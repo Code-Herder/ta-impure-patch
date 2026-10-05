@@ -210,6 +210,14 @@ def semantic_states(segment):
             history.source_roots[55]["events"][1]["image"][12:] != b"NO" or
             history.roots[55]["sequence"] != 5):
         raise RuntimeError("mixed root proof tail replaced application authority")
+    if history.at(100).explored:
+        raise RuntimeError("future exploration published before application")
+    for tick in (101,1000):
+        state=history.at(tick)
+        if (set(state.explored)!={11,22} or state.explored[11]["image"]!=b"\x01" or
+                state.explored[11]["lostype"]!=65535 or state.explored[22]["image"]!=b"\0" or
+                state.explored[22]["lostype"]!=5 or state.explored[11]["source_tick"]!=101):
+            raise RuntimeError("exploration image/mode or application cutoff")
     proof = History(segment["header"])
     for block_kind, _, _, payload in segment["blocks"]:
         if block_kind != tarec.RB_CONTRIBUTIONS:
@@ -231,11 +239,13 @@ def semantic_states(segment):
         at = 0
         while at < len(payload):
             span, origin, _, _, _ = struct.unpack_from("<IIIII", payload, at+16+12)
-            phase = struct.unpack_from("<I", payload, at+12)[0]
-            if origin == 55 and phase != 3:
+            if origin == 55:
                 named_proof.block(struct.pack("<QII", 0, 0, 3) + payload[at+16:at+16+span])
             at += 16+span
     if (55 not in named_proof.source_named or 55 not in named_proof.source_roots or
+            named_proof.source_explored[55]["image"] != b"\x01" or
+            named_proof.source_explored[55]["lostype"] != 65535 or
+            named_proof.explored or named_proof.at(1000).explored or
             named_proof.named or named_proof.roots or named_proof.maps or named_proof.players or
             named_proof.orders or named_proof.at(1000).named or named_proof.at(1000).roots):
         raise RuntimeError("proof-only named roots fabricated application authority")
@@ -261,11 +271,11 @@ def application_trace(segment, log):
             roots.append((origin, source_tick, sequence, tick))
     observed = [tuple(int(v, 16 if i == 8 else 10) for i, v in enumerate(line.split()[1:]))
                 for line in log.read_text().splitlines() if line.startswith("APPLICATION ")]
-    if observed != expected or len(expected) != 27 or roots != [
+    if observed != expected or len(expected) != 30 or roots != [
             (55, 8, 5, 100), (11, 100, 5, 100), (22, 100, 5, 100),
             (11, 101, 7, 101), (22, 101, 7, 101), (11, 101, 8, 101)]:
         raise RuntimeError("C ordered application cursor differs from independent Python ledger")
-    print("application cursor: all 27 envelopes/6 mixed root batches match Python bytes and both clocks; A/B/A, query isolation, resumed ordinals, duplicate polls and seek PASS", flush=True)
+    print("application cursor: all 30 envelopes/6 mixed root batches match Python bytes and both clocks; A/B/A, query isolation, resumed ordinals, duplicate polls and seek PASS", flush=True)
 
 
 def semantic_mutation(blocks, origin, kind, phase, offset, fmt, value, envelope=False):
@@ -289,6 +299,38 @@ def semantic_mutation(blocks, origin, kind, phase, offset, fmt, value, envelope=
     return resealed(result)
 
 
+def native_explored_oracle(segment, history):
+    """Compare local-origin bitmaps with the independent raw primary map at that B2 tick."""
+    snapshots, checked = {}, set()
+    prefix = History(segment["header"])
+    seats = {origin: seat for origin, seat, *_ in history.roster.actors}
+    for _, raw in history.applications:
+        prefix.block(raw)
+        phase = struct.unpack_from("<I", raw, 12)[0]
+        _, origin, source, _, kind = struct.unpack_from("<IIIII", raw, 28)
+        if phase == 1 and kind == 11 and raw[80+12] & 2:
+            snapshots.setdefault(source, {})[origin] = prefix.explored[origin]["image"]
+    if not snapshots:
+        return 0
+    def check(world, kind, body):
+        if kind is not None or world.tick not in snapshots:
+            return
+        images = snapshots[world.tick]
+        packed = {origin: bytearray(len(image)) for origin, image in images.items()}
+        for cell, (word,) in enumerate(struct.iter_unpack("<H", world.mapped)):
+            for origin, image in packed.items():
+                image[cell >> 3] |= ((word >> seats[origin]) & 1) << (cell & 7)
+        for origin, image in packed.items():
+            if bytes(image) != images[origin]:
+                raise RuntimeError(f"native origin {origin} exploration differs from primary map at {world.tick}")
+            checked.add((world.tick, origin))
+    world = tarec.stream_to(segment["header"], segment["blocks"], on_record=check)
+    check(world, None, None)
+    if len(checked) != sum(map(len, snapshots.values())):
+        raise RuntimeError("native local exploration source tick has no observed primary iteration")
+    return len(checked)
+
+
 def run(output, read_file=None, skirmish_file=None, native_file=None):
     root = tareplay.main_checkout()
     directory = None
@@ -298,7 +340,7 @@ def run(output, read_file=None, skirmish_file=None, native_file=None):
         with (output / "setup.log").open("w") as log:
             exe = output / "recmp-file-test.exe"
             sources = ("tagpu_recmp", "tagpu_recmp_auth", "tagpu_recmp_record", "tagpu_recmp_stream", "tagpu_recmp_players",
-                       "tagpu_recmp_file", "tagpu_recmp_file_state", "tagpu_recmp_history", "tagpu_recmp_units", "tagpu_recmp_named", "tagpu_recmp_roots", "tagpu_recmp_orders", "tagpu_recwriter",
+                       "tagpu_recmp_file", "tagpu_recmp_file_state", "tagpu_recmp_history", "tagpu_recmp_units", "tagpu_recmp_named", "tagpu_recmp_roots", "tagpu_recmp_explored", "tagpu_recmp_orders", "tagpu_recwriter",
                        "tagpu_recreader", "tagpu_recfile", "lodepng", "crc32")
             command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc", "-O2", "-Wall",
                      "-Wextra", "-Werror", "-std=c99", "-o", exe, HERE / "recmp_file_test.c",
@@ -347,6 +389,29 @@ def run(output, read_file=None, skirmish_file=None, native_file=None):
             if rows != [[str(len(creates)), f"{create_crc:08X}"]]:
                 raise RuntimeError("native C/Python network creation arguments/ticks/token disagree")
             print(f"native creates: {len(creates)} exact C/Python roots retained through world seek PASS", flush=True)
+            expected = []
+            for stage, tick in (("final", segment["last"]),
+                                ("seek-middle", segment["first"]+(segment["last"]-segment["first"])//2),
+                                ("seek-final", segment["last"])):
+                state = history.at(tick)
+                for origin, *_ in history.roster.actors:
+                    if origin not in state.explored:
+                        continue
+                    e = state.explored[origin]
+                    expected.append([stage, str(tick), str(origin), str(e["source_tick"]),
+                                     str(e["sequence"]), str(e["application_tick"]), str(e["cells"]),
+                                     str(e["bytes"]), str(e["lostype"]), f'{zlib.crc32(e["image"]):08X}',
+                                     e["stream"].hex().upper()])
+            rows = [line.split()[1:] for line in log_path.read_text().splitlines()
+                    if line.startswith("NATIVE_EXPLORED ")]
+            if rows != expected:
+                raise RuntimeError("native C/Python exploration bytes, modes or provenance differ through seek")
+            if rows:
+                print(f"native exploration: {len(rows)} exact C/Python bitmap/mode/provenance queries through seek PASS", flush=True)
+                count = native_explored_oracle(segment, history)
+                print(f"native exploration: {count} exact local-origin snapshots agree with independent primary map PASS", flush=True)
+            else:
+                print("native exploration: absent from this file; C/Python retain unknown through seek PASS", flush=True)
             print("native file: C/Python complete application bytes/order/provenance, all owner players/unit-block bounds and world seek PASS", flush=True)
             return
         for mode in (() if read_file else ("normal", "missing_cut", "missing_receipt", "journal_full", "local_stop")):
@@ -474,6 +539,17 @@ def run(output, read_file=None, skirmish_file=None, native_file=None):
                 command(["wine", exe, "refuse", "Z:" + str(path).replace("/", "\\")], log, env=env)
             print(f"{name}: C reader/summary/info and Python mapping refusal PASS", flush=True)
         for name, origin, kind, phase, offset, fmt, value, envelope in (
+                ("exploration_total", 11, 11, 1, 4, "<I", 2, False),
+                ("exploration_first", 11, 11, 1, 0, "<I", 1, False),
+                ("exploration_count", 11, 11, 1, 8, "<H", 2, False),
+                ("exploration_flags", 11, 11, 1, 12, "<B", 15, False),
+                ("exploration_reserved", 11, 11, 1, 13, "<B", 1, False),
+                ("exploration_missing_begin", 11, 11, 1, 12, "<B", 6, False),
+                ("exploration_partial_seal", 11, 11, 1, 12, "<B", 5, False),
+                ("exploration_delta_without_baseline", 11, 11, 1, 12, "<B", 3, False),
+                ("exploration_unused_bits", 11, 11, 1, 16, "<B", 2, False),
+                ("proof_exploration_total", 55, 11, 3, 4, "<I", 2, False),
+                ("proof_exploration_partial_seal", 55, 11, 3, 12, "<B", 5, False),
                 ("player_origin", 55, 6, 2, 0, "<I", 66, False),
                 ("player_controller", 55, 6, 2, 4, "<I", 3, False),
                 ("player_missing_baseline", 55, 6, 2, 8, "<I", 0, False),

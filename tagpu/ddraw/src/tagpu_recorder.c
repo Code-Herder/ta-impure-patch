@@ -70,6 +70,7 @@
 #include "tagpu_recmp_units.h"
 #include "tagpu_recmp_named.h"
 #include "tagpu_recmp_roots.h"
+#include "tagpu_recmp_explored.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_replay_layout.h"
@@ -287,6 +288,10 @@ static RecMpRoster s_mp_roster;
 static RecMpPlayers* s_mp_players;
 static RecMpSeatMaps* s_mp_seats;
 static RecMpUnits* s_mp_units;
+static RecMpExplored* s_mp_explored;
+static const unsigned char* s_mp_explored_map;
+static unsigned char* s_mp_explored_image;
+static unsigned s_mp_explored_w, s_mp_explored_h, s_mp_explored_cells, s_mp_explored_bytes;
 static RecMpNamed* s_mp_named;
 static RecMpRoots* s_mp_roots;
 static RecMpRootsQueue* s_mp_roots_queue;
@@ -517,6 +522,79 @@ refused:
     tagpu_logf("recmp: start/player-data sites differ or cannot be patched: no contributions");
 }
 
+static void mp_explored_end(void)
+{
+    tagpu_recmp_explored_end(s_mp_explored); s_mp_explored=NULL;
+    if (s_mp_explored_image) HeapFree(GetProcessHeap(),0,s_mp_explored_image);
+    s_mp_explored_image=NULL; s_mp_explored_map=NULL;
+    s_mp_explored_w=s_mp_explored_h=s_mp_explored_cells=s_mp_explored_bytes=0;
+}
+
+static int mp_explored_begin(const Level* L, const RecMpRoster* roster)
+{
+    unsigned w=*(const unsigned*)(L->ta+OFF_GRID_W), h=*(const unsigned*)(L->ta+OFF_GRID_H);
+    unsigned cells=tagpu_recmp_explored_cells(w,h);
+    const unsigned char* map=*(const unsigned char* const*)(L->ta+OFF_MAPPED);
+    if (!cells || !map) return 0;
+    s_mp_explored=tagpu_recmp_explored_begin(roster,w,h);
+    s_mp_explored_bytes=(cells+7)/8;
+    s_mp_explored_image=HeapAlloc(GetProcessHeap(),0,s_mp_explored_bytes);
+    if (!s_mp_explored || !s_mp_explored_image) { mp_explored_end(); return 0; }
+    s_mp_explored_w=w; s_mp_explored_h=h; s_mp_explored_cells=cells; s_mp_explored_map=map;
+    return 1;
+}
+
+static void mp_explored_log(unsigned origin, unsigned tick, const char* where)
+{
+    RecMpExploreState state;
+    if (tagpu_recmp_explored_get(s_mp_explored,origin,&state,s_mp_explored_image,s_mp_explored_bytes))
+        tagpu_logf("recmp: %s explored map ID %u, source tick %u seq %u applied tick %u, "
+                   "%u cells / %u bytes, lostype %u crc %08X",where,origin,state.source_tick,
+                   state.sequence,tick,state.cells,state.bytes,state.lostype,
+                   (unsigned)Crc32_ComputeBuf(0,s_mp_explored_image,state.bytes));
+}
+
+typedef struct { unsigned tick; } MpExploreEmit;
+static int mp_explored_emit(void* ctx, unsigned origin, const void* body, unsigned bytes)
+{
+    MpExploreEmit* e=ctx;
+    RecMpHeader header;
+    RecMpExploreState state;
+    int known=tagpu_recmp_explored_get(s_mp_explored,origin,&state,NULL,0);
+    if (!tagpu_recmp_send_from(s_mp_channel,origin,RECMP_EXPLORED,e->tick,body,bytes,&header) ||
+        !tagpu_recmp_explored_put(s_mp_explored,s_mp_seats,&header,body,bytes,e->tick)) return 0;
+    if (!known) mp_explored_log(origin,e->tick,"local");
+    return 1;
+}
+
+static int mp_explored_capture(const Level* L, unsigned tick)
+{
+    MpExploreEmit emit={tick};
+    unsigned short lostype;
+    if (*(const unsigned char* const*)(L->ta+OFF_MAPPED)!=s_mp_explored_map ||
+        *(const unsigned*)(L->ta+OFF_GRID_W)!=s_mp_explored_w ||
+        *(const unsigned*)(L->ta+OFF_GRID_H)!=s_mp_explored_h) return 0;
+    memcpy(&lostype,L->ta+OFF_LOSTYPE,sizeof lostype);
+    /* LoadMap owns exactly cells*2 bytes, with no 32-bit wrap, and only level
+       teardown frees this frozen pointer. B2 and teardown share the game thread.
+       Each bounded u16 contributes only this local controller's player bit. */
+    for (unsigned seat=0;seat<REC_PLAYERS;seat++) {
+        const char* player=L->ta+OFF_PLAYERS+seat*PL_STRIDE;
+        unsigned controller=(unsigned char)player[PL_CONTROLLER], origin;
+        if (controller!=1 && controller!=2) continue;
+        memcpy(&origin,player+4,sizeof origin);
+        memset(s_mp_explored_image,0,s_mp_explored_bytes);
+        for (unsigned cell=0;cell<s_mp_explored_cells;cell++) {
+            unsigned short word;
+            memcpy(&word,s_mp_explored_map+(size_t)cell*2,sizeof word);
+            s_mp_explored_image[cell>>3]|=((word>>seat)&1u)<<(cell&7);
+        }
+        if (!tagpu_recmp_explored_encode(s_mp_explored,origin,s_mp_explored_image,
+                                          s_mp_explored_bytes,lostype,mp_explored_emit,&emit)) return 0;
+    }
+    return 1;
+}
+
 static void mp_capture(const Level* L, unsigned tick)
 {
     unsigned i;
@@ -610,11 +688,12 @@ static void mp_capture(const Level* L, unsigned tick)
         s_mp_roots = tagpu_recmp_roots_begin(&roster);
         s_mp_roots_queue = tagpu_recmp_roots_queue_begin();
         s_mp_orders = tagpu_recmp_orders_begin(L->nslots);
-        if (!s_mp_players || !s_mp_seats || !s_mp_units || !s_mp_orders ||
+        if (!mp_explored_begin(L,&roster) || !s_mp_players || !s_mp_seats || !s_mp_units || !s_mp_orders ||
             !s_mp_named || !s_mp_roots || !s_mp_roots_queue) {
             tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
             tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
             tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
+            mp_explored_end();
             mp_roots_end();
             tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
             tagpu_logf("recmp: no bounded player/order cache: no contributions");
@@ -626,6 +705,7 @@ static void mp_capture(const Level* L, unsigned tick)
             tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
             tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
             tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
+            mp_explored_end();
             mp_roots_end();
             tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
             tagpu_logf("recmp: contribution worker could not start");
@@ -687,7 +767,8 @@ static void mp_capture(const Level* L, unsigned tick)
     while ((taken = tagpu_recmp_take_at(s_mp_channel, &packet, tick)) > 0) {
         RecMpPlayerState before, state;
         if (packet.h.kind == RECMP_SEAL) {
-            if (!tagpu_recmp_orders_idle(s_mp_orders, packet.h.origin)) goto incomplete;
+            if (!tagpu_recmp_orders_idle(s_mp_orders, packet.h.origin) ||
+                !tagpu_recmp_explored_idle(s_mp_explored,packet.h.origin)) goto incomplete;
             continue;
         }
         if (packet.h.kind == RECMP_SEATS) {
@@ -696,6 +777,14 @@ static void mp_capture(const Level* L, unsigned tick)
             tagpu_logf("recmp: remote source roster ID %u seq %u, %u actors, applied tick %u, crc %08X",
                        packet.h.origin,packet.h.sequence,s_mp_roster.count,tick,
                        (unsigned)Crc32_ComputeBuf(0,packet.body,packet.h.bytes-sizeof packet.h));
+            continue;
+        }
+        if (packet.h.kind == RECMP_EXPLORED) {
+            RecMpExploreState state;
+            int known=tagpu_recmp_explored_get(s_mp_explored,packet.h.origin,&state,NULL,0);
+            if (!tagpu_recmp_explored_put(s_mp_explored,s_mp_seats,&packet.h,packet.body,
+                                          packet.h.bytes-sizeof packet.h,tick)) goto incomplete;
+            if (!known) mp_explored_log(packet.h.origin,tick,"remote");
             continue;
         }
         if (packet.h.kind == RECMP_UNITS) {
@@ -752,7 +841,7 @@ static void mp_capture(const Level* L, unsigned tick)
         tagpu_logf("recmp: contribution source sequence or stream is incomplete");
         goto incomplete;
     }
-    if (!mp_units_capture(L, tick) || !mp_orders_capture(L, tick)) goto incomplete;
+    if (!mp_units_capture(L, tick) || !mp_orders_capture(L, tick) || !mp_explored_capture(L,tick)) goto incomplete;
     if (tick - s_mp_logtick >= 150) {
         tagpu_recmp_stats(s_mp_channel, &stats);
         tagpu_logf("recmp: tick=%u sent=%u bytes=%u received=%u queued=%u lost=%u failed=%08X "
@@ -773,6 +862,7 @@ incomplete:
     tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
     tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
     tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
+    mp_explored_end();
     tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
 }
 
@@ -5837,6 +5927,7 @@ void tagpu_rec_level_end(void)
     s_mp_seats = NULL;
     tagpu_recmp_units_end(s_mp_units);
     s_mp_units = NULL;
+    mp_explored_end();
     memset(&s_mp_roster, 0, sizeof s_mp_roster);
     s_mp_tried = 0;
     memset(s_mp_orders_seen, 0, sizeof s_mp_orders_seen);

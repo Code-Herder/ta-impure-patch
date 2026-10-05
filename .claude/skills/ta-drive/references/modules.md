@@ -243,6 +243,21 @@ Native multiplayer can start at speed 10 despite a stopped-instance setting of
 network run accelerated. Tick-based skirmish replay fixtures use 20; multiplayer
 timing and bandwidth tests retain their own speed policy.
 
+Per-origin explored-map contributions use:
+`python3 tools/replay/recmp_explored_test.py --out /tmp/recmp-explored-run`.
+The owned-prefix codec fixture checks ten permuted origins, copied encoder input,
+multipart full/delta atomicity, mode-only updates, malformed/guarded spans,
+unused tail bits and failed emission. The file fixture also checks bitmap/mode/
+provenance queries through seek and proof-only isolation. With `--native-file`,
+it compares C/Python exploration queries and local-origin snapshots against the
+recording's independent raw primary map at the same B2 tick. These tests do not
+enable native engine playback or complete POV capture. In a live game,
+`recmp: local explored map` / `remote explored map` logs the first complete
+bitmap's origin, source sequence/tick, application tick, geometry, LosType and
+CRC; match source/recipient by origin, with each side's application clock
+retained separately. Run the standalone prefix-removing fixture separately from
+multiplayer menu drivers.
+
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
   `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin. **The NAT
   helpers are refused** (`dpnhpast,dpnhupnp=d`): the transport skips a helper that does not load,

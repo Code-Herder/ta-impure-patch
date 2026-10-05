@@ -176,11 +176,12 @@ static void proof_only_roster(void)
     RecMpUnitState unit;
     RecMpNamedState named;
     RecMpRootsState roots;
+    RecMpExploreState explored;
     unsigned char body[sizeof(RecMpPlayerDelta)+REC_PLAYER_IMAGE];
     unsigned bytes;
     memcpy(h.magic,"IMPUREMP",8);
     for (unsigned i=0;i<4;i++) file.actor[i]=(RecMpRecordActor){recorder.actor[i].origin,i<2};
-    history=tagpu_recmp_history_begin(&file,&recorder); CHECK(history);
+    history=tagpu_recmp_history_begin(&file,&recorder,2,2); CHECK(history);
     h.bytes=sizeof h+sizeof source;
     CHECK(tagpu_recmp_history_record(history,&where,&h,&source,sizeof source));
     h.kind=RECMP_PLAYER; h.sequence=2; bytes=player_body(55,1,body); h.bytes=sizeof h+bytes;
@@ -195,6 +196,15 @@ static void proof_only_roster(void)
     CHECK(tagpu_recmp_history_record(history,&where,&h,body,bytes));
     memset(&roots,0xA5,sizeof roots); CHECK(!tagpu_recmp_history_roots(history,55,&roots));
     for (unsigned i=0;i<sizeof roots;i++) CHECK(((unsigned char*)&roots)[i]==0xA5);
+    {
+        RecMpExploreChunk chunk={0,1,1,5,7,{0}};
+        memcpy(body,&chunk,sizeof chunk); body[sizeof chunk]=1;
+        h.kind=RECMP_EXPLORED; h.sequence=6; h.bytes=sizeof h+sizeof chunk+1;
+        CHECK(tagpu_recmp_history_record(history,&where,&h,body,sizeof chunk+1));
+        memset(&explored,0xA5,sizeof explored);
+        CHECK(!tagpu_recmp_history_explored(history,55,&explored,body,sizeof body));
+        for (unsigned i=0;i<sizeof explored;i++) CHECK(((unsigned char*)&explored)[i]==0xA5);
+    }
     memset(&state,0xA5,sizeof state);
     CHECK(!tagpu_recmp_history_player(history,55,&state));
     for (unsigned i=0;i<sizeof state;i++) CHECK(((unsigned char*)&state)[i]==0xA5);
@@ -210,7 +220,14 @@ static void file_proof_tail(void)
         RecMpSeal seal;
         RecMpPacket* p;
         if (f.missing_cut && i==1) continue;
-        if (!i) { source_named(6,1); source_roots(7,1); }
+        if (!i) {
+            RecMpExploreChunk chunk={0,1,1,0xFFFF,7,{0}};
+            unsigned char body[sizeof chunk+1];
+            source_named(6,1); source_roots(7,1);
+            memcpy(body,&chunk,sizeof chunk); body[sizeof chunk]=1;
+            p=packet(55,RECMP_EXPLORED,8,8,body,sizeof body);
+            CHECK(tagpu_recmp_stream_put(&f.source[0],&p->h,p->body,sizeof body));
+        }
         if (i==1) {
             source_orders(66,6,9,46,45,1);
             source_player(66,7,10,0);
@@ -442,19 +459,26 @@ static int read_file(const char* path, int expected)
                   ostate.count==0 && ostate.sequence==4 && ostate.applied_tick==100);
             CHECK(recr_mp_player(r,66,&pstate,why,sizeof why)==1 && pstate.image[0]==66 && pstate.sequence==2 &&
                   ((unsigned char*)pstate.image)[0x146]==3);
+            {
+                RecMpExploreState e; unsigned char bit=0xEE;
+                CHECK(recr_mp_explored(r,11,&e,&bit,1,why,sizeof why)==1 && bit==1 &&
+                      e.cells==1 && e.bytes==1 && e.lostype==0xFFFF && e.source_tick==101 && e.applied_tick==101);
+                CHECK(recr_mp_explored(r,22,&e,&bit,1,why,sizeof why)==1 && bit==0 && e.lostype==5);
+                CHECK(recr_mp_explored(r,55,&e,&bit,1,why,sizeof why)==0);
+            }
             read_applications(r,applied,&ordinal,why,sizeof why);
-            CHECK(applied->count==27 && applied->roots==6 && applied->packet[22].h.origin==11 &&
+            CHECK(applied->count==30 && applied->roots==6 && applied->packet[22].h.origin==11 &&
                   applied->packet[23].h.origin==22 && applied->packet[24].h.origin==11);
             replay_ordinal=0;
-            CHECK(recr_mp_apply(r,&replay_ordinal,applied_copy,replayed,why,sizeof why)==1 && replay_ordinal==27);
+            CHECK(recr_mp_apply(r,&replay_ordinal,applied_copy,replayed,why,sizeof why)==1 && replay_ordinal==30);
             applied_equal(applied,0,replayed);
             memset(replayed,0,sizeof *replayed);
         }
         CHECK(!recr_tick(r,why,sizeof why));
         CHECK(recr_seek(r,100,0,NULL,NULL,why,sizeof why)==1 && recr_world(r)->player[0][0]==0xA5);
         if (expected) {
-            uint64_t beyond=27;
-            CHECK(recr_mp_apply(r,&beyond,applied_copy,replayed,why,sizeof why)==-1 && beyond==27 && !replayed->count);
+            uint64_t beyond=30;
+            CHECK(recr_mp_apply(r,&beyond,applied_copy,replayed,why,sizeof why)==-1 && beyond==30 && !replayed->count);
             replay_ordinal=0;
             CHECK(recr_mp_apply(r,&replay_ordinal,applied_copy,replayed,why,sizeof why)==1 && replay_ordinal==19);
             CHECK(replayed->count==19 && replayed->roots==3);
@@ -463,7 +487,7 @@ static int read_file(const char* path, int expected)
             CHECK(recr_seek(r,101,0,NULL,NULL,why,sizeof why)==1 &&
                   recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 && ostate.sequence==4);
             read_units(r,why,sizeof why);
-            CHECK(recr_mp_apply(r,&replay_ordinal,applied_copy,replayed,why,sizeof why)==1 && replay_ordinal==27);
+            CHECK(recr_mp_apply(r,&replay_ordinal,applied_copy,replayed,why,sizeof why)==1 && replay_ordinal==30);
             applied_equal(applied,0,replayed);
             CHECK(recr_mp_orders(r,1,1,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 && ostate.count==1);
             for (unsigned i=0;i<RECMP_ORDER_BYTES;i++) CHECK(order[i]==(unsigned char)(i*7+3));
@@ -510,6 +534,26 @@ static void native_application(void* ctx, const RecMpRecord* where, const RecMpH
     if (packet->kind==RECMP_ROOTS) n->roots++;
 }
 
+static void native_explored(RecReader* r, const char* stage)
+{
+    char why[256];
+    const RecHeader* h=recr_header(r);
+    for (unsigned i=0;i<h->mp_seats.count;i++) {
+        RecMpExploreState state;
+        unsigned char* image;
+        int known=recr_mp_explored(r,h->mp_seats.actor[i].origin,&state,NULL,0,why,sizeof why);
+        CHECK(known>=0);
+        if (!known) continue;
+        image=malloc(state.bytes); CHECK(image);
+        CHECK(recr_mp_explored(r,state.origin,&state,image,state.bytes,why,sizeof why)==1);
+        printf("NATIVE_EXPLORED %s %u %u %u %u %u %u %u %u %08X ",stage,
+               recr_world(r)->tick,state.origin,state.source_tick,state.sequence,state.applied_tick,
+               state.cells,state.bytes,state.lostype,(unsigned)Crc32_ComputeBuf(0,image,state.bytes));
+        for (unsigned j=0;j<sizeof state.stream;j++) printf("%02X",((unsigned char*)&state.stream)[j]);
+        puts(""); free(image);
+    }
+}
+
 static int read_native(const char* path)
 {
     char why[256];
@@ -540,6 +584,7 @@ static int read_native(const char* path)
         CHECK(recr_mp_apply(r,&ordinal,native_application,&n,why,sizeof why)==1 && ordinal==n.records);
     }
     CHECK(!k && first && last>=first && n.records && n.roots);
+    native_explored(r,"final");
     for (unsigned i=0;i<n.header->mp_seats.count;i++) {
         const RecMpSeat* seat=&n.header->mp_seats.actor[i];
         RecMpPlayerState player;
@@ -554,12 +599,14 @@ static int read_native(const char* path)
     /* A world seek and state queries cannot acknowledge any application batch.
        Reconstructing from its prefix, then advancing, must deliver every byte. */
     CHECK(recr_seek(r,first+(last-first)/2,0,NULL,NULL,why,sizeof why)==1);
+    native_explored(r,"seek-middle");
     replayed.header=recr_header(r); ordinal=0;
     CHECK(recr_mp_apply(r,&ordinal,native_application,&replayed,why,sizeof why)==1);
     while ((k=recr_tick(r,why,sizeof why))>0)
         CHECK(k==1 && recr_mp_apply(r,&ordinal,native_application,&replayed,why,sizeof why)==1);
     CHECK(!k && n.records==replayed.records && n.bytes==replayed.bytes &&
           n.roots==replayed.roots && n.crc==replayed.crc);
+    native_explored(r,"seek-final");
     printf("NATIVE_APPLICATIONS %llu %llu %llu %08X %u %u\n",
            (unsigned long long)n.records,(unsigned long long)n.bytes,(unsigned long long)n.roots,
            n.crc,first,last);
@@ -707,6 +754,10 @@ int main(int argc, char** argv)
         unsigned char body[RECMP_BODY_MAX];
         unsigned origin=i==1 ? 22 : 11, n=roots_body(origin,i==2 ? 2 : 1,body);
         CHECK(tagpu_recmp_send_from(c,origin,RECMP_ROOTS,101,body,n,NULL));
+    }
+    for (unsigned i=0;i<3;i++) {
+        struct { RecMpExploreChunk chunk; unsigned char bit; } packet={{0,1,1,i==2 ? 0xFFFF : 5,i==2 ? 3 : 7,{0}},i==2 ? 1 : 0};
+        CHECK(tagpu_recmp_send_from(c,i==1 ? 22 : 11,RECMP_EXPLORED,101,&packet,sizeof packet,NULL));
     }
     tagpu_recmp_retain(c);
     if (!local_stop) tagpu_recmp_end(c);

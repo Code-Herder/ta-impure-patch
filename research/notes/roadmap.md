@@ -3938,7 +3938,7 @@ mixed calls, with constructor arguments captured even when local recording is
 off and source owner rows authorized through frozen maps. Synthetic writer/
 C/Python reader tests retain six applied batches
 through seek and isolate later source proof. The ordered `recr_mp_apply` cursor
-delivers all 27 application envelopes with exact source/application metadata and
+delivers all 30 application envelopes with exact source/application metadata and
 bytes, including A/B/A batches; queries, repeated polls, resumed ordinals and
 backward/forward seek preserve delivery. Five lifecycles, 23 header and 87 body
 refusals pass, including constructor bounds/ownership.
@@ -3974,6 +3974,21 @@ Native engine application is still refused: two later Reclaiming replies reach
 the recorder before its replicas exist, and product decision 7 must choose owner
 unit lifetimes or an explicit delay policy. The other multiplayer gates remain
 required; this checkpoint does not land the slice.
+
+Per-origin explored-map capture is also in progress: each local human/hosted AI
+packs its own mapped-map bit under native origin identity, with exact LosType
+and source/application stamps. Complete BEGIN/END transactions preserve mode
+changes and cleared bits, and proof-only state cannot become applied exploration.
+Copied-data controls and writer/C/Python seek checks pass; a four-actor native
+COVER sample verifies initial source/recipient bitmap CRCs. The native exit/chat
+driver stops after three failed attempts, leaving the complete native map file,
+mode change and native seek gate open. The current skirmish regression has 22
+passes and one images-inventory failure at three bytes of `main+0x531`; simulation
+comparisons and all three exact poisoned round trips pass. The pending exclusion
+is unchanged. It adds no engine write, hook or exclusion. Native POV playback, camera/cursor/selection/
+click streams and communication audiences remain open; the multiplayer slice
+records the current verification and wider gaps. No multiplayer landing is
+cleared by this work.
 
 The work branch's tick-based replay harness defaults to internal speed 20 (2x),
 with normal speed selectable and retained for cost and speed/settings UI checks.

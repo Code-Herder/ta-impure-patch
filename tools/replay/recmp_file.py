@@ -142,7 +142,7 @@ class Contributions:
                 if final > 1 or (previous, seal_tick, data_bytes, crc) != (source["sequence"], tick, source["bytes"], source["crc"]) or (sealed is not None and (tick < sealed or (not final and tick == sealed))):
                     raise ValueError("contribution prefix seal")
                 source.update(sealed_tick=tick, sealed_sequence=sequence, ended=bool(final))
-            elif kind in (1, 2, 6, 7, 8, 9, 10):
+            elif kind in (1, 2, 6, 7, 8, 9, 10, 11):
                 if source["sealed_tick"] is not None and tick <= source["sealed_tick"]:
                     raise ValueError("contribution data in closed tick")
                 source["bytes"] += span
@@ -170,7 +170,7 @@ class Contributions:
 class History:
     """Independent semantic source validation and application-only authority."""
     def __init__(self, header):
-        self.header = {key: header[key] for key in ("multiplayer", "mp_seats", "slots", "units_each")}
+        self.header = {key: header[key] for key in ("multiplayer", "mp_seats", "slots", "units_each", "features")}
         self.header["players"] = [p.copy() for p in header["players"]]
         self.ledger = Contributions(self.header["multiplayer"])
         self.roster = Seats(self.header["mp_seats"], self.ledger.actors,
@@ -181,6 +181,7 @@ class History:
         self.source_named, self.named = {}, {}
         self.source_roots, self.roots = {}, {}
         self.source_orders, self.orders, self.stages = {}, {}, {}
+        self.source_explored, self.explored, self.explored_stages = {}, {}, {}
         self.applications = []
         self.failed = False
 
@@ -227,6 +228,54 @@ class History:
             self.source_players[origin] = state
             if not proof:
                 self.players[origin] = dict(state, image=mapped)
+        elif kind == 11:
+            source_map = self.source_maps.get(origin)
+            if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:
+                raise ValueError("exploration precedes its source roster")
+            w, h = self.header["features"][:2]
+            product = w*h
+            if not 0 < w <= 65535 or not 0 < h <= 65535 or product > 0xFFFFFFFF//2 or product % 4:
+                raise ValueError("exploration geometry")
+            cells, size = product//4, (product//4+7)//8
+            if not 16 <= len(body) <= 4032:
+                raise ValueError("exploration chunk span")
+            first, total, count, lostype, flags, reserved = struct.unpack_from("<IIHHB3s", body)
+            begin, end, full = bool(flags & 1), bool(flags & 2), bool(flags & 4)
+            previous = self.source_explored.get(origin)
+            stage = self.explored_stages.get(origin)
+            if (flags & ~7 or any(reserved) or total != size or len(body) != 16+count or
+                    first > size or count > size-first or
+                    not count and (full or first or not begin or not end) or
+                    previous and (sequence <= previous["sequence"] or tick < previous["source_tick"] or
+                    application_tick < previous["application_tick"] or stream != previous["stream"])):
+                raise ValueError("exploration span/provenance")
+            if begin:
+                if stage is not None or not full and previous is None or full and first:
+                    raise ValueError("exploration BEGIN/baseline")
+            elif (stage is None or stage["full"] != full or sequence != stage["sequence"]+1 or
+                    tick != stage["tick"] or application_tick < stage["application_tick"] or
+                    lostype != stage["lostype"] or stream != stage["stream"] or
+                    first < stage["end"] or full and first != stage["end"]):
+                raise ValueError("exploration partial transaction")
+            if end and full and first+count != size:
+                raise ValueError("exploration full image has a hole")
+            if count and cells % 8 and first+count == size and body[-1] & (0xFF << (cells % 8)):
+                raise ValueError("exploration unused tail bits")
+            if begin:
+                stage = dict(data=bytearray(size) if full else bytearray(previous["image"]), full=full)
+            stage["data"][first:first+count] = body[16:]
+            stage.update(sequence=sequence, tick=tick, application_tick=application_tick,
+                         end=first+count, lostype=lostype, stream=bytes(stream))
+            if end:
+                state = dict(origin=origin, source_tick=tick, sequence=sequence,
+                             application_tick=application_tick, cells=cells, bytes=size,
+                             lostype=lostype, stream=bytes(stream), image=bytes(stage["data"]))
+                self.source_explored[origin] = state
+                self.explored_stages.pop(origin, None)
+                if not proof:
+                    self.explored[origin] = state.copy()
+            else:
+                self.explored_stages[origin] = stage
         elif kind == 8:
             source_map = self.source_maps.get(origin)
             if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:
@@ -422,7 +471,7 @@ class History:
                     self.orders[slot, which] = state.copy()
                 stage["active"] = False
         elif kind == 4:
-            if self.stages.get(origin, {}).get("active"):
+            if self.stages.get(origin, {}).get("active") or origin in self.explored_stages:
                 raise ValueError("seal closes an incomplete order transaction")
         # Legacy kind 1 contributes no complete player or order authority.
 

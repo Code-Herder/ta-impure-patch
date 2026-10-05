@@ -140,7 +140,7 @@ The player fixture executes 640 roster permutations over all actor counts 1–10
 
 Source kind 7 carries the owner's copied 176-byte frozen roster at sequence 1, before its first full player image at sequence 2 and before orders. Each origin announces the whole source peer's roster once. Exact origin sets and fixed global block endpoints must agree with the recorder; actor order and local row assignments may differ. The game adapter validates each local image against its frozen source map and each received image against that sender's map. Raw delta baselines stay in source coordinates. Maps belong to the game thread and are freed at failure/level end; the worker still owns only copied packets.
 
-File history owns separate source and application map caches. A proof-only roster validates a proof-only full image but publishes neither mapping nor player authority; both C and Python fixtures check this. Produced/consumed player queries return recorder-coordinate vectors/self row, retaining source stream/tick/sequence and application tick. The wire version is 2, shared by start tokens, primary keys, private identity and envelopes. Experimental wire-version-1 contributions are refused; the 176-byte roster schema and file metadata schema remain version 1. File format 6 adds observed replica creation; no recorder exclusion changes. Unit coordinates are bounded and mapped as described below; projectile owner indices, explored bits and declared Impure player IDs still require their own remapping audit. Native file capture is enabled on request; engine replay application remains unfinished.
+File history owns separate source and application map caches. A proof-only roster validates a proof-only full image but publishes neither mapping nor player authority; both C and Python fixtures check this. Produced/consumed player queries return recorder-coordinate vectors/self row, retaining source stream/tick/sequence and application tick. The wire version is 2, shared by start tokens, primary keys, private identity and envelopes. Experimental wire-version-1 contributions are refused; the 176-byte roster schema and file metadata schema remain version 1. File format 6 adds observed replica creation; no recorder exclusion changes. Unit coordinates are bounded and mapped as described below. Explored-map contributions use origin identity instead of row bits; projectile owner indices and declared Impure player IDs still require their own remapping audit. Native file capture is enabled on request; engine replay application remains unfinished.
 
 ### Owner unit records and movers
 
@@ -1138,3 +1138,105 @@ The physical budget and no-game-delay gate remains open, as do native engine
 playback/seek/takeover, complete owner authority, POV/chat, ten-seat play,
 continued migration and the accumulated review/replay landing gates. This is a
 measurement fixture checkpoint, not a multiplayer landing.
+
+### Per-origin explored-map history
+
+The primary stream's raw mapped map describes the recorder's engine copy. It
+cannot supply a remote controlling peer's actual exploration history. Each
+local human/hosted AI now contributes its own source-row bit from every engine
+mapped-map u16, packed in the original linear cell order. Native origin identity
+keys the bitmap; player-row permutations move neither its cells nor its bytes.
+A validated source roster still binds the origin and stream before any chunk.
+The [engine map](../exe-reverse-engineering.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)
+records the allocation, bit writer and Mapping handler disassembly.
+
+`RECMP_EXPLORED` (kind 11) uses a packed 16-byte prefix: u32 first/total byte
+offsets, u16 count/LosType, BEGIN/END/FULL flags and three zero reserved bytes,
+then at most 4,016 bitmap bytes. The first image is full; later ordered byte runs
+preserve both set and cleared bits, bridging up to eight equal bytes. An
+unchanged bitmap emits nothing unless its full 16-bit LosType changed, in which
+case an empty BEGIN/END transaction retains the mode. Housekeeping bit 3 is
+retained. Wire version 2 and file formats 5/6 are unchanged; a decoder without
+kind 11 refuses this new data, so all contributing peers require the same build.
+
+`tagpu_recmp_explored.c` owns copied buffers on one thread. Dimensions must fit
+LoadMap's exact whole-u16 allocation without 32-bit multiplication/shift wrap.
+Each complete copied chunk validates length, flags, reserved/tail bits, range,
+source roster/stream, tick, sequence and transaction ordering before any write.
+A full transaction has contiguous coverage; deltas require a complete baseline
+and ascending nonoverlapping runs. Only END publishes. Source seals require no
+partial transaction. Encoder input is copied before callbacks; failed emission
+ends the producer and cannot restart its partial transaction.
+
+`mp_explored_capture` reads only controller-1/2 rows on the game thread at B2,
+including when local recording is off. Frozen pointer/geometry checks detect
+level replacement; allocation-to-teardown game-thread ordering supplies the
+lifetime. File history separately validates source proof and publishes applied
+exploration. `recr_mp_explored` returns the last complete bitmap, full LosType
+and source/application provenance at the current world tick, rebuilding after
+seek. Unknown and insufficient-capacity queries leave outputs unchanged. No
+engine write, byte patch, exclusion, tolerance or simulation class is changed.
+
+The owned Wine codec fixture passes ten shuffled origins, input destruction
+during callback, split full/delta publication, unchanged and mode-only updates,
+53 malformed/guarded-span controls, unused tail bits and failed emission. The
+writer/C/Python file fixture checks applied full/delta/mode data, seek, proof-only
+isolation and semantic refusals behind resealed valid source prefixes/cuts.
+These are copied-data tests. They do not establish effective POV playback,
+camera/cursor/selection/click streams, recomputed sight or communication audiences;
+native engine playback and the wider multiplayer gates remain open.
+
+MEASURED 2026-10-05 on the reference setup, COVER build, retail *Two Continents*,
+private display and native loopback DirectPlay, host recording enabled and joiner
+opted out: all four complete first bitmaps have source tick 1, sequence 17,
+134,400 cells, 16,800 bytes and LosType 7. Source/recipient CRCs agree exactly:
+
+| Origin | Controller | CRC | Recipient application tick |
+|---|---|---|---|
+| 666445500 | host human | `9D86AD27` | 14 |
+| 666445497 | host AI | `AFB762D4` | 14 |
+| 666445502 | join human | `7134ABF3` | 57 |
+| 666445496 | join AI | `E3D77AE4` | 57 |
+
+The same run verifies the four initial rosters/player images and all 24 first
+create/death/return/script/reply/spray batches. It then fails the ordinary-exit
+driver: batched chat input leaves `TALK.GUI` on top instead of `TABMENU`.
+The next attempt stops before the game because its temporary nickname exceeds
+the engine's ten-character field. The third uses short names and waits for
+`TALK.GUI`, but `ui fill TALK +mapping` returns an empty field rather than the
+requested text; it refuses to submit unconfirmed input. All owned instances
+and private displays are removed. This native gate stops after three attempts.
+No complete native exploration file, real Mapping change, primary-map oracle,
+C/Python native exploration seek result or physical budget is claimed. The next
+native attempt needs a driver that demonstrates acknowledged chat text or
+another engine-owned mode-change control. These failures leave the successful
+initial exchange intact and do not establish a simulation or transport defect.
+
+The current controlled file is 4,018 bytes: 30 applications (20 produced, ten
+consumed) and eight proof records. Six mixed owner root batches keep their exact
+order/bytes; the new local exploration full/delta/mode images are applied while
+a later remote full image stays proof-only. All five lifecycle checks, 23 header
+controls and 120 semantic-body controls pass, including eleven exploration
+mutations whose rebuilt raw seals/cuts are valid. The first expanded proof-only
+test omitted the original late proof packets from its constructed proof stream;
+including the complete source prefix fixes that test, without decoder changes.
+
+The current COVER `secondary-orders` run at internal speed 20 returns 22 passes
+and one failure: the images inventory finds three differing bytes at
+`main+0x531`, live `48c60b`, playing `70030c`, fresh seek `40050c`. Observed world,
+radar, roots/sinks, address scans, puppet-write checks and all three exact
+poisoned round trips pass. This repeats the pending GUI-pointer classification
+gap; no exclusion or tolerance is changed and this run does not clear that gate.
+The normal/COVER builds and all 39 harness logic tests pass. The native bitmap
+coverage sample reaches `mp_explored_begin`, `mp_explored_capture`,
+`mp_explored_emit` and `mp_explored_log` on both peers; the sample is written
+before teardown and does not reach `mp_explored_end`. The codec's private copied
+storage is outside the instrumented recorder source set. No successful complete
+native exploration replay or accumulated landing coverage is claimed.
+
+The updated C/Python readers also verify the earlier real native file: all
+5,994 applications, 1,546,794 application bytes, 1,054 root batches and 36
+observed replica creates remain exact through world seek. That file contains
+no kind-11 exploration; both readers retain unknown exploration rather than
+inventing a baseline. This is backward file-reading verification, not native
+exploration application or engine multiplayer playback.

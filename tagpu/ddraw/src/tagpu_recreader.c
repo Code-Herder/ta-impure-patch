@@ -1352,7 +1352,7 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
             s->t.first_off = s->t.end_off = off + sizeof b + b.packed;
             s->i0 = nix;
             tagpu_recmp_history_end(mp); mp=NULL;
-            if (s->h->has_mp && !(mp=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats))) {
+            if (s->h->has_mp && !(mp=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats,s->h->grid_w,s->h->grid_h))) {
                 snprintf(why, cap, "invalid contribution roster or no memory for history"); goto done;
             }
             after_end = 0;
@@ -1764,7 +1764,7 @@ static int mp_read(RecReader* r, RecMpRead* m, uint64_t* ordinal,
         r->w.tick<m->tick || (ordinal &&
         *ordinal!=tagpu_recmp_history_ledger(m->history)->records)) {
         mp_read_free(m);
-        m->history=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats);
+        m->history=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats,s->h->grid_w,s->h->grid_h);
         if (!m->history) { snprintf(why,cap,"no memory for multiplayer authority"); return -1; }
         m->epoch=r->scan_epoch; m->segment=segment; m->tick=0;
         m->index=s->i0; m->done=0;
@@ -2560,4 +2560,11 @@ done:
     recr_close(r);
     recfile_unlock(&lock);
     return ok;
+}
+
+int recr_mp_explored(RecReader* r, unsigned origin, RecMpExploreState* out, void* image, unsigned capacity,
+                      char* why, unsigned cap)
+{
+    int k=mp_read(r,&r->mp_query,NULL,NULL,NULL,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_explored(r->mp_query.history,origin,out,image,capacity);
 }

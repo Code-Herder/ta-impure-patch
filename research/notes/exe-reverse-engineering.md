@@ -2706,6 +2706,31 @@ written. The simulation reads it: the transport unload `0x47E2D0` tests the unit
 (`0x47E37B`), the AI's map `0x40D7B0` its own player's, and `UnitInPlayerLOS 0x465AC0` (outside true
 LOS) and the order resolver `0x43F0E0` the **locally viewed** player's.
 
+**Per-origin multiplayer capture, DIS / SOURCE:** the allocation computes its size in
+32 bits: `0x483CF6/0x483CF9` read W/H at the map block's `+0x38/+0x3C`,
+`0x483CFD` doubles the product and `0x483CFF` shifts it right twice before
+`0x4D83B0` at `0x483D08`; `0x483D1E..0x483D25` zero both whole dwords and
+remaining bytes. `tagpu_recmp_explored_cells` requires positive 16-bit dimensions,
+W·H ≤ UINT32_MAX/2 and W·H divisible by four. Thus its W·H/4 bounded u16 reads
+fit the exact engine allocation and the doubled product cannot wrap. The stamp
+loads the player's self row at `0x48194B`, shifts the mask at `0x481951`, reads
+the map at `0x481A48` and the indexed u16 at `0x481A53`; the tested-zero branch
+stores that bit at `0x481A67`. These instructions establish the source row's
+bit identity, not a remote peer's row order.
+
+`mp_explored_capture` freezes `main+0x14273`, W/H (`+0x14233/+0x14237`) and
+copies each local controller-1/2 row's own bit into an origin-keyed bitmap at B2.
+Map allocation and level teardown belong to this game thread; equality tests
+detect a changed level and are not the memory lifetime guarantee. The private
+codec owns copied storage and publishes only a complete BEGIN/END transaction.
+It performs no engine write or patch. The full u16 LosType at `main+0x14281`
+travels with that origin's bitmap, including housekeeping bit 3. The typed
+`Mapping` handler `0x416D80` reads it at `0x416D86`, toggles only bit 0 at
+`0x416D8F..0x416D98`, calls `0x430F00` at `0x416D9F` and rebuilds with argument
+1 through `0x4816A0` at `0x416DA6`. This inspection establishes no broader
+contract for `0x430F00`. A Mapping mode change may clear or fill the map;
+the contribution delta therefore preserves both cleared and set bits.
+
 **The sight counters' bookkeeping.** A unit keeps its last stamp's cell in `+0x7A`/`+0x7C` and its
 height byte (ray fan) or radius (circle) in `+0xF8`. The stamp `0x482270` increments, the removal
 `0x481D50` decrements the same cells, read from the same stored words, with no zero test. The

@@ -3046,13 +3046,14 @@ also run with recording off; frame/queue exhaustion makes capture incomplete.
 Codec/queue controls pass 68 atomic refusals, 1,300 guarded batch truncations,
 457 guarded per-kind short spans, maximum 167 replies/251 returns and 8,392
 ordered mixed calls, including source owner-row authorization and every
-constructor/finished/position bit. The 3,964-byte synthetic C/Python file verifies six mixed
-applied batches through seek, proof-only isolation, five lifecycles, 23 header
-and 109 body refusals. Queries return copied authority separately from `RecWorld`.
+constructor/finished/position bit. The 4,018-byte synthetic C/Python file verifies six mixed
+applied batches and per-origin exploration through seek, proof-only isolation,
+five lifecycles, 23 header and 120 body refusals. Queries return copied authority
+separately from `RecWorld`.
 `recr_mp_apply` visits every application envelope in recorded ordinal order
 through the current world tick, retaining both clocks and the full copied batch.
 Its separate cursor prevents copied-state queries from consuming playback data.
-All 27 envelopes match independent Python bytes/provenance; A/B/A batches,
+All 30 envelopes match independent Python bytes/provenance; A/B/A batches,
 resumed ordinals, repeated polls and backward/forward seek preserve the sequence.
 The engine map corrects the notice-table stride to 24 bytes and documents both
 reply viewer filters and spray's signed low layer index. Engine application,
@@ -3141,6 +3142,22 @@ radar/root/sink comparisons at speed 20. This verifies the shared path; it does
 not establish native playback or explain the earlier GUI inventory failure.
 
 The mapping checkpoint's skirmish regression passes world/radar/events/counts and all three poisoned round trips, but the images inventory fails at two bytes of the active GUI heap pointer `main+0x531`. The four-byte exclusion proposal is pending the owner's decision; this is a checkpoint, not a cleared landing gate. See the multiplayer slice and engine map for the disassembly and measured addresses.
+
+The work branch also captures each controlling human/hosted AI's explored-map
+bit history as kind-11 origin-keyed full/delta bitmap transactions, retaining
+the complete LosType and source/application stamps. B2 bounds the raw u16
+reads by LoadMap's nonwrapping allocation geometry and uses game-thread level
+lifetime. The copied codec publishes only END, source seals refuse partial
+transactions, and file readers keep proof-only source state separate from
+applied exploration. Codec and controlled file/seek checks pass. A native COVER
+sample verifies all four first source/recipient bitmap CRCs, but its exit/chat
+driver fails; the complete native map file/mode/seek gate remains open after
+three attempts. The current `secondary-orders` replay has 22 passes and one
+images-inventory failure at three bytes of `main+0x531`; all simulation
+comparisons and three exact poisoned round trips pass. The pending exclusion
+is unchanged. This adds no hook, field write or exclusion. Effective POV
+engine playback, other view streams and communication audiences remain open;
+see the multiplayer slice's *Per-origin explored-map history*.
 
 | Fields we write in the multiplayer checkpoint | Invariant |
 |---|---|

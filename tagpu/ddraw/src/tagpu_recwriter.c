@@ -431,7 +431,7 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
             if (ctl<1 || ctl>4 || w->mp.header.actor[i].local!=(ctl==1 || ctl==2)) return 0;
         }
         if (seats!=mask) return 0;
-        w->mp_history=tagpu_recmp_history_begin(&w->mp.header,roster);
+        w->mp_history=tagpu_recmp_history_begin(&w->mp.header,roster,w->gw,w->gh);
         if (!w->mp_history) return 0;
     }
     w->units = (unsigned char*)VirtualAlloc(NULL, (size_t)w->nslots * REC_UNIT_IMAGE,

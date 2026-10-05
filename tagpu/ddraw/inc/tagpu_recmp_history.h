@@ -5,6 +5,7 @@
 #include "tagpu_recmp_units.h"
 #include "tagpu_recmp_named.h"
 #include "tagpu_recmp_roots.h"
+#include "tagpu_recmp_explored.h"
 
 typedef struct RecMpHistory RecMpHistory;
 
@@ -12,7 +13,8 @@ typedef struct RecMpHistory RecMpHistory;
    every envelope, including proof tails. Separate application caches publish only
    produced/consumed records, so proof completion cannot replace the recorded world.
    All storage has fixed bounds and belongs to this one reader/writer. */
-RecMpHistory* tagpu_recmp_history_begin(const RecMpRecordHeader* header, const RecMpRoster* roster);
+RecMpHistory* tagpu_recmp_history_begin(const RecMpRecordHeader* header, const RecMpRoster* roster,
+                                            unsigned width, unsigned height);
 void tagpu_recmp_history_end(RecMpHistory* history);
 /* Invalid input poisons the history: discard it. No state may be queried afterwards. */
 int tagpu_recmp_history_record(RecMpHistory* history, const RecMpRecord* where,
@@ -22,6 +24,8 @@ const RecMpFileState* tagpu_recmp_history_ledger(const RecMpHistory* history);
 /* Player images use recorder row coordinates; source provenance remains intact.
    0 means unknown, including a list whose first complete transaction has not arrived. */
 int tagpu_recmp_history_player(const RecMpHistory* history, unsigned origin, RecMpPlayerState* out);
+int tagpu_recmp_history_explored(const RecMpHistory* history, unsigned origin,
+                                  RecMpExploreState* out, void* image, unsigned capacity);
 int tagpu_recmp_history_unit(const RecMpHistory* history, unsigned slot, RecMpUnitState* out);
 int tagpu_recmp_history_roots(const RecMpHistory* history, unsigned origin, RecMpRootsState* out);
 int tagpu_recmp_history_named(const RecMpHistory* history, unsigned origin, RecMpNamedState* out);
