@@ -1,0 +1,3 @@
+landing-review: reviewers=resource_review_engine,resource_review_state effort=high range=main...c1e8149b findings=3 acted=3 rejected=0 date=2026-10-05
+Native non-interactive reviewer could not execute commands because its namespace sandbox was unavailable; two independent fresh read-only harness reviewers checked the accumulated source/docs diff and pristine disassembly.
+Confirmed resolver zero sentinel, coordinate-producer prerequisite, and raw-preference Undo findings. Parent verified each against source/disassembly. All acted in a0e1a0a2, with focused native regressions; both reviewers independently audited the fixes with no confirmed remaining findings. Final replay and compatibility results are separate gates.
