@@ -10,7 +10,9 @@
    game thread is the only writer of the engine records and of every SIM_STATE table the capture
    reads: the loader thread's writes end before the in-play entry (0x497F40 reads the loader's
    last store, bit 1 of main+0x38D75, before the first iteration). The event hooks (*The events*)
-   record what the engine does between two captures, and only on that thread.
+   record what the engine does between two captures, and only on that thread. The primary
+   receive wrapper also runs on the loader's pump: it owns only its stack frame, private
+   packet bytes and exact receive span, serializing receive/dispatch with the other pump.
 
    WHAT IT READS, AND WHY EACH READ IS IN BOUNDS.
    - The unit array [begin, begin + nslots * 0x118): nslots is the engine's own count
@@ -52,8 +54,10 @@
 
    WHAT IT WRITES: its own memory -- the shadow images, contribution caches, ring and dump file --
    and the startup packet-length entry 0x512AF8, identified-text length/callback/mask
-   entries 0x512B84/0x512ACC/0x512C6C through its redirected initializer. Validated
-   identified text replaces the first 65 bytes of the current owned receive allocation
+   entries 0x512B84/0x512ACC/0x512C6C through its redirected initializer. The primary
+   receiver writes its dispatcher's stack pointer to privately owned packet storage;
+   nested pumps restore their parent's main+0x4C9/+0x4CD transport metadata. Validated
+   identified text replaces the first 65 bytes of that private receive allocation
    before entering the stock text case. The host's extended start retains the engine's
    original start action (mp_start_send / mp_start_receive). Native CreatePlayer receives
    the original 21-byte prefix plus a public key through the redirect at 0x4CA762;
@@ -345,6 +349,103 @@ static void mp_match_log(const char* action, DWORD origin, const GUID* match)
                match->Data4[4], match->Data4[5], match->Data4[6], match->Data4[7], (unsigned)origin);
 }
 
+/* The queued receiver copies a split message without checking its caller's
+   capacity (0x46354F..0x463567). Every split length is a u16: the variable
+   length at 0x46391B or the fixed table word at 0x463931. Reserve their full
+   range before calling it. Raw/system messages use the SDK's size negotiation.
+   Native sends continue to use main+0x2A38, so they cannot overwrite this input.
+   The pump lock owns the transport's receive cursors and main+0x4C9/0x4CD from
+   receive through dispatch. A recursive call gets a distinct frame and restores
+   its parent's metadata; neither its allocation nor its span escapes the call. */
+#define MP_RX_BYTES 65536u
+typedef struct MpReceiveFrame {
+    struct MpReceiveFrame* previous;
+    char* ta;
+    unsigned char* buffer;
+    unsigned capacity, bytes, from, to;
+} MpReceiveFrame;
+_Static_assert(sizeof(MpReceiveFrame)<=127, "receive frame fits the wrapper's stack instruction");
+static DWORD s_mp_rx_tls = TLS_OUT_OF_INDEXES;
+static CRITICAL_SECTION s_mp_rx_lock;
+
+unsigned tagpu_rec_wire_received(const void* message)
+{
+    MpReceiveFrame* frame;
+    if (!message || s_mp_rx_tls==TLS_OUT_OF_INDEXES) return 0;
+    frame=TlsGetValue(s_mp_rx_tls);
+    return frame && message==frame->buffer ? frame->bytes : 0;
+}
+
+/* The wrapper reserves this frame on its own stack before entering the stock
+   no-argument pump. All original registers/flags survive each callout. */
+static int __cdecl mp_receive_enter(MpReceiveFrame* frame)
+{
+    EnterCriticalSection(&s_mp_rx_lock);
+    memset(frame,0,sizeof *frame);
+    frame->previous=TlsGetValue(s_mp_rx_tls);
+    frame->ta=ta_main();
+    if (frame->ta) {
+        memcpy(&frame->from,frame->ta+0x4C9,4);
+        memcpy(&frame->to,frame->ta+0x4CD,4);
+    }
+    if (!TlsSetValue(s_mp_rx_tls,frame)) {
+        LeaveCriticalSection(&s_mp_rx_lock);
+        tagpu_logf("recmp: primary receive frame unavailable");
+        return 0;
+    }
+    return 1;
+}
+
+static void __cdecl mp_receive_leave(MpReceiveFrame* frame)
+{
+    if (frame->buffer) HeapFree(GetProcessHeap(),0,frame->buffer);
+    if (frame->previous && frame->ta) {
+        memcpy(frame->ta+0x4C9,&frame->from,4);
+        memcpy(frame->ta+0x4CD,&frame->to,4);
+    }
+    TlsSetValue(s_mp_rx_tls,frame->previous);
+    LeaveCriticalSection(&s_mp_rx_lock);
+}
+
+/* Call-entered at 0x453D94: entry[5] is the stock pump's message pointer at
+   esp+0x10. The SDK writes only into this frame's allocation. A too-small
+   response must increase capacity; it has not consumed the pending message.
+   Allocation failure leaves that message pending for a later pump visit. */
+static int __cdecl mp_receive_packet(unsigned* entry)
+{
+    typedef HRESULT (__attribute__((thiscall)) *QueuedFn)(void*,void*,void*,DWORD*);
+    typedef HRESULT (__stdcall *RawFn)(void*,void*,DWORD*);
+    typedef void (__stdcall *StatsFn)(unsigned,unsigned,unsigned);
+    MpReceiveFrame* frame=TlsGetValue(s_mp_rx_tls);
+    unsigned raw=*(const unsigned*)0x506DBC==0;
+    HRESULT result;
+    DWORD bytes;
+    if (!frame || !frame->ta || !((unsigned char)frame->ta[OFF_NETWORK]&1)) return 0;
+    frame->bytes=0;
+    if (!frame->buffer) {
+        frame->buffer=HeapAlloc(GetProcessHeap(),0,MP_RX_BYTES);
+        if (!frame->buffer) return 0;
+        frame->capacity=MP_RX_BYTES;
+    }
+    for (;;) {
+        bytes=frame->capacity;
+        result=raw ? ((RawFn)(size_t)0x4C9840)(frame->ta+0x14,frame->buffer,&bytes) :
+                     ((QueuedFn)(size_t)0x462F30)((void*)0x51E300,frame->ta+0x14,
+                                                 frame->buffer,&bytes);
+        if (result!=(HRESULT)0x8877001E) break;
+        if (bytes<=frame->capacity) return 0;
+        unsigned char* next=HeapReAlloc(GetProcessHeap(),0,frame->buffer,bytes);
+        if (!next) return 0;
+        frame->buffer=next; frame->capacity=bytes;
+    }
+    if (result!=S_OK || !bytes || bytes>frame->capacity) return 0;
+    frame->bytes=bytes;
+    entry[5]=(unsigned)(size_t)frame->buffer;
+    ((StatsFn)(size_t)0x415EF0)(frame->buffer[0],bytes,0);
+    if (raw) ((StatsFn)(size_t)0x415F40)(bytes,0,0);
+    return 1;
+}
+
 /* DISASSEMBLED: only the host branch of 0x496CE0 reaches call 0x496D25;
    PlayerInfo+0x97 bit 0 selects it. 0x451DF0 copies this stack packet into
    the engine queue (0x462710/0x4628D0), or sends it before returning in raw
@@ -379,7 +480,7 @@ static int __stdcall mp_start_send(DWORD origin, const void* message, unsigned b
 /* DISASSEMBLED: the 0x08 case enters at 0x4553BE with its message at esp+0x10
    and source player in EDI (esp+0x14 holds its row index). Only the game thread
    in lobby/start states 2/3 accepts
-   metadata. B3's receive note supplies the actual span, not buffer capacity.
+   metadata. tagpu_wire_received supplies the actual span, not buffer capacity.
    The ten-row bound precedes the process-lifetime PlayerInfo read. */
 static void __cdecl mp_start_receive(void* frame)
 {
@@ -550,11 +651,9 @@ static int __stdcall mp_chat_send_line(const char* line)
     return ((SendFn)(size_t)0x453360)(line);
 }
 
-/* The new 0x2B case has the dispatcher's original frame. The exact delivered
-   pointer/length owns a writable allocation at main+0x2A38 until the next
-   receive. Copy/validate metadata before moving its embedded stock packet to
-   the front of that allocation, then enter stock's 0x05 case unchanged. No
-   engine address escapes this call; the original pump pointer stays intact. */
+/* The new 0x2B case has the dispatcher's original frame and its private receive
+   allocation. Copy/validate metadata before moving its embedded stock packet
+   to the front of that allocation, then enter stock's 0x05 case unchanged. */
 static int __cdecl mp_chat_receive(void* frame)
 {
     unsigned char* message=((unsigned char**)frame)[4];
@@ -595,6 +694,10 @@ static int __cdecl mp_chat_receive(void* frame)
 
 static void mp_init(void)
 {
+    static const unsigned char pump_entry[5]={0xA1,0xE8,0x1D,0x51,0x00};
+    static const unsigned char pump_receive[5]={0xE8,0x47,0xF7,0xFF,0xFF};
+    static const unsigned char split_variable[11]={0x6A,0x10,0x8D,0x4C,0x24,0x18,0xE8,0x9C,0x24,0xFB,0xFF};
+    static const unsigned char split_fixed[8]={0x66,0x8B,0x04,0x85,0xD8,0x2A,0x51,0x00};
     static const unsigned char launch[] = {
         0xC6,0x44,0x24,0x07,0x08,0x8B,0x40,0x04,0x8D,0x54,0x24,0x07,
         0x6A,0x01,0x52,0x50,0xE8,0xC6,0xB0,0xFB,0xFF
@@ -617,18 +720,25 @@ static void mp_init(void)
     struct { unsigned va, n; unsigned char now[6]; DWORD protection; } site[] = {
         { 0x496D25, 5 }, { 0x4553BE, 5 }, { 0x4520BE, 6 },
         { 0x4CA762, 5 }, { 0x454315, 6 }, { 0x493FAF,5 }, { 0x463E9F,5 },
-        { 0x4534B6,5 }, { 0x4533F9,5 }, { 0x45348B,5 }, { 0x456028,4 }
+        { 0x4534B6,5 }, { 0x4533F9,5 }, { 0x45348B,5 }, { 0x456028,4 },
+        { 0x453D40,5 }, { 0x453D94,5 }
     };
     unsigned char *observe = NULL, *sized = NULL, *create = NULL, *accept = NULL, *chat = NULL, *p;
+    unsigned char *pump=NULL, *receive=NULL, *tail;
     const unsigned sites = sizeof site / sizeof site[0];
-    unsigned i, writable = 0, value;
+    unsigned i, writable = 0, value, locked=0;
     if (memcmp((const void*)(size_t)0x496D15, launch, sizeof launch) ||
         memcmp((const void*)(size_t)0x4553BE, received, sizeof received) ||
         *(const unsigned*)(size_t)0x455F9C != 0x4553BE ||
         memcmp((const void*)(size_t)0x4520BE, length, sizeof length) ||
         memcmp((const void*)(size_t)0x4CA749, created, sizeof created) ||
         memcmp((const void*)(size_t)0x454315, data_size, sizeof data_size) ||
-        *(const unsigned*)(size_t)0x456028!=0x455F50) goto refused;
+        *(const unsigned*)(size_t)0x456028!=0x455F50 ||
+        tagpu_detour_landed(0x453D40,NULL,NULL) ||
+        memcmp((const void*)0x453D40,pump_entry,sizeof pump_entry) ||
+        memcmp((const void*)0x453D94,pump_receive,sizeof pump_receive) ||
+        memcmp((const void*)0x463919,split_variable,sizeof split_variable) ||
+        memcmp((const void*)0x463931,split_fixed,sizeof split_fixed)) goto refused;
     for (i=0;i<sizeof chat_call/sizeof chat_call[0];i++)
         if (memcmp((const void*)(size_t)chat_call[i].va,chat_call[i].stock,5)) goto refused;
     observe = tagpu_detour_stub();
@@ -636,7 +746,41 @@ static void mp_init(void)
     create = tagpu_detour_stub();
     accept = tagpu_detour_stub();
     chat = tagpu_detour_stub();
-    if (!observe || !sized || !create || !accept || !chat) goto refused;
+    pump = tagpu_detour_stub();
+    receive = tagpu_detour_stub();
+    if (!observe || !sized || !create || !accept || !chat || !pump || !receive) goto refused;
+    s_mp_rx_tls=TlsAlloc();
+    if (s_mp_rx_tls==TLS_OUT_OF_INDEXES) goto refused;
+    if (!InitializeCriticalSectionAndSpinCount(&s_mp_rx_lock,0)) goto refused;
+    locked=1;
+    p=pump;
+    *p++=0x83; *p++=0xEC; *p++=sizeof(MpReceiveFrame);
+    *p++=0x9C; *p++=0x60;
+    *p++=0x8D; *p++=0x44; *p++=0x24; *p++=0x24;
+    *p++=0x50; *p++=0xE8; tagpu_detour_rel(p,(unsigned)(size_t)mp_receive_enter); p+=4;
+    *p++=0x83; *p++=0xC4; *p++=4;
+    *p++=0x85; *p++=0xC0; *p++=0x61;
+    *p++=0x0F; *p++=0x84; tail=p; p+=4;
+    *p++=0x9D;
+    *p++=0xE8; unsigned char* original=p; p+=4;
+    *p++=0x9C; *p++=0x60;
+    *p++=0x8D; *p++=0x44; *p++=0x24; *p++=0x24;
+    *p++=0x50; *p++=0xE8; tagpu_detour_rel(p,(unsigned)(size_t)mp_receive_leave); p+=4;
+    *p++=0x83; *p++=0xC4; *p++=4; *p++=0x61; *p++=0x9D;
+    *p++=0x8D; *p++=0x64; *p++=0x24; *p++=sizeof(MpReceiveFrame); *p++=0xC3;
+    tagpu_detour_rel(tail,(unsigned)(size_t)p);
+    *p++=0x9D; *p++=0x83; *p++=0xC4; *p++=sizeof(MpReceiveFrame);
+    *p++=0x33; *p++=0xC0; *p++=0xC3;
+    tagpu_detour_rel(original,(unsigned)(size_t)p);
+    memcpy(p,pump_entry,sizeof pump_entry); p+=sizeof pump_entry;
+    *p++=0xE9; tagpu_detour_rel(p,0x453D45);
+    p=receive;
+    *p++=0x9C; *p++=0x60;
+    *p++=0x8D; *p++=0x44; *p++=0x24; *p++=0x24;
+    *p++=0x50; *p++=0xE8; tagpu_detour_rel(p,(unsigned)(size_t)mp_receive_packet); p+=4;
+    *p++=0x83; *p++=0xC4; *p++=4;
+    *p++=0x89; *p++=0x44; *p++=0x24; *p++=0x1C;
+    *p++=0x61; *p++=0x9D; *p++=0xC3;
     p = observe;
     *p++ = 0x9C; *p++ = 0x60;                  /* flags and all registers */
     *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x24;
@@ -694,9 +838,10 @@ static void mp_init(void)
                           i == 6 ? (unsigned)(size_t)mp_chat_send_line :
                           i == 7 ? (unsigned)(size_t)mp_chat_send_all :
                           i == 8 || i == 9 ? (unsigned)(size_t)mp_chat_send_one :
-                          (unsigned)(size_t)chat;
+                          i == 10 ? (unsigned)(size_t)chat :
+                          i == 11 ? (unsigned)(size_t)pump : (unsigned)(size_t)receive;
         if (i==10) { memcpy(site[i].now,&target,4); continue; }
-        site[i].now[0] = i == 0 || i>=5 ? 0xE8 : 0xE9;
+        site[i].now[0] = i == 0 || (i>=5 && i!=11) ? 0xE8 : 0xE9;
         value = target - (site[i].va + 5);
         memcpy(site[i].now + 1, &value, 4);
         site[i].now[5] = 0x90;
@@ -720,6 +865,7 @@ static void mp_init(void)
                (unsigned)sizeof(RecMpStart), RECMP_PRIMARY_BYTES + (unsigned)sizeof(RecMpPublic));
     tagpu_logf("recmp: ARMED %u-byte identified in-match text; native audience and display case",
                (unsigned)sizeof(RecMpChatWire));
+    tagpu_logf("recmp: ARMED owned primary receive frames and serialized dispatch");
     return;
 refused:
     for (i = 0; i < writable; i++) {
@@ -731,6 +877,11 @@ refused:
     tagpu_detour_stub_free(create);
     tagpu_detour_stub_free(accept);
     tagpu_detour_stub_free(chat);
+    tagpu_detour_stub_free(pump);
+    tagpu_detour_stub_free(receive);
+    if (locked) DeleteCriticalSection(&s_mp_rx_lock);
+    if (s_mp_rx_tls!=TLS_OUT_OF_INDEXES) TlsFree(s_mp_rx_tls);
+    s_mp_rx_tls=TLS_OUT_OF_INDEXES;
     tagpu_logf("recmp: start/player-data/text sites differ or cannot be patched: no contributions");
 }
 

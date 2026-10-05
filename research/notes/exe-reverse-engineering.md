@@ -447,7 +447,7 @@ existing send/receive and save investigations below remain the fuller maps.
 | `0x451DF0` | Message-send entry, `ret 0xC`; reads the main pointer `0x511DE8`, sender/player records, network bit `main+0x2A44`, and branch selector `main+0x299C`. With that selector zero, `[0x506DBC] != 0` calls `0x461990` at `0x451EE0`, `ecx = 0x513000`; otherwise `0x451EFD` calls `0x4C97B0` with destination 0 and context `main+0x14`. The other branch loops player records at stride `0x14B`, using deduplication storage `0x512B90`, and calls `0x451BC0` at `0x451F75`. This entry is already B8's held-send gate, not an unowned recorder hook site. |
 | `0x4C97B0` | `ret 0x14`; after the existing diagnostic call `0x4C9740`, takes the interface at context `+0x4C5`, calls its vtable `+0x68` (`Send`) at `0x4C97F6`, and derives its flags from `0x50A780`. A NULL interface returns `0x887700AA`. The adjacent `0x4C9800` wrapper also calls `+0x68` (at `0x4C9839`), with flag 1; recording only one wrapper would need a coverage argument. |
 | `0x4C9840` | `ret 0xC`; reads the same interface at context `+0x4C5`, passes context `+0x4B5` and `+0x4B9` as the sender/destination output addresses and flag 1, then calls vtable `+0x64` (`Receive`) at `0x4C987E`. The buffer and length pointer come from its other two arguments. These offsets are relative to the network context, not the main block. |
-| `0x4534E0`, `0x453595`, `0x45361F` | Existing bounded-delivery capture in B3, re-read in `tagpu_patches.c:wire_rx_note`: the latter two sites replace the statistics call and preserve the delivered buffer/length in TLS. The pump's moved-buffer fix must remain. See *One receive, one message* below for callers, fields, and prior disassembly; not a newly verified whole-function trace in this pass. |
+| `0x4534E0`, `0x453595`, `0x45361F` | Existing bounded-delivery capture in B3, re-read in `tagpu_patches.c:wire_rx_note`: the latter two sites replace the statistics call and preserve the delivered buffer/length in TLS. That moved-buffer fix remains the fallback when the owned primary installer refuses. See *One receive, one message* below for callers, fields, and prior disassembly; not a newly verified whole-function trace in this pass. |
 | `0x432A38` | TADR `SaveGame_SaveAdditionHook`'s site: retail bytes `A1 E8 1D 51 00`, `mov eax,[0x511DE8]`. Continuation `0x432A3D` takes the stack-local address, reads `main+0x391ED`, and calls `0x48FDF0` at `0x432A48`. The field's object type and the called function's meaning are not established by this slice. |
 | `0x43267D` | TADR `SaveGame_LoadAdditionHook`'s site: retail bytes `8B 15 E8 1D 51 00`, `mov edx,[0x511DE8]`; continuation `0x432683` pushes `esi` and reads the same `main+0x391ED`. Matching splice bytes establish neither checkpoint completeness nor multiplayer restore support. |
 
@@ -505,7 +505,7 @@ but does not identify a level. No capability or version negotiation is added.
 | `0x451DF0`, `0x451EE0`, `0x451EFD` | Generic sender, stdcall `ret 12`, validates an active local type-1/type-2 source and tests the network bit. Reliable mode calls `0x461990`; raw mode calls `0x4C97B0`. B8 owns its entry; the recorder redirects only the start call, preserving B8's path. The targeted sender `0x451BC0` is stdcall `ret 16`, validates a local source and remote destination, and uses its raw call at `0x451DAC`. |
 | `0x461990`, `0x462710`, `0x4628D0` | Reliable queue path: the wrapper forwards to `0x462710`, whose copy routine `0x4628D0` proves old payload plus incoming bytes fits `0x42A` (1066), copies the exact span into queue-owned memory at record `+0x14+offset`, and stores its length. The caller's 25-byte stack start is no longer needed after return. The queue has a `0x400` entry bound. |
 | `0x451FD0`, `0x452040`, `0x4520BE..0x4520D4` | Packet-table initializer. ESI is 1 at `0x452040`; `0x4520BE` writes that fixed length to `0x512AF8`, the `0x08` entry in length table `0x512AD8`. Mask `0x512BE0` is 7 (all three pump phases), set at `0x4520CE`. The recorder redirects the six-byte length store to write 25 and resumes at `0x4520C4`, so reinitialization retains the extended format. |
-| `0x453D40`, `0x453E14`, `0x453E84..0x453EA2` | The receive pump keeps the message at stack `+0x10`; B3's receive note repairs this pointer after realloc and retains the actual delivered length in TLS. Stack `+0x14` is the source row **index**, initially 10 for no match, not a player pointer. The pump derives source player EDI from it at `0x453E9B`. Recorder metadata bounds that saved EDI to the ten-row array before reading native ID `+4` and process-lifetime PlayerInfo `+0x27/+0x97`. |
+| `0x453D40`, `0x453E14`, `0x453E84..0x453EA2` | The retail receive pump keeps the message at stack `+0x10`; B3's fallback receive note repairs this pointer after realloc and retains the delivered length in TLS. The work branch's owned receive path assigns that slot from its private allocation instead. Stack `+0x14` is the source row **index**, initially 10 for no match, not a player pointer. The pump derives source player EDI from it at `0x453E9B`. Recorder metadata bounds that saved EDI to the ten-row array before reading native ID `+4` and process-lifetime PlayerInfo `+0x27/+0x97`. |
 | `0x45473F..0x4547AD`, `0x4547AD..0x45483F` | Pump phase mask and player admission. States 5/6 test mask bits 1/2; other states test bit 0. The source row is EDI and destination row is EBX. The recorder accepts start metadata only on the GUI/game thread, in network mode 3 and states 2/3; a late loading/play delivery does not replace its token. |
 | `0x455F9C`, `0x4553BE..0x4553D5` | The dispatch-table slot for `0x08` points to `0x4553BE`. Its first instruction loads main from `0x511DE8`; the body clears stack `+0xF0`, sets main `+0x2A44` bit 2 and jumps to `0x455F50`. The observer preserves all registers/flags, validates actual length/version/native host identity, then executes this original action even when metadata is invalid. |
 | `0x45522E`, `0x45534E`, `0x4553B5` | Alternative carriers read and left alone: fixed-65-byte chat case, `0x06` reply construction and `0x07` readiness-bit store. A chat-plus-start batch depends on the reliable splitter; the raw mode has no splitter. Extending the existing start itself serves both paths without introducing chat metadata. |
@@ -3618,7 +3618,7 @@ with bit 0 (`0x454791..0x4547A7`); a code whose bit fails in state 5 or 6 goes s
 (`0x45477F..0x45478B`, the `je` at `0x45478B` state 6's), never on to the bit-0 test. State 6 is set at
 `0x498445`, on the game thread after the load (state 5 during it).
 
-**One receive, one message.** The pump `0x453D40` calls `0x4534E0` per message (`0x453D94`), which
+**One receive, one message.** In retail, the pump `0x453D40` calls `0x4534E0` per message (`0x453D94`), which
 receives into the buffer at `main+0x2A38` — through the transport `0x462F30` when `[0x506DBC]` is set
 (the image's 1), or straight from DirectPlay (`0x4C9840`, `IDirectPlay::Receive`) when a `-p` switch
 below 0 has cleared it (`0x49F23F` → `0x4578D0` → `0x4619EB`). A too-small buffer is grown and the receive retried
@@ -7543,8 +7543,8 @@ byte), `0x486679`–`7D`, `0x486810`–`15`, `0x486F10`–`19` and `0x42B019`–
   that pressed it was the host, the third peer removed the player at the same moment, without its
   own `REJECT` (MEASURED once, 2026-09-27); after the host's console `+kill` instead, the third
   peer's copies stood until its own `REJECT`.
-- **The removal runs on whichever thread pumps.** The pump `0x453D40` holds no lock across its
-  dispatch: it tests `main+0x2A44` bit 0 (clear, it returns 0 at once, `0x453D4B..0x453D5C`, so
+- **The removal runs on whichever thread pumps.** The retail pump `0x453D40` holds no lock across its
+  dispatch; the work branch's owned primary wrapper serializes it when armed. Retail tests `main+0x2A44` bit 0 (clear, it returns 0 at once, `0x453D4B..0x453D5C`, so
   outside a network session no message case runs), zeroes ten dwords and calls the receive `0x4534E0`
   (`0x453D40..0x453D94`), and the cases run on the caller's thread. During a network
   load the loader (`0x49727D`) and the game thread's load loop (`0x49852E`) both run it, and the
@@ -12830,12 +12830,16 @@ observations. Primary per-pair message ordering remains unproved.
 | `0x45522E`, table entry `0x455F90` | Text `0x05` receive case. Requires active destination EBX and `EBX+0x73 == 1`, then calls `0x463CA0(message+1,8,0,sourceRow)` at `0x455250`. Thus an AI destination is not a displayed human chat recipient. B4's `hit_rx_chat` owns the table entry and only handles its binary envelopes when text byte 1 is zero; ordinary nonzero text continues to this stock case. |
 | `0x463CA0(text, flags, unitID, sourceRow)` | `ret 16`, shared display sink. Returns for empty text or zero `ScreenChatLines` at `main+0x37F27`. Thirty entries at `main+0x12EF`, stride `0x48`, with head/tail `+0x2A3E/+0x2A40`. Copies 64 bytes then sets entry `+0x3F` to NUL, giving at most 63 displayed bytes (`0x463D25..0x463D41`); stores GameTime at `+0x40`, unit ID at `+0x44`, source row at `+0x46` and low four flag bits at `+0x47`. Plays `MessageArrived` (`0x5072B8`) only when sourceRow != 10. Other callers include console replies, unit replies and death/results notices: recording every call as human chat would misclassify them. |
 
-`tagpu_wire_received` (`tagpu_patches.c`) reports B3's retained SDK span only
-when its argument equals the original TLS receive-buffer pointer. The primary
-pump receives **one split message** per call to `0x4534E0`; the splitter's queue
+`tagpu_wire_received` (`tagpu_patches.c`) first reports the current owned
+primary frame's delivered span when its argument equals that frame's buffer.
+Otherwise it reports B3's retained SDK span only for the exact retail TLS
+receive-buffer pointer. Both identified chat and the guarded unit-movement
+decoder use this API. The primary
+retail pump receives **one split message** per call to `0x4534E0`; the splitter's queue
 records a pointer and length for each message (`0x463A5B/0x463A6F`, or
-`0x463B6A/0x463B7E`). The pump's statistics call records the length delivered
-into `main+0x2A38`, rather than the earlier aggregate. The new text receiver
+`0x463B6A/0x463B7E`). The retail pump's statistics call records the length delivered
+into `main+0x2A38`, rather than the earlier aggregate; the owned receive path
+publishes the same delivered span for its private allocation. The new text receiver
 requires that exact pointer and exactly 97 delivered bytes before copying.
 An arbitrary interior pointer does not inherit that bound.
 
@@ -12948,16 +12952,88 @@ still pumps during the loading frame at `0x49852E`. Once it reads bit 1 at
 ticks and at `0x4968CB` before `0x498445` stores state 6. Thus state 5 also
 includes a phase after loader completion and before the first B2 producer.
 
-B3's `wire_rx_note` stores the current `main+0x2A38` pointer and delivered
-length in TLS at the receive statistics call. TLS binds the span to this
-thread's receive; it does not serialize the two loading pumps or keep an
-allocation alive against another pump's realloc. The live identified receiver
-requires the game thread and its B2 channel lifetime. Merely changing mask 4
-to 7 and removing that guard would supply neither lifetime nor recording
-ownership. A faithful loading implementation must establish the handoff,
-preserve actual pre-B2 observation clocks and publish their copied records
-after source-roster prerequisites. This audit changes no engine patch or
-acceptance rule; loading delivery remains open.
+B3's fallback `wire_rx_note` stores the current `main+0x2A38` pointer and
+delivered length in TLS at the receive statistics call. That binds the span
+to a thread; it supplies no cross-thread lifetime. The work branch's owned
+pump below removes that input-buffer dependency when the recorder's atomic
+primary installer arms. The live identified receiver still requires the game
+thread and its B2 channel lifetime. The pre-B2 copied-record handoff, exact
+observation clocks and source-roster bootstrap remain open; the receive mask
+remains 4, so loading chat is not yet accepted.
+
+##### Owned primary receive frames
+
+DISASSEMBLED 2026-10-05, retail `.text`, and checked against the branch's
+`mp_receive_enter`, `mp_receive_packet`, `mp_receive_leave` and `mp_init`:
+
+| Address / field | Established behaviour and branch use |
+|---|---|
+| `0x453D40..0x453D5C`, `0x455F50..0x455F77` | No-argument pump, plain `ret`; first five bytes load main. Network bit `main+0x2A44` gates it. The return paths restore its `0x51C` locals and four saved registers. A wrapper reserves a 28-byte private frame on its stack, preserves registers/flags around enter/leave, calls a copied-prologue trampoline and returns the original result/flags. It holds a recursive critical section through the native receive/dispatch and the final calls `0x450980`/`0x453C20`. The parent frame and its source/destination words are restored after a nested call. |
+| `0x453D8A`, `0x453D90`, `0x453D94` | Stock takes the shared message pointer once and calls receive at `0x453D94`. That call now enters the owned receiver. Its call-entry word 5 is the pump's `esp+0x10` pointer; only a successful bounded receive replaces it. The packet stays in this frame's allocation until the next receive or this pump's return. |
+| `0x4534E0..0x453639` | Stock no-argument receive returns 1 on a delivered message, 0 on no network/no message/error. It selects `0x462F30` or `0x4C9840` using `0x506DBC`, initializes size from `main+0x2A34`, and reallocates `main+0x2A38` through `0x4D84A0` at `0x453565`/`0x4535EE`. Its sole direct relative caller is redirected; the old B3 statistics stubs remain available if the atomic primary installer refuses. |
+| `0x462F30..0x4635A3`, object `0x51E300` | `thiscall(context, buffer, DWORD *bytes)`, `ret 12`. It scans ten 0x34-byte source-ring records at `this+0x20..`, consuming due entries, or receives an aggregate through `0x44F9C0` at `0x4630DE`/`0x46314D` and splits it. The queued-message branches converge at `0x46354F`: they copy EDX bytes without comparing caller capacity, then store length at `0x463567`. The branch at `0x463589` writes source/destination to context `+0x4B5/+0x4B9`. System source 0 instead bounds size against caller capacity at `0x4633E3..0x463429` and preserves a too-large message for retry. |
+| `0x463919..0x463939`, `0x4639E5`, `0x463B33`, table `0x512AD8` | Split messages have u16 lengths: the variable `0x2C` length uses a 16-bit reader call, fixed messages take the table's word, and the other walks mask to 16 bits. The owned queued receiver allocates 65,536 bytes before entering the transport, covering that entire range even though the final copy does not check capacity. The installer compares the variable reader call and fixed word-load bytes as prerequisites. |
+| `0x4C9840..0x4C9882`, `0x4C987E` | `stdcall(context, buffer, DWORD *bytes)`, `ret 12`; tests primary interface at context `+0x4C5`, then calls vtable `+0x64` with receive flag 1, output IDs at context `+0x4B5/+0x4B9` and the caller's buffer/size. For main's context at `main+0x14`, these are `main+0x4D9`, `main+0x4C9/+0x4CD`. No primary interface is retained by the new code or sent to a worker. |
+| `0x887700BE`, `0x8877001E` | Stock distinguishes no messages and buffer too small using these HRESULTs. The owned receive retries too-small only if its reported size strictly increases capacity; a failed allocation leaves the SDK message pending. Delivered length must be nonzero and at most allocation capacity before dispatch/span publication. Other errors return 0, matching the stock pump contract. |
+| `0x415EF0..0x415F3C`, `0x415F40` | Message statistics are `stdcall(code, bytes, 0)`, `ret 12`; the raw path additionally calls packet statistics `(bytes, 0, 0)`. The replacement preserves both calls. The message routine updates received bytes at `0x511BC0` and code-indexed counts/bytes at `0x511A58/0x511C58`; these counters are not packet capacity or a receive lifetime. |
+| `0x455002..0x45504A`, `0x455050..0x455053` | This case first reads input from the pump's private pointer, then obtains `main+0x2A38` to construct an outgoing `0x1C` reply. Its direct shared-buffer read is an output builder, so moving incoming packets does not require redirecting it. The sweep finds no other direct `+0x2A38` load inside this pump except its initial pointer read. |
+| `0x45486D`, table `0x455F84`; `0x45497A`, `0x4549CC`, `0x454A26` | The case switch spans codes 2 through `0x2C`. Several cases reread `main+0x4C9` after the initial sender scan; a lock around only receive would leave their sender metadata exposed to another pump. The wrapper retains ownership through dispatch. |
+| `0x454425`, `0x454548`, `0x45456C..0x45456E` | The system `0x102` case obtains its data pointer from packet `+0x0C`, then copies 46 dwords and one byte into existing PlayerInfo. This particular sink copies 185 bytes rather than retaining that data address. |
+| `0x45469E`, `0x454712..0x454732`, `0x4E4760..0x4E47E8` | The system name-update path passes packet `+0x18/+0x14` pointers to the bounded string-copy routine with count 30 and destinations at player `+0x2B/+0x49`. The routine copies source bytes into destination and pads after NUL; it retains no source pointer. These facts cover this sink, not every system-message consumer. |
+| `0x454685..0x454697` | A system session-data branch copies twenty dwords from message `+4` into `main+0x471`. |
+| `0x4553EE..0x4553F9`, `0x48B920..0x48BACF` | The `0x2C` case passes its packet and sender player to `0x48B920`. That decoder constructs a stack bit-reader at `0x48B933..0x48B93F`, reads code/length/GameTime through `0x415DC0`, stores GameTime at player `+0x18`, and passes the stack reader to mover vtable `+0x24` (`0x48BA10`). Dirty updates may create through `0x4861D0` at `0x48BA00`; completed updates call `0x43DD20` and `0x48A870`. The round-robin path calls `0x48B3F0` at `0x48BAC3`; `ret 8` at `0x48BACF` returns to the pump. The guarded copy owns the decoder's padded packet span; this trace alone does not audit every mover's retention. |
+
+The whole-`.text` positive-offset reference inventory also finds shared-buffer
+loads at `0x450CD9`, `0x451023`, `0x451AD7`, `0x452783`, `0x452870`,
+`0x452AFE`, `0x452B7E`, `0x452BF2`, `0x453099`, `0x45332B`, `0x453368`,
+`0x45337F`, `0x4533EE`, `0x453479`, `0x4534AC`, `0x4563E2`, `0x456520`,
+and the stock receive/growth/statistics sites `0x45350B`, `0x453558`,
+`0x45358C`, `0x4535A1`, `0x4535E1`, `0x453616`. The pointer stores are
+`0x453573`/`0x4535FC`; capacity reads/stores are `0x4534F3`, `0x453548`,
+`0x4535D2`. This instruction inventory is not an indirect-reference proof.
+In particular, `0x453360` constructs chat in that buffer and `0x453320`
+constructs loading-ready messages there. Locking only receivers would not
+protect an incoming packet kept in the shared buffer from those sends. The
+owned input allocation removes that dependency; it does not serialize all
+native output builders or establish their separate lifetimes.
+
+Controlled execution of the exact production receive core and its actual
+`tagpu_wire_received`/`wire_s2c_copy` integration, with only SDK and
+statistics targets replaced, passes a 65,535-byte split packet, raw growth to
+70,001 bytes, native-output-buffer overwrite, nested allocation and
+source/destination/span restoration, no-message/invalid-size/network refusal,
+4,000 two-thread receives and 200 nested receives. The copy controls also
+cover owned and retail spans, header clamping, zero padding, and refusal of
+interior pointers and an inactive nested parent. The native three-human
+COVER probe separately exercises the installed wrapper through lobby, load,
+private/public delivery and orderly recording closure at tick 709, zero
+corrections. Seven exact text observations agree with native source/recipient
+logs and C/Python reader seek. A separate raw three-human run closes at tick
+799 with zero corrections: seven text entries, eight latest-batch queries and
+all 340 application envelopes / 162,631 bytes, CRC `0E49B035`, agree through
+C/Python reader seek. Its observed internal speed is 10 despite a requested
+registry value of 20. These text probes precede the movement integration fix.
+
+The native movement regression demonstrates why testing chat alone is
+insufficient. On *Two Continents*, two humans with a 20-unit limit each move
+their commander by 96 world units. The preceding branch baseline propagates
+both units to both observers. Before the integration fix, each owner's unit
+moves locally but both remote images remain at their initial positions through
+ticks 2057/2043; the host's movement heartbeat records `2c=0` and 1975 stale
+refusals. `wire_s2c_copy` had read only the retail statistics-hook TLS, which
+the owned receiver bypasses. It now obtains the exact span from the shared
+receive API. The fixed queued and raw native fixtures both observe both units
+move on both peers. Queued observation finishes at ticks 363/342, with 333
+movement packets on each endpoint; raw finishes at 331/299, with 294/245
+movement packets. Every sampled stale count is zero. Each run retains its
+tested COVER DLL/map/hash, native tick/roster samples and endpoint logs, then
+removes only its own instances and display.
+
+The allocation is freed at pump return, whereas retail shared storage can
+persist longer. Native consumers' retention and the whole-pump lock's possible
+wait cycles still require a complete audit before landing. The copied chat and
+system sinks above do not prove every case. Continued host migration,
+loading-chat admission, receive cost and physical bandwidth also remain open.
 
 #### Textfield input beneath the chat GUI
 

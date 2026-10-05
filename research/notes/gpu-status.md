@@ -2974,8 +2974,10 @@ Off a puppet level `tagpu_replay_phase` returns at once.
 **Fields we write:** native protocol initialization writes extended start length
 `0x512AF8`, identified-text length `0x512B84`, callback `0x512ACC` and mask
 `0x512C6C`. An accepted 97-byte identified text delivery replaces the first 65
-bytes of the current owned receive allocation (`main+0x2A38`) with its validated
-embedded stock packet before entering the stock text case. Capture reads the unit array with each unit's mover and order lists, the ten
+bytes of this pump call's private receive allocation with its validated embedded
+stock packet before entering the stock text case. The receive redirect writes
+only the pump's stack message pointer; a nested pump restores its parent's
+`main+0x4C9/+0x4CD` transport metadata before resuming it. Capture reads the unit array with each unit's mover and order lists, the ten
 player records with their PlayerInfo, the controlled and viewed players, the unit types, the
 sort buckets, GameTime, the game mode and the map's path, the feature grid, the wreck pool, its
 heads and the reproduction cursor, the feature defs, and at the create's exit the new unit's water
@@ -3201,9 +3203,25 @@ has zero corrections and all 324 application envelopes / 160,587 bytes remain
 exact through C/Python reader seek. The reusable saved-evidence fixture passes
 both this recording and the fourteen-entry repeated/full-length recording.
 The loading audit identifies state-5 deliveries before B2 and two loading
-pumps sharing the receive allocation. TLS provides a span but no cross-thread
-lifetime; acceptance still requires an ordered implementation. No mask,
-thread guard, engine patch or field write changes in this verification.
+pumps sharing the retail receive allocation. The work branch now redirects the
+whole primary pump at `0x453D40` and its receive call at `0x453D94`: each call
+owns private packet storage until return, and a recursive critical section
+serializes native receive/dispatch metadata. Nested calls retain independent
+storage and restore their parent's source/destination words. Native sends
+continue using their own shared output buffer; input never borrows it. A full
+u16 allocation bounds the unchecked queued copy; raw/system messages negotiate
+larger sizes before publication. The native three-human COVER run retains
+correct private/public audiences and closes at tick 709 with zero corrections;
+seven text entries agree through C/Python reader seek. A separate raw run
+closes at tick 799 with zero corrections and seven exact entries through reader
+seek. Exact-core controls cover maximum queued size, raw growth, nested
+lifetime/metadata/span, refusal, two-thread receive ordering and the actual
+guarded movement copy. That copy now uses the shared receive-span API; native
+queued and raw movement tests observe both commanders on both peers with no stale
+refusals. Native packet-retention and whole-pump wait-cycle audits remain
+necessary before landing. The state-6 mask and B2 guard remain; loading chat
+still needs its copied-record handoff and roster bootstrap. Whole-game receive
+cost, bandwidth and continued migration remain open.
 The snapshot also publishes inline `edit_index`/`caret` without engine writes.
 A two-peer COVER run verifies acknowledged text replacement and the engine's
 Mapping toggle. This is driver verification, not a native replay gate.
@@ -3213,9 +3231,11 @@ Mapping toggle. This is driver verification, not a native replay gate.
 | `0x512AF8` startup packet-length entry | 25, written by the redirected initializer store; start sender, receive observer and initializer are installed together. |
 | Host start's message bytes | Fixed 25-byte stack value passed through the existing generic sender; its reliable queue copies before return. No remote engine resources or order fields are written. |
 | Native CreatePlayer initial data | The original 21-byte password/version prefix followed by a fixed 280-byte public-key record. Only public material is exported; key failure forwards the stock data and refuses faithful contributions. The size handler retains the original accepted-prefix tests. |
-| `0x512B84`, `0x512ACC`, `0x512C6C` | Fixed identified-text size 97, generic `ret 4` callback `0x44FD40` and state-6 receive mask 4, written by the same startup initializer. All eleven primary sites are acquired before any is written. |
+| `0x512B84`, `0x512ACC`, `0x512C6C` | Fixed identified-text size 97, generic `ret 4` callback `0x44FD40` and state-6 receive mask 4, written by the same startup initializer. All thirteen primary sites are acquired before any is written. |
 | Scoped GUI text message | Copied 97-byte stack wire value through the original target/generic sender. The native queue copies before returning; ordinary binary `0x05` messages retain their existing size. |
-| First 65 bytes of the current `main+0x2A38` receive allocation | Exact delivered pointer/97-byte length and copied version/match/serial/actor validation precede the bounded stock-image replacement. The original text case reads that same allocation before the next receive. |
+| `0x453D40`, `0x453D94` / pump stack `+0x10` | Byte-matched entry wrapper and receive-call redirect. One recursive critical section owns receive/dispatch; each call has private allocation and exact delivered span. Success writes the current input pointer to the dispatcher's existing stack slot. All original return registers/flags are preserved. |
+| `main+0x4C9`, `main+0x4CD` | Native receive writes source/destination as before. A nested pump restores its parent's saved words before returning to that parent's dispatcher; the process-lifetime main block remains owned. No primary interface is retained. |
+| First 65 bytes of this pump's private receive allocation | Exact delivered pointer/97-byte length and copied version/match/serial/actor validation precede the bounded stock-image replacement. The original text case reads that same allocation before the next receive; native sends cannot overwrite it. |
 
 ### 2.6f Watching a recording (`tagpu_replay.c`, `tagpu_puppet.c`, `tagpu_recreader.c`, on request)
 
@@ -20330,8 +20350,8 @@ edit. A key naming no section folds nothing.
 **Threads.** The keys are written on the LOADER thread inside the load; the fold runs where the
 menu-time loader runs, before the seal; everything else runs on the thread that runs the death:
 the GAME thread in play (every death, the cargo loop, kill-all, the pick and the `0x4C`'s
-receipt), and during a network load either thread that pumps. The pump `0x453D40` holds no lock
-across its dispatch, and both the loader (`0x49727D`) and the game thread's load loop (`0x49852E`) reach its leave case
+receipt), and during a network load either thread that pumps. The retail pump `0x453D40` holds no lock
+across its dispatch; the work branch's owned primary wrapper serializes it when armed. Both the loader (`0x49727D`) and the game thread's load loop (`0x49852E`) reach its leave case
 and the removal's kill-all. So the running kill-all is the thread's own: its token, from an
 interlocked counter, lives in a TLS slot, and a kill mark matches only the kill-all that wrote it;
 two threads' kill-alls never honour each other's marks, and a mark left behind matches no later

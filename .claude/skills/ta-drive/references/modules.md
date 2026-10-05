@@ -291,6 +291,28 @@ the native menu driver has stopped. `--native-file` retains the separate
 combat effects and independent primary exploration oracle gates. Neither
 reader mode tests engine multiplayer playback or loading-phase delivery.
 
+`python3 tools/replay/recmp_receive_test.py --out /tmp/recmp-receive-run` checks
+the exact production primary receive core, receive-span API and movement copy
+with controlled SDK/statistics boundaries: maximum u16 message, raw buffer
+growth, independent native output,
+nested storage/span/source-destination restoration, error/size refusal and
+two-thread receives, movement header clamping/padding and retail fallback. It
+cleans up its own Wine prefix/display. Use the native menu driver separately
+to exercise the installed entry/call wrapper; these
+controls do not prove loading-chat admission or native raw transport. When the
+primary installer arms, `recmp: ARMED owned primary receive frames and serialized
+dispatch` identifies the new path. Identified chat remains restricted to the
+live B2 producer and state 6.
+
+`python3 tools/replay/recmp_primary_test.py --port PORT --out /tmp/recmp-primary-run`
+checks native live movement through the installed primary wrapper in two owned
+human instances, with saving off and a 20-unit limit. Both commanders must move
+on both observers; native movement counts must be positive and stale refusals
+zero. Add `--raw` for the unqueued primary transport. The fixture retains the
+tested DLL/map/hash, native ticks, rosters and logs, then removes its own
+instances/display. This does not test saved-file completeness, engine replay,
+loading chat, bandwidth or continued migration.
+
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
   `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin. **The NAT
   helpers are refused** (`dpnhpast,dpnhupnp=d`): the transport skips a helper that does not load,

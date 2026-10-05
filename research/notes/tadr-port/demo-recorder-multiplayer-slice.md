@@ -1445,6 +1445,81 @@ mask and loader ordering. Loading receipt ownership/clocks and stock display
 still require a by-design handoff; this checkpoint changes no mask or thread
 guard and does not close that gate.
 
+#### Primary input ownership before loading admission
+
+The work branch replaces the pump's shared incoming allocation with one
+private allocation per call. The entry wrapper at `0x453D40` keeps a recursive
+critical section through receive and native dispatch; the receive-call
+redirect at `0x453D94` copies from the original transport/SDK into that frame's
+storage and assigns the pump's existing stack message pointer only on success.
+Native sends keep using `main+0x2A38` and cannot overwrite this input. Nested
+pumps own distinct allocations, restore their parent's exact span and
+`main+0x4C9/+0x4CD` IDs, then resume it. The full u16 allocation bounds the
+transport's unchecked queued-message copy. Raw/system receives negotiate
+larger allocations before exposing any span. All thirteen primary sites and
+the splitter's length-bound instructions are checked before any write.
+No engine interface or input allocation is retained after the pump returns.
+
+The [engine map](../exe-reverse-engineering.md#owned-primary-receive-frames)
+records the native receive contracts, queued-copy exception, system size
+negotiation, two stock statistics calls, direct caller/reference sweeps and
+the case that builds an outgoing reply in the shared buffer. Input ownership
+does not establish safe lifetimes for every separate native output builder.
+
+`recmp_receive_test.py` compiles the exact production receive core and the
+actual receive-span API and movement-copy integration, with only the
+SDK/statistics targets redirected to controlled fixtures. It passes the
+65,535-byte queued limit, raw growth to 70,001 bytes, output-buffer overwrite,
+nested storage/span/ID restoration, invalid-size/error/network refusal and
+4,000 two-thread receives with 200 nested calls. It also verifies movement
+header clamping, zero padding, legacy fallback, and interior/inactive-parent
+refusals. Its prefix/display are removed.
+The generated entry/call wrapper is exercised separately by the native game.
+
+MEASURED 2026-10-05 on the reference setup: three humans, *Town & Country*,
+COVER, native queued DirectPlay, internal speed 10, only the host saving.
+Each saving-off author sends serial 1 privately to the other; the host sends
+a public marker. The host's sampled display has neither private line and its
+log has no private receipt. IDs `680809199`/`680809193` retain stock CRCs
+`5C1DCD80`/`5D736F86`, original ticks 245/352 and actual acceptance ticks
+254/354. Host `680809197` sends CRC `BD3EAEC2` at 499, accepted by the other
+peers at 461/465. The file closes with 709 iterations and zero corrections.
+C/Python agree on all seven entries, eight latest-batch queries and the full
+313-envelope / 159,095-byte application history, CRC `CEA69AB6`, through reader
+seek. Both opted-out logs lack a writer. Their contributions refuse after the
+host leaves, as in the preceding baseline probe; continued host migration is
+still open. The first raw follow-up also delivers these audiences and closes
+its host writer, but its menu driver fails on `ENDMSN`, so no complete raw
+saved-file/read gate is claimed from that attempt. A second raw run fixes only
+that exit driver and completes at tick 799 with zero corrections. Authors
+`681831592`/`681831598` send private CRCs `98F0C09C`/`999E629A` at ticks
+267/435, accepted at 339/364. Host `681831594` sends public CRC `97588B0B`
+at 590, accepted at 473/545. The host displays neither private line. C/Python
+agree on seven entries, eight latest-batch queries and all 340 application
+envelopes / 162,631 bytes, CRC `0E49B035`, through reader seek. The observed
+native speed is 10 despite requesting registry speed 20.
+
+Native movement testing then exposes an integration regression: the guarded
+`0x2C` decoder still consults only the retail receive TLS. Both owners move
+locally, but remote images stay at their initial coordinates and all movement
+packets are refused as stale. The preceding branch baseline propagates them.
+The decoder now uses the same exact-span API as identified chat. The fixed
+queued and raw two-human fixtures observe both commanders move on both peers,
+positive movement packet counts and no stale refusals. Queued finishes at
+ticks 363/342 with 333 movement packets per endpoint; raw finishes at 331/299
+with 294/245. These are native live receive
+checks, separate from the stopped independent primary exploration oracle.
+
+Incoming storage separation is implemented and tested. Before landing, all
+native packet consumers still need a retention audit because the private
+allocation expires at pump return; the whole-pump lock also needs its wait-cycle
+audit. Loading admission still
+needs a copied pre-B2 queue, source-roster bootstrap and truthful source,
+recipient and recorder application clocks. Mask 4 and the live B2 guard remain
+unchanged. Engine replay chat, other audience modes, pings/drawings, complete
+authority/play/seek/takeover, physical budget, receive cost, ten-seat continuation
+and the accumulated replay/review/local landing gates remain open.
+
 #### Input acknowledgement used by the chat fixture
 
 The engine's textfield editor is `0x4A7290`, with active edit index at GUIInfo

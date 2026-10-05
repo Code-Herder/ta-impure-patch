@@ -4021,9 +4021,19 @@ authors' serial 1 values remain distinct. Its seven entries and complete
 seek, with zero writer corrections. The reusable saved-evidence reader checks
 these identities/bytes/clocks against every peer's native logs and also passes
 the earlier repeated/full-length file. Loading research confirms a gap between
-stock's state-5 acceptance and the current state-6 wire: the pre-B2 producer
-handoff and shared receive-buffer lifetime remain implementation work. No
-multiplayer landing gate is cleared by this verification.
+stock's state-5 acceptance and the current state-6 wire. The primary pump now
+owns packet storage per call and serializes receive/dispatch metadata, retaining
+independent storage and parent IDs across nested calls. Native sends cannot
+overwrite incoming packets. Exact-core bounds/nesting/concurrency controls pass;
+the three-human COVER run retains seven correct private/public observations
+through C/Python reader seek and closes at tick 709 with zero corrections.
+The raw follow-up also completes with seven exact entries at tick 799, zero
+corrections. Native movement regression testing finds the guarded copy still
+reading the retail TLS; switching it to the shared exact-span API restores
+remote movement in both queued and raw fixtures. Packet-retention and whole-pump wait-cycle
+audits remain open before landing.
+The pre-B2 producer handoff and roster bootstrap still remain, so the wire mask
+and loading guard are unchanged. No multiplayer landing gate is cleared.
 
 The work branch's tick-based replay harness defaults to internal speed 20 (2x),
 with normal speed selectable and retained for cost and speed/settings UI checks.

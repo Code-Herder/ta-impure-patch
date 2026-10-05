@@ -56,6 +56,11 @@ void tagpu_rec_level_end(void);
 void tagpu_rec_init(void);
 int tagpu_rec_hooks_in(void);
 
+/* Actual delivered span in this thread's owned primary receive frame. Zero
+   means the pointer is not that frame's current packet. No engine buffer is
+   borrowed; nested pump calls keep independent storage until they return. */
+unsigned tagpu_rec_wire_received(const void* message);
+
 /* The running game's mod fingerprint, as a recording's RT_MODPRINT states it: FNV-1a over each
    archive the engine mounted, in mount order, its lowercased name without its folder, NUL, size
    and mtime, Impure's own impure-patch.ufo left out. Game thread: the engine mounts there. */
