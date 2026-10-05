@@ -172,7 +172,10 @@ The complete normalized player-image contribution has a bounded-cache fixture:
 `python3 tools/replay/recmp_players_test.py --out /tmp/recmp-players-run`.
 It uses one owned prefix/private display without launching TA. C exercises frozen
 origin/seat/block bounds, complete human/AI images, deltas, source/application
-provenance and guard-page truncations; C and Python independently reconstruct
+provenance and guard-page truncations. C also checks copied-image player-row mapping:
+640 roster permutations, 3,520 exact inverse round trips, identity and fixed-block
+agreement, retained vacant/dummy entries, in-place mapping and unchanged-output
+refusals. The mapper is not integrated into capture/history yet. C and Python independently reconstruct
 the four exact images from a raw contribution journal and refuse corruption or
 a missing tail. It does not test game `.imprec` playback, seek or AI takeover.
 

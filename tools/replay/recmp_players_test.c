@@ -79,6 +79,101 @@ static void roster_bounds(void)
     CHECK(!tagpu_recmp_roster_valid(NULL));
 }
 
+static void seat_maps(void)
+{
+    unsigned seed=17, trials=0, players=0;
+    const unsigned vector[]={0x108,0x113,0x11E,0x129,0x134};
+    for (unsigned count=1;count<=RECMP_ACTORS;count++) for (unsigned trial=0;trial<64;trial++) {
+        RecMpRoster a={ .version=1, .count=count, .slots=21, .each=2 }, b=a;
+        uint8_t map[RECMP_ACTORS+1], inverse[RECMP_ACTORS+1];
+        unsigned row[2][RECMP_ACTORS], seen=0;
+        for (unsigned peer=0;peer<2;peer++) {
+            for (unsigned i=0;i<RECMP_ACTORS;i++) row[peer][i]=i;
+            for (unsigned i=RECMP_ACTORS-1;i;i--) {
+                unsigned j, save;
+                seed=seed*1664525u+1013904223u; j=seed%(i+1);
+                save=row[peer][i]; row[peer][i]=row[peer][j]; row[peer][j]=save;
+            }
+        }
+        for (unsigned i=0;i<count;i++) {
+            a.actor[i]=(RecMpSeat){i+1,row[0][i],1+2*i,2+2*i};
+            b.actor[count-1-i]=(RecMpSeat){i+1,row[1][i],1+2*i,2+2*i};
+        }
+        CHECK(tagpu_recmp_seat_map(&a,&b,map) && tagpu_recmp_seat_map(&b,&a,inverse));
+        for (unsigned i=0;i<=RECMP_ACTORS;i++) {
+            CHECK(map[i]<=RECMP_ACTORS && !(seen>>map[i]&1) && inverse[map[i]]==i);
+            seen|=1u<<map[i];
+        }
+        CHECK(map[RECMP_ACTORS]==RECMP_ACTORS);
+        for (unsigned i=0;i<count;i++) {
+            unsigned char original[REC_PLAYER_IMAGE], mapped[REC_PLAYER_IMAGE+2], restored[REC_PLAYER_IMAGE];
+            unsigned origin=a.actor[i].origin, destination=row[1][i];
+            image(&a.actor[i],original); original[0x146]=a.actor[i].seat;
+            for (unsigned v=0;v<5;v++) for (unsigned r=0;r<=RECMP_ACTORS;r++)
+                original[vector[v]+r]=(unsigned char)(1+v*23+r*7);
+            memset(mapped,0xA5,sizeof mapped);
+            CHECK(tagpu_recmp_player_map(&a,&b,origin,original,sizeof original,mapped+1,REC_PLAYER_IMAGE));
+            CHECK(mapped[0]==0xA5 && mapped[sizeof mapped-1]==0xA5 && mapped[1+0x146]==destination);
+            for (unsigned v=0;v<5;v++) for (unsigned r=0;r<=RECMP_ACTORS;r++)
+                CHECK(mapped[1+vector[v]+map[r]]==original[vector[v]+r]);
+            for (unsigned byte=0;byte<REC_PLAYER_IMAGE;byte++) {
+                unsigned indexed=byte==0x146;
+                for (unsigned v=0;v<5;v++) indexed|=byte>=vector[v] && byte<=vector[v]+RECMP_ACTORS;
+                if (!indexed) CHECK(mapped[1+byte]==original[byte]);
+            }
+            CHECK(tagpu_recmp_player_map(&b,&a,origin,mapped+1,REC_PLAYER_IMAGE,restored,sizeof restored));
+            CHECK(!memcmp(restored,original,sizeof original));
+            CHECK(tagpu_recmp_player_map(&a,&b,origin,restored,sizeof restored,restored,sizeof restored));
+            CHECK(!memcmp(restored,mapped+1,sizeof restored));
+            players++;
+        }
+        trials++;
+    }
+    printf("PASS: %u seat permutations, %u exact player round trips, active identity, vacant/dummy bijection and in-place mapping\n",
+           trials,players);
+}
+
+static void mapping_refusals(void)
+{
+    RecMpRoster a=roster(), b, bad;
+    unsigned char original[REC_PLAYER_IMAGE], mapped[REC_PLAYER_IMAGE], map[RECMP_ACTORS+1];
+    for (unsigned control=0;control<15;control++) {
+        unsigned bytes=sizeof original, capacity=sizeof mapped, origin=11;
+        b=a; bad=a; image(&a.actor[0],original); original[0x146]=0;
+        memset(mapped,0xA5,sizeof mapped); memset(map,0xA5,sizeof map);
+        switch (control) {
+        case 0: bad.actor[0].seat=10; break;
+        case 1: b.actor[0].origin=99; break;
+        case 2: b.actor[0].first=9; b.actor[0].last=10; break;
+        case 3: b.count=3; memset(&b.actor[3],0,sizeof b.actor[3]); break;
+        case 4: b.each=3; b.slots=31;
+            for (unsigned i=0;i<b.count;i++) { b.actor[i].first=1+3*i; b.actor[i].last=3+3*i; }
+            break;
+        case 5: b.actor[1].seat=0; break;
+        case 6: bad.actor[1].origin=11; break;
+        case 7: bad.version=0; break;
+        case 8: bad.actor[4].origin=99; break;
+        case 9: origin=99; break;
+        case 10: original[0x146]=10; break;
+        case 11: original[0x67]++; break;
+        case 12: bytes--; break;
+        case 13: bytes++; break;
+        case 14: capacity--; break;
+        }
+        if (control<9) {
+            CHECK(!tagpu_recmp_seat_map(&bad,&b,map));
+            for (unsigned i=0;i<sizeof map;i++) CHECK(map[i]==0xA5);
+        }
+        CHECK(!tagpu_recmp_player_map(&bad,&b,origin,original,bytes,mapped,capacity));
+        for (unsigned i=0;i<sizeof mapped;i++) CHECK(mapped[i]==0xA5);
+    }
+    CHECK(!tagpu_recmp_seat_map(NULL,&a,map) && !tagpu_recmp_seat_map(&a,NULL,map) &&
+          !tagpu_recmp_seat_map(&a,&a,NULL));
+    CHECK(!tagpu_recmp_player_map(&a,&a,11,NULL,sizeof original,mapped,sizeof mapped));
+    CHECK(!tagpu_recmp_player_map(&a,&a,11,original,sizeof original,NULL,sizeof mapped));
+    puts("PASS: 15 mapping refusal controls preserve destination bytes");
+}
+
 static void transactions(void)
 {
     RecMpRoster r=roster();
@@ -165,7 +260,13 @@ static void guard_bounds(void)
     unsigned i;
     CHECK(p && pages && VirtualProtect(pages+4096,4096,PAGE_NOACCESS,&protection));
     image(&r.actor[0],img);
+    img[0x146]=r.actor[0].seat;
     memcpy(pages+4096-sizeof img,img,sizeof img);
+    CHECK(tagpu_recmp_player_map(&r,&r,11,pages+4096-sizeof img,sizeof img,
+                                 pages+4096-sizeof img,sizeof img));
+    CHECK(!memcmp(pages+4096-sizeof img,img,sizeof img));
+    CHECK(!tagpu_recmp_player_map(&r,&r,11,pages+4096,sizeof img-1,img,sizeof img));
+    CHECK(!tagpu_recmp_player_map(&r,&r,11,pages+4096,sizeof img,img,sizeof img-1));
     CHECK(tagpu_recmp_players_delta(p,11,1,pages+4096-sizeof img,body,sizeof body)==sizeof body);
     CHECK(tagpu_recmp_players_delta(p,11,1,img,pages+4096,sizeof body-1)==-1);
     for (i=0;i<sizeof body;i++) {
@@ -242,7 +343,7 @@ static void persisted(const char* path)
 int main(int argc, char** argv)
 {
     CHECK(argc==2);
-    roster_bounds(); transactions(); guard_bounds(); persisted(argv[1]);
+    roster_bounds(); seat_maps(); mapping_refusals(); transactions(); guard_bounds(); persisted(argv[1]);
     puts("PASS: full owner player images, human/AI isolation, transactional deltas, clocks/stream provenance, bounded rosters, guard-page truncations and persisted journal reconstruction");
     return 0;
 }

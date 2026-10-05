@@ -33,6 +33,61 @@ int tagpu_recmp_roster_valid(const RecMpRoster* r)
     return 1;
 }
 
+int tagpu_recmp_seat_map(const RecMpRoster* source, const RecMpRoster* destination,
+                         uint8_t out[RECMP_ACTORS+1])
+{
+    uint8_t map[RECMP_ACTORS+1];
+    unsigned i, j, used=0;
+    if (!out || !tagpu_recmp_roster_valid(source) || !tagpu_recmp_roster_valid(destination) ||
+        source->count!=destination->count || source->slots!=destination->slots ||
+        source->each!=destination->each) return 0;
+    memset(map,RECMP_ACTORS+1,sizeof map);
+    for (i=0;i<source->count;i++) {
+        const RecMpSeat* a=&source->actor[i];
+        for (j=0;j<destination->count;j++) if (destination->actor[j].origin==a->origin) break;
+        if (j==destination->count || a->first!=destination->actor[j].first ||
+            a->last!=destination->actor[j].last) return 0;
+        map[a->seat]=(uint8_t)destination->actor[j].seat;
+        used|=1u<<map[a->seat];
+    }
+    /* The validated unique active rows and this disjoint vacant-row pairing
+       form a bijection. Even unused vector entries survive an inverse mapping. */
+    for (i=0,j=0;i<RECMP_ACTORS;i++) if (map[i]>RECMP_ACTORS) {
+        while (j<RECMP_ACTORS && (used>>j&1)) j++;
+        if (j==RECMP_ACTORS) return 0;
+        map[i]=(uint8_t)j; used|=1u<<j;
+    }
+    map[RECMP_ACTORS]=RECMP_ACTORS;
+    memcpy(out,map,sizeof map);
+    return 1;
+}
+
+int tagpu_recmp_player_map(const RecMpRoster* source, const RecMpRoster* destination,
+                           unsigned origin, const void* image, unsigned bytes,
+                           void* out, unsigned capacity)
+{
+    static const unsigned vector[]={0x108,0x113,0x11E,0x129,0x134};
+    uint8_t map[RECMP_ACTORS+1], original[REC_PLAYER_IMAGE], mapped[REC_PLAYER_IMAGE];
+    unsigned i, row;
+    if (!image || !out || bytes!=REC_PLAYER_IMAGE || capacity<REC_PLAYER_IMAGE ||
+        !tagpu_recmp_seat_map(source,destination,map)) return 0;
+    for (i=0;i<source->count;i++) if (source->actor[i].origin==origin) break;
+    if (i==source->count) return 0;
+    row=source->actor[i].seat;
+    memcpy(original,image,sizeof original);
+    if (original[0x146]!=row || word(original,0x67)!=source->actor[i].first+1 ||
+        word(original,0x6B)!=source->actor[i].last+1) return 0;
+    memcpy(mapped,original,sizeof mapped);
+    /* DISASSEMBLED: alliances/mirror are 11-byte rows; 0x45591D/0x455930 and
+       0x45768A index the three statistics rows by sender. Player +0x146 is the
+       row copied to unit +0xFF at 0x485908/0x48590E. See the engine map's records. */
+    for (i=0;i<sizeof vector/sizeof *vector;i++)
+        for (row=0;row<=RECMP_ACTORS;row++) mapped[vector[i]+map[row]]=original[vector[i]+row];
+    mapped[0x146]=map[original[0x146]];
+    memcpy(out,mapped,sizeof mapped);
+    return 1;
+}
+
 static unsigned actor(const RecMpPlayers* p, unsigned origin)
 {
     unsigned i;

@@ -30,6 +30,17 @@ typedef struct RecMpPlayers RecMpPlayers;
 /* Roster validation rejects aliased origins/seats/blocks, unbounded intervals
    and ranges not matching one of the engine's fixed each-sized slot blocks. */
 int tagpu_recmp_roster_valid(const RecMpRoster* roster);
+/* A bijection of all eleven engine rows. Active rows match by native origin and
+   identical global unit blocks; vacant rows pair in ascending order and dummy
+   row ten stays ten. Refusal leaves out unchanged. Actor array order is irrelevant. */
+int tagpu_recmp_seat_map(const RecMpRoster* source, const RecMpRoster* destination,
+                         uint8_t out[RECMP_ACTORS+1]);
+/* Copied normalized images only: map the five player-indexed vectors and self
+   row, retaining every other byte and validating the source row/block identity.
+   No engine addresses or state are accessed. In-place mapping is supported. */
+int tagpu_recmp_player_map(const RecMpRoster* source, const RecMpRoster* destination,
+                           unsigned origin, const void* image, unsigned bytes,
+                           void* out, unsigned capacity);
 RecMpPlayers* tagpu_recmp_players_begin(const RecMpRoster* roster);
 void tagpu_recmp_players_end(RecMpPlayers* players);
 /* Encoder does not change the baseline; commit only with the accepted source

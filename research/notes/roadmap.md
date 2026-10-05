@@ -3899,6 +3899,8 @@ The work branch now captures each local human/hosted AI's full normalized player
 Semantic file history is now reconstructed by the writer/readers. Bounded source caches validate proof tails while separate application caches preserve the last complete player/list; reader queries rebuild this authority at the current world tick after seek. The synthetic file fixture passes four full players, exact nonempty order bytes/provenance, unknown/partial-state handling, proof isolation, five lifecycles and 18 raw-seal-valid body refusals. This establishes file authority queries, not engine application or native network playback.
 
 
+The copied-image player-row mapper passes 640 roster permutations and 3,520 byte-exact inverse round trips across 1–10 actors. It matches active rows by native identity and fixed global unit block, preserves vacant/dummy entries, and changes only five player-indexed vectors and the self row. It remains a utility: the source stream still needs frozen-roster carriage and file/game integration before source-local images can become recorder-coordinate authority. Unit/projectile/Impure mappings and native multiplayer record/play/seek remain open; no multiplayer landing is cleared by this test.
+
 ## The restorer as compute (2026-09-27)
 
 The Classic++ restorer's backend moves from fragment passes to Vulkan compute, and the speed goes

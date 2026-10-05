@@ -1772,6 +1772,24 @@ loader is `0x466050`.
 - **Clocks in the unit record:** the one wall-clock value is the hover wave; the one GameTime stamp
   is `+0xB0`. The countdowns (`+0xFA`, `+0xFB`, the reload) count simulation ticks.
 
+### Player-row coordinates across multiplayer peers [DISASSEMBLED 2026-10-04]
+
+The recorder's player-ID normalization (`tagpu_recorder.c`, `id_of`, `RL_T_PLAYER`) is the local engine row plus one. `player_image` also retains the five eleven-byte player vectors and own row byte. Its existing pointer/mask normalization does not convert these local coordinates into another peer's rows. Origin and fixed unit-block identity must establish that conversion before contributed images are applied.
+
+The player/unit-record map above is reconfirmed by aligned retail disassembly. Reset `0x4644D0` is called at `0x42734F`, `0x427D73` and `0x4518AC`. The activation range belongs to `0x464290`, with the fill/join/setup callers listed above. Resource receiver `0x457540` is called by dispatcher `0x455904`; unit array initialization `0x4854A0` by level initialization at `0x4918D4`.
+
+| addresses read | record fields and evidence |
+|---|---|
+| `0x4644D0..0x4646FA`, player reset | Reads the main pointer at `0x511DE8`; loops rows at `main+0x1B63`, stride `0x14B`, including row 10 (`0x4646D0`/`0x4646D3`). The initial clear retains each `+0x27` PlayerInfo pointer. It clears eleven bytes each at `+0x108` and `+0x113`, then sets each row's own element (`0x4645B3`, `0x4645BB`). `0x4646B4` writes self row `+0x146` to 10 for a free record. At that store the already-advanced `ebp` makes displacement `-0x118` equal the previous row's `+0x146`. The reset's name-format calls at `0x464599` and `0x4645AE` target `0x4E42B0`; this mapping does not change names or PlayerInfo. |
+| `0x46434D..0x464381`, player activation | Stores self row at `+0x146`, scoreboard rank at `+0x148` and start position at `+0x147`. Those last two happen to share an initial value; their later writers in the player-record table show different meanings. Only self row is a player reference. |
+| `0x45590E..0x455938`, dispatcher statistics flags | Message bytes select writes at `0x45591D` and `0x455930` into `+0x11E` and `+0x134`, indexed by the sender row. These are branches inside the dispatcher, not separate callable functions. |
+| `0x457682..0x4576B5`, in `0x457540` | Reads the sending player's `+0x146`, writes the receiving record's indexed `+0x129` at `0x45768A`, and reads indexed `+0x11E` at `0x45769C`. The response uses native IDs from each player's `+0x04` through sender `0x451BC0`. |
+| `0x4858BD..0x48592E`, in array initialization `0x4854A0` | Freezes each player's inclusive unit-block endpoints `+0x67`/`+0x6B` and slot bounds `+0x6F`/`+0x71`; its inner loop assigns unit `+0x96` to that player at `0x485902`, then copies player `+0x146` to unit `+0xFF` at `0x485908`/`0x48590E`. The inclusive last-pointer compare is at `0x485923`/`0x485925`; ten player blocks at `0x48592B`/`0x48592E`. |
+
+`tagpu_recmp_seat_map` operates on copied rosters, requiring the same origin set and global block endpoints and a bijection of the ten active-or-vacant rows plus fixed dummy row 10. Active rows match by origin; vacant rows pair in ascending order so unused vector bytes remain reversible. `tagpu_recmp_player_map` first validates the source self row and normalized block IDs, maps the five vectors and self row in a copied 520-byte image, and retains every other byte. The Wine fixture passes 640 roster permutations and 3,520 exact inverse image mappings, including 1–10 actors, shuffled local seats, reversed actor order, preserved vacant/dummy entries, in-place copies, refusal canaries and guarded spans. This is utility verification, not a native multiplayer replay result.
+
+The stream currently carries no per-source roster, and the game/file history does not call this mapper. Their contributed images remain in source coordinates. Unit `+0x96`/`+0xEC` normalized player IDs, unit `+0xF4`/`+0xFF` row bytes, projectile `+0x66`, explored bits and declared Impure player IDs are separate outstanding integration/audit work. No engine patch, read or write is added by these utilities.
+
 ### The demo recorder's capture: where it runs and what it reads [DISASSEMBLED + MEASURED 2026-09-29]
 
 S1 of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder)
