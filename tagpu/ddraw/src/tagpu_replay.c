@@ -41,8 +41,10 @@
    of GameTime T with the recorded seats local, one of them the player's, and the level goes on as
    a live skirmish, recorded as a new timeline of the same file.
 
-   WHAT IT READS AND WRITES. Everything here runs on the game thread: the Start handler, the
-   sim step and the frame callback 0x496790 are the engine's own game-thread code, and the
+   WHAT IT READS AND WRITES. The allocator ownership callback runs on the loader thread and
+   consumes only a copied plan published before that thread starts. Its atomic result is read
+   at the first game-thread step after the engine's load-done gate. The other paths run on the
+   game thread: the Start handler, sim step and frame callback 0x496790, and the
    teardown is entered only from the engine's state handlers there. The player records and their
    PlayerInfo blocks live in the main block for the process (tagpu_recorder.c says why); a seat
    index is below 10 before it addresses one (the reader refuses anything else, and V is chosen
@@ -249,6 +251,8 @@ static struct {
 #define RT_ARMED 24                 /* a broad entry's round trips, armed at once (fixtures.json) */
 static int s_rt_pace_in;            /* attach-time guard before the skirmish step loop */
 static int s_mp_arena_in;           /* allocator's block-ownership boundary */
+enum { MP_ARENA_OFF, MP_ARENA_ARMED, MP_ARENA_WORKING, MP_ARENA_READY, MP_ARENA_FAILED };
+static struct { RecMpRoster roster; volatile LONG state; } s_mp_arena;
 static struct {
     unsigned n;
     struct { char name[37]; unsigned T; } a[RT_ARMED];
@@ -290,6 +294,9 @@ static void counts_log(const char* when, unsigned now);
 
 static void replay_close(void)
 {
+    /* Start's undo precedes thread creation; level teardown follows the engine's
+       load-done gate. No loader can still consume this immutable plan. */
+    InterlockedExchange(&s_mp_arena.state,MP_ARENA_OFF);
     s_viewPending = 0;
     recr_close(s_rd);
     recfile_leave();
@@ -694,10 +701,27 @@ static void span_read(const char* path)
 }
 
 /* The seating, once everything it rests on has been checked: S-a's, for both routes. */
+static void mp_arena_prepare(const RecHeader* header)
+{
+    if (header->mode!=3) { InterlockedExchange(&s_mp_arena.state,MP_ARENA_OFF); return; }
+    if (!s_mp_arena_in || !header->has_mp || !header->has_mp_seats ||
+        header->slots!=header->mp_seats.slots || header->units_each!=header->mp_seats.each ||
+        !tagpu_recmp_roster_valid(&header->mp_seats)) {
+        InterlockedExchange(&s_mp_arena.state,MP_ARENA_FAILED);
+        return;
+    }
+    /* The game thread fills this once before the loader-start call at 0x4982CA. The
+       plan stays immutable through loader completion; publication and the
+       loader's result use interlocked operations, not an assumed delay. */
+    s_mp_arena.roster=header->mp_seats;
+    InterlockedExchange(&s_mp_arena.state,MP_ARENA_ARMED);
+}
+
 static void seat(char* ta, const char* name, unsigned v, int view)
 {
     s_view = view >= 0 ? (unsigned)view : v;
     seat_level(ta, recr_header(s_rd), v, s_view);
+    mp_arena_prepare(recr_header(s_rd));
     snprintf(s_name, sizeof s_name, "%s", name);
     s_viewer = v;
     s_first = 1;
@@ -898,6 +922,10 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
     unsigned each = *(const unsigned short*)(ta + OFF_EACH);
     unsigned slots = *(const unsigned short*)(ta + OFF_NSLOTS);
     unsigned now = *(const unsigned*)(ta + OFF_GAMETIME);
+    if (h->mode==3 && InterlockedCompareExchange(&s_mp_arena.state,0,0)!=MP_ARENA_READY) {
+        snprintf(why,cap,"the loader did not establish the recorded unit-block ownership");
+        return 0;
+    }
     if (each != h->units_each || slots != h->slots) {
         snprintf(why, cap, "the level allows %u units a player in %u slots, the recording %u in %u",
                  each, slots, h->units_each, h->slots);
@@ -7200,32 +7228,33 @@ static void rt_pace_init(void)
    +0x14 holds the freshly zeroed arena. Reorder only that bounded permutation:
    0x4858BD..0x485925 then initializes player +0x67/+0x6B/+0x6F/+0x71 and unit
    +0x96/+0xFF/+0xAC together, before any constructor can use a block. The
-   loader and reader lifetime belong to this game thread. No live unit moves. */
+   loader owns this fresh arena/stack. It reads no mutable reader or playback
+   state: only the copied plan published before its creation, then atomically
+   publishes a result for the first step after load completion. No live unit moves. */
 static int __cdecl mp_arena_order(void* entry_esp)
 {
-    const RecHeader* header;
     char* ta;
     uint32_t row[RECMP_ACTORS];
     unsigned short slots, each;
     void* arena;
-    if (!tagpu_puppet_on() || !s_rd || s_dead) return 0;
-    header=recr_header(s_rd);
-    if (header->mode!=3) return 0;
+    const RecMpRoster* roster=&s_mp_arena.roster;
+    if (InterlockedCompareExchange(&s_mp_arena.state,MP_ARENA_WORKING,MP_ARENA_ARMED)!=MP_ARENA_ARMED)
+        return 0;
     ta=ta_main();
     if (!ta) goto refused;
     memcpy(&slots,ta+OFF_NSLOTS,sizeof slots);
     memcpy(&each,ta+OFF_EACH,sizeof each);
     memcpy(&arena,(const char*)entry_esp+0x14,4);
-    if (!header->has_mp || !header->has_mp_seats || !arena ||
-        arena!=*(void**)(ta+OFF_BEGIN) || slots!=header->slots || each!=header->units_each ||
-        slots!=header->mp_seats.slots || each!=header->mp_seats.each) goto refused;
-    for (unsigned i=0;i<RECMP_ACTORS;i++) row[i]=(uint32_t)(size_t)player_rec(ta,i);
-    if (!tagpu_recmp_arena_order(&header->mp_seats,row,(uint32_t*)((char*)entry_esp+0x18)))
+    if (!arena || arena!=*(void**)(ta+OFF_BEGIN) || slots!=roster->slots || each!=roster->each)
         goto refused;
-    tagpu_logf("replay: multiplayer unit blocks ordered: %u actors, %u slots",header->mp_seats.count,slots);
+    for (unsigned i=0;i<RECMP_ACTORS;i++) row[i]=(uint32_t)(size_t)player_rec(ta,i);
+    if (!tagpu_recmp_arena_order(roster,row,(uint32_t*)((char*)entry_esp+0x18)))
+        goto refused;
+    InterlockedExchange(&s_mp_arena.state,MP_ARENA_READY);
+    tagpu_logf("replay: multiplayer unit blocks ordered: %u actors, %u slots",roster->count,slots);
     return 0;
 refused:
-    s_dead=1;
+    InterlockedExchange(&s_mp_arena.state,MP_ARENA_FAILED);
     tagpu_log("replay: multiplayer allocator ownership refused; no units will be applied");
     return 0;
 }

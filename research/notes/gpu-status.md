@@ -3356,6 +3356,11 @@ its callback. The loader's stack contains ten sorted pointers at `esp+0x18`
 and the fresh arena at `esp+0x14`. Only a multiplayer puppet reorders that
 validated permutation before the native ownership loop. Saved multiplayer
 playback is still refused; the installed observer is inert on existing levels.
+This callback runs on the loader thread. Seating publishes a copied immutable
+roster before thread creation; interlocked claim/result operations carry it to
+the allocator and READY/FAILED back to the first game-thread step after the
+engine's load-done gate. The loader reads no mutable replay reader and does not
+write its failure flag.
 
 **Sites.** Four call sites of the Start and the loader, installed by `tagpu_replay_init` and inert
 without an accepted request: the seat fill's call `0x47B092`, the settings persist's call
@@ -3394,7 +3399,8 @@ returning to one of COB's five write sites (`0x480B57`, `0x480BF1`, `0x480BB3`, 
 logged. The gates make them zero; the observers prove it. **The step's phases** (§2.6e) call
 `tagpu_replay_phase` after the host's projectile tick and after its explosion tick.
 
-**Fields we write**, on the game thread, during playback, takeover or live rewind:
+**Fields we write**, on the game thread during playback, takeover or live rewind,
+and on the loader thread at the allocator ownership boundary:
 
 - multiplayer allocation: only the loader's ten-pointer stack table at the
   `0x48587E` boundary. The unchanged native loop then initializes all player

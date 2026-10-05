@@ -1181,8 +1181,13 @@ and ranks pair in ascending order. All ten seats are supported without reserving
 a row. No pointer is followed by the copied helper, and refusal changes no
 table byte. The native initializer subsequently writes player first/last pointers
 and IDs, unit owner pointers/rows and initial groups together. This avoids moving
-live units or manually changing one side of those paired fields. The game-thread
-loader owns the fresh arena and stack throughout that initialization.
+live units or manually changing one side of those paired fields. The loader
+thread owns the fresh arena and stack throughout that initialization. Seating
+publishes an immutable copied roster before that thread starts; the allocator
+claims it and publishes READY/FAILED with interlocked operations. The first
+game-thread step, after the engine's load-done gate, requires READY. The loader
+does not touch the mutable reader or game-thread failure flag. Plan reset occurs
+before thread creation on Start undo or after loader completion at teardown.
 
 MEASURED 2026-10-05 on the reference setup:
 `python3 tools/replay/recmp_arena_test.py --out <directory>` passes 640 copied
@@ -1203,6 +1208,17 @@ four `secondary-orders` coverage processes and leaves their skirmish layout
 unchanged: all 23 checks pass at internal speed 20, complete tick 1,140,
 1,139 transitions explained and three exact poisoned round trips at 361/481/511,
 each with 26 tables and zero residue. No exclusion or tolerance changes.
+
+The loader handoff correction's coverage regression passes 22 of 23
+`secondary-orders` checks at internal speed 20: complete tick 1,110 and 1,109
+explained transitions. Recorded/puppet/restored/fresh seek comparisons pass,
+and round trips 421/451/541 poison 26 tables with zero residue and exact
+before/after dumps. The images inventory reports `main+0x531`, one byte of
+the desktop GUI pointer, as written during play only on the recording machine.
+Its proposed exclusion remains unapproved and unchanged. This run exercises
+the installed callback's inert skirmish path and seating's OFF publication;
+it does not exercise a multiplayer loader handoff or clear the complete
+landing gate.
 
 The standalone allocator fixture proves the paired initialization, and the game
 regression proves the installed hook remains inert on skirmishes. Neither proves

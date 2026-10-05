@@ -2141,6 +2141,31 @@ that value's meaning is not established here. The existing named-event payload
 retains all four argument words, including unused ones. The named transport's
 first argument is a global unit slot, not a heap address.
 
+**Start ABI and caller continuations** [DISASSEMBLED 2026-10-05].
+`0x4B0940` saves ECX and the four nonvolatile registers at `0x4B0940..0x4B0944`;
+both its failure exit `0x4B09A8..0x4B09AF` and success exit
+`0x4B09ED..0x4B09F7` restore them and use `ret 0xC`, returning 0 or 1.
+The by-name argument entry `0x4B0A70` saves the same registers and forwards all
+eight words to `0x4B0B00` at `0x4B0AEE`; `0x4B0AF3..0x4B0AF8` restores them
+and uses `ret 0x20`. Suppressing a call therefore requires the entry's actual
+callee stack cleanup, not merely declining to record it.
+
+All thirteen owner-only sites pass a null callback. The four `TargetCleared`
+sites pass `argc=1`, with the selected weapon index as argument 0, and `now=0`.
+`EndTransport` runs now at `0x40F433` and `0x411DA1`; the other three sites pass
+0. Pickup and drop run now and pass `argc=1`. These values are carried by the
+named-root payload; they are not interchangeable scheduling choices.
+
+After the call, `0x489F48`, `0x411492` and `0x411799` overwrite EAX before
+using it; `0x48A2E5` explicitly zeroes it. Pickup calls reply at `0x40683E`,
+drop calls the order helper at `0x4069CF`, `0x40F43A` allocates an order,
+`0x411DA9` calls an order helper and `0x411E33` loads another value before any
+local use of the script result. The tails at `0x489F93`, `0x48989D`,
+`0x48994D` and `0x48A14E` instead return with that EAX still present;
+their outer callers' use is not established by this continuation audit.
+No continuation read here branches on the start's flags before another
+instruction establishes flags. Native child suppression is not implemented.
+
 The multiplayer adapter reuses these thirteen call observers and the extra-weapons
 helper without adding a byte patch. On the game thread it bounds the observed unit
 against the level's fixed array before reading `+0x96` or `+0x9A`, confirms the
@@ -3750,6 +3775,22 @@ fresh arena base must agree with the recording before the stack changes. A
 refusal stops application before any recorded unit is constructed. The current
 mode-3 playback guard remains closed, so this route does not yet admit a saved
 multiplayer game. Other levels leave the stack unchanged.
+
+**Thread handoff.** This allocator runs on the loader thread, through
+`0x497180` → `0x497581` → `0x4917D0` → `0x4918D4` → `0x4854A0`.
+The Start's seat fill precedes the loader-start call `0x4B6B20` at `0x4982CA`,
+which takes entry `0x497C70` (the CRT thread wrapper), not the allocator itself.
+The callback consumes an immutable copied roster published at seating with
+`InterlockedExchange`, claims it with `InterlockedCompareExchange` and publishes
+READY or FAILED through another interlocked operation. It neither reads the
+mutable reader nor writes the game-thread failure flag. At the first step,
+`first_checks` requires READY before construction. The engine reaches that step
+only after its loading-state test of `main+0x38D75` bit 1 at
+`0x498342..0x49834D`; the loader's final store sets that bit at `0x497C62`,
+after the allocator and its callback have returned. Start undo precedes thread
+creation, and replay teardown follows that load-done gate, so the copied plan
+cannot be reset while this loader still consumes it. The owning thread and the
+publication/result ordering are separate facts; a fast load proves neither.
 
 `tools/replay/recmp_arena_test.py` executes the retail allocator, comparator and
 insertion helper in a relocated image inside a standalone Wine fixture. Its
@@ -15864,9 +15905,10 @@ runs either way (and returns at once on `dt == 0`).
 | `RockUnit` | `0x499C5C`, `0x49CBEB`, `0x49CDA6`, `0x49CFCA` | `0x4B0A70` | 0 | 2 |
 | `HitByWeapon` | `0x489F43` | `0x4B0A70` | 0 | 2 |
 | `TakeDamage` | `0x489F8E` | `0x4B0A70` | 0 | 1 |
-| `TargetCleared` | `0x489898`, `0x489948`, `0x48A149`, `0x48A2E0` | `0x4B0A70` | 0 | – |
-| `EndTransport` | `0x40F433`, `0x41148D`, `0x411794`, `0x411DA1`, `0x411E2B` | `0x4B0940` | 0 | – |
-| `TransportPickup`, `TransportDrop`, `BeginTransport` | `0x406834`, `0x4069BF`, `0x4113EF` | `0x4B0A70` | 0 | – |
+| `TargetCleared` | `0x489898`, `0x489948`, `0x48A149`, `0x48A2E0` | `0x4B0A70` | 0 | 1 |
+| `EndTransport` | `0x40F433`, `0x411DA1` | `0x4B0940` | **1** | – |
+| `EndTransport` | `0x41148D`, `0x411794`, `0x411E2B` | `0x4B0940` | 0 | – |
+| `TransportPickup`, `TransportDrop`, `BeginTransport` | `0x406834`, `0x4069BF`, `0x4113EF` | `0x4B0A70` | **1** | 1 |
 | `Query*`/`AimFrom*` (tables), `QueryNanoPiece`, `SweetSpot`, `QueryBuildInfo`, `QueryTransport`, `QueryLandingPad`, `Killed` (`Send_UnitDeath`) | `0x43E227`, `0x43E291`, `0x43E32C`, `0x43E370`, `0x43E3E4`, `0x43E427`, `0x4027FB`, `0x4113B1`, `0x41189C`+4, `0x4865C3` | `0x4B0BC0` | query | 4 in, 4 out |
 
 `0x509678` = `{FirePrimary, FireSecondary, FireTertiary, NULL, AimPrimary, AimSecondary,
