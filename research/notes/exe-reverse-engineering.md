@@ -16312,3 +16312,8 @@ and before census/publisher early returns. `DrawGameScreen` returns from its fli
 `0x46A3E0`; that game-flip identity freezes policy even without frame packets. Main-menu
 selection releases the freeze. Polling is independent of mailbox capacity and of a live render
 consumer; `fill_shell` only fills presentation data. No additional byte patch is installed.
+
+DISASSEMBLED GUI stack removal: `GUI_Pop 0x4A9660` installs the previous active link
+`[gi+0x18] = [removed]` at `0x4A96A2` before freeing the removed GUIMEMSTRUCT through
+`MEM_Free 0x4D85A0` at `0x4A96AF`. Profile refresh uses that current link on the same
+GUI/input thread and retains no GUI pointer beyond the refresh call.
