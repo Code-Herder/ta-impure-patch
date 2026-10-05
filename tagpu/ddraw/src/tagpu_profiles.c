@@ -6,6 +6,7 @@
 #include "tagpu_settings.h"
 #include "tagpu_log.h"
 #include "tagpu_menu.h"
+#include "tagpu_resource.h"
 
 #define PROFILE_CAP 4096
 #define RADIUS_MAX 8
@@ -203,7 +204,7 @@ int tagpu_profiles_mod(void) { return s_mod; }
 int tagpu_profiles_radius(void)
 {
     int v = s_policy.radius;
-    if (!s_policy.manual || tagpu_settings_ignored()) return 0;
+    if (!s_policy.manual || !tagpu_resource_live() || tagpu_settings_ignored()) return 0;
     tagpu_settings_get(radius_key(), &v);
     if (v < 0) v = s_policy.radius;
     return v < s_policy.maximum ? v : s_policy.maximum;
@@ -212,7 +213,7 @@ int tagpu_profiles_radius(void)
 int tagpu_profiles_quick(void)
 {
     int v = s_policy.quick_default;
-    if (!s_policy.quick || tagpu_settings_ignored()) return 0;
+    if (!s_policy.quick || !tagpu_resource_live() || tagpu_settings_ignored()) return 0;
     tagpu_settings_get(quick_key(), &v);
     return v < 0 ? s_policy.quick_default : v == 1;
 }
@@ -229,5 +230,6 @@ void tagpu_profiles_set_quick(int value)
 void tagpu_profiles_status(char* out, unsigned cap)
 {
     if (s_error[0]) snprintf(out, cap, "Profile error: %s", s_error);
+    else if (!tagpu_resource_live()) snprintf(out, cap, "Resource hooks unavailable; see log");
     else snprintf(out, cap, "%s %s | %s", names[s_mod], s_version, s_selected);
 }

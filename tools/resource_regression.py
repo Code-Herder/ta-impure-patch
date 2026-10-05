@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+"""Native-input assertions for the resource replay fixtures.
+
+The live lane must produce real build/reclaim/guard orders before tareplay
+compares it with playback, restoration and fresh-process seeks. Memory reads
+are measurements through tacli's game-thread peek; all actions use its input.
+"""
+import argparse
+import json
+import struct
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+TREE = Path(__file__).resolve().parents[1]
+TACLI = TREE / "tools/tacli"
+
+
+class Check:
+    def __init__(self, name):
+        self.name = name
+        self.base = self.values("*0x511DE8+0x14357")[0]
+        def loaded():
+            roster = self.call("roster", "--json")["units"]
+            units = {u["type"].upper(): u["engine_index"] for u in roster if u["owner"] == 0}
+            return units if {"ARMCK", "ARMACK", "CORCK", "ARMPW", "ARMMEX"} <= units.keys() else None
+        self.units = self.until(loaded, "resource fixture units have not reached the roster")
+
+    def call(self, command, *args):
+        r = subprocess.run([sys.executable, str(TACLI), command, self.name, *map(str, args)],
+                           capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0, r.stdout + r.stderr
+        return json.loads(r.stdout) if "--json" in args else r.stdout
+
+    def values(self, *specs):
+        return [int(p["value"].split()[0]) for p in self.call("peek", *specs, "--json")["peeks"]]
+
+    def bytes(self, spec):
+        s = self.call("peek", spec, "--json")["peeks"][0]["value"]
+        return bytes.fromhex(s)
+
+    def until(self, function, message, seconds=10):
+        end = time.monotonic() + seconds
+        while True:
+            result = function()
+            if result:
+                return result
+            assert time.monotonic() < end, message
+            time.sleep(0.1)
+
+    def address(self, kind):
+        return self.base + self.units[kind] * 0x118
+
+    def orders(self, kind):
+        owner = self.address(kind)
+        node = self.values(f"0x{owner + 0x5c:x}")[0]
+        result, seen = [], set()
+        while node:
+            assert node not in seen and len(seen) < 100, "cyclic/excessive fixture order chain"
+            seen.add(node)
+            b = self.bytes(f"0x{node:x}:x50")
+            assert struct.unpack_from("<I", b, 0x0e)[0] == owner, "wrong order owner"
+            result.append({"action": b[4], "target": struct.unpack_from("<I", b, 0x16)[0],
+                           "pos": struct.unpack_from("<iii", b, 0x22),
+                           "type": struct.unpack_from("<H", b, 0x36)[0]})
+            node = struct.unpack_from("<I", b, 0x4a)[0]
+        return result
+
+    def placed(self, orders):
+        if not orders:
+            return []
+        descriptors = self.values("0x512344")[0]
+        caps = self.values(*(f"0x{descriptors + o['action'] * 0x19 + 0xc:x}" for o in orders))
+        return [o for o, cap in zip(orders, caps) if cap & 1 and o["type"]]
+
+    def stop(self, kind):
+        self.call("ui", "click", "ARMSTOP")
+        self.until(lambda: self.mode() == 1 and all(o["action"] == 41 for o in self.orders(kind)),
+                   "Stop did not restore contextual idle state")
+
+    def keys(self, *tokens):
+        self.call("keys", *tokens)
+        # A peek visits a later game frame; delivery remains asynchronous,
+        # so behavior-specific predicates below establish the observed state.
+        self.values("*0x511DE8+0x38a47")
+
+    def eye(self, x, z):
+        self.call("eye", x, z)
+        self.until(lambda: self.values("*0x511DE8+0x1431f", "*0x511DE8+0x14323") == [x, z],
+                   "camera did not reach the fixture eye")
+
+    def screen(self, kind):
+        b = self.bytes(f"0x{self.address(kind) + 0x6a:x}:xc")
+        x, h, z = (v >> 16 for v in struct.unpack("<iii", b))
+        ex, ez = self.values("*0x511DE8+0x1431f", "*0x511DE8+0x14323")
+        return x - ex + 128, z - h // 2 - ez + 32
+
+    def select(self, *kinds):
+        self.keys("esc")
+        eye = self.values("*0x511DE8+0x1431f", "*0x511DE8+0x14323")
+        for i, kind in enumerate(kinds):
+            x, z = self.screen(kind)
+            if not (128 < x < 1024 and 32 < z < 744):
+                b = self.bytes(f"0x{self.address(kind) + 0x6a:x}:xc")
+                wx, _, wz = struct.unpack("<iii", b)
+                self.eye((wx >> 16) - 300, (wz >> 16) - 300)
+                x, z = self.screen(kind)
+            self.keys(*(["down:shift"] if i else []), f"pclick:{x},{z}",
+                      *(["up:shift"] if i else []))
+        self.until(lambda: all(self.values(f"0x{self.address(k) + 0x110:x}")[0] & 0x10
+                               for k in kinds), "selection did not reach every fixture unit")
+        self.eye(*eye)
+
+    def mode(self):
+        return self.values("*0x511DE8+0x2cc3:1")[0]
+
+    def rect(self):
+        return struct.unpack("<iiiiii", self.bytes("*0x511DE8+0x2c92:x18"))
+
+    def menu(self, **settings):
+        self.call("arm", "menu.open")
+        for name, value in settings.items():
+            self.call("ui", "set", name, value)
+        self.call("arm", "menu.open=off")
+        self.until(lambda: self.call("ui", "--json")["gui"] != "RENDER.GUI",
+                   "Impure options did not close")
+
+    def build(self, name):
+        snap = self.call("ui", "--json")
+        for g in snap["gadgets"]:
+            if g["name"].endswith("BUILD"):
+                self.call("ui", "click", g["name"])
+                break
+        for _ in range(8):
+            gadgets = self.call("ui", "--json")["gadgets"]
+            if any(g["name"] == name for g in gadgets):
+                self.call("ui", "click", name)
+                return
+            pager = next(g["name"] for g in gadgets if g["name"].endswith("NEXT"))
+            self.call("ui", "click", pager)
+        raise AssertionError(f"{name} absent from the fixture builder's menu")
+
+    def resource_click(self, x, z, shift=False):
+        right = self.values("*0x511DE8+0x37efa")[0] != 0
+        self.keys(*(["down:shift"] if shift else []),
+                  f"{'prclick' if right else 'pclick'}:{x},{z}",
+                  *(["up:shift"] if shift else []))
+
+    def repeat(self, x, z):
+        def count():
+            return len(self.call("log", "--grep", "resource: already queued", "--tail", 100, "--json")["lines"])
+        before = count()
+        self.resource_click(x, z, shift=True)
+        self.until(lambda: count() > before, "repeat click was not consumed as already queued")
+
+
+def mex(c):
+    c.eye(1000, 950)
+    c.menu(RESOURCE=3, QUICKBUILD=0)
+    c.select("ARMCK")
+    c.call("ui", "click", "ARMMEX")
+    c.keys("pmove:588,377")
+    snapped = c.until(lambda: c.rect() if c.mode() == 14 and c.rect()[0] == 1408 else None,
+                      "manual mex did not snap to the real deposit")
+    c.keys("down:alt")
+    c.until(lambda: c.rect()[0] == 1440, "stationary Alt did not bypass manual snapping")
+    c.keys("up:alt")
+    c.until(lambda: c.rect() == snapped, "manual snapping did not resume after Alt")
+    c.keys("down:shift", "pclick:588,377", "up:shift")
+    def built():
+        orders = c.orders("ARMCK")
+        return orders if any(o["type"] == 78 and o["pos"][0] >> 16 == 1432 for o in orders) else None
+    orders = c.until(built, "manual snapped build produced no order")
+    assert any(o["pos"][0] >> 16 == 1432 for o in orders), "manual order lost its snapped position"
+    # Stop leaves manual placement before the independent Quick Build click.
+    c.menu(RESOURCE=0, QUICKBUILD=1)
+    c.stop("ARMCK")
+    c.resource_click(560, 375)
+    orders = c.until(built, "Quick Build failed with manual radius off")
+    c.repeat(560, 375)
+    assert c.orders("ARMCK") == orders, "repeat click changed the queued mex orders"
+    assert c.mode() == 1, "Quick Build left contextual mode"
+    print("resource-mex: manual snap, stationary Alt, independent toggle and queued no-op passed")
+
+
+def upgrade(c, shift=False):
+    c.eye(1250, 1200)
+    c.menu(RESOURCE=3, QUICKBUILD=1)
+    c.select("ARMACK", "ARMCK", "CORCK", "ARMPW")
+    if shift:
+        c.call("order", "move", "pos", "4500", "2500", "--unit", c.units["ARMACK"],
+               "--expect", "ARMACK")
+    combat = c.orders("ARMPW")
+    x, z = c.screen("ARMMEX")
+    c.resource_click(x, z, shift=shift)
+    def upgraded():
+        orders = c.orders("ARMACK")
+        return orders if any(o["type"] == 88 for o in orders) else None
+    orders = c.until(upgraded, "upgrade produced no orders")
+    offset = int(shift)
+    assert len(orders) >= offset + 2 and orders[offset]["target"] == c.address("ARMMEX"), "missing reclaim before upgrade"
+    assert orders[offset + 1]["type"] != 0 and orders[offset + 1]["target"] == 0, "missing upgrade build after reclaim"
+    for helper in ("ARMCK", "CORCK"):
+        def guarded():
+            h = c.orders(helper)
+            return h if any(o["target"] == c.address("ARMACK") for o in h) else None
+        h = c.until(guarded, f"{helper} received no assist order")
+        assert sum(o["target"] == c.address("ARMACK") for o in h) == 1, f"{helper} did not guard the primary"
+    assert c.orders("ARMPW") == combat, "Quick Build changed a selected combat unit's orders"
+    c.repeat(x, z)
+    assert c.orders("ARMACK") == orders, "repeat upgrade toggled or duplicated its queue"
+    for helper in ("ARMCK", "CORCK"):
+        assert sum(o["target"] == c.address("ARMACK") for o in c.orders(helper)) == 1, "repeat upgrade duplicated a helper guard"
+    assert c.mode() == 1, "upgrade left contextual mode"
+    print("resource-upgrade: reclaim/build sequence, mixed helpers, combat priority and repeat no-op passed")
+
+
+def terrain(c, mode):
+    c.eye(100, 150)
+    c.menu(RESOURCE=3, QUICKBUILD=1)
+    c.select("ARMCK")
+    # The generated map is flat height 32. These clicks target cell (23,23),
+    # which has a discrete deposit only in the mixed map.
+    x, z = 23 * 16 + 8 - 100 + 128, 23 * 16 + 8 - 16 - 150 + 32
+    c.resource_click(x, z)
+    def ordered():
+        orders = c.orders("ARMCK")
+        return orders if orders and orders[0]["action"] != 41 else None
+    orders = c.until(ordered, "metal-map contextual click did nothing")
+    if mode == "mixed":
+        assert any(o["type"] == 78 for o in orders), "rich deposit on metal ground was not built"
+    else:
+        assert not any(o["type"] == 78 for o in orders), "uniform metal ground became a Quick Build target"
+    # Geo remains eligible on every metal-map kind and manual geo snapping
+    # feeds the same ordinary build-order recorder root.
+    c.select("CORCK")
+    c.build("CORGEO")
+    c.keys("pmove:708,258")
+    def vent():
+        r = c.rect()
+        green = c.values("*0x511DE8+0x2cc6:1")[0] & 0x40
+        return r if c.mode() == 14 and green else None
+    snapped = c.until(vent, "manual geothermal snap did not find the generated vent")
+    c.keys("down:alt")
+    c.until(lambda: c.rect() != snapped, "Alt did not bypass geothermal snapping")
+    c.keys("up:alt")
+    c.until(lambda: c.rect() == snapped, "geothermal snap did not resume")
+    c.keys("esc")
+    c.resource_click(676, 258, shift=True)
+    c.until(lambda: any(o["type"] == 193 for o in c.orders("CORCK")), "Quick geo produced no geothermal build order")
+    print(f"resource-{mode}: metal-ground classification, manual geo/Alt and Quick geo passed")
+
+
+def policy(c, mode, gamedir):
+    c.eye(1000, 950)
+    c.call("arm", "menu.open")
+    snap = c.call("ui", "--json")
+    controls = {g["name"]: g for g in snap["gadgets"]}
+    assert controls["QUICKBUILD"]["grayed"] == 1, "mod profile did not lock Quick Build off"
+    assert controls["QUICKBUILD"]["stage"] == 0, "locked Quick Build stayed on"
+    if mode == "locked":
+        assert controls["RESOURCE"]["grayed"] == 1 and controls["RESOURCE"]["stage"] == 0, "mod profile did not lock manual snapping off"
+    else:
+        assert controls["RESOURCE"]["grayed"] == 0 and controls["RESOURCE"]["stage"] <= 1, "version override did not inherit and clamp manual snapping"
+    # Neither editing general rules nor removing an override may change the
+    # policy once this match has started, including while its options are open.
+    (gamedir / "profiles/retail.ini").write_text("manual_snapping=1\nquick_build=1\n"
+                                              "default_radius=3\nmax_radius=3\nquick_build_default=1\n")
+    (gamedir / "profiles/retail@76332e31.ini").unlink(missing_ok=True)
+    c.values("*0x511DE8+0x38a47")
+    controls = {g["name"]: g for g in c.call("ui", "--json")["gadgets"]}
+    assert controls["QUICKBUILD"]["grayed"] == 1, "profile edit changed an in-progress match"
+    c.call("arm", "menu.open=off")
+    c.until(lambda: c.call("ui", "--json")["gui"] != "RENDER.GUI", "options did not close")
+    c.select("ARMCK")
+    c.resource_click(560, 375)
+    c.until(lambda: any(o["action"] != 41 for o in c.orders("ARMCK")), "locked contextual click did nothing")
+    assert not any(o["type"] == 78 for o in c.orders("ARMCK")), "locked Quick Build issued a mex order"
+    print(f"resource-policy-{mode}: locks, inheritance/clamping and match freeze passed")
+
+
+def geo_upgrade(c):
+    c.eye(100, 150)
+    c.menu(RESOURCE=3, QUICKBUILD=1)
+    c.select("CORCK", "ARMCK")
+    types = c.call("units", "--json")["units"]
+    stronger = next(t["id"] for t in types if t["name"].upper() == "RSUPGEO")
+    c.call("order", "move", "pos", "900", "900", "--unit", c.units["CORCK"], "--expect", "CORCK")
+    x, z = c.screen("CORGEO")
+    c.resource_click(x, z, shift=True)
+    def upgraded():
+        orders = c.orders("CORCK")
+        return orders if any(o["type"] == stronger for o in orders) else None
+    orders = c.until(upgraded, "geothermal upgrade did not append a stronger plant")
+    reclaim = next(i for i, o in enumerate(orders) if o["target"] == c.address("CORGEO"))
+    assert orders[reclaim + 1]["type"] == stronger, "geo upgrade lost reclaim/build ordering"
+    c.repeat(x, z)
+    assert c.orders("CORCK") == orders, "repeat geo upgrade altered its queue"
+    c.until(lambda: any(o["target"] == c.address("CORCK") for o in c.orders("ARMCK")), "geo helper received no persistent guard")
+    print("resource-geo-upgrade: stronger variant, Shift reclaim/build and persistent helper passed")
+
+
+def priority(c):
+    c.eye(1000, 950)
+    c.menu(RESOURCE=3, QUICKBUILD=1)
+    c.select("ARMCK")
+    for case in ("move", "alt", "equal", "off"):
+        c.stop("ARMCK")
+        if case == "move":
+            c.call("ui", "click", "ARMMOVE")
+            c.until(lambda: c.mode() != 1, "explicit Move mode did not arm")
+        if case == "alt":
+            c.keys("down:alt")
+        if case == "off":
+            c.menu(QUICKBUILD=0)
+        if case == "equal":
+            c.eye(1250, 1200)
+            x, z = c.screen("ARMMEX")
+        else:
+            c.eye(1000, 950)
+            x, z = 560, 375
+        if case == "move":
+            # Explicit commands use the engine's placement button; in the
+            # right-button interface a right click cancels an armed command.
+            c.keys(f"pclick:{x},{z}")
+        else:
+            c.resource_click(x, z)
+        if case == "alt":
+            c.keys("up:alt")
+        orders = c.until(lambda: c.orders("ARMCK") if any(o["action"] != 41 for o in c.orders("ARMCK")) else None,
+                         f"{case} priority produced no contextual order")
+        assert not c.placed(orders), f"{case} priority incorrectly issued a resource build"
+    print("resource-priority: explicit Move, Alt, equal owned mex and player toggle off passed")
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("instance")
+    p.add_argument("case", choices=("mex", "upgrade", "queued-upgrade", "plain", "uniform", "mixed", "locked", "inherit", "geo-upgrade", "priority"))
+    p.add_argument("--gamedir", type=Path)
+    a = p.parse_args()
+    try:
+        {"mex": mex, "upgrade": upgrade,
+         "queued-upgrade": lambda c: upgrade(c, shift=True),
+         "geo-upgrade": geo_upgrade,
+         "priority": priority,
+         **{m: (lambda c, m=m: policy(c, m, a.gamedir)) for m in ("locked", "inherit")},
+         **{m: (lambda c, m=m: terrain(c, m)) for m in ("plain", "uniform", "mixed")}}[a.case](Check(a.instance))
+    except (AssertionError, ValueError, subprocess.TimeoutExpired) as e:
+        print(f"resource regression FAILED: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

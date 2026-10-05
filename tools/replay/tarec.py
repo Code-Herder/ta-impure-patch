@@ -40,7 +40,7 @@
                                              exactly, sinks per (site, caller, aux) within
                                              replay-absent.tsv's band less its rows, and no COB
                                              engine write on the puppet
-  tools/replay/tarec.py images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1
+  tools/replay/tarec.py images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1 [VIEW...]
                                              the null twin: every bit of the two images no row
                                              covers where the live game and a playing or the
                                              seek differ at T1, classified presentation,
@@ -1872,11 +1872,11 @@ def image_group(which, at):
 GATE_CLASSES = ("presentation", "host-variant", "load-constant", "FAIL")
 
 
-def cmd_images_gate(path, live, twin, playing, second, seek):
+def cmd_images_gate(path, live, twin, playing, second, seek, views=()):
     """THE IMAGES GATE (the null twin): every bit of the main block and .data that no row of
     replay-globals.tsv covers and where the live game at T1 differs from the playing at T1 or from
     the fresh seek to T1 is, in this order:
-      presentation   the paused twin's two dumps differ there (the live game, paused, then the
+      presentation   the paused twin's dumps differ there (the live game, paused, then the
                      camera, the zoom, the menu and the cursor moved): the viewer's own
       host-variant   two playings on one host differ there (P against R at T1)
       load-constant  unchanged across [T1, Tlast] on the recording machine and on the puppet host
@@ -1887,10 +1887,10 @@ def cmd_images_gate(path, live, twin, playing, second, seek):
     (l1, lT), (n1, n2), (p1, pT) = live, twin, playing
     got = {}
     for name, d in (("l1", l1), ("lT", lT), ("n1", n1), ("n2", n2), ("p1", p1), ("pT", pT),
-                    ("r1", second), ("q1", seek)):
+                    ("r1", second), ("q1", seek), *[(f"v{i}", d) for i, d in enumerate(views)]):
         got[name] = dump_images(d)
-    frames = [header(blocks(d)[0][0][3]).get("frame") for d in (n1, n2)]
-    if frames[0] is None or frames[0] != frames[1]:
+    frames = [header(blocks(d)[0][0][3]).get("frame") for d in (n1, n2, *views)]
+    if frames[0] is None or len(set(frames)) != 1:
         print(f"the twin's dumps are not two frame dumps of one GameTime: {frames}")
         return 2
     t1 = {got[k][0] for k in ("l1", "p1", "r1", "q1")}
@@ -1913,7 +1913,10 @@ def cmd_images_gate(path, live, twin, playing, second, seek):
             bits = ((L1[i] ^ P1[i]) | (L1[i] ^ Q1[i])) & free
             if not bits:
                 continue
-            pres = bits & (N1[i] ^ N2[i])
+            changed = N1[i] ^ N2[i]
+            for k in range(len(views)):
+                changed |= N1[i] ^ im[f"v{k}"][which][i]
+            pres = bits & changed
             host = bits & ~pres & (P1[i] ^ R1[i])
             const = bits & ~pres & ~host & ~((L1[i] ^ LT[i]) | (P1[i] ^ PT[i])) & 0xFF
             fail = bits & ~pres & ~host & ~const
@@ -2124,7 +2127,7 @@ def main(argv):
             (argv[1] == "compare" and len(argv) < 4) or (images and len(argv) != 4) or \
             (argv[1] == "compare-dumps" and len(argv) != 5) or \
             (argv[1] in ("counts", "scan") and len(argv) != 4) or \
-            (argv[1] == "images-gate" and len(argv) != 11) or \
+            (argv[1] == "images-gate" and len(argv) < 11) or \
             (argv[1] == "compare-counts" and len(argv) != 7):
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         return 2
@@ -2143,7 +2146,7 @@ def main(argv):
             return cmd_compare_dumps(argv[2], argv[3], argv[4], takeover)
         if argv[1] == "images-gate":
             return cmd_images_gate(argv[2], (argv[3], argv[4]), (argv[5], argv[6]),
-                                   (argv[7], argv[8]), argv[9], argv[10])
+                                   (argv[7], argv[8]), argv[9], argv[10], argv[11:])
         if argv[1] == "scan":
             return cmd_scan(argv[2], argv[3])
         if argv[1] == "counts":

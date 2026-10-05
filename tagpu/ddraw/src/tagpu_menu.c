@@ -69,6 +69,7 @@
 #include "tagpu_vk.h"
 #include "tagpu_settings.h"
 #include "tagpu_profiles.h"
+#include "tagpu_resource.h"
 #include "tagpu_opt.h"
 #include "tagpu_art.h"
 #include "tagpu_replays.h"
@@ -275,7 +276,7 @@ static const int SHADOWQ_VAL[4] = { 512, 1024, 2048, 4096 };
    palette 55..63 is a dark warm ramp and tools/guipanel.py's colours were
    chosen against it (its GROUND_LO (46,40,29) is index 60 (47,43,27), its
    RECESS_LO (23,20,14) is 62 (23,19,15), and so on), so the drawn panel is
-   expressible as nine indices with no colour of the game's in it. */
+   expressible as row indices with no colour of the game's in it. */
 #define ART_NAME   "RENDERDD"
 #define UFO_FILE   "impure-patch.ufo"
 #define SCREEN     "RENDER.GUI"
@@ -348,7 +349,7 @@ static int exists(const char* p)
     return GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES;
 }
 
-/* The nine indices, and what tools/guipanel.py calls each of them. */
+/* The row indices, and what tools/guipanel.py calls each of them. */
 #define IX_EDGE          63     /* the outer keyline, and a recess's sunken lip */
 #define IX_BEVEL_HI      55
 #define IX_BEVEL_LO      59
@@ -1020,8 +1021,8 @@ static int row_held(int row)
     case R_SS:    return exists(SS_OFF);
     case R_FPS:   return exists(FPS_ON);
     case R_EDGE:  return exists(EDGE_ON) || exists(EDGE_OFF);
-    case R_RESOURCE: return !tagpu_profiles_policy()->manual;
-    case R_QUICK: return !tagpu_profiles_policy()->quick;
+    case R_RESOURCE: return !tagpu_resource_live() || !tagpu_profiles_policy()->manual;
+    case R_QUICK: return !tagpu_resource_live() || !tagpu_profiles_policy()->quick;
     default:      break;
     }
     h = tagpu_classicpp_held();
@@ -2170,7 +2171,7 @@ static int build_visuals_gui(char* b, int cap, int rows)
     at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", "Window");
     at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
     at = common(b, cap, at, 5, 0, "TEXT", VC1_X, VHDR_Y, VCOL_W, VLBL_H, 18, 15, 104);
-    at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", "Impure rendering");
+    at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", "Impure options");
 
     /* ---- the WINDOW rows -------------------------------------------------- */
     {
@@ -3326,7 +3327,7 @@ static void vis_install(void)
 
 void tagpu_menu_init(void)
 {
-    static char gui[8192];
+    static char gui[12288];
     static char vgui[49152];
     /* one GAF per screen, because the engine picks the file from the panel
        gadget's own name (`0x4A8537`): anims\\RENDER.GAF and anims\\VISUALS.GAF */

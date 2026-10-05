@@ -129,6 +129,7 @@ TAKEOVER_CHECKS = {
     "victory": "timeline 1 ends complete with P's seat won, within TAKEOVER_SPAN of T",
 }
 CONTINUE = 300                  # the dump after a round trip, this many ticks on
+NULL_VIEWS = tuple(f"lnv{i}" for i in range(12))
 LAUNCH_TIMEOUT = 400
 
 
@@ -541,6 +542,17 @@ def step(w, kind, arg):
                       timeout=60)
         if rc:
             raise CouldNotRun(f"order {kind_} {rank} {' '.join(argv)}: {last(o)}")
+    elif kind == "run":
+        # A fixture's assertions use the same native input path as a player.
+        # They fail the live lane before state equality could bless a no-op.
+        argv = [a.replace("{instance}", w.name).replace("{gamedir}", str(w.gamedir))
+                for a in arg]
+        if argv[0].endswith(".py"):
+            argv = [sys.executable, str(TREE / argv[0])] + argv[1:]
+        r = subprocess.run(argv, cwd=TREE, capture_output=True, text=True, timeout=300)
+        if r.returncode:
+            raise Failed(f"fixture assertion {' '.join(arg)}: {last(r.stdout + r.stderr)}")
+        say(last(r.stdout))
     else:
         raise CouldNotRun(f"a step of kind {kind!r}")
 
@@ -561,6 +573,34 @@ def twin(w, log):
     w.trigger("dump ln1 now")
     if not log.wait(r"recorder: frame dump ln1 at GameTime", 30, n):
         raise CouldNotRun("the twin: frame dump ln1 not taken in 30 s")
+    # A button message changes the event ring even when a modal GUI consumes
+    # it. Sample a complete ring turn and several camera positions while the
+    # world is paused: returning to the same eye or ring index would hide these
+    # viewer writes from a two-image observation.
+    tacli("arm", w.name, "menu.open")
+    rc, o = tacli("ui", w.name, "wait", "--gui", "RENDER.GUI", "--timeout", "10", timeout=60)
+    if rc:
+        raise CouldNotRun(f"the twin: Impure options did not open: {last(o)}")
+    rc, o = tacli("ui", w.name, "--json")
+    if rc:
+        raise CouldNotRun(f"the twin: Impure options could not be read: {last(o)}")
+    gui = json.loads(o)
+    labels = [g for g in gui["gadgets"] if g["type"] == "label" and g["active"]]
+    if not labels:
+        raise CouldNotRun("the twin: Impure options has no inert labels to sample")
+    for i, name in enumerate(NULL_VIEWS):
+        x, y = labels[i % len(labels)]["click"]
+        tacli("keys", w.name, f"pclick:{x},{y}")
+        # The engine clamps these eyes to the map. The views are observations,
+        # not assertions about the camera's permitted range.
+        tacli("eye", w.name, i * 137, i * 193)
+        n = len(log.lines)
+        w.trigger(f"dump {name} now")
+        if not log.wait(rf"recorder: frame dump {name} at GameTime", 30, n):
+            raise CouldNotRun(f"the twin: frame dump {name} not taken")
+        if w.gametime() != g1:
+            raise CouldNotRun("the twin: GameTime moved during the viewer samples")
+    tacli("arm", w.name, "menu.open=off")
     for key in ("up", "down", "left", "right"):
         tacli("keys", w.name, f"down:{key}")
         nap(1.0)
@@ -1455,8 +1495,12 @@ def checks(fx):
         compare(f"counts, L against P over [{Ts[0]}, {Ts[-1]})", "compare-counts", rec, l1, lT,
                 p1, pT, files=[l1, lT, p1, pT])
     if all(ran.get(k) == "ran" for k in "PRQ"):
+        views = [out / "L" / f"dump-{n}.bin" for n in NULL_VIEWS]
+        for view in views + [n2]:
+            compare(f"the paused twin's simulation: {view.stem}", "compare-dumps", rec,
+                    n1, view, files=[n1, view])
         compare(f"the images gate at {Ts[0]}", "images-gate", rec, l1, lT, n1, n2, p1, pT, r1, q1,
-                files=[l1, lT, n1, n2, p1, pT, r1, q1])
+                *views, files=[l1, lT, n1, n2, p1, pT, r1, q1, *views])
     for proc, d in (("L", lT), ("P", pT)):
         if ran.get(proc) == "ran":
             compare(f"{proc} {d.stem[5:]}: the address scan", "scan", rec, d, files=[d])
@@ -2071,6 +2115,10 @@ def gated(paths, base):
     fx, by_region, by_function, whole, why = set(), set(), set(), set(), []
     headers = {s: includes_of(s) for s in sims}
     for p in sorted(paths):
+        users = {n for n, f in fixtures().items() if p in f.get("sources", [])}
+        if users:
+            fx |= users
+            why.append(f"{p}: the input regression of {' '.join(sorted(users))}")
         if p in sims:
             by_region.add(p)
         elif p == FIXTURES_JSON:

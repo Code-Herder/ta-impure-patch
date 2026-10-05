@@ -1841,6 +1841,11 @@ static void __cdecl bl_download_append(unsigned int* regs)
 
 /* CLASS: simulation, fail closed. A builder's list is what the AI's pick 0x40BDB0 and the
    build menu offer, so a player without it builds by a different list. */
+static int s_buildListsLive;
+SIM_VAR(s_buildListsLive, SIM_INSTALL);
+
+int tagpu_build_lists_live(void) { return s_buildListsLive && s_limState == 1; }
+
 static int fix_build_list(void)
 {
     FIXSITE site[4] = {
@@ -1862,7 +1867,9 @@ static int fix_build_list(void)
     fix_branch(&site[1], 0xE8, b);
     site[1].now[5] = 0xEB; site[1].now[6] = 0x15;          /* jmp 0x42DAE3, past the rep movs */
     fix_branch(&site[3], 0xE8, c);
-    return fix_table(site, 4, "whole build lists");
+    int result = fix_table(site, 4, "whole build lists");
+    s_buildListsLive = result == FIX_TABLE;
+    return result;
 }
 
 SIM_FEATURE(download_records, SIM_PUPPET_RUNS, "battle");

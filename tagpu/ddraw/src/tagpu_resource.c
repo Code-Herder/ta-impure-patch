@@ -11,6 +11,7 @@
 #include "tagpu_replay.h"
 #include "tagpu_puppet.h"
 #include "tagpu_log.h"
+#include "tagpu_patches.h"
 #include "winapi_hooks.h"
 
 /* DISASSEMBLED: 0x419670 uses these order roots and the def's CANBUILD list.
@@ -39,8 +40,8 @@ typedef unsigned char* (__attribute__((thiscall))* Action)(void*, const char*);
 
 typedef struct {
     char *ta, *defs, *units, *grid;
-    unsigned ndefs, nslots;
-    int w, h, player, threshold;
+    unsigned ndefs, nslots, first, last;
+    int w, h, player, threshold, shift;
 } World;
 typedef struct {
     unsigned type, target;
@@ -55,7 +56,8 @@ static unsigned short s_patch_queue[PATCH_CAP];
 
 static int world(World* w)
 {
-    char *state, *end;
+    char *state, *end, *player;
+    uintptr_t first, last;
     uintptr_t distance;
     memset(w, 0, sizeof *w);
     w->ta = *(char**)TA_MAIN_PP;
@@ -79,7 +81,15 @@ static int world(World* w)
     if (distance % UNIT_STRIDE || distance / UNIT_STRIDE >= TAGPU_PK_DESIGN_SLOTS) return 0;
     w->nslots = *(unsigned short*)(w->ta + 0x14351);
     if (w->nslots != (unsigned)(distance / UNIT_STRIDE) + 1) return 0;
+    player = w->ta + 0x1B63 + w->player * 0x14B;
+    first = (uintptr_t)*(char**)(player + 0x67); last = (uintptr_t)*(char**)(player + 0x6B);
+    if (first < (uintptr_t)w->units || last < first || last > (uintptr_t)end ||
+        (first - (uintptr_t)w->units) % UNIT_STRIDE ||
+        (last - (uintptr_t)w->units) % UNIT_STRIDE) return 0;
+    w->first = (unsigned)((first - (uintptr_t)w->units) / UNIT_STRIDE);
+    w->last = (unsigned)((last - (uintptr_t)w->units) / UNIT_STRIDE);
     w->threshold = *(unsigned*)(state + 0xD30) > 255u ? 255 : *(unsigned*)(state + 0xD30);
+    w->shift = (fake_GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
     return 1;
 }
 
@@ -149,6 +159,16 @@ static int can_build(const World* w, const char* u, unsigned type)
     if (!list || count > TAGPU_LIM_TYPES) return 0;
     for (i = 0; i < count; i++) if (list[i] == type && type < w->ndefs) return 1;
     return 0;
+}
+
+static int can_assist(const World* w, const char* u)
+{
+    unsigned id = def_id(w, u);
+    const char* d;
+    if (!id) return 0;
+    d = w->defs + id * D_STRIDE;
+    return (*(unsigned*)(d + D_FLAGS) & 0x40u) &&
+           (*(unsigned*)(d + 0x245) & 0x200u) && *(unsigned short*)(d + 0x1FE);
 }
 
 static int discovered(const World* w, int x, int z)
@@ -224,6 +244,10 @@ static int fits(const World* w, unsigned type, int x, int z, unsigned ignore, in
     return ok;
 }
 
+static int distinct(const World* w, Choice* c, int fx, int fz);
+static int queued(const World* w, const Choice* c);
+static int plans_block(const World* w, const Choice* c);
+
 static int site(const World* w, unsigned type, const int seed[3], const int raw[3], int radius,
                 int legal, unsigned ignore, Choice* out)
 {
@@ -242,6 +266,15 @@ static int site(const World* w, unsigned type, const int seed[3], const int raw[
         count = k == 1 ? coverage(w, x, z, fx, fz) : 1;
         if (!count || count < best || (count == best && dist >= distance)) continue;
         if ((legal || k == 2) && !fits(w, type, x, z, ignore, &h)) continue;
+        if (legal) {
+            Choice candidate = {0};
+            candidate.type = type; candidate.kind = k; candidate.x = x; candidate.z = z;
+            candidate.height = h; candidate.target = ignore;
+            if (plans_block(w, &candidate)) {
+                if (k == 1 && !ignore && !distinct(w, &candidate, fx, fz)) continue;
+                if (!queued(w, &candidate)) continue;
+            }
+        }
         best = count; distance = dist; bx = x; bz = z; height = h;
     }
     if (!best) return 0;
@@ -257,6 +290,7 @@ static int distinct(const World* w, Choice* c, int fx, int fz)
 {
     int x, z, sx = -1, sz = -1, left, top;
     unsigned head = 0, tail = 0;
+    int boundary = 0, edges = 0;
     for (z = c->z; z < c->z + fz && sx < 0; z++) for (x = c->x; x < c->x + fx; x++)
         if (metal(w, x, z) > w->threshold) { sx = x; sz = z; break; }
     if (sx < 0) return 0;
@@ -269,20 +303,26 @@ static int distinct(const World* w, Choice* c, int fx, int fz)
         unsigned idx = s_patch_queue[head++];
         int rx = idx % PATCH_SIDE, rz = idx / PATCH_SIDE, dx, dz;
         if (!rx || !rz || rx == PATCH_SIDE - 1 || rz == PATCH_SIDE - 1) return 0;
+        if (left + rx == 0) edges |= 1;
+        if (left + rx == w->w - 1) edges |= 2;
+        if (top + rz == 0) edges |= 4;
+        if (top + rz == w->h - 1) edges |= 8;
         for (dz = -1; dz <= 1; dz++) for (dx = -1; dx <= 1; dx++) {
             unsigned next = (unsigned)(rz + dz) * PATCH_SIDE + rx + dx;
             int wx = left + rx + dx, wz = top + rz + dz;
             if (s_patch_seen[next] || wx < 0 || wz < 0 || wx >= w->w || wz >= w->h) continue;
             s_patch_seen[next] = 1;
             if (!discovered(w, wx, wz)) return 0;
-            if (metal(w, wx, wz) <= w->threshold) continue;
+            if (metal(w, wx, wz) <= w->threshold) { boundary = 1; continue; }
             if (tail >= PATCH_CAP) return 0;
             s_patch_queue[tail++] = (unsigned short)next;
             if (wz < c->anchor_z || (wz == c->anchor_z && wx < c->anchor_x))
                 c->anchor_x = wx, c->anchor_z = wz;
         }
     }
-    return 1;
+    /* The edge of the map alone cannot distinguish a small uniform metal
+       map from a deposit. Require a discovered background cell as well. */
+    return boundary && (edges & 3) != 3 && (edges & 12) != 12;
 }
 
 static int resolve(const char* u, int command, const char* target, const int pos[3])
@@ -302,10 +342,73 @@ static void position(const World* w, const Choice* c, int pos[3])
     pos[2] = (c->z * 16 + fz * 8) * 65536;
 }
 
+static int build_node(const World* w, const char* n)
+{
+    const char* first = *(const char* const*)0x00512344u;
+    const char* last = *(const char* const*)0x00512348u;
+    uintptr_t bytes;
+    unsigned action = (unsigned char)n[4], type = *(unsigned short*)(n + 0x36);
+    if (!first || (uintptr_t)last < (uintptr_t)first) return 0;
+    bytes = (uintptr_t)last - (uintptr_t)first;
+    /* The loader's descriptor array is fixed for the level, stride 0x19.
+       Capability bit 0 identifies placed build orders, not factory counts. */
+    return bytes % 0x19u == 0 && action < bytes / 0x19u &&
+        (*(unsigned*)(first + action * 0x19u + 0x0C) & 1u) &&
+        type && type < w->ndefs && *(int*)(n + 0x22) > 0 && *(int*)(n + 0x2A) > 0;
+}
+
+static int plans_block(const World* w, const Choice* c)
+{
+    const char* d = w->defs + c->type * D_STRIDE;
+    const char *primary = NULL, *target = c->target ? unit(w, c->target) : NULL;
+    const unsigned char* yard = *(const unsigned char* const*)(d + 0x14E);
+    int fx, fz, shift = w->shift;
+    unsigned i;
+    int pos[3];
+    if (!footprint(d, &fx, &fz) || !yard) return 1;
+    position(w, c, pos);
+    if (!shift) for (i = w->first; i <= w->last; i++) {
+        const char* u = unit(w, i);
+        if (u && selected(w, u) && can_build(w, u, c->type) &&
+            (!c->target || (target && resolve(u, 12, target, pos) >= 0))) { primary = u; break; }
+    }
+    for (i = w->first; i <= w->last; i++) {
+        const char *u = unit(w, i), *n;
+        unsigned steps = 0;
+        int ordered;
+        if (!u || *(unsigned char*)(u + U_OWNER) != w->player) continue;
+        ordered = primary && selected(w, u) &&
+            ((can_build(w, u, c->type) && (!c->target || resolve(u, 12, target, pos) >= 0)) ||
+             (can_assist(w, u) && resolve(u, 7, primary, pos) >= 0));
+        for (n = *(const char* const*)(u + U_ORDERS); n && steps++ < 16384;
+             n = *(const char* const*)(n + 0x4A)) {
+            const char* od;
+            const unsigned char* oy;
+            int ofx, ofz, ox, oz, x, z;
+            if (*(const char* const*)(n + 0x0E) != u) break;
+            if (!build_node(w, n)) continue;
+            if (ordered &&
+                !(*(unsigned*)(n + 0x42) & 4u)) continue;
+            od = w->defs + *(unsigned short*)(n + 0x36) * D_STRIDE;
+            if (od[0x22F] || !footprint(od, &ofx, &ofz) ||
+                !(oy = *(const unsigned char* const*)(od + 0x14E))) continue;
+            ox = (int)(((int64_t)*(int*)(n + 0x22) - ofx * 524288 + 524288) >> 20);
+            oz = (int)(((int64_t)*(int*)(n + 0x2A) - ofz * 524288 + 524288) >> 20);
+            for (z = c->z > oz ? c->z : oz; z < c->z + fz && z < oz + ofz; z++)
+                for (x = c->x > ox ? c->x : ox; x < c->x + fx && x < ox + ofx; x++) {
+                    unsigned a = yard[(z - c->z) * fx + x - c->x];
+                    unsigned b = oy[(z - oz) * ofx + x - ox];
+                    if (((a & 4u) && (b & 6u)) || ((b & 4u) && (a & 6u))) return 1;
+                }
+        }
+    }
+    return 0;
+}
+
 static int queued(const World* w, const Choice* c)
 {
     unsigned i;
-    for (i = 1; i < w->nslots; i++) {
+    for (i = w->first; i <= w->last; i++) {
         const char *u = unit(w, i), *node;
         unsigned steps = 0;
         if (!u || *(unsigned char*)(u + U_OWNER) != w->player) continue;
@@ -316,13 +419,16 @@ static int queued(const World* w, const Choice* c)
             unsigned t = *(unsigned short*)(node + 0x36);
             int x, z, fx, fz;
             if (*(const char* const*)(node + 0x0E) != u) break;
-            if (!t || t >= w->ndefs) continue;
+            if (!build_node(w, node)) continue;
             if (kind(w->defs + t * D_STRIDE) != c->kind || !footprint(w->defs + t * D_STRIDE, &fx, &fz)) continue;
             x = (*(int*)(node + 0x22) >> 16) - fx * 8;
             z = (*(int*)(node + 0x2A) >> 16) - fz * 8;
             x /= 16; z /= 16;
             if (c->kind == 2 || c->target) {
-                if (abs(x - c->x) <= 1 && abs(z - c->z) <= 1) return 1;
+                int pos[3];
+                position(w, c, pos);
+                if (llabs((int64_t)*(int*)(node + 0x22) - pos[0]) <= 1048576 &&
+                    llabs((int64_t)*(int*)(node + 0x2A) - pos[2]) <= 1048576) return 1;
             } else {
                 Choice other = {0};
                 other.x = x; other.z = z;
@@ -358,7 +464,7 @@ static int quick_choice(const World* w, Choice* chosen)
         const char* defs = *(const char* const*)(w->ta + OFF_FEATDEF);
         if (count <= 0xFFFBu && feature < count && defs && (*(unsigned short*)(defs + feature * FD_STRIDE + 0xFE) & 0x80u)) return 0;
     }
-    for (i = 1; i < w->nslots; i++) {
+    for (i = w->first; i <= w->last; i++) {
         const char* u = unit(w, i);
         unsigned id, n, j;
         const char* d;
@@ -392,6 +498,8 @@ static int quick_choice(const World* w, Choice* chosen)
             if (k == 1 && !distinct(w, &c, fx, fz)) continue;
         }
         c.strength = value; c.target = target ? target_id : 0;
+        c.queued = queued(w, &c);
+        if (!c.queued && plans_block(w, &c)) continue;
         best[k] = c;
     }
     *chosen = best[1].type ? best[1] : best[2];
@@ -480,16 +588,22 @@ static int click(void* frame, int right)
         return 0;
     }
     if ((*(int*)(w.ta + 0x37EFA) != 0) != right) return 0;
+    /* The queued mouse record owns its modifier state. A later key release
+       must not change which existing plans this click will preserve. */
+    w.shift = (record[2] & 4) != 0;
     {
         unsigned scratch0 = *(unsigned*)0x0051E684u, scratch1 = *(unsigned*)0x0051E688u;
         int have = quick_choice(&w, &c);
         *(unsigned*)0x0051E684u = scratch0; *(unsigned*)0x0051E688u = scratch1;
         if (!have) return 0;
     }
-    if (c.queued) return 1;
+    if (c.queued) {
+        tagpu_logf("resource: already queued type=%u site=%d,%d", c.type, c.x, c.z);
+        return 1;
+    }
     position(&w, &c, pos);
-    shift = (record[2] & 4) != 0;
-    for (i = 1; i < w.nslots; i++) {
+    shift = w.shift;
+    for (i = w.first; i <= w.last; i++) {
         const char* u = unit(&w, i);
         if (u && selected(&w, u) && can_build(&w, u, c.type) &&
             (!c.target || resolve(u, 12, unit(&w, c.target), pos) >= 0)) {
@@ -513,14 +627,11 @@ static int click(void* frame, int right)
         }
         ((Order)0x0043AFC0u)(actions[i], shift || c.target, (void*)u, NULL, pos, c.type, 0);
     }
-    for (i = 1; i < w.nslots; i++) {
+    for (i = w.first; i <= w.last; i++) {
         const char *u = unit(&w, i), *main;
-        unsigned id, j;
+        unsigned j;
         int guard;
-        if (!u || !selected(&w, u) || !(id = def_id(&w, u)) ||
-            !(*(unsigned*)(w.defs + id * D_STRIDE + D_FLAGS) & 0x40u) ||
-            !(*(unsigned*)(w.defs + id * D_STRIDE + 0x245) & 0x200u) ||
-            !(*(unsigned short*)(w.defs + id * D_STRIDE + 0x1FE))) continue;
+        if (!u || !selected(&w, u) || !can_assist(&w, u)) continue;
         for (j = 0; j < np && u != primary[j]; j++) {}
         if (j < np) continue;
         main = primary[helper++ % np];
@@ -558,11 +669,16 @@ void tagpu_resource_packet(TAGPU_PACKET* p)
     p->build_rect[3] = (c.x + fx) * 16; p->build_rect[4] = c.height; p->build_rect[5] = (c.z + fz) * 16;
 }
 
+int tagpu_resource_live(void) { return s_armed; }
+
 void tagpu_resource_init(void)
 {
     static const unsigned char build[] = {0x83,0xEC,0x14,0x8B,0x15,0xE8,0x1D,0x51,0x00};
     static const unsigned char left[] = {0x51,0xA1,0xE8,0x1D,0x51,0x00};
     static const unsigned char right[] = {0x51,0x8B,0x0D,0xE8,0x1D,0x51,0x00};
+    if (!tagpu_build_lists_live()) {
+        tagpu_logf("resource: CANBUILD allocation bound unavailable; not armed"); return;
+    }
     if (!tagpu_detour_bytes_ok(0x004197D0u, build, sizeof build) ||
         !tagpu_detour_bytes_ok(0x00498F70u, left, sizeof left) ||
         !tagpu_detour_bytes_ok(0x00499100u, right, sizeof right)) {
