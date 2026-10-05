@@ -6792,6 +6792,7 @@ static void __cdecl hit_created(unsigned int* r)
     }
     t->stamp[idx] = stamp;
     t->local[idx] = HIT_GAMETIME(ta);
+    tagpu_rec_network_created(slot, rec, stamp);
 }
 
 /* In place of 0x456050's `call 0x451DF0` (0x4560AE), with its signature: the unit's 0x09,

@@ -3892,6 +3892,23 @@ edi,[esp+0x24]`), with the caller's return address at `[esp+0x1C]`. Its three ca
 `0x48B47E`), not the sender. **The `0x2C` header's GameTime** (`[32]`, read at `0x48B955`) is
 stored at the sender's `player+0x18` (`0x48B963`) before the first entry.
 
+**Replica creation observation [DISASSEMBLED 2026-10-05].** The record read at
+`0x4861ED` supplies slot at `+3` (`0x4861F7`), type at `+1` (`0x48625F`) and
+three position dwords at `+5` (`0x48624F..0x486263`). `0x4862B8` calls unit init
+`0x485A40` with finished zero; the constructor then creates COB (`0x4862BE` →
+`0x485D40`), weapon queries (`0x4862C4` → `0x49E070`), orders (`0x4862CA` →
+`0x437840`), the mover when applicable, sight (`0x486306` → `0x48A870`), the
+footprint (`0x48630C` → `0x47CC30`) and the bucket (`0x486312` → `0x482AC0`).
+It increments the owning player's word/dword counts at `0x486322`/`0x486338`,
+then calls `0x490580` at `0x48634A` before the success exit.
+B4's existing exit callout applies valid carried build/HP state through
+`kill_apply_state`, stores its incarnation/local clock, then calls
+`tagpu_rec_network_created`. That observer copies the constructor arguments,
+bounded owner, slot water and the post-B4 `+0x104`/`+0x108` values into native
+`RK_EV_NET_CREATE`; it adds no byte site or engine field write. The local create
+observer at `0x4861B3` does not see this constructor. Native playback remains
+unfinished; the root is stored for its eventual materializer.
+
 **The dispatcher's switch and gate.** The jump table `0x455F84` is indexed by `code − 2`
 (`0x454861`): `0x05` at `0x455F90` (→ `0x45522E`), `0x09` at `0x455FA0` (→ `0x4553DA`), `0x0B` at
 `0x455FA8` (→ `0x45540D`), `0x0F` at `0x455FB8`. Before it, `0x45473F` gates on the state

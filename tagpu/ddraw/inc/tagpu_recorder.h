@@ -3,8 +3,9 @@
 /* tagpu_recorder -- the demo recorder (research/notes/tadr-port/demo-recorder-skirmish-slice.md).
    tagpu_recorder.c is the capture, on the game thread. tagpu_recwriter.c is the writer thread; it
    reads no engine memory, and since it is not on thread-split.allow the build refuses an engine
-   address in it. The records that pass between them are tagpu_recfmt.h's. A skirmish is recorded
-   only while tagpu_recorder.on is in the game's folder at the level's first iteration. */
+   address in it. The records that pass between them are tagpu_recfmt.h's. A skirmish or native
+   game is saved when tagpu_recorder.on is in the game's folder at the level's first iteration;
+   native owner contributions run independently of that local save request. */
 
 #include <windows.h>
 #include "tagpu_recfile.h"
@@ -60,8 +61,9 @@ int tagpu_rec_hooks_in(void);
    and mtime, Impure's own impure-patch.ufo left out. Game thread: the engine mounts there. */
 unsigned tagpu_rec_mod_print(void);
 
-/* The callouts of the events whose sites belong to other modules, on the game thread; each is
-   inert unless a skirmish is being recorded.
+/* The callouts of the events whose sites belong to other modules, on the game thread. Shots
+   and intercepts copy into an active recording; owner script roots also contribute in native
+   games whose local recording is off.
    - tagpu_rec_shot: a fire function's 0x0D packet at its send (wpn_tx_fired), `meteor` for the
      meteor spawn's, whose sender leaves +0x1A..+0x23 as the stack held them.
    - tagpu_rec_intercept: area damage's 0x0E, from its target point (three dwords) and the
@@ -71,6 +73,9 @@ unsigned tagpu_rec_mod_print(void);
      the slots from 3 up): `now` is the start's third argument, `a0` its one argument. */
 void tagpu_rec_shot(const unsigned char* pkt, int meteor);
 void tagpu_rec_intercept(const unsigned char* point, unsigned weapon);
+/* B4's existing CreateFromNetwork success observer, after its incarnation stamp.
+   The record's first 17 bytes are the constructor's bounded input; no worker reads it. */
+void tagpu_rec_network_created(const char* unit, const unsigned char* record, unsigned birth);
 void tagpu_rec_start_named(const char* unit, const char* name, int now, int argc, int a0);
 
 /* What a recording's header says about the game it was made in, computed as the header computes

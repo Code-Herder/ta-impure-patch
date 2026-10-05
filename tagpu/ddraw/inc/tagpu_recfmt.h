@@ -35,7 +35,13 @@
 #include <stdint.h>
 #include "tagpu_replay_globals.h"
 
-#define REC_FORMAT        5
+#define REC_FORMAT        6
+#define REC_FORMAT_PREVIOUS 5
+
+static __inline int rec_format_supported(unsigned format)
+{
+    return format == REC_FORMAT || format == REC_FORMAT_PREVIOUS;
+}
 
 #define REC_UNIT_BYTES    0x118   /* a unit record                                           */
 #define REC_MOVER_BYTES   0x2F    /* its mover: the creates' allocation (`push 0x2F`, 0x4860C4)  */
@@ -271,8 +277,22 @@ enum RecKind {
     RK_COUNT_NAME,     /* dump only: u32 aux, char[REC_COUNT_NAME] NUL-padded: the script name
                           whose FNV-1a is the aux of the COB thread allocation 0x4B08C0's rows   */
     RK_MINIMAP,        /* ring only: an RB_MINIMAP's payload, right after the RK_HEADER          */
+    RK_EV_NET_CREATE,  /* RecNetCreate: CreateFromNetwork 0x4861D0 made this replica. Native
+                          format 6 only; observed at its success exit after B4 stamps it         */
     RK_KINDS
 };
+
+typedef struct RecNetCreate {
+    uint32_t unit;                    /* slot ID                                                */
+    uint16_t type;                    /* engine index, from the constructor's record +1        */
+    uint8_t owner, water;
+    uint32_t birth;                   /* B4's observed token, including lower-bound/unknown    */
+    int32_t position[3];              /* constructor arguments, from its record +5             */
+    float unfinished;                 /* post-B4 unit +0x104                                    */
+    uint16_t hp, reserved;            /* post-B4 unit +0x108; reserved is zero                  */
+} RecNetCreate;
+_Static_assert(sizeof(RecNetCreate) == 32, "network create event span");
+_Static_assert(RK_EV_NET_CREATE == 51, "existing record kinds retain their values");
 
 /* A feature root, and its arguments after the site. A cell the engine names by address is its
    column and row (0xFFFF 0xFFFF: not a cell of the grid, and never replayed). */
@@ -299,6 +319,7 @@ static __inline int rec_event_len(unsigned kind, unsigned len)
 {
     switch (kind) {
     case RK_EV_CREATE:      return len == 28;
+    case RK_EV_NET_CREATE:  return len == sizeof(RecNetCreate);
     case RK_EV_DEATH:       return len == 12 + REC_UNIT_IMAGE;
     case RK_EV_SHOT:        return len == 36;
     case RK_EV_INTERCEPT:   return len == 16;

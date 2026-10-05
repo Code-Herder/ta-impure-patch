@@ -31,6 +31,72 @@ def encoded(blocks):
     return out
 
 
+def network_create_controls(blocks, output, exe, log, env):
+    expected = struct.pack("<IHBBIiiifHH", 6, 1, 2, 4, 0x80000011, 123456, -654321, 123, 0.25, 65535, 0)
+    segment = tarec.segments(blocks)[0]
+    observed = []
+    tarec.stream_to(segment["header"], segment["blocks"], on_record=lambda w, k, b:
+                    observed.append(bytes(b)) if k == tarec.RK_EV_NET_CREATE else None)
+    if observed != [expected]:
+        raise RuntimeError("Python network creation arguments/incarnation changed")
+
+    def changed(body, legacy=False, drop=False):
+        result = []
+        for kind, first, last, raw in blocks:
+            if legacy and kind == tarec.RB_HEADER:
+                raw = b"".join(struct.pack("<HH", tag, len(b)) + b + bytes((-len(b)) % 4)
+                               for tag, b in ((tag, struct.pack("<I", 5) if tag == tarec.RT_FORMAT else b)
+                                              for tag, b in tarec.entries(raw)))
+            if kind == tarec.RB_STREAM:
+                raw = b"".join(struct.pack("<HH", rk, len(b)) + b + bytes((-len(b)) % 4)
+                               for rk, b in ((rk, body if rk == tarec.RK_EV_NET_CREATE else b)
+                                             for rk, b in tarec.records(raw))
+                               if not (drop and rk == tarec.RK_EV_NET_CREATE))
+            result.append((kind, first, last, raw))
+        return result
+
+    variants = {"short": expected[:-1], "long": expected+b"x"}
+    for name, offset, fmt, value in (("null_unit", 0, "I", 0), ("slot_zero", 0, "I", 1),
+                                    ("past_slots", 0, "I", 22), ("wrong_block", 6, "B", 0),
+                                    ("past_owner", 6, "B", 10), ("past_water", 7, "B", 5),
+                                    ("null_type", 4, "H", 0), ("past_type", 4, "H", 8),
+                                    ("reserved", 30, "H", 1), ("nan_build", 24, "I", 0x7fc00000),
+                                    ("negative_build", 24, "f", -0.25), ("past_build", 24, "f", 1.25)):
+        b = bytearray(expected)
+        struct.pack_into("<"+fmt, b, offset, value)
+        variants[name] = bytes(b)
+    for name, body in variants.items():
+        altered = changed(body)
+        seg = tarec.segments(altered)[0]
+        try:
+            tarec.stream_to(seg["header"], seg["blocks"])
+        except tarec.Unreadable:
+            pass
+        else:
+            raise RuntimeError("Python accepted network create "+name)
+        path = output / ("network-create-"+name+".imprec")
+        path.write_bytes(encoded(altered))
+        command(["wine", exe, "world-refuse", "Z:"+str(path).replace("/", "\\")], log, env=env)
+    altered = changed(expected, legacy=True)
+    seg = tarec.segments(altered)[0]
+    try:
+        tarec.stream_to(seg["header"], seg["blocks"])
+    except tarec.Unreadable:
+        pass
+    else:
+        raise RuntimeError("Python accepted format-5 network create")
+    path = output / "network-create-format5.imprec"
+    path.write_bytes(encoded(altered))
+    command(["wine", exe, "world-refuse", "Z:"+str(path).replace("/", "\\")], log, env=env)
+    legacy = changed(expected, legacy=True, drop=True)
+    seg = tarec.segments(legacy)[0]
+    tarec.stream_to(seg["header"], seg["blocks"])
+    path = output / "legacy-format5.imprec"
+    path.write_bytes(encoded(legacy))
+    command(["wine", exe, "read", "Z:"+str(path).replace("/", "\\")], log, env=env)
+    print("network create: exact arguments/token/carried state, 15 primary semantic refusals and legacy format-5 reading PASS", flush=True)
+
+
 def resealed(blocks):
     """Rebuild source DATA prefix seals too, so malformed bodies reach semantic checks."""
     sources, result = {}, []
@@ -258,6 +324,18 @@ def run(output, read_file=None, skirmish_file=None, native_file=None):
                         str(segment["first"]), str(segment["last"])]
             if rows != [expected] or set(history.players) != {a[0] for a in history.ledger.actors}:
                 raise RuntimeError("native C/Python application bytes, clocks or applied players disagree")
+            creates, create_crc = [], 0
+            def create_record(world, kind, body):
+                nonlocal create_crc
+                if kind == tarec.RK_EV_NET_CREATE:
+                    creates.append(bytes(body))
+                    create_crc = zlib.crc32(struct.pack("<I", world.tick)+body, create_crc)
+            tarec.stream_to(segment["header"], segment["blocks"], on_record=create_record)
+            rows = [line.split()[1:] for line in log_path.read_text().splitlines()
+                    if line.startswith("NATIVE_CREATES ")]
+            if rows != [[str(len(creates)), f"{create_crc:08X}"]]:
+                raise RuntimeError("native C/Python network creation arguments/ticks/token disagree")
+            print(f"native creates: {len(creates)} exact C/Python roots retained through world seek PASS", flush=True)
             print("native file: C/Python complete application bytes/order/provenance, all owner players/unit-block bounds and world seek PASS", flush=True)
             return
         for mode in (() if read_file else ("normal", "missing_cut", "missing_receipt", "journal_full", "local_stop")):
@@ -276,6 +354,9 @@ def run(output, read_file=None, skirmish_file=None, native_file=None):
         original = read_file or output / "normal.imprec"
         blocks, stopped = tarec.blocks(original)
         semantic_states(tarec.segments(blocks)[0])
+        if not read_file:
+            with (output / "network-create-controls.log").open("w") as log:
+                network_create_controls(blocks, output, exe, log, env)
         if read_file:
             with (output / "normal-read.log").open("w") as log:
                 command(["wine", exe, "read", "Z:" + str(original).replace("/", "\\")], log, env=env)

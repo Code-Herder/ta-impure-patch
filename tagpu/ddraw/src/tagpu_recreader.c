@@ -420,7 +420,7 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         }
         at += (4 + (size_t)n + 3) & ~(size_t)3;
     }
-    if ((seen & 1) && h->format != REC_FORMAT) {
+    if ((seen & 1) && !rec_format_supported(h->format)) {
         snprintf(why, cap, "format %u, this build reads %u", h->format, REC_FORMAT);
         return 0;
     }
@@ -683,6 +683,23 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
     RecWorld* w = &r->w;
     unsigned id;
     switch (kind) {
+    case RK_EV_NET_CREATE: {
+        RecNetCreate create;
+        unsigned i, slot;
+        if (r->h.format < REC_FORMAT || r->h.mode != 3 || !r->h.has_mp_seats ||
+            !r->h.has_unitdefs || !rec_event_len(kind, len)) return 0;
+        memcpy(&create, b, sizeof create);
+        slot = create.unit - 1;
+        if (slot < 1 || slot >= w->slots || !create.type || create.type >= r->h.ndefs ||
+            create.owner >= REC_PLAYERS || create.water > 4 || create.reserved ||
+            !(create.unfinished >= 0.0f && create.unfinished <= 1.0f)) return 0;
+        for (i = 0; i < r->h.mp_seats.count; i++) {
+            const RecMpSeat* seat = &r->h.mp_seats.actor[i];
+            if (seat->seat == create.owner && slot >= seat->first && slot <= seat->last) break;
+        }
+        if (i == r->h.mp_seats.count) return 0;
+        break;
+    }
     case RK_EV_FEATURE:
         if (r->fbracket || (b[0] == FR_TICK && r->ndeaths) ||
             b[1] > REC_PHASE_LATE || b[2] || b[3] ||
@@ -764,7 +781,8 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
     RecTable* t;
     if (r->pend.next < r->pend.total && kind != RK_ORDERS) return 0;
     if (len >= 2) memcpy(&id, b, 2);
-    if ((kind >= RK_EV_CREATE && kind <= RK_EV_DEATH_END) || (kind == RK_CELLS && *events)) {
+    if ((kind >= RK_EV_CREATE && kind <= RK_EV_DEATH_END) || kind == RK_EV_NET_CREATE ||
+        (kind == RK_CELLS && *events)) {
         if (!event_take(r, kind, b, len)) return 0;
         *events = 1;
         return 1;
@@ -2211,7 +2229,7 @@ static int info_header(RecInfo* o, const unsigned char* b, size_t len)
             o->seat[p[0]].present = 1;
         at += (4 + (size_t)n + 3) & ~(size_t)3;
     }
-    return format == REC_FORMAT;
+    return rec_format_supported(format);
 }
 
 static void info_end(RecInfo* o, const unsigned char* b, size_t len)

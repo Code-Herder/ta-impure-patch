@@ -3892,6 +3892,15 @@ The multiplayer work branch writes native observed-world/contribution files on
 local recording opt-in; engine playback remains unfinished. The [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.html)
 is active on a work branch: bounded contributions, authoritative human/hosted-AI
 queue caches with source/application ticks, and a fresh ID on each engine start.
+Format 6 adds observed replica creation roots through B4's existing success
+observer, including constructor arguments, birth, water and carried build/HP
+state; readers retain format-5 support. The controlled file/seek fixture bounds
+and preserves that data. It does not resolve early owner replies' materialization
+clock or enable native engine playback; those remain the next application work.
+The normal native format-6 recording verifies 35 replica roots against the next
+B2 images and retains their exact bytes through C/Python world seek; all 353
+observed-world transitions are explained. A private SDK creation failure under
+coverage remains a startup gap, with successful native coverage still required.
 The isolated native worker now carries contributions inside TA, with signed human/AI bindings against keys copied from actual native player data. A four-actor TA game verifies resources and queues; its production channel also starts and delivers in the native fixture after both primary interfaces close. Source-prefix seals now validate exact sequence/tick/byte/checksum tails; the native fixture verifies final human/AI prefixes and a missing-tail control refuses. Frozen consumption cuts, final receipts and a retained post-teardown consumer now pass controls and the native fixture. A bounded journal preserves produced/consumed source packets with separate application timestamps and a shared ordinal. Its optional copied context now reaches the actual format-5 file writer; a synthetic `.imprec` fixture passes C/Python read/cut-footer validation and world seeking, refusing missing proofs and semantic corruption. Native capture now attaches that context before any publication/consumption. Full owner authority, bandwidth bounds, network engine playback/seek, perspectives, communication and ten-seat takeover remain.
 No multiplayer code has landed. A real native normal-speed four-actor game now
 produces a 2,524,535-byte mode-3 file with the host recording and the joiner opted

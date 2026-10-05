@@ -3665,6 +3665,30 @@ static int __cdecl ev_create(void* E)
     return 0;
 }
 
+void tagpu_rec_network_created(const char* unit, const unsigned char* record, unsigned birth)
+{
+    Rec* r = ev_rec();
+    RecNetCreate b;
+    unsigned owner;
+    if (!r || r->mode != MODE_NETWORK || !(b.unit = ev_unit(r, unit))) return;
+    /* B4 bounds the slot before calling us. Its engine constructor reads exactly
+       these type/position arguments; the game thread owns both through the return. */
+    owner = id_of(&r->L, RL_T_PLAYER, *(const char* const*)(unit + U_OWNER));
+    b.owner = (unsigned char)(owner && owner != REC_ID_BAD ? owner - 1 : 0xFF);
+    memcpy(&b.type, record + 1, sizeof b.type);
+    b.water = (unsigned char)unit[U_WATER];
+    b.birth = birth;
+    memcpy(b.position, record + 5, sizeof b.position);
+    /* The carried create applies these fields before B4 reaches this observer.
+       A bare constructor leaves every replica unfinished, so its arguments alone
+       cannot reproduce a carried finished create (kill_apply_state). */
+    memcpy(&b.unfinished, unit + 0x104, sizeof b.unfinished);
+    memcpy(&b.hp, unit + 0x108, sizeof b.hp);
+    b.reserved = 0;
+    cnt(0x0048634Fu, 0, 0);
+    ev_put(r, RK_EV_NET_CREATE, &b, sizeof b);
+}
+
 /* the player a netid names, by 0x44FE40's rule: the first seat with a controller whose netid it
    is, and 10 for none */
 static unsigned player_of_netid(const char* ta, unsigned netid)

@@ -224,7 +224,8 @@ static HANDLE world_start(RecMpFile* mp, const char* path, RecRing** ring, unsig
     RecRing* g=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof *g);
     unsigned char header[2048], player[4+REC_PLAYER_IMAGE]={0}, seat[16+REC_INFO_BYTES]={0};
     unsigned globals[REC_GLOBALS_DWORDS]={0}, proj[2]={0}, mapped[2]={0};
-    unsigned features[5]={2,2,1,0,0}, tick=100, at=0, n=0;
+    unsigned features[5]={2,2,1,0,0}, defs[2]={8,0}, tick=100, at=0, n=0;
+    RecNetCreate create={6,1,2,4,0x80000011u,{123456,-654321,123},0.25f,65535,0};
     unsigned short grid[2]={2,2};
     HANDLE done;
     CHECK(g);
@@ -237,6 +238,7 @@ static HANDLE world_start(RecMpFile* mp, const char* path, RecRing** ring, unsig
     n=tlv32(header,n,RT_FORMAT,REC_FORMAT); n=tlv32(header,n,RT_MODE,3);
     n=tlv32(header,n,RT_SLOTS,21); n=tlv32(header,n,RT_UNITS_EACH,2); n=tlv32(header,n,RT_START,100);
     n=tlv32(header,n,RT_PROJECTILES,1);
+    n=append(header,n,RT_UNITDEFS,defs,sizeof defs);
     n=append(header,n,RT_FEATURES,features,sizeof features);
     n=append(header,n,RT_MULTIPLAYER,tagpu_recmp_file_header(mp),sizeof(RecMpRecordHeader));
     n=append(header,n,RT_MP_SEATS,tagpu_recmp_file_roster(mp),sizeof(RecMpRoster));
@@ -252,6 +254,7 @@ static HANDLE world_start(RecMpFile* mp, const char* path, RecRing** ring, unsig
     at=append(g->buf,at,RK_MAPPED,mapped,6);
     player[4]=0xA5;
     at=append(g->buf,at,RK_PLAYER,player,sizeof player);
+    at=append(g->buf,at,RK_EV_NET_CREATE,&create,sizeof create);
     tick=101; at=append(g->buf,at,RK_TICK,&tick,4);
     InterlockedExchange(&g->flush_req,1); /* make tick 100 durable before failure controls */
     InterlockedExchange(&g->wpub,at);
@@ -379,6 +382,12 @@ static int read_file(const char* path, int expected)
               recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==0);
         CHECK(recr_mp_apply(r,&ordinal,applied_copy,applied,why,sizeof why)==0 && !ordinal && !applied->count);
         CHECK(recr_tick(r,why,sizeof why)==1 && recr_world(r)->tick==100 && recr_world(r)->player[0][0]==0xA5);
+        if (recr_header(r)->format==REC_FORMAT) {
+            RecNetCreate create={6,1,2,4,0x80000011u,{123456,-654321,123},0.25f,65535,0};
+            CHECK(recr_world(r)->nev==1 && recr_world(r)->ev[0].kind==RK_EV_NET_CREATE &&
+                  recr_world(r)->ev[0].len==sizeof create &&
+                  !memcmp(recr_world(r)->ev[0].b,&create,sizeof create));
+        } else CHECK(recr_header(r)->format==REC_FORMAT_PREVIOUS && !recr_world(r)->nev);
         for (unsigned i=0;i<4;i++) {
             unsigned origin=i==0 ? 11 : i==1 ? 22 : i==2 ? 55 : 66;
             if (expected) {
@@ -492,7 +501,7 @@ static int read_native(const char* path)
     RecInfo* info=calloc(1,sizeof *info);
     NativeRead n={0}, replayed={0};
     uint64_t ordinal=0;
-    unsigned first=0, last=0;
+    unsigned first=0, last=0, creates=0, create_crc=0, seek_creates=0, seek_crc=0;
     int k;
     if (!r) printf("native reader: %s\n",why);
     CHECK(r && info && recr_header(r)->mode==3 && recr_header(r)->has_mp &&
@@ -503,6 +512,13 @@ static int read_native(const char* path)
         CHECK(k==1);
         if (!first) first=recr_world(r)->tick;
         last=recr_world(r)->tick;
+        for (unsigned i=0;i<recr_world(r)->nev;i++) {
+            const RecEvent* e=&recr_world(r)->ev[i];
+            if (e->kind!=RK_EV_NET_CREATE) continue;
+            creates++;
+            create_crc=(unsigned)Crc32_ComputeBuf(create_crc,&last,sizeof last);
+            create_crc=(unsigned)Crc32_ComputeBuf(create_crc,e->b,e->len);
+        }
         CHECK(recr_mp_apply(r,&ordinal,native_application,&n,why,sizeof why)==1 && ordinal==n.records);
         CHECK(recr_mp_apply(r,&ordinal,native_application,&n,why,sizeof why)==1 && ordinal==n.records);
     }
@@ -530,6 +546,20 @@ static int read_native(const char* path)
     printf("NATIVE_APPLICATIONS %llu %llu %llu %08X %u %u\n",
            (unsigned long long)n.records,(unsigned long long)n.bytes,(unsigned long long)n.roots,
            n.crc,first,last);
+    CHECK(recr_seek(r,first,0,NULL,NULL,why,sizeof why)==1);
+    do {
+        const RecWorld* w=recr_world(r);
+        for (unsigned i=0;i<w->nev;i++) {
+            const RecEvent* e=&w->ev[i];
+            if (e->kind!=RK_EV_NET_CREATE) continue;
+            seek_creates++;
+            seek_crc=(unsigned)Crc32_ComputeBuf(seek_crc,&w->tick,sizeof w->tick);
+            seek_crc=(unsigned)Crc32_ComputeBuf(seek_crc,e->b,e->len);
+        }
+        k=recr_tick(r,why,sizeof why);
+    } while (k>0);
+    CHECK(!k && creates==seek_creates && create_crc==seek_crc);
+    printf("NATIVE_CREATES %u %08X\n",creates,create_crc);
     recr_close(r); free(info);
     puts("PASS: native world/header/info and complete ordered authority through sequential reading and world seek");
     return 0;
@@ -553,6 +583,14 @@ int main(int argc, char** argv)
     CHECK(argc==3);
     proof_only_roster();
     if (!strcmp(argv[1],"native")) return read_native(argv[2]);
+    if (!strcmp(argv[1],"world-refuse")) {
+        char why[256];
+        RecReader* r=recr_open(argv[2],why,sizeof why);
+        CHECK(r && recr_tick(r,why,sizeof why)==-1 && !recr_world(r)->nev);
+        printf("PASS: malformed network create refused before event publication: %s\n",why);
+        recr_close(r);
+        return 0;
+    }
     if (!strcmp(argv[1],"skirmish")) {
         char why[256];
         RecReader* r=recr_open(argv[2],why,sizeof why);

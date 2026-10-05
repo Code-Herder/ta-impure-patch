@@ -88,7 +88,8 @@ import zlib
 from pathlib import Path
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 5
+REC_FORMAT = 6
+REC_FORMAT_PREVIOUS = 5
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -135,12 +136,12 @@ def mapped_bytes(w, h):
  RK_EV_DEATH_END, RK_CELLS, RK_WRECK, RK_FEATURES, RK_GRID,
  RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
  RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT, RK_COUNTS,
- RK_COUNT_NAME) = range(50)
+ RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE) = range(52)
 REC_COUNT_DLL = 0x80000000           # RK_COUNTS: a caller inside Impure's DLL, as its offset
 RK_NAMES = {RK_UNIT: "unit", RK_PLAYER: "player", RK_TABLE_SPAN: "table", RK_ORDERS: "order list",
             RK_GLOBALS: "globals image", RK_PROJ: "projectile record",
             RK_PROJ_HEAD: "projectile count (+0x0) and extent (+0x4)"}
-EVENTS = {RK_EV_CREATE: "create", RK_EV_DEATH: "death", RK_EV_SHOT: "shot",
+EVENTS = {RK_EV_CREATE: "create", RK_EV_NET_CREATE: "network create", RK_EV_DEATH: "death", RK_EV_SHOT: "shot",
           RK_EV_INTERCEPT: "interception", RK_EV_START: "broadcast start",
           RK_EV_START_NAMED: "owner's start", RK_EV_BUILT: "build done", RK_EV_STATE: "state byte",
           RK_EV_REPLY: "reply", RK_EV_SPRAY: "nano spray", RK_EV_FEATURE: "feature call",
@@ -335,7 +336,7 @@ def header(payload):
             ix, n = struct.unpack_from("<HH", b)
             h.setdefault("fields", {})[ix] = [struct.unpack_from("<HHHHBB", b, 4 + 12 * k)
                                               for k in range(n)]
-    if h.get("format") != REC_FORMAT:
+    if h.get("format") not in (REC_FORMAT, REC_FORMAT_PREVIOUS):
         raise Unreadable(f"format {h.get('format')}, this tool reads {REC_FORMAT}")
     if (h.get("mode") == 3) != ("multiplayer" in h) or ("multiplayer" in h) != ("mp_seats" in h):
         raise Unreadable("network mode and contribution roster disagree")
@@ -377,6 +378,7 @@ def end(payload):
 class World:
     def __init__(self, slots, tables, header=None, dims=None):
         self.slots = slots
+        self.header = header
         if dims is None:
             dims = feature_dims(header)
         self.gw, self.gh, self.nrec, self.ncap = dims
@@ -451,6 +453,23 @@ class World:
         list_record)."""
         if self.pend is not None and kind != RK_ORDERS:
             raise Unreadable(f"slot {self.pend[0]}'s order list cut short by another record")
+        if kind == RK_EV_NET_CREATE:
+            h = self.header
+            if not h or h.get("format") != REC_FORMAT or h.get("mode") != 3 or len(b) != 32 or \
+                    "mp_seats" not in h or "unitdefs" not in h:
+                raise Unreadable("a network create outside native format 6")
+            unit, unit_type, owner, water = struct.unpack_from("<IHBB", b)
+            unfinished, _, reserved = struct.unpack_from("<fHH", b, 24)
+            slot = unit - 1
+            roster = h["mp_seats"]
+            count = struct.unpack_from("<I", roster, 4)[0]
+            if not 1 <= slot < self.slots or not 1 <= unit_type < h["unitdefs"][0] or \
+                    owner >= REC_PLAYERS or water > 4 or reserved or not 0 <= unfinished <= 1 or not any(
+                        row == owner and first <= slot <= last
+                        for _, row, first, last in (struct.unpack_from("<IIII", roster, 16 + 16*i)
+                                                    for i in range(count))):
+                raise Unreadable("a network create outside its owner block/type/water bounds")
+            return kind, b
         if kind in (RK_EV_FEATURE, RK_EV_FEATURE_END, RK_EV_DEATH, RK_EV_DEATH_END, RK_EV_DRAW):
             self.bracket(kind, b)
             return kind, b
@@ -1090,7 +1109,7 @@ class EventCheck:
         self.checked += 1
         made, died, state, built = set(), set(), {}, set()
         for kind, b in events:
-            if kind == RK_EV_CREATE:
+            if kind in (RK_EV_CREATE, RK_EV_NET_CREATE):
                 made.add(struct.unpack_from("<I", b)[0] - 1)
             elif kind == RK_EV_DEATH:
                 died.add(struct.unpack_from("<I", b)[0] - 1)
