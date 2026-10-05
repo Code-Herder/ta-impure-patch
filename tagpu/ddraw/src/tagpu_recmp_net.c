@@ -1,6 +1,7 @@
 #define INITGUID
 #define COBJMACROS
 #include "tagpu_recmp_net.h"
+#include "tagpu_log.h"
 #include <dplobby.h>
 #include <objbase.h>
 #include <stdio.h>
@@ -208,6 +209,7 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
     DWORD player = 0;
     unsigned attempt;
     HRESULT hr;
+    const char* stage="COM initialization";
     if (!out) return E_INVALIDARG;
     *out = NULL;
     if (!config || !guid_present(&config->match) || config->host > 1 ||
@@ -221,10 +223,13 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
     hr = CoInitialize(NULL);
     if (FAILED(hr)) goto fail;
     net->com = 1;
+    stage="native library";
     net->module = LoadLibraryA("dplayx.dll");
     if (!net->module) { hr = HRESULT_FROM_WIN32(GetLastError()); goto fail; }
+    stage="native object";
     hr = object(net->module, &CLSID_DirectPlay, &IID_IDirectPlay4A, (void**)&net->dp);
     if (hr != DP_OK) goto fail;
+    stage="primary address decoding";
     hr = addresses(net->module, config, &inet);
     if (hr != DP_OK) goto fail;
     snprintf(search.name, sizeof search.name, "IMPUREMP-%08lX%04X%04X%02X%02X%02X%02X%02X%02X%02X%02X",
@@ -235,6 +240,7 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
     desc.dwSize = sizeof desc;
     desc.guidApplication = s_app;
     if (config->host) {
+        stage="host connection";
         hr = connection(net, &inet.provider, &inet.address[0]);
         if (hr != DP_OK) goto fail;
         desc.dwMaxPlayers = 10;
@@ -245,21 +251,27 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
             if (attempt) {
                 IDirectPlayX_Release(net->dp);
                 net->dp = NULL;
+                stage="join object";
                 hr = object(net->module, &CLSID_DirectPlay, &IID_IDirectPlay4A, (void**)&net->dp);
                 if (hr != DP_OK) goto fail;
             }
+            stage="join connection";
             hr = connection(net, &inet.provider, &inet.address[attempt]);
             if (hr != DP_OK) goto fail;
+            stage="session enumeration";
             hr = IDirectPlayX_EnumSessions(net->dp, &desc, 1500, session_found, &search,
                                            DPENUMSESSIONS_AVAILABLE);
             if (hr != DP_OK && hr != DPERR_NOSESSIONS) goto fail;
         }
+        stage="matching session";
         if (search.found != 1) { hr = DPERR_NOSESSIONS; goto fail; }
         desc.guidInstance = search.session;
     }
+    stage=config->host ? "session creation" : "session join";
     hr = IDirectPlayX_Open(net->dp, &desc, config->host ? DPOPEN_CREATE : DPOPEN_JOIN);
     if (hr != DP_OK) goto fail;
     net->opened = 1;
+    stage="session descriptor";
     hr = IDirectPlayX_GetSessionDesc(net->dp, session, &bytes);
     if (hr != DP_OK || bytes > sizeof session || bytes < sizeof desc) {
         if (hr == DP_OK) hr = E_INVALIDARG;
@@ -274,6 +286,7 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
         goto fail;
     }
     caps.dwSize = sizeof caps;
+    stage="guaranteed capabilities";
     hr = IDirectPlayX_GetCaps(net->dp, &caps, DPGETCAPS_GUARANTEED);
     if (hr != DP_OK) goto fail;
     if ((caps.dwFlags & (DPCAPS_ASYNCSUPPORTED | DPCAPS_ASYNCCANCELSUPPORTED | DPCAPS_SENDTIMEOUTSUPPORTED)) !=
@@ -281,11 +294,13 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
         hr = DPERR_UNSUPPORTED;
         goto fail;
     }
+    stage="receive event";
     net->event = CreateEvent(NULL, FALSE, FALSE, NULL);
     if (!net->event) { hr = HRESULT_FROM_WIN32(GetLastError()); goto fail; }
     name.dwSize = sizeof name;
     name.lpszShortNameA = (char*)"Impure";
     name.lpszLongNameA = (char*)"Impure recorder";
+    stage="private player creation";
     hr = IDirectPlayX_CreatePlayer(net->dp, &player, &name, net->event, NULL, 0, 0);
     if (hr != DP_OK) goto fail;
     net->identity.player = player;
@@ -293,6 +308,7 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
     net->identity.bytes = sizeof net->identity;
     net->identity.match = config->match;
     net->identity.session = desc.guidInstance;
+    stage="private peer enumeration";
     hr = IDirectPlayX_EnumPlayers(net->dp, NULL, peer_found, net, DPENUMPLAYERS_REMOTE);
     if (hr != DP_OK || net->stats.failed) {
         if (hr == DP_OK) hr = net->stats.failed;
@@ -301,6 +317,7 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
     *out = net;
     return DP_OK;
 fail:
+    tagpu_logf("recmp: private session open failed at %s: %08X",stage,(unsigned)hr);
     destroy(net);
     return hr;
 }

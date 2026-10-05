@@ -1,5 +1,7 @@
 /* Exercise the primary-owned public key and signed private identity without TA. */
 #include "tagpu_recmp_auth.h"
+#include "tagpu_log.h"
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +10,12 @@
 
 static HANDLE release;
 static const RecMpKey* keys[4];
+
+void tagpu_logf(const char* fmt, ...)
+{
+    va_list args;
+    va_start(args,fmt); vprintf(fmt,args); va_end(args); putchar('\n');
+}
 
 static DWORD WINAPI creator(void* arg)
 {
@@ -22,7 +30,7 @@ int main(void)
 {
     HANDLE threads[4];
     RecMpPublic public, parsed, before, wrong_key;
-    RecMpIdentity identity = {1,sizeof identity,{.Data1=1},{.Data1=2},11};
+    RecMpIdentity identity = {RECMP_VERSION,sizeof identity,{.Data1=1},{.Data1=2},11};
     RecMpIdentity local = identity;
     RecMpSignedIdentity signed_identity, out, bad, previous;
     GUID stream = {.Data1=3}, wrong_stream = {.Data1=4};

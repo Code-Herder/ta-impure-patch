@@ -34,7 +34,7 @@ static void identity_bounds(void)
 {
     unsigned char* pages = VirtualAlloc(NULL, 8192, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     DWORD old;
-    RecMpIdentity identity = {1,sizeof identity,{0},{0},19}, out = {0}, before;
+    RecMpIdentity identity = {RECMP_VERSION,sizeof identity,{0},{0},19}, out = {0}, before;
     void* at;
     CHECK(pages && VirtualProtect(pages+4096,4096,PAGE_NOACCESS,&old));
     identity.match = s_match;
@@ -48,7 +48,7 @@ static void identity_bounds(void)
     identity.version++;
     memcpy(at,&identity,sizeof identity);
     CHECK(!tagpu_recmp_identity_read(at,sizeof identity,&s_match,&out));
-    identity.version = 1;
+    identity.version = RECMP_VERSION;
     identity.match.Data1++;
     memcpy(at,&identity,sizeof identity);
     CHECK(!tagpu_recmp_identity_read(at,sizeof identity,&s_match,&out));

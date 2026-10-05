@@ -277,6 +277,7 @@ static unsigned char s_mp_match_ready;
 static RecMpChannel* s_mp_channel;
 static RecMpRoster s_mp_roster;
 static RecMpPlayers* s_mp_players;
+static RecMpSeatMaps* s_mp_seats;
 static unsigned s_mp_logtick;
 static RecMpOrderCache* s_mp_orders;
 static unsigned char s_mp_order_scratch[ORD_SCRATCH];
@@ -575,9 +576,11 @@ static void mp_capture(const Level* L, unsigned tick)
         }
         config.net.address_bytes = bytes;
         s_mp_players = tagpu_recmp_players_begin(&roster);
+        s_mp_seats = tagpu_recmp_seats_begin(&roster);
         s_mp_orders = tagpu_recmp_orders_begin(L->nslots);
-        if (!s_mp_players || !s_mp_orders) {
+        if (!s_mp_players || !s_mp_seats || !s_mp_orders) {
             tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
+            tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
             tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
             tagpu_logf("recmp: no bounded player/order cache: no contributions");
             return;
@@ -586,6 +589,7 @@ static void mp_capture(const Level* L, unsigned tick)
         s_mp_channel = tagpu_recmp_begin(&config);
         if (!s_mp_channel) {
             tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
+            tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
             tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
             tagpu_logf("recmp: contribution worker could not start");
             return;
@@ -604,7 +608,22 @@ static void mp_capture(const Level* L, unsigned tick)
         unsigned ctl = (unsigned char)player[PL_CONTROLLER];
         if (ctl != 1 && ctl != 2) continue;
         memcpy(&origin, player + 4, sizeof origin);
+        if (!tagpu_recmp_seats_get(s_mp_seats,origin,NULL,NULL)) {
+            if (!tagpu_recmp_send_from(s_mp_channel,origin,RECMP_SEATS,tick,&s_mp_roster,
+                                       sizeof s_mp_roster,&header) ||
+                !tagpu_recmp_seats_put(s_mp_seats,&header,&s_mp_roster,sizeof s_mp_roster)) goto incomplete;
+            tagpu_logf("recmp: local source roster ID %u seq %u, %u actors, crc %08X", origin,
+                       header.sequence,s_mp_roster.count,
+                       (unsigned)Crc32_ComputeBuf(0,&s_mp_roster,sizeof s_mp_roster));
+        }
         player_image(L, i, img);
+        {
+            GUID stream;
+            unsigned mapped[REC_PLAYER_DWORDS];
+            if (!tagpu_recmp_seats_get(s_mp_seats,origin,NULL,&stream) ||
+                !tagpu_recmp_seats_image(s_mp_seats,origin,&stream,img,sizeof img,mapped,sizeof mapped))
+                goto incomplete;
+        }
         bytes = tagpu_recmp_players_delta(s_mp_players, origin, ctl, img, body, sizeof body);
         if (bytes < 0) goto incomplete;
         if (!bytes) continue;
@@ -623,8 +642,17 @@ static void mp_capture(const Level* L, unsigned tick)
             if (!tagpu_recmp_orders_idle(s_mp_orders, packet.h.origin)) goto incomplete;
             continue;
         }
+        if (packet.h.kind == RECMP_SEATS) {
+            if (!tagpu_recmp_seats_put(s_mp_seats,&packet.h,packet.body,packet.h.bytes-sizeof packet.h))
+                goto incomplete;
+            tagpu_logf("recmp: remote source roster ID %u seq %u, %u actors, applied tick %u, crc %08X",
+                       packet.h.origin,packet.h.sequence,s_mp_roster.count,tick,
+                       (unsigned)Crc32_ComputeBuf(0,packet.body,packet.h.bytes-sizeof packet.h));
+            continue;
+        }
         if (packet.h.kind == RECMP_ORDERS) {
-            if (!mp_orders_receive(L, &packet, tick)) goto incomplete;
+            if (!tagpu_recmp_seats_get(s_mp_seats,packet.h.origin,NULL,NULL) ||
+                !mp_orders_receive(L, &packet, tick)) goto incomplete;
             continue;
         }
         if (packet.h.kind != RECMP_PLAYER) goto incomplete;
@@ -632,18 +660,26 @@ static void mp_capture(const Level* L, unsigned tick)
         if (i == s_mp_roster.count) goto incomplete;
         {
             unsigned seat = s_mp_roster.actor[i].seat, origin;
+            unsigned mapped[REC_PLAYER_DWORDS];
             const char* player = L->ta + OFF_PLAYERS + seat * PL_STRIDE;
             int valid = tagpu_recmp_players_get(s_mp_players, packet.h.origin, &before);
             memcpy(&origin, player + 4, sizeof origin);
             if (origin != packet.h.origin || (unsigned char)player[PL_CONTROLLER] != 3 ||
+                !tagpu_recmp_seats_get(s_mp_seats,origin,NULL,NULL) ||
                 !tagpu_recmp_players_put(s_mp_players, &packet.h, packet.body,
-                                         packet.h.bytes-sizeof packet.h, tick)) goto incomplete;
+                                         packet.h.bytes-sizeof packet.h, tick) ||
+                !tagpu_recmp_players_get(s_mp_players,origin,&state) ||
+                !tagpu_recmp_seats_image(s_mp_seats,origin,&state.stream,state.image,sizeof state.image,
+                                         mapped,sizeof mapped)) goto incomplete;
             if (!valid) {
-                tagpu_recmp_players_get(s_mp_players, packet.h.origin, &state);
                 tagpu_logf("recmp: remote player image ID %u -> seat %u owner controller %u, "
                            "source tick %u seq %u, applied tick %u, %u image bytes crc %08X", origin,
                            seat, state.controller, state.source_tick, state.sequence, tick,
                            REC_PLAYER_IMAGE, (unsigned)Crc32_ComputeBuf(0,state.image,sizeof state.image));
+                tagpu_logf("recmp: mapped player ID %u self %u -> %u, image crc %08X", origin,
+                           ((const unsigned char*)state.image)[0x146],
+                           ((const unsigned char*)mapped)[0x146],
+                           (unsigned)Crc32_ComputeBuf(0,mapped,sizeof mapped));
             }
         }
     }
@@ -668,6 +704,7 @@ incomplete:
     tagpu_recmp_end(s_mp_channel);
     s_mp_channel = NULL;
     tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
+    tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
     tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
 }
 
@@ -5391,6 +5428,8 @@ void tagpu_rec_level_end(void)
     s_mp_orders = NULL;
     tagpu_recmp_players_end(s_mp_players);
     s_mp_players = NULL;
+    tagpu_recmp_seats_end(s_mp_seats);
+    s_mp_seats = NULL;
     memset(&s_mp_roster, 0, sizeof s_mp_roster);
     s_mp_tried = 0;
     memset(s_mp_orders_seen, 0, sizeof s_mp_orders_seen);

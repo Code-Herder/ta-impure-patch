@@ -66,21 +66,40 @@ def semantic_states(segment):
         for i, origin in enumerate((11, 22, 55, 66)):
             p = state.players.get(origin)
             if not p or (struct.unpack_from("<I", p["image"])[0], p["controller"], p["source_tick"],
-                         p["sequence"], p["applied_tick"]) != (origin, 1+(i & 1), 100 if i < 2 else 8, 1, 100):
+                         p["sequence"], p["applied_tick"]) != (origin, 1+(i & 1), 100 if i < 2 else 8, 2, 100):
                 raise RuntimeError("player authority/provenance changed across proof tail")
+            sender = range(11) if i < 2 else (7, 4, 0, 2, 1, 3, 5, 6, 8, 9, 10)
+            if p["image"][0x146] != i or any(p["image"][0x108+11*v+row] != 20*v+source+1
+                                            for v in range(5) for row, source in enumerate(sender)):
+                raise RuntimeError("source-local player vectors/self row were not mapped")
         o = state.orders.get((7, 0))
-        if not o or (o["count"], o["birth"], o["source_tick"], o["sequence"], o["applied_tick"]) != (0, 17, 8, 2, 100):
+        if not o or (o["count"], o["birth"], o["source_tick"], o["sequence"], o["applied_tick"]) != (0, 17, 8, 3, 100):
             raise RuntimeError("partial/proof order transaction replaced complete authority")
         if (8, 0) in state.orders:
             raise RuntimeError("unknown order list was fabricated empty")
         local = state.orders.get((1, 1))
         if not local or (local["origin"], local["birth"], local["count"], local["source_tick"],
                          local["sequence"], local["applied_tick"], local["image"]) != (
-                11, 21, 1, 100, 2, 100, bytes((i*7+3) & 255 for i in range(88))):
+                11, 21, 1, 100, 3, 100, bytes((i*7+3) & 255 for i in range(88))):
             raise RuntimeError("recorded nonempty order bytes/provenance were not reconstructed")
     if (history.source_orders[7, 0]["count"] != 46 or
             struct.unpack_from("<I", history.source_players[66]["image"])[0] != 67):
         raise RuntimeError("proof tail was not semantically validated")
+    proof = History(segment["header"])
+    for block_kind, _, _, payload in segment["blocks"]:
+        if block_kind != tarec.RB_CONTRIBUTIONS:
+            continue
+        at = 0
+        while at < len(payload):
+            span, origin, _, _, kind = struct.unpack_from("<IIIII", payload, at+16+12)
+            if origin == 55 and kind in (6, 7):
+                proof.block(struct.pack("<QII", 0, 0, 3) + payload[at+16:at+16+span])
+            at += 16+span
+    if (55 not in proof.source_maps or 55 not in proof.source_players or proof.maps or proof.players or
+            proof.orders or proof.at(1000).players):
+        raise RuntimeError("proof-only roster fabricated application authority")
+    if history.source_players[66]["image"][0x146] != 2 or history.at(101).players[66]["image"][0x146] != 3:
+        raise RuntimeError("mapped application image replaced the raw source baseline")
     print("typed history: C and Python player/order provenance, unknown baseline, partial-list retention and proof isolation PASS", flush=True)
 
 
@@ -93,7 +112,8 @@ def semantic_mutation(blocks, origin, kind, phase, offset, fmt, value, envelope=
                 record_phase = struct.unpack_from("<I", raw, at+12)[0]
                 span, source, _, _, source_kind = struct.unpack_from("<IIIII", raw, at+16+12)
                 if (source, source_kind, record_phase) == (origin, kind, phase):
-                    struct.pack_into(fmt, raw, at+16+(0 if envelope else 64)+offset, value)
+                    values = value if isinstance(value, tuple) else (value,)
+                    struct.pack_into(fmt, raw, at+16+(0 if envelope else 64)+offset, *values)
                     found = True
                     break
                 at += 16+span
@@ -255,6 +275,16 @@ def run(output, read_file=None, skirmish_file=None):
                 ("player_full_mask", 55, 6, 2, 12, "<B", 254, False),
                 ("player_mask_overflow", 55, 6, 2, 28, "<B", 7, False),
                 ("player_block_ids", 55, 6, 2, 32+0x67, "<I", 8, False),
+                ("player_self_row", 55, 6, 2, 32+0x146, "<B", 2, False),
+                ("source_roster_version", 55, 7, 2, 0, "<I", 0, False),
+                ("source_roster_alias", 55, 7, 2, 36, "<I", 7, False),
+                ("source_roster_origin", 55, 7, 2, 16, "<I", 99, False),
+                ("source_roster_block", 55, 7, 2, 24, "<I", 9, False),
+                ("source_roster_changed_block", 55, 7, 2, 24, "<II", (9, 10), False),
+                ("source_roster_dummy", 55, 7, 2, 20, "<I", 10, False),
+                ("source_roster_unused", 55, 7, 2, 80, "<I", 99, False),
+                ("missing_source_roster", 55, 7, 2, 28, "<I", 1, True),
+                ("repeated_source_roster", 66, 6, 3, 28, "<I", 7, True),
                 ("proof_player_origin", 66, 6, 3, 0, "<I", 55, False),
                 ("proof_player_mask", 66, 6, 3, 28, "<B", 4, False),
                 ("order_owner_block", 66, 2, 2, 0, "<H", 5, False),

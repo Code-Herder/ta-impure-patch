@@ -8,10 +8,10 @@
 /* Recorder contributions have their own application/session and framing. No engine
    pointer or primary-session interface crosses into a contribution worker. */
 #define RECMP_PACKET_MAX 4096u
-#define RECMP_VERSION 1u
+#define RECMP_VERSION 2u
 #define RECMP_ACTORS 10u
 enum { RECMP_RESOURCES = 1, RECMP_ORDERS = 2, RECMP_BIND = 3, RECMP_SEAL = 4,
-       RECMP_RECEIPT = 5, RECMP_PLAYER = 6 };
+       RECMP_RECEIPT = 5, RECMP_PLAYER = 6, RECMP_SEATS = 7 };
 
 #pragma pack(push, 1)
 typedef struct {

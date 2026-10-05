@@ -6,6 +6,15 @@ static void file_proof_tail(void);
 #undef main
 #include "tagpu_recorder.h"
 #include "tagpu_recreader.h"
+#include "tagpu_recmp_history.h"
+
+static RecMpRoster source_roster(unsigned remote)
+{
+    RecMpRoster r={ .version=1, .count=4, .slots=21, .each=2 };
+    const unsigned origin[]={11,22,55,66}, seat[]={7,4,0,2};
+    for (unsigned i=0;i<4;i++) r.actor[i]=(RecMpSeat){origin[i],remote ? seat[i] : i,1+2*i,2+2*i};
+    return r;
+}
 
 static unsigned player_body(unsigned origin, unsigned full, unsigned char* out)
 {
@@ -19,6 +28,9 @@ static unsigned player_body(unsigned origin, unsigned full, unsigned char* out)
     memcpy(out,&delta,sizeof delta);
     for (unsigned i=0;i<REC_PLAYER_DWORDS;i++) image[i]=origin;
     memcpy((unsigned char*)image+0x67,&first,4); memcpy((unsigned char*)image+0x6B,&last,4);
+    ((unsigned char*)image)[0x146]=source_roster(rank>=2).actor[rank].seat;
+    for (unsigned v=0;v<5;v++) for (unsigned row=0;row<11;row++)
+        ((unsigned char*)image)[0x108+11*v+row]=(unsigned char)(20*v+row+1);
     if (!full) image[0]++;
     memcpy(out+sizeof delta,image,full ? sizeof image : 4);
     return sizeof delta+(full ? sizeof image : 4);
@@ -45,6 +57,31 @@ static void source_orders(unsigned origin, unsigned sequence, unsigned tick, uns
     CHECK(tagpu_recmp_stream_put(&f.source[origin==66],&p->h,p->body,p->h.bytes-sizeof p->h));
 }
 
+static void proof_only_roster(void)
+{
+    RecMpRecordHeader file={ .version=1, .count=4, .recorder=11, .match={1} };
+    RecMpRoster recorder=source_roster(0), source=source_roster(1);
+    RecMpHistory* history;
+    RecMpRecord where={ .phase=RECMP_RECORD_PROOF };
+    RecMpHeader h={ .version=RECMP_VERSION, .header=sizeof h, .origin=55, .tick=8,
+                   .sequence=1, .kind=RECMP_SEATS, .match={1}, .stream={2} };
+    RecMpPlayerState state;
+    unsigned char body[sizeof(RecMpPlayerDelta)+REC_PLAYER_IMAGE];
+    unsigned bytes;
+    memcpy(h.magic,"IMPUREMP",8);
+    for (unsigned i=0;i<4;i++) file.actor[i]=(RecMpRecordActor){recorder.actor[i].origin,i<2};
+    history=tagpu_recmp_history_begin(&file,&recorder); CHECK(history);
+    h.bytes=sizeof h+sizeof source;
+    CHECK(tagpu_recmp_history_record(history,&where,&h,&source,sizeof source));
+    h.kind=RECMP_PLAYER; h.sequence=2; bytes=player_body(55,1,body); h.bytes=sizeof h+bytes;
+    CHECK(tagpu_recmp_history_record(history,&where,&h,body,bytes));
+    memset(&state,0xA5,sizeof state);
+    CHECK(!tagpu_recmp_history_player(history,55,&state));
+    for (unsigned i=0;i<sizeof state;i++) CHECK(((unsigned char*)&state)[i]==0xA5);
+    tagpu_recmp_history_end(history);
+    puts("PASS: proof-only source roster/player validate without publishing application authority");
+}
+
 static void file_proof_tail(void)
 {
     for (unsigned i=0;i<2;i++) {
@@ -52,8 +89,8 @@ static void file_proof_tail(void)
         RecMpPacket* p;
         if (f.missing_cut && i==1) continue;
         if (i==1) {
-            source_orders(66,4,9,46,45,1);
-            source_player(66,5,10,0);
+            source_orders(66,5,9,46,45,1);
+            source_player(66,6,10,0);
         }
         CHECK(tagpu_recmp_stream_seal(&f.source[i],i ? 10 : 8,0,&seal));
         p=packet(i ? 66 : 55,RECMP_SEAL,f.source[i].sequence+1,i ? 10 : 8,&seal,sizeof seal);
@@ -155,31 +192,37 @@ static int read_file(const char* path, int expected)
             if (expected) {
                 CHECK(recr_mp_player(r,origin,&pstate,why,sizeof why)==1 && pstate.image[0]==origin &&
                       pstate.controller==1+(i&1) && pstate.source_tick==(i<2 ? 100 : 8) &&
-                      pstate.sequence==1 && pstate.applied_tick==100);
+                      pstate.sequence==2 && pstate.applied_tick==100 &&
+                      ((unsigned char*)pstate.image)[0x146]==i);
+                for (unsigned v=0;v<5;v++) for (unsigned row=0;row<11;row++) {
+                    const unsigned sender[]={7,4,0,2,1,3,5,6,8,9,10};
+                    CHECK(((unsigned char*)pstate.image)[0x108+11*v+row]==20*v+(i<2 ? row : sender[row])+1);
+                }
             }
         }
         if (expected) {
             CHECK(recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 &&
-                  ostate.count==0 && ostate.birth==17 && ostate.sequence==2 &&
+                  ostate.count==0 && ostate.birth==17 && ostate.sequence==3 &&
                   ostate.source_tick==8 && ostate.applied_tick==100 && ostate.stream.Data1==2);
             CHECK(recr_mp_orders(r,8,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==0);
             CHECK(recr_mp_player(r,11,&pstate,why,sizeof why)==1 &&
                   recr_mp_orders(r,1,1,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 &&
-                  ostate.origin==11 && ostate.birth==21 && ostate.count==1 && ostate.sequence==2 &&
+                  ostate.origin==11 && ostate.birth==21 && ostate.count==1 && ostate.sequence==3 &&
                   ostate.source_tick==100 && ostate.applied_tick==100 &&
                   !memcmp(&ostate.stream,&pstate.stream,sizeof ostate.stream));
             for (unsigned i=0;i<RECMP_ORDER_BYTES;i++) CHECK(order[i]==(unsigned char)(i*7+3));
             CHECK(recr_tick(r,why,sizeof why)==1 && recr_world(r)->tick==101 && recr_world(r)->player[0][0]==0xA5);
             CHECK(recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 &&
-                  ostate.count==0 && ostate.sequence==2 && ostate.applied_tick==100);
-            CHECK(recr_mp_player(r,66,&pstate,why,sizeof why)==1 && pstate.image[0]==66 && pstate.sequence==1);
+                  ostate.count==0 && ostate.sequence==3 && ostate.applied_tick==100);
+            CHECK(recr_mp_player(r,66,&pstate,why,sizeof why)==1 && pstate.image[0]==66 && pstate.sequence==2 &&
+                  ((unsigned char*)pstate.image)[0x146]==3);
         }
         CHECK(!recr_tick(r,why,sizeof why));
         CHECK(recr_seek(r,100,0,NULL,NULL,why,sizeof why)==1 && recr_world(r)->player[0][0]==0xA5);
         if (expected) {
-            CHECK(recr_mp_player(r,66,&pstate,why,sizeof why)==1 && pstate.image[0]==66 && pstate.sequence==1);
+            CHECK(recr_mp_player(r,66,&pstate,why,sizeof why)==1 && pstate.image[0]==66 && pstate.sequence==2);
             CHECK(recr_seek(r,101,0,NULL,NULL,why,sizeof why)==1 &&
-                  recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 && ostate.sequence==2);
+                  recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 && ostate.sequence==3);
             CHECK(recr_mp_orders(r,1,1,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 && ostate.count==1);
             for (unsigned i=0;i<RECMP_ORDER_BYTES;i++) CHECK(order[i]==(unsigned char)(i*7+3));
         }
@@ -209,6 +252,7 @@ int main(int argc, char** argv)
     RecMpStats stats;
     int local_stop;
     CHECK(argc==3);
+    proof_only_roster();
     if (!strcmp(argv[1],"skirmish")) {
         char why[256];
         RecReader* r=recr_open(argv[2],why,sizeof why);
@@ -246,10 +290,15 @@ int main(int argc, char** argv)
     for (unsigned i=0;i<2;i++) {
         CHECK(tagpu_recmp_sign(config.signer,i ? 66 : 55,&stream,&remote,&binding));
         packet(i ? 66 : 55,RECMP_BIND,0,0,&binding,sizeof binding);
-        source_player(i ? 66 : 55,1,8,1);
-        source_orders(i ? 66 : 55,2,8,0,0,0);
+        {
+            RecMpRoster r=source_roster(1);
+            RecMpPacket* p=packet(i ? 66 : 55,RECMP_SEATS,1,8,&r,sizeof r);
+            CHECK(tagpu_recmp_stream_put(&f.source[i],&p->h,p->body,sizeof r));
+        }
+        source_player(i ? 66 : 55,2,8,1);
+        source_orders(i ? 66 : 55,3,8,0,0,0);
     }
-    source_orders(66,3,9,46,0,45);
+    source_orders(66,4,9,46,0,45);
     c=tagpu_recmp_begin(&config); CHECK(c);
     bad=roster; bad.actor[0].origin=99;
     CHECK(!tagpu_recmp_file_begin(&config,c,&bad));
@@ -267,11 +316,13 @@ int main(int argc, char** argv)
     CHECK(WaitForSingleObject(f.opened,15000)==WAIT_OBJECT_0);
     memset(&config,0,sizeof config); SetEvent(f.release);
     CHECK(WaitForSingleObject(f.initial,15000)==WAIT_OBJECT_0);
-    for (unsigned i=0;i<4;i++) CHECK(tagpu_recmp_take_at(c,&got,100)==1);
+    for (unsigned i=0;i<6;i++) CHECK(tagpu_recmp_take_at(c,&got,100)==1);
     CHECK(tagpu_recmp_advance(c,100));
     for (unsigned i=0;i<2;i++) {
         unsigned char body[sizeof(RecMpPlayerDelta)+REC_PLAYER_IMAGE];
         unsigned origin=i ? 22 : 11, n=player_body(origin,1,body);
+        RecMpRoster r=source_roster(0);
+        CHECK(tagpu_recmp_send_from(c,origin,RECMP_SEATS,100,&r,sizeof r,NULL));
         CHECK(tagpu_recmp_send_from(c,origin,RECMP_PLAYER,100,body,n,NULL));
     }
     {

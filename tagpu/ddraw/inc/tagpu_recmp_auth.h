@@ -17,8 +17,8 @@ typedef struct {
     unsigned char signature[RECMP_SIGNATURE_BYTES];
 } RecMpSignedIdentity;
 #pragma pack(pop)
-_Static_assert(sizeof(RecMpPublic) == 280, "version-1 primary public identity span");
-_Static_assert(sizeof(RecMpSignedIdentity) == 296, "version-1 signed private identity span");
+_Static_assert(sizeof(RecMpPublic) == 280, "primary public identity span");
+_Static_assert(sizeof(RecMpSignedIdentity) == 296, "signed private identity span");
 
 typedef struct RecMpKey RecMpKey;
 

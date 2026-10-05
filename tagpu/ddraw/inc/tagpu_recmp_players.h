@@ -41,6 +41,18 @@ int tagpu_recmp_seat_map(const RecMpRoster* source, const RecMpRoster* destinati
 int tagpu_recmp_player_map(const RecMpRoster* source, const RecMpRoster* destination,
                            unsigned origin, const void* image, unsigned bytes,
                            void* out, unsigned capacity);
+typedef struct RecMpSeatMaps RecMpSeatMaps;
+/* One copied, immutable source roster per origin, advertised at source sequence
+   one. Game-thread owned; a reader uses separate source and application maps. */
+RecMpSeatMaps* tagpu_recmp_seats_begin(const RecMpRoster* destination);
+void tagpu_recmp_seats_end(RecMpSeatMaps* maps);
+int tagpu_recmp_seats_put(RecMpSeatMaps* maps, const RecMpHeader* header,
+                          const void* body, unsigned bytes);
+/* Optional copied outputs. Unknown sources stay unknown. */
+int tagpu_recmp_seats_get(const RecMpSeatMaps* maps, unsigned origin,
+                          RecMpRoster* source, GUID* stream);
+int tagpu_recmp_seats_image(const RecMpSeatMaps* maps, unsigned origin, const GUID* stream,
+                            const void* image, unsigned bytes, void* out, unsigned capacity);
 RecMpPlayers* tagpu_recmp_players_begin(const RecMpRoster* roster);
 void tagpu_recmp_players_end(RecMpPlayers* players);
 /* Encoder does not change the baseline; commit only with the accepted source

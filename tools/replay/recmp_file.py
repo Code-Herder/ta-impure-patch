@@ -3,30 +3,65 @@ import struct
 import zlib
 
 
-class Seats:
-    """Frozen source-to-recorder-row/global-slot mapping, bounded by the file world."""
-    def __init__(self, raw, actors, slots, each, players):
+class Roster:
+    """Copied bounded rows; a source roster may order the same identities differently."""
+    def __init__(self, raw):
+        raw = bytes(raw)
         if len(raw) != 176:
             raise ValueError("contribution seat mapping span")
-        version, count, recorded_slots, recorded_each = struct.unpack_from("<IIII", raw)
-        if (version != 1 or not 1 <= count <= 10 or not 1 <= recorded_each <= 6553 or
-                recorded_slots != 10*recorded_each+1 or (slots, each) != (recorded_slots, recorded_each) or
-                count != len(actors) or count != len(players)):
-            raise ValueError("contribution mapping disagrees with world allocation or seats")
+        version, count, self.slots, self.each = struct.unpack_from("<IIII", raw)
+        if version != 1 or not 1 <= count <= 10 or not 1 <= self.each <= 6553 or self.slots != 10*self.each+1:
+            raise ValueError("contribution seat mapping shape")
         rows = [struct.unpack_from("<IIII", raw, 16+16*i) for i in range(10)]
         if any(row != (0, 0, 0, 0) for row in rows[count:]):
             raise ValueError("unused contribution seat mapping")
         self.actors = rows[:count]
         origins, seats, blocks = set(), set(), set()
-        for i, (origin, seat, first, last) in enumerate(self.actors):
+        for origin, seat, first, last in self.actors:
             if (not origin or origin in origins or seat in seats or first in blocks or seat >= 10 or
-                    not 1 <= first <= last < slots or last-first+1 != each or (first-1) % each or
-                    origin != actors[i][0]):
+                    not 1 <= first <= last < self.slots or last-first+1 != self.each or (first-1) % self.each):
                 raise ValueError("invalid or aliased contribution origin/seat/block")
-            matches = [p for p in players if p["index"] == seat]
-            if len(matches) != 1 or not 1 <= matches[0]["controller"] <= 4 or actors[i][1] != (matches[0]["controller"] in (1, 2)):
-                raise ValueError("contribution origin has no matching owned seat")
             origins.add(origin); seats.add(seat); blocks.add(first)
+
+    def mapping(self, destination):
+        source = {a[0]: a for a in self.actors}
+        target = {a[0]: a for a in destination.actors}
+        if ((self.slots, self.each) != (destination.slots, destination.each) or source.keys() != target.keys() or
+                any(a[2:] != target[o][2:] for o, a in source.items())):
+            raise ValueError("source roster identity or global blocks changed")
+        result = {a[1]: target[o][1] for o, a in source.items()}
+        vacant = [row for row in range(10) if row not in result]
+        available = [row for row in range(10) if row not in result.values()]
+        result.update(zip(vacant, available))
+        result[10] = 10
+        return result
+
+    def player(self, destination, origin, raw):
+        image = bytes(raw)
+        actor = next((a for a in self.actors if a[0] == origin), None)
+        if (len(image) != 520 or actor is None or image[0x146] != actor[1] or
+                struct.unpack_from("<II", image, 0x67) != (actor[2]+1, actor[3]+1)):
+            raise ValueError("source player self row or block IDs changed")
+        mapping, out = self.mapping(destination), bytearray(image)
+        for offset in (0x108, 0x113, 0x11E, 0x129, 0x134):
+            for row, target in mapping.items():
+                out[offset+target] = image[offset+row]
+        out[0x146] = mapping[image[0x146]]
+        return bytes(out)
+
+
+class Seats(Roster):
+    """Recorder roster additionally agrees with header roles, seats and allocation."""
+    def __init__(self, raw, actors, slots, each, players):
+        super().__init__(raw)
+        if ((slots, each) != (self.slots, self.each) or
+                len(self.actors) != len(actors) or len(self.actors) != len(players)):
+            raise ValueError("contribution mapping disagrees with world allocation or seats")
+        for i, (origin, seat, _, _) in enumerate(self.actors):
+            matches = [p for p in players if p["index"] == seat]
+            if (origin != actors[i][0] or len(matches) != 1 or not 1 <= matches[0]["controller"] <= 4 or
+                    actors[i][1] != (matches[0]["controller"] in (1, 2))):
+                raise ValueError("contribution origin has no matching owned seat")
 
 
 class Contributions:
@@ -62,7 +97,7 @@ class Contributions:
             at += 16
             magic, version, header, span, origin, tick, sequence, kind = struct.unpack_from("<8sHHIIIII", raw, at)
             match, stream = raw[at+32:at+48], raw[at+48:at+64]
-            if magic != b"IMPUREMP" or version != 1 or header != 64 or not 64 <= span <= 4096 or span > len(raw)-at:
+            if magic != b"IMPUREMP" or version != 2 or header != 64 or not 64 <= span <= 4096 or span > len(raw)-at:
                 raise ValueError("contribution envelope span")
             if match != self.match or not any(stream):
                 raise ValueError("contribution match/stream")
@@ -92,7 +127,7 @@ class Contributions:
                 if final > 1 or (previous, seal_tick, data_bytes, crc) != (source["sequence"], tick, source["bytes"], source["crc"]) or (sealed is not None and (tick < sealed or (not final and tick == sealed))):
                     raise ValueError("contribution prefix seal")
                 source.update(sealed_tick=tick, sealed_sequence=sequence, ended=bool(final))
-            elif kind in (1, 2, 6):
+            elif kind in (1, 2, 6, 7):
                 if source["sealed_tick"] is not None and tick <= source["sealed_tick"]:
                     raise ValueError("contribution data in closed tick")
                 source["bytes"] += span
@@ -126,13 +161,26 @@ class History:
         self.roster = Seats(self.header["mp_seats"], self.ledger.actors,
                             self.header["slots"], self.header["units_each"], self.header["players"])
         self.source_players, self.players = {}, {}
+        self.source_maps, self.maps = {}, {}
         self.source_orders, self.orders, self.stages = {}, {}, {}
         self.applications = []
         self.failed = False
 
     def _semantic(self, origin, tick, sequence, kind, stream, body, application_tick, proof):
         actor = next(a for a in self.roster.actors if a[0] == origin)
-        if kind == 6:
+        if kind == 7:
+            if sequence != 1 or origin in self.source_maps:
+                raise ValueError("late or repeated source roster")
+            roster = Roster(body)
+            roster.mapping(self.roster)
+            state = dict(roster=roster, stream=bytes(stream))
+            self.source_maps[origin] = state
+            if not proof:
+                self.maps[origin] = state.copy()
+        elif kind == 6:
+            source_map = self.source_maps.get(origin)
+            if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:
+                raise ValueError("player precedes its source roster")
             if not 32 <= len(body) <= 552:
                 raise ValueError("player delta span")
             player, controller, full = struct.unpack_from("<III", body)
@@ -157,10 +205,14 @@ class History:
                 raise ValueError("player delta block IDs or trailing bytes")
             state = dict(image=bytes(image), controller=controller, source_tick=tick, sequence=sequence,
                          applied_tick=application_tick, stream=bytes(stream))
+            mapped = source_map["roster"].player(self.roster, origin, image)
             self.source_players[origin] = state
             if not proof:
-                self.players[origin] = state.copy()
+                self.players[origin] = dict(state, image=mapped)
         elif kind == 2:
+            source_map = self.source_maps.get(origin)
+            if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:
+                raise ValueError("orders precede their source roster")
             if len(body) < 16:
                 raise ValueError("order chunk span")
             slot, which, reserved, birth, total, first, count, reserved2 = struct.unpack_from("<HBBIHHHH", body)

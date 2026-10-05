@@ -5,6 +5,7 @@ struct RecMpHistory {
     RecMpRoster roster;
     RecMpFileState ledger;
     RecMpPlayers *source_player, *applied_player;
+    RecMpSeatMaps *source_seats, *applied_seats;
     RecMpOrderCache *source_orders, *applied_orders;
     unsigned failed;
 };
@@ -19,9 +20,12 @@ RecMpHistory* tagpu_recmp_history_begin(const RecMpRecordHeader* header, const R
     tagpu_recmp_file_state(&h->ledger,header);
     h->source_player=tagpu_recmp_players_begin(roster);
     h->applied_player=tagpu_recmp_players_begin(roster);
+    h->source_seats=tagpu_recmp_seats_begin(roster);
+    h->applied_seats=tagpu_recmp_seats_begin(roster);
     h->source_orders=tagpu_recmp_orders_begin(roster->slots);
     h->applied_orders=tagpu_recmp_orders_begin(roster->slots);
-    if (!h->source_player || !h->applied_player || !h->source_orders || !h->applied_orders) {
+    if (!h->source_player || !h->applied_player || !h->source_seats || !h->applied_seats ||
+        !h->source_orders || !h->applied_orders) {
         tagpu_recmp_history_end(h); return NULL;
     }
     return h;
@@ -32,6 +36,8 @@ void tagpu_recmp_history_end(RecMpHistory* h)
     if (!h) return;
     tagpu_recmp_players_end(h->source_player);
     tagpu_recmp_players_end(h->applied_player);
+    tagpu_recmp_seats_end(h->source_seats);
+    tagpu_recmp_seats_end(h->applied_seats);
     tagpu_recmp_orders_end(h->source_orders);
     tagpu_recmp_orders_end(h->applied_orders);
     HeapFree(GetProcessHeap(),0,h);
@@ -42,14 +48,27 @@ static int semantic(RecMpHistory* h, const RecMpRecord* where, const RecMpHeader
 {
     unsigned proof=where->phase==RECMP_RECORD_PROOF;
     unsigned tick=proof ? h->ledger.tick : where->tick;
+    if (packet->kind==RECMP_SEATS) {
+        if (!tagpu_recmp_seats_put(h->source_seats,packet,body,bytes)) return 0;
+        return proof || tagpu_recmp_seats_put(h->applied_seats,packet,body,bytes);
+    }
     if (packet->kind==RECMP_PLAYER) {
-        if (!tagpu_recmp_players_put(h->source_player,packet,body,bytes,tick)) return 0;
+        RecMpPlayerState state;
+        unsigned image[REC_PLAYER_DWORDS];
+        if (!tagpu_recmp_seats_get(h->source_seats,packet->origin,NULL,NULL) ||
+            !tagpu_recmp_players_put(h->source_player,packet,body,bytes,tick) ||
+            !tagpu_recmp_players_get(h->source_player,packet->origin,&state) ||
+            !tagpu_recmp_seats_image(h->source_seats,packet->origin,&state.stream,
+                                     state.image,sizeof state.image,image,sizeof image)) return 0;
+        if (!proof && !tagpu_recmp_seats_get(h->applied_seats,packet->origin,NULL,NULL)) return 0;
         return proof || tagpu_recmp_players_put(h->applied_player,packet,body,bytes,tick);
     }
     if (packet->kind==RECMP_ORDERS) {
         RecMpOrders chunk;
         unsigned i;
-        if (!body || bytes<sizeof chunk) return 0;
+        if (!body || bytes<sizeof chunk ||
+            !tagpu_recmp_seats_get(h->source_seats,packet->origin,NULL,NULL) ||
+            (!proof && !tagpu_recmp_seats_get(h->applied_seats,packet->origin,NULL,NULL))) return 0;
         memcpy(&chunk,body,sizeof chunk);
         for (i=0;i<h->roster.count;i++) if (h->roster.actor[i].origin==packet->origin) break;
         if (i==h->roster.count || chunk.slot<h->roster.actor[i].first ||
@@ -103,7 +122,12 @@ const RecMpFileState* tagpu_recmp_history_ledger(const RecMpHistory* h)
 
 int tagpu_recmp_history_player(const RecMpHistory* h, unsigned origin, RecMpPlayerState* out)
 {
-    return h && !h->failed && tagpu_recmp_players_get(h->applied_player,origin,out);
+    RecMpPlayerState state;
+    if (!h || h->failed || !out || !tagpu_recmp_players_get(h->applied_player,origin,&state) ||
+        !tagpu_recmp_seats_image(h->applied_seats,origin,&state.stream,state.image,sizeof state.image,
+                                 state.image,sizeof state.image)) return 0;
+    *out=state;
+    return 1;
 }
 
 int tagpu_recmp_history_orders(const RecMpHistory* h, unsigned slot, unsigned list,

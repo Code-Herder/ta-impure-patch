@@ -6,6 +6,11 @@ struct RecMpPlayers {
     RecMpPlayerState state[RECMP_ACTORS];
 };
 
+struct RecMpSeatMaps {
+    RecMpRoster destination;
+    struct { unsigned valid; GUID stream; RecMpRoster roster; } source[RECMP_ACTORS];
+};
+
 static unsigned word(const void* image, unsigned offset)
 {
     unsigned value;
@@ -86,6 +91,60 @@ int tagpu_recmp_player_map(const RecMpRoster* source, const RecMpRoster* destina
     mapped[0x146]=map[original[0x146]];
     memcpy(out,mapped,sizeof mapped);
     return 1;
+}
+
+static unsigned seat_source(const RecMpSeatMaps* m, unsigned origin)
+{
+    unsigned i;
+    for (i=0;i<m->destination.count;i++) if (m->destination.actor[i].origin==origin) return i;
+    return RECMP_ACTORS;
+}
+
+RecMpSeatMaps* tagpu_recmp_seats_begin(const RecMpRoster* destination)
+{
+    RecMpSeatMaps* m;
+    if (!tagpu_recmp_roster_valid(destination)) return NULL;
+    m=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof *m);
+    if (m) m->destination=*destination;
+    return m;
+}
+
+void tagpu_recmp_seats_end(RecMpSeatMaps* m) { if (m) HeapFree(GetProcessHeap(),0,m); }
+
+int tagpu_recmp_seats_put(RecMpSeatMaps* m, const RecMpHeader* h, const void* body, unsigned bytes)
+{
+    RecMpRoster source;
+    uint8_t map[RECMP_ACTORS+1];
+    GUID zero={0};
+    unsigned at;
+    if (!m || !h || !body || bytes!=sizeof source || h->kind!=RECMP_SEATS ||
+        h->sequence!=1 || h->header!=sizeof *h || h->bytes!=sizeof *h+bytes ||
+        h->version!=RECMP_VERSION || memcmp(h->magic,"IMPUREMP",8) ||
+        !memcmp(&h->stream,&zero,sizeof zero) || (at=seat_source(m,h->origin))==RECMP_ACTORS ||
+        m->source[at].valid) return 0;
+    memcpy(&source,body,sizeof source);
+    if (!tagpu_recmp_seat_map(&source,&m->destination,map)) return 0;
+    m->source[at].roster=source; m->source[at].stream=h->stream;
+    m->source[at].valid=1;
+    return 1;
+}
+
+int tagpu_recmp_seats_get(const RecMpSeatMaps* m, unsigned origin, RecMpRoster* source, GUID* stream)
+{
+    unsigned at;
+    if (!m || (at=seat_source(m,origin))==RECMP_ACTORS || !m->source[at].valid) return 0;
+    if (source) *source=m->source[at].roster;
+    if (stream) *stream=m->source[at].stream;
+    return 1;
+}
+
+int tagpu_recmp_seats_image(const RecMpSeatMaps* m, unsigned origin, const GUID* stream,
+                            const void* image, unsigned bytes, void* out, unsigned capacity)
+{
+    unsigned at;
+    if (!m || !stream || (at=seat_source(m,origin))==RECMP_ACTORS || !m->source[at].valid ||
+        memcmp(stream,&m->source[at].stream,sizeof *stream)) return 0;
+    return tagpu_recmp_player_map(&m->source[at].roster,&m->destination,origin,image,bytes,out,capacity);
 }
 
 static unsigned actor(const RecMpPlayers* p, unsigned origin)

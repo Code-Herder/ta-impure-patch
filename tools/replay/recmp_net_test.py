@@ -62,7 +62,7 @@ def check_journal(raw):
         values = struct.unpack_from("<8sHHIIIII16s16s", raw, at)
         magic, version, header, size, origin, tick, sequence, kind, packet_match, stream = values
         if (order != ordinal+1 or application_tick < application_last or origin not in actors or phase != (1 if actors[origin] else 2) or
-                magic != b"IMPUREMP" or version != 1 or header != 64 or not 64 <= size <= 4096 or
+                magic != b"IMPUREMP" or version != 2 or header != 64 or not 64 <= size <= 4096 or
                 size > len(raw)-at or packet_match != match or not any(stream)):
             raise ValueError("journal packet metadata refused")
         s = ledger[origin]
@@ -78,7 +78,7 @@ def check_journal(raw):
                     (tick < s["closed"] or (not final and tick == s["closed"])))):
                 raise ValueError("journal seal refused")
             s["closed"], s["ended"] = tick, bool(final)
-        elif kind in (1, 2, 6):
+        elif kind in (1, 2, 6, 7):
             if s["closed"] is not None and tick <= s["closed"]:
                 raise ValueError("journal closed tick refused")
             s["size"] += size

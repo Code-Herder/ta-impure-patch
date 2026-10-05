@@ -13,7 +13,7 @@ typedef struct {
     uint32_t player;
 } RecMpIdentity;
 #pragma pack(pop)
-_Static_assert(sizeof(RecMpIdentity) == 40, "version-1 private identity wire span");
+_Static_assert(sizeof(RecMpIdentity) == 40, "private identity wire span");
 
 typedef struct {
     GUID provider, match;

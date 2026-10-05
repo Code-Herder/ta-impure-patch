@@ -16,7 +16,8 @@ int tagpu_recmp_history_record(RecMpHistory* history, const RecMpRecord* where,
                                const RecMpHeader* header, const void* body, unsigned bytes);
 int tagpu_recmp_history_block(RecMpHistory* history, const void* body, unsigned bytes);
 const RecMpFileState* tagpu_recmp_history_ledger(const RecMpHistory* history);
-/* 0 means unknown, including a list whose first complete transaction has not arrived. */
+/* Player images use recorder row coordinates; source provenance remains intact.
+   0 means unknown, including a list whose first complete transaction has not arrived. */
 int tagpu_recmp_history_player(const RecMpHistory* history, unsigned origin, RecMpPlayerState* out);
 int tagpu_recmp_history_orders(const RecMpHistory* history, unsigned slot, unsigned list,
                                RecMpOrderState* out, void* image, unsigned capacity);

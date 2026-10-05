@@ -174,6 +174,48 @@ static void mapping_refusals(void)
     puts("PASS: 15 mapping refusal controls preserve destination bytes");
 }
 
+static void source_maps(void)
+{
+    RecMpRoster r=roster(), source=r, copied;
+    RecMpSeatMaps* m=tagpu_recmp_seats_begin(&r);
+    RecMpHeader h=header(11,1,8,sizeof source), bad;
+    GUID stream, wrong={ .Data1=99 };
+    unsigned char img[REC_PLAYER_IMAGE], mapped[REC_PLAYER_IMAGE];
+    CHECK(m && !tagpu_recmp_seats_get(m,11,NULL,NULL));
+    h.kind=RECMP_SEATS;
+    for (unsigned i=0;i<r.count;i++) source.actor[i].seat=9-i;
+    for (unsigned control=0;control<8;control++) {
+        unsigned bytes=sizeof source;
+        bad=h;
+        switch (control) {
+        case 0: bytes--; break;
+        case 1: bytes++; break;
+        case 2: bad.sequence=2; break;
+        case 3: bad.version=1; break;
+        case 4: bad.kind=RECMP_PLAYER; break;
+        case 5: bad.origin=99; break;
+        case 6: memset(&bad.stream,0,sizeof bad.stream); break;
+        case 7: bad.magic[0]^=1; break;
+        }
+        CHECK(!tagpu_recmp_seats_put(m,&bad,&source,bytes));
+        CHECK(!tagpu_recmp_seats_get(m,11,NULL,NULL));
+    }
+    CHECK(tagpu_recmp_seats_put(m,&h,&source,sizeof source));
+    CHECK(tagpu_recmp_seats_get(m,11,&copied,&stream) && !memcmp(&copied,&source,sizeof source) &&
+          !memcmp(&stream,&h.stream,sizeof stream));
+    image(&source.actor[0],img); img[0x146]=9;
+    CHECK(tagpu_recmp_seats_image(m,11,&stream,img,sizeof img,mapped,sizeof mapped) && mapped[0x146]==0);
+    memset(mapped,0xA5,sizeof mapped);
+    CHECK(!tagpu_recmp_seats_image(m,11,&wrong,img,sizeof img,mapped,sizeof mapped));
+    CHECK(!tagpu_recmp_seats_image(m,22,&stream,img,sizeof img,mapped,sizeof mapped));
+    for (unsigned i=0;i<sizeof mapped;i++) CHECK(mapped[i]==0xA5);
+    CHECK(!tagpu_recmp_seats_put(m,&h,&source,sizeof source));
+    memset(&source,0,sizeof source); memset(&r,0,sizeof r);
+    CHECK(tagpu_recmp_seats_get(m,11,&source,NULL) && !memcmp(&copied,&source,sizeof source));
+    tagpu_recmp_seats_end(m);
+    puts("PASS: immutable copied source rosters, first-sequence/version/stream prerequisites and unchanged refusals");
+}
+
 static void transactions(void)
 {
     RecMpRoster r=roster();
@@ -343,7 +385,7 @@ static void persisted(const char* path)
 int main(int argc, char** argv)
 {
     CHECK(argc==2);
-    roster_bounds(); seat_maps(); mapping_refusals(); transactions(); guard_bounds(); persisted(argv[1]);
+    roster_bounds(); seat_maps(); mapping_refusals(); source_maps(); transactions(); guard_bounds(); persisted(argv[1]);
     puts("PASS: full owner player images, human/AI isolation, transactional deltas, clocks/stream provenance, bounded rosters, guard-page truncations and persisted journal reconstruction");
     return 0;
 }
