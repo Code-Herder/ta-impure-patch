@@ -3039,9 +3039,14 @@ before publication; an uncredited multiplayer spray refuses contributions.
 There is no new engine write or patch. The worker sees copied packets only.
 The legacy kind-9 cache remains for reading earlier experimental contributions.
 Codec/queue controls pass 36 atomic refusals, 284 guarded truncations and 8,392
-ordered mixed calls. The 3,439-byte synthetic C/Python file verifies mixed applied
-batches through seek, proof-only isolation, five lifecycles, 23 header and 74
-body refusals. Queries return copied authority separately from `RecWorld`.
+ordered mixed calls. The 3,512-byte synthetic C/Python file verifies six mixed
+applied batches through seek, proof-only isolation, five lifecycles, 23 header
+and 74 body refusals. Queries return copied authority separately from `RecWorld`.
+`recr_mp_apply` visits every application envelope in recorded ordinal order
+through the current world tick, retaining both clocks and the full copied batch.
+Its separate cursor prevents copied-state queries from consuming playback data.
+All 27 envelopes match independent Python bytes/provenance; A/B/A batches,
+resumed ordinals, repeated polls and backward/forward seek preserve the sequence.
 The engine map corrects the notice-table stride to 24 bytes and documents both
 reply viewer filters and spray's signed low layer index. Engine application,
 independent clock mapping, remaining roots/Impure authority and native network

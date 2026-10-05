@@ -50,6 +50,13 @@ typedef struct RecSeg {
     int                ended;       /* an RB_END closes it                                     */
 } RecSeg;
 
+typedef struct {
+    unsigned epoch, segment, tick, index, done;
+    RecMpHistory* history;
+    unsigned char* payload;
+    size_t bytes, at;
+} RecMpRead;
+
 struct RecReader {
     HANDLE             f;
     unsigned long long off;         /* the file offset of the next block                      */
@@ -81,10 +88,8 @@ struct RecReader {
     RecIndexEntry*     idx;         /* every block of every segment but their headers, to the
                                        first torn one, or to an end block no header follows   */
     unsigned           nidx;
-    unsigned           scan_epoch, mp_epoch, mp_segment, mp_tick, mp_index, mp_done;
-    RecMpHistory*      mp_history;
-    unsigned char*     mp_payload;
-    size_t             mp_bytes, mp_at;
+    unsigned           scan_epoch;
+    RecMpRead          mp_query, mp_apply;
     RecSeg             seg[RECR_TIMELINES];
     unsigned           nseg;
     unsigned           nstates, max_id;
@@ -1721,7 +1726,15 @@ int recr_same_file(const RecReader* r, void* f)
            a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow;
 }
 
-static int mp_sync(RecReader* r, char* why, unsigned cap)
+static void mp_read_free(RecMpRead* m)
+{
+    tagpu_recmp_history_end(m->history);
+    free(m->payload);
+    memset(m,0,sizeof *m);
+}
+
+static int mp_read(RecReader* r, RecMpRead* m, uint64_t* ordinal,
+                    RecMpApplyVisit visit, void* ctx, char* why, unsigned cap)
 {
     const RecSeg* s;
     unsigned segment;
@@ -1729,84 +1742,116 @@ static int mp_sync(RecReader* r, char* why, unsigned cap)
     if (!r->in_seg) return 0;
     segment=r->chain[r->cur]; s=&r->seg[segment];
     if (!s->h->has_mp) return 0;
-    if (!r->mp_history || r->mp_epoch!=r->scan_epoch || r->mp_segment!=segment ||
-        r->w.tick<r->mp_tick) {
-        tagpu_recmp_history_end(r->mp_history);
-        free(r->mp_payload); r->mp_payload=NULL; r->mp_bytes=r->mp_at=0;
-        r->mp_history=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats);
-        if (!r->mp_history) { snprintf(why,cap,"no memory for multiplayer authority"); return -1; }
-        r->mp_epoch=r->scan_epoch; r->mp_segment=segment; r->mp_tick=0;
-        r->mp_index=s->i0; r->mp_done=0;
+    if (!m->history || m->epoch!=r->scan_epoch || m->segment!=segment ||
+        r->w.tick<m->tick || (ordinal &&
+        *ordinal!=tagpu_recmp_history_ledger(m->history)->records)) {
+        mp_read_free(m);
+        m->history=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats);
+        if (!m->history) { snprintf(why,cap,"no memory for multiplayer authority"); return -1; }
+        m->epoch=r->scan_epoch; m->segment=segment; m->tick=0;
+        m->index=s->i0; m->done=0;
     }
-    while (!r->mp_done) {
+    while (!m->done) {
         RecMpRecord where;
         RecMpHeader packet;
-        if (r->mp_at==r->mp_bytes) {
+        const unsigned char* body;
+        if (m->at==m->bytes) {
             const RecIndexEntry* ix;
             RecBlock b;
-            free(r->mp_payload); r->mp_payload=NULL; r->mp_bytes=r->mp_at=0;
-            while (r->mp_index<s->i0+s->n && r->idx[r->mp_index].kind!=RB_CONTRIBUTIONS)
-                r->mp_index++;
-            if (r->mp_index==s->i0+s->n) break;
-            ix=&r->idx[r->mp_index++];
+            free(m->payload); m->payload=NULL; m->bytes=m->at=0;
+            while (m->index<s->i0+s->n && r->idx[m->index].kind!=RB_CONTRIBUTIONS)
+                m->index++;
+            if (m->index==s->i0+s->n) break;
+            ix=&r->idx[m->index++];
             if (!seek_to(r->f,ix->off) || !read_all(r->f,&b,sizeof b) ||
                 b.magic!=REC_BLOCK_MAGIC || (uint32_t)Crc32_ComputeBuf(0,&b,28)!=b.crc_head ||
                 b.kind!=RB_CONTRIBUTIONS || b.raw!=ix->raw || b.packed!=ix->packed ||
                 b.raw>RECR_BLOCK_MAX || b.packed>RECR_BLOCK_MAX ||
                 ((b.flags&RBF_STORED) && b.raw!=b.packed) ||
-                body_get(r,ix->off,&b,&r->mp_payload,&r->mp_bytes,why,cap)!=BLK_WHOLE) {
+                body_get(r,ix->off,&b,&m->payload,&m->bytes,why,cap)!=BLK_WHOLE) {
                 ok=-1; break;
             }
         }
-        if (r->mp_bytes-r->mp_at<sizeof where+sizeof packet) { ok=-1; break; }
-        memcpy(&where,r->mp_payload+r->mp_at,sizeof where);
-        memcpy(&packet,r->mp_payload+r->mp_at+sizeof where,sizeof packet);
+        if (m->bytes-m->at<sizeof where+sizeof packet) { ok=-1; break; }
+        memcpy(&where,m->payload+m->at,sizeof where);
+        memcpy(&packet,m->payload+m->at+sizeof where,sizeof packet);
         if (packet.bytes<sizeof packet || packet.bytes>RECMP_PACKET_MAX ||
-            packet.bytes>r->mp_bytes-r->mp_at-sizeof where) { ok=-1; break; }
-        if (where.phase==RECMP_RECORD_PROOF) { r->mp_done=1; break; }
+            packet.bytes>m->bytes-m->at-sizeof where) { ok=-1; break; }
+        if (where.phase==RECMP_RECORD_PROOF) { m->done=1; break; }
         if (where.tick>r->w.tick) break;
-        if (!tagpu_recmp_history_record(r->mp_history,&where,&packet,
-            r->mp_payload+r->mp_at+sizeof where+sizeof packet,packet.bytes-sizeof packet)) {
+        body=m->payload+m->at+sizeof where+sizeof packet;
+        if (!tagpu_recmp_history_record(m->history,&where,&packet,body,packet.bytes-sizeof packet)) {
             ok=-1; break;
         }
-        r->mp_at+=sizeof where+packet.bytes;
+        m->at+=sizeof where+packet.bytes;
+        if (ordinal && where.ordinal>*ordinal) {
+            visit(ctx,&where,&packet,body,packet.bytes-sizeof packet);
+            *ordinal=where.ordinal;
+        }
     }
-    /* Querying authority must not disturb a partly read world block's next file read. */
+    /* Either authority cursor preserves the world's next file read. */
     if (!seek_to(r->f,r->off)) ok=-1;
-    if (ok<0) snprintf(why,cap,"invalid multiplayer authority at GameTime %u",r->w.tick);
-    else r->mp_tick=r->w.tick;
+    if (ok<0) {
+        mp_read_free(m);
+        snprintf(why,cap,"invalid multiplayer authority at GameTime %u",r->w.tick);
+    } else m->tick=r->w.tick;
     return ok;
+}
+
+static int mp_sync(RecReader* r, char* why, unsigned cap)
+{
+    return mp_read(r,&r->mp_query,NULL,NULL,NULL,why,cap);
+}
+
+int recr_mp_apply(RecReader* r, uint64_t* ordinal, RecMpApplyVisit visit, void* ctx,
+                    char* why, unsigned cap)
+{
+    int k;
+    if (!ordinal || !visit) {
+        snprintf(why,cap,"multiplayer application cursor and visitor are required");
+        return -1;
+    }
+    /* Validate the complete available prefix before delivering anything. Queries
+       and application use separate histories so neither can skip the other's
+       envelopes, even when a query already advanced to this world tick. */
+    k=mp_sync(r,why,cap);
+    if (k<=0) return k;
+    if (*ordinal>tagpu_recmp_history_ledger(r->mp_query.history)->records) {
+        snprintf(why,cap,"multiplayer application ordinal is beyond GameTime %u",r->w.tick);
+        return -1;
+    }
+    return mp_read(r,&r->mp_apply,ordinal,visit,ctx,why,cap);
 }
 
 int recr_mp_player(RecReader* r, unsigned origin, RecMpPlayerState* out, char* why, unsigned cap)
 {
     int k=mp_sync(r,why,cap);
-    return k<=0 ? k : tagpu_recmp_history_player(r->mp_history,origin,out);
+    return k<=0 ? k : tagpu_recmp_history_player(r->mp_query.history,origin,out);
 }
 
 int recr_mp_unit(RecReader* r, unsigned slot, RecMpUnitState* out, char* why, unsigned cap)
 {
     int k=mp_sync(r,why,cap);
-    return k<=0 ? k : tagpu_recmp_history_unit(r->mp_history,slot,out);
+    return k<=0 ? k : tagpu_recmp_history_unit(r->mp_query.history,slot,out);
 }
 
 int recr_mp_roots(RecReader* r, unsigned origin, RecMpRootsState* out, char* why, unsigned cap)
 {
     int k=mp_sync(r,why,cap);
-    return k<=0 ? k : tagpu_recmp_history_roots(r->mp_history,origin,out);
+    return k<=0 ? k : tagpu_recmp_history_roots(r->mp_query.history,origin,out);
 }
 
 int recr_mp_named(RecReader* r, unsigned origin, RecMpNamedState* out, char* why, unsigned cap)
 {
     int k=mp_sync(r,why,cap);
-    return k<=0 ? k : tagpu_recmp_history_named(r->mp_history,origin,out);
+    return k<=0 ? k : tagpu_recmp_history_named(r->mp_query.history,origin,out);
 }
 
 int recr_mp_orders(RecReader* r, unsigned slot, unsigned list, RecMpOrderState* out,
                      void* image, unsigned capacity, char* why, unsigned cap)
 {
     int k=mp_sync(r,why,cap);
-    return k<=0 ? k : tagpu_recmp_history_orders(r->mp_history,slot,list,out,image,capacity);
+    return k<=0 ? k : tagpu_recmp_history_orders(r->mp_query.history,slot,list,out,image,capacity);
 }
 
 /* ---- seeking -------------------------------------------------------------------------------- */
@@ -2267,8 +2312,8 @@ void recr_close(RecReader* r)
     unsigned i;
     if (!r) return;
     payload_free(r);
-    tagpu_recmp_history_end(r->mp_history);
-    free(r->mp_payload);
+    mp_read_free(&r->mp_query);
+    mp_read_free(&r->mp_apply);
     if (r->f && r->f != INVALID_HANDLE_VALUE) CloseHandle(r->f);
     free(r->pk);
     if (r->w.list)

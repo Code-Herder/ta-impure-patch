@@ -668,3 +668,46 @@ engine application coverage and does not resolve the intermittent GUI-pointer
 inventory failure seen in a previous normal-speed control. No exclusion or
 tolerance changes. The 39 harness logic tests pass, the driving skill validates,
 and the wiki builds 98 pages plus its index with the new sections inspected.
+
+### Ordered application reader
+
+`recr_mp_apply` reads every produced/consumed envelope after an acknowledged
+ordinal through the current `RecWorld` tick. It preserves recorded global order,
+source clock/sequence/stream, application clock/phase and the exact batch bytes.
+It visits complete semantically validated batches, including unit/player/queue
+updates and source seals, so the eventual engine consumer can retain their causal
+order. A latest-owner cache cannot supply this sequence: the raw ledger is its
+source. Proof records never visit. The callback borrows bounded copied file data
+until it returns and cannot re-enter the reader.
+
+Inspection queries and application delivery have separate bounded histories and
+block cursors. Neither can consume the other's data; both restore the world's
+next file offset after reading. They rebuild after an index/segment change or a
+backward world tick. The consumer supplies its acknowledged ordinal, setting zero
+for a new reconstruction; a resumed ordinal reconstructs validation from the
+start while skipping already delivered envelopes. Repeating a delivered prefix
+visits nothing. An ordinal beyond the current world's available prefix refuses
+before any callback. Each returned callback advances the acknowledgement before
+a later read can fail. This is engine-free reader state, with no format change,
+new byte patch or engine field write.
+
+MEASURED 2026-10-05 on the reference setup: the actual writer's synthetic fixture
+is 3,512 bytes with 27 application envelopes, ten remote consumptions and seven
+late proof envelopes. Six mixed root batches include three updates at tick 101
+in A/B/A owner order; each has script/reply/spray calls with distinct exact payloads.
+The C cursor's trace matches independently decoded Python envelopes, including
+both clocks, ordinal, phase, origin, sequence, kind, span and whole-packet CRC.
+Byte-exact C copies compare complete sequences after repeated polls, an ordinal-10
+resume, interleaved latest-state queries, replay from zero and backward/forward
+world seek. An out-of-range acknowledgement visits nothing. Five file lifecycles,
+23 malformed-header and 74 raw-seal-valid semantic-body refusals pass. The reader
+also opens/inspects a real skirmish `battle` recording and returns no multiplayer
+applications at its first world tick. No game launches in this fixture.
+
+Native capture still does not attach a `RecMpFile`; the header/start/stop path is
+skirmish-only. `rec_begin`'s `s_rec_fired` lever also belongs to skirmish fire
+capture, so enabling native files requires separate mode/sink ownership that
+preserves native sends. Owner snapshots retain source clocks and source-local
+linked state: ordered reading alone does not establish which fields may replace
+the recorder's replicated world. The authority/clock materialization invariant,
+native file integration and actual engine record/play/seek remain open.

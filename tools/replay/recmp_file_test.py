@@ -83,11 +83,14 @@ def semantic_states(segment):
                 raise RuntimeError("named root bytes/phase/provenance changed across proof tail")
             roots = state.roots.get(origin)
             unit = 2 if origin == 11 else 4 if origin == 22 else 6
-            images = [struct.pack("<IBBBBIIII4s", unit, 1, 0, 0, 0, origin, 0, 0, 0, b"Move"),
-                      struct.pack("<IIBBBB2s", unit, 23, 1, 1, 0, 0, b"OK"),
-                      struct.pack("<III", unit, 1, origin) + b"\xA5"*32 + struct.pack("<I", 0xABCD0004)]
+            later = tick == 101 and origin < 55
+            variant = (2 if origin == 11 else 1) if later else 0
+            images = [struct.pack("<IBBBBIIII4s", unit, 1, 0, 0, 0, origin+variant, 0, 0, 0, b"Move"),
+                      struct.pack("<IIBBBB2s", unit, 23, 1, 1, 0, 0, b"NO" if later else b"OK"),
+                      struct.pack("<III", unit, 1, origin+variant) + b"\xA5"*32 + struct.pack("<I", 0xABCD0004)]
             if (not roots or (roots["source_tick"], roots["sequence"], roots["applied_tick"]) !=
-                    (100 if origin < 55 else 8, 5, 100) or
+                    (101 if later else 100 if origin < 55 else 8,
+                     (8 if origin == 11 else 7) if later else 5, 101 if later else 100) or
                     [(e["kind"], e["unit"], e["birth"], e["before_capture"], e["image"])
                      for e in roots["events"]] !=
                     [(kind, unit, 17, i & 1, image) for i, (kind, image) in enumerate(zip(
@@ -164,6 +167,30 @@ def semantic_states(segment):
     print("typed history: C and Python mapped player/unit/order/script/reply/spray provenance, mixed call order, absence versus unknown, partial-list retention and proof isolation PASS", flush=True)
 
 
+def application_trace(segment, log):
+    history = History(segment["header"])
+    for kind, _, _, raw in segment["blocks"]:
+        if kind == tarec.RB_CONTRIBUTIONS:
+            history.block(raw)
+    expected, roots = [], []
+    for tick, raw in history.applications:
+        ordinal, application_tick, phase = struct.unpack_from("<QII", raw)
+        span, origin, source_tick, sequence, kind = struct.unpack_from("<IIIII", raw, 28)
+        if application_tick != tick:
+            raise RuntimeError("independent application clock changed")
+        expected.append((ordinal, tick, phase, origin, source_tick, sequence, kind, span,
+                         zlib.crc32(raw[16:])))
+        if kind == 10:
+            roots.append((origin, source_tick, sequence, tick))
+    observed = [tuple(int(v, 16 if i == 8 else 10) for i, v in enumerate(line.split()[1:]))
+                for line in log.read_text().splitlines() if line.startswith("APPLICATION ")]
+    if observed != expected or len(expected) != 27 or roots != [
+            (55, 8, 5, 100), (11, 100, 5, 100), (22, 100, 5, 100),
+            (11, 101, 7, 101), (22, 101, 7, 101), (11, 101, 8, 101)]:
+        raise RuntimeError("C ordered application cursor differs from independent Python ledger")
+    print("application cursor: all 27 envelopes/6 mixed root batches match Python bytes and both clocks; A/B/A, query isolation, resumed ordinals, duplicate polls and seek PASS", flush=True)
+
+
 def semantic_mutation(blocks, origin, kind, phase, offset, fmt, value, envelope=False):
     result, found = [], False
     for block_kind, first, last, raw in blocks:
@@ -223,6 +250,7 @@ def run(output, read_file=None, skirmish_file=None):
         if read_file:
             with (output / "normal-read.log").open("w") as log:
                 command(["wine", exe, "read", "Z:" + str(original).replace("/", "\\")], log, env=env)
+        application_trace(tarec.segments(blocks)[0], output / ("normal-read.log" if read_file else "normal.log"))
         if skirmish_file:
             with (output / "skirmish-read.log").open("w") as log:
                 command(["wine", exe, "skirmish", "Z:" + str(skirmish_file).replace("/", "\\")], log, env=env)

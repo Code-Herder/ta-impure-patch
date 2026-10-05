@@ -244,6 +244,21 @@ int recr_mp_named(RecReader* r, unsigned origin, RecMpNamedState* out, char* why
 int recr_mp_orders(RecReader* r, unsigned slot, unsigned list, RecMpOrderState* out,
                      void* image, unsigned capacity, char* why, unsigned cap);
 
+typedef void (*RecMpApplyVisit)(void* ctx, const RecMpRecord* where,
+                                const RecMpHeader* packet, const void* body, unsigned bytes);
+/* Visit every application envelope after *ordinal through the current world
+   tick, in recorded order. Both clocks, source sequence and batch bytes stay
+   intact; proof tails never visit. Arguments are borrowed until the callback
+   returns; callbacks must not call into this reader. Set *ordinal to zero for a
+   new reconstruction, including after seeking backwards. A copied-state query
+   cannot consume this cursor. Repeating an acknowledged prefix visits nothing.
+   1 success, 0 before a world/non-multiplayer, -1 invalid (why). Each completed
+   callback advances *ordinal even if a later read fails, so retry cannot repeat
+   an already delivered batch. An ordinal beyond this world's prefix is refused
+   before any callback. No engine state is read or written here. */
+int recr_mp_apply(RecReader* r, uint64_t* ordinal, RecMpApplyVisit visit, void* ctx,
+                    char* why, unsigned cap);
+
 /* What the Replays browser shows of a recording, read from its header, its minimap block and its
    end block alone (the stream's blocks are skipped unread). */
 typedef struct RecInfoSeat {

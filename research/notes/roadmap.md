@@ -3907,9 +3907,12 @@ Owner-only script starts, replies and sprays now share a copied kind-10 carrier
 and one bounded queue, preserving mixed call order, exact bytes, incarnation,
 source clock and pre/post-capture phase. The legacy kind-9 decoder remains.
 Codec/queue controls pass 36 atomic refusals, 284 guarded truncations and 8,392
-mixed calls; synthetic writer/C/Python reader tests retain three applied batches
-through seek and isolate later source proof. Five lifecycles, 23 header and 74
-body refusals pass. Capture reuses existing observers without a new engine patch
+mixed calls; synthetic writer/C/Python reader tests retain six applied batches
+through seek and isolate later source proof. The ordered `recr_mp_apply` cursor
+delivers all 27 application envelopes with exact source/application metadata and
+bytes, including A/B/A batches; queries, repeated polls, resumed ordinals and
+backward/forward seek preserve delivery. Five lifecycles, 23 header and 74 body
+refusals pass. Capture reuses existing observers without a new engine patch
 or field write. Independent clock mapping, engine root application, remaining
 owner-only events/Impure authority, native file/play/seek, all POV/communications,
 budget and ten-seat/migration gates remain open. A native normal-speed four-actor
