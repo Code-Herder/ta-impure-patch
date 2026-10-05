@@ -16306,3 +16306,9 @@ Visuals Undo snapshots the two raw per-mod resource preferences, not their cappe
 Restoration uses the settings store's global value bounds rather than the active profile
 cap; menu refresh derives the effective values again. Raising a cap can therefore recover
 a saved higher radius even after Undo.
+
+Profile polling runs inside the existing `0x4C63A0` flip observer, after its game-thread guard
+and before census/publisher early returns. `DrawGameScreen` returns from its flip call at
+`0x46A3E0`; that game-flip identity freezes policy even without frame packets. Main-menu
+selection releases the freeze. Polling is independent of mailbox capacity and of a live render
+consumer; `fill_shell` only fills presentation data. No additional byte patch is installed.

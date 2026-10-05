@@ -20516,7 +20516,7 @@ contracts* gives the allocation/lifetime proof and disassembly.
 | `0x47D2E0`, `0x47C780` | Engine site/altitude queries on the input thread. Quick queries preserve scratch words; an upgrade uses a private yard projection of an uncontested old footprint's clear |
 | `0x43F0E0`, `0x438760`, `0x43AFC0` | Native eligibility (zero action byte refuses), action lookup and dispatch. Upgrade is reclaim→appended build; non-building constructor helpers Guard primaries, combat units untouched |
 | `tagpu_packet_pub.c` → native ghost and marker | Chosen type/green rectangle and queued flag copied into the packet. Engine stays in contextual mode. No new renderer-owned engine access or GL object |
-| Shared replay-menu identity → profile publication | Config/archive names and Twilight's label select a general profile plus an optional exact-version override. Menu reload validates complete candidates; in-game options cannot unfreeze policy |
+| `0x4C63A0` flip observer / `0x46A3E0` game return; shared replay-menu identity | Config/archive names and Twilight's label select a general profile plus an optional exact-version override. Game-thread menu polling remains live without packets or a render consumer; native game flips freeze policy and in-game options cannot unfreeze it |
 
 Defaults permit and initially enable both features for Stock/M/P/T, and lock both off for
 E/Z/unknown. A player can set manual radius zero with Quick Build still on. Alt bypasses both.

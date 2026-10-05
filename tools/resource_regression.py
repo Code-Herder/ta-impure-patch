@@ -368,6 +368,8 @@ def frontend(name, gamedir):
     cfg, profile = gamedir / "impure.cfg", gamedir / "profiles/retail.ini"
     old_cfg = cfg.read_bytes() if cfg.exists() else None
     old_profile = profile.read_bytes()
+    packet_off = gamedir / "tagpu_packet.off"
+    old_packet_off = packet_off.read_bytes() if packet_off.exists() else None
     def controls():
         return {g["name"]: g for g in c.call("ui", "--json")["gadgets"]}
     def stored():
@@ -379,6 +381,7 @@ def frontend(name, gamedir):
         text = (old_cfg or b"").decode()
         text = re.sub(r"(?m)^resource_radius\.retail=[^\n]*\n?", "", text)
         cfg.write_text(text + "\nresource_radius.retail=8\n")
+        packet_off.touch()
         c.call("launch", "--defaults", "--keep-dll")
         c.until(lambda: c.call("ui", "--json")["gui"] == "MAINMENU.GUI", "frontend did not reach menu")
         for button in ("SINGLE", "Options", "VISUALS"):
@@ -398,14 +401,20 @@ def frontend(name, gamedir):
         c.until(lambda: stored() == "8", "Undo did not restore the raw preference")
         profile.write_text("manual_snapping=1\nquick_build=1\ndefault_radius=3\nmax_radius=8\nquick_build_default=1\n")
         c.until(lambda: controls()["RESOURCE"]["stage"] == 8, "raising the cap did not recover the preference")
-        print("resource-frontend: untouched/touched Undo preserved raw radius and cap reload passed")
+        print("resource-frontend: untouched/touched Undo and cap reload without packets passed")
     finally:
-        c.call("stop")
-        profile.write_bytes(old_profile)
-        if old_cfg is None:
-            cfg.unlink(missing_ok=True)
-        else:
-            cfg.write_bytes(old_cfg)
+        try:
+            c.call("stop")
+        finally:
+            profile.write_bytes(old_profile)
+            if old_cfg is None:
+                cfg.unlink(missing_ok=True)
+            else:
+                cfg.write_bytes(old_cfg)
+            if old_packet_off is None:
+                packet_off.unlink(missing_ok=True)
+            else:
+                packet_off.write_bytes(old_packet_off)
 
 
 def catalogue(name):

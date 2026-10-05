@@ -790,3 +790,7 @@ Resource preflights run native frontend checks before the L lane records a match
 contains the private constructors; capability refusals must not issue action zero.
 `resource-nozoom` uses `tagpu_zoom.off` and exercises stock-limits manual/Quick input with
 pristine conversion. The fixture cleanup removes that lever before other launches.
+
+The `resource-frontend` preflight disables packets while exercising Undo and cap reload, then
+restores the lever before match recording. Profile polling follows the engine flip on every
+renderer lane; a full mailbox or absent Vulkan consumer cannot stop menu reload.

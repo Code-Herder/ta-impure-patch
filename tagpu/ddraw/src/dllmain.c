@@ -227,8 +227,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            absent — and with "tagpu_vpwide.on" it ALSO widens the engine's own
            addressable viewport rect to close the display-only ring at zoom < 1,
            redirecting the two readers that must not see it wide (the
-           offscreen's clip, and the screen->world origin). Armed by
-           "tagpu_vpwide.on" or "tagpu_zoom.on"; byte-matched; the widening half
+           offscreen's clip, and the screen->world origin). Always captures
+           resource input, with pristine conversion when neither arm enables
+           repair; byte-matched; the widening half
            is all-or-nothing and the rect is only written while a zoomed-out
            view is live. MUST run after tagpu_zoom_init(). */
         tagpu_vpwide_init();

@@ -267,7 +267,8 @@ TA metal-map classifier, and its widget does not establish TA's reclaim/build di
 
 `tagpu_resource.c` chooses sites on the game/input thread. `tagpu_profiles.c` owns file parsing,
 inheritance and effective settings. `tagpu_replays.c` supplies the shared mod identity; the menu
-refreshes the profile label and two separate controls. Polling runs at 500 ms menu intervals and
+refreshes the profile label and two separate controls. Polling runs on the engine flip’s game
+thread at 500 ms menu intervals, independently of packet publication or a render consumer, and
 stops for the entire match. Returning to the main menu permits it again.
 
 The raw point is captured after the existing zoom/viewport mouse repair. The observer on
@@ -341,7 +342,7 @@ if its input merely leaves an old queue unchanged.
 | `resource-priority` | Explicit Move, Alt, equal own mex and personal Quick toggle off | L/P/R/Q |
 | `resource-nozoom` (stock limits) | Manual/Alt and Quick Build when zoom and widening are disabled | L/P/R/Q |
 | `resource-refusals` | Reclaim-ineligible constructor, Guard-ineligible helper retaining its queue, eligible primary and helper fallback | Native catalogue preflight + L/P/R/Q |
-| `resource-frontend` | Untouched/touched Visuals Undo preserves a raw radius above the current cap; raising the cap recovers it | Frontend preflight + L/P/R/Q mex |
+| `resource-frontend` | Untouched/touched Visuals Undo preserves a raw radius above the current cap; raising the cap recovers it with packets disabled | Frontend preflight + L/P/R/Q mex |
 
 L records real input and simulation; P plays it on puppet seats; R restores in place at three
 sampled ticks, compares before/after state and continues; Q seeks from a fresh process. The

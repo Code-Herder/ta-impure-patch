@@ -3705,7 +3705,6 @@ static unsigned fill_shell(TAGPU_PACKET* p, void* ctx)
                   sizeof(TAGPU_PACKET) - offsetof(TAGPU_PACKET, used_bytes));
     p->used_bytes = sizeof(TAGPU_PACKET);
     p->in_game    = 0;                       /* must stay 0: no world draws  */
-    tagpu_profiles_menu_tick();
     p->level_gen  = s_levelGen;
     p->tick       = s_lastTick;
     p->load_flags = (unsigned short)lf;

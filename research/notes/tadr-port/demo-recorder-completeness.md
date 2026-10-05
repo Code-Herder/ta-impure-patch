@@ -689,3 +689,6 @@ differences across return-to-now via `compare-counts --rewind`, reporting each
 pair. Seated sight counters, root counts and puppet-write checks remain intact.
 COB execution state is reconstructed, not preserved. Ordinary count comparisons
 retain their existing policy. See [S4 rewind](demo-recorder-s4-rewind.html).
+
+The resource frontend preflight temporarily disables frame packets to require menu reload
+without a renderer consumer; it restores that lever before recording the match.

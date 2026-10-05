@@ -55,6 +55,7 @@
 #include "tagpu_trigger.h"
 #include "tagpu_log.h"
 #include "tagpu_hud.h"    /* the dock region's scale, carried on the flip marker */
+#include "tagpu_profiles.h"
 
 #define TA_MAINPP     0x00511DE8u
 #define OFF_GUI_TOP   0x531           /* GUIInfo.TheActive_GUIMEM               */
@@ -3756,6 +3757,10 @@ static int __cdecl before_flip(void* entry_esp)
     int hijack = 0;
     if (!s_gameTid) s_gameTid = GetCurrentThreadId();
     else if (!on_game_thread()) return 0;
+    /* Policy reload belongs to the UI thread, independently of packet space
+       or a live render consumer. A game flip freezes it until the next menu. */
+    if (isGame) tagpu_profiles_begin_match();
+    tagpu_profiles_menu_tick();
     /* FIRST, before the census or the publisher read a single base: retire every
        surface another thread's MEM_Free left for us (surf_drain_freeq) */
     surf_drain_freeq();
