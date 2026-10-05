@@ -16272,7 +16272,10 @@ changed ring/eye bit. A native injected click returns the pointer to screen cent
 harness follows each sampled click with a separate move and requires the GUI x/y/message echo
 before dumping. It samples GUI-consumed clicks through a ring turn, every valid coordinate bit
 and several eyes at one paused GameTime, and requires its carried simulation records to remain equal.
-The recorder's positive list and exclusions are unchanged.
+The recorder's recorded simulation slots are unchanged. Three owner-approved `leave` rows
+cover only the active GUI pointer (`main+0x531`, four bytes), GUI mouse-event clock
+(`main+0x561`, four bytes) and bitmap-font pointer (`0x51F524`, four bytes). Coordinates,
+displayed unit types, text colours and simulation records retain their ordinary checks.
 
 The GUI event timestamp is a wall-clock sample. `0x4B5E70`, `0x4B5ED1` and `0x4B5F1D`
 call GetTickCount through IAT `0x4FC0DC`, multiply the low 32 bits by graphics `+0xE8`, and
@@ -16310,7 +16313,9 @@ Font loader `0x42A320` reads the two native faces through `0x4BBE50` at
 at `0x4BBF3C` and reads them at `0x4BBF49`; teardown frees them through `MEM_Free 0x4D85A0`
 at `0x42A3BC`/`0x42A3E0`. The font latch holds a process allocation address, not a font ID.
 All three focused fixtures' carried simulation, events, round trips and seeks compare equal,
-including all 39 paused views; these viewer metadata differences still fail the strict images gate.
+including 39 additional paused views and three final endpoints. The former strict image
+failures identify the exact fields above; their owner-approved rows now classify that metadata
+explicitly. The full landing tier remains the runtime gate for the resulting list.
 
 `main+0x37E9E` is the command panel's displayed unit type: word stores at `0x41B0D2` and
 `0x41B1BC` copy unit `+0xA6`; the no-unit branch zeros it at `0x41B1E1`. The adjacent word
