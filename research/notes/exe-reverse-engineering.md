@@ -12857,9 +12857,9 @@ unchanged and requires the product's same-build peers.
 
 | Address / field | Established behaviour and branch use |
 |---|---|
-| `0x451FD0..0x452322`, `0x512B84`, `0x512ACC`, `0x512C6C` | Packet initializer zeroes the length table and never assigns code `0x2B` a positive length or callback; the whole-body disassembly contains no later store to these three entries after `0x4520BE`. The existing recorder initializer stub at `0x4520BE` now writes length 97, callback `0x44FD40` and receive mask 4 to them, as well as the extended start length at `0x512AF8`. All three splitter walks use the length table. Mask bit 2 admits net state 6; the state-5 and other-state paths require bits 1 and 0 respectively (`0x454745..0x4547A7`). |
+| `0x451FD0..0x452322`, `0x512B84`, `0x512ACC`, `0x512C6C` | Packet initializer zeroes the length table and never assigns code `0x2B` a positive length or callback; the whole-body disassembly contains no later store to these three entries after `0x4520BE`. The recorder initializer stub writes length 97, callback `0x44FD40` and receive mask 7, as well as extended start length at `0x512AF8`. All three splitter walks use the length table. Mask bit 2 admits net state 6; state 5 and other states require bits 1 and 0 respectively (`0x454745..0x4547A7`). The identified adapter further requires state 5 or 6 and a copied current match. |
 | `0x44FD40..0x44FD43`, `0x44FDA0..0x44FDAC`, table `0x512A20` | The registered default callback returns −1 with `ret 4`, the same body as stock text callback `0x44FD60`. `0x44FDA0` indexes this callback table with the message code and makes an indirect call at `0x44FDA5`; registering a length alone would leave that callback missing. No new meaning is assigned to −1. |
-| `0x493FAF`, `0x463E9F` | The first call scopes one ID over the in-match GUI's native `0x463E50`; the second observes that scope after formatting in the engine's 200-byte stack buffer (`sub esp,0xC8` at `0x463E54`). The callback stores its controlled-player record at stack `+0x24` (`0x493E6F..0x493E98`) and passes that pointer at `0x493FAE`. Front-end callers remain outside the scope. The live B2 producer's thread/channel lifetime authorizes the current match; its pending-start flag is already consumed. The scope is only mutated by the owning game thread, saves/restores its outer value on the stack, and exhausts rather than wrapping its serial. |
+| `0x493FAF`, `0x463E9F` | The first call scopes one ID over the in-match GUI's native `0x463E50`; the second observes that scope after formatting in the engine's 200-byte stack buffer (`sub esp,0xC8` at `0x463E54`). The callback stores its controlled-player record at stack `+0x24` (`0x493E6F..0x493E98`) and passes that pointer at `0x493FAE`. Front-end callers remain outside the scope. The copied current-match inbox authorizes loading/play scope before or after B2. The scope is only mutated by the owning game thread, saves/restores its outer value on the stack, and exhausts rather than wrapping its serial. |
 | `0x4533F9`, `0x45348B`, `0x4534B6` | Call-site replacements wrap only scoped GUI text, then call the original targeted or generic sender. The native audience loops, masks, alliance tests and destination filters remain in those original functions. One source event has the same ID at every target call; a transport return is not a recipient receipt. |
 | `0x4628D0`, `0x46290D..0x46292C` | Queue append compares current bytes plus supplied length with `0x42A` at `0x462911`; on the accepted path it copies all supplied bytes into its owned packet at `+0x14` before returning. The call's stack packet therefore outlives no send. Its recorded entry length is supplied length at `0x46293F`. This proves the copy lifetime, not per-pair ordering or reliable delivery. |
 | `0x456028`, stock value `0x455F50` | Dispatch-table slot for code `0x2B`, selected after the code's receive-mask check. The new stub preserves flags/registers and gives its original frame to `mp_chat_receive`. Bounded native sender/destination rows and IDs, local controller-1 destination, exact delivered span, version/match/serial and embedded `0x05` nonempty text are validated. On success, a copied 65-byte stock image replaces the front of the owned writable receive buffer, then the stub enters `0x45522E`; on refusal it enters `0x455F50`. It changes no pump pointer and retains no engine address after the call. |
@@ -12937,8 +12937,8 @@ DISASSEMBLED 2026-10-05: stock code `0x05` has mask 7, stored at `0x45208C`
 to `0x512BD4`, after length 65 at `0x452078` and callback `0x44FD60` at
 `0x452082`. The state gate at `0x45473F..0x4547AD` accepts mask bit 1 in
 state 5, bit 2 in state 6 and bit 0 otherwise; a failed state-5/6 bit does
-not fall through to bit 0. The identified code's mask 4 therefore omits a
-stock acceptance state.
+not fall through to bit 0. The identified code uses mask 7 and its adapter
+bounds accepted states to 5/6. Its former mask 4 omitted stock loading admission.
 
 A whole-`.text` relative-call sweep finds seven direct calls to `0x453D40`:
 `0x41F80B`, `0x434EAF`, `0x44A69C`, `0x4954C8`, `0x4968CB`, `0x49727D`
@@ -12956,10 +12956,62 @@ B3's fallback `wire_rx_note` stores the current `main+0x2A38` pointer and
 delivered length in TLS at the receive statistics call. That binds the span
 to a thread; it supplies no cross-thread lifetime. The work branch's owned
 pump below removes that input-buffer dependency when the recorder's atomic
-primary installer arms. The live identified receiver still requires the game
-thread and its B2 channel lifetime. The pre-B2 copied-record handoff, exact
-observation clocks and source-roster bootstrap remain open; the receive mask
-remains 4, so loading chat is not yet accepted.
+primary installer arms. The identified receiver now copies loading/play
+observations into a process-owned inbox before entering the stock text case.
+It does not require a live B2 producer or the GUI thread. Native execution of
+loading delivery and its saved clock/order still needs a separate gate; the
+controlled adapter test below is not that native loading run.
+
+`tagpu_recmp_chat_inbox.c` owns one fixed 4,096-observation allocation. Its
+critical section protects only copied match/host metadata, queue values and
+the acceptance-time read of the supplied process-lifetime main GameTime field.
+Held bodies contain no engine/SDK call, logging, allocation or acquisition of
+another lock; the wire parser and text-queue transfer helpers use bounded
+owned data only. Thus its wait cannot form a cycle through an engine or SDK
+lock acquired by the holder. Initialization/free occur outside ownership;
+installed callbacks retain the allocation for the process lifetime.
+
+Start publication resets the copied epoch. A pending start and its observations
+survive level-load teardown; first B2 claims it exactly once. That game producer
+copies the frozen roster before transferring entries, requiring the local
+recipient and bounded origin/target IDs. It drains before source advance and
+again at teardown before final seals. Final transfer and admission closure
+share one ownership interval: an admitted observation is transferred, and a
+waiting receiver cannot append after the cut. Level-owned queues are freed
+only after closure. Overflow, decreasing observation clocks or an
+invalid bootstrap refuse contributions instead of dropping an event from a
+successful file. Valid wire packets still restore their stock image on inbox
+exhaustion. Source and receipt clocks are not changed to the first B2 tick.
+
+The direct GameTime write inventory has five sites: shell increment
+`0x44A696`, sim increment `0x4954C0`, and zero stores `0x491979`, `0x4971BB`,
+`0x498180`. The loader zero precedes its early pump; level initialization
+zeroes again from `0x4917D0`; the game loading entry also clears its clock.
+These direct stores do not alone prove all possible loading observations
+monotonic or exclude aliased writes. Native loading clocks remain a gate.
+
+Production inbox/queue controls retain zero receipt ticks and distinct source
+tick 13, preserve a pending epoch over loading reset, refuse a second claim,
+and transfer 4,000 two-thread receipts. A caller blocked on inbox ownership
+reads its acceptance clock only after acquiring that ownership; producer drain
+cannot pass an observation whose publication owns the same lock. Controls also
+cover overflow with stock restoration, changed-match and frozen-roster refusal.
+A receiver held at publication ownership refuses after the final transfer
+closes admission, even when the game queue has already been freed.
+The exact production `mp_chat_receive` body, with only main/mode/span/log
+boundaries substituted, accepts state-5 calls from both the game and a foreign
+thread without a producer, restores all 65 stock bytes, and refuses wrong
+mode/state/row/span/controller/network inputs. No native loading display or
+saved-file application is claimed from these controls.
+
+The integrated inbox's native three-human queued run separately passes seven
+exact original/actual-recipient entries through C/Python reader seek, with the
+host saving and two peers opted out. The final admission-closure build's file
+closes at tick 764 with zero corrections; all 311 application envelopes /
+71,127 bytes, CRC `0FE1FD27`, agree.
+The host displays neither private line. Continued contributions after host
+departure still refuse on the surviving peers. This is in-play integration,
+not execution of the state-5 path in a native loading frame.
 
 ##### Owned primary receive frames
 
@@ -13066,7 +13118,7 @@ adds no lock-wait edge to the engine's loader/game-thread locks and consumes no
 message on refusal. This does not establish the costs or callback behaviour of
 the SDK itself, or the lifetimes of separate native output builders. The copied
 chat/system sinks and inspected movement path do not prove every native parser
-reentrant. Continued host migration, loading-chat admission, receive cost and
+reentrant. Continued host migration, native loading-chat verification, receive cost and
 physical bandwidth also remain open.
 
 #### Textfield input beneath the chat GUI

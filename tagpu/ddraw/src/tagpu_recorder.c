@@ -78,6 +78,7 @@
 #include "tagpu_recmp_roots.h"
 #include "tagpu_recmp_explored.h"
 #include "tagpu_recmp_chat_wire.h"
+#include "tagpu_recmp_chat_inbox.h"
 #include "tagpu_recmp_text.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
@@ -283,9 +284,9 @@ static unsigned s_bad;                   /* pointers outside their tables, this 
 static unsigned s_badlog;                /* of them, the ones logged                           */
 
 static unsigned char s_mp_sites, s_mp_tried;
-static GUID s_mp_match;
-static DWORD s_mp_host;
-static unsigned char s_mp_match_ready;
+static RecMpChatInbox* s_mp_chat_inbox;
+static GUID s_mp_active_match;
+static DWORD s_mp_local;
 typedef struct {
     unsigned active, origin, tick;
     uint64_t event;
@@ -493,11 +494,9 @@ static int __stdcall mp_start_send(DWORD origin, const void* message, unsigned b
     start.version = RECMP_VERSION;
     start.bytes = sizeof start;
     start.origin = origin;
-    s_mp_match_ready = SUCCEEDED(CoCreateGuid(&match));
-    if (s_mp_match_ready) {
+    unsigned ready = SUCCEEDED(CoCreateGuid(&match));
+    if (ready) {
         start.match = match;
-        s_mp_match = match;
-        s_mp_host = origin;
         mp_match_log("send", origin, &match);
     } else {
         /* The splitter always expects the extended size. A zero ID preserves
@@ -505,6 +504,7 @@ static int __stdcall mp_start_send(DWORD origin, const void* message, unsigned b
         memset(&start.match, 0, sizeof start.match);
         tagpu_logf("recmp: no fresh match ID: no contributions");
     }
+    tagpu_recmp_chat_inbox_start(s_mp_chat_inbox,ready ? &match : NULL,ready ? origin : 0);
     return ((SendFn)(size_t)0x451DF0)(origin, &start, sizeof start);
 }
 
@@ -522,24 +522,24 @@ static void __cdecl mp_start_receive(void* frame)
     size_t off;
     unsigned state, id;
     DWORD from;
+    GUID match;
     if (!ta || GetCurrentThreadId() != g_ddraw.gui_thread_id || game_mode(ta) != 3 ||
         !((unsigned char)ta[OFF_NETWORK] & 1)) return;
     memcpy(&state, ta + 0x391F1, sizeof state);
     if (state != 2 && state != 3) return;
-    s_mp_match_ready = 0;
+    tagpu_recmp_chat_inbox_start(s_mp_chat_inbox,NULL,0);
     off = (size_t)player - (size_t)(ta + OFF_PLAYERS);
     if (off % PL_STRIDE || off / PL_STRIDE >= REC_PLAYERS) return;
     memcpy(&from, ta + 0x4C9, sizeof from);
     memcpy(&id, player + 4, sizeof id);
     memcpy(&info, player + PL_INFO, sizeof info);
     if (!info || !from || id != from || !((unsigned char)info[0x97] & 1) ||
-        !tagpu_recmp_start_read(message, tagpu_wire_received(message), from, &s_mp_match)) {
+        !tagpu_recmp_start_read(message, tagpu_wire_received(message), from, &match)) {
         tagpu_logf("recmp: start metadata refused: no contributions");
         return;
     }
-    s_mp_match_ready = 1;
-    s_mp_host = from;
-    mp_match_log("receive", from, &s_mp_match);
+    tagpu_recmp_chat_inbox_start(s_mp_chat_inbox,&match,from);
+    mp_match_log("receive", from, &match);
 }
 
 /* DISASSEMBLED: native CreatePlayer at 0x4CA762 receives the engine's 21-byte
@@ -587,18 +587,21 @@ static int __stdcall mp_chat_gui_send(const char* player, const char* text,
     char* ta=ta_main();
     size_t offset=ta ? (size_t)player-(size_t)(ta+OFF_PLAYERS) : (size_t)-1;
     unsigned state=0;
+    GUID match;
     int result;
     if (ta) memcpy(&state,ta+0x391F1,sizeof state);
     s_mp_chat.active=0;
     s_mp_chat.text_seen=0;
     memset(&s_mp_chat.text,0,sizeof s_mp_chat.text);
-    /* B2 consumes the pending-start flag once. The live producer's thread
-       lifetime, cleared before level teardown, authorizes this level's ID. */
-    if (ta && s_mp_tid==GetCurrentThreadId() && s_mp_channel &&
-        state==6 && game_mode(ta)==3 && ((unsigned char)ta[OFF_NETWORK]&1) &&
+    /* The copied start survives loading reset until the first B2 claim.
+       The game thread owns this GUI scope; loaders use only the copied inbox. */
+    if (ta && (state==5 || state==6) &&
+        tagpu_recmp_chat_inbox_match(s_mp_chat_inbox,&match) &&
+        game_mode(ta)==3 && ((unsigned char)ta[OFF_NETWORK]&1) &&
         offset%PL_STRIDE==0 && offset/PL_STRIDE<REC_PLAYERS &&
         *(const unsigned*)player && (unsigned char)player[0x73]==1) {
         if (s_mp_chat_serial==UINT64_MAX) {
+            tagpu_recmp_chat_inbox_fail(s_mp_chat_inbox);
             if (s_mp_channel) tagpu_recmp_abort(s_mp_channel,HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW));
             tagpu_logf("recmp: text identity exhausted: incomplete contributions");
         } else {
@@ -606,7 +609,7 @@ static int __stdcall mp_chat_gui_send(const char* player, const char* text,
             memcpy(&s_mp_chat.origin,player+4,4);
             memcpy(&s_mp_chat.tick,ta+OFF_GAMETIME,4);
             s_mp_chat.event=++s_mp_chat_serial;
-            s_mp_chat.match=s_mp_match;
+            s_mp_chat.match=match;
             s_mp_chat.text.phase=RECMP_TEXT_SOURCE;
             s_mp_chat.text.mode=(unsigned char)ta[0x2BF0];
             s_mp_chat.text.origin=s_mp_chat.text.recipient=s_mp_chat.origin;
@@ -619,8 +622,9 @@ static int __stdcall mp_chat_gui_send(const char* player, const char* text,
     /* The formatter returns after its unconditional local sink call at
        0x463ED4. Target calls and exact packet bytes are now copied facts. */
     if (s_mp_chat.active && s_mp_chat.text_seen &&
-        !tagpu_recmp_text_queue_push(s_mp_text_queue,s_mp_chat.tick,&s_mp_chat.text))
-        s_mp_text_failed=1;
+        !tagpu_recmp_chat_inbox_source(s_mp_chat_inbox,&s_mp_chat.match,
+                                       s_mp_chat.tick,&s_mp_chat.text))
+        tagpu_recmp_chat_inbox_fail(s_mp_chat_inbox);
     s_mp_chat=previous;
     return result;
 }
@@ -634,6 +638,7 @@ static int mp_chat_wire(RecMpChatWire* wire, DWORD origin, const void* message, 
     if (origin==s_mp_chat.origin &&
         tagpu_recmp_chat_wire_make(wire,&s_mp_chat.match,s_mp_chat.event,s_mp_chat.tick,message,bytes))
         return 1;
+    tagpu_recmp_chat_inbox_fail(s_mp_chat_inbox);
     if (s_mp_channel) tagpu_recmp_abort(s_mp_channel,E_INVALIDARG);
     tagpu_logf("recmp: text sender/packet disagrees with GUI identity: incomplete contributions");
     return 0;
@@ -659,7 +664,10 @@ static int __stdcall mp_chat_send_one(DWORD origin, DWORD destination,
             if (s_mp_chat.text.target[i]==destination) break;
             if (!s_mp_chat.text.target[i]) { s_mp_chat.text.target[i]=destination; break; }
         }
-        if (!destination || i==RECMP_ACTORS) s_mp_text_failed=1;
+        if (!destination || i==RECMP_ACTORS) {
+            s_mp_text_failed=1;
+            tagpu_recmp_chat_inbox_fail(s_mp_chat_inbox);
+        }
     }
     return ((SendFn)(size_t)0x451BC0)(origin,destination,message,bytes);
 }
@@ -673,7 +681,10 @@ static int __stdcall mp_chat_send_line(const char* line)
         memset(stock,0,sizeof stock);
         stock[0]=5;
         for (i=0;i<sizeof stock-1 && line[i];i++) stock[i+1]=(unsigned char)line[i];
-        if (s_mp_chat.text_seen) s_mp_text_failed=1;
+        if (s_mp_chat.text_seen) {
+            s_mp_text_failed=1;
+            tagpu_recmp_chat_inbox_fail(s_mp_chat_inbox);
+        }
         memcpy(s_mp_chat.text.stock,stock,sizeof stock); s_mp_chat.text_seen=1;
         tagpu_logf("recmp: text source origin %u event %llu tick %u CRC %08X",
                    s_mp_chat.origin,(unsigned long long)s_mp_chat.event,s_mp_chat.tick,
@@ -694,9 +705,10 @@ static int __cdecl mp_chat_receive(void* frame)
     RecMpChatWire wire;
     size_t source_offset, target_offset;
     DWORD from, to, source_id, target_id;
-    unsigned tick;
-    if (!ta || GetCurrentThreadId()!=g_ddraw.gui_thread_id ||
-        s_mp_tid!=GetCurrentThreadId() || !s_mp_channel) return 0;
+    unsigned tick, state;
+    if (!ta || game_mode(ta)!=3 || !((unsigned char)ta[OFF_NETWORK]&1)) return 0;
+    memcpy(&state,ta+0x391F1,sizeof state);
+    if (state!=5 && state!=6) return 0;
     source_offset=(size_t)sender-(size_t)(ta+OFF_PLAYERS);
     target_offset=(size_t)destination-(size_t)(ta+OFF_PLAYERS);
     if (source_offset%PL_STRIDE || source_offset/PL_STRIDE>=REC_PLAYERS ||
@@ -707,18 +719,12 @@ static int __cdecl mp_chat_receive(void* frame)
         *((const unsigned char*)frame+0x14)!=source_offset/PL_STRIDE || !*(const unsigned*)sender ||
         (unsigned char)sender[0x73]!=3 || !*(const unsigned*)destination ||
         (unsigned char)destination[0x73]!=1 ||
-        !tagpu_recmp_chat_wire_read(&wire,&s_mp_match,message,tagpu_wire_received(message))) return 0;
-    memcpy(&tick,ta+OFF_GAMETIME,4);
+        !tagpu_recmp_chat_inbox_receive(s_mp_chat_inbox,from,to,message,
+            tagpu_wire_received(message),(const volatile unsigned*)(ta+OFF_GAMETIME),
+            &wire,&tick)) return 0;
     tagpu_logf("recmp: text received origin %u event %llu source %u tick %u recipient %u CRC %08X",
                from,(unsigned long long)wire.event,wire.tick,tick,to,
                (unsigned)Crc32_ComputeBuf(0,wire.stock,sizeof wire.stock));
-    {
-        RecMpTextEntry entry={ .phase=RECMP_TEXT_RECEIVED, .mode=RECMP_TEXT_MODE_UNKNOWN,
-                              .origin=from, .recipient=to, .source_tick=wire.tick,
-                              .display=8, .event=wire.event };
-        memcpy(entry.stock,wire.stock,sizeof entry.stock);
-        if (!tagpu_recmp_text_queue_push(s_mp_text_queue,tick,&entry)) s_mp_text_failed=1;
-    }
     memcpy(message,wire.stock,sizeof wire.stock);
     return 1;
 }
@@ -782,6 +788,8 @@ static void mp_init(void)
     if (!observe || !sized || !create || !accept || !chat || !pump || !receive) goto refused;
     s_mp_rx_tls=TlsAlloc();
     if (s_mp_rx_tls==TLS_OUT_OF_INDEXES) goto refused;
+    s_mp_chat_inbox=tagpu_recmp_chat_inbox_begin();
+    if (!s_mp_chat_inbox) goto refused;
     if (!InitializeCriticalSectionAndSpinCount(&s_mp_rx_lock,0)) goto refused;
     locked=1;
     p=pump;
@@ -827,9 +835,10 @@ static void mp_init(void)
     value = sizeof(RecMpStart); memcpy(p, &value, 4); p += 4;
     /* DISASSEMBLED: the initializer leaves code 0x2B's length/callback zero
        and its dispatch slot points to the loop. All three splitter walks use
-       this length table; the receive mask's bit 2 admits state 6 only. */
+       this length table. Mask 7 preserves stock text's state admission; the
+       identified handler bounds itself to loading/play states 5/6. */
     { const unsigned entries[][2] = {
-        {0x512B84,sizeof(RecMpChatWire)}, {0x512ACC,0x44FD40}, {0x512C6C,4}
+        {0x512B84,sizeof(RecMpChatWire)}, {0x512ACC,0x44FD40}, {0x512C6C,7}
       };
       for (i=0;i<sizeof entries/sizeof entries[0];i++) {
           *p++=0xC7; *p++=0x05;
@@ -911,6 +920,7 @@ refused:
     tagpu_detour_stub_free(pump);
     tagpu_detour_stub_free(receive);
     if (locked) DeleteCriticalSection(&s_mp_rx_lock);
+    tagpu_recmp_chat_inbox_end(s_mp_chat_inbox); s_mp_chat_inbox=NULL;
     if (s_mp_rx_tls!=TLS_OUT_OF_INDEXES) TlsFree(s_mp_rx_tls);
     s_mp_rx_tls=TLS_OUT_OF_INDEXES;
     tagpu_logf("recmp: start/player-data/text sites differ or cannot be patched: no contributions");
@@ -1001,16 +1011,12 @@ static void mp_capture(const Level* L, unsigned tick)
         RecMpConfig config = {0};
         RecMpRoster roster = { .version=1, .slots=L->nslots };
         unsigned short each;
-        DWORD bytes = sizeof session, origin, host = s_mp_host;
+        DWORD bytes = sizeof session, origin, host = 0;
         unsigned seat = (unsigned char)L->ta[OFF_CONTROLLED];
         GUID zero = { 0 };
-        GUID match = s_mp_match;
-        unsigned ready = s_mp_match_ready;
+        GUID match = {0};
+        unsigned ready = tagpu_recmp_chat_inbox_claim(s_mp_chat_inbox,&match,&host);
         s_mp_tried = 1;
-        /* Consume once. Level-load teardown may lie between the start message
-           and B2, so level_end preserves the pending token; it cannot authorize
-           a second level after this attempt. */
-        s_mp_match_ready = 0;
         memset(&session, 0, sizeof session);
         memcpy(&dp, L->ta + 0x4D9, sizeof dp);
         if (!s_mp_sites || seat >= REC_PLAYERS || !dp) return;
@@ -1110,6 +1116,8 @@ static void mp_capture(const Level* L, unsigned tick)
         tagpu_logf("recmp: contributions begin at tick %u, transport ID %u", tick, origin);
         s_mp_logtick = tick;
         s_mp_level = *L;
+        s_mp_active_match = match;
+        s_mp_local = origin;
         s_mp_tick = tick;
         s_mp_roots_failed = 0;
         s_mp_tid = GetCurrentThreadId();
@@ -1118,6 +1126,8 @@ static void mp_capture(const Level* L, unsigned tick)
         mp_record_begin(L,(int)tick,&config);
     }
     if (!s_mp_channel) return;
+    if (!tagpu_recmp_chat_inbox_drain(s_mp_chat_inbox,&s_mp_active_match,s_mp_local,
+                                      &s_mp_roster,s_mp_text_queue)) goto incomplete;
     /* The pump at 0x4954C8 can start roots at T before B2. Post-B2 roots
        from T-1 must be sent before advance seals that source tick. */
     if (s_mp_roots_failed || s_mp_text_failed || !mp_events_flush(s_mp_tick)) goto incomplete;
@@ -4458,6 +4468,7 @@ static int __cdecl ev_reply1(void* E) { cnt(0x0047F850u, ARG(E, 0), 0); ev_reply
 static void mp_roots_end(void)
 {
     s_mp_tid=0;
+    tagpu_recmp_chat_inbox_level_end(s_mp_chat_inbox);
     tagpu_recmp_named_end(s_mp_named); s_mp_named=NULL;
     tagpu_recmp_roots_end(s_mp_roots); s_mp_roots=NULL;
     tagpu_recmp_roots_queue_end(s_mp_roots_queue); s_mp_roots_queue=NULL;
@@ -6349,7 +6360,10 @@ void tagpu_rec_level_end(void)
     /* Teardown enters on the producer's game thread before the unit-array free.
        Copied final roots precede final source seals; no hook can retain this
        level context after it is cleared. */
-    if (s_mp_channel && (s_mp_roots_failed || s_mp_text_failed || !mp_events_flush(~0u)))
+    if (s_mp_channel &&
+        (!tagpu_recmp_chat_inbox_finish(s_mp_chat_inbox,&s_mp_active_match,s_mp_local,
+                                       &s_mp_roster,s_mp_text_queue) ||
+         s_mp_roots_failed || s_mp_text_failed || !mp_events_flush(~0u)))
         tagpu_recmp_abort(s_mp_channel,E_ABORT);
     mp_roots_end();
     tagpu_recmp_end(s_mp_channel);

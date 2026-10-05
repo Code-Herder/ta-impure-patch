@@ -304,8 +304,18 @@ cleans up its own Wine prefix/display. Use the native menu driver separately
 to exercise the installed entry/call wrapper; these
 controls do not prove loading-chat admission or native raw transport. When the
 primary installer arms, `recmp: ARMED owned primary receive frames and serialized
-dispatch` identifies the new path. Identified chat remains restricted to the
-live B2 producer and state 6.
+dispatch` identifies the path. Identified chat accepts loading/play states 5/6
+through a copied current-match inbox, including receipt before the B2 producer.
+
+`python3 tools/replay/recmp_chat_inbox_test.py --out /tmp/recmp-chat-inbox-run`
+checks the production copied inbox/text queue and exact receive adapter:
+pending reset survival, once-only bootstrap, original zero/source clocks,
+publication ownership, final transfer/admission closure before queue free,
+concurrent receipts, overflow with stock restoration,
+frozen-roster/match refusal and state-5 calls on game/foreign threads without a
+producer. Main/mode/span/log boundaries are controlled; this does not prove a
+native loading receipt, its display or persisted application clocks. Its own
+prefix/display are removed.
 
 `python3 tools/replay/recmp_primary_test.py --port PORT --out /tmp/recmp-primary-run`
 checks native live movement through the installed primary wrapper in two owned

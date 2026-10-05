@@ -3971,8 +3971,9 @@ complete 2,432,312-byte file retains 5,994 applications through C/Python world
 seek with zero corrections; both peers reach the destructor and saved-identity
 publication helpers. Copied-data controls and all 23 skirmish replay checks pass.
 Native engine application is still refused: two later Reclaiming replies reach
-the recorder before its replicas exist, and product decision 7 must choose owner
-unit lifetimes or an explicit delay policy. The other multiplayer gates remain
+the recorder before its replicas exist. The owner chose owner-controlled unit
+timing for decision 7; incarnation-dependent engine application is next. The
+other multiplayer gates remain
 required; this checkpoint does not land the slice.
 
 Per-origin explored-map capture is also in progress: each local human/hosted AI
@@ -4021,7 +4022,7 @@ authors' serial 1 values remain distinct. Its seven entries and complete
 seek, with zero writer corrections. The reusable saved-evidence reader checks
 these identities/bytes/clocks against every peer's native logs and also passes
 the earlier repeated/full-length file. Loading research confirms a gap between
-stock's state-5 acceptance and the current state-6 wire. The primary pump now
+stock's state-5 acceptance and the initial state-6 wire. The primary pump now
 reuses process-lifetime packet storage per recursion depth and serializes
 receive/dispatch metadata through nonblocking admission, retaining
 independent storage and parent IDs across nested calls. A busy caller consumes
@@ -4036,8 +4037,12 @@ remote movement in both queued and raw fixtures. Exact-core controls verify
 retained aliases, depth-slot reuse and busy admission without an SDK receive.
 Native parser reentrancy, SDK callback/cost behaviour and separate output
 lifetimes are not established by these controls.
-The pre-B2 producer handoff and roster bootstrap still remain, so the wire mask
-and loading guard are unchanged. No multiplayer landing gate is cleared.
+A fixed copied inbox now bridges loading pumps to the first B2 claim, with
+frozen-roster validation and unchanged source/recipient observation clocks.
+Mask 7 admits the adapter, which requires states 5/6. Its copied-data ownership
+holds no engine/SDK/log/allocation call or other lock. Production inbox and
+exact state-5 receiver controls pass; native loading delivery/clock/file gates
+remain open. No multiplayer landing gate is cleared.
 
 The work branch's tick-based replay harness defaults to internal speed 20 (2x),
 with normal speed selectable and retained for cost and speed/settings UI checks.

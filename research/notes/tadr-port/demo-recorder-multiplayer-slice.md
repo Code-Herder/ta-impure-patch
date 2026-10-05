@@ -1039,9 +1039,12 @@ birth zero, supplied by its initial full source image.
 This is product decision 7: owner-controlled unit lifetimes permit these private
 roots to retain their recorded arrival order; retaining the recording peer's
 delayed replica lifetimes requires an explicitly chosen event-delay policy.
-That lifetime decision is pending. No root is dropped or retimed, no clock
-offset is guessed, and native engine playback remains refused. Death capture
-below is needed under either policy and does not choose it.
+The owner chose owner-controlled unit timing on 2026-10-05: creation and death
+follow the unit owner's contributions; private roots retain their recorded
+application order. The materializer must enforce incarnation dependencies
+without dropping or retiming roots or guessing source-clock offsets. That
+engine application remains unimplemented and native playback remains refused.
+Death capture below supplies the required lifetime observations.
 
 ### Owner destructor entry and return verification
 
@@ -1280,7 +1283,7 @@ without deduplicating text or inferring a recipient from a transport return.
 Primary per-pair ordering is still unproved; the same-wire identity removes
 the need to correlate these observations by ordinal. Pings/drawings still need
 their own boundary/audience audit. This does not close the POV/chat gate or
-choose the pending owner-lifetime policy.
+implement the chosen owner-lifetime policy.
 
 #### Identity travels with the native chat
 
@@ -1311,7 +1314,7 @@ retains the output unchanged. The source and recipient logs retain identity,
 text-packet CRC and separate clocks; they are diagnostics, not persisted
 communication-ledger records. No complete communication file, playback, seek,
 pings/drawings or native raw-transport result is claimed. Loading-phase chat
-delivery is also unverified: the new receiver currently requires the live B2
+delivery is also unverified by that probe: its receiver required the live B2
 producer and state-6 dispatch. The first native wire probe sends the stock path
 because it incorrectly required the pending start flag that B2 has already
 consumed; the active producer's owning-thread lifetime replaces that check.
@@ -1434,16 +1437,16 @@ fourteen-entry recording and this three-author seven-entry recording both
 pass the saved-evidence check. These are reader tests, not engine replay
 application or the accumulated multiplayer landing gate.
 
-The loading audit confirms a concrete gap: stock text mask 7 admits state 5,
-whereas the identified text mask 4 admits only state 6. The loader's early
+The loading audit identifies the mask gap: stock text mask 7 admits state 5,
+whereas the identified path's initial mask 4 admitted only state 6. The loader's early
 pump and the game loading frame can both receive. State 5 also persists into
 the first catch-up ticks after the loader's final completion store, before B2
 creates the contribution producer. B3's TLS span identifies a receive; it
 does not serialize loading pumps or protect their shared reallocating buffer.
 The [engine map](../exe-reverse-engineering.md) records the call sweep, state
 mask and loader ordering. Loading receipt ownership/clocks and stock display
-still require a by-design handoff; this checkpoint changes no mask or thread
-guard and does not close that gate.
+require the copied handoff below; an actual native loading receipt and its
+saved clock/order remain unverified.
 
 #### Primary input ownership before loading admission
 
@@ -1529,12 +1532,56 @@ Incoming storage separation, retained packet lifetime and nonblocking pump
 admission are implemented and tested. Their safety rests on persistent depth
 storage and refusal before any SDK receive when another thread owns dispatch.
 They do not prove all native parsers reentrant, SDK callback/cost behaviour or
-separate native output lifetimes. Loading admission still
-needs a copied pre-B2 queue, source-roster bootstrap and truthful source,
-recipient and recorder application clocks. Mask 4 and the live B2 guard remain
-unchanged. Engine replay chat, other audience modes, pings/drawings, complete
+separate native output lifetimes. Engine replay chat, other audience modes, pings/drawings, complete
 authority/play/seek/takeover, physical budget, receive cost, ten-seat continuation
 and the accumulated replay/review/local landing gates remain open.
+
+#### Copied loading chat inbox
+
+`tagpu_recmp_chat_inbox.c` provides the loading/game-thread handoff before B2.
+One fixed process-owned queue holds 4,096 copied observations; no engine
+address is stored. Its ownership protects only copied match/host metadata,
+queue values and the acceptance-time read of main GameTime. Held bodies make
+no engine/SDK call, log, allocation or acquisition of another lock. The start
+epoch survives loading reset, is claimed once at B2, and closes before live
+level queues are freed. Bootstrap bounds all origin/recipient/target IDs by
+the frozen roster. Overflow or a decreasing observed clock makes capture
+incomplete, with the stock text image still restored for a valid wire packet.
+
+The identified initializer now writes mask 7. The receiver requires loading/play
+state 5/6, exact delivery and native sender/recipient validation, and can run on
+either pump caller before the producer exists. The GUI source scope uses the
+same copied current match. B2 transfers inbox entries before source advance.
+Teardown transfers final entries and closes admission under one ownership
+interval before final seals or queue free; later receivers cannot append after
+that cut. Neither source nor recipient clocks are retimed to B2.
+
+Normal/COVER builds pass. Production inbox/text-queue controls pass pending-reset
+survival, once-only claim, zero receipt ticks, distinct source ticks, acceptance
+clock/publication ordering, closure before final seals/queue free, 4,000
+concurrent receipts, overflow without stock
+suppression, changed-match and frozen-roster refusal. The exact production
+receiver body accepts controlled state-5 game/foreign-thread calls without a
+producer and restores the stock packet; wrong mode/state/row/span/controller/
+network inputs refuse. These controlled boundaries do not prove native loading
+display, native loading clocks or their saved-file application. Those gates
+remain open, along with the full multiplayer landing.
+
+MEASURED 2026-10-05 on the reference setup: the integrated inbox runs in a
+three-human queued native *Town & Country* game, COVER, 20-unit limit, host
+saving and both peers opted out. The final admission-closure build is retained
+with its coverage map, SHA `fb6278986a471b2c160a390997f68b5d09dafb1ffd9d7acdd0e250defd68dcd4`.
+Source IDs `689214863`/`689214857` send private serial 1 at ticks 285/383,
+accepted by the other peer at 284/392, CRCs `507DBE27`/`51131C21`. Host
+`689214861` sends its public serial 1 at 545, accepted at 511/507, CRC
+`B7D817B9`. The host displays neither private line.
+Its file closes at tick 764 with zero corrections. C/Python agree on seven
+entries, eight latest-batch queries, two constructor roots and all 311
+application envelopes / 71,127 bytes, CRC `0FE1FD27`, through reader seek.
+The opted-out peers refuse contributions after host departure, repeating the
+open continued-migration gap. All owned test instances/display are removed.
+This verifies in-play integration and final inbox draining, not native loading
+delivery or engine multiplayer playback.
 
 #### Input acknowledgement used by the chat fixture
 

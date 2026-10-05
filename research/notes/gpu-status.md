@@ -3083,8 +3083,10 @@ through fresh world seek. The applied calls observe both B2 phases; the death
 pairs in this sample are post-B2. All 23 skirmish replay checks still pass at 2x,
 including three exact poisoned round trips. Separate constructor-arrival analysis
 finds two later Reclaiming replies before the recorder's replica exists. Owner
-lifetime authority versus explicitly delayed event application remains product
-decision 7. Death capture does not choose it; native playback stays refused.
+timing was chosen by the owner in product decision 7: unit creation/death follows
+its owner and private roots keep recorded application order. The materializer
+must enforce incarnation dependencies; it remains unfinished and native
+playback stays refused.
 The engine map records the unbounded native constructor inputs, its occupied-slot
 death, and why unfinished construction plus B4 carried state differs from a
 finished local constructor. No engine write or patch is added.
@@ -3169,7 +3171,7 @@ guarded/malformed controls pass. Intended targets and actual recipient
 observations remain separate; playback,
 loading-phase acceptance and pings/drawings remain open. The first native wire
 probe fails input acknowledgement and exposes an inactive start-token guard;
-the live B2 producer lifetime replaces that guard. No passing native wire-ID
+the corrected in-play scope replaced that guard. No passing native wire-ID
 gate is claimed from that attempt. The corrected COVER three-human run, local
 recording off, verifies five unique source events and exact packet CRCs: the
 selected recipient accepts all five; the other peer accepts four, excluding the
@@ -3227,8 +3229,17 @@ lock waits; they do not prove every native parser reentrant, SDK callback/cost
 behaviour or separate output-builder lifetime. The installed 32-byte wrapper
 also passes queued/raw movement fixtures after those changes, with positive
 movement counts and every sampled stale count zero.
-The state-6 mask and B2 guard remain; loading chat
-still needs its copied-record handoff and roster bootstrap. Whole-game receive
+The identified mask is now 7, with the adapter restricted to loading/play
+states 5/6. A fixed process-owned inbox publishes copied match metadata and
+4,096 bounded observations from either pump caller to the first B2 producer.
+Its held bodies acquire no other lock and make no engine/SDK/log/allocation
+call. Acceptance clocks are copied inside publication ownership; the frozen
+roster bounds IDs before transfer. Pending start survives load reset and is
+claimed once. B2 drains before source advance. Teardown transfers final entries
+and closes admission under one ownership interval before final seals/queue
+free. Exact inbox
+and state-5 receiver controls pass; native loading delivery/clock/file gates
+remain open. Whole-game receive
 cost, bandwidth and continued migration remain open.
 The snapshot also publishes inline `edit_index`/`caret` without engine writes.
 A two-peer COVER run verifies acknowledged text replacement and the engine's
@@ -3239,7 +3250,7 @@ Mapping toggle. This is driver verification, not a native replay gate.
 | `0x512AF8` startup packet-length entry | 25, written by the redirected initializer store; start sender, receive observer and initializer are installed together. |
 | Host start's message bytes | Fixed 25-byte stack value passed through the existing generic sender; its reliable queue copies before return. No remote engine resources or order fields are written. |
 | Native CreatePlayer initial data | The original 21-byte password/version prefix followed by a fixed 280-byte public-key record. Only public material is exported; key failure forwards the stock data and refuses faithful contributions. The size handler retains the original accepted-prefix tests. |
-| `0x512B84`, `0x512ACC`, `0x512C6C` | Fixed identified-text size 97, generic `ret 4` callback `0x44FD40` and state-6 receive mask 4, written by the same startup initializer. All thirteen primary sites are acquired before any is written. |
+| `0x512B84`, `0x512ACC`, `0x512C6C` | Fixed identified-text size 97, generic `ret 4` callback `0x44FD40` and receive mask 7, written by the same startup initializer; the copied-inbox adapter accepts only states 5/6. All thirteen primary sites are acquired before any is written. |
 | Scoped GUI text message | Copied 97-byte stack wire value through the original target/generic sender. The native queue copies before returning; ordinary binary `0x05` messages retain their existing size. |
 | `0x453D40`, `0x453D94` / pump stack `+0x10` | Byte-matched entry wrapper and receive-call redirect. A 32-byte stack frame publishes an exact active TLS span; one process-lifetime allocation per recursion depth retains the last packet across return. Nonblocking recursive ownership covers receive/dispatch; busy admission returns 0 and consumes nothing. Success writes the current input pointer to the dispatcher's existing stack slot. All original return registers/flags are preserved. |
 | `main+0x4C9`, `main+0x4CD` | Native receive writes source/destination as before. A nested pump restores its parent's saved words before returning to that parent's dispatcher; the process-lifetime main block remains owned. No primary interface is retained. |
