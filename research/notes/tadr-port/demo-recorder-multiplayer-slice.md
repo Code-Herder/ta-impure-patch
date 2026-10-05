@@ -585,13 +585,19 @@ nonzero u16 raw type, source owner row, layer 0..3, all 32 finished bits,
 three position dwords, water 0..4 and three zero reserved bytes. The source
 owner row must map to this origin's frozen destination seat; copied bytes are
 retained in source coordinates. The later engine consumer must also bound the
-type against its definition count. The existing success-exit observer supplies
-this dependency even with recording off, after any constructor replies, with
-B4's exact birth token and source capture phase. Initial units remain in the
-initial full images. The representation adds an existing payload subtype to
-kind 10 without changing its fields or wire version 2/file formats 5/6; older
-decoders refuse this subtype. It does not enable engine playback or choose the
-application ordering for roots whose units are not yet present on the recorder.
+type against its definition count. The success-exit observer records the return
+even with recording off, after any constructor replies, with B4's exact birth
+token and source capture phase. A distinct contribution-only root `0x100`
+records the same arguments at `0x486075`, after reservation/stamping but before
+initialization and child roots. Its fixed owner pointer is assigned when the
+unit array is allocated, not by the constructor's overwritten owner argument.
+The whole nine-byte observer span contains no relative instruction. One queue
+retains begin, child calls and successful return in source order; playback need
+not look ahead to a later return to discover that incarnation. Initial units
+remain in the initial full images. These kind-10 subtypes leave wire version 2
+and file header formats 5/6 unchanged; older root decoders refuse unknown
+subtypes. An earlier recording without begin roots still reads as captured
+data. This supplies the owner-lifetime boundary, not engine playback.
 
 Owner deaths carry the existing 340-byte payload: unit ID, killer unit ID,
 source killer-player row (ten for none), raw severity/kind bytes, carried flag,
@@ -617,11 +623,12 @@ unknown owner. Hooks copy without a worker call or lock. Prior-tick calls drain
 before sealing, current pump calls after advancing, and final calls before final
 seals. Overflow, backwards source time and failed emission latch incomplete.
 The extra queue replaces the former named-only queue; there are no independent
-per-kind drains that could regroup calls. No new engine patch or field write.
+per-kind drains that could regroup calls. The constructor-begin observer adds
+one byte patch and no engine field write.
 
-MEASURED 2026-10-05 on the reference setup: `recmp_roots_test.py` passes 68 atomic
+MEASURED 2026-10-05 on the reference setup: `recmp_roots_test.py` passes 83 atomic
 refusals, all 1,300 guard-page truncations of three/four/six-kind mixed batches,
-457 guarded per-kind short spans, maximum 167 replies and 251 death returns,
+485 guarded per-kind short spans, maximum 167 replies and 251 death returns,
 exact future incarnation tokens, constructor/finished/high layer bits, source
 owner-row authorization and unchanged unknown outputs. Queue controls verify
 8,392 copied mixed calls over phase/tick changes,
@@ -1045,6 +1052,63 @@ application order. The materializer must enforce incarnation dependencies
 without dropping or retiming roots or guessing source-clock offsets. That
 engine application remains unimplemented and native playback remains refused.
 Death capture below supplies the required lifetime observations.
+
+The constructor-begin contribution now provides the ordering missing from an
+exit-only observation: reservation and exact B4 birth precede initialization,
+private roots and successful return. Both C and Python use the same constructor
+payload bounds and frozen source owner-row authorization for this new subtype.
+The existing primary/skirmish creation event remains at the successful exit.
+No source clock offset, replay exclusion, application delay or engine field
+write is introduced. The engine consumer must still construct/apply the owner
+world and enforce these incarnation dependencies before mode-3 playback opens.
+
+#### Constructor-begin verification
+
+MEASURED 2026-10-05 on the reference setup: the native coverage fixture
+`tools/replay/recmp_create_begin_test.py` runs two humans and one hosted AI per
+human on *Two Continents*, with only the host saving. All 28 first observations
+(four actors times seven root kinds) agree between source and recipient on
+whole-batch bytes/CRC, source clock/sequence, event index, slot, birth and phase;
+each also matches its persisted application envelope. The complete
+2,845,687-byte recording spans ticks 1..558 with zero writer corrections.
+Seventy-one constructor begins precede matching successful returns with exact
+28-byte payloads, source tick and capture phase. Eight reply roots occur between
+their own begin and success; the queue preserves those calls without moving
+them to another clock or looking ahead to the success record. All four actors,
+including both owners on the peer whose saving is off, have matched pairs.
+Coverage reaches `mp_create_begin`, `create_image`, `ev_create`,
+`mp_roots_prepare` and `mp_roots_publish` on both peers in the retained build map.
+
+The independent C/Python reader run retains all 8,146 application envelopes,
+2,061,238 exact bytes and CRC `8EA54D8E` through fresh reader world seek.
+Twelve per-origin explored-map queries and forty local-origin comparisons
+against the captured primary map also pass. This does not rerun or close the
+previously stopped primary-receive exploration driver gate, or prove remote
+engine map application. The native fixture requests internal speed 20, but
+heartbeats show 10 at about 30 ticks/s; this is normal-speed evidence. The
+initial native fixture attempt was a driver failure: its generated nickname
+exceeded the native ten-character field. Shorter fresh names fix that driver;
+both attempts clean up their own instances/display.
+
+The copied-root controls pass 83 atomic refusals, 1,300 guarded batch truncations,
+485 per-kind guarded short spans and 8,392 ordered copied calls including begin.
+The actual writer's synthetic fixture carries the seventh subtype through both
+readers, all five file lifecycles and source/application/proof histories. Fifteen
+additional raw-seal-valid begin corruptions bring semantic body refusals to 135;
+wrong owner rows, IDs, type, phase, birth, span, layer/water/reserved bytes and an
+unknown adjacent kind refuse in C and Python. The first expanded codec run
+correctly refused a reused sequence in its positive test; fixing that test to
+advance the sequence passes without weakening validation.
+
+The shared constructor payload helper also passes all 23 `secondary-orders`
+skirmish replay checks at internal speed 20: complete 1,110-iteration recording,
+1,109 explained steps, puppet playback, restored/fresh seek, inventory and COB
+write checks. Three round trips at 391/421/511 poison 26 tables, leave zero
+residue and compare exactly before/after. This verifies the shared skirmish
+path; it does not establish native engine play/seek/takeover. Owner-world
+materialization, complete state/effect authority and the rest of the multiplayer
+landing remain open. No exclusion, tolerance or simulation classification is
+loosened.
 
 ### Owner destructor entry and return verification
 

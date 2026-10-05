@@ -139,6 +139,9 @@ MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
 tools/mp_leave.sh h1                                 # surrender -> main menu
 ```
 
+Use instance names of at most ten characters with `mp_lobby.sh`: it uses the
+uppercased instance name for TA's ten-character nickname field.
+
 The recorder's isolated native backend has a standalone transport fixture:
 `python3 tools/replay/recmp_net_test.py --port 47733 --out /tmp/recmp-net-run`.
 Add `--channel` to exercise the production channel, initialized after both primary
@@ -218,24 +221,37 @@ fixture independently checks mapped unit authority and proof-tail isolation in
 C/Python through synthetic seek. These fixtures do not test engine application,
 owned COB/model/effect objects or native multiplayer recording/playback.
 
-Owner create/death/return/script/reply/spray contribution bounds use:
+Owner begin/create/death/return/script/reply/spray contribution bounds use:
 `python3 tools/replay/recmp_roots_test.py --out /tmp/recmp-roots-run`.
 One owned prefix/private display runs copied-cache and 4,096-call queue controls:
-68 atomic refusals, all 1,300 guarded batch truncations, 457 per-kind short spans,
+83 atomic refusals, all 1,300 guarded batch truncations, 485 per-kind short spans,
 maximum 167 replies/251 death returns and 8,392 mixed
 calls across packet splits/actor switches/queue wrap. Overflow, backwards source
 time or failed emission permanently refuse. Payloads preserve exact argument/text/
 spray/constructor bytes, source clock, incarnation token and pre/post-capture phase.
 Constructor payloads retain the source owner row, validated through its frozen
-source roster, and all finished/position bits.
+source roster, and all finished/position bits. Contribution-only constructor
+begin `0x100` precedes initialization/child roots; ordinary CREATE is the success.
 Death payloads keep the complete normalized victim/mover image and source owner
 indices; four-byte returns retain the saved exact incarnation. These brackets
 run with recording off and return follows no freed engine object. The file fixture checks ordered
 applied mixed batches through synthetic seek and proof
-isolation. The retained legacy named-only codec is exercised by
+isolation. Native constructor ordering uses the coverage DLL:
+`python3 tools/replay/recmp_create_begin_test.py --port 47818 --out /tmp/recmp-birth-run`.
+It creates two fresh instances on a private display, adds one hosted AI per
+human, records on the host while the peer's saving is off, compares source and
+recipient first-root bytes, and checks exact begin/child/success order in the
+completed file. It retains that file, logs, DLL/map and coverage, then stops and
+removes only its own instances. Run the saved file through
+`python3 tools/replay/recmp_file_test.py --native-file FILE --out /tmp/recmp-birth-read`
+to compare complete C/Python application delivery through reader world seek.
+These are native capture/reader tests; engine multiplayer playback remains
+unavailable. The fixture requests speed 20; count it as 2x evidence only if live
+heartbeats confirm 20. The retained legacy named-only codec is exercised by
 `python3 tools/replay/recmp_named_test.py --out /tmp/recmp-named-run` (28 atomic
-refusals and 94 guarded truncations). These tests do not launch TA or establish
-engine root application/native recording. Run owned-prefix codec/file fixtures
+refusals and 94 guarded truncations). Codec/file controls do not launch TA;
+neither they nor the native constructor fixture establish engine root application.
+Run owned-prefix codec/file fixtures
 separately from multiplayer menu drivers, as for the channel fixture above.
 
 Native multiplayer can start at speed 10 despite a stopped-instance setting of

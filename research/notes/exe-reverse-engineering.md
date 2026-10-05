@@ -1926,6 +1926,7 @@ one did not fit.
 | Site | What it is | What the hook reads |
 |---|---|---|
 | `0x4861B3` (`mov eax,esi; pop edi; pop esi; pop ebp`) | the create `0x485F50`'s success exit; the NULL exits (`0x4861BD`, `0x48605A`) are not observed | `esi`, the unit in the slot it took. Five registers are still pushed (`0x4861B5..0x4861B9`, then `ret 0x20`), so the arguments start at `E+0x18`. The first, the owner, is overwritten at `0x485F9C` (`mov [esp+0x18],eax`, the unit type), so the owner is the unit's own `+0x96`; the type is the word at `E+0x1C` (`mov dx,[esp+0x1C]`, `0x486079`), the position the three dwords at `E+0x20`, `finished` the dword at `E+0x2C` (`0x486075`), and `layer` at `E+0x30`, of which the create keeps bits 0–1 (`0x4860F1`). The events of the calls the create makes (its state byte through `0x48B090(1, 1)`, its scripts) come before the create's own |
+| `0x486075` (9 bytes: `mov edi,[esp+0x2C]; mov dx,[esp+0x1C]`) | multiplayer constructor-begin observer, after the selected slot and its B4 birth token are fixed, before type/init/COB work | Same five saved registers and arguments as the success exit; `esi` is the actual selected fixed-array slot, including a first-free slot B4 moved. Copies the same 28-byte arguments/water image into contribution-only root `0x100`. Neither stolen instruction is relative. Ordinary skirmish events remain success-exit observations. |
 | `0x4866D0` (9 bytes) | the destructor `(rec, mode)`'s entry | the record: the victim's `u16` at `+1`, the killer's netid at `+3`, the killer's `u16` at `+7`, the severity at `+9`, the kind at `+0xA`. A call the destructor would make inert (B3's bound at `0x4866E5`, the alive test at `0x486706`) is not recorded; a killer of 0 is none (`0x48675A`). The killer's player by `0x44FE40`'s rule (below); C4's carried decision (`tagpu_tx_carried`); the victim's image as the destructor finds it |
 | `0x41B8D0` (6 bytes) | the build done `(builder, built)`, `ret 8` | both arguments. Its five callers are listed at the table's `0x41B8D0` row above; the build step `0x41BA60` calls it at `0x41BCBF` when the built unit's `+0x104` compares equal to 0.0 (`0x41BCAA..0x41BCBB`), so every build that finishes in play passes here |
 | `0x48B090` (5 bytes) | the state setter `(mask, value)`, `ecx` the unit, `ret 8` | the byte `+0x10E` as the setter will leave it (`0x48B09A..0x48B0D4`), recorded only when it changes, since the setter returns at once otherwise (`0x48B0DE`) |
@@ -1946,9 +1947,67 @@ this success exit. The payload retains all 32 finished bits: `0x486075` loads
 the dword and `0x48611A..0x48611C` test zero versus nonzero, without normalizing
 it. The position copies at `0x48607E..0x48609D`, raw type store at `0x486086`,
 layer mask at `0x4860FE` and success register pops at `0x4861B3..0x4861B9`
-were checked against pristine disassembly. This supplies a creation dependency;
-it does not choose when an early owner root materializes in a native replay.
-No additional engine patch or field write is installed.
+were checked against pristine disassembly. This is the successful return;
+constructor child roots can precede it.
+
+**Constructor reservation before child roots [DISASSEMBLED 2026-10-05].**
+`0x486075` now supplies a distinct contribution-only begin root (`0x100`), with
+the same 28-byte argument shape. B4's `hit_take` at `0x486036` runs after the
+free-type test, selects the actual slot and assigns its exact monotonic stamp
+before continuing at `0x48605D`. Every refusal/null return in `0x485F50` is
+before the observed boundary; the subsequent body has one successful return.
+The pool initializer assigns each slot's fixed owner pointer at `0x485902`
+and owner-row byte at `0x48590E`, within the ten player blocks ending at
+`0x48592B`. Thus this observer need not follow a COB, definition or mover from
+a not-yet-initialized slot: unit/player array arithmetic, frozen owner/block
+agreement and game-thread level lifetime protect its owner/water reads. The
+source tick and stamp are copied by the same existing `mp_roots_prepare` path.
+
+The stolen span is exactly `8B 7C 24 2C 66 8B 54 24 1C`. There is no branch
+into its second instruction in the constructor. A later candidate at
+`0x4860A5` would steal `push esi; call 0x485D40`: the generic observer copies
+stolen instructions without relocating a relative call, so that span cannot
+be used with it. Attach matches the whole chosen span along with all other
+observer sites before installing any. This adds one observation byte patch
+and no engine field write. The game-thread queue preserves begin, child roots
+and successful return in source call order; no look-ahead or retiming is needed
+to discover the new incarnation. Engine materialization remains open.
+
+**Constructor initialization calls read for that ordering [DISASSEMBLED].**
+Type is stored at unit `+0xA6` at `0x486086`. `0x4860A0` calls
+`0x485A40(unit, position-by-value, finished)`, `ret 0x14`: it sets the
+definition pointer `+0x92` and live bit (`0x485A75`/`0x485A70..0x485A7B`),
+unfinished fraction/HP `+0x104`/`+0x108` (`0x485B11..0x485B37`) and position
+`+0x6A`/`+0x6E`/`+0x72` (`0x485B77..0x485B96`). It calls the simulation RNG
+`0x4B6C30` at `0x485BDE` and `0x485D1B`, weapon helpers `0x48A160` and
+`0x489800` at `0x485C50`/`0x485C58`, inline resource-object constructor
+`0x401070` at `0x485D0A` and group-add `0x480250` at `0x485D29`. The
+begin observer precedes all these calls; their transitive effects are not
+claimed absent from this read of the initializer.
+
+`0x4860A6` then calls `0x485D40(unit)`, which allocates `0x544` bytes for COB
+and stores unit `+0x9A` at `0x485D9F`, loads the script via `0x4B0720`
+at `0x485DAC`, makes the model via `0x45A950` at `0x485DC0`, stores
+`+0x9E` at `0x485DCC` and binds it via `0x480D40` at `0x485DD2`.
+Its `Create` script call at `0x485DE6` is `0x4B0940(name, 0, 1)`:
+`0x485DDD` pushes run-now 1, before the outer constructor returns. The
+no-script path calls `0x45A8D0` at `0x485E09` and leaves COB null. The
+outer constructor subsequently calls weapon init `0x49E070` at `0x4860AC`,
+order init `0x437840` at `0x4860B2`, placement `0x48A870` at `0x486109`,
+footprint `0x47CC30` at `0x48610F`, network create `0x456050` at
+`0x486115` and group/update helpers `0x482AC0`/`0x490580` at
+`0x486178`/`0x4861AE`. This establishes why an exit-only creation root is
+too late for child calls, rather than asserting that initialization is inert.
+
+MEASURED 2026-10-05 on the reference setup: the four-actor native coverage
+fixture records 71 begin/success pairs, each with the same exact payload, birth,
+source tick and phase. Eight kind-3 reply calls lie between their own begin and
+success. All 28 first-kind observations match publisher/recipient and persisted
+batch bytes/provenance, including the peer with saving off. The complete file
+has 558 iterations, zero corrections and 8,146 exact application envelopes
+(2,061,238 bytes, CRC `8EA54D8E`) retained through C/Python reader world seek.
+Both peers reach the new boundary/payload helpers in the retained coverage map.
+This is constructor capture/order evidence, not native engine playback.
 
 **Owned destructor contributions [DISASSEMBLED, MEASURED 2026-10-05].** The
 existing `0x4866D0` observer now also brackets deaths of bounded frozen local

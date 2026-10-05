@@ -4142,6 +4142,41 @@ static void ai_finish(unsigned tick)
     s_ai.tid = 0;
 }
 
+static void create_image(const Level* L, const void* E, const char* unit, unsigned id,
+                          unsigned char b[28])
+{
+    unsigned owner=id_of(L,RL_T_PLAYER,*(const char* const*)(unit+U_OWNER)), v;
+    memcpy(b,&id,4);
+    v=ARG(E,0x1C)&0xFFFF;
+    memcpy(b+4,&v,2);
+    b[6]=(unsigned char)(owner && owner!=REC_ID_BAD ? owner-1 : 0xFF);
+    b[7]=(unsigned char)(ARG(E,0x30)&3);
+    v=ARG(E,0x2C);
+    memcpy(b+8,&v,4);
+    memcpy(b+12,(const unsigned char*)E+0x20,12);
+    b[24]=(unsigned char)unit[U_WATER];
+    b[25]=b[26]=b[27]=0;
+}
+
+/* DISASSEMBLED: 0x486075 follows B4's slot reservation/stamp at 0x486036,
+   before type store 0x486086 and init 0x485A40. ESI is the chosen fixed-array
+   slot; its owner fields already belong to the unit-array allocation. Both
+   observed sites have the same saved-register depth and argument offsets.
+   Publishing here orders the incarnation before every constructor child root.
+   No relative instruction is stolen: observe copies its span without relocation. */
+static int __cdecl mp_create_begin(void* E)
+{
+    const char* unit=PTR(REG_ESI(E));
+    MpRootRef ref;
+    unsigned id=mp_roots_unit(unit,0,0);
+    unsigned char b[28];
+    if (!id || !mp_roots_prepare(unit,&ref)) return 0;
+    cnt(0x00486075u,0,0);
+    create_image(&s_mp_level,E,unit,id,b);
+    mp_roots_publish(&ref,RECMP_ROOT_CREATE_BEGIN,b,sizeof b);
+    return 0;
+}
+
 /* The create 0x485F50's success exit 0x4861B3 (`mov eax,esi`): esi is the unit it made, in the
    slot it actually took -- B4's hit_take may move a first-free create past its first choice. The
    function has pushed five registers, so its arguments start at +0x18; the first, the owner, is
@@ -4152,25 +4187,14 @@ static int __cdecl ev_create(void* E)
 {
     Rec* r;
     const char* unit;
-    unsigned id, owner, v;
+    unsigned id;
     unsigned char b[28];
     cnt(0x004861B3u, 0, 0);
     r = ev_rec();
     unit = PTR(REG_ESI(E));
     id = r ? ev_unit(r, unit) : mp_roots_unit(unit, 0, 0);
     if (!id) return 0;
-    owner = id_of(r ? &r->L : &s_mp_level, RL_T_PLAYER,
-                  *(const char* const*)(unit + U_OWNER));
-    memcpy(b, &id, 4);
-    v = ARG(E, 0x1C) & 0xFFFF;                        /* the type: `mov dx,[esp+0x1C]`, 0x486079 */
-    memcpy(b + 4, &v, 2);
-    b[6] = (unsigned char)(owner && owner != REC_ID_BAD ? owner - 1 : 0xFF);
-    b[7] = (unsigned char)(ARG(E, 0x30) & 3);         /* the create keeps bits 0-1 (0x4860F1)    */
-    v = ARG(E, 0x2C);
-    memcpy(b + 8, &v, 4);
-    memcpy(b + 12, (const unsigned char*)E + 0x20, 12);   /* the position, three dwords by value */
-    b[24] = (unsigned char)unit[U_WATER];
-    b[25] = b[26] = b[27] = 0;
+    create_image(r ? &r->L : &s_mp_level,E,unit,id,b);
     if (r) ev_put(r, RK_EV_CREATE, b, sizeof b);
     mp_roots_push(unit, RK_EV_CREATE, b, sizeof b);
     return 0;
@@ -4495,7 +4519,7 @@ static void mp_roots_log(const RecMpPacket* packet, unsigned applied_tick, const
         memcpy(&id,packet->body+at,4);
         bit=e.kind==RK_EV_START_NAMED ? 1 : e.kind==RK_EV_REPLY ? 2 :
             e.kind==RK_EV_SPRAY ? 4 : e.kind==RK_EV_CREATE ? 8 :
-            e.kind==RK_EV_DEATH ? 16 : 32;
+            e.kind==RK_EV_DEATH ? 16 : e.kind==RECMP_ROOT_CREATE_BEGIN ? 64 : 32;
         if (!(s_mp_roots_seen[row]&bit)) {
             s_mp_roots_seen[row]|=bit;
             tagpu_logf("recmp: %s owned roots ID %u source tick %u seq %u applied tick %u, "
@@ -5573,6 +5597,7 @@ typedef struct ObserveSite {
                                            footprint writers' undo on a puppet level             */
 } ObserveSite;
 static const ObserveSite OBSERVE_SITES[] = {
+    { 0x00486075u, 9, { 0x8B, 0x7C, 0x24, 0x2C, 0x66, 0x8B, 0x54, 0x24, 0x1C }, mp_create_begin, NULL },
     { 0x004861B3u, 5, { 0x8B, 0xC6, 0x5F, 0x5E, 0x5D }, ev_create, NULL },
     { 0x004866D0u, 9, { 0x83, 0xEC, 0x68, 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 }, ev_death,
       death_leave },

@@ -3,7 +3,7 @@
 
 #include "tagpu_recmp_players.h"
 
-/* One existing create, death, death-end, script, reply or spray image follows this prefix. The source's
+/* One constructor-begin, create, death, death-end, script, reply or spray image follows this prefix. The source's
    incarnation and capture phase survive an arrival on another peer's clock.
    A birth is a monotonic slot token: repeated creates within one tick can put
    it ahead of GameTime (tagpu_patches.c:hit_next_birth). */
@@ -19,6 +19,10 @@ _Static_assert(sizeof(RecMpRootsEntry)==12, "owned root prefix");
 #define RECMP_ROOTS_MAX (12u+REC_UNIT_IMAGE)
 #define RECMP_ROOT_REPLY_KINDS 24u
 #define RECMP_ROOT_LAYERS 10
+#define RECMP_ROOT_CREATE_BEGIN 0x100u
+/* Contribution-only kind: the same 28-byte constructor arguments as CREATE,
+   published after slot reservation and before initialization or child roots.
+   CREATE remains the successful return, not the beginning of that lifetime. */
 #define RECMP_ROOTS_COUNT ((RECMP_BODY_MAX-4u)/(sizeof(RecMpRootsEntry)+RECMP_ROOTS_MIN))
 
 typedef struct {

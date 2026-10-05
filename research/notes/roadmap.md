@@ -3895,8 +3895,19 @@ queue caches with source/application ticks, and a fresh ID on each engine start.
 Format 6 adds observed replica creation roots through B4's existing success
 observer, including constructor arguments, birth, water and carried build/HP
 state; readers retain format-5 support. The controlled file/seek fixture bounds
-and preserves that data. It does not resolve early owner replies' materialization
-clock or enable native engine playback; those remain the next application work.
+and preserves that data. Owner timing is selected for canonical unit lifetimes;
+the constructor reservation observer at `0x486075` now publishes distinct begin
+root `0x100` before child events and retains the success observation separately.
+The nine-byte whole-span check and fixed-array owner/birth bounds add no engine
+field write or retiming. Native world materialization and playback remain the
+next application work.
+The native constructor-boundary fixture verifies 71 exact begin/success pairs
+and eight intervening replies across four human/hosted-AI owners, one endpoint
+saving off. All 28 first-root batches match native source/recipient and saved
+bytes. Its complete tick-558 file has zero corrections; C/Python reader seek
+preserves 8,146 applications and CRC `8EA54D8E`. All 23 shared skirmish replay
+checks pass at internal speed 20. This establishes the constructor ordering
+needed for the selected owner lifetimes; engine application remains open.
 The current native format-6 coverage recording verifies 36 replica roots against
 the next B2 images and retains their exact bytes through C/Python world seek;
 all 445 observed-world transitions are explained. Earlier private SDK startup

@@ -17,7 +17,7 @@ import zlib
 
 import tarec
 import tareplay
-from recmp_file import History
+from recmp_file import History, RECMP_ROOT_CREATE_BEGIN
 from recmp_net_test import command
 
 HERE = Path(__file__).resolve().parent
@@ -166,6 +166,7 @@ def semantic_states(segment):
                                   3, 0x80000001, origin+variant, -0x80000000, 0x7FFFFFFF, 4),
                       struct.pack("<IIBBBB", unit, 2, 10, variant, variant+5, variant & 1) + death_image,
                       struct.pack("<I", unit)]
+            images.append(images[3])
             if (not roots or (roots["source_tick"], roots["sequence"], roots["applied_tick"]) !=
                     (101 if later else 100 if origin < 55 else 8,
                      (8 if origin == 11 else 7) if later else 5, 101 if later else 100) or
@@ -173,7 +174,8 @@ def semantic_states(segment):
                      for e in roots["events"]] !=
                     [(kind, unit, 17, i & 1, image) for i, (kind, image) in enumerate(zip(
                         (tarec.RK_EV_START_NAMED, tarec.RK_EV_REPLY, tarec.RK_EV_SPRAY,
-                         tarec.RK_EV_CREATE, tarec.RK_EV_DEATH, tarec.RK_EV_DEATH_END), images))]):
+                         tarec.RK_EV_CREATE, tarec.RK_EV_DEATH, tarec.RK_EV_DEATH_END,
+                         RECMP_ROOT_CREATE_BEGIN), images))]):
                 raise RuntimeError("mixed root bytes/order/phase/provenance changed across proof tail")
         if 66 in state.named or 66 in state.roots:
             raise RuntimeError("unknown named roots fabricated")
@@ -721,6 +723,21 @@ def run(output, read_file=None, skirmish_file=None, native_file=None,
                 ("roots_create_reserved2", 55, 10, 2, 169, "<B", 1, False),
                 ("roots_create_birth", 55, 10, 2, 138, "<I", 0x80000000, False),
                 ("roots_create_phase", 55, 10, 2, 134, "<B", 2, False),
+                ("roots_begin_short", 55, 10, 2, 540, "<H", 27, False),
+                ("roots_begin_long", 55, 10, 2, 540, "<H", 29, False),
+                ("roots_begin_type", 55, 10, 2, 554, "<H", 0, False),
+                ("roots_begin_owner_bound", 55, 10, 2, 556, "<B", 10, False),
+                ("roots_begin_owner_row", 55, 10, 2, 556, "<B", 2, False),
+                ("roots_begin_layer", 55, 10, 2, 557, "<B", 4, False),
+                ("roots_begin_water", 55, 10, 2, 574, "<B", 5, False),
+                ("roots_begin_reserved0", 55, 10, 2, 575, "<B", 1, False),
+                ("roots_begin_reserved1", 55, 10, 2, 576, "<B", 1, False),
+                ("roots_begin_reserved2", 55, 10, 2, 577, "<B", 1, False),
+                ("roots_begin_birth", 55, 10, 2, 546, "<I", 0x80000000, False),
+                ("roots_begin_phase", 55, 10, 2, 542, "<B", 2, False),
+                ("roots_begin_slot", 55, 10, 2, 550, "<I", 8, False),
+                ("roots_begin_unknown_kind", 55, 10, 2, 538, "<H", 0x101, False),
+                ("proof_roots_begin_owner", 55, 10, 3, 556, "<B", 2, False),
                 ("proof_roots_kind", 55, 10, 3, 4, "<H", 0, False),
                 ("proof_roots_reply_kind", 55, 10, 3, 60, "<I", 24, False),
                 ("proof_roots_spray_layer", 55, 10, 3, 126, "<h", 10, False),

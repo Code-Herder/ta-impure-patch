@@ -3033,29 +3033,42 @@ The copied-image player-row mapper validates source/destination origin sets and 
 
 `tagpu_recmp_units.c` now bounds/maps owner/resource-player IDs and attacker/owner rows in copied 328-byte unit/mover images. Kind 8 carries full/changed-word images and explicit absence with birth/source/application provenance. Its game-thread cache validates the entire batch and source/cache allocation agreement before publishing any slot. The isolated fixture passes 464,640 exact inverse mappings over 640 rosters, atomic refusal and guard-page controls, 201-entry batches and final-slot bounds at 65,531 slots. Actual native TA verifies all four human/hosted-AI first full unit-image source checksums/provenance and mapped human rows, plus ordinary-exit cuts/receipts. C/Python file queries retain unknown-versus-absent and proof-only delta isolation through synthetic seek. The adapter reads bounded frozen local blocks and the existing declared birth table, and writes only owned caches. Engine application, COB/model/order-owned objects, effects/projectiles, AI planner, complete declared Impure authority and native engine playback/seek remain open. The engine map documents create/resource/damage/death and lookup helpers read for this audit, including the uncalled helper and unbounded initializer.
 
-Owner creates, deaths/returns, script starts, replies and nano sprays share one copied kind-10
+Owner constructor begins/creates, deaths/returns, script starts, replies and nano sprays share one copied kind-10
 carrier and 4,096-call game-thread queue (`tagpu_recmp_roots.c`), independently
 of the recording switch. The existing thirteen start observers, extra-weapons
-helper, successful constructor exit, destructor entry/return, two reply observers, nano query/dispatch credit and two spray observers
+helper, constructor reservation and successful exit, destructor entry/return, two reply observers, nano query/dispatch credit and two spray observers
 supply unchanged root payloads. Mixed kinds and contiguous actor switches retain
 call order, source clock, incarnation and pre/post-B2 phase. Old calls drain before
 source seals and final calls before teardown seals. Whole-batch bounds validate
 frozen ownership, names/arguments, 24 reply kinds and ten signed spray layers
 before publication; an uncredited multiplayer spray refuses contributions.
-There is no new engine write or patch. The worker sees copied packets only.
+The constructor-begin observer byte-matches nine bytes at `0x486075`, after
+B4 fixes the selected slot/birth and before initialization or child roots. It
+copies the same 28-byte arguments into distinct root `0x100`; the ordinary
+creation event remains at the successful return. The span has no relative
+instruction, since the generic observer copies without relocation. No engine
+field is written. The worker sees copied packets only.
 The legacy kind-9 cache remains for reading earlier experimental contributions.
 Death entry copies the normalized victim/mover image while this same-thread
 destructor still owns it. Return publishes its saved source/birth identity without
 reading the freed mover or cleared slot. Frozen source-owner rows, killer IDs,
 player indices and the live image validate before publication. These brackets
 also run with recording off; frame/queue exhaustion makes capture incomplete.
-Codec/queue controls pass 68 atomic refusals, 1,300 guarded batch truncations,
-457 guarded per-kind short spans, maximum 167 replies/251 returns and 8,392
+Codec/queue controls pass 83 atomic refusals, 1,300 guarded batch truncations,
+485 guarded per-kind short spans, maximum 167 replies/251 returns and 8,392
 ordered mixed calls, including source owner-row authorization and every
-constructor/finished/position bit. The 4,018-byte synthetic C/Python file verifies six mixed
+constructor/finished/position bit. The synthetic C/Python file verifies six mixed
 applied batches and per-origin exploration through seek, proof-only isolation,
-five lifecycles, 23 header and 120 body refusals. Queries return copied authority
-separately from `RecWorld`.
+five lifecycles, 23 header and 135 body refusals. Queries return copied authority
+separately from `RecWorld`. The current four-actor native coverage fixture
+matches all 28 first root observations between source, recipient and saved file;
+71 exact constructor begin/success pairs bracket eight private reply calls.
+Its complete 2,845,687-byte recording ends at tick 558 with zero corrections.
+C/Python retain all 8,146 applications, 2,061,238 bytes and CRC `8EA54D8E`
+through reader world seek; both peers reach the new boundary/payload helpers.
+All 23 shared `secondary-orders` skirmish checks pass at internal speed 20,
+including three exact poisoned round trips. The native run observes speed 10;
+native engine play/seek and complete authority remain unfinished.
 `recr_mp_apply` visits every application envelope in recorded ordinal order
 through the current world tick, retaining both clocks and the full copied batch.
 Its separate cursor prevents copied-state queries from consuming playback data.
@@ -3089,7 +3102,7 @@ must enforce incarnation dependencies; it remains unfinished and native
 playback stays refused.
 The engine map records the unbounded native constructor inputs, its occupied-slot
 death, and why unfinished construction plus B4 carried state differs from a
-finished local constructor. No engine write or patch is added.
+finished local constructor. These reads install no network constructor patch.
 
 Current COVER native capture also verifies all sixteen first constructor/script/
 reply/spray batch observations with one peer's recording off. Seventy exact
@@ -3247,6 +3260,7 @@ Mapping toggle. This is driver verification, not a native replay gate.
 
 | Fields we write in the multiplayer checkpoint | Invariant |
 |---|---|
+| `0x486075..0x48607D` constructor reservation code | One whole-span-matched observer jump; its stub preserves registers/flags and runs the original two nonrelative argument loads. Reads only bounded fixed-array owner/water fields and the already assigned exact birth, publishing copied begin arguments before initialization. No engine data field is changed. |
 | `0x512AF8` startup packet-length entry | 25, written by the redirected initializer store; start sender, receive observer and initializer are installed together. |
 | Host start's message bytes | Fixed 25-byte stack value passed through the existing generic sender; its reliable queue copies before return. No remote engine resources or order fields are written. |
 | Native CreatePlayer initial data | The original 21-byte password/version prefix followed by a fixed 280-byte public-key record. Only public material is exported; key failure forwards the stock data and refuses faithful contributions. The size handler retains the original accepted-prefix tests. |

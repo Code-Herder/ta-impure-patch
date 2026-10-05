@@ -2,6 +2,8 @@
 import struct
 import zlib
 
+RECMP_ROOT_CREATE_BEGIN = 0x100
+
 
 class Roster:
     """Copied bounded rows; a source roster may order the same identities differently."""
@@ -458,7 +460,7 @@ class History:
                 unit = struct.unpack_from("<I", image)[0]
                 if not actor[2]+1 <= unit <= actor[3]+1:
                     raise ValueError("owner root unit block")
-                if root == RK_EV_CREATE:
+                if root in (RK_EV_CREATE, RECMP_ROOT_CREATE_BEGIN):
                     if (span != 28 or not struct.unpack_from("<H", image, 4)[0] or
                             image[6] >= 10 or image[7] > 3 or image[24] > 4 or any(image[25:])):
                         raise ValueError("owner create type/owner/layer/water/reserved")
