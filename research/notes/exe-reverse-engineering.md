@@ -16268,6 +16268,12 @@ at the nearer pointer, and both modes use definition 78; the difference is the s
 not a footprint conversion or engine refusal. The shared check retains the original radius
 and refuses that partial Quick target, leaving the native contextual action available.
 
+**MEASURED native interface selection:** Tab → `PREFS` → `SPEEDS`, set `LEFTCLICK` stage 0,
+then `PREV` → `OK` sets `main+0x37EFA` to 0 after launch. `tacli` forces this field's registry
+setting to 1 at every launch, so a prelaunch fixture edit cannot establish left-button coverage.
+The classic resource regression uses that native menu path and checks the live field before its
+clicks; the other mex fixtures require value 1.
+
 #### GUI-only writes found by the resource replay fixtures
 
 The graphics globals base is `0x51F320`. Its event-ring write/read indices `+0x18E/+0x192` are

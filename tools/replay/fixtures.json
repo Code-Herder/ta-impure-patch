@@ -593,8 +593,7 @@
       "tools/resource_regression.py",
       "{instance}",
       "mex",
-      "--gamedir",
-      "{gamedir}"
+      "--classic"
      ]
     ]
    ],
@@ -602,8 +601,7 @@
    "content": {
     "run": [
      "tools/resource_fixture.py",
-     "{gamedir}",
-     "--classic"
+     "{gamedir}"
     ],
     "files": [
      "resource-test.ufo",

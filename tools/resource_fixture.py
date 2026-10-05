@@ -53,7 +53,6 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("gamedir", type=Path)
     p.add_argument("--policy", choices=("on", "locked", "inherit"), default="on")
-    p.add_argument("--classic", action="store_true")
     p.add_argument("--geo-upgrade", action="store_true")
     p.add_argument("--no-zoom", action="store_true")
     p.add_argument("--refusals", action="store_true")
@@ -81,15 +80,6 @@ def main():
     override.unlink(missing_ok=True)
     if a.policy == "inherit":
         override.write_text("quick_build=0\ndefault_radius=1\nmax_radius=1\n")
-    # The registry is the isolated instance's stopped-game store. Both mouse
-    # interfaces are exercised by otherwise identical resource fixtures.
-    registry = a.gamedir / "tacli-state/registry.txt"
-    lines = registry.read_text().splitlines()
-    lines = [line for line in lines if len(line.split("\t")) < 2 or
-             line.split("\t")[1].lower() != "interface type"]
-    lines.append(f"HKCU\\Software\\Cavedog Entertainment\\Total Annihilation\t"
-                 f"Interface Type\tdword\t{0 if a.classic else 1}")
-    registry.write_text("\n".join(lines) + "\n")
     if a.geo_upgrade:
         # Derived test content stays inside the private game folder. Reuse
         # the installed unit's model/script, with a stronger output and short

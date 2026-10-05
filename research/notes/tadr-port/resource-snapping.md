@@ -336,6 +336,9 @@ game folders. Its optional stronger geo and capability-refusal fixtures derive p
 content; none of those archives is tracked. `tools/resource_regression.py` drives native input and
 requires actual order/preview results in the live lane before replay comparison. A fixture fails
 if its input merely leaves an old queue unchanged.
+The mex fixtures verify the live mouse-interface value. `resource-classic` selects left-button
+orders through native Interface options after launch; a prelaunch registry setting is insufficient
+because the launcher replaces it with right-button orders.
 
 | Fixture | Input behavior exercised | Replay checks |
 |---|---|---|

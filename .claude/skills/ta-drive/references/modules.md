@@ -791,6 +791,9 @@ before replay comparisons; use `tools/replay/tareplay.py run resource-mex resour
 a focused run and `tools/replay/tareplay.py landing` for the landing gate. The mex assertion
 compares manual and Quick placement at the same pointer and rejects a partial target at the
 configured snap boundary.
+The classic fixture selects `LEFTCLICK` stage 0 in native Interface options after launch and
+requires `main+0x37EFA == 0` before clicking. Setting the stopped instance's registry is
+insufficient: every launch restores right-button orders. Other mex fixtures verify value 1.
 
 Resource preflights run native frontend checks before the L lane records a match.
 `resource-frontend` tests raw radius preservation through Visuals Undo and profile cap reload.

@@ -156,7 +156,18 @@ class Check:
         self.until(lambda: count() > before, "repeat click was not consumed as already queued")
 
 
-def mex(c):
+def mex(c, classic=False):
+    if classic:
+        # Launch forces right-button orders. Select the native interface
+        # after launch so this fixture actually reaches the left-click gate.
+        c.keys("tab", "tab")
+        c.call("ui", "click", "PREFS")
+        c.call("ui", "click", "SPEEDS")
+        c.call("ui", "set", "LEFTCLICK", 0)
+        c.call("ui", "click", "PREV")
+        c.call("ui", "click", "OK")
+    c.until(lambda: c.values("*0x511DE8+0x37efa")[0] == int(not classic),
+            "mex regression did not reach its required mouse interface")
     c.eye(1000, 950)
     c.menu(RESOURCE=3, QUICKBUILD=0)
     c.select("ARMCK")
@@ -197,7 +208,7 @@ def mex(c):
     c.repeat(560, 375)
     assert c.orders("ARMCK") == orders, "repeat click changed the queued mex orders"
     assert c.mode() == 1, "Quick Build left contextual mode"
-    print("resource-mex: manual/Quick center parity, snap boundary, stationary Alt, independent toggle and queued no-op passed")
+    print(f"resource-mex: {'left' if classic else 'right'} interface, manual/Quick center parity, snap boundary, stationary Alt, independent toggle and queued no-op passed")
 
 
 def upgrade(c, shift=False):
@@ -462,6 +473,7 @@ def main():
     p.add_argument("instance")
     p.add_argument("case", choices=("mex", "upgrade", "queued-upgrade", "plain", "uniform", "mixed", "locked", "inherit", "geo-upgrade", "priority", "refusals", "viewer", "frontend", "catalogue"))
     p.add_argument("--gamedir", type=Path)
+    p.add_argument("--classic", action="store_true", help="exercise native left-button contextual orders")
     a = p.parse_args()
     try:
         if a.case == "catalogue":
@@ -471,7 +483,7 @@ def main():
             assert a.gamedir, "frontend regression requires --gamedir"
             frontend(a.instance, a.gamedir)
             return 0
-        {"mex": mex, "upgrade": upgrade,
+        {"mex": lambda c: mex(c, classic=a.classic), "upgrade": upgrade,
          "queued-upgrade": lambda c: upgrade(c, shift=True),
          "geo-upgrade": geo_upgrade,
          "priority": priority,
