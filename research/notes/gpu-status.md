@@ -20530,10 +20530,15 @@ Resource scratch and profile state are presentation inputs; simulation never rea
 Puppet seats are refused. Every effect is an ordinary recorded engine order and its normal
 simulation roots. Resource fixtures assert native live behavior and compare playback, three
 in-place restores and fresh seeks. The replay landing selector also follows their declared
-source dependencies; changing the harness selects the whole suite. No replay field exclusion or tolerance changes. The owner approved an expected-absent row
-for the recording player's native immediate-command UI click (return `0x41A0F6`), including
-Stop; its simulation orders remain checked. Paused viewer samples verify that the camera and GUI can move
-without any carried simulation record changing.
+source dependencies; changing the harness selects the whole suite. The owner approved three
+four-byte viewer metadata rows: the active GUI stack pointer (`main+0x531`), mouse-event clock
+(`main+0x561`) and current bitmap-font pointer (`0x51F524`). These process-local values stay with
+the viewer; the recorded global slots are unchanged. The owner also approved an expected-absent
+row for the recording player's native immediate-command UI click (return `0x41A0F6`), including
+Stop; its simulation orders remain checked. No tolerance changes. Paused viewer samples verify
+that camera movement, GUI mouse input and native selection leave all carried simulation state
+unchanged. See [recorder completeness](tadr-port/demo-recorder-completeness.html) for the field
+owners, disassembly and exact comparison protocol.
 
 **Open:** multiplayer policy parity warnings and mod download/activation. The fixture table names
 what was exercised; it does not establish every mod yardmap, obstruction, fog boundary or

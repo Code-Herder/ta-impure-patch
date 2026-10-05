@@ -199,16 +199,15 @@ Use the profile search radius and the same exploration policy as manual snapping
 construction requires a distinct deposit: uniform metal ground retains ordinary movement clicks,
 including uniform regions above `SurfaceMetal`. Richer discrete deposits on a metal map remain
 eligible. Owned-building upgrades remain available on metal maps, and geothermal vents are
-independent of the uniform-metal rule. A distinct-deposit classifier suitable for TA still needs
-source research and live verification; TADR's above-background footprint count alone cannot
-establish this property.
+independent of the uniform-metal rule. The closed-component classifier below establishes the
+distinct-deposit rule; TADR's above-background footprint count alone cannot establish it.
 
 Choose the highest extraction-rate mex available to the selected constructors that legally fits
 the target patch. A lower-rate option can be chosen when stronger ones do not fit. Apply the same
 rule to geothermal plants using energy output. Show the exact variant in the ghost. If no option
-fits, retain normal contextual behavior. Definition metrics, build-list enumeration and stable
-tie-breaking must be established against TA's data before implementation; do not substitute unit
-names or tech-level guesses for the agreed output comparison.
+fits, retain normal contextual behavior. The implementation reads definition output metrics and
+the bounded native build lists, with a stable definition-index tie-break. Unit names and tech
+levels do not determine output priority.
 
 ### Orders and mixed selections
 
@@ -309,9 +308,10 @@ Resource and profile scratch is classified as presentation: simulation never rea
 survives into the simulation, and the module refuses puppet seats. The orders it creates are
 normal recorded engine state. Playback, in-place restoration and fresh-process seeks reproduce
 those orders and their reclaim/build/assist effects through the existing recorder and engine
-roots. No recorder field exclusion or tolerance changes. The owner approved omitting the recording
-player's native immediate-command UI click (`0x41A0F1`, return `0x41A0F6`), including Stop,
-as the console click already is; the commands and their simulation effects remain checked.
+roots. The three approved viewer metadata fields are listed below; no recorded simulation slots
+or tolerance changes. The owner also approved omitting the recording player's native
+immediate-command UI click (`0x41A0F1`, return `0x41A0F6`), including Stop, as the console click
+already is; the commands and their simulation effects remain checked.
 
 ### Quick Build's metal-ground classifier
 
@@ -347,8 +347,13 @@ if its input merely leaves an old queue unchanged.
 L records real input and simulation; P plays it on puppet seats; R restores in place at three
 sampled ticks, compares before/after state and continues; Q seeks from a fresh process. The
 landing harness also checks event attribution, effect counts, address values, puppet writes and
-the complete main/.data images. Paused viewer samples exercise camera movement and GUI-consumed
-button messages while separate comparisons require simulation state to remain equal.
+the complete main/.data images. Paused viewer samples exercise camera movement, GUI-consumed
+mouse messages, all valid coordinate bits and a native selected-type change. Thirteen additional
+views and the final view each retain exact comparison of carried simulation state against the
+first paused view. Three owner-approved four-byte GUI metadata fields stay local to the viewer:
+the active screen pointer, mouse-event clock and bitmap-font pointer. No simulation comparison
+or tolerance is loosened; [recorder completeness](demo-recorder-completeness.md) records their
+owners and the native Stop-button sound exception.
 
 Fixtures name their resource/profile/UI source dependencies in `fixtures.json`; `tareplay landing`
 selects them when those sources change, in addition to its SIM_FEATURE rules. Changes to the

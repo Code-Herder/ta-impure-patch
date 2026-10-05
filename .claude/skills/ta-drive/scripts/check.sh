@@ -32,6 +32,11 @@ body | grep -oE '\b(tagpu_)?[a-z0-9_]+\.(on|off|ab|cfg|txt|step|trigger|gpus|che
     # `tagpu_gui.on` is quoted once as the WRONG spelling to give `arm`; skip that literal
     [ "$base" = "tagpu_gui" ] && continue
     n=$(grep -rl -F "tagpu_${base}.${ext}" "$ROOT/tagpu/ddraw/src" "$ROOT/tagpu/ddraw/inc" "$ROOT/tools/tacli" 2>/dev/null | wc -l)
+    # Play-default .off names are constructed from the table's .on entries.
+    if [ "$n" -eq 0 ] && [ "$ext" = off ] &&
+       grep -q -E "^[[:space:]]*\\{ \"tagpu_${base}\\.on\", " "$ROOT/tagpu/ddraw/src/tagpu_opt.c"; then
+        n=1
+    fi
     if [ "$n" -eq 0 ]; then echo "  NO READER: $lev"; echo fail >&3; fi
 done 3>"$SK/.check.tmp"
 [ -s "$SK/.check.tmp" ] && rc=1; rm -f "$SK/.check.tmp"
