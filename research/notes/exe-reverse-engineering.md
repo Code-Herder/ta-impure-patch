@@ -13791,10 +13791,32 @@ the observer keys the main offscreen on that tag so a re-created one retires the
 lands on the base the 1024×768 had (`05190050` both, first fit), so the observer sees a
 **same-base size change** and never a free — `surf_get` now drops the ring's recorded boxes on
 such a change, where before the next publish read a 1024-wide box off a 640-wide surface and
-called it an overflow. Inside `NewTAScreen`, cnc-ddraw's `dd_SetDisplayMode` stops its render
-thread and starts a new one on a new GL context (`dd.c`); the old thread's last presents come
-hundreds of milliseconds apart while the game thread is in this path, and the shell is already
-flipping ~5 000 times a second — the stall the publisher guards against since G15d.
+called it an overflow. `NewTAScreen` calls `DDrawDeviceCreateAndCaps 0x4B5510`, which releases
+the old DirectDraw objects through `0x4B4FF0` **before** making new ones. In the proxy,
+the final `dd_Release` stops and joins its render thread and zeros `g_ddraw`.
+The subsequent `dd_SetDisplayMode` starts a new render thread. A ready Vulkan lane now
+survives this joined replacement on the same actual window lifetime; the shell publisher's
+stall guard still spans the interval with no renderer. [fullscreen-handoff](fullscreen-handoff.html)
+records the original measured 619 ms restart and escaping resize, and the fix: a persistent
+window subclass retains resize ownership and observes actual destruction after Release.
+
+### DirectDraw recreation and the borderless handoff [DISASSEMBLED + MEASURED 2026-10-04]
+
+All addresses below are from the pristine executable. Direct call sites are from a full-image
+`objdump -d -M intel` scan; runtime return addresses are from temporary proxy boundary logs.
+The full protocol, captures, controls and unresolved compositor timing are in
+[fullscreen-handoff](fullscreen-handoff.html).
+
+| Address | Established behaviour and ownership |
+|---|---|
+| `0x4B4FF0` | **`DDrawReleaseObjects` [INFERRED name]**, stdcall(program*), `ret 4`. Tests `program+0x84` for nonzero, then releases and clears palette `+0x94`, attached backbuffer `+0x8C`, primary `+0x88`, clipper `+0x90`, and device `+0x84`, in that order. Does not destroy the game HWND at `+0x40`. Four direct callers: `0x4B5574`, `0x4B5C45`, `0x4B61BC`, `0x4CBB46`. |
+| `0x4B5061` / `0x4B5064` | The final device's vtable `+8` Release call / return address inside `0x4B4FF0`. Measured: proxy global ref reaches zero at game entry here, so the renderer join and `g_ddraw` reset happen before the next engine resize. |
+| `0x4B5510` | **`DDrawDeviceCreateAndCaps`**, corpus name, stdcall(fullscreen), `ret 4`. Calls `0x4B4FF0` at `0x4B5574`; then resizes the existing HWND before `DirectDrawCreate` at `0x4B55FB`. Direct callers: `0x4B5924`, `0x4B592C`, `0x4B5971`, `0x4B5C3B`, `0x4B5CF3`, `0x4B6250`. Owns recreation of `TAProgram+0x84/+0x88/+0x8C/+0x90/+0x94`; see [resolution](resolution.html) §1.2. |
+| `0x4B55D7` / `0x4B55DD` | `SetWindowPos` import call / return address; HWND `TAProgram+0x40`, size `+0xD4/+0xD8`, flags 6 (`SWP_NOMOVE | SWP_NOZORDER`). Measured after final Release: proxy ref=0, tracked HWND=NULL, actual HWND unchanged. Before the lifetime-property fix, the resize guard was skipped; the same top-level X client shrank 1280×1024 → 1024×768 → 1280×1024, with 13.37 ms between its two size events. |
+| `0x4B5940` | **`NewTAScreen`**, corpus name, stdcall(w,h), `ret 8`. Writes `TAProgram+0xD4/+0xD8`, reads bit 1 of `+0xF0`, calls `0x4B5510` at `0x4B5971`. Three direct callers: `0x491B0B` (leave game), `0x4980B7` (loading screen), `0x4983EA` (desired game mode). |
+| `0x4B5613`, `0x4B5639` / `0x4B563C` | The replacement device's SetCooperativeLevel (`0x53`) and SetDisplayMode / return address; mode takes `TAProgram+0xD4/+0xD8` and hard-coded bpp 8. Runtime: same HWND `00020058`, proxy borderless state `windowed=1, fullscreen=1`, device mode 1024×768, presentation target 1280×1024. These calls follow the escaping resize. |
+| `0x4B6700`, `0x4B6710` | Current **logical** mode width/height getters [INFERRED names], no arguments, plain `ret`. Read `TAProgram*` at `0x51FBD0`, then `+0xD4` / `+0xD8`; no Win32 screen-size query. The loading comparisons therefore read shell 640×480, not the actual 1280×1024 borderless client. Width's 14 direct callers: `0x41CCE9`, `0x46BCA5`, `0x49121B`, `0x491A8F`, `0x494A47`, `0x498044`, `0x498362`, `0x4A823E`, `0x4A826C`, `0x4A82A0`, `0x4A82B3`, `0x4A833E`, `0x4ABF06`, `0x4C648F`. Height's 17: `0x41CCF6`, `0x467DE4`, `0x46A284`, `0x46A8E0`, `0x46AD69`, `0x49122C`, `0x491A9B`, `0x498050`, `0x498375`, `0x4A8252`, `0x4A828C`, `0x4A82C7`, `0x4A82DA`, `0x4A834F`, `0x4A84F9`, `0x4ABF1A`, `0x4C649C`. Full-image direct call/jump scan found no direct jumps to either. |
+| `0x498342..0x4983EA` | The loading handler tests `main+0x38D75` bit 1; clear goes to the loading-frame path `0x4984DD`. Set compares current width/height through `0x4B6700` / `0x4B6710` against desired `main+0x37F1B/+0x37F1F` at `0x49836D` / `0x498380`. A mismatch frees `main+0x37E1B`, calls the surface restore helpers `0x4C61F0` / `0x4C62C0`, requests a resize at `0x4983D1`, then calls `NewTAScreen` at `0x4983EA`. Both resizes are now blocked through the actual window-lifetime property; the inner resize escaped the old ref/hwnd guard. Matching 640×480 skips recreation: measured no long end-of-load presentation gap. |
 
 **The loading screen.** Game entry, `0x498109..0x498156`: `0x4290F0(&path, "palettes",
 "guipal", …)`, `0x4BBE50(path)` loads the file, then **`0x4AC7D0(GUIInfo, main+0x143A7, data)`**

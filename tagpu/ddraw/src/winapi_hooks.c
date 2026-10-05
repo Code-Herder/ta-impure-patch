@@ -27,6 +27,7 @@
 #include "palette.h"
 #include "tagpu_shield.h"
 #include "tagpu_recorder.h"
+#include "tagpu_window.h"
 
 
 /* THE ENGINE IS TOLD THE TRUTH ABOUT WHERE THE POINTER IS, at every zoom.
@@ -388,6 +389,12 @@ int WINAPI fake_GetSystemMetrics(int nIndex)
 
 BOOL WINAPI fake_SetWindowPos(HWND hWnd, HWND hWndInsertAfter, int X, int Y, int cx, int cy, UINT uFlags)
 {
+    /* TA resizes again after releasing DirectDraw (0x4B55D7, DISASSEMBLED).
+       The window lifetime remains owned when g_ddraw has been cleared. */
+    if (tagpu_window_generation(hWnd)) {
+        UINT fixed = SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER;
+        if ((uFlags & fixed) != fixed) return TRUE;
+    }
     if (g_ddraw.ref && g_ddraw.hwnd)
     {
         if (g_ddraw.hwnd == hWnd)
@@ -413,6 +420,8 @@ BOOL WINAPI fake_SetWindowPos(HWND hWnd, HWND hWndInsertAfter, int X, int Y, int
 
 BOOL WINAPI fake_MoveWindow(HWND hWnd, int X, int Y, int nWidth, int nHeight, BOOL bRepaint)
 {
+    if (tagpu_window_generation(hWnd) && (!g_ddraw.ref || hWnd != g_ddraw.hwnd))
+        return TRUE;
     if (g_ddraw.ref && g_ddraw.hwnd)
     {
         if (g_ddraw.hwnd == hWnd)
@@ -2019,7 +2028,7 @@ BOOL WINAPI fake_DestroyWindow(HWND hWnd)
     if (g_ddraw.ref && hWnd && hWnd == g_ddraw.hwnd)
     {
         dd_RestoreDisplayMode();
-        /* The Vulkan lane owes nothing at this site (render_vk.c's header). */
+        /* The window subclass owns final presentation teardown at WM_DESTROY. */
     }
 
     BOOL result = real_DestroyWindow(hWnd);

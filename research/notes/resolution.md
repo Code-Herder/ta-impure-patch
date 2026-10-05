@@ -84,9 +84,16 @@ DDrawDeviceCreateAndCaps((TAProgram->flagsF0 /*+0xF0*/ >> 1) & 1);  // bit1 = fu
 ### 1.2 `DDrawDeviceCreateAndCaps 0x4B5510` [BINARY-VERIFIED, name CORPUS]
 
 stdcall(int fullscreen), ret 4. Serialised by the `'NIAM'` interlock at
-`0x52A4E8..F0`. Frees the old GDI objects (`TAProgram+0x44/48/4C`), then
+`0x52A4E8..F0`. First releases the old DirectDraw objects through `0x4B4FF0`
+(call at `0x4B5574`); its final release, `0x4B5061`, is the device at `TAProgram+0x84`.
+Then frees the old GDI objects (`TAProgram+0x44/48/4C`), then
 `SetWindowPos(hwnd=TAProgram+0x40, 0,0, curW, curH, SWP_NOZORDER|SWP_NOMOVE=6)`
-and branches:
+(call at `0x4B55D7`) and branches. That resize precedes the new DirectDraw object:
+our `dd_Release` has zeroed `g_ddraw`. The resize guard identifies the surviving
+window through `tagpu_window.c`'s lifetime property, including this interval with no
+DirectDraw object. **MEASURED 2026-10-04:** before that fix a borderless 1280×1024
+window shrank to 1024×768 and back; fixed runs retain its full size and ready Vulkan
+presentation. [fullscreen-handoff](fullscreen-handoff.html) contains the trace and controls.
 
 - **fullscreen (arg=1)**: sets `+0xF0 |= 2`; `DirectDrawCreate(0, &TAProgram+0x84, 0)`
   (import thunk `0x49F710`) → `SetCooperativeLevel(hwnd, 0x53)` (`call [vt+0x50]`

@@ -173,6 +173,20 @@ file — a game launched outside tacli, an instance created before this, or `--n
 the title is untouched, which is why `Instance.window()` keeps the bare title in its
 search list alongside the exact one the launch recorded in `window_title`.
 
+## Borderless shell-to-game handoff
+
+TA releases and recreates DirectDraw on a logical shell/game mode change. The actual game
+window survives. `tagpu_window.c` keeps the window lifetime and resize policy attached
+through that interval, even while the proxy resets `g_ddraw`. A ready Vulkan lane keeps its
+presented image and GPU resources while the old render thread is stopped and joined; the
+replacement thread takes ownership after the join. Actual window destruction tears it down.
+
+The [fullscreen handoff note](fullscreen-handoff.html) records the original same-window
+shrink, desktop flash and 0.5–0.6 s presentation restart, and Wine verification of the fix.
+Recorded fixed transitions expose no desktop pixels and create no replacement Vulkan child.
+Brief blank frames remain (0.117 s at end of loading in the Greenhaven run).
+Live compositor timing and Windows presentation behaviour remain unmeasured.
+
 ## Movies in the DLL's window
 
 TA refuses to play Smacker movies when it believes it is windowed (string: *"You must be in

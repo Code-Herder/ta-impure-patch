@@ -20,6 +20,7 @@
 #include "tagpu_cfg.h"
 #include "tagpu_log.h"
 #include "tagpu_settings.h"
+#include "tagpu_window.h"
 
 
 CNCDDRAW g_ddraw;
@@ -1451,6 +1452,9 @@ HRESULT dd_SetCooperativeLevel(HWND hwnd, DWORD dwFlags)
 
     if (!g_ddraw.wndproc)
     {
+        if (!tagpu_window_attach(g_ddraw.hwnd))
+            return DDERR_GENERIC;
+
         hook_init();
 
         g_ddraw.wndproc = (WNDPROC)real_SetWindowLongA(g_ddraw.hwnd, GWL_WNDPROC, (LONG)fake_WndProc);

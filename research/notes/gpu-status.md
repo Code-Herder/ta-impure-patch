@@ -2056,6 +2056,8 @@ and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integratio
 
 | Where | What |
 |---|---|
+| Win32 HWND property `Impure.WindowLifetime`; `tagpu_window.c` | Window owner attaches a positive process-unique ID and destruction subclass before proxy subclassing. Survives final DirectDraw Release; removed before engine WM_DESTROY. The ID counter saturates rather than wrapping. No engine field is written (§2.107) |
+| Vulkan `s_ownerGeneration`, `s_ownGone`, lane state | Bound and destroyed generation IDs published with Interlocked operations; a delayed old-window notification cannot veto its replacement. Ready GPU objects transfer between joined renderers; the window owner tears down only after joining the active renderer, or after final Release already joined it. An unfinished worker retains its own cleanup (§2.107) |
 | `0x511DE8` | `TAdynmemStruct**` — the root of everything below |
 | `main+0x14357` / `+0x1435B` | unit array begin/end, stride `0x118` |
 | `main+0x1435F` / `+0x14367` | HotUnits ids / count (culled to whatever the viewport rect says — the unzoomed one, or the widened one under `vpwide`) |
@@ -20463,3 +20465,33 @@ Return-to-now also restores the objective's saved `+0x88` switch before resuming
 steps. Conversion disarms it; takeover/fork arms it. The same level owns the
 objective across rewind. This preserves games whose console command disabled
 victory/defeat before the rewind.
+
+### 2.107 Presentation follows the window lifetime (`tagpu_window.c`, `render_vk.c`, `tagpu_vk.c`) — 2026-10-04
+
+The engine's logical mode recreation releases DirectDraw at `0x4B5061`, then asks to resize
+its surviving HWND at `0x4B55D7`, before the replacement device exists. The old resize policy
+lost its owner when `dd_Release` cleared `g_ddraw`; Vulkan also destroyed its device/surface at
+every renderer exit. Those produced the borderless desktop flash and restart gap. The engine
+map's *DirectDraw recreation and the borderless handoff* establishes the calls and fields;
+[fullscreen-handoff](fullscreen-handoff.html) records the baseline and fixed captures.
+
+| Seam | Mechanism and ownership |
+|---|---|
+| Engine SetWindowPos / MoveWindow IAT hooks | A property identifies the owned actual window even with no DirectDraw object; engine calls cannot shrink it in that interval. Real proxy mode calls still position it. No new byte patch |
+| dd_SetCooperativeLevel / final Release | Register the persistent comctl32 destruction subclass before installing the proxy procedure. Final Release restores its dispatcher, stops and joins the renderer, and resets DirectDraw as before |
+| Ready Vulkan renderer exit / replacement | Retain device, surface, swapchain, last image and pass objects only for the same live window lifetime. The existing join transfers sole CPU ownership; existing per-image fences order GPU reuse |
+| WM_DESTROY | Publish the departing generation, remove the lifetime ID, join an active renderer, then hard-stop only with no remaining renderer handle and a still-matching bound lifetime. Another window's destruction cannot claim it; HWND recycling gets a new ID |
+| Failed or incomplete lane; GPU choice or actual window change | Full cleanup remains; ST_STARTING abandonment does not wait for its worker. Real extent and present-mode changes retain their swapchain rebuild path |
+
+**MEASURED**, Wine on isolated Xvfb, 1280×1024 borderless, logical 1024×768, Classic++, Vsync:
+repeated Two Continents shell/game transitions and final Greenhaven entry expose no desktop
+pixels and have no handoff window/surface-child recreation. The initial device comes up once,
+and actual main-menu Exit tears it down. Fullscreen/windowed toggles rebuild the swapchain.
+The real Win32 subclass test passes restoration, scoped teardown, join ordering, thread
+ownership, replacement-object/no-renderer cleanup and 256 new lifetime IDs. A deterministic
+test of the production observer/predicate reproduces the old delayed-notification failure and
+passes with the generation marker. Normal and stock-limits builds pass.
+
+**Still open:** brief blank frames (0.117 s at end of loading in the Greenhaven
+capture), live compositor timing and Windows presentation verification. Cold start and failed
+or invalidated lanes still initialize a device. No engine/simulation state is written here.
