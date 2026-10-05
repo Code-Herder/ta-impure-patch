@@ -1,5 +1,5 @@
 {
- "about": "tareplay's fixtures (tools/replay/tareplay.py). Each is a scripted skirmish recorded live and then checked on puppets. `load` is a scenario under scenarios/; `steps` run at a GameTime of the live game: `apply` a scenario, `type` a chat line, `keys` native input tokens, `order` one unit by roster type and rank; `end` is the GameTime scenarios/replay-end.json ends the level at. `los`: \"file\" keeps the scenario's own line of sight, else the SkirmishLineOfSight value. `dll`: \"stock\" plays the stock-limits build. `content`: a command run before every launch of the fixture ({gamedir} the instance's game folder) and the files it writes there, which every other fixture's launch removes first. `unit_limit`: the game's unit limit, 500 unless given. `takeover`: the fixture is also taken over (tareplay.py's K and F): at T2, as `player` (a record, or \"controlled\", the recording's controlled player), with the `switches` set and the chat line `type` typed after the takeover, `order` (a type and rank of the player's units) moved 300 wu, K's dump `dump` ticks after T (1800 unless given), the takeover's line within `ms` when given, and the `checks` it must pass (TAKEOVER_CHECKS); a takeover with `victory` ends by its own chat line (`+iwin`: the console's Kill disarms the objective, so `+kill` never ends a level), any other by replay-end.json. `rewind`: adds the U live-rewind lane; `rewind_steps`: extra scripted steps applied to its live run; `rewind_paused` names the scenario applied while paused just before its saved-present dump. `broad` holds what only the broad tier runs (tareplay.py broad): `trips`, round trips beyond the three; `cost`, a game recorded live and reported for the recorder's cost and the file's size, with no check. `run` steps execute an assertion command ({instance} and {gamedir} substitutions) and fail the live lane on a nonzero exit. `sources` binds input/presentation code to replay fixtures in addition to the SIM_FEATURE gates.",
+ "about": "tareplay's fixtures (tools/replay/tareplay.py). Each is a scripted skirmish recorded live and then checked on puppets. `load` is a scenario under scenarios/; `steps` run at a GameTime of the live game: `apply` a scenario, `type` a chat line, `keys` native input tokens, `order` one unit by roster type and rank; `end` is the GameTime scenarios/replay-end.json ends the level at. `los`: \"file\" keeps the scenario's own line of sight, else the SkirmishLineOfSight value. `dll`: \"stock\" plays the stock-limits build. `content`: a command run before every launch of the fixture ({gamedir} the instance's game folder) and the files it writes there, which every other fixture's launch removes first. `unit_limit`: the game's unit limit, 500 unless given. `takeover`: the fixture is also taken over (tareplay.py's K and F): at T2, as `player` (a record, or \"controlled\", the recording's controlled player), with the `switches` set and the chat line `type` typed after the takeover, `order` (a type and rank of the player's units) moved 300 wu, K's dump `dump` ticks after T (1800 unless given), the takeover's line within `ms` when given, and the `checks` it must pass (TAKEOVER_CHECKS); a takeover with `victory` ends by its own chat line (`+iwin`: the console's Kill disarms the objective, so `+kill` never ends a level), any other by replay-end.json. `rewind`: adds the U live-rewind lane; `rewind_steps`: extra scripted steps applied to its live run; `rewind_paused` names the scenario applied while paused just before its saved-present dump. `broad` holds what only the broad tier runs (tareplay.py broad): `trips`, round trips beyond the three; `cost`, a game recorded live and reported for the recorder's cost and the file's size, with no check. `run` steps execute an assertion command ({instance} and {gamedir} substitutions) and fail the live lane on a nonzero exit. `sources` binds input/presentation code to replay fixtures in addition to the SIM_FEATURE gates. `preflight` runs a native frontend assertion before the live recording starts.",
  "fixtures": {
   "forest-fire": {
    "load": "s3a-forest-fire.json",
@@ -140,7 +140,8 @@
     "tools/resource_regression.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tools/resource_fixture.py"
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
    ],
    "steps": [
     [
@@ -186,7 +187,8 @@
     "tools/resource_regression.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tools/resource_fixture.py"
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
    ],
    "steps": [
     [
@@ -232,7 +234,8 @@
     "tools/resource_regression.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tools/resource_fixture.py"
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
    ],
    "steps": [
     [
@@ -279,7 +282,8 @@
     "tools/resource_regression.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tools/resource_fixture.py"
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
    ],
    "steps": [
     [
@@ -325,7 +329,8 @@
     "tools/resource_regression.py",
     "tools/resource_fixture.py",
     "tagpu/ddraw/src/dllmain.c",
-    "tagpu/ddraw/src/config.c"
+    "tagpu/ddraw/src/config.c",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
    ],
    "content": {
     "run": [
@@ -371,7 +376,8 @@
     "tools/resource_regression.py",
     "tools/resource_fixture.py",
     "tagpu/ddraw/src/dllmain.c",
-    "tagpu/ddraw/src/config.c"
+    "tagpu/ddraw/src/config.c",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
    ],
    "content": {
     "run": [
@@ -417,7 +423,8 @@
     "tools/resource_regression.py",
     "tools/resource_fixture.py",
     "tagpu/ddraw/src/dllmain.c",
-    "tagpu/ddraw/src/config.c"
+    "tagpu/ddraw/src/config.c",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
    ],
    "content": {
     "run": [
@@ -463,7 +470,8 @@
     "tools/resource_regression.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tools/resource_fixture.py"
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
    ],
    "steps": [
     [
@@ -513,7 +521,8 @@
     "tools/resource_regression.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tools/resource_fixture.py"
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
    ],
    "steps": [
     [
@@ -563,7 +572,8 @@
     "tools/resource_regression.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tools/resource_fixture.py"
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
    ],
    "steps": [
     [
@@ -612,7 +622,8 @@
     "tools/resource_regression.py",
     "tools/resource_fixture.py",
     "tagpu/ddraw/src/dllmain.c",
-    "tagpu/ddraw/src/config.c"
+    "tagpu/ddraw/src/config.c",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
    ],
    "content": {
     "run": [
@@ -660,7 +671,8 @@
     "tools/resource_regression.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tools/resource_fixture.py"
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
    ],
    "steps": [
     [
@@ -685,6 +697,160 @@
      "profiles/retail@76332e31.ini"
     ]
    }
+  },
+  "resource-nozoom": {
+   "load": "resource-snapping.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "mex"
+     ]
+    ]
+   ],
+   "end": 2400,
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}",
+     "--no-zoom"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini",
+     "tagpu_zoom.off"
+    ]
+   },
+   "dll": "stock"
+  },
+  "resource-refusals": {
+   "preflight": ["tools/resource_regression.py", "{instance}", "catalogue"],
+   "load": "resource-refusals.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "refusals"
+     ]
+    ]
+   ],
+   "end": 2400,
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}",
+     "--refusals"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini",
+     "resource-refusal.ufo"
+    ]
+   }
+  },
+  "resource-frontend": {
+   "load": "resource-snapping.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "mex"
+     ]
+    ]
+   ],
+   "end": 2400,
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini"
+    ]
+   },
+   "preflight": [
+    "tools/resource_regression.py",
+    "{instance}",
+    "frontend",
+    "--gamedir",
+    "{gamedir}"
+   ]
   }
  },
  "broad": {

@@ -652,6 +652,10 @@ immediate-command click (`0x41A0F1` → `0x47F1A0("immediateorders", 0)`, return
 including Stop. The recording player's click is absent on puppets, as the console click already
 is. Command orders, reclaim/build effects and carried simulation state remain checked.
 
+Resource fixtures may name a `preflight` command before the live recording: native frontend
+Undo assertions or an engine catalogue refresh for changed private test content. Its failure
+fails the fixture; the match is then recorded and checked through the usual L/P/R/Q lanes.
+
 ## Open items
 
 For the skirmish slice:

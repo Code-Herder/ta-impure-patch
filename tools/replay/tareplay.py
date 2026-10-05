@@ -643,6 +643,8 @@ def live(w, fx, Ts, out):
     """L: the fixture recorded, dumps l<T1> and l<Tlast>; returns the recording's path."""
     fix = fx["fix"]
     w.place(fix, fx["dll"])
+    if fix.get("preflight"):
+        step(w, "run", fix["preflight"])
     los = [] if fix.get("los") == "file" else ["--los", str(fix.get("los", 0))]
     log = Log(w)
     rc, o = tacli("scenario", "load", w.name, SCENARIOS / fix["load"], "--defaults", *los,

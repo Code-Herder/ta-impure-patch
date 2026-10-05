@@ -2,7 +2,7 @@
 """Generate small original terrain fixtures for resource input/replay tests.
 
 Generated maps and feature definitions reference the installed vent animation.
-The optional geo upgrade derives a private test unit from installed content;
+Optional upgrade/refusal fixtures derive private test units from installed content;
 all generated archives stay inside isolated game folders.
 """
 import argparse
@@ -55,7 +55,11 @@ def main():
     p.add_argument("--policy", choices=("on", "locked", "inherit"), default="on")
     p.add_argument("--classic", action="store_true")
     p.add_argument("--geo-upgrade", action="store_true")
+    p.add_argument("--no-zoom", action="store_true")
+    p.add_argument("--refusals", action="store_true")
     a = p.parse_args()
+    if a.no_zoom:
+        (a.gamedir / "tagpu_zoom.off").touch()
     tree = {}
     for mode in ("plain", "uniform", "mixed"):
         name = f"RS {mode}"
@@ -101,6 +105,26 @@ def main():
         hpipack.insert(extra, "scripts/rsupgeo.cob", archive.read("scripts/corgeo.cob"))
         hpipack.insert(extra, "download/rsupgeo.tdf", b"[MENUENTRY1]{unitmenu=CORCK;unitname=RSUPGEO;MENU=6;BUTTON=0;}")
         (a.gamedir / "resource-geo.ufo").write_bytes(hpipack.build(extra, method=2))
+    if a.refusals:
+        archives = [hpipack.Archive(a.gamedir / name)
+                    for name in ("totala1.hpi", "ccdata.ccx", "rev31.gp3")]
+        content = {name: archive for archive in archives for name in archive.files}
+        extra = {}
+        for old, new, capability in (("armack", "rsnrack", "canreclamate"),
+                                      ("armck", "rsngck", "canguard")):
+            fbi = content[f"units/{old}.fbi"].read(f"units/{old}.fbi").decode("latin-1")
+            for key, value in (("UnitName", new.upper()), (capability, 0)):
+                fbi, n = re.subn(rf"\b{key}\s*=[^;]*;", f"{key}={value};", fbi,
+                                  count=1, flags=re.I)
+                assert n == 1, f"refusal fixture lacks {key}"
+            hpipack.insert(extra, f"units/{new}.fbi", fbi.encode("latin-1"))
+            hpipack.insert(extra, f"scripts/{new}.cob",
+                           content[f"scripts/{old}.cob"].read(f"scripts/{old}.cob"))
+            for name, archive in content.items():
+                if re.fullmatch(rf"guis/{old}\d+\.gui", name):
+                    gui = archive.read(name).decode("latin-1").replace(old.upper(), new.upper())
+                    hpipack.insert(extra, name.replace(old, new), gui.encode("latin-1"))
+        (a.gamedir / "resource-refusal.ufo").write_bytes(hpipack.build(extra, method=2))
 
 
 if __name__ == "__main__":

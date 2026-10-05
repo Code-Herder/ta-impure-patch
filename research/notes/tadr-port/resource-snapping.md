@@ -294,6 +294,10 @@ unit ID. No preview mutates the grid or live definitions. Contested old footprin
 because their destructor can restamp another unit and cannot establish that projection. Details
 and call sites are in the engine map's *Resource placement and contextual order contracts*.
 
+The capture wrapper is independent of zoom activation and uses pristine conversion when zoom is
+disabled. Resource hooks require that producer to be installed. Visuals Undo restores raw
+per-mod preferences, so an effective profile cap never becomes the saved radius through Undo.
+
 All engine reads share the input thread's level lifetime. Unit indices, the controlled player's
 inclusive unit partition, definition indices, map products, exploration bits and descriptor
 indices are bounded before addressing memory. Yard reads use the loader's allocation contract.
@@ -322,7 +326,7 @@ need manual placement. Owned upgrades and geo sites do not need this component c
 ### Automated regressions
 
 `tools/resource_fixture.py` generates original small terrain and policies inside isolated private
-game folders. Its optional stronger geo fixture derives a private test unit from installed game
+game folders. Its optional stronger geo and capability-refusal fixtures derive private test units from installed game
 content; none of those archives is tracked. `tools/resource_regression.py` drives native input and
 requires actual order/preview results in the live lane before replay comparison. A fixture fails
 if its input merely leaves an old queue unchanged.
@@ -335,6 +339,9 @@ if its input merely leaves an old queue unchanged.
 | `resource-geo-upgrade` | Stronger private geo variant on metal ground, queued reclaim/build, repeat no-op and helper Guard | L/P/R/Q |
 | `resource-locked`, `resource-inherit` | General locks, exact-version inheritance/clamping, effective controls and policy frozen despite edits during the match | L/P/R/Q |
 | `resource-priority` | Explicit Move, Alt, equal own mex and personal Quick toggle off | L/P/R/Q |
+| `resource-nozoom` (stock limits) | Manual/Alt and Quick Build when zoom and widening are disabled | L/P/R/Q |
+| `resource-refusals` | Reclaim-ineligible constructor, Guard-ineligible helper retaining its queue, eligible primary and helper fallback | Native catalogue preflight + L/P/R/Q |
+| `resource-frontend` | Untouched/touched Visuals Undo preserves a raw radius above the current cap; raising the cap recovers it | Frontend preflight + L/P/R/Q mex |
 
 L records real input and simulation; P plays it on puppet seats; R restores in place at three
 sampled ticks, compares before/after state and continues; Q seeks from a fresh process. The
@@ -350,7 +357,8 @@ assumption from the existence of these fixture definitions.
 ### Verification limits
 
 The synthetic fixtures cover the behavior listed above; live inspection additionally verifies
-the resource settings panel and normal Comet Catcher terrain/features. The generated `RS` maps
+the resource settings panel, queued ghost indicator, frontend hot reload/error recovery and
+normal Comet Catcher terrain/features. The generated `RS` maps
 are intentionally flat green. The compatibility suite checks the supported packages' startup,
 battles and networking; it does not exercise every mod's resource footprint and build menu.
 

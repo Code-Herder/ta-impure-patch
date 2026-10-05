@@ -91,7 +91,8 @@
 
 /* Install the call-site redirects and the wndproc lParam patch. DllMain only,
    byte-matched; the widening half is all-or-nothing and needs
-   `tagpu_vpwide.on`, while the `0x498DA0` redirect goes in for either arm file.
+   `tagpu_vpwide.on`. The `0x498DA0` redirect always captures resource input;
+   it performs pristine conversion when zoom repair is disabled.
    (The lParam patch: TA unpacks the mouse position with `AND 0xffff` /
    `SHR 0x10`, which is zero-extending, so a client x of -20 arrives as 65516
    and the event is lost — half the ring. The patch makes it `MOVSX`/`SAR`,

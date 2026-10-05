@@ -783,3 +783,10 @@ an isolated stopped game folder. The `RS` maps are deliberately flat green. Stoc
 live assertions through native input. The fixtures in `tools/replay/fixtures.json` run them
 before replay comparisons; use `tools/replay/tareplay.py run resource-mex resource-upgrade` for
 a focused run and `tools/replay/tareplay.py landing` for the landing gate.
+
+Resource preflights run native frontend checks before the L lane records a match.
+`resource-frontend` tests raw radius preservation through Visuals Undo and profile cap reload.
+`resource-refusals` refreshes `tacli units` before scenario validation so its cached catalogue
+contains the private constructors; capability refusals must not issue action zero.
+`resource-nozoom` uses `tagpu_zoom.off` and exercises stock-limits manual/Quick input with
+pristine conversion. The fixture cleanup removes that lever before other launches.

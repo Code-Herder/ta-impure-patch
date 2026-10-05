@@ -16178,7 +16178,7 @@ are an instruction-level `call rel32` scan of `.text`, not a scan of address-sha
 | `0x47C780` | Build-site altitude result, `ret 0`, only caller `0x4198F5`; low byte is the site's altitude. Reads the scratch produced by the preceding site test. Resource preview/click queries save and restore `0x51E684`/`0x51E688`; the native manual cursor retains its normal scratch ownership |
 | `0x43AFC0` | Ordinary order dispatch, `stdcall(action, shift, unit, target, pos, param1, param2)`, `ret 28`. Called at `0x4197A9` (manual build) and `0x48D1F4` (contextual command). A build's param1 is the definition ID; an upgrade uses the resolved reclaim action then an appended build |
 | `0x438760` | Action-name lookup, thiscall `(output_byte*, name)`; 109 direct callers, including manual dispatch `0x4197A4`. Resource dispatch asks for `MOBILEBUILD` (`0x502654`) or `VTOL_MOBILEBUILD` (`0x502640`) according to the builder's fly bit |
-| `0x43F0E0` | Action resolver, `stdcall(index*, mode, unit, target, pos)`; returns an action-byte pointer or NULL. Guard is mode 7, reclaim mode 12. There are 28 direct callers; context dispatch uses `0x48D0A0`, script orders `0x4804A3`, and constructor/assist paths `0x487D5B`..`0x487F8C`. Resource input asks the resolver instead of assuming every selected builder can reclaim or Guard |
+| `0x43F0E0` | Action resolver, `stdcall(index*, mode, unit, target, pos)`; returns the caller's output pointer; refusal writes action byte zero (`0x4401E3`), which native dispatch rejects at `0x48D0AF`. Guard is mode 7, reclaim mode 12. There are 28 direct callers; context dispatch uses `0x48D0A0`, script orders `0x4804A3`, and constructor/assist paths `0x487D5B`..`0x487F8C`. Resource input asks the resolver instead of assuming every selected builder can reclaim or Guard |
 | `0x48CD80`, `0x48D220` | Hovered-unit query and context resolution; callers respectively `0x491D18`/`0x499278` and `0x491D36`/`0x499297`. Hovered unit ID is stored at `main+0x2CBA`; feature ID is `+0x2CBC` |
 | `0x481930` | Explored-map setter, six callers: `0x4818E6`, `0x48269C`, `0x48279B`, `0x482901`, `0x482A94`, `0x482C08`. Uses the player's map bit, not its seat number; allocation `0x483CF6`..`0x483D25` is W×H/4 u16 entries for even W/H |
 | `0x422040` | Applies indestructible metal-spot feature values to grid byte `+7`; only caller `0x483D7D`. The cell's feature ID must be below `0xFFFB`, its definition's metal float `+0xF0` nonzero and flags `+0xFF & 2` set. Uses definition footprint `+0x94/+0x96`, bounds helper `0x481550`, and float conversion `0x4E43A0`. This is how the private synthetic fixture supplies metal values |
@@ -16288,3 +16288,21 @@ OnCommand dispatcher is one of Impure's own menu handlers. `GUI_Load 0x4AA8F0` a
 The signed count at panel `+0xB6` must therefore be 1..199 before a refresh walks records
 1..count. The profile label's text is `char[128]` at gadget `+0xB6`, ending before its status
 word at `+0x137`. This is the allocation bound, not a readable-page probe.
+
+Resource raw coordinates are captured after the `0x499221` conversion independently of zoom.
+With zoom disabled, the installed wrapper calls pristine `0x498DA0` directly before capture;
+no zoom conversion or viewport rect write runs. Resource hooks require that producer
+installation to be live, in addition to the complete CANBUILD allocation patch.
+
+The resolver's mode-7 branch at `0x43F4C7` requires definition `+0x245` bit `0x20`
+(CanGuard) and a nonzero relationship at `0x43F4D4`. Mode 12 starts at `0x43F4F7` and
+requires `+0x245` bit `0x400` (CanReclamate) at `0x43F4FD`. Refusal reaches `0x4401DC`,
+loads the caller's output pointer into EAX, writes byte zero at `0x4401E3` and returns
+`ret 0x14` at `0x4401E7`. Native dispatch at `0x48D0A5`..`0x48D0B1` tests that byte
+and skips zero. A nonnull pointer alone is not eligibility. The resource wrapper returns
+`-1` for byte zero before any reclaim/build/Guard plan is accepted.
+
+Visuals Undo snapshots the two raw per-mod resource preferences, not their capped plates.
+Restoration uses the settings store's global value bounds rather than the active profile
+cap; menu refresh derives the effective values again. Raising a cap can therefore recover
+a saved higher radius even after Undo.

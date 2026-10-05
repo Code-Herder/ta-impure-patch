@@ -1421,10 +1421,11 @@ static void commit_row(int row)
     commit_one(row);
 }
 
-static void commit_all_rows(void)
+static void commit_all_rows(int resource_rows)
 {
     int i;
-    for (i = 0; i < R_COUNT; i++) if (i != R_STYLE) commit_one(i);
+    for (i = 0; i < R_COUNT; i++)
+        if (i != R_STYLE && (resource_rows || (i != R_RESOURCE && i != R_QUICK))) commit_one(i);
     if (!row_held(R_STYLE)) tagpu_settings_set(TS_STYLE, style_value());
 }
 
@@ -2591,6 +2592,7 @@ static void commit_display(int d)
 static int s_visKeep;
 static int s_stageOpen[R_COUNT];
 static int s_vstageOpen[VD_COUNT];
+static int s_resourceModOpen, s_resourceOpen[2];
 
 /* The actuated gadget's name, or NULL. */
 static const char* vis_actuated(void* gi)
@@ -2625,7 +2627,12 @@ static void vis_undo(void)
     int i;
     memcpy(s_stage,  s_stageOpen,  sizeof s_stage);
     memcpy(s_vstage, s_vstageOpen, sizeof s_vstage);
-    commit_all_rows();
+    /* A profile cap changes the plate, not the saved preference. Undo restores
+       raw values through the store's global bounds, including a higher radius. */
+    commit_all_rows(0);
+    if (tagpu_profiles_mod() == s_resourceModOpen)
+        for (i = 0; i < 2; i++)
+            tagpu_settings_set(TS_RESOURCE_BASE + s_resourceModOpen * 2 + i, s_resourceOpen[i]);
     for (i = 0; i < VD_COUNT; i++) {
         if (!s_vtouched[i] || vrow_held(i)) continue;
         apply_display(i == VD_SCALE ? VD_UNDO_SCALE : i);
@@ -2669,7 +2676,7 @@ static void vis_restore(void)
     s_stage[R_RESOURCE] = tagpu_profiles_policy()->radius;
     s_stage[R_QUICK] = tagpu_profiles_policy()->quick_default;
     for (i = 0; i < R_COUNT; i++) if (row_held(i)) s_stage[i] = keep[i];
-    commit_all_rows();
+    commit_all_rows(1);
     /* UI scale back to OFF, the store's default: HUD scale is off the play
        defaults (tagpu_opt.c), so "Restore defaults" must not be what arms it.
        No stage of the row means off, so the pass is turned off here directly,
@@ -3172,6 +3179,11 @@ static void* __cdecl vis_build_after(unsigned int* regs)
             read_display_state();
             memcpy(s_stageOpen,  s_stage,  sizeof s_stageOpen);
             memcpy(s_vstageOpen, s_vstage, sizeof s_vstageOpen);
+            s_resourceModOpen = tagpu_profiles_mod();
+            for (int i = 0; i < 2; i++) {
+                s_resourceOpen[i] = -1;
+                tagpu_settings_get(TS_RESOURCE_BASE + s_resourceModOpen * 2 + i, &s_resourceOpen[i]);
+            }
             InterlockedExchange(&s_scaleOpen, tagpu_hud_stored_pct());
             memset(s_vtouched, 0, sizeof s_vtouched);
             if (!tagpu_settings_get(TS_MONITOR, &s_monOpen)) s_monOpen = -1;

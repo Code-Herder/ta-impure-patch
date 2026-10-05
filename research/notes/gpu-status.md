@@ -20510,11 +20510,11 @@ contracts* gives the allocation/lifetime proof and disassembly.
 
 | Seam | Mechanism |
 |---|---|
-| `0x498DA0`, existing redirected call `0x499221` | Viewport wrapper repairs raw world coordinates, then captures them for resource input; no additional byte patch at this seam |
+| `0x498DA0`, redirected call `0x499221` | Always-installed wrapper captures resource coordinates after zoom repair, or after pristine conversion with zoom disabled. Resource arming requires this producer |
 | `0x4197D0` | Nine-byte entry observer chooses manual placement, original code computes corners/flags and tests the site |
 | `0x498F70`, `0x499100` | Six-/seven-byte gates for left/right handlers, each `ret 4`. Only the configured contextual button is consumed; paired button bookkeeping outside these handlers remains native |
 | `0x47D2E0`, `0x47C780` | Engine site/altitude queries on the input thread. Quick queries preserve scratch words; an upgrade uses a private yard projection of an uncontested old footprint's clear |
-| `0x43F0E0`, `0x438760`, `0x43AFC0` | Native eligibility, action lookup and dispatch. Upgrade is reclaim→appended build; non-building constructor helpers Guard primaries, combat units untouched |
+| `0x43F0E0`, `0x438760`, `0x43AFC0` | Native eligibility (zero action byte refuses), action lookup and dispatch. Upgrade is reclaim→appended build; non-building constructor helpers Guard primaries, combat units untouched |
 | `tagpu_packet_pub.c` → native ghost and marker | Chosen type/green rectangle and queued flag copied into the packet. Engine stays in contextual mode. No new renderer-owned engine access or GL object |
 | Shared replay-menu identity → profile publication | Config/archive names and Twilight's label select a general profile plus an optional exact-version override. Menu reload validates complete candidates; in-game options cannot unfreeze policy |
 
@@ -20540,3 +20540,7 @@ what was exercised; it does not establish every mod yardmap, obstruction, fog bo
 edge/zoom combination. The 129×129 closed-component classifier conservatively refuses large or
 partly unexplored deposits, and contested upgrades are refused. Profile identifiers describe
 what the engine reports, which may be shorter than an installed package version.
+
+Resource regression preflights also check Visuals Undo against raw per-mod preferences and
+refresh the engine catalogue for privately derived capability-refusal constructors. The
+no-zoom fixture exercises pristine conversion with both zoom and widening disabled.

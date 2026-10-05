@@ -148,6 +148,7 @@ static int clampi(int v, int lo, int hi)
 }
 
 static int  s_installed;        /* the mouse->world redirect went in         */
+static int  s_repairArmed;      /* zoom conversion is enabled for the wrapper */
 static int  s_widenArmed;       /* ...and tagpu_vpwide.on, so the rect widens */
 /* GAME THREAD ONLY, all of it: the verification, the widening
    store, the restore and every reader of the rect that is not the engine's
@@ -471,7 +472,8 @@ void tagpu_vpwide_true_rect(const char* ta, int* L, int* T, int* W, int* H)
 
 static void __stdcall vpw_mouse_world(int* pos)
 {
-    vpw_mouse_world_impl(pos);
+    if (s_repairArmed) vpw_mouse_world_impl(pos);
+    else ((PFN_MOUSEWORLD)VA_MOUSEWORLD)(pos);
     tagpu_resource_mouse();
 }
 
@@ -681,15 +683,11 @@ void tagpu_vpwide_init(void)
 {
     int ok;
 
-    /* TWO ARM FILES, BECAUSE THE STUB HAS TWO JOBS (see "the mouse point").
-       Widening the rect is what `tagpu_vpwide.on` buys. The mouse->world repair
-       is not optional once `fake_GetCursorPos` answers the true pointer — the
-       engine would otherwise name the world under the SCREEN position — and the
-       zoom transform goes live from the lever alone, which `tagpu_zoom.on` does
-       not gate. So `zoom.on` arms the repair by itself, and nothing else:
-       one call-site redirect, no rect ever written. */
+    /* Resource input needs the post-conversion point even with zoom disabled.
+       The wrapper always installs; without zoom it calls the pristine converter.
+       Zoom enables repair, and vpwide enables the separate rect-widening half. */
     s_widenArmed = tagpu_opt_on("tagpu_vpwide.on");
-    if (!s_widenArmed && !tagpu_opt_on("tagpu_zoom.on")) return;
+    s_repairArmed = s_widenArmed || tagpu_opt_on("tagpu_zoom.on");
 
     if (!site_is(SITE_MOUSEWORLD, VA_MOUSEWORLD)) {
         flog("vpwide: NOT armed — 0x499221 is not a call to 0x498DA0");
@@ -727,6 +725,8 @@ void tagpu_vpwide_init(void)
     else if (s_widenArmed) flog("vpwide: ARMED (mouse->world 0x498DA0, surface "
                                 "clip 0x4C6B10 x3, wndproc lParam sign-extend "
                                 "x3); the rect only widens while zoom < 1");
-    else                 flog("vpwide: mouse->world repair only (0x498DA0) — "
-                              "the viewport rect is never widened");
+    else if (s_repairArmed) flog("vpwide: mouse->world repair only (0x498DA0) — "
+                                "the viewport rect is never widened");
+    else                 flog("vpwide: mouse->world capture only (0x498DA0) — "
+                              "pristine conversion, no zoom repair or rect writes");
 }

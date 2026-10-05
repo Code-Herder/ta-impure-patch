@@ -7,6 +7,7 @@ are measurements through tacli's game-thread peek; all actions use its input.
 """
 import argparse
 import json
+import re
 import struct
 import subprocess
 import sys
@@ -109,7 +110,7 @@ class Check:
             self.keys(*(["down:shift"] if i else []), f"pclick:{x},{z}",
                       *(["up:shift"] if i else []))
         self.until(lambda: all(self.values(f"0x{self.address(k) + 0x110:x}")[0] & 0x10
-                               for k in kinds), "selection did not reach every fixture unit")
+                               for k in kinds), f"selection did not reach fixture units {kinds}")
         self.eye(*eye)
 
     def mode(self):
@@ -334,17 +335,112 @@ def priority(c):
     print("resource-priority: explicit Move, Alt, equal owned mex and player toggle off passed")
 
 
+def refusals(c):
+    c.eye(1250, 1200)
+    c.menu(RESOURCE=3, QUICKBUILD=1)
+    types = {t["name"].upper(): t["id"] for t in c.call("units", "--json")["units"]}
+    defs = c.values("*0x511DE8+0x1439b")[0]
+    assert not c.values(f"0x{defs + types['RSNRACK'] * 0x249 + 0x245:x}")[0] & 0x400
+    assert not c.values(f"0x{defs + types['RSNGCK'] * 0x249 + 0x245:x}")[0] & 0x20
+    c.select("RSNRACK")
+    x, z = c.screen("ARMMEX")
+    c.resource_click(x, z)
+    orders = c.until(lambda: c.orders("RSNRACK") if any(o["action"] != 41 for o in c.orders("RSNRACK")) else None,
+                     "reclaim-ineligible builder received no ordinary contextual order")
+    assert not c.placed(orders) and all(o["action"] for o in orders), "refused reclaim produced a build or action zero"
+    c.stop("RSNRACK")
+    c.select("ARMACK", "RSNRACK", "RSNGCK", "CORCK")
+    c.call("order", "move", "pos", "4500", "2500", "--unit", c.units["RSNGCK"], "--expect", "RSNGCK")
+    before = c.orders("RSNGCK")
+    c.resource_click(x, z)
+    c.until(lambda: any(o["type"] == 88 for o in c.orders("ARMACK")), "eligible builder did not upgrade")
+    assert not c.placed(c.orders("RSNRACK")), "reclaim-ineligible builder became a primary"
+    c.until(lambda: any(o["target"] == c.address("ARMACK") for o in c.orders("CORCK")),
+            "eligible constructor did not receive its helper Guard")
+    assert c.orders("RSNGCK") == before, "Guard refusal changed the helper's queue"
+    print("resource-refusals: reclaim and Guard refusal, eligible upgrade and helper fallback passed")
+
+
+def frontend(name, gamedir):
+    """Pre-match native Visuals Undo must preserve the raw preference under a cap."""
+    c = Check.__new__(Check)
+    c.name = name
+    cfg, profile = gamedir / "impure.cfg", gamedir / "profiles/retail.ini"
+    old_cfg = cfg.read_bytes() if cfg.exists() else None
+    old_profile = profile.read_bytes()
+    def controls():
+        return {g["name"]: g for g in c.call("ui", "--json")["gadgets"]}
+    def stored():
+        text = cfg.read_text()
+        m = re.search(r"(?m)^resource_radius\.retail=(\w+)", text)
+        return m.group(1) if m else None
+    try:
+        c.call("stop")
+        text = (old_cfg or b"").decode()
+        text = re.sub(r"(?m)^resource_radius\.retail=[^\n]*\n?", "", text)
+        cfg.write_text(text + "\nresource_radius.retail=8\n")
+        c.call("launch", "--defaults", "--keep-dll")
+        c.until(lambda: c.call("ui", "--json")["gui"] == "MAINMENU.GUI", "frontend did not reach menu")
+        for button in ("SINGLE", "Options", "VISUALS"):
+            c.call("ui", "click", button)
+        c.until(lambda: controls()["RESOURCE"]["stage"] == 3, "profile cap did not apply")
+        assert stored() == "8", "opening Visuals changed the raw preference"
+        c.call("ui", "click", "UNDO")
+        c.until(lambda: controls()["RESOURCE"]["stage"] == 3, "untouched Undo lost effective cap")
+        assert stored() == "8", "untouched Undo overwrote the raw preference"
+        profile.write_text("manual_snapping=1\nquick_build=1\ndefault_radius=3\nmax_radius=8\nquick_build_default=1\n")
+        c.until(lambda: controls()["RESOURCE"]["stage"] == 8, "untouched Undo destroyed the preference above the cap")
+        profile.write_bytes(old_profile)
+        c.until(lambda: controls()["RESOURCE"]["stage"] == 3, "original cap did not reload")
+        c.call("ui", "click", "RESOURCE")
+        c.until(lambda: stored() == "0", "resource click did not commit")
+        c.call("ui", "click", "UNDO")
+        c.until(lambda: stored() == "8", "Undo did not restore the raw preference")
+        profile.write_text("manual_snapping=1\nquick_build=1\ndefault_radius=3\nmax_radius=8\nquick_build_default=1\n")
+        c.until(lambda: controls()["RESOURCE"]["stage"] == 8, "raising the cap did not recover the preference")
+        print("resource-frontend: untouched/touched Undo preserved raw radius and cap reload passed")
+    finally:
+        c.call("stop")
+        profile.write_bytes(old_profile)
+        if old_cfg is None:
+            cfg.unlink(missing_ok=True)
+        else:
+            cfg.write_bytes(old_cfg)
+
+
+def catalogue(name):
+    """Refresh scenario validation from the engine after private content changes."""
+    c = Check.__new__(Check)
+    c.name = name
+    try:
+        c.call("stop")
+        c.call("launch", "--defaults", "--keep-dll")
+        names = {t["name"].upper() for t in c.call("units", "--json")["units"]}
+        assert {"RSNRACK", "RSNGCK"} <= names, "private refusal constructors did not load"
+        print("resource catalogue: refusal constructors loaded")
+    finally:
+        c.call("stop")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("instance")
-    p.add_argument("case", choices=("mex", "upgrade", "queued-upgrade", "plain", "uniform", "mixed", "locked", "inherit", "geo-upgrade", "priority"))
+    p.add_argument("case", choices=("mex", "upgrade", "queued-upgrade", "plain", "uniform", "mixed", "locked", "inherit", "geo-upgrade", "priority", "refusals", "frontend", "catalogue"))
     p.add_argument("--gamedir", type=Path)
     a = p.parse_args()
     try:
+        if a.case == "catalogue":
+            catalogue(a.instance)
+            return 0
+        if a.case == "frontend":
+            assert a.gamedir, "frontend regression requires --gamedir"
+            frontend(a.instance, a.gamedir)
+            return 0
         {"mex": mex, "upgrade": upgrade,
          "queued-upgrade": lambda c: upgrade(c, shift=True),
          "geo-upgrade": geo_upgrade,
          "priority": priority,
+         "refusals": refusals,
          **{m: (lambda c, m=m: policy(c, m, a.gamedir)) for m in ("locked", "inherit")},
          **{m: (lambda c, m=m: terrain(c, m)) for m in ("plain", "uniform", "mixed")}}[a.case](Check(a.instance))
     except (AssertionError, ValueError, subprocess.TimeoutExpired) as e:

@@ -12,6 +12,7 @@
 #include "tagpu_puppet.h"
 #include "tagpu_log.h"
 #include "tagpu_patches.h"
+#include "tagpu_vpwide.h"
 #include "winapi_hooks.h"
 
 /* DISASSEMBLED: 0x419670 uses these order roots and the def's CANBUILD list.
@@ -330,7 +331,9 @@ static int resolve(const char* u, int command, const char* target, const int pos
     int index = -1;
     const unsigned char* action = ((Resolve)0x0043F0E0u)(&index, command,
                                 (void*)u, (void*)target, pos);
-    return action ? *action : -1;
+    /* 0x4401E3 returns the output pointer with byte zero on refusal;
+       the native caller 0x48D0AF accepts only a nonzero action. */
+    return action && *action ? *action : -1;
 }
 
 static void position(const World* w, const Choice* c, int pos[3])
@@ -676,6 +679,9 @@ void tagpu_resource_init(void)
     static const unsigned char build[] = {0x83,0xEC,0x14,0x8B,0x15,0xE8,0x1D,0x51,0x00};
     static const unsigned char left[] = {0x51,0xA1,0xE8,0x1D,0x51,0x00};
     static const unsigned char right[] = {0x51,0x8B,0x0D,0xE8,0x1D,0x51,0x00};
+    if (!tagpu_vpwide_mouse_world_live()) {
+        tagpu_logf("resource: raw mouse coordinate producer unavailable; not armed"); return;
+    }
     if (!tagpu_build_lists_live()) {
         tagpu_logf("resource: CANBUILD allocation bound unavailable; not armed"); return;
     }
