@@ -346,8 +346,11 @@ def terrain(c, mode):
 def policy(c, mode, gamedir):
     c.eye(1000, 950)
     c.call("arm", "menu.open")
-    snap = c.call("ui", "--json")
-    controls = {g["name"]: g for g in snap["gadgets"]}
+    def opened():
+        snap = c.call("ui", "--json")
+        controls = {g["name"]: g for g in snap["gadgets"]}
+        return controls if snap["gui"] == "RENDER.GUI" and {"RESOURCE", "QUICKBUILD"} <= controls.keys() else None
+    controls = c.until(opened, "resource policy options did not open")
     assert controls["QUICKBUILD"]["grayed"] == 1, "mod profile did not lock Quick Build off"
     assert controls["QUICKBUILD"]["stage"] == 0, "locked Quick Build stayed on"
     if mode == "locked":
@@ -581,7 +584,7 @@ def main():
             assert a.gamedir, "frontend regression requires --gamedir"
             frontend(a.instance, a.gamedir)
             return 0
-        {"mex": lambda c: mex(c, classic=a.classic), "upgrade": upgrade,
+        run = {"mex": lambda c: mex(c, classic=a.classic), "upgrade": upgrade,
          "queued-upgrade": lambda c: upgrade(c, shift=True),
          "geo-upgrade": geo_upgrade,
          "nearby": nearby,
@@ -589,7 +592,13 @@ def main():
          "refusals": refusals,
          "viewer": viewer,
          **{m: (lambda c, m=m: policy(c, m, a.gamedir)) for m in ("locked", "inherit")},
-         **{m: (lambda c, m=m: terrain(c, m)) for m in ("plain", "uniform", "mixed")}}[a.case](Check(a.instance))
+         **{m: (lambda c, m=m: terrain(c, m)) for m in ("plain", "uniform", "mixed")}}[a.case]
+        check = Check(a.instance)
+        try:
+            run(check)
+        finally:
+            if a.case in ("locked", "inherit"):
+                check.call("arm", "menu.open=off")
     except (AssertionError, ValueError, subprocess.TimeoutExpired) as e:
         print(f"resource regression FAILED: {e}", file=sys.stderr)
         return 1
