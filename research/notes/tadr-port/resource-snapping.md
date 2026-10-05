@@ -293,18 +293,23 @@ in contextual mode. The renderer never runs site tests or order roots. It displa
 variant's ordinary ghost and a queued/cancellation marker. Preview tests save/restore the two
 engine build-site scratch words `0x51E684` and `0x51E688`.
 
-A build goes through `0x43AFC0`, the engine's ordinary order root. Reclaim and Guard eligibility
+A new build goes through `0x43ADC0`, the engine's ordinary append/replace order root. Reclaim and Guard eligibility
 come from `0x43F0E0`; build action names come from `0x438760`. Upgrades issue reclaim followed by
 an appended build. Helper constructors retain persistent Guards; the engine may prepend its own
 assist/reclaim work. Selected combat units receive no order from this path. Queued builds are
 identified by the engine descriptor's placed-build capability, excluding factory build counts.
 Actual yard occupancy bits determine queued collisions. Plain repeated clicks consume the input
-without changing orders. Shift cancellation copies the actual queued action/type/position and
-proves it is the native root's first match before calling `0x43AFC0` with Shift. The root ignores
-the build type when matching, so passing the newly preferred variant alone is insufficient.
-Paired upgrade cancellation copies the preceding resolved reclaim and re-queries it after the
-build destructor. No heap-node pointer survives an engine call, and a missing reclaim is never
-appended. Only selected owners are cancelled; persistent helper Guards remain ordinary orders.
+without changing orders. Shift cancellation selects the actual queued node and removes it through
+the exact native root `0x439F80(unit,node)`. The mouse toggle root `0x43AFC0` ignores build type and
+treats positions within 16 world units as a match; it cannot distinguish adjacent one-cell vents.
+New Quick plans use `0x43ADC0` so a Shift append never toggles a neighboring plan.
+Geo reservations compare a unique geothermal feature anchor touched by the G yard, normalizing
+bounded footprint aliases; footprints spanning multiple distinct vents have no cancellation identity.
+Upgrade pairs require an adjacent resolved reclaim and an unstarted non-head build with no handler,
+StopMoving flag or owned object. Its destructor only unlinks its reference, so the preceding reclaim
+remains live across build removal and can then be removed exactly. No destroyed node is reused,
+and cancellation never appends an order. Only selected constructors are cancelled; persistent
+helper Guards remain ordinary orders.
 
 The upgrade test projects the old building's post-reclaim yard-bit clear into a bounded private
 copy of the candidate definition/yardmap. The engine's occupancy test ignores exactly the old
@@ -359,6 +364,7 @@ because the launcher replaces it with right-button orders.
 | `resource-upgrade`, `resource-queued-upgrade` | Own mex→Moho reclaim/build, plain replacement or Shift after Move, mixed helpers, persistent Guard dedup, combat unaffected; queued-pair cancellation/requeue preserves Move and Guards | L/P/R/Q |
 | `resource-plain`, `resource-uniform`, `resource-mixed` | Background/above-background uniform metal and rich patches; manual geo/Alt, Quick geo cancellation/requeue preserving Move | L/P/R/Q |
 | `resource-geo-upgrade` | Stronger private geo variant on metal ground, queued reclaim/build, plain repeat no-op, pair cancellation/requeue, persistent helper Guard | L/P/R/Q |
+| `resource-nearby` | Two adjacent one-cell vents remain distinct; Shift appends both, cancels only the clicked plan, preserves a preceding persistent Guard and requeues | L/P/R/Q |
 | `resource-locked`, `resource-inherit` | General locks, exact-version inheritance/clamping, effective controls and policy frozen despite edits during the match | L/P/R/Q |
 | `resource-priority` | Explicit Move, Alt, equal own mex and personal Quick toggle off | L/P/R/Q |
 | `resource-nozoom` (stock limits) | Manual/Alt and Quick Build when zoom and widening are disabled | L/P/R/Q |
@@ -367,6 +373,9 @@ because the launcher replaces it with right-button orders.
 
 L records real input and simulation; P plays it on puppet seats; R restores in place at three
 sampled ticks, compares before/after state and continues; Q seeks from a fresh process. The
+queue-cancellation helper requires a later simulation GameTime before cancellation and again
+after it, so both the queued and absent states reach recorder capture points before requeue.
+Native acknowledgements or later render frames alone are insufficient. The
 landing harness also checks event attribution, effect counts, address values, puppet writes and
 the complete main/.data images. Paused viewer samples exercise camera movement, GUI-consumed
 mouse messages, all valid coordinate bits and a native selected-type change. Thirteen additional

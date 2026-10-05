@@ -16176,7 +16176,7 @@ are an instruction-level `call rel32` scan of `.text`, not a scan of address-sha
 | `0x499100` | Right button handler, `ret 4`, prologue `51 8B 0D E8 1D 51 00`, one caller `0x4993AC`. Contextual orders use right when Interface Type `main+0x37EFA` is nonzero; zero uses left. Explicit commands retain native button/cancel behavior |
 | `0x47D2E0` | Site test, `stdcall(def, packed_cell, ignore_unit_id, player)`, `ret 16`; callers `0x40A4CD`, `0x4198C6`, `0x47DBE5`. Requires origin at least 1 and footprint end strictly below W/H. Its return's bit 0 reports acceptance |
 | `0x47C780` | Build-site altitude result, `ret 0`, only caller `0x4198F5`; low byte is the site's altitude. Reads the scratch produced by the preceding site test. Resource preview/click queries save and restore `0x51E684`/`0x51E688`; the native manual cursor retains its normal scratch ownership |
-| `0x43AFC0` | Ordinary order dispatch, `stdcall(action, shift, unit, target, pos, param1, param2)`, `ret 28`. Called at `0x4197A9` (manual build) and `0x48D1F4` (contextual command). A build's param1 is the definition ID; an upgrade uses the resolved reclaim action then an appended build |
+| `0x43AFC0` | Ordinary mouse order dispatch, `stdcall(action, shift, unit, target, pos, param1, param2)`, `ret 28`. Called at `0x4197A9` (manual build) and `0x48D1F4` (contextual command). A build's param1 is the definition ID; an upgrade uses the resolved reclaim action then an appended build |
 | `0x438760` | Action-name lookup, thiscall `(output_byte*, name)`; 109 direct callers, including manual dispatch `0x4197A4`. Resource dispatch asks for `MOBILEBUILD` (`0x502654`) or `VTOL_MOBILEBUILD` (`0x502640`) according to the builder's fly bit |
 | `0x43F0E0` | Action resolver, `stdcall(index*, mode, unit, target, pos)`; returns the caller's output pointer; refusal writes action byte zero (`0x4401E3`), which native dispatch rejects at `0x48D0AF`. Guard is mode 7, reclaim mode 12. There are 28 direct callers; context dispatch uses `0x48D0A0`, script orders `0x4804A3`, and constructor/assist paths `0x487D5B`..`0x487F8C`. Resource input asks the resolver instead of assuming every selected builder can reclaim or Guard |
 | `0x48CD80`, `0x48D220` | Hovered-unit query and context resolution; callers respectively `0x491D18`/`0x499278` and `0x491D36`/`0x499297`. Hovered unit ID is stored at `main+0x2CBA`; feature ID is `+0x2CBC` |
@@ -16230,7 +16230,7 @@ capability `+0x0C & 1` distinguishes a placed build from factory counts. Target 
 Plain order clearing (`0x43ADC0`) preserves flags bit 2 (`4`); queued collision tests reproduce
 that distinction for participating builders/helpers rather than discarding every old plan.
 
-#### Contextual cancellation through the native Shift root [DISASSEMBLED 2026-10-05]
+#### Contextual cancellation through the native order roots [DISASSEMBLED 2026-10-05]
 
 `0x43AFC0` tests Shift at `0x43AFD4` and scans only the main chain `unit+0x5C` at
 `0x43AFE0`. The first action match (`0x43AFF2`) whose optional target matches (`0x43AFF7`..`0x43AFFE`)
@@ -16254,15 +16254,46 @@ at `0x43A264`..`0x43A2A4` can invoke virtual destructors. A head removal also ca
 `0x489650` at `0x43A2C1` releases the target reference at `node+0x12`. Thus cancellation
 can re-enter engine handlers, and retaining an order-node pointer across the root is unsafe.
 
-Resource cancellation walks the bounded, game-thread-owned chain, proves that the intended
-main-list node is exactly the root's first match, and copies action/type/position before calling
-the root. This proves deletion rather than accidental append or cancellation of a neighboring
-plan, even if the selection now offers a stronger variant. Upgrade pairing additionally requires
-the immediately preceding node to be the resolved reclaim action on the old target at the same
-position. Its values are copied too; after build removal the remaining native match is re-queried
-and checked against those values before a second root call. No node address survives destruction.
-Cancellation scans only selected owned constructors, once each; the packet distinguishes an own
-queued site from one the selection can cancel. Helper Guards are left intact.
+**Exact removal `0x439F80(unit,node)`** is stdcall, `ret 8`. Its two direct callers are
+`0x43BA7C` (order controller) and `0x49646F` (Ctrl+D cancellation). `0x439F89` reads the main
+head, `0x439F8F` selects the sub-list for flags `0x40000`, and `0x439FA1`..`0x439FAD`
+search for the exact pointer. A missing node returns without appending or freeing. A found node
+is unlinked at `0x439FB3`..`0x439FB8`, sets `0x10000` when not the main head at `0x439FBC`,
+and is destructed/freed by `0x439FC9`/`0x439FCF`. Resource cancellation finds the actual
+selected constructor's main-list node in the bounded owned chain and uses this root, so build
+variant changes and neighboring positions cannot redirect deletion.
+
+**The paired-reclaim lifetime:** the immediately preceding node must be the resolved reclaim
+on the old target at exactly the build position. The build must be unstarted (`byte +6 & 2 == 0`),
+without `+0x42 & 0x400000` or an owned object (`+0x52 == NULL`). Being preceded proves it is
+non-head; exact removal sets `0x10000`. These conditions disable every callback branch of
+`0x43A1F0`. Its remaining `0x489650` call has no calls or virtual dispatch: `0x48965D`..`0x489683`
+only unlink this node's target reference from the intrusive unit-reference chain. Therefore the
+preceding reclaim stays allocated across build removal and can be passed to the second exact
+removal root. This is the only order pointer retained across a root; it has an explicit lifetime
+proof. After reclaim removal no node pointer is used. Helpers' Guards remain intact.
+
+**New orders `0x43ADC0(action,shift,unit,target,pos,p1,p2)`** use the same seven-argument
+stdcall layout and `ret 28` as `0x43AFC0`. It constructs a `0x56`-byte node through
+`0x4B4F10`/`0x43A0C0` at `0x43ADC4`..`0x43ADF4`, preserves existing non-temporary work with
+Shift, and replaces removable work without Shift (`0x43AE02`..`0x43AE59`). The native temporary
+head cleanup and linking retain their normal descriptor flags (`0x43AE5B`..`0x43AFB1`). It does
+not run the mouse root's proximity toggle. New Quick reclaim/build orders use this root, ensuring
+that Shift can append a distinct adjacent site. Its 27 direct callers are `0x4029A5`, `0x402E5E`,
+`0x402EFA`, `0x403DC5`, `0x408064`, `0x4082B0`, `0x408421`, `0x408453`, `0x4085A1`, `0x4140F3`,
+`0x43B09D`, `0x43B120`, `0x4804BB`, `0x487D70`, `0x487DE8`, `0x487E3F`, `0x487E8A`, `0x487F25`,
+`0x487FA5`, `0x487FF6`, `0x4880AB`, `0x4880D2`, `0x488110`, `0x488175`, `0x4881D1`, `0x4881F8`,
+`0x48821E` (instruction-level call scan).
+
+**Geo identity:** `0x47D684` tests candidate yard bit `0x80`. `0x47D69D` reads the feature ID
+at grid-cell `+8`; an ID below `0xFFFB` is checked against the feature count. `0xFFFE` resolves
+through cell `+10` (dz) and `+11` (dx), subtracting `(dz*W+dx)*13` at `0x47D6C7`..`0x47D6E4`.
+`0x47D708` tests feature-definition byte `+0xFE & 0x20`; no spacing rule separates geo sites.
+Resource identity bounds the alias offsets before subtracting, checks explored anchor cells and
+feature IDs against the allocation, and requires one unique canonical geothermal anchor among
+all G-yard cells. Candidate and queued footprints must name the same anchor; touching multiple
+anchors is ambiguous and does not permit cancellation. The generated adjacent-one-cell fixture
+exercises the distinction that a +/-16-world-unit comparison cannot establish.
 
 #### An upgrade preview without grid mutation
 

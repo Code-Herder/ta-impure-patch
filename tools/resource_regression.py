@@ -164,9 +164,18 @@ class Check:
     def unqueue(self, x, z):
         def count():
             return len(self.call("log", "--grep", "resource: unqueued", "--tail", 100, "--json")["lines"])
+        # Both queue images must reach recorder capture points. A later
+        # render frame or command acknowledgement alone does not prove that.
+        self.next_tick()
         before = count()
         self.resource_click(x, z, shift=True)
         self.until(lambda: count() > before, "Shift-click did not cancel the queued resource plan")
+        self.next_tick()
+
+    def next_tick(self):
+        tick = self.values("*0x511DE8+0x38a47")[0]
+        self.until(lambda: self.values("*0x511DE8+0x38a47")[0] > tick,
+                   "resource queue state did not reach a later simulation tick")
 
 
 def mex(c, classic=False):
@@ -390,6 +399,33 @@ def geo_upgrade(c):
     print("resource-geo-upgrade: stronger variant, Shift reclaim/build and persistent helper passed")
 
 
+def nearby(c):
+    c.eye(100, 150)
+    c.menu(RESOURCE=3, QUICKBUILD=1)
+    c.select("CORCK")
+    types = c.call("units", "--json")["units"]
+    geo = next(t["id"] for t in types if t["name"].upper() == "RSGEO")
+    # Persistent Guard keeps both plans pending by queue ordering.
+    c.call("order", "guard", "unit", c.units["ARMMSTOR"], "--unit", c.units["CORCK"],
+           "--expect", "CORCK", "--expect-target", "ARMMSTOR")
+    def sites():
+        return {(o["pos"][0] >> 16, o["pos"][2] >> 16)
+                for o in c.placed(c.orders("CORCK")) if o["type"] == geo}
+    c.resource_click(676, 258, shift=True)
+    c.until(lambda: sites() == {(648, 392)}, "first one-cell vent was not queued")
+    c.next_tick()
+    c.resource_click(692, 258, shift=True)
+    c.until(lambda: sites() == {(648, 392), (664, 392)},
+            "queueing the neighboring vent toggled or replaced the first plan")
+    c.unqueue(692, 258)
+    assert sites() == {(648, 392)}, "unqueue cancelled the neighboring vent instead of its own plan"
+    assert any(o["target"] == c.address("ARMMSTOR") for o in c.orders("CORCK")), "unqueue removed the preceding Guard"
+    c.resource_click(692, 258, shift=True)
+    c.until(lambda: sites() == {(648, 392), (664, 392)}, "neighboring vent could not be requeued")
+    c.next_tick()
+    print("resource-nearby: distinct adjacent vents, Shift append/cancel/requeue, preceding Guard and recorded cancellation passed")
+
+
 def priority(c):
     c.eye(1000, 950)
     c.menu(RESOURCE=3, QUICKBUILD=1)
@@ -533,7 +569,7 @@ def catalogue(name):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("instance")
-    p.add_argument("case", choices=("mex", "upgrade", "queued-upgrade", "plain", "uniform", "mixed", "locked", "inherit", "geo-upgrade", "priority", "refusals", "viewer", "frontend", "catalogue"))
+    p.add_argument("case", choices=("mex", "upgrade", "queued-upgrade", "plain", "uniform", "mixed", "locked", "inherit", "geo-upgrade", "nearby", "priority", "refusals", "viewer", "frontend", "catalogue"))
     p.add_argument("--gamedir", type=Path)
     p.add_argument("--classic", action="store_true", help="exercise native left-button contextual orders")
     a = p.parse_args()
@@ -548,6 +584,7 @@ def main():
         {"mex": lambda c: mex(c, classic=a.classic), "upgrade": upgrade,
          "queued-upgrade": lambda c: upgrade(c, shift=True),
          "geo-upgrade": geo_upgrade,
+         "nearby": nearby,
          "priority": priority,
          "refusals": refusals,
          "viewer": viewer,

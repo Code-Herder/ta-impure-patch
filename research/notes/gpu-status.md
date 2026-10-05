@@ -20514,7 +20514,7 @@ contracts* gives the allocation/lifetime proof and disassembly.
 | `0x4197D0` | Nine-byte entry observer chooses manual placement, original code computes corners/flags and tests the site |
 | `0x498F70`, `0x499100` | Six-/seven-byte gates for left/right handlers, each `ret 4`. Only the configured contextual button is consumed; paired button bookkeeping outside these handlers remains native |
 | `0x47D2E0`, `0x47C780` | Engine site/altitude queries on the input thread. Quick queries preserve scratch words; an upgrade uses a private yard projection of an uncontested old footprint's clear |
-| `0x43F0E0`, `0x438760`, `0x43AFC0` | Native eligibility (zero action byte refuses), action lookup and dispatch. Upgrade is reclaim→appended build; non-building constructor helpers Guard primaries, combat units untouched |
+| `0x43F0E0`, `0x438760`, `0x43ADC0`, `0x439F80` | Native eligibility (zero action byte refuses), action lookup, append/replace and exact removal. Upgrade is reclaim→appended build; non-building constructor helpers Guard primaries via `0x43AFC0`, combat units untouched |
 | `tagpu_packet_pub.c` → native ghost and marker | Chosen type/green rectangle and queued/selected-cancellation bits copied into the packet. Engine stays in contextual mode. A selected owner's cancellable plan says `Shift-click to cancel`. No new renderer-owned engine access or GL object |
 | `0x4C63A0` flip observer / `0x46A3E0` game return; shared replay-menu identity | Config/archive names and Twilight's label select a general profile plus an optional exact-version override. Game-thread menu polling remains live without packets or a render consumer; native game flips freeze policy and in-game options cannot unfreeze it |
 
@@ -20530,16 +20530,18 @@ inclusive player partition. Engine heap order nodes have the input thread's sole
 lifetime; nothing retains a pointer across a simulation iteration or level teardown.
 
 Shift plus the configured command button cancels one matching queued resource plan per selected
-constructor through `0x43AFC0`; a queued upgrade cancels its adjacent reclaim/build pair. Actual
-queued values are copied before destruction, and the native first-match rule is verified before
-each root call. The root does not compare build types. Plain repeats, unselected owners' plans,
+constructor through `0x439F80`; a queued upgrade cancels its adjacent reclaim/build pair. A gated
+unstarted, non-head build's callback-free destructor preserves the preceding reclaim's lifetime.
+Unique canonical vent anchors distinguish adjacent geo sites; new plans use `0x43ADC0` to avoid
+the mouse toggle root's 16-world-unit ambiguity. Plain repeats, unselected owners' plans,
 unrelated orders and persistent helper Guards remain unchanged. The cancellation adds no patch,
 simulation-owned state or replay exception.
 
 Resource scratch and profile state are presentation inputs; simulation never reads those tables.
 Puppet seats are refused. Every effect is an ordinary recorded engine order and its normal
 simulation roots. Resource fixtures assert native live behavior and compare playback, three
-in-place restores and fresh seeks. The replay landing selector also follows their declared
+in-place restores and fresh seeks. Cancellation tests fence simulation ticks around removal,
+so requeue cannot hide the absent order image. The replay landing selector also follows their declared
 source dependencies; changing the harness selects the whole suite. The owner approved three
 four-byte viewer metadata rows: the active GUI stack pointer (`main+0x531`), mouse-event clock
 (`main+0x561`) and current bitmap-font pointer (`0x51F524`). These process-local values stay with

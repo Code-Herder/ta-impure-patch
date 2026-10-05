@@ -660,6 +660,56 @@
    ],
    "end": 2400
   },
+  "resource-nearby": {
+   "load": "resource-nearby.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}",
+     "--nearby-vents"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini",
+     "resource-vents.ufo"
+    ]
+   },
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "nearby"
+     ]
+    ]
+   ],
+   "end": 2400
+  },
   "resource-priority": {
    "load": "resource-snapping.json",
    "sources": [
