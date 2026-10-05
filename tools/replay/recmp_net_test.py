@@ -78,7 +78,7 @@ def check_journal(raw):
                     (tick < s["closed"] or (not final and tick == s["closed"])))):
                 raise ValueError("journal seal refused")
             s["closed"], s["ended"] = tick, bool(final)
-        elif kind in (1, 2, 6, 7):
+        elif kind in (1, 2, 6, 7, 8):
             if s["closed"] is not None and tick <= s["closed"]:
                 raise ValueError("journal closed tick refused")
             s["size"] += size

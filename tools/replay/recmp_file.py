@@ -49,6 +49,21 @@ class Roster:
         out[0x146] = mapping[image[0x146]]
         return bytes(out)
 
+    def unit(self, destination, origin, slot, raw):
+        image = bytes(raw)
+        actor = next((a for a in self.actors if a[0] == origin and a[2] <= slot <= a[3]), None)
+        if (len(image) != 328 or actor is None or struct.unpack_from("<I", image, 0x96)[0] != actor[1]+1 or
+                image[0xFF] != actor[1] or image[0xF4] > 10):
+            raise ValueError("unit source owner/block or attacker row")
+        store = struct.unpack_from("<I", image, 0xEC)[0]
+        if store > 11:
+            raise ValueError("unit normalized player ID")
+        mapping, out = self.mapping(destination), bytearray(image)
+        struct.pack_into("<I", out, 0x96, mapping[actor[1]]+1)
+        struct.pack_into("<I", out, 0xEC, mapping[store-1]+1 if store else 0)
+        out[0xF4], out[0xFF] = mapping[image[0xF4]], mapping[image[0xFF]]
+        return bytes(out)
+
 
 class Seats(Roster):
     """Recorder roster additionally agrees with header roles, seats and allocation."""
@@ -127,7 +142,7 @@ class Contributions:
                 if final > 1 or (previous, seal_tick, data_bytes, crc) != (source["sequence"], tick, source["bytes"], source["crc"]) or (sealed is not None and (tick < sealed or (not final and tick == sealed))):
                     raise ValueError("contribution prefix seal")
                 source.update(sealed_tick=tick, sealed_sequence=sequence, ended=bool(final))
-            elif kind in (1, 2, 6, 7):
+            elif kind in (1, 2, 6, 7, 8):
                 if source["sealed_tick"] is not None and tick <= source["sealed_tick"]:
                     raise ValueError("contribution data in closed tick")
                 source["bytes"] += span
@@ -162,6 +177,7 @@ class History:
                             self.header["slots"], self.header["units_each"], self.header["players"])
         self.source_players, self.players = {}, {}
         self.source_maps, self.maps = {}, {}
+        self.source_units, self.units = {}, {}
         self.source_orders, self.orders, self.stages = {}, {}, {}
         self.applications = []
         self.failed = False
@@ -209,6 +225,55 @@ class History:
             self.source_players[origin] = state
             if not proof:
                 self.players[origin] = dict(state, image=mapped)
+        elif kind == 8:
+            source_map = self.source_maps.get(origin)
+            if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:
+                raise ValueError("units precede their source roster")
+            if len(body) < 4:
+                raise ValueError("unit batch span")
+            count = struct.unpack_from("<I", body)[0]
+            if not 1 <= count <= 201:
+                raise ValueError("unit batch count")
+            at, updates, mapped_updates = 4, {}, {}
+            for _ in range(count):
+                if at+20 > len(body):
+                    raise ValueError("unit entry span")
+                slot, live, full, birth, mask, reserved = struct.unpack_from("<HBBI11sB", body, at)
+                at += 20
+                bits = int.from_bytes(mask, "little")
+                previous = self.source_units.get(slot)
+                if (not actor[2] <= slot <= actor[3] or slot in updates or live > 1 or full > 1 or reserved or
+                        birth >> 31 or bits >> 82 or not live and (not full or bits) or
+                        live and full and bits != (1 << 82)-1):
+                    raise ValueError("unit entry ownership/flags/mask")
+                if previous and (previous["origin"] != origin or previous["stream"] != stream or
+                                 sequence <= previous["sequence"] or tick < previous["source_tick"] or
+                                 application_tick < previous["applied_tick"]):
+                    raise ValueError("unit clocks/stream")
+                if live and not full and (not previous or not previous["live"] or previous["birth"] != birth):
+                    raise ValueError("unit delta has no matching live incarnation")
+                image = bytearray(previous["image"]) if live and not full else bytearray(328)
+                for word in range(82):
+                    if bits >> word & 1:
+                        if at+4 > len(body):
+                            raise ValueError("unit delta word span")
+                        image[word*4:word*4+4] = body[at:at+4]
+                        at += 4
+                if live:
+                    if (not struct.unpack_from("<I", image, 0x110)[0] & (1 << 28) or
+                            not full and image[0x92:0x96] != previous["image"][0x92:0x96]):
+                        raise ValueError("unit live bit or delta type change")
+                    mapped = source_map["roster"].unit(self.roster, origin, slot, image)
+                else:
+                    mapped = bytes(image)
+                state = dict(image=bytes(image), live=live, origin=origin, birth=birth,
+                             source_tick=tick, sequence=sequence, applied_tick=application_tick, stream=bytes(stream))
+                updates[slot], mapped_updates[slot] = state, dict(state, image=mapped)
+            if at != len(body):
+                raise ValueError("unit batch trailing bytes")
+            self.source_units.update(updates)
+            if not proof:
+                self.units.update(mapped_updates)
         elif kind == 2:
             source_map = self.source_maps.get(origin)
             if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:

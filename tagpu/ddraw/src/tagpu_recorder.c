@@ -5,8 +5,8 @@
    WHERE IT RUNS. B2's stub at the sim step's call of the unit tick (0x4954ED, the only call of
    0x48AD30) calls tagpu_rec_capture before anything else: GameTime has just been incremented
    (0x4954C0) and every phase of the previous iteration has run, so a capture sees the world
-   between two iterations, on the thread that owns it. A skirmish, the only game recorded, calls
-   the step with 0 (0x49693C), so the step's network pump (0x4954C8) does not run. During play the
+   between two iterations, on the thread that owns it. File capture is skirmish-only; multiplayer
+   contributions follow the step's network pump (0x4954C8) at the same B2 boundary. During play the
    game thread is the only writer of the engine records and of every SIM_STATE table the capture
    reads: the loader thread's writes end before the in-play entry (0x497F40 reads the loader's
    last store, bit 1 of main+0x38D75, before the first iteration). The event hooks (*The events*)
@@ -50,9 +50,8 @@
    table, by arithmetic (tagpu_recfmt.h), and a pointer outside the table becomes REC_ID_BAD,
    counted and logged. Each event hook's reads are stated beside it.
 
-   WHAT IT WRITES: its own memory -- the shadow images, the ring and the dump file -- and the
-   receive wrapper's sender/destination outputs, as the engine wrapper writes them for a delivered
-   game or system packet (mp_receive), and the startup packet-length entry 0x512AF8
+   WHAT IT WRITES: its own memory -- the shadow images, contribution caches, ring and dump file --
+   and the startup packet-length entry 0x512AF8
    through its redirected initializer. The host's extended start retains the engine's
    original start action (mp_start_send / mp_start_receive). Native CreatePlayer receives
    the original 21-byte prefix plus a public key through the redirect at 0x4CA762;
@@ -68,6 +67,7 @@
 #include "tagpu_recmp.h"
 #include "tagpu_recmp_channel.h"
 #include "tagpu_recmp_players.h"
+#include "tagpu_recmp_units.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_replay_layout.h"
@@ -278,11 +278,14 @@ static RecMpChannel* s_mp_channel;
 static RecMpRoster s_mp_roster;
 static RecMpPlayers* s_mp_players;
 static RecMpSeatMaps* s_mp_seats;
+static RecMpUnits* s_mp_units;
 static unsigned s_mp_logtick;
 static RecMpOrderCache* s_mp_orders;
 static unsigned char s_mp_order_scratch[ORD_SCRATCH];
 static unsigned char s_mp_orders_seen[REC_PLAYERS];
 static int mp_orders_capture(const Level* L, unsigned tick);
+static int mp_units_capture(const Level* L, unsigned tick);
+static void mp_units_log(const RecMpPacket* packet, unsigned tick, const char* where);
 static int mp_orders_receive(const Level* L, const RecMpPacket* packet, unsigned tick);
 static const unsigned* mp_births(const Level* L);
 static unsigned id_in(const char* p, const char* base, unsigned stride, unsigned n);
@@ -577,10 +580,12 @@ static void mp_capture(const Level* L, unsigned tick)
         config.net.address_bytes = bytes;
         s_mp_players = tagpu_recmp_players_begin(&roster);
         s_mp_seats = tagpu_recmp_seats_begin(&roster);
+        s_mp_units = tagpu_recmp_units_begin(&roster);
         s_mp_orders = tagpu_recmp_orders_begin(L->nslots);
-        if (!s_mp_players || !s_mp_seats || !s_mp_orders) {
+        if (!s_mp_players || !s_mp_seats || !s_mp_units || !s_mp_orders) {
             tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
             tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
+            tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
             tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
             tagpu_logf("recmp: no bounded player/order cache: no contributions");
             return;
@@ -590,6 +595,7 @@ static void mp_capture(const Level* L, unsigned tick)
         if (!s_mp_channel) {
             tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
             tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
+            tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
             tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
             tagpu_logf("recmp: contribution worker could not start");
             return;
@@ -650,6 +656,12 @@ static void mp_capture(const Level* L, unsigned tick)
                        (unsigned)Crc32_ComputeBuf(0,packet.body,packet.h.bytes-sizeof packet.h));
             continue;
         }
+        if (packet.h.kind == RECMP_UNITS) {
+            if (!tagpu_recmp_units_put(s_mp_units,s_mp_seats,&packet.h,packet.body,
+                                       packet.h.bytes-sizeof packet.h,tick)) goto incomplete;
+            mp_units_log(&packet,tick,"remote");
+            continue;
+        }
         if (packet.h.kind == RECMP_ORDERS) {
             if (!tagpu_recmp_seats_get(s_mp_seats,packet.h.origin,NULL,NULL) ||
                 !mp_orders_receive(L, &packet, tick)) goto incomplete;
@@ -687,7 +699,7 @@ static void mp_capture(const Level* L, unsigned tick)
         tagpu_logf("recmp: contribution source sequence or stream is incomplete");
         goto incomplete;
     }
-    if (!mp_orders_capture(L, tick)) goto incomplete;
+    if (!mp_units_capture(L, tick) || !mp_orders_capture(L, tick)) goto incomplete;
     if (tick - s_mp_logtick >= 150) {
         tagpu_recmp_stats(s_mp_channel, &stats);
         tagpu_logf("recmp: tick=%u sent=%u bytes=%u received=%u queued=%u lost=%u failed=%08X "
@@ -705,6 +717,7 @@ incomplete:
     s_mp_channel = NULL;
     tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
     tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
+    tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
     tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
 }
 
@@ -2031,6 +2044,82 @@ static const unsigned* mp_births(const Level* L)
         return *(const unsigned* const*)d->addr;
     }
     return NULL;
+}
+
+/* The unit cache has already validated every entry and the exact packet span.
+   A full live image is contiguous here; deltas advance by their selected words. */
+static void mp_units_log(const RecMpPacket* packet, unsigned tick, const char* where)
+{
+    unsigned count, at=4, i, word;
+    memcpy(&count,packet->body,4);
+    for (i=0;i<count;i++) {
+        RecMpUnitDelta entry;
+        memcpy(&entry,packet->body+at,sizeof entry); at+=sizeof entry;
+        if (entry.live && entry.full) {
+            RecMpUnitState state;
+            if (tagpu_recmp_units_get(s_mp_units,s_mp_seats,entry.slot,&state))
+                tagpu_logf("recmp: %s unit image ID %u slot %u birth %u, source tick %u seq %u, "
+                           "applied tick %u, %u image bytes crc %08X mapped %08X", where,packet->h.origin,
+                           entry.slot,entry.birth,packet->h.tick,packet->h.sequence,tick,REC_UNIT_IMAGE,
+                           (unsigned)Crc32_ComputeBuf(0,packet->body+at,REC_UNIT_IMAGE),
+                           (unsigned)Crc32_ComputeBuf(0,state.image,sizeof state.image));
+        }
+        for (word=0;word<REC_UNIT_DWORDS;word++) if (entry.bits[word>>3]>>(word&7)&1) at+=4;
+    }
+}
+
+static int mp_units_send(unsigned origin, unsigned tick, RecMpPacket* packet, unsigned count, unsigned bytes)
+{
+    memcpy(packet->body,&count,4);
+    if (!tagpu_recmp_send_from(s_mp_channel,origin,RECMP_UNITS,tick,packet->body,bytes,&packet->h) ||
+        !tagpu_recmp_units_put(s_mp_units,s_mp_seats,&packet->h,packet->body,bytes,tick)) return 0;
+    mp_units_log(packet,tick,"local");
+    return 1;
+}
+
+static int mp_units_capture(const Level* L, unsigned tick)
+{
+    const unsigned* birth=mp_births(L);
+    unsigned actor;
+    if (!birth) return 0;
+    for (actor=0;actor<s_mp_roster.count;actor++) {
+        const RecMpSeat* seat=&s_mp_roster.actor[actor];
+        const char* player=L->ta+OFF_PLAYERS+seat->seat*PL_STRIDE;
+        unsigned ctl=(unsigned char)player[PL_CONTROLLER], origin, slot, count=0, bytes=4;
+        RecMpPacket packet;
+        if (ctl!=1 && ctl!=2) continue;
+        memcpy(&origin,player+4,4);
+        if (origin!=seat->origin) return 0;
+        for (slot=seat->first;slot<=seat->last;slot++) {
+            unsigned img[REC_UNIT_DWORDS], live=unit_live(L,slot), incarnation=birth[slot];
+            unsigned char entry[sizeof(RecMpUnitDelta)+REC_UNIT_IMAGE];
+            int n;
+            if (live) {
+                const char* unit=L->begin+(size_t)slot*REC_UNIT_BYTES;
+                /* The frozen global block and bounded owner must agree before
+                   following the mover of this locally controlled live unit. */
+                unsigned owner=id_in(*(const char* const*)(unit+U_OWNER),
+                                     L->ta+OFF_PLAYERS,PL_STRIDE,REC_PLAYERS);
+                if (owner!=seat->seat+1 || (incarnation&0x80000000u)) return 0;
+                unit_image(L,slot,img);
+            } else if (incarnation&0x80000000u) {
+                /* Never-created slots have no birth, but the bounded unit's
+                   cleared live bit establishes their authoritative absence. */
+                incarnation=0;
+            }
+            n=tagpu_recmp_units_delta(s_mp_units,origin,slot,incarnation,live,
+                                      live ? img : NULL,live ? sizeof img : 0,entry,sizeof entry);
+            if (n<0) return 0;
+            if (!n) continue;
+            if (bytes+(unsigned)n>sizeof packet.body) {
+                if (!mp_units_send(origin,tick,&packet,count,bytes)) return 0;
+                count=0; bytes=4;
+            }
+            memcpy(packet.body+bytes,entry,n); bytes+=n; count++;
+        }
+        if (count && !mp_units_send(origin,tick,&packet,count,bytes)) return 0;
+    }
+    return 1;
 }
 
 static int mp_orders_capture(const Level* L, unsigned tick)
@@ -5430,6 +5519,8 @@ void tagpu_rec_level_end(void)
     s_mp_players = NULL;
     tagpu_recmp_seats_end(s_mp_seats);
     s_mp_seats = NULL;
+    tagpu_recmp_units_end(s_mp_units);
+    s_mp_units = NULL;
     memset(&s_mp_roster, 0, sizeof s_mp_roster);
     s_mp_tried = 0;
     memset(s_mp_orders_seen, 0, sizeof s_mp_orders_seen);

@@ -59,7 +59,7 @@ def semantic_states(segment):
     for kind, _, _, payload in segment["blocks"]:
         if kind == tarec.RB_CONTRIBUTIONS:
             history.block(payload)
-    if history.at(99).players or history.at(99).orders:
+    if history.at(99).players or history.at(99).orders or history.at(99).units:
         raise RuntimeError("unknown authority was fabricated before first application")
     for tick in (100, 101):
         state = history.at(tick)
@@ -73,7 +73,7 @@ def semantic_states(segment):
                                             for v in range(5) for row, source in enumerate(sender)):
                 raise RuntimeError("source-local player vectors/self row were not mapped")
         o = state.orders.get((7, 0))
-        if not o or (o["count"], o["birth"], o["source_tick"], o["sequence"], o["applied_tick"]) != (0, 17, 8, 3, 100):
+        if not o or (o["count"], o["birth"], o["source_tick"], o["sequence"], o["applied_tick"]) != (0, 17, 8, 4, 100):
             raise RuntimeError("partial/proof order transaction replaced complete authority")
         if (8, 0) in state.orders:
             raise RuntimeError("unknown order list was fabricated empty")
@@ -82,8 +82,22 @@ def semantic_states(segment):
                          local["sequence"], local["applied_tick"], local["image"]) != (
                 11, 21, 1, 100, 3, 100, bytes((i*7+3) & 255 for i in range(88))):
             raise RuntimeError("recorded nonempty order bytes/provenance were not reconstructed")
+        for slot, origin, row, birth, source_tick, attacker in ((3, 22, 1, 23, 100, 0), (7, 66, 3, 17, 8, 2)):
+            u = state.units.get(slot)
+            if (not u or (u["live"], u["origin"], u["birth"], u["source_tick"], u["sequence"], u["applied_tick"]) !=
+                    (1, origin, birth, source_tick, 3, 100) or struct.unpack_from("<I", u["image"], 0x68)[0] != origin or
+                    struct.unpack_from("<I", u["image"], 0x96)[0] != row+1 or
+                    struct.unpack_from("<I", u["image"], 0xEC)[0] != row+1 or
+                    u["image"][0xFF] != row or u["image"][0xF4] != attacker or u["stream"] != state.players[origin]["stream"]):
+                raise RuntimeError("mapped unit authority/provenance changed across proof tail")
+            empty = state.units.get(slot+1)
+            if not empty or empty["live"] or empty["image"] != bytes(328) or empty["sequence"] != 3:
+                raise RuntimeError("authoritative unit absence was not retained")
+        if 5 in state.units:
+            raise RuntimeError("unknown unit was fabricated absent")
     if (history.source_orders[7, 0]["count"] != 46 or
-            struct.unpack_from("<I", history.source_players[66]["image"])[0] != 67):
+            struct.unpack_from("<I", history.source_players[66]["image"])[0] != 67 or
+            struct.unpack_from("<I", history.source_units[7]["image"], 0x68)[0] != 67):
         raise RuntimeError("proof tail was not semantically validated")
     proof = History(segment["header"])
     for block_kind, _, _, payload in segment["blocks"]:
@@ -92,15 +106,16 @@ def semantic_states(segment):
         at = 0
         while at < len(payload):
             span, origin, _, _, kind = struct.unpack_from("<IIIII", payload, at+16+12)
-            if origin == 55 and kind in (6, 7):
+            phase = struct.unpack_from("<I", payload, at+12)[0]
+            if origin == 66 and kind in (6, 7, 8) and phase != 3:
                 proof.block(struct.pack("<QII", 0, 0, 3) + payload[at+16:at+16+span])
             at += 16+span
-    if (55 not in proof.source_maps or 55 not in proof.source_players or proof.maps or proof.players or
-            proof.orders or proof.at(1000).players):
+    if (66 not in proof.source_maps or 66 not in proof.source_players or 7 not in proof.source_units or
+            proof.maps or proof.players or proof.units or proof.orders or proof.at(1000).players or proof.at(1000).units):
         raise RuntimeError("proof-only roster fabricated application authority")
     if history.source_players[66]["image"][0x146] != 2 or history.at(101).players[66]["image"][0x146] != 3:
         raise RuntimeError("mapped application image replaced the raw source baseline")
-    print("typed history: C and Python player/order provenance, unknown baseline, partial-list retention and proof isolation PASS", flush=True)
+    print("typed history: C and Python mapped player/unit/order provenance, absence versus unknown, partial-list retention and proof isolation PASS", flush=True)
 
 
 def semantic_mutation(blocks, origin, kind, phase, offset, fmt, value, envelope=False):
@@ -133,7 +148,7 @@ def run(output, read_file=None, skirmish_file=None):
         with (output / "setup.log").open("w") as log:
             exe = output / "recmp-file-test.exe"
             sources = ("tagpu_recmp", "tagpu_recmp_auth", "tagpu_recmp_record", "tagpu_recmp_stream", "tagpu_recmp_players",
-                       "tagpu_recmp_file", "tagpu_recmp_file_state", "tagpu_recmp_history", "tagpu_recmp_orders", "tagpu_recwriter",
+                       "tagpu_recmp_file", "tagpu_recmp_file_state", "tagpu_recmp_history", "tagpu_recmp_units", "tagpu_recmp_orders", "tagpu_recwriter",
                        "tagpu_recreader", "tagpu_recfile", "lodepng", "crc32")
             command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc", "-O2", "-Wall",
                      "-Wextra", "-Werror", "-std=c99", "-o", exe, HERE / "recmp_file_test.c",
@@ -287,6 +302,21 @@ def run(output, read_file=None, skirmish_file=None):
                 ("repeated_source_roster", 66, 6, 3, 28, "<I", 7, True),
                 ("proof_player_origin", 66, 6, 3, 0, "<I", 55, False),
                 ("proof_player_mask", 66, 6, 3, 28, "<B", 4, False),
+                ("unit_batch_count", 66, 8, 2, 0, "<I", 0, False),
+                ("unit_owner_block", 66, 8, 2, 4, "<H", 5, False),
+                ("unit_live_flag", 66, 8, 2, 6, "<B", 2, False),
+                ("unit_full_flag", 66, 8, 2, 7, "<B", 0, False),
+                ("unit_birth", 66, 8, 2, 8, "<I", 0x80000000, False),
+                ("unit_reserved", 66, 8, 2, 23, "<B", 1, False),
+                ("unit_unused_bits", 66, 8, 2, 22, "<B", 7, False),
+                ("unit_owner_id", 66, 8, 2, 24+0x96, "<I", 1, False),
+                ("unit_store_id", 66, 8, 2, 24+0xEC, "<I", 12, False),
+                ("unit_attacker_row", 66, 8, 2, 24+0xF4, "<B", 11, False),
+                ("unit_owner_row", 66, 8, 2, 24+0xFF, "<B", 255, False),
+                ("unit_missing_live_bit", 66, 8, 2, 24+0x110, "<I", 0, False),
+                ("unit_duplicate_slot", 66, 8, 2, 24+328, "<H", 7, False),
+                ("proof_unit_birth", 66, 8, 3, 8, "<I", 18, False),
+                ("proof_unit_mask", 66, 8, 3, 22, "<B", 4, False),
                 ("order_owner_block", 66, 2, 2, 0, "<H", 5, False),
                 ("order_reserved", 66, 2, 2, 3, "<B", 1, False),
                 ("order_total", 66, 2, 2, 8, "<H", 4097, False),

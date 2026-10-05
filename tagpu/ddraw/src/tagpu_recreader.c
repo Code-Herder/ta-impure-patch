@@ -1784,6 +1784,12 @@ int recr_mp_player(RecReader* r, unsigned origin, RecMpPlayerState* out, char* w
     return k<=0 ? k : tagpu_recmp_history_player(r->mp_history,origin,out);
 }
 
+int recr_mp_unit(RecReader* r, unsigned slot, RecMpUnitState* out, char* why, unsigned cap)
+{
+    int k=mp_sync(r,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_unit(r->mp_history,slot,out);
+}
+
 int recr_mp_orders(RecReader* r, unsigned slot, unsigned list, RecMpOrderState* out,
                      void* image, unsigned capacity, char* why, unsigned cap)
 {

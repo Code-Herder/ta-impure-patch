@@ -6,6 +6,7 @@ struct RecMpHistory {
     RecMpFileState ledger;
     RecMpPlayers *source_player, *applied_player;
     RecMpSeatMaps *source_seats, *applied_seats;
+    RecMpUnits *source_units, *applied_units;
     RecMpOrderCache *source_orders, *applied_orders;
     unsigned failed;
 };
@@ -22,10 +23,12 @@ RecMpHistory* tagpu_recmp_history_begin(const RecMpRecordHeader* header, const R
     h->applied_player=tagpu_recmp_players_begin(roster);
     h->source_seats=tagpu_recmp_seats_begin(roster);
     h->applied_seats=tagpu_recmp_seats_begin(roster);
+    h->source_units=tagpu_recmp_units_begin(roster);
+    h->applied_units=tagpu_recmp_units_begin(roster);
     h->source_orders=tagpu_recmp_orders_begin(roster->slots);
     h->applied_orders=tagpu_recmp_orders_begin(roster->slots);
     if (!h->source_player || !h->applied_player || !h->source_seats || !h->applied_seats ||
-        !h->source_orders || !h->applied_orders) {
+        !h->source_units || !h->applied_units || !h->source_orders || !h->applied_orders) {
         tagpu_recmp_history_end(h); return NULL;
     }
     return h;
@@ -38,6 +41,8 @@ void tagpu_recmp_history_end(RecMpHistory* h)
     tagpu_recmp_players_end(h->applied_player);
     tagpu_recmp_seats_end(h->source_seats);
     tagpu_recmp_seats_end(h->applied_seats);
+    tagpu_recmp_units_end(h->source_units);
+    tagpu_recmp_units_end(h->applied_units);
     tagpu_recmp_orders_end(h->source_orders);
     tagpu_recmp_orders_end(h->applied_orders);
     HeapFree(GetProcessHeap(),0,h);
@@ -62,6 +67,10 @@ static int semantic(RecMpHistory* h, const RecMpRecord* where, const RecMpHeader
                                      state.image,sizeof state.image,image,sizeof image)) return 0;
         if (!proof && !tagpu_recmp_seats_get(h->applied_seats,packet->origin,NULL,NULL)) return 0;
         return proof || tagpu_recmp_players_put(h->applied_player,packet,body,bytes,tick);
+    }
+    if (packet->kind==RECMP_UNITS) {
+        if (!tagpu_recmp_units_put(h->source_units,h->source_seats,packet,body,bytes,tick)) return 0;
+        return proof || tagpu_recmp_units_put(h->applied_units,h->applied_seats,packet,body,bytes,tick);
     }
     if (packet->kind==RECMP_ORDERS) {
         RecMpOrders chunk;
@@ -134,4 +143,9 @@ int tagpu_recmp_history_orders(const RecMpHistory* h, unsigned slot, unsigned li
                                RecMpOrderState* out, void* image, unsigned capacity)
 {
     return h && !h->failed && tagpu_recmp_orders_get(h->applied_orders,slot,list,out,image,capacity);
+}
+
+int tagpu_recmp_history_unit(const RecMpHistory* h, unsigned slot, RecMpUnitState* out)
+{
+    return h && !h->failed && tagpu_recmp_units_get(h->applied_units,h->applied_seats,slot,out);
 }

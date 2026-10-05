@@ -166,7 +166,7 @@ owned prefix/private display, without launching TA. It writes format-5 synthetic
 footer, seeks the synthetic world, and refuses missing proofs, local-save failure
 and logically corrupted packets/footers. `--read-file <fixture.imprec>` runs the
 reader controls against an existing fixture file; `--skirmish-file <recording>` also checks an actual skirmish header/summary/info. The mode-3 header carries copied origin/seat/unit-block mapping, with world allocation and seat ownership validation; malformed mapping controls rebuild outer CRCs before expecting refusal. The typed fixture verifies source-roster carriage, complete eleven-row remapping,
-proof-only roster isolation, and reader player/order authority queries through playback/seek, exact nonempty list bytes and provenance, unknown/partial-list handling and proof-tail isolation. Body controls rebuild source seals as well as outer checksums before semantic refusal. These files do not prove game
+proof-only roster isolation, and reader player/unit/order authority queries through playback/seek, mapped owner/attacker rows, known absence versus unknown slots, exact nonempty list bytes and provenance, partial-list retention and proof-tail isolation. Body controls rebuild source seals as well as outer checksums before semantic refusal. These files do not prove game
 capture, full owner authority, engine authority application or multiplayer playback.
 
 The complete normalized player-image contribution has a bounded-cache fixture:
@@ -181,6 +181,19 @@ wire version 2 contributes a copied roster before player/order state. File autho
 queries map player vectors/self rows to recorder coordinates. C and Python independently reconstruct
 the four exact images from a raw contribution journal and refuse corruption or
 a missing tail. It does not test game `.imprec` playback, seek or AI takeover.
+
+Copied unit/mover images have a separate bounded-cache fixture:
+`python3 tools/replay/recmp_units_test.py --out /tmp/recmp-units-run`.
+One owned prefix/private display runs C controls without launching TA: 640 roster
+permutations and 464,640 exact inverse mappings across every bounded attacker row
+and nullable player ID; sixteen unchanged-output mapping refusals; full/delta,
+type/birth/death, provenance and unknown-versus-absent checks; twenty-seven atomic
+batch refusals. Guard controls cover all 372 truncations of a mixed full-live and
+absent packet, exact spans, a maximum 201-entry batch, source-map/cache allocation
+disagreement and the maximum 65,531-slot allocation's final-slot bounds. The file
+fixture independently checks mapped unit authority and proof-tail isolation in
+C/Python through synthetic seek. These fixtures do not test engine application,
+owned COB/model/effect objects or native multiplayer recording/playback.
 
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
   `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin. **The NAT
