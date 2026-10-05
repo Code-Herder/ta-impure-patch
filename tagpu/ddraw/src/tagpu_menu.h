@@ -26,6 +26,9 @@ void __stdcall tagpu_menu_oncommand(void* gi);
 /* DLL_PROCESS_ATTACH: write the archive, install the observer. */
 void tagpu_menu_init(void);
 
+/* Game thread: refresh resource plates after a menu-time profile reload. */
+void tagpu_menu_resource_refresh(void);
+
 /* Is this GAME-space point one the render-options UI owns -- the sprocket, or
    the panel while it is open? The zoom asks, because a click inside the world
    viewport is UNZOOMED on its way to the engine (tagpu_zoom.h) and our panel

@@ -1,0 +1,110 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Resource snapping and contextual mex/geo construction on discovered land, with mixed build lists, persistent helpers and owned-resource upgrade targets.",
+  "seed": 20260926,
+  "on_error": "abort",
+  "setup": {
+    "map": "Comet Catcher",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "core",
+        "color": 1,
+        "metal": 5000,
+        "energy": 5000
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "arm",
+        "color": 0
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "basic",
+      "type": "ARMCK",
+      "owner": 0,
+      "pos": [
+        1600,
+        1560
+      ]
+    },
+    {
+      "id": "advanced",
+      "type": "ARMACK",
+      "owner": 0,
+      "pos": [
+        1600,
+        1660
+      ]
+    },
+    {
+      "id": "helper",
+      "type": "CORCK",
+      "owner": 0,
+      "pos": [
+        1600,
+        1760
+      ]
+    },
+    {
+      "id": "combat",
+      "type": "ARMPW",
+      "owner": 0,
+      "pos": [
+        1500,
+        1760
+      ]
+    },
+    {
+      "id": "storage",
+      "type": "ARMMSTOR",
+      "owner": 0,
+      "pos": [
+        1300,
+        1550
+      ]
+    },
+    {
+      "id": "energy",
+      "type": "ARMESTOR",
+      "owner": 0,
+      "pos": [
+        1300,
+        1700
+      ]
+    },
+    {
+      "id": "old_mex",
+      "type": "ARMMEX",
+      "owner": 0,
+      "pos": [
+        1952,
+        1600
+      ]
+    },
+    {
+      "id": "spare",
+      "type": "CORSOLAR",
+      "owner": 1,
+      "pos": [
+        4000,
+        3500
+      ]
+    }
+  ],
+  "camera": {
+    "at": [
+      1800,
+      1660
+    ]
+  }
+}

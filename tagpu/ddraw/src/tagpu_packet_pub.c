@@ -91,6 +91,8 @@
 #include "tagpu_detour.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_vpwide.h"
+#include "tagpu_resource.h"
+#include "tagpu_profiles.h"
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
 #include "tagpu_native.h"   /* tagpu_native_owns_unit: the ownership answer, taken here */
@@ -2699,6 +2701,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     p->region_flags = RDU8(ta, OFF_REGIONFL);
     p->build_unit_id = RDU16(ta, OFF_BUILDUNITID);
     p->game_opt     = RDU8(ta, OFF_GFXOPT);
+    p->resource_queued = 0;
+    tagpu_profiles_begin_match();
+    tagpu_resource_packet(p);
 
     /* THE ORDER IS THE CUT ORDER. A fill that does not fit the reserve is
        published cut (tagpu_packet.c, pkx_publish), and what is cut is what
@@ -3014,6 +3019,7 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
        ScrollSpeed (its options screen shows that byte) */
     if (s_installed && !s_countOnly) {
         char* ta = (char*)ta_main();
+        tagpu_resource_level_end();
         if (ta) { tagpu_zoom_level_end(ta); tagpu_vpwide_level_end(ta); }
         /* and the terrain latch with it: the shell, the next level's loading
            draws and any screenshot draw before its first in-play one never
@@ -3699,6 +3705,7 @@ static unsigned fill_shell(TAGPU_PACKET* p, void* ctx)
                   sizeof(TAGPU_PACKET) - offsetof(TAGPU_PACKET, used_bytes));
     p->used_bytes = sizeof(TAGPU_PACKET);
     p->in_game    = 0;                       /* must stay 0: no world draws  */
+    tagpu_profiles_menu_tick();
     p->level_gen  = s_levelGen;
     p->tick       = s_lastTick;
     p->load_flags = (unsigned short)lf;

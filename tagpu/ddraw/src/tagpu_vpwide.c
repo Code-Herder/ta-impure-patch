@@ -9,6 +9,7 @@
 #include "tagpu_opt.h"
 #include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_vpwide.h"
+#include "tagpu_resource.h"
 #include "tagpu_detour.h"
 #include "tagpu_zoom.h"
 #include "tagpu_hud.h"
@@ -313,7 +314,7 @@ static int record_is_message(const int* pos)
     return memcmp(pos, (const char*)obj + OFF_MREC, MREC_BYTES) != 0;
 }
 
-static void __stdcall vpw_mouse_world(int* pos)
+static void __stdcall vpw_mouse_world_impl(int* pos)
 {
     char* ta;
     unsigned char* fl;
@@ -466,6 +467,12 @@ void tagpu_vpwide_true_rect(const char* ta, int* L, int* T, int* W, int* H)
     *T = *(const int*)(ta + OFF_VP_T);
     *W = *(const int*)(ta + OFF_VIEW_W);
     *H = *(const int*)(ta + OFF_VIEW_H);
+}
+
+static void __stdcall vpw_mouse_world(int* pos)
+{
+    vpw_mouse_world_impl(pos);
+    tagpu_resource_mouse();
 }
 
 int tagpu_vpwide_mouse_world_live(void)

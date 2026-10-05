@@ -767,7 +767,7 @@ typedef struct TAGPU_PACKET {
                                          ARMMEX after a build-menu click       */
     uint8_t  game_opt;                /* 0x37F06 low byte: bit0 damagebars,
                                          bit2 Shadow, bit3 TShadow, bit4 FShadow  */
-    uint8_t  pad3;
+    uint8_t  resource_queued;         /* contextual build already in an own queue */
     uint32_t shd_off, shd_len;        /* the engine's 32x256 shade table
                                          (PALETTE.SHD at graphics+0xC4), copied
                                          whole: the Gouraud LUT the unit pass
