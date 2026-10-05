@@ -22,7 +22,7 @@ static unsigned tlv32(unsigned char* b, unsigned at, unsigned tag, unsigned valu
 static HANDLE world_start(RecMpFile* mp, const char* path, RecRing** ring, unsigned* write)
 {
     RecRing* g=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof *g);
-    unsigned char header[512], player[4+REC_PLAYER_IMAGE]={0};
+    unsigned char header[2048], player[4+REC_PLAYER_IMAGE]={0}, seat[16+REC_INFO_BYTES]={0};
     unsigned globals[REC_GLOBALS_DWORDS]={0}, proj[2]={0}, mapped[2]={0};
     unsigned features[5]={2,2,1,0,0}, tick=100, at=0, n=0;
     unsigned short grid[2]={2,2};
@@ -35,10 +35,15 @@ static HANDLE world_start(RecMpFile* mp, const char* path, RecRing** ring, unsig
     CHECK(g->buf && g->grid && g->wake && g->done && DuplicateHandle(GetCurrentProcess(),g->done,
         GetCurrentProcess(),&done,0,FALSE,DUPLICATE_SAME_ACCESS));
     n=tlv32(header,n,RT_FORMAT,REC_FORMAT); n=tlv32(header,n,RT_MODE,3);
-    n=tlv32(header,n,RT_SLOTS,3); n=tlv32(header,n,RT_START,100);
+    n=tlv32(header,n,RT_SLOTS,21); n=tlv32(header,n,RT_UNITS_EACH,2); n=tlv32(header,n,RT_START,100);
     n=tlv32(header,n,RT_PROJECTILES,1);
     n=append(header,n,RT_FEATURES,features,sizeof features);
     n=append(header,n,RT_MULTIPLAYER,tagpu_recmp_file_header(mp),sizeof(RecMpRecordHeader));
+    n=append(header,n,RT_MP_SEATS,tagpu_recmp_file_roster(mp),sizeof(RecMpRoster));
+    for (unsigned i=0;i<4;i++) {
+        seat[0]=i; seat[1]=i<2 ? i+1 : 3;
+        n=append(header,n,RT_PLAYER,seat,sizeof seat);
+    }
     at=append(g->buf,at,RK_HEADER,header,n);
     at=append(g->buf,at,RK_TICK,&tick,4);
     at=append(g->buf,at,RK_GRID,grid,sizeof grid);
@@ -80,7 +85,9 @@ static int read_file(const char* path, int expected)
         printf("PASS: reader, summary and info refuse malformed contribution proof: %s\n",why);
     } else {
         if (!r) { printf("reader: %s\n",why); CHECK(r); }
-        CHECK(recr_header(r)->mode==3 && recr_header(r)->has_mp);
+        CHECK(recr_header(r)->mode==3 && recr_header(r)->has_mp && recr_header(r)->has_mp_seats &&
+              recr_header(r)->mp_seats.actor[3].origin==66 && recr_header(r)->mp_seats.actor[3].seat==3 &&
+              recr_header(r)->mp_seats.actor[3].first==7 && recr_header(r)->mp_seats.actor[3].last==8);
         CHECK(recr_tick(r,why,sizeof why)==1 && recr_world(r)->tick==100 && recr_world(r)->player[0][0]==0xA5);
         if (expected) CHECK(recr_tick(r,why,sizeof why)==1 && recr_world(r)->tick==101 && recr_world(r)->player[0][0]==0xA5);
         CHECK(!recr_tick(r,why,sizeof why));
@@ -98,6 +105,7 @@ static int read_file(const char* path, int expected)
 int main(int argc, char** argv)
 {
     RecMpConfig config={0};
+    RecMpRoster roster={ .version=1, .count=4, .slots=21, .each=2 }, bad;
     RecMpChannel* c;
     RecMpFile* mp;
     RecRing* ring;
@@ -110,6 +118,18 @@ int main(int argc, char** argv)
     RecMpStats stats;
     int local_stop;
     CHECK(argc==3);
+    if (!strcmp(argv[1],"skirmish")) {
+        char why[256];
+        RecReader* r=recr_open(argv[2],why,sizeof why);
+        RecSummary summary;
+        RecInfo* info=calloc(1,sizeof *info);
+        CHECK(r && info && recr_header(r)->mode==2 && !recr_header(r)->has_mp);
+        CHECK(recr_summary(argv[2],&summary,why,sizeof why) && recr_info(argv[2],info,why,sizeof why));
+        CHECK(summary.nseats==recr_header(r)->nseats && info->ended && summary.end_reason);
+        recr_close(r); free(info);
+        puts("PASS: actual skirmish recording's full header validation, reader, summary and file info");
+        return 0;
+    }
     if (!strcmp(argv[1],"read")) return read_file(argv[2],1);
     if (!strcmp(argv[1],"refuse")) return read_file(argv[2],-1);
     f.missing_cut=!strcmp(argv[1],"missing_cut");
@@ -129,6 +149,7 @@ int main(int argc, char** argv)
     for (unsigned i=0;i<4;i++) {
         config.actor[i].origin=i==0 ? 11 : i==1 ? 22 : i==2 ? 55 : 66;
         config.actor[i].local=i<2; tagpu_recmp_public(config.signer,&config.actor[i].public);
+        roster.actor[i]=(RecMpSeat){config.actor[i].origin,i,1+2*i,2+2*i};
     }
     f.config=config;
     for (unsigned i=0;i<2;i++) {
@@ -139,7 +160,11 @@ int main(int argc, char** argv)
         CHECK(tagpu_recmp_stream_put(&f.source[i],&p->h,p->body,5));
     }
     c=tagpu_recmp_begin(&config); CHECK(c);
-    mp=tagpu_recmp_file_begin(&config,c); CHECK(mp);
+    bad=roster; bad.actor[0].origin=99;
+    CHECK(!tagpu_recmp_file_begin(&config,c,&bad));
+    mp=tagpu_recmp_file_begin(&config,c,&roster); CHECK(mp);
+    memset(&roster,0,sizeof roster);
+    CHECK(tagpu_recmp_file_roster(mp)->count==4 && tagpu_recmp_file_roster(mp)->actor[3].last==8);
     if (f.journal_full) {
         /* Before the writer starts, a deterministic full journal. */
         RecMpPacket p=f.packet[1];

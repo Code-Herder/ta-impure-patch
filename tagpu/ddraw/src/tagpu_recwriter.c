@@ -358,7 +358,7 @@ static void delta_apply(unsigned* img, const unsigned char* bits, unsigned dword
 
 static int header_apply(Writer* w, const unsigned char* b, unsigned len)
 {
-    unsigned at = 0, mode = 0;
+    unsigned at = 0, mode = 0, each = 0, mapped = 0, seats = 0;
     while (at + 4 <= len) {
         unsigned short tag, n;
         memcpy(&tag, b + at, 2);
@@ -366,6 +366,7 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         if (at + 4 + n > len) return 0;
         if (tag == RT_SLOTS && n == 4) memcpy(&w->nslots, b + at + 4, 4);
         if (tag == RT_MODE && n == 4) memcpy(&mode, b + at + 4, 4);
+        if (tag == RT_UNITS_EACH && n == 4) memcpy(&each, b + at + 4, 4);
         if (tag == RT_MULTIPLAYER) {
             RecMpRecordHeader h;
             const RecMpRecordHeader* own = tagpu_recmp_file_header(w->ring->mp);
@@ -374,7 +375,19 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
             if (memcmp(&h, own, sizeof h) || !tagpu_recmp_file_state(&w->mp, &h)) return 0;
             w->mp_in = 1;
         }
-        if (tag == RT_PLAYER && n >= 2 && b[at + 4] < REC_PLAYERS) w->ctl[b[at + 4]] = b[at + 5];
+        if (tag == RT_MP_SEATS) {
+            const RecMpRoster* own = tagpu_recmp_file_roster(w->ring->mp);
+            if (mapped || !own || n!=sizeof *own || memcmp(b+at+4,own,sizeof *own)) return 0;
+            mapped=1;
+        }
+        if (tag == RT_PLAYER) {
+            unsigned seat;
+            if (n<16+REC_INFO_BYTES) return 0;
+            seat=b[at+4];
+            if (seat>=REC_PLAYERS || (seats>>seat&1)) return 0;
+            seats|=1u<<seat;
+            w->ctl[seat]=b[at+5];
+        }
         if (tag == RT_OPTIONS && n == 20) {
             w->view[0] = b[at + 4 + 18];
             w->view[1] = b[at + 4 + 19];
@@ -402,10 +415,21 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         }
         at += (4 + n + 3) & ~3u;
     }
-    if ((mode == 3) != !!w->mp_in || !!w->ring->mp != !!w->mp_in ||
+    if (at!=len || (mode == 3) != !!w->mp_in || w->mp_in!=mapped || !!w->ring->mp != !!w->mp_in ||
         w->nslots < 2 || w->nslots > 0xFFFF || !w->gw || w->gw > 0xFFFF || !w->gh ||
         w->gh > 0xFFFF || !w->npool || w->npool > 0x8000 || !w->ncap || w->ncap > 0xFFFF)
         return 0;
+    if (mapped) {
+        const RecMpRoster* roster=tagpu_recmp_file_roster(w->ring->mp);
+        unsigned i, mask=0;
+        if (w->nslots!=roster->slots || each!=roster->each) return 0;
+        for (i=0;i<roster->count;i++) {
+            unsigned seat=roster->actor[i].seat, ctl=w->ctl[seat];
+            mask|=1u<<seat;
+            if (ctl<1 || ctl>4 || w->mp.header.actor[i].local!=(ctl==1 || ctl==2)) return 0;
+        }
+        if (seats!=mask) return 0;
+    }
     w->units = (unsigned char*)VirtualAlloc(NULL, (size_t)w->nslots * REC_UNIT_IMAGE,
                                             MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     w->live = (unsigned char*)calloc(w->nslots, 1);

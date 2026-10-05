@@ -86,7 +86,7 @@ import struct
 import sys
 import zlib
 from pathlib import Path
-from recmp_file import Contributions
+from recmp_file import Contributions, Seats
 
 REC_FORMAT = 5
 REC_MAGIC = b"IMPREC\r\n"
@@ -164,6 +164,7 @@ RBF_STORED = 1
  RT_WEAPONS, RT_FEATURES, RT_GLOBALS, RT_PROJECTILES, RT_FRAME, RT_DLL, RT_FIELDS,
  RT_GAME_VERSION, RT_ARCHIVE, RT_MODPRINT, RT_TIMELINE) = range(1, 27)
 RT_MULTIPLAYER = 27
+RT_MP_SEATS = 28
 (RT_END_REASON, RT_LAST, RT_ITERATIONS, RT_CORRECTIONS, RT_BAD_IDS, RT_RING_HIGH, RT_OFF_THREAD,
  RT_UNCREDITED, RT_UNOBSERVED, RT_GAME_END, RT_SEAT_END) = range(32, 43)
 RT_MP_END = 43
@@ -282,6 +283,8 @@ def header(payload):
         elif tag == RT_UNITS_EACH: h["units_each"] = u32
         elif tag == RT_UNITDEFS: h["unitdefs"] = struct.unpack_from("<II", b)
         elif tag == RT_PLAYER:
+            if len(b) < 16+0xB9 or b[0] >= 10 or any(p["index"] == b[0] for p in h["players"]):
+                raise Unreadable("malformed or duplicate seat in the header")
             h["players"].append({"index": b[0], "controller": b[1], "side": b[2], "logo": b[3],
                                  "alliances": bytes(b[4:15]), "info": bytes(b[16:16 + 0xB9]),
                                  "name": b[16 + 0xB9:].decode("latin-1")})
@@ -324,14 +327,24 @@ def header(payload):
             except ValueError as error:
                 raise Unreadable(str(error)) from error
             h["multiplayer"] = b
+        elif tag == RT_MP_SEATS:
+            if "mp_seats" in h:
+                raise Unreadable("duplicate contribution seat mapping")
+            h["mp_seats"] = b
         elif tag == RT_FIELDS:
             ix, n = struct.unpack_from("<HH", b)
             h.setdefault("fields", {})[ix] = [struct.unpack_from("<HHHHBB", b, 4 + 12 * k)
                                               for k in range(n)]
     if h.get("format") != REC_FORMAT:
         raise Unreadable(f"format {h.get('format')}, this tool reads {REC_FORMAT}")
-    if (h.get("mode") == 3) != ("multiplayer" in h):
+    if (h.get("mode") == 3) != ("multiplayer" in h) or ("multiplayer" in h) != ("mp_seats" in h):
         raise Unreadable("network mode and contribution roster disagree")
+    if "multiplayer" in h:
+        try:
+            Seats(h["mp_seats"], Contributions(h["multiplayer"]).actors,
+                  h.get("slots"), h.get("units_each"), h["players"])
+        except ValueError as error:
+            raise Unreadable(str(error)) from error
     return h
 
 
@@ -890,6 +903,8 @@ def segments(bl, offsets=None):
 def shape_differs(a, b):
     """The first field in which a segment's header differs from the first header, or None: the
     reader's bound that keeps the world sized from the first header for every segment."""
+    if "multiplayer" in a and "multiplayer" in b and (a["multiplayer"] != b["multiplayer"] or a["mp_seats"] != b["mp_seats"]):
+        return "multiplayer source/seat mapping"
     for key in ("slots", "units_each", "unitdefs", "weapons", "features", "projectiles", "layout",
                 "globals", "settings_map"):
         if a.get(key) != b.get(key):

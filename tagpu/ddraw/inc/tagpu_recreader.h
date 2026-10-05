@@ -63,6 +63,8 @@ typedef struct RecHeader {
     RecTableInfo tab[REC_TABLE_MAX];
     unsigned     has_mp;
     RecMpRecordHeader mp;
+    unsigned     has_mp_seats;
+    RecMpRoster mp_seats;
 } RecHeader;
 
 /* one node list of a live unit, its node images in list order */

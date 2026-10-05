@@ -3,6 +3,32 @@ import struct
 import zlib
 
 
+class Seats:
+    """Frozen source-to-recorder-row/global-slot mapping, bounded by the file world."""
+    def __init__(self, raw, actors, slots, each, players):
+        if len(raw) != 176:
+            raise ValueError("contribution seat mapping span")
+        version, count, recorded_slots, recorded_each = struct.unpack_from("<IIII", raw)
+        if (version != 1 or not 1 <= count <= 10 or not 1 <= recorded_each <= 6553 or
+                recorded_slots != 10*recorded_each+1 or (slots, each) != (recorded_slots, recorded_each) or
+                count != len(actors) or count != len(players)):
+            raise ValueError("contribution mapping disagrees with world allocation or seats")
+        rows = [struct.unpack_from("<IIII", raw, 16+16*i) for i in range(10)]
+        if any(row != (0, 0, 0, 0) for row in rows[count:]):
+            raise ValueError("unused contribution seat mapping")
+        self.actors = rows[:count]
+        origins, seats, blocks = set(), set(), set()
+        for i, (origin, seat, first, last) in enumerate(self.actors):
+            if (not origin or origin in origins or seat in seats or first in blocks or seat >= 10 or
+                    not 1 <= first <= last < slots or last-first+1 != each or (first-1) % each or
+                    origin != actors[i][0]):
+                raise ValueError("invalid or aliased contribution origin/seat/block")
+            matches = [p for p in players if p["index"] == seat]
+            if len(matches) != 1 or not 1 <= matches[0]["controller"] <= 4 or actors[i][1] != (matches[0]["controller"] in (1, 2)):
+                raise ValueError("contribution origin has no matching owned seat")
+            origins.add(origin); seats.add(seat); blocks.add(first)
+
+
 class Contributions:
     def __init__(self, raw):
         if len(raw) != 112:

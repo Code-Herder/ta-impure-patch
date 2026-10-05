@@ -3,6 +3,7 @@
 
 #include "tagpu_recmp_record.h"
 #include "tagpu_recmp_stream.h"
+#include "tagpu_recmp_players.h"
 
 /* A footer carries application cuts, not proof-tail application. Local rows are
    zero; their final source seal is checked in the persisted packet ledger. */
@@ -27,6 +28,7 @@ typedef struct {
 /* Writer and reader independently reconstruct these bounded ledgers from file
    bytes. Refusal leaves the state unchanged. No authorization key is persisted. */
 int tagpu_recmp_file_state(RecMpFileState* s, const RecMpRecordHeader* header);
+int tagpu_recmp_file_roster_valid(const RecMpRecordHeader* header, const RecMpRoster* roster);
 int tagpu_recmp_file_record(RecMpFileState* s, const RecMpRecord* where,
                             const RecMpHeader* h, const void* body, unsigned bytes);
 int tagpu_recmp_file_block(RecMpFileState* s, const void* body, unsigned bytes);
@@ -36,8 +38,10 @@ typedef struct RecMpFile RecMpFile;
 /* Before any channel publication/consumption. The returned context owns a fresh
    attached journal and a retained channel reference. Transfer it to RecRing
    before starting that ring's writer. */
-RecMpFile* tagpu_recmp_file_begin(const RecMpConfig* config, RecMpChannel* channel);
+RecMpFile* tagpu_recmp_file_begin(const RecMpConfig* config, RecMpChannel* channel,
+                                 const RecMpRoster* roster);
 const RecMpRecordHeader* tagpu_recmp_file_header(const RecMpFile* f);
+const RecMpRoster* tagpu_recmp_file_roster(const RecMpFile* f);
 RecMpJournal* tagpu_recmp_file_journal(RecMpFile* f);
 /* Producer's final access. channel_ended is true only after the game has called
    channel end; otherwise detach the failed local recording while play continues.

@@ -289,6 +289,13 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             h->has_mp = 1;
             break;
         }
+        case RT_MP_SEATS:
+            if (h->has_mp_seats || n != sizeof h->mp_seats) {
+                snprintf(why, cap, "malformed multiplayer seat mapping"); return 0;
+            }
+            memcpy(&h->mp_seats, p, sizeof h->mp_seats);
+            h->has_mp_seats = 1;
+            break;
         case RT_MAP:           text(h->map, sizeof h->map, p, n); break;
         case RT_WALLCLOCK:     if (n == 8) memcpy(&h->wallclock, p, 8); break;
         case RT_START:         if (n == 4) h->start = u32(p); break;
@@ -412,8 +419,23 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
                  "pool");
         return 0;
     }
-    if ((h->mode == 3) != !!h->has_mp) {
+    if ((h->mode == 3) != !!h->has_mp || h->has_mp != h->has_mp_seats) {
         snprintf(why, cap, "network mode and contribution roster disagree"); return 0;
+    }
+    if (h->has_mp) {
+        if (!tagpu_recmp_file_roster_valid(&h->mp,&h->mp_seats) ||
+            h->slots!=h->mp_seats.slots || h->units_each!=h->mp_seats.each ||
+            h->nseats!=h->mp_seats.count) {
+            snprintf(why, cap, "contribution mapping disagrees with world allocation or seats"); return 0;
+        }
+        for (i=0;i<h->mp_seats.count;i++) {
+            unsigned k;
+            for (k=0;k<h->nseats;k++) if (h->seats[k].index==h->mp_seats.actor[i].seat) break;
+            if (k==h->nseats || h->seats[k].controller<1 || h->seats[k].controller>4 ||
+                h->mp.actor[i].local!=(h->seats[k].controller==1 || h->seats[k].controller==2)) {
+                snprintf(why, cap, "contribution origin has no matching owned seat"); return 0;
+            }
+        }
     }
     /* a projectile record's index is a u16 (RK_PROJ) */
     if (!h->proj_cap || h->proj_cap > 0xFFFF) {
@@ -1522,6 +1544,8 @@ static const char* shape_differs(const RecHeader* a, const RecHeader* b)
     unsigned i;
     if (a->slots != b->slots) return "unit slots";
     if (a->units_each != b->units_each) return "units a player";
+    if (a->has_mp && b->has_mp && (memcmp(&a->mp,&b->mp,sizeof a->mp) ||
+        memcmp(&a->mp_seats,&b->mp_seats,sizeof a->mp_seats))) return "multiplayer source/seat mapping";
     if (a->has_unitdefs != b->has_unitdefs || a->ndefs != b->ndefs || a->defs_hash != b->defs_hash)
         return "unit types";
     if (a->has_weapons != b->has_weapons || a->nweapons != b->nweapons ||
@@ -2112,14 +2136,14 @@ int recr_info(const char* path, RecInfo* out, char* why, unsigned cap)
         if (k >= 0) snprintf(why, cap, "%s has no header block", path);
         goto done;
     }
+    if (!header_parse(&r->h, r->raw, r->rawn, why, cap)) goto done;
     if (!info_header(out, r->raw, r->rawn)) {
         snprintf(why, cap, "%s is not a recording of format %u", path, REC_FORMAT);
         goto done;
     }
-    if (entry_u32(r->raw, r->rawn, RT_MODE) == 3) {
+    if (r->h.has_mp) {
         unsigned long long first = r->off;
-        if (!header_parse(&r->h, r->raw, r->rawn, why, cap) ||
-            segs_scan(r, 0, why, cap) < 0 || !file_at(r, first)) goto done;
+        if (segs_scan(r, 0, why, cap) < 0 || !file_at(r, first)) goto done;
     }
     ok = 1;
     if (!GetFileSizeEx(r->f, &size)) goto done;

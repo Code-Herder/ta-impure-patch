@@ -486,6 +486,7 @@ enum RecTag {
                           segment's first iteration is fork_at, and along a chain of timelines
                           it replaces the parent's iterations from fork_at on                   */
     RT_MULTIPLAYER,    /* RecMpRecordHeader: copied match/origin roster, required in mode 3      */
+    RT_MP_SEATS,       /* RecMpRoster: origin/recorder-seat/fixed-unit-block mapping in mode 3   */
     RT_END_REASON = 32,/* u32 RecEnd                                                            */
     RT_LAST,           /* u32: the last recorded GameTime                                       */
     RT_ITERATIONS,     /* u32: iterations recorded                                              */

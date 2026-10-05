@@ -1,6 +1,16 @@
 #include "tagpu_recmp_file.h"
 #include <string.h>
 
+int tagpu_recmp_file_roster_valid(const RecMpRecordHeader* h, const RecMpRoster* r)
+{
+    RecMpFileState state;
+    unsigned i;
+    if (!tagpu_recmp_roster_valid(r) || !tagpu_recmp_file_state(&state,h) || h->count!=r->count)
+        return 0;
+    for (i=0;i<r->count;i++) if (h->actor[i].origin!=r->actor[i].origin) return 0;
+    return 1;
+}
+
 int tagpu_recmp_file_state(RecMpFileState* s, const RecMpRecordHeader* h)
 {
     unsigned i, k, own=0;

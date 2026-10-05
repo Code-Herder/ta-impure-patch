@@ -4,22 +4,28 @@
 struct RecMpFile {
     RecMpJournal* journal;
     RecMpChannel* channel;
+    RecMpRoster roster;
     volatile LONG ended;
 };
 
-RecMpFile* tagpu_recmp_file_begin(const RecMpConfig* config, RecMpChannel* channel)
+RecMpFile* tagpu_recmp_file_begin(const RecMpConfig* config, RecMpChannel* channel,
+                                 const RecMpRoster* roster)
 {
     RecMpFile* f;
-    if (!channel) return NULL;
+    if (!channel || !tagpu_recmp_roster_valid(roster)) return NULL;
     f=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof *f);
     if (!f) return NULL;
     f->journal=tagpu_recmp_record_begin(config);
-    if (!f->journal || !tagpu_recmp_record_attach(channel,f->journal)) {
+    if (!f->journal || !tagpu_recmp_file_roster_valid(tagpu_recmp_record_header(f->journal),roster) ||
+        !tagpu_recmp_record_attach(channel,f->journal)) {
         tagpu_recmp_record_free(f->journal); HeapFree(GetProcessHeap(),0,f); return NULL;
     }
+    f->roster=*roster;
     tagpu_recmp_retain(channel); f->channel=channel;
     return f;
 }
+
+const RecMpRoster* tagpu_recmp_file_roster(const RecMpFile* f) { return f ? &f->roster : NULL; }
 
 const RecMpRecordHeader* tagpu_recmp_file_header(const RecMpFile* f)
 {
