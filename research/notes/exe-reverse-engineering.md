@@ -16234,7 +16234,9 @@ that distinction for participating builders/helpers rather than discarding every
 
 `0x47CC30` stamps a footprint; callers `0x43DA41`, `0x48610F`, `0x48630C`, `0x48AA9A`, `0x48B6B9`.
 An old yard byte's bit 0 stamps cell flag bit 1 (`2`) at `0x47CE32`; yard occupancy bit 2 (`4`,
-or bit 1 when unit byte `+0x10F & 2`) stamps its unit number at `0x47CE23`.
+or bit 1 when unit byte `+0x10F & 4`) stamps its unit number at `0x47CE23`.
+The mask selection at `0x47CD88..0x47CD9D` reads that byte, ANDs with `4`, and chooses yard
+mask `2` when set, otherwise `4`.
 `0x47D0E0` clears the footprint; callers `0x43DA0F`, `0x47CBD6`, `0x48AA6B`, `0x48B685`.
 It clears a matching unit number at `0x47D172`, and clears cell flag `2` for every old yard bit 0
 at `0x47D17C`. The site's only read of the candidate yard's bit 0 is `0x47D530`; its occupancy
