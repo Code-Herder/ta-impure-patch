@@ -23,27 +23,35 @@ static RecMpHeader header(unsigned origin, unsigned sequence, unsigned tick, uns
 
 static unsigned payload(unsigned kind, unsigned origin, unsigned serial, unsigned char* b)
 {
-    unsigned id=origin==11 ? 2 : 4, n=kind==RK_EV_START_NAMED ? 56 : kind==RK_EV_REPLY ? 140 : 48;
+    unsigned id=origin==11 ? 2 : 4, n=kind==RK_EV_START_NAMED ? 56 :
+        kind==RK_EV_REPLY ? 140 : kind==RK_EV_CREATE ? 28 : 48;
     memset(b,0,n); memcpy(b,&id,4);
     if (kind==RK_EV_START_NAMED) {
         b[4]=4; b[5]=1; memcpy(b+8,&serial,4); memset(b+24,'N',32);
     } else if (kind==RK_EV_REPLY) {
         unsigned reply=serial%24; memcpy(b+4,&reply,4); b[8]=serial&1; b[9]=1;
         char text[9]; snprintf(text,sizeof text,"%08X",serial); memcpy(b+12,text,8); memset(b+20,'R',120);
+    } else if (kind==RK_EV_CREATE) {
+        uint16_t type=0xFFFF;
+        unsigned finished=0x80000001u+serial;
+        memcpy(b+4,&type,2); b[6]=origin==11 ? 7 : 4; b[7]=serial&3;
+        memcpy(b+8,&finished,4); memcpy(b+12,&serial,4);
+        memset(b+16,0xA5,8); b[24]=serial%5;
     } else {
         unsigned reverse=serial&1, layer=0xABCD0004; memcpy(b+4,&reverse,4);
         memcpy(b+8,&serial,4); memset(b+12,0xA5,32); memcpy(b+44,&layer,4);
     }
     return n;
 }
-static const unsigned kinds[]={RK_EV_START_NAMED,RK_EV_REPLY,RK_EV_SPRAY};
+static const unsigned kinds[]={RK_EV_START_NAMED,RK_EV_REPLY,RK_EV_SPRAY,RK_EV_CREATE};
+#define KIND_COUNT (sizeof kinds/sizeof *kinds)
 static unsigned batch(unsigned count, unsigned char* b)
 {
     unsigned at=4; memcpy(b,&count,4);
     for (unsigned i=0;i<count;i++) {
         unsigned char image[RECMP_ROOTS_MAX];
-        unsigned n=payload(kinds[i%3],11,i,image);
-        RecMpRootsEntry e={kinds[i%3],n,i&1,{0},i+17};
+        unsigned n=payload(kinds[i%KIND_COUNT],11,i,image);
+        RecMpRootsEntry e={kinds[i%KIND_COUNT],n,i&1,{0},i+17};
         memcpy(b+at,&e,sizeof e); at+=sizeof e; memcpy(b+at,image,n); at+=n;
     }
     return at;
@@ -110,10 +118,37 @@ static void codec(void)
         memcpy(b+at,&e,sizeof e); at+=sizeof e; memset(b+at,0,12); memcpy(b+at,&id,4); at+=12;
     }
     h=header(11,3,11,RECMP_ROOTS,at); CHECK(at==4012 && tagpu_recmp_roots_put(c,m,&h,b,at,101));
+    bytes=batch(4,original);
+    h=header(11,4,12,RECMP_ROOTS,bytes);
+    CHECK(bytes==324 && tagpu_recmp_roots_put(c,m,&h,original,bytes,102));
+    CHECK(tagpu_recmp_roots_get(c,11,&before) && !memcmp(before.body,original,bytes));
+    for (unsigned control=0;control<15;control++) {
+        RecMpHeader bad=header(11,5,13,RECMP_ROOTS,bytes);
+        memcpy(b,original,bytes);
+        switch (control) {
+        case 0: b[286]=27; break; case 1: b[286]=29; break;
+        case 2: b[300]=b[301]=0; break; case 3: b[302]=10; break;
+        case 4: b[302]=4; break; case 5: b[302]=0; break;
+        case 6: b[303]=4; break; case 7: b[320]=5; break;
+        case 8: b[321]=1; break; case 9: b[322]=1; break; case 10: b[323]=1; break;
+        case 11: b[288]=2; break; case 12: b[295]=0x80; break;
+        case 13: b[296]=4; break; case 14: b[284]=0; break;
+        }
+        CHECK(!tagpu_recmp_roots_put(c,m,&bad,b,bytes,103));
+        CHECK(tagpu_recmp_roots_get(c,11,&after) && !memcmp(&before,&after,sizeof before));
+    }
+    page=VirtualAlloc(NULL,8192,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    CHECK(page && VirtualProtect(page+4096,4096,PAGE_NOACCESS,&old));
+    for (unsigned n=0;n<bytes;n++) {
+        RecMpHeader bad=header(11,5,13,RECMP_ROOTS,n); unsigned char* p=page+4096-n;
+        memcpy(p,original,n); CHECK(!tagpu_recmp_roots_put(c,m,&bad,p,n,103));
+        CHECK(tagpu_recmp_roots_get(c,11,&after) && !memcmp(&before,&after,sizeof before));
+    }
+    VirtualFree(page,0,MEM_RELEASE);
     memset(&after,0xA5,sizeof after); CHECK(!tagpu_recmp_roots_get(c,99,&after));
     for (unsigned i=0;i<sizeof after;i++) CHECK(((unsigned char*)&after)[i]==0xA5);
     tagpu_recmp_roots_end(c); tagpu_recmp_seats_end(m);
-    puts("PASS: mixed roots, future birth tokens, exact high layer bits, 36 atomic refusals, all 284 guarded truncations, 167-call maximum and unchanged unknown output");
+    puts("PASS: mixed roots, future birth tokens, exact constructor/finished/high layer bits, source owner mapping, 51 atomic refusals, all 608 guarded truncations, 167-call maximum and unchanged unknown output");
 }
 typedef struct { unsigned next, packets, alternating, tick, fail, replies; } Emissions;
 static int emit(void* context, unsigned origin, unsigned tick, const void* body, unsigned bytes)
@@ -123,7 +158,7 @@ static int emit(void* context, unsigned origin, unsigned tick, const void* body,
     memcpy(&count,b,4); CHECK(count && bytes<=RECMP_BODY_MAX && tick==e->tick);
     for (unsigned i=0;i<count;i++) {
         RecMpRootsEntry entry; unsigned char expected[RECMP_ROOTS_MAX];
-        unsigned kind=e->replies ? RK_EV_REPLY : kinds[e->next%3];
+        unsigned kind=e->replies ? RK_EV_REPLY : kinds[e->next%KIND_COUNT];
         unsigned owner=e->alternating && e->next&1 ? 22 : 11;
         unsigned n=payload(kind,owner,e->next,expected);
         memcpy(&entry,b+at,sizeof entry); at+=sizeof entry;
@@ -140,7 +175,7 @@ static void queues(void)
         Emissions e={ .alternating=alternating, .tick=10 }; unsigned char b[RECMP_ROOTS_MAX];
         CHECK(q);
         for (unsigned i=0;i<4096;i++) {
-            unsigned origin=alternating && i&1 ? 22 : 11, kind=kinds[i%3];
+            unsigned origin=alternating && i&1 ? 22 : 11, kind=kinds[i%KIND_COUNT];
             unsigned n=payload(kind,origin,i,b);
             CHECK(tagpu_recmp_roots_queue_push(q,origin,10,i+17,i&1,kind,b,n)); memset(b,0xCC,sizeof b);
         }
@@ -149,7 +184,7 @@ static void queues(void)
         if (alternating) CHECK(e.packets==4096);
         e.tick=11;
         for (unsigned i=4096;i<4196;i++) {
-            unsigned origin=alternating && i&1 ? 22 : 11, kind=kinds[i%3];
+            unsigned origin=alternating && i&1 ? 22 : 11, kind=kinds[i%KIND_COUNT];
             unsigned n=payload(kind,origin,i,b);
             CHECK(tagpu_recmp_roots_queue_push(q,origin,11,i+17,i&1,kind,b,n));
         }
@@ -171,6 +206,6 @@ static void queues(void)
         CHECK(!tagpu_recmp_roots_queue_push(q,11,10,17,0,RK_EV_REPLY,b,n));
         tagpu_recmp_roots_queue_end(q);
     }
-    puts("PASS: 8392 mixed script/reply/spray calls preserve copied bytes/order across actor switches, packet splits, phase/tick and ring wrap; overflow/backwards clock/failed emission latch incomplete");
+    puts("PASS: 8392 mixed create/script/reply/spray calls preserve copied bytes/order across actor switches, packet splits, phase/tick and ring wrap; overflow/backwards clock/failed emission latch incomplete");
 }
 int main(void) { codec(); queues(); return 0; }

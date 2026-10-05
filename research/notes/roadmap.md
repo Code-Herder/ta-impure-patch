@@ -3897,10 +3897,10 @@ observer, including constructor arguments, birth, water and carried build/HP
 state; readers retain format-5 support. The controlled file/seek fixture bounds
 and preserves that data. It does not resolve early owner replies' materialization
 clock or enable native engine playback; those remain the next application work.
-The normal native format-6 recording verifies 35 replica roots against the next
-B2 images and retains their exact bytes through C/Python world seek; all 353
-observed-world transitions are explained. A private SDK creation failure under
-coverage remains a startup gap, with successful native coverage still required.
+The current native format-6 coverage recording verifies 36 replica roots against
+the next B2 images and retains their exact bytes through C/Python world seek;
+all 445 observed-world transitions are explained. Earlier private SDK startup
+failures remain unexplained; this successful run does not resolve reliability.
 The isolated native worker now carries contributions inside TA, with signed human/AI bindings against keys copied from actual native player data. A four-actor TA game verifies resources and queues; its production channel also starts and delivers in the native fixture after both primary interfaces close. Source-prefix seals now validate exact sequence/tick/byte/checksum tails; the native fixture verifies final human/AI prefixes and a missing-tail control refuses. Frozen consumption cuts, final receipts and a retained post-teardown consumer now pass controls and the native fixture. A bounded journal preserves produced/consumed source packets with separate application timestamps and a shared ordinal. Its optional copied context now reaches the actual format-5 file writer; a synthetic `.imprec` fixture passes C/Python read/cut-footer validation and world seeking, refusing missing proofs and semantic corruption. Native capture now attaches that context before any publication/consumption. Full owner authority, bandwidth bounds, network engine playback/seek, perspectives, communication and ten-seat takeover remain.
 No multiplayer code has landed. A real native normal-speed four-actor game now
 produces a 2,524,535-byte mode-3 file with the host recording and the joiner opted
@@ -3930,25 +3930,38 @@ The copied-image player-row mapper passes 640 roster permutations and 3,520 byte
 
 Owner unit/mover images now have a bounded copied-image mapper and kind-8 full/delta/absence carrier, preserving birth, source stream/tick/sequence and application tick. Its atomic cache fixture passes 464,640 exact inverse mappings, malformed-batch and guard controls, 201-entry batches and the 65,531-slot bound. A native four-actor game verifies all four first full unit-image checksums/provenance and human owner-row remapping, then ordinary-exit cuts/receipts. Synthetic C/Python file seeking retains mapped unit authority and known absence while proof-only changes stay in source validation. This covers the record/mover, not COB/model/order-owned objects, effects/projectiles, AI planner or complete declared Impure authority. Engine application, projectile/Impure mappings and native multiplayer playback/seek remain open; no multiplayer landing is cleared by these tests.
 
-Owner-only script starts, replies and sprays now share a copied kind-10 carrier
+Owner creates, script starts, replies and sprays share a copied kind-10 carrier
 and one bounded queue, preserving mixed call order, exact bytes, incarnation,
 source clock and pre/post-capture phase. The legacy kind-9 decoder remains.
-Codec/queue controls pass 36 atomic refusals, 284 guarded truncations and 8,392
-mixed calls; synthetic writer/C/Python reader tests retain six applied batches
+Codec/queue controls pass 51 atomic refusals, 608 guarded truncations and 8,392
+mixed calls, with constructor arguments captured even when local recording is
+off and source owner rows authorized through frozen maps. Synthetic writer/
+C/Python reader tests retain six applied batches
 through seek and isolate later source proof. The ordered `recr_mp_apply` cursor
 delivers all 27 application envelopes with exact source/application metadata and
 bytes, including A/B/A batches; queries, repeated polls, resumed ordinals and
-backward/forward seek preserve delivery. Five lifecycles, 23 header and 74 body
-refusals pass. Capture reuses existing observers without a new engine patch
+backward/forward seek preserve delivery. Five lifecycles, 23 header and 87 body
+refusals pass, including constructor bounds/ownership.
+Capture reuses existing observers without a new engine patch
 or field write. Independent clock mapping, engine root application, remaining
 owner-only events/Impure authority, native engine playback/seek, all POV/communications,
 budget and ten-seat/migration gates remain open. A native normal-speed four-actor
 rerun with recording off verifies matching first script/reply/spray packet bytes
 and provenance for every actor and ordinary-exit cuts/receipts; the sample observes
-only post-B2 phase. The current coverage build passes all 67 skirmish `battle`
-checks, including the shared reply/spray/start hooks, restore/seek, takeover,
-forks and live/paused rewind. No exclusion or tolerance changes. This is a
+only post-B2 phase. The current coverage build passes all 23 skirmish
+`secondary-orders` checks, including the shared constructor observer,
+puppet playback, restore/fresh seek, inventory and three exact poisoned round
+trips. No exclusion or tolerance changes. This is a
 worktree checkpoint.
+
+Current native COVER capture verifies sixteen first create/script/reply/spray
+observations with host recording and joiner opt-out. All 70 constructor tokens
+join carried source type/owner; the 35 local primary payloads match contribution
+bytes. Eight roots precede their constructor's success exit, so capturing the
+dependency does not settle native materialization order. The complete native
+file retains 3,052 applications and 508 root batches through C/Python world seek
+with zero corrections; both peers reach `ev_create`. Engine playback remains
+refused and no multiplayer landing is cleared by this checkpoint.
 
 The work branch's tick-based replay harness defaults to internal speed 20 (2x),
 with normal speed selectable and retained for cost and speed/settings UI checks.

@@ -3647,10 +3647,12 @@ static int __cdecl ev_create(void* E)
     unsigned id, owner, v;
     unsigned char b[28];
     cnt(0x004861B3u, 0, 0);
-    if (!(r = ev_rec())) return 0;
+    r = ev_rec();
     unit = PTR(REG_ESI(E));
-    if (!(id = ev_unit(r, unit))) return 0;
-    owner = id_of(&r->L, RL_T_PLAYER, *(const char* const*)(unit + U_OWNER));
+    id = r ? ev_unit(r, unit) : mp_roots_unit(unit, 0, 0);
+    if (!id) return 0;
+    owner = id_of(r ? &r->L : &s_mp_level, RL_T_PLAYER,
+                  *(const char* const*)(unit + U_OWNER));
     memcpy(b, &id, 4);
     v = ARG(E, 0x1C) & 0xFFFF;                        /* the type: `mov dx,[esp+0x1C]`, 0x486079 */
     memcpy(b + 4, &v, 2);
@@ -3661,7 +3663,8 @@ static int __cdecl ev_create(void* E)
     memcpy(b + 12, (const unsigned char*)E + 0x20, 12);   /* the position, three dwords by value */
     b[24] = (unsigned char)unit[U_WATER];
     b[25] = b[26] = b[27] = 0;
-    ev_put(r, RK_EV_CREATE, b, sizeof b);
+    if (r) ev_put(r, RK_EV_CREATE, b, sizeof b);
+    mp_roots_push(unit, RK_EV_CREATE, b, sizeof b);
     return 0;
 }
 
@@ -3967,7 +3970,8 @@ static void mp_roots_log(const RecMpPacket* packet, unsigned applied_tick, const
         unsigned id, bit;
         memcpy(&e,packet->body+at,sizeof e); at+=sizeof e;
         memcpy(&id,packet->body+at,4);
-        bit=e.kind==RK_EV_START_NAMED ? 1 : e.kind==RK_EV_REPLY ? 2 : 4;
+        bit=e.kind==RK_EV_START_NAMED ? 1 : e.kind==RK_EV_REPLY ? 2 :
+            e.kind==RK_EV_SPRAY ? 4 : 8;
         if (!(s_mp_roots_seen[row]&bit)) {
             s_mp_roots_seen[row]|=bit;
             tagpu_logf("recmp: %s owned roots ID %u source tick %u seq %u applied tick %u, "

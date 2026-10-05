@@ -15,7 +15,13 @@ int tagpu_recmp_root_image_valid(unsigned kind, const void* image, unsigned byte
     const unsigned char* b=image;
     unsigned value, at;
     if (!image || bytes<RECMP_ROOTS_MIN || bytes>RECMP_ROOTS_MAX) return 0;
-    if (kind==RK_EV_START_NAMED) {
+    if (kind==RK_EV_CREATE) {
+        uint16_t type;
+        if (bytes!=28) return 0;
+        memcpy(&type,b+4,2);
+        return type && b[6]<REC_PLAYERS && b[7]<=3 && b[24]<=4 &&
+               !b[25] && !b[26] && !b[27];
+    } else if (kind==RK_EV_START_NAMED) {
         if (bytes<25 || bytes>24+REC_NAME_MAX || b[4]>4 || b[5]>1 || b[6] || b[7]) return 0;
         at=24;
     } else if (kind==RK_EV_REPLY) {
@@ -89,6 +95,9 @@ int tagpu_recmp_roots_put(RecMpRoots* c, const RecMpSeatMaps* maps,
         memcpy(&id,b+at,4);
         if (id<actor->first+1 || id>actor->last+1 ||
             !tagpu_recmp_root_image_valid(e.kind,b+at,e.bytes)) return 0;
+        /* The payload keeps the source's player row. Its bounded row must map
+           to this origin's frozen destination seat before the batch publishes. */
+        if (e.kind==RK_EV_CREATE && permutation[b[at+6]]!=actor->seat) return 0;
         at+=e.bytes;
     }
     if (at!=bytes) return 0;

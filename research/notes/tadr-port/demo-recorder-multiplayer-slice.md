@@ -563,10 +563,10 @@ At tick 151, host statistics show 23 accepted DATA / 3376 bytes / 17 logical rec
 Step 1 is the research gate. The work branch enables observed native capture with the separate authority ledger from step 2. No multiplayer landing is complete: it needs the native fixtures and a checked account of every remote field it carries and applies. Presentation and playback remain required; a partial file must not be presented as a faithful multiplayer replay.
 
 
-### Ordered script, reply and spray contributions
+### Ordered create, script, reply and spray contributions
 
-Production wire kind 10 uses one 4,096-slot copied game-thread queue for all three
-existing roots: `RK_EV_START_NAMED`, `RK_EV_REPLY`, `RK_EV_SPRAY`. It preserves
+Production wire kind 10 uses one 4,096-slot copied game-thread queue for four
+existing roots: `RK_EV_CREATE`, `RK_EV_START_NAMED`, `RK_EV_REPLY`, `RK_EV_SPRAY`. It preserves
 mixed call order, including A/B/A actor changes, and packetizes only contiguous
 same-origin, same-source-tick entries. A u32 count precedes packed twelve-byte
 prefixes: u16 kind, u16 payload span, boolean pre-B2 phase, three zero reserved
@@ -576,6 +576,19 @@ Script names/arguments retain the legacy bounds; replies have kind <24, boolean
 root/text flags, zero reserved bytes and at most 128 non-NUL text bytes; sprays
 are exactly 48 bytes with a boolean reverse flag and signed low layer word 0..9.
 The high layer word is retained unchanged, as in skirmish replay.
+
+Successful owner creates use the existing 28-byte payload: shared unit ID,
+nonzero u16 raw type, source owner row, layer 0..3, all 32 finished bits,
+three position dwords, water 0..4 and three zero reserved bytes. The source
+owner row must map to this origin's frozen destination seat; copied bytes are
+retained in source coordinates. The later engine consumer must also bound the
+type against its definition count. The existing success-exit observer supplies
+this dependency even with recording off, after any constructor replies, with
+B4's exact birth token and source capture phase. Initial units remain in the
+initial full images. The representation adds an existing payload subtype to
+kind 10 without changing its fields or wire version 2/file formats 5/6; older
+decoders refuse this subtype. It does not enable engine playback or choose the
+application ordering for roots whose units are not yet present on the recorder.
 
 The entire copied batch validates source roster/stream, frozen origin block,
 span, kind, birth/phase and provenance before publication. There is no partial
@@ -589,25 +602,29 @@ seals. Overflow, backwards source time and failed emission latch incomplete.
 The extra queue replaces the former named-only queue; there are no independent
 per-kind drains that could regroup calls. No new engine patch or field write.
 
-MEASURED 2026-10-05 on the reference setup: `recmp_roots_test.py` passes 36 atomic
-refusals, all 284 guard-page truncations of a mixed batch, a 167-call maximum,
-exact future incarnation tokens and high layer bits, and unchanged unknown
-outputs. Queue controls verify 8,392 copied mixed calls over phase/tick changes,
+MEASURED 2026-10-05 on the reference setup: `recmp_roots_test.py` passes 51 atomic
+refusals, all 608 guard-page truncations of three/four-kind mixed batches,
+a 167-call maximum,
+exact future incarnation tokens, constructor/finished/high layer bits, source
+owner-row authorization and unchanged unknown outputs. Queue controls verify
+8,392 copied mixed calls over phase/tick changes,
 actor switches, packet boundaries and ring wrap; overflow/backwards clock/failed
-emission permanently refuse. `recmp_file_test.py` writes a 3,439-byte synthetic
-world/container with 24 application records (ten remote consumptions) and seven
-late proof records. C and independent Python preserve three actors' exact ordered
-script/reply/spray batches through reading and seeking, including phases, future
+emission permanently refuse. Its Python runner's syntax error was reproduced
+and corrected before this execution. `recmp_file_test.py` writes a 3,661-byte
+synthetic world/container with 27 application records and seven late proof
+records. C and independent Python preserve three actors' exact ordered
+create/script/reply/spray batches through reading and seeking, including phases, future
 birth tokens and high layer bits. Late source proof changes reply text from OK to
 NO while leaving application authority unchanged; proof-only roots establish no
-applied authority. All five lifecycle controls, 23 header refusals and 74 body
+applied authority. All five lifecycle controls, 23 header refusals and 87 body
 refusals with valid raw seals/cuts pass. `recr_mp_roots` returns the last applied
 copied batch separately from `RecWorld`; the ledger keeps every batch.
 
 These controls establish bounded capture representation and reader history.
-They do not materialize engine roots, map independent clocks, create a native
-multiplayer file, or establish multiplayer playback/seek. Remaining owner-only
-roots and declared Impure authority, all POV/communications, budget enforcement,
+They do not materialize engine roots or map independent clocks. Actual native
+file capture is verified separately below; engine multiplayer playback/seek
+remains refused. Remaining owner-only roots and declared Impure authority,
+all POV/communications, budget enforcement,
 ten seats and continued migration remain required.
 
 
@@ -935,3 +952,44 @@ Native heartbeats still report speed 10. The owned games, prefixes and display
 are removed. Engine playback remains refused pending the materialization,
 incarnation and authority work above; this capture/reader verification does not
 meet the complete multiplayer landing gate.
+
+### Owner constructor dependency verification
+
+MEASURED 2026-10-05 on the reference setup, the current coverage DLL runs a
+four-actor *Two Continents* combat/reclaim game with host recording and joiner
+recording off. All sixteen first create/script/reply/spray observations match
+source and recipient batch bytes, checksum, source sequence/tick, call index,
+birth and phase. The host writes a complete 1,401,962-byte file at GameTimes
+1..266 with zero corrections. C and Python retain all 3,052 ordered applications,
+806,806 application bytes and 508 root batches through sequential reading and
+fresh world seek, CRC `AEDF9750`. The 36 primary replica creation roots retain
+their exact ticks/body bytes, CRC `D68B60BD`. The observed-world checker explains
+all 265 transitions, including 35 local and 36 replica creates.
+
+The mandatory owner ledger carries 70 successful constructor calls: 22/13
+for each human/hosted-AI pair, including the non-recording peer. Sixty-eight
+have finished=1 and two finished=0; all are post-B2 in this sample. Every call's
+exact origin/slot/birth joins a carried live source image with the same raw type
+and source owner. All 35 local observed-world constructor payloads equal their
+mandatory contribution payloads byte for byte. Eight other owner roots precede
+their constructor's success exit; the carrier preserves that order. This proves
+why a creation dependency needs incarnation indexing, and does not justify
+dispatching roots solely by recorded arrival or numerical tick equality.
+
+The retained matching coverage map shows 662/529 reached functions on host/joiner;
+both reach `ev_create`, `mp_roots_push`, `mp_roots_log` and `mp_capture`. The host
+ends before the joiner with 1,509 accepted / 1,515 completed, cuts 2/2 and four
+receipts; the still-playing joiner later ends at 1,677 / 1,683 and cuts 2/2.
+Both queues and failure codes are zero. Owned games, prefixes and display are
+removed. Native speed is still 10. Continued migration, independent-clock/root
+materialization and faithful engine playback remain open; mode-3 playback is
+still refused. No exclusion, tolerance, timing mitigation, byte patch or engine
+field write is introduced.
+
+The same current coverage build passes all 23 `secondary-orders` skirmish
+checks at internal speed 20: live/puppet/restore/fresh seek, event/image
+comparisons, inventory, address scans and puppet write checks. Round trips at
+331/391/511 poison 26 tables, leave zero residue and compare exactly before/
+after. This verifies the shared constructor observer with the native channel
+absent; it does not replace the accumulated landing replay gate or native
+engine playback tests.

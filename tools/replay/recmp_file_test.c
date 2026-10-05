@@ -101,9 +101,9 @@ static void source_named(unsigned sequence, unsigned proof)
 
 static unsigned roots_body(unsigned origin, unsigned proof, unsigned char* body)
 {
-    const unsigned kinds[]={RK_EV_START_NAMED,RK_EV_REPLY,RK_EV_SPRAY};
-    const unsigned spans[]={28,14,48};
-    unsigned count=3, at=4, id=origin==11 ? 2 : origin==22 ? 4 : 6;
+    const unsigned kinds[]={RK_EV_START_NAMED,RK_EV_REPLY,RK_EV_SPRAY,RK_EV_CREATE};
+    const unsigned spans[]={28,14,48,28};
+    unsigned count=4, at=4, rank=origin==11 ? 0 : origin==22 ? 1 : 2, id=2+2*rank;
     memcpy(body,&count,4);
     for (unsigned i=0;i<count;i++) {
         RecMpRootsEntry e={kinds[i],spans[i],i&1,{0},17};
@@ -116,10 +116,17 @@ static unsigned roots_body(unsigned origin, unsigned proof, unsigned char* body)
         } else if (i==1) {
             value=23; memcpy(body+at+4,&value,4); body[at+8]=body[at+9]=1;
             memcpy(body+at+12,proof ? "NO" : "OK",2);
-        } else {
+        } else if (i==2) {
             value=1; memcpy(body+at+4,&value,4);
             value=origin+proof; memcpy(body+at+8,&value,4);
             memset(body+at+12,0xA5,32); value=0xABCD0004; memcpy(body+at+44,&value,4);
+        } else {
+            uint16_t type=1;
+            memcpy(body+at+4,&type,2); body[at+6]=source_roster(rank>=2).actor[rank].seat;
+            body[at+7]=3; value=0x80000001; memcpy(body+at+8,&value,4);
+            value=origin+proof; memcpy(body+at+12,&value,4);
+            value=0x80000000; memcpy(body+at+16,&value,4);
+            value=0x7FFFFFFF; memcpy(body+at+20,&value,4); body[at+24]=4;
         }
         at+=spans[i];
     }
@@ -289,7 +296,7 @@ static void read_units(RecReader* r, char* why, unsigned cap)
         unsigned later=recr_world(r)->tick==101 && origin<55;
         unsigned variant=later ? (origin==11 ? 2 : 1) : 0;
         bytes=roots_body(origin,variant,body);
-        CHECK(recr_mp_roots(r,origin,&roots,why,cap)==1 && roots.count==3 &&
+        CHECK(recr_mp_roots(r,origin,&roots,why,cap)==1 && roots.count==4 &&
               roots.bytes==bytes && roots.sequence==(later ? (origin==11 ? 8 : 7) : 5) &&
               roots.source_tick==(later ? 101 : i<2 ? 100 : 8) &&
               roots.applied_tick==(later ? 101 : 100) && !memcmp(roots.body,body,bytes));

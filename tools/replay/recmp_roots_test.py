@@ -35,7 +35,7 @@ def run(output):
                      "--private-registry", "--display", display.display, "--res", "640x480"], log)
         with (output / "roots.log").open("w") as log:
             command(["wine", exe], log, env=env)
-    print("PASS: copied owner-root cache and ordered queue controls", flush=True)
+        print("PASS: copied owner-root cache and ordered queue controls", flush=True)
     finally:
         if env:
             subprocess.run(["wineserver", "-k"], env=env, timeout=10, check=False)

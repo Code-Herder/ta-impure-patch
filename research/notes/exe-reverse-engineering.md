@@ -1936,6 +1936,20 @@ one did not fit.
 | `0x4720D0`, `0x472200` (7 bytes each) | the nano emitters `(point, box, layer)` and `(box, point, layer)` | the point, the box and the layer, credited to a unit |
 | `0x43A216`, `0x43B878`, `0x43BB1D` (8 bytes each) | the order dispatch: the order's `mov`, its `push`, and the `call [reg+4]` 4 bytes on (`0x43A21A`, `0x43B87C`, `0x43BB21`), the only ways into a handler ([*The nano spray*](#the-nano-spray-two-emitters-fifteen-order-handlers-disassembled-2026-09-29)) | nothing: they forget the last query |
 
+**Owned constructor contributions.** The existing `0x4861B3` observer also
+copies successful local human/hosted-AI constructor arguments into kind-10
+contributions with recording off. Fixed unit/player array bounds and the owning
+game thread protect the reads; the frozen origin block and source-roster owner
+row authorize the copied payload. B4 stamps the slot before constructor calls,
+so the queue attaches its exact incarnation token even when replies precede
+this success exit. The payload retains all 32 finished bits: `0x486075` loads
+the dword and `0x48611A..0x48611C` test zero versus nonzero, without normalizing
+it. The position copies at `0x48607E..0x48609D`, raw type store at `0x486086`,
+layer mask at `0x4860FE` and success register pops at `0x4861B3..0x4861B9`
+were checked against pristine disassembly. This supplies a creation dependency;
+it does not choose when an early owner root materializes in a native replay.
+No additional engine patch or field write is installed.
+
 **`0x44FE40(netid)`**, `ret 4`, read and not hooked: −1 is player 10, none (`0x44FE47`,
 `0x44FE9B`); otherwise the first of the ten seats whose controller `+0x73` is nonzero and whose
 `+4` is the netid (`0x44FE5C..0x44FE99`), and 10 when no seat matches. The death's killer is named

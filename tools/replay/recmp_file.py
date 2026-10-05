@@ -313,7 +313,7 @@ class History:
             if not proof:
                 self.named[origin] = state.copy()
         elif kind == 10:
-            from tarec import RK_EV_START_NAMED, RK_EV_REPLY, RK_EV_SPRAY
+            from tarec import RK_EV_CREATE, RK_EV_START_NAMED, RK_EV_REPLY, RK_EV_SPRAY
             source_map = self.source_maps.get(origin)
             if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:
                 raise ValueError("owner roots precede their source roster")
@@ -338,7 +338,13 @@ class History:
                 unit = struct.unpack_from("<I", image)[0]
                 if not actor[2]+1 <= unit <= actor[3]+1:
                     raise ValueError("owner root unit block")
-                if root == RK_EV_START_NAMED:
+                if root == RK_EV_CREATE:
+                    if (span != 28 or not struct.unpack_from("<H", image, 4)[0] or
+                            image[6] >= 10 or image[7] > 3 or image[24] > 4 or any(image[25:])):
+                        raise ValueError("owner create type/owner/layer/water/reserved")
+                    if source_map["roster"].mapping(self.roster)[image[6]] != actor[1]:
+                        raise ValueError("owner create source row")
+                elif root == RK_EV_START_NAMED:
                     if (not 25 <= span <= 56 or image[4] > 4 or image[5] > 1 or
                             image[6] or image[7] or b"\0" in image[24:]):
                         raise ValueError("owner script arguments/name")

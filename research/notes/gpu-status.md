@@ -3027,10 +3027,10 @@ The copied-image player-row mapper validates source/destination origin sets and 
 
 `tagpu_recmp_units.c` now bounds/maps owner/resource-player IDs and attacker/owner rows in copied 328-byte unit/mover images. Kind 8 carries full/changed-word images and explicit absence with birth/source/application provenance. Its game-thread cache validates the entire batch and source/cache allocation agreement before publishing any slot. The isolated fixture passes 464,640 exact inverse mappings over 640 rosters, atomic refusal and guard-page controls, 201-entry batches and final-slot bounds at 65,531 slots. Actual native TA verifies all four human/hosted-AI first full unit-image source checksums/provenance and mapped human rows, plus ordinary-exit cuts/receipts. C/Python file queries retain unknown-versus-absent and proof-only delta isolation through synthetic seek. The adapter reads bounded frozen local blocks and the existing declared birth table, and writes only owned caches. Engine application, COB/model/order-owned objects, effects/projectiles, AI planner, complete declared Impure authority and native engine playback/seek remain open. The engine map documents create/resource/damage/death and lookup helpers read for this audit, including the uncalled helper and unbounded initializer.
 
-Owner-only script starts, replies and nano sprays now share one copied kind-10
+Owner creates, script starts, replies and nano sprays share one copied kind-10
 carrier and 4,096-call game-thread queue (`tagpu_recmp_roots.c`), independently
 of the recording switch. The existing thirteen start observers, extra-weapons
-helper, two reply observers, nano query/dispatch credit and two spray observers
+helper, successful constructor exit, two reply observers, nano query/dispatch credit and two spray observers
 supply unchanged root payloads. Mixed kinds and contiguous actor switches retain
 call order, source clock, incarnation and pre/post-B2 phase. Old calls drain before
 source seals and final calls before teardown seals. Whole-batch bounds validate
@@ -3038,10 +3038,11 @@ frozen ownership, names/arguments, 24 reply kinds and ten signed spray layers
 before publication; an uncredited multiplayer spray refuses contributions.
 There is no new engine write or patch. The worker sees copied packets only.
 The legacy kind-9 cache remains for reading earlier experimental contributions.
-Codec/queue controls pass 36 atomic refusals, 284 guarded truncations and 8,392
-ordered mixed calls. The 3,512-byte synthetic C/Python file verifies six mixed
+Codec/queue controls pass 51 atomic refusals, 608 guarded truncations and 8,392
+ordered mixed calls, including source owner-row authorization and every
+constructor/finished/position bit. The 3,661-byte synthetic C/Python file verifies six mixed
 applied batches through seek, proof-only isolation, five lifecycles, 23 header
-and 74 body refusals. Queries return copied authority separately from `RecWorld`.
+and 87 body refusals. Queries return copied authority separately from `RecWorld`.
 `recr_mp_apply` visits every application envelope in recorded ordinal order
 through the current world tick, retaining both clocks and the full copied batch.
 Its separate cursor prevents copied-state queries from consuming playback data.
@@ -3054,9 +3055,20 @@ playback/seek remain open. Native normal-speed four-actor TA with recording off
 verifies all twelve first script/reply/spray observations against recipient bytes,
 source metadata, event index, incarnation and phase, plus ordinary-exit cuts and
 receipts. Only post-B2 calls are observed in that native sample. This is a worktree
-checkpoint. The current coverage build passes all 67 skirmish `battle` checks,
-including shared reply/spray/start capture, restore/seek, takeover, timeline forks
-and live/paused rewind; no exclusion or comparison rule is changed.
+checkpoint. The current coverage build passes all 23 skirmish `secondary-orders`
+checks, including the shared constructor observer, puppet playback, restore,
+fresh seek, inventory and three exact poisoned round trips. No exclusion or
+comparison rule is changed.
+
+Current COVER native capture also verifies all sixteen first constructor/script/
+reply/spray batch observations with one peer's recording off. Seventy exact
+constructor tokens join their carried live source type/owner; all 35 primary
+local constructor payloads equal the contribution bytes. Eight other roots
+precede their constructor's success exit. The complete 1,401,962-byte recording
+retains 3,052 ordered applications and 508 root batches through C/Python fresh
+world seek, with zero corrections; coverage reaches `ev_create` on both peers.
+These dependencies remain separate from observed-world authority. Native engine
+materialization/playback and the complete multiplayer landing gate remain open.
 
 Native `mp_record_begin` now transfers `RecMpFile` into the writer before any
 source publication or consumption. Mode-3 headers retain copied transport and

@@ -204,14 +204,16 @@ fixture independently checks mapped unit authority and proof-tail isolation in
 C/Python through synthetic seek. These fixtures do not test engine application,
 owned COB/model/effect objects or native multiplayer recording/playback.
 
-Owner-only script/reply/spray contribution bounds use:
+Owner create/script/reply/spray contribution bounds use:
 `python3 tools/replay/recmp_roots_test.py --out /tmp/recmp-roots-run`.
 One owned prefix/private display runs copied-cache and 4,096-call queue controls:
-36 atomic refusals, all 284 guarded truncations, maximum batches and 8,392 mixed
+51 atomic refusals, all 608 guarded truncations, maximum batches and 8,392 mixed
 calls across packet splits/actor switches/queue wrap. Overflow, backwards source
 time or failed emission permanently refuse. Payloads preserve exact argument/text/
-spray bytes, source clock, incarnation token and pre/post-capture phase. The file
-fixture checks ordered applied mixed batches through synthetic seek and proof
+spray/constructor bytes, source clock, incarnation token and pre/post-capture phase.
+Constructor payloads retain the source owner row, validated through its frozen
+source roster, and all finished/position bits. The file fixture checks ordered
+applied mixed batches through synthetic seek and proof
 isolation. The retained legacy named-only codec is exercised by
 `python3 tools/replay/recmp_named_test.py --out /tmp/recmp-named-run` (28 atomic
 refusals and 94 guarded truncations). These tests do not launch TA or establish
