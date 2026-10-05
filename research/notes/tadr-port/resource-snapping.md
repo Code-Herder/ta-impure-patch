@@ -123,6 +123,8 @@ The uniform-region statement applies to candidates with the same qualifying cove
 and region boundaries can change their counts. It does not promise identical coordinates to
 vanilla placement in every rounding case. Geo snapping remains independent of the metal threshold.
 These consequences are derived from source; live metal-map verification is pending.
+The [engine map](../exe-reverse-engineering.md#surface-metal-and-the-mex-snap-threshold) records
+the stock property load and grid initialization that establish the background value's role.
 
 ### Exploration
 

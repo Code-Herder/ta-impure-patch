@@ -467,6 +467,34 @@ Every native recorder contains `lockon`, `sharemappos` and replay-follow help. T
 no host-only gate; following requires camera data in the recording. These observations are
 availability/default evidence, not a newly run native replay.
 
+### Surface metal and the mex snap threshold
+
+**SOURCE + DISASSEMBLED 2026-10-04.** Read for the
+[resource-snapping design](tadr-port/resource-snapping.md#metal-maps). The preferred image is
+`pristine/TotalA.exe.pristine`, inspected with `i686-w64-mingw32-objdump -d -M intel` and a
+section dump for the property name. These are stock reads/initialization, not Impure writes.
+
+TADR's `v2026.6.8` `tamem.h` names the game-state dword at `+0xD30` `surfaceMetal` and the byte
+at `FeatureStruct+7` `MetalValue`; the packed feature-grid record is 13 bytes. Its mex scorer
+counts only footprint cells with `MetalValue > surfaceMetal`, rather than summing values. The
+scorer and square-search selector are identical after whitespace normalization in `v2024.3.31`,
+`v2026.6.8` and `v2026.8.6`. SOURCE.
+
+| Address | Established fact |
+|---|---|
+| `0x4366B3..0x4366DB` | Pushes the property string at `0x504B24` (`SurfaceMetal`), calls the integer reader `0x4C46C0` at `0x4366BE`, and stores its result at game-state `+0xD30` at `0x4366DB`. DISASSEMBLED + string dump. |
+| `0x4839B3..0x4839ED` | Loads the game-state pointer from main `+0x391E9` and the background dword from `+0xD30`. A negative value, or the header value held in `[esp+0x18]` below `0x2000`, selects zero; otherwise the dword's low byte initializes each grid record at `+7` (`0x4839E6`). The loop strides 13 bytes and counts the product of the two fields read at `[ebp+0x38]` and `[ebp+0x3C]` (`0x483986..0x48398D`). DISASSEMBLED. The header field's meaning is not classified by this inspection. |
+| `0x435E09` | The game-state initialization stores `0xFFFFFFFF` at `+0xD30`. DISASSEMBLED. A cold-state value is not a loaded map's scoring threshold. |
+| `0x40A5D0..0x40A602` | This function's initial arithmetic multiplies the background dword by definition footprint words `+0x14C` and `+0x14A`, doubles the product and stores it in a stack local. DISASSEMBLED. Its full role and callers were not traced here; this prefix is not evidence for a complete extractor-income formula. |
+| `0x40C160..0x40C16C` | Another read of game-state `+0xD30`, compared against EAX by `cmp`/`jge`. DISASSEMBLED. The surrounding function's role and callers remain unclassified. |
+
+The initialization establishes the baseline/grid relationship used by TADR's threshold test,
+subject to the header condition above. Uniform cells equal to the baseline produce no snap
+candidates; a uniform above-baseline interior produces equal-coverage candidates, with the
+selector preferring pointer distance. These are source/disassembly deductions. Live metal-map
+placement, feature-written metal values and the complete extractor-yield path were not verified
+by this inspection.
+
 ## Demo recorder exploration: capture and save boundaries [DISASSEMBLED 2026-09-28]
 
 Boundary recheck for [the recorder exploration](tadr-port/demo-recorder-exploration.md).
