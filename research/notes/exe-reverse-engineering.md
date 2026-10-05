@@ -12805,6 +12805,65 @@ cannot be prologue-detoured without relocating the call.
 
 ### The popups, chat and the HUD painter [VERIFIED call graphs]
 
+#### In-match text chat: sender, audience and received display
+
+DISASSEMBLED 2026-10-05 from `pristine/TotalA.exe.pristine`, with a whole
+`.text` relative-call sweep. These are stock text-chat facts; no multiplayer
+chat contribution or playback root is installed by this research. A send
+attempt, a transport success and a recipient's displayed line are separate
+observations. Primary per-pair message ordering remains unproved.
+
+| Address | Established behaviour and evidence |
+|---|---|
+| `0x494050` | Opens `TALK.GUI` or `TALK2.GUI` through `0x4AA8F0`, stores callback `0x493BF0` at the returned GUI object's `+8` (`0x494120`), seeds `TALK` from `0x51E788` through `0x4A0BF0`, sets the edit index through `0x49FC50` and the GUI object's focus at `+0x20`. It refuses PlayerInfo watcher bit 6 (`+0x9B`, `0x49407C..0x494081`). Direct E8 callers are `0x493D37` and `0x496508`; the callback itself is indirect. |
+| `0x493BF0` | Chat GUI callback, `ret 4`. Reads UIChange at GUIInfo `+0x60`. `LIVEPLYR` changes the indexed `main+0x2BF1` byte and mode to 3 (`0x493C6E..0x493CC3`); `SENDTO` changes the console flag and rebuilds the dialog (`0x493CDA..0x493D3D`); `SENDTYPE` selects mode, bounds it below 4, then calls `0x493AE0`. The `TALK` submission copies the inline field at `+0xB6`, skips leading spaces, and sends a leading `+` command to `0x417B50` before the remaining text goes to `0x463E50` (`0x493FAF`). It saves/restores mode and ten recipient bytes around shorthand overrides. |
+| `0x493E04..0x493FAF` | Command run level starts at 1, becomes 7 with `main+0x37F2F` bit 1, and gains bit 1 when `0x5091CC` is nonzero. Chat shorthand accepts a digit or `a`/`e` followed by a separator from `0x5093F4` (`,:;`). A digit selects one native-ID-bearing row in mode 3; `a`/`e` select modes 1/2 with captions `Allies`/`Enemies` at `0x508384`/`0x5093EC`. A space is not one of these separators. |
+| `0x493AE0`, table `0x493BD8` | Loops ten rows at stride `0x14B`, skipping inactive/type-4/self rows. Mode 0 selects all; mode 1 reads the controlled player's alliance byte at `player+0x108+row`; mode 2 inverts it; mode 3 reads `main+0x2BF1+row`. Calls `0x4A1080` to show the corresponding `LIVEPLYR` stages. This updates the UI; actual send filters are below. |
+| `0x463E50(player, text, flags, caption)` | `ret 16`. Formats `<%s%s%s> %s` (`0x5072C8`) from `player+0x49`, optional `->` (`0x5072D4`), caption and text. Calls `0x453360` at `0x463E9F`, then `0x463CA0(line, flags, 0, 10)` at `0x463ED4`. Its six direct E8 callers are `0x447280`, `0x448042`, `0x448460`, `0x448F77`, `0x45398B` and `0x493FAF`: it is not an in-match-only boundary. |
+| `0x453360(line)` | `ret 4`, one direct E8 caller `0x463E9F`. Constructs byte `0x05` followed by `strncpy(...,64)` in `main+0x2A38`; sends exactly 65 bytes. Source ID is the first controller-1 row's `player+4`, or −1. Mode 0, or an input line beginning with `+`, uses `0x451DF0` (`0x4534B6`). Mode 3 loops the ten recipient mask bytes and calls `0x451BC0` for nonzero target IDs (`0x4533F9`). Modes 1/2 target active controller-3 rows according to the controlled player's alliance vector (`0x45348B`). It adds no event identifier and performs no text deduplication. |
+| `0x451BC0(sourceID, destinationID, data, bytes)` | `ret 16`. Maps IDs with `0x44FFD0`/`0x44FE40`. Requires the network bit, an active local controller-1/2 source and active controller-3 destination, both with `+0x22 == 0` (`0x451C87..0x451CDF`). A later ID scan can take a controller-1/2 local shortcut returning success without a transport call (`0x451D66..0x451DCA`), so its return alone does not prove delivery. With `0x506DBC` set, calls `0x4619B0` at `0x451D8B`; otherwise calls `0x4C97B0` at `0x451DAC` and treats zero as success. B8 already owns the generic `0x451DF0` entry. |
+| `0x461990`, `0x4619B0` | Generic and targeted queue adapters, `ret 16`, into `0x462710`. The targeted adapter resolves the destination through `0x461630(destination,1)` and returns zero on a miss (`0x4619B7..0x4619D9`). This trace does not prove recipient ordering or exactly-once display. |
+| `0x453D40`, `0x453DAE..0x453ECA`, `0x455F78` | Dispatcher reads native source/destination IDs from `main+0x4C9/+0x4CD`, scans ten controller-bearing rows, puts source row at stack `+0x14`, destination row at `+0x38`, sender record in EDI and destination record in EBX. A missing identity becomes row 10. The `0x455F78` branch commits a found source row before destination scanning. These identities precede the text-case switch; formatted names are not the identity. |
+| `0x45522E`, table entry `0x455F90` | Text `0x05` receive case. Requires active destination EBX and `EBX+0x73 == 1`, then calls `0x463CA0(message+1,8,0,sourceRow)` at `0x455250`. Thus an AI destination is not a displayed human chat recipient. B4's `hit_rx_chat` owns the table entry and only handles its binary envelopes when text byte 1 is zero; ordinary nonzero text continues to this stock case. |
+| `0x463CA0(text, flags, unitID, sourceRow)` | `ret 16`, shared display sink. Returns for empty text or zero `ScreenChatLines` at `main+0x37F27`. Thirty entries at `main+0x12EF`, stride `0x48`, with head/tail `+0x2A3E/+0x2A40`. Copies 64 bytes then sets entry `+0x3F` to NUL, giving at most 63 displayed bytes (`0x463D25..0x463D41`); stores GameTime at `+0x40`, unit ID at `+0x44`, source row at `+0x46` and low four flag bits at `+0x47`. Plays `MessageArrived` (`0x5072B8`) only when sourceRow != 10. Other callers include console replies, unit replies and death/results notices: recording every call as human chat would misclassify them. |
+
+`tagpu_wire_received` (`tagpu_patches.c`) reports B3's retained SDK span only
+when its argument equals the original TLS receive-buffer pointer. A chat
+submessage inside an aggregate need not satisfy that equality. The stock
+65-byte splitter length and the containing receive span must be established
+before copying; a pointer probe or a formatted name supplies neither a bound
+nor an origin identity.
+
+#### Textfield input beneath the chat GUI
+
+DISASSEMBLED 2026-10-05. The editor is `0x4A7290`; `0x4A4D70` is its painter.
+These facts identify observations for the failed native chat driver; they do
+not establish the cause of its empty field.
+
+| Address | Established behaviour and evidence |
+|---|---|
+| `0x4B5CC0`, `0x4B5DE5` | Window procedure's `WM_CHAR` arm queues wParam through `0x4C1B20` at `0x4B5DEA`. Keydown uses `0x4C1D50`; mouse moves update the current record via `0x4C2360`, while button records go through `0x4C2E30` at `0x4B5F51`. |
+| `0x4C1D50`, tables `0x4C21D0`/`0x4C2230` | Keydown maps `VK_END` through `0x4C1EF7` to ring code `0xF1` (store `0x4C1F1C`), `VK_HOME` through `0x4C1EC2` to `0xF0`, and `VK_DELETE` through `0x4C1F5B` to `0xF3`. `VK_BACK` is below the switch's lower bound `0x13`; the fallback `0x4C20EA..0x4C21C7` queues letters/digits/punctuation but no backspace. Backspace therefore needs the separate `WM_CHAR(8)` path. The editor tables `0x4ABA00`/`0x4ABA28` map 8 to `0x4AB7C4`, which removes the character left of the caret, and `0xF1` to `0x4AB7B0`, which moves the caret to text length. |
+| `0x4B6220`, `0x51FBD0` | Returns the engine globals pointer stored at `0x51FBD0`. The character ring's capacity is globals `+0xF2`, storage `+0xF6`, write index `+0x16E` and read index `+0x172`. |
+| `0x4C1A40`, `0x4C1A60`, `0x4C1AB0`, `0x4C1B00`, `0x4C1B20` | Ring reset zeroes both indices; capacity setter caps at 30 and resets; pop advances read and returns zero when empty; peek does not advance; push drops when the next write index equals read. `0x4A82FF` drains through pop during the GUI stage updater's bit-0 arm. A queued character is not evidence of a field edit. |
+| `0x4A9FD0`, `0x4A9B90` | GUI pump peeks or pops one character according to GUI object `+0x18` (`0x4AA019..0x4AA039`), calls the key dispatcher, then takes the type-3 arm at `0x4AA2A6 → 0x4A7290`. Key dispatch uses GUI object `+0x20` as focus and GUIInfo `+0x64` to recognize an active edit; `0x4A9C80..0x4A9CA0` skips the shortcut branch for an active type-3 gadget. `0x4A9BF5` also calls the mapped SHIFT sampler `0x4C1B80(0xF9)`. `0x499890` also peeks for special in-game keys before the GUI pump. |
+| `0x49FC50(gi,index)` | `ret 8`. Ends a previous type-3 edit by setting `gi+0x64` to −1 without clearing its text, then sets GUIInfo `+0x64` to the new index, and, for type 3, sets caret `gi+0x74` to inline text length (`0x49FCC5..0x49FCD5`). GUI object `+0x20` and this edit index are distinct fields. |
+| `0x4A0BF0`, `0x4A09C0` | Named setter calls indexed setter at `0x4A0C58`. The type-3 arm copies a NUL-terminated string into gadget `+0xB6`, updates the caret if this gadget is edited, and sets `+0x138` only when the fourth argument is nonzero (`0x4A0A61..0x4A0AD4`). The field text is inline, not a pointer to `0x51E788`. |
+| `0x4A7290`, `0x4AB6C0`, `0x4AB720` | Textfield click sets focus and edit index, initializes the inline buffer/caret through `0x4AB6C0` (ret 20; preserves text within its character limit when flag is zero, otherwise clears it, and calls the painter), then resets the character ring (`0x4A7434..0x4A7439`, also the second mouse arm). An edited field runs `0x4AB720`; Return completes it and Esc clears it. The latter routine edits `+0xB6`, drains queued characters, and invokes the painter only after handling input. Printable range is `0x20..0x7F`; attrib bit 1 restricts it to alphanumeric, `_`, space or apostrophe (`0x4AB942..0x4AB972`). TALK's measured attrib 1 has that restriction clear. |
+| `0x4A4440`, `0x4A716A` | Button/shortcut handlers can consume characters through the same pop. They do not establish a textfield edit; focus, active edit index and accepted inline text remain the required observations. |
+
+`tagpu_shield.c` delivers `WM_TAGPU_CHAR` as `WM_CHAR` directly to the game;
+tagged keydown separately synthesizes a character through `ToAscii` because it
+bypasses the engine's `TranslateMessage`. The input-file parser splits on every
+byte <= `0x20`, so a literal `char:` followed by control byte 8 is truncated and
+never posts that character. `tacli ui fill` clicks first and waits for exact
+inline text prefixes in batches of at most four characters. The snapshot also
+publishes inline `gi+0x64/+0x74` as `edit_index`/`caret`, copied by the owning
+game thread at the flip; they are data, never gadget-array addressing inputs.
+The CLI keeps an already active editor, or waits for the chosen edit index
+before posting text. The panel's `focus` string is only the default-focus name
+at `ctrls+0xEC`. Callers reject any result that differs from requested text.
+
 - `DrawPopupF4Dialog 0x4948E0`: `DrawText 0x4A50E0` ×5, `0x4BF4D0` ×3 (the frame), `0x4C7580`
   ×1, `0x4B7F30`. `DrawPopupButtomDialog 0x4689C0`: `DrawText` ×3, `0x4B7F90` ×1, `0x4C6AE0`.
   `DrawChatText 0x464060`: `DrawText` ×1, `0x467C00` ×1 (a message-box painter that also calls

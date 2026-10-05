@@ -3136,13 +3136,6 @@ mode-2 skirmish to tick 1,293 with zero corrections, 908 shots, 1,985 script roo
 and no contribution blocks at speed 20. A separate coverage-build attempt fails
 private SDK enumeration with `80004005` before binding; it remains a startup
 reliability gap, alongside the earlier join timeout.
-The current coverage build passes all 23 `secondary-orders` skirmish checks,
-including images inventory, fresh seek, exact poisoned round trips and world/
-radar/root/sink comparisons at speed 20. This verifies the shared path; it does
-not establish native playback or explain the earlier GUI inventory failure.
-
-The mapping checkpoint's skirmish regression passes world/radar/events/counts and all three poisoned round trips, but the images inventory fails at two bytes of the active GUI heap pointer `main+0x531`. The four-byte exclusion proposal is pending the owner's decision; this is a checkpoint, not a cleared landing gate. See the multiplayer slice and engine map for the disassembly and measured addresses.
-
 The work branch also captures each controlling human/hosted AI's explored-map
 bit history as kind-11 origin-keyed full/delta bitmap transactions, retaining
 the complete LosType and source/application stamps. B2 bounds the raw u16
@@ -3158,6 +3151,14 @@ comparisons and three exact poisoned round trips pass. The pending exclusion
 is unchanged. This adds no hook, field write or exclusion. Effective POV
 engine playback, other view streams and communication audiences remain open;
 see the multiplayer slice's *Per-origin explored-map history*.
+
+The stock text-chat boundary and audience audit identifies intended targets and
+accepted local displays as separate observations. No chat contribution or
+playback hook is installed; event identity and recipient correlation remain
+open. The engine map and multiplayer slice record those contracts.
+The snapshot also publishes inline `edit_index`/`caret` without engine writes.
+A two-peer COVER run verifies acknowledged text replacement and the engine's
+Mapping toggle. This is driver verification, not a native replay gate.
 
 | Fields we write in the multiplayer checkpoint | Invariant |
 |---|---|

@@ -440,9 +440,11 @@ tools/tacli log c1 -g datakeys            # every key read at load, every mask a
   <i> cheats=on`**: the chat grants the debug run level only with that bit. **It kills every unit
   of that type first** — a side left with no unit ends the game on `ENDMSN.GUI` — so keep another
   unit per side, and spawn the type again with `scenario apply` to test the reloaded def.
-- **Type into the chat bar four characters per `keys` call, with a `tacli shot` between calls,
-  and read the line back**: a long `char:` run loses characters, and the first batch after the
-  `return` that opens the bar can be lost too. Clear a wrong line with `backspace`.
+- **Wait for `TALK` after opening chat, then use `ui fill TALK <text> --json` and compare
+  `text` with `wanted` before submitting.** The fill posts at most four characters per batch
+  and waits for exact prefix acknowledgement; one snapshot can precede the edit. A differing
+  field is a failed input attempt. Long direct `keys char:…` runs can fill the engine's
+  character ring; token-file consumption does not prove a field edit.
 
 ### The weapon keys
 

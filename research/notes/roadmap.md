@@ -3990,12 +3990,20 @@ click streams and communication audiences remain open; the multiplayer slice
 records the current verification and wider gaps. No multiplayer landing is
 cleared by this work.
 
+The native chat driver acknowledges exact text prefixes, retains an already
+active editor and waits for a changed edit index before typing. A two-peer
+COVER control replaces a 43-character mixed-case line exactly and submits
+`+mapping` on both peers with a verified Mapping-bit toggle. This verifies the
+input control; the complete native exploration file and seek gate remain open.
+The stock chat/audience audit installs no chat contribution or playback root.
+
 The work branch's tick-based replay harness defaults to internal speed 20 (2x),
 with normal speed selectable and retained for cost and speed/settings UI checks.
 An armed round trip bounds the ordinary due-tick batch before the engine caches
-it, so faster progression cannot skip its T−1 frame. `secondary-orders` passes
-all 23 checks at 2x; the normal-speed control passes simulation and round-trip
-checks but repeats the open GUI-pointer images-inventory failure. No comparison
+it, so faster progression cannot skip its T−1 frame. The current `secondary-orders`
+run has 22 passes and the open GUI-pointer images-inventory failure at 2x; the
+normal-speed control also passes simulation and round-trip checks with that
+inventory failure. No comparison
 rule or exclusion is loosened, and no multiplayer timing or bandwidth gate is
 cleared by these runs. The [completeness note](tadr-port/demo-recorder-completeness.html)
 and engine map describe the policy and batch bound.

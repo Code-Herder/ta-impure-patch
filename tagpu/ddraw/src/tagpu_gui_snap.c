@@ -22,6 +22,8 @@
 #define OFF_GUIINFO 0x519         /* GUIInfo, inline in main            */
 #define GI_ACTIVE   0x18          /* GUIMEMSTRUCT* TheActive_GUIMEM     */
 #define GI_UICHANGE 0x60          /* int, last actuated gadget index    */
+#define GI_EDIT     0x64          /* active type-3 editor index, or -1  */
+#define GI_CARET    0x74          /* editor character offset           */
 
 #define GM_PREV     0x00          /* GUIMEMSTRUCT* per_active           */
 #define GM_CTRLS    0x04          /* GUI0IDControl* ControlsAry         */
@@ -464,6 +466,11 @@ static void write_snapshot(const TAGPU_FRAME* f)
     jfield_str(out, "focus", ctrls + P_FOCUS,  16);
 
     fprintf(out, ",\"uichange\":%d", *(int*)(gi + GI_UICHANGE));
+
+    /* Inline main-block values, copied on its owning game thread at the flip.
+       Indices are output data; neither is used to address the gadget array. */
+    fprintf(out, ",\"edit_index\":%d,\"caret\":%d",
+            *(int*)(gi + GI_EDIT), *(int*)(gi + GI_CARET));
 
     /* The panel record's own rect. Shell menus are full-screen panels at 0,0 so
        their gadget coords read as absolute; the in-game panel is not, and this is

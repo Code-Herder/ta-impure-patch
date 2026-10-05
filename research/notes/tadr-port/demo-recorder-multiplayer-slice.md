@@ -1240,3 +1240,111 @@ observed replica creates remain exact through world seek. That file contains
 no kind-11 exploration; both readers retain unknown exploration rather than
 inventing a baseline. This is backward file-reading verification, not native
 exploration application or engine multiplayer playback.
+
+### Text-chat boundary and audience audit
+
+The communication contract includes in-match public/team/private text, pings
+and drawings, with all messages in full-map mode and only received messages in
+a selected player's view. Lobby text is excluded. The current contribution
+format does not carry these events yet.
+
+DISASSEMBLED 2026-10-05: the stock text sender formats a line through
+`0x463E50`, builds a fixed 65-byte `0x05` message through `0x453360`, and
+chooses targets before transmission. Mode 0 uses the generic sender, modes
+1/2 use the controlled player's alliance vector, and mode 3 uses ten explicit
+recipient bytes. The targeted sender `0x451BC0` applies additional source and
+destination filters; even a successful return can be a local shortcut without
+a transport call. It therefore does not establish a received audience.
+
+The dispatcher maps native source and destination IDs from `main+0x4C9/+0x4CD`
+to records before the text case. That case displays text only for an active
+controller-1 destination. The display queue holds at most 63 visible bytes per
+line, with source row and GameTime; its shared sink also receives unit replies,
+console replies and notices. Capturing every display-sink call as human chat
+would invent chat events. Capturing only a recorder's own receive path would
+lose private/team text it was never addressed. Names in formatted text are
+not identities, and identical repeated lines are separate events.
+
+The engine map's *In-match text chat* section records the call sites, argument
+contracts, field offsets, source/destination lookup, local shortcut, display
+truncation and the existing B4/B8 hook ownership. B3's retained SDK span only
+matches the original receive pointer; an interior chat submessage needs its
+own proved containing span. This audit installs no hook or playback root.
+
+The remaining implementation needs a unique sender event identity, intended
+targets and actual accepted recipient observations, preserving their separate
+source/application times. Original and forwarded copies must join one event
+without deduplicating text or inferring a recipient from a transport return.
+Primary per-pair ordering is still unproved, so correlating sender/recipient
+observations by matching ordinal is not yet justified. The in-match boundary
+must exclude the sender's other front-end callers. Pings/drawings still need
+their own boundary/audience audit. This does not close the POV/chat gate or
+choose the pending owner-lifetime policy.
+
+#### Input acknowledgement used by the chat fixture
+
+The engine's textfield editor is `0x4A7290`, with active edit index at GUIInfo
+`+0x64`, caret at `+0x74`, and inline field text at `+0xB6`. The painter
+`0x4A4D70` does not accept input. The character ring holds at most 29 queued
+entries and drops a push when full. A field click initializes the editor and
+resets that ring. The flip's trigger family snapshots UI and posts input;
+posted messages have not been dispatched when the trigger family returns.
+One fresh snapshot can therefore precede an already-requested field edit.
+
+MEASURED 2026-10-05 on the reference setup, normal build, two native DirectPlay
+peers on a private display with the shield on: after posting one character the
+first field snapshot remains empty while the later caret read is 1; the next
+snapshot contains that character. After posting another character the first
+snapshot still has the previous text while the later caret is 2. A subsequent
+fill reads exactly `probe`. Both edit index and GUI-object focus remain 2.
+Both owned games/prefixes and the private display are removed. This establishes
+an early-observation path; it does not alone establish the cause of every
+previous driver failure.
+
+The first COVER acknowledgement probe accepts `probe` exactly but fails while
+replacing it: the existing backspace/delete loop leaves five characters. A
+separate direct-control-character probe leaves `probe` unchanged on both peers:
+`char:` followed by byte 8 is truncated by the token parser's <= `0x20`
+delimiters, so that character never reaches the engine. This is not a test of
+the engine's backspace editor. An existing-key control posts `end backspace`
+on both native peers and observes exactly `prob`, caret 4, ring read/write 7/7
+and focus/edit index 2. The End key queues editor code `0xF1`; backspace's
+separate synthesized `WM_CHAR(8)` performs the edit. Both controls leave the
+Mapping bit unchanged and clean up their games/prefixes/private display.
+
+The second COVER replacement probe also refuses before submission: it never
+acknowledges `p` while clearing `probe`. Its engine log places the field click,
+End and four backspaces in the same input poll; a 0.2-second delay did not even
+separate their posting. This does not alone prove where the edit was lost.
+The GUI snapshot now reports `edit_index` and `caret` from inline
+`GUIInfo+0x64/+0x74`, copied on the owning game thread. Neither value addresses
+the gadget array. The existing `focus` string remains the panel's
+`defaultfocus[16]`, not the actual edit index. A fill keeps a field already
+selected as the editor; otherwise it observes the chosen edit index before
+posting its clear/text batches. Its completion still requires exact field
+text. No sleep supplies that ordering.
+
+`tacli ui fill` now clears with End and at most four backspaces per batch,
+waiting for each exact shortened prefix. It posts at most four text characters
+per batch and waits for the same screen/gadget index, name and kind to
+acknowledge the exact prefix before posting more.
+Its timeout reports unacknowledged text, never successful completion. Callers
+continue to compare `text` with `wanted` before submitting. This supplies an
+observed-state ordering and a queue bound; increasing the old fixed sleep
+would supply neither. The additive snapshot fields change no engine state layout, patch, transport,
+simulation speed, exclusion or tolerance. The stopped native exploration gate
+and wider multiplayer playback/seek/takeover gates remain open.
+
+The third acknowledgement probe passes on the updated COVER build, two native
+human peers, private display, shield on. Each peer fills `probe` exactly,
+replaces it with the exact 43-character mixed-case line
+`Mixed Case 0123456789 abcdefghij ABCDEFGHIJ`, then replaces that with
+`+mapping`. Before Return, both snapshots report `TALK.GUI`, edit index 2 and
+caret 8, matching the independent engine reads. After Return both return to
+`ARMMAIN2.GUI` and LosType changes 15 → 14: the Mapping bit is toggled by the
+engine command. The long line exceeds the ring's 29-entry capacity but exact
+prefix acknowledgement bounds each batch. Both DLL builds pass; this native
+run verifies the driver and the mode-change control. It records no complete
+kind-11 file and does not close the stopped exploration-file/seek gate, native
+multiplayer playback, audiences, physical bandwidth or ten-seat takeover.
+Both owned prefixes and the private display are removed.

@@ -2081,10 +2081,9 @@ KEYS_BATCH = 900
 def _write_tokens(inst: Instance, tokens: str, timeout: float = 5.0):
     """Append tokens to the in-process input file (consumed once by the game).
 
-    `ui fill` can emit a token per character plus a backspace per character
-    already in the field, which overruns a single batch. Long batches are split
-    and each piece waits for the game to swallow the one before it, so the tail
-    is never silently dropped.
+    Long batches are split on the token file's byte budget. Taking that file
+    acknowledges posting input, not the engine editing a field; `ui fill` waits
+    for its text separately and bounds each character batch.
     """
     path = inst.gamedir / "tagpu_keys.txt"
     words = tokens.split()
@@ -3127,6 +3126,28 @@ def _ui_bound_list(snap: dict, slider: dict):
     return None
 
 
+def _ui_wait_field_text(inst: Instance, before: dict, field: dict,
+                        wanted: str, timeout: float, editing: bool = False):
+    """Wait for the same field to acknowledge text; queued input is not an edit."""
+    deadline = time.monotonic() + timeout
+    got = None
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None if editing else got
+        snap = _ui_snapshot(inst, timeout=remaining, soft=True)
+        if snap is None:
+            return None
+        hits = _ui_match(snap, f'#{field["i"]}')
+        if (snap.get("gui") != before.get("gui") or len(hits) != 1 or
+                hits[0].get("name") != field.get("name") or
+                hits[0].get("id") != field.get("id")):
+            die(f'{field["name"]} changed while waiting for its text')
+        got = hits[0].get("text")
+        if got == wanted and (not editing or snap.get("edit_index") == field["i"]):
+            return got
+
+
 def _ui_resolve(inst: Instance, selector: str, timeout: float,
                 wait: bool = True, actionable: bool = True):
     """Resolve one gadget, auto-waiting for it to appear and become actionable.
@@ -3530,6 +3551,8 @@ def cmd_ui(args):
         selector, text = rest[0], rest[1]
         tokens = _ui_text_tokens(text)
         snap, g = _ui_resolve(inst, selector, tmo, wait=args.wait)
+        if g["type"] != "field":
+            die(f'{g["name"]} is a {_ui_kind(g)}, not a text field')
 
         # The field's own limit is knowable before we type, so refuse rather than
         # deliver a silently truncated string and call it a fill.
@@ -3537,44 +3560,46 @@ def cmd_ui(args):
         if cap and len(text) > cap:
             die(f'{g["name"]} holds {cap} characters and {text!r} is {len(text)}')
 
-        _ui_click_gadget(inst, g, snap, settle=False)     # focus the field
-        time.sleep(0.2)
-        # Clearing is one backspace at a time, each one waited for. Characters go
-        # as WM_CHAR and queue, so a whole word lands from a single batch; backspace
-        # is a key token, and the shield holds a key down for 150 ms because TA
-        # *polls* the keyboard — so a batch of five overlapping presses is one edge
-        # and deletes one character. Send one, wait for the field to actually get
-        # shorter, repeat. A click can place the caret inside existing text: after
-        # backspace consumes the left side, delete must consume the right side.
-        # Neither key is evidence of progress until the field acknowledges it.
-        left = len(g.get("text") or "")
-        while left:
-            was = left
-            for key in ("backspace", "delete"):
-                _write_tokens(inst, key)
-                deadline = time.time() + 3.0
-                while time.time() < deadline:
-                    time.sleep(0.15)
-                    now = _ui_match(_ui_snapshot(inst), g["name"])
-                    if len(now) != 1:
-                        die(f'{g["name"]} disappeared while clearing its text')
-                    left = len(now[0].get("text") or "")
-                    if left < was:
-                        break
-                if left < was:
-                    break
-            if left >= was:
-                die(f'{g["name"]} still reads {was} characters after backspace and delete')
-        if tokens:
-            _write_tokens(inst, " ".join(tokens))
-        time.sleep(0.3)
-
-        after = _ui_snapshot(inst)
-        hits = _ui_match(after, g["name"])
-        got = hits[0].get("text") if len(hits) == 1 else None
+        # Clicking an active editor resets its character ring. The snapshot's
+        # edit index lets us keep that editor, or acknowledge a focus change
+        # before sending text. Older snapshots still acknowledge every edit.
+        if snap.get("edit_index") != g["i"]:
+            _ui_click_gadget(inst, g, snap, settle=False)
+            old = g.get("text") or ""
+            got = _ui_wait_field_text(inst, snap, g, old, tmo,
+                                      editing="edit_index" in snap)
+            if got != old:
+                die(f'{g["name"]} did not acknowledge focus: reads {got!r}')
+        # End queues the editor's 0xF1 code; backspace produces WM_CHAR(8).
+        # A click can position the caret inside the text. Each exact shortened
+        # prefix acknowledges the edit at its end, before another batch is sent.
+        remaining = g.get("text") or ""
+        step = 4
+        first = True
+        while remaining:
+            count = min(step, len(remaining))
+            batch = " ".join(["backspace"] * count)
+            _write_tokens(inst, ("end " if first else "") + batch)
+            first = False
+            remaining = remaining[:-count]
+            got = _ui_wait_field_text(inst, snap, g, remaining, tmo)
+            if got != remaining:
+                die(f'{g["name"]} did not acknowledge clearing: '
+                    f'reads {got!r}, wanted {remaining!r}')
+        # TA's character ring holds at most 29 queued entries. Its snapshot can
+        # also run before posted WM_CHAR messages are edited. Four characters
+        # followed by exact field acknowledgement bound the queue and establish
+        # completion without treating a sleep or token-file deletion as proof.
+        got = _ui_wait_field_text(inst, snap, g, "", tmo) if not tokens else ""
+        for offset in range(0, len(tokens), step):
+            _write_tokens(inst, " ".join(tokens[offset:offset + step]))
+            wanted = text[:offset + step]
+            got = _ui_wait_field_text(inst, snap, g, wanted, tmo)
+            if got != wanted:
+                break
         note = "" if got == text else (
-            f" (field now reads {got!r}, not {text!r} — TA validates what a field "
-            "accepts and drops the rest)")
+            f" (field reads {got!r}; it did not acknowledge {text!r} "
+            f"within {tmo:g}s — check focus and the field's character rules)")
         out({"name": g["name"], "text": got, "wanted": text}, args.json,
             human=f"filled {g['name']}{note}")
         return
@@ -3640,11 +3665,10 @@ def cmd_ui(args):
 def _ui_text_tokens(text: str):
     """Text -> `tacli keys` tokens, refusing what the input layer cannot type.
 
-    Every character goes as `char:`, the WM_CHAR token, rather than as a key
-    token. A key token carries a modifier the shield deliberately *holds* for
-    150 ms because TA polls it, so `shift+c` in a batch capitalises everything
-    typed behind it — "Claude" arrives as "CLAUDE". WM_CHAR carries the
-    character with no modifier state at all, which is what a text field wants.
+    Printable characters use `char:`, the WM_CHAR token. Space uses its key
+    token because whitespace delimits the input file. Modified key tokens hold
+    their modifier for 150 ms because TA polls it, so `shift+c` in a batch also
+    capitalises following characters. WM_CHAR carries no modifier state.
 
     Which characters a field then keeps is TA's business, not ours: the
     save-name field accepts letters, digits, space and underscore and silently
