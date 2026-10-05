@@ -229,9 +229,9 @@ the building, placement, target and modifiers at the input boundary. A mouse mov
 preview update is not a prerequisite for a correct click.
 
 A site reserved by the player's queued resource-building order shows an **already queued**
-indicator. When a selected constructor owns a cancellable plan, the ghost says **Shift-click to
-cancel**. Shift plus the configured contextual command button removes that constructor's matching
-plan; a queued upgrade removes its adjacent reclaim/build pair. Other selected constructors'
+indicator without mouse-button instructions. Shift plus the configured contextual command button
+removes a selected constructor's matching plan; a queued upgrade removes its adjacent reclaim/build
+pair. Other selected constructors'
 matching plans are cancelled too, one per constructor. Unselected constructors' queues, unrelated
 orders and persistent helper Guards remain intact. The queued definition may differ from the
 strongest variant currently offered by the selection.
@@ -290,7 +290,7 @@ other paths call through. A manual left click recomputes placement before normal
 
 Quick Build publishes a cursor/type/rectangle override into the frame packet, leaving the engine
 in contextual mode. The renderer never runs site tests or order roots. It displays the chosen
-variant's ordinary ghost and a queued/cancellation marker. Preview tests save/restore the two
+variant's ordinary ghost and a queued marker. Preview tests save/restore the two
 engine build-site scratch words `0x51E684` and `0x51E688`.
 
 A new build goes through `0x43ADC0`, the engine's ordinary append/replace order root. Reclaim and Guard eligibility

@@ -767,8 +767,7 @@ static void gather_cursor(const TAGPU_FXVIEW* v)
     put_outline(&nv, l + 1, t + 1, r - 1, b - 1, inner, wx, wz);
     if (pk->resource_queued)
         tagpu_mark_emit_text((float)l, (float)t - 8.0f * s_px,
-                             (pk->resource_queued & TAGPU_RESOURCE_CANCEL) ? "Shift-click to cancel" : "Already queued",
-                             GUI_WHITE, wx, wz);
+                             "Already queued", GUI_WHITE, wx, wz);
     s_ncurs = nv - CURSBASE;
 }
 
