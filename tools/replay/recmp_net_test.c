@@ -92,6 +92,11 @@ static BOOL WINAPI found(LPCDPSESSIONDESC2 desc, LPDWORD timeout, DWORD flags, v
 #ifdef RECMP_CHANNEL_TEST
 #include "tagpu_recmp_record.h"
 #include "tagpu_recmp_stream.h"
+#ifndef RECMP_TEST_BODY_BYTES
+#define RECMP_TEST_BODY_BYTES 16
+#endif
+typedef char RecMpTestBodyBound[(RECMP_TEST_BODY_BYTES >= 1 &&
+                                RECMP_TEST_BODY_BYTES <= RECMP_BODY_MAX) ? 1 : -1];
 static HANDLE s_finished;
 #endif
 
@@ -147,7 +152,7 @@ static void channel_run(Probe* p)
     CHECK(tagpu_recmp_advance(channel,1));
     CHECK(tagpu_recmp_advance(channel,1));
     for (sent=0;sent<16;sent++) {
-        unsigned char body[16];
+        unsigned char body[RECMP_TEST_BODY_BYTES];
         memset(body,(int)(sent/2+1),sizeof body);
         CHECK(tagpu_recmp_send_from(channel,p->local[sent%2],RECMP_RESOURCES,1,
                                      body,sizeof body,NULL));
@@ -157,7 +162,8 @@ static void channel_run(Probe* p)
     CHECK(tagpu_recmp_advance(channel,2));
     CHECK(tagpu_recmp_finish_sources(channel));
     CHECK(tagpu_recmp_finish_sources(channel));
-    printf("CHANNEL QUEUED: 16 data packets and human/AI prefix seals after primary Close\n");
+    printf("CHANNEL QUEUED: 16 data packets (%u body bytes each) and human/AI prefix seals after primary Close\n",
+           (unsigned)RECMP_TEST_BODY_BYTES);
     for (;;) {
         int got;
         while ((got=tagpu_recmp_take_at(channel,&packet,2)) > 0) {
@@ -169,13 +175,13 @@ static void channel_run(Probe* p)
                 CHECK(packet.h.bytes == sizeof packet.h+sizeof seal);
                 memcpy(&seal,packet.body,sizeof seal);
                 CHECK(seal.previous == packet.h.sequence-1 && seal.tick == packet.h.tick &&
-                      seal.data_bytes == 8*(sizeof packet.h+16));
+                      seal.data_bytes == 8*(sizeof packet.h+RECMP_TEST_BODY_BYTES));
                 if (seal.final) { CHECK(packet.h.sequence == 10 && seal.tick == 2); finals++; }
                 else CHECK(packet.h.sequence == 9 && seal.tick == 1);
                 seals++;
             } else {
-                CHECK(packet.h.kind == RECMP_RESOURCES && packet.h.bytes == sizeof packet.h+16);
-                for (i=0;i<16;i++) CHECK(packet.body[i] == packet.h.sequence);
+                CHECK(packet.h.kind == RECMP_RESOURCES && packet.h.bytes == sizeof packet.h+RECMP_TEST_BODY_BYTES);
+                for (i=0;i<RECMP_TEST_BODY_BYTES;i++) CHECK(packet.body[i] == packet.h.sequence);
                 received++;
             }
         }
@@ -187,7 +193,7 @@ static void channel_run(Probe* p)
         Sleep(1);
     }
     CHECK(stats.bound == 2 && stats.expected == 2 && stats.player &&
-          stats.sent == 20 && stats.bytes == 16*(sizeof(RecMpHeader)+16)+4*(sizeof(RecMpHeader)+sizeof(RecMpSeal)) &&
+          stats.sent == 20 && stats.bytes == 16*(sizeof(RecMpHeader)+RECMP_TEST_BODY_BYTES)+4*(sizeof(RecMpHeader)+sizeof(RecMpSeal)) &&
           stats.received == 20 && sequences[0] == 10 && sequences[1] == 10 &&
           seals == 4 && stats.seals == 4 && stats.ended == 2);
     CHECK(stats.completed_bytes == stats.bytes +

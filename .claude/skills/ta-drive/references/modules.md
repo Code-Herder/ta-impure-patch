@@ -145,6 +145,20 @@ Add `--channel` to exercise the production channel, initialized after both prima
 interfaces close, including roster/configuration copying, signed human/AI bindings,
 source sequences, source-prefix/final seals and packet delivery. The default exercises the backend directly,
 including its sixteen completion-context bound and refusal of an early Close.
+With `--channel`, `--body-bytes 1..4032` varies the copied DATA body (default 16);
+4032 exercises the maximum 4096-byte application packet with its 64-byte header.
+`--trace-network` requires strace and retains `host.trace.*` and `join.trace.*`
+from only the owned native peers and their descendants. Successful kernel network
+calls show datagram framing and fragmentation below the SDK. They include Wine
+IPC and discovery traffic: do not label all traced bytes as private contributions.
+Tracing perturbs timing; the logs establish neither physical wire bandwidth nor
+undisturbed game latency. Use the maximum-payload probe as follows:
+
+```bash
+python3 tools/replay/recmp_net_test.py --port 47733 --channel \
+    --body-bytes 4032 --trace-network --out /tmp/recmp-wire-run
+```
+
 Both modes run authentication, stream-ledger bounds/corruption/missing-tail tests,
 and controlled channel bounds/gap/wrong-source/missing-tail/abandoned-drain tests.
 The runner also checks frozen consumption cuts, final receipts, retained tail

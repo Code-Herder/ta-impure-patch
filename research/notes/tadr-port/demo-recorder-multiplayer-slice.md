@@ -1091,3 +1091,50 @@ logic tests pass with refreshed coverage maps; their initial stale-map failure
 named the new helper and was resolved by building the current coverage map.
 No comparison rule or exclusion changes. This is a verified worktree checkpoint,
 not the accumulated replay landing gate or a multiplayer landing.
+
+### Native contribution datagram probe
+
+The standalone production-channel fixture accepts `--body-bytes 1..4032` and
+keeps the default 16-byte body. The C fixture checks every copied DATA byte,
+source sequence, byte accounting, human/AI prefix seal and terminal receipt.
+Its independent Python journal checker retains its CRC, sequence and final-prefix
+refusals; the exact journal span follows the selected body size. Neither path
+changes the production channel or an engine field.
+
+`--trace-network` uses strace on only the two owned native peers and their
+descendants. It records successful network calls with timestamps, decoded socket
+endpoints and complete hexadecimal buffers up to the configured capture limit.
+The runner closes the owned prefixes, observes peer termination and waits for
+the associated tracers to end before returning their evidence. Setup, control
+fixtures and other games are outside that trace scope.
+
+MEASURED 2026-10-05 on the reference setup: the maximum-body production-channel
+run passes both peers' sixteen DATA deliveries after primary Close, final
+prefixes, receipts, byte accounting, persisted-journal round trips and corruption/
+missing-tail controls. Each journal has 40 applications and 132,528 bytes.
+The successful UDP `sendmsg` calls show the following DATA spans on each peer:
+
+| Application DATA | UDP datagrams per message | UDP payload bytes per message | Total for sixteen messages |
+|---|---|---|---|
+| 4,096 bytes | 1,394 + 1,394 + 1,334 bytes | 4,122 bytes | 65,536 application / 65,952 UDP payload bytes |
+
+An independent byte audit groups the observed fragments, removes their measured
+14/6/6-byte prefixes and reconstructs all sixteen complete application packets.
+Their byte multiset equals the local-produced DATA in each peer's journal.
+Fragments can interleave; this comparison establishes no cross-source ordering
+rule. At the default body size, each identifiable 80-byte application DATA in
+the earlier probe occupies one 94-byte UDP payload. Both probes contain separate
+14-byte datagrams without an application marker and repeated identity images.
+Counting only datagrams that contain `IMPUREMP` therefore misses continuation
+fragments and unmarked traffic.
+A TCP byte counter also misses this observed UDP data path.
+
+These are kernel-accepted UDP payload observations. IP/UDP/link headers, kernel
+TCP retransmissions, socket lifetime attribution of unmarked traffic, a shared
+bottleneck, cross-address discovery and game-traffic delay are not established.
+The reference setup permits tracing owned processes but denies packet capture
+and an unprivileged network namespace. No privileged network change is made.
+The physical budget and no-game-delay gate remains open, as do native engine
+playback/seek/takeover, complete owner authority, POV/chat, ten-seat play,
+continued migration and the accumulated review/replay landing gates. This is a
+measurement fixture checkpoint, not a multiplayer landing.

@@ -2,12 +2,17 @@
 """Run the native isolated-transport fixture in two owned Wine prefixes.
 
     tools/replay/recmp_net_test.py --port PORT [--out DIR] [--channel]
+        [--body-bytes 1..4032] [--trace-network]
 
 PORT is a free DirectPlay discovery port. The output keeps the executable and both
 logs. The fixture uses primary-session stand-ins; it does not run TA or prove a
 complete recording. --channel starts the production channel after both primary
 interfaces close; the default tests the backend directly. Both run authentication
 and controlled channel tests. Session lifetimes use observed test barriers.
+--body-bytes sets the channel fixture's copied DATA payload, default 16.
+--trace-network traces only the two owned native peers and their descendants.
+The traces contain kernel calls; they do not establish physical link bandwidth
+or unperturbed TA latency. No TA game is launched by this fixture.
 """
 import argparse
 import fcntl
@@ -92,7 +97,35 @@ def check_journal(raw):
     return ordinal
 
 
+def wait_tracers(paths):
+    """Do not return trace evidence while an owned tracer can still write it."""
+    arguments = {os.fsencode(path) for path in paths}
+    if not arguments:
+        return
+    deadline = time.monotonic() + 10
+    while True:
+        live = []
+        for path in Path("/proc").iterdir():
+            if not path.name.isdigit():
+                continue
+            try:
+                argv = (path / "cmdline").read_bytes().split(b"\0")
+                if (argv and Path(os.fsdecode(argv[0])).name == "strace" and
+                        arguments.intersection(argv) and
+                        (path / "stat").read_text().split(") ", 1)[1][0] != "Z"):
+                    live.append(int(path.name))
+            except (OSError, ValueError, IndexError):
+                continue
+        if not live:
+            return
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"owned network tracers still running: {live}")
+        time.sleep(.1)
+
+
 def run(args, output):
+    body_bytes = getattr(args, "body_bytes", 16)
+    trace_network = getattr(args, "trace_network", False)
     root = tareplay.main_checkout()
     instances = root / "tagpu" / "instances"
     instances.mkdir(parents=True, exist_ok=True)
@@ -101,7 +134,7 @@ def run(args, output):
     with (instances / f"recmp-net-port-{args.port}.lock").open("a") as lease:
         fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
         display = tareplay.start_xvfb()
-        owned, jobs = [], []
+        owned, jobs, traces = [], [], []
         release = output / "release"
         advertise = output / "release.advertise"
         primary = output / "release.primary"
@@ -111,7 +144,8 @@ def run(args, output):
                 exe = output / "recmp-net-test.exe"
                 command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc",
                          "-O2", "-Wall", "-Wextra", "-Werror", "-std=c99", "-o", exe,
-                         *(["-DRECMP_CHANNEL_TEST", TREE / "tagpu/ddraw/src/tagpu_recmp.c"] if args.channel else []),
+                         *(["-DRECMP_CHANNEL_TEST", f"-DRECMP_TEST_BODY_BYTES={body_bytes}",
+                            TREE / "tagpu/ddraw/src/tagpu_recmp.c"] if args.channel else []),
                          HERE / "recmp_net_test.c", TREE / "tagpu/ddraw/src/tagpu_recmp_net.c",
                          TREE / "tagpu/ddraw/src/tagpu_recmp_auth.c",
                          TREE / "tagpu/ddraw/src/tagpu_recmp_record.c",
@@ -179,8 +213,17 @@ def run(args, output):
             for role, (directory, env) in zip(("host", "join"), owned):
                 log = output / f"{role}.log"
                 handle = log.open("w")
-                proc = subprocess.Popen(["wine", str(exe), role,
-                                         "Z:" + str(release).replace("/", "\\")],
+                launch = ["wine", str(exe), role,
+                          "Z:" + str(release).replace("/", "\\")]
+                if trace_network:
+                    trace = output / f"{role}.trace"
+                    traces.append(trace)
+                    # -D preserves the peer PID and wait semantics. The tracer
+                    # follows descendants until owned-prefix shutdown below.
+                    launch = ["strace", "-D", "-ff", "-ttt", "-T", "-yy", "-xx",
+                              "-s", "8192", "-e", "trace=network", "-e",
+                              "status=successful", "-o", str(trace), *launch]
+                proc = subprocess.Popen(launch,
                                         env=env, stdout=handle, stderr=subprocess.STDOUT)
                 jobs.append((proc, handle, log))
                 wait_for(jobs, "PRIMARY READY" if args.channel else "PRIVATE READY")
@@ -201,7 +244,8 @@ def run(args, output):
             if args.channel:
                 for role in ("host", "join"):
                     raw = (output / f"release.{role}.journal").read_bytes()
-                    if len(raw) != 4016 or check_journal(raw) != 40:
+                    expected_bytes = 112 + 32*(64+body_bytes) + 8*88 + 40*16
+                    if len(raw) != expected_bytes or check_journal(raw) != 40:
                         raise RuntimeError("persisted journal mismatch")
                     for altered in (raw[:-1], raw[:112+16+64] + bytes([raw[112+16+64] ^ 1]) + raw[112+16+65:]):
                         try:
@@ -226,6 +270,7 @@ def run(args, output):
                     proc.wait(timeout=10)
                 finally:
                     handle.close()
+            wait_tracers(traces)
             for directory, env in owned:
                 shutil.rmtree(directory)
             tareplay.stop_xvfb(display)
@@ -237,9 +282,19 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--channel", action="store_true",
                         help="test the production channel with both primary interfaces already closed")
+    parser.add_argument("--body-bytes", type=int, default=16,
+                        help="copied channel DATA body size in 1..4032 (default: 16)")
+    parser.add_argument("--trace-network", action="store_true",
+                        help="retain strace network calls from owned native peers; perturbs timing")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port must be in 1024..65535")
+    if not 1 <= args.body_bytes <= 4032:
+        parser.error("body bytes must be in 1..4032")
+    if args.body_bytes != 16 and not args.channel:
+        parser.error("--body-bytes requires --channel")
+    if args.trace_network and not shutil.which("strace"):
+        parser.error("--trace-network requires strace")
     output = args.out.expanduser().resolve() if args.out else Path(tempfile.mkdtemp(prefix="recmp-net-"))
     if args.out:
         output.mkdir(parents=True, exist_ok=False)
