@@ -89,9 +89,12 @@ simulation fixes and limits remain in their [port groups](overview.md). Inclusio
 override a feature's earlier safety decision: `PreviewObject3D` is parked and the
 [opponent-facing preview](data-keys-evidence.md#4-previewfaceopponent) has unresolved fog and
 commander-identity concerns. Group D has a survey; the first feature's
-[resource-snapping and mod-profile design](resource-snapping.md) is agreed, with implementation
-and live placement verification pending. Its proposed Stock TA default is an Impure choice,
-distinct from the native bundled defaults audited here.
+[resource-snapping, Quick Build and mod-profile design](resource-snapping.md) is agreed, with
+implementation and live placement verification pending. It adds a separate BAR-style contextual
+mex/geo toggle, owned completed-building upgrades and queued-site indicators. Proposed defaults
+enable both resource features for Stock TA, M/P/T and lock them off for E/Z and unidentified mods.
+Those are Impure choices; this table continues to audit native bundled TADR behavior. Quick Build
+is additional planned work and is not evidence of another feature in any bundled TADR DLL.
 
 ## Activation evidence for older conveniences
 

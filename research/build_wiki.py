@@ -145,7 +145,7 @@ PAGES = [
     ("tadr-port/data-keys",       "C. New data keys — plan",   "TADR port"),
     ("tadr-port/data-keys-evidence", "C. New data keys — evidence", "TADR port"),
     ("tadr-port/quality-of-life", "D. Quality-of-life — coverage", "TADR port"),
-    ("tadr-port/resource-snapping", "D. Resource snapping — design", "TADR port"),
+    ("tadr-port/resource-snapping", "D. Resource snapping / Quick Build — design", "TADR port"),
     ("tadr-port/cob",             "F. COB compatibility — plan", "TADR port"),
 
     ("compat/overview",           "Overview & load routes",    "Compatibility"),
