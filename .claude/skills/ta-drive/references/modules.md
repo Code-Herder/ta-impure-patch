@@ -266,6 +266,18 @@ drivers. The native `recmp: text source` / `text received` logs carry sender
 identity, event serial, text-packet CRC and separate source/recipient ticks.
 These logs do not establish persisted communication or replay playback.
 
+`python3 tools/replay/recmp_text_test.py --out /tmp/recmp-text-run` checks
+copied kind-12 text batches, all ten origins, receipt-before-original joins,
+repeated/reordered receipts, full-length bytes, malformed/guarded spans,
+identity/queue capacity and failed publication. C/Python copied file-history
+controls check missing-original refusal, proof-only isolation and application
+prefix reconstruction. This fixture removes its owned prefix/display and runs
+separately from menu drivers. Native `local text batch` / `remote text batch`
+logs identify contribution publication/consumption, not replay display. Source
+entries include local echo and intended target calls; received entries belong
+to the actual recipient's stream and clock. `recr_mp_text` inspects the latest
+applied batch; every observation remains in the ordered application ledger.
+
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
   `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin. **The NAT
   helpers are refused** (`dpnhpast,dpnhupnp=d`): the transport skips a helper that does not load,

@@ -4003,8 +4003,16 @@ inactive pending-start guard. The corrected live-producer guard passes a COVER
 three-human native run with five unique events, exact source/received packet
 CRCs, repeated identical lines and correct sampled private delivery; a
 full-length line displays the same 63 characters on all three peers.
-Communication-ledger publication, actual audience queries,
-playback/seek, loading-phase chat and pings/drawings remain open.
+Kind 12 now carries exact text sources/local echoes and actual recipient
+observations on their own clocks, with the recorder's separate application
+order. Its copied identity join rejects mismatched or absent originals and
+actual recipients outside targeted intent; proof-only originals do not appear
+in application history. Codec/history controls and the existing file regression
+pass. A COVER three-human run saves five originals/nine receipts with both
+other peers opted out of saving; ordinary teardown closes the recording with
+zero corrections. Latest-batch inspection and the ordered application visitor
+retain these records; replay display/engine seek, loading-phase chat, raw
+transport and pings/drawings remain open.
 
 The work branch's tick-based replay harness defaults to internal speed 20 (2x),
 with normal speed selectable and retained for cost and speed/settings UI checks.

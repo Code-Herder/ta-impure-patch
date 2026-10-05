@@ -12881,8 +12881,33 @@ CRC `0056345B`. A 60-character `full-` plus narrow `i` line is serial 4, CRC
 Serial 5 is the subsequent public marker, CRC `67CE86A6`. The native IDs,
 fresh match GUID, tested DLL/map/hash, retained logs and queue snapshots are
 the probe evidence. All owned instances/prefixes/display are removed. This
-establishes in-play queued transport; raw transport, loading acceptance,
-persisted communication, playback and seek remain unverified.
+establishes in-play queued transport. That wire-only probe does not establish
+raw transport, loading acceptance, persisted communication or playback; the
+following ledger measurements address storage.
+
+DISASSEMBLED for the copied communication ledger: the formatter calls the
+native sender at `0x463E9F`, then its optional screen-message path, then calls
+the local sink unconditionally at `0x463ED4`; it returns with `ret 0x10` at
+`0x463EDF`. The source scope copies its 65-byte packet at the sender boundary,
+audience mode from `main+0x2BF0` and actual intended target calls at
+`0x4533F9/0x45348B`, then publishes copied source/local-echo metadata only after
+that formatter returns. Generic `0x4534B6` retains its distinct public audience.
+The validated receive boundary contributes an observation under the actual
+native destination's own stream/tick, with stock display flag 8. No success
+return from the targeted sender is treated as recipient acceptance. These
+copied contribution records add no engine write or primary patch site beyond
+the identified wire above.
+
+MEASURED in the kind-12 recording probe: source/local sink flags are 4; actual
+remote text flags are 8. Source `676590527` event 3 has audience mode 3 and the
+single intended target `676590525`; only that peer displays the private text.
+Its original tick is 511, the peer's acceptance tick 476 and the saving host's
+observation-publication tick 519. Both other peers save no local file but publish
+their actual observations. The completed file contains five originals and nine
+receipts, with exact wire CRCs/65-byte data retained. Public event 1 and 2 share
+their packet CRC `20E5EB9A` but remain separate identities. Ordinary teardown
+closes at GameTime 1027 with zero corrections. C/Python reader application bytes
+remain identical through world seek; engine multiplayer playback remains refused.
 
 #### Textfield input beneath the chat GUI
 

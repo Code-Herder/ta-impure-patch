@@ -1399,7 +1399,7 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
                         RecMpRecordEnd end;
                         if (!s->h->has_mp || found || len != sizeof end) break;
                         memcpy(&end, p + at + 4, sizeof end);
-                        if (!tagpu_recmp_file_footer(tagpu_recmp_history_ledger(mp), &end)) break;
+                        if (!tagpu_recmp_history_footer(mp, &end)) break;
                         found = 1;
                     }
                     at += (4u + len + 3u) & ~3u;
@@ -1863,6 +1863,12 @@ int recr_mp_named(RecReader* r, unsigned origin, RecMpNamedState* out, char* why
 {
     int k=mp_sync(r,why,cap);
     return k<=0 ? k : tagpu_recmp_history_named(r->mp_query.history,origin,out);
+}
+
+int recr_mp_text(RecReader* r, unsigned origin, RecMpTextState* out, char* why, unsigned cap)
+{
+    int k=mp_sync(r,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_text(r->mp_query.history,origin,out);
 }
 
 int recr_mp_orders(RecReader* r, unsigned slot, unsigned list, RecMpOrderState* out,

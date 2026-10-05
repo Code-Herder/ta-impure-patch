@@ -513,8 +513,8 @@ static int read_file(const char* path, int expected)
 
 typedef struct {
     const RecHeader* header;
-    uint64_t records, bytes, roots;
-    unsigned crc;
+    uint64_t records, bytes, roots, texts;
+    unsigned crc, print_text;
 } NativeRead;
 
 static void native_application(void* ctx, const RecMpRecord* where, const RecMpHeader* packet,
@@ -532,6 +532,23 @@ static void native_application(void* ctx, const RecMpRecord* where, const RecMpH
     n->crc=(unsigned)Crc32_ComputeBuf(n->crc,body,bytes);
     n->bytes+=sizeof *where+packet->bytes;
     if (packet->kind==RECMP_ROOTS) n->roots++;
+    if (packet->kind==RECMP_TEXT) {
+        unsigned count;
+        memcpy(&count,body,4);
+        n->texts+=count;
+        if (!n->print_text) return;
+        for (unsigned j=0;j<count;j++) {
+            RecMpTextEntry e;
+            memcpy(&e,(const unsigned char*)body+4+j*sizeof e,sizeof e);
+            printf("NATIVE_TEXT %llu %u %u %u %u %u %u %u %llu %u %u %u ",
+                   (unsigned long long)where->ordinal,where->tick,packet->origin,packet->sequence,
+                   packet->tick,e.phase,e.origin,e.recipient,(unsigned long long)e.event,
+                   e.source_tick,e.display,e.mode);
+            for (unsigned k=0;k<RECMP_ACTORS;k++) printf("%u%s",e.target[k],k+1==RECMP_ACTORS ? " " : ",");
+            for (unsigned k=0;k<sizeof e.stock;k++) printf("%02X",e.stock[k]);
+            puts("");
+        }
+    }
 }
 
 static void native_explored(RecReader* r, const char* stage)
@@ -554,7 +571,24 @@ static void native_explored(RecReader* r, const char* stage)
     }
 }
 
-static int read_native(const char* path)
+static void native_text_query(RecReader* r, const char* stage)
+{
+    char why[256];
+    const RecHeader* h=recr_header(r);
+    for (unsigned i=0;i<h->mp_seats.count;i++) {
+        RecMpTextState state;
+        int known=recr_mp_text(r,h->mp_seats.actor[i].origin,&state,why,sizeof why);
+        CHECK(known>=0);
+        if (!known) continue;
+        printf("NATIVE_TEXT_QUERY %s %u %u %u %u %u %u %08X ",stage,
+               recr_world(r)->tick,state.origin,state.source_tick,state.sequence,state.applied_tick,
+               state.count,(unsigned)Crc32_ComputeBuf(0,state.body,state.bytes));
+        for (unsigned j=0;j<sizeof state.stream;j++) printf("%02X",((unsigned char*)&state.stream)[j]);
+        puts("");
+    }
+}
+
+static int read_native(const char* path, unsigned text_only)
 {
     char why[256];
     RecReader* r=recr_open(path,why,sizeof why);
@@ -569,6 +603,7 @@ static int read_native(const char* path)
           recr_summary(path,&summary,why,sizeof why) && summary.end_reason==REC_END_TEARDOWN &&
           recr_info(path,info,why,sizeof why) && info->ended);
     n.header=recr_header(r);
+    n.print_text=1;
     while ((k=recr_tick(r,why,sizeof why))>0) {
         CHECK(k==1);
         if (!first) first=recr_world(r)->tick;
@@ -583,8 +618,9 @@ static int read_native(const char* path)
         CHECK(recr_mp_apply(r,&ordinal,native_application,&n,why,sizeof why)==1 && ordinal==n.records);
         CHECK(recr_mp_apply(r,&ordinal,native_application,&n,why,sizeof why)==1 && ordinal==n.records);
     }
-    CHECK(!k && first && last>=first && n.records && n.roots);
+    CHECK(!k && first && last>=first && n.records && (text_only ? n.texts : n.roots));
     native_explored(r,"final");
+    native_text_query(r,"final");
     for (unsigned i=0;i<n.header->mp_seats.count;i++) {
         const RecMpSeat* seat=&n.header->mp_seats.actor[i];
         RecMpPlayerState player;
@@ -600,13 +636,15 @@ static int read_native(const char* path)
        Reconstructing from its prefix, then advancing, must deliver every byte. */
     CHECK(recr_seek(r,first+(last-first)/2,0,NULL,NULL,why,sizeof why)==1);
     native_explored(r,"seek-middle");
+    native_text_query(r,"seek-middle");
     replayed.header=recr_header(r); ordinal=0;
     CHECK(recr_mp_apply(r,&ordinal,native_application,&replayed,why,sizeof why)==1);
     while ((k=recr_tick(r,why,sizeof why))>0)
         CHECK(k==1 && recr_mp_apply(r,&ordinal,native_application,&replayed,why,sizeof why)==1);
     CHECK(!k && n.records==replayed.records && n.bytes==replayed.bytes &&
-          n.roots==replayed.roots && n.crc==replayed.crc);
+          n.roots==replayed.roots && n.texts==replayed.texts && n.crc==replayed.crc);
     native_explored(r,"seek-final");
+    native_text_query(r,"seek-final");
     printf("NATIVE_APPLICATIONS %llu %llu %llu %08X %u %u\n",
            (unsigned long long)n.records,(unsigned long long)n.bytes,(unsigned long long)n.roots,
            n.crc,first,last);
@@ -646,7 +684,8 @@ int main(int argc, char** argv)
     int local_stop;
     CHECK(argc==3);
     proof_only_roster();
-    if (!strcmp(argv[1],"native")) return read_native(argv[2]);
+    if (!strcmp(argv[1],"native")) return read_native(argv[2],0);
+    if (!strcmp(argv[1],"native-text")) return read_native(argv[2],1);
     if (!strcmp(argv[1],"world-refuse")) {
         char why[256];
         RecReader* r=recr_open(argv[2],why,sizeof why);

@@ -1291,7 +1291,12 @@ static void contributions_finish(Writer* w)
         if (taken < 0) { fail(w, "multiplayer channel failed before file completion"); break; }
         complete = tagpu_recmp_file_complete(f, &w->mp, &w->mp_end);
         if (complete < 0) { fail(w, "persisted contribution prefixes do not cover application cuts"); break; }
-        if (complete) { contributions_flush(w); break; }
+        if (complete) {
+            if (!tagpu_recmp_history_footer(w->mp_history,&w->mp_end)) {
+                fail(w,"communication receipt lacks its byte-exact original contribution"); break;
+            }
+            contributions_flush(w); break;
+        }
         WaitForSingleObject(w->ring->wake, REC_WRITER_POLL_MS);
     }
 }

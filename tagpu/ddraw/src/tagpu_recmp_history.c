@@ -11,6 +11,7 @@ struct RecMpHistory {
     RecMpRoots *source_roots, *applied_roots;
     RecMpOrderCache *source_orders, *applied_orders;
     RecMpExplored *source_explored, *applied_explored;
+    RecMpText *source_text, *applied_text;
     unsigned failed;
 };
 
@@ -35,11 +36,14 @@ RecMpHistory* tagpu_recmp_history_begin(const RecMpRecordHeader* header, const R
     h->applied_roots=tagpu_recmp_roots_begin(roster);
     h->source_explored=tagpu_recmp_explored_begin(roster,width,height);
     h->applied_explored=tagpu_recmp_explored_begin(roster,width,height);
+    h->source_text=tagpu_recmp_text_begin(roster);
+    h->applied_text=tagpu_recmp_text_begin(roster);
     h->source_orders=tagpu_recmp_orders_begin(roster->slots);
     h->applied_orders=tagpu_recmp_orders_begin(roster->slots);
     if (!h->source_player || !h->applied_player || !h->source_seats || !h->applied_seats ||
         !h->source_units || !h->applied_units || !h->source_named || !h->applied_named || !h->source_roots || !h->applied_roots ||
-        !h->source_orders || !h->applied_orders || !h->source_explored || !h->applied_explored) {
+        !h->source_orders || !h->applied_orders || !h->source_explored || !h->applied_explored ||
+        !h->source_text || !h->applied_text) {
         tagpu_recmp_history_end(h); return NULL;
     }
     return h;
@@ -62,6 +66,8 @@ void tagpu_recmp_history_end(RecMpHistory* h)
     tagpu_recmp_orders_end(h->applied_orders);
     tagpu_recmp_explored_end(h->source_explored);
     tagpu_recmp_explored_end(h->applied_explored);
+    tagpu_recmp_text_end(h->source_text);
+    tagpu_recmp_text_end(h->applied_text);
     HeapFree(GetProcessHeap(),0,h);
 }
 
@@ -88,6 +94,10 @@ static int semantic(RecMpHistory* h, const RecMpRecord* where, const RecMpHeader
     if (packet->kind==RECMP_EXPLORED) {
         if (!tagpu_recmp_explored_put(h->source_explored,h->source_seats,packet,body,bytes,tick)) return 0;
         return proof || tagpu_recmp_explored_put(h->applied_explored,h->applied_seats,packet,body,bytes,tick);
+    }
+    if (packet->kind==RECMP_TEXT) {
+        if (!tagpu_recmp_text_put(h->source_text,h->source_seats,packet,body,bytes,tick)) return 0;
+        return proof || tagpu_recmp_text_put(h->applied_text,h->applied_seats,packet,body,bytes,tick);
     }
     if (packet->kind==RECMP_UNITS) {
         if (!tagpu_recmp_units_put(h->source_units,h->source_seats,packet,body,bytes,tick)) return 0;
@@ -159,6 +169,12 @@ const RecMpFileState* tagpu_recmp_history_ledger(const RecMpHistory* h)
     return h && !h->failed ? &h->ledger : NULL;
 }
 
+int tagpu_recmp_history_footer(const RecMpHistory* h, const RecMpRecordEnd* end)
+{
+    return h && !h->failed && tagpu_recmp_text_complete(h->source_text) &&
+           tagpu_recmp_file_footer(&h->ledger,end);
+}
+
 int tagpu_recmp_history_player(const RecMpHistory* h, unsigned origin, RecMpPlayerState* out)
 {
     RecMpPlayerState state;
@@ -188,6 +204,11 @@ int tagpu_recmp_history_named(const RecMpHistory* h, unsigned origin, RecMpNamed
 int tagpu_recmp_history_roots(const RecMpHistory* h, unsigned origin, RecMpRootsState* out)
 {
     return h && !h->failed && tagpu_recmp_roots_get(h->applied_roots,origin,out);
+}
+
+int tagpu_recmp_history_text(const RecMpHistory* h, unsigned origin, RecMpTextState* out)
+{
+    return h && !h->failed && tagpu_recmp_text_get(h->applied_text,origin,out);
 }
 
 int tagpu_recmp_history_explored(const RecMpHistory* h, unsigned origin,

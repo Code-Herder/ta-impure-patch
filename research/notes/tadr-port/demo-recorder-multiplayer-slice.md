@@ -1245,8 +1245,9 @@ exploration application or engine multiplayer playback.
 
 The communication contract includes in-match public/team/private text, pings
 and drawings, with all messages in full-map mode and only received messages in
-a selected player's view. Lobby text is excluded. The current contribution
-format does not carry these events yet.
+a selected player's view. Lobby text is excluded. The work branch carries
+identified text sources and actual recipient observations as kind 12; display,
+loading acceptance and the other communication forms remain open.
 
 DISASSEMBLED 2026-10-05: the stock text sender formats a line through
 `0x463E50`, builds a fixed 65-byte `0x05` message through `0x453360`, and
@@ -1273,7 +1274,7 @@ The identified text receiver below uses this bound before copying.
 
 The native text wire now carries a unique sender event identity as described
 below. Intended targets and actual accepted recipient observations still need
-communication-ledger publication and playback, preserving their separate
+playback, preserving their separate
 source/application times. Original and forwarded copies must join one event
 without deduplicating text or inferring a recipient from a transport return.
 Primary per-pair ordering is still unproved; the same-wire identity removes
@@ -1331,6 +1332,73 @@ No cause for every long-line driver refusal is claimed. The engine map lists
 the complete source/recipient ID/tick/CRC sequences. The tested DLL/map/hash,
 logs and queue snapshots are retained, and all owned instances/prefixes/display
 are removed. This remains a wire checkpoint with the wider gaps above.
+
+#### Persisted text identities and receipt clocks
+
+Kind 12 batches carry copied 136-byte entries: source/received phase, audience
+mode, native source and recipient IDs, nonzero event serial, original source
+tick, display flags, up to ten intended target-call IDs and all 65 stock bytes.
+The envelope's tick belongs to its producer: the author for a source entry,
+the actual recipient for a received entry. The journal separately retains this
+recorder's application tick and ordinal. Source entries include the formatter's
+local echo, copied after its unconditional local sink returns; received entries
+capture the validated native receive boundary. Public mode keeps the generic
+audience distinct from a list of targeted calls. Received entries have unknown
+intent and never infer another recipient from a successful send return.
+
+The bounded identity cache joins `(native author, serial)` within the match,
+including receipts arriving before originals. It checks all packet bytes and
+the original tick; targeted originals must include every claimed receiver.
+Source serials increase; actual repeated/reordered receipts remain separate
+ordered observations. The 65,536-identity bound and 4,096-entry copied queue
+refuse overflow rather than drop an event. Every batch validates before any
+cache publication. Root and text queues drain their earliest copied tick first,
+before advancing the shared source clock; teardown uses the same ordering.
+
+Writer and C/Python reader source histories validate even proof-only entries.
+A complete footer requires an original for every claimed receipt. Separate
+application history excludes proof tails; `recr_mp_text` is a latest-batch
+inspection query, while the application visitor retains every original and
+receipt through seek. These queries do not display multiplayer replay chat.
+The native loading boundary, raw transport, other communication forms, complete
+POV reconstruction and engine playback remain open.
+
+Copied controls pass ten shuffled origins, full-length/repeated text,
+receipt-before-original and repeated/reordered receipts, private intent
+validation, 28 malformed batches, 412 guard-page truncations, the identity
+bound and queue wrap/overflow/failed-publication refusal. C/Python serialized
+history controls reject a sealed but absent original, join a proof-only
+original, preserve separate clocks through prefix reconstruction and keep
+that proof-only original out of application history. The existing full
+`.imprec` writer/reader/failure regression suite also passes.
+
+The live COVER storage probe passes with three humans, one saving and two
+opted out. Source `676590527` emits IDs `1..5` at ticks
+`273,384,511,691,821`. Recipient `676590525` observes all five at
+`238,349,476,656,785`; `676590523` observes `1,2,4,5` at
+`236,347,654,784`. The host records those remote observations at
+`280,391,519,699,828` (the other peer has no private event at 519).
+The source's intended target for private event 3 is exactly `676590525`.
+Two identical public lines remain distinct IDs. All 65 bytes/CRCs agree between
+the wire's source/receipt logs and the fourteen persisted observations. Full
+text remains 64 wire bytes with equal 63-character native displays. Ordinary
+departure through each peer's own menus closes the recording at GameTime 1027
+with 1,027 iterations, 429 application envelopes and zero corrections. Python
+strict source/end validation accepts the complete file. The C reader recovers
+the same fourteen complete entries as Python, including exact packet bytes,
+intent and all three clocks; wire source/received metadata matches the file.
+Sequential reading and reader world seek both recover all 429 envelopes /
+174,679 application bytes, CRC `2E8EA472`, from GameTime 1 through 1027.
+The C latest-batch queries and Python prefixes also agree in body bytes and
+origin/stream/sequence/source/application provenance before and after reader
+seek to the middle and end. Repeated queries do not acknowledge application
+visitor records.
+This idle chat fixture has zero owned effect batches. The combat-native reader
+fixture correctly refuses that missing prerequisite; its existing effect
+requirement is retained, and the explicit `native-text` reader control requires
+text observations instead. This does not complete the owner-effect gate or
+enable engine playback. This run does not provide an independent raw primary
+exploration oracle or the accumulated landing coverage.
 
 #### Input acknowledgement used by the chat fixture
 

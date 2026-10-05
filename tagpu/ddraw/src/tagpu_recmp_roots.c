@@ -155,6 +155,13 @@ void tagpu_recmp_roots_queue_end(RecMpRootsQueue* q)
     if (q) HeapFree(GetProcessHeap(),0,q);
 }
 
+int tagpu_recmp_roots_queue_tick(const RecMpRootsQueue* q, unsigned* tick)
+{
+    if (!q || !tick || q->failed) return -1;
+    if (!q->used) return 0;
+    *tick=q->pending[q->head].tick; return 1;
+}
+
 int tagpu_recmp_roots_queue_push(RecMpRootsQueue* q, unsigned origin, unsigned tick,
                                  unsigned birth, unsigned before_capture, unsigned kind,
                                  const void* image, unsigned bytes)

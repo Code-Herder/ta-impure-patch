@@ -340,7 +340,7 @@ def run(output, read_file=None, skirmish_file=None, native_file=None):
         with (output / "setup.log").open("w") as log:
             exe = output / "recmp-file-test.exe"
             sources = ("tagpu_recmp", "tagpu_recmp_auth", "tagpu_recmp_record", "tagpu_recmp_stream", "tagpu_recmp_players",
-                       "tagpu_recmp_file", "tagpu_recmp_file_state", "tagpu_recmp_history", "tagpu_recmp_units", "tagpu_recmp_named", "tagpu_recmp_roots", "tagpu_recmp_explored", "tagpu_recmp_orders", "tagpu_recwriter",
+                       "tagpu_recmp_file", "tagpu_recmp_file_state", "tagpu_recmp_history", "tagpu_recmp_units", "tagpu_recmp_named", "tagpu_recmp_roots", "tagpu_recmp_explored", "tagpu_recmp_text", "tagpu_recmp_orders", "tagpu_recwriter",
                        "tagpu_recreader", "tagpu_recfile", "lodepng", "crc32")
             command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc", "-O2", "-Wall",
                      "-Wextra", "-Werror", "-std=c99", "-o", exe, HERE / "recmp_file_test.c",

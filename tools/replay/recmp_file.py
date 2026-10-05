@@ -142,7 +142,7 @@ class Contributions:
                 if final > 1 or (previous, seal_tick, data_bytes, crc) != (source["sequence"], tick, source["bytes"], source["crc"]) or (sealed is not None and (tick < sealed or (not final and tick == sealed))):
                     raise ValueError("contribution prefix seal")
                 source.update(sealed_tick=tick, sealed_sequence=sequence, ended=bool(final))
-            elif kind in (1, 2, 6, 7, 8, 9, 10, 11):
+            elif kind in (1, 2, 6, 7, 8, 9, 10, 11, 12):
                 if source["sealed_tick"] is not None and tick <= source["sealed_tick"]:
                     raise ValueError("contribution data in closed tick")
                 source["bytes"] += span
@@ -180,6 +180,7 @@ class History:
         self.source_units, self.units = {}, {}
         self.source_named, self.named = {}, {}
         self.source_roots, self.roots = {}, {}
+        self.source_text, self.text, self.text_identity, self.text_serial = {}, {}, {}, {}
         self.source_orders, self.orders, self.stages = {}, {}, {}
         self.source_explored, self.explored, self.explored_stages = {}, {}, {}
         self.applications = []
@@ -228,6 +229,75 @@ class History:
             self.source_players[origin] = state
             if not proof:
                 self.players[origin] = dict(state, image=mapped)
+        elif kind == 12:
+            source_map = self.source_maps.get(origin)
+            if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:
+                raise ValueError("text precedes its source roster")
+            if not 4 <= len(body) <= 4032:
+                raise ValueError("text batch span")
+            count = struct.unpack_from("<I", body)[0]
+            if not 1 <= count <= 29 or len(body) != 4+count*136:
+                raise ValueError("text batch count/span")
+            previous = self.source_text.get(origin)
+            if previous and (sequence <= previous["sequence"] or tick < previous["source_tick"] or
+                             application_tick < previous["applied_tick"] or stream != previous["stream"]):
+                raise ValueError("text provenance")
+            actors, events = {a[0] for a in self.roster.actors}, []
+            for i in range(count):
+                at = 4+i*136
+                phase, mode, reserved, sender, recipient, event_tick, display, event = \
+                    struct.unpack_from("<BBHIIIIQ", body, at)
+                targets = struct.unpack_from("<10I", body, at+28)
+                stock = bytes(body[at+68:at+133])
+                if (reserved or any(body[at+133:at+136]) or sender not in actors or
+                        recipient != origin or not event or stock[0] != 5 or not stock[1]):
+                    raise ValueError("text identity/recipient/packet")
+                if phase == 1:
+                    if (sender != origin or mode > 3 or event_tick != tick or
+                            event <= self.text_serial.get(origin, 0)):
+                        raise ValueError("text original origin/clock/serial")
+                elif phase == 2:
+                    if sender == recipient or mode != 255 or display != 8:
+                        raise ValueError("text received origin/display/unknown intent")
+                else:
+                    raise ValueError("text observation phase")
+                tail, chosen = False, set()
+                for target in targets:
+                    if not target:
+                        tail = True
+                    elif tail or mode == 0 or phase != 1 or target not in actors or target in chosen:
+                        raise ValueError("text intended targets")
+                    else:
+                        chosen.add(target)
+                key = sender, event
+                identity = self.text_identity.get(key)
+                if identity is None:
+                    if len(self.text_identity) == 65536:
+                        raise ValueError("text identity capacity")
+                    identity = dict(tick=event_tick, stock=stock, canonical=False, receivers=set())
+                    self.text_identity[key] = identity
+                if identity["tick"] != event_tick or identity["stock"] != stock:
+                    raise ValueError("text receipt differs from original")
+                if phase == 1:
+                    if identity["canonical"]:
+                        raise ValueError("repeated text original identity")
+                    if mode and not identity["receivers"].issubset(chosen):
+                        raise ValueError("text actual audience outside intended targets")
+                    identity["canonical"] = True
+                    identity["mode"], identity["targets"] = mode, chosen
+                    self.text_serial[origin] = event
+                else:
+                    if identity["canonical"] and identity["mode"] and recipient not in identity["targets"]:
+                        raise ValueError("text actual audience outside intended targets")
+                    identity["receivers"].add(recipient)
+                events.append(dict(phase=phase, mode=mode, origin=sender, recipient=recipient,
+                                   source_tick=event_tick, display=display, event=event,
+                                   targets=targets, stock=stock))
+            state = dict(source_tick=tick, sequence=sequence, applied_tick=application_tick,
+                         stream=bytes(stream), events=events)
+            self.source_text[origin] = state
+            if not proof:
+                self.text[origin] = state.copy()
         elif kind == 11:
             source_map = self.source_maps.get(origin)
             if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:
@@ -499,6 +569,8 @@ class History:
             raise
 
     def footer(self, raw):
+        if any(not e["canonical"] for e in self.text_identity.values()):
+            raise ValueError("communication receipt lacks its byte-exact original contribution")
         self.ledger.footer(raw)
 
     def at(self, tick):

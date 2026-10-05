@@ -74,6 +74,7 @@
 #include "tagpu_recmp_roots.h"
 #include "tagpu_recmp_explored.h"
 #include "tagpu_recmp_chat_wire.h"
+#include "tagpu_recmp_text.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_replay_layout.h"
@@ -285,9 +286,14 @@ typedef struct {
     unsigned active, origin, tick;
     uint64_t event;
     GUID match;
+    unsigned text_seen;
+    RecMpTextEntry text;
 } MpChatContext;
 static MpChatContext s_mp_chat;
 static uint64_t s_mp_chat_serial;
+static RecMpText* s_mp_text;
+static RecMpTextQueue* s_mp_text_queue;
+static unsigned s_mp_text_failed;
 static RecMpChannel* s_mp_channel;
 /* Borrowed by the game producer until file_end. The ring's writer owns its
    lifetime and cannot free it before that end publication. */
@@ -313,7 +319,7 @@ static unsigned s_mp_tick, s_mp_roots_failed;
 static unsigned char s_mp_roots_seen[RECMP_ACTORS];
 typedef struct { unsigned origin, tick, birth, before_capture; } MpRootRef;
 static void mp_roots_end(void);
-static int mp_roots_flush(unsigned through);
+static int mp_events_flush(unsigned through);
 static void mp_roots_push(const char* unit, unsigned kind, const void* image, unsigned bytes);
 static int mp_roots_prepare(const char* unit, MpRootRef* out);
 static void mp_roots_publish(const MpRootRef* ref, unsigned kind, const void* image, unsigned bytes);
@@ -452,6 +458,8 @@ static int __stdcall mp_chat_gui_send(const char* player, const char* text,
     int result;
     if (ta) memcpy(&state,ta+0x391F1,sizeof state);
     s_mp_chat.active=0;
+    s_mp_chat.text_seen=0;
+    memset(&s_mp_chat.text,0,sizeof s_mp_chat.text);
     /* B2 consumes the pending-start flag once. The live producer's thread
        lifetime, cleared before level teardown, authorizes this level's ID. */
     if (ta && s_mp_tid==GetCurrentThreadId() && s_mp_channel &&
@@ -467,9 +475,20 @@ static int __stdcall mp_chat_gui_send(const char* player, const char* text,
             memcpy(&s_mp_chat.tick,ta+OFF_GAMETIME,4);
             s_mp_chat.event=++s_mp_chat_serial;
             s_mp_chat.match=s_mp_match;
+            s_mp_chat.text.phase=RECMP_TEXT_SOURCE;
+            s_mp_chat.text.mode=(unsigned char)ta[0x2BF0];
+            s_mp_chat.text.origin=s_mp_chat.text.recipient=s_mp_chat.origin;
+            s_mp_chat.text.source_tick=s_mp_chat.tick;
+            s_mp_chat.text.display=flags;
+            s_mp_chat.text.event=s_mp_chat.event;
         }
     }
     result=((SendFn)(size_t)0x463E50)(player,text,flags,caption);
+    /* The formatter returns after its unconditional local sink call at
+       0x463ED4. Target calls and exact packet bytes are now copied facts. */
+    if (s_mp_chat.active && s_mp_chat.text_seen &&
+        !tagpu_recmp_text_queue_push(s_mp_text_queue,s_mp_chat.tick,&s_mp_chat.text))
+        s_mp_text_failed=1;
     s_mp_chat=previous;
     return result;
 }
@@ -501,7 +520,15 @@ static int __stdcall mp_chat_send_one(DWORD origin, DWORD destination,
 {
     typedef int (__stdcall *SendFn)(DWORD,DWORD,const void*,unsigned);
     RecMpChatWire wire;
-    if (mp_chat_wire(&wire,origin,message,bytes)) { message=&wire; bytes=sizeof wire; }
+    if (mp_chat_wire(&wire,origin,message,bytes)) {
+        unsigned i;
+        message=&wire; bytes=sizeof wire;
+        for (i=0;i<RECMP_ACTORS;i++) {
+            if (s_mp_chat.text.target[i]==destination) break;
+            if (!s_mp_chat.text.target[i]) { s_mp_chat.text.target[i]=destination; break; }
+        }
+        if (!destination || i==RECMP_ACTORS) s_mp_text_failed=1;
+    }
     return ((SendFn)(size_t)0x451BC0)(origin,destination,message,bytes);
 }
 
@@ -514,6 +541,8 @@ static int __stdcall mp_chat_send_line(const char* line)
         memset(stock,0,sizeof stock);
         stock[0]=5;
         for (i=0;i<sizeof stock-1 && line[i];i++) stock[i+1]=(unsigned char)line[i];
+        if (s_mp_chat.text_seen) s_mp_text_failed=1;
+        memcpy(s_mp_chat.text.stock,stock,sizeof stock); s_mp_chat.text_seen=1;
         tagpu_logf("recmp: text source origin %u event %llu tick %u CRC %08X",
                    s_mp_chat.origin,(unsigned long long)s_mp_chat.event,s_mp_chat.tick,
                    (unsigned)Crc32_ComputeBuf(0,stock,sizeof stock));
@@ -553,6 +582,13 @@ static int __cdecl mp_chat_receive(void* frame)
     tagpu_logf("recmp: text received origin %u event %llu source %u tick %u recipient %u CRC %08X",
                from,(unsigned long long)wire.event,wire.tick,tick,to,
                (unsigned)Crc32_ComputeBuf(0,wire.stock,sizeof wire.stock));
+    {
+        RecMpTextEntry entry={ .phase=RECMP_TEXT_RECEIVED, .mode=RECMP_TEXT_MODE_UNKNOWN,
+                              .origin=from, .recipient=to, .source_tick=wire.tick,
+                              .display=8, .event=wire.event };
+        memcpy(entry.stock,wire.stock,sizeof entry.stock);
+        if (!tagpu_recmp_text_queue_push(s_mp_text_queue,tick,&entry)) s_mp_text_failed=1;
+    }
     memcpy(message,wire.stock,sizeof wire.stock);
     return 1;
 }
@@ -863,9 +899,11 @@ static void mp_capture(const Level* L, unsigned tick)
         s_mp_named = tagpu_recmp_named_begin(&roster);
         s_mp_roots = tagpu_recmp_roots_begin(&roster);
         s_mp_roots_queue = tagpu_recmp_roots_queue_begin();
+        s_mp_text = tagpu_recmp_text_begin(&roster);
+        s_mp_text_queue = tagpu_recmp_text_queue_begin();
         s_mp_orders = tagpu_recmp_orders_begin(L->nslots);
         if (!mp_explored_begin(L,&roster) || !s_mp_players || !s_mp_seats || !s_mp_units || !s_mp_orders ||
-            !s_mp_named || !s_mp_roots || !s_mp_roots_queue) {
+            !s_mp_named || !s_mp_roots || !s_mp_roots_queue || !s_mp_text || !s_mp_text_queue) {
             tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
             tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
             tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
@@ -900,8 +938,8 @@ static void mp_capture(const Level* L, unsigned tick)
     if (!s_mp_channel) return;
     /* The pump at 0x4954C8 can start roots at T before B2. Post-B2 roots
        from T-1 must be sent before advance seals that source tick. */
-    if (s_mp_roots_failed || !mp_roots_flush(s_mp_tick)) goto incomplete;
-    if (!tagpu_recmp_advance(s_mp_channel, tick) || !mp_roots_flush(tick)) goto incomplete;
+    if (s_mp_roots_failed || s_mp_text_failed || !mp_events_flush(s_mp_tick)) goto incomplete;
+    if (!tagpu_recmp_advance(s_mp_channel, tick) || !mp_events_flush(tick)) goto incomplete;
     s_mp_tick = tick;
     for (i = 0; i < REC_PLAYERS; i++) {
         const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
@@ -961,6 +999,15 @@ static void mp_capture(const Level* L, unsigned tick)
             if (!tagpu_recmp_explored_put(s_mp_explored,s_mp_seats,&packet.h,packet.body,
                                           packet.h.bytes-sizeof packet.h,tick)) goto incomplete;
             if (!known) mp_explored_log(packet.h.origin,tick,"remote");
+            continue;
+        }
+        if (packet.h.kind == RECMP_TEXT) {
+            if (!tagpu_recmp_text_put(s_mp_text,s_mp_seats,&packet.h,packet.body,
+                                      packet.h.bytes-sizeof packet.h,tick)) goto incomplete;
+            tagpu_logf("recmp: remote text batch ID %u source tick %u seq %u applied tick %u, %u bytes CRC %08X",
+                       packet.h.origin,packet.h.tick,packet.h.sequence,tick,
+                       packet.h.bytes-(unsigned)sizeof packet.h,
+                       (unsigned)Crc32_ComputeBuf(0,packet.body,packet.h.bytes-sizeof packet.h));
             continue;
         }
         if (packet.h.kind == RECMP_UNITS) {
@@ -4232,6 +4279,9 @@ static void mp_roots_end(void)
     tagpu_recmp_named_end(s_mp_named); s_mp_named=NULL;
     tagpu_recmp_roots_end(s_mp_roots); s_mp_roots=NULL;
     tagpu_recmp_roots_queue_end(s_mp_roots_queue); s_mp_roots_queue=NULL;
+    tagpu_recmp_text_end(s_mp_text); s_mp_text=NULL;
+    tagpu_recmp_text_queue_end(s_mp_text_queue); s_mp_text_queue=NULL;
+    s_mp_text_failed=0;
     s_nano_unit=NULL; s_nano_out=NULL;
     memset(&s_mp_level,0,sizeof s_mp_level);
     memset(s_mp_roots_seen,0,sizeof s_mp_roots_seen);
@@ -4279,9 +4329,37 @@ static int mp_roots_send(void* context, unsigned origin, unsigned tick,
     return 1;
 }
 
-static int mp_roots_flush(unsigned through)
+static int mp_text_send(void* context, unsigned origin, unsigned tick,
+                         const void* body, unsigned bytes)
 {
-    return tagpu_recmp_roots_queue_flush(s_mp_roots_queue,through,mp_roots_send,NULL);
+    RecMpHeader header;
+    (void)context;
+    if (!tagpu_recmp_advance(s_mp_channel,tick) ||
+        !tagpu_recmp_send_from(s_mp_channel,origin,RECMP_TEXT,tick,body,bytes,&header) ||
+        !tagpu_recmp_text_put(s_mp_text,s_mp_seats,&header,body,bytes,tick)) return 0;
+    tagpu_logf("recmp: local text batch ID %u source tick %u seq %u, %u bytes CRC %08X",
+               origin,tick,header.sequence,bytes,(unsigned)Crc32_ComputeBuf(0,body,bytes));
+    return 1;
+}
+
+/* Both copied queues share the producer's clock. Draining the earliest tick
+   first prevents one feature from sealing a tick the other still owns, also
+   during teardown when several ticks can remain. The game thread owns both. */
+static int mp_events_flush(unsigned through)
+{
+    for (;;) {
+        unsigned roots=0, text=0, tick;
+        int r=tagpu_recmp_roots_queue_tick(s_mp_roots_queue,&roots);
+        int t=tagpu_recmp_text_queue_tick(s_mp_text_queue,&text);
+        if (r<0 || t<0) return 0;
+        if (!r && !t) return 1;
+        tick=r && (!t || roots<=text) ? roots : text;
+        if (tick>through) return 1;
+        if (r && roots==tick &&
+            !tagpu_recmp_roots_queue_flush(s_mp_roots_queue,tick,mp_roots_send,NULL)) return 0;
+        if (t && text==tick &&
+            !tagpu_recmp_text_queue_flush(s_mp_text_queue,tick,mp_text_send,NULL)) return 0;
+    }
 }
 
 /* A matching thread ID establishes ownership before following the level context.
@@ -6089,7 +6167,7 @@ void tagpu_rec_level_end(void)
     /* Teardown enters on the producer's game thread before the unit-array free.
        Copied final roots precede final source seals; no hook can retain this
        level context after it is cleared. */
-    if (s_mp_channel && (s_mp_roots_failed || !mp_roots_flush(~0u)))
+    if (s_mp_channel && (s_mp_roots_failed || s_mp_text_failed || !mp_events_flush(~0u)))
         tagpu_recmp_abort(s_mp_channel,E_ABORT);
     mp_roots_end();
     tagpu_recmp_end(s_mp_channel);

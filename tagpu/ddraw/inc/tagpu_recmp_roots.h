@@ -50,6 +50,8 @@ typedef int (*RecMpRootsEmit)(void* context, unsigned origin, unsigned tick,
    Overflow or a failed emission makes the queue permanently incomplete. */
 RecMpRootsQueue* tagpu_recmp_roots_queue_begin(void);
 void tagpu_recmp_roots_queue_end(RecMpRootsQueue* queue);
+/* Earliest copied tick: 1 present, 0 empty, -1 incomplete. Same owner as flush. */
+int tagpu_recmp_roots_queue_tick(const RecMpRootsQueue* queue, unsigned* tick);
 int tagpu_recmp_roots_queue_push(RecMpRootsQueue* queue, unsigned origin, unsigned tick,
                                  unsigned birth, unsigned before_capture, unsigned kind,
                                  const void* image, unsigned bytes);

@@ -3164,7 +3164,7 @@ call-site replacements at `0x493FAF`, `0x463E9F`, `0x4533F9`, `0x45348B` and
 then enters stock's text case at `0x45522E`. It preserves the pump pointer and
 copies no engine address to a worker. Normal/COVER builds and 168 copied-packet
 guarded/malformed controls pass. Intended targets and actual recipient
-observations remain separate; communication-ledger publication, playback,
+observations remain separate; playback,
 loading-phase acceptance and pings/drawings remain open. The first native wire
 probe fails input acknowledgement and exposes an inactive start-token guard;
 the live B2 producer lifetime replaces that guard. No passing native wire-ID
@@ -3173,8 +3173,26 @@ recording off, verifies five unique source events and exact packet CRCs: the
 selected recipient accepts all five; the other peer accepts four, excluding the
 private event. Repeated identical lines remain distinct, and a full-length line
 has equal 63-character displays on every peer. This is in-play queued native
-delivery; the open communication-ledger/playback/loading/raw gates remain.
+delivery; the open playback/loading/raw gates remain.
 The engine map and multiplayer slice record the invariants and verification.
+
+Kind 12 persists text sources and actual receipt observations, including the
+original tick, recipient-owned clock, recorder application tick/order, intended
+target-call IDs, display flags and exact stock packet bytes. A fixed identity
+join validates all 65 bytes even when a receipt precedes its original. Targeted
+intent bounds actual receipts. Exhaustion of 65,536 identities or the 4,096
+copied queue refuses contributions; it never truncates an event history.
+Root/text queues drain in tick order before the shared clock advances or seals.
+Writer and C/Python semantic histories validate proof-only originals without
+publishing them, and a complete end refuses a receipt whose original is absent.
+`recr_mp_text` inspects the latest applied batch; all batches remain in the
+ordered application visitor. Copied controls and the existing file regression
+suite pass. A COVER three-human match stores five originals and nine actual
+receipts in a complete native recording with zero corrections; saving is off
+on both recipients. Public repeats, the sampled private recipient and a
+full-length line retain exact wire CRCs and separate clocks. This does not
+enable multiplayer replay display or close loading/raw transport/POV/budget
+gates. The multiplayer slice records the current native reader verification.
 The snapshot also publishes inline `edit_index`/`caret` without engine writes.
 A two-peer COVER run verifies acknowledged text replacement and the engine's
 Mapping toggle. This is driver verification, not a native replay gate.
