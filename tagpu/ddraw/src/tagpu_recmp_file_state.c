@@ -92,4 +92,3 @@ int tagpu_recmp_file_footer(const RecMpFileState* s, const RecMpRecordEnd* end)
     }
     return 1;
 }
-
