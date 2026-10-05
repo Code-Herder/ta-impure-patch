@@ -1165,6 +1165,52 @@ fixes that fixture without changing production validation. Normal and coverage
 DLL builds pass. The engine materializer, complete authority and remaining
 multiplayer gates are still open.
 
+### Fixed global owner blocks before construction
+
+Offline skirmish allocation sorts by player-record address; native multiplayer
+sorts by native ID. Setting an offline player's ID therefore cannot preserve the
+recorded global unit blocks. Reconstructing a saved owner unit requires that
+its recorded slot already belongs to that owner's normalized player row.
+
+The allocator observer at `0x48587E` supplies this invariant before any unit
+constructor. It runs after the native sort and before the paired block initializer.
+`tagpu_recmp_arena_order` validates the frozen roster and all ten copied pointer
+values as an exact permutation of the ten player records, then replaces only
+that stack table. Active rows retain their recorded global ranks; vacant rows
+and ranks pair in ascending order. All ten seats are supported without reserving
+a row. No pointer is followed by the copied helper, and refusal changes no
+table byte. The native initializer subsequently writes player first/last pointers
+and IDs, unit owner pointers/rows and initial groups together. This avoids moving
+live units or manually changing one side of those paired fields. The game-thread
+loader owns the fresh arena and stack throughout that initialization.
+
+MEASURED 2026-10-05 on the reference setup:
+`python3 tools/replay/recmp_arena_test.py --out <directory>` passes 640 copied
+permutations, overlap and twelve unchanged-output refusals. A standalone fixture
+executes the relocated retail allocator and its real sorting functions, replacing
+only its three heap calls and retargeting 24 verified absolute operands. It
+checks two untouched offline/native-ID ordering controls and 206 recorded layouts:
+one through ten actors, noncontiguous blocks, every unit's paired owner fields,
+player block pointers/IDs, group -1, original global slot IDs and the sentinel.
+Format-bound cases include each=1 and 6,553; these do not expand the game's
+permitted unit limit. The first two fixture attempts could not reserve the retail
+address range because Wine's process heap owned it. Relocating the fixture's
+private code/data image resolves that conflict without releasing another mapping
+or changing the original executable.
+
+Normal and coverage builds pass. The production observer is installed on all
+four `secondary-orders` coverage processes and leaves their skirmish layout
+unchanged: all 23 checks pass at internal speed 20, complete tick 1,140,
+1,139 transitions explained and three exact poisoned round trips at 361/481/511,
+each with 26 tables and zero residue. No exclusion or tolerance changes.
+
+The standalone allocator fixture proves the paired initialization, and the game
+regression proves the installed hook remains inert on skirmishes. Neither proves
+the multiplayer loader route: the mode-3 playback refusal remains. Native owner
+construction/destruction, exactly-once child roots, full authority and saved
+play/seek/takeover are still open. Ten-row allocation support does not implement
+ten-seat replay hosting or its viewer policy.
+
 ### Owner destructor entry and return verification
 
 MEASURED 2026-10-05 on the reference setup: current coverage code runs a native

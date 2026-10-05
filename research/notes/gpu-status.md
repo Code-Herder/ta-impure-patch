@@ -3079,6 +3079,13 @@ replies and five script starts during destruction through fresh reader seek.
 This adds no hook or engine field write. Native construction/destruction and
 suppression of regenerated child roots remain the adapter's open work; saved
 network engine playback is still refused.
+The allocator ownership boundary at `0x48587E` now orders the ten player pointers
+by frozen global actor blocks before the native initializer writes their paired
+fields. Copied input validates before any stack write; other levels remain inert.
+A relocated retail-allocator fixture passes 206 layouts, two untouched native
+ordering controls and all ten paired blocks. The production hook is installed
+through all four coverage skirmish processes; all 23 replay checks pass at internal
+speed 20. Multiplayer loader admission and engine reconstruction remain open.
 `recr_mp_apply` visits every application envelope in recorded ordinal order
 through the current world tick, retaining both clocks and the full copied batch.
 Its separate cursor prevents copied-state queries from consuming playback data.
@@ -3343,6 +3350,13 @@ byte-matched observers; the existing weapons acquisition wrapper ends planner
 attribution without another patch at `0x4089A0`. **Fields we write:** diagnostic storage only; these
 observers write no engine field and no recording payload.
 
+The **multiplayer allocator ownership observer at `0x48587E`** checks the whole
+nine-byte span `33 FF C6 85 FF 00 00 00 FF` and preserves registers/flags around
+its callback. The loader's stack contains ten sorted pointers at `esp+0x18`
+and the fresh arena at `esp+0x14`. Only a multiplayer puppet reorders that
+validated permutation before the native ownership loop. Saved multiplayer
+playback is still refused; the installed observer is inert on existing levels.
+
 **Sites.** Four call sites of the Start and the loader, installed by `tagpu_replay_init` and inert
 without an accepted request: the seat fill's call `0x47B092`, the settings persist's call
 `0x47B09C`, and the start units' calls `0x497963` and `0x497ACD`; with them an **observer on the
@@ -3381,6 +3395,11 @@ logged. The gates make them zero; the observers prove it. **The step's phases** 
 `tagpu_replay_phase` after the host's projectile tick and after its explosion tick.
 
 **Fields we write**, on the game thread, during playback, takeover or live rewind:
+
+- multiplayer allocation: only the loader's ten-pointer stack table at the
+  `0x48587E` boundary. The unchanged native loop then initializes all player
+  `+0x67/+0x6B/+0x6F/+0x71` and unit `+0x96/+0xFF/+0xAC` ownership pairs.
+  No live unit, arena pointer, slot ID or native transport ID is changed;
 
 - armed round trips on a puppet: the scheduler's due-tick count at
   `main+0x38A3B`, validated within 0..5 and only reduced to the next T−1

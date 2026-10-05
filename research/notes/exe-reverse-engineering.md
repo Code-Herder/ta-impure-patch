@@ -3720,8 +3720,53 @@ block (`0x4858FC..0x485925`), fixing unit owner pointer `+0x96` at `0x485902`,
 owner row `+0xFF` at `0x48590E` and group `+0xAC=-1` at `0x485914`.
 Sentinel slot zero gets owner `NULL`/row 255 at `0x485880`/`0x485887` and is
 outside the loop. The insertion fallback calls comparator `0x485940` at
-`0x485691`; its body was not audited in this read. No offline block remapping
-or new write/patch is implemented by the copied lifetime consumer.
+`0x485691`. Its body (`0x485940..0x485974`) calls `0x435100`, the three-byte
+`mov eax,[ecx]; ret` mode getter, then returns unsigned less-than on native
+IDs for mode 3 or record pointers otherwise. The insertion helper `0x488920`
+calls that comparator at `0x488938` and `0x48894C`, shifts pointers backwards
+and returns with `ret 0xC` at `0x488958`. The minimum-element invariant and the
+other sort comparisons are in *Replay player names and unit-block ordering*.
+
+**Allocation ownership boundary [DISASSEMBLED + SOURCE + MEASURED 2026-10-05].**
+Both sort branches reach `0x48587E`; the fixed ten-row branch jumps there at
+`0x4856C2`. Its stack holds the freshly allocated unit base at `esp+0x14`
+and exactly ten sorted player pointers at `esp+0x18..+0x3F`. The array is
+zeroed by `0x485554..0x48555E`; the global slot word `+0xA8` is assigned at
+`0x485603` and definition-table pointer `+0x92` at `0x485617`, before sorting.
+`0x48587E` clears EDI, `0x485880` sets the sentinel owner row to 255 and
+`0x485887` sets its owner pointer to NULL. `0x48588D` then points EBP at the
+stack's player table and `0x485894..0x48592E` initializes all ten paired blocks.
+The native allocator's three named allocation calls are at
+`0x485515`, `0x48557D` and `0x48559C`, all targeting `0x4D83B0` with two
+caller-popped arguments. This work reads their call contract, not the allocator's
+complete heap implementation.
+
+`tagpu_replay.c:mp_arena_order` observes the nine nonrelative bytes at
+`0x48587E` (XOR EDI and the whole sentinel-row MOV). A multiplayer puppet
+reorders only the bounded stack permutation according to frozen actor global
+blocks; vacant rows and ranks pair in ascending order. The native loop remains
+the sole initializer of all paired player/unit ownership fields. Counts and the
+fresh arena base must agree with the recording before the stack changes. A
+refusal stops application before any recorded unit is constructed. The current
+mode-3 playback guard remains closed, so this route does not yet admit a saved
+multiplayer game. Other levels leave the stack unchanged.
+
+`tools/replay/recmp_arena_test.py` executes the retail allocator, comparator and
+insertion helper in a relocated image inside a standalone Wine fixture. Its
+24 verified absolute operands (21 main-pointer reads and three comparator PUSH
+arguments) are retargeted; all relative calls retain their original displacement.
+Only the three heap calls use a fixture allocator. It does not call the exe
+entry point or launch a game. Two untouched controls reproduce pointer-order
+offline blocks and native-ID-order multiplayer blocks; 206 reordered allocations
+then verify all ten first/last pointers and IDs, every unit owner pointer/row,
+group -1, preserved global slot ID and the sentinel. Actors cover one through
+ten, including noncontiguous active blocks; each values 1, 20, 1,500 and 6,553
+exercise the copied bounds. The latter is a format-bound control, not a claim
+that the game permits that unit limit. 640 copied permutations, overlapping
+input/output and twelve unchanged-output refusals also pass. The production hook
+is installed and inert through all four processes of the coverage skirmish
+regression. Multiplayer loader admission and native owner-unit reconstruction
+remain unverified.
 
 **Which thread.** The receivers above run on the game thread only, by the dispatcher's gate:
 `0x451FD0` (called at `0x491369`) is the only filler of the receive-mask table `0x512BC0` for these

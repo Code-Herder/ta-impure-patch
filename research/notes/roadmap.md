@@ -3916,6 +3916,14 @@ the saved fixture, with 10,372,503 exact action bytes/CRC `8CF737F2` through fre
 reader seek. Proof-only images never authorize an action, and a failed callback
 cannot retry already applied effects. This is the copied dispatch layer; native
 engine application, regenerated-child suppression and full playback remain open.
+The fixed-block prerequisite now reorders the allocator's bounded ten-row stack
+table before the engine initializes its paired player/unit fields. 206 relocated
+retail-allocator layouts preserve every global slot and all ten ownership blocks,
+including fully occupied rosters; two controls retain stock offline/native-ID
+order. The installed hook passes all 23 existing skirmish replay checks at
+internal speed 20. Native multiplayer loader admission, exactly-once children
+and actual reconstruction remain open; this does not enable Watch or ten-seat
+replay hosting.
 The current native format-6 coverage recording verifies 36 replica roots against
 the next B2 images and retains their exact bytes through C/Python world seek;
 all 445 observed-world transitions are explained. Earlier private SDK startup

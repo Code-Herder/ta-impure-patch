@@ -58,6 +58,7 @@
 #include "tagpu_replay.h"
 #include "tagpu_cover.h"
 #include "tagpu_recreader.h"
+#include "tagpu_recmp_arena.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_recorder.h"
 #include "tagpu_replay_layout.h"
@@ -247,6 +248,7 @@ static struct {
 } s_tk;
 #define RT_ARMED 24                 /* a broad entry's round trips, armed at once (fixtures.json) */
 static int s_rt_pace_in;            /* attach-time guard before the skirmish step loop */
+static int s_mp_arena_in;           /* allocator's block-ownership boundary */
 static struct {
     unsigned n;
     struct { char name[37]; unsigned T; } a[RT_ARMED];
@@ -7193,6 +7195,49 @@ static void rt_pace_init(void)
     tagpu_logf("replay: tick-batch guard %s", s_rt_pace_in ? "in" : "unavailable");
 }
 
+/* DISASSEMBLED: 0x48587E follows the allocator's complete ten-player sort and
+   precedes every owner/block store. Its live stack owns ten pointers at +0x18;
+   +0x14 holds the freshly zeroed arena. Reorder only that bounded permutation:
+   0x4858BD..0x485925 then initializes player +0x67/+0x6B/+0x6F/+0x71 and unit
+   +0x96/+0xFF/+0xAC together, before any constructor can use a block. The
+   loader and reader lifetime belong to this game thread. No live unit moves. */
+static int __cdecl mp_arena_order(void* entry_esp)
+{
+    const RecHeader* header;
+    char* ta;
+    uint32_t row[RECMP_ACTORS];
+    unsigned short slots, each;
+    void* arena;
+    if (!tagpu_puppet_on() || !s_rd || s_dead) return 0;
+    header=recr_header(s_rd);
+    if (header->mode!=3) return 0;
+    ta=ta_main();
+    if (!ta) goto refused;
+    memcpy(&slots,ta+OFF_NSLOTS,sizeof slots);
+    memcpy(&each,ta+OFF_EACH,sizeof each);
+    memcpy(&arena,(const char*)entry_esp+0x14,4);
+    if (!header->has_mp || !header->has_mp_seats || !arena ||
+        arena!=*(void**)(ta+OFF_BEGIN) || slots!=header->slots || each!=header->units_each ||
+        slots!=header->mp_seats.slots || each!=header->mp_seats.each) goto refused;
+    for (unsigned i=0;i<RECMP_ACTORS;i++) row[i]=(uint32_t)(size_t)player_rec(ta,i);
+    if (!tagpu_recmp_arena_order(&header->mp_seats,row,(uint32_t*)((char*)entry_esp+0x18)))
+        goto refused;
+    tagpu_logf("replay: multiplayer unit blocks ordered: %u actors, %u slots",header->mp_seats.count,slots);
+    return 0;
+refused:
+    s_dead=1;
+    tagpu_log("replay: multiplayer allocator ownership refused; no units will be applied");
+    return 0;
+}
+
+static void mp_arena_init(void)
+{
+    static const unsigned char FIRST[9]={0x33,0xFF,0xC6,0x85,0xFF,0x00,0x00,0x00,0xFF};
+    s_mp_arena_in=tagpu_detour_bytes_ok(0x0048587Eu,FIRST,sizeof FIRST) &&
+        tagpu_detour_observe(0x0048587Eu,FIRST,sizeof FIRST,mp_arena_order,NULL);
+    tagpu_logf("replay: multiplayer allocator ownership boundary %s",s_mp_arena_in ? "in" : "unavailable");
+}
+
 /* The frame visit's site: the in-play draw call `call 0x468CF0` at 0x4969CD (`push ebx; push ebx`
    before it, DISASSEMBLED). Two facts it rests on:
    - the stub is entered by the site's call and leaves by a jump, so DrawGameScreen runs with the
@@ -7282,6 +7327,7 @@ void tagpu_replay_init(void)
     frame_site_init();
     rw_pause_init();
     rt_pace_init();
+    mp_arena_init();
     if (!call_is(FILL, 0x0047A760u) || !call_is(PERSIST, 0x00430F00u) ||
         !call_is(START1, 0x00496EE0u) || !call_is(START2, 0x00496EE0u)) {
         tagpu_logf("replay: the Start's or the loader's calls hold other bytes: no replays");

@@ -244,6 +244,12 @@ It owns one isolated Wine prefix/private display and launches no game. C/Python
 check exact action order/provenance, incarnation dependencies, normalized owner
 fields, proof-tail isolation and fresh reconstruction after reader seek. This
 checks the dispatch layer; it does not establish native engine playback or Seek.
+For fixed global owner blocks, use
+`python3 tools/replay/recmp_arena_test.py --out <directory>`.
+It owns a private Wine prefix/display and launches no game. It checks copied
+permutations and executes a relocated retail unit allocator, replacing only its
+heap calls and retargeting verified absolute operands. All ten paired ownership
+blocks are checked; multiplayer loader admission and saved playback are not.
 It creates two fresh instances on a private display, adds one hosted AI per
 human, records on the host while the peer's saving is off, compares source and
 recipient first-root bytes, and checks exact begin/child/success order in the
