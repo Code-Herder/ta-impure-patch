@@ -228,13 +228,12 @@ vent can supply its own ghost without selecting an icon. The preview and command
 the building, placement, target and modifiers at the input boundary. A mouse move or a timed
 preview update is not a prerequisite for a correct click.
 
-A site reserved by the player's queued resource-building order shows an **already queued**
-indicator without mouse-button instructions. Shift plus the configured contextual command button
-removes a selected constructor's matching plan; a queued upgrade removes its adjacent reclaim/build
-pair. Other selected constructors'
-matching plans are cancelled too, one per constructor. Unselected constructors' queues, unrelated
-orders and persistent helper Guards remain intact. The queued definition may differ from the
-strongest variant currently offered by the selection.
+A site reserved by the player's queued resource-building order shows the ordinary ghost without
+caption text. Shift plus the configured contextual command button removes a selected constructor's
+matching plan; a queued upgrade removes its adjacent reclaim/build pair. Other selected
+constructors' matching plans are cancelled too, one per constructor. Unselected constructors'
+queues, unrelated orders and persistent helper Guards remain intact. The queued definition may
+differ from the strongest variant currently offered by the selection.
 
 A plain repeat click leaves the queue unchanged. A Shift-click with no selected owner also leaves
 it unchanged. Both consume the command click rather than issuing Move or duplicate construction.
@@ -290,7 +289,7 @@ other paths call through. A manual left click recomputes placement before normal
 
 Quick Build publishes a cursor/type/rectangle override into the frame packet, leaving the engine
 in contextual mode. The renderer never runs site tests or order roots. It displays the chosen
-variant's ordinary ghost and a queued marker. Preview tests save/restore the two
+variant's ordinary ghost without caption text. Preview tests save/restore the two
 engine build-site scratch words `0x51E684` and `0x51E688`.
 
 A new build goes through `0x43ADC0`, the engine's ordinary append/replace order root. Reclaim and Guard eligibility
@@ -393,7 +392,7 @@ assumption from the existence of these fixture definitions.
 ### Verification limits
 
 The synthetic fixtures cover the behavior listed above; live inspection additionally verifies
-the resource settings panel, queued ghost indicator, frontend hot reload/error recovery and
+the resource settings panel, queued resource ghost, frontend hot reload/error recovery and
 normal Comet Catcher terrain/features. The generated `RS` maps
 are intentionally flat green. The compatibility suite checks the supported packages' startup,
 battles and networking; it does not exercise every mod's resource footprint and build menu.
