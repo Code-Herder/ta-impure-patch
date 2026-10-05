@@ -238,6 +238,12 @@ run with recording off and return follows no freed engine object. The file fixtu
 applied mixed batches through synthetic seek and proof
 isolation. Native constructor ordering uses the coverage DLL:
 `python3 tools/replay/recmp_create_begin_test.py --port 47818 --out /tmp/recmp-birth-run`.
+For copied owner lifetime dispatch from a saved file, use
+`python3 tools/replay/recmp_lifecycle_test.py --native-file <recording> --out <directory>`.
+It owns one isolated Wine prefix/private display and launches no game. C/Python
+check exact action order/provenance, incarnation dependencies, normalized owner
+fields, proof-tail isolation and fresh reconstruction after reader seek. This
+checks the dispatch layer; it does not establish native engine playback or Seek.
 It creates two fresh instances on a private display, adds one hosted AI per
 human, records on the host while the peer's saving is off, compares source and
 recipient first-root bytes, and checks exact begin/child/success order in the

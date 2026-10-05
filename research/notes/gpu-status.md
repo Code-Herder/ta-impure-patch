@@ -3069,6 +3069,16 @@ through reader world seek; both peers reach the new boundary/payload helpers.
 All 23 shared `secondary-orders` skirmish checks pass at internal speed 20,
 including three exact poisoned round trips. The native run observes speed 10;
 native engine play/seek and complete authority remain unfinished.
+`tagpu_recmp_lifecycle.c` consumes that ordered prefix into normalized owner
+lifetime actions. Whole-batch incarnation/type/bracket validation precedes every
+callback; initial full images bootstrap units, proof-only images do not. A failed
+callback stops the consumer permanently. Against the saved four-actor file,
+independent C/Python audits retain 10,372,503 action bytes/CRC `8CF737F2`, all
+6,000 owned slots, 71 construction and 24 destruction pairs, eight constructor
+replies and five script starts during destruction through fresh reader seek.
+This adds no hook or engine field write. Native construction/destruction and
+suppression of regenerated child roots remain the adapter's open work; saved
+network engine playback is still refused.
 `recr_mp_apply` visits every application envelope in recorded ordinal order
 through the current world tick, retaining both clocks and the full copied batch.
 Its separate cursor prevents copied-state queries from consuming playback data.

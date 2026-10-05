@@ -667,7 +667,10 @@ static int read_native(const char* path, unsigned text_only)
     return 0;
 }
 
-int main(int argc, char** argv)
+#ifndef RECMP_FILE_TEST_MAIN
+#define RECMP_FILE_TEST_MAIN main
+#endif
+int RECMP_FILE_TEST_MAIN(int argc, char** argv)
 {
     RecMpConfig config={0};
     RecMpRoster roster={ .version=1, .count=4, .slots=21, .each=2 }, bad;

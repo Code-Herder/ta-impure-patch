@@ -537,7 +537,7 @@ The optional recording journal copies local publications and remote consumptions
 
 The network adapter now reuses `player_image` at B2 for every local human/hosted AI, rather than reading only resources at player `+0x8C`. It copies the existing normalized 520-byte record/PlayerInfo image. DISASSEMBLED: main's eleven PlayerInfo objects are allocated by `0x463BE0` from `0x41D98B` and retained across reset `0x464508`; destructor `0x463C40` is called only for stack-local records at `0x454538`/`0x454607`. Thus the fixed ten-row bound plus process lifetime, and the existing game-thread capture ordering, authorize this tail read. No probe establishes that lifetime. The recorder's layout keeps the `+0x27` pointer as presence and the `+0x67/+0x6B` block pointers as unit IDs; every other existing normalization remains unchanged.
 
-Bootstrap additionally freezes each active origin's recorder-local row and inclusive global block. It reads `main+0x37EE6` (u16 each), `+0x14351` (u16 slots), `+0x14357/+0x1435B` (array/last-slot pointers) and bounded player `+4`, `+0x73`, `+0x67/+0x6B`. DISASSEMBLED: `0x4854A0` allocates `10*each+1` unit records; `0x485657..0x4856C0` sorts network players by native ID and `0x4858A6..0x4858E0` assigns each rank's fixed block, so rank differs from local row. A roster requires unique nonzero origins, distinct rows/blocks and exactly each-sized aligned intervals inside that allocation. A normalized source player image must retain its own block IDs; remote queue authorization uses the frozen inclusive slots even before a stock create. The cache and delta codec add no byte patch, engine write or new engine address. The optional file context now copies and persists this mapping in `RT_MP_SEATS` (176 bytes), validated against the source roster, world slot/each counts and described seat ownership. This engine-free change adds no address, patch or engine write; actual network capture still does not create the context, and full owner-only unit/effect/Impure authority remains open.
+Bootstrap additionally freezes each active origin's recorder-local row and inclusive global block. It reads `main+0x37EE6` (u16 each), `+0x14351` (u16 slots), `+0x14357/+0x1435B` (array/last-slot pointers) and bounded player `+4`, `+0x73`, `+0x67/+0x6B`. DISASSEMBLED: `0x4854A0` allocates `10*each+1` unit records; `0x485657..0x4856C0` sorts network players by native ID and `0x4858A6..0x4858E0` assigns each rank's fixed block, so rank differs from local row. A roster requires unique nonzero origins, distinct rows/blocks and exactly each-sized aligned intervals inside that allocation. A normalized source player image must retain its own block IDs; remote queue authorization uses the frozen inclusive slots even before a stock create. The cache and delta codec add no byte patch, engine write or new engine address. The optional file context now copies and persists this mapping in `RT_MP_SEATS` (176 bytes), validated against the source roster, world slot/each counts and described seat ownership. The context adds no engine write or byte patch. Network capture creates it through `mp_record_begin` when saving is enabled; mandatory contributions continue with saving off. Complete owner-only unit/effect/Impure authority and native engine playback remain open.
 
 ### File authority reconstruction [SOURCE-VERIFIED 2026-10-04]
 
@@ -2021,6 +2021,47 @@ The slot type is then cleared at `0x486DC7` and live bit at
 capture phase, unit ID and exact birth, so it follows no cleared slot or freed
 object. Slot/player bounds and the owning game thread establish the entry's
 destructor lifetime; a pointer probe is unnecessary.
+
+**Lifecycle children and the engine consumer [SOURCE, DISASSEMBLED, MEASURED
+2026-10-05].** The saved constructor-boundary fixture contains five
+`TargetCleared` starts on their own dying unit between entry and return, in
+addition to its eight constructor replies. The copied lifetime consumer retains
+the target through each bracket and normalizes the entry's killer row and
+victim image; its return action carries that saved image. C/Python dispatch
+retains 71 constructor and 24 death pairs, all 6,000 owned slots and exact action
+CRC `8CF737F2` through fresh reader seek. Native application remains open.
+
+The existing skirmish `make` in `tagpu_replay.c` opens both COB-write and reply
+gates around `0x485F50`; `tagpu_puppet.c`'s `s_open` is tested by both predicates.
+That reproduces children which precede the skirmish's exit-only create and have
+no live target when replayed. Multiplayer's begin/child/success sequence cannot
+reuse that rule while also dispatching the recorded children: it needs an
+explicit sole producer for those effects. The observer stubs for the thirteen
+owner-only named starts restore registers/flags and jump unconditionally to
+`0x4B0A70` or `0x4B0940`; their C observer's return value suppresses nothing.
+
+DISASSEMBLED against `pristine/TotalA.exe.pristine`: the destructor calls order
+purge `0x439EB0` at `0x4867A1`, notice cleanup `0x47F8C0` at `0x4867A7`, group
+removal `0x480250` at `0x4867AF`, projectile source cleanup `0x49C880` at
+`0x4867B5`, cargo detaches `0x48AAC0` at `0x4867CB`/`0x48681D`, cargo hit
+`0x489BB0` at `0x48680B`, footprint removal `0x47CBD0` at `0x48682D` and
+optional sight removal `0x482090` at `0x486845`. Its explosion `0x49B000` at
+`0x486D50` and corpse helper `0x486360` at `0x486D6F` precede owned-object
+destruction. None of these observations proves transitive child effects absent.
+
+The reset `0x489800` has no controller test before its `TargetCleared` start:
+selector 3 recursively resets selectors 0 and 1 at `0x48980E`/`0x489817`, then
+falls through with 2. Weapon-row `+0x1B` bit 1 set/bit 4 clear
+(`0x489838..0x489842`) and nondefault target words (`0x489850..0x489865`) cause
+bit 4 to be set (`0x489844..0x489846`), target words to become
+`0`/`0x8000` (`0x489867..0x48986C`), helper `0x4B07C0` at `0x48987B`, then
+named start `0x4B0A70` at `0x489898`. A type-3 owner does not itself prevent this.
+`0x49C880` scans the projectile pool at `main+0x141F7` for the count
+`main+0x141F3` (`0x49C888..0x49C90A`). A nonzero projectile `+0x60` and
+`+0x52` equal to the dying unit select a row (`0x49C8A1..0x49C8AA`);
+it cleans the current-shot fields when selected (`0x49C8AC..0x49C8EA`), sets
+`+0x69` bit 1 (`0x49C8F0`) and calls `0x49AE20` at `0x49C8F4`. The read body
+does not directly call `0x489800`; that is not a claim about its callees.
 
 The current four-actor native coverage capture has 22 matched entry/return
 pairs, including 12/5 deaths from the non-recording peer's human/hosted AI.
@@ -3667,6 +3708,20 @@ four this section first listed, since other pages link to it):
 (`0x485657..0x4856C0`) that, in a network game, compares the records' DirectPlay ids `[rec+4]`
 (DISASSEMBLED). Confirmed live 2026-09-25 in a four-player game with an AI seat: blocks at slots 1,
 1501, 3001, 4501 and 6001, `N` 1500, and on one joiner record 2 held the block at 6001.
+
+DISASSEMBLED 2026-10-05 for offline owner reconstruction: `0x48566C` calls
+`0x435100`; only result 3 takes the ID comparison (`0x485671..0x48567E`).
+Other modes compare record pointers at `0x485680`. Changing native IDs in an
+offline skirmish therefore cannot recreate the recorded native block order.
+The block initializer writes player first/last pointers `+0x67`/`+0x6B` at
+`0x4858BD`/`0x4858E0`, copies those units' global `+0xA8` IDs into player
+`+0x6F`/`+0x71` at `0x4858ED`/`0x4858F8`, then loops inclusively through the
+block (`0x4858FC..0x485925`), fixing unit owner pointer `+0x96` at `0x485902`,
+owner row `+0xFF` at `0x48590E` and group `+0xAC=-1` at `0x485914`.
+Sentinel slot zero gets owner `NULL`/row 255 at `0x485880`/`0x485887` and is
+outside the loop. The insertion fallback calls comparator `0x485940` at
+`0x485691`; its body was not audited in this read. No offline block remapping
+or new write/patch is implemented by the copied lifetime consumer.
 
 **Which thread.** The receivers above run on the game thread only, by the dispatcher's gate:
 `0x451FD0` (called at `0x491369`) is the only filler of the receive-mask table `0x512BC0` for these

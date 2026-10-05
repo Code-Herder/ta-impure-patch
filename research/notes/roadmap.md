@@ -3908,6 +3908,14 @@ bytes. Its complete tick-558 file has zero corrections; C/Python reader seek
 preserves 8,146 applications and CRC `8EA54D8E`. All 23 shared skirmish replay
 checks pass at internal speed 20. This establishes the constructor ordering
 needed for the selected owner lifetimes; engine application remains open.
+The ordered lifetime consumer now validates complete batches before emitting
+normalized owner actions, including initial full-image bootstraps and exact
+birth dependencies. C/Python agree on all 6,000 owned slots, 71 constructor and
+24 death pairs, eight constructor replies and five death-time script starts in
+the saved fixture, with 10,372,503 exact action bytes/CRC `8CF737F2` through fresh
+reader seek. Proof-only images never authorize an action, and a failed callback
+cannot retry already applied effects. This is the copied dispatch layer; native
+engine application, regenerated-child suppression and full playback remain open.
 The current native format-6 coverage recording verifies 36 replica roots against
 the next B2 images and retains their exact bytes through C/Python world seek;
 all 445 observed-world transitions are explained. Earlier private SDK startup

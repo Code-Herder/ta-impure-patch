@@ -1110,6 +1110,61 @@ materialization, complete state/effect authority and the rest of the multiplayer
 landing remain open. No exclusion, tolerance or simulation classification is
 loosened.
 
+### Ordered owner lifetime consumer
+
+`tagpu_recmp_lifecycle.c` supplies the copied lifetime actions for the engine
+adapter. It consumes the semantically validated envelopes from `recr_mp_apply`
+starting at ordinal one, with its own seat/unit/root baselines and source ledger.
+It does not read engine memory, merge an observed replica into owner authority,
+or enable mode-3 playback. Other feature bodies retain their own consumers.
+
+Each owned slot is unknown, absent, creating, live or dying. A first applied full
+unit image bootstraps an initial live unit or establishes absence. Later images
+must match the completed owner lifetime's exact birth and type. A constructor
+begin reserves a fresh lifetime before its private roots; success checks the
+same source clock, capture phase and first 24 argument bytes. The water byte is
+copied unit state, not a constructor argument: both observations survive, and the
+success action supplies its own bounded value. A death entry retains its copied
+normalized victim image and keeps the target available to private children;
+the return action supplies that image for one destruction after those children.
+The native adapter must suppress regenerated child roots before using this
+recipe. Native destruction and child suppression are not implemented by this
+consumer and remain unverified.
+
+Constructor owner rows, death killer rows and the death image's player IDs are
+mapped through the frozen source roster. Every image/constructor type is bounded
+by the recording's definition count. The whole copied batch, including every
+incarnation dependency, validates before any action callback. A later bad entry
+emits none of the batch's actions. A callback failure permanently poisons the
+consumer; already applied effects cannot be retried. A fresh seek needs a fresh
+consumer and an application cursor reset to zero. Proof tails validate copied
+source bodies but emit no actions and establish no lifetime. Completion requires
+an applied baseline for every owned slot and no open construction/death bracket;
+a file's transport footer alone does not prove those requirements.
+
+MEASURED 2026-10-05 on the reference setup:
+`tools/replay/recmp_lifecycle_test.py --native-file <recording> --out <directory>`
+passes against the complete constructor-boundary recording. The C consumer and
+an independent Python file audit agree on 10,372,503 action bytes, CRC
+`8CF737F2`: four initial live units, 71 begins, 71 successes, 24 death entries,
+24 returns, 20,878 live image actions, 6,020 absence actions and 4,129 private
+roots. Eight replies run inside their construction bracket and five
+`TargetCleared` starts inside their death bracket. All 6,000 owned slots have an
+applied baseline. Five proof records emit nothing. A fresh consumer rebuilt from
+the middle world seek and advanced to the end produces identical actions,
+provenance, final lifetime phases and bytes. This is copied dispatch evidence,
+not native engine playback or engine Seek.
+
+Controlled cases exercise mapped cross-owner fields, different water values at
+constructor begin/success, valid nested children, missing/mismatched brackets,
+wrong birth/phase/arguments/type/owner, unannounced image lifetimes, a bad final
+entry after valid earlier entries, unchanged output after refusal, no retry after
+callback failure and proof-only initial/future images. The first compile failed
+on the nested fixture's main-name macro; making the outer entry name explicit
+fixes that fixture without changing production validation. Normal and coverage
+DLL builds pass. The engine materializer, complete authority and remaining
+multiplayer gates are still open.
+
 ### Owner destructor entry and return verification
 
 MEASURED 2026-10-05 on the reference setup: current coverage code runs a native
