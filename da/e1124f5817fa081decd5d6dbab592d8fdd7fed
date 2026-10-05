@@ -1,0 +1,1 @@
+owner-decision: replay decision 7, 2026-10-05. The owner explicitly selected unit-owner timing for creation and death. Preserve recorded private-root application order and enforce incarnation dependencies; do not retain delayed recorder-replica lifetimes or guess source-clock offsets. Engine materialization remains to be implemented.
