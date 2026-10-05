@@ -1,9 +1,65 @@
 /* Actual writer/reader fixture using the controlled native channel boundaries. */
+static void file_proof_tail(void);
+#define RECMP_FILE_HISTORY
 #define main cut_test_main
 #include "recmp_cut_test.c"
 #undef main
 #include "tagpu_recorder.h"
 #include "tagpu_recreader.h"
+
+static unsigned player_body(unsigned origin, unsigned full, unsigned char* out)
+{
+    RecMpPlayerDelta delta={0};
+    unsigned rank=origin==11 ? 0 : origin==22 ? 1 : origin==55 ? 2 : 3;
+    unsigned image[REC_PLAYER_DWORDS], first=2+2*rank, last=3+2*rank;
+    delta.origin=origin; delta.controller=1+(rank&1); delta.full=full;
+    memset(delta.bits,full ? 255 : 0,sizeof delta.bits);
+    delta.bits[REC_PLAYER_BITS-1]=full ? 3 : 0;
+    if (!full) delta.bits[0]=1;
+    memcpy(out,&delta,sizeof delta);
+    for (unsigned i=0;i<REC_PLAYER_DWORDS;i++) image[i]=origin;
+    memcpy((unsigned char*)image+0x67,&first,4); memcpy((unsigned char*)image+0x6B,&last,4);
+    if (!full) image[0]++;
+    memcpy(out+sizeof delta,image,full ? sizeof image : 4);
+    return sizeof delta+(full ? sizeof image : 4);
+}
+
+static void source_player(unsigned origin, unsigned sequence, unsigned tick, unsigned full)
+{
+    unsigned char body[sizeof(RecMpPlayerDelta)+REC_PLAYER_IMAGE];
+    unsigned n=player_body(origin,full,body);
+    RecMpPacket* p=packet(origin,RECMP_PLAYER,sequence,tick,body,n);
+    CHECK(tagpu_recmp_stream_put(&f.source[origin==66],&p->h,p->body,n));
+}
+
+static void source_orders(unsigned origin, unsigned sequence, unsigned tick, unsigned total,
+                           unsigned first, unsigned count)
+{
+    RecMpOrders chunk={(uint16_t)(origin==55 ? 5 : 7),0,0,17,
+                       (uint16_t)total,(uint16_t)first,(uint16_t)count,0};
+    unsigned char body[RECMP_BODY_MAX];
+    RecMpPacket* p;
+    memcpy(body,&chunk,sizeof chunk);
+    for (unsigned i=0;i<count*RECMP_ORDER_BYTES;i++) body[sizeof chunk+i]=(unsigned char)(i+first);
+    p=packet(origin,RECMP_ORDERS,sequence,tick,body,sizeof chunk+count*RECMP_ORDER_BYTES);
+    CHECK(tagpu_recmp_stream_put(&f.source[origin==66],&p->h,p->body,p->h.bytes-sizeof p->h));
+}
+
+static void file_proof_tail(void)
+{
+    for (unsigned i=0;i<2;i++) {
+        RecMpSeal seal;
+        RecMpPacket* p;
+        if (f.missing_cut && i==1) continue;
+        if (i==1) {
+            source_orders(66,4,9,46,45,1);
+            source_player(66,5,10,0);
+        }
+        CHECK(tagpu_recmp_stream_seal(&f.source[i],i ? 10 : 8,0,&seal));
+        p=packet(i ? 66 : 55,RECMP_SEAL,f.source[i].sequence+1,i ? 10 : 8,&seal,sizeof seal);
+        CHECK(tagpu_recmp_stream_put(&f.source[i],&p->h,p->body,sizeof seal));
+    }
+}
 
 static unsigned append(unsigned char* b, unsigned at, unsigned kind, const void* body, unsigned bytes)
 {
@@ -84,14 +140,49 @@ static int read_file(const char* path, int expected)
         CHECK(!r && !recr_summary(path,&summary,why,sizeof why) && !recr_info(path,info,why,sizeof why));
         printf("PASS: reader, summary and info refuse malformed contribution proof: %s\n",why);
     } else {
+        RecMpPlayerState pstate;
+        RecMpOrderState ostate;
+        unsigned char order[RECMP_ORDER_MAX*RECMP_ORDER_BYTES];
         if (!r) { printf("reader: %s\n",why); CHECK(r); }
         CHECK(recr_header(r)->mode==3 && recr_header(r)->has_mp && recr_header(r)->has_mp_seats &&
               recr_header(r)->mp_seats.actor[3].origin==66 && recr_header(r)->mp_seats.actor[3].seat==3 &&
               recr_header(r)->mp_seats.actor[3].first==7 && recr_header(r)->mp_seats.actor[3].last==8);
+        CHECK(recr_mp_player(r,66,&pstate,why,sizeof why)==0 &&
+              recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==0);
         CHECK(recr_tick(r,why,sizeof why)==1 && recr_world(r)->tick==100 && recr_world(r)->player[0][0]==0xA5);
-        if (expected) CHECK(recr_tick(r,why,sizeof why)==1 && recr_world(r)->tick==101 && recr_world(r)->player[0][0]==0xA5);
+        for (unsigned i=0;i<4;i++) {
+            unsigned origin=i==0 ? 11 : i==1 ? 22 : i==2 ? 55 : 66;
+            if (expected) {
+                CHECK(recr_mp_player(r,origin,&pstate,why,sizeof why)==1 && pstate.image[0]==origin &&
+                      pstate.controller==1+(i&1) && pstate.source_tick==(i<2 ? 100 : 8) &&
+                      pstate.sequence==1 && pstate.applied_tick==100);
+            }
+        }
+        if (expected) {
+            CHECK(recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 &&
+                  ostate.count==0 && ostate.birth==17 && ostate.sequence==2 &&
+                  ostate.source_tick==8 && ostate.applied_tick==100 && ostate.stream.Data1==2);
+            CHECK(recr_mp_orders(r,8,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==0);
+            CHECK(recr_mp_player(r,11,&pstate,why,sizeof why)==1 &&
+                  recr_mp_orders(r,1,1,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 &&
+                  ostate.origin==11 && ostate.birth==21 && ostate.count==1 && ostate.sequence==2 &&
+                  ostate.source_tick==100 && ostate.applied_tick==100 &&
+                  !memcmp(&ostate.stream,&pstate.stream,sizeof ostate.stream));
+            for (unsigned i=0;i<RECMP_ORDER_BYTES;i++) CHECK(order[i]==(unsigned char)(i*7+3));
+            CHECK(recr_tick(r,why,sizeof why)==1 && recr_world(r)->tick==101 && recr_world(r)->player[0][0]==0xA5);
+            CHECK(recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 &&
+                  ostate.count==0 && ostate.sequence==2 && ostate.applied_tick==100);
+            CHECK(recr_mp_player(r,66,&pstate,why,sizeof why)==1 && pstate.image[0]==66 && pstate.sequence==1);
+        }
         CHECK(!recr_tick(r,why,sizeof why));
         CHECK(recr_seek(r,100,0,NULL,NULL,why,sizeof why)==1 && recr_world(r)->player[0][0]==0xA5);
+        if (expected) {
+            CHECK(recr_mp_player(r,66,&pstate,why,sizeof why)==1 && pstate.image[0]==66 && pstate.sequence==1);
+            CHECK(recr_seek(r,101,0,NULL,NULL,why,sizeof why)==1 &&
+                  recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 && ostate.sequence==2);
+            CHECK(recr_mp_orders(r,1,1,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 && ostate.count==1);
+            for (unsigned i=0;i<RECMP_ORDER_BYTES;i++) CHECK(order[i]==(unsigned char)(i*7+3));
+        }
         CHECK(recr_summary(path,&summary,why,sizeof why) && summary.end_reason==(expected ? REC_END_TEARDOWN : 0));
         CHECK(recr_info(path,info,why,sizeof why) && !!info->ended==!!expected);
         recr_close(r);
@@ -153,12 +244,12 @@ int main(int argc, char** argv)
     }
     f.config=config;
     for (unsigned i=0;i<2;i++) {
-        RecMpPacket* p;
         CHECK(tagpu_recmp_sign(config.signer,i ? 66 : 55,&stream,&remote,&binding));
         packet(i ? 66 : 55,RECMP_BIND,0,0,&binding,sizeof binding);
-        p=packet(i ? 66 : 55,RECMP_RESOURCES,1,8,"first",5);
-        CHECK(tagpu_recmp_stream_put(&f.source[i],&p->h,p->body,5));
+        source_player(i ? 66 : 55,1,8,1);
+        source_orders(i ? 66 : 55,2,8,0,0,0);
     }
+    source_orders(66,3,9,46,0,45);
     c=tagpu_recmp_begin(&config); CHECK(c);
     bad=roster; bad.actor[0].origin=99;
     CHECK(!tagpu_recmp_file_begin(&config,c,&bad));
@@ -176,8 +267,21 @@ int main(int argc, char** argv)
     CHECK(WaitForSingleObject(f.opened,15000)==WAIT_OBJECT_0);
     memset(&config,0,sizeof config); SetEvent(f.release);
     CHECK(WaitForSingleObject(f.initial,15000)==WAIT_OBJECT_0);
-    CHECK(tagpu_recmp_take_at(c,&got,100)==1 && tagpu_recmp_take_at(c,&got,100)==1);
-    CHECK(tagpu_recmp_advance(c,100) && tagpu_recmp_send(c,RECMP_RESOURCES,100,"local",5));
+    for (unsigned i=0;i<4;i++) CHECK(tagpu_recmp_take_at(c,&got,100)==1);
+    CHECK(tagpu_recmp_advance(c,100));
+    for (unsigned i=0;i<2;i++) {
+        unsigned char body[sizeof(RecMpPlayerDelta)+REC_PLAYER_IMAGE];
+        unsigned origin=i ? 22 : 11, n=player_body(origin,1,body);
+        CHECK(tagpu_recmp_send_from(c,origin,RECMP_PLAYER,100,body,n,NULL));
+    }
+    {
+        RecMpOrders chunk={1,1,0,21,1,0,1,0};
+        unsigned char body[sizeof chunk+RECMP_ORDER_BYTES];
+        memcpy(body,&chunk,sizeof chunk);
+        for (unsigned i=0;i<RECMP_ORDER_BYTES;i++) body[sizeof chunk+i]=(unsigned char)(i*7+3);
+        CHECK(tagpu_recmp_send_from(c,11,RECMP_ORDERS,100,body,sizeof body,NULL));
+    }
+    CHECK(tagpu_recmp_advance(c,101) && tagpu_recmp_take_at(c,&got,101)==1);
     tagpu_recmp_retain(c);
     if (!local_stop) tagpu_recmp_end(c);
     tagpu_recmp_file_end(mp,!local_stop); /* final game access, before ring hand-over */
@@ -185,7 +289,7 @@ int main(int argc, char** argv)
     if (!local_stop) SetEvent(f.tail_release);
     CHECK(WaitForSingleObject(done,30000)==WAIT_OBJECT_0); CloseHandle(done);
     if (local_stop) {
-        CHECK(tagpu_recmp_send(c,RECMP_RESOURCES,100,"still playing",13));
+        CHECK(tagpu_recmp_send(c,RECMP_RESOURCES,101,"still playing",13));
         tagpu_recmp_end(c); SetEvent(f.tail_release);
     }
     tagpu_recmp_stats(c,&stats);

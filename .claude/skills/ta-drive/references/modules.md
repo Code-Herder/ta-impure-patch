@@ -165,8 +165,8 @@ owned prefix/private display, without launching TA. It writes format-5 synthetic
 `.imprec` files, validates source/application/proof records and the frozen-cut
 footer, seeks the synthetic world, and refuses missing proofs, local-save failure
 and logically corrupted packets/footers. `--read-file <fixture.imprec>` runs the
-reader controls against an existing fixture file; `--skirmish-file <recording>` also checks an actual skirmish header/summary/info. The mode-3 header carries copied origin/seat/unit-block mapping, with world allocation and seat ownership validation; malformed mapping controls rebuild outer CRCs before expecting refusal. These files do not prove game
-capture, full owner authority, semantic queue seeking or multiplayer playback.
+reader controls against an existing fixture file; `--skirmish-file <recording>` also checks an actual skirmish header/summary/info. The mode-3 header carries copied origin/seat/unit-block mapping, with world allocation and seat ownership validation; malformed mapping controls rebuild outer CRCs before expecting refusal. The typed fixture verifies reader player/order authority queries through playback/seek, exact nonempty list bytes and provenance, unknown/partial-list handling and proof-tail isolation. Body controls rebuild source seals as well as outer checksums before semantic refusal. These files do not prove game
+capture, full owner authority, engine authority application or multiplayer playback.
 
 The complete normalized player-image contribution has a bounded-cache fixture:
 `python3 tools/replay/recmp_players_test.py --out /tmp/recmp-players-run`.

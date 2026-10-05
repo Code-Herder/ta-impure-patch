@@ -115,3 +115,125 @@ class Contributions:
             source = self.source[i]
             if (local and not source["ended"]) or (not local and (source["sealed_tick"] is None or source["sealed_sequence"] < cuts[i][1])):
                 raise ValueError("contribution prefix does not cover application cut")
+
+
+class History:
+    """Independent semantic source validation and application-only authority."""
+    def __init__(self, header):
+        self.header = {key: header[key] for key in ("multiplayer", "mp_seats", "slots", "units_each")}
+        self.header["players"] = [p.copy() for p in header["players"]]
+        self.ledger = Contributions(self.header["multiplayer"])
+        self.roster = Seats(self.header["mp_seats"], self.ledger.actors,
+                            self.header["slots"], self.header["units_each"], self.header["players"])
+        self.source_players, self.players = {}, {}
+        self.source_orders, self.orders, self.stages = {}, {}, {}
+        self.applications = []
+        self.failed = False
+
+    def _semantic(self, origin, tick, sequence, kind, stream, body, application_tick, proof):
+        actor = next(a for a in self.roster.actors if a[0] == origin)
+        if kind == 6:
+            if not 32 <= len(body) <= 552:
+                raise ValueError("player delta span")
+            player, controller, full = struct.unpack_from("<III", body)
+            bits = int.from_bytes(body[12:29], "little")
+            previous = self.source_players.get(origin)
+            if (player != origin or controller not in (1, 2) or full not in (0, 1) or
+                    any(body[29:32]) or bits >> 130 or full and bits != (1 << 130)-1 or
+                    not full and previous is None):
+                raise ValueError("player delta fields/mask/baseline")
+            if previous and (sequence <= previous["sequence"] or tick < previous["source_tick"] or
+                             application_tick < previous["applied_tick"] or stream != previous["stream"]):
+                raise ValueError("player delta provenance")
+            image = bytearray(520) if full else bytearray(previous["image"])
+            pos = 32
+            for word in range(130):
+                if bits >> word & 1:
+                    if pos+4 > len(body):
+                        raise ValueError("truncated player delta")
+                    image[4*word:4*word+4] = body[pos:pos+4]
+                    pos += 4
+            if pos != len(body) or struct.unpack_from("<II", image, 0x67) != (actor[2]+1, actor[3]+1):
+                raise ValueError("player delta block IDs or trailing bytes")
+            state = dict(image=bytes(image), controller=controller, source_tick=tick, sequence=sequence,
+                         applied_tick=application_tick, stream=bytes(stream))
+            self.source_players[origin] = state
+            if not proof:
+                self.players[origin] = state.copy()
+        elif kind == 2:
+            if len(body) < 16:
+                raise ValueError("order chunk span")
+            slot, which, reserved, birth, total, first, count, reserved2 = struct.unpack_from("<HBBIHHHH", body)
+            if (not actor[2] <= slot <= actor[3] or which > 1 or reserved or reserved2 or
+                    total > 4096 or count > 45 or first > total or count > total-first or
+                    len(body) != 16+88*count or not count and (total or first)):
+                raise ValueError("order chunk bound/ownership/span")
+            stage = self.stages.get(origin)
+            if stage and (stream != stage["stream"] or sequence <= stage["sequence"] or tick < stage["tick"]):
+                raise ValueError("order chunk provenance")
+            if first == 0:
+                if stage and stage["active"]:
+                    raise ValueError("interrupted order transaction")
+                stage = dict(stream=bytes(stream), tick=tick, slot=slot, which=which, birth=birth,
+                             total=total, next=0, active=True, image=bytearray())
+                self.stages[origin] = stage
+            elif (not stage or not stage["active"] or stage["sequence"]+1 != sequence or
+                  (stage["tick"], stage["slot"], stage["which"], stage["birth"], stage["total"], stage["next"]) !=
+                  (tick, slot, which, birth, total, first)):
+                raise ValueError("order transaction discontinuity")
+            stage["image"] += body[16:]
+            stage["next"] += count
+            stage["sequence"] = sequence
+            if stage["next"] == total:
+                used = sum(s["count"] for s in self.source_orders.values())
+                old = self.source_orders.get((slot, which), {}).get("count", 0)
+                if total > 131072-used+old:
+                    raise ValueError("order pool exhausted")
+                state = dict(origin=origin, birth=birth, source_tick=tick, sequence=sequence,
+                             applied_tick=application_tick, count=total, stream=bytes(stream),
+                             image=bytes(stage["image"]))
+                self.source_orders[slot, which] = state
+                if not proof:
+                    self.orders[slot, which] = state.copy()
+                stage["active"] = False
+        elif kind == 4:
+            if self.stages.get(origin, {}).get("active"):
+                raise ValueError("seal closes an incomplete order transaction")
+        # Legacy kind 1 contributes no complete player or order authority.
+
+    def block(self, raw):
+        if self.failed:
+            raise ValueError("history already invalid")
+        try:
+            raw = bytes(raw)
+            self.ledger.block(raw)
+            at = 0
+            while at < len(raw):
+                start = at
+                ordinal, application_tick, phase = struct.unpack_from("<QII", raw, at)
+                at += 16
+                span, origin, tick, sequence, kind = struct.unpack_from("<IIIII", raw, at+12)
+                stream = raw[at+48:at+64]
+                proof = phase == 3
+                self._semantic(origin, tick, sequence, kind, stream, raw[at+64:at+span],
+                               self.ledger.tick if proof else application_tick, proof)
+                at += span
+                if not proof:
+                    self.applications.append((application_tick, memoryview(raw)[start:at]))
+        except (ValueError, struct.error):
+            self.failed = True
+            raise
+
+    def footer(self, raw):
+        self.ledger.footer(raw)
+
+    def at(self, tick):
+        """Rebuild a semantic application prefix at a world tick, excluding proof tails."""
+        if self.failed:
+            raise ValueError("history already invalid")
+        result = History(self.header)
+        for applied, raw in self.applications:
+            if applied > tick:
+                break
+            result.block(raw)
+        return result

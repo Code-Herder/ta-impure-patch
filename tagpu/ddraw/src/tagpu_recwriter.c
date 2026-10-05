@@ -38,6 +38,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_recorder.h"
+#include "tagpu_recmp_history.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_log.h"
 #include "crc32.h"
@@ -128,6 +129,7 @@ typedef struct Writer {
     unsigned char  seats[4 + 12 * REC_PLAYERS];   /* RK_END's game end and RT_SEAT_ENDs   */
     unsigned long long raw, packed;   /* the stream's bytes, before and after deflate */
     RecMpFileState mp;
+    RecMpHistory* mp_history;
     RecMpRecordEnd mp_end;
     Buf            contributions;
     unsigned       mp_in;
@@ -429,6 +431,8 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
             if (ctl<1 || ctl>4 || w->mp.header.actor[i].local!=(ctl==1 || ctl==2)) return 0;
         }
         if (seats!=mask) return 0;
+        w->mp_history=tagpu_recmp_history_begin(&w->mp.header,roster);
+        if (!w->mp_history) return 0;
     }
     w->units = (unsigned char*)VirtualAlloc(NULL, (size_t)w->nslots * REC_UNIT_IMAGE,
                                             MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -1239,11 +1243,12 @@ static void contributions_flush(Writer* w)
 
 static void contribution(Writer* w, const RecMpRecorded* record)
 {
-    if (!tagpu_recmp_file_record(&w->mp, &record->where, &record->packet.h,
+    if (!tagpu_recmp_history_record(w->mp_history, &record->where, &record->packet.h,
         record->packet.body, record->packet.h.bytes - sizeof record->packet.h)) {
         fail(w, "malformed contribution journal or proof tail");
         return;
     }
+    w->mp=*tagpu_recmp_history_ledger(w->mp_history);
     buf_put(&w->contributions, &record->where, sizeof record->where);
     buf_put(&w->contributions, &record->packet, record->packet.h.bytes);
     if (w->contributions.oom) fail(w, "no memory for contribution block");
@@ -1344,6 +1349,7 @@ static void finish(Writer* w)
     free(w->stream.p);
     free(w->snap.p);
     free(w->contributions.p);
+    tagpu_recmp_history_end(w->mp_history);
     for (i = 0; i < w->ntab; i++) free(w->tab[i].img);
     if (w->units) VirtualFree(w->units, 0, MEM_RELEASE);
     for (i = 0; w->lists && i < w->nslots * 2; i++) free(w->lists[i].img);

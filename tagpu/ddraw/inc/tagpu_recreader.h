@@ -228,6 +228,14 @@ int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsign
 /* 1 when the file HANDLE `f` is the file the reader holds open: one volume, one file index */
 int recr_same_file(const RecReader* r, void* f);
 
+/* Authority at the currently read world tick. Rebuild after seek/segment/index
+   changes; advancing queries consume only new application records. Unknown stays
+   unknown; late proof records never publish. 1 found, 0 unknown, -1 invalid (why).
+   These return copied normalized values, never write engine state. */
+int recr_mp_player(RecReader* r, unsigned origin, RecMpPlayerState* out, char* why, unsigned cap);
+int recr_mp_orders(RecReader* r, unsigned slot, unsigned list, RecMpOrderState* out,
+                     void* image, unsigned capacity, char* why, unsigned cap);
+
 /* What the Replays browser shows of a recording, read from its header, its minimap block and its
    end block alone (the stream's blocks are skipped unread). */
 typedef struct RecInfoSeat {

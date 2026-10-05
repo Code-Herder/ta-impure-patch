@@ -77,7 +77,8 @@ HRESULT tagpu_recmp_net_send(RecMpNet* net, const void* bytes, unsigned size)
             RecMpSeal seal; RecMpReceipt receipt;
             unsigned i;
             CHECK(size==sizeof p->h+sizeof seal);
-            memcpy(&seal,p->body,sizeof seal); CHECK(seal.final);
+            memcpy(&seal,p->body,sizeof seal);
+            if (!seal.final) goto sent;
             receipt.origin=p->h.origin; receipt.sequence=p->h.sequence;
             receipt.stream=p->h.stream; receipt.seal=seal;
             for (i=0;i<2;i++) {
@@ -87,14 +88,18 @@ HRESULT tagpu_recmp_net_send(RecMpNet* net, const void* bytes, unsigned size)
             }
             f.final_sent++;
         } else if (p->h.kind==RECMP_RECEIPT) f.receipts_sent++;
-        else CHECK(p->h.kind==RECMP_RESOURCES);
+        else CHECK(p->h.kind==RECMP_RESOURCES || p->h.kind==RECMP_PLAYER || p->h.kind==RECMP_ORDERS);
     }
+sent:
     net->stats.completed++; net->stats.completed_bytes+=size;
     return DP_OK;
 }
 
 static void proof_tail(void)
 {
+#ifdef RECMP_FILE_HISTORY
+    file_proof_tail();
+#else
     RecMpSeal seal; RecMpPacket* p;
     unsigned i;
     for (i=0;i<2;i++) {
@@ -107,6 +112,7 @@ static void proof_tail(void)
         p=packet(i ? 66 : 55,RECMP_SEAL,f.source[i].sequence+1,i ? 9 : 8,&seal,sizeof seal);
         CHECK(tagpu_recmp_stream_put(&f.source[i],&p->h,p->body,sizeof seal));
     }
+#endif
 }
 
 HRESULT tagpu_recmp_net_receive(RecMpNet* net, DWORD* from, void* bytes, unsigned* size)

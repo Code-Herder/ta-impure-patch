@@ -86,7 +86,7 @@ import struct
 import sys
 import zlib
 from pathlib import Path
-from recmp_file import Contributions, Seats
+from recmp_file import Contributions, Seats, History
 
 REC_FORMAT = 5
 REC_MAGIC = b"IMPREC\r\n"
@@ -846,7 +846,7 @@ def segments(bl, offsets=None):
                    "first": None, "last": None, "end_reason": None,
                    "range": list(offsets[i]) if offsets else None}
             segs.append(seg)
-            contributions = Contributions(h["multiplayer"]) if "multiplayer" in h else None
+            contributions = History(h) if "multiplayer" in h else None
             after_end = False
         elif kind == RB_HEADER:
             raise Unreadable(f"a header block (block {i}) inside timeline {seg['id']}")

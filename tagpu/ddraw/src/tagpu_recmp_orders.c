@@ -181,6 +181,7 @@ int tagpu_recmp_orders_put(RecMpOrderCache* c, const RecMpHeader* h,
        both the old image and its provenance intact. */
     l->state.source_tick = h->tick;
     l->state.sequence = h->sequence;
+    l->state.stream = h->stream;
     l->state.applied_tick = applied_tick;
     l->state.count = chunk.total;
     l->valid = 1;

@@ -70,6 +70,7 @@ typedef struct {
 typedef struct RecMpOrderCache RecMpOrderCache;
 typedef struct {
     unsigned origin, birth, source_tick, sequence, applied_tick, count;
+    GUID stream;
 } RecMpOrderState;
 
 /* Fixed room for 131072 nodes, two lists per slot, and at most ten assembling sources.

@@ -1,0 +1,113 @@
+#include "tagpu_recmp_history.h"
+#include <string.h>
+
+struct RecMpHistory {
+    RecMpRoster roster;
+    RecMpFileState ledger;
+    RecMpPlayers *source_player, *applied_player;
+    RecMpOrderCache *source_orders, *applied_orders;
+    unsigned failed;
+};
+
+RecMpHistory* tagpu_recmp_history_begin(const RecMpRecordHeader* header, const RecMpRoster* roster)
+{
+    RecMpHistory* h;
+    if (!tagpu_recmp_file_roster_valid(header,roster)) return NULL;
+    h=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof *h);
+    if (!h) return NULL;
+    h->roster=*roster;
+    tagpu_recmp_file_state(&h->ledger,header);
+    h->source_player=tagpu_recmp_players_begin(roster);
+    h->applied_player=tagpu_recmp_players_begin(roster);
+    h->source_orders=tagpu_recmp_orders_begin(roster->slots);
+    h->applied_orders=tagpu_recmp_orders_begin(roster->slots);
+    if (!h->source_player || !h->applied_player || !h->source_orders || !h->applied_orders) {
+        tagpu_recmp_history_end(h); return NULL;
+    }
+    return h;
+}
+
+void tagpu_recmp_history_end(RecMpHistory* h)
+{
+    if (!h) return;
+    tagpu_recmp_players_end(h->source_player);
+    tagpu_recmp_players_end(h->applied_player);
+    tagpu_recmp_orders_end(h->source_orders);
+    tagpu_recmp_orders_end(h->applied_orders);
+    HeapFree(GetProcessHeap(),0,h);
+}
+
+static int semantic(RecMpHistory* h, const RecMpRecord* where, const RecMpHeader* packet,
+                      const void* body, unsigned bytes)
+{
+    unsigned proof=where->phase==RECMP_RECORD_PROOF;
+    unsigned tick=proof ? h->ledger.tick : where->tick;
+    if (packet->kind==RECMP_PLAYER) {
+        if (!tagpu_recmp_players_put(h->source_player,packet,body,bytes,tick)) return 0;
+        return proof || tagpu_recmp_players_put(h->applied_player,packet,body,bytes,tick);
+    }
+    if (packet->kind==RECMP_ORDERS) {
+        RecMpOrders chunk;
+        unsigned i;
+        if (!body || bytes<sizeof chunk) return 0;
+        memcpy(&chunk,body,sizeof chunk);
+        for (i=0;i<h->roster.count;i++) if (h->roster.actor[i].origin==packet->origin) break;
+        if (i==h->roster.count || chunk.slot<h->roster.actor[i].first ||
+            chunk.slot>h->roster.actor[i].last ||
+            tagpu_recmp_orders_put(h->source_orders,packet,body,bytes,tick)<0) return 0;
+        return proof || tagpu_recmp_orders_put(h->applied_orders,packet,body,bytes,tick)>=0;
+    }
+    if (packet->kind==RECMP_SEAL)
+        return tagpu_recmp_orders_idle(h->source_orders,packet->origin);
+    /* Legacy resource samples are opaque source-ledger records. They establish
+       neither a complete player baseline nor order authority. Production uses PLAYER. */
+    return packet->kind==RECMP_RESOURCES;
+}
+
+int tagpu_recmp_history_record(RecMpHistory* h, const RecMpRecord* where,
+                               const RecMpHeader* packet, const void* body, unsigned bytes)
+{
+    RecMpFileState next;
+    if (!h || h->failed) return 0;
+    next=h->ledger;
+    if (!tagpu_recmp_file_record(&next,where,packet,body,bytes) ||
+        !semantic(h,where,packet,body,bytes)) { h->failed=1; return 0; }
+    h->ledger=next;
+    return 1;
+}
+
+int tagpu_recmp_history_block(RecMpHistory* h, const void* body, unsigned bytes)
+{
+    const unsigned char* b=body;
+    unsigned at=0;
+    if (!h || h->failed) return 0;
+    if (!b || !bytes) { h->failed=1; return 0; }
+    while (at<bytes) {
+        RecMpRecord where;
+        RecMpHeader packet;
+        if (bytes-at<sizeof where+sizeof packet) break;
+        memcpy(&where,b+at,sizeof where); at+=sizeof where;
+        memcpy(&packet,b+at,sizeof packet);
+        if (packet.bytes<sizeof packet || packet.bytes>RECMP_PACKET_MAX || packet.bytes>bytes-at ||
+            !tagpu_recmp_history_record(h,&where,&packet,b+at+sizeof packet,packet.bytes-sizeof packet)) break;
+        at+=packet.bytes;
+    }
+    if (at!=bytes) { h->failed=1; return 0; }
+    return 1;
+}
+
+const RecMpFileState* tagpu_recmp_history_ledger(const RecMpHistory* h)
+{
+    return h && !h->failed ? &h->ledger : NULL;
+}
+
+int tagpu_recmp_history_player(const RecMpHistory* h, unsigned origin, RecMpPlayerState* out)
+{
+    return h && !h->failed && tagpu_recmp_players_get(h->applied_player,origin,out);
+}
+
+int tagpu_recmp_history_orders(const RecMpHistory* h, unsigned slot, unsigned list,
+                               RecMpOrderState* out, void* image, unsigned capacity)
+{
+    return h && !h->failed && tagpu_recmp_orders_get(h->applied_orders,slot,list,out,image,capacity);
+}
