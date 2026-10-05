@@ -93,6 +93,7 @@ static BOOL WINAPI found(LPCDPSESSIONDESC2 desc, LPDWORD timeout, DWORD flags, v
 #include "tagpu_recmp_record.h"
 #include "tagpu_recmp_stream.h"
 static HANDLE s_finished;
+#endif
 
 void tagpu_logf(const char* fmt, ...)
 {
@@ -101,9 +102,12 @@ void tagpu_logf(const char* fmt, ...)
     vprintf(fmt,args);
     va_end(args);
     putchar('\n');
+#ifdef RECMP_CHANNEL_TEST
     if (strstr(fmt,"isolated worker ended:")) SetEvent(s_finished);
+#endif
 }
 
+#ifdef RECMP_CHANNEL_TEST
 static void channel_run(Probe* p)
 {
     RecMpConfig config = {0};

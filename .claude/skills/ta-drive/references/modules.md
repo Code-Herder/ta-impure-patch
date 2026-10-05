@@ -158,10 +158,16 @@ removes two private-registry prefixes and an X display, retaining logs and test
 executables. It uses primary-session stand-ins; it does not launch TA or verify
 terminal recording completeness, bandwidth, recording or playback.
 
+For a single coverage completion, create `talog.Cursor(gamedir)` before writing
+`cover <name>` to `tagpu_replay.trigger`, then observe its `text()` and copy the
+completed file. `tacli wait` observes only lines written after it starts; starting
+it after the trigger can miss the one completion line. Retain the tested COVER
+DLL and its matching linker map beside the collected bitmaps.
+
 The contribution file container has a separate controlled fixture:
 `python3 tools/replay/recmp_file_test.py --out /tmp/recmp-file-run`.
 It uses the actual world-file writer, compressor, lock and C/Python readers in one
-owned prefix/private display, without launching TA. It writes format-5 synthetic
+owned prefix/private display, without launching TA. It writes format-6 synthetic
 `.imprec` files, validates source/application/proof records and the frozen-cut
 footer, seeks the synthetic world, and refuses missing proofs, local-save failure
 and logically corrupted packets/footers. `--native-file <recording>` checks an

@@ -858,10 +858,10 @@ owner ledger into the engine. Actual native heartbeats report speed 10.
 
 Host exit completes 2,116 accepted / 2,122 completed, queued/failure zero,
 cuts 2/2 and four receipts while the joiner stays on `ARMMAIN2.GUI`; the joiner
-later completes 2,078 / 2,084, queued/failure zero and cuts 2/2. A coverage-build
-attempt instead fails private session creation with `80004005`, ending the local
-recording explicitly incomplete after two iterations; no successful native
-coverage is claimed. The normal run does not explain that startup failure or
+later completes 2,078 / 2,084, queued/failure zero and cuts 2/2. The first coverage-build
+attempt failed private session creation with `80004005`, ending the local
+recording explicitly incomplete after two iterations; that attempt supplies no
+successful native coverage. The normal run does not explain that startup failure or
 the earlier enumeration/join failures. All owned prefixes/displays are removed.
 
 The current format-6 coverage build passes all 23 `secondary-orders` skirmish
@@ -870,8 +870,8 @@ checks at internal speed 20: complete 1,140-iteration recording, every one of
 counts, images inventory, address scans and no puppet COB engine writes. Fresh
 seek and round trips at 451/481/541 pass; each round trip poisons 26 tables,
 leaves zero residue and compares exactly. The 39 harness logic checks pass.
-This verifies the changed shared file path, not the native materializer or
-successful native coverage. No exclusion, tolerance or expected-absent rule
+This verifies the changed shared file path. The native materializer remains
+unverified. No exclusion, tolerance or expected-absent rule
 is changed.
 
 An audit of the earlier native format-5 recording finds 3,878 individual owner
@@ -891,3 +891,47 @@ reclaim replies' materialization clock or authorize dropping/retiming them.
 The playback consumer still needs causal ordering and an exact incarnation
 identity across creation, recycling and seek, plus the previously named field
 authority, owner effects, perspectives, traffic and ten-seat/migration work.
+
+### Native startup and capture verification (format 6)
+
+The default isolated-adapter fixture now supplies the logging stub used by
+`tagpu_recmp_net_open`'s failure diagnostics. Previously that stub existed only
+under `RECMP_CHANNEL_TEST`; the default build failed to link with an undefined
+`tagpu_logf`. Its common stub now logs in both modes, while the worker-finished
+event remains channel-only. The actual default native fixture passes its bounds,
+source/cut controls, four human/AI public keys and signed bindings, sixteen data
+deliveries after primary Close and eighteen successful native completions per
+peer. A separate simultaneous-start probe holds both primary sessions live and
+releases both private workers through an observed file barrier; it also passes.
+These successes do not explain the earlier intermittent creation, enumeration
+or join failures. No retry or timing mitigation is added to the adapter.
+
+MEASURED 2026-10-05 on the reference setup: the current coverage DLL, SHA-256
+checked in both owned prefixes and retained with its matching linker map, runs
+the four-actor *Two Continents* combat/reclaim fixture. Only the host records;
+the joiner contributes with recording off. The complete native file is
+2,338,188 bytes, GameTimes 1..446, with zero writer corrections. All four source
+rosters, player images, unit images and script/reply/spray first batches match
+publisher/recipient bytes and provenance. Host exit completes 2,780 accepted /
+2,786 completed, queued/failure zero, cuts 2/2 and four receipts while the joiner
+stays on `ARMMAIN2.GUI`. The joiner later completes 2,939 / 2,945,
+queued/failure zero and cuts 2/2. This verifies the host's frozen recording cut;
+continued recording after host migration is still required.
+
+C and Python agree through sequential reading and fresh world seek on all
+5,620 application records, 1,422,940 application bytes, 1,030 root batches and
+CRC `A9913E6F`. All 36 primary replica roots retain their tick/body bytes, CRC
+`1DDD61AA`; each type (`unit+0xA6`), owner, birth, unfinished fraction and HP
+matches the next B2 image. Owners 1/3 have 23/13 roots. Thirty-five are finished
+creates; one is unfinished with fraction 1 and HP 0. The world checker explains
+all 445 transitions: 35 local creates, 36 replica creates, 20 deaths and 552
+shots, among the other recorded roots.
+
+The matching coverage map identifies 674/540 reached functions in host/joiner.
+Both reach `hit_created`, `tagpu_rec_network_created` and `mp_capture`, verifying
+the active replica capture path. The adapter is outside the instrumented map;
+its successful native Open is runtime-log evidence, not a coverage claim.
+Native heartbeats still report speed 10. The owned games, prefixes and display
+are removed. Engine playback remains refused pending the materialization,
+incarnation and authority work above; this capture/reader verification does not
+meet the complete multiplayer landing gate.

@@ -577,6 +577,28 @@ owner's public key before play. The private worker's signature covers that origi
 stream, match, private session and actual private sender. Keys come from native
 GetPlayerData for the primary ID, not from a private packet. The game thread also calls native GetPlayerCaps at vtable `+0x4C` to check local ownership, GetPlayerData at `+0x50` for each actual primary key, and GetPlayerAddress at `+0x48` for the validated start host ID. Those offsets are the DirectPlay2 SDK interface layout; the native game verifies the calls on TA's existing interface. The bounded 4096-byte compound address, ten-actor roster, match and host role are copied before starting the private worker. Its backend derives the TCP/IP provider through native EnumAddress; no additional engine provider field is read. No primary interface or engine pointer survives in worker storage.
 
+### Native TCP/IP provider address reads [DISASSEMBLED 2026-10-05]
+
+These are the native DirectPlay files installed by `tools/dpinstall.sh`, not
+addresses in `TotalA.exe`. `tools/dpport.py` verifies their masked file hashes
+before patching its seven discovery-port immediates. The reads support startup
+diagnosis; they introduce no provider or engine patch.
+
+| Native binary/range | Established fact |
+|---|---|
+| `dpwsockx.dll`, `0x5DF075C4..0x5DF0765F` | Address callback compares the GUIDs at `0x5DF01394`, `0x5DF01384` and `0x5DF01374`. Their bytes match SDK `DPAID_INet`, `DPAID_INetW` and `DPAID_INetPort`. ANSI input of at most 128 bytes is copied in full; a larger input is truncated to 127 bytes. The Unicode branch uses conversion root `0x5DF099BF`; the port branch copies a WORD into provider context `+0xF0`. No recorder callback uses this provider context. |
+| `dpwsockx.dll`, `0x5DF08260..0x5DF083A0` | Read setup span: a nonzero context `+0xF0` is passed through helper `0x5DF0C902` at `0x5DF082E5`; that helper jumps through `0x5DF011F0`, WSOCK32 ordinal 9. Zero uses the `0x08BA` immediate at `0x5DF082FC`, the site `dpport.py` changes. The address/task path calls `0x5DF08FB3`, `0x5DF0621A` and `0x5DF0776E`. This partial span alone does not name the complete setup function or prove why Open failed. |
+| `dpwsockx.dll`, `0x5DF07578..0x5DF079FF` | Additional read spans cover the address callback, table allocation at `0x5DF07667`, task setup at `0x5DF0776E`, worker body at `0x5DF0784E` and thread/event creation at `0x5DF0796A`. The latter returns `80004005` when its event or thread creation fails; other read paths also return that same HRESULT. A generic SDK error cannot identify one of these paths without a runtime observation. |
+| `dplaysvr.exe`, `0x01002260..0x01002430` | Read name-server setup span includes the two `push 0x08BA` discovery-port sites at `0x010022FD` and `0x010023E2`, already covered by `dpport.py`. No new claim about the earlier function entry or the entire server lifetime follows from this span. |
+
+MEASURED on the reference setup: a current coverage-build TA host successfully
+opens and binds its private session while the primary session is live. Its Wine
+Winsock trace shows an exclusive TCP bind at 2300 and 2301 fail with status
+`C0000043`, then 2302 succeed; the socket closes and a socket with reuse enabled
+binds/listens on 2302. Thus an occupied candidate port occurs on a successful
+startup. This is one provider trace, not proof of a race or a fix for the earlier
+`80004005` creation/enumeration failures.
+
 ### Temporary transport observation and construction reads [MEASURED 2026-09-28]
 
 The three observed entry instructions are position-independent five-byte `push imm32`s:
