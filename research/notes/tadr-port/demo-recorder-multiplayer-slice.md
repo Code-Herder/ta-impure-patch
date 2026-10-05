@@ -1448,8 +1448,10 @@ guard and does not close that gate.
 #### Primary input ownership before loading admission
 
 The work branch replaces the pump's shared incoming allocation with one
-private allocation per call. The entry wrapper at `0x453D40` keeps a recursive
-critical section through receive and native dispatch; the receive-call
+process-lifetime allocation per recursion depth, reused across calls, threads
+and levels. The entry wrapper at `0x453D40` keeps a recursive
+critical section through receive and native dispatch; busy admission returns 0
+without waiting, changing TLS/IDs or consuming an SDK message. The receive-call
 redirect at `0x453D94` copies from the original transport/SDK into that frame's
 storage and assigns the pump's existing stack message pointer only on success.
 Native sends keep using `main+0x2A38` and cannot overwrite this input. Nested
@@ -1458,7 +1460,10 @@ pumps own distinct allocations, restore their parent's exact span and
 transport's unchecked queued-message copy. Raw/system receives negotiate
 larger allocations before exposing any span. All thirteen primary sites and
 the splitter's length-bound instructions are checked before any write.
-No engine interface or input allocation is retained after the pump returns.
+No engine interface is retained. The last packet remains allocated after pump
+return until a subsequent receive at that depth overwrites or resizes it.
+Nested receives use a different depth slot. This introduces no earlier native
+alias invalidation than retail's shared buffer, which any receive can reuse.
 
 The [engine map](../exe-reverse-engineering.md#owned-primary-receive-frames)
 records the native receive contracts, queued-copy exception, system size
@@ -1471,7 +1476,10 @@ actual receive-span API and movement-copy integration, with only the
 SDK/statistics targets redirected to controlled fixtures. It passes the
 65,535-byte queued limit, raw growth to 70,001 bytes, output-buffer overwrite,
 nested storage/span/ID restoration, invalid-size/error/network refusal and
-4,000 two-thread receives with 200 nested calls. It also verifies movement
+4,000 two-thread receives with 200 nested calls. Parent and nested aliases
+survive return, both depth buffers are reused, and a foreign thread finishes
+busy admission while the owner holds the lock without consuming a message.
+It also verifies movement
 header clamping, zero padding, legacy fallback, and interior/inactive-parent
 refusals. Its prefix/display are removed.
 The generated entry/call wrapper is exercised separately by the native game.
@@ -1510,10 +1518,18 @@ ticks 363/342 with 333 movement packets per endpoint; raw finishes at 331/299
 with 294/245. These are native live receive
 checks, separate from the stopped independent primary exploration oracle.
 
-Incoming storage separation is implemented and tested. Before landing, all
-native packet consumers still need a retention audit because the private
-allocation expires at pump return; the whole-pump lock also needs its wait-cycle
-audit. Loading admission still
+The persistent-depth/nonblocking follow-up passes both native fixtures on the
+same retained COVER build: queued ticks 315/295, movement counts 270/319;
+raw ticks 336/311, counts 200/222. Every sampled stale count is zero and neither
+endpoint reports contribution refusal. This executes the installed 32-byte
+wrapper, with saving off, and removes only its own instances/display. It does
+not test saved-file playback, loading chat or physical bandwidth.
+
+Incoming storage separation, retained packet lifetime and nonblocking pump
+admission are implemented and tested. Their safety rests on persistent depth
+storage and refusal before any SDK receive when another thread owns dispatch.
+They do not prove all native parsers reentrant, SDK callback/cost behaviour or
+separate native output lifetimes. Loading admission still
 needs a copied pre-B2 queue, source-roster bootstrap and truthful source,
 recipient and recorder application clocks. Mask 4 and the live B2 guard remain
 unchanged. Engine replay chat, other audience modes, pings/drawings, complete

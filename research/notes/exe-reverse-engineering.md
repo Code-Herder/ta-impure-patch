@@ -12968,8 +12968,8 @@ DISASSEMBLED 2026-10-05, retail `.text`, and checked against the branch's
 
 | Address / field | Established behaviour and branch use |
 |---|---|
-| `0x453D40..0x453D5C`, `0x455F50..0x455F77` | No-argument pump, plain `ret`; first five bytes load main. Network bit `main+0x2A44` gates it. The return paths restore its `0x51C` locals and four saved registers. A wrapper reserves a 28-byte private frame on its stack, preserves registers/flags around enter/leave, calls a copied-prologue trampoline and returns the original result/flags. It holds a recursive critical section through the native receive/dispatch and the final calls `0x450980`/`0x453C20`. The parent frame and its source/destination words are restored after a nested call. |
-| `0x453D8A`, `0x453D90`, `0x453D94` | Stock takes the shared message pointer once and calls receive at `0x453D94`. That call now enters the owned receiver. Its call-entry word 5 is the pump's `esp+0x10` pointer; only a successful bounded receive replaces it. The packet stays in this frame's allocation until the next receive or this pump's return. |
+| `0x453D40..0x453D5C`, `0x455F50..0x455F77` | No-argument pump, plain `ret`; first five bytes load main. Network bit `main+0x2A44` gates it. The return paths restore its `0x51C` locals and four saved registers. A wrapper reserves a 32-byte private frame on its stack, preserves registers/flags around enter/leave, calls a copied-prologue trampoline and returns the original result/flags. `TryEnterCriticalSection` admits the owner through native receive/dispatch and the final calls `0x450980`/`0x453C20`; a busy caller returns 0 without receiving or changing TLS/IDs. The parent frame and its source/destination words are restored after a nested call. |
+| `0x453D8A`, `0x453D90`, `0x453D94` | Stock takes the shared message pointer once and calls receive at `0x453D94`. That call now enters the owned receiver. Its call-entry word 5 is the pump's `esp+0x10` pointer; only a successful bounded receive replaces it. Each recursion depth reuses its own process-lifetime allocation across calls, threads and levels. Pump return does not free the packet; the receiver reuses or resizes its storage only on a subsequent receive at that depth. Native dispatch retains its packet mutations. |
 | `0x4534E0..0x453639` | Stock no-argument receive returns 1 on a delivered message, 0 on no network/no message/error. It selects `0x462F30` or `0x4C9840` using `0x506DBC`, initializes size from `main+0x2A34`, and reallocates `main+0x2A38` through `0x4D84A0` at `0x453565`/`0x4535EE`. Its sole direct relative caller is redirected; the old B3 statistics stubs remain available if the atomic primary installer refuses. |
 | `0x462F30..0x4635A3`, object `0x51E300` | `thiscall(context, buffer, DWORD *bytes)`, `ret 12`. It scans ten 0x34-byte source-ring records at `this+0x20..`, consuming due entries, or receives an aggregate through `0x44F9C0` at `0x4630DE`/`0x46314D` and splits it. The queued-message branches converge at `0x46354F`: they copy EDX bytes without comparing caller capacity, then store length at `0x463567`. The branch at `0x463589` writes source/destination to context `+0x4B5/+0x4B9`. System source 0 instead bounds size against caller capacity at `0x4633E3..0x463429` and preserves a too-large message for retry. |
 | `0x463919..0x463939`, `0x4639E5`, `0x463B33`, table `0x512AD8` | Split messages have u16 lengths: the variable `0x2C` length uses a 16-bit reader call, fixed messages take the table's word, and the other walks mask to 16 bits. The owned queued receiver allocates 65,536 bytes before entering the transport, covering that entire range even though the final copy does not check capacity. The installer compares the variable reader call and fixed word-load bytes as prerequisites. |
@@ -12982,6 +12982,24 @@ DISASSEMBLED 2026-10-05, retail `.text`, and checked against the branch's
 | `0x45469E`, `0x454712..0x454732`, `0x4E4760..0x4E47E8` | The system name-update path passes packet `+0x18/+0x14` pointers to the bounded string-copy routine with count 30 and destinations at player `+0x2B/+0x49`. The routine copies source bytes into destination and pads after NUL; it retains no source pointer. These facts cover this sink, not every system-message consumer. |
 | `0x454685..0x454697` | A system session-data branch copies twenty dwords from message `+4` into `main+0x471`. |
 | `0x4553EE..0x4553F9`, `0x48B920..0x48BACF` | The `0x2C` case passes its packet and sender player to `0x48B920`. That decoder constructs a stack bit-reader at `0x48B933..0x48B93F`, reads code/length/GameTime through `0x415DC0`, stores GameTime at player `+0x18`, and passes the stack reader to mover vtable `+0x24` (`0x48BA10`). Dirty updates may create through `0x4861D0` at `0x48BA00`; completed updates call `0x43DD20` and `0x48A870`. The round-robin path calls `0x48B3F0` at `0x48BAC3`; `ret 8` at `0x48BACF` returns to the pump. The guarded copy owns the decoder's padded packet span; this trace alone does not audit every mover's retention. |
+
+Additional DISASSEMBLED consumer and pump-tail facts:
+
+| Address / caller | Packet use or owned fields |
+|---|---|
+| `0x450980..0x450A0C`; pump calls `0x45493C`, `0x455F5F` | No callees or packet argument. Zeroes eleven stack counters and scans ten active controller-1/2/3 player rows, excluding player `+0x146 == 10`. Player `+0x0C` is bounded to 1..10 before indexing those counters; the first duplicate sets main `+0x299C` to 1, otherwise 0. Group meaning is [INFERRED]. |
+| `0x453C20..0x453D30`; pump call `0x455F64` | No packet argument. Main `+0x37F2F` bit 0 skips the scan; paused `+0x38A51` bit 0 saves the clock from `0x4B6340` to `0x512C7C`. Ten controller-3 rows compare clock minus max(saved clock, player `+0x1C`) against 30 times main `+0x37F31`. Calls `0x453A50` with −1 at `0x453D11`, or the chosen row's native ID at `0x453D20`. This body does not establish the callee's full closure. |
+| `0x4565A0..0x456759`; pump call `0x454B2F` | Timestamp echo, `ret 4`. A request with packet `+5 == 0` writes the native clock there, passes the same 13-byte packet through `0x451BC0` at `0x4565EA`, and flushes the queued sender through `0x4618A0` before/after when enabled. `0x4C9790` temporarily selects raw sending. The response branch copies clock minus packet `+1` into matched player `+0x14` at `0x456743`; it stores no packet pointer. Queued send's copy contract is established separately at `0x4628D0`. |
+| `0x48AB70..0x48AD2D`; pump call `0x455403` | Attachment input, `ret 4`. Reads u16 unit IDs at packet `+1/+3` and state bytes `+5/+6`; the packet address is neither stored nor passed to another function. Stored links at unit `+0x86/+0x8A/+0x8E` are unit-array addresses, state writes are unit `+0xF9` and mover `+0x2E` low bits. Calls `0x47CB00`, `0x47CB40`, `0x4384A0` and `0x48C9B0` with unit/object arguments. These are retention facts, not a new proof of every ID bound. |
+| `0x49AF90..0x49AFF4`; pump call `0x455443` | Reads packet coordinates `+1/+5/+9` and weapon byte `+0x0D` while scanning main `+0x141F3` records from pool `+0x141F7`, stride `0x6B`. The matching branch calls `0x499EB0(projectile, 0)` at `0x49AFEB`; it never forwards the packet or uses the sender argument. |
+| `0x47F300..0x47F604`; pump call `0x45563F` | Positional sound, `ret 12`. The native case passes packet `+6` as the point and flag 0, so the outgoing branch does not rebroadcast it. That branch copies three point dwords into an 18-byte stack message before `0x451DF0` at `0x47F3AF`. The positional playback branch builds local coordinates and passes their stack copy to `0x4CF570` at `0x47F579`; fallback calls pass NULL. `0x4CF6C9..0x4CF6E0` converts the copied point into float arguments passed by value to COM vtable `+0x4C`, not a retained point address. This identifies the inspected positional path, not every sound callback. |
+| `0x46D500..0x46D51E`; pump call `0x4559B7` | Unsequenced unit-sync frontend, `ret 8`. Zeroes packet `+2`; if packet `+1 < 100`, forwards the packet and sender row to `0x46D6C0`. Unlike the copying sinks above, this frontend alone does not establish its callee's retention behaviour. |
+
+A speculative direct-call/branch traversal reaches 1,462 entries with 425
+unresolved calls/jumps, including virtual calls and inferred jump-table extents.
+It is not a complete wait-cycle or callback proof. Nonblocking pump admission
+removes the introduced lock-wait edge by construction without depending on a
+negative result from that traversal.
 
 The whole-`.text` positive-offset reference inventory also finds shared-buffer
 loads at `0x450CD9`, `0x451023`, `0x451AD7`, `0x452783`, `0x452870`,
@@ -13000,9 +13018,13 @@ native output builders or establish their separate lifetimes.
 Controlled execution of the exact production receive core and its actual
 `tagpu_wire_received`/`wire_s2c_copy` integration, with only SDK and
 statistics targets replaced, passes a 65,535-byte split packet, raw growth to
-70,001 bytes, native-output-buffer overwrite, nested allocation and
+70,001 bytes, native-output-buffer overwrite, nested storage and
 source/destination/span restoration, no-message/invalid-size/network refusal,
-4,000 two-thread receives and 200 nested receives. The copy controls also
+4,000 two-thread receives and 200 nested receives. Both depth slots are reused
+throughout those calls. Aliases to the last parent and nested packets remain
+readable after both frames return. A foreign thread finishes its busy admission
+while the owner holds the lock, with no SDK call, TLS frame or consumed packet;
+the owner's exact span and bytes remain unchanged. The copy controls also
 cover owned and retail spans, header clamping, zero padding, and refusal of
 interior pointers and an inactive nested parent. The native three-human
 COVER probe separately exercises the installed wrapper through lobby, load,
@@ -13029,11 +13051,23 @@ movement packets. Every sampled stale count is zero. Each run retains its
 tested COVER DLL/map/hash, native tick/roster samples and endpoint logs, then
 removes only its own instances and display.
 
-The allocation is freed at pump return, whereas retail shared storage can
-persist longer. Native consumers' retention and the whole-pump lock's possible
-wait cycles still require a complete audit before landing. The copied chat and
-system sinks above do not prove every case. Continued host migration,
-loading-chat admission, receive cost and physical bandwidth also remain open.
+After retaining depth storage and changing admission to `TryEnterCriticalSection`,
+the installed 32-byte wrapper passes both native movement fixtures again.
+Queued observations finish at ticks 315/295 with movement counts 270/319;
+raw finishes at 336/311 with counts 200/222. Both use the same retained COVER
+build, and every sampled stale count is zero. Neither saving-off endpoint
+reports contribution refusal. The tests remove their own instances/display.
+
+The storage lifetime no longer depends on every native consumer dropping its
+packet pointer before pump return. Only a later receive at the same depth can
+invalidate it; retail shared input can already be overwritten or resized by
+any later receive. Nested receives use a different slot. Nonblocking admission
+adds no lock-wait edge to the engine's loader/game-thread locks and consumes no
+message on refusal. This does not establish the costs or callback behaviour of
+the SDK itself, or the lifetimes of separate native output builders. The copied
+chat/system sinks and inspected movement path do not prove every native parser
+reentrant. Continued host migration, loading-chat admission, receive cost and
+physical bandwidth also remain open.
 
 #### Textfield input beneath the chat GUI
 

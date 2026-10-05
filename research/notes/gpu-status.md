@@ -3204,9 +3204,11 @@ exact through C/Python reader seek. The reusable saved-evidence fixture passes
 both this recording and the fourteen-entry repeated/full-length recording.
 The loading audit identifies state-5 deliveries before B2 and two loading
 pumps sharing the retail receive allocation. The work branch now redirects the
-whole primary pump at `0x453D40` and its receive call at `0x453D94`: each call
-owns private packet storage until return, and a recursive critical section
-serializes native receive/dispatch metadata. Nested calls retain independent
+whole primary pump at `0x453D40` and its receive call at `0x453D94`: one persistent
+storage slot per recursion depth survives return and is reused across calls,
+threads and levels. A recursive critical section serializes native
+receive/dispatch metadata; busy admission returns 0 without waiting or consuming
+an SDK message. Nested calls retain independent
 storage and restore their parent's source/destination words. Native sends
 continue using their own shared output buffer; input never borrows it. A full
 u16 allocation bounds the unchecked queued copy; raw/system messages negotiate
@@ -3218,8 +3220,14 @@ seek. Exact-core controls cover maximum queued size, raw growth, nested
 lifetime/metadata/span, refusal, two-thread receive ordering and the actual
 guarded movement copy. That copy now uses the shared receive-span API; native
 queued and raw movement tests observe both commanders on both peers with no stale
-refusals. Native packet-retention and whole-pump wait-cycle audits remain
-necessary before landing. The state-6 mask and B2 guard remain; loading chat
+refusals. Exact-core controls also verify packet aliases after return, depth-slot
+reuse and a foreign thread's busy refusal while the owner holds the lock. These
+lifetime and admission invariants remove early packet freeing and introduced
+lock waits; they do not prove every native parser reentrant, SDK callback/cost
+behaviour or separate output-builder lifetime. The installed 32-byte wrapper
+also passes queued/raw movement fixtures after those changes, with positive
+movement counts and every sampled stale count zero.
+The state-6 mask and B2 guard remain; loading chat
 still needs its copied-record handoff and roster bootstrap. Whole-game receive
 cost, bandwidth and continued migration remain open.
 The snapshot also publishes inline `edit_index`/`caret` without engine writes.
@@ -3233,7 +3241,7 @@ Mapping toggle. This is driver verification, not a native replay gate.
 | Native CreatePlayer initial data | The original 21-byte password/version prefix followed by a fixed 280-byte public-key record. Only public material is exported; key failure forwards the stock data and refuses faithful contributions. The size handler retains the original accepted-prefix tests. |
 | `0x512B84`, `0x512ACC`, `0x512C6C` | Fixed identified-text size 97, generic `ret 4` callback `0x44FD40` and state-6 receive mask 4, written by the same startup initializer. All thirteen primary sites are acquired before any is written. |
 | Scoped GUI text message | Copied 97-byte stack wire value through the original target/generic sender. The native queue copies before returning; ordinary binary `0x05` messages retain their existing size. |
-| `0x453D40`, `0x453D94` / pump stack `+0x10` | Byte-matched entry wrapper and receive-call redirect. One recursive critical section owns receive/dispatch; each call has private allocation and exact delivered span. Success writes the current input pointer to the dispatcher's existing stack slot. All original return registers/flags are preserved. |
+| `0x453D40`, `0x453D94` / pump stack `+0x10` | Byte-matched entry wrapper and receive-call redirect. A 32-byte stack frame publishes an exact active TLS span; one process-lifetime allocation per recursion depth retains the last packet across return. Nonblocking recursive ownership covers receive/dispatch; busy admission returns 0 and consumes nothing. Success writes the current input pointer to the dispatcher's existing stack slot. All original return registers/flags are preserved. |
 | `main+0x4C9`, `main+0x4CD` | Native receive writes source/destination as before. A nested pump restores its parent's saved words before returning to that parent's dispatcher; the process-lifetime main block remains owned. No primary interface is retained. |
 | First 65 bytes of this pump's private receive allocation | Exact delivered pointer/97-byte length and copied version/match/serial/actor validation precede the bounded stock-image replacement. The original text case reads that same allocation before the next receive; native sends cannot overwrite it. |
 

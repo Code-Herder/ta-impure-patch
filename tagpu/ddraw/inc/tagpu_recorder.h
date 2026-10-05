@@ -58,7 +58,8 @@ int tagpu_rec_hooks_in(void);
 
 /* Actual delivered span in this thread's owned primary receive frame. Zero
    means the pointer is not that frame's current packet. No engine buffer is
-   borrowed; nested pump calls keep independent storage until they return. */
+   borrowed; recursive pump depths have independent storage. The native last
+   packet survives return until another receive at that depth overwrites it. */
 unsigned tagpu_rec_wire_received(const void* message);
 
 /* The running game's mod fingerprint, as a recording's RT_MODPRINT states it: FNV-1a over each

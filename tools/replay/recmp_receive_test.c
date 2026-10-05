@@ -68,12 +68,20 @@ static void valid(MpReceiveFrame* frame,unsigned source,unsigned size)
     CHECK(frame->buffer[0]==0x2C);
     for (unsigned i=1;i<size;i++) CHECK(frame->buffer[i]==(unsigned char)source);
 }
+static DWORD WINAPI busy_probe(void* argument)
+{
+    unsigned calls=(unsigned)(size_t)argument;
+    MpReceiveFrame frame;
+    CHECK(!mp_receive_enter(&frame));
+    CHECK(!TlsGetValue(s_mp_rx_tls) && s_test_calls==calls);
+    return 0;
+}
 static DWORD WINAPI worker(void* argument)
 {
     unsigned id=(unsigned)(size_t)argument;
     for (unsigned i=0;i<2000;i++) {
         MpReceiveFrame parent, child;
-        CHECK(mp_receive_enter(&parent));
+        while (!mp_receive_enter(&parent)) SwitchToThread();
         valid(&parent,id,65);
         if (!(i%20)) {
             CHECK(mp_receive_enter(&child)); valid(&child,id+20,97); mp_receive_leave(&child);
@@ -99,6 +107,10 @@ int main(void)
     CHECK(InitializeCriticalSectionAndSpinCount(&s_mp_rx_lock,0));
     MpReceiveFrame parent,child;
     CHECK(mp_receive_enter(&parent)); valid(&parent,11,65535);
+    HANDLE busy=CreateThread(NULL,0,busy_probe,(void*)(size_t)s_test_calls,0,NULL);
+    CHECK(busy && WaitForSingleObject(busy,30000)==WAIT_OBJECT_0);
+    CloseHandle(busy);
+    CHECK(tagpu_rec_wire_received(parent.buffer)==65535 && parent.buffer[3]==11);
     unsigned short full=65535; memcpy(parent.buffer+1,&full,2);
     movement_copy(parent.buffer,65535,1);
     movement_copy(parent.buffer+1,0,0);
@@ -107,7 +119,9 @@ int main(void)
     CHECK(s_test_calls==2 && child.capacity==70001);
     memcpy(child.buffer+1,&full,2); movement_copy(child.buffer,65535,1);
     movement_copy(parent.buffer,0,0);
+    unsigned char* nested_packet=child.buffer;
     mp_receive_leave(&child);
+    CHECK(nested_packet[0]==0x2C && nested_packet[3]==55);
     CHECK(tagpu_rec_wire_received(parent.buffer)==65535 && parent.buffer[3]==11);
     unsigned short short_span=17; memcpy(parent.buffer+1,&short_span,2);
     movement_copy(parent.buffer,17,1);
@@ -121,8 +135,19 @@ int main(void)
     s_test_main[OFF_NETWORK]=0; s_test_calls=0;
     CHECK(!mp_receive_packet(entry) && !s_test_calls);
     s_test_main[OFF_NETWORK]=1; mp_receive_leave(&parent);
+    CHECK(parent.buffer[0]==0x2C && parent.buffer[3]==11);
+    CHECK(nested_packet[0]==0x2C && nested_packet[3]==55);
     CHECK(!tagpu_rec_wire_received(parent.buffer));
     movement_copy(parent.buffer,0,0);
+    MpReceiveFrame next;
+    CHECK(mp_receive_enter(&next));
+    CHECK(next.buffer==parent.buffer && next.capacity==parent.capacity && !next.bytes);
+    CHECK(next.buffer[3]==11 && !tagpu_rec_wire_received(next.buffer));
+    valid(&next,22,65);
+    CHECK(mp_receive_enter(&child));
+    CHECK(child.buffer==nested_packet && child.capacity==70001 && !child.bytes);
+    CHECK(child.buffer[3]==55);
+    mp_receive_leave(&child); mp_receive_leave(&next);
     s_test_stock[0]=0x2C; memcpy(s_test_stock+1,&full,2);
     movement_copy(s_test_stock,65,1);
     movement_copy(s_test_stock+1,0,0);
@@ -131,8 +156,10 @@ int main(void)
     CHECK(threads[0] && threads[1]);
     CHECK(WaitForMultipleObjects(2,threads,TRUE,30000)==WAIT_OBJECT_0);
     CloseHandle(threads[0]); CloseHandle(threads[1]);
+    CHECK(s_mp_rx_storage.buffer==parent.buffer && s_mp_rx_storage.nested);
+    CHECK(s_mp_rx_storage.nested->buffer==nested_packet && !s_mp_rx_storage.nested->nested);
     DeleteCriticalSection(&s_mp_rx_lock); TlsFree(s_mp_rx_tls); s_mp_rx_tls=TLS_OUT_OF_INDEXES;
     TlsFree(s_wireTlsBuf); TlsFree(s_wireTlsLen);
-    puts("PASS exact production receive core and movement copy: u16 maximum, raw growth, native send independence, nested lifetime/metadata/span, owned and legacy spans, header clamp and padding, stale/interior/closed-frame refusal, invalid size/error/network refusal, 4000 two-thread receives and 200 nested receives");
+    puts("PASS exact production receive core and movement copy: u16 maximum, raw growth, native send independence, nonblocking busy admission consumes nothing, nested lifetime/metadata/span, native aliases survive return, depth storage reused across calls/threads, owned and legacy spans, header clamp and padding, stale/interior/closed-frame refusal, invalid size/error/network refusal, 4000 two-thread receives and 200 nested receives");
     return 0;
 }

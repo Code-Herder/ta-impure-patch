@@ -355,11 +355,21 @@ static void mp_match_log(const char* action, DWORD origin, const GUID* match)
    range before calling it. Raw/system messages use the SDK's size negotiation.
    Native sends continue to use main+0x2A38, so they cannot overwrite this input.
    The pump lock owns the transport's receive cursors and main+0x4C9/0x4CD from
-   receive through dispatch. A recursive call gets a distinct frame and restores
-   its parent's metadata; neither its allocation nor its span escapes the call. */
+   receive through dispatch. A recursive call gets distinct storage and restores
+   its parent's metadata. Storage survives pump return: retail consumers may
+   retain the last packet between receives. The receiver reuses or resizes it
+   only on a subsequent receive at this depth; the retail shared buffer can
+   already be reused or resized by any subsequent receive. Native dispatch
+   retains its own packet mutations. */
 #define MP_RX_BYTES 65536u
+typedef struct MpReceiveStorage {
+    struct MpReceiveStorage* nested;
+    unsigned char* buffer;
+    unsigned capacity;
+} MpReceiveStorage;
 typedef struct MpReceiveFrame {
     struct MpReceiveFrame* previous;
+    MpReceiveStorage* storage;
     char* ta;
     unsigned char* buffer;
     unsigned capacity, bytes, from, to;
@@ -367,6 +377,10 @@ typedef struct MpReceiveFrame {
 _Static_assert(sizeof(MpReceiveFrame)<=127, "receive frame fits the wrapper's stack instruction");
 static DWORD s_mp_rx_tls = TLS_OUT_OF_INDEXES;
 static CRITICAL_SECTION s_mp_rx_lock;
+/* The serialized pump reuses one slot per recursion depth, across threads and
+   levels. Only peak depth grows this process-lifetime chain; entering another
+   frame or ending a level never invalidates the last packet's native aliases. */
+static MpReceiveStorage s_mp_rx_storage;
 
 unsigned tagpu_rec_wire_received(const void* message)
 {
@@ -380,9 +394,24 @@ unsigned tagpu_rec_wire_received(const void* message)
    no-argument pump. All original registers/flags survive each callout. */
 static int __cdecl mp_receive_enter(MpReceiveFrame* frame)
 {
-    EnterCriticalSection(&s_mp_rx_lock);
+    /* A busy pump consumes no SDK message and adds no lock-wait edge to the
+       engine's loading/game-thread locks. Its current owner keeps receiving;
+       the other caller returns the pump's ordinary no-work result. */
+    if (!TryEnterCriticalSection(&s_mp_rx_lock)) return 0;
     memset(frame,0,sizeof *frame);
     frame->previous=TlsGetValue(s_mp_rx_tls);
+    if (frame->previous) {
+        MpReceiveStorage* parent=frame->previous->storage;
+        if (!parent->nested)
+            parent->nested=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof *parent->nested);
+        frame->storage=parent->nested;
+        if (!frame->storage) {
+            LeaveCriticalSection(&s_mp_rx_lock);
+            return 0;
+        }
+    } else frame->storage=&s_mp_rx_storage;
+    frame->buffer=frame->storage->buffer;
+    frame->capacity=frame->storage->capacity;
     frame->ta=ta_main();
     if (frame->ta) {
         memcpy(&frame->from,frame->ta+0x4C9,4);
@@ -398,7 +427,6 @@ static int __cdecl mp_receive_enter(MpReceiveFrame* frame)
 
 static void __cdecl mp_receive_leave(MpReceiveFrame* frame)
 {
-    if (frame->buffer) HeapFree(GetProcessHeap(),0,frame->buffer);
     if (frame->previous && frame->ta) {
         memcpy(frame->ta+0x4C9,&frame->from,4);
         memcpy(frame->ta+0x4CD,&frame->to,4);
@@ -426,6 +454,8 @@ static int __cdecl mp_receive_packet(unsigned* entry)
         frame->buffer=HeapAlloc(GetProcessHeap(),0,MP_RX_BYTES);
         if (!frame->buffer) return 0;
         frame->capacity=MP_RX_BYTES;
+        frame->storage->buffer=frame->buffer;
+        frame->storage->capacity=frame->capacity;
     }
     for (;;) {
         bytes=frame->capacity;
@@ -437,6 +467,7 @@ static int __cdecl mp_receive_packet(unsigned* entry)
         unsigned char* next=HeapReAlloc(GetProcessHeap(),0,frame->buffer,bytes);
         if (!next) return 0;
         frame->buffer=next; frame->capacity=bytes;
+        frame->storage->buffer=next; frame->storage->capacity=bytes;
     }
     if (result!=S_OK || !bytes || bytes>frame->capacity) return 0;
     frame->bytes=bytes;

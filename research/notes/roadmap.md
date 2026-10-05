@@ -4022,16 +4022,20 @@ seek, with zero writer corrections. The reusable saved-evidence reader checks
 these identities/bytes/clocks against every peer's native logs and also passes
 the earlier repeated/full-length file. Loading research confirms a gap between
 stock's state-5 acceptance and the current state-6 wire. The primary pump now
-owns packet storage per call and serializes receive/dispatch metadata, retaining
-independent storage and parent IDs across nested calls. Native sends cannot
+reuses process-lifetime packet storage per recursion depth and serializes
+receive/dispatch metadata through nonblocking admission, retaining
+independent storage and parent IDs across nested calls. A busy caller consumes
+no message; packet aliases survive return. Native sends cannot
 overwrite incoming packets. Exact-core bounds/nesting/concurrency controls pass;
 the three-human COVER run retains seven correct private/public observations
 through C/Python reader seek and closes at tick 709 with zero corrections.
 The raw follow-up also completes with seven exact entries at tick 799, zero
 corrections. Native movement regression testing finds the guarded copy still
 reading the retail TLS; switching it to the shared exact-span API restores
-remote movement in both queued and raw fixtures. Packet-retention and whole-pump wait-cycle
-audits remain open before landing.
+remote movement in both queued and raw fixtures. Exact-core controls verify
+retained aliases, depth-slot reuse and busy admission without an SDK receive.
+Native parser reentrancy, SDK callback/cost behaviour and separate output
+lifetimes are not established by these controls.
 The pre-B2 producer handoff and roster bootstrap still remain, so the wire mask
 and loading guard are unchanged. No multiplayer landing gate is cleared.
 

@@ -295,8 +295,11 @@ reader mode tests engine multiplayer playback or loading-phase delivery.
 the exact production primary receive core, receive-span API and movement copy
 with controlled SDK/statistics boundaries: maximum u16 message, raw buffer
 growth, independent native output,
-nested storage/span/source-destination restoration, error/size refusal and
-two-thread receives, movement header clamping/padding and retail fallback. It
+nested storage/span/source-destination restoration, aliases retained after
+return and depth-slot reuse, error/size refusal and two-thread receives. A busy
+foreign caller must finish without consuming an SDK message while the owner
+holds dispatch. The fixture also checks movement header clamping/padding and
+retail fallback. It
 cleans up its own Wine prefix/display. Use the native menu driver separately
 to exercise the installed entry/call wrapper; these
 controls do not prove loading-chat admission or native raw transport. When the
