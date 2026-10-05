@@ -430,7 +430,7 @@ ninth-slot handoff; arbitrary mod callback demand is not proved bounded by ten.
 | Guarded ten-slot save/load | All ten active records preserved on both probes; automated preflight also reaches native `cob_save` and `cob_load` on the coverage build |
 | Full-pool START / CALL | 16 / 3 assertions pass; refusal retains the documented scheduling behavior |
 | Portable COB regression | 41 tests pass, including high-slot links, old-format bounds and transactional load refusal |
-| Long completed-Moho replay | Ten-slot run: 36 checks pass, including completion, effects, all 14 paused comparisons and three exact restores; only keyboard indices `0x51F48E`/`0x51F492` fail the strict image gate |
+| Long completed-Moho replay before the keyboard-index exclusion | Ten-slot run: 36 checks pass, including completion, effects, all 14 paused comparisons and three exact restores; only keyboard indices `0x51F48E`/`0x51F492` fail the strict image gate |
 
 The diagnostic ARM phase-1 sweep completed 66 of 67 accepted upgrades; its one
 remaining bot was generated near the map's lower border and never moved or reclaimed
@@ -438,6 +438,12 @@ its mex. It did not match the reported post-reclaim failure. Generated starts no
 remain at least 128 world units from the border and record their actual approach;
 the ten-slot ARM rerun completes all 67 accepted upgrades, including that case. This
 corrects the generated test start rather than changing the native pathfinder or upgrade orders.
+
+The owner approved two four-byte keyboard-ring index leave rows on 2026-10-05,
+`0x51F48E` and `0x51F492`, keeping those local input indices with the viewer.
+Builds, upgrades, unit/player state and effects retain their existing comparisons.
+The final combined landing replay gate remains outstanding; the table above records
+the completed focused run before that approved exclusion.
 
 The synthetic fixtures cover the behavior listed above; live inspection additionally verifies
 the resource settings panel, queued resource ghost, frontend hot reload/error recovery and
