@@ -88,7 +88,10 @@ This inventory covers player conveniences. Separate lobby/game-control features,
 simulation fixes and limits remain in their [port groups](overview.md). Inclusion here does not
 override a feature's earlier safety decision: `PreviewObject3D` is parked and the
 [opponent-facing preview](data-keys-evidence.md#4-previewfaceopponent) has unresolved fog and
-commander-identity concerns. Group D has a survey, not an implementation plan.
+commander-identity concerns. Group D has a survey; the first feature's
+[resource-snapping and mod-profile design](resource-snapping.md) is agreed, with implementation
+and live placement verification pending. Its proposed Stock TA default is an Impure choice,
+distinct from the native bundled defaults audited here.
 
 ## Activation evidence for older conveniences
 
