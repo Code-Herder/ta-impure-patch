@@ -24,7 +24,8 @@ static RecMpHeader header(unsigned origin, unsigned sequence, unsigned tick, uns
 static unsigned payload(unsigned kind, unsigned origin, unsigned serial, unsigned char* b)
 {
     unsigned id=origin==11 ? 2 : 4, n=kind==RK_EV_START_NAMED ? 56 :
-        kind==RK_EV_REPLY ? 140 : kind==RK_EV_CREATE ? 28 : 48;
+        kind==RK_EV_REPLY ? 140 : kind==RK_EV_CREATE ? 28 :
+        kind==RK_EV_DEATH ? 340 : kind==RK_EV_DEATH_END ? 4 : 48;
     memset(b,0,n); memcpy(b,&id,4);
     if (kind==RK_EV_START_NAMED) {
         b[4]=4; b[5]=1; memcpy(b+8,&serial,4); memset(b+24,'N',32);
@@ -37,13 +38,21 @@ static unsigned payload(unsigned kind, unsigned origin, unsigned serial, unsigne
         memcpy(b+4,&type,2); b[6]=origin==11 ? 7 : 4; b[7]=serial&3;
         memcpy(b+8,&finished,4); memcpy(b+12,&serial,4);
         memset(b+16,0xA5,8); b[24]=serial%5;
-    } else {
+    } else if (kind==RK_EV_DEATH) {
+        unsigned killer=origin==11 ? 4 : 2, owner=origin==11 ? 8 : 5;
+        memcpy(b+4,&killer,4); b[8]=serial%11; b[9]=serial; b[10]=serial>>8; b[11]=serial&1;
+        memset(b+12,0xA5,REC_UNIT_IMAGE); memcpy(b+12+0x96,&owner,4);
+        owner=11; memcpy(b+12+0xEC,&owner,4); b[12+0xF4]=10;
+        b[12+0xFF]=origin==11 ? 7 : 4;
+        owner=0x10000000u|serial; memcpy(b+12+0x110,&owner,4);
+    } else if (kind==RK_EV_SPRAY) {
         unsigned reverse=serial&1, layer=0xABCD0004; memcpy(b+4,&reverse,4);
         memcpy(b+8,&serial,4); memset(b+12,0xA5,32); memcpy(b+44,&layer,4);
     }
     return n;
 }
-static const unsigned kinds[]={RK_EV_START_NAMED,RK_EV_REPLY,RK_EV_SPRAY,RK_EV_CREATE};
+static const unsigned kinds[]={RK_EV_START_NAMED,RK_EV_REPLY,RK_EV_SPRAY,RK_EV_CREATE,
+                               RK_EV_DEATH,RK_EV_DEATH_END};
 #define KIND_COUNT (sizeof kinds/sizeof *kinds)
 static unsigned batch(unsigned count, unsigned char* b)
 {
@@ -145,10 +154,59 @@ static void codec(void)
         CHECK(tagpu_recmp_roots_get(c,11,&after) && !memcmp(&before,&after,sizeof before));
     }
     VirtualFree(page,0,MEM_RELEASE);
+    bytes=batch(6,original);
+    h=header(11,5,13,RECMP_ROOTS,bytes);
+    CHECK(bytes==692 && tagpu_recmp_roots_put(c,m,&h,original,bytes,103));
+    CHECK(tagpu_recmp_roots_get(c,11,&before) && !memcmp(before.body,original,bytes));
+    for (unsigned control=0;control<17;control++) {
+        RecMpHeader bad=header(11,6,14,RECMP_ROOTS,bytes);
+        memcpy(b,original,bytes);
+        switch (control) {
+        case 0: b[326]=83; break; case 1: b[326]=85; break;
+        case 2: b[340]=1; break; case 3: b[340]=22; break;
+        case 4: b[344]=11; break; case 5: b[347]=2; break;
+        case 6: b[498]=0; break; case 7: b[498]=11; break;
+        case 8: b[498]=5; break; case 9: b[603]=4; break;
+        case 10: b[584]=12; break; case 11: b[592]=11; break;
+        case 12: memset(b+620,0,4); break;
+        case 13: b[678]=3; break; case 14: b[678]=5; break;
+        case 15: b[688]=4; break; case 16: b[684]=0; b[687]=0x80; break;
+        }
+        CHECK(!tagpu_recmp_roots_put(c,m,&bad,b,bytes,104));
+        CHECK(tagpu_recmp_roots_get(c,11,&after) && !memcmp(&before,&after,sizeof before));
+    }
+    page=VirtualAlloc(NULL,8192,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    CHECK(page && VirtualProtect(page+4096,4096,PAGE_NOACCESS,&old));
+    for (unsigned n=0;n<bytes;n++) {
+        RecMpHeader bad=header(11,6,14,RECMP_ROOTS,n); unsigned char* p=page+4096-n;
+        memcpy(p,original,n); CHECK(!tagpu_recmp_roots_put(c,m,&bad,p,n,104));
+        CHECK(tagpu_recmp_roots_get(c,11,&after) && !memcmp(&before,&after,sizeof before));
+    }
+    VirtualFree(page,0,MEM_RELEASE);
+    count=RECMP_ROOTS_COUNT; at=4; memcpy(b,&count,4);
+    for (unsigned i=0;i<count;i++) {
+        RecMpRootsEntry e={RK_EV_DEATH_END,4,i&1,{0},17};
+        memcpy(b+at,&e,sizeof e); at+=sizeof e; memcpy(b+at,&id,4); at+=4;
+    }
+    h=header(11,6,14,RECMP_ROOTS,at); CHECK(count==251 && at==4020 && tagpu_recmp_roots_put(c,m,&h,b,at,104));
+    /* Every kind is length-checked before a field read, including four-byte
+       returns and now-invalid short replies next to a guard page. */
+    page=VirtualAlloc(NULL,8192,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    CHECK(page && VirtualProtect(page+4096,4096,PAGE_NOACCESS,&old));
+    for (unsigned i=0;i<KIND_COUNT;i++) {
+        unsigned char image[RECMP_ROOTS_MAX];
+        const unsigned minimum[]={25,12,48,28,340,4};
+        payload(kinds[i],11,i,image);
+        for (unsigned n=0;n<minimum[i];n++) {
+            unsigned char* p=page+4096-n; memcpy(p,image,n);
+            CHECK(!tagpu_recmp_root_image_valid(kinds[i],p,n));
+        }
+    }
+    VirtualFree(page,0,MEM_RELEASE);
     memset(&after,0xA5,sizeof after); CHECK(!tagpu_recmp_roots_get(c,99,&after));
     for (unsigned i=0;i<sizeof after;i++) CHECK(((unsigned char*)&after)[i]==0xA5);
     tagpu_recmp_roots_end(c); tagpu_recmp_seats_end(m);
-    puts("PASS: mixed roots, future birth tokens, exact constructor/finished/high layer bits, source owner mapping, 51 atomic refusals, all 608 guarded truncations, 167-call maximum and unchanged unknown output");
+    puts("PASS: six root kinds, exact death images/returns and source owner mapping, 68 atomic refusals, 1300 guarded batch truncations, guarded per-kind short spans, 167 replies/251 returns and unchanged unknown output");
 }
 typedef struct { unsigned next, packets, alternating, tick, fail, replies; } Emissions;
 static int emit(void* context, unsigned origin, unsigned tick, const void* body, unsigned bytes)
@@ -206,6 +264,6 @@ static void queues(void)
         CHECK(!tagpu_recmp_roots_queue_push(q,11,10,17,0,RK_EV_REPLY,b,n));
         tagpu_recmp_roots_queue_end(q);
     }
-    puts("PASS: 8392 mixed create/script/reply/spray calls preserve copied bytes/order across actor switches, packet splits, phase/tick and ring wrap; overflow/backwards clock/failed emission latch incomplete");
+    puts("PASS: 8392 mixed create/death/return/script/reply/spray calls preserve copied bytes/order across actor switches, packet splits, phase/tick and ring wrap; overflow/backwards clock/failed emission latch incomplete");
 }
 int main(void) { codec(); queues(); return 0; }

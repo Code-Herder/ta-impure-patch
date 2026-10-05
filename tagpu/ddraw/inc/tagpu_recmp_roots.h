@@ -3,7 +3,7 @@
 
 #include "tagpu_recmp_players.h"
 
-/* One existing create, script, reply or spray image follows this prefix. The source's
+/* One existing create, death, death-end, script, reply or spray image follows this prefix. The source's
    incarnation and capture phase survive an arrival on another peer's clock.
    A birth is a monotonic slot token: repeated creates within one tick can put
    it ahead of GameTime (tagpu_patches.c:hit_next_birth). */
@@ -15,8 +15,8 @@ typedef struct {
 } RecMpRootsEntry;
 #pragma pack(pop)
 _Static_assert(sizeof(RecMpRootsEntry)==12, "owned root prefix");
-#define RECMP_ROOTS_MIN 12u
-#define RECMP_ROOTS_MAX (12u+REC_TEXT_MAX)
+#define RECMP_ROOTS_MIN 4u
+#define RECMP_ROOTS_MAX (12u+REC_UNIT_IMAGE)
 #define RECMP_ROOT_REPLY_KINDS 24u
 #define RECMP_ROOT_LAYERS 10
 #define RECMP_ROOTS_COUNT ((RECMP_BODY_MAX-4u)/(sizeof(RecMpRootsEntry)+RECMP_ROOTS_MIN))
@@ -28,8 +28,8 @@ typedef struct {
 } RecMpRootsState;
 typedef struct RecMpRoots RecMpRoots;
 
-/* Copied roots only: shared global unit IDs need no mapping. A create's source
-   owner row is validated against the source roster and retained unchanged. A
+/* Copied roots only: shared global unit IDs need no mapping. Create/death source
+   owner rows are validated against the source roster and retained unchanged. A
    complete batch validates before publication. These last-batch queries support
    inspection; the file retains every batch in its ordered application ledger. */
 RecMpRoots* tagpu_recmp_roots_begin(const RecMpRoster* roster);

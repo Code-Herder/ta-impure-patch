@@ -25,6 +25,7 @@ int tagpu_recmp_root_image_valid(unsigned kind, const void* image, unsigned byte
         if (bytes<25 || bytes>24+REC_NAME_MAX || b[4]>4 || b[5]>1 || b[6] || b[7]) return 0;
         at=24;
     } else if (kind==RK_EV_REPLY) {
+        if (bytes<12 || bytes>12+REC_TEXT_MAX) return 0;
         memcpy(&value,b+4,4);
         if (value>=RECMP_ROOT_REPLY_KINDS || b[8]>1 || b[9]>1 || b[10] || b[11] ||
             (!b[9] && bytes!=12)) return 0;
@@ -34,6 +35,10 @@ int tagpu_recmp_root_image_valid(unsigned kind, const void* image, unsigned byte
         if (bytes!=48) return 0;
         memcpy(&value,b+4,4); memcpy(&layer,b+44,2);
         return value<=1 && layer>=0 && layer<RECMP_ROOT_LAYERS;
+    } else if (kind==RK_EV_DEATH) {
+        return bytes==12+REC_UNIT_IMAGE && b[8]<=REC_PLAYERS && b[11]<=1;
+    } else if (kind==RK_EV_DEATH_END) {
+        return bytes==4;
     } else return 0;
     for (;at<bytes;at++) if (!b[at]) return 0;
     return 1;
@@ -98,6 +103,17 @@ int tagpu_recmp_roots_put(RecMpRoots* c, const RecMpSeatMaps* maps,
         /* The payload keeps the source's player row. Its bounded row must map
            to this origin's frozen destination seat before the batch publishes. */
         if (e.kind==RK_EV_CREATE && permutation[b[at+6]]!=actor->seat) return 0;
+        if (e.kind==RK_EV_DEATH) {
+            unsigned killer, owner, store, state;
+            const unsigned char* image=b+at+12;
+            memcpy(&killer,b+at+4,4); memcpy(&owner,image+0x96,4);
+            memcpy(&store,image+0xEC,4);
+            memcpy(&state,image+0x110,4);
+            if ((killer && (killer<2 || killer>c->roster.slots)) ||
+                !owner || owner>REC_PLAYERS || permutation[owner-1]!=actor->seat ||
+                image[0xFF]!=owner-1 || image[0xF4]>REC_PLAYERS || store>REC_PLAYERS+1 ||
+                !(state&0x10000000u)) return 0;
+        }
         at+=e.bytes;
     }
     if (at!=bytes) return 0;

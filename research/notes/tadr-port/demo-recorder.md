@@ -451,7 +451,11 @@ evidence, and keep remaining gaps visible.
    by each machine at every death, can differ from the owner's for good, and nothing replicates
    them.
    Whether owners also send corrections for their own units, and at what bandwidth, is decided in
-   the multiplayer slice with measurements.
+   the multiplayer slice with measurements. Its [constructor-arrival audit](demo-recorder-multiplayer-slice.md#constructor-and-replica-arrival-causality)
+   also finds two later owner replies reaching the recorder before their replicas
+   exist. Choosing owner-controlled lifetimes preserves private-root arrival
+   order; keeping the recording peer's delayed lifetimes requires an explicit
+   event-delay policy. That lifetime choice is pending; capture does not decide it.
 8. **Metric definitions** for army value and APM; the
    [exploration](demo-recorder-exploration.md#visibility-communication-and-analysis) holds a
    recommendation.

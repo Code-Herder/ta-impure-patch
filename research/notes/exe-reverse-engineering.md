@@ -1950,6 +1950,28 @@ were checked against pristine disassembly. This supplies a creation dependency;
 it does not choose when an early owner root materializes in a native replay.
 No additional engine patch or field write is installed.
 
+**Owned destructor contributions [DISASSEMBLED, MEASURED 2026-10-05].** The
+existing `0x4866D0` observer now also brackets deaths of bounded frozen local
+human/hosted-AI slots with recording off. Its 340-byte entry payload copies the
+victim/mover image before orders are freed (`0x486D75`), COB is deleted/nulled
+(`0x486D8A`/`0x486D8D`), model state is freed/nulled (`0x486D9E`/`0x486DA3`),
+and the mover is destroyed/freed/nulled (`0x486DB1`/`0x486DB7`/`0x486DBF`).
+The slot type is then cleared at `0x486DC7` and live bit at
+`0x486DCE..0x486DD4`; the return epilogue starts at `0x486E59`, `ret 8` at
+`0x486E60`. The return observer publishes only its saved origin, source tick,
+capture phase, unit ID and exact birth, so it follows no cleared slot or freed
+object. Slot/player bounds and the owning game thread establish the entry's
+destructor lifetime; a pointer probe is unnecessary.
+
+The current four-actor native coverage capture has 22 matched entry/return
+pairs, including 12/5 deaths from the non-recording peer's human/hosted AI.
+All five locally owned primary death payloads equal their mandatory copied
+payloads byte for byte at the same source tick. Both peers reach entry, frame
+allocation/return and copied publication in the matching retained coverage map.
+The complete file still carries its separate observed-world events: it has
+23 primary deaths, so the two namespaces are not interchangeable. These are
+capture facts, not native replay application or complete death-effect authority.
+
 **`0x44FE40(netid)`**, `ret 4`, read and not hooked: −1 is player 10, none (`0x44FE47`,
 `0x44FE9B`); otherwise the first of the ten seats whose controller `+0x73` is nonzero and whose
 `+4` is the netid (`0x44FE5C..0x44FE99`), and 10 when no seat matches. The death's killer is named
@@ -3944,6 +3966,31 @@ bounded owner, slot water and the post-B4 `+0x104`/`+0x108` values into native
 `RK_EV_NET_CREATE`; it adds no byte site or engine field write. The local create
 observer at `0x4861B3` does not see this constructor. Native playback remains
 unfinished; the root is stored for its eventual materializer.
+
+**Native constructor inputs and carried state [DISASSEMBLED, SOURCE-CHECKED
+2026-10-05].** `0x4861D8` masks the owner to a byte, then scales it by
+`0x14B`; it does not bound it to ten records. The nonzero slot from `record+3`
+is scaled by `0x118` at `0x486208..0x48621D`, without a slot-count check.
+The type from `record+1` indexes `main+0x1439B` with stride `0x249` at
+`0x48626F..0x48627F`, without a definition-count check. The player block test
+at `0x486220..0x486227` checks only a nonzero first-slot pointer. An occupied
+slot's nonzero type at `0x486237` calls `Send_UnitDeath(unit,0)` at `0x486244`
+before initialization. A replay caller therefore has to establish the owner,
+slot, type and free-slot invariants before entering this root; the engine does
+not supply those bounds, and a puppet gate refusing the death does not free it.
+
+The mover branch tests definition `+0x22F == 1` at `0x4862CF`; it allocates
+`0x2F` bytes through `0x4B4F10` at `0x4862DA`, constructs through
+`0x43DC00(unit)` at `0x4862E9`, stores `unit+0`, and copies definition `+0x210`
+to unit `+0x66` at `0x4862FA..0x486301`. In B4's `hit_created`, only the
+recognized carried-create return applies `kill_apply_state` before publishing
+the exact birth and invoking the recorder. Its carried record uses birth at
+`+23`, build fraction at `+27`, HP at `+31` and presence at `+33`. That helper
+accepts only presence 1 and fraction 0..1, clears model-object `+0x10`, writes
+unit `+0x108`, and, on a changed fraction, writes `+0x104` and sets state bit 13.
+It calls no build-completion function. Calling the local constructor with
+finished nonzero is therefore a different path from this unfinished native
+constructor followed by carried state. No native playback root is enabled here.
 
 **The dispatcher's switch and gate.** The jump table `0x455F84` is indexed by `code − 2`
 (`0x454861`): `0x05` at `0x455F90` (→ `0x45522E`), `0x09` at `0x455FA0` (→ `0x4553DA`), `0x0B` at

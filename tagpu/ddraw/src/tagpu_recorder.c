@@ -296,9 +296,12 @@ static Level s_mp_level;
 static DWORD s_mp_tid;
 static unsigned s_mp_tick, s_mp_roots_failed;
 static unsigned char s_mp_roots_seen[RECMP_ACTORS];
+typedef struct { unsigned origin, tick, birth, before_capture; } MpRootRef;
 static void mp_roots_end(void);
 static int mp_roots_flush(unsigned through);
 static void mp_roots_push(const char* unit, unsigned kind, const void* image, unsigned bytes);
+static int mp_roots_prepare(const char* unit, MpRootRef* out);
+static void mp_roots_publish(const MpRootRef* ref, unsigned kind, const void* image, unsigned bytes);
 static unsigned mp_roots_unit(const char* unit, unsigned cob, int check_cob);
 static void mp_roots_log(const RecMpPacket* packet, unsigned applied_tick, const char* where);
 static unsigned s_mp_logtick;
@@ -3714,7 +3717,7 @@ static unsigned player_of_netid(const char* ta, unsigned netid)
    the unit's own movement step, so the iteration's image is a step early for the wreck and the
    blast. */
 static int death_room(Rec* r);
-static int death_enter(Rec* r, void* E, unsigned id, unsigned owner);
+static int death_enter(Rec* r, void* E, unsigned id, unsigned owner, const MpRootRef* mp);
 
 #define OFF_SIDES      0x37F39      /* u32: the sides this game loaded; the lobby clamps a side at
                                        or above it (0x447EC0..0x447ECE)                          */
@@ -3755,6 +3758,9 @@ static int is_commander(const Level* L, const char* unit, unsigned owner)
 static int __cdecl ev_death(void* E)
 {
     Rec* r;
+    const Level* L;
+    const char* unit;
+    MpRootRef mp={0};
     const unsigned char* msg = (const unsigned char*)PTR(ARG(E, 4));
     unsigned short slot, ks;
     unsigned id, kid;
@@ -3763,26 +3769,34 @@ static int __cdecl ev_death(void* E)
     /* the destructor's own alive test (0x486706) on a slot bounded first */
     if (cnt_on() && slot && slot < s_cnt.L.nslots && unit_live(&s_cnt.L, slot))
         cnt_add(0x004866D0u, ARG(E, 0), 0);
-    if (!(r = ev_rec())) return 0;
-    if (!slot || slot >= r->L.nslots || !unit_live(&r->L, slot)) return 0;
+    r = ev_rec();
+    if (!r && (!s_mp_tid || GetCurrentThreadId()!=s_mp_tid || !s_mp_channel)) return 0;
+    L = r ? &r->L : &s_mp_level;
+    if (!slot || slot >= L->nslots || !unit_live(L, slot)) return 0;
+    unit = L->begin + (size_t)slot * REC_UNIT_BYTES;
+    mp_roots_prepare(unit, &mp);
+    if (!r && !mp.origin) return 0;
     if (!death_room(r)) return 0;
     memcpy(&ks, msg + 7, 2);
     id = slot + 1u;
-    kid = ks && ks < r->L.nslots ? ks + 1u : 0;
+    kid = ks && ks < L->nslots ? ks + 1u : 0;
     memcpy(b, &id, 4);
     memcpy(b + 4, &kid, 4);
-    b[8] = (unsigned char)player_of_netid(r->L.ta, *(const unsigned*)(msg + 3));
+    b[8] = (unsigned char)player_of_netid(L->ta, *(const unsigned*)(msg + 3));
     b[9] = msg[9];
     b[10] = msg[0xA];
-    b[11] = (unsigned char)tagpu_tx_carried(r->L.begin + (size_t)slot * REC_UNIT_BYTES);
-    unit_image(&r->L, slot, (unsigned*)(b + 12));
-    ev_put(r, RK_EV_DEATH, b, sizeof b);
+    b[11] = (unsigned char)tagpu_tx_carried(unit);
+    /* The bounded victim's mover is still owned by this destructor at its
+       entry. Its free occurs later in this same game-thread call, so the copied
+       image needs no pointer probe. The return uses only the saved identity. */
+    unit_image(L, slot, (unsigned*)(b + 12));
+    if (r) ev_put(r, RK_EV_DEATH, b, sizeof b);
+    if (mp.origin) mp_roots_publish(&mp, RK_EV_DEATH, b, sizeof b);
     {
-        const char* unit = r->L.begin + (size_t)slot * REC_UNIT_BYTES;
-        unsigned owner = owner_index(r->L.ta, *(const char* const*)(unit + U_OWNER));
-        if (owner < REC_PLAYERS && is_commander(&r->L, unit, owner))
-            r->cmdr[owner] = *(const unsigned*)(r->L.ta + OFF_GAMETIME);
-        return death_enter(r, E, id, owner);
+        unsigned owner = owner_index(L->ta, *(const char* const*)(unit + U_OWNER));
+        if (r && owner < REC_PLAYERS && is_commander(L, unit, owner))
+            r->cmdr[owner] = *(const unsigned*)(L->ta + OFF_GAMETIME);
+        return death_enter(r, E, id, owner, &mp);
     }
 }
 
@@ -3971,7 +3985,8 @@ static void mp_roots_log(const RecMpPacket* packet, unsigned applied_tick, const
         memcpy(&e,packet->body+at,sizeof e); at+=sizeof e;
         memcpy(&id,packet->body+at,4);
         bit=e.kind==RK_EV_START_NAMED ? 1 : e.kind==RK_EV_REPLY ? 2 :
-            e.kind==RK_EV_SPRAY ? 4 : 8;
+            e.kind==RK_EV_SPRAY ? 4 : e.kind==RK_EV_CREATE ? 8 :
+            e.kind==RK_EV_DEATH ? 16 : 32;
         if (!(s_mp_roots_seen[row]&bit)) {
             s_mp_roots_seen[row]|=bit;
             tagpu_logf("recmp: %s owned roots ID %u source tick %u seq %u applied tick %u, "
@@ -4026,18 +4041,19 @@ static unsigned mp_roots_unit(const char* unit, unsigned cob, int check_cob)
     return id;
 }
 
-static void mp_roots_push(const char* unit, unsigned kind, const void* image, unsigned bytes)
+static int mp_roots_prepare(const char* unit, MpRootRef* out)
 {
     unsigned id=mp_roots_unit(unit,0,0), owner, origin, row, tick, ctl;
     const char* player;
     const unsigned* birth;
-    if (!id) return;
+    memset(out,0,sizeof *out);
+    if (!id) return 0;
     owner=id_in(*(const char* const*)(unit+U_OWNER),
                 s_mp_level.ta+OFF_PLAYERS,PL_STRIDE,REC_PLAYERS);
     if (owner==REC_ID_BAD || !owner) goto invalid;
     player=s_mp_level.ta+OFF_PLAYERS+(owner-1)*PL_STRIDE;
     ctl=(unsigned char)player[PL_CONTROLLER];
-    if (ctl==3 || ctl==4) return;
+    if (ctl==3 || ctl==4) return 0;
     if (ctl!=1 && ctl!=2) goto invalid;
     memcpy(&origin,player+4,4);
     for (row=0;row<s_mp_roster.count;row++)
@@ -4046,12 +4062,27 @@ static void mp_roots_push(const char* unit, unsigned kind, const void* image, un
         id-1<s_mp_roster.actor[row].first || id-1>s_mp_roster.actor[row].last) goto invalid;
     birth=mp_births(&s_mp_level);
     tick=*(const unsigned*)(s_mp_level.ta+OFF_GAMETIME);
-    if (!birth || (tick!=s_mp_tick && (s_mp_tick==~0u || tick!=s_mp_tick+1)) ||
-        !tagpu_recmp_roots_queue_push(s_mp_roots_queue,origin,tick,birth[id-1],
-                                      tick!=s_mp_tick,kind,image,bytes)) goto invalid;
-    return;
+    if (!birth || birth[id-1]&0x80000000u ||
+        (tick!=s_mp_tick && (s_mp_tick==~0u || tick!=s_mp_tick+1))) goto invalid;
+    *out=(MpRootRef){origin,tick,birth[id-1],tick!=s_mp_tick};
+    return 1;
 invalid:
     s_mp_roots_failed=1;
+    return 0;
+}
+
+/* A destructor's return cannot reread its cleared slot or freed mover. Its
+   game-thread entry saved the bounded source identity and exact incarnation. */
+static void mp_roots_publish(const MpRootRef* ref, unsigned kind, const void* image, unsigned bytes)
+{
+    if (!tagpu_recmp_roots_queue_push(s_mp_roots_queue,ref->origin,ref->tick,ref->birth,
+                                      ref->before_capture,kind,image,bytes)) s_mp_roots_failed=1;
+}
+
+static void mp_roots_push(const char* unit, unsigned kind, const void* image, unsigned bytes)
+{
+    MpRootRef ref;
+    if (mp_roots_prepare(unit,&ref)) mp_roots_publish(&ref,kind,image,bytes);
 }
 
 /* A start of a script by name that only the owner's machine makes: the unit, the start's third
@@ -4232,8 +4263,10 @@ static int __cdecl ev_spray1(void* E) { cnt(0x00472200u, ARG(E, 0), 0); ev_spray
    the cells that changed since the iteration's images: the unit slots the unit tick moved, which
    reproduction reads (0x424189). That is what a replay needs to run the same call to the same
    end (tagpu_replay.c). The depth is a LIFO of the return addresses the observers' `after`
-   restores, pushed only while this thread records: a call that is not recorded pushes nothing
-   and has no `after`, and a recording neither starts nor ends inside a feature call -- it starts
+   restores. Feature calls push only while this thread records; locally owned multiplayer
+   deaths also push while recording is off so their return can close the contributed bracket.
+   A call with neither recording nor contribution pushes nothing and has no `after`.
+   A recording neither starts nor ends inside a feature call -- it starts
    and ends at a capture, at the unit tick's call, or on the teardown's entry, outside every one.
 
    A UNIT'S DEATH is a frame too, from the destructor's entry, where its RK_EV_DEATH is taken, to
@@ -4682,9 +4715,9 @@ static Feat* feat_start(const char* ta, RecRing* g)
    explosion it is a root (*The features*, A UNIT'S DEATH). `id` is a death's unit's ID. */
 #define FR_DEATH       FR_ROOTS
 #define FR_BLAST       (FR_ROOTS + 1)
-typedef struct FFrame { unsigned ret, id; unsigned char root, recorded, owner; } FFrame;
+typedef struct FFrame { unsigned ret, id; unsigned char root, recorded, owner; MpRootRef mp; } FFrame;
 static FFrame   s_fstack[FDEPTH_MAX];
-static unsigned s_fdepth;           /* moved only on the recording's game thread (feat_enter) */
+static unsigned s_fdepth;           /* moved only by game-thread feature/death frames */
 static unsigned char s_fphase;      /* the step's phase (tagpu_rec_phase), on the game thread    */
 
 void __cdecl tagpu_rec_phase(unsigned phase) { s_fphase = (unsigned char)phase; }
@@ -4812,28 +4845,28 @@ static void* __cdecl feat_leave(unsigned* regs)
     return (void*)(size_t)fr->ret;
 }
 
-/* Whether the stack has room for a death's frame, asked before its RK_EV_DEATH goes in, so that no
-   death is published without the bracket that closes it. Without room the next capture ends the
-   recording. */
+/* Reserve the return frame before publishing a death to either recording or
+   contribution storage. Exhaustion makes the applicable capture incomplete. */
 static int death_room(Rec* r)
 {
     if (s_fdepth < FDEPTH_MAX) return 1;
-    r->feat->broken = 1;
+    if (r) r->feat->broken = 1;
+    if (s_mp_tid==GetCurrentThreadId()) s_mp_roots_failed=1;
     return 0;
 }
 
-/* The destructor's entry, once its RK_EV_DEATH is in: the death is a frame, so the feature calls
+/* The destructor's entry, once its RK_EV_DEATH is copied: the death is a frame, so the feature calls
    it makes itself are its own (*The features*, A UNIT'S DEATH). Nothing about the grid is marked
    here: each call it makes marks its own. */
-static int death_enter(Rec* r, void* E, unsigned id, unsigned owner)
+static int death_enter(Rec* r, void* E, unsigned id, unsigned owner, const MpRootRef* mp)
 {
     FFrame* fr = &s_fstack[s_fdepth++];
-    (void)r;
     fr->ret = ARG(E, 0);
     fr->id = id;
     fr->root = FR_DEATH;
-    fr->recorded = 1;
+    fr->recorded = r != NULL;
     fr->owner = (unsigned char)owner;
+    fr->mp = *mp;
     return 1;
 }
 
@@ -4844,12 +4877,13 @@ static void* __cdecl death_leave(unsigned* regs)
     FFrame* fr = &s_fstack[--s_fdepth];
     Rec* r = ev_rec();
     (void)regs;
-    if (r) {
+    if (fr->recorded && r) {
         ev_put(r, RK_EV_DEATH_END, &fr->id, 4);
         if (fr->owner < REC_PLAYERS &&
             !*(const unsigned short*)(r->L.ta + OFF_PLAYERS + (size_t)fr->owner * PL_STRIDE + PL_LIVE))
             r->defeat[fr->owner] = *(const unsigned*)(r->L.ta + OFF_GAMETIME);
     }
+    if (fr->mp.origin) mp_roots_publish(&fr->mp,RK_EV_DEATH_END,&fr->id,4);
     return (void*)(size_t)fr->ret;
 }
 

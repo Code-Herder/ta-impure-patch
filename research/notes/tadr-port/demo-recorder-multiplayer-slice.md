@@ -563,15 +563,18 @@ At tick 151, host statistics show 23 accepted DATA / 3376 bytes / 17 logical rec
 Step 1 is the research gate. The work branch enables observed native capture with the separate authority ledger from step 2. No multiplayer landing is complete: it needs the native fixtures and a checked account of every remote field it carries and applies. Presentation and playback remain required; a partial file must not be presented as a faithful multiplayer replay.
 
 
-### Ordered create, script, reply and spray contributions
+### Ordered owner root contributions
 
-Production wire kind 10 uses one 4,096-slot copied game-thread queue for four
-existing roots: `RK_EV_CREATE`, `RK_EV_START_NAMED`, `RK_EV_REPLY`, `RK_EV_SPRAY`. It preserves
+Production wire kind 10 uses one 4,096-slot copied game-thread queue for six
+existing roots: `RK_EV_CREATE`, `RK_EV_DEATH`, `RK_EV_DEATH_END`,
+`RK_EV_START_NAMED`, `RK_EV_REPLY`, `RK_EV_SPRAY`. It preserves
 mixed call order, including A/B/A actor changes, and packetizes only contiguous
 same-origin, same-source-tick entries. A u32 count precedes packed twelve-byte
 prefixes: u16 kind, u16 payload span, boolean pre-B2 phase, three zero reserved
 bytes and the exact incarnation token. Each existing root payload follows
 unchanged. Up to 167 minimum twelve-byte reply payloads fit a 4,032-byte body.
+Four-byte death returns permit at most 251 entries; each kind checks its own
+payload length before reading any field.
 Script names/arguments retain the legacy bounds; replies have kind <24, boolean
 root/text flags, zero reserved bytes and at most 128 non-NUL text bytes; sprays
 are exactly 48 bytes with a boolean reverse flag and signed low layer word 0..9.
@@ -590,6 +593,20 @@ kind 10 without changing its fields or wire version 2/file formats 5/6; older
 decoders refuse this subtype. It does not enable engine playback or choose the
 application ordering for roots whose units are not yet present on the recorder.
 
+Owner deaths carry the existing 340-byte payload: unit ID, killer unit ID,
+source killer-player row (ten for none), raw severity/kind bytes, carried flag,
+and the complete normalized 328-byte victim/mover image at destructor entry.
+The image's owner ID and owner row must match the source roster and origin's
+frozen block; player indices, killer ID and live bit validate before publication.
+The four-byte return carries the same unit ID and exact birth in its prefix.
+Both recording-on and recording-off owners use the existing `0x4866D0`
+entry/return observer. Entry saves the bounded source identity before the
+destructor clears its slot; return publishes that saved identity without reading
+the freed mover or cleared birth stamp. The entry image is protected by the
+same game-thread destructor lifetime, not a pointer probe. Frame exhaustion or
+queue failure makes capture incomplete. These roots do not yet carry the
+owner-only feature/effect work inside a death or enable native engine playback.
+
 The entire copied batch validates source roster/stream, frozen origin block,
 span, kind, birth/phase and provenance before publication. There is no partial
 cache update. Existing unit/player array bounds and the same game-thread level
@@ -602,21 +619,20 @@ seals. Overflow, backwards source time and failed emission latch incomplete.
 The extra queue replaces the former named-only queue; there are no independent
 per-kind drains that could regroup calls. No new engine patch or field write.
 
-MEASURED 2026-10-05 on the reference setup: `recmp_roots_test.py` passes 51 atomic
-refusals, all 608 guard-page truncations of three/four-kind mixed batches,
-a 167-call maximum,
+MEASURED 2026-10-05 on the reference setup: `recmp_roots_test.py` passes 68 atomic
+refusals, all 1,300 guard-page truncations of three/four/six-kind mixed batches,
+457 guarded per-kind short spans, maximum 167 replies and 251 death returns,
 exact future incarnation tokens, constructor/finished/high layer bits, source
 owner-row authorization and unchanged unknown outputs. Queue controls verify
 8,392 copied mixed calls over phase/tick changes,
 actor switches, packet boundaries and ring wrap; overflow/backwards clock/failed
-emission permanently refuse. Its Python runner's syntax error was reproduced
-and corrected before this execution. `recmp_file_test.py` writes a 3,661-byte
+emission permanently refuse. `recmp_file_test.py` writes a 3,964-byte
 synthetic world/container with 27 application records and seven late proof
 records. C and independent Python preserve three actors' exact ordered
-create/script/reply/spray batches through reading and seeking, including phases, future
+create/death/return/script/reply/spray batches through reading and seeking, including phases, future
 birth tokens and high layer bits. Late source proof changes reply text from OK to
 NO while leaving application authority unchanged; proof-only roots establish no
-applied authority. All five lifecycle controls, 23 header refusals and 87 body
+applied authority. All five lifecycle controls, 23 header refusals and 109 body
 refusals with valid raw seals/cuts pass. `recr_mp_roots` returns the last applied
 copied batch separately from `RecWorld`; the ledger keeps every batch.
 
@@ -993,3 +1009,85 @@ comparisons, inventory, address scans and puppet write checks. Round trips at
 after. This verifies the shared constructor observer with the native channel
 absent; it does not replace the accumulated landing replay gate or native
 engine playback tests.
+
+### Constructor and replica arrival causality
+
+MEASURED 2026-10-05 on the reference setup, an independent audit of the
+1,401,962-byte constructor-contribution recording joins each owner root by
+origin/global slot/exact birth to the recorder's B2 world image at its application
+tick. Of 2,135 calls, 2,073 already have the same live incarnation; 62 target an
+absent slot and none targets a different live birth. Fifty-two absent-slot calls
+are constructors themselves. Eight are kind-3 replies without text preceding
+the corresponding constructor success exit in the source's retained call order.
+Two are later, nonempty kind-5 replies:
+
+| Origin / slot / birth | Owner constructor source / application tick | Reply source / application tick / text | Primary replica-create tick |
+|---|---|---|---|
+| Join human `657375758 / 4522 / 31` | 31 / 75 | 32 / 76 / Reclaiming | 78 |
+| Join AI `657375752 / 12 / 31` | 31 / 76 | 32 / 76 / Reclaiming | 80 |
+
+These two calls are after their owner's successful constructor, in different
+source batches. They cannot be treated as replies produced inside that
+constructor. At their recorded application tick the recorder's replica has not
+been constructed. Across all 70 owner constructors, primary creation minus
+application tick ranges from -1 to 8. For remote births the primary creation
+minus source tick ranges from 43 to 53; this includes differing replica-arrival
+delays and establishes no fixed source-clock offset. The one primary create
+without a streamed owner constructor is the initial join commander, slot 4501,
+birth zero, supplied by its initial full source image.
+
+This is product decision 7: owner-controlled unit lifetimes permit these private
+roots to retain their recorded arrival order; retaining the recording peer's
+delayed replica lifetimes requires an explicitly chosen event-delay policy.
+That lifetime decision is pending. No root is dropped or retimed, no clock
+offset is guessed, and native engine playback remains refused. Death capture
+below is needed under either policy and does not choose it.
+
+### Owner destructor entry and return verification
+
+MEASURED 2026-10-05 on the reference setup: current coverage code runs a native
+*Two Continents* combat/reclaim game, two humans and one hosted AI each,
+1,500-unit actor blocks, host recording on and joiner off. All 24 first
+create/death/return/script/reply/spray observations match source and recipient
+batch bytes, CRC, source tick/sequence, call index, birth and phase. The complete
+2,432,312-byte host file spans GameTimes 1..468 with 468 iterations and zero
+corrections. Its ordered ledger retains 5,994 applications, 2,632 consumed.
+C and independent Python retain the complete application sequence and 36 primary
+replica-create roots through fresh world seek: application bytes 1,546,794,
+1,054 root batches, CRC `5C4F39B4`; primary creates CRC `9B62B4A7`.
+
+The ledger contains 22 matched destructor entry/return pairs with identical
+origin, slot, birth, source tick and capture phase. Host human/AI contribute
+4/1 deaths; join human/AI contribute 12/5, with recording off on that peer.
+All death pairs in this sample are post-B2. A join-human named start at source
+tick 109, sequence 271, unit ID 18/birth 42 is pre-B2; its publisher and recipient
+bytes and phase match. This native sample therefore observes both root phases,
+but does not establish pre-B2 death coverage.
+Across the 3,699 applied owner calls, 2,166 are post-B2 and 1,533 pre-B2.
+All five locally owned primary death payloads match their mandatory entry bytes
+at the same source tick. The observed world has 23 primary deaths versus the
+ledger's 22 owner deaths; these remain separate namespaces, and this capture
+test establishes no rule for reconciling them in a canonical replay world.
+
+The retained DLL/map and bitmaps show 678/549 reached functions. Both peers
+reach `ev_death`, `death_room`, `death_enter`, `death_leave`, `mp_roots_prepare`,
+`mp_roots_publish`, `mp_roots_push`, `mp_roots_log` and `mp_capture`. Root-cache
+code outside the instrumented source set is exercised by its separate fixture;
+no coverage reach is claimed for it. The host ends with 3,362 accepted / 3,368
+completed packets, queue/unread/failure zero, cuts 2/2 and four receipts. The
+joiner later ends with 2,756 / 2,762, queue/failure zero, three unread packets,
+final sources 2/2, cuts 2/2 and four receipts sent. The joiner is on
+`ARMMAIN2.GUI` after host leave, so this verifies a frozen recording cut and
+ordinary exit, not continued migration. Native speed remains 10. All owned
+games/prefixes/display are removed. No engine patch/write, exclusion, tolerance
+or timing mitigation is added; native playback/seek/takeover and the full
+multiplayer landing gates remain open.
+
+The same source passes all 23 coverage `secondary-orders` skirmish checks at
+internal speed 20: live/puppet/restore/fresh seek, event/image comparisons,
+inventory, address scans and puppet writes. Round trips at 391/481/511 poison
+26 tables, leave zero residue and compare exactly before/after. The 39 harness
+logic tests pass with refreshed coverage maps; their initial stale-map failure
+named the new helper and was resolved by building the current coverage map.
+No comparison rule or exclusion changes. This is a verified worktree checkpoint,
+not the accumulated replay landing gate or a multiplayer landing.

@@ -313,14 +313,15 @@ class History:
             if not proof:
                 self.named[origin] = state.copy()
         elif kind == 10:
-            from tarec import RK_EV_CREATE, RK_EV_START_NAMED, RK_EV_REPLY, RK_EV_SPRAY
+            from tarec import (RK_EV_CREATE, RK_EV_START_NAMED, RK_EV_REPLY, RK_EV_SPRAY,
+                               RK_EV_DEATH, RK_EV_DEATH_END)
             source_map = self.source_maps.get(origin)
             if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:
                 raise ValueError("owner roots precede their source roster")
             if not 4 <= len(body) <= 4032:
                 raise ValueError("owner root batch span")
             count = struct.unpack_from("<I", body)[0]
-            if not 1 <= count <= 167:
+            if not 1 <= count <= 251:
                 raise ValueError("owner root batch count")
             previous = self.source_roots.get(origin)
             if previous and (sequence <= previous["sequence"] or tick < previous["source_tick"] or
@@ -332,7 +333,7 @@ class History:
                     raise ValueError("owner root prefix span")
                 root, span, before, reserved, birth = struct.unpack_from("<HHB3sI", body, at)
                 at += 12
-                if not 12 <= span <= 140 or at+span > len(body) or any(reserved) or before > 1 or birth >> 31:
+                if not 4 <= span <= 340 or at+span > len(body) or any(reserved) or before > 1 or birth >> 31:
                     raise ValueError("owner root prefix fields")
                 image = bytes(body[at:at+span])
                 unit = struct.unpack_from("<I", image)[0]
@@ -349,13 +350,27 @@ class History:
                             image[6] or image[7] or b"\0" in image[24:]):
                         raise ValueError("owner script arguments/name")
                 elif root == RK_EV_REPLY:
-                    if (struct.unpack_from("<I", image, 4)[0] >= 24 or image[8] > 1 or image[9] > 1 or
+                    if (not 12 <= span <= 140 or struct.unpack_from("<I", image, 4)[0] >= 24 or image[8] > 1 or image[9] > 1 or
                             image[10] or image[11] or not image[9] and span != 12 or b"\0" in image[12:]):
                         raise ValueError("owner reply kind/flags/text")
                 elif root == RK_EV_SPRAY:
                     if (span != 48 or struct.unpack_from("<I", image, 4)[0] > 1 or
                             not 0 <= struct.unpack_from("<h", image, 44)[0] < 10):
                         raise ValueError("owner spray direction/layer")
+                elif root == RK_EV_DEATH:
+                    if span != 340 or image[8] > 10 or image[11] > 1:
+                        raise ValueError("owner death span/killer/carried")
+                    killer = struct.unpack_from("<I", image, 4)[0]
+                    owner = struct.unpack_from("<I", image, 12+0x96)[0]
+                    store = struct.unpack_from("<I", image, 12+0xEC)[0]
+                    if (killer and not 2 <= killer <= self.roster.slots or not 1 <= owner <= 10 or
+                            source_map["roster"].mapping(self.roster)[owner-1] != actor[1] or
+                            image[12+0xFF] != owner-1 or image[12+0xF4] > 10 or store > 11 or
+                            not struct.unpack_from("<I", image, 12+0x110)[0] & 0x10000000):
+                        raise ValueError("owner death image source row/indices")
+                elif root == RK_EV_DEATH_END:
+                    if span != 4:
+                        raise ValueError("owner death return span")
                 else:
                     raise ValueError("unknown owner root kind")
                 events.append(dict(kind=root, unit=unit, birth=birth, before_capture=before, image=image))

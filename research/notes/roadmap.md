@@ -3963,6 +3963,18 @@ file retains 3,052 applications and 508 root batches through C/Python world seek
 with zero corrections; both peers reach `ev_create`. Engine playback remains
 refused and no multiplayer landing is cleared by this checkpoint.
 
+Owner destructor entry/return capture also runs with recording off. The native
+COVER checkpoint verifies 22 exact birth-token pairs across all four actors,
+including the joiner's human/AI, and five byte-identical local primary death
+images. All 24 first root-kind observations match source and recipient. The
+complete 2,432,312-byte file retains 5,994 applications through C/Python world
+seek with zero corrections; both peers reach the destructor and saved-identity
+publication helpers. Copied-data controls and all 23 skirmish replay checks pass.
+Native engine application is still refused: two later Reclaiming replies reach
+the recorder before its replicas exist, and product decision 7 must choose owner
+unit lifetimes or an explicit delay policy. The other multiplayer gates remain
+required; this checkpoint does not land the slice.
+
 The work branch's tick-based replay harness defaults to internal speed 20 (2x),
 with normal speed selectable and retained for cost and speed/settings UI checks.
 An armed round trip bounds the ordinary due-tick batch before the engine caches

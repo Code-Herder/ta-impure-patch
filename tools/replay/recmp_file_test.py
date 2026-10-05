@@ -151,11 +151,19 @@ def semantic_states(segment):
             unit = 2 if origin == 11 else 4 if origin == 22 else 6
             later = tick == 101 and origin < 55
             variant = (2 if origin == 11 else 1) if later else 0
+            row = 0 if origin == 55 else origin//11-1
+            death_image = bytearray(b"\xA5"*328)
+            struct.pack_into("<I", death_image, 0x96, row+1)
+            struct.pack_into("<I", death_image, 0xEC, 11)
+            death_image[0xF4], death_image[0xFF] = 10, row
+            struct.pack_into("<I", death_image, 0x110, 0x10000000 | origin+variant)
             images = [struct.pack("<IBBBBIIII4s", unit, 1, 0, 0, 0, origin+variant, 0, 0, 0, b"Move"),
                       struct.pack("<IIBBBB2s", unit, 23, 1, 1, 0, 0, b"NO" if later else b"OK"),
                       struct.pack("<III", unit, 1, origin+variant) + b"\xA5"*32 + struct.pack("<I", 0xABCD0004),
                       struct.pack("<IHBBIIiiB3x", unit, 1, 0 if origin == 55 else origin//11-1,
-                                  3, 0x80000001, origin+variant, -0x80000000, 0x7FFFFFFF, 4)]
+                                  3, 0x80000001, origin+variant, -0x80000000, 0x7FFFFFFF, 4),
+                      struct.pack("<IIBBBB", unit, 2, 10, variant, variant+5, variant & 1) + death_image,
+                      struct.pack("<I", unit)]
             if (not roots or (roots["source_tick"], roots["sequence"], roots["applied_tick"]) !=
                     (101 if later else 100 if origin < 55 else 8,
                      (8 if origin == 11 else 7) if later else 5, 101 if later else 100) or
@@ -163,7 +171,7 @@ def semantic_states(segment):
                      for e in roots["events"]] !=
                     [(kind, unit, 17, i & 1, image) for i, (kind, image) in enumerate(zip(
                         (tarec.RK_EV_START_NAMED, tarec.RK_EV_REPLY, tarec.RK_EV_SPRAY,
-                         tarec.RK_EV_CREATE), images))]):
+                         tarec.RK_EV_CREATE, tarec.RK_EV_DEATH, tarec.RK_EV_DEATH_END), images))]):
                 raise RuntimeError("mixed root bytes/order/phase/provenance changed across proof tail")
         if 66 in state.named or 66 in state.roots:
             raise RuntimeError("unknown named roots fabricated")
@@ -233,7 +241,7 @@ def semantic_states(segment):
         raise RuntimeError("proof-only named roots fabricated application authority")
     if history.source_players[66]["image"][0x146] != 2 or history.at(101).players[66]["image"][0x146] != 3:
         raise RuntimeError("mapped application image replaced the raw source baseline")
-    print("typed history: C and Python mapped player/unit/order/script/reply/spray provenance, mixed call order, absence versus unknown, partial-list retention and proof isolation PASS", flush=True)
+    print("typed history: C and Python mapped player/unit/order/create/death/return/script/reply/spray provenance, mixed call order, absence versus unknown, partial-list retention and proof isolation PASS", flush=True)
 
 
 def application_trace(segment, log):
@@ -546,6 +554,28 @@ def run(output, read_file=None, skirmish_file=None, native_file=None):
                 ("proof_roots_reply_kind", 55, 10, 3, 60, "<I", 24, False),
                 ("proof_roots_spray_layer", 55, 10, 3, 126, "<h", 10, False),
                 ("proof_roots_create_owner", 55, 10, 3, 148, "<B", 2, False),
+                ("roots_death_short", 55, 10, 2, 172, "<H", 339, False),
+                ("roots_death_long", 55, 10, 2, 172, "<H", 341, False),
+                ("roots_death_phase", 55, 10, 2, 174, "<B", 2, False),
+                ("roots_death_birth", 55, 10, 2, 178, "<I", 0x80000000, False),
+                ("roots_death_unit", 55, 10, 2, 182, "<I", 8, False),
+                ("roots_death_killer_zero_slot", 55, 10, 2, 186, "<I", 1, False),
+                ("roots_death_killer_bound", 55, 10, 2, 186, "<I", 22, False),
+                ("roots_death_killer_row", 55, 10, 2, 190, "<B", 11, False),
+                ("roots_death_carried", 55, 10, 2, 193, "<B", 2, False),
+                ("roots_death_owner_none", 55, 10, 2, 344, "<I", 0, False),
+                ("roots_death_owner_bound", 55, 10, 2, 344, "<I", 11, False),
+                ("roots_death_owner_row", 55, 10, 2, 344, "<I", 8, False),
+                ("roots_death_store_bound", 55, 10, 2, 430, "<I", 12, False),
+                ("roots_death_attacker_bound", 55, 10, 2, 438, "<B", 11, False),
+                ("roots_death_self_row", 55, 10, 2, 449, "<B", 7, False),
+                ("roots_death_alive", 55, 10, 2, 466, "<I", 0, False),
+                ("roots_death_end_short", 55, 10, 2, 524, "<H", 3, False),
+                ("roots_death_end_long", 55, 10, 2, 524, "<H", 5, False),
+                ("roots_death_end_birth", 55, 10, 2, 530, "<I", 0x80000000, False),
+                ("roots_death_end_unit", 55, 10, 2, 534, "<I", 8, False),
+                ("proof_roots_death_owner", 55, 10, 3, 344, "<I", 8, False),
+                ("proof_roots_death_end_unit", 55, 10, 3, 534, "<I", 8, False),
                 ("order_total", 66, 2, 2, 8, "<H", 4097, False),
                 ("order_first_chunk", 66, 2, 2, 10, "<H", 1, False),
                 ("order_chunk_count", 66, 2, 2, 12, "<H", 46, False),
