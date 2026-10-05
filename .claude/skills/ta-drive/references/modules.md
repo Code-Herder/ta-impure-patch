@@ -168,6 +168,14 @@ and logically corrupted packets/footers. `--read-file <fixture.imprec>` runs the
 reader controls against an existing fixture file. These files do not prove game
 capture, full owner authority, semantic queue seeking or multiplayer playback.
 
+The complete normalized player-image contribution has a bounded-cache fixture:
+`python3 tools/replay/recmp_players_test.py --out /tmp/recmp-players-run`.
+It uses one owned prefix/private display without launching TA. C exercises frozen
+origin/seat/block bounds, complete human/AI images, deltas, source/application
+provenance and guard-page truncations; C and Python independently reconstruct
+the four exact images from a raw contribution journal and refuse corruption or
+a missing tail. It does not test game `.imprec` playback, seek or AI takeover.
+
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
   `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin. **The NAT
   helpers are refused** (`dpnhpast,dpnhupnp=d`): the transport skips a helper that does not load,

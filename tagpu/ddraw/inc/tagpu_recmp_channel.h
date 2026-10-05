@@ -3,7 +3,6 @@
 
 #include "tagpu_recmp_auth.h"
 
-#define RECMP_ACTORS 10u
 typedef struct {
     DWORD origin;
     unsigned local;

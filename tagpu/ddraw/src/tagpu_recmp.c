@@ -176,7 +176,7 @@ static int receive_packet(RecMpChannel* c, RecMpNet* net, DWORD from,
         }
         return 1;
     }
-    if (!p->h.sequence || (p->h.kind != RECMP_RESOURCES && p->h.kind != RECMP_ORDERS &&
+    if (!p->h.sequence || (p->h.kind != RECMP_RESOURCES && p->h.kind != RECMP_ORDERS && p->h.kind != RECMP_PLAYER &&
         p->h.kind != RECMP_SEAL)) goto invalid;
     last = &c->actor[at].last;
     if (p->h.sequence < last->h.sequence) return 1;
@@ -499,7 +499,7 @@ int tagpu_recmp_send_from(RecMpChannel* c, DWORD origin, unsigned kind, unsigned
     if (c->producers_closed || at == c->config.count || !c->config.actor[at].local ||
         bytes > RECMP_BODY_MAX || (bytes && !body) ||
         (c->capture_seen && tick != c->capture_tick) ||
-        (kind != RECMP_RESOURCES && kind != RECMP_ORDERS)) {
+        (kind != RECMP_RESOURCES && kind != RECMP_ORDERS && kind != RECMP_PLAYER)) {
         fail(c, E_INVALIDARG);
         SetEvent(c->wake);
         return 0;

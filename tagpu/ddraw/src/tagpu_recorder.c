@@ -67,6 +67,7 @@
 #include "tagpu_recorder.h"
 #include "tagpu_recmp.h"
 #include "tagpu_recmp_channel.h"
+#include "tagpu_recmp_players.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_replay_layout.h"
@@ -274,8 +275,8 @@ static GUID s_mp_match;
 static DWORD s_mp_host;
 static unsigned char s_mp_match_ready;
 static RecMpChannel* s_mp_channel;
-static RecMpResources s_mp_local[REC_PLAYERS], s_mp_remote[REC_PLAYERS];
-static unsigned char s_mp_local_valid[REC_PLAYERS], s_mp_remote_valid[REC_PLAYERS];
+static RecMpRoster s_mp_roster;
+static RecMpPlayers* s_mp_players;
 static unsigned s_mp_logtick;
 static RecMpOrderCache* s_mp_orders;
 static unsigned char s_mp_order_scratch[ORD_SCRATCH];
@@ -283,6 +284,8 @@ static unsigned char s_mp_orders_seen[REC_PLAYERS];
 static int mp_orders_capture(const Level* L, unsigned tick);
 static int mp_orders_receive(const Level* L, const RecMpPacket* packet, unsigned tick);
 static const unsigned* mp_births(const Level* L);
+static unsigned id_in(const char* p, const char* base, unsigned stride, unsigned n);
+static void player_image(const Level* L, unsigned i, unsigned* img);
 
 static void mp_match_log(const char* action, DWORD origin, const GUID* match)
 {
@@ -495,6 +498,8 @@ static void mp_capture(const Level* L, unsigned tick)
         union { DPSESSIONDESC2 desc; unsigned char bytes[4096]; } session;
         IDirectPlay2A* dp;
         RecMpConfig config = {0};
+        RecMpRoster roster = { .version=1, .slots=L->nslots };
+        unsigned short each;
         DWORD bytes = sizeof session, origin, host = s_mp_host;
         unsigned seat = (unsigned char)L->ta[OFF_CONTROLLED];
         GUID zero = { 0 };
@@ -522,6 +527,8 @@ static void mp_capture(const Level* L, unsigned tick)
         config.net.host = host == origin;
         config.origin = origin;
         config.signer = tagpu_recmp_key();
+        memcpy(&each, L->ta + OFF_EACH, sizeof each);
+        roster.each = each;
         for (i = 0; i < REC_PLAYERS; i++) {
             const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
             unsigned active, ctl = (unsigned char)player[PL_CONTROLLER];
@@ -541,8 +548,24 @@ static void mp_capture(const Level* L, unsigned tick)
             config.actor[config.count].origin = native;
             config.actor[config.count].local = ctl == 1 || ctl == 2;
             config.actor[config.count++].public = public;
+            {
+                unsigned first = id_in(*(const char* const*)(player + 0x67), L->begin,
+                                       REC_UNIT_BYTES, L->nslots);
+                unsigned last = id_in(*(const char* const*)(player + 0x6B), L->begin,
+                                      REC_UNIT_BYTES, L->nslots);
+                if (first == REC_ID_BAD || last == REC_ID_BAD || first <= 1 || last <= 1) {
+                    tagpu_logf("recmp: unbounded unit block for native ID %u: no contributions", native);
+                    return;
+                }
+                roster.actor[roster.count++] = (RecMpSeat){native, i, first-1, last-1};
+            }
             tagpu_logf("recmp: primary-owned key ID %u seat %u controller %u data bytes %u",
                        native, i, ctl, RECMP_PRIMARY_BYTES + (unsigned)sizeof public);
+        }
+        if (!tagpu_recmp_roster_valid(&roster)) {
+            tagpu_logf("recmp: primary seat/unit blocks disagree with %u slots, each %u: no contributions",
+                       roster.slots, roster.each);
+            return;
         }
         bytes = sizeof config.net.address;
         if (!host || IDirectPlay2_GetPlayerAddress(dp, host, config.net.address, &bytes) != DP_OK ||
@@ -551,13 +574,20 @@ static void mp_capture(const Level* L, unsigned tick)
             return;
         }
         config.net.address_bytes = bytes;
-        s_mp_channel = tagpu_recmp_begin(&config);
-        if (!s_mp_channel) { tagpu_logf("recmp: contribution worker could not start"); return; }
+        s_mp_players = tagpu_recmp_players_begin(&roster);
         s_mp_orders = tagpu_recmp_orders_begin(L->nslots);
-        if (!s_mp_orders) {
-            tagpu_recmp_end(s_mp_channel);
-            s_mp_channel = NULL;
-            tagpu_logf("recmp: no bounded order cache: contributions end incomplete");
+        if (!s_mp_players || !s_mp_orders) {
+            tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
+            tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
+            tagpu_logf("recmp: no bounded player/order cache: no contributions");
+            return;
+        }
+        s_mp_roster = roster;
+        s_mp_channel = tagpu_recmp_begin(&config);
+        if (!s_mp_channel) {
+            tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
+            tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
+            tagpu_logf("recmp: contribution worker could not start");
             return;
         }
         tagpu_logf("recmp: contributions begin at tick %u, transport ID %u", tick, origin);
@@ -567,20 +597,28 @@ static void mp_capture(const Level* L, unsigned tick)
     if (!tagpu_recmp_advance(s_mp_channel, tick)) goto incomplete;
     for (i = 0; i < REC_PLAYERS; i++) {
         const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
-        RecMpResources sample;
+        unsigned img[REC_PLAYER_DWORDS], origin;
+        unsigned char body[sizeof(RecMpPlayerDelta)+REC_PLAYER_IMAGE];
+        RecMpHeader header;
+        int bytes;
         unsigned ctl = (unsigned char)player[PL_CONTROLLER];
         if (ctl != 1 && ctl != 2) continue;
-        memcpy(&sample.player, player + 4, 4);
-        memcpy(sample.values, player + 0x8C, sizeof sample.values);
-        if (!s_mp_local_valid[i] || memcmp(&sample, &s_mp_local[i], sizeof sample)) {
-            if (!tagpu_recmp_send_from(s_mp_channel, sample.player, RECMP_RESOURCES, tick,
-                                      &sample, sizeof sample, NULL)) goto incomplete;
-            s_mp_local[i] = sample;
-            s_mp_local_valid[i] = 1;
-        }
+        memcpy(&origin, player + 4, sizeof origin);
+        player_image(L, i, img);
+        bytes = tagpu_recmp_players_delta(s_mp_players, origin, ctl, img, body, sizeof body);
+        if (bytes < 0) goto incomplete;
+        if (!bytes) continue;
+        /* The accepted source envelope is the baseline's publication point.
+           An unsent delta cannot suppress a later capture of those bytes. */
+        if (!tagpu_recmp_send_from(s_mp_channel, origin, RECMP_PLAYER, tick, body, bytes, &header) ||
+            !tagpu_recmp_players_put(s_mp_players, &header, body, bytes, tick)) goto incomplete;
+        if (((const RecMpPlayerDelta*)body)->full)
+            tagpu_logf("recmp: local player image ID %u seat %u controller %u, source tick %u seq %u, "
+                       "%u image bytes crc %08X", origin, i, ctl, tick, header.sequence,
+                       REC_PLAYER_IMAGE, (unsigned)Crc32_ComputeBuf(0,img,sizeof img));
     }
     while ((taken = tagpu_recmp_take_at(s_mp_channel, &packet, tick)) > 0) {
-        RecMpResources sample;
+        RecMpPlayerState before, state;
         if (packet.h.kind == RECMP_SEAL) {
             if (!tagpu_recmp_orders_idle(s_mp_orders, packet.h.origin)) goto incomplete;
             continue;
@@ -589,28 +627,24 @@ static void mp_capture(const Level* L, unsigned tick)
             if (!mp_orders_receive(L, &packet, tick)) goto incomplete;
             continue;
         }
-        if (packet.h.kind != RECMP_RESOURCES || packet.h.bytes != sizeof packet.h + sizeof sample)
-            goto incomplete;
-        memcpy(&sample, packet.body, sizeof sample);
-        /* Hosted AIs have their own primary native IDs. The private worker verifies
-           that origin against its native-owned key, then freezes the actual private
-           sender/session/stream binding before publishing data. */
-        if (sample.player != packet.h.origin) goto incomplete;
-        for (i = 0; i < REC_PLAYERS; i++) {
-            const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
-            unsigned id;
-            memcpy(&id, player + 4, 4);
-            if (id != sample.player || (unsigned char)player[PL_CONTROLLER] != 3) continue;
-            if (!s_mp_remote_valid[i]) {
-                float values[8];
-                memcpy(values, sample.values, sizeof values);
-                tagpu_logf("recmp: remote resources ID %u -> seat %u, source tick %u seq %u, "
-                           "energy=%g production=%g metal=%g production=%g", id, i,
-                           packet.h.tick, packet.h.sequence, values[0], values[1], values[3], values[4]);
+        if (packet.h.kind != RECMP_PLAYER) goto incomplete;
+        for (i = 0; i < s_mp_roster.count; i++) if (s_mp_roster.actor[i].origin == packet.h.origin) break;
+        if (i == s_mp_roster.count) goto incomplete;
+        {
+            unsigned seat = s_mp_roster.actor[i].seat, origin;
+            const char* player = L->ta + OFF_PLAYERS + seat * PL_STRIDE;
+            int valid = tagpu_recmp_players_get(s_mp_players, packet.h.origin, &before);
+            memcpy(&origin, player + 4, sizeof origin);
+            if (origin != packet.h.origin || (unsigned char)player[PL_CONTROLLER] != 3 ||
+                !tagpu_recmp_players_put(s_mp_players, &packet.h, packet.body,
+                                         packet.h.bytes-sizeof packet.h, tick)) goto incomplete;
+            if (!valid) {
+                tagpu_recmp_players_get(s_mp_players, packet.h.origin, &state);
+                tagpu_logf("recmp: remote player image ID %u -> seat %u owner controller %u, "
+                           "source tick %u seq %u, applied tick %u, %u image bytes crc %08X", origin,
+                           seat, state.controller, state.source_tick, state.sequence, tick,
+                           REC_PLAYER_IMAGE, (unsigned)Crc32_ComputeBuf(0,state.image,sizeof state.image));
             }
-            s_mp_remote[i] = sample;
-            s_mp_remote_valid[i] = 1;
-            break;
         }
     }
     if (taken < 0) {
@@ -633,6 +667,8 @@ incomplete:
     tagpu_recmp_abort(s_mp_channel, E_ABORT);
     tagpu_recmp_end(s_mp_channel);
     s_mp_channel = NULL;
+    tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
+    tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
 }
 
 /* a row's ID: one more than its index, so NULL's ID is 0 (tagpu_recfmt.h) */
@@ -2033,25 +2069,24 @@ static int mp_orders_receive(const Level* L, const RecMpPacket* packet, unsigned
     unsigned i, bytes = packet->h.bytes - sizeof packet->h;
     if (bytes < sizeof chunk) return 0;
     memcpy(&chunk, packet->body, sizeof chunk);
-    for (i = 0; i < REC_PLAYERS; i++) {
-        const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
-        unsigned origin, first, last;
+    for (i = 0; i < s_mp_roster.count; i++) {
+        const RecMpSeat* seat = &s_mp_roster.actor[i];
+        const char* player = L->ta + OFF_PLAYERS + seat->seat * PL_STRIDE;
+        unsigned origin;
         int result;
         memcpy(&origin, player + 4, sizeof origin);
-        if (origin != packet->h.origin) continue;
+        if (seat->origin != packet->h.origin) continue;
+        if (origin != seat->origin) return 0;
         if ((unsigned char)player[PL_CONTROLLER] == 1 ||
             (unsigned char)player[PL_CONTROLLER] == 2) return 1;
         if ((unsigned char)player[PL_CONTROLLER] != 3) continue;
-        /* DISASSEMBLED: each player owns its inclusive +0x67/+0x6B block. Normalize
-           both ends against the level allocation before authorizing even a dead slot;
-           its stock create and its private queue may arrive in either order. */
-        first = id_in(*(const char* const*)(player + 0x67), L->begin, REC_UNIT_BYTES, L->nslots);
-        last = id_in(*(const char* const*)(player + 0x6B), L->begin, REC_UNIT_BYTES, L->nslots);
-        if (!first || first == REC_ID_BAD || !last || last == REC_ID_BAD || first > last ||
-            chunk.slot + 1u < first || chunk.slot + 1u > last ||
+        /* DISASSEMBLED: 0x4858A6..0x4858E0 assigns inclusive fixed blocks by
+           native-ID rank. Bootstrap bounds and freezes them before use; a queue
+           may precede its stock create, so the recycled slot is not authority. */
+        if (chunk.slot < seat->first || chunk.slot > seat->last ||
             (chunk.birth & 0x80000000u)) {
             tagpu_logf("recmp: remote order authorization refused: ID %u slot %u, "
-                       "block IDs %u..%u birth %08X", origin, chunk.slot, first, last, chunk.birth);
+                       "block slots %u..%u birth %08X", origin, chunk.slot, seat->first, seat->last, chunk.birth);
             return 0;
         }
         result = tagpu_recmp_orders_put(s_mp_orders, &packet->h, packet->body, bytes, tick);
@@ -2065,11 +2100,11 @@ static int mp_orders_receive(const Level* L, const RecMpPacket* packet, unsigned
                        chunk.first, chunk.total, chunk.count, state.source_tick, state.sequence);
             return 0;
         }
-        if (result && chunk.total && !(s_mp_orders_seen[i] & (1u << chunk.list))) {
+        if (result && chunk.total && !(s_mp_orders_seen[seat->seat] & (1u << chunk.list))) {
             tagpu_logf("recmp: remote orders ID %u -> seat %u, slot %u birth %u, "
-                       "source tick %u seq %u, applied tick %u, list %u nodes %u", origin, i, chunk.slot,
+                       "source tick %u seq %u, applied tick %u, list %u nodes %u", origin, seat->seat, chunk.slot,
                        chunk.birth, packet->h.tick, packet->h.sequence, tick, chunk.list, chunk.total);
-            s_mp_orders_seen[i] |= 1u << chunk.list;
+            s_mp_orders_seen[seat->seat] |= 1u << chunk.list;
         }
         return 1;
     }
@@ -5354,9 +5389,10 @@ void tagpu_rec_level_end(void)
     s_mp_channel = NULL;
     tagpu_recmp_orders_end(s_mp_orders);
     s_mp_orders = NULL;
+    tagpu_recmp_players_end(s_mp_players);
+    s_mp_players = NULL;
+    memset(&s_mp_roster, 0, sizeof s_mp_roster);
     s_mp_tried = 0;
-    memset(s_mp_local_valid, 0, sizeof s_mp_local_valid);
-    memset(s_mp_remote_valid, 0, sizeof s_mp_remote_valid);
     memset(s_mp_orders_seen, 0, sizeof s_mp_orders_seen);
     /* a timed dump does not outlive its level, whose GameTime the next level starts again; an
        untimed one is taken at the next level's first capture point */
