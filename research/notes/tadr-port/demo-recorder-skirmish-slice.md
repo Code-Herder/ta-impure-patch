@@ -2,6 +2,10 @@
 
 ## Status
 
+The multiplayer work branch now writes/reads format 5, adding an optional contribution
+container and cut footer. Its game recorder still starts only in skirmish mode; the
+multiplayer container and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
+
 The [product page](demo-recorder.md#milestones-and-delivery-order)'s second milestone, planned
 2026-09-29: recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser
 and `tacli` automation, with the verification the

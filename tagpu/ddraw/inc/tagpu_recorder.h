@@ -8,6 +8,7 @@
 
 #include <windows.h>
 #include "tagpu_recfile.h"
+#include "tagpu_recmp_file.h"
 
 /* Game-thread VM allocation with a stable START/CALL counter key. */
 int tagpu_rec_cob_child(char* cob, unsigned script, int call);
@@ -170,6 +171,8 @@ typedef struct RecRing {
                                           Islands, 21 MB)                                      */
     RecFork        fork;               /* a fork's file and append point; fork.file NULL for an
                                           ordinary recording, which creates its own file       */
+    RecMpFile*     mp;                 /* copied contribution context, set before writer start;
+                                          producer end precedes the final ring publication     */
 } RecRing;
 
 /* Starts the writer thread on a ring whose first record is RK_HEADER. From then on the writer

@@ -127,6 +127,10 @@ typedef struct Writer {
     unsigned       end_reason, bad_ids, ring_high, off_thread, uncredited, unobserved;
     unsigned char  seats[4 + 12 * REC_PLAYERS];   /* RK_END's game end and RT_SEAT_ENDs   */
     unsigned long long raw, packed;   /* the stream's bytes, before and after deflate */
+    RecMpFileState mp;
+    RecMpRecordEnd mp_end;
+    Buf            contributions;
+    unsigned       mp_in;
 } Writer;
 
 /* ---- buffers -------------------------------------------------------------------------------- */
@@ -354,13 +358,22 @@ static void delta_apply(unsigned* img, const unsigned char* bits, unsigned dword
 
 static int header_apply(Writer* w, const unsigned char* b, unsigned len)
 {
-    unsigned at = 0;
+    unsigned at = 0, mode = 0;
     while (at + 4 <= len) {
         unsigned short tag, n;
         memcpy(&tag, b + at, 2);
         memcpy(&n, b + at + 2, 2);
         if (at + 4 + n > len) return 0;
         if (tag == RT_SLOTS && n == 4) memcpy(&w->nslots, b + at + 4, 4);
+        if (tag == RT_MODE && n == 4) memcpy(&mode, b + at + 4, 4);
+        if (tag == RT_MULTIPLAYER) {
+            RecMpRecordHeader h;
+            const RecMpRecordHeader* own = tagpu_recmp_file_header(w->ring->mp);
+            if (w->mp_in || n != sizeof h || !own) return 0;
+            memcpy(&h, b + at + 4, sizeof h);
+            if (memcmp(&h, own, sizeof h) || !tagpu_recmp_file_state(&w->mp, &h)) return 0;
+            w->mp_in = 1;
+        }
         if (tag == RT_PLAYER && n >= 2 && b[at + 4] < REC_PLAYERS) w->ctl[b[at + 4]] = b[at + 5];
         if (tag == RT_OPTIONS && n == 20) {
             w->view[0] = b[at + 4 + 18];
@@ -389,7 +402,8 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         }
         at += (4 + n + 3) & ~3u;
     }
-    if (w->nslots < 2 || w->nslots > 0xFFFF || !w->gw || w->gw > 0xFFFF || !w->gh ||
+    if ((mode == 3) != !!w->mp_in || !!w->ring->mp != !!w->mp_in ||
+        w->nslots < 2 || w->nslots > 0xFFFF || !w->gw || w->gw > 0xFFFF || !w->gh ||
         w->gh > 0xFFFF || !w->npool || w->npool > 0x8000 || !w->ncap || w->ncap > 0xFFFF)
         return 0;
     w->units = (unsigned char*)VirtualAlloc(NULL, (size_t)w->nslots * REC_UNIT_IMAGE,
@@ -888,7 +902,7 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
     case RK_CELLS:
         if (len < 8 || !w->grid) return 0;
         memcpy(h, b, 8);
-        if (!h[2] || h[2] > REC_CELLS_MAX || h[3] || len != 8 + h[2] * REC_CELL_BYTES ||
+        if (!h[2] || h[2] > REC_CELLS_MAX || h[3] || len != 8u + h[2] * REC_CELL_BYTES ||
             h[0] + h[2] > w->gw || h[1] >= w->gh)
             return 0;
         if (open && w->fbracket != FR_TICK + 1) return 0;
@@ -1191,6 +1205,68 @@ static void tlv(Buf* b, unsigned tag, const void* p, unsigned n)
 
 static void tlv_u32(Buf* b, unsigned tag, unsigned v) { tlv(b, tag, &v, 4); }
 
+static void contributions_flush(Writer* w)
+{
+    if (!w->contributions.n || w->dead) return;
+    block(w, RB_CONTRIBUTIONS, 0, 0,
+          w->contributions.p, w->contributions.n, 1);
+    w->contributions.n = 0;
+}
+
+static void contribution(Writer* w, const RecMpRecorded* record)
+{
+    if (!tagpu_recmp_file_record(&w->mp, &record->where, &record->packet.h,
+        record->packet.body, record->packet.h.bytes - sizeof record->packet.h)) {
+        fail(w, "malformed contribution journal or proof tail");
+        return;
+    }
+    buf_put(&w->contributions, &record->where, sizeof record->where);
+    buf_put(&w->contributions, &record->packet, record->packet.h.bytes);
+    if (w->contributions.oom) fail(w, "no memory for contribution block");
+    else if (w->contributions.n >= STREAM_BYTES) contributions_flush(w);
+}
+
+static void contributions_poll(Writer* w)
+{
+    RecMpRecorded record;
+    unsigned count = 0;
+    int taken = 0;
+    if (!w->mp_in || w->dead) return;
+    while (!w->dead && count++ < 512 && (taken = tagpu_recmp_record_take(
+        tagpu_recmp_file_journal(w->ring->mp), &record)) > 0) contribution(w, &record);
+    if (w->dead) return;
+    if (count <= 512 && taken < 0) fail(w, "local contribution journal failed");
+}
+
+/* The game has published its final ring record. Only owned copied data survives;
+   the channel's sole receive consumer transfers at its producer's end publication. */
+static void contributions_finish(Writer* w)
+{
+    RecMpFile* f = w->ring->mp;
+    if (!f) return;
+    while (!tagpu_recmp_file_ended(f)) WaitForSingleObject(w->ring->wake, REC_WRITER_POLL_MS);
+    if (!w->mp_in || tagpu_recmp_file_ended(f) != 1) {
+        if (!w->dead) fail(w, "local multiplayer recording stopped before channel hand-over");
+        return;
+    }
+    while (!w->dead) {
+        RecMpRecorded record = {0};
+        int taken, complete;
+        contributions_poll(w);
+        if (w->dead) break;
+        if (!tagpu_recmp_record_done(tagpu_recmp_file_journal(f))) continue;
+        record.where.phase = RECMP_RECORD_PROOF;
+        while ((taken = tagpu_recmp_file_proof(f, &record.packet)) > 0 && !w->dead)
+            contribution(w, &record);
+        if (w->dead) break;
+        if (taken < 0) { fail(w, "multiplayer channel failed before file completion"); break; }
+        complete = tagpu_recmp_file_complete(f, &w->mp, &w->mp_end);
+        if (complete < 0) { fail(w, "persisted contribution prefixes do not cover application cuts"); break; }
+        if (complete) { contributions_flush(w); break; }
+        WaitForSingleObject(w->ring->wake, REC_WRITER_POLL_MS);
+    }
+}
+
 static void finish(Writer* w)
 {
     Buf e = { 0 };
@@ -1226,6 +1302,7 @@ static void finish(Writer* w)
         for (i = 0; i < REC_PLAYERS; i++)
             if (w->seats[4 + 12 * i + 1] != REC_RESULT_NONE)
                 tlv(&e, RT_SEAT_END, w->seats + 4 + 12 * i, 12);
+        if (w->mp_in) tlv(&e, RT_MP_END, &w->mp_end, sizeof w->mp_end);
         if (e.oom) fail(w, "no memory for the end block");
         else block(w, RB_END, w->tick, w->tick, e.p, e.n, 0);
     }
@@ -1242,6 +1319,7 @@ static void finish(Writer* w)
     free(e.p);
     free(w->stream.p);
     free(w->snap.p);
+    free(w->contributions.p);
     for (i = 0; i < w->ntab; i++) free(w->tab[i].img);
     if (w->units) VirtualFree(w->units, 0, MEM_RELEASE);
     for (i = 0; w->lists && i < w->nslots * 2; i++) free(w->lists[i].img);
@@ -1315,15 +1393,21 @@ static DWORD WINAPI writer_main(void* arg)
             }
         }
         InterlockedExchange(&g->rpub, (LONG)r);
+        if (w) contributions_poll(w);
         stop = InterlockedCompareExchange(&g->ended, 0, 0) &&
                wp == (unsigned)InterlockedCompareExchange(&g->wend, 0, 0);
     }
     /* the hand-over (tagpu_recorder.h): the capture's last access to the ring is behind us */
     if (w) {
+        contributions_finish(w);
         finish(w);
         if (w->append && !recfile_request(w->path, REC_FILE_COMPACT, g->fork.id, NULL, NULL))
             tagpu_logf("replay: forks %s: compaction skipped: worker unavailable", w->path);
         free(w);
+    }
+    if (g->mp) {
+        while (!tagpu_recmp_file_ended(g->mp)) WaitForSingleObject(g->wake, REC_WRITER_POLL_MS);
+        tagpu_recmp_file_free(g->mp);
     }
     VirtualFree(g->buf, 0, MEM_RELEASE);
     if (g->grid) VirtualFree(g->grid, 0, MEM_RELEASE);     /* the copy's grid, when it took it */

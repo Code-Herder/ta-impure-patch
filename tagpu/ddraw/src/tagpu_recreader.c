@@ -277,6 +277,18 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         case RT_FORMAT:        if (n == 4) { h->format = u32(p); seen |= 1; } break;
         case RT_BUILD:         text(h->build, sizeof h->build, p, n); break;
         case RT_MODE:          if (n == 4) { h->mode = u32(p); seen |= 2; } break;
+        case RT_MULTIPLAYER: {
+            RecMpFileState state;
+            if (h->has_mp || n != sizeof h->mp) {
+                snprintf(why, cap, "malformed multiplayer roster"); return 0;
+            }
+            memcpy(&h->mp, p, sizeof h->mp);
+            if (!tagpu_recmp_file_state(&state, &h->mp)) {
+                snprintf(why, cap, "invalid multiplayer roster"); return 0;
+            }
+            h->has_mp = 1;
+            break;
+        }
         case RT_MAP:           text(h->map, sizeof h->map, p, n); break;
         case RT_WALLCLOCK:     if (n == 8) memcpy(&h->wallclock, p, 8); break;
         case RT_START:         if (n == 4) h->start = u32(p); break;
@@ -399,6 +411,9 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         snprintf(why, cap, "a header without its format, mode, slots, features or projectile "
                  "pool");
         return 0;
+    }
+    if ((h->mode == 3) != !!h->has_mp) {
+        snprintf(why, cap, "network mode and contribution roster disagree"); return 0;
     }
     /* a projectile record's index is a u16 (RK_PROJ) */
     if (!h->proj_cap || h->proj_cap > 0xFFFF) {
@@ -1169,6 +1184,7 @@ static unsigned seg_index(const RecReader* r, unsigned id)
    -1 (why). */
 static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
 {
+    RecMpFileState mp = {0};
     RecSeg* sg = (RecSeg*)calloc(RECR_TIMELINES, sizeof *sg);
     RecIndexEntry* ix = NULL;
     unsigned nix = 0, room = 0, ns = 0, i, j;
@@ -1285,11 +1301,30 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
             s->t.header_off = off;
             s->t.first_off = s->t.end_off = off + sizeof b + b.packed;
             s->i0 = nix;
+            if (s->h->has_mp && !tagpu_recmp_file_state(&mp, &s->h->mp)) {
+                snprintf(why, cap, "invalid contribution roster"); goto done;
+            }
             after_end = 0;
             off = s->t.first_off;
             continue;
         }
         s = &sg[ns - 1];
+        if (s->h->mode == 3 && !s->h->has_mp) {
+            snprintf(why, cap, "network recording has no contribution roster"); goto done;
+        }
+        if (b.kind == RB_CONTRIBUTIONS) {
+            k = body_get(r, off, &b, &p, &n, why, cap);
+            if (k == BLK_UNREADABLE) goto done;
+            if (k == BLK_TORN) {
+                if (failed_block(r, off, off + sizeof b + b.packed, size, tail, why, cap) < 0)
+                    goto done;
+                break;
+            }
+            if (!s->h->has_mp || !tagpu_recmp_file_block(&mp, p, (unsigned)n)) {
+                free(p); snprintf(why, cap, "invalid contribution block at byte %llu", off); goto done;
+            }
+            free(p);
+        }
         if (b.kind == RB_HEADER) {
             snprintf(why, cap, "a header block at byte %llu inside timeline %u", off, s->t.id);
             goto done;
@@ -1303,6 +1338,25 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
                 break;
             }
             s->t.end_reason = entry_u32(p, n, RT_END_REASON);
+            {
+                unsigned at = 0, found = 0;
+                while (at + 4 <= n) {
+                    unsigned short tag, len;
+                    memcpy(&tag, p + at, 2); memcpy(&len, p + at + 2, 2);
+                    if (len > n - at - 4) break;
+                    if (tag == RT_MP_END) {
+                        RecMpRecordEnd end;
+                        if (!s->h->has_mp || found || len != sizeof end) break;
+                        memcpy(&end, p + at + 4, sizeof end);
+                        if (!tagpu_recmp_file_footer(&mp, &end)) break;
+                        found = 1;
+                    }
+                    at += (4u + len + 3u) & ~3u;
+                }
+                if (found != !!s->h->has_mp || at != n) {
+                    free(p); snprintf(why, cap, "missing or invalid contribution end proof"); goto done;
+                }
+            }
             s->ended = 1;
             free(p);
         }
@@ -1931,6 +1985,13 @@ int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap)
     lstrcpynA(s->map, r->h.map, sizeof s->map);
     for (i = 0; i < r->h.nseats; i++) lstrcpynA(s->name[i], r->h.seats[i].name, RECR_NAME);
     s->nseats = r->h.nseats;
+    if (r->h.has_mp) {
+        if (segs_scan(r, 0, why, cap) < 0) goto done;
+        s->last = r->seg[0].t.last ? r->seg[0].t.last : s->start;
+        s->end_reason = r->seg[0].t.end_reason;
+        ok = 1;
+        goto done;
+    }
     if (!GetFileSizeEx(r->f, &fs)) {
         snprintf(why, cap, "cannot size the file (%lu)", GetLastError());
         goto done;
@@ -2054,6 +2115,11 @@ int recr_info(const char* path, RecInfo* out, char* why, unsigned cap)
     if (!info_header(out, r->raw, r->rawn)) {
         snprintf(why, cap, "%s is not a recording of format %u", path, REC_FORMAT);
         goto done;
+    }
+    if (entry_u32(r->raw, r->rawn, RT_MODE) == 3) {
+        unsigned long long first = r->off;
+        if (!header_parse(&r->h, r->raw, r->rawn, why, cap) ||
+            segs_scan(r, 0, why, cap) < 0 || !file_at(r, first)) goto done;
     }
     ok = 1;
     if (!GetFileSizeEx(r->f, &size)) goto done;

@@ -1,0 +1,179 @@
+/* Actual writer/reader fixture using the controlled native channel boundaries. */
+#define main cut_test_main
+#include "recmp_cut_test.c"
+#undef main
+#include "tagpu_recorder.h"
+#include "tagpu_recreader.h"
+
+static unsigned append(unsigned char* b, unsigned at, unsigned kind, const void* body, unsigned bytes)
+{
+    RecHdr h={(uint16_t)kind,(uint16_t)bytes};
+    memcpy(b+at,&h,sizeof h);
+    if (bytes) memcpy(b+at+4,body,bytes);
+    memset(b+at+4+bytes,0,((bytes+3)&~3u)-bytes);
+    return at+4+((bytes+3)&~3u);
+}
+
+static unsigned tlv32(unsigned char* b, unsigned at, unsigned tag, unsigned value)
+{
+    return append(b,at,tag,&value,4);
+}
+
+static HANDLE world_start(RecMpFile* mp, const char* path, RecRing** ring, unsigned* write)
+{
+    RecRing* g=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof *g);
+    unsigned char header[512], player[4+REC_PLAYER_IMAGE]={0};
+    unsigned globals[REC_GLOBALS_DWORDS]={0}, proj[2]={0}, mapped[2]={0};
+    unsigned features[5]={2,2,1,0,0}, tick=100, at=0, n=0;
+    unsigned short grid[2]={2,2};
+    HANDLE done;
+    CHECK(g);
+    g->buf=VirtualAlloc(NULL,REC_RING_BYTES,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    g->grid=VirtualAlloc(NULL,4*REC_CELL_BYTES,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    g->wake=CreateEvent(NULL,FALSE,FALSE,NULL); g->done=CreateEvent(NULL,TRUE,FALSE,NULL);
+    g->mp=mp; snprintf(g->path,sizeof g->path,"%s",path);
+    CHECK(g->buf && g->grid && g->wake && g->done && DuplicateHandle(GetCurrentProcess(),g->done,
+        GetCurrentProcess(),&done,0,FALSE,DUPLICATE_SAME_ACCESS));
+    n=tlv32(header,n,RT_FORMAT,REC_FORMAT); n=tlv32(header,n,RT_MODE,3);
+    n=tlv32(header,n,RT_SLOTS,3); n=tlv32(header,n,RT_START,100);
+    n=tlv32(header,n,RT_PROJECTILES,1);
+    n=append(header,n,RT_FEATURES,features,sizeof features);
+    n=append(header,n,RT_MULTIPLAYER,tagpu_recmp_file_header(mp),sizeof(RecMpRecordHeader));
+    at=append(g->buf,at,RK_HEADER,header,n);
+    at=append(g->buf,at,RK_TICK,&tick,4);
+    at=append(g->buf,at,RK_GRID,grid,sizeof grid);
+    at=append(g->buf,at,RK_GLOBALS,globals,sizeof globals);
+    at=append(g->buf,at,RK_PROJ_HEAD,proj,sizeof proj);
+    at=append(g->buf,at,RK_MAPPED,mapped,6);
+    player[4]=0xA5;
+    at=append(g->buf,at,RK_PLAYER,player,sizeof player);
+    tick=101; at=append(g->buf,at,RK_TICK,&tick,4);
+    InterlockedExchange(&g->flush_req,1); /* make tick 100 durable before failure controls */
+    InterlockedExchange(&g->wpub,at);
+    CHECK(tagpu_recwriter_start(g));
+    *ring=g; *write=at;
+    return done;
+}
+
+static void world_end(RecRing* g, unsigned at)
+{
+    unsigned char end[REC_END_BYTES]={0};
+    HANDLE wake;
+    end[0]=REC_END_TEARDOWN;
+    for (unsigned i=0;i<REC_PLAYERS;i++) end[24+4+12*i+1]=REC_RESULT_NONE;
+    CHECK(DuplicateHandle(GetCurrentProcess(),g->wake,GetCurrentProcess(),&wake,0,FALSE,DUPLICATE_SAME_ACCESS));
+    at=append(g->buf,at,RK_END,end,sizeof end);
+    InterlockedExchange(&g->wend,at); InterlockedExchange(&g->ended,1);
+    InterlockedExchange(&g->wpub,at);  /* final producer access; writer can free */
+    SetEvent(wake); CloseHandle(wake);
+}
+
+static int read_file(const char* path, int expected)
+{
+    char why[256];
+    RecReader* r=recr_open(path,why,sizeof why);
+    RecSummary summary;
+    RecInfo* info=calloc(1,sizeof *info);
+    CHECK(info);
+    if (expected<0) {
+        CHECK(!r && !recr_summary(path,&summary,why,sizeof why) && !recr_info(path,info,why,sizeof why));
+        printf("PASS: reader, summary and info refuse malformed contribution proof: %s\n",why);
+    } else {
+        if (!r) { printf("reader: %s\n",why); CHECK(r); }
+        CHECK(recr_header(r)->mode==3 && recr_header(r)->has_mp);
+        CHECK(recr_tick(r,why,sizeof why)==1 && recr_world(r)->tick==100 && recr_world(r)->player[0][0]==0xA5);
+        if (expected) CHECK(recr_tick(r,why,sizeof why)==1 && recr_world(r)->tick==101 && recr_world(r)->player[0][0]==0xA5);
+        CHECK(!recr_tick(r,why,sizeof why));
+        CHECK(recr_seek(r,100,0,NULL,NULL,why,sizeof why)==1 && recr_world(r)->player[0][0]==0xA5);
+        CHECK(recr_summary(path,&summary,why,sizeof why) && summary.end_reason==(expected ? REC_END_TEARDOWN : 0));
+        CHECK(recr_info(path,info,why,sizeof why) && !!info->ended==!!expected);
+        recr_close(r);
+        puts(expected ? "PASS: actual .imprec writer/reader, world seek and persisted cut proof" :
+                        "PASS: failed contribution file has no complete end, world prefix remains readable");
+    }
+    free(info);
+    return 0;
+}
+
+int main(int argc, char** argv)
+{
+    RecMpConfig config={0};
+    RecMpChannel* c;
+    RecMpFile* mp;
+    RecRing* ring;
+    unsigned write;
+    HANDLE done;
+    RecMpSignedIdentity binding;
+    RecMpIdentity remote={RECMP_VERSION,sizeof remote,{.Data1=1},{.Data1=3},202};
+    GUID stream={.Data1=2};
+    RecMpPacket got;
+    RecMpStats stats;
+    int local_stop;
+    CHECK(argc==3);
+    if (!strcmp(argv[1],"read")) return read_file(argv[2],1);
+    if (!strcmp(argv[1],"refuse")) return read_file(argv[2],-1);
+    f.missing_cut=!strcmp(argv[1],"missing_cut");
+    f.missing_receipt=!strcmp(argv[1],"missing_receipt");
+    f.journal_full=!strcmp(argv[1],"journal_full");
+    local_stop=!strcmp(argv[1],"local_stop");
+    f.game_thread=GetCurrentThreadId();
+    f.net.identity=remote; f.net.identity.player=101;
+    f.net.stats.peers=1; f.net.stats.membership=1;
+    f.opened=CreateEvent(NULL,TRUE,FALSE,NULL); f.release=CreateEvent(NULL,TRUE,FALSE,NULL);
+    f.initial=CreateEvent(NULL,TRUE,FALSE,NULL); f.tail_release=CreateEvent(NULL,TRUE,FALSE,NULL);
+    f.net.event=CreateEvent(NULL,FALSE,FALSE,NULL);
+    CHECK(f.opened && f.release && f.initial && f.tail_release && f.net.event);
+    config.signer=tagpu_recmp_key(); CHECK(config.signer);
+    config.origin=11; config.count=4; config.net.match.Data1=1;
+    config.net.host=1; config.net.address_bytes=3; memcpy(config.net.address,"ip!",3);
+    for (unsigned i=0;i<4;i++) {
+        config.actor[i].origin=i==0 ? 11 : i==1 ? 22 : i==2 ? 55 : 66;
+        config.actor[i].local=i<2; tagpu_recmp_public(config.signer,&config.actor[i].public);
+    }
+    f.config=config;
+    for (unsigned i=0;i<2;i++) {
+        RecMpPacket* p;
+        CHECK(tagpu_recmp_sign(config.signer,i ? 66 : 55,&stream,&remote,&binding));
+        packet(i ? 66 : 55,RECMP_BIND,0,0,&binding,sizeof binding);
+        p=packet(i ? 66 : 55,RECMP_RESOURCES,1,8,"first",5);
+        CHECK(tagpu_recmp_stream_put(&f.source[i],&p->h,p->body,5));
+    }
+    c=tagpu_recmp_begin(&config); CHECK(c);
+    mp=tagpu_recmp_file_begin(&config,c); CHECK(mp);
+    if (f.journal_full) {
+        /* Before the writer starts, a deterministic full journal. */
+        RecMpPacket p=f.packet[1];
+        unsigned char body[RECMP_BODY_MAX]={0};
+        p.h.origin=11; p.h.bytes=RECMP_PACKET_MAX;
+        while (tagpu_recmp_record_put(tagpu_recmp_file_journal(mp),&p.h,body,sizeof body,100,1)) {}
+    }
+    done=world_start(mp,argv[2],&ring,&write);
+    CHECK(WaitForSingleObject(f.opened,15000)==WAIT_OBJECT_0);
+    memset(&config,0,sizeof config); SetEvent(f.release);
+    CHECK(WaitForSingleObject(f.initial,15000)==WAIT_OBJECT_0);
+    CHECK(tagpu_recmp_take_at(c,&got,100)==1 && tagpu_recmp_take_at(c,&got,100)==1);
+    CHECK(tagpu_recmp_advance(c,100) && tagpu_recmp_send(c,RECMP_RESOURCES,100,"local",5));
+    tagpu_recmp_retain(c);
+    if (!local_stop) tagpu_recmp_end(c);
+    tagpu_recmp_file_end(mp,!local_stop); /* final game access, before ring hand-over */
+    world_end(ring,write);
+    if (!local_stop) SetEvent(f.tail_release);
+    CHECK(WaitForSingleObject(done,30000)==WAIT_OBJECT_0); CloseHandle(done);
+    if (local_stop) {
+        CHECK(tagpu_recmp_send(c,RECMP_RESOURCES,100,"still playing",13));
+        tagpu_recmp_end(c); SetEvent(f.tail_release);
+    }
+    tagpu_recmp_stats(c,&stats);
+    if (f.missing_cut || f.missing_receipt) CHECK(stats.failed && stats.finished);
+    else {
+        DWORD deadline=GetTickCount()+30000;
+        while (!stats.finished) {
+            CHECK((LONG)(deadline-GetTickCount())>0); Sleep(1); tagpu_recmp_stats(c,&stats);
+        }
+        CHECK(!stats.failed && stats.cuts==2 && stats.receipts==4);
+    }
+    tagpu_recmp_release(c);
+    CloseHandle(f.opened); CloseHandle(f.release); CloseHandle(f.initial);
+    CloseHandle(f.tail_release); CloseHandle(f.net.event);
+    return read_file(argv[2],!(f.missing_cut || f.missing_receipt || f.journal_full || local_stop));
+}

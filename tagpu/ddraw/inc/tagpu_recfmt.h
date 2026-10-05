@@ -35,7 +35,7 @@
 #include <stdint.h>
 #include "tagpu_replay_globals.h"
 
-#define REC_FORMAT        4
+#define REC_FORMAT        5
 
 #define REC_UNIT_BYTES    0x118   /* a unit record                                           */
 #define REC_MOVER_BYTES   0x2F    /* its mover: the creates' allocation (`push 0x2F`, 0x4860C4)  */
@@ -317,7 +317,7 @@ static __inline int rec_event_len(unsigned kind, unsigned len)
 static __inline int rec_root_len(unsigned root, unsigned len)
 {
     static const unsigned char args[FR_ROOTS] = { 0, 28, 8, 12, 12, 16, 12 };
-    return root < FR_ROOTS && len == 8 + args[root];
+    return root < FR_ROOTS && len == 8u + args[root];
 }
 
 /* The feature code's calls of the simulation RNG 0x4B6C30: every one from 0x4232F0 to 0x4250FF,
@@ -414,7 +414,9 @@ enum RecBlockKind {
                           palette indices, rows of w: the TNT's minimap picture (the GAF frame at
                           main+0x1426B, uncompressed), whose part [0, 2*columns) x [0, 2*rows)
                           the engine shows. A reader that does not know it skips it            */
-    RB_TIMELINES       /* RecTimelineState rows (tagpu_recfile.h); the latest complete table wins */
+    RB_TIMELINES,      /* RecTimelineState rows (tagpu_recfile.h); the latest complete table wins */
+    RB_CONTRIBUTIONS   /* RecMpRecord metadata followed by its exact source envelope/payload;
+                          packed consecutive spans, no ring padding (tagpu_recmp_file.h)        */
 };
 #define REC_MINIMAP_HEAD  8u
 #define REC_MINIMAP_MAX   (0xFF00u - REC_MINIMAP_HEAD)   /* the most indices: a ring record's */
@@ -483,6 +485,7 @@ enum RecTag {
                           parent's id (0 the original), u32 fork_at: a fork's header only. The
                           segment's first iteration is fork_at, and along a chain of timelines
                           it replaces the parent's iterations from fork_at on                   */
+    RT_MULTIPLAYER,    /* RecMpRecordHeader: copied match/origin roster, required in mode 3      */
     RT_END_REASON = 32,/* u32 RecEnd                                                            */
     RT_LAST,           /* u32: the last recorded GameTime                                       */
     RT_ITERATIONS,     /* u32: iterations recorded                                              */
@@ -505,10 +508,11 @@ enum RecTag {
     RT_GAME_END,       /* u32: main+0x3923B's bits 2, 4, 5 and 6 at the teardown, the result of
                           the controlled player: bit 4 won, bit 6 lost, bit 2 without them a quit;
                           0 when the recording ended before the level did                        */
-    RT_SEAT_END        /* u8 seat, u8 result (RecResult), u16 0, u32 the GameTime its last
+    RT_SEAT_END,       /* u8 seat, u8 result (RecResult), u16 0, u32 the GameTime its last
                           commander died, u32 the GameTime its last unit died when it ended the
                           game with none (its live count +0x144 at 0), 0 for none: a seat of the
                           recording                                                              */
+    RT_MP_END          /* RecMpRecordEnd: persisted source proofs cover these application cuts  */
 };
 _Static_assert(RT_TIMELINE < RT_END_REASON, "a header's tags stay below the end block's");
 

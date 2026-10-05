@@ -86,8 +86,9 @@ import struct
 import sys
 import zlib
 from pathlib import Path
+from recmp_file import Contributions
 
-REC_FORMAT = 4
+REC_FORMAT = 5
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -151,18 +152,21 @@ ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12)     # an RK_EV_FEATURE's arguments after 
 FS_SITES = 6
 
 RB_HEADER, RB_STREAM, RB_SNAPSHOT, RB_END, RB_MINIMAP, RB_TIMELINES = 1, 2, 3, 4, 5, 6
+RB_CONTRIBUTIONS = 7
 RB_BOUNDARY = -1            # load()'s marker of a fork in a chain's blocks: no block of the file
 RECR_TIMELINES = 64         # the segments a file may hold (tagpu_recreader.h)
 RB_NAMES = {RB_HEADER: "header", RB_STREAM: "stream", RB_SNAPSHOT: "snapshot", RB_END: "end",
-            RB_MINIMAP: "minimap", RB_TIMELINES: "timelines"}
+            RB_MINIMAP: "minimap", RB_TIMELINES: "timelines", RB_CONTRIBUTIONS: "contributions"}
 RBF_STORED = 1
 
 (RT_FORMAT, RT_BUILD, RT_MODE, RT_MAP, RT_START, RT_WALLCLOCK, RT_SLOTS, RT_UNITS_EACH,
  RT_UNITDEFS, RT_PLAYER, RT_LEVER, RT_LAYOUT, RT_TABLE, RT_OPTIONS, RT_SETTINGS_MAP,
  RT_WEAPONS, RT_FEATURES, RT_GLOBALS, RT_PROJECTILES, RT_FRAME, RT_DLL, RT_FIELDS,
  RT_GAME_VERSION, RT_ARCHIVE, RT_MODPRINT, RT_TIMELINE) = range(1, 27)
+RT_MULTIPLAYER = 27
 (RT_END_REASON, RT_LAST, RT_ITERATIONS, RT_CORRECTIONS, RT_BAD_IDS, RT_RING_HIGH, RT_OFF_THREAD,
  RT_UNCREDITED, RT_UNOBSERVED, RT_GAME_END, RT_SEAT_END) = range(32, 43)
+RT_MP_END = 43
 RESULTS = {0: "unknown", 1: "won", 2: "lost"}
 
 END_REASONS = {1: "complete: the level ended", 2: "INCOMPLETE: the ring was full",
@@ -312,12 +316,22 @@ def header(payload):
                 h["archives_mounted"] = struct.unpack_from("<I", b, 4)[0]
         elif tag == RT_TIMELINE and len(b) == 12:
             h["timeline"] = struct.unpack_from("<III", b)
+        elif tag == RT_MULTIPLAYER:
+            if "multiplayer" in h:
+                raise Unreadable("duplicate contribution roster")
+            try:
+                Contributions(b)
+            except ValueError as error:
+                raise Unreadable(str(error)) from error
+            h["multiplayer"] = b
         elif tag == RT_FIELDS:
             ix, n = struct.unpack_from("<HH", b)
             h.setdefault("fields", {})[ix] = [struct.unpack_from("<HHHHBB", b, 4 + 12 * k)
                                               for k in range(n)]
     if h.get("format") != REC_FORMAT:
         raise Unreadable(f"format {h.get('format')}, this tool reads {REC_FORMAT}")
+    if (h.get("mode") == 3) != ("multiplayer" in h):
+        raise Unreadable("network mode and contribution roster disagree")
     return h
 
 
@@ -819,6 +833,7 @@ def segments(bl, offsets=None):
                    "first": None, "last": None, "end_reason": None,
                    "range": list(offsets[i]) if offsets else None}
             segs.append(seg)
+            contributions = Contributions(h["multiplayer"]) if "multiplayer" in h else None
             after_end = False
         elif kind == RB_HEADER:
             raise Unreadable(f"a header block (block {i}) inside timeline {seg['id']}")
@@ -829,7 +844,24 @@ def segments(bl, offsets=None):
             if seg["first"] is None:
                 seg["first"] = first
             seg["last"] = last
+        elif kind == RB_CONTRIBUTIONS:
+            if contributions is None:
+                raise Unreadable("contribution block without network roster")
+            try:
+                contributions.block(payload)
+            except ValueError as error:
+                raise Unreadable(str(error)) from error
         elif kind == RB_END:
+            footers = [b for tag, b in entries(payload) if tag == RT_MP_END]
+            if contributions is not None:
+                if len(footers) != 1:
+                    raise Unreadable("missing or duplicate contribution end proof")
+                try:
+                    contributions.footer(footers[0])
+                except ValueError as error:
+                    raise Unreadable(str(error)) from error
+            elif footers:
+                raise Unreadable("contribution end proof without network roster")
             seg["end_reason"] = end(payload).get(RT_END_REASON)
             after_end = True
     seen = set()

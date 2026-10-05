@@ -158,6 +158,16 @@ removes two private-registry prefixes and an X display, retaining logs and test
 executables. It uses primary-session stand-ins; it does not launch TA or verify
 terminal recording completeness, bandwidth, recording or playback.
 
+The contribution file container has a separate controlled fixture:
+`python3 tools/replay/recmp_file_test.py --out /tmp/recmp-file-run`.
+It uses the actual world-file writer, compressor, lock and C/Python readers in one
+owned prefix/private display, without launching TA. It writes format-5 synthetic
+`.imprec` files, validates source/application/proof records and the frozen-cut
+footer, seeks the synthetic world, and refuses missing proofs, local-save failure
+and logically corrupted packets/footers. `--read-file <fixture.imprec>` runs the
+reader controls against an existing fixture file. These files do not prove game
+capture, full owner authority, semantic queue seeking or multiplayer playback.
+
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
   `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin. **The NAT
   helpers are refused** (`dpnhpast,dpnhupnp=d`): the transport skips a helper that does not load,

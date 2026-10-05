@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include "tagpu_recfmt.h"
 #include "tagpu_recfile.h"
+#include "tagpu_recmp_file.h"
 
 #define RECR_TEXT       64          /* a header string's bytes kept, NUL included            */
 #define RECR_NAME       (0x1E + 1)  /* a seat's name: the record's 0x1E bytes, NUL included  */
@@ -60,6 +61,8 @@ typedef struct RecHeader {
     RecSeat      seats[REC_PLAYERS];            /* in the header's order               */
     unsigned     ntab;
     RecTableInfo tab[REC_TABLE_MAX];
+    unsigned     has_mp;
+    RecMpRecordHeader mp;
 } RecHeader;
 
 /* one node list of a live unit, its node images in list order */
