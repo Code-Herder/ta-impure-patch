@@ -3447,7 +3447,7 @@ incremented at `0x4954C0`; `UNITINFOCount` is `main+0x1438F` (the type bound `[1
 
 Locally none of these indices can be 0 (`0x4864B0` writes the live unit's own `+0xA8`, ≥ 1), so only a
 malformed or foreign message reaches them — the fix is stock-exact for every well-formed one and is
-[class local](tadr-port/sim-fixes.md#b3-built-ahead-2026-09-25). Our stubs are entered by a jmp at a
+[class local](tadr-port/sim-fixes.md#the-landings). Our stubs are entered by a jmp at a
 clean 5-byte boundary (the `0x0C` destructor at `0x4866E5`, after stock's `push edi`), verify the
 whole stock span first, and continue at the same address; a misframed `0x2C` points the reader at a
 zero dword and jumps to the engine's own end-of-list `0x48BA28`. The `0x2C` is parsed from a copy:
@@ -3589,7 +3589,7 @@ does not handle (`0x45486D`'s `ja`, and entries 1, 2, 35 and 41) jumps to, and w
 own state (`0x455F50` reads `[esp+0xF0]`) before re-entering the receive at `0x453D94` (counted as a
 `0a` drop). A child of 0, which `0x48AB70` ignores, drops there too: no sender writes one. The
 diverged `0x0D` is dropped in `wpn_rx_fired` (`0x49D280`, [the
-weapon-ID receiver](#weapon-ids)) by resolving the shooter's own slot weapon and comparing it to
+weapon-ID receiver](#a-weapons-id-and-the-messages-that-carry-it-0x42e440-0x49d270-0x45544d-0x42454b-disassembled-measured-2026-09-24)) by resolving the shooter's own slot weapon and comparing it to
 `&Weapons[id]`: stock divides by the local slot weapon's `+0x68` (`0x49CE62..0x49CE6A`) and faults only
 when that is 0, otherwise building a projectile from the packet weapon's branch and the local
 weapon's velocity. Between consistent peers the two never differ (DISASSEMBLED): the sender's aim
