@@ -16274,6 +16274,44 @@ before dumping. It samples GUI-consumed clicks through a ring turn, every valid 
 and several eyes at one paused GameTime, and requires its carried simulation records to remain equal.
 The recorder's positive list and exclusions are unchanged.
 
+The GUI event timestamp is a wall-clock sample. `0x4B5E70`, `0x4B5ED1` and `0x4B5F1D`
+call GetTickCount through IAT `0x4FC0DC`, multiply the low 32 bits by graphics `+0xE8`, and
+divide by 1000, as `0x4B6340` does. Moves copy the event through `0x4C2360`; buttons preserve
+it in the ring. `0x4AB66C` copies the six dwords into `GUI+0x3C`; with an empty ring,
+`0x4AB67B` calls `0x4C2340`, whose copy is at `0x4C2356`. The pump copies the event into
+its local dispatch data at `0x4AA151`. The original timestamp at `0x51F4C2` and its input
+copy at `main+0x2C82` already remain local under the existing mouse/input rows.
+Ring flush `0x4C2BB0` resets only the indices, and GUI init `0x4AA850` does not clear
+`GUI+0x48`. Ordinary native moves and clicks produce another clock sample. A short paused
+probe cannot establish a change of every clock bit by waiting for arithmetic rollover.
+
+`main+0x531..+0x534` is the full active GUI pointer (`GUI+0x18`), not a unit type or a
+simulation pointer. Init zeros it at `0x4AA85E`; `GUI_Load` links its allocated screen to
+the old top at screen `+0`, then installs it at `0x4AAC5B`. Both `GUI_Pop` (`0x4A96A2`)
+and the pump's own pop (`0x4AA7D5`) replace it with that previous link before freeing
+the removed screen. MEASURED resource-refusals: live T301 held `0x0F72F320`, T1891 and
+the paused base held `0x0DC035B0`, menu views held `0x0B0B8018`, and the native RSNRACK
+selection returned to `0x0DC035B0`. Playback held `0x0B0A0BD0`; fresh seek held
+`0x0B0A7AF8`. Different screen allocations do not guarantee that every differing address bit
+changes during the null twin.
+
+`0x51F524..0x51F527` is the full current bitmap-font pointer, graphics `+0x204` (the text
+globals above). `SetFont 0x4C1420` ignores NULL at `0x4C1425..0x4C1427`, then stores the
+pointer at `0x4C142E`. `GetFont 0x4C1440` reads it at `0x4C1445`; `0x4C1450` reads its
+first byte as font height. Text drawing `0x4C14F0` passes this font to the glyph rasterizer
+`0x4CCF60` at `0x4C16D4`/`0x4C1744`. The adjacent `+0x208/+0x20C/+0x210` fields are text
+colour latches, not part of this pointer. MEASURED resource-classic: live T301 held
+`0x0DC48C20`, T1441 and all thirteen paused views held `0x0DA31580`; playback, second playing
+and seek held `0x0B0EBF90`, `0x0B0EB178` and `0x0B0EB128`. The two reported bytes at
+`0x51F525` were the middle of that four-byte pointer. A NULL SetFont call cannot clear it.
+Font loader `0x42A320` reads the two native faces through `0x4BBE50` at
+`0x42A347`/`0x42A387` and stores the returned allocations at `main+0x391F9/+0x391FD`
+(`0x42A375`/`0x42A3A2`). The file loader allocates bytes through `MEM_AllocNamed 0x4D83B0`
+at `0x4BBF3C` and reads them at `0x4BBF49`; teardown frees them through `MEM_Free 0x4D85A0`
+at `0x42A3BC`/`0x42A3E0`. The font latch holds a process allocation address, not a font ID.
+All three focused fixtures' carried simulation, events, round trips and seeks compare equal,
+including all 39 paused views; these viewer metadata differences still fail the strict images gate.
+
 `main+0x37E9E` is the command panel's displayed unit type: word stores at `0x41B0D2` and
 `0x41B1BC` copy unit `+0xA6`; the no-unit branch zeros it at `0x41B1E1`. The adjacent word
 `main+0x37E9C` receives unit `+0xA8` at `0x41B0BE`/`0x41B1A8`. MEASURED: native selection of

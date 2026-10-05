@@ -634,7 +634,11 @@ block that reads to its last complete block.
   [--out DIR]` (`list` names the fixtures of `tools/replay/fixtures.json`): each fixture is
   recorded live, played on puppets, played again with three round trips and sought from a fresh
   process, each on its own Xvfb; the live game also takes the null twin (paused, the camera, the
-  wheel, the cursor and the in-game menu moved, two frame dumps). A fixture with `"watch": true`
+  wheel, the cursor and the in-game menu moved, two endpoints and thirteen intermediate
+  views). Each view requires unchanged GameTime and exact carried-simulation equality.
+  Mouse samples follow a GUI-consumed click with an explicit move and require its native
+  x/y/message echo; the resource-refusals selection view selects RSNRACK and requires its
+  displayed type. A fixture with `"watch": true`
   runs a fifth process, W: the playing started from REPLAYS and Watch as a player starts it, two
   edited copies refused, then the dock's speed, the Options' OK, pause, the dock's seek, the
   player cards' Sight and Full map (clock and camera unchanged), its dump
