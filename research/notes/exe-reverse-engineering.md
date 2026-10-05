@@ -16230,6 +16230,40 @@ capability `+0x0C & 1` distinguishes a placed build from factory counts. Target 
 Plain order clearing (`0x43ADC0`) preserves flags bit 2 (`4`); queued collision tests reproduce
 that distinction for participating builders/helpers rather than discarding every old plan.
 
+#### Contextual cancellation through the native Shift root [DISASSEMBLED 2026-10-05]
+
+`0x43AFC0` tests Shift at `0x43AFD4` and scans only the main chain `unit+0x5C` at
+`0x43AFE0`. The first action match (`0x43AFF2`) whose optional target matches (`0x43AFF7`..`0x43AFFE`)
+and whose X/Z positions are within inclusive ±16 world units (`0x43B004`..`0x43B029`) wins.
+The position arithmetic is unsigned wrapping 32-bit subtraction plus `0x100000`, compared against
+`0x200000`. **It never compares the build type at `node+0x36`.** A NULL target argument skips
+the target comparison. With no match, `0x43B08A`..`0x43B09D` appends through `0x43ADC0`.
+
+`0x43B034` chooses the unlink head: `+0x60` for node flags `+0x42 & 0x40000`, otherwise
+`+0x5C`. `0x43B05B`..`0x43B05E` unlink the matched node. The original head is saved at
+`[esp+0x24]`; a non-head removal sets `+0x42 & 0x10000` at `0x43B068`. The calls at
+`0x43B075` and `0x43B07B` destruct (`0x43A1F0`) and free (`0x4B4F20`) it, then return
+without creating an order. The root is used by manual placement `0x4197A9`, contextual orders
+`0x48D1F4` and the resource input path.
+
+The destructor calls the action handler with flags 2 at `0x43A21A` when node byte `+6 & 2`
+is set. Flags `+0x42 & 0x400000` run the native `StopMoving` script lookup/start at
+`0x43A227`..`0x43A258` (`0x4B07C0`, `0x4B0B00`, `0x456190`). Its `+0x52` object cleanup
+at `0x43A264`..`0x43A2A4` can invoke virtual destructors. A head removal also calls
+`0x489800(unit,3)` at `0x43A2B9`; the `0x10000` flag skips that call for non-heads.
+`0x489650` at `0x43A2C1` releases the target reference at `node+0x12`. Thus cancellation
+can re-enter engine handlers, and retaining an order-node pointer across the root is unsafe.
+
+Resource cancellation walks the bounded, game-thread-owned chain, proves that the intended
+main-list node is exactly the root's first match, and copies action/type/position before calling
+the root. This proves deletion rather than accidental append or cancellation of a neighboring
+plan, even if the selection now offers a stronger variant. Upgrade pairing additionally requires
+the immediately preceding node to be the resolved reclaim action on the old target at the same
+position. Its values are copied too; after build removal the remaining native match is re-queried
+and checked against those values before a second root call. No node address survives destruction.
+Cancellation scans only selected owned constructors, once each; the packet distinguishes an own
+queued site from one the selection can cancel. Helper Guards are left intact.
+
 #### An upgrade preview without grid mutation
 
 `0x47CC30` stamps a footprint; callers `0x43DA41`, `0x48610F`, `0x48630C`, `0x48AA9A`, `0x48B6B9`.

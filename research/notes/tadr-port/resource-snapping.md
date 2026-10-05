@@ -228,10 +228,18 @@ vent can supply its own ghost without selecting an icon. The preview and command
 the building, placement, target and modifiers at the input boundary. A mouse move or a timed
 preview update is not a prerequisite for a correct click.
 
-A site already reserved by the player's queued resource-building order shows an **already queued**
-indicator. Repeated Quick Build clicks on that site leave existing orders unchanged and consume
-the command click: they must not fall through to a movement order or duplicate/cancel construction.
-Normal order controls remain available to cancel those orders.
+A site reserved by the player's queued resource-building order shows an **already queued**
+indicator. When a selected constructor owns a cancellable plan, the ghost says **Shift-click to
+cancel**. Shift plus the configured contextual command button removes that constructor's matching
+plan; a queued upgrade removes its adjacent reclaim/build pair. Other selected constructors'
+matching plans are cancelled too, one per constructor. Unselected constructors' queues, unrelated
+orders and persistent helper Guards remain intact. The queued definition may differ from the
+strongest variant currently offered by the selection.
+
+A plain repeat click leaves the queue unchanged. A Shift-click with no selected owner also leaves
+it unchanged. Both consume the command click rather than issuing Move or duplicate construction.
+Cancellation does not undo construction or reclamation that has already happened; an unfinished
+resource building retains native contextual repair/assist priority.
 
 ### Owned-building upgrades
 
@@ -282,7 +290,7 @@ other paths call through. A manual left click recomputes placement before normal
 
 Quick Build publishes a cursor/type/rectangle override into the frame packet, leaving the engine
 in contextual mode. The renderer never runs site tests or order roots. It displays the chosen
-variant's ordinary ghost and an `Already queued` marker. Preview tests save/restore the two
+variant's ordinary ghost and a queued/cancellation marker. Preview tests save/restore the two
 engine build-site scratch words `0x51E684` and `0x51E688`.
 
 A build goes through `0x43AFC0`, the engine's ordinary order root. Reclaim and Guard eligibility
@@ -290,8 +298,13 @@ come from `0x43F0E0`; build action names come from `0x438760`. Upgrades issue re
 an appended build. Helper constructors retain persistent Guards; the engine may prepend its own
 assist/reclaim work. Selected combat units receive no order from this path. Queued builds are
 identified by the engine descriptor's placed-build capability, excluding factory build counts.
-Actual yard occupancy bits determine queued collisions. A repeated resource click consumes the
-input without changing the order chains.
+Actual yard occupancy bits determine queued collisions. Plain repeated clicks consume the input
+without changing orders. Shift cancellation copies the actual queued action/type/position and
+proves it is the native root's first match before calling `0x43AFC0` with Shift. The root ignores
+the build type when matching, so passing the newly preferred variant alone is insufficient.
+Paired upgrade cancellation copies the preceding resolved reclaim and re-queries it after the
+build destructor. No heap-node pointer survives an engine call, and a missing reclaim is never
+appended. Only selected owners are cancelled; persistent helper Guards remain ordinary orders.
 
 The upgrade test projects the old building's post-reclaim yard-bit clear into a bounded private
 copy of the candidate definition/yardmap. The engine's occupancy test ignores exactly the old
@@ -342,10 +355,10 @@ because the launcher replaces it with right-button orders.
 
 | Fixture | Input behavior exercised | Replay checks |
 |---|---|---|
-| `resource-mex`, `resource-classic`, `stock-resource-mex` | Manual mex/Alt, same-pointer manual/Quick center agreement, partial-target refusal at the snap boundary, manual radius zero with Quick enabled, both mouse layouts, queued click consumed without toggling the build | L/P/R/Q |
-| `resource-upgrade`, `resource-queued-upgrade` | Own mex→Moho reclaim/build, plain replacement or Shift after Move, mixed helpers, persistent Guard dedup, combat unaffected | L/P/R/Q |
-| `resource-plain`, `resource-uniform`, `resource-mixed` | Background/above-background uniform metal and rich patches; manual geo/Alt and Quick geo | L/P/R/Q |
-| `resource-geo-upgrade` | Stronger private geo variant on metal ground, queued reclaim/build, repeat no-op and helper Guard | L/P/R/Q |
+| `resource-mex`, `resource-classic`, `stock-resource-mex` | Manual mex/Alt, manual/Quick center agreement, partial-target refusal at the snap boundary, independent toggle, both mouse layouts, plain repeat no-op, selected-only Shift cancellation across variant changes, preceding Move preserved, requeue | L/P/R/Q |
+| `resource-upgrade`, `resource-queued-upgrade` | Own mex→Moho reclaim/build, plain replacement or Shift after Move, mixed helpers, persistent Guard dedup, combat unaffected; queued-pair cancellation/requeue preserves Move and Guards | L/P/R/Q |
+| `resource-plain`, `resource-uniform`, `resource-mixed` | Background/above-background uniform metal and rich patches; manual geo/Alt, Quick geo cancellation/requeue preserving Move | L/P/R/Q |
+| `resource-geo-upgrade` | Stronger private geo variant on metal ground, queued reclaim/build, plain repeat no-op, pair cancellation/requeue, persistent helper Guard | L/P/R/Q |
 | `resource-locked`, `resource-inherit` | General locks, exact-version inheritance/clamping, effective controls and policy frozen despite edits during the match | L/P/R/Q |
 | `resource-priority` | Explicit Move, Alt, equal own mex and personal Quick toggle off | L/P/R/Q |
 | `resource-nozoom` (stock limits) | Manual/Alt and Quick Build when zoom and widening are disabled | L/P/R/Q |

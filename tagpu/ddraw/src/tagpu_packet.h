@@ -1,5 +1,8 @@
 #ifndef TAGPU_PACKET_H
 #define TAGPU_PACKET_H
+
+#define TAGPU_RESOURCE_QUEUED 1u
+#define TAGPU_RESOURCE_CANCEL 2u
 /* tagpu_packet — the frame packet exchange, consumer side.
 
    Design: research/notes/frame-packet-exchange.html. The game thread publishes
@@ -767,7 +770,7 @@ typedef struct TAGPU_PACKET {
                                          ARMMEX after a build-menu click       */
     uint8_t  game_opt;                /* 0x37F06 low byte: bit0 damagebars,
                                          bit2 Shadow, bit3 TShadow, bit4 FShadow  */
-    uint8_t  resource_queued;         /* contextual build already in an own queue */
+    uint8_t  resource_queued;         /* TAGPU_RESOURCE_QUEUED / TAGPU_RESOURCE_CANCEL */
     uint32_t shd_off, shd_len;        /* the engine's 32x256 shade table
                                          (PALETTE.SHD at graphics+0xC4), copied
                                          whole: the Gouraud LUT the unit pass

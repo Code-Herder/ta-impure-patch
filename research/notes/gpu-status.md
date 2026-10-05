@@ -20515,7 +20515,7 @@ contracts* gives the allocation/lifetime proof and disassembly.
 | `0x498F70`, `0x499100` | Six-/seven-byte gates for left/right handlers, each `ret 4`. Only the configured contextual button is consumed; paired button bookkeeping outside these handlers remains native |
 | `0x47D2E0`, `0x47C780` | Engine site/altitude queries on the input thread. Quick queries preserve scratch words; an upgrade uses a private yard projection of an uncontested old footprint's clear |
 | `0x43F0E0`, `0x438760`, `0x43AFC0` | Native eligibility (zero action byte refuses), action lookup and dispatch. Upgrade is reclaim→appended build; non-building constructor helpers Guard primaries, combat units untouched |
-| `tagpu_packet_pub.c` → native ghost and marker | Chosen type/green rectangle and queued flag copied into the packet. Engine stays in contextual mode. No new renderer-owned engine access or GL object |
+| `tagpu_packet_pub.c` → native ghost and marker | Chosen type/green rectangle and queued/selected-cancellation bits copied into the packet. Engine stays in contextual mode. A selected owner's cancellable plan says `Shift-click to cancel`. No new renderer-owned engine access or GL object |
 | `0x4C63A0` flip observer / `0x46A3E0` game return; shared replay-menu identity | Config/archive names and Twilight's label select a general profile plus an optional exact-version override. Game-thread menu polling remains live without packets or a render consumer; native game flips freeze policy and in-game options cannot unfreeze it |
 
 Defaults permit and initially enable both features for Stock/M/P/T, and lock both off for
@@ -20528,6 +20528,13 @@ the new predicate's `SIM_INSTALL` flag belongs to that installation. Unit/defini
 exploration/descriptor values are bounded, and owned unit walks use the engine's validated
 inclusive player partition. Engine heap order nodes have the input thread's sole-mutator
 lifetime; nothing retains a pointer across a simulation iteration or level teardown.
+
+Shift plus the configured command button cancels one matching queued resource plan per selected
+constructor through `0x43AFC0`; a queued upgrade cancels its adjacent reclaim/build pair. Actual
+queued values are copied before destruction, and the native first-match rule is verified before
+each root call. The root does not compare build types. Plain repeats, unselected owners' plans,
+unrelated orders and persistent helper Guards remain unchanged. The cancellation adds no patch,
+simulation-owned state or replay exception.
 
 Resource scratch and profile state are presentation inputs; simulation never reads those tables.
 Puppet seats are refused. Every effect is an ordinary recorded engine order and its normal

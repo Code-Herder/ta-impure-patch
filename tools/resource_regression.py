@@ -116,6 +116,12 @@ class Check:
     def mode(self):
         return self.values("*0x511DE8+0x2cc3:1")[0]
 
+    def pause(self, on):
+        if bool(self.values("*0x511DE8+0x38a51:2")[0] & 1) != on:
+            self.keys("pause")
+        self.until(lambda: bool(self.values("*0x511DE8+0x38a51:2")[0] & 1) == on,
+                   "native pause did not reach the fixture state")
+
     def rect(self):
         return struct.unpack("<iiiiii", self.bytes("*0x511DE8+0x2c92:x18"))
 
@@ -148,12 +154,19 @@ class Check:
                   f"{'prclick' if right else 'pclick'}:{x},{z}",
                   *(["up:shift"] if shift else []))
 
-    def repeat(self, x, z):
+    def repeat(self, x, z, shift=False):
         def count():
             return len(self.call("log", "--grep", "resource: already queued", "--tail", 100, "--json")["lines"])
         before = count()
-        self.resource_click(x, z, shift=True)
+        self.resource_click(x, z, shift=shift)
         self.until(lambda: count() > before, "repeat click was not consumed as already queued")
+
+    def unqueue(self, x, z):
+        def count():
+            return len(self.call("log", "--grep", "resource: unqueued", "--tail", 100, "--json")["lines"])
+        before = count()
+        self.resource_click(x, z, shift=True)
+        self.until(lambda: count() > before, "Shift-click did not cancel the queued resource plan")
 
 
 def mex(c, classic=False):
@@ -203,12 +216,39 @@ def mex(c, classic=False):
     assert centers == {((snapped[0] + snapped[3]) // 2, (snapped[2] + snapped[5]) // 2)}, \
         "Quick Build and the manual ghost selected different deposit centers"
     c.stop("ARMCK")
-    c.resource_click(560, 375)
+    # A preceding Move keeps the plan unstarted by queue ordering.
+    # Pause also keeps native selection clicks on stationary constructors.
+    c.pause(True)
+    c.call("order", "move", "pos", "4500", "2500", "--unit", c.units["ARMCK"], "--expect", "ARMCK")
+    preceding = c.orders("ARMCK")
+    c.resource_click(560, 375, shift=True)
     orders = c.until(built, "Quick Build failed with manual radius off")
+    c.pause(False)
     c.repeat(560, 375)
     assert c.orders("ARMCK") == orders, "repeat click changed the queued mex orders"
+    # Another selected constructor must not cancel an unselected owner's plan.
+    c.pause(True)
+    c.select("CORCK")
+    other = c.orders("CORCK")
+    c.pause(False)
+    c.repeat(560, 375, shift=True)
+    assert c.orders("ARMCK") == orders and c.orders("CORCK") == other, "unqueue changed an unselected constructor or added an order"
+    # The strongest available variant is now Moho, but the queued node is MEX.
+    c.pause(True)
+    c.select("ARMCK", "ARMACK")
+    advanced = c.orders("ARMACK")
+    c.pause(False)
+    c.unqueue(560, 375)
+    assert c.orders("ARMCK") == preceding, "unqueue removed the preceding Move or kept the mex"
+    assert c.orders("ARMACK") == advanced, "unqueue added an order to a constructor without the plan"
+    c.pause(True)
+    c.select("ARMCK")
+    c.pause(False)
+    c.stop("ARMCK")
+    c.resource_click(560, 375)
+    c.until(built, "cancelled mex could not be queued again")
     assert c.mode() == 1, "Quick Build left contextual mode"
-    print(f"resource-mex: {'left' if classic else 'right'} interface, manual/Quick center parity, snap boundary, stationary Alt, independent toggle and queued no-op passed")
+    print(f"resource-mex: {'left' if classic else 'right'} interface, center parity, snap boundary, Alt, independent toggle, plain no-op, selected-only variant-safe Shift cancellation and requeue passed")
 
 
 def upgrade(c, shift=False):
@@ -218,6 +258,7 @@ def upgrade(c, shift=False):
     if shift:
         c.call("order", "move", "pos", "4500", "2500", "--unit", c.units["ARMACK"],
                "--expect", "ARMACK")
+        preceding = c.orders("ARMACK")
     combat = c.orders("ARMPW")
     x, z = c.screen("ARMMEX")
     c.resource_click(x, z, shift=shift)
@@ -239,6 +280,14 @@ def upgrade(c, shift=False):
     assert c.orders("ARMACK") == orders, "repeat upgrade toggled or duplicated its queue"
     for helper in ("ARMCK", "CORCK"):
         assert sum(o["target"] == c.address("ARMACK") for o in c.orders(helper)) == 1, "repeat upgrade duplicated a helper guard"
+    if shift:
+        helpers = {k: c.orders(k) for k in ("ARMCK", "CORCK")}
+        c.unqueue(x, z)
+        assert c.orders("ARMACK") == preceding, "unqueue did not remove only the reclaim/build pair"
+        assert all(c.orders(k) == orders for k, orders in helpers.items()), "unqueue changed persistent helpers"
+        assert c.orders("ARMPW") == combat, "unqueue changed selected combat orders"
+        c.resource_click(x, z, shift=True)
+        c.until(upgraded, "cancelled upgrade could not be queued again")
     assert c.mode() == 1, "upgrade left contextual mode"
     print("resource-upgrade: reclaim/build sequence, mixed helpers, combat priority and repeat no-op passed")
 
@@ -274,9 +323,15 @@ def terrain(c, mode):
     c.keys("up:alt")
     c.until(lambda: c.rect() == snapped, "geothermal snap did not resume")
     c.keys("esc")
+    c.call("order", "move", "pos", "900", "900", "--unit", c.units["CORCK"], "--expect", "CORCK")
+    preceding = c.orders("CORCK")
     c.resource_click(676, 258, shift=True)
     c.until(lambda: any(o["type"] == 193 for o in c.orders("CORCK")), "Quick geo produced no geothermal build order")
-    print(f"resource-{mode}: metal-ground classification, manual geo/Alt and Quick geo passed")
+    c.unqueue(676, 258)
+    assert c.orders("CORCK") == preceding, "geo unqueue did not preserve the preceding Move"
+    c.resource_click(676, 258, shift=True)
+    c.until(lambda: any(o["type"] == 193 for o in c.orders("CORCK")), "cancelled geo could not be queued again")
+    print(f"resource-{mode}: metal-ground classification, manual geo/Alt, Quick geo cancellation and requeue passed")
 
 
 def policy(c, mode, gamedir):
@@ -314,6 +369,7 @@ def geo_upgrade(c):
     types = c.call("units", "--json")["units"]
     stronger = next(t["id"] for t in types if t["name"].upper() == "RSUPGEO")
     c.call("order", "move", "pos", "900", "900", "--unit", c.units["CORCK"], "--expect", "CORCK")
+    preceding = c.orders("CORCK")
     x, z = c.screen("CORGEO")
     c.resource_click(x, z, shift=True)
     def upgraded():
@@ -325,6 +381,12 @@ def geo_upgrade(c):
     c.repeat(x, z)
     assert c.orders("CORCK") == orders, "repeat geo upgrade altered its queue"
     c.until(lambda: any(o["target"] == c.address("CORCK") for o in c.orders("ARMCK")), "geo helper received no persistent guard")
+    helper = c.orders("ARMCK")
+    c.unqueue(x, z)
+    assert c.orders("CORCK") == preceding, "geo unqueue did not remove only the reclaim/build pair"
+    assert c.orders("ARMCK") == helper, "geo unqueue changed the persistent helper"
+    c.resource_click(x, z, shift=True)
+    c.until(upgraded, "cancelled geo upgrade could not be queued again")
     print("resource-geo-upgrade: stronger variant, Shift reclaim/build and persistent helper passed")
 
 

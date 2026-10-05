@@ -49,6 +49,10 @@ typedef struct {
     int kind, x, z, height, queued, anchor_x, anchor_z;
     float strength;
 } Choice;
+typedef struct {
+    int action, pos[3], reclaim, reclaim_pos[3];
+    unsigned type, target;
+} Cancel;
 
 /* UI state, game-thread owned: the engine simulation never reads it. */
 static int s_armed, s_raw[3], s_raw_valid;
@@ -431,9 +435,81 @@ static int plans_block(const World* w, const Choice* c)
     return 0;
 }
 
+static int same_plan(const World* w, const Choice* c, const char* node)
+{
+    unsigned t = *(unsigned short*)(node + 0x36);
+    int x, z, fx, fz;
+    if (!build_node(w, node) || kind(w->defs + t * D_STRIDE) != c->kind ||
+        !footprint(w->defs + t * D_STRIDE, &fx, &fz)) return 0;
+    x = ((*(int*)(node + 0x22) >> 16) - fx * 8) / 16;
+    z = ((*(int*)(node + 0x2A) >> 16) - fz * 8) / 16;
+    if (c->kind == 2 || c->target) {
+        int pos[3];
+        position(w, c, pos);
+        return llabs((int64_t)*(int*)(node + 0x22) - pos[0]) <= 1048576 &&
+               llabs((int64_t)*(int*)(node + 0x2A) - pos[2]) <= 1048576;
+    } else {
+        Choice other = {0};
+        other.x = x; other.z = z;
+        return x >= 0 && z >= 0 && x + fx <= w->w && z + fz <= w->h &&
+            distinct(w, &other, fx, fz) && other.anchor_x == c->anchor_x &&
+            other.anchor_z == c->anchor_z;
+    }
+}
+
+static const char* native_match(const char* u, int action, const char* target, const int* pos)
+{
+    const char* n;
+    unsigned steps = 0;
+    /* DISASSEMBLED 0x43AFF2..0x43B032: the Shift root takes the FIRST
+       action/optional-target/position match, ignoring the build type.
+       Mirror its unsigned +/-16-world-unit arithmetic, including wrap. */
+    for (n = *(const char* const*)(u + U_ORDERS); n && steps++ < 16384;
+         n = *(const char* const*)(n + 0x4A)) {
+        if (*(const char* const*)(n + 0x0E) != u) return NULL;
+        if ((unsigned char)n[4] == action && (!target || *(const char* const*)(n + 0x16) == target) &&
+            (unsigned)pos[0] - *(const unsigned*)(n + 0x22) + 0x100000u <= 0x200000u &&
+            (unsigned)pos[2] - *(const unsigned*)(n + 0x2A) + 0x100000u <= 0x200000u) return n;
+    }
+    return NULL;
+}
+
+static int find_cancel(const World* w, const char* u, const Choice* c, Cancel* out)
+{
+    const char *node, *previous = NULL, *target = c->target ? unit(w, c->target) : NULL;
+    unsigned steps = 0;
+    for (node = *(const char* const*)(u + U_ORDERS); node && steps++ < 16384;
+         previous = node, node = *(const char* const*)(node + 0x4A)) {
+        int pos[3], action;
+        if (*(const char* const*)(node + 0x0E) != u) break;
+        if (!same_plan(w, c, node) || (*(unsigned*)(node + 0x42) & 0x40000u)) continue;
+        memcpy(pos, node + 0x22, sizeof pos);
+        action = (unsigned char)node[4];
+        /* Finding this exact first match on the main chain proves the
+           engine root will unlink it rather than append or remove a neighbor.
+           No simulation iteration or other mutator runs before the call. */
+        if (native_match(u, action, NULL, pos) != node) continue;
+        memset(out, 0, sizeof *out);
+        out->action = action; out->type = *(unsigned short*)(node + 0x36);
+        memcpy(out->pos, pos, sizeof pos);
+        if (c->target) {
+            if (!target || !previous || (*(unsigned*)(previous + 0x42) & 0x40000u) ||
+                *(const char* const*)(previous + 0x16) != target ||
+                resolve(u, 12, target, pos) != (unsigned char)previous[4] ||
+                memcmp(previous + 0x22, pos, sizeof pos)) continue;
+            out->reclaim = (unsigned char)previous[4]; out->target = c->target;
+            memcpy(out->reclaim_pos, previous + 0x22, sizeof out->reclaim_pos);
+            if (native_match(u, out->reclaim, target, out->reclaim_pos) != previous) continue;
+        }
+        return 1;
+    }
+    return 0;
+}
+
 static int queued(const World* w, const Choice* c)
 {
     unsigned i;
+    int found = 0;
     for (i = w->first; i <= w->last; i++) {
         const char *u = unit(w, i), *node;
         unsigned steps = 0;
@@ -442,29 +518,41 @@ static int queued(const World* w, const Choice* c)
            this thread. The walk is bounded even for a malformed cycle. */
         for (node = *(const char* const*)(u + U_ORDERS); node && steps++ < 16384;
              node = *(const char* const*)(node + 0x4A)) {
-            unsigned t = *(unsigned short*)(node + 0x36);
-            int x, z, fx, fz;
             if (*(const char* const*)(node + 0x0E) != u) break;
-            if (!build_node(w, node)) continue;
-            if (kind(w->defs + t * D_STRIDE) != c->kind || !footprint(w->defs + t * D_STRIDE, &fx, &fz)) continue;
-            x = (*(int*)(node + 0x22) >> 16) - fx * 8;
-            z = (*(int*)(node + 0x2A) >> 16) - fz * 8;
-            x /= 16; z /= 16;
-            if (c->kind == 2 || c->target) {
-                int pos[3];
-                position(w, c, pos);
-                if (llabs((int64_t)*(int*)(node + 0x22) - pos[0]) <= 1048576 &&
-                    llabs((int64_t)*(int*)(node + 0x2A) - pos[2]) <= 1048576) return 1;
-            } else {
-                Choice other = {0};
-                other.x = x; other.z = z;
-                if (x >= 0 && z >= 0 && x + fx <= w->w && z + fz <= w->h &&
-                    distinct(w, &other, fx, fz) && other.anchor_x == c->anchor_x &&
-                    other.anchor_z == c->anchor_z) return 1;
+            if (same_plan(w, c, node)) {
+                Cancel cancel;
+                found |= TAGPU_RESOURCE_QUEUED;
+                if (selected(w, u) && find_cancel(w, u, c, &cancel))
+                    return found | TAGPU_RESOURCE_CANCEL;
+                break;
             }
         }
     }
-    return 0;
+    return found;
+}
+
+static unsigned unqueue(const World* w, const Choice* c)
+{
+    unsigned i, count = 0;
+    for (i = w->first; i <= w->last; i++) {
+        const char* u = unit(w, i);
+        Cancel cancel;
+        if (!u || !selected(w, u) || !find_cancel(w, u, c, &cancel)) continue;
+        /* Copy values, never retain a heap node across destruction. The
+           bounded unit arena remains live throughout these input roots. */
+        ((Order)0x0043AFC0u)(cancel.action, 1, (void*)u, NULL, cancel.pos, cancel.type, 0);
+        if (cancel.target) {
+            const char* target = unit(w, cancel.target);
+            const char* reclaim = target ? native_match(u, cancel.reclaim, target, cancel.reclaim_pos) : NULL;
+            /* Destructors may re-enter handlers. Re-query the remaining
+               pair by copied values; never append a reclaim if it vanished. */
+            if (reclaim && !(*(unsigned*)(reclaim + 0x42) & 0x40000u) &&
+                !memcmp(reclaim + 0x22, cancel.reclaim_pos, sizeof cancel.reclaim_pos))
+                ((Order)0x0043AFC0u)(cancel.reclaim, 1, (void*)u, (void*)target, cancel.reclaim_pos, 0, 0);
+        }
+        count++;
+    }
+    return count;
 }
 
 static int quick_choice(const World* w, Choice* chosen)
@@ -614,6 +702,12 @@ static int click(void* frame, int right)
         if (!have) return 0;
     }
     if (c.queued) {
+        if (w.shift && (c.queued & TAGPU_RESOURCE_CANCEL)) {
+            unsigned removed = unqueue(&w, &c);
+            tagpu_logf("resource: unqueued type=%u site=%d,%d builders=%u upgrade=%u",
+                       c.type, c.x, c.z, removed, c.target);
+            return 1;
+        }
         tagpu_logf("resource: already queued type=%u site=%d,%d", c.type, c.x, c.z);
         return 1;
     }
