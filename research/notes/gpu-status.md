@@ -3193,6 +3193,17 @@ on both recipients. Public repeats, the sampled private recipient and a
 full-length line retain exact wire CRCs and separate clocks. This does not
 enable multiplayer replay display or close loading/raw transport/POV/budget
 gates. The multiplayer slice records the current native reader verification.
+An independent three-human COVER run also retains private originals from two
+saving-off authors, both actual receipts and a public marker: seven entries,
+three distinct author/serial-1 identities. The recording host has neither
+private line in its sampled display and no private receipt. The complete file
+has zero corrections and all 324 application envelopes / 160,587 bytes remain
+exact through C/Python reader seek. The reusable saved-evidence fixture passes
+both this recording and the fourteen-entry repeated/full-length recording.
+The loading audit identifies state-5 deliveries before B2 and two loading
+pumps sharing the receive allocation. TLS provides a span but no cross-thread
+lifetime; acceptance still requires an ordered implementation. No mask,
+thread guard, engine patch or field write changes in this verification.
 The snapshot also publishes inline `edit_index`/`caret` without engine writes.
 A two-peer COVER run verifies acknowledged text replacement and the engine's
 Mapping toggle. This is driver verification, not a native replay gate.

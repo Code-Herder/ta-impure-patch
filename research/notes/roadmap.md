@@ -4013,6 +4013,17 @@ other peers opted out of saving; ordinary teardown closes the recording with
 zero corrections. Latest-batch inspection and the ordered application visitor
 retain these records; replay display/engine seek, loading-phase chat, raw
 transport and pings/drawings remain open.
+The separate three-human COVER run also verifies private originals from two
+authors with saving off, sent only to each other. The saving host displays
+neither private line but retains both originals and actual receipts; all three
+authors' serial 1 values remain distinct. Its seven entries and complete
+324-envelope / 160,587-byte application history agree through C/Python reader
+seek, with zero writer corrections. The reusable saved-evidence reader checks
+these identities/bytes/clocks against every peer's native logs and also passes
+the earlier repeated/full-length file. Loading research confirms a gap between
+stock's state-5 acceptance and the current state-6 wire: the pre-B2 producer
+handoff and shared receive-buffer lifetime remain implementation work. No
+multiplayer landing gate is cleared by this verification.
 
 The work branch's tick-based replay harness defaults to internal speed 20 (2x),
 with normal speed selectable and retained for cost and speed/settings UI checks.

@@ -4,8 +4,10 @@
 One owned Wine prefix/private display; no game launch or primary session.
 """
 import argparse
+import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -331,7 +333,87 @@ def native_explored_oracle(segment, history):
     return len(checked)
 
 
-def run(output, read_file=None, skirmish_file=None, native_file=None):
+def native_text_checks(segment, history, log_path, output, evidence=None):
+    entries, expected = [], []
+    for applied, packet in history.applications:
+        packet = bytes(packet)
+        origin, tick, sequence, kind = struct.unpack_from("<IIII", packet, 32)
+        if kind != 12:
+            continue
+        ordinal = struct.unpack_from("<Q", packet)[0]
+        count = struct.unpack_from("<I", packet, 80)[0]
+        for i in range(count):
+            at = 84+i*136
+            phase, mode, _, author, recipient, source_tick, flags, event = struct.unpack_from("<BBHIIIIQ", packet, at)
+            targets = struct.unpack_from("<10I", packet, at+28)
+            stock = packet[at+68:at+133]
+            expected.append([str(v) for v in (ordinal, applied, origin, sequence, tick,
+                             phase, author, recipient, event, source_tick, flags, mode)]+
+                            [",".join(map(str, targets)), stock.hex().upper()])
+            entries.append(dict(ordinal=ordinal, applied=applied, producer=origin,
+                                sequence=sequence, tick=tick, phase=phase, author=author,
+                                recipient=recipient, event=event, source_tick=source_tick,
+                                flags=flags, mode=mode, targets=targets, stock=stock.hex()))
+    text = log_path.read_text()
+    observed = [line.split()[1:] for line in text.splitlines() if line.startswith("NATIVE_TEXT ")]
+    if observed != expected:
+        raise RuntimeError("native C/Python text entries, packet bytes, intent or clocks differ")
+    queries = []
+    for stage, tick in (("final", segment["last"]),
+                        ("seek-middle", segment["first"]+(segment["last"]-segment["first"])//2),
+                        ("seek-final", segment["last"])):
+        state = history.at(tick)
+        for origin, *_ in history.roster.actors:
+            if origin not in state.text:
+                continue
+            e = state.text[origin]
+            body = struct.pack("<I", len(e["events"]))+b"".join(
+                struct.pack("<BBHIIIIQ10I65s3x", v["phase"], v["mode"], 0,
+                            v["origin"], v["recipient"], v["source_tick"], v["display"],
+                            v["event"], *v["targets"], v["stock"]) for v in e["events"])
+            queries.append([stage, str(tick), str(origin), str(e["source_tick"]),
+                            str(e["sequence"]), str(e["applied_tick"]), str(len(e["events"])),
+                            f'{zlib.crc32(body):08X}', e["stream"].hex().upper()])
+    observed = [line.split()[1:] for line in text.splitlines() if line.startswith("NATIVE_TEXT_QUERY ")]
+    if observed != queries:
+        raise RuntimeError("native C/Python text batch queries or provenance differ through seek")
+    if evidence:
+        rosters = json.loads((evidence / "roster.json").read_text())
+        peers = {}
+        for name, roster in rosters.items():
+            local = [p["native"] for p in roster if p["active"] and p["controller"] == 1]
+            if len(local) != 1 or local[0] in peers.values() or Path(name).name != name:
+                raise RuntimeError("chat evidence has no unique local human identity")
+            peers[name] = local[0]
+        human_seats = {p["index"] for p in segment["header"]["players"] if p["controller"] in (1, 3)}
+        humans = {origin for origin, seat, *_ in history.roster.actors if seat in human_seats}
+        communicating = {v for e in entries for v in (e["author"], e["recipient"])}
+        if set(peers.values()) != humans or not communicating.issubset(peers.values()):
+            raise RuntimeError("chat evidence does not cover every native human endpoint")
+        for name, peer in peers.items():
+            wire = (evidence / (name+"-tagpu.log")).read_text()
+            sources = [(int(origin), int(event), int(tick), int(crc, 16)) for origin, event, tick, crc in
+                       re.findall(r"recmp: text source origin (\d+) event (\d+) tick (\d+) CRC ([0-9A-F]{8})", wire)]
+            persisted = [(e["author"], e["event"], e["source_tick"], zlib.crc32(bytes.fromhex(e["stock"])))
+                         for e in entries if e["phase"] == 1 and e["author"] == peer]
+            if sources != persisted:
+                raise RuntimeError("chat original differs from native wire evidence for "+name)
+            receipts = [(int(origin), int(event), int(source), int(tick), int(recipient), int(crc, 16))
+                        for origin, event, source, tick, recipient, crc in re.findall(
+                        r"recmp: text received origin (\d+) event (\d+) source (\d+) tick (\d+) recipient (\d+) CRC ([0-9A-F]{8})", wire)]
+            persisted = [(e["author"], e["event"], e["source_tick"], e["tick"], e["recipient"],
+                          zlib.crc32(bytes.fromhex(e["stock"]))) for e in entries
+                         if e["phase"] == 2 and e["recipient"] == peer]
+            if receipts != persisted:
+                raise RuntimeError("chat actual receipts differ from native wire evidence for "+name)
+        print("native text: all originals/actual recipients match each peer's native wire identity, CRC and clocks PASS", flush=True)
+    (output / "text-applications.json").write_text(json.dumps(entries, indent=2)+"\n")
+    print(f"native text: {len(entries)} exact C/Python entries and {len(queries)} latest-batch queries through seek PASS", flush=True)
+    return len(entries)
+
+
+def run(output, read_file=None, skirmish_file=None, native_file=None,
+        native_text_file=None, chat_evidence=None):
     root = tareplay.main_checkout()
     directory = None
     display = tareplay.start_xvfb()
@@ -354,11 +436,13 @@ def run(output, read_file=None, skirmish_file=None, native_file=None):
             with (output / "skirmish-read.log").open("w") as log:
                 command(["wine", exe, "skirmish", "Z:" + str(skirmish_file).replace("/", "\\")], log, env=env)
             print("actual skirmish file: C reader/summary/full-header info PASS", flush=True)
-        if native_file:
+        if native_file or native_text_file:
+            path = native_file or native_text_file
             log_path = output / "native-read.log"
             with log_path.open("w") as log:
-                command(["wine", exe, "native", "Z:" + str(native_file).replace("/", "\\")], log, env=env)
-            blocks, stopped = tarec.blocks(native_file)
+                command(["wine", exe, "native" if native_file else "native-text",
+                         "Z:" + str(path).replace("/", "\\")], log, env=env)
+            blocks, stopped = tarec.blocks(path)
             if stopped:
                 raise RuntimeError(stopped)
             segment = tarec.segments(blocks)[0]
@@ -366,6 +450,11 @@ def run(output, read_file=None, skirmish_file=None, native_file=None):
             for kind, _, _, raw in blocks:
                 if kind == tarec.RB_CONTRIBUTIONS:
                     history.block(raw)
+                elif kind == tarec.RB_END:
+                    footers = [body for tag, body in tarec.entries(raw) if tag == tarec.RT_MP_END]
+                    if len(footers) != 1:
+                        raise RuntimeError("native file has no unique multiplayer footer")
+                    history.footer(footers[0])
             crc, size, roots = 0, 0, 0
             for _, raw in history.applications:
                 crc = zlib.crc32(raw, crc)
@@ -389,6 +478,12 @@ def run(output, read_file=None, skirmish_file=None, native_file=None):
             if rows != [[str(len(creates)), f"{create_crc:08X}"]]:
                 raise RuntimeError("native C/Python network creation arguments/ticks/token disagree")
             print(f"native creates: {len(creates)} exact C/Python roots retained through world seek PASS", flush=True)
+            count = native_text_checks(segment, history, log_path, output, chat_evidence)
+            if native_text_file:
+                if not count:
+                    raise RuntimeError("native text file contains no text observations")
+                print("native text file: complete footer and full C/Python application bytes through reader world seek PASS; engine playback and primary exploration oracle untested", flush=True)
+                return
             expected = []
             for stage, tick in (("final", segment["last"]),
                                 ("seek-middle", segment["first"]+(segment["last"]-segment["first"])//2),
@@ -694,15 +789,21 @@ def main():
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--read-file", type=Path, help="verify new reader controls against an existing fixture file")
     source.add_argument("--native-file", type=Path, help="verify a game-produced multiplayer file and its ordered authority through seek")
+    source.add_argument("--native-text-file", type=Path, help="verify a game-produced chat file through reader seek; requires text, without the combat effects or primary exploration oracle gates")
+    parser.add_argument("--chat-evidence", type=Path, help="also compare native text against retained roster.json and every peer's NAME-tagpu.log")
     parser.add_argument("--skirmish-file", type=Path, help="also validate a real skirmish recording's header/info")
     args = parser.parse_args()
+    if args.chat_evidence and not (args.native_file or args.native_text_file):
+        parser.error("--chat-evidence requires --native-file or --native-text-file")
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)
     try:
         run(output, args.read_file.resolve() if args.read_file else None,
             args.skirmish_file.resolve() if args.skirmish_file else None,
-            args.native_file.resolve() if args.native_file else None)
+            args.native_file.resolve() if args.native_file else None,
+            args.native_text_file.resolve() if args.native_text_file else None,
+            args.chat_evidence.resolve() if args.chat_evidence else None)
     except (OSError, ValueError, RuntimeError, tarec.Unreadable, subprocess.SubprocessError,
             tareplay.CouldNotRun) as error:
         print(f"FAIL: {error}; inspect {output}", file=sys.stderr)

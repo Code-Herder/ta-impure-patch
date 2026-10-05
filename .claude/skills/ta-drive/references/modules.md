@@ -278,6 +278,19 @@ entries include local echo and intended target calls; received entries belong
 to the actual recipient's stream and clock. `recr_mp_text` inspects the latest
 applied batch; every observation remains in the ordered application ledger.
 
+Saved native chat evidence uses:
+`python3 tools/replay/recmp_file_test.py --out /tmp/recmp-chat-read --native-text-file FILE --chat-evidence DIR`.
+`DIR/roster.json` maps each instance name to its ten native player rows;
+`DIR/NAME-tagpu.log` retains each human endpoint's source/received wire logs.
+The fixture requires text observations, checks the complete footer and every
+C/Python text entry, application bytes and latest-batch query through reader
+seek, then compares author/serial/CRC and source/recipient clocks with those
+logs. Authors and actual recipients must all have evidence, including a saving
+peer that receives no private messages. Run this owned-prefix fixture after
+the native menu driver has stopped. `--native-file` retains the separate
+combat effects and independent primary exploration oracle gates. Neither
+reader mode tests engine multiplayer playback or loading-phase delivery.
+
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
   `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin. **The NAT
   helpers are refused** (`dpnhpast,dpnhupnp=d`): the transport skips a helper that does not load,

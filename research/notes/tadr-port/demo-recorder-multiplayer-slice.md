@@ -1400,6 +1400,51 @@ text observations instead. This does not complete the owner-effect gate or
 enable engine playback. This run does not provide an independent raw primary
 exploration oracle or the accumulated landing coverage.
 
+MEASURED 2026-10-05 on the reference setup: a separate native three-human
+*Town & Country* COVER game explicitly arms local saving off on both private
+authors. Each sends one digit-selected message to the other; the saving host
+is addressed only by its own subsequent public marker. After that marker the
+host's native display queue contains neither private line, and its wire log
+has no private receipt. The complete 428,123-byte recording nevertheless
+retains both private originals and their actual receipts:
+
+| Author / intended destination | Serial / stock CRC | Original source / recorder application tick | Actual recipient / recorder application tick |
+|---|---|---|---|
+| `677804643` / `677804645` | 1 / `FCC570F5` | 265 / 311 | 262 / 313 |
+| `677804645` / `677804643` | 1 / `FDABD2F3` | 355 / 406 | 366 / 411 |
+| `677804641` / generic public | 1 / `F70E8277` | 515 / 515 | `677804643`: 478 / 522; `677804645`: 471 / 522 |
+
+All three author/serial pairs remain distinct. Private originals have mode 3
+and exactly the other's native ID as intended target. The two opted-out
+authors create no writer according to their retained logs. Ordinary departure
+closes at GameTime 728 with 728 iterations and zero corrections. C/Python
+recover all seven exact entries and the complete 324-envelope / 160,587-byte
+application history, CRC `DDA07B57`, through reader world seek. Eight C/Python
+latest-batch queries agree; the host has no batch at the middle seek because
+its first source event is later. Unknown is retained rather than invented.
+This idle chat recording has no owner effect batches or engine playback result.
+
+`recmp_file_test.py --native-text-file FILE --chat-evidence DIR` is the
+repeatable saved-evidence check. It requires text observations and a complete
+footer, compares every C/Python entry and latest-batch query through seek, and
+checks original/actual receipt identities, CRCs and clocks against each peer's
+retained log and native roster. The existing `--native-file` combat and primary
+exploration oracle requirements remain intact. The repeated/full-length
+fourteen-entry recording and this three-author seven-entry recording both
+pass the saved-evidence check. These are reader tests, not engine replay
+application or the accumulated multiplayer landing gate.
+
+The loading audit confirms a concrete gap: stock text mask 7 admits state 5,
+whereas the identified text mask 4 admits only state 6. The loader's early
+pump and the game loading frame can both receive. State 5 also persists into
+the first catch-up ticks after the loader's final completion store, before B2
+creates the contribution producer. B3's TLS span identifies a receive; it
+does not serialize loading pumps or protect their shared reallocating buffer.
+The [engine map](../exe-reverse-engineering.md) records the call sweep, state
+mask and loader ordering. Loading receipt ownership/clocks and stock display
+still require a by-design handoff; this checkpoint changes no mask or thread
+guard and does not close that gate.
+
 #### Input acknowledgement used by the chat fixture
 
 The engine's textfield editor is `0x4A7290`, with active edit index at GUIInfo

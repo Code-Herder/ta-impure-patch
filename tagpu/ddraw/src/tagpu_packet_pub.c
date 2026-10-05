@@ -49,9 +49,9 @@
    "the game thread owns all of main" is false during a load and true for
    every in-play draw — exactly the set the return-address gate selects, and
    what closes the audit's begin/end hazard by ORDERING rather than by speed.
-   No instruction clears bit 0 or bit 1 (every reference to the word is
-   listed in the exe note), so whether they are reset between two games in
-   one process is settled by the log lines here, not by the disassembly.
+   The in-play entry zeroes the flag word with bulk stores at 0x49847E and
+   0x498480, after the catch-up frame and the state-6 store. That frame's
+   first draw can therefore see flags 3; later draws see 0 with no live loader.
    The observer on 0x497C70 (stolen `55 8B EC 6A FF`, position-independent)
    logs the loader's thread id at its entry — a direct measurement rather than
    a call-chain inference.

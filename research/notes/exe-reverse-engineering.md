@@ -11592,11 +11592,14 @@ disassembly confirms it:
 | `0x497C57..0x497C62` | the loader body's LAST act: **bit 1** set (`or ecx,2` at `0x497C5F`, the store at `0x497C62`), then `ret` at `0x497C6C` |
 | bits 0/1, the readers | `0x45290E`/`0x452917`, `0x4550C2`/`0x4550CB`, `0x494E8B`/`0x494E94` (`test byte,1` / `test byte,2` pairs), `0x497D28`, `0x497F4B` (bit 0), `0x498342` (bit 1); bit 2: `0x45578A`, `0x498539`, `0x496846` |
 
-**Every writer of the word** is in that table: `or 1`, `or 2`, `or 4`, `or 8` and the two
-`and ~4`. **No instruction clears bit 0 or bit 1.** MEASURED, then: the publisher's per-frame
-copy of the word reads `0x0003` at the level's first in-play draw and **`0x0000` from a few
-seconds later on**, so a bulk store zeroes it after the load — where, is not established; the
-level-cycle run below is what says whether the next load starts from zero.
+The table lists the individual bit updates: `or 1`, `or 2`, `or 4`, `or 8`
+and the two `and ~4`. The in-play entry also clears the word by a bulk store:
+`0x498478` forms `main+0x38D6F`, `0x49847E` zeroes its first dword and
+`0x498480` zeroes the next, covering `main+0x38D73..+0x38D76` and therefore
+the complete flag word. These stores follow state 6 at `0x498445` and the
+catch-up frame's return. This explains the measured `0x0003` at the first
+in-play draw and subsequent `0x0000`; zero flags during play do not mean the
+loader is still running.
 
 **The order, measured** (the log of `tagpu_packet_pub.c`, one append per line, so the file's order
 is the time order; game thread 736, render thread 744 then 760 after the mode switch):
@@ -12908,6 +12911,53 @@ receipts, with exact wire CRCs/65-byte data retained. Public event 1 and 2 share
 their packet CRC `20E5EB9A` but remain separate identities. Ordinary teardown
 closes at GameTime 1027 with zero corrections. C/Python reader application bytes
 remain identical through world seek; engine multiplayer playback remains refused.
+
+MEASURED in the separate saving-off private-source probe, three humans on
+*Town & Country*, COVER, native queued DirectPlay: authors `677804643` and
+`677804645` each send serial 1 only to the other. Their stock packet CRCs are
+`FCC570F5` and `FDABD2F3`; source ticks are 265 and 355, actual recipient ticks
+262 and 366, saving host application ticks 311/313 and 406/411 for originals/
+receipts. Both original modes are 3 and each has exactly the other's native
+ID as its target. The saving host `677804641` has neither private line in its
+sampled native queue after its public marker and logs no private receipt.
+Its own serial 1 public line has CRC `F70E8277`, source tick 515, recipient
+ticks 478/471 and host application tick 522 for both receipts. All three
+author/serial pairs stay distinct. The complete file retains three originals
+and four actual receipts; C/Python bytes and reader seek agree. Neither
+saving-off peer logs a recording writer. This establishes contribution of
+chat the recorder was never addressed; it does not establish replay display.
+
+##### Loading acceptance remains a separate lifetime boundary
+
+DISASSEMBLED 2026-10-05: stock code `0x05` has mask 7, stored at `0x45208C`
+to `0x512BD4`, after length 65 at `0x452078` and callback `0x44FD60` at
+`0x452082`. The state gate at `0x45473F..0x4547AD` accepts mask bit 1 in
+state 5, bit 2 in state 6 and bit 0 otherwise; a failed state-5/6 bit does
+not fall through to bit 0. The identified code's mask 4 therefore omits a
+stock acceptance state.
+
+A whole-`.text` relative-call sweep finds seven direct calls to `0x453D40`:
+`0x41F80B`, `0x434EAF`, `0x44A69C`, `0x4954C8`, `0x4968CB`, `0x49727D`
+and `0x49852E`; the sole direct call to `0x4534E0` is `0x453D94` in that
+pump. This sweep does not exclude indirect calls. The loader's only direct
+pump is its early wait at `0x49727D`, before `LoadGameData_Main` at
+`0x497581`. Its subsequent bit-3 wait at `0x4975D6..0x4975F1` sleeps without
+another direct pump; its last store sets bit 1 at `0x497C62`. The game thread
+still pumps during the loading frame at `0x49852E`. Once it reads bit 1 at
+`0x498342`, it calls `0x496790` at `0x49842F`; that frame pumps in catch-up
+ticks and at `0x4968CB` before `0x498445` stores state 6. Thus state 5 also
+includes a phase after loader completion and before the first B2 producer.
+
+B3's `wire_rx_note` stores the current `main+0x2A38` pointer and delivered
+length in TLS at the receive statistics call. TLS binds the span to this
+thread's receive; it does not serialize the two loading pumps or keep an
+allocation alive against another pump's realloc. The live identified receiver
+requires the game thread and its B2 channel lifetime. Merely changing mask 4
+to 7 and removing that guard would supply neither lifetime nor recording
+ownership. A faithful loading implementation must establish the handoff,
+preserve actual pre-B2 observation clocks and publish their copied records
+after source-roster prerequisites. This audit changes no engine patch or
+acceptance rule; loading delivery remains open.
 
 #### Textfield input beneath the chat GUI
 
