@@ -3081,6 +3081,15 @@ The **pause guard at `0x496920`**, stolen `84 98 51 8A 03 00`, observes before t
 engine's pause test and reasserts pause while rewind owns the level. Failure to
 install it disables live rewind.
 
+The **round-trip batch guard at `0x49692D`**, stolen `A1 E8 1D 51 00`, runs after
+the scheduler `0x495230` returns at `0x496928` and before the count test at
+`0x496932` and step call at `0x49693E`. The two calls and the count test are
+byte-matched too. On a puppet with round trips armed, it bounds the due count by
+the nearest upcoming T−1 before `0x495490` caches that count in EBX. This makes
+the required frame boundary independent of frame timing. It preserves registers
+and flags and changes no iteration's step size. An unavailable guard refuses
+round trips; the frame dump and playback sites remain independent.
+
 The harness's AI activity observation brackets `0x408C40`, stops attribution
 at the shared targeting phase `0x4089A0`, samples constructors at `0x43A0C0`,
 and forgets destroyed samples at `0x43A1F0`. Existing dispatch observers
@@ -3127,6 +3136,10 @@ logged. The gates make them zero; the observers prove it. **The step's phases** 
 `tagpu_replay_phase` after the host's projectile tick and after its explosion tick.
 
 **Fields we write**, on the game thread, during playback, takeover or live rewind:
+
+- armed round trips on a puppet: the scheduler's due-tick count at
+  `main+0x38A3B`, validated within 0..5 and only reduced to the next T−1
+  boundary. This pacing word is already `leave` in `replay-globals.tsv`;
 
 - live rewind: pause bit 0 at `main+0x38A51`; the spectator's seat and buffers
   through `0x464290` and `0x464700`; recorded seats' type through `0x463C60`,

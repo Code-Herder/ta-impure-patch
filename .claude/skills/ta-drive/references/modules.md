@@ -694,7 +694,16 @@ block that reads to its last complete block.
   to read timeline N's chain, and `compare-fork FILE N` compares timeline N's first iteration with
   its parent at the fork point, less the takeover's expected differences.
 - **Check playback end to end** with `tools/replay/tareplay.py run FIXTURE… | all [-j N] [--keep]
-  [--out DIR]` (`list` names the fixtures of `tools/replay/fixtures.json`): each fixture is
+  [--game-speed 10|20] [--out DIR]` (`list` names the fixtures of `tools/replay/fixtures.json`):
+  tick-driven runs default to internal speed 20 (2x normal); `--game-speed 10` selects normal.
+  Each stopped owned instance's private registry store is configured before launch.
+  Cost fixtures and W's speed/settings UI test use normal speed. Tick endpoints,
+  round-trip windows and comparison rules keep their existing units; wall-clock
+  deadlines are not shortened. Armed round trips bound the tick batch at T−1,
+  so their frame checks cannot be skipped by faster simulation progression.
+  Use normal speed for timing, network latency and bandwidth measurements.
+  The same option applies to `measure`, `landing`,
+  `broad`, `takeover`, `forks` and `rewind`. Each fixture is
   recorded live, played on puppets, played again with three round trips and sought from a fresh
   process, each on its own Xvfb; the live game also takes the null twin (paused, the camera, the
   wheel, the cursor and the in-game menu moved, two frame dumps). A fixture with `"watch": true`

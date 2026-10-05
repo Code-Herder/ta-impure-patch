@@ -3903,6 +3903,19 @@ The copied-image player-row mapper passes 640 roster permutations and 3,520 byte
 
 Owner unit/mover images now have a bounded copied-image mapper and kind-8 full/delta/absence carrier, preserving birth, source stream/tick/sequence and application tick. Its atomic cache fixture passes 464,640 exact inverse mappings, malformed-batch and guard controls, 201-entry batches and the 65,531-slot bound. A native four-actor game verifies all four first full unit-image checksums/provenance and human owner-row remapping, then ordinary-exit cuts/receipts. Synthetic C/Python file seeking retains mapped unit authority and known absence while proof-only changes stay in source validation. This covers the record/mover, not COB/model/order-owned objects, effects/projectiles, AI planner or complete declared Impure authority. Engine application, projectile/Impure mappings and native multiplayer record/play/seek remain open; no multiplayer landing is cleared by these tests.
 
+The work branch's tick-based replay harness defaults to internal speed 20 (2x),
+with normal speed selectable and retained for cost and speed/settings UI checks.
+An armed round trip bounds the ordinary due-tick batch before the engine caches
+it, so faster progression cannot skip its T−1 frame. `secondary-orders` passes
+all 23 checks at 2x; the normal-speed control passes simulation and round-trip
+checks but repeats the open GUI-pointer images-inventory failure. No comparison
+rule or exclusion is loosened, and no multiplayer timing or bandwidth gate is
+cleared by these runs. The [completeness note](tadr-port/demo-recorder-completeness.html)
+and engine map describe the policy and batch bound.
+The coverage build also passes 33 `wpn-badtgt` checks, including the normal-speed
+W lane's settings restoration, and ten accelerated battle-takeover checks:
+fresh orders execute for every AI seat and 91% of mobile units move.
+
 ## The restorer as compute (2026-09-27)
 
 The Classic++ restorer's backend moves from fragment passes to Vulkan compute, and the speed goes

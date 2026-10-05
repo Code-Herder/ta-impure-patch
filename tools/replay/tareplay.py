@@ -66,6 +66,12 @@ failure; 2: something could not run (and nothing failed by name).
 
 The output folder (default ~/.local/share/ta-replay/runs/<time>, or $TAREPLAY_OUT) is outside the
 repository: its logs carry absolute paths.
+
+Tick-driven runs default to internal game speed 20 (2x normal); --game-speed 10 selects normal
+speed. The owned instance's private settings are written while stopped, before each launch.
+Simulation tick endpoints, comparisons and wall-clock deadlines retain their existing units.
+Cost fixtures and W's speed/settings UI test use normal speed; network/timing suites have
+their own speed policy.
 """
 import argparse
 import fcntl
@@ -110,6 +116,8 @@ _CLI_SPEC.loader.exec_module(_CLI_API)
 
 PREFIX = "tareplay-"
 UNIT_LIMIT = 500
+TEST_GAME_SPEED = 20
+NORMAL_GAME_SPEED = 10
 GAMETIME = "*0x511DE8+0x38A47:4"
 COB_STOP = "A unit script cannot continue safely"
 TRIGGER = "tagpu_replay.trigger"
@@ -242,7 +250,10 @@ def last(text):
 class Worker:
     """One tacli instance on one Xvfb, for the whole run."""
 
-    def __init__(self, out):
+    def __init__(self, out, game_speed=TEST_GAME_SPEED):
+        if game_speed not in (NORMAL_GAME_SPEED, TEST_GAME_SPEED):
+            raise CouldNotRun("test game speed must be 10 or 20")
+        self.game_speed = game_speed
         self.lock = None
         self.last_collection = None
         for k in range(1, 100):
@@ -347,6 +358,14 @@ class Worker:
         """The DLL and this fixture's content in the game folder, before a launch: every fixture's
         content files removed first, so one fixture's units never reach another's game."""
         self.last_collection = None
+        speed = NORMAL_GAME_SPEED if fix.get("cost") else self.game_speed
+        rc, text = tacli("registry", self.name, f"gamespeed={speed}", "--json")
+        if rc:
+            raise CouldNotRun(f"test game speed: {last(text)}")
+        rows = json.loads(text[text.index("{"):])["values"]
+        if len(rows) != 1 or rows[0]["value"] != speed or rows[0]["type"] != 4:
+            raise CouldNotRun(f"test game speed was not stored as a dword: {last(text)}")
+        say(f"{self.name}: game speed {speed} ({speed / NORMAL_GAME_SPEED:g}x target)")
         shutil.copy2(dll, self.gamedir / "ddraw.dll")
         rd = self.gamedir / "replays"
         for f in rd.glob("*") if rd.is_dir() else []:
@@ -1692,6 +1711,7 @@ class Run:
         self.fx = {}
         self.out = out
         self.measure = measure
+        self.game_speed = getattr(args, "game_speed", TEST_GAME_SPEED)
         h = head()
         fixes = fixes or fixtures()
         for name in names:
@@ -1715,6 +1735,7 @@ class Run:
             self.fx[name] = {"name": name, "fix": fix, "dll": dll, "Ts": Ts, "out": out / name,
                              "problems": [], "rt": {}, "passed": [], "held": [],
                              "procs": {}, "cover": cover, "measure": measure,
+                             "game_speed": NORMAL_GAME_SPEED if fix.get("cost") else self.game_speed,
                              "map": dll.with_suffix(".map"), "want": want,
                              "tk_ask": takeover or (None, None)}
             if measure:
@@ -1744,6 +1765,7 @@ class Run:
         say(f"{name} {proc}: start on {w.name}")
         try:
             stopping()
+            w.game_speed = NORMAL_GAME_SPEED if proc == "W" else self.game_speed
             if proc == "L":
                 cost = bool(fx["fix"].get("cost"))
                 fx["rec"] = live(w, fx, None if fx["measure"] or cost else Ts, out)
@@ -1848,7 +1870,9 @@ def report(run, keep):
     for name, fx in run.fx.items():
         cost = bool(fx["fix"].get("cost"))
         lines.append(f"== {name}: " + ("the cost game" if cost else
-                                       f"T {' '.join(map(str, fx['Ts']))}") + f"; {fx['out']}")
+                                       f"T {' '.join(map(str, fx['Ts']))}") +
+                     f"; game speed {fx['game_speed']} ({fx['game_speed'] / NORMAL_GAME_SPEED:g}x "
+                     f"target; W uses 10); {fx['out']}")
         for proc, kind, why in fx["problems"]:
             lines.append(f"   {proc} {kind.upper()}: {why}")
             failed |= kind == "FAILED"
@@ -2234,7 +2258,8 @@ def cmd_landing(args):
         feats = sorted({f for f, _ in funcs.values()} | set(regions))
         note = (f"{NOTE} dll={dll} range={base}..{sha} features={','.join(feats) or '-'} "
                 f"fixtures={','.join(sorted(fx)) or '-'} seeds={seeds.replace(' ', ',') or '-'} "
-                f"reached={k}/{total} result=pass date={datetime.date.today().isoformat()}")
+                f"reached={k}/{total} game_speed={args.game_speed} result=pass "
+                f"date={datetime.date.today().isoformat()}")
         git("notes", "append", "-m", note, graded)
         print(f"tareplay landing: pass, noted on {sha}: {note}")
         return 0
@@ -2366,7 +2391,7 @@ def cmd_forks(args):
     if not fix or not fix.get("takeover"):
         raise CouldNotRun("forks needs a takeover fixture")
     out = out_dir(args)
-    w = Worker(out)
+    w = Worker(out, args.game_speed)
     dll, make = build_dll(fix.get("dll") == "stock", args.cover)
     try:
         if not dll.exists() or dll.stat().st_mtime < sources_mtime():
@@ -2402,7 +2427,7 @@ def cmd_rewind(args):
     dll, make = build_dll(args.stock, args.cover)
     if not dll.exists() or dll.stat().st_mtime < sources_mtime():
         raise CouldNotRun(f"build {make} first")
-    w = Worker(out)
+    w = Worker(out, args.game_speed)
     try:
         fx = {"name": "battle", "fix": fixtures()["battle"], "dll": dll.resolve(),
               "cover": args.cover}
@@ -2491,6 +2516,10 @@ def main(argv=None):
     fe.add_argument("--check", metavar="DIR", help="the link's check of tagpu/ddraw: exit 0 "
                                                    "clean, 1 a named problem, 2 could not run")
     fe.set_defaults(func=cmd_features)
+    for parser in (r, m, la, br, tk, fk, rw):
+        parser.add_argument("--game-speed", type=int, choices=(10, 20), default=TEST_GAME_SPEED,
+                            help="internal TA speed: 20 = 2x (default), 10 = normal; cost "
+                                 "fixtures and W's speed UI test use 10")
     a = ap.parse_args(argv)
     if a.cmd in ("run", "measure", "landing", "broad", "takeover") and not 1 <= a.j <= 9:
         ap.error("-j is 1..9")

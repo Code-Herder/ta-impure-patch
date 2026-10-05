@@ -125,6 +125,7 @@
                                        its frames at +0x28, 8 bytes each                         */
 #define OFF_NSLOTS     0x14351      /* u16: the unit array's slots                                */
 #define OFF_GAMETIME   0x38A47
+#define OFF_DUE_TICKS  0x38A3B      /* u32: scheduler 0x495230 bounds this frame's steps to 0..5 */
 #define OFF_SPEED_CEIL 0x38A4B      /* u16: the game speed the player chose, 10 = 1x                 */
 #define OFF_SPEED_LIVE 0x38A4D      /* u16: the speed the scheduler runs at, raised toward the
                                        ceiling by its throttle (0x495465..0x49547B)               */
@@ -245,6 +246,7 @@ static struct {
     LONGLONG t_ai, t_pass;                  /* TK1's and TK4a's ticks                            */
 } s_tk;
 #define RT_ARMED 24                 /* a broad entry's round trips, armed at once (fixtures.json) */
+static int s_rt_pace_in;            /* attach-time guard before the skirmish step loop */
 static struct {
     unsigned n;
     struct { char name[37]; unsigned T; } a[RT_ARMED];
@@ -6202,13 +6204,17 @@ void tagpu_replay_files_frame(unsigned frame)
    poison check's comparison exact: a frame dump <name>-a; the TRANSIENT declarations put back to
    the values saved at the playing's first frame visit (tagpu_simreg.h); the seek to T with the
    poison check; a frame dump <name>-b; one line. tarec compare-dumps A B must be EQUAL. One the
-   host passes is dropped with a line (a frame can run several steps), which tareplay reports as
-   could not run. */
+   reader already passed is dropped with a line. The pacing guard bounds the ordinary step
+   batch at each upcoming T-1, so simulation progression cannot skip an armed future target. */
 static void rt_arm(const char* name, unsigned T)
 {
     size_t i, n = strlen(name);
     if (!tagpu_puppet_on() || !s_rd || s_dead) {
         tagpu_logf("replay: round trip %s refused: this level plays no recording", name);
+        return;
+    }
+    if (!s_rt_pace_in) {
+        tagpu_logf("replay: round trip %s refused: the tick-batch guard is unavailable", name);
         return;
     }
     if (!n || n > 36 || T < 2) {
@@ -7150,6 +7156,43 @@ static void rw_pause_init(void)
     tagpu_logf("rewind: scheduler pause guard %s", s_rw_pause_in ? "in" : "unavailable");
 }
 
+/* DISASSEMBLED: the scheduler returns before 0x49692D; 0x496932 tests its count,
+   and 0x495490 loads that count once at 0x495497, then decrements EBX at 0x49566C.
+   A future round trip needs the frame after T-1. Bounding the batch before that
+   load makes the frame boundary a fact, independent of speed or frame timing.
+   Only pacing changes: every simulation iteration still advances by one tick. */
+static int __cdecl rt_pace_guard(void* entry_esp)
+{
+    char* ta = ta_main();
+    unsigned now, due, i;
+    (void)entry_esp;
+    if (!ta || !tagpu_puppet_on() || !s_rd || s_dead || s_over || s_rw.state || !s_rt.n)
+        return 0;
+    now = *(const unsigned*)(ta + OFF_GAMETIME);
+    due = *(const unsigned*)(ta + OFF_DUE_TICKS);
+    if (due > 5) return 0;
+    for (i = 0; i < s_rt.n; i++) {
+        unsigned last = s_rt.a[i].T - 1;
+        if (last > now && last - now < due) due = last - now;
+    }
+    *(unsigned*)(ta + OFF_DUE_TICKS) = due;
+    return 0;
+}
+
+static void rt_pace_init(void)
+{
+    static const unsigned char MAIN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };
+    static const unsigned char COUNT[10] = {
+        0x8B, 0x88, 0x3B, 0x8A, 0x03, 0x00, 0x85, 0xC9, 0x74, 0x2D
+    };
+    s_rt_pace_in = call_is(0x00496928u, 0x00495230u) &&
+        tagpu_detour_bytes_ok(0x0049692Du, MAIN, sizeof MAIN) &&
+        tagpu_detour_bytes_ok(0x00496932u, COUNT, sizeof COUNT) &&
+        call_is(0x0049693Eu, 0x00495490u) &&
+        tagpu_detour_observe(0x0049692Du, MAIN, sizeof MAIN, rt_pace_guard, NULL);
+    tagpu_logf("replay: tick-batch guard %s", s_rt_pace_in ? "in" : "unavailable");
+}
+
 /* The frame visit's site: the in-play draw call `call 0x468CF0` at 0x4969CD (`push ebx; push ebx`
    before it, DISASSEMBLED). Two facts it rests on:
    - the stub is entered by the site's call and leaves by a jump, so DrawGameScreen runs with the
@@ -7238,6 +7281,7 @@ void tagpu_replay_init(void)
     int ok = 1;
     frame_site_init();
     rw_pause_init();
+    rt_pace_init();
     if (!call_is(FILL, 0x0047A760u) || !call_is(PERSIST, 0x00430F00u) ||
         !call_is(START1, 0x00496EE0u) || !call_is(START2, 0x00496EE0u)) {
         tagpu_logf("replay: the Start's or the loader's calls hold other bytes: no replays");

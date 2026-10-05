@@ -1378,7 +1378,7 @@ capture-point dump or one of another frame; `compare` refuses a frame dump (`com
 compare-dumps`), since no capture point's image holds what it holds.
 
 **The round trip.** `roundtrip <name> at <T>` in the trigger, on a level that plays a recording
-(refused elsewhere), T ≥ 2 and the name 1 to 36 letters, digits, `-` and `_`, up to 4 armed. At the
+(refused elsewhere), T ≥ 2 and the name 1 to 36 letters, digits, `-` and `_`, up to 24 armed. At the
 first frame visit of GameTime T−1, the reader at iteration T, right after that visit's
 `recorded_put` — so A's tables are the recording's, which the poison check needs — the replay takes
 the frame dump `<name>-a`, puts the TRANSIENT declarations back, seeks to T with the poison check,
@@ -1386,8 +1386,14 @@ takes the frame dump `<name>-b` and logs one line: `replay: <rec>: round trip <n
 TRANSIENT <b> bytes reset (<names>); <n> tables poisoned, residue <r> (<names>); seek <ms> ms`.
 `tarec.py compare-dumps <rec> <name>-a <name>-b` must be EQUAL: A is a playing's state, B a rebuild
 to T in place with nothing between them, so a difference is the seek's by construction. A round
-trip the host passes (a frame can run several steps) is dropped with `... not run: the level is at
+trip already behind the reader is dropped with `... not run: the level is at
 GameTime <t>`, and one whose seek is refused logs the refusal and takes no B.
+For an upcoming target, the byte-matched observer at `0x49692D` bounds the due-tick
+batch before `0x495490` caches it in EBX. The batch cannot advance beyond T−1,
+so ordinary simulation progression reaches that frame at any supported speed.
+The observer changes pacing only on a puppet with round trips armed, on the same
+game thread that arms and runs them. A round trip is refused if this guard could
+not install. Explicit seeks can still move the reader past an armed target.
 
 - **The TRANSIENT reset** (`tagpu_simreg_transient_save`, `tagpu_simreg_transient_reset`,
   `tagpu_simreg.c`): the static `SIM_TRANSIENT` declarations — not TLS, heap or engine ones —

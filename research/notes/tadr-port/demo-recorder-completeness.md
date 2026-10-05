@@ -399,6 +399,33 @@ pauses, since a puppet host's speed keys change nothing), `dump <name> now` (a f
 once), `seek <T> [dump <name>]`, `dock seek <T>` (the dock's own seek entry,
 `tagpu_replay_seek_request`, which takes no dump) and `roundtrip <name> at <T>`.
 
+**Test speed.** Tick-driven runs default to internal game speed 20 (2x normal),
+within the retail setter's range. `--game-speed 10` selects normal speed for
+`run`, `measure`, `landing`, `broad`, `takeover`, `forks` and `rewind`. Every launch
+configures only the stopped worker's private registry store through `tacli
+registry`; its acknowledged dword is checked before launching. Cost fixtures and
+W's speed/settings UI test use normal speed. Simulation tick endpoints,
+round-trip/AI windows, comparisons and wall-clock deadlines retain their units.
+The target speed is reported, and a passing landing note records it. The engine's
+due-tick loop repeats the ordinary one-tick step instead of enlarging it; its
+five-tick frame bound and throttle still apply. This policy does not accelerate
+the separate network/timing suites or establish equal AI choices across speeds.
+Armed round trips bound the scheduler's batch before the step caches it, making
+the frame after T−1 available even when a frame would otherwise run several
+ticks. The guard is on the game thread and affects only puppet pacing while a
+round trip is armed; an unavailable guard refuses the round trip.
+The [engine map](../exe-reverse-engineering.md) gives the disassembly
+and earlier measured tick rates.
+
+MEASURED 2026-10-05 on the reference setup: at internal speed 20,
+`secondary-orders` passes all 23 checks, `wpn-badtgt --cover` all 33 (W starting
+at 10), and `takeover battle --cover` all ten reported checks, including fresh
+executed AI orders and exact fork playback. The normal-speed
+`secondary-orders` control passes 22 checks and fails its images inventory at
+the existing `main+0x531` GUI pointer. No exclusion is added. Simulation runs
+near 60 ticks/s at 20 and 30 ticks/s at 10; startup, pauses and comparison work
+prevent inferring a whole-harness speedup from these runs.
+
 **Live rewind (U).** A fixture with `"rewind": true` also runs the
 [rewind L/P/Q checks](demo-recorder-s4-rewind.md) in `tarewind.py`. Battle and
 stock-limits use the battle on their respective DLLs. `rewind_steps` declares

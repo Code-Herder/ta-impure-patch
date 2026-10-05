@@ -13357,6 +13357,80 @@ measurements and normal-speed runs; an accelerated run changes the traffic load
 per wall-clock second. These facts are reconfirmed by retail disassembly, not a
 new accelerated multiplayer measurement.
 
+**The round-trip batch bound [DISASSEMBLED + MEASURED 2026-10-05].**
+The ordinary skirmish frame tests front-end bit 0 at `0x496918`
+(`main+0x37EBE`) and pause bit 0 at `0x496920` (`main+0x38A51`). When both
+are clear it calls the scheduler `0x495230` at `0x496928`, loads main from
+`0x511DE8` at `0x49692D` (`A1 E8 1D 51 00`), loads and tests the due count
+`main+0x38A3B` at `0x496932..0x496938`, and branches to `0x496969` at zero
+(`74 2D` at `0x49693A`). Otherwise `push 0` at `0x49693C` precedes the
+step call `0x495490` at `0x49693E`. That callee caches the count in EBX
+(`0x495497`, `0x4954AD`) and decrements the cached count at `0x49566C`;
+changing the main word inside the unit tick cannot stop that batch. Its
+once-a-call tail, including `0x428BD0/0x428BE0/0x428BF0` at
+`0x495674/0x495679/0x49567E`, remains outside the loop (their meanings are
+not established here). After the step, the frame times it through `0x4B6560`
+at `0x49694F`, accumulating at `main+0x38D85 +0x4C`, then tests the same
+front-end bit at `0x496969`, polls input `0x495E90` at `0x496971` and scroll
+`0x41CE90` at `0x496976`, and calls `0x48BAE0` at `0x49697B`.
+
+The adjacent network tail was read to distinguish these paths: after the
+step's timing accumulator it calls `0x428C00/0x428C10/0x428C20` at
+`0x496831/0x496836/0x49683B` and tests `main+0x38D75` bit 2 at
+`0x496846..0x496851`. When set, `0x4568C0` at `0x496853` may clear that
+bit at `0x496868..0x49686E`, and is timed through `0x4B6560` at `0x496881`
+into the `+0x2C` accumulator. The following calls
+`0x428C30/0x428C40/0x428C50` at `0x496896/0x49689B/0x4968A0` precede
+the jump to `0x496964`. The paused network branch at `0x4968AA` tests
+the same pause bit, optionally calls `0x4618A0` at `0x4968C6` with
+`this=0x513000`, argument 0 and nonzero `[0x506DBC]`, then pumps `0x453D40`
+at `0x4968CB`. A `0x4B6340` clock compared with `[0x51F300]` at
+`0x4968D0..0x4968DB` gates the next `clock+60` deadline, the local-player
+lookup `0x44FDB0` at `0x4968EC`, and `0x453320` at `0x4968F2` with that
+lookup's result. This branch is timed at `0x496903` into `+0x2C` and
+jumps to `0x496962`. No hook or new write is added in these network
+branches; the six `0x428Cxx` functions' meanings are not established here.
+
+`rt_pace_init` observes the five bytes at `0x49692D`, matching both calls
+and the ten bytes of the count load/test/zero branch as well. Its before-only
+observer preserves registers and flags, replays the main load and resumes at
+`0x496932`. On a playing puppet with armed round trips, outside rewind, the
+game thread validates the due count within 0..5 and reduces it by the smallest
+positive distance to an upcoming T−1. The step therefore cannot pass that
+frame boundary. This discards pacing budget for that frame, never an iteration
+or simulation state. The arm table is bounded to 24 entries, with T ≥ 2;
+the same game thread arms, bounds and consumes it. No lock or timing interval
+is the argument. Targets already behind the reader, including after an
+explicit seek, still report not run. Failure to install refuses round trips.
+The pacing word was already `leave` in `replay-globals.tsv`; no exclusion
+or comparison rule changed.
+
+MEASURED on the reference setup: the first internal-speed-20
+`secondary-orders` run missed the frame at GameTime 390 and refused the
+round trip at 391. With the bound installed, the full live/play/round-trip/
+fresh-seek fixture passes all 23 checks: frame dumps at GameTimes 390, 480
+and 540 match their in-place rebuilds exactly, all 26 poisoned tables have
+zero residue, and the continuations at 691, 781 and 841 match the recording.
+Playback heartbeats report 58.51 and 57.46 ticks/s at live speed 20.
+The same source at normal speed passes world/radar/event/count/address,
+puppet-write and all three round-trip checks, with playback heartbeats around
+30 ticks/s. Its images inventory fails one byte at the existing `main+0x531`
+GUI-pointer gap. That failure remains open and does not authorize an exclusion.
+This verifies accelerated tick-based replay checks; it does not measure
+multiplayer traffic or establish a total harness-time reduction.
+
+On the coverage build, `wpn-badtgt` passes all 33 checks, including accelerated
+live/play/round-trip/fresh-seek checks and the W lane starting at normal speed:
+the dock changes 10 to 20, the Options save retains the player's stored 10,
+and Leave restores the ceiling to 10. Its three round trips poison 27 tables
+with zero residue and exact A/B frame dumps. The coverage files reach
+`rt_pace_init`, `rt_pace_guard`, `rt_arm` and `rt_due`. The accelerated
+`takeover battle` passes all ten reported checks, including unchanged original
+history, exact fork playback and AI activity over [1679,3479): seats 1/2/3
+issue 1743/1987/1740 fresh orders, with 187/195/190 reaching normal dispatch,
+and 91% of 1001 mobile units move. These are functional speed regressions,
+not a clean result for the open GUI-pointer inventory or a throughput estimate.
+
 **The pause** is bit 0 of the word `main+0x38A51`: the Pause key XORs it (`0x4960AA..0x4960BC`) and
 then sends packet `0x19` through `0x451DF0`, with no watcher test. The level setups do not clear it
 (`0x49842A`, above, is ours).

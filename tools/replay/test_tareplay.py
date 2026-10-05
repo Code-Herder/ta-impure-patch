@@ -33,6 +33,7 @@ MAPS = [tafeat.DDRAW / "ddraw-cover.map", tafeat.DDRAW / "ddraw-stocklimits-cove
 class FailedWorkerCleanup(unittest.TestCase):
     def test_failed_game_is_stopped_even_if_artifact_collection_fails(self):
         run = tareplay.Run.__new__(tareplay.Run)
+        run.game_speed = tareplay.TEST_GAME_SPEED
         run.fx = {"naval": {"Ts": [1], "out": Path("unused"), "rec": Path("rec"),
                             "procs": {}, "problems": []}}
         worker = Mock(name="worker")
@@ -46,6 +47,7 @@ class FailedWorkerCleanup(unittest.TestCase):
 
     def test_worker_is_retired_if_failed_game_cannot_be_stopped(self):
         run = tareplay.Run.__new__(tareplay.Run)
+        run.game_speed = tareplay.TEST_GAME_SPEED
         run.fx = {"naval": {"Ts": [1], "out": Path("unused"), "rec": Path("rec"),
                             "procs": {}, "problems": []}}
         worker = Mock(name="worker")
