@@ -1009,6 +1009,23 @@ layer's vector at `[main+0x38D77] + layer·16`; a layer already holding more tha
 entries destroys its oldest first. Neither entry has an absolute reference; the 17 callers, all
 passing layer 6, are the handlers below.
 
+**Copied multiplayer spray bounds [DISASSEMBLED 2026-10-05].** The forward
+emitter reads its point argument at `0x4720D3`, expands its three coordinates on
+the stack at `0x4720DE..0x4720F8`, reads the layer-table pointer at `0x47210C`,
+and copies the low layer byte into object `+0xC` at `0x472142..0x472149`.
+After the object's init call at `0x472179`, `0x47217C` sign-extends the **low
+sixteen bits** of the original layer argument; `0x472181` scales by sixteen and
+`0x472188` reads layer `+4` without an index bound. The constructor `0x471D90`
+allocates `0xA0` bytes (`0x471D92..0x471D97`), loops ten rows (`0x471DAD`,
+`0x471DBD..0x471DC1`) and publishes the table at `main+0x38D77` (`0x471DCB`).
+The reverse emitter reads its point at `0x472203` and expands it at
+`0x47220E..0x47222C`. The copied root decoder requires a 48-byte payload,
+boolean reverse flag and signed low layer in 0..9 before publishing a batch;
+the unused high layer word remains byte-exact. This matches the existing
+skirmish replay bound. The recorder reuses its query/handler/point credit
+invariant; an uncredited multiplayer spray fails contributions incomplete.
+No new emitter patch or engine state write is installed.
+
 **The handlers.** Each is referenced once, at its `.rdata` record's `+4`, and runs only from the
 heap copy (*`0x512344` — the order-descriptor array*). The action is the record's rank there
 [INFERRED from the comparator and the registrations; not read live]. The spray starts at
@@ -1896,6 +1913,37 @@ one did not fit.
 `+4` is the netid (`0x44FE5C..0x44FE99`), and 10 when no seat matches. The death's killer is named
 by the same rule.
 
+**Copied reply bounds [DISASSEMBLED 2026-10-05].** `0x47F780` loads the unit
+at `0x47F787` and compares unit owner byte `+0xFF` with viewed row
+`main+0x2A43` at `0x47F78B..0x47F799`, before reading the caller's text.
+It tests live bit 28 and carried bit 14 at `0x47F79B..0x47F7AB`. With null
+text, `0x47F7BA..0x47F7BD` compute `kind*24` and read table field `+0x10`
+at `0x5086E8`, without bounding kind; translation `0x4C5740` is called at
+`0x47F7C5`, notice queue `0x47FAD0` at `0x47F7D3`, then `ret 0xC`.
+The off-screen root `0x47F850` calls visibility `0x48BCB0` at `0x47F856`,
+returns for visible units, tests the same viewed-owner/live/carried fields,
+and performs the same null-text lookup at `0x47F893..0x47F896`, translation
+at `0x47F89E`, and notice call at `0x47F8AC`; it returns twelve bytes at
+`0x47F8B3`. The intervening uncalled helper `0x47F7E0` has the same
+null-text lookup/translation/notice at `0x47F826`, `0x47F82E`, `0x47F83C`;
+no new observer is added there.
+
+The notice table is **24 rows of 24 bytes**, `0x5086D8..0x508917`:
+`.data` contains row indices 0 through 23, and the next string begins at
+`0x508918`. `0x47FAD0` scales kind by 24 at `0x47FADE..0x47FAE9`, reads
+GameTime at `0x47FAE3`, and compares field `+0x14` at `0x47FAF0` without
+bounding kind. Its queue holds eight 17-byte entries (count test
+`0x47FB1A`); it calls queue helper `0x47FD70` at `0x47FB27`. Priority
+lookups at `0x47FBA4` and `0x47FBB1` use row field `+4` (`0x5086DC`),
+with the latter scaling a queued kind by 24 at `0x47FBAE`. The table's
+stride was previously documented as eight; that claim is corrected here.
+Copied replies require kind <24, boolean root/text flags, zero reserved
+bytes and at most 128 non-NUL text bytes; absent text has no text payload.
+The multiplayer owner check bounds the unit and player arrays and filters
+replica controllers before copying caller text. Existing observers precede
+the viewer filters so hosted AI replies can be retained for their own POV.
+These are capture/decoder facts, not engine replay application coverage.
+
 **The nano credit.** Each of the fifteen handlers that spray asks `0x43E400` for the point first,
 into a buffer on its own stack, and passes that buffer to the emitter as the point. A spray is
 credited to the unit of the last query whose out pointer is its point, and the dispatch sites
@@ -2118,7 +2166,7 @@ level that plays a recording, and otherwise runs the stolen bytes and goes on:
   `+0x9A` and the message's arguments (`0x455528..0x455551`). The nano emitters index the ten
   16-byte particle layers at `[main+0x38D77]` with their layer word, unbounded
   (`0x47217C..0x472188`). The shot receiver `0x49D270` reads the shooter's mover's speed `+0x20`
-  (`0x49D50F`). The notice function `0x47FAD0` indexes its table `0x5086D8`, 8-byte rows, by the
+  (`0x49D50F`). The notice function `0x47FAD0` indexes its table `0x5086D8`, 24-byte rows, by the
   kind, unbounded (`0x47FBA4`, `0x47FBB1`, `0x47FC33`). The create `0x485F50` indexes the owner's
   record unbounded (`0x485F5C..0x485F78`); a nonzero slot argument is taken exactly and an
   occupied one refused (`0x486002..0x486043`), and 0 takes the first free (`0x486036`).

@@ -3027,23 +3027,31 @@ The copied-image player-row mapper validates source/destination origin sets and 
 
 `tagpu_recmp_units.c` now bounds/maps owner/resource-player IDs and attacker/owner rows in copied 328-byte unit/mover images. Kind 8 carries full/changed-word images and explicit absence with birth/source/application provenance. Its game-thread cache validates the entire batch and source/cache allocation agreement before publishing any slot. The isolated fixture passes 464,640 exact inverse mappings over 640 rosters, atomic refusal and guard-page controls, 201-entry batches and final-slot bounds at 65,531 slots. Actual native TA verifies all four human/hosted-AI first full unit-image source checksums/provenance and mapped human rows, plus ordinary-exit cuts/receipts. C/Python file queries retain unknown-versus-absent and proof-only delta isolation through synthetic seek. The adapter reads bounded frozen local blocks and the existing declared birth table, and writes only owned caches. Engine application, COB/model/order-owned objects, effects/projectiles, AI planner, complete declared Impure authority and native network file/play/seek remain open. The engine map documents create/resource/damage/death and lookup helpers read for this audit, including the uncalled helper and unbounded initializer.
 
-Owner-only named COB starts now share their existing thirteen observers and
-extra-weapons helper with a copied kind-9 carrier, independently of the local
-recording switch. A fixed 4,096-call game-thread queue retains actual source tick,
-pre/post-B2 phase, incarnation token, arguments and contiguous actor call order.
-Old-tick calls precede sealing; new pump calls follow channel advance; final copied
-roots precede teardown seals. Bounds establish unit/player access and the same
-thread owns capture, drain and context destruction. The worker sees copied packets.
-Cache/queue guards and actual C/Python file seek/proof controls pass; the current
-coverage build passes all 33 extra-weapons skirmish replay/round-trip/Watch checks. A native
-four-actor combat run with recording off verifies matching first batches for both
-humans and both hosted AIs, plus ordinary-exit cuts/receipts. Separate source and
-recipient tick numbers differ substantially; clock mapping remains an application
-requirement. Only post-B2 roots are observed live in that first-batch sample. Latest-batch
-queries support inspection while the ledger retains every batch. Remaining roots,
-complete Impure authority, engine application and native network files/play/seek
-remain open. The adapter adds no engine write or byte patch; the engine map records
-the transport argument loads and the pump/capture ordering it relies on.
+Owner-only script starts, replies and nano sprays now share one copied kind-10
+carrier and 4,096-call game-thread queue (`tagpu_recmp_roots.c`), independently
+of the recording switch. The existing thirteen start observers, extra-weapons
+helper, two reply observers, nano query/dispatch credit and two spray observers
+supply unchanged root payloads. Mixed kinds and contiguous actor switches retain
+call order, source clock, incarnation and pre/post-B2 phase. Old calls drain before
+source seals and final calls before teardown seals. Whole-batch bounds validate
+frozen ownership, names/arguments, 24 reply kinds and ten signed spray layers
+before publication; an uncredited multiplayer spray refuses contributions.
+There is no new engine write or patch. The worker sees copied packets only.
+The legacy kind-9 cache remains for reading earlier experimental contributions.
+Codec/queue controls pass 36 atomic refusals, 284 guarded truncations and 8,392
+ordered mixed calls. The 3,439-byte synthetic C/Python file verifies mixed applied
+batches through seek, proof-only isolation, five lifecycles, 23 header and 74
+body refusals. Queries return copied authority separately from `RecWorld`.
+The engine map corrects the notice-table stride to 24 bytes and documents both
+reply viewer filters and spray's signed low layer index. Engine application,
+independent clock mapping, remaining roots/Impure authority and native network
+files/play/seek remain open. Native normal-speed four-actor TA with recording off
+verifies all twelve first script/reply/spray observations against recipient bytes,
+source metadata, event index, incarnation and phase, plus ordinary-exit cuts and
+receipts. Only post-B2 calls are observed in that native sample. This is a worktree
+checkpoint. The current coverage build passes all 67 skirmish `battle` checks,
+including shared reply/spray/start capture, restore/seek, takeover, timeline forks
+and live/paused rewind; no exclusion or comparison rule is changed.
 
 The mapping checkpoint's skirmish regression passes world/radar/events/counts and all three poisoned round trips, but the images inventory fails at two bytes of the active GUI heap pointer `main+0x531`. The four-byte exclusion proposal is pending the owner's decision; this is a checkpoint, not a cleared landing gate. See the multiplayer slice and engine map for the disassembly and measured addresses.
 

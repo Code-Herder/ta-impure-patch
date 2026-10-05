@@ -36,20 +36,4 @@ int tagpu_recmp_named_put(RecMpNamed* cache, const RecMpSeatMaps* maps,
                           unsigned applied_tick);
 int tagpu_recmp_named_get(const RecMpNamed* cache, unsigned origin, RecMpNamedState* out);
 
-#define RECMP_NAMED_PENDING 4096u
-typedef struct RecMpNamedQueue RecMpNamedQueue;
-typedef int (*RecMpNamedEmit)(void* context, unsigned origin, unsigned tick,
-                             const void* body, unsigned bytes);
-
-/* One game-thread producer and consumer. Hooks copy values into bounded slots;
-   B2 drains old ticks before sealing them, then the new tick after advancing.
-   Overflow or a failed emission makes the queue permanently incomplete. */
-RecMpNamedQueue* tagpu_recmp_named_queue_begin(void);
-void tagpu_recmp_named_queue_end(RecMpNamedQueue* queue);
-int tagpu_recmp_named_queue_push(RecMpNamedQueue* queue, unsigned origin, unsigned tick,
-                                 unsigned birth, unsigned before_capture,
-                                 const void* image, unsigned bytes);
-int tagpu_recmp_named_queue_flush(RecMpNamedQueue* queue, unsigned through,
-                                  RecMpNamedEmit emit, void* context);
-
 #endif

@@ -4,6 +4,7 @@
 #include "tagpu_recmp_file.h"
 #include "tagpu_recmp_units.h"
 #include "tagpu_recmp_named.h"
+#include "tagpu_recmp_roots.h"
 
 typedef struct RecMpHistory RecMpHistory;
 
@@ -22,6 +23,7 @@ const RecMpFileState* tagpu_recmp_history_ledger(const RecMpHistory* history);
    0 means unknown, including a list whose first complete transaction has not arrived. */
 int tagpu_recmp_history_player(const RecMpHistory* history, unsigned origin, RecMpPlayerState* out);
 int tagpu_recmp_history_unit(const RecMpHistory* history, unsigned slot, RecMpUnitState* out);
+int tagpu_recmp_history_roots(const RecMpHistory* history, unsigned origin, RecMpRootsState* out);
 int tagpu_recmp_history_named(const RecMpHistory* history, unsigned origin, RecMpNamedState* out);
 int tagpu_recmp_history_orders(const RecMpHistory* history, unsigned slot, unsigned list,
                                RecMpOrderState* out, void* image, unsigned capacity);

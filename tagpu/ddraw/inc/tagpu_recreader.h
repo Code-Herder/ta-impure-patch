@@ -19,6 +19,7 @@
 #include "tagpu_recmp_file.h"
 #include "tagpu_recmp_units.h"
 #include "tagpu_recmp_named.h"
+#include "tagpu_recmp_roots.h"
 
 #define RECR_TEXT       64          /* a header string's bytes kept, NUL included            */
 #define RECR_NAME       (0x1E + 1)  /* a seat's name: the record's 0x1E bytes, NUL included  */
@@ -238,6 +239,7 @@ int recr_same_file(const RecReader* r, void* f);
 int recr_mp_player(RecReader* r, unsigned origin, RecMpPlayerState* out, char* why, unsigned cap);
 int recr_mp_unit(RecReader* r, unsigned slot, RecMpUnitState* out, char* why, unsigned cap);
 /* Latest applied batch for inspection; every root remains in the ordered ledger. */
+int recr_mp_roots(RecReader* r, unsigned origin, RecMpRootsState* out, char* why, unsigned cap);
 int recr_mp_named(RecReader* r, unsigned origin, RecMpNamedState* out, char* why, unsigned cap);
 int recr_mp_orders(RecReader* r, unsigned slot, unsigned list, RecMpOrderState* out,
                      void* image, unsigned capacity, char* why, unsigned cap);

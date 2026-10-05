@@ -69,6 +69,7 @@
 #include "tagpu_recmp_players.h"
 #include "tagpu_recmp_units.h"
 #include "tagpu_recmp_named.h"
+#include "tagpu_recmp_roots.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_replay_layout.h"
@@ -281,14 +282,19 @@ static RecMpPlayers* s_mp_players;
 static RecMpSeatMaps* s_mp_seats;
 static RecMpUnits* s_mp_units;
 static RecMpNamed* s_mp_named;
-static RecMpNamedQueue* s_mp_named_queue;
+static RecMpRoots* s_mp_roots;
+static RecMpRootsQueue* s_mp_roots_queue;
+static const char* s_nano_unit;
+static const void* s_nano_out;
 static Level s_mp_level;
 static DWORD s_mp_tid;
-static unsigned s_mp_tick, s_mp_named_failed;
-static unsigned char s_mp_named_seen[RECMP_ACTORS];
-static void mp_named_end(void);
-static int mp_named_flush(unsigned through);
-static void mp_named_log(const RecMpPacket* packet, unsigned applied_tick, const char* where);
+static unsigned s_mp_tick, s_mp_roots_failed;
+static unsigned char s_mp_roots_seen[RECMP_ACTORS];
+static void mp_roots_end(void);
+static int mp_roots_flush(unsigned through);
+static void mp_roots_push(const char* unit, unsigned kind, const void* image, unsigned bytes);
+static unsigned mp_roots_unit(const char* unit, unsigned cob, int check_cob);
+static void mp_roots_log(const RecMpPacket* packet, unsigned applied_tick, const char* where);
 static unsigned s_mp_logtick;
 static RecMpOrderCache* s_mp_orders;
 static unsigned char s_mp_order_scratch[ORD_SCRATCH];
@@ -592,14 +598,15 @@ static void mp_capture(const Level* L, unsigned tick)
         s_mp_seats = tagpu_recmp_seats_begin(&roster);
         s_mp_units = tagpu_recmp_units_begin(&roster);
         s_mp_named = tagpu_recmp_named_begin(&roster);
-        s_mp_named_queue = tagpu_recmp_named_queue_begin();
+        s_mp_roots = tagpu_recmp_roots_begin(&roster);
+        s_mp_roots_queue = tagpu_recmp_roots_queue_begin();
         s_mp_orders = tagpu_recmp_orders_begin(L->nslots);
         if (!s_mp_players || !s_mp_seats || !s_mp_units || !s_mp_orders ||
-            !s_mp_named || !s_mp_named_queue) {
+            !s_mp_named || !s_mp_roots || !s_mp_roots_queue) {
             tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
             tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
             tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
-            mp_named_end();
+            mp_roots_end();
             tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
             tagpu_logf("recmp: no bounded player/order cache: no contributions");
             return;
@@ -610,7 +617,7 @@ static void mp_capture(const Level* L, unsigned tick)
             tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
             tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
             tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
-            mp_named_end();
+            mp_roots_end();
             tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
             tagpu_logf("recmp: contribution worker could not start");
             return;
@@ -619,14 +626,14 @@ static void mp_capture(const Level* L, unsigned tick)
         s_mp_logtick = tick;
         s_mp_level = *L;
         s_mp_tick = tick;
-        s_mp_named_failed = 0;
+        s_mp_roots_failed = 0;
         s_mp_tid = GetCurrentThreadId();
     }
     if (!s_mp_channel) return;
     /* The pump at 0x4954C8 can start roots at T before B2. Post-B2 roots
        from T-1 must be sent before advance seals that source tick. */
-    if (s_mp_named_failed || !mp_named_flush(s_mp_tick)) goto incomplete;
-    if (!tagpu_recmp_advance(s_mp_channel, tick) || !mp_named_flush(tick)) goto incomplete;
+    if (s_mp_roots_failed || !mp_roots_flush(s_mp_tick)) goto incomplete;
+    if (!tagpu_recmp_advance(s_mp_channel, tick) || !mp_roots_flush(tick)) goto incomplete;
     s_mp_tick = tick;
     for (i = 0; i < REC_PLAYERS; i++) {
         const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
@@ -685,10 +692,15 @@ static void mp_capture(const Level* L, unsigned tick)
             mp_units_log(&packet,tick,"remote");
             continue;
         }
+        if (packet.h.kind == RECMP_ROOTS) {
+            if (!tagpu_recmp_roots_put(s_mp_roots,s_mp_seats,&packet.h,packet.body,
+                                       packet.h.bytes-sizeof packet.h,tick)) goto incomplete;
+            mp_roots_log(&packet,tick,"remote");
+            continue;
+        }
         if (packet.h.kind == RECMP_NAMED) {
             if (!tagpu_recmp_named_put(s_mp_named,s_mp_seats,&packet.h,packet.body,
                                        packet.h.bytes-sizeof packet.h,tick)) goto incomplete;
-            mp_named_log(&packet,tick,"remote");
             continue;
         }
         if (packet.h.kind == RECMP_ORDERS) {
@@ -741,7 +753,7 @@ static void mp_capture(const Level* L, unsigned tick)
     return;
 incomplete:
     tagpu_logf("recmp: contribution refused: contributions end incomplete at tick %u", tick);
-    mp_named_end();
+    mp_roots_end();
     tagpu_recmp_abort(s_mp_channel, E_ABORT);
     tagpu_recmp_end(s_mp_channel);
     s_mp_channel = NULL;
@@ -3825,9 +3837,11 @@ static void ev_reply(void* E, unsigned root)
 {
     Rec* r = ev_rec();
     const char* text;
+    const char* unit=PTR(ARG(E,4));
     unsigned id, kind, n = 0;
     unsigned char b[12 + REC_TEXT_MAX];
-    if (!r || !(id = ev_unit(r, PTR(ARG(E, 4))))) return;
+    id=r ? ev_unit(r,unit) : mp_roots_unit(unit,0,0);
+    if (!id) return;
     kind = ARG(E, 8);
     text = PTR(ARG(E, 0xC));
     memcpy(b, &id, 4);
@@ -3839,78 +3853,95 @@ static void ev_reply(void* E, unsigned root)
         n = (unsigned)bounded_len(text, REC_TEXT_MAX);
         memcpy(b + 12, text, n);
     }
-    ev_put(r, RK_EV_REPLY, b, 12 + n);
+    if (r) ev_put(r, RK_EV_REPLY, b, 12 + n);
+    mp_roots_push(unit,RK_EV_REPLY,b,12+n);
 }
 
 static int __cdecl ev_reply0(void* E) { cnt(0x0047F780u, ARG(E, 0), 0); ev_reply(E, 0); return 0; }
 static int __cdecl ev_reply1(void* E) { cnt(0x0047F850u, ARG(E, 0), 0); ev_reply(E, 1); return 0; }
 
-static void mp_named_end(void)
+static void mp_roots_end(void)
 {
     s_mp_tid=0;
     tagpu_recmp_named_end(s_mp_named); s_mp_named=NULL;
-    tagpu_recmp_named_queue_end(s_mp_named_queue); s_mp_named_queue=NULL;
+    tagpu_recmp_roots_end(s_mp_roots); s_mp_roots=NULL;
+    tagpu_recmp_roots_queue_end(s_mp_roots_queue); s_mp_roots_queue=NULL;
+    s_nano_unit=NULL; s_nano_out=NULL;
     memset(&s_mp_level,0,sizeof s_mp_level);
-    memset(s_mp_named_seen,0,sizeof s_mp_named_seen);
-    s_mp_named_failed=0;
+    memset(s_mp_roots_seen,0,sizeof s_mp_roots_seen);
+    s_mp_roots_failed=0;
 }
 
-static void mp_named_log(const RecMpPacket* packet, unsigned applied_tick, const char* where)
+static void mp_roots_log(const RecMpPacket* packet, unsigned applied_tick, const char* where)
 {
-    unsigned row, count;
-    RecMpNamedEntry e;
-    const unsigned char* image=packet->body+4+sizeof e;
-    unsigned id;
+    unsigned row, count, at=4;
     for (row=0;row<s_mp_roster.count;row++)
         if (s_mp_roster.actor[row].origin==packet->h.origin) break;
-    if (row==s_mp_roster.count || s_mp_named_seen[row]) return;
-    s_mp_named_seen[row]=1;
-    memcpy(&count,packet->body,4); memcpy(&e,packet->body+4,sizeof e);
-    memcpy(&id,image,4);
-    tagpu_logf("recmp: %s named roots ID %u source tick %u seq %u applied tick %u, "
-               "%u calls %u bytes crc %08X, first unit %u birth %u before %u name %.*s",
-               where,packet->h.origin,packet->h.tick,packet->h.sequence,applied_tick,
-               count,packet->h.bytes-(unsigned)sizeof packet->h,
-               (unsigned)Crc32_ComputeBuf(0,packet->body,packet->h.bytes-sizeof packet->h),
-               id,e.birth,e.before_capture,e.bytes-24,image+24);
+    if (row==s_mp_roster.count) return;
+    memcpy(&count,packet->body,4);
+    for (unsigned i=0;i<count;i++) {
+        RecMpRootsEntry e;
+        unsigned id, bit;
+        memcpy(&e,packet->body+at,sizeof e); at+=sizeof e;
+        memcpy(&id,packet->body+at,4);
+        bit=e.kind==RK_EV_START_NAMED ? 1 : e.kind==RK_EV_REPLY ? 2 : 4;
+        if (!(s_mp_roots_seen[row]&bit)) {
+            s_mp_roots_seen[row]|=bit;
+            tagpu_logf("recmp: %s owned roots ID %u source tick %u seq %u applied tick %u, "
+                       "%u calls %u bytes crc %08X, event %u kind %u unit %u birth %u before %u",
+                       where,packet->h.origin,packet->h.tick,packet->h.sequence,applied_tick,
+                       count,packet->h.bytes-(unsigned)sizeof packet->h,
+                       (unsigned)Crc32_ComputeBuf(0,packet->body,packet->h.bytes-sizeof packet->h),
+                       i,e.kind,id,e.birth,e.before_capture);
+        }
+        at+=e.bytes;
+    }
 }
 
-static int mp_named_send(void* context, unsigned origin, unsigned tick,
+static int mp_roots_send(void* context, unsigned origin, unsigned tick,
                           const void* body, unsigned bytes)
 {
     RecMpPacket packet;
     (void)context;
     if (!tagpu_recmp_advance(s_mp_channel,tick) ||
-        !tagpu_recmp_send_from(s_mp_channel,origin,RECMP_NAMED,tick,body,bytes,&packet.h) ||
-        !tagpu_recmp_named_put(s_mp_named,s_mp_seats,&packet.h,body,bytes,tick)) return 0;
+        !tagpu_recmp_send_from(s_mp_channel,origin,RECMP_ROOTS,tick,body,bytes,&packet.h) ||
+        !tagpu_recmp_roots_put(s_mp_roots,s_mp_seats,&packet.h,body,bytes,tick)) return 0;
     memcpy(packet.body,body,bytes);
-    mp_named_log(&packet,tick,"local");
+    mp_roots_log(&packet,tick,"local");
     return 1;
 }
 
-static int mp_named_flush(unsigned through)
+static int mp_roots_flush(unsigned through)
 {
-    return tagpu_recmp_named_queue_flush(s_mp_named_queue,through,mp_named_send,NULL);
+    return tagpu_recmp_roots_queue_flush(s_mp_roots_queue,through,mp_roots_send,NULL);
 }
 
 /* A matching thread ID establishes ownership before following the level context.
    The fixed unit/player arrays live until level_end clears that ID on the same
    thread. Pointer arithmetic bounds the unit before reading its owner or COB;
    no COB object or remote-owned heap is followed. */
-static unsigned mp_named_unit(const char* unit, unsigned cob, int check_cob)
+static unsigned mp_roots_unit(const char* unit, unsigned cob, int check_cob)
 {
     unsigned id;
     if (!s_mp_tid || GetCurrentThreadId()!=s_mp_tid || !s_mp_channel) return 0;
     id=id_in(unit,s_mp_level.begin,REC_UNIT_BYTES,s_mp_level.nslots);
     if (id==REC_ID_BAD || id<2 || (check_cob && *(const unsigned*)(unit+U_COB)!=cob)) {
-        s_mp_named_failed=1; return 0;
+        s_mp_roots_failed=1; return 0;
+    }
+    {
+        unsigned owner=id_in(*(const char* const*)(unit+U_OWNER),
+                              s_mp_level.ta+OFF_PLAYERS,PL_STRIDE,REC_PLAYERS), ctl;
+        if (owner==REC_ID_BAD || !owner) { s_mp_roots_failed=1; return 0; }
+        ctl=(unsigned char)s_mp_level.ta[OFF_PLAYERS+(owner-1)*PL_STRIDE+PL_CONTROLLER];
+        if (ctl==3 || ctl==4) return 0;
+        if (ctl!=1 && ctl!=2) { s_mp_roots_failed=1; return 0; }
     }
     return id;
 }
 
-static void mp_named_push(const char* unit, const void* image, unsigned bytes)
+static void mp_roots_push(const char* unit, unsigned kind, const void* image, unsigned bytes)
 {
-    unsigned id=mp_named_unit(unit,0,0), owner, origin, row, tick, ctl;
+    unsigned id=mp_roots_unit(unit,0,0), owner, origin, row, tick, ctl;
     const char* player;
     const unsigned* birth;
     if (!id) return;
@@ -3929,11 +3960,11 @@ static void mp_named_push(const char* unit, const void* image, unsigned bytes)
     birth=mp_births(&s_mp_level);
     tick=*(const unsigned*)(s_mp_level.ta+OFF_GAMETIME);
     if (!birth || (tick!=s_mp_tick && (s_mp_tick==~0u || tick!=s_mp_tick+1)) ||
-        !tagpu_recmp_named_queue_push(s_mp_named_queue,origin,tick,birth[id-1],
-                                      tick!=s_mp_tick,image,bytes)) goto invalid;
+        !tagpu_recmp_roots_queue_push(s_mp_roots_queue,origin,tick,birth[id-1],
+                                      tick!=s_mp_tick,kind,image,bytes)) goto invalid;
     return;
 invalid:
-    s_mp_named_failed=1;
+    s_mp_roots_failed=1;
 }
 
 /* A start of a script by name that only the owner's machine makes: the unit, the start's third
@@ -3952,8 +3983,8 @@ static void ev_named(Rec* r, const char* unit, unsigned id, const char* name, un
     else memset(b + 8, 0, 16);
     memcpy(b + 24, name, n);
     if (r) ev_put(r, RK_EV_START_NAMED, b, 24 + n);
-    if (mp_valid) mp_named_push(unit,b,24+n);
-    else if (s_mp_tid && GetCurrentThreadId()==s_mp_tid) s_mp_named_failed=1;
+    if (mp_valid) mp_roots_push(unit,RK_EV_START_NAMED,b,24+n);
+    else if (s_mp_tid && GetCurrentThreadId()==s_mp_tid) s_mp_roots_failed=1;
 }
 
 void tagpu_rec_start_named(const char* unit, const char* name, int now, int argc, int a0)
@@ -3961,7 +3992,7 @@ void tagpu_rec_start_named(const char* unit, const char* name, int now, int argc
     Rec* r = ev_rec();
     int a[4] = { 0, 0, 0, 0 };
     unsigned id;
-    id=r ? ev_unit(r,unit) : mp_named_unit(unit,0,0);
+    id=r ? ev_unit(r,unit) : mp_roots_unit(unit,0,0);
     if (!id) return;
     a[0] = a0;
     ev_named(r, unit, id, name, (unsigned)now, (unsigned)argc, (const unsigned char*)a);
@@ -4005,7 +4036,7 @@ static int __cdecl ev_start_site(void* E, unsigned site)
     cnt(st->call, 0, 0);
     r = ev_rec();
     unit = PTR(((const unsigned*)((const unsigned char*)E - 0x24))[st->reg]);
-    id=r ? ev_unit(r,unit) : mp_named_unit(unit,REG_ECX(E),1);
+    id=r ? ev_unit(r,unit) : mp_roots_unit(unit,REG_ECX(E),1);
     if (!id) return 0;
     if (*(const unsigned*)(unit + U_COB) != REG_ECX(E)) {
         s_bad++;                                      /* not the unit the disassembly says */
@@ -4022,14 +4053,11 @@ static int __cdecl ev_start_site(void* E, unsigned site)
    the point (the engine map, *The nano spray*). A spray is credited to the unit of the last query
    whose out buffer is its point; the handler calls, the only way into an emitter, forget the last
    query, so a query cannot credit a spray of another handler's call. A spray with no such query is
-   recorded with ID 0 and counted. */
-static const char* s_nano_unit;
-static const void* s_nano_out;
-
+   recorded with ID 0 and counted in skirmish; multiplayer refuses an uncredited spray. */
 static int __cdecl ev_nano_query(void* E)
 {
     cnt(0x0043E400u, ARG(E, 0), 0);
-    if (ev_rec()) {
+    if (ev_rec() || (s_mp_tid && GetCurrentThreadId()==s_mp_tid)) {
         s_nano_unit = PTR(ARG(E, 4));
         s_nano_out = PTR(ARG(E, 8));
     }
@@ -4040,7 +4068,8 @@ static int __cdecl ev_nano_query(void* E)
 static int __cdecl ev_nano_handler(void* E)
 {
     (void)E;
-    if (ev_rec()) s_nano_unit = NULL, s_nano_out = NULL;
+    if (ev_rec() || (s_mp_tid && GetCurrentThreadId()==s_mp_tid))
+        s_nano_unit = NULL, s_nano_out = NULL;
     return 0;
 }
 static int __cdecl ev_nano_h0(void* E) { cnt(0x0043A216u, 0, 0); return ev_nano_handler(E); }
@@ -4054,15 +4083,19 @@ static void ev_spray(void* E, unsigned reverse)
     const void* box = PTR(ARG(E, reverse ? 4 : 8));
     unsigned id = 0, layer = ARG(E, 0xC);
     unsigned char b[48];
-    if (!r) return;
-    if (s_nano_unit && point == s_nano_out) id = ev_unit(r, s_nano_unit);
-    if (!id) r->uncredited++;
+    if (!r && (!s_mp_tid || GetCurrentThreadId()!=s_mp_tid)) return;
+    if (s_nano_unit && point == s_nano_out)
+        id=r ? ev_unit(r,s_nano_unit) : mp_roots_unit(s_nano_unit,0,0);
+    else if (!r) { s_mp_roots_failed=1; return; }
+    if (!id && r) r->uncredited++;
+    if (!id && !r) return;
     memcpy(b, &id, 4);
     memcpy(b + 4, &reverse, 4);
     memcpy(b + 8, point, 12);
     memcpy(b + 20, box, 24);
     memcpy(b + 44, &layer, 4);
-    ev_put(r, RK_EV_SPRAY, b, sizeof b);
+    if (r) ev_put(r, RK_EV_SPRAY, b, sizeof b);
+    mp_roots_push(s_nano_unit,RK_EV_SPRAY,b,sizeof b);
 }
 
 static int __cdecl ev_spray0(void* E) { cnt(0x004720D0u, ARG(E, 0), 0); ev_spray(E, 0); return 0; }
@@ -5640,9 +5673,9 @@ void tagpu_rec_level_end(void)
     /* Teardown enters on the producer's game thread before the unit-array free.
        Copied final roots precede final source seals; no hook can retain this
        level context after it is cleared. */
-    if (s_mp_channel && (s_mp_named_failed || !mp_named_flush(~0u)))
+    if (s_mp_channel && (s_mp_roots_failed || !mp_roots_flush(~0u)))
         tagpu_recmp_abort(s_mp_channel,E_ABORT);
-    mp_named_end();
+    mp_roots_end();
     tagpu_recmp_end(s_mp_channel);
     s_mp_channel = NULL;
     tagpu_recmp_orders_end(s_mp_orders);

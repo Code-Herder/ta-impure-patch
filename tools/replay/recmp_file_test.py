@@ -59,7 +59,8 @@ def semantic_states(segment):
     for kind, _, _, payload in segment["blocks"]:
         if kind == tarec.RB_CONTRIBUTIONS:
             history.block(payload)
-    if history.at(99).players or history.at(99).orders or history.at(99).units or history.at(99).named:
+    if (history.at(99).players or history.at(99).orders or history.at(99).units or
+            history.at(99).named or history.at(99).roots):
         raise RuntimeError("unknown authority was fabricated before first application")
     for tick in (100, 101):
         state = history.at(tick)
@@ -80,7 +81,19 @@ def semantic_states(segment):
                     [(e["birth"], e["before_capture"], struct.unpack_from("<I", e["args"])[0])
                      for e in n["events"]] != [(17, 0, origin), (17, 1, origin+1)]):
                 raise RuntimeError("named root bytes/phase/provenance changed across proof tail")
-        if 66 in state.named:
+            roots = state.roots.get(origin)
+            unit = 2 if origin == 11 else 4 if origin == 22 else 6
+            images = [struct.pack("<IBBBBIIII4s", unit, 1, 0, 0, 0, origin, 0, 0, 0, b"Move"),
+                      struct.pack("<IIBBBB2s", unit, 23, 1, 1, 0, 0, b"OK"),
+                      struct.pack("<III", unit, 1, origin) + b"\xA5"*32 + struct.pack("<I", 0xABCD0004)]
+            if (not roots or (roots["source_tick"], roots["sequence"], roots["applied_tick"]) !=
+                    (100 if origin < 55 else 8, 5, 100) or
+                    [(e["kind"], e["unit"], e["birth"], e["before_capture"], e["image"])
+                     for e in roots["events"]] !=
+                    [(kind, unit, 17, i & 1, image) for i, (kind, image) in enumerate(zip(
+                        (tarec.RK_EV_START_NAMED, tarec.RK_EV_REPLY, tarec.RK_EV_SPRAY), images))]):
+                raise RuntimeError("mixed root bytes/order/phase/provenance changed across proof tail")
+        if 66 in state.named or 66 in state.roots:
             raise RuntimeError("unknown named roots fabricated")
         o = state.orders.get((7, 0))
         if not o or (o["count"], o["birth"], o["source_tick"], o["sequence"], o["applied_tick"]) != (0, 17, 8, 4, 100):
@@ -109,10 +122,14 @@ def semantic_states(segment):
             struct.unpack_from("<I", history.source_players[66]["image"])[0] != 67 or
             struct.unpack_from("<I", history.source_units[7]["image"], 0x68)[0] != 67):
         raise RuntimeError("proof tail was not semantically validated")
-    if (history.source_named[55]["sequence"] != 5 or
+    if (history.source_named[55]["sequence"] != 6 or
             struct.unpack_from("<I", history.source_named[55]["events"][0]["args"])[0] != 56 or
             history.named[55]["sequence"] != 4):
         raise RuntimeError("named proof tail replaced application authority")
+    if (history.source_roots[55]["sequence"] != 7 or
+            history.source_roots[55]["events"][1]["image"][12:] != b"NO" or
+            history.roots[55]["sequence"] != 5):
+        raise RuntimeError("mixed root proof tail replaced application authority")
     proof = History(segment["header"])
     for block_kind, _, _, payload in segment["blocks"]:
         if block_kind != tarec.RB_CONTRIBUTIONS:
@@ -138,12 +155,13 @@ def semantic_states(segment):
             if origin == 55 and phase != 3:
                 named_proof.block(struct.pack("<QII", 0, 0, 3) + payload[at+16:at+16+span])
             at += 16+span
-    if (55 not in named_proof.source_named or named_proof.named or named_proof.maps or
-            named_proof.players or named_proof.orders or named_proof.at(1000).named):
+    if (55 not in named_proof.source_named or 55 not in named_proof.source_roots or
+            named_proof.named or named_proof.roots or named_proof.maps or named_proof.players or
+            named_proof.orders or named_proof.at(1000).named or named_proof.at(1000).roots):
         raise RuntimeError("proof-only named roots fabricated application authority")
     if history.source_players[66]["image"][0x146] != 2 or history.at(101).players[66]["image"][0x146] != 3:
         raise RuntimeError("mapped application image replaced the raw source baseline")
-    print("typed history: C and Python mapped player/unit/order/named provenance, absence versus unknown, partial-list retention and proof isolation PASS", flush=True)
+    print("typed history: C and Python mapped player/unit/order/script/reply/spray provenance, mixed call order, absence versus unknown, partial-list retention and proof isolation PASS", flush=True)
 
 
 def semantic_mutation(blocks, origin, kind, phase, offset, fmt, value, envelope=False):
@@ -176,7 +194,7 @@ def run(output, read_file=None, skirmish_file=None):
         with (output / "setup.log").open("w") as log:
             exe = output / "recmp-file-test.exe"
             sources = ("tagpu_recmp", "tagpu_recmp_auth", "tagpu_recmp_record", "tagpu_recmp_stream", "tagpu_recmp_players",
-                       "tagpu_recmp_file", "tagpu_recmp_file_state", "tagpu_recmp_history", "tagpu_recmp_units", "tagpu_recmp_named", "tagpu_recmp_orders", "tagpu_recwriter",
+                       "tagpu_recmp_file", "tagpu_recmp_file_state", "tagpu_recmp_history", "tagpu_recmp_units", "tagpu_recmp_named", "tagpu_recmp_roots", "tagpu_recmp_orders", "tagpu_recwriter",
                        "tagpu_recreader", "tagpu_recfile", "lodepng", "crc32")
             command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc", "-O2", "-Wall",
                      "-Wextra", "-Werror", "-std=c99", "-o", exe, HERE / "recmp_file_test.c",
@@ -358,6 +376,26 @@ def run(output, read_file=None, skirmish_file=None):
                 ("named_arg_reserved", 55, 9, 2, 18, "<B", 1, False),
                 ("named_name", 55, 9, 2, 36, "<B", 0, False),
                 ("proof_named_argc", 55, 9, 3, 16, "<B", 5, False),
+                ("roots_count", 55, 10, 2, 0, "<I", 0, False),
+                ("roots_kind", 55, 10, 2, 4, "<H", 0, False),
+                ("roots_span", 55, 10, 2, 6, "<H", 11, False),
+                ("roots_phase", 55, 10, 2, 8, "<B", 2, False),
+                ("roots_reserved", 55, 10, 2, 10, "<B", 1, False),
+                ("roots_birth", 55, 10, 2, 12, "<I", 0x80000000, False),
+                ("roots_owner", 55, 10, 2, 16, "<I", 8, False),
+                ("roots_script_argc", 55, 10, 2, 20, "<B", 5, False),
+                ("roots_script_name", 55, 10, 2, 40, "<B", 0, False),
+                ("roots_reply_kind", 55, 10, 2, 60, "<I", 24, False),
+                ("roots_reply_root", 55, 10, 2, 64, "<B", 2, False),
+                ("roots_reply_absent_text", 55, 10, 2, 65, "<B", 0, False),
+                ("roots_reply_reserved", 55, 10, 2, 67, "<B", 1, False),
+                ("roots_reply_text", 55, 10, 2, 68, "<B", 0, False),
+                ("roots_spray_reverse", 55, 10, 2, 86, "<I", 2, False),
+                ("roots_spray_layer", 55, 10, 2, 126, "<h", 10, False),
+                ("roots_spray_negative_layer", 55, 10, 2, 126, "<h", -1, False),
+                ("proof_roots_kind", 55, 10, 3, 4, "<H", 0, False),
+                ("proof_roots_reply_kind", 55, 10, 3, 60, "<I", 24, False),
+                ("proof_roots_spray_layer", 55, 10, 3, 126, "<h", 10, False),
                 ("order_total", 66, 2, 2, 8, "<H", 4097, False),
                 ("order_first_chunk", 66, 2, 2, 10, "<H", 1, False),
                 ("order_chunk_count", 66, 2, 2, 12, "<H", 46, False),

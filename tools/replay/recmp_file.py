@@ -142,7 +142,7 @@ class Contributions:
                 if final > 1 or (previous, seal_tick, data_bytes, crc) != (source["sequence"], tick, source["bytes"], source["crc"]) or (sealed is not None and (tick < sealed or (not final and tick == sealed))):
                     raise ValueError("contribution prefix seal")
                 source.update(sealed_tick=tick, sealed_sequence=sequence, ended=bool(final))
-            elif kind in (1, 2, 6, 7, 8, 9):
+            elif kind in (1, 2, 6, 7, 8, 9, 10):
                 if source["sealed_tick"] is not None and tick <= source["sealed_tick"]:
                     raise ValueError("contribution data in closed tick")
                 source["bytes"] += span
@@ -179,6 +179,7 @@ class History:
         self.source_maps, self.maps = {}, {}
         self.source_units, self.units = {}, {}
         self.source_named, self.named = {}, {}
+        self.source_roots, self.roots = {}, {}
         self.source_orders, self.orders, self.stages = {}, {}, {}
         self.applications = []
         self.failed = False
@@ -311,6 +312,55 @@ class History:
             self.source_named[origin] = state
             if not proof:
                 self.named[origin] = state.copy()
+        elif kind == 10:
+            from tarec import RK_EV_START_NAMED, RK_EV_REPLY, RK_EV_SPRAY
+            source_map = self.source_maps.get(origin)
+            if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:
+                raise ValueError("owner roots precede their source roster")
+            if not 4 <= len(body) <= 4032:
+                raise ValueError("owner root batch span")
+            count = struct.unpack_from("<I", body)[0]
+            if not 1 <= count <= 167:
+                raise ValueError("owner root batch count")
+            previous = self.source_roots.get(origin)
+            if previous and (sequence <= previous["sequence"] or tick < previous["source_tick"] or
+                             application_tick < previous["applied_tick"] or stream != previous["stream"]):
+                raise ValueError("owner root provenance")
+            at, events = 4, []
+            for _ in range(count):
+                if at+12 > len(body):
+                    raise ValueError("owner root prefix span")
+                root, span, before, reserved, birth = struct.unpack_from("<HHB3sI", body, at)
+                at += 12
+                if not 12 <= span <= 140 or at+span > len(body) or any(reserved) or before > 1 or birth >> 31:
+                    raise ValueError("owner root prefix fields")
+                image = bytes(body[at:at+span])
+                unit = struct.unpack_from("<I", image)[0]
+                if not actor[2]+1 <= unit <= actor[3]+1:
+                    raise ValueError("owner root unit block")
+                if root == RK_EV_START_NAMED:
+                    if (not 25 <= span <= 56 or image[4] > 4 or image[5] > 1 or
+                            image[6] or image[7] or b"\0" in image[24:]):
+                        raise ValueError("owner script arguments/name")
+                elif root == RK_EV_REPLY:
+                    if (struct.unpack_from("<I", image, 4)[0] >= 24 or image[8] > 1 or image[9] > 1 or
+                            image[10] or image[11] or not image[9] and span != 12 or b"\0" in image[12:]):
+                        raise ValueError("owner reply kind/flags/text")
+                elif root == RK_EV_SPRAY:
+                    if (span != 48 or struct.unpack_from("<I", image, 4)[0] > 1 or
+                            not 0 <= struct.unpack_from("<h", image, 44)[0] < 10):
+                        raise ValueError("owner spray direction/layer")
+                else:
+                    raise ValueError("unknown owner root kind")
+                events.append(dict(kind=root, unit=unit, birth=birth, before_capture=before, image=image))
+                at += span
+            if at != len(body):
+                raise ValueError("owner root trailing bytes")
+            state = dict(body=bytes(body), events=events, source_tick=tick, sequence=sequence,
+                         applied_tick=application_tick, stream=bytes(stream))
+            self.source_roots[origin] = state
+            if not proof:
+                self.roots[origin] = state.copy()
         elif kind == 2:
             source_map = self.source_maps.get(origin)
             if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:

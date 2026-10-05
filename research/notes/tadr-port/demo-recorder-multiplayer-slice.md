@@ -171,7 +171,7 @@ The earlier format-5 container checkpoint passed the actual TA `secondary-orders
 ### Owner-only named script starts
 
 The owner-only COB starts use the existing `RK_EV_START_NAMED` engine root and
-payload. Wire kind 9 carries a u32 count and variable entries: an eight-byte
+payload. The retained legacy wire-kind-9 decoder accepts a u32 count and variable entries: an eight-byte
 prefix (`bytes`, `before_capture`, reserved zero, exact incarnation token), then
 24 fixed payload bytes and a non-NUL name of 1..32 bytes. Unit IDs are normalized
 global slots plus one, authorized against the origin's frozen block. Arguments
@@ -181,32 +181,20 @@ before an entire batch publishes. Up to 122 minimum-size calls or 62 maximum-nam
 calls fit the 4,032-byte body. Incarnation tokens can exceed GameTime when a slot
 is created repeatedly within one tick; they are identities, not tick ceilings.
 
-Every locally controlled human and hosted AI contributes these calls independently
-of `tagpu_recorder.on`. A 4,096-slot copied queue preserves local engine call order,
-including A/B/A actor switches; packetization combines only contiguous same-origin,
-same-tick calls. Hooks record actual GameTime and whether B2 has captured it. Old
-post-B2 calls drain before channel advance seals their tick; pump calls at the new
-tick drain after advance, before its unit/player/order capture. Final copied roots
-drain before final source seals at teardown, and the game-thread context is cleared
-before the level's unit array can be freed. Queue overflow, backwards source time
-or failed emission permanently marks that queue incomplete. No callback blocks on
-the worker and no COB pointer or remote-owned heap is followed.
-
-`recmp_named_test.py` passes 28 unchanged-cache refusal controls, all 94 truncations
-of a two-call batch ending at a guard page, maximum batches and copied ownership.
-Its 8,392-call queue controls verify actor alternation, packet boundaries, source
-tick/phase, queue wrap, overflow and failed-emission refusal. The real file fixture
-now writes 3,274 bytes, with 21 applications (nine remote) and six proof records.
-C and independent Python preserve three origins' exact two-call batches through
-synthetic seeking; a late fourth batch validates only source proof, leaving
-applied call bytes and provenance unchanged. All five lifecycle controls, 23
-header refusals and 54 body refusals with valid raw seals/cuts pass. The reader's
-latest-batch query is for inspection; every batch remains in the ordered ledger.
-It is not a substitute for the complete root sequence.
+Every locally controlled human and hosted AI contributes independently of
+`tagpu_recorder.on`. Production now carries these starts beside replies and
+sprays in the unified kind-10 queue described below; the legacy kind-9 cache and
+reader remain available. `recmp_named_test.py` exercises the copied legacy cache:
+28 unchanged-cache refusal controls, all 94 guarded truncations of a two-call
+batch, maximum batches and copied ownership. The queue controls are in
+`recmp_roots_test.py`. Latest-batch queries support inspection; the file's ordered
+ledger retains every batch and supplies the complete root sequence.
 
 MEASURED 2026-10-05 on the reference setup: native *Two Continents*, two humans and
-one hosted AI each, `each=1500`, internal speed 20, private display, neither peer
-carrying `tagpu_recorder.on`. Each peer creates 20 locally owned human units and
+one hosted AI each, `each=1500`, private display, neither peer
+carrying `tagpu_recorder.on`. The stopped-instance setting requested speed 20,
+but the in-game heartbeats show native speed 10: this run provides normal-speed
+multiplayer evidence. Each peer creates 20 locally owned human units and
 ten units for its locally controlled AI through the scenario applier; all 64
 initial/created full unit images match source/recipient raw checksums and provenance.
 First named batches match exact bytes, including their four argument words:
@@ -573,3 +561,110 @@ At tick 151, host statistics show 23 accepted DATA / 3376 bytes / 17 logical rec
 4. **Playback and takeover.** Host up to ten recorded seats without assuming a spare viewer seat ([puppet-host limit](demo-recorder-s2-host.md#13-the-limit-a-ten-seat-recording-new)), restore each seat's controller and authoritative state, then take over one player with the others as AI. Run record, puppet, seek and takeover checks on a real two-peer game and extend them to the ten-seat case. Preserve the existing replay round-trip gate for any simulation change.
 
 Step 1 is the research gate. Network recording remains disabled until the first code landing combines its safe capture boundary with enough of step 2 to carry authoritative remote state. That landing needs a two-peer fixture, a real network recording and a checked account of every remote field it carries. Presentation and playback can follow as separate landings, but a partial file must not be presented as a faithful multiplayer replay.
+
+
+### Ordered script, reply and spray contributions
+
+Production wire kind 10 uses one 4,096-slot copied game-thread queue for all three
+existing roots: `RK_EV_START_NAMED`, `RK_EV_REPLY`, `RK_EV_SPRAY`. It preserves
+mixed call order, including A/B/A actor changes, and packetizes only contiguous
+same-origin, same-source-tick entries. A u32 count precedes packed twelve-byte
+prefixes: u16 kind, u16 payload span, boolean pre-B2 phase, three zero reserved
+bytes and the exact incarnation token. Each existing root payload follows
+unchanged. Up to 167 minimum twelve-byte reply payloads fit a 4,032-byte body.
+Script names/arguments retain the legacy bounds; replies have kind <24, boolean
+root/text flags, zero reserved bytes and at most 128 non-NUL text bytes; sprays
+are exactly 48 bytes with a boolean reverse flag and signed low layer word 0..9.
+The high layer word is retained unchanged, as in skirmish replay.
+
+The entire copied batch validates source roster/stream, frozen origin block,
+span, kind, birth/phase and provenance before publication. There is no partial
+cache update. Existing unit/player array bounds and the same game-thread level
+lifetime protect capture; replica controllers are filtered before reading caller
+text or spray arguments. Nano credit reuses the query/handler/point invariant.
+An uncredited multiplayer spray refuses contributions rather than claiming an
+unknown owner. Hooks copy without a worker call or lock. Prior-tick calls drain
+before sealing, current pump calls after advancing, and final calls before final
+seals. Overflow, backwards source time and failed emission latch incomplete.
+The extra queue replaces the former named-only queue; there are no independent
+per-kind drains that could regroup calls. No new engine patch or field write.
+
+MEASURED 2026-10-05 on the reference setup: `recmp_roots_test.py` passes 36 atomic
+refusals, all 284 guard-page truncations of a mixed batch, a 167-call maximum,
+exact future incarnation tokens and high layer bits, and unchanged unknown
+outputs. Queue controls verify 8,392 copied mixed calls over phase/tick changes,
+actor switches, packet boundaries and ring wrap; overflow/backwards clock/failed
+emission permanently refuse. `recmp_file_test.py` writes a 3,439-byte synthetic
+world/container with 24 application records (ten remote consumptions) and seven
+late proof records. C and independent Python preserve three actors' exact ordered
+script/reply/spray batches through reading and seeking, including phases, future
+birth tokens and high layer bits. Late source proof changes reply text from OK to
+NO while leaving application authority unchanged; proof-only roots establish no
+applied authority. All five lifecycle controls, 23 header refusals and 74 body
+refusals with valid raw seals/cuts pass. `recr_mp_roots` returns the last applied
+copied batch separately from `RecWorld`; the ledger keeps every batch.
+
+These controls establish bounded capture representation and reader history.
+They do not materialize engine roots, map independent clocks, create a native
+multiplayer file, or establish multiplayer playback/seek. Remaining owner-only
+roots and declared Impure authority, all POV/communications, budget enforcement,
+ten seats and continued migration remain required.
+
+
+MEASURED 2026-10-05 on the reference setup: native *Two Continents*, two humans
+and one hosted AI each, 1,500 slots per actor, private display and recording off.
+Both peer DLL copies match the tested build at launch. The registry requests 20,
+but live heartbeats report speed 10; this is normal-speed evidence. Sixty combat
+units exercise script starts, while commanders/solars placed near each local
+starting base exercise reclaim replies and sprays. All four frozen source
+rosters, full player images and 74 observed full unit-image contributions match
+the recipient's source bytes/provenance. All twelve first root-type observations
+(four actors times three kinds) match source packet count/span/CRC, event index,
+unit ID, incarnation and phase:
+
+| Origin / owner | Root | Source tick / sequence | Calls / bytes / CRC | Event / unit / birth | Recipient tick |
+|---|---|---|---|---|---|
+| 643537554, host human | reply | 74 / 29 | 2 / 52 / `C00B0F5F` | 0 / 1523 / 74 | 34 |
+| 643537554, host human | script | 135 / 282 | 3 / 121 / `F17B7956` | 1 / 1518 / 74 | 95 |
+| 643537554, host human | spray | 161 / 366 | 6 / 265 / `2CFB5415` | 1 / 1523 / 74 | 120 |
+| 643537559, host AI | reply | 74 / 31 | 2 / 52 / `E93418D6` | 0 / 4513 / 74 | 34 |
+| 643537559, host AI | script | 121 / 194 | 1 / 53 / `2403BA92` | 0 / 4509 / 74 | 81 |
+| 643537559, host AI | spray | 436 / 1325 | 3 / 157 / `9B4AB2B8` | 0 / 4502 / 0 | 396 |
+| 643537552, join human | reply | 48 / 26 | 2 / 52 / `B934165A` | 0 / 23 / 48 | 92 |
+| 643537552, join human | script | 98 / 252 | 3 / 121 / `0ED95145` | 1 / 21 / 48 | 141 |
+| 643537552, join human | spray | 127 / 331 | 6 / 265 / `82A2D4AA` | 1 / 23 / 48 | 170 |
+| 643537558, join AI | reply | 48 / 28 | 2 / 52 / `2AF7ABD1` | 0 / 3013 / 48 | 92 |
+| 643537558, join AI | script | 94 / 190 | 1 / 53 / `E4DA3F24` | 0 / 3010 / 48 | 137 |
+| 643537558, join AI | spray | 170 / 391 | 1 / 64 / `B8894F4D` | 0 / 3013 / 48 | 213 |
+
+The six-call human spray packets include mixed kinds, with the first observed
+spray at entry one. All these first observations have post-B2 phase zero;
+guarded codec/queue/file fixtures cover both phases, but this native sample does
+not establish pre-B2 root coverage. Source/recipient clocks differ by up to 44
+here; numerical tick equality is not an application mapping. Ordinary surrender
+closes the host before the joiner exits: 2,862 accepted / 2,868 completed,
+queued/failure zero, cuts 2/2 and four receipts received, remote final sources
+0/2 and 36 unread proof-tail packets. The joiner remains on `ARMMAIN2.GUI`, then
+exits with 2,875 / 2,881, queued/failure zero, cuts 2/2, four receipts sent and four
+unread packets. No file is created, so no durable tail or native replay is claimed.
+These counters are not physical bandwidth. Both owned games/prefixes and display
+are removed. The first fixture attempt put reclaimers near combat: most were
+killed before producing sprays, while contributions remained healthy. The revised
+fixture observes all three root types without changing capture semantics.
+
+
+The current coverage build passes all 67 `battle` skirmish checks at internal
+speed 20, including live recording, puppet playback, in-place restore, fresh
+seek, AI takeover, timeline forks/export/deletion and live/paused rewind.
+The live recording ends complete after 4,080 iterations, with zero off-thread
+events and zero uncredited sprays. Its 4,079 checked steps contain 23,051
+owner-only script starts, 17,106 replies and 3,302 sprays; every recorded change
+is explained. Round trips at 721/2101/2641 poison 26 tables, leave zero residue
+and compare exactly before/after. Coverage reaches all six shared capture
+functions (`ev_named`, `ev_start_site`, `ev_reply`, `ev_nano_query`,
+`ev_nano_handler`, `ev_spray`) and the inactive multiplayer guard/push/end
+functions. This preserves the skirmish path; it is not native multiplayer
+engine application coverage and does not resolve the intermittent GUI-pointer
+inventory failure seen in a previous normal-speed control. No exclusion or
+tolerance changes. The 39 harness logic tests pass, the driving skill validates,
+and the wiki builds 98 pages plus its index with the new sections inspected.

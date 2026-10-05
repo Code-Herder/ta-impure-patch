@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run copied named-root and bounded queue controls in an owned Wine prefix."""
+"""Run copied named-root cache controls in an owned Wine prefix."""
 import argparse
 import os
 from pathlib import Path
@@ -35,7 +35,7 @@ def run(output):
                      "--private-registry", "--display", display.display, "--res", "640x480"], log)
         with (output / "named.log").open("w") as log:
             command(["wine", exe], log, env=env)
-        print("PASS: copied named roots and bounded ordered staging controls", flush=True)
+        print("PASS: copied named-root cache controls", flush=True)
     finally:
         if env:
             subprocess.run(["wineserver", "-k"], env=env, timeout=10, check=False)

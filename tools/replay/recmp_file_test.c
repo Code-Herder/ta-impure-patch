@@ -98,6 +98,41 @@ static void source_named(unsigned sequence, unsigned proof)
     CHECK(tagpu_recmp_stream_put(&f.source[0],&p->h,p->body,n));
 }
 
+static unsigned roots_body(unsigned origin, unsigned proof, unsigned char* body)
+{
+    const unsigned kinds[]={RK_EV_START_NAMED,RK_EV_REPLY,RK_EV_SPRAY};
+    const unsigned spans[]={28,14,48};
+    unsigned count=3, at=4, id=origin==11 ? 2 : origin==22 ? 4 : 6;
+    memcpy(body,&count,4);
+    for (unsigned i=0;i<count;i++) {
+        RecMpRootsEntry e={kinds[i],spans[i],i&1,{0},17};
+        unsigned value;
+        memcpy(body+at,&e,sizeof e); at+=sizeof e;
+        memset(body+at,0,spans[i]); memcpy(body+at,&id,4);
+        if (!i) {
+            body[at+4]=1; value=origin+proof; memcpy(body+at+8,&value,4);
+            memcpy(body+at+24,"Move",4);
+        } else if (i==1) {
+            value=23; memcpy(body+at+4,&value,4); body[at+8]=body[at+9]=1;
+            memcpy(body+at+12,proof ? "NO" : "OK",2);
+        } else {
+            value=1; memcpy(body+at+4,&value,4);
+            value=origin+proof; memcpy(body+at+8,&value,4);
+            memset(body+at+12,0xA5,32); value=0xABCD0004; memcpy(body+at+44,&value,4);
+        }
+        at+=spans[i];
+    }
+    return at;
+}
+
+static void source_roots(unsigned sequence, unsigned proof)
+{
+    unsigned char body[RECMP_BODY_MAX];
+    unsigned n=roots_body(55,proof,body);
+    RecMpPacket* p=packet(55,RECMP_ROOTS,sequence,8,body,n);
+    CHECK(tagpu_recmp_stream_put(&f.source[0],&p->h,p->body,n));
+}
+
 static void source_orders(unsigned origin, unsigned sequence, unsigned tick, unsigned total,
                            unsigned first, unsigned count)
 {
@@ -122,6 +157,7 @@ static void proof_only_roster(void)
     RecMpPlayerState state;
     RecMpUnitState unit;
     RecMpNamedState named;
+    RecMpRootsState roots;
     unsigned char body[sizeof(RecMpPlayerDelta)+REC_PLAYER_IMAGE];
     unsigned bytes;
     memcpy(h.magic,"IMPUREMP",8);
@@ -137,6 +173,10 @@ static void proof_only_roster(void)
     CHECK(tagpu_recmp_history_record(history,&where,&h,body,bytes));
     memset(&named,0xA5,sizeof named); CHECK(!tagpu_recmp_history_named(history,55,&named));
     for (unsigned i=0;i<sizeof named;i++) CHECK(((unsigned char*)&named)[i]==0xA5);
+    h.kind=RECMP_ROOTS; h.sequence=5; bytes=roots_body(55,0,body); h.bytes=sizeof h+bytes;
+    CHECK(tagpu_recmp_history_record(history,&where,&h,body,bytes));
+    memset(&roots,0xA5,sizeof roots); CHECK(!tagpu_recmp_history_roots(history,55,&roots));
+    for (unsigned i=0;i<sizeof roots;i++) CHECK(((unsigned char*)&roots)[i]==0xA5);
     memset(&state,0xA5,sizeof state);
     CHECK(!tagpu_recmp_history_player(history,55,&state));
     for (unsigned i=0;i<sizeof state;i++) CHECK(((unsigned char*)&state)[i]==0xA5);
@@ -152,7 +192,7 @@ static void file_proof_tail(void)
         RecMpSeal seal;
         RecMpPacket* p;
         if (f.missing_cut && i==1) continue;
-        if (!i) source_named(5,1);
+        if (!i) { source_named(6,1); source_roots(7,1); }
         if (i==1) {
             source_orders(66,6,9,46,45,1);
             source_player(66,7,10,0);
@@ -235,14 +275,20 @@ static void world_end(RecRing* g, unsigned at)
 static void read_units(RecReader* r, char* why, unsigned cap)
 {
     RecMpNamedState named;
+    RecMpRootsState roots;
     unsigned char body[RECMP_BODY_MAX];
     for (unsigned i=0;i<3;i++) {
         unsigned origin=i==0 ? 11 : i==1 ? 22 : 55, bytes=named_body(origin,0,body);
         CHECK(recr_mp_named(r,origin,&named,why,cap)==1 && named.count==2 &&
               named.bytes==bytes && named.sequence==4 && named.source_tick==(i<2 ? 100 : 8) &&
               named.applied_tick==100 && !memcmp(named.body,body,bytes));
+        bytes=roots_body(origin,0,body);
+        CHECK(recr_mp_roots(r,origin,&roots,why,cap)==1 && roots.count==3 &&
+              roots.bytes==bytes && roots.sequence==5 && roots.source_tick==(i<2 ? 100 : 8) &&
+              roots.applied_tick==100 && !memcmp(roots.body,body,bytes));
     }
     CHECK(recr_mp_named(r,66,&named,why,cap)==0);
+    CHECK(recr_mp_roots(r,66,&roots,why,cap)==0);
     RecMpUnitState state;
     RecMpPlayerState player;
     for (unsigned slot=3;slot<=7;slot+=4) {
@@ -276,6 +322,7 @@ static int read_file(const char* path, int expected)
         RecMpOrderState ostate;
         RecMpUnitState ustate;
         RecMpNamedState nstate;
+        RecMpRootsState rstate;
         unsigned char order[RECMP_ORDER_MAX*RECMP_ORDER_BYTES];
         if (!r) { printf("reader: %s\n",why); CHECK(r); }
         CHECK(recr_header(r)->mode==3 && recr_header(r)->has_mp && recr_header(r)->has_mp_seats &&
@@ -284,6 +331,7 @@ static int read_file(const char* path, int expected)
         CHECK(recr_mp_player(r,66,&pstate,why,sizeof why)==0 &&
               recr_mp_unit(r,7,&ustate,why,sizeof why)==0 &&
               recr_mp_named(r,55,&nstate,why,sizeof why)==0 &&
+              recr_mp_roots(r,55,&rstate,why,sizeof why)==0 &&
               recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==0);
         CHECK(recr_tick(r,why,sizeof why)==1 && recr_world(r)->tick==100 && recr_world(r)->player[0][0]==0xA5);
         for (unsigned i=0;i<4;i++) {
@@ -401,7 +449,7 @@ int main(int argc, char** argv)
         source_player(i ? 66 : 55,2,8,1);
         if (i) source_units(3,8,1);
         source_orders(i ? 66 : 55,i ? 4 : 3,8,0,0,0);
-        if (!i) source_named(4,0);
+        if (!i) { source_named(4,0); source_roots(5,0); }
     }
     source_orders(66,5,9,46,0,45);
     c=tagpu_recmp_begin(&config); CHECK(c);
@@ -421,7 +469,7 @@ int main(int argc, char** argv)
     CHECK(WaitForSingleObject(f.opened,15000)==WAIT_OBJECT_0);
     memset(&config,0,sizeof config); SetEvent(f.release);
     CHECK(WaitForSingleObject(f.initial,15000)==WAIT_OBJECT_0);
-    for (unsigned i=0;i<8;i++) CHECK(tagpu_recmp_take_at(c,&got,100)==1);
+    for (unsigned i=0;i<9;i++) CHECK(tagpu_recmp_take_at(c,&got,100)==1);
     CHECK(tagpu_recmp_advance(c,100));
     for (unsigned i=0;i<2;i++) {
         unsigned char body[sizeof(RecMpPlayerDelta)+REC_PLAYER_IMAGE];
@@ -442,6 +490,8 @@ int main(int argc, char** argv)
         unsigned char body[RECMP_BODY_MAX];
         unsigned origin=i ? 22 : 11, n=named_body(origin,0,body);
         CHECK(tagpu_recmp_send_from(c,origin,RECMP_NAMED,100,body,n,NULL));
+        n=roots_body(origin,0,body);
+        CHECK(tagpu_recmp_send_from(c,origin,RECMP_ROOTS,100,body,n,NULL));
     }
     CHECK(tagpu_recmp_advance(c,101) && tagpu_recmp_take_at(c,&got,101)==1);
     tagpu_recmp_retain(c);

@@ -1790,6 +1790,12 @@ int recr_mp_unit(RecReader* r, unsigned slot, RecMpUnitState* out, char* why, un
     return k<=0 ? k : tagpu_recmp_history_unit(r->mp_history,slot,out);
 }
 
+int recr_mp_roots(RecReader* r, unsigned origin, RecMpRootsState* out, char* why, unsigned cap)
+{
+    int k=mp_sync(r,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_roots(r->mp_history,origin,out);
+}
+
 int recr_mp_named(RecReader* r, unsigned origin, RecMpNamedState* out, char* why, unsigned cap)
 {
     int k=mp_sync(r,why,cap);

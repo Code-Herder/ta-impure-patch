@@ -195,15 +195,24 @@ fixture independently checks mapped unit authority and proof-tail isolation in
 C/Python through synthetic seek. These fixtures do not test engine application,
 owned COB/model/effect objects or native multiplayer recording/playback.
 
-Owner-only named-script contribution bounds use:
-`python3 tools/replay/recmp_named_test.py --out /tmp/recmp-named-run`.
+Owner-only script/reply/spray contribution bounds use:
+`python3 tools/replay/recmp_roots_test.py --out /tmp/recmp-roots-run`.
 One owned prefix/private display runs copied-cache and 4,096-call queue controls:
-28 atomic refusals, all 94 guarded truncations, maximum batches, 8,392 ordered
-calls across packet splits/actor switches/queue wrap, and permanent refusal after
-overflow, backwards source time or failed emission. Calls preserve exact argument
-bytes, source clock, incarnation token and pre/post-capture phase. The file fixture
-also checks applied named batches through synthetic seek and proof-tail isolation.
-These tests do not launch TA or establish engine root application/native recording.
+36 atomic refusals, all 284 guarded truncations, maximum batches and 8,392 mixed
+calls across packet splits/actor switches/queue wrap. Overflow, backwards source
+time or failed emission permanently refuse. Payloads preserve exact argument/text/
+spray bytes, source clock, incarnation token and pre/post-capture phase. The file
+fixture checks ordered applied mixed batches through synthetic seek and proof
+isolation. The retained legacy named-only codec is exercised by
+`python3 tools/replay/recmp_named_test.py --out /tmp/recmp-named-run` (28 atomic
+refusals and 94 guarded truncations). These tests do not launch TA or establish
+engine root application/native recording. Run owned-prefix codec/file fixtures
+separately from multiplayer menu drivers, as for the channel fixture above.
+
+Native multiplayer can start at speed 10 despite a stopped-instance setting of
+20. Check the in-game `packet:` heartbeat's `speed` and `tps` before labelling a
+network run accelerated. Tick-based skirmish replay fixtures use 20; multiplayer
+timing and bandwidth tests retain their own speed policy.
 
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
   `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin. **The NAT
