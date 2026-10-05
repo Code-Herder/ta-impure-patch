@@ -1,0 +1,2 @@
+documentation-check: reviewer=resource_review_engine range=6565cf13..f8b20e2d date=2026-10-05 result=pass
+Read-only pristine disassembly verifies the GUI active link update at 0x4A96A2 precedes free at 0x4A96AF; refresh stays on the guarded GUI/input thread and retains no pointer beyond the call. No incorrect claims.
