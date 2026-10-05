@@ -51,8 +51,10 @@
    counted and logged. Each event hook's reads are stated beside it.
 
    WHAT IT WRITES: its own memory -- the shadow images, contribution caches, ring and dump file --
-   and the startup packet-length entry 0x512AF8
-   through its redirected initializer. The host's extended start retains the engine's
+   and the startup packet-length entry 0x512AF8, identified-text length/callback/mask
+   entries 0x512B84/0x512ACC/0x512C6C through its redirected initializer. Validated
+   identified text replaces the first 65 bytes of the current owned receive allocation
+   before entering the stock text case. The host's extended start retains the engine's
    original start action (mp_start_send / mp_start_receive). Native CreatePlayer receives
    the original 21-byte prefix plus a public key through the redirect at 0x4CA762;
    the native-create size branch at 0x454315 accepts that fixed 301-byte span as well
@@ -71,6 +73,7 @@
 #include "tagpu_recmp_named.h"
 #include "tagpu_recmp_roots.h"
 #include "tagpu_recmp_explored.h"
+#include "tagpu_recmp_chat_wire.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_replay_layout.h"
@@ -278,6 +281,13 @@ static unsigned char s_mp_sites, s_mp_tried;
 static GUID s_mp_match;
 static DWORD s_mp_host;
 static unsigned char s_mp_match_ready;
+typedef struct {
+    unsigned active, origin, tick;
+    uint64_t event;
+    GUID match;
+} MpChatContext;
+static MpChatContext s_mp_chat;
+static uint64_t s_mp_chat_serial;
 static RecMpChannel* s_mp_channel;
 /* Borrowed by the game producer until file_end. The ring's writer owns its
    lifetime and cannot free it before that end publication. */
@@ -425,6 +435,128 @@ static int mp_public_key(IDirectPlay2A* dp, DWORD origin, RecMpPublic* public)
            tagpu_recmp_public_read(data + RECMP_PRIMARY_BYTES, sizeof *public, public);
 }
 
+/* DISASSEMBLED: only the in-match GUI callback calls 0x463E50 at 0x493FAF.
+   Scope one identity over formatting, every native target send and local echo.
+   Its stack copy restores the outer identity if a callback nests. Only the
+   owning game thread can enter this scope or read its mutable context. */
+static int __stdcall mp_chat_gui_send(const char* player, const char* text,
+                                      unsigned flags, const char* caption)
+{
+    typedef int (__stdcall *SendFn)(const char*,const char*,unsigned,const char*);
+    if (GetCurrentThreadId()!=g_ddraw.gui_thread_id)
+        return ((SendFn)(size_t)0x463E50)(player,text,flags,caption);
+    MpChatContext previous=s_mp_chat;
+    char* ta=ta_main();
+    size_t offset=ta ? (size_t)player-(size_t)(ta+OFF_PLAYERS) : (size_t)-1;
+    unsigned state=0;
+    int result;
+    if (ta) memcpy(&state,ta+0x391F1,sizeof state);
+    s_mp_chat.active=0;
+    /* B2 consumes the pending-start flag once. The live producer's thread
+       lifetime, cleared before level teardown, authorizes this level's ID. */
+    if (ta && s_mp_tid==GetCurrentThreadId() && s_mp_channel &&
+        state==6 && game_mode(ta)==3 && ((unsigned char)ta[OFF_NETWORK]&1) &&
+        offset%PL_STRIDE==0 && offset/PL_STRIDE<REC_PLAYERS &&
+        *(const unsigned*)player && (unsigned char)player[0x73]==1) {
+        if (s_mp_chat_serial==UINT64_MAX) {
+            if (s_mp_channel) tagpu_recmp_abort(s_mp_channel,HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW));
+            tagpu_logf("recmp: text identity exhausted: incomplete contributions");
+        } else {
+            s_mp_chat.active=1;
+            memcpy(&s_mp_chat.origin,player+4,4);
+            memcpy(&s_mp_chat.tick,ta+OFF_GAMETIME,4);
+            s_mp_chat.event=++s_mp_chat_serial;
+            s_mp_chat.match=s_mp_match;
+        }
+    }
+    result=((SendFn)(size_t)0x463E50)(player,text,flags,caption);
+    s_mp_chat=previous;
+    return result;
+}
+
+/* 0x453360 constructs exactly 65 bytes before any target call. Its two target
+   sites and its generic site remain the engine's audience/filter logic. The
+   queue copies the enlarged packet before returning (0x462919..0x46292C). */
+static int mp_chat_wire(RecMpChatWire* wire, DWORD origin, const void* message, unsigned bytes)
+{
+    if (GetCurrentThreadId()!=g_ddraw.gui_thread_id || !s_mp_chat.active) return 0;
+    if (origin==s_mp_chat.origin &&
+        tagpu_recmp_chat_wire_make(wire,&s_mp_chat.match,s_mp_chat.event,s_mp_chat.tick,message,bytes))
+        return 1;
+    if (s_mp_channel) tagpu_recmp_abort(s_mp_channel,E_INVALIDARG);
+    tagpu_logf("recmp: text sender/packet disagrees with GUI identity: incomplete contributions");
+    return 0;
+}
+
+static int __stdcall mp_chat_send_all(DWORD origin, const void* message, unsigned bytes)
+{
+    typedef int (__stdcall *SendFn)(DWORD,const void*,unsigned);
+    RecMpChatWire wire;
+    if (mp_chat_wire(&wire,origin,message,bytes)) { message=&wire; bytes=sizeof wire; }
+    return ((SendFn)(size_t)0x451DF0)(origin,message,bytes);
+}
+
+static int __stdcall mp_chat_send_one(DWORD origin, DWORD destination,
+                                      const void* message, unsigned bytes)
+{
+    typedef int (__stdcall *SendFn)(DWORD,DWORD,const void*,unsigned);
+    RecMpChatWire wire;
+    if (mp_chat_wire(&wire,origin,message,bytes)) { message=&wire; bytes=sizeof wire; }
+    return ((SendFn)(size_t)0x451BC0)(origin,destination,message,bytes);
+}
+
+static int __stdcall mp_chat_send_line(const char* line)
+{
+    typedef int (__stdcall *SendFn)(const char*);
+    unsigned char stock[RECMP_CHAT_STOCK_BYTES];
+    if (GetCurrentThreadId()==g_ddraw.gui_thread_id && s_mp_chat.active) {
+        unsigned i;
+        memset(stock,0,sizeof stock);
+        stock[0]=5;
+        for (i=0;i<sizeof stock-1 && line[i];i++) stock[i+1]=(unsigned char)line[i];
+        tagpu_logf("recmp: text source origin %u event %llu tick %u CRC %08X",
+                   s_mp_chat.origin,(unsigned long long)s_mp_chat.event,s_mp_chat.tick,
+                   (unsigned)Crc32_ComputeBuf(0,stock,sizeof stock));
+    }
+    return ((SendFn)(size_t)0x453360)(line);
+}
+
+/* The new 0x2B case has the dispatcher's original frame. The exact delivered
+   pointer/length owns a writable allocation at main+0x2A38 until the next
+   receive. Copy/validate metadata before moving its embedded stock packet to
+   the front of that allocation, then enter stock's 0x05 case unchanged. No
+   engine address escapes this call; the original pump pointer stays intact. */
+static int __cdecl mp_chat_receive(void* frame)
+{
+    unsigned char* message=((unsigned char**)frame)[4];
+    const char* sender=*(const char* const*)((const char*)frame-0x24);
+    const char* destination=*(const char* const*)((const char*)frame-0x14);
+    char* ta=ta_main();
+    RecMpChatWire wire;
+    size_t source_offset, target_offset;
+    DWORD from, to, source_id, target_id;
+    unsigned tick;
+    if (!ta || GetCurrentThreadId()!=g_ddraw.gui_thread_id ||
+        s_mp_tid!=GetCurrentThreadId() || !s_mp_channel) return 0;
+    source_offset=(size_t)sender-(size_t)(ta+OFF_PLAYERS);
+    target_offset=(size_t)destination-(size_t)(ta+OFF_PLAYERS);
+    if (source_offset%PL_STRIDE || source_offset/PL_STRIDE>=REC_PLAYERS ||
+        target_offset%PL_STRIDE || target_offset/PL_STRIDE>=REC_PLAYERS) return 0;
+    memcpy(&from,ta+0x4C9,4); memcpy(&to,ta+0x4CD,4);
+    memcpy(&source_id,sender+4,4); memcpy(&target_id,destination+4,4);
+    if (!from || from!=source_id || to!=target_id ||
+        *((const unsigned char*)frame+0x14)!=source_offset/PL_STRIDE || !*(const unsigned*)sender ||
+        (unsigned char)sender[0x73]!=3 || !*(const unsigned*)destination ||
+        (unsigned char)destination[0x73]!=1 ||
+        !tagpu_recmp_chat_wire_read(&wire,&s_mp_match,message,tagpu_wire_received(message))) return 0;
+    memcpy(&tick,ta+OFF_GAMETIME,4);
+    tagpu_logf("recmp: text received origin %u event %llu source %u tick %u recipient %u CRC %08X",
+               from,(unsigned long long)wire.event,wire.tick,tick,to,
+               (unsigned)Crc32_ComputeBuf(0,wire.stock,sizeof wire.stock));
+    memcpy(message,wire.stock,sizeof wire.stock);
+    return 1;
+}
+
 static void mp_init(void)
 {
     static const unsigned char launch[] = {
@@ -439,11 +571,19 @@ static void mp_init(void)
         0x56,0xFF,0x51,0x18,0x33,0xC9
     };
     static const unsigned char data_size[] = { 0x83,0x7D,0x14,0x15,0x74,0x40 };
+    static const struct { unsigned va; unsigned char stock[5]; } chat_call[] = {
+        { 0x493FAF, {0xE8,0x9C,0xFE,0xFC,0xFF} },
+        { 0x463E9F, {0xE8,0xBC,0xF4,0xFE,0xFF} },
+        { 0x4534B6, {0xE8,0x35,0xE9,0xFF,0xFF} },
+        { 0x4533F9, {0xE8,0xC2,0xE7,0xFF,0xFF} },
+        { 0x45348B, {0xE8,0x30,0xE7,0xFF,0xFF} }
+    };
     struct { unsigned va, n; unsigned char now[6]; DWORD protection; } site[] = {
         { 0x496D25, 5 }, { 0x4553BE, 5 }, { 0x4520BE, 6 },
-        { 0x4CA762, 5 }, { 0x454315, 6 }
+        { 0x4CA762, 5 }, { 0x454315, 6 }, { 0x493FAF,5 }, { 0x463E9F,5 },
+        { 0x4534B6,5 }, { 0x4533F9,5 }, { 0x45348B,5 }, { 0x456028,4 }
     };
-    unsigned char *observe = NULL, *sized = NULL, *create = NULL, *accept = NULL, *p;
+    unsigned char *observe = NULL, *sized = NULL, *create = NULL, *accept = NULL, *chat = NULL, *p;
     const unsigned sites = sizeof site / sizeof site[0];
     unsigned i, writable = 0, value;
     if (memcmp((const void*)(size_t)0x496D15, launch, sizeof launch) ||
@@ -451,12 +591,16 @@ static void mp_init(void)
         *(const unsigned*)(size_t)0x455F9C != 0x4553BE ||
         memcmp((const void*)(size_t)0x4520BE, length, sizeof length) ||
         memcmp((const void*)(size_t)0x4CA749, created, sizeof created) ||
-        memcmp((const void*)(size_t)0x454315, data_size, sizeof data_size)) goto refused;
+        memcmp((const void*)(size_t)0x454315, data_size, sizeof data_size) ||
+        *(const unsigned*)(size_t)0x456028!=0x455F50) goto refused;
+    for (i=0;i<sizeof chat_call/sizeof chat_call[0];i++)
+        if (memcmp((const void*)(size_t)chat_call[i].va,chat_call[i].stock,5)) goto refused;
     observe = tagpu_detour_stub();
     sized = tagpu_detour_stub();
     create = tagpu_detour_stub();
     accept = tagpu_detour_stub();
-    if (!observe || !sized || !create || !accept) goto refused;
+    chat = tagpu_detour_stub();
+    if (!observe || !sized || !create || !accept || !chat) goto refused;
     p = observe;
     *p++ = 0x9C; *p++ = 0x60;                  /* flags and all registers */
     *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x24;
@@ -470,6 +614,18 @@ static void mp_init(void)
     *p++ = 0xC7; *p++ = 0x05;
     value = 0x512AF8; memcpy(p, &value, 4); p += 4;
     value = sizeof(RecMpStart); memcpy(p, &value, 4); p += 4;
+    /* DISASSEMBLED: the initializer leaves code 0x2B's length/callback zero
+       and its dispatch slot points to the loop. All three splitter walks use
+       this length table; the receive mask's bit 2 admits state 6 only. */
+    { const unsigned entries[][2] = {
+        {0x512B84,sizeof(RecMpChatWire)}, {0x512ACC,0x44FD40}, {0x512C6C,4}
+      };
+      for (i=0;i<sizeof entries/sizeof entries[0];i++) {
+          *p++=0xC7; *p++=0x05;
+          memcpy(p,&entries[i][0],4); p+=4;
+          memcpy(p,&entries[i][1],4); p+=4;
+      }
+    }
     *p++ = 0xE9; tagpu_detour_rel(p, 0x4520C4);
     p = create;
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)mp_create_player); p += 4;
@@ -482,12 +638,29 @@ static void mp_init(void)
     value = RECMP_PRIMARY_BYTES + sizeof(RecMpPublic); memcpy(p, &value, 4); p += 4;
     *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, 0x45435B); p += 4;
     *p++ = 0xE9; tagpu_detour_rel(p, 0x45431B);
+    p=chat;
+    *p++=0x9C; *p++=0x60;
+    *p++=0x8D; *p++=0x44; *p++=0x24; *p++=0x24;
+    *p++=0x50; *p++=0xE8;
+    tagpu_detour_rel(p,(unsigned)(size_t)mp_chat_receive); p+=4;
+    *p++=0x83; *p++=0xC4; *p++=0x04;
+    *p++=0x85; *p++=0xC0; *p++=0x61;
+    *p++=0x74; *p++=0x06;
+    *p++=0x9D; *p++=0xE9; tagpu_detour_rel(p,0x45522E); p+=4;
+    *p++=0x9D; *p++=0xE9; tagpu_detour_rel(p,0x455F50);
     for (i = 0; i < sites; i++) {
         unsigned target = i == 0 ? (unsigned)(size_t)mp_start_send :
                           i == 1 ? (unsigned)(size_t)observe :
                           i == 2 ? (unsigned)(size_t)sized :
-                          i == 3 ? (unsigned)(size_t)create : (unsigned)(size_t)accept;
-        site[i].now[0] = i == 0 ? 0xE8 : 0xE9;
+                          i == 3 ? (unsigned)(size_t)create :
+                          i == 4 ? (unsigned)(size_t)accept :
+                          i == 5 ? (unsigned)(size_t)mp_chat_gui_send :
+                          i == 6 ? (unsigned)(size_t)mp_chat_send_line :
+                          i == 7 ? (unsigned)(size_t)mp_chat_send_all :
+                          i == 8 || i == 9 ? (unsigned)(size_t)mp_chat_send_one :
+                          (unsigned)(size_t)chat;
+        if (i==10) { memcpy(site[i].now,&target,4); continue; }
+        site[i].now[0] = i == 0 || i>=5 ? 0xE8 : 0xE9;
         value = target - (site[i].va + 5);
         memcpy(site[i].now + 1, &value, 4);
         site[i].now[5] = 0x90;
@@ -509,6 +682,8 @@ static void mp_init(void)
     s_mp_sites = 1;
     tagpu_logf("recmp: ARMED %u-byte fresh start and %u-byte native player identity",
                (unsigned)sizeof(RecMpStart), RECMP_PRIMARY_BYTES + (unsigned)sizeof(RecMpPublic));
+    tagpu_logf("recmp: ARMED %u-byte identified in-match text; native audience and display case",
+               (unsigned)sizeof(RecMpChatWire));
     return;
 refused:
     for (i = 0; i < writable; i++) {
@@ -519,7 +694,8 @@ refused:
     tagpu_detour_stub_free(sized);
     tagpu_detour_stub_free(create);
     tagpu_detour_stub_free(accept);
-    tagpu_logf("recmp: start/player-data sites differ or cannot be patched: no contributions");
+    tagpu_detour_stub_free(chat);
+    tagpu_logf("recmp: start/player-data/text sites differ or cannot be patched: no contributions");
 }
 
 static void mp_explored_end(void)

@@ -2971,7 +2971,11 @@ engine's function, then `tagpu_replay_phase`, keeping every register and the fla
 stamps each feature root with the phase it was made in; `tagpu_rec_capture` sets the phase back to 0.
 Off a puppet level `tagpu_replay_phase` returns at once.
 
-**Fields we write: none.** It reads the unit array with each unit's mover and order lists, the ten
+**Fields we write:** native protocol initialization writes extended start length
+`0x512AF8`, identified-text length `0x512B84`, callback `0x512ACC` and mask
+`0x512C6C`. An accepted 97-byte identified text delivery replaces the first 65
+bytes of the current owned receive allocation (`main+0x2A38`) with its validated
+embedded stock packet before entering the stock text case. Capture reads the unit array with each unit's mover and order lists, the ten
 player records with their PlayerInfo, the controlled and viewed players, the unit types, the
 sort buckets, GameTime, the game mode and the map's path, the feature grid, the wreck pool, its
 heads and the reproduction cursor, the feature defs, and at the create's exit the new unit's water
@@ -3152,10 +3156,25 @@ is unchanged. This adds no hook, field write or exclusion. Effective POV
 engine playback, other view streams and communication audiences remain open;
 see the multiplayer slice's *Per-origin explored-map history*.
 
-The stock text-chat boundary and audience audit identifies intended targets and
-accepted local displays as separate observations. No chat contribution or
-playback hook is installed; event identity and recipient correlation remain
-open. The engine map and multiplayer slice record those contracts.
+The native text path also carries `(fresh match GUID, native sender, 64-bit
+serial)` beside the original 65-byte text packet. Source GUI scope/format/send
+call-site replacements at `0x493FAF`, `0x463E9F`, `0x4533F9`, `0x45348B` and
+`0x4534B6` preserve the original audience logic. The new `0x2B` dispatch slot
+`0x456028` validates the exact 97-byte delivery and bounded actor identities,
+then enters stock's text case at `0x45522E`. It preserves the pump pointer and
+copies no engine address to a worker. Normal/COVER builds and 168 copied-packet
+guarded/malformed controls pass. Intended targets and actual recipient
+observations remain separate; communication-ledger publication, playback,
+loading-phase acceptance and pings/drawings remain open. The first native wire
+probe fails input acknowledgement and exposes an inactive start-token guard;
+the live B2 producer lifetime replaces that guard. No passing native wire-ID
+gate is claimed from that attempt. The corrected COVER three-human run, local
+recording off, verifies five unique source events and exact packet CRCs: the
+selected recipient accepts all five; the other peer accepts four, excluding the
+private event. Repeated identical lines remain distinct, and a full-length line
+has equal 63-character displays on every peer. This is in-play queued native
+delivery; the open communication-ledger/playback/loading/raw gates remain.
+The engine map and multiplayer slice record the invariants and verification.
 The snapshot also publishes inline `edit_index`/`caret` without engine writes.
 A two-peer COVER run verifies acknowledged text replacement and the engine's
 Mapping toggle. This is driver verification, not a native replay gate.
@@ -3165,6 +3184,9 @@ Mapping toggle. This is driver verification, not a native replay gate.
 | `0x512AF8` startup packet-length entry | 25, written by the redirected initializer store; start sender, receive observer and initializer are installed together. |
 | Host start's message bytes | Fixed 25-byte stack value passed through the existing generic sender; its reliable queue copies before return. No remote engine resources or order fields are written. |
 | Native CreatePlayer initial data | The original 21-byte password/version prefix followed by a fixed 280-byte public-key record. Only public material is exported; key failure forwards the stock data and refuses faithful contributions. The size handler retains the original accepted-prefix tests. |
+| `0x512B84`, `0x512ACC`, `0x512C6C` | Fixed identified-text size 97, generic `ret 4` callback `0x44FD40` and state-6 receive mask 4, written by the same startup initializer. All eleven primary sites are acquired before any is written. |
+| Scoped GUI text message | Copied 97-byte stack wire value through the original target/generic sender. The native queue copies before returning; ordinary binary `0x05` messages retain their existing size. |
+| First 65 bytes of the current `main+0x2A38` receive allocation | Exact delivered pointer/97-byte length and copied version/match/serial/actor validation precede the bounded stock-image replacement. The original text case reads that same allocation before the next receive. |
 
 ### 2.6f Watching a recording (`tagpu_replay.c`, `tagpu_puppet.c`, `tagpu_recreader.c`, on request)
 

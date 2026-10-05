@@ -1267,19 +1267,70 @@ not identities, and identical repeated lines are separate events.
 
 The engine map's *In-match text chat* section records the call sites, argument
 contracts, field offsets, source/destination lookup, local shortcut, display
-truncation and the existing B4/B8 hook ownership. B3's retained SDK span only
-matches the original receive pointer; an interior chat submessage needs its
-own proved containing span. This audit installs no hook or playback root.
+truncation and the existing B4/B8 hook ownership. Each primary receive delivers
+one split message into its current buffer; B3 retains that exact delivered span.
+The identified text receiver below uses this bound before copying.
 
-The remaining implementation needs a unique sender event identity, intended
-targets and actual accepted recipient observations, preserving their separate
+The native text wire now carries a unique sender event identity as described
+below. Intended targets and actual accepted recipient observations still need
+communication-ledger publication and playback, preserving their separate
 source/application times. Original and forwarded copies must join one event
 without deduplicating text or inferring a recipient from a transport return.
-Primary per-pair ordering is still unproved, so correlating sender/recipient
-observations by matching ordinal is not yet justified. The in-match boundary
-must exclude the sender's other front-end callers. Pings/drawings still need
+Primary per-pair ordering is still unproved; the same-wire identity removes
+the need to correlate these observations by ordinal. Pings/drawings still need
 their own boundary/audience audit. This does not close the POV/chat gate or
 choose the pending owner-lifetime policy.
+
+#### Identity travels with the native chat
+
+The work branch registers a 97-byte primary code `0x2B`, with version/length,
+fresh match GUID, a nonzero 64-bit sender serial, source GameTime and the original
+65-byte stock text packet. `(match, native sender, serial)` names one event.
+One scope at the in-match GUI call encloses the native formatter, audience loops,
+every destination send and local echo. Other front-end calls and skirmish remain
+stock. The serial never wraps. The three native send sites wrap that same event
+before calling their original sender; they preserve native audience/filter logic
+and keep its success distinct from recipient acceptance.
+
+The receiver bounds both native actor rows/IDs and requires a controller-1
+destination plus the exact current SDK-delivered pointer and 97-byte span before
+copying. It checks version, match, nonzero serial and the embedded ordinary text
+packet, copies that original packet to the front of the owned receive allocation,
+then enters the original text case. It neither changes the pump pointer nor
+retains an engine address. Code `0x2B` has a fixed splitter length, a default
+callback with the same body as stock text and a receive mask permitting state 6
+only. All sites are acquired before any patch is written. This same-build wire
+extension adds 32 application bytes per transmitted human text message; this is
+arithmetic, not measured physical traffic or an approved bandwidth result.
+
+Normal and COVER builds pass. Copied codec controls pass repeated full-length
+text with different IDs, maximum serial, source/destination aliasing, 162
+guard-page-truncated spans and six malformed headers/packets. Every refusal
+retains the output unchanged. The source and recipient logs retain identity,
+text-packet CRC and separate clocks; they are diagnostics, not persisted
+communication-ledger records. No complete communication file, playback, seek,
+pings/drawings or native raw-transport result is claimed. Loading-phase chat
+delivery is also unverified: the new receiver currently requires the live B2
+producer and state-6 dispatch. The first native wire probe sends the stock path
+because it incorrectly required the pending start flag that B2 has already
+consumed; the active producer's owning-thread lifetime replaces that check.
+That run then stops on a failed long-line input acknowledgement, before its
+wire-ID assertions. It is not a passing native identity result.
+
+The corrected COVER run passes in-play queued native delivery with three
+humans and local recording off. Five source identities `1..5` preserve exact
+65-byte packet CRCs and source ticks on the selected recipient; the other peer
+accepts `1,2,4,5`. The two identical public lines have separate identities with
+the same CRC. Event 3 is the digit-selected private line. Event 4 fills the
+64-byte wire text and has exactly equal 63-character displayed text on every
+peer. The source tick 697 is received at 662 and 660 respectively, preserving
+both clocks. Event 5 is the subsequent public marker. The first long-line
+attempt did not acknowledge a wide-character field replacement; the corrected
+run uses a 60-character narrow-letter line and acknowledges it exactly.
+No cause for every long-line driver refusal is claimed. The engine map lists
+the complete source/recipient ID/tick/CRC sequences. The tested DLL/map/hash,
+logs and queue snapshots are retained, and all owned instances/prefixes/display
+are removed. This remains a wire checkpoint with the wider gaps above.
 
 #### Input acknowledgement used by the chat fixture
 

@@ -12808,8 +12808,8 @@ cannot be prologue-detoured without relocating the call.
 #### In-match text chat: sender, audience and received display
 
 DISASSEMBLED 2026-10-05 from `pristine/TotalA.exe.pristine`, with a whole
-`.text` relative-call sweep. These are stock text-chat facts; no multiplayer
-chat contribution or playback root is installed by this research. A send
+`.text` relative-call sweep. These are stock text-chat facts; the work branch
+also carries a unique identity in the original native text delivery below. A send
 attempt, a transport success and a recipient's displayed line are separate
 observations. Primary per-pair message ordering remains unproved.
 
@@ -12828,11 +12828,61 @@ observations. Primary per-pair message ordering remains unproved.
 | `0x463CA0(text, flags, unitID, sourceRow)` | `ret 16`, shared display sink. Returns for empty text or zero `ScreenChatLines` at `main+0x37F27`. Thirty entries at `main+0x12EF`, stride `0x48`, with head/tail `+0x2A3E/+0x2A40`. Copies 64 bytes then sets entry `+0x3F` to NUL, giving at most 63 displayed bytes (`0x463D25..0x463D41`); stores GameTime at `+0x40`, unit ID at `+0x44`, source row at `+0x46` and low four flag bits at `+0x47`. Plays `MessageArrived` (`0x5072B8`) only when sourceRow != 10. Other callers include console replies, unit replies and death/results notices: recording every call as human chat would misclassify them. |
 
 `tagpu_wire_received` (`tagpu_patches.c`) reports B3's retained SDK span only
-when its argument equals the original TLS receive-buffer pointer. A chat
-submessage inside an aggregate need not satisfy that equality. The stock
-65-byte splitter length and the containing receive span must be established
-before copying; a pointer probe or a formatted name supplies neither a bound
-nor an origin identity.
+when its argument equals the original TLS receive-buffer pointer. The primary
+pump receives **one split message** per call to `0x4534E0`; the splitter's queue
+records a pointer and length for each message (`0x463A5B/0x463A6F`, or
+`0x463B6A/0x463B7E`). The pump's statistics call records the length delivered
+into `main+0x2A38`, rather than the earlier aggregate. The new text receiver
+requires that exact pointer and exactly 97 delivered bytes before copying.
+An arbitrary interior pointer does not inherit that bound.
+
+##### Identified native text delivery
+
+The work branch's `mp_init` also registers fixed code `0x2B`, whose stock
+length is zero and dispatch target is the receive loop. A 97-byte
+`RecMpChatWire` contains version/length, fresh match GUID, nonzero 64-bit sender
+serial, source GameTime and the original 65-byte text packet. Identity is
+`(match, native transport sender, serial)`; a repeated line or a paused clock
+cannot alias another event. Source and recipient clocks remain separate.
+This installs native delivery metadata, not communication-file persistence or
+multiplayer playback. It leaves primary reliability and message ordering
+unchanged and requires the product's same-build peers.
+
+| Address / field | Established behaviour and branch use |
+|---|---|
+| `0x451FD0..0x452322`, `0x512B84`, `0x512ACC`, `0x512C6C` | Packet initializer zeroes the length table and never assigns code `0x2B` a positive length or callback; the whole-body disassembly contains no later store to these three entries after `0x4520BE`. The existing recorder initializer stub at `0x4520BE` now writes length 97, callback `0x44FD40` and receive mask 4 to them, as well as the extended start length at `0x512AF8`. All three splitter walks use the length table. Mask bit 2 admits net state 6; the state-5 and other-state paths require bits 1 and 0 respectively (`0x454745..0x4547A7`). |
+| `0x44FD40..0x44FD43`, `0x44FDA0..0x44FDAC`, table `0x512A20` | The registered default callback returns −1 with `ret 4`, the same body as stock text callback `0x44FD60`. `0x44FDA0` indexes this callback table with the message code and makes an indirect call at `0x44FDA5`; registering a length alone would leave that callback missing. No new meaning is assigned to −1. |
+| `0x493FAF`, `0x463E9F` | The first call scopes one ID over the in-match GUI's native `0x463E50`; the second observes that scope after formatting in the engine's 200-byte stack buffer (`sub esp,0xC8` at `0x463E54`). The callback stores its controlled-player record at stack `+0x24` (`0x493E6F..0x493E98`) and passes that pointer at `0x493FAE`. Front-end callers remain outside the scope. The live B2 producer's thread/channel lifetime authorizes the current match; its pending-start flag is already consumed. The scope is only mutated by the owning game thread, saves/restores its outer value on the stack, and exhausts rather than wrapping its serial. |
+| `0x4533F9`, `0x45348B`, `0x4534B6` | Call-site replacements wrap only scoped GUI text, then call the original targeted or generic sender. The native audience loops, masks, alliance tests and destination filters remain in those original functions. One source event has the same ID at every target call; a transport return is not a recipient receipt. |
+| `0x4628D0`, `0x46290D..0x46292C` | Queue append compares current bytes plus supplied length with `0x42A` at `0x462911`; on the accepted path it copies all supplied bytes into its owned packet at `+0x14` before returning. The call's stack packet therefore outlives no send. Its recorded entry length is supplied length at `0x46293F`. This proves the copy lifetime, not per-pair ordering or reliable delivery. |
+| `0x456028`, stock value `0x455F50` | Dispatch-table slot for code `0x2B`, selected after the code's receive-mask check. The new stub preserves flags/registers and gives its original frame to `mp_chat_receive`. Bounded native sender/destination rows and IDs, local controller-1 destination, exact delivered span, version/match/serial and embedded `0x05` nonempty text are validated. On success, a copied 65-byte stock image replaces the front of the owned writable receive buffer, then the stub enters `0x45522E`; on refusal it enters `0x455F50`. It changes no pump pointer and retains no engine address after the call. |
+| `0x4C97B0`, `0x4C9800`, `0x50A780` | Ordinary raw send derives SDK flags 0/1 from whether `0x50A780` is nonzero (`0x4C97D5..0x4C97EA`), then calls vtable `+0x68` at `0x4C97F6`. The adjacent wrapper always supplies flag 1 (`0x4C9830/0x4C9839`). Installed `dplay.h` defines these as non-guaranteed/guaranteed. This says nothing by itself about the engine's queued transport. |
+| `0x4C9790`, `0x4C97A6`, `0x4CA56C`, `0x4CA5E3` | Setter `0x4C9790(value)`, `ret 4`, writes the flag at `0x4C97A6` and returns its old value. Whole-`.text` direct references find two other writes: 1 at `0x4CA56C`, 0 at `0x4CA5E3` in initialization beginning `0x4CA5D0`. Setter call sites are `0x427D46`, `0x4563A0`, `0x4563D2`, `0x4565CF`, `0x45660E`, `0x498580`; their surrounding branches temporarily disable/conditionally restore it or change loading/menu state. No invariant that chat always uses guaranteed SDK sends is established. |
+
+MEASURED 2026-10-05 on the reference setup, before the new wire path: a native
+three-human *Town & Country* game receives two identical public lines on all
+three peers and a digit-selected private line on sender/selected destination.
+The other peer's sampled queue after a subsequent public marker has no private
+line. Source/received ticks are `280/245`, `407/373`, `547/510`, `651/616`;
+these observations do not establish an offset or primary ordering. Each peer
+reads `0x50A780 == 0` and `0x506DBC == 1`. A diagnostic dword at `main+0x1427F`
+reads `0x000F004B`; its combined field meaning is unestablished and it is not
+used as an authority. These are queue observations, not a complete replay file.
+
+MEASURED 2026-10-05 on the reference setup, corrected COVER wire path, three
+human peers with local recording off: source `674591616` emits serials 1..5 at
+ticks `279,400,526,697,824`. Recipient `674591618` accepts all five at
+`244,365,490,662,789`; recipient `674591620` accepts 1,2,4,5 at
+`241,362,660,787`. Every received serial/source tick and all 65 stock bytes'
+CRC match the source. The two identical public lines share CRC `6585E629`
+and have distinct serials 1 and 2. The digit-selected private line is serial 3,
+CRC `0056345B`. A 60-character `full-` plus narrow `i` line is serial 4, CRC
+`40E30A33`, with exactly equal 63-character visible queues on all three peers.
+Serial 5 is the subsequent public marker, CRC `67CE86A6`. The native IDs,
+fresh match GUID, tested DLL/map/hash, retained logs and queue snapshots are
+the probe evidence. All owned instances/prefixes/display are removed. This
+establishes in-play queued transport; raw transport, loading acceptance,
+persisted communication, playback and seek remain unverified.
 
 #### Textfield input beneath the chat GUI
 

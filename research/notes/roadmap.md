@@ -3995,7 +3995,16 @@ active editor and waits for a changed edit index before typing. A two-peer
 COVER control replaces a 43-character mixed-case line exactly and submits
 `+mapping` on both peers with a verified Mapping-bit toggle. This verifies the
 input control; the complete native exploration file and seek gate remain open.
-The stock chat/audience audit installs no chat contribution or playback root.
+The native text wire now carries a unique match/sender/serial identity beside
+the original text, preserving native audience selection and the received text
+case. Normal/COVER builds and 168 copied-packet bound/corruption controls pass.
+The first native wire probe stops on input acknowledgement and reveals an
+inactive pending-start guard. The corrected live-producer guard passes a COVER
+three-human native run with five unique events, exact source/received packet
+CRCs, repeated identical lines and correct sampled private delivery; a
+full-length line displays the same 63 characters on all three peers.
+Communication-ledger publication, actual audience queries,
+playback/seek, loading-phase chat and pings/drawings remain open.
 
 The work branch's tick-based replay harness defaults to internal speed 20 (2x),
 with normal speed selectable and retained for cost and speed/settings UI checks.

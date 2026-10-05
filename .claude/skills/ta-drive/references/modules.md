@@ -258,6 +258,14 @@ CRC; match source/recipient by origin, with each side's application clock
 retained separately. Run the standalone prefix-removing fixture separately from
 multiplayer menu drivers.
 
+`python3 tools/replay/recmp_chat_wire_test.py --out /tmp/recmp-chat-wire-run`
+checks copied identified text packets, repeated full-length text with distinct
+serials, alias-safe copies, guarded truncated spans and malformed packet
+refusal. It cleans up its owned prefix/display and runs separately from menu
+drivers. The native `recmp: text source` / `text received` logs carry sender
+identity, event serial, text-packet CRC and separate source/recipient ticks.
+These logs do not establish persisted communication or replay playback.
+
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
   `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin. **The NAT
   helpers are refused** (`dpnhpast,dpnhupnp=d`): the transport skips a helper that does not load,
