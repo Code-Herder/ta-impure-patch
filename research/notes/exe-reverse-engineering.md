@@ -3076,8 +3076,10 @@ translate special keys into that ring. Readers include gameplay keys at
 `0x495E9A`, menus at `0x4998B6/0x4998D7/0x49991D`, and GUI input at
 `0x4AA034`. On the long CORE upgrade replay's T451/T9181 images, the recording
 had both indices 9, playback and fresh seek both 0: equal enqueue/dequeue indices
-mean drained input, not a construction counter. The proposed replay exception is
-exactly these eight bytes; owner approval is required before adding a leave row.
+mean drained input, not a construction counter. The replay exception is
+exactly these eight bytes; the owner approved both four-byte leave rows on 2026-10-05.
+Enqueue stores are `0x4C1A47`, `0x4C1A87`, `0x4C1B5C`, `0x4C1B66`;
+dequeue stores are `0x4C1A4D`, `0x4C1A8D`, `0x4C1ADC`, `0x4C1AE4`.
 
 **Every wall clock the engine stores.** The sources are `GetTickCount` (IAT `0x4FC0DC`; `0x4B6560`
 is `jmp` to it, and `0x4B6340` is `GetTickCount · rate / 1000`), `QueryPerformanceCounter` (IAT

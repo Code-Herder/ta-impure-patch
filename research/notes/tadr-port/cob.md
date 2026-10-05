@@ -715,4 +715,5 @@ all 14 paused comparisons and the completion/effect/restore checks; the strict i
 gate still names the two keyboard indices. The final puppet guard and native
 save/load preflight require a combined coverage run. The preflight separately
 preserves all ten active slots on both probes and its coverage reaches `cob_save`
-and `cob_load`. No keyboard exclusion has been applied without owner approval.
+and `cob_load`. The owner approved exactly the two four-byte keyboard-index exclusions on
+2026-10-05; the combined landing replay gate remains outstanding.

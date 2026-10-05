@@ -492,6 +492,12 @@ cannot see an address recorded as a value; the scan looks for one instead.
   pointer `0x51F524` (4). The generated recorded simulation slots remain identical; coordinates,
   displayed unit types and orders receive their ordinary checks. Ownership and native writers
   are established in the engine map's resource section.
+  On 2026-10-05 the owner additionally approved the two four-byte keyboard-ring
+  indices, enqueue `0x51F48E` and dequeue `0x51F492`. Native keyboard and GUI
+  input consume this local ring; the completed-Moho replay had drained indices
+  9/9 live and 0/0 on playback and seek. Only those eight index bytes receive
+  leave rows; builds, orders, unit/player state and effect checks retain their
+  existing comparisons. The engine map records the disassembled stores and readers.
 - **The address scan** (`tarec.py scan`). A dump carries Impure's DLL's base and size (`RT_DLL`)
   and each recorded table's layout (`RT_FIELDS`). Every recorded table's plain fields — all but
   `SIMF_ID`, `SIMF_ADDR`, `SIMF_OWNED`, `SIMF_LOCAL`, `SIMF_COLUMN` and `SIMF_OPAQUE`, each aligned
