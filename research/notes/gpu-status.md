@@ -2056,6 +2056,10 @@ and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integratio
 
 | Where | What |
 |---|---|
+| `main+0x2CAA` | Resource input restores the repaired raw point, then writes the chosen manual snap point before `0x4197D0` computes its rectangle/flags. Game/input thread only; does not arm a command (§2.108) |
+| `0x51E684` / `0x51E688` | Site-test scratch: Quick preview/click queries save and restore both words. Manual placement leaves their normal native ownership (§2.108) |
+| Order nodes through `0x43AFC0` | Resource clicks create ordinary build/reclaim/Guard orders through the engine root; no direct unit/grid mutation. Recorded and replayed by the existing recorder (§2.108) |
+| `profiles/*.ini`, per-mod resource keys in `impure.cfg` | Missing general profiles are created at attach; existing files preserved. Complete validated rules publish on the game thread in menus, frozen for the match. Personal toggles/radius are independent and retain their saved values under locks (§2.108) |
 | Win32 HWND property `Impure.WindowLifetime`; `tagpu_window.c` | Window owner attaches a positive process-unique ID and destruction subclass before proxy subclassing. Survives final DirectDraw Release; removed before engine WM_DESTROY. The ID counter saturates rather than wrapping. No engine field is written (§2.107) |
 | Vulkan `s_ownerGeneration`, `s_ownGone`, lane state | Bound and destroyed generation IDs published with Interlocked operations; a delayed old-window notification cannot veto its replacement. Ready GPU objects transfer between joined renderers; the window owner tears down only after joining the active renderer, or after final Release already joined it. An unfinished worker retains its own cleanup (§2.107) |
 | `0x511DE8` | `TAdynmemStruct**` — the root of everything below |
@@ -20495,3 +20499,44 @@ passes with the generation marker. Normal and stock-limits builds pass.
 **Still open:** brief blank frames (0.117 s at end of loading in the Greenhaven
 capture), live compositor timing and Windows presentation verification. Cold start and failed
 or invalidated lanes still initialize a device. No engine/simulation state is written here.
+
+
+### 2.108 Resource snapping, contextual Quick Build and profiles (`tagpu_resource.c`, `tagpu_profiles.c`) — 2026-10-04
+
+Manual mex/geo placement and a separate contextual Quick Build option use the existing input,
+packet and ghost paths. The [resource page](tadr-port/resource-snapping.html) gives policy,
+behavior, fixture coverage and gaps; the engine map's *Resource placement and contextual order
+contracts* gives the allocation/lifetime proof and disassembly.
+
+| Seam | Mechanism |
+|---|---|
+| `0x498DA0`, existing redirected call `0x499221` | Viewport wrapper repairs raw world coordinates, then captures them for resource input; no additional byte patch at this seam |
+| `0x4197D0` | Nine-byte entry observer chooses manual placement, original code computes corners/flags and tests the site |
+| `0x498F70`, `0x499100` | Six-/seven-byte gates for left/right handlers, each `ret 4`. Only the configured contextual button is consumed; paired button bookkeeping outside these handlers remains native |
+| `0x47D2E0`, `0x47C780` | Engine site/altitude queries on the input thread. Quick queries preserve scratch words; an upgrade uses a private yard projection of an uncontested old footprint's clear |
+| `0x43F0E0`, `0x438760`, `0x43AFC0` | Native eligibility, action lookup and dispatch. Upgrade is reclaim→appended build; non-building constructor helpers Guard primaries, combat units untouched |
+| `tagpu_packet_pub.c` → native ghost and marker | Chosen type/green rectangle and queued flag copied into the packet. Engine stays in contextual mode. No new renderer-owned engine access or GL object |
+| Shared replay-menu identity → profile publication | Config/archive names and Twilight's label select a general profile plus an optional exact-version override. Menu reload validates complete candidates; in-game options cannot unfreeze policy |
+
+Defaults permit and initially enable both features for Stock/M/P/T, and lock both off for
+E/Z/unknown. A player can set manual radius zero with Quick Build still on. Alt bypasses both.
+The whole-build-list allocation patch must be fully installed before resource hooks can arm;
+the new predicate's `SIM_INSTALL` flag belongs to that installation. Unit/definition/grid/
+exploration/descriptor values are bounded, and owned unit walks use the engine's validated
+inclusive player partition. Engine heap order nodes have the input thread's sole-mutator
+lifetime; nothing retains a pointer across a simulation iteration or level teardown.
+
+Resource scratch and profile state are presentation inputs; simulation never reads those tables.
+Puppet seats are refused. Every effect is an ordinary recorded engine order and its normal
+simulation roots. Resource fixtures assert native live behavior and compare playback, three
+in-place restores and fresh seeks. The replay landing selector also follows their declared
+source dependencies; changing the harness selects the whole suite. No replay field exclusion or tolerance changes. The owner approved an expected-absent row
+for the recording player's native immediate-command UI click (return `0x41A0F6`), including
+Stop; its simulation orders remain checked. Paused viewer samples verify that the camera and GUI can move
+without any carried simulation record changing.
+
+**Open:** multiplayer policy parity warnings and mod download/activation. The fixture table names
+what was exercised; it does not establish every mod yardmap, obstruction, fog boundary or
+edge/zoom combination. The 129×129 closed-component classifier conservatively refuses large or
+partly unexplored deposits, and contested upgrades are refused. Profile identifiers describe
+what the engine reports, which may be shorter than an installed package version.

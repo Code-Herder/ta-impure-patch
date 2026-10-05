@@ -134,6 +134,7 @@ enum { ENG_GAMMA = 1, ENG_BITS = 2, ENG_RES = 4, ENG_ALL = 7 };
 #define G_GRAYED  0x13C
 #define GI_UICHANGE 0x60                /* gi+0x60 = main+0x579                */
 #define STRIDE    0x15B
+#define GUI_RECORDS 200                 /* GUI_Load 0x4AAA68/0x4AAA95: fixed allocation */
 
 typedef void* (__stdcall *gui_load_fn)(void* gi, const char* name, int flags);
 typedef int   (__stdcall *set_status_fn)(void* gi, const char* name, int value);
@@ -1058,6 +1059,9 @@ static int row_greyed(int row)
     return 0;
 }
 
+static void __stdcall tagpu_vis_oncommand(void* gi);
+static void __stdcall tagpu_vrt_oncommand(void* gi);
+
 void tagpu_menu_resource_refresh(void)
 {
     int i, changed = 0;
@@ -1066,11 +1070,15 @@ void tagpu_menu_resource_refresh(void)
     s_stage[R_QUICK] = tagpu_profiles_quick();
     top = ta ? *(char**)(ta + OFF_TOPGUI) : NULL;
     ctrls = top ? *(char**)(top + GM_CTRLS) : NULL;
-    if (ctrls) {
+    /* Only our dispatchers own the profile label. GUI_Load allocates exactly
+       200 records, including record zero; the engine's count excludes zero. */
+    if (ctrls && (*(void**)(top + GM_ONCMD) == (void*)tagpu_menu_oncommand ||
+                  *(void**)(top + GM_ONCMD) == (void*)tagpu_vis_oncommand ||
+                  *(void**)(top + GM_ONCMD) == (void*)tagpu_vrt_oncommand)) {
         int count = *(short*)(ctrls + 0xB6);
-        if (count > 0 && count < 1024) for (i = 1; i <= count; i++) {
+        if (count > 0 && count < GUI_RECORDS) for (i = 1; i <= count; i++) {
             char* g = ctrls + i * STRIDE;
-            if (!memcmp(g + G_NAME, "PROFILE", 8)) {
+            if (g[0] == 5 && !memcmp(g + G_NAME, "PROFILE", 8)) {
                 char status[128];
                 tagpu_profiles_status(status, sizeof status);
                 memcpy(g + 0xB6, status, strlen(status) + 1);
@@ -3073,8 +3081,6 @@ static int screen_has_row(void)
 
 typedef void (__stdcall *oncmd_fn)(void* gi);
 static oncmd_fn s_visPrevOnCmd = 0;
-
-static void __stdcall tagpu_vis_oncommand(void* gi);
 
 /* Is the screen on top our VISUALRT? By its ground's name, which no stock
    screen carries. */

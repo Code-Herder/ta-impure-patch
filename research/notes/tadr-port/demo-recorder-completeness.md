@@ -462,10 +462,13 @@ cannot see an address recorded as a value; the scan looks for one instead.
   dump `ln1`, then does what a viewer does without changing the game — the arrow keys a second
   each way, one wheel notch in and out at the map's centre, the cursor over the map and over the
   panel, the in-game menu (Tab, `ARMOPT.GUI`) opened — and takes `ln2` with the menu still open
-  (its OK resumes the game); the twin is refused unless GameTime did not move between them.
+  (its OK resumes the game). It also samples twelve paused views: GUI-consumed clicks through
+  the event ring, inert label hovers and distinct camera positions. Each additional dump must
+  have the same GameTime, and its carried simulation records must equal `ln1`. Returning to
+  the same eye/ring index at the second endpoint alone would hide viewer-only writes.
 - **The images gate** (`tarec.py images-gate`). Every bit of the main block and `.data` that no
   row of `replay-globals.tsv` covers, where the live game at T1 differs from the playing at T1 or
-  from the fresh seek to T1, is in this order **presentation** (the twin's two dumps differ there),
+  from the fresh seek to T1, is in this order **presentation** (the twin's paused dumps differ there),
   **host-variant** (the playing and the round-trip process differ there at T1), **load-constant**
   (unchanged across [T1, Tlast] on the recording machine and on the puppet host), or a **FAIL**,
   named by address, `IMAGE_MAP` group and values and labelled *written during play on the
@@ -643,6 +646,11 @@ region with whether its fixtures reach it.
 | 2026-10-02 | **A takeover starts every order node from the constructor's state** (S4's D1, the s2-orders decision 8): `+5`, `+6`, `+0xA`, `+0x4E` and `+0x52` as the node's constructor leaves them, except the measured adoption of in-progress builds (BuildingBuild and MobileBuild at state 3 when their target is set). Every handler starts from that state, so it is the one safe by construction; keeping the recorded `+5` would resume handlers mid-state with `+0x52` NULL, and the destructor's event-2 dispatch for `+6` bit 1 is a named crash path. Orders restart: a patrol leg, an attack's acquisition, a reclaim. |
 | 2026-10-02 | **The takeover checks' expected differences** (S4's D2, a loosening approved by the owner): the order-node fields of D1; the player records outside the fork's seats (the viewer seat and the records the seat fill deactivated); the controllers, `RK_VIEWER` and PlayerInfo `+0x94` where the takeover changed a seat's role; and the contact bits only where the viewed seats agree (the existing `compare --puppet` rule). Any other difference is a bug. |
 | 2026-10-02 | **A fork is always recorded**, whatever `tagpu_recorder.on` says (S4's D3); a takeover whose file cannot be appended is refused before the rebuild, with the reason. **B4's per-slot columns are recorded** (D4, landing S4a). **The fork rules' last-used times live in the recording** (D5), appended when a watching session ends and skipped with a log line when the file cannot be written. |
+
+The owner approved one additional UI-only count exception on 2026-10-05: the native
+immediate-command click (`0x41A0F1` → `0x47F1A0("immediateorders", 0)`, return `0x41A0F6`),
+including Stop. The recording player's click is absent on puppets, as the console click already
+is. Command orders, reclaim/build effects and carried simulation state remain checked.
 
 ## Open items
 

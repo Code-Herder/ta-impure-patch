@@ -15,6 +15,7 @@ differs is the setup around it.
 8. [A remote Windows machine](#a-remote-windows-machine)
 9. [A mod that loads Impure from its own proxy](#a-mod-that-loads-impure-from-its-own-proxy)
 10. [The demo recorder: recordings and dumps](#the-demo-recorder-recordings-and-dumps)
+11. [Resource snapping and Quick Build](#resource-snapping-and-quick-build)
 
 ## Extra weapons
 
@@ -761,3 +762,24 @@ block that reads to its last complete block.
   writer's `closed` line is in the log.
 - The file format is `tagpu/ddraw/inc/tagpu_recfmt.h`; what is recorded and what is not:
   `research/notes/tadr-port/demo-recorder-skirmish-slice.md`.
+
+
+## Resource snapping and Quick Build
+
+The Impure options screen exposes `RESOURCE` (manual radius) and `QUICKBUILD` independently;
+`PROFILE` shows the detected rules or a rejected-edit error. `arm menu.open` opens the gear
+screen; `arm menu.open=off` closes it. This screen has no OK button. Effective controls are
+locked when the profile forbids them or the resource hooks are unavailable.
+
+Before a contextual Quick Build test, leave manual placement with Stop and wait for cursor
+mode 1; Escape while a build queue is active is insufficient evidence of that transition.
+Use the contextual button from Interface Type (zero left, nonzero right). Explicit commands
+retain their native left-placement/right-cancel behavior. Input delivery is asynchronous:
+assert a new order or the `resource: already queued` acknowledgment, not an unchanged old queue.
+
+`tools/resource_fixture.py` prepares the resource fixtures' generated terrain and profiles in
+an isolated stopped game folder. The `RS` maps are deliberately flat green. Stock geothermal
+`CORGEO` is in `CORCK`'s menu; `ARMACK` does not build it. `tools/resource_regression.py` drives
+live assertions through native input. The fixtures in `tools/replay/fixtures.json` run them
+before replay comparisons; use `tools/replay/tareplay.py run resource-mex resource-upgrade` for
+a focused run and `tools/replay/tareplay.py landing` for the landing gate.

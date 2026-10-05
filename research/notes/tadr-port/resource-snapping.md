@@ -1,6 +1,6 @@
-# D. Resource snapping, Quick Build and mod profiles — design
+# D. Resource snapping, Quick Build and mod profiles
 
-**Design decisions agreed 2026-10-04; implementation pending.** This page specifies mex and
+**Implemented on the landing branch; validation in progress, 2026-10-04.** This page describes mex and
 geothermal placement snapping, contextual Quick Build, the mod profiles that permit them, and
 automatic profile reload. Quick Build follows the BAR resource-building workflow: select a
 capable constructor, hover a deposit or geothermal vent, see the building ghost, and use the
@@ -16,9 +16,8 @@ snapping, dragging queued orders, line/ring construction and other construction 
 retain their current status in the inventory. Mod profiles initially govern these resource
 features; other features can adopt the profile mechanism in later work.
 
-These are **proposed Impure defaults**, including the agreed Stock TA opt-in. They are not a
-claim that Stock TA ships TADR or that Impure already implements either resource feature. Quick
-Build is an additional Impure design, separate from the inventory's native TADR snapping row.
+These are **Impure defaults**, including Stock TA. Stock TA does not ship TADR. Quick Build is
+an additional Impure feature, separate from the inventory's native TADR snapping row.
 
 | Detected mod | Manual snapping permitted? | Quick Build permitted / initial player toggle | Profile default radius | Maximum radius |
 |---|---|---|---|---|
@@ -74,9 +73,33 @@ personal radius slider initially. A personal manual-snapping radius of zero ther
 Quick Build available when its own permission and toggle allow it. Holding Alt temporarily
 bypasses both features. Profile permissions, defaults and limits share the reload rules below.
 
-The file schema, version-profile filename encoding and shared mod-identity interface are
-implementation details to specify against the existing code. Profile paths must remain inside
-`profiles/`; engine-supplied identifiers are data, not unrestricted path components.
+### Profile files
+
+General filenames are `retail.ini`, `mayhem.ini`, `prota.ini`, `twilight.ini`, `escalation.ini`,
+`tazero.ini` and `unknown.ini`. An optional override is `<mod>@<version-bytes-as-lowercase-hex>.ini`:
+Stock's `v3.1` is `profiles/retail@76332e31.ini`. The settings label shows the detected identity and
+selected file. Encoding prevents an engine-supplied identifier from becoming a path component.
+
+```ini
+manual_snapping=1
+quick_build=1
+default_radius=3
+max_radius=3
+quick_build_default=1
+```
+
+Boolean values accept `0`/`1` or `off`/`on`; radii accept integers 0–8. Comments start with `#` or
+`;`. Unknown keys, duplicate keys, embedded NULs, files over 4096 bytes and a resolved default
+radius greater than the maximum are rejected. Overrides inherit missing keys. General files also
+inherit omitted keys from the embedded defaults. The reader denies concurrent writers while
+reading each file, then publishes the complete validated policy on the game thread.
+
+Identity shares the replay browser's config/archive table and Twilight's menu label. The stock
+policy additionally requires the stock config and archive formats. A custom package retaining
+both stock identifiers cannot be distinguished from stock by this detector. The reported version
+is the engine's printable version field (at most seven characters), or Twilight's label; a
+loader's full package release is not necessarily present there. Exact overrides match that
+reported identifier, not an assumed installer version.
 
 ## Automatic reload
 
@@ -139,7 +162,9 @@ distinguishes qualifying patches from uniform surface metal.
 The uniform-region statement applies to candidates with the same qualifying coverage; map edges
 and region boundaries can change their counts. It does not promise identical coordinates to
 vanilla placement in every rounding case. Geo snapping remains independent of the metal threshold.
-These consequences are derived from source; live metal-map verification is pending.
+These TADR consequences are derived from source. Impure's generated-map regressions separately
+exercise uniform metal equal to the background, uniform metal above it and rich discrete deposits
+on metal ground.
 The [engine map](../exe-reverse-engineering.md#surface-metal-and-the-mex-snap-threshold) records
 the stock property load and grid initialization that establish the background value's role.
 
@@ -238,75 +263,109 @@ strongest legally fitting option, completed own buildings and strictly improved 
 metal ground does not disable geothermal Quick Build. BAR's spot-count heuristic is not a verified
 TA metal-map classifier, and its widget does not establish TA's reclaim/build dispatch contract.
 
-## Source evidence and implementation work
+## Implementation and replay ownership
 
-The released [v2026.6.8 scorer](https://github.com/tanvanman/TADR/blob/v2026.6.8/src/DDraw/tahook.cpp#L175)
-counts cells above the background threshold. Its
-[selector](https://github.com/tanvanman/TADR/blob/v2026.6.8/src/DDraw/tahook.cpp#L292)
-enumerates a square of candidate offsets and breaks maximum-count ties by pointer distance.
-The [caller](https://github.com/tanvanman/TADR/blob/v2026.6.8/src/DDraw/tahook.cpp#L650)
-contains the mex stability check and geo yardmap/buildability path. The same threshold/selection
-rule was checked in the native Mayhem tag, v2024.3.31, and Escalation's v2026.8.6 tag; Escalation's
-build configuration disables its availability.
+`tagpu_resource.c` chooses sites on the game/input thread. `tagpu_profiles.c` owns file parsing,
+inheritance and effective settings. `tagpu_replays.c` supplies the shared mod identity; the menu
+refreshes the profile label and two separate controls. Polling runs at 500 ms menu intervals and
+stops for the entire match. Returning to the main menu permits it again.
 
-Existing code provides starting points, not a verified snapping integration:
+The raw point is captured after the existing zoom/viewport mouse repair. The observer on
+`0x4197D0` updates only `main+0x2CAA` before the engine computes the manual rectangle and flags.
+The gates on `0x498F70` and `0x499100` handle their respective configured contextual button; all
+other paths call through. A manual left click recomputes placement before normal dispatch.
 
-- `tagpu/ddraw/src/tagpu_settings.c` owns `impure.cfg`, closed value lists and personal-setting
-  publication. The profile mechanism must preserve those ownership and test-control rules.
-- `tagpu/ddraw/src/tagpu_replays.c` identifies supported mods from engine config/archive names
-  and Twilight's main-menu label. Share a verified identity interface instead of duplicating
-  mod tables. Validate the distinction between Stock TA and unidentified mods: the replay UI's
-  retail placement fallback is not authorization to enable a gameplay convenience.
-- `tagpu/ddraw/src/tagpu_mark.c`, `tagpu_packet_pub.c` and `tagpu_native.c` carry cursor/build
-  preview data from the game thread to the renderer. Choose placement on the game thread and
-  publish that choice; the renderer must not call engine placement functions or write engine
-  input state.
+Quick Build publishes a cursor/type/rectangle override into the frame packet, leaving the engine
+in contextual mode. The renderer never runs site tests or order roots. It displays the chosen
+variant's ordinary ghost and an `Already queued` marker. Preview tests save/restore the two
+engine build-site scratch words `0x51E684` and `0x51E688`.
 
-The [engine mouse-button map](../exe-reverse-engineering.md#the-in-game-mouse-buttons-what-a-click-actually-does-mapped-by-us)
-already distinguishes contextual mode `1`, manual placement mode `14`, the interface preference,
-left/right dispatch and cancellation. Use those mapped contracts as research starting points.
-Before Quick Build implementation, trace build-list membership, builder/assist/reclaim capability,
-selected-unit filtering, owned queued sites, completion and output fields, reclaim/build/Guard
-roots, upgrade occupancy validation and button-down/up ownership. Stock build dispatch visiting
-selected builders alone does not prove each can build the chosen variant. Publish Quick Build
-ghosts through the existing game-thread preview path without moving engine calls to the renderer.
+A build goes through `0x43AFC0`, the engine's ordinary order root. Reclaim and Guard eligibility
+come from `0x43F0E0`; build action names come from `0x438760`. Upgrades issue reclaim followed by
+an appended build. Helper constructors retain persistent Guards; the engine may prepend its own
+assist/reclaim work. Selected combat units receive no order from this path. Queued builds are
+identified by the engine descriptor's placed-build capability, excluding factory build counts.
+Actual yard occupancy bits determine queued collisions. A repeated resource click consumes the
+input without changing the order chains.
 
-Before implementation, establish the input/update and click hook contracts by disassembly,
-including footprint parity, map boundaries, exploration lookup and the engine's buildability
-entry point. Read map/definition objects under the engine's lifetime and validated bounds. A
-pointer probe or a short interval between checks and reads is not a safety argument.
+The upgrade test projects the old building's post-reclaim yard-bit clear into a bounded private
+copy of the candidate definition/yardmap. The engine's occupancy test ignores exactly the old
+unit ID. No preview mutates the grid or live definitions. Contested old footprints are refused,
+because their destructor can restamp another unit and cannot establish that projection. Details
+and call sites are in the engine map's *Resource placement and contextual order contracts*.
 
-## Verification before landing
+All engine reads share the input thread's level lifetime. Unit indices, the controlled player's
+inclusive unit partition, definition indices, map products, exploration bits and descriptor
+indices are bounded before addressing memory. Yard reads use the loader's allocation contract.
+CANBUILD reads require the existing allocation patch to have installed successfully; the new
+`SIM_INSTALL` flag describes that process installation, not match state.
 
-Run the feature in the game; compilation and source inspection do not verify placement. The
-required behavior cases are:
+Resource and profile scratch is classified as presentation: simulation never reads it, no address
+survives into the simulation, and the module refuses puppet seats. The orders it creates are
+normal recorded engine state. Playback, in-place restoration and fresh-process seeks reproduce
+those orders and their reclaim/build/assist effects through the existing recorder and engine
+roots. No recorder field exclusion or tolerance changes. The owner approved omitting the recording
+player's native immediate-command UI click (`0x41A0F1`, return `0x41A0F6`), including Stop,
+as the console click already is; the commands and their simulation effects remain checked.
 
-- Stock TA and each supported mod, with fresh defaults and edited general/version profiles;
-  independent profile locks, Quick Build default/toggle, personal manual radius zero with Quick
-  Build still enabled, inherited limits and saved preferences across versions.
-- Normal deposits, occupied deposits with red previews, map edges and differing footprints;
-  zoomed views, stationary-mouse Alt changes, immediate clicks and manually queued build orders.
-- Uniform background-metal maps, above-background uniform regions and mixed deposit maps;
-  coverage ties and values demonstrating that the rule does not maximize income.
-- Unexplored terrain, discovered terrain under grey fog and fully revealed maps; scoring across
-  exploration boundaries without reading unseen resources into the result.
-- Geothermal sites with valid and blocked placements, including supported mod yardmaps.
-- Quick mex/geo ghosts and orders with each configured command button, normal and Shift clicks,
-  immediate clicks, Alt changes without motion, explicit commands and manual placement active.
-- Strongest legal variants, stronger variants that do not fit, no legal variant, mixed constructor
-  and combat selections, assist eligibility, persistent Guards and duplicate Guard prevention.
-- Owned completed weaker mex/geo upgrades, own unfinished structures, equal/better buildings,
-  allied/enemy buildings, unavailable reclamation, different replacement footprints and queued
-  reclaim/build sequences; previewing an upgrade must not mutate occupancy.
-- Queued-site indicators and repeated clicks preserving orders; ordinary targets above deposits;
-  Quick movement on uniform metal ground, rich discrete deposits, metal-map upgrades and vents.
-- Automatic reload of valid edits, inherited version overrides, rejected edits and later repair;
-  menu application, match deferral and a coherent policy seen by every consumer.
+### Quick Build's metal-ground classifier
 
-Any simulation state or engine effect introduced by the chosen integration follows the existing
-[recorder completeness rules](demo-recorder-completeness.md). Determine the applicable state
-declarations and replay fixtures from that integration; do not assume that a local convenience
-can bypass the simulation landing gates.
+Manual snapping retains the footprint-coverage rule. Quick mex building additionally requires a
+closed, fully explored eight-connected component above `SurfaceMetal`, with a discovered
+background neighbor. The search arena is 129×129 cells around its seed. A component reaching that
+arena's edge, touching both opposite map edges on either axis, or meeting unexplored neighbors
+is conservatively refused. This keeps uniform above-background metal maps as normal movement,
+including small maps with a vent interrupting their metal surface. Discrete deposits on metal
+ground remain eligible. Very large deposits and deposits not yet fully explored may therefore
+need manual placement. Owned upgrades and geo sites do not need this component classification.
+
+### Automated regressions
+
+`tools/resource_fixture.py` generates original small terrain and policies inside isolated private
+game folders. Its optional stronger geo fixture derives a private test unit from installed game
+content; none of those archives is tracked. `tools/resource_regression.py` drives native input and
+requires actual order/preview results in the live lane before replay comparison. A fixture fails
+if its input merely leaves an old queue unchanged.
+
+| Fixture | Input behavior exercised | Replay checks |
+|---|---|---|
+| `resource-mex`, `resource-classic`, `stock-resource-mex` | Manual mex/Alt, manual radius zero with Quick enabled, both mouse layouts, queued click consumed without toggling the build | L/P/R/Q |
+| `resource-upgrade`, `resource-queued-upgrade` | Own mex→Moho reclaim/build, plain replacement or Shift after Move, mixed helpers, persistent Guard dedup, combat unaffected | L/P/R/Q |
+| `resource-plain`, `resource-uniform`, `resource-mixed` | Background/above-background uniform metal and rich patches; manual geo/Alt and Quick geo | L/P/R/Q |
+| `resource-geo-upgrade` | Stronger private geo variant on metal ground, queued reclaim/build, repeat no-op and helper Guard | L/P/R/Q |
+| `resource-locked`, `resource-inherit` | General locks, exact-version inheritance/clamping, effective controls and policy frozen despite edits during the match | L/P/R/Q |
+| `resource-priority` | Explicit Move, Alt, equal own mex and personal Quick toggle off | L/P/R/Q |
+
+L records real input and simulation; P plays it on puppet seats; R restores in place at three
+sampled ticks, compares before/after state and continues; Q seeks from a fresh process. The
+landing harness also checks event attribution, effect counts, address values, puppet writes and
+the complete main/.data images. Paused viewer samples exercise camera movement and GUI-consumed
+button messages while separate comparisons require simulation state to remain equal.
+
+Fixtures name their resource/profile/UI source dependencies in `fixtures.json`; `tareplay landing`
+selects them when those sources change, in addition to its SIM_FEATURE rules. Changes to the
+replay harness select every fixture. This landing's final passing note remains a gate, not an
+assumption from the existence of these fixture definitions.
+
+### Verification limits
+
+The synthetic fixtures cover the behavior listed above; live inspection additionally verifies
+the resource settings panel and normal Comet Catcher terrain/features. The generated `RS` maps
+are intentionally flat green. The compatibility suite checks the supported packages' startup,
+battles and networking; it does not exercise every mod's resource footprint and build menu.
+
+Not established by these fixtures: every supported mod's geothermal yardmap, very large or
+contested upgrades, variant fallback under every obstruction, all exploration-boundary/fog
+combinations, every edge/zoom/footprint combination, all ordinary allied/enemy/wreck priorities,
+or automated frontend profile-error/recovery and cross-version preference persistence. These
+remain targeted regression opportunities; source bounds and refusal paths do not substitute for
+claiming those cases were run.
+
+The released [v2026.6.8 scorer](https://github.com/tanvanman/TADR/blob/v2026.6.8/src/DDraw/tahook.cpp#L175),
+[selector](https://github.com/tanvanman/TADR/blob/v2026.6.8/src/DDraw/tahook.cpp#L292) and
+[caller](https://github.com/tanvanman/TADR/blob/v2026.6.8/src/DDraw/tahook.cpp#L650) establish the native
+coverage/tie/stability and geo rules. The inventory separately checks the native mod bundles and
+their activation gates; this implementation does not imply that native E/Z enabled snapping.
 
 ## Future work
 

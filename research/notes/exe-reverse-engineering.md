@@ -16159,3 +16159,132 @@ before installing any observer. `tagpu_detour_observe` alone compares an
 already registered Impure stub; its first-install path does not match the
 engine's bytes. A mismatch therefore leaves all three new observers uninstalled,
 and the harness refuses AI activity observation.
+
+
+### Resource placement and contextual order contracts [DISASSEMBLED + MEASURED 2026-10-04]
+
+`tagpu_resource.c` implements manual mex/geo snapping and contextual resource building. All
+queries and dispatches run on the game/input thread; the renderer gets only packet values.
+The following contracts were disassembled from `pristine/TotalA.exe.pristine`. Caller counts
+are an instruction-level `call rel32` scan of `.text`, not a scan of address-shaped bytes.
+
+| Entry | Contract and callers |
+|---|---|
+| `0x4197D0` | Manual build cursor, `ret 0`, prologue `83 EC 14 8B 15 E8 1D 51 00`; called at `0x491CDB`, `0x499241`. Reads type `main+0x2CC4` and point `+0x2CAA`; writes six build-corner ints `+0x2C92..+0x2CA6` and the `+0x2CC6` valid/region bits. Snapping observes its entry; original code owns the rectangle and validation |
+| `0x498DA0` | Mouse-to-world update, called only at `0x499221`. The existing viewport wrapper repairs its result before resource input captures the raw point. In `0x499200`, cursor update `0x499241`, hovered unit query `0x499278` and context resolution `0x499297` precede button dispatch |
+| `0x498F70` | Left button handler, `ret 4`, prologue `51 A1 E8 1D 51 00`, one caller `0x4995B3`. The resource gate's saved entry stack holds the six-dword message pointer at `[esp+4]` |
+| `0x499100` | Right button handler, `ret 4`, prologue `51 8B 0D E8 1D 51 00`, one caller `0x4993AC`. Contextual orders use right when Interface Type `main+0x37EFA` is nonzero; zero uses left. Explicit commands retain native button/cancel behavior |
+| `0x47D2E0` | Site test, `stdcall(def, packed_cell, ignore_unit_id, player)`, `ret 16`; callers `0x40A4CD`, `0x4198C6`, `0x47DBE5`. Requires origin at least 1 and footprint end strictly below W/H. Its return's bit 0 reports acceptance |
+| `0x47C780` | Build-site altitude result, `ret 0`, only caller `0x4198F5`; low byte is the site's altitude. Reads the scratch produced by the preceding site test. Resource preview/click queries save and restore `0x51E684`/`0x51E688`; the native manual cursor retains its normal scratch ownership |
+| `0x43AFC0` | Ordinary order dispatch, `stdcall(action, shift, unit, target, pos, param1, param2)`, `ret 28`. Called at `0x4197A9` (manual build) and `0x48D1F4` (contextual command). A build's param1 is the definition ID; an upgrade uses the resolved reclaim action then an appended build |
+| `0x438760` | Action-name lookup, thiscall `(output_byte*, name)`; 109 direct callers, including manual dispatch `0x4197A4`. Resource dispatch asks for `MOBILEBUILD` (`0x502654`) or `VTOL_MOBILEBUILD` (`0x502640`) according to the builder's fly bit |
+| `0x43F0E0` | Action resolver, `stdcall(index*, mode, unit, target, pos)`; returns an action-byte pointer or NULL. Guard is mode 7, reclaim mode 12. There are 28 direct callers; context dispatch uses `0x48D0A0`, script orders `0x4804A3`, and constructor/assist paths `0x487D5B`..`0x487F8C`. Resource input asks the resolver instead of assuming every selected builder can reclaim or Guard |
+| `0x48CD80`, `0x48D220` | Hovered-unit query and context resolution; callers respectively `0x491D18`/`0x499278` and `0x491D36`/`0x499297`. Hovered unit ID is stored at `main+0x2CBA`; feature ID is `+0x2CBC` |
+| `0x481930` | Explored-map setter, six callers: `0x4818E6`, `0x48269C`, `0x48279B`, `0x482901`, `0x482A94`, `0x482C08`. Uses the player's map bit, not its seat number; allocation `0x483CF6`..`0x483D25` is W×H/4 u16 entries for even W/H |
+| `0x422040` | Applies indestructible metal-spot feature values to grid byte `+7`; only caller `0x483D7D`. The cell's feature ID must be below `0xFFFB`, its definition's metal float `+0xF0` nonzero and flags `+0xFF & 2` set. Uses definition footprint `+0x94/+0x96`, bounds helper `0x481550`, and float conversion `0x4E43A0`. This is how the private synthetic fixture supplies metal values |
+
+The full resolver caller list is `0x401F2F`, `0x402E3D`, `0x4031A7`, `0x405265`, `0x405ABC`,
+`0x4064F5`, `0x40804C`, `0x408299`, `0x408403`, `0x408435`, `0x408589`, `0x40FE86`,
+`0x410AD9`, `0x43B242`, `0x43B285`, `0x43B416`, `0x43B451`, `0x43B583`, `0x43FE5A`,
+`0x43FE83`, `0x43FECC`, `0x4804A3`, `0x487D5B`, `0x487DD3`, `0x487E2E`, `0x487EFD`,
+`0x487F8C`, `0x48D0A0`.
+
+#### Input bounds and layout
+
+The root is `0x511DE8`. The controlled player byte `main+0x2A42` is bounded below 10, and resource
+input refuses puppet seats. Global unit begin/end `+0x14357/+0x1435B` are inclusive, stride
+`0x118`; their aligned distance plus one must equal the engine count `u16 +0x14351`. The
+controlled player's record at `+0x1B63 + seat*0x14B` has first/last pointers `+0x67/+0x6B`, also
+inclusive and aligned within the global pool. Own-unit and order scans use that smaller partition.
+
+Unit flags `+0x110`: alive `0x10000000`, selected `0x10`, excluded `0x4000`, structural footprint
+`0x20000000`, contested footprint bits `0x0C000000`. Owner is byte `+0xFF`; definition pointer
+`+0x92` must be aligned in the `0x249`-stride definition array at `main+0x1439B`, bounded by
+`+0x1438F`. Unit number is `u16 +0xA8`, world position is three 16.16 ints `+0x6A/+0x6E/+0x72`;
+`+0x104 == 0` identifies completed construction in the resource path. Grid origin is
+`u16 +0x76/+0x78`, footprint size `+0x7E/+0x80`.
+
+Definitions: footprint shorts `+0x14A/+0x14C`, yard pointer `+0x14E` (allocated as FootX×FootZ by
+`0x42CF30`), CANBUILD count `+0x152` and u16-array pointer `+0x156`. The existing whole-build-list
+patch maintains `bl_room(count)` at every allocator/copy/append; resource hooks require its
+complete installed state. `s_buildListsLive` is `SIM_INSTALL`, set from the deferred patch-table
+registration; its public predicate also requires `s_limState == 1`. This prevents input using a
+count bound without the allocation bound. Building movement code is byte `+0x22F == 0`, builder
+bit `+0x241 & 0x40`, fly bit `+0x241 & 0x800`; worker time is u16 `+0x1FE`, repair capability
+`+0x245 & 0x200`. Metal extraction and energy output floats `+0x1CE/+0x1C2` must be finite and
+positive. Geo recognition scans the complete bounded yard for byte `0x8F`, at most 64×64 cells.
+
+The feature grid `main+0x14287` has dimensions `+0x14233/+0x14237`, stride 13. Dimension products
+are checked before indexing. Metal is byte `cell+7`. Background `SurfaceMetal` is loaded through
+`[main+0x391E9]+0xD30` (`0x4366B3`..`0x4366DB`) and seeds ordinary grid metal
+(`0x4839B3`..`0x4839ED`). Explored entries at `main+0x14273` use the player record's byte `+0x146`
+as a bit index, bounded below 16. Every metal read first checks that cell's explored 2×2 block;
+unknown neighbors prevent a Quick deposit from being proved closed. The engine's full-map
+reveal fills this explored map; resource scoring has no alternate unseen-data path.
+
+Order nodes belong to the live unit's game-thread-owned heap chain at `unit+0x5C`; no node is
+retained across iterations. Walks stop at 16384 nodes and check owner pointer `node+0x0E`.
+Action `byte +4` indexes the level's descriptor vector `0x512344..0x512348` at stride `0x19`;
+capability `+0x0C & 1` distinguishes a placed build from factory counts. Target is pointer
+`+0x16`, position `+0x22/+0x26/+0x2A`, build type u16 `+0x36`, flags `+0x42`, next pointer `+0x4A`.
+Plain order clearing (`0x43ADC0`) preserves flags bit 2 (`4`); queued collision tests reproduce
+that distinction for participating builders/helpers rather than discarding every old plan.
+
+#### An upgrade preview without grid mutation
+
+`0x47CC30` stamps a footprint; callers `0x43DA41`, `0x48610F`, `0x48630C`, `0x48AA9A`, `0x48B6B9`.
+An old yard byte's bit 0 stamps cell flag bit 1 (`2`) at `0x47CE32`; yard occupancy bit 2 (`4`,
+or bit 1 when unit byte `+0x10F & 2`) stamps its unit number at `0x47CE23`.
+`0x47D0E0` clears the footprint; callers `0x43DA0F`, `0x47CBD6`, `0x48AA6B`, `0x48B685`.
+It clears a matching unit number at `0x47D172`, and clears cell flag `2` for every old yard bit 0
+at `0x47D17C`. The site's only read of the candidate yard's bit 0 is `0x47D530`; its occupancy
+check at `0x47D554` ignores the supplied unit ID exactly.
+
+Therefore, for a validated uncontested old footprint, clearing candidate yard bit 0 where it
+would overlap an old yard bit 0 gives the site's post-clear yard-bit test without touching the
+grid. A stack copy of the definition points at this bounded stack yard. Both old and new
+footprints and the old live footprint dimensions are validated first. Other yard bits and the
+old-ID occupancy exemption retain the engine's tests. Contested footprints are refused because
+`0x47D2B9`..`0x47D2C4` calls `0x47E5C0` to restamp neighbors: the simple projection is insufficient
+there. No timing or pointer probe supplies this proof.
+
+**MEASURED on retail Comet Catcher:** the patch spans metal cells 88–90 by 81–83, metal byte 223
+against SurfaceMetal 3. Manual ARMMEX snaps to footprint origin (1408,1296), and a stationary Alt
+returns raw origin x = 1440. The resulting order center is (1432,1320). Advanced ARMACK
+queues reclaim of a completed own ARMMEX followed by ARMMOHO, while ARMCK/CORCK receive persistent
+Guards and ARMPW's orders stay unchanged. The generated RS maps exercise background 5 with metal
+5, background 5 with metal 20 everywhere, and background 20 with an isolated metal-223 patch.
+These measurements establish the input cases; their final replay/compatibility gates are tracked
+in the landing's notes, not assumed from these values.
+
+#### GUI-only writes found by the resource replay fixtures
+
+The graphics globals base is `0x51F320`. Its event-ring write/read indices `+0x18E/+0x192` are
+`0x51F4AE`/`0x51F4B2`, capacity `+0x186 = 20`; `0x4C2E30` and `0x4C2D60` advance them through
+mouse-button messages even when a modal GUI consumes the click. The GUI is `main+0x519`:
+`main+0x561` is inside its six-dword latest event (`+0x3C..+0x53`), while `main+0x533` is inside
+its active-screen pointer `+0x18`, and `main+0x585` is the previous hovered/help gadget index at `GUI+0x6C`: `0x4AA596`
+and `0x4A00B5` copy `GUI+0x68` into it before selecting that gadget's text at record `+0x33`. The existing event-ring and GUI pump sections establish those owners. A two-image null
+twin whose arrows cancel and whose keyboard menu opens without clicks cannot observe every
+changed ring/eye bit. The harness samples GUI-consumed clicks through a ring turn and several
+eyes at one paused GameTime, and requires its carried simulation records to remain equal.
+The recorder's positive list and exclusions are unchanged.
+
+
+The native Stop-button callback plays a UI sound at `0x41A0F1`, returning to `0x41A0F6`,
+through `0x47F1A0("immediateorders", 0)` (name pointer `0x50271C`). The Stop branch
+compares `"STOP"` (`0x502714`), sets mode 1, clears region bit 3 and dispatches through
+`0x48CF30` (`0x419CBC`..`0x419CF2`), then jumps to this shared UI sound tail. The Load and
+other unarmed command paths share the tail; it is not a
+simulation reply produced by `0x47F780`/`0x47F850`. The resource-priority fixture observed three
+such calls in its live [481,1681) count window and none on the puppet. Its unit/player/order,
+round-trip and fresh-seek comparisons still agree. The owner approved its exact call-site expected-absent row on 2026-10-05; the command
+orders and their effects retain the ordinary recorder checks.
+
+The resource profile-label refresh writes only a label (`gadget+0`, ID 5) on a screen whose
+OnCommand dispatcher is one of Impure's own menu handlers. `GUI_Load 0x4AA8F0` allocates
+`0x10F57` bytes at `0x4AAA68` and advances `ControlsAry` by `0x3F` at `0x4AAA95`: the remaining
+`0x10F18` bytes hold exactly 200 records of stride `0x15B`, including panel record zero.
+The signed count at panel `+0xB6` must therefore be 1..199 before a refresh walks records
+1..count. The profile label's text is `char[128]` at gadget `+0xB6`, ending before its status
+word at `+0x137`. This is the allocation bound, not a readable-page probe.

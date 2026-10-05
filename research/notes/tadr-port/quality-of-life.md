@@ -89,12 +89,12 @@ simulation fixes and limits remain in their [port groups](overview.md). Inclusio
 override a feature's earlier safety decision: `PreviewObject3D` is parked and the
 [opponent-facing preview](data-keys-evidence.md#4-previewfaceopponent) has unresolved fog and
 commander-identity concerns. Group D has a survey; the first feature's
-[resource-snapping, Quick Build and mod-profile design](resource-snapping.md) is agreed, with
-implementation and live placement verification pending. It adds a separate BAR-style contextual
-mex/geo toggle, owned completed-building upgrades and queued-site indicators. Proposed defaults
+[resource-snapping, Quick Build and mod profiles](resource-snapping.md) are implemented on the
+landing branch, with replay validation in progress. They add a separate BAR-style contextual
+mex/geo toggle, owned completed-building upgrades and queued-site indicators. Defaults
 enable both resource features for Stock TA, M/P/T and lock them off for E/Z and unidentified mods.
 Those are Impure choices; this table continues to audit native bundled TADR behavior. Quick Build
-is additional planned work and is not evidence of another feature in any bundled TADR DLL.
+is an Impure addition and is not evidence of another feature in any bundled TADR DLL.
 
 ## Activation evidence for older conveniences
 
@@ -205,11 +205,12 @@ examined together rather than inferring absence from module names:
   heading. It does not read `Rotations`, alternate preview models, per-facing lists or
   `PreviewFaceOpponent`. COB getters 32 and 69–75 are [implemented](cob.md); those script getters
   do not implement the preview-key reader.
-- `tagpu_order.c` draws stock SHIFT orders/ranges/queued ghosts; it does not implement dragging,
-  snapping, line/ring placement, blocker kickout or configurable construction behavior.
+- `tagpu_order.c` draws stock SHIFT orders/ranges/queued ghosts; `tagpu_resource.c` implements
+  manual mex/geo snapping and contextual Quick Build. Reclaim snapping, dragging, line/ring
+  placement, blocker kickout and other construction behavior controls remain unimplemented.
 - `tagpu_mark.c` draws health/group markers, without reload bars or stockpile/transport counters.
   Team-coloured models and ghosts are separate from construction/reclaim effect colouring.
-- `tagpu_menu.c` exposes renderer/display settings, without the listed TADR options/panels.
+- `tagpu_menu.c` exposes renderer/display and resource settings, without the other listed TADR options/panels.
   `tagpu_shield.c` handles `WM_CHAR` as a low byte and `tagpu_text.h` uses byte glyphs; the
   Unicode/chat extensions are missing.
 - `tagpu_cards.c` provides replay resource cards and Sight. Camera Jump/Follow/Free controls are

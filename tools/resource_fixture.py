@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Generate small original terrain fixtures for resource input/replay tests.
 
-Only generated maps and feature definitions are written. Their names reference
-the game's installed vent animation; no game asset is copied into the archive.
+Generated maps and feature definitions reference the installed vent animation.
+The optional geo upgrade derives a private test unit from installed content;
+all generated archives stay inside isolated game folders.
 """
 import argparse
 import re
