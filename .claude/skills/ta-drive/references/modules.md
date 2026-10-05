@@ -777,6 +777,8 @@ locked when the profile forbids them or the resource hooks are unavailable.
 
 Before a contextual Quick Build test, leave manual placement with Stop and wait for cursor
 mode 1; Escape while a build queue is active is insufficient evidence of that transition.
+Allow simulation to run while waiting for Stop to clear the order chain; while paused the
+native button can change the cursor mode before its orders are processed.
 Use the contextual button from Interface Type (zero left, nonzero right). Explicit commands
 retain their native left-placement/right-cancel behavior. Input delivery is asynchronous:
 assert a new order or the `resource: already queued` acknowledgment, not an unchanged old queue.
@@ -786,7 +788,9 @@ an isolated stopped game folder. The `RS` maps are deliberately flat green. Stoc
 `CORGEO` is in `CORCK`'s menu; `ARMACK` does not build it. `tools/resource_regression.py` drives
 live assertions through native input. The fixtures in `tools/replay/fixtures.json` run them
 before replay comparisons; use `tools/replay/tareplay.py run resource-mex resource-upgrade` for
-a focused run and `tools/replay/tareplay.py landing` for the landing gate.
+a focused run and `tools/replay/tareplay.py landing` for the landing gate. The mex assertion
+compares manual and Quick placement at the same pointer and rejects a partial target at the
+configured snap boundary.
 
 Resource preflights run native frontend checks before the L lane records a match.
 `resource-frontend` tests raw radius preservation through Visuals Undo and profile cap reload.

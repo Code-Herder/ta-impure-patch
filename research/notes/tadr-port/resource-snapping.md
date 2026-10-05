@@ -129,9 +129,14 @@ search radius, count footprint cells whose metal value is strictly greater than 
 raw mouse position. This scores qualifying coverage, not metal income or the sum of metal values.
 If no candidate qualifies, retain normal placement.
 
-The modern TADR caller also checks whether a selected mex target is stable under a further local
-search before activating the override. Preserve the intended complete-target behavior; verify
-its coordinate and footprint conventions before adopting the code-level test.
+Manual and Quick Build mex selection share the complete-target check derived from the modern
+TADR caller. When the chosen grid center differs from the raw mouse cell, search again around
+that choice with radius equal to the larger footprint dimension, retaining the raw mouse for
+distance ties. Accept only if the same footprint origin wins. The second search verifies the
+choice; it does not extend the configured snap radius. A partial deposit clipped by that radius
+therefore retains ordinary placement or contextual movement, instead of offering an offset mex.
+The verification scores coverage without occupancy filtering, so an obstruction cannot make a
+partial target count as complete. Quick Build additionally requires native site acceptance.
 
 Occupied deposits remain snap targets for mexes. Their preview is red while ordinary engine
 validation says construction is blocked. This supports preparing a reclaim-and-replace upgrade;
@@ -195,7 +200,7 @@ their contextual actions. The exception is an eligible completed resource buildi
 player, which offers the upgrade described below. Unfinished buildings retain normal repair/assist
 behavior. Allied and enemy buildings retain their normal contextual actions.
 
-Use the profile search radius and the same exploration policy as manual snapping. Quick mex
+Use the profile search radius, complete-target check and exploration policy of manual snapping. Quick mex
 construction requires a distinct deposit: uniform metal ground retains ordinary movement clicks,
 including uniform regions above `SurfaceMetal`. Richer discrete deposits on a metal map remain
 eligible. Owned-building upgrades remain available on metal maps, and geothermal vents are
@@ -308,8 +313,8 @@ Resource and profile scratch is classified as presentation: simulation never rea
 survives into the simulation, and the module refuses puppet seats. The orders it creates are
 normal recorded engine state. Playback, in-place restoration and fresh-process seeks reproduce
 those orders and their reclaim/build/assist effects through the existing recorder and engine
-roots. The three approved viewer metadata fields are listed below; no recorded simulation slots
-or tolerance changes. The owner also approved omitting the recording player's native
+roots. The three approved viewer metadata fields are listed below; recorded simulation slots
+and tolerances are unchanged. The owner also approved omitting the recording player's native
 immediate-command UI click (`0x41A0F1`, return `0x41A0F6`), including Stop, as the console click
 already is; the commands and their simulation effects remain checked.
 
@@ -334,7 +339,7 @@ if its input merely leaves an old queue unchanged.
 
 | Fixture | Input behavior exercised | Replay checks |
 |---|---|---|
-| `resource-mex`, `resource-classic`, `stock-resource-mex` | Manual mex/Alt, manual radius zero with Quick enabled, both mouse layouts, queued click consumed without toggling the build | L/P/R/Q |
+| `resource-mex`, `resource-classic`, `stock-resource-mex` | Manual mex/Alt, same-pointer manual/Quick center agreement, partial-target refusal at the snap boundary, manual radius zero with Quick enabled, both mouse layouts, queued click consumed without toggling the build | L/P/R/Q |
 | `resource-upgrade`, `resource-queued-upgrade` | Own mex→Moho reclaim/build, plain replacement or Shift after Move, mixed helpers, persistent Guard dedup, combat unaffected | L/P/R/Q |
 | `resource-plain`, `resource-uniform`, `resource-mixed` | Background/above-background uniform metal and rich patches; manual geo/Alt and Quick geo | L/P/R/Q |
 | `resource-geo-upgrade` | Stronger private geo variant on metal ground, queued reclaim/build, repeat no-op and helper Guard | L/P/R/Q |

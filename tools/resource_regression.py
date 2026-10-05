@@ -168,6 +168,10 @@ def mex(c):
     c.until(lambda: c.rect()[0] == 1440, "stationary Alt did not bypass manual snapping")
     c.keys("up:alt")
     c.until(lambda: c.rect() == snapped, "manual snapping did not resume after Alt")
+    c.keys("pmove:620,375")
+    c.until(lambda: c.rect()[0] == 1472, "manual snapping accepted a partial deposit at the range boundary")
+    c.keys("pmove:588,377")
+    c.until(lambda: c.rect() == snapped, "manual snapping did not return to the deposit center")
     c.keys("down:shift", "pclick:588,377", "up:shift")
     def built():
         orders = c.orders("ARMCK")
@@ -177,12 +181,23 @@ def mex(c):
     # Stop leaves manual placement before the independent Quick Build click.
     c.menu(RESOURCE=0, QUICKBUILD=1)
     c.stop("ARMCK")
+    c.resource_click(620, 375)
+    partial = c.until(lambda: c.orders("ARMCK") if any(o["action"] != 41 for o in c.orders("ARMCK")) else None,
+                      "snap-range boundary click produced no contextual order")
+    assert not c.placed(partial), "Quick Build accepted a partial deposit at the snap-range boundary"
+    c.stop("ARMCK")
+    c.resource_click(588, 377)
+    orders = c.until(built, "Quick Build did not match the manual snapped placement")
+    centers = {(o["pos"][0] >> 16, o["pos"][2] >> 16) for o in c.placed(orders)}
+    assert centers == {((snapped[0] + snapped[3]) // 2, (snapped[2] + snapped[5]) // 2)}, \
+        "Quick Build and the manual ghost selected different deposit centers"
+    c.stop("ARMCK")
     c.resource_click(560, 375)
     orders = c.until(built, "Quick Build failed with manual radius off")
     c.repeat(560, 375)
     assert c.orders("ARMCK") == orders, "repeat click changed the queued mex orders"
     assert c.mode() == 1, "Quick Build left contextual mode"
-    print("resource-mex: manual snap, stationary Alt, independent toggle and queued no-op passed")
+    print("resource-mex: manual/Quick center parity, snap boundary, stationary Alt, independent toggle and queued no-op passed")
 
 
 def upgrade(c, shift=False):

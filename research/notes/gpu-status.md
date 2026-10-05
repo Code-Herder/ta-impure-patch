@@ -20520,6 +20520,9 @@ contracts* gives the allocation/lifetime proof and disassembly.
 
 Defaults permit and initially enable both features for Stock/M/P/T, and lock both off for
 E/Z/unknown. A player can set manual radius zero with Quick Build still on. Alt bypasses both.
+Manual and Quick mex selection share a footprint-sized stability check with raw-mouse distance
+ties. A partial deposit at the configured search boundary cannot supply a Quick ghost or build;
+the native contextual action remains available. The check adds no state or engine writes.
 The whole-build-list allocation patch must be fully installed before resource hooks can arm;
 the new predicate's `SIM_INSTALL` flag belongs to that installation. Unit/definition/grid/
 exploration/descriptor values are bounded, and owned unit walks use the engine's validated

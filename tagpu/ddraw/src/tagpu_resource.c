@@ -345,6 +345,29 @@ static void position(const World* w, const Choice* c, int pos[3])
     pos[2] = (c->z * 16 + fz * 8) * 65536;
 }
 
+static int snapped_site(const World* w, unsigned type, const int raw[3], int radius,
+                        int legal, Choice* out)
+{
+    Choice c = {0};
+    if (!site(w, type, raw, raw, radius, legal, 0, &c)) return 0;
+    if (c.kind == 1) {
+        Choice stable = {0};
+        int fx, fz, next[3];
+        footprint(w->defs + type * D_STRIDE, &fx, &fz);
+        position(w, &c, next);
+        if (c.x + fx / 2 != (raw[0] >> 20) || c.z + fz / 2 != (raw[2] >> 20)) {
+            /* A search boundary can expose only part of a deposit. Both
+               modes require the chosen coverage target to remain best in
+               the footprint-sized neighborhood, using the raw mouse tie.
+               Occupancy cannot turn a partial target into a complete one. */
+            if (!site(w, type, next, raw, fx > fz ? fx : fz, 0, 0, &stable) ||
+                stable.x != c.x || stable.z != c.z) return 0;
+        }
+    }
+    *out = c;
+    return 1;
+}
+
 static int build_node(const World* w, const char* n)
 {
     const char* first = *(const char* const*)0x00512344u;
@@ -497,7 +520,7 @@ static int quick_choice(const World* w, Choice* chosen)
             if (!fits(w, t, c.x, c.z, *(unsigned short*)(target + U_INDEX), &c.height)) continue;
             c.type = t; c.kind = k;
         } else {
-            if (!site(w, t, s_raw, s_raw, p->radius, 1, 0, &c)) continue;
+            if (!snapped_site(w, t, s_raw, p->radius, 1, &c)) continue;
             if (k == 1 && !distinct(w, &c, fx, fz)) continue;
         }
         c.strength = value; c.target = target ? target_id : 0;
@@ -546,17 +569,7 @@ static int __cdecl manual_cursor(void* frame)
     type = *(unsigned short*)(w.ta + M_TYPE);
     radius = tagpu_profiles_radius();
     if (!type || type >= w.ndefs || !radius || (fake_GetAsyncKeyState(VK_MENU) & 0x8000)) return 0;
-    if (site(&w, type, s_raw, s_raw, radius, 0, 0, &c)) {
-        if (c.kind == 1) {
-            Choice stable = {0};
-            int fx, fz, next[3];
-            footprint(w.defs + type * D_STRIDE, &fx, &fz);
-            position(&w, &c, next);
-            if (c.x + fx / 2 != (s_raw[0] >> 20) || c.z + fz / 2 != (s_raw[2] >> 20)) {
-                if (!site(&w, type, next, s_raw, fx > fz ? fx : fz, 0, 0, &stable) ||
-                    stable.x != c.x || stable.z != c.z) return 0;
-            }
-        }
+    if (snapped_site(&w, type, s_raw, radius, 0, &c)) {
         position(&w, &c, pos);
         pos[1] = s_raw[1];
         memcpy(w.ta + M_POINT, pos, sizeof pos);

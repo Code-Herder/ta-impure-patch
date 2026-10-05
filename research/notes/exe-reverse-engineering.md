@@ -16257,6 +16257,17 @@ Guards and ARMPW's orders stay unchanged. The generated RS maps exercise backgro
 These measurements establish the input cases; their final replay/compatibility gates are tracked
 in the landing's notes, not assumed from these values.
 
+**MEASURED on retail Comet Catcher, 2026-10-05:** at eye (1000,950), pointer (588,377),
+manual ARMMEX's rectangle at `main+0x2C92` and Quick Build's native order at `unit+0x5C`
+both center at (1432,1320), with a 3×3 footprint. At pointer (620,375), the raw x is 1492;
+manual placement retains origin x=1472 and queues center x=1496. Before Quick Build shared
+the manual complete-target check, it instead queued x=1448: the radius-3 search captured only
+part of the deposit. A footprint-radius search from that candidate finds the full-coverage
+origin (88,81), so the candidate is not stable. The centered site is accepted by `0x47D2E0`
+at the nearer pointer, and both modes use definition 78; the difference is the selection check,
+not a footprint conversion or engine refusal. The shared check retains the original radius
+and refuses that partial Quick target, leaving the native contextual action available.
+
 #### GUI-only writes found by the resource replay fixtures
 
 The graphics globals base is `0x51F320`. Its event-ring write/read indices `+0x18E/+0x192` are

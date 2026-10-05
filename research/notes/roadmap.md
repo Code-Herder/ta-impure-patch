@@ -3963,6 +3963,9 @@ blank frames remain; cold or invalidated devices still require initialization.
 Manual mex/geo snapping and independent contextual resource building are implemented together
 with inherited per-mod rules. Stock/M/P/T defaults permit both; E/Z/unknown lock both off.
 Quick upgrades use native reclaim/build orders and helpers use persistent Guard orders. Resource
+selection shares the manual complete-target check, retaining the configured radius and refusing
+partial mex targets at its boundary. Same-pointer manual/Quick center agreement is a native-input
+regression in both mouse layouts and the stock/no-zoom paths. Resource
 replay fixtures assert actual live input, then playback, in-place restoration and fresh-process
 seek results. The landing requires the replay note, Wine compatibility and independent reviews.
 See [resource snapping](tadr-port/resource-snapping.html) for the contracts and verification table.
