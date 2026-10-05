@@ -16262,13 +16262,24 @@ in the landing's notes, not assumed from these values.
 The graphics globals base is `0x51F320`. Its event-ring write/read indices `+0x18E/+0x192` are
 `0x51F4AE`/`0x51F4B2`, capacity `+0x186 = 20`; `0x4C2E30` and `0x4C2D60` advance them through
 mouse-button messages even when a modal GUI consumes the click. The GUI is `main+0x519`:
-`main+0x561` is inside its six-dword latest event (`+0x3C..+0x53`), while `main+0x533` is inside
+its latest event occupies `main+0x555..+0x56C` (`GUI+0x3C..+0x53`): six dwords x, y,
+wParam, timestamp, message and double-click flag. Thus `main+0x559` is y and `main+0x561..+0x564`
+is its timestamp, while `main+0x533` is inside
 its active-screen pointer `+0x18`, and `main+0x585` is the previous hovered/help gadget index at `GUI+0x6C`: `0x4AA596`
 and `0x4A00B5` copy `GUI+0x68` into it before selecting that gadget's text at record `+0x33`. The existing event-ring and GUI pump sections establish those owners. A two-image null
 twin whose arrows cancel and whose keyboard menu opens without clicks cannot observe every
-changed ring/eye bit. The harness samples GUI-consumed clicks through a ring turn and several
-eyes at one paused GameTime, and requires its carried simulation records to remain equal.
+changed ring/eye bit. A native injected click returns the pointer to screen centre, so the
+harness follows each sampled click with a separate move and requires the GUI x/y/message echo
+before dumping. It samples GUI-consumed clicks through a ring turn, every valid coordinate bit
+and several eyes at one paused GameTime, and requires its carried simulation records to remain equal.
 The recorder's positive list and exclusions are unchanged.
+
+`main+0x37E9E` is the command panel's displayed unit type: word stores at `0x41B0D2` and
+`0x41B1BC` copy unit `+0xA6`; the no-unit branch zeros it at `0x41B1E1`. The adjacent word
+`main+0x37E9C` receives unit `+0xA8` at `0x41B0BE`/`0x41B1A8`. MEASURED: native selection of
+ARMACK changes the type to 4 at paused GameTime 1722, which remains 1722 after selection.
+The resource-refusals null twin selects RSNRACK through native input and requires its displayed
+type before a thirteenth dump; that dump's carried simulation must still equal the paused base.
 
 
 The native Stop-button callback plays a UI sound at `0x41A0F1`, returning to `0x41A0F6`,

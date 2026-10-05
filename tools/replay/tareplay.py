@@ -129,7 +129,7 @@ TAKEOVER_CHECKS = {
     "victory": "timeline 1 ends complete with P's seat won, within TAKEOVER_SPAN of T",
 }
 CONTINUE = 300                  # the dump after a round trip, this many ticks on
-NULL_VIEWS = tuple(f"lnv{i}" for i in range(12))
+NULL_VIEWS = tuple(f"lnv{i}" for i in range(12)) + ("lnselection",)
 LAUNCH_TIMEOUT = 400
 
 
@@ -557,7 +557,7 @@ def step(w, kind, arg):
         raise CouldNotRun(f"a step of kind {kind!r}")
 
 
-def twin(w, log):
+def twin(w, log, fix):
     """The null twin (tarec images-gate): the live game paused, frame dump ln1; then what the
     viewer does without changing the game -- the arrow keys a second each way, one wheel notch in
     and out at the map's centre, the cursor over the map and over the panel, the in-game menu
@@ -588,9 +588,28 @@ def twin(w, log):
     labels = [g for g in gui["gadgets"] if g["type"] == "label" and g["active"]]
     if not labels:
         raise CouldNotRun("the twin: Impure options has no inert labels to sample")
-    for i, name in enumerate(NULL_VIEWS):
+    width, height = gui["surface"]
+    points = ((0, 0), ((1 << (width.bit_length() - 1)) - 1,
+                       (1 << (height.bit_length() - 1)) - 1), (width - 1, height - 1))
+    for i, name in enumerate(NULL_VIEWS[:-1]):
         x, y = labels[i % len(labels)]["click"]
         tacli("keys", w.name, f"pclick:{x},{y}")
+        # Click injection returns the pointer to screen centre. A separate
+        # move and its native GUI echo establish the coordinate in this view.
+        x, y = points[i % len(points)]
+        tacli("keys", w.name, f"pmove:{x},{y}")
+        deadline = time.monotonic() + 10
+        while True:
+            rc, o = tacli("peek", w.name, "*0x511DE8+0x555", "*0x511DE8+0x559",
+                          "*0x511DE8+0x565", "--json", timeout=60)
+            if rc:
+                raise CouldNotRun(f"the twin: native mouse echo: {last(o)}")
+            event = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
+            if event == [x, y, 0x200]:
+                break
+            if time.monotonic() >= deadline:
+                raise CouldNotRun(f"the twin: mouse event {event}, wanted {[x, y, 0x200]}")
+            nap(0.1)
         # The engine clamps these eyes to the map. The views are observations,
         # not assertions about the camera's permitted range.
         tacli("eye", w.name, i * 137, i * 193)
@@ -601,6 +620,14 @@ def twin(w, log):
         if w.gametime() != g1:
             raise CouldNotRun("the twin: GameTime moved during the viewer samples")
     tacli("arm", w.name, "menu.open=off")
+    if fix.get("viewer"):
+        step(w, "run", fix["viewer"])
+    n = len(log.lines)
+    w.trigger("dump lnselection now")
+    if not log.wait(r"recorder: frame dump lnselection at GameTime", 30, n):
+        raise CouldNotRun("the twin: selection frame dump not taken")
+    if w.gametime() != g1:
+        raise CouldNotRun("the twin: GameTime moved during the selection view")
     for key in ("up", "down", "left", "right"):
         tacli("keys", w.name, f"down:{key}")
         nap(1.0)
@@ -672,7 +699,7 @@ def live(w, fx, Ts, out):
             step(w, kind, arg)
         if Ts and not twinned and g > Ts[-1] + 5:
             wait_dumps(log, names[1:], 30)
-            twin(w, log)
+            twin(w, log, fix)
             twinned = True
         if g >= fix["end"] and not steps:
             break

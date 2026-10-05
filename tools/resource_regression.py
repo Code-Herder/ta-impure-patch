@@ -361,6 +361,17 @@ def refusals(c):
     print("resource-refusals: reclaim and Guard refusal, eligible upgrade and helper fallback passed")
 
 
+def viewer(c):
+    tick, paused = c.values("*0x511DE8+0x38a47", "*0x511DE8+0x38a51:2")
+    assert paused & 1, "viewer probe requires the world paused"
+    types = {t["name"].upper(): t["id"] for t in c.call("units", "--json")["units"]}
+    c.select("RSNRACK")
+    c.until(lambda: c.values("*0x511DE8+0x37e9e:2")[0] == types["RSNRACK"],
+            "native selection did not display the refusal constructor's type")
+    assert c.values("*0x511DE8+0x38a47")[0] == tick, "viewer selection advanced the simulation"
+    print("resource viewer: paused native selection updated the displayed unit type")
+
+
 def frontend(name, gamedir):
     """Pre-match native Visuals Undo must preserve the raw preference under a cap."""
     c = Check.__new__(Check)
@@ -434,7 +445,7 @@ def catalogue(name):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("instance")
-    p.add_argument("case", choices=("mex", "upgrade", "queued-upgrade", "plain", "uniform", "mixed", "locked", "inherit", "geo-upgrade", "priority", "refusals", "frontend", "catalogue"))
+    p.add_argument("case", choices=("mex", "upgrade", "queued-upgrade", "plain", "uniform", "mixed", "locked", "inherit", "geo-upgrade", "priority", "refusals", "viewer", "frontend", "catalogue"))
     p.add_argument("--gamedir", type=Path)
     a = p.parse_args()
     try:
@@ -450,6 +461,7 @@ def main():
          "geo-upgrade": geo_upgrade,
          "priority": priority,
          "refusals": refusals,
+         "viewer": viewer,
          **{m: (lambda c, m=m: policy(c, m, a.gamedir)) for m in ("locked", "inherit")},
          **{m: (lambda c, m=m: terrain(c, m)) for m in ("plain", "uniform", "mixed")}}[a.case](Check(a.instance))
     except (AssertionError, ValueError, subprocess.TimeoutExpired) as e:

@@ -463,7 +463,12 @@ cannot see an address recorded as a value; the scan looks for one instead.
   each way, one wheel notch in and out at the map's centre, the cursor over the map and over the
   panel, the in-game menu (Tab, `ARMOPT.GUI`) opened — and takes `ln2` with the menu still open
   (its OK resumes the game). It also samples twelve paused views: GUI-consumed clicks through
-  the event ring, inert label hovers and distinct camera positions. Each additional dump must
+  the event ring, explicit cursor positions and distinct camera positions. A click returns the
+  injected pointer to screen centre; each sample therefore moves it separately and requires
+  the native GUI's x/y/message echo before dumping. Zero, the largest in-range power of two
+  minus one, and the last screen coordinate exercise every valid coordinate bit. A thirteenth
+  view follows fixture-specific native selection; resource-refusals selects RSNRACK and requires
+  the command panel to display its type. Each additional dump must
   have the same GameTime, and its carried simulation records must equal `ln1`. Returning to
   the same eye/ring index at the second endpoint alone would hide viewer-only writes.
 - **The images gate** (`tarec.py images-gate`). Every bit of the main block and `.data` that no

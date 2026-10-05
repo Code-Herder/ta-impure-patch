@@ -763,6 +763,7 @@
   },
   "resource-refusals": {
    "preflight": ["tools/resource_regression.py", "{instance}", "catalogue"],
+   "viewer": ["tools/resource_regression.py", "{instance}", "viewer"],
    "load": "resource-refusals.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
