@@ -3063,6 +3063,22 @@ and evidence; the corrections first:
 - **`main+0x14353`, the unit tick's count of the units it ticked** (zeroed `0x48AD4A`, incremented
   `0x48ADC2`, read only by the debug line `0x46AAC6`), is a `write` row: the steps write it.
 
+**The keyboard ring [DISASSEMBLED + MEASURED 2026-10-05].** `0x4B6220` returns
+the graphics object through `0x51FBD0`, set by its initializer `0x4B5990`; the
+WinMain setup passes static object `0x51F320`. Its `+0xF2` is a ring capacity,
+at most 30 (`0x4C1A60`), `+0xF6` its dword character/key entries, `+0x16E`
+the enqueue index (`0x51F48E`) and `+0x172` the dequeue index (`0x51F492`).
+`0x4C1A40` clears both; `0x4C1AB0` removes one key, advances/wraps the dequeue
+index and returns zero when empty; `0x4C1B00` peeks; `0x4C1B20` appends unless
+the next slot equals the dequeue index, then advances/wraps the enqueue index.
+The WM_CHAR path calls the append at `0x4B5DEA`; `0x4C1FBE..0x4C21C2` also
+translate special keys into that ring. Readers include gameplay keys at
+`0x495E9A`, menus at `0x4998B6/0x4998D7/0x49991D`, and GUI input at
+`0x4AA034`. On the long CORE upgrade replay's T451/T9181 images, the recording
+had both indices 9, playback and fresh seek both 0: equal enqueue/dequeue indices
+mean drained input, not a construction counter. The proposed replay exception is
+exactly these eight bytes; owner approval is required before adding a leave row.
+
 **Every wall clock the engine stores.** The sources are `GetTickCount` (IAT `0x4FC0DC`; `0x4B6560`
 is `jmp` to it, and `0x4B6340` is `GetTickCount · rate / 1000`), `QueryPerformanceCounter` (IAT
 `0x4FC0BC`; `0x4E1730` in seconds), and the C runtime's `time` `0x4E6480`; there is no
@@ -14882,10 +14898,11 @@ resume by accidentally borrowing another child's completion. The native
 per-unit runner `0x4B0D60` continues visiting the other seven records.
 
 Impure preserves that state. `tagpu_cob_check_record` accepts child `-1` or
-`0..7` only; the expanded and native save readers apply the same validation.
+a slot below the runtime capacity; save readers also bound it by the saved capacity.
 Other negative values and out-of-range slots remain faults. A refused START
 still consumes arguments in the guarded adapter to bound repeated failed starts.
-This is a sentinel-and-bounds argument; no retry or enlarged thread pool is used.
+The sentinel is safe independently of capacity; the CORE constructor handoff below
+establishes a separate need for more than the native eight slots.
 
 [MEASURED 2026-10-03] The full-pool fixture held eight busy records on each of
 human unit 2 and local-AI unit 1002. Their refused CALLs retained 128 arguments
@@ -15483,7 +15500,7 @@ looked like before the site's displacement was fixed.
 The stock layouts above describe the executable. The F port's raised layout and
 its incomplete verification gates are in [the COB note](tadr-port/cob.md).
 `cob_runtime_sites` in `tagpu_patches.c` is the checked patch inventory: allocation
-operand `0x485D74`; 33 model-field operands (the getter's 34th reference lives in
+operand `0x485D74`; ten record-count operands; 33 model-field operands (the getter's 34th reference lives in
 its trampoline); 12 busy-count operands; six record-iteration strides; and the
 record-index expressions at `0x4B08F0`, `0x4B09B2`, `0x4B0A27`, `0x4B0B25`, and
 `0x4B0C57`. The original `slot*41*4` becomes `slot*137*4`. The runner address
@@ -15497,11 +15514,39 @@ byte-checked before replacement; the owning functions retain their native call s
 
 | Field or loop | Operand addresses | Native operation and raised value |
 |---|---|---|
-| model pointer, reads | `0x480B22`, `0x480C36`, `0x480C56`, `0x480C7F`, `0x480C8C`, `0x480C99`, `0x480CBA`, `0x480CF3`, `0x480D0C`, `0x480D1E`, `0x480D2B`, `0x480D5E`, `0x480D8B`, `0x480D96`, `0x480DB6`, `0x480DDF`, `0x480DF6`, `0x480E20`, `0x480E36`, `0x480E56`, `0x480E76`, `0x480EBD`, `0x480EF4`, `0x480F0C`, `0x480F5B`, `0x48115B`, `0x48124C`, `0x481388`, `0x481397`, `0x4813EE`, `0x481432`, `0x481472` | `mov register,[ecx/esi+0x540]` in the unit COB's model/piece/query/attachment methods; offset becomes `0x1140` |
-| model pointer, initialization | `0x480D46` | `mov [ecx+0x540],eax`; offset becomes `0x1140` |
-| active-record count, reads | `0x4B09CA`, `0x4B0A3F`, `0x4B0B88`, `0x4B0D22`, `0x4B0D6A`, `0x4B19EF`, `0x4B1AA1`, `0x4B1B68` | `mov eax,[edi/ecx+0x53C]` in callback/call/runner/return/signal/termination paths; offset becomes `0x113C` |
-| active-record count, writes | `0x4B0638`, `0x4B19FB`, `0x4B1AAD`, `0x4B1B77` | constructor stores EDX; return/signal/termination store EAX into `+0x53C`; offset becomes `0x113C` |
+| model pointer, reads | `0x480B22`, `0x480C36`, `0x480C56`, `0x480C7F`, `0x480C8C`, `0x480C99`, `0x480CBA`, `0x480CF3`, `0x480D0C`, `0x480D1E`, `0x480D2B`, `0x480D5E`, `0x480D8B`, `0x480D96`, `0x480DB6`, `0x480DDF`, `0x480DF6`, `0x480E20`, `0x480E36`, `0x480E56`, `0x480E76`, `0x480EBD`, `0x480EF4`, `0x480F0C`, `0x480F5B`, `0x48115B`, `0x48124C`, `0x481388`, `0x481397`, `0x4813EE`, `0x481432`, `0x481472` | `mov register,[ecx/esi+0x540]` in the unit COB's model/piece/query/attachment methods; offset becomes `0x1588` |
+| model pointer, initialization | `0x480D46` | `mov [ecx+0x540],eax`; offset becomes `0x1588` |
+| active-record count, reads | `0x4B09CA`, `0x4B0A3F`, `0x4B0B88`, `0x4B0D22`, `0x4B0D6A`, `0x4B19EF`, `0x4B1AA1`, `0x4B1B68` | `mov eax,[edi/ecx+0x53C]` in callback/call/runner/return/signal/termination paths; offset becomes `0x1584` |
+| active-record count, writes | `0x4B0638`, `0x4B19FB`, `0x4B1AAD`, `0x4B1B77` | constructor stores EDX; return/signal/termination store EAX into `+0x53C`; offset becomes `0x1584` |
 | record iteration | `0x4B062F`, `0x4B08DF`, `0x4B0D4C`, `0x4B1A1E`, `0x4B1AD0`, `0x4B1AE8` | constructor/free-slot search/runner cleanup/return/signal advance a record pointer by `0xA4`; stride becomes `0x224` |
+| record-count dwords | `0x4B0616`, `0x4B0D33`, `0x4B19F5`, `0x4B1AA7` | constructor initialization, callback clearing, RETURN parent wakeup and SIGNAL parent wakeup: `mov ecx/edx,8` becomes 10 |
+| record-count bytes | `0x4B08E5`, `0x4B09E1`, `0x4B0A57`, `0x4B0B9F`, `0x4B0D81`, `0x4B1AEE` | allocator, synchronous named/indexed/native starts, DoScriptsNow and SIGNAL: `cmp eax/esi/ebx,8` becomes 10; capacity remains below the signed immediate's 128 boundary |
+
+The allocation is `0x158C` bytes: header `0x1C`, ten records of `0x224`,
+the active count and the model pointer. All ten count operands and the existing
+allocation/stride/field operands belong to the same fail-closed installation.
+Native serializer loop counts at `0x4B1EEE` and `0x4B20E2` are not executed: their
+whole methods are replaced at `0x4B1EC0` and `0x4B2040`. The `and register,7`
+instructions inside opcode handling decode operand modes, not thread indices.
+The stock-limits comparison build retains eight native `0xA4` records.
+
+**Cost of the capacity [DISASSEMBLED].** DoScriptsNow `0x4B0D60` reads the busy
+count at `0x4B0D6A` and bypasses the record sweep when zero (`0x4B0D68..0x4B0D70`).
+Otherwise its `0x4B0D81` bound visits every record; the guarded runner checks an
+empty record's status and returns before execution or locking. RETURN/SIGNAL's
+parent-wakeup scans also visit the whole bound. Animation stepping at the unit
+tick's call `0x48ADEB` continues independently. Two additional `0x224` records
+cost 1,096 bytes per scripted unit: 15.68 MiB at 15,000, excluding allocator
+overhead. The loop visits increase from eight to ten; frame CPU cost is unmeasured.
+
+The guarded wire header remains six dwords, version 1, with explicit word/record
+counts. Current records occupy `0x1580` bytes including the header. Loading also
+accepts the earlier guarded eight-record `0x1138` block and the native `0x528`
+block. The latter carries eight `0xA4` records and a trailing active count.
+Each format is bounded by its exact length, original stack capacity and original
+child-slot capacity; additional runtime records are zeroed. Records, statics and
+animation are published only after validation. No format reads ten records
+from an eight-record input.
 
 Getter 73's native fraction read at `0x480A62` is `fld [esi+0x104]`, reached by
 the construction-query case at `0x480A44`. The guarded replacement reads that same
@@ -16188,6 +16233,99 @@ The full resolver caller list is `0x401F2F`, `0x402E3D`, `0x4031A7`, `0x405265`,
 `0x410AD9`, `0x43B242`, `0x43B285`, `0x43B416`, `0x43B451`, `0x43B583`, `0x43FE5A`,
 `0x43FE83`, `0x43FECC`, `0x4804A3`, `0x487D5B`, `0x487DD3`, `0x487E2E`, `0x487EFD`,
 `0x487F8C`, `0x48D0A0`.
+
+#### Native MobileBuild placement retries [DISASSEMBLED 2026-10-05]
+
+An accepted contextual upgrade queues native reclaim followed by `MOBILEBUILD`; queue
+creation does not establish that the replacement will start. `MobileBuild` at `0x403A20`
+dispatches state 1 to `0x403B45`. It obtains the replacement definition from `node+0x36`,
+recomputes its packed footprint origin from the stored position, and calls
+`0x47DB70(def, 0, packed_cell, 1)` at `0x403CC7`. The zero is the ignored unit number:
+this test does not exempt the constructor. For a stationary definition (`def+0x22F == 0`),
+`0x47DB70` delegates to the yard test `0x47D2E0` at `0x47DBE5`, also with ignored unit
+number and player zero. The other branch tests occupied cells against the supplied
+ignored number at `0x47DD00..0x47DD0A`.
+
+On placement refusal, `node+0x3E` counts retries. The first refusal emits its message at
+`0x403CDF`; `0x403CE4..0x403CF4` increments the counter, arms a 30-tick wait through
+`0x439E80`, and returns 2. Subsequent refusals reach `0x403D03`: a counter greater than
+10 emits the final message at `0x403D10` and returns 8 at `0x403D15`, abandoning the
+command. Acceptance calls `0x47DDC0` at `0x403D2F`, creates a nanoframe through
+`0x485F50` at `0x403D5B`, and links it into `node+0x16` through `0x489690` at
+`0x403D64`. Failure to obtain a unit retries after 300 ticks (`0x403D7D..0x403D89`),
+which is distinct from placement refusal. These contracts are disassembly, not proof
+that a particular reported upgrade failed for constructor overlap.
+
+Installed stock definitions read for the Comet Catcher stress test: `ARMMEX`/`CORMEX`
+have 3x3 footprints, `ARMMOHO`/`CORMOHO` 5x5, and `ARMACK`/`CORACK` 2x2 with
+build distance 60. `tools/resource_upgrade_stress.py` measures actual mouse dispatch,
+reclamation, frame creation and completion; its native-order snapshots require the
+pause bit at `main+0x38A51`, so the unit tick and its order destructors cannot run
+between the game-thread peeks.
+
+#### CORE reclaim-to-Moho handoff [DISASSEMBLED + MEASURED 2026-10-05]
+
+On installed Comet Catcher, stock `CORACK` at `(2892,1772)` upgrading `CORMEX`
+at `(2824,1704)` through a contextual click repeatedly reclaimed the old mex,
+created `CORMOHO`, then abandoned it without reducing `unit+0x104` from 1.
+The native MobileBuild node reached state 2, flags `0x14`. At `0x403DE1`,
+`0x438590` starts StartBuilding; state 2 calls `0x438700(unit,node,0xA)` at
+`0x403DFD`. That helper waits for `unit+0x10F` bit 0 (`INBUILDSTANCE`), marking
+the node's flags with bit 2 while it is clear. State 3 builds through `0x41BA60`.
+
+The COB trace identified the missing transition. At tick 2901 all eight native
+slots were occupied: MotionControl and walklegs, SmokeUnit, RequestState,
+Stop and close, StartBuilding and StopMoving. StartBuilding's START of another
+RequestState was refused at `0x4B08C0` (`cmp eax,8` at `0x4B08E3`), so the
+script never requested its new build state. The installed CORACK script has one
+serialized RequestState coordinator, which CALLs Go/open or Stop/close; a new
+RequestState updates its desired state and returns while that coordinator is busy.
+The handoff therefore requires a ninth record to deliver that update. Those
+chains have no recursion. This establishes the demand of the reproduced handoff,
+not a bound on every possible mod script or arbitrary additional callbacks.
+
+The nanoframe's GetBuilt handler (`0x402DA0`) remains incomplete when stance
+never arrives. Its wait arms 300 ticks through `0x439E80` from state 0 at
+`0x402F8C`; state 2's elapsed-event branch at `0x402F5B` calls the native
+unbuild/decay path `0x41BCD0(unit,11)` at `0x402F6B`. A ghost disappearing here
+does not establish a placement failure. In one paused reproduction, the bot's
+2×2 footprint at cells `(178,109)` and the accepted Moho's 5×5 footprint at
+`(174,104)` shared no cell. Explicit native build from idle at the same site and
+bot position entered state 3, stance 1 and reached remaining fraction `0.961694`.
+
+On the sixteen-slot diagnostic prototype, the trace accepts
+the formerly refused RequestState in slot 8. The focused native assertion reached
+stance 1 and remaining `0.947848` after 679 ticks. An all-deposit CORE sweep
+completed all 61 accepted upgrades by 7541 elapsed ticks; 20 initial site refusals
+are separate from accepted upgrades. The constructors, mexes and Mohos retained
+stock definitions; only supply was synthetic. The original mixed sweep completed
+all 37 accepted ARM upgrades and abandoned all 24 accepted CORE upgrades. These
+measurements identify a real CORE COB failure; they do not identify the faction
+or exact cause of an unrecorded earlier play report.
+
+The chosen ten-record runtime repeated the same CORE phase-0 sweep: **61 of 61
+accepted upgrades completed**, by 7611 elapsed ticks, 20 initial refusals and no
+unfinished build. Its trace accepts RequestState in slot 8 (including units 169
+and 265 at tick 2651). Native ten-record save/load preserved all ten active records
+on human and local-AI probes; native eight-record saves imported without loss.
+Full-pool START and CALL probes passed 16 and 3 assertions respectively.
+The automated native save/load preflight separately preserves all ten active
+records on both owners; its coverage bitmap reaches the replacement `cob_save`
+and `cob_load` functions at the native `0x4B1EC0`/`0x4B2040` methods.
+The ARM phase-1 sweep on ten records completed all 67 accepted upgrades by 8303
+elapsed ticks, with 14 initial refusals. Keeping generated starts 128 world units
+inside the border lets the previously motionless lower-border bot reclaim and
+complete; no native pathfinder change is made.
+
+The long replay fixture checks completed stock Moho at tick 7800 and requires its
+last comparison tick at or after that checkpoint. The diagnostic run's unit/player,
+effect-count and three restore comparisons passed, while paused viewer input first
+computed CORMOHO's ghost-mask row (`s_ghost` type 219): piece-count/valid/any and its
+hide bits changed at frozen tick 9219. `tagpu_datakeys_ghost_mask` now keeps an
+uncached paused preview in local storage; `main+0x38A51` bit 0 gates cache writes,
+so a first hover cannot write SIM_STATE while the simulation tick is frozen.
+Puppet cache misses use local storage regardless of native pause, leaving the
+recording the only writer even during replay-dock pause. No declaration or recorded-state comparison is removed by this correction.
 
 #### Input bounds and layout
 

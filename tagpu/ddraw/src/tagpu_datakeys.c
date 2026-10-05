@@ -534,7 +534,8 @@ void tagpu_datakeys_init(void)
     tagpu_datakeys_units_install();
 }
 
-SIM_FEATURE(keys_ghost_mask, SIM_PUPPET_RUNS, "battle");
+SIM_FEATURE(keys_ghost_mask, SIM_PUPPET_RUNS, "battle resource-core-upgrade");
+#include "tagpu_puppet.h"
 
 /* =========================================================================
    3. The build ghost's piece mask
@@ -878,6 +879,7 @@ int tagpu_datakeys_ghost_mask(unsigned type, TAGPU_PK_GHOSTMASK* out)
     const DkUnit* rec = NULL;
     unsigned n, gen, serial = 0;
     DkGhost* g;
+    DkGhost preview;
 
     if (!s_ghost || !ptr_ok(ta) || !type || type >= TAGPU_LIM_TYPES) return 0;
     n = *(const unsigned*)(ta + OFF_UDEFCOUNT);
@@ -894,6 +896,13 @@ int tagpu_datakeys_ghost_mask(unsigned type, TAGPU_PK_GHOSTMASK* out)
     g = &s_ghost[type];
     gen = tagpu_packet_pub_level_gen();
     if (!g->valid || g->gen != gen || g->serial != serial || g->root != root || g->cob != cob) {
+        /* Native pause (+0x38A51 bit 0) still pumps cursor previews on this
+           thread. A hover must not change state at a frozen tick, and the
+           recording is the only cache writer on puppets. */
+        if ((*(const unsigned short*)(ta + 0x38A51) & 1u) || tagpu_puppet_on()) {
+            memset(&preview, 0, sizeof preview);
+            g = &preview;
+        }
         ghost_compute(def, root, cob, cob ? cob_size(cob) : 0u, rec, g);
         g->gen = gen; g->serial = serial; g->root = root; g->cob = cob; g->valid = 1;
     }

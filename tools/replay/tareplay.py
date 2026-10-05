@@ -20,7 +20,10 @@ what the tier never exercised.
 FIXTURE is a name in tools/replay/fixtures.json, or `all`. For each fixture four GameTimes are
 drawn (one more for each round trip a broad entry's `trips` asks for beyond three), each T = 1 (mod 30) -- the radar pass's step, so a seek's contact bits agree at once (O14)
 -- between 301 and 0.8 x its end, from a generator seeded by the fixture's name and HEAD, and
-printed: T1 the first, T2..T4 the round trips, Tlast = T4. Four processes, each a game of its own:
+printed: T1 the first, T2..T4 the round trips, Tlast = T4.
+An entry's `last_min` requires Tlast to reach a named completion checkpoint; it keeps late
+construction events inside the live/puppet comparison on every commit's random seed.
+Four processes, each a game of its own:
 
     L  live      the fixture recorded, dumps l<T1> and l<Tlast>
     P  playing   `replay play` in the recording's viewed player's perspective, dumps p<T1> and
@@ -457,7 +460,7 @@ def head():
     return r.stdout.strip() or "no-head"
 
 
-def gametimes(name, end, h, trips=3):
+def gametimes(name, end, h, trips=3, last_min=None):
     """T1 and `trips` round trips: T = 1 (mod 30) between 301 and 0.8 x end, with room for the
     dump after a round trip, sorted, from a generator seeded by the fixture and HEAD."""
     hi = min(int(0.8 * end), end - CONTINUE - 30)
@@ -465,7 +468,14 @@ def gametimes(name, end, h, trips=3):
     if len(pool) < trips + 1:
         raise CouldNotRun(f"{name}: end {end} leaves fewer than {trips + 1} GameTimes")
     rng = random.Random(int(hashlib.sha1((name + h).encode()).hexdigest()[:8], 16))
-    return sorted(rng.sample(pool, trips + 1))
+    times = sorted(rng.sample(pool, trips + 1))
+    if last_min is not None:
+        eligible = [t for t in pool if t >= last_min]
+        if not eligible:
+            raise CouldNotRun(f"{name}: end {end} leaves no GameTime at or after {last_min}")
+        if times[-1] < last_min:
+            times[-1] = rng.choice(eligible)
+    return times
 
 
 # ---- the four processes ---------------------------------------------------------------------
@@ -1781,7 +1791,7 @@ class Run:
                 raise CouldNotRun(f"{name}: no DLL at {dll} ({make})")
             if dll.stat().st_mtime < sources_mtime():
                 raise CouldNotRun(f"{name}: {dll} is older than its sources ({make})")
-            Ts = gametimes(name, fix["end"], h, fix.get("trips", 3))
+            Ts = gametimes(name, fix["end"], h, fix.get("trips", 3), fix.get("last_min"))
             # `takeover`, (player, at) of `tareplay.py takeover`: L, K and F alone
             want = (("L", "K", "F") if takeover else ("L", "P") if measure else
                     ("L",) if fix.get("cost") else procs(fix))
@@ -2449,7 +2459,7 @@ def cmd_forks(args):
         if not dll.exists() or dll.stat().st_mtime < sources_mtime():
             raise CouldNotRun(f"build {make} first")
         fx = {"name": args.fixture, "fix": fix, "dll": dll.resolve(), "cover": args.cover,
-              "Ts": gametimes(args.fixture, fix["end"], head(), 3)}
+              "Ts": gametimes(args.fixture, fix["end"], head(), 3, fix.get("last_min"))}
         fx["rec"] = live(w, fx, None, out / "L")
         res = forks_lane(w, fx, out / "X")
         for name, status, detail in res:

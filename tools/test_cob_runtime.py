@@ -8,6 +8,7 @@ import unittest
 import cob_audit
 
 ROOT = Path(__file__).resolve().parents[1]
+THREADS = 10
 
 
 class Record(C.Structure):
@@ -164,10 +165,10 @@ class RuntimeTests(unittest.TestCase):
         program = self.lib.tagpu_cob_program(data, len(data) - 1, reason, len(reason))
         self.assertTrue(program, reason.value)
         try:
-            records = (Record * 8)()
-            saved = C.create_string_buffer(24 + 8 * C.sizeof(Record))
-            result, busy = (Record * 8)(), C.c_uint()
-            for child in (-1, 0, 7):
+            records = (Record * THREADS)()
+            saved = C.create_string_buffer(24 + THREADS * C.sizeof(Record))
+            result, busy = (Record * THREADS)(), C.c_uint()
+            for child in (-1, 0, 7, 8, 9):
                 records[0] = Record(status=0x02800000, sp=127, child=child)
                 records[0].stack[127] = 123
                 self.assertTrue(self.lib.tagpu_cob_save_records(
@@ -183,7 +184,7 @@ class RuntimeTests(unittest.TestCase):
             self.assertTrue(self.lib.tagpu_cob_load_records(
                 program, 99, bytes(old), len(old), result, C.byref(busy), reason, len(reason)), reason.value)
             self.assertEqual((busy.value, result[0].child, result[0].sp), (1, -1, 7))
-            for child in (-2, 8, 2147483647):
+            for child in (-2, THREADS, 2147483647):
                 records[0].child = child
                 self.assertFalse(self.lib.tagpu_cob_save_records(
                     program, 99, records, saved, len(saved), reason, len(reason)))
@@ -198,14 +199,17 @@ class RuntimeTests(unittest.TestCase):
         program = self.lib.tagpu_cob_program(blob, len(blob) - 1, reason, len(reason))
         self.assertTrue(program, reason.value)
         try:
-            records = (Record * 8)()
+            records = (Record * THREADS)()
             records[0] = Record(status=0x01000000, sp=100, callback=0x12345678)
             records[0].stack[100] = 9876
-            data = C.create_string_buffer(24 + 8 * C.sizeof(Record))
+            records[8] = Record(status=0x02800000, sp=-1, child=9)
+            records[9] = Record(status=0x01000000, sp=-1)
+            data = C.create_string_buffer(24 + THREADS * C.sizeof(Record))
             self.assertTrue(self.lib.tagpu_cob_save_records(program, 99, records, data, len(data), reason, len(reason)), reason.value)
-            result, busy = (Record * 8)(), C.c_uint()
+            result, busy = (Record * THREADS)(), C.c_uint()
             self.assertTrue(self.lib.tagpu_cob_load_records(program, 99, data, len(data), result, C.byref(busy), reason, len(reason)), reason.value)
-            self.assertEqual((busy.value, result[0].sp, result[0].stack[100], result[0].callback), (1, 100, 9876, 0))
+            self.assertEqual((busy.value, result[0].sp, result[0].stack[100], result[0].callback), (3, 100, 9876, 0))
+            self.assertEqual((result[8].child, result[9].status), (9, 0x01000000))
             before = bytes(result)
             for size in (0, 4, 23, len(data) - 1):
                 self.assertFalse(self.lib.tagpu_cob_load_records(program, 99, data, size, result, C.byref(busy), reason, len(reason)))
@@ -217,6 +221,40 @@ class RuntimeTests(unittest.TestCase):
             old = bytearray(old)
             struct.pack_into('<III', old, 4, 0x01000000, 0, 32)
             self.assertFalse(self.lib.tagpu_cob_load_records(program, 99, bytes(old), len(old), result, C.byref(busy), reason, len(reason)))
+        finally:
+            self.lib.tagpu_cob_program_free(program)
+
+    def test_eight_slot_saves_preserve_state_and_cannot_reference_new_slots(self):
+        import struct
+        blob = C.create_string_buffer(self.blob([0x10065000]))
+        reason = C.create_string_buffer(256)
+        program = self.lib.tagpu_cob_program(blob, len(blob) - 1, reason, len(reason))
+        self.assertTrue(program, reason.value)
+        try:
+            legacy = (Record * 8)()
+            legacy[0] = Record(status=0x02800000, sp=100, child=7, callback=123)
+            legacy[0].stack[100] = 456
+            legacy[7] = Record(status=0x01000000, sp=-1)
+            guarded = bytearray(struct.pack('<6I', 99, 0x53424f43, 1, 128, 8, 2) + bytes(legacy))
+            result, busy = (Record * THREADS)(), C.c_uint(77)
+            C.memset(result, 0xaa, C.sizeof(result))
+            self.assertTrue(self.lib.tagpu_cob_load_records(
+                program, 99, bytes(guarded), len(guarded), result, C.byref(busy), reason, len(reason)), reason.value)
+            self.assertEqual((busy.value, result[0].child, result[0].stack[100], result[0].callback), (2, 7, 456, 0))
+            self.assertEqual(bytes(result)[8 * C.sizeof(Record):], bytes((THREADS - 8) * C.sizeof(Record)))
+            before = bytes(result)
+            for offset, value in ((16, THREADS), (16, 0), (24 + 24, 8), (20, 3)):
+                bad = bytearray(guarded)
+                struct.pack_into('<I', bad, offset, value)
+                self.assertFalse(self.lib.tagpu_cob_load_records(
+                    program, 99, bytes(bad), len(bad), result, C.byref(busy), reason, len(reason)))
+                self.assertEqual((bytes(result), busy.value), (before, 2))
+            native = bytearray(struct.pack('<I', 99) + bytes(8 * 164) + struct.pack('<I', 1))
+            struct.pack_into('<IIi', native, 4, 0x02800000, 0, -1)
+            struct.pack_into('<i', native, 4 + 24, 8)
+            self.assertFalse(self.lib.tagpu_cob_load_records(
+                program, 99, bytes(native), len(native), result, C.byref(busy), reason, len(reason)))
+            self.assertEqual((bytes(result), busy.value), (before, 2))
         finally:
             self.lib.tagpu_cob_program_free(program)
 

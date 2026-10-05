@@ -2046,8 +2046,8 @@ their use. The model-binding seam publishes a validated script (or NULL for a re
 at `UnitDef+0x18E`. Save/load access only model-backed pieces and zero excess animation rows.
 Before allocating a saved level, the saved `Summary/maxunits` is validated and written
 to `main+0x37EE6/+0x37EEC` so the restored IDs keep their original player partition. On the engine's
-script-executing thread, the guarded adapter owns eight 128-word records (`cob+0x1C`, stride
-`0x224`), busy count `+0x113C`, and relocated model pointer `+0x1140`; it initializes stacks,
+script-executing thread, the guarded adapter owns ten 128-word records (`cob+0x1C`, stride
+`0x224`), busy count `+0x1584`, and relocated model pointer `+0x1588`; it initializes stacks,
 transfers bounded child arguments, retains a refused CALL's arguments and dormant
 child `-1` sentinel, and restores validated records/statics/animation and piece
 state on load. These are simulation writes, not renderer-owned state. Local entry chat uses
@@ -2094,7 +2094,7 @@ and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integratio
 | **the frame packet's header and its four world tables** — the header: `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x37E27..+0x37E33` (the rect the engine can name, since landing 2), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (the scroll extent — the map less 32 and 128 px — and the map in cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F`, `+0x143A7` (the palette table, 1 KB, since landing 2), `[0x51FBD0]+0x614` (gamma, bounded, since landing 2); **since landing 3** also `+0x0DCB` (the GUI colour array), `+0x2C76`/`+0x2C7A` (the dispatched mouse point), `+0x2C92..+0x2CA6` (the build cursor's two corners), `+0x2CC3`/`+0x2CC6` (the cursor mode and region flags), `+0x1424B`/`+0x1424F` (the feature sweep), `+0x14253` (`NumFeatureDefs`) and `[0x51FBD0]+0xC4` (the 32×256 shade table, which the unit pass turns into its face-shade multipliers, §2.88); `[0x51FBD0]+0xCC`, the grey band's 256-byte remap, is **not** copied since G20d — the grey is computed in RGB. **The three per-map BASES are deliberately NOT in it** — `+0x1426F` (FeatureDefs), `+0x1420B` (wreck records) and `+0x14377` (`MODEL_PTRS`) are read live, at every use, on the render thread: the teardown frees each and then NULLS it (`0x4221F8`→`0x422214`, `0x42227D`→`0x42228B`, `0x42DCCB`→`0x42DCD8`), so the null is what refuses the walk, and a copy taken at publish time and held for a frame reads straight past it. **[CORRECTED 2026-09-12 by a landing review, which found the copies.]** The tables: the unit array walked to `+0x14351`'s count, each record's `+0x64..+0x110` fields, its `UnitDef`'s `+0x20`/`+0x1FA`/`+0x241`, its `Object3do`'s `+0x00`/`+0x10`/`+0x18`/`+0x1E` and every `+0x22 + i·0x36` piece, the feature grid `+0x14287` over the widest zoom rect plus the lead (`tagpu_zoom_pub_window`), and the wreck records the anchors name ([engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies") | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.16, §2.17; the addresses live in `inc/tagpu_engine.h`). **Since landing 2 the packet's `vp`, `eye` (plus the unacknowledged anchor deltas), `vp_addr`, `pal` and `gamma` ARE the view every pass draws from** — the native pass, the scaffold, the marker pass's build-cursor gate and the palette module read no engine field for any of them. (The GL UI's layer draw was the fifth until the clean cut deleted it — §2.81) |
 | **the effects models** — a weapon's `+0x74` node and its `+0x30` child, an explosion's `+0x00` body, a flying piece's `*(sys+0x2C)` node; per node `+0x04`, `+0x08`, `+0x0C`, `+0x24`, `+0x28`, `+0x30`; per face `+0x00`, `+0x04`, `+0x0C`, `+0x10`, `+0x18`, `+0x1C`; a sequence's `u16` count and its `+0x28` frames; for a piece's team face `sys+0` → `+0x96` → `+0x27` → `+0x96` | **Read only, on the GAME THREAD**, by the frame packet's publisher (`tagpu_packet_pub.c` `fx_model`) in the same `after` as the tables above, and COPIED: posed by the engine's own `0x4B6CC0` into a `dst` of the publisher's, every count and index bounded before it is used — the vertex and face counts, each face index by its node's vertex count, each frame index by its sequence's count, the piece's unit a stride-aligned member of the unit array inside the slot count and its player one of the ten `main+0x1B63` records — into the packet's five model tables. The render thread reads the copies (`tagpu_fxmodel.c`) and the unit atlas's own mirror, never a model (§2.89) |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
-| `UnitDef+0x18E` → the type's COB, and the template's node names `node+0x1C` | **the build ghost's mask** (§2.23). Read only, **on the GAME thread**, inside the in-play packet fill, once per type per level: the COB's header, its script and piece name tables, `Create()`'s entry and bytecode as `0x4B2450` left them relocated, each table and each name bounded by the block's own length (the size `0x4B6BA0` checksums it with, recorded by an observer); the template tree under `MODEL_PTRS[type]`, the type bounded by `UNITINFOCount`, with no length to bound its node pointers against (`exe-reverse-engineering.md`, *The loaded script*). Both are per-LEVEL: `0x42D2E0` loads them on the LOADER thread before the level's first in-play draw, the teardown frees them on the game thread (the COB at `0x42DC3C`, the template in `0x42DB90`), and a console `Reload` frees the type's COB and loads it anew on the game thread itself (`0x42D275` / `0x42D294`) |
+| `UnitDef+0x18E` → the type's COB, and the template's node names `node+0x1C` | **the build ghost's mask** (§2.23). Read only, **on the GAME thread**, inside the in-play packet fill, cached per type during unpaused play (paused/puppet misses use local storage): the COB's header, its script and piece name tables, `Create()`'s entry and bytecode as `0x4B2450` left them relocated, each table and each name bounded by the block's own length (the size `0x4B6BA0` checksums it with, recorded by an observer); the template tree under `MODEL_PTRS[type]`, the type bounded by `UNITINFOCount`, with no length to bound its node pointers against (`exe-reverse-engineering.md`, *The loaded script*). Both are per-LEVEL: `0x42D2E0` loads them on the LOADER thread before the level's first in-play draw, the teardown frees them on the game thread (the COB at `0x42DC3C`, the template in `0x42DB90`), and a console `Reload` frees the type's COB and loads it anew on the game thread itself (`0x42D275` / `0x42D294`) |
 | the FBI section at `0x42BF97`, through `0x4C48C0` | **`PreviewPieces=`**, read by `tagpu_datakeys.c`'s observer inside the FBI loader `0x42BF40`, on the LOADER thread (the level's load) and on the game thread (the console `Reload`). Observers at the unit-data load's start `0x42D2E0` and the loader's entry (its `def` argument) keep each record to its own load. The records it writes are ours; nothing is written into the engine |
 | `0x4B6BA0`'s stack arguments `(buf, size)`, for the call that returns to `0x4B247C` | **each COB block's address and length**, recorded by `tagpu_datakeys.c`'s observer on the checksum's entry, on the thread that loads the script (the loader's, or the game thread's at a `Reload`); the bound on every read of that script. The other ten callers are ignored |
 | weapon `+0x111` bit 6, `noradar` | **WRITTEN at the level's load, on the LOADER thread, by `nomapweaponalert`** (§2.97): `tagpu_datakeys.c`'s observer on the loader's closing call `0x49E010` sets it for a weapon that carries the key, has `meteor=1` (bit 5) and default damage 0 (`+0xD4`, a WORD), exactly as `noradar=1` in its file would. Its one reader is the radar rebuild's projectile dot (`0x467206`). No stock weapon has the key, so none is written |
@@ -5018,7 +5018,7 @@ and the COB length (`0x4B6BA0`) for the `Create()` mask.
   [data keys](tadr-port/data-keys.html)). A structure's COB `Create()` hides pieces the moment the
   unit exists — muzzle flares, a radar dish, a moho's rotary — and no script runs for a preview, so
   the ghost used to show them: 21 of the 126 stock structures hide a piece with faces. The mask is
-  computed on the GAME thread by `tagpu_datakeys.c`, once per type per level, and published as
+  computed on the GAME thread by `tagpu_datakeys.c`, cached during unpaused play, and published as
   `TAGPU_PK_GHOSTMASK`: type, piece count, template root, 256 bits, one row per type a ghost may
   draw this frame that hides anything, sorted by type (validated in `frame_valid`). What it hides:
   - **by default, `Create()`'s hides, read and not run** — from the entry point, through the
@@ -20316,7 +20316,7 @@ The [COB decision and evidence note](tadr-port/cob.html) is the verification led
 does not yet claim complete mod parity. Required getters 32 and 69–75 use full signed-ID checks
 against the match's pool before addressing a live record. ID 111 remains native/inactive.
 The portable core bounds file allocations, instruction/entry operands, 128-word stacks,
-eight-record waits and old/new saved state. Native scheduling and valid opcode bodies remain
+ten-record waits and old/new saved state. Native scheduling and valid opcode bodies remain
 in use; unsupported types are unavailable with an entry warning, while required-unit creation
 and unrecoverable execution faults refuse with diagnostics.
 
@@ -20324,8 +20324,8 @@ and unrecoverable execution faults refuse with diagnostics.
 |---|---|
 | `0x480770` | six-byte getter detour, retaining the native fallback and relocating its model operand |
 | `0x4B245C`, `0x4B246F..0x4B2475`, `0x4B26D5` | validate the actual file allocation before relocation, checksum that same allocation, unlink metadata before free |
-| `cob_runtime_sites` | checked object size/model/count/record-stride operands; `0x4B0921` initializes allocated records; `0x4B0DAD` guards wait-state access and `0x4B0E5D` every instruction fetch |
-| `0x4B1EC0`, `0x4B2040` | replace complete save/load methods; validate the complete input before exposing restored state |
+| `cob_runtime_sites` | checked object size/model/count/record-stride operands, including all ten native slot-count loops; `0x4B0921` initializes allocated records; `0x4B0DAD` guards wait-state access and `0x4B0E5D` every instruction fetch |
+| `0x4B1EC0`, `0x4B2040` | replace complete save/load methods; validate native eight-slot, guarded eight-slot or guarded ten-slot input before exposing restored state; zero additional runtime records |
 | `0x42D8F4`, `0x42D299`, `0x43E0B0` | bind initial/reloaded scripts to model storage; bound the native SweetSpot result consumer |
 | `0x497581` | saved unit partition established before native `0x4917D0` allocates the level |
 | `0x42DA58`, `0x42BEC3`, `0x485FA0`, `0x485D64` | filter rejected types from build lists and guard creation, including required/saved units |
@@ -20336,6 +20336,27 @@ and unrecoverable execution faults refuse with diagnostics.
 The trace keeps a lock-ordered per-thread pending start, logs every transferred argument and
 new stack peaks (`H`); capacity failures invalidate its evidence with `INCOMPLETE`. It writes
 no engine state. The allocation/runner/return/signal/random observers in §2.4 remain its seams.
+
+The CORE advanced-kbot upgrade reproduction needs a ninth script slot while its old
+Stop/close chain overlaps the new StartBuilding callback. The guarded pool on this branch is ten
+records, object `0x158C`; allocation and every reader/iterator share that bound. The
+stock-limits comparison build retains the native eight records. The trace's slot bounds
+follow the selected build. The ten-slot runtime completed all 61 accepted upgrades in an
+all-deposit Comet Catcher CORE sweep, with 20 initial refusals and no unfinished accepted
+build. Native eight-slot import and ten-slot full-pool save/load preserved every active probe
+record; full-pool START/CALL probes pass. Arbitrary mod-script demand is still not proved
+bounded by ten. See the engine map's *CORE reclaim-to-Moho handoff* and the resource note.
+
+The completed-Moho replay fixture compares after completion as well as around three restores.
+Its diagnostic run found a first paused hover writing the ghost-mask SIM_STATE cache.
+`tagpu_datakeys_ghost_mask` computes a cache miss in local storage while native pause is set,
+so hover cannot mutate carried state at a frozen tick. Puppet cache misses also use local
+storage, leaving the recording the only writer. No state class or comparison is loosened.
+The native save/load preflight preserves all ten active records on human and AI probes;
+its coverage reaches both `cob_save` and `cob_load`. The ten-slot completion replay passes
+all 14 paused comparisons and its construction/effect/restore checks, with only the
+two keyboard indices failing the strict image gate. The final combined replay gate
+is still open; the keyboard-ring exception requires owner approval.
 
 **GUI first-arm ordering.** `tagpu_gui_mirror_want` requests a producer reset on its rising edge.
 The render-thread mirror withholds operations and publication until its drain records that

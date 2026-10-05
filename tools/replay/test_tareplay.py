@@ -30,6 +30,24 @@ import tarewind  # noqa: E402
 MAPS = [tafeat.DDRAW / "ddraw-cover.map", tafeat.DDRAW / "ddraw-stocklimits-cover.map"]
 
 
+class CompletionCheckpoints(unittest.TestCase):
+    def test_completed_moho_is_compared_for_every_commit_seed(self):
+        for revision in range(256):
+            times = tareplay.gametimes("resource-core-upgrade", 12000, str(revision), last_min=7800)
+            self.assertEqual(times, sorted(set(times)))
+            self.assertEqual(len(times), 4)
+            self.assertTrue(all(t % 30 == 1 and 301 <= t <= 9600 for t in times))
+            self.assertGreaterEqual(times[-1], 7800)
+
+    def test_unreachable_completion_is_refused(self):
+        with self.assertRaises(tareplay.CouldNotRun):
+            tareplay.gametimes("too-short", 2400, "revision", last_min=7800)
+
+    def test_ordinary_fixture_keeps_its_sampling(self):
+        self.assertEqual(tareplay.gametimes("battle", 2400, "revision"),
+                         tareplay.gametimes("battle", 2400, "revision", last_min=None))
+
+
 class FailedWorkerCleanup(unittest.TestCase):
     def test_failed_game_is_stopped_even_if_artifact_collection_fails(self):
         run = tareplay.Run.__new__(tareplay.Run)

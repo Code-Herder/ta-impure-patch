@@ -19,8 +19,11 @@
    The build ghost's piece mask (C1): which pieces a type's ghost hides. By
    default the pieces its COB `Create()` hides before anything else runs; with
    `PreviewPieces=` in the FBI, every piece that list does not name. Computed
-   on the game thread, cached per type for the level, published in the frame
-   packet as TAGPU_PK_GHOSTMASK. The render thread reads only the packet. */
+   on the game thread, cached per type for the level during unpaused play,
+   published in the frame packet as TAGPU_PK_GHOSTMASK. A paused cache miss
+   uses local storage so a hover cannot change carried state at a frozen tick;
+   puppet cache misses use local storage too, leaving the recording the only writer.
+   The render thread reads only the packet. */
 
 #include "tagpu_packet.h"
 

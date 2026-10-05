@@ -197,7 +197,7 @@ commit can change.
   `Reload` moves the serial whether or not its FBI opens. A reader takes a row only when its stored
   def pointer is the def it asks about. C1 reads one key, `PreviewPieces=`, through the engine's
   own reader `0x4C48C0` with TADR's 1024-byte buffer.
-- **The mask**, on the game thread inside the packet fill, once per type per level: `Create()`'s
+- **The mask**, on the game thread inside the packet fill, cached per type during unpaused play: `Create()`'s
   hides read and not run, with the engine's own piece match (`0x45A950`'s pre-order and swap,
   [the engine map](../exe-reverse-engineering.html)), or every piece `PreviewPieces=` does not
   name. Every read of the COB is bounded by the block's own length, which a fourth observer
@@ -205,6 +205,11 @@ commit can change.
   read, kept only for the call that returns into the loader (`0x4B247C`). A script with no
   recorded length gets no mask. The cache is keyed by the packet's level generation, the record's
   serial (a `Reload` can bring the COB back at the same address) and the root and COB pointers.
+  On a cache miss during native pause, the mask is computed in local storage and published
+  without writing the SIM_STATE cache. A first hover at a frozen tick therefore cannot change
+  recorded state; no declaration or comparison is excluded by this rule.
+  Puppet cache misses also use local storage, leaving the recording the only writer
+  even when the viewer pauses through the replay dock instead of native Pause.
   The cursor's row is published whenever a build is on the cursor, from the packet's own
   `build_unit_id`, so the cursor ghost never draws from a packet without it; the queued sites'
   types ride the builds table's gate. It reaches the render

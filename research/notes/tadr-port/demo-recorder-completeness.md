@@ -68,8 +68,10 @@ and generates `inc/tagpu_replay_layout.h`, which carries the file's SHA-256; the
 it or the header was edited by hand, as `spirv-check.sh` does for shaders. A change to what is
 excluded is therefore always a visible diff of the file, and each row is a loosening the owner
 approves. Only the unit and player layouts are fixed by the retail executable: Impure's COB landing
-grew the engine's COB object from `0x544` to `0x1144` bytes (`0x485D73`), and several pools now
-live in the DLL.
+grew the engine's COB object from `0x544` to `0x1144` bytes (`0x485D73`); the current
+ten-record runtime uses `0x158C` bytes. Several pools now live in the DLL. COB execution
+history is still reconstructed, rather than recorded, under the existing contract;
+a larger native allocation does not change that replay limitation.
 
 **What restoring these records needs**, found while building the file; each is for the applier
 the skirmish slice brings:

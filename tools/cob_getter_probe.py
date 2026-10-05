@@ -34,6 +34,7 @@ import tacompat as compat
 
 GETTERS = (32, 69, 70, 71, 72, 73, 74, 75)
 TYPE = "COBFPROBE"
+COB_THREADS = 10
 BOUND_ARGS = (-2147483648, -1, 0, 65535, 65536, 65537, 2147483647, None)
 
 
@@ -81,7 +82,7 @@ def probe_cob(pieces, extended=False, roundtrip=False, thread_exhaustion=None):
     if thread_exhaustion:
         worker = len(scripts)
         prefix = [op['PUSH_CONSTANT'], 1, op['SET_SIGNAL_MASK']]
-        prefix += [op['START_SCRIPT'], worker, 0] * 7
+        prefix += [op['START_SCRIPT'], worker, 0] * (COB_THREADS - 1)
         prefix += [op['PUSH_CONSTANT'], 0, op['SET_SIGNAL_MASK']]
         prefix += [op['PUSH_CONSTANT'], 123] * 128
         prefix += [op['CALL_SCRIPT' if thread_exhaustion == 'call' else 'START_SCRIPT'], worker, 128]
@@ -304,7 +305,7 @@ def active_records(pid, units):
         for unit in units:
             cob = struct.unpack('<I', read(base + unit * 0x118 + 0x9A, 4))[0]
             records = []
-            for slot in range(8):
+            for slot in range(COB_THREADS):
                 words = list(struct.unpack('<137I', read(cob + 28 + slot * 548, 548)))
                 if words[0]:
                     # Callback addresses are deliberately not persisted. Sleep
@@ -548,11 +549,11 @@ def run(out, mode, dll, extended=False, roundtrip=False, quarantine=False, threa
                 if thread_exhaustion == 'call':
                     cob = struct.unpack_from('<I', data, 0x9A)[0]
                     memory.seek(cob + 28)
-                    records = memory.read(8 * (36 + 4 * 128))
+                    records = memory.read(COB_THREADS * (36 + 4 * 128))
                     status, pc, sp, sleep, piece, axis, child = struct.unpack_from('<IIiiiii', records)
                     stack = struct.unpack_from('<128i', records, 36)
-                    busy = sum(struct.unpack_from('<I', records, i * 548)[0] != 0 for i in range(8))
-                    if (status, sp, child, busy) != (0x02800000, 127, -1, 8) or stack != (123,) * 128:
+                    busy = sum(struct.unpack_from('<I', records, i * 548)[0] != 0 for i in range(COB_THREADS))
+                    if (status, sp, child, busy) != (0x02800000, 127, -1, COB_THREADS) or stack != (123,) * 128:
                         raise RuntimeError(f'failed CALL state differs: {status:#x}, sp={sp}, child={child}, busy={busy}')
                     report.setdefault('failed_calls', []).append(dict(unit=unit, pc=pc,
                         sp=sp, child=child, busy=busy, arguments_retained=len(stack)))
@@ -638,7 +639,7 @@ def main():
     parser.add_argument("--roundtrip", action="store_true", help="save/load expanded sleeping records before checking their results")
     parser.add_argument("--quarantine", action="store_true", help="require a malformed type to be excluded while the match continues")
     parser.add_argument("--reject-required", action="store_true", help="require a malformed starting commander to refuse the match")
-    parser.add_argument('--thread-exhaustion', choices=('start', 'call'), help='exercise the eight-record limit with a 128-word argument stack')
+    parser.add_argument('--thread-exhaustion', choices=('start', 'call'), help='exercise the expanded record limit with a 128-word argument stack')
     parser.add_argument('--skirmish-ceiling', action='store_true', help='fill player three to reach native slot 6000 and run extended getter checks; global slot 15000 requires multiplayer')
     parser.add_argument('--unused-model-pieces', action='store_true', help='declare 4096 pieces over the solar model without accessing the excess; exercise safe save padding with --roundtrip')
     parser.add_argument('--reload', action='store_true', help='native +reload before creation; verify a marked script was loaded before getter/save assertions')

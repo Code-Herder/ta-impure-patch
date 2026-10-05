@@ -361,6 +361,7 @@ because the launcher replaces it with right-button orders.
 |---|---|---|
 | `resource-mex`, `resource-classic`, `stock-resource-mex` | Manual mex/Alt, manual/Quick center agreement, partial-target refusal at the snap boundary, independent toggle, both mouse layouts, plain repeat no-op, selected-only Shift cancellation across variant changes, preceding Move preserved, requeue | L/P/R/Q |
 | `resource-upgrade`, `resource-queued-upgrade` | Own mex→Moho reclaim/build, plain replacement or Shift after Move, mixed helpers, persistent Guard dedup, combat unaffected; queued-pair cancellation/requeue preserves Move and Guards | L/P/R/Q |
+| `resource-core-upgrade` | Native save/load preflight with all ten slots active; installed Comet Catcher, native CORACK→CORMOHO contextual click, reclaim/build pair, stance, progress and completed Moho at tick 7800 | Native loader coverage + L/P/R/Q; last comparison after completion |
 | `resource-plain`, `resource-uniform`, `resource-mixed` | Background/above-background uniform metal and rich patches; manual geo/Alt, Quick geo cancellation/requeue preserving Move | L/P/R/Q |
 | `resource-geo-upgrade` | Stronger private geo variant on metal ground, queued reclaim/build, plain repeat no-op, pair cancellation/requeue, persistent helper Guard | L/P/R/Q |
 | `resource-nearby` | Two adjacent one-cell vents remain distinct; Shift appends both, cancels only the clicked plan, preserves a preceding persistent Guard and requeues | L/P/R/Q |
@@ -390,6 +391,53 @@ replay harness select every fixture. This landing's final passing note remains a
 assumption from the existence of these fixture definitions.
 
 ### Verification limits
+
+`tools/resource_upgrade_stress.py` adds a completion check on the real Comet Catcher map.
+Its `prepare` command reads the installed map and generates one mex plus one advanced
+kbot for every metal-feature anchor, varying approach bearings and distances. `--phase`
+rotates those assignments; `--sides arm|core|mixed` selects the constructors. A private
+supply unit removes resource starvation; the constructors, mexes, Mohos and terrain
+retain their installed definitions. Generated archives and scenarios remain local.
+`run` applies that scenario in an owned instance, issues real configured contextual
+mouse clicks, and separately records refusals, accepted reclaim/build pairs, old-mex
+removal, Moho creation and completion. Native-order snapshots pause the simulation.
+An accepted upgrade that removes its mex and loses its build without a replacement
+is a failure; a surviving unfinished build at the observation bound is reported as
+incomplete. This is a native stress test, not a replay comparison. The existing mex
+upgrade fixtures assert the queued pair and helper behavior; they do not require a
+completed stock Moho at every Comet Catcher deposit.
+
+The stress reproduction exposed a native **CORE COB slot exhaustion**, rather than
+an overlap in the measured failed case. CORACK's old RequestState/Stop/close chain
+overlaps its new StartBuilding and StopMoving callbacks; all eight records are busy,
+and the new RequestState START needs a ninth. Its refusal prevents INBUILDSTANCE,
+so the native accepted nanoframe decays. Explicit native construction from idle at
+the same bot/site succeeds. The engine map records the script chain, native node
+states, trace and non-overlapping footprints; an earlier unrecorded play incident
+cannot be assigned that exact cause from this reproduction alone.
+
+The owner selected **ten script records**. Allocation, all native loop bounds,
+guards, saves and trace agree on that capacity. Older native and guarded eight-slot
+saves retain their own validation bound and import with the two extra slots zeroed.
+The stock-limits control stays at native eight slots. This fixes the reproduced
+ninth-slot handoff; arbitrary mod callback demand is not proved bounded by ten.
+
+| Verification on the ten-slot runtime | Result |
+|---|---|
+| CORE, all 81 Comet deposits, phase 0; 8 bearings and 6 requested distances | 61 accepted, all 61 completed by 7611 elapsed ticks; 20 initial placement refusals; no abandoned or unfinished accepted build |
+| ARM, all 81 deposits, phase 1; generated starts inside the border | 67 accepted, all 67 completed by 8303 elapsed ticks; 14 initial refusals; no abandoned or unfinished accepted build |
+| Native eight-slot save → guarded ten-slot load | All eight active records preserved on human and local-AI probes |
+| Guarded ten-slot save/load | All ten active records preserved on both probes; automated preflight also reaches native `cob_save` and `cob_load` on the coverage build |
+| Full-pool START / CALL | 16 / 3 assertions pass; refusal retains the documented scheduling behavior |
+| Portable COB regression | 41 tests pass, including high-slot links, old-format bounds and transactional load refusal |
+| Long completed-Moho replay | Ten-slot run: 36 checks pass, including completion, effects, all 14 paused comparisons and three exact restores; only keyboard indices `0x51F48E`/`0x51F492` fail the strict image gate |
+
+The diagnostic ARM phase-1 sweep completed 66 of 67 accepted upgrades; its one
+remaining bot was generated near the map's lower border and never moved or reclaimed
+its mex. It did not match the reported post-reclaim failure. Generated starts now
+remain at least 128 world units from the border and record their actual approach;
+the ten-slot ARM rerun completes all 67 accepted upgrades, including that case. This
+corrects the generated test start rather than changing the native pathfinder or upgrade orders.
 
 The synthetic fixtures cover the behavior listed above; live inspection additionally verifies
 the resource settings panel, queued resource ghost, frontend hot reload/error recovery and

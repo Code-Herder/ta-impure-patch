@@ -7,12 +7,18 @@
 /* The corpus needs 85 words relative to entry, plus at most four native
    arguments. Every runtime access is checked against this allocation. */
 #define TAGPU_COB_WORDS 128u
-#define TAGPU_COB_THREADS 8u
+/* Stock CORACK's reclaim-to-build handoff needs a ninth record: the old
+   RequestState/Stop/close chain, MotionControl and its child, SmokeUnit,
+   StartBuilding, StopMoving and the new RequestState. All native iterators
+   and the object allocation use this same bound. */
+#define TAGPU_COB_THREADS 10u
+#define TAGPU_COB_LEGACY_THREADS 8u
 #define TAGPU_COB_RECORD_BYTES (36u + 4u * TAGPU_COB_WORDS)
 #define TAGPU_COB_COUNT_OFFSET (28u + TAGPU_COB_THREADS * TAGPU_COB_RECORD_BYTES)
 #define TAGPU_COB_MODEL_OFFSET (TAGPU_COB_COUNT_OFFSET + 4u)
 #define TAGPU_COB_OBJECT_BYTES (TAGPU_COB_MODEL_OFFSET + 4u)
 #define TAGPU_COB_SAVE_BYTES (24u + TAGPU_COB_THREADS * TAGPU_COB_RECORD_BYTES)
+#define TAGPU_COB_LEGACY_SAVE_BYTES (24u + TAGPU_COB_LEGACY_THREADS * TAGPU_COB_RECORD_BYTES)
 
 typedef struct TagpuCobRecord {
     uint32_t status, pc;

@@ -795,6 +795,37 @@ The classic fixture selects `LEFTCLICK` stage 0 in native Interface options afte
 requires `main+0x37EFA == 0` before clicking. Setting the stopped instance's registry is
 insufficient: every launch restores right-button orders. Other mex fixtures verify value 1.
 
+For reclaim-to-Moho failures on Comet Catcher, use `tools/resource_upgrade_stress.py` in
+an owned isolated instance. While stopped, `prepare <gamedir> /tmp/comet-upgrades.json
+--phase 0 --sides mixed` creates private supply content and a scenario covering every
+installed metal deposit. Load it with `tacli scenario load <name>
+/tmp/comet-upgrades.json --defaults`, then `run <name> /tmp/comet-upgrades.json
+--out /tmp/comet-upgrades-run`. Native mouse clicks issue the upgrades; the JSON report
+distinguishes refusal, reclaim, nanoframe creation and completed construction. Use a
+different phase or side for another sweep. Order inspection pauses the unit tick;
+the final state is left paused for diagnosis. This test does not compare replays.
+Generated constructor starts stay 128 world units inside the border; the report records
+actual bearing/distance after clamping. Initial native placement refusals remain separate
+from accepted upgrades that later stall or finish.
+
+`resource-core-upgrade` is the completion replay regression on installed Comet Catcher.
+Its private supply leaves CORACK, CORMEX and CORMOHO definitions intact. `check-core`
+issues real contextual input and requires native reclaim/build, INBUILDSTANCE and progress;
+`finish-core` requires a completed Moho and the old mex absent. The fixture's `last_min`
+keeps its final comparison after that completion checkpoint on every commit seed.
+Its `cob_legacy_save_probe.py --preflight <name> --gamedir <gamedir>` first exercises
+native save/load with all ten records active on human and AI probes, using the
+worker's held DLL. Paused game-thread peeks compare active records; the engine
+writes `cover-resource-save.bin` on coverage builds. The recorder is disabled
+through the preflight and restored before L starts.
+Run `tools/replay/tareplay.py run resource-core-upgrade --cover` for the focused check.
+
+The guarded COB runtime has ten 128-word slots; the stock-limits build has eight native
+32-word slots. `cob_getter_probe.py --thread-exhaustion start|call` fills the guarded pool
+on human and local-AI units. `cob_legacy_save_probe.py --out /tmp/cob-import` imports a
+native save with all eight records active; `--expanded` saves/restores all ten guarded
+records. Their archives and saved games stay private in the owned instance/output folder.
+
 Resource preflights run native frontend checks before the L lane records a match.
 `resource-frontend` tests raw radius preservation through Visuals Undo and profile cap reload.
 `resource-refusals` refreshes `tacli units` before scenario validation so its cached catalogue

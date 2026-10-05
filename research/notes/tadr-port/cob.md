@@ -19,8 +19,7 @@ renumbered 2026 recorder are not the target.
 
 ## The landing
 
-The latest runtime change is `96929a8` (required placed campaign units); everything
-after it is documentation and the compatibility harness's Xvfb readiness reader.
+The 2026-09-28 core landing ends at `96929a8` (required placed campaign units).
 Main was merged in at `23cd2d0` (documentation only, no conflict).
 
 Implemented: all eight getters below; full-width unit-ID validation; 128-word
@@ -28,8 +27,9 @@ stacks with eight thread records; guarded execution and argument transfers;
 model-backed piece bounds; whole-type quarantine with entry chat; required
 starting, saved and placed mission-unit refusal; native 32-word save import and
 versioned expanded-state round trips; native reload binding and rejected-script
-cleanup. ID `111` remains inactive. Eight records are the current capacity, not a
-claim that every mod's dynamic thread demand has been proved.
+cleanup. ID `111` remains inactive. That landing used eight records;
+[the ten-record runtime](#core-mex-upgrades-and-ten-script-records) addresses a later
+stock constructor reproduction. Neither capacity proves every mod's dynamic demand.
 
 Two independent read-only HIGH reviews found seven defects across the initial and
 follow-up passes. All seven were fixed and cleared. The later campaign-wrapper
@@ -641,10 +641,11 @@ The guard accepts the engine's exhausted-CALL state: child `-1`, status
 `0x02800000`, PC past the CALL, arguments retained. The thread remains dormant;
 other scripts and the match continue. RETURN compares the sentinel with a
 bounded slot and never indexes through it. The same check protects native and
-expanded saved records; every child other than `-1` or `0..7` is still rejected.
+expanded saved records; a child must be `-1` or below the saved format's record count.
+Native and older guarded saves retain their eight-record bound; current saves carry ten.
 The engine map's *Exhausted CALL* section records the disassembly and live bounds.
 This preserves stock behavior, including the dormant script; it does not promise
-that eight records suffice for every script or restore COB execution history.
+that the runtime capacity suffices for every script or restore COB execution history.
 
 The S4d gate exposed this at `CORMSHIP.COB` word 724 after naval round trips at
 1681 and 2071. Replaying the retained recording reproduced the fatal guard stop.
@@ -666,3 +667,52 @@ eight occupied records, all 128 CALL arguments retained, child `-1`, SP 127,
 and a continuing game. The retained failure is also the live regression for
 failed-game cleanup before Watch. Final replay verification is recorded in
 [the S4d note](demo-recorder-s4-rewind.md).
+
+## CORE mex upgrades and ten script records
+
+**Implemented on the landing branch, 2026-10-05; replay validation remains a gate.**
+Stock CORACK's contextual reclaim-to-Moho handoff on Comet Catcher fills all eight
+records with MotionControl/walklegs, SmokeUnit, the old RequestState/Stop/close chain,
+StartBuilding and StopMoving. The new RequestState START needs a ninth record; when
+refused, the script never requests INBUILDSTANCE and the accepted nanoframe decays.
+The trace and native order/footprint measurements are in the engine map's
+*CORE reclaim-to-Moho handoff*. This establishes a reproduced stock failure; it does
+not identify the faction or cause of an earlier unrecorded play report.
+
+The chosen capacity is **ten 128-word records**, stride `0x224`, object size
+`0x158C`, busy count `+0x1584`, model `+0x1588`. Allocation, all ten native count
+operands, execution/wait guards, save format and trace use the same capacity.
+The stock-limits comparison build retains native eight-record/32-word storage.
+Current saves contain a six-dword version-1 header and ten records (`0x1580` bytes).
+Native `0x528` and earlier guarded `0x1138` eight-record saves remain readable;
+the loader bounds children by the saved capacity, zeroes the two additional records,
+and publishes state only after the entire input validates. A malformed older save
+cannot acquire a valid child merely because the new runtime has more slots.
+
+Two extra records cost **1,096 bytes per scripted unit**, or **15.68 MiB** for
+15,000 scripted units, excluding allocator overhead. DoScriptsNow skips its record
+sweep when the busy count is zero. Otherwise it checks all ten slots, including
+empty/sleeping slots; empty slots return before execution and locking. RETURN and
+SIGNAL also scan the pool. Ten versus eight adds 25% to those loop visits, not a
+measured 25% increase in frame CPU time.
+
+The ten-slot native save probe preserves all ten active records on both human and
+local-AI units; native eight-slot import preserves all eight active records.
+The full-pool START fixture passes all 16 getter assertions after SIGNAL frees its
+children. Portable tests exercise high-slot child links, old-format zero filling
+and transactional refusal. Full-pool CALL and map-wide completion results are
+recorded in [the resource regression](resource-snapping.md#verification-limits).
+Arbitrary supported-mod callback demand remains unproved bounded by ten.
+
+The dedicated `resource-core-upgrade` replay fixture asserts real contextual input,
+native stance, stock Moho progress and completion. Its long diagnostic run preserved
+unit/player state, effect counts and all three restore round trips, but failed the
+paused-twin cache comparison and two keyboard-ring image bytes. This is a failed
+replay gate, not grounds for claiming completion. An uncached paused ghost preview
+uses local storage so a first hover cannot mutate recorded state at a frozen tick;
+puppet previews also leave the recording the only writer. The ten-slot rerun passes
+all 14 paused comparisons and the completion/effect/restore checks; the strict image
+gate still names the two keyboard indices. The final puppet guard and native
+save/load preflight require a combined coverage run. The preflight separately
+preserves all ten active slots on both probes and its coverage reaches `cob_save`
+and `cob_load`. No keyboard exclusion has been applied without owner approval.

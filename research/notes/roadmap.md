@@ -3770,6 +3770,13 @@ shipped-mod saved fixtures, and the Windows smoke checks. The effective loaded c
 piece guard exposes malformed bundled ZZZ content in four setups while admitting unused
 extra declarations in normal units. Generic compatibility battles do not establish feature parity.
 
+The guarded runtime on the landing branch uses ten script records. A native CORE advanced-kbot
+mex upgrade requires a ninth record to deliver its next build-state request; the expanded
+allocation, all ten native loop bounds, saves and trace agree on the capacity. Older
+eight-record saves remain accepted. The stock-limits comparison build stays native.
+The [resource regression](tadr-port/resource-snapping.html) records the Comet Catcher
+reproduction and completion checks. Ten is not a proven capacity for every mod script.
+
 ### Replay player cards — implemented and verified
 
 | gate | state | scope |
@@ -3970,6 +3977,13 @@ button cancels selected constructors' queued plans and upgrade pairs, preserving
 orders and persistent Guards; plain repeats remain consumed no-ops. Resource
 replay fixtures assert actual live input, then playback, in-place restoration and fresh-process
 seek results. The landing requires the replay note, Wine compatibility and independent reviews.
+The Comet Catcher stress runner checks every installed metal deposit with varied constructor
+bearings and distances. Its CORE run exposed an eight-slot COB exhaustion during the native
+reclaim-to-build handoff; the ten-slot runtime completes every accepted CORE upgrade in that sweep.
+The dedicated CORE replay fixture checks stance, construction progress and completed Moho,
+and requires the last comparison at or after its completion checkpoint. The strict replay
+gate remains open; completion/paused-state results, native save/load coverage and the
+remaining keyboard-index image failure are recorded on the resource page.
 See [resource snapping](tadr-port/resource-snapping.html) for the contracts and verification table.
 
 Still open: multiplayer feature-policy parity chat warnings, future mod activation/download,
