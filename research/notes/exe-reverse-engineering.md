@@ -3663,6 +3663,55 @@ image), finds no operand `0x29A0` (the settings block `[main+0x29A0]`) or `0x38D
 count). Impure's own code writes the difficulty `main+0x37EEE`, which the replay's options restore at
 the level's end.
 
+### The replay viewer's record: player record 10 and the level init's call `0x4919C8` [DISASSEMBLED 2026-10-06]
+
+Stage 5 of the [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.md) seats a playback's
+viewer in player record 10 on every playback ([the ten-seat note](tadr-port/demo-recorder-ten-seats.md)).
+Read from `pristine/TotalA.exe.pristine` (`objdump -d -M intel`).
+
+**What we patch.** The level init's only call site, `0x4919C8` (`E8 C3 2F FD FF`, `call 0x464990`,
+inside `LoadGameData_Main 0x4917D0`, which the loader thread calls at `0x497581`), is retargeted to
+`tagpu_replay_level_players` (`tagpu_replay.c`), byte-matched by `call_is` at attach and installed
+with the replay's other call sites, all or none. It calls `0x464990` itself and then, only on a level
+whose seating armed it, the player init `0x464700` on record 10. `0x464990` takes no argument and
+returns with a plain `ret` (`0x4649C6`), and the next instruction, `call 0x44F6A0`, reads no register
+the call leaves (`0x44F6A0` starts with `push 0xC9; call 0x4B4F10`), so the C function is the call's
+target directly. A whole-image scan finds no other `call` or `jmp` to `0x464990`.
+
+**Record 10.** The records are `0x14B` bytes from `main+0x1B63`; record 10 is `main+0x2851..+0x299B`
+(the teardown's bound, `add eax,0x2851` at `0x464A0C`), followed by the branch selector at
+`main+0x299C`.
+
+| Address | What it does with record 10 |
+|---|---|
+| `0x41D97E..0x41D997` | the constructor loop runs 11 times (`ebx` = 0xB), each through `0x463BE0`, which makes the record's PlayerInfo |
+| `0x464990` the level init's players | `cdecl (void)`: `0x464700` for each of records 0–9 whose `+0x73` is set (`edi` = 10 at `0x464994`, the type at `main+0x1BD6 + i·0x14B`), then `0x4648E0` (`0x4649BF`) |
+| `0x464700` the player init | `stdcall (rec)`, `ret 4` (`0x4648D6`); its one direct call is `0x4649B1`. Sets `+0xF0`, `+0xF4`, `+0xF8` to GameTime (`0x464715`, `0x464727`, `0x464765`), zeroes the resources and storage (`0x46476B..0x4647A1`), makes `+0xEC` when NULL (`0x4647CB..0x4647D7`) and calls `0x401070(+0x146)` on it, frees the old sight counters `+0x7C` (`0x464855`) and allocates new ones of `(W/2)·(H/2)` rounded up to 8 bytes (`+0x88`, `0x46482B..0x464866`), zeroed, then the group table through `0x480190` (`0x464898`). It makes the AI object and `0x40B320(+0x146)` unless `[rec+0]` ≠ 0 and `+0x73` = 3 (`0x46489D..0x4648A5`) |
+| `0x464A00` the player teardown | walks records 0–10 (`jbe` against `main+0x2851`, `0x464A99`): frees `+0x7C` and zeroes `+0x7C..+0x88` (`0x464A24..0x464A38`), frees `+0x78` through `0x4801F0` (`0x464A3C`), frees the AI object only when `+0x74` is set, with `0x40B390(+0x146)` first (`0x464A41..0x464A6B`), and frees and zeroes `+0xEC` (`0x464A6E..0x464A7E`) |
+| `0x4816A0(m)` the sight rebuild | with `m` ≠ 0 fills the explored map with 0 or `0xFFFF` by Mapping (`0x4816AF..0x4816FB`); its counter fill loops records 0–9 (`cmp bl,0xa`, `0x481707`, `0x481777`) and skips a record whose `+0x146` is 10 (`0x48172A`), so record 10's counters are never refilled |
+| `0x48C190` the ID cycle | walks the controlled record's ID range `[+0x6F, +0x71]` (u16, `0x48C1CA..0x48C1D9`); an ID becomes the unit `array + ID·0x118`, and ID 0 a NULL it reads at `+0x110` (`0x48C1EE..0x48C213`, `0x48C239..0x48C25E`). With `[1, 1]` it reads slot 1 alone |
+| `0x4858BD..0x48592B` the level's slot setup | writes `+0x67`, `+0x6B`, `+0x6F`, `+0x71` for records 0–9 only (`cmp edi,0xa`, `0x48592B`) |
+
+**The viewed record's work in the players phase.** The phase loops records 0–9 (`cmp bl,0xa`,
+`0x4655A8..0x4655AF`). Only in the viewed record's iteration does it run the minimap rebuild
+`0x466DC0` every tick (`cmp bl,[main+0x2A43]`, `0x465065..0x465072`) and, past the record's 30-tick
+deadline `+0xF0` (`0x46507D..0x465092`: `ja` past the whole block, else `+0xF0 += 30`), the radar pass
+`0x467440` and the minimap's fog `0x466C20` (`0x465565..0x465572`). `0x466DC0` takes no argument and
+returns with a plain `ret` (`0x46743D`); its last store is `main+0x142F1 |= 2` (`0x46742F`). Its two
+callers are that phase and the sight rebuild (`0x48191F`, after the fog at `0x48191A`). With record 10
+viewed none of the three runs, so `tagpu_replay.c`'s `viewer_frame` runs them once a GameTime at the
+frame visit.
+
+**The load's order** around the patched call, in the loader function: the saved-game branch's seat
+fill `0x47A760` (`0x49757C`, behind `0x435100` = 2 at `0x49753D`, which a Start does not reach),
+then `LoadGameData_Main` (`0x497581`), whose level init gives each record its buffers, then the sight
+rebuild `0x4816A0(1)` (`0x497AE5`), the first reader of the viewed record's counters, through its fog
+`0x466C20`.
+
+**The network reporter.** `main+0x2A42` reaches `reporter.dll`'s export only while the library is
+loaded: `0x51E58C` is set nonzero only at `0x46C00F` and zeroed at `0x46C11F`, `0x46C149` and
+`0x46C1CF` (after `FreeLibrary`). The replay refuses to seat while it is set.
+
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
 Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the

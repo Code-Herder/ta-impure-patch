@@ -516,12 +516,16 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
     A save before the first step, which no known path makes, writes the recording's, and the
     teardown then saves again.
   - **The start units' calls `0x497963` and `0x497ACD`**, skipped.
+  - **The level init's call `0x4919C8`**, retargeted: after `0x464990`, record 10's buffers through
+    `0x464700`, on the loader thread ([the ten-seat note](demo-recorder-ten-seats.md) §4.2).
   - **The first step**, at B2's stub `0x4954ED`: the level's counts, map, unit and weapon data and
     first GameTime against the header; then the start units through the create, the first image,
     the wind's seed and V's sight.
-- **The viewer's seat** V is the lowest record the recording does not seat: type 3, with the watcher
-  bit, holding `+0x2A42` for the whole level. Its PlayerInfo goes back as the Start's fill left it
-  once the teardown `0x491B60` has returned, after the post-game table has left the watcher out:
+- **The viewer's seat** V is player record 10, the engine's no-player record, which no recording
+  carries ([the ten-seat note](demo-recorder-ten-seats.md)): type 3, with the watcher bit and an
+  empty block, holding `+0x2A42` for the whole level. The record and its PlayerInfo go back as the
+  Start found them once the teardown `0x491B60` has returned, after the post-game table has left
+  the watcher out:
   the seat activation does not clear the watcher bit, and a surrender to the main menu passes no
   reset (MEASURED).
   - Every path that selects or orders walks the controlled player's units, of which this seat has
@@ -598,8 +602,8 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
   with a header naming its tables, and `tools/replay/tarec.py compare --puppet` compares it with
   the recording read back to its GameTime: every unit, player and order list image and every
   declared table, paired by name, since each build numbers its tables in its own order; less the
-  contact bits, V's record, the controllers and the viewer, and with the contact bits when the
-  dump's viewed player is the recording's.
+  contact bits, the controllers and the viewer, and with the contact bits when the dump's viewed
+  player is the recording's. V's record, record 10, is in neither the recording nor the dump.
 
 #### S2b, verified and measured
 
@@ -1002,11 +1006,12 @@ The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
   appears. The constructor clears the reference again for an action whose descriptor lacks bit 9,
   and the recording machine's handlers set it afterwards; before, the node stayed empty for one step,
   and at a seek every such target was empty at T.
-- **V's energy and metal are 0** from the first step. The level start reads them from V's skirmish
-  settings entry, which the SKIRMISH screen does not fill (MEASURED 1365/16385 and 11/10 in three
-  processes), and nothing changes a type-3 record's pair afterwards, so every host of a recording now
-  holds the same V. The resource bar showed 0 before as well: it clamps to the storages, which the
-  player init zeroes.
+- **V's energy and metal are 0** on every host. V is record 10, which the player init zeroes
+  (`0x46476B`, `0x46477D`) and the level start `0x465E30` does not reach (`0x465F87`); nothing
+  changes a type-3 record's pair afterwards. (While V was the lowest unseated record, the level
+  start read them from its skirmish settings entry, which the SKIRMISH screen does not fill,
+  MEASURED 1365/16385 and 11/10 in three processes.) The resource bar shows 0 either way: it clamps
+  to the storages, which the player init zeroes.
 - **V's minimap follows V's sight.** The minimap's fog is composited by `0x466C20` only when
   `main+0x142F1` bit 2 asks, and the engine asks for the viewed player's own units' stamps, sets and
   removals; V owns no unit, so under true LOS V's minimap kept the composite of the sight rebuild's

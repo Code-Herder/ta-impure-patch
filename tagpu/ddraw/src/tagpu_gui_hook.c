@@ -295,10 +295,14 @@ static int live_hit(unsigned p, unsigned size)
    `+0x01`. That third one does NOT touch byte 0, so byte 0 is ours alone to
    poison. It is a display memo, not sim state. */
 #define HUD_MEMO       0x37E3Fu
-#define HUD_PLRREC     0x1B63u        /* main+ : PlayerStruct[10], stride 331  */
+#define HUD_PLRREC     0x1B63u        /* main+ : the player records, 331 apart */
 #define HUD_PLRBYTE    0x146u         /* record+ : what 0x468E6C loads into the
                                          memo's byte 0                        */
-#define HUD_NPLAYERS   10
+#define HUD_NPLAYERS   11             /* the records the engine's own readers
+                                         index with the viewed player (0x468E6C,
+                                         0x467D70): the eleven it constructs
+                                         (0x41D97E..0x41D997), record 10 the
+                                         replay viewer's (tagpu_replay.c)      */
 #define CHROME_PLAYER  0x2A43u        /* main+ : the local player index      */
 #define CHROME_PLRTBL  0x1B8Au        /* main+ : record+0x27, a pointer (to the
                                          block holding the side byte), stride 331 */
@@ -4438,9 +4442,9 @@ static void panel_emit(const char* ctrls, int n0)
    stops reading back as our poison -- which is the engine having written its
    own fresh state over it, i.e. having drawn.
 
-   `p` IS BOUNDED BEFORE IT INDEXES. The engine indexes the ten records with
-   it unchecked; a value that is not a slot is data we do not index with, and
-   the debt waits for a flip on which it is one.
+   `p` IS BOUNDED BEFORE IT INDEXES. The engine indexes the eleven records
+   with it unchecked; a value that is not a record is data we do not index
+   with, and the debt waits for a flip on which it is one.
 
    ORDERING, NOT TIMING. This runs at the flip's RETURN, on the game thread.
    None of the 44 call sites of the flip `0x4C63A0` lies inside the block
@@ -5005,7 +5009,7 @@ static void chrome_emit(struct SURF* fs)
     w = *(const int*)(gfx + GFX_SCREEN_W);
     if (h <= CHROME_YOFF || w <= CHROME_XOFF) { s_chromePend = 0; s_chromeRefused++; return; }
 
-    {   /* the engine indexes the ten records with this unchecked; we do not */
+    {   /* the engine indexes the records with this unchecked; we do not */
         unsigned p = *(const unsigned char*)(ta + CHROME_PLAYER);
         if (p >= HUD_NPLAYERS) return;            /* not a slot: keep the debt */
         rec = *(const char* const*)(ta + CHROME_PLRTBL + p * CHROME_STRIDE);

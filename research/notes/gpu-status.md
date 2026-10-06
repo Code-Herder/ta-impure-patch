@@ -1844,7 +1844,8 @@ METAL/ENERGY block inside `DrawGameScreen` compares itself against, once per twi
 the engine redraw a block it would otherwise skip for the life of the level ([engine
 map](exe-reverse-engineering.html) "The resource block, and the 33-byte memo that skips it").
 The poison is the complement of the byte the block will write there (`PlayerStruct+0x146` of
-the local player, the player index bounded to the ten records first). Every engine writer of
+the local player, the player index bounded to the eleven records first: record 10 is a replay's
+viewer's). Every engine writer of
 that field stores 0..10 (engine map), so the poison, 0xF5..0xFF, is a value the block cannot
 compute and the compare cannot come out equal; a poison that alternated `0xFF`/`0x00` did on every second reset for player 0, and the
 bars then stayed blank until metal or energy first changed.
@@ -3361,9 +3362,12 @@ the allocator and READY/FAILED back to the first game-thread step after the
 engine's load-done gate. The loader reads no mutable replay reader and does not
 write its failure flag.
 
-**Sites.** Four call sites of the Start and the loader, installed by `tagpu_replay_init` and inert
-without an accepted request: the seat fill's call `0x47B092`, the settings persist's call
-`0x47B09C`, and the start units' calls `0x497963` and `0x497ACD`; with them an **observer on the
+**Sites.** Five call sites of the Start and the loader, installed by `tagpu_replay_init`, all or
+none, and inert without an accepted request: the seat fill's call `0x47B092`, the settings
+persist's call `0x47B09C`, the start units' calls `0x497963` and `0x497ACD`, and the level init's
+call `0x4919C8` (`E8 C3 2F FD FF`), retargeted to `tagpu_replay_level_players`, which calls
+`0x464990` and then, on the loader thread and only on a level the seating armed, the player init
+`0x464700` on record 10, the viewer's ([the engine map](exe-reverse-engineering.md#the-replay-viewers-record-player-record-10-and-the-level-inits-call-0x4919c8-disassembled-2026-10-06)); with them an **observer on the
 settings save `0x430F00`** (`tagpu_detour_observe`, stolen `A1 E8 1D 51 00`, a `before` and an
 `after`), inert unless a recording's options are in. The teardown wrap's post hook (§2.7) calls
 `tagpu_replay_level_after` once `0x491B60` has returned. The step runs from B2's stub at
@@ -3399,7 +3403,7 @@ logged. The gates make them zero; the observers prove it. **The step's phases** 
 `tagpu_replay_phase` after the host's projectile tick and after its explosion tick.
 
 **Fields we write**, on the game thread during playback, takeover or live rewind,
-and on the loader thread at the allocator ownership boundary:
+and on the loader thread at the allocator ownership boundary and the level init's call:
 
 - multiplayer allocation: only the loader's ten-pointer stack table at the
   `0x48587E` boundary. The unchanged native loop then initializes all player
@@ -3410,7 +3414,10 @@ and on the loader thread at the allocator ownership boundary:
   `main+0x38A3B`, validated within 0..5 and only reduced to the next T−1
   boundary. This pacing word is already `leave` in `replay-globals.tsv`;
 
-- live rewind: pause bit 0 at `main+0x38A51`; the spectator's seat and buffers
+- the level init's call, on a puppet level: record 10's buffers through `0x464700`; when they
+  cannot be made, `main+0x2A42` and `main+0x2A43` = the lowest recorded seat;
+
+- live rewind: pause bit 0 at `main+0x38A51`; the spectator's seat (record 10) and buffers
   through `0x464290` and `0x464700`; recorded seats' type through `0x463C60`,
   acquisition table through `0x40B390`, and AI `+0x74` cleared only after all their
   units have been destroyed. V gets the fresh loader's WinLoseTime `+0xF4 = 0`,
@@ -3423,9 +3430,11 @@ and on the loader thread at the allocator ownership boundary:
   applied on that return;
 
 - at the seat fill: each seat's record through `0x464290(seat, 3)`, then PlayerInfo `+0x95` and
-  `+0x96`, the name at `+0x2B` and `+0x49`, and the alliance row `+0x108..+0x112`; V's through
-  `0x464290(V, 3)`, with PlayerInfo `+0x9B` bit 6 (the watcher bit) and the recording viewer's
-  side at `+0x95`; `0x464290(r, 0)` for a record the stock fill activated that the recording does
+  `+0x96`, the name at `+0x2B` and `+0x49`, and the alliance row `+0x108..+0x112`; V's, record
+  10's, through `0x464290(10, 3)`, with PlayerInfo `+0x9B` bit 6 (the watcher bit) and the
+  recording viewer's side at `+0x95`, the empty block `+0x67` = 1, `+0x6B` = 0 and the ID range
+  `+0x6F` = `+0x71` = 1 (the whole record kept beforehand, and put back after the teardown with
+  `main+0x2A42`/`+0x2A43` = 0 when either names it); `0x464290(r, 0)` for a record the stock fill activated that the recording does
   not seat; `main+0x2A42` = V, `main+0x2A43` = the view, `main+0x2A3C` = the recorded player
   count; the objective disarmed (`0x4904B0`);
 - the skirmish settings (`+0x108..+0x11B`), `main+0x37EEE` and `main+0x37EEC`, which the
@@ -3436,7 +3445,7 @@ and on the loader thread at the allocator ownership boundary:
 - each step: every unit's record and mover under `replay-layout.tsv`'s classes, positions through
   `0x48A9F0` with `0x43DA70` and `0x43DB50`, carry links through `0x48AB70`, order lists through
   `0x43A0C0`, `0x43A1F0`, `0x43AD10` and `0x489690`, a yard's change through `0x47C790` and
-  `0x440A40`; every player record but V's under the same classes, but `+0xF0`, the 30-tick
+  `0x440A40`; every player record 0–9 under the same classes, but `+0xF0`, the 30-tick
   deadline the host's players phase keeps, and only with both names ended inside their fields and
   a seat's PlayerInfo side and colour within this game's counts; and each seat's `+0x18` = GameTime;
 - the events, through `0x485F50`, C4's death wrap, `0x49D270`, `0x4B0B00`, `0x4B0A70`,
@@ -3483,11 +3492,15 @@ and on the loader thread at the allocator ownership boundary:
 - at each create: the new unit's water state `+0x10A`, from the create event, bounded by its enum;
 - after each step's images: the cells the feature tick's input wrote, again from the next
   iteration's world through the same cell write (the whole grid after an overflow);
-- at the first step: V's sight counters (`[rec+0x7C]`, `[rec+0x88]` bytes of 1), V's bit
-  (`[V+0x146]`) in every entry of the explored map `[main+0x14273]`, `main+0x14281` bit 3 cleared,
-  then `main+0x142F1` bit 2 and the minimap's fog composite `0x466C20` (also after each LosType
-  change and at a seek); V's energy `+0x8C` and metal `+0x98` = 0; and `s_windState` seeded from the
-  recording's first image;
+- at the first frame visit or step: V's sight counters (`[rec+0x7C]`, `[rec+0x88]` bytes of 1),
+  V's bit (`[V+0x146]`, 10) in every entry of the explored map `[main+0x14273]`, `main+0x14281`
+  bit 3 cleared, then `main+0x142F1` bit 2 and the minimap's fog composite `0x466C20` (also after
+  each LosType change and at a seek), and V's `+0xF0` = the next multiple of 30; and, at the first
+  step, `s_windState` seeded from the recording's first image;
+- while record 10 is viewed on a puppet level, once a GameTime at the frame visit: the minimap
+  rebuild `0x466DC0`, and when record 10's `+0xF0` is due, `+0xF0` = the next multiple of 30, the
+  radar pass `0x467440` and the fog composite `0x466C20` (the players phase's viewed-record work,
+  which its loop over records 0–9 never reaches);
 - at a seek, on the frame visit, in this order: the projectile count 0 (and `main+0x142F7` when it
   points into the pool); every unit killed through C4's wrap of the destructor `0x4866D0` with
   severity and corpse 0; every temporary sight record's `+0x1C` zeroed, then `0x482130`; LosType

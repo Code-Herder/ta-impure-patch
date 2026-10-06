@@ -62,7 +62,11 @@ static __inline int rec_format_supported(unsigned format)
 #define REC_ORDERS_MAX    4096    /* the most nodes a recorded list holds: a longer one ends the
                                      recording (REC_END_ORDERS), and is never cut short        */
 #define REC_ORDERS_CHUNK  512     /* the most node images one RK_ORDERS carries                */
-#define REC_PLAYERS       10    /* the records a game seats; the eleventh only ever means "no player" */
+#define REC_PLAYERS       10    /* the records a game seats and a recording carries; the eleventh,
+                                   REC_VIEWER, is the engine's no-player record, which a puppet
+                                   level seats the viewer in                                   */
+#define REC_VIEWER        10    /* the viewer's record on a puppet level (tagpu_replay.c, THE
+                                   VIEWER'S SEAT)                                              */
 #define REC_TABLE_MAX     256   /* the most declared tables a recording names: the capture refuses
                                    to start past it, so the writer's copy never meets one more  */
 #define REC_UNIT_BITS     ((REC_UNIT_DWORDS + 7) / 8)    /* 11 bytes of a unit delta's bitmap   */

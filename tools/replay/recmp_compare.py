@@ -362,11 +362,10 @@ def main(argv):
         w = tarec.stream_to(h, bl, want=dw.tick)
         compose(w, start, hist.at(dw.tick), seats)
         radar = dw.view[1] == w.view[1]
-        bit = dw.players[tarec.viewer_of(h)][tarec.PL_MAPBIT]
-        tarec.mapped_hold(w, bit)
-        tarec.mapped_hold(dw, bit)
-        tarec.puppet_view(w, tarec.viewer_of(h), radar)
-        tarec.puppet_view(dw, tarec.viewer_of(h), radar)
+        tarec.mapped_hold(w)
+        tarec.mapped_hold(dw)
+        tarec.puppet_view(w, radar)
+        tarec.puppet_view(dw, radar)
         tarec.puppet_hold(w, held)
         tarec.globals_hold(w, gslots)
         tarec.globals_hold(dw, gslots)

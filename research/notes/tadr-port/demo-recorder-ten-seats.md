@@ -227,7 +227,7 @@ outside a level that seats record 10. `tagpu_replay_level_end` clears `s_vbuf`, 
 
 ### 4.9 Lists and tools
 
-- `replay-globals.tsv`: a `leave` row for record 10, `main 0x2891 331`, reason: the replay viewer's
+- `replay-globals.tsv`: a `leave` row for record 10, `main 0x2851 331` (`viewerrec`), reason: the replay viewer's
   record on a puppet host; on a recording machine it is the engine's no-player record. Without it the
   images gate fails on the bytes `viewer_frame` writes (`+0xF0`). **A loosening, owner decision O2.**
   Any edit changes the globals hash, so recordings made by earlier builds are refused (none is
@@ -295,7 +295,7 @@ the render-feeding readers bound. Each run below is a game of 10 minutes or less
 ## 7. Owner decisions (answered 2026-10-06)
 
 - **O1.** V is record 10 on **every** playback: one path, exercised by every fixture.
-- **O2. Accepted:** the `leave` row for record 10 (`main+0x2891`, 0x14B bytes) and the compares'
+- **O2. Accepted:** the `leave` row for record 10 (`main+0x2851`, 0x14B bytes) and the compares'
   explored-map mask moving from V's bit to bit 10. The images gate no longer checks record 10. On a
   recording machine, its only writes in play are, [INFERRED], the destructor's kill and loss counters
   (`0x4868C1`, `0x486906`, `0x486A33`) for deaths credited to player 10, which nothing displays or

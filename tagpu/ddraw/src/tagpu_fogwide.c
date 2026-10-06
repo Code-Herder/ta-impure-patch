@@ -21,7 +21,10 @@
 #define OFF_PLOT_R   0x14237       /* i32 FeatureMapSizeY                       */
 #define OFF_MAPPED   0x14273       /* u16* MAPPED bitmap, one bit per player    */
 #define OFF_LOCALID  0x2A43        /* u8 — the LOCAL player, not the watched one */
-#define OFF_PLAYERS  0x1B63        /* PlayerStruct[10], stride 0x14B            */
+#define OFF_PLAYERS  0x1B63        /* the player records, stride 0x14B          */
+#define PLAYER_RECS  11            /* the engine constructs eleven (0x41D97E..0x41D997); the
+                                      eleventh, record 10, is viewed only on a puppet level,
+                                      whose viewer it seats (tagpu_replay.c)    */
 #define PLAYER_STRIDE 0x14B
 #define PLAYER_LOS   0x7C          /* {u8* counters; i32 w; i32 h} inside it    */
 
@@ -290,10 +293,14 @@ static int fogw_source(char* ta, FOGW_SRC* s)
     memset(s, 0, sizeof *s);
     if (!ptr_ok(ta)) return 0;
 
-    /* ten players, so the bit always lands inside the u16 tile the engine
-       masks with (`test ax,ax` after a 16-bit load) */
+    /* one of the eleven records, so the bit always lands inside the u16
+       tile the engine masks with (`test ax,ax` after a 16-bit load). Record
+       10's counters exist whenever it is viewed: a puppet level names it only
+       between giving it its buffers and the teardown (tagpu_replay.c,
+       viewer_frame's LIFETIME), and the counters pointer is range-checked
+       below as every record's is */
     id = *(const unsigned char*)(ta + OFF_LOCALID);
-    if (id > 9) return 0;
+    if (id >= PLAYER_RECS) return 0;
     s->mask = 1u << id;
 
     ps = ta + OFF_PLAYERS + (size_t)id * PLAYER_STRIDE + PLAYER_LOS;

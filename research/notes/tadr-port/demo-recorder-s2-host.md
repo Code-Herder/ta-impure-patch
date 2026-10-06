@@ -103,9 +103,9 @@ The contest outcome in the grid can still differ from the recording until S3 rec
 
 ### 1.1 What it is
 
-V is the lowest record index in 0–9 that the recording does not seat. A skirmish recording lists its seats in `RT_PLAYER` (`tagpu_recorder.c` `header_build`: every record with a non-zero `+0x73` at the start).
+V is player record 10, the engine's own no-player record, on every playback: [the ten-seat note](demo-recorder-ten-seats.md) is the design, and `tagpu_replay.c`'s *THE VIEWER'S SEAT* the build. A recording carries records 0–9 only, so nothing recorded is ever overwritten with viewer state. A skirmish recording lists its seats in `RT_PLAYER` (`tagpu_recorder.c` `header_build`: every record with a non-zero `+0x73` at the start).
 
-**Seating.** V is seated at the seat fill as type 3 through the engine's seat activation `0x464290(V, 3)` [DISASSEMBLED, `0x464290..0x4644BE`]. That call:
+**Seating.** V is seated at the seat fill as type 3 through the engine's seat activation `0x464290(10, 3)` [DISASSEMBLED, `0x464290..0x4644BE`]. That call:
 
 - zeroes the record's five 11-byte arrays (`+0x108`, `+0x113`, `+0x11E`, `+0x129`, `+0x134`);
 - sets `+0x73` = 3 and leaves PlayerInfo `+0x94` alone for type 3 (`0x46432C..0x46433A`);
@@ -122,8 +122,9 @@ V is the lowest record index in 0–9 that the recording does not seat. A skirmi
 **What V's record never gets.**
 
 - **No start unit.** The loader creates none, because the start-unit sites skip every record on a puppet host (§6.4).
-- **No apply and no comparison.** The applier never writes V's record and the playback comparison skips it. S1 records all ten records every iteration (`REC_PLAYERS` = 10, `cap_players`), and V's recorded image is an empty record, so applying it would un-seat the viewer.
-- **The records no one sits in are applied like the seats.** Every record but V's is written raw
+- **No apply and no comparison.** A recording carries records 0–9 (`REC_PLAYERS` = 10, `cap_players`), not record 10, so nothing applies to V and the comparison compares every recorded record; `replay-globals.tsv` leaves record 10 out (`viewerrec`).
+- **No buffers from the level init.** `0x464990` gives records 0–9 their sight counters and group tables (`edi` = 10, `0x464994`); the replay's retarget of its call `0x4919C8` gives record 10 its own through `0x464700` on the loader thread, at the same point of the load.
+- **The records no one sits in are applied like the seats.** Every record 0–9 is written raw
   under the exclusion file, not only the recorded seats: the level start `0x465E30` writes the start
   energy and metal (`+0x8C`/`+0x98`) of all ten records from the skirmish settings
   (`0x465EF5..0x465F1A`), and the host's settings for an unseated record are its own menu's, not
@@ -131,11 +132,13 @@ V is the lowest record index in 0–9 that the recording does not seat. A skirmi
   `+0x98` until the apply wrote them].
 - **No pacing stamp needed.** The pacing gate `0x495230` takes the smallest `+0x18` among active type-3 records whose live count `+0x144` is above 0 (`0x4952CF..0x495303`, engine map). V never has a unit, so it never holds the host back.
 
-**V's block.** V has an empty unit block of its own. The level init gives contiguous ranges of `main+0x37EE6` slots to all ten records, active or not:
+**V's block.** V has an empty unit block, which the seating writes: `+0x67` = 1 and `+0x6B` = 0, first above last, and the ID range `+0x6F` = `+0x71` = 1. The level init gives contiguous ranges of `main+0x37EE6` slots to records 0–9 only, active or not, so record 10 gets none of its own:
 
 - The loop runs to `cmp edi,0xA` at `0x48592B`, writing `+0x67`/`+0x6B` at `0x4858BD`/`0x4858E0`.
 - In a skirmish the order is pointer order, from `0x485940`'s non-network branch.
 - [DISASSEMBLED; the engine map's *Replay player names and unit-block ordering* says the same: "The loop does not omit spectators".]
+
+Every walk of the controlled or viewed block tests `first > last` before its first unit, and the ID cycle `0x48C190` reads slot 1 alone for the range [1, 1] (the ten-seat note §3).
 
 ### 1.2 Why selection and orders are inert by construction
 
@@ -182,7 +185,9 @@ The engine map says the SKIRMISH seat count `main+0x38D81` is 4 by default: "Tha
 - S2 refuses a ten-seat recording, with a log line that names the reason.
 - The multiplayer slice designs the full house, where ten seats are common: a borrowed seat with sink gates on the order issuers and selection, or more records.
 
-### 1.4 Record 10 is not a seat
+### 1.4 Record 10 is the engine's no-player record
+
+In a game the engine never seats record 10; on a puppet level the replay seats the viewer there (§1.1).
 
 - The level init assigns blocks to indices 0–9 only (`0x48592B`), so record 10 has none.
 - Every player loop treats `+0x146` = 10 as no player:
@@ -971,7 +976,7 @@ Taken 2026-09-30: D1 by the owner as recommended (the slice note's *Decided 2026
 - **When UNITINFO is loaded**, before or after the Start's seat fill. This decides where the unit-defs check goes.
 - **Where GameingState `+0x204` (the TNT path) is written.** It is not in the `.ota` reader `0x435DA0`, so the TNT-stem check sits at S-d.
 - **Readers of `+0x2A3C`** beyond the radar pass's "fewer than 2". Also `0x479760`'s test (the engine map: role not traced).
-- **The draw `0x46A16B`**: what a watcher skips [the controlled player's resource bar, INFERRED]. The resource bar itself reads the viewed record (`main+0x2A43`, `0x468E4B`) and clamps what it shows to the storages `+0xA4`/`+0xA8` (`0x468F14..0x468F6C`), which the player init zeroes (`0x46478F`, `0x464795`): so in V's view it shows 0 whatever V's record holds. V's record itself held what the level start `0x465E30` read from V's skirmish settings entry, which the SKIRMISH screen does not fill (MEASURED 1365/16385 and 11/10); the replay zeroes V's energy and metal at the first step since S3b. Which other HUD elements read `+0x2A42` is open.
+- **The draw `0x46A16B`**: what a watcher skips [the controlled player's resource bar, INFERRED]. The resource bar itself reads the viewed record (`main+0x2A43`, `0x468E4B`) and clamps what it shows to the storages `+0xA4`/`+0xA8` (`0x468F14..0x468F6C`), which the player init zeroes (`0x46478F`, `0x464795`): so in V's view it shows 0 whatever V's record holds. V's energy and metal are 0 as well: the player init zeroes them (`0x46476B`, `0x46477D`), and the level start `0x465E30` stops at record 9 (`0x465F87`). Which other HUD elements read `+0x2A42` is open.
 - **The explored map** is monotonic (set only) [INFERRED].
 - **The death route** (§2.7) belongs to the events research. So does whether recorded hits are replayed at all.
 - **The cargo loop's order** (§2.2 row 9) is shared with the carried-units research. It is not established whether a mod's unit survives 30 000 damage.

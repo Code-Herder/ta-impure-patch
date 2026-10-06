@@ -112,6 +112,10 @@ REC_WRECK_BYTES = 0x30                    # a wreck-pool record's image
 REC_DEATHS_MAX = 32
 REC_ORDERS_LENGTH = 0xFFFFFFFE
 REC_PLAYERS = 10
+# REC_VIEWER: the record a playing seats the viewer in, the engine's no-player record 10, which no
+# recording carries; and its bit of the explored map, its +0x146, 10 by the seat activation
+# (0x46434D) (tagpu_replay.c, THE VIEWER'S SEAT)
+VIEWER = VIEWER_BIT = 10
 REC_UNIT_BITS = (REC_UNIT_DWORDS + 7) // 8
 REC_PLAYER_BITS = (REC_PLAYER_DWORDS + 7) // 8
 REC_UNIT_DELTA_HEAD = (2 + REC_UNIT_BITS + 3) & ~3
@@ -1533,17 +1537,6 @@ def cmd_pov(path, check):
     return 1 if bad else 0
 
 
-def viewer_of(h):
-    """V, the record a playing seats the viewer in: the lowest the recording does not seat
-    (tagpu_replay.c, validate)."""
-    seated = {p["index"] for p in h["players"]}
-    free = [i for i in range(REC_PLAYERS) if i not in seated]
-    if not free:
-        raise Unreadable("the recording seats all ten records, so a playing has no seat for the "
-                         "viewer and refuses it")
-    return free[0]
-
-
 def dump_world(path, h):
     """A dump's world, read with its own header's tables and the recording's dimensions."""
     dbl, dstop = blocks(path)
@@ -1554,7 +1547,7 @@ def dump_world(path, h):
     return dh, snapshot_world(dbl[1][3], h["slots"], dh["tables"], feature_dims(h))
 
 
-def mapped_hold(w, bit):
+def mapped_hold(w, bit=VIEWER_BIT):
     """The explored map less the viewer's bit, which a puppet host keeps set in every entry
     (tagpu_replay.c, recorded_put): masked on both sides of a puppet compare."""
     if bit >= 16:
@@ -1564,17 +1557,17 @@ def mapped_hold(w, bit):
         struct.pack_into("<H", w.mapped, i, v)
 
 
-def puppet_view(w, viewer, radar=False):
+def puppet_view(w, radar=False):
     """A world less what a puppet host keeps as its own (demo-recorder-s2-host.md §1.1, §2.3): the
     contact bits +0x110 8-10 and 12, which its radar pass computes for its own view (D1) -- bit 12
     only, with `radar`, when the host views the player the recording viewed, whose radar picture
     it computes from the same inputs, and loop 4 of the pass, which sets bit 12, runs only for a
-    type 1 or 2 owner; the viewer's record V; and the controllers and the controlled and viewed
-    players, which are the host's seating."""
+    type 1 or 2 owner; and the controllers and the controlled and viewed players, which are the
+    host's seating. Every recorded record is compared: the viewer's is record 10, which neither a
+    recording nor a dump carries."""
     mask = 0x1000 if radar else 0x1700
     for img in w.units.values():
         struct.pack_into("<I", img, U_STATE, struct.unpack_from("<I", img, U_STATE)[0] & ~mask)
-    w.players[viewer] = bytearray(REC_PLAYER_IMAGE)
     w.ctl = [0] * REC_PLAYERS
     w.view = [0, 0]
 
@@ -1748,12 +1741,10 @@ def cmd_compare(path, dumps, puppet=False, timeline=0):
         radar = False
         if puppet:
             radar = dw.view[1] == w.view[1]
-            # V's bit is the host's record's, as recorded_put takes it (the dump is the host's)
-            bit = dw.players[viewer_of(h)][PL_MAPBIT]
-            mapped_hold(w, bit)
-            mapped_hold(dw, bit)
-            puppet_view(w, viewer_of(h), radar)
-            puppet_view(dw, viewer_of(h), radar)
+            mapped_hold(w)
+            mapped_hold(dw)
+            puppet_view(w, radar)
+            puppet_view(dw, radar)
             puppet_hold(w, held)
             globals_hold(w, gslots)
             globals_hold(dw, gslots)

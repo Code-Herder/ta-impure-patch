@@ -18,7 +18,7 @@ typedef struct PuppetTable {
                                                of it: the loader's feature calls end before
                                                the load word's bit 1 that the first step
                                                waits on (0x497C5F, 0x498342)                */
-    unsigned char seat[PUPPET_PLAYERS];     /* the record is a puppet seat, V included      */
+    unsigned char seat[PUPPET_PLAYERS];     /* the record is a puppet seat                  */
     unsigned char local[PUPPET_PLAYERS];    /* getter 75's answer for its units             */
     unsigned char engine_cells;             /* the footprint writers' writes stand          */
 } PuppetTable;
