@@ -5337,9 +5337,13 @@ def _replay_start(args, verb, tail=""):
     # a multiplayer recorder holds every remote player, human or AI, as 3 (validate_header)
     if any(p["controller"] not in ((1, 2, 3) if network else (1, 2)) for p in seats):
         die(f"{args.recording} has a seat that was neither human nor AI")
-    smap = h.get("settings_map")
+    # a skirmish starts from the SKIRMISH screen's map, which its recording keeps as the settings
+    # map; a network game's map is the battleroom's, its level's own, while its settings map is
+    # whatever the host's SKIRMISH screen last held
+    smap = h.get("map") if network else h.get("settings_map")
     if not smap:
-        die(f"{args.recording} does not name its map as the skirmish settings did")
+        die(f"{args.recording} does not name its map"
+            + ("" if network else " as the skirmish settings did"))
     if args.perspective is not None and args.perspective not in {p["index"] for p in seats}:
         die(f"--perspective {args.perspective}: {args.recording} seats records "
             f"{', '.join(str(p['index']) for p in seats)}")
