@@ -614,12 +614,10 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
         snprintf(why, cap, "the recording lacks the map or the options");
         return 0;
     }
+    /* and at most ten, every record a game seats: the reader refuses an eleventh (RT_PLAYER), and
+       the viewer takes record 10 (THE VIEWER'S SEAT) */
     if (h->nseats < 2) {
         snprintf(why, cap, "it seats %u players", h->nseats);
-        return 0;
-    }
-    if (h->nseats >= REC_PLAYERS) {
-        snprintf(why, cap, "it seats all ten records, which leaves the viewer none");
         return 0;
     }
     /* a multiplayer recording seats every remote player, human or AI, as 3, as its recorder held

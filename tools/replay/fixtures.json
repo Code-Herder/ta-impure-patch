@@ -129,6 +129,14 @@
    "end": 900,
    "takeover": {"player": 0, "switches": {"cheats": true}, "type": "+iwin", "dump": 60,
                 "checks": ["judge", "line", "fork", "victory"]}
+  },
+  "tenseat": {
+   "load": "replay-tenseat-load.json",
+   "steps": [[900, "type", "+los"]],
+   "end": 1800,
+   "watch": true,
+   "forks": true,
+   "takeover": {"player": "controlled", "checks": ["judge", "line", "fork"]}
   }
  },
  "broad": {

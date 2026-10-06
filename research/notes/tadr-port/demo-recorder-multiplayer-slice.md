@@ -2,7 +2,7 @@
 
 ## Status
 
-Started 2026-10-04. This is the **multiplayer slice** in the [recorder plan](demo-recorder.md#milestones-and-delivery-order), separate from S5's skirmish browser and controls. No multiplayer recorder change has landed. The work branch captures an observed native world and its separate authoritative contribution ledger when recording is enabled (`tagpu_recorder.c:mp_record_begin`). Its puppet host plays such a file through the [owner-authority materializer](#owner-authority-materializer), seeks it ([*The seek of a multiplayer recording*](#the-seek-of-a-multiplayer-recording)) and takes it over ([*The takeover of a multiplayer recording*](#the-takeover-of-a-multiplayer-recording)); perspective streams and ten seats are unfinished.
+Started 2026-10-04. This is the **multiplayer slice** in the [recorder plan](demo-recorder.md#milestones-and-delivery-order), separate from S5's skirmish browser and controls. No multiplayer recorder change has landed. The work branch captures an observed native world and its separate authoritative contribution ledger when recording is enabled (`tagpu_recorder.c:mp_record_begin`). Its puppet host plays such a file through the [owner-authority materializer](#owner-authority-materializer), seeks it ([*The seek of a multiplayer recording*](#the-seek-of-a-multiplayer-recording)) and takes it over ([*The takeover of a multiplayer recording*](#the-takeover-of-a-multiplayer-recording)); perspective streams are unfinished. Ten seats are stage 5's: the viewer takes player record 10 on every playback ([the ten-seat note](demo-recorder-ten-seats.md)).
 
 The slice's product scope is a recording file sufficient on its own for playback, with contributions from every Impure peer: each player's effective perspective and authoritative state, communication, then playback and takeover. The [product contract](demo-recorder.md#multiplayer-contributions) requires contributions even from a peer that opts out of saving its own recording. A live multiplayer game has no rewind timeline.
 
@@ -1579,8 +1579,10 @@ each dump checked against another view's expectation fails.
 The skirmish `secondary-orders --cover` regression passes all 25 checks on the
 build carrying 4a and 4b.
 
-Still open after stage 4: ten seats without a spare viewer seat, and the
-traffic budget, migration and cross-address discovery, in that order.
+Stage 5 seats the viewer in player record 10 on every playback, so a recording
+that seats all ten records plays ([the ten-seat note](demo-recorder-ten-seats.md)).
+Still open: the traffic budget, migration and cross-address discovery, in that
+order.
 
 A player who leaves the game is a lifecycle landing of its own (*Named
 residuals*).

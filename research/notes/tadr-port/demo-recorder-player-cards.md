@@ -42,7 +42,7 @@ An unavailable definition produces unknown status, not a claim that the commande
 
 ## Sight, independently of the camera
 
-Sight queues a recorded seat; Full map queues the playback's spare viewer seat. A pending seek
+Sight queues a recorded seat; Full map queues the viewer's record 10. A pending seek
 or timeline boundary has priority. The game-thread frame visit first applies the display state
 for the current iteration, then handles Sight, including paused frames and EOF.
 

@@ -5286,7 +5286,7 @@ REPLAY_REQUEST = "tagpu_replay.play"
 REPLAY_TRIGGER = "tagpu_replay.trigger"
 REPLAY_RX = re.compile(r"replay: (playing|not playing)\b(.*)")
 REPLAY_PLAYING_RX = re.compile(r"replay: playing ([A-Za-z0-9_-]+):")
-REPLAY_SEATS_MAX = 9    # the viewer needs a record of its own (decision D2)
+REPLAY_SEATS_MAX = 10   # every record a game seats: the viewer takes record 10 (tagpu_replay.c)
 REPLAY_SEEK_TIMEOUT = 120.0
 REPLAY_TAKEOVER_TIMEOUT = 120.0
 REPLAY_NAME_RX = re.compile(r"[A-Za-z0-9_-]{1,39}")    # the DLL's name rule for a dump
@@ -5333,7 +5333,7 @@ def _replay_start(args, verb, tail=""):
             f"(mode {h.get('mode')})")
     if not 2 <= len(seats) <= REPLAY_SEATS_MAX:
         die(f"{args.recording} seats {len(seats)} players: a replay plays 2 to "
-            f"{REPLAY_SEATS_MAX}, since the viewer takes a record of its own")
+            f"{REPLAY_SEATS_MAX}")
     # a multiplayer recorder holds every remote player, human or AI, as 3 (validate_header)
     if any(p["controller"] not in ((1, 2, 3) if network else (1, 2)) for p in seats):
         die(f"{args.recording} has a seat that was neither human nor AI")

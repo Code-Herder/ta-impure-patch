@@ -1,6 +1,7 @@
 # Demo recorder, stage 5: ten recorded seats
 
-Status: **design, 2026-10-06; not implemented.** Stage 5 of the
+Status: **design, 2026-10-06; implemented 2026-10-06 on the stage branch (§4, both commits of
+§5), §5's runs not yet made.** Stage 5 of the
 [multiplayer slice](demo-recorder-multiplayer-slice.md) ("Still open after stage 4: ten seats
 without a spare viewer seat"). It supersedes decision D2 of the
 [puppet host note](demo-recorder-s2-host.md) (§1.3: refuse a ten-seat recording) and corrects §1.4
@@ -342,3 +343,21 @@ implementation; the landing review should have its answer.
 | explosion's type-3 owner gate | `0x49A01D..0x49A047` | DISASSEMBLED |
 | music event 5 on killer = controlled | `0x4869D1..0x4869EB` | DISASSEMBLED; the meaning of `+0xF4` [INFERRED] |
 | ten records seated in a skirmish; recording plays with 0 corrections | `replay-tenseat-load.json` | MEASURED 2026-10-06 (coordinator) |
+
+## 10. As built
+
+What the build settled that §4 left open, in `tagpu_replay.c` unless stated:
+
+- `s_vbuf` is one interlocked word with four states: OFF, ARMED (the seating, with the lowest
+  recorded seat copied beside it in `s_vlowest`), READY and FAILED (the loader hook). The first
+  step's `first_checks` refuses anything but READY at the Start ("the viewer's record could not be
+  prepared"), and `viewer_init` runs only on READY, so a live rewind, which never arms the hook,
+  fills record 10 through the seek's R14 and sets its deadlines through R15.
+- The hook at `0x4919C8` is installed with the replay's other call sites, all or none, before the
+  fill's site: no Start can seat record 10 without it.
+- `viewer_seat` and `viewer_take` (record 10 kept whole, once a level) are shared by the seating
+  and `rw_prepare`; `viewer_free` is `validate_engine`'s, with the buffers test at a Start only.
+- `tagpu_fogwide.c` and `tagpu_gui_hook.c` bound the index with constants of their own, 11
+  (`PLAYER_RECS`, `HUD_NPLAYERS`), since neither includes the recording format header.
+- The level's end zeroes both `+0x2A42` and `+0x2A43` when either names record 10.
+- Record 10 is `main+0x2851` (§2, `0x464A0C`); the `leave` row is `viewerrec`.

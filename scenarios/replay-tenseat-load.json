@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The demo recorder's ten-seat fixture: all ten records seated (the human and nine AIs) on Core Prime Industrial Area, a ten-player map, so no record is left for the replay's viewer (demo-recorder-ten-seats.md).",
+ "description": "The demo recorder's ten-seat fixture: all ten records seated (the human and nine AIs) on Core Prime Industrial Area, a ten-player map; the replay's viewer takes record 10, outside them (demo-recorder-ten-seats.md).",
  "setup": {
   "map": "Core Prime Industrial Area",
   "res": "1024x768",

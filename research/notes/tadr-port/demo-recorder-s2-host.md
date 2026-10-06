@@ -2,7 +2,7 @@
 
 ## Status
 
-**Desk research, 2026-09-30**, for the [skirmish slice](demo-recorder-skirmish-slice.md)'s S2, with the owner's decisions in that note's *Decided 2026-09-30*. S2a records what its header and applier need. **S2b built the puppet host on this page**, and where the build departed from it or proved it wrong, the section now says what was built and why: the radar pass's 30-tick deadline (§2.3), the damage gate at the apply rather than the sender (§2.6), the reaper and bit 14 (§2.7), the explored map's size (§2.9), and the wind (row 13).
+**Desk research, 2026-09-30**, for the [skirmish slice](demo-recorder-skirmish-slice.md)'s S2; V's record is stage 5's ([the ten-seat note](demo-recorder-ten-seats.md)), which §1.1, §1.3, §1.4 and D2 follow, with the owner's decisions in that note's *Decided 2026-09-30*. S2a records what its header and applier need. **S2b built the puppet host on this page**, and where the build departed from it or proved it wrong, the section now says what was built and why: the radar pass's 30-tick deadline (§2.3), the damage gate at the apply rather than the sender (§2.6), the reaper and bit 14 (§2.7), the explored map's size (§2.9), and the wind (row 13).
 
 It covers five tasks:
 
@@ -180,10 +180,7 @@ The engine map says the SKIRMISH seat count `main+0x38D81` is 4 by default: "Tha
 
 **A count above 10 overruns.** The seat fill loops to that count (`0x47A8A4..0x47A8BE`) and would write past the ten records [INFERRED from the loop]. The count is input the puppet host bounds itself.
 
-**Consequence.** A skirmish recording can seat all ten records and leave no index for V. Record 10 cannot serve (§1.4). **Decision D2** (§8):
-
-- S2 refuses a ten-seat recording, with a log line that names the reason.
-- The multiplayer slice designs the full house, where ten seats are common: a borrowed seat with sink gates on the order issuers and selection, or more records.
+**Consequence.** A skirmish recording can seat all ten records. V is record 10 on every playback (§1.1, [the ten-seat note](demo-recorder-ten-seats.md)), so a ten-seat recording plays like any other: **decision D2** (§8) is superseded.
 
 ### 1.4 Record 10 is the engine's no-player record
 
@@ -939,7 +936,7 @@ The console's `Share*`/`SetShare*` (level 1) change it in play, so S2 should rec
    - `0x4161F0` is a network-statistics helper called by `NetStats` (`0x417570`).
    - `0x416280` is `AI`, level 4, table row `0x501FD0`. It calls `0x463C60(2)` when the record's type is 1 and `0x463C60(1)` otherwise, so a type-3 record becomes 1 (`0x4162CF..0x4162FE`).
 2. **The receive timeout is unreachable in a skirmish.** This closes the completeness note's open question (§2.5).
-3. **The skirmish seat count is 3–10** (§1.3). The count is registry input read without a bound. A recording can seat all ten records.
+3. **The skirmish seat count is 3–10** (§1.3). The count is registry input read without a bound. A recording can seat all ten records, and plays with V in record 10.
 4. **`0x430F00` is the settings persist** (§6.1). Its role is not stated in the engine map.
 5. **YARD_OPEN, the refusal, the re-claim and the passability refresh** (§5.1). Open item 2 can be closed with §5.2's recipe.
 6. **The typed-command entry is `0x417B50`.** The executor `0x4B7900` also runs the level's AI script (§3.2).
@@ -961,7 +958,7 @@ Taken 2026-09-30: D1 by the owner as recommended (the slice note's *Decided 2026
 | | Decision | Taken |
 |---|---|---|
 | **D1** | The contact bits on a puppet host | Display state: the radar pass computes them for the chosen perspective; the applier holds the recorded bits for takeover; the comparison masks them. This amends 2026-09-29's "a replay shows the recording viewer's radar picture": that perspective still shows it, computed by the engine. |
-| **D2** | Ten-seat recordings | S2 refuses them by name; the multiplayer slice designs the full house. |
+| **D2** | Ten-seat recordings | S2 refused them by name. Superseded 2026-10-06 by [the ten-seat note](demo-recorder-ten-seats.md): V is record 10 on every playback, and ten-seat recordings play. |
 | **D3** | The puppet table's class | Rebuilt from the header, never recorded or restored (`SIM_CONTENT`'s shape), in a new `sim` puppet module; the recorder stays `presentation`. |
 | **D4** | Typed commands on a puppet host | Refuse all, at `0x417B50`. No allow-list for display commands. |
 | **D5** | The fire spread and the meteors | The sink gate at `0x489BB0` makes both harmless to puppets. Skip the shower, whose stones come from the recording as events. Features: S3a records them, and a puppet host makes no feature change of its own (the feature gates, [the slice](demo-recorder-skirmish-slice.md#s3a-features-and-wrecks)). |

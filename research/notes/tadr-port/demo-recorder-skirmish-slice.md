@@ -533,7 +533,7 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
   - Four gates cover the rest of the viewer's input: typed commands (`0x417B50`, every one
     refused), the debug keys (`0x4956C0`), the resource transfer (`0x464C60`) and saving
     (`0x4326B0`).
-  - A recording that seats all ten records leaves no seat for the viewer, and is refused by name.
+  - A recording may seat all ten records: the viewer's seat is record 10, outside them.
 - **What the viewer sees.** Without `--perspective`, everything: V's sight counters are filled, V's
   bit is set in every cell of the explored map, and the radar pass marks every unit for a watcher.
   With `--perspective N`, `+0x2A43` is record N and the host's own radar pass computes N's radar
