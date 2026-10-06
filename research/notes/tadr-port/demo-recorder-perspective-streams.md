@@ -354,7 +354,12 @@ ground, which deselects under Interface Type 1; an arrow key held for 60 ticks; 
 injected `pclick`, `prclick` and `pmove` tokens are used rather than `click`, `rclick` and
 `mouse:`, which fall back to `SendInput` and the desktop's pointer when the shield is down.
 
-**Every selection is made and cleared before GameTime 301**, the earliest point the harness draws
+**The steps are few and early because each costs about 60 ticks at the test speed** (MEASURED
+2026-10-06: steps planned 15-30 ticks apart for GameTime 120-270 ran at 183-303, and a drag whose
+press, move and release were separate steps fired in one poll and selected nothing). The drag is one
+step: the engine takes one mouse record per frame (E1), so the press, the moves and the release
+still reach it on successive frames. **Every selection is made and cleared before GameTime 301**,
+the earliest point the harness draws
 for the images gate and the round trips (`tareplay.py gametimes`). A selection held by the human on
 the recording machine is the viewer's own interface state there: the unit panel, the desktop GUI
 `main+0x561`, the game-screen state `main+0x37E9E`/`+0x37EC1` and the cursor `0x51F4AE`/`0x51F4B2`
