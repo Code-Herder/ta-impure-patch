@@ -10,8 +10,10 @@ applied by the recorder's capture of T (tagpu_replay.c, THE CLOCK). A unit, play
 owner has described yet holds its level-start image. The features are the primary stream's at
 every dump, corpses included (tagpu_replay.c, THE DEATHS ON A MULTIPLAYER LEVEL). The grid's unit
 slots and yard bits are the engine's own on such a level, its units following their owners: they
-are checked instead of compared -- every slot a dump cell names is a live unit there, and every
-set yard bit lies inside a live structure's footprint. An order whose target its owner has
+are checked instead of compared -- every slot a dump cell names is a live unit there whose
+footprint holds the cell, every cell of a live mobile unit's footprint names it (a structure's
+yardmap leaves some of its cells open), and every set yard bit lies inside a live structure's
+footprint. An order whose target its owner has
 already destroyed names no target: a unit's death keeps its owner's clock, so another owner's
 image can still name it, and the host cannot link a unit it no longer holds (ord_target); the
 owner approved that expectation on 2026-10-06. The puppet holds of `tarec compare
@@ -86,26 +88,39 @@ def compose(w, start, applied, seats):
 STRUCTURE = 1 << 29     # unit +0x110: a structure, whose yard bits a footprint writer sets
 
 
+def rect(u):
+    """The cells a unit's footprint covers: +0x76/+0x78 by +0x7E/+0x80, i16 each."""
+    x, z = struct.unpack_from("<hh", u, 0x76)
+    w, h = struct.unpack_from("<hh", u, 0x7E)
+    return {(cx, cz) for cx in range(x, x + w) for cz in range(z, z + h)}
+
+
+def structure(u):
+    return struct.unpack_from("<I", u, 0x110)[0] & STRUCTURE
+
+
 def footprints(dw):
-    """Every cell a live structure of the dump covers: +0x76/+0x78 by +0x7E/+0x80, i16 each."""
-    cells = set()
-    for u in dw.units.values():
-        if not struct.unpack_from("<I", u, 0x110)[0] & STRUCTURE:
-            continue
-        x, z = struct.unpack_from("<hh", u, 0x76)
-        w, h = struct.unpack_from("<hh", u, 0x7E)
-        cells.update((cx, cz) for cx in range(x, x + w) for cz in range(z, z + h))
-    return cells
+    """Every cell a live structure of the dump covers."""
+    return set().union(*(rect(u) for u in dw.units.values() if structure(u)))
 
 
 def occupancy(w, dw):
     """The grid's unit slots and yard bit are the engine's on a mode-3 level (tagpu_puppet_begin,
-    engine_cells): the expected cells take the dump's, every slot a dump cell names must be a live
-    unit there, and every set yard bit must lie inside a live structure's footprint. The
-    differences those checks find."""
+    engine_cells): the expected cells take the dump's, and the module's checks stand in for the
+    comparison. The differences those checks find."""
     out = []
     cb = tarec.REC_CELL_BYTES
     yards = footprints(dw)
+    rects = {slot: rect(u) for slot, u in dw.units.items()}
+    for slot, u in sorted(dw.units.items()):
+        if structure(u):
+            continue
+        for cx, cz in sorted(rects[slot]):
+            i = (cz * w.gw + cx) * cb
+            if not (0 <= cx < w.gw and 0 <= i < len(dw.grid)) or \
+                    slot not in struct.unpack_from("<HH", dw.grid, i):
+                out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
+                           "does not name it")
     for i in range(0, len(dw.grid), cb):
         c = i // cb
         xz = (c % w.gw, c // w.gw)
@@ -114,6 +129,8 @@ def occupancy(w, dw):
         for slot in struct.unpack_from("<HH", dw.grid, i):
             if slot and slot not in dw.units:
                 out.append(f"occupancy: cell {xz} names slot {slot}, not live")
+            elif slot and xz not in rects[slot]:
+                out.append(f"occupancy: cell {xz} names slot {slot}, outside its footprint")
         if dw.grid[i + 0x0C] & 2 and xz not in yards:
             out.append(f"occupancy: cell {xz} holds a yard bit outside every live structure")
     return out

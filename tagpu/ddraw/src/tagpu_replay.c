@@ -266,6 +266,7 @@ static int s_engine_cells;          /* the grid's unit slots and yard bits are t
                                        a multiplayer recording's level (tagpu_puppet_begin) */
 enum { MP_ARENA_OFF, MP_ARENA_ARMED, MP_ARENA_WORKING, MP_ARENA_READY, MP_ARENA_FAILED };
 static struct { RecMpRoster roster; volatile LONG state; } s_mp_arena;
+#define MP_CREATE 29                /* a create's 28 argument bytes, then 1 once it returned     */
 /* THE MULTIPLAYER MATERIALIZER's state */
 static struct {
     int             on;             /* this level plays a mode-3 recording                       */
@@ -275,6 +276,7 @@ static struct {
     unsigned        slots;
     const struct Lv* L;             /* the step's level, for the action callback                 */
     unsigned char*  held;           /* [slots] live here, no composed image yet                  */
+    unsigned char*  create;         /* [slots * MP_CREATE] a held unit's create, for a seek      */
     unsigned char*  live;           /* [slots] the composed world's                              */
     uint32_t*       unit;           /* [slots * REC_UNIT_DWORDS]                                 */
     RecList*        list;           /* [slots * 2]                                               */
@@ -282,6 +284,12 @@ static struct {
     uint32_t        player[REC_PLAYERS][REC_PLAYER_DWORDS];
     unsigned char   actor[REC_PLAYERS]; /* the record is an actor's: its owner describes it      */
     RecWorld        W;
+    unsigned char*  s_live;         /* the level-start composed world, which a seek composes on  */
+    uint32_t*       s_unit;
+    RecList*        s_list;
+    uint32_t        s_player[REC_PLAYERS][REC_PLAYER_DWORDS];
+    int             compose;        /* the actions compose data only (mp_rebuild)                */
+    unsigned        rebuilt, croots;
     struct MpHeld*  q;              /* envelopes read and not yet applied, in ledger order       */
     unsigned        nq, capq;
     unsigned        observed, ocorpse;  /* the recorder's deaths, and those with a corpse level   */
@@ -3378,6 +3386,12 @@ static void mp_end(void)
     unsigned i;
     if (s_mp.list)
         for (i = 0; i < s_mp.slots * 2; i++) free(s_mp.list[i].img);
+    if (s_mp.s_list)
+        for (i = 0; i < s_mp.slots * 2; i++) free(s_mp.s_list[i].img);
+    free(s_mp.create);
+    free(s_mp.s_live);
+    free(s_mp.s_unit);
+    free(s_mp.s_list);
     if (s_mp.life) tagpu_recmp_lifecycle_end(s_mp.life);
     free(s_mp.held);
     free(s_mp.live);
@@ -3436,9 +3450,14 @@ static int mp_begin(const Lv* L, const RecWorld* W)
     s_mp.unit = malloc((size_t)W->slots * REC_UNIT_IMAGE);
     s_mp.list = calloc((size_t)W->slots * 2, sizeof *s_mp.list);
     s_mp.nodes = malloc((size_t)RECMP_ORDER_MAX * REC_ORDER_IMAGE);
+    s_mp.create = malloc((size_t)W->slots * MP_CREATE);
+    s_mp.s_live = malloc(W->slots);
+    s_mp.s_unit = malloc((size_t)W->slots * REC_UNIT_IMAGE);
+    s_mp.s_list = calloc((size_t)W->slots * 2, sizeof *s_mp.s_list);
     s_mp.on = 1;
     if (W->slots != L->nslots || !s_mp.life || !s_mp.held || !s_mp.live || !s_mp.unit ||
-        !s_mp.list || !s_mp.nodes) {
+        !s_mp.list || !s_mp.nodes || !s_mp.create || !s_mp.s_live || !s_mp.s_unit ||
+        !s_mp.s_list) {
         mp_fail("the materializer could not be set up for %u slots", W->slots);
         return 0;
     }
@@ -3450,10 +3469,14 @@ static int mp_begin(const Lv* L, const RecWorld* W)
         if (seat < REC_PLAYERS) s_mp.actor[seat] = 1;
     }
     for (i = 0; i < W->slots * 2; i++)
-        if (!mp_list_put(&s_mp.list[i], W->list[i].img, W->list[i].n)) {
+        if (!mp_list_put(&s_mp.list[i], W->list[i].img, W->list[i].n) ||
+            !mp_list_put(&s_mp.s_list[i], W->list[i].img, W->list[i].n)) {
             mp_fail("no memory for the level-start order lists");
             return 0;
         }
+    memcpy(s_mp.s_live, W->live, W->slots);
+    memcpy(s_mp.s_unit, W->unit, (size_t)W->slots * REC_UNIT_IMAGE);
+    memcpy(s_mp.s_player, W->player, sizeof s_mp.s_player);
     return 1;
 }
 
@@ -3493,6 +3516,8 @@ static int mp_create(const Lv* L, const RecMpLifeAction* a)
     memcpy(pos, b + 12, 12);
     if (id - 1 != a->slot || !make(L, a->slot, b[6], type, pos, finished, b[7] & 3u, 0))
         return 0;
+    memcpy(s_mp.create + (size_t)a->slot * MP_CREATE, b, 28);
+    s_mp.create[(size_t)a->slot * MP_CREATE + 28] = 0;
     s_mp.held[a->slot] = 1;
     s_mp.live[a->slot] = 0;
     mp_lists_clear(a->slot);
@@ -3508,6 +3533,8 @@ static int mp_created(const Lv* L, const RecMpLifeAction* a)
     water = a->image[24];
     if (water > WATER_MAX) return 0;
     memcpy(unit_at(L, a->slot) + U_WATER, &water, 4);
+    s_mp.create[(size_t)a->slot * MP_CREATE + 24] = (unsigned char)water;
+    s_mp.create[(size_t)a->slot * MP_CREATE + 28] = 1;
     return 1;
 }
 
@@ -3566,6 +3593,65 @@ static int mp_root(const Lv* L, const RecMpLifeAction* a)
     return 1;
 }
 
+/* THE SEEK OF A MULTIPLAYER RECORDING. The composed world of iteration T is what the forward
+   playing holds when the world holds iteration T: every envelope read through T, those of T
+   applied up to its first post-capture root batch, the rest of T held (THE CLOCK). mp_rebuild makes
+   it so by construction: the level-start composed world, a fresh consumer, every envelope from
+   the first (recr_mp_apply from ordinal 0, the reader standing at T), then mp_apply_held and
+   mp_authority as mp_step_image calls them -- the same reads, the same order, the same split.
+   Only the actions differ: here they compose data and touch no engine state (mp_compose), since
+   the seek then makes every unit of the composed world itself, as it makes a skirmish's (R7),
+   and a unit created but not yet described from its create's own arguments (mp_make_held). A
+   private root is not played, as a skirmish seek plays no event before T. What a refusal leaves:
+   mp_fail stops the playing, so nothing composed half is ever applied. */
+static int mp_compose(const Lv* L, const RecMpLifeAction* a)
+{
+    unsigned char* c = s_mp.create + (size_t)a->slot * MP_CREATE;
+    switch (a->action) {
+    case RECMP_LIFE_BOOTSTRAP:
+    case RECMP_LIFE_IMAGE:
+        if (a->bytes != REC_UNIT_IMAGE) break;
+        memcpy(s_mp.unit + (size_t)a->slot * REC_UNIT_DWORDS, a->image, REC_UNIT_IMAGE);
+        s_mp.live[a->slot] = 1;
+        s_mp.held[a->slot] = 0;
+        return 1;
+    case RECMP_LIFE_ABSENCE:
+        s_mp.live[a->slot] = 0;
+        return 1;
+    case RECMP_LIFE_CREATE_BEGIN:
+        if (a->bytes != 28) break;
+        memcpy(c, a->image, 28);
+        c[28] = 0;
+        s_mp.held[a->slot] = 1;
+        s_mp.live[a->slot] = 0;
+        mp_lists_clear(a->slot);
+        return 1;
+    case RECMP_LIFE_CREATE_END:
+        if (a->bytes != 28) break;
+        if (s_mp.held[a->slot]) {
+            c[24] = a->image[24];
+            c[28] = 1;
+        }
+        return 1;
+    case RECMP_LIFE_DEATH_BEGIN:
+        return 1;
+    case RECMP_LIFE_DEATH_END:
+        if (a->bytes != 12 + REC_UNIT_IMAGE) break;
+        s_mp.live[a->slot] = 0;
+        s_mp.held[a->slot] = 0;
+        mp_lists_clear(a->slot);
+        return 1;
+    case RECMP_LIFE_ROOT:
+        s_mp.croots++;
+        return 1;
+    default:
+        break;
+    }
+    mp_fail("GameTime %u: an owner action %u of slot %u (%u bytes) cannot be composed", L->now,
+            a->action, a->slot, a->bytes);
+    return 0;
+}
+
 static int mp_action(void* ctx, const RecMpLifeAction* a)
 {
     const Lv* L = s_mp.L;
@@ -3575,6 +3661,7 @@ static int mp_action(void* ctx, const RecMpLifeAction* a)
         mp_fail("GameTime %u: an owner action names slot %u, outside the level", L->now, a->slot);
         return 0;
     }
+    if (s_mp.compose) return mp_compose(L, a);
     switch (a->action) {
     case RECMP_LIFE_BOOTSTRAP:
         if (a->bytes == REC_UNIT_IMAGE && !host_live(L, a->slot) &&
@@ -3774,6 +3861,66 @@ static const RecWorld* mp_world(const RecWorld* W)
     for (p = 0; p < REC_PLAYERS; p++)
         if (s_mp.actor[p]) memcpy(s_mp.W.player[p], s_mp.player[p], sizeof s_mp.player[p]);
     return &s_mp.W;
+}
+
+/* the composed world of iteration T, the reader standing at T (THE SEEK OF A MULTIPLAYER
+   RECORDING); 1 composed, 0 the playing stopped */
+static int mp_rebuild(const Lv* L, unsigned T)
+{
+    const RecHeader* h = recr_header(s_rd);
+    char why[160];
+    unsigned i;
+    if (s_mp.failed) return 0;
+    tagpu_recmp_lifecycle_end(s_mp.life);
+    s_mp.life = tagpu_recmp_lifecycle_begin(&h->mp, &h->mp_seats, L->ndefs);
+    if (!s_mp.life) {
+        mp_fail("no memory for the seek's owner consumer");
+        return 0;
+    }
+    memcpy(s_mp.live, s_mp.s_live, s_mp.slots);
+    memcpy(s_mp.unit, s_mp.s_unit, (size_t)s_mp.slots * REC_UNIT_IMAGE);
+    memcpy(s_mp.player, s_mp.s_player, sizeof s_mp.player);
+    memset(s_mp.held, 0, s_mp.slots);
+    for (i = 0; i < s_mp.slots * 2; i++)
+        if (!mp_list_put(&s_mp.list[i], s_mp.s_list[i].img, s_mp.s_list[i].n)) {
+            mp_fail("no memory for the seek's order lists");
+            return 0;
+        }
+    s_mp.nq = 0;
+    s_mp.ordinal = 0;
+    s_mp.croots = 0;
+    s_mp.compose = 1;
+    if (recr_mp_apply(s_rd, &s_mp.ordinal, mp_envelope, NULL, why, sizeof why) < 0)
+        mp_fail("the seek to %u cannot read the contributions: %s", T, why);
+    if (!s_mp.failed) mp_apply_held(L, T - 1, 1);
+    s_mp.compose = 0;
+    if (!s_mp.failed) mp_authority(L);
+    if (s_mp.failed) return 0;
+    s_mp.rebuilt++;
+    return 1;
+}
+
+/* a unit its owner created and has not yet described, made from its create's arguments as
+   mp_create made it, its water from the create's return; how many */
+static unsigned mp_make_held(const Lv* L)
+{
+    unsigned slot, made = 0;
+    for (slot = 1; slot < s_mp.slots; slot++) {
+        const unsigned char* c = s_mp.create + (size_t)slot * MP_CREATE;
+        uint32_t id, finished, water;
+        unsigned short type;
+        int32_t pos[3];
+        if (!s_mp.held[slot]) continue;
+        memcpy(&id, c, 4);
+        memcpy(&type, c + 4, 2);
+        memcpy(&finished, c + 8, 4);
+        memcpy(pos, c + 12, 12);
+        if (id - 1 != slot || !make(L, slot, c[6], type, pos, finished, c[7] & 3u, 0)) continue;
+        water = c[24];
+        if (c[28] && water <= WATER_MAX) memcpy(unit_at(L, slot) + U_WATER, &water, 4);
+        made++;
+    }
+    return made;
 }
 
 /* the primary events a mode-3 world carries for what the owners contribute */
@@ -5092,10 +5239,21 @@ static void sk_features(const Lv* L, const RecWorld* W)
         const unsigned char* img = W->grid + (size_t)c * REC_CELL_BYTES;
         char* cell = L->grid + (size_t)c * REC_CELL_BYTES;
         unsigned char keep = (unsigned char)cell[CELL_FLAGS] & CELL_DRAWDEFER;
-        uint16_t slot[2];
+        unsigned char yard = (unsigned char)cell[CELL_FLAGS] & CELL_YARDBIT;
+        uint16_t slot[2], host[2];
         unsigned k;
+        memcpy(host, cell, 4);
         memcpy(cell, img, REC_CELL_BYTES);
         cell[CELL_FLAGS] = (char)(((unsigned char)cell[CELL_FLAGS] & ~CELL_DRAWDEFER) | keep);
+        if (s_engine_cells) {
+            /* the slots and the yard bit are the engine's own (THE MULTIPLAYER MATERIALIZER):
+               R3's kills took every unit off the grid and R7's creates and R8's moves put the
+               composed world's units on it, so the host's are that world's */
+            memcpy(cell, host, 4);
+            cell[CELL_FLAGS] = (char)(((unsigned char)cell[CELL_FLAGS] & ~CELL_YARDBIT) | yard);
+            s_sk.fcells++;
+            continue;
+        }
         memcpy(slot, img, 4);
         for (k = 0; k < 2; k++)
             if (slot[k] && (slot[k] >= L->nslots || !host_live(L, slot[k]))) {
@@ -5717,7 +5875,11 @@ refused:
 static void sk_back(const Lv* L, unsigned prev)
 {
     char why[200];
-    if (recr_seek(s_rd, prev, 0, NULL, NULL, why, sizeof why) == 1) return;
+    if (recr_seek(s_rd, prev, 0, NULL, NULL, why, sizeof why) == 1) {
+        /* the composed world follows the reader (THE SEEK OF A MULTIPLAYER RECORDING) */
+        if (s_mp.on) mp_rebuild(L, prev);
+        return;
+    }
     s_over = 1;
     tagpu_logf("replay: %s cannot be read back to GameTime %u: %s; the units stop here", s_name,
                prev, why);
@@ -6086,6 +6248,8 @@ static void rw_contacts(const Lv* L, const RecWorld* W)
 static int seek_run(char* ta)
 {
     RecWorld* W = recr_world(s_rd);
+    const RecWorld* V = W;                  /* the world the units are made from: in mode 3, the
+                                               composed one (THE SEEK OF A MULTIPLAYER RECORDING) */
     const int back = s_seek.mode == SK_NOW, convert = s_seek.mode == SK_REWIND;
     const int tk = s_seek.mode == SK_TAKEOVER || back;
     unsigned T = s_seek.T, prev = W->tick, h, nheads = 0, refused0, built0, P = s_seek.P;
@@ -6098,8 +6262,8 @@ static int seek_run(char* ta)
     s_seek.mode = SK_SEEK;                  /* consumed: rt_due's seek_run is a SEEK */
     s_seek.boundary = 0;
     snprintf(dump, sizeof dump, "%s", s_seek.dump);
-    if (s_mp.on) {
-        sk_refused(tk, T, "a multiplayer recording plays forward only: its seek is not built");
+    if (s_mp.on && (tk || convert)) {
+        sk_refused(tk, T, "a multiplayer recording's takeover and rewind are not built");
         return 0;
     }
     pend_finish();                          /* the step before it, whole (THE PHASES) */
@@ -6121,10 +6285,17 @@ static int seek_run(char* ta)
         if (k < 0 && !back) sk_back(&L, prev);
         return 0;
     }
+    if (s_mp.on) {
+        if (!mp_rebuild(&L, T)) {
+            sk_refused(tk, T, s_mp.why);
+            return 0;
+        }
+        V = mp_world(W);
+    }
     QueryPerformanceCounter(&t1);
     memset(&s_sk, 0, sizeof s_sk);
     masks_init();
-    if (!sk_bound(&L, W, &nheads, why, sizeof why)) {
+    if (!sk_bound(&L, V, &nheads, why, sizeof why)) {
         sk_refused(tk, T, why);
         if (!back) sk_back(&L, prev);
         return 0;
@@ -6167,29 +6338,30 @@ static int seek_run(char* ta)
     if (tk) tk_seats(ta, P, (unsigned)D);
     /* R7: every unit of iteration T, made as the first step makes them; a refused create is a
        difference the comparison names, never a hazard (make bounds what it passes) */
-    s_sk.made = level_units(&L, W);
+    s_sk.made = level_units(&L, V);
+    if (s_mp.on) s_sk.made += mp_make_held(&L);
     /* R8: S2b's appliers, the features left to R10 */
-    links_put(&L, W);
-    units_put(&L, W);
-    yards_put(&L, W);
-    states_put(&L, W);
-    players_put(&L, W);
+    links_put(&L, V);
+    units_put(&L, V);
+    yards_put(&L, V);
+    states_put(&L, V);
+    players_put(&L, V);
     if (tk) tk_types(ta, P);
     built0 = s_st.obuilt;
-    orders_put(&L, W);
+    orders_put(&L, V);
     if (tk) s_tk.orphans = tk_orphans(&L, W);
     s_sk.refused = s_st.refused - refused0;
     /* R8b, after R8's moves, which re-emit */
-    seek_unit_books(&L, W);
+    seek_unit_books(&L, V);
     /* R9, R10, R11, R12 */
-    sk_buckets(&L, W, nheads);
-    sk_features(&L, W);
+    sk_buckets(&L, V, nheads);
+    sk_features(&L, V);
     s_sk.effects = tagpu_effects_clear();
-    sk_tables(&L, W);
+    sk_tables(&L, V);
     /* R13: the globals, the pool and the explored map, after R7's draws of the simulation RNG and
        R11; the LosType step finds R5's bits and does nothing */
     refused0 = s_gst.refused;
-    recorded_put(&L, W);
+    recorded_put(&L, V);
     s_sk.pool = s_gst.refused == refused0;
     /* R14a: the viewed seat's temporary sight records (THE SEEK'S SIGHT RECORDS) */
     eye_put(&L, T);
@@ -6221,7 +6393,8 @@ static int seek_run(char* ta)
     /* R14c: the records' expiry, as 0x495688 follows the players phase (THE SEEK'S SIGHT
        RECORDS) */
     E_SightExpire();
-    /* R15 */
+    /* R15, from the recorder's images: a deadline is the host's own clock's, which the recorder's
+       carries, where an owner's player image carries its own machine's (mp_world, players_put) */
     sk_deadlines(ta, W, T - 1);
     /* R16: inside the frame visit, before the next frame's scheduler 0x495230 sees the stamps: no
        lag, even after a forward seek of 900 ticks or more */
@@ -6258,6 +6431,17 @@ static int seek_run(char* ta)
                s_sk.pool ? "written" : "REFUSED", W->proj_hw,
                s_sk.effects ? "cleared" : "NOT cleared", s_eye.made, s_eye.refused, s_eye.capped,
                SR_MAX);
+    if (s_mp.on) {
+        unsigned slot, live = 0, held = 0;
+        for (slot = 1; slot < s_mp.slots; slot++) {
+            live += s_mp.live[slot];
+            held += s_mp.held[slot];
+        }
+        tagpu_logf("replay: %s: the seek to %u composed the owners' contributions from the "
+                   "first (composition %u): %u units described, %u created and not yet "
+                   "described, %u envelopes of %u held, %u private roots not played", s_name, T,
+                   s_mp.rebuilt, live, held, s_mp.nq, T, s_mp.croots);
+    }
     /* TK4b (THE TAKEOVER, tk_end): s_rd is gone afterwards */
     if (back) rw_finish(ta, 1);
     else if (tk)

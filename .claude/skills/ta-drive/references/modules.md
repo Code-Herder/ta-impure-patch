@@ -267,7 +267,11 @@ These are native capture/reader tests. Saved multiplayer playback is measured wi
 [--perspective N] [--content ARCHIVE ...]`, which plays FILE on one tareplay worker at speed 20,
 dumps at each T and exits through the game so the playing's counts are logged (`--content`
 copies an archive the recording was made with, such as the recording run's `zzrepro.ufo`, into
-the worker for the playing and removes it after); then
+the worker for the playing and removes it after). The same script seeks:
+`--roundtrip T` (dump A, poison, seek, dump B; compare the pair with `tarec.py
+compare-dumps`), `--seek A:T` (at GameTime A seek to T in the same process,
+dumps s<T> and s<T+120>), or `--fresh T` alone (a fresh process at T, dump
+q<T>); then
 `python3 tools/replay/recmp_compare.py FILE <directory>/dump-p<T>.bin ...` compares each dump
 with the owner-authority world the recording implies (the multiplayer slice note's
 *Owner-authority materializer*). The fixture requests speed 20; count it as 2x evidence only if live

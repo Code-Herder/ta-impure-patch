@@ -1973,7 +1973,10 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
         const RecSeg* s = chain_seg(r, from);
         const RecIndexEntry* next = snap + 1;
         /* the stream goes on from S + 1 within the segment, unless the chain leaves it at S; the
-           writer starts it there (tagpu_recwriter.c, iteration_done) */
+           writer starts it there (tagpu_recwriter.c, iteration_done). A multiplayer recording's
+           contributions blocks may stand between the two, and tick_read steps over them as it
+           steps over every block that is not the stream's */
+        while (next < r->idx + s->i0 + s->n && next->kind == RB_CONTRIBUTIONS) next++;
         if (snap->last < cover_end(r, from) &&
             (next >= r->idx + s->i0 + s->n || next->kind != RB_STREAM ||
              next->first != snap->last + 1)) {

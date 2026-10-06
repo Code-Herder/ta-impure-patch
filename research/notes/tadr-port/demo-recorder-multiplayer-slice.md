@@ -1361,16 +1361,79 @@ played by `tools/replay/recmp_play_test.py`:
   native sample reads a nonzero source slot, so the branch where the
   recorder's slot differs from the host's runs only through the same stub.
 
-Still open: seek (`seek_run` refuses a mode-3 recording), takeover and fresh AI,
-perspective streams and communication audiences, ten seats without a spare
-viewer seat, and the traffic budget, migration and cross-address discovery.
-They are taken in that order:
+### The seek of a multiplayer recording
 
-1. Seek, rebuild and fresh-process seek of a mode-3 file, with a fresh consumer.
-2. Takeover with the remaining seats as fresh AI.
-3. Perspective streams, communication audiences, pings and drawings.
-4. Ten seats without a spare viewer seat.
-5. The measured traffic budget, migration and cross-address discovery.
+`seek_run` seeks a mode-3 recording within a playing (the `seek` trigger, the
+dock, a round trip) and from a fresh process (`tacli replay seek`); takeover and
+rewind still refuse one. *THE SEEK OF A MULTIPLAYER RECORDING* in
+`tagpu_replay.c` holds the argument:
+
+- **The composed world of iteration T is rebuilt, not carried.** After
+  `recr_seek` stands the reader at T, `mp_rebuild` restores the level-start
+  composed world (copied when the materializer starts), starts a fresh
+  lifecycle consumer, reads every envelope from the first (`recr_mp_apply`
+  from ordinal 0) and applies them with `mp_apply_held(T - 1, 1)` and
+  `mp_authority`, the calls `mp_step_image` makes when the world holds
+  iteration T. So the composed world, the consumer and the held queue are the
+  forward playing's at that point by construction: the same reads, the same
+  order, the same split at T's first post-capture root batch. Only the actions
+  differ. They compose data and touch no engine state (`mp_compose`), and a
+  private root is not played, as a skirmish seek plays no event before T.
+- **The seek makes the composed world.** R7 makes every unit it describes
+  (`level_units` on `mp_world`), and a unit its owner created but has not yet
+  described from its create's own arguments and return (`mp_make_held`). R8–R14
+  write the composed units, lists and actor players, and the primary stream's
+  features, globals and tables. Two exceptions keep the host's own state. Each
+  seat's players-phase deadline comes from the recorder's image, because it is
+  the host's clock and an owner's image carries its own machine's. The cells'
+  unit slots and yard bit stay the host's (`sk_features` under
+  `s_engine_cells`): R3's kills took every unit off the grid, and R7's creates
+  and R8's moves put the composed world's units on it.
+- **A refused seek** reads the stream back to where it was (`sk_back`), and the
+  materializer is rebuilt there by the same rule. A composition that fails
+  stops the playing (`mp_fail`), so nothing composed by half is applied.
+- **The reader.** A snapshot of a mode-3 file is followed by its contributions
+  block before the stream goes on, so `recr_seek` steps over contributions
+  entries when it checks that the stream follows the snapshot. `tick_read`
+  already steps over every block that is not the stream's.
+
+`recmp_compare.py` checks the slots more strictly since this seek: a slot must
+lie inside the footprint of the live unit it names, and every cell of a live
+mobile unit's footprint must name it. A structure's yardmap leaves some of its
+cells open, such as the four corners of slot 4502's 6×6 footprint at 2070.
+Without that check, a seek that wrote the recorder's slots compared EQUAL:
+unit 3006 stood in the recorder's cells, one row off its owner's, and its old
+row named it after its death.
+
+MEASURED 2026-10-06 on the reference setup, internal speed 20, the reproduction
+recording on the current list (GameTimes 1..2071):
+
+- **In-process seeks:** backward from 900 to 246 (inside an owner-first window)
+  and forward from 1000 to 1838. Dumps are EQUAL at 246, at 366 (120 ticks on),
+  at 1838 and at 1958, and the playing goes on to its end after both seeks.
+- **Round trips** at 193 and 338 (inside owner-first windows): 26 tables
+  poisoned, residue 0, A against B EQUAL.
+- **Fresh-process seeks** to 74, 75, 246, 338, 1578 and 1958, the last two
+  across the snapshots at 901 and 1801: each dump EQUAL. The fresh
+  seek to 1958 took 407 ms, 402 of them reading the stream and composing the
+  contributions.
+- The skirmish `secondary-orders --cover` regression passes all 25 checks on
+  the same build.
+- **Not run:** a seek between a unit's create and its first image (0 such
+  units at every seek point). In these recordings, a create is applied after
+  its capture, or with its image in the same one.
+
+Still open: takeover and fresh AI, perspective streams and communication
+audiences, ten seats without a spare viewer seat, and the traffic budget,
+migration and cross-address discovery. They are taken in that order:
+
+1. Takeover with the remaining seats as fresh AI.
+2. Perspective streams, communication audiences, pings and drawings.
+3. Ten seats without a spare viewer seat.
+4. The measured traffic budget, migration and cross-address discovery.
+
+A player who leaves the game is a lifecycle landing of its own (*Named
+residuals*).
 
 ### Fixed global owner blocks before construction
 
