@@ -3,6 +3,9 @@ import struct
 import zlib
 
 RECMP_ROOT_CREATE_BEGIN = 0x100
+# tagpu_recpov.h's bounds, as tagpu_recmp_pov.c checks a contribution's perspective
+REC_SEL_MAX = 1500
+RECMP_POV_PLAYER = 0xFF
 
 
 class Roster:
@@ -144,7 +147,7 @@ class Contributions:
                 if final > 1 or (previous, seal_tick, data_bytes, crc) != (source["sequence"], tick, source["bytes"], source["crc"]) or (sealed is not None and (tick < sealed or (not final and tick == sealed))):
                     raise ValueError("contribution prefix seal")
                 source.update(sealed_tick=tick, sealed_sequence=sequence, ended=bool(final))
-            elif kind in (1, 2, 6, 7, 8, 9, 10, 11, 12):
+            elif kind in (1, 2, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15):
                 if source["sealed_tick"] is not None and tick <= source["sealed_tick"]:
                     raise ValueError("contribution data in closed tick")
                 source["bytes"] += span
@@ -185,6 +188,11 @@ class History:
         self.source_text, self.text, self.text_identity, self.text_serial = {}, {}, {}, {}
         self.source_orders, self.orders, self.stages = {}, {}, {}
         self.source_explored, self.explored, self.explored_stages = {}, {}, {}
+        # perspective (kinds 13-15): an origin's last two samples, its last click, its last whole
+        # selection, and its selection transaction while partial
+        self.source_pov, self.pov = {}, {}
+        self.source_clicks, self.clicks = {}, {}
+        self.source_selections, self.selections, self.selection_stages = {}, {}, {}
         self.applications = []
         self.failed = False
 
@@ -300,6 +308,8 @@ class History:
             self.source_text[origin] = state
             if not proof:
                 self.text[origin] = state.copy()
+        elif kind in (13, 14, 15):
+            self._perspective(origin, tick, sequence, kind, stream, body, application_tick, proof, actor)
         elif kind == 11:
             source_map = self.source_maps.get(origin)
             if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:
@@ -543,9 +553,83 @@ class History:
                     self.orders[slot, which] = state.copy()
                 stage["active"] = False
         elif kind == 4:
-            if self.stages.get(origin, {}).get("active") or origin in self.explored_stages:
-                raise ValueError("seal closes an incomplete order transaction")
+            if (self.stages.get(origin, {}).get("active") or origin in self.explored_stages or
+                    origin in self.selection_stages):
+                raise ValueError("seal closes an incomplete order, exploration or selection transaction")
         # Legacy kind 1 contributes no complete player or order authority.
+
+    def _perspective(self, origin, tick, sequence, kind, stream, body, application_tick, proof, actor):
+        """tagpu_recmp_pov_put: a camera sample, a click, or one chunk of a selection transaction."""
+        source_map = self.source_maps.get(origin)
+        if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:
+            raise ValueError("perspective precedes its source roster")
+        state = dict(origin=origin, source_tick=tick, sequence=sequence,
+                     applied_tick=application_tick, stream=bytes(stream))
+
+        def after(previous):
+            return previous is None or (sequence > previous["sequence"] and tick >= previous["source_tick"] and
+                                        application_tick >= previous["applied_tick"] and
+                                        stream == previous["stream"])
+        if kind == 13:
+            if len(body) != 32:
+                raise ValueError("perspective sample span")
+            player, every, flags, zero, view_w, view_h, zoom = struct.unpack_from("<BBBBHHI", body)
+            held = self.source_pov.get(origin, [])
+            if (player != RECMP_POV_PLAYER or not 1 <= every <= 30 or flags & ~3 or zero or
+                    not 16384 <= zoom <= 524288 or not 1 <= view_w <= 16384 or not 1 <= view_h <= 16384 or
+                    not after(held[-1] if held else None)):
+                raise ValueError("perspective sample fields/provenance")
+            state["pov"] = bytes(body)
+            self.source_pov[origin] = held[-1:]+[state]
+            if not proof:
+                self.pov[origin] = self.pov.get(origin, [])[-1:]+[state]
+        elif kind == 14:
+            if len(body) != 20:
+                raise ValueError("perspective click span")
+            player, button, _, _, region, itype, keys = struct.unpack_from("<BBBBBBH", body)
+            if (player != RECMP_POV_PLAYER or button > 1 or region > 3 or itype > 1 or keys & ~0xC or
+                    not after(self.source_clicks.get(origin))):
+                raise ValueError("perspective click fields/provenance")
+            state["click"] = bytes(body)
+            self.source_clicks[origin] = state
+            if not proof:
+                self.clicks[origin] = state
+        else:
+            if len(body) < 8:
+                raise ValueError("selection chunk span")
+            player, flags, total, first, count = struct.unpack_from("<BBHHH", body)
+            limit = min(self.header["units_each"], REC_SEL_MAX)
+            begin, end = bool(flags & 1), bool(flags & 2)
+            stage = self.selection_stages.get(origin)
+            if (len(body) != 8+6*count or flags & ~3 or total > limit or first+count > total or
+                    player != RECMP_POV_PLAYER or not after(self.source_selections.get(origin)) or
+                    not count and (total or not begin or not end) or
+                    (first+count != total if end else first+count >= total)):
+                raise ValueError("selection chunk fields/span/provenance")
+            if begin:
+                if stage is not None or first:
+                    raise ValueError("selection interrupted transaction")
+                stage = dict(entries=[], last=-1)
+            elif (stage is None or sequence != stage["sequence"]+1 or tick != stage["tick"] or
+                    application_tick < stage["applied_tick"] or total != stage["total"] or
+                    first != len(stage["entries"]) or stream != stage["stream"]):
+                raise ValueError("selection transaction discontinuity")
+            entries, last = list(stage["entries"]), stage["last"]
+            for slot, birth in struct.iter_unpack("<HI", body[8:]):
+                if slot <= last or not actor[2] <= slot <= actor[3]:
+                    raise ValueError("selection slot order/ownership")
+                entries.append((slot, birth))
+                last = slot
+            if end:
+                state["entries"] = entries
+                self.source_selections[origin] = state
+                self.selection_stages.pop(origin, None)
+                if not proof:
+                    self.selections[origin] = state
+            else:
+                self.selection_stages[origin] = dict(entries=entries, last=last, total=total, tick=tick,
+                                                     sequence=sequence, applied_tick=application_tick,
+                                                     stream=bytes(stream))
 
     def block(self, raw):
         if self.failed:

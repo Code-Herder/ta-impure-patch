@@ -29,7 +29,8 @@ def run(output):
                      *(TREE / f"tagpu/ddraw/src/{name}.c" for name in
                        ("tagpu_recmp_players", "tagpu_recmp_history", "tagpu_recmp_file_state",
                         "tagpu_recmp_stream", "tagpu_recmp_units", "tagpu_recmp_named",
-                        "tagpu_recmp_roots", "tagpu_recmp_orders", "tagpu_recmp_explored", "crc32")),
+                        "tagpu_recmp_roots", "tagpu_recmp_orders", "tagpu_recmp_explored", "tagpu_recmp_pov",
+                        "crc32")),
                      "-lole32", "-luuid"], log)
             instances = root / "tagpu/instances"
             instances.mkdir(parents=True, exist_ok=True)

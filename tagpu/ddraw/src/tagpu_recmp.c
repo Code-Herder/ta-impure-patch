@@ -177,6 +177,7 @@ static int receive_packet(RecMpChannel* c, RecMpNet* net, DWORD from,
         return 1;
     }
     if (!p->h.sequence || (p->h.kind != RECMP_RESOURCES && p->h.kind != RECMP_ORDERS && p->h.kind != RECMP_PLAYER && p->h.kind != RECMP_SEATS && p->h.kind != RECMP_UNITS && p->h.kind != RECMP_NAMED && p->h.kind != RECMP_ROOTS && p->h.kind != RECMP_EXPLORED && p->h.kind != RECMP_TEXT &&
+        p->h.kind != RECMP_POV && p->h.kind != RECMP_CLICK && p->h.kind != RECMP_SELECT &&
         p->h.kind != RECMP_SEAL)) goto invalid;
     last = &c->actor[at].last;
     if (p->h.sequence < last->h.sequence) return 1;
@@ -499,12 +500,21 @@ int tagpu_recmp_send_from(RecMpChannel* c, DWORD origin, unsigned kind, unsigned
     if (c->producers_closed || at == c->config.count || !c->config.actor[at].local ||
         bytes > RECMP_BODY_MAX || (bytes && !body) ||
         (c->capture_seen && tick != c->capture_tick) ||
-        (kind != RECMP_RESOURCES && kind != RECMP_ORDERS && kind != RECMP_PLAYER && kind != RECMP_SEATS && kind != RECMP_UNITS && kind != RECMP_NAMED && kind != RECMP_ROOTS && kind != RECMP_EXPLORED && kind != RECMP_TEXT)) {
+        (kind != RECMP_RESOURCES && kind != RECMP_ORDERS && kind != RECMP_PLAYER && kind != RECMP_SEATS && kind != RECMP_UNITS && kind != RECMP_NAMED && kind != RECMP_ROOTS && kind != RECMP_EXPLORED && kind != RECMP_TEXT &&
+         kind != RECMP_POV && kind != RECMP_CLICK && kind != RECMP_SELECT)) {
         fail(c, E_INVALIDARG);
         SetEvent(c->wake);
         return 0;
     }
     return publish(c, at, kind, tick, body, bytes, out);
+}
+
+unsigned tagpu_recmp_room(RecMpChannel* c)
+{
+    unsigned used;
+    if (!c) return 0;
+    used = acquire(&c->tx.published) - acquire(&c->tx.read);
+    return used >= MP_QUEUE_SLOTS ? 0 : MP_QUEUE_SLOTS - used;
 }
 
 int tagpu_recmp_advance(RecMpChannel* c, unsigned tick)

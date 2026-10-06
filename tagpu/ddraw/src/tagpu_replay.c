@@ -305,7 +305,15 @@ static struct {
     unsigned char*  xmap;           /* [REC_PLAYERS * xbytes] each actor's, by its record          */
     unsigned char   xvalid[REC_PLAYERS];
     unsigned char*  mapped;         /* the composed explored map (mp_world)                      */
+    /* each actor's perspective at the application tick, by its record (mp_authority), in
+       RecWorld's shape: the samples' ticks are application ticks (persp_world) */
+    unsigned        npov[REC_PLAYERS];
+    RecPov          pov[REC_PLAYERS][2];
+    unsigned        pov_tick[REC_PLAYERS][2];
+    unsigned        nsel[REC_PLAYERS];
+    RecSelEntry*    sel;            /* [REC_PLAYERS * REC_SEL_MAX], seat-major                     */
     RecWorld        W;
+    RecWorld        P;              /* the world the perspective reads (persp_world)             */
     unsigned char*  s_live;         /* the level-start composed world, which a seek composes on  */
     uint32_t*       s_unit;
     RecList*        s_list;
@@ -412,6 +420,7 @@ static void overlay_visit(char* ta);
 static int overlay_trigger(const char* line);
 static void ov_clicks_take(const RecWorld* W);
 static void ov_clicks_clear(void);
+static void ov_click_put(unsigned tick, const RecClick* c);
 
 static void replay_close(void)
 {
@@ -3610,6 +3619,7 @@ static void mp_end(void)
     free(s_mp.create);
     free(s_mp.xmap);
     free(s_mp.mapped);
+    free(s_mp.sel);
     free(s_mp.s_live);
     free(s_mp.s_unit);
     free(s_mp.s_list);
@@ -3679,10 +3689,11 @@ static int mp_begin(const Lv* L, const RecWorld* W)
     s_mp.xbytes = (W->mapped_bytes / 2 + 7) / 8;
     s_mp.xmap = malloc((size_t)REC_PLAYERS * s_mp.xbytes + 1);
     s_mp.mapped = malloc(W->mapped_bytes + 1);
+    s_mp.sel = malloc((size_t)REC_PLAYERS * REC_SEL_MAX * sizeof *s_mp.sel);
     s_mp.on = 1;
     if (W->slots != L->nslots || !s_mp.life || !s_mp.held || !s_mp.live || !s_mp.unit ||
         !s_mp.list || !s_mp.nodes || !s_mp.create || !s_mp.s_live || !s_mp.s_unit ||
-        !s_mp.s_list || !s_mp.xmap || !s_mp.mapped) {
+        !s_mp.s_list || !s_mp.xmap || !s_mp.mapped || !s_mp.sel) {
         mp_fail("the materializer could not be set up for %u slots", W->slots);
         return 0;
     }
@@ -4044,6 +4055,21 @@ static void mp_text(const Lv* L, const MpHeld* e)
     }
 }
 
+/* A recorded click, shown from its application tick (THE CLOCK), as chat is. The reader's history
+   has checked its length and fields (tagpu_recmp_pov_put); its origin names the seat, bounded
+   below REC_PLAYERS by mp_row, and an origin no actor holds shows nothing. A seek shows no click
+   from before T: mp_rebuild composes with the actions only, which take none. */
+static void mp_click(const MpHeld* e)
+{
+    RecClick c;
+    int seat;
+    if (e->bytes != sizeof c || (seat = mp_row(e->packet.origin)) < 0) return;
+    memcpy(&c, e->body, sizeof c);
+    if (c.player != RECMP_POV_PLAYER || !rec_click_ok(&c)) return;
+    c.player = (uint8_t)seat;
+    ov_click_put(e->where.tick, &c);
+}
+
 /* a root batch the recorder's own unit tick made after its capture point */
 static int mp_post_capture(const MpHeld* e)
 {
@@ -4068,6 +4094,8 @@ static void mp_apply_held(const Lv* L, unsigned T, int image)
                     tagpu_recmp_lifecycle_error(s_mp.life));
         if (!s_mp.compose && e->where.phase != RECMP_RECORD_PROOF && e->packet.kind == RECMP_TEXT)
             mp_text(L, e);
+        if (!s_mp.compose && e->where.phase != RECMP_RECORD_PROOF && e->packet.kind == RECMP_CLICK)
+            mp_click(e);
     }
     memmove(s_mp.q, s_mp.q + i, (size_t)(s_mp.nq - i) * sizeof *s_mp.q);
     s_mp.nq -= i;
@@ -4103,6 +4131,33 @@ static void mp_authority(const Lv* L)
             mp_fail("GameTime %u: origin %u's explored map is %u bytes, the level's %u", L->now,
                     st->origin, es.bytes, s_mp.xbytes);
         else s_mp.xvalid[st->seat] = (unsigned char)k;
+    }
+    /* each actor's camera samples and selection, by the same authority: the samples' ticks are
+       the recorder's application ticks, the clock the displayed tick n counts in (persp_world).
+       The history has held every selection entry inside the actor's own block and below
+       REC_SEL_MAX (tagpu_recmp_pov_put); a seat is below REC_PLAYERS */
+    for (i = 0; i < h->mp_seats.count && !s_mp.failed; i++) {
+        const RecMpSeat* st = &h->mp_seats.actor[i];
+        RecMpPovState ps;
+        RecMpSelectState ss;
+        unsigned n;
+        int k;
+        if (st->seat >= REC_PLAYERS) continue;
+        k = recr_mp_pov(s_rd, st->origin, &ps, why, sizeof why);
+        if (k < 0) {
+            mp_fail("GameTime %u: perspective authority: %s", L->now, why);
+            break;
+        }
+        s_mp.npov[st->seat] = k ? ps.count : 0;
+        for (n = 0; k && n < ps.count && n < 2; n++) {
+            s_mp.pov[st->seat][n] = ps.sample[n].pov;
+            s_mp.pov[st->seat][n].player = (uint8_t)st->seat;
+            s_mp.pov_tick[st->seat][n] = ps.sample[n].applied_tick;
+        }
+        k = recr_mp_select(s_rd, st->origin, &ss, s_mp.sel + (size_t)st->seat * REC_SEL_MAX,
+                           REC_SEL_MAX, why, sizeof why);
+        if (k < 0) mp_fail("GameTime %u: selection authority: %s", L->now, why);
+        else s_mp.nsel[st->seat] = k ? ss.count : 0;
     }
     for (slot = 1; slot < s_mp.slots && !s_mp.failed; slot++) {
         RecMpLifeState ls;
@@ -4183,6 +4238,29 @@ static const RecWorld* mp_world(const RecWorld* W)
     return &s_mp.W;
 }
 
+/* The world the perspective reads -- Follow, the overlays and the cards: in a multiplayer
+   recording's own segment the reader's world with the composed units and lists and the actors'
+   samples and selections (mp_authority), anywhere else the reader's own. The samples' ticks are
+   the recorder's application ticks and W->tick is the application tick the world holds, so the
+   displayed tick n is the composed application tick. A copy of the world's fixed part, rewritten
+   at each call on the game thread; the explored map is the primary world's, which nothing here
+   reads. */
+static const RecWorld* persp_world(void)
+{
+    const RecWorld* W = recr_world(s_rd);
+    if (!s_mp.on) return W;
+    s_mp.P = *W;
+    s_mp.P.live = s_mp.live;
+    s_mp.P.unit = s_mp.unit;
+    s_mp.P.list = s_mp.list;
+    memcpy(s_mp.P.npov, s_mp.npov, sizeof s_mp.npov);
+    memcpy(s_mp.P.pov, s_mp.pov, sizeof s_mp.pov);
+    memcpy(s_mp.P.pov_tick, s_mp.pov_tick, sizeof s_mp.pov_tick);
+    memcpy(s_mp.P.nsel, s_mp.nsel, sizeof s_mp.nsel);
+    s_mp.P.sel = s_mp.sel;
+    return &s_mp.P;
+}
+
 /* the composed world of iteration T, the reader standing at T (THE SEEK OF A MULTIPLAYER
    RECORDING); 1 composed, 0 the playing stopped */
 static int mp_rebuild(const Lv* L, unsigned T)
@@ -4202,6 +4280,8 @@ static int mp_rebuild(const Lv* L, unsigned T)
     memcpy(s_mp.player, s_mp.s_player, sizeof s_mp.player);
     memset(s_mp.held, 0, s_mp.slots);
     memset(s_mp.xvalid, 0, sizeof s_mp.xvalid);
+    memset(s_mp.npov, 0, sizeof s_mp.npov);
+    memset(s_mp.nsel, 0, sizeof s_mp.nsel);
     for (i = 0; i < s_mp.slots * 2; i++)
         if (!mp_list_put(&s_mp.list[i], s_mp.s_list[i].img, s_mp.s_list[i].n)) {
             mp_fail("no memory for the seek's order lists");
@@ -7960,6 +8040,7 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
 {
     const RecHeader* h;
     const RecWorld* W;
+    const RecWorld* P;
     char* ta = ta_main();
     Lv L;
     unsigned i, slot;
@@ -7968,6 +8049,7 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
     if (!out || cap <= 0 || !tagpu_replay_live()) return 0;
     h = recr_header(s_rd);
     W = mp_world(recr_world(s_rd));     /* in mode 3 the composed world the puppets hold */
+    P = persp_world();
     valid = ta && level_of(ta, &L);
     for (i = 0; i < REC_PLAYERS; i++) rows[i] = sides[i] = -1;
     for (i = 0; i < h->nseats && i < REC_PLAYERS && n < cap; i++) {
@@ -7983,8 +8065,8 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
         dst->commander_alive = valid && h->seats[i].side < L.sides && h->seats[i].side < 5 ? 0 : -1;
         dst->seat = seat;
         dst->colour = h->seats[i].logo;
-        /* a skirmish's seat with a camera sample; a multiplayer recording's are not played */
-        dst->pov = !s_mp.level && W->npov[seat] != 0;
+        /* a seat with a camera sample: a skirmish's recorded, a multiplayer actor's contributed */
+        dst->pov = P->npov[seat] != 0;
         lstrcpynA(dst->name, h->seats[i].name, sizeof dst->name);
         /* The same image the puppet applier uses, held at the final image after EOF. The reader
            owns REC_PLAYERS fixed records and only this thread advances it. None of these fields
@@ -8059,9 +8141,10 @@ int tagpu_replay_sight_request(int seat)
    A seek leaves the camera alone and a Follow goes on from the new GameTime; the end of the
    recording holds its last samples; a takeover, the level's end and any other end of the playing
    end the epoch (follow_close). A multiplayer recording's perspectives are its contributions,
-   which this playing does not read yet: it refuses. Everything here is the game thread's: the
-   requests come from the cards (in the wndproc TA pumps on that thread) and the trigger, and the
-   visit runs before the in-play draw call 0x4969CD. */
+   composed at the application tick (persp_world), so there W->tick is the composed application
+   tick and a sample's tick the one the recorder applied it at. Everything here is the game
+   thread's: the requests come from the cards (in the wndproc TA pumps on that thread) and the
+   trigger, and the visit runs before the in-play draw call 0x4969CD. */
 
 #define OFF_VIEW_W     0x37E37      /* the 1x view, as the recorder's samples carry it (RecPov)    */
 #define OFF_VIEW_H     0x37E3B
@@ -8072,11 +8155,10 @@ static const char* follow_refusal(int seat)
     const RecHeader* h;
     unsigned i;
     if (!tagpu_replay_live()) return "this level plays no recording";
-    if (s_mp.level) return "a multiplayer recording's perspectives are not played";
     h = recr_header(s_rd);
     for (i = 0; i < h->nseats && i < REC_PLAYERS; i++)
         if (seat >= 0 && seat < REC_PLAYERS && h->seats[i].index == (unsigned)seat)
-            return recr_world(s_rd)->npov[seat] ? NULL : "its camera was not recorded";
+            return persp_world()->npov[seat] ? NULL : "its camera was not recorded";
     return "no such recorded seat";
 }
 
@@ -8162,14 +8244,14 @@ static void follow_visit(char* ta)
                        s_fl.seat, s_fl.E);
         }
     }
-    if (s_fl.E && (!tagpu_replay_live() || s_mp.level)) follow_end_log("the playing ended");
+    if (s_fl.E && !tagpu_replay_live()) follow_end_log("the playing ended");
     if (s_fl.E && s_fl.handed) {
         const int st = tagpu_zoom_follow_state(s_fl.E);
         if (st != TAGPU_FOLLOW_ACTIVE) follow_end_log(follow_why(st));
     }
     memset(&s_fl.at, 0, sizeof s_fl.at);
     if (s_fl.E) {
-        W = recr_world(s_rd);
+        W = persp_world();
         s_fl.at.n = W->tick;
         s_fl.at.vw = *(const int*)(ta + OFF_VIEW_W);
         s_fl.at.vh = *(const int*)(ta + OFF_VIEW_H);
@@ -8205,7 +8287,7 @@ static void follow_visit(char* ta)
    Every recorded player's cursor, clicks and selection at once, whatever Sight shows (the owner's
    answer Q5), each behind its switch in the dock's Overlays menu (tagpu_cards.c), which also holds
    the chat's. Built at the frame visit, after any seek and after Follow's own reading of the same
-   world, from the reader's world alone -- nothing of the engine's:
+   world, from the reader's world alone (persp_world) -- nothing of the engine's:
    - a cursor: the perspective clock's sample for the displayed tick W->tick, as Follow takes it
      (tagpu_persp.h), when it was over the world (REC_POV_WORLD);
    - a click: REC_CLICK_SHOW ticks from the iteration it came with, aged against GameTime + 1,
@@ -8214,13 +8296,15 @@ static void follow_visit(char* ta)
    - a selection's unit: only while its slot holds a live unit whose birth is the entry's, read
      from the recording's own births column -- on a puppet host the engine's column is host-own
      (THE SEEK, "B4's per-slot columns"), so a unit made in the slot since is never taken for the
-     one selected.
+     one selected; in a multiplayer recording's own segment from the composed lifecycle's birth,
+     the reference its order lists are held to (mp_authority).
    THE PUBLISHER COPIES THE RESULT BY VALUE (tagpu_packet_pub.c, fill_overlay and the unit walk),
    in the `after` of the draw this visit precedes, on this same thread; the render thread sees
    only that copy. The switches are the game thread's too: the menu's clicks come in the wndproc
    TA pumps on it, the trigger at the frame visit. A switched-off overlay produces nothing, so the
-   render side has no switch. A multiplayer recording's perspectives are its contributions, which
-   this playing does not read yet: it shows none. */
+   render side has no switch. A multiplayer recording's perspectives are its contributions: its
+   cursors and selections at the composed application tick (persp_world), its clicks from the
+   held envelopes at their application tick (mp_click). */
 
 #define BIRTHS_TABLE "src/tagpu_patches.c:s_hitStamp"   /* the births column's RT_TABLE name */
 #define OV_GREY      59             /* a player with no colour: the cards' own fallback       */
@@ -8265,9 +8349,19 @@ static void ov_clicks_clear(void)
     s_ov.rn = s_ov.rnext = 0;
 }
 
+/* a click into the ring, shown from `tick`; the player is bounded here against ov_col */
+static void ov_click_put(unsigned tick, const RecClick* c)
+{
+    if (c->player >= TAGPU_PK_OV_PLAYERS) return;
+    s_ov.ring[s_ov.rnext].tick = tick;
+    s_ov.ring[s_ov.rnext].c = *c;
+    s_ov.rnext = (s_ov.rnext + 1) % OV_RING;
+    if (s_ov.rn < OV_RING) s_ov.rn++;
+}
+
 /* The iteration's clicks into the ring, from play(), which applies each iteration's events once:
    so each click is taken once, at the tick of the iteration it came with. The reader checked
-   each one's length and fields (rec_click_ok); the player is bounded here against ov_col. */
+   each one's length and fields (rec_click_ok). */
 static void ov_clicks_take(const RecWorld* W)
 {
     unsigned i;
@@ -8275,11 +8369,7 @@ static void ov_clicks_take(const RecWorld* W)
         RecClick c;
         if (W->click[i].kind != RK_CLICK || W->click[i].len != sizeof c) continue;
         memcpy(&c, W->click[i].b, sizeof c);
-        if (c.player >= TAGPU_PK_OV_PLAYERS) continue;
-        s_ov.ring[s_ov.rnext].tick = W->tick;
-        s_ov.ring[s_ov.rnext].c = c;
-        s_ov.rnext = (s_ov.rnext + 1) % OV_RING;
-        if (s_ov.rn < OV_RING) s_ov.rn++;
+        ov_click_put(W->tick, &c);
     }
 }
 
@@ -8315,27 +8405,41 @@ static const RecTable* ov_births(const RecWorld* W)
     return NULL;
 }
 
-/* THE SELECTION DISPLAY RULE. BOUND: a slot is used only below the world's slot count, the births
-   column's rows and s_rsel's length; the reader has already held every entry inside its seat's
-   block (rec_sel_entries_ok), and a seat is a header seat below REC_PLAYERS. */
+/* An entry's unit is the displayed one: in a multiplayer recording's own segment, the composed
+   lifecycle's birth for the slot, the reference its order lists are held to (mp_authority);
+   elsewhere the recording's births column, which `b` holds `rows` rows of. */
+static int ov_born(const RecTable* b, unsigned rows, unsigned slot, uint32_t birth)
+{
+    uint32_t at;
+    if (s_mp.on) {
+        RecMpLifeState ls;
+        return tagpu_recmp_lifecycle_get(s_mp.life, slot, &ls) == 1 && ls.birth == birth;
+    }
+    if (!b || slot >= rows) return 0;
+    memcpy(&at, b->img + (size_t)slot * sizeof at, sizeof at);
+    return at == birth;
+}
+
+/* THE SELECTION DISPLAY RULE. BOUND: a slot is used only below the world's slot count and
+   s_rsel's length, and a births column's rows (ov_born) or the lifecycle's own slots
+   (tagpu_recmp_lifecycle_get refuses any other); the reader has already held every entry inside
+   its seat's block (rec_sel_entries_ok, tagpu_recmp_pov_put), and a seat is a header seat below
+   REC_PLAYERS. */
 static void ov_selections(const RecWorld* W)
 {
     const RecHeader* h = recr_header(s_rd);
-    const RecTable* b = ov_births(W);
+    const RecTable* b = s_mp.on ? NULL : ov_births(W);
     unsigned rows = b ? b->size / (unsigned)sizeof(uint32_t) : 0, i, k;
-    for (i = 0; rows && i < h->nseats && i < REC_PLAYERS; i++) {
+    for (i = 0; (rows || s_mp.on) && i < h->nseats && i < REC_PLAYERS; i++) {
         unsigned p = h->seats[i].index;
         const RecSelEntry* e;
         if (p >= TAGPU_PK_OV_PLAYERS) continue;
         e = W->sel + (size_t)p * REC_SEL_MAX;
         for (k = 0; k < W->nsel[p] && k < REC_SEL_MAX; k++) {
             unsigned slot = e[k].slot;
-            uint32_t birth;
-            if (slot >= W->slots || slot >= rows || slot >= TAGPU_PK_MAX_UNITS || !W->live[slot] ||
-                !(img_u32(W, slot, U_STATE) & U_ALIVE))
+            if (slot >= W->slots || slot >= TAGPU_PK_MAX_UNITS || !W->live[slot] ||
+                !(img_u32(W, slot, U_STATE) & U_ALIVE) || !ov_born(b, rows, slot, e[k].birth))
                 continue;
-            memcpy(&birth, b->img + (size_t)slot * sizeof birth, sizeof birth);
-            if (birth != e[k].birth) continue;
             if (!s_rsel[slot]) s_rselAt[s_ov.nrsel++] = (uint16_t)slot;
             s_rsel[slot] |= (uint16_t)(1u << p);
         }
@@ -8351,10 +8455,10 @@ static void overlay_visit(char* ta)
     unsigned i, now;
     s_ov.n = 0;
     ov_rsel_clear();
-    s_ov.live = tagpu_replay_live() && !s_mp.level;
+    s_ov.live = tagpu_replay_live();
     if (!s_ov.live) return;
     h = recr_header(s_rd);
-    W = recr_world(s_rd);
+    W = persp_world();
     if (!s_ov.col_ok) {
         memset(s_ov.col, OV_GREY, sizeof s_ov.col);
         for (i = 0; i < h->nseats && i < REC_PLAYERS; i++)

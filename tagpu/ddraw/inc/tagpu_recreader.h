@@ -22,6 +22,7 @@
 #include "tagpu_recmp_roots.h"
 #include "tagpu_recmp_explored.h"
 #include "tagpu_recmp_text.h"
+#include "tagpu_recmp_pov.h"
 
 #define RECR_TEXT       64          /* a header string's bytes kept, NUL included            */
 #define RECR_NAME       (0x1E + 1)  /* a seat's name: the record's 0x1E bytes, NUL included  */
@@ -255,6 +256,11 @@ int recr_same_file(const RecReader* r, void* f);
 int recr_mp_player(RecReader* r, unsigned origin, RecMpPlayerState* out, char* why, unsigned cap);
 int recr_mp_explored(RecReader* r, unsigned origin, RecMpExploreState* out, void* image, unsigned capacity,
                       char* why, unsigned cap);
+/* An actor's last two camera/cursor samples and its last whole selection (tagpu_recmp_pov.h);
+   a NULL `entries` asks for the selection's metadata only, else `capacity` holds every entry. */
+int recr_mp_pov(RecReader* r, unsigned origin, RecMpPovState* out, char* why, unsigned cap);
+int recr_mp_select(RecReader* r, unsigned origin, RecMpSelectState* out, RecSelEntry* entries,
+                   unsigned capacity, char* why, unsigned cap);
 int recr_mp_unit(RecReader* r, unsigned slot, RecMpUnitState* out, char* why, unsigned cap);
 /* Latest applied batch for inspection; every root remains in the ordered ledger. */
 int recr_mp_roots(RecReader* r, unsigned origin, RecMpRootsState* out, char* why, unsigned cap);

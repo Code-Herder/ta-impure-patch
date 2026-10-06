@@ -2,7 +2,7 @@
 
 ## Status
 
-Started 2026-10-04. This is the **multiplayer slice** in the [recorder plan](demo-recorder.md#milestones-and-delivery-order), separate from S5's skirmish browser and controls. No multiplayer recorder change has landed. The work branch captures an observed native world and its separate authoritative contribution ledger when recording is enabled (`tagpu_recorder.c:mp_record_begin`). Its puppet host plays such a file through the [owner-authority materializer](#owner-authority-materializer), seeks it ([*The seek of a multiplayer recording*](#the-seek-of-a-multiplayer-recording)) and takes it over ([*The takeover of a multiplayer recording*](#the-takeover-of-a-multiplayer-recording)); perspective streams are unfinished. Ten seats are stage 5's: the viewer takes player record 10 on every playback ([the ten-seat note](demo-recorder-ten-seats.md)).
+Started 2026-10-04. This is the **multiplayer slice** in the [recorder plan](demo-recorder.md#milestones-and-delivery-order), separate from S5's skirmish browser and controls. No multiplayer recorder change has landed. The work branch captures an observed native world and its separate authoritative contribution ledger when recording is enabled (`tagpu_recorder.c:mp_record_begin`). Its puppet host plays such a file through the [owner-authority materializer](#owner-authority-materializer), seeks it ([*The seek of a multiplayer recording*](#the-seek-of-a-multiplayer-recording)) and takes it over ([*The takeover of a multiplayer recording*](#the-takeover-of-a-multiplayer-recording)). Each peer's camera, cursor, clicks and selection are contributions of their own, built and awaiting their two-peer run ([*Stage 4*](#stage-4-perspectives-and-communication)). Ten seats are stage 5's: the viewer takes player record 10 on every playback ([the ten-seat note](demo-recorder-ten-seats.md)).
 
 The slice's product scope is a recording file sufficient on its own for playback, with contributions from every Impure peer: each player's effective perspective and authoritative state, communication, then playback and takeover. The [product contract](demo-recorder.md#multiplayer-contributions) requires contributions even from a peer that opts out of saving its own recording. A live multiplayer game has no rewind timeline.
 
@@ -1531,6 +1531,27 @@ overlays, in skirmish recordings too (the human seat). Pings and drawings are
 dropped until Impure has such a feature: stock TA has none [INFERRED: no ping
 or marker message found; TADR's markers are not ported], and a future one
 follows chat's audience rules.
+
+4c is its own plan, [demo-recorder-perspective-streams.md](demo-recorder-perspective-streams.md).
+Its skirmish landings 4c-1 to 4c-3 record the human seat in the primary stream
+and play it as Follow, Jump and the overlays. Landing 4c-4 brings them to a
+multiplayer recording as three contribution kinds, built 2026-10-06 and not yet
+run between two peers ([4c-4 as built](demo-recorder-perspective-streams.md#4c-4-as-built)):
+
+| Kind | Name | Body | Sent |
+|---|---|---|---|
+| 13 | `RECMP_POV` | one `RecPov`, 32 bytes: view, applied zoom, camera centre, cursor | at most every 6 ticks (5 Hz), when it changed and the transmit queue has 64 free slots |
+| 14 | `RECMP_CLICK` | one `RecClick`, 20 bytes | from the click redirects, at the channel's capture tick |
+| 15 | `RECMP_SELECT` | a `RecSel` head and at most 670 `(slot, birth)` entries | the whole selection, BEGIN to END, when it changed other than by a death |
+
+Every payload's player byte is 0xFF, since the origin names the actor. A
+selection's slots lie in the actor's roster block. A seal is refused while a
+selection transaction is partial, as for kinds 2 and 11. Wire version 2 is
+unchanged, and a peer without kinds 13-15 refuses them, so every contributing
+peer needs the same build. The playback reads them at the application tick:
+Follow and the cursors interpolate between the samples' application ticks, a
+click shows from its envelope's application tick, and a selection is held to
+the composed lifecycle's birth.
 
 ### Chat in playback
 

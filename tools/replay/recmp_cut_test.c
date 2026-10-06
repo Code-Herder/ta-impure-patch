@@ -90,7 +90,8 @@ HRESULT tagpu_recmp_net_send(RecMpNet* net, const void* bytes, unsigned size)
         } else if (p->h.kind==RECMP_RECEIPT) f.receipts_sent++;
         else CHECK(p->h.kind==RECMP_RESOURCES || p->h.kind==RECMP_PLAYER ||
                    p->h.kind==RECMP_ORDERS || p->h.kind==RECMP_SEATS || p->h.kind==RECMP_UNITS ||
-                   p->h.kind==RECMP_NAMED || p->h.kind==RECMP_ROOTS || p->h.kind==RECMP_EXPLORED);
+                   p->h.kind==RECMP_NAMED || p->h.kind==RECMP_ROOTS || p->h.kind==RECMP_EXPLORED ||
+                   p->h.kind==RECMP_POV || p->h.kind==RECMP_CLICK || p->h.kind==RECMP_SELECT);
     }
 sent:
     net->stats.completed++; net->stats.completed_bytes+=size;

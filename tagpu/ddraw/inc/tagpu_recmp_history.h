@@ -7,6 +7,7 @@
 #include "tagpu_recmp_roots.h"
 #include "tagpu_recmp_explored.h"
 #include "tagpu_recmp_text.h"
+#include "tagpu_recmp_pov.h"
 
 typedef struct RecMpHistory RecMpHistory;
 
@@ -32,6 +33,12 @@ int tagpu_recmp_history_unit(const RecMpHistory* history, unsigned slot, RecMpUn
 int tagpu_recmp_history_roots(const RecMpHistory* history, unsigned origin, RecMpRootsState* out);
 int tagpu_recmp_history_named(const RecMpHistory* history, unsigned origin, RecMpNamedState* out);
 int tagpu_recmp_history_text(const RecMpHistory* history, unsigned origin, RecMpTextState* out);
+/* An actor's perspective at the application tick: its last two samples, its last click and its
+   last whole selection. 0 unknown, including a selection whose first transaction is partial. */
+int tagpu_recmp_history_pov(const RecMpHistory* history, unsigned origin, RecMpPovState* out);
+int tagpu_recmp_history_click(const RecMpHistory* history, unsigned origin, RecMpClickState* out);
+int tagpu_recmp_history_select(const RecMpHistory* history, unsigned origin, RecMpSelectState* out,
+                               RecSelEntry* entries, unsigned capacity);
 int tagpu_recmp_history_orders(const RecMpHistory* history, unsigned slot, unsigned list,
                                RecMpOrderState* out, void* image, unsigned capacity);
 

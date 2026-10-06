@@ -56,7 +56,8 @@ int tagpu_recmp_record_put(RecMpJournal* j, const RecMpHeader* h, const void* bo
     if (!j || acquire(&j->failed) || acquire(&j->ended)) return 0;
     if (!h || bytes>RECMP_BODY_MAX || (bytes && !body) ||
         h->header!=sizeof *h || h->bytes!=sizeof *h+bytes || !h->sequence ||
-        (h->kind!=RECMP_RESOURCES && h->kind!=RECMP_ORDERS && h->kind!=RECMP_PLAYER && h->kind!=RECMP_SEATS && h->kind!=RECMP_UNITS && h->kind!=RECMP_NAMED && h->kind!=RECMP_ROOTS && h->kind!=RECMP_EXPLORED && h->kind!=RECMP_TEXT && h->kind!=RECMP_SEAL) ||
+        (h->kind!=RECMP_RESOURCES && h->kind!=RECMP_ORDERS && h->kind!=RECMP_PLAYER && h->kind!=RECMP_SEATS && h->kind!=RECMP_UNITS && h->kind!=RECMP_NAMED && h->kind!=RECMP_ROOTS && h->kind!=RECMP_EXPLORED && h->kind!=RECMP_TEXT &&
+         h->kind!=RECMP_POV && h->kind!=RECMP_CLICK && h->kind!=RECMP_SELECT && h->kind!=RECMP_SEAL) ||
         memcmp(h->magic,"IMPUREMP",8) || h->version!=RECMP_VERSION ||
         memcmp(&h->match,&j->header.match,sizeof h->match) ||
         (phase!=RECMP_RECORD_PRODUCED && phase!=RECMP_RECORD_CONSUMED) ||

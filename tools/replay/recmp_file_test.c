@@ -349,9 +349,9 @@ static void read_units(RecReader* r, char* why, unsigned cap)
 }
 
 typedef struct {
-    unsigned count, bytes[32], roots;
-    RecMpRecord where[32];
-    RecMpPacket packet[32];
+    unsigned count, bytes[40], roots;
+    RecMpRecord where[40];
+    RecMpPacket packet[40];
 } Applied;
 
 static void applied_copy(void* ctx, const RecMpRecord* where, const RecMpHeader* packet,
@@ -359,7 +359,7 @@ static void applied_copy(void* ctx, const RecMpRecord* where, const RecMpHeader*
 {
     Applied* a=ctx;
     unsigned i=a->count++;
-    CHECK(i<32 && where->phase!=RECMP_RECORD_PROOF && bytes<=RECMP_BODY_MAX &&
+    CHECK(i<40 && where->phase!=RECMP_RECORD_PROOF && bytes<=RECMP_BODY_MAX &&
           packet->bytes==sizeof *packet+bytes);
     a->where[i]=*where; a->packet[i].h=*packet; a->bytes[i]=bytes;
     memcpy(a->packet[i].body,body,bytes);
@@ -382,6 +382,29 @@ static void read_applications(RecReader* r, Applied* a, uint64_t* ordinal, char*
     CHECK(recr_mp_apply(r,ordinal,applied_copy,a,why,cap)==1 && *ordinal==a->count);
     CHECK(recr_mp_apply(r,ordinal,applied_copy,a,why,cap)==1 && a->count==*ordinal);
     CHECK(a->count>=before);
+}
+
+/* The perspective contributions origins 11 and 22 published at 101: none before it, and the same
+   after a seek as after reading forward (the query history is rebuilt at a seek). */
+static void read_perspective(RecReader* r, char* why, unsigned cap)
+{
+    RecMpPovState ps;
+    RecMpSelectState ss;
+    RecSelEntry e[2];
+    if (recr_world(r)->tick<101) {
+        CHECK(recr_mp_pov(r,11,&ps,why,cap)==0 && recr_mp_select(r,11,&ss,NULL,0,why,cap)==0 &&
+              recr_mp_select(r,22,&ss,NULL,0,why,cap)==0);
+        return;
+    }
+    CHECK(recr_mp_pov(r,11,&ps,why,cap)==1 && ps.count==1 && ps.sample[0].origin==11 &&
+          ps.sample[0].source_tick==101 && ps.sample[0].applied_tick==101 &&
+          ps.sample[0].pov.cam_x==321 && ps.sample[0].pov.zoom==98304);
+    CHECK(recr_mp_pov(r,22,&ps,why,cap)==0 && recr_mp_pov(r,55,&ps,why,cap)==0);
+    CHECK(recr_mp_select(r,11,&ss,e,2,why,cap)==1 && ss.count==2 && ss.applied_tick==101 &&
+          e[0].slot==1 && e[0].birth==21 && e[1].slot==2 && e[1].birth==22);
+    CHECK(recr_mp_select(r,11,&ss,e,1,why,cap)==0);
+    CHECK(recr_mp_select(r,22,&ss,e,2,why,cap)==1 && ss.count==1 && e[0].slot==3 && e[0].birth==33);
+    CHECK(recr_mp_select(r,66,&ss,NULL,0,why,cap)==0);
 }
 
 static int read_file(const char* path, int expected)
@@ -437,6 +460,7 @@ static int read_file(const char* path, int expected)
         }
         if (expected) {
             read_units(r,why,sizeof why);
+            read_perspective(r,why,sizeof why);
             CHECK(recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 &&
                   ostate.count==0 && ostate.birth==17 && ostate.sequence==4 &&
                   ostate.source_tick==8 && ostate.applied_tick==100 && ostate.stream.Data1==2);
@@ -466,28 +490,34 @@ static int read_file(const char* path, int expected)
                 CHECK(recr_mp_explored(r,22,&e,&bit,1,why,sizeof why)==1 && bit==0 && e.lostype==5);
                 CHECK(recr_mp_explored(r,55,&e,&bit,1,why,sizeof why)==0);
             }
+            read_perspective(r,why,sizeof why);
             read_applications(r,applied,&ordinal,why,sizeof why);
-            CHECK(applied->count==30 && applied->roots==6 && applied->packet[22].h.origin==11 &&
-                  applied->packet[23].h.origin==22 && applied->packet[24].h.origin==11);
+            CHECK(applied->count==34 && applied->roots==6 && applied->packet[22].h.origin==11 &&
+                  applied->packet[23].h.origin==22 && applied->packet[24].h.origin==11 &&
+                  applied->packet[28].h.kind==RECMP_POV && applied->packet[29].h.kind==RECMP_CLICK &&
+                  applied->packet[30].h.kind==RECMP_SELECT && applied->packet[31].h.origin==22 &&
+                  applied->packet[32].h.kind==RECMP_SEAL);
             replay_ordinal=0;
-            CHECK(recr_mp_apply(r,&replay_ordinal,applied_copy,replayed,why,sizeof why)==1 && replay_ordinal==30);
+            CHECK(recr_mp_apply(r,&replay_ordinal,applied_copy,replayed,why,sizeof why)==1 && replay_ordinal==34);
             applied_equal(applied,0,replayed);
             memset(replayed,0,sizeof *replayed);
         }
         CHECK(!recr_tick(r,why,sizeof why));
         CHECK(recr_seek(r,100,0,NULL,NULL,why,sizeof why)==1 && recr_world(r)->player[0][0]==0xA5);
         if (expected) {
-            uint64_t beyond=30;
-            CHECK(recr_mp_apply(r,&beyond,applied_copy,replayed,why,sizeof why)==-1 && beyond==30 && !replayed->count);
+            uint64_t beyond=34;
+            CHECK(recr_mp_apply(r,&beyond,applied_copy,replayed,why,sizeof why)==-1 && beyond==34 && !replayed->count);
             replay_ordinal=0;
             CHECK(recr_mp_apply(r,&replay_ordinal,applied_copy,replayed,why,sizeof why)==1 && replay_ordinal==19);
             CHECK(replayed->count==19 && replayed->roots==3);
             read_units(r,why,sizeof why);
+            read_perspective(r,why,sizeof why);
             CHECK(recr_mp_player(r,66,&pstate,why,sizeof why)==1 && pstate.image[0]==66 && pstate.sequence==2);
             CHECK(recr_seek(r,101,0,NULL,NULL,why,sizeof why)==1 &&
                   recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 && ostate.sequence==4);
             read_units(r,why,sizeof why);
-            CHECK(recr_mp_apply(r,&replay_ordinal,applied_copy,replayed,why,sizeof why)==1 && replay_ordinal==30);
+            read_perspective(r,why,sizeof why);
+            CHECK(recr_mp_apply(r,&replay_ordinal,applied_copy,replayed,why,sizeof why)==1 && replay_ordinal==34);
             applied_equal(applied,0,replayed);
             CHECK(recr_mp_orders(r,1,1,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==1 && ostate.count==1);
             for (unsigned i=0;i<RECMP_ORDER_BYTES;i++) CHECK(order[i]==(unsigned char)(i*7+3));
@@ -920,6 +950,22 @@ int RECMP_FILE_TEST_MAIN(int argc, char** argv)
     for (unsigned i=0;i<3;i++) {
         struct { RecMpExploreChunk chunk; unsigned char bit; } packet={{0,1,1,i==2 ? 0xFFFF : 5,i==2 ? 3 : 7,{0}},i==2 ? 1 : 0};
         CHECK(tagpu_recmp_send_from(c,i==1 ? 22 : 11,RECMP_EXPLORED,101,&packet,sizeof packet,NULL));
+    }
+    {
+        /* the perspective kinds: 11's sample, click and two-unit selection, 22's one-unit one */
+        RecPov p={RECMP_POV_PLAYER,RECMP_POV_EVERY,REC_POV_WORLD|REC_POV_MINIMAP,0,640,480,98304,
+                  321,-654,30,4,-40};
+        RecClick k={RECMP_POV_PLAYER,REC_CLICK_LEFT,2,5,3,1,8,31,5,-41};
+        RecSel s={RECMP_POV_PLAYER,REC_SEL_BEGIN|REC_SEL_END,2,0,2};
+        RecSelEntry e[2]={{1,21},{2,22}};
+        unsigned char body[REC_SEL_BYTES(2)];
+        memcpy(body,&s,sizeof s); memcpy(body+sizeof s,e,sizeof e);
+        CHECK(tagpu_recmp_send_from(c,11,RECMP_POV,101,&p,sizeof p,NULL));
+        CHECK(tagpu_recmp_send_from(c,11,RECMP_CLICK,101,&k,sizeof k,NULL));
+        CHECK(tagpu_recmp_send_from(c,11,RECMP_SELECT,101,body,sizeof body,NULL));
+        s.total=s.count=1; e[0]=(RecSelEntry){3,33};
+        memcpy(body,&s,sizeof s); memcpy(body+sizeof s,e,sizeof *e);
+        CHECK(tagpu_recmp_send_from(c,22,RECMP_SELECT,101,body,(unsigned)REC_SEL_BYTES(1),NULL));
     }
     tagpu_recmp_retain(c);
     if (!local_stop) tagpu_recmp_end(c);

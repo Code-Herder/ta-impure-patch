@@ -12,6 +12,7 @@ struct RecMpHistory {
     RecMpOrderCache *source_orders, *applied_orders;
     RecMpExplored *source_explored, *applied_explored;
     RecMpText *source_text, *applied_text;
+    RecMpPov *source_pov, *applied_pov;
     unsigned failed;
 };
 
@@ -38,12 +39,14 @@ RecMpHistory* tagpu_recmp_history_begin(const RecMpRecordHeader* header, const R
     h->applied_explored=tagpu_recmp_explored_begin(roster,width,height);
     h->source_text=tagpu_recmp_text_begin(roster);
     h->applied_text=tagpu_recmp_text_begin(roster);
+    h->source_pov=tagpu_recmp_pov_begin(roster);
+    h->applied_pov=tagpu_recmp_pov_begin(roster);
     h->source_orders=tagpu_recmp_orders_begin(roster->slots);
     h->applied_orders=tagpu_recmp_orders_begin(roster->slots);
     if (!h->source_player || !h->applied_player || !h->source_seats || !h->applied_seats ||
         !h->source_units || !h->applied_units || !h->source_named || !h->applied_named || !h->source_roots || !h->applied_roots ||
         !h->source_orders || !h->applied_orders || !h->source_explored || !h->applied_explored ||
-        !h->source_text || !h->applied_text) {
+        !h->source_text || !h->applied_text || !h->source_pov || !h->applied_pov) {
         tagpu_recmp_history_end(h); return NULL;
     }
     return h;
@@ -68,6 +71,8 @@ void tagpu_recmp_history_end(RecMpHistory* h)
     tagpu_recmp_explored_end(h->applied_explored);
     tagpu_recmp_text_end(h->source_text);
     tagpu_recmp_text_end(h->applied_text);
+    tagpu_recmp_pov_end(h->source_pov);
+    tagpu_recmp_pov_end(h->applied_pov);
     HeapFree(GetProcessHeap(),0,h);
 }
 
@@ -99,6 +104,10 @@ static int semantic(RecMpHistory* h, const RecMpRecord* where, const RecMpHeader
         if (!tagpu_recmp_text_put(h->source_text,h->source_seats,packet,body,bytes,tick)) return 0;
         return proof || tagpu_recmp_text_put(h->applied_text,h->applied_seats,packet,body,bytes,tick);
     }
+    if (packet->kind==RECMP_POV || packet->kind==RECMP_CLICK || packet->kind==RECMP_SELECT) {
+        if (!tagpu_recmp_pov_put(h->source_pov,h->source_seats,packet,body,bytes,tick)) return 0;
+        return proof || tagpu_recmp_pov_put(h->applied_pov,h->applied_seats,packet,body,bytes,tick);
+    }
     if (packet->kind==RECMP_UNITS) {
         if (!tagpu_recmp_units_put(h->source_units,h->source_seats,packet,body,bytes,tick)) return 0;
         return proof || tagpu_recmp_units_put(h->applied_units,h->applied_seats,packet,body,bytes,tick);
@@ -126,7 +135,8 @@ static int semantic(RecMpHistory* h, const RecMpRecord* where, const RecMpHeader
     }
     if (packet->kind==RECMP_SEAL)
         return tagpu_recmp_orders_idle(h->source_orders,packet->origin) &&
-               tagpu_recmp_explored_idle(h->source_explored,packet->origin);
+               tagpu_recmp_explored_idle(h->source_explored,packet->origin) &&
+               tagpu_recmp_pov_idle(h->source_pov,packet->origin);
     /* Legacy resource samples are opaque source-ledger records. They establish
        neither a complete player baseline nor order authority. Production uses PLAYER. */
     return packet->kind==RECMP_RESOURCES;
@@ -215,4 +225,20 @@ int tagpu_recmp_history_explored(const RecMpHistory* h, unsigned origin,
                                   RecMpExploreState* out, void* image, unsigned capacity)
 {
     return h && !h->failed && tagpu_recmp_explored_get(h->applied_explored,origin,out,image,capacity);
+}
+
+int tagpu_recmp_history_pov(const RecMpHistory* h, unsigned origin, RecMpPovState* out)
+{
+    return h && !h->failed && tagpu_recmp_pov_get(h->applied_pov,origin,out);
+}
+
+int tagpu_recmp_history_click(const RecMpHistory* h, unsigned origin, RecMpClickState* out)
+{
+    return h && !h->failed && tagpu_recmp_pov_click(h->applied_pov,origin,out);
+}
+
+int tagpu_recmp_history_select(const RecMpHistory* h, unsigned origin, RecMpSelectState* out,
+                               RecSelEntry* entries, unsigned capacity)
+{
+    return h && !h->failed && tagpu_recmp_pov_select(h->applied_pov,origin,out,entries,capacity);
 }

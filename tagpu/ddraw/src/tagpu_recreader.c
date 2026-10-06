@@ -2668,3 +2668,16 @@ int recr_mp_explored(RecReader* r, unsigned origin, RecMpExploreState* out, void
     int k=mp_read(r,&r->mp_query,NULL,NULL,NULL,why,cap);
     return k<=0 ? k : tagpu_recmp_history_explored(r->mp_query.history,origin,out,image,capacity);
 }
+
+int recr_mp_pov(RecReader* r, unsigned origin, RecMpPovState* out, char* why, unsigned cap)
+{
+    int k=mp_sync(r,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_pov(r->mp_query.history,origin,out);
+}
+
+int recr_mp_select(RecReader* r, unsigned origin, RecMpSelectState* out, RecSelEntry* entries,
+                   unsigned capacity, char* why, unsigned cap)
+{
+    int k=mp_sync(r,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_select(r->mp_query.history,origin,out,entries,capacity);
+}

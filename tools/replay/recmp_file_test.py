@@ -218,6 +218,21 @@ def semantic_states(segment):
         raise RuntimeError("mixed root proof tail replaced application authority")
     if history.at(100).explored:
         raise RuntimeError("future exploration published before application")
+    early = history.at(100)
+    if early.pov or early.clicks or early.selections:
+        raise RuntimeError("future perspective published before application")
+    for tick in (101, 1000):
+        state = history.at(tick)
+        sample = struct.pack("<BBBBHHIiiiii", 0xFF, 6, 3, 0, 640, 480, 98304, 321, -654, 30, 4, -40)
+        held = state.pov.get(11, [])
+        if (set(state.pov) != {11} or len(held) != 1 or held[0]["pov"] != sample or
+                (held[0]["source_tick"], held[0]["applied_tick"]) != (101, 101) or
+                set(state.clicks) != {11} or state.clicks[11]["click"] !=
+                struct.pack("<BBBBBBHiii", 0xFF, 0, 2, 5, 3, 1, 8, 31, 5, -41) or
+                set(state.selections) != {11, 22} or
+                state.selections[11]["entries"] != [(1, 21), (2, 22)] or
+                state.selections[22]["entries"] != [(3, 33)] or state.selection_stages):
+            raise RuntimeError("perspective sample/click/selection or application cutoff")
     for tick in (101,1000):
         state=history.at(tick)
         if (set(state.explored)!={11,22} or state.explored[11]["image"]!=b"\x01" or
@@ -277,11 +292,11 @@ def application_trace(segment, log):
             roots.append((origin, source_tick, sequence, tick))
     observed = [tuple(int(v, 16 if i == 8 else 10) for i, v in enumerate(line.split()[1:]))
                 for line in log.read_text().splitlines() if line.startswith("APPLICATION ")]
-    if observed != expected or len(expected) != 30 or roots != [
+    if observed != expected or len(expected) != 34 or roots != [
             (55, 8, 5, 100), (11, 100, 5, 100), (22, 100, 5, 100),
             (11, 101, 7, 101), (22, 101, 7, 101), (11, 101, 8, 101)]:
         raise RuntimeError("C ordered application cursor differs from independent Python ledger")
-    print("application cursor: all 30 envelopes/6 mixed root batches match Python bytes and both clocks; A/B/A, query isolation, resumed ordinals, duplicate polls and seek PASS", flush=True)
+    print("application cursor: all 34 envelopes/6 mixed root batches match Python bytes and both clocks; A/B/A, query isolation, resumed ordinals, duplicate polls and seek PASS", flush=True)
 
 
 def semantic_mutation(blocks, origin, kind, phase, offset, fmt, value, envelope=False):
@@ -426,7 +441,7 @@ def run(output, read_file=None, skirmish_file=None, native_file=None,
         with (output / "setup.log").open("w") as log:
             exe = output / "recmp-file-test.exe"
             sources = ("tagpu_recmp", "tagpu_recmp_auth", "tagpu_recmp_record", "tagpu_recmp_stream", "tagpu_recmp_players",
-                       "tagpu_recmp_file", "tagpu_recmp_file_state", "tagpu_recmp_history", "tagpu_recmp_units", "tagpu_recmp_named", "tagpu_recmp_roots", "tagpu_recmp_explored", "tagpu_recmp_text", "tagpu_recmp_orders", "tagpu_recwriter",
+                       "tagpu_recmp_file", "tagpu_recmp_file_state", "tagpu_recmp_history", "tagpu_recmp_units", "tagpu_recmp_named", "tagpu_recmp_roots", "tagpu_recmp_explored", "tagpu_recmp_text", "tagpu_recmp_pov", "tagpu_recmp_orders", "tagpu_recwriter",
                        "tagpu_recreader", "tagpu_recfile", "lodepng", "crc32")
             command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc", "-O2", "-Wall",
                      "-Wextra", "-Werror", "-std=c99", "-o", exe, HERE / "recmp_file_test.c",
@@ -663,6 +678,23 @@ def run(output, read_file=None, skirmish_file=None, native_file=None,
                 ("exploration_unused_bits", 11, 11, 1, 16, "<B", 2, False),
                 ("proof_exploration_total", 55, 11, 3, 4, "<I", 2, False),
                 ("proof_exploration_partial_seal", 55, 11, 3, 12, "<B", 5, False),
+                ("pov_player", 11, 13, 1, 0, "<B", 0, False),
+                ("pov_every", 11, 13, 1, 1, "<B", 31, False),
+                ("pov_flags", 11, 13, 1, 2, "<B", 4, False),
+                ("pov_zero", 11, 13, 1, 3, "<B", 1, False),
+                ("pov_view", 11, 13, 1, 6, "<H", 16385, False),
+                ("pov_zoom", 11, 13, 1, 8, "<I", 16383, False),
+                ("click_player", 11, 14, 1, 0, "<B", 1, False),
+                ("click_button", 11, 14, 1, 1, "<B", 2, False),
+                ("click_region", 11, 14, 1, 4, "<B", 4, False),
+                ("click_itype", 11, 14, 1, 5, "<B", 2, False),
+                ("click_keys", 11, 14, 1, 6, "<H", 1, False),
+                ("select_total", 11, 15, 1, 2, "<H", 3, False),
+                ("select_flags", 11, 15, 1, 1, "<B", 7, False),
+                ("select_count_span", 11, 15, 1, 6, "<H", 1, False),
+                ("select_slot_block", 11, 15, 1, 8, "<H", 3, False),
+                ("select_slot_order", 11, 15, 1, 14, "<H", 1, False),
+                ("select_partial_seal", 22, 15, 1, 0, "<BBH", (0xFF, 1, 2), False),
                 ("player_origin", 55, 6, 2, 0, "<I", 66, False),
                 ("player_controller", 55, 6, 2, 4, "<I", 3, False),
                 ("player_missing_baseline", 55, 6, 2, 8, "<I", 0, False),

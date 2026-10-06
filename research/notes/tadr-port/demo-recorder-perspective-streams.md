@@ -5,8 +5,9 @@
 Planned 2026-10-06. Landing 4c-1 (the skirmish capture) is built and awaits its V1 run. Landing
 4c-2 (Follow, Jump and Free cam on a skirmish playback) is built and awaits its V2 run; what it
 settled beyond the plan is [4c-2 as built](#4c-2-as-built). Landing 4c-3 (the overlays and the
-dock's Overlays menu) is built and awaits its V3 run: [4c-3 as built](#4c-3-as-built). 4c-4 is not
-built. This is stage 4c of the
+dock's Overlays menu) is built and awaits its V3 run: [4c-3 as built](#4c-3-as-built). Landing
+4c-4 (multiplayer, contribution kinds 13-15) is built and awaits its V4 two-peer run:
+[4c-4 as built](#4c-4-as-built). This is stage 4c of the
 [multiplayer slice](demo-recorder-multiplayer-slice.md#stage-4-perspectives-and-communication)
 and landing 3 of [S5](demo-recorder-s5-ui.md#landings) ("the streams and the cards"). It records
 each human seat's camera, cursor, clicks and selection: the local human in a skirmish recording
@@ -311,8 +312,7 @@ the follow lever and the follow's apply in `src/tagpu_zoom.c`, the frame visit's
 
 Gaps 4c-2 leaves:
 
-- **A multiplayer playback refuses Follow and Jump** ("a multiplayer recording's perspectives are
-  not played"); 4c-4 brings them.
+- **A multiplayer playback refused Follow and Jump** here; [4c-4](#4c-4-as-built) brings them.
 - **A Vulkan frame that skips `tagpu_zoom_read_lever`** (the overlay off, the reclaim teardown's
   frames) reports nothing: a Jump made while no frame reads the lever is written until the camera
   is moved, as a Follow would be.
@@ -397,7 +397,7 @@ cursor and ring in `src/tagpu_mark.c` (`gather_overlay`), the recorded selection
 
 Gaps 4c-3 leaves:
 
-- **A multiplayer playback shows no overlays**; 4c-4 brings them.
+- **A multiplayer playback showed no overlays** here; [4c-4](#4c-4-as-built) brings them.
 - **GDI shows none** (owner Q2).
 - **Art**: the menu and DKOVER are stand-ins. The owner's kit is to supply:
   - an Overlays glyph for the dock (about 20 x 16, like the transport glyphs, with its pressed
@@ -424,6 +424,90 @@ Gaps 4c-3 leaves:
   controller 1. A slot outside the actor's roster block refuses the contribution.
 - **Consumers:** the `tagpu_replay.c` consumers listed under Playback.
 - **Build:** as with kind 11, every peer needs the same build.
+
+### 4c-4 as built
+
+Built 2026-10-06; its codec and file tests pass, and its two-peer run (V4) has not been made. The
+code: the codec and caches in `src/tagpu_recmp_pov.c` (`inc/tagpu_recmp_pov.h`), the channel's
+accept lists and `tagpu_recmp_room` in `src/tagpu_recmp.c`, `_record.c` and `_stream.c`, the
+history's caches in `src/tagpu_recmp_history.c`, `recr_mp_pov` and `recr_mp_select` in
+`src/tagpu_recreader.c`, the capture (`mp_pov_capture`) and the network click (`mp_click`) in
+`src/tagpu_recorder.c`, the playback's composition (`mp_authority`, `mp_click`, `persp_world`,
+`ov_born`) in `src/tagpu_replay.c`, and the Python mirror in `tools/replay/recmp_file.py`. What it
+settled that the plan left open:
+
+- **The payloads are tagpu_recpov.h's, with `player` 0xFF** (`RECMP_POV_PLAYER`) in every one:
+  the envelope's origin names the actor, the codec refuses any other value, and the playback
+  writes the seat the roster gives the origin.
+- **One cache for the three kinds.** For each roster actor it keeps the last two samples, the
+  last click (for inspection; the playback takes clicks from the envelopes) and a published and a
+  staged selection of `min(each, REC_SEL_MAX)` entries. The staged rows are what lets a partial
+  transaction leave the last whole selection in force, so the cache holds two selections per
+  actor where the plan counted one.
+- **What the codec checks**, the same in `tagpu_recmp_pov_put` and `recmp_file.py`, with a
+  refusal leaving the cache unchanged:
+  - the envelope's own fields, and its origin's source roster announced on the same stream;
+  - provenance per kind: a later sequence, and neither the source tick nor the application tick
+    back;
+  - a sample of exactly 32 bytes passing `rec_pov_ok`, a click of exactly 20 passing
+    `rec_click_ok`;
+  - a selection chunk of exactly `8 + 6*count` bytes with flags within BEGIN|END, a total of at
+    most `min(each, REC_SEL_MAX)`, `first + count <= total`, slots strictly ascending across the
+    transaction and inside the actor's roster block;
+  - an empty chunk only as the empty selection (total 0, BEGIN|END); END exactly at the total,
+    any other chunk short of it;
+  - BEGIN at entry 0 with nothing staged; each further chunk on the next sequence, at the same
+    source tick, with the same total, starting where the last ended. Only END publishes.
+- **The seal** is refused while an origin's selection is partial, beside the order and
+  exploration transactions, in the history, the recorder's receive loop and Python.
+- **The sampler's rule is the codec's** (`tagpu_recmp_pov_due`), so the room skip is tested
+  without a game: the last sample is the cache's latest for the origin, and a skipped sample leaves
+  it unchanged. `tagpu_recmp_room` is `256 - (published - read)` on the transmit queue.
+- **A selection is one encoder call** (`tagpu_recmp_select_encode`): chunks of 670, 670 and 160
+  for a 1500-unit block, each published and put before the next, the entries checked as put checks
+  them before anything is emitted.
+- **The capture** runs after the explored map in `mp_capture`, for each seat whose controller is 1
+  and whose origin is a roster actor of that seat (any other refuses the contribution). It samples
+  at `RECMP_POV_EVERY` (6); the selection walk is `sel_walk` under the roster's units per player,
+  and a refused walk or a walked slot outside the actor's roster block refuses the contribution,
+  with a log line. Unlike a skirmish's, whose walk refusal only stops recording the selection,
+  a contribution's refusal ends all of them: a refused walk means the block or the births column
+  has gone, which the roots refuse as well.
+- **A network click** is published from the redirect at the channel's capture tick `s_mp_tick`
+  once `s_mp_advanced` is set by the first advance, on the contributing game thread only. A refused
+  publication sets `s_mp_pov_failed`, which the next B2 and the level's end turn into the
+  contribution's refusal. An Interface Type above 1 is skipped with one log line.
+- **Log lines**: the first envelope of each kind per origin, `recmp: <local|remote> <camera
+  sample|click|selection> ID <origin> source tick <t> seq <s> applied tick <a>, <n> bytes`.
+- **The playback**:
+  - `mp_authority` copies each actor's samples (their application ticks as the samples' ticks)
+    and selection from the reader at its tick, after the explored map, and `mp_rebuild` clears
+    them before it, so a seek rebuilds them as it rebuilds the map.
+  - `persp_world` gives Follow, the overlays and the cards a copy of the reader's world with the
+    composed units, lists, samples and selections. Its `tick` is the reader's, the application
+    tick the world holds, which is the displayed tick n.
+  - A click goes into the ring from `mp_apply_held`, at its envelope's application tick, unless
+    the step composes for a seek or the envelope is a proof record. The step's root-batch split
+    (`mp_post_capture`) tests for kind 10 only, so it already passes kinds 13-15.
+  - A selection entry is drawn while the composed unit is live with bit 28 and the composed
+    lifecycle's birth for the slot is the entry's (`ov_born`).
+  - A multiplayer file's takeover timeline is a skirmish segment, and there `persp_world` is the
+    reader's own world, as for any skirmish.
+- **Tests** (2026-10-06, no game run):
+  - `tools/replay/recmp_pov_test.py` checks samples, clicks and selection chunks: every malformed
+    length and field, provenance, the 670-entry transactions, partial and interrupted ones, the
+    encoder's refusals, a seal while partial through the history, and a room-skipped sample.
+  - `recmp_file_test.py` sends a sample, a click and two selections through the real channel,
+    writer and reader. They are absent at 100 and present at 101, the same after both seeks, and
+    the C and Python histories agree on all 34 envelopes. Seventeen mutations of kinds 13-15 are
+    refused by both, the seal over a partial selection among them.
+
+Gaps 4c-4 leaves:
+
+- **V4 has not run**: no two-peer recording yet carries kinds 13-15, and the host playback's
+  Follow and selection rectangle of a joiner are unmeasured.
+- **Every peer needs this build**: a peer without kinds 13-15 refuses them as invalid data.
+- **The physical budget** (owner Q3) is still unmeasured.
 
 ## Landings
 

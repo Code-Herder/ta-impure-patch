@@ -12,7 +12,8 @@
 #define RECMP_ACTORS 10u
 enum { RECMP_RESOURCES = 1, RECMP_ORDERS = 2, RECMP_BIND = 3, RECMP_SEAL = 4,
        RECMP_RECEIPT = 5, RECMP_PLAYER = 6, RECMP_SEATS = 7, RECMP_UNITS = 8,
-       RECMP_NAMED = 9, RECMP_ROOTS = 10, RECMP_EXPLORED = 11, RECMP_TEXT = 12 };
+       RECMP_NAMED = 9, RECMP_ROOTS = 10, RECMP_EXPLORED = 11, RECMP_TEXT = 12,
+       RECMP_POV = 13, RECMP_CLICK = 14, RECMP_SELECT = 15 };
 
 #pragma pack(push, 1)
 typedef struct {
@@ -119,6 +120,10 @@ int tagpu_recmp_send_from(RecMpChannel* c, DWORD origin, unsigned kind, unsigned
    capture tick; repeated visits to one tick may still produce data for that tick.
    Seals accompany changed prefixes and at least once per 30 advancing ticks. */
 int tagpu_recmp_advance(RecMpChannel* c, unsigned tick);
+/* The transmit queue's free slots as its producer sees them. The game thread is the queue's only
+   producer and the worker only consumes, so the room can only grow between this answer and the
+   producer's next publication: a check against it holds by construction. */
+unsigned tagpu_recmp_room(RecMpChannel* c);
 /* Freeze all local producers with final prefix seals, while retaining the game
    reference/receive consumer. No further local data can be published. */
 int tagpu_recmp_finish_sources(RecMpChannel* c);

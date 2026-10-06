@@ -45,10 +45,11 @@
    - The fields of the main block and .data replay-globals.tsv lists, and the projectile pool and
      its count: *The globals and the projectiles* below; for the harness's dump, the main block
      and .data whole.
-   - The perspective of a skirmish's human seat: the camera's scroll target, the view's size, the
-     world point under the pointer, the region bits and, at the two click redirects, the armed
-     order, the cursor index, the Interface Type and the click's own message; and the seat's unit
-     block, walked within the bound *The perspective* states. All of it is game-thread state.
+   - The perspective of a skirmish's human seat, and in a multiplayer game of each local actor a
+     human controls: the camera's scroll target, the view's size, the world point under the
+     pointer, the region bits and, at the two click redirects, the armed order, the cursor index,
+     the Interface Type and the click's own message; and the seat's unit block, walked within the
+     bound *The perspective* states. All of it is game-thread state.
    - For the header, once: the unit-type definitions' names (UNITINFOCount of them), the weapons'
      names (the array's slots, tagpu_limits.h), the feature defs' names (their count), the
      skirmish settings and the game's options.
@@ -84,6 +85,7 @@
 #include "tagpu_recmp_chat_wire.h"
 #include "tagpu_recmp_chat_inbox.h"
 #include "tagpu_recmp_text.h"
+#include "tagpu_recmp_pov.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_replay_layout.h"
@@ -319,6 +321,17 @@ static const unsigned char* s_mp_explored_map;
 static unsigned char* s_mp_explored_image;
 static unsigned s_mp_explored_w, s_mp_explored_h, s_mp_explored_cells, s_mp_explored_bytes;
 static RecMpNamed* s_mp_named;
+/* each local actor's perspective as contributed, and every remote one's as received
+   (mp_pov_capture); s_mp_advanced: the channel has advanced once, so a click has a capture tick to
+   be published at; s_mp_pov_failed: a click's publication was refused, which mp_capture turns into
+   the contribution's refusal at its next B2 */
+static RecMpPov* s_mp_pov;
+static unsigned s_mp_advanced, s_mp_pov_failed, s_mp_clicks_odd;
+static unsigned char s_mp_pov_seen[RECMP_ACTORS];
+static RecSelEntry s_mp_sel_now[REC_SEL_MAX], s_mp_sel_last[REC_SEL_MAX];
+static int mp_pov_capture(const Level* L, unsigned tick);
+static void mp_pov_log(const RecMpHeader* h, unsigned tick, const char* where);
+static void mp_pov_end(void);
 static RecMpRoots* s_mp_roots;
 static RecMpRootsQueue* s_mp_roots_queue;
 static const char* s_nano_unit;
@@ -939,6 +952,13 @@ static void mp_explored_end(void)
     s_mp_explored_w=s_mp_explored_h=s_mp_explored_cells=s_mp_explored_bytes=0;
 }
 
+static void mp_pov_end(void)
+{
+    tagpu_recmp_pov_end(s_mp_pov); s_mp_pov=NULL;
+    s_mp_advanced=s_mp_pov_failed=s_mp_clicks_odd=0;
+    memset(s_mp_pov_seen,0,sizeof s_mp_pov_seen);
+}
+
 static int mp_explored_begin(const Level* L, const RecMpRoster* roster)
 {
     unsigned w=*(const unsigned*)(L->ta+OFF_GRID_W), h=*(const unsigned*)(L->ta+OFF_GRID_H);
@@ -1095,12 +1115,15 @@ static void mp_capture(const Level* L, unsigned tick)
         s_mp_text = tagpu_recmp_text_begin(&roster);
         s_mp_text_queue = tagpu_recmp_text_queue_begin();
         s_mp_orders = tagpu_recmp_orders_begin(L->nslots);
+        s_mp_pov = tagpu_recmp_pov_begin(&roster);
         if (!mp_explored_begin(L,&roster) || !s_mp_players || !s_mp_seats || !s_mp_units || !s_mp_orders ||
-            !s_mp_named || !s_mp_roots || !s_mp_roots_queue || !s_mp_text || !s_mp_text_queue) {
+            !s_mp_named || !s_mp_roots || !s_mp_roots_queue || !s_mp_text || !s_mp_text_queue ||
+            !s_mp_pov) {
             tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
             tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
             tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
             mp_explored_end();
+            mp_pov_end();
             mp_roots_end();
             tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
             tagpu_logf("recmp: no bounded player/order cache: no contributions");
@@ -1113,6 +1136,7 @@ static void mp_capture(const Level* L, unsigned tick)
             tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
             tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
             mp_explored_end();
+            mp_pov_end();
             mp_roots_end();
             tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
             tagpu_logf("recmp: contribution worker could not start");
@@ -1135,9 +1159,11 @@ static void mp_capture(const Level* L, unsigned tick)
                                       &s_mp_roster,s_mp_text_queue)) goto incomplete;
     /* The pump at 0x4954C8 can start roots at T before B2. Post-B2 roots
        from T-1 must be sent before advance seals that source tick. */
-    if (s_mp_roots_failed || s_mp_text_failed || !mp_events_flush(s_mp_tick)) goto incomplete;
+    if (s_mp_roots_failed || s_mp_text_failed || s_mp_pov_failed || !mp_events_flush(s_mp_tick))
+        goto incomplete;
     if (!tagpu_recmp_advance(s_mp_channel, tick) || !mp_events_flush(tick)) goto incomplete;
     s_mp_tick = tick;
+    s_mp_advanced = 1;
     for (i = 0; i < REC_PLAYERS; i++) {
         const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
         unsigned img[REC_PLAYER_DWORDS], origin;
@@ -1179,7 +1205,8 @@ static void mp_capture(const Level* L, unsigned tick)
         RecMpPlayerState before, state;
         if (packet.h.kind == RECMP_SEAL) {
             if (!tagpu_recmp_orders_idle(s_mp_orders, packet.h.origin) ||
-                !tagpu_recmp_explored_idle(s_mp_explored,packet.h.origin)) goto incomplete;
+                !tagpu_recmp_explored_idle(s_mp_explored,packet.h.origin) ||
+                !tagpu_recmp_pov_idle(s_mp_pov,packet.h.origin)) goto incomplete;
             continue;
         }
         if (packet.h.kind == RECMP_SEATS) {
@@ -1196,6 +1223,13 @@ static void mp_capture(const Level* L, unsigned tick)
             if (!tagpu_recmp_explored_put(s_mp_explored,s_mp_seats,&packet.h,packet.body,
                                           packet.h.bytes-sizeof packet.h,tick)) goto incomplete;
             if (!known) mp_explored_log(packet.h.origin,tick,"remote");
+            continue;
+        }
+        if (packet.h.kind == RECMP_POV || packet.h.kind == RECMP_CLICK ||
+            packet.h.kind == RECMP_SELECT) {
+            if (!tagpu_recmp_pov_put(s_mp_pov,s_mp_seats,&packet.h,packet.body,
+                                     packet.h.bytes-sizeof packet.h,tick)) goto incomplete;
+            mp_pov_log(&packet.h,tick,"remote");
             continue;
         }
         if (packet.h.kind == RECMP_TEXT) {
@@ -1261,7 +1295,8 @@ static void mp_capture(const Level* L, unsigned tick)
         tagpu_logf("recmp: contribution source sequence or stream is incomplete");
         goto incomplete;
     }
-    if (!mp_units_capture(L, tick) || !mp_orders_capture(L, tick) || !mp_explored_capture(L,tick)) goto incomplete;
+    if (!mp_units_capture(L, tick) || !mp_orders_capture(L, tick) || !mp_explored_capture(L,tick) ||
+        !mp_pov_capture(L, tick)) goto incomplete;
     if (tick - s_mp_logtick >= 150) {
         tagpu_recmp_stats(s_mp_channel, &stats);
         tagpu_logf("recmp: tick=%u sent=%u bytes=%u received=%u queued=%u lost=%u failed=%08X "
@@ -1283,6 +1318,7 @@ incomplete:
     tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
     tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
     mp_explored_end();
+    mp_pov_end();
     tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
 }
 
@@ -3504,8 +3540,9 @@ static int cap_mapped(Rec* r, const Level* L)
 #define PL_BLOCKLAST   0x6B         /*   inclusive (E9)                                           */
 #define U_SELECTED     0x10u        /* +0x110 bit 4, which the destructor clears (0x486DE8)        */
 
-/* The sample this capture point would send, into `p`; 0 when the view's size is no view's. */
-static int pov_sample(const char* ta, unsigned player, RecPov* p)
+/* The sample this capture point would send, into `p`, for `player` (0xFF in a contribution) and
+   a sampler `every` ticks apart; 0 when the view's size is no view's. */
+static int pov_sample(const char* ta, unsigned player, unsigned every, RecPov* p)
 {
     int w = *(const int*)(ta + OFF_VIEW_W), h = *(const int*)(ta + OFF_VIEW_H);
     unsigned seq, centre, epoch, region = (unsigned char)ta[OFF_REGION];
@@ -3517,7 +3554,7 @@ static int pov_sample(const char* ta, unsigned player, RecPov* p)
     if (level > TAGPU_ZOOM_MAX) level = TAGPU_ZOOM_MAX;
     memset(p, 0, sizeof *p);
     p->player = (uint8_t)player;
-    p->every = REC_POV_EVERY;
+    p->every = (uint8_t)every;
     p->flags = (uint8_t)(((region & 2) ? REC_POV_WORLD : 0) | ((region & 1) ? REC_POV_MINIMAP : 0));
     p->view_w = (uint16_t)w;
     p->view_h = (uint16_t)h;
@@ -3565,15 +3602,16 @@ static int sel_walk(const Level* L, unsigned player, unsigned each, const unsign
     return n;
 }
 
-/* The selection changed other than by a death: the last record's entries whose unit is still live
-   with the same birth differ from the walk's. A death alone leaves the two equal, so a battle does
-   not resend the set each tick. */
-static int sel_changed(const Rec* r, const Level* L, unsigned player, const unsigned* birth,
-                       const RecSelEntry* now, unsigned n)
+/* The selection changed other than by a death: the last record's `nlast` entries whose unit is
+   still live with the same birth differ from the walk's. A death alone leaves the two equal, so a
+   battle does not resend the set each tick. The last record's slots are the walk's of an earlier
+   capture point, inside the same block, so below nslots. */
+static int sel_changed(const RecSelEntry* last, unsigned nlast, const Level* L,
+                       const unsigned* birth, const RecSelEntry* now, unsigned n)
 {
     unsigned i, k = 0;
-    for (i = 0; i < r->nsel[player]; i++) {
-        const RecSelEntry* e = &r->sel[player][i];
+    for (i = 0; i < nlast; i++) {
+        const RecSelEntry* e = &last[i];
         unsigned state = *(const unsigned*)(L->begin + (size_t)e->slot * REC_UNIT_BYTES + U_STATE);
         if (!(state & U_ALIVE) || birth[e->slot] != e->birth) continue;
         if (k == n || now[k].slot != e->slot || now[k].birth != e->birth) return 1;
@@ -3595,7 +3633,8 @@ static int cap_pov(Rec* r, const Level* L, int tick)
         (unsigned char)L->ta[OFF_PLAYERS + p * PL_STRIDE + PL_CONTROLLER] != 1)
         return 1;
     if ((!r->pov_in[p] || (unsigned)tick - r->pov_tick[p] >= REC_POV_EVERY) &&
-        pov_sample(L->ta, p, &pov) && (!r->pov_in[p] || memcmp(&pov, &r->pov[p], sizeof pov))) {
+        pov_sample(L->ta, p, REC_POV_EVERY, &pov) &&
+        (!r->pov_in[p] || memcmp(&pov, &r->pov[p], sizeof pov))) {
         if (!ring_put(r, RK_POV, &pov, sizeof pov, NULL, 0)) return 0;
         r->pov[p] = pov;
         r->pov_tick[p] = (unsigned)tick;
@@ -3609,7 +3648,7 @@ static int cap_pov(Rec* r, const Level* L, int tick)
                        "block is not a run of at most %u slots of the array, or the births column "
                        "is missing", p, tick, r->each < REC_SEL_MAX ? r->each : REC_SEL_MAX);
         r->sel_refused = 1;
-    } else if (sel_changed(r, L, p, birth, r->selnow, (unsigned)n)) {
+    } else if (sel_changed(r->sel[p], r->nsel[p], L, birth, r->selnow, (unsigned)n)) {
         RecSel head;
         head.player = (uint8_t)p;
         head.flags = REC_SEL_BEGIN | REC_SEL_END;
@@ -3619,6 +3658,88 @@ static int cap_pov(Rec* r, const Level* L, int tick)
             return 0;
         memcpy(r->sel[p], r->selnow, (size_t)n * sizeof(RecSelEntry));
         r->nsel[p] = (unsigned short)n;
+    }
+    return 1;
+}
+
+/* the first envelope of each perspective kind an origin publishes here or the channel delivers */
+static void mp_pov_log(const RecMpHeader* h, unsigned tick, const char* where)
+{
+    static const char* const what[] = { "camera sample", "click", "selection" };
+    unsigned row, k = h->kind - RECMP_POV;
+    for (row = 0; row < s_mp_roster.count; row++)
+        if (s_mp_roster.actor[row].origin == h->origin) break;
+    if (row == s_mp_roster.count || k > 2 || (s_mp_pov_seen[row] & (1u << k))) return;
+    s_mp_pov_seen[row] |= (unsigned char)(1u << k);
+    tagpu_logf("recmp: %s %s ID %u source tick %u seq %u applied tick %u, %u bytes",
+               where, what[k], h->origin, h->tick, h->sequence, tick,
+               h->bytes - (unsigned)sizeof *h);
+}
+
+static int mp_pov_send(unsigned origin, unsigned kind, unsigned tick, const void* body,
+                       unsigned bytes)
+{
+    RecMpHeader header;
+    if (!tagpu_recmp_send_from(s_mp_channel, origin, kind, tick, body, bytes, &header) ||
+        !tagpu_recmp_pov_put(s_mp_pov, s_mp_seats, &header, body, bytes, tick)) return 0;
+    mp_pov_log(&header, tick, "local");
+    return 1;
+}
+
+static int mp_select_emit(void* ctx, unsigned origin, const void* body, unsigned bytes)
+{
+    return mp_pov_send(origin, RECMP_SELECT, *(const unsigned*)ctx, body, bytes);
+}
+
+/* THE PERSPECTIVE of each local actor a human controls (+0x73 == 1), as its contributions
+   RECMP_POV and RECMP_SELECT (the plan's *Multiplayer*): what cap_pov takes for a skirmish's seat,
+   with cap_pov's ORDERING and ONE THREAD, at this capture point after the explored map. A camera
+   sample goes at most every RECMP_POV_EVERY ticks and only when it changed, and is skipped while
+   the transmit queue has fewer than RECMP_POV_ROOM free slots (tagpu_recmp_pov_due): the room can
+   only grow before the publication, since this thread is the queue's only producer
+   (tagpu_recmp_room). A selection is reliable: it goes whole, as one transaction, whenever it
+   changed other than by a death. The BOUND is sel_walk's, under the roster's units per player;
+   and every slot the walk names must lie in the actor's own roster block, the block the readers
+   hold a selection to, or the contribution is refused. 0 refuses it. */
+static int mp_pov_capture(const Level* L, unsigned tick)
+{
+    const unsigned* birth = mp_births(L);
+    unsigned seat, i;
+    for (seat = 0; seat < REC_PLAYERS; seat++) {
+        const char* player = L->ta + OFF_PLAYERS + seat * PL_STRIDE;
+        const RecMpSeat* actor = NULL;
+        RecMpSelectState last;
+        RecPov pov;
+        unsigned origin, nlast;
+        int n;
+        if ((unsigned char)player[PL_CONTROLLER] != 1) continue;
+        memcpy(&origin, player + 4, sizeof origin);
+        for (i = 0; i < s_mp_roster.count; i++)
+            if (s_mp_roster.actor[i].origin == origin) actor = &s_mp_roster.actor[i];
+        if (!actor || actor->seat != seat) return 0;
+        if (pov_sample(L->ta, RECMP_POV_PLAYER, RECMP_POV_EVERY, &pov)) {
+            int due = tagpu_recmp_pov_due(s_mp_pov, origin, &pov, tick, tagpu_recmp_room(s_mp_channel));
+            if (due < 0 || (due && !mp_pov_send(origin, RECMP_POV, tick, &pov, sizeof pov)))
+                return 0;
+        }
+        n = sel_walk(L, seat, s_mp_roster.each, birth, s_mp_sel_now);
+        if (n < 0) {
+            tagpu_logf("recmp: player %u's selection cannot be walked at tick %u: its unit block is "
+                       "not a run of at most %u slots of the array, or the births column is missing",
+                       seat, tick, s_mp_roster.each < REC_SEL_MAX ? s_mp_roster.each : REC_SEL_MAX);
+            return 0;
+        }
+        for (i = 0; i < (unsigned)n; i++)
+            if (s_mp_sel_now[i].slot < actor->first || s_mp_sel_now[i].slot > actor->last) {
+                tagpu_logf("recmp: player %u selects slot %u at tick %u, outside its block %u..%u",
+                           seat, s_mp_sel_now[i].slot, tick, actor->first, actor->last);
+                return 0;
+            }
+        nlast = tagpu_recmp_pov_select(s_mp_pov, origin, &last, s_mp_sel_last, REC_SEL_MAX) ?
+                last.count : 0;
+        if (sel_changed(s_mp_sel_last, nlast, L, birth, s_mp_sel_now, (unsigned)n) &&
+            !tagpu_recmp_select_encode(s_mp_pov, origin, s_mp_sel_now, (unsigned)n,
+                                       mp_select_emit, &tick)) return 0;
     }
     return 1;
 }
@@ -4961,13 +5082,57 @@ static int __cdecl ev_spray1(void* E) { cnt(0x00472200u, ARG(E, 0), 0); ev_spray
    ones the action acts on. Each action is stdcall(record), `ret 4`, and both start by saving ecx
    and reloading main (0x498F70, 0x499100): they read no register of their caller's. The record
    is the handler's own stack copy (0x499210..0x49921A), its wParam at +8 (0x498FA9, 0x49917A).
-   The redirect records, then calls the action with the same argument; only a skirmish
-   recording's game thread records (ev_rec), and everywhere else it only passes through. */
+   The redirect records, then calls the action with the same argument. A skirmish recording's
+   game thread records the click as RK_CLICK (ev_rec). A multiplayer game's contributing game
+   thread (s_mp_tid) publishes it as RECMP_CLICK at the channel's capture tick, the last B2's,
+   which send_from accepts until the next advance; the click runs before this frame's tick loop
+   (E3), so no later tick has been advanced to. Not before the channel's first advance, which
+   gives the capture tick. Everywhere else it only passes through. */
 typedef void (__stdcall* PFN_Click)(void* msg);
 #define E_ClickLeft      ((PFN_Click)0x00498F70u)
 #define E_ClickRight     ((PFN_Click)0x00499100u)
 #define CLICK_LEFT_CALL  0x004995B3u
 #define CLICK_RIGHT_CALL 0x004993ACu
+
+/* the click this message makes, for `player` (0xFF in a contribution) */
+static void click_fill(const char* ta, const void* msg, unsigned button, unsigned player,
+                       RecClick* c)
+{
+    c->player = (uint8_t)player;
+    c->button = (uint8_t)button;
+    c->order = (uint8_t)ta[OFF_ORDER];
+    c->cursor = (uint8_t)ta[OFF_CURSOR_IX];
+    c->region = (uint8_t)(ta[OFF_REGION] & 3);
+    c->itype = (uint8_t)*(const unsigned*)(ta + OFF_ITYPE);
+    c->keys = (uint16_t)(*(const unsigned*)((const char*)msg + 8) & REC_CLICK_KEYS);
+    c->x = *(const int16_t*)(ta + OFF_POINT_X);
+    c->h = *(const int16_t*)(ta + OFF_POINT_H);
+    c->z = *(const int16_t*)(ta + OFF_POINT_Z);
+}
+
+/* The controlled player's click as its actor's RECMP_CLICK. A refused publication refuses the
+   contribution at the next B2 (s_mp_pov_failed), since a hook cannot end the channel itself. */
+static void mp_click(const void* msg, unsigned button)
+{
+    const char* ta = s_mp_level.ta;
+    unsigned p = (unsigned char)ta[OFF_CONTROLLED], itype = *(const unsigned*)(ta + OFF_ITYPE);
+    unsigned origin, i;
+    RecClick c;
+    if (p >= REC_PLAYERS || (unsigned char)ta[OFF_PLAYERS + p * PL_STRIDE + PL_CONTROLLER] != 1)
+        return;
+    if (itype > 1) {
+        if (!s_mp_clicks_odd++)
+            tagpu_logf("recmp: a click at tick %u is not contributed: the Interface Type "
+                       "main+0x37EFA is %u, not 0 or 1", s_mp_tick, itype);
+        return;
+    }
+    memcpy(&origin, ta + OFF_PLAYERS + p * PL_STRIDE + 4, sizeof origin);
+    for (i = 0; i < s_mp_roster.count; i++)
+        if (s_mp_roster.actor[i].origin == origin && s_mp_roster.actor[i].seat == p) break;
+    click_fill(ta, msg, button, RECMP_POV_PLAYER, &c);
+    if (i == s_mp_roster.count || !mp_pov_send(origin, RECMP_CLICK, s_mp_tick, &c, sizeof c))
+        s_mp_pov_failed = 1;
+}
 
 static void __stdcall rec_click(void* msg, unsigned button)
 {
@@ -4983,19 +5148,13 @@ static void __stdcall rec_click(void* msg, unsigned button)
                                "Type main+0x37EFA is %u, not 0 or 1", r->tick, itype);
             } else {
                 RecClick c;
-                c.player = (uint8_t)p;
-                c.button = (uint8_t)button;
-                c.order = (uint8_t)ta[OFF_ORDER];
-                c.cursor = (uint8_t)ta[OFF_CURSOR_IX];
-                c.region = (uint8_t)(ta[OFF_REGION] & 3);
-                c.itype = (uint8_t)itype;
-                c.keys = (uint16_t)(*(const unsigned*)((const char*)msg + 8) & REC_CLICK_KEYS);
-                c.x = *(const int16_t*)(ta + OFF_POINT_X);
-                c.h = *(const int16_t*)(ta + OFF_POINT_H);
-                c.z = *(const int16_t*)(ta + OFF_POINT_Z);
+                click_fill(ta, msg, button, p, &c);
                 ev_put(r, RK_CLICK, &c, sizeof c);
             }
         }
+    } else if (s_mp_channel && s_mp_pov && s_mp_advanced && !s_mp_pov_failed && s_mp_tid &&
+               GetCurrentThreadId() == s_mp_tid) {
+        mp_click(msg, button);
     }
     (button == REC_CLICK_RIGHT ? E_ClickRight : E_ClickLeft)(msg);
 }
@@ -6750,7 +6909,7 @@ void tagpu_rec_level_end(void)
     if (s_mp_channel &&
         (!tagpu_recmp_chat_inbox_finish(s_mp_chat_inbox,&s_mp_active_match,s_mp_local,
                                        &s_mp_roster,s_mp_text_queue) ||
-         s_mp_roots_failed || s_mp_text_failed || !mp_events_flush(~0u)))
+         s_mp_roots_failed || s_mp_text_failed || s_mp_pov_failed || !mp_events_flush(~0u)))
         tagpu_recmp_abort(s_mp_channel,E_ABORT);
     mp_roots_end();
     tagpu_recmp_end(s_mp_channel);
@@ -6765,6 +6924,7 @@ void tagpu_rec_level_end(void)
     tagpu_recmp_units_end(s_mp_units);
     s_mp_units = NULL;
     mp_explored_end();
+    mp_pov_end();
     memset(&s_mp_roster, 0, sizeof s_mp_roster);
     s_mp_tried = 0;
     memset(s_mp_orders_seen, 0, sizeof s_mp_orders_seen);
