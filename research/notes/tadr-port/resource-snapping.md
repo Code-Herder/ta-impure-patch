@@ -378,8 +378,8 @@ after it, so both the queued and absent states reach recorder capture points bef
 Native acknowledgements or later render frames alone are insufficient. The
 landing harness also checks event attribution, effect counts, address values, puppet writes and
 the complete main/.data images. Paused viewer samples exercise camera movement, GUI-consumed
-mouse messages, all valid coordinate bits and a native selected-type change. Thirteen additional
-views and the final view each retain exact comparison of carried simulation state against the
+mouse messages, all valid coordinate bits and native selected-type changes. Additional paused
+camera/selection views and the final view each retain exact comparison of carried simulation state against the
 first paused view. Three owner-approved four-byte GUI metadata fields stay local to the viewer:
 the active screen pointer, mouse-event clock and bitmap-font pointer. No simulation comparison
 or tolerance is loosened; [recorder completeness](demo-recorder-completeness.md) records their
@@ -453,9 +453,13 @@ stock-resource-mex → wpn-badtgt run with content-boundary catalogue invalidati
 native active slots on human and AI probes; guarded coverage reaches the allocator and stack
 observer. Trace is removed before recording, because its allocator hook displaces the ordinary
 sink counter. The latest combined run completed all 37 live recordings, but disk exhaustion
-interrupted the remaining replay lanes. Redundant frame dumps from earlier passing fixtures
-were removed while preserving recordings, logs, coverage and failing cases. The whole landing
-gate remains outstanding; no passing replay note is claimed.
+interrupted the remaining replay lanes. Its completed report also identifies three strict
+UI-image failures: CORCK's displayed type in `resource-nozoom`, the native gadget-status latch
+in `resource-plain`, and Shift in the latest mouse flags in `resource-upgrade`. Their native
+writers and the unsuccessful gadget-latch diagnostic are recorded in the engine map. No new
+exclusion has been applied. Redundant binary artifacts from completed passing fixture reports
+were removed while preserving logs, coverage, summaries and failing/incomplete cases. A fresh
+whole-landing run is in progress; the gate remains outstanding and no passing replay note is claimed.
 
 The null twin now samples camera positions across the map's native scroll extents and selects
 ARMACK and RSNRACK in separate refusal-fixture views. The prior small camera sweep never set the minimap rectangle's

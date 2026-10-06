@@ -13892,6 +13892,18 @@ the surface to `0x4AB290(GUIInfo, surface)` instead and stores nothing. 42 calle
 `"bitmaps\loadgame2bg.PCX"`, 640×480 [MEASURED 2026-09-29, `gui trace: alloc`]. How the picture
 then reaches the frame is *The loading frame*, below.
 
+**Background-cache helpers [DISASSEMBLED 2026-10-05].** `0x428730` walks the ten
+`0x28`-byte records from `0x5120B8` to the exclusive end `0x512248`. A non-NULL
+surface is freed through `0x4C6AC0` at `0x428741`, and its name through `0x4D85A0`
+at `0x42874A`. It clears a matching `main+0x11EB` at `0x428763` and a matching
+active GUI screen's background pointer `screen+0x24` at `0x428781`, then zeroes
+the record. Direct callers are `0x4916F6` and `0x49835D`. `0x4287B0`, called at
+`0x491635`, initializes that cache with 100 zero dwords. The name lookup
+`0x4287D0` walks the cached names at `0x5120C0` with the same stride and returns
+the associated name pointer at `0x5120BC`; no direct CALL to its entry was found.
+That negative result does not exclude an indirect caller. None of these helpers
+writes the adjacent `main+0x11E7` gadget-status latch.
+
 ### The loading frame — what the game thread draws while the loader thread runs [DISASSEMBLED + MEASURED 2026-09-29]
 
 *Read with `i686-w64-mingw32-objdump -d -M intel` on `pristine/TotalA.exe.pristine`; the flips and
@@ -16556,6 +16568,60 @@ explicitly. The full landing tier remains the runtime gate for the resulting lis
 ARMACK changes the type to 4 at paused GameTime 1722, which remains 1722 after selection.
 The resource-refusals null twin selects ARMACK through native input and requires its displayed
 type before a thirteenth dump; that dump's carried simulation must still equal the paused base.
+
+**Additional strict-image failures [DISASSEMBLED + MEASURED 2026-10-05].** The
+disk-interrupted combined run also completed three failing image comparisons:
+`resource-nozoom` at T1291 names `main+0x37E9E` (live `0xA5`, playback/seek zero),
+`resource-plain` at T481 names `main+0x11E7` (live 1, playback/seek zero), and
+`resource-upgrade` at T481 names `main+0x55D` (live 4, playback/seek zero).
+Each reports one differing byte. These are outstanding failures, not passing
+simulation evidence; the existing comparison list has not been widened for them.
+
+`main+0x55D` is the full four-byte native event wParam, `GUI+0x44`, within the
+six-dword copies at `0x4AB66C`/`0x4C2356` described above. Bit 2 is `MK_SHIFT`;
+the right mouse button is bit 1. An isolated native paused probe at GameTime 172
+changes the flags from 0 to 4 using held Shift and a mouse move. The same frozen
+probe selects ARMCK, ARMACK and CORCK and observes displayed types 32, 4 and 165
+respectively. Thus the old no-zoom value `0xA5` is CORCK's displayed type, not
+ARMCK's. The current refusal-only selection samples do not exercise that type
+in every resource fixture.
+
+`main+0x11E7` is `GUI+0xCCE`, a four-byte saved signed gadget status. The native
+handler `0x4A6AE0`, called at `0x4AA24C`, resolves the active screen at `GUI+0x18`
+and its gadget array at `screen+4`, with stride `0x15B`. At `0x4A6BC0` and
+`0x4A6BF1` it sign-extends gadget word `+0x138`; the stores at `0x4A6BC7` and
+`0x4A6BF8` save that value in the GUI latch. The branches follow left/right
+press tests through `0x4AB510` at `0x4A6BA1`/`0x4A6BD2`. That helper tests
+`GUI+0x4C` for native messages `0x201`/`0x203` or `0x204`/`0x206` and returns
+with `ret 8`. Its other direct callers are `0x4A3A13`, `0x4A3A58`, `0x4A430F`,
+`0x4A43B8`, `0x4A44EC`, `0x4A451B`, `0x4A4BCF`, `0x4A4C02`, `0x4A6DD2`,
+`0x4A73D7` and `0x4A744F`.
+
+The latch's word reads at `0x4A6C56`/`0x4A6CE3` restore gadget `+0x138` when
+the pointer is outside its rectangle. Its dword read at `0x4A6CB2` supplies the
+zero/nonzero toggle stored at `0x4A6CBF`. The latter branch tests the held-button
+mask through `0x4AB5B0`: that helper reads `GUI+0x54`, ANDs its requested mask
+and returns a boolean with `ret 8`; it does not decode a mouse-up message.
+Direct callers are `0x4A3AB6`, `0x4A4204`, `0x4A4553`, `0x4A4C3E`, `0x4A6C17`,
+`0x4A6C82`, `0x4A6D66` and `0x4A6E62`. The handler calls `0x4A0340` and
+`0x4A5F40` at `0x4A6CC8`/`0x4A6CCF` after updating gadget state, and returns
+with `ret 12`. A displacement search finds those two stores and three reads of
+`+0xCCE`; it does not prove the absence of an aliased or block-copy access.
+
+Related reset `0x4A69D0` clears nonzero type-1 gadget status words over the
+native signed count at panel `+0xB6`, starting at gadget 1; it requests a redraw
+through `GUI+0xCCA` at `0x4A6A14`. No direct CALL to this entry was found.
+`0x4A6A40` applies the same reset only to the supplied gadget's byte-1 group,
+and sets the redraw flag at `0x4A6AAF`. Its direct callers are `0x4958AD`,
+`0x49591F`, `0x495F82`, `0x49900C`, `0x4990F1`, `0x499159` and `0x49933D`.
+Neither reset writes `GUI+0xCCE`.
+
+Three isolated diagnostic attempts did not reproduce the latch changing to 1
+with the native Interface `LEFTCLICK` control. Their stage assertions failed
+before the paired dump comparisons ran. The frozen-tick flags/type observations
+above are established; a paired carried-state proof for this particular gadget
+status is not. The native writers establish its GUI owner, not a successful
+diagnostic regression or owner approval for a new exclusion.
 
 `main+0x142CB..+0x142DA` holds four signed dwords for the minimap camera rectangle.
 `0x41C3C0` clamps eye `+0x1431F/+0x14323` against native scroll extents `+0x1422B/+0x1422F`
