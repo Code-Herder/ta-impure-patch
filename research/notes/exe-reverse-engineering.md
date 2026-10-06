@@ -3712,6 +3712,16 @@ rebuild `0x4816A0(1)` (`0x497AE5`), the first reader of the viewed record's coun
 loaded: `0x51E58C` is set nonzero only at `0x46C00F` and zeroed at `0x46C11F`, `0x46C149` and
 `0x46C1CF` (after `FreeLibrary`). The replay refuses to seat while it is set.
 
+**The destructor's death cue `0x4869EB`** [DISASSEMBLED 2026-10-06]: `0x494FF0(5)`, stdcall
+`ret 4` (`0x495000`), adds 5 to the music's combat ring when the dying unit's killer byte `+0xF4`
+equals the controlled index (`0x4869D7..0x4869E3`). `+0xF4` is written by the hit `0x489DC0` as
+the attacker's owner `+0xFF`; MEASURED 2026-10-06, it holds 10 on 906 of 1448 deaths in the battle
+fixture and on every death in the ten-seat fixture, so with record 10 controlled the cue would fire
+on most deaths. The replay retargets the call to a stub that returns, popping the argument, on a
+puppet level and otherwise jumps to `0x494FF0` (`tagpu_replay.c`, THE DEATH CUE). The hit cue at
+`0x489DE6` compares the attacker's and the victim's `+0xFF` with the controlled index and needs no
+gate.
+
 **The resource bar's colour badge reads the viewed record's colour with no bound** [DISASSEMBLED
 2026-10-06]: the bar reads the viewed index `main+0x2A43` (`0x468E4B`), forms the record at
 `0x468E73` and calls the badge `0x467C00` at `0x4690AB`. The badge reads PlayerInfo `+0x96`

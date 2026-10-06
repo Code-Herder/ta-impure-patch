@@ -3364,8 +3364,11 @@ the allocator and READY/FAILED back to the first game-thread step after the
 engine's load-done gate. The loader reads no mutable replay reader and does not
 write its failure flag.
 
-**Sites.** Five call sites of the Start and the loader, installed by `tagpu_replay_init`, all or
-none, and inert without an accepted request: the seat fill's call `0x47B092`, the settings
+**Sites.** Six call sites of the Start, the loader and the destructor, installed by
+`tagpu_replay_init`, all or none, and inert without an accepted request: the destructor's death cue
+`0x4869EB` (`call 0x494FF0`, the music's combat ring +5 when a death's killer byte equals the
+controlled index), which returns with its argument popped on a puppet level, where the controlled
+record is the viewer's record 10; the seat fill's call `0x47B092`, the settings
 persist's call `0x47B09C`, the start units' calls `0x497963` and `0x497ACD`, and the level init's
 call `0x4919C8` (`E8 C3 2F FD FF`), retargeted to `tagpu_replay_level_players`, which calls
 `0x464990` and then, on the loader thread and only on a level the seating armed, the player init

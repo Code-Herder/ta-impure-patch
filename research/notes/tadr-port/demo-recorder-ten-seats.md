@@ -287,12 +287,14 @@ the render-feeding readers bound. Each run below is a game of 10 minutes or less
 
 ## 6. Residuals and gaps
 
-- **R1, the music cue.** The destructor plays music event 5 whenever the killer byte `+0xF4` equals
-  `+0x2A42` (`0x4869D1..0x4869EB`: the compare at `0x4869DD`, the call `0x494FF0` at `0x4869EB`).
-  With record 10 controlled, a death credited to player 10 plays it on the host and not on the
-  recording machine. It is audio only, and the music is the viewer's own (`leave`). How often it
-  fires is item 6; [INFERRED] killer 10 comes from owner-10 damage (meteors, B7's shooterless
-  projectiles). Owner decision O3.
+- **R1, the music cue: closed by a gate.** The destructor adds 5 to the music's combat ring (the
+  call `0x494FF0` at `0x4869EB`) whenever a death's killer byte `+0xF4` equals `+0x2A42` (the
+  compare at `0x4869DD`). With record 10 controlled that matched most deaths: MEASURED 2026-10-06,
+  `+0xF4` = 10 on 906 of 1448 deaths in the battle fixture, every death in the ten-seat fixture, and
+  3 of 35 in a four-actor network recording, so the playback leaned to the battle music. On a puppet
+  level the call site returns without the cue (`tagpu_replay.c`, THE DEATH CUE), as the cue never
+  fired for a viewer before it had record 10. The hit cue `0x489DE6` compares owners (`+0xFF`), which
+  are never 10. Owner decision O3, revised.
 - **R2, owner-10 explosions.** Record 10 is type 3 on a puppet level, so the explosion's owner gate
   (`0x49A03F..0x49A047`) skips area and direct damage for owner-10 projectiles, as it does for
   puppets'. Every damage sink is gated on a puppet level (`tagpu_puppet.c`), so nothing the recording
@@ -311,9 +313,11 @@ the render-feeding readers bound. Each run below is a game of 10 minutes or less
   (`0x4868C1`, `0x486906`, `0x486A33`) for deaths credited to player 10, which nothing displays or
   tests (§3). In exchange, records 0–9 are all compared, where today V's record is blanked.
   Recordings made before the change are refused; none is published.
-- **O3. Accepted as audio** (R1): the viewer's own sound stream; verification item 6 counts it.
-- **O4.** The two-peer, eight-AI ten-seat recording now; a true ten-peer game only on demand or with
-  the release suite. The viewer's seat does not depend on the peer count.
+- **O3. Gate it** (R1, revised 2026-10-06 once item 6 measured it on most deaths): the death cue is
+  skipped on a puppet level.
+- **O4.** A ten-seat network recording from five Impure peers and five AIs (revised 2026-10-06: the
+  battleroom seats one AI per human, MEASURED, so two peers and eight AIs cannot exist); a true
+  ten-peer game only on demand or with the release suite. The viewer's seat does not depend on the peer count.
 
 No escalation applies: every fix rests on a bound or an ordering stated above, and every verification
 can run.

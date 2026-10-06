@@ -8805,9 +8805,9 @@ static void watch_sites_init(void)
 void tagpu_replay_init(void)
 {
     enum { FILL = 0x0047B092u, PERSIST = 0x0047B09Cu, START1 = 0x00497963u, START2 = 0x00497ACDu,
-           PLAYERS = 0x004919C8u };
+           PLAYERS = 0x004919C8u, DEATHCUE = 0x004869EBu };
     static const unsigned char SAVE[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };   /* mov eax,[main] */
-    unsigned char *fill, *persist, *skip, *p;
+    unsigned char *fill, *persist, *skip, *cue, *p;
     int ok = 1;
     frame_site_init();
     rw_pause_init();
@@ -8815,7 +8815,7 @@ void tagpu_replay_init(void)
     mp_arena_init();
     if (!call_is(FILL, 0x0047A760u) || !call_is(PERSIST, 0x00430F00u) ||
         !call_is(START1, 0x00496EE0u) || !call_is(START2, 0x00496EE0u) ||
-        !call_is(PLAYERS, 0x00464990u)) {
+        !call_is(PLAYERS, 0x00464990u) || !call_is(DEATHCUE, 0x00494FF0u)) {
         tagpu_logf("replay: the Start's or the loader's calls hold other bytes: no replays");
         return;
     }
@@ -8829,13 +8829,15 @@ void tagpu_replay_init(void)
        as it would, with the two arguments popped; otherwise it jumps to it with the site's
        return address on top */
     skip = p = tagpu_detour_stub();
+    cue = tagpu_detour_stub();
     /* THE PLAYER'S SETTINGS: no site goes in unless the save's observer is in. Without the
        persist's site it stays inert: nothing else puts a recording's options in. */
-    if (!fill || !persist || !skip ||
+    if (!fill || !persist || !skip || !cue ||
         !tagpu_detour_observe(0x00430F00u, SAVE, 5, save_before, save_after)) {
         tagpu_detour_stub_free(fill);
         tagpu_detour_stub_free(persist);
         tagpu_detour_stub_free(skip);
+        tagpu_detour_stub_free(cue);
         tagpu_logf("replay: no memory for the sites, or the settings save cannot be observed: no "
                    "replays");
         return;
@@ -8845,6 +8847,20 @@ void tagpu_replay_init(void)
     *p++ = 0xE9; tagpu_detour_rel(p, 0x00496EE0u); p += 4;
     *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;              /* ret 8               */
 
+    /* THE DEATH CUE: the destructor's 0x494FF0(5) at 0x4869EB, stdcall `ret 4` (0x495000), adds 5
+       to the music's combat ring when a death's killer byte +0xF4 equals the controlled index
+       (0x4869D7..0x4869E3). On a puppet level the controlled record is the viewer's, record 10,
+       and +0xF4 holds 10 on most deaths (MEASURED 2026-10-06: 906 of 1448 in the battle fixture,
+       every one in the ten-seat fixture), so the playback would lean to the battle music for
+       deaths no seat of the viewer's caused. There the stub returns with the argument popped, as
+       the cue never fired for a viewer before it had record 10; elsewhere it jumps to the cue.
+       The hit cue 0x489DE6 compares owners (+0xFF), which are never 10, and needs no gate. */
+    p = cue;
+    p = tagpu_detour_cmp_flag(p, (volatile unsigned char*)tagpu_puppet_flag());
+    *p++ = 0x75; *p++ = 0x05;                           /* jne over the jump   */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00494FF0u); p += 4;
+    *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;              /* ret 4               */
+
     /* THE VIEWER'S BUFFERS: the level init's own call, made by the C function itself, which, like
        0x464990, takes no argument and leaves nothing the site reads but the registers C keeps */
     call_write(PLAYERS, (const unsigned char*)(size_t)tagpu_replay_level_players, &ok);
@@ -8852,11 +8868,12 @@ void tagpu_replay_init(void)
     call_write(START2, skip, &ok);
     call_write(PERSIST, persist, &ok);
     call_write(FILL, fill, &ok);
+    call_write(DEATHCUE, cue, &ok);
     if (!ok) {
         tagpu_logf("replay: FAILED a site could not be written: no request is read");
         return;
     }
-    tagpu_logf("replay: 5 sites and the settings save's observer in");
+    tagpu_logf("replay: 6 sites and the settings save's observer in");
     s_sitesIn = 1;
     watch_sites_init();
 }
