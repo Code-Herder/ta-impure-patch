@@ -243,6 +243,9 @@ isolation. Native constructor ordering uses the coverage DLL:
 both peers, and `--until T` keeps the game running to GameTime T before the host leaves: the
 feature cursor visits one cell per tick from the map's last cell, and on Two Continents it meets
 a tree at rest at tick 387, then none until 1577, and 18 by 2000 (`--until 2000`).
+`--chat` has the two humans talk once the roots are in, through each one's `TALK` box: a public
+line from each and a private line each way (`1:` picks the other human), so the file carries
+originals and receipts for every audience a two-human game has.
 For copied owner lifetime dispatch from a saved file, use
 `python3 tools/replay/recmp_lifecycle_test.py --native-file <recording> --out <directory>`.
 It owns one isolated Wine prefix/private display and launches no game. C/Python
@@ -275,7 +278,9 @@ q<T>), or `--takeover T:P` alone (a fresh process takes over at T as P, dump
 k<T+120>, then tareplay's AI-activity check; the file with its timeline is
 kept as `fork-<name>`; `recmp_compare.py --fork 1 FILE` compares the fork's
 first iteration with the composed parent). `--timeline N` plays or seeks
-timeline N's chain; then
+timeline N's chain; `--hide-chat` writes `chat hide` once the playing starts
+(`recmp_compare.py --chat VIEW[:SINCE] FILE DUMP...` checks a dump's chat lines
+for the viewed record, `full` for the full map); then
 `python3 tools/replay/recmp_compare.py FILE <directory>/dump-p<T>.bin ...` compares each dump
 with the owner-authority world the recording implies (the multiplayer slice note's
 *Owner-authority materializer*). The fixture requests speed 20; count it as 2x evidence only if live

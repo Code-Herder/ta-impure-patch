@@ -62,6 +62,7 @@
 #include "tagpu_recreader.h"
 #include "tagpu_recmp_arena.h"
 #include "tagpu_recmp_lifecycle.h"
+#include "tagpu_recmp_text.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_recorder.h"
 #include "tagpu_replay_layout.h"
@@ -299,8 +300,10 @@ static struct {
     unsigned        nq, capq;
     unsigned        observed, ocorpse;  /* the recorder's deaths, and those with a corpse level   */
     unsigned        made, destroyed, images, roots, rplayed;
+    unsigned        said, shown;    /* text entries applied, and lines given to the message log  */
     char            why[200];
 } s_mp;
+static int s_chat_hidden;           /* the viewer's hide-chat toggle (`chat hide`, `chat show`)  */
 static struct {
     unsigned n;
     struct { char name[37]; unsigned T; } a[RT_ARMED];
@@ -3772,6 +3775,64 @@ static void mp_envelope(void* ctx, const RecMpRecord* where, const RecMpHeader* 
     memcpy(e->body, body, bytes);
 }
 
+/* THE CHAT OF A MULTIPLAYER RECORDING. Each text entry is shown when the recorder applied it, the
+   clock every composed contribution keeps (THE CLOCK), through the stock display sink 0x463CA0
+   (text, flags, unit, source row) that the text receive case 0x45522E calls. Who sees it follows
+   the viewed record: the viewer's own record V is the full map, where every message shows once,
+   at its author's original (a SOURCE entry, whose origin is its recipient); a player's view shows
+   what that player's machine showed -- its own lines as the formatter's local echo (source row
+   10, the entry's display flags, 0x463ED4) and the lines its machine received (RECEIVED entries
+   whose recipient is its origin, flags 8 as the receive case passes). An origin no actor of the
+   roster holds names no row and shows nothing. The sink copies 64 bytes and ends the line at 63
+   (0x463D25..0x463D41), so the text is copied out with a NUL after the packet's 64. A seek
+   empties the message log (sk_deadlines) and shows no line before T, as it plays no event
+   before T; hidden, nothing is shown. */
+typedef void (__stdcall *PFN_ChatShow)(const char* text, int flags, int unit, int row);
+#define E_ChatShow ((PFN_ChatShow)0x00463CA0u)
+
+static int mp_row(uint32_t origin)
+{
+    const RecHeader* h = recr_header(s_rd);
+    unsigned i;
+    for (i = 0; i < h->mp_seats.count; i++)
+        if (h->mp_seats.actor[i].origin == origin && h->mp_seats.actor[i].seat < REC_PLAYERS)
+            return (int)h->mp_seats.actor[i].seat;
+    return -1;
+}
+
+static void mp_text(const Lv* L, const MpHeld* e)
+{
+    unsigned count, i;
+    unsigned viewed = (unsigned char)L->ta[OFF_VIEWED];
+    int full = viewed == s_viewer;
+    uint32_t mine = 0;
+    if (!full) {
+        const RecHeader* h = recr_header(s_rd);
+        for (i = 0; i < h->mp_seats.count; i++)
+            if (h->mp_seats.actor[i].seat == viewed) mine = h->mp_seats.actor[i].origin;
+    }
+    if (e->bytes < 4) return;
+    memcpy(&count, e->body, 4);
+    if (count > RECMP_TEXT_COUNT || e->bytes != 4 + count * sizeof(RecMpTextEntry)) return;
+    for (i = 0; i < count; i++) {
+        RecMpTextEntry t;
+        char line[RECMP_CHAT_STOCK_BYTES];
+        int author;
+        memcpy(&t, e->body + 4 + (size_t)i * sizeof t, sizeof t);
+        s_mp.said++;
+        if (!tagpu_recmp_text_entry_valid(&t) || (author = mp_row(t.origin)) < 0) continue;
+        memcpy(line, t.stock + 1, sizeof line - 1);
+        line[sizeof line - 1] = 0;
+        if (s_chat_hidden) continue;
+        if (full ? t.phase == RECMP_TEXT_SOURCE :
+            t.phase == RECMP_TEXT_SOURCE ? t.origin == mine : t.recipient == mine) {
+            int own = !full && t.phase == RECMP_TEXT_SOURCE;
+            E_ChatShow(line, own ? (int)t.display : 8, 0, own ? 10 : author);
+            s_mp.shown++;
+        }
+    }
+}
+
 /* a root batch the recorder's own unit tick made after its capture point */
 static int mp_post_capture(const MpHeld* e)
 {
@@ -3794,6 +3855,8 @@ static void mp_apply_held(const Lv* L, unsigned T, int image)
                                           mp_action, NULL) && !s_mp.failed)
             mp_fail("GameTime %u: the owners' contributions refused: %s", L->now,
                     tagpu_recmp_lifecycle_error(s_mp.life));
+        if (!s_mp.compose && e->where.phase != RECMP_RECORD_PROOF && e->packet.kind == RECMP_TEXT)
+            mp_text(L, e);
     }
     memmove(s_mp.q, s_mp.q + i, (size_t)(s_mp.nq - i) * sizeof *s_mp.q);
     s_mp.nq -= i;
@@ -7027,6 +7090,11 @@ static void trigger_read(void)
             return;
         }
     }
+    if (!strcmp(line, "chat hide") || !strcmp(line, "chat show")) {
+        s_chat_hidden = line[5] == 'h';
+        tagpu_logf("replay: chat %s", s_chat_hidden ? "hidden" : "shown");
+        return;
+    }
     if (sscanf(line, "cover %39s%n", name, &end) == 1 && !line[end]) {
         tagpu_cover_write(name);
         return;
@@ -7338,9 +7406,10 @@ static void counts_log(const char* when, unsigned now)
     if (s_mp.on)
         tagpu_logf("replay: %s: owners: %u units made, %u destroyed, %u images, %u private roots "
                    "(%u played), envelope %llu; %u deaths the recorder observed, %u with a corpse "
-                   "level; %u corpses made from its stream%s%s", s_name,
-                   s_mp.made, s_mp.destroyed, s_mp.images, s_mp.roots, s_mp.rplayed,
+                   "level; %u corpses made from its stream; %u text entries, %u lines shown%s%s",
+                   s_name, s_mp.made, s_mp.destroyed, s_mp.images, s_mp.roots, s_mp.rplayed,
                    (unsigned long long)s_mp.ordinal, s_mp.observed, s_mp.ocorpse, s_fst.corpses,
+                   s_mp.said, s_mp.shown,
                    s_mp.failed ? "; stopped: " : "", s_mp.failed ? s_mp.why : "");
 }
 

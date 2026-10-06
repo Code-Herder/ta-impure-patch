@@ -3,6 +3,7 @@
 
     tools/replay/recmp_compare.py RECORDING DUMP...
     tools/replay/recmp_compare.py --fork N RECORDING
+    tools/replay/recmp_compare.py --chat VIEW[:SINCE] RECORDING DUMP...
 
 The expected world of a dump at GameTime T is the primary stream's iteration T -- its features,
 projectiles, globals and tables, as the recorder observed them -- with every owner block's units,
@@ -25,6 +26,20 @@ owner approved that expectation on 2026-10-06. The puppet holds of `tarec compar
 at its fork_at as above, less what `tarec compare-fork` takes off (decision D2, tarec.fork_view);
 the grid's unit slots and yard bits are checked on the fork's iteration, which the host's engine
 made. Exit 0 EQUAL, 1 otherwise.
+
+--chat checks each dump's message log (main+0x12EF, a leave row the comparison does not read)
+against the chat its viewer should see (tagpu_replay.c, THE CHAT OF A MULTIPLAYER RECORDING):
+VIEW `full` is the full map, every message once at its author's original, else a record whose
+view shows its own lines as the local echo (source row 10) and the lines its machine received.
+Every text entry the recorder applied after SINCE (a seek's target; 0 for a playing from the
+start) and by the dump's GameTime counts; a chat line is one in the formatter's `<name> text` form.
+The log's chat lines must be the newest expected ones in order, each stamped with the GameTime of
+the step that applied it (its application tick, or the one before, THE CLOCK), and every older
+expected line must have left the ring, which drops only its oldest line: the step's expiry
+0x463EF0 once its stamp plus (main+0x37F23 + 1) * 30 ticks is below GameTime, and the draw
+(0x448CFA..0x448D2C) while more lines are queued than the panel holds, which the engine's own
+notices fill too. So a missing line has expired, or is older than the oldest line still in the
+ring. Exit 0 when every dump passes.
 """
 import struct
 import sys
@@ -218,7 +233,116 @@ def fork(path, n):
     return 1 if lines else 0
 
 
+MSG_RING, MSG_LINES, MSG_STRIDE, MSG_HEAD = 0x12EF, 30, 0x48, 0x2A3E
+TEXT_ENTRY = 136
+
+
+def texts(path):
+    """Every text entry the recorder applied, in ledger order: (application tick, entry)."""
+    blocks, stopped = tarec.blocks(path)
+    if stopped:
+        raise tarec.Unreadable(stopped)
+    out = []
+    for kind, _, _, raw in blocks:
+        if kind != tarec.RB_CONTRIBUTIONS:
+            continue
+        at = 0
+        while at < len(raw):
+            _, applied, phase = struct.unpack_from("<QII", raw, at)
+            span, _, _, _, kind12 = struct.unpack_from("<IIIII", raw, at + 28)
+            body = raw[at + 16 + 64:at + 16 + span]
+            if phase != 3 and kind12 == 12:
+                for i in range(struct.unpack_from("<I", body)[0]):
+                    e = body[4 + i * TEXT_ENTRY:4 + (i + 1) * TEXT_ENTRY]
+                    p, _, _, origin, recipient, _, display = struct.unpack_from("<BBHIIII", e)
+                    text = bytes(e[69:69 + 64]).split(b"\0")[0]
+                    out.append((applied, dict(phase=p, origin=origin, recipient=recipient,
+                                              display=display, text=text)))
+            at += 16 + span
+    return out
+
+
+def chat_expected(entries, rows, view, since, tick):
+    """(text, source row, application tick) of the lines VIEW's message log is given by `tick`,
+    oldest first."""
+    mine = next((o for o, r in rows.items() if r == view), None)
+    lines = []
+    for applied, e in entries:
+        if not since < applied <= tick or e["origin"] not in rows:
+            continue
+        if view == "full":
+            if e["phase"] == 1:
+                lines.append((e["text"], rows[e["origin"]], applied))
+        elif e["phase"] == 1 and e["origin"] == mine:
+            lines.append((e["text"], 10, applied))
+        elif e["phase"] == 2 and e["recipient"] == mine:
+            lines.append((e["text"], rows[e["origin"]], applied))
+    return lines
+
+
+MSG_DURATION = 0x37F23   # u32: a line shows (it + 1) * 30 ticks (0x463F15..0x463F32)
+
+
+def chat_log(path):
+    """(GameTime, a line's lifetime in ticks, the log's chat lines oldest first as (text, source
+    row, stamp))."""
+    tick, _, images = tarec.dump_images(path)
+    main = images[0]
+    head, tail = struct.unpack_from("<HH", main, MSG_HEAD)
+    life = (struct.unpack_from("<I", main, MSG_DURATION)[0] + 1) * 30
+    lines, i, oldest = [], tail, None
+    while i != head and len(lines) < MSG_LINES:
+        e = main[MSG_RING + i * MSG_STRIDE:MSG_RING + (i + 1) * MSG_STRIDE]
+        text = bytes(e[:0x40]).split(b"\0")[0]
+        stamp = struct.unpack_from("<I", e, 0x40)[0]
+        oldest = stamp if oldest is None else oldest
+        if text.startswith(b"<"):
+            lines.append((text, e[0x46], stamp))
+        i = (i + 1) % MSG_LINES
+    return tick, life, oldest, lines
+
+
+def chat_check(want, got, tick, life, oldest):
+    """What is wrong with a dump's chat lines, or None."""
+    gone = want[:len(want) - len(got)]
+    kept = want[len(want) - len(got):]
+    if [(t, r) for t, r, _ in kept] != [(t, r) for t, r, _ in got]:
+        return "the lines are not the newest expected ones in order"
+    for (text, _, applied), (_, _, stamp) in zip(kept, got):
+        if stamp not in (applied - 1, applied):
+            return f"{text!r} is stamped {stamp}, applied at {applied}"
+    for text, _, applied in gone:
+        if applied + life > tick and (oldest is None or applied - 1 > oldest):
+            return f"{text!r}, applied at {applied}, is missing, has not expired and is not " \
+                   "older than the ring's oldest line"
+    return None
+
+
+def chat(path, spec, dumps):
+    view, _, since = spec.partition(":")
+    view = view if view == "full" else int(view)
+    hist = history(path)
+    rows = {origin: row for origin, row, _, _ in hist.roster.actors}
+    entries = texts(path)
+    status = 0
+    for d in dumps:
+        tick, life, oldest, got = chat_log(d)
+        want = chat_expected(entries, rows, view, int(since or 0), tick)
+        why = chat_check(want, got, tick, life, oldest)
+        ok = why is None
+        print(f"{d}: GameTime {tick}, view {view}: {len(got)} chat lines of {len(want)} given, "
+              f"a line lives {life} ticks: " + ("EQUAL" if ok else "DIFFERENT: " + why))
+        if not ok:
+            for label, lines in (("expected", want), ("dump", got)):
+                for text, row, at in lines:
+                    print(f"  {label}: row {row} at {at}: {text.decode('latin-1')}")
+        status |= 0 if ok else 1
+    return status
+
+
 def main(argv):
+    if len(argv) >= 4 and argv[1] == "--chat":
+        return chat(argv[3], argv[2], argv[4:])
     if len(argv) == 4 and argv[1] == "--fork":
         return fork(argv[3], int(argv[2]))
     if len(argv) < 3:

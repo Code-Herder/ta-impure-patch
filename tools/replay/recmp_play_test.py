@@ -23,7 +23,7 @@ then requires the AI seats to play: tareplay's takeover check, fresh AI orders r
 for every AI seat and a quarter of their mobile units moving in the TAKEOVER_SPAN ticks after a
 pause; quits after it and keeps the file with its new timeline as DIR/fork-<RECORDING>. With
 --from A the recording is played first, and the running playback is taken over after its dump pA. --timeline N plays
-or seeks timeline N's chain. --content copies a game archive the recording
+or seeks timeline N's chain. --hide-chat hides the chat once the playing starts. --content copies a game archive the recording
 was made with (tools/reproduce_fixture.py's, say) into the worker's game folder for the playing
 and removes it afterwards.
 """
@@ -67,6 +67,7 @@ def main():
     ap.add_argument("--from", dest="from_", type=int, default=None,
                     help="with --takeover: play to this GameTime, then take the playback over")
     ap.add_argument("--timeline", type=int, default=None)
+    ap.add_argument("--hide-chat", action="store_true", help="`chat hide` once the playing starts")
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
     rec = a.out / a.recording.name
@@ -158,6 +159,11 @@ def main():
         print(o.strip())
         if rc:
             raise tareplay.CouldNotRun(f"replay play: {last(o)}")
+        if a.hide_chat:
+            n = len(log.lines)
+            w.trigger("chat hide")
+            if not log.wait(r"replay: chat hidden", 60, n):
+                raise tareplay.CouldNotRun("chat hide: no answer in 60 s")
         names = []
         seeks = [tuple(map(int, x.split(":"))) for x in a.seek]
         last_tick = tarec.chain(tarec.segments(tarec.blocks(rec)[0]), a.timeline or 0)[-1]["last"]

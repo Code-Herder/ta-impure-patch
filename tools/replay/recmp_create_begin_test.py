@@ -9,6 +9,10 @@ This verifies capture and persisted causality, not multiplayer engine playback.
 --out for the playing), so the trees and shrubs the feature cursor visits reproduce; --until T
 keeps the game running to GameTime T before the host leaves, since the cursor visits one cell
 per tick from the map's last cell.
+
+--chat has the two humans talk once the roots are in, through the game's own TALK box: a public
+line from each and a private line each way (CHAT, below), so the recording carries every
+communication audience a two-human game has.
 """
 import argparse
 import fcntl
@@ -119,7 +123,13 @@ def audit(path, output):
     print("PASS: exact owner constructor begin precedes child roots and matching success", summary, flush=True)
 
 
-def run(output, dll, port, reproduce=False, until=0):
+# who says what, in order: a digit selects the n-th other player of the talk box's list, which
+# skips the sender's own row (0x493AE0), so `1:` is the other human for both (rows 0 and 1)
+CHAT = (("join", "public from the joiner"), ("host", "1:private to the joiner"),
+        ("join", "1:private to the host"), ("host", "public from the host"))
+
+
+def run(output, dll, port, reproduce=False, until=0, chat=False):
     root = tareplay.main_checkout()
     instances, cli = root / "tagpu/instances", TREE / "tools/tacli"
     owned, display = [], None
@@ -239,6 +249,16 @@ def run(output, dll, port, reproduce=False, until=0):
             (output / "first-roots.json").write_text(json.dumps(
                 [dict(origin=k[0], kind=k[1], observation=v) for k, v in local.items()], indent=2)+"\n")
             print("PASS: all 28 first owner root observations match recipient bytes and source provenance", flush=True)
+            if chat:
+                who = dict(host=host, join=join)
+                for speaker, text in CHAT:
+                    name = who[speaker]
+                    command(sys.executable, cli, "keys", name, "return")
+                    command(sys.executable, cli, "ui", name, "wait", "--gui", "TALK", "--timeout", "20")
+                    command(sys.executable, cli, "ui", name, "fill", "TALK", text, "--json")
+                    command(sys.executable, cli, "keys", name, "return")
+                    command(sys.executable, cli, "ui", name, "wait", "--gui", "ARMMAIN2", "--timeout", "20")
+                print(f"said {len(CHAT)} lines", flush=True)
 
             def gametime():
                 out = command(sys.executable, cli, "peek", host, tareplay.GAMETIME, "--json", timeout=60)
@@ -284,12 +304,13 @@ def main():
     parser.add_argument("--reproduce", action="store_true",
                         help="install the reproducing trees and shrubs on both peers")
     parser.add_argument("--until", type=int, default=0, help="play to this GameTime before leaving")
+    parser.add_argument("--chat", action="store_true", help="the humans talk (CHAT)")
     args = parser.parse_args()
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)
     try:
-        run(output, args.dll.resolve(), args.port, args.reproduce, args.until)
+        run(output, args.dll.resolve(), args.port, args.reproduce, args.until, args.chat)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tareplay.CouldNotRun) as error:
         print(f"FAIL: {error}; inspect {output}", file=sys.stderr)
         return 1

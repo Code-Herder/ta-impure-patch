@@ -1532,6 +1532,51 @@ dropped until Impure has such a feature: stock TA has none [INFERRED: no ping
 or marker message found; TADR's markers are not ported], and a future one
 follows chat's audience rules.
 
+### Chat in playback
+
+*THE CHAT OF A MULTIPLAYER RECORDING* in `tagpu_replay.c`. Each text entry
+([*Persisted text identities and receipt clocks*](#persisted-text-identities-and-receipt-clocks))
+is shown when the recorder applied it, the clock of every composed
+contribution, through the stock display sink `0x463CA0(text, flags, unit,
+source row)` that the text receive case calls. The viewed record picks the
+audience:
+
+- **The full map** (the viewer's own record V): every message once, at its
+  author's original, with the author's row and flags 8.
+- **A player's view**: what that player's machine showed. Its own lines show as
+  the formatter's local echo (source row 10, the entry's display flags, as
+  `0x463ED4` passes), and the lines its machine received show with the author's
+  row and flags 8. An AI seat receives no text (the receive case requires a
+  controller-1 destination), so its view shows none.
+
+A seek shows no line before T: `sk_deadlines` empties the message log through
+the level init's reset `0x463C80`, as before. `chat hide` and `chat show` in the
+trigger file toggle the display, and the playing's last line counts the text
+entries applied and the lines shown. The toggle has no control on the screen
+yet.
+
+The message log is a `leave` row, so `recmp_compare.py --chat VIEW[:SINCE]`
+checks it apart from the comparison. The log's chat lines must be the newest
+expected ones, in order, each stamped with the GameTime of the step that applied
+it (its application tick or the one before, THE CLOCK). Every older expected
+line must have left the ring, which drops only its oldest line. Two things drop
+it: the step's expiry `0x463EF0`, once the line's stamp plus (`main+0x37F23` +
+1) × 30 ticks is below GameTime (DISASSEMBLED, called at `0x495683`), and the
+draw `0x448CFA..0x448D2C`, while more lines are queued than the panel holds. A
+seat's own notices fill the panel too.
+
+MEASURED 2026-10-06 on the reference setup: a two-human, two-AI game on *Two
+Continents* in which each human says a public line and sends the other a
+private line (`recmp_create_begin_test.py --chat`, eight entries: four
+originals, four receipts). The playing applies all eight in every view. The
+full map shows the four originals: three at 600, none at 1400 once they have
+expired (a line lives 330 ticks at the option's 10), and after a seek from 1400
+to 500, two at 620. Each human's view shows its two own lines as echoes and
+the two lines it received: at 700, player 0 still shows one and player 1 none,
+since player 1's "Under Attack" notices pushed the rest out of the panel. AI seat 2
+shows none, and `chat hide` shows none in the full map. Every dump passes, and
+each dump checked against another view's expectation fails.
+
 Still open after stage 4: ten seats without a spare viewer seat, and the
 traffic budget, migration and cross-address discovery, in that order.
 
