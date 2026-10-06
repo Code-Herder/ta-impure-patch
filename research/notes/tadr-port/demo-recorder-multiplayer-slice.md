@@ -1576,6 +1576,8 @@ the two lines it received: at 700, player 0 still shows one and player 1 none,
 since player 1's "Under Attack" notices pushed the rest out of the panel. AI seat 2
 shows none, and `chat hide` shows none in the full map. Every dump passes, and
 each dump checked against another view's expectation fails.
+The skirmish `secondary-orders --cover` regression passes all 25 checks on the
+build carrying 4a and 4b.
 
 Still open after stage 4: ten seats without a spare viewer seat, and the
 traffic budget, migration and cross-address discovery, in that order.
