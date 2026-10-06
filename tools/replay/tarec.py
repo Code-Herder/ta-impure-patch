@@ -57,6 +57,11 @@
                                              from the last, every selection ascending inside its
                                              seat's block, and the stream's perspective to equal
                                              the one every snapshot rebuilds
+  tools/replay/tarec.py pov FILE --eye T --viewer W,H [--seat P]
+                                             what the playback's Follow puts on a W x H view at
+                                             displayed GameTime T: the sample the perspective
+                                             clock takes, the eye before the range clamp and the
+                                             level x 65536 (tagpu_persp.c, mirrored)
 
   check, compare and compare --puppet take --timeline N: the chain of timeline N, read across
   each fork it descends from.
@@ -437,6 +442,59 @@ def sel_block(player_image, slots):
     if first < 2 or last < first or last > slots:
         raise Unreadable(f"a selection's seat has no unit block (IDs {first}, {last})")
     return first - 1, last - 1
+
+
+# ---- the playback's perspective arithmetic (tagpu_persp.c, mirrored line for line) -----------
+
+PERSP_NONE, PERSP_LATEST, PERSP_BETWEEN, PERSP_EARLIER = range(4)
+PERSP_HOW = ("none", "latest", "between", "earlier")
+
+
+def _tdiv(a, b):
+    """a / b truncated toward zero, as C99's integer division is (b > 0)."""
+    q = abs(a) // b
+    return q if a >= 0 else -q
+
+
+def _sat32(v):
+    return max(-0x80000000, min(0x7FFFFFFF, v))
+
+
+def persp_sample(samples, n):
+    """THE PERSPECTIVE CLOCK (tagpu_persp.h, persp_sample) for the displayed GameTime n over a
+    seat's held samples, World.pov's [(GameTime, RecPov bytes)], the earlier first: (how, fields)
+    with fields REC_POV's tuple, or (PERSP_NONE, None)."""
+    if not 1 <= len(samples) <= 2:
+        return PERSP_NONE, None
+    tb, bb = samples[-1]
+    b = REC_POV.unpack(bb)
+    t = n - b[1]
+    if tb <= t:
+        return PERSP_LATEST, b
+    if len(samples) == 1:
+        return PERSP_EARLIER, b
+    ta, ab = samples[0]
+    a = REC_POV.unpack(ab)
+    if not (ta <= t and tb - ta <= 2 * b[1]):
+        return PERSP_EARLIER, a
+    num, den = t - ta, tb - ta
+    out = list(a)
+    fields = [4, 5, 6, 7, 8]                    # view_w, view_h, zoom, cam_x, cam_y
+    if a[2] & REC_POV_WORLD and b[2] & REC_POV_WORLD:
+        fields += [9, 10, 11]                   # the cursor
+    for i in fields:
+        out[i] = a[i] + _tdiv((b[i] - a[i]) * num, den)
+    return PERSP_BETWEEN, tuple(out)
+
+
+def persp_follow(f, view_w, view_h):
+    """FOLLOW'S FIT (tagpu_persp.h, persp_follow) of a sample's fields to a view_w x view_h view:
+    (eye_x, eye_y, level x 65536), or None for a view of no size."""
+    if view_w <= 0 or view_h <= 0 or not f[4] or not f[5]:
+        return None
+    z = min(f[6] * view_w // f[4], f[6] * view_h // f[5])
+    z = max(REC_POV_ZOOM_MIN, min(REC_POV_ZOOM_MAX, z))
+    return _sat32(f[7] - view_w // 2), _sat32(f[8] - view_h // 2), z
 
 
 class World:
@@ -1537,6 +1595,39 @@ def cmd_pov(path, check):
     return 1 if bad else 0
 
 
+def cmd_pov_eye(path, n, view, seat):
+    """Follow's answer for the displayed GameTime n on a view_w x view_h screen, as the playback
+    computes it at its frame visit (tagpu_replay.c, FOLLOW, JUMP AND FREE CAM): the world at the
+    end of iteration n -- the reader's RecWorld there, W->tick == n -- the seat's held samples, the
+    perspective clock and Follow's fit (persp_sample, persp_follow). `seat` None takes the only seat
+    with samples. Prints the sample and `eye (x, y), level L/65536`; the eye is before the camera's
+    range clamp, which the playback applies with the map and the range in force."""
+    h, bl, stop = load(path)
+    w = stream_to(h, bl, want=n)
+    if w.tick != n:
+        print(f"{path}: GameTime {n} is no iteration of the stream (it reached {w.tick}"
+              + (f"; stopped at {stop}" if stop else "") + ")")
+        return 1
+    held = [p for p in range(REC_PLAYERS) if w.pov[p]]
+    if seat is None:
+        if len(held) != 1:
+            print(f"{path}: at GameTime {n} the seats with samples are {held or 'none'}: "
+                  f"name one with --seat")
+            return 1
+        seat = held[0]
+    how, f = persp_sample(w.pov[seat], n)
+    fit = persp_follow(f, *view) if f else None
+    if not fit:
+        print(f"{path}: GameTime {n} player {seat}: no sample to follow")
+        return 1
+    ticks = ", ".join(str(t) for t, _ in w.pov[seat])
+    print(f"GameTime {n} player {seat}: sample {PERSP_HOW[how]} of the samples at [{ticks}]: "
+          f"camera ({f[7]}, {f[8]}), view {f[4]}x{f[5]}, zoom {f[6]}/65536")
+    print(f"  on {view[0]}x{view[1]}: eye ({fit[0]}, {fit[1]}), level {fit[2]}/65536 "
+          f"({fit[2] / 65536:.4f})")
+    return 0
+
+
 def dump_world(path, h):
     """A dump's world, read with its own header's tables and the recording's dimensions."""
     dbl, dstop = blocks(path)
@@ -2402,6 +2493,24 @@ def main(argv):
     pov_check = argv[1:2] == ["pov"] and "--check" in argv
     if pov_check:
         argv = [a for a in argv if a != "--check"]
+    pov_eye = None
+    if argv[1:2] == ["pov"] and "--eye" in argv:
+        k = argv.index("--eye")
+        try:
+            n = int(argv[k + 1])
+            if argv[k + 2] != "--viewer":
+                raise ValueError
+            view = tuple(int(v) for v in argv[k + 3].split(","))
+            rest = argv[k + 4:]
+            seat = None
+            if rest[:1] == ["--seat"]:
+                seat, rest = int(rest[1]), rest[2:]
+            if rest or len(view) != 2 or n < 0 or seat is not None and not 0 <= seat < REC_PLAYERS:
+                raise ValueError
+        except (ValueError, IndexError):
+            print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
+            return 2
+        pov_eye, argv = (n, view, seat), argv[:k]
     if len(argv) < 3 or argv[1] not in ("info", "check", "compare", "compare-dumps", "counts",
                                         "compare-counts", "images-gate", "scan", "segments",
                                         "compare-fork", "pov") or \
@@ -2422,6 +2531,11 @@ def main(argv):
             return cmd_check(argv[2], timeline)
         if argv[1] == "segments":
             return cmd_segments(argv[2])
+        if argv[1] == "pov" and pov_eye:
+            if pov_check:
+                print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
+                return 2
+            return cmd_pov_eye(argv[2], *pov_eye)
         if argv[1] == "pov":
             return cmd_pov(argv[2], pov_check)
         if argv[1] == "compare-fork":

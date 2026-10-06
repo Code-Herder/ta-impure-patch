@@ -618,6 +618,43 @@ class Perspective(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("player 0's samples: recording at GameTime [1, 4], snapshot at [4]", out)
 
+    def test_clock_and_fit(self):
+        """The mirror of tagpu_persp.c on the plan's rules (persp_test.py checks it against the C
+        on random cases)."""
+        held = [(1, pov()), (4, pov(cam=(130, 170)))]
+        self.assertEqual(tarec.persp_sample([], 9), (tarec.PERSP_NONE, None))
+        how, f = tarec.persp_sample(held, 7)                 # t = 4: the latest
+        self.assertEqual((how, f[7], f[8]), (tarec.PERSP_LATEST, 130, 170))
+        how, f = tarec.persp_sample(held, 5)                 # t = 2: a third of the way
+        self.assertEqual((how, f[7], f[8]), (tarec.PERSP_BETWEEN, 110, 190))
+        how, f = tarec.persp_sample([(1, pov()), (4, pov(cam=(130, 160)))], 5)
+        self.assertEqual(f[8], 187)                          # -40/3 truncated toward zero
+        how, f = tarec.persp_sample(held, 3)                 # t = 0: before the earlier one
+        self.assertEqual((how, f[7]), (tarec.PERSP_EARLIER, 100))
+        how, f = tarec.persp_sample([(1, pov()), (8, pov(cam=(130, 170)))], 9)
+        self.assertEqual((how, f[7]), (tarec.PERSP_EARLIER, 100))   # 7 apart > 2 * every
+        f = tarec.REC_POV.unpack(pov(cam=(1000, 800)))
+        self.assertEqual(tarec.persp_follow(f, 640, 480), (680, 560, 65536))
+        self.assertEqual(tarec.persp_follow(f, 1000, 600), (500, 500, 81920))
+        self.assertEqual(tarec.persp_follow(f, 700, 500)[2], 68266)
+        self.assertIsNone(tarec.persp_follow(f, 0, 480))
+
+    def test_eye(self):
+        path = Path(self.tmp.name) / "p.imprec"
+        path.write_bytes(tarec.REC_MAGIC + b"".join(self.good()))
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = tarec.main(["tarec.py", "pov", str(path), "--eye", "5", "--viewer", "800,600"])
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertIn("sample between of the samples at [1, 4]: camera (110, 200)",
+                      out.getvalue())
+        self.assertIn("on 800x600: eye (-290, -100), level 81920/65536", out.getvalue())
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(tarec.main(["tarec.py", "pov", str(path), "--eye", "3", "--viewer",
+                                         "800,600"]), 1)   # no iteration 3
+            self.assertEqual(tarec.main(["tarec.py", "pov", str(path), "--eye", "5", "--viewer",
+                                         "800,600", "--seat", "1"]), 1)   # no samples
+
     def test_refusals(self):
         for bad in (selection(0, [(2, 1), (1, 1)]),          # descending
                     selection(0, [(3, 1)]),                  # outside the block [1, 2]

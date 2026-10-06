@@ -5843,6 +5843,91 @@ def cmd_replay_takeover(args):
         sys.exit(1)
 
 
+# The playback's camera (tagpu_replay.c, FOLLOW, JUMP AND FREE CAM): the cards' Follow, Jump and
+# Free cam as trigger lines, and `pov`, the frame visit's own account of what Follow computed.
+REPLAY_POV_RX = re.compile(
+    r"pov at GameTime (\d+): (?:no follow|(follow|jump) epoch (\d+) seat (\d+), tick (\d+), "
+    r"sample (\w+), view (-?\d+)x(-?\d+), eye \((-?\d+), (-?\d+)\), level (\d+)/65536)")
+
+
+def _replay_camera(args, line, rx):
+    """Writes `line` to the running playback's trigger and waits for the first log line `rx`
+    matches after it, or for a refusal; returns (name, the line, its match or None)."""
+    inst = Instance(args.name)
+    if inst.remote:
+        die(f"{args.name} is remote: the replay's camera verbs drive a local instance")
+    name, why = _replay_playing(inst)
+    if name is None:
+        die(f"{args.name}: not playing: {why}")
+    lines = _LogLines(_log_cursor(inst))
+    trig = inst.gamedir / REPLAY_TRIGGER
+    tmp = trig.with_name(trig.name + ".tmp")
+    tmp.write_text(line + "\n")
+    os.replace(tmp, trig)
+    refused = re.compile(r"replay: (?:[^:]*: )?(?:follow|jump|free cam|pov)\b[^:]* refused: .*"
+                         rf"|replay: {re.escape(REPLAY_TRIGGER)}: not understood: .*")
+    deadline = time.time() + args.timeout
+    while time.time() < deadline:
+        for got in lines():
+            m = rx.search(got)
+            if m:
+                return name, got[m.start():].strip(), m
+            r = refused.search(got)
+            if r:
+                return name, got[r.start():].strip(), None
+        if not inst.running():
+            die(f"{args.name} exited (tacli log {args.name} -n 40)")
+        time.sleep(0.1)
+    die(f"{args.name}: no answer to `{line}` in {args.timeout:g}s (tacli log {args.name} -g replay)")
+
+
+def cmd_replay_follow(args):
+    """Follow a recorded seat's camera, or Free cam (`follow NAME free`)."""
+    if args.seat == "free":
+        line, rx = "follow free", re.compile(r"replay: .*: (?:follow|jump) ended: free cam|"
+                                             r"replay: .*: free cam: nothing was followed")
+    elif args.seat.isdigit():
+        line = f"follow {args.seat}"
+        rx = re.compile(rf"replay: .*: follow seat {args.seat}, epoch (\d+)")
+    else:
+        die(f"follow: SEAT is a recorded seat's number or `free`, not {args.seat!r}")
+    name, got, m = _replay_camera(args, line, rx)
+    res = {"name": args.name, "as": name, "seat": args.seat, "done": m is not None, "line": got}
+    if m and m.groups():
+        res["epoch"] = int(m[1])
+    out(res, args.json, human=got)
+    if not m:
+        sys.exit(1)
+
+
+def cmd_replay_jump(args):
+    """Put the camera where a recorded seat's was, once."""
+    rx = re.compile(rf"replay: .*: jump to seat {args.seat}, epoch (\d+)")
+    name, got, m = _replay_camera(args, f"jump {args.seat}", rx)
+    res = {"name": args.name, "as": name, "seat": args.seat, "done": m is not None, "line": got}
+    if m:
+        res["epoch"] = int(m[1])
+    out(res, args.json, human=got)
+    if not m:
+        sys.exit(1)
+
+
+def cmd_replay_pov(args):
+    """What the playback's Follow computed at its latest frame visit."""
+    name, got, m = _replay_camera(args, "pov", REPLAY_POV_RX)
+    res = {"name": args.name, "as": name, "line": got, "done": m is not None}
+    if m:
+        res["gametime"] = int(m[1])
+        res["following"] = m[2] is not None
+        if m[2]:
+            res.update(kind=m[2], epoch=int(m[3]), seat=int(m[4]), tick=int(m[5]), sample=m[6],
+                       view=[int(m[7]), int(m[8])], eye=[int(m[9]), int(m[10])],
+                       level_q16=int(m[11]))
+    out(res, args.json, human=got)
+    if not m:
+        sys.exit(1)
+
+
 # ------------------------------------------------------------------- switches
 #
 # SoftwareDebugMode, a u16 at TAdynmemStruct+0x37F2F, name-keyed to its bits. A
@@ -6953,6 +7038,38 @@ def build_parser():
     rpt.add_argument("--dry-run", action="store_true",
                      help="print which fork would be deleted; with FILE, inspect without launching")
     rpt.set_defaults(func=cmd_replay_takeover)
+
+    rpfo = rpv.add_parser(
+        "follow", help="follow a recorded seat's camera in the running playback, or Free cam",
+        description="The cards' Follow (SEAT) or Free cam (`free`), through the playback's "
+                    "trigger: Follow shows the seat's recorded camera, fitted to this screen, "
+                    "until the camera is moved or the wheel turned (tacli log -g 'follow "
+                    "ended'). Prints the DLL's line, with the epoch.")
+    add_common(rpfo)
+    rpfo.add_argument("name", help="the instance whose playback runs")
+    rpfo.add_argument("seat", metavar="SEAT", help="a recorded seat's number, or `free`")
+    rpfo.add_argument("--timeout", type=float, default=30.0)
+    rpfo.set_defaults(func=cmd_replay_follow)
+
+    rpj = rpv.add_parser("jump", help="put the camera where a recorded seat's was, once",
+                         description="The cards' Jump: the seat's recorded camera, fitted to "
+                                     "this screen, written until the renderer has drawn its "
+                                     "level; then the camera is free.")
+    add_common(rpj)
+    rpj.add_argument("name", help="the instance whose playback runs")
+    rpj.add_argument("seat", type=int, metavar="SEAT", help="a recorded seat's number")
+    rpj.add_argument("--timeout", type=float, default=30.0)
+    rpj.set_defaults(func=cmd_replay_jump)
+
+    rppv = rpv.add_parser("pov", help="what the playback's Follow computed at its last frame visit",
+                          description="The follow epoch, the seat, the displayed GameTime, the "
+                                      "sample the perspective clock took, the view, the eye and "
+                                      "the level x 65536 -- the numbers `tarec.py pov FILE --eye "
+                                      "T --viewer W,H` computes from the file.")
+    add_common(rppv)
+    rppv.add_argument("name", help="the instance whose playback runs")
+    rppv.add_argument("--timeout", type=float, default=30.0)
+    rppv.set_defaults(func=cmd_replay_pov)
 
     rpf = rpv.add_parser("forks", help="list a recording's timelines, or delete/export a fork")
     add_common(rpf)

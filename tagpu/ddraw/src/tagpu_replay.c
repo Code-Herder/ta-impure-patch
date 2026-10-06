@@ -79,6 +79,8 @@
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
 #include "tagpu_replays.h"
+#include "tagpu_persp.h"
+#include "tagpu_zoom.h"
 #include "git.h"
 
 #define TA_MAINPP      0x00511DE8u
@@ -316,6 +318,20 @@ static struct {
     char            why[200];
 } s_mp;
 static int s_chat_hidden;           /* the viewer's hide-chat toggle (`chat hide`, `chat show`)  */
+/* FOLLOW, JUMP AND FREE CAM's state (game thread only) */
+static struct {
+    int      req;                   /* a request for the next frame visit: FQ_*                  */
+    int      rseat, ronce;          /* ... a Follow's or Jump's seat, and which                  */
+    int      seat;                  /* the seat the epoch in force shows, -1 none                */
+    int      once;                  /* ... and whether it is a Jump                              */
+    unsigned E;                     /* that epoch (tagpu_zoom_follow), 0 none                    */
+    int      handed;                /* the epoch has been handed to tagpu_zoom                   */
+    int      pov;                   /* `pov` asked: logged after this visit's answer             */
+    struct { unsigned n; int how, vw, vh, x, y; uint32_t level; } at;   /* that answer           */
+} s_fl = { 0, 0, 0, -1, 0, 0, 0, 0, { 0, 0, 0, 0, 0, 0, 0 } };
+/* the epochs handed out since the DLL loaded: never reset, so tagpu_zoom never sees one twice */
+static unsigned s_flEpochs;
+enum { FQ_NONE, FQ_FOLLOW, FQ_FREE };
 static struct {
     unsigned n;
     struct { char name[37]; unsigned T; } a[RT_ARMED];
@@ -366,6 +382,8 @@ static unsigned colour_count(const char* ta)
 static void pend_reset(void);
 static void counts_log(const char* when, unsigned now);
 static void mp_end(void);
+static void follow_close(const char* why);
+static void follow_visit(char* ta);
 
 static void replay_close(void)
 {
@@ -373,6 +391,7 @@ static void replay_close(void)
        load-done gate. No loader can still consume this immutable plan. */
     InterlockedExchange(&s_mp_arena.state,MP_ARENA_OFF);
     s_viewPending = 0;
+    follow_close("the playing ended");
     mp_end();
     recr_close(s_rd);
     recfile_leave();
@@ -7148,6 +7167,11 @@ static int rw_trigger(const char* line)
    - `takeover <P> at <T>` or `takeover <P> at <T> difficulty <D>`: on a level that plays a
      recording, the takeover waits for the next frame visit after the first step (THE TAKEOVER);
      the checks that need the world at T are R0's, so its refusals come from seek_run.
+   - `follow <seat>`, `jump <seat>`, `follow free`: the cards' Follow, Jump and Free cam
+     (FOLLOW, JUMP AND FREE CAM), for the next frame visit; a refusal is logged at once.
+   - `pov`: the next frame visit logs its Follow's answer -- the epoch, the seat, the displayed
+     tick, the sample the clock took, the view, the eye and the level -- or that nothing is
+     followed.
    - `cover <name>`: the coverage build's functions that ran, at once (tagpu_cover_write); any
      other build refuses it with a line. */
 /* `p` is a decimal u32 and nothing after it: 1 with its value */
@@ -7289,6 +7313,24 @@ static void trigger_read(void)
     }
     if (s_rw.state) {
         tagpu_logf("replay: refused: use rewind commands while live rewind owns the level");
+        return;
+    }
+    if (!strcmp(line, "pov")) {
+        if (tagpu_replay_live()) s_fl.pov = 1;
+        else tagpu_logf("replay: pov refused: this level plays no recording");
+        return;
+    }
+    if (!strcmp(line, "follow free")) {
+        if (!tagpu_replay_follow_request(-1, 0))
+            tagpu_logf("replay: free cam refused: this level plays no recording");
+        return;
+    }
+    if (!strncmp(line, "follow ", 7) && u32_word(line + 7, &P)) {
+        tagpu_replay_follow_request(P > 0x7FFFFFFFu ? 0x7FFFFFFF : (int)P, 0);
+        return;
+    }
+    if (!strncmp(line, "jump ", 5) && u32_word(line + 5, &P)) {
+        tagpu_replay_follow_request(P > 0x7FFFFFFFu ? 0x7FFFFFFF : (int)P, 1);
         return;
     }
     if (sscanf(line, "roundtrip %39s%n", name, &end) == 1 && !strncmp(line + end, " at ", 4) &&
@@ -7597,14 +7639,15 @@ static void frame_visit(void)
     if (s_rd && s_viewPending && !s_seek.pending && !s_hold) sight_change(ta);
 }
 
-/* the frame visit, with the viewer's record's first fill before it and its viewed work after it,
-   whichever way the visit returns */
+/* the frame visit, with the viewer's record's first fill before it and its viewed work and
+   Follow's camera after it, whichever way the visit returns */
 static void __cdecl tagpu_replay_frame(void)
 {
     char* ta = ta_main();
     if (ta) viewer_init(ta);
     frame_visit();
     viewer_frame();
+    if (ta) follow_visit(ta);
 }
 
 /* once a level: at the recording's end, or at the level's when that comes first */
@@ -7906,6 +7949,8 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
         dst->commander_alive = valid && h->seats[i].side < L.sides && h->seats[i].side < 5 ? 0 : -1;
         dst->seat = seat;
         dst->colour = h->seats[i].logo;
+        /* a skirmish's seat with a camera sample; a multiplayer recording's are not played */
+        dst->pov = !s_mp.level && W->npov[seat] != 0;
         lstrcpynA(dst->name, h->seats[i].name, sizeof dst->name);
         /* The same image the puppet applier uses, held at the final image after EOF. The reader
            owns REC_PLAYERS fixed records and only this thread advances it. None of these fields
@@ -7966,6 +8011,158 @@ int tagpu_replay_sight_request(int seat)
             return 1;
         }
     return 0;
+}
+
+/* ---- FOLLOW, JUMP AND FREE CAM (research/notes/tadr-port/demo-recorder-perspective-streams.md,
+   *Playback*) ---------------------------------------------------------------------------------
+   A Follow shows a recorded seat's camera: at every frame visit the perspective clock picks or
+   interpolates the seat's sample for the displayed GameTime, W->tick (tagpu_persp.h), Follow's fit
+   puts it on this screen, and tagpu_zoom_follow hands the eye and the level to the apply at the
+   top of the draw that follows, which writes the camera on the thread that owns it. A Jump is the
+   same for one epoch that tagpu_zoom ends once the render thread has drawn its level; Free cam
+   ends the epoch. tagpu_zoom ends a Follow on its own when the camera is moved under it or the
+   wheel is turned, and the next visit logs why. Each start and each end is one log line.
+   A seek leaves the camera alone and a Follow goes on from the new GameTime; the end of the
+   recording holds its last samples; a takeover, the level's end and any other end of the playing
+   end the epoch (follow_close). A multiplayer recording's perspectives are its contributions,
+   which this playing does not read yet: it refuses. Everything here is the game thread's: the
+   requests come from the cards (in the wndproc TA pumps on that thread) and the trigger, and the
+   visit runs before the in-play draw call 0x4969CD. */
+
+#define OFF_VIEW_W     0x37E37      /* the 1x view, as the recorder's samples carry it (RecPov)    */
+#define OFF_VIEW_H     0x37E3B
+
+/* the seat has a sample to show, or why not */
+static const char* follow_refusal(int seat)
+{
+    const RecHeader* h;
+    unsigned i;
+    if (!tagpu_replay_live()) return "this level plays no recording";
+    if (s_mp.level) return "a multiplayer recording's perspectives are not played";
+    h = recr_header(s_rd);
+    for (i = 0; i < h->nseats && i < REC_PLAYERS; i++)
+        if (seat >= 0 && seat < REC_PLAYERS && h->seats[i].index == (unsigned)seat)
+            return recr_world(s_rd)->npov[seat] ? NULL : "its camera was not recorded";
+    return "no such recorded seat";
+}
+
+int tagpu_replay_follow_request(int seat, int once)
+{
+    const char* why;
+    if (seat < 0) {
+        if (!tagpu_replay_live()) return 0;
+        s_fl.req = FQ_FREE;
+        return 1;
+    }
+    why = follow_refusal(seat);
+    if (why) {
+        tagpu_logf("replay: %s: %s %d refused: %s", tagpu_replay_live() ? s_name : "-",
+                   once ? "jump" : "follow", seat, why);
+        return 0;
+    }
+    s_fl.req = FQ_FOLLOW;
+    s_fl.rseat = seat;
+    s_fl.ronce = once;
+    return 1;
+}
+
+int tagpu_replay_followed(void)
+{
+    if (s_fl.req == FQ_FREE) return -1;
+    if (s_fl.req == FQ_FOLLOW) return s_fl.ronce ? -1 : s_fl.rseat;
+    return s_fl.E && !s_fl.once ? s_fl.seat : -1;
+}
+
+static const char* follow_why(int st)
+{
+    switch (st) {
+    case TAGPU_FOLLOW_MOVED:   return "camera moved";
+    case TAGPU_FOLLOW_ZOOMED:  return "zoomed";
+    case TAGPU_FOLLOW_DRAWN:   return "drawn";
+    case TAGPU_FOLLOW_STOPPED: return "stopped";
+    case TAGPU_FOLLOW_LEVEL:   return "the level ended";
+    default:                   return "unknown";
+    }
+}
+
+/* the epoch in force ends, tagpu_zoom's side with it, with one line saying why */
+static void follow_end_log(const char* why)
+{
+    if (!s_fl.E) return;
+    tagpu_zoom_follow_stop(s_fl.E);
+    tagpu_logf("replay: %s: %s ended: %s", s_name, s_fl.once ? "jump" : "follow", why);
+    s_fl.E = 0;
+    s_fl.seat = -1;
+    s_fl.handed = 0;
+}
+
+static void follow_close(const char* why)
+{
+    follow_end_log(why);
+    s_fl.req = FQ_NONE;
+    s_fl.pov = 0;
+}
+
+/* The frame visit's part, after any seek and on every path out of the visit, paused frames
+   included. */
+static void follow_visit(char* ta)
+{
+    const RecWorld* W;
+    RecPov p;
+    if (s_fl.req) {
+        const int req = s_fl.req;
+        const char* why = req == FQ_FOLLOW ? follow_refusal(s_fl.rseat) : NULL;
+        s_fl.req = FQ_NONE;
+        /* a seek since the request can have taken the seat's samples away */
+        if (why) tagpu_logf("replay: %s: %s %d refused: %s", s_name,
+                            s_fl.ronce ? "jump" : "follow", s_fl.rseat, why);
+        else if (req == FQ_FREE && !s_fl.E)
+            tagpu_logf("replay: %s: free cam: nothing was followed", s_name);
+        else follow_end_log(req == FQ_FREE ? "free cam" : s_fl.ronce ? "a jump" : "another follow");
+        if (!why && req == FQ_FOLLOW) {
+            s_fl.seat = s_fl.rseat;
+            s_fl.once = s_fl.ronce;
+            s_fl.E = ++s_flEpochs;
+            s_fl.handed = 0;
+            tagpu_logf("replay: %s: %s seat %d, epoch %u", s_name, s_fl.once ? "jump to" : "follow",
+                       s_fl.seat, s_fl.E);
+        }
+    }
+    if (s_fl.E && (!tagpu_replay_live() || s_mp.level)) follow_end_log("the playing ended");
+    if (s_fl.E && s_fl.handed) {
+        const int st = tagpu_zoom_follow_state(s_fl.E);
+        if (st != TAGPU_FOLLOW_ACTIVE) follow_end_log(follow_why(st));
+    }
+    memset(&s_fl.at, 0, sizeof s_fl.at);
+    if (s_fl.E) {
+        W = recr_world(s_rd);
+        s_fl.at.n = W->tick;
+        s_fl.at.vw = *(const int*)(ta + OFF_VIEW_W);
+        s_fl.at.vh = *(const int*)(ta + OFF_VIEW_H);
+        /* the seat is a header seat (follow_refusal), so below REC_PLAYERS. A seek to before the
+           seat's first sample leaves it none: the camera stays where the last write put it */
+        s_fl.at.how = persp_sample(W->npov[s_fl.seat], W->pov[s_fl.seat], W->pov_tick[s_fl.seat],
+                                   W->tick, &p);
+        if (s_fl.at.how && persp_follow(&p, s_fl.at.vw, s_fl.at.vh, &s_fl.at.x, &s_fl.at.y,
+                                        &s_fl.at.level)) {
+            tagpu_zoom_follow(ta, s_fl.at.x, s_fl.at.y, s_fl.at.level, s_fl.E, s_fl.once);
+            s_fl.handed = 1;
+        } else s_fl.at.how = PERSP_NONE;
+    }
+    if (s_fl.pov) {
+        static const char* const how[] = { "none", "latest", "between", "earlier" };
+        s_fl.pov = 0;
+        if (!s_fl.E)
+            tagpu_logf("replay: %s: pov at GameTime %u: no follow", s_name,
+                       *(const unsigned*)(ta + OFF_GAMETIME));
+        else
+            tagpu_logf("replay: %s: pov at GameTime %u: %s epoch %u seat %d, tick %u, sample %s, "
+                       "view %dx%d, eye (%d, %d), level %u/65536 (%.4f)", s_name,
+                       *(const unsigned*)(ta + OFF_GAMETIME), s_fl.once ? "jump" : "follow",
+                       s_fl.E, s_fl.seat, s_fl.at.n, how[s_fl.at.how], s_fl.at.vw, s_fl.at.vh,
+                       s_fl.at.x, s_fl.at.y, (unsigned)s_fl.at.level,
+                       (double)s_fl.at.level / 65536.0);
+    }
 }
 
 int tagpu_replay_paused(void)

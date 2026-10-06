@@ -3764,11 +3764,12 @@ extra declarations in normal units. Generic compatibility battles do not establi
 | Player cards and independent Sight | implemented and verified | recorded stats and commander presence; compact/normal rows and scrolling; Full map/Sight without camera movement; disabled camera controls for recordings without streams |
 | Runtime verification | passed | four-seat compact/normal layouts and HUD125/150/Auto; synthetic nine-row scroll; zero-time/EOF controls; death-vision dump comparisons; both builds; full 18-fixture replay gate, six of six changed functions reached |
 | Independent review | passed after corrections | two high-effort reviews; complete frame draining and rejection of captures without a final marker; focused synchronization re-review |
+| Jump, Follow and Free cam | built, awaiting its V2 run | a skirmish recording's camera stream (format 7): Follow fits the recorded view to this screen and ends on a camera move or a wheel notch, Jump writes it until its level is drawn; GDI shows the camera; multiplayer refused until 4c-4 ([perspective plan, 4c-2](tadr-port/demo-recorder-perspective-streams.html#4c-2-as-built)) |
 
 The [player-card note](tadr-port/demo-recorder-player-cards.html) records the implementation,
 bounds, frame ordering, measured checks and remaining feature gaps. The cards share the dock's post-GUI
-path so the world between the two panels remains interactive. Camera streams and Overlays are
-separate recorder/UI work.
+path so the world between the two panels remains interactive. The camera controls play the
+perspective plan's camera stream; the Overlays are its landing 4c-3.
 
 ## Hardware portability: depth, lines, and a remote Windows test (G21)  [LANDED 2026-09-25]
 

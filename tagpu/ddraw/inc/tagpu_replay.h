@@ -107,16 +107,23 @@ int  tagpu_replay_speed_set(unsigned gs);
    recording the composed one, its owners' (THE MULTIPLAYER MATERIALIZER). Sight is independent of the
    camera: -1 selects the full-map viewer, otherwise a recorded seat index. The request runs at
    the frame boundary and rebuilds death vision, minimap fog and contacts before publishing the
-   selected seat. There is no camera stream in this recording format. */
+   selected seat. */
 typedef struct TAGPU_REPLAY_PLAYER {
     unsigned seat, colour, units, commander_losses;
     int commander_alive; /* 1 present, 0 absent, -1 unavailable */
+    int pov;             /* the seat's camera was recorded and a sample is held: Jump and Follow */
     char name[32];
     float metal, energy, metal_in, metal_out, energy_in, energy_out;
 } TAGPU_REPLAY_PLAYER;
 int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap);
 int tagpu_replay_sight(void);
 int tagpu_replay_sight_request(int seat);
+/* Follow, Jump and Free cam, game thread only (tagpu_replay.c, FOLLOW, JUMP AND FREE CAM): the
+   cards' actions 3k+2, 3k and 34. `seat` a recorded seat whose camera was recorded, its Follow or,
+   with `once`, its Jump; -1 Free cam. Applied at the next frame visit; 0 refused, with a log line
+   naming why. followed: the seat a Follow shows, -1 under Free cam (a Jump included). */
+int tagpu_replay_follow_request(int seat, int once);
+int tagpu_replay_followed(void);
 
 /* tagpu_reclaim's teardown wrap, once 0x491B60 has returned, on the thread that entered it: V's
    PlayerInfo gets back what the Start's fill left in it. */

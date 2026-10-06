@@ -185,7 +185,8 @@ void tagpu_cards_tick(int on_top)
 }
 
 /* Actions use header row indices, which never change on death or seek. -1 is empty space;
-   0..32 are the three buttons per player, 33 full map, 34 free camera. */
+   0..32 are the three buttons per player (3k Jump, 3k+1 Sight, 3k+2 Follow), 33 full map, 34
+   free camera. */
 static int action(int x, int y)
 {
     int row, b;
@@ -211,8 +212,12 @@ int tagpu_cards_click(int x, int y, int down, int right, int on_top)
         a = action(x, y);
         if (!right && was && s_action >= 0 && a == s_action && s_visible && on_top) {
             if (a == 33) tagpu_replay_sight_request(-1);
-            else if (a < 33 && a % 3 == 1 && a / 3 < s_count)
-                tagpu_replay_sight_request((int)s_player[a / 3].seat);
+            else if (a == 34) tagpu_replay_follow_request(-1, 0);
+            else if (a < 33 && a / 3 < s_count) {
+                const TAGPU_REPLAY_PLAYER* p = &s_player[a / 3];
+                if (a % 3 == 1) tagpu_replay_sight_request((int)p->seat);
+                else if (p->pov) tagpu_replay_follow_request((int)p->seat, a % 3 == 0);
+            }
         }
         if (!right) s_action = -1;
         return was;
@@ -289,7 +294,7 @@ static void button(int x, int y, int w, const char* caption, int a, int enabled,
 
 void tagpu_cards_draw(void)
 {
-    int y, k, fh, sight, by;
+    int y, k, fh, sight, followed, by;
     char line[128], m[24], e[24], mi[24], mo[24], ei[24], eo[24];
     if (!s_visible) return;
     for (y = 0; y < s_rect.h; y += 64) {
@@ -297,6 +302,7 @@ void tagpu_cards_draw(void)
         BLIT(NULL, s_bgFrame[h - 1], s_rect.l, s_rect.t + y);
     }
     sight = tagpu_replay_sight();
+    followed = tagpu_replay_followed();
     fh = TEXT_HEIGHT();
     for (k = 0; k < s_slots; k++) {
         const TAGPU_REPLAY_PLAYER* p = &s_player[s_first + k];
@@ -321,9 +327,10 @@ void tagpu_cards_draw(void)
             text_at(x + 150, cy + 16, 48, "Defeated", 1);
         }
         by = cy + h - 24;
-        button(x + 8, by, 60, "Jump", 3 * (s_first + k), 0, 0);
+        button(x + 8, by, 60, "Jump", 3 * (s_first + k), p->pov, 0);
         button(x + 72, by, 60, "Sight", 3 * (s_first + k) + 1, 1, sight == (int)p->seat);
-        button(x + 136, by, 60, "Follow", 3 * (s_first + k) + 2, 0, 0);
+        button(x + 136, by, 60, "Follow", 3 * (s_first + k) + 2, p->pov,
+               followed == (int)p->seat);
     }
     if (s_count > s_slots) {
         int len = s_rect.h - FOOT, top = len * s_first / s_count;
@@ -333,11 +340,12 @@ void tagpu_cards_draw(void)
     }
     by = s_rect.t + s_rect.h - FOOT + 4;
     button(s_rect.l + 8, by, 92, "Full map", 33, 1, sight == -1);
-    button(s_rect.l + 106, by, 92, "Free cam", 34, 0, 1);
-    /* The fixed footer remains 32 high. A disabled camera control explains itself in the list's
-       spare space when available, otherwise in the current card's status line while hovered. */
+    button(s_rect.l + 106, by, 92, "Free cam", 34, 1, followed == -1);
+    /* The fixed footer remains 32 high. A disabled camera control -- a seat whose camera was not
+       recorded -- explains itself in the list's spare space when available, otherwise in the
+       current card's status line while hovered. */
     k = action(g_ddraw.cursor.x, g_ddraw.cursor.y);
-    if (k == 34 || (k >= 0 && k < 33 && k % 3 != 1)) {
+    if (k >= 0 && k < 33 && k % 3 != 1 && k / 3 < s_count && !s_player[k / 3].pov) {
         int hy = s_rect.t + s_slots * s_pitch;
         if (hy + fh < by) text_at(s_rect.l + 8, hy, 190, "Camera was not recorded.", 0);
         else {

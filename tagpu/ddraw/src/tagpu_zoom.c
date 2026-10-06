@@ -36,7 +36,7 @@ static volatile LONG  s_live;          /* a zoomed world is on screen right now 
 static volatile LONG  s_fresh;         /* the pass published during this frame     */
 static int            g_mmInstalled;   /* tagpu_zoom_init() patched the engine     */
 
-/* The range BOTH levers share. The transform is fine outside it; these are the
+/* The range every lever shares. The transform is fine outside it; these are the
    levels the rest of the stack has been checked at. */
 /* the range itself is published in tagpu_zoom.h — the passes that size a
    gather from it need the same two numbers */
@@ -178,11 +178,10 @@ static LONG wheel_discard(void)
     return d;
 }
 
-/* Render thread: the wheel at rest at level z — no tween, nothing owed, the
-   ring emptied. Returns the raw delta thrown away. */
-static LONG wheel_reset(float z)
+/* Render thread: the wheel at rest at level z — no tween, nothing owed — with
+   the ring left as it is. */
+static void wheel_rest(float z)
 {
-    LONG dropped = wheel_discard();
     s_wheelTgt = s_wheelCur = z;
     s_tweening = 0;
     s_tweenG = 1.0;
@@ -190,7 +189,24 @@ static LONG wheel_reset(float z)
     s_remX = s_remY = 0.0f;
     s_gPosted = 1.0;
     s_wheelPend = 0;
+}
+
+/* Render thread: the wheel at rest at level z, the ring emptied. Returns the
+   raw delta thrown away. */
+static LONG wheel_reset(float z)
+{
+    LONG dropped = wheel_discard();
+    wheel_rest(z);
     return dropped;
+}
+
+/* Render thread: 1 when a notch is queued. `head` is the message thread's
+   interlocked store, so a notch it published is seen here or on a later
+   frame, never lost: nothing in this file takes it but wheel_level and the
+   two discards. */
+static int notches_queued(void)
+{
+    return s_nqHead != s_nqTail;
 }
 
 /* Pin the wheel to a level without a tween, and throw away any notches that
@@ -344,6 +360,47 @@ static float wheel_level(const TAGPU_PACKET* pk)
     return s_wheelCur;
 }
 
+/* ---- the follow lever -------------------------------------------------------
+
+   THE REPLAY'S FOLLOW AND JUMP REACH THE RENDER THREAD ONLY BY VALUE. The
+   game thread writes the camera for a follow epoch in its apply and publishes
+   the epoch and its level in the packet of that draw (follow_epoch,
+   follow_level); this thread reads those two numbers and nothing else, and
+   answers with two of its own in every command record (follow_broken,
+   follow_seen). An epoch is the replay's counter, unique in the process and
+   never reused, and every test of one is an EQUALITY against the epoch the
+   reader holds in force — so a packet or a record from before an epoch began,
+   or from one that has ended, matches nothing and changes nothing, however
+   late either thread takes it. That is the whole ordering argument: no word
+   of either side is read by the other, and no stale value can be mistaken
+   for a current one.
+
+   In read_lever the follow lever stands between the file and the wheel. A
+   packet whose epoch is nonzero, not the one this thread broke, and whose
+   level is in the lever's range puts the follow in force:
+     no notch queued: the wheel is pinned at rest to the follow level and no
+       anchor is applied; when the frame is drawn at that level the epoch is
+       `seen`, which is what ends a Jump on the game thread;
+     a notch queued: the epoch is `broken` — the apply stops writing the
+       camera — and the wheel starts from the follow level and takes the notch
+       as it takes any, its anchor included.
+   Either way the wheel is left at the follow level when the epoch ends, so
+   ending a Follow moves nothing on the screen. Render thread only. */
+static unsigned s_followBroken;            /* the epoch a notch ended            */
+static unsigned s_followSeen;              /* the latest epoch drawn at its level */
+
+#define FOLLOW_Q16_MIN ((unsigned)(ZOOM_MIN * 65536.0f))
+#define FOLLOW_Q16_MAX ((unsigned)(ZOOM_MAX * 65536.0f))
+
+/* The follow epoch this packet puts in force, or 0. */
+static unsigned follow_in_force(const TAGPU_PACKET* pk)
+{
+    if (!pk || !pk->in_game || !pk->follow_epoch || pk->follow_epoch == s_followBroken ||
+        pk->follow_level < FOLLOW_Q16_MIN || pk->follow_level > FOLLOW_Q16_MAX)
+        return 0;
+    return pk->follow_epoch;
+}
+
 /* the eye this frame is drawn from (render thread) */
 static int   s_predX, s_predY, s_havePred, s_fogWide;
 /* the fog bound's cost and the monotone rule's witness (tagpu_zoom_fog_held) */
@@ -352,6 +409,10 @@ static int      s_fogHeldMax;
 
 float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
 {
+    unsigned fe = follow_in_force(pk);          /* see "the follow lever" */
+    float    fz = fe ? (float)pk->follow_level / 65536.0f : 1.0f;
+    int      following = 0;
+
     /* NO ZOOM WITHOUT THE MOUSE-WORLD REPAIR, and this is the gate that makes
        that structural rather than merely documented.
 
@@ -364,9 +425,9 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
        (which carry `u` in the message) still land correctly — half broken and
        hard to see.
 
-       BOTH LEVERS ARE UNGATED BY ANY ARM FILE. `tagpu_zoom.on` installs the
-       minimap/ScrollSpeed/camera-range patches and nothing else; the file and
-       the wheel are read here, and the native pass publishes the view, with no
+       THE LEVERS ARE UNGATED BY ANY ARM FILE. `tagpu_zoom.on` installs the
+       minimap/ScrollSpeed/camera-range patches and nothing else; the file, the
+       follow and the wheel are read here, and the native pass publishes the view, with no
        arm file consulted at all. So a build with `native.on` and `terr.on` but
        no `zoom.on` could be wheeled to 0.5x and reach exactly that state. Pin
        to 1.0 instead, and say so once. */
@@ -381,6 +442,9 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
         anchor_step(0, pk);
         predict(pk, 1.0f, 0);
         s_lever = 1.0f;
+        /* the level is pinned and the follow's camera drawn: a Jump has
+           nothing more to wait for */
+        if (fe) s_followSeen = fe;
         return 1.0f;
     }
 
@@ -395,7 +459,20 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     int    fromWheel = (zh == INVALID_HANDLE_VALUE);
     float  z = s_zoom;
-    if (fromWheel) {
+    if (fromWheel && fe && !notches_queued()) {
+        /* THE FOLLOW LEVER, pinned: no notch, so no gesture and no anchor */
+        wheel_rest(fz);
+        z = fz;
+        following = 1;
+        fromWheel = 0;
+    } else if (fromWheel) {
+        if (fe) {
+            /* a notch for the epoch in force ends it, and the wheel takes
+               the notch from the follow level */
+            s_followBroken = fe;
+            wheel_rest(fz);
+            s_lever = fz;
+        }
         z = wheel_level(pk);
     } else {
         char zb[32]; DWORD zn = 0;
@@ -410,6 +487,9 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
            the one actually in force and therefore the one the wheel must
            inherit when the file goes away. */
         wheel_pin(z);
+        /* the file outranks the follow's level, so the follow's camera is
+           drawn at the file's: a Jump has nothing more to wait for */
+        if (fe) s_followSeen = fe;
     }
     /* The eye step that holds the point under the cursor, worked out HERE:
        this is the call the driver makes at the top of its frame, before any
@@ -420,6 +500,9 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
     /* the fog bound may hold the level for this frame (predict), so the
        published level is written once, after it */
     z = predict(pk, z, 1);
+    /* seen only when the frame is drawn AT the follow level: the fog bound
+       may draw it at the last frame's instead (predict) */
+    if (following && z == fz) s_followSeen = fe;
     s_zoom = z;
     s_lever = z;
     return z;
@@ -1194,8 +1277,11 @@ static void __stdcall zoom_debug_overlay(void* ctx)
    DrawGameScreen stores the eye (the scenario camera is written by the apply
    itself, and releases nothing). A gesture that moves the eye by NOTHING —
    the pointer on the viewport centre — releases nothing, so the A/B control
-   holds exactly. */
-static void release_follow(char* ta)
+   holds exactly. The replay's Follow and Jump release it the same way, on
+   their epoch's first write (tagpu_zoom_follow): a Ctrl+C made before them
+   would otherwise have the stepper move the target to its unit, which ends
+   the Follow on its next frame. `who` names the taker for the log. */
+static void release_follow(char* ta, const char* who)
 {
     int*   obj  = (int*)  (ta + OFF_FOLLOW_OBJ);
     int*   unit = (int*)  (ta + OFF_FOLLOW_UNIT);
@@ -1213,8 +1299,11 @@ static void release_follow(char* ta)
         static DWORD tick;                   /* game thread only */
         DWORD now = GetTickCount();
         if (now - tick > 1000) {
+            char b[96];
             tick = now;
-            zlog("zoom: cursor anchor took the camera - the unit follow is released");
+            _snprintf(b, sizeof b, "zoom: %s took the camera - the unit follow is released", who);
+            b[sizeof b - 1] = 0;
+            zlog(b);
         }
     }
 }
@@ -1238,6 +1327,64 @@ static unsigned s_epoch;                   /* bumped at every level end (game th
 /* the scenario camera's eye, owed to the next apply (tagpu_zoom_place_eye),
    and whether the apply runs at all (game thread only) */
 static int      s_placeOn, s_placeX, s_placeY, s_applyLive;
+
+/* ---- the replay's Follow and Jump, the game thread's half -------------------
+
+   THE MECHANISM (demo-recorder-perspective-streams.md, "Follow's mechanism"):
+   the replay's frame visit hands the eye of the recorded seat's camera, fitted
+   to this screen, to tagpu_zoom_follow before the draw call 0x4969CD; the
+   apply at the draw's top writes it, with the scroll target, after every
+   engine camera writer of the frame (the stepper and the scroll poll precede
+   the draw call; nothing inside DrawGameScreen stores the eye); and the
+   packet that draw publishes carries the epoch and its level to the render
+   thread ("the follow lever").
+
+   FOLLOW ENDS ON AN OBSERVED FACT, NOT A GUESS. Every camera move a player
+   makes writes the scroll target — the nine eye writers copy the eye into it,
+   the centre-ons store it, the stepper's follow source writes it (the exe
+   map's camera module) — and between two applies nothing else does: the eye
+   clamp 0x41C3C0 touches only the eye, the stepper eases only the eye unless
+   it follows a unit, an object or a remembered position, and the epoch's
+   first write released all three (release_follow). So a target at the apply's entry that is not where the
+   last write left it, after its clamp, IS a camera move of someone else's,
+   and the epoch ends there. The render thread ends one by value: a record
+   whose follow_broken is the epoch in force (a wheel notch), or for a Jump
+   one whose follow_seen is (its level drawn). Epochs are the replay's, unique
+   in the process, compared only for equality with the one in force, so no
+   record or packet from before an epoch began, or after it ended, can act on
+   it. All of it is game-thread state, read and written by this thread
+   alone. */
+static struct {
+    unsigned epoch;            /* in force, 0 none                                   */
+    unsigned last;             /* the latest epoch ever handed in: none at or below
+                                  it starts again                                    */
+    int      once;             /* a Jump                                             */
+    int      x, y;             /* the eye the next write puts the camera at          */
+    unsigned level;            /* its level x 65536, for the packet                  */
+    int      wrote;            /* the epoch's first write is done ...                */
+    int      tx, ty;           /* ... and left the target here, clamped              */
+    unsigned ended;            /* the latest epoch to end ...                        */
+    int      why;              /* ... and why (TAGPU_FOLLOW_*)                        */
+} s_fol;
+
+static void follow_end(int why)
+{
+    s_fol.ended = s_fol.epoch;
+    s_fol.why = why;
+    s_fol.epoch = 0;
+}
+
+/* The epoch's end tests, at the entry of a write: the target moved under it,
+   or the render thread's record ended it. `c` may be NULL (no record yet, or
+   no apply at all). */
+static void follow_check(const char* ta, const TAGPU_CMD* c)
+{
+    const int* scr = (const int*)(ta + OFF_SCRTX);
+    if (!s_fol.epoch || !s_fol.wrote) return;
+    if (scr[0] != s_fol.tx || scr[1] != s_fol.ty) follow_end(TAGPU_FOLLOW_MOVED);
+    else if (c && c->follow_broken == s_fol.epoch) follow_end(TAGPU_FOLLOW_ZOOMED);
+    else if (c && s_fol.once && c->follow_seen == s_fol.epoch) follow_end(TAGPU_FOLLOW_DRAWN);
+}
 
 void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
 {
@@ -1263,6 +1410,18 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
     s_gCentre = g_eyeInstalled && terr;
     if (!clamp_range(ta, &loX, &hiX, &loY, &hiY)) s_gCentre = 0;
 
+    /* THE REPLAY'S FOLLOW, BEFORE ANYTHING HERE WRITES THE CAMERA: the target
+       at entry is what the frame's engine writers left, so this is the test
+       of "someone else moved it". A scenario camera handed over for this
+       draw is such a move too. An epoch's first write releases the engine's
+       own follow, so an earlier Ctrl+C cannot have the stepper move the
+       target and end the epoch on its next frame. */
+    if (s_fol.epoch) {
+        follow_check(ta, c);
+        if (s_fol.epoch && s_placeOn) follow_end(TAGPU_FOLLOW_MOVED);
+        if (s_fol.epoch && !s_fol.wrote) release_follow(ta, "the replay's follow");
+    }
+
     /* A NEW RECORD: its delta is consumed exactly once — the difference
        between its cumulative sum and what was applied so far — and the
        follow is released on the same draw when the gesture asked. The
@@ -1277,7 +1436,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
     if (c && c->cmd_seq != s_appliedSeq && c->epoch == s_epoch) {
         int dx = c->cum_dx - s_appliedDx, dy = c->cum_dy - s_appliedDy;
         if (dx || dy) {
-            if (c->drop_follow) release_follow(ta);
+            if (c->drop_follow) release_follow(ta, "cursor anchor");
             eye[0] += dx; eye[1] += dy;
             /* the target moves with the eye, always: the two disagreeing is
                what the per-frame stepper reads as "a camera move is in
@@ -1298,6 +1457,18 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
         eye[0] = s_placeX; eye[1] = s_placeY;
         scr[0] = s_placeX; scr[1] = s_placeY;
         moved = applied = 1;
+    }
+
+    /* THE REPLAY'S FOLLOW WRITES THE CAMERA, every draw while its epoch
+       stands, the eye and the target together and clamped into the range as
+       the hold is; the hold, when on, wins. Written only when it differs, so
+       a still camera costs no fog rebuild. */
+    if (s_fol.epoch && !(c && c->hold_on)) {
+        int x = s_fol.x, y = s_fol.y;
+        clamp_pair(&x, &y, loX, hiX, loY, hiY);
+        if (eye[0] != x || eye[1] != y) { eye[0] = x; eye[1] = y; moved = 1; }
+        if (scr[0] != x || scr[1] != y) { scr[0] = x; scr[1] = y; }
+        applied = 1;
     }
 
     /* THE HOLD, a level: the camera is where tagpu_eye.txt says, every draw,
@@ -1338,6 +1509,11 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
     if (g_eyeInstalled || applied) {
         moved |= clamp_pair(eye, eye + 1, loX, hiX, loY, hiY);
         moved |= clamp_pair(scr, scr + 1, loX, hiX, loY, hiY);
+    }
+    /* the target this apply leaves, which the next one tests the epoch on */
+    if (s_fol.epoch) {
+        s_fol.tx = scr[0]; s_fol.ty = scr[1];
+        s_fol.wrote = 1;
     }
 
     /* A CAMERA WE MOVED OWES THE ENGINE WHAT ITS OWN WRITERS DO. Nine of the
@@ -1381,6 +1557,7 @@ void tagpu_zoom_level_end(char* ta)
     s_appliedSeq = 0; s_appliedDx = 0; s_appliedDy = 0;
     s_placeOn = 0;                        /* a placement is the old level's */
     s_applyLive = 0;
+    if (s_fol.epoch) follow_end(TAGPU_FOLLOW_LEVEL);
     /* THE GROUND GOES BACK TO THE ENGINE HERE (the publisher latches it down
        right after this call), so the eye and the target are walked into its
        own range first: nothing between this teardown and the next level's
@@ -1435,6 +1612,70 @@ int tagpu_zoom_place_eye(char* ta, int x, int y, int* outX, int* outY)
     return 1;
 }
 
+/* The write where no apply runs (tagpu_zoom_follow): the same end tests with
+   no record, the release on the epoch's first write, the pair clamped into
+   the range in force, and, when the camera moved, what place_eye's own write
+   owes the engine. Nothing draws a level here, so a Jump ends with its
+   write. */
+static void follow_direct(char* ta)
+{
+    int* eye = (int*)(ta + OFF_EYEX);
+    int* scr = (int*)(ta + OFF_SCRTX);
+    int  loX, hiX, loY, hiY, x = s_fol.x, y = s_fol.y;
+
+    follow_check(ta, NULL);
+    if (!s_fol.epoch) return;
+    if (!s_fol.wrote) release_follow(ta, "the replay's follow");
+    clamp_range(ta, &loX, &hiX, &loY, &hiY);
+    clamp_pair(&x, &y, loX, hiX, loY, hiY);
+    if (eye[0] != x || eye[1] != y || scr[0] != x || scr[1] != y) {
+        eye[0] = x; eye[1] = y;
+        scr[0] = x; scr[1] = y;
+        zoom_minimap_rect((int*)(ta + OFF_MM_RECT));
+        *(unsigned char*)(ta + OFF_MM_DIRTY) |= 2u;
+        *(unsigned short*)(ta + OFF_LOSTYPE) &= (unsigned short)~8u;
+    }
+    s_fol.tx = x; s_fol.ty = y;
+    s_fol.wrote = 1;
+    if (s_fol.once) follow_end(TAGPU_FOLLOW_DRAWN);
+}
+
+void tagpu_zoom_follow(char* ta, int eyeX, int eyeY, unsigned levelQ16, unsigned E, int once)
+{
+    if (!E || !ta_ok(ta)) return;
+    if (E != s_fol.epoch) {
+        if (E <= s_fol.last) return;           /* ended, or older than one that did */
+        if (s_fol.epoch) follow_end(TAGPU_FOLLOW_STOPPED);
+        s_fol.epoch = s_fol.last = E;
+        s_fol.once = once;
+        s_fol.wrote = 0;
+    }
+    s_fol.x = eyeX; s_fol.y = eyeY;
+    s_fol.level = levelQ16;
+    if (!s_applyLive) follow_direct(ta);
+}
+
+void tagpu_zoom_follow_stop(unsigned E)
+{
+    if (E && E == s_fol.epoch) follow_end(TAGPU_FOLLOW_STOPPED);
+}
+
+int tagpu_zoom_follow_state(unsigned E)
+{
+    if (!E) return TAGPU_FOLLOW_UNKNOWN;
+    if (E == s_fol.epoch) return TAGPU_FOLLOW_ACTIVE;
+    return E == s_fol.ended ? s_fol.why : TAGPU_FOLLOW_UNKNOWN;
+}
+
+/* Published only once the apply has written for the epoch, so a packet that
+   names it carries the eye it wrote (or the hold's, which wins). */
+void tagpu_zoom_follow_pub(unsigned* epoch, unsigned* levelQ16)
+{
+    int on = s_fol.epoch && s_fol.wrote;
+    *epoch = on ? s_fol.epoch : 0u;
+    *levelQ16 = on ? s_fol.level : 0u;
+}
+
 void tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level,
                         unsigned* epoch, unsigned* centre)
 {
@@ -1469,6 +1710,8 @@ void tagpu_zoom_frame_end(void)
     rec.cum_dx      = s_cumX;
     rec.cum_dy      = s_cumY;
     rec.drop_follow = (s_cumX != s_ackX || s_cumY != s_ackY) ? 1u : 0u;
+    rec.follow_broken = s_followBroken;
+    rec.follow_seen   = s_followSeen;
     tagpu_input_cmd(&rec);
     tagpu_cmd_post(&rec);
 }

@@ -59,7 +59,7 @@ struct TAGPU_CMD;
    outermost screen pixel) keep working at every zoom.
 
    THREE THREADS, ONE OWNER PER WORD.
-   The render thread owns the LEVEL — it reads the two levers, tweens the
+   The render thread owns the LEVEL — it reads the three levers, tweens the
    wheel, works out the cursor anchor's eye delta and publishes the live view
    for the input path — and it writes NOTHING into engine memory: everything the zoom
    needs the engine to do travels as a COMMAND RECORD (tagpu_packet.h,
@@ -120,17 +120,23 @@ void  tagpu_zoom_init(void);
 /* Re-read the level. Render thread, ONCE per overlay frame, from the driver
    (tagpu_overlay.c) BEFORE any pass reads the eye — the scaffold included, so
    every pass draws the same frame from the same eye. Returns the level in
-   force, from the two levers in priority order:
+   force, from the three levers in priority order:
 
      tagpu_zoom.txt, when present — the file's value when it parses in
        0.25..8.0, the last good value on a torn read. Scripted drivers (tacli,
        the scenarios) own this one, and while it is there it WINS.
+     the replay's Follow or Jump — the level the packet's follow_level names,
+       while its follow_epoch is nonzero and no wheel notch has ended it.
+       A notch queued for an epoch ends it: the wheel starts from the follow
+       level and the notch is taken as any notch is (tagpu_zoom.c, "the
+       follow lever").
      the wheel otherwise — the level the player has wheeled to, drawn along
        its 250 ms tween at this call's time, and 1.0 until they turn the wheel.
 
-   While the file is in force the wheel is pinned to it, so DELETING the file
-   leaves the view exactly where it was and hands the wheel control from there,
-   rather than snapping back to 1.0 or to some level wheeled at long ago.
+   While the file or a Follow is in force the wheel is pinned to it, so
+   DELETING the file, or the Follow ending, leaves the view exactly where it
+   was and hands the wheel control from there, rather than snapping back to
+   1.0 or to some level wheeled at long ago.
 
    `pk` is this frame's packet (or NULL): the cursor anchor works out its eye
    delta against the packet's eye and the camera range the packet's map and
@@ -234,7 +240,8 @@ void  tagpu_zoom_publish_view(int vpL, int vpT, int vw, int vh);
    cannot bend menu clicks. And it POSTS THIS FRAME'S COMMAND RECORD: the level
    and whether it is live (the game thread derives the addressable rect, the
    minimap box and the scroll rate from them), the anchor's cumulative delta,
-   the camera hold (tagpu_input.c) and the follow release. A frame that drew
+   the camera hold (tagpu_input.c), the follow release, and the replay
+   Follow epochs a notch ended and the render thread drew. A frame that drew
    nothing zoomed therefore hands the engine its own rect and rate back at the
    next in-play draw. */
 void  tagpu_zoom_frame_end(void);
@@ -258,14 +265,21 @@ float tagpu_zoom_level(void);
    the level every game-thread reader here uses (the minimap rect's scale,
    the scroll rate); the camera range is chosen — the centre range when
    `terr`, the render thread's terrain request that the publisher latches
-   for this same draw right after, else the engine's own; a NEW record of the
+   for this same draw right after, else the engine's own; the replay's
+   Follow ended when the scroll target is not where its last write left it,
+   or when the record reports a notch for it (a Jump once the record reports
+   its level drawn), and the engine's own follow released on an epoch's first
+   write; a NEW record of the
    current epoch has its eye delta applied — the follow released first when
    the record asks, then the eye and its scroll target stepped together; a
-   scenario camera handed over since the last apply is written; the
+   scenario camera handed over since the last apply is written (and ends a
+   Follow: it moves the camera); the replay's Follow writes the eye and the
+   target together; the
    hold, when on, is clamped into the range and written when it differs; the
    range is applied to the eye and the target every draw, which is what walks
    the eye into the engine's own range before a draw whose ground is the
-   engine's; a camera that moved gets what every engine eye writer gives it —
+   engine's, and the target it leaves is what the next apply compares a
+   Follow's against; a camera that moved gets what every engine eye writer gives it —
    the minimap's view box recomputed, bit 1 of main+0x142F1 set (the
    minimap's dirty flag) and bit 3 of main+0x14281 cleared (the screen fog
    grid's is-current flag), both safe HERE, on the game thread, and nowhere
@@ -296,6 +310,46 @@ void  tagpu_zoom_level_end(char* ta);
    written goes to outX, outY. Returns 0, writing nothing, when main is not
    sane. */
 int   tagpu_zoom_place_eye(char* ta, int x, int y, int* outX, int* outY);
+
+/* ---- game thread: the replay's Follow and Jump ------------------------ */
+
+/* How an epoch stands (tagpu_zoom_follow_state). */
+enum {
+    TAGPU_FOLLOW_UNKNOWN = 0,   /* never handed in, or not the latest to end                  */
+    TAGPU_FOLLOW_ACTIVE,        /* the camera is written for it                               */
+    TAGPU_FOLLOW_MOVED,         /* the target was not where its last write left it            */
+    TAGPU_FOLLOW_ZOOMED,        /* the render thread gave its level to a wheel notch          */
+    TAGPU_FOLLOW_DRAWN,         /* a Jump: its level has been drawn, or nothing draws one     */
+    TAGPU_FOLLOW_STOPPED,       /* tagpu_zoom_follow_stop, or a later epoch replaced it        */
+    TAGPU_FOLLOW_LEVEL          /* the level ended                                            */
+};
+
+/* GAME THREAD, from the replay's frame visit before the in-play draw call 0x4969CD: put the
+   camera's eye at (eyeX, eyeY), and the level at levelQ16 / 65536, for epoch E -- a Follow,
+   handed again at every frame visit with the position of that visit, or a Jump (`once`).
+   E is the caller's, nonzero and unique in the process: a new E starts an epoch and ends the
+   one in force; an E that is not in force and not later than every E handed before is ignored,
+   so an ended epoch never restarts. The next apply (tagpu_zoom_apply) writes the eye and the
+   scroll target together, after every engine camera writer of the frame, and publishes E and
+   the level in the packet, where the render thread's follow lever pins the wheel to it. Where
+   no apply runs (the packet publisher count-only: GDI) the eye is written here, with what
+   tagpu_zoom_place_eye's own write owes the engine, and a Jump ends with its write.
+   The epoch ends -- tagpu_zoom_follow_state says why -- when the scroll target is not where
+   the last write left it (a camera move of the engine's: an arrow key, an edge scroll, a
+   minimap click), when the render thread reports a wheel notch for it, for a Jump once the
+   render thread reports its level drawn, on tagpu_zoom_follow_stop, and at the level end. */
+void  tagpu_zoom_follow(char* ta, int eyeX, int eyeY, unsigned levelQ16, unsigned E, int once);
+
+/* GAME THREAD: end epoch E (Free cam), when it is the one in force. */
+void  tagpu_zoom_follow_stop(unsigned E);
+
+/* GAME THREAD: TAGPU_FOLLOW_ACTIVE while E is in force; why it ended when it is the latest
+   epoch to end; TAGPU_FOLLOW_UNKNOWN otherwise. */
+int   tagpu_zoom_follow_state(unsigned E);
+
+/* GAME THREAD, for the packet the in-play draw publishes: the epoch the apply wrote the camera
+   for and its level x 65536, both 0 when none. */
+void  tagpu_zoom_follow_pub(unsigned* epoch, unsigned* levelQ16);
 
 /* GAME THREAD: what the apply has done so far, for the packet's
    acknowledgement fields — the last record's cmd_seq, the cumulative delta

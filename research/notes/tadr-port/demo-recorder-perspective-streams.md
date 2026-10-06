@@ -2,8 +2,10 @@
 
 ## Status
 
-Planned 2026-10-06. Landing 4c-1 (the skirmish capture) is built and awaits its V1 run; 4c-2 to
-4c-4 are not built. This is stage 4c of the
+Planned 2026-10-06. Landing 4c-1 (the skirmish capture) is built and awaits its V1 run. Landing
+4c-2 (Follow, Jump and Free cam on a skirmish playback) is built and awaits its V2 run; what it
+settled beyond the plan is [4c-2 as built](#4c-2-as-built). 4c-3 and 4c-4 are not built. This is
+stage 4c of the
 [multiplayer slice](demo-recorder-multiplayer-slice.md#stage-4-perspectives-and-communication)
 and landing 3 of [S5](demo-recorder-s5-ui.md#landings) ("the streams and the cards"). It records
 each human seat's camera, cursor, clicks and selection: the local human in a skirmish recording
@@ -255,6 +257,65 @@ and Free cam, instead of a new Overlays button on the dock: no new GUI screen an
 **tacli** triggers: `replay follow <seat>|free`, `replay jump <seat>`, `replay overlay <name>
 on|off`, and `replay pov`, which logs the follow epoch, the computed eye and level, the item
 count and the number of `rsel` units.
+
+### 4c-2 as built
+
+Built 2026-10-06; not yet run in a game. The code: `src/tagpu_persp.c` (the clock and the fit),
+the follow lever and the follow's apply in `src/tagpu_zoom.c`, the frame visit's part
+(`follow_visit`) and the requests in `src/tagpu_replay.c`, the cards in `src/tagpu_cards.c`, and
+`tacli replay follow|jump|pov`. What it settled that the plan left open:
+
+- **The fit rounds down.** Each of `z_r * W_v / W_r` and `z_r * H_v / H_r` is truncated in 64-bit
+  integers before the minimum and the clamp, so the viewer's view/z_v is never smaller than the
+  recorder's view/z_r unless the 0.25 floor cuts it. The eye is `cam - W_v/2` with the half
+  rounded down, saturated to int32.
+- **Interpolation starts from `a`.** The fields the clock does not interpolate (`player`,
+  `every`, `flags`) and, unless both samples are `REC_POV_WORLD`, the cursor are `a`'s. With one
+  sample, a latest that is too new answers with that sample (`PERSP_EARLIER`).
+- **The mirror is checked against the C, not only against the plan.**
+  `tools/replay/persp_test.py` builds `tools/replay/persp_test.c` with `tagpu_persp.c` with the
+  host's C compiler, runs its rule checks, then 200 000 random cases (int32-wide coordinates
+  included) against `tarec.py`'s `persp_sample` and `persp_follow`: 0 differ. A mirror that
+  floors instead of truncating fails it (821 of 20 000).
+- **The displayed tick is the reader's, `W->tick`**, which is GameTime + 1 while playing (the
+  frame visit shows the iteration after the step). `tacli replay pov` logs it as `tick n`, and
+  `tarec.py pov FILE --eye n --viewer W,H` takes that n. Its eye is the one before the camera's
+  range clamp; the apply clamps into the range in force, so near a map edge the peeked eye is the
+  clamped one.
+- **Epochs are the replay's**, a counter over the process that is never reset, so an epoch is
+  never reused across levels; `tagpu_zoom` ignores an epoch that is not the one in force and not
+  later than every one it was handed. The render thread compares the packet's and the record's
+  epochs with the one in force by equality only.
+- **A Jump is `seen` only when its frame is drawn at the follow level**; the fog bound can draw a
+  frame at the last frame's level (`predict`), and that frame does not count. Where the level
+  lever is not the follow's — `tagpu_zoom.txt` in force, or the 1.0 pin without the mouse-world
+  repair — the render thread reports the epoch seen at once, so a Jump ends there with the file's
+  level, which outranks it.
+- **A scenario camera handed to the apply ends a Follow** as "camera moved": it is a camera move
+  of someone else's that the target comparison cannot see, because it is written inside the
+  apply.
+- **No apply (GDI, the packet publisher count-only):** `tagpu_zoom_follow` writes the eye and the
+  target at the frame visit, before the draw call, with what `tagpu_zoom_place_eye`'s own write
+  owes the engine; the same target comparison ends a Follow there, and a Jump ends with its write.
+- **A seek before the seat's first sample** leaves it none: the epoch stays and the camera stays
+  where the last write put it.
+- **The cards**: Jump and Follow are enabled for a seat whose `RecWorld` holds a sample
+  (`TAGPU_REPLAY_PLAYER.pov`); Follow is drawn active for the followed seat and Free cam active
+  otherwise, a Jump included. "Camera was not recorded." now explains only a disabled Jump or
+  Follow.
+- **Log lines**: `replay: <name>: follow seat <S>, epoch <E>` / `jump to seat <S>, epoch <E>`;
+  `follow ended: camera moved|zoomed|free cam|another follow|a jump|the playing ended|the level
+  ended` (`jump ended: drawn` for a completed Jump); `<follow|jump> <S> refused: <why>`; and
+  `pov at GameTime <G>: follow|jump epoch <E> seat <S>, tick <n>, sample <how>, view <W>x<H>,
+  eye (<x>, <y>), level <L>/65536 (<z>)`.
+
+Gaps 4c-2 leaves:
+
+- **A multiplayer playback refuses Follow and Jump** ("a multiplayer recording's perspectives are
+  not played"); 4c-4 brings them.
+- **A Vulkan frame that skips `tagpu_zoom_read_lever`** (the overlay off, the reclaim teardown's
+  frames) reports nothing: a Jump made while no frame reads the lever is written until the camera
+  is moved, as a Follow would be.
 
 ## Multiplayer (kinds 13-15)
 

@@ -12,7 +12,8 @@
 
    THE OTHER DIRECTION is the same primitive with the threads
    swapped: the render thread posts a COMMAND record — the zoom level in
-   force, the cursor anchor's eye delta, the camera hold, the follow release —
+   force, the cursor anchor's eye delta, the camera hold, the follow release,
+   and what the render thread made of the replay's Follow —
    and the game thread takes the latest one at the top of every in-play draw
    (the observer's `before`, post-tick, pre-draw) and writes the engine's
    words there, on the thread that owns them. The render thread stores into
@@ -703,6 +704,13 @@ typedef struct TAGPU_PACKET {
                                    0 = the engine's own [0, extent - W]. The
                                    render thread's anchor and prediction clamp
                                    with the same range from this              */
+    uint32_t follow_epoch;      /* the replay's Follow or Jump the apply wrote
+                                   the camera for before this draw (its epoch,
+                                   unique in the process); 0 = none           */
+    uint32_t follow_level;      /* ... and the level it fits, x 65536: the
+                                   render thread pins the wheel to it while
+                                   the epoch is in force (tagpu_zoom.c, "the
+                                   follow lever")                             */
     uint32_t pal_ok;            /* 1 = pal[] and gamma below were copied        */
     float    gamma;             /* the engine's gamma factor, bounded 0.05..8.0 */
     uint8_t  pal[1024];         /* the engine's own palette table, 256 x RGBA,
@@ -901,6 +909,11 @@ typedef struct TAGPU_CMD {
                                    wants the camera: release the follow when
                                    applying it (the engine's own rule for a
                                    manual camera move)                         */
+    uint32_t follow_broken;     /* the follow epoch a wheel notch ended: the
+                                   render thread took the level back for the
+                                   wheel, and the apply stops writing         */
+    uint32_t follow_seen;       /* the latest follow epoch the render thread
+                                   drew at its level: a Jump ends there       */
     uint32_t crc;               /* the primitive's suffix, as above            */
     uint32_t tail_seq;
 } TAGPU_CMD;

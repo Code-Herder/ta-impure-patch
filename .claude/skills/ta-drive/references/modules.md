@@ -968,6 +968,17 @@ block that reads to its last complete block.
   line, which leaves it at T − 1).
   `replay play` and `replay seek --recording` take `--timeline N` to play a forked timeline; the
   playing crosses each fork with a seek (`replay: <name>: timeline <N> continues from GameTime <T>`).
+- **The recorded camera** (a skirmish recording of format 7 or later, whose human seat's camera
+  was recorded): `tacli replay follow <i> SEAT` is the cards' Follow — the camera shows that
+  seat's, its zoom fitted to this screen, until the camera is moved (arrow keys, edge scroll,
+  minimap) or the wheel turned; `tacli replay follow <i> free` is Free cam; `tacli replay jump
+  <i> SEAT` puts the camera there once. Each waits for `replay: <name>: follow seat <S>, epoch
+  <E>` (`jump to seat …`) or `… refused: <why>`. The end is logged as `replay: <name>: follow
+  ended: camera moved|zoomed|free cam|…` (`jump ended: drawn` for a Jump). `tacli replay pov <i>`
+  prints what the latest frame visit computed — `follow|jump epoch E seat S, tick n, sample …,
+  view WxH, eye (x, y), level L/65536` — which `tools/replay/tarec.py pov FILE --eye n --viewer
+  W,H` computes from the file (the eye before the camera's range clamp). Triggers: `follow <S>`,
+  `follow free`, `jump <S>`, `pov`.
 - **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P
   [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish at T as player P,
   every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2 when it had
