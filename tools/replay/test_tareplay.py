@@ -333,6 +333,15 @@ class Landing(unittest.TestCase):
         self.commit("tools/replay/x.c", "int f(void)\n{\n    return 2; /* one */\n}\n")
         self.assertEqual(tareplay.changed_lines("tools/replay/x.c", "main"), {3})
 
+    def test_native_driver_changes_select_every_fixture(self):
+        fx = {"one": {"load": "one.json"}, "two": {"load": "two.json"}}
+        with patch.object(tareplay, "fixtures", return_value=fx), \
+             patch.object(tareplay, "sim_paths", return_value=set()):
+            selected, regions, functions, headers, why = tareplay.gated({"tools/tacli"}, "main")
+        self.assertEqual(selected, set(fx))
+        self.assertFalse(regions or functions or headers)
+        self.assertTrue(why)
+
     def test_check(self):
         self.commit("README", "r2\n")
         self.assertEqual(tareplay.landing_check("main"), 0)       # nothing gated

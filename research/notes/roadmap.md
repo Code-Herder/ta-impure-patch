@@ -3986,8 +3986,10 @@ gate remains open; the CORE completion replay now passes its strict image gate a
 as completion/paused-state and native save/load checks. Focused native replays pass the
 corrected refusal UI samples, catalogue invalidation and isolated trace coverage. The latest
 whole run completed all 37 live recordings, but disk exhaustion interrupted the remaining
-lanes; its report also names three outstanding native UI-image mismatches. The whole-landing
-rerun is in progress after artifact cleanup; no passing note is claimed. Wine compatibility
+lanes; the completed rerun has 1448 passing checks, with four native UI-image failures and a
+stock rewind setup failure. The exact additional UI rows are owner-approved and applied; native
+validation passes the corrected scenario seat-count setup. A fresh whole-landing gate remains
+required; no passing note is claimed. Wine compatibility
 has 18 expected setup outcomes, one known inactive gap and zero unexpected outcomes across
 19 setups; all 15 network cases pass. Windows was not run.
 See [resource snapping](tadr-port/resource-snapping.html) for the contracts and verification table.

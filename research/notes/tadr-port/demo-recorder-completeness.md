@@ -487,10 +487,10 @@ cannot see an address recorded as a value; the scan looks for one instead.
   wall clock, process state a fresh process differs in (the heaps, the allocators, the libraries'
   and the C runtime's state), a cache of the draw, or a level constant. Each is a loosening and the
   owner's decision; `replay-globals-gen.py` accepts the rows and generates nothing for them.
-  The resource landing's approved rows name exactly twelve viewer bytes: active GUI pointer
+  The resource landing's first approved rows name exactly twelve viewer bytes: active GUI pointer
   `main+0x531` (4), latest GUI mouse-event clock `main+0x561` (4), and current bitmap-font
-  pointer `0x51F524` (4). The generated recorded simulation slots remain identical; coordinates,
-  displayed unit types and orders receive their ordinary checks. Ownership and native writers
+  pointer `0x51F524` (4). The generated recorded simulation slots remain identical.
+  Coordinates retain their existing classification, and orders retain their existing comparisons. Ownership and native writers
   are established in the engine map's resource section.
   On 2026-10-05 the owner additionally approved the two four-byte keyboard-ring
   indices, enqueue `0x51F48E` and dequeue `0x51F492`. Native keyboard and GUI
@@ -498,6 +498,15 @@ cannot see an address recorded as a value; the scan looks for one instead.
   9/9 live and 0/0 on playback and seek. Only those eight index bytes receive
   leave rows; builds, orders, unit/player state and effect checks retain their
   existing comparisons. The engine map records the disassembled stores and readers.
+  The owner then approved exactly ten further UI bytes: native mouse button/modifier
+  wParam `main+0x55D` (4), saved signed gadget status `main+0x11E7` (4), and the
+  displayed unit type `main+0x37E9E` (2). Their disassembled writers own GUI input
+  and command-panel state. Frozen native probes observe Shift flags 0/4 and
+  ARMCK/ARMACK/CORCK types 32/4/165. The gadget-latch probe did not reach its
+  paired comparisons; its ownership evidence is disassembly. These eight rows
+  total 30 bytes; the 60 recorded globals slots / 78 dwords remain identical.
+  The subsequent full landing run must still pass every ordinary state, effect,
+  restoration, seek, image and reach check.
 - **The address scan** (`tarec.py scan`). A dump carries Impure's DLL's base and size (`RT_DLL`)
   and each recorded table's layout (`RT_FIELDS`). Every recorded table's plain fields — all but
   `SIMF_ID`, `SIMF_ADDR`, `SIMF_OWNED`, `SIMF_LOCAL`, `SIMF_COLUMN` and `SIMF_OPAQUE`, each aligned

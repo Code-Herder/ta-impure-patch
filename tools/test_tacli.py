@@ -1123,6 +1123,38 @@ class LoadComposition(unittest.TestCase):
     def test_no_players_means_no_flags(self):
         self.assertEqual(self.flags([]), [])
 
+    def launch_values(self, players):
+        class BeforeLaunch(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "seats.json"
+            path.write_text(json.dumps({"format": "ta-scenario/1", "setup": {
+                "map": "Town & Country", "players": players}}))
+            args = tacli.build_parser().parse_args(["scenario", "load", "probe", str(path)])
+            inst = Mock(remote=False)
+            inst.running.return_value = False
+            with patch.object(tacli, "Instance", return_value=inst), \
+                 patch.object(tacli, "_cat_load", return_value={}), \
+                 patch.object(tacli, "_launch", side_effect=BeforeLaunch) as launch:
+                with self.assertRaises(BeforeLaunch):
+                    tacli.cmd_scenario_load(args)
+                return tacli.regstore_values(False, args=launch.call_args.args[0])
+
+    def test_four_players_replace_the_previous_replay_count(self):
+        values = self.launch_values([{"slot": 0, "controller": "human"}] +
+                                   [{"slot": i, "controller": "ai"} for i in (1, 2, 3)])
+        self.assertIn(("", "NumSkirmishPlayers", "REG_DWORD", 4), values)
+
+    def test_sparse_slots_use_their_extent_instead_of_the_number_of_rows(self):
+        values = self.launch_values([{"slot": 0, "controller": "human"},
+                                    {"slot": 3, "controller": "ai"}])
+        self.assertIn(("", "NumSkirmishPlayers", "REG_DWORD", 4), values)
+
+    def test_no_roster_keeps_the_existing_seat_preset(self):
+        self.assertFalse(any(name == "NumSkirmishPlayers" for _, name, _, _ in
+                             self.launch_values([])))
+
 
 class PlayerSpecs(unittest.TestCase):
     """`--player` is positional, and the compiler writes it: both ends, one test."""

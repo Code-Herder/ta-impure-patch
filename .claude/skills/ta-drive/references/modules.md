@@ -634,7 +634,7 @@ block that reads to its last complete block.
   [--out DIR]` (`list` names the fixtures of `tools/replay/fixtures.json`): each fixture is
   recorded live, played on puppets, played again with three round trips and sought from a fresh
   process, each on its own Xvfb; the live game also takes the null twin (paused, the camera, the
-  wheel, the cursor and the in-game menu moved, two endpoints and thirteen intermediate
+  wheel, the cursor and the in-game menu moved, two endpoints and intermediate paused
   views). Each view requires unchanged GameTime and exact carried-simulation equality.
   Mouse samples follow a GUI-consumed click with an explicit move and require its native
   x/y/message echo. Camera samples span the map's native scroll extents, including native
@@ -642,6 +642,8 @@ block that reads to its last complete block.
   each with its native displayed-type acknowledgement and exact paused comparison.
   Every owned worker removes its cached `catalogue.json` when it
   replaces fixture content, so scenario validation never uses a previous fixture's units.
+  `scenario load` with explicit players replaces the saved seat extent as well as
+  controller keys; a prior playback's smaller roster cannot truncate the next fixture.
   A fixture with `"watch": true`
   runs a fifth process, W: the playing started from REPLAYS and Watch as a player starts it, two
   edited copies refused, then the dock's speed, the Options' OK, pause, the dock's seek, the
@@ -672,6 +674,7 @@ block that reads to its last complete block.
   note on the commit it graded. Commit first: it refuses uncommitted changes under
   `tagpu/ddraw`, `tools` or `scenarios`. `landing --check` says whether a passing note already
   covers HEAD.
+  Changes to `tools/tacli` select every fixture, as changes to the replay harness do.
   `tareplay.py broad` runs every fixture and `fixtures.json`'s `broad` entries (`limits-tier1`
   with 20 round trips; `cost-four-ai`, ten minutes of four AIs reported for the recorder's cost
   and the file's size) and names what none exercised (a feature, a root or sink site, a recorded

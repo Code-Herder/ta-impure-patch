@@ -330,7 +330,7 @@ Resource and profile scratch is classified as presentation: simulation never rea
 survives into the simulation, and the module refuses puppet seats. The orders it creates are
 normal recorded engine state. Playback, in-place restoration and fresh-process seeks reproduce
 those orders and their reclaim/build/assist effects through the existing recorder and engine
-roots. The three approved viewer metadata fields are listed below; recorded simulation slots
+roots. The approved viewer/input metadata fields are listed below; recorded simulation slots
 and tolerances are unchanged. The owner also approved omitting the recording player's native
 immediate-command UI click (`0x41A0F1`, return `0x41A0F6`), including Stop, as the console click
 already is; the commands and their simulation effects remain checked.
@@ -380,14 +380,16 @@ landing harness also checks event attribution, effect counts, address values, pu
 the complete main/.data images. Paused viewer samples exercise camera movement, GUI-consumed
 mouse messages, all valid coordinate bits and native selected-type changes. Additional paused
 camera/selection views and the final view each retain exact comparison of carried simulation state against the
-first paused view. Three owner-approved four-byte GUI metadata fields stay local to the viewer:
-the active screen pointer, mouse-event clock and bitmap-font pointer. No simulation comparison
-or tolerance is loosened; [recorder completeness](demo-recorder-completeness.md) records their
-owners and the native Stop-button sound exception.
+first paused view. Eight owner-approved viewer/input metadata fields remain local, totaling
+30 bytes: the active screen pointer (4), mouse-event clock (4), bitmap-font pointer (4), keyboard
+enqueue/dequeue indices (4 each), mouse button/modifier flags (4), saved GUI gadget status (4)
+and displayed unit type (2). The 60 recorded global slots / 78 dwords and comparison tolerances
+are unchanged. [Recorder completeness](demo-recorder-completeness.md) records their owners,
+native evidence and the native Stop-button sound exception.
 
 Fixtures name their resource/profile/UI source dependencies in `fixtures.json`; `tareplay landing`
 selects them when those sources change, in addition to its SIM_FEATURE rules. Changes to the
-replay harness select every fixture. This landing's final passing note remains a gate, not an
+replay harness or native driver select every fixture. This landing's final passing note remains a gate, not an
 assumption from the existence of these fixture definitions.
 
 ### Verification limits
@@ -457,9 +459,16 @@ interrupted the remaining replay lanes. Its completed report also identifies thr
 UI-image failures: CORCK's displayed type in `resource-nozoom`, the native gadget-status latch
 in `resource-plain`, and Shift in the latest mouse flags in `resource-upgrade`. Their native
 writers and the unsuccessful gadget-latch diagnostic are recorded in the engine map. No new
-exclusion has been applied. Redundant binary artifacts from completed passing fixture reports
+exclusion was applied in that run. Redundant binary artifacts from completed passing fixture reports
 were removed while preserving logs, coverage, summaries and failing/incomplete cases. A fresh
-whole-landing run is in progress; the gate remains outstanding and no passing replay note is claimed.
+whole-landing rerun completed 1448 passing checks, including 519 exact paused comparisons and
+33 strict image gates. Four image checks still name the approved displayed-type/gadget-status
+fields. Its stock-limits rewind lane could not create the battle armies because a prior
+two-seat playback persisted `NumSkirmishPlayers = 2` and scenario loading did not replace it.
+The corrected launcher supplies the declared slot extent before startup; starting from count
+2 it creates four commanders and all 1428 battle units without errors. Offline driver and
+harness tests pass. The owner-approved ten UI bytes are now applied, with the recorded globals
+unchanged. A fresh whole-landing run on these fixes remains required; no passing note is claimed.
 
 The null twin now samples camera positions across the map's native scroll extents and selects
 ARMACK and RSNRACK in separate refusal-fixture views. The prior small camera sweep never set the minimap rectangle's

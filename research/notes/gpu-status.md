@@ -20571,15 +20571,22 @@ Puppet seats are refused. Every effect is an ordinary recorded engine order and 
 simulation roots. Resource fixtures assert native live behavior and compare playback, three
 in-place restores and fresh seeks. Cancellation tests fence simulation ticks around removal,
 so requeue cannot hide the absent order image. The replay landing selector also follows their declared
-source dependencies; changing the harness selects the whole suite. The owner approved three
+source dependencies; changing the harness or native driver selects the whole suite. The owner approved three
 four-byte viewer metadata rows: the active GUI stack pointer (`main+0x531`), mouse-event clock
-(`main+0x561`) and current bitmap-font pointer (`0x51F524`). These process-local values stay with
-the viewer; the recorded global slots are unchanged. The owner also approved an expected-absent
+(`main+0x561`) and current bitmap-font pointer (`0x51F524`). Two keyboard-ring indices add eight
+bytes; mouse flags (`main+0x55D`, 4), saved gadget status (`main+0x11E7`, 4), and displayed type
+(`main+0x37E9E`, 2) add exactly ten more approved bytes. These eight viewer/input fields total
+30 bytes, with the 60 recorded globals slots / 78 dwords unchanged. The owner also approved an expected-absent
 row for the recording player's native immediate-command UI click (return `0x41A0F6`), including
 Stop; its simulation orders remain checked. No tolerance changes. Paused viewer samples verify
 that camera movement, GUI mouse input and native selection leave all carried simulation state
 unchanged. See [recorder completeness](tadr-port/demo-recorder-completeness.html) for the field
 owners, disassembly and exact comparison protocol.
+
+Scenario loading writes its explicit roster's seat extent through the existing locked
+prelaunch registry store. A prior two-seat playback therefore cannot truncate a subsequent
+four-seat fixture. Native stock-limits validation creates four commanders and all 1428 battle
+units from a count-2 starting store; the full replay gate must also verify its rewind lane.
 
 **Open:** multiplayer policy parity warnings and mod download/activation. The fixture table names
 what was exercised; it does not establish every mod yardmap, obstruction, fog boundary or

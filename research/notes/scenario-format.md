@@ -160,8 +160,8 @@ unit names by scanning the live definition table. This design follows its recipe
   The four is the SKIRMISH screen's seat count `main+0x38D81`, which the seat fill walks (engine
   map, *Seating a level*): a demo-recorder probe that activated records 4–9 through the engine's
   own seat activation had the applier accept slots 4, 5 and 9 (MEASURED 2026-09-29,
-  [the puppet host](tadr-port/demo-recorder-state-evidence.md#the-puppet-host-measured)). Nothing
-  shipped does that.
+  [the puppet host](tadr-port/demo-recorder-state-evidence.md#the-puppet-host-measured)).
+  Ordinary scenario loading does not activate those extra seats.
 - Handles are `[A-Za-z0-9][A-Za-z0-9_.-]{0,31}`. An entity with no `id` gets a synthesized
   one containing `#`, which an author's cannot — so a file that names nothing is still
   reported entity by entity, with no chance of collision. Group members are
@@ -611,6 +611,21 @@ the map the engine *actually* loaded, and only then applies. It is a clean start
 definition, so on a running instance it refuses unless `--restart` says otherwise, and
 `--any-map` is the escape hatch for the map check. `launch --unit-limit` exposes the same
 INI knob on its own.
+
+When `setup.players` is explicit, `load` also writes `NumSkirmishPlayers` as the
+highest declared slot plus one, through the instance's locked registry store
+before launch. The schema bounds slots to 0..9; an omitted roster leaves the
+saved seat preset alone. Controller keys alone are insufficient: playback writes
+its recorded seat extent, which can be smaller than the next scenario's roster.
+This does not extend native skirmish seating beyond the four-player limit above.
+
+MEASURED 2026-10-05 on the stock-limits coverage DLL: with saved count 2,
+`replay-battle-load.json` launched two commanders and the battle applier refused
+all 1428 units (715 resolution errors, including inactive slots 2/3). With count
+4 it launched four commanders and created all 1428 units without errors. The
+corrected `load`, starting from count 2, produces the latter result. The offline
+regression checks the actual launch's registry-value payload, and driver changes
+select every replay fixture for the landing gate.
 
 Still waiting on the fork:
 

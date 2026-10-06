@@ -13989,6 +13989,18 @@ applied; `0x4273E8`, in the front end's state machine (case `+0x2BBE == 7`, sub-
 reloads. MEASURED on a `scenario load`: one reload after startup, which read Gamma 12, word
 `0x003E` and 1024×768 from the registry while memory held 16, `0x0022` and 1024×768.
 
+**MEASURED 2026-10-05, scenario seat extent:** the stock-limits coverage DLL's
+`replay-battle-load.json` launch with saved `NumSkirmishPlayers = 2` creates only
+two commanders, even though its four controller keys are supplied. The subsequent
+battle apply creates no units and reports 715 resolution errors, with slots 2/3
+inactive. The same native load with saved count 4 creates four commanders and
+accepts all 1428 battle units without errors. Playback's CLI launch writes its
+recorded seat extent; ordinary scenario loading must also supply its own extent
+before the native skirmish screen reads the store. The corrected CLI does so
+through its existing locked prelaunch registry write and reproduces the four-seat
+result from a count-2 starting store. This is a fixture-setup defect, not a COB
+scheduling or replay-state comparison failure. The native four-seat limit remains.
+
 **The saver `REGISTRY_SaveSettings 0x430F00`** writes the same names back from memory
 (`0x431108..0x431216`, Gamma at `0x4311ED`) and has **27 callers**, among them Options Done
 (`0x45FD5F`), **game entry (`0x497FF6`, every launch unless `0x435100(...) == 2`)**, every
@@ -16517,10 +16529,12 @@ changed ring/eye bit. A native injected click returns the pointer to screen cent
 harness follows each sampled click with a separate move and requires the GUI x/y/message echo
 before dumping. It samples GUI-consumed clicks through a ring turn, every valid coordinate bit
 and several eyes at one paused GameTime, and requires its carried simulation records to remain equal.
-The recorder's recorded simulation slots are unchanged. Three owner-approved `leave` rows
-cover only the active GUI pointer (`main+0x531`, four bytes), GUI mouse-event clock
-(`main+0x561`, four bytes) and bitmap-font pointer (`0x51F524`, four bytes). Coordinates,
-displayed unit types, text colours and simulation records retain their ordinary checks.
+The recorder's 60 recorded global slots / 78 dwords are unchanged. Owner-approved `leave`
+rows keep the active GUI pointer (`main+0x531`, four bytes), GUI mouse-event clock
+(`main+0x561`, four bytes) and bitmap-font pointer (`0x51F524`, four bytes) local.
+The three additional UI fields below and the two keyboard indices above also have exact
+owner-approved rows. Coordinates and text colours retain their existing classification;
+orders and carried simulation records retain their existing comparisons.
 
 The GUI event timestamp is a wall-clock sample. `0x4B5E70`, `0x4B5ED1` and `0x4B5F1D`
 call GetTickCount through IAT `0x4FC0DC`, multiply the low 32 bits by graphics `+0xE8`, and
@@ -16574,8 +16588,10 @@ disk-interrupted combined run also completed three failing image comparisons:
 `resource-nozoom` at T1291 names `main+0x37E9E` (live `0xA5`, playback/seek zero),
 `resource-plain` at T481 names `main+0x11E7` (live 1, playback/seek zero), and
 `resource-upgrade` at T481 names `main+0x55D` (live 4, playback/seek zero).
-Each reports one differing byte. These are outstanding failures, not passing
-simulation evidence; the existing comparison list has not been widened for them.
+Each reports one differing byte. The owner subsequently approved exactly the
+full four-byte wParam, four-byte gadget latch and two-byte displayed type as
+viewer-local fields. Their leave rows add ten bytes without changing any recorded
+global slot or comparison tolerance. A new full run remains the validation gate.
 
 `main+0x55D` is the full four-byte native event wParam, `GUI+0x44`, within the
 six-dword copies at `0x4AB66C`/`0x4C2356` described above. Bit 2 is `MK_SHIFT`;
@@ -16621,7 +16637,8 @@ with the native Interface `LEFTCLICK` control. Their stage assertions failed
 before the paired dump comparisons ran. The frozen-tick flags/type observations
 above are established; a paired carried-state proof for this particular gadget
 status is not. The native writers establish its GUI owner, not a successful
-diagnostic regression or owner approval for a new exclusion.
+diagnostic regression. Owner approval of those exact extents is separate from
+the native ownership evidence and from the unsuccessful paired-state probe.
 
 `main+0x142CB..+0x142DA` holds four signed dwords for the minimap camera rectangle.
 `0x41C3C0` clamps eye `+0x1431F/+0x14323` against native scroll extents `+0x1422B/+0x1422F`
