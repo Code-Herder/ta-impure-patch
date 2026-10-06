@@ -91,7 +91,7 @@ typedef struct RecEvent { unsigned kind, len; const unsigned char* b; } RecEvent
 
 /* The recorded world at the end of one iteration's images: every live slot's image and lists,
    the ten players, the controllers and the viewer, the declared tables, the features, the
-   globals, the projectile pool and the explored map. */
+   globals, the projectile pool, the explored map and the human seat's perspective. */
 typedef struct RecWorld {
     unsigned       slots;       /* slots 1 .. slots - 1 hold units, as the engine's array     */
     unsigned       tick;        /* the GameTime of the images it holds                        */
@@ -124,6 +124,17 @@ typedef struct RecWorld {
     unsigned       mapped_bytes;   /* REC_MAPPED_BYTES of the header's grid                   */
     int            mapped_whole;   /* its RK_MAPPED records have all come                     */
     unsigned       corrections; /* RK_CORRECTs read: the recording machine's own repairs      */
+    /* THE PERSPECTIVE (tagpu_recpov.h): a skirmish's human seat's, as its RK_POV, RK_SELECT and
+       RK_CLICK records leave it, and as a snapshot's RK_POV_AT and RK_SELECT rebuild it */
+    unsigned       npov[REC_PLAYERS];          /* a seat's samples held: 0, 1 or 2               */
+    RecPov         pov[REC_PLAYERS][2];        /* ... the earlier first, the latest last          */
+    unsigned       pov_tick[REC_PLAYERS][2];   /* ... and the GameTime each was taken             */
+    unsigned       nsel[REC_PLAYERS];          /* a seat's selection, ascending by slot ...       */
+    RecSelEntry*   sel;                        /* ... [REC_PLAYERS * REC_SEL_MAX], seat-major    */
+    unsigned       nclick;      /* the iteration's clicks, in the order they came: after the
+                                   step's events, so each is a click of the frames between this
+                                   capture point and the next                                 */
+    RecEvent*      click;
 } RecWorld;
 
 typedef struct RecReader RecReader;

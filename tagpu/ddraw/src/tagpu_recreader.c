@@ -74,7 +74,8 @@ struct RecReader {
     unsigned           end_iters;   /* does not carry                                         */
     unsigned*          touched;     /* the slots whose `changed` is set                        */
     unsigned           ntouched;
-    unsigned           evcap, fcap;
+    unsigned           evcap, fcap, clickcap;
+    int                snap;        /* the records applied are a snapshot's (snapshot_apply)   */
     unsigned           fbracket;    /* an RK_EV_FEATURE's root + 1, until its END             */
     unsigned           ndeaths;     /* the deaths whose RK_EV_DEATH_END is still to come      */
     unsigned           death[REC_DEATHS_MAX];
@@ -543,6 +544,9 @@ static void world_reset(RecReader* r, int from_base)
     for (i = 0; i < w->ntab; i++) w->tab[i].size = 0;
     w->nev = 0;
     w->nfeat = 0;
+    w->nclick = 0;
+    memset(w->npov, 0, sizeof w->npov);
+    memset(w->nsel, 0, sizeof w->nsel);
     if (from_base) memcpy(w->grid, r->base, grid_bytes(r));
     else memset(w->grid, 0, grid_bytes(r));
     memset(w->pool, 0, (size_t)r->h.wrecks * REC_WRECK_BYTES);
@@ -586,8 +590,9 @@ static int world_init(RecReader* r, char* why, unsigned cap)
     w->proj = (unsigned char*)calloc(r->h.proj_cap, REC_PROJ_IMAGE);
     w->mapped_bytes = REC_MAPPED_BYTES(r->h.grid_w, r->h.grid_h);
     w->mapped = (unsigned char*)malloc(w->mapped_bytes ? w->mapped_bytes : 1);
+    w->sel = (RecSelEntry*)calloc((size_t)REC_PLAYERS * REC_SEL_MAX, sizeof *w->sel);
     if (!w->live || !w->changed || !w->list || !w->unit || !r->touched || !w->tab || !w->grid ||
-        !r->base || !w->pool || !w->proj || !w->mapped) {
+        !r->base || !w->pool || !w->proj || !w->mapped || !w->sel) {
         snprintf(why, cap, "no memory for the world of %u slots and %u x %u cells", w->slots,
                  r->h.grid_w, r->h.grid_h);
         return 0;
@@ -687,7 +692,7 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
     case RK_EV_NET_CREATE: {
         RecNetCreate create;
         unsigned i, slot;
-        if (r->h.format < REC_FORMAT || r->h.mode != 3 || !r->h.has_mp_seats ||
+        if (r->h.format < REC_FORMAT_NET_CREATE || r->h.mode != 3 || !r->h.has_mp_seats ||
             !r->h.has_unitdefs || !rec_event_len(kind, len)) return 0;
         memcpy(&create, b, sizeof create);
         slot = create.unit - 1;
@@ -775,6 +780,69 @@ static int list_record(RecReader* r, const unsigned char* b, unsigned len)
     return 1;
 }
 
+/* A sample, `tick` its GameTime, as the seat's latest: later than the one it replaces. */
+static int pov_take(RecWorld* w, const unsigned char* b, unsigned tick)
+{
+    RecPov p;
+    unsigned s;
+    memcpy(&p, b, sizeof p);
+    s = p.player;
+    if (s >= REC_PLAYERS || !rec_pov_ok(&p) || tick > w->tick ||
+        (w->npov[s] && w->pov_tick[s][w->npov[s] - 1] >= tick))
+        return 0;
+    if (w->npov[s] == 2) {
+        w->pov[s][0] = w->pov[s][1];
+        w->pov_tick[s][0] = w->pov_tick[s][1];
+        w->npov[s] = 1;
+    }
+    w->pov[s][w->npov[s]] = p;
+    w->pov_tick[s][w->npov[s]] = tick;
+    w->npov[s]++;
+    return 1;
+}
+
+/* THE PERSPECTIVE (tagpu_recpov.h): a skirmish segment's from format 7, outside every bracket, as
+   the writer has them (tagpu_recwriter.c, pov_record). RK_POV and RK_CLICK are a stream's, RK_POV_AT
+   a snapshot's; a selection's slots lie inside the seat's block as its player image, applied
+   before it, names it. 1 applied, 0 malformed. */
+static int pov_record(RecReader* r, unsigned kind, const unsigned char* b, unsigned len)
+{
+    RecWorld* w = &r->w;
+    const RecHeader* h = seg_header(r);
+    if (h->format < REC_FORMAT || h->has_mp || r->fbracket || r->ndeaths) return 0;
+    switch (kind) {
+    case RK_POV:
+        return !r->snap && len == sizeof(RecPov) && pov_take(w, b, w->tick);
+    case RK_POV_AT:
+        return r->snap && len == REC_POV_AT_BYTES && pov_take(w, b + 4, u32(b));
+    case RK_CLICK: {
+        RecClick c;
+        if (r->snap || len != sizeof c) return 0;
+        memcpy(&c, b, sizeof c);
+        if (c.player >= REC_PLAYERS || !rec_click_ok(&c)) return 0;
+        return list_add(&w->click, &w->nclick, &r->clickcap, kind, len, b);
+    }
+    case RK_SELECT: {
+        RecSel head;
+        unsigned lo, hi;
+        long prev = -1;
+        if (!rec_sel_head(b, len, h->units_each, &head) || !rec_sel_whole(&head) ||
+            head.player >= REC_PLAYERS)
+            return 0;
+        if (head.count && (!rec_sel_block((const unsigned char*)w->player[head.player], w->slots,
+                                          &lo, &hi) ||
+                           !rec_sel_entries_ok(b + sizeof head, head.count, lo, hi, &prev)))
+            return 0;
+        memcpy(w->sel + (size_t)head.player * REC_SEL_MAX, b + sizeof head,
+               (size_t)head.count * sizeof(RecSelEntry));
+        w->nsel[head.player] = head.count;
+        return 1;
+    }
+    default:
+        return 0;
+    }
+}
+
 /* One record of an iteration after its tick. 1 applied, 0 malformed. */
 static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned len, int* events)
 {
@@ -784,6 +852,8 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
     RecTable* t;
     if (r->pend.next < r->pend.total && kind != RK_ORDERS) return 0;
     if (len >= 2) memcpy(&id, b, 2);
+    /* a click follows the step's events, and may follow the images directly */
+    if (kind == RK_CLICK) return pov_record(r, kind, b, len);
     if ((kind >= RK_EV_CREATE && kind <= RK_EV_DEATH_END) || kind == RK_EV_NET_CREATE ||
         (kind == RK_CELLS && *events)) {
         if (!event_take(r, kind, b, len)) return 0;
@@ -942,6 +1012,10 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
         if (len != 4) return 0;
         w->corrections++;
         return 1;
+    case RK_POV:
+    case RK_POV_AT:
+    case RK_SELECT:
+        return pov_record(r, kind, b, len);
     default:
         return 0;   /* the ring's own kinds are never in a block, nor a dump's RK_IMAGE */
     }
@@ -980,6 +1054,7 @@ static int tick_read(RecReader* r, char* why, unsigned cap)
     memset(w->pchanged, 0, sizeof w->pchanged);
     w->nev = 0;
     w->nfeat = 0;
+    w->nclick = 0;
     for (;;) {
         RecHdr hd;
         const unsigned char* b;
@@ -1885,7 +1960,7 @@ int recr_mp_orders(RecReader* r, unsigned slot, unsigned list, RecMpOrderState* 
 
 /* The snapshot block whose header block_head has just read, applied over the reset world: a TICK
    at the block's GameTime, then images only (tagpu_recfmt.h, RB_SNAPSHOT). 1, or -1 (why). */
-static int snapshot_apply(RecReader* r, const RecBlock* blk, char* why, unsigned cap)
+static int snapshot_records(RecReader* r, const RecBlock* blk, char* why, unsigned cap)
 {
     RecWorld* w = &r->w;
     int events = 0;
@@ -1932,6 +2007,15 @@ static int snapshot_apply(RecReader* r, const RecBlock* blk, char* why, unsigned
     w->nfeat = 0;
     payload_free(r);
     return 1;
+}
+
+static int snapshot_apply(RecReader* r, const RecBlock* blk, char* why, unsigned cap)
+{
+    int k;
+    r->snap = 1;
+    k = snapshot_records(r, blk, why, cap);
+    r->snap = 0;
+    return k;
 }
 
 int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx, char* why,
@@ -2357,6 +2441,8 @@ void recr_close(RecReader* r)
     free(r->w.changed);
     free(r->w.ev);
     free(r->w.feat);
+    free(r->w.click);
+    free(r->w.sel);
     free(r->w.pool);
     free(r->w.proj);
     free(r->w.mapped);

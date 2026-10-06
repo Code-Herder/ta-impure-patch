@@ -416,12 +416,12 @@ static int read_file(const char* path, int expected)
               recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==0);
         CHECK(recr_mp_apply(r,&ordinal,applied_copy,applied,why,sizeof why)==0 && !ordinal && !applied->count);
         CHECK(recr_tick(r,why,sizeof why)==1 && recr_world(r)->tick==100 && recr_world(r)->player[0][0]==0xA5);
-        if (recr_header(r)->format==REC_FORMAT) {
+        if (recr_header(r)->format>=REC_FORMAT_NET_CREATE) {
             RecNetCreate create={6,1,2,4,0x80000011u,{123456,-654321,123},0.25f,65535,0};
             CHECK(recr_world(r)->nev==1 && recr_world(r)->ev[0].kind==RK_EV_NET_CREATE &&
                   recr_world(r)->ev[0].len==sizeof create &&
                   !memcmp(recr_world(r)->ev[0].b,&create,sizeof create));
-        } else CHECK(recr_header(r)->format==REC_FORMAT_PREVIOUS && !recr_world(r)->nev);
+        } else CHECK(recr_header(r)->format==REC_FORMAT_OLDEST && !recr_world(r)->nev);
         for (unsigned i=0;i<4;i++) {
             unsigned origin=i==0 ? 11 : i==1 ? 22 : i==2 ? 55 : 66;
             if (expected) {
@@ -667,6 +667,125 @@ static int read_native(const char* path, unsigned text_only)
     return 0;
 }
 
+/* A skirmish file's perspective through the real writer and reader: player 0's samples every
+   third tick, a selection each 200 ticks and a click each 250, so the writer's snapshot after
+   PV_FIRST + 900 carries two dated samples and a selection. Forward reading keeps each tick's
+   state; seeks before and after the snapshot must rebuild exactly that state. */
+#define PV_FIRST 100u
+#define PV_LAST  1100u
+typedef struct PvState {
+    unsigned npov, tick[2], nsel, nclick;
+    RecPov pov[2];
+    RecSelEntry sel[4];
+} PvState;
+
+static void pv_state(const RecWorld* w, PvState* s)
+{
+    memset(s,0,sizeof *s);
+    s->npov=w->npov[0]; s->nsel=w->nsel[0]; s->nclick=w->nclick;
+    CHECK(s->npov<=2 && s->nsel<=4 && !w->npov[1] && !w->nsel[1]);
+    for (unsigned i=0;i<s->npov;i++) { s->pov[i]=w->pov[0][i]; s->tick[i]=w->pov_tick[0][i]; }
+    memcpy(s->sel,w->sel,s->nsel*sizeof *s->sel);
+}
+
+static int perspective_file(const char* path)
+{
+    RecRing* g=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof *g);
+    unsigned char header[1024], player[4+REC_PLAYER_IMAGE]={0}, seat[16+REC_INFO_BYTES]={0};
+    unsigned globals[REC_GLOBALS_DWORDS]={0}, proj[2]={0}, mapped[2]={0};
+    unsigned features[5]={2,2,1,0,0}, at=0, n=0, first=2, last=5, k, t, T;
+    unsigned short grid[2]={2,2};
+    static const unsigned SEEKS[]={PV_FIRST+450,PV_FIRST+901,PV_FIRST+950,PV_LAST-1,PV_LAST};
+    PvState* fwd=calloc(PV_LAST-PV_FIRST+1,sizeof *fwd);
+    PvState now;
+    RecReader* r;
+    HANDLE done;
+    char why[256];
+    CHECK(g && fwd);
+    g->buf=VirtualAlloc(NULL,REC_RING_BYTES,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    g->grid=VirtualAlloc(NULL,4*REC_CELL_BYTES,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    g->wake=CreateEvent(NULL,FALSE,FALSE,NULL); g->done=CreateEvent(NULL,TRUE,FALSE,NULL);
+    snprintf(g->path,sizeof g->path,"%s",path);
+    CHECK(g->buf && g->grid && g->wake && g->done && DuplicateHandle(GetCurrentProcess(),g->done,
+        GetCurrentProcess(),&done,0,FALSE,DUPLICATE_SAME_ACCESS));
+    n=tlv32(header,n,RT_FORMAT,REC_FORMAT); n=tlv32(header,n,RT_MODE,2);
+    n=tlv32(header,n,RT_SLOTS,21); n=tlv32(header,n,RT_UNITS_EACH,4); n=tlv32(header,n,RT_START,PV_FIRST);
+    n=tlv32(header,n,RT_PROJECTILES,1);
+    n=append(header,n,RT_FEATURES,features,sizeof features);
+    for (unsigned i=0;i<2;i++) {
+        seat[0]=(unsigned char)i; seat[1]=(unsigned char)(i+1);
+        n=append(header,n,RT_PLAYER,seat,sizeof seat);
+    }
+    at=append(g->buf,at,RK_HEADER,header,n);
+    memcpy(player+4+0x67,&first,4); memcpy(player+4+0x6B,&last,4);
+    for (t=PV_FIRST;t<=PV_LAST;t++) {
+        at=append(g->buf,at,RK_TICK,&t,4);
+        if (t==PV_FIRST) {
+            at=append(g->buf,at,RK_GRID,grid,sizeof grid);
+            at=append(g->buf,at,RK_GLOBALS,globals,sizeof globals);
+            at=append(g->buf,at,RK_PROJ_HEAD,proj,sizeof proj);
+            at=append(g->buf,at,RK_MAPPED,mapped,6);
+            at=append(g->buf,at,RK_PLAYER,player,sizeof player);
+        }
+        if (t%3==1) {
+            RecPov p={0,REC_POV_EVERY,REC_POV_WORLD,0,640,480,65536u+t,(int32_t)t,-(int32_t)t,
+                      (int32_t)t+1,0,(int32_t)t+2};
+            at=append(g->buf,at,RK_POV,&p,sizeof p);
+        }
+        if (t%200==0) {
+            unsigned char b[REC_SEL_BYTES(4)];
+            RecSel h={0,REC_SEL_BEGIN|REC_SEL_END,0,0,0};
+            h.total=h.count=(uint16_t)(t/200%4+1);
+            memcpy(b,&h,sizeof h);
+            for (k=0;k<h.count;k++) {
+                RecSelEntry e={(uint16_t)(k+1),t+k};
+                memcpy(b+sizeof h+k*sizeof e,&e,sizeof e);
+            }
+            at=append(g->buf,at,RK_SELECT,b,REC_SEL_BYTES(h.count));
+        }
+        if (t%250==0) {
+            RecClick c={0,REC_CLICK_RIGHT,1,3,2,0,4,(int32_t)t,0,-(int32_t)t};
+            at=append(g->buf,at,RK_CLICK,&c,sizeof c);
+        }
+    }
+    CHECK(at<REC_RING_BYTES/2);
+    InterlockedExchange(&g->wpub,at);
+    CHECK(tagpu_recwriter_start(g));
+    world_end(g,at);
+    CHECK(WaitForSingleObject(done,30000)==WAIT_OBJECT_0); CloseHandle(done);
+
+    r=recr_open(path,why,sizeof why);
+    if (!r) { printf("reader: %s\n",why); CHECK(r); }
+    for (t=PV_FIRST;;t++) {
+        int got=recr_tick(r,why,sizeof why);
+        if (got!=1) { CHECK(got==0 && t==PV_LAST+1); break; }
+        CHECK(recr_world(r)->tick==t);
+        pv_state(recr_world(r),&fwd[t-PV_FIRST]);
+        CHECK(fwd[t-PV_FIRST].nclick==(t%250==0));
+        if (t%250==0) {
+            RecClick c;
+            memcpy(&c,recr_world(r)->click[0].b,sizeof c);
+            CHECK(recr_world(r)->click[0].kind==RK_CLICK && c.button==REC_CLICK_RIGHT && c.x==(int32_t)t);
+        }
+    }
+    CHECK(fwd[PV_LAST-PV_FIRST].npov==2 && fwd[PV_LAST-PV_FIRST].tick[1]==PV_LAST-(PV_LAST+2)%3);
+    for (k=0;k<sizeof SEEKS/sizeof SEEKS[0];k++) {
+        T=SEEKS[k];
+        CHECK(recr_seek(r,T,0,NULL,NULL,why,sizeof why)==1 && recr_world(r)->tick==T);
+        pv_state(recr_world(r),&now);
+        if (memcmp(&now,&fwd[T-PV_FIRST],sizeof now)) {
+            printf("PERSPECTIVE seek to %u: npov %u/%u nsel %u/%u\n",T,now.npov,fwd[T-PV_FIRST].npov,
+                   now.nsel,fwd[T-PV_FIRST].nsel);
+            CHECK(!"the seek rebuilt the forward perspective");
+        }
+    }
+    recr_close(r);
+    free(fwd);
+    printf("PASS: perspective samples, clicks and selections through the writer, forward reading "
+           "and %u seeks\n",(unsigned)(sizeof SEEKS/sizeof SEEKS[0]));
+    return 0;
+}
+
 #ifndef RECMP_FILE_TEST_MAIN
 #define RECMP_FILE_TEST_MAIN main
 #endif
@@ -714,6 +833,7 @@ int RECMP_FILE_TEST_MAIN(int argc, char** argv)
         puts("PASS: actual skirmish recording's full header validation, reader, summary and file info");
         return 0;
     }
+    if (!strcmp(argv[1],"perspective")) return perspective_file(argv[2]);
     if (!strcmp(argv[1],"read")) return read_file(argv[2],1);
     if (!strcmp(argv[1],"refuse")) return read_file(argv[2],-1);
     f.missing_cut=!strcmp(argv[1],"missing_cut");

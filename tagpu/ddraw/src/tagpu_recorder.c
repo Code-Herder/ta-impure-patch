@@ -45,6 +45,10 @@
    - The fields of the main block and .data replay-globals.tsv lists, and the projectile pool and
      its count: *The globals and the projectiles* below; for the harness's dump, the main block
      and .data whole.
+   - The perspective of a skirmish's human seat: the camera's scroll target, the view's size, the
+     world point under the pointer, the region bits and, at the two click redirects, the armed
+     order, the cursor index, the Interface Type and the click's own message; and the seat's unit
+     block, walked within the bound *The perspective* states. All of it is game-thread state.
    - For the header, once: the unit-type definitions' names (UNITINFOCount of them), the weapons'
      names (the array's slots, tagpu_limits.h), the feature defs' names (their count), the
      skirmish settings and the game's options.
@@ -93,6 +97,7 @@
 #include "tagpu_patches.h"
 #include "tagpu_puppet.h"
 #include "tagpu_replay.h"
+#include "tagpu_zoom.h"
 #include "crc32.h"
 #include "git.h"
 #include "dd.h"
@@ -1611,6 +1616,15 @@ typedef struct Rec {
     unsigned char  rewind_end[4 + 12 * REC_PLAYERS];
     unsigned       defeat[REC_PLAYERS]; /* the GameTime its live count last reached 0, 0 none:
                                            a seat ends defeated only while it is still 0       */
+    unsigned       each;        /* the units a player may have, as the header states it    */
+    RecPov         pov[REC_PLAYERS];      /* each seat's last RK_POV (*The perspective*)    */
+    unsigned       pov_tick[REC_PLAYERS]; /* ... the GameTime it was sent                   */
+    unsigned char  pov_in[REC_PLAYERS];   /* ... and whether there is one                    */
+    unsigned short nsel[REC_PLAYERS];     /* each seat's last RK_SELECT                      */
+    RecSelEntry    sel[REC_PLAYERS][REC_SEL_MAX];
+    RecSelEntry    selnow[REC_SEL_MAX];   /* the walk's, this capture point                  */
+    int            sel_refused;           /* the walk's refusal is logged                    */
+    unsigned       clicks_odd;  /* clicks not recorded: an Interface Type above 1        */
 } Rec;
 
 static void olist_drop(Rec* r, unsigned slot);
@@ -2208,6 +2222,7 @@ static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
     r->ring = g;
     r->begin = L->begin;
     r->nslots = L->nslots;
+    r->each = *(const unsigned short*)(L->ta + OFF_EACH);
     r->mode = mp ? MODE_NETWORK : MODE_SKIRMISH;
     r->tick = tick - 1;
     r->first = 1;
@@ -3452,6 +3467,159 @@ static int cap_mapped(Rec* r, const Level* L)
     if (n && !ring_put(r, RK_MAPPED_RUNS, runs, n, NULL, 0)) return 0;
     r->mruns++;
     r->mrun_bytes += changed;
+    return 1;
+}
+
+/* ---- the perspective ------------------------------------------------------------------------ */
+
+/* THE PERSPECTIVE of the human seat a skirmish commands (tagpu_recpov.h; the plan,
+   demo-recorder-perspective-streams.md): its camera and cursor, and its selection, at the capture
+   point. None of it is simulation state: the simulation reads none of these records, and the
+   copies below are the recorder's own.
+   THE ORDERING (E1-E3) that makes the capture point read this frame's values: IdleTick 0x499890
+   copies the frame's one mouse record into main+0x2C76 and calls the mode-6 handler 0x499200
+   (0x499A1C); the handler fills the world point main+0x2CAA and the region bits main+0x2CC6
+   through 0x498DA0 (0x499221), runs any click action, and then calls GameFrame 0x496790
+   (0x4995B8) on every path, whose tick loop 0x495490 reaches this capture point (B2, 0x4954ED).
+   So the world point is the one this frame's handler stored, and the scroll target is what the
+   last draw's apply and this frame's stepper 0x41CA10 (inside the earlier ticks) left; the scroll
+   poll 0x41CE90 runs after the ticks and lands in the next capture.
+   ONE THREAD (E8): every field read here is written by game-thread code. The mouse thread
+   0x4C2990 writes only the graphics object's 0x51F4B6 and 0x51F4D6 (replay-globals.tsv rows
+   cursorpos and cursordrawn), and nothing here reads either. */
+#define OFF_SCROLL_X   0x14327      /* i32: the scroll target, where the camera is heading        */
+#define OFF_SCROLL_Y   0x1432B
+#define OFF_VIEW_W     0x37E37      /* i32: the 1x view's width and height                        */
+#define OFF_VIEW_H     0x37E3B
+#define OFF_POINT_X    0x2CAC       /* i16: the integer halves of the world point main+0x2CAA's
+                                       16.16 x, height and z (DrawGameScreen reads them as words,
+                                       0x468DC4..0x468DD2)                                     */
+#define OFF_POINT_H    0x2CB0
+#define OFF_POINT_Z    0x2CB4
+#define OFF_REGION     0x2CC6       /* u8: bit 0 the minimap, bit 1 the world viewport (E5)       */
+#define OFF_ORDER      0x2CC3       /* u8: the armed order                                       */
+#define OFF_CURSOR_IX  0x2CBE       /* u8: the cursor index (0x49925D, 0x4992AD)                  */
+#define OFF_ITYPE      0x37EFA      /* u32: the Interface Type (0x499352, 0x499567)                */
+#define PL_BLOCKFIRST  0x67         /* the player's unit block, first and last slot's address,    */
+#define PL_BLOCKLAST   0x6B         /*   inclusive (E9)                                           */
+#define U_SELECTED     0x10u        /* +0x110 bit 4, which the destructor clears (0x486DE8)        */
+
+/* The sample this capture point would send, into `p`; 0 when the view's size is no view's. */
+static int pov_sample(const char* ta, unsigned player, RecPov* p)
+{
+    int w = *(const int*)(ta + OFF_VIEW_W), h = *(const int*)(ta + OFF_VIEW_H);
+    unsigned seq, centre, epoch, region = (unsigned char)ta[OFF_REGION];
+    int dx, dy;
+    float level;
+    if (w < 1 || w > (int)REC_POV_VIEW_MAX || h < 1 || h > (int)REC_POV_VIEW_MAX) return 0;
+    tagpu_zoom_applied(&seq, &dx, &dy, &level, &epoch, &centre);
+    if (!(level >= TAGPU_ZOOM_MIN)) level = TAGPU_ZOOM_MIN;
+    if (level > TAGPU_ZOOM_MAX) level = TAGPU_ZOOM_MAX;
+    memset(p, 0, sizeof *p);
+    p->player = (uint8_t)player;
+    p->every = REC_POV_EVERY;
+    p->flags = (uint8_t)(((region & 2) ? REC_POV_WORLD : 0) | ((region & 1) ? REC_POV_MINIMAP : 0));
+    p->view_w = (uint16_t)w;
+    p->view_h = (uint16_t)h;
+    p->zoom = (uint32_t)(level * 65536.0f + 0.5f);
+    /* unsigned, so a target the clamps never produce wraps rather than overflows */
+    p->cam_x = (int32_t)(*(const uint32_t*)(ta + OFF_SCROLL_X) + (uint32_t)(w / 2));
+    p->cam_y = (int32_t)(*(const uint32_t*)(ta + OFF_SCROLL_Y) + (uint32_t)(h / 2));
+    p->cur_x = *(const int16_t*)(ta + OFF_POINT_X);
+    p->cur_h = *(const int16_t*)(ta + OFF_POINT_H);
+    p->cur_z = *(const int16_t*)(ta + OFF_POINT_Z);
+    return 1;
+}
+
+/* The seat's live selected units, ascending, into `out`; their count, or -1 when the walk is
+   refused. THE BOUND, the one tagpu_patches.c's player_units rests on: the block's first and last
+   unit (the player record's +0x67, +0x6B) are slots of the unit array -- inside [begin, the last
+   slot], whose count level_read checked against the array's own last-slot pointer -- aligned to
+   its 0x118-byte stride and in order, and the block holds at most REC_SEL_MAX of them and at most
+   the units a player may have, the readers' bound on a selection's total. Each slot
+   is then an index below nslots by arithmetic, and the births column holds nslots rows at least
+   (mp_births). A unit is read only at its own slot, during play, on this thread. */
+static int sel_walk(const Level* L, unsigned player, unsigned each, const unsigned* birth,
+                    RecSelEntry* out)
+{
+    const char* rec = L->ta + OFF_PLAYERS + player * PL_STRIDE;
+    const char* first = *(const char* const*)(rec + PL_BLOCKFIRST);
+    const char* last = *(const char* const*)(rec + PL_BLOCKLAST);
+    const char* end = L->begin + (size_t)(L->nslots - 1) * REC_UNIT_BYTES;
+    unsigned s, s0, s1;
+    int n = 0;
+    if (first < L->begin || last > end || first > last ||
+        (size_t)(first - L->begin) % REC_UNIT_BYTES || (size_t)(last - L->begin) % REC_UNIT_BYTES)
+        return -1;
+    s0 = (unsigned)((size_t)(first - L->begin) / REC_UNIT_BYTES);
+    s1 = (unsigned)((size_t)(last - L->begin) / REC_UNIT_BYTES);
+    if (!s0 || s1 - s0 >= REC_SEL_MAX || s1 - s0 >= each || !birth) return -1;
+    for (s = s0; s <= s1; s++) {
+        unsigned state = *(const unsigned*)(L->begin + (size_t)s * REC_UNIT_BYTES + U_STATE);
+        if ((state & U_ALIVE) && (state & U_SELECTED)) {
+            out[n].slot = (uint16_t)s;
+            out[n].birth = birth[s];
+            n++;
+        }
+    }
+    return n;
+}
+
+/* The selection changed other than by a death: the last record's entries whose unit is still live
+   with the same birth differ from the walk's. A death alone leaves the two equal, so a battle does
+   not resend the set each tick. */
+static int sel_changed(const Rec* r, const Level* L, unsigned player, const unsigned* birth,
+                       const RecSelEntry* now, unsigned n)
+{
+    unsigned i, k = 0;
+    for (i = 0; i < r->nsel[player]; i++) {
+        const RecSelEntry* e = &r->sel[player][i];
+        unsigned state = *(const unsigned*)(L->begin + (size_t)e->slot * REC_UNIT_BYTES + U_STATE);
+        if (!(state & U_ALIVE) || birth[e->slot] != e->birth) continue;
+        if (k == n || now[k].slot != e->slot || now[k].birth != e->birth) return 1;
+        k++;
+    }
+    return k != n;
+}
+
+/* The seat's camera and cursor, at most every REC_POV_EVERY ticks and only when the sample differs
+   from the last one sent; then its selection, every capture point, when it changed. The seat is
+   the controlled player when a human controls it (+0x73 == 1). 0 when the ring is full. */
+static int cap_pov(Rec* r, const Level* L, int tick)
+{
+    unsigned p = (unsigned char)L->ta[OFF_CONTROLLED];
+    const unsigned* birth;
+    RecPov pov;
+    int n;
+    if (r->mode != MODE_SKIRMISH || p >= REC_PLAYERS ||
+        (unsigned char)L->ta[OFF_PLAYERS + p * PL_STRIDE + PL_CONTROLLER] != 1)
+        return 1;
+    if ((!r->pov_in[p] || (unsigned)tick - r->pov_tick[p] >= REC_POV_EVERY) &&
+        pov_sample(L->ta, p, &pov) && (!r->pov_in[p] || memcmp(&pov, &r->pov[p], sizeof pov))) {
+        if (!ring_put(r, RK_POV, &pov, sizeof pov, NULL, 0)) return 0;
+        r->pov[p] = pov;
+        r->pov_tick[p] = (unsigned)tick;
+        r->pov_in[p] = 1;
+    }
+    birth = mp_births(L);
+    n = sel_walk(L, p, r->each, birth, r->selnow);
+    if (n < 0) {
+        if (!r->sel_refused)
+            tagpu_logf("recorder: player %u's selection is not recorded at GameTime %d: its unit "
+                       "block is not a run of at most %u slots of the array, or the births column "
+                       "is missing", p, tick, r->each < REC_SEL_MAX ? r->each : REC_SEL_MAX);
+        r->sel_refused = 1;
+    } else if (sel_changed(r, L, p, birth, r->selnow, (unsigned)n)) {
+        RecSel head;
+        head.player = (uint8_t)p;
+        head.flags = REC_SEL_BEGIN | REC_SEL_END;
+        head.total = head.count = (uint16_t)n;
+        head.first = 0;
+        if (!ring_put(r, RK_SELECT, &head, sizeof head, r->selnow, (unsigned)n * sizeof(RecSelEntry)))
+            return 0;
+        memcpy(r->sel[p], r->selnow, (size_t)n * sizeof(RecSelEntry));
+        r->nsel[p] = (unsigned short)n;
+    }
     return 1;
 }
 
@@ -4780,6 +4948,58 @@ static void ev_spray(void* E, unsigned reverse)
 static int __cdecl ev_spray0(void* E) { cnt(0x004720D0u, ARG(E, 0), 0); ev_spray(E, 0); return 0; }
 static int __cdecl ev_spray1(void* E) { cnt(0x00472200u, ARG(E, 0), 0); ev_spray(E, 1); return 0; }
 
+/* THE CLICKS (*The perspective*). Each of the engine's two click actions has exactly one call site
+   in the image (DISASSEMBLED, the plan's E6, re-scanned 2026-10-06: every E8/E9 rel32 of the
+   executable section reaching either entry, and no absolute dword anywhere in the file naming
+   one, so no table or vtable calls them): the left
+   action 0x498F70 only at 0x4995B3 (`e8 b8 f9 ff ff`), which a command-mode left press, a short
+   still left release and an Interface-Type-0 minimap press all reach, and the right button's
+   press 0x499100 only at 0x4993AC (`e8 4f fd ff ff`). Impure's order_check calls 0x499100 from
+   the DLL as a cancel, which is no click and does not pass here. Both sites lie in the mode-6
+   handler 0x499200 after 0x498DA0 (0x499221) stored this message's world point and region and
+   after the cursor choice stored its cursor index (0x4992AD), so the fields read here are the
+   ones the action acts on. Each action is stdcall(record), `ret 4`, and both start by saving ecx
+   and reloading main (0x498F70, 0x499100): they read no register of their caller's. The record
+   is the handler's own stack copy (0x499210..0x49921A), its wParam at +8 (0x498FA9, 0x49917A).
+   The redirect records, then calls the action with the same argument; only a skirmish
+   recording's game thread records (ev_rec), and everywhere else it only passes through. */
+typedef void (__stdcall* PFN_Click)(void* msg);
+#define E_ClickLeft      ((PFN_Click)0x00498F70u)
+#define E_ClickRight     ((PFN_Click)0x00499100u)
+#define CLICK_LEFT_CALL  0x004995B3u
+#define CLICK_RIGHT_CALL 0x004993ACu
+
+static void __stdcall rec_click(void* msg, unsigned button)
+{
+    Rec* r = ev_rec();
+    if (r && r->mode == MODE_SKIRMISH && !r->ev_full) {
+        const char* ta = r->L.ta;
+        unsigned p = (unsigned char)ta[OFF_CONTROLLED];
+        unsigned itype = *(const unsigned*)(ta + OFF_ITYPE);
+        if (p < REC_PLAYERS && (unsigned char)ta[OFF_PLAYERS + p * PL_STRIDE + PL_CONTROLLER] == 1) {
+            if (itype > 1) {
+                if (!r->clicks_odd++)
+                    tagpu_logf("recorder: a click at GameTime %d is not recorded: the Interface "
+                               "Type main+0x37EFA is %u, not 0 or 1", r->tick, itype);
+            } else {
+                RecClick c;
+                c.player = (uint8_t)p;
+                c.button = (uint8_t)button;
+                c.order = (uint8_t)ta[OFF_ORDER];
+                c.cursor = (uint8_t)ta[OFF_CURSOR_IX];
+                c.region = (uint8_t)(ta[OFF_REGION] & 3);
+                c.itype = (uint8_t)itype;
+                c.keys = (uint16_t)(*(const unsigned*)((const char*)msg + 8) & REC_CLICK_KEYS);
+                c.x = *(const int16_t*)(ta + OFF_POINT_X);
+                c.h = *(const int16_t*)(ta + OFF_POINT_H);
+                c.z = *(const int16_t*)(ta + OFF_POINT_Z);
+                ev_put(r, RK_CLICK, &c, sizeof c);
+            }
+        }
+    }
+    (button == REC_CLICK_RIGHT ? E_ClickRight : E_ClickLeft)(msg);
+}
+
 /* ---- the features --------------------------------------------------------------------------- */
 
 /* THE FEATURES: the feature grid, the wreck pool, the heads of the pool's three lists and the
@@ -5969,8 +6189,12 @@ void tagpu_rec_init(void)
     unsigned char* draws[FS_RNG_SITES] = { 0 };
     unsigned char* blast = NULL;
     unsigned char* source = NULL;
+    unsigned char* clicks[2] = { 0 };
     unsigned i, k;
     static const unsigned char regs[8] = { 0x8F, 0x8E, 0x8D, 0, 0x8B, 0, 0, 0 };
+    /* THE CLICKS: the left action's and the right press's call sites, by REC_CLICK_* */
+    static const unsigned CLICK_CALL[2] = { CLICK_LEFT_CALL, CLICK_RIGHT_CALL };
+    static const PFN_Click CLICK_ACTION[2] = { E_ClickLeft, E_ClickRight };
 
     mp_init();
 
@@ -6031,6 +6255,17 @@ void tagpu_rec_init(void)
                    "and nothing will be recorded", SOURCE_TEST);
         return;
     }
+    for (i = 0; i < 2; i++) {
+        unsigned char c[5];
+        int32_t rel = (int32_t)((unsigned)(size_t)CLICK_ACTION[i] - (CLICK_CALL[i] + 5));
+        c[0] = 0xE8;
+        memcpy(c + 1, &rel, 4);
+        if (!pristine(CLICK_CALL[i], c, 5)) {
+            tagpu_logf("recorder: the click call 0x%06X holds other bytes: no event hooks, and "
+                       "nothing will be recorded", CLICK_CALL[i]);
+            return;
+        }
+    }
 
     /* the stubs of the custom sites */
     for (i = 0; i < 5; i++) {
@@ -6086,6 +6321,14 @@ void tagpu_rec_init(void)
         *p++ = 0x0F; *p++ = 0x85; tagpu_detour_rel(p, SOURCE_SKIP); p += 4;   /* jnz: no spread  */
         *p++ = 0xE9; tagpu_detour_rel(p, SOURCE_ON);    /* ecx and eax as stock left them       */
     }
+    for (i = 0; i < 2; i++) {
+        unsigned char* p = clicks[i] = tagpu_detour_stub();
+        if (!p) goto fail;
+        *p++ = 0x68; memcpy(p, &i, 4); p += 4;          /* push the button                      */
+        *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x08;   /* push dword [esp+8]: the record */
+        *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)rec_click); p += 4;
+        *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;          /* ret 4, the action's own              */
+    }
 
     /* then all of them */
     for (i = 0; i < OBSERVE_SITE_COUNT; i++)
@@ -6127,9 +6370,17 @@ void tagpu_rec_init(void)
     }
     if (!tagpu_detour_land(SOURCE_TEST, source, sizeof SOURCE_BYTES)) goto landfail;
     source = NULL;
+    for (k = 0; k < 2; k++) {
+        unsigned char c[5];
+        int32_t rel = (int32_t)((unsigned)(size_t)clicks[k] - (CLICK_CALL[k] + 5));
+        c[0] = 0xE8;
+        memcpy(c + 1, &rel, 4);
+        if (!tagpu_detour_write(CLICK_CALL[k], c, 5)) goto landfail;
+        clicks[k] = NULL;
+    }
     s_sites = 1;
     tagpu_logf("recorder: %u event sites in",
-               (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + FS_RNG_SITES + 2));
+               (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + FS_RNG_SITES + 2 + 2));
     cnt_sinks_init();
     ai_hooks_init();
     return;
@@ -6143,6 +6394,7 @@ fail:
     for (i = 0; i < FS_RNG_SITES; i++) tagpu_detour_stub_free(draws[i]);
     tagpu_detour_stub_free(blast);
     tagpu_detour_stub_free(source);
+    for (i = 0; i < 2; i++) tagpu_detour_stub_free(clicks[i]);
 }
 
 /* ---- the entry points ----------------------------------------------------------------------- */
@@ -6446,6 +6698,7 @@ void __cdecl tagpu_rec_capture(void)
     if (t < 0) { r->w = w0; rec_stop(REC_END_PROJ); return; }
     t = t ? cap_mapped(r, &L) : 0;
     if (t < 0) { r->w = w0; rec_stop(REC_END_MAPPED); return; }
+    t = t ? cap_pov(r, &L, tick) : 0;
     if (!t) {
         /* the iteration does not fit: the recording ends after the last whole one, and what this
            one wrote is dropped unpublished */

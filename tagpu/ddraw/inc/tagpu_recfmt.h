@@ -34,13 +34,17 @@
 
 #include <stdint.h>
 #include "tagpu_replay_globals.h"
+#include "tagpu_recpov.h"
 
-#define REC_FORMAT        6
-#define REC_FORMAT_PREVIOUS 5
+/* 7 adds the perspective records (RK_POV to RK_POV_AT); 6 the network create (RK_EV_NET_CREATE).
+   A reader takes every format from REC_FORMAT_OLDEST on: each added kinds and changed none. */
+#define REC_FORMAT        7
+#define REC_FORMAT_NET_CREATE 6
+#define REC_FORMAT_OLDEST 5
 
 static __inline int rec_format_supported(unsigned format)
 {
-    return format == REC_FORMAT || format == REC_FORMAT_PREVIOUS;
+    return format >= REC_FORMAT_OLDEST && format <= REC_FORMAT;
 }
 
 #define REC_UNIT_BYTES    0x118   /* a unit record                                           */
@@ -281,8 +285,24 @@ enum RecKind {
     RK_COUNT_NAME,     /* dump only: u32 aux, char[REC_COUNT_NAME] NUL-padded: the script name
                           whose FNV-1a is the aux of the COB thread allocation 0x4B08C0's rows   */
     RK_MINIMAP,        /* ring only: an RB_MINIMAP's payload, right after the RK_HEADER          */
-    RK_EV_NET_CREATE,  /* RecNetCreate: CreateFromNetwork 0x4861D0 made this replica. Native
-                          format 6 only; observed at its success exit after B4 stamps it         */
+    RK_EV_NET_CREATE,  /* RecNetCreate: CreateFromNetwork 0x4861D0 made this replica. A native
+                          file's from format 6; observed at its success exit after B4 stamps it   */
+
+    /* THE PERSPECTIVE of the human seat the skirmish commands (tagpu_recpov.h; the plan,
+       demo-recorder-perspective-streams.md). A network-mode recorder writes none of them: a
+       multiplayer file's perspectives are contributions. */
+    RK_POV,            /* RecPov: the seat's camera and cursor at this iteration's capture point,
+                          taken at most every `every` ticks and only when it differs from the
+                          seat's last RK_POV. With the images, a stream's only                    */
+    RK_CLICK,          /* RecClick: an engine click action ran (0x498F70 at 0x4995B3, 0x499100 at
+                          0x4993AC). Taken between two capture points, outside the tick loop, so
+                          it follows the step's events, outside every bracket; a stream's only  */
+    RK_SELECT,         /* RecSel, BEGIN|END, then its RecSelEntry: the seat's whole selection, its
+                          slots ascending inside the seat's block, when it changed other than by a
+                          death. With the images, and in a snapshot                               */
+    RK_POV_AT,         /* u32 the GameTime it was taken, then a RecPov: a snapshot's copy of one of
+                          a seat's two last samples, which a stream's RK_POV dates by its
+                          iteration; a snapshot's only                                            */
     RK_KINDS
 };
 
@@ -296,7 +316,9 @@ typedef struct RecNetCreate {
     uint16_t hp, reserved;            /* post-B4 unit +0x108; reserved is zero                  */
 } RecNetCreate;
 _Static_assert(sizeof(RecNetCreate) == 32, "network create event span");
-_Static_assert(RK_EV_NET_CREATE == 51, "existing record kinds retain their values");
+_Static_assert(RK_EV_NET_CREATE == 51 && RK_POV == 52 && RK_CLICK == 53 && RK_SELECT == 54 &&
+               RK_POV_AT == 55, "existing record kinds retain their values");
+#define REC_POV_AT_BYTES (4u + (unsigned)sizeof(RecPov))
 
 /* A feature root, and its arguments after the site. A cell the engine names by address is its
    column and row (0xFFFF 0xFFFF: not a cell of the grid, and never replayed). */
@@ -426,7 +448,9 @@ enum RecBlockKind {
     RB_STREAM,         /* records: iterations, in order, from where the last block ended         */
     RB_SNAPSHOT,       /* records that build the whole world at `last`: a TICK, an RK_UNIT per
                           live unit with the RK_ORDERS of its lists that are not empty, an
-                          RK_PLAYER and an RK_CONTROLLER per player, an RK_VIEWER, an
+                          RK_PLAYER and an RK_CONTROLLER per player, an RK_VIEWER, for each
+                          seat with a perspective its last two samples as RK_POV_AT, the
+                          earlier first, then its RK_SELECT when it has had one, an
                           RK_TABLE_SIZE per declared table and an RK_TABLE_SPAN for each of its
                           spans that is not all zero (RK_TABLE_SIZE zeroes the table, which
                           starts empty), the RK_CELLS of every cell that differs from the

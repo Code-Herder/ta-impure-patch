@@ -2,7 +2,8 @@
 
 ## Status
 
-Planned 2026-10-06; nothing is built. This is stage 4c of the
+Planned 2026-10-06. Landing 4c-1 (the skirmish capture) is built and awaits its V1 run; 4c-2 to
+4c-4 are not built. This is stage 4c of the
 [multiplayer slice](demo-recorder-multiplayer-slice.md#stage-4-perspectives-and-communication)
 and landing 3 of [S5](demo-recorder-s5-ui.md#landings) ("the streams and the cards"). It records
 each human seat's camera, cursor, clicks and selection: the local human in a skirmish recording
@@ -48,7 +49,7 @@ session unless a note is cited), **MEASURED** (with the numbers), **[INFERRED]**
 | Sampling | **Camera and cursor: one combined sample, at most one per `every` ticks, only when it differs from the last one sent** (skirmish `every = 3`, 10 Hz; multiplayer: owner Q3). **Selection: checked every B2. Click: when it happens** (at most one per frame, E1) | Contract: continuous data only when it changes, a few times a second; discrete data reliable and in order |
 | Lost samples | **Multiplayer only, camera and cursor only:** the producer skips a sample when the transmit queue has fewer than 64 free slots, and the next eligible tick sends it if it still differs | The contract allows a lost sample; a full queue fails every contribution (E12). The check is safe because the game thread is the queue's only producer: free slots can only grow between the check and the publish |
 | Interpolation | **Camera and cursor play `every` ticks behind the world**, interpolated between the two samples around that time with integer arithmetic. **Clicks and selections play at their own tick** | The agreed method is interpolation from earlier and later samples ([How it works](demo-recorder.md#how-it-works)). Since samples are at least `every` apart, a delay of `every` always has both in hand without reading ahead. Discrete events stay with the units they refer to |
-| Format | **Shared payloads** in a new `inc/tagpu_recpov.h`. **Skirmish:** `RK_POV` 52, `RK_CLICK` 53, `RK_SELECT` 54, `REC_FORMAT` 7, and readers accept 5..7. **Multiplayer:** `RECMP_POV` 13, `RECMP_CLICK` 14, `RECMP_SELECT` 15. A network-mode recorder writes none of the RK kinds | One payload and one consumer per kind. A multiplayer file has one source for perspectives, the contribution ledger, as `ev_put` already does for owner-only roots |
+| Format | **Shared payloads** in a new `inc/tagpu_recpov.h`. **Skirmish:** `RK_POV` 52, `RK_CLICK` 53, `RK_SELECT` 54, the snapshot-only `RK_POV_AT` 55, `REC_FORMAT` 7, and readers accept 5..7. **Multiplayer:** `RECMP_POV` 13, `RECMP_CLICK` 14, `RECMP_SELECT` 15. A network-mode recorder writes none of the RK kinds | One payload and one consumer per kind. A multiplayer file has one source for perspectives, the contribution ledger, as `ev_put` already does for owner-only roots |
 | Follow's mechanism | **The apply writes the eye and target every draw from the interpolated sample.** Follow ends when the target at the apply's entry differs from Follow's last write, or when the render thread reports a wheel notch for Follow's epoch | The apply runs after every engine camera writer of the frame (E3), and every player camera move writes the target (E7). That makes "someone else moved the camera" an observed fact, not a guess |
 | Overlays' renderer | **Vulkan:** cursors and click rings in the marker pass with fog off, and selections as the native pass's selection rectangle in the player's colour. **GDI: none** (owner Q2) | The marker pass already draws world-anchored geometry through the zoom transform. The selection rectangle is the engine's own look for "selected" |
 | Simulation-state class | **None of the new statics is simulation state.** All of them live in `presentation` files (`tagpu_recorder.c`, `tagpu_replay.c`, `tagpu_zoom.c`, `tagpu_cards.c`, `tagpu_native.c`, `tagpu_mark.c`) or in new engine-free files (`tagpu_persp.c`, `tagpu_recmp_pov.c`), so `tagpu_simreg.h` declares nothing. The simulation reads none of them. The camera rows stay `leave` and `selected` stays `drop` | No loosening: no exclusion, no `presentation` change to a sim file, no tolerance |
@@ -93,8 +94,13 @@ typedef struct RecSelEntry { uint16_t slot; uint32_t birth; } RecSelEntry;   /* 
 #pragma pack(pop)
 ```
 
+A stream's `RK_POV` takes its tick from its iteration, which a snapshot cannot give the samples
+taken before it. So a snapshot carries each seat's samples as **`RK_POV_AT` 55**: `u32` the
+GameTime the sample was taken, then the `RecPov`, 36 bytes. A stream refuses `RK_POV_AT`, a
+snapshot refuses `RK_POV` and `RK_CLICK`, and every kind keeps one length everywhere.
+
 Validation, the same in the C readers, the history and both Python mirrors:
-- **Exact lengths:** 32, 20, and `8 + 6*count`.
+- **Exact lengths:** 32, 20, 36 for `RK_POV_AT`, and `8 + 6*count`.
 - **`RecPov`:** `every` in 1..30, `flags` within the two bits, `zero` 0, `zoom` in range, `view_w`/`view_h` in 1..16384.
 - **`RecClick`:** `button` 1 or less, `region` 3 or less, `itype` 1 or less.
 - **`RecSel`:** `total` at most the seat's block (`units_each`) and REC_SEL_MAX, `first + count <= total`, slots strictly ascending and inside the seat's block, and a transaction contiguous on its stream that publishes only at END.
@@ -153,9 +159,14 @@ Comments the capture must carry:
 - **Per seat:** the last two samples with their ticks, and the current selection (ascending
   `(slot, birth)`, capacity `units_each`).
 - **Clicks:** a ring of the 64 most recent, each with its tick.
-- **Skirmish:** `RecWorld` holds the samples and selection. `recr_tick` and `recr_seek` maintain
-  them, and the writer's snapshot writes each seat's two `RK_POV` in order, then its `RK_SELECT`,
-  as it does for `RK_VIEWER`. The iteration's clicks are a per-iteration list in `RecWorld`.
+- **Skirmish:** `RecWorld` holds the samples with their ticks and the selection. `recr_tick` and
+  `recr_seek` maintain them, and the writer's snapshot writes each seat's two samples as
+  `RK_POV_AT` in order, then its `RK_SELECT`, right after the `RK_VIEWER`. The iteration's clicks
+  are a per-iteration list in `RecWorld`, not in its events: a click is taken outside the tick
+  loop, so it follows the step's events, outside every bracket. A list grows as the events' does,
+  so clicks made while the game is paused need no cap of their own; a full ring ends the
+  recording as it does for an event. An Interface Type above 1 records no click, counted and
+  logged once.
 - **Multiplayer:** the history's applied caches (`recr_mp_pov`, `recr_mp_select`) at the reader's
   application tick, rebuilt at a seek as the explored map is. Clicks come from the step's held
   envelopes (`mp_envelope`) at their application tick, as chat does. The step's root-batch split
@@ -266,16 +277,20 @@ count and the number of `rsel` units.
 
 | Landing | Delivers | Review |
 |---|---|---|
-| **4c-1 Skirmish capture** | `tagpu_recpov.h`; `RK_POV/CLICK/SELECT` and `REC_FORMAT` 7 in `tagpu_recfmt.h`; the B2 capture and the two click redirects in `tagpu_recorder.c`; the world copy and snapshot in `tagpu_recwriter.c`; `RecWorld` state, `recr_tick` and `recr_seek` in `tagpu_recreader.c`; the `tarec.py` mirror and its `pov` command. `tarec`'s `RK_EV_NET_CREATE` test becomes `format >= 6` | high: two new byte patches |
+| **4c-1 Skirmish capture** | `tagpu_recpov.h`; `RK_POV/CLICK/SELECT/POV_AT` and `REC_FORMAT` 7 in `tagpu_recfmt.h`; the B2 capture and the two click redirects in `tagpu_recorder.c`; the world copy and snapshot in `tagpu_recwriter.c`; `RecWorld` state, `recr_tick` and `recr_seek` in `tagpu_recreader.c`; the `tarec.py` mirror and its `pov` command. `tarec`'s `RK_EV_NET_CREATE` test becomes `format >= 6` | high: two new byte patches |
 | **4c-2 Follow, Jump, Free** | `tagpu_persp.c` (clock and follow arithmetic, with a native test like the cards'), the follow lever and apply in `tagpu_zoom.c/.h`, the packet and command fields, the cards' Jump, Follow and Free cam, and the tacli triggers | high: game/render handshake |
 | **4c-3 Overlays** | the overlay builder, `PK_OVERLAY`, `rsel` and `ov_col`, `tagpu_native.c`'s selection rectangle, `tagpu_mark.c`'s cursor and ring, the switches and their cards row | high: packet layout |
 | **4c-4 Multiplayer** | kinds 13-15 end to end, as in the section above | high: wire kinds |
 
 Each landing runs `tareplay.py landing`. A new fixture, `perspective`, reaches the new functions.
-It uses a small scenario with the camera placed by the scenario and the human's units at known
-world positions. Its `keys` steps are `pmove`, a left `click` on a unit, an `rclick` on the
-ground, a drag selection (`down:lbutton`, `mouse:`, `up:lbutton`), arrow-key scrolling and
-`wheel:1`. It sets `"watch": true` and ends by tick 1500.
+Its scenario, `scenarios/replay-perspective.json`, centres the unpinned camera on the human's
+commander and puts two Peewees inside the drag box. Its `keys` steps are `pmove`, a left
+`pclick` on the commander at the window's centre, a `prclick` on the ground, a drag selection
+(`pmove` and `down:lbutton`, `pmove`, `up:lbutton`, each a step of its own so the engine sees the
+move between the press and the release), an arrow key held for 60 ticks and `wheel:1`. The
+injected `pclick`, `prclick` and `pmove` tokens are used rather than `click`, `rclick` and
+`mouse:`, which fall back to `SendInput` and the desktop's pointer when the shield is down. It
+sets `"watch": true` and ends at tick 1500.
 
 **Verification runs** (each 10 minutes or less, private display, retail):
 

@@ -50,6 +50,14 @@
                                              that lies inside the main block, an engine pool or
                                              Impure's DLL: an address recorded as a value
 
+  tools/replay/tarec.py pov FILE [--check]  the human seat's perspective: every camera and cursor
+                                             sample, click and selection, by GameTime; with
+                                             --check, require each record well formed, samples
+                                             at least their `every` apart and each one differing
+                                             from the last, every selection ascending inside its
+                                             seat's block, and the stream's perspective to equal
+                                             the one every snapshot rebuilds
+
   check, compare and compare --puppet take --timeline N: the chain of timeline N, read across
   each fork it descends from.
 
@@ -88,8 +96,9 @@ import zlib
 from pathlib import Path
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 6
-REC_FORMAT_PREVIOUS = 5
+REC_FORMAT = 7                            # the perspective records (RK_POV to RK_POV_AT)
+REC_FORMAT_NET_CREATE = 6                 # RK_EV_NET_CREATE
+REC_FORMAT_OLDEST = 5                     # every format from here on reads
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -136,7 +145,23 @@ def mapped_bytes(w, h):
  RK_EV_DEATH_END, RK_CELLS, RK_WRECK, RK_FEATURES, RK_GRID,
  RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
  RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT, RK_COUNTS,
- RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE) = range(52)
+ RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE, RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT) = range(56)
+
+# THE PERSPECTIVE's payloads (tagpu_recpov.h)
+REC_POV = struct.Struct("<BBBBHHIiiiii")   # player, every, flags, zero, view_w, view_h, zoom,
+                                           # cam_x, cam_y, cur_x, cur_h, cur_z: 32 bytes
+REC_CLICK = struct.Struct("<BBBBBBHiii")   # player, button, order, cursor, region, itype, keys,
+                                           # x, h, z: 20 bytes
+REC_SEL = struct.Struct("<BBHHH")          # player, flags, total, first, count: 8 bytes
+REC_SEL_ENTRY = struct.Struct("<HI")       # slot, birth: 6 bytes
+REC_POV_EVERY_MAX = 30
+REC_POV_WORLD, REC_POV_MINIMAP = 1, 2
+REC_POV_ZOOM_MIN, REC_POV_ZOOM_MAX = 16384, 524288
+REC_POV_VIEW_MAX = 16384
+REC_SEL_BEGIN, REC_SEL_END = 1, 2
+REC_SEL_MAX = 1500
+REC_CLICK_KEYS = 0x000C                           # MK_SHIFT | MK_CONTROL
+PL_BLOCKFIRST, PL_BLOCKLAST = 0x67, 0x6B          # a player image's unit block, as IDs
 REC_COUNT_DLL = 0x80000000           # RK_COUNTS: a caller inside Impure's DLL, as its offset
 RK_NAMES = {RK_UNIT: "unit", RK_PLAYER: "player", RK_TABLE_SPAN: "table", RK_ORDERS: "order list",
             RK_GLOBALS: "globals image", RK_PROJ: "projectile record",
@@ -337,7 +362,7 @@ def header(payload):
             ix, n = struct.unpack_from("<HH", b)
             h.setdefault("fields", {})[ix] = [struct.unpack_from("<HHHHBB", b, 4 + 12 * k)
                                               for k in range(n)]
-    if h.get("format") not in (REC_FORMAT, REC_FORMAT_PREVIOUS):
+    if not REC_FORMAT_OLDEST <= (h.get("format") or 0) <= REC_FORMAT:
         raise Unreadable(f"format {h.get('format')}, this tool reads {REC_FORMAT}")
     if (h.get("mode") == 3) != ("multiplayer" in h) or ("multiplayer" in h) != ("mp_seats" in h):
         raise Unreadable("network mode and contribution roster disagree")
@@ -375,6 +400,40 @@ def end(payload):
 
 
 # ---- the world -------------------------------------------------------------------------------
+
+def pov_fields(b):
+    """A RecPov's fields, each bounded as tagpu_recpov.h's rec_pov_ok bounds it."""
+    if len(b) != REC_POV.size:
+        raise Unreadable(f"a sample of {len(b)} bytes")
+    f = REC_POV.unpack(b)
+    player, every, flags, zero, view_w, view_h, zoom = f[:7]
+    if player >= REC_PLAYERS or not 1 <= every <= REC_POV_EVERY_MAX or \
+            flags & ~(REC_POV_WORLD | REC_POV_MINIMAP) or zero or \
+            not REC_POV_ZOOM_MIN <= zoom <= REC_POV_ZOOM_MAX or \
+            not 1 <= view_w <= REC_POV_VIEW_MAX or not 1 <= view_h <= REC_POV_VIEW_MAX:
+        raise Unreadable(f"a malformed sample {f}")
+    return f
+
+
+def click_fields(b):
+    """A RecClick's fields, each bounded as rec_click_ok bounds it."""
+    if len(b) != REC_CLICK.size:
+        raise Unreadable(f"a click of {len(b)} bytes")
+    f = REC_CLICK.unpack(b)
+    player, button, _, _, region, itype, keys = f[:7]
+    if player >= REC_PLAYERS or button > 1 or region > 3 or itype > 1 or keys & ~REC_CLICK_KEYS:
+        raise Unreadable(f"a malformed click {f}")
+    return f
+
+
+def sel_block(player_image, slots):
+    """The seat's block of slots, inclusive, from its player image's two unit IDs (rec_sel_block)."""
+    first, last = struct.unpack_from("<I", player_image, PL_BLOCKFIRST)[0], \
+        struct.unpack_from("<I", player_image, PL_BLOCKLAST)[0]
+    if first < 2 or last < first or last > slots:
+        raise Unreadable(f"a selection's seat has no unit block (IDs {first}, {last})")
+    return first - 1, last - 1
+
 
 class World:
     def __init__(self, slots, tables, header=None, dims=None):
@@ -414,6 +473,11 @@ class World:
         self.tick = None
         self.corrections = 0
         self.pend = None        # (slot, list, total, next) of an order list still owed records
+        self.snap = False       # the records applied are a snapshot's (snapshot_world)
+        self.pov = [[] for _ in range(REC_PLAYERS)]   # a seat's last two samples, the earlier
+                                                      # first: (GameTime, its RecPov's bytes)
+        self.sel = [None] * REC_PLAYERS     # a seat's selection, [(slot, birth)], once it has one
+        self.clicks = []                    # the iteration's RK_CLICK bodies, in order
 
     def bracket(self, kind, b):
         """The brackets' grammar, as the DLL's reader has it (tagpu_recreader.c, event_take): a
@@ -446,6 +510,56 @@ class World:
             if b[0] == FS_SOURCE and (self.fbracket != FR_TICK + 1 or not network):
                 raise Unreadable("a source test outside a multiplayer recording's tick")
 
+    def perspective(self, kind, b):
+        """THE PERSPECTIVE, as the DLL's reader has it (tagpu_recreader.c, pov_record): a skirmish
+        file's from format 7, RK_POV and RK_CLICK a stream's and RK_POV_AT a snapshot's, a
+        selection's slots inside its seat's block as the player image applied before it names
+        it."""
+        h = self.header
+        if h is not None and (h.get("format", 0) < REC_FORMAT or h.get("mode") == 3):
+            raise Unreadable(f"perspective record kind {kind} outside a skirmish file of format "
+                             f"{REC_FORMAT}")
+        if kind in (RK_POV, RK_POV_AT):
+            if (kind == RK_POV_AT) != self.snap:
+                raise Unreadable(f"perspective record kind {kind} in a "
+                                 f"{'snapshot' if self.snap else 'stream'}")
+            if kind == RK_POV:
+                tick, body = self.tick, bytes(b)
+            else:
+                if len(b) != 4 + REC_POV.size:
+                    raise Unreadable(f"a dated sample of {len(b)} bytes")
+                tick, body = struct.unpack_from("<I", b)[0], bytes(b[4:])
+            f = pov_fields(body)
+            seat = self.pov[f[0]]
+            if self.tick is None or tick > self.tick or (seat and seat[-1][0] >= tick):
+                raise Unreadable(f"player {f[0]}'s sample at GameTime {tick} is not after its "
+                                 f"last one and at most the iteration's")
+            seat.append((tick, body))
+            del seat[:-2]
+        elif kind == RK_CLICK:
+            if self.snap:
+                raise Unreadable("a click in a snapshot")
+            click_fields(b)
+            self.clicks.append(bytes(b))
+        else:
+            if len(b) < REC_SEL.size:
+                raise Unreadable(f"a selection of {len(b)} bytes")
+            p, flags, total, first, count = REC_SEL.unpack_from(b)
+            limit = REC_SEL_MAX if h is None else min(REC_SEL_MAX, h.get("units_each", 0))
+            if len(b) != REC_SEL.size + count * REC_SEL_ENTRY.size or p >= REC_PLAYERS or \
+                    flags != REC_SEL_BEGIN | REC_SEL_END or first or count != total or \
+                    total > limit:
+                raise Unreadable(f"a malformed selection of player {p} ({count} entries)")
+            entries_ = [REC_SEL_ENTRY.unpack_from(b, REC_SEL.size + REC_SEL_ENTRY.size * i)
+                        for i in range(count)]
+            if entries_:
+                lo, hi = sel_block(self.players[p], self.slots)
+                if any(not lo <= slot <= hi for slot, _ in entries_) or \
+                        any(a[0] >= c[0] for a, c in zip(entries_, entries_[1:])):
+                    raise Unreadable(f"player {p}'s selection is not ascending inside its block "
+                                     f"[{lo}, {hi}]")
+            self.sel[p] = entries_
+
     def cells(self, b):
         x, z, n, zero = struct.unpack_from("<HHHH", b)
         if not n or n > REC_CELLS_MAX or zero or len(b) != 8 + n * REC_CELL_BYTES or \
@@ -462,9 +576,9 @@ class World:
             raise Unreadable(f"slot {self.pend[0]}'s order list cut short by another record")
         if kind == RK_EV_NET_CREATE:
             h = self.header
-            if not h or h.get("format") != REC_FORMAT or h.get("mode") != 3 or len(b) != 32 or \
+            if not h or h.get("format") < REC_FORMAT_NET_CREATE or h.get("mode") != 3 or len(b) != 32 or \
                     "mp_seats" not in h or "unitdefs" not in h:
-                raise Unreadable("a network create outside native format 6")
+                raise Unreadable("a network create outside a native file of format 6 or later")
             unit, unit_type, owner, water = struct.unpack_from("<IHBB", b)
             unfinished, _, reserved = struct.unpack_from("<fHH", b, 24)
             slot = unit - 1
@@ -487,8 +601,11 @@ class World:
             return kind, b
         if (self.fbracket or self.deaths) and kind not in EVENTS:
             raise Unreadable(f"record kind {kind} inside a feature call or a death")
-        if kind == RK_TICK:
+        if kind in (RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT):
+            self.perspective(kind, b)
+        elif kind == RK_TICK:
             self.tick = struct.unpack_from("<I", b)[0]
+            self.clicks = []
         elif kind == RK_UNIT:
             self.units[struct.unpack_from("<H", b)[0]] = bytearray(b[4:4 + REC_UNIT_IMAGE])
         elif kind == RK_UNIT_DELTA:
@@ -653,6 +770,22 @@ class World:
             raise Unreadable("a feature call's or a death's records cut short at the end of its "
                              "iteration")
 
+    def pov_differences(self, other):
+        """Lines naming each seat whose last two samples, with their GameTimes, or whose selection
+        differ between the two worlds; a seat that never had a selection holds none."""
+        out = []
+        for p in range(REC_PLAYERS):
+            a, b = [t for t, _ in self.pov[p]], [t for t, _ in other.pov[p]]
+            if self.pov[p] != other.pov[p]:
+                out.append(f"player {p}'s samples: recording at GameTime {a}, dump at {b}"
+                           + (", their fields differ" if a == b else ""))
+            a, b = self.sel[p] or [], other.sel[p] or []
+            if a != b:
+                out.append(f"player {p}'s selection: {len(a)} units in the recording, {len(b)} "
+                           f"in the dump" + (", their slots or births differ"
+                                             if len(a) == len(b) else ""))
+        return out
+
     @staticmethod
     def _delta(img, bits, dwords, vals):
         k = 0
@@ -661,11 +794,13 @@ class World:
                 img[4 * i:4 * i + 4] = vals[4 * k:4 * k + 4]
                 k += 1
 
-    def differences(self, other, names, other_names=None, limit=20, gnames=None, sight=False):
+    def differences(self, other, names, other_names=None, limit=20, gnames=None, sight=False,
+                    pov=False):
         """Lines naming each difference, the first `limit` of them, and their count. `names` are
         this world's tables and `other_names` the other's, when another build numbered them;
         `gnames` the globals image's dwords by name, when the list is known (globals_list); with
-        `sight`, the players' sight counters too, which only dumps carry."""
+        `sight`, the players' sight counters too, which only dumps carry; with `pov`, the
+        perspective, which only a recording's stream and snapshots carry."""
         out, n = [], 0
 
         def note(line):
@@ -702,6 +837,8 @@ class World:
                 note(f"player {p}'s controller: recording {self.ctl[p]}, dump {other.ctl[p]}")
         if self.view != other.view:
             note(f"the controlled and viewed players: recording {self.view}, dump {other.view}")
+        for line in self.pov_differences(other) if pov else ():
+            note(line)
         def by_name(w, tabs):
             return {tabs.get(ix, {}).get("name", f"table {ix}"): (tabs.get(ix, {}).get("stride"), t)
                     for ix, t in w.tables.items()}
@@ -789,15 +926,19 @@ class World:
         return out, n
 
 
-def snapshot_world(payload, slots, tables, dims, base=None):
+def snapshot_world(payload, slots, tables, dims, base=None, header=None):
     """A snapshot or a dump builds the world from nothing, its seats and viewer included; a
-    snapshot's cells over the recording's base grid, a dump's over nothing (it carries them all)."""
+    snapshot's cells over the recording's base grid, a dump's over nothing (it carries them all).
+    With the recording's `header`, its perspective is checked against it as the stream's is."""
     w = World(slots, tables, dims=dims)
+    w.header = header
+    w.snap = True
     if base is not None:
         w.grid[:] = base
     for kind, b in records(payload):
         w.apply(kind, b)
     w.whole()
+    w.snap = False
     return w
 
 
@@ -1210,14 +1351,16 @@ def cmd_info(path):
         for rk, b in records(payload):
             if rk in EVENTS or rk in (RK_ORDERS, RK_CONTROLLER, RK_VIEWER, RK_CELLS, RK_WRECK,
                                       RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ,
-                                      RK_PROJ_DELTA, RK_MAPPED, RK_MAPPED_RUNS):
+                                      RK_PROJ_DELTA, RK_MAPPED, RK_MAPPED_RUNS, RK_POV, RK_CLICK,
+                                      RK_SELECT):
                 ev[rk] = ev.get(rk, 0) + 1
                 evb[rk] = evb.get(rk, 0) + 4 + ((len(b) + 3) & ~3)
     names = {**EVENTS, RK_ORDERS: "order list", RK_CONTROLLER: "controller", RK_VIEWER: "viewer",
              RK_CELLS: "run of cells", RK_WRECK: "wreck record", RK_GLOBALS: "globals image",
              RK_GLOBALS_DELTA: "globals delta", RK_PROJ_HEAD: "projectile head",
              RK_PROJ: "projectile record", RK_PROJ_DELTA: "projectile delta",
-             RK_MAPPED: "explored map record", RK_MAPPED_RUNS: "explored map runs"}
+             RK_MAPPED: "explored map record", RK_MAPPED_RUNS: "explored map runs",
+             RK_POV: "camera and cursor sample", RK_CLICK: "click", RK_SELECT: "selection"}
     print("  records: " + (", ".join(f"{ev[k]} {names[k]} ({evb[k] >> 10} KB)" for k in sorted(ev))
                            or "no order lists, seats or events"))
     ends = [b for b in bl if b[0] == RB_END]
@@ -1304,8 +1447,8 @@ def cmd_check(path, timeline=0):
     def at_snapshot(w, payload):
         nonlocal bad, seen
         seen += 1
-        s = snapshot_world(payload, h["slots"], h["tables"], feature_dims(h), w.base)
-        lines, n = w.differences(s, h["tables"], gnames=gnames)
+        s = snapshot_world(payload, h["slots"], h["tables"], feature_dims(h), w.base, w.header)
+        lines, n = w.differences(s, h["tables"], gnames=gnames, pov=True)
         if s.tick != w.tick:
             lines.insert(0, f"the snapshot is at GameTime {s.tick}, the stream at {w.tick}")
             n += 1
@@ -1326,6 +1469,68 @@ def cmd_check(path, timeline=0):
     for line in ec.lines:
         print("  " + line)
     return 1 if bad or w.corrections or ec.n else 0
+
+
+def cmd_pov(path, check):
+    """The perspective records in stream order, and with `check` what the plan's V1 requires of
+    them (demo-recorder-perspective-streams.md): each well formed and bounded (World.perspective),
+    each seat's samples at least their `every` apart and each differing from its last, and the
+    stream's perspective equal to the one each snapshot rebuilds."""
+    h, bl, stop = load(path)
+    bad, counts, snaps, last = [], {RK_POV: 0, RK_CLICK: 0, RK_SELECT: 0}, [0], {}
+
+    def on_record(w, kind, b):
+        if kind == RK_POV:
+            f = pov_fields(b)
+            where = "".join(n for bit, n in ((REC_POV_WORLD, " world"), (REC_POV_MINIMAP, " minimap"))
+                            if f[2] & bit) or " outside"
+            print(f"GameTime {w.tick} player {f[0]}: camera ({f[7]}, {f[8]}), view {f[4]}x{f[5]}, "
+                  f"zoom {f[6]}/65536, cursor ({f[9]}, {f[10]}, {f[11]}){where}, every {f[1]}")
+            was = last.get(f[0])
+            if was and w.tick - was[0] < f[1]:
+                bad.append(f"GameTime {w.tick} player {f[0]}: a sample {w.tick - was[0]} ticks "
+                           f"after the last, under its every {f[1]}")
+            if was and was[1] == bytes(b):
+                bad.append(f"GameTime {w.tick} player {f[0]}: a sample equal to the last one")
+            last[f[0]] = (w.tick, bytes(b))
+        elif kind == RK_CLICK:
+            f = click_fields(b)
+            print(f"GameTime {w.tick} player {f[0]}: {('left', 'right')[f[1]]} click at "
+                  f"({f[7]}, {f[8]}, {f[9]}), order {f[2]}, cursor {f[3]}, region {f[4]}, "
+                  f"interface {f[5]}, keys 0x{f[6]:X}")
+        elif kind == RK_SELECT:
+            p, _, total = REC_SEL.unpack_from(b)[:3]
+            units = " ".join(f"{slot}:{birth:08X}" for slot, birth in w.sel[p][:8])
+            print(f"GameTime {w.tick} player {p}: selection of {total}"
+                  + (f": {units}" + (" ..." if total > 8 else "") if total else ""))
+        if kind in counts:
+            counts[kind] += 1
+
+    def at_snapshot(w, payload):
+        snaps[0] += 1
+        s = snapshot_world(payload, h["slots"], h["tables"], feature_dims(h), w.base, w.header)
+        bad.extend(f"the snapshot at GameTime {s.tick}: {line.replace('dump', 'snapshot')}"
+                   for line in w.pov_differences(s))
+
+    try:
+        stream_to(h, bl, on_snapshot=at_snapshot, on_record=on_record)
+    except Unreadable as e:
+        if not check:
+            raise
+        bad.append(f"unreadable: {e}")
+    print(f"{path}: {counts[RK_POV]} samples, {counts[RK_CLICK]} clicks, {counts[RK_SELECT]} "
+          f"selections; {snaps[0]} snapshots" + (f"; stopped at {stop}" if stop else ""))
+    if not check:
+        return 0
+    if h.get("mode") == 3:
+        bad.append("a multiplayer file carries its perspectives as contributions, which this "
+                   "command does not read")
+    elif not counts[RK_POV]:
+        bad.append("no camera and cursor sample is recorded")
+    for line in bad[:40]:
+        print("  FAIL " + line)
+    print("  " + (f"{len(bad)} FAILED" if bad else "every perspective check holds"))
+    return 1 if bad else 0
 
 
 def viewer_of(h):
@@ -2203,9 +2408,13 @@ def main(argv):
     absent = None
     if argv[1:2] == ["compare-counts"] and len(argv) == 9 and argv[7] == "--absent":
         absent, argv = argv[8], argv[:7]
+    pov_check = argv[1:2] == ["pov"] and "--check" in argv
+    if pov_check:
+        argv = [a for a in argv if a != "--check"]
     if len(argv) < 3 or argv[1] not in ("info", "check", "compare", "compare-dumps", "counts",
                                         "compare-counts", "images-gate", "scan", "segments",
-                                        "compare-fork") or \
+                                        "compare-fork", "pov") or \
+            (argv[1] == "pov" and len(argv) != 3) or \
             (argv[1] == "segments" and len(argv) != 3) or \
             (argv[1] == "compare-fork" and (len(argv) != 4 or not argv[3].isdigit())) or \
             (argv[1] == "compare" and len(argv) < 4) or (images and len(argv) != 4) or \
@@ -2222,6 +2431,8 @@ def main(argv):
             return cmd_check(argv[2], timeline)
         if argv[1] == "segments":
             return cmd_segments(argv[2])
+        if argv[1] == "pov":
+            return cmd_pov(argv[2], pov_check)
         if argv[1] == "compare-fork":
             return cmd_compare_fork(argv[2], int(argv[3]))
         if images:

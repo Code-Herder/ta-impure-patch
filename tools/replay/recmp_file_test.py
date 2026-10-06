@@ -4,6 +4,8 @@
 One owned Wine prefix/private display; no game launch or primary session.
 """
 import argparse
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -524,6 +526,20 @@ def run(output, read_file=None, skirmish_file=None, native_file=None,
             if segment["end_reason"] != expected:
                 raise RuntimeError(f"{mode}: unexpected complete end")
             print(f"{mode}: real writer, C reader/summary/info and Python reader PASS", flush=True)
+        if not read_file:
+            path = output / "perspective.imprec"
+            with (output / "perspective.log").open("w") as log:
+                command(["wine", exe, "perspective", "Z:" + str(path).replace("/", "\\")], log,
+                        env=env)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = tarec.cmd_pov(str(path), True)
+            (output / "perspective-pov.txt").write_text(out.getvalue())
+            if code or "334 samples, 4 clicks, 5 selections; 1 snapshots" not in out.getvalue():
+                raise RuntimeError("perspective: tarec pov --check disagrees with the C writer and "
+                                   "reader")
+            print("perspective: real writer, C forward reading and seek, and tarec pov --check PASS",
+                  flush=True)
         original = read_file or output / "normal.imprec"
         blocks, stopped = tarec.blocks(original)
         semantic_states(tarec.segments(blocks)[0])

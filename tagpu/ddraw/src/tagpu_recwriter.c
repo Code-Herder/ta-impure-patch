@@ -133,6 +133,14 @@ typedef struct Writer {
     RecMpRecordEnd mp_end;
     Buf            contributions;
     unsigned       mp_in;
+
+    unsigned       each;        /* RT_UNITS_EACH: a selection's most entries               */
+    RecPov         pov[REC_PLAYERS][2];     /* each seat's last two samples, the earlier first */
+    unsigned       pov_tick[REC_PLAYERS][2];   /* ... the GameTime each was taken          */
+    unsigned char  npov[REC_PLAYERS];       /* ... how many of the two there are          */
+    unsigned char  sel_in[REC_PLAYERS];     /* the seat has had an RK_SELECT               */
+    unsigned short nsel[REC_PLAYERS];       /* its last one's entries                      */
+    unsigned char  sel[REC_PLAYERS][REC_SEL_MAX * sizeof(RecSelEntry)];
 } Writer;
 
 /* ---- buffers -------------------------------------------------------------------------------- */
@@ -434,6 +442,7 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         w->mp_history=tagpu_recmp_history_begin(&w->mp.header,roster,w->gw,w->gh);
         if (!w->mp_history) return 0;
     }
+    w->each = each;
     w->units = (unsigned char*)VirtualAlloc(NULL, (size_t)w->nslots * REC_UNIT_IMAGE,
                                             MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     w->live = (unsigned char*)calloc(w->nslots, 1);
@@ -802,6 +811,24 @@ static void snapshot(Writer* w)
         v[2] = v[3] = 0;
         buf_rec(b, RK_VIEWER, v, 4, NULL, 0);
     }
+    for (i = 0; i < REC_PLAYERS; i++) {
+        unsigned k;
+        for (k = 0; k < w->npov[i]; k++) {
+            unsigned char at[REC_POV_AT_BYTES];
+            memcpy(at, &w->pov_tick[i][k], 4);
+            memcpy(at + 4, &w->pov[i][k], sizeof(RecPov));
+            buf_rec(b, RK_POV_AT, at, sizeof at, NULL, 0);
+        }
+        if (w->sel_in[i]) {
+            RecSel head;
+            head.player = (uint8_t)i;
+            head.flags = REC_SEL_BEGIN | REC_SEL_END;
+            head.total = head.count = w->nsel[i];
+            head.first = 0;
+            buf_rec(b, RK_SELECT, &head, sizeof head, w->sel[i],
+                    (unsigned)w->nsel[i] * sizeof(RecSelEntry));
+        }
+    }
     for (i = 0; i < w->ntab; i++) {
         WTable* t = &w->tab[i];
         unsigned char pre[8];
@@ -1070,6 +1097,55 @@ static int globals_proj_record(Writer* w, unsigned kind, const unsigned char* b,
     return 1;
 }
 
+/* THE PERSPECTIVE (tagpu_recpov.h): a skirmish's only, outside every bracket. A sample and a
+   selection are taken with the images; a click between two capture points, so after the step's
+   events. The copy keeps each seat's last two samples, dated by their iteration, and its last
+   selection, whose slots lie inside the seat's block as the copy's player image names it -- the
+   capture's own player images come first in an iteration. 1 applied, 0 malformed. */
+static int pov_record(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
+{
+    if (w->mp_in || !w->ticked || w->fbracket || w->ndeaths) return 0;
+    if (kind == RK_POV) {
+        RecPov p;
+        unsigned s;
+        if (len != sizeof p) return 0;
+        memcpy(&p, b, sizeof p);
+        s = p.player;
+        if (s >= REC_PLAYERS || !rec_pov_ok(&p) ||
+            (w->npov[s] && w->pov_tick[s][w->npov[s] - 1] >= w->tick))
+            return 0;
+        if (w->npov[s] == 2) {
+            w->pov[s][0] = w->pov[s][1];
+            w->pov_tick[s][0] = w->pov_tick[s][1];
+            w->npov[s] = 1;
+        }
+        w->pov[s][w->npov[s]] = p;
+        w->pov_tick[s][w->npov[s]] = w->tick;
+        w->npov[s]++;
+    } else if (kind == RK_CLICK) {
+        RecClick c;
+        if (len != sizeof c) return 0;
+        memcpy(&c, b, sizeof c);
+        if (c.player >= REC_PLAYERS || !rec_click_ok(&c)) return 0;
+    } else {
+        RecSel head;
+        unsigned lo, hi;
+        long prev = -1;
+        if (!rec_sel_head(b, len, w->each, &head) || !rec_sel_whole(&head) ||
+            head.player >= REC_PLAYERS)
+            return 0;
+        if (head.count && (!rec_sel_block((const unsigned char*)w->players[head.player],
+                                          w->nslots, &lo, &hi) ||
+                           !rec_sel_entries_ok(b + sizeof head, head.count, lo, hi, &prev)))
+            return 0;
+        memcpy(w->sel[head.player], b + sizeof head, (size_t)head.count * sizeof(RecSelEntry));
+        w->nsel[head.player] = head.count;
+        w->sel_in[head.player] = 1;
+    }
+    buf_rec(&w->stream, kind, b, len, NULL, 0);
+    return 1;
+}
+
 /* 1 applied, 0 malformed */
 static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
 {
@@ -1152,6 +1228,10 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
         w->view[0] = b[0];
         w->view[1] = b[1];
         break;
+    case RK_POV:
+    case RK_CLICK:
+    case RK_SELECT:
+        return pov_record(w, kind, b, len);
     case RK_VERIFY_UNIT: {
         unsigned short live;
         if (len < 4 || !slot_ok(w, id)) return 0;

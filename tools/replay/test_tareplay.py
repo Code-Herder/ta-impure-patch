@@ -532,6 +532,110 @@ class Segments(unittest.TestCase):
 
 
 
+def pov(player=0, cam=(100, 200), zoom=65536, flags=tarec.REC_POV_WORLD, every=3):
+    """A RecPov of a 640 x 480 view with its cursor at the camera."""
+    return tarec.REC_POV.pack(player, every, flags, 0, 640, 480, zoom, *cam, cam[0], 0, cam[1])
+
+
+def selection(player, units):
+    return tarec.REC_SEL.pack(player, tarec.REC_SEL_BEGIN | tarec.REC_SEL_END, len(units), 0,
+                              len(units)) + b"".join(tarec.REC_SEL_ENTRY.pack(*u) for u in units)
+
+
+def block_player(first_id=2, last_id=3):
+    """Player 0's image with its unit block, IDs first_id..last_id (slots one less)."""
+    img = bytearray(tarec.REC_PLAYER_IMAGE)
+    struct.pack_into("<II", img, tarec.PL_BLOCKFIRST, first_id, 0)
+    struct.pack_into("<I", img, tarec.PL_BLOCKLAST, last_id)
+    return tlv(tarec.RK_PLAYER, struct.pack("<HH", 0, 0) + bytes(img))
+
+
+class Perspective(unittest.TestCase):
+    """tarec's perspective records and `pov --check`, on files built from the format alone."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def head(self, fmt=None):
+        h = bytearray(header())
+        # the RK_HEADER block's payload begins after its 32-byte head; RT_FORMAT is its first entry
+        p = bytes(h[32:])
+        p = p.replace(tlv(tarec.RT_FORMAT, struct.pack("<I", tarec.REC_FORMAT)),
+                      tlv(tarec.RT_FORMAT, struct.pack("<I", fmt or tarec.REC_FORMAT)), 1)
+        p += tlv(tarec.RT_UNITS_EACH, struct.pack("<I", 2))
+        return block(tarec.RB_HEADER, 0, 0, p)
+
+    def run_pov(self, *parts):
+        path = Path(self.tmp.name) / "p.imprec"
+        path.write_bytes(tarec.REC_MAGIC + b"".join(parts))
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = tarec.cmd_pov(str(path), True)
+        return code, out.getvalue()
+
+    def good(self, second=None, snap_sel=((1, 0x11),), snap_pov=None):
+        first = pov()
+        second = second or pov(cam=(130, 200))
+        s1 = (tlv(tarec.RK_TICK, struct.pack("<I", 1)) + block_player() +
+              tlv(tarec.RK_MAPPED, struct.pack("<I", 0) + bytes(2)) +
+              tlv(tarec.RK_POV, first) + tlv(tarec.RK_SELECT, selection(0, [(1, 0x11)])) +
+              tlv(tarec.RK_CLICK, tarec.REC_CLICK.pack(0, 0, 1, 2, 2, 0, 4, 100, 0, 200)) +
+              tlv(tarec.RK_TICK, struct.pack("<I", 2)) +
+              tlv(tarec.RK_TICK, struct.pack("<I", 4)) + tlv(tarec.RK_POV, second))
+        snap_pov = snap_pov or [(1, first), (4, second)]
+        snap = (tlv(tarec.RK_TICK, struct.pack("<I", 4)) + block_player() +
+                b"".join(tlv(tarec.RK_POV_AT, struct.pack("<I", t) + b) for t, b in snap_pov) +
+                tlv(tarec.RK_SELECT, selection(0, list(snap_sel))) +
+                tlv(tarec.RK_MAPPED, struct.pack("<I", 0) + bytes(2)))
+        s2 = tlv(tarec.RK_TICK, struct.pack("<I", 5))
+        return (self.head(), block(tarec.RB_STREAM, 1, 4, s1), block(tarec.RB_SNAPSHOT, 4, 4, snap),
+                block(tarec.RB_STREAM, 5, 5, s2), end_block(5))
+
+    def test_well_formed(self):
+        code, out = self.run_pov(*self.good())
+        self.assertEqual(code, 0, out)
+        self.assertIn("2 samples, 1 clicks, 1 selections; 1 snapshots", out)
+        self.assertIn("left click at (100, 0, 200)", out)
+
+    def test_spacing_and_change(self):
+        parts = list(self.good(second=pov()))
+        code, out = self.run_pov(*parts)
+        self.assertEqual(code, 1)
+        self.assertIn("equal to the last one", out)
+        code, out = self.run_pov(*self.good(second=pov(cam=(130, 200), every=4)))
+        self.assertEqual(code, 1)
+        self.assertIn("under its every 4", out)
+
+    def test_snapshot_must_rebuild_the_stream(self):
+        code, out = self.run_pov(*self.good(snap_sel=()))
+        self.assertEqual(code, 1)
+        self.assertIn("player 0's selection: 1 units in the recording, 0 in the snapshot", out)
+        code, out = self.run_pov(*self.good(snap_pov=[(4, pov(cam=(130, 200)))]))
+        self.assertEqual(code, 1)
+        self.assertIn("player 0's samples: recording at GameTime [1, 4], snapshot at [4]", out)
+
+    def test_refusals(self):
+        for bad in (selection(0, [(2, 1), (1, 1)]),          # descending
+                    selection(0, [(3, 1)]),                  # outside the block [1, 2]
+                    selection(0, [(1, 1), (2, 1), (2, 2)]),  # past units_each
+                    pov(zoom=1)):                            # a zoom no level has
+            kind = tarec.RK_POV if len(bad) == tarec.REC_POV.size else tarec.RK_SELECT
+            parts = list(self.good())
+            parts[3] = block(tarec.RB_STREAM, 5, 5, tlv(tarec.RK_TICK, struct.pack("<I", 5)) +
+                             tlv(kind, bad))
+            code, out = self.run_pov(*parts)
+            self.assertEqual(code, 1, out)
+            self.assertIn("unreadable", out)
+        parts = list(self.good())
+        parts[0] = self.head(fmt=tarec.REC_FORMAT_NET_CREATE)
+        code, out = self.run_pov(*parts)
+        self.assertEqual(code, 1)
+        self.assertIn("outside a skirmish file of format 7", out)
+
+
 class TakeoverFixtures(unittest.TestCase):
     """fixtures.json's takeover entries, and the processes they make a fixture run."""
 
