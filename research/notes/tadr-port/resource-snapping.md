@@ -428,7 +428,8 @@ ninth-slot handoff; arbitrary mod callback demand is not proved bounded by ten.
 | ARM, all 81 deposits, phase 1; generated starts inside the border | 67 accepted, all 67 completed by 8303 elapsed ticks; 14 initial refusals; no abandoned or unfinished accepted build |
 | Native eight-slot save → guarded ten-slot load | All eight active records preserved on human and local-AI probes |
 | Guarded ten-slot save/load | All ten active records preserved on both probes; automated preflight also reaches native `cob_save` and `cob_load` on the coverage build |
-| Trace preflights with recording disabled | All ten guarded and eight native active records preserved on human/AI probes; guarded allocator and stack observer reached |
+| Trace preflights with recording disabled | All ten guarded and eight native active records preserved on human/AI probes; both allocator observers and the guarded stack observer reached |
+| Refusal and stock resource replays with trace isolated | All 75 checks pass, including 29 exact paused comparisons, six exact restores and both strict image gates; allocator sink remains counted |
 | Full-pool START / CALL | 16 / 3 assertions pass; refusal retains the documented scheduling behavior |
 | Portable COB regression | 41 tests pass, including high-slot links, old-format bounds and transactional load refusal |
 | Long completed-Moho replay before the keyboard-index exclusion | Ten-slot run: 36 checks pass, including completion, effects, all 14 paused comparisons and three exact restores; only keyboard indices `0x51F48E`/`0x51F492` fail the strict image gate |
