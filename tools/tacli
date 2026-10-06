@@ -5197,6 +5197,11 @@ def cmd_scenario_load(args):
         name=args.name, json=True, force=False, res=res, map=wanted_map,
         vsync=args.vsync,
         unit_limit=limit, player=_scn_player_flags(setup) or None,
+        # the SKIRMISH screen seats main+0x38D81 players (4 by default) and the seat fill walks
+        # that many: a slot past it is no seat. The count reaches the highest slot, never below
+        # the default, as replay play sets it from a recording's seats
+        skirmish_players=(max(4, max(p["slot"] for p in setup["players"]) + 1)
+                          if setup["players"] else None),
         display=args.display, slot=None, sound=None, intro=False, shield=None,
         dplay=None, dplay_port=None, free_dplay_port=False, title=None,
         keep_dll=args.keep_dll, defaults=args.defaults, los=los, mapping=mapping, arg=[],

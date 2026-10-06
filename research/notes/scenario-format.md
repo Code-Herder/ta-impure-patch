@@ -154,14 +154,14 @@ unit names by scanning the live definition table. This design follows its recipe
   of them, so a slot **is** the engine's 0-based `Players[]` index, `0..9`. (Phase A
   bounded it `1..10` and so could not name the human seat a plain launch uses.)
   When `setup.players` is present, an `owner` outside it is an error.
-- **A skirmish seats four players.** MEASURED 2026-09-24: ten named in `setup.players` on Core
-  Prime Industrial Area, a ten-player map, and the engine refused every unit of slots 4–9 as
-  `player slot N is not in this game`. Ten players are a network game (`tools/mp_lobby.sh`).
-  The four is the SKIRMISH screen's seat count `main+0x38D81`, which the seat fill walks (engine
-  map, *Seating a level*): a demo-recorder probe that activated records 4–9 through the engine's
-  own seat activation had the applier accept slots 4, 5 and 9 (MEASURED 2026-09-29,
-  [the puppet host](tadr-port/demo-recorder-state-evidence.md#the-puppet-host-measured)). Nothing
-  shipped does that.
+- **A skirmish seats as many players as the SKIRMISH screen's count** `main+0x38D81`, which the
+  seat fill walks (engine map, *Seating a level*); its default is 4. `scenario load` sets the count
+  (`NumSkirmishPlayers`) to the highest slot in `setup.players` plus one, never below 4, as
+  `replay play` sets it from a recording's seats. MEASURED 2026-10-06: `replay-tenseat-load.json`
+  seats ten players on Core Prime Industrial Area, a ten-player map, each with its commander
+  ("live with 10 units"). Before that (MEASURED 2026-09-24), with the count left at 4, the engine
+  refused every unit of slots 4–9 as `player slot N is not in this game`. The count persists in the
+  instance's registry store.
 - Handles are `[A-Za-z0-9][A-Za-z0-9_.-]{0,31}`. An entity with no `id` gets a synthesized
   one containing `#`, which an author's cannot — so a file that names nothing is still
   reported entity by entity, with no chance of collision. Group members are
