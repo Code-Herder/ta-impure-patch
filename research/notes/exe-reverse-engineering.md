@@ -11477,6 +11477,11 @@ check alone. Every other image bit, fixture and state/order/effect-call/restore 
 its existing policy. Snapshot layouts for these pools remain unimplemented; see
 [recorder completeness](tadr-port/demo-recorder-completeness.html).
 
+The subsequent whole run samples this control at T301: the image gate accepts zero cosmetic
+bytes and also passes without the option. Earlier T451 dumps still fail the default comparator
+and pass only with the approved option. The full 37-fixture gate passes with 11/11 changed
+function/region requirements reached; these outcomes do not fill the pool-layout gap.
+
 **THE ENGINE'S OWN EXPLOSION DRAW EMITS PARTICLES**, which is not what a draw pass is supposed
 to do and is why it is recorded here. `0x420B00`'s debris loop calls `0x421550` at `0x420B18`, and
 that function calls the grey-smoke emitter `0x472810` (`0x421583`) and the fire emitter `0x472AB0`

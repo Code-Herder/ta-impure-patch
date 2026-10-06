@@ -483,8 +483,13 @@ native stock control's unlisted-image check may accept differing bits in the thr
 cosmetic-pool ranges, totalling 41204 address bytes. Every other check remains intact, and
 all 17 resource image gates stay strict. See [recorder completeness](demo-recorder-completeness.html)
 for the bounds, option and outstanding snapshot-layout work. The saved whole-run and focused
-comparisons pass with that option and still fail without it; the new full landing rerun and
-independent reviews remain pending. No passing replay note is claimed yet.
+comparisons pass with that option and still fail without it. The new full landing rerun
+passes all 37 fixtures, 1480 checks, 519 exact paused comparisons and all 37 image gates;
+all 17 resource image gates stay strict. Its native control samples T301 and accepts zero
+cosmetic bytes, also passing the default strict comparator at that checkpoint. The earlier
+T451 gap remains reproduced. Coverage reaches all 11 changed function/region requirements,
+and the passing `replay-roundtrip:` note is on `cfe3771f`; `landing --check` passes.
+Independent landing reviews remain pending.
 
 The null twin now samples camera positions across the map's native scroll extents and selects
 ARMACK and RSNRACK in separate refusal-fixture views. The prior small camera sweep never set the minimap rectangle's

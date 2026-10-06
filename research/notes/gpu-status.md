@@ -20365,8 +20365,12 @@ stock secondary-orders control, reproduced in a fresh worker. Seek clears those 
 record layouts remain unimplemented. The owner approved only this native control's three
 cosmetic-pool ranges as an explicit unlisted-image known gap on 2026-10-06; all other bytes,
 all resource fixtures and ordinary state/order/effect/restore checks retain their policy.
-The saved comparisons pass with the option and still fail without it; the new whole gate
-and reviews remain pending. See the recorder completeness note for the exact bounds. The native
+The saved comparisons pass with the option and still fail without it. The new whole gate
+passes all 37 fixtures, 1480 checks, 519 exact paused comparisons and all 37 image gates,
+with 11/11 changed function/region requirements reached and a passing note on `cfe3771f`.
+Its native control at T301 accepts zero cosmetic bytes and also passes the default strict
+comparator; the earlier T451 gap remains. Independent reviews remain pending.
+See the recorder completeness note for the exact bounds. The native
 trace lever is enabled only during CORE and stock native preflights; recorded lanes keep
 all ordinary sink counters enabled. The stack-peak
 observer belongs only to the guarded interpreter. Wine compatibility on the ten-slot

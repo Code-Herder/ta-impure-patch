@@ -348,6 +348,12 @@ policy tests cover the bounds and fixture/build/command restrictions. Native and
 cosmetic-pool snapshot layouts remain separate work; this exception does not establish that
 pool fullness is irrelevant to simulation.
 
+The subsequent full landing run passes 1480 checks, 519 exact paused comparisons and all
+37 image gates, with coverage reaching all 11 changed function/region requirements. Its
+native control's T301 checkpoint accepts zero cosmetic bytes and also passes the default
+strict comparator. That checkpoint does not erase the earlier reproduced T451 gap. All
+17 resource image gates remain strict. The passing note is on `cfe3771f` (2026-10-06).
+
 ### Events
 
 Events are counted where they start (roots: the creates `0x485F50`/`0x4861D0`, the destructor

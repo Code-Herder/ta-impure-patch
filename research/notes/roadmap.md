@@ -3981,23 +3981,18 @@ The Comet Catcher stress runner checks every installed metal deposit with varied
 bearings and distances. Its CORE run exposed an eight-slot COB exhaustion during the native
 reclaim-to-build handoff; the ten-slot runtime completes every accepted CORE upgrade in that sweep.
 The dedicated CORE replay fixture checks stance, construction progress and completed Moho,
-and requires the last comparison at or after its completion checkpoint. The strict replay
-gate remains open; the CORE completion replay now passes its strict image gate as well
-as completion/paused-state and native save/load checks. Focused native replays pass the
-corrected refusal UI samples, catalogue invalidation and isolated trace coverage. The latest
-whole run completed all 37 live recordings, but disk exhaustion interrupted the remaining
-lanes; the completed rerun has 1448 passing checks, with four native UI-image failures and a
-stock rewind setup failure. The exact additional UI rows are owner-approved and applied; native
-validation passes the corrected scenario seat-count setup. The subsequent whole run has
-1479 passing checks, 519 exact paused comparisons and 36 strict image gates; all 17 resource
-image gates and stock rewind continuity checks pass. The sole failure is the unchanged stock
-secondary-orders control's native cosmetic-pool images after seek, reproduced in a focused
-fresh worker. Seek clears those pools, whose layouts the recorder does not carry. The strict
-gate rerun remains pending. On 2026-10-06 the owner approved a known gap confined to this
-native control's three cosmetic-pool ranges; all 17 resource image gates remain strict and
-ordinary state/order/effect/restore checks are unchanged. The saved comparisons pass with
-the option and still fail without it. Native pool snapshot layouts remain separate work;
-see the recorder completeness note for the exact bounds. No passing note is claimed yet. Wine compatibility
+and requires the last comparison at or after its completion checkpoint. The full replay gate
+passes all 37 fixtures, 1480 checks, 519 exact paused comparisons and all 37 image gates,
+with 11/11 changed function/region requirements reached. All 17 resource image gates remain
+strict, including completed Moho. Native save/load and stock rewind continuity/AI checks pass.
+The passing note is on `cfe3771f`; independent landing reviews remain pending.
+
+On 2026-10-06 the owner approved a known gap confined to the native stock secondary-orders
+control's three cosmetic-pool ranges. Its new T301 checkpoint accepts zero cosmetic bytes
+and also passes the default strict comparator. Earlier T451 dumps still fail the default
+comparator and pass with the approved option. Ordinary state/order/effect/restore checks are
+unchanged. Native pool snapshot layouts remain separate work; see the recorder completeness
+note for the exact bounds. Wine compatibility
 has 18 expected setup outcomes, one known inactive gap and zero unexpected outcomes across
 19 setups; all 15 network cases pass. Windows was not run.
 See [resource snapping](tadr-port/resource-snapping.html) for the contracts and verification table.
