@@ -713,7 +713,9 @@ and strict image gate. Its native save/load preflight preserves all ten active s
 on both probes and reaches `cob_save` and `cob_load`. The whole landing gate still
 fails the separate refusal fixture's UI samples, one stale catalogue and trace reach.
 `resource-core-upgrade` and `stock-resource-mex` enable the existing COB trace lever
-to exercise allocator observation in both builds. The stack-peak observer is compiled
+only in unrecorded native save/load preflights, then restore it before L. Their coverage
+exercises allocator observation in both builds without displacing its recorder counter.
+The stack-peak observer is compiled
 only with the guarded interpreter, its sole caller; a native 32-word record cannot
 exceed the depth threshold. See the resource page for the remaining gate results.
 

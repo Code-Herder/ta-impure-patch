@@ -271,8 +271,7 @@
     "run": [
      "tools/resource_upgrade_stress.py",
      "supply",
-     "{gamedir}",
-     "--cob-trace"
+     "{gamedir}"
     ],
     "files": [
      "resource-stress.ufo",
@@ -285,10 +284,12 @@
     "--preflight",
     "{instance}",
     "--gamedir",
-    "{gamedir}"
+    "{gamedir}",
+    "--trace"
    ]
   },
   "stock-resource-mex": {
+   "preflight": ["tools/cob_legacy_save_probe.py", "--preflight", "{instance}", "--gamedir", "{gamedir}", "--native-stock", "--trace"],
    "load": "resource-snapping.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
@@ -310,7 +311,8 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tools/cob_legacy_save_probe.py"
    ],
    "steps": [
     [
@@ -328,8 +330,7 @@
    "content": {
     "run": [
      "tools/resource_fixture.py",
-     "{gamedir}",
-     "--cob-trace"
+     "{gamedir}"
     ],
     "files": [
      "resource-test.ufo",

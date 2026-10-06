@@ -98,7 +98,7 @@ def record_state(read, words, indices=None):
     return result
 
 
-def preflight(name, gamedir):
+def preflight(name, gamedir, native_stock=False, trace=False):
     """Exercise the native loader on the replay worker's exact build before recording."""
     api = runpy.run_path(str(compat.TACLI), run_name='cob_save_preflight')
     inst = api['Instance'](name)
@@ -106,6 +106,9 @@ def preflight(name, gamedir):
         raise RuntimeError('save preflight game folder differs from its instance')
     recorder = gamedir / 'tagpu_recorder.on'
     previous = recorder.read_bytes() if recorder.exists() else None
+    trace_lever = gamedir / 'tagpu_cobtrace.on'
+    previous_trace = trace_lever.read_bytes() if trace_lever.exists() else None
+    slots, words = (8, 32) if native_stock else (probe.COB_THREADS, 128)
     archive = gamedir / 'cob-old-probe.ufo'
     if archive.exists():
         raise RuntimeError('save preflight would replace existing probe content')
@@ -115,7 +118,9 @@ def preflight(name, gamedir):
     try:
         c.call('stop')
         recorder.unlink(missing_ok=True)
-        fixture(gamedir, probe.COB_THREADS)
+        if trace:
+            trace_lever.write_text(TYPE)
+        fixture(gamedir, slots)
         c.call('launch', '--defaults', '--keep-dll')
         c.until(lambda: c.call('ui', '--json')['gui'] == 'MAINMENU.GUI',
                 'save preflight did not reach the main menu', seconds=30)
@@ -140,9 +145,9 @@ def preflight(name, gamedir):
                 return b''.join(bytes.fromhex(p['value']) for p in
                                 c.call('peek', *specs, '--json')['peeks'])
             indices = [u['engine_index'] for u in applied['units'].values()]
-            return record_state(read, 128, indices)
+            return record_state(read, words, indices)
         before = snapshot()
-        if any(len(rows) != probe.COB_THREADS for rows in before.values()):
+        if any(len(rows) != slots for rows in before.values()):
             raise RuntimeError('save preflight did not fill every script record')
         print('COB native save preflight: full active pool observed', flush=True)
         probe.open_options(name)
@@ -173,13 +178,17 @@ def preflight(name, gamedir):
         pending.replace(trigger)
         c.until(lambda: target.exists() or 'cover: resource-save refused: not a coverage build'
                 in talog.run_text(gamedir), 'native save coverage request was not acknowledged')
-        print(f'COB native save preflight: all {probe.COB_THREADS} active slots preserved '
+        print(f'COB native save preflight: all {slots} active slots preserved '
               'on human and AI probes', flush=True)
     finally:
         try:
             c.call('stop')
         finally:
             archive.unlink(missing_ok=True)
+            if previous_trace is None:
+                trace_lever.unlink(missing_ok=True)
+            else:
+                trace_lever.write_bytes(previous_trace)
             if previous is None:
                 recorder.unlink(missing_ok=True)
             else:
@@ -329,6 +338,8 @@ def main():
     parser.add_argument('--out', type=Path)
     parser.add_argument('--preflight', metavar='INSTANCE')
     parser.add_argument('--gamedir', type=Path)
+    parser.add_argument('--native-stock', action='store_true', help='preflight the native eight-slot, 32-word build')
+    parser.add_argument('--trace', action='store_true', help='enable COB trace only during the unrecorded preflight')
     parser.add_argument('--dll', type=Path, default=compat.TREE / 'tagpu/ddraw/ddraw.dll')
     parser.add_argument('--stock', type=Path, default=compat.TREE / 'tagpu/ddraw/ddraw-stocklimits.dll')
     parser.add_argument('--load-limit', type=int, help='override only the loading executable configuration')
@@ -338,10 +349,12 @@ def main():
     if args.preflight:
         if not args.gamedir or args.out:
             parser.error('--preflight requires --gamedir and does not use --out')
-        preflight(args.preflight, args.gamedir)
+        preflight(args.preflight, args.gamedir, args.native_stock, args.trace)
         return 0
     if not args.out:
         parser.error('--out is required without --preflight')
+    if args.native_stock or args.trace:
+        parser.error('--native-stock and --trace require --preflight')
     out = args.out.resolve()
     if any(out == root or root in out.parents for root in (compat.TREE, compat.main_checkout())):
         parser.error('output must be outside the repository')

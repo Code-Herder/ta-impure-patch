@@ -15451,11 +15451,20 @@ replay supplies"; the rules above are what it had to get right to produce the re
 | `0x4B1A99` | `C7 01 00 00 00 00` | SIGNAL's kill, resuming at `0x4B1A9F` (the sixth stolen byte is NOPped): `ecx` the record, `ebx` its slot, `[esp+0x34]` the signaller |
 | `0x4B15E0` | `E8 4B 56 00 00` | the RNG call, redirected: the stub calls `0x4B6C30` itself and logs `lo + result` (`ebx` = lo, `ebp` = slot) |
 
-Reads only: the tick `main+0x38A47`, the in-game index `unit+0xA8` (`i16`), the def name
-`def+0x20`, and the record/file fields above. All five run on the game thread — the only
-thread the engine calls the VM from — so the log needs no lock. Not traced: the engine's
+Reads only: the tick `main+0x38A47`, the in-game index `unit+0xA8` (`u16`), the def name
+`def+0x20`, and the record/file fields above. Loader queries and in-play events use separate
+TLS latches. The trace lock orders deferred reads against the two native COB destructor
+entries: the destructor invalidates every matching latch before freeing the object.
+Not traced: the engine's
 asks for a script the unit lacks (only `-1` reaches the allocator, the name is gone by then),
 and which engine function issued an `E` start (its return address is two frames up).
+
+The allocator entry is also the recorder's counted COB sink. Both observers require its
+pristine five bytes; with trace installed first, the recorder reports that the sink holds
+other bytes and leaves its counts out. MEASURED on the stock resource fixture: `images-gate`
+and carried-state comparisons run, but `compare-counts` refuses the missing allocator
+counter. Trace coverage belongs in an unrecorded preflight, with its lever restored before
+the ordinary recording/playback lanes. No counter is excluded to accommodate tracing.
 
 **Three call sites read for the trace's sake** (the strings are the engine's own, in `.data`):
 `0x4865C3` (`Send_UnitDeath+0x113`) is **`QueryScript(cob, "Killed" @0x508BE8, &severity,
@@ -16549,13 +16558,13 @@ The resource-refusals null twin selects ARMACK through native input and requires
 type before a thirteenth dump; that dump's carried simulation must still equal the paused base.
 
 `main+0x142CB..+0x142DA` holds four signed dwords for the minimap camera rectangle.
-`0x41C3C0` clamps eye `+0x1431F/+0x14323` against world dimensions `+0x1422B/+0x1422F`
+`0x41C3C0` clamps eye `+0x1431F/+0x14323` against native scroll extents `+0x1422B/+0x1422F`
 minus viewport dimensions `+0x37E37/+0x37E3B`, then passes `main+0x142CB` to
 `0x466B70` at `0x41C426`/`0x41C442`. The indirect stores are `0x466B99` (left),
 `0x466BBF` (top), `0x466BE6` (right) and `0x466C0F` (bottom). Left/top use signed
 minimap origin `+0x142E7/+0x142E9` plus minimap dimensions `+0x142EB/+0x142ED`
-times the eye divided by the world dimensions. Right/bottom add those minimap dimensions
-times view cell dimensions `+0x1423B/+0x1423F` times 16 divided by world dimensions,
+times the eye divided by those extents. Right/bottom add those minimap dimensions
+times view cell dimensions `+0x1423B/+0x1423F` times 16 divided by those extents,
 then subtract one. The rectangle is passed to `0x4BF8C0` at `0x466B5E` after
 the minimap image copy through `0x4C6B70` at `0x466B44`. DISASSEMBLED.
 
@@ -16564,7 +16573,7 @@ displayed type 4; T1711 and paused base T1759 rectangle `(32,20,45,30)` and type
 P/R/Q at T691 held `(12,0,25,10)` and type 0. The small paused camera sweep reached
 right coordinates only 25..50, never setting the differing bit 6 at `main+0x142D3`;
 paused RSNRACK selection displayed 280 (`0x118`), never setting ARMACK's bit 2.
-The null twin now spans the map's world dimensions and samples ARMACK and RSNRACK selection,
+The null twin now spans the map's native scroll extents and samples ARMACK and RSNRACK selection,
 while preserving the exact paused-simulation check and existing comparison list.
 
 

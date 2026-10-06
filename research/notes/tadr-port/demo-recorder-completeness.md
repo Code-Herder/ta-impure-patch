@@ -680,6 +680,12 @@ a private unit because the previous fixture did not supply it. The sequential st
 then wpn-badtgt regression on one worker passes all 84 replay checks, including 28 exact paused
 comparisons and both strict image gates.
 
+The native COB trace and the recorder's allocator counter both require the pristine
+`0x4B08C0` entry. Enabling trace for a recorded lane prevents that counter from installing,
+and the count gate rejects it as not counted. Resource preflights therefore exercise trace
+with the recorder disabled, save their coverage bitmap, stop the native game, and restore
+the trace lever before L. Playback, restoration and seek use the ordinary counter setup.
+
 ## Open items
 
 For the skirmish slice:

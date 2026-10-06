@@ -428,6 +428,7 @@ ninth-slot handoff; arbitrary mod callback demand is not proved bounded by ten.
 | ARM, all 81 deposits, phase 1; generated starts inside the border | 67 accepted, all 67 completed by 8303 elapsed ticks; 14 initial refusals; no abandoned or unfinished accepted build |
 | Native eight-slot save → guarded ten-slot load | All eight active records preserved on human and local-AI probes |
 | Guarded ten-slot save/load | All ten active records preserved on both probes; automated preflight also reaches native `cob_save` and `cob_load` on the coverage build |
+| Trace preflights with recording disabled | All ten guarded and eight native active records preserved on human/AI probes; guarded allocator and stack observer reached |
 | Full-pool START / CALL | 16 / 3 assertions pass; refusal retains the documented scheduling behavior |
 | Portable COB regression | 41 tests pass, including high-slot links, old-format bounds and transactional load refusal |
 | Long completed-Moho replay before the keyboard-index exclusion | Ten-slot run: 36 checks pass, including completion, effects, all 14 paused comparisons and three exact restores; only keyboard indices `0x51F48E`/`0x51F492` fail the strict image gate |
@@ -447,10 +448,12 @@ checks, 504 exact paused comparisons and 35 passing strict image gates. The refu
 image gate still identifies the minimap camera rectangle and displayed-unit type; the weapon
 fixture could not start because its worker retained an older unit catalogue. A sequential
 stock-resource-mex → wpn-badtgt run with content-boundary catalogue invalidation passes all
-84 checks, including both image gates. The trace allocator and guarded stack observer still
-need fixture coverage. The final combined landing gate remains outstanding.
+84 checks, including both image gates. Trace preflights preserve all ten guarded and eight
+native active slots on human and AI probes; guarded coverage reaches the allocator and stack
+observer. Trace is removed before recording, because its allocator hook displaces the ordinary
+sink counter. The final combined landing gate remains outstanding.
 
-The null twin now samples camera positions across the map's world dimensions and selects
+The null twin now samples camera positions across the map's native scroll extents and selects
 ARMACK and RSNRACK in separate refusal-fixture views. The prior small camera sweep never set the minimap rectangle's
 right-coordinate bit 6, and selecting RSNRACK (type 280) never set displayed-type bit 2;
 ARMACK is type 4. These are native paused input samples, not new exclusions. See the engine

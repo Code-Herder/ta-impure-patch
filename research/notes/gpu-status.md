@@ -20358,7 +20358,8 @@ all 14 paused comparisons and its construction/effect/restore checks. After the 
 two four-byte keyboard-index leave rows, that fixture's strict image gate also passes
 in the combined run. The whole landing gate still needs the refusal fixture's native
 camera/selection samples, worker catalogue invalidation and trace reach. The native
-trace lever is enabled by CORE and stock resource fixture content; the stack-peak
+trace lever is enabled only during CORE and stock native preflights; recorded lanes keep
+all ordinary sink counters enabled. The stack-peak
 observer belongs only to the guarded interpreter. Wine compatibility on the ten-slot
 DLL passes all 19 expected setup outcomes (one documented inactive gap) and all 15
 network cases. Windows was not run for this change.
