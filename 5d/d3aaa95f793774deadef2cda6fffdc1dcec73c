@@ -1,0 +1,2 @@
+owner-approval: date=2026-10-05 scope=workspace-temp-cleanup-and-one-further-full-replay-gate
+The owner explicitly said to clean temporary folders for this workspace and rerun after the ENOSPC interruption. The further full gate grades 5dd3aaa9 without --keep. Cleanup preserves failure evidence, text summaries/logs and coverage, excludes the report still reading its dumps, and touches only this tasks known temporary run directories. No comparison, state class or exception is changed.
