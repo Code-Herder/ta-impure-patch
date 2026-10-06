@@ -331,6 +331,7 @@ def main():
     prep.add_argument("--sides", choices=("mixed", "arm", "core"), default="mixed")
     content = sub.add_parser("supply")
     content.add_argument("gamedir", type=Path)
+    content.add_argument("--cob-trace", action="store_true")
     core = sub.add_parser("check-core")
     core.add_argument("name")
     finish = sub.add_parser("finish-core")
@@ -349,6 +350,8 @@ def main():
         prepare(a.gamedir, a.scenario, a.phase, a.sides)
     elif a.command == "supply":
         supply(a.gamedir)
+        if a.cob_trace:
+            (a.gamedir / "tagpu_cobtrace.on").write_text("CORACK,CORMEX,CORMOHO")
     elif a.command == "check-core":
         check_core(a.name)
     elif a.command == "finish-core":

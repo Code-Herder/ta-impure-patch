@@ -3982,8 +3982,10 @@ bearings and distances. Its CORE run exposed an eight-slot COB exhaustion during
 reclaim-to-build handoff; the ten-slot runtime completes every accepted CORE upgrade in that sweep.
 The dedicated CORE replay fixture checks stance, construction progress and completed Moho,
 and requires the last comparison at or after its completion checkpoint. The strict replay
-gate remains open; completion/paused-state results, native save/load coverage and the
-remaining keyboard-index image failure are recorded on the resource page.
+gate remains open; the CORE completion replay now passes its strict image gate as well
+as completion/paused-state and native save/load checks. The whole tier still needs native
+refusal UI samples, content-boundary catalogue invalidation and trace coverage. Wine
+compatibility passes all 19 expected setup outcomes and 15 network cases; Windows was not run.
 See [resource snapping](tadr-port/resource-snapping.html) for the contracts and verification table.
 
 Still open: multiplayer feature-policy parity chat warnings, future mod activation/download,

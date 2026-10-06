@@ -358,6 +358,9 @@ class Worker:
         for other in fixtures().values():
             for name in (other.get("content") or {}).get("files", []):
                 (self.gamedir / name).unlink(missing_ok=True)
+        # A cached catalogue belongs to the previous fixture's installed
+        # content. The next launch must resolve its units against its own game.
+        _CLI_API._cat_path(_CLI_API.Instance(self.name)).unlink(missing_ok=True)
         content = fix.get("content")
         if content:
             argv = [a.replace("{gamedir}", str(self.gamedir)) for a in content["run"]]
@@ -599,6 +602,11 @@ def twin(w, log, fix):
     if not labels:
         raise CouldNotRun("the twin: Impure options has no inert labels to sample")
     width, height = gui["surface"]
+    rc, o = tacli("peek", w.name, "*0x511DE8+0x1422b", "*0x511DE8+0x1422f",
+                  "--json", timeout=60)
+    if rc:
+        raise CouldNotRun(f"the twin: map dimensions: {last(o)}")
+    map_width, map_height = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
     points = ((0, 0), ((1 << (width.bit_length() - 1)) - 1,
                        (1 << (height.bit_length() - 1)) - 1), (width - 1, height - 1))
     for i, name in enumerate(NULL_VIEWS[:-1]):
@@ -622,7 +630,8 @@ def twin(w, log, fix):
             nap(0.1)
         # The engine clamps these eyes to the map. The views are observations,
         # not assertions about the camera's permitted range.
-        tacli("eye", w.name, i * 137, i * 193)
+        tacli("eye", w.name, i * map_width // (len(NULL_VIEWS) - 2),
+              i * map_height // (len(NULL_VIEWS) - 2))
         n = len(log.lines)
         w.trigger(f"dump {name} now")
         if not log.wait(rf"recorder: frame dump {name} at GameTime", 30, n):

@@ -16545,8 +16545,27 @@ explicitly. The full landing tier remains the runtime gate for the resulting lis
 `0x41B1BC` copy unit `+0xA6`; the no-unit branch zeros it at `0x41B1E1`. The adjacent word
 `main+0x37E9C` receives unit `+0xA8` at `0x41B0BE`/`0x41B1A8`. MEASURED: native selection of
 ARMACK changes the type to 4 at paused GameTime 1722, which remains 1722 after selection.
-The resource-refusals null twin selects RSNRACK through native input and requires its displayed
+The resource-refusals null twin selects ARMACK through native input and requires its displayed
 type before a thirteenth dump; that dump's carried simulation must still equal the paused base.
+
+`main+0x142CB..+0x142DA` holds four signed dwords for the minimap camera rectangle.
+`0x41C3C0` clamps eye `+0x1431F/+0x14323` against world dimensions `+0x1422B/+0x1422F`
+minus viewport dimensions `+0x37E37/+0x37E3B`, then passes `main+0x142CB` to
+`0x466B70` at `0x41C426`/`0x41C442`. The indirect stores are `0x466B99` (left),
+`0x466BBF` (top), `0x466BE6` (right) and `0x466C0F` (bottom). Left/top use signed
+minimap origin `+0x142E7/+0x142E9` plus minimap dimensions `+0x142EB/+0x142ED`
+times the eye divided by the world dimensions. Right/bottom add those minimap dimensions
+times view cell dimensions `+0x1423B/+0x1423F` times 16 divided by world dimensions,
+then subtract one. The rectangle is passed to `0x4BF8C0` at `0x466B5E` after
+the minimap image copy through `0x4C6B70` at `0x466B44`. DISASSEMBLED.
+
+MEASURED combined ten-slot resource-refusals: T691 rectangle `(53,22,66,32)` and
+displayed type 4; T1711 and paused base T1759 rectangle `(32,20,45,30)` and type 0.
+P/R/Q at T691 held `(12,0,25,10)` and type 0. The small paused camera sweep reached
+right coordinates only 25..50, never setting the differing bit 6 at `main+0x142D3`;
+paused RSNRACK selection displayed 280 (`0x118`), never setting ARMACK's bit 2.
+The null twin now spans the map's world dimensions and samples ARMACK selection,
+while preserving the exact paused-simulation check and existing comparison list.
 
 
 The native Stop-button callback plays a UI sound at `0x41A0F1`, returning to `0x41A0F6`,

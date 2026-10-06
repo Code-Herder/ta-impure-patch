@@ -271,11 +271,13 @@
     "run": [
      "tools/resource_upgrade_stress.py",
      "supply",
-     "{gamedir}"
+     "{gamedir}",
+     "--cob-trace"
     ],
     "files": [
      "resource-stress.ufo",
-     "cob-old-probe.ufo"
+     "cob-old-probe.ufo",
+     "tagpu_cobtrace.on"
     ]
    },
    "preflight": [
@@ -326,12 +328,14 @@
    "content": {
     "run": [
      "tools/resource_fixture.py",
-     "{gamedir}"
+     "{gamedir}",
+     "--cob-trace"
     ],
     "files": [
      "resource-test.ufo",
      "profiles/retail.ini",
-     "profiles/retail@76332e31.ini"
+     "profiles/retail@76332e31.ini",
+     "tagpu_cobtrace.on"
     ]
    }
   },

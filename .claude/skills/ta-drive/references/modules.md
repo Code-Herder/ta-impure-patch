@@ -637,8 +637,11 @@ block that reads to its last complete block.
   wheel, the cursor and the in-game menu moved, two endpoints and thirteen intermediate
   views). Each view requires unchanged GameTime and exact carried-simulation equality.
   Mouse samples follow a GUI-consumed click with an explicit move and require its native
-  x/y/message echo; the resource-refusals selection view selects RSNRACK and requires its
-  displayed type. A fixture with `"watch": true`
+  x/y/message echo. Camera samples span the map's world dimensions, including native
+  clamping at the far edge; the resource-refusals selection view selects ARMACK and requires
+  its displayed type. Every owned worker removes its cached `catalogue.json` when it
+  replaces fixture content, so scenario validation never uses a previous fixture's units.
+  A fixture with `"watch": true`
   runs a fifth process, W: the playing started from REPLAYS and Watch as a player starts it, two
   edited copies refused, then the dock's speed, the Options' OK, pause, the dock's seek, the
   player cards' Sight and Full map (clock and camera unchanged), its dump
@@ -819,6 +822,10 @@ worker's held DLL. Paused game-thread peeks compare active records; the engine
 writes `cover-resource-save.bin` on coverage builds. The recorder is disabled
 through the preflight and restored before L starts.
 Run `tools/replay/tareplay.py run resource-core-upgrade --cover` for the focused check.
+That fixture and `stock-resource-mex` enable the native COB trace through their private
+content commands and remove its lever before other fixtures. They exercise the changed
+allocator observer on ten guarded slots and eight native slots; stack-peak observation
+belongs only to the guarded interpreter.
 
 The guarded COB runtime has ten 128-word slots; the stock-limits build has eight native
 32-word slots. `cob_getter_probe.py --thread-exhaustion start|call` fills the guarded pool

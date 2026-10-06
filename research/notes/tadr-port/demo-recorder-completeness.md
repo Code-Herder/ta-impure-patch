@@ -674,6 +674,12 @@ Resource fixtures may name a `preflight` command before the live recording: nati
 Undo assertions or an engine catalogue refresh for changed private test content. Its failure
 fails the fixture; the match is then recorded and checked through the usual L/P/R/Q lanes.
 
+An owned replay worker invalidates its cached engine catalogue whenever it replaces fixture
+content. The next scenario therefore validates against its own launch, rather than rejecting
+a private unit because the previous fixture did not supply it. The sequential stock-resource-mex
+then wpn-badtgt regression on one worker passes all 84 replay checks, including 28 exact paused
+comparisons and both strict image gates.
+
 ## Open items
 
 For the skirmish slice:

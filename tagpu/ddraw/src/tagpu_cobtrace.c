@@ -59,7 +59,7 @@
 #include "tagpu_simreg.h"
 #include "tagpu_cob_safe.h"
 
-SIM_FEATURE(cob_trace, SIM_PUPPET_INDEPENDENT, "battle");
+SIM_FEATURE(cob_trace, SIM_PUPPET_INDEPENDENT, "battle resource-core-upgrade stock-resource-mex");
 
 #define TA_MAINPP   0x00511DE8u
 #define OFF_TICK    0x38A47
@@ -343,6 +343,9 @@ static int __stdcall my_alloc(char* cob, int idx, unsigned ret, char* vm_rec, in
     return slot;
 }
 
+#ifndef TAGPU_LIMITS_STOCK
+/* Only the guarded interpreter calls this observer. Native 32-word records
+   cannot exceed the stack depth it reports. */
 void tagpu_cobtrace_step(char* cob, unsigned slot)
 {
     char line[512];
@@ -367,6 +370,7 @@ void tagpu_cobtrace_step(char* cob, unsigned slot)
     }
     LeaveCriticalSection(&s_lock);
 }
+#endif
 
 /* the thread runner's entry: the latched thread is about to take its first step */
 static void __stdcall my_run(char* cob, int slot, int dt)

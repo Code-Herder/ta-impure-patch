@@ -705,15 +705,18 @@ recorded in [the resource regression](resource-snapping.md#verification-limits).
 Arbitrary supported-mod callback demand remains unproved bounded by ten.
 
 The dedicated `resource-core-upgrade` replay fixture asserts real contextual input,
-native stance, stock Moho progress and completion. Its long diagnostic run preserved
-unit/player state, effect counts and all three restore round trips, but failed the
-paused-twin cache comparison and two keyboard-ring image bytes. This is a failed
-replay gate, not grounds for claiming completion. An uncached paused ghost preview
-uses local storage so a first hover cannot mutate recorded state at a frozen tick;
-puppet previews also leave the recording the only writer. The ten-slot rerun passes
-all 14 paused comparisons and the completion/effect/restore checks; the strict image
-gate still names the two keyboard indices. The final puppet guard and native
-save/load preflight require a combined coverage run. The preflight separately
-preserves all ten active slots on both probes and its coverage reaches `cob_save`
-and `cob_load`. The owner approved exactly the two four-byte keyboard-index exclusions on
-2026-10-05; the combined landing replay gate remains outstanding.
+native stance, stock Moho progress and completion. Uncached native-paused and puppet
+ghost previews use local storage, leaving the recording the only writer. With the
+two owner-approved four-byte keyboard-index leave rows, the combined ten-slot run
+passes this fixture's construction, effects, all 14 paused comparisons, three restores
+and strict image gate. Its native save/load preflight preserves all ten active slots
+on both probes and reaches `cob_save` and `cob_load`. The whole landing gate still
+fails the separate refusal fixture's UI samples, one stale catalogue and trace reach.
+`resource-core-upgrade` and `stock-resource-mex` enable the existing COB trace lever
+to exercise allocator observation in both builds. The stack-peak observer is compiled
+only with the guarded interpreter, its sole caller; a native 32-word record cannot
+exceed the depth threshold. See the resource page for the remaining gate results.
+
+The ten-slot DLL's completed Wine suite has 18 expected active setups, one documented
+gammata inactive gap, zero unexpected results across 19 setups and all 15 two-peer
+matches passing. Windows was not run for this change.

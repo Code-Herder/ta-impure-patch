@@ -492,9 +492,9 @@ def viewer(c):
     tick, paused = c.values("*0x511DE8+0x38a47", "*0x511DE8+0x38a51:2")
     assert paused & 1, "viewer probe requires the world paused"
     types = {t["name"].upper(): t["id"] for t in c.call("units", "--json")["units"]}
-    c.select("RSNRACK")
-    c.until(lambda: c.values("*0x511DE8+0x37e9e:2")[0] == types["RSNRACK"],
-            "native selection did not display the refusal constructor's type")
+    c.select("ARMACK")
+    c.until(lambda: c.values("*0x511DE8+0x37e9e:2")[0] == types["ARMACK"],
+            "native selection did not display the advanced constructor's type")
     assert c.values("*0x511DE8+0x38a47")[0] == tick, "viewer selection advanced the simulation"
     print("resource viewer: paused native selection updated the displayed unit type")
 

@@ -20354,10 +20354,14 @@ so hover cannot mutate carried state at a frozen tick. Puppet cache misses also 
 storage, leaving the recording the only writer. No state class or comparison is loosened.
 The native save/load preflight preserves all ten active records on human and AI probes;
 its coverage reaches both `cob_save` and `cob_load`. The ten-slot completion replay passes
-all 14 paused comparisons and its construction/effect/restore checks, with only the
-two keyboard indices failing the strict image gate. The final combined replay gate
-is still open. The owner approved both four-byte keyboard-ring index leave rows
-on 2026-10-05; their stores and local input ownership are recorded in the engine map.
+all 14 paused comparisons and its construction/effect/restore checks. After the owner's
+two four-byte keyboard-index leave rows, that fixture's strict image gate also passes
+in the combined run. The whole landing gate still needs the refusal fixture's native
+camera/selection samples, worker catalogue invalidation and trace reach. The native
+trace lever is enabled by CORE and stock resource fixture content; the stack-peak
+observer belongs only to the guarded interpreter. Wine compatibility on the ten-slot
+DLL passes all 19 expected setup outcomes (one documented inactive gap) and all 15
+network cases. Windows was not run for this change.
 
 **GUI first-arm ordering.** `tagpu_gui_mirror_want` requests a producer reset on its rising edge.
 The render-thread mirror withholds operations and publication until its drain records that

@@ -442,8 +442,24 @@ corrects the generated test start rather than changing the native pathfinder or 
 The owner approved two four-byte keyboard-ring index leave rows on 2026-10-05,
 `0x51F48E` and `0x51F492`, keeping those local input indices with the viewer.
 Builds, upgrades, unit/player state and effects retain their existing comparisons.
-The final combined landing replay gate remains outstanding; the table above records
-the completed focused run before that approved exclusion.
+The combined ten-slot run after that approval completes 36 live fixtures, with 1431 passing
+checks, 504 exact paused comparisons and 35 passing strict image gates. The refusal fixture's
+image gate still identifies the minimap camera rectangle and displayed-unit type; the weapon
+fixture could not start because its worker retained an older unit catalogue. A sequential
+stock-resource-mex → wpn-badtgt run with content-boundary catalogue invalidation passes all
+84 checks, including both image gates. The trace allocator and guarded stack observer still
+need fixture coverage. The final combined landing gate remains outstanding.
+
+The null twin now samples camera positions across the map's world dimensions and selects
+ARMACK in the refusal fixture. The prior small camera sweep never set the minimap rectangle's
+right-coordinate bit 6, and selecting RSNRACK (type 280) never set displayed-type bit 2;
+ARMACK is type 4. These are native paused input samples, not new exclusions. See the engine
+map for the indirect rectangle writer and measured values.
+
+The ten-slot DLL's Wine compatibility run has 18 expected active setups, one documented
+gammata inactive gap and zero unexpected outcomes across 19 setups; all 15 two-peer matches
+pass. Windows was not run for this change. Compatibility does not validate every mod's mex
+or geothermal menu.
 
 The synthetic fixtures cover the behavior listed above; live inspection additionally verifies
 the resource settings panel, queued resource ghost, frontend hot reload/error recovery and

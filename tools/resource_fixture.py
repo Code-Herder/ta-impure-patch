@@ -59,7 +59,10 @@ def main():
     p.add_argument("--nearby-vents", action="store_true")
     p.add_argument("--no-zoom", action="store_true")
     p.add_argument("--refusals", action="store_true")
+    p.add_argument("--cob-trace", action="store_true")
     a = p.parse_args()
+    if a.cob_trace:
+        (a.gamedir / "tagpu_cobtrace.on").write_text("ARMCK,CORCK,ARMACK")
     if a.no_zoom:
         (a.gamedir / "tagpu_zoom.off").touch()
     tree = {}
