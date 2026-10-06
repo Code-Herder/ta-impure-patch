@@ -5322,12 +5322,15 @@ def _replay_start(args, verb, tail=""):
     except (OSError, tarec.Unreadable) as e:
         die(f"{args.recording}: {e}")
     seats = sorted(h["players"], key=lambda p: p["index"])
-    if h.get("mode") != 2:
-        die(f"{args.recording} is not a skirmish's (mode {h.get('mode')})")
+    network = h.get("mode") == 3
+    if h.get("mode") != 2 and not network:
+        die(f"{args.recording} is neither a skirmish's nor a multiplayer game's "
+            f"(mode {h.get('mode')})")
     if not 2 <= len(seats) <= REPLAY_SEATS_MAX:
         die(f"{args.recording} seats {len(seats)} players: a replay plays 2 to "
             f"{REPLAY_SEATS_MAX}, since the viewer takes a record of its own")
-    if any(p["controller"] not in (1, 2) for p in seats):
+    # a multiplayer recorder holds every remote player, human or AI, as 3 (validate_header)
+    if any(p["controller"] not in ((1, 2, 3) if network else (1, 2)) for p in seats):
         die(f"{args.recording} has a seat that was neither human nor AI")
     smap = h.get("settings_map")
     if not smap:
@@ -5345,10 +5348,14 @@ def _replay_start(args, verb, tail=""):
     # as off, so the stock seat fill activates exactly the recorded seats
     count = seats[-1]["index"] + 1
     by = {p["index"]: p for p in seats}
-    players = [f"{i}:{by[i]['controller']}:{by[i]['side']}:{by[i]['logo']}" if i in by
-               else f"{i}:0" for i in range(count)]
+    # the skirmish menu knows human and AI only: a remote seat is filled as an AI, and the DLL
+    # seats every recorded player as a puppet whatever the fill made it
+    players = [f"{i}:{1 if by[i]['controller'] == 1 else 2}:{by[i]['side']}:{by[i]['logo']}"
+               if i in by else f"{i}:0" for i in range(count)]
     launched = _launch(argparse.Namespace(
         name=args.name, json=True, force=False, res=tuple(args.res) if args.res else None,
+        # no UnitLimit: options_exchange (tagpu_replay.c) writes the recording's units-each before
+        # the Start, and a limit given here would stay the instance's for every later launch
         map=smap, vsync=args.vsync, unit_limit=None, player=players,
         skirmish_players=count, display=args.display, slot=None, sound=None, intro=False,
         shield=None, dplay=None, dplay_port=None, free_dplay_port=False, title=None,

@@ -1794,7 +1794,7 @@ loader is `0x466050`.
 | `+0x140`/`+0x144` | units created, alive | the creates, the destructor | "out" = none alive of some created |
 | `+0x146` | own index, 10 when free | ctor, reset, activation, the lobby's renumbering | copied into unit `+0xFF` |
 | `+0x147` | start position | activation, `0x45517B`, `0x456C96` | the network level setup |
-| `+0x148` | scoreboard rank | activation, the destructor; the scoreboard `0x4948E0` (`0x494E27`), whose one caller is DrawGameScreen (`0x469F65`), compacts the ranks while the scoreboard is shown (`[0x51F2D8]` > 0, `0x494986`) | the destructor's lead message (`0x486B2D..0x486C17`) |
+| `+0x148` | scoreboard rank | activation, the destructor; the scoreboard `0x4948E0` (`0x494E27`), whose one caller is DrawGameScreen (`0x469F65`), compacts the ranks while the scoreboard is shown (`[0x51F2D8]` > 0, `0x494986`). In a network or mode-2 game (`0x435100` = 3 or 2) the destructor's rank update reads a ranked record's `+0x148` (`0x486B2D`), computes its new rank from the other records' scores, then increments every record's rank that is at least the new one and below the old one — a loop over all ten records with **no activity test** (`0x486BE7..0x486C13`), so unseated records at rank 0 become 1 when the new rank is 0 — and stores the new rank (`0x486C17`). DISASSEMBLED; MEASURED 2026-10-05 in a four-actor network recording: rows 4..9 (unseated) went 0 → 1 at one death | the destructor's lead message (`0x486B2D..0x486C17`) |
 | `+0x149` | bit 0: base storage counts | the level setups, the loader; cleared at init and when the commander dies (`0x486518`) | the economy pass (`0x401941`); no writer of bits 1–15 |
 
 **Negative results.**
@@ -2500,9 +2500,29 @@ the explosions and the players phase, in this order:
    a map that is not square it picks a cell in the wrong row. Each coordinate then moves by
    `0x4B6C30(n) − n/2`, `n` the def's `+0xFD` (`0x424159`, `0x424167`). The spawn
    `0x423C50(cell, def, 0, 0, 10)` (`0x4241A3`) runs when that cell is on the map, the cursor's
-   cell's slot A is 0 (`0x424189`) and the chosen cell's def is `0xFFFF`. No stock feature has a
-   nonzero `+0xFC`, so none reproduces, but the first draw is made for every GAF feature at rest
-   the cursor passes.
+   cell's slot A is 0 (`0x424189`) and the chosen cell's def is `0xFFFF` (`0x42418F`; nothing else
+   about it is tested — not its units, height or water). The spawn takes the cursor cell's own def
+   (`0x424197`) and owner `0xA`, and sends no network message: every peer reproduces from its own
+   grid. `0x4B6C30(n)` returns 0 for `n` < 2 without stepping the generator, so `+0xFD` of 0 or 1
+   makes no area draw. No stock feature has a nonzero `+0xFC`, so none reproduces, but the first
+   draw is made for every GAF feature at rest the cursor passes; mods set it (TA Zero and TA
+   Twilight use 1–2). The demo recorder replaces the 10-byte source test at `0x424185`
+   (`8B 4C 24 10 66 83 39 00 75 19`, the slot pointer's load, the compare and its `jne 0x4241A8`)
+   with a stub that asks `feat_source` (`tagpu_recorder.c`), which falls through to `0x42418F` or
+   jumps to `0x4241A8`: a multiplayer recording records the slot the recorder's tick read there,
+   and a multiplayer playing answers from it, since the host's slots follow the owners' units.
+   DISASSEMBLED.
+   The keys: LoadFeature `0x4224B0` reads `reproduce` into the byte `+0xFC` (`0x422A13`,
+   `0x422A1D`) and `reproducearea` into `+0xFD` (`0x422A27`, `0x422A31`), each with `atol`,
+   truncated to a byte, not clamped, 0 when absent. LoadFeature takes a section from the first
+   feature TDF enumerated that holds it, and the enumeration (`0x4BCB50("features", "*.tdf", −1,
+   1)`, recursive) lists loose files under the game folder first, then the archives in mount order
+   — `rev31.gp3`, `*.ccx`, `*.ufo`, `*.hpi` — so a `.ufo` takes over a name defined only in
+   `totala1.hpi` (`tools/reproduce_fixture.py` relies on that). The cursor is set to 0 at every
+   level load by LoadMap's last store (`0x483DAC`, `mov [ebp+0x5C],ebx` with `ebp` =
+   `main+0x141FB`) and at process start (`0x41D956`): a level's first tick wraps it and examines
+   no cell, tick k examines cell `W × H − k`, and cell `W × H − 1` is never examined. DISASSEMBLED
+   (the enumeration and the cursor's start by a scouting pass, 2026-10-06).
 4. **The active list**, every tick. A 3DO record (`+0xFE` bit 0 clear) with a velocity adds it to
    its position (`0x424230..0x424250`); then on the ground (`0x485140`) it stops there, velocity
    zeroed; below the sea level `main+0x1427F` it sinks, `+0x14` 0, `+0x18` `−0x2CCC`, `+0x1C` 0;
@@ -2577,8 +2597,19 @@ ExplodeAs `+0x220` or SelfDestructAs `+0x224` and calls `0x499EB0`), and only th
 the death record). The explosion's damage is computed only on the owner's peer: the owner gate
 `0x49A01B..0x49A047` passes by an explosion whose owner's player record has `+0x73` = 3, which
 then is a sound and a picture; otherwise the area damage `0x49A120` damages the features in the
-blast at `0x49A626`. The corpse is made on every peer. `0x49B000`'s other caller is kill-all
-`0x486F10` at `0x486F9E`, outside the destructor. Deaths do not nest: the cargo loop's hit
+blast at `0x49A626`. MEASURED 2026-10-05 on a native four-actor game recorded by one host: the
+recorder's 7 deaths of its own units held 21 feature roots from `0x49A626` inside 6 of their
+brackets, and the 17 deaths of the other peer's units none. The corpse is made on every peer. `0x49B000`'s other caller is kill-all
+`0x486F10` at `0x486F9E`, outside the destructor.
+The corpse helper `0x486360(unit, level, smoke)` is stdcall, `ret 0xC` (`0x486454`); the
+destructor calls it only when the death record's corpse level, `+0xA`'s low nibble, is nonzero
+(`0x486D55..0x486D6F`). It reads the unit's type `+0x92` (`0x486368`, `0x486404`), the cell
+`+0x76`/`+0x78` (`0x4863BB`, `0x4863B7`), the position `+0x6A` (`0x4863D0`), the turn `+0x64`
+(`0x4863F1`) and the owner `+0xFF` (`0x4863EB`, `0x486426`), and spawns through `0x423C50`
+(`0x4863F9`, `0x486434`). A multiplayer demo recording carries that call as the root `FR_CORPSE`
+with exactly those fields (`tagpu_recorder.c`, `root_args`), and a playing makes it through
+`0x486360` on a stack record holding them, while the host's own destructor runs with the nibble
+cleared (`tagpu_replay.c`, THE DEATHS ON A MULTIPLAYER LEVEL). DISASSEMBLED. Deaths do not nest: the cargo loop's hit
 (`0x48680B`, `0x489BB0` → `0x489CE0`) marks a passenger dying (`+0x110` bit 14, `0x489EE2`), and
 the unit tick's reaper destroys it later (`0x48AFD1`); no feature function and nothing the
 destructor calls calls the destructor (its callers are `0x486679`, Send_UnitDeath, and the `0x0C`
@@ -4978,7 +5009,11 @@ each heap — and for **every GAF feature while it plays its death or reclaim se
 lists partition it, each record's `+0x00` next and `+0x02` prev being **signed** 16-bit (`movsx` at
 `0x42331F`), so no index may reach `0x8000`: `main+0x14213` the active in-use list, `main+0x14217`
 the settled one, `main+0x1421B` the free list (−1 = empty). `0x4232F0(idx, &list)` moves a record
-onto a list, unlinking it from whichever head it was. MEASURED with a census that reads the whole
+onto a list, unlinking it from whichever head it was, and pushes it at the head (its next is the
+old head, `0x42337B`, and the head becomes it, `0x42337E`); the spawn takes
+the free list's head (`0x423DA8`). The free list is therefore LIFO, and the record a spawn takes
+follows from the order of every earlier spawn and free — the reason a multiplayer playing makes
+its corpses only through the recorder's roots, in recorded order. DISASSEMBLED. MEASURED with a census that reads the whole
 pool and walks the three lists: with 8192 corpses placed, 0 active + 8192 settled + 0 free, every
 record exactly once.
 

@@ -910,7 +910,8 @@ static int list_record(Writer* w, unsigned kind, const unsigned char* b, unsigne
    one step's events: a feature call's, RK_EV_FEATURE to its END, holds no other bracket, and
    cells only when it is the tick's, whose cells are its input and none of the copy, and which is
    inside no bracket; a death's, RK_EV_DEATH to its END, holds the feature calls its explosion
-   made and may hold deaths. A draw is inside one. */
+   made, in a multiplayer recording its corpse's (FR_CORPSE, inside a death only), and may hold
+   deaths. A draw is inside one, FS_SOURCE inside a multiplayer recording's tick only. */
 static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
 {
     unsigned short h[4];
@@ -951,6 +952,7 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
         break;
     case RK_EV_FEATURE:
         if (!w->ticked || w->fbracket || (b[0] == FR_TICK && w->ndeaths) ||
+            (b[0] == FR_CORPSE && (!w->ndeaths || !w->mp_in)) ||
             b[1] > REC_PHASE_LATE || b[2] || b[3] ||
             !rec_root_len(b[0], len))
             return 0;
@@ -972,7 +974,9 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
         w->ndeaths--;
         break;
     case RK_EV_DRAW:
-        if (!open || len != 12 || b[0] >= FS_SITES || b[1] || b[2] || b[3]) return 0;
+        if (!open || len != 12 || b[0] >= FS_SITES || b[1] || b[2] || b[3] ||
+            (b[0] == FS_SOURCE && (w->fbracket != FR_TICK + 1 || !w->mp_in)))
+            return 0;
         break;
     default:
         return 0;

@@ -676,8 +676,9 @@ static int list_add(RecEvent** l, unsigned* n, unsigned* cap, unsigned kind, uns
 
 /* An event of the step, by the brackets' grammar (tagpu_recwriter.c, feature_record): a feature
    call's holds no other and cells only when it is the tick's, which is inside none; a death's
-   holds its explosion's feature calls and may hold deaths; a draw is inside one. 1 taken, 0
-   malformed. */
+   holds its explosion's feature calls, in a multiplayer recording its corpse's (FR_CORPSE, inside
+   a death only), and may hold deaths; a draw is inside one, FS_SOURCE inside a multiplayer
+   recording's tick only. 1 taken, 0 malformed. */
 static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsigned len)
 {
     RecWorld* w = &r->w;
@@ -702,6 +703,7 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
     }
     case RK_EV_FEATURE:
         if (r->fbracket || (b[0] == FR_TICK && r->ndeaths) ||
+            (b[0] == FR_CORPSE && (!r->ndeaths || r->h.mode != 3)) ||
             b[1] > REC_PHASE_LATE || b[2] || b[3] ||
             !rec_root_len(b[0], len))
             return 0;
@@ -723,7 +725,8 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
         break;
     case RK_EV_DRAW:
         if ((!r->fbracket && !r->ndeaths) || !rec_event_len(kind, len) || b[0] >= FS_SITES ||
-            b[1] || b[2] || b[3])
+            b[1] || b[2] || b[3] ||
+            (b[0] == FS_SOURCE && (r->fbracket != FR_TICK + 1 || r->h.mode != 3)))
             return 0;
         break;
     case RK_CELLS:

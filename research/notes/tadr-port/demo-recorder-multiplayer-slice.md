@@ -2,7 +2,7 @@
 
 ## Status
 
-Started 2026-10-04. This is the **multiplayer slice** in the [recorder plan](demo-recorder.md#milestones-and-delivery-order), separate from S5's skirmish browser and controls. No multiplayer recorder change has landed. The work branch captures an observed native world and its separate authoritative contribution ledger when recording is enabled (`tagpu_recorder.c:mp_record_begin`). Its puppet host still accepts only skirmish controllers (`tagpu_replay.c:validate_header`); native engine playback is unfinished.
+Started 2026-10-04. This is the **multiplayer slice** in the [recorder plan](demo-recorder.md#milestones-and-delivery-order), separate from S5's skirmish browser and controls. No multiplayer recorder change has landed. The work branch captures an observed native world and its separate authoritative contribution ledger when recording is enabled (`tagpu_recorder.c:mp_record_begin`). Its puppet host plays such a file forward from its start through the [owner-authority materializer](#owner-authority-materializer); seek, takeover, perspective streams and ten seats are unfinished.
 
 The slice's product scope is a recording file sufficient on its own for playback, with contributions from every Impure peer: each player's effective perspective and authoritative state, communication, then playback and takeover. The [product contract](demo-recorder.md#multiplayer-contributions) requires contributions even from a peer that opts out of saving its own recording. A live multiplayer game has no rewind timeline.
 
@@ -1005,8 +1005,8 @@ ends before the joiner with 1,509 accepted / 1,515 completed, cuts 2/2 and four
 receipts; the still-playing joiner later ends at 1,677 / 1,683 and cuts 2/2.
 Both queues and failure codes are zero. Owned games, prefixes and display are
 removed. Native speed is still 10. Continued migration, independent-clock/root
-materialization and faithful engine playback remain open; mode-3 playback is
-still refused. No exclusion, tolerance, timing mitigation, byte patch or engine
+materialization and faithful engine playback remain open (mode-3 playback is
+now the [materializer's](#owner-authority-materializer)). No exclusion, tolerance, timing mitigation, byte patch or engine
 field write is introduced.
 
 The same current coverage build passes all 23 `secondary-orders` skirmish
@@ -1210,45 +1210,162 @@ fresh seek's count none. Feeding the live dumps in as the puppet's makes
 `compare-counts` report all four sites. This verifies the existing skirmish
 invariant only; the multiplayer adapter that relies on it is unimplemented.
 
-### Owner-authority materializer (plan)
+### Owner-authority materializer
 
-Not implemented; this is the composition the mode-3 adapter will build, stated
-so that each stage below is checked against one rule. Playback steps on the
-recorder's GameTime, as skirmish does. Envelopes of application tick `a` apply
-in ledger order after step `a`'s primary events and before image `a+1`
-(`recr_mp_apply` called before `iteration_read`). Each namespace has exactly one
-source:
+`tagpu_replay.c` plays a mode-3 recording through a materializer over the
+skirmish replay: *THE MULTIPLAYER MATERIALIZER*, *THE CLOCK* and *THE DEATHS ON
+A MULTIPLAYER LEVEL* in the source. Every actor is a puppet seat beside V, and
+each namespace has exactly one source:
 
 | Namespace | Source on the puppet host |
 |---|---|
-| Unit existence and lifetime, every frozen block | the lifecycle consumer's actions; primary create, network-create and death events are checked, not dispatched |
-| Unit record and mover | the latest applied owner image of that exact incarnation, written by the existing image recipe |
+| Unit existence and lifetime, every frozen block | the lifecycle consumer's actions (`tagpu_recmp_lifecycle.h`); primary create and death events are not dispatched |
+| Unit record and mover | the latest applied owner image of that exact incarnation, written by the skirmish image recipe |
+| A unit's sight stamp and water state | the same composed image (`books_put` reads it) |
 | Owner private roots (named starts, replies, sprays) | `ROOT` actions at their ledger position, the recorder's own publications included; primary copies are not dispatched |
-| Player records | owner player images, mapped to recorder rows |
-| Order lists | owner order caches |
-| Features, wrecks, grid, projectiles, globals, declared tables | the primary stream, as the recorder observed them |
+| An actor's player record | its owner's player images, mapped to recorder rows; `+0xF0`, the players phase's deadline, stays the host's own |
+| A player record no actor holds | the primary stream (the destructor's rank update writes every record's `+0x148`, `0x486BE7..0x486C13`) |
+| Order lists | owner order caches whose birth matches the unit's; a create and a death empty the slot's lists |
+| Feature records, cells' defs and heights, the wreck pool, every corpse, projectiles, globals, declared tables | the primary stream, as the recorder observed them; corpses as `FR_CORPSE` roots |
+| Cells' unit slots and yard bit | the host's engine (below); reproduction's source test takes the recorder's slot (`FS_SOURCE`) |
 | Explored map per player | per-origin contributions |
 
 The composed world is a materializer-owned copy of `RecWorld`'s unit, live,
 player and list arrays; the reader's world stays the delta baseline. Every ID
-the owner images carry is bounded as skirmish bounds it, and an image is
-applied only to a slot whose lifecycle phase is live with the same birth.
-Shots and effects come from the recorder's observation, while their units'
-positions come from owner images: a remote unit can fire from where the
-recorder's replica stood. That residual is named here, not hidden.
+an owner image carries is bounded as skirmish bounds it, and an image applies
+only to a slot whose lifecycle phase is live with the same birth. A unit absent
+from the recorder's start world is made from its owner's first image
+(`BOOTSTRAP`). In the first sample one remote actor's commander (slot 4501) is
+absent, arriving later as a network replica; the other remote actor's (slot
+1501) is in the start world. The recorder holds every remote player, human or
+AI, as controller 3, and the materializer admits no other remote type: the
+explosion's owner gate tests 3 alone (`0x49A043`).
 
-Stages, each a checkpoint with native evidence:
+**The clock.** At the recorder's B2 for tick T, `mp_capture` (1) flushes the
+post-capture roots of T-1, still labelled T-1, (2) advances, (3) flushes the
+pre-capture roots of T, (4) publishes the local players' images of T, (5) takes
+the remote packets, consumed at T, and (6) publishes the local units', order
+lists' and explored map's images of T, which equal primary image T.
+So the replay applies, before image T, every envelope labelled below T and
+those labelled T up to the first produced root batch whose first entry is
+post-capture. It applies the rest of T after the primary events that follow
+image T. Applying all of T after the events instead left every local unit one
+tick behind its image (footprint `+0x78`, sight stamp `+0xF8`).
 
-1. Mode-3 admission through the materializer: seat every actor as a puppet beside V,
-   construct/destroy/dispatch by the lifecycle consumer under *Exactly-once private
-   children*, substitute units, players and orders. Oracle on the four-actor
-   recording: the recorder's own units equal its primary images exactly; every
-   remote slot equals its latest applied owner image after each step.
-2. Seek, rebuild and fresh-process seek of a mode-3 file, with a fresh consumer.
-3. Takeover with the remaining seats as fresh AI.
-4. Perspective streams, communication audiences, pings and drawings.
-5. Ten seats without a spare viewer seat.
-6. The measured traffic budget, migration and cross-address discovery.
+**Cells' unit slots and the yard bit.** A cell's slots name the unit standing
+on it, and the yard bit is a structure's. The recorder's grid names its replicas
+at its own times, while the host's units follow their owners. No recorded slot
+is the truth on such a level, so the footprint writers' writes stand
+(`tagpu_puppet_begin`'s `engine_cells`), and `cell_put`/`slots_put` write
+neither. Every slot the host's grid names is a live host unit: the engine writes
+it, and its destructor takes the unit off the grid (`0x48682D`) before it clears
+the alive bit (`0x486DCE`). `recmp_compare.py` checks that instead of comparing
+the slots, and checks that every set yard bit lies inside a live structure's
+footprint (`+0x76`/`+0x78` by `+0x7E`/`+0x80`, `+0x110` bit 29) instead of
+comparing the bit; the owner approved that check on 2026-10-06. The feature
+code reads one slot, reproduction's source test (`0x424189`); a multiplayer
+recording records the value the recorder's tick read there (`FS_SOURCE`, an
+`RK_EV_DRAW` inside the tick), and the host's stub at `0x424185` answers from it
+(`tagpu_replay_source`).
+
+**The deaths.** A unit's end is its owner's: `DEATH_END` runs the destructor
+through `ev_death` at the owner's time, with the feature gates shut and the
+record's corpse level (`+0xA`'s low nibble) cleared, so it changes neither the
+grid nor the pool. The destructor reads that nibble only to call the corpse
+helper `0x486360` (`0x486D55..0x486D6F`, its only caller). A death's feature
+effects are the recorder's. The recorder records its corpse call as a root,
+`FR_CORPSE`: the unit's type, the level, the smoke flag, `+0xFF`, the cell
+`+0x76`/`+0x78`, the position and the turn — everything `0x486360` reads. The
+host makes it through `0x486360` on a stack record holding exactly those
+fields, at the root's recorded phase and place, like the explosion's feature
+roots. On such a level the grid's and the pool's structure therefore change only
+through the recorder's roots, in recorded order: a spawn takes the free list's
+head (`0x423DA8`) and the list mover pushes at it (`0x4232F0`, LIFO), so every
+spawn meets the free list the recorder's met and takes the record, the cell and
+the list place the recorder's took. The pump `0x4954C8` runs before the capture
+`0x4954ED`, so a remote unit's death is recorded LATE, after its iteration's
+tick root, and its corpse goes in there.
+
+**Named residuals.**
+- *The split.* A remote unit's explosion plays at its owner's time and
+  position; its corpse, flare and smoke appear when the recorder saw the death,
+  in the recorder's replica's cell — 2 to 8 ticks later in the samples. In the
+  other order the unit stands over its corpse until its owner's death. The owner
+  accepted this on 2026-10-06: deaths keep the owner's clock and features the
+  recorder's.
+- *Orders naming a unit its owner destroyed.* Another owner's order list can
+  still name a unit for those same ticks, until that owner's next image drops
+  it. The host's destructor has already cleared every reference to it, and
+  `ord_target` links no unit the host does not hold, so the order names no
+  target here. On a puppet the order is inert. `recmp_compare.py` expects no
+  target for such an order (the owner approved this on 2026-10-06). Those
+  refusals are part of the playing's "order nodes … refused" count.
+- *A player who leaves.* Its owner sends no `DEATH_END`, so its units stay alive
+  on the host from their last images while the recorder's kill-all makes their
+  corpses. A rule that ends a departed owner's units is a lifecycle landing of
+  its own (the owner's decision, 2026-10-06).
+- *A death's other events* stay unplayed, as their owner contributes them; a
+  draw a destructor made outside any root is counted. Projectiles come from the
+  images.
+- *Shots.* They come from the recorder's observation, while their units'
+  positions come from owner images, so a remote unit can fire from where the
+  recorder's replica stood.
+- *The first owner image.* Until a remote unit's first owner image applies
+  (ticks 54–57 in the first sample), it holds its start image, and the host's
+  engine derives another water state, which is written back from the image each
+  step (the units' bookkeeping counts in the playing's log).
+- *Passability.* The pathing contexts on the host follow the host's slots
+  (`0x440A40` → `0x47DFC0`), a cache nothing on a puppet host simulates with
+  [INFERRED].
+
+MEASURED 2026-10-06 on the reference setup, internal speed 20, a native
+four-actor game recorded with the corpse root (`recmp_create_begin_test.py`: two
+humans and one hosted AI each; four 1,500-unit blocks; GameTimes 1..520) and
+played by `tools/replay/recmp_play_test.py`:
+
+- The recording holds 25 deaths, 23 with a corpse level, and 23 `FR_CORPSE`
+  roots, each the last root of its death, each at its death image's cell. The
+  recorder's own corpses are at phase 0 and the remote ones at LATE; 14 remote
+  deaths applied by their owners 3 to 8 ticks before the recorder saw them, and
+  11 in the same step. The attach log reads "recorder: 53 event sites in".
+- The level plays to its end with no stop: 72 units made, 25 destroyed, 18,988
+  images, 3,552 private roots, all played; 23 corpses made from the stream. The
+  features line reads 0 out of bounds, 0 returned otherwise, 0 draws not taken
+  as recorded, 0 cells and 0 wreck records left for their structure, the heads
+  differed 0 times. COB engine writes and native owner-only starts on a puppet:
+  0.
+- `tools/replay/recmp_compare.py`, with no exemption, against dumps at
+  GameTimes 120, 216, 259, 291, 302, 351, 411, 423, 424 and 519 — inside
+  owner-first windows (259, 291, 411), at the recorder's own deaths with
+  explosion roots (302, 351, 423, two in one step) and after the rank update
+  (216): EQUAL at every one, units, players, order lists, features, the pool,
+  the cells and the yard bits included.
+- **Reproduction.** A second native game was recorded with
+  `tools/reproduce_fixture.py`'s archive on both peers (`--reproduce --until
+  2000`; GameTimes 1..2091). It holds 18 `FS_SOURCE` draws, all inside the
+  tick's root and all reading slot 0, at the 18 trees at rest that the cursor
+  passes (ticks 387 and 1577..1957). Every one spawned its child in rows
+  668..670, which is the row bug. The recording also holds 39 deaths, 37 corpse
+  roots and 0 corpses outside a death. Played with the same archive
+  (`--content`), it reached its end: 0 draws not taken as recorded, 0 cells or
+  wreck records left for their structure, the heads differed 0 times, and 37
+  corpses were made. Dumps at 388 (after the first spawn), 1578, 1722, 1744,
+  1958 and 2090 are EQUAL. 388 had one difference before the comparer expected
+  no target for an order naming a destroyed unit (above): unit 10's order named
+  slot 1505, which its owner destroyed at 388 and the recorder saw at 392. No
+  native sample reads a nonzero source slot, so the branch where the
+  recorder's slot differs from the host's runs only through the same stub.
+
+Still open: seek (`seek_run` refuses a mode-3 recording), takeover and fresh AI,
+perspective streams and communication audiences, ten seats without a spare
+viewer seat, and the traffic budget, migration and cross-address discovery.
+They are taken in that order:
+
+1. Seek, rebuild and fresh-process seek of a mode-3 file, with a fresh consumer.
+2. Takeover with the remaining seats as fresh AI.
+3. Perspective streams, communication audiences, pings and drawings.
+4. Ten seats without a spare viewer seat.
+5. The measured traffic budget, migration and cross-address discovery.
 
 ### Fixed global owner blocks before construction
 
@@ -1306,11 +1423,10 @@ it does not exercise a multiplayer loader handoff or clear the complete
 landing gate.
 
 The standalone allocator fixture proves the paired initialization, and the game
-regression proves the installed hook remains inert on skirmishes. Neither proves
-the multiplayer loader route: the mode-3 playback refusal remains. Native owner
-construction/destruction, exactly-once child roots, full authority and saved
-play/seek/takeover are still open. Ten-row allocation support does not implement
-ten-seat replay hosting or its viewer policy.
+regression proves the installed hook remains inert on skirmishes. The
+multiplayer loader route is exercised by the [materializer's](#owner-authority-materializer)
+saved playing. Ten-row allocation support does not implement ten-seat replay
+hosting or its viewer policy.
 
 ### Owner destructor entry and return verification
 

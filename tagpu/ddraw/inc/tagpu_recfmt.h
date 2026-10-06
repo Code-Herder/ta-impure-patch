@@ -208,22 +208,26 @@ enum RecKind {
                           u16 0, u32 the call's site (its return address
                           less 5), then the root's arguments (RecRoot): a feature function called
                           outside every other one -- outside a unit's death, or inside its
-                          explosion -- or the feature tick. The records up to its
+                          explosion -- or the feature tick, or, in a multiplayer recording, the
+                          corpse helper directly inside a death (FR_CORPSE). The records up to its
                           RK_EV_FEATURE_END are the call's: the draws it made, the tick's cells,
                           and the events of what it nested. A bracket holds no other and no death,
                           and the tick's is inside none                                           */
     RK_EV_FEATURE_END, /* u8 root, u8 0, u16 0, u32 what it returned: a spawn's or a swap's record
                           as its index + 1 (0: none, 0xFFFFFFFF: not a record of the pool), a
-                          destroy's 0 or 1, and 0 for the rest, whose EAX is no result          */
+                          destroy's 0 or 1, the corpse's record its spawn took (index + 1, 0
+                          none), and 0 for the rest, whose EAX is no result                     */
     RK_EV_DRAW,        /* u8 site (RecDrawSite), u8 0, u16 0, u32 n, u32 the value: the simulation
                           RNG 0x4B6C30(n) at one of the feature code's six calls of it, inside a
                           bracket: a feature call's, or a death's when a call its destructor made
-                          itself drew                                                             */
+                          itself drew; or site FS_SOURCE: the source cell's slot A as the tick
+                          read it, n the cell's index                                            */
     RK_EV_DEATH_END,   /* u32 unit ID: the destructor RK_EV_DEATH opened has returned. The records
                           between are the death's: the feature calls its explosion made, each a
                           root, the events of what it nested, and the deaths nested in it, each a
-                          bracket of its own. What its destructor made itself -- its corpse -- is
-                          not recorded: a replay's destructor makes it                            */
+                          bracket of its own. What its destructor makes itself -- its corpse -- a
+                          skirmish recording leaves to the replay's destructor; a multiplayer
+                          recording records it as FR_CORPSE inside the bracket                   */
 
     /* THE FEATURES, images like the ones above (the slice note's S3a) */
     RK_CELLS,          /* u16 x, u16 z, u16 cells, u16 0, then `cells` cell images: a run of the
@@ -306,9 +310,12 @@ enum RecRoot {
     FR_DAMAGE,         /* 0x4244B0(cell, x, z, weapon): u16 x, u16 z (the cell), i32 x, i32 z, u32
                           the weapon's ID                                                          */
     FR_SWAP,           /* 0x423710(x, z, reclaimed): i32 x, i32 z, u32 reclaimed                   */
+    FR_CORPSE,         /* 0x486360(unit, level, smoke): u32 the unit's type ID, u8 level, u8 smoke,
+                          u8 the unit's +0xFF, u8 0, i16 +0x76, i16 +0x78, i32 +0x6A x3, u16
+                          +0x64 x3, u16 0: a multiplayer recording's only, directly inside a death */
     FR_ROOTS
 };
-#define REC_ROOT_ARGS_MAX 28   /* FR_SPAWN's                                                    */
+#define REC_ROOT_ARGS_MAX 32   /* FR_CORPSE's                                                   */
 #define REC_DEATHS_MAX    32   /* the deaths a bracket may nest, and the capture's frames        */
 
 /* An event's length and a feature root's: the one rule the writer and the reader both apply
@@ -337,12 +344,13 @@ static __inline int rec_event_len(unsigned kind, unsigned len)
 /* an RK_EV_FEATURE's arguments after its site, by its root */
 static __inline int rec_root_len(unsigned root, unsigned len)
 {
-    static const unsigned char args[FR_ROOTS] = { 0, 28, 8, 12, 12, 16, 12 };
+    static const unsigned char args[FR_ROOTS] = { 0, 28, 8, 12, 12, 16, 12, 32 };
     return root < FR_ROOTS && len == 8u + args[root];
 }
 
-/* The feature code's calls of the simulation RNG 0x4B6C30: every one from 0x4232F0 to 0x4250FF,
-   which holds the feature functions, the spread 0x4239C0 and the tick 0x424050. */
+/* The feature code's inputs from outside the feature world: its calls of the simulation RNG
+   0x4B6C30 -- every one from 0x4232F0 to 0x4250FF, which holds the feature functions, the spread
+   0x4239C0 and the tick 0x424050 -- and reproduction's source test. */
 enum RecDrawSite {
     FS_BURN = 0,       /* 0x4234C2, the burn's length                                             */
     FS_SPREAD,         /* 0x423A38, the spread to a neighbour                                     */
@@ -350,8 +358,11 @@ enum RecDrawSite {
     FS_REPRODUCE,      /* 0x424113, reproduction's chance                                          */
     FS_REPRODUCE_X,    /* 0x424159, and its column                                                  */
     FS_REPRODUCE_Z,    /* 0x424167, and its row                                                     */
+    FS_SOURCE,         /* 0x424189, reproduction's test of its source cell's slot A: an input, not
+                          a draw; a multiplayer recording's tick only                              */
     FS_SITES
 };
+#define FS_RNG_SITES 6 /* the RNG calls the recorder redirects                                      */
 
 /* A seat's result. The engine holds one result, the controlled player's (RT_GAME_END); the others
    are this rule: a seat that ends the game with no unit lost; when the controlled player won,

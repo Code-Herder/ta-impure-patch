@@ -33,9 +33,12 @@ int tagpu_puppet_local(unsigned player);
 const volatile unsigned char* tagpu_puppet_flag(void);
 
 /* The seat fill's (tagpu_replay.c): `seat` and `local` for the ten records, then the mode on.
+   `engine_cells`: the grid's unit slots and yard bits are the engine's own on this level -- a
+   multiplayer recording's, whose units are timed by their owners while the recorder's grid
+   follows its own replicas -- so the footprint writers' writes stand (THE FOOTPRINT WRITERS).
    The teardown's: everything off. */
 void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
-                        const unsigned char local[PUPPET_PLAYERS]);
+                        const unsigned char local[PUPPET_PLAYERS], int engine_cells);
 void tagpu_puppet_end(void);
 
 /* THE GATES (tagpu_puppet.c): the engine functions that would write what a recording carries on
@@ -71,8 +74,9 @@ void tagpu_puppet_refusals(char* out, size_t cap);
 void tagpu_puppet_play(void);
 int tagpu_puppet_features(int open);
 
-/* THE DRAWS a replayed root makes at the feature code's six calls of the simulation RNG
-   (tagpu_recfmt.h, RecDrawSite): the recording's, in order, armed by the replay around the call.
+/* THE DRAWS a replayed root makes at the feature code's six calls of the simulation RNG, and on
+   a multiplayer level at reproduction's source test (FS_SOURCE) (tagpu_recfmt.h, RecDrawSite):
+   the recording's, in order, armed by the replay around the call.
    tagpu_puppet_draw answers 1 with the next one while its site and argument are the call's;
    otherwise 0, and the call draws for itself, as do the rest of the root's calls. */
 typedef struct PuppetDraw { unsigned site, n, v; } PuppetDraw;

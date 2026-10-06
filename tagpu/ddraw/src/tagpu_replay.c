@@ -61,6 +61,7 @@
 #include "tagpu_cover.h"
 #include "tagpu_recreader.h"
 #include "tagpu_recmp_arena.h"
+#include "tagpu_recmp_lifecycle.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_recorder.h"
 #include "tagpu_replay_layout.h"
@@ -141,6 +142,7 @@
 #define OFF_MMFLAGS    0x142F1      /* u8: bit 2 asks 0x466C20 for the minimap's fog; bit 1 is
                                        DrawMinimap's redraw (0x466B11)                           */
 #define MODE_SKIRMISH  2
+#define MODE_NETWORK   3   /* RT_MODE of a multiplayer recording (tagpu_recorder.c) */
 
 /* 0x464290(seat, type): the seat activation (stdcall, `ret 8`; seat and type are read as bytes) */
 typedef void (__stdcall* PFN_ActivateSeat)(unsigned seat, unsigned type);
@@ -176,7 +178,7 @@ static struct {
 } s_st;                             /* the level's counts, logged at its end                      */
 static struct {
     unsigned roots, rrefused, rdiffer, deaths, dmissed, left, cells, cstruct, cbad, wrecks,
-             wstruct, wbad, heads, cursor, tcells, tover;
+             wstruct, wbad, heads, cursor, tcells, tover, corpses;
 } s_fst;                            /* ... and its features' (THE FEATURES)                       */
 /* The runs the feature tick's input wrote since the last images (THE TICK'S INPUT). 4096 runs:
    MEASURED in the six fixtures of 2026-10-01, the runs of one step's input were at most 432
@@ -223,6 +225,13 @@ static struct {
 static int s_rw_pause_in;
 static int rw_prepare(char* ta, char* why, unsigned cap);
 static void rw_seats(char* ta);
+/* rewind keeps a live skirmish's own recording: a multiplayer one has no seek */
+static int rw_skirmish(const RecHeader* h, char* why, unsigned cap)
+{
+    if (h->mode != MODE_NETWORK) return 1;
+    snprintf(why, cap, "a multiplayer recording has no rewind");
+    return 0;
+}
 static void rw_finish(char* ta, int back);
 static void rw_poll(void);
 static int rw_trigger(const char* line);
@@ -251,8 +260,32 @@ static struct {
 #define RT_ARMED 24                 /* a broad entry's round trips, armed at once (fixtures.json) */
 static int s_rt_pace_in;            /* attach-time guard before the skirmish step loop */
 static int s_mp_arena_in;           /* allocator's block-ownership boundary */
+static int s_engine_cells;          /* the grid's unit slots and yard bits are the engine's:
+                                       a multiplayer recording's level (tagpu_puppet_begin) */
 enum { MP_ARENA_OFF, MP_ARENA_ARMED, MP_ARENA_WORKING, MP_ARENA_READY, MP_ARENA_FAILED };
 static struct { RecMpRoster roster; volatile LONG state; } s_mp_arena;
+/* THE MULTIPLAYER MATERIALIZER's state */
+static struct {
+    int             on;             /* this level plays a mode-3 recording                       */
+    int             failed;
+    RecMpLifecycle* life;
+    uint64_t        ordinal;        /* the last envelope the consumer was given                  */
+    unsigned        slots;
+    const struct Lv* L;             /* the step's level, for the action callback                 */
+    unsigned char*  held;           /* [slots] live here, no composed image yet                  */
+    unsigned char*  live;           /* [slots] the composed world's                              */
+    uint32_t*       unit;           /* [slots * REC_UNIT_DWORDS]                                 */
+    RecList*        list;           /* [slots * 2]                                               */
+    unsigned char*  nodes;          /* one list's query buffer, RECMP_ORDER_MAX nodes            */
+    uint32_t        player[REC_PLAYERS][REC_PLAYER_DWORDS];
+    unsigned char   actor[REC_PLAYERS]; /* the record is an actor's: its owner describes it      */
+    RecWorld        W;
+    struct MpHeld*  q;              /* envelopes read and not yet applied, in ledger order       */
+    unsigned        nq, capq;
+    unsigned        observed, ocorpse;  /* the recorder's deaths, and those with a corpse level   */
+    unsigned        made, destroyed, images, roots, rplayed;
+    char            why[200];
+} s_mp;
 static struct {
     unsigned n;
     struct { char name[37]; unsigned T; } a[RT_ARMED];
@@ -291,6 +324,7 @@ static unsigned colour_count(const char* ta)
 
 static void pend_reset(void);
 static void counts_log(const char* when, unsigned now);
+static void mp_end(void);
 
 static void replay_close(void)
 {
@@ -298,12 +332,14 @@ static void replay_close(void)
        load-done gate. No loader can still consume this immutable plan. */
     InterlockedExchange(&s_mp_arena.state,MP_ARENA_OFF);
     s_viewPending = 0;
+    mp_end();
     recr_close(s_rd);
     recfile_leave();
     s_rd = NULL;
     s_path[0] = 0;
     memset(&s_span, 0, sizeof s_span);
     s_first = s_dead = s_over = 0;
+    s_engine_cells = 0;
     s_endlog = 0;
     s_notes = 0;
     memset(&s_st, 0, sizeof s_st);
@@ -510,8 +546,13 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
                  "holds %u", h->proj_cap, (unsigned)TAGPU_LIM_PROJ);
         return 0;
     }
-    if (h->mode != MODE_SKIRMISH) {
-        snprintf(why, cap, "it is not a skirmish (mode %u)", h->mode);
+    if (h->mode != MODE_SKIRMISH && h->mode != MODE_NETWORK) {
+        snprintf(why, cap, "it is neither a skirmish nor a multiplayer game (mode %u)", h->mode);
+        return 0;
+    }
+    if (h->mode == MODE_NETWORK && (!h->has_mp || !h->has_mp_seats || !h->has_unitdefs)) {
+        snprintf(why, cap, "it is a multiplayer game without its contributors, seats or unit "
+                 "types");
         return 0;
     }
     if (!tagpu_puppet_gates_in()) {
@@ -540,8 +581,13 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
         snprintf(why, cap, "it seats all ten records, which leaves the viewer none");
         return 0;
     }
+    /* a multiplayer recording seats every remote player, human or AI, as 3, as its recorder held
+       it (MEASURED 2026-10-05, the four-actor recording). The explosion's owner gate tests 3 alone
+       (0x49A043), and THE DEATHS ON A MULTIPLAYER LEVEL rest on it, so no other type is
+       admitted */
     for (i = 0; i < h->nseats; i++) {
-        if (h->seats[i].controller != 1 && h->seats[i].controller != 2) {
+        if (h->seats[i].controller < 1 ||
+            h->seats[i].controller > (h->mode == MODE_NETWORK ? 3u : 2u)) {
             snprintf(why, cap, "seat %u's controller is %u", h->seats[i].index,
                      h->seats[i].controller);
             return 0;
@@ -653,7 +699,7 @@ static void seat_level(char* ta, const RecHeader* h, unsigned v, unsigned view)
         name_put(rec + PL_NAME2, s->name);
         memcpy(rec + PL_ALLY, s->ally, 11);     /* the activation zeroes the row */
         seatv[s->index] = 1;
-        localv[s->index] = 1;                   /* validate: every controller is 1 or 2 */
+        localv[s->index] = s->controller == 1 || s->controller == 2;   /* getter 75 there */
     }
     /* V shows the recording's controlled player's side. With full visibility V is the viewed
        record, and the interface takes the viewed record's side: MAIN2 is loaded once from it
@@ -680,7 +726,8 @@ static void seat_level(char* ta, const RecHeader* h, unsigned v, unsigned view)
     *(unsigned short*)(ta + OFF_NPLAYERS) = (unsigned short)h->nplayers;
     objective = *(void**)(ta + OFF_OBJECTIVE);
     if (objective) E_Disarm(objective);
-    tagpu_puppet_begin(seatv, localv);
+    s_engine_cells = h->mode == MODE_NETWORK;
+    tagpu_puppet_begin(seatv, localv, s_engine_cells);
 }
 
 /* The open recording's path and its first and last GameTime, for the dock (tagpu_dock.h): the
@@ -1039,6 +1086,8 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define MV_LAYER       0x2E         /* the mover's layer, bits 0-1                                 */
 #define U_DEF          0x92         /* the type's definition, *(main+0x1439B) + 0x249 the index    */
 #define U_FOOTXZ       0x76         /* the footprint's cell x and z, i16 each (0x47D98E)           */
+#define U_POS          0x6A         /* x, altitude, z: i32 each                                    */
+#define U_TURN         0x64         /* the turn, u16 x3                                            */
 #define U_FOOTWH       0x7E         /* its width and height, i16 each: the def's +0x14A (0x485AAA) */
 #define U_YARD         0x10F        /* bit 2: the yard is open (0x47DAF1)                          */
 #define U_RECLAIM      0x08000000u  /* +0x110 bit 27: the re-claim is owed (0x47DAEC)              */
@@ -1505,9 +1554,12 @@ static int owner_holds(const Lv* L, unsigned owner, unsigned slot)
     return first && last && u >= first && u <= last;
 }
 
-/* the create of a recorded unit in its recorded slot; 1 made */
+/* the create of a recorded unit in its recorded slot; 1 made. `open` lets the create's nested
+   COB writes and replies through: a skirmish's exit-only create, whose recorded children have no
+   unit when played (THE OTHER EVENTS). A multiplayer owner's create keeps them shut: its
+   recording carries those children inside its bracket (THE MULTIPLAYER MATERIALIZER). */
 static int make(const Lv* L, unsigned slot, unsigned owner, unsigned type, const int32_t pos[3],
-                uint32_t finished, unsigned layer)
+                uint32_t finished, unsigned layer, int open)
 {
     char* u;
     if (!owner_holds(L, owner, slot) || !type || type >= L->ndefs) {
@@ -1521,9 +1573,9 @@ static int make(const Lv* L, unsigned slot, unsigned owner, unsigned type, const
              L->now, *(const unsigned short*)(unit_at(L, slot) + U_TYPEIX));
         return 0;
     }
-    tagpu_puppet_open(1);           /* what it nests is the recording's (THE OTHER EVENTS) */
+    if (open) tagpu_puppet_open(1);
     u = E_Create(owner, type, pos[0], pos[1], pos[2], finished, layer, slot);
-    tagpu_puppet_open(0);
+    if (open) tagpu_puppet_open(0);
     if (u != unit_at(L, slot)) {
         s_st.refused++;
         note("replay: the create of slot %u gave %s %u", slot, u ? "slot" : "nothing,",
@@ -1548,7 +1600,7 @@ static unsigned level_units(const Lv* L, const RecWorld* W)
         memcpy(pos, ib + 0x6A, 12);
         memcpy(&built, ib + U_BUILT, 4);
         if (make(L, slot, (unsigned char)ib[U_OWNERIX], img_type(img), pos, built == 0.0f,
-                 img[U_STATE / 4] & 3u))
+                 img[U_STATE / 4] & 3u, 1))
             made++;
     }
     return made;
@@ -1764,7 +1816,7 @@ static void units_put(const Lv* L, const RecWorld* W)
     for (slot = 1; slot < L->nslots; slot++) {
         const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
         if (!W->live[slot]) {
-            if (host_live(L, slot)) {
+            if (host_live(L, slot) && !(s_mp.on && s_mp.held[slot])) {
                 s_st.lingering++;
                 note("replay: GameTime %u: slot %u is live here, not in the recording", L->now,
                      slot);
@@ -2272,7 +2324,7 @@ static int ev_create(const Lv* L, const unsigned char* b, unsigned len)
     memcpy(&type, b + 4, 2);
     memcpy(&finished, b + 8, 4);
     memcpy(pos, b + 12, 12);
-    if (!make(L, id - 1, b[6], type, pos, finished, b[7] & 3u)) return 0;
+    if (!make(L, id - 1, b[6], type, pos, finished, b[7] & 3u, 1)) return 0;
     water = b[24];
     if (water <= WATER_MAX) {
         memcpy(unit_at(L, id - 1) + U_WATER, &water, 4);
@@ -2287,8 +2339,12 @@ static int ev_create(const Lv* L, const unsigned char* b, unsigned len)
 /* RK_EV_DEATH: the victim's fields as the destructor found them (s2-events §1.9), then the
    destructor through C4's wrap, as a remote's death is applied: mode 0, the killer's player by
    the host's netid for it (every seat's is its index, 0x464290), and C4's carried decision armed
-   from the recording */
-static int ev_death(const Lv* L, const unsigned char* b, unsigned len)
+   from the recording. `corpse` 0 clears the record's corpse level, +0xA's low nibble: the
+   destructor reads it only at 0x486D55..0x486D69, to call the corpse helper 0x486360 at 0x486D6F
+   (its only caller); its other reads of +0xA take the high nibble (0x4867DA, 0x486880, 0x486CA2,
+   0x486D42), and the record reaches no callee (DISASSEMBLED 0x4866D0..0x486E60). So 0 removes
+   the corpse and its flare and nothing else. */
+static int ev_death(const Lv* L, const unsigned char* b, unsigned len, int corpse)
 {
     uint32_t id, kid, netid = 0xFFFFFFFFu;
     unsigned slot, ks, kp = b[8];
@@ -2317,7 +2373,7 @@ static int ev_death(const Lv* L, const unsigned char* b, unsigned len)
     rec[7] = (unsigned char)ks;
     rec[8] = (unsigned char)(ks >> 8);
     rec[9] = b[9];
-    rec[10] = b[10];
+    rec[10] = corpse ? b[10] : (unsigned char)(b[10] & 0xF0);
     if (tagpu_tx_replay_death(rec, b[11])) return 1;
     s_st.refused++;
     return 0;
@@ -2529,8 +2585,11 @@ static int ev_spray(const Lv* L, const unsigned char* b, unsigned len)
      are armed around it (tagpu_puppet_draws): the feature code's six calls of the simulation RNG
      take the recording's values, in order, while their site and argument agree. The tick is the
      root that also carries cells: the grid's changes since the iteration's images, put in before
-     it runs, since its reproduction reads the source cell's unit slot (0x424189).
-   - A DEATH is replayed as ev_death replays it, with the feature gates open: the host's destructor
+     it runs, since its reproduction reads the source cell's unit slot (0x424189) -- on a
+     multiplayer recording's level, whose slots are the host's, that read takes the recording's
+     value instead (FS_SOURCE, tagpu_replay_source).
+   - A multiplayer recording's DEATH: THE DEATHS ON A MULTIPLAYER LEVEL. A skirmish recording's
+     DEATH is replayed as ev_death replays it, with the feature gates open: the host's destructor
      makes what every machine makes, its corpse through 0x486360 (0x486D6F). The damage of its
      explosion it cannot make: the owner gate (0x49A01B..0x49A047) passes a type-3 owner's
      explosion by, and every puppet seat is one. So the roots that explosion made, which the
@@ -2551,10 +2610,12 @@ static int ev_spray(const Lv* L, const unsigned char* b, unsigned len)
    value that indexes is bounded before it goes in: a cell's unit slots by the unit array's count,
    a sequence's frame by the sequence's own count, as 0x4B8B30 bounds it, and the reproduction
    cursor by the grid's cells, the range the tick keeps it in (0x4240A3..0x4240CC).
-   THE UNIT SLOTS AND THE YARD BIT come from the images alone: every write the stamp, the clear and
-   the re-claim make to them on this level -- for the placements below, the creates and deaths,
-   and the host's own unit tick -- is undone at the writer's return (tagpu_puppet.c, THE
-   FOOTPRINT WRITERS), so the cells the recording did not change keep the recording's values. */
+   THE UNIT SLOTS AND THE YARD BIT come from the images alone on a skirmish recording's level: every
+   write the stamp, the clear and the re-claim make to them -- for the placements below, the
+   creates and deaths, and the host's own unit tick -- is undone at the writer's return
+   (tagpu_puppet.c, THE FOOTPRINT WRITERS), so the cells the recording did not change keep the
+   recording's values. On a multiplayer recording's level they are the host engine's own
+   (s_engine_cells): its units follow their owners, not the recorder's replicas. */
 
 #define OFF_FGRID      0x14287      /* the feature grid (tagpu_recorder.c, *The features*)          */
 #define OFF_FGRIDW     0x14233
@@ -2563,6 +2624,8 @@ static int ev_spray(const Lv* L, const unsigned char* b, unsigned len)
 #define OFF_FDEFS      0x1426F
 #define OFF_WRECKS     0x1420B      /* the wreck pool, TAGPU_LIM_WRECKS records                    */
 #define OFF_WR_HEADS   0x14213      /* the active, settled and free lists' heads, i32 each         */
+#define WR_NEXT        0x00         /* a wreck record's list links, i16: the next, the previous   */
+#define WR_PREV        0x02         /*   (the list mover 0x4232F0)                                */
 #define OFF_FCURSOR    0x14257      /* the reproduction cursor                                    */
 #define FD_STRIDE      0x100
 #define FD_MASK        0xFE         /* bit 0: a GAF feature                                       */
@@ -2570,6 +2633,7 @@ static int ev_spray(const Lv* L, const unsigned char* b, unsigned len)
 #define CELL_BACK      0x0A         /* a footprint cell's rows and columns back to its anchor, an
                                        anchor's record, or a resting GAF anchor's damage         */
 #define CELL_FLAGS     0x0C         /* bit 0: the anchor holds a record                           */
+#define CELL_YARDBIT   0x02         /* +0x0C bit 1, the yard's (tagpu_puppet.c, THE FOOTPRINT WRITERS) */
 #define DEF_FOOTPRINT  0xFFFE
 #define WR_STATE1      0x04         /* a GAF record's sequence states: u16 frame, u16 timer, u8
                                        loop, the sequence at +8 (0x4B8B30)                        */
@@ -2671,6 +2735,16 @@ static int cell_put(const Lv* L, char* c, const unsigned char* img, unsigned x, 
                  "recording: its structure is the engine's, and it is left as it is", L->now, x, z,
                  hdef, rdef);
         return 0;
+    }
+    if (s_engine_cells) {
+        /* THE MULTIPLAYER MATERIALIZER: the slots and the yard bit are the engine's own */
+        for (k = 0; k < REC_CELL_BYTES; k++) {
+            unsigned char m = k < 4 ? 0 : s_cval[k];
+            if (k == CELL_FLAGS) m &= (unsigned char)~CELL_YARDBIT;
+            if (back && (k == CELL_BACK || k == CELL_BACK + 1)) m = 0;
+            c[k] = (char)(((unsigned char)c[k] & ~m) | (img[k] & m));
+        }
+        return 1;
     }
     memcpy(slot, img, 4);
     /* a slot is a unit the engine follows from the cell: the stamp's contest dereferences the
@@ -2862,6 +2936,30 @@ static unsigned draws_gather(const RecWorld* W, unsigned i, unsigned* n)
     return j;
 }
 
+static int addr_of(const Lv* L, unsigned simid, uint32_t id, char** p);
+
+typedef void (__stdcall* PFN_FCorpse)(char* unit, unsigned level, unsigned smoke);
+#define E_FCorpse  ((PFN_FCorpse)0x00486360u)   /* `ret 0xC` (0x486454)                      */
+#define UD_CORPSE  0x1BC     /* u16 the unit def's corpse feature (0x48636E)                       */
+#define FD_DEAD    0xF4      /* u16 a feature def's next corpse level (0x48639F)                    */
+#define FDEF_NONE  0xFFFB    /* a def at or above it is no feature (0x486384)                       */
+
+/* 0x486360's walk to the corpse def (0x48636E..0x4863B1): the unit def's +0x1BC, then level - 1
+   times FeatureDef +0xF4 while below 0xFFFB. The helper bounds nothing but 0xFFFB, and the spawn
+   indexes FeatureDef by what the walk ends on (0x423CD2). So each index it reads through, and a
+   last one below 0xFFFB, must name a feature def. 1 when they do. */
+static int corpse_def_ok(const Lv* L, const char* udef, unsigned level)
+{
+    uint16_t f;
+    const char* d;
+    memcpy(&f, udef + UD_CORPSE, 2);
+    for (; level > 1 && f < FDEF_NONE; level--) {
+        if (!(d = fdef_of(L, f))) return 0;
+        memcpy(&f, d + FD_DEAD, 2);
+    }
+    return f >= FDEF_NONE || fdef_of(L, f) != NULL;
+}
+
 /* the recorded arguments of a root, bounded, and the call; 0 when a bound refused it, with the
    result in `got` otherwise */
 static int root_call(const Lv* L, unsigned root, const unsigned char* a, uint32_t* got)
@@ -2915,6 +3013,42 @@ static int root_call(const Lv* L, unsigned root, const unsigned char* a, uint32_
             return 0;
         E_FDamage(cell, x, z, weapon);
         return 1;
+    case FR_CORPSE: {
+        /* The corpse helper on a stack record holding exactly what it reads of its unit: +0x92
+           (0x486368, 0x486404), +0x76 and +0x78 (0x4863B7, 0x4863BB), the position +0x6A and the
+           turn +0x64 by address (0x4863D0, 0x4863F1, 0x48642C), and +0xFF (0x4863EB, 0x486426).
+           It writes none of them, and every callee copies what it takes: the spawn the position
+           and the turn (0x423E28..0x423E38, 0x423E9B..0x423EA6), the smoke's and the flare's
+           inits 12 bytes of the point (0x47515D..0x475178, 0x474D5D..0x474D7C). So nothing keeps
+           a pointer into the record past the call (DISASSEMBLED). The effect is the helper's
+           own: the spawn, the underwater velocity (0x486416) and the flare, as on the recording
+           machine. Bounds: the type by the unit types' count (addr_of); the level 1..15 and the
+           smoke 0..1, as 0x486D58..0x486D69 pass them; the corpse defs (corpse_def_ok); the cell
+           by 0x481550 itself (0x481551..0x481593), the height by 0x485070 itself
+           (0x48508F..0x4850C4); the owner byte reaches only the anchor's flag nibble
+           (0x423EFB). */
+        char u[REC_UNIT_BYTES];
+        char* udef;
+        uint32_t type;
+        int16_t fx, fz;
+        memcpy(&type, a, 4);
+        memcpy(&fx, a + 8, 2);
+        memcpy(&fz, a + 10, 2);
+        if (a[4] < 1 || a[4] > 15 || a[5] > 1 || a[7] || a[30] || a[31] ||
+            !addr_of(L, SIM_ID_UNIT_TYPE, type, &udef) || !udef || !corpse_def_ok(L, udef, a[4]))
+            return 0;
+        memset(u, 0, sizeof u);
+        memcpy(u + U_DEF, &udef, 4);
+        memcpy(u + U_TURN, a + 24, 6);
+        memcpy(u + U_POS, a + 12, 12);
+        memcpy(u + U_FOOTXZ, a + 8, 4);
+        u[U_OWNERIX] = (char)a[6];
+        E_FCorpse(u, a[4], a[5]);
+        cell = cell_at(L, fx, fz);
+        *got = cell && (cell[CELL_FLAGS] & 1) ? (uint32_t)*(const uint16_t*)(cell + CELL_BACK) + 1
+                                              : REC_ID_NULL;
+        return 1;
+    }
     default:
         return 0;
     }
@@ -2950,9 +3084,12 @@ static void root_play(const Lv* L, const RecWorld* W, unsigned i)
         return;
     }
     s_fst.roots++;
+    if (root == FR_CORPSE) s_fst.corpses++;
     s_fst.left += left;
-    if ((root == FR_SPAWN || root == FR_SWAP || root == FR_DESTROY) && got != want &&
-        !s_fst.rdiffer++)
+    /* a corpse whose spawn took no record on the recording machine is checked by the next
+       images' structure compare */
+    if ((root == FR_SPAWN || root == FR_SWAP || root == FR_DESTROY ||
+         (root == FR_CORPSE && want != REC_ID_NULL)) && got != want && !s_fst.rdiffer++)
         note("replay: GameTime %u: the feature call from 0x%06X returned %u here, %u in the "
              "recording", L->now, site, got, want);
 }
@@ -3000,7 +3137,7 @@ static int death_play(const Lv* L, const RecWorld* W, unsigned i)
     s_dying.blasted = 0;
     memcpy(&s_dying.id, W->ev[i].b, 4);
     was = tagpu_puppet_features(1);
-    done = ev_death(L, W->ev[i].b, W->ev[i].len);
+    done = ev_death(L, W->ev[i].b, W->ev[i].len, 1);
     tagpu_puppet_features(was);
     s_dying.W = NULL;
     if (roots && !s_dying.blasted && !s_fst.dmissed++)
@@ -3009,6 +3146,11 @@ static int death_play(const Lv* L, const RecWorld* W, unsigned i)
     s_fst.left += stray;
     s_fst.deaths++;
     return done;
+}
+
+int tagpu_replay_source(unsigned n, unsigned* v)
+{
+    return s_engine_cells && tagpu_puppet_on() && tagpu_puppet_draw(FS_SOURCE, n, v);
 }
 
 void tagpu_replay_blast(const char* unit)
@@ -3038,8 +3180,10 @@ void tagpu_replay_blast(const char* unit)
    the unit tick's at the replay step, in recorded order with the step's other events; the
    projectile tick's once the host's projectile tick has returned; the rest once its explosion
    tick has returned, and the step's feature images after them, since they are the world
-   after every root of the step (THE TICK'S INPUT). Roots inside a death's bracket go with the
-   death, at the replay step. The deferred brackets are copied, since the iteration is read on
+   after every root of the step (THE TICK'S INPUT). Roots inside a skirmish recording's death go
+   with the death, at the replay step; inside a multiplayer recording's, each at its own phase,
+   like any other (THE DEATHS ON A MULTIPLAYER LEVEL). The deferred brackets are copied, since the
+   iteration is read on
    before the projectile tick runs; past the store's room the step's remaining roots go in at
    the replay step, in recorded order, the ones already held first.
    The cells' unit slots of the next image go in early (slots_put), for the host's projectile
@@ -3047,7 +3191,9 @@ void tagpu_replay_blast(const char* unit)
    source cell's unit slot, 0x424189), and the recording machine's tick saw the iteration's slots
    and its input, not the next image's. So each early slot's previous bytes are kept, and put back
    just before the tick root, whose input then goes in over them (THE TICK'S INPUT); features_put
-   writes the next image's afterwards. A cell past the store's room is not written early. */
+   writes the next image's afterwards. A cell past the store's room is not written early. On a
+   multiplayer recording's level no slot is written (s_engine_cells), and the tick's one read of
+   one, the source test, takes the recording's value (FS_SOURCE). */
 #define PEND_EVENTS 8192
 #define PEND_BYTES  (2u << 20)
 #define PEND_SLOTS  16384
@@ -3119,8 +3265,11 @@ static void slots_restore(void)
     for (i = s_pend.nslots; i-- > 0;) memcpy(s_pend.slot[i].cell, s_pend.slot[i].was, 4);
 }
 
+static int mp_owned_event(unsigned kind);
+
 /* the held brackets of phases up to `phase`, in recorded order: each root, then the events its
-   bracket holds, as the step plays them */
+   bracket holds, as the step plays them. On a multiplayer level the owners' private events a
+   held root nested are their ROOT actions (the materializer), as at the step. */
 static void pend_play(unsigned phase)
 {
     s_pendW.ev = s_pend.ev;
@@ -3131,7 +3280,7 @@ static void pend_play(unsigned phase)
             if (e->b[1] > phase) return;
             if (e->b[0] == FR_TICK) slots_restore();
             root_play(&s_pend.L, &s_pendW, s_pend.next);
-        } else {
+        } else if (!mp_owned_event(e->kind)) {
             ev_play(&s_pend.L, e);
         }
         s_pend.next++;
@@ -3175,24 +3324,484 @@ void __cdecl tagpu_replay_phase(unsigned phase)
     if (phase >= REC_PHASE_LATE) pend_finish();
 }
 
-/* The step's events in recorded order; with `defer`, the roots of a later phase into the store */
+/* ---- THE MULTIPLAYER MATERIALIZER ----------------------------------------------------------
+   A mode-3 recording (demo-recorder-multiplayer-slice.md, *Owner-authority materializer*). The
+   recorder's primary stream supplies the shared world -- features, wrecks, the grid, the
+   projectiles, the globals, the declared tables -- and the broadcast events it observed. Each
+   unit's lifetime, record and mover, each player record and each order list come from the
+   owners' contributions, applied in ledger order where the recorder's capture took them (THE
+   CLOCK, mp_apply_held), through the lifecycle consumer
+   (tagpu_recmp_lifecycle.h) and the reader's authority queries. images_put reads a composed
+   world: the primary world's shared parts with this materializer's own unit, live, player and
+   list arrays, so the reader's world stays its own delta baseline.
+
+   An initial unit is made from the level-start image as the loader made it (level_units), and
+   that image stays its composed one until its owner's first image applies: a remote owner's
+   first contribution reaches the recorder some fifty steps after the level starts (MEASURED
+   2026-10-05, the four-actor recording: ticks 54..57). A unit the recording creates is made at
+   CREATE_BEGIN with the puppet gates shut -- the recording's bracketed children are the only
+   ones (*Exactly-once private children*) -- and holds no composed image until its owner's
+   first, while `held` keeps units_put from counting it as lingering. Its death runs at
+   DEATH_END through ev_death with the entry's saved image, the feature gates shut and its
+   corpse level cleared; its corpse and the rest of its feature calls come from the recorder's
+   stream (THE DEATHS ON A MULTIPLAYER LEVEL).
+
+   Every action names a slot of the recording's frozen blocks, which first_checks has matched
+   to the level's array; the consumer bounds every type by the level's definition count
+   before a callback runs. A refused action stops the playing: the consumer cannot be resumed,
+   and an applied effect is never retried. */
+
+/* one envelope copied out of the reader, until its turn (THE MULTIPLAYER MATERIALIZER) */
+typedef struct MpHeld {
+    RecMpRecord   where;
+    RecMpHeader   packet;
+    unsigned      bytes;
+    unsigned char body[RECMP_BODY_MAX];
+} MpHeld;
+
+static void mp_end(void)
+{
+    unsigned i;
+    if (s_mp.list)
+        for (i = 0; i < s_mp.slots * 2; i++) free(s_mp.list[i].img);
+    if (s_mp.life) tagpu_recmp_lifecycle_end(s_mp.life);
+    free(s_mp.held);
+    free(s_mp.live);
+    free(s_mp.unit);
+    free(s_mp.list);
+    free(s_mp.nodes);
+    free(s_mp.q);
+    memset(&s_mp, 0, sizeof s_mp);
+}
+
+static void mp_fail(const char* fmt, ...)
+{
+    va_list ap;
+    if (s_mp.failed) return;
+    s_mp.failed = 1;
+    s_over = 1;                     /* whichever phase of the step refused, nothing follows it */
+    va_start(ap, fmt);
+    vsnprintf(s_mp.why, sizeof s_mp.why, fmt, ap);
+    va_end(ap);
+    tagpu_logf("replay: %s stops: %s", s_name, s_mp.why);
+}
+
+/* A slot's composed order lists emptied: a new incarnation, or none, shows no list until its owner
+   describes one for its own birth (mp_authority) */
+static void mp_lists_clear(unsigned slot)
+{
+    s_mp.list[(size_t)slot * 2].n = 0;
+    s_mp.list[(size_t)slot * 2 + 1].n = 0;
+}
+
+/* a copy of a list image into a composed list, its buffer grown to fit */
+static int mp_list_put(RecList* l, const unsigned char* img, unsigned n)
+{
+    if (n > l->cap) {
+        unsigned char* p = realloc(l->img, (size_t)n * REC_ORDER_IMAGE);
+        if (!p) return 0;
+        l->img = p;
+        l->cap = n;
+    }
+    if (n) memcpy(l->img, img, (size_t)n * REC_ORDER_IMAGE);
+    l->n = n;
+    return 1;
+}
+
+/* At the first step, once level_units has made the level-start world: the consumer, and the
+   composed world as that image. 1 ready. */
+static int mp_begin(const Lv* L, const RecWorld* W)
+{
+    const RecHeader* h = recr_header(s_rd);
+    unsigned i;
+    mp_end();
+    s_mp.slots = W->slots;
+    s_mp.life = tagpu_recmp_lifecycle_begin(&h->mp, &h->mp_seats, L->ndefs);
+    s_mp.held = calloc(W->slots, 1);
+    s_mp.live = malloc(W->slots);
+    s_mp.unit = malloc((size_t)W->slots * REC_UNIT_IMAGE);
+    s_mp.list = calloc((size_t)W->slots * 2, sizeof *s_mp.list);
+    s_mp.nodes = malloc((size_t)RECMP_ORDER_MAX * REC_ORDER_IMAGE);
+    s_mp.on = 1;
+    if (W->slots != L->nslots || !s_mp.life || !s_mp.held || !s_mp.live || !s_mp.unit ||
+        !s_mp.list || !s_mp.nodes) {
+        mp_fail("the materializer could not be set up for %u slots", W->slots);
+        return 0;
+    }
+    memcpy(s_mp.live, W->live, W->slots);
+    memcpy(s_mp.unit, W->unit, (size_t)W->slots * REC_UNIT_IMAGE);
+    memcpy(s_mp.player, W->player, sizeof s_mp.player);
+    for (i = 0; i < recr_header(s_rd)->mp_seats.count; i++) {
+        unsigned seat = recr_header(s_rd)->mp_seats.actor[i].seat;
+        if (seat < REC_PLAYERS) s_mp.actor[seat] = 1;
+    }
+    for (i = 0; i < W->slots * 2; i++)
+        if (!mp_list_put(&s_mp.list[i], W->list[i].img, W->list[i].n)) {
+            mp_fail("no memory for the level-start order lists");
+            return 0;
+        }
+    return 1;
+}
+
+/* the action's slot is one of the level's: first_checks matched the counts to the recording's */
+static int mp_slot_ok(const Lv* L, const RecMpLifeAction* a)
+{
+    return a->slot >= 1 && a->slot < L->nslots && a->slot < s_mp.slots;
+}
+
+/* An initial unit the recorder's level start did not hold -- a remote owner's, which reaches the
+   recorder as a network replica -- made from its owner's first image as level_units makes one:
+   its loader made it with its Create script's children, which nothing records. */
+static int mp_bootstrap_make(const Lv* L, unsigned slot, const uint32_t* img)
+{
+    const char* ib = (const char*)img;
+    int32_t pos[3];
+    float built;
+    memcpy(pos, ib + 0x6A, 12);
+    memcpy(&built, ib + U_BUILT, 4);
+    if (!make(L, slot, (unsigned char)ib[U_OWNERIX], img_type(img), pos, built == 0.0f,
+              img[U_STATE / 4] & 3u, 1))
+        return 0;
+    s_mp.made++;
+    return 1;
+}
+
+static int mp_create(const Lv* L, const RecMpLifeAction* a)
+{
+    const unsigned char* b = a->image;
+    uint32_t id, finished;
+    unsigned short type;
+    int32_t pos[3];
+    if (a->bytes != 28) return 0;
+    memcpy(&id, b, 4);
+    memcpy(&type, b + 4, 2);
+    memcpy(&finished, b + 8, 4);
+    memcpy(pos, b + 12, 12);
+    if (id - 1 != a->slot || !make(L, a->slot, b[6], type, pos, finished, b[7] & 3u, 0))
+        return 0;
+    s_mp.held[a->slot] = 1;
+    s_mp.live[a->slot] = 0;
+    mp_lists_clear(a->slot);
+    s_mp.made++;
+    return 1;
+}
+
+/* the create's water state, as ev_create writes it: the success exit's own value */
+static int mp_created(const Lv* L, const RecMpLifeAction* a)
+{
+    uint32_t water;
+    if (a->bytes != 28 || !host_live(L, a->slot)) return 0;
+    water = a->image[24];
+    if (water > WATER_MAX) return 0;
+    memcpy(unit_at(L, a->slot) + U_WATER, &water, 4);
+    return 1;
+}
+
+/* THE DEATHS ON A MULTIPLAYER LEVEL. A unit's end is its owner's: DEATH_END runs the destructor
+   through ev_death at the owner's time, with the feature gates shut and the record's corpse level
+   cleared, so it changes neither the grid nor the pool. A death's feature effects are the
+   recorder's: its corpse (FR_CORPSE, the destructor's call of 0x486360 recorded as a root) and
+   its explosion's feature calls are roots of the primary stream, made by root_play at their
+   recorded phase and in recorded order like every other root. The unit's end and its corpse
+   therefore split in time on the recorder's units seen from another machine: the approved rule
+   keeps deaths on the owner's clock and features on the recorder's.
+
+   THE INVARIANT is an ordering. On such a level the feature grid's structure and the wreck pool's
+   structure change only through the recorder's feature roots, made here in recorded order at
+   their recorded phases: the seven feature gates refuse every other call, and the owner-timed
+   destructor runs with them shut and its corpse level cleared. Each root reads only what the
+   recording makes equal -- the grid and the pool, by induction; the feature and unit defs, which
+   data_match pins; its draws, armed; the one unit slot a feature call tests, FS_SOURCE; its
+   recorded arguments, bounded. A spawn takes the free list's head (0x423DA8) and the list mover
+   pushes at it (0x4232F0, LIFO), so one call out of order would shift every later record; in
+   order, from the level's start, every spawn meets the free list the recorder's met and takes the
+   record, the cell and the list place the recorder's took. The images keep comparing structure
+   and never write it.
+
+   A death's other events are its owner's (the materializer's ROOT actions), and a draw a death's
+   destructor made outside any root is counted, not played. The pump 0x4954C8 runs before the
+   capture 0x4954ED, so a remote unit's death the recorder applied from the network is recorded
+   LATE, after its iteration's tick root, and its corpse goes in there. MEASURED 2026-10-05, the
+   four-actor recording: 24 deaths; the 17 of remote units LATE with no root inside; the
+   recorder's own 7 at phase 0, 6 holding explosion roots; every remote death applied by its owner
+   2..7 ticks before the recorder observed it. */
+static int mp_death(const Lv* L, const RecMpLifeAction* a)
+{
+    int done = ev_death(L, a->image, a->bytes, 0);
+    s_fst.deaths++;
+    return done;
+}
+
+static int mp_root(const Lv* L, const RecMpLifeAction* a)
+{
+    int done;
+    unsigned k = a->kind;
+    switch (k) {
+    case RK_EV_START_NAMED: done = ev_start_named(L, a->image, a->bytes); break;
+    case RK_EV_REPLY:       done = ev_reply(L, a->image, a->bytes); break;
+    case RK_EV_SPRAY:       done = ev_spray(L, a->image, a->bytes); break;
+    default:                return 0;
+    }
+    s_mp.roots++;
+    if (done) {
+        s_mp.rplayed++;
+        s_st.played[k - RK_EV_CREATE]++;
+    } else {
+        s_st.skipped[k - RK_EV_CREATE]++;
+    }
+    return 1;
+}
+
+static int mp_action(void* ctx, const RecMpLifeAction* a)
+{
+    const Lv* L = s_mp.L;
+    const char* what = "";
+    (void)ctx;
+    if (!mp_slot_ok(L, a)) {
+        mp_fail("GameTime %u: an owner action names slot %u, outside the level", L->now, a->slot);
+        return 0;
+    }
+    switch (a->action) {
+    case RECMP_LIFE_BOOTSTRAP:
+        if (a->bytes == REC_UNIT_IMAGE && !host_live(L, a->slot) &&
+            !mp_bootstrap_make(L, a->slot, (const uint32_t*)(const void*)a->image)) {
+            what = "a first image";
+            break;
+        }
+        /* fall through: the unit is here, as its owner's loader made it */
+    case RECMP_LIFE_IMAGE:
+        if (a->bytes != REC_UNIT_IMAGE ||
+            !holds(L, a->slot, (const uint32_t*)(const void*)a->image)) {
+            what = a->action == RECMP_LIFE_BOOTSTRAP ? "a first image" : "an image";
+            break;
+        }
+        memcpy(s_mp.unit + (size_t)a->slot * REC_UNIT_DWORDS, a->image, REC_UNIT_IMAGE);
+        s_mp.live[a->slot] = 1;
+        s_mp.held[a->slot] = 0;
+        s_mp.images++;
+        return 1;
+    case RECMP_LIFE_ABSENCE:
+        if (host_live(L, a->slot)) {
+            what = "an absence";
+            break;
+        }
+        s_mp.live[a->slot] = 0;
+        return 1;
+    case RECMP_LIFE_CREATE_BEGIN:
+        if (mp_create(L, a)) return 1;
+        what = "a create";
+        break;
+    case RECMP_LIFE_CREATE_END:
+        if (mp_created(L, a)) return 1;
+        what = "a create's return";
+        break;
+    case RECMP_LIFE_DEATH_BEGIN:
+        if (host_live(L, a->slot)) return 1;
+        what = "a death";
+        break;
+    case RECMP_LIFE_DEATH_END:
+        if (a->bytes == 12 + REC_UNIT_IMAGE && mp_death(L, a)) {
+            s_mp.live[a->slot] = 0;
+            s_mp.held[a->slot] = 0;
+            mp_lists_clear(a->slot);
+            s_mp.destroyed++;
+            return 1;
+        }
+        what = "a death's return";
+        break;
+    case RECMP_LIFE_ROOT:
+        if (mp_root(L, a)) return 1;
+        what = "a private root";
+        break;
+    default:
+        what = "an unknown action";
+        break;
+    }
+    mp_fail("GameTime %u: %s of slot %u (owner %u, birth %u) does not apply here", L->now, what,
+            a->slot, a->source.origin, a->birth);
+    return 0;
+}
+
+/* THE CLOCK. The recorder's B2 at GameTime T (tagpu_recorder.c, mp_capture) flushes its own
+   roots of unit tick T-1, advances, flushes the roots its pump made at T, publishes its own
+   player images of T, consumes every remote contribution that has arrived, then publishes its
+   own unit, order and explored images of T; the roots its unit tick T then makes are flushed
+   at the next B2, still labelled T. So the
+   envelopes of application tick T are, in ledger order, those the recorder held when it
+   captured image T, then its own post-capture roots of T. The replay plays image T at step T-1:
+   step T-1 applies tick T's envelopes up to the first post-capture root batch the recorder
+   produced, and step T applies the rest after its primary events, where its unit tick made
+   them. */
+static void mp_envelope(void* ctx, const RecMpRecord* where, const RecMpHeader* packet,
+                        const void* body, unsigned bytes)
+{
+    MpHeld* e;
+    (void)ctx;
+    if (s_mp.failed) return;
+    if (bytes > RECMP_BODY_MAX) {
+        mp_fail("an envelope of %u bytes, past the %u a packet holds", bytes,
+                (unsigned)RECMP_BODY_MAX);
+        return;
+    }
+    if (s_mp.nq == s_mp.capq) {
+        unsigned cap = s_mp.capq ? s_mp.capq * 2 : 64;
+        MpHeld* q = realloc(s_mp.q, (size_t)cap * sizeof *q);
+        if (!q) {
+            mp_fail("no memory for %u held envelopes", cap);
+            return;
+        }
+        s_mp.q = q;
+        s_mp.capq = cap;
+    }
+    e = &s_mp.q[s_mp.nq++];
+    e->where = *where;
+    e->packet = *packet;
+    e->bytes = bytes;
+    memcpy(e->body, body, bytes);
+}
+
+/* a root batch the recorder's own unit tick made after its capture point */
+static int mp_post_capture(const MpHeld* e)
+{
+    return e->where.phase == RECMP_RECORD_PRODUCED && e->packet.kind == RECMP_ROOTS &&
+           e->bytes >= 4 + sizeof(RecMpRootsEntry) &&
+           !((const RecMpRootsEntry*)(const void*)(e->body + 4))->before_capture;
+}
+
+/* the held envelopes through tick T, and with `image` tick T+1's up to its post-capture roots */
+static void mp_apply_held(const Lv* L, unsigned T, int image)
+{
+    unsigned i = 0;
+    s_mp.L = L;
+    for (; i < s_mp.nq && !s_mp.failed; i++) {
+        const MpHeld* e = &s_mp.q[i];
+        if (e->where.tick > T + (image ? 1u : 0u) ||
+            (image && e->where.tick == T + 1 && mp_post_capture(e)))
+            break;
+        if (!tagpu_recmp_lifecycle_record(s_mp.life, &e->where, &e->packet, e->body, e->bytes,
+                                          mp_action, NULL) && !s_mp.failed)
+            mp_fail("GameTime %u: the owners' contributions refused: %s", L->now,
+                    tagpu_recmp_lifecycle_error(s_mp.life));
+    }
+    memmove(s_mp.q, s_mp.q + i, (size_t)(s_mp.nq - i) * sizeof *s_mp.q);
+    s_mp.nq -= i;
+    s_mp.L = NULL;
+}
+
+/* The players and order lists through step T, by the reader's application authority; a player
+   or a list no owner has described yet keeps its level-start image. An order list goes in only
+   for the incarnation its owner described: the create and the death empty the slot's lists
+   (mp_lists_clear), and a list whose birth is another incarnation's is not copied. */
+static void mp_authority(const Lv* L)
+{
+    const RecHeader* h = recr_header(s_rd);
+    unsigned i, slot, list;
+    char why[sizeof s_mp.why];
+    for (i = 0; i < h->mp_seats.count && !s_mp.failed; i++) {
+        const RecMpSeat* st = &h->mp_seats.actor[i];
+        RecMpPlayerState ps;
+        int k = recr_mp_player(s_rd, st->origin, &ps, why, sizeof why);
+        if (k < 0) mp_fail("GameTime %u: player authority: %s", L->now, why);
+        else if (k && st->seat < REC_PLAYERS) memcpy(s_mp.player[st->seat], ps.image, sizeof ps.image);
+    }
+    for (slot = 1; slot < s_mp.slots && !s_mp.failed; slot++) {
+        RecMpLifeState ls;
+        if (!s_mp.live[slot] && !s_mp.held[slot]) continue;
+        if (tagpu_recmp_lifecycle_get(s_mp.life, slot, &ls) != 1) continue;
+        for (list = 0; list < 2; list++) {
+            RecMpOrderState os;
+            RecList* l = &s_mp.list[(size_t)slot * 2 + list];
+            int k = recr_mp_orders(s_rd, slot, list, &os, s_mp.nodes, RECMP_ORDER_MAX, why,
+                                   sizeof why);
+            if (k < 0) {
+                mp_fail("GameTime %u: order authority: %s", L->now, why);
+                break;
+            }
+            if (!k || os.birth != ls.birth) continue;
+            if (!mp_list_put(l, s_mp.nodes, os.count)) mp_fail("no memory for an order list");
+        }
+    }
+}
+
+/* Step T's own post-capture roots, after its primary events (THE CLOCK) */
+static void mp_step_events(const Lv* L, unsigned T)
+{
+    if (!s_mp.on || s_mp.failed) return;
+    mp_apply_held(L, T, 0);
+    if (s_mp.failed) s_over = 1;
+}
+
+/* What image T+1 rests on, once the world holds iteration T+1 (THE CLOCK): the envelopes read
+   through T+1, those of T+1 up to its post-capture roots applied, then the players and lists */
+static void mp_step_image(const Lv* L, unsigned T)
+{
+    char why[160];
+    if (!s_mp.on || s_mp.failed) return;
+    if (recr_mp_apply(s_rd, &s_mp.ordinal, mp_envelope, NULL, why, sizeof why) < 0)
+        mp_fail("GameTime %u: the contributions cannot be read: %s", L->now, why);
+    if (!s_mp.failed) mp_apply_held(L, T, 1);
+    if (!s_mp.failed) mp_authority(L);
+    if (s_mp.failed) s_over = 1;
+}
+
+/* the world images_put reads: the primary world with the composed units, lists and actors'
+   player records. A record no actor holds has no owner to describe it, so the recorder's
+   observation is its one source: the destructor's rank update moves every record's +0x148, the
+   unseated ones included -- its loop over the ten records has no activity test
+   (0x486BE7..0x486C13, DISASSEMBLED). */
+static const RecWorld* mp_world(const RecWorld* W)
+{
+    unsigned p;
+    if (!s_mp.on) return W;
+    s_mp.W = *W;
+    s_mp.W.live = s_mp.live;
+    s_mp.W.unit = s_mp.unit;
+    s_mp.W.list = s_mp.list;
+    for (p = 0; p < REC_PLAYERS; p++)
+        if (s_mp.actor[p]) memcpy(s_mp.W.player[p], s_mp.player[p], sizeof s_mp.player[p]);
+    return &s_mp.W;
+}
+
+/* the primary events a mode-3 world carries for what the owners contribute */
+static int mp_owned_event(unsigned kind)
+{
+    return s_mp.on && (kind == RK_EV_CREATE || kind == RK_EV_START_NAMED ||
+                       kind == RK_EV_REPLY || kind == RK_EV_SPRAY);
+}
+
+/* The step's events in recorded order; with `defer`, the roots of a later phase into the store.
+   A skirmish recording's death is played whole by death_play, the roots inside it among them; a
+   multiplayer recording's death is its owner's, and only its roots go in here, each at its own
+   phase like any other (THE DEATHS ON A MULTIPLAYER LEVEL). */
 static void events_put(const Lv* L, const RecWorld* W, int defer)
 {
-    unsigned i, end, deaths = 0;
+    unsigned i, end, deaths = 0, mdeaths = 0;
+    int inroot = 0;
     if (defer) s_pend.L = *L;
     for (i = 0; i < W->nev; i++) {
         unsigned k = W->ev[i].kind;
+        if (mp_owned_event(k)) continue;
         switch (k) {
         case RK_EV_DEATH:
+            if (s_mp.on) {
+                mdeaths++;
+                s_mp.observed++;
+                if (W->ev[i].b[10] & 0xF) s_mp.ocorpse++;
+                break;
+            }
             if (death_play(L, W, i)) s_st.played[k - RK_EV_CREATE]++;
             else s_st.skipped[k - RK_EV_CREATE]++;
             deaths++;
             break;
         case RK_EV_DEATH_END:
-            deaths--;
+            if (s_mp.on) mdeaths--;
+            else deaths--;
+            break;
+        case RK_EV_FEATURE_END:
+            inroot = 0;
             break;
         case RK_EV_FEATURE:
-            if (deaths) break;
+            if (deaths) break;          /* death_play made it inside the destructor */
             if (defer && !s_pend.full && W->ev[i].b[1] > REC_PHASE_UNITS) {
                 if ((end = pend_add(W, i)) != 0) {
                     i = end;            /* the bracket's events go with its root */
@@ -3203,8 +3812,13 @@ static void events_put(const Lv* L, const RecWorld* W, int defer)
                 pend_play(REC_PHASE_LATE);  /* the held ones first: the order stays recorded */
             }
             root_play(L, W, i);
+            inroot = 1;
             break;
         default:
+            if (mdeaths && !inroot) {   /* a death's own events are its owner's */
+                if (k == RK_EV_DRAW) s_fst.left++;  /* a draw no recorded call made */
+                break;
+            }
             ev_play(L, &W->ev[i]);
             break;
         }
@@ -3231,6 +3845,7 @@ static void slots_put(const Lv* L, const RecWorld* W)
 {
     unsigned i, k, j;
     uint16_t h[4], slot[2];
+    if (s_engine_cells) return;
     for (i = 0; i < W->nfeat; i++) {
         const unsigned char* b = W->feat[i].b;
         if (W->feat[i].kind != RK_CELLS) continue;
@@ -3669,7 +4284,6 @@ static void mapped_put(char* ta, const RecWorld* W)
     *(uint16_t*)(ta + OFF_LOSTYPE) &= (uint16_t)~8u;
 }
 
-#define U_POS          0x6A         /* x, altitude, z: i32 each                                    */
 #define U_LOSXZ        0x7A         /* the sight stamp: its cell or corner, i16 x and z ...        */
 #define U_LOSH         0xF8         /* ... and its height or circle radius index, u8              */
 #define U_OWNERREC     0x96         /* the owner's player record                                   */
@@ -3841,7 +4455,7 @@ static void recorded_put(const Lv* L, const RecWorld* W)
 {
     masks_init();
     los_react(L->ta, W);
-    books_put(L, W);
+    books_put(L, mp_world(W));          /* each unit's, whichever stream drives it */
     tables_put(L, W, &s_gst.tab, 0);
     globals_put(L->ta, W);
     if (s_tk.on) holds_put(L->ta, W);
@@ -3920,8 +4534,6 @@ void __cdecl tagpu_replay_capture(void)
                                        untested (0x423EBB..0x423EC2)                              */
 #define CELL_DRAWDEFER 0x04         /* flags bit 2: the draw's own (replay-layout.tsv, drawdefer)   */
 #define DEF_BORDER     0xFFFB       /* a cell def at or above this is no feature (0x4246EC)       */
-#define WR_NEXT        0x00         /* a wreck record's list links, i16: the next, the previous   */
-#define WR_PREV        0x02         /*   (the list mover 0x4232F0)                                */
 #define PL_RECORDS     11           /* the player records a SIM_ID_PLAYER may name                */
 #define PL_DISPLAY     0xF8         /* DisplayTimer, a GameTime deadline (0x464765)               */
 #define PASS_TICKS     30           /* the players phase's period (0x46507D..0x465092)            */
@@ -5472,6 +6084,10 @@ static int seek_run(char* ta)
     s_seek.mode = SK_SEEK;                  /* consumed: rt_due's seek_run is a SEEK */
     s_seek.boundary = 0;
     snprintf(dump, sizeof dump, "%s", s_seek.dump);
+    if (s_mp.on) {
+        sk_refused(tk, T, "a multiplayer recording plays forward only: its seek is not built");
+        return 0;
+    }
     pend_finish();                          /* the step before it, whole (THE PHASES) */
     /* R0: position and validate; nothing of the host is touched before TK0 returns */
     if (!level_of(ta, &L)) {
@@ -5734,7 +6350,7 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
     s_view = s_rw.P;
     E_Disarm(*(void**)(ta + OFF_OBJECTIVE));
     seats[v] = 1;
-    tagpu_puppet_begin(seats, locals);
+    tagpu_puppet_begin(seats, locals, 0);
     tagpu_puppet_play();
     s_first = s_dead = s_over = 0;
     s_rw.state = RW_PAST;
@@ -5852,6 +6468,7 @@ static void rw_poll(void)
         s_rd = recr_open(s_rw.path, why, sizeof why);
         if (!s_rd || recr_timeline(s_rd, s_rw.timeline, why, sizeof why) != 1 ||
             !validate_header(recr_header(s_rd), why, sizeof why, &s_rw.viewer, &refusal) ||
+            !rw_skirmish(recr_header(s_rd), why, sizeof why) ||
             !validate_engine(ta, recr_header(s_rd), why, sizeof why) ||
             !first_checks(ta, recr_header(s_rd), why, sizeof why, &refusal, 0)) {
             tagpu_logf("rewind: open refused: %s", why); rw_close_unmoved(ta); return;
@@ -6432,6 +7049,13 @@ static void counts_log(const char* when, unsigned now)
     tagpu_logf("replay: %s: refused on puppets: %s", s_name, gates);
     tagpu_puppet_footprints(gates, sizeof gates);
     tagpu_logf("replay: %s: footprint writes: %s", s_name, gates);
+    if (s_mp.on)
+        tagpu_logf("replay: %s: owners: %u units made, %u destroyed, %u images, %u private roots "
+                   "(%u played), envelope %llu; %u deaths the recorder observed, %u with a corpse "
+                   "level; %u corpses made from its stream%s%s", s_name,
+                   s_mp.made, s_mp.destroyed, s_mp.images, s_mp.roots, s_mp.rplayed,
+                   (unsigned long long)s_mp.ordinal, s_mp.observed, s_mp.ocorpse, s_fst.corpses,
+                   s_mp.failed ? "; stopped: " : "", s_mp.failed ? s_mp.why : "");
 }
 
 /* The next iteration into the world; 0 when there is none, and the playing stops, or when it is
@@ -6500,7 +7124,14 @@ static void play(const Lv* L, int first)
     masks_init();
     if (first) {
         s_st.made += level_units(L, W);
-        images_put(L, W, 0);
+        if (recr_header(s_rd)->mode == MODE_NETWORK) {
+            if (mp_begin(L, W)) mp_step_image(L, W->tick - 1);
+            if (s_mp.failed) {
+                s_over = 1;
+                return;
+            }
+        }
+        images_put(L, mp_world(W), 0);
         wind_seed(W);
         sight_fill(L->ta, s_viewer);
         /* V owns nothing, so its energy and metal are 0. The level start 0x465E30 reads them from
@@ -6522,9 +7153,12 @@ static void play(const Lv* L, int first)
             note("replay: the events of GameTime %u played at GameTime %u", W->tick, L->now);
         }
         events_put(L, W, now);
+        mp_step_events(L, W->tick);
         s_st.steps++;
-        if (!iteration_read(L)) break;
-        images_put(L, W, now && !s_pend.full);
+        if (s_over || !iteration_read(L)) break;
+        mp_step_image(L, W->tick - 1);
+        if (s_over) break;
+        images_put(L, mp_world(W), now && !s_pend.full);
     }
 }
 
@@ -6652,7 +7286,7 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
     int n = 0;
     if (!out || cap <= 0 || !tagpu_replay_live()) return 0;
     h = recr_header(s_rd);
-    W = recr_world(s_rd);
+    W = mp_world(recr_world(s_rd));     /* in mode 3 the composed world the puppets hold */
     valid = ta && level_of(ta, &L);
     for (i = 0; i < REC_PLAYERS; i++) rows[i] = sides[i] = -1;
     for (i = 0; i < h->nseats && i < REC_PLAYERS && n < cap; i++) {
@@ -7062,6 +7696,14 @@ int tagpu_replay_watch(void* gi, const char* file, int view, void (*back)(void* 
         replay_close();
         refused(&r, path);              /* before the notice: the browser is still on top */
         return watch_refuse(gi, name, why);
+    }
+    /* Watch's Start fills the skirmish menu from the recorded controllers, which knows types 1 and
+       2 only; a multiplayer recording plays through tacli replay play, which fills it as human
+       and AI */
+    if (h->mode == MODE_NETWORK) {
+        replay_close();
+        return watch_refuse(gi, name, "a multiplayer recording plays through tacli replay play "
+                            "only");
     }
 
     /* B: the stock order; each refusal undoes before its notice */

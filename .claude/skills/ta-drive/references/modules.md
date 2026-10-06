@@ -238,6 +238,11 @@ run with recording off and return follows no freed engine object. The file fixtu
 applied mixed batches through synthetic seek and proof
 isolation. Native constructor ordering uses the coverage DLL:
 `python3 tools/replay/recmp_create_begin_test.py --port 47818 --out /tmp/recmp-birth-run`.
+`--reproduce` installs `tools/reproduce_fixture.py`'s archive (the stock trees and shrubs with
+`reproduce=100`, generated from the install, written only into the instances and `--out`) on
+both peers, and `--until T` keeps the game running to GameTime T before the host leaves: the
+feature cursor visits one cell per tick from the map's last cell, and on Two Continents it meets
+a tree at rest at tick 387, then none until 1577, and 18 by 2000 (`--until 2000`).
 For copied owner lifetime dispatch from a saved file, use
 `python3 tools/replay/recmp_lifecycle_test.py --native-file <recording> --out <directory>`.
 It owns one isolated Wine prefix/private display and launches no game. C/Python
@@ -257,8 +262,15 @@ completed file. It retains that file, logs, DLL/map and coverage, then stops and
 removes only its own instances. Run the saved file through
 `python3 tools/replay/recmp_file_test.py --native-file FILE --out /tmp/recmp-birth-read`
 to compare complete C/Python application delivery through reader world seek.
-These are native capture/reader tests; engine multiplayer playback remains
-unavailable. The fixture requests speed 20; count it as 2x evidence only if live
+These are native capture/reader tests. Saved multiplayer playback is measured with
+`python3 tools/replay/recmp_play_test.py FILE --out <directory> [--at T ...] [--to-end]
+[--perspective N] [--content ARCHIVE ...]`, which plays FILE on one tareplay worker at speed 20,
+dumps at each T and exits through the game so the playing's counts are logged (`--content`
+copies an archive the recording was made with, such as the recording run's `zzrepro.ufo`, into
+the worker for the playing and removes it after); then
+`python3 tools/replay/recmp_compare.py FILE <directory>/dump-p<T>.bin ...` compares each dump
+with the owner-authority world the recording implies (the multiplayer slice note's
+*Owner-authority materializer*). The fixture requests speed 20; count it as 2x evidence only if live
 heartbeats confirm 20. The retained legacy named-only codec is exercised by
 `python3 tools/replay/recmp_named_test.py --out /tmp/recmp-named-run` (28 atomic
 refusals and 94 guarded truncations). Codec/file controls do not launch TA;
@@ -831,8 +843,9 @@ Without it the log says `recorder: not recording: tagpu_recorder.on is absent`. 
 `recorder: recording …` at the start and `recorder: writer: … closed: …` when the file is done, with
 the corrections, which must be 0; `recorder: N iterations captured: …` gives the capture's cost.
 A native file contains this peer's observed world plus the separate exact-owner
-contribution ledger. Its capture-start log explicitly states that multiplayer
-playback is unavailable; `tacli replay play` still accepts only skirmish files.
+contribution ledger. `tacli replay play` plays it forward from its start, every actor a puppet
+beside the viewer; it has no seek, takeover or ten-seat hosting yet (the multiplayer slice note's
+*Owner-authority materializer*).
 Mandatory contributions run with the recording switch off and continue after a
 local save failure. Live rewind is available only for a recorded skirmish.
 Quitting waits for the file of a game that has ended — the in-game menu's `EXIT` then `EXITGAME`,

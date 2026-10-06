@@ -70,10 +70,16 @@ void __cdecl tagpu_replay_step(void);
 void __cdecl tagpu_replay_phase(unsigned phase);
 
 /* The destructor's explosion has returned (tagpu_recorder.c, rec_blast, at 0x486D50), on the game
-   thread. While a death is replayed, the feature calls the recording's explosion made are made
-   here: the host's explosion makes none, its owner being a puppet seat (the owner gate,
-   0x49A01B..0x49A047). */
+   thread. While a skirmish recording's death is replayed, the feature calls the recording's
+   explosion made are made here: the host's explosion makes none, its owner being a puppet seat
+   (the owner gate, 0x49A01B..0x49A047). */
 void tagpu_replay_blast(const char* unit);
+
+/* Reproduction's source test (tagpu_recorder.c, feat_source) on a multiplayer recording's level:
+   1 with the slot word the recording's tick read for cell n -- the next armed draw, when it is
+   that cell's FS_SOURCE; 0 on any other level, with the armed draws untouched, and the engine
+   tests its own slot. Game thread, inside the replay's tick root. */
+int tagpu_replay_source(unsigned n, unsigned* v);
 
 /* tagpu_reclaim's teardown wrap, on entry to 0x491B60, on the game thread: the level's replay
    ends, the skirmish settings get back what the player had, and the puppet table is cleared. */
@@ -97,7 +103,8 @@ int  tagpu_replay_speed(void);
 int  tagpu_replay_speed_set(unsigned gs);
 
 /* Player cards, game thread only. Rows stay in the recording header's order, including defeated
-   seats. Values come from the player's current recorded image, held after EOF. Sight is independent of the
+   seats. Values come from the player's current recorded image, held after EOF -- in a multiplayer
+   recording the composed one, its owners' (THE MULTIPLAYER MATERIALIZER). Sight is independent of the
    camera: -1 selects the full-map viewer, otherwise a recorded seat index. The request runs at
    the frame boundary and rebuilds death vision, minimap fog and contacts before publishing the
    selected seat. There is no camera stream in this recording format. */

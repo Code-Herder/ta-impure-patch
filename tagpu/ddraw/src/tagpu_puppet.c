@@ -20,6 +20,7 @@ typedef struct PuppetTable {
                                                waits on (0x497C5F, 0x498342)                */
     unsigned char seat[PUPPET_PLAYERS];     /* the record is a puppet seat, V included      */
     unsigned char local[PUPPET_PLAYERS];    /* getter 75's answer for its units             */
+    unsigned char engine_cells;             /* the footprint writers' writes stand          */
 } PuppetTable;
 static PuppetTable s_pup;
 SIM_VAR(s_pup, SIM_CONTENT);
@@ -384,6 +385,10 @@ int tagpu_puppet_rebuilding(void) { return s_rebuild; }
    image's position, an iteration early (MEASURED 2026-09-30, the battle: at GameTime 1280 one
    cell's slot B held the host's unit 858 where the recording's held 854).
 
+   A multiplayer recording's level is the exception (engine_cells, tagpu_puppet_begin): its
+   units are timed by their owners, while the recorder's grid names its own replicas at its own
+   times, so no recorded slot is the truth there and the engine's writes stand.
+
    So each call's grid writes are undone at its return. The recorder's observer at each entry hands
    the unit over (tagpu_puppet.h); this saves the unit's footprint -- +0x76, +0x78 by +0x7E, +0x80,
    i16 each, a cell wider each way, clipped to the grid -- and puts the slots and the yard bit back
@@ -435,7 +440,8 @@ int tagpu_puppet_foot_enter(const char* unit, unsigned ret)
     unsigned char* grid;
     FootFrame* fr;
     int W, H, x0, z0, x1, z1, w, h, x, z, k;
-    if (!s_pup.on || !(ta = *(const char* const*)(size_t)TA_MAINPP)) return 0;
+    if (!s_pup.on || s_pup.engine_cells || !(ta = *(const char* const*)(size_t)TA_MAINPP))
+        return 0;
     if (s_foot.depth >= FOOT_DEPTH) {
         if (!s_footDiag.nested++)
             tagpu_logf("puppet: a footprint writer called from 0x%06X inside %d open ones, the "
@@ -563,7 +569,7 @@ unsigned tagpu_puppet_draws_end(void)
 }
 
 void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
-                        const unsigned char local[PUPPET_PLAYERS])
+                        const unsigned char local[PUPPET_PLAYERS], int engine_cells)
 {
     unsigned i;
     for (i = 0; i < PUPPET_PLAYERS; i++) {
@@ -577,6 +583,7 @@ void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
     s_fopen = 0;
     s_rebuild = 0;
     s_pup.playing = 0;
+    s_pup.engine_cells = engine_cells ? 1 : 0;
     s_pup.on = 1;
 }
 
@@ -584,6 +591,7 @@ void tagpu_puppet_end(void)
 {
     s_pup.on = 0;
     s_pup.playing = 0;
+    s_pup.engine_cells = 0;
     s_open = 0;
     s_fopen = 0;
     s_rebuild = 0;

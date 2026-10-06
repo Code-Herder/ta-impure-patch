@@ -5343,6 +5343,26 @@ static unsigned root_args(Rec* r, Feat* f, void* E, unsigned root, unsigned char
         memcpy(b + 8, &v, 4);
         mark_feature(f, defs, x, z);
         return 12;
+    case FR_CORPSE: {
+        /* What 0x486360 reads of its unit, which it writes none of: the type +0x92 (0x486368,
+           0x486404), the cell +0x76/+0x78 (0x4863B7, 0x4863BB), the position +0x6A and the turn
+           +0x64 by address (0x4863D0, 0x4863F1, 0x48642C), and +0xFF (0x4863EB, 0x486426). Its
+           spawn marks the cells it writes, a nested root of its own */
+        const char* u = PTR(ARG(E, 4));
+        unsigned id = REC_ID_BAD;
+        memset(b, 0, 32);
+        if (ev_unit(r, u)) {
+            id = id_of(&r->L, RL_T_TYPE, *(const char* const*)(u + U_TYPE));
+            b[6] = (unsigned char)u[0xFF];
+            memcpy(b + 8, u + 0x76, 4);
+            memcpy(b + 12, u + 0x6A, 12);
+            memcpy(b + 24, u + 0x64, 6);
+        }
+        memcpy(b, &id, 4);
+        b[4] = (unsigned char)ARG(E, 8);
+        b[5] = (unsigned char)ARG(E, 12);
+        return 32;
+    }
     default:
         return 0;
     }
@@ -5365,7 +5385,13 @@ static int feat_enter(void* E, unsigned root)
     fr->ret = ARG(E, 0);
     fr->id = 0;
     fr->root = (unsigned char)root;
-    fr->recorded = !s_fdepth || s_fstack[s_fdepth - 1].root == FR_BLAST;
+    {
+        const FFrame* up = s_fdepth ? &s_fstack[s_fdepth - 1] : NULL;
+        /* the corpse is a root directly inside the death that is recorded; anything else is one
+           outside every frame or inside an explosion */
+        fr->recorded = root == FR_CORPSE ? (up && up->root == FR_DEATH && up->recorded)
+                                         : (!up || up->root == FR_BLAST);
+    }
     if (fr->recorded) {
         unsigned site = ARG(E, 0) - 5;
         b[0] = (unsigned char)root;
@@ -5388,6 +5414,10 @@ static void* __cdecl feat_leave(unsigned* regs)
 {
     FFrame* fr = &s_fstack[--s_fdepth];
     Rec* r;
+    /* the corpse's spawn, nested in it: the record it took is the corpse's END */
+    if (fr->root == FR_SPAWN && s_fdepth && s_fstack[s_fdepth - 1].root == FR_CORPSE &&
+        s_fstack[s_fdepth - 1].recorded && (r = ev_rec()) != NULL && r->feat)
+        s_fstack[s_fdepth - 1].id = wreck_id(r->feat, regs[7]);
     if (fr->recorded && (r = ev_rec()) != NULL && r->feat) {
         unsigned char b[8];
         unsigned v = regs[7];
@@ -5395,8 +5425,9 @@ static void* __cdecl feat_leave(unsigned* regs)
            cell, or a value that is no record for a cell holding no feature (0x423734 ->
            0x4237C3), which wreck_id makes REC_ID_BAD on both machines; 0x4246B0 a 0 or 1
            (0x4246F2, 0x42471E, 0x42482A); the others end on a network send's or a field's
-           value */
+           value; 0x486360's END is the record its spawn took, 0 for none */
         if (fr->root == FR_SPAWN || fr->root == FR_SWAP) v = wreck_id(r->feat, v);
+        else if (fr->root == FR_CORPSE) v = fr->id;
         else if (fr->root != FR_DESTROY) v = 0;
         b[0] = fr->root;
         b[1] = b[2] = b[3] = 0;
@@ -5476,7 +5507,7 @@ static void __stdcall rec_blast(char* unit, unsigned selfd)
 }
 
 /* the feature functions' entries, by RecRoot, for the counts */
-static const unsigned FEAT_VA[FR_ROOTS] = { 0x00424050u, 0x00423C50u, 0x004246B0u, 0x00423550u,
+static const unsigned FEAT_VA[FR_CORPSE] = { 0x00424050u, 0x00423C50u, 0x004246B0u, 0x00423550u,
                                             0x004233A0u, 0x004244B0u, 0x00423710u };
 static int feat_counted(void* E, unsigned root)
 {
@@ -5490,6 +5521,19 @@ static int __cdecl ob_die(void* E) { return feat_counted(E, FR_DIE); }
 static int __cdecl ob_burn(void* E) { return feat_counted(E, FR_BURN); }
 static int __cdecl ob_damage(void* E) { return feat_counted(E, FR_DAMAGE); }
 static int __cdecl ob_swap(void* E) { return feat_counted(E, FR_SWAP); }
+
+/* The corpse helper 0x486360(unit, level, smoke), the destructor's only call of it (0x486D6F; no
+   other call or stored address in the image). In a multiplayer recording it is a root of its own
+   inside the death, FR_CORPSE: the host's destructor runs at its owner's time and makes no corpse,
+   and the corpse comes from this root (tagpu_replay.c, THE DEATHS ON A MULTIPLAYER LEVEL). In a
+   skirmish recording the replay's destructor makes it: no frame, and no count, which would add a
+   row to every skirmish recording's counts. */
+static int __cdecl ob_corpse(void* E)
+{
+    Rec* r = ev_rec();
+    if (!r || !r->feat || r->mode != MODE_NETWORK) return 0;
+    return feat_enter(E, FR_CORPSE);
+}
 
 /* the stamp, the clear and the re-claim, each (unit): the unit's footprint, a cell wider. On a
    puppet level, where nothing records, the call's grid writes are undone at its return instead
@@ -5537,8 +5581,39 @@ static unsigned __stdcall feat_draw(unsigned site, unsigned n)
     return v;
 }
 
-static const unsigned DRAW_SITES[FS_SITES] = { 0x004234C2u, 0x00423A38u, 0x00423B40u,
-                                               0x00424113u, 0x00424159u, 0x00424167u };
+static const unsigned DRAW_SITES[FS_RNG_SITES] = { 0x004234C2u, 0x00423A38u, 0x00423B40u,
+                                                   0x00424113u, 0x00424159u, 0x00424167u };
+
+/* THE SOURCE TEST. Reproduction spreads a feature only from a source cell no unit stands on:
+   `cmp word [cell],0` at 0x424189, slot A of the cursor's cell [esp+0x10] (0x4240E5). It is the
+   one value a feature call reads from outside the feature world: area damage's slot sums are
+   never read by its feature branch (0x49A407, 0x49A40D), and the spawn, the destroy and the tick
+   read no other unit slot (DISASSEMBLED). A multiplayer playing's host keeps its own slots,
+   because its units follow their owners, so a multiplayer recording records the slot the tick
+   read (FS_SOURCE) and such a host answers from it (tagpu_replay_source). Everywhere else this is
+   the stock test on the engine's own pointer. n is a key compared with the recording's, never an
+   index. 1: a unit holds the source. */
+static int __cdecl feat_source(const unsigned char* cell)
+{
+    const char* ta = *(const char* const*)(size_t)TA_MAINPP;
+    const unsigned char* grid = ta ? *(const unsigned char* const*)(ta + OFF_GRID) : NULL;
+    unsigned n = grid ? (unsigned)((size_t)(cell - grid) / REC_CELL_BYTES) : 0, v;
+    uint16_t a;
+    Rec* r;
+    if (tagpu_replay_source(n, &v)) return v != 0;
+    memcpy(&a, cell, 2);
+    if (s_fdepth && (r = ev_rec()) != NULL && r->feat && r->mode == MODE_NETWORK) {
+        unsigned char b[12];
+        unsigned w = a;
+        b[0] = FS_SOURCE;
+        b[1] = b[2] = b[3] = 0;
+        memcpy(b + 4, &n, 4);
+        memcpy(b + 8, &w, 4);
+        ev_put(r, RK_EV_DRAW, b, 12);
+        r->feat->draws++;
+    }
+    return a != 0;
+}
 
 /* The features as a dump's records: every cell, every record whose image is not all zero, and
    the lists' heads and the cursor, read as the capture reads them and within the same counts. A
@@ -5622,6 +5697,8 @@ static const ObserveSite OBSERVE_SITES[] = {
     { 0x004233A0u, 8, { 0x8B, 0x44, 0x24, 0x08, 0x8B, 0x4C, 0x24, 0x04 }, ob_burn, feat_leave },
     { 0x004244B0u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, ob_damage, feat_leave },
     { 0x00423710u, 8, { 0x8B, 0x44, 0x24, 0x08, 0x8B, 0x4C, 0x24, 0x04 }, ob_swap, feat_leave },
+    /* the corpse helper: no gate lands there */
+    { 0x00486360u, 8, { 0x53, 0x55, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x14 }, ob_corpse, feat_leave },
     { 0x0047CC30u, 5, { 0x83, 0xEC, 0x18, 0x53, 0x55 }, ob_stamp, foot_leave },
     { 0x0047D0E0u, 10, { 0x83, 0xEC, 0x08, 0x53, 0x8B, 0x1D, 0xE8, 0x1D, 0x51, 0x00 }, ob_clear,
       foot_leave },
@@ -5864,6 +5941,16 @@ static void dump_counts(void)
     }
 }
 
+/* Reproduction's source test (THE SOURCE TEST): `mov ecx,[esp+0x10]; cmp word [ecx],0; jne
+   0x4241A8`, redirected whole to a stub that makes the test through feat_source. 0x42418F reads
+   eax, the target cell, and 0x424197 ecx, the source cell, both as stock leaves them; 0x4241A8
+   reads no flags. No branch lands inside the ten bytes (DISASSEMBLED 0x424050..0x4244B0). */
+#define SOURCE_TEST 0x00424185u
+#define SOURCE_SKIP 0x004241A8u     /* 0x42418D's target: a unit holds the source, no spread     */
+#define SOURCE_ON   0x0042418Fu     /* the target cell's test                                    */
+static const unsigned char SOURCE_BYTES[10] = { 0x8B, 0x4C, 0x24, 0x10, 0x66, 0x83, 0x39, 0x00,
+                                                0x75, 0x19 };
+
 /* the fire functions' network tests, `test byte [reg+0x2A44],1` then a je */
 static const unsigned NET_TESTS[5] = { 0x0049D7A0u, 0x0049DA92u, 0x0049DC64u, 0x0049DE25u,
                                        0x0049DFAFu };
@@ -5879,8 +5966,9 @@ void tagpu_rec_init(void)
 {
     unsigned char* net[5] = { 0 };
     unsigned char* calls[START_SITE_COUNT] = { 0 };
-    unsigned char* draws[FS_SITES] = { 0 };
+    unsigned char* draws[FS_RNG_SITES] = { 0 };
     unsigned char* blast = NULL;
+    unsigned char* source = NULL;
     unsigned i, k;
     static const unsigned char regs[8] = { 0x8F, 0x8E, 0x8D, 0, 0x8B, 0, 0, 0 };
 
@@ -5916,7 +6004,7 @@ void tagpu_rec_init(void)
             return;
         }
     }
-    for (i = 0; i < FS_SITES; i++) {
+    for (i = 0; i < FS_RNG_SITES; i++) {
         unsigned char c[5];
         int32_t rel = (int32_t)((unsigned)(size_t)E_Rand - (DRAW_SITES[i] + 5));
         c[0] = 0xE8;
@@ -5937,6 +6025,11 @@ void tagpu_rec_init(void)
                        "event hooks, and nothing will be recorded", BLAST_CALL);
             return;
         }
+    }
+    if (!pristine(SOURCE_TEST, SOURCE_BYTES, sizeof SOURCE_BYTES)) {
+        tagpu_logf("recorder: reproduction's source test 0x%06X holds other bytes: no event hooks, "
+                   "and nothing will be recorded", SOURCE_TEST);
+        return;
     }
 
     /* the stubs of the custom sites */
@@ -5964,7 +6057,7 @@ void tagpu_rec_init(void)
         *p++ = 0x9D;                                    /* popfd                                */
         *p++ = 0xE9; tagpu_detour_rel(p, START_SITES[i].target);
     }
-    for (i = 0; i < FS_SITES; i++) {
+    for (i = 0; i < FS_RNG_SITES; i++) {
         unsigned char* p = draws[i] = tagpu_detour_stub();
         if (!p) goto fail;
         *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x04;   /* push dword [esp+4]: the n      */
@@ -5979,6 +6072,19 @@ void tagpu_rec_init(void)
         *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x08;   /* push dword [esp+8]: the unit   */
         *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)rec_blast); p += 4;
         *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;          /* ret 8, the explosion's own           */
+    }
+    {
+        unsigned char* p = source = tagpu_detour_stub();
+        if (!p) goto fail;
+        memcpy(p, SOURCE_BYTES, 4); p += 4;             /* mov ecx,[esp+0x10]: the source cell   */
+        *p++ = 0x60;                                    /* pushad                               */
+        *p++ = 0x51;                                    /* push ecx                             */
+        *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)feat_source); p += 4;
+        *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;          /* add esp,4                            */
+        *p++ = 0x85; *p++ = 0xC0;                       /* test eax,eax                         */
+        *p++ = 0x61;                                    /* popad, which leaves EFLAGS alone     */
+        *p++ = 0x0F; *p++ = 0x85; tagpu_detour_rel(p, SOURCE_SKIP); p += 4;   /* jnz: no spread  */
+        *p++ = 0xE9; tagpu_detour_rel(p, SOURCE_ON);    /* ecx and eax as stock left them       */
     }
 
     /* then all of them */
@@ -6003,7 +6109,7 @@ void tagpu_rec_init(void)
         if (!tagpu_detour_write(START_SITES[k].call, c, 5)) goto landfail;
         calls[k] = NULL;
     }
-    for (k = 0; k < FS_SITES; k++) {
+    for (k = 0; k < FS_RNG_SITES; k++) {
         unsigned char c[5];
         int32_t rel = (int32_t)((unsigned)(size_t)draws[k] - (DRAW_SITES[k] + 5));
         c[0] = 0xE8;
@@ -6019,9 +6125,11 @@ void tagpu_rec_init(void)
         if (!tagpu_detour_write(BLAST_CALL, c, 5)) goto landfail;
         blast = NULL;
     }
+    if (!tagpu_detour_land(SOURCE_TEST, source, sizeof SOURCE_BYTES)) goto landfail;
+    source = NULL;
     s_sites = 1;
     tagpu_logf("recorder: %u event sites in",
-               (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + FS_SITES + 1));
+               (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + FS_RNG_SITES + 2));
     cnt_sinks_init();
     ai_hooks_init();
     return;
@@ -6032,8 +6140,9 @@ landfail:
 fail:
     for (i = 0; i < 5; i++) tagpu_detour_stub_free(net[i]);
     for (i = 0; i < START_SITE_COUNT; i++) tagpu_detour_stub_free(calls[i]);
-    for (i = 0; i < FS_SITES; i++) tagpu_detour_stub_free(draws[i]);
+    for (i = 0; i < FS_RNG_SITES; i++) tagpu_detour_stub_free(draws[i]);
     tagpu_detour_stub_free(blast);
+    tagpu_detour_stub_free(source);
 }
 
 /* ---- the entry points ----------------------------------------------------------------------- */
@@ -6136,7 +6245,7 @@ static void mp_record_begin(const Level* L, int tick, const RecMpConfig* config)
     rec_begin(L,tick,config);
     if (s_rec)
         tagpu_logf("recorder: native file retains observed world and owner contributions; "
-                   "multiplayer playback is not available");
+                   "it plays forward from its start, with no seek");
 }
 
 static void mp_record_end(int channel_ended)

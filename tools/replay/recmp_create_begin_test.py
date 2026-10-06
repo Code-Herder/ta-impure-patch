@@ -4,6 +4,11 @@
 Owns two fresh Wine instances, a private display and the chosen DirectPlay port.
 Only the host saves; both endpoints must contribute each constructor boundary.
 This verifies capture and persisted causality, not multiplayer engine playback.
+
+--reproduce installs tools/reproduce_fixture.py's archive on both peers (and keeps a copy in
+--out for the playing), so the trees and shrubs the feature cursor visits reproduce; --until T
+keeps the game running to GameTime T before the host leaves, since the cursor visits one cell
+per tick from the map's last cell.
 """
 import argparse
 import fcntl
@@ -114,7 +119,7 @@ def audit(path, output):
     print("PASS: exact owner constructor begin precedes child roots and matching success", summary, flush=True)
 
 
-def run(output, dll, port):
+def run(output, dll, port, reproduce=False, until=0):
     root = tareplay.main_checkout()
     instances, cli = root / "tagpu/instances", TREE / "tools/tacli"
     owned, display = [], None
@@ -145,6 +150,8 @@ def run(output, dll, port):
             if dll.with_suffix(".map").exists():
                 shutil.copyfile(dll.with_suffix(".map"), output / "tested-ddraw.map")
             (output / "build-sha.txt").write_text(digest+"\n")
+            if reproduce:
+                command(sys.executable, TREE / "tools/reproduce_fixture.py", output / "zzrepro.ufo")
             token = "mb"+uuid.uuid4().hex[:6]
             for suffix in ("H", "J"):
                 name = token+suffix
@@ -155,6 +162,8 @@ def run(output, dll, port):
                         "--display", display.display, "--res", "1024x768")
                 game = instances / name / "gamedir"
                 shutil.copyfile(dll, game / "ddraw.dll")
+                if reproduce:
+                    shutil.copyfile(output / "zzrepro.ufo", game / "zzrepro.ufo")
                 if suffix == "H":
                     (game / "tagpu_recorder.on").touch()
                 elif (game / "tagpu_recorder.on").exists():
@@ -230,6 +239,12 @@ def run(output, dll, port):
             (output / "first-roots.json").write_text(json.dumps(
                 [dict(origin=k[0], kind=k[1], observation=v) for k, v in local.items()], indent=2)+"\n")
             print("PASS: all 28 first owner root observations match recipient bytes and source provenance", flush=True)
+
+            def gametime():
+                out = command(sys.executable, cli, "peek", host, tareplay.GAMETIME, "--json", timeout=60)
+                return int(str(json.loads(out[out.index("{"):])["peeks"][0]["value"]).split()[0])
+
+            wait_for(lambda: gametime() >= until, f"the game did not reach GameTime {until}", 1800)
             command("bash", TREE / "tools/mp_leave.sh", host)
             wait_for(lambda: " closed:" in talog.run_text(instances / host / "gamedir"),
                      "native writer did not close", 30)
@@ -266,12 +281,15 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dll", type=Path, default=TREE / "tagpu/ddraw/ddraw-cover.dll")
     parser.add_argument("--port", type=int, default=47818)
+    parser.add_argument("--reproduce", action="store_true",
+                        help="install the reproducing trees and shrubs on both peers")
+    parser.add_argument("--until", type=int, default=0, help="play to this GameTime before leaving")
     args = parser.parse_args()
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)
     try:
-        run(output, args.dll.resolve(), args.port)
+        run(output, args.dll.resolve(), args.port, args.reproduce, args.until)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tareplay.CouldNotRun) as error:
         print(f"FAIL: {error}; inspect {output}", file=sys.stderr)
         return 1

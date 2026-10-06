@@ -147,10 +147,11 @@ EVENTS = {RK_EV_CREATE: "create", RK_EV_NET_CREATE: "network create", RK_EV_DEAT
           RK_EV_REPLY: "reply", RK_EV_SPRAY: "nano spray", RK_EV_FEATURE: "feature call",
           RK_EV_FEATURE_END: "feature call's end", RK_EV_DRAW: "feature draw",
           RK_EV_DEATH_END: "death's end"}
-FR_TICK, FR_SPAWN, FR_DESTROY, FR_DIE, FR_BURN, FR_DAMAGE, FR_SWAP = range(7)
+FR_TICK, FR_SPAWN, FR_DESTROY, FR_DIE, FR_BURN, FR_DAMAGE, FR_SWAP, FR_CORPSE = range(8)
 REC_PHASE_LATE = 2                        # RK_EV_FEATURE's phase byte at most (tagpu_recfmt.h)
-ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12)     # an RK_EV_FEATURE's arguments after its site
-FS_SITES = 6
+ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12, 32)     # an RK_EV_FEATURE's arguments after its site
+FS_SOURCE = 6           # reproduction's source test, a multiplayer recording's tick input
+FS_SITES = 7
 
 RB_HEADER, RB_STREAM, RB_SNAPSHOT, RB_END, RB_MINIMAP, RB_TIMELINES = 1, 2, 3, 4, 5, 6
 RB_CONTRIBUTIONS = 7
@@ -417,9 +418,13 @@ class World:
     def bracket(self, kind, b):
         """The brackets' grammar, as the DLL's reader has it (tagpu_recreader.c, event_take): a
         feature call's holds no other and cells only when it is the tick's, which is inside none;
-        a death's holds its explosion's feature calls and may hold deaths; a draw is inside one."""
+        a death's holds its explosion's feature calls, in a multiplayer recording its corpse's
+        (FR_CORPSE, inside a death only), and may hold deaths; a draw is inside one, FS_SOURCE inside
+        a multiplayer recording's tick only."""
+        network = bool(self.header) and self.header.get("mode") == 3
         if kind == RK_EV_FEATURE:
             if self.fbracket or (b[0] == FR_TICK and self.deaths) or b[0] >= len(ROOT_ARGS) or \
+                    (b[0] == FR_CORPSE and (not self.deaths or not network)) or \
                     b[1] > REC_PHASE_LATE or b[2] or b[3] or len(b) != 8 + ROOT_ARGS[b[0]]:
                 raise Unreadable("a malformed feature call")
             self.fbracket = b[0] + 1
@@ -438,6 +443,8 @@ class World:
         elif kind == RK_EV_DRAW:
             if (not self.fbracket and not self.deaths) or len(b) != 12 or b[0] >= FS_SITES:
                 raise Unreadable("a draw outside a feature call or a death")
+            if b[0] == FS_SOURCE and (self.fbracket != FR_TICK + 1 or not network):
+                raise Unreadable("a source test outside a multiplayer recording's tick")
 
     def cells(self, b):
         x, z, n, zero = struct.unpack_from("<HHHH", b)
