@@ -2932,8 +2932,8 @@ recording that has ended is closed ([*Its lifetime*](tadr-port/demo-recorder-ski
 all before any lands; no recording starts without them. Twenty-five observers run a handler and then
 the stolen bytes: the create's success exit `0x4861B3`, the destructor `0x4866D0`, the build done
 `0x41B8D0`, the state setter `0x48B090`, the broadcast starts `0x456190`, `0x456290` and
-`0x456218` (inside `0x456200`), the replies `0x47F780` and `0x47F850` (chained onto the puppet
-gates there, §2.6f), `QueryNanoPiece` `0x43E400`,
+`0x456218` (inside `0x456200`), the replies `0x47F780` and `0x47F850` (the setter and the replies
+chained onto the puppet gates there, §2.6f, so a refused call is neither recorded nor counted), `QueryNanoPiece` `0x43E400`,
 the nano emitters `0x4720D0` and `0x472200`, and the order dispatch at `0x43A216`, `0x43B878` and
 `0x43BB1D`; and, for the features (S3a), the feature tick `0x424050`, the spawn `0x423C50`, the
 destroy `0x4246B0`, FeatureDie `0x423550`, the burn `0x4233A0`, the damage `0x4244B0` and the swap
@@ -3383,7 +3383,7 @@ in-play frame callback's `call 0x468CF0`: checked by `call_is` and rewritten to 
 the site's own return address `0x4969D2` and the observers on `0x468CF0` see the frames they saw.
 It is installed first and on its own, since a dump of a live recording needs it too, and runs on
 paused frames as well, between two sim steps, before the draw; the scenario applier's hook at
-`0x4969D2` takes the next instruction's bytes. **Twenty prologue gates** (`tagpu_puppet.c`,
+`0x4969D2` takes the next instruction's bytes. **Twenty-one prologue gates** (`tagpu_puppet.c`,
 `tagpu_detour_gate`), landed at `DllMain` before the recorder's observers, refuse on a puppet level:
 the apply `0x489CE0` and `Send_UnitDeath 0x4864B0` for a puppet's unit; COB's SET (at `0x480B26`,
 its second instruction), ATTACH `0x481340`, DROP `0x4813B0` and the two replies `0x47F780` and
@@ -3393,14 +3393,18 @@ shower `0x437DE0`, typed commands `0x417B50`, the debug keys `0x4956C0`, the res
 the feature tick `0x424050` and the six feature functions (`0x423C50`, `0x4246B0`, `0x423550`,
 `0x4233A0`, `0x4244B0`, `0x423710`); and while a seek rebuilds the level, the skirmish
 elimination `0x47BD70` (stolen `81 EC C8 00 00 00`, `ret 4`), so the rebuild's kills announce no
-defeat. On any other level a gate reads only the mode byte. The
+defeat; and on a multiplayer recording's segment, the state setter `0x48B090` (stolen
+`51 8B 44 24 0C`, `ret 8`) for a call that would change a puppet's `+0x10E` by the setter's own
+rule, outside the replay's write of the byte from the owner's composed image
+(`tagpu_puppet_state_open`, around `book_state` alone), so each change starts its scripts once.
+On any other level a gate reads only the mode byte. The
 recorder's hooks serve a puppet level too (§2.6e): the six draws answer from the recording, the
 explosion stub makes a replayed death's feature calls, and the footprint writers' `after` undoes
-their grid writes. A recording plays only when all twenty gates and the recorder's hooks are in,
+their grid writes. A recording plays only when all twenty-one gates and the recorder's hooks are in,
 and the teardown wrap too (§2.7), which ends the puppet level before the cascade destroys its
 units. **Three count-only observers** (`tagpu_puppet.c`, *THE COB WRITES ON A PUPPET*, installed
 after the gates; without them the dumps carry no COB-write counts) on the state setter `0x48B090`
-(stolen `51 8B 44 24 0C`), the yard `0x47DAC0` (`53 8B 5C 24 0C`) and the carry link `0x48AAC0`
+(stolen `51 8B 44 24 0C`, chained onto its gate, so a refused call is not counted), the yard `0x47DAC0` (`53 8B 5C 24 0C`) and the carry link `0x48AAC0`
 (`8B 4C 24 04 83 EC 08`) count, on a puppet level outside the replay's own calls, each call
 returning to one of COB's five write sites (`0x480B57`, `0x480BF1`, `0x480BB3`, `0x4813AB`,
 `0x481427`) on a puppet's unit, the unit bounded as a slot of the array first; the first 16 are
@@ -3493,7 +3497,9 @@ and on the loader thread at the allocator ownership boundary and the level init'
   and, before the `write` rows, each live unit's water state `+0x10A` (bounded by its enum) and
   sight stamp's fields `+0x7A`, `+0x7C`, `+0xF8` (through the removal `0x482090` and the stamp
   `0x482270`, a circle's radius index bounded by the frame table's count) where they differ from
-  the recording's (`books_put`);
+  the recording's (`books_put`); on a multiplayer recording's segment also each live unit's state
+  byte `+0x10E` from its owner's composed image, through `0x48B090` with the state gate open, where
+  it differs (`book_state`);
 - at each create: the new unit's water state `+0x10A`, from the create event, bounded by its enum;
 - after each step's images: the cells the feature tick's input wrote, again from the next
   iteration's world through the same cell write (the whole grid after an overflow);

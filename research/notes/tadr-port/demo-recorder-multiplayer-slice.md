@@ -1222,6 +1222,7 @@ each namespace has exactly one source:
 | Unit existence and lifetime, every frozen block | the lifecycle consumer's actions (`tagpu_recmp_lifecycle.h`); primary create and death events are not dispatched |
 | Unit record and mover | the latest applied owner image of that exact incarnation, written by the skirmish image recipe |
 | A unit's sight stamp and water state | the same composed image (`books_put` reads it) |
+| A unit's state byte `+0x10E` | the same composed image, written by `books_put` through the setter `0x48B090` at every capture point (R8b's `book_state`, which a seek runs too); the primary's state events are not dispatched, since the recorder's copy takes each change at its own receipt time, and the puppet's state gate refuses every other change of a puppet's byte on the segment -- the create's activation `0x486148`, the replayed build finish's `0x41B9BF`, a script's SET -- so each change starts `Activate`/`Deactivate` or `StartBuilding`/`StopBuilding` once |
 | Owner private roots (named starts, replies, sprays) | `ROOT` actions at their ledger position, the recorder's own publications included; primary copies are not dispatched |
 | An actor's player record | its owner's player images, mapped to recorder rows; `+0xF0`, the players phase's deadline, stays the host's own |
 | A player record no actor holds | the primary stream (the destructor's rank update writes every record's `+0x148`, `0x486BE7..0x486C13`) |
@@ -1229,6 +1230,23 @@ each namespace has exactly one source:
 | Feature records, cells' defs and heights, the wreck pool, every corpse, projectiles, globals, declared tables | the primary stream, as the recorder observed them; corpses as `FR_CORPSE` roots |
 | Cells' unit slots and yard bit | the host's engine (below); reproduction's source test takes the recorder's slot (`FS_SOURCE`) |
 | Explored map per player | per-origin contributions |
+
+**The state byte.** Played from the primary's state events, a unit's `+0x10E`
+followed the recorder's clock while the comparison and a seek took the owner's
+image: MEASURED 2026-10-06 on the four-actor recording, an armmex finished by
+its owner (slot 4503) held the byte 1 in its owner's image from 1199, while the
+primary's state event came in step 1202 and its build finish in 1203, so the
+forward dumps at 1199 and 1202 differed from the expected world by exactly that
+byte and a fresh seek to 1200 did not. With the composed image as the byte's
+one source, the same recording played forward compares EQUAL at 300 and at
+every tick from 1198 to 1203, a playing in player 1's perspective at 1200 and
+fresh seeks to 1200 and 1202 EQUAL too. The forward playing, stopped after its dump at 1203, wrote 15 state
+bytes from the images and the gate refused 13 changes: the creates' activations
+`0x486148` of the loader's three commanders at GameTime 1 and of nine finished
+units the owners made at 55, 61 and 76, and one build finish `0x41B9BF` whose
+primary event came before its owner's image (slot 3006, 615). A seek's rebuild
+has its creates refused in the same way (16 in a fresh seek to 1200, 13 of them
+the rebuild's) and R8b writes the composed byte after them.
 
 The composed world is a materializer-owned copy of `RecWorld`'s unit, live,
 player and list arrays; the reader's world stays the delta baseline. Every ID

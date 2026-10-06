@@ -1205,17 +1205,43 @@ AutoAim and the local block (orders, movement, regeneration) run only for types 
   add explosions through `0x420A30`. EMIT_SFX, `vt+0x30` = `0x480EB0`, emits particles only, and
   only when the unit is in the viewed player's sight (`0x465AC0`, `0x480EC5..0x480EEC`).
   PLAY_SOUND `0x10072000` kills its own thread (`0x4B1B60`).
-- **`0x48B090(mask, value)`** (thiscall on the unit, `ret 8`) stores the new `+0x10E` and returns
-  at once when the byte did not change (`0x48B0D6..0x48B0DE`). A change starts Activate or
-  Deactivate (bit 0) or StartBuilding or StopBuilding (bit 3) with run-now clear (`0x48B106`,
-  `0x48B12B`, `0x48B14E`, `0x48B169`), calls `0x47F780` for bits 0 and 2, then `0x41C110`, and
-  sends `0x11` only for an active owner of type 1 or 2 (`0x48B1B5..0x48B1F3`). `0x47F780(unit,
+- **`0x48B090(mask, value)`** (thiscall on the unit, `ret 8`; 45 call sites) computes the new
+  byte as `value ? old | mask : old & ~mask` of `+0x10E`, both arguments taken as bytes
+  (`0x48B09A..0x48B0D4`), stores it (`0x48B0D8`) and returns at once when the byte did not change
+  (`0x48B0DE`). Its effects, DISASSEMBLED `0x48B0D8..0x48B1FC` (2026-10-06): with the bits newly
+  set in `bl` and the bits newly cleared at `[esp+0x14]`, bit 0 set starts `Activate` (the name at
+  `0x501280`) through `0x4B0940` on the unit's script `[+0x9A]` with run-now clear (`0x48B106`) and
+  queues reply kind 3 through `0x47F780(unit, 3, 0)` (`0x48B110`); bit 0 cleared starts
+  `Deactivate` (`0x501274`, `0x48B12B`) and queues kind 4 (`0x48B135`); bit 3 set starts
+  `StartBuilding` (`0x5050F4`, `0x48B14E`) and bit 3 cleared `StopBuilding` (`0x505104`,
+  `0x48B169`), with no reply; bit 2 set queues kind 14 (`0x48B178`) and hands event `0x10000` to
+  every reference on the unit's `+0xA2` chain (`0x48B17D..0x48B19C`, the owner's `vtable[0]`, which
+  ORs it into an order node's `+0x4E`), and bit 2 cleared queues kind 15 (`0x48B1AA`). Then
+  `0x41C110(unit)` (`0x48B1B0`), which sets `main+0x37EBE` bit 4 for a unit of the controlled
+  player with `+0x110` bit 4, and the `0x11` (`0x11`, the slot `+0xA8`, the new byte; 4 bytes)
+  through `0x451DF0` only when the owner record `[+0x96]` is active and of type 1 or 2
+  (`0x48B1B5..0x48B1F3`). It has no result: EAX holds whatever its last load or call left. `0x47F780(unit,
   kind, 0)` acts only for a live unit of the viewed player and queues a status line through
   `0x47FAD0` (table `0x5086E8`). It never reaches the sound entry `0x47F0C0`, whose callers are
   `0x45562D`, `0x47F1FA`, `0x47F274` and `0x47F31A`: the queue's consumer `0x47F680`, called once
   per main-loop pass (`0x4999A6`), plays a reply through `0x47FD70` and `0x4D0640` by file name and
   sends nothing. Bit 0 queues reply kind 3 or 4 (`0x48B110`, `0x48B135`), bit 2 kind 14 or 15
   (`0x48B178`, `0x48B1AA`).
+- **The build finish `0x41B8D0(builder, built)`** (stdcall, `ret 8`), DISASSEMBLED
+  `0x41B8D0..0x41BA51` (2026-10-06). It returns at once unless the builder is non-NULL and live
+  (`+0x110` bit 28), its def's `+0x156` is nonzero, and the built unit is non-NULL and live
+  (`0x41B8D6..0x41B917`). Then on the built unit: the model instance's nanoframe flag
+  `[+0x9E]+0x10` = 0 (`0x41B923`), `+0x104` = 0 (`0x41B933`) and `+0x110` bit 13 set (`0x41B930`,
+  `0x41B93D`). For an owner of type 1 or 2 (`0x41B945..0x41B959`): with `+0x110` bit 29, when
+  `BUILDER.GUI` (`0x502844`) is on top (`0x4AB060`) its refresh flag through `0x49FA90`
+  (`0x41B95B..0x41B989`), otherwise, with `+0x86` set, `0x48AAC0(built, 0, −1, 1)` (`0x41B990..
+  0x41B9A1`). With def `+0x241` bit 18, `0x48B090(1, 1)` on the built unit (`0x41B9A6..0x41B9BF`)
+  -- the activation that starts `Activate` -- and the code after it (`0x41B9C4`) does not read
+  EAX. When `main+0x37E9C` names the builder (its `+0xA8`), `0x4199B0(main+0x519, builder)`
+  (`0x41B9C4..0x41B9E0`); with def `+0x241` bit 24, `+0xF5` = 7 and `+0x110` bit 14
+  (`0x41B9E5..0x41BA08`); for an owner of type 1 or 2 the `0x12` through `0x4560C0(builder,
+  built)` (`0x41BA0E..0x41BA26`); and when either unit has `+0x110` bit 4, `main+0x37EBE` bit 4
+  (`0x41BA2B..0x41BA48`).
 - **A remote copy takes `+0x10E` only through `0x48B090`**, called twice (set the byte's bits,
   clear the rest) by the `0x11` receiver (`0x4555A1`, `0x4555B0`) and the round robin
   (`0x48B4F6..0x48B519`). Neither carries `+0x10F`, so a remote copy's `+0x10F` comes only from
@@ -2325,6 +2351,8 @@ level that plays a recording, and otherwise runs the stolen bytes and goes on:
 | `0x4233A0`, the burn | `8B 44 24 08 8B 4C 24 04` | 0xC | the same |
 | `0x4244B0`, the damage | `8B 0D E8 1D 51 00` | 0x10 | the same |
 | `0x423710`, the swap | `8B 44 24 08 8B 4C 24 04` | 0xC | the same |
+| `0x47BD70`, the skirmish elimination | `81 EC C8 00 00 00` | 4 | while a seek rebuilds the level |
+| `0x48B090`, the state setter | `51 8B 44 24 0C` | 8 | on a multiplayer recording's segment, the unit (ECX) is a puppet seat's, the call would change `+0x10E` by the setter's own rule (`0x48B09A..0x48B0D4`), outside the replay's write of the byte from the owner's image |
 
 **What else the apply rests on** [DISASSEMBLED 2026-09-30]:
 

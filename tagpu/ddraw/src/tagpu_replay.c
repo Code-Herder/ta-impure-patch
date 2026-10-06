@@ -217,7 +217,7 @@ typedef struct {
 } TabCounts;
 
 typedef struct {
-    unsigned water, stamps, refused;
+    unsigned water, states, stamps, refused;
 } Books;                            /* the units' bookkeeping written (THE UNITS' BOOKKEEPING)     */
 static struct {
     unsigned puts, late, refused, reacts, dropped, unbounded, mputs, mentries, mrefused;
@@ -1579,7 +1579,9 @@ static void masks_init(void)
     m_bytes(s_raw1, U_OWNERIX, 1, 0);
     m_bytes(s_raw1, U_GROUP, 4, 0);         /* the control group, group_put's              */
     m_bytes(s_raw1, 0x10A, 1, 0);           /* the water state, books_put's                    */
-    m_bytes(s_raw1, 0x10E, 1, 0);           /* the state byte                                  */
+    m_bytes(s_raw1, 0x10E, 1, 0);           /* the state byte: the state events' in a skirmish,
+                                               books_put's from the composed image on a
+                                               multiplayer segment                             */
     m_field(s_raw1, U_YARD, 1, 0x04, 0);    /* the yard, YARD_OPEN's                           */
     m_field(s_raw1, U_STATE, 4, U_ENGINE_BITS, 0);
     m_bytes(s_raw1, REC_MOVER_AT + 0x26, 8, 0);
@@ -3596,6 +3598,13 @@ void __cdecl tagpu_replay_phase(unsigned phase)
    corpse level cleared; its corpse and the rest of its feature calls come from the recorder's
    stream (THE DEATHS ON A MULTIPLAYER LEVEL).
 
+   A unit's state byte +0x10E is its composed image's too. The recorder's state events are its
+   own copy's changes at its own receipt times, so they are not played (mp_owned_event); books_put
+   writes the composed byte through the setter at every capture point, as R8b does at a seek, and
+   the puppet's state gate refuses every other change of a puppet's byte on this segment -- the
+   create's, the replayed build done's, a script's -- so each change starts its scripts once
+   (THE UNITS' BOOKKEEPING, tagpu_puppet.c).
+
    Every action names a slot of the recording's frozen blocks, which first_checks has matched
    to the level's array; the consumer bounds every type by the level's definition count
    before a callback runs. A refused action stops the playing: the consumer cannot be resumed,
@@ -4341,11 +4350,14 @@ static int mp_follow(const Lv* L, unsigned T)
     return here ? mp_rebuild(L, T) : !s_mp.failed;
 }
 
-/* the primary events a mode-3 world carries for what the owners contribute */
+/* the primary events a mode-3 world carries for what the owners contribute. RK_EV_STATE among
+   them: the recorder's copy takes a state change from the engine's 0x11 or its build done at its
+   own receipt time, on another session, so that step is not the composed image's; the image's
+   byte is written by books_put (THE UNITS' BOOKKEEPING). */
 static int mp_owned_event(unsigned kind)
 {
     return s_mp.on && (kind == RK_EV_CREATE || kind == RK_EV_START_NAMED ||
-                       kind == RK_EV_REPLY || kind == RK_EV_SPRAY);
+                       kind == RK_EV_REPLY || kind == RK_EV_SPRAY || kind == RK_EV_STATE);
 }
 
 /* The step's events in recorded order; with `defer`, the roots of a later phase into the store.
@@ -4929,6 +4941,21 @@ static int book_water(char* u, const unsigned char* ib, Books* b)
     return 1;
 }
 
+/* R8b's state half: the image's state byte where the host's differs, through the setter as ev_state
+   sets it -- the bits set, then the rest cleared -- so its scripts and replies start as on the
+   recording machine. The state gate is open around the two calls alone (tagpu_puppet.c): on a
+   multiplayer segment this is the byte's one writer on a puppet. 1 written */
+static int book_state(char* u, const unsigned char* ib, Books* b)
+{
+    if ((unsigned char)u[U_STATEBYTE] == ib[U_STATEBYTE]) return 0;
+    tagpu_puppet_state_open(1);
+    E_SetState(u, ib[U_STATEBYTE], 1);
+    E_SetState(u, (unsigned char)~ib[U_STATEBYTE], 0);
+    tagpu_puppet_state_open(0);
+    b->states++;
+    return 1;
+}
+
 /* R8b's stamp half (seek_unit_books has the engine's invariant and the bound): the circle's radius
    index bounded first, then, where the fields differ, the host's stamp removed through 0x482090
    when it made one, the image's three written, and stamped through 0x482270 when they describe
@@ -4984,7 +5011,17 @@ static int book_stamp(const Lv* L, char* u, const unsigned char* ib, uint16_t lo
    write puts the recording machine's values for that point, and nothing between the write and the
    recorder's capture, or the next unit tick, emits or runs 0x43DB50. The counters stay exact by
    R8b's own argument: the host's fields describe the host's stamps, so the removal takes back
-   exactly what was stamped. */
+   exactly what was stamped.
+   ON A MULTIPLAYER SEGMENT the state byte +0x10E is written here too, from W, the composed world:
+   its owner's image is the byte's one source there, since the recorder's state events follow the
+   recorder's own receipt of each change (mp_owned_event leaves them out) and the state gate
+   refuses every other change of a puppet's byte (tagpu_puppet.c). book_state writes it through
+   the setter as R8b does, so the scripts and replies a change starts run once, here. The
+   invariant is the same ordering: this is the last writer of the byte before the recorder's
+   capture and dump at every capture point, and R8b writes the same composed byte at a seek, so a
+   forward playing and a seek hold the same byte at every capture point. The bound is the loop's:
+   a slot below the level's count whose unit is of the image's type (holds). In a skirmish the
+   recorded state events are the byte's writer and nothing is written here. */
 static void books_put(const Lv* L, const RecWorld* W)
 {
     unsigned slot;
@@ -5002,6 +5039,7 @@ static void books_put(const Lv* L, const RecWorld* W)
         int made, wrote_w, wrote_s;
         if (!W->live[slot] || !holds(L, slot, img)) continue;
         u = unit_at(L, slot);
+        if (s_mp.on) book_state(u, ib, &s_gst.books);
         water = (unsigned char)u[U_WATER];
         memcpy(was, u + U_LOSXZ, 4);
         wasb = (unsigned char)u[U_LOSH];
@@ -5499,7 +5537,9 @@ static void sk_sight_reset(char* ta, const RecWorld* W)
      it, so the bound is its enum's; a value past it keeps the host's and is counted. Setting it
      starts no script: COB restarts at a seek, and the unit's next change starts setSFXoccupy.
    - The state byte through the setter, as ev_state sets it; its scripts and its send run as in
-     R7's creates, which call it from the frame visit already (0x486148).
+     R7's creates, which call it from the frame visit already (0x486148). On a multiplayer
+     segment the state gate refuses the creates' call, and this write, book_state's, is the
+     byte's one change.
    - The sight stamp, by the engine's invariant (DISASSEMBLED): with LosType bit 1, in the ray fan
      a unit's byte is not 0 exactly when its fields describe a stamp it made, and in the circle its
      fields always do -- the create's 0x482AC0 stores byte 0 and goes through the emitter in the
@@ -5521,8 +5561,9 @@ static void sk_sight_reset(char* ta, const RecWorld* W)
      stamp, and is counted. The walks bound the words themselves (0x4822F8/0x482304, 0x481DD8,
      the circle's frame clipped at 0x4824F5..0x482547), and every byte is a height the emitter
      can store (0x4825EA..0x4825F2).
-   The water and stamp halves are book_water and book_stamp. In playback, books_put runs them at
-   every capture point (THE UNITS' BOOKKEEPING). Here they run for the seek's own reason, and
+   The water, state and stamp halves are book_water, book_state and book_stamp. In playback,
+   books_put runs the water and stamp halves at every capture point, and the state half on a
+   multiplayer segment (THE UNITS' BOOKKEEPING). Here they run for the seek's own reason, and
    R13's books_put then finds them equal. */
 static void seek_unit_books(const Lv* L, const RecWorld* W)
 {
@@ -5530,7 +5571,7 @@ static void seek_unit_books(const Lv* L, const RecWorld* W)
     uint16_t los;
     const uint16_t* circles = *(const uint16_t* const*)(L->ta + OFF_CIRCLES);
     unsigned char rec[SIGHT_REC];
-    Books b = { 0, 0, 0 };
+    Books b = { 0, 0, 0, 0 };
     memcpy(&los, L->ta + OFF_LOSTYPE, 2);
     for (slot = 1; slot < L->nslots; slot++) {
         const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
@@ -5539,14 +5580,11 @@ static void seek_unit_books(const Lv* L, const RecWorld* W)
         if (!W->live[slot] || !holds(L, slot, img)) continue;
         u = unit_at(L, slot);
         book_water(u, ib, &b);
-        if ((unsigned char)u[U_STATEBYTE] != ib[U_STATEBYTE]) {
-            E_SetState(u, ib[U_STATEBYTE], 1);
-            E_SetState(u, (unsigned char)~ib[U_STATEBYTE], 0);
-            s_sk.states++;
-        }
+        book_state(u, ib, &b);
         book_stamp(L, u, ib, los, circles, rec, &b);
     }
     s_sk.water += b.water;
+    s_sk.states += b.states;
     s_sk.stamps += b.stamps;
     s_sk.brefused += b.refused;
 }
@@ -7798,11 +7836,13 @@ static void counts_log(const char* when, unsigned now)
                "another iteration; the pool refused %u times; the sight mode changed %u times, "
                "%u temporary sight records dropped, %u changes not made; the explored map changed "
                "by %u writes, %u entries in all, refused %u times; the units' bookkeeping: %u water "
-               "states and %u sight stamps written, %u refused; %u units made in the step before, "
+               "states, %u state bytes and %u sight stamps written, %u refused; %u units made in "
+               "the step before (water and stamps), "
                "%u others; the declared tables: %u rows written over the host's own values (in "
                "%s), %u values kept, %u skipped, %u repaired", s_name, s_gst.puts, s_gst.late,
                s_gst.refused, s_gst.reacts, s_gst.dropped, s_gst.unbounded, s_gst.mputs,
-               s_gst.mentries, s_gst.mrefused, s_gst.books.water, s_gst.books.stamps,
+               s_gst.mentries, s_gst.mrefused, s_gst.books.water, s_gst.books.states,
+               s_gst.books.stamps,
                s_gst.books.refused, s_gst.bmade, s_gst.bother, s_gst.tab.changed,
                s_gst.tab.names[0] ? s_gst.tab.names : "none", s_gst.tab.kept, s_gst.tab.skipped,
                s_gst.tab.repaired);

@@ -48,8 +48,8 @@ void tagpu_puppet_engine_cells(int engine_cells);
 
 /* THE GATES (tagpu_puppet.c): the engine functions that would write what a recording carries on
    a puppet level, or take the viewer's own input to it, refuse on one. DllMain's attach lands them
-   all, before the recorder's observers, which chain onto the two reply gates; a level plays a
-   recording only when every gate is in. */
+   all, before the recorder's observers, which chain onto the two reply gates, the seven feature
+   gates and the state gate; a level plays a recording only when every gate is in. */
 void tagpu_puppet_init(void);
 int tagpu_puppet_gates_in(void);
 /* The replay's own create and reply, bracketed on the game thread: the unit gates let through
@@ -60,6 +60,9 @@ void tagpu_puppet_open(int open);
 void tagpu_puppet_rebuild(int on);
 /* 1 while a seek's rebuild runs: the recorder's counts leave its calls out */
 int tagpu_puppet_rebuilding(void);
+/* The replay's own write of a state byte from the owner's image, bracketed on the game thread
+   (tagpu_replay.c, book_state): on a multiplayer segment the state gate lets through only it */
+void tagpu_puppet_state_open(int open);
 /* COB's engine writes on a puppet this level, by write site (tagpu_puppet.c, THE COB WRITES ON A
    PUPPET): each site's return address in va[k] and its count in n[k]; the sites, or 0 when the
    observers are not in */
