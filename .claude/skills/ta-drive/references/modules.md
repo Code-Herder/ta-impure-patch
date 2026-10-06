@@ -90,7 +90,7 @@ instance/display. `--extended` checks full-width invalid IDs, nonzero kills/cons
 local 100 and every argument of a 100-argument CALL. `--roundtrip` saves and restores sleeping
 expanded records; `--quarantine` checks type exclusion, native chat and a presented-window
 capture; `--reject-required` expects a required-unit refusal. Separate
-`--thread-exhaustion start|call` fixtures fill all eight records and exercise refused calls
+`--thread-exhaustion start|call` fixtures fill all ten guarded records and exercise refused calls
 with a full 128-word argument stack. START consumes refused arguments and resumes
 after SIGNAL frees slots; CALL retains the arguments, leaves its parent dormant
 on child `-1`, and checks that the match keeps advancing.
@@ -795,6 +795,10 @@ before replay comparisons; use `tools/replay/tareplay.py run resource-mex resour
 a focused run and `tools/replay/tareplay.py landing` for the landing gate. The mex assertion
 compares manual and Quick placement at the same pointer and rejects a partial target at the
 configured snap boundary.
+Omit `--keep` for normal regression runs: the report removes passing frame dumps after its
+checks, retaining failing dumps, logs, recordings and coverage. Peak space still includes the
+whole run before reporting. Use `--keep` when passing dumps are needed for diagnosis, and clean
+redundant artifacts only from completed runs; an active report still reads its collected dumps.
 The classic fixture selects `LEFTCLICK` stage 0 in native Interface options after launch and
 requires `main+0x37EFA == 0` before clicking. Setting the stopped instance's registry is
 insufficient: every launch restores right-button orders. Other mex fixtures verify value 1.
