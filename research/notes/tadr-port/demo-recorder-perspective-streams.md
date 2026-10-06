@@ -4,8 +4,9 @@
 
 Planned 2026-10-06. Landing 4c-1 (the skirmish capture) is built and awaits its V1 run. Landing
 4c-2 (Follow, Jump and Free cam on a skirmish playback) is built and awaits its V2 run; what it
-settled beyond the plan is [4c-2 as built](#4c-2-as-built). 4c-3 and 4c-4 are not built. This is
-stage 4c of the
+settled beyond the plan is [4c-2 as built](#4c-2-as-built). Landing 4c-3 (the overlays and the
+dock's Overlays menu) is built and awaits its V3 run: [4c-3 as built](#4c-3-as-built). 4c-4 is not
+built. This is stage 4c of the
 [multiplayer slice](demo-recorder-multiplayer-slice.md#stage-4-perspectives-and-communication)
 and landing 3 of [S5](demo-recorder-s5-ui.md#landings) ("the streams and the cards"). It records
 each human seat's camera, cursor, clicks and selection: the local human in a skirmish recording
@@ -236,8 +237,8 @@ Further rules:
 - **Colours** come from the cards' `colour(logo)`, computed once a level and published in
   `ov_col[10]`.
 - **Switches:** three game-thread bits (Cursors, Clicks, Selections), default on, reset at each
-  playback, not persisted. A switched-off overlay produces no items, so the render side needs no
-  switch.
+  playback, not persisted, in the watching dock's **Overlays** menu beside the chat's (owner Q4).
+  A switched-off overlay produces no items, so the render side needs no switch.
 - **Players:** every recorded player is shown at once, whatever Sight shows (owner Q5).
 - **Packet:** `PK_UNIT` replaces `pad_[3]` with `uint8_t pad0; uint16_t rsel;` (offsets 85 and 86,
   size still 104, asserted). New fields `n_overlay/off_overlay` (at most 128 items of 16 B),
@@ -251,9 +252,8 @@ target-compare does not fire. **Takeover:** Follow and the overlays end. **After
 file:** the last state holds and clicks expire. **Level end:** the zoom's epoch bump ends
 everything.
 
-**Cards:** Jump and Follow are enabled for a seat with a sample. Owner Q4 recommends three
-toggles in a second footer row (Cursors, Clicks, Selections), drawn and hit-tested like Full map
-and Free cam, instead of a new Overlays button on the dock: no new GUI screen and no new art.
+**Cards:** Jump and Follow are enabled for a seat with a sample. The three switches live in the
+dock's Overlays menu with the chat's (owner Q4), not in the cards' footer.
 **tacli** triggers: `replay follow <seat>|free`, `replay jump <seat>`, `replay overlay <name>
 on|off`, and `replay pov`, which logs the follow epoch, the computed eye and level, the item
 count and the number of `rsel` units.
@@ -317,6 +317,97 @@ Gaps 4c-2 leaves:
   frames) reports nothing: a Jump made while no frame reads the lever is written until the camera
   is moved, as a Follow would be.
 
+### 4c-3 as built
+
+Built 2026-10-06; not yet run in a game. The code: the builder and the switches in
+`src/tagpu_replay.c` (THE OVERLAYS), the copy into the packet in `src/tagpu_packet_pub.c`
+(`fill_overlay` and the unit walk's `rsel`), the acquire's checks in `src/tagpu_packet.c`, the
+cursor and ring in `src/tagpu_mark.c` (`gather_overlay`), the recorded selection's rectangle in
+`src/tagpu_native.c`, the Overlays button in `src/tagpu_dock.c` and its menu in
+`src/tagpu_cards.c`, and `tacli replay overlay`. What it settled that the plan left open:
+
+- **The menu.** The dock's row gains **DKOVER**, a plain button at `dock_w - 72`, left of Leave
+  (at the 400-px minimum width it starts 4 px right of the bookmark button and ends 8 px left
+  of Leave). Its press toggles a
+  menu of four rows -- Cursors, Clicks, Selections, Chat -- each a toggle drawn as the cards'
+  Sight and Follow are (pressed with the lit bar while on). The menu is drawn and hit-tested by
+  the cards' layer, at the cards panel's bottom right, which sits right above the button at every
+  HUD scale (the dock grows from its bottom-left corner, the panel from its bottom-right, and the
+  button is 44 to 72 engine px from the dock's right end). That keeps it inside the panel's
+  magnified region and pointer map; a menu of its own above the dock would have been a fifth
+  region of both. It is 100 x 89 engine px, under the 90-row floor every panel has.
+  - It opens only while the cards are shown, and DKOVER is greyed otherwise. It closes on a press
+    of either button anywhere but the menu and DKOVER, on a second press of DKOVER, and whenever
+    the cards hide (a modal, the dock off the top). The press that closes it still reaches what
+    lies under it. The wheel over it does nothing.
+  - **Stand-in art**: the menu's ground is a 100 x 89 plate cut from `dock-tex`, its rows the
+    cards' 92-px toggle plates, its captions the engine's font; DKOVER's glyph is a 7 x 11 pointer
+    arrow drawn in code in the play glyph's colour.
+- **The switches** are `TAGPU_OV_*` (`tagpu_replay.h`); Chat's is the existing hide-chat bit.
+  All four come back on when a playing's state is reset: at the next playing's Start
+  (`replay_fill`) and at the level's end. The triggers `overlay <cursors|clicks|selections|chat>
+  <on|off>` and `chat hide|show` set them, and so does the menu. Each logs `replay: overlay <name>
+  on|off`, or `replay: chat hidden|shown` for the chat, which `recmp_play_test.py --hide-chat`
+  waits for.
+- **The clicks' clock.** The ring takes an iteration's clicks where `play()` applies its events
+  (each iteration once, a late one included), tagged with the iteration's GameTime. A click is
+  shown while `GameTime + 1 - tick < REC_CLICK_SHOW`. `GameTime + 1` is `W->tick` while the
+  playing runs and keeps growing after the recording's end, where `W->tick` stops: so a click
+  expires there, while the cursor and the selection, which read `W->tick`, hold. A seek or a
+  takeover empties the ring before it reads anything. So a click just before T is gone after a
+  seek to T, and T's own clicks come with T's step. After a step the first frame shows a click at
+  age 1.
+- **Cursors** are the perspective clock's sample at `W->tick`, the one Follow takes, for every
+  header seat with a sample whose `REC_POV_WORLD` bit is set.
+- **The selection rule** finds the births column by its RT_TABLE name
+  `src/tagpu_patches.c:s_hitStamp` (stride 4) in the header and reads its row in the world's table
+  image. An entry is drawn when the slot is below the world's slot count, the column's rows and
+  `TAGPU_PK_MAX_UNITS`, its recorded image is live with bit 28, and the column holds the entry's
+  birth. A recording without the column shows no selections. On the render side the viewer's own
+  selection keeps the engine's colour and wins. Otherwise the rectangle takes
+  `ov_col[lowest set bit of rsel & 0x3FF]`. It is not behind the engine's SelBoxes option (the
+  overlay has its own switch).
+- **Colours** are taken once a playing, at its first frame visit, from each header seat's `logo`
+  through the cards' `tagpu_cards_colour` (now exported). A player with no seat gets 59, the
+  cards' own fallback.
+- **The drawing.**
+  - **Cursor**: an arrow 12 x 18 screen px, its tip at the projected point. The fill is five flat
+    triangles in the player's colour, with a one-line outline in the GUI's black (`gui_col[0]`)
+    over it.
+  - **Click**: 16 line segments in the player's colour, radius `(4 + 12 * (15 - age) / 15)` screen
+    px.
+  - **Projection**: `selbox_emit`'s `x - eyeX + vpL`, `z - floor(h / 2) - eyeY + vpT`, with the
+    offsets times one screen pixel in the frame's units. The anchor is snapped to the device grid.
+    An item more than 32 screen px outside the zoom's effective rect makes no vertex.
+  - **Order**: three draw-list entries after the build cursor, all with the fog off -- the rings,
+    then the arrows' fills, then their outlines. That is 10 of the hand-over's 16.
+- **The packet.** `PK_OVERLAY` is `{kind, player, colour, age, x, h, z}`, 16 bytes; at most 128
+  ride a packet, after the build orders in the cut order (`TAGPU_PK_TRUNC_OVERLAY` when they do
+  not fit). The acquire refuses a table past the cap or an item whose kind is above 1 or whose
+  player is 10 or more. `PK_UNIT.pad0` is at 85 and `rsel` at 86, both asserted with the 104-byte
+  size. The header gains `n_overlay`, `off_overlay`, `ov_col[10]` and two pad bytes. Outside a
+  playback, all of it is zero.
+- **The ordering**: the replay builds the items and the bits at its frame visit, before the draw
+  call `0x4969CD`, and the publisher copies them by value in that draw's `after` at `0x4969D2`. Both
+  run on the game thread, so a packet carries the overlays of its own frame. The render thread
+  reads the copy only.
+- **`replay pov`** appends `; overlays: <n> items, <m> selected units` to both of its lines. The
+  overlays are built before Follow's part of the visit, so the counts are this visit's.
+  `tacli replay pov` reports them as `overlay_items` and `selected_units`.
+
+Gaps 4c-3 leaves:
+
+- **A multiplayer playback shows no overlays**; 4c-4 brings them.
+- **GDI shows none** (owner Q2).
+- **Art**: the menu and DKOVER are stand-ins. The owner's kit is to supply:
+  - an Overlays glyph for the dock (about 20 x 16, like the transport glyphs, with its pressed
+    and greyed forms);
+  - the menu's ground: a panel about 100 x 89, or a 9-slice;
+  - the toggle row in its off and on states, with a checkbox or lamp for on, in place of the
+    cards' pressed plate.
+- **The press that closes the menu is not consumed**; whether it should be is a design question
+  the stand-in does not settle.
+
 ## Multiplayer (kinds 13-15)
 
 - **Channel:** `send_from`'s accept list gains 13-15. A new `tagpu_recmp_room(c)` returns
@@ -340,7 +431,7 @@ Gaps 4c-2 leaves:
 |---|---|---|
 | **4c-1 Skirmish capture** | `tagpu_recpov.h`; `RK_POV/CLICK/SELECT/POV_AT` and `REC_FORMAT` 7 in `tagpu_recfmt.h`; the B2 capture and the two click redirects in `tagpu_recorder.c`; the world copy and snapshot in `tagpu_recwriter.c`; `RecWorld` state, `recr_tick` and `recr_seek` in `tagpu_recreader.c`; the `tarec.py` mirror and its `pov` command. `tarec`'s `RK_EV_NET_CREATE` test becomes `format >= 6` | high: two new byte patches |
 | **4c-2 Follow, Jump, Free** | `tagpu_persp.c` (clock and follow arithmetic, with a native test like the cards'), the follow lever and apply in `tagpu_zoom.c/.h`, the packet and command fields, the cards' Jump, Follow and Free cam, and the tacli triggers | high: game/render handshake |
-| **4c-3 Overlays** | the overlay builder, `PK_OVERLAY`, `rsel` and `ov_col`, `tagpu_native.c`'s selection rectangle, `tagpu_mark.c`'s cursor and ring, the switches and their cards row | high: packet layout |
+| **4c-3 Overlays** | the overlay builder, `PK_OVERLAY`, `rsel` and `ov_col`, `tagpu_native.c`'s selection rectangle, `tagpu_mark.c`'s cursor and ring, the switches and the dock's Overlays menu | high: packet layout |
 | **4c-4 Multiplayer** | kinds 13-15 end to end, as in the section above | high: wire kinds |
 
 Each landing runs `tareplay.py landing`. A new fixture, `perspective`, reaches the new functions.

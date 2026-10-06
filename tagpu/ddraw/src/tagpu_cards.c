@@ -1,7 +1,13 @@
 /* Player cards beside the replay dock. Engine GUI screens are rectangular and only the top
    screen receives input. Keeping the two separated regions in the dock's post-GUI layer leaves
    the world between them interactive. Immutable GAF planes carry the art; the engine's text
-   renderer carries the changing labels. The same pure region map drives draw and hit testing. */
+   renderer carries the changing labels. The same pure region map drives draw and hit testing.
+
+   THE OVERLAYS MENU, which the dock's Overlays button opens, is drawn and hit-tested here, at the
+   panel's bottom right, so that it sits just above the button and inside the one region HUD scale
+   already magnifies and maps the pointer through: a menu of its own above the dock would be a
+   fifth region of the composite and of the pointer map. Its four rows are the replay's switches
+   (tagpu_replay.h, TAGPU_OV_*), drawn as the cards' toggles are. */
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
@@ -22,6 +28,11 @@
 #define GAP 4
 #define BTN_W 60
 #define BTN_H 20
+#define MENU_W 100
+#define MENU_ROW 21
+#define MENU_H (3 + TAGPU_OV_N * MENU_ROW + 2)   /* inside the 90 rows every panel has      */
+#define ACT_MENU 39                             /* the menu's own ground: taken, no action  */
+#define ACT_ROW 40                              /* 40 + TAGPU_OV_*: a menu row              */
 
 /* DISASSEMBLED: text 0x4C14F0 is stdcall, ret 0x14; font/width/height at 0x4C1440,
    0x4C1480, 0x4C1450; colour setters/getters at 0x4C13A0, 0x4C1400, 0x4C1410.
@@ -42,13 +53,14 @@ typedef void (__stdcall *BlitFn)(void*, const void*, int, int);
 #define BLIT ((BlitFn)0x004B7F90u)
 
 typedef struct { unsigned char hdr[24]; unsigned char pix[WIDTH * NORMAL]; } Plane;
-static Plane s_bg, s_row[2], s_button[2][4], s_line[2];
+static Plane s_bg, s_row[2], s_button[2][4], s_line[2], s_menuBg;
 static struct { unsigned char hdr[24], pix[64]; } s_chip[256];
 static unsigned char s_bgFrame[64][24];
 static unsigned char s_glyph[3][2][24], s_greyGlyph[3][32 * 32];
 static void* s_gm;
 static int s_ready, s_open, s_visible, s_q8, s_first, s_count, s_pitch, s_slots;
-static int s_held[2], s_action = -1;
+static int s_held[2], s_action = -1, s_menu;
+typedef char menu_fits[(MENU_H <= 90 && MENU_W * MENU_H <= WIDTH * NORMAL) ? 1 : -1];
 static TAGPU_HUD_DOCKMAP s_rect;
 static TAGPU_REPLAY_PLAYER s_player[ROWS];
 
@@ -90,6 +102,7 @@ static int prepare(void)
     plate(&s_bg, WIDTH, 64, tex, 1);
     for (i = 1; i <= 64; i++) frame(s_bgFrame[i - 1], WIDTH, i, s_bg.pix);
     plate(&s_row[0], WIDTH, NORMAL, tex, 0);
+    plate(&s_menuBg, MENU_W, MENU_H, tex, 0);
     plate(&s_row[1], WIDTH, COMPACT, tex, 0);
     for (i = 0; i < 2; i++) {
         w = i ? 92 : BTN_W;
@@ -123,8 +136,9 @@ static int prepare(void)
 
 /* The engine's colour sequence lives with the main block, loaded at startup (0x431911).
    The replay seats bound logo against this same count. Decode at most 64x64 into a fixed plane;
-   only a palette index escapes. The engine reads the same sequence at 0x467C1E..0x467C24. */
-static unsigned colour(unsigned logo)
+   only a palette index escapes. The engine reads the same sequence at 0x467C1E..0x467C24. The
+   replay's overlays take their colours from here too (tagpu_cards.h). */
+unsigned tagpu_cards_colour(unsigned logo)
 {
     const char* ta = *(const char* const*)0x00511DE8u;
     const unsigned char *seq, *f;
@@ -157,7 +171,7 @@ void tagpu_cards_open(int q8, void* gm)
 
 void tagpu_cards_close(void)
 {
-    s_open = s_visible = 0;
+    s_open = s_visible = s_menu = 0;
     s_gm = NULL;
     s_action = -1;
     tagpu_hud_cards_set(0);
@@ -180,17 +194,53 @@ void tagpu_cards_tick(int on_top)
         if (s_first < 0) s_first = 0;
         if (!s_count || !s_slots) s_visible = 0;
     }
-    if (!s_visible) s_action = -1;
+    if (!s_visible) {
+        s_action = -1;
+        s_menu = 0;
+    }
     tagpu_hud_cards_set(s_visible ? s_q8 : 0);
+}
+
+/* the menu's engine rect: the panel's bottom right, 4 in from its right edge */
+static void menu_rect(int* x, int* y)
+{
+    *x = s_rect.l + WIDTH - 4 - MENU_W;
+    *y = s_rect.t + s_rect.h - MENU_H;
+}
+
+int tagpu_cards_menu_available(void) { return s_visible; }
+int tagpu_cards_menu_open(void) { return s_menu; }
+void tagpu_cards_menu_close(void) { s_menu = 0; }
+
+void tagpu_cards_menu_toggle(void)
+{
+    s_menu = s_visible && !s_menu;
+    s_action = -1;
+}
+
+int tagpu_cards_menu_owns(int x, int y)
+{
+    int mx, my;
+    if (!s_menu || !inside(x, y)) return 0;
+    menu_rect(&mx, &my);
+    return x >= mx && x < mx + MENU_W && y >= my && y < my + MENU_H;
 }
 
 /* Actions use header row indices, which never change on death or seek. -1 is empty space;
    0..32 are the three buttons per player (3k Jump, 3k+1 Sight, 3k+2 Follow), 33 full map, 34
-   free camera. */
+   free camera; while the Overlays menu is open it covers what lies under it: ACT_MENU its
+   ground, ACT_ROW + TAGPU_OV_* a row. */
 static int action(int x, int y)
 {
     int row, b;
     if (!inside(x, y)) return -1;
+    if (tagpu_cards_menu_owns(x, y)) {
+        int mx, my;
+        menu_rect(&mx, &my);
+        row = (y - my - 3) / MENU_ROW;
+        return y >= my + 3 && row < TAGPU_OV_N && (y - my - 3) % MENU_ROW < BTN_H &&
+               x >= mx + 4 && x < mx + 96 ? ACT_ROW + row : ACT_MENU;
+    }
     x -= s_rect.l; y -= s_rect.t;
     if (y >= s_rect.h - FOOT + 4 && y < s_rect.h - FOOT + 24) {
         if (x >= 8 && x < 100) return 33;
@@ -213,6 +263,8 @@ int tagpu_cards_click(int x, int y, int down, int right, int on_top)
         if (!right && was && s_action >= 0 && a == s_action && s_visible && on_top) {
             if (a == 33) tagpu_replay_sight_request(-1);
             else if (a == 34) tagpu_replay_follow_request(-1, 0);
+            else if (a >= ACT_ROW && a < ACT_ROW + TAGPU_OV_N)
+                tagpu_replay_overlay_set(a - ACT_ROW, !tagpu_replay_overlay(a - ACT_ROW));
             else if (a < 33 && a / 3 < s_count) {
                 const TAGPU_REPLAY_PLAYER* p = &s_player[a / 3];
                 if (a % 3 == 1) tagpu_replay_sight_request((int)p->seat);
@@ -234,6 +286,7 @@ int tagpu_cards_wheel(UINT msg, WPARAM wp, LPARAM lp)
 {
     int d, x = (short)LOWORD(lp), y = (short)HIWORD(lp);
     if (msg != WM_MOUSEWHEEL || !inside(x, y)) return 0;
+    if (tagpu_cards_menu_owns(x, y)) return 1;
     d = (short)HIWORD(wp);
     if (d) {
         s_first += d > 0 ? -1 : 1;
@@ -308,7 +361,7 @@ void tagpu_cards_draw(void)
         const TAGPU_REPLAY_PLAYER* p = &s_player[s_first + k];
         int x = s_rect.l, cy = s_rect.t + k * s_pitch, h = s_pitch - GAP;
         BLIT(NULL, s_row[h == COMPACT].hdr, x, cy);
-        BLIT(NULL, s_chip[colour(p->colour)].hdr, x + 6, cy + 5);
+        BLIT(NULL, s_chip[tagpu_cards_colour(p->colour)].hdr, x + 6, cy + 5);
         text_at(x + 19, cy + 4, h == NORMAL ? 110 : 129, p->name, !p->units);
         snprintf(line, sizeof line, "U:%u", p->units);
         text_at(x + 153, cy + (h == NORMAL ? 16 : 4), 46, line, !p->units);
@@ -354,5 +407,15 @@ void tagpu_cards_draw(void)
             BLIT(NULL, s_bgFrame[th - 1], s_rect.l, by - th);
             text_at(s_rect.l + 8, by - th + 2, 190, "Camera was not recorded.", 0);
         }
+    }
+    if (s_menu) {
+        static const char* const caption[TAGPU_OV_N] = { "Cursors", "Clicks", "Selections",
+                                                          "Chat" };
+        int mx, my;
+        menu_rect(&mx, &my);
+        BLIT(NULL, s_menuBg.hdr, mx, my);
+        for (k = 0; k < TAGPU_OV_N; k++)
+            button(mx + 4, my + 3 + k * MENU_ROW, 92, caption[k], ACT_ROW + k, 1,
+                   tagpu_replay_overlay(k));
     }
 }

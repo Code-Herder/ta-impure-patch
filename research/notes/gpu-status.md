@@ -4218,7 +4218,7 @@ with RENDER.GUI ([renderers](renderers.html) §2.10).
 |---|---|---|
 | `DLL_PROCESS_ATTACH` | `impure/dock.gui` and `anims/dock.gaf` into `impure-patch.ufo`: the ground as eight 512×86 uncompressed frames and the buttons' frames, composed from `art/ui/retail`, every frame tagged `TAGPU_GAF_EXACT` at `+0x0C` so the Classic++ UI restorer leaves it alone; nothing arms without the art | — |
 | `DrawGameScreen 0x468CF0` (the menu's tick) | push `DOCK.GUI` through the slot; place it before stage 1 at the HUD scale in force (`tagpu_dock_rect`), and publish the magnified region's word while the engine's chain holds it; repaint the ground and compare the Leave guard's bytes after it; then each frame, while it is the top screen, push the play stage, the speed stage, the greying and the two readouts through the engine's setters, attribs bit 8 on each greyed button and off each live one; put back the pause Leave's question took; start the walker once a level | game |
-| `GUIMEMSTRUCT+0x08` (its `OnCommand`) | seeks, pause, speed, a bookmark, Leave (the pause taken, `0x512FF8 = 0`, `0x460680`, the title set); every handled click answered with `0x4AB0A0` | game |
+| `GUIMEMSTRUCT+0x08` (its `OnCommand`) | seeks, pause, speed, a bookmark, the Overlays menu opened or closed (§2.12c), Leave (the pause taken, `0x512FF8 = 0`, `0x460680`, the title set); every handled click answered with `0x4AB0A0` | game |
 | `tagpu_shield.c`, both paths | the strip's left and right buttons through `tagpu_menu_click` / `tagpu_menu_rclick`; a drag's seek cancelled on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and a deactivating `WM_ACTIVATEAPP`, its release still consumed | game |
 | `0x46A308` (post-GUI) | the strip's fill, markers and playhead into the back buffer through `0x4B7F90`, unless a screen above the dock overlaps it | game |
 | the walker | reads the recording file through its own `RecReader` and publishes markers; joined at the teardown wrap's entry | its own |
@@ -4227,7 +4227,7 @@ with RENDER.GUI ([renderers](renderers.html) §2.10).
 the word read-modify-written); `main+0x38A4B` and `+0x38A4D` (the speed's ceiling and live value,
 the presets 5..80 only, the player's put back at the teardown and exchanged around every settings
 save); the dword `0x512FF8` (YESORNO's question, 0); the dock's parsed records' rects before stage 1,
-and after it the attribs dword (`+0x1B`, bit 8 only) of its six greyable buttons; its own ground
+and after it the attribs dword (`+0x1B`, bit 8 only) of its seven greyable buttons; its own ground
 tiles' planes; `main+0x37EA0` through the slot. `replays\index.dat`'s bookmarks
 field. Nothing the recording carries.
 
@@ -4240,7 +4240,7 @@ No new byte patch: the cards reuse the dock's model tick, post-GUI observer and 
 |---|---|---|
 | dock open/tick/close | model and layout, top-screen check, enabled card-scale word | game |
 | post-GUI `0x46A308` | immutable GAF frames through `0x4B7F90`; bounded ASCII labels through `0x4C14F0`, font measured with `0x4C1440`/`0x4C1480`/`0x4C1450` | game |
-| both shield button paths; wheel before zoom | card actions, paired release consumption, scroll; current `main+0x531` compared with the dock identity | game |
+| both shield button paths; wheel before zoom | card actions, paired release consumption, scroll; current `main+0x531` compared with the dock identity; the dock's Overlays menu, drawn over the panel's bottom right and hit-tested before the cards, its four rows the replay's overlay and chat switches, closed by a press anywhere but itself and the dock's `DKOVER` ([perspective plan, 4c-3 as built](tadr-port/demo-recorder-perspective-streams.html#4c-3-as-built)) | game |
 | replay frame visit at `0x4969CD` | pending Sight after display-state application: independent death-history reader, expiry, view selection, temporary sight adds, minimap fog and radar passes | game |
 | flip marker and composite | `OP_FLIP.dy` → `PK_FRAME.h` → presented card scale; bottom-right region uniforms at 128/144/160, total block176 bytes | game → render |
 
@@ -4736,6 +4736,7 @@ Object3do ([cross-thread engine reads](cross-thread-engine-reads.html) §5 row 2
 | `tagpu_native.c` | the unit and wreck gathers, the whole pose path (`pose_accum_body`, `posed_pose`, `hires_pose`, `pose_dump`, the pose CRC), the ownership test, the ground height, the option bits, the sub-pixel table's key: all from the packet. What it still reads is per-LEVEL assets under `tagpu_reclaim`'s teardown fence — the model templates behind `MODEL_PTRS`, whose base is read LIVE every call (the teardown nulls it at `0x42DCD8`, and that null is the refusal) while the bound is the packet's `udef_count`, and the screen fog descriptor, which is landing 4b's | render |
 | `tagpu_scaffold.c`, `tagpu_feat.c` | the anchors, the map and sweep dimensions, the units they stamp for; the FeatureDef and wreck RECORDS stay, under the fence. Their bases are read LIVE at every use (the teardown nulls both, and those nulls are the refusal) and their indices are bounded without a probe: a def row by `min(live NumFeatureDefs, the packet's)`, a wreck record by the engine's fixed 2048-record pool | render |
 | `tagpu_mark.c`, `tagpu_overlay.c`, `tagpu_lerp.c`, `tagpu_hires.c` | off the allow-list entirely: they name no engine memory at all | render |
+| the same `after`, on a level that plays a recording | **the replay's overlays**, copied by value from what the replay's frame visit built before the draw call `0x4969CD` out of the recording alone: `PK_OVERLAY` (16 B, at most 128: a recorded cursor or click, its player, its colour, a click's age and the world point), `ov_col[10]` (each recorded player's palette index) and `PK_UNIT.rsel` (bit p: recorded player p's selection holds the unit, drawn only while the slot holds a live unit of the entry's birth), in what was `pad_[3]` — `pad0` at 85 and `rsel` at 86, the record still 104 B, all asserted. The acquire bounds the count and every item's kind and player. `tagpu_mark.c` draws the cursors and the click rings after the build cursor with the fog off; `tagpu_native.c` draws a recorded selection as its selection rectangle in `ov_col` of the lowest player. Zero outside a playback, and on GDI nothing draws them ([perspective plan, 4c-3 as built](tadr-port/demo-recorder-perspective-streams.html#4c-3-as-built)) | game → render |
 | `tagpu_render3do.c` | the shade table and the build-state formulas take the packet's copies; the **write-back is deleted** | render |
 
 **The lerp is rekeyed, and its arena is gone.** `tagpu_lerp.c` kept 3.4 MB of pose banks keyed on

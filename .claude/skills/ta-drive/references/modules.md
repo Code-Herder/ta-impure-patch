@@ -977,8 +977,14 @@ block that reads to its last complete block.
   ended: camera moved|zoomed|free cam|…` (`jump ended: drawn` for a Jump). `tacli replay pov <i>`
   prints what the latest frame visit computed — `follow|jump epoch E seat S, tick n, sample …,
   view WxH, eye (x, y), level L/65536` — which `tools/replay/tarec.py pov FILE --eye n --viewer
-  W,H` computes from the file (the eye before the camera's range clamp). Triggers: `follow <S>`,
-  `follow free`, `jump <S>`, `pov`.
+  W,H` computes from the file (the eye before the camera's range clamp), then `; overlays: <n>
+  items, <m> selected units`. Triggers: `follow <S>`, `follow free`, `jump <S>`, `pov`.
+- **The overlays** (the same recordings; Vulkan only, GDI draws none): every recorded player's
+  cursor, click rings and selection rectangles, in that player's colour. `tacli replay overlay
+  <i> cursors|clicks|selections|chat on|off` is a switch of the dock's Overlays menu (the dock's
+  pointer-arrow button, left of Leave); it waits for `replay: overlay <name> on|off`, or `replay:
+  chat hidden|shown` for the chat. Every switch is on when a playing starts. Triggers: `overlay
+  <name> on|off`, and `chat hide` / `chat show`.
 - **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P
   [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish at T as player P,
   every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2 when it had

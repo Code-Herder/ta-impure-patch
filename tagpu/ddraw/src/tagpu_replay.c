@@ -81,6 +81,8 @@
 #include "tagpu_replays.h"
 #include "tagpu_persp.h"
 #include "tagpu_zoom.h"
+#include "tagpu_cards.h"
+#include "tagpu_packet.h"
 #include "git.h"
 
 #define TA_MAINPP      0x00511DE8u
@@ -317,7 +319,28 @@ static struct {
     unsigned        said, shown;    /* text entries applied, and lines given to the message log  */
     char            why[200];
 } s_mp;
-static int s_chat_hidden;           /* the viewer's hide-chat toggle (`chat hide`, `chat show`)  */
+static int s_chat_hidden;           /* 1 = the Overlays menu's Chat switch is off (`chat hide`,
+                                       `chat show`, `overlay chat`): THE OVERLAYS               */
+/* THE OVERLAYS' state (game thread only) */
+#define OV_RING 64                  /* the clicks held: the most recent, each with its tick      */
+static struct {
+    unsigned char    off[TAGPU_OV_CHAT];   /* a switched-off overlay, by TAGPU_OV_*: 0 is on      */
+    int              live;                 /* item, n and s_rsel are this playing's this frame   */
+    int              col_ok;               /* col holds this playing's colours                   */
+    unsigned char    col[TAGPU_PK_OV_PLAYERS];
+    TAGPU_PK_OVERLAY item[TAGPU_PK_MAX_OVERLAY];
+    unsigned         n;
+    unsigned         nrsel;                /* the slots s_rselAt lists                            */
+    struct { unsigned tick; RecClick c; } ring[OV_RING];
+    unsigned         rn, rnext;            /* clicks held, and the entry the next one takes       */
+} s_ov;
+/* each slot's recorded-selection bits, bit p for player p, and the slots that have any: every
+   slot is listed once, when its bits first become nonzero, so nrsel <= TAGPU_PK_MAX_UNITS */
+static uint16_t s_rsel[TAGPU_PK_MAX_UNITS];
+static uint16_t s_rselAt[TAGPU_PK_MAX_UNITS];
+_Static_assert(TAGPU_PK_OV_PLAYERS == REC_PLAYERS, "ov_col has a row for every recorded player");
+_Static_assert(TAGPU_PK_OV_PLAYERS <= 16, "rsel has a bit for every recorded player");
+_Static_assert(REC_CLICK_SHOW <= 256, "a click's age fits PK_OVERLAY.age");
 /* FOLLOW, JUMP AND FREE CAM's state (game thread only) */
 static struct {
     int      req;                   /* a request for the next frame visit: FQ_*                  */
@@ -384,6 +407,11 @@ static void counts_log(const char* when, unsigned now);
 static void mp_end(void);
 static void follow_close(const char* why);
 static void follow_visit(char* ta);
+static void overlay_close(void);
+static void overlay_visit(char* ta);
+static int overlay_trigger(const char* line);
+static void ov_clicks_take(const RecWorld* W);
+static void ov_clicks_clear(void);
 
 static void replay_close(void)
 {
@@ -392,6 +420,7 @@ static void replay_close(void)
     InterlockedExchange(&s_mp_arena.state,MP_ARENA_OFF);
     s_viewPending = 0;
     follow_close("the playing ended");
+    overlay_close();
     mp_end();
     recr_close(s_rd);
     recfile_leave();
@@ -6605,6 +6634,7 @@ static int seek_run(char* ta)
     s_seek.mode = SK_SEEK;                  /* consumed: rt_due's seek_run is a SEEK */
     s_seek.boundary = 0;
     snprintf(dump, sizeof dump, "%s", s_seek.dump);
+    ov_clicks_clear();                      /* no click from before T is shown after it */
     if (s_mp.level && (convert || back)) {
         sk_refused(tk, T, "a multiplayer recording has no rewind");
         return 0;
@@ -7298,10 +7328,10 @@ static void trigger_read(void)
         }
     }
     if (!strcmp(line, "chat hide") || !strcmp(line, "chat show")) {
-        s_chat_hidden = line[5] == 'h';
-        tagpu_logf("replay: chat %s", s_chat_hidden ? "hidden" : "shown");
+        tagpu_replay_overlay_set(TAGPU_OV_CHAT, line[5] == 's');
         return;
     }
+    if (overlay_trigger(line)) return;
     if (sscanf(line, "cover %39s%n", name, &end) == 1 && !line[end]) {
         tagpu_cover_write(name);
         return;
@@ -7647,7 +7677,10 @@ static void __cdecl tagpu_replay_frame(void)
     if (ta) viewer_init(ta);
     frame_visit();
     viewer_frame();
-    if (ta) follow_visit(ta);
+    if (ta) {
+        overlay_visit(ta);
+        follow_visit(ta);
+    }
 }
 
 /* once a level: at the recording's end, or at the level's when that comes first */
@@ -7794,6 +7827,7 @@ static void play(const Lv* L, int first)
             note("replay: the events of GameTime %u played at GameTime %u", W->tick, L->now);
         }
         events_put(L, W, now);
+        ov_clicks_take(W);
         mp_step_events(L, W->tick);
         s_st.steps++;
         if (s_over || !iteration_read(L)) break;
@@ -8153,16 +8187,228 @@ static void follow_visit(char* ta)
         static const char* const how[] = { "none", "latest", "between", "earlier" };
         s_fl.pov = 0;
         if (!s_fl.E)
-            tagpu_logf("replay: %s: pov at GameTime %u: no follow", s_name,
-                       *(const unsigned*)(ta + OFF_GAMETIME));
+            tagpu_logf("replay: %s: pov at GameTime %u: no follow; overlays: %u items, %u "
+                       "selected units", s_name, *(const unsigned*)(ta + OFF_GAMETIME), s_ov.n,
+                       s_ov.nrsel);
         else
             tagpu_logf("replay: %s: pov at GameTime %u: %s epoch %u seat %d, tick %u, sample %s, "
-                       "view %dx%d, eye (%d, %d), level %u/65536 (%.4f)", s_name,
+                       "view %dx%d, eye (%d, %d), level %u/65536 (%.4f); overlays: %u items, %u "
+                       "selected units", s_name,
                        *(const unsigned*)(ta + OFF_GAMETIME), s_fl.once ? "jump" : "follow",
                        s_fl.E, s_fl.seat, s_fl.at.n, how[s_fl.at.how], s_fl.at.vw, s_fl.at.vh,
                        s_fl.at.x, s_fl.at.y, (unsigned)s_fl.at.level,
-                       (double)s_fl.at.level / 65536.0);
+                       (double)s_fl.at.level / 65536.0, s_ov.n, s_ov.nrsel);
     }
+}
+
+/* ---- THE OVERLAYS (research/notes/tadr-port/demo-recorder-perspective-streams.md, *Playback*)
+   Every recorded player's cursor, clicks and selection at once, whatever Sight shows (the owner's
+   answer Q5), each behind its switch in the dock's Overlays menu (tagpu_cards.c), which also holds
+   the chat's. Built at the frame visit, after any seek and after Follow's own reading of the same
+   world, from the reader's world alone -- nothing of the engine's:
+   - a cursor: the perspective clock's sample for the displayed tick W->tick, as Follow takes it
+     (tagpu_persp.h), when it was over the world (REC_POV_WORLD);
+   - a click: REC_CLICK_SHOW ticks from the iteration it came with, aged against GameTime + 1,
+     which is W->tick while the playing runs and goes on growing past the recording's end, so a
+     last click expires there while the last cursor and selection hold;
+   - a selection's unit: only while its slot holds a live unit whose birth is the entry's, read
+     from the recording's own births column -- on a puppet host the engine's column is host-own
+     (THE SEEK, "B4's per-slot columns"), so a unit made in the slot since is never taken for the
+     one selected.
+   THE PUBLISHER COPIES THE RESULT BY VALUE (tagpu_packet_pub.c, fill_overlay and the unit walk),
+   in the `after` of the draw this visit precedes, on this same thread; the render thread sees
+   only that copy. The switches are the game thread's too: the menu's clicks come in the wndproc
+   TA pumps on it, the trigger at the frame visit. A switched-off overlay produces nothing, so the
+   render side has no switch. A multiplayer recording's perspectives are its contributions, which
+   this playing does not read yet: it shows none. */
+
+#define BIRTHS_TABLE "src/tagpu_patches.c:s_hitStamp"   /* the births column's RT_TABLE name */
+#define OV_GREY      59             /* a player with no colour: the cards' own fallback       */
+
+static const char* const OV_NAME[TAGPU_OV_N] = { "cursors", "clicks", "selections", "chat" };
+
+int tagpu_replay_overlay(int which)
+{
+    if (which == TAGPU_OV_CHAT) return !s_chat_hidden;
+    return which >= 0 && which < TAGPU_OV_CHAT && !s_ov.off[which];
+}
+
+void tagpu_replay_overlay_set(int which, int on)
+{
+    if (which == TAGPU_OV_CHAT) {
+        s_chat_hidden = !on;
+        tagpu_logf("replay: chat %s", s_chat_hidden ? "hidden" : "shown");
+        return;
+    }
+    if (which < 0 || which >= TAGPU_OV_CHAT) return;
+    s_ov.off[which] = (unsigned char)!on;
+    tagpu_logf("replay: overlay %s %s", OV_NAME[which], on ? "on" : "off");
+}
+
+/* `overlay <cursors|clicks|selections|chat> <on|off>` */
+static int overlay_trigger(const char* line)
+{
+    char name[16], state[8];
+    int end = 0, k;
+    if (sscanf(line, "overlay %15s %7s%n", name, state, &end) != 2 || line[end]) return 0;
+    if (strcmp(state, "on") && strcmp(state, "off")) return 0;
+    for (k = 0; k < TAGPU_OV_N; k++)
+        if (!strcmp(name, OV_NAME[k])) {
+            tagpu_replay_overlay_set(k, state[1] == 'n');
+            return 1;
+        }
+    return 0;
+}
+
+static void ov_clicks_clear(void)
+{
+    s_ov.rn = s_ov.rnext = 0;
+}
+
+/* The iteration's clicks into the ring, from play(), which applies each iteration's events once:
+   so each click is taken once, at the tick of the iteration it came with. The reader checked
+   each one's length and fields (rec_click_ok); the player is bounded here against ov_col. */
+static void ov_clicks_take(const RecWorld* W)
+{
+    unsigned i;
+    for (i = 0; i < W->nclick; i++) {
+        RecClick c;
+        if (W->click[i].kind != RK_CLICK || W->click[i].len != sizeof c) continue;
+        memcpy(&c, W->click[i].b, sizeof c);
+        if (c.player >= TAGPU_PK_OV_PLAYERS) continue;
+        s_ov.ring[s_ov.rnext].tick = W->tick;
+        s_ov.ring[s_ov.rnext].c = c;
+        s_ov.rnext = (s_ov.rnext + 1) % OV_RING;
+        if (s_ov.rn < OV_RING) s_ov.rn++;
+    }
+}
+
+static void ov_rsel_clear(void)
+{
+    unsigned i;
+    for (i = 0; i < s_ov.nrsel; i++) s_rsel[s_rselAt[i]] = 0;
+    s_ov.nrsel = 0;
+}
+
+static void ov_item(unsigned kind, unsigned p, unsigned age, int32_t x, int32_t h, int32_t z)
+{
+    TAGPU_PK_OVERLAY* o;
+    if (s_ov.n >= TAGPU_PK_MAX_OVERLAY) return;
+    o = &s_ov.item[s_ov.n++];
+    o->kind = (uint8_t)kind;
+    o->player = (uint8_t)p;
+    o->colour = s_ov.col[p];
+    o->age = (uint8_t)age;
+    o->x = x;
+    o->h = h;
+    o->z = z;
+}
+
+/* the recording's births column at W, or NULL when it carries none */
+static const RecTable* ov_births(const RecWorld* W)
+{
+    const RecHeader* h = recr_header(s_rd);
+    unsigned i;
+    for (i = 0; i < h->ntab && i < W->ntab; i++)
+        if (!strcmp(h->tab[i].name, BIRTHS_TABLE) && h->tab[i].stride == sizeof(uint32_t))
+            return &W->tab[i];
+    return NULL;
+}
+
+/* THE SELECTION DISPLAY RULE. BOUND: a slot is used only below the world's slot count, the births
+   column's rows and s_rsel's length; the reader has already held every entry inside its seat's
+   block (rec_sel_entries_ok), and a seat is a header seat below REC_PLAYERS. */
+static void ov_selections(const RecWorld* W)
+{
+    const RecHeader* h = recr_header(s_rd);
+    const RecTable* b = ov_births(W);
+    unsigned rows = b ? b->size / (unsigned)sizeof(uint32_t) : 0, i, k;
+    for (i = 0; rows && i < h->nseats && i < REC_PLAYERS; i++) {
+        unsigned p = h->seats[i].index;
+        const RecSelEntry* e;
+        if (p >= TAGPU_PK_OV_PLAYERS) continue;
+        e = W->sel + (size_t)p * REC_SEL_MAX;
+        for (k = 0; k < W->nsel[p] && k < REC_SEL_MAX; k++) {
+            unsigned slot = e[k].slot;
+            uint32_t birth;
+            if (slot >= W->slots || slot >= rows || slot >= TAGPU_PK_MAX_UNITS || !W->live[slot] ||
+                !(img_u32(W, slot, U_STATE) & U_ALIVE))
+                continue;
+            memcpy(&birth, b->img + (size_t)slot * sizeof birth, sizeof birth);
+            if (birth != e[k].birth) continue;
+            if (!s_rsel[slot]) s_rselAt[s_ov.nrsel++] = (uint16_t)slot;
+            s_rsel[slot] |= (uint16_t)(1u << p);
+        }
+    }
+}
+
+/* The frame visit's part, every in-play frame, paused ones included; before Follow's, so that
+   `pov` reports this visit's counts. */
+static void overlay_visit(char* ta)
+{
+    const RecHeader* h;
+    const RecWorld* W;
+    unsigned i, now;
+    s_ov.n = 0;
+    ov_rsel_clear();
+    s_ov.live = tagpu_replay_live() && !s_mp.level;
+    if (!s_ov.live) return;
+    h = recr_header(s_rd);
+    W = recr_world(s_rd);
+    if (!s_ov.col_ok) {
+        memset(s_ov.col, OV_GREY, sizeof s_ov.col);
+        for (i = 0; i < h->nseats && i < REC_PLAYERS; i++)
+            if (h->seats[i].index < TAGPU_PK_OV_PLAYERS)
+                s_ov.col[h->seats[i].index] = (unsigned char)tagpu_cards_colour(h->seats[i].logo);
+        s_ov.col_ok = 1;
+    }
+    if (!s_ov.off[TAGPU_OV_CURSORS])
+        for (i = 0; i < h->nseats && i < REC_PLAYERS; i++) {
+            unsigned p = h->seats[i].index;
+            RecPov pv;
+            if (p >= TAGPU_PK_OV_PLAYERS ||
+                !persp_sample(W->npov[p], W->pov[p], W->pov_tick[p], W->tick, &pv) ||
+                !(pv.flags & REC_POV_WORLD))
+                continue;
+            ov_item(TAGPU_PK_OV_CURSOR, p, 0, pv.cur_x, pv.cur_h, pv.cur_z);
+        }
+    if (!s_ov.off[TAGPU_OV_CLICKS]) {
+        now = *(const unsigned*)(ta + OFF_GAMETIME) + 1u;
+        for (i = 0; i < s_ov.rn; i++) {             /* the oldest first: a newer ring on top */
+            unsigned at = (s_ov.rnext + OV_RING - s_ov.rn + i) % OV_RING;
+            unsigned age = now - s_ov.ring[at].tick;
+            const RecClick* c = &s_ov.ring[at].c;
+            if (age < REC_CLICK_SHOW) ov_item(TAGPU_PK_OV_CLICK, c->player, age, c->x, c->h, c->z);
+        }
+    }
+    if (!s_ov.off[TAGPU_OV_SELECTIONS]) ov_selections(W);
+}
+
+/* The playing ended: nothing is shown until the next one, whose switches are all on. */
+static void overlay_close(void)
+{
+    s_ov.n = 0;
+    ov_rsel_clear();
+    s_ov.live = 0;
+    s_ov.col_ok = 0;
+    ov_clicks_clear();
+    memset(s_ov.off, 0, sizeof s_ov.off);
+    s_chat_hidden = 0;
+}
+
+unsigned tagpu_replay_overlays(TAGPU_PK_OVERLAY* out, unsigned cap, unsigned char col[10])
+{
+    unsigned n = s_ov.live ? s_ov.n : 0;
+    if (n > cap) n = cap;
+    if (n) memcpy(out, s_ov.item, (size_t)n * sizeof *out);
+    if (s_ov.live) memcpy(col, s_ov.col, TAGPU_PK_OV_PLAYERS);
+    else memset(col, 0, TAGPU_PK_OV_PLAYERS);
+    return n;
+}
+
+unsigned tagpu_replay_rsel(unsigned slot)
+{
+    return s_ov.live && slot < TAGPU_PK_MAX_UNITS ? s_rsel[slot] : 0;
 }
 
 int tagpu_replay_paused(void)

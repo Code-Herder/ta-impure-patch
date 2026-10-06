@@ -915,12 +915,13 @@ static const SELAABB* selbox_aabb(const char* nd)
     return a;
 }
 
-/* One selected unit's rect into the marker pass. `ax`/`ay` are the gather's
-   anchor (frame px, eye and viewport folded in), `alt` its altitude, `enc` the
-   depth key its body is drawn at. Returns 1 when a rect was emitted. */
+/* One selected unit's rect into the marker pass, in palette index `colidx`.
+   `ax`/`ay` are the gather's anchor (frame px, eye and viewport folded in),
+   `alt` its altitude, `enc` the depth key its body is drawn at. Returns 1 when
+   a rect was emitted. */
 static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
                        float ax, float ay, float alt, float wx, float wz,
-                       float enc, float depthScale, int vpL, int vpT)
+                       float enc, float depthScale, int vpL, int vpT, int colidx)
 {
     const char* root;
     const SELAABB* a;
@@ -977,8 +978,7 @@ static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
     depth = 1.0f - (enc - 0.5f) / depthScale;
     if (depth < 0.0f) depth = 0.0f;
     if (depth > 1.0f) depth = 1.0f;
-    return tagpu_mark_emit_selbox(px, py, pk->gui_col[SELBOX_COLIDX],
-                                  wx, wz, depth);
+    return tagpu_mark_emit_selbox(px, py, colidx, wx, wz, depth);
 }
 
 /* ---------------------------------------------------------------- COB pose --
@@ -3017,10 +3017,21 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            the rect whether or not the body can be (0x46A530 has no model
            test, and a body the bake refuses is not a unit that was not
            selected). `sel` already carries the SelBoxes gate (ui_gates bit 2). */
-        if (units[i].sel && markOn && units[i].pu)
+        /* A REPLAY'S RECORDED SELECTION is the same rect in the recording
+           player's colour (PK_UNIT.rsel, tagpu_replay.c THE OVERLAYS), the
+           lowest player's when several selected the unit; the viewer's own
+           selection keeps the engine's colour and wins. Not behind SelBoxes:
+           the overlay has its own switch, which the game thread applied. The
+           mask keeps the index inside ov_col's ten rows. */
+        if (markOn && units[i].pu &&
+            (units[i].sel || (units[i].pu->rsel & ((1u << TAGPU_PK_OV_PLAYERS) - 1u)))) {
+            unsigned rs = units[i].pu->rsel & ((1u << TAGPU_PK_OV_PLAYERS) - 1u);
+            int col = units[i].sel ? pk->gui_col[SELBOX_COLIDX]
+                                   : pk->ov_col[__builtin_ctz(rs)];
             nselDrawn += selbox_emit(pk, units[i].pu, units[i].ax, units[i].ay,
                                      units[i].wy, units[i].wx0, units[i].wz0,
-                                     encBase, depthScale, vpL, vpT);
+                                     encBase, depthScale, vpL, vpT, col);
+        }
         /* NOTHING IS RE-READ: the pose, the composite rect and every field
            below are a COPY the game thread made, in our own memory, valid for
            the whole frame. */

@@ -5844,10 +5844,12 @@ def cmd_replay_takeover(args):
 
 
 # The playback's camera (tagpu_replay.c, FOLLOW, JUMP AND FREE CAM): the cards' Follow, Jump and
-# Free cam as trigger lines, and `pov`, the frame visit's own account of what Follow computed.
+# Free cam as trigger lines, and `pov`, the frame visit's own account of what Follow computed and
+# of the overlays it built (THE OVERLAYS).
 REPLAY_POV_RX = re.compile(
     r"pov at GameTime (\d+): (?:no follow|(follow|jump) epoch (\d+) seat (\d+), tick (\d+), "
-    r"sample (\w+), view (-?\d+)x(-?\d+), eye \((-?\d+), (-?\d+)\), level (\d+)/65536)")
+    r"sample (\w+), view (-?\d+)x(-?\d+), eye \((-?\d+), (-?\d+)\), level (\d+)/65536 \([^)]*\))"
+    r"(?:; overlays: (\d+) items, (\d+) selected units)?")
 
 
 def _replay_camera(args, line, rx):
@@ -5864,7 +5866,7 @@ def _replay_camera(args, line, rx):
     tmp = trig.with_name(trig.name + ".tmp")
     tmp.write_text(line + "\n")
     os.replace(tmp, trig)
-    refused = re.compile(r"replay: (?:[^:]*: )?(?:follow|jump|free cam|pov)\b[^:]* refused: .*"
+    refused = re.compile(r"replay: (?:[^:]*: )?(?:follow|jump|free cam|pov|overlay)\b[^:]* refused: .*"
                          rf"|replay: {re.escape(REPLAY_TRIGGER)}: not understood: .*")
     deadline = time.time() + args.timeout
     while time.time() < deadline:
@@ -5919,10 +5921,30 @@ def cmd_replay_pov(args):
     if m:
         res["gametime"] = int(m[1])
         res["following"] = m[2] is not None
+        if m[12] is not None:
+            res.update(overlay_items=int(m[12]), selected_units=int(m[13]))
         if m[2]:
             res.update(kind=m[2], epoch=int(m[3]), seat=int(m[4]), tick=int(m[5]), sample=m[6],
                        view=[int(m[7]), int(m[8])], eye=[int(m[9]), int(m[10])],
                        level_q16=int(m[11]))
+    out(res, args.json, human=got)
+    if not m:
+        sys.exit(1)
+
+
+REPLAY_OVERLAYS = ("cursors", "clicks", "selections", "chat")
+
+
+def cmd_replay_overlay(args):
+    """One of the dock's Overlays switches: a recorded overlay, or the chat."""
+    on = args.state == "on"
+    if args.overlay == "chat":
+        rx = re.compile(rf"replay: chat {'shown' if on else 'hidden'}")
+    else:
+        rx = re.compile(rf"replay: overlay {args.overlay} {args.state}")
+    name, got, m = _replay_camera(args, f"overlay {args.overlay} {args.state}", rx)
+    res = {"name": args.name, "as": name, "overlay": args.overlay, "on": on, "done": m is not None,
+           "line": got}
     out(res, args.json, human=got)
     if not m:
         sys.exit(1)
@@ -7065,11 +7087,25 @@ def build_parser():
                           description="The follow epoch, the seat, the displayed GameTime, the "
                                       "sample the perspective clock took, the view, the eye and "
                                       "the level x 65536 -- the numbers `tarec.py pov FILE --eye "
-                                      "T --viewer W,H` computes from the file.")
+                                      "T --viewer W,H` computes from the file -- and the overlays "
+                                      "the visit built: the cursor and click items, and the units "
+                                      "a recorded selection's rectangle is drawn on.")
     add_common(rppv)
     rppv.add_argument("name", help="the instance whose playback runs")
     rppv.add_argument("--timeout", type=float, default=30.0)
     rppv.set_defaults(func=cmd_replay_pov)
+
+    rpov = rpv.add_parser("overlay", help="switch one of the dock's Overlays menu entries",
+                          description="The Overlays menu's switches, through the playback's "
+                                      "trigger: the recorded players' cursors, clicks and "
+                                      "selections, and the chat. Every switch is on when a "
+                                      "playing starts and none is saved.")
+    add_common(rpov)
+    rpov.add_argument("name", help="the instance whose playback runs")
+    rpov.add_argument("overlay", choices=REPLAY_OVERLAYS)
+    rpov.add_argument("state", choices=("on", "off"))
+    rpov.add_argument("--timeout", type=float, default=30.0)
+    rpov.set_defaults(func=cmd_replay_overlay)
 
     rpf = rpv.add_parser("forks", help="list a recording's timelines, or delete/export a fork")
     add_common(rpf)

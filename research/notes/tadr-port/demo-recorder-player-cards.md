@@ -2,7 +2,8 @@
 
 Implemented and runtime-validated, including two independent high-effort reviews and their
 frame-boundary corrections. This is the card portion
-of [the S5 design](demo-recorder-s5-ui.md). The Overlays panel remains separate work. Jump, Follow
+of [the S5 design](demo-recorder-s5-ui.md). The dock's Overlays menu is drawn and hit-tested by
+this layer (*The Overlays menu* below). Jump, Follow
 and Free cam play a skirmish recording's camera stream (format 7,
 [the perspective plan's 4c-2](demo-recorder-perspective-streams.md#4c-2-as-built)): Jump and
 Follow are enabled for a seat with a recorded camera sample, Follow is drawn active for
@@ -31,6 +32,21 @@ The cards draw only while DOCK.GUI is topmost. Hit tests also compare its stored
 press owns its release, even after closing the panel; a cancelled press cannot invoke Sight.
 Wheel messages over the cards are handled before either the world zoom or the GUI list wheel.
 Config replaces the dock through the existing screen slot; teardown clears the card region.
+
+## The Overlays menu
+
+The dock's `DKOVER` toggles a menu that this layer draws over the panel's bottom right: 100 x 89
+engine px, 4 px in from the panel's right edge, its bottom on the panel's, right above the
+button. Its four rows -- Cursors, Clicks, Selections, Chat -- are 92-px toggles drawn as Sight and
+Follow are, on while pressed with the lit bar. Each row flips one of the replay's switches
+(`tagpu_replay_overlay_set`). While open it covers what lies under it: its rows and its ground are
+actions of their own (`ACT_ROW`, `ACT_MENU`), so a press there never reaches a card, and the wheel
+over it does nothing. It opens only while the cards are shown, and closes when they hide. The
+dock closes it on a press anywhere but the menu and `DKOVER`, and that press then acts as usual.
+Being inside the panel's rect, it is magnified and pointer-mapped with the cards at every HUD
+scale. The overlays it switches are the
+[perspective plan's 4c-3](demo-recorder-perspective-streams.md#4c-3-as-built); its art is a
+stand-in.
 
 ## Recorded model
 

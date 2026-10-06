@@ -559,6 +559,17 @@ static const char* frame_valid(const void* rec)
        buffer sized by the cap, so the cap is checked here with the extent */
     if (!table_ok(p, p->off_mapfeat, p->n_mapfeat, sizeof(TAGPU_PK_MAPFEAT))) return "map features table";
     if (p->n_mapfeat > TAGPU_PK_MAX_MAPFEAT) return "more map features than the table holds";
+    /* the replay's overlay items: the marker pass sizes its buckets from the
+       cap and takes each item's kind and player as given */
+    if (!table_ok(p, p->off_overlay, p->n_overlay, sizeof(TAGPU_PK_OVERLAY))) return "overlay table";
+    if (p->n_overlay > TAGPU_PK_MAX_OVERLAY) return "more overlay items than the table holds";
+    {
+        const TAGPU_PK_OVERLAY* ov = tagpu_pk_overlay(p);
+        unsigned k;
+        for (k = 0; k < p->n_overlay; k++)
+            if (ov[k].kind > TAGPU_PK_OV_CLICK || ov[k].player >= TAGPU_PK_OV_PLAYERS)
+                return "overlay item kind or player";
+    }
     if (p->n_units && p->unit_slots && p->n_units > p->unit_slots) return "more units than slots";
     /* the publisher's own table caps, which the render thread sizes its
        per-frame arrays from -- a count past them is not a packet it wrote */
