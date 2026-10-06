@@ -1210,6 +1210,46 @@ fresh seek's count none. Feeding the live dumps in as the puppet's makes
 `compare-counts` report all four sites. This verifies the existing skirmish
 invariant only; the multiplayer adapter that relies on it is unimplemented.
 
+### Owner-authority materializer (plan)
+
+Not implemented; this is the composition the mode-3 adapter will build, stated
+so that each stage below is checked against one rule. Playback steps on the
+recorder's GameTime, as skirmish does. Envelopes of application tick `a` apply
+in ledger order after step `a`'s primary events and before image `a+1`
+(`recr_mp_apply` called before `iteration_read`). Each namespace has exactly one
+source:
+
+| Namespace | Source on the puppet host |
+|---|---|
+| Unit existence and lifetime, every frozen block | the lifecycle consumer's actions; primary create, network-create and death events are checked, not dispatched |
+| Unit record and mover | the latest applied owner image of that exact incarnation, written by the existing image recipe |
+| Owner private roots (named starts, replies, sprays) | `ROOT` actions at their ledger position, the recorder's own publications included; primary copies are not dispatched |
+| Player records | owner player images, mapped to recorder rows |
+| Order lists | owner order caches |
+| Features, wrecks, grid, projectiles, globals, declared tables | the primary stream, as the recorder observed them |
+| Explored map per player | per-origin contributions |
+
+The composed world is a materializer-owned copy of `RecWorld`'s unit, live,
+player and list arrays; the reader's world stays the delta baseline. Every ID
+the owner images carry is bounded as skirmish bounds it, and an image is
+applied only to a slot whose lifecycle phase is live with the same birth.
+Shots and effects come from the recorder's observation, while their units'
+positions come from owner images: a remote unit can fire from where the
+recorder's replica stood. That residual is named here, not hidden.
+
+Stages, each a checkpoint with native evidence:
+
+1. Mode-3 admission through the materializer: seat every actor as a puppet beside V,
+   construct/destroy/dispatch by the lifecycle consumer under *Exactly-once private
+   children*, substitute units, players and orders. Oracle on the four-actor
+   recording: the recorder's own units equal its primary images exactly; every
+   remote slot equals its latest applied owner image after each step.
+2. Seek, rebuild and fresh-process seek of a mode-3 file, with a fresh consumer.
+3. Takeover with the remaining seats as fresh AI.
+4. Perspective streams, communication audiences, pings and drawings.
+5. Ten seats without a spare viewer seat.
+6. The measured traffic budget, migration and cross-address discovery.
+
 ### Fixed global owner blocks before construction
 
 Offline skirmish allocation sorts by player-record address; native multiplayer
