@@ -1,6 +1,6 @@
 # D. Resource snapping, Quick Build and mod profiles
 
-**Implemented on the landing branch; validation in progress, 2026-10-04.** This page describes mex and
+**Implemented and replay-validated, 2026-10-06.** This page describes mex and
 geothermal placement snapping, contextual Quick Build, the mod profiles that permit them, and
 automatic profile reload. Quick Build follows the BAR resource-building workflow: select a
 capable constructor, hover a deposit or geothermal vent, see the building ghost, and use the
@@ -125,8 +125,11 @@ archives, definitions and scripts in the same process.
 
 Use TADR's footprint-coverage rule for mexes. For each candidate placement within the square
 search radius, count footprint cells whose metal value is strictly greater than the map's
-`SurfaceMetal` background value. Prefer the highest count; ties favor the placement nearest the
-raw mouse position. This scores qualifying coverage, not metal income or the sum of metal values.
+`SurfaceMetal` background value. Prefer the highest count; ties favor the candidate-cell center
+nearest the raw mouse position, using TADR's `(candidate + 0.5)` metric on both axes.
+The actual building center depends on footprint parity, so this does not guarantee the physically
+nearest building center on an even footprint axis. This scores qualifying coverage, not metal
+income or the sum of metal values.
 If no candidate qualifies, retain normal placement.
 
 Manual and Quick Build mex selection share the complete-target check derived from the modern
@@ -142,7 +145,7 @@ Occupied deposits remain snap targets for mexes. Their preview is red while ordi
 validation says construction is blocked. This supports preparing a reclaim-and-replace upgrade;
 snapping does not grant permission to build over an occupied site.
 
-Geo snapping finds the nearest placement accepted by the engine's buildability rules for the
+Geo snapping uses the same candidate-cell-center metric among placements accepted by the engine's buildability rules for the
 selected geothermal building. Its resource recognition and yardmap reads must be bounded by
 the actual definition/yardmap allocation. TADR's inspection of at most 64 yardmap bytes is a
 source heuristic, not a complete identification guarantee for every mod footprint.
@@ -161,7 +164,7 @@ distinguishes qualifying patches from uniform surface metal.
 |---|---|
 | Uniform cells equal to the map's background level | No qualifying candidates; normal placement |
 | Background metal with richer discrete deposits | Deposits remain snap targets |
-| A broad uniform region above the background level | Equal full-footprint scores favor the candidate nearest the mouse |
+| A broad uniform region above the background level | Equal full-footprint scores favor the candidate-cell center nearest the mouse |
 | Unequal richness values that are all above the threshold | Coverage determines the score; higher income is not guaranteed |
 
 The uniform-region statement applies to candidates with the same qualifying coverage; map edges
@@ -489,7 +492,9 @@ all 17 resource image gates stay strict. Its native control samples T301 and acc
 cosmetic bytes, also passing the default strict comparator at that checkpoint. The earlier
 T451 gap remains reproduced. Coverage reaches all 11 changed function/region requirements,
 and the passing `replay-roundtrip:` note is on `cfe3771f`; `landing --check` passes.
-Independent landing reviews remain pending.
+Two independent HIGH landing reviews found no surviving code defect. Their three LOW
+documentation findings are corrected: this tie metric, the order-root write table and the
+COB page's whole-gate status.
 
 The null twin now samples camera positions across the map's native scroll extents and selects
 ARMACK and RSNRACK in separate refusal-fixture views. The prior small camera sweep never set the minimap rectangle's

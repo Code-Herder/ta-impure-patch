@@ -2058,7 +2058,7 @@ and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integratio
 |---|---|
 | `main+0x2CAA` | Resource input restores the repaired raw point, then writes the chosen manual snap point before `0x4197D0` computes its rectangle/flags. Game/input thread only; does not arm a command (§2.108) |
 | `0x51E684` / `0x51E688` | Site-test scratch: Quick preview/click queries save and restore both words. Manual placement leaves their normal native ownership (§2.108) |
-| Order nodes through `0x43AFC0` | Resource clicks create ordinary build/reclaim/Guard orders through the engine root; no direct unit/grid mutation. Recorded and replayed by the existing recorder (§2.108) |
+| Order nodes through `0x43ADC0`, `0x43AFC0`, `0x439F80` | Resource clicks append/replace build and reclaim orders through `0x43ADC0`; helpers use `0x43AFC0` for Guard; queued-plan cancellation removes exact nodes through `0x439F80`. No direct unit/grid mutation. Recorded and replayed by the existing recorder (§2.108) |
 | `profiles/*.ini`, per-mod resource keys in `impure.cfg` | Missing general profiles are created at attach; existing files preserved. Complete validated rules publish on the game thread in menus, frozen for the match. Personal toggles/radius are independent and retain their saved values under locks (§2.108) |
 | Win32 HWND property `Impure.WindowLifetime`; `tagpu_window.c` | Window owner attaches a positive process-unique ID and destruction subclass before proxy subclassing. Survives final DirectDraw Release; removed before engine WM_DESTROY. The ID counter saturates rather than wrapping. No engine field is written (§2.107) |
 | Vulkan `s_ownerGeneration`, `s_ownGone`, lane state | Bound and destroyed generation IDs published with Interlocked operations; a delayed old-window notification cannot veto its replacement. Ready GPU objects transfer between joined renderers; the window owner tears down only after joining the active renderer, or after final Release already joined it. An unfinished worker retains its own cleanup (§2.107) |
@@ -20369,7 +20369,8 @@ The saved comparisons pass with the option and still fail without it. The new wh
 passes all 37 fixtures, 1480 checks, 519 exact paused comparisons and all 37 image gates,
 with 11/11 changed function/region requirements reached and a passing note on `cfe3771f`.
 Its native control at T301 accepts zero cosmetic bytes and also passes the default strict
-comparator; the earlier T451 gap remains. Independent reviews remain pending.
+comparator; the earlier T451 gap remains. Two independent HIGH reviews found no surviving
+code defect; their three LOW documentation findings are corrected.
 See the recorder completeness note for the exact bounds. The native
 trace lever is enabled only during CORE and stock native preflights; recorded lanes keep
 all ordinary sink counters enabled. The stack-peak

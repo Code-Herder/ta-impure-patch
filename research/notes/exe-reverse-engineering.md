@@ -16297,6 +16297,18 @@ The full resolver caller list is `0x401F2F`, `0x402E3D`, `0x4031A7`, `0x405265`,
 `0x43FE83`, `0x43FECC`, `0x4804A3`, `0x487D5B`, `0x487DD3`, `0x487E2E`, `0x487EFD`,
 `0x487F8C`, `0x48D0A0`.
 
+**Candidate-cell distance and actual placement centers.** SOURCE: TADR v2026.8.6
+`tahook.cpp:SnapToNear` ranks equal-coverage candidates by squared distance from
+`(cx + 0.5, cz + 0.5)` to the raw mouse in cell units; its geo caller uses the same selector.
+Impure preserves this metric. It is not a guarantee of the nearest actual building center.
+DISASSEMBLED: manual dispatch `0x419670` (sole direct caller `0x498F98`) reads type
+`main+0x2CC4`, point `+0x2CAA` and definition footprint
+`+0x14A/+0x14C`. Its `0x4196D8..0x419714` conversion reconstructs each order coordinate
+as `(2 * footprint_origin + footprint_size) << 19`, passed through `0x43AFC0` at `0x4197A9`.
+`tagpu_resource.c:position` uses that same center: even footprint axes place at `cx * 16`
+world units, odd axes at `(cx + 0.5) * 16`. Thus an even axis's actual center differs by
+eight world units from the candidate-cell center used for the tie. No metric change is implied.
+
 #### Native MobileBuild placement retries [DISASSEMBLED 2026-10-05]
 
 An accepted contextual upgrade queues native reclaim followed by `MOBILEBUILD`; queue

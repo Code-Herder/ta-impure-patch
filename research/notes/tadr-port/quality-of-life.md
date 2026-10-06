@@ -89,8 +89,8 @@ simulation fixes and limits remain in their [port groups](overview.md). Inclusio
 override a feature's earlier safety decision: `PreviewObject3D` is parked and the
 [opponent-facing preview](data-keys-evidence.md#4-previewfaceopponent) has unresolved fog and
 commander-identity concerns. Group D has a survey; the first feature's
-[resource-snapping, Quick Build and mod profiles](resource-snapping.md) are implemented on the
-landing branch, with replay validation in progress. They add a separate BAR-style contextual
+[resource-snapping, Quick Build and mod profiles](resource-snapping.md) are implemented and
+replay-validated (2026-10-06). They add a separate BAR-style contextual
 mex/geo toggle, owned completed-building upgrades and queued-site indicators. Defaults
 enable both resource features for Stock TA, M/P/T and lock them off for E/Z and unidentified mods.
 Those are Impure choices; this table continues to audit native bundled TADR behavior. Quick Build
