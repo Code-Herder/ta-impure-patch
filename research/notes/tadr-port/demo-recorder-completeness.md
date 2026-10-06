@@ -422,7 +422,8 @@ MEASURED 2026-10-05 on the reference setup: at internal speed 20,
 at 10), and `takeover battle --cover` all ten reported checks, including fresh
 executed AI orders and exact fork playback. The normal-speed
 `secondary-orders` control passes 22 checks and fails its images inventory at
-the existing `main+0x531` GUI pointer. No exclusion is added. Simulation runs
+the `main+0x531` GUI pointer, which `replay-globals.tsv` now leaves with the viewer
+(`guitop`, the owner's decision, 2026-10-06). Simulation runs
 near 60 ticks/s at 20 and 30 ticks/s at 10; startup, pauses and comparison work
 prevent inferring a whole-harness speedup from these runs.
 

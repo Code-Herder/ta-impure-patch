@@ -2518,7 +2518,10 @@ the explosions and the players phase, in this order:
    feature TDF enumerated that holds it, and the enumeration (`0x4BCB50("features", "*.tdf", −1,
    1)`, recursive) lists loose files under the game folder first, then the archives in mount order
    — `rev31.gp3`, `*.ccx`, `*.ufo`, `*.hpi` — so a `.ufo` takes over a name defined only in
-   `totala1.hpi` (`tools/reproduce_fixture.py` relies on that). The cursor is set to 0 at every
+   `totala1.hpi` (`tools/reproduce_fixture.py` relies on that). The index LoadFeature searches,
+   `[0x511FB4]`, lives only during the level load: built by `0x4222E0` (`0x4918A2`), freed and
+   zeroed by `0x4223E0` (`0x4918DE`; the store at `0x422452`), so LoadFeature called in a live
+   game reads through NULL at `0x4224BB`. The cursor is set to 0 at every
    level load by LoadMap's last store (`0x483DAC`, `mov [ebp+0x5C],ebx` with `ebp` =
    `main+0x141FB`) and at process start (`0x41D956`): a level's first tick wraps it and examines
    no cell, tick k examines cell `W × H − k`, and cell `W × H − 1` is never examined. DISASSEMBLED
@@ -3485,7 +3488,7 @@ The desktop `GUIInfo` is embedded at `main+0x519`; its `+0x18`, therefore `main+
 
 MEASURED on the reference setup in the mapping checkpoint's `secondary-orders` run: live tick 331 has `0x0B0AD4D8`, changing to `0x1168C340` at 451; two paused frame dumps at tick 496 change `0x1168C340` to `0x0B0CC500`. Puppet playback at ticks 331 and 451 has `0x0B0B0560`; repeated playback at 331 has `0x0B0AF920`; fresh-process seek at 331 has `0x0B0AF8B0`. World/radar/events/counts and all three poisoned round trips pass, but the bitwise images inventory reports two bytes at `main+0x531`. Individual address bits can coincide across two heaps and remain equal across a paused pair even while the whole pointer changes, so the gate's bitwise presentation/host tests need not classify every bit of an address alike.
 
-The current positive list does not name these four bytes. A proposed `leave` row is pending the owner's decision; no inventory exception is applied and this regression remains failed. Leaving a raw heap address with the viewer would not provide recorded GUI/input history: that history still needs stable identities and events. This investigation reads existing addresses and dumps; it adds no engine patch or engine write.
+The positive list names these four bytes as the `leave` row `guitop` (the owner's decision, 2026-10-06): the viewer's own screen stack, and an address no other process can use. MEASURED 2026-10-06: `secondary-orders --cover` passes all 25 checks with it, the images gate included. Leaving a raw heap address with the viewer would not provide recorded GUI/input history: that history still needs stable identities and events. This investigation reads existing addresses and dumps; it adds no engine patch or engine write.
 
 **Every wall clock the engine stores.** The sources are `GetTickCount` (IAT `0x4FC0DC`; `0x4B6560`
 is `jmp` to it, and `0x4B6340` is `GetTickCount · rate / 1000`), `QueryPerformanceCounter` (IAT
@@ -14226,7 +14229,7 @@ Playback heartbeats report 58.51 and 57.46 ticks/s at live speed 20.
 The same source at normal speed passes world/radar/event/count/address,
 puppet-write and all three round-trip checks, with playback heartbeats around
 30 ticks/s. Its images inventory fails one byte at the existing `main+0x531`
-GUI-pointer gap. That failure remains open and does not authorize an exclusion.
+GUI-pointer gap, which `replay-globals.tsv` now leaves with the viewer (`guitop`).
 This verifies accelerated tick-based replay checks; it does not measure
 multiplayer traffic or establish a total harness-time reduction.
 

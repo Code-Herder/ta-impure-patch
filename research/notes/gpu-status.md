@@ -3185,8 +3185,7 @@ sample verifies all four first source/recipient bitmap CRCs, but its exit/chat
 driver fails; the complete native map file/mode/seek gate remains open after
 three attempts. The current `secondary-orders` replay has 22 passes and one
 images-inventory failure at three bytes of `main+0x531`; all simulation
-comparisons and three exact poisoned round trips pass. The pending exclusion
-is unchanged. This adds no hook, field write or exclusion. Effective POV
+comparisons and three exact poisoned round trips pass. `main+0x531` is the `leave` row `guitop` in `replay-globals.tsv` (the owner's decision, 2026-10-06), and `secondary-orders --cover` then passes all 25 checks, the images gate included (MEASURED 2026-10-06). This adds no hook, field write or exclusion. Effective POV
 engine playback, other view streams and communication audiences remain open;
 see the multiplayer slice's *Per-origin explored-map history*.
 

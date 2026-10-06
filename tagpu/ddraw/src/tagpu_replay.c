@@ -170,6 +170,8 @@ static int        s_over;           /* the recording has nothing more to apply  
 static int        s_endlog;         /* its counts wait for the last step's phases (THE PHASES)    */
 static unsigned   s_endat;          /* ... and the GameTime it ended at                           */
 static unsigned   s_notes;          /* the level's anomalies logged                               */
+#define NOTE_SITES     48           /* above the call sites of note(), so each has its own count  */
+static struct { const char* fmt; unsigned n; } s_nsite[NOTE_SITES]; /* per call site, by format */
 #define EV_KINDS (RK_EV_SPRAY - RK_EV_CREATE + 1)
 static struct {
     unsigned steps, late, made, refused, missing, lingering, other, bad_ids, links, unlinked;
@@ -342,6 +344,7 @@ static void replay_close(void)
     s_engine_cells = 0;
     s_endlog = 0;
     s_notes = 0;
+    memset(s_nsite, 0, sizeof s_nsite);
     memset(&s_st, 0, sizeof s_st);
     memset(&s_fst, 0, sizeof s_fst);
     s_tin.n = 0;
@@ -1145,6 +1148,9 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    carried (17), and the create's 28-31 */
 #define U_ENGINE_BITS  0xF003170Fu
 #define NOTES_MAX      32           /* the log lines a level's anomalies may take                 */
+#define NOTES_PER_SITE 3            /* ... and one call site's: an anomaly that repeats every step
+                                       is counted in the level's counts, so its first lines stand
+                                       for the rest and leave the budget to the other kinds        */
 
 /* 0x485F50(owner, type, x, altitude, z, finished, layer, slot): the create (stdcall, `ret 0x20`);
    a nonzero slot is taken exactly, and an occupied one refused (0x486002..0x486043) */
@@ -1408,7 +1414,15 @@ static void note(const char* fmt, ...)
 {
     char line[256];
     va_list ap;
+    unsigned i;
     if (s_notes >= NOTES_MAX) return;
+    for (i = 0; i < NOTE_SITES && s_nsite[i].fmt && s_nsite[i].fmt != fmt; i++) ;
+    if (i < NOTE_SITES) {
+        s_nsite[i].fmt = fmt;
+        if (s_nsite[i].n >= NOTES_PER_SITE) return;
+        if (++s_nsite[i].n == NOTES_PER_SITE)
+            tagpu_log("replay: (the last line of this kind; the level's counts hold the rest)");
+    }
     if (++s_notes == NOTES_MAX) tagpu_log("replay: (the last line of this level's notes)");
     va_start(ap, fmt);
     vsnprintf(line, sizeof line, fmt, ap);

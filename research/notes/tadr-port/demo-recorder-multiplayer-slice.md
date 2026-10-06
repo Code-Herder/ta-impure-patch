@@ -166,7 +166,7 @@ The controlled 3,108-byte file, with 18 application records (eight remote consum
 
 The same file retrieves all 88 bytes of a recorded nonempty local secondary list, including after seek. An empty remote list at source tick 8/sequence 4/application tick 100 remains the last complete list when a 46-node replacement begins at application tick 101. Only the proof tail supplies its final node and a changed player image; source validation reconstructs 46 nodes and the changed image while playback/seek still return the previous complete list and player image. Tick 99 and an unreported slot/list remain unknown. All five file lifecycles and the 23 header controls pass. Forty-three additional body mutations rebuild both outer checksums and source-prefix seals; the raw framing/cut ledger accepts each, but C open/summary/info and Python reject malformed source rosters, player/unit fields and masks, live/birth/owner/block/duplicate-slot violations, order ownership/bounds/continuations and a seal over an incomplete transaction. No tolerance or exclusion changes.
 
-The earlier format-5 container checkpoint passed the actual TA `secondary-orders` regression through live recording, puppet playback, in-place restore and fresh-process seek: complete tick-1080 recording, image/event comparisons and three exact round trips at 481/511/541. The mapping checkpoint's later run ends complete at tick 1080 with 1080 iterations; world/radar/event/count comparisons and round trips at 361/421/451 pass, poisoning 26 tables with zero residue and equal before/after dumps. Its images inventory gate fails at two bytes of `main+0x531`, the active GUI heap pointer. Disassembly and full pointer measurements are in the [engine map](../exe-reverse-engineering.md#the-active-gui-pointer-and-the-images-inventory-disassembled-measured-2026-10-04). A proposed four-byte `leave` row awaits the owner's exclusion decision; the later regression is not clear and no exclusion or tolerance is applied. The semantic reader also opens, summarizes and inspects that real skirmish file. The harness's 39 logic tests pass after refreshing the coverage map for the new reader functions. These are skirmish reader/regression results, not native multiplayer replay coverage. Engine application, complete unit/effect/Impure authority and game-produced network record/play/seek remain open.
+The earlier format-5 container checkpoint passed the actual TA `secondary-orders` regression through live recording, puppet playback, in-place restore and fresh-process seek: complete tick-1080 recording, image/event comparisons and three exact round trips at 481/511/541. The mapping checkpoint's later run ends complete at tick 1080 with 1080 iterations; world/radar/event/count comparisons and round trips at 361/421/451 pass, poisoning 26 tables with zero residue and equal before/after dumps. Its images inventory gate fails at two bytes of `main+0x531`, the active GUI heap pointer. Disassembly and full pointer measurements are in the [engine map](../exe-reverse-engineering.md#the-active-gui-pointer-and-the-images-inventory-disassembled-measured-2026-10-04). Those four bytes are the `leave` row `guitop` (the owner's decision, 2026-10-06); `secondary-orders --cover` then passes all 25 checks, the images gate included. The semantic reader also opens, summarizes and inspects that real skirmish file. The harness's 39 logic tests pass after refreshing the coverage map for the new reader functions. These are skirmish reader/regression results, not native multiplayer replay coverage. Engine application, complete unit/effect/Impure authority and game-produced network record/play/seek remain open.
 
 ### Owner-only named script starts
 
@@ -224,9 +224,9 @@ recording contains 331 owner-only named starts and refuses zero off-thread event
 The three round trips at 421/1021/1051 poison 27 tables, leave zero residue and
 compare exactly before/after. Coverage reaches `ev_named` and `ev_start_site`;
 this fixture does not reach the extra-weapons `tagpu_rec_start_named` helper. This
-pass preserves the skirmish path; it does not resolve the intermittent `main+0x531`
-GUI-pointer inventory failure seen in the earlier normal-speed control, and its
-proposed exclusion remains unapplied.
+pass preserves the skirmish path. The intermittent `main+0x531` GUI-pointer
+inventory failure of the earlier normal-speed control is closed by the `leave` row
+`guitop`.
 
 This carrier covers named starts and their arguments, not raw COB execution/model
 heaps. Existing skirmish replay reconstructs those through engine roots under its
@@ -1352,7 +1352,12 @@ played by `tools/replay/recmp_play_test.py`:
   corpses were made. Dumps at 388 (after the first spawn), 1578, 1722, 1744,
   1958 and 2090 are EQUAL. 388 had one difference before the comparer expected
   no target for an order naming a destroyed unit (above): unit 10's order named
-  slot 1505, which its owner destroyed at 388 and the recorder saw at 392. No
+  slot 1505, which its owner destroyed at 388 and the recorder saw at 392. The
+  positive list's change for `guitop` refuses these recordings (a recording
+  names its list); a third, recorded on the current list (GameTimes 1..2071,
+  42 deaths, 40 corpses, 18 source tests), is EQUAL at 193, 205, 246 and 338
+  (inside owner-first windows), 388, 1578, 1958 and 2070, and its log names
+  each anomaly kind: three lines per call site, the rest counted. No
   native sample reads a nonzero source slot, so the branch where the
   recorder's slot differs from the host's runs only through the same stub.
 
@@ -1417,7 +1422,7 @@ explained transitions. Recorded/puppet/restored/fresh seek comparisons pass,
 and round trips 421/451/541 poison 26 tables with zero residue and exact
 before/after dumps. The images inventory reports `main+0x531`, one byte of
 the desktop GUI pointer, as written during play only on the recording machine.
-Its proposed exclusion remains unapproved and unchanged. This run exercises
+That byte is the `leave` row `guitop` since 2026-10-06. This run exercises
 the installed callback's inert skirmish path and seating's OFF publication;
 it does not exercise a multiplayer loader handoff or clear the complete
 landing gate.
@@ -1610,8 +1615,8 @@ The current COVER `secondary-orders` run at internal speed 20 returns 22 passes
 and one failure: the images inventory finds three differing bytes at
 `main+0x531`, live `48c60b`, playing `70030c`, fresh seek `40050c`. Observed world,
 radar, roots/sinks, address scans, puppet-write checks and all three exact
-poisoned round trips pass. This repeats the pending GUI-pointer classification
-gap; no exclusion or tolerance is changed and this run does not clear that gate.
+poisoned round trips pass. Those bytes are the `leave` row `guitop` since
+2026-10-06, with which the same fixture passes all 25 checks.
 The normal/COVER builds and all 39 harness logic tests pass. The native bitmap
 coverage sample reaches `mp_explored_begin`, `mp_explored_capture`,
 `mp_explored_emit` and `mp_explored_log` on both peers; the sample is written

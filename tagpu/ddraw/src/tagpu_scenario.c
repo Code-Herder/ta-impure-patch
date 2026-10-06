@@ -111,7 +111,6 @@ typedef void* (__stdcall* PFN_CREATE)(int owner, int typeIdx, int x, int alt, in
                                       int fullHp, unsigned stateMask, int unitNumber);
 typedef int   (__stdcall* PFN_KILL)(void* unit, unsigned mode);
 typedef short (__stdcall* PFN_FEATNAME2ID)(const char* name);
-typedef short (__stdcall* PFN_LOADFEATURE)(const char* name);
 typedef void* (__stdcall* PFN_GRIDPLOT)(int gridX, int gridZ);
 typedef void* (__stdcall* PFN_SPAWNFEAT)(void* gridPlot, short defIdx, const void* pos,
                                          const void* turn, unsigned char playerId);
@@ -123,7 +122,6 @@ typedef void  (__stdcall* PFN_ORDER)(int actionIndex, int shift, void* unit, voi
 #define UNITS_CreateUnit ((PFN_CREATE)      0x00485F50u)
 #define UNITS_KillUnit   ((PFN_KILL)        0x004864B0u)
 #define FeatureName2ID   ((PFN_FEATNAME2ID) 0x00422DD0u)
-#define LoadFeature      ((PFN_LOADFEATURE) 0x004224B0u)
 #define GetGridPosPLOT   ((PFN_GRIDPLOT)    0x00481550u)
 #define SpawnFeatureOnMap ((PFN_SPAWNFEAT)  0x00423C50u)
 #define ScriptAction_Type2Index ((PFN_TYPE2INDEX) 0x0043F0E0u)
@@ -1102,10 +1100,11 @@ static int resolve_all(char* ta)
     {
         scn_feat* fe = &g_feats[i];
 
+        /* Only a definition the level loaded: LoadFeature 0x4224B0 searches the TDF index
+           [0x511FB4], which the level load frees and zeroes (0x4223E0 at 0x4918DE; 0x422452)
+           before any scenario runs, so from a live game it reads through NULL at 0x4224BB.
+           The recorder relies on the same fact: only a level load grows the definitions. */
         fe->defIdx = FeatureName2ID(fe->type);
-
-        if (fe->defIdx < 0)
-            fe->defIdx = LoadFeature(fe->type);
 
         if (fe->defIdx < 0)
         {

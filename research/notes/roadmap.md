@@ -4012,8 +4012,7 @@ COVER sample verifies initial source/recipient bitmap CRCs. The native exit/chat
 driver stops after three failed attempts, leaving the complete native map file,
 mode change and native seek gate open. The current skirmish regression has 22
 passes and one images-inventory failure at three bytes of `main+0x531`; simulation
-comparisons and all three exact poisoned round trips pass. The pending exclusion
-is unchanged. It adds no engine write, hook or exclusion. Native POV playback, camera/cursor/selection/
+comparisons and all three exact poisoned round trips pass. `main+0x531` is the `leave` row `guitop` in `replay-globals.tsv` (the owner's decision, 2026-10-06), and `secondary-orders --cover` then passes all 25 checks, the images gate included (MEASURED 2026-10-06). It adds no engine write, hook or exclusion. Native POV playback, camera/cursor/selection/
 click streams and communication audiences remain open; the multiplayer slice
 records the current verification and wider gaps. No multiplayer landing is
 cleared by this work.
