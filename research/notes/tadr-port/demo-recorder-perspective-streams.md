@@ -284,12 +284,25 @@ count and the number of `rsel` units.
 
 Each landing runs `tareplay.py landing`. A new fixture, `perspective`, reaches the new functions.
 Its scenario, `scenarios/replay-perspective.json`, centres the unpinned camera on the human's
-commander and puts two Peewees inside the drag box. Its `keys` steps are `pmove`, a left
-`pclick` on the commander at the window's centre, a `prclick` on the ground, a drag selection
-(`pmove` and `down:lbutton`, `pmove`, `up:lbutton`, each a step of its own so the engine sees the
-move between the press and the release), an arrow key held for 60 ticks and `wheel:1`. The
+commander and puts two Peewees inside the drag box. Its `keys` steps are `pmove`; a left
+`pclick` on the commander at the window's centre; a drag selection (`pmove` and `down:lbutton`,
+`pmove`, `up:lbutton`, each a step of its own so the engine sees the move between the press and the
+release); a Shift `pclick` on the commander (`down:shift` … `up:shift`, which the shield turns into
+`MK_SHIFT`); a `prclick` on the ground, which orders the three to move; a left `pclick` on empty
+ground, which deselects under Interface Type 1; an arrow key held for 60 ticks; and `wheel:1`. The
 injected `pclick`, `prclick` and `pmove` tokens are used rather than `click`, `rclick` and
-`mouse:`, which fall back to `SendInput` and the desktop's pointer when the shield is down. It
+`mouse:`, which fall back to `SendInput` and the desktop's pointer when the shield is down.
+
+**Every selection is made and cleared before GameTime 301**, the earliest point the harness draws
+for the images gate and the round trips (`tareplay.py gametimes`). A selection held by the human on
+the recording machine is the viewer's own interface state there: the unit panel, the desktop GUI
+`main+0x561`, the game-screen state `main+0x37E9E`/`+0x37EC1` and the cursor `0x51F4AE`/`0x51F4B2`
+(MEASURED 2026-10-06: these 8 bytes failed the gate at 391 with a selection held from 224). The
+gate's null twin classifies what a viewer does without changing the game, and selecting is not
+among it, so a held selection at a gate point is reported as unlisted state. The fixture holds none
+there instead of widening the twin. The drag is no click record: it selects through the drag box,
+not through either click action (MEASURED: two clicks for a click and a right click with a drag
+between). It
 sets `"watch": true` and ends at tick 1500.
 
 **Verification runs** (each 10 minutes or less, private display, retail):
@@ -302,7 +315,8 @@ sets `"watch": true` and ends at tick 1500.
   - **Exact expectations:**
     - the selection after the click names the commander's slot and birth (read with `tacli peek`
       while paused);
-    - three clicks with the injected buttons and keys at `main+0x2CAA`'s integer parts;
+    - four clicks (left, Shift left, right, left) with the injected buttons and keys at
+      `main+0x2CAA`'s integer parts, and selections of 1, 2, 3 and 0 units;
     - `cam_x` grows across the scroll;
     - `zoom` equals the wheel's logged level × 65536, rounded.
   - **Gate:** the fixtures gate `tareplay.py landing` passes, with the changed recorder, writer

@@ -70,9 +70,10 @@
   },
   "perspective": {
    "load": "replay-perspective.json",
-   "steps": [[90, "keys", ["pmove:600,400"]], [150, "keys", ["pclick:512,384"]],
-             [300, "keys", ["prclick:700,500"]], [450, "keys", ["pmove:360,270", "down:lbutton"]],
-             [480, "keys", ["pmove:470,340"]], [510, "keys", ["up:lbutton"]],
+   "steps": [[90, "keys", ["pmove:600,400"]], [120, "keys", ["pclick:512,384"]],
+             [150, "keys", ["pmove:360,270", "down:lbutton"]], [165, "keys", ["pmove:470,340"]],
+             [180, "keys", ["up:lbutton"]], [200, "keys", ["down:shift", "pclick:512,384", "up:shift"]],
+             [230, "keys", ["prclick:700,500"]], [270, "keys", ["pclick:850,150"]],
              [700, "keys", ["down:right"]], [760, "keys", ["up:right"]],
              [900, "keys", ["pmove:512,384", "wheel:1"]]],
    "end": 1500,
