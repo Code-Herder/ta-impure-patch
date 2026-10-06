@@ -407,13 +407,51 @@ class Worker:
         (into / "tagpu.log").write_text(talog.run_text(self.gamedir))
 
 
+def crash_report(path: Path) -> str:
+    """TA's ErrorLog.txt in one line: where the exception was and what it read or wrote."""
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return "ErrorLog.txt (unreadable)"
+    keep = [ln.strip() for ln in text.splitlines()
+            if re.match(r"\s*(module |Access violation|ExceptionCode|Instruction pointer)", ln)]
+    return "; ".join(keep[:4]) or text.strip().splitlines()[0][:200]
+
+
 class Log:
-    """The instance's log from a launch on, across rotation; a COB stop ends the process."""
+    """The instance's log from a launch on, across rotation; a COB stop ends the process, and a
+    crash ends every wait at once (`alive`)."""
+
+    ALIVE_EVERY = 2.0      # s between the process checks of a wait: each asks tacli
 
     def __init__(self, w: Worker):
+        self.w = w
         self.cursor = talog.Cursor(w.gamedir)
         self.part = ""
         self.lines = []
+        self.errorlog = w.gamedir / "ErrorLog.txt"
+        self.errorlog_was = self.errorlog.stat().st_mtime if self.errorlog.exists() else None
+        self.seen_running = False
+        self.checked = 0.0
+
+    def alive(self):
+        """Raise Failed when the game has crashed since this log began: TA wrote ErrorLog.txt
+        (its exception handler, which can leave the process up behind a box), or the process
+        that was running is gone. A wait would otherwise sit out its whole timeout -- up to
+        half an hour -- on a game that cannot answer."""
+        if self.errorlog.exists() and self.errorlog.stat().st_mtime != self.errorlog_was:
+            self.read()
+            raise Failed(f"the game crashed: {crash_report(self.errorlog)}")
+        now = time.time()
+        if now - self.checked < self.ALIVE_EVERY:
+            return
+        self.checked = now
+        if self.w.running():
+            self.seen_running = True
+        elif self.seen_running:
+            self.read()
+            raise Failed("the game's process exited during a wait"
+                         + (f": {self.lines[-1].strip()}" if self.lines else ""))
 
     def read(self):
         got = (self.part + self.cursor.text(advance=True)).split("\n")
@@ -437,6 +475,8 @@ class Log:
                 return None
             nap(0.4)
             self.read()
+            if not any(rx.search(ln) for ln in self.lines[start:]):
+                self.alive()
 
 
 # ---- the fixtures and the GameTimes ---------------------------------------------------------
@@ -654,6 +694,7 @@ def live(w, fx, Ts, out):
         if g >= fix["end"] and not steps:
             break
         log.read()
+        log.alive()
         nap(0.5)
     if fx["cover"]:
         cover_ask(w, log, "L")

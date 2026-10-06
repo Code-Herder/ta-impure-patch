@@ -14,6 +14,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import zlib
 from unittest.mock import Mock, patch
@@ -730,6 +731,42 @@ class TakeoverAi(unittest.TestCase):
 
     def test_no_mobile_units_is_unrun(self):
         self.assertEqual(self.check(fraction=None)[1], tareplay.UNRUN)
+
+
+class CrashEndsTheWait(unittest.TestCase):
+    """A crash ends a log wait at once instead of after its timeout."""
+
+    class Worker:
+        def __init__(self, gamedir, up):
+            self.gamedir, self.up = gamedir, list(up)
+
+        def running(self):
+            return self.up.pop(0) if len(self.up) > 1 else self.up[0]
+
+    def log(self, gamedir, up):
+        log = tareplay.Log(self.Worker(gamedir, up))
+        log.ALIVE_EVERY = 0
+        return log
+
+    def test_an_errorlog_ends_the_wait(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = self.log(Path(d), [True])
+            (Path(d) / "ErrorLog.txt").write_text(
+                "TotalA caused an Access Violation in\nmodule TotalA.exe at 0023:004c74c7.\n")
+            t0 = time.time()
+            with self.assertRaisesRegex(tareplay.Failed, "crashed: module TotalA.exe at 0023:004c74c7"):
+                log.wait(r"never", 60)
+            self.assertLess(time.time() - t0, 5)
+
+    def test_a_process_that_exits_ends_the_wait(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = self.log(Path(d), [True, False])
+            with self.assertRaisesRegex(tareplay.Failed, "process exited"):
+                log.wait(r"never", 60)
+
+    def test_a_process_not_yet_seen_running_does_not(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(self.log(Path(d), [False]).wait(r"never", 1))
 
 
 if __name__ == "__main__":

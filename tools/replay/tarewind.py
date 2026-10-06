@@ -76,6 +76,7 @@ def run(t, w, fx, out):
             if g >= G:
                 break
             log.read()
+            log.alive()
             if judge:
                 judge()
             if time.monotonic() > deadline:
