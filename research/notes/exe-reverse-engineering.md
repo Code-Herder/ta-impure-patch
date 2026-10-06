@@ -3712,6 +3712,19 @@ rebuild `0x4816A0(1)` (`0x497AE5`), the first reader of the viewed record's coun
 loaded: `0x51E58C` is set nonzero only at `0x46C00F` and zeroed at `0x46C11F`, `0x46C149` and
 `0x46C1CF` (after `FreeLibrary`). The replay refuses to seat while it is set.
 
+**The resource bar's colour badge reads the viewed record's colour with no bound** [DISASSEMBLED
+2026-10-06]: the bar reads the viewed index `main+0x2A43` (`0x468E4B`), forms the record at
+`0x468E73` and calls the badge `0x467C00` at `0x4690AB`. The badge reads PlayerInfo `+0x96`
+(`0x467C18`), takes the frame `[[main+0x148DB] + 8·colour + 0x28]` (`0x467C24`), uses the frame's
+width and height as the quad's uv, and draws it through `GAF_DrawTransformed 0x4C7580` (`0x467CA1`)
+at the quad (132,5)-(152,25). The colour sequence `main+0x148DB` has one writer, `0x431911`, at
+start-up, and holds ten frames; the players reset `0x4644D0` sets every record's colour to its own
+index (`0x46461E`, the loop over records 0..10, `0x4646CB..0x4646D3`), so record 10 holds colour
+10. MEASURED 2026-10-06, two processes: the dword past the ten frames (`[seq+0x78]`) is
+`0x0001000A`, the first dword of the next heap object, and a full-map playback with record 10
+viewed and its colour left at 10 crashed at `0x4C74C7` reading pixel data at NULL. The replay
+therefore gives record 10 a recorded seat's colour (`tagpu_replay.c`, `viewer_seat`).
+
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
 Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the
@@ -3803,6 +3816,7 @@ locally from stock models (never committed), on Core Prime Industrial Area with 
 weapons `tools/weaponids_fixture.py` generates for the weapon IDs, on Two Continents with a save
 and its load for the border features, and on Two Continents with the `scenarios/b1-*.json`
 fixtures for the four combat fixes. Each compares against a build without the patch.
+
 
 ### The network receivers take a unit index straight off the wire — `0x09`, `0x0B`, `0x0C`, `0x2C` [DISASSEMBLED 2026-09-25]
 

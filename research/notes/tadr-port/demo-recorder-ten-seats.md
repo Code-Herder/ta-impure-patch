@@ -104,8 +104,17 @@ this level's viewer; read once by the loader hook), `s_vready` (`viewer_init` ha
   rewind may find buffers its earlier rewind made, §4.6).
 - `seat_level`: take `s_vrec` (if not taken) and `s_vinfo` (as today) from record 10; then
   `viewer_seat(ta, side)`, shared with `rw_prepare`:
-  `E_ActivateSeat(10, 3)`; watcher bit and side in PlayerInfo (the side rule as today: the header's
-  controlled seat's side); the **empty block** `+0x67` = 1, `+0x6B` = 0 (first above last: no address
+  `E_ActivateSeat(10, 3)`; the watcher bit, and the **side and colour** (`+0x95`, `+0x96`) of the
+  header's controlled seat, or of its first seat when the controlled record is not seated, both
+  checked by `validate_engine` against the engine's counts. **The colour is a bound, not a
+  nicety:** the players reset gives every record its own index as its colour (`0x46461E`, records
+  0..10), so record 10 holds colour 10, one past the ten frames of the colour sequence
+  `main+0x148DB`; with V viewed, the resource bar draws V's colour badge (`0x468E4B` → `0x4690AB`
+  → `0x467C00`, which takes the frame at `0x467C24` with no bound) and the span read pixel data
+  at NULL (MEASURED 2026-10-06: an access violation at `0x4C74C7` within seconds of a full-map
+  playback; the dword past the ten frames was `0x0001000A` on two processes). The fixtures' P, Q
+  and R legs all play a perspective, so only the browser's Watch (W), which plays the full map,
+  exercised it; the **empty block** `+0x67` = 1, `+0x6B` = 0 (first above last: no address
   at all, so a walker that missed the test would fault at once instead of acting on a seat's unit) and
   `+0x6F` = `+0x71` = 1 (the ID cycle then reads slot 1 only, which every unit array has, 10·each + 1
   slots, and finds its selected bit clear because every setter walks the controlled block). Then

@@ -765,11 +765,17 @@ static void name_put(char* dst, const char* name)
      reads (0x48C1EF..0x48C213), so with [1, 1] it reads slot 1 alone, which every unit array has,
      and finds it unselected, since every selection setter walks the controlled block. The level
      init gives blocks to records 0-9 only (0x48592B), so nothing else writes these.
-   - The watcher bit, as the network watcher switch sets it (0x46569D), and `side` (seat_level's
-     rule), or the side left as it is for -1.
+   - The watcher bit, as the network watcher switch sets it (0x46569D), and the side and colour of
+     `shown`, a seat of the recording. BOUND: both are the header's, which validate_engine has
+     checked against the side count and the colour sequence's count before either caller runs; the
+     sequence main+0x148DB has one writer, at start-up (0x431911). Record 10's own colour is not
+     one: the players reset gives every record its index (0x46461E, the loop 0..10), the sequence
+     holds ten frames, and the resource bar draws the viewed record's colour frame with no bound
+     (0x468E4B, 0x467C18..0x467C24, GAF_DrawTransformed 0x4C7580), so with V viewed it would draw
+     the dword past the ten frames as a frame.
    seat_level and rw_prepare share it; its buffers are the level init's call's (THE VIEWER'S
    BUFFERS) or rw_prepare's. */
-static void viewer_seat(char* ta, int side)
+static void viewer_seat(char* ta, const RecSeat* shown)
 {
     char* rec = player_rec(ta, REC_VIEWER);
     unsigned char* info;
@@ -779,7 +785,8 @@ static void viewer_seat(char* ta, int side)
     info = *(unsigned char**)(rec + PL_INFO);
     if (info) {
         info[INFO_FLAGS] |= INFO_WATCHER;
-        if (side >= 0) info[INFO_SIDE] = (unsigned char)side;
+        info[INFO_SIDE] = shown->side;
+        info[INFO_LOGO] = shown->logo;
     }
     memcpy(rec + PL_BLOCKFIRST, &first, 4);
     memcpy(rec + PL_BLOCKLAST, &last, 4);
@@ -802,7 +809,7 @@ static void seat_level(char* ta, const RecHeader* h, unsigned view)
     unsigned char* info;
     void* objective;
     unsigned i, lowest = REC_PLAYERS;
-    int side = -1;
+    const RecSeat* shown = &h->seats[0];        /* validate_header: at least two seats */
     for (i = 0; i < h->nseats; i++) {
         const RecSeat* s = &h->seats[i];
         char* rec = player_rec(ta, s->index);
@@ -817,21 +824,23 @@ static void seat_level(char* ta, const RecHeader* h, unsigned view)
         memcpy(rec + PL_ALLY, s->ally, 11);     /* the activation zeroes the row */
         seatv[s->index] = 1;
         localv[s->index] = s->controller == 1 || s->controller == 2;   /* getter 75 there */
-        if (s->index == h->controlled) side = s->side;
+        if (s->index == h->controlled) shown = s;
         if (s->index < lowest) lowest = s->index;
     }
-    /* V shows the recording's controlled player's side. With full visibility V is the viewed
-       record, and the interface takes the viewed record's side: MAIN2 is loaded once from it
-       (0x497B56..0x497BD8), and the chrome and both bars read it every frame
-       (0x467D98..0x467DB3); the side menus %sGEN and %sDL take the controlled record's, which is
-       V too (0x41B2E0). What record 10 and its PlayerInfo held goes back after the teardown
-       (tagpu_replay_level_after). V is no puppet seat: the puppet table has ten entries, and
-       every gate keys on a unit's owner, which is never 10. */
+    /* V shows the side and colour of the recording's controlled player, or of its first seat when
+       the controlled record is not seated. With full visibility V is the viewed record, and the
+       interface takes the viewed record's side and colour: MAIN2 is loaded once from its side
+       (0x497B56..0x497BD8), the chrome and both bars read the side every frame
+       (0x467D98..0x467DB3), and the resource bar draws its colour (0x467C00 at 0x4690AB); the
+       side menus %sGEN and %sDL take the controlled record's, which is V too (0x41B2E0). What
+       record 10 and its PlayerInfo held goes back after the teardown (tagpu_replay_level_after).
+       V is no puppet seat: the puppet table has ten entries, and every gate keys on a unit's
+       owner, which is never 10. */
     viewer_take(ta);
     info = *(unsigned char**)(player_rec(ta, REC_VIEWER) + PL_INFO);
     s_vinfo.at = info;
     if (info) memcpy(s_vinfo.was, info, REC_INFO_BYTES);
-    viewer_seat(ta, side);
+    viewer_seat(ta, shown);
     /* a record the stock fill activated that the recording does not seat */
     for (i = 0; i < REC_PLAYERS; i++) {
         char c = player_rec(ta, i)[PL_CONTROLLER];
@@ -6790,6 +6799,7 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
     unsigned char seats[REC_PLAYERS] = {0}, locals[REC_PLAYERS] = {0};
     char path[MAX_PATH], *rec;
     unsigned char* info;
+    const RecSeat* shown = NULL;
     static unsigned serial;
     s_rw.P = (unsigned char)ta[OFF_CONTROLLED];
     s_rw.viewed = (unsigned char)ta[OFF_VIEWED];
@@ -6824,7 +6834,9 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
             return 0;
         }
         seats[st] = locals[st] = 1;
+        if (st == s_rw.P) shown = &h->seats[i];
     }
+    /* seats[P] is set only in the iteration that sets `shown`: past this test, P's header seat */
     if (!seats[s_rw.P] || s_rw.types[s_rw.P] != 1) {
         snprintf(why, cap, "the controlled seat is not a recorded local player");
         return 0;
@@ -6851,7 +6863,7 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
         s_vinfo.at = info;
         memcpy(s_vinfo.was, info, REC_INFO_BYTES);
     }
-    viewer_seat(ta, (*(unsigned char**)(player_rec(ta, s_rw.P) + PL_INFO))[INFO_SIDE]);
+    viewer_seat(ta, shown);
     if (!*(void**)(rec + PL_SIGHT)) E_PlayerInit(rec);
     if (!*(void**)(rec + PL_SIGHT) || !*(void**)(rec + PL_GROUPS) || !*(void**)(rec + PL_EC)) {
         tagpu_refuse("Rewinding failed: the spectator's player buffers could not be allocated.");
