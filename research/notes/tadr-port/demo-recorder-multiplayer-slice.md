@@ -1497,13 +1497,43 @@ reproduction recording:
 taken over backwards (the driver arms its dump before the takeover, and the
 recorder refuses a dump at a GameTime the level has passed).
 
-Still open: perspective streams and communication audiences, ten seats
-without a spare viewer seat, and the traffic budget, migration and
-cross-address discovery. They are taken in that order:
+### Each player's explored map in playback
 
-1. Perspective streams, communication audiences, pings and drawings.
-2. Ten seats without a spare viewer seat.
-3. The measured traffic budget, migration and cross-address discovery.
+The explored map holds one bit per player in every entry, and the recorder's
+copy of a remote player's bits is what its own engine stamped from replicas,
+not what that player explored. Each owner contributes its own bit
+([*Per-origin explored-map history*](#per-origin-explored-map-history)), so
+the materializer composes the map as it composes units and players:
+`mp_authority` reads each actor's bitmap from the reader's history at the
+reader's tick, the authority its player record uses, and `mp_world` writes
+the actor's bit in every entry from it at the record's `+0x146`, the bit the
+recording machine stamped. The other bits are the recorder's, and a player no
+owner has described yet keeps them. `recorded_put` writes the composed map in
+every step and seek, so a selected player's view, the takeover's live game and
+the dumps all show the owner's exploration. `recmp_compare.py` composes the
+expected map the same way.
+
+MEASURED 2026-10-06 on the reproduction recording: the owners' and the
+recorder's bits differ in one entry, row 3's at entry 10833 from GameTime 244,
+which its owner explored before the recorder saw it. The dumps at 244, 246,
+364, 900 and 1958 are EQUAL with the composition, both viewed from the default
+seat and from record 3, and without it the comparison names that entry. The
+recording's units barely travel, so a recording with long moves is still to
+measure (the exploration research measured 34 cells for one moved commander).
+
+### Stage 4: perspectives and communication
+
+Owner decisions, 2026-10-06: 4a, each player's explored map (above); 4b,
+chat played back with its audiences, every message in full-map mode and only
+what a player received in that player's view, with a hide-chat toggle; 4c,
+every player's camera, cursor, clicks and selections recorded and shown as
+overlays, in skirmish recordings too (the human seat). Pings and drawings are
+dropped until Impure has such a feature: stock TA has none [INFERRED: no ping
+or marker message found; TADR's markers are not ported], and a future one
+follows chat's audience rules.
+
+Still open after stage 4: ten seats without a spare viewer seat, and the
+traffic budget, migration and cross-address discovery, in that order.
 
 A player who leaves the game is a lifecycle landing of its own (*Named
 residuals*).

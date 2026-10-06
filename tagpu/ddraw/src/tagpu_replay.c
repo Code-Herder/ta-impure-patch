@@ -284,6 +284,10 @@ static struct {
     unsigned char*  nodes;          /* one list's query buffer, RECMP_ORDER_MAX nodes            */
     uint32_t        player[REC_PLAYERS][REC_PLAYER_DWORDS];
     unsigned char   actor[REC_PLAYERS]; /* the record is an actor's: its owner describes it      */
+    unsigned        xbytes;         /* one owner's explored bitmap: a bit per map entry          */
+    unsigned char*  xmap;           /* [REC_PLAYERS * xbytes] each actor's, by its record          */
+    unsigned char   xvalid[REC_PLAYERS];
+    unsigned char*  mapped;         /* the composed explored map (mp_world)                      */
     RecWorld        W;
     unsigned char*  s_live;         /* the level-start composed world, which a seek composes on  */
     uint32_t*       s_unit;
@@ -3390,6 +3394,8 @@ static void mp_end(void)
     if (s_mp.s_list)
         for (i = 0; i < s_mp.slots * 2; i++) free(s_mp.s_list[i].img);
     free(s_mp.create);
+    free(s_mp.xmap);
+    free(s_mp.mapped);
     free(s_mp.s_live);
     free(s_mp.s_unit);
     free(s_mp.s_list);
@@ -3456,10 +3462,13 @@ static int mp_begin(const Lv* L, const RecWorld* W)
     s_mp.s_live = malloc(W->slots);
     s_mp.s_unit = malloc((size_t)W->slots * REC_UNIT_IMAGE);
     s_mp.s_list = calloc((size_t)W->slots * 2, sizeof *s_mp.s_list);
+    s_mp.xbytes = (W->mapped_bytes / 2 + 7) / 8;
+    s_mp.xmap = malloc((size_t)REC_PLAYERS * s_mp.xbytes + 1);
+    s_mp.mapped = malloc(W->mapped_bytes + 1);
     s_mp.on = 1;
     if (W->slots != L->nslots || !s_mp.life || !s_mp.held || !s_mp.live || !s_mp.unit ||
         !s_mp.list || !s_mp.nodes || !s_mp.create || !s_mp.s_live || !s_mp.s_unit ||
-        !s_mp.s_list) {
+        !s_mp.s_list || !s_mp.xmap || !s_mp.mapped) {
         mp_fail("the materializer could not be set up for %u slots", W->slots);
         return 0;
     }
@@ -3807,6 +3816,20 @@ static void mp_authority(const Lv* L)
         if (k < 0) mp_fail("GameTime %u: player authority: %s", L->now, why);
         else if (k && st->seat < REC_PLAYERS) memcpy(s_mp.player[st->seat], ps.image, sizeof ps.image);
     }
+    /* each actor's explored map, by the same authority as its player record */
+    for (i = 0; i < h->mp_seats.count && !s_mp.failed; i++) {
+        const RecMpSeat* st = &h->mp_seats.actor[i];
+        RecMpExploreState es;
+        int k;
+        if (st->seat >= REC_PLAYERS) continue;
+        k = recr_mp_explored(s_rd, st->origin, &es, s_mp.xmap + (size_t)st->seat * s_mp.xbytes,
+                             s_mp.xbytes, why, sizeof why);
+        if (k < 0) mp_fail("GameTime %u: explored-map authority: %s", L->now, why);
+        else if (k && es.bytes != s_mp.xbytes)
+            mp_fail("GameTime %u: origin %u's explored map is %u bytes, the level's %u", L->now,
+                    st->origin, es.bytes, s_mp.xbytes);
+        else s_mp.xvalid[st->seat] = (unsigned char)k;
+    }
     for (slot = 1; slot < s_mp.slots && !s_mp.failed; slot++) {
         RecMpLifeState ls;
         if (!s_mp.live[slot] && !s_mp.held[slot]) continue;
@@ -3854,14 +3877,35 @@ static void mp_step_image(const Lv* L, unsigned T)
    (0x486BE7..0x486C13, DISASSEMBLED). */
 static const RecWorld* mp_world(const RecWorld* W)
 {
-    unsigned p;
-    if (!s_mp.on) return W;
+    unsigned p, i, n;
+    if (!s_mp.on || W == &s_mp.W) return W;
     s_mp.W = *W;
     s_mp.W.live = s_mp.live;
     s_mp.W.unit = s_mp.unit;
     s_mp.W.list = s_mp.list;
     for (p = 0; p < REC_PLAYERS; p++)
         if (s_mp.actor[p]) memcpy(s_mp.W.player[p], s_mp.player[p], sizeof s_mp.player[p]);
+    /* The explored map: an actor's bit in every entry is its owner's, a bit for each entry in
+       the map's own order (tagpu_recmp_explored.h), the other bits the recorder's. The bit is the
+       record's +0x146 as the recording machine stamped it, bounded to the entry's 16. */
+    memcpy(s_mp.mapped, W->mapped, W->mapped_bytes);
+    n = W->mapped_bytes / 2;
+    for (p = 0; p < REC_PLAYERS; p++) {
+        const unsigned char* x = s_mp.xmap + (size_t)p * s_mp.xbytes;
+        unsigned b = ((const unsigned char*)W->player[p])[PL_MAPBIT];
+        if (!s_mp.xvalid[p]) continue;
+        if (b >= 16) {
+            mp_fail("record %u's explored-map bit is %u", p, b);
+            break;
+        }
+        for (i = 0; i < n; i++) {
+            uint16_t v;
+            memcpy(&v, s_mp.mapped + 2 * i, 2);
+            v = (uint16_t)((v & ~(1u << b)) | ((x[i >> 3] >> (i & 7) & 1u) << b));
+            memcpy(s_mp.mapped + 2 * i, &v, 2);
+        }
+    }
+    s_mp.W.mapped = s_mp.mapped;
     return &s_mp.W;
 }
 
@@ -3883,6 +3927,7 @@ static int mp_rebuild(const Lv* L, unsigned T)
     memcpy(s_mp.unit, s_mp.s_unit, (size_t)s_mp.slots * REC_UNIT_IMAGE);
     memcpy(s_mp.player, s_mp.s_player, sizeof s_mp.player);
     memset(s_mp.held, 0, s_mp.slots);
+    memset(s_mp.xvalid, 0, sizeof s_mp.xvalid);
     for (i = 0; i < s_mp.slots * 2; i++)
         if (!mp_list_put(&s_mp.list[i], s_mp.s_list[i].img, s_mp.s_list[i].n)) {
             mp_fail("no memory for the seek's order lists");
@@ -4633,14 +4678,16 @@ static void tables_put(const Lv* L, const RecWorld* W, TabCounts* c, int seek);
    bits 1-2 the stamp's pair reads */
 static void recorded_put(const Lv* L, const RecWorld* W)
 {
+    const RecWorld* C = mp_world(W);    /* each unit's books and the explored map, whichever
+                                           stream drives them */
     masks_init();
     los_react(L->ta, W);
-    books_put(L, mp_world(W));          /* each unit's, whichever stream drives it */
+    books_put(L, C);
     tables_put(L, W, &s_gst.tab, 0);
     globals_put(L->ta, W);
     if (s_tk.on) holds_put(L->ta, W);
     proj_put(L, W);
-    mapped_put(L->ta, W);
+    mapped_put(L->ta, C);
     s_gst.puts++;
 }
 

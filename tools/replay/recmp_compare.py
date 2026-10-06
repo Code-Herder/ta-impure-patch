@@ -7,7 +7,8 @@
 The expected world of a dump at GameTime T is the primary stream's iteration T -- its features,
 projectiles, globals and tables, as the recorder observed them -- with every owner block's units,
 the actors' player records and the units' order lists taken from the owners' contributions
-applied by the recorder's capture of T (tagpu_replay.c, THE CLOCK). A unit, player or list no
+applied by the recorder's capture of T (tagpu_replay.c, THE CLOCK), and each actor's bit of the
+explored map from its owner's bitmap. A unit, player or list no
 owner has described yet holds its level-start image. The features are the primary stream's at
 every dump, corpses included (tagpu_replay.c, THE DEATHS ON A MULTIPLAYER LEVEL). The grid's unit
 slots and yard bits are the engine's own on such a level, its units following their owners: they
@@ -53,6 +54,21 @@ def history(path):
 ORDER_TARGET = 0x16      # an order node's target, its unit's slot + 1 (tagpu_replay.c, ORD_TARGET)
 
 
+def explored(w, row, state):
+    """An actor's bit in every explored-map entry is its owner's bitmap's (tagpu_replay.c,
+    mp_world): one bit per entry in the map's order, at the record's +0x146 as the recorder stamped
+    it. A player no owner has described keeps the recorder's bits."""
+    if state is None:
+        return
+    bit, img = w.players[row][tarec.PL_MAPBIT], state["image"]
+    if bit >= 16:
+        raise tarec.Unreadable(f"record {row}'s explored-map bit is {bit}")
+    m = w.mapped
+    for i in range(len(m) // 2):
+        v = struct.unpack_from("<H", m, 2 * i)[0] & ~(1 << bit)
+        struct.pack_into("<H", m, 2 * i, v | (img[i >> 3] >> (i & 7) & 1) << bit)
+
+
 def compose(w, start, applied, seats):
     """The owner-authority world over primary world `w`: its units, players and lists replaced."""
     units, lists = {}, {}
@@ -77,6 +93,7 @@ def compose(w, start, applied, seats):
                         lists[slot, which] = bytearray(o["image"])
                 elif (slot, which) in start.lists and slot in start.units:
                     lists[slot, which] = bytearray(start.lists[slot, which])
+        explored(w, row, applied.explored.get(origin))
         # +0xF0, the players phase's 30-tick deadline, is the host's own on its own clock
         # (players_put leaves it): the recorder's, whatever the owner's clock read
         deadline = bytes(w.players[row][0xF0:0xF4])
