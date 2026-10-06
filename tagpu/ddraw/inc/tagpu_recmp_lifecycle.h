@@ -54,8 +54,9 @@ int tagpu_recmp_lifecycle_complete(const RecMpLifecycle* life, const RecMpRecord
    and supplies the success water value, which is state rather than an argument.
    DEATH_BEGIN keeps the target available for children. DEATH_END carries the
    entry's copied, normalized 340-byte death image, for one native destruction
-   after those children, with END's own provenance. The engine adapter must
-   suppress native regeneration of carried child roots. This API performs no
-   construction, destruction, engine write, or native child suppression. */
+   after those children, with END's own provenance. The engine adapter keeps
+   the puppet gates shut around construction so these carried roots are the
+   only children (the slice note, *Exactly-once private children*). This API
+   performs no construction, destruction or engine write. */
 
 #endif

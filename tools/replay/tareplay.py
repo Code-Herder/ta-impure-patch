@@ -1484,12 +1484,14 @@ def checks(fx):
             continue
         if not d.exists():
             res.append((f"{proc}: COB engine writes on a puppet", UNRUN, f"no {d.name}"))
+            res.append((f"{proc}: native owner-only starts on a puppet", UNRUN, f"no {d.name}"))
             continue
         rc, o = tarec_run("counts", rec, d)
-        writes = [ln.strip() for ln in o.splitlines() if "COB write" in ln and not ln.endswith(": 0")]
-        res.append((f"{proc}: COB engine writes on a puppet",
-                    UNRUN if rc else FAIL if writes else PASS,
-                    o.strip() if rc else "; ".join(writes) if writes else f"none ({d.name})"))
+        for what, label in (("COB engine writes", "COB write"),
+                            ("native owner-only starts", "owner-only start")):
+            hits = [ln.strip() for ln in o.splitlines() if label in ln and not ln.endswith(": 0")]
+            res.append((f"{proc}: {what} on a puppet", UNRUN if rc else FAIL if hits else PASS,
+                        o.strip() if rc else "; ".join(hits) if hits else f"none ({d.name})"))
     if ran.get("R") == "ran":
         for T in Ts[1:]:
             line = fx["rt"].get(f"rt{T}", "")

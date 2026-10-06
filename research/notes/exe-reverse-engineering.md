@@ -2049,6 +2049,19 @@ optional sight removal `0x482090` at `0x486845`. Its explosion `0x49B000` at
 `0x486D50` and corpse helper `0x486360` at `0x486D6F` precede owned-object
 destruction. None of these observations proves transitive child effects absent.
 
+The initializer's three `0x489800(k)` calls at `0x485C58` cannot start a script:
+each follows `0x48A160(unit, k)` at `0x485C50`, which writes slot `k`'s target
+words as `0`/`0x8000` (`0x48A173`/`0x48A178`), the pair `0x489850..0x489865`
+tests before skipping the start; `k` stays below 3, so there is no recursion
+[DISASSEMBLED 2026-10-05]. Direct-call reachability over the retail executable
+(functions are call targets plus table-referenced starts) from `0x485F50` reaches
+this start site and the reply `0x47F780` (through the state setter at
+`0x48B110`). From `0x4866D0` it reaches HitByWeapon/TakeDamage and the reply
+`0x47F850` through the cargo hit (`0x48680B` → `0x489BB0` → `0x489CE0`),
+and `0x489800`'s start through the order purge (`0x4867A1` → `0x439EB0` →
+`0x43A1F0` at `0x43A2B9`). No other owner-only site is directly reachable;
+118 and 131 indirect calls in those call graphs are not followed.
+
 The reset `0x489800` has no controller test before its `TargetCleared` start:
 selector 3 recursively resets selectors 0 and 1 at `0x48980E`/`0x489817`, then
 falls through with 2. Weapon-row `+0x1B` bit 1 set/bit 4 clear

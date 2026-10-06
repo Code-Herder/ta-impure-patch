@@ -1692,6 +1692,14 @@ COUNT_SINKS = [0x420A30, 0x4B08C0, 0x47F0C0, 0x47F1A0, 0x47F210, 0x47F300, 0x49C
                0x472810, 0x4728F0, 0x4729D0, 0x472AB0, 0x472C50]
 COB_WRITES = {0x480B57: "SET ACTIVATION", 0x480BF1: "SET ARMORED", 0x480BB3: "SET YARD_OPEN",
               0x4813AB: "ATTACH", 0x481427: "DROP"}
+# the thirteen owner-only start calls (tagpu_recorder.c, START_SITES), counted at the call: on a
+# puppet level only the replay starts these scripts, through 0x4B0A70 itself, so a count here is
+# the engine starting one natively (the slice note, *Exactly-once private children*)
+OWNER_STARTS = {0x489F43: "HitByWeapon", 0x489F8E: "TakeDamage", 0x406834: "TransportPickup",
+                0x4069BF: "TransportDrop", 0x489898: "TargetCleared (0x489800)",
+                0x489948: "TargetCleared (0x4898B0)", 0x48A149: "TargetCleared (0x48A0F0)",
+                0x48A2E0: "TargetCleared (0x48A1E0)", 0x40F433: "EndTransport", 0x41148D: "EndTransport",
+                0x411794: "EndTransport", 0x411DA1: "EndTransport", 0x411E2B: "EndTransport"}
 
 
 def counts_of(path, h):
@@ -1789,7 +1797,7 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
     the change between its two dumps: every root per site exactly; every sink per (site, caller,
     aux), a `same` row's callers summed, within replay-absent.tsv's band, less its absent and
     extra rows; the named COB flare can inherit an accepted parent shortfall,
-    reported with both counts; and no COB engine write on the puppet.
+    reported with both counts; and no COB engine write or native owner-only start on the puppet.
     Rewind permits only VM START/CALL child counts to differ and reports each pair.
     Both dumps of a pair are taken at a capture point before that step's replay step, so both
     windows hold the steps [first GameTime, second GameTime)."""
@@ -1858,6 +1866,11 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
         n = sum(c for (s, _, _), c in cpb.items() if s == va)
         if n:
             lines.append(f"COB engine write on a puppet, {what}: {n} since the level began")
+    for va, what in OWNER_STARTS.items():
+        n = sum(c for (s, _, _), c in cpb.items() if s == va)
+        if n:
+            lines.append(f"owner-only start on a puppet, {what} at 0x{va:06X}: {n} since the level "
+                         f"began")
     print(f"counts, live {la}..{lb} against puppet {pa}..{pb}, GameTime [{ta}, {tb}): "
           f"{len(COUNT_ROOTS)} roots, {nsink} sink keys, band {band[0]}% or {band[1]}, "
           f"{len(rows)} rows: "
@@ -1874,7 +1887,8 @@ def cmd_counts(path, dump):
           f"0x{m[1]:X}, counting {m[2]}")
     for (site, caller, aux), n in sorted(c.items()):
         kind = ("root" if site in COUNT_ROOTS else "sink" if site in COUNT_SINKS else
-                "COB write" if site in COB_WRITES else "site")
+                "COB write" if site in COB_WRITES else
+                "owner-only start" if site in OWNER_STARTS else "site")
         name = names.get(aux)
         print(f"  {kind} 0x{site:06X} from {caller_text(caller)}"
               + (f' "{name}"' if name else f" aux 0x{aux:X}" if aux else "") + f": {n}")

@@ -853,7 +853,7 @@ block that reads to its last complete block.
   counts of the engine's roots and sinks: `counts FILE DUMP` lists them, and `compare-counts FILE
   L_A L_B P_A P_B` compares a live game's (two of its dumps) with a playing's over the same
   window — roots exactly, sinks within `tagpu/ddraw/replay-absent.tsv`'s band less its rows, and no
-  COB engine write on the puppet. `images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1`
+  COB engine write or native owner-only script start on the puppet. `images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1`
   classifies every uncovered byte where the live game and a playing or a fresh seek differ, and
   `scan FILE DUMP` fails a plain value that is an address. A file holds one or more timelines
   (a takeover appends one): `segments FILE` lists them, `check` and `compare` take `--timeline N`

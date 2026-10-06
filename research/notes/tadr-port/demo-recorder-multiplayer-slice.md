@@ -1127,9 +1127,8 @@ copied unit state, not a constructor argument: both observations survive, and th
 success action supplies its own bounded value. A death entry retains its copied
 normalized victim image and keeps the target available to private children;
 the return action supplies that image for one destruction after those children.
-The native adapter must suppress regenerated child roots before using this
-recipe. Native destruction and child suppression are not implemented by this
-consumer and remain unverified.
+The engine adapter applies this recipe under the rule in *Exactly-once private
+children* below. This consumer performs no construction or destruction.
 
 Constructor owner rows, death killer rows and the death image's player IDs are
 mapped through the frozen source roster. Every image/constructor type is bounded
@@ -1164,6 +1163,52 @@ on the nested fixture's main-name macro; making the outer entry name explicit
 fixes that fixture without changing production validation. Normal and coverage
 DLL builds pass. The engine materializer, complete authority and remaining
 multiplayer gates are still open.
+
+### Exactly-once private children
+
+On a puppet level the recording is the **sole producer** of an owner's private
+children: named starts, replies and sprays. The adapter constructs a contributed
+unit at `CREATE_BEGIN` through the constructor with the COB-write and reply gates
+**shut**, dispatches each bracketed `ROOT` through the replay's own calls
+(`ev_start_named`, `ev_reply`, `ev_spray`), and runs the native destructor at
+`DEATH_END` with that action's saved image. Skirmish `make` opens the gates
+instead because its exit-only create has no live target for the children
+recorded before it; multiplayer's begin bracket gives those children a target,
+so opening the gates as well would produce each one twice.
+
+Nothing native can produce a second copy:
+
+- **Replies, SET, ATTACH, DROP.** Every gate predicate refuses a call on a
+  puppet seat's unit unless `s_open` is set, and only the replay's own reply call
+  sets it (`tagpu_puppet.c`, *The gates*). With the gates shut the Create script's
+  first slice still runs; its engine writes are refused, so the state they would
+  write must come from the owner's images.
+- **Owner-only starts.** Direct-call reachability from the constructor
+  `0x485F50` and the destructor `0x4866D0` over the retail executable reaches
+  three of the thirteen sites (engine map, *Lifecycle children and the engine
+  consumer*). The constructor's `0x489800` calls cannot start a script: each
+  follows `0x48A160`, which resets that slot's target words just before.
+  The destructor's cargo hit reaches `0x489CE0`, which the hit gate refuses for
+  every puppet victim whatever `s_open` holds. Its order purge reaches `0x489800`
+  only for a node without `+0x42` bit `0x10000`, which every puppet node holds
+  set. The order handlers and AutoAim never run for a type-3 owner.
+  The enumeration does not follow the 118 and 131 indirect calls reachable from the
+  two functions. The counts close that gap: `tarec compare-counts` and
+  `tareplay`'s R/Q check now fail on any count at one of the thirteen sites
+  in a puppet process.
+
+A skirmish death is recorded at its entry, so the children it nests are replayed
+after the destructor and find no unit: they occur zero times on the puppet. In
+multiplayer they are dispatched once, before the native destruction. The
+destructor deletes the COB at `0x486D8A` within that same call.
+
+MEASURED 2026-10-05 on the reference setup, from the retained `wpn-badtgt`
+coverage run: the live process counts 331 native owner-only starts by
+GameTime 1,051 (163 HitByWeapon, 163 TakeDamage, two TargetCleared in `0x4898B0`,
+three in `0x48A1E0`). The puppet's dump at 1,051, the round trips' dumps and the
+fresh seek's count none. Feeding the live dumps in as the puppet's makes
+`compare-counts` report all four sites. This verifies the existing skirmish
+invariant only; the multiplayer adapter that relies on it is unimplemented.
 
 ### Fixed global owner blocks before construction
 
