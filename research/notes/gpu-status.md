@@ -20362,7 +20362,11 @@ approved UI rows and scenario seat-count repair finishes all 37 fixtures: 1479 c
 including 519 exact paused comparisons and 36 strict image gates. All 17 resource image gates
 and stock rewind checks pass. The sole failure is native cosmetic-pool state in the unchanged
 stock secondary-orders control, reproduced in a fresh worker. Seek clears those pools, whose
-record layouts remain unimplemented; the strict landing gate remains open. The native
+record layouts remain unimplemented. The owner approved only this native control's three
+cosmetic-pool ranges as an explicit unlisted-image known gap on 2026-10-06; all other bytes,
+all resource fixtures and ordinary state/order/effect/restore checks retain their policy.
+The saved comparisons pass with the option and still fail without it; the new whole gate
+and reviews remain pending. See the recorder completeness note for the exact bounds. The native
 trace lever is enabled only during CORE and stock native preflights; recorded lanes keep
 all ordinary sink counters enabled. The stack-peak
 observer belongs only to the guarded interpreter. Wine compatibility on the ten-slot

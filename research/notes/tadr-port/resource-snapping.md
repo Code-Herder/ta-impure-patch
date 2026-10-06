@@ -478,9 +478,13 @@ fresh seek holds zero. A focused fresh-worker rerun at the same checkpoints repr
 failing bytes in those same pools, with every other check passing. Seek deliberately clears
 effects; the raised `SIM_ENGINE` pools are declared but also excluded from recording until
 their layouts are implemented. This is an existing recorder gap, not evidence of a mex order
-or construction mismatch. The strict landing gate remains open, with no passing replay note
-or new cosmetic-pool exclusion. Extending pool recording or accepting this gap requires a
-scope decision before review and landing.
+or construction mismatch. The owner accepted a bounded known gap on 2026-10-06: only this
+native stock control's unlisted-image check may accept differing bits in the three exact
+cosmetic-pool ranges, totalling 41204 address bytes. Every other check remains intact, and
+all 17 resource image gates stay strict. See [recorder completeness](demo-recorder-completeness.html)
+for the bounds, option and outstanding snapshot-layout work. The saved whole-run and focused
+comparisons pass with that option and still fail without it; the new full landing rerun and
+independent reviews remain pending. No passing replay note is claimed yet.
 
 The null twin now samples camera positions across the map's native scroll extents and selects
 ARMACK and RSNRACK in separate refusal-fixture views. The prior small camera sweep never set the minimap rectangle's

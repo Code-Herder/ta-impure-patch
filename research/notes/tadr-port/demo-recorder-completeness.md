@@ -333,8 +333,20 @@ order, effect-call, paused-state and restoration check passes. A focused fresh-w
 reproduces 469 failing bytes in those same pools. `seek_run` calls `tagpu_effects_clear`;
 the native paths clear the count, reinitialise debris and zero flying-piece slots. The raised
 engine-pool declarations are also excluded by `tagpu_simreg_recorded` until their layouts
-are implemented. These paths are unchanged from the landing's base. No additional exclusion
-or tolerance is applied: the strict gate remains open pending a scope decision.
+are implemented. These paths are unchanged from the landing's base.
+
+**Owner-approved known gap, 2026-10-06.** Only `stock-secondary-orders`, on its native
+300-projectile build, enables `images-gate --stock-secondary-cosmetics`. Otherwise failing
+unlisted bits within exactly `main[0x1491B,0x1AB8F)`, `main[0x1AB9F,0x1E88F)` and
+`.data[0x511DF0,0x511F80)` are reported as `known-gap`, with their accepted byte count.
+The address scope is 41204 bytes; it is not the measured number of differences. Adjacent bytes,
+other fixtures and raised-limit recordings retain the strict gate. No recorder layout,
+positive globals row, unit/player/order comparison, paused comparison, restore check or
+root/sink effect comparison changes. The saved whole-run and focused dumps pass only with
+this explicit option; the default still fails their original 514 and 469 bytes. Six portable
+policy tests cover the bounds and fixture/build/command restrictions. Native and raised
+cosmetic-pool snapshot layouts remain separate work; this exception does not establish that
+pool fullness is irrelevant to simulation.
 
 ### Events
 

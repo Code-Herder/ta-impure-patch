@@ -11471,8 +11471,11 @@ Those routines are unchanged from this landing's base. The bounded native storag
 `main+0x1AB9F..+0x1E88F` (300 × 0x34 debris records, 15600 bytes), and
 `0x511DF0..0x511F80` (100 pointer slots, 400 bytes); upper endpoints are exclusive.
 These measurements identify an existing cosmetic-pool snapshot gap. They do not establish
-that pool fullness is irrelevant to simulation, or authorize a new exclusion. The landing
-retains the strict gate pending a scope decision.
+that pool fullness is irrelevant to simulation. The owner approved exactly these three ranges
+on 2026-10-06 as a known-gap exception for the native `stock-secondary-orders` unlisted-image
+check alone. Every other image bit, fixture and state/order/effect-call/restore check retains
+its existing policy. Snapshot layouts for these pools remain unimplemented; see
+[recorder completeness](tadr-port/demo-recorder-completeness.html).
 
 **THE ENGINE'S OWN EXPLOSION DRAW EMITS PARTICLES**, which is not what a draw pass is supposed
 to do and is why it is recorded here. `0x420B00`'s debris loop calls `0x421550` at `0x420B18`, and

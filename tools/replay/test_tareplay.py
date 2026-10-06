@@ -17,7 +17,7 @@ import tempfile
 import unittest
 import zlib
 from unittest.mock import Mock, patch
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -28,6 +28,72 @@ import tareplay  # noqa: E402
 import tarewind  # noqa: E402
 
 MAPS = [tafeat.DDRAW / "ddraw-cover.map", tafeat.DDRAW / "ddraw-stocklimits-cover.map"]
+
+
+class NativeCosmeticImagePolicy(unittest.TestCase):
+    RANGES = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x1E88F),
+              (1, 0x511DF0 - tarec.REC_DATA_BEGIN, 0x511F80 - tarec.REC_DATA_BEGIN))
+
+    def gate(self, positions, accepted=False, name="stock-secondary-orders", cap=300):
+        names = ("l1", "lT", "n1", "n2", "p1", "pT", "r1", "q1")
+        images = {name: {0: bytearray(tarec.REC_MAIN_BYTES),
+                         1: bytearray(tarec.REC_DATA_BYTES)} for name in names}
+        for which, at in positions:
+            images["l1"][which][at] = 1
+        gen = Mock()
+        gen.coverage.return_value = {}
+        output = io.StringIO()
+        with patch.object(tarec, "header_only", return_value={"projectiles": cap}), \
+                patch.object(tarec, "dump_images", side_effect=lambda name: (
+                    201 if name in ("lT", "pT") else 101, "digest", images[name])), \
+                patch.object(tarec, "blocks", return_value=([(0, 0, 0, b"header")], None)), \
+                patch.object(tarec, "header", return_value={"frame": 202}), \
+                patch.object(tarec, "globals_list", return_value=(gen, [], [], "digest")), \
+                redirect_stdout(output):
+            result = tarec.cmd_images_gate(f"{name}.imprec", ("l1", "lT"), ("n1", "n2"),
+                                          ("p1", "pT"), "r1", "q1",
+                                          stock_secondary_cosmetics=accepted)
+        return result, output.getvalue()
+
+    def test_default_still_fails_inside_all_three_pools(self):
+        positions = [(which, at) for which, lo, hi in self.RANGES for at in (lo, hi - 1)]
+        result, output = self.gate(positions)
+        self.assertEqual(result, 1)
+        self.assertIn("6 bytes FAIL", output)
+
+    def test_approved_pool_boundaries_are_reported_as_known_gap(self):
+        positions = [(which, at) for which, lo, hi in self.RANGES for at in (lo, hi - 1)]
+        result, output = self.gate(positions, accepted=True)
+        self.assertEqual(result, 0)
+        self.assertIn("6 native cosmetic-pool bytes", output)
+        self.assertIn("known-gap", output)
+
+    def test_adjacent_bytes_and_unit_state_remain_strict(self):
+        for which, lo, hi in self.RANGES:
+            for at in (lo - 1, hi):
+                with self.subTest(which=which, at=at):
+                    result, output = self.gate([(which, lo), (which, at)], accepted=True)
+                    self.assertEqual(result, 1)
+                    self.assertIn("1 bytes FAIL", output)
+        self.assertEqual(self.gate([(0, 0x1B63)], accepted=True)[0], 1)
+
+    def test_other_fixture_and_guarded_cap_are_refused(self):
+        self.assertEqual(self.gate([], accepted=True, name="stock-resource-mex")[0], 2)
+        self.assertEqual(self.gate([], accepted=True, cap=3000)[0], 2)
+
+    def test_harness_only_selects_named_stock_control(self):
+        for name, dll, accepted in (("stock-secondary-orders", "stock", True),
+                                   ("stock-secondary-orders", "normal", False),
+                                   ("stock-resource-mex", "stock", False),
+                                   ("resource-upgrade", "normal", False)):
+            with self.subTest(name=name, dll=dll):
+                self.assertEqual(tareplay.image_gate_options({"name": name, "fix": {"dll": dll}}),
+                                 ["--stock-secondary-cosmetics"] if accepted else [])
+
+    def test_cli_refuses_exception_on_other_commands(self):
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(tarec.main(["tarec", "check", "missing.imprec",
+                                         "--stock-secondary-cosmetics"]), 2)
 
 
 class CompletionCheckpoints(unittest.TestCase):

@@ -3993,7 +3993,11 @@ validation passes the corrected scenario seat-count setup. The subsequent whole 
 image gates and stock rewind continuity checks pass. The sole failure is the unchanged stock
 secondary-orders control's native cosmetic-pool images after seek, reproduced in a focused
 fresh worker. Seek clears those pools, whose layouts the recorder does not carry. The strict
-gate remains open; no passing note or new pool exclusion is claimed. Wine compatibility
+gate rerun remains pending. On 2026-10-06 the owner approved a known gap confined to this
+native control's three cosmetic-pool ranges; all 17 resource image gates remain strict and
+ordinary state/order/effect/restore checks are unchanged. The saved comparisons pass with
+the option and still fail without it. Native pool snapshot layouts remain separate work;
+see the recorder completeness note for the exact bounds. No passing note is claimed yet. Wine compatibility
 has 18 expected setup outcomes, one known inactive gap and zero unexpected outcomes across
 19 setups; all 15 network cases pass. Windows was not run.
 See [resource snapping](tadr-port/resource-snapping.html) for the contracts and verification table.
