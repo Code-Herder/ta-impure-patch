@@ -710,8 +710,11 @@ ghost previews use local storage, leaving the recording the only writer. With th
 two owner-approved four-byte keyboard-index leave rows, the combined ten-slot run
 passes this fixture's construction, effects, all 14 paused comparisons, three restores
 and strict image gate. Its native save/load preflight preserves all ten active slots
-on both probes and reaches `cob_save` and `cob_load`. The whole landing gate still
-fails the separate refusal fixture's UI samples, one stale catalogue and trace reach.
+on both probes and reaches `cob_save` and `cob_load`. The earlier whole landing run
+failed separate refusal UI samples, a stale catalogue and trace reach. Focused native
+replays now pass after correcting those paths. The latest whole run completed all
+37 live recordings, but disk exhaustion interrupted the remaining replay lanes;
+there is no passing whole-landing note.
 `resource-core-upgrade` and `stock-resource-mex` enable the existing COB trace lever
 only in unrecorded native save/load preflights, then restore it before L. Their coverage
 exercises allocator observation in both builds without displacing its recorder counter.
@@ -719,6 +722,6 @@ The stack-peak observer is compiled
 only with the guarded interpreter, its sole caller; a native 32-word record cannot
 exceed the depth threshold. See the resource page for the remaining gate results.
 
-The ten-slot DLL's completed Wine suite has 18 expected active setups, one documented
+The ten-slot DLL's completed Wine suite has 18 expected setup outcomes, one documented
 gammata inactive gap, zero unexpected results across 19 setups and all 15 two-peer
 matches passing. Windows was not run for this change.

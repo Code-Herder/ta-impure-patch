@@ -20356,8 +20356,10 @@ The native save/load preflight preserves all ten active records on human and AI 
 its coverage reaches both `cob_save` and `cob_load`. The ten-slot completion replay passes
 all 14 paused comparisons and its construction/effect/restore checks. After the owner's
 two four-byte keyboard-index leave rows, that fixture's strict image gate also passes
-in the combined run. The whole landing gate still needs the refusal fixture's native
-camera/selection samples, worker catalogue invalidation and trace reach. The native
+in the combined run. Focused native replays pass the corrected camera/selection samples,
+worker catalogue invalidation and isolated trace coverage. The latest whole run completed
+37 live recordings, but disk exhaustion interrupted remaining replay lanes; the whole
+landing gate remains open. The native
 trace lever is enabled only during CORE and stock native preflights; recorded lanes keep
 all ordinary sink counters enabled. The stack-peak
 observer belongs only to the guarded interpreter. Wine compatibility on the ten-slot

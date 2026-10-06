@@ -444,7 +444,7 @@ corrects the generated test start rather than changing the native pathfinder or 
 The owner approved two four-byte keyboard-ring index leave rows on 2026-10-05,
 `0x51F48E` and `0x51F492`, keeping those local input indices with the viewer.
 Builds, upgrades, unit/player state and effects retain their existing comparisons.
-The combined ten-slot run after that approval completes 36 live fixtures, with 1431 passing
+The earlier combined ten-slot run after that approval completed 36 live fixtures, with 1431 passing
 checks, 504 exact paused comparisons and 35 passing strict image gates. The refusal fixture's
 image gate still identifies the minimap camera rectangle and displayed-unit type; the weapon
 fixture could not start because its worker retained an older unit catalogue. A sequential
@@ -452,7 +452,10 @@ stock-resource-mex → wpn-badtgt run with content-boundary catalogue invalidati
 84 checks, including both image gates. Trace preflights preserve all ten guarded and eight
 native active slots on human and AI probes; guarded coverage reaches the allocator and stack
 observer. Trace is removed before recording, because its allocator hook displaces the ordinary
-sink counter. The final combined landing gate remains outstanding.
+sink counter. The latest combined run completed all 37 live recordings, but disk exhaustion
+interrupted the remaining replay lanes. Redundant frame dumps from earlier passing fixtures
+were removed while preserving recordings, logs, coverage and failing cases. The whole landing
+gate remains outstanding; no passing replay note is claimed.
 
 The null twin now samples camera positions across the map's native scroll extents and selects
 ARMACK and RSNRACK in separate refusal-fixture views. The prior small camera sweep never set the minimap rectangle's
@@ -460,7 +463,7 @@ right-coordinate bit 6, and selecting RSNRACK (type 280) never set displayed-typ
 ARMACK is type 4. These are native paused input samples, not new exclusions. See the engine
 map for the indirect rectangle writer and measured values.
 
-The ten-slot DLL's Wine compatibility run has 18 expected active setups, one documented
+The ten-slot DLL's Wine compatibility run has 18 expected setup outcomes, one documented
 gammata inactive gap and zero unexpected outcomes across 19 setups; all 15 two-peer matches
 pass. Windows was not run for this change. Compatibility does not validate every mod's mex
 or geothermal menu.
