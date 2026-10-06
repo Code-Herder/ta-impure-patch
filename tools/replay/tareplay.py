@@ -515,11 +515,17 @@ def head():
     return r.stdout.strip() or "no-head"
 
 
-def gametimes(name, end, h, trips=3):
-    """T1 and `trips` round trips: T = 1 (mod 30) between 301 and 0.8 x end, with room for the
-    dump after a round trip, sorted, from a generator seeded by the fixture and HEAD."""
+def gametimes(name, end, h, trips=3, first=301):
+    """T1 and `trips` round trips: T = 1 (mod 30) between `first` and 0.8 x end, with room for
+    the dump after a round trip, sorted, from a generator seeded by the fixture and HEAD. A
+    fixture's `first` puts every point after its human's interface work (the images gate reads
+    the recording machine's interface state as unlisted state, the null twin classifying only
+    what a viewer does without changing the game); it moves where the checks run, not what they
+    check."""
+    if first % 30 != 1:
+        raise CouldNotRun(f"{name}: first {first} is not 1 (mod 30)")
     hi = min(int(0.8 * end), end - CONTINUE - 30)
-    pool = list(range(301, hi + 1, 30))
+    pool = list(range(first, hi + 1, 30))
     if len(pool) < trips + 1:
         raise CouldNotRun(f"{name}: end {end} leaves fewer than {trips + 1} GameTimes")
     rng = random.Random(int(hashlib.sha1((name + h).encode()).hexdigest()[:8], 16))
@@ -1771,7 +1777,7 @@ class Run:
                 raise CouldNotRun(f"{name}: no DLL at {dll} ({make})")
             if dll.stat().st_mtime < sources_mtime():
                 raise CouldNotRun(f"{name}: {dll} is older than its sources ({make})")
-            Ts = gametimes(name, fix["end"], h, fix.get("trips", 3))
+            Ts = gametimes(name, fix["end"], h, fix.get("trips", 3), fix.get("first", 301))
             # `takeover`, (player, at) of `tareplay.py takeover`: L, K and F alone
             want = (("L", "K", "F") if takeover else ("L", "P") if measure else
                     ("L",) if fix.get("cost") else procs(fix))

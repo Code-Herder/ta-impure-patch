@@ -354,19 +354,26 @@ ground, which deselects under Interface Type 1; an arrow key held for 60 ticks; 
 injected `pclick`, `prclick` and `pmove` tokens are used rather than `click`, `rclick` and
 `mouse:`, which fall back to `SendInput` and the desktop's pointer when the shield is down.
 
-**The steps are few and early because each costs about 60 ticks at the test speed** (MEASURED
-2026-10-06: steps planned 15-30 ticks apart for GameTime 120-270 ran at 183-303, and a drag whose
-press, move and release were separate steps fired in one poll and selected nothing). The drag is one
-step: the engine takes one mouse record per frame (E1), so the press, the moves and the release
-still reach it on successive frames. **Every selection is made and cleared before GameTime 301**,
-the earliest point the harness draws
-for the images gate and the round trips (`tareplay.py gametimes`). A selection held by the human on
-the recording machine is the viewer's own interface state there: the unit panel, the desktop GUI
-`main+0x561`, the game-screen state `main+0x37E9E`/`+0x37EC1` and the cursor `0x51F4AE`/`0x51F4B2`
-(MEASURED 2026-10-06: these 8 bytes failed the gate at 391 with a selection held from 224). The
-gate's null twin classifies what a viewer does without changing the game, and selecting is not
-among it, so a held selection at a gate point is reported as unlisted state. The fixture holds none
-there instead of widening the twin. The drag is no click record: it selects through the drag box,
+**The steps are 90 ticks apart, and the gate's points start at 721** (the fixture's `first`).
+MEASURED 2026-10-06:
+- **Input timing.** At the test speed a step costs about 60 ticks. Two `tacli keys` calls that land
+  before the game reads its keys file are injected as one burst; the runner saw `input: keys
+  prclick:700,500 pclick:850,150`. The live loop's first step fires near GameTime 160.
+- **Why the drag needs separate steps.** A mouse move is not queued. `WM_MOUSEMOVE` replaces the
+  input object's current record, and only button messages enter the ring (`0x4C2360` at `0x4B5EA4`
+  against `0x4C2E30` at `0x4B5F51`). So a press, a move and a release sent in one burst reach the
+  engine as a click at the release point.
+- **The drag as built.** The drag is three steps, each landing in a read of its own.
+- **Why the gate starts at 721.** A selection held by the recording machine's human is that
+  machine's interface state: the unit panel, the desktop GUI `main+0x561`, the game-screen state
+  `main+0x37E9E`/`+0x37EC1` and the cursor `0x51F4AE`/`0x51F4B2`. These 8 bytes failed the gate at
+  391 with a selection held from 224. The null twin classifies what a viewer does without changing
+  the game, and selecting is not among it.
+- **What `first` does and does not change.** The selections are made and cleared before
+  GameTime 721, and `first` keeps every gate and round-trip point after them. It moves where the
+  checks run, not what they check: no byte leaves the gate.
+
+The drag is no click record: it selects through the drag box,
 not through either click action (MEASURED: two clicks for a click and a right click with a drag
 between). It
 sets `"watch": true` and ends at tick 1500.
