@@ -488,15 +488,15 @@ def refusals(c):
     print("resource-refusals: reclaim and Guard refusal, eligible upgrade and helper fallback passed")
 
 
-def viewer(c):
+def viewer(c, kind="ARMACK"):
     tick, paused = c.values("*0x511DE8+0x38a47", "*0x511DE8+0x38a51:2")
     assert paused & 1, "viewer probe requires the world paused"
     types = {t["name"].upper(): t["id"] for t in c.call("units", "--json")["units"]}
-    c.select("ARMACK")
-    c.until(lambda: c.values("*0x511DE8+0x37e9e:2")[0] == types["ARMACK"],
+    c.select(kind)
+    c.until(lambda: c.values("*0x511DE8+0x37e9e:2")[0] == types[kind],
             "native selection did not display the advanced constructor's type")
     assert c.values("*0x511DE8+0x38a47")[0] == tick, "viewer selection advanced the simulation"
-    print("resource viewer: paused native selection updated the displayed unit type")
+    print(f"resource viewer: paused native {kind} selection updated the displayed unit type")
 
 
 def frontend(name, gamedir):
@@ -575,6 +575,7 @@ def main():
     p.add_argument("case", choices=("mex", "upgrade", "queued-upgrade", "plain", "uniform", "mixed", "locked", "inherit", "geo-upgrade", "nearby", "priority", "refusals", "viewer", "frontend", "catalogue"))
     p.add_argument("--gamedir", type=Path)
     p.add_argument("--classic", action="store_true", help="exercise native left-button contextual orders")
+    p.add_argument("--viewer-unit", choices=("ARMACK", "RSNRACK"), default="ARMACK")
     a = p.parse_args()
     try:
         if a.case == "catalogue":
@@ -590,7 +591,7 @@ def main():
          "nearby": nearby,
          "priority": priority,
          "refusals": refusals,
-         "viewer": viewer,
+         "viewer": lambda c: viewer(c, a.viewer_unit),
          **{m: (lambda c, m=m: policy(c, m, a.gamedir)) for m in ("locked", "inherit")},
          **{m: (lambda c, m=m: terrain(c, m)) for m in ("plain", "uniform", "mixed")}}[a.case]
         check = Check(a.instance)

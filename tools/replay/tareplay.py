@@ -136,6 +136,10 @@ NULL_VIEWS = tuple(f"lnv{i}" for i in range(12)) + ("lnselection",)
 LAUNCH_TIMEOUT = 400
 
 
+def null_views(fix):
+    return NULL_VIEWS + tuple(f"lnselection{i}" for i in range(len(fix.get("viewer_more", []))))
+
+
 def main_checkout() -> Path:
     """tacli's instances live in the main checkout, whichever tree this tool runs from."""
     if os.environ.get("TACLI_ROOT"):
@@ -639,14 +643,17 @@ def twin(w, log, fix):
         if w.gametime() != g1:
             raise CouldNotRun("the twin: GameTime moved during the viewer samples")
     tacli("arm", w.name, "menu.open=off")
-    if fix.get("viewer"):
-        step(w, "run", fix["viewer"])
-    n = len(log.lines)
-    w.trigger("dump lnselection now")
-    if not log.wait(r"recorder: frame dump lnselection at GameTime", 30, n):
-        raise CouldNotRun("the twin: selection frame dump not taken")
-    if w.gametime() != g1:
-        raise CouldNotRun("the twin: GameTime moved during the selection view")
+    selections = [("lnselection", fix.get("viewer"))] + [
+        (f"lnselection{i}", command) for i, command in enumerate(fix.get("viewer_more", []))]
+    for name, command in selections:
+        if command:
+            step(w, "run", command)
+        n = len(log.lines)
+        w.trigger(f"dump {name} now")
+        if not log.wait(rf"recorder: frame dump {name} at GameTime", 30, n):
+            raise CouldNotRun("the twin: selection frame dump not taken")
+        if w.gametime() != g1:
+            raise CouldNotRun("the twin: GameTime moved during the selection view")
     for key in ("up", "down", "left", "right"):
         tacli("keys", w.name, f"down:{key}")
         nap(1.0)
@@ -1543,7 +1550,7 @@ def checks(fx):
         compare(f"counts, L against P over [{Ts[0]}, {Ts[-1]})", "compare-counts", rec, l1, lT,
                 p1, pT, files=[l1, lT, p1, pT])
     if all(ran.get(k) == "ran" for k in "PRQ"):
-        views = [out / "L" / f"dump-{n}.bin" for n in NULL_VIEWS]
+        views = [out / "L" / f"dump-{n}.bin" for n in null_views(fx["fix"])]
         for view in views + [n2]:
             compare(f"the paused twin's simulation: {view.stem}", "compare-dumps", rec,
                     n1, view, files=[n1, view])

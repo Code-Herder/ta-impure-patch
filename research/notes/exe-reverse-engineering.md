@@ -16564,7 +16564,7 @@ displayed type 4; T1711 and paused base T1759 rectangle `(32,20,45,30)` and type
 P/R/Q at T691 held `(12,0,25,10)` and type 0. The small paused camera sweep reached
 right coordinates only 25..50, never setting the differing bit 6 at `main+0x142D3`;
 paused RSNRACK selection displayed 280 (`0x118`), never setting ARMACK's bit 2.
-The null twin now spans the map's world dimensions and samples ARMACK selection,
+The null twin now spans the map's world dimensions and samples ARMACK and RSNRACK selection,
 while preserving the exact paused-simulation check and existing comparison list.
 
 

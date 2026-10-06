@@ -451,7 +451,7 @@ stock-resource-mex → wpn-badtgt run with content-boundary catalogue invalidati
 need fixture coverage. The final combined landing gate remains outstanding.
 
 The null twin now samples camera positions across the map's world dimensions and selects
-ARMACK in the refusal fixture. The prior small camera sweep never set the minimap rectangle's
+ARMACK and RSNRACK in separate refusal-fixture views. The prior small camera sweep never set the minimap rectangle's
 right-coordinate bit 6, and selecting RSNRACK (type 280) never set displayed-type bit 2;
 ARMACK is type 4. These are native paused input samples, not new exclusions. See the engine
 map for the indirect rectangle writer and measured values.

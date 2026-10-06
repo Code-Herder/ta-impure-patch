@@ -638,8 +638,9 @@ block that reads to its last complete block.
   views). Each view requires unchanged GameTime and exact carried-simulation equality.
   Mouse samples follow a GUI-consumed click with an explicit move and require its native
   x/y/message echo. Camera samples span the map's world dimensions, including native
-  clamping at the far edge; the resource-refusals selection view selects ARMACK and requires
-  its displayed type. Every owned worker removes its cached `catalogue.json` when it
+  clamping at the far edge; resource-refusals samples ARMACK and then RSNRACK selection,
+  each with its native displayed-type acknowledgement and exact paused comparison.
+  Every owned worker removes its cached `catalogue.json` when it
   replaces fixture content, so scenario validation never uses a previous fixture's units.
   A fixture with `"watch": true`
   runs a fifth process, W: the playing started from REPLAYS and Watch as a player starts it, two
