@@ -20357,13 +20357,17 @@ its coverage reaches both `cob_save` and `cob_load`. The ten-slot completion rep
 all 14 paused comparisons and its construction/effect/restore checks. After the owner's
 two four-byte keyboard-index leave rows, that fixture's strict image gate also passes
 in the combined run. Focused native replays pass the corrected camera/selection samples,
-worker catalogue invalidation and isolated trace coverage. The latest whole run completed
-37 live recordings, but disk exhaustion interrupted remaining replay lanes; the whole
-landing gate remains open. The native
+worker catalogue invalidation and isolated trace coverage. The whole rerun after disk cleanup,
+approved UI rows and scenario seat-count repair finishes all 37 fixtures: 1479 checks pass,
+including 519 exact paused comparisons and 36 strict image gates. All 17 resource image gates
+and stock rewind checks pass. The sole failure is native cosmetic-pool state in the unchanged
+stock secondary-orders control, reproduced in a fresh worker. Seek clears those pools, whose
+record layouts remain unimplemented; the strict landing gate remains open. The native
 trace lever is enabled only during CORE and stock native preflights; recorded lanes keep
 all ordinary sink counters enabled. The stack-peak
 observer belongs only to the guarded interpreter. Wine compatibility on the ten-slot
-DLL passes all 19 expected setup outcomes (one documented inactive gap) and all 15
+DLL has 18 expected setup outcomes, one documented inactive gap, zero unexpected outcomes
+across 19 setups and all 15 passing
 network cases. Windows was not run for this change.
 
 **GUI first-arm ordering.** `tagpu_gui_mirror_want` requests a producer reset on its rising edge.
@@ -20586,7 +20590,8 @@ owners, disassembly and exact comparison protocol.
 Scenario loading writes its explicit roster's seat extent through the existing locked
 prelaunch registry store. A prior two-seat playback therefore cannot truncate a subsequent
 four-seat fixture. Native stock-limits validation creates four commanders and all 1428 battle
-units from a count-2 starting store; the full replay gate must also verify its rewind lane.
+units from a count-2 starting store; the subsequent full run also passes its stock rewind
+lane, including exact return/fresh-seek frames, timeline continuity and AI orders.
 
 **Open:** multiplayer policy parity warnings and mod download/activation. The fixture table names
 what was exercised; it does not establish every mod yardmap, obstruction, fog boundary or

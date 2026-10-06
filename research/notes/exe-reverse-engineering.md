@@ -11454,6 +11454,26 @@ every publish of that tick.
 Two of the caps above gate draws from the simulation's random numbers; see *The raised effect
 pools* below.
 
+**MEASURED 2026-10-05, native stock cosmetic pools and fresh seek.** The unchanged
+`stock-secondary-orders` fixture self-destructs its selected ARMSOLAR through native Ctrl+D.
+At T451, its live and ordinary-playback frame dumps both have explosion count 15 at
+`main+0x1491B`; fresh seek has count zero. At T541 live/playback both have count 2. The paused
+live twin at T589 has count zero but retains 433 nonzero bytes in the inline record storage.
+The strict unlisted-image gate reports 514 failing bytes in the explosion, debris and
+flying-piece pools; a focused fresh-worker rerun at the same checkpoints reports 469 in
+those same pools. All ordinary state/order/effect-call and restore checks pass.
+`tagpu_replay.c:seek_run` calls `tagpu_effects_clear` before restoring recorded tables.
+In the native build that function clears the count, reinitialises 300 debris records and
+zeros 100 flying-piece slots. In the raised build it clears its corresponding DLL pools;
+`tagpu_simreg_recorded` excludes `SIMD_ENGINE` declarations until their layouts exist.
+Those routines are unchanged from this landing's base. The bounded native storage is
+`main+0x1491B..+0x1AB8F` (count plus 300 × 0x54, 25204 bytes),
+`main+0x1AB9F..+0x1E88F` (300 × 0x34 debris records, 15600 bytes), and
+`0x511DF0..0x511F80` (100 pointer slots, 400 bytes); upper endpoints are exclusive.
+These measurements identify an existing cosmetic-pool snapshot gap. They do not establish
+that pool fullness is irrelevant to simulation, or authorize a new exclusion. The landing
+retains the strict gate pending a scope decision.
+
 **THE ENGINE'S OWN EXPLOSION DRAW EMITS PARTICLES**, which is not what a draw pass is supposed
 to do and is why it is recorded here. `0x420B00`'s debris loop calls `0x421550` at `0x420B18`, and
 that function calls the grey-smoke emitter `0x472810` (`0x421583`) and the fire emitter `0x472AB0`

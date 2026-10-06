@@ -3988,8 +3988,12 @@ corrected refusal UI samples, catalogue invalidation and isolated trace coverage
 whole run completed all 37 live recordings, but disk exhaustion interrupted the remaining
 lanes; the completed rerun has 1448 passing checks, with four native UI-image failures and a
 stock rewind setup failure. The exact additional UI rows are owner-approved and applied; native
-validation passes the corrected scenario seat-count setup. A fresh whole-landing gate remains
-required; no passing note is claimed. Wine compatibility
+validation passes the corrected scenario seat-count setup. The subsequent whole run has
+1479 passing checks, 519 exact paused comparisons and 36 strict image gates; all 17 resource
+image gates and stock rewind continuity checks pass. The sole failure is the unchanged stock
+secondary-orders control's native cosmetic-pool images after seek, reproduced in a focused
+fresh worker. Seek clears those pools, whose layouts the recorder does not carry. The strict
+gate remains open; no passing note or new pool exclusion is claimed. Wine compatibility
 has 18 expected setup outcomes, one known inactive gap and zero unexpected outcomes across
 19 setups; all 15 network cases pass. Windows was not run.
 See [resource snapping](tadr-port/resource-snapping.html) for the contracts and verification table.

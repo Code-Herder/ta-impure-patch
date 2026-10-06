@@ -325,6 +325,17 @@ the harness have to:
 - the engine pools the DLL holds (`SIM_ENGINE`) are declared, but their record layouts are not yet
   written anywhere the recorder reads.
 
+**MEASURED 2026-10-05: native cosmetic pools after seek.** The resource landing's whole
+rerun passes 1479 checks and 36 image gates; the unchanged `stock-secondary-orders` control
+alone fails 514 unlisted image bytes in native explosions, debris and flying-piece slots.
+Live/ordinary playback at T451 have 15 active explosions, fresh seek has zero; every unit,
+order, effect-call, paused-state and restoration check passes. A focused fresh-worker rerun
+reproduces 469 failing bytes in those same pools. `seek_run` calls `tagpu_effects_clear`;
+the native paths clear the count, reinitialise debris and zero flying-piece slots. The raised
+engine-pool declarations are also excluded by `tagpu_simreg_recorded` until their layouts
+are implemented. These paths are unchanged from the landing's base. No additional exclusion
+or tolerance is applied: the strict gate remains open pending a scope decision.
+
 ### Events
 
 Events are counted where they start (roots: the creates `0x485F50`/`0x4861D0`, the destructor

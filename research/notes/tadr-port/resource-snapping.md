@@ -468,7 +468,19 @@ two-seat playback persisted `NumSkirmishPlayers = 2` and scenario loading did no
 The corrected launcher supplies the declared slot extent before startup; starting from count
 2 it creates four commanders and all 1428 battle units without errors. Offline driver and
 harness tests pass. The owner-approved ten UI bytes are now applied, with the recorded globals
-unchanged. A fresh whole-landing run on these fixes remains required; no passing note is claimed.
+unchanged. The subsequent whole-landing run finishes all 37 live, playback, restoration and
+fresh-seek fixtures: 1479 checks pass, including 519 exact paused comparisons and 36 strict
+image gates. All 17 resource image gates pass, including completed Moho and native stock mex.
+The corrected stock rewind setup and its continuity/AI checks pass. The sole failure is the
+unchanged `stock-secondary-orders` control's native cosmetic pools: 514 unlisted image bytes
+differ. At its T451 checkpoint, live and ordinary playback both hold 15 native explosions;
+fresh seek holds zero. A focused fresh-worker rerun at the same checkpoints reproduces 469
+failing bytes in those same pools, with every other check passing. Seek deliberately clears
+effects; the raised `SIM_ENGINE` pools are declared but also excluded from recording until
+their layouts are implemented. This is an existing recorder gap, not evidence of a mex order
+or construction mismatch. The strict landing gate remains open, with no passing replay note
+or new cosmetic-pool exclusion. Extending pool recording or accepting this gap requires a
+scope decision before review and landing.
 
 The null twin now samples camera positions across the map's native scroll extents and selects
 ARMACK and RSNRACK in separate refusal-fixture views. The prior small camera sweep never set the minimap rectangle's
