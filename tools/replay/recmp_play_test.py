@@ -4,6 +4,7 @@
     tools/replay/recmp_play_test.py RECORDING --out DIR [--dll PATH] [--at T ...] [--to-end] [--perspective N]
                                     [--content FILE ...] [--roundtrip T ...] [--seek A:T ...]
     tools/replay/recmp_play_test.py RECORDING --out DIR --fresh T [--dll PATH] [--content FILE ...]
+    tools/replay/recmp_play_test.py RECORDING --out DIR --takeover T:P [--from A] [--dll PATH] [--content FILE ...]
 
 One tareplay worker (its own tacli instance on its own Xvfb) plays RECORDING through
 `tacli replay play` at the standard internal speed 20, takes `dump p<T>` at each --at T, plays to
@@ -16,18 +17,27 @@ compared separately: this only drives the game. --roundtrip T arms the playing's
 `tarec.py compare-dumps`). --seek A:T, when the playing reaches GameTime A (its dump pA), seeks
 to T in the same process, dumping s<T> at T and s<T+120> 120 ticks on (when the recording
 reaches it; at speed 20 a nearer dump cannot be armed in time). --fresh T instead
-starts a fresh process at T (`tacli replay seek`), dump q<T>. --content copies a game archive the recording
+starts a fresh process at T (`tacli replay seek`), dump q<T>. --takeover T:P takes the recording
+over at T as player P in a fresh process (`tacli replay takeover`), dumps the live game at k<T+120>,
+then requires the AI seats to play: tareplay's takeover check, fresh AI orders reaching a handler
+for every AI seat and a quarter of their mobile units moving in the TAKEOVER_SPAN ticks after a
+pause; quits after it and keeps the file with its new timeline as DIR/fork-<RECORDING>. With
+--from A the recording is played first, and the running playback is taken over after its dump pA. --timeline N plays
+or seeks timeline N's chain. --content copies a game archive the recording
 was made with (tools/reproduce_fixture.py's, say) into the worker's game folder for the playing
 and removes it afterwards.
 """
 import argparse
+import json
 import re
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import tarec
 import tareplay
+import tarewind
 from tareplay import Log, Worker, arm, arm_dump, tacli, wait_dumps, last, LAUNCH_TIMEOUT
 
 HERE = Path(__file__).resolve().parent
@@ -53,6 +63,10 @@ def main():
     ap.add_argument("--roundtrip", type=int, action="append", default=[])
     ap.add_argument("--seek", action="append", default=[], help="A:T")
     ap.add_argument("--fresh", type=int, default=None)
+    ap.add_argument("--takeover", default=None, help="T:P")
+    ap.add_argument("--from", dest="from_", type=int, default=None,
+                    help="with --takeover: play to this GameTime, then take the playback over")
+    ap.add_argument("--timeline", type=int, default=None)
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
     rec = a.out / a.recording.name
@@ -65,8 +79,69 @@ def main():
         for f in a.content:
             shutil.copy2(f, w.gamedir / f.name)
         log = Log(w)
+        tl = ["--timeline", a.timeline] if a.timeline is not None else []
+        if a.takeover is not None:
+            T, P = map(int, a.takeover.split(":"))
+            if a.from_ is None:
+                src = [rec, *tl, "--defaults", "--restart", "--keep-dll"]
+            else:
+                # the running playback's own composition, carried to A, is what the takeover
+                # replaces with T's
+                rc, o = tacli("replay", "play", w.name, rec, *tl, "--defaults", "--restart",
+                              "--keep-dll", timeout=LAUNCH_TIMEOUT)
+                print(o.strip())
+                if rc:
+                    raise tareplay.CouldNotRun(f"replay play: {last(o)}")
+                arm_dump(w, log, f"p{a.from_}", a.from_)
+                wait_dumps(log, [f"p{a.from_}"], 900)
+                src = []
+            rc, o = tacli("replay", "takeover", w.name, *src, "--at", T, "--player", P,
+                          "--dump", f"k{T + AFTER}", "--dump-at", T + AFTER, "--timeout", 300,
+                          "--json", timeout=LAUNCH_TIMEOUT + 300)
+            print(o.strip())
+            try:
+                got = json.loads(o[o.index("{"):])
+            except ValueError:
+                raise tareplay.CouldNotRun(f"replay takeover: {last(o)}")
+            if rc or not got.get("taken") or "fork" not in got:
+                raise tareplay.CouldNotRun(f"replay takeover: {last(o)}")
+            tk, got_fork = got, got["fork"]
+            wait_dumps(log, [f"k{T + AFTER}"], 600)
+            # the window opens after a pause the engine acknowledged, so it lies wholly ahead
+            # (tareplay.takeover_k)
+            rc, o = tacli("keys", w.name, "pause")
+            if rc:
+                raise tareplay.CouldNotRun(f"pause: {last(o)}")
+            deadline = time.monotonic() + 30
+            while not tareplay.peek(w, "*0x511DE8+0x38A51:2") & 1:
+                if time.monotonic() > deadline:
+                    raise tareplay.CouldNotRun("the engine did not acknowledge pause")
+                tareplay.nap(.1)
+            start = w.gametime() + 1
+            stop = start + tareplay.TAKEOVER_SPAN
+            tarewind.arm_ai(tareplay, w, log, "takeover", start, stop)
+            rc, o = tacli("keys", w.name, "pause")
+            if rc:
+                raise tareplay.CouldNotRun(f"resume: {last(o)}")
+            got = log.wait(r"recorder: AI activity takeover done", 1200)
+            if not got:
+                raise tareplay.CouldNotRun("no AI activity line in 1200 s")
+            # the level's teardown ends the timeline (tagpu_rec_level_end)
+            w.quit()
+            w.collect(a.out)
+            fork = a.out / f"fork-{a.recording.name}"
+            shutil.copy2(got_fork, fork)
+            seats = {i for i in range(10) if f"{i}=ai" in tk.get("seats", "")}
+            active, detail = tarewind.ai_activity(
+                (a.out / "tagpu.log").read_text(errors="replace").splitlines(), "takeover",
+                start, stop, seats)
+            ai, made, frac, n = tareplay.tk_ai(fork, tk["timeline"], start, stop - 1)
+            print(f"takeover ai: {detail}; {frac or 0:.0%} of {n} mobile units moved; "
+                  f"construction observed for seats {sorted(made)}")
+            ok = active and frac is not None and frac >= .25
+            raise Done
         if a.fresh is not None:
-            rc, o = tacli("replay", "seek", w.name, a.fresh, "--recording", rec, "--dump",
+            rc, o = tacli("replay", "seek", w.name, a.fresh, "--recording", rec, *tl, "--dump",
                           f"q{a.fresh}", "--defaults", "--restart", "--keep-dll", "--timeout", 300,
                           timeout=LAUNCH_TIMEOUT + 300)
             print(o.strip())
@@ -76,7 +151,7 @@ def main():
             w.collect(a.out)
             ok = True
             raise Done
-        argv = ["replay", "play", w.name, rec, "--defaults", "--restart", "--keep-dll"]
+        argv = ["replay", "play", w.name, rec, *tl, "--defaults", "--restart", "--keep-dll"]
         if a.perspective is not None:
             argv += ["--perspective", a.perspective]
         rc, o = tacli(*argv, timeout=LAUNCH_TIMEOUT)
@@ -85,7 +160,7 @@ def main():
             raise tareplay.CouldNotRun(f"replay play: {last(o)}")
         names = []
         seeks = [tuple(map(int, x.split(":"))) for x in a.seek]
-        last_tick = tarec.segments(tarec.blocks(rec)[0])[0]["last"]
+        last_tick = tarec.chain(tarec.segments(tarec.blocks(rec)[0]), a.timeline or 0)[-1]["last"]
         for T in sorted(set(a.at) | {A for A, _ in seeks}):
             arm_dump(w, log, f"p{T}", T)
             names.append(f"p{T}")
@@ -137,7 +212,8 @@ def main():
     text = (a.out / "tagpu.log").read_text(errors="replace") if (a.out / "tagpu.log").exists() else ""
     for line in text.splitlines():
         if re.search(r"replay: .*(playing|stops|owners:|not playing|refused on puppets|"
-                     r"events played|sought from|composed the owners|round trip|refused)", line):
+                     r"events played|sought from|composed the owners|round trip|refused|taken over|"
+                     r"timeline)|recorder: .*timeline", line):
             print(line)
     return 0 if ok and " stops: " not in text else 1
 

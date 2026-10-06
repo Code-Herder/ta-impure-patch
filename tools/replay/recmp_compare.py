@@ -2,6 +2,7 @@
 """Compare a mode-3 playing's dumps with the world its recording implies.
 
     tools/replay/recmp_compare.py RECORDING DUMP...
+    tools/replay/recmp_compare.py --fork N RECORDING
 
 The expected world of a dump at GameTime T is the primary stream's iteration T -- its features,
 projectiles, globals and tables, as the recorder observed them -- with every owner block's units,
@@ -18,6 +19,11 @@ already destroyed names no target: a unit's death keeps its owner's clock, so an
 image can still name it, and the host cannot link a unit it no longer holds (ord_target); the
 owner approved that expectation on 2026-10-06. The puppet holds of `tarec compare
 --puppet` apply. Exit 0 when every dump is EQUAL, 1 otherwise.
+
+--fork N compares timeline N's first iteration, the world a takeover made, with the expected world
+at its fork_at as above, less what `tarec compare-fork` takes off (decision D2, tarec.fork_view);
+the grid's unit slots and yard bits are checked on the fork's iteration, which the host's engine
+made. Exit 0 EQUAL, 1 otherwise.
 """
 import struct
 import sys
@@ -136,7 +142,68 @@ def occupancy(w, dw):
     return out
 
 
+CONTACT = 0x1700        # unit +0x110 bits 8-10 and 12, the viewed seat's scan history (tarec.puppet_view)
+
+
+def contacts(a, b, scan):
+    """The contact bits are the viewed seat's scan (tagpu_replay.c, R14b), and an owner's image
+    carries its own machine's: the recorder's are its primary stream's. So with one player viewed
+    in both worlds (fork_view's rule), a composed unit the primary stream holds takes the primary's
+    bits, and one it does not hold yet -- an owner-first unit, which no recorded scan has seen --
+    is compared without them. The count of those."""
+    if a.view[1] != b.view[1]:
+        return 0
+    n = 0
+    for slot, img in a.units.items():
+        v = struct.unpack_from("<I", img, tarec.U_STATE)[0] & ~CONTACT
+        if slot in scan:
+            struct.pack_into("<I", img, tarec.U_STATE, v | scan[slot])
+            continue
+        struct.pack_into("<I", img, tarec.U_STATE, v)
+        if slot in b.units:
+            u = b.units[slot]
+            struct.pack_into("<I", u, tarec.U_STATE,
+                             struct.unpack_from("<I", u, tarec.U_STATE)[0] & ~CONTACT)
+        n += 1
+    return n
+
+
+def fork(path, n):
+    segs, _ = tarec.file_segments(path)
+    c = tarec.chain(segs, n)[-1]
+    if not c["id"]:
+        raise tarec.Unreadable("timeline 0 is the original: it forks from nothing")
+    T = c["fork_at"]
+    h, bl, _ = tarec.load(path, timeline=c["parent"])
+    hist = history(path)
+    start = tarec.stream_to(h, bl, want=h["start"])
+    a = tarec.stream_to(h, bl, want=T)
+    scan = {slot: struct.unpack_from("<I", u, tarec.U_STATE)[0] & CONTACT
+            for slot, u in a.units.items()}
+    b = tarec.stream_to(c["header"], c["blocks"], want=T)
+    if a.tick != T or b.tick != T:
+        print(f"{path}: the parent reads to GameTime {a.tick} and timeline {n} begins at "
+              f"{b.tick}, not at its fork_at {T}")
+        return 2
+    compose(a, start, hist.at(T), hist.roster.actors)
+    unseen = contacts(a, b, scan)
+    tarec.fork_view(a, b, h, c["header"])
+    gnames = tarec.globals_names(tarec.globals_list(h.get("globals"))[2])
+    stale = occupancy(a, b)
+    lines, _ = a.differences(b, h["tables"], c["header"]["tables"], gnames=gnames,
+                             limit=1 << 30)
+    lines += stale
+    print(f"{path}: timeline {n} at GameTime {T} against the composed parent, {len(b.units)} "
+          f"live units, {len(a.units)} expected, {unseen} no recorded scan has seen: " +
+          ("EQUAL" if not lines else f"{len(lines)} DIFFERENCES"))
+    for line in lines[:LIMIT]:
+        print("  " + line.replace("dump", f"timeline {n}"))
+    return 1 if lines else 0
+
+
 def main(argv):
+    if len(argv) == 4 and argv[1] == "--fork":
+        return fork(argv[3], int(argv[2]))
     if len(argv) < 3:
         print(__doc__.strip(), file=sys.stderr)
         return 2

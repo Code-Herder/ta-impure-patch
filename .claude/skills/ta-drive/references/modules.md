@@ -270,8 +270,12 @@ copies an archive the recording was made with, such as the recording run's `zzre
 the worker for the playing and removes it after). The same script seeks:
 `--roundtrip T` (dump A, poison, seek, dump B; compare the pair with `tarec.py
 compare-dumps`), `--seek A:T` (at GameTime A seek to T in the same process,
-dumps s<T> and s<T+120>), or `--fresh T` alone (a fresh process at T, dump
-q<T>); then
+dumps s<T> and s<T+120>), `--fresh T` alone (a fresh process at T, dump
+q<T>), or `--takeover T:P` alone (a fresh process takes over at T as P, dump
+k<T+120>, then tareplay's AI-activity check; the file with its timeline is
+kept as `fork-<name>`; `recmp_compare.py --fork 1 FILE` compares the fork's
+first iteration with the composed parent). `--timeline N` plays or seeks
+timeline N's chain; then
 `python3 tools/replay/recmp_compare.py FILE <directory>/dump-p<T>.bin ...` compares each dump
 with the owner-authority world the recording implies (the multiplayer slice note's
 *Owner-authority materializer*). The fixture requests speed 20; count it as 2x evidence only if live
@@ -847,9 +851,10 @@ Without it the log says `recorder: not recording: tagpu_recorder.on is absent`. 
 `recorder: recording …` at the start and `recorder: writer: … closed: …` when the file is done, with
 the corrections, which must be 0; `recorder: N iterations captured: …` gives the capture's cost.
 A native file contains this peer's observed world plus the separate exact-owner
-contribution ledger. `tacli replay play` plays it forward from its start, every actor a puppet
-beside the viewer; it has no seek, takeover or ten-seat hosting yet (the multiplayer slice note's
-*Owner-authority materializer*).
+contribution ledger. `tacli replay play` plays it with every actor a puppet beside the viewer,
+`replay seek` and the `seek` trigger seek it, and `replay takeover` takes it over into a skirmish
+timeline of the same file; it has no ten-seat hosting yet (the multiplayer slice note's
+*Owner-authority materializer* and the sections after it).
 Mandatory contributions run with the recording switch off and continue after a
 local save failure. Live rewind is available only for a recorded skirmish.
 Quitting waits for the file of a game that has ended — the in-game menu's `EXIT` then `EXITGAME`,

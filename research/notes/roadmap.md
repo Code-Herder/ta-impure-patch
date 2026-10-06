@@ -3889,7 +3889,9 @@ checked by new planner orders reaching normal dispatch. The note records the
 approved sight, reconstructed COB-thread and bounded naval flare-count limits.
 In-game rewind controls and faithful network playback remain separate work.
 The multiplayer work branch writes native observed-world/contribution files on
-local recording opt-in; engine playback remains unfinished. The [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.html)
+local recording opt-in, and its puppet host plays, seeks and takes over such a
+file, the takeover's game recorded as a skirmish timeline of it; perspective
+streams and ten seats remain unfinished. The [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.html)
 is active on a work branch: bounded contributions, authoritative human/hosted-AI
 queue caches with source/application ticks, and a fresh ID on each engine start.
 Format 6 adds observed replica creation roots through B4's existing success

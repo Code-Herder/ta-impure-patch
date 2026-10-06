@@ -40,6 +40,10 @@ const volatile unsigned char* tagpu_puppet_flag(void);
 void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
                         const unsigned char local[PUPPET_PLAYERS], int engine_cells);
 void tagpu_puppet_end(void);
+/* engine_cells for the segment the replay plays from here on: a multiplayer file's takeover
+   timeline is a skirmish segment. Only between steps (the replay's seek); refused, and logged,
+   inside a footprint writer. */
+void tagpu_puppet_engine_cells(int engine_cells);
 
 /* THE GATES (tagpu_puppet.c): the engine functions that would write what a recording carries on
    a puppet level, or take the viewer's own input to it, refuse on one. DllMain's attach lands them

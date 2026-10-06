@@ -227,7 +227,7 @@ static struct {
 static int s_rw_pause_in;
 static int rw_prepare(char* ta, char* why, unsigned cap);
 static void rw_seats(char* ta);
-/* rewind keeps a live skirmish's own recording: a multiplayer one has no seek */
+/* rewind keeps a live skirmish's own recording: a live multiplayer game has no rewind */
 static int rw_skirmish(const RecHeader* h, char* why, unsigned cap)
 {
     if (h->mode != MODE_NETWORK) return 1;
@@ -269,7 +269,8 @@ static struct { RecMpRoster roster; volatile LONG state; } s_mp_arena;
 #define MP_CREATE 29                /* a create's 28 argument bytes, then 1 once it returned     */
 /* THE MULTIPLAYER MATERIALIZER's state */
 static struct {
-    int             on;             /* this level plays a mode-3 recording                       */
+    int             level;          /* this level plays a mode-3 file (mp_begin)                 */
+    int             on;             /* ... and the reader stands in its multiplayer segment       */
     int             failed;
     RecMpLifecycle* life;
     uint64_t        ordinal;        /* the last envelope the consumer was given                  */
@@ -3450,6 +3451,7 @@ static int mp_begin(const Lv* L, const RecWorld* W)
     s_mp.unit = malloc((size_t)W->slots * REC_UNIT_IMAGE);
     s_mp.list = calloc((size_t)W->slots * 2, sizeof *s_mp.list);
     s_mp.nodes = malloc((size_t)RECMP_ORDER_MAX * REC_ORDER_IMAGE);
+    s_mp.level = 1;
     s_mp.create = malloc((size_t)W->slots * MP_CREATE);
     s_mp.s_live = malloc(W->slots);
     s_mp.s_unit = malloc((size_t)W->slots * REC_UNIT_IMAGE);
@@ -3921,6 +3923,23 @@ static unsigned mp_make_held(const Lv* L)
         made++;
     }
     return made;
+}
+
+/* The materializer follows the segment the reader stands in. A multiplayer file's takeover timeline
+   is a skirmish segment: a live skirmish recorded it, every unit its own seat's, so there the
+   replay plays it as a skirmish's -- the recorded world whole, the cells' slots and yard bits the
+   recording's -- and in the file's own segment it composes T's world (THE SEEK OF A MULTIPLAYER
+   RECORDING). Called after every reader seek, before the seek writes anything. 1, or 0 the
+   playing stopped. */
+static int mp_follow(const Lv* L, unsigned T)
+{
+    int here;
+    if (!s_mp.level) return 1;
+    here = recr_segment_mp(s_rd);
+    s_mp.on = here;
+    s_engine_cells = here;
+    tagpu_puppet_engine_cells(here);
+    return here ? mp_rebuild(L, T) : !s_mp.failed;
 }
 
 /* the primary events a mode-3 world carries for what the owners contribute */
@@ -5022,6 +5041,30 @@ static void sk_kills(const Lv* L)
         if (host_live(L, slot)) s_sk.left++;
 }
 
+/* R3b, on a level whose cells are the engine's (s_engine_cells): every cell as the engine's own
+   would be with no unit alive. A unit's death clears the footprint it stands in, which on such a
+   level is where the engine put it; but the segment the reader stood in before this seek may be a
+   takeover timeline, whose cells were the recording's (mp_follow), and there a death leaves the
+   recorded cells that named the unit somewhere else. So a slot naming no live unit is dropped
+   (host_live), and with every unit gone (sk_kills' count) no yard bit stands. R7's creates and
+   R8's moves then stamp the composed world on a grid that holds nothing else. */
+static void sk_cells_clear(const Lv* L)
+{
+    unsigned c, k, ncells = L->gw * L->gh;
+    for (c = 0; c < ncells; c++) {
+        char* cell = L->grid + (size_t)c * REC_CELL_BYTES;
+        uint16_t slot[2];
+        memcpy(slot, cell, 4);
+        for (k = 0; k < 2; k++)
+            if (slot[k] && (slot[k] >= L->nslots || !host_live(L, slot[k]))) {
+                slot[k] = 0;
+                s_sk.fdropped++;
+            }
+        memcpy(cell, slot, 4);
+        if (!s_sk.left) cell[CELL_FLAGS] = (char)((unsigned char)cell[CELL_FLAGS] & ~CELL_YARDBIT);
+    }
+}
+
 /* R5: LosType bits 0-2 the recording's, then 0x4816A0 always, with 1 when Mapping changed (the
    Mapping command's own call, 0x416DA6) and 0 otherwise. With no unit alive and no temporary
    record left, its fill gives every record that passes its seat test the mode's base and its unit
@@ -5247,8 +5290,8 @@ static void sk_features(const Lv* L, const RecWorld* W)
         cell[CELL_FLAGS] = (char)(((unsigned char)cell[CELL_FLAGS] & ~CELL_DRAWDEFER) | keep);
         if (s_engine_cells) {
             /* the slots and the yard bit are the engine's own (THE MULTIPLAYER MATERIALIZER):
-               R3's kills took every unit off the grid and R7's creates and R8's moves put the
-               composed world's units on it, so the host's are that world's */
+               R3's kills and R3b's clear took every unit off the grid and R7's creates and R8's
+               moves put the composed world's units on it, so the host's are that world's */
             memcpy(cell, host, 4);
             cell[CELL_FLAGS] = (char)(((unsigned char)cell[CELL_FLAGS] & ~CELL_YARDBIT) | yard);
             s_sk.fcells++;
@@ -5876,8 +5919,7 @@ static void sk_back(const Lv* L, unsigned prev)
 {
     char why[200];
     if (recr_seek(s_rd, prev, 0, NULL, NULL, why, sizeof why) == 1) {
-        /* the composed world follows the reader (THE SEEK OF A MULTIPLAYER RECORDING) */
-        if (s_mp.on) mp_rebuild(L, prev);
+        mp_follow(L, prev);             /* the materializer follows the reader */
         return;
     }
     s_over = 1;
@@ -6262,8 +6304,8 @@ static int seek_run(char* ta)
     s_seek.mode = SK_SEEK;                  /* consumed: rt_due's seek_run is a SEEK */
     s_seek.boundary = 0;
     snprintf(dump, sizeof dump, "%s", s_seek.dump);
-    if (s_mp.on && (tk || convert)) {
-        sk_refused(tk, T, "a multiplayer recording's takeover and rewind are not built");
+    if (s_mp.level && (convert || back)) {
+        sk_refused(tk, T, "a multiplayer recording has no rewind");
         return 0;
     }
     pend_finish();                          /* the step before it, whole (THE PHASES) */
@@ -6285,13 +6327,11 @@ static int seek_run(char* ta)
         if (k < 0 && !back) sk_back(&L, prev);
         return 0;
     }
-    if (s_mp.on) {
-        if (!mp_rebuild(&L, T)) {
-            sk_refused(tk, T, s_mp.why);
-            return 0;
-        }
-        V = mp_world(W);
+    if (!mp_follow(&L, T)) {
+        sk_refused(tk, T, s_mp.why);
+        return 0;
     }
+    V = mp_world(W);
     QueryPerformanceCounter(&t1);
     memset(&s_sk, 0, sizeof s_sk);
     masks_init();
@@ -6306,7 +6346,7 @@ static int seek_run(char* ta)
     }
     if (tk) {
         memset(&s_tk, 0, sizeof s_tk);
-        if (!tk_bound(&L, W, P, &D, back, why, sizeof why) ||
+        if (!tk_bound(&L, V, P, &D, back, why, sizeof why) ||
             (!back && !tk_open(T, why, sizeof why))) {
             tagpu_logf("replay: %s: takeover at %u refused: %s", s_name, T, why);
             if (!back) sk_back(&L, prev);
@@ -6323,6 +6363,7 @@ static int seek_run(char* ta)
     /* R3, on the clock the host holds: GameTime h >= 1, which R0 enforces (sk_bound) */
     refused0 = s_st.refused;
     sk_kills(&L);
+    if (s_engine_cells) sk_cells_clear(&L);
     if (convert) rw_seats(ta);
     /* R4: every temporary sight record dropped through the engine's own removal (the drop's
        comment): no temporary record outlives R5's refill, whose counters its later expiry would
@@ -6349,7 +6390,7 @@ static int seek_run(char* ta)
     if (tk) tk_types(ta, P);
     built0 = s_st.obuilt;
     orders_put(&L, V);
-    if (tk) s_tk.orphans = tk_orphans(&L, W);
+    if (tk) s_tk.orphans = tk_orphans(&L, V);
     s_sk.refused = s_st.refused - refused0;
     /* R8b, after R8's moves, which re-emit */
     seek_unit_books(&L, V);

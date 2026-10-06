@@ -2,7 +2,7 @@
 
 ## Status
 
-Started 2026-10-04. This is the **multiplayer slice** in the [recorder plan](demo-recorder.md#milestones-and-delivery-order), separate from S5's skirmish browser and controls. No multiplayer recorder change has landed. The work branch captures an observed native world and its separate authoritative contribution ledger when recording is enabled (`tagpu_recorder.c:mp_record_begin`). Its puppet host plays such a file forward from its start through the [owner-authority materializer](#owner-authority-materializer); seek, takeover, perspective streams and ten seats are unfinished.
+Started 2026-10-04. This is the **multiplayer slice** in the [recorder plan](demo-recorder.md#milestones-and-delivery-order), separate from S5's skirmish browser and controls. No multiplayer recorder change has landed. The work branch captures an observed native world and its separate authoritative contribution ledger when recording is enabled (`tagpu_recorder.c:mp_record_begin`). Its puppet host plays such a file through the [owner-authority materializer](#owner-authority-materializer), seeks it ([*The seek of a multiplayer recording*](#the-seek-of-a-multiplayer-recording)) and takes it over ([*The takeover of a multiplayer recording*](#the-takeover-of-a-multiplayer-recording)); perspective streams and ten seats are unfinished.
 
 The slice's product scope is a recording file sufficient on its own for playback, with contributions from every Impure peer: each player's effective perspective and authoritative state, communication, then playback and takeover. The [product contract](demo-recorder.md#multiplayer-contributions) requires contributions even from a peer that opts out of saving its own recording. A live multiplayer game has no rewind timeline.
 
@@ -1364,8 +1364,8 @@ played by `tools/replay/recmp_play_test.py`:
 ### The seek of a multiplayer recording
 
 `seek_run` seeks a mode-3 recording within a playing (the `seek` trigger, the
-dock, a round trip) and from a fresh process (`tacli replay seek`); takeover and
-rewind still refuse one. *THE SEEK OF A MULTIPLAYER RECORDING* in
+dock, a round trip) and from a fresh process (`tacli replay seek`). A live
+multiplayer game has no rewind, so the rewind's return to now refuses one. *THE SEEK OF A MULTIPLAYER RECORDING* in
 `tagpu_replay.c` holds the argument:
 
 - **The composed world of iteration T is rebuilt, not carried.** After
@@ -1423,14 +1423,87 @@ recording on the current list (GameTimes 1..2071):
   units at every seek point). In these recordings, a create is applied after
   its capture, or with its image in the same one.
 
-Still open: takeover and fresh AI, perspective streams and communication
-audiences, ten seats without a spare viewer seat, and the traffic budget,
-migration and cross-address discovery. They are taken in that order:
+### The takeover of a multiplayer recording
 
-1. Takeover with the remaining seats as fresh AI.
-2. Perspective streams, communication audiences, pings and drawings.
-3. Ten seats without a spare viewer seat.
-4. The measured traffic budget, migration and cross-address discovery.
+`tacli replay takeover` and the `takeover` trigger take a mode-3 recording over
+as they take a skirmish's ([S4b](demo-recorder-s4-takeover.md)): at GameTime T
+player P is human, every other recorded seat a fresh AI, the viewer's seat
+dropped, and the game after T is recorded as a skirmish timeline of the same
+file (owner decision, 2026-10-06). The takeover is the seek in its TAKEOVER
+mode, so it runs on the composed world of the seek above: `tk_bound` bounds
+P's live count and every seat byte in the composed player images, and
+`tk_orphans` tears down the lists of host units the composed world does not
+describe. Nothing else in the takeover's steps is changed: TK1's seat flip
+comes after R3's kills and before R7's creates, so every unit is made a local
+mover whichever machine owned it in the recording.
+
+**The materializer follows the segment** (`mp_follow`, after every reader
+seek). The takeover's timeline was recorded by a live skirmish, every unit its
+own seat's, so a playing of that timeline plays it as a skirmish's: the
+recorded world whole, the cells' slots and yard bits the recording's
+(`tagpu_puppet_engine_cells(0)`). In the file's own segment the materializer
+composes T's world and the cells are the engine's. The boundary's seek to
+`fork_at` crosses into the timeline, and a seek back before it composes
+again. `recr_segment_mp` names the segment the world was read from.
+
+**R3b, the cells after the kills** (`sk_cells_clear`). Where the cells are
+the engine's, the seek has relied on R3's kills leaving no unit on the grid,
+since a death clears the footprint the unit stands in. That holds only while
+the engine has owned the cells all along. After a playing of the takeover's
+timeline, the cells were the recording's, and a death left the recorded cells
+that named the unit somewhere else. MEASURED 2026-10-06: a seek from 1166 in
+the timeline back to 900 left slots 3005 and 4502 in four cells outside their
+footprints. So with every unit dead, a slot naming no live unit is dropped and
+no yard bit stands. R7 and R8 then stamp the composed world on an empty grid.
+
+**What the comparison expects.** `recmp_compare.py --fork N` compares the
+takeover's first iteration with the composed parent at `fork_at`, less D2's
+list (`tarec.fork_view`). The grid's slots and yard bits are checked on the
+fork's iteration, as on a dump. The contact bits `+0x110` 8–10 and 12 are the
+viewed seat's scan (R14b), and an owner's image carries its own machine's: a
+player's own units are in contact on its own machine. So when both worlds view
+the same player, a composed unit takes the recorder's bits from the primary
+stream. A unit that stream does not hold yet is compared without them and
+counted. Both measured forks counted 0.
+
+MEASURED 2026-10-06 on the reference setup, internal speed 20, the
+reproduction recording:
+
+- **At 1000 as player 1**, the remote human seat: 36 units made, 32 order
+  nodes built and 1 adopted. The fork's first iteration is EQUAL to the
+  composed parent. The live game's dump at 1120 is EQUAL to timeline 1's
+  recording, and `tarec check --timeline 1` explains every change.
+- **At 246 as player 0**, the recorder's own seat, inside an owner-first
+  window: 65 units, the fork EQUAL, the live dump at 366 EQUAL.
+- **The AI plays** (tareplay's takeover check, a 1,800-tick window after a
+  pause). At 1000: seats 0, 2 and 3 issue 80, 39 and 20 orders, 96% of
+  their 25 mobile units move, and seats 0 and 3 build. At 246: seats 1, 2 and
+  3 issue 33, 39 and 12 orders, 96% of 28 mobile units move, and all three
+  build.
+- **Timeline 1 played back** across its fork: in one playing, seeks from 920
+  to 1100 (into the timeline) and from 1166 to 900 (back into the
+  multiplayer segment), and the boundary's own crossing at 1000. Dumps are
+  EQUAL at 900 (twice), 1020, 1100, 1120 and 1140, the multiplayer ones by
+  `recmp_compare.py` and the timeline's by `tarec compare --puppet
+  --timeline 1`.
+
+- **A running playback taken over** at 900 as player 1, after it had played
+  and composed to 300 on its own: the fork EQUAL, the live dump at 1020 EQUAL,
+  and the AI seats issue 68, 27 and 18 orders.
+- The skirmish `tareplay.py takeover battle --cover` passes every check on
+  the same build, compare-fork EQUAL.
+
+**Not run:** a takeover inside the timeline itself, and a running playback
+taken over backwards (the driver arms its dump before the takeover, and the
+recorder refuses a dump at a GameTime the level has passed).
+
+Still open: perspective streams and communication audiences, ten seats
+without a spare viewer seat, and the traffic budget, migration and
+cross-address discovery. They are taken in that order:
+
+1. Perspective streams, communication audiences, pings and drawings.
+2. Ten seats without a spare viewer seat.
+3. The measured traffic budget, migration and cross-address discovery.
 
 A player who leaves the game is a lifecycle landing of its own (*Named
 residuals*).

@@ -2215,6 +2215,8 @@ done:
 
 const RecHeader* recr_header(const RecReader* r) { return &r->h; }
 
+int recr_segment_mp(const RecReader* r) { return r->in_seg && seg_header(r)->has_mp; }
+
 /* 1 the header is of this format */
 static int info_header(RecInfo* o, const unsigned char* b, size_t len)
 {

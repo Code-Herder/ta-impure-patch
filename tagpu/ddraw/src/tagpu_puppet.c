@@ -587,6 +587,17 @@ void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
     s_pup.on = 1;
 }
 
+void tagpu_puppet_engine_cells(int engine_cells)
+{
+    /* a writer's frame saved under one rule is put back under it (foot_enter, foot_leave) */
+    if (s_foot.depth) {
+        tagpu_logf("puppet: the cells' rule not changed inside %u open footprint writers",
+                   s_foot.depth);
+        return;
+    }
+    s_pup.engine_cells = engine_cells ? 1 : 0;
+}
+
 void tagpu_puppet_end(void)
 {
     s_pup.on = 0;

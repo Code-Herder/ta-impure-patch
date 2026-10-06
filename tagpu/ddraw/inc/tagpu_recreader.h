@@ -223,6 +223,9 @@ int recr_timelines(RecReader* r, RecTimeline* out, unsigned cap, char* why, unsi
 int recr_timeline(RecReader* r, unsigned id, char* why, unsigned cap);
 /* the chosen timeline */
 const RecTimeline* recr_selected(const RecReader* r);
+/* 1 when the segment the world was last read from carries a multiplayer roster: a multiplayer
+   file's own segment, never a takeover's timeline, which a skirmish level records */
+int recr_segment_mp(const RecReader* r);
 /* Where a fork at `at` is appended, found afresh: the caller holds the file open for writing
    first, so no other writer can change it until the fork's writer has used this (tagpu_replay.c,
    TK0). A torn last block is not kept, an unfinished last segment with no complete iteration is
