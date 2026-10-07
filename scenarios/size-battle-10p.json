@@ -1,0 +1,482 @@
+{
+ "format": "ta-scenario/1",
+ "description": "Size analysis: ten seats on Core Prime Industrial Area, five ARM armies against five CORE armies, 200 units each (1,000 a side, the 12:8:5 Peewee/AK, Hammer/Thud, Rocko/Storm mix of limits-tier1), in the open strip between the northern enclosures and the central chasm, 1,600 world units apart and ordered onto each other. Used to measure where a demo recording's disk space goes.",
+ "seed": 20261007,
+ "on_error": "abort",
+ "setup": {
+  "map": "Core Prime Industrial Area",
+  "res": "1024x768",
+  "unit_limit": 250,
+  "clear_existing": false,
+  "los": "permanent",
+  "mapping": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 2,
+    "controller": "ai",
+    "side": "arm",
+    "color": 2,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 3,
+    "controller": "ai",
+    "side": "core",
+    "color": 3,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 4,
+    "controller": "ai",
+    "side": "arm",
+    "color": 4,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 5,
+    "controller": "ai",
+    "side": "core",
+    "color": 5,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 6,
+    "controller": "ai",
+    "side": "arm",
+    "color": 6,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 7,
+    "controller": "ai",
+    "side": "core",
+    "color": 7,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 8,
+    "controller": "ai",
+    "side": "arm",
+    "color": 8,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 9,
+    "controller": "ai",
+    "side": "core",
+    "color": 9,
+    "metal": 10000,
+    "energy": 10000
+   }
+  ]
+ },
+ "groups": [
+  {
+   "id": "arm0",
+   "owner": 0,
+   "at": [
+    2700,
+    2620
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 10,
+    "spacing": 32,
+    "jitter": 4
+   },
+   "composition": [
+    {
+     "type": "ARMPW",
+     "count": 96
+    },
+    {
+     "type": "ARMHAM",
+     "count": 64
+    },
+    {
+     "type": "ARMROCK",
+     "count": 40
+    }
+   ],
+   "facing": 90,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      6550,
+      2620
+     ]
+    }
+   ]
+  },
+  {
+   "id": "core0",
+   "owner": 1,
+   "at": [
+    5900,
+    2620
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 10,
+    "spacing": 32,
+    "jitter": 4
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 96
+    },
+    {
+     "type": "CORTHUD",
+     "count": 64
+    },
+    {
+     "type": "CORSTORM",
+     "count": 40
+    }
+   ],
+   "facing": 270,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      3350,
+      2620
+     ]
+    }
+   ]
+  },
+  {
+   "id": "arm1",
+   "owner": 2,
+   "at": [
+    3028,
+    2620
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 10,
+    "spacing": 32,
+    "jitter": 4
+   },
+   "composition": [
+    {
+     "type": "ARMPW",
+     "count": 96
+    },
+    {
+     "type": "ARMHAM",
+     "count": 64
+    },
+    {
+     "type": "ARMROCK",
+     "count": 40
+    }
+   ],
+   "facing": 90,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      6550,
+      2620
+     ]
+    }
+   ]
+  },
+  {
+   "id": "core1",
+   "owner": 3,
+   "at": [
+    6228,
+    2620
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 10,
+    "spacing": 32,
+    "jitter": 4
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 96
+    },
+    {
+     "type": "CORTHUD",
+     "count": 64
+    },
+    {
+     "type": "CORSTORM",
+     "count": 40
+    }
+   ],
+   "facing": 270,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      3350,
+      2620
+     ]
+    }
+   ]
+  },
+  {
+   "id": "arm2",
+   "owner": 4,
+   "at": [
+    3356,
+    2620
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 10,
+    "spacing": 32,
+    "jitter": 4
+   },
+   "composition": [
+    {
+     "type": "ARMPW",
+     "count": 96
+    },
+    {
+     "type": "ARMHAM",
+     "count": 64
+    },
+    {
+     "type": "ARMROCK",
+     "count": 40
+    }
+   ],
+   "facing": 90,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      6550,
+      2620
+     ]
+    }
+   ]
+  },
+  {
+   "id": "core2",
+   "owner": 5,
+   "at": [
+    6556,
+    2620
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 10,
+    "spacing": 32,
+    "jitter": 4
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 96
+    },
+    {
+     "type": "CORTHUD",
+     "count": 64
+    },
+    {
+     "type": "CORSTORM",
+     "count": 40
+    }
+   ],
+   "facing": 270,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      3350,
+      2620
+     ]
+    }
+   ]
+  },
+  {
+   "id": "arm3",
+   "owner": 6,
+   "at": [
+    3684,
+    2620
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 10,
+    "spacing": 32,
+    "jitter": 4
+   },
+   "composition": [
+    {
+     "type": "ARMPW",
+     "count": 96
+    },
+    {
+     "type": "ARMHAM",
+     "count": 64
+    },
+    {
+     "type": "ARMROCK",
+     "count": 40
+    }
+   ],
+   "facing": 90,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      6550,
+      2620
+     ]
+    }
+   ]
+  },
+  {
+   "id": "core3",
+   "owner": 7,
+   "at": [
+    6884,
+    2620
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 10,
+    "spacing": 32,
+    "jitter": 4
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 96
+    },
+    {
+     "type": "CORTHUD",
+     "count": 64
+    },
+    {
+     "type": "CORSTORM",
+     "count": 40
+    }
+   ],
+   "facing": 270,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      3350,
+      2620
+     ]
+    }
+   ]
+  },
+  {
+   "id": "arm4",
+   "owner": 8,
+   "at": [
+    4012,
+    2620
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 10,
+    "spacing": 32,
+    "jitter": 4
+   },
+   "composition": [
+    {
+     "type": "ARMPW",
+     "count": 96
+    },
+    {
+     "type": "ARMHAM",
+     "count": 64
+    },
+    {
+     "type": "ARMROCK",
+     "count": 40
+    }
+   ],
+   "facing": 90,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      6550,
+      2620
+     ]
+    }
+   ]
+  },
+  {
+   "id": "core4",
+   "owner": 9,
+   "at": [
+    7212,
+    2620
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 10,
+    "spacing": 32,
+    "jitter": 4
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 96
+    },
+    {
+     "type": "CORTHUD",
+     "count": 64
+    },
+    {
+     "type": "CORSTORM",
+     "count": 40
+    }
+   ],
+   "facing": 270,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      3350,
+      2620
+     ]
+    }
+   ]
+  }
+ ]
+}
