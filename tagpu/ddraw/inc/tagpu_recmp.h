@@ -98,11 +98,17 @@ typedef struct {
     uint64_t application_order;
     GUID stream;
 } RecMpCutPoint;
+/* Why consumption ended for good (RecMpStats.consumption): the consumer relinquished it,
+   the worker found the receive queue full, or the game ended with no recording attached. */
+enum { RECMP_CONSUMING = 0, RECMP_RELINQUISHED = 1, RECMP_RECEIVE_FULL = 2, RECMP_NO_CONSUMER = 3 };
+/* The channel's failure when its queue fills, or the game stops, before every remote actor
+   the roster names has bound: the private link to them was never established. */
+#define RECMP_UNBOUND DPERR_NOCONNECTION
 typedef struct {
-    unsigned queued, sent, bytes, received, lost;
+    unsigned queued, sent, bytes, received, lost, unread;
     unsigned bound, expected, player, pending, completed, completed_bytes;
     unsigned seals, ended;
-    unsigned cuts, receipts, receipts_sent, finished;
+    unsigned cuts, receipts, receipts_sent, finished, consumption;
     HRESULT failed;
 } RecMpStats;
 
@@ -140,14 +146,23 @@ void tagpu_recmp_end(RecMpChannel* c);
 
 /* One consumer, initially the game thread and later an explicitly handed-over
    retained consumer. Returns 1 for a logical packet, 0 when empty, -1 for
-   channel failure. The worker verifies native bindings, streams and sequences before
+   channel failure, -2 once consumption has ended (RecMpStats.consumption): the
+   channel still contributes, and what was taken is a prefix of every source.
+   The worker verifies native bindings, streams and sequences before
    publishing; its one receive queue has no primary-session or loader producer. */
 int tagpu_recmp_take(RecMpChannel* c, RecMpPacket* out);
 /* One consumer, as for take. The game supplies its actual B2 application tick;
    each consumed source packet receives a distinct recording-local ordinal. */
 int tagpu_recmp_take_at(RecMpChannel* c, RecMpPacket* out, unsigned application_tick);
-/* An immutable consumption cut is available only after end. A source with no
-   consumed packet has sequence/order zero; it still needs a received seal. */
+/* An immutable consumption cut is available only after end, and only while
+   consumption has not ended. A source with no consumed packet has sequence/order
+   zero; it still needs a received seal. */
 int tagpu_recmp_cut(RecMpChannel* c, DWORD origin, RecMpCutPoint* out);
+/* The game-thread consumer's refusal of what it receives: it takes nothing more, and
+   its recording, which it ends itself (tagpu_recmp_file_end with channel_ended 0),
+   is incomplete. Unlike abort, the channel lives on: local sends, seals, final seals
+   and receipts continue, so the other recorders' completeness does not depend on
+   this peer being able to apply what they send. */
+void tagpu_recmp_relinquish(RecMpChannel* c);
 
 #endif

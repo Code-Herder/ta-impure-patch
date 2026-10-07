@@ -356,7 +356,46 @@ static DWORD WINAPI worker(void* argument)
         CHECK((LONG)(deadline-GetTickCount()) > 0);
         Sleep(10);
     }
-    CHECK(tagpu_recmp_net_close(net) == DP_OK);
+    if (p->config.host) {
+        /* The joiner closes at the release and then publishes its departure. A broadcast
+           sent before this worker has received the departure notice goes into a session
+           with no remote player: SendEx answers DP_OK rather than DPERR_PENDING, and the
+           send still completes once through SENDCOMPLETE, so its context stays held until then. */
+        char left[MAX_PATH];
+        strcpy(left,p->release); strcat(left,".left");
+        deadline = GetTickCount()+45000;
+        while (GetFileAttributesA(left) == INVALID_FILE_ATTRIBUTES) {
+            CHECK((LONG)(deadline-GetTickCount()) > 0);
+            Sleep(1);
+        }
+        tagpu_recmp_net_stats(net,&stats);
+        CHECK(stats.peers == 1);
+        data_send(p,net,sent);
+        tagpu_recmp_net_stats(net,&stats);
+        CHECK(stats.pending == 1 && !stats.failed);
+        CHECK(tagpu_recmp_net_close(net) == DPERR_BUSY);
+        while (stats.pending || stats.peers) {
+            unsigned char buffer[RECMP_PACKET_MAX];
+            unsigned bytes = sizeof buffer;
+            DWORD from = 0;
+            hr = tagpu_recmp_net_receive(net,&from,buffer,&bytes);
+            CHECK(hr == DPERR_NOMESSAGES);
+            tagpu_recmp_net_stats(net,&stats);
+            CHECK(!stats.failed && (LONG)(deadline-GetTickCount()) > 0);
+            if (bytes) WaitForSingleObject(tagpu_recmp_net_event(net),10);
+        }
+        CHECK(stats.completed == 19);
+        printf("PASS: a send after the joiner left keeps its context until its one completion\n");
+        CHECK(tagpu_recmp_net_close(net) == DP_OK);
+    } else {
+        HANDLE left;
+        char path[MAX_PATH];
+        CHECK(tagpu_recmp_net_close(net) == DP_OK);
+        strcpy(path,p->release); strcat(path,".left");
+        left = CreateFileA(path,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+        CHECK(left != INVALID_HANDLE_VALUE);
+        CloseHandle(left);
+    }
     return 0;
 }
 

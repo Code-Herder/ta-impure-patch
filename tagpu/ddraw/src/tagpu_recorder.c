@@ -307,6 +307,9 @@ static RecMpText* s_mp_text;
 static RecMpTextQueue* s_mp_text_queue;
 static unsigned s_mp_text_failed;
 static RecMpChannel* s_mp_channel;
+/* Whether this game thread still applies what the channel delivers. Cleared for good by
+   mp_relinquish, while s_mp_channel lives on for this peer's own contributions. */
+static unsigned s_mp_consuming;
 /* Borrowed by the game producer until file_end. The ring's writer owns its
    lifetime and cannot free it before that end publication. */
 static RecMpFile* s_mp_file;
@@ -1024,12 +1027,156 @@ static int mp_explored_capture(const Level* L, unsigned tick)
     return 1;
 }
 
+/* This peer stops applying remote contributions for the rest of the game: its own
+   recording ends incomplete, and only that. Aborting the channel instead would also end
+   this peer's sends, seals and receipts, on which every other recorder's completeness
+   rests. MEASURED 2026-10-06, five peers: at the game's end each joiner's engine clears
+   every other remote player's row (active 0, ID 0xFFFFFFFF, controller 0; the removal
+   0x452CC0 [INFERRED]) while those players still contribute, so their next player image
+   is refused here (mp_apply) on every joiner. */
+static void mp_relinquish(unsigned tick)
+{
+    tagpu_logf("recmp: tick %u: this peer stops applying contributions; its own continue, its "
+               "recording ends incomplete", tick);
+    s_mp_consuming = 0;
+    tagpu_recmp_relinquish(s_mp_channel);
+    mp_record_end(0);
+}
+
+/* A remote packet this peer cannot apply, named; the caller relinquishes consumption. */
+static int mp_refuse(const RecMpHeader* h, unsigned tick, const char* why)
+{
+    tagpu_logf("recmp: tick %u: cannot apply ID %u kind %u seq %u source tick %u: %s", tick,
+               h->origin, h->kind, h->sequence, h->tick, why);
+    return 0;
+}
+
+/* Everything the channel delivered by this capture point, applied in delivery order:
+   1 when the queue is empty, 0 when a packet is refused or consumption has ended, -1
+   when the channel failed. */
+static int mp_apply(const Level* L, unsigned tick)
+{
+    RecMpPacket packet;
+    unsigned i;
+    int taken;
+    while ((taken = tagpu_recmp_take_at(s_mp_channel, &packet, tick)) > 0) {
+        RecMpPlayerState before, state;
+        if (packet.h.kind == RECMP_SEAL) {
+            if (!tagpu_recmp_orders_idle(s_mp_orders, packet.h.origin) ||
+                !tagpu_recmp_explored_idle(s_mp_explored,packet.h.origin) ||
+                !tagpu_recmp_pov_idle(s_mp_pov,packet.h.origin))
+                return mp_refuse(&packet.h,tick,"a seal closes a partial order, explored-map or "
+                                 "selection transaction");
+            continue;
+        }
+        if (packet.h.kind == RECMP_SEATS) {
+            if (!tagpu_recmp_seats_put(s_mp_seats,&packet.h,packet.body,packet.h.bytes-sizeof packet.h))
+                return mp_refuse(&packet.h,tick,"its source roster differs from this peer's");
+            tagpu_logf("recmp: remote source roster ID %u seq %u, %u actors, applied tick %u, crc %08X",
+                       packet.h.origin,packet.h.sequence,s_mp_roster.count,tick,
+                       (unsigned)Crc32_ComputeBuf(0,packet.body,packet.h.bytes-sizeof packet.h));
+            continue;
+        }
+        if (packet.h.kind == RECMP_EXPLORED) {
+            RecMpExploreState state;
+            int known=tagpu_recmp_explored_get(s_mp_explored,packet.h.origin,&state,NULL,0);
+            if (!tagpu_recmp_explored_put(s_mp_explored,s_mp_seats,&packet.h,packet.body,
+                                          packet.h.bytes-sizeof packet.h,tick))
+                return mp_refuse(&packet.h,tick,"the explored-map cache refuses it");
+            if (!known) mp_explored_log(packet.h.origin,tick,"remote");
+            continue;
+        }
+        if (packet.h.kind == RECMP_POV || packet.h.kind == RECMP_CLICK ||
+            packet.h.kind == RECMP_SELECT) {
+            if (!tagpu_recmp_pov_put(s_mp_pov,s_mp_seats,&packet.h,packet.body,
+                                     packet.h.bytes-sizeof packet.h,tick))
+                return mp_refuse(&packet.h,tick,"the perspective cache refuses it");
+            mp_pov_log(&packet.h,tick,"remote");
+            continue;
+        }
+        if (packet.h.kind == RECMP_TEXT) {
+            if (!tagpu_recmp_text_put(s_mp_text,s_mp_seats,&packet.h,packet.body,
+                                      packet.h.bytes-sizeof packet.h,tick))
+                return mp_refuse(&packet.h,tick,"the text cache refuses it");
+            tagpu_logf("recmp: remote text batch ID %u source tick %u seq %u applied tick %u, %u bytes CRC %08X",
+                       packet.h.origin,packet.h.tick,packet.h.sequence,tick,
+                       packet.h.bytes-(unsigned)sizeof packet.h,
+                       (unsigned)Crc32_ComputeBuf(0,packet.body,packet.h.bytes-sizeof packet.h));
+            continue;
+        }
+        if (packet.h.kind == RECMP_UNITS) {
+            if (!tagpu_recmp_units_put(s_mp_units,s_mp_seats,&packet.h,packet.body,
+                                       packet.h.bytes-sizeof packet.h,tick))
+                return mp_refuse(&packet.h,tick,"the unit cache refuses it");
+            mp_units_log(&packet,tick,"remote");
+            continue;
+        }
+        if (packet.h.kind == RECMP_ROOTS) {
+            if (!tagpu_recmp_roots_put(s_mp_roots,s_mp_seats,&packet.h,packet.body,
+                                       packet.h.bytes-sizeof packet.h,tick))
+                return mp_refuse(&packet.h,tick,"the root cache refuses it");
+            mp_roots_log(&packet,tick,"remote");
+            continue;
+        }
+        if (packet.h.kind == RECMP_NAMED) {
+            if (!tagpu_recmp_named_put(s_mp_named,s_mp_seats,&packet.h,packet.body,
+                                       packet.h.bytes-sizeof packet.h,tick))
+                return mp_refuse(&packet.h,tick,"the named-start cache refuses it");
+            continue;
+        }
+        if (packet.h.kind == RECMP_ORDERS) {
+            if (!tagpu_recmp_seats_get(s_mp_seats,packet.h.origin,NULL,NULL))
+                return mp_refuse(&packet.h,tick,"orders precede the source's roster");
+            if (!mp_orders_receive(L, &packet, tick))
+                return mp_refuse(&packet.h,tick,"the order cache refuses it");
+            continue;
+        }
+        if (packet.h.kind != RECMP_PLAYER) return mp_refuse(&packet.h,tick,"no recorder applies its kind");
+        for (i = 0; i < s_mp_roster.count; i++) if (s_mp_roster.actor[i].origin == packet.h.origin) break;
+        if (i == s_mp_roster.count) return mp_refuse(&packet.h,tick,"its origin is not in the roster");
+        {
+            unsigned seat = s_mp_roster.actor[i].seat, origin;
+            unsigned mapped[REC_PLAYER_DWORDS];
+            const char* player = L->ta + OFF_PLAYERS + seat * PL_STRIDE;
+            int valid = tagpu_recmp_players_get(s_mp_players, packet.h.origin, &before);
+            memcpy(&origin, player + 4, sizeof origin);
+            if (origin != packet.h.origin || (unsigned char)player[PL_CONTROLLER] != 3) {
+                tagpu_logf("recmp: seat %u holds ID %u controller %u", seat, origin,
+                           (unsigned char)player[PL_CONTROLLER]);
+                return mp_refuse(&packet.h,tick,"its seat no longer holds that remote player");
+            }
+            if (!tagpu_recmp_seats_get(s_mp_seats,origin,NULL,NULL))
+                return mp_refuse(&packet.h,tick,"a player image precedes the source's roster");
+            if (!tagpu_recmp_players_put(s_mp_players, &packet.h, packet.body,
+                                         packet.h.bytes-sizeof packet.h, tick) ||
+                !tagpu_recmp_players_get(s_mp_players,origin,&state) ||
+                !tagpu_recmp_seats_image(s_mp_seats,origin,&state.stream,state.image,sizeof state.image,
+                                         mapped,sizeof mapped))
+                return mp_refuse(&packet.h,tick,"the player cache refuses it");
+            if (!valid) {
+                tagpu_logf("recmp: remote player image ID %u -> seat %u owner controller %u, "
+                           "source tick %u seq %u, applied tick %u, %u image bytes crc %08X", origin,
+                           seat, state.controller, state.source_tick, state.sequence, tick,
+                           REC_PLAYER_IMAGE, (unsigned)Crc32_ComputeBuf(0,state.image,sizeof state.image));
+                tagpu_logf("recmp: mapped player ID %u self %u -> %u, image crc %08X", origin,
+                           ((const unsigned char*)state.image)[0x146],
+                           ((const unsigned char*)mapped)[0x146],
+                           (unsigned)Crc32_ComputeBuf(0,mapped,sizeof mapped));
+            }
+        }
+    }
+    if (taken == -2) {
+        tagpu_logf("recmp: tick %u: the receive queue filled before this peer applied it", tick);
+        return 0;
+    }
+    return taken < 0 ? -1 : 1;
+}
+
 static void mp_capture(const Level* L, unsigned tick)
 {
     unsigned i;
-    int taken;
-    RecMpPacket packet;
     RecMpStats stats;
+    const char* why;
     if (!s_mp_tried) {
         union { DPSESSIONDESC2 desc; unsigned char bytes[4096]; } session;
         IDirectPlay2A* dp;
@@ -1143,6 +1290,7 @@ static void mp_capture(const Level* L, unsigned tick)
             return;
         }
         tagpu_logf("recmp: contributions begin at tick %u, transport ID %u", tick, origin);
+        s_mp_consuming = 1;
         s_mp_logtick = tick;
         s_mp_level = *L;
         s_mp_active_match = match;
@@ -1156,12 +1304,20 @@ static void mp_capture(const Level* L, unsigned tick)
     }
     if (!s_mp_channel) return;
     if (!tagpu_recmp_chat_inbox_drain(s_mp_chat_inbox,&s_mp_active_match,s_mp_local,
-                                      &s_mp_roster,s_mp_text_queue)) goto incomplete;
+                                      &s_mp_roster,s_mp_text_queue)) {
+        why = "the copied chat inbox did not drain into the text queue";
+        goto incomplete;
+    }
     /* The pump at 0x4954C8 can start roots at T before B2. Post-B2 roots
        from T-1 must be sent before advance seals that source tick. */
-    if (s_mp_roots_failed || s_mp_text_failed || s_mp_pov_failed || !mp_events_flush(s_mp_tick))
+    if (s_mp_roots_failed || s_mp_text_failed || s_mp_pov_failed || !mp_events_flush(s_mp_tick)) {
+        why = "a root, text or click publication was refused";
         goto incomplete;
-    if (!tagpu_recmp_advance(s_mp_channel, tick) || !mp_events_flush(tick)) goto incomplete;
+    }
+    if (!tagpu_recmp_advance(s_mp_channel, tick) || !mp_events_flush(tick)) {
+        why = "the source clock did not advance";
+        goto incomplete;
+    }
     s_mp_tick = tick;
     s_mp_advanced = 1;
     for (i = 0; i < REC_PLAYERS; i++) {
@@ -1176,7 +1332,10 @@ static void mp_capture(const Level* L, unsigned tick)
         if (!tagpu_recmp_seats_get(s_mp_seats,origin,NULL,NULL)) {
             if (!tagpu_recmp_send_from(s_mp_channel,origin,RECMP_SEATS,tick,&s_mp_roster,
                                        sizeof s_mp_roster,&header) ||
-                !tagpu_recmp_seats_put(s_mp_seats,&header,&s_mp_roster,sizeof s_mp_roster)) goto incomplete;
+                !tagpu_recmp_seats_put(s_mp_seats,&header,&s_mp_roster,sizeof s_mp_roster)) {
+                why = "the local source roster was not published";
+                goto incomplete;
+            }
             tagpu_logf("recmp: local source roster ID %u seq %u, %u actors, crc %08X", origin,
                        header.sequence,s_mp_roster.count,
                        (unsigned)Crc32_ComputeBuf(0,&s_mp_roster,sizeof s_mp_roster));
@@ -1186,117 +1345,39 @@ static void mp_capture(const Level* L, unsigned tick)
             GUID stream;
             unsigned mapped[REC_PLAYER_DWORDS];
             if (!tagpu_recmp_seats_get(s_mp_seats,origin,NULL,&stream) ||
-                !tagpu_recmp_seats_image(s_mp_seats,origin,&stream,img,sizeof img,mapped,sizeof mapped))
+                !tagpu_recmp_seats_image(s_mp_seats,origin,&stream,img,sizeof img,mapped,sizeof mapped)) {
+                why = "a local player image does not map through its seats";
                 goto incomplete;
+            }
         }
         bytes = tagpu_recmp_players_delta(s_mp_players, origin, ctl, img, body, sizeof body);
-        if (bytes < 0) goto incomplete;
+        if (bytes < 0) {
+            why = "a local player image delta was refused";
+            goto incomplete;
+        }
         if (!bytes) continue;
         /* The accepted source envelope is the baseline's publication point.
            An unsent delta cannot suppress a later capture of those bytes. */
         if (!tagpu_recmp_send_from(s_mp_channel, origin, RECMP_PLAYER, tick, body, bytes, &header) ||
-            !tagpu_recmp_players_put(s_mp_players, &header, body, bytes, tick)) goto incomplete;
+            !tagpu_recmp_players_put(s_mp_players, &header, body, bytes, tick)) {
+            why = "a local player image was not published";
+            goto incomplete;
+        }
         if (((const RecMpPlayerDelta*)body)->full)
             tagpu_logf("recmp: local player image ID %u seat %u controller %u, source tick %u seq %u, "
                        "%u image bytes crc %08X", origin, i, ctl, tick, header.sequence,
                        REC_PLAYER_IMAGE, (unsigned)Crc32_ComputeBuf(0,img,sizeof img));
     }
-    while ((taken = tagpu_recmp_take_at(s_mp_channel, &packet, tick)) > 0) {
-        RecMpPlayerState before, state;
-        if (packet.h.kind == RECMP_SEAL) {
-            if (!tagpu_recmp_orders_idle(s_mp_orders, packet.h.origin) ||
-                !tagpu_recmp_explored_idle(s_mp_explored,packet.h.origin) ||
-                !tagpu_recmp_pov_idle(s_mp_pov,packet.h.origin)) goto incomplete;
-            continue;
-        }
-        if (packet.h.kind == RECMP_SEATS) {
-            if (!tagpu_recmp_seats_put(s_mp_seats,&packet.h,packet.body,packet.h.bytes-sizeof packet.h))
-                goto incomplete;
-            tagpu_logf("recmp: remote source roster ID %u seq %u, %u actors, applied tick %u, crc %08X",
-                       packet.h.origin,packet.h.sequence,s_mp_roster.count,tick,
-                       (unsigned)Crc32_ComputeBuf(0,packet.body,packet.h.bytes-sizeof packet.h));
-            continue;
-        }
-        if (packet.h.kind == RECMP_EXPLORED) {
-            RecMpExploreState state;
-            int known=tagpu_recmp_explored_get(s_mp_explored,packet.h.origin,&state,NULL,0);
-            if (!tagpu_recmp_explored_put(s_mp_explored,s_mp_seats,&packet.h,packet.body,
-                                          packet.h.bytes-sizeof packet.h,tick)) goto incomplete;
-            if (!known) mp_explored_log(packet.h.origin,tick,"remote");
-            continue;
-        }
-        if (packet.h.kind == RECMP_POV || packet.h.kind == RECMP_CLICK ||
-            packet.h.kind == RECMP_SELECT) {
-            if (!tagpu_recmp_pov_put(s_mp_pov,s_mp_seats,&packet.h,packet.body,
-                                     packet.h.bytes-sizeof packet.h,tick)) goto incomplete;
-            mp_pov_log(&packet.h,tick,"remote");
-            continue;
-        }
-        if (packet.h.kind == RECMP_TEXT) {
-            if (!tagpu_recmp_text_put(s_mp_text,s_mp_seats,&packet.h,packet.body,
-                                      packet.h.bytes-sizeof packet.h,tick)) goto incomplete;
-            tagpu_logf("recmp: remote text batch ID %u source tick %u seq %u applied tick %u, %u bytes CRC %08X",
-                       packet.h.origin,packet.h.tick,packet.h.sequence,tick,
-                       packet.h.bytes-(unsigned)sizeof packet.h,
-                       (unsigned)Crc32_ComputeBuf(0,packet.body,packet.h.bytes-sizeof packet.h));
-            continue;
-        }
-        if (packet.h.kind == RECMP_UNITS) {
-            if (!tagpu_recmp_units_put(s_mp_units,s_mp_seats,&packet.h,packet.body,
-                                       packet.h.bytes-sizeof packet.h,tick)) goto incomplete;
-            mp_units_log(&packet,tick,"remote");
-            continue;
-        }
-        if (packet.h.kind == RECMP_ROOTS) {
-            if (!tagpu_recmp_roots_put(s_mp_roots,s_mp_seats,&packet.h,packet.body,
-                                       packet.h.bytes-sizeof packet.h,tick)) goto incomplete;
-            mp_roots_log(&packet,tick,"remote");
-            continue;
-        }
-        if (packet.h.kind == RECMP_NAMED) {
-            if (!tagpu_recmp_named_put(s_mp_named,s_mp_seats,&packet.h,packet.body,
-                                       packet.h.bytes-sizeof packet.h,tick)) goto incomplete;
-            continue;
-        }
-        if (packet.h.kind == RECMP_ORDERS) {
-            if (!tagpu_recmp_seats_get(s_mp_seats,packet.h.origin,NULL,NULL) ||
-                !mp_orders_receive(L, &packet, tick)) goto incomplete;
-            continue;
-        }
-        if (packet.h.kind != RECMP_PLAYER) goto incomplete;
-        for (i = 0; i < s_mp_roster.count; i++) if (s_mp_roster.actor[i].origin == packet.h.origin) break;
-        if (i == s_mp_roster.count) goto incomplete;
-        {
-            unsigned seat = s_mp_roster.actor[i].seat, origin;
-            unsigned mapped[REC_PLAYER_DWORDS];
-            const char* player = L->ta + OFF_PLAYERS + seat * PL_STRIDE;
-            int valid = tagpu_recmp_players_get(s_mp_players, packet.h.origin, &before);
-            memcpy(&origin, player + 4, sizeof origin);
-            if (origin != packet.h.origin || (unsigned char)player[PL_CONTROLLER] != 3 ||
-                !tagpu_recmp_seats_get(s_mp_seats,origin,NULL,NULL) ||
-                !tagpu_recmp_players_put(s_mp_players, &packet.h, packet.body,
-                                         packet.h.bytes-sizeof packet.h, tick) ||
-                !tagpu_recmp_players_get(s_mp_players,origin,&state) ||
-                !tagpu_recmp_seats_image(s_mp_seats,origin,&state.stream,state.image,sizeof state.image,
-                                         mapped,sizeof mapped)) goto incomplete;
-            if (!valid) {
-                tagpu_logf("recmp: remote player image ID %u -> seat %u owner controller %u, "
-                           "source tick %u seq %u, applied tick %u, %u image bytes crc %08X", origin,
-                           seat, state.controller, state.source_tick, state.sequence, tick,
-                           REC_PLAYER_IMAGE, (unsigned)Crc32_ComputeBuf(0,state.image,sizeof state.image));
-                tagpu_logf("recmp: mapped player ID %u self %u -> %u, image crc %08X", origin,
-                           ((const unsigned char*)state.image)[0x146],
-                           ((const unsigned char*)mapped)[0x146],
-                           (unsigned)Crc32_ComputeBuf(0,mapped,sizeof mapped));
-            }
-        }
+    if (s_mp_consuming) {
+        int applied = mp_apply(L, tick);
+        if (applied < 0) { why = "the channel failed"; goto incomplete; }
+        if (!applied) mp_relinquish(tick);
     }
-    if (taken < 0) {
-        tagpu_logf("recmp: contribution source sequence or stream is incomplete");
-        goto incomplete;
-    }
-    if (!mp_units_capture(L, tick) || !mp_orders_capture(L, tick) || !mp_explored_capture(L,tick) ||
-        !mp_pov_capture(L, tick)) goto incomplete;
+    why = !mp_units_capture(L, tick) ? "the local unit capture was refused" :
+          !mp_orders_capture(L, tick) ? "the local order capture was refused" :
+          !mp_explored_capture(L, tick) ? "the local explored-map capture was refused" :
+          !mp_pov_capture(L, tick) ? "the local perspective capture was refused" : NULL;
+    if (why) goto incomplete;
     if (tick - s_mp_logtick >= 150) {
         tagpu_recmp_stats(s_mp_channel, &stats);
         tagpu_logf("recmp: tick=%u sent=%u bytes=%u received=%u queued=%u lost=%u failed=%08X "
@@ -1308,7 +1389,10 @@ static void mp_capture(const Level* L, unsigned tick)
     }
     return;
 incomplete:
-    tagpu_logf("recmp: contribution refused: contributions end incomplete at tick %u", tick);
+    tagpu_recmp_stats(s_mp_channel, &stats);
+    tagpu_logf("recmp: contribution refused at tick %u: %s (channel %08X): contributions end "
+               "incomplete", tick, why, (unsigned)stats.failed);
+    s_mp_consuming = 0;
     mp_roots_end();
     tagpu_recmp_abort(s_mp_channel, E_ABORT);
     tagpu_recmp_end(s_mp_channel);
@@ -6906,15 +6990,24 @@ void tagpu_rec_level_end(void)
     /* Teardown enters on the producer's game thread before the unit-array free.
        Copied final roots precede final source seals; no hook can retain this
        level context after it is cleared. */
-    if (s_mp_channel &&
-        (!tagpu_recmp_chat_inbox_finish(s_mp_chat_inbox,&s_mp_active_match,s_mp_local,
-                                       &s_mp_roster,s_mp_text_queue) ||
-         s_mp_roots_failed || s_mp_text_failed || s_mp_pov_failed || !mp_events_flush(~0u)))
-        tagpu_recmp_abort(s_mp_channel,E_ABORT);
+    if (s_mp_channel) {
+        const char* why =
+            !tagpu_recmp_chat_inbox_finish(s_mp_chat_inbox,&s_mp_active_match,s_mp_local,
+                                           &s_mp_roster,s_mp_text_queue)
+                ? "the copied chat inbox did not finish into the text queue" :
+            s_mp_roots_failed || s_mp_text_failed || s_mp_pov_failed
+                ? "a root, text or click publication was refused" :
+            !mp_events_flush(~0u) ? "the final events did not flush" : NULL;
+        if (why) {
+            tagpu_logf("recmp: final contributions refused at the level's end: %s", why);
+            tagpu_recmp_abort(s_mp_channel,E_ABORT);
+        }
+    }
     mp_roots_end();
     tagpu_recmp_end(s_mp_channel);
     mp_record_end(1);
     s_mp_channel = NULL;
+    s_mp_consuming = 0;
     tagpu_recmp_orders_end(s_mp_orders);
     s_mp_orders = NULL;
     tagpu_recmp_players_end(s_mp_players);

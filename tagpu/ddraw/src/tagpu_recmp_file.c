@@ -60,7 +60,7 @@ int tagpu_recmp_file_complete(RecMpFile* f, const RecMpFileState* s, RecMpRecord
     unsigned i;
     if (!f || !s || !end || tagpu_recmp_file_ended(f)!=1 || !tagpu_recmp_record_done(f->journal)) return 0;
     tagpu_recmp_stats(f->channel,&stats);
-    if (stats.failed) return -1;
+    if (stats.failed || stats.consumption) return -1;
     if (!stats.finished) return 0;
     next.version=1; next.count=s->header.count; next.records=s->records;
     for (i=0;i<next.count;i++) if (!s->header.actor[i].local &&

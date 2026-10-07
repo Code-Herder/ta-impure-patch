@@ -1372,6 +1372,7 @@ static void contributions_finish(Writer* w)
         while ((taken = tagpu_recmp_file_proof(f, &record.packet)) > 0 && !w->dead)
             contribution(w, &record);
         if (w->dead) break;
+        if (taken == -2) { fail(w, "contribution receive queue filled before the file drained it"); break; }
         if (taken < 0) { fail(w, "multiplayer channel failed before file completion"); break; }
         complete = tagpu_recmp_file_complete(f, &w->mp, &w->mp_end);
         if (complete < 0) { fail(w, "persisted contribution prefixes do not cover application cuts"); break; }

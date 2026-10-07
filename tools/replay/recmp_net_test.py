@@ -206,10 +206,11 @@ def run(args, output):
                 with (output / ("channel-" + (mode or "bounds") + ".log")).open("w") as log:
                     command(["wine", controls, *([mode] if mode else [])], log, env=owned[0][1])
             print("source-prefix ledger, private channel bounds/gap/wrong-source/missing-tail and abandoned-drain controls: PASS", flush=True)
-            for mode in ("", "missing_receipt", "missing_cut", "bad_receipt", "journal_full"):
+            for mode in ("", "missing_receipt", "missing_cut", "bad_receipt", "journal_full",
+                         "relinquish", "rx_full", "no_consumer"):
                 with (output / ("cut-" + (mode or "handoff") + ".log")).open("w") as log:
                     command(["wine", cuts, *([mode] if mode else [])], log, env=owned[0][1])
-            print("consumption cuts, terminal receipts and retained tail controls: PASS", flush=True)
+            print("consumption cuts, terminal receipts, retained tail and ended-consumption controls: PASS", flush=True)
             for role, (directory, env) in zip(("host", "join"), owned):
                 log = output / f"{role}.log"
                 handle = log.open("w")
@@ -238,9 +239,13 @@ def run(args, output):
             wait_for(jobs, "PASS: production channel after primary Close" if args.channel else
                      "PASS: two primary-native human/AI keys")
             release.touch()
+            # The backend host's last send follows the joiner's departure, whose
+            # completion can take as long as a departed peer's send stall.
             for proc, handle, log in jobs:
-                if proc.wait(timeout=10):
+                if proc.wait(timeout=60):
                     raise RuntimeError(f"fixture failed: {log}")
+            if not args.channel and "PASS: a send after the joiner left" not in jobs[0][2].read_text(errors="replace"):
+                raise RuntimeError("host did not complete its send after the joiner left")
             if args.channel:
                 for role in ("host", "join"):
                     raw = (output / f"release.{role}.journal").read_bytes()

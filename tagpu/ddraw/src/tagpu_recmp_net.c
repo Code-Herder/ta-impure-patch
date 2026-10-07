@@ -207,7 +207,7 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
     unsigned char session[4096];
     DWORD bytes = sizeof session;
     DWORD player = 0;
-    unsigned attempt;
+    unsigned attempt, listener = 0;
     HRESULT hr;
     const char* stage="COM initialization";
     if (!out) return E_INVALIDARG;
@@ -259,17 +259,21 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
             hr = connection(net, &inet.provider, &inet.address[attempt]);
             if (hr != DP_OK) goto fail;
             stage="session enumeration";
+            listener = 1;
             hr = IDirectPlayX_EnumSessions(net->dp, &desc, 1500, session_found, &search,
                                            DPENUMSESSIONS_AVAILABLE);
             if (hr != DP_OK && hr != DPERR_NOSESSIONS) goto fail;
+            listener = 0;
         }
         stage="matching session";
         if (search.found != 1) { hr = DPERR_NOSESSIONS; goto fail; }
         desc.guidInstance = search.session;
     }
     stage=config->host ? "session creation" : "session join";
+    listener = 1;
     hr = IDirectPlayX_Open(net->dp, &desc, config->host ? DPOPEN_CREATE : DPOPEN_JOIN);
     if (hr != DP_OK) goto fail;
+    listener = 0;
     net->opened = 1;
     stage="session descriptor";
     hr = IDirectPlayX_GetSessionDesc(net->dp, session, &bytes);
@@ -318,6 +322,17 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
     return DP_OK;
 fail:
     tagpu_logf("recmp: private session open failed at %s: %08X",stage,(unsigned)hr);
+    /* THE PORT RACE. The TCP/IP provider (dpwsockx) picks its stream listener's port by
+       walking up from 2300, so two processes starting it at the same moment can pick the
+       same port, and the loser's enumeration fails with DPERR_GENERIC, at once or after
+       ~1.5 s of the provider's own retries [INFERRED from Wine socket traces]. MEASURED
+       2026-10-06 under Wine, five peers each opening this session at the game's start:
+       19 of 70 opens lost at enumeration, in 12 of 14 rounds, no peer twice, every loser
+       opened on its next attempt; with two peers none. Open is classed with enumeration
+       because a host's Open, which enumerates nothing, starts the same listener [INFERRED].
+       Either failure comes before any session is open, so destroy leaves nothing behind
+       for a later open to meet. */
+    if (hr == DPERR_GENERIC && listener) hr = RECMP_NET_PORT_RACE;
     destroy(net);
     return hr;
 }
@@ -344,8 +359,17 @@ HRESULT tagpu_recmp_net_send(RecMpNet* net, const void* packet, unsigned bytes)
     hr = IDirectPlayX_SendEx(net->dp, net->identity.player, DPID_ALLPLAYERS,
                             DPSEND_GUARANTEED | DPSEND_ASYNC, (void*)packet, bytes,
                             0, 10000, &net->send[slot], &net->send[slot].id);
-    if (hr != DPERR_PENDING) {
-        net->stats.failed = hr == DP_OK ? E_UNEXPECTED : hr;
+    /* THE INVARIANT: a context is never reused while DirectPlay may still complete it.
+       DP_OK is an accepted send as much as DPERR_PENDING is: a broadcast into a session
+       whose remote players have all left answers DP_OK when the departure notices are
+       still queued for this worker, and its SENDCOMPLETE still follows. MEASURED
+       2026-10-06 under Wine's native dplayx: more than 600 DP_OK sends in the port-race
+       probes and 80 after clean leaves, each with exactly one matching completion
+       (recmp_net_test.c's departure case reproduces it). So both keep the context until
+       that completion; one that never came would hold the context and refuse close,
+       failing the channel incomplete, never freeing it early. */
+    if (hr != DPERR_PENDING && hr != DP_OK) {
+        net->stats.failed = hr;
         return net->stats.failed;
     }
     /* The SDK copies an accepted asynchronous send. The caller may reuse its

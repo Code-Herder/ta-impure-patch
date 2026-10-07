@@ -27,6 +27,11 @@ typedef struct {
     HRESULT failed;
 } RecMpNetStats;
 
+/* open's answer when the provider lost its listener port to another process starting
+   at the same moment (tagpu_recmp_net.c, the fail path). A failed open leaves nothing
+   behind, so its caller may open again. */
+#define RECMP_NET_PORT_RACE HRESULT_FROM_WIN32(WSAEADDRINUSE)
+
 /* One worker owns the module, both COM objects, session, player and receive event.
    config is a copied primary-session address and match ID; it contains no engine
    pointer or primary-session interface. No call is made on TA's send queue. */
