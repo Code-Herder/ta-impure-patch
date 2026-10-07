@@ -312,6 +312,10 @@ the follow lever and the follow's apply in `src/tagpu_zoom.c`, the frame visit's
 Gaps 4c-2 leaves:
 
 - **A multiplayer playback refused Follow and Jump** here; [4c-4](#4c-4-as-built) brings them.
+- **An arrow key on a paused playback neither scrolls nor ends a Follow.** The engine's scroll
+  does not run while the game is paused, and never did on a playback: MEASURED 2026-10-06 on the
+  build before 4c-2 (eye x 992 before and after a 1-s right arrow, paused) as on this one; running,
+  the same key scrolled (0 to 992) and, under Follow, logged "follow ended: camera moved".
 - **A Vulkan frame that skips `tagpu_zoom_read_lever`** (the overlay off, the reclaim teardown's
   frames) reports nothing: a Jump made while no frame reads the lever is written until the camera
   is moved, as a Follow would be.
