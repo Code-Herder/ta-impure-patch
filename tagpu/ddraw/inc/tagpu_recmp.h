@@ -118,6 +118,9 @@ typedef struct {
    sent counts accepted source packets (data and seals); completed includes
    identity announcements. Capture and end share the game-thread producer. */
 RecMpChannel* tagpu_recmp_begin(const RecMpConfig* config);
+/* Whether a channel's worker still runs: one per process, held from tagpu_recmp_begin until
+   the worker has drained or failed (at most its 15 s drain deadline after the level's end). */
+int tagpu_recmp_worker_running(void);
 int tagpu_recmp_send(RecMpChannel* c, unsigned kind, unsigned tick,
                      const void* body, unsigned bytes);
 int tagpu_recmp_send_from(RecMpChannel* c, DWORD origin, unsigned kind, unsigned tick,

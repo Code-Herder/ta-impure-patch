@@ -1421,6 +1421,24 @@ tick root, and its corpse goes in there.
   mode-3 segment, which no `tareplay.py` fixture is; `recmp_play_test.py`'s
   forward playing exercises them, as it does the materializer's other
   mode-3-only code.
+- *Native DirectPlay's `DP_OK` from an asynchronous send.* The channel keeps
+  the send's context until its completion arrives, which Wine's DirectPlay
+  posts for every such send (MEASURED: more than 600, each with one
+  completion). Native Windows is unmeasured. Were it to post none, each such
+  send would hold one of the 16 contexts until the channel refused further
+  sends and the recording ended incomplete at its drain deadline: no corruption,
+  a lost recording.
+- *One channel worker per process.* A match that starts while the previous
+  match's worker is still draining (at most its 15 s deadline after that level's
+  end) starts no channel on that peer, which logs "the previous match's worker
+  has not ended"; every other peer's channel then fails as unbound, naming it.
+  Letting two workers coexist belongs with the traffic stage.
+- *The browser validates a multiplayer file whole.* The Replays browser's
+  summary of a multiplayer file scans every contributions block, so that no span
+  is shown for a file whose completeness is not proven; it runs on the game
+  thread each time the list is built or the selection changes, and its cost
+  grows with the file. Reading the proof from the end block alone is the
+  remedy.
 - *A count comparison for mode 3.* If one is ever added, `0x41B8D0` runs 0 times
   on the host by design, like the state events; an expected-absent row would be
   a loosening, the owner's decision at that time.
@@ -2049,14 +2067,19 @@ stock. The serial never wraps. The three native send sites wrap that same event
 before calling their original sender; they preserve native audience/filter logic
 and keep its success distinct from recipient acceptance.
 
-The receiver bounds both native actor rows/IDs and requires a controller-1
-destination plus the exact current SDK-delivered pointer and 97-byte span before
-copying. It checks version, match, nonzero serial and the embedded ordinary text
-packet, copies that original packet to the front of the owned receive allocation,
-then enters the original text case. It neither changes the pump pointer nor
+The receiver shows every well-formed envelope and records only what it can
+name. An envelope of the exact 97-byte span with the code, version, length and an
+ordinary text packet (`0x05`) has that original packet copied to the front of the
+owned receive allocation and enters the original text case `0x45522E`, which
+checks its own destination as it does for stock text; a malformed one is dropped
+(`0x455F50`). Recording it is separate: it requires a network level in state 5
+or 6, both native actor rows bounded with their IDs, a controller-3 sender and a
+controller-1 destination, and the inbox's match and serial checks. A line refused
+there -- a sender row the engine has cleared at the game's end, an inbox that has
+closed -- is shown as the stock game shows it, logged as "shown and not
+recorded", and not recorded. The receiver neither changes the pump pointer nor
 retains an engine address. Code `0x2B` has a fixed splitter length, a default
-callback with the same body as stock text and a receive mask permitting state 6
-only. All sites are acquired before any patch is written. This same-build wire
+callback with the same body as stock text and stock text's receive mask (7). All sites are acquired before any patch is written. This same-build wire
 extension adds 32 application bytes per transmitted human text message; this is
 arithmetic, not measured physical traffic or an approved bandwidth result.
 

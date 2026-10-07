@@ -687,28 +687,29 @@ static int list_add(RecEvent** l, unsigned* n, unsigned* cap, unsigned kind, uns
 static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsigned len)
 {
     RecWorld* w = &r->w;
+    const RecHeader* h = seg_header(r);   /* a takeover's segment is a skirmish's */
     unsigned id;
     switch (kind) {
     case RK_EV_NET_CREATE: {
         RecNetCreate create;
         unsigned i, slot;
-        if (r->h.format < REC_FORMAT_NET_CREATE || r->h.mode != 3 || !r->h.has_mp_seats ||
-            !r->h.has_unitdefs || !rec_event_len(kind, len)) return 0;
+        if (h->format < REC_FORMAT_NET_CREATE || h->mode != 3 || !h->has_mp_seats ||
+            !h->has_unitdefs || !rec_event_len(kind, len)) return 0;
         memcpy(&create, b, sizeof create);
         slot = create.unit - 1;
-        if (slot < 1 || slot >= w->slots || !create.type || create.type >= r->h.ndefs ||
+        if (slot < 1 || slot >= w->slots || !create.type || create.type >= h->ndefs ||
             create.owner >= REC_PLAYERS || create.water > 4 || create.reserved ||
             !(create.unfinished >= 0.0f && create.unfinished <= 1.0f)) return 0;
-        for (i = 0; i < r->h.mp_seats.count; i++) {
-            const RecMpSeat* seat = &r->h.mp_seats.actor[i];
+        for (i = 0; i < h->mp_seats.count; i++) {
+            const RecMpSeat* seat = &h->mp_seats.actor[i];
             if (seat->seat == create.owner && slot >= seat->first && slot <= seat->last) break;
         }
-        if (i == r->h.mp_seats.count) return 0;
+        if (i == h->mp_seats.count) return 0;
         break;
     }
     case RK_EV_FEATURE:
         if (r->fbracket || (b[0] == FR_TICK && r->ndeaths) ||
-            (b[0] == FR_CORPSE && (!r->ndeaths || r->h.mode != 3)) ||
+            (b[0] == FR_CORPSE && (!r->ndeaths || h->mode != 3)) ||
             b[1] > REC_PHASE_LATE || b[2] || b[3] ||
             !rec_root_len(b[0], len))
             return 0;
@@ -731,7 +732,7 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
     case RK_EV_DRAW:
         if ((!r->fbracket && !r->ndeaths) || !rec_event_len(kind, len) || b[0] >= FS_SITES ||
             b[1] || b[2] || b[3] ||
-            (b[0] == FS_SOURCE && (r->fbracket != FR_TICK + 1 || r->h.mode != 3)))
+            (b[0] == FS_SOURCE && (r->fbracket != FR_TICK + 1 || h->mode != 3)))
             return 0;
         break;
     case RK_CELLS:

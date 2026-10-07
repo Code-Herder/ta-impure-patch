@@ -715,12 +715,10 @@ static int __stdcall mp_chat_send_line(const char* line)
     return ((SendFn)(size_t)0x453360)(line);
 }
 
-/* The new 0x2B case has the dispatcher's original frame and its private receive
-   allocation. Copy/validate metadata before moving its embedded stock packet
-   to the front of that allocation, then enter stock's 0x05 case unchanged. */
-static int __cdecl mp_chat_receive(void* frame)
+/* Whether a received 0x2B line enters the recording: the metadata checks and the inbox, which
+   copies what it records before the caller moves the stock packet over the envelope. */
+static int mp_chat_record(void* frame, unsigned char* message, unsigned bytes)
 {
-    unsigned char* message=((unsigned char**)frame)[4];
     const char* sender=*(const char* const*)((const char*)frame-0x24);
     const char* destination=*(const char* const*)((const char*)frame-0x14);
     char* ta=ta_main();
@@ -741,13 +739,35 @@ static int __cdecl mp_chat_receive(void* frame)
         *((const unsigned char*)frame+0x14)!=source_offset/PL_STRIDE || !*(const unsigned*)sender ||
         (unsigned char)sender[0x73]!=3 || !*(const unsigned*)destination ||
         (unsigned char)destination[0x73]!=1 ||
-        !tagpu_recmp_chat_inbox_receive(s_mp_chat_inbox,from,to,message,
-            tagpu_wire_received(message),(const volatile unsigned*)(ta+OFF_GAMETIME),
-            &wire,&tick)) return 0;
+        !tagpu_recmp_chat_inbox_receive(s_mp_chat_inbox,from,to,message,bytes,
+            (const volatile unsigned*)(ta+OFF_GAMETIME),&wire,&tick)) return 0;
     tagpu_logf("recmp: text received origin %u event %llu source %u tick %u recipient %u CRC %08X",
                from,(unsigned long long)wire.event,wire.tick,tick,to,
                (unsigned)Crc32_ComputeBuf(0,wire.stock,sizeof wire.stock));
-    memcpy(message,wire.stock,sizeof wire.stock);
+    return 1;
+}
+
+/* The new 0x2B case has the dispatcher's original frame and its private receive allocation.
+   SHOWING A LINE NEVER DEPENDS ON RECORDING IT: every well-formed envelope moves its embedded
+   stock packet to the front of that allocation and enters stock's 0x05 case unchanged, which
+   checks its own destination (0x45522E..0x455250) and is admitted by the same state mask as the
+   stock code (mask 7). Only entering the recording depends on the sender's identity, the level's
+   state and the match (mp_chat_record), so a line refused there -- a sender row the engine has
+   cleared at the game's end, an inbox that has closed -- is shown as the stock game shows it and
+   is not recorded. A malformed envelope is dropped (0x455F50). */
+static int __cdecl mp_chat_receive(void* frame)
+{
+    unsigned char* message=((unsigned char**)frame)[4];
+    unsigned bytes=tagpu_wire_received(message);
+    RecMpChatWire envelope;
+    if (bytes!=sizeof envelope) return 0;
+    memcpy(&envelope,message,sizeof envelope);
+    if (envelope.code!=RECMP_CHAT_CODE || envelope.version!=RECMP_CHAT_WIRE_VERSION ||
+        envelope.bytes!=sizeof envelope || envelope.stock[0]!=5) return 0;
+    if (!mp_chat_record(frame,message,bytes))
+        tagpu_logf("recmp: text event %llu shown and not recorded",
+                   (unsigned long long)envelope.event);
+    memcpy(message,envelope.stock,sizeof envelope.stock);
     return 1;
 }
 
@@ -1287,7 +1307,9 @@ static void mp_capture(const Level* L, unsigned tick)
             mp_pov_end();
             mp_roots_end();
             tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
-            tagpu_logf("recmp: contribution worker could not start");
+            tagpu_logf("recmp: contribution worker could not start%s",
+                       tagpu_recmp_worker_running() ?
+                       ": the previous match's worker has not ended" : "");
             return;
         }
         tagpu_logf("recmp: contributions begin at tick %u, transport ID %u", tick, origin);

@@ -961,7 +961,9 @@ static int viewer_buffers(char* ta)
    then, on a level the seating armed, record 10's buffers. Three invariants:
    - ORDERING. s_vbuf and s_vlowest are written on the game thread at the seating, before the load
      state creates the loader thread (0x4982C5..0x4982CA), and s_vbuf is cleared at the level's
-     end, after the loader has exited; this thread's result is published through an interlocked
+     end, after the loader has exited, and at every fill before a seating, so a seating that never
+     reached its level's end arms no later level; the loader acts on it only on a puppet level,
+     whose mode the same seating set before the loader thread existed. This thread's result is published through an interlocked
      write and read at the first step, which follows the loader's last write (bit 1 of
      main+0x38D75, set at 0x497C5F, tested at 0x498342).
    - LIFETIME. Record 10 gets its buffers at the point of the load where records 0-9 get theirs,
@@ -976,7 +978,8 @@ static void __cdecl tagpu_replay_level_players(void)
     char* ta;
     int ok;
     E_PlayersInit();
-    if (InterlockedCompareExchange(&s_vbuf, VB_ARMED, VB_ARMED) != VB_ARMED) return;
+    if (!tagpu_puppet_on() ||
+        InterlockedCompareExchange(&s_vbuf, VB_ARMED, VB_ARMED) != VB_ARMED) return;
     ta = ta_main();
     ok = ta && viewer_buffers(ta);
     if (!ok && ta) ta[OFF_CONTROLLED] = ta[OFF_VIEWED] = (char)s_vlowest;
@@ -1041,6 +1044,7 @@ static void __cdecl replay_fill(void)
     Refusal r = { 0, 0, 0 };
     replay_close();
     tagpu_puppet_end();
+    InterlockedExchange(&s_vbuf, VB_OFF);
     k = request_read(name, sizeof name, &view, why, sizeof why);
     if (!k) return;
     if (k < 0) {
@@ -1779,6 +1783,13 @@ static void group_put(const Lv* L, char* u, const uint32_t* img, unsigned slot)
     E_SetGroup(u, want);
 }
 
+/* Whether a build fraction is finished, by the engine's own test: the C3 of an x87 compare with
+   0.0 (0x4586DF and its siblings), true for 0.0, -0.0 and a NaN alike. */
+static int build_finished(float f)
+{
+    return !(f < 0.0f || f > 0.0f);
+}
+
 /* one unit's image, by the recipe above; the slot holds() it.
 
    THE BUILD FINISH ON A MULTIPLAYER LEVEL.
@@ -1833,14 +1844,12 @@ static void unit_put(const Lv* L, unsigned slot, const uint32_t* img)
     memcpy(&was, u + U_BUILT, 4);
     put_masked(u, img, s_raw1, 0, REC_UNIT_BYTES);
     memcpy(&now, u + U_BUILT, 4);
-    /* "finished" is the engine's own test, the C3 of an x87 compare with 0.0 (0x4586DF and its
-       siblings), true for 0.0, -0.0 and a NaN alike -- hence !(f < 0 || f > 0) */
-    if (s_mp.on && !(was < 0.0f || was > 0.0f) != !(now < 0.0f || now > 0.0f)) {
+    if (s_mp.on && build_finished(was) != build_finished(now)) {
         char* model;
         uint32_t st;
         memcpy(&model, u + U_MODEL, 4);
         if (model) *(uint32_t*)(model + O3_FRAME) = 0;
-        if (!(now < 0.0f || now > 0.0f)) {
+        if (build_finished(now)) {
             memcpy(&st, u + U_STATE, 4);
             if (st & U_SELECTED) *(uint16_t*)(L->ta + OFF_GUIWORD) |= GUI_REFRESH;
             s_mp.bfinished++;
@@ -1936,7 +1945,7 @@ static unsigned level_units(const Lv* L, const RecWorld* W)
         if (!W->live[slot]) continue;
         memcpy(pos, ib + 0x6A, 12);
         memcpy(&built, ib + U_BUILT, 4);
-        if (make(L, slot, (unsigned char)ib[U_OWNERIX], img_type(img), pos, built == 0.0f,
+        if (make(L, slot, (unsigned char)ib[U_OWNERIX], img_type(img), pos, build_finished(built),
                  img[U_STATE / 4] & 3u, 1))
             made++;
     }
@@ -3829,7 +3838,7 @@ static int mp_bootstrap_make(const Lv* L, unsigned slot, const uint32_t* img)
     float built;
     memcpy(pos, ib + 0x6A, 12);
     memcpy(&built, ib + U_BUILT, 4);
-    if (!make(L, slot, (unsigned char)ib[U_OWNERIX], img_type(img), pos, built == 0.0f,
+    if (!make(L, slot, (unsigned char)ib[U_OWNERIX], img_type(img), pos, build_finished(built),
               img[U_STATE / 4] & 3u, 1))
         return 0;
     s_mp.made++;

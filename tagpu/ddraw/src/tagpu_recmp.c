@@ -557,6 +557,8 @@ refused:
     return NULL;
 }
 
+int tagpu_recmp_worker_running(void) { return InterlockedCompareExchange(&s_workers, 0, 0) != 0; }
+
 int tagpu_recmp_send(RecMpChannel* c, unsigned kind, unsigned tick,
                      const void* body, unsigned bytes)
 {
