@@ -1421,6 +1421,12 @@ tick root, and its corpse goes in there.
   mode-3 segment, which no `tareplay.py` fixture is; `recmp_play_test.py`'s
   forward playing exercises them, as it does the materializer's other
   mode-3-only code.
+- *The host leaving first.* MEASURED 2026-10-07 in three-peer games whose
+  host quit before its joiners: once the host's own recording closed normally
+  (942 iterations), and once, on the previous build with the same channel
+  code, the host stopped consuming when its receive queue filled during the
+  quit and its writer abandoned the file at its last complete block. Ending a
+  recording when its own player leaves is the leavers' lifecycle stage.
 - *Native DirectPlay's `DP_OK` from an asynchronous send.* The channel keeps
   the send's context until its completion arrives, which Wine's DirectPlay
   posts for every such send (MEASURED: more than 600, each with one
@@ -2075,9 +2081,14 @@ checks its own destination as it does for stock text; a malformed one is dropped
 (`0x455F50`). Recording it is separate: it requires a network level in state 5
 or 6, both native actor rows bounded with their IDs, a controller-3 sender and a
 controller-1 destination, and the inbox's match and serial checks. A line refused
-there -- a sender row the engine has cleared at the game's end, an inbox that has
-closed -- is shown as the stock game shows it, logged as "shown and not
-recorded", and not recorded. The receiver neither changes the pump pointer nor
+there is shown as the stock game shows it, logged as "shown and not recorded",
+and not recorded: whether a line appears never depends on the recorder. MEASURED
+2026-10-07: a two-peer game with four lines records and plays them EQUAL with
+no line refused; in a three-peer game whose host left first, each joiner's
+engine cleared every other remote row (rows 1-3 to ID 0xFFFFFFFF), so a later
+line from one joiner reached the other on neither this build nor the previous
+one -- the engine had no other player left to address, and the refusal this
+separation removes was not what kept it off the screen. The receiver neither changes the pump pointer nor
 retains an engine address. Code `0x2B` has a fixed splitter length, a default
 callback with the same body as stock text and stock text's receive mask (7). All sites are acquired before any patch is written. This same-build wire
 extension adds 32 application bytes per transmitted human text message; this is
