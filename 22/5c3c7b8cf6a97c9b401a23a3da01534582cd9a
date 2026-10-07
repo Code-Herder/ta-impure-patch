@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high reviewers=2 range=main..225c3c7b (focus e2e1bf4e..225c3c7b; main..e2e1bf4e reviewed in its own note) findings=6 (merged 5) acted=5 rejected=0 date=2026-10-07 (fixes in 337246d4: sk_kills build_finished; takeover minimap after tk_live; rescale gated on g_mmInstalled; 'viewed record' x3; R14d doc placement)
