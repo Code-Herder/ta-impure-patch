@@ -19,7 +19,7 @@ import talog
 compat = probe.compat
 command = probe.command
 TYPE = 'COBOLD'
-
+PREFLIGHT_MAP = 'Comet Catcher'
 
 def fixture(gamedir, slots):
     archive = probe.hpipack.Archive(gamedir / 'totala1.hpi')
@@ -121,7 +121,9 @@ def preflight(name, gamedir, native_stock=False, trace=False):
         if trace:
             trace_lever.write_text(TYPE)
         fixture(gamedir, slots)
-        c.call('launch', '--defaults', '--keep-dll')
+        # the preflight's units stand at x 3000, so its map is named rather than whatever the
+        # instance's registry last held (a 1024-wide map refused both units)
+        c.call('launch', '--defaults', '--keep-dll', '--map', PREFLIGHT_MAP)
         c.until(lambda: c.call('ui', '--json')['gui'] == 'MAINMENU.GUI',
                 'save preflight did not reach the main menu', seconds=30)
         names = {u['name'].upper() for u in c.call('units', '--json')['units']}

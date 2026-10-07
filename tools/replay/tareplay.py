@@ -73,8 +73,9 @@ repository: its logs carry absolute paths.
 Tick-driven runs default to internal game speed 20 (2x normal); --game-speed 10 selects normal
 speed. The owned instance's private settings are written while stopped, before each launch.
 Simulation tick endpoints, comparisons and wall-clock deadlines retain their existing units.
-Cost fixtures and W's speed/settings UI test use normal speed; network/timing suites have
-their own speed policy.
+Cost fixtures, fixtures marked `normal_speed` (input regressions whose assertions read the
+running game, validated at normal speed) and W's speed/settings UI test use normal speed;
+network/timing suites have their own speed policy.
 """
 import argparse
 import fcntl
@@ -255,6 +256,12 @@ def last(text):
     return lines[-1] if lines else ""
 
 
+
+def fixture_speed(fix, default):
+    """A fixture's game speed: normal for a cost fixture and one marked `normal_speed`."""
+    return NORMAL_GAME_SPEED if fix.get("cost") or fix.get("normal_speed") else default
+
+
 class Worker:
     """One tacli instance on one Xvfb, for the whole run."""
 
@@ -366,7 +373,7 @@ class Worker:
         """The DLL and this fixture's content in the game folder, before a launch: every fixture's
         content files removed first, so one fixture's units never reach another's game."""
         self.last_collection = None
-        speed = NORMAL_GAME_SPEED if fix.get("cost") else self.game_speed
+        speed = fixture_speed(fix, self.game_speed)
         rc, text = tacli("registry", self.name, f"gamespeed={speed}", "--json")
         if rc:
             raise CouldNotRun(f"test game speed: {last(text)}")
@@ -1195,8 +1202,38 @@ def watch_cards(w, log, rec):
             raise Failed(f"the player cards: {got.strip() if got else 'no Sight reply'}")
         if w.gametime() != tick or tuple(peek(w, s) for s in eye_specs) != eye:
             raise Failed("the player cards: Sight changed the paused clock or camera")
+
+    def device(what, x, y, want):
+        n = len(log.lines)
+        rc, output = tacli("click", w.name, x, y, "--device", timeout=60)
+        if rc:
+            raise CouldNotRun(f"the player cards' {what}: {last(output)}")
+        got = log.wait(want, 30, n)
+        if not got:
+            raise Failed(f"the player cards' {what}: no line matching {want!r} in 30 s")
+        return got.strip()
+
+    # Follow, Jump and Free cam on the card of the seat the recording's human commanded (the
+    # perspective streams carry that seat's camera), then the Overlays menu's Cursors row off and
+    # on again and the menu closed by its own button; all paused, so the clock must not move
+    h = tarec.header_only(rec)
+    own = (h.get("options") or {}).get("controlled")
+    row = next((k for k, p in enumerate(seats) if p["index"] == own), None)
+    if row is None:
+        raise CouldNotRun(f"the player cards: the controlled seat {own} has no card")
+    y = 40 + row_height * (row + 1) - 14
+    lines = [device("Follow", width - 40, y, rf"replay: [^:]+: follow seat {own}, epoch \d+"),
+             device("Jump", width - 168, y, rf"replay: [^:]+: jump to seat {own}, epoch \d+"),
+             device("Free cam", width - 56, height - 148, r"replay: [^:]+: .*free cam")]
+    ui(w, "click", "DKOVER")
+    lines += [device("Cursors off", width - 54, height - 206, r"replay: overlay cursors off"),
+              device("Cursors on", width - 54, height - 206, r"replay: overlay cursors on")]
+    ui(w, "click", "DKOVER")
+    if w.gametime() != tick:
+        raise Failed(f"the player cards: Follow, Jump or the Overlays menu moved the paused "
+                     f"clock from {tick} to {w.gametime()}")
     return ("W: player cards", PASS, f"Sight {seats[0]['index']} and Full map {viewer}; "
-            f"GameTime {tick} and camera {eye} unchanged")
+            f"GameTime {tick} and camera {eye} unchanged; " + "; ".join(lines))
 
 
 def watch_lane(w, fx, rec, out, T):
@@ -1891,7 +1928,7 @@ class Run:
             self.fx[name] = {"name": name, "fix": fix, "dll": dll, "Ts": Ts, "out": out / name,
                              "problems": [], "rt": {}, "passed": [], "held": [],
                              "procs": {}, "cover": cover, "measure": measure,
-                             "game_speed": NORMAL_GAME_SPEED if fix.get("cost") else self.game_speed,
+                             "game_speed": fixture_speed(fix, self.game_speed),
                              "map": dll.with_suffix(".map"), "want": want,
                              "tk_ask": takeover or (None, None)}
             if measure:
@@ -2267,7 +2304,9 @@ def gated(paths, base):
             why.append(f"{p}: the entries {' '.join(sorted(changed)) or 'none left'}")
         elif p in RECORDER_OWN or p.startswith("tools/replay/") or p == "scenarios/replay-end.json":
             fx |= every
-            if p.endswith(".c"):
+            # only the DLL's own sources: a coverage build compiles no test program, so no
+            # fixture could reach one of its functions (the test programs run in their suites)
+            if p.endswith(".c") and p.startswith(DD):
                 by_function.add(p)
             why.append(f"{p}: the recorder's own, every fixture")
         elif p.startswith("scenarios/") and fixture_users(Path(p).name):

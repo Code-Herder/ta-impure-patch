@@ -411,6 +411,15 @@ class Landing(unittest.TestCase):
         self.assertFalse(regions or functions or headers)
         self.assertTrue(why)
 
+    def test_a_test_program_selects_every_fixture_and_no_function(self):
+        fx = {"one": {"load": "one.json"}}
+        with patch.object(tareplay, "fixtures", return_value=fx), \
+             patch.object(tareplay, "sim_paths", return_value=set()):
+            selected, regions, functions, headers, why = tareplay.gated(
+                {"tools/replay/recmp_x_test.c", tareplay.DD + "src/tagpu_replay.c"}, "main")
+        self.assertEqual(selected, set(fx))
+        self.assertEqual(functions, {tareplay.DD + "src/tagpu_replay.c"})
+
     def test_check(self):
         self.commit("README", "r2\n")
         self.assertEqual(tareplay.landing_check("main"), 0)       # nothing gated
