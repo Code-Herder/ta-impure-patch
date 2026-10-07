@@ -1,5 +1,14 @@
 # The setups and their outcomes
 
+## Native bundled features
+
+For the five supported mods, [the QoL coverage table](../tadr-port/quality-of-life.md) records the
+effective native TADR: Mayhem v2024.3.31, ProTA v2025.8.29, Zero's TAF 2025.4.24 Zero build,
+Escalation v2026.8.6 and Twilight v2026.6.8-full. These include the final fixture layers, rather
+than assuming a contemporary upstream config describes a mod's download. The table's
+**Mod enabled?** column describes native play without Impure. Compatibility passing with TADR
+suppressed does not imply those conveniences survive; each needs Impure's own implementation.
+
 ## Summary
 
 Nineteen setups: sixteen game folders as a player has them — the retail 3.1 game, what a mod or

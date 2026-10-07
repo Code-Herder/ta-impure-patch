@@ -4,6 +4,21 @@ Deep dive, 2026-08-31. Subject: **TA:ESC GOLD 10.2.0** (WotanESC & The Registere
 `taesc.tauniverse.com`. Scope: original Cavedog `TotalA.exe`.
 Evidence: a first-hand teardown of the shipped 334 MB distribution.
 
+## Native QoL and factory directions
+
+The [coverage audit](tadr-port/quality-of-life.md) checks GOLD 10.2.0's **v2026.8.6 Escalation
+DLL** and content. Wreck snapping, queue editing, line/ring construction, blocker kickout,
+whiteboard/camera/income transport and F11's macro are enabled native conveniences missing
+from Impure. Metal/geo snapping is disabled by this build. Assist-only patrol and stay/scatter
+factory guarding are available preferences; their defaults do not select those behaviors.
+
+**Building rotation is shipped but unused:** zero active `Rotations=` definitions were found.
+The 12 `PreviewFaceOpponent=1` units customize placement ghosts; Impure implements ordinary
+build ghosts and `PreviewPieces`, but lacks this facing key. Escalation's scripted factory-exit
+directions are a separate feature. Accessible Chat is included with its backdrop default off;
+reload bars, extra counters, team-coloured nanolathe, allied queues and newer chat/mute/share
+extensions are absent from the native DLL despite later public development downloads.
+
 ## Summary & verdict
 
 **TA:ESC does not write engine patches. It consumes the community's, and implements every

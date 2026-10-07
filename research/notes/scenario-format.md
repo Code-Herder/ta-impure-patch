@@ -156,8 +156,7 @@ unit names by scanning the live definition table. This design follows its recipe
   When `setup.players` is present, an `owner` outside it is an error.
 - **A skirmish seats as many players as the SKIRMISH screen's count** `main+0x38D81`, which the
   seat fill walks (engine map, *Seating a level*); its default is 4. `scenario load` sets the count
-  (`NumSkirmishPlayers`) to the highest slot in `setup.players` plus one, never below 4, as
-  `replay play` sets it from a recording's seats. MEASURED 2026-10-06: `replay-tenseat-load.json`
+  (`NumSkirmishPlayers`) to the highest slot in `setup.players` plus one ([CLI surface](#cli-surface)). MEASURED 2026-10-06: `replay-tenseat-load.json`
   seats ten players on Core Prime Industrial Area, a ten-player map, each with its commander
   ("live with 10 units"). Before that (MEASURED 2026-09-24), with the count left at 4, the engine
   refused every unit of slots 4–9 as `player slot N is not in this game`. The count persists in the
@@ -611,6 +610,21 @@ the map the engine *actually* loaded, and only then applies. It is a clean start
 definition, so on a running instance it refuses unless `--restart` says otherwise, and
 `--any-map` is the escape hatch for the map check. `launch --unit-limit` exposes the same
 INI knob on its own.
+
+When `setup.players` is explicit, `load` also writes `NumSkirmishPlayers` as the
+highest declared slot plus one, through the instance's locked registry store
+before launch. The schema bounds slots to 0..9; an omitted roster leaves the
+saved seat preset alone. Controller keys alone are insufficient: playback writes
+its recorded seat extent, which can be smaller than the next scenario's roster.
+With ten slots declared it seats ten (the seating rule under the schema's notes).
+
+MEASURED 2026-10-05 on the stock-limits coverage DLL: with saved count 2,
+`replay-battle-load.json` launched two commanders and the battle applier refused
+all 1428 units (715 resolution errors, including inactive slots 2/3). With count
+4 it launched four commanders and created all 1428 units without errors. The
+corrected `load`, starting from count 2, produces the latter result. The offline
+regression checks the actual launch's registry-value payload, and driver changes
+select every replay fixture for the landing gate.
 
 Still waiting on the fork:
 

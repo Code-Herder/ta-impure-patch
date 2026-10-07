@@ -1,5 +1,18 @@
 # TA Zero
 
+## Supported installation and native conveniences
+
+The compatibility fixture is **Alpha 5 + TAZ31 120526**, with the effective TAF
+**2025.4.24 Zero-specific `zdraw.dll`**. This layered installation is the scope of the
+[QoL coverage audit](tadr-port/quality-of-life.md), rather than the older installer alone or a
+new development `config_tazero.h`. Metal/geo and wreck snapping have dormant code with zero
+availability gates. Queue dragging, line/ring construction, Hold Position reclaim-only patrol,
+F11's macro, whiteboard, camera sharing and allied income are included. The old clock/weather
+code still includes wind/tidal rows, unlike the later dedicated Zero configuration; its old
+surface-pointer guard carries the audit's rendering caveat. Rotation, configurable assist-only
+patrol, stay/scatter guarding options, blocker kickout and the newer reload/counter/chat modules
+are absent. No active `Rotations=` or extra preview keys occur in either content layer.
+
 ## Summary
 
 **TA Zero** is a total conversion for the original Cavedog *Total Annihilation* (`TotalA.exe`, 1997),

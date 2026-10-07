@@ -1,5 +1,5 @@
 {
- "about": "tareplay's fixtures (tools/replay/tareplay.py). Each is a scripted skirmish recorded live and then checked on puppets. `load` is a scenario under scenarios/; `steps` run at a GameTime of the live game: `apply` a scenario, `type` a chat line, `keys` native input tokens, `order` one unit by roster type and rank; `end` is the GameTime scenarios/replay-end.json ends the level at. `los`: \"file\" keeps the scenario's own line of sight, else the SkirmishLineOfSight value. `dll`: \"stock\" plays the stock-limits build. `content`: a command run before every launch of the fixture ({gamedir} the instance's game folder) and the files it writes there, which every other fixture's launch removes first. `unit_limit`: the game's unit limit, 500 unless given. `takeover`: the fixture is also taken over (tareplay.py's K and F): at T2, as `player` (a record, or \"controlled\", the recording's controlled player), with the `switches` set and the chat line `type` typed after the takeover, `order` (a type and rank of the player's units) moved 300 wu, K's dump `dump` ticks after T (1800 unless given), the takeover's line within `ms` when given, and the `checks` it must pass (TAKEOVER_CHECKS); a takeover with `victory` ends by its own chat line (`+iwin`: the console's Kill disarms the objective, so `+kill` never ends a level), any other by replay-end.json. `rewind`: adds the U live-rewind lane; `rewind_steps`: extra scripted steps applied to its live run; `rewind_paused` names the scenario applied while paused just before its saved-present dump. `broad` holds what only the broad tier runs (tareplay.py broad): `trips`, round trips beyond the three; `cost`, a game recorded live and reported for the recorder's cost and the file's size, with no check.",
+ "about": "tareplay's fixtures (tools/replay/tareplay.py). Each is a scripted skirmish recorded live and then checked on puppets. `load` is a scenario under scenarios/; `steps` run at a GameTime of the live game: `apply` a scenario, `type` a chat line, `keys` native input tokens, `order` one unit by roster type and rank; `last_min` requires the final comparison checkpoint to reach that GameTime; `end` is the GameTime scenarios/replay-end.json ends the level at. `los`: \"file\" keeps the scenario's own line of sight, else the SkirmishLineOfSight value. `dll`: \"stock\" plays the stock-limits build. `content`: a command run before every launch of the fixture ({gamedir} the instance's game folder) and the files it writes there, which every other fixture's launch removes first. `unit_limit`: the game's unit limit, 500 unless given. `takeover`: the fixture is also taken over (tareplay.py's K and F): at T2, as `player` (a record, or \"controlled\", the recording's controlled player), with the `switches` set and the chat line `type` typed after the takeover, `order` (a type and rank of the player's units) moved 300 wu, K's dump `dump` ticks after T (1800 unless given), the takeover's line within `ms` when given, and the `checks` it must pass (TAKEOVER_CHECKS); a takeover with `victory` ends by its own chat line (`+iwin`: the console's Kill disarms the objective, so `+kill` never ends a level), any other by replay-end.json. `rewind`: adds the U live-rewind lane; `rewind_steps`: extra scripted steps applied to its live run; `rewind_paused` names the scenario applied while paused just before its saved-present dump. `broad` holds what only the broad tier runs (tareplay.py broad): `trips`, round trips beyond the three; `cost`, a game recorded live and reported for the recorder's cost and the file's size, with no check. `run` steps execute an assertion command ({instance} and {gamedir} substitutions) and fail the live lane on a nonzero exit. `sources` binds input/presentation code to replay fixtures in addition to the SIM_FEATURE gates. `preflight` runs a native assertion before the live recording starts. `viewer` and `viewer_more` run native input assertions in separate paused selection views, each checked against the same frozen simulation.",
  "fixtures": {
   "forest-fire": {
    "load": "s3a-forest-fire.json",
@@ -139,6 +139,879 @@
    "watch": true,
    "forks": true,
    "takeover": {"player": "controlled", "checks": ["judge", "line", "fork"]}
+  },
+  "resource-mex": {
+   "load": "resource-snapping.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "mex"
+     ]
+    ]
+   ],
+   "end": 2400,
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini"
+    ]
+   }
+  },
+  "resource-upgrade": {
+   "load": "resource-snapping.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "upgrade"
+     ]
+    ]
+   ],
+   "end": 2400,
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini"
+    ]
+   }
+  },
+  "resource-core-upgrade": {
+   "load": "resource-core-upgrade.json",
+   "last_min": 7800,
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/tagpu_cob_safe.c",
+    "tagpu/ddraw/inc/tagpu_cob_safe.h",
+    "tagpu/ddraw/src/tagpu_patches.c",
+    "tools/resource_upgrade_stress.py",
+    "tools/cob_legacy_save_probe.py"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_upgrade_stress.py",
+      "check-core",
+      "{instance}"
+     ]
+    ],
+    [
+     7800,
+     "run",
+     [
+      "tools/resource_upgrade_stress.py",
+      "finish-core",
+      "{instance}"
+     ]
+    ]
+   ],
+   "end": 12000,
+   "content": {
+    "run": [
+     "tools/resource_upgrade_stress.py",
+     "supply",
+     "{gamedir}"
+    ],
+    "files": [
+     "resource-stress.ufo",
+     "cob-old-probe.ufo",
+     "tagpu_cobtrace.on"
+    ]
+   },
+   "preflight": [
+    "tools/cob_legacy_save_probe.py",
+    "--preflight",
+    "{instance}",
+    "--gamedir",
+    "{gamedir}",
+    "--trace"
+   ]
+  },
+  "stock-resource-mex": {
+   "preflight": ["tools/cob_legacy_save_probe.py", "--preflight", "{instance}", "--gamedir", "{gamedir}", "--native-stock", "--trace"],
+   "load": "resource-snapping.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tools/cob_legacy_save_probe.py"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "mex"
+     ]
+    ]
+   ],
+   "end": 2400,
+   "dll": "stock",
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini",
+     "tagpu_cobtrace.on"
+    ]
+   }
+  },
+  "resource-queued-upgrade": {
+   "load": "resource-snapping.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "queued-upgrade"
+     ]
+    ]
+   ],
+   "end": 2400,
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini"
+    ]
+   }
+  },
+  "resource-mixed": {
+   "load": "resource-mixed.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini"
+    ]
+   },
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "mixed"
+     ]
+    ]
+   ],
+   "end": 2400
+  },
+  "resource-plain": {
+   "load": "resource-plain.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini"
+    ]
+   },
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "plain"
+     ]
+    ]
+   ],
+   "end": 2400
+  },
+  "resource-uniform": {
+   "load": "resource-uniform.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini"
+    ]
+   },
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "uniform"
+     ]
+    ]
+   ],
+   "end": 2400
+  },
+  "resource-locked": {
+   "load": "resource-snapping.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "locked",
+      "--gamedir",
+      "{gamedir}"
+     ]
+    ]
+   ],
+   "end": 2400,
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}",
+     "--policy",
+     "locked"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini"
+    ]
+   }
+  },
+  "resource-inherit": {
+   "load": "resource-snapping.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "inherit",
+      "--gamedir",
+      "{gamedir}"
+     ]
+    ]
+   ],
+   "end": 2400,
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}",
+     "--policy",
+     "inherit"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini"
+    ]
+   }
+  },
+  "resource-classic": {
+   "load": "resource-snapping.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "mex",
+      "--classic"
+     ]
+    ]
+   ],
+   "end": 2400,
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini"
+    ]
+   }
+  },
+  "resource-geo-upgrade": {
+   "load": "resource-geo-upgrade.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}",
+     "--geo-upgrade"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini",
+     "resource-geo.ufo"
+    ]
+   },
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "geo-upgrade"
+     ]
+    ]
+   ],
+   "end": 2400
+  },
+  "resource-nearby": {
+   "load": "resource-nearby.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}",
+     "--nearby-vents"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini",
+     "resource-vents.ufo"
+    ]
+   },
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "nearby"
+     ]
+    ]
+   ],
+   "end": 2400
+  },
+  "resource-priority": {
+   "load": "resource-snapping.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "priority"
+     ]
+    ]
+   ],
+   "end": 2400,
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini"
+    ]
+   }
+  },
+  "resource-nozoom": {
+   "load": "resource-snapping.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "mex"
+     ]
+    ]
+   ],
+   "end": 2400,
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}",
+     "--no-zoom"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini",
+     "tagpu_zoom.off"
+    ]
+   },
+   "dll": "stock"
+  },
+  "resource-refusals": {
+   "preflight": ["tools/resource_regression.py", "{instance}", "catalogue"],
+   "viewer": ["tools/resource_regression.py", "{instance}", "viewer"],
+   "viewer_more": [["tools/resource_regression.py", "{instance}", "viewer", "--viewer-unit", "RSNRACK"]],
+   "load": "resource-refusals.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "refusals"
+     ]
+    ]
+   ],
+   "end": 2400,
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}",
+     "--refusals"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini",
+     "resource-refusal.ufo"
+    ]
+   }
+  },
+  "resource-frontend": {
+   "load": "resource-snapping.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_resource.c",
+    "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_profiles.c",
+    "tagpu/ddraw/src/tagpu_profiles.h",
+    "tagpu/ddraw/inc/tagpu_mod.h",
+    "tagpu/ddraw/inc/tagpu_settings.h",
+    "tagpu/ddraw/src/tagpu_settings.c",
+    "tagpu/ddraw/src/tagpu_menu.c",
+    "tagpu/ddraw/src/tagpu_menu.h",
+    "tagpu/ddraw/src/tagpu_vpwide.c",
+    "tagpu/ddraw/src/tagpu_packet_pub.c",
+    "tagpu/ddraw/src/tagpu_gui_hook.c",
+    "tagpu/ddraw/src/tagpu_packet.h",
+    "tagpu/ddraw/src/tagpu_mark.c",
+    "tagpu/ddraw/src/tagpu_replays.c",
+    "tools/resource_regression.py",
+    "tagpu/ddraw/src/dllmain.c",
+    "tagpu/ddraw/src/config.c",
+    "tools/resource_fixture.py",
+    "tagpu/ddraw/inc/tagpu_vpwide.h"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/resource_regression.py",
+      "{instance}",
+      "mex"
+     ]
+    ]
+   ],
+   "end": 2400,
+   "content": {
+    "run": [
+     "tools/resource_fixture.py",
+     "{gamedir}"
+    ],
+    "files": [
+     "resource-test.ufo",
+     "profiles/retail.ini",
+     "profiles/retail@76332e31.ini",
+     "tagpu_packet.off"
+    ]
+   },
+   "preflight": [
+    "tools/resource_regression.py",
+    "{instance}",
+    "frontend",
+    "--gamedir",
+    "{gamedir}"
+   ]
   }
  },
  "broad": {

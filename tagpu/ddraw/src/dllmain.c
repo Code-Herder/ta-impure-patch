@@ -25,6 +25,7 @@
 #include "tagpu_settings.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
+#include "tagpu_resource.h"
 #include "tagpu_datakeys.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_recorder.h"
@@ -226,8 +227,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            absent — and with "tagpu_vpwide.on" it ALSO widens the engine's own
            addressable viewport rect to close the display-only ring at zoom < 1,
            redirecting the two readers that must not see it wide (the
-           offscreen's clip, and the screen->world origin). Armed by
-           "tagpu_vpwide.on" or "tagpu_zoom.on"; byte-matched; the widening half
+           offscreen's clip, and the screen->world origin). Always captures
+           resource input, with pristine conversion when neither arm enables
+           repair; byte-matched; the widening half
            is all-or-nothing and the rect is only written while a zoomed-out
            view is live. MUST run after tagpu_zoom_init(). */
         tagpu_vpwide_init();
@@ -330,6 +332,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            itself is one observer on DrawGameScreen 0x468CF0, byte-matched,
            disjoint from every detour above; `tagpu_menu.off` disables it. */
         tagpu_menu_init();
+        tagpu_resource_init();
 
         /* tagpu: the frame packet's publisher (tagpu_packet_pub.h): ONE more
            observer on DrawGameScreen 0x468CF0, chained AFTER the menu's -- its

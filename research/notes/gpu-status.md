@@ -11,6 +11,16 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5
 
 ---
 
+## Native TADR convenience coverage
+
+The [28-row QoL audit](tadr-port/quality-of-life.md) compares current Impure functions with the
+actual DLLs and opt-ins shipped by supported mods. Our build ghosts/`PreviewPieces`, health/
+group/order/range markers, world zoom, HUD scaling and replay playback/seeking already cover
+part of the interface. Native snapping, queue editing, construction controls and allied panels
+remain missing. Escalation/Twilight ship rotation support but no checked content enables it; Escalation's
+opponent-facing preview key remains unsupported. Newer development modules are distinguished
+from native bundle features. This is a documentation audit, not a new hook or engine write.
+
 ## 1. Status — what is ours, what is still the engine's
 
 **THERE ARE TWO RENDERER BACKENDS SINCE 2026-09-18, AND THE PROCESS CREATES NO GL CONTEXT ON
@@ -2039,8 +2049,8 @@ their use. The model-binding seam publishes a validated script (or NULL for a re
 at `UnitDef+0x18E`. Save/load access only model-backed pieces and zero excess animation rows.
 Before allocating a saved level, the saved `Summary/maxunits` is validated and written
 to `main+0x37EE6/+0x37EEC` so the restored IDs keep their original player partition. On the engine's
-script-executing thread, the guarded adapter owns eight 128-word records (`cob+0x1C`, stride
-`0x224`), busy count `+0x113C`, and relocated model pointer `+0x1140`; it initializes stacks,
+script-executing thread, the guarded adapter owns ten 128-word records (`cob+0x1C`, stride
+`0x224`), busy count `+0x1584`, and relocated model pointer `+0x1588`; it initializes stacks,
 transfers bounded child arguments, retains a refused CALL's arguments and dormant
 child `-1` sentinel, and restores validated records/statics/animation and piece
 state on load. These are simulation writes, not renderer-owned state. Local entry chat uses
@@ -2049,6 +2059,12 @@ and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integratio
 
 | Where | What |
 |---|---|
+| `main+0x2CAA` | Resource input restores the repaired raw point, then writes the chosen manual snap point before `0x4197D0` computes its rectangle/flags. Game/input thread only; does not arm a command (§2.108) |
+| `0x51E684` / `0x51E688` | Site-test scratch: Quick preview/click queries save and restore both words. Manual placement leaves their normal native ownership (§2.108) |
+| Order nodes through `0x43ADC0`, `0x43AFC0`, `0x439F80` | Resource clicks append/replace build and reclaim orders through `0x43ADC0`; helpers use `0x43AFC0` for Guard; queued-plan cancellation removes exact nodes through `0x439F80`. No direct unit/grid mutation. Recorded and replayed by the existing recorder (§2.108) |
+| `profiles/*.ini`, per-mod resource keys in `impure.cfg` | Missing general profiles are created at attach; existing files preserved. Complete validated rules publish on the game thread in menus, frozen for the match. Personal toggles/radius are independent and retain their saved values under locks (§2.108) |
+| Win32 HWND property `Impure.WindowLifetime`; `tagpu_window.c` | Window owner attaches a positive process-unique ID and destruction subclass before proxy subclassing. Survives final DirectDraw Release; removed before engine WM_DESTROY. The ID counter saturates rather than wrapping. No engine field is written (§2.107) |
+| Vulkan `s_ownerGeneration`, `s_ownGone`, lane state | Bound and destroyed generation IDs published with Interlocked operations; a delayed old-window notification cannot veto its replacement. Ready GPU objects transfer between joined renderers; the window owner tears down only after joining the active renderer, or after final Release already joined it. An unfinished worker retains its own cleanup (§2.107) |
 | `0x511DE8` | `TAdynmemStruct**` — the root of everything below |
 | `main+0x14357` / `+0x1435B` | unit array begin/end, stride `0x118` |
 | `main+0x1435F` / `+0x14367` | HotUnits ids / count (culled to whatever the viewport rect says — the unzoomed one, or the widened one under `vpwide`) |
@@ -2081,7 +2097,7 @@ and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integratio
 | **the frame packet's header and its four world tables** — the header: `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x37E27..+0x37E33` (the rect the engine can name, since landing 2), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (the scroll extent — the map less 32 and 128 px — and the map in cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F`, `+0x143A7` (the palette table, 1 KB, since landing 2), `[0x51FBD0]+0x614` (gamma, bounded, since landing 2); **since landing 3** also `+0x0DCB` (the GUI colour array), `+0x2C76`/`+0x2C7A` (the dispatched mouse point), `+0x2C92..+0x2CA6` (the build cursor's two corners), `+0x2CC3`/`+0x2CC6` (the cursor mode and region flags), `+0x1424B`/`+0x1424F` (the feature sweep), `+0x14253` (`NumFeatureDefs`) and `[0x51FBD0]+0xC4` (the 32×256 shade table, which the unit pass turns into its face-shade multipliers, §2.88); `[0x51FBD0]+0xCC`, the grey band's 256-byte remap, is **not** copied since G20d — the grey is computed in RGB. **The three per-map BASES are deliberately NOT in it** — `+0x1426F` (FeatureDefs), `+0x1420B` (wreck records) and `+0x14377` (`MODEL_PTRS`) are read live, at every use, on the render thread: the teardown frees each and then NULLS it (`0x4221F8`→`0x422214`, `0x42227D`→`0x42228B`, `0x42DCCB`→`0x42DCD8`), so the null is what refuses the walk, and a copy taken at publish time and held for a frame reads straight past it. **[CORRECTED 2026-09-12 by a landing review, which found the copies.]** The tables: the unit array walked to `+0x14351`'s count, each record's `+0x64..+0x110` fields, its `UnitDef`'s `+0x20`/`+0x1FA`/`+0x241`, its `Object3do`'s `+0x00`/`+0x10`/`+0x18`/`+0x1E` and every `+0x22 + i·0x36` piece, the feature grid `+0x14287` over the widest zoom rect plus the lead (`tagpu_zoom_pub_window`), and the wreck records the anchors name ([engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies") | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.16, §2.17; the addresses live in `inc/tagpu_engine.h`). **Since landing 2 the packet's `vp`, `eye` (plus the unacknowledged anchor deltas), `vp_addr`, `pal` and `gamma` ARE the view every pass draws from** — the native pass, the scaffold, the marker pass's build-cursor gate and the palette module read no engine field for any of them. (The GL UI's layer draw was the fifth until the clean cut deleted it — §2.81) |
 | **the effects models** — a weapon's `+0x74` node and its `+0x30` child, an explosion's `+0x00` body, a flying piece's `*(sys+0x2C)` node; per node `+0x04`, `+0x08`, `+0x0C`, `+0x24`, `+0x28`, `+0x30`; per face `+0x00`, `+0x04`, `+0x0C`, `+0x10`, `+0x18`, `+0x1C`; a sequence's `u16` count and its `+0x28` frames; for a piece's team face `sys+0` → `+0x96` → `+0x27` → `+0x96` | **Read only, on the GAME THREAD**, by the frame packet's publisher (`tagpu_packet_pub.c` `fx_model`) in the same `after` as the tables above, and COPIED: posed by the engine's own `0x4B6CC0` into a `dst` of the publisher's, every count and index bounded before it is used — the vertex and face counts, each face index by its node's vertex count, each frame index by its sequence's count, the piece's unit a stride-aligned member of the unit array inside the slot count and its player one of the ten `main+0x1B63` records — into the packet's five model tables. The render thread reads the copies (`tagpu_fxmodel.c`) and the unit atlas's own mirror, never a model (§2.89) |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
-| `UnitDef+0x18E` → the type's COB, and the template's node names `node+0x1C` | **the build ghost's mask** (§2.23). Read only, **on the GAME thread**, inside the in-play packet fill, once per type per level: the COB's header, its script and piece name tables, `Create()`'s entry and bytecode as `0x4B2450` left them relocated, each table and each name bounded by the block's own length (the size `0x4B6BA0` checksums it with, recorded by an observer); the template tree under `MODEL_PTRS[type]`, the type bounded by `UNITINFOCount`, with no length to bound its node pointers against (`exe-reverse-engineering.md`, *The loaded script*). Both are per-LEVEL: `0x42D2E0` loads them on the LOADER thread before the level's first in-play draw, the teardown frees them on the game thread (the COB at `0x42DC3C`, the template in `0x42DB90`), and a console `Reload` frees the type's COB and loads it anew on the game thread itself (`0x42D275` / `0x42D294`) |
+| `UnitDef+0x18E` → the type's COB, and the template's node names `node+0x1C` | **the build ghost's mask** (§2.23). Read only, **on the GAME thread**, inside the in-play packet fill, cached per type during unpaused play (paused/puppet misses use local storage): the COB's header, its script and piece name tables, `Create()`'s entry and bytecode as `0x4B2450` left them relocated, each table and each name bounded by the block's own length (the size `0x4B6BA0` checksums it with, recorded by an observer); the template tree under `MODEL_PTRS[type]`, the type bounded by `UNITINFOCount`, with no length to bound its node pointers against (`exe-reverse-engineering.md`, *The loaded script*). Both are per-LEVEL: `0x42D2E0` loads them on the LOADER thread before the level's first in-play draw, the teardown frees them on the game thread (the COB at `0x42DC3C`, the template in `0x42DB90`), and a console `Reload` frees the type's COB and loads it anew on the game thread itself (`0x42D275` / `0x42D294`) |
 | the FBI section at `0x42BF97`, through `0x4C48C0` | **`PreviewPieces=`**, read by `tagpu_datakeys.c`'s observer inside the FBI loader `0x42BF40`, on the LOADER thread (the level's load) and on the game thread (the console `Reload`). Observers at the unit-data load's start `0x42D2E0` and the loader's entry (its `def` argument) keep each record to its own load. The records it writes are ours; nothing is written into the engine |
 | `0x4B6BA0`'s stack arguments `(buf, size)`, for the call that returns to `0x4B247C` | **each COB block's address and length**, recorded by `tagpu_datakeys.c`'s observer on the checksum's entry, on the thread that loads the script (the loader's, or the game thread's at a `Reload`); the bound on every read of that script. The other ten callers are ignored |
 | weapon `+0x111` bit 6, `noradar` | **WRITTEN at the level's load, on the LOADER thread, by `nomapweaponalert`** (§2.97): `tagpu_datakeys.c`'s observer on the loader's closing call `0x49E010` sets it for a weapon that carries the key, has `meteor=1` (bit 5) and default damage 0 (`+0xD4`, a WORD), exactly as `noradar=1` in its file would. Its one reader is the radar rebuild's projectile dot (`0x467206`). No stock weapon has the key, so none is written |
@@ -5341,7 +5357,7 @@ and the COB length (`0x4B6BA0`) for the `Create()` mask.
   [data keys](tadr-port/data-keys.html)). A structure's COB `Create()` hides pieces the moment the
   unit exists — muzzle flares, a radar dish, a moho's rotary — and no script runs for a preview, so
   the ghost used to show them: 21 of the 126 stock structures hide a piece with faces. The mask is
-  computed on the GAME thread by `tagpu_datakeys.c`, once per type per level, and published as
+  computed on the GAME thread by `tagpu_datakeys.c`, cached during unpaused play, and published as
   `TAGPU_PK_GHOSTMASK`: type, piece count, template root, 256 bits, one row per type a ghost may
   draw this frame that hides anything, sorted by type (validated in `frame_valid`). What it hides:
   - **by default, `Create()`'s hides, read and not run** — from the entry point, through the
@@ -20639,7 +20655,7 @@ The [COB decision and evidence note](tadr-port/cob.html) is the verification led
 does not yet claim complete mod parity. Required getters 32 and 69–75 use full signed-ID checks
 against the match's pool before addressing a live record. ID 111 remains native/inactive.
 The portable core bounds file allocations, instruction/entry operands, 128-word stacks,
-eight-record waits and old/new saved state. Native scheduling and valid opcode bodies remain
+ten-record waits and old/new saved state. Native scheduling and valid opcode bodies remain
 in use; unsupported types are unavailable with an entry warning, while required-unit creation
 and unrecoverable execution faults refuse with diagnostics.
 
@@ -20647,8 +20663,8 @@ and unrecoverable execution faults refuse with diagnostics.
 |---|---|
 | `0x480770` | six-byte getter detour, retaining the native fallback and relocating its model operand |
 | `0x4B245C`, `0x4B246F..0x4B2475`, `0x4B26D5` | validate the actual file allocation before relocation, checksum that same allocation, unlink metadata before free |
-| `cob_runtime_sites` | checked object size/model/count/record-stride operands; `0x4B0921` initializes allocated records; `0x4B0DAD` guards wait-state access and `0x4B0E5D` every instruction fetch |
-| `0x4B1EC0`, `0x4B2040` | replace complete save/load methods; validate the complete input before exposing restored state |
+| `cob_runtime_sites` | checked object size/model/count/record-stride operands, including all ten native slot-count loops; `0x4B0921` initializes allocated records; `0x4B0DAD` guards wait-state access and `0x4B0E5D` every instruction fetch |
+| `0x4B1EC0`, `0x4B2040` | replace complete save/load methods; validate native eight-slot, guarded eight-slot or guarded ten-slot input before exposing restored state; zero additional runtime records |
 | `0x42D8F4`, `0x42D299`, `0x43E0B0` | bind initial/reloaded scripts to model storage; bound the native SweetSpot result consumer |
 | `0x497581` | saved unit partition established before native `0x4917D0` allocates the level |
 | `0x42DA58`, `0x42BEC3`, `0x485FA0`, `0x485D64` | filter rejected types from build lists and guard creation, including required/saved units |
@@ -20659,6 +20675,48 @@ and unrecoverable execution faults refuse with diagnostics.
 The trace keeps a lock-ordered per-thread pending start, logs every transferred argument and
 new stack peaks (`H`); capacity failures invalidate its evidence with `INCOMPLETE`. It writes
 no engine state. The allocation/runner/return/signal/random observers in §2.4 remain its seams.
+
+The CORE advanced-kbot upgrade reproduction needs a ninth script slot while its old
+Stop/close chain overlaps the new StartBuilding callback. The guarded pool on this branch is ten
+records, object `0x158C`; allocation and every reader/iterator share that bound. The
+stock-limits comparison build retains the native eight records. The trace's slot bounds
+follow the selected build. The ten-slot runtime completed all 61 accepted upgrades in an
+all-deposit Comet Catcher CORE sweep, with 20 initial refusals and no unfinished accepted
+build. Native eight-slot import and ten-slot full-pool save/load preserved every active probe
+record; full-pool START/CALL probes pass. Arbitrary mod-script demand is still not proved
+bounded by ten. See the engine map's *CORE reclaim-to-Moho handoff* and the resource note.
+
+The completed-Moho replay fixture compares after completion as well as around three restores.
+Its diagnostic run found a first paused hover writing the ghost-mask SIM_STATE cache.
+`tagpu_datakeys_ghost_mask` computes a cache miss in local storage while native pause is set,
+so hover cannot mutate carried state at a frozen tick. Puppet cache misses also use local
+storage, leaving the recording the only writer. No state class or comparison is loosened.
+The native save/load preflight preserves all ten active records on human and AI probes;
+its coverage reaches both `cob_save` and `cob_load`. The ten-slot completion replay passes
+all 14 paused comparisons and its construction/effect/restore checks. After the owner's
+two four-byte keyboard-index leave rows, that fixture's strict image gate also passes
+in the combined run. Focused native replays pass the corrected camera/selection samples,
+worker catalogue invalidation and isolated trace coverage. The whole rerun after disk cleanup,
+approved UI rows and scenario seat-count repair finishes all 37 fixtures: 1479 checks pass,
+including 519 exact paused comparisons and 36 strict image gates. All 17 resource image gates
+and stock rewind checks pass. The sole failure is native cosmetic-pool state in the unchanged
+stock secondary-orders control, reproduced in a fresh worker. Seek clears those pools, whose
+record layouts remain unimplemented. The owner approved only this native control's three
+cosmetic-pool ranges as an explicit unlisted-image known gap on 2026-10-06; all other bytes,
+all resource fixtures and ordinary state/order/effect/restore checks retain their policy.
+The saved comparisons pass with the option and still fail without it. The new whole gate
+passes all 37 fixtures, 1480 checks, 519 exact paused comparisons and all 37 image gates,
+with 11/11 changed function/region requirements reached and a passing note on `cfe3771f`.
+Its native control at T301 accepts zero cosmetic bytes and also passes the default strict
+comparator; the earlier T451 gap remains. Two independent HIGH reviews found no surviving
+code defect; their three LOW documentation findings are corrected.
+See the recorder completeness note for the exact bounds. The native
+trace lever is enabled only during CORE and stock native preflights; recorded lanes keep
+all ordinary sink counters enabled. The stack-peak
+observer belongs only to the guarded interpreter. Wine compatibility on the ten-slot
+DLL has 18 expected setup outcomes, one documented inactive gap, zero unexpected outcomes
+across 19 setups and all 15 passing
+network cases. Windows was not run for this change.
 
 **GUI first-arm ordering.** `tagpu_gui_mirror_want` requests a producer reset on its rising edge.
 The render-thread mirror withholds operations and publication until its drain records that
@@ -20792,3 +20850,103 @@ Return-to-now also restores the objective's saved `+0x88` switch before resuming
 steps. Conversion disarms it; takeover/fork arms it. The same level owns the
 objective across rewind. This preserves games whose console command disabled
 victory/defeat before the rewind.
+
+### 2.107 Presentation follows the window lifetime (`tagpu_window.c`, `render_vk.c`, `tagpu_vk.c`) — 2026-10-04
+
+The engine's logical mode recreation releases DirectDraw at `0x4B5061`, then asks to resize
+its surviving HWND at `0x4B55D7`, before the replacement device exists. The old resize policy
+lost its owner when `dd_Release` cleared `g_ddraw`; Vulkan also destroyed its device/surface at
+every renderer exit. Those produced the borderless desktop flash and restart gap. The engine
+map's *DirectDraw recreation and the borderless handoff* establishes the calls and fields;
+[fullscreen-handoff](fullscreen-handoff.html) records the baseline and fixed captures.
+
+| Seam | Mechanism and ownership |
+|---|---|
+| Engine SetWindowPos / MoveWindow IAT hooks | A property identifies the owned actual window even with no DirectDraw object; engine calls cannot shrink it in that interval. Real proxy mode calls still position it. No new byte patch |
+| dd_SetCooperativeLevel / final Release | Register the persistent comctl32 destruction subclass before installing the proxy procedure. Final Release restores its dispatcher, stops and joins the renderer, and resets DirectDraw as before |
+| Ready Vulkan renderer exit / replacement | Retain device, surface, swapchain, last image and pass objects only for the same live window lifetime. The existing join transfers sole CPU ownership; existing per-image fences order GPU reuse |
+| WM_DESTROY | Publish the departing generation, remove the lifetime ID, join an active renderer, then hard-stop only with no remaining renderer handle and a still-matching bound lifetime. Another window's destruction cannot claim it; HWND recycling gets a new ID |
+| Failed or incomplete lane; GPU choice or actual window change | Full cleanup remains; ST_STARTING abandonment does not wait for its worker. Real extent and present-mode changes retain their swapchain rebuild path |
+
+**MEASURED**, Wine on isolated Xvfb, 1280×1024 borderless, logical 1024×768, Classic++, Vsync:
+repeated Two Continents shell/game transitions and final Greenhaven entry expose no desktop
+pixels and have no handoff window/surface-child recreation. The initial device comes up once,
+and actual main-menu Exit tears it down. Fullscreen/windowed toggles rebuild the swapchain.
+The real Win32 subclass test passes restoration, scoped teardown, join ordering, thread
+ownership, replacement-object/no-renderer cleanup and 256 new lifetime IDs. A deterministic
+test of the production observer/predicate reproduces the old delayed-notification failure and
+passes with the generation marker. Normal and stock-limits builds pass.
+
+**Still open:** brief blank frames (0.117 s at end of loading in the Greenhaven
+capture), live compositor timing and Windows presentation verification. Cold start and failed
+or invalidated lanes still initialize a device. No engine/simulation state is written here.
+
+
+### 2.108 Resource snapping, contextual Quick Build and profiles (`tagpu_resource.c`, `tagpu_profiles.c`) — 2026-10-04
+
+Manual mex/geo placement and a separate contextual Quick Build option use the existing input,
+packet and ghost paths. The [resource page](tadr-port/resource-snapping.html) gives policy,
+behavior, fixture coverage and gaps; the engine map's *Resource placement and contextual order
+contracts* gives the allocation/lifetime proof and disassembly.
+
+| Seam | Mechanism |
+|---|---|
+| `0x498DA0`, redirected call `0x499221` | Always-installed wrapper captures resource coordinates after zoom repair, or after pristine conversion with zoom disabled. Resource arming requires this producer |
+| `0x4197D0` | Nine-byte entry observer chooses manual placement, original code computes corners/flags and tests the site |
+| `0x498F70`, `0x499100` | Six-/seven-byte gates for left/right handlers, each `ret 4`. Only the configured contextual button is consumed; paired button bookkeeping outside these handlers remains native |
+| `0x47D2E0`, `0x47C780` | Engine site/altitude queries on the input thread. Quick queries preserve scratch words; an upgrade uses a private yard projection of an uncontested old footprint's clear |
+| `0x43F0E0`, `0x438760`, `0x43ADC0`, `0x439F80` | Native eligibility (zero action byte refuses), action lookup, append/replace and exact removal. Upgrade is reclaim→appended build; non-building constructor helpers Guard primaries via `0x43AFC0`, combat units untouched |
+| `tagpu_packet_pub.c` → native ghost and marker | Chosen type/green rectangle and queued/selected-cancellation bits copied into the packet. Engine stays in contextual mode. Queued resource ghosts have no caption text. No new renderer-owned engine access or GL object |
+| `0x4C63A0` flip observer / `0x46A3E0` game return; shared replay-menu identity | Config/archive names and Twilight's label select a general profile plus an optional exact-version override. Game-thread menu polling remains live without packets or a render consumer; native game flips freeze policy and in-game options cannot unfreeze it |
+
+Defaults permit and initially enable both features for Stock/M/P/T, and lock both off for
+E/Z/unknown. A player can set manual radius zero with Quick Build still on. Alt bypasses both.
+Manual and Quick mex selection share a footprint-sized stability check with raw-mouse distance
+ties. A partial deposit at the configured search boundary cannot supply a Quick ghost or build;
+the native contextual action remains available. The check adds no state or engine writes.
+The whole-build-list allocation patch must be fully installed before resource hooks can arm;
+the new predicate's `SIM_INSTALL` flag belongs to that installation. Unit/definition/grid/
+exploration/descriptor values are bounded, and owned unit walks use the engine's validated
+inclusive player partition. Engine heap order nodes have the input thread's sole-mutator
+lifetime; nothing retains a pointer across a simulation iteration or level teardown.
+
+Shift plus the configured command button cancels one matching queued resource plan per selected
+constructor through `0x439F80`; a queued upgrade cancels its adjacent reclaim/build pair. A gated
+unstarted, non-head build's callback-free destructor preserves the preceding reclaim's lifetime.
+Unique canonical vent anchors distinguish adjacent geo sites; new plans use `0x43ADC0` to avoid
+the mouse toggle root's 16-world-unit ambiguity. Plain repeats, unselected owners' plans,
+unrelated orders and persistent helper Guards remain unchanged. The cancellation adds no patch,
+simulation-owned state or replay exception.
+
+Resource scratch and profile state are presentation inputs; simulation never reads those tables.
+Puppet seats are refused. Every effect is an ordinary recorded engine order and its normal
+simulation roots. Resource fixtures assert native live behavior and compare playback, three
+in-place restores and fresh seeks. Cancellation tests fence simulation ticks around removal,
+so requeue cannot hide the absent order image. The replay landing selector also follows their declared
+source dependencies; changing the harness or native driver selects the whole suite. The owner approved three
+four-byte viewer metadata rows: the active GUI stack pointer (`main+0x531`), mouse-event clock
+(`main+0x561`) and current bitmap-font pointer (`0x51F524`). Two keyboard-ring indices add eight
+bytes; mouse flags (`main+0x55D`, 4), saved gadget status (`main+0x11E7`, 4), and displayed type
+(`main+0x37E9E`, 2) add exactly ten more approved bytes. These eight viewer/input fields total
+30 bytes, with the 60 recorded globals slots / 78 dwords unchanged. The owner also approved an expected-absent
+row for the recording player's native immediate-command UI click (return `0x41A0F6`), including
+Stop; its simulation orders remain checked. No tolerance changes. Paused viewer samples verify
+that camera movement, GUI mouse input and native selection leave all carried simulation state
+unchanged. See [recorder completeness](tadr-port/demo-recorder-completeness.html) for the field
+owners, disassembly and exact comparison protocol.
+
+Scenario loading writes its explicit roster's seat extent through the existing locked
+prelaunch registry store. A prior two-seat playback therefore cannot truncate a subsequent
+four-seat fixture. Native stock-limits validation creates four commanders and all 1428 battle
+units from a count-2 starting store; the subsequent full run also passes its stock rewind
+lane, including exact return/fresh-seek frames, timeline continuity and AI orders.
+
+**Open:** multiplayer policy parity warnings and mod download/activation. The fixture table names
+what was exercised; it does not establish every mod yardmap, obstruction, fog boundary or
+edge/zoom combination. The 129×129 closed-component classifier conservatively refuses large or
+partly unexplored deposits, and contested upgrades are refused. Profile identifiers describe
+what the engine reports, which may be shorter than an installed package version.
+
+Resource regression preflights also check Visuals Undo against raw per-mod preferences and
+refresh the engine catalogue for privately derived capability-refusal constructors. The
+no-zoom fixture exercises pristine conversion with both zoom and widening disabled.

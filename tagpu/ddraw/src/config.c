@@ -4,6 +4,7 @@
 #include "dd.h"
 #include "tagpu_cfg.h"
 #include "tagpu_settings.h"
+#include "tagpu_profiles.h"
 
 CNCDDRAWCONFIG g_config =
     { .window_rect = {.left = -32000, .top = -32000, .right = 0, .bottom = 0 } };
@@ -38,6 +39,7 @@ void cfg_load()
     g_config.hotkeys.screenshot = VK_SNAPSHOT;
 
     tagpu_settings_attach();
+    tagpu_profiles_attach();
     tagpu_cfg_defaults();
 }
 

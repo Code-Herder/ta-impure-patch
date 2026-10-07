@@ -52,6 +52,11 @@ typedef struct {
 static const Opt O_STYLE[]   = { {"classic++", TS_STYLE_PP}, {"classic", TS_STYLE_CLASSIC},
                                  {"custom", TS_STYLE_CUSTOM} };
 static const Opt O_BOOL[]    = { {"1", 1}, {"0", 0}, {"on", 1}, {"off", 0} };
+static const Opt O_RESOURCE_RADIUS[] = {
+    {"auto", -1}, {"0", 0}, {"1", 1}, {"2", 2}, {"3", 3},
+    {"4", 4}, {"5", 5}, {"6", 6}, {"7", 7}, {"8", 8}
+};
+static const Opt O_RESOURCE_QUICK[] = { {"auto", -1}, {"1", 1}, {"0", 0}, {"on", 1}, {"off", 0} };
 /* `soft` and 1 are READ as hard: the soft map has no producer on this lane, so
    honouring them would draw nothing (tagpu_classicpp.c's `shadow_defaults`). */
 static const Opt O_SHADOWS[] = { {"hard", 2}, {"off", 0}, {"2", 2}, {"0", 0},
@@ -107,6 +112,20 @@ static const Key s_key[TS_NKEYS] = {
     /* ON: a player sees no tearing unless they ask for the lower latency
        (renderers.md 2.10b). */
     { "vsync",     O_BOOL,    N(O_BOOL),    1 },
+    { "resource_radius.unknown", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
+    { "quick_build.unknown", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
+    { "resource_radius.retail", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
+    { "quick_build.retail", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
+    { "resource_radius.escalation", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
+    { "quick_build.escalation", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
+    { "resource_radius.mayhem", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
+    { "quick_build.mayhem", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
+    { "resource_radius.prota", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
+    { "quick_build.prota", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
+    { "resource_radius.tazero", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
+    { "quick_build.tazero", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
+    { "resource_radius.twilight", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
+    { "quick_build.twilight", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
 };
 
 static volatile LONG s_val[TS_NKEYS];
@@ -792,4 +811,3 @@ int tagpu_settings_vsync(void)
     int v;
     return tagpu_settings_placement(TS_VSYNC, &v) ? v : s_key[TS_VSYNC].def;
 }
-

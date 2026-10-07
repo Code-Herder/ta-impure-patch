@@ -39,6 +39,7 @@
 #include "tagpu_recorder.h"    /* tagpu_rec_mod_print: the running game's archives */
 #include "tagpu_recreader.h"
 #include "tagpu_replays.h"
+#include "tagpu_profiles.h"
 #include "tagpu_replay.h"
 #include "tagpu_gaf.h"        /* TAGPU_GAF_EXACT: the badges are drawn as drawn */
 #include "tagpu_gui.h"        /* tagpu_gui_asset_exact: so are the ground and the plate */
@@ -175,7 +176,6 @@ typedef void  (__stdcall *list_cb_fn)(void* gi, void* rec);
    guis/mainmenu.gui). Positions are MEASURED on live captures of each setup's main menu. A mod
    the table does not name, and an entry whose guard fails, take the retail placement: REPLAYS on
    our plate below the centre, and nothing of the mod's own moved. */
-enum { MOD_UNKNOWN, MOD_RETAIL, MOD_ESC, MOD_MAYHEM, MOD_PROTA, MOD_TAZERO, MOD_TWILIGHT, MOD_N };
 
 /* The generation of index.dat's `I` fields: bump it whenever this table's names or archive
    patterns change, or the rule that derives the `I` fields from a recording does (mod_of,
@@ -764,6 +764,22 @@ static void mainmenu_visit(char* gi)
     n = rec_count(ctrls);
     if (n < 1 || n > GUI_RECORDS - 2) return;
     s_mod = identify(ctrls, n, version, sizeof version);
+    if (!version[0]) {
+        const char* v = (const char*)VA_VERSION_TEXT;
+        unsigned k = 0;
+        while (k < 8 && v[k] >= 0x20 && v[k] < 0x7F) k++;
+        if (k && k < 8 && !v[k]) { memcpy(version, v, k); version[k] = 0; }
+    }
+    /* Stock's format and config must both match. A custom archive format
+       with totala.ini uses retail's layout but cannot inherit its rules. */
+    {
+        int policy_mod = s_mod;
+        if (policy_mod == MOD_RETAIL &&
+            (strncmp((const char*)VA_STR_ARCHIVE, "rev%s.GP3", sizeof "rev%s.GP3") ||
+             strncmp((const char*)VA_STR_CFG, "totala.ini", sizeof "totala.ini")))
+            policy_mod = MOD_UNKNOWN;
+        tagpu_profiles_select(policy_mod, version);
+    }
     m = &s_mods[s_mod];
     sib = find_rec(ctrls, SIB_NAME);
     if (!sib || !plain_button(ctrls + (size_t)sib * STRIDE) ||

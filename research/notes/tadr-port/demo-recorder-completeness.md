@@ -68,8 +68,10 @@ and generates `inc/tagpu_replay_layout.h`, which carries the file's SHA-256; the
 it or the header was edited by hand, as `spirv-check.sh` does for shaders. A change to what is
 excluded is therefore always a visible diff of the file, and each row is a loosening the owner
 approves. Only the unit and player layouts are fixed by the retail executable: Impure's COB landing
-grew the engine's COB object from `0x544` to `0x1144` bytes (`0x485D73`), and several pools now
-live in the DLL.
+grew the engine's COB object from `0x544` to `0x1144` bytes (`0x485D73`); the current
+ten-record runtime uses `0x158C` bytes. Several pools now live in the DLL. COB execution
+history is still reconstructed, rather than recorded, under the existing contract;
+a larger native allocation does not change that replay limitation.
 
 **What restoring these records needs**, found while building the file; each is for the applier
 the skirmish slice brings:
@@ -323,6 +325,35 @@ the harness have to:
 - the engine pools the DLL holds (`SIM_ENGINE`) are declared, but their record layouts are not yet
   written anywhere the recorder reads.
 
+**MEASURED 2026-10-05: native cosmetic pools after seek.** The resource landing's whole
+rerun passes 1479 checks and 36 image gates; the unchanged `stock-secondary-orders` control
+alone fails 514 unlisted image bytes in native explosions, debris and flying-piece slots.
+Live/ordinary playback at T451 have 15 active explosions, fresh seek has zero; every unit,
+order, effect-call, paused-state and restoration check passes. A focused fresh-worker rerun
+reproduces 469 failing bytes in those same pools. `seek_run` calls `tagpu_effects_clear`;
+the native paths clear the count, reinitialise debris and zero flying-piece slots. The raised
+engine-pool declarations are also excluded by `tagpu_simreg_recorded` until their layouts
+are implemented. These paths are unchanged from the landing's base.
+
+**Owner-approved known gap, 2026-10-06.** Only `stock-secondary-orders`, on its native
+300-projectile build, enables `images-gate --stock-secondary-cosmetics`. Otherwise failing
+unlisted bits within exactly `main[0x1491B,0x1AB8F)`, `main[0x1AB9F,0x1E88F)` and
+`.data[0x511DF0,0x511F80)` are reported as `known-gap`, with their accepted byte count.
+The address scope is 41204 bytes; it is not the measured number of differences. Adjacent bytes,
+other fixtures and raised-limit recordings retain the strict gate. No recorder layout,
+positive globals row, unit/player/order comparison, paused comparison, restore check or
+root/sink effect comparison changes. The saved whole-run and focused dumps pass only with
+this explicit option; the default still fails their original 514 and 469 bytes. Six portable
+policy tests cover the bounds and fixture/build/command restrictions. Native and raised
+cosmetic-pool snapshot layouts remain separate work; this exception does not establish that
+pool fullness is irrelevant to simulation.
+
+The subsequent full landing run passes 1480 checks, 519 exact paused comparisons and all
+37 image gates, with coverage reaching all 11 changed function/region requirements. Its
+native control's T301 checkpoint accepts zero cosmetic bytes and also passes the default
+strict comparator. That checkpoint does not erase the earlier reproduced T451 gap. All
+17 resource image gates remain strict. The passing note is on `cfe3771f` (2026-10-06).
+
 ### Events
 
 Events are counted where they start (roots: the creates `0x485F50`/`0x4861D0`, the destructor
@@ -490,10 +521,18 @@ cannot see an address recorded as a value; the scan looks for one instead.
   dump `ln1`, then does what a viewer does without changing the game — the arrow keys a second
   each way, one wheel notch in and out at the map's centre, the cursor over the map and over the
   panel, the in-game menu (Tab, `ARMOPT.GUI`) opened — and takes `ln2` with the menu still open
-  (its OK resumes the game); the twin is refused unless GameTime did not move between them.
+  (its OK resumes the game). It also samples twelve paused views: GUI-consumed clicks through
+  the event ring, explicit cursor positions and distinct camera positions. A click returns the
+  injected pointer to screen centre; each sample therefore moves it separately and requires
+  the native GUI's x/y/message echo before dumping. Zero, the largest in-range power of two
+  minus one, and the last screen coordinate exercise every valid coordinate bit. A thirteenth
+  view follows fixture-specific native selection; resource-refusals selects RSNRACK and requires
+  the command panel to display its type. Each additional dump must
+  have the same GameTime, and its carried simulation records must equal `ln1`. Returning to
+  the same eye/ring index at the second endpoint alone would hide viewer-only writes.
 - **The images gate** (`tarec.py images-gate`). Every bit of the main block and `.data` that no
   row of `replay-globals.tsv` covers, where the live game at T1 differs from the playing at T1 or
-  from the fresh seek to T1, is in this order **presentation** (the twin's two dumps differ there),
+  from the fresh seek to T1, is in this order **presentation** (the twin's paused dumps differ there),
   **host-variant** (the playing and the round-trip process differ there at T1), **load-constant**
   (unchanged across [T1, Tlast] on the recording machine and on the puppet host), or a **FAIL**,
   named by address, `IMAGE_MAP` group and values and labelled *written during play on the
@@ -505,6 +544,26 @@ cannot see an address recorded as a value; the scan looks for one instead.
   wall clock, process state a fresh process differs in (the heaps, the allocators, the libraries'
   and the C runtime's state), a cache of the draw, or a level constant. Each is a loosening and the
   owner's decision; `replay-globals-gen.py` accepts the rows and generates nothing for them.
+  The resource landing's first approved rows name exactly twelve viewer bytes: active GUI pointer
+  `main+0x531` (4), latest GUI mouse-event clock `main+0x561` (4), and current bitmap-font
+  pointer `0x51F524` (4). The generated recorded simulation slots remain identical.
+  Coordinates retain their existing classification, and orders retain their existing comparisons. Ownership and native writers
+  are established in the engine map's resource section.
+  On 2026-10-05 the owner additionally approved the two four-byte keyboard-ring
+  indices, enqueue `0x51F48E` and dequeue `0x51F492`. Native keyboard and GUI
+  input consume this local ring; the completed-Moho replay had drained indices
+  9/9 live and 0/0 on playback and seek. Only those eight index bytes receive
+  leave rows; builds, orders, unit/player state and effect checks retain their
+  existing comparisons. The engine map records the disassembled stores and readers.
+  The owner then approved exactly ten further UI bytes: native mouse button/modifier
+  wParam `main+0x55D` (4), saved signed gadget status `main+0x11E7` (4), and the
+  displayed unit type `main+0x37E9E` (2). Their disassembled writers own GUI input
+  and command-panel state. Frozen native probes observe Shift flags 0/4 and
+  ARMCK/ARMACK/CORCK types 32/4/165. The gadget-latch probe did not reach its
+  paired comparisons; its ownership evidence is disassembly. These eight rows
+  total 30 bytes; the 60 recorded globals slots / 78 dwords remain identical.
+  The subsequent full landing run must still pass every ordinary state, effect,
+  restoration, seek, image and reach check.
 - **The address scan** (`tarec.py scan`). A dump carries Impure's DLL's base and size (`RT_DLL`)
   and each recorded table's layout (`RT_FIELDS`). Every recorded table's plain fields — all but
   `SIMF_ID`, `SIMF_ADDR`, `SIMF_OWNED`, `SIMF_LOCAL`, `SIMF_COLUMN` and `SIMF_OPAQUE`, each aligned
@@ -676,6 +735,27 @@ region with whether its fixtures reach it.
 | 2026-10-02 | **The takeover checks' expected differences** (S4's D2, a loosening approved by the owner): the order-node fields of D1; the player records outside the fork's seats (the viewer seat and the records the seat fill deactivated); the controllers, `RK_VIEWER` and PlayerInfo `+0x94` where the takeover changed a seat's role; and the contact bits only where the viewed seats agree (the existing `compare --puppet` rule). Any other difference is a bug. |
 | 2026-10-02 | **A fork is always recorded**, whatever `tagpu_recorder.on` says (S4's D3); a takeover whose file cannot be appended is refused before the rebuild, with the reason. **B4's per-slot columns are recorded** (D4, landing S4a). **The fork rules' last-used times live in the recording** (D5), appended when a watching session ends and skipped with a log line when the file cannot be written. |
 
+The owner approved one additional UI-only count exception on 2026-10-05: the native
+immediate-command click (`0x41A0F1` → `0x47F1A0("immediateorders", 0)`, return `0x41A0F6`),
+including Stop. The recording player's click is absent on puppets, as the console click already
+is. Command orders, reclaim/build effects and carried simulation state remain checked.
+
+Resource fixtures may name a `preflight` command before the live recording: native frontend
+Undo assertions or an engine catalogue refresh for changed private test content. Its failure
+fails the fixture; the match is then recorded and checked through the usual L/P/R/Q lanes.
+
+An owned replay worker invalidates its cached engine catalogue whenever it replaces fixture
+content. The next scenario therefore validates against its own launch, rather than rejecting
+a private unit because the previous fixture did not supply it. The sequential stock-resource-mex
+then wpn-badtgt regression on one worker passes all 84 replay checks, including 28 exact paused
+comparisons and both strict image gates.
+
+The native COB trace and the recorder's allocator counter both require the pristine
+`0x4B08C0` entry. Enabling trace for a recorded lane prevents that counter from installing,
+and the count gate rejects it as not counted. Resource preflights therefore exercise trace
+with the recorder disabled, save their coverage bitmap, stop the native game, and restore
+the trace lever before L. Playback, restoration and seek use the ordinary counter setup.
+
 ## Open items
 
 For the skirmish slice:
@@ -709,3 +789,6 @@ differences across return-to-now via `compare-counts --rewind`, reporting each
 pair. Seated sight counters, root counts and puppet-write checks remain intact.
 COB execution state is reconstructed, not preserved. Ordinary count comparisons
 retain their existing policy. See [S4 rewind](demo-recorder-s4-rewind.html).
+
+The resource frontend preflight temporarily disables frame packets to require menu reload
+without a renderer consumer; it restores that lever before recording the match.

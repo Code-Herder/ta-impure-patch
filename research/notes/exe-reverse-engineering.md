@@ -435,6 +435,66 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
   (`totala.ini` → `ta.ini`), and `0x40EAD6` (the path budget). The table is in
   [the setups page](compat/setups.md#the-3902-exe).
 
+### TADR QoL configuration bytes and map owner markers
+
+**SOURCE + DISASSEMBLED / MEASURED 2026-10-04.** Read for the
+[supported native QoL audit](tadr-port/quality-of-life.md). These are foreign-patcher inputs,
+not new Impure writes. Source claims are labelled separately from stock disassembly.
+
+| Address / raw file offset | Meaning and evidence |
+|---|---|
+| `0x50390A/B` / `0x101F0A/B` | Default/max metal/geo snap radii, spare `.data` bytes read by pre-split TADR `tahook.cpp` (`v2024.3.31`, snap getter functions). M/P embedded loader INIs write `03 03`; native Z leaves its availability gate zero. Later E/T use compile-time defaults/maxima, E 0/0 and T 3/3. SOURCE + native loader/data measurement. |
+| `0x503912/13` / `0x101F12/13` | Equivalent wreck snap radii. Native M/P loader writes `01 01`; Z's gate is zero. Later E/T configure 1/1. SOURCE + native loader/data measurement. |
+| `0x50391F` / `0x101F1F` | Pre-split guarding-constructor behavior gate. ProTA's loader writes `01`; `v2025.8.29` `TABugFix.cpp` reads it before installing the hooks. Its stay/scatter dialog choices still default to Cavedog behavior. SOURCE + native loader measurement. |
+| `0x483A75`, `0x483AD3`, `0x483B31` / `0x82E75`, `0x82ED3`, `0x82F31` | Immediate owner bytes of three stock `push 0x0A` instructions, whose boundaries are `0x483A74`, `0x483AD2`, `0x483B30`. The following calls at `0x483A7E`, `0x483ADE`, `0x483B38` all reach `0x423C50`. DISASSEMBLED in the pristine 3.1 image. ProTA's embedded loader changes all three immediates to `0B`; M lacks those writes and native E/Z/T retain `0A`. MEASURED in native fixtures. |
+| `0x469A7B` → `0x469AAF` | TADR's `DrawPlayer11DTProc` hook site and LOS-skip continuation. It tests `(ecx & 0x0F) == 11`. SOURCE (`TABugFix.cpp`, inspected native release tags); this row does not claim a fresh disassembly of that draw block. Its constructor's three marker writes above are commented out. Thus the hook alone does not establish native map-DT visibility. |
+
+Loader sections name **raw file offsets**. In these `.data` bytes VA = raw + `0x401A00`;
+in the `.text` marker bytes VA = raw + `0x400C00`. The snap cells are `.data`, not `.rdata`.
+Under takeover the mod's spare-byte values remain, but Impure does not yet consume these QoL
+gates or reproduce the owner-11 LOS bypass.
+
+The recorder's camera-sharing default was also checked in native DLL disassembly. The following
+are **preferred-image DLL VAs**, not addresses in `TotalA.exe`:
+
+| Native recorder | Instructions / data | Established fact |
+|---|---|---|
+| E/M/P/T 3.9.2.416 | `0x738334` pushes 1; `0x738336` loads string `0x7389FC` (`sharepos`); category string `0x7389DC`; `0x738343` calls options reader `0x71FD18`; `0x73834B` stores AL at object `+0x44` | Camera-sharing registry fallback is true. DISASSEMBLED + native strings. |
+| Z 3.9.2.0 | `0x734089` pushes 1; `0x73408B` loads `0x7344FC` (`sharepos`); category string `0x7344DC`; `0x734098` calls `0x71D770`; `0x7340A0` stores AL at object `+0x44` | Same true fallback in the older recorder. DISASSEMBLED + native strings. |
+
+Every native recorder contains `lockon`, `sharemappos` and replay-follow help. The old
+`self_commands.inc` handler and registration establish `.lockon` as a local replay action with
+no host-only gate; following requires camera data in the recording. These observations are
+availability/default evidence, not a newly run native replay.
+
+### Surface metal and the mex snap threshold
+
+**SOURCE + DISASSEMBLED 2026-10-04.** Read for the
+[resource-snapping design](tadr-port/resource-snapping.md#metal-maps). The preferred image is
+`pristine/TotalA.exe.pristine`, inspected with `i686-w64-mingw32-objdump -d -M intel` and a
+section dump for the property name. These are stock reads/initialization, not Impure writes.
+
+TADR's `v2026.6.8` `tamem.h` names the game-state dword at `+0xD30` `surfaceMetal` and the byte
+at `FeatureStruct+7` `MetalValue`; the packed feature-grid record is 13 bytes. Its mex scorer
+counts only footprint cells with `MetalValue > surfaceMetal`, rather than summing values. The
+scorer and square-search selector are identical after whitespace normalization in `v2024.3.31`,
+`v2026.6.8` and `v2026.8.6`. SOURCE.
+
+| Address | Established fact |
+|---|---|
+| `0x4366B3..0x4366DB` | Pushes the property string at `0x504B24` (`SurfaceMetal`), calls the integer reader `0x4C46C0` at `0x4366BE`, and stores its result at game-state `+0xD30` at `0x4366DB`. DISASSEMBLED + string dump. |
+| `0x4839B3..0x4839ED` | Loads the game-state pointer from main `+0x391E9` and the background dword from `+0xD30`. A negative value, or the header value held in `[esp+0x18]` below `0x2000`, selects zero; otherwise the dword's low byte initializes each grid record at `+7` (`0x4839E6`). The loop strides 13 bytes and counts the product of the two fields read at `[ebp+0x38]` and `[ebp+0x3C]` (`0x483986..0x48398D`). DISASSEMBLED. The header field's meaning is not classified by this inspection. |
+| `0x435E09` | The game-state initialization stores `0xFFFFFFFF` at `+0xD30`. DISASSEMBLED. A cold-state value is not a loaded map's scoring threshold. |
+| `0x40A5D0..0x40A602` | This function's initial arithmetic multiplies the background dword by definition footprint words `+0x14C` and `+0x14A`, doubles the product and stores it in a stack local. DISASSEMBLED. Its full role and callers were not traced here; this prefix is not evidence for a complete extractor-income formula. |
+| `0x40C160..0x40C16C` | Another read of game-state `+0xD30`, compared against EAX by `cmp`/`jge`. DISASSEMBLED. The surrounding function's role and callers remain unclassified. |
+
+The initialization establishes the baseline/grid relationship used by TADR's threshold test,
+subject to the header condition above. Uniform cells equal to the baseline produce no snap
+candidates; a uniform above-baseline interior produces equal-coverage candidates, with the
+selector preferring pointer distance. These are source/disassembly deductions. Live metal-map
+placement, feature-written metal values and the complete extractor-yield path were not verified
+by this inspection.
+
 ## Demo recorder exploration: capture and save boundaries [DISASSEMBLED 2026-09-28]
 
 Boundary recheck for [the recorder exploration](tadr-port/demo-recorder-exploration.md).
@@ -3570,6 +3630,24 @@ MEASURED on the reference setup in the mapping checkpoint's `secondary-orders` r
 
 The positive list names these four bytes as the `leave` row `guitop` (the owner's decision, 2026-10-06): the viewer's own screen stack, and an address no other process can use. MEASURED 2026-10-06: `secondary-orders --cover` passes all 25 checks with it, the images gate included. Leaving a raw heap address with the viewer would not provide recorded GUI/input history: that history still needs stable identities and events. This investigation reads existing addresses and dumps; it adds no engine patch or engine write.
 
+**The keyboard ring [DISASSEMBLED + MEASURED 2026-10-05].** `0x4B6220` returns
+the graphics object through `0x51FBD0`, set by its initializer `0x4B5990`; the
+WinMain setup passes static object `0x51F320`. Its `+0xF2` is a ring capacity,
+at most 30 (`0x4C1A60`), `+0xF6` its dword character/key entries, `+0x16E`
+the enqueue index (`0x51F48E`) and `+0x172` the dequeue index (`0x51F492`).
+`0x4C1A40` clears both; `0x4C1AB0` removes one key, advances/wraps the dequeue
+index and returns zero when empty; `0x4C1B00` peeks; `0x4C1B20` appends unless
+the next slot equals the dequeue index, then advances/wraps the enqueue index.
+The WM_CHAR path calls the append at `0x4B5DEA`; `0x4C1FBE..0x4C21C2` also
+translate special keys into that ring. Readers include gameplay keys at
+`0x495E9A`, menus at `0x4998B6/0x4998D7/0x49991D`, and GUI input at
+`0x4AA034`. On the long CORE upgrade replay's T451/T9181 images, the recording
+had both indices 9, playback and fresh seek both 0: equal enqueue/dequeue indices
+mean drained input, not a construction counter. The replay exception is
+exactly these eight bytes; the owner approved both four-byte leave rows on 2026-10-05.
+Enqueue stores are `0x4C1A47`, `0x4C1A87`, `0x4C1B5C`, `0x4C1B66`;
+dequeue stores are `0x4C1A4D`, `0x4C1A8D`, `0x4C1ADC`, `0x4C1AE4`.
+
 **Every wall clock the engine stores.** The sources are `GetTickCount` (IAT `0x4FC0DC`; `0x4B6560`
 is `jmp` to it, and `0x4B6340` is `GetTickCount · rate / 1000`), `QueryPerformanceCounter` (IAT
 `0x4FC0BC`; `0x4E1730` in seconds), and the C runtime's `time` `0x4E6480`; there is no
@@ -4102,7 +4180,7 @@ incremented at `0x4954C0`; `UNITINFOCount` is `main+0x1438F` (the type bound `[1
 
 Locally none of these indices can be 0 (`0x4864B0` writes the live unit's own `+0xA8`, ≥ 1), so only a
 malformed or foreign message reaches them — the fix is stock-exact for every well-formed one and is
-[class local](tadr-port/sim-fixes.md#b3-built-ahead-2026-09-25). Our stubs are entered by a jmp at a
+[class local](tadr-port/sim-fixes.md#the-landings). Our stubs are entered by a jmp at a
 clean 5-byte boundary (the `0x0C` destructor at `0x4866E5`, after stock's `push edi`), verify the
 whole stock span first, and continue at the same address; a misframed `0x2C` points the reader at a
 zero dword and jumps to the engine's own end-of-list `0x48BA28`. The `0x2C` is parsed from a copy:
@@ -4244,7 +4322,7 @@ does not handle (`0x45486D`'s `ja`, and entries 1, 2, 35 and 41) jumps to, and w
 own state (`0x455F50` reads `[esp+0xF0]`) before re-entering the receive at `0x453D94` (counted as a
 `0a` drop). A child of 0, which `0x48AB70` ignores, drops there too: no sender writes one. The
 diverged `0x0D` is dropped in `wpn_rx_fired` (`0x49D280`, [the
-weapon-ID receiver](#weapon-ids)) by resolving the shooter's own slot weapon and comparing it to
+weapon-ID receiver](#a-weapons-id-and-the-messages-that-carry-it-0x42e440-0x49d270-0x45544d-0x42454b-disassembled-measured-2026-09-24)) by resolving the shooter's own slot weapon and comparing it to
 `&Weapons[id]`: stock divides by the local slot weapon's `+0x68` (`0x49CE62..0x49CE6A`) and faults only
 when that is 0, otherwise building a projectile from the packet weapon's branch and the local
 weapon's velocity. Between consistent peers the two never differ (DISASSEMBLED): the sender's aim
@@ -12159,6 +12237,34 @@ every publish of that tick.
 Two of the caps above gate draws from the simulation's random numbers; see *The raised effect
 pools* below.
 
+**MEASURED 2026-10-05, native stock cosmetic pools and fresh seek.** The unchanged
+`stock-secondary-orders` fixture self-destructs its selected ARMSOLAR through native Ctrl+D.
+At T451, its live and ordinary-playback frame dumps both have explosion count 15 at
+`main+0x1491B`; fresh seek has count zero. At T541 live/playback both have count 2. The paused
+live twin at T589 has count zero but retains 433 nonzero bytes in the inline record storage.
+The strict unlisted-image gate reports 514 failing bytes in the explosion, debris and
+flying-piece pools; a focused fresh-worker rerun at the same checkpoints reports 469 in
+those same pools. All ordinary state/order/effect-call and restore checks pass.
+`tagpu_replay.c:seek_run` calls `tagpu_effects_clear` before restoring recorded tables.
+In the native build that function clears the count, reinitialises 300 debris records and
+zeros 100 flying-piece slots. In the raised build it clears its corresponding DLL pools;
+`tagpu_simreg_recorded` excludes `SIMD_ENGINE` declarations until their layouts exist.
+Those routines are unchanged from this landing's base. The bounded native storage is
+`main+0x1491B..+0x1AB8F` (count plus 300 × 0x54, 25204 bytes),
+`main+0x1AB9F..+0x1E88F` (300 × 0x34 debris records, 15600 bytes), and
+`0x511DF0..0x511F80` (100 pointer slots, 400 bytes); upper endpoints are exclusive.
+These measurements identify an existing cosmetic-pool snapshot gap. They do not establish
+that pool fullness is irrelevant to simulation. The owner approved exactly these three ranges
+on 2026-10-06 as a known-gap exception for the native `stock-secondary-orders` unlisted-image
+check alone. Every other image bit, fixture and state/order/effect-call/restore check retains
+its existing policy. Snapshot layouts for these pools remain unimplemented; see
+[recorder completeness](tadr-port/demo-recorder-completeness.html).
+
+The subsequent whole run samples this control at T301: the image gate accepts zero cosmetic
+bytes and also passes without the option. Earlier T451 dumps still fail the default comparator
+and pass only with the approved option. The full 37-fixture gate passes with 11/11 changed
+function/region requirements reached; these outcomes do not fill the pool-layout gap.
+
 **THE ENGINE'S OWN EXPLOSION DRAW EMITS PARTICLES**, which is not what a draw pass is supposed
 to do and is why it is recorded here. `0x420B00`'s debris loop calls `0x421550` at `0x420B18`, and
 that function calls the grey-smoke emitter `0x472810` (`0x421583`) and the fire emitter `0x472AB0`
@@ -14975,10 +15081,32 @@ the observer keys the main offscreen on that tag so a re-created one retires the
 lands on the base the 1024×768 had (`05190050` both, first fit), so the observer sees a
 **same-base size change** and never a free — `surf_get` now drops the ring's recorded boxes on
 such a change, where before the next publish read a 1024-wide box off a 640-wide surface and
-called it an overflow. Inside `NewTAScreen`, cnc-ddraw's `dd_SetDisplayMode` stops its render
-thread and starts a new one on a new GL context (`dd.c`); the old thread's last presents come
-hundreds of milliseconds apart while the game thread is in this path, and the shell is already
-flipping ~5 000 times a second — the stall the publisher guards against since G15d.
+called it an overflow. `NewTAScreen` calls `DDrawDeviceCreateAndCaps 0x4B5510`, which releases
+the old DirectDraw objects through `0x4B4FF0` **before** making new ones. In the proxy,
+the final `dd_Release` stops and joins its render thread and zeros `g_ddraw`.
+The subsequent `dd_SetDisplayMode` starts a new render thread. A ready Vulkan lane now
+survives this joined replacement on the same actual window lifetime; the shell publisher's
+stall guard still spans the interval with no renderer. [fullscreen-handoff](fullscreen-handoff.html)
+records the original measured 619 ms restart and escaping resize, and the fix: a persistent
+window subclass retains resize ownership and observes actual destruction after Release.
+
+### DirectDraw recreation and the borderless handoff [DISASSEMBLED + MEASURED 2026-10-04]
+
+All addresses below are from the pristine executable. Direct call sites are from a full-image
+`objdump -d -M intel` scan; runtime return addresses are from temporary proxy boundary logs.
+The full protocol, captures, controls and unresolved compositor timing are in
+[fullscreen-handoff](fullscreen-handoff.html).
+
+| Address | Established behaviour and ownership |
+|---|---|
+| `0x4B4FF0` | **`DDrawReleaseObjects` [INFERRED name]**, stdcall(program*), `ret 4`. Tests `program+0x84` for nonzero, then releases and clears palette `+0x94`, attached backbuffer `+0x8C`, primary `+0x88`, clipper `+0x90`, and device `+0x84`, in that order. Does not destroy the game HWND at `+0x40`. Four direct callers: `0x4B5574`, `0x4B5C45`, `0x4B61BC`, `0x4CBB46`. |
+| `0x4B5061` / `0x4B5064` | The final device's vtable `+8` Release call / return address inside `0x4B4FF0`. Measured: proxy global ref reaches zero at game entry here, so the renderer join and `g_ddraw` reset happen before the next engine resize. |
+| `0x4B5510` | **`DDrawDeviceCreateAndCaps`**, corpus name, stdcall(fullscreen), `ret 4`. Calls `0x4B4FF0` at `0x4B5574`; then resizes the existing HWND before `DirectDrawCreate` at `0x4B55FB`. Direct callers: `0x4B5924`, `0x4B592C`, `0x4B5971`, `0x4B5C3B`, `0x4B5CF3`, `0x4B6250`. Owns recreation of `TAProgram+0x84/+0x88/+0x8C/+0x90/+0x94`; see [resolution](resolution.html) §1.2. |
+| `0x4B55D7` / `0x4B55DD` | `SetWindowPos` import call / return address; HWND `TAProgram+0x40`, size `+0xD4/+0xD8`, flags 6 (`SWP_NOMOVE | SWP_NOZORDER`). Measured after final Release: proxy ref=0, tracked HWND=NULL, actual HWND unchanged. Before the lifetime-property fix, the resize guard was skipped; the same top-level X client shrank 1280×1024 → 1024×768 → 1280×1024, with 13.37 ms between its two size events. |
+| `0x4B5940` | **`NewTAScreen`**, corpus name, stdcall(w,h), `ret 8`. Writes `TAProgram+0xD4/+0xD8`, reads bit 1 of `+0xF0`, calls `0x4B5510` at `0x4B5971`. Three direct callers: `0x491B0B` (leave game), `0x4980B7` (loading screen), `0x4983EA` (desired game mode). |
+| `0x4B5613`, `0x4B5639` / `0x4B563C` | The replacement device's SetCooperativeLevel (`0x53`) and SetDisplayMode / return address; mode takes `TAProgram+0xD4/+0xD8` and hard-coded bpp 8. Runtime: same HWND `00020058`, proxy borderless state `windowed=1, fullscreen=1`, device mode 1024×768, presentation target 1280×1024. These calls follow the escaping resize. |
+| `0x4B6700`, `0x4B6710` | Current **logical** mode width/height getters [INFERRED names], no arguments, plain `ret`. Read `TAProgram*` at `0x51FBD0`, then `+0xD4` / `+0xD8`; no Win32 screen-size query. The loading comparisons therefore read shell 640×480, not the actual 1280×1024 borderless client. Width's 14 direct callers: `0x41CCE9`, `0x46BCA5`, `0x49121B`, `0x491A8F`, `0x494A47`, `0x498044`, `0x498362`, `0x4A823E`, `0x4A826C`, `0x4A82A0`, `0x4A82B3`, `0x4A833E`, `0x4ABF06`, `0x4C648F`. Height's 17: `0x41CCF6`, `0x467DE4`, `0x46A284`, `0x46A8E0`, `0x46AD69`, `0x49122C`, `0x491A9B`, `0x498050`, `0x498375`, `0x4A8252`, `0x4A828C`, `0x4A82C7`, `0x4A82DA`, `0x4A834F`, `0x4A84F9`, `0x4ABF1A`, `0x4C649C`. Full-image direct call/jump scan found no direct jumps to either. |
+| `0x498342..0x4983EA` | The loading handler tests `main+0x38D75` bit 1; clear goes to the loading-frame path `0x4984DD`. Set compares current width/height through `0x4B6700` / `0x4B6710` against desired `main+0x37F1B/+0x37F1F` at `0x49836D` / `0x498380`. A mismatch frees `main+0x37E1B`, calls the surface restore helpers `0x4C61F0` / `0x4C62C0`, requests a resize at `0x4983D1`, then calls `NewTAScreen` at `0x4983EA`. Both resizes are now blocked through the actual window-lifetime property; the inner resize escaped the old ref/hwnd guard. Matching 640×480 skips recreation: measured no long end-of-load presentation gap. |
 
 **The loading screen.** Game entry, `0x498109..0x498156`: `0x4290F0(&path, "palettes",
 "guipal", …)`, `0x4BBE50(path)` loads the file, then **`0x4AC7D0(GUIInfo, main+0x143A7, data)`**
@@ -15007,6 +15135,18 @@ the surface to `0x4AB290(GUIInfo, surface)` instead and stores nothing. 42 calle
 `FrontendX` background among them (`0x478F19`). The surface is a `0x4C69F0` object tagged
 `"bitmaps\loadgame2bg.PCX"`, 640×480 [MEASURED 2026-09-29, `gui trace: alloc`]. How the picture
 then reaches the frame is *The loading frame*, below.
+
+**Background-cache helpers [DISASSEMBLED 2026-10-05].** `0x428730` walks the ten
+`0x28`-byte records from `0x5120B8` to the exclusive end `0x512248`. A non-NULL
+surface is freed through `0x4C6AC0` at `0x428741`, and its name through `0x4D85A0`
+at `0x42874A`. It clears a matching `main+0x11EB` at `0x428763` and a matching
+active GUI screen's background pointer `screen+0x24` at `0x428781`, then zeroes
+the record. Direct callers are `0x4916F6` and `0x49835D`. `0x4287B0`, called at
+`0x491635`, initializes that cache with 100 zero dwords. The name lookup
+`0x4287D0` walks the cached names at `0x5120C0` with the same stride and returns
+the associated name pointer at `0x5120BC`; no direct CALL to its entry was found.
+That negative result does not exclude an indirect caller. None of these helpers
+writes the adjacent `main+0x11E7` gadget-status latch.
 
 ### The loading frame — what the game thread draws while the loader thread runs [DISASSEMBLED + MEASURED 2026-09-29]
 
@@ -15092,6 +15232,18 @@ applied; `0x4273E8`, in the front end's state machine (case `+0x2BBE == 7`, sub-
 `0x47BB52`, in the skirmish setup, which saves (`0x47BB3D`), writes `NumSkirmishPlayers` and
 reloads. MEASURED on a `scenario load`: one reload after startup, which read Gamma 12, word
 `0x003E` and 1024×768 from the registry while memory held 16, `0x0022` and 1024×768.
+
+**MEASURED 2026-10-05, scenario seat extent:** the stock-limits coverage DLL's
+`replay-battle-load.json` launch with saved `NumSkirmishPlayers = 2` creates only
+two commanders, even though its four controller keys are supplied. The subsequent
+battle apply creates no units and reports 715 resolution errors, with slots 2/3
+inactive. The same native load with saved count 4 creates four commanders and
+accepts all 1428 battle units without errors. Playback's CLI launch writes its
+recorded seat extent; ordinary scenario loading must also supply its own extent
+before the native skirmish screen reads the store. The corrected CLI does so
+through its existing locked prelaunch registry write and reproduces the four-seat
+result from a count-2 starting store. This is a fixture-setup defect, not a COB
+scheduling or replay-state comparison failure. The native four-seat limit remains.
 
 **The saver `REGISTRY_SaveSettings 0x430F00`** writes the same names back from memory
 (`0x431108..0x431216`, Gamma at `0x4311ED`) and has **27 callers**, among them Options Done
@@ -16016,10 +16168,11 @@ resume by accidentally borrowing another child's completion. The native
 per-unit runner `0x4B0D60` continues visiting the other seven records.
 
 Impure preserves that state. `tagpu_cob_check_record` accepts child `-1` or
-`0..7` only; the expanded and native save readers apply the same validation.
+a slot below the runtime capacity; save readers also bound it by the saved capacity.
 Other negative values and out-of-range slots remain faults. A refused START
 still consumes arguments in the guarded adapter to bound repeated failed starts.
-This is a sentinel-and-bounds argument; no retry or enlarged thread pool is used.
+The sentinel is safe independently of capacity; the CORE constructor handoff below
+establishes a separate need for more than the native eight slots.
 
 [MEASURED 2026-10-03] The full-pool fixture held eight busy records on each of
 human unit 2 and local-AI unit 1002. Their refused CALLs retained 128 arguments
@@ -16567,11 +16720,20 @@ replay supplies"; the rules above are what it had to get right to produce the re
 | `0x4B1A99` | `C7 01 00 00 00 00` | SIGNAL's kill, resuming at `0x4B1A9F` (the sixth stolen byte is NOPped): `ecx` the record, `ebx` its slot, `[esp+0x34]` the signaller |
 | `0x4B15E0` | `E8 4B 56 00 00` | the RNG call, redirected: the stub calls `0x4B6C30` itself and logs `lo + result` (`ebx` = lo, `ebp` = slot) |
 
-Reads only: the tick `main+0x38A47`, the in-game index `unit+0xA8` (`i16`), the def name
-`def+0x20`, and the record/file fields above. All five run on the game thread — the only
-thread the engine calls the VM from — so the log needs no lock. Not traced: the engine's
+Reads only: the tick `main+0x38A47`, the in-game index `unit+0xA8` (`u16`), the def name
+`def+0x20`, and the record/file fields above. Loader queries and in-play events use separate
+TLS latches. The trace lock orders deferred reads against the two native COB destructor
+entries: the destructor invalidates every matching latch before freeing the object.
+Not traced: the engine's
 asks for a script the unit lacks (only `-1` reaches the allocator, the name is gone by then),
 and which engine function issued an `E` start (its return address is two frames up).
+
+The allocator entry is also the recorder's counted COB sink. Both observers require its
+pristine five bytes; with trace installed first, the recorder reports that the sink holds
+other bytes and leaves its counts out. MEASURED on the stock resource fixture: `images-gate`
+and carried-state comparisons run, but `compare-counts` refuses the missing allocator
+counter. Trace coverage belongs in an unrecorded preflight, with its lever restored before
+the ordinary recording/playback lanes. No counter is excluded to accommodate tracing.
 
 **Three call sites read for the trace's sake** (the strings are the engine's own, in `.data`):
 `0x4865C3` (`Send_UnitDeath+0x113`) is **`QueryScript(cob, "Killed" @0x508BE8, &severity,
@@ -16618,7 +16780,7 @@ looked like before the site's displacement was fixed.
 The stock layouts above describe the executable. The F port's raised layout and
 its incomplete verification gates are in [the COB note](tadr-port/cob.md).
 `cob_runtime_sites` in `tagpu_patches.c` is the checked patch inventory: allocation
-operand `0x485D74`; 33 model-field operands (the getter's 34th reference lives in
+operand `0x485D74`; ten record-count operands; 33 model-field operands (the getter's 34th reference lives in
 its trampoline); 12 busy-count operands; six record-iteration strides; and the
 record-index expressions at `0x4B08F0`, `0x4B09B2`, `0x4B0A27`, `0x4B0B25`, and
 `0x4B0C57`. The original `slot*41*4` becomes `slot*137*4`. The runner address
@@ -16632,11 +16794,39 @@ byte-checked before replacement; the owning functions retain their native call s
 
 | Field or loop | Operand addresses | Native operation and raised value |
 |---|---|---|
-| model pointer, reads | `0x480B22`, `0x480C36`, `0x480C56`, `0x480C7F`, `0x480C8C`, `0x480C99`, `0x480CBA`, `0x480CF3`, `0x480D0C`, `0x480D1E`, `0x480D2B`, `0x480D5E`, `0x480D8B`, `0x480D96`, `0x480DB6`, `0x480DDF`, `0x480DF6`, `0x480E20`, `0x480E36`, `0x480E56`, `0x480E76`, `0x480EBD`, `0x480EF4`, `0x480F0C`, `0x480F5B`, `0x48115B`, `0x48124C`, `0x481388`, `0x481397`, `0x4813EE`, `0x481432`, `0x481472` | `mov register,[ecx/esi+0x540]` in the unit COB's model/piece/query/attachment methods; offset becomes `0x1140` |
-| model pointer, initialization | `0x480D46` | `mov [ecx+0x540],eax`; offset becomes `0x1140` |
-| active-record count, reads | `0x4B09CA`, `0x4B0A3F`, `0x4B0B88`, `0x4B0D22`, `0x4B0D6A`, `0x4B19EF`, `0x4B1AA1`, `0x4B1B68` | `mov eax,[edi/ecx+0x53C]` in callback/call/runner/return/signal/termination paths; offset becomes `0x113C` |
-| active-record count, writes | `0x4B0638`, `0x4B19FB`, `0x4B1AAD`, `0x4B1B77` | constructor stores EDX; return/signal/termination store EAX into `+0x53C`; offset becomes `0x113C` |
+| model pointer, reads | `0x480B22`, `0x480C36`, `0x480C56`, `0x480C7F`, `0x480C8C`, `0x480C99`, `0x480CBA`, `0x480CF3`, `0x480D0C`, `0x480D1E`, `0x480D2B`, `0x480D5E`, `0x480D8B`, `0x480D96`, `0x480DB6`, `0x480DDF`, `0x480DF6`, `0x480E20`, `0x480E36`, `0x480E56`, `0x480E76`, `0x480EBD`, `0x480EF4`, `0x480F0C`, `0x480F5B`, `0x48115B`, `0x48124C`, `0x481388`, `0x481397`, `0x4813EE`, `0x481432`, `0x481472` | `mov register,[ecx/esi+0x540]` in the unit COB's model/piece/query/attachment methods; offset becomes `0x1588` |
+| model pointer, initialization | `0x480D46` | `mov [ecx+0x540],eax`; offset becomes `0x1588` |
+| active-record count, reads | `0x4B09CA`, `0x4B0A3F`, `0x4B0B88`, `0x4B0D22`, `0x4B0D6A`, `0x4B19EF`, `0x4B1AA1`, `0x4B1B68` | `mov eax,[edi/ecx+0x53C]` in callback/call/runner/return/signal/termination paths; offset becomes `0x1584` |
+| active-record count, writes | `0x4B0638`, `0x4B19FB`, `0x4B1AAD`, `0x4B1B77` | constructor stores EDX; return/signal/termination store EAX into `+0x53C`; offset becomes `0x1584` |
 | record iteration | `0x4B062F`, `0x4B08DF`, `0x4B0D4C`, `0x4B1A1E`, `0x4B1AD0`, `0x4B1AE8` | constructor/free-slot search/runner cleanup/return/signal advance a record pointer by `0xA4`; stride becomes `0x224` |
+| record-count dwords | `0x4B0616`, `0x4B0D33`, `0x4B19F5`, `0x4B1AA7` | constructor initialization, callback clearing, RETURN parent wakeup and SIGNAL parent wakeup: `mov ecx/edx,8` becomes 10 |
+| record-count bytes | `0x4B08E5`, `0x4B09E1`, `0x4B0A57`, `0x4B0B9F`, `0x4B0D81`, `0x4B1AEE` | allocator, synchronous named/indexed/native starts, DoScriptsNow and SIGNAL: `cmp eax/esi/ebx,8` becomes 10; capacity remains below the signed immediate's 128 boundary |
+
+The allocation is `0x158C` bytes: header `0x1C`, ten records of `0x224`,
+the active count and the model pointer. All ten count operands and the existing
+allocation/stride/field operands belong to the same fail-closed installation.
+Native serializer loop counts at `0x4B1EEE` and `0x4B20E2` are not executed: their
+whole methods are replaced at `0x4B1EC0` and `0x4B2040`. The `and register,7`
+instructions inside opcode handling decode operand modes, not thread indices.
+The stock-limits comparison build retains eight native `0xA4` records.
+
+**Cost of the capacity [DISASSEMBLED].** DoScriptsNow `0x4B0D60` reads the busy
+count at `0x4B0D6A` and bypasses the record sweep when zero (`0x4B0D68..0x4B0D70`).
+Otherwise its `0x4B0D81` bound visits every record; the guarded runner checks an
+empty record's status and returns before execution or locking. RETURN/SIGNAL's
+parent-wakeup scans also visit the whole bound. Animation stepping at the unit
+tick's call `0x48ADEB` continues independently. Two additional `0x224` records
+cost 1,096 bytes per scripted unit: 15.68 MiB at 15,000, excluding allocator
+overhead. The loop visits increase from eight to ten; frame CPU cost is unmeasured.
+
+The guarded wire header remains six dwords, version 1, with explicit word/record
+counts. Current records occupy `0x1580` bytes including the header. Loading also
+accepts the earlier guarded eight-record `0x1138` block and the native `0x528`
+block. The latter carries eight `0xA4` records and a trailing active count.
+Each format is bounded by its exact length, original stack capacity and original
+child-slot capacity; additional runtime records are zeroed. Records, statics and
+animation are published only after validation. No format reads ten records
+from an eight-record input.
 
 Getter 73's native fraction read at `0x480A62` is `fld [esi+0x104]`, reached by
 the construction-query case at `0x480A44`. The guarded replacement reads that same
@@ -17294,3 +17484,482 @@ before installing any observer. `tagpu_detour_observe` alone compares an
 already registered Impure stub; its first-install path does not match the
 engine's bytes. A mismatch therefore leaves all three new observers uninstalled,
 and the harness refuses AI activity observation.
+
+
+### Resource placement and contextual order contracts [DISASSEMBLED + MEASURED 2026-10-04]
+
+`tagpu_resource.c` implements manual mex/geo snapping and contextual resource building. All
+queries and dispatches run on the game/input thread; the renderer gets only packet values.
+The following contracts were disassembled from `pristine/TotalA.exe.pristine`. Caller counts
+are an instruction-level `call rel32` scan of `.text`, not a scan of address-shaped bytes.
+
+| Entry | Contract and callers |
+|---|---|
+| `0x4197D0` | Manual build cursor, `ret 0`, prologue `83 EC 14 8B 15 E8 1D 51 00`; called at `0x491CDB`, `0x499241`. Reads type `main+0x2CC4` and point `+0x2CAA`; writes six build-corner ints `+0x2C92..+0x2CA6` and the `+0x2CC6` valid/region bits. Snapping observes its entry; original code owns the rectangle and validation |
+| `0x498DA0` | Mouse-to-world update, called only at `0x499221`. The existing viewport wrapper repairs its result before resource input captures the raw point. In `0x499200`, cursor update `0x499241`, hovered unit query `0x499278` and context resolution `0x499297` precede button dispatch |
+| `0x498F70` | Left button handler, `ret 4`, prologue `51 A1 E8 1D 51 00`, one caller `0x4995B3`. The resource gate's saved entry stack holds the six-dword message pointer at `[esp+4]` |
+| `0x499100` | Right button handler, `ret 4`, prologue `51 8B 0D E8 1D 51 00`, one caller `0x4993AC`. Contextual orders use right when Interface Type `main+0x37EFA` is nonzero; zero uses left. Explicit commands retain native button/cancel behavior |
+| `0x47D2E0` | Site test, `stdcall(def, packed_cell, ignore_unit_id, player)`, `ret 16`; callers `0x40A4CD`, `0x4198C6`, `0x47DBE5`. Requires origin at least 1 and footprint end strictly below W/H. Its return's bit 0 reports acceptance |
+| `0x47C780` | Build-site altitude result, `ret 0`, only caller `0x4198F5`; low byte is the site's altitude. Reads the scratch produced by the preceding site test. Resource preview/click queries save and restore `0x51E684`/`0x51E688`; the native manual cursor retains its normal scratch ownership |
+| `0x43AFC0` | Ordinary mouse order dispatch, `stdcall(action, shift, unit, target, pos, param1, param2)`, `ret 28`. Called at `0x4197A9` (manual build) and `0x48D1F4` (contextual command). A build's param1 is the definition ID; an upgrade uses the resolved reclaim action then an appended build |
+| `0x438760` | Action-name lookup, thiscall `(output_byte*, name)`; 109 direct callers, including manual dispatch `0x4197A4`. Resource dispatch asks for `MOBILEBUILD` (`0x502654`) or `VTOL_MOBILEBUILD` (`0x502640`) according to the builder's fly bit |
+| `0x43F0E0` | Action resolver, `stdcall(index*, mode, unit, target, pos)`; returns the caller's output pointer; refusal writes action byte zero (`0x4401E3`), which native dispatch rejects at `0x48D0AF`. Guard is mode 7, reclaim mode 12. There are 28 direct callers; context dispatch uses `0x48D0A0`, script orders `0x4804A3`, and constructor/assist paths `0x487D5B`..`0x487F8C`. Resource input asks the resolver instead of assuming every selected builder can reclaim or Guard |
+| `0x48CD80`, `0x48D220` | Hovered-unit query and context resolution; callers respectively `0x491D18`/`0x499278` and `0x491D36`/`0x499297`. Hovered unit ID is stored at `main+0x2CBA`; feature ID is `+0x2CBC` |
+| `0x481930` | Explored-map setter, six callers: `0x4818E6`, `0x48269C`, `0x48279B`, `0x482901`, `0x482A94`, `0x482C08`. Uses the player's map bit, not its seat number; allocation `0x483CF6`..`0x483D25` is W×H/4 u16 entries for even W/H |
+| `0x422040` | Applies indestructible metal-spot feature values to grid byte `+7`; only caller `0x483D7D`. The cell's feature ID must be below `0xFFFB`, its definition's metal float `+0xF0` nonzero and flags `+0xFF & 2` set. Uses definition footprint `+0x94/+0x96`, bounds helper `0x481550`, and float conversion `0x4E43A0`. This is how the private synthetic fixture supplies metal values |
+
+The full resolver caller list is `0x401F2F`, `0x402E3D`, `0x4031A7`, `0x405265`, `0x405ABC`,
+`0x4064F5`, `0x40804C`, `0x408299`, `0x408403`, `0x408435`, `0x408589`, `0x40FE86`,
+`0x410AD9`, `0x43B242`, `0x43B285`, `0x43B416`, `0x43B451`, `0x43B583`, `0x43FE5A`,
+`0x43FE83`, `0x43FECC`, `0x4804A3`, `0x487D5B`, `0x487DD3`, `0x487E2E`, `0x487EFD`,
+`0x487F8C`, `0x48D0A0`.
+
+**Candidate-cell distance and actual placement centers.** SOURCE: TADR v2026.8.6
+`tahook.cpp:SnapToNear` ranks equal-coverage candidates by squared distance from
+`(cx + 0.5, cz + 0.5)` to the raw mouse in cell units; its geo caller uses the same selector.
+Impure preserves this metric. It is not a guarantee of the nearest actual building center.
+DISASSEMBLED: manual dispatch `0x419670` (sole direct caller `0x498F98`) reads type
+`main+0x2CC4`, point `+0x2CAA` and definition footprint
+`+0x14A/+0x14C`. Its `0x4196D8..0x419714` conversion reconstructs each order coordinate
+as `(2 * footprint_origin + footprint_size) << 19`, passed through `0x43AFC0` at `0x4197A9`.
+`tagpu_resource.c:position` uses that same center: even footprint axes place at `cx * 16`
+world units, odd axes at `(cx + 0.5) * 16`. Thus an even axis's actual center differs by
+eight world units from the candidate-cell center used for the tie. No metric change is implied.
+
+#### Native MobileBuild placement retries [DISASSEMBLED 2026-10-05]
+
+An accepted contextual upgrade queues native reclaim followed by `MOBILEBUILD`; queue
+creation does not establish that the replacement will start. `MobileBuild` at `0x403A20`
+dispatches state 1 to `0x403B45`. It obtains the replacement definition from `node+0x36`,
+recomputes its packed footprint origin from the stored position, and calls
+`0x47DB70(def, 0, packed_cell, 1)` at `0x403CC7`. The zero is the ignored unit number:
+this test does not exempt the constructor. For a stationary definition (`def+0x22F == 0`),
+`0x47DB70` delegates to the yard test `0x47D2E0` at `0x47DBE5`, also with ignored unit
+number and player zero. The other branch tests occupied cells against the supplied
+ignored number at `0x47DD00..0x47DD0A`.
+
+On placement refusal, `node+0x3E` counts retries. The first refusal emits its message at
+`0x403CDF`; `0x403CE4..0x403CF4` increments the counter, arms a 30-tick wait through
+`0x439E80`, and returns 2. Subsequent refusals reach `0x403D03`: a counter greater than
+10 emits the final message at `0x403D10` and returns 8 at `0x403D15`, abandoning the
+command. Acceptance calls `0x47DDC0` at `0x403D2F`, creates a nanoframe through
+`0x485F50` at `0x403D5B`, and links it into `node+0x16` through `0x489690` at
+`0x403D64`. Failure to obtain a unit retries after 300 ticks (`0x403D7D..0x403D89`),
+which is distinct from placement refusal. These contracts are disassembly, not proof
+that a particular reported upgrade failed for constructor overlap.
+
+Installed stock definitions read for the Comet Catcher stress test: `ARMMEX`/`CORMEX`
+have 3x3 footprints, `ARMMOHO`/`CORMOHO` 5x5, and `ARMACK`/`CORACK` 2x2 with
+build distance 60. `tools/resource_upgrade_stress.py` measures actual mouse dispatch,
+reclamation, frame creation and completion; its native-order snapshots require the
+pause bit at `main+0x38A51`, so the unit tick and its order destructors cannot run
+between the game-thread peeks.
+
+#### CORE reclaim-to-Moho handoff [DISASSEMBLED + MEASURED 2026-10-05]
+
+On installed Comet Catcher, stock `CORACK` at `(2892,1772)` upgrading `CORMEX`
+at `(2824,1704)` through a contextual click repeatedly reclaimed the old mex,
+created `CORMOHO`, then abandoned it without reducing `unit+0x104` from 1.
+The native MobileBuild node reached state 2, flags `0x14`. At `0x403DE1`,
+`0x438590` starts StartBuilding; state 2 calls `0x438700(unit,node,0xA)` at
+`0x403DFD`. That helper waits for `unit+0x10F` bit 0 (`INBUILDSTANCE`), marking
+the node's flags with bit 2 while it is clear. State 3 builds through `0x41BA60`.
+
+The COB trace identified the missing transition. At tick 2901 all eight native
+slots were occupied: MotionControl and walklegs, SmokeUnit, RequestState,
+Stop and close, StartBuilding and StopMoving. StartBuilding's START of another
+RequestState was refused at `0x4B08C0` (`cmp eax,8` at `0x4B08E3`), so the
+script never requested its new build state. The installed CORACK script has one
+serialized RequestState coordinator, which CALLs Go/open or Stop/close; a new
+RequestState updates its desired state and returns while that coordinator is busy.
+The handoff therefore requires a ninth record to deliver that update. Those
+chains have no recursion. This establishes the demand of the reproduced handoff,
+not a bound on every possible mod script or arbitrary additional callbacks.
+
+The nanoframe's GetBuilt handler (`0x402DA0`) remains incomplete when stance
+never arrives. Its wait arms 300 ticks through `0x439E80` from state 0 at
+`0x402F8C`; state 2's elapsed-event branch at `0x402F5B` calls the native
+unbuild/decay path `0x41BCD0(unit,11)` at `0x402F6B`. A ghost disappearing here
+does not establish a placement failure. In one paused reproduction, the bot's
+2×2 footprint at cells `(178,109)` and the accepted Moho's 5×5 footprint at
+`(174,104)` shared no cell. Explicit native build from idle at the same site and
+bot position entered state 3, stance 1 and reached remaining fraction `0.961694`.
+
+On the sixteen-slot diagnostic prototype, the trace accepts
+the formerly refused RequestState in slot 8. The focused native assertion reached
+stance 1 and remaining `0.947848` after 679 ticks. An all-deposit CORE sweep
+completed all 61 accepted upgrades by 7541 elapsed ticks; 20 initial site refusals
+are separate from accepted upgrades. The constructors, mexes and Mohos retained
+stock definitions; only supply was synthetic. The original mixed sweep completed
+all 37 accepted ARM upgrades and abandoned all 24 accepted CORE upgrades. These
+measurements identify a real CORE COB failure; they do not identify the faction
+or exact cause of an unrecorded earlier play report.
+
+The chosen ten-record runtime repeated the same CORE phase-0 sweep: **61 of 61
+accepted upgrades completed**, by 7611 elapsed ticks, 20 initial refusals and no
+unfinished build. Its trace accepts RequestState in slot 8 (including units 169
+and 265 at tick 2651). Native ten-record save/load preserved all ten active records
+on human and local-AI probes; native eight-record saves imported without loss.
+Full-pool START and CALL probes passed 16 and 3 assertions respectively.
+The automated native save/load preflight separately preserves all ten active
+records on both owners; its coverage bitmap reaches the replacement `cob_save`
+and `cob_load` functions at the native `0x4B1EC0`/`0x4B2040` methods.
+The ARM phase-1 sweep on ten records completed all 67 accepted upgrades by 8303
+elapsed ticks, with 14 initial refusals. Keeping generated starts 128 world units
+inside the border lets the previously motionless lower-border bot reclaim and
+complete; no native pathfinder change is made.
+
+The long replay fixture checks completed stock Moho at tick 7800 and requires its
+last comparison tick at or after that checkpoint. The diagnostic run's unit/player,
+effect-count and three restore comparisons passed, while paused viewer input first
+computed CORMOHO's ghost-mask row (`s_ghost` type 219): piece-count/valid/any and its
+hide bits changed at frozen tick 9219. `tagpu_datakeys_ghost_mask` now keeps an
+uncached paused preview in local storage; `main+0x38A51` bit 0 gates cache writes,
+so a first hover cannot write SIM_STATE while the simulation tick is frozen.
+Puppet cache misses use local storage regardless of native pause, leaving the
+recording the only writer even during replay-dock pause. No declaration or recorded-state comparison is removed by this correction.
+
+#### Input bounds and layout
+
+The root is `0x511DE8`. The controlled player byte `main+0x2A42` is bounded below 10, and resource
+input refuses puppet seats. Global unit begin/end `+0x14357/+0x1435B` are inclusive, stride
+`0x118`; their aligned distance plus one must equal the engine count `u16 +0x14351`. The
+controlled player's record at `+0x1B63 + seat*0x14B` has first/last pointers `+0x67/+0x6B`, also
+inclusive and aligned within the global pool. Own-unit and order scans use that smaller partition.
+
+Unit flags `+0x110`: alive `0x10000000`, selected `0x10`, excluded `0x4000`, structural footprint
+`0x20000000`, contested footprint bits `0x0C000000`. Owner is byte `+0xFF`; definition pointer
+`+0x92` must be aligned in the `0x249`-stride definition array at `main+0x1439B`, bounded by
+`+0x1438F`. Unit number is `u16 +0xA8`, world position is three 16.16 ints `+0x6A/+0x6E/+0x72`;
+`+0x104 == 0` identifies completed construction in the resource path. Grid origin is
+`u16 +0x76/+0x78`, footprint size `+0x7E/+0x80`.
+
+Definitions: footprint shorts `+0x14A/+0x14C`, yard pointer `+0x14E` (allocated as FootX×FootZ by
+`0x42CF30`), CANBUILD count `+0x152` and u16-array pointer `+0x156`. The existing whole-build-list
+patch maintains `bl_room(count)` at every allocator/copy/append; resource hooks require its
+complete installed state. `s_buildListsLive` is `SIM_INSTALL`, set from the deferred patch-table
+registration; its public predicate also requires `s_limState == 1`. This prevents input using a
+count bound without the allocation bound. Building movement code is byte `+0x22F == 0`, builder
+bit `+0x241 & 0x40`, fly bit `+0x241 & 0x800`; worker time is u16 `+0x1FE`, repair capability
+`+0x245 & 0x200`. Metal extraction and energy output floats `+0x1CE/+0x1C2` must be finite and
+positive. Geo recognition scans the complete bounded yard for byte `0x8F`, at most 64×64 cells.
+
+The feature grid `main+0x14287` has dimensions `+0x14233/+0x14237`, stride 13. Dimension products
+are checked before indexing. Metal is byte `cell+7`. Background `SurfaceMetal` is loaded through
+`[main+0x391E9]+0xD30` (`0x4366B3`..`0x4366DB`) and seeds ordinary grid metal
+(`0x4839B3`..`0x4839ED`). Explored entries at `main+0x14273` use the player record's byte `+0x146`
+as a bit index, bounded below 16. Every metal read first checks that cell's explored 2×2 block;
+unknown neighbors prevent a Quick deposit from being proved closed. The engine's full-map
+reveal fills this explored map; resource scoring has no alternate unseen-data path.
+
+Order nodes belong to the live unit's game-thread-owned heap chain at `unit+0x5C`; no node is
+retained across iterations. Walks stop at 16384 nodes and check owner pointer `node+0x0E`.
+Action `byte +4` indexes the level's descriptor vector `0x512344..0x512348` at stride `0x19`;
+capability `+0x0C & 1` distinguishes a placed build from factory counts. Target is pointer
+`+0x16`, position `+0x22/+0x26/+0x2A`, build type u16 `+0x36`, flags `+0x42`, next pointer `+0x4A`.
+Plain order clearing (`0x43ADC0`) preserves flags bit 2 (`4`); queued collision tests reproduce
+that distinction for participating builders/helpers rather than discarding every old plan.
+
+#### Contextual cancellation through the native order roots [DISASSEMBLED 2026-10-05]
+
+`0x43AFC0` tests Shift at `0x43AFD4` and scans only the main chain `unit+0x5C` at
+`0x43AFE0`. The first action match (`0x43AFF2`) whose optional target matches (`0x43AFF7`..`0x43AFFE`)
+and whose X/Z positions are within inclusive ±16 world units (`0x43B004`..`0x43B029`) wins.
+The position arithmetic is unsigned wrapping 32-bit subtraction plus `0x100000`, compared against
+`0x200000`. **It never compares the build type at `node+0x36`.** A NULL target argument skips
+the target comparison. With no match, `0x43B08A`..`0x43B09D` appends through `0x43ADC0`.
+
+`0x43B034` chooses the unlink head: `+0x60` for node flags `+0x42 & 0x40000`, otherwise
+`+0x5C`. `0x43B05B`..`0x43B05E` unlink the matched node. The original head is saved at
+`[esp+0x24]`; a non-head removal sets `+0x42 & 0x10000` at `0x43B068`. The calls at
+`0x43B075` and `0x43B07B` destruct (`0x43A1F0`) and free (`0x4B4F20`) it, then return
+without creating an order. The root is used by manual placement `0x4197A9`, contextual orders
+`0x48D1F4` and the resource input path.
+
+The destructor calls the action handler with flags 2 at `0x43A21A` when node byte `+6 & 2`
+is set. Flags `+0x42 & 0x400000` run the native `StopMoving` script lookup/start at
+`0x43A227`..`0x43A258` (`0x4B07C0`, `0x4B0B00`, `0x456190`). Its `+0x52` object cleanup
+at `0x43A264`..`0x43A2A4` can invoke virtual destructors. A head removal also calls
+`0x489800(unit,3)` at `0x43A2B9`; the `0x10000` flag skips that call for non-heads.
+`0x489650` at `0x43A2C1` releases the target reference at `node+0x12`. Thus cancellation
+can re-enter engine handlers, and retaining an order-node pointer across the root is unsafe.
+
+**Exact removal `0x439F80(unit,node)`** is stdcall, `ret 8`. Its two direct callers are
+`0x43BA7C` (order controller) and `0x49646F` (Ctrl+D cancellation). `0x439F89` reads the main
+head, `0x439F8F` selects the sub-list for flags `0x40000`, and `0x439FA1`..`0x439FAD`
+search for the exact pointer. A missing node returns without appending or freeing. A found node
+is unlinked at `0x439FB3`..`0x439FB8`, sets `0x10000` when not the main head at `0x439FBC`,
+and is destructed/freed by `0x439FC9`/`0x439FCF`. Resource cancellation finds the actual
+selected constructor's main-list node in the bounded owned chain and uses this root, so build
+variant changes and neighboring positions cannot redirect deletion.
+
+**The paired-reclaim lifetime:** the immediately preceding node must be the resolved reclaim
+on the old target at exactly the build position. The build must be unstarted (`byte +6 & 2 == 0`),
+without `+0x42 & 0x400000` or an owned object (`+0x52 == NULL`). Being preceded proves it is
+non-head; exact removal sets `0x10000`. These conditions disable every callback branch of
+`0x43A1F0`. Its remaining `0x489650` call has no calls or virtual dispatch: `0x48965D`..`0x489683`
+only unlink this node's target reference from the intrusive unit-reference chain. Therefore the
+preceding reclaim stays allocated across build removal and can be passed to the second exact
+removal root. This is the only order pointer retained across a root; it has an explicit lifetime
+proof. After reclaim removal no node pointer is used. Helpers' Guards remain intact.
+
+**New orders `0x43ADC0(action,shift,unit,target,pos,p1,p2)`** use the same seven-argument
+stdcall layout and `ret 28` as `0x43AFC0`. It constructs a `0x56`-byte node through
+`0x4B4F10`/`0x43A0C0` at `0x43ADC4`..`0x43ADF4`, preserves existing non-temporary work with
+Shift, and replaces removable work without Shift (`0x43AE02`..`0x43AE59`). The native temporary
+head cleanup and linking retain their normal descriptor flags (`0x43AE5B`..`0x43AFB1`). It does
+not run the mouse root's proximity toggle. New Quick reclaim/build orders use this root, ensuring
+that Shift can append a distinct adjacent site. Its 27 direct callers are `0x4029A5`, `0x402E5E`,
+`0x402EFA`, `0x403DC5`, `0x408064`, `0x4082B0`, `0x408421`, `0x408453`, `0x4085A1`, `0x4140F3`,
+`0x43B09D`, `0x43B120`, `0x4804BB`, `0x487D70`, `0x487DE8`, `0x487E3F`, `0x487E8A`, `0x487F25`,
+`0x487FA5`, `0x487FF6`, `0x4880AB`, `0x4880D2`, `0x488110`, `0x488175`, `0x4881D1`, `0x4881F8`,
+`0x48821E` (instruction-level call scan).
+
+**Geo identity:** `0x47D684` tests candidate yard bit `0x80`. `0x47D69D` reads the feature ID
+at grid-cell `+8`; an ID below `0xFFFB` is checked against the feature count. `0xFFFE` resolves
+through cell `+10` (dz) and `+11` (dx), subtracting `(dz*W+dx)*13` at `0x47D6C7`..`0x47D6E4`.
+`0x47D708` tests feature-definition byte `+0xFE & 0x20`; no spacing rule separates geo sites.
+Resource identity bounds the alias offsets before subtracting, checks explored anchor cells and
+feature IDs against the allocation, and requires one unique canonical geothermal anchor among
+all G-yard cells. Candidate and queued footprints must name the same anchor; touching multiple
+anchors is ambiguous and does not permit cancellation. The generated adjacent-one-cell fixture
+exercises the distinction that a +/-16-world-unit comparison cannot establish.
+
+#### An upgrade preview without grid mutation
+
+`0x47CC30` stamps a footprint; callers `0x43DA41`, `0x48610F`, `0x48630C`, `0x48AA9A`, `0x48B6B9`.
+An old yard byte's bit 0 stamps cell flag bit 1 (`2`) at `0x47CE32`; yard occupancy bit 2 (`4`,
+or bit 1 when unit byte `+0x10F & 4`) stamps its unit number at `0x47CE23`.
+The mask selection at `0x47CD88..0x47CD9D` reads that byte, ANDs with `4`, and chooses yard
+mask `2` when set, otherwise `4`.
+`0x47D0E0` clears the footprint; callers `0x43DA0F`, `0x47CBD6`, `0x48AA6B`, `0x48B685`.
+It clears a matching unit number at `0x47D172`, and clears cell flag `2` for every old yard bit 0
+at `0x47D17C`. The site's only read of the candidate yard's bit 0 is `0x47D530`; its occupancy
+check at `0x47D554` ignores the supplied unit ID exactly.
+
+Therefore, for a validated uncontested old footprint, clearing candidate yard bit 0 where it
+would overlap an old yard bit 0 gives the site's post-clear yard-bit test without touching the
+grid. A stack copy of the definition points at this bounded stack yard. Both old and new
+footprints and the old live footprint dimensions are validated first. Other yard bits and the
+old-ID occupancy exemption retain the engine's tests. Contested footprints are refused because
+`0x47D2B9`..`0x47D2C4` calls `0x47E5C0` to restamp neighbors: the simple projection is insufficient
+there. No timing or pointer probe supplies this proof.
+
+**MEASURED on retail Comet Catcher:** the patch spans metal cells 88–90 by 81–83, metal byte 223
+against SurfaceMetal 3. Manual ARMMEX snaps to footprint origin (1408,1296), and a stationary Alt
+returns raw origin x = 1440. The resulting order center is (1432,1320). Advanced ARMACK
+queues reclaim of a completed own ARMMEX followed by ARMMOHO, while ARMCK/CORCK receive persistent
+Guards and ARMPW's orders stay unchanged. The generated RS maps exercise background 5 with metal
+5, background 5 with metal 20 everywhere, and background 20 with an isolated metal-223 patch.
+These measurements establish the input cases; their final replay/compatibility gates are tracked
+in the landing's notes, not assumed from these values.
+
+**MEASURED on retail Comet Catcher, 2026-10-05:** at eye (1000,950), pointer (588,377),
+manual ARMMEX's rectangle at `main+0x2C92` and Quick Build's native order at `unit+0x5C`
+both center at (1432,1320), with a 3×3 footprint. At pointer (620,375), the raw x is 1492;
+manual placement retains origin x=1472 and queues center x=1496. Before Quick Build shared
+the manual complete-target check, it instead queued x=1448: the radius-3 search captured only
+part of the deposit. A footprint-radius search from that candidate finds the full-coverage
+origin (88,81), so the candidate is not stable. The centered site is accepted by `0x47D2E0`
+at the nearer pointer, and both modes use definition 78; the difference is the selection check,
+not a footprint conversion or engine refusal. The shared check retains the original radius
+and refuses that partial Quick target, leaving the native contextual action available.
+
+**MEASURED native interface selection:** Tab → `PREFS` → `SPEEDS`, set `LEFTCLICK` stage 0,
+then `PREV` → `OK` sets `main+0x37EFA` to 0 after launch. `tacli` forces this field's registry
+setting to 1 at every launch, so a prelaunch fixture edit cannot establish left-button coverage.
+The classic resource regression uses that native menu path and checks the live field before its
+clicks; the other mex fixtures require value 1.
+
+#### GUI-only writes found by the resource replay fixtures
+
+The graphics globals base is `0x51F320`. Its event-ring write/read indices `+0x18E/+0x192` are
+`0x51F4AE`/`0x51F4B2`, capacity `+0x186 = 20`; `0x4C2E30` and `0x4C2D60` advance them through
+mouse-button messages even when a modal GUI consumes the click. The GUI is `main+0x519`:
+its latest event occupies `main+0x555..+0x56C` (`GUI+0x3C..+0x53`): six dwords x, y,
+wParam, timestamp, message and double-click flag. Thus `main+0x559` is y and `main+0x561..+0x564`
+is its timestamp, while `main+0x533` is inside
+its active-screen pointer `+0x18`, and `main+0x585` is the previous hovered/help gadget index at `GUI+0x6C`: `0x4AA596`
+and `0x4A00B5` copy `GUI+0x68` into it before selecting that gadget's text at record `+0x33`. The existing event-ring and GUI pump sections establish those owners. A two-image null
+twin whose arrows cancel and whose keyboard menu opens without clicks cannot observe every
+changed ring/eye bit. A native injected click returns the pointer to screen centre, so the
+harness follows each sampled click with a separate move and requires the GUI x/y/message echo
+before dumping. It samples GUI-consumed clicks through a ring turn, every valid coordinate bit
+and several eyes at one paused GameTime, and requires its carried simulation records to remain equal.
+The recorder's 60 recorded global slots / 78 dwords are unchanged. Owner-approved `leave`
+rows keep the active GUI pointer (`main+0x531`, four bytes), GUI mouse-event clock
+(`main+0x561`, four bytes) and bitmap-font pointer (`0x51F524`, four bytes) local.
+The three additional UI fields below and the two keyboard indices above also have exact
+owner-approved rows. Coordinates and text colours retain their existing classification;
+orders and carried simulation records retain their existing comparisons.
+
+The GUI event timestamp is a wall-clock sample. `0x4B5E70`, `0x4B5ED1` and `0x4B5F1D`
+call GetTickCount through IAT `0x4FC0DC`, multiply the low 32 bits by graphics `+0xE8`, and
+divide by 1000, as `0x4B6340` does. Moves copy the event through `0x4C2360`; buttons preserve
+it in the ring. `0x4AB66C` copies the six dwords into `GUI+0x3C`; with an empty ring,
+`0x4AB67B` calls `0x4C2340`, whose copy is at `0x4C2356`. The pump copies the event into
+its local dispatch data at `0x4AA151`. The original timestamp at `0x51F4C2` and its input
+copy at `main+0x2C82` already remain local under the existing mouse/input rows.
+Ring flush `0x4C2BB0` resets only the indices, and GUI init `0x4AA850` does not clear
+`GUI+0x48`. Ordinary native moves and clicks produce another clock sample. A short paused
+probe cannot establish a change of every clock bit by waiting for arithmetic rollover.
+
+`main+0x531..+0x534` is the full active GUI pointer (`GUI+0x18`), not a unit type or a
+simulation pointer. Init zeros it at `0x4AA85E`; `GUI_Load` links its allocated screen to
+the old top at screen `+0`, then installs it at `0x4AAC5B`. Both `GUI_Pop` (`0x4A96A2`)
+and the pump's own pop (`0x4AA7D5`) replace it with that previous link before freeing
+the removed screen. MEASURED resource-refusals: live T301 held `0x0F72F320`, T1891 and
+the paused base held `0x0DC035B0`, menu views held `0x0B0B8018`, and the native RSNRACK
+selection returned to `0x0DC035B0`. Playback held `0x0B0A0BD0`; fresh seek held
+`0x0B0A7AF8`. Different screen allocations do not guarantee that every differing address bit
+changes during the null twin.
+
+`0x51F524..0x51F527` is the full current bitmap-font pointer, graphics `+0x204` (the text
+globals above). `SetFont 0x4C1420` ignores NULL at `0x4C1425..0x4C1427`, then stores the
+pointer at `0x4C142E`. `GetFont 0x4C1440` reads it at `0x4C1445`; `0x4C1450` reads its
+first byte as font height. Text drawing `0x4C14F0` passes this font to the glyph rasterizer
+`0x4CCF60` at `0x4C16D4`/`0x4C1744`. The adjacent `+0x208/+0x20C/+0x210` fields are text
+colour latches, not part of this pointer. MEASURED resource-classic: live T301 held
+`0x0DC48C20`, T1441 and all thirteen paused views held `0x0DA31580`; playback, second playing
+and seek held `0x0B0EBF90`, `0x0B0EB178` and `0x0B0EB128`. The two reported bytes at
+`0x51F525` were the middle of that four-byte pointer. A NULL SetFont call cannot clear it.
+Font loader `0x42A320` reads the two native faces through `0x4BBE50` at
+`0x42A347`/`0x42A387` and stores the returned allocations at `main+0x391F9/+0x391FD`
+(`0x42A375`/`0x42A3A2`). The file loader allocates bytes through `MEM_AllocNamed 0x4D83B0`
+at `0x4BBF3C` and reads them at `0x4BBF49`; teardown frees them through `MEM_Free 0x4D85A0`
+at `0x42A3BC`/`0x42A3E0`. The font latch holds a process allocation address, not a font ID.
+All three focused fixtures' carried simulation, events, round trips and seeks compare equal,
+including 39 additional paused views and three final endpoints. The former strict image
+failures identify the exact fields above; their owner-approved rows now classify that metadata
+explicitly. The full landing tier remains the runtime gate for the resulting list.
+
+`main+0x37E9E` is the command panel's displayed unit type: word stores at `0x41B0D2` and
+`0x41B1BC` copy unit `+0xA6`; the no-unit branch zeros it at `0x41B1E1`. The adjacent word
+`main+0x37E9C` receives unit `+0xA8` at `0x41B0BE`/`0x41B1A8`. MEASURED: native selection of
+ARMACK changes the type to 4 at paused GameTime 1722, which remains 1722 after selection.
+The resource-refusals null twin selects ARMACK through native input and requires its displayed
+type before a thirteenth dump; that dump's carried simulation must still equal the paused base.
+
+**Additional strict-image failures [DISASSEMBLED + MEASURED 2026-10-05].** The
+disk-interrupted combined run also completed three failing image comparisons:
+`resource-nozoom` at T1291 names `main+0x37E9E` (live `0xA5`, playback/seek zero),
+`resource-plain` at T481 names `main+0x11E7` (live 1, playback/seek zero), and
+`resource-upgrade` at T481 names `main+0x55D` (live 4, playback/seek zero).
+Each reports one differing byte. The owner subsequently approved exactly the
+full four-byte wParam, four-byte gadget latch and two-byte displayed type as
+viewer-local fields. Their leave rows add ten bytes without changing any recorded
+global slot or comparison tolerance. A new full run remains the validation gate.
+
+`main+0x55D` is the full four-byte native event wParam, `GUI+0x44`, within the
+six-dword copies at `0x4AB66C`/`0x4C2356` described above. Bit 2 is `MK_SHIFT`;
+the right mouse button is bit 1. An isolated native paused probe at GameTime 172
+changes the flags from 0 to 4 using held Shift and a mouse move. The same frozen
+probe selects ARMCK, ARMACK and CORCK and observes displayed types 32, 4 and 165
+respectively. Thus the old no-zoom value `0xA5` is CORCK's displayed type, not
+ARMCK's. The current refusal-only selection samples do not exercise that type
+in every resource fixture.
+
+`main+0x11E7` is `GUI+0xCCE`, a four-byte saved signed gadget status. The native
+handler `0x4A6AE0`, called at `0x4AA24C`, resolves the active screen at `GUI+0x18`
+and its gadget array at `screen+4`, with stride `0x15B`. At `0x4A6BC0` and
+`0x4A6BF1` it sign-extends gadget word `+0x138`; the stores at `0x4A6BC7` and
+`0x4A6BF8` save that value in the GUI latch. The branches follow left/right
+press tests through `0x4AB510` at `0x4A6BA1`/`0x4A6BD2`. That helper tests
+`GUI+0x4C` for native messages `0x201`/`0x203` or `0x204`/`0x206` and returns
+with `ret 8`. Its other direct callers are `0x4A3A13`, `0x4A3A58`, `0x4A430F`,
+`0x4A43B8`, `0x4A44EC`, `0x4A451B`, `0x4A4BCF`, `0x4A4C02`, `0x4A6DD2`,
+`0x4A73D7` and `0x4A744F`.
+
+The latch's word reads at `0x4A6C56`/`0x4A6CE3` restore gadget `+0x138` when
+the pointer is outside its rectangle. Its dword read at `0x4A6CB2` supplies the
+zero/nonzero toggle stored at `0x4A6CBF`. The latter branch tests the held-button
+mask through `0x4AB5B0`: that helper reads `GUI+0x54`, ANDs its requested mask
+and returns a boolean with `ret 8`; it does not decode a mouse-up message.
+Direct callers are `0x4A3AB6`, `0x4A4204`, `0x4A4553`, `0x4A4C3E`, `0x4A6C17`,
+`0x4A6C82`, `0x4A6D66` and `0x4A6E62`. The handler calls `0x4A0340` and
+`0x4A5F40` at `0x4A6CC8`/`0x4A6CCF` after updating gadget state, and returns
+with `ret 12`. A displacement search finds those two stores and three reads of
+`+0xCCE`; it does not prove the absence of an aliased or block-copy access.
+
+Related reset `0x4A69D0` clears nonzero type-1 gadget status words over the
+native signed count at panel `+0xB6`, starting at gadget 1; it requests a redraw
+through `GUI+0xCCA` at `0x4A6A14`. No direct CALL to this entry was found.
+`0x4A6A40` applies the same reset only to the supplied gadget's byte-1 group,
+and sets the redraw flag at `0x4A6AAF`. Its direct callers are `0x4958AD`,
+`0x49591F`, `0x495F82`, `0x49900C`, `0x4990F1`, `0x499159` and `0x49933D`.
+Neither reset writes `GUI+0xCCE`.
+
+Three isolated diagnostic attempts did not reproduce the latch changing to 1
+with the native Interface `LEFTCLICK` control. Their stage assertions failed
+before the paired dump comparisons ran. The frozen-tick flags/type observations
+above are established; a paired carried-state proof for this particular gadget
+status is not. The native writers establish its GUI owner, not a successful
+diagnostic regression. Owner approval of those exact extents is separate from
+the native ownership evidence and from the unsuccessful paired-state probe.
+
+`main+0x142CB..+0x142DA` holds four signed dwords for the minimap camera rectangle.
+`0x41C3C0` clamps eye `+0x1431F/+0x14323` against native scroll extents `+0x1422B/+0x1422F`
+minus viewport dimensions `+0x37E37/+0x37E3B`, then passes `main+0x142CB` to
+`0x466B70` at `0x41C426`/`0x41C442`. The indirect stores are `0x466B99` (left),
+`0x466BBF` (top), `0x466BE6` (right) and `0x466C0F` (bottom). Left/top use signed
+minimap origin `+0x142E7/+0x142E9` plus minimap dimensions `+0x142EB/+0x142ED`
+times the eye divided by those extents. Right/bottom add those minimap dimensions
+times view cell dimensions `+0x1423B/+0x1423F` times 16 divided by those extents,
+then subtract one. The rectangle is passed to `0x4BF8C0` at `0x466B5E` after
+the minimap image copy through `0x4C6B70` at `0x466B44`. DISASSEMBLED.
+
+MEASURED combined ten-slot resource-refusals: T691 rectangle `(53,22,66,32)` and
+displayed type 4; T1711 and paused base T1759 rectangle `(32,20,45,30)` and type 0.
+P/R/Q at T691 held `(12,0,25,10)` and type 0. The small paused camera sweep reached
+right coordinates only 25..50, never setting the differing bit 6 at `main+0x142D3`;
+paused RSNRACK selection displayed 280 (`0x118`), never setting ARMACK's bit 2.
+The null twin now spans the map's native scroll extents and samples ARMACK and RSNRACK selection,
+while preserving the exact paused-simulation check and existing comparison list.
+
+
+The native Stop-button callback plays a UI sound at `0x41A0F1`, returning to `0x41A0F6`,
+through `0x47F1A0("immediateorders", 0)` (name pointer `0x50271C`). The Stop branch
+compares `"STOP"` (`0x502714`), sets mode 1, clears region bit 3 and dispatches through
+`0x48CF30` (`0x419CBC`..`0x419CF2`), then jumps to this shared UI sound tail. The Load and
+other unarmed command paths share the tail; it is not a
+simulation reply produced by `0x47F780`/`0x47F850`. The resource-priority fixture observed three
+such calls in its live [481,1681) count window and none on the puppet. Its unit/player/order,
+round-trip and fresh-seek comparisons still agree. The owner approved its exact call-site expected-absent row on 2026-10-05; the command
+orders and their effects retain the ordinary recorder checks.
+
+The resource profile-label refresh writes only a label (`gadget+0`, ID 5) on a screen whose
+OnCommand dispatcher is one of Impure's own menu handlers. `GUI_Load 0x4AA8F0` allocates
+`0x10F57` bytes at `0x4AAA68` and advances `ControlsAry` by `0x3F` at `0x4AAA95`: the remaining
+`0x10F18` bytes hold exactly 200 records of stride `0x15B`, including panel record zero.
+The signed count at panel `+0xB6` must therefore be 1..199 before a refresh walks records
+1..count. The profile label's text is `char[128]` at gadget `+0xB6`, ending before its status
+word at `+0x137`. This is the allocation bound, not a readable-page probe.
+
+Resource raw coordinates are captured after the `0x499221` conversion independently of zoom.
+With zoom disabled, the installed wrapper calls pristine `0x498DA0` directly before capture;
+no zoom conversion or viewport rect write runs. Resource hooks require that producer
+installation to be live, in addition to the complete CANBUILD allocation patch.
+
+The resolver's mode-7 branch at `0x43F4C7` requires definition `+0x245` bit `0x20`
+(CanGuard) and a nonzero relationship at `0x43F4D4`. Mode 12 starts at `0x43F4F7` and
+requires `+0x245` bit `0x400` (CanReclamate) at `0x43F4FD`. Refusal reaches `0x4401DC`,
+loads the caller's output pointer into EAX, writes byte zero at `0x4401E3` and returns
+`ret 0x14` at `0x4401E7`. Native dispatch at `0x48D0A5`..`0x48D0B1` tests that byte
+and skips zero. A nonnull pointer alone is not eligibility. The resource wrapper returns
+`-1` for byte zero before any reclaim/build/Guard plan is accepted.
+
+Visuals Undo snapshots the two raw per-mod resource preferences, not their capped plates.
+Restoration uses the settings store's global value bounds rather than the active profile
+cap; menu refresh derives the effective values again. Raising a cap can therefore recover
+a saved higher radius even after Undo.
+
+Profile polling runs inside the existing `0x4C63A0` flip observer, after its game-thread guard
+and before census/publisher early returns. `DrawGameScreen` returns from its flip call at
+`0x46A3E0`; that game-flip identity freezes policy even without frame packets. Main-menu
+selection releases the freeze. Polling is independent of mailbox capacity and of a live render
+consumer; `fill_shell` only fills presentation data. No additional byte patch is installed.
+
+DISASSEMBLED GUI stack removal: `GUI_Pop 0x4A9660` installs the previous active link
+`[gi+0x18] = [removed]` at `0x4A96A2` before freeing the removed GUIMEMSTRUCT through
+`MEM_Free 0x4D85A0` at `0x4A96AF`. Profile refresh uses that current link on the same
+GUI/input thread and retains no GUI pointer beyond the refresh call.

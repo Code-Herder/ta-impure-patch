@@ -1,5 +1,15 @@
 # Impure beside mods, TADR and the Patch Loader
 
+## Native features and Impure coverage
+
+A successful compatibility result means the mod runs with Impure and TADR is suppressed.
+It does not mean every native TADR convenience has been reimplemented. The
+[QoL table](../tadr-port/quality-of-life.md) checks each supported mod's effective bundled version,
+content opt-ins and fresh defaults against Impure's current functions. It distinguishes enabled
+native features, bundled options defaulting off and newer development features absent from the
+bundles. Basic ghosts, piece masks, existing markers, world zoom and replay playback already work;
+snapping, queue editing, construction controls and allied information remain gaps.
+
 ## Summary
 
 Players do not install Impure into a clean retail folder. They install it into a TA Zero, TA Twilight,

@@ -67,7 +67,7 @@ def snapshot(pid, indices):
                     raise RuntimeError('unbounded script static count')
                 u['statics'] = list(struct.unpack(f'<{count}i', read(word(cob + 16), count * 4))) if count else []
                 u['threads'] = [struct.unpack('<9i', read(cob + 28 + slot * 548, 36))
-                                for slot in range(8)]
+                                for slot in range(probe.COB_THREADS)]
             result['units'][handle] = u
         return result
 

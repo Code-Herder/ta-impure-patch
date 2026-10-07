@@ -20,7 +20,10 @@ what the tier never exercised.
 FIXTURE is a name in tools/replay/fixtures.json, or `all`. For each fixture four GameTimes are
 drawn (one more for each round trip a broad entry's `trips` asks for beyond three), each T = 1 (mod 30) -- the radar pass's step, so a seek's contact bits agree at once (O14)
 -- between 301 and 0.8 x its end, from a generator seeded by the fixture's name and HEAD, and
-printed: T1 the first, T2..T4 the round trips, Tlast = T4. Four processes, each a game of its own:
+printed: T1 the first, T2..T4 the round trips, Tlast = T4.
+An entry's `last_min` requires Tlast to reach a named completion checkpoint; it keeps late
+construction events inside the live/puppet comparison on every commit's random seed.
+Four processes, each a game of its own:
 
     L  live      the fixture recorded, dumps l<T1> and l<Tlast>
     P  playing   `replay play` in the recording's viewed player's perspective, dumps p<T1> and
@@ -137,7 +140,12 @@ TAKEOVER_CHECKS = {
     "victory": "timeline 1 ends complete with P's seat won, within TAKEOVER_SPAN of T",
 }
 CONTINUE = 300                  # the dump after a round trip, this many ticks on
+NULL_VIEWS = tuple(f"lnv{i}" for i in range(12)) + ("lnselection",)
 LAUNCH_TIMEOUT = 400
+
+
+def null_views(fix):
+    return NULL_VIEWS + tuple(f"lnselection{i}" for i in range(len(fix.get("viewer_more", []))))
 
 
 def main_checkout() -> Path:
@@ -373,6 +381,9 @@ class Worker:
         for other in fixtures().values():
             for name in (other.get("content") or {}).get("files", []):
                 (self.gamedir / name).unlink(missing_ok=True)
+        # A cached catalogue belongs to the previous fixture's installed
+        # content. The next launch must resolve its units against its own game.
+        _CLI_API._cat_path(_CLI_API.Instance(self.name)).unlink(missing_ok=True)
         content = fix.get("content")
         if content:
             argv = [a.replace("{gamedir}", str(self.gamedir)) for a in content["run"]]
@@ -515,13 +526,13 @@ def head():
     return r.stdout.strip() or "no-head"
 
 
-def gametimes(name, end, h, trips=3, first=301):
+def gametimes(name, end, h, trips=3, first=301, last_min=None):
     """T1 and `trips` round trips: T = 1 (mod 30) between `first` and 0.8 x end, with room for
     the dump after a round trip, sorted, from a generator seeded by the fixture and HEAD. A
     fixture's `first` puts every point after its human's interface work (the images gate reads
     the recording machine's interface state as unlisted state, the null twin classifying only
     what a viewer does without changing the game); it moves where the checks run, not what they
-    check."""
+    check. Its `last_min` makes the last point reach a named completion checkpoint."""
     if first % 30 != 1:
         raise CouldNotRun(f"{name}: first {first} is not 1 (mod 30)")
     hi = min(int(0.8 * end), end - CONTINUE - 30)
@@ -529,7 +540,14 @@ def gametimes(name, end, h, trips=3, first=301):
     if len(pool) < trips + 1:
         raise CouldNotRun(f"{name}: end {end} leaves fewer than {trips + 1} GameTimes")
     rng = random.Random(int(hashlib.sha1((name + h).encode()).hexdigest()[:8], 16))
-    return sorted(rng.sample(pool, trips + 1))
+    times = sorted(rng.sample(pool, trips + 1))
+    if last_min is not None:
+        eligible = [t for t in pool if t >= last_min]
+        if not eligible:
+            raise CouldNotRun(f"{name}: end {end} leaves no GameTime at or after {last_min}")
+        if times[-1] < last_min:
+            times[-1] = rng.choice(eligible)
+    return times
 
 
 # ---- the four processes ---------------------------------------------------------------------
@@ -606,11 +624,22 @@ def step(w, kind, arg):
                       timeout=60)
         if rc:
             raise CouldNotRun(f"order {kind_} {rank} {' '.join(argv)}: {last(o)}")
+    elif kind == "run":
+        # A fixture's assertions use the same native input path as a player.
+        # They fail the live lane before state equality could bless a no-op.
+        argv = [a.replace("{instance}", w.name).replace("{gamedir}", str(w.gamedir))
+                for a in arg]
+        if argv[0].endswith(".py"):
+            argv = [sys.executable, str(TREE / argv[0])] + argv[1:]
+        r = subprocess.run(argv, cwd=TREE, capture_output=True, text=True, timeout=300)
+        if r.returncode:
+            raise Failed(f"fixture assertion {' '.join(arg)}: {last(r.stdout + r.stderr)}")
+        say(last(r.stdout))
     else:
         raise CouldNotRun(f"a step of kind {kind!r}")
 
 
-def twin(w, log):
+def twin(w, log, fix):
     """The null twin (tarec images-gate): the live game paused, frame dump ln1; then what the
     viewer does without changing the game -- the arrow keys a second each way, one wheel notch in
     and out at the map's centre, the cursor over the map and over the panel, the in-game menu
@@ -626,6 +655,70 @@ def twin(w, log):
     w.trigger("dump ln1 now")
     if not log.wait(r"recorder: frame dump ln1 at GameTime", 30, n):
         raise CouldNotRun("the twin: frame dump ln1 not taken in 30 s")
+    # A button message changes the event ring even when a modal GUI consumes
+    # it. Sample a complete ring turn and several camera positions while the
+    # world is paused: returning to the same eye or ring index would hide these
+    # viewer writes from a two-image observation.
+    tacli("arm", w.name, "menu.open")
+    rc, o = tacli("ui", w.name, "wait", "--gui", "RENDER.GUI", "--timeout", "10", timeout=60)
+    if rc:
+        raise CouldNotRun(f"the twin: Impure options did not open: {last(o)}")
+    rc, o = tacli("ui", w.name, "--json")
+    if rc:
+        raise CouldNotRun(f"the twin: Impure options could not be read: {last(o)}")
+    gui = json.loads(o)
+    labels = [g for g in gui["gadgets"] if g["type"] == "label" and g["active"]]
+    if not labels:
+        raise CouldNotRun("the twin: Impure options has no inert labels to sample")
+    width, height = gui["surface"]
+    rc, o = tacli("peek", w.name, "*0x511DE8+0x1422b", "*0x511DE8+0x1422f",
+                  "--json", timeout=60)
+    if rc:
+        raise CouldNotRun(f"the twin: map dimensions: {last(o)}")
+    map_width, map_height = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
+    points = ((0, 0), ((1 << (width.bit_length() - 1)) - 1,
+                       (1 << (height.bit_length() - 1)) - 1), (width - 1, height - 1))
+    for i, name in enumerate(NULL_VIEWS[:-1]):
+        x, y = labels[i % len(labels)]["click"]
+        tacli("keys", w.name, f"pclick:{x},{y}")
+        # Click injection returns the pointer to screen centre. A separate
+        # move and its native GUI echo establish the coordinate in this view.
+        x, y = points[i % len(points)]
+        tacli("keys", w.name, f"pmove:{x},{y}")
+        deadline = time.monotonic() + 10
+        while True:
+            rc, o = tacli("peek", w.name, "*0x511DE8+0x555", "*0x511DE8+0x559",
+                          "*0x511DE8+0x565", "--json", timeout=60)
+            if rc:
+                raise CouldNotRun(f"the twin: native mouse echo: {last(o)}")
+            event = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
+            if event == [x, y, 0x200]:
+                break
+            if time.monotonic() >= deadline:
+                raise CouldNotRun(f"the twin: mouse event {event}, wanted {[x, y, 0x200]}")
+            nap(0.1)
+        # The engine clamps these eyes to the map. The views are observations,
+        # not assertions about the camera's permitted range.
+        tacli("eye", w.name, i * map_width // (len(NULL_VIEWS) - 2),
+              i * map_height // (len(NULL_VIEWS) - 2))
+        n = len(log.lines)
+        w.trigger(f"dump {name} now")
+        if not log.wait(rf"recorder: frame dump {name} at GameTime", 30, n):
+            raise CouldNotRun(f"the twin: frame dump {name} not taken")
+        if w.gametime() != g1:
+            raise CouldNotRun("the twin: GameTime moved during the viewer samples")
+    tacli("arm", w.name, "menu.open=off")
+    selections = [("lnselection", fix.get("viewer"))] + [
+        (f"lnselection{i}", command) for i, command in enumerate(fix.get("viewer_more", []))]
+    for name, command in selections:
+        if command:
+            step(w, "run", command)
+        n = len(log.lines)
+        w.trigger(f"dump {name} now")
+        if not log.wait(rf"recorder: frame dump {name} at GameTime", 30, n):
+            raise CouldNotRun("the twin: selection frame dump not taken")
+        if w.gametime() != g1:
+            raise CouldNotRun("the twin: GameTime moved during the selection view")
     for key in ("up", "down", "left", "right"):
         tacli("keys", w.name, f"down:{key}")
         nap(1.0)
@@ -668,6 +761,8 @@ def live(w, fx, Ts, out):
     """L: the fixture recorded, dumps l<T1> and l<Tlast>; returns the recording's path."""
     fix = fx["fix"]
     w.place(fix, fx["dll"])
+    if fix.get("preflight"):
+        step(w, "run", fix["preflight"])
     los = [] if fix.get("los") == "file" else ["--los", str(fix.get("los", 0))]
     log = Log(w)
     rc, o = tacli("scenario", "load", w.name, SCENARIOS / fix["load"], "--defaults", *los,
@@ -695,7 +790,7 @@ def live(w, fx, Ts, out):
             step(w, kind, arg)
         if Ts and not twinned and g > Ts[-1] + 5:
             wait_dumps(log, names[1:], 30)
-            twin(w, log)
+            twin(w, log, fix)
             twinned = True
         if g >= fix["end"] and not steps:
             break
@@ -1474,6 +1569,12 @@ def tarec_run(*args):
 PASS, FAIL, UNRUN = "pass", "FAIL", "could not run"
 
 
+def image_gate_options(fx):
+    if fx["name"] == "stock-secondary-orders" and fx["fix"].get("dll") == "stock":
+        return ["--stock-secondary-cosmetics"]
+    return []
+
+
 def checks(fx):
     """Every check of the processes that ran: (name, verdict, detail) each. A dump tarec cannot
     read (its exit 2) could not run; only a comparison that ran and differed is a FAIL."""
@@ -1521,8 +1622,13 @@ def checks(fx):
         compare(f"counts, L against P over [{Ts[0]}, {Ts[-1]})", "compare-counts", rec, l1, lT,
                 p1, pT, files=[l1, lT, p1, pT])
     if all(ran.get(k) == "ran" for k in "PRQ"):
-        compare(f"the images gate at {Ts[0]}", "images-gate", rec, l1, lT, n1, n2, p1, pT, r1, q1,
-                files=[l1, lT, n1, n2, p1, pT, r1, q1])
+        views = [out / "L" / f"dump-{n}.bin" for n in null_views(fx["fix"])]
+        for view in views + [n2]:
+            compare(f"the paused twin's simulation: {view.stem}", "compare-dumps", rec,
+                    n1, view, files=[n1, view])
+        compare(f"the images gate at {Ts[0]}", "images-gate", *image_gate_options(fx),
+                rec, l1, lT, n1, n2, p1, pT, r1, q1,
+                *views, files=[l1, lT, n1, n2, p1, pT, r1, q1, *views])
     for proc, d in (("L", lT), ("P", pT)):
         if ran.get(proc) == "ran":
             compare(f"{proc} {d.stem[5:]}: the address scan", "scan", rec, d, files=[d])
@@ -1777,7 +1883,8 @@ class Run:
                 raise CouldNotRun(f"{name}: no DLL at {dll} ({make})")
             if dll.stat().st_mtime < sources_mtime():
                 raise CouldNotRun(f"{name}: {dll} is older than its sources ({make})")
-            Ts = gametimes(name, fix["end"], h, fix.get("trips", 3), fix.get("first", 301))
+            Ts = gametimes(name, fix["end"], h, fix.get("trips", 3), fix.get("first", 301),
+                           fix.get("last_min"))
             # `takeover`, (player, at) of `tareplay.py takeover`: L, K and F alone
             want = (("L", "K", "F") if takeover else ("L", "P") if measure else
                     ("L",) if fix.get("cost") else procs(fix))
@@ -2083,7 +2190,7 @@ RECORDER_OWN = {DD + "src/tagpu_recorder.c", DD + "src/tagpu_recwriter.c",
                 DD + "inc/tagpu_replay_layout.h", DD + "replay-globals.tsv",
                 DD + "replay-layout.tsv", DD + "replay-absent.tsv",
                 "tools/replay-globals-gen.py", "tools/replay-layout-gen.py",
-                "tools/replay-layout-check.sh"}
+                "tools/replay-layout-check.sh", "tools/tacli"}
 FIXTURES_JSON = "tools/replay/fixtures.json"
 NOTE = "replay-roundtrip:"
 
@@ -2144,6 +2251,10 @@ def gated(paths, base):
     fx, by_region, by_function, whole, why = set(), set(), set(), set(), []
     headers = {s: includes_of(s) for s in sims}
     for p in sorted(paths):
+        users = {n for n, f in fixtures().items() if p in f.get("sources", [])}
+        if users:
+            fx |= users
+            why.append(f"{p}: the input regression of {' '.join(sorted(users))}")
         if p in sims:
             by_region.add(p)
         elif p == FIXTURES_JSON:
@@ -2446,7 +2557,8 @@ def cmd_forks(args):
         if not dll.exists() or dll.stat().st_mtime < sources_mtime():
             raise CouldNotRun(f"build {make} first")
         fx = {"name": args.fixture, "fix": fix, "dll": dll.resolve(), "cover": args.cover,
-              "Ts": gametimes(args.fixture, fix["end"], head(), 3)}
+              "Ts": gametimes(args.fixture, fix["end"], head(), 3, fix.get("first", 301),
+                            fix.get("last_min"))}
         fx["rec"] = live(w, fx, None, out / "L")
         res = forks_lane(w, fx, out / "X")
         for name, status, detail in res:

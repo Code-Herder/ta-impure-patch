@@ -18,15 +18,12 @@ There are two things to capture, and one tool for each:
   frame — UI, and the flat key fill inside the world viewport — so it is the right tool for
   reading the UI, the shell or a dialog, and the wrong one for judging what a pass drew.
 
-  **A loading screen is the window grab's, not this one's.** The loading frame flips once per
-  200 ms for the length of the load (three flips in a Wine load of a skirmish), and the trigger is
-  polled at the flip's ENTRY, before the engine copies back buffer → primary, so it only ARMS
-  and the capture happens on the trigger family's NEXT pass, one flip later (`screenshot.h` has
-  the two hosts that were tried for it and why both were worse). That is one 200 ms frame of
-  latency, and a 120-shot sweep through a `scenario load` caught nine distinct live frames and
-  never the loading screen itself. To see the load, loop `import -window 0x<client>` from just
-  before the click on Start (`tacli ui <i> click Start`), keep each PNG's timestamp, and
-  compare by ImageMagick signature; a load on Wine is about 1.2 s and its frames are 640×480.
+  **Capture loading screens through the presented window.** The trigger is polled at the
+  engine flip's entry, before back buffer → primary. It arms a shot that is serviced on the
+  next eligible trigger-family pass, so it can miss a short-lived loading frame. Record from
+  before `tacli ui <i> click Start`, keep capture timestamps, and compare image signatures.
+  The shell's logical surface is 640×480; measure the actual client size for the window grab.
+
 * **the window, grabbed by its client id** — the presented frame, our passes included. One
   frame is `import -window 0x<client>` on the instance's display; video is ffmpeg x11grab
   `-window_id` (rule 5). There is no in-process capture of the presented frame that a `tacli`
@@ -50,12 +47,22 @@ Two facts that shape every capture:
 
 | Path | Trigger | What it sees | Output |
 |---|---|---|---|
-| Surface shot | `tagpu_shot.trigger` | the 8bpp ENGINE frame only (none of our passes) | `<gamedir>/Screenshots/*.png` at the surface size (640×480 in the shell, the game mode in play). **Broken in game between the window-title landing and 2026-09-07**: the title's `:` and `\|` made an illegal filename and the PNG never appeared; fixed in `screenshot.c` |
+| Surface shot | `tagpu_shot.trigger` | the 8bpp ENGINE frame only (none of our passes) | `<gamedir>/Screenshots/*.png` at the surface size (640×480 in the shell, the game mode in play) |
 | Window grab | `import -window 0x<client>` (rule 5) | the presented frame, our passes included | png, client-sized |
 | Video | ffmpeg x11grab `-window_id` (below) | the window's OWN content, occluded or not | mkv |
 
-Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
-`sleep 0.55` between triggers.
+The trigger family has a **16 ms minimum interval**, evaluated at engine flips
+(`before_flip` in `tagpu_gui_hook.c`). `tagpu_triggers_frame` services an armed surface shot
+before arming a new one: capture follows on the next eligible family pass. Actual throughput
+depends on engine flips, PNG encoding and the reader; there is no eight-frame capture gate
+or required fixed sleep. `tacli shot` itself checks for output every 250 ms.
+
+A custom burst loop must wait for the previous PNG to decode completely before copying or
+removing it and requesting another. Names use wall-clock seconds and collision suffixes
+(`_2`, `_3`, …); removing a file lets its name be reused within that second. Snapshot the
+directory before each trigger and detect new output relative to that snapshot. Measure
+distinct frames and simulation ticks rather than assuming each captured image advances the
+game. See `research/notes/capture-workflows.md` for the recorded rates and their limits.
 
 ## Hard rules
 
@@ -68,16 +75,14 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
 2. **Never inject keys or clicks with xdotool** — use `tacli keys` / `tacli click`
    (in-process, reliable, session-state-proof). X injection has landed keystrokes in
    the user's unlock dialog. xdotool stays fine for reading geometry and for capture.
-3. **Every window stays on the visible desktop.** `tacli`'s tiler reads the real display
-   size and wraps into overlapping cells when it runs out, rather than marching windows
-   off an edge (`tile_for` in `tools/tacli`). Keep it that way when placing an instance by
-   hand: the presented frame is only ever captured through the window.
-4. **Geometry: windowed instances are 1:1** — the client area *is* the game
-   resolution, so game px == window px and no letterbox maths is needed, and
-   `-video_size <w>x<h>` is simply the instance's `res` (grab it by window id, rule 5).
-   (Legacy fullscreen runs letterbox 4:3 inside 3840×2160 at
-   `+480,0`, scale 4.5, i.e. game px → window px = `(480 + gx*4.5, gy*4.5)`; those
-   numbers are 640×480-only and must be recalibrated after any resolution change.)
+3. **Keep each window inside its own display.** `tacli`'s tiler reads that display's size
+   and wraps into overlapping cells when it runs out (`tile_for` in `tools/tacli`). Keep
+   hand placement inside those bounds. An isolated display belongs to the experiment;
+   a game handed to the human must be visible on their monitor.
+4. **Measure the client geometry.** A default windowed launch follows the game resolution,
+   but `--window` and fullscreen can make the client a different size. Read the client with
+   `xwininfo -id <client>` on the instance's display and use that size for `-video_size`.
+   Recalibrate any game-to-window coordinates after a display-mode or resolution change.
 5. **Recording video: grab the WINDOW, not a screen region** (2026-09-08).
    `-window_id` reads the window's own redirected pixmap, so the capture is the game's
    frame no matter what is stacked over it, wherever the window sits — and the user
@@ -120,17 +125,29 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
    a second cursor and a moving false positive.
 
    **If you must grab a screen region anyway** (2026-09-02, still true): the session must
-   be unlocked and actually displaying the window. **The user's desktop is REAL**
-   (6200×2160, with their browser, Discord, Zoom and terminals on it) — not an isolated
-   display — so say so before you record. `LockedHint` is **not** a sufficient check: a
+   be unlocked and actually displaying the window. **A region of the live desktop can include
+   other applications**, so say so before you record. `LockedHint` is **not** a sufficient check: a
    switched-away session reports `LockedHint=no` while GNOME's `mutter guard window`
    (full-screen, `IsViewable`) covers everything, and the capture comes back as blurred
    wallpaper. Test with one `-frames:v 1 -update 1` grab diffed against a `-window_id` grab of the same window;
    a mean abs difference of ~1 means you have the window, ~40 the guard. And the client
    rect from `xwininfo -id <client>` (`Absolute upper-left`) is the one to grab, **not**
    the `tacli ls --json` rect, which is the frame — they differed by (14, 49) here.
-   **`xwd -id <window>` returns full window content even while the session is locked**
-   (3.1 MB for 1024×768, verified) — the escape hatch when the screen is unavailable.
+   **Validate the image before trusting a locked-session capture.** `xwd -id`,
+   `import -window` and ffmpeg `-window_id` can produce black frames while the game keeps
+   running. A valid file or normal byte count does not establish visible content.
+   For engine UI, `tacli shot` remains an independent surface path. For Vulkan output,
+   use an isolated display and validate a presented-frame grab there; a surface shot
+   cannot show our GPU passes. See `research/notes/capture-workflows.md` for the limits.
+   **A desktop flash during a mode change needs an isolated-display grab.** A
+   `-window_id` capture cannot show the desktop uncovered by the window shrinking.
+   On an isolated display, give the root a known background colour and record the
+   whole display at 60 fps; keep the normal window-only rule on the human's desktop.
+   Pair the recording with timestamped window Create/Destroy, Map/Unmap and Configure
+   events. Keep ConfigureNotify's own width/height: querying the window after the
+   event can already see the next size and hide the intermediate one. See
+   `research/notes/fullscreen-handoff.md` for the reproduction and its compositor gap.
+
 6. **Marker-verified pairs** (engine vs ours): `echo "STRIP <phase> $(date +%s)"
    >> $OUT/markers.txt` before each capture, match PNG mtimes with
    `ls --time-style=+%s`. The marker goes in your own file, never into `log/tagpu.log`: the DLL
@@ -250,6 +267,29 @@ the delta (`~1400 px/s`, clamp 0.15–3 s) → park → re-read. Break when with
    the same walk to five to twelve catches a minute. A single core is used,
    and nothing else on the machine is touched; unpin afterwards.
 
+## A zoomed close-up that follows a unit
+
+- Use a private `Xvfb :N -screen 0 3840x2160x24` and create your own instance on `:N`.
+  Whole-display `ffmpeg -f x11grab -i :N+0,0` is appropriate there because the display
+  contains only your experiment. Validate actual frames; an isolated display removes the
+  human desktop's covering windows, but does not establish a rendering rate.
+- Set the simulation speed on the stopped instance with `tacli registry <i> gamespeed=1`
+  if slow motion is needed. A newly seeded store starts at 10; existing stores retain their
+  value. Measure simulation ticks and presented frames separately. Encoding at 30 fps
+  does not make a low-rate simulation advance at 30 ticks/s.
+- Write `tagpu_zoom.txt` atomically; the active lever is reread each render frame. Calibrate
+  the game viewport centre and world-to-screen mapping for the current HUD, resolution and
+  zoom instead of reusing coordinates from another recording.
+- `tacli eye <i> X Y` holds the camera. The hold's presence is checked every 15 render frames;
+  once active, its integer position is reread every render frame and applied on the game
+  thread before drawing. Removal invalidates the hold on the next active read. Measure the
+  screen-space steps when tracking at high zoom; a pinned camera and an offline crop are
+  useful when integer world coordinates are too coarse for the shot.
+- Park the in-game cursor over a safe sidebar point with
+  `tacli keys <i> pmove:<x>,<y> pmove:<x>,<y>`; the repeated token handles the keys verb's
+  first-token behaviour. Never move the human's pointer. Judge laser size and motion from
+  the actual presented capture at the chosen zoom.
+
 ## Launching (see the ta-drive skill for the full driving surface)
 
 ```bash
@@ -261,3 +301,10 @@ tools/tacli stop cap1
 Wedged (menu keys dead) = `tacli stop <name> --hard` and relaunch. A DLL rebuild is
 picked up by the next `tacli launch`. Sandbox note: run game-dir reads/writes and
 wine/ffmpeg commands with the sandbox disabled.
+
+## Maintaining this skill
+
+State current procedures in the present tense. Replace incorrect instructions instead of
+appending a correction. Keep dated measurements and their limits in
+`research/notes/capture-workflows.md` or the relevant investigation note. Check each named
+lever and tool against the source, and verify the rendered wiki when changing its notes.

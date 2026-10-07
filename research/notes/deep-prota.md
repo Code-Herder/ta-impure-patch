@@ -178,13 +178,18 @@ There is **no `pdraw.dll`**. The Patch Loader is a **`dplayx.dll` proxy** forwar
 `+0x10000`, applies the INI, sets a marker byte at `0x00401064` to tell `tdraw.dll` the proxy is
 live, then `LoadLibrary("tdraw.dll")` and repoints two `DirectDrawCreate` call sites (`0x0047BFA2`,
 `0x004B55FB`). Per TADR's `tdraw.txt`, **ProTA uses the unmodified name `tdraw.dll`** — it is the
-mainline build (`tdraw-prota.zip`, "all features enabled"); Mayhem renames it `mdraw.dll`,
+mainline build target (`tdraw-prota.zip` in newer releases); historical Mayhem renames it `mdraw.dll`,
 Escalation `taesc.dll`, Zero `zdraw.dll`. TADR carries `src/DDraw/config_prota.h` and
 `src/Recorder/dist/prota/tplayx.dll`, and lists "ProTA 4.6 / ProTA.ini / tdraw.dll".
 
-Two features the brief attributes to ProTA — **build-menu rotation overlays** and **allied
-queued-build overlays** — are `tdraw.dll` features contributed by TAG_Venom (`tdraw.txt:81, 725,
-768-775`), not `prota.ini` hex patches.
+**Build-menu rotation overlays and allied queued-build overlays are absent from ProTA 4.8's
+bundled DLL.** They are later upstream `tdraw` features, not `prota.ini` patches. A newer ProTA
+build target is not evidence that 4.8 ships it. The [native QoL audit](tadr-port/quality-of-life.md)
+identifies the installed binary and defaults: placement/reclaim snapping, queue editing,
+line/ring construction, Hold Position reclaim-only patrol, blocker kickout, whiteboard/camera/
+income transport and F11's macro are included. Assist-only patrol and stay/scatter guarding are
+available options with conservative defaults. ProTA alone supplies the owner-11 map markers
+needed for DT/fort-wall visibility without LOS. No active `Rotations=` definitions were found.
 
 **ProTA 4.8** (29 August 2025, the current release) is `https://prota.tauniverse.com/ProTA4.8.zip`
 (behind a browser check; 17,103,752 bytes, sha256 `1b0acde1…`; the installation page lists 4.8
@@ -192,12 +197,13 @@ and the earlier releases, and TA Forever installs it too). It is unzipped into a
 ships [VERIFIED — downloaded 2026-09-26]: the **stock 3.1 `TotalA.exe`** (md5 `8e74a1df…`); the Patch
 Loader as `dplayx.dll` (156,672 bytes, image `0x31000`, `; ProTA 4.8 Patches`,
 `RegistryPath=ProTA`, `ConfigFileName=ProTA.ini`, `Gp3FileName=ProTA.gp3`, MP version 4.8); a 2025
-TADR `tdraw.dll` (716,800 bytes, image `0xB6000`, the "Install Limit Crack" generation); the
+TADR **v2025.8.29** `tdraw.dll` (716,800 bytes, image `0xB6000`, byte-identical to that upstream release); the
 recorder `tplayx.dll` (298,496, image `0x4F000`); cnc-ddraw as `ddraw.dll`; `win32.dll`,
 `tmusi.dll`, `wgmus.dll` and the bass libraries for sound; and `ProTA.gp3` with the mod's data.
-With Impure copied over `ddraw.dll` it reaches the menu and crashes on the first skirmish load,
-the same collision as Total Mayhem's ([TADR beside Impure](compat/tadr-collision.md)). The
-earlier reported 680,448-byte `tdraw.dll` is a different, older build.
+Before the takeover, copying Impure over `ddraw.dll` reached the menu and crashed on the first
+skirmish load ([the collision](compat/tadr-collision.md)). The supported setup now passes with
+TADR suppressed ([current outcomes](compat/setups.md)); suppression does not retain its native
+QoL. The earlier reported 680,448-byte `tdraw.dll` is a different, older build.
 
 ## Multiplayer version enforcement
 

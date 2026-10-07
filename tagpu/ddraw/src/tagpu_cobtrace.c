@@ -9,7 +9,7 @@
 
      S  tick unit type script slot source args…   a thread starts (allocated)
      R  tick unit slot script value               a thread's RETURN, the value it popped
-     X  tick unit script source                   a start REFUSED: all eight records busy
+     X  tick unit script source                   a start REFUSED: all records busy
      K  tick unit slot script by                  a thread killed by another's `signal`
      D  tick unit slot value                      a `rand` draw, the value the script got
      H  tick unit slot script pc depth            a new stack peak above 32 words
@@ -27,7 +27,7 @@
    THE SEAM (the engine map has the full disassembled layouts). The COB engine
    object hangs off unit+0x9A (size and record stride in tagpu_cob_safe.h, vtable
    0x4FD698): +0x08 the loaded .cob (+4 nscripts, +0x18 entry[] word indices,
-   +0x1C name[] pointers, +0x24 code words), +0x1C eight thread records,
+   +0x1C name[] pointers, +0x24 code words), +0x1C the thread records,
    then the busy count and the posed model pointer whose +0xC is the
    unit. A record: +0 status (0 free; 0x01xxxxxx running; 0x02xxxxxx blocked,
    bits 20-23 say on what), +4 pc, +8 stack top index (-1 empty), +0x18 the
@@ -36,7 +36,7 @@
 
    Every thread start — the engine's StartScript/QueryScript families and the
    VM's START/CALL opcodes alike — goes through ONE allocator, 0x4B08C0
-   (`__thiscall(cob, scriptIndex)` -> record slot 0..7 or -1). Its callers push
+   (`__thiscall(cob, scriptIndex)` -> bounded record slot or -1). Its callers push
    the arguments onto the new record's stack only AFTER it returns, so the S
    line is latched there and written at the next hook event, always before the
    thread has run (the thread runner 0x4B0DA0 is hooked for exactly that: a
@@ -59,7 +59,7 @@
 #include "tagpu_simreg.h"
 #include "tagpu_cob_safe.h"
 
-SIM_FEATURE(cob_trace, SIM_PUPPET_INDEPENDENT, "battle");
+SIM_FEATURE(cob_trace, SIM_PUPPET_INDEPENDENT, "battle resource-core-upgrade stock-resource-mex");
 
 #define TA_MAINPP   0x00511DE8u
 #define OFF_TICK    0x38A47
@@ -72,10 +72,12 @@ SIM_FEATURE(cob_trace, SIM_PUPPET_INDEPENDENT, "battle");
 #define COB_O3(c)     (*(char**)((c) + 0x540))
 #define COB_REC(c, i) ((c) + 0x1C + (i) * 0xA4)
 #define REC_WORDS     32
+#define REC_THREADS   8
 #else
 #define COB_O3(c)     (*(char**)((c) + TAGPU_COB_MODEL_OFFSET))
 #define COB_REC(c, i) ((c) + 0x1C + (i) * TAGPU_COB_RECORD_BYTES)
 #define REC_WORDS     TAGPU_COB_WORDS
+#define REC_THREADS   TAGPU_COB_THREADS
 #endif
 #define REC_PC(r)     (*(int*)((r) + 0x04))
 #define REC_SP(r)     (*(int*)((r) + 0x08))
@@ -130,7 +132,7 @@ typedef struct {
 static struct {
     TraceThread   threads[64];
     unsigned      threadCount;
-    unsigned char peak[65536][TAGPU_COB_THREADS];
+    unsigned char peak[65536][REC_THREADS];
 } s_traceDiag;
 SIM_VAR(s_traceDiag, SIM_PRIVATE);
 static DWORD s_tls = TLS_OUT_OF_INDEXES;     /* the slot: this thread's s_traceDiag.threads entry */
@@ -298,7 +300,7 @@ static int __stdcall my_alloc(char* cob, int idx, unsigned ret, char* vm_rec, in
     slot = s_real_alloc(cob, idx);
     u = cob_unit(cob);
     if (!wanted(u)) { LeaveCriticalSection(&s_lock); return slot; }
-    if (slot >= 0 && slot < TAGPU_COB_THREADS && unit_index(u) >= 0)
+    if (slot >= 0 && slot < REC_THREADS && unit_index(u) >= 0)
         s_traceDiag.peak[unit_index(u)][slot] = 0;
     if (slot < 0) {
         /* -1 for an index the file lacks too (the engine asking for a script
@@ -328,7 +330,7 @@ static int __stdcall my_alloc(char* cob, int idx, unsigned ret, char* vm_rec, in
         pend->parent = thread->vm.parent;
         pend->argc = thread->vm.argc;
     }
-    if ((ret == START_RET || ret == CALL_RET) && vm_slot >= 0 && vm_slot < 8 &&
+    if ((ret == START_RET || ret == CALL_RET) && vm_slot >= 0 && vm_slot < REC_THREADS &&
         vm_rec == COB_REC(cob, vm_slot)) {
         /* the opcode's inline operands: [pc+1] script index, [pc+2] argument count */
         char* sf = COB_FILE(cob);
@@ -341,6 +343,9 @@ static int __stdcall my_alloc(char* cob, int idx, unsigned ret, char* vm_rec, in
     return slot;
 }
 
+#ifndef TAGPU_LIMITS_STOCK
+/* Only the guarded interpreter calls this observer. Native 32-word records
+   cannot exceed the stack depth it reports. */
 void tagpu_cobtrace_step(char* cob, unsigned slot)
 {
     char line[512];
@@ -352,7 +357,7 @@ void tagpu_cobtrace_step(char* cob, unsigned slot)
     flush_pending(thread);
     u = cob_unit(cob);
     index = unit_index(u);
-    if (slot < TAGPU_COB_THREADS && index >= 0 && wanted(u)) {
+    if (slot < REC_THREADS && index >= 0 && wanted(u)) {
         rec = COB_REC(cob, slot);
         depth = REC_SP(rec) + 1;
         if (depth > 32 && depth <= REC_WORDS && depth > s_traceDiag.peak[index][slot]) {
@@ -365,6 +370,7 @@ void tagpu_cobtrace_step(char* cob, unsigned slot)
     }
     LeaveCriticalSection(&s_lock);
 }
+#endif
 
 /* the thread runner's entry: the latched thread is about to take its first step */
 static void __stdcall my_run(char* cob, int slot, int dt)

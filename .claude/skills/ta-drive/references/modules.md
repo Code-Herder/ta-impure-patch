@@ -15,6 +15,7 @@ differs is the setup around it.
 8. [A remote Windows machine](#a-remote-windows-machine)
 9. [A mod that loads Impure from its own proxy](#a-mod-that-loads-impure-from-its-own-proxy)
 10. [The demo recorder: recordings and dumps](#the-demo-recorder-recordings-and-dumps)
+11. [Resource snapping and Quick Build](#resource-snapping-and-quick-build)
 
 ## Extra weapons
 
@@ -89,7 +90,7 @@ instance/display. `--extended` checks full-width invalid IDs, nonzero kills/cons
 local 100 and every argument of a 100-argument CALL. `--roundtrip` saves and restores sleeping
 expanded records; `--quarantine` checks type exclusion, native chat and a presented-window
 capture; `--reject-required` expects a required-unit refusal. Separate
-`--thread-exhaustion start|call` fixtures fill all eight records and exercise refused calls
+`--thread-exhaustion start|call` fixtures fill all ten guarded records and exercise refused calls
 with a full 128-word argument stack. START consumes refused arguments and resumes
 after SIGNAL frees slots; CALL retains the arguments, leaves its parent dormant
 on child `-1`, and checks that the match keeps advancing.
@@ -899,7 +900,17 @@ block that reads to its last complete block.
   `broad`, `takeover`, `forks` and `rewind`. Each fixture is
   recorded live, played on puppets, played again with three round trips and sought from a fresh
   process, each on its own Xvfb; the live game also takes the null twin (paused, the camera, the
-  wheel, the cursor and the in-game menu moved, two frame dumps). A fixture with `"watch": true`
+  wheel, the cursor and the in-game menu moved, two endpoints and intermediate paused
+  views). Each view requires unchanged GameTime and exact carried-simulation equality.
+  Mouse samples follow a GUI-consumed click with an explicit move and require its native
+  x/y/message echo. Camera samples span the map's native scroll extents, including native
+  clamping at the far edge; resource-refusals samples ARMACK and then RSNRACK selection,
+  each with its native displayed-type acknowledgement and exact paused comparison.
+  Every owned worker removes its cached `catalogue.json` when it
+  replaces fixture content, so scenario validation never uses a previous fixture's units.
+  `scenario load` with explicit players replaces the saved seat extent as well as
+  controller keys; a prior playback's smaller roster cannot truncate the next fixture.
+  A fixture with `"watch": true`
   runs a fifth process, W: the playing started from REPLAYS and Watch as a player starts it, two
   edited copies refused, then the dock's speed, the Options' OK, pause, the dock's seek, the
   player cards' Sight and Full map (clock and camera unchanged), its dump
@@ -929,6 +940,7 @@ block that reads to its last complete block.
   note on the commit it graded. Commit first: it refuses uncommitted changes under
   `tagpu/ddraw`, `tools` or `scenarios`. `landing --check` says whether a passing note already
   covers HEAD.
+  Changes to `tools/tacli` select every fixture, as changes to the replay harness do.
   `tareplay.py broad` runs every fixture and `fixtures.json`'s `broad` entries (`limits-tier1`
   with 20 round trips; `cost-four-ai`, ten minutes of four AIs reported for the recorder's cost
   and the file's size) and names what none exercised (a feature, a root or sink site, a recorded
@@ -1044,3 +1056,83 @@ block that reads to its last complete block.
   writer's `closed` line is in the log.
 - The file format is `tagpu/ddraw/inc/tagpu_recfmt.h`; what is recorded and what is not:
   `research/notes/tadr-port/demo-recorder-skirmish-slice.md`.
+
+
+## Resource snapping and Quick Build
+
+The Impure options screen exposes `RESOURCE` (manual radius) and `QUICKBUILD` independently;
+`PROFILE` shows the detected rules or a rejected-edit error. `arm menu.open` opens the gear
+screen; `arm menu.open=off` closes it. This screen has no OK button. Effective controls are
+locked when the profile forbids them or the resource hooks are unavailable.
+
+Before a contextual Quick Build test, leave manual placement with Stop and wait for cursor
+mode 1; Escape while a build queue is active is insufficient evidence of that transition.
+Allow simulation to run while waiting for Stop to clear the order chain; while paused the
+native button can change the cursor mode before its orders are processed.
+Use the contextual button from Interface Type (zero left, nonzero right). Explicit commands
+retain their native left-placement/right-cancel behavior. Input delivery is asynchronous:
+assert a new order or the `resource: already queued` acknowledgment, not an unchanged old queue.
+
+`tools/resource_fixture.py` prepares the resource fixtures' generated terrain and profiles in
+an isolated stopped game folder. The `RS` maps are deliberately flat green. Stock geothermal
+`CORGEO` is in `CORCK`'s menu; `ARMACK` does not build it. `tools/resource_regression.py` drives
+live assertions through native input. The fixtures in `tools/replay/fixtures.json` run them
+before replay comparisons; use `tools/replay/tareplay.py run resource-mex resource-upgrade` for
+a focused run and `tools/replay/tareplay.py landing` for the landing gate. The mex assertion
+compares manual and Quick placement at the same pointer and rejects a partial target at the
+configured snap boundary.
+Omit `--keep` for normal regression runs: the report removes passing frame dumps after its
+checks, retaining failing dumps, logs, recordings and coverage. Peak space still includes the
+whole run before reporting. Use `--keep` when passing dumps are needed for diagnosis, and clean
+redundant artifacts only from completed runs; an active report still reads its collected dumps.
+The classic fixture selects `LEFTCLICK` stage 0 in native Interface options after launch and
+requires `main+0x37EFA == 0` before clicking. Setting the stopped instance's registry is
+insufficient: every launch restores right-button orders. Other mex fixtures verify value 1.
+
+For reclaim-to-Moho failures on Comet Catcher, use `tools/resource_upgrade_stress.py` in
+an owned isolated instance. While stopped, `prepare <gamedir> /tmp/comet-upgrades.json
+--phase 0 --sides mixed` creates private supply content and a scenario covering every
+installed metal deposit. Load it with `tacli scenario load <name>
+/tmp/comet-upgrades.json --defaults`, then `run <name> /tmp/comet-upgrades.json
+--out /tmp/comet-upgrades-run`. Native mouse clicks issue the upgrades; the JSON report
+distinguishes refusal, reclaim, nanoframe creation and completed construction. Use a
+different phase or side for another sweep. Order inspection pauses the unit tick;
+the final state is left paused for diagnosis. This test does not compare replays.
+Generated constructor starts stay 128 world units inside the border; the report records
+actual bearing/distance after clamping. Initial native placement refusals remain separate
+from accepted upgrades that later stall or finish.
+
+`resource-core-upgrade` is the completion replay regression on installed Comet Catcher.
+Its private supply leaves CORACK, CORMEX and CORMOHO definitions intact. `check-core`
+issues real contextual input and requires native reclaim/build, INBUILDSTANCE and progress;
+`finish-core` requires a completed Moho and the old mex absent. The fixture's `last_min`
+keeps its final comparison after that completion checkpoint on every commit seed.
+Its `cob_legacy_save_probe.py --preflight <name> --gamedir <gamedir>` first exercises
+native save/load with all ten records active on human and AI probes, using the
+worker's held DLL. Paused game-thread peeks compare active records; the engine
+writes `cover-resource-save.bin` on coverage builds. The recorder is disabled
+through the preflight and restored before L starts.
+Run `tools/replay/tareplay.py run resource-core-upgrade --cover` for the focused check.
+That fixture's preflight enables native COB trace while recording is disabled, then restores
+the lever before L starts. `stock-resource-mex` runs the same save/load preflight with
+`--native-stock --trace` on eight 32-word records. Their coverage bitmaps exercise the allocator
+observer in both builds; stack-peak observation belongs only to the guarded interpreter.
+The trace and recorder counter both detour the allocator's pristine entry, so recorded lanes
+keep tracing disabled and retain every ordinary sink counter.
+
+The guarded COB runtime has ten 128-word slots; the stock-limits build has eight native
+32-word slots. `cob_getter_probe.py --thread-exhaustion start|call` fills the guarded pool
+on human and local-AI units. `cob_legacy_save_probe.py --out /tmp/cob-import` imports a
+native save with all eight records active; `--expanded` saves/restores all ten guarded
+records. Their archives and saved games stay private in the owned instance/output folder.
+
+Resource preflights run native frontend checks before the L lane records a match.
+`resource-frontend` tests raw radius preservation through Visuals Undo and profile cap reload.
+`resource-refusals` refreshes `tacli units` before scenario validation so its cached catalogue
+contains the private constructors; capability refusals must not issue action zero.
+`resource-nozoom` uses `tagpu_zoom.off` and exercises stock-limits manual/Quick input with
+pristine conversion. The fixture cleanup removes that lever before other launches.
+
+The `resource-frontend` preflight disables packets while exercising Undo and cap reload, then
+restores the lever before match recording. Profile polling follows the engine flip on every
+renderer lane; a full mailbox or absent Vulkan consumer cannot stop menu reload.

@@ -40,7 +40,7 @@
                                              exactly, sinks per (site, caller, aux) within
                                              replay-absent.tsv's band less its rows, and no COB
                                              engine write on the puppet
-  tools/replay/tarec.py images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1
+  tools/replay/tarec.py images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1 [VIEW...]
                                              the null twin: every bit of the two images no row
                                              covers where the live game and a playing or the
                                              seek differ at T1, classified presentation,
@@ -65,6 +65,9 @@
 
   check, compare and compare --puppet take --timeline N: the chain of timeline N, read across
   each fork it descends from.
+
+  images-gate alone takes --stock-secondary-cosmetics: the owner-approved native cosmetic-pool
+  known gap for stock-secondary-orders at the native 300-projectile cap. Other bytes stay strict.
 
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
@@ -1860,6 +1863,8 @@ IMAGE_MAP = {
         (0x14, 0x4DE, "HAPINET: the network state"),
         (0x511, 0x519, "the pacing gate's record and lag, rewritten every frame"),
         (0x519, 0x1B63, "the desktop GUI"),
+        (0x531, 0x535, "the active GUI stack pointer"),
+        (0x561, 0x565, "the GUI mouse-event clock"),
         (0x1B63, 0x299C, "the eleven player records"),
         (0x299C, 0x29A4, "the branch selector, the skirmish settings' pointer"),
         (0x29D0, 0x2A25, "the start positions"),
@@ -1911,6 +1916,7 @@ IMAGE_MAP = {
         (0x1D810, 0x1D814, "an object"),
         (0x1E4B6, 0x1E4BE, "the cursor's position: the mouse thread 0x4C2990 writes it"),
         (0x1E4D6, 0x1E4DE, "the cursor's drawn position: the mouse thread 0x4C2990 writes it"),
+        (0x1E524, 0x1E528, "the current bitmap-font pointer"),
         (0x1EB50, 0x1EBD4, "a registry value, checksums, the graphics globals' pointer"),
         (0x1EBE0, 0x1EC88, "timers"),
         (0x1EC88, 0x1EC8C, "the simulation RNG"),
@@ -2243,28 +2249,36 @@ def image_group(which, at):
     return best[2] if best else "not mapped"
 
 
-GATE_CLASSES = ("presentation", "host-variant", "load-constant", "FAIL")
+GATE_CLASSES = ("presentation", "host-variant", "load-constant", "known-gap", "FAIL")
+STOCK_SECONDARY_COSMETICS = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x1E88F),
+                           (1, 0x511DF0 - REC_DATA_BEGIN, 0x511F80 - REC_DATA_BEGIN))
 
 
-def cmd_images_gate(path, live, twin, playing, second, seek):
+def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
+                    stock_secondary_cosmetics=False):
     """THE IMAGES GATE (the null twin): every bit of the main block and .data that no row of
     replay-globals.tsv covers and where the live game at T1 differs from the playing at T1 or from
     the fresh seek to T1 is, in this order:
-      presentation   the paused twin's two dumps differ there (the live game, paused, then the
+      presentation   the paused twin's dumps differ there (the live game, paused, then the
                      camera, the zoom, the menu and the cursor moved): the viewer's own
       host-variant   two playings on one host differ there (P against R at T1)
       load-constant  unchanged across [T1, Tlast] on the recording machine and on the puppet host
+      known-gap      only the explicit stock-secondary-orders native cosmetic-pool exception
       FAIL           anything else, labelled by who wrote it in play.
     A bit equal at both ends of [T1, Tlast] on each machine counts as unwritten in play: the window
     cannot see a write that was undone inside it. Exit 1 on any FAIL."""
     h = header_only(path)
+    if stock_secondary_cosmetics and (Path(path).stem != "stock-secondary-orders" or
+                                      h["projectiles"] != 300):
+        print("native cosmetic-pool exception requires stock-secondary-orders at the stock cap")
+        return 2
     (l1, lT), (n1, n2), (p1, pT) = live, twin, playing
     got = {}
     for name, d in (("l1", l1), ("lT", lT), ("n1", n1), ("n2", n2), ("p1", p1), ("pT", pT),
-                    ("r1", second), ("q1", seek)):
+                    ("r1", second), ("q1", seek), *[(f"v{i}", d) for i, d in enumerate(views)]):
         got[name] = dump_images(d)
-    frames = [header(blocks(d)[0][0][3]).get("frame") for d in (n1, n2)]
-    if frames[0] is None or frames[0] != frames[1]:
+    frames = [header(blocks(d)[0][0][3]).get("frame") for d in (n1, n2, *views)]
+    if frames[0] is None or len(set(frames)) != 1:
         print(f"the twin's dumps are not two frame dumps of one GameTime: {frames}")
         return 2
     t1 = {got[k][0] for k in ("l1", "p1", "r1", "q1")}
@@ -2278,7 +2292,7 @@ def cmd_images_gate(path, live, twin, playing, second, seek):
     gen, rows, slots, digest = globals_list(got["l1"][1])
     cov = gen.coverage(rows)
     im = {k: v[2] for k, v in got.items()}
-    tally, fails = {}, []
+    tally, fails, accepted = {}, [], 0
     for which, where in ((0, "main"), (1, "data")):
         L1, LT, N1, N2 = im["l1"][which], im["lT"][which], im["n1"][which], im["n2"][which]
         P1, PT, R1, Q1 = im["p1"][which], im["pT"][which], im["r1"][which], im["q1"][which]
@@ -2287,13 +2301,23 @@ def cmd_images_gate(path, live, twin, playing, second, seek):
             bits = ((L1[i] ^ P1[i]) | (L1[i] ^ Q1[i])) & free
             if not bits:
                 continue
-            pres = bits & (N1[i] ^ N2[i])
+            changed = N1[i] ^ N2[i]
+            for k in range(len(views)):
+                changed |= N1[i] ^ im[f"v{k}"][which][i]
+            pres = bits & changed
             host = bits & ~pres & (P1[i] ^ R1[i])
             const = bits & ~pres & ~host & ~((L1[i] ^ LT[i]) | (P1[i] ^ PT[i])) & 0xFF
             fail = bits & ~pres & ~host & ~const
+            # Seek clears these native pools; they have no snapshot layout yet. The owner's
+            # exact fixture/range exception leaves all other image bits and all record/effect
+            # comparisons intact. See demo-recorder-completeness.md, native cosmetic pools.
+            gap = fail if stock_secondary_cosmetics and any(
+                which == pool and lo <= i < hi for pool, lo, hi in STOCK_SECONDARY_COSMETICS) else 0
+            fail &= ~gap
+            accepted += bool(gap)
             group = image_group(which, i)
-            t = tally.setdefault((which, group), [0, 0, 0, 0])
-            for k, m in enumerate((pres, host, const, fail)):
+            t = tally.setdefault((which, group), [0, 0, 0, 0, 0])
+            for k, m in enumerate((pres, host, const, gap, fail)):
                 if m:
                     t[k] += 1
             if fail:
@@ -2326,6 +2350,9 @@ def cmd_images_gate(path, live, twin, playing, second, seek):
               f"{hexs(4)}, playing {hexs(5)}, seek {hexs(6)}")
     if len(runs) > 200:
         print(f"  ... and {len(runs) - 200} runs more")
+    if stock_secondary_cosmetics:
+        print(f"  accepted {accepted} native cosmetic-pool bytes for stock-secondary-orders; "
+              "all other bytes checked")
     return 1 if fails else 0
 
 
@@ -2469,6 +2496,12 @@ def cmd_scan(path, dump):
 
 def main(argv):
     timeline = 0
+    stock_secondary_cosmetics = "--stock-secondary-cosmetics" in argv
+    if stock_secondary_cosmetics:
+        if argv[1:2] != ["images-gate"]:
+            print("--stock-secondary-cosmetics requires images-gate", file=sys.stderr)
+            return 2
+        argv = [a for a in argv if a != "--stock-secondary-cosmetics"]
     rewind = argv[1:2] == ["compare-counts"] and "--rewind" in argv
     if rewind:
         argv = [a for a in argv if a != "--rewind"]
@@ -2520,7 +2553,7 @@ def main(argv):
             (argv[1] == "compare" and len(argv) < 4) or (images and len(argv) != 4) or \
             (argv[1] == "compare-dumps" and len(argv) != 5) or \
             (argv[1] in ("counts", "scan") and len(argv) != 4) or \
-            (argv[1] == "images-gate" and len(argv) != 11) or \
+            (argv[1] == "images-gate" and len(argv) < 11) or \
             (argv[1] == "compare-counts" and len(argv) != 7):
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         return 2
@@ -2546,7 +2579,8 @@ def main(argv):
             return cmd_compare_dumps(argv[2], argv[3], argv[4], takeover)
         if argv[1] == "images-gate":
             return cmd_images_gate(argv[2], (argv[3], argv[4]), (argv[5], argv[6]),
-                                   (argv[7], argv[8]), argv[9], argv[10])
+                                   (argv[7], argv[8]), argv[9], argv[10], argv[11:],
+                                   stock_secondary_cosmetics)
         if argv[1] == "scan":
             return cmd_scan(argv[2], argv[3])
         if argv[1] == "counts":

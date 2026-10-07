@@ -1,5 +1,6 @@
 #ifndef TAGPU_SETTINGS_H
 #define TAGPU_SETTINGS_H
+#include "tagpu_mod.h"
 /* tagpu_settings -- the player's settings store, `impure.cfg` beside TotalA.exe.
    Design: renderers.md 2.10b.
 
@@ -50,7 +51,8 @@ typedef enum {
     TS_MIXING,      /* 8 | 16 | 24 | 32: sounds the engine plays at once      */
     TS_EDGE,        /* 1 mirror | 0 black: what the view shows past the map   */
     TS_VSYNC,       /* 1 | 0: present on the display's vertical blank          */
-    TS_NKEYS
+    TS_RESOURCE_BASE, /* per-mod radius, Quick Build pairs; versions share a preference */
+    TS_NKEYS = TS_RESOURCE_BASE + MOD_N * 2
 } TagpuSetting;
 
 enum { TS_STYLE_CLASSIC, TS_STYLE_PP, TS_STYLE_CUSTOM };

@@ -6,6 +6,8 @@
 #include <string.h>
 
 typedef char cob_record_size_matches[(sizeof(TagpuCobRecord) == TAGPU_COB_RECORD_BYTES) ? 1 : -1];
+typedef char cob_threads_fit_native_loops[(TAGPU_COB_THREADS >= TAGPU_COB_LEGACY_THREADS &&
+                                         TAGPU_COB_THREADS < 128u) ? 1 : -1];
 
 int32_t tagpu_cob_build_left(float remaining)
 {
@@ -252,26 +254,32 @@ int tagpu_cob_load_records(const TagpuCobProgram* program, uint32_t checksum,
 {
     const unsigned char* data = (const unsigned char*)input;
     TagpuCobRecord decoded[TAGPU_COB_THREADS];
-    unsigned offset, stride, words, saved_busy, active = 0, i;
+    unsigned offset, stride, words, slots, saved_busy, active = 0, i;
     if (size == 0x528u) {
-        offset = 4; stride = 164; words = 32;
+        offset = 4; stride = 164; words = 32; slots = TAGPU_COB_LEGACY_THREADS;
         saved_busy = word_at(data + size - 4);
-    } else if (size == TAGPU_COB_SAVE_BYTES) {
+    } else if (size == TAGPU_COB_SAVE_BYTES || size == TAGPU_COB_LEGACY_SAVE_BYTES) {
+        slots = word_at(data + 16);
         if (word_at(data + 4) != 0x53424f43u || word_at(data + 8) != 1 ||
-            word_at(data + 12) != TAGPU_COB_WORDS || word_at(data + 16) != TAGPU_COB_THREADS)
+            word_at(data + 12) != TAGPU_COB_WORDS ||
+            (slots != TAGPU_COB_THREADS && slots != TAGPU_COB_LEGACY_THREADS) ||
+            size != 24u + slots * TAGPU_COB_RECORD_BYTES)
             return fault(reason, capacity, "unsupported COB save format");
         offset = 24; stride = TAGPU_COB_RECORD_BYTES; words = TAGPU_COB_WORDS;
         saved_busy = word_at(data + 20);
     } else return fault(reason, capacity, "COB saved records are truncated or have an unknown size");
     if (word_at(data) != checksum) return fault(reason, capacity, "saved COB checksum differs from the unit script");
     memset(decoded, 0, sizeof decoded);
-    for (i = 0; i < TAGPU_COB_THREADS; ++i) {
+    for (i = 0; i < slots; ++i) {
         const unsigned char* source = data + offset + i * stride;
         if (!word_at(source)) continue;
         memcpy(&decoded[i], source, stride);
         decoded[i].callback = 0;
         if (decoded[i].sp < -1 || decoded[i].sp >= (int32_t)words)
             return fault(reason, capacity, "saved stack pointer exceeds its original allocation");
+        if (decoded[i].status == 0x02800000 && decoded[i].child != -1 &&
+            (uint32_t)decoded[i].child >= slots)
+            return fault(reason, capacity, "saved CALL child exceeds its original allocation");
         if (!tagpu_cob_check_record(program, &decoded[i], reason, capacity)) return 0;
         ++active;
     }

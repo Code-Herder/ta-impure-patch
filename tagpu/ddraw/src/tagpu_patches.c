@@ -1841,6 +1841,11 @@ static void __cdecl bl_download_append(unsigned int* regs)
 
 /* CLASS: simulation, fail closed. A builder's list is what the AI's pick 0x40BDB0 and the
    build menu offer, so a player without it builds by a different list. */
+static int s_buildListsLive;
+SIM_VAR(s_buildListsLive, SIM_INSTALL);
+
+int tagpu_build_lists_live(void) { return s_buildListsLive && s_limState == 1; }
+
 static int fix_build_list(void)
 {
     FIXSITE site[4] = {
@@ -1862,7 +1867,9 @@ static int fix_build_list(void)
     fix_branch(&site[1], 0xE8, b);
     site[1].now[5] = 0xEB; site[1].now[6] = 0x15;          /* jmp 0x42DAE3, past the rep movs */
     fix_branch(&site[3], 0xE8, c);
-    return fix_table(site, 4, "whole build lists");
+    int result = fix_table(site, 4, "whole build lists");
+    s_buildListsLive = result == FIX_TABLE;
+    return result;
 }
 
 SIM_FEATURE(download_records, SIM_PUPPET_RUNS, "battle");
@@ -10820,7 +10827,7 @@ static unsigned char* lim_emit(unsigned char* p, const unsigned char* op, int n,
     return p + n + 4;
 }
 
-SIM_FEATURE(cob_guard, SIM_PUPPET_RUNS, "battle");
+SIM_FEATURE(cob_guard, SIM_PUPPET_RUNS, "battle resource-core-upgrade");
 
 typedef int (__attribute__((thiscall)) *CobNativeGet)(char*, int, int, int, int, int);
 static CobNativeGet s_cobNativeGet;
@@ -11368,7 +11375,8 @@ static int __attribute__((thiscall)) cob_load(char* cob, void* stream)
     TagpuCobRecord records[TAGPU_COB_THREADS];
     void** vtable = *(void***)cob;
     char reason[256];
-    if (size < tail || (size - tail != 0x528u && size - tail != TAGPU_COB_SAVE_BYTES))
+    if (size < tail || (size - tail != 0x528u && size - tail != TAGPU_COB_SAVE_BYTES &&
+                        size - tail != TAGPU_COB_LEGACY_SAVE_BYTES))
         cob_fault(f->name, 0, "saved script size does not match its validated allocation");
     records_size = size - tail;
     data = (unsigned char*)tagpu_sim_scratch(size);
@@ -11423,6 +11431,12 @@ static void cob_runtime_sites(void)
         0x4B19EF,0x4B19FB,0x4B1AA1,0x4B1AAD,0x4B1B68,0x4B1B77
     };
     static const unsigned stride[] = {0x4B062F,0x4B08DF,0x4B0D4C,0x4B1A1E,0x4B1AD0,0x4B1AE8};
+    /* DISASSEMBLED: constructor, callback clearing, RETURN parent wakeup
+       and SIGNAL parent wakeup use dword counts. Allocation, synchronous
+       starts, DoScriptsNow and SIGNAL use byte loop limits. Native save/load
+       iterators are replaced at their entries below. */
+    static const unsigned slots_dword[] = {0x4B0616,0x4B0D33,0x4B19F5,0x4B1AA7};
+    static const unsigned slots_byte[] = {0x4B08E5,0x4B09E1,0x4B0A57,0x4B0B9F,0x4B0D81,0x4B1AEE};
     static const unsigned char alloc[] = {0x8D,0x14,0x80,0x8D,0x14,0xD0};
     static const unsigned char callback[] = {0x8D,0x0C,0x80,0x8D,0x14,0xC8};
     static const unsigned char start[] = {0x8D,0x0C,0x80,0x56,0x8D,0x14,0xC8};
@@ -11447,6 +11461,7 @@ static void cob_runtime_sites(void)
     unsigned i, factor = TAGPU_COB_RECORD_BYTES / 4;
     unsigned char now[12];
     unsigned char* original;
+    const unsigned char native_slots = 8, expanded_slots = TAGPU_COB_THREADS;
     InitializeCriticalSection(&s_cobLock);
     lim_dword(0x00485D74u, 0x544, TAGPU_COB_OBJECT_BYTES, "COB object allocation");
     for (i = 0; i < sizeof model / sizeof *model; ++i)
@@ -11455,6 +11470,10 @@ static void cob_runtime_sites(void)
         lim_dword(count[i], 0x53C, TAGPU_COB_COUNT_OFFSET, "COB active-thread count");
     for (i = 0; i < sizeof stride / sizeof *stride; ++i)
         lim_dword(stride[i], 0xA4, TAGPU_COB_RECORD_BYTES, "COB record iteration stride");
+    for (i = 0; i < sizeof slots_dword / sizeof *slots_dword; ++i)
+        lim_dword(slots_dword[i], 8, TAGPU_COB_THREADS, "COB record count");
+    for (i = 0; i < sizeof slots_byte / sizeof *slots_byte; ++i)
+        lim_add(slots_byte[i], 1, &native_slots, &expanded_slots, "COB record loop bound");
     lim_op(0x004B08F0u, sizeof alloc, alloc, multiply, sizeof multiply, factor, "COB allocated record address");
     lim_op(0x004B09B2u, sizeof callback, callback, multiply, sizeof multiply, factor, "COB named callback record");
     lim_op(0x004B0A27u, sizeof callback, callback, multiply, sizeof multiply, factor, "COB indexed callback record");

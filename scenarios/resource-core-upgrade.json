@@ -1,0 +1,72 @@
+{
+  "format": "ta-scenario/1",
+  "seed": 20261005,
+  "on_error": "abort",
+  "description": "Stock CORE advanced kbot contextual mex-to-Moho handoff; native constructor and build time, private supply only.",
+  "setup": {
+    "map": "Comet Catcher",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "core",
+        "metal": 200000,
+        "energy": 200000
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "arm"
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "bot",
+      "type": "CORACK",
+      "owner": 0,
+      "pos": [
+        2892,
+        1772
+      ]
+    },
+    {
+      "id": "mex",
+      "type": "CORMEX",
+      "owner": 0,
+      "pos": [
+        2824,
+        1704
+      ]
+    },
+    {
+      "id": "supply",
+      "type": "RSSTRESS",
+      "owner": 0,
+      "pos": [
+        3000,
+        3800
+      ]
+    },
+    {
+      "id": "opponent",
+      "type": "CORSOLAR",
+      "owner": 1,
+      "pos": [
+        5800,
+        7400
+      ]
+    }
+  ],
+  "camera": {
+    "at": [
+      2800,
+      1800
+    ]
+  }
+}

@@ -1,0 +1,119 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Queued owned geothermal upgrade with a stronger generated plant and persistent constructor assistance.",
+  "seed": 20260926,
+  "on_error": "abort",
+  "setup": {
+    "map": "RS plain",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "core",
+        "color": 1,
+        "metal": 5000,
+        "energy": 5000
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "arm",
+        "color": 0
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "basic",
+      "type": "ARMCK",
+      "owner": 0,
+      "pos": [
+        500,
+        600
+      ]
+    },
+    {
+      "id": "advanced",
+      "type": "ARMACK",
+      "owner": 0,
+      "pos": [
+        800,
+        800
+      ]
+    },
+    {
+      "id": "helper",
+      "type": "CORCK",
+      "owner": 0,
+      "pos": [
+        650,
+        800
+      ]
+    },
+    {
+      "id": "combat",
+      "type": "ARMPW",
+      "owner": 0,
+      "pos": [
+        700,
+        650
+      ]
+    },
+    {
+      "id": "storage",
+      "type": "ARMMSTOR",
+      "owner": 0,
+      "pos": [
+        160,
+        700
+      ]
+    },
+    {
+      "id": "energy",
+      "type": "ARMESTOR",
+      "owner": 0,
+      "pos": [
+        240,
+        800
+      ]
+    },
+    {
+      "id": "old_mex",
+      "type": "ARMMEX",
+      "owner": 0,
+      "pos": [
+        800,
+        500
+      ]
+    },
+    {
+      "id": "spare",
+      "type": "CORSOLAR",
+      "owner": 1,
+      "pos": [
+        800,
+        900
+      ]
+    },
+    {
+      "id": "old_geo",
+      "type": "CORGEO",
+      "owner": 0,
+      "pos": [
+        648,
+        392
+      ]
+    }
+  ],
+  "camera": {
+    "at": [
+      450,
+      450
+    ]
+  }
+}

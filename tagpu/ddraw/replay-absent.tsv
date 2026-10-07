@@ -36,6 +36,7 @@
 0x4B08C0	*	0x0	absent	a script index the engine refused: 0x4B08C5..0x4B08D0 returns -1 and the three wrappers start nothing (0x4B0B0F..0x4B0B22, 0x4B09A6..0x4B09AF, 0x4B0C4F..0x4B0C54)	2026-10-01
 0x4B08C0	*	0x0	extra	as the absent row: nothing runs on either side	2026-10-01
 0x47F1A0	0x496508	*	absent	the in-game console key's click (0x4964FD plays SmallButton, then opens the console 0x494050): the recording machine's own keyboard	2026-10-01
+0x47F1A0	0x41A0F6	*	absent	the recording player's native immediate-command UI click (0x41A0F1 plays immediateorders, including Stop); the issued simulation orders remain recorded and checked	2026-10-05
 0x420A30	0x421445,0x4214D9,0x4210A1	*	absent	a flying piece's or a falling record's explosion: pieces are spawned from the simulation RNG at EXPLODE 0x481140, which a puppet host draws in another order; the owner accepts debris that flies differently (2026-10-01)	2026-10-01
 0x420A30	0x421445,0x4214D9,0x4210A1	*	extra	as the absent row	2026-10-01
 0x472630	0x420AE6	0x4210A1	absent	a falling record's explosion's flare: the add 0x420A30 emits it at 0x420AE1 (4th argument 0, the point above the sea level, 0x420ABE..0x420AD8), so it lands with the 0x420A30 row's explosion; the counts key it by the add's caller (tagpu_recorder.c, sink_472630)	2026-10-01

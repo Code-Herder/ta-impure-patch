@@ -10,6 +10,10 @@ Follow are enabled for a seat with a recorded camera sample, Follow is drawn act
 the followed seat and Free cam otherwise; these three are built and await that plan's V2 run.
 Hovering a disabled Jump or Follow explains “Camera was not recorded.”
 
+The [native-mod QoL audit](quality-of-life.md) confirms `.lockon` camera follow is available in
+all five native recorder/TADR pairings when the replay contains camera data. This is a specific
+remaining Impure gap; its working replay playback/seeking and Sight controls are separate.
+
 ## Layout and input
 
 `tagpu_cards.c` is the dock's game-thread companion. At HUD 1× its panel is 206 pixels wide,

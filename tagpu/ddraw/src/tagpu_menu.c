@@ -68,6 +68,8 @@
 #include "tagpu_hud.h"
 #include "tagpu_vk.h"
 #include "tagpu_settings.h"
+#include "tagpu_profiles.h"
+#include "tagpu_resource.h"
 #include "tagpu_opt.h"
 #include "tagpu_art.h"
 #include "tagpu_replays.h"
@@ -132,6 +134,7 @@ enum { ENG_GAMMA = 1, ENG_BITS = 2, ENG_RES = 4, ENG_ALL = 7 };
 #define G_GRAYED  0x13C
 #define GI_UICHANGE 0x60                /* gi+0x60 = main+0x579                */
 #define STRIDE    0x15B
+#define GUI_RECORDS 200                 /* GUI_Load 0x4AAA68/0x4AAA95: fixed allocation */
 
 typedef void* (__stdcall *gui_load_fn)(void* gi, const char* name, int flags);
 typedef int   (__stdcall *set_status_fn)(void* gi, const char* name, int value);
@@ -169,15 +172,8 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
 
 /* ---- the geometry, from tools/guipanel.py (the source of truth) ---------- */
 #define PANEL_W   304
-/* NINE rows: ROW_Y0 34 + ROW_PITCH 28 * 8 = 258, and the row is ROW_H 20, so
-   the last one ends at 278; the bottom rule sits 8 px under it and the panel
-   ends 10 px under the rule (DIV_BOT). One define carries
-   it: the GAF frame header (`FRMOFF + 0x02` below), `s_ground`, the ramp, the
-   border and the corner bolts are all sized from it, and the panel is COMPOSED
-   AT RUNTIME from the player's install rather than shipped, so no art is
-   regenerated. tools/guipanel.py says 304x212 -- it is the lab's copy of this
-   layout, not its source. */
-#define PANEL_H   296
+/* The runtime ground and its frame header share these dimensions. */
+#define PANEL_H   382
 #define MARGIN     16                   /* the panel and the trigger share it  */
 #define BAR_H      32                   /* the top bar: rows 0..31             */
 #define ROW_Y0     34
@@ -200,7 +196,7 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
    thread and tagpu_vk_fps.c builds its pipeline on first use. Vsync does too:
    the render thread reads the store every frame and the lane rebuilds its
    swapchain when the answer changes (render_vk.c). */
-enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_VSYNC, R_EDGE,
+enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_VSYNC, R_EDGE, R_RESOURCE, R_QUICK,
        R_COUNT };
 
 typedef struct {
@@ -228,6 +224,8 @@ static const Row s_row[R_COUNT] = {
     /* what the view shows past the map: the world reflected, or the engine's
        black (bar-camera-port.md 1.2) */
     { "EDGE",    "Map edge",          "Black|Mirror",             2 },
+    { "RESOURCE", "Resource snapping", "Off|1|2|3|4|5|6|7|8",      9 },
+    { "QUICKBUILD", "Quick mex/geo",    "Off|On",                   2 },
 };
 
 /* Renderer stages. Custom is DERIVED, never clicked into: clicking the row
@@ -279,7 +277,7 @@ static const int SHADOWQ_VAL[4] = { 512, 1024, 2048, 4096 };
    palette 55..63 is a dark warm ramp and tools/guipanel.py's colours were
    chosen against it (its GROUND_LO (46,40,29) is index 60 (47,43,27), its
    RECESS_LO (23,20,14) is 62 (23,19,15), and so on), so the drawn panel is
-   expressible as nine indices with no colour of the game's in it. */
+   expressible as row indices with no colour of the game's in it. */
 #define ART_NAME   "RENDERDD"
 #define UFO_FILE   "impure-patch.ufo"
 #define SCREEN     "RENDER.GUI"
@@ -352,7 +350,7 @@ static int exists(const char* p)
     return GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES;
 }
 
-/* The nine indices, and what tools/guipanel.py calls each of them. */
+/* The row indices, and what tools/guipanel.py calls each of them. */
 #define IX_EDGE          63     /* the outer keyline, and a recess's sunken lip */
 #define IX_BEVEL_HI      55
 #define IX_BEVEL_LO      59
@@ -367,7 +365,7 @@ static int exists(const char* p)
 #define IX_KEY            0     /* the frame's transparency index -- never drawn */
 
 #define DIV_TOP    30
-#define DIV_BOT   286           /* under the last row: 278 + 8 */
+#define DIV_BOT   342           /* under the last row: 278 + 8 */
 #define PAD         2
 
 /* THE FRAMES ARE NOT ALL ONE SIZE, so the pixel helpers carry their
@@ -919,7 +917,7 @@ static int build_gui(char* b, int cap, int rows)
         "\ttotalgadgets=%d;\r\n"
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
         "\tpanel=;\r\n\tcrdefault=;\r\n\tescdefault=;\r\n\tdefaultfocus=;\r\n\t}\r\n",
-        rows * 2 + 2);
+        rows * 2 + 3);
 
     /* the ground: an id=12 whose NAME is the GAF frame, over the whole panel */
     at = gput(b, cap, at, "[GADGET1]\r\n\t{\r\n");
@@ -930,7 +928,7 @@ static int build_gui(char* b, int cap, int rows)
        band above it is the title's -- an empty one is just a bare rule. */
     at = gput(b, cap, at, "[GADGET2]\r\n\t{\r\n");
     at = common(b, cap, at, 5, 0, "TITLE", LBL_X, TITLE_Y, TITLE_W, 18, 1, 15, 0);
-    at = gput(b, cap, at, "\ttext=%s;\r\n\t}\r\n", "Render options");
+    at = gput(b, cap, at, "\ttext=%s;\r\n\t}\r\n", "Impure options");
 
     for (i = 0; i < rows; i++) {
         int y = ROW_Y0 + ROW_PITCH * i;
@@ -946,6 +944,9 @@ static int build_gui(char* b, int cap, int rows)
             "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=0;\r\n\tgrayedout=0;\r\n\tstages=%d;\r\n\t}\r\n",
             s_row[i].text, s_row[i].stages);
     }
+    at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", rows * 2 + 3);
+    at = common(b, cap, at, 5, 0, "PROFILE", LBL_X, 350, TITLE_W, 24, 1, 15, 0);
+    at = gput(b, cap, at, "\ttext=Resource profile;\r\n\t}\r\n");
     return at;
 }
 
@@ -983,6 +984,8 @@ static void read_state(void)
     /* the map edge in force: its lever, then the store, then the default --
        tagpu_opt.c answers in that order, and Black under tagpu_defaults.off */
     s_stage[R_EDGE]    = tagpu_opt_on(EDGE_ON) ? 1 : 0;
+    s_stage[R_RESOURCE] = tagpu_profiles_radius();
+    s_stage[R_QUICK] = tagpu_profiles_quick();
 
     /* 0 (Off) when the cfg names a value this row does not offer. That is not
        reachable for `shadows=1`, which tagpu_classicpp.c's parse migrates to
@@ -1019,6 +1022,8 @@ static int row_held(int row)
     case R_SS:    return exists(SS_OFF);
     case R_FPS:   return exists(FPS_ON);
     case R_EDGE:  return exists(EDGE_ON) || exists(EDGE_OFF);
+    case R_RESOURCE: return !tagpu_resource_live() || !tagpu_profiles_policy()->manual;
+    case R_QUICK: return !tagpu_resource_live() || !tagpu_profiles_policy()->quick;
     default:      break;
     }
     h = tagpu_classicpp_held();
@@ -1041,7 +1046,7 @@ static int row_greyed(int row)
        present mode to pick there, but the frame limiter's backstop paces it
        (fps_limiter.c). */
     if (row == R_STYLE || row == R_SS || row == R_FPS || row == R_VSYNC ||
-        row == R_SHADOWS || row == R_EDGE) return 0;
+        row == R_SHADOWS || row == R_EDGE || row == R_RESOURCE || row == R_QUICK) return 0;
     if (s_stage[R_STYLE] == STYLE_CLASSIC) return 1;
     /* ALWAYS GREY. `shadowres=` is the edge of
        the soft map's depth texture and reaches nothing else -- the hard pair is
@@ -1054,9 +1059,45 @@ static int row_greyed(int row)
     return 0;
 }
 
+static void __stdcall tagpu_vis_oncommand(void* gi);
+static void __stdcall tagpu_vrt_oncommand(void* gi);
+
+void tagpu_menu_resource_refresh(void)
+{
+    int i, changed = 0;
+    char *ta = *(char**)TA_MAIN, *top, *ctrls;
+    s_stage[R_RESOURCE] = tagpu_profiles_radius();
+    s_stage[R_QUICK] = tagpu_profiles_quick();
+    top = ta ? *(char**)(ta + OFF_TOPGUI) : NULL;
+    ctrls = top ? *(char**)(top + GM_CTRLS) : NULL;
+    /* Only our dispatchers own the profile label. GUI_Load allocates exactly
+       200 records, including record zero; the engine's count excludes zero. */
+    if (ctrls && (*(void**)(top + GM_ONCMD) == (void*)tagpu_menu_oncommand ||
+                  *(void**)(top + GM_ONCMD) == (void*)tagpu_vis_oncommand ||
+                  *(void**)(top + GM_ONCMD) == (void*)tagpu_vrt_oncommand)) {
+        int count = *(short*)(ctrls + 0xB6);
+        if (count > 0 && count < GUI_RECORDS) for (i = 1; i <= count; i++) {
+            char* g = ctrls + i * STRIDE;
+            if (g[0] == 5 && !memcmp(g + G_NAME, "PROFILE", 8)) {
+                char status[128];
+                tagpu_profiles_status(status, sizeof status);
+                memcpy(g + 0xB6, status, strlen(status) + 1);
+                changed = 1;
+            }
+        }
+    }
+    if (!changed) return;
+    ((set_status_fn)VA_SETSTATUS)(ta + OFF_GUIINFO, "RESOURCE", s_stage[R_RESOURCE]);
+    ((set_status_fn)VA_SETSTATUS)(ta + OFF_GUIINFO, "QUICKBUILD", s_stage[R_QUICK]);
+    ((set_grayed_fn)VA_SETGRAYED)(ta + OFF_GUIINFO, "RESOURCE", row_held(R_RESOURCE));
+    ((set_grayed_fn)VA_SETGRAYED)(ta + OFF_GUIINFO, "QUICKBUILD", row_held(R_QUICK));
+    ((set_dirty_fn)VA_SETDIRTY)(ta + OFF_GUIINFO);
+}
+
 static void push_stages(void* gi)
 {
     int i;
+    tagpu_menu_resource_refresh();
     for (i = 0; i < s_nrows; i++)
         ((set_status_fn)VA_SETSTATUS)(gi, s_row[i].name, s_stage[i]);
     /* `grayedout` is the engine's own way of saying "this does not apply now"
@@ -1343,6 +1384,8 @@ static void commit_one(int row)
     case R_FPS:     tagpu_settings_set(TS_FPS, s_stage[R_FPS]); break;
     case R_VSYNC:   tagpu_settings_set(TS_VSYNC, s_stage[R_VSYNC]); break;
     case R_EDGE:    tagpu_settings_set(TS_EDGE, s_stage[R_EDGE]); break;
+    case R_RESOURCE: tagpu_profiles_set_radius(s_stage[R_RESOURCE]); break;
+    case R_QUICK: tagpu_profiles_set_quick(s_stage[R_QUICK]); break;
     default:        break;
     }
 }
@@ -1378,17 +1421,18 @@ static void commit_row(int row)
     commit_one(row);
 }
 
-static void commit_all_rows(void)
+static void commit_all_rows(int resource_rows)
 {
     int i;
-    for (i = 0; i < R_COUNT; i++) if (i != R_STYLE) commit_one(i);
+    for (i = 0; i < R_COUNT; i++)
+        if (i != R_STYLE && (resource_rows || (i != R_RESOURCE && i != R_QUICK))) commit_one(i);
     if (!row_held(R_STYLE)) tagpu_settings_set(TS_STYLE, style_value());
 }
 
 void __stdcall tagpu_menu_oncommand(void* gi)
 {
     int row = menu_row_of(gi);
-    if (row < 0) return;
+    if (row < 0 || row_held(row)) return;
 
     if (row == R_STYLE) {
         /* alternates Classic and Classic++; Custom is derived, so it is never
@@ -1409,7 +1453,8 @@ void __stdcall tagpu_menu_oncommand(void* gi)
         if (s_stage[R_ASSETS] == 1 && tagpu_rguard_off()) tagpu_rguard_clear();
         if (s_stage[R_STYLE] != STYLE_CLASSIC) s_stage[R_STYLE] = derive_style();
     } else {
-        s_stage[row] = (s_stage[row] + 1) % s_row[row].stages;
+        s_stage[row] = (s_stage[row] + 1) % (row == R_RESOURCE ?
+            tagpu_profiles_policy()->maximum + 1 : s_row[row].stages);
         /* DERIVED, not forced to Custom. A row clicked back to its Classic++
            value leaves nothing customised, and saying "Custom" there is the
            screen telling the player something untrue -- the same test
@@ -1737,7 +1782,7 @@ static const unsigned char VIS_BUILD_STOLEN[7] =
 #define VHDR_Y     56           /* the column heading                          */
 #define VRULE_Y    72
 #define VROW_Y0    80           /* the first row's caption                     */
-#define VPITCH     44
+#define VPITCH     36
 #define VLBL_H     14
 #define VCTL_DY    16           /* caption -> control                          */
 #define VCTL_H     20
@@ -2103,7 +2148,7 @@ static int build_visuals_gui(char* b, int cap, int rows)
         "\ttotalgadgets=%d;\r\n"
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
         "\tpanel=;\r\n\tcrdefault=;\r\n\tescdefault=;\r\n\tdefaultfocus=;\r\n\t}\r\n",
-        1 + VIS_STOCK_N + 2 + (rows + VD_COUNT) * 2);
+        1 + VIS_STOCK_N + 3 + (rows + VD_COUNT) * 2);
 
     /* THE GROUND FIRST, so every caption and control is drawn on top of it --
        gadgets are drawn in array order, and ours are appended to STARTOPT's,
@@ -2135,7 +2180,7 @@ static int build_visuals_gui(char* b, int cap, int rows)
     at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", "Window");
     at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
     at = common(b, cap, at, 5, 0, "TEXT", VC1_X, VHDR_Y, VCOL_W, VLBL_H, 18, 15, 104);
-    at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", "Impure rendering");
+    at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", "Impure options");
 
     /* ---- the WINDOW rows -------------------------------------------------- */
     {
@@ -2170,6 +2215,9 @@ static int build_visuals_gui(char* b, int cap, int rows)
                               "\tgrayedout=0;\r\n\tstages=%d;\r\n\t}\r\n",
                   s_row[i].text, s_row[i].stages);
     }
+    at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+    at = common(b, cap, at, 5, 0, "PROFILE", VC0_X, 452, VP_W - 14, 18, 1, 15, 0);
+    at = gput(b, cap, at, "\ttext=Resource profile;\r\n\t}\r\n");
     return at;
 }
 
@@ -2544,6 +2592,7 @@ static void commit_display(int d)
 static int s_visKeep;
 static int s_stageOpen[R_COUNT];
 static int s_vstageOpen[VD_COUNT];
+static int s_resourceModOpen, s_resourceOpen[2];
 
 /* The actuated gadget's name, or NULL. */
 static const char* vis_actuated(void* gi)
@@ -2578,7 +2627,12 @@ static void vis_undo(void)
     int i;
     memcpy(s_stage,  s_stageOpen,  sizeof s_stage);
     memcpy(s_vstage, s_vstageOpen, sizeof s_vstage);
-    commit_all_rows();
+    /* A profile cap changes the plate, not the saved preference. Undo restores
+       raw values through the store's global bounds, including a higher radius. */
+    commit_all_rows(0);
+    if (tagpu_profiles_mod() == s_resourceModOpen)
+        for (i = 0; i < 2; i++)
+            tagpu_settings_set(TS_RESOURCE_BASE + s_resourceModOpen * 2 + i, s_resourceOpen[i]);
     for (i = 0; i < VD_COUNT; i++) {
         if (!s_vtouched[i] || vrow_held(i)) continue;
         apply_display(i == VD_SCALE ? VD_UNDO_SCALE : i);
@@ -2619,8 +2673,10 @@ static void vis_restore(void)
     s_stage[R_FPS]     = 0;
     s_stage[R_VSYNC]   = 1;
     s_stage[R_EDGE]    = 1;
+    s_stage[R_RESOURCE] = tagpu_profiles_policy()->radius;
+    s_stage[R_QUICK] = tagpu_profiles_policy()->quick_default;
     for (i = 0; i < R_COUNT; i++) if (row_held(i)) s_stage[i] = keep[i];
-    commit_all_rows();
+    commit_all_rows(1);
     /* UI scale back to OFF, the store's default: HUD scale is off the play
        defaults (tagpu_opt.c), so "Restore defaults" must not be what arms it.
        No stage of the row means off, so the pass is turned off here directly,
@@ -3033,8 +3089,6 @@ static int screen_has_row(void)
 typedef void (__stdcall *oncmd_fn)(void* gi);
 static oncmd_fn s_visPrevOnCmd = 0;
 
-static void __stdcall tagpu_vis_oncommand(void* gi);
-
 /* Is the screen on top our VISUALRT? By its ground's name, which no stock
    screen carries. */
 static int screen_is_vrt(void)
@@ -3125,6 +3179,11 @@ static void* __cdecl vis_build_after(unsigned int* regs)
             read_display_state();
             memcpy(s_stageOpen,  s_stage,  sizeof s_stageOpen);
             memcpy(s_vstageOpen, s_vstage, sizeof s_vstageOpen);
+            s_resourceModOpen = tagpu_profiles_mod();
+            for (int i = 0; i < 2; i++) {
+                s_resourceOpen[i] = -1;
+                tagpu_settings_get(TS_RESOURCE_BASE + s_resourceModOpen * 2 + i, &s_resourceOpen[i]);
+            }
             InterlockedExchange(&s_scaleOpen, tagpu_hud_stored_pct());
             memset(s_vtouched, 0, sizeof s_vtouched);
             if (!tagpu_settings_get(TS_MONITOR, &s_monOpen)) s_monOpen = -1;
@@ -3286,7 +3345,7 @@ static void vis_install(void)
 
 void tagpu_menu_init(void)
 {
-    static char gui[8192];
+    static char gui[12288];
     static char vgui[49152];
     /* one GAF per screen, because the engine picks the file from the panel
        gadget's own name (`0x4A8537`): anims\\RENDER.GAF and anims\\VISUALS.GAF */

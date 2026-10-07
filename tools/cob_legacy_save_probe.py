@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Load a save made by the native 32-word COB serializer with the raised runtime."""
+"""Check native eight-slot import or a full expanded COB save/load round trip."""
 import argparse
 import hashlib
 import json
 from pathlib import Path
 import re
+import runpy
 import shutil
 import struct
+import tempfile
 import time
 import traceback
 import uuid
@@ -16,6 +18,23 @@ import talog
 
 compat = probe.compat
 command = probe.command
+TYPE = 'COBOLD'
+
+
+def fixture(gamedir, slots):
+    archive = probe.hpipack.Archive(gamedir / 'totala1.hpi')
+    fbi = archive.read('units/armsolar.fbi').decode('latin-1')
+    fbi, n = re.subn(r'(?i)(\bUnitName\s*=\s*)[^;]+;', rf'\g<1>{TYPE};', fbi, count=1)
+    if n != 1:
+        raise RuntimeError('native save fixture lacks UnitName')
+    starts = ''.join(f'start-script Worker({100 + i});' for i in range(slots - 1))
+    source = ('piece base; Create() {' + starts + 'sleep 600000; return(0);}'
+              'Worker(value) {var local; local=9876; sleep 600000; return(local);}')
+    script = probe.cob_audit.tacob.write_cob(probe.cob_audit.tacob.compile_bos(source))
+    tree = {}
+    probe.hpipack.insert(tree, 'units/cobold.fbi', fbi.encode('latin-1'))
+    probe.hpipack.insert(tree, 'scripts/cobold.cob', script)
+    (gamedir / 'cob-old-probe.ufo').write_bytes(probe.hpipack.build(tree, method=2))
 
 
 def records(pid, words):
@@ -27,74 +46,190 @@ def records(pid, words):
                 raise RuntimeError('short memory read')
             return data
 
-        def word(address):
-            return struct.unpack('<I', read(address, 4))[0]
-
-        main = word(0x511DE8)
-        if read(main + 0x38A51, 1) != b'\1':
-            raise RuntimeError('script observation requires pause acknowledgement')
-        base = word(main + 0x14357)
-        slots = struct.unpack('<H', read(main + 0x14351, 2))[0]
-        result = {}
-        defs = word(main + 0x1439B)
-        count = word(main + 0x1438F)
-        pool = read(base, slots * 0x118)
-        for index in range(1, slots):
-            unit = pool[index * 0x118:(index + 1) * 0x118]
-            if not struct.unpack_from('<I', unit, 0x110)[0] & 0x10000000:
-                continue
-            typ = struct.unpack_from('<H', unit, 0xA6)[0]
-            if typ >= count:
-                raise RuntimeError('live unit type exceeds definition count')
-            if not word(defs + typ * 0x249 + 0x245) & 0x40000:
-                continue
-            owner = unit[0xFF]
-            if owner in result:
-                raise RuntimeError('ambiguous duplicate commander')
-            cob = struct.unpack_from('<I', unit, 0x9A)[0]
-            if not cob:
-                raise RuntimeError(f'live commander {index}, owner {owner}, has no script')
-            state = []
-            for slot in range(8):
-                data = list(struct.unpack(f'<{words + 9}I', read(cob + 28 + slot * (36 + 4 * words), 36 + 4 * words)))
-                if data[0]:
-                    # Native records leave inactive wait fields and unused stack
-                    # words unspecified. Compare only live state and stack cells.
-                    depth = struct.unpack('<i', struct.pack('<I', data[2]))[0] + 1
-                    if not 0 <= depth <= words:
-                        raise RuntimeError('native record exceeds its stack')
-                    state.append(dict(slot=slot, status=data[0], pc=data[1], depth=depth,
-                                      mask=data[7], stack=data[9:9 + depth]))
-            result[owner] = state
-        if not {0, 1} <= set(result):
-            raise RuntimeError(f'expected human and AI commanders, found owners {list(result)}')
-        return result
+        return record_state(read, words)
 
 
-def run(out, dll, stock, load_limit=None, reject_saved=False):
+def record_state(read, words, indices=None):
+    def word(address):
+        return struct.unpack('<I', read(address, 4))[0]
+
+    main = word(0x511DE8)
+    if not read(main + 0x38A51, 1)[0] & 1:
+        raise RuntimeError('script observation requires pause acknowledgement')
+    base = word(main + 0x14357)
+    slots = struct.unpack('<H', read(main + 0x14351, 2))[0]
+    result = {}
+    defs = word(main + 0x1439B)
+    count = word(main + 0x1438F)
+    for index in range(1, slots) if indices is None else indices:
+        if not 0 < index < slots:
+            raise RuntimeError('save probe index exceeds the unit allocation')
+        unit = read(base + index * 0x118, 0x118)
+        if not struct.unpack_from('<I', unit, 0x110)[0] & 0x10000000:
+            continue
+        typ = struct.unpack_from('<H', unit, 0xA6)[0]
+        if typ >= count:
+            raise RuntimeError('live unit type exceeds definition count')
+        if read(defs + typ * 0x249 + 0x20, 32).split(b'\0')[0].upper() != TYPE.encode():
+            continue
+        owner = unit[0xFF]
+        if owner in result:
+            raise RuntimeError('ambiguous duplicate save probe')
+        cob = struct.unpack_from('<I', unit, 0x9A)[0]
+        if not cob:
+            raise RuntimeError(f'live save probe {index}, owner {owner}, has no script')
+        state = []
+        record_count = 8 if words == 32 else probe.COB_THREADS
+        stride = 36 + 4 * words
+        pool = read(cob + 28, record_count * stride)
+        for slot in range(record_count):
+            data = list(struct.unpack_from(f'<{words + 9}I', pool, slot * stride))
+            if data[0]:
+                # Native records leave inactive wait fields and unused stack
+                # words unspecified. Compare only live state and stack cells.
+                depth = struct.unpack('<i', struct.pack('<I', data[2]))[0] + 1
+                if not 0 <= depth <= words:
+                    raise RuntimeError('native record exceeds its stack')
+                state.append(dict(slot=slot, status=data[0], pc=data[1], depth=depth,
+                                  mask=data[7], stack=data[9:9 + depth]))
+        result[owner] = state
+    if not {0, 1} <= set(result):
+        raise RuntimeError(f'expected human and AI save probes, found owners {list(result)}')
+    return result
+
+
+def preflight(name, gamedir, native_stock=False, trace=False):
+    """Exercise the native loader on the replay worker's exact build before recording."""
+    api = runpy.run_path(str(compat.TACLI), run_name='cob_save_preflight')
+    inst = api['Instance'](name)
+    if inst.gamedir.resolve() != gamedir.resolve():
+        raise RuntimeError('save preflight game folder differs from its instance')
+    recorder = gamedir / 'tagpu_recorder.on'
+    previous = recorder.read_bytes() if recorder.exists() else None
+    trace_lever = gamedir / 'tagpu_cobtrace.on'
+    previous_trace = trace_lever.read_bytes() if trace_lever.exists() else None
+    slots, words = (8, 32) if native_stock else (probe.COB_THREADS, 128)
+    archive = gamedir / 'cob-old-probe.ufo'
+    if archive.exists():
+        raise RuntimeError('save preflight would replace existing probe content')
+    from resource_regression import Check
+    c = Check.__new__(Check)
+    c.name = name
+    try:
+        c.call('stop')
+        recorder.unlink(missing_ok=True)
+        if trace:
+            trace_lever.write_text(TYPE)
+        fixture(gamedir, slots)
+        c.call('launch', '--defaults', '--keep-dll')
+        c.until(lambda: c.call('ui', '--json')['gui'] == 'MAINMENU.GUI',
+                'save preflight did not reach the main menu', seconds=30)
+        names = {u['name'].upper() for u in c.call('units', '--json')['units']}
+        if TYPE not in names:
+            raise RuntimeError('save preflight unit did not reach the native catalogue')
+        probe.enter_skirmish(name, gamedir / 'log/startup-failure.txt')
+        with tempfile.TemporaryDirectory(prefix='cob-save-preflight-') as temp:
+            scenario = Path(temp) / 'native-save.json'
+            scenario.write_text(json.dumps(dict(format='ta-scenario/1', seed=7, on_error='abort',
+                setup=dict(clear_existing=False),
+                units=[dict(id='human', type=TYPE, owner=0, pos=[1000, 1200]),
+                       dict(id='ai', type=TYPE, owner=1, pos=[3000, 1200])])) + '\n')
+            applied = json.loads(command('scenario', 'apply', name, str(scenario), '--json'))
+        c.call('keys', 'shift', 'pause')
+        c.until(lambda: c.values('*0x511DE8+0x38A51:1')[0] & 1,
+                'save preflight did not acknowledge pause')
+        def snapshot():
+            def read(address, size):
+                specs = [f'0x{address + offset:x}:x{min(256, size - offset):x}'
+                         for offset in range(0, size, 256)]
+                return b''.join(bytes.fromhex(p['value']) for p in
+                                c.call('peek', *specs, '--json')['peeks'])
+            indices = [u['engine_index'] for u in applied['units'].values()]
+            return record_state(read, words, indices)
+        before = snapshot()
+        if any(len(rows) != slots for rows in before.values()):
+            raise RuntimeError('save preflight did not fill every script record')
+        print('COB native save preflight: full active pool observed', flush=True)
+        probe.open_options(name)
+        command('ui', name, 'click', 'SAVEGAME')
+        command('ui', name, 'click', 'GAMENAME')
+        filled = json.loads(command('ui', name, 'fill', 'GAMENAME', 'L', '--json'))
+        if filled.get('text') != 'L':
+            raise RuntimeError('save preflight filename was not acknowledged')
+        command('ui', name, 'click', 'LOAD')
+        probe.open_options(name)
+        command('ui', name, 'click', 'LOADGAME')
+        command('ui', name, 'select', 'GAMES', 'L')
+        command('ui', name, 'click', 'LOAD', timeout=90)
+        print('COB native save preflight: native load acknowledged', flush=True)
+        c.until(lambda: compat.IN_GAME_PANEL.search(command('ui', name).splitlines()[0]),
+                'save preflight did not return to play', seconds=90)
+        if not c.values('*0x511DE8+0x38A51:1')[0] & 1:
+            c.call('keys', 'shift', 'pause')
+        c.until(lambda: c.values('*0x511DE8+0x38A51:1')[0] & 1,
+                'loaded save preflight did not acknowledge pause')
+        if before != snapshot():
+            raise RuntimeError('native save/load changed active script records')
+        target = gamedir / 'replays/cover-resource-save.bin'
+        target.unlink(missing_ok=True)
+        trigger = gamedir / 'tagpu_replay.trigger'
+        pending = trigger.with_suffix('.tmp')
+        pending.write_text('cover resource-save\n')
+        pending.replace(trigger)
+        c.until(lambda: target.exists() or 'cover: resource-save refused: not a coverage build'
+                in talog.run_text(gamedir), 'native save coverage request was not acknowledged')
+        print(f'COB native save preflight: all {slots} active slots preserved '
+              'on human and AI probes', flush=True)
+    finally:
+        try:
+            c.call('stop')
+        finally:
+            archive.unlink(missing_ok=True)
+            if previous_trace is None:
+                trace_lever.unlink(missing_ok=True)
+            else:
+                trace_lever.write_bytes(previous_trace)
+            if previous is None:
+                recorder.unlink(missing_ok=True)
+            else:
+                recorder.write_bytes(previous)
+
+
+def run(out, dll, stock, load_limit=None, reject_saved=False, expanded=False):
     setup = compat.pick_setups(['retail'])[0]
     compat.PREFIX = 'cob-old-' + uuid.uuid4().hex[:8] + '-'
     name = compat.inst_name('retail')
     server = compat.start_xvfb()
     inst = game = None
+    serializer = dll if expanded else stock
+    words, slots = (128, probe.COB_THREADS) if expanded else (32, 8)
     report = dict(instance=name, dll_sha256=hashlib.sha256(dll.read_bytes()).hexdigest(),
-                  native_serializer_dll_sha256=hashlib.sha256(stock.read_bytes()).hexdigest())
+                  serializer_dll_sha256=hashlib.sha256(serializer.read_bytes()).hexdigest(),
+                  serialized_words=words, serialized_slots=slots)
     try:
-        inst = compat.prepare_wine(setup, stock, server.tacompat_display)
+        inst = compat.prepare_wine(setup, serializer, server.tacompat_display)
+        fixture(inst['gamedir'], slots)
         game = compat.start_wine(inst, server.tacompat_display, display_server=server)
-        print('Creating a retail save with native COB serialization', flush=True)
+        print(f'Creating a retail save with {slots}-slot COB serialization', flush=True)
         probe.enter_skirmish(name, inst['gamedir'] / 'log/startup-failure.txt')
         cmd = compat.commanders(name)
         if not cmd['ok']:
             raise RuntimeError(cmd['why'])
+        command('units', name, '--json')
+        scenario = out / 'native-probes.json'
+        scenario.write_text(json.dumps(dict(format='ta-scenario/1', seed=7, on_error='abort',
+            setup=dict(clear_existing=False),
+            units=[dict(id='human', type=TYPE, owner=0, pos=[1000, 1200]),
+                   dict(id='ai', type=TYPE, owner=1, pos=[3000, 1200])])) + '\n')
+        command('scenario', 'apply', name, str(scenario), '--json')
         command('keys', name, 'shift', 'pause')
         hooks = compat.exe_hooks(game['proc'].pid, inst['gamedir'])
         if hooks.get('why'):
             raise RuntimeError(hooks['why'])
         probe.wait_paused(hooks['pid'])
-        report['before'] = records(hooks['pid'], 32)
-        if not any(report['before'].values()):
-            raise RuntimeError('native save has no active COB state to exercise')
+        report['before'] = records(hooks['pid'], words)
+        if any(len(rows) != slots for rows in report['before'].values()):
+            raise RuntimeError('save did not exercise every script record')
         probe.open_options(name)
         command('ui', name, 'click', 'SAVEGAME')
         command('ui', name, 'click', 'GAMENAME')
@@ -170,6 +305,10 @@ def run(out, dll, stock, load_limit=None, reject_saved=False):
         hooks = compat.exe_hooks(game['proc'].pid, inst['gamedir'])
         if hooks.get('why'):
             raise RuntimeError(hooks['why'])
+        # Local loads deliberately resume play. The sleeping probe's PC and
+        # locals are stable, so pause through native input before measuring;
+        # the old implicit LOADGAME pause is not a saved-state contract.
+        command('keys', name, 'shift', 'pause')
         probe.wait_paused(hooks['pid'])
         cmd = compat.commanders(name)
         if not cmd['ok']:
@@ -196,17 +335,31 @@ def run(out, dll, stock, load_limit=None, reject_saved=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--out', type=Path)
+    parser.add_argument('--preflight', metavar='INSTANCE')
+    parser.add_argument('--gamedir', type=Path)
+    parser.add_argument('--native-stock', action='store_true', help='preflight the native eight-slot, 32-word build')
+    parser.add_argument('--trace', action='store_true', help='enable COB trace only during the unrecorded preflight')
     parser.add_argument('--dll', type=Path, default=compat.TREE / 'tagpu/ddraw/ddraw.dll')
     parser.add_argument('--stock', type=Path, default=compat.TREE / 'tagpu/ddraw/ddraw-stocklimits.dll')
     parser.add_argument('--load-limit', type=int, help='override only the loading executable configuration')
     parser.add_argument('--reject-saved', action='store_true', help='require refusal when a saved commander script is malformed')
+    parser.add_argument('--expanded', action='store_true', help='save and restore all expanded slots with the guarded runtime')
     args = parser.parse_args()
+    if args.preflight:
+        if not args.gamedir or args.out:
+            parser.error('--preflight requires --gamedir and does not use --out')
+        preflight(args.preflight, args.gamedir, args.native_stock, args.trace)
+        return 0
+    if not args.out:
+        parser.error('--out is required without --preflight')
+    if args.native_stock or args.trace:
+        parser.error('--native-stock and --trace require --preflight')
     out = args.out.resolve()
     if any(out == root or root in out.parents for root in (compat.TREE, compat.main_checkout())):
         parser.error('output must be outside the repository')
     out.mkdir(parents=True, exist_ok=False)
-    report = run(out, args.dll.resolve(), args.stock.resolve(), args.load_limit, args.reject_saved)
+    report = run(out, args.dll.resolve(), args.stock.resolve(), args.load_limit, args.reject_saved, args.expanded)
     print(json.dumps(report, indent=2))
     return 0 if report['ok'] else 1
 

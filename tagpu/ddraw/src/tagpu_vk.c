@@ -61,9 +61,9 @@
                              full barrier, so a render thread that reads
                              ST_READY sees all of them.
      ST_STARTING -> ST_FAILED  the worker, the same way.
-     ST_READY -> ST_OFF      the render thread, and only it, and only from
-                             ST_READY -- the state in which the worker has
-                             stopped touching `s_vk` for good.
+     ST_READY -> ST_OFF      the render thread, or the window owner after its
+                             join. In ST_READY the worker has stopped touching
+                             `s_vk` for good; the join transfers CPU ownership.
      ST_STARTING -> ST_ZOMBIE  `tagpu_vk_render_stop`, abandoning a worker.
      ST_ZOMBIE -> ST_OFF     `lane_release`, and nothing else.
 
@@ -135,6 +135,7 @@
 #include "hook.h"
 #include "tagpu_vk.h"
 #include "tagpu_settings.h"
+#include "tagpu_window.h"
 #include "tagpu_vk_gui.h"
 #include "tagpu_vk_fps.h"
 #include "tagpu_vk_scaffold.h"
@@ -485,11 +486,14 @@ static float s_clear[3] = { 0.0f, 0.0f, 0.0f };
    against the previous one. The last two-lane figures are in
    [gpu-status](gpu-status.html) §2.54.
 
-   `tagpu_vk_wndproc` is called from the fork's wndproc and has one arm, which
-   is not about a window of ours -- the OWNER dying, which is the only thing the window thread can tell the render
-   thread that `hwnd != s_owner` cannot (see `s_ownGone`). */
+   The persistent window subclass observes destruction even while DirectDraw
+   has restored its own window procedure. The observer publishes that fact to
+   the renderer before the window owner joins it. */
 
 static HWND          s_owner;           /* the game window we are tracking     */
+/* The window subclass publishes destruction even between DirectDraw objects.
+   A lifetime ID also distinguishes a new window that reuses the same HWND. */
+static volatile LONG s_ownerGeneration;
 
 
 /* THIS BACKEND OWNS THE PRESENT, and there is no other kind of frame:
@@ -508,35 +512,33 @@ static HWND          s_owner;           /* the game window we are tracking     *
    early the write happens. */
 static volatile LONG s_ownWin;          /* this backend owns the present       */
 
-/* THE OWNER IS GONE, published by the window thread, and it is the ONLY thing
-   that detector can be now. `hwnd != s_owner` does not cover it -- `g_ddraw.hwnd`
-   is nulled only by the IAT-hooked `DestroyWindow` (winapi_hooks.c), and only
-   AFTER the real destroy, so a destroy by any other route leaves that test false
-   and the lane presenting on a dead HWND until the driver says
-   `VK_ERROR_SURFACE_LOST_KHR`. That would be trading an ordering for "wait for
-   an error", which is the shape this file is not allowed to ship, so the latch
-   keeps a one-frame bound on it. It is why `tagpu_vk_wndproc` exists at
-   all. */
+/* The destroyed lifetime, published before its owner joins the renderer. A
+   late publication about an old window cannot mark its replacement dead.
+   Never cleared on binding; nonrepeating IDs make the identity the invariant. */
 static volatile LONG s_ownGone;
 
-
-/* Called from the fork's wndproc on the game window's thread. An OBSERVER: it
-   never swallows a message the fork or the engine needs, and it watches
-   exactly one thing -- the game window being destroyed. That is the only fact
-   the window thread has which the render thread cannot get for itself; see
-   `s_ownGone` for why asking `hwnd != s_owner` instead does not work. */
-void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
+static int owner_gone(void)
 {
-    (void)hwnd; (void)wparam; (void)lparam;
+    LONG generation = InterlockedCompareExchange(&s_ownerGeneration, 0, 0);
+    return generation && generation == InterlockedCompareExchange(&s_ownGone, 0, 0);
+}
+
+int tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
+{
+    LONG generation;
+    (void)wparam; (void)lparam;
     /* AND ONLY WHEN THERE IS A LANE TO BRING DOWN: without the `s_ownWin`
        test this would append a line naming a lane and a render thread that do
        not exist to every `tagpu.log` on the DEFAULT renderer, with no Vulkan
        lever present at all. It also keeps the symmetry the two readers of
        `s_ownGone` have. */
-    if (msg != WM_DESTROY || !s_ownWin) return;
-    InterlockedExchange(&s_ownGone, 1);
-    vklog("window: the game window is being destroyed - the lane comes down on "
-          "the render thread's next frame");
+    if (msg != WM_DESTROY || !s_ownWin) return 0;
+    generation = tagpu_window_generation(hwnd);
+    if (!generation || generation !=
+        InterlockedCompareExchange(&s_ownerGeneration, 0, 0)) return 0;
+    if (InterlockedExchange(&s_ownGone, generation) != generation)
+        vklog("window: the presentation owner is being destroyed - joining and teardown");
+    return 1;
 }
 
 /* ---- the lever ----------------------------------------------------------- */
@@ -651,14 +653,6 @@ int tagpu_vk_ab_arm(const char* tag)
 void tagpu_vk_own_present(void)
 {
     InterlockedExchange(&s_ownWin, 1);
-    /* AND THE "OWNER GONE" LATCH IS CLEARED HERE, once per render thread. It
-       must not outlive the thread that saw the destroy: `g_ddraw.hwnd` is
-       assigned again on a mode change (dd.c, utils.c), so a latch that stayed
-       set would refuse every bring-up for the rest of the process -- the lane
-       silently never coming up, which is the failure this file exists to make
-       impossible. This function runs once at the top of each render thread,
-       which is exactly the scope the latch wants. */
-    InterlockedExchange(&s_ownGone, 0);
     vklog("this backend owns the present - the surface goes on the game window");
 }
 
@@ -1857,9 +1851,9 @@ static void vk_perimage_free(void)
     s_vk.tsPeriod = 0.0;
 }
 
-/* Everything, in the reverse order it was built. Called with `s_vk` owned --
-   the render thread in ST_READY, or the bring-up worker unwinding its own
-   failure while still in ST_STARTING. */
+/* Called by the render thread in ST_READY, its window owner after joining it,
+   or the bring-up worker unwinding a failure or abandonment. Each has sole
+   CPU ownership of s_vk by the lane state and the renderer join. */
 static void vk_down(void)
 {
     if (s_vk.dev) {
@@ -3030,14 +3024,13 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
     switch (st) {
     case ST_OFF: {
         HWND win;
+        LONG generation = tagpu_window_generation(hwnd);
         if (!hwnd || w <= 0 || h <= 0) return 0;
-        /* NOT BACK UP ON A WINDOW WE WATCHED DIE. Without this the rebuild the
-           `s_ownGone` test forces would fall straight into another bring-up on
-           the same dead HWND, once a frame. The render thread is being stopped
-           on every path that destroys the game window, so refusing here is a
-           stop rather than a wait. */
-        if (s_ownWin && s_ownGone) return 0;
+        /* A removed lifetime cannot be revived by another logical mode set.
+           A new lifetime may bind even if Windows recycles the HWND value. */
+        if (!generation || generation == InterlockedCompareExchange(&s_ownGone, 0, 0)) return 0;
         s_owner = hwnd;
+        InterlockedExchange(&s_ownerGeneration, generation);
         /* THE CALLER'S WINDOW, AND NOTHING ELSE: `hwnd` is already known
            non-NULL two lines above. */
         win = hwnd;
@@ -3076,15 +3069,14 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
         return 0;
     }
 
-    /* Three things force the whole lane down and back up through the worker:
-       the game window CHANGED (a mode switch), the game window was DESTROYED
-       under us (only the wndproc observer can see that -- `s_ownGone`), or the
-       player picked another GPU. Each invalidates the surface or the device and
-       neither is patchable in place; going back through the worker is what keeps
-       every bring-up off the render thread, not just the first. */
-    if (hwnd != s_owner || s_ownGone || lane_gen() != s_choiceSeen) {
+    /* The actual window lifetime or GPU choice invalidates this device.
+       A logical DirectDraw mode change on the same window does not. */
+    if (hwnd != s_owner || owner_gone() || tagpu_window_generation(hwnd) !=
+        InterlockedCompareExchange(&s_ownerGeneration, 0, 0) || lane_gen() != s_choiceSeen) {
         vklog(hwnd != s_owner ? "the game window changed - rebuilding" :
-              s_ownGone       ? "the game window was destroyed under us - down"
+              owner_gone()   ? "the game window was destroyed under us - down"
+              : tagpu_window_generation(hwnd) != InterlockedCompareExchange(&s_ownerGeneration, 0, 0)
+                              ? "the window lifetime changed - rebuilding"
                               : "the GPU row changed - rebuilding");
         vk_down();
         InterlockedExchange(&s_state, ST_OFF);
@@ -3179,4 +3171,33 @@ void tagpu_vk_render_stop(void)
         if (st == ST_READY) { vk_down(); vklog("render thread stopping - down"); }
         InterlockedExchange(&s_state, ST_OFF);
     }
+}
+
+int tagpu_vk_ready(void)
+{
+    return lane_state() == ST_READY;
+}
+
+void tagpu_vk_render_stop_window(LONG generation)
+{
+    /* The caller owns the lane after joining, so no renderer can change its
+       bound generation between this identity test and teardown. */
+    if (generation && generation == InterlockedCompareExchange(&s_ownerGeneration, 0, 0))
+        tagpu_vk_render_stop();
+}
+
+void tagpu_vk_render_pause(HWND hwnd)
+{
+    LONG generation = tagpu_window_generation(hwnd);
+    if (lane_state() != ST_READY || owner_gone() || hwnd != s_owner || !generation ||
+        generation != InterlockedCompareExchange(&s_ownerGeneration, 0, 0)) {
+        tagpu_vk_render_stop();
+        return;
+    }
+    if (s_worker) { CloseHandle(s_worker); s_worker = NULL; }
+    /* The old renderer's join transfers sole CPU ownership to its replacement.
+       GPU objects and per-image fences remain live; their existing fence waits
+       still order the next submit. Nothing retained points into g_ddraw. */
+    vklog("render thread paused - ready presentation retained for window lifetime %ld",
+          generation);
 }

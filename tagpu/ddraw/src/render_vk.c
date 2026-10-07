@@ -61,15 +61,8 @@ DWORD WINAPI vk_render_main(void)
 #define VK_RETRY_BUDGET 3
 
     unsigned fc = 0;
-    int gave_up = 0, came_up = 0, retries = 0;
+    int gave_up = 0, came_up = tagpu_vk_ready(), retries = 0;
     DWORD timeout;
-
-    /* A QUARTER SECOND BEFORE ANYTHING ELSE. The render thread is
-       started from the game thread's mode set-up and the window's client rect
-       is not final until that has finished; a swapchain built against the
-       intermediate size would be rebuilt on the first `VK_SUBOPTIMAL_KHR`
-       anyway, so this costs nothing and saves the churn. */
-    Sleep(250);
 
     fpsl_init();
 
@@ -213,11 +206,12 @@ DWORD WINAPI vk_render_main(void)
         fpsl_frame_end();
     }
 
-    /* Every exit from the loop is a mode change, a shutdown or a lane that
-       failed, and all three invalidate what the surface was made on -- so the
-       lane comes down here, on the thread that owns it, rather than being left
-       to discover a dead window. */
-    tagpu_vk_render_stop();
+    /* The caller joins this thread before resetting DirectDraw state. A ready
+       lane on the same live window keeps its last image and GPU objects; the
+       next joined-in render thread becomes their sole CPU owner. No thread
+       remains reading the critical section or primary surface being released. */
+    if (gave_up) tagpu_vk_render_stop();
+    else tagpu_vk_render_pause(g_ddraw.hwnd);
 
     if (gave_up)
     {
