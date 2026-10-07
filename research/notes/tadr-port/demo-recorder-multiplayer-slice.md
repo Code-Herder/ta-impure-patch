@@ -1571,7 +1571,30 @@ viewed seat's scan (R14b), and an owner's image carries its own machine's: a
 player's own units are in contact on its own machine. So when both worlds view
 the same player, a composed unit takes the recorder's bits from the primary
 stream. A unit that stream does not hold yet is compared without them and
-counted. Both measured forks counted 0.
+counted. Both measured forks counted 0. A dump comparison takes the same rule
+whenever the dump views the seat the recorder viewed (a playing with
+`--perspective` of the recorder's own record); in full view, or from another
+seat, the views differ and the contact bits are not compared. The count of
+units compared without them is on every summary line, and the owner approved
+that rule for dumps on 2026-10-06.
+
+MEASURED 2026-10-06: before the dump path took the rule, every multiplayer dump
+had been taken in full view or from a seat the recorder did not view, so none
+reached it. From the recorder's own seat, the four remote humans' commanders of
+the five-peer ten-seat recording differed in bits 8-9 at 300 and 1000 (their
+owners' machines view their own players; the playback's radar pass `0x467440`
+computes the recorder's view, as the recorder's own scan did), and the two-peer
+recording differed in 18, 11, 10 and 9 units at 300, 600, 900 and 1200. With
+the rule all are EQUAL with 0 units unscanned, and a contact bit cleared in one
+dumped unit is found as exactly one difference.
+
+The residual: the expectation is the recorder's scan, but the host's radar pass
+reads the composed world -- each remote unit at its owner's image position --
+while the recorder's read its replicas, which in the two-peer recording sat up
+to 10.3 world units away (1 to 6 remote units per sampled tick). A unit or a
+jammer straddling a sight, radar or jammer edge at a pass would differ with no
+playback bug. None was seen in six dumps; the owner chose to keep the
+comparison strict and investigate one if it appears.
 
 MEASURED 2026-10-06 on the reference setup, internal speed 20, the
 reproduction recording:

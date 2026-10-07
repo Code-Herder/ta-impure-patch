@@ -19,8 +19,9 @@ yardmap leaves some of its cells open), and every set yard bit lies inside a liv
 footprint. An order whose target its owner has
 already destroyed names no target: a unit's death keeps its owner's clock, so another owner's
 image can still name it, and the host cannot link a unit it no longer holds (ord_target); the
-owner approved that expectation on 2026-10-06. The puppet holds of `tarec compare
---puppet` apply. Exit 0 when every dump is EQUAL, 1 otherwise.
+owner approved that expectation on 2026-10-06. With the recorder's viewed seat
+viewed in the dump too, a unit's contact bits (+0x110 bits 8-10 and 12) are the recorder's own scan,
+as --fork takes them (contacts). The puppet holds of `tarec compare --puppet` apply. Exit 0 when every dump is EQUAL, 1 otherwise.
 
 --fork N compares timeline N's first iteration, the world a takeover made, with the expected world
 at its fork_at as above, less what `tarec compare-fork` takes off (decision D2, tarec.fork_view);
@@ -177,10 +178,16 @@ def occupancy(w, dw):
 CONTACT = 0x1700        # unit +0x110 bits 8-10 and 12, the viewed seat's scan history (tarec.puppet_view)
 
 
+def recorder_scan(w):
+    """The primary stream's contact bits per slot: the recorder's own scan of its viewed seat."""
+    return {slot: struct.unpack_from("<I", u, tarec.U_STATE)[0] & CONTACT
+            for slot, u in w.units.items()}
+
+
 def contacts(a, b, scan):
     """The contact bits are the viewed seat's scan (tagpu_replay.c, R14b), and an owner's image
     carries its own machine's: the recorder's are its primary stream's. So with one player viewed
-    in both worlds (fork_view's rule), a composed unit the primary stream holds takes the primary's
+    in both worlds (puppet_view's and fork_view's rule), a composed unit the primary stream holds takes the primary's
     bits, and one it does not hold yet -- an owner-first unit, which no recorded scan has seen --
     is compared without them. The count of those."""
     if a.view[1] != b.view[1]:
@@ -210,8 +217,7 @@ def fork(path, n):
     hist = history(path)
     start = tarec.stream_to(h, bl, want=h["start"])
     a = tarec.stream_to(h, bl, want=T)
-    scan = {slot: struct.unpack_from("<I", u, tarec.U_STATE)[0] & CONTACT
-            for slot, u in a.units.items()}
+    scan = recorder_scan(a)
     b = tarec.stream_to(c["header"], c["blocks"], want=T)
     if a.tick != T or b.tick != T:
         print(f"{path}: the parent reads to GameTime {a.tick} and timeline {n} begins at "
@@ -360,7 +366,10 @@ def main(argv):
     for d in dumps:
         dh, dw = tarec.dump_world(d, h)
         w = tarec.stream_to(h, bl, want=dw.tick)
+        scan = recorder_scan(w)
         compose(w, start, hist.at(dw.tick), seats)
+        # before puppet_view, which clears both worlds' views: contacts() compares them
+        unseen = contacts(w, dw, scan)
         radar = dw.view[1] == w.view[1]
         tarec.mapped_hold(w)
         tarec.mapped_hold(dw)
@@ -373,8 +382,8 @@ def main(argv):
         lines, _ = w.differences(dw, h["tables"], dh["tables"], gnames=gnames, limit=1 << 30)
         lines += stale
         n = len(lines)
-        print(f"{d}: GameTime {dw.tick}, {len(dw.units)} live units, {len(w.units)} expected: "
-              + ("EQUAL" if not n else f"{n} DIFFERENCES"))
+        print(f"{d}: GameTime {dw.tick}, {len(dw.units)} live units, {len(w.units)} expected, "
+              f"{unseen} no recorded scan has seen: " + ("EQUAL" if not n else f"{n} DIFFERENCES"))
         for line in lines[:LIMIT]:
             print("  " + line)
         status |= 1 if n else 0
