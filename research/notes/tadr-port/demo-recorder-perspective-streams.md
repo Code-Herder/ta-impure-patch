@@ -2,12 +2,11 @@
 
 ## Status
 
-Planned 2026-10-06. Landing 4c-1 (the skirmish capture) is built and awaits its V1 run. Landing
-4c-2 (Follow, Jump and Free cam on a skirmish playback) is built and awaits its V2 run; what it
-settled beyond the plan is [4c-2 as built](#4c-2-as-built). Landing 4c-3 (the overlays and the
-dock's Overlays menu) is built and awaits its V3 run: [4c-3 as built](#4c-3-as-built). Landing
-4c-4 (multiplayer, contribution kinds 13-15) is built and awaits its V4 two-peer run:
-[4c-4 as built](#4c-4-as-built). This is stage 4c of the
+Planned 2026-10-06; the four landings are built and their verification runs passed on
+2026-10-06, not yet landed on main: 4c-1 (the skirmish capture), 4c-2 (Follow, Jump and Free cam on
+a skirmish playback, [as built](#4c-2-as-built)), 4c-3 (the overlays and the dock's Overlays menu,
+[as built](#4c-3-as-built)) and 4c-4 (multiplayer, contribution kinds 13-15,
+[as built](#4c-4-as-built)). This is stage 4c of the
 [multiplayer slice](demo-recorder-multiplayer-slice.md#stage-4-perspectives-and-communication)
 and landing 3 of [S5](demo-recorder-s5-ui.md#landings) ("the streams and the cards"). It records
 each human seat's camera, cursor, clicks and selection: the local human in a skirmish recording
@@ -338,8 +337,10 @@ cursor and ring in `src/tagpu_mark.c` (`gather_overlay`), the recorded selection
   region of both. It is 100 x 89 engine px, under the 90-row floor every panel has.
   - It opens only while the cards are shown, and DKOVER is greyed otherwise. It closes on a press
     of either button anywhere but the menu and DKOVER, on a second press of DKOVER, and whenever
-    the cards hide (a modal, the dock off the top). The press that closes it still reaches what
-    lies under it. The wheel over it does nothing.
+    the cards hide (a modal, the dock off the top). On the top screen the press that closes it does
+    nothing else: it and its release are consumed (owner, 2026-10-06), so closing the menu never
+    selects a unit or presses what lies under it; under an engine dialog the press goes on to the
+    dialog. The wheel over it does nothing.
   - **Stand-in art**: the menu's ground is a 100 x 89 plate cut from `dock-tex`, its rows the
     cards' 92-px toggle plates, its captions the engine's font; DKOVER's glyph is a 7 x 11 pointer
     arrow drawn in code in the play glyph's colour.
@@ -405,8 +406,6 @@ Gaps 4c-3 leaves:
   - the menu's ground: a panel about 100 x 89, or a 9-slice;
   - the toggle row in its off and on states, with a checkbox or lamp for on, in place of the
     cards' pressed plate.
-- **The press that closes the menu is not consumed**; whether it should be is a design question
-  the stand-in does not settle.
 
 ## Multiplayer (kinds 13-15)
 
@@ -504,8 +503,12 @@ settled that the plan left open:
 
 Gaps 4c-4 leaves:
 
-- **V4 has not run**: no two-peer recording yet carries kinds 13-15, and the host playback's
-  Follow and selection rectangle of a joiner are unmeasured.
+- **V4** ran 2026-10-06 on a two-peer recording whose joiner clicked, dragged, scrolled and
+  zoomed: the file validates in C and Python, the playings in full view and from the joiner's
+  seat are EQUAL at 300 and 1198..1203, and Follow of the joiner at GameTime 1272 put the eye at
+  (10295, 4738) and the level at 76205/65536, exactly the file's sample (camera minus half the
+  view; zoom 76205). The viewer's screen was the joiner's size, 896x704, so the fit of another
+  size is unmeasured on a network recording.
 - **Every peer needs this build**: a peer without kinds 13-15 refuses them as invalid data.
 - **The physical budget** (owner Q3) is still unmeasured.
 

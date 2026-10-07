@@ -129,6 +129,7 @@ static struct { int valid, play, speed, grey, leave, over; char now[16], end[16]
 /* the strip's presses: `s_held` and `s_rpress` a press consumed, whose release is consumed too;
    `s_drag` the seek the left one asks for on its release, which a lost mouse cancels */
 static int    s_held, s_drag, s_rpress;
+static int    s_dismissed, s_rdismissed;   /* a press that closed the Overlays menu, either button */
 
 /* the post-GUI frames: 0x18-byte engine headers over the art's own pixels, which tagpu_art keeps
    for the process and never writes; the fill also in every narrower width, for the tile the
@@ -801,16 +802,20 @@ static int cursor_x(void)
     return (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
 }
 
-/* THE OVERLAYS MENU CLOSES ON A PRESS ANYWHERE BUT ITSELF AND ITS BUTTON, either button, whoever
-   takes the press after. A press on DKOVER is left to it: the engine's click on its release
-   toggles the menu (tagpu_dock_oncommand). */
-static void menu_dismiss(int gx, int gy)
+/* THE OVERLAYS MENU CLOSES ON A PRESS ANYWHERE BUT ITSELF AND ITS BUTTON, either button, and on
+   the top screen that press does nothing else: it is consumed, with its release (THE
+   CONSUMED-PRESS RULE), so closing the menu never selects a unit or presses what lies under it.
+   Under an engine dialog the press closes the menu and goes on to the dialog, as THE ON-TOP RULE
+   leaves the engine's clicks to it. A press on DKOVER is left to it: the engine's click on its
+   release toggles the menu (tagpu_dock_oncommand). Whether the press was consumed. */
+static int menu_dismiss(int gx, int gy, int on_top)
 {
-    if (!tagpu_cards_menu_open() || tagpu_cards_menu_owns(gx, gy)) return;
+    if (!tagpu_cards_menu_open() || tagpu_cards_menu_owns(gx, gy)) return 0;
     if (s_open && gx >= s_ex + s_w - OVER_RX && gx < s_ex + s_w - OVER_RX + BTN_W &&
         gy >= s_ey + BTN_Y && gy < s_ey + BTN_Y + BTN_H)
-        return;
+        return 0;
     tagpu_cards_menu_close();
+    return on_top;
 }
 
 /* THE CONSUMED-PRESS RULE, the sprocket's (tagpu_menu.c): a release is consumed exactly when its
@@ -822,7 +827,16 @@ static void menu_dismiss(int gx, int gy)
 int tagpu_dock_click(int gx, int gy, int down, int on_top)
 {
     unsigned first, last;
-    if (down) menu_dismiss(gx, gy);
+    if (down) {
+        s_dismissed = menu_dismiss(gx, gy, on_top);
+        if (s_dismissed) {
+            s_held = s_drag = 0;
+            return 1;
+        }
+    } else if (s_dismissed) {
+        s_dismissed = 0;
+        return 1;
+    }
     if (tagpu_cards_click(gx, gy, down, 0, on_top)) return 1;
     if (!down) {
         int was = s_held;
@@ -843,7 +857,16 @@ int tagpu_dock_rclick(int gx, int gy, int down, int on_top)
 {
     unsigned first, last;
     int i, best = SNAP_PX + 1, k = -1;
-    if (down) menu_dismiss(gx, gy);
+    if (down) {
+        s_rdismissed = menu_dismiss(gx, gy, on_top);
+        if (s_rdismissed) {
+            s_rpress = 0;
+            return 1;
+        }
+    } else if (s_rdismissed) {
+        s_rdismissed = 0;
+        return 1;
+    }
     if (tagpu_cards_click(gx, gy, down, 1, on_top)) return 1;
     if (!down) {
         int was = s_rpress;
