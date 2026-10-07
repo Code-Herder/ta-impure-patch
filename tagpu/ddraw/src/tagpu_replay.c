@@ -5283,6 +5283,12 @@ typedef void (__stdcall* PFN_ObjFree)(char* instance);
    owner, which a puppet host has none of. */
 typedef void (__cdecl* PFN_RadarPass)(void);
 #define E_RadarPass   ((PFN_RadarPass)0x00467440u)
+/* 0x466DC0(): the minimap's unit and projectile picture for the viewed record, no argument, plain
+   `ret` (0x46743D), which the players phase runs every tick for the viewed record alone
+   (0x465065..0x465072). Display state: its count main+0x1436B and main+0x142F1 bit 1 are the
+   viewer's own (replay-globals.tsv). */
+typedef void (__cdecl* PFN_MinimapRebuild)(void);
+#define E_MinimapRebuild ((PFN_MinimapRebuild)0x00466DC0u)
 /* the level init's resets, no argument, plain `ret`: the notices 0x47EE30 (DISASSEMBLED
    0x47EE30..0x47EEDA: the queue *(0x51E68C) emptied from its last entry, each queued text freed,
    the last sound's time +0x9D = 0, the 24 per-kind cooldowns at 0x5086EC + 0x18 k = 0) and the chat
@@ -6450,6 +6456,9 @@ static void sight_change(char* ta)
     minimap_fog(ta);
     E_RadarPass();
     E_SightExpire();
+    /* the new record's minimap picture now: on a paused frame no players phase runs, and
+       viewer_frame rebuilds record 10's only on a new GameTime */
+    E_MinimapRebuild();
     s_view = seat;
     tagpu_logf("replay: sight is seat %u at GameTime %u; death vision %u made, %u refused",
                seat, L.now, s_eye.made, s_eye.refused);
@@ -6983,6 +6992,11 @@ static int seek_run(char* ta)
     /* R14c: the records' expiry, as 0x495688 follows the players phase (THE SEEK'S SIGHT
        RECORDS) */
     E_SightExpire();
+    /* R14d: the viewed record's minimap picture from the world at T, after the contacts it reads
+       (R14b). A playing rebuilds it every tick, in the players phase for a seat and in
+       viewer_frame for record 10; a seek on a paused frame runs neither, and a seat's picture
+       would show the world before the seek until the next tick. */
+    E_MinimapRebuild();
     /* R15, from the recorder's images: a deadline is the host's own clock's, which the recorder's
        carries, where an owner's player image carries its own machine's (mp_world, players_put) */
     sk_deadlines(ta, W, T - 1);
@@ -7801,12 +7815,6 @@ static void viewer_init(char* ta)
     next = PASS_TICKS * (now / PASS_TICKS + 1);
     memcpy(player_rec(ta, REC_VIEWER) + PL_PASS, &next, 4);
 }
-
-/* 0x466DC0(): the minimap's unit and projectile picture for the viewed record, no argument, plain
-   `ret` (0x46743D), which the players phase runs every tick for the viewed record alone
-   (0x465065..0x465072) */
-typedef void (__cdecl* PFN_MinimapRebuild)(void);
-#define E_MinimapRebuild ((PFN_MinimapRebuild)0x00466DC0u)
 
 /* The players phase's work for the viewed record, while record 10 is viewed: its loop runs over
    records 0-9 (0x4655A8..0x4655AF), so it never reaches V's iteration, where it would rebuild the

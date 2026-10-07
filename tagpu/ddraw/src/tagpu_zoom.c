@@ -700,6 +700,9 @@ void tagpu_zoom_publish_view(int vpL, int vpT, int vw, int vh)
    whether the centre range is in force (camera_centre() below) */
 static float s_gLevel = 1.0f;
 static int   s_gLive, s_gCentre;
+/* game thread only: the level the minimap's view box main+0x142CB was last scaled by, every
+   write of it going through zoom_minimap_rect */
+static float s_rectLevel = 1.0f;
 static unsigned char s_scrollBase, s_scrollWrote;   /* game thread only */
 
 static float game_level(void)
@@ -981,6 +984,7 @@ static void __stdcall zoom_minimap_rect(int* r)
 
     ((void (__stdcall *)(int*))MINIMAP_RECT_VA)(r);
     if (!r) return;
+    s_rectLevel = zm;
 
     cx = (float)(r[0] + r[2]) * 0.5f;
     cy = (float)(r[1] + r[3]) * 0.5f;
@@ -1542,6 +1546,13 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
         zoom_minimap_rect((int*)(ta + OFF_MM_RECT));
         *(unsigned char*)(ta + OFF_MM_DIRTY) |= 2u;
         *(unsigned short*)(ta + OFF_LOSTYPE) &= (unsigned short)~8u;
+    } else if (game_level() != s_rectLevel) {
+        /* THE BOX IS A FUNCTION OF THE EYE AND THE LEVEL, so a level that changed under a still
+           eye owes it too: nothing else rescales it until the eye moves (MEASURED 2026-10-07: a
+           paused replay kept the 1x box through wheel steps to 0.456 and 0.25). Only the box
+           and its redraw bit: the level changed, the camera did not. */
+        zoom_minimap_rect((int*)(ta + OFF_MM_RECT));
+        *(unsigned char*)(ta + OFF_MM_DIRTY) |= 2u;
     }
 
     /* and the scroll rate, every draw: base/z, or the base when nothing is
