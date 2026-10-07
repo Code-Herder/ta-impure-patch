@@ -616,7 +616,7 @@ scroll target) — always together, because the two disagreeing is what the per-
 reads as a camera move in flight and would rebuild the fog grid every frame for as long as it
 lasted (G13g) — `main+0x142CB`, the minimap's view box, recomputed through the engine's own
 `0x466B70` because `0x41C3C0` is the only place it is otherwise filled — after an eye it moved,
-and also when the level differs from the one the box was last scaled by (the box is a function of
+and also, while the redirects are installed, when the level differs from the one the box was last scaled by (the box is a function of
 both: MEASURED 2026-10-07, a paused replay kept the 1x box through wheel steps to 0.456 and 0.25
 until the eye moved) — and, on a frame that
 actually steps the eye, the three **camera-follow** slots zeroed (below). After any eye it moved
@@ -1065,7 +1065,7 @@ is the bit's only reader (`0x466B06..0x466B16`), and every reader of the word is
 (bit 0 is the dots' blink phase [INFERRED], toggled at `0x4665A9`; bit 2 asks `0x466C20` to
 rebuild the fog composite), so all three bits are display state. The radar rebuild `0x466DC0`
 sets bit 1 unconditionally — its one exit runs through `0x46742F` — and `0x464F80` calls it for the
-local player (`0x465072`) on every sim tick, from the tick loop `0x495490` (`0x49555F`). So on a
+viewed record `main+0x2A43` (`0x465072`) on every sim tick, from the tick loop `0x495490` (`0x49555F`). So on a
 running game the apply's write decides something only on a frame that ran no tick. The apply now
 sets it after any eye it moved, on the game
 thread, exactly as the writers do; the reason it once did not — a render-thread read-modify-write

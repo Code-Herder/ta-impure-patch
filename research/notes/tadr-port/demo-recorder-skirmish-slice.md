@@ -1770,11 +1770,12 @@ image as the destructor found it, so no format change was needed.
   through the engine's add `0x482910` with the def's `+0x202` and `+0x170` (the def bounded by
   `UNITINFOCount` through `addr_of`) and the ticks it has left as the duration; a made or refused
   record is told by the engine's count. **R14c**, after R14b: the expiry `0x482130` once, as
-  `0x495688` follows the players phase. **R14d**, after R14c: the viewed record's minimap picture
-  `0x466DC0`, which a playing rebuilds every tick (the players phase for a seat, `viewer_frame`
-  for record 10) and a paused frame does not — display state, the viewer's own. The invariant is a lifetime: the add makes each record with
+  `0x495688` follows the players phase. The invariant is a lifetime: the add makes each record with
   its stamp and only the expiry removes both, so the counters stay the engine's own; nothing after
   R14a rebuilds the viewed record's counters (R14 writes V's alone, and V owns no unit).
+- **R14d**, after R14c (a takeover's after TK4a's deselect): the viewed record's minimap picture
+  `0x466DC0`, which a playing rebuilds every tick (the players phase for a seat, `viewer_frame`
+  for record 10) and a paused frame does not — display state, the viewer's own.
 - **The seek's line** gains `temporary sight records: <m> made again, <r> refused, <c> deaths past
   the engine's 20 (the records may differ from a playing's)`.
 - **`tarec.py compare-dumps` is strict again**: O9's fold is deleted, and `replay-globals.tsv`'s

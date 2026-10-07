@@ -5574,7 +5574,7 @@ static void sk_kills(const Lv* L)
             if (!host_live(L, slot)) continue;
             memcpy(&built, u + U_BUILT, 4);
             memcpy(&carrier, u + U_CARRIER, 4);
-            kind = built != 0.0f ? 0 : carrier ? 1 : 2;
+            kind = !build_finished(built) ? 0 : carrier ? 1 : 2;
             if (kind != pass) continue;
             memset(rec, 0, sizeof rec);
             rec[0] = 0x0C;
@@ -6995,8 +6995,10 @@ static int seek_run(char* ta)
     /* R14d: the viewed record's minimap picture from the world at T, after the contacts it reads
        (R14b). A playing rebuilds it every tick, in the players phase for a seat and in
        viewer_frame for record 10; a seek on a paused frame runs neither, and a seat's picture
-       would show the world before the seek until the next tick. */
-    E_MinimapRebuild();
+       would show the world before the seek until the next tick. A takeover's waits for TK4a, whose
+       deselect removes the selected units' range circles the picture draws (+0x110 bit 4,
+       0x466F42..0x467039). */
+    if (!tk) E_MinimapRebuild();
     /* R15, from the recorder's images: a deadline is the host's own clock's, which the recorder's
        carries, where an owner's player image carries its own machine's (mp_world, players_put) */
     sk_deadlines(ta, W, T - 1);
@@ -7004,7 +7006,10 @@ static int seek_run(char* ta)
        lag, even after a forward seek of 900 ticks or more */
     pace(ta, T - 1);
     /* TK4a (THE TAKEOVER, tk_live) */
-    if (tk) tk_live(ta, P);
+    if (tk) {
+        tk_live(ta, P);
+        E_MinimapRebuild();
+    }
     /* R17: the next tick makes GameTime T; at its capture point the world holds iteration T and
        the step plays T's events and reads T+1, the play loop's own invariant */
     tagpu_puppet_rebuild(0);

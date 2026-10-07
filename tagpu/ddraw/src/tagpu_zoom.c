@@ -700,8 +700,9 @@ void tagpu_zoom_publish_view(int vpL, int vpT, int vw, int vh)
    whether the centre range is in force (camera_centre() below) */
 static float s_gLevel = 1.0f;
 static int   s_gLive, s_gCentre;
-/* game thread only: the level the minimap's view box main+0x142CB was last scaled by, every
-   write of it going through zoom_minimap_rect */
+/* game thread only: the level the minimap's view box main+0x142CB was last scaled by; every
+   write of it goes through zoom_minimap_rect once tagpu_zoom_init installed the redirects
+   (g_mmInstalled), and without them the engine's clamp writes the 1x box, so it is not kept */
 static float s_rectLevel = 1.0f;
 static unsigned char s_scrollBase, s_scrollWrote;   /* game thread only */
 
@@ -1532,7 +1533,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
        bit 1 set, the dirty flag DrawMinimap `0x466B00` alone tests
        (`0x466B06..0x466B16`) — display state, like the word's other bits; the
        minimap's radar rebuild `0x466DC0` also sets it on every sim tick for
-       the local player (`0x46742F`), so this write decides something only on
+       the viewed record main+0x2A43 (`0x46742F`), so this write decides something only on
        a frame no tick ran; and bit 3 cleared,
        the screen fog grid's is-current flag, since that grid is
        view-anchored and rebuilt lazily off it. Both flags are written HERE,
@@ -1546,7 +1547,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
         zoom_minimap_rect((int*)(ta + OFF_MM_RECT));
         *(unsigned char*)(ta + OFF_MM_DIRTY) |= 2u;
         *(unsigned short*)(ta + OFF_LOSTYPE) &= (unsigned short)~8u;
-    } else if (game_level() != s_rectLevel) {
+    } else if (g_mmInstalled && game_level() != s_rectLevel) {
         /* THE BOX IS A FUNCTION OF THE EYE AND THE LEVEL, so a level that changed under a still
            eye owes it too: nothing else rescales it until the eye moves (MEASURED 2026-10-07: a
            paused replay kept the 1x box through wheel steps to 0.456 and 0.25). Only the box
