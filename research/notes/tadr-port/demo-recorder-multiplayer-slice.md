@@ -1311,6 +1311,17 @@ its owner's finished image would have left the nanoframe bake for the rest of
 the level: the image writes the fraction back, the next draw bakes a nanoframe
 again, and the finish image leaves that bake in place.
 
+MEASURED 2026-10-06 with the clear in place (`c8d3cafb`), on a fresh two-peer
+recording: the probe that reads a recording's finishes found 5 -- 3 remote ones
+with a window between the owner's finished image and the primary's build done
+(the widest, slot 2 type 78, image at 1018 and build done at 1025) and 2 in the
+same step, none stuck. The forward playing logged "5 builds finished and 0
+unfinished by an image" against the probe's 5, `built 0/0`, and played to its
+end; its dumps at 1017, 1018, 1025 and 1026 were EQUAL, as were a fresh seek to
+1018 and a round trip at 1025. The five-peer ten-seat recording logged 5 builds
+finished and 0 unfinished. No tareplay fixture is a multiplayer segment, so
+these playings are the only ones that reach the new lines.
+
 The composed world is a materializer-owned copy of `RecWorld`'s unit, live,
 player and list arrays; the reader's world stays the delta baseline. Every ID
 an owner image carries is bounded as skirmish bounds it, and an image applies
