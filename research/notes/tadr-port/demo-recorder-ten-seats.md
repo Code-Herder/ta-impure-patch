@@ -1,7 +1,7 @@
 # Demo recorder, stage 5: ten recorded seats
 
 Status: **design, 2026-10-06; implemented 2026-10-06 on the stage branch (§4, both commits of
-§5), §5's runs not yet made.** Stage 5 of the
+§5); §5's runs 2, 3, 4 and 6 made 2026-10-06, run 5 (the pictures) not yet.** Stage 5 of the
 [multiplayer slice](demo-recorder-multiplayer-slice.md) ("Still open after stage 4: ten seats
 without a spare viewer seat"). It supersedes decision D2 of the
 [puppet host note](demo-recorder-s2-host.md) (§1.3: refuse a ten-seat recording) and corrects §1.4
@@ -284,6 +284,23 @@ the render-feeding readers bound. Each run below is a game of 10 minutes or less
    two frames 1 s apart (`viewer_frame`); with `hudscale` 150, the bars and chrome redraw.
 6. **R1's size**: count the recorded deaths whose victim image has killer byte `+0xF4` = 10, in the
    `tenseat` and `battle` recordings (`tarec`).
+
+MEASURED 2026-10-06 on the reference setup:
+
+- **Run 2:** `tenseat` passes every lane: P logs "10 seats, the viewer at record 10", the images
+  gate passes with record 10 under its `leave` row, W's Watch and its cards, the forks, and K's
+  takeover.
+- **Run 3:** `battle`, `battle-los`, `secondary-orders`, `stock-secondary-orders`, `stock-limits`,
+  `takeover-end`, `b7-radar-hail` and `perspective` pass.
+- **Run 4:** the four-actor network recording is EQUAL in full view and from record 1, its chat
+  EQUAL. The ten-seat game was recorded from five Impure peers with one AI each (owner decision O4,
+  revised: the battleroom allows one AI per human), twice, the host recording and the joiners
+  leaving first: every peer opened the channel (one lost port race reopened, F1 of the slice note),
+  bound 8/8, and the host's file completed. Played back it logs "10 seats, the viewer at record
+  10"; its dumps at 300 and 1000 are EQUAL in full view, from record 0 and from a fresh seek to
+  1000.
+- **Run 6:** in §6, R1.
+- **Run 5 (the pictures)** has not been made.
 
 ## 6. Residuals and gaps
 
