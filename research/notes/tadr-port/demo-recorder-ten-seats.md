@@ -1,7 +1,7 @@
 # Demo recorder, stage 5: ten recorded seats
 
 Status: **design, 2026-10-06; implemented 2026-10-06 on the stage branch (§4, both commits of
-§5); §5's runs 2, 3, 4 and 6 made 2026-10-06, run 5 (the pictures) not yet.** Stage 5 of the
+§5); §5's runs 2, 3, 4 and 6 made 2026-10-06, run 5 (the pictures) 2026-10-07.** Stage 5 of the
 [multiplayer slice](demo-recorder-multiplayer-slice.md) ("Still open after stage 4: ten seats
 without a spare viewer seat"). It supersedes decision D2 of the
 [puppet host note](demo-recorder-s2-host.md) (§1.3: refuse a ten-seat recording) and corrects §1.4
@@ -300,7 +300,25 @@ MEASURED 2026-10-06 on the reference setup:
   10"; its dumps at 300 and 1000 are EQUAL in full view, from record 0 and from a fresh seek to
   1000.
 - **Run 6:** in §6, R1.
-- **Run 5 (the pictures)** has not been made.
+- **Run 5 (the pictures)**, MEASURED 2026-10-07 on the landing gate's ten-seat recording (one
+  human and nine AIs on Core Prime Industrial Area), 1024x768, Vulkan, on a private Xvfb:
+  - the wide fog, paused at GameTime 157, zoom 0.456 and 0.25: even to every viewport edge, no
+    unshaded band (platform brightness 106 top, 108 bottom, 114 left, 103-111 centre at 0.25);
+  - the minimap while playing: unit dots move (12 and 48 of its 128x128 pixels changed over 1 s),
+    all ten seat colours present; projectile dots unchecked, the recording having none in flight
+    at the times sampled;
+  - hudscale 150 while playing: 0 pixels changed outside content in the top, side and bottom bars;
+  - `--perspective 0`, paused at 1499, zoom 0.25: colour only in the commander's sight circle
+    (chroma 13.9 against 0.0 elsewhere); never-visited ground is grey, not dark, because the game
+    starts Mapped.
+
+  The run found two minimap faults, both fixed: the view box kept its 1x size through a paused
+  zoom (the zoom apply now rescales it when the level changes, `gpu-status.md`), and after a paused
+  seek in a seat's view the minimap showed no unit until play resumed (the seek's R14d and a Sight
+  change now rebuild the picture; MEASURED 2026-10-07 on 2acc422e: the box 23x16 at 0.456 and 41x29
+  at 0.25 while paused, in the replay and in a paused live skirmish alike, and seat 0's one dot right
+  after a paused seek to 1500 and after each paused Sight switch). The card list shows 9 of the 10 seats at 100 % and 5 at
+  hudscale 150: the dock's ten-seat layout is the open 9-slice HUD work.
 
 ## 6. Residuals and gaps
 

@@ -615,7 +615,10 @@ the zoom and the eye it is drawn with change together.
 scroll target) — always together, because the two disagreeing is what the per-frame stepper
 reads as a camera move in flight and would rebuild the fog grid every frame for as long as it
 lasted (G13g) — `main+0x142CB`, the minimap's view box, recomputed through the engine's own
-`0x466B70` because `0x41C3C0` is the only place it is otherwise filled, and, on a frame that
+`0x466B70` because `0x41C3C0` is the only place it is otherwise filled — after an eye it moved,
+and also when the level differs from the one the box was last scaled by (the box is a function of
+both: MEASURED 2026-10-07, a paused replay kept the 1x box through wheel steps to 0.456 and 0.25
+until the eye moved) — and, on a frame that
 actually steps the eye, the three **camera-follow** slots zeroed (below). After any eye it moved
 the apply also writes the two flag bits the engine's own writers do, on the game thread: it sets
 `main+0x142F1` bit 1 (the minimap's dirty flag) and clears `main+0x14281` bit 3 (the screen fog

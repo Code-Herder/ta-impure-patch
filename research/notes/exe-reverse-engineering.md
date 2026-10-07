@@ -3937,7 +3937,11 @@ deadline `+0xF0` (`0x46507D..0x465092`: `ja` past the whole block, else `+0xF0 +
 returns with a plain `ret` (`0x46743D`); its last store is `main+0x142F1 |= 2` (`0x46742F`). Its two
 callers are that phase and the sight rebuild (`0x48191F`, after the fog at `0x48191A`). With record 10
 viewed none of the three runs, so `tagpu_replay.c`'s `viewer_frame` runs them once a GameTime at the
-frame visit.
+frame visit. On a paused frame the phase does not run at all, so a replay that rewrites the world or
+the viewed record outside a tick — the seek (its step R14d, after the radar pass and the expiry) and
+a Sight change — calls `0x466DC0` itself for whichever record is viewed. MEASURED 2026-10-07 before
+that call: in seat 0's view, a paused seek to GameTime 1500 left the minimap with no unit dot until
+play resumed.
 
 **The load's order** around the patched call, in the loader function: the saved-game branch's seat
 fill `0x47A760` (`0x49757C`, behind `0x435100` = 2 at `0x49753D`, which a Start does not reach),
