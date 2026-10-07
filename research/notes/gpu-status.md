@@ -3457,8 +3457,14 @@ and on the loader thread at the allocator ownership boundary and the level init'
   `0x440A40`; every player record 0–9 under the same classes, but `+0xF0`, the 30-tick
   deadline the host's players phase keeps, and only with both names ended inside their fields and
   a seat's PlayerInfo side and colour within this game's counts; and each seat's `+0x18` = GameTime;
+- on a multiplayer segment, with each unit's image: its model's composite frame `Object3do+0x10`
+  (`[unit+0x9E]+0x10`) = 0 when the composed image changes whether its build is finished (the
+  model the host's create made, freed only by its destructor on this thread; a NULL model
+  skipped), and `main+0x37EBE` bit 4 when that finishes a unit the viewer has selected
+  (`tagpu_replay.c`, *THE BUILD FINISH ON A MULTIPLAYER LEVEL*);
 - the events, through `0x485F50`, C4's death wrap, `0x49D270`, `0x4B0B00`, `0x4B0A70`,
-  `0x4B0940`, `0x41B8D0`, `0x48B090`, `0x47F780`, `0x47F850`, `0x4720D0` and `0x472200`;
+  `0x4B0940`, `0x41B8D0` (not on a multiplayer segment), `0x48B090`, `0x47F780`, `0x47F850`,
+  `0x4720D0` and `0x472200`;
 - the features' changes, through the feature tick and the six feature functions with the
   recorded arguments, bounded by the level's grid, defs and weapons, each at the phase of the step
   the recording machine made it in: a unit-tick root at the replay step, a projectile-tick root

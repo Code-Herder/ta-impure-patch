@@ -108,6 +108,22 @@ colour-only composite is thrown away and rebuilt with a depth plane. Bit `0x2000
 is set by the build-tick (§3) on every nanolathe pulse and by the completion
 routine.
 
+### The completion `0x41B8D0` clears the composite [BINARY-VERIFIED]
+
+The finish writes `[unit+0x9E]+0x10 = 0` (`0x41B923`) beside `+0x104 = 0` and bit 13
+(`0x41B92A..0x41B93D`): `Object3do+0x10` is the composite frame pointer, the cached 1x
+bake, not a nanoframe flag. Nothing above rebakes a **finished** structure that still
+has a composite, so this clear is what makes the next draw bake it again, now as a
+finished unit: colour-only (`Nanoframe == 0`, the builder above) and holding only the
+cached pieces. The piece filter skips a piece whose cached bit (`prim+0x28` bit 1)
+differs from the requested mode only when `Nanoframe == 0` — the plain rasteriser at
+`0x459963..0x459985`, the Gouraud one at `0x459DB8..0x459DCC` — so a nanoframe's bake
+holds every visible piece, dont-cache ones included. Kept past the finish, that bake
+would go down the depth-plane path below: the dont-cache pieces redrawn over their
+frozen copy, and the waterline and digger clips applied as to a nanoframe. The engine
+map's *The composite and the build fraction* has every other writer of the field and
+the draw's rebake rules.
+
 ### Blit `0x459200` — the per-frame build-state work [BINARY-VERIFIED]
 
 The blit branches on `*(composite+0x14)` (depth-plane pointer):

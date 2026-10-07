@@ -1245,7 +1245,8 @@ each namespace has exactly one source:
 | Unit existence and lifetime, every frozen block | the lifecycle consumer's actions (`tagpu_recmp_lifecycle.h`); primary create and death events are not dispatched |
 | Unit record and mover | the latest applied owner image of that exact incarnation, written by the skirmish image recipe |
 | A unit's sight stamp and water state | the same composed image (`books_put` reads it) |
-| A unit's state byte `+0x10E` | the same composed image, written by `books_put` through the setter `0x48B090` at every capture point (R8b's `book_state`, which a seek runs too); the primary's state events are not dispatched, since the recorder's copy takes each change at its own receipt time, and the puppet's state gate refuses every other change of a puppet's byte on the segment -- the create's activation `0x486148`, the replayed build finish's `0x41B9BF`, a script's SET -- so each change starts `Activate`/`Deactivate` or `StartBuilding`/`StopBuilding` once |
+| A unit's state byte `+0x10E` | the same composed image, written by `books_put` through the setter `0x48B090` at every capture point (R8b's `book_state`, which a seek runs too); the primary's state events are not dispatched, since the recorder's copy takes each change at its own receipt time, and the puppet's state gate refuses every other change of a puppet's byte on the segment -- the create's activation `0x486148`, a script's SET -- so each change starts `Activate`/`Deactivate` or `StartBuilding`/`StopBuilding` once |
+| A unit's build finish | the same composed image: the fraction `+0x104`, `+0x110` bits 13 and 14 and `+0xF5`; the unit's composite frame (its model's `Object3do+0x10`, which no image can carry) cleared by `unit_put` when the image changes whether the build is finished; the primary's build done (`RK_EV_BUILT`) is not dispatched |
 | Owner private roots (named starts, replies, sprays) | `ROOT` actions at their ledger position, the recorder's own publications included; primary copies are not dispatched |
 | An actor's player record | its owner's player images, mapped to recorder rows; `+0xF0`, the players phase's deadline, stays the host's own |
 | A player record no actor holds | the primary stream (the destructor's rank update writes every record's `+0x148`, `0x486BE7..0x486C13`) |
@@ -1269,7 +1270,46 @@ bytes from the images and the gate refused 13 changes: the creates' activations
 units the owners made at 55, 61 and 76, and one build finish `0x41B9BF` whose
 primary event came before its owner's image (slot 3006, 615). A seek's rebuild
 has its creates refused in the same way (16 in a fresh seek to 1200, 13 of them
-the rebuild's) and R8b writes the composed byte after them.
+the rebuild's) and R8b writes the composed byte after them. The primary's build
+done is not played on such a segment (*The build finish*, below), and a puppet
+reaches `0x41B8D0` by no other path, so the gate's refusals there are the
+creates' alone.
+
+**The build finish.** The finish `0x41B8D0` writes, on the built unit, the
+fraction `+0x104` = 0, `+0x110` bits 13 and 14, `+0xF5` and (through the
+setter) the state byte -- every one a record field the owner's image carries on
+the owner's clock -- and clears the unit's composite frame `[+0x9E]+0x10`, the
+host's cached 1x bake ([engine map](../exe-reverse-engineering.html), *The
+composite and the build fraction*). The nanoframe look itself, the scaffold and
+the wire in both renderers, follows `+0x104` alone. The composite is what no
+image can carry: a host heap pointer in the host's own model instance. Its bytes
+depend on the fraction only through whether it is 0.0 (a nanoframe's bake has a
+depth plane and every visible piece, a finished unit's only the cached pieces),
+and the draw never rebakes a finished structure that still has one. So the
+primary's build done, the recorder's copy finishing at its receipt of the
+engine's `0x12` on its own clock, is not played (`mp_owned_event`), and
+`unit_put` clears the composite where the image's write changes whether the
+fraction is 0.0, as the engine's own round robin pairs the two for a remote
+copy (`0x48B4A6`). On such a segment that write is the fraction's one writer
+after a unit's create (a puppet runs no build step, `0x48AEB5..0x48AECD`), so
+every bake follows the last class the images wrote, and a seek -- whose creates
+start every unit with no composite -- holds the same at every draw. When the
+image finishes a unit the viewer has selected, `unit_put` sets the GUI word's
+refresh bit as the finish does. The playing's `owners:` line counts the clears
+("N builds finished and M unfinished by an image"), and the events line reads
+`built 0/0`.
+
+MEASURED 2026-10-06 (a native two-peer recording read with `tarec` and
+`recmp_file`) under the build that still played the primary's build done:
+three remote finishes (slots 1514, 1502, 1503, type 78) reach their owner's
+finished image at application ticks 405, 929 and 1583, and the primary's build
+done came in steps 409, 933 and 1588 -- 5, 5 and 6 frames in which a finished
+unit kept its nanoframe bake. The recorder's own three finishes (slots 3, 2, 4)
+were in the same step. The owner image's `+0x104` reaches 0.0 together with
+`+0x10E` = 1 at those ticks. A build done that comes two or more steps before
+its owner's finished image would have left the nanoframe bake for the rest of
+the level: the image writes the fraction back, the next draw bakes a nanoframe
+again, and the finish image leaves that bake in place.
 
 The composed world is a materializer-owned copy of `RecWorld`'s unit, live,
 player and list arrays; the reader's world stays the delta baseline. Every ID
@@ -1358,6 +1398,21 @@ tick root, and its corpse goes in there.
 - *Passability.* The pathing contexts on the host follow the host's slots
   (`0x440A40` → `0x47DFC0`), a cache nothing on a puppet host simulates with
   [INFERRED].
+- *The builder's half of a finish.* The finish's GUI effects for the builder --
+  `0x4199B0`, which relabels the top GUI window's unit buttons with a tracked
+  builder's queued counts, and the GUI word's refresh bit for a selected builder
+  -- are not made: the image write that clears the composite names only the
+  built unit. [INFERRED invisible: the viewer, record 10, owns no unit and has
+  no build menu up.] An owner root for the build done would make them on the
+  owner's clock; it still needs the clear at the image write, since a root can
+  apply one application tick before its finished image.
+- *No tareplay fixture reaches the clear.* `unit_put`'s new lines run only on a
+  mode-3 segment, which no `tareplay.py` fixture is; `recmp_play_test.py`'s
+  forward playing exercises them, as it does the materializer's other
+  mode-3-only code.
+- *A count comparison for mode 3.* If one is ever added, `0x41B8D0` runs 0 times
+  on the host by design, like the state events; an expected-absent row would be
+  a loosening, the owner's decision at that time.
 
 MEASURED 2026-10-06 on the reference setup, internal speed 20, a native
 four-actor game recorded with the corpse root (`recmp_create_begin_test.py`: two

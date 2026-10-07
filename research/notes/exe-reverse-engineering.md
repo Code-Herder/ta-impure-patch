@@ -1231,18 +1231,69 @@ AutoAim and the local block (orders, movement, regeneration) run only for types 
 - **The build finish `0x41B8D0(builder, built)`** (stdcall, `ret 8`), DISASSEMBLED
   `0x41B8D0..0x41BA51` (2026-10-06). It returns at once unless the builder is non-NULL and live
   (`+0x110` bit 28), its def's `+0x156` is nonzero, and the built unit is non-NULL and live
-  (`0x41B8D6..0x41B917`). Then on the built unit: the model instance's nanoframe flag
-  `[+0x9E]+0x10` = 0 (`0x41B923`), `+0x104` = 0 (`0x41B933`) and `+0x110` bit 13 set (`0x41B930`,
-  `0x41B93D`). For an owner of type 1 or 2 (`0x41B945..0x41B959`): with `+0x110` bit 29, when
+  (`0x41B8D6..0x41B917`). Then on the built unit: the model instance's composite frame pointer
+  `[+0x9E]+0x10` = 0 (`0x41B923`) -- the cached 1x bake, not a nanoframe flag: cleared, the next
+  draw bakes the unit again as a finished one (*The composite and the build fraction*, below) --
+  `+0x104` = 0 (`0x41B933`) and `+0x110` bit 13 set (`0x41B930`, `0x41B93D`). For an owner of type 1 or 2 (`0x41B945..0x41B959`): with `+0x110` bit 29, when
   `BUILDER.GUI` (`0x502844`) is on top (`0x4AB060`) its refresh flag through `0x49FA90`
   (`0x41B95B..0x41B989`), otherwise, with `+0x86` set, `0x48AAC0(built, 0, −1, 1)` (`0x41B990..
   0x41B9A1`). With def `+0x241` bit 18, `0x48B090(1, 1)` on the built unit (`0x41B9A6..0x41B9BF`)
   -- the activation that starts `Activate` -- and the code after it (`0x41B9C4`) does not read
   EAX. When `main+0x37E9C` names the builder (its `+0xA8`), `0x4199B0(main+0x519, builder)`
-  (`0x41B9C4..0x41B9E0`); with def `+0x241` bit 24, `+0xF5` = 7 and `+0x110` bit 14
+  (`0x41B9C4..0x41B9E0`), which relabels the top GUI window's unit buttons: for each gadget
+  (stride `0x15B`, from `[[gui+0x18]+4]+0x15B`, count at `+0xB6`) of type byte 1 with flag 4 it
+  looks the button's type up by name (`0x488B10`) and writes `+%d` (`0x502660`) of the builder's
+  queued count of it, `0x439D80(builder, type)`, into the gadget's label, or empties it; flag 8
+  writes `%d`/` +%d` from the builder's `+0x1E` and its count; then `0x49FA90(gui)`
+  (`0x4199B0..0x419AB1`, the label writes `0x4199E9..0x419A6F`); with def `+0x241` bit 24, `+0xF5` = 7 and `+0x110` bit 14
   (`0x41B9E5..0x41BA08`); for an owner of type 1 or 2 the `0x12` through `0x4560C0(builder,
   built)` (`0x41BA0E..0x41BA26`); and when either unit has `+0x110` bit 4, `main+0x37EBE` bit 4
   (`0x41BA2B..0x41BA48`).
+- **The composite and the build fraction** [DISASSEMBLED 2026-10-06, the pristine exe]. The model
+  instance's `Object3do+0x10` is its composite frame, the cached 1x bake: the builder `0x4586A0`
+  stores its allocation through `lea ebx,[edi+0x10]` (`0x4586FA..0x45871E`), the `O3_COMPOSITE` of
+  `tagpu_engine.h` ([composite-buffer](composite-buffer.html)).
+    - **It depends on `+0x104` only through whether it is 0.0.** The allocation is colour + depth
+      (`0x437BE0`) for a nonzero second argument, `+0x114` bit 0 or `+0x104 != 0`
+      (`0x4586D2..0x4586F0`), else colour only (`0x437B50`). The piece filter skips a piece whose
+      cached bit (prim `+0x28` bit 1) differs from the requested mode only when `+0x104 == 0` (the
+      plain bake `0x459963..0x459985`, the Gouraud bake `0x459DB8..0x459DCC`). So an unfinished
+      unit's bake holds every visible piece and a depth plane, a finished one's only the cached
+      pieces. The only `+0x104` reads in `0x458000..0x45B000` are `0x4586DF`, `0x45889E`,
+      `0x458DF5`, `0x458E92` (the blit-time scaffold), `0x45961C`, `0x459974` and `0x459DBB`.
+    - **"Finished" is C3.** Every one of those reads but `0x458E92` (which scales the scaffold by the
+      fraction, `fmul [0x4FD4C4]`) is a zero test of the form `fld; fcomp [0x4FD4C0]` (0.0);
+      `fnstsw; test ah,0x40`: true for 0.0, -0.0 and a NaN alike.
+    - **When the draw `0x458810` rebakes.** When `Object3do+4` is 0 (`0x458870`); for a structure
+      (`+0x110` bit 29) when the composite is NULL (`0x45889C`) or when it is a nanoframe with
+      `+0x110` bit 13 and no depth plane (`0x45889E..0x4588BF`); with `+0x114` bit 0 when NULL
+      (`0x4588DD`). A NULL composite also clears the shadow cache `+0x14` (`0x458884`). A
+      non-structure with a NULL composite draws its pieces directly (`0x45895A..0x4589AA`). **A
+      finished structure with a composite is never rebaked by the draw.**
+    - **What a stale bake shows.** With a depth plane the blit `0x459200` copies the composite and
+      runs the scaffold (`0x4589C0` -> `0x458DD0`, which returns at `+0x104 == 0`), then, for a
+      unit that is not an active nanoframe, redraws the dont-cache pieces live (`0x459830(...,
+      mode 0)`, `0x45960D..0x459641`); the waterline erase/tint and the digger clip are on this path
+      only (the split at `0x45927E`). So a finished unit that keeps its nanoframe bake draws its
+      dont-cache pieces twice on GDI (the bake's frozen copy under the live ones) and is clipped as
+      a depth-plane unit in both renderers ([INFERRED from these paths; not seen on screen]).
+    - **The round robin clears it on every `0x2C` record that names a type.** `0x48B3F0` zeroes
+      `ebp` (`0x48B40E`) and stores it through `[unit+0x9E]+0x10` (`0x48B4A6`) whether or not the
+      fraction changed; it writes the fraction and bit 13 only when it differs
+      (`0x48B4C6..0x48B4EC`).
+    - **Who stores 0 there** (a pattern scan of the whole `.text`: every load of `+0x9E` followed
+      within four instructions by a store to `+0x10`; complete for that pattern only): `0x41B923`
+      (the finish), `0x485DF2` and `0x485E1F` (the create `0x485D40`), `0x48B4A6` (the round robin).
+      The COB `cache`/`shade` handlers clear it through the COB's model pointer (`[cob+0x540]+0x10`,
+      `0x480DE3`, `0x480E24`). **Negative:** the build step `0x41BA60` writes `+0x104` (`0x41BC16`,
+      `0x41BC96`) and never the composite; it calls the finish at `0x41BCBF` when the fraction
+      compares equal to 0.0.
+    - **The model's lifetime.** The create stores the model at `0x485DCC` (with a COB) or
+      `0x485E0E` (without) and clears its composite at `0x485DF2` / `0x485E1F`. The destructor
+      `0x4866D0` tests `+0x9E` for NULL (`0x486D99`), calls `FreeObjectState 0x45AAA0` (`0x486D9E`)
+      and nulls `+0x9E` (`0x486DA3`).
+    - **A puppet runs no build step.** The unit tick runs a unit's orders only for an owner of
+      `+0x73` 1 or 2; any other goes to the reaper (`0x48AEB5..0x48AECD` -> `0x48AFB9`).
 - **A remote copy takes `+0x10E` only through `0x48B090`**, called twice (set the byte's bits,
   clear the rest) by the `0x11` receiver (`0x4555A1`, `0x4555B0`) and the round robin
   (`0x48B4F6..0x48B519`). Neither carries `+0x10F`, so a remote copy's `+0x10F` comes only from

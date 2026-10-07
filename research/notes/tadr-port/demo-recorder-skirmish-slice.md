@@ -394,7 +394,8 @@ puppet host and verifies it against the recording.
   - **Shots**, from the `0x0D` packet of the five fire functions, with their network tests released
     while recording; and **interceptions**.
   - **Script starts** through the three broadcasters `0x456190`, `0x456200` and `0x456290`.
-  - **Build done**, `0x41B8D0`, the only writer of the model's nanoframe flag.
+  - **Build done**, `0x41B8D0`, which clears the model's composite frame `[+0x9E]+0x10` (the
+    cached 1x bake), so a finished unit bakes again as a finished one.
   - **The state byte** `+0x10E`, as its new value, from `0x48B090`.
   - **Unit replies**, at `0x47F780` and `0x47F850` before their viewer test, for every player.
   - **The script starts only the owner's machine makes**: `HitByWeapon` and `TakeDamage` in the hit

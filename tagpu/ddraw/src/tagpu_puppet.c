@@ -104,15 +104,14 @@ const volatile unsigned char* tagpu_puppet_flag(void) { return &s_pup.on; }
      is the byte's one source, written through this setter at every capture point
      (tagpu_replay.c, THE UNITS' BOOKKEEPING), and a change starts Activate or Deactivate (bit 0)
      and StartBuilding or StopBuilding (bit 3) by name and queues its replies
-     (0x48B0E4..0x48B1AA, DISASSEMBLED); any other caller -- the create's 0x486148, the build
-     done's 0x41B9BF on the recorder's own clock, a script's SET -- would start them a second
+     (0x48B0E4..0x48B1AA, DISASSEMBLED); any other caller -- the create's 0x486148 or a
+     script's SET; the replay plays no build done on such a segment -- would start them a second
      time. The test is the setter's own (0x48B09A..0x48B0D4): now = on ? was | mask :
      was & ~mask, and a call that leaves the byte as it is returns at once (0x48B0DE), so it is
      let through. The setter has no result: EAX holds whatever its last load or call left, and
-     the two engine callers that reach a puppet's unit here, the create and the build done, go
-     on at 0x48614D and 0x41B9C4 without reading it, so the gate's EAX 0 changes nothing. On a
-     skirmish recording the byte comes from the recorded state events and the gate lets every
-     call through.
+     the engine caller that reaches a puppet's unit here, the create, goes on at 0x48614D
+     without reading it, so the gate's EAX 0 changes nothing. On a skirmish recording the byte
+     comes from the recorded state events and the gate lets every call through.
 
    THE REPLAY'S OWN CALLS open the COB and reply gates while they run (tagpu_puppet_open), on
    the game thread. A recorded event nested in a root is recorded after the root's record when the

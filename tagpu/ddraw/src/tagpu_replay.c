@@ -324,7 +324,10 @@ static struct {
     unsigned        nq, capq;
     unsigned        observed, ocorpse;  /* the recorder's deaths, and those with a corpse level   */
     unsigned        made, destroyed, images, roots, rplayed;
-    unsigned        said, shown;    /* text entries applied, and lines given to the message log  */
+    unsigned        bfinished, bunfinished; /* composites cleared: an image finished a build, or
+                                               unfinished one (THE BUILD FINISH ON A MULTIPLAYER
+                                               LEVEL)                                             */
+    unsigned        said, shown;   /* text entries applied, and lines given to the message log  */
     char            why[200];
 } s_mp;
 static int s_chat_hidden;           /* 1 = the Overlays menu's Chat switch is off (`chat hide`,
@@ -1310,6 +1313,14 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define U_OWNERIX      0xFF
 #define U_BUILT        0x104        /* the build left, a float: 0.0 when finished                  */
 #define U_STATE        0x110
+#define U_SELECTED     0x10u        /* +0x110 bit 4: the viewer's own selection (a drop row)      */
+#define U_MODEL        0x9E         /* the model instance (Object3do): the create 0x485D40 stores it
+                                       (0x485DCC, 0x485E0E) and only the destructor frees it,
+                                       nulling the field at once (0x486D93..0x486DA3)            */
+#define O3_FRAME       0x10         /* ... its composite frame, the cached 1x bake (stored through
+                                       0x4586FA..0x45871E); 0 makes the next draw bake it again  */
+#define OFF_GUIWORD    0x37EBE      /* the GUI word, the viewer's own: bit 4 asks for a refresh  */
+#define GUI_REFRESH    0x10u
 #define U_ALIVE        0x10000000u
 #define U_WATER        0x10A        /* the water state, 0..4: 0x43DB50 its only writer and reader,
                                        a dword, read and stored whole (0x43DB6B, 0x43DBED)        */
@@ -1757,12 +1768,75 @@ static void group_put(const Lv* L, char* u, const uint32_t* img, unsigned slot)
     E_SetGroup(u, want);
 }
 
-/* one unit's image, by the recipe above; the slot holds() it */
+/* one unit's image, by the recipe above; the slot holds() it.
+
+   THE BUILD FINISH ON A MULTIPLAYER LEVEL.
+
+   What the finish writes. 0x41B8D0(builder, built) (DISASSEMBLED 0x41B8D0..0x41BA51) writes on
+   the built unit its model's composite frame [+0x9E]+0x10 = 0, +0x104 = 0 and +0x110 bit 13.
+   Behind owner type 1/2 it makes a GUI refresh or the detach 0x48AAC0; under def+0x241 bit 18 it
+   calls the activation 0x48B090(1, 1); when the GUI tracks the builder it refreshes the builder's
+   menu counts (0x4199B0); under def bit 24 it sets +0xF5 = 7 and +0x110 bit 14; for a type-1/2
+   owner it sends the 0x12; when either unit is selected it sets the GUI word's refresh bit.
+
+   Where each effect comes from here. On a multiplayer segment the owner's image carries every
+   unit field of that on the owner's clock: the fraction, +0x110 bits 13 and 14 and +0xF5 by this
+   recipe, the state byte by book_state. A puppet's owner is type 3, so the owner-only parts never
+   run here. The primary's build done -- the recorder's copy finishing at its receipt of the
+   engine's 0x12, on its own clock -- is not played (mp_owned_event).
+
+   What the image cannot carry: the composite, the host's cached 1x bake of the unit. Its bytes
+   depend on the fraction only through whether it is 0.0: an unfinished unit's bake has a depth
+   plane (0x4586DF..0x4586F0) and every visible piece, a finished unit's holds only the cached
+   pieces (0x459963..0x459985, 0x459DB8..0x459DCC). The draw bakes it again only when it is 0, or
+   for a structure that is still a nanoframe (0x458870..0x4588F2). So a write here that changes
+   whether the fraction is 0.0 clears it, as the finish clears its own (0x41B923) and the remote
+   refresh a copy's (0x48B4A6), and the next draw bakes it for the unit the image describes. Kept,
+   a finished unit would draw its nanoframe bake: on GDI its dont-cache pieces twice (0x459641
+   redraws them over the bake's frozen copy), and in both renderers the waterline and digger
+   clips a depth plane selects (0x45927E; tagpu_native.c).
+
+   THE INVARIANT is an ordering. On such a segment this write is the fraction's one writer after a
+   unit's create:
+   - a puppet runs no order code, hence no build step (0x48AEB5..0x48AECD);
+   - a puppet level is no network game, so neither the 0x12 receiver nor the round robin runs
+     [INFERRED];
+   - the primary's build done is not played;
+   - the create clears the composite itself (0x485DF2, 0x485E1F).
+   So every bake follows the last class written here. A seek, whose creates start every unit with
+   no composite, holds the same as a forward playing at every draw.
+
+   THE LIFETIME. +0x9E is the model the host's create made for this unit (0x485DCC, 0x485E0E).
+   Only the destructor frees it, nulling the field in the same call (0x486D93..0x486DA3), on this
+   thread. replay-layout.tsv's `model` row keeps the image off it, and every caller has bounded
+   the slot (holds). A NULL model is skipped, as the destructor skips one (0x486D99).
+
+   The finish's GUI refresh is made for the built unit when the viewer has it selected (+0x110
+   bit 4, the viewer's own). The builder's half -- its refresh bit and its menu counts 0x4199B0 --
+   has no unit here to name and is not made. */
 static void unit_put(const Lv* L, unsigned slot, const uint32_t* img)
 {
     char* u = unit_at(L, slot);
     char* mover = *(char**)u;           /* the create made it for a type with one (def +0x22F) */
+    float was, now;
+    memcpy(&was, u + U_BUILT, 4);
     put_masked(u, img, s_raw1, 0, REC_UNIT_BYTES);
+    memcpy(&now, u + U_BUILT, 4);
+    /* "finished" is the engine's own test, the C3 of an x87 compare with 0.0 (0x4586DF and its
+       siblings), true for 0.0, -0.0 and a NaN alike -- hence !(f < 0 || f > 0) */
+    if (s_mp.on && !(was < 0.0f || was > 0.0f) != !(now < 0.0f || now > 0.0f)) {
+        char* model;
+        uint32_t st;
+        memcpy(&model, u + U_MODEL, 4);
+        if (model) *(uint32_t*)(model + O3_FRAME) = 0;
+        if (!(now < 0.0f || now > 0.0f)) {
+            memcpy(&st, u + U_STATE, 4);
+            if (st & U_SELECTED) *(uint16_t*)(L->ta + OFF_GUIWORD) |= GUI_REFRESH;
+            s_mp.bfinished++;
+        } else {
+            s_mp.bunfinished++;
+        }
+    }
     if (mover) {
         const char* ib = (const char*)img;
         int32_t x, z, alt, a_pre, vy;
@@ -2670,8 +2744,9 @@ static int ev_state(const Lv* L, const unsigned char* b, unsigned len)
 }
 
 /* RK_EV_BUILT: 0x41B8D0(builder, built), which tests the builder's build list and both units'
-   lives itself (0x41B8D6..0x41B917); only the frame's nanoframe flag, [+0x9E]+0x10, has no
-   other writer here */
+   lives itself (0x41B8D6..0x41B917); of what it writes, the model's composite frame [+0x9E]+0x10
+   is the one the images do not carry (THE BUILD FINISH ON A MULTIPLAYER LEVEL); a multiplayer
+   segment does not play it (mp_owned_event) */
 static int ev_built(const Lv* L, const unsigned char* b, unsigned len)
 {
     uint32_t bid, uid;
@@ -3602,8 +3677,10 @@ void __cdecl tagpu_replay_phase(unsigned phase)
    own copy's changes at its own receipt times, so they are not played (mp_owned_event); books_put
    writes the composed byte through the setter at every capture point, as R8b does at a seek, and
    the puppet's state gate refuses every other change of a puppet's byte on this segment -- the
-   create's, the replayed build done's, a script's -- so each change starts its scripts once
-   (THE UNITS' BOOKKEEPING, tagpu_puppet.c).
+   create's, a script's -- so each change starts its scripts once (THE UNITS' BOOKKEEPING,
+   tagpu_puppet.c). A unit's build finish is its image's too: the primary's build done is not
+   played, and unit_put clears the unit's composite when the image changes whether its build is
+   finished (THE BUILD FINISH ON A MULTIPLAYER LEVEL).
 
    Every action names a slot of the recording's frozen blocks, which first_checks has matched
    to the level's array; the consumer bounds every type by the level's definition count
@@ -4350,14 +4427,17 @@ static int mp_follow(const Lv* L, unsigned T)
     return here ? mp_rebuild(L, T) : !s_mp.failed;
 }
 
-/* the primary events a mode-3 world carries for what the owners contribute. RK_EV_STATE among
-   them: the recorder's copy takes a state change from the engine's 0x11 or its build done at its
-   own receipt time, on another session, so that step is not the composed image's; the image's
-   byte is written by books_put (THE UNITS' BOOKKEEPING). */
+/* the primary events a mode-3 world carries for what the owners contribute. RK_EV_STATE and
+   RK_EV_BUILT among them: the recorder's copy takes a state change from the engine's 0x11 and a
+   build's finish from its 0x12 (the receiver 0x4555BA -> 0x41B8D0) at its own receipt time, on
+   another session, so that step is not the composed image's. The image's state byte is written
+   by books_put (THE UNITS' BOOKKEEPING), a finish by the image's own write (THE BUILD FINISH ON A
+   MULTIPLAYER LEVEL). */
 static int mp_owned_event(unsigned kind)
 {
     return s_mp.on && (kind == RK_EV_CREATE || kind == RK_EV_START_NAMED ||
-                       kind == RK_EV_REPLY || kind == RK_EV_SPRAY || kind == RK_EV_STATE);
+                       kind == RK_EV_REPLY || kind == RK_EV_SPRAY || kind == RK_EV_STATE ||
+                       kind == RK_EV_BUILT);
 }
 
 /* The step's events in recorded order; with `defer`, the roots of a later phase into the store.
@@ -7853,10 +7933,11 @@ static void counts_log(const char* when, unsigned now)
     if (s_mp.on)
         tagpu_logf("replay: %s: owners: %u units made, %u destroyed, %u images, %u private roots "
                    "(%u played), envelope %llu; %u deaths the recorder observed, %u with a corpse "
-                   "level; %u corpses made from its stream; %u text entries, %u lines shown%s%s",
+                   "level; %u corpses made from its stream; %u builds finished and %u unfinished "
+                   "by an image; %u text entries, %u lines shown%s%s",
                    s_name, s_mp.made, s_mp.destroyed, s_mp.images, s_mp.roots, s_mp.rplayed,
                    (unsigned long long)s_mp.ordinal, s_mp.observed, s_mp.ocorpse, s_fst.corpses,
-                   s_mp.said, s_mp.shown,
+                   s_mp.bfinished, s_mp.bunfinished, s_mp.said, s_mp.shown,
                    s_mp.failed ? "; stopped: " : "", s_mp.failed ? s_mp.why : "");
 }
 
