@@ -372,8 +372,9 @@ static void mp_match_log(const char* action, DWORD origin, const GUID* match)
 }
 
 /* The queued receiver copies a split message without checking its caller's
-   capacity (0x46354F..0x463567). Every split length is a u16: the variable
-   length at 0x46391B or the fixed table word at 0x463931. Reserve their full
+   capacity (0x46354F..0x463567). Every split length is a u16: a 0x2C's own
+   16-bit size field (0x463919..0x463923, read by the call at 0x46391F) or the
+   fixed table word at 0x463931. Reserve their full
    range before calling it. Raw/system messages use the SDK's size negotiation.
    Native sends continue to use main+0x2A38, so they cannot overwrite this input.
    The pump lock owns the transport's receive cursors and main+0x4C9/0x4CD from

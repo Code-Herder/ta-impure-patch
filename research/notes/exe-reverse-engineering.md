@@ -564,11 +564,11 @@ but does not identify a level. No capability or version negotiation is added.
 | `0x496BB0`, `0x496C95`, `0x496CA4` | The lobby handler [INFERRED name] checks main `+0x2A44` bit 2 and lobby fields `+0x2BBE`, `+0x2BBF`, `+0x2B4C`, then writes state 3 and handler `0x496CE0`. Its earlier mode-1/mode-2 branches select the campaign/skirmish load handlers. |
 | `0x496CE0..0x496DA4` | The start handler [INFERRED name] selects the controlled row through main `+0x2A42`, takes PlayerInfo from player `+0x27`, and tests Info `+0x97` bit 0 at `0x496D0C`. Only that host branch builds byte `0x08` on its stack (`0x496D15`) and sends `(player+4, &byte, 1)` through call `0x496D25 → 0x451DF0`. A whole-`.text` sweep found no direct E8 call to the handler; its state-pointer assignments are the entries above. A 22-line disassembly lookback at every direct call to `0x451DF0`/`0x451BC0` found this one immediate byte-8 constructor; that is not a proof about computed constructors. Both branches select state 5 and handler `0x497F40`, at `0x496D65/0x496D75` or `0x496D87/0x496D9D`. |
 | `0x451DF0`, `0x451EE0`, `0x451EFD` | Generic sender, stdcall `ret 12`, validates an active local type-1/type-2 source and tests the network bit. Reliable mode calls `0x461990`; raw mode calls `0x4C97B0`. B8 owns its entry; the recorder redirects only the start call, preserving B8's path. The targeted sender `0x451BC0` is stdcall `ret 16`, validates a local source and remote destination, and uses its raw call at `0x451DAC`. |
-| `0x461990`, `0x462710`, `0x4628D0` | Reliable queue path: the wrapper forwards to `0x462710`, whose copy routine `0x4628D0` proves old payload plus incoming bytes fits `0x42A` (1066), copies the exact span into queue-owned memory at record `+0x14+offset`, and stores its length. The caller's 25-byte stack start is no longer needed after return. The queue has a `0x400` entry bound. |
+| `0x461990`, `0x462710`, `0x4628D0` | Reliable queue path: the wrapper forwards to `0x462710`, whose copy routine `0x4628D0` proves old payload plus incoming bytes fits `0x42A` (1066), copies the exact span into queue-owned memory at record `+0x14+offset` (the bound at `0x462911`, the copy at `0x462919..0x46292C`), and stores its length. The caller's 25-byte stack start, and the 97-byte identified text built on the sender's stack, is no longer needed after return. The queue has a `0x400` entry bound. |
 | `0x451FD0`, `0x452040`, `0x4520BE..0x4520D4` | Packet-table initializer. ESI is 1 at `0x452040`; `0x4520BE` writes that fixed length to `0x512AF8`, the `0x08` entry in length table `0x512AD8`. Mask `0x512BE0` is 7 (all three pump phases), set at `0x4520CE`. The recorder redirects the six-byte length store to write 25 and resumes at `0x4520C4`, so reinitialization retains the extended format. |
-| `0x453D40`, `0x453E14`, `0x453E84..0x453EA2` | The retail receive pump keeps the message at stack `+0x10`; B3's fallback receive note repairs this pointer after realloc and retains the delivered length in TLS. The work branch's owned receive path assigns that slot from its private allocation instead. Stack `+0x14` is the source row **index**, initially 10 for no match, not a player pointer. The pump derives source player EDI from it at `0x453E9B`. Recorder metadata bounds that saved EDI to the ten-row array before reading native ID `+4` and process-lifetime PlayerInfo `+0x27/+0x97`. |
+| `0x453D40`, `0x453E14`, `0x453E84..0x453EA2` | The retail receive pump keeps the message at stack `+0x10`; B3's fallback receive note repairs this pointer after realloc and retains the delivered length in TLS. The recorder's owned receive path assigns that slot from its private allocation instead: it redirects the pump's entry `0x453D40` (`A1 E8 1D 51 00`, `mov eax,[0x511DE8]`) to a wrapper that runs those five bytes and resumes at `0x453D45` (`sub esp,0x51C`), and the receive call at `0x453D94`. The queued receiver's copy `0x46354F..0x463567` does not check its caller's capacity; every length the splitter hands it is a `u16`, the `0x2C` size read through `0x415DC0(0x10)` (`0x463919..0x463923`, the call at `0x46391F`) or the table word at `0x463931` (`mov ax,[eax*4+0x512AD8]`), so the private allocation is 65,536 bytes. Stack `+0x14` is the source row **index**, initially 10 for no match, not a player pointer. The pump derives source player EDI from it at `0x453E9B`. Recorder metadata bounds that saved EDI to the ten-row array before reading native ID `+4` and process-lifetime PlayerInfo `+0x27/+0x97`. |
 | `0x45473F..0x4547AD`, `0x4547AD..0x45483F` | Pump phase mask and player admission. States 5/6 test mask bits 1/2; other states test bit 0. The source row is EDI and destination row is EBX. The recorder accepts start metadata only on the GUI/game thread, in network mode 3 and states 2/3; a late loading/play delivery does not replace its token. |
-| `0x455F9C`, `0x4553BE..0x4553D5` | The dispatch-table slot for `0x08` points to `0x4553BE`. Its first instruction loads main from `0x511DE8`; the body clears stack `+0xF0`, sets main `+0x2A44` bit 2 and jumps to `0x455F50`. The observer preserves all registers/flags, validates actual length/version/native host identity, then executes this original action even when metadata is invalid. |
+| `0x455F9C`, `0x4553BE..0x4553D5` | The dispatch-table slot for `0x08` points to `0x4553BE`. Its first instruction loads main from `0x511DE8` (five bytes; the observer runs them and resumes at `0x4553C3`); the body clears stack `+0xF0`, sets main `+0x2A44` bit 2 and jumps to `0x455F50`. The observer preserves all registers/flags, validates actual length/version/native host identity, then executes this original action even when metadata is invalid. |
 | `0x45522E`, `0x45534E`, `0x4553B5` | Alternative carriers read and left alone: fixed-65-byte chat case, `0x06` reply construction and `0x07` readiness-bit store. A chat-plus-start batch depends on the reliable splitter; the raw mode has no splitter. Extending the existing start itself serves both paths without introducing chat metadata. |
 
 The start wire image is packed: code 8 (one byte), version/length (two bytes each),
@@ -1269,7 +1269,8 @@ AutoAim and the local block (orders, movement, regeneration) run only for types 
 - **`0x48B090(mask, value)`** (thiscall on the unit, `ret 8`; 45 call sites) computes the new
   byte as `value ? old | mask : old & ~mask` of `+0x10E`, both arguments taken as bytes
   (`0x48B09A..0x48B0D4`), stores it (`0x48B0D8`) and returns at once when the byte did not change
-  (`0x48B0DE`). Its effects, DISASSEMBLED `0x48B0D8..0x48B1FC` (2026-10-06): with the bits newly
+  (`0x48B0DE`). Its effects, DISASSEMBLED `0x48B0D8..0x48B1FC` (2026-10-06), start at `0x48B0E4`
+  and end with the last reply call at `0x48B1AA`: with the bits newly
   set in `bl` and the bits newly cleared at `[esp+0x14]`, bit 0 set starts `Activate` (the name at
   `0x501280`) through `0x4B0940` on the unit's script `[+0x9A]` with run-now clear (`0x48B106`) and
   queues reply kind 3 through `0x47F780(unit, 3, 0)` (`0x48B110`); bit 0 cleared starts
@@ -2630,9 +2631,10 @@ the explosions and the players phase, in this order:
 1. **The idle states.** For each def whose byte at `+0xFE` has bit 1 set, it steps the two
    sequence states at `+0xCC` and `+0xD8` with `0x4B8B90` (`0x424074..0x4240A1`). Only the draw
    reads them [INFERRED: no simulation read of `+0xCC..+0xE3` was found].
-2. **The cursor** `main+0x14257`, a cell index, is decremented; when it goes below 0 it is set to
-   `W × H − 1` and reproduction is skipped for that tick (`0x4240A3..0x4240D2`, a jump to the list
-   walk at `0x4241A8`).
+2. **The cursor** `main+0x14257`, a cell index, is decremented (stored at `0x4240AA`); when it
+   goes below 0 it is set to `W × H − 1` (stored at `0x4240CC`) and reproduction is skipped for
+   that tick (`0x4240A3..0x4240D2`, a jump to the list walk at `0x4241A8`). Otherwise the cursor's
+   cell address is kept at `[esp+0x10]` (`0x4240E5`) for the source test below.
 3. **Reproduction.** When the cursor's cell holds a def below `0xFFFB` whose anchor holds no record
    (a GAF feature at rest), it draws `0x4B6C30(100)` (`0x424113`), and when the draw is below the
    def's `+0xFC` it picks a cell near the cursor: the column is `cursor % W` and the row is
@@ -2646,8 +2648,9 @@ the explosions and the players phase, in this order:
    grid. `0x4B6C30(n)` returns 0 for `n` < 2 without stepping the generator, so `+0xFD` of 0 or 1
    makes no area draw. No stock feature has a nonzero `+0xFC`, so none reproduces, but the first
    draw is made for every GAF feature at rest the cursor passes; mods set it (TA Zero and TA
-   Twilight use 1–2). The demo recorder replaces the 10-byte source test at `0x424185`
-   (`8B 4C 24 10 66 83 39 00 75 19`, the slot pointer's load, the compare and its `jne 0x4241A8`)
+   Twilight use 1–2). The demo recorder replaces the 10-byte source test `0x424185..0x42418E`
+   (`8B 4C 24 10 66 83 39 00 75 19`, the slot pointer's load, the compare at `0x424189` and its
+   `jne 0x4241A8` at `0x42418D`)
    with a stub that asks `feat_source` (`tagpu_recorder.c`), which falls through to `0x42418F` or
    jumps to `0x4241A8`: a multiplayer recording records the slot the recorder's tick read there,
    and a multiplayer playing answers from it, since the host's slots follow the owners' units.
@@ -2759,6 +2762,52 @@ destructor calls calls the destructor (its callers are `0x486679`, Send_UnitDeat
 case `0x455423`; Send_UnitDeath's are `0x4859A8`, `0x486244`, the console's kill of every unit of
 a type `0x486E80` (`0x486EB2`, one caller `0x4174B8`) and of every unit `0x486ED0` (`0x486EF8`, one
 caller `0x4164BD`), kill-all `0x486F10` (`0x486FB4`) and the reaper).
+
+**What a playing's corpse call rests on** [DISASSEMBLED 2026-10-06] (`tagpu_replay.c`,
+`FR_CORPSE` and `corpse_def_ok`; the root is recorded by an observer on `0x486360`'s entry).
+- **The walk to the corpse def, `0x48636E..0x4863B1`.** The helper takes the unit def's `u16
+  +0x1BC` (`0x48636E`), then, `level − 1` times while the def is below `0xFFFB` (`0x486384`), the
+  FeatureDef's `u16 +0xF4` (`0x48639F`; FeatureDefs are `0x100` bytes apart from
+  `[main+0x1426F]`), and spawns only when the last def is below `0xFFFB` (`0x4863B1`). The spawn
+  tests a def only against `0xFFFF` and `0xFFFC` (`0x423C5A`, `0x423C76`) and then indexes
+  FeatureDef by it (`0x423CD2`, `add esi,ebx` after `shl esi,8`), so every def the walk reads
+  through, and the last, must name a feature def: the replay bounds them by the level's def count.
+- **No callee keeps a pointer into the unit.** The position goes by address (`lea ebp,[edi+0x6A]`
+  at `0x4863D0`), the turn too (`0x4863F1`, and `add edi,0x64` at `0x48642C` on the other branch).
+  The spawn copies the position's 12 bytes into the record's `+0x08` (`0x423E28..0x423E38`) and
+  the turn's 6 bytes into `+0x20` (`0x423E9B..0x423EA6`), and the owner byte reaches only the
+  anchor cell's flag bits 3–6 (`and al,0xF; shl al,3` at `0x423EFB`). The spawn's smoke
+  `0x472C50` (called at `0x423FE3`) builds an emitter of class `0x4FD638` through `0x4750B0`
+  (`0x472C8E`) and calls its slot `+0x18`, `0x475150`, which copies the 12-byte point into the
+  emitter's `+0x28` (`0x47515D..0x475178`). The helper's flare `0x472630` (`0x48644B`, with
+  `(pos, 0xF, 0x384, 9)` when `smoke` is set, skipped after an underwater spawn that made a
+  record, `0x486420`) builds class `0x4FD618`
+  through `0x474CD0` and calls its slot `+0x18`, `0x474D50`, which copies the point into
+  `+0x2C` (`0x474D5D..0x474D7C`). So a playing can pass the helper a record on its stack.
+- **The two lookups bound themselves.** The cell lookup `0x481550(x, z)`, `ret 8`, returns NULL
+  unless `0 ≤ x < W` and `0 ≤ z < H`, signed (`0x481551..0x481593`). The height `0x485070(pos)`,
+  `ret 4`, takes the cell of the position's integer halves `>> 4` and returns −1 (`0x485136`)
+  unless that cell and its +1 neighbours lie on the grid (`0x48508F..0x4850C4`).
+- **The destructor's arguments.** It passes `level` as the death record's `+0xA` low nibble, so
+  1..15, and `smoke` as 1 unless the high nibble is 7 (`0x486D55..0x486D6E`: `test al,0xF` at
+  `0x486D58`, `jbe` past the call when 0, the low nibble taken at `0x486D69`). Its other four
+  reads of `+0xA` take the high nibble alone (`0x4867DA`, `0x486880`, `0x486CA2`, `0x486D42`), so
+  a playing that clears the low nibble removes the corpse and its flare and nothing else.
+- **The unit's model `+0x9E`** is freed only by the destructor, through `FreeObjectState
+  0x45AAA0` at `0x486D9E`, and nulled in the same call (`0x486D93..0x486DA3`; a NULL model is
+  skipped at `0x486D99`). `0x45AAA0`'s two other callers free feature records (`0x4221C4`,
+  `0x42474F`); the unit's other `+0x9E` writers are the create's (`0x485DCC`, `0x485E0E`).
+
+**Reproduction's source test is the one value a feature call reads from outside the feature
+world** [DISASSEMBLED 2026-10-06]. The spawn, the destroy and the tick read no other unit slot.
+Area damage `0x49A120` keeps two sums of the damage it deals, by whether the victim's owner byte
+`+0xFF` equals the shooter's `+0x66` (`add [esp+0x44]` at `0x49A407`, else `add [esp+0x30]` at
+`0x49A40D`; both zeroed at `0x49A1D3..0x49A1D7`), and reads them only after its loops, at
+`0x49A823..0x49A82E`, as arguments of `0x406F50` on the shooter's owner's AI object (`+0x74`,
+the call at `0x49A837`): its feature branch (`0x49A626`) never reads them. The feature code's
+draws of the simulation RNG are exactly the six in the table below: a scan of
+`0x4232F0..0x4251CA`, which holds the feature functions through the saved game's load
+`0x424C00` (whose one `ret 4` is `0x4251C8`), finds no other call of `0x4B6C30`.
 
 **The footprint writers.** The stamp `0x47CC30(unit)`, the clear `0x47D0E0(unit)` and the re-claim
 `0x47C790(unit)`, `ret 4` each, write a cell's unit slots and yard bit only inside the unit's
@@ -3091,8 +3140,11 @@ before writing anything (*The sight emitter*, below), and the seek counts a refu
   argument, plain `ret` at `0x47EEDA`; one caller, the level init `0x491898`) empties the queue
   freeing each text, zeroes `+0x9D` (`0x47EEB7`) and the 24 cooldowns.
 - **The chat lines**: 30 lines at `main+0x12EF`, 0x48 each, their stamps at `+0x40` (`0x463D5F`), the
-  head `main+0x2A3E` and tail `+0x2A40`; the expiry `0x463EF0` drops the oldest only once its stamp
-  plus the display time is below GameTime. **`0x463C80`** (plain `ret` at `0x463C9C`; the level init
+  head `main+0x2A3E` and tail `+0x2A40`; the expiry `0x463EF0` (one caller, the step at `0x495683`)
+  drops the oldest only once its stamp plus `(main+0x37F23 + 1) · 30` ticks is below GameTime
+  (`0x463F15..0x463F32`, `jae` keeps it). The chat panel's draw `0x448C70` (callers `0x44A5C6`,
+  `0x44AE00`) drops the oldest too while more lines are queued than the panel holds, its height
+  `[+0x19]` over `0x4A50B0`'s result + 2 [INFERRED: the font's line height], the tail wrapping at 30 (`0x448CFA..0x448D2C`). **`0x463C80`** (plain `ret` at `0x463C9C`; the level init
   `0x4917D2`) zeroes the head and tail.
 - **The particles** carry their own: an emitter's end `+4` and next emit `+8`, a particle's death
   `+0x30`.
@@ -3843,12 +3895,39 @@ target directly. A whole-image scan finds no other `call` or `jmp` to `0x464990`
 | Address | What it does with record 10 |
 |---|---|
 | `0x41D97E..0x41D997` | the constructor loop runs 11 times (`ebx` = 0xB), each through `0x463BE0`, which makes the record's PlayerInfo |
+| `0x4644D0` the players reset | zeroes all eleven records but `+0x27`, the PlayerInfo pointer, which it reads first and stores back (`0x4644D7..0x46450F`, `cmp edx,0xCEE` / `jle`), then sets `main+0x2A42` = 0 (`0x46451B`) and `main+0x2A43` = 0 (`0x46452D`) |
+| `0x464290(seat, type)` the seat activation | `stdcall`. Writes only record `seat` and its PlayerInfo: the five 11-byte rows `+0x108`, `+0x113`, `+0x11E`, `+0x129`, `+0x134` zeroed (`0x4642BE..0x464329`), `+0x73` = type (`0x464332`) and PlayerInfo `+0x94` = type unless 3 (`0x46433A`), `[+0x113+seat]` = 1 (`0x464342`), `+0x74` = 0 without a free (`0x46434A`), `+0x146`, `+0x148`, `+0x147` = seat (`0x46434D`, `0x464353`, `0x46436B`), `[+0x108+seat]` = 1 (`0x464359`), `[rec+0]` = 1 (`0x464364`), `+0x13F` = 5, PlayerInfo `+0x9B` bit 5 cleared (`0x464378`), `+4` = seat, `+0xC` = 0, `+0x22` = 0 (`0x464381..0x46438C`); a type 1 or 2 also gets PlayerInfo `+0x99` (`0x4643BC`); in game mode 1 or 2 the name `+0x2B` is copied to `+0x49` (`0x464418..0x464439`, `0x464497..0x4644B8`), a type 1 or 2 first having a name formatted into `+0x2B` through `0x4E42B0`; `ret 8` (`0x4644BE`) |
 | `0x464990` the level init's players | `cdecl (void)`: `0x464700` for each of records 0–9 whose `+0x73` is set (`edi` = 10 at `0x464994`, the type at `main+0x1BD6 + i·0x14B`), then `0x4648E0` (`0x4649BF`) |
-| `0x464700` the player init | `stdcall (rec)`, `ret 4` (`0x4648D6`); its one direct call is `0x4649B1`. Sets `+0xF0`, `+0xF4`, `+0xF8` to GameTime (`0x464715`, `0x464727`, `0x464765`), zeroes the resources and storage (`0x46476B..0x4647A1`), makes `+0xEC` when NULL (`0x4647CB..0x4647D7`) and calls `0x401070(+0x146)` on it, frees the old sight counters `+0x7C` (`0x464855`) and allocates new ones of `(W/2)·(H/2)` rounded up to 8 bytes (`+0x88`, `0x46482B..0x464866`), zeroed, then the group table through `0x480190` (`0x464898`). It makes the AI object and `0x40B320(+0x146)` unless `[rec+0]` ≠ 0 and `+0x73` = 3 (`0x46489D..0x4648A5`) |
-| `0x464A00` the player teardown | walks records 0–10 (`jbe` against `main+0x2851`, `0x464A99`): frees `+0x7C` and zeroes `+0x7C..+0x88` (`0x464A24..0x464A38`), frees `+0x78` through `0x4801F0` (`0x464A3C`), frees the AI object only when `+0x74` is set, with `0x40B390(+0x146)` first (`0x464A41..0x464A6B`), and frees and zeroes `+0xEC` (`0x464A6E..0x464A7E`) |
+| `0x464700` the player init | `stdcall (rec)`, `ret 4` (`0x4648D6`); its one direct call is `0x4649B1`. Sets `+0xF0`, `+0xF4`, `+0xF8` to GameTime (`0x464715`, `0x464727`, `0x464765`), zeroes the resources and storage (`0x46476B..0x4647A1`), makes `+0xEC` when NULL (`0x4647CB..0x4647D7`: `0x4B4F10(0x34)` at `0x4647CF`) and calls `0x401070(+0x146)` on it (`0x4647EA`), frees the old sight counters `+0x7C` (`0x464855`) and allocates new ones of `(W/2)·(H/2)` rounded up to 8 bytes (`+0x88`, `0x46482B..0x464866`), zeroed, then the group table through `0x480190` (`0x464898`), which allocates `0x140` bytes through `0x4D83B0` (`0x4801A1`) and stores them to `+0x78` (`0x4801B1`) without freeing the old table. It makes the AI object and `0x40B320(+0x146)` unless `[rec+0]` ≠ 0 and `+0x73` = 3 (`0x46489D..0x4648A5`) |
+| `0x464A00` the player teardown | walks records 0–10 (`cmp` against `main+0x2851` at `0x464A99`, `jbe` at `0x464A9B`): frees `+0x7C` and zeroes `+0x7C..+0x88` (`0x464A24..0x464A38`), frees `+0x78` through `0x4801F0` (`0x464A3C`), frees the AI object only when `+0x74` is set, with `0x40B390(+0x146)` first (`0x464A41..0x464A6B`), and frees and zeroes `+0xEC` (`0x464A6E..0x464A7E`, the free at `0x464A76`) |
 | `0x4816A0(m)` the sight rebuild | with `m` ≠ 0 fills the explored map with 0 or `0xFFFF` by Mapping (`0x4816AF..0x4816FB`); its counter fill loops records 0–9 (`cmp bl,0xa`, `0x481707`, `0x481777`) and skips a record whose `+0x146` is 10 (`0x48172A`), so record 10's counters are never refilled |
-| `0x48C190` the ID cycle | walks the controlled record's ID range `[+0x6F, +0x71]` (u16, `0x48C1CA..0x48C1D9`); an ID becomes the unit `array + ID·0x118`, and ID 0 a NULL it reads at `+0x110` (`0x48C1EE..0x48C213`, `0x48C239..0x48C25E`). With `[1, 1]` it reads slot 1 alone |
+| `0x48C190` the ID cycle | walks the controlled record's ID range `[+0x6F, +0x71]` (u16, `0x48C1CA..0x48C1D9`); an ID becomes the unit `array + ID·0x118`, and ID 0 a NULL it reads at `+0x110` (`0x48C1EE..0x48C213`: `test dx,dx` at `0x48C1EF` takes ID 0 to `xor eax,eax`; and `0x48C239..0x48C25E`). With `[1, 1]` it reads slot 1 alone |
 | `0x4858BD..0x48592B` the level's slot setup | writes `+0x67`, `+0x6B`, `+0x6F`, `+0x71` for records 0–9 only (`cmp edi,0xa`, `0x48592B`) |
+
+**The walkers of a record's unit block test the empty block** [DISASSEMBLED 2026-10-06; the
+classification of all 35 reads of `+0x67` is in [the ten-seat note](tadr-port/demo-recorder-ten-seats.md#3-what-record-10-needs-and-what-the-engine-gives-it)].
+Every walk of the controlled or viewed record's block compares the first unit with the last before
+it reads one and leaves on `first > last`: the `ja` at `0x41C345`, `0x467516`, `0x48BE3F`,
+`0x48CA80`, `0x48D2A5`, `0x48D454`, `0x48D4AC`, `0x48D505`, `0x48D561`, `0x48D67E` and `0x48DD40`
+(there `mov ecx,[eax+0x67]; cmp ecx,esi; ja` at `0x48DD3B..0x48DD40`). So record 10's empty block,
+`+0x67` = 1 above `+0x6B` = 0, is walked by none of them. **Loops that stop at record 9:** the
+players phase (`0x4655A8`), the sight rebuild's counter fill (`0x481707..0x48177A`), the level
+start's resource seed (`0x465F87`, `cmp edi,0xD84`) and the post-game table `0x41DC20`
+(`cmp ebp,0xCEE` / `jl` at `0x41DEC5`, which also skips a record whose `+0x146` is 10 at
+`0x41DD37`).
+
+**The in-play interface takes the viewed record's side** [DISASSEMBLED 2026-10-06]. The loader
+loads MAIN2 once, from the viewed record's side (`0x497B56..0x497BD8`): it reads `main+0x2A43`
+(`0x497B56`), PlayerInfo `+0x95` through `+0x27` (`0x497B7D`), formats `%sMAIN2.GUI` (`0x509570`)
+with the side's name at `main+0x37F5B + side·0x232` into `main+0x37EA0` through `0x4E42B0`
+(`0x497BAA`), loads it into the desktop GUI `main+0x519` with `0x4AA8F0` (`0x497BC6`) and stores
+`0x494890` into the screen's `+8`, its OnCommand, and `main` into `+0xC` (`0x497BCB`, `0x497BD8`). The chrome
+and both bars read the side every frame (`0x467D98..0x467DB3`).
+
+**The explosion's owner gate tests type 3 alone** [DISASSEMBLED 2026-10-06]: `0x49A01B..0x49A047`
+forms the owner record from the projectile's owner byte `+0x66` and skips the damage when the
+record is active and `cmp byte [rec+0x73],3` (`0x49A043`) holds. The replay admits a multiplayer
+recording's remote seats only as type 3 for this reason (`tagpu_replay.c`, the header checks).
 
 **The viewed record's work in the players phase.** The phase loops records 0–9 (`cmp bl,0xa`,
 `0x4655A8..0x4655AF`). Only in the viewed record's iteration does it run the minimap rebuild
@@ -3868,7 +3947,9 @@ rebuild `0x4816A0(1)` (`0x497AE5`), the first reader of the viewed record's coun
 
 **The network reporter.** `main+0x2A42` reaches `reporter.dll`'s export only while the library is
 loaded: `0x51E58C` is set nonzero only at `0x46C00F` and zeroed at `0x46C11F`, `0x46C149` and
-`0x46C1CF` (after `FreeLibrary`). The replay refuses to seat while it is set.
+`0x46C1CF` (after `FreeLibrary`). The export receives `+0x2A42` as a value: `0x46C7CC` loads
+the byte and `0x46C7E7` calls `[0x51E584]` with it among ten arguments. The replay refuses to seat
+while the handle is set.
 
 **The destructor's death cue `0x4869EB`** [DISASSEMBLED 2026-10-06]: `0x494FF0(5)`, stdcall
 `ret 4` (`0x495000`), adds 5 to the music's combat ring when the dying unit's killer byte `+0xF4`
@@ -3892,6 +3973,56 @@ index (`0x46461E`, the loop over records 0..10, `0x4646CB..0x4646D3`), so record
 `0x0001000A`, the first dword of the next heap object, and a full-map playback with record 10
 viewed and its colour left at 10 crashed at `0x4C74C7` reading pixel data at NULL. The replay
 therefore gives record 10 a recorded seat's colour (`tagpu_replay.c`, `viewer_seat`).
+
+### The demo recorder's perspective: the clicks and the world point [DISASSEMBLED 2026-10-06]
+
+Stage 4c of the [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.md#stage-4-perspectives-and-communication)
+records each human seat's camera, cursor, clicks and selection
+([the perspective plan](tadr-port/demo-recorder-perspective-streams.md)). Read from
+`pristine/TotalA.exe.pristine` (`objdump -d -M intel`).
+
+**The two click redirects.** Each click action has exactly one call site in the image: a scan of
+every `E8`/`E9` rel32 in the executable section reaching either entry, and of every absolute dword
+in the file naming one, finds the left action `0x498F70` only at `0x4995B3` (`e8 b8 f9 ff ff`) and
+the right button's press `0x499100` only at `0x4993AC` (`e8 4f fd ff ff`). The recorder rewrites
+both `call`s to 17-byte stubs, `push button; push [esp+8]; call rec_click; ret 4`, and
+`rec_click` records the click and then calls the action with the same argument (`tagpu_recorder.c`,
+THE CLICKS). Both sites lie in the mode-6 handler `0x499200`, after `0x498DA0` (`0x499221`) has
+stored this message's world point and region and after the cursor choice has stored the cursor
+index (`0x4992AD`). Each action is `stdcall(record)`, `ret 4`, and starts by saving `ecx` and
+reloading main (`0x498F70`, `0x499100`), so it reads no register of its caller's. The record is
+the handler's own stack copy of the six-dword mouse record `main+0x2C76` (`rep movs` of 6 dwords,
+`0x499210..0x49921A`), its wParam at `+8`, which the left action tests at `0x498FA9` and the right
+at `0x49917A`. Impure's own `order_check` calls `0x499100` directly as a cancel and does not pass
+the redirect.
+
+**What a click carries** is read at that moment: the armed order `main+0x2CC3`, the cursor index
+`main+0x2CBE`, the region bits `main+0x2CC6` & 3, the Interface Type `main+0x37EFA` (a click is
+recorded only for 0 or 1), and the world point's integer halves, the `i16` words at
+`main+0x2CAC`, `+0x2CB0` and `+0x2CB4` of the 16.16 point `main+0x2CAA`, which `DrawGameScreen`
+reads as words too (`0x468DC4..0x468DD2`: `movsx` of `+0x2CB0`, `+0x2CB4`, `+0x2CAC`).
+
+**The reproduction source test** (the features section above) is the stage's other redirect,
+made for a multiplayer playing: `0x424185..0x42418E` goes to a stub that asks `feat_source`.
+
+**The RESTART name test `0x460880`** [DISASSEMBLED 2026-10-06]. The exit menu's OnCommand
+`0x460800` tests the fired gadget's name with `0x49FD60(gi, "RESTART")` (`push 0x506CA8` at
+`0x46087A`, the call at `0x460880`); on a match it pops the screen (`0x4A9660`, `0x46088A`) and
+calls `0x4604A0` (`0x46088F`), which loads `RESTART.GUI` (`0x506CD8`) and stores
+its OnCommand `0x460340` (`0x4604CB`), which stores 1 to the restart flag `main+0x39249`
+(`0x460449`; the flag's other two stores, `0x49129D` and `0x491863`, store a register, and its one read
+is `0x4996FB`); otherwise `0x460898..0x46089F` passes the
+message on through `0x4AB0A0`. The replay's RESTART gate answers 0 for this one test on a puppet
+level, so the menu stays open (`tagpu_replay.c`, THE RESTART GATE).
+
+**The main menu's return `0x4270A9` and `0x512C80`** [DISASSEMBLED 2026-10-06]. After the main
+menu's builder `0x4263B0` returns at `0x4270A9`, the shell reads the dword `0x512C80`
+(`0x4270AE`): nonzero takes `0x4270F0`, which sets the shell's sub-state `main+0x2BBF` = 6 instead
+of going on in the main menu [INFERRED: the lobby's launch path]. Its other references are a read
+at `0x444007`, which takes it as an index 0..4 through the jump table `0x444184` to one of the
+four GUIDs at `0x4FCD98..0x4FCDC8` and then zeroes it (`0x44403E`), a store at `0x45B878`, and the
+address taken at `0x45B6A1` and `0x45B7D0`. The Replays browser reopens after a Start it made only
+while it reads 0 (`tagpu_replay.c`, `menu_built`).
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
@@ -4050,9 +4181,24 @@ reorders only the bounded stack permutation according to frozen actor global
 blocks; vacant rows and ranks pair in ascending order. The native loop remains
 the sole initializer of all paired player/unit ownership fields. Counts and the
 fresh arena base must agree with the recording before the stack changes. A
-refusal stops application before any recorded unit is constructed. The current
-mode-3 playback guard remains closed, so this route does not yet admit a saved
-multiplayer game. Other levels leave the stack unchanged.
+refusal stops application before any recorded unit is constructed. The seating of a
+mode-3 recording arms it, and that recording's first step refuses to apply units
+unless it reported READY. Other levels leave the stack unchanged.
+
+**The allocator run outside the game** [DISASSEMBLED + MEASURED 2026-10-05]
+(`tools/replay/recmp_arena_test.c`, `recmp_arena_test.py`). The test loads the retail
+image into its own process under Wine and runs `0x4854A0..0x48593B` (the allocator,
+whose plain `ret` is `0x48593B`) with the comparator `0x485940..0x485974`, retargeting
+24 absolute operands: the 21 four-byte reads of the main pointer `0x511DE8` in that span,
+each after an `A1` or an `8B` with a disp32 ModRM (`0x4854A4`, `0x4854B5`, `0x4854CA`,
+`0x4854DD`, `0x4854F7`, `0x48551C`, `0x48552C`, `0x485562`, `0x485584`, `0x4855A3`,
+`0x4855B2`, `0x4855E0`, `0x48560C`, `0x48561E`, `0x48562D`, `0x48565C`, `0x485794`,
+`0x48582D`, `0x485896`, `0x4858C2`, `0x485941`), and the three `push 0x485940`
+operands naming the comparator (`0x48568B`, `0x485744`, `0x485765`). A byte scan of
+`0x4854A0..0x485974` finds those 21 and those 3 and no other occurrence of either value.
+Relative calls keep their displacements, since the whole image moves together; the
+allocation call `0x4D83B0` is the one dependency substituted. MEASURED: 206 reordered
+allocations and two stock-order controls preserve every global slot and all ten blocks.
 
 **Thread handoff.** This allocator runs on the loader thread, through
 `0x497180` → `0x497581` → `0x4917D0` → `0x4918D4` → `0x4854A0`.
@@ -17801,7 +17947,13 @@ it in the ring. `0x4AB66C` copies the six dwords into `GUI+0x3C`; with an empty 
 its local dispatch data at `0x4AA151`. The original timestamp at `0x51F4C2` and its input
 copy at `main+0x2C82` already remain local under the existing mouse/input rows.
 Ring flush `0x4C2BB0` resets only the indices, and GUI init `0x4AA850` does not clear
-`GUI+0x48`. Ordinary native moves and clicks produce another clock sample. A short paused
+`GUI+0x48`. The window procedure stores the stamp into the event it builds at `0x4B5E9C` (a
+move), `0x4B5EF0` (a button) and `0x4B5F3C` (a double click). The record's three readers each
+copy all six dwords to their stack (`0x4A44B7..0x4A44D1`, `0x4A6B57..0x4A6B63`,
+`0x4A737D..0x4A7389`) and go on with the copy's x and y (`[copy+0]`, `[copy+4]`, read at once);
+`0x49FD20(gui, gadget, out)`, `ret 0xC`, which copies the six dwords out whole and makes x and y
+gadget-relative, has no direct caller and no stored address in the image. The `leave` row
+`guistamp` (`main+0x561`) rests on this. Ordinary native moves and clicks produce another clock sample. A short paused
 probe cannot establish a change of every clock bit by waiting for arithmetic rollover.
 
 `main+0x531..+0x534` is the full active GUI pointer (`GUI+0x18`), not a unit type or a

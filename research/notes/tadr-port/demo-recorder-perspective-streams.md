@@ -2,8 +2,8 @@
 
 ## Status
 
-Planned 2026-10-06; the four landings are built and their verification runs passed on
-2026-10-06, not yet landed on main: 4c-1 (the skirmish capture), 4c-2 (Follow, Jump and Free cam on
+Planned 2026-10-06; the four landings are built, their verification runs passed on 2026-10-06,
+and they land with the multiplayer slice's stages 1–5: 4c-1 (the skirmish capture), 4c-2 (Follow, Jump and Free cam on
 a skirmish playback, [as built](#4c-2-as-built)), 4c-3 (the overlays and the dock's Overlays menu,
 [as built](#4c-3-as-built)) and 4c-4 (multiplayer, contribution kinds 13-15,
 [as built](#4c-4-as-built)). This is stage 4c of the
@@ -260,7 +260,7 @@ count and the number of `rsel` units.
 
 ### 4c-2 as built
 
-Built 2026-10-06; not yet run in a game. The code: `src/tagpu_persp.c` (the clock and the fit),
+Built 2026-10-06; its V2 run passed the same day (*Status*). The code: `src/tagpu_persp.c` (the clock and the fit),
 the follow lever and the follow's apply in `src/tagpu_zoom.c`, the frame visit's part
 (`follow_visit`) and the requests in `src/tagpu_replay.c`, the cards in `src/tagpu_cards.c`, and
 `tacli replay follow|jump|pov`. What it settled that the plan left open:
@@ -322,7 +322,7 @@ Gaps 4c-2 leaves:
 
 ### 4c-3 as built
 
-Built 2026-10-06; not yet run in a game. The code: the builder and the switches in
+Built 2026-10-06; its V3 run passed the same day (*Status*). The code: the builder and the switches in
 `src/tagpu_replay.c` (THE OVERLAYS), the copy into the packet in `src/tagpu_packet_pub.c`
 (`fill_overlay` and the unit walk's `rsel`), the acquire's checks in `src/tagpu_packet.c`, the
 cursor and ring in `src/tagpu_mark.c` (`gather_overlay`), the recorded selection's rectangle in
@@ -430,7 +430,8 @@ Gaps 4c-3 leaves:
 
 ### 4c-4 as built
 
-Built 2026-10-06; its codec and file tests pass, and its two-peer run (V4) has not been made. The
+Built 2026-10-06; its codec and file tests pass, and its two-peer run (V4) passed the same day
+(*Gaps 4c-4 leaves*, below). The
 code: the codec and caches in `src/tagpu_recmp_pov.c` (`inc/tagpu_recmp_pov.h`), the channel's
 accept lists and `tagpu_recmp_room` in `src/tagpu_recmp.c`, `_record.c` and `_stream.c`, the
 history's caches in `src/tagpu_recmp_history.c`, `recr_mp_pov` and `recr_mp_select` in

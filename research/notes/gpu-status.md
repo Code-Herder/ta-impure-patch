@@ -2944,9 +2944,11 @@ which the hook does not reach (`SC_CLOSE` in `wndproc.c`, `tagpu_refuse`, and th
 and unit-type refusals in `tagpu_patches.c`): the process's exit waits until the file of every
 recording that has ended is closed ([*Its lifetime*](tadr-port/demo-recorder-skirmish-slice.md#its-lifetime)).
 
-**Its events have 50 sites of their own**, byte-matched and built at `DllMain` by `tagpu_rec_init`,
-all before any lands; no recording starts without them. Twenty-five observers run a handler and then
-the stolen bytes: the create's success exit `0x4861B3`, the destructor `0x4866D0`, the build done
+**Its events have 55 sites of their own** (the attach log's `recorder: N event sites in`),
+byte-matched and built at `DllMain` by `tagpu_rec_init`, all before any lands; no recording starts
+without them. Twenty-seven observers run a handler and then the stolen bytes: the constructor
+reservation `0x486075` (the multiplayer begin root, below), the create's success exit `0x4861B3`,
+the destructor `0x4866D0`, the corpse helper `0x486360` (`FR_CORPSE`), the build done
 `0x41B8D0`, the state setter `0x48B090`, the broadcast starts `0x456190`, `0x456290` and
 `0x456218` (inside `0x456200`), the replies `0x47F780` and `0x47F850` (the setter and the replies
 chained onto the puppet gates there, §2.6f, so a refused call is neither recorded nor counted), `QueryNanoPiece` `0x43E400`,
@@ -2955,10 +2957,20 @@ the nano emitters `0x4720D0` and `0x472200`, and the order dispatch at `0x43A216
 destroy `0x4246B0`, FeatureDie `0x423550`, the burn `0x4233A0`, the damage `0x4244B0` and the swap
 `0x423710`, each with an `after` at its return and chained onto its puppet gate (§2.6f), and the
 footprint writers `0x47CC30`, `0x47D0E0` and `0x47C790`, whose `after` runs only on a puppet level
-(§2.6f). Seven more `call`s go through stubs that
+(§2.6f). Nine more `call`s go through stubs that
 call the engine's own function: the feature code's six calls of the simulation RNG `0x4B6C30`
-(`0x4234C2`, `0x423A38`, `0x423B40`, `0x424113`, `0x424159`, `0x424167`) and the destructor's
-explosion `0x49B000` at `0x486D50` ([the engine map](exe-reverse-engineering.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)). Thirteen `call`s of the COB starts `0x4B0A70` and `0x4B0940` (HitByWeapon, TakeDamage,
+(`0x4234C2`, `0x423A38`, `0x423B40`, `0x424113`, `0x424159`, `0x424167`), the destructor's
+explosion `0x49B000` at `0x486D50` ([the engine map](exe-reverse-engineering.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)),
+and the two click actions' only call sites, the left action `0x498F70` at `0x4995B3` and the right
+button's press `0x499100` at `0x4993AC`, each a 17-byte stub that records the click
+(`RK_CLICK` in a skirmish recording, `RECMP_CLICK` from a multiplayer game's contributing game
+thread) and then calls the action with the same argument
+([the engine map](exe-reverse-engineering.md#the-demo-recorders-perspective-the-clicks-and-the-world-point-disassembled-2026-10-06)).
+Reproduction's **source test** `0x424185..0x42418E` (`mov ecx,[esp+0x10]; cmp word [ecx],0; jne
+0x4241A8`) is redirected whole to a stub that makes the test through `feat_source`: the stock
+test on the engine's own cell pointer, recorded as `FS_SOURCE` by a multiplayer recording, and
+answered from the recording on a multiplayer playing's host, whose slots follow the owners'
+units; it jumps on to `0x42418F` or `0x4241A8` with `eax` and `ecx` as stock left them. Thirteen `call`s of the COB starts `0x4B0A70` and `0x4B0940` (HitByWeapon, TakeDamage,
 TransportPickup, TransportDrop, TargetCleared, EndTransport) go through a stub that records and
 then jumps to the function. The five fire functions' network tests (`0x49D7A0`, `0x49DA92`,
 `0x49DC64`, `0x49DE25`, `0x49DFAF`) are released while a skirmish is recorded, so that each builds
@@ -3034,7 +3046,7 @@ the count, each function's RVA) at once, and the first name armed is written aga
 end (`tagpu_rec_level_end`). Any other build refuses the line (`cover: <name> refused: not a
 coverage build`).
 
-**Multiplayer work branch checkpoint:** `tagpu_recmp.c` carries contributions on one worker's distinct native TCP/IP application/session, and `tagpu_recmp_orders.c` caches authoritative human/hosted-AI queues without following remote list objects. Native observed-world files are enabled on request; faithful network engine playback remains unfinished. The host's start call `0x496D25` carries a fresh match ID; observer `0x4553BE` retains the original start action and initializer `0x4520BE` writes its 25-byte length. Native CreatePlayer at `0x4CA762` appends a public key to the original 21-byte prefix; system size branch `0x454315` accepts 21 or 301 bytes. All five sites are checked and made writable before any changes. B3's `tagpu_wire_received` supplies the start action's actual delivered span. The primary Receive wrapper is stock. Details: [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.md).
+**Multiplayer contributions:** `tagpu_recmp.c` carries contributions on one worker's distinct native TCP/IP application/session, and `tagpu_recmp_orders.c` caches authoritative human/hosted-AI queues without following remote list objects. Native observed-world files are written on request, and the puppet host plays, seeks and takes them over through the owner-authority materializer (§2.6f). The host's start call `0x496D25` carries a fresh match ID; observer `0x4553BE` retains the original start action and initializer `0x4520BE` writes its 25-byte length. Native CreatePlayer at `0x4CA762` appends a public key to the original 21-byte prefix; system size branch `0x454315` accepts 21 or 301 bytes. All five sites are checked and made writable before any changes. B3's `tagpu_wire_received` supplies the start action's actual delivered span. The primary Receive wrapper is stock. Details: [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.md).
 
 The game thread copies the native host address and bounded actor roster/public keys/ownership. The worker retains no primary interface or engine pointer. `tagpu_recmp_net.c` owns sixteen native async completion contexts, while signed bindings freeze each primary human/AI origin's private session, stream and actual SDK sender. Data waits in bounded storage until every expected actor binds and identity announcements precede data on the private sender. A full transmit queue ends contributions incomplete, as unbound (`RECMP_UNBOUND`, naming the primary IDs that never bound) when an expected actor has not bound; the game never joins the worker. A private session open that loses the TCP/IP provider's listener port to another peer is opened again, at most ten times, and a send SendEx answers with DP_OK keeps its context until its completion as a pending one does. A remote packet the game cannot apply, a full receive queue, or a stop with no recording attached ends only this peer's consumption (`tagpu_recmp_relinquish`): its own recording ends incomplete, while its sends, seals, final seals and receipts continue. Details: [channel failure handling](tadr-port/demo-recorder-multiplayer-slice.md#channel-failure-handling).
 
@@ -3133,9 +3145,8 @@ pairs in this sample are post-B2. All 23 skirmish replay checks still pass at 2x
 including three exact poisoned round trips. Separate constructor-arrival analysis
 finds two later Reclaiming replies before the recorder's replica exists. Owner
 timing was chosen by the owner in product decision 7: unit creation/death follows
-its owner and private roots keep recorded application order. The materializer
-must enforce incarnation dependencies; it remains unfinished and native
-playback stays refused.
+its owner and private roots keep recorded application order. The owner-authority
+materializer (§2.6f) applies each unit's images to that exact incarnation only.
 The engine map records the unbounded native constructor inputs, its occupied-slot
 death, and why unfinished construction plus B4 carried state differs from a
 finished local constructor. These reads install no network constructor patch.
@@ -3168,9 +3179,9 @@ corrections. C and independent Python validate 6,697 ordered applications,
 bounds through sequential reading and world seek. Source/recipient roster/player
 and first script/reply/spray bytes match; ordinary host exit validates cuts 2/2
 and four receipts before the joiner exits. Actual native speed is 10. This is
-observed-world capture and copied authority, with native engine materialization,
-remaining roots/effects/Impure authority, all POV/communications, physical traffic
-budget, ten seats and continued host migration still open. See the multiplayer
+observed-world capture and copied authority; playback through the materializer
+(§2.6f), the perspectives, chat and ten seats came later, and the physical traffic
+budget and host migration remain open. See the multiplayer
 slice's *Native observed-world file capture* for exact conditions.
 Native format 6 also stores replica creation roots from B4's existing success
 callout at `0x48634F`, after the incarnation and carried build/HP state are set.
@@ -3193,7 +3204,7 @@ mode-2 skirmish to tick 1,293 with zero corrections, 908 shots, 1,985 script roo
 and no contribution blocks at speed 20. A separate coverage-build attempt fails
 private SDK enumeration with `80004005` before binding; it remains a startup
 reliability gap, alongside the earlier join timeout.
-The work branch also captures each controlling human/hosted AI's explored-map
+The recorder also captures each controlling human/hosted AI's explored-map
 bit history as kind-11 origin-keyed full/delta bitmap transactions, retaining
 the complete LosType and source/application stamps. B2 bounds the raw u16
 reads by LoadMap's nonwrapping allocation geometry and uses game-thread level
@@ -3253,7 +3264,7 @@ has zero corrections and all 324 application envelopes / 160,587 bytes remain
 exact through C/Python reader seek. The reusable saved-evidence fixture passes
 both this recording and the fourteen-entry repeated/full-length recording.
 The loading audit identifies state-5 deliveries before B2 and two loading
-pumps sharing the retail receive allocation. The work branch now redirects the
+pumps sharing the retail receive allocation. The recorder redirects the
 whole primary pump at `0x453D40` and its receive call at `0x453D94`: one persistent
 storage slot per recursion depth survives return and is reused across calls,
 threads and levels. A recursive critical section serializes native
@@ -20465,7 +20476,7 @@ edit. A key naming no section folds nothing.
 menu-time loader runs, before the seal; everything else runs on the thread that runs the death:
 the GAME thread in play (every death, the cargo loop, kill-all, the pick and the `0x4C`'s
 receipt), and during a network load either thread that pumps. The retail pump `0x453D40` holds no lock
-across its dispatch; the work branch's owned primary wrapper serializes it when armed. Both the loader (`0x49727D`) and the game thread's load loop (`0x49852E`) reach its leave case
+across its dispatch; the recorder's owned primary wrapper serializes it when armed. Both the loader (`0x49727D`) and the game thread's load loop (`0x49852E`) reach its leave case
 and the removal's kill-all. So the running kill-all is the thread's own: its token, from an
 interlocked counter, lives in a TLS slot, and a kill mark matches only the kill-all that wrote it;
 two threads' kill-alls never honour each other's marks, and a mark left behind matches no later

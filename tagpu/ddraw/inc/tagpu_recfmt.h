@@ -375,8 +375,9 @@ static __inline int rec_root_len(unsigned root, unsigned len)
 }
 
 /* The feature code's inputs from outside the feature world: its calls of the simulation RNG
-   0x4B6C30 -- every one from 0x4232F0 to 0x4250FF, which holds the feature functions, the spread
-   0x4239C0 and the tick 0x424050 -- and reproduction's source test. */
+   0x4B6C30 -- every one from 0x4232F0 to 0x4251CA, which holds the feature functions, the spread
+   0x4239C0, the tick 0x424050 and the saved game's load 0x424C00 (its `ret 4` at 0x4251C8) --
+   and reproduction's source test. */
 enum RecDrawSite {
     FS_BURN = 0,       /* 0x4234C2, the burn's length                                             */
     FS_SPREAD,         /* 0x423A38, the spread to a neighbour                                     */

@@ -822,8 +822,9 @@ static void name_put(char* dst, const char* name)
    loop reaches (0x4655A8, 0x481707..0x48177A, 0x465F87, 0x41DEC5) and no recording carries
    (replay-globals.tsv, `viewerrec`). So nothing recorded is ever overwritten with viewer state,
    and every record 0-9, seated or not, is applied and compared as recorded.
-   - The activation 0x464290(10, 3) writes only inside record 10: its five 11-byte rows, +0x146,
-     +0x147 and +0x148 = 10, [rec+0] = 1, +0x74 = 0 without a free (0x4642BE..0x464364). BOUND:
+   - The activation 0x464290(10, 3) writes only inside record 10 -- its five 11-byte rows, +0x146,
+     +0x147 and +0x148 = 10, [rec+0] = 1, +0x74 = 0 without a free -- and clears its PlayerInfo's
+     +0x9B bit 5 (0x4642BE..0x4644BE). BOUND:
      type 3 with [rec+0] set before the player init 0x464700 ever sees the record is what makes it
      skip the AI object and 0x40B320 (0x46489D..0x4648A5), which would write the ten-entry table
      0x5119C0 at index 10 (0x40B340).

@@ -3784,9 +3784,9 @@ reproduction and completion checks. Ten is not a proven capacity for every mod s
 | Player cards and independent Sight | implemented and verified | recorded stats and commander presence; compact/normal rows and scrolling; Full map/Sight without camera movement; disabled camera controls for recordings without streams |
 | Runtime verification | passed | four-seat compact/normal layouts and HUD125/150/Auto; synthetic nine-row scroll; zero-time/EOF controls; death-vision dump comparisons; both builds; full 18-fixture replay gate, six of six changed functions reached |
 | Independent review | passed after corrections | two high-effort reviews; complete frame draining and rejection of captures without a final marker; focused synchronization re-review |
-| Jump, Follow and Free cam | built, awaiting its V2 run | a skirmish recording's camera stream (format 7): Follow fits the recorded view to this screen and ends on a camera move or a wheel notch, Jump writes it until its level is drawn; GDI shows the camera; a multiplayer recording's through 4c-4 ([perspective plan, 4c-2](tadr-port/demo-recorder-perspective-streams.html#4c-2-as-built)) |
-| The overlays and the dock's Overlays menu | built, awaiting its V3 run | every recorded player's cursor, click rings and selection rectangles in that player's colour, on Vulkan; the dock's Overlays button opens four toggles (Cursors, Clicks, Selections, Chat) with stand-in art; GDI draws none; a multiplayer recording's through 4c-4 ([perspective plan, 4c-3](tadr-port/demo-recorder-perspective-streams.html#4c-3-as-built)) |
-| Multiplayer perspectives (contribution kinds 13-15) | built, awaiting its V4 two-peer run | each Impure peer's human contributes its camera and cursor (5 Hz, skipped while the transmit queue is short), clicks and selection; a multiplayer playback plays them as Follow, Jump and the overlays at the recorder's application ticks; every peer needs the same build ([perspective plan, 4c-4](tadr-port/demo-recorder-perspective-streams.html#4c-4-as-built)) |
+| Jump, Follow and Free cam | verified 2026-10-06 (V2) | a skirmish recording's camera stream (format 7): Follow fits the recorded view to this screen and ends on a camera move or a wheel notch, Jump writes it until its level is drawn; GDI shows the camera; a multiplayer recording's through 4c-4 ([perspective plan, 4c-2](tadr-port/demo-recorder-perspective-streams.html#4c-2-as-built)) |
+| The overlays and the dock's Overlays menu | verified 2026-10-06 (V3) | every recorded player's cursor, click rings and selection rectangles in that player's colour, on Vulkan; the dock's Overlays button opens four toggles (Cursors, Clicks, Selections, Chat) with stand-in art; GDI draws none; a multiplayer recording's through 4c-4 ([perspective plan, 4c-3](tadr-port/demo-recorder-perspective-streams.html#4c-3-as-built)) |
+| Multiplayer perspectives (contribution kinds 13-15) | verified 2026-10-06 (V4, two peers) | each Impure peer's human contributes its camera and cursor (5 Hz, skipped while the transmit queue is short), clicks and selection; a multiplayer playback plays them as Follow, Jump and the overlays at the recorder's application ticks; every peer needs the same build ([perspective plan, 4c-4](tadr-port/demo-recorder-perspective-streams.html#4c-4-as-built)) |
 
 The [player-card note](tadr-port/demo-recorder-player-cards.html) records the implementation,
 bounds, frame ordering, measured checks and remaining feature gaps. The cards share the dock's post-GUI
@@ -3910,204 +3910,29 @@ open, seek, return-to-now, fork and close through tacli on a recorded skirmish
 functions reached on every required build. AI activity after return and fork is
 checked by new planner orders reaching normal dispatch. The note records the
 approved sight, reconstructed COB-thread and bounded naval flare-count limits.
-In-game rewind controls and faithful network playback remain separate work.
-The multiplayer work branch writes native observed-world/contribution files on
-local recording opt-in, and its puppet host plays, seeks and takes over such a
-file, the takeover's game recorded as a skirmish timeline of it; perspective
-streams and ten seats remain unfinished. The [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.html)
-is active on a work branch: bounded contributions, authoritative human/hosted-AI
-queue caches with source/application ticks, and a fresh ID on each engine start.
-Format 6 adds observed replica creation roots through B4's existing success
-observer, including constructor arguments, birth, water and carried build/HP
-state; readers retain format-5 support. The controlled file/seek fixture bounds
-and preserves that data. Owner timing is selected for canonical unit lifetimes;
-the constructor reservation observer at `0x486075` now publishes distinct begin
-root `0x100` before child events and retains the success observation separately.
-The nine-byte whole-span check and fixed-array owner/birth bounds add no engine
-field write or retiming. Native world materialization and playback remain the
-next application work.
-The native constructor-boundary fixture verifies 71 exact begin/success pairs
-and eight intervening replies across four human/hosted-AI owners, one endpoint
-saving off. All 28 first-root batches match native source/recipient and saved
-bytes. Its complete tick-558 file has zero corrections; C/Python reader seek
-preserves 8,146 applications and CRC `8EA54D8E`. All 23 shared skirmish replay
-checks pass at internal speed 20. This establishes the constructor ordering
-needed for the selected owner lifetimes; engine application remains open.
-The ordered lifetime consumer now validates complete batches before emitting
-normalized owner actions, including initial full-image bootstraps and exact
-birth dependencies. C/Python agree on all 6,000 owned slots, 71 constructor and
-24 death pairs, eight constructor replies and five death-time script starts in
-the saved fixture, with 10,372,503 exact action bytes/CRC `8CF737F2` through fresh
-reader seek. Proof-only images never authorize an action, and a failed callback
-cannot retry already applied effects. This is the copied dispatch layer; native
-engine application, regenerated-child suppression and full playback remain open.
-The fixed-block prerequisite now reorders the allocator's bounded ten-row stack
-table before the engine initializes its paired player/unit fields. 206 relocated
-retail-allocator layouts preserve every global slot and all ten ownership blocks,
-including fully occupied rosters; two controls retain stock offline/native-ID
-order. The installed hook passes all 23 existing skirmish replay checks at
-internal speed 20. Native multiplayer loader admission, exactly-once children
-and actual reconstruction remain open; this does not enable Watch or ten-seat
-replay hosting.
-The current native format-6 coverage recording verifies 36 replica roots against
-the next B2 images and retains their exact bytes through C/Python world seek;
-all 445 observed-world transitions are explained. Earlier private SDK startup
-failures remain unexplained; this successful run does not resolve reliability.
-The isolated native worker now carries contributions inside TA, with signed human/AI bindings against keys copied from actual native player data. A four-actor TA game verifies resources and queues; its production channel also starts and delivers in the native fixture after both primary interfaces close. Source-prefix seals now validate exact sequence/tick/byte/checksum tails; the native fixture verifies final human/AI prefixes and a missing-tail control refuses. Frozen consumption cuts, final receipts and a retained post-teardown consumer now pass controls and the native fixture. A bounded journal preserves produced/consumed source packets with separate application timestamps and a shared ordinal. Its optional copied context now reaches the actual format-5 file writer; a synthetic `.imprec` fixture passes C/Python read/cut-footer validation and world seeking, refusing missing proofs and semantic corruption. Native capture now attaches that context before any publication/consumption. Full owner authority, bandwidth bounds, network engine playback/seek, perspectives, communication and ten-seat takeover remain.
-No multiplayer code has landed. A real native normal-speed four-actor game now
-produces a 2,524,535-byte mode-3 file with the host recording and the joiner opted
-out: observed GameTimes 1–536, zero writer corrections, 6,697 ordered applications.
-C and Python readers agree on complete application bytes/order/provenance through
-world seek, with all four players and owner unit-block bounds. Native capture
-retains remote queues in the exact-owner ledger, never following replica heads or
-attaching them to unknown births. Owner script/reply/spray batches have one stored
-representation; the native fire path and skirmish-only live rewind are preserved.
-The file-context lifetime ends by producer publication, with local-save failure
-independent of mandatory contribution lifetime. Faithful native engine playback,
-source-clock/field-authority materialization and the wider gates remain open.
-A deliberate native local-save failure leaves four-actor contributions and
-terminal cuts/receipts healthy. The same process then saves a complete mode-2
-skirmish with shots/script roots and zero corrections at speed 20. A private SDK
-enumeration failure in the separate coverage attempt remains unexplained.
-The current coverage build passes all 23 `secondary-orders` skirmish gates at
-speed 20, including images inventory, fresh seek and three exact poisoned round
-trips. Native engine playback/coverage and the accumulated landing gates remain.
+In-game rewind controls remain separate work.
 
-The work branch now captures each local human/hosted AI's full normalized player image with exact changed-word deltas, replacing resource-only samples. A frozen origin/seat/unit-block roster authorizes these images and remote queues. The bounded cache and persisted contribution-history fixture pass complete-image/provenance checks in C and Python; a four-actor native TA game verifies first full-image CRCs/source stamps, frozen-block queues and ordinary exit cuts/receipts. The optional file context persists the copied mapping and verifies it against world/seat ownership in writer and C/Python readers; 23 malformed-header controls refuse. Its skirmish regression passes world comparisons and all round trips but fails the images inventory at two bytes of the active GUI heap pointer; a proposed four-byte exclusion awaits the owner's decision. Native recording retains the observed world and a separate owner ledger; remaining owner-only effect/Impure authority, engine authority application and the wider multiplayer gates above remain open.
+**The multiplayer slice, stages 1–5** ([the slice note](tadr-port/demo-recorder-multiplayer-slice.html),
+landed 2026-10-06). Every Impure peer contributes the authoritative state of its humans and hosted
+AIs — player and unit images, order queues, creates and deaths, owner-only script starts, replies
+and sprays, each player's explored map and its chat with the audiences it had — on a native
+DirectPlay session of its own, signed per actor, sealed per source and cut at the game's end,
+whether or not it saves its own recording. A peer that cannot apply what it receives ends only
+its own recording. A saving peer writes one file, its observed world beside that contribution
+ledger, and the puppet host plays it through the owner-authority materializer, seeks it, and takes
+it over with the other seats as AI; a unit's state byte and build finish come from its owner's
+image. Stage 4c records each human seat's camera, cursor, clicks and selection, in skirmish and
+multiplayer recordings alike, and plays them as Follow, Jump and the overlays
+([the perspective plan](tadr-port/demo-recorder-perspective-streams.html)). Stage 5 seats the
+viewer in player record 10 on every playback, so a recording that fills all ten seats plays
+([the ten-seat note](tadr-port/demo-recorder-ten-seats.html)).
 
-Semantic file history is reconstructed by the writer/readers. Bounded source caches validate proof tails while separate application caches preserve the last complete player/unit/list/absence; reader queries rebuild this authority at the current world tick after seek. The 3,108-byte synthetic file fixture passes four full players, two mapped AI unit/mover images, explicit absent slots, exact nonempty order bytes/provenance, unknown/partial-state handling, proof isolation, five lifecycles and 43 raw-seal-valid body refusals. This establishes file authority queries, not engine application or native network playback.
-
-
-The copied-image player-row mapper passes 640 roster permutations and 3,520 byte-exact inverse round trips across 1–10 actors. It matches active rows by native identity and fixed global unit block, preserves vacant/dummy entries, and changes only five player-indexed vectors and the self row. The wire-version-2 stream carries each origin's copied roster before typed state; game capture validates against it and reader player queries map to recorder coordinates with retained source provenance. Separate source/applied maps prevent proof-only announcements from publishing authority. All eleven vector entries and proof-only maps are checked in C and Python. The first native run failed in private-session startup before delivery; the diagnostic four-actor rerun verifies all roster/image source stamps, actual human row swaps and ordinary-exit cuts/receipts. That pass does not explain the earlier SDK timeout, which remains a startup reliability gap.
-
-Owner unit/mover images now have a bounded copied-image mapper and kind-8 full/delta/absence carrier, preserving birth, source stream/tick/sequence and application tick. Its atomic cache fixture passes 464,640 exact inverse mappings, malformed-batch and guard controls, 201-entry batches and the 65,531-slot bound. A native four-actor game verifies all four first full unit-image checksums/provenance and human owner-row remapping, then ordinary-exit cuts/receipts. Synthetic C/Python file seeking retains mapped unit authority and known absence while proof-only changes stay in source validation. This covers the record/mover, not COB/model/order-owned objects, effects/projectiles, AI planner or complete declared Impure authority. Engine application, projectile/Impure mappings and native multiplayer playback/seek remain open; no multiplayer landing is cleared by these tests.
-
-Owner creates, script starts, replies and sprays share a copied kind-10 carrier
-and one bounded queue, preserving mixed call order, exact bytes, incarnation,
-source clock and pre/post-capture phase. The legacy kind-9 decoder remains.
-Codec/queue controls pass 51 atomic refusals, 608 guarded truncations and 8,392
-mixed calls, with constructor arguments captured even when local recording is
-off and source owner rows authorized through frozen maps. Synthetic writer/
-C/Python reader tests retain six applied batches
-through seek and isolate later source proof. The ordered `recr_mp_apply` cursor
-delivers all 30 application envelopes with exact source/application metadata and
-bytes, including A/B/A batches; queries, repeated polls, resumed ordinals and
-backward/forward seek preserve delivery. Five lifecycles, 23 header and 87 body
-refusals pass, including constructor bounds/ownership.
-Capture reuses existing observers without a new engine patch
-or field write. Independent clock mapping, engine root application, remaining
-owner-only events/Impure authority, native engine playback/seek, all POV/communications,
-budget and ten-seat/migration gates remain open. A native normal-speed four-actor
-rerun with recording off verifies matching first script/reply/spray packet bytes
-and provenance for every actor and ordinary-exit cuts/receipts; the sample observes
-only post-B2 phase. The current coverage build passes all 23 skirmish
-`secondary-orders` checks, including the shared constructor observer,
-puppet playback, restore/fresh seek, inventory and three exact poisoned round
-trips. No exclusion or tolerance changes. This is a
-worktree checkpoint.
-
-Current native COVER capture verifies sixteen first create/script/reply/spray
-observations with host recording and joiner opt-out. All 70 constructor tokens
-join carried source type/owner; the 35 local primary payloads match contribution
-bytes. Eight roots precede their constructor's success exit, so capturing the
-dependency does not settle native materialization order. The complete native
-file retains 3,052 applications and 508 root batches through C/Python world seek
-with zero corrections; both peers reach `ev_create`. Engine playback remains
-refused and no multiplayer landing is cleared by this checkpoint.
-
-Owner destructor entry/return capture also runs with recording off. The native
-COVER checkpoint verifies 22 exact birth-token pairs across all four actors,
-including the joiner's human/AI, and five byte-identical local primary death
-images. All 24 first root-kind observations match source and recipient. The
-complete 2,432,312-byte file retains 5,994 applications through C/Python world
-seek with zero corrections; both peers reach the destructor and saved-identity
-publication helpers. Copied-data controls and all 23 skirmish replay checks pass.
-Native engine application is still refused: two later Reclaiming replies reach
-the recorder before its replicas exist. The owner chose owner-controlled unit
-timing for decision 7; incarnation-dependent engine application is next. The
-other multiplayer gates remain
-required; this checkpoint does not land the slice.
-
-Per-origin explored-map capture is also in progress: each local human/hosted AI
-packs its own mapped-map bit under native origin identity, with exact LosType
-and source/application stamps. Complete BEGIN/END transactions preserve mode
-changes and cleared bits, and proof-only state cannot become applied exploration.
-Copied-data controls and writer/C/Python seek checks pass; a four-actor native
-COVER sample verifies initial source/recipient bitmap CRCs. The native exit/chat
-driver stops after three failed attempts, leaving the complete native map file,
-mode change and native seek gate open. The current skirmish regression has 22
-passes and one images-inventory failure at three bytes of `main+0x531`; simulation
-comparisons and all three exact poisoned round trips pass. `main+0x531` is the `leave` row `guitop` in `replay-globals.tsv` (the owner's decision, 2026-10-06), and `secondary-orders --cover` then passes all 25 checks, the images gate included (MEASURED 2026-10-06). It adds no engine write, hook or exclusion. Native POV playback, camera/cursor/selection/
-click streams and communication audiences remain open; the multiplayer slice
-records the current verification and wider gaps. No multiplayer landing is
-cleared by this work.
-
-The native chat driver acknowledges exact text prefixes, retains an already
-active editor and waits for a changed edit index before typing. A two-peer
-COVER control replaces a 43-character mixed-case line exactly and submits
-`+mapping` on both peers with a verified Mapping-bit toggle. This verifies the
-input control; the complete native exploration file and seek gate remain open.
-The native text wire now carries a unique match/sender/serial identity beside
-the original text, preserving native audience selection and the received text
-case. Normal/COVER builds and 168 copied-packet bound/corruption controls pass.
-The first native wire probe stops on input acknowledgement and reveals an
-inactive pending-start guard. The corrected live-producer guard passes a COVER
-three-human native run with five unique events, exact source/received packet
-CRCs, repeated identical lines and correct sampled private delivery; a
-full-length line displays the same 63 characters on all three peers.
-Kind 12 now carries exact text sources/local echoes and actual recipient
-observations on their own clocks, with the recorder's separate application
-order. Its copied identity join rejects mismatched or absent originals and
-actual recipients outside targeted intent; proof-only originals do not appear
-in application history. Codec/history controls and the existing file regression
-pass. A COVER three-human run saves five originals/nine receipts with both
-other peers opted out of saving; ordinary teardown closes the recording with
-zero corrections. Latest-batch inspection and the ordered application visitor
-retain these records; replay display/engine seek, loading-phase chat, raw
-transport and pings/drawings remain open.
-The separate three-human COVER run also verifies private originals from two
-authors with saving off, sent only to each other. The saving host displays
-neither private line but retains both originals and actual receipts; all three
-authors' serial 1 values remain distinct. Its seven entries and complete
-324-envelope / 160,587-byte application history agree through C/Python reader
-seek, with zero writer corrections. The reusable saved-evidence reader checks
-these identities/bytes/clocks against every peer's native logs and also passes
-the earlier repeated/full-length file. Loading research confirms a gap between
-stock's state-5 acceptance and the initial state-6 wire. The primary pump now
-reuses process-lifetime packet storage per recursion depth and serializes
-receive/dispatch metadata through nonblocking admission, retaining
-independent storage and parent IDs across nested calls. A busy caller consumes
-no message; packet aliases survive return. Native sends cannot
-overwrite incoming packets. Exact-core bounds/nesting/concurrency controls pass;
-the three-human COVER run retains seven correct private/public observations
-through C/Python reader seek and closes at tick 709 with zero corrections.
-The raw follow-up also completes with seven exact entries at tick 799, zero
-corrections. Native movement regression testing finds the guarded copy still
-reading the retail TLS; switching it to the shared exact-span API restores
-remote movement in both queued and raw fixtures. Exact-core controls verify
-retained aliases, depth-slot reuse and busy admission without an SDK receive.
-Native parser reentrancy, SDK callback/cost behaviour and separate output
-lifetimes are not established by these controls.
-A fixed copied inbox now bridges loading pumps to the first B2 claim, with
-frozen-roster validation and unchanged source/recipient observation clocks.
-Mask 7 admits the adapter, which requires states 5/6. Its copied-data ownership
-holds no engine/SDK/log/allocation call or other lock. Production inbox and
-exact state-5 receiver controls pass; native loading delivery/clock/file gates
-remain open. No multiplayer landing gate is cleared.
-
-The work branch's tick-based replay harness defaults to internal speed 20 (2x),
-with normal speed selectable and retained for cost and speed/settings UI checks.
-An armed round trip bounds the ordinary due-tick batch before the engine caches
-it, so faster progression cannot skip its T−1 frame. The current `secondary-orders`
-run has 22 passes and the open GUI-pointer images-inventory failure at 2x; the
-normal-speed control also passes simulation and round-trip checks with that
-inventory failure. No comparison
-rule or exclusion is loosened, and no multiplayer timing or bandwidth gate is
-cleared by these runs. The [completeness note](tadr-port/demo-recorder-completeness.html)
-and engine map describe the policy and batch bound.
-The coverage build also passes 33 `wpn-badtgt` checks, including the normal-speed
-W lane's settings restoration, and ten accelerated battle-takeover checks:
-fresh orders execute for every AI seat and 91% of mobile units move.
+**Open:** stage 6, the traffic budget and admission control — the physical bandwidth measurement,
+which actors a channel expects before every one has bound, and the 11–15 s send stall after a
+peer departs; a player who leaves the game, a lifecycle landing of its own; host migration and
+cross-address discovery; and the slice note's named residuals, among them a remote death's corpse
+placed at the recorder's clock and orders that still name a unit its owner destroyed. Every
+contributing peer needs the same build, and a ten-peer network game has not been run.
 
 ## The restorer as compute (2026-09-27)
 
