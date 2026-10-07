@@ -622,6 +622,15 @@ static int data_match(const char* ta, const RecHeader* h, char* why, unsigned ca
 
 /* Everything the seating rests on that the recording alone decides, and the sites it needs in
    (§6.4). 1 with V, record 10, in `viewer`. */
+/* The map a playback's Start reads. A skirmish starts from the SKIRMISH screen's map, which its
+   recording keeps as the settings map; a network game's is the battleroom's, its level's own
+   (RT_MAP), while its settings map is whatever the host's SKIRMISH screen last held. tacli's
+   replay play makes the same choice. */
+static const char* start_map(const RecHeader* h)
+{
+    return h->mode == MODE_NETWORK ? h->map : h->settings_map;
+}
+
 static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned* viewer,
                            Refusal* r)
 {
@@ -670,7 +679,8 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
                  "replay takes the feature draws, a death's explosion and the footprint writes");
         return 0;
     }
-    if (!h->has_settings_map || !h->has_options) {
+    if (!start_map(h)[0] || (h->mode != MODE_NETWORK && !h->has_settings_map) ||
+        !h->has_options) {
         snprintf(why, cap, "the recording lacks the map or the options");
         return 0;
     }
@@ -757,9 +767,9 @@ static int validate_engine(const char* ta, const RecHeader* h, char* why, unsign
     }
     for (i = 0; i + 1 < sizeof map && set[SET_MAP + i]; i++) map[i] = set[SET_MAP + i];
     map[i] = 0;
-    if (_stricmp(map, h->settings_map)) {
+    if (_stricmp(map, start_map(h))) {
         snprintf(why, cap, "the Start read the map %s, the recording's is %s", map,
-                 h->settings_map);
+                 start_map(h));
         return 0;
     }
     /* the engine indexes its side and colour tables with a seat's side and colour unbounded
@@ -1016,7 +1026,7 @@ static void seat(char* ta, const char* name, unsigned v, int view)
     s_viewer = v;
     s_first = 1;
     tagpu_logf("replay: %s seated: %u players on %s, the viewer at record %u", name,
-               recr_header(s_rd)->nseats, recr_header(s_rd)->settings_map, v);
+               recr_header(s_rd)->nseats, start_map(recr_header(s_rd)), v);
     if (s_seek.pending)
         tagpu_logf("replay: %s: a seek to GameTime %u waits for the first step", name, s_seek.T);
 }
@@ -8899,7 +8909,7 @@ static int settings_in(char* ta, const RecHeader* h)
         *(unsigned*)(e + ENT_COLOUR) = h->seats[i].logo;
     }
     memset(set + SET_MAP, 0, SET_MAPLEN);
-    memcpy(set + SET_MAP, h->settings_map, strnlen(h->settings_map, SET_MAPLEN - 1));
+    memcpy(set + SET_MAP, start_map(h), strnlen(start_map(h), SET_MAPLEN - 1));
     *(unsigned*)(ta + OFF_NSEATS) = count;
     return 1;
 }
