@@ -136,6 +136,7 @@ PAGES = [
     ("tadr-port/demo-recorder-state-evidence", "Demo recorder — state evidence", "TADR port"),
     ("tadr-port/demo-recorder-completeness", "Demo recorder — completeness design", "TADR port"),
     ("tadr-port/demo-recorder-skirmish-slice", "Demo recorder — skirmish slice", "TADR port"),
+    ("tadr-port/demo-recorder-size", "Demo recorder — making recordings smaller", "TADR port"),
     ("tadr-merge-exploration",    "TADR merge exploration",    "TADR port"),
     ("tadr-port/raised-limits",   "A. Raised ceilings — plan", "TADR port"),
     ("tadr-port/limits-evidence", "A. Raised ceilings — evidence", "TADR port"),

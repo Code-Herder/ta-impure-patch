@@ -442,7 +442,10 @@ evidence, and keep remaining gaps visible.
    the speed is the obvious saving, not yet measured. **The exact stream**, every value at every
    tick, which the skirmish slice's recorder writes: about 15 MB an hour for four AIs and 18–20 MB
    a minute in a 1,400-unit battle, which a scratch lossless repacking made about 2.5 times smaller
-   ([measured](demo-recorder-skirmish-slice.md#measured)). Until the reduced stream lands, a
+   ([measured](demo-recorder-skirmish-slice.md#measured)). A ten-player battle of 2,010 units
+   recorded exactly came to 99.6 MB for 4 min 21 s, about 560 MB an hour once 400 units remained;
+   where those bytes go and the ideas for reducing them, ranked:
+   [making recordings smaller](demo-recorder-size.md). Until the reduced stream lands, a
    skirmish is recorded only on request.
 3. **Snapshot interval**, chosen by measurement against the seek target and the disk budget.
 4. **Playback speed presets.**
