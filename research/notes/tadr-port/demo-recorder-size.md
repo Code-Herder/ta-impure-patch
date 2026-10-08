@@ -9,9 +9,9 @@ about 12 MiB**, and lossy options add about 1 MiB per category on top. It feeds 
 landing that turns recording on for every game, which waits for a smaller stream (the product
 page's status: "Recording every game waits for the reduced stream").
 
-The precision is already decided by the product contract (*Disk budget*): moving units are
-recorded ten times a second in whole world units with 8-bit headings and interpolated during
-playback, and snapshots, which seek and takeover start from, keep full precision. The budgets are
+The owner chose lossless first (2026-10-07, *Decisions* below): the reduced stream keeps every value
+at every tick, and the product contract's *Disk budget* says so; precision is cut only if the
+measured hour misses a budget. The budgets are
 **10 MB an hour for a 1v1, 25 MB for a typical four-player game and 100 MB for ten players with
 1,500 units**. Today's recorder writes every value at every tick, exactly, which is what the replay
 gate's EQUAL checks rest on. The research below recommends lossless first, which keeps those checks
@@ -342,24 +342,25 @@ the units: stage 6's traffic budget.
 | L5 | lossy, only if L4 misses a budget | about −1 MiB per category |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
-## Decisions for the owner
+## Decisions
 
-1. **Lossless first, instead of the contract's 10 Hz** (a change to the plan): lossless reaches
-   most of the gain, and lossy adds about 1 MiB per category.
-2. **The prediction tier**: generic (9.84 MiB), integrators (7.30), or with the sine-table rule
-   (4.50), which pins the format to one engine fact.
-3. **Field lanes or dword lanes**: a table of the record's field boundaries (a wrong row costs size,
-   never correctness) or plain dwords.
-4. **The compressor**: keep the writer's deflate, or add zstd (+0.6 MB of DLL) for writer CPU and
-   seek speed rather than size.
-5. **The Python reader's dependencies**: numpy, and zstandard if zstd is chosen.
-6. **Old formats**: drop formats 5–7 (no recording from them is in a release).
-7. **Projectile engine facts in the codec**: shot events and the `+0x67` slot stamp as predictions
-   (0.44 + 0.22 MiB).
-8. **Loosenings, if L4 needs them**: the motion tolerance, approximate radar contacts at range
-   edges, what a takeover between snapshots gets, stale projectile records out of snapshots.
-9. **Projectiles from launch**: whether the puppet's engine may fly its own shots, after a
-   determinism probe.
-10. **Multiplayer**: DECIDED 2026-10-07, K. Open: accepting the loss of the replica-against-owner
-    audits, which K drops with the observed remote copies.
-11. **The measured hour's wall time** against the ten-minute rule for a game run.
+Taken by the owner on 2026-10-07:
+
+1. **Lossless first**, instead of the earlier contract's 10 Hz whole-unit motion; the product
+   page's *Disk budget* now says so.
+2. **The prediction tier: the engine rules** (4.50 MiB): integrators plus velocity from the sine
+   table × speed; the rules and the table are constants of the format version.
+3. **Field lanes**: a table of the unit and mover records' field widths (a wrong row costs size,
+   never correctness).
+4. **zstd level 3** in the DLL (BSD-3, about +0.6 MB) for writer CPU and seek speed; the
+   `zstandard` package in the development venv for `tarec.py`. Players are unaffected.
+5. **numpy** may be a dependency of `tarec.py` (development tooling only).
+6. **Formats 5–7 are dropped** when the new format lands (no build writing them was published).
+7. **Projectile engine facts are used**: shot events as references for births and the `+0x67`
+   slot stamp as the survivor's previous slot.
+8. **Loosenings are decided after L4**, with the measured shortfall in hand, if there is one.
+9. **Projectiles from launch: not now**; revisited only if L4 misses a budget.
+10. **Multiplayer: K**, accepting the loss of the replica-against-owner audits.
+11. **The measured hour runs accelerated**, within the ten-minute rule for a game run, with one
+    ten-minute stretch at normal speed as a cross-check for anything paced in real time (cameras,
+    cursors).

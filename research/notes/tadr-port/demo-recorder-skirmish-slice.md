@@ -51,9 +51,9 @@ Each landing adds one capability that can be verified by itself, and the ones af
 | **S5 — the browser and the controls** | the Replays browser, the timeline bar, perspectives, camera follow, the overlays, the recording switch in the settings screen | the browser and the controls driven through `tacli ui`, with pictures |
 
 **S1 and S2 record every value exactly, at every tick.** That is what makes their checks exact. The
-product page's stream — ten samples a second in whole world units, interpolated in playback — is a
-landing of its own after S2, once playback can show its error; S1 measures the exact stream's size
-so that the gap to the budget is known before then. Until that landing a skirmish is recorded only
+reduced stream — the same exact values, coded losslessly ([making recordings
+smaller](demo-recorder-size.md)) — is a landing of its own after S2; S1 measures the exact stream's
+size so that the gap to the budget is known before then. Until that landing a skirmish is recorded only
 when asked, by the file `tagpu_recorder.on` in the game's folder, because the exact stream is too
 large to write for every game (*Measured*). That landing turns recording on for every skirmish and
 retires the file, and it packs the stream tighter as well: a scratch repacking of the exact stream

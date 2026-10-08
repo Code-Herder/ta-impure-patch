@@ -199,10 +199,11 @@ other players; a multiplayer game is rewound from its finished recording.
 - **Keep recordings by default.** Show total replay storage in the browser. Offer optional
   cleanup by age or total size; favorites are protected from automatic deletion.
 - **Disk budget.** Targets per match-hour: **at most 10 MB for a 1v1, 25 MB for a
-  typical four-player game, and 100 MB for ten players with 1,500 units.** Moving units are
-  recorded ten times a second in whole world units with 8-bit headings and interpolated during
-  playback; snapshots, which takeover uses, keep full precision. Precision rises only if the
-  fidelity check shows visible error. These targets rest on an estimate, not a measurement
+  typical four-player game, and 100 MB for ten players with 1,500 units.** The recording stays
+  exact: every value at every tick, made small by lossless coding
+  ([making recordings smaller](demo-recorder-size.md)), so a replay shows exactly what the game
+  computed and takeover can start from any tick's state. Precision is cut only if the measured hour
+  misses a budget, and each such loosening is a decision of its own. These targets rest on an estimate, not a measurement
   ([open decisions](#open-decisions-and-evidence-needed)). So far an eight-minute four-AI game
   measured about 5–7 MB per hour, and a 1,432-unit battle would reach 160–640 MB if sustained for
   an hour ([evidence](demo-recorder-state-evidence.md#4-size-estimate)). A real hour-long four-player game with AI and structures is measured before
@@ -432,7 +433,9 @@ evidence, and keep remaining gaps visible.
    1v1 target has only a static-battle estimate, about 3.5–6.5 MB per hour (up to 9.4 with the
    explored map stored), and a moving 1v1 is not estimated. Recording at 5 Hz
    instead of 10 Hz saves only about 38 % of the unit-state stream, about a fifth of the whole
-   estimate, so the rate is chosen for smoothness. **Measured since** (a probe's recordings,
+   estimate, so the rate is not the lever: the recording stays exact and is coded losslessly
+   ([making recordings smaller](demo-recorder-size.md), which measures it at about 12 MiB for a
+   99.6 MiB 2,010-unit battle). **Measured since** (a probe's recordings,
    re-encoded within 0.25–2 world units, no general compression; [evidence](demo-recorder-state-evidence.md#4-size-estimate)):
    an eight-minute game of four AIs with up to 92 units comes to about 5–6 MB per hour (6–7 MB
    with each unit's speed recorded). A 1,432-unit battle, every unit fighting, would come to
