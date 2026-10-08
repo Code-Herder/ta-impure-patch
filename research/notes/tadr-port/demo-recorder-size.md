@@ -2,10 +2,14 @@
 
 ## Status
 
-Research, 2026-10-07. Nothing here is built yet. The page gathers what has been measured about the
-size of a demo recording, the research round that prototyped each way of reducing it on one
-battle recording, and the plan that came out of it: **lossless, the battle's 99.6 MiB file becomes
-about 12 MiB**, and lossy options add about 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
+**L1 is built and measured, not landed** (*L1: recording format 8, measured*, below): recording
+format 8 packs every block with zstd and carries the unit deltas in a unit frame predicted from the
+engine's own rules, and a new run of the battle below recorded in 29.1 MiB where the measured one
+took 99.6 (not like for like: another game of the same scenario). L2 to L6 are
+plans. The page gathers what has been measured about the size of a demo recording, the research
+round that prototyped each way of reducing it on one battle recording, and the plan that came out
+of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
+1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
 landing that turns recording on for every game, which waits for a smaller stream (the product
 page's status: "Recording every game waits for the reduced stream").
 
@@ -191,7 +195,9 @@ As a drop-in on today's blocks, zstd level 3 makes the stream 66.8 MiB (−32 %)
 CPU from 38 to 3.6 ms per second of game (130 to 13 in the busiest 30 s) and decompresses about
 eight times faster (129 MB/s to about 1 GB/s; a seek through the busiest interval decodes in 0.06 s
 instead of 0.75) — MEASURED with a 32-bit
-MinGW build at the DLL's flags under Wine on the reference setup. It adds about 0.6 MB to the DLL.
+MinGW build at the DLL's flags under Wine on the reference setup. Vendored without the greedy, lazy
+and binary-tree strategies (level 3 is dfast), the legacy formats and the error strings, it adds
+345,088 bytes to the DLL (MEASURED, L1).
 
 Once the codecs above are in, the compressor no longer shrinks the file: on the unit frame zstd 3
 is 4.63 MiB against the writer's 4.50, zstd 19 about 5 % better. Snapshots are the exception
@@ -199,8 +205,10 @@ is 4.63 MiB against the writer's 4.50, zstd 19 about 5 % better. Snapshots are t
 framing alone saves only 6.1 MiB under zstd 3: implicit lengths (where the format fixes a record's
 size), runs and slot gaps pay; varint headers, dropping padding, trained dictionaries, sparse mask
 encodings, byte shuffles and order-0/1 rANS gain nothing on this data. The container that carries
-the codecs: self-contained blocks of about 30 iterations, ending at each snapshot, holding a kind
-sequence and one section per category.
+the codecs: blocks of at most 30 iterations, ending at each snapshot, holding a kind sequence and
+one section per category. As built in L1 each block's zstd frame is self-contained, but the unit
+frame's state runs on from block to block and restarts only at reset points (*L1*, below), since a
+restart costs every unit's first iterations of history.
 
 ### The plan, combined
 
@@ -251,14 +259,16 @@ Every one is a loosening and the owner's decision.
 - **One flat battle**: no aircraft or hills (pitch, roll and vertical velocity never changed). L0
   (below) re-ran every codec on three other recordings: lossless everywhere, and aircraft are the
   one class that costs far more than the battle suggested.
-- **Seek in C**: the prototype decoder works over every live unit; a seek could take 0.2–0.6 s
-  against the one-second target [INFERRED]. Decode work should grow with the moving units.
-- **The writer and the ring**: the unit encoder's cost (about 1 ms an iteration at 2,000 units) is
-  unmeasured, and the 16 MB ring holds about 5 s of peak input, so a slow writer ends a recording.
-- **A codec bug's reach**: every codec decodes its block before writing and falls back to today's
+- **Seek in C**: decode work grows with the units that move, since a unit at rest is skipped. L1
+  MEASURED a seek under one second everywhere except the first snapshot interval of the two largest
+  battles, 1.15–1.23 s, where every unit marches (*L1*, below): open, for L4's snapshot interval.
+- **The writer and the ring**: L1's unit frame cost at most 95 ms for one block of 30 iterations on
+  the writer thread, and the 16 MiB ring held at most 2.1 MiB (*L1*, below).
+- **A codec bug's reach**: every codec decodes its block before writing and falls back to the
   records on a mismatch, so a bug costs size, never data.
-- **Predictor resets**: every codec resets at each snapshot and each segment's first iteration, a
-  rule of the format, so a seek can start at any snapshot.
+- **Predictor resets**: the unit frame restarts at a segment's first stream block, at the first
+  after a snapshot and at the first after a block written as records, a rule of the format, so a
+  seek can start at any snapshot.
 
 ## L0: the codecs on other recordings
 
@@ -384,15 +394,18 @@ The integer version also fixes three holes the float prototype's specification h
 term at 2^16 (the largest |A| measured is 26,214), division truncates toward zero as in C (Python's
 `//` floors), and a zero speed cap is guarded.
 
-**What L1's unit frame carries for aircraft**: gravity and sea level in the stream header (gravity
-stays a `leave` row of `replay-globals.tsv`; the header is not the replayed globals); per aircraft
-type, its air bit and about 24 bytes of definition constants written by the writer (type ids differ
-between recordings: CORVAMP is 271 on the air war, 272 on Town & Country); a third image and an age
-per slot; LosType as an input of the sight rules; the landing tick's rule (on `0x43D210(1)` the
-smoothed acceleration decays once and the bank is recomputed); and as format-version constants
-0xF333, 0xCCD, the integer tables and the sine table. Gravity and the definition offset `+0x170`
-were fitted from the data (8155 is unique: 588,252 exact banks against about 503,000 for 8154 or
-8156); the writer reads the real values.
+**What L1's unit frame carries for aircraft** (built): the recording's header holds gravity, sea
+level and LosType's bit 2 (`RT_PHYSICS`; gravity stays a `leave` row of `replay-globals.tsv`, since
+the header is not the replayed globals) and, per aircraft type, a 24-byte row of its type index,
+sight height and five flight fields (`RT_AIR`; type indices differ between recordings: CORVAMP is
+271 on the air war, 272 on Town & Country). The capture writes them on the game thread at the
+recording's start, and the writer parses them from the header's bytes, as a reader does. Each slot
+keeps two images and five lanes of a third, and an age; the landing tick's rule is in (on
+`0x43D210(1)` the smoothed acceleration decays once and the bank is recomputed); 0xF333, 0xCCD,
+the integer tables and the sine table are constants of the format. Gravity and the definition
+offset `+0x170` were fitted from the data (8155 is unique: 588,252 exact banks against about
+503,000 for 8154 or 8156); the capture reads the real values (the engine map's *The demo
+recorder's unit frame*).
 
 **Not covered** by the air war: landings (its 200 transition iterations are all take-offs), air
 transports and their cargo, the blocked branch, a non-zero pitch scale, the other LosType path
@@ -400,6 +413,106 @@ transports and their cargo, the blocked branch, a non-zero pitch scale, the othe
 Chasing the velocity further — estimating each aircraft's target from its turns (the turn reveals
 the desired heading on 86 % of iterations) or recording the course's target (26 bytes an aircraft)
 — is not measured and not in the plan unless the measured hour needs it.
+
+## L1: recording format 8, measured
+
+**What L1 is** (built, not landed). Recording format 8: every packed block is one zstd frame at
+level 3 (zstd 1.5.7, vendored), and a stream block — at most 30 iterations or 2 MiB, ending at each
+snapshot — is written as a **sectioned container**: the record kinds as runs, one section of
+verbatim bodies per category (projectiles, cells, orders, events, the rest), and the **unit
+frame**, which replaces every unit delta with residuals against per-lane predictions — the engine's
+rules (heading, ground and air velocity, position, the footprint and sight cells, the claim and
+move stamps, the countdowns, the aircraft's speed, smoothed acceleration and bank), the previous
+value or the linear extrapolation — all in integers. The writer writes a sectioned block only when
+a second decoder gives its records back byte for byte, else the records. Both readers take format 8
+alone (decision 6). The bytes, the reset points, the fallback and the refusals are the skirmish
+slice's [*The file*](demo-recorder-skirmish-slice.md#the-file); every engine fact the rules rest on
+is in the engine map's
+[*The demo recorder's unit frame*](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
+
+**Where it departs from the plan above**, each decided in the building:
+
+- **The unit frame's state runs across blocks** between reset points (a segment's first stream
+  block, the first after a snapshot, the first after a block written as records); only each
+  block's zstd frame is self-contained.
+- **Each recording carries its lane table** (`RT_CODEC`, from `tagpu/ddraw/replay-lanes.tsv`, 112
+  lanes), so editing the table never orphans a file; the rules find their lanes by role.
+- **The capture writes the constants** (`RT_PHYSICS`, `RT_AIR`) into the header on the game
+  thread; the writer, like a reader, parses them from the header's bytes.
+- **A third image is five lanes** (heading, layer, velocity), not a whole image.
+- **A unit at rest is skipped**: one whose image equals the two before it and the third's lanes and
+  which is not due a move stamp is a fixed point of every rule, so decode work scales with the
+  units that changed in the last three iterations.
+- **The Python reader** (`tools/replay/reccodec.py`, numpy) is an independent implementation,
+  checked byte-identical with the C one.
+
+**Offline, on the four format-7 recordings** rewritten as format 8 (MEASURED 2026-10-08, native and
+under Wine): every stream block sectioned, 0 declined, 0 mismatched; the C and Python decoders and
+the records identical on every block. The unit frame, zstd 3 / the old deflate, MiB: air war
+1.375 / 1.333, Town & Country 4.151 / 4.027, naval 0.213 / 0.205 (the research: 1.38 / 1.338,
+4.16 / 4.034, 0.206), the battle 4.342 / 4.214 against the research's 4.634 / 4.497, which had no
+footprint, sight or claim rule (without them the codec gives 4.619 / 4.486). 200,000 fuzzed blocks
+under ASan and UBSan gave no report, and C and Python agreed on 3 × 2,000 fuzzed cases.
+
+**In the game** (MEASURED 2026-10-08 on the reference setup: the default build at `a45d84ac`,
+recorder armed, game speed 20, each scenario played anew under Wine). The format-7 figures are
+L0's recordings of the same scenarios, which ran to other GameTimes and fought differently, so
+**the comparison is not like for like**.
+
+| | the battle | Town & Country | naval | air war |
+|---|---:|---:|---:|---:|
+| ticks, format 8 (format 7) | 7,410 (7,830) | 4,261 (4,021) | 3,811 (3,841) | 5,911 (5,610) |
+| **the file, MiB, format 8** | **29.09** | **18.97** | **4.76** | **14.15** |
+| the file, MiB, format 7 | 99.6 | 79.2 | 10.1 | 46.2 |
+| stream blocks sectioned / declined / mismatched | 263 / 0 / 0 | 148 / 0 / 0 | 128 / 0 / 0 | 198 / 0 / 0 |
+| the unit frame on the writer thread, ms in all / at most for one block | 8,136 / 70 | 7,419 / 95 | 565 / 21 | 3,718 / 29 |
+| the ring's high water, KiB of 16 MiB | 2,164 | 1,748 | 945 | 1,061 |
+| a seek's read, ms, to GameTime 900 / 1800 / 2700 / 3600 | 1,227 / 671 / — / — | 1,151–1,195 / 917 / 725 / 596–606 | 148 / 58 / 28 / 23 | 343 / 352 / 318 / 284 |
+| `codectest.py verify`: blocks where C and Python differ | 0 | 0 | 0 | 0 |
+| Python decode, `tarec.py info`, s | 28.9 | 27.9 | 3.2 | 16.2 |
+
+The largest sections, each packed alone with zstd 3 (`recsize.py`; together within 2 % of the
+stream as written), MiB: the battle — projectiles 15.0, the unit frame 4.76, cells 2.59, events
+2.21, orders 1.93; Town & Country — projectiles 8.44, the unit frame 4.07, cells 3.52, orders 1.10;
+naval — projectiles 3.24, cells 0.33; the air war — cells 7.49, projectiles 3.33, the unit frame
+1.61. The seek's read is the replay's own log line (`sought … in X ms (read Y, rebuild Z)`); a seek
+to 900 reads from the segment's first iteration, there being no snapshot before it.
+
+**Against the plan.**
+
+- **Size.** L1's row planned about −42 MiB on the battle, from the units and the interleaving. It
+  measured −70 MiB, on a run that is not the same game: the sections also let zstd pack the
+  categories L1 carries verbatim far tighter than the old interleaved 2 KB-window deflate — the
+  projectiles' section packs to 15.0 MiB where the format-7 battle's projectiles packed alone to
+  36.5. The unit frame came to 4.76 MiB against the plan's 4.5–4.6, on a run with 473 unit deltas an
+  iteration where the format-7 recording had 385; on that recording itself it gives 4.34.
+- **The writer.** The plan estimated about 120 ms of codec work per game second at 2,000 moving
+  units [INFERRED]; the most for one block of 30 iterations (one second at normal speed) was 95 ms,
+  and the ring never held more than 2.1 MiB of its 16. No recording declined a block or failed its
+  check.
+- **The seek.** Every seek read in under one second except those in the first snapshot interval of
+  the two big battles, **1.15–1.23 s**, over the one-second target: decode work scales with the
+  units that move, and in the opening every unit marches. This is **open**: the snapshot interval
+  (`SNAPSHOT_TICKS`, 900) is tuned at L4, which measures the hour it is chosen for (the owner's
+  decision).
+- **Python.** Decoding a recording in Python takes about 28 s for the large battles, within the 30 s
+  the plan allowed, and the replay gate runs `tarec.py` many times a fixture: `TAREC_CACHE=DIR`
+  (`tools/replay/reccache.py`) keeps a recording's decoded blocks keyed by the SHA-256 of its bytes
+  and of the decoder's sources, `tareplay.py` sets it for each run, and with the cache warm `tarec.py
+  info` on Town & Country takes 2.0 s.
+
+**What L1 leaves open.**
+
+- **The seek in a large battle's first interval** (above), for L4.
+- **Aircraft in the replay gate**: the fixtures fly aircraft only in `carry-links` (transports) and
+  `battle` (a dozen AI-built ones); whether they reach the codec's air functions is the landing
+  gate's answer. If the gate names them UNCOVERED, the owner's choice is a short `air-war` fixture
+  (`scenarios/air-war.json`).
+- **Never met in a recording**, each costing size only if a rule is wrong: the circle's sight path
+  (LosType bit 2 clear), a landing, air transports' cargo, a non-zero pitch scale, remote aircraft
+  in a multiplayer recording.
+- **The other categories ride verbatim**: projectiles, cells, orders and events are L2's and L3's;
+  a multiplayer file's contributions stay records blocks, zstd-packed (K is L6).
 
 ## Multiplayer recordings
 
@@ -477,7 +590,7 @@ the units: stage 6's traffic budget.
 | | Landing | Gives |
 |---|---|---|
 | L0 | every codec run offline on the naval and Town & Country recordings and one with aircraft and hills: DONE 2026-10-07, lossless everywhere (*L0* above) | aircraft as the open cost |
-| L1 | the sectioned container, decode-before-write with fallback, the unit frame with the aircraft and cell rules in integers | about −42 MiB on this battle |
+| L1 | the sectioned container, decode-before-write with fallback, the unit frame with the aircraft and cell rules in integers: BUILT, measured, not landed (*L1* above) | planned about −42 MiB on this battle; MEASURED 99.6 → 29.1 MiB on a new run of it, not like for like |
 | L2 | projectiles by identity, the guided-velocity rule, the search capped at 4 candidates, shooter first | about −34 MiB |
 | L3 | cells, orders, events, globals; the snapshot wreck base | about −7 MiB |
 | L4 | the measured hour of a four-player game with AI and structures | the snapshot interval; whether lossy is needed |

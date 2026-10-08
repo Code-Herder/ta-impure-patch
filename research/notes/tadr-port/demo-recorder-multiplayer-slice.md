@@ -32,7 +32,7 @@ Each local human and hosted AI signs its primary origin and private identity aga
 
 Teardown releases the game reference and publishes stop without joining. A reference keeps the wake handle and copied channel storage alive through a concurrent worker finish. There is at most one channel worker per process, including one still finishing. The worker drains queued local work and native completions before closing its own session on the normal path; abort never claims delivery. When native membership has no private peers left, queued transmissions can retire only after every expected source has supplied its final prefix. A departed unsealed source cannot authorize that retirement. A 15-second stopped-worker drain deadline aborts incomplete; elapsed time proves no receipt, prefix or delivery fact. Normal teardown publishes a final prefix seal for each local actor before stop. A validated seal proves that received source prefix; it does not establish a complete recording. The consumption cut, final-seal receipts and retained-consumer API below now govern normal close. Game capture attaches the file context before the first source publication; native authority application remains open.
 
-Locally controlled human and hosted-AI players contribute their full normalized 520-byte player image and subsequent changed-word deltas with recording off. The recipient maps records by primary ID, independently of their private SDK sender. Source sequences are separate for up to ten origins. The game keeps authoritative caches separately from its observed world. Enabled local recording persists both namespaces without altering engine resources. `REC_FORMAT` is 6; readers also accept format 5.
+Locally controlled human and hosted-AI players contribute their full normalized 520-byte player image and subsequent changed-word deltas with recording off. The recipient maps records by primary ID, independently of their private SDK sender. Source sequences are separate for up to ten origins. The game keeps authoritative caches separately from its observed world. Enabled local recording persists both namespaces without altering engine resources. The recording format is 8 (`REC_FORMAT`), the only one the readers take.
 
 The primary descriptor refuses `DPSESSION_NOMESSAGEID`, which removes native source identity. The private backend requires the native protocol, ordered guaranteed async sends and completion notifications on its own session. Its [Send contract](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpref_6dvd.content.htm) and bounded contexts establish requested transport support, not terminal recording completeness or a measured bandwidth budget.
 
@@ -116,7 +116,7 @@ A separate producer/writer-thread control copies and validates 15,000 alternatin
 
 ### Contribution file container
 
-The work branch writes format 6 and reads formats 5 and 6. `RT_MULTIPLAYER` carries the copied 112-byte roster in a mode-3 header; both writer and readers refuse a network mode without that roster or a roster in another mode. `RB_CONTRIBUTIONS` carries consecutive 16-byte application metadata plus exact source packets, with no ring padding. Its block timestamps are zero: packet metadata retains application/source clocks, and these blocks are not world seek snapshots. After game hand-over, proof-tail records use phase 3, zero application ordinal and zero application tick. They enter the persisted source ledgers without entering the world copy or extending application cuts.
+The recorder writes format 8 and the readers take format 8 alone. `RT_MULTIPLAYER` carries the copied 112-byte roster in a mode-3 header; both writer and readers refuse a network mode without that roster or a roster in another mode. `RB_CONTRIBUTIONS` carries consecutive 16-byte application metadata plus exact source packets, with no ring padding. Its block timestamps are zero: packet metadata retains application/source clocks, and these blocks are not world seek snapshots. After game hand-over, proof-tail records use phase 3, zero application ordinal and zero application tick. They enter the persisted source ledgers without entering the world copy or extending application cuts.
 
 `tagpu_recmp_file.c` owns the attached journal and a retained channel reference. It is created before channel publication/consumption and transferred into `RecRing` before writer start. The game ends that context before its final ring publication. Ending a local save detaches the journal and publishes a distinct local-stop state; the file writer cannot take the channel consumer or stop game contributions in that state. Ending the channel first permits the sole receive consumer to transfer after journal drain. Context end is the producer's final access; the writer acquires it before freeing either the journal or the retained reference. No engine allocation or interface is kept alive by this context.
 
@@ -140,7 +140,7 @@ The player fixture executes 640 roster permutations over all actor counts 1–10
 
 Source kind 7 carries the owner's copied 176-byte frozen roster at sequence 1, before its first full player image at sequence 2 and before orders. Each origin announces the whole source peer's roster once. Exact origin sets and fixed global block endpoints must agree with the recorder; actor order and local row assignments may differ. The game adapter validates each local image against its frozen source map and each received image against that sender's map. Raw delta baselines stay in source coordinates. Maps belong to the game thread and are freed at failure/level end; the worker still owns only copied packets.
 
-File history owns separate source and application map caches. A proof-only roster validates a proof-only full image but publishes neither mapping nor player authority; both C and Python fixtures check this. Produced/consumed player queries return recorder-coordinate vectors/self row, retaining source stream/tick/sequence and application tick. The wire version is 2, shared by start tokens, primary keys, private identity and envelopes. Experimental wire-version-1 contributions are refused; the 176-byte roster schema and file metadata schema remain version 1. File format 6 adds observed replica creation; no recorder exclusion changes. Unit coordinates are bounded and mapped as described below. Explored-map contributions use origin identity instead of row bits; projectile owner indices and declared Impure player IDs still require their own remapping audit. Native file capture is enabled on request; engine replay application remains unfinished.
+File history owns separate source and application map caches. A proof-only roster validates a proof-only full image but publishes neither mapping nor player authority; both C and Python fixtures check this. Produced/consumed player queries return recorder-coordinate vectors/self row, retaining source stream/tick/sequence and application tick. The wire version is 2, shared by start tokens, primary keys, private identity and envelopes. Experimental wire-version-1 contributions are refused; the 176-byte roster schema and file metadata schema remain version 1. The file format carries observed replica creation; no recorder exclusion changes for it. Unit coordinates are bounded and mapped as described below. Explored-map contributions use origin identity instead of row bits; projectile owner indices and declared Impure player IDs still require their own remapping audit. Native file capture is enabled on request; engine replay application remains unfinished.
 
 ### Owner unit records and movers
 
@@ -872,8 +872,8 @@ native file/failure/transition runs above verify those behaviors directly.
 
 ### Replica creation roots and incarnation joins
 
-Native format 6 adds `RK_EV_NET_CREATE` (kind 51), without renumbering existing
-records or changing the contribution wire. B4's existing `hit_created` callout
+The native format carries `RK_EV_NET_CREATE` (kind 51), which renumbers no existing
+record and does not change the contribution wire. B4's existing `hit_created` callout
 at `CreateFromNetwork`'s success exit `0x48634F` calls the recorder after storing
 the observed incarnation token. It adds no competing byte patch. The recorder
 copies only on its native recording game thread, after bounding the unit pointer
@@ -887,12 +887,11 @@ three i32 position arguments, float unfinished fraction, u16 HP and zero u16
 reserved. It retains primary-world creation order; it does
 not manufacture an owner creation at a guessed recorder tick.
 
-C and Python readers require native format 6, unit-def metadata, an allocated
+C and Python readers require the native format, unit-def metadata, an allocated
 nonzero slot in the frozen owner's block, type in `1..ndefs-1`, owner below ten
 and water in `0..4`, a finite unfinished fraction in `0..1` and zero reserved
 bytes before exposing the event. File reads and seeks retain its
-arguments and token; no engine memory is written. Readers also accept format 5
-without this new record. Native engine playback remains refused, so the new
+arguments and token; no engine memory is written. Native engine playback remains refused, so the new
 record is not sent through the skirmish event dispatcher.
 
 MEASURED 2026-10-05 on the reference setup: the actual writer's 3,554-byte

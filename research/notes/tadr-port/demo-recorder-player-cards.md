@@ -4,8 +4,8 @@ Implemented and runtime-validated, including two independent high-effort reviews
 frame-boundary corrections. This is the card portion
 of [the S5 design](demo-recorder-s5-ui.md). The dock's Overlays menu is drawn and hit-tested by
 this layer (*The Overlays menu* below). Jump, Follow
-and Free cam play a skirmish recording's camera stream (format 7,
-[the perspective plan's 4c-2](demo-recorder-perspective-streams.md#4c-2-as-built)): Jump and
+and Free cam play a skirmish recording's camera stream
+([the perspective plan's 4c-2](demo-recorder-perspective-streams.md#4c-2-as-built)): Jump and
 Follow are enabled for a seat with a recorded camera sample, Follow is drawn active for
 the followed seat and Free cam otherwise; these three are built and await that plan's V2 run.
 Hovering a disabled Jump or Follow explains “Camera was not recorded.”

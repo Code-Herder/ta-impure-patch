@@ -424,7 +424,7 @@ S5 asks for these instead of editing it:
 
 1. **The minimap in the header.** The TNT's minimap picture, the GAF frame at `main+0x1426B`, alive
    for the whole level and NULL when the file has none (VERIFIED 2026-09-12, `tagpu_packet_pub.c`):
-   at most about 252×252 bytes, deflated with the block.
+   at most about 252×252 bytes, packed with the block.
 2. **A summary in the end block**: each player's result, and each commander death and defeat with
    its GameTime, so the browser and the timeline need not walk the stream.
 3. **The mod**: its name as the per-mod table knows it (empty for retail or an unknown mod), its

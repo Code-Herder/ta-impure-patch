@@ -1555,7 +1555,10 @@ and [*Rebuild, takeover and rewind, measured*](tadr-port/demo-recorder-state-evi
     every step.**
   - **`0x43D290`**, the air step: unless the move object's layer `+0x2E & 3` is 2 it zeroes the
     velocity `+0x8..+0x10`, the speed `+0x20` and `+0x24` and returns (`0x43D297..0x43D2BD`); on
-    layer 2 it asks `[vt+0x10]` and integrates the velocity (`0x43D2C0..`) [not read further].
+    layer 2 it asks `[vt+0x10]` (`0x43D2EE`) and steps the velocity (`0x43D2C0..0x43D6BF`) and then
+    the smoothed acceleration and the bank through `0x43D0D0` (`0x43D6B3`): the parts the demo
+    recorder's unit frame predicts are in *The demo recorder's unit frame* (below); the steering
+    term between them is the size research's reading.
   - **`0x43D6D0`**, the placement. A carried unit (`+0x86` set) is put at its carrier's attach
     point (`0x43E060` by `+0xF9`; for def `+0x241` bit 19 not below the sea level `main+0x1427F`
     less the waterline def `+0x22C`, `0x43D712..0x43D75A`) through `0x48A9F0(unit, pos, move
@@ -3432,6 +3435,122 @@ and measured*): the pool's written extent reached 242 of 3000 records in the 1,4
 in the naval fixture and 5 in the forest fire; with Mapping on (LosType 5) the explored map changed
 in 226 of 3,810 iterations, 5,669 bytes in their runs; with it off it never changed in any
 fixture.
+
+### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
+
+Recording format 8 carries a stream block's unit deltas as residuals against a prediction, the
+*unit frame* (`tagpu/ddraw/src/tagpu_reccodec.c`; the bytes in the skirmish slice's
+[*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the plan and its measurements in
+[making recordings smaller](tadr-port/demo-recorder-size.md)). Where a rule exists the prediction
+is the engine's own, and the capture writes the constants the rules need into the recording's
+header once, on the game thread at the recording's start (`header_codec`, `tagpu_recorder.c`):
+RT_PHYSICS (gravity, sea level, the sight rule) and one RT_AIR row per aircraft type. Every rule
+and constant is a predictor's: a wrong one costs size, never data, because the writer writes a
+block in the unit frame only when a second decoder gives its records back. Everything below was
+re-read in `pristine/TotalA.exe.pristine` on 2026-10-08 unless it is marked as the size research's
+(`research/sizelab/`), which MEASURED each rule's exactness on its recordings.
+
+**What the capture reads.** The defs are `*(main+0x1439B)`, `0x249` bytes each, and the loop over
+them runs below UNITINFOCount `main+0x1438F`, the count the engine's own loops over the defs run to.
+
+| read | what | established by |
+|---|---|---|
+| `main+0x14263`, i32 | gravity | read by the bank `0x43D186` and 13 other instructions in `.text`, stored by none by displacement (`replay-globals.tsv`, a `leave` row). The air war's 8155 was also fitted from its banks by the size research (unique: 588,252 exact against about 503,000 for 8154 or 8156) |
+| `main+0x1427F`, u8 | sea level | `movzx` at `0x48280D` in the sight emit (below); 70 byte accesses in `.text`, one of them a store (`0x416AA3`) |
+| `main+0x14281` bit 2 | LosType's ray fan: which sight path a unit takes | the emitter's test `0x4825BA..0x4825CE`; RT_PHYSICS stores the bit as it stands at the segment's start, since the typed command LOSType can change it during a game |
+| def `+0x241` bit 11 | the unit moves by the air step | the movement pass `0x43DD36..0x43DD44` (below) |
+| def `+0x170`, u8 | the sight emit's height term | `mov cl, byte [def+0x170]` at `0x4827FB`. The water state reads the same offset as a signed **word** (`movsx` at `0x43DBBA`); the sight emit's byte is the one RT_AIR carries |
+| def `+0x192`, i32 | `maxvelocity` | the def loader stores it at `0x42C151` (key string `0x503E3C`); the air step reads it at `0x43D301`; also read at `0x43CC76` (`imul`, in `0x43CC20`) and `0x43D9A2` |
+| def `+0x19A`, i32 | `brakerate` | stored at `0x42C165` (`0x503E30`); the ground step `0x43CD46` and `0x43D02F`; the air step as a float (`fild` at `0x43D3BC`) |
+| def `+0x19E`, i32 | `acceleration` | stored at `0x42C180` (`0x503E20`); the air step `0x43D2FB`; the ground step `0x43D0AC` |
+| def `+0x1A2`, i32 | `bankscale` | stored at `0x42C1AE` (`0x503E14`); the bank `0x43D1AF` |
+| def `+0x1A6`, i32 | `pitchscale` | stored at `0x42C1C5` (`0x503E08`); the bank's twin `0x43D1DB` |
+
+The loader takes each of the five through `0x4C4800` (the key pushed at `0x42C129`, `0x42C14B`,
+`0x42C16F`, `0x42C18C`, `0x42C1A8`; `damagemodifier` follows at `0x42C1CF`); the values are 16.16
+per the size research's `air-challenge/lib_int/airdefs.py` [the conversion in `0x4C4800` not
+re-read here].
+
+**The rules, by the image's fields** (the unit image is the unit record's `0x118` bytes, then the
+mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
+
+- **The movement pass `0x43DD20`** (thiscall on the move object, the unit as its one argument,
+  `ret 4`; callers the unit tick `0x48AFAA` and the `0x2C` receiver `0x48BA46`) calls the class
+  step `[vt+0x08]` (`0x43DD28`), then loads the def `[unit+0x92]` (`0x43DD30`), shifts
+  `[def+0x241]` right by 11 and tests bit 0 (`0x43DD36..0x43DD41`): set, the air step `0x43D290`
+  (`0x43DD46`, its only caller); clear, the ground step `0x43CD20` (`0x43DD4D`); then the placement
+  `0x43D6D0` (`0x43DD55`). The unit frame takes a type as an aircraft when RT_AIR has a row for its
+  type index (the image's `+0xA6`, one less than the def's ID at `+0x92`).
+- **Heading** `+0x66` += the mover's turn rate `+0x24`, as a word (`add word [unit+0x66], cx` at
+  `0x43CFDB`, `cx` loaded at `0x43CFD1`).
+- **Ground velocity**: `TurnXLookup 0x4B70EF` and `TurnZLookup 0x4B7123` off the sine table
+  `0x509F00` times the speed (*`DrawRangeCircle 0x438EA0`*, below, and the size research's
+  `0x43CC20`, `0x43CCDB..0x43CD13`: vx = −sin(h)·speed, vz = −cos(h)·speed, MEASURED exact in
+  4,362,632 of 4,362,632 live mover unit-ticks).
+- **The air step's damping** (`0x43D2F1..0x43D339`): the def from the unit at `[esp+0x5C]`, its
+  acceleration (`0x43D2FB`) and maxvelocity (`0x43D301`), the acceleration also kept as a float
+  times 2^−16 (`fmul [0x4FD2D0]`, `0x43D310`), then `d = 0x10000 − (acc << 16) / maxv` through
+  `_allshl 0x4E44F0` (`0x43D326`) and `_alldiv 0x4E4440` (`0x43D32F`, `0x43D334..0x43D339`). The
+  rest of the step — the drift limit against brakerate, the vertical clamp, the turn, the steering
+  term toward the course's target point, the speed — is the size research's reading
+  (`0x43D2F1..0x43D47D`, *Aircraft* in the size note) and was not re-read here; the steering term's
+  target point lives in the course `0x490690`, not in the unit record, so the velocity is the one
+  air field the image does not determine.
+- **`0x43D0D0`, the smoothed acceleration and the bank** (thiscall on the move object (unit,
+  &Δv), `ret 8`; callers the air step's end `0x43D6B3` and `0x43D210`'s layer-1 branch
+  `0x43D25B`): each of the mover's `+0x14`, `+0x18`, `+0x1C` becomes `(A · 0xF333) >> 16` through
+  `_allmul 0x4E4400` and `_allshr 0x4E43D0` (`0x43D0D9..0x43D131`), then gains Δv
+  (`0x43D134..0x43D159`); `0x4B7173(heading, &A)` turns it by the heading [INFERRED from the size
+  research's fit: x′ = x cos − z sin]; `q = (gravity << 16) / 0xCCD` (`0x43D186..0x43D1A4`); the bank
+  `+0x64` = `0x4B715A((−x′ · bankscale) >> 16, q)` (`0x43D1A6..0x43D1CA`) and `+0x68` the same with
+  pitchscale (`0x43D1CF..0x43D1F6`) [INFERRED: `0x4B715A` is an atan2 to a heading; the size
+  research's integer bank matches the engine on 588,451 of 588,452 airborne iterations, MEASURED].
+  On a landing (`0x43D210` with layer 1) Δv is zero [the size research's reading; no recording
+  has met one].
+- **Position** `+0x6A`/`+0x6E`/`+0x72` += velocity, the altitude only in the air step's path
+  (`0x43D7FF..0x43D839`, the altitude `0x43D80D`); the **move stamp**, the mover's `+0x2A` =
+  GameTime when the position or layer changed (`0x43D85A..0x43D865`).
+- **The footprint cell** `+0x76`/`+0x78` = `(x − (w << 19) + 0x80000) >> 20` with the size
+  `+0x7E`/`+0x80` (`0x43D86F..0x43D895`), compared with the stored cell at `0x43D898`.
+- **The claim stamp `0x440A70(unit)`** (stdcall, `ret 4`): with a mover, it reads the mover's
+  `+0x26` (`0x440A83`) and stores GameTime `main+0x38A47` there as a **dword** (`0x440A8B..0x440A91`),
+  then re-marks the unit's rectangle in each of the 32 movement classes (`0x512358`, stride `0x20`)
+  whose watermark `+0x1C` is above the old stamp (`0x440A94..0x440AB1`, through `0x440830`); with
+  none, it re-marks every present class (`0x440AB9..0x440ADB`). Its one caller is the end of the
+  footprint clear `0x47D0E0` (`0x47D2CA`), so the stamp moves when the footprint does. The image
+  sees the step before its iteration's label: the iteration labelled `gt` holds `gt − 1`.
+- **The sight emit `0x4827B0(unit)`** (stdcall, `ret 4`; callers `0x43DA59`, `0x464DBF`,
+  `0x465053`, `0x48AAA0`, `0x48B6BF`) builds a record on its stack (`0x4827B3..0x48281B`): `+0`
+  the owner `[unit+0x96]`, `+4` the address of `unit+0x7A`, `+8` def `+0x202` as a word
+  [INFERRED: the sight distance], `+0xA` def `+0x170`'s byte, `+0xC` the address of `unit+0xF8`,
+  `+0x10/+0x14/+0x18` x, altitude and z; it raises the altitude to `(sea level + 1) << 16` by a
+  signed compare (`0x48280B..0x48281B`) and calls the emitter `0x4825B0` (`0x482824`).
+- **The emitter `0x4825B0(rec)`** tests LosType bit 2 (`0x4825BA..0x4825CE`). **Set** (the ray
+  fan, `0x4825D4..0x48261C`): the column `sx = movsx(x >> 16) >> 5`; the height `h = clamp(byte
+  +0xA + movsx(altitude >> 16), 0, 255)`; the row `sz = (movsx(z >> 16) − (h >> 1)) >> 5`, all
+  arithmetic shifts. It returns writing nothing when both cells equal the stored ones and the stored
+  height byte is within 5 of `h` (`0x48261F..0x48262E`); otherwise it stores the cells
+  (`0x48264C`, `0x482652`), bounds them unsigned against `main+0x14293` and `main+0x14297`
+  (`0x48265B`, `0x482663`) and stores `h` at `unit+0xF8` inside (`0x48266E`), 0 outside
+  (`0x4826AC`). The unit frame predicts sx as `x >> 21` for every unit and sz this way for an
+  aircraft (a ground unit's sz is a generic lane). **Clear** (the circle, `0x4826B7..0x48271A`):
+  the radius index `trunc(+8 / 32) − 5` clamped to `[0, count − 1]` of the table
+  `*(main+0x1485B)`, and the corner from `trunc(x / 2^21)` and `trunc(z / 2^21) −
+  trunc(altitude_hi / 64)`, less the circle's offset from `0x4B7F30` — truncating divisions and a
+  table lookup the unit frame does not predict: with RT_PHYSICS's sight byte 0, sx and sz are
+  generic lanes.
+- **The countdowns**: weapon slot reloads (AutoAim `0x49E1C8..0x49E1D2`) and `+0xFA`/`+0xFB`
+  (`0x48ADF0..0x48AE0D`), −1 a tick down to 0.
+- **The water state `+0x10A`** is stored as one dword (`mov [esi+0x10A], edi` at `0x43DBED`); the
+  lane table keeps it as two u16 lanes, as the size research measured them. A lane's width is a
+  size hint only.
+- **The sine table `0x509F00`**: MEASURED equal to `round(8192 · sin(2πi / 512))` on all 512
+  entries, the closest to a rounding tie 0.0016, so the codec carries it as a literal of the
+  formula and never reads the executable.
+
+**Not predicted**, each costing size only: the circle's sight path (LosType bit 2 clear); a
+landing (`0x43D210` with layer 1: the rule is written, never met); air transports' cargo; a
+non-zero pitch scale (none of the recordings had one); the steering term's hidden target.
 
 ### The demo recorder's tick boundaries: the sim step `0x495490` and its callers [DISASSEMBLED 2026-10-01]
 
@@ -10162,7 +10281,10 @@ content is that small. `fix_range_circle` sends N = 0 to the radius-0 epilogue `
 **`TurnXLookup 0x4B70EF` is a SINE and `TurnZLookup 0x4B7123` a COSINE**, off one shared
 table at **`0x509F00`**: 512 `s16` entries, `8192 = 1.0` (`shrd …,0xD` after a `+0x1000`
 round), indexed `((angle + 0x20) >> 6) & 0x3FE`, and TurnZ adds a quarter turn (`+0x4020`)
-before the same shift. Both are **cdecl** — the callers `add esp,8`. So the engine's
+before the same shift; the table is `round(8192 · sin(2πi / 512))` on all 512 entries, none
+within 0.0016 of a rounding tie (MEASURED 2026-10-08 against `pristine/TotalA.exe.pristine`; the
+demo recorder's unit frame carries it as a literal of that formula). Both are **cdecl** — the
+callers `add esp,8`. So the engine's
 parameterisation is `p.x = centre.x + r·sin(a)`, `p.z = centre.z + r·cos(a)`, which is the
 mirror of the usual cos/sin pair: on a round circle it is the same circle entered a quarter
 turn along, and it matters only when you want a point on it at the engine's own angle.
