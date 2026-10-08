@@ -98,6 +98,7 @@ PAGES = [
     ("scenario-format",            "JSON scenarios",              "Tooling"),
     ("tascene-design",             "tascene — browser render lab", "Tooling"),
     ("tacob-design",               "tacob — BOS/COB editor",      "Tooling"),
+    ("hud-art",                    "HUD art: painted, cut, sliced", "Tooling"),
     ("windowed-mode",              "Windowed mode",               "Tooling"),
 
     ("binary-patches",            "The core mechanism",        "Mechanism"),
@@ -290,6 +291,8 @@ code,kbd,pre,.mono{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Cons
 .doc h3{font-family:"Saira Condensed",sans-serif; font-weight:600; font-size:1.17rem; margin:1.9em 0 .4em; color:var(--ink); text-wrap:balance}
 .doc h4{font-size:.97rem; font-weight:600; margin:1.5em 0 .3em; color:var(--ink-2)}
 .doc p{margin:0 0 1.02em}
+.doc img{max-width:100%; height:auto}
+.doc a:has(>img){border-bottom:0}
 .doc a{color:var(--link); text-decoration:none; border-bottom:1px solid color-mix(in srgb,var(--link) 35%,transparent)}
 .doc a:hover{color:var(--link-hover); border-bottom-color:currentColor}
 .doc a:focus-visible{outline:2px solid var(--accent); outline-offset:2px}

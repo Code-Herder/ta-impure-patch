@@ -8291,10 +8291,25 @@ number's animation state: `0x468E83`/`0x468E90` convert the old and new values a
 asymmetry is what makes byte 0 the only one a fork may poison to force a redraw without
 fabricating a value the engine then displays.
 
-What the block draws, all through leaves the GUI observer already has: the two bar fills via
-`0x4BF6F0` (`0x46912E`, `0x4691B2`), the six numbers via `DrawTextCustomFont 0x4C14F0` ×3 — which
+What the block draws, all through leaves the GUI observer already has: four rects via `DrawBar
+0x4BF6F0`, the six numbers via `DrawTextCustomFont 0x4C14F0` ×3 — which
 reaches the hooked glyph blitter `0x4CCF60` internally — and the player's colour badge via
-`0x467C00` at `0x4690AB`. The guard above the first bar — `fcomps 0x4FD568` at `0x4690BD`, `jne 0x4691B9` at `0x4690ED`
+`0x467C00` at `0x4690AB`.
+
+The four rects [DISASSEMBLED 2026-10-07]:
+
+- **The energy fill**, at `0x46912E`. Its right edge is the bar rect's left plus its width times the
+  eased value at `[esp+0x79]` (the memo's bytes 1..4 above), over the storage `[ebp+0xa4]`.
+- **The metal fill**, at `0x469412`. The same, with `[esp+0x85]` over `[ebp+0xa8]`; that
+  `[esp+0x85]` is metal's eased value is [INFERRED] from the energy case.
+- **Their colours.** Each fill takes the side data's colour: `RaceSideData +0x222 energycolor` and
+  `+0x226 metalcolor` (`tools/tamem_ghidra.h`). `sidedata.tdf` sets them to 208 and 224, which
+  `PALETTE.PAL` holds as `#ffff00` and `#d3dbff`.
+- **A tick after each fill**, 2 px wide (`0x4691B2` energy, `0x469492` metal). It sits at a second
+  level over the same storage (`[ebp+0xe8]`, `[ebp+0xe4]`), in colour byte `[edi+0xc]`. That the
+  level is the share setting is [INFERRED].
+
+The `0x4691B2` call is the energy tick, not a fill. The guard above the first bar — `fcomps 0x4FD568` at `0x4690BD`, `jne 0x4691B9` at `0x4690ED`
 — is a divide-by-zero check on max storage, not a dirty test.
 
 #### `0x467C00` — the player's colour badge, and where its colour comes from [DISASSEMBLED 2026-09-21]
