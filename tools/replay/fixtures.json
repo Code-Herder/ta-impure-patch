@@ -141,7 +141,6 @@
    "takeover": {"player": "controlled", "checks": ["judge", "line", "fork"]}
   },
   "resource-mex": {
-   "normal_speed": true,
    "load": "resource-snapping.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
@@ -190,7 +189,6 @@
    }
   },
   "resource-upgrade": {
-   "normal_speed": true,
    "load": "resource-snapping.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
@@ -311,7 +309,6 @@
    ]
   },
   "stock-resource-mex": {
-   "normal_speed": true,
    "preflight": ["tools/cob_legacy_save_probe.py", "--preflight", "{instance}", "--gamedir", "{gamedir}", "--native-stock", "--trace"],
    "load": "resource-snapping.json",
    "sources": [
@@ -364,7 +361,6 @@
    }
   },
   "resource-queued-upgrade": {
-   "normal_speed": true,
    "load": "resource-snapping.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
@@ -413,7 +409,6 @@
    }
   },
   "resource-mixed": {
-   "normal_speed": true,
    "load": "resource-mixed.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
@@ -462,7 +457,6 @@
    "end": 2400
   },
   "resource-plain": {
-   "normal_speed": true,
    "load": "resource-plain.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
@@ -511,7 +505,6 @@
    "end": 2400
   },
   "resource-uniform": {
-   "normal_speed": true,
    "load": "resource-uniform.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
@@ -560,7 +553,6 @@
    "end": 2400
   },
   "resource-locked": {
-   "normal_speed": true,
    "load": "resource-snapping.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
@@ -613,7 +605,6 @@
    }
   },
   "resource-inherit": {
-   "normal_speed": true,
    "load": "resource-snapping.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
@@ -666,7 +657,6 @@
    }
   },
   "resource-classic": {
-   "normal_speed": true,
    "load": "resource-snapping.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
@@ -767,7 +757,6 @@
    "end": 2400
   },
   "resource-nearby": {
-   "normal_speed": true,
    "load": "resource-nearby.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
@@ -818,7 +807,6 @@
    "end": 2400
   },
   "resource-priority": {
-   "normal_speed": true,
    "load": "resource-snapping.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
@@ -867,7 +855,6 @@
    }
   },
   "resource-nozoom": {
-   "normal_speed": true,
    "load": "resource-snapping.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
@@ -919,7 +906,6 @@
    "dll": "stock"
   },
   "resource-refusals": {
-   "normal_speed": true,
    "preflight": ["tools/resource_regression.py", "{instance}", "catalogue"],
    "viewer": ["tools/resource_regression.py", "{instance}", "viewer"],
    "viewer_more": [["tools/resource_regression.py", "{instance}", "viewer", "--viewer-unit", "RSNRACK"]],
@@ -973,7 +959,6 @@
    }
   },
   "resource-frontend": {
-   "normal_speed": true,
    "load": "resource-snapping.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",

@@ -74,8 +74,9 @@ recordings' decoded blocks for every tarec call of the run (TAREC_CACHE, reccach
 Tick-driven runs default to internal game speed 20 (2x normal); --game-speed 10 selects normal
 speed. The owned instance's private settings are written while stopped, before each launch.
 Simulation tick endpoints, comparisons and wall-clock deadlines retain their existing units.
-Cost fixtures, fixtures marked `normal_speed` (input regressions whose assertions read the
-running game, validated at normal speed) and W's speed/settings UI test use normal speed;
+Cost fixtures, a fixture marked `normal_speed` (resource-geo-upgrade, whose queue comparison
+reads the running game after a Move that finishes first at speed 20) and W's speed/settings UI
+test use normal speed;
 network/timing suites have their own speed policy.
 """
 import argparse
@@ -2707,7 +2708,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="record each fixture and check it on puppets")
     r.add_argument("fixtures", nargs="+", help="fixture names, or `all`")
-    r.add_argument("-j", type=int, default=4, help="games at once (default 4)")
+    r.add_argument("-j", type=int, default=8, help="games at once (default 8)")
     r.add_argument("--dll", help="the build under test (default the tree's, its coverage twin "
                                  "with --cover)")
     r.add_argument("--stock-dll", help="the stock-limits build, for a fixture that names it")
@@ -2721,7 +2722,7 @@ def main(argv=None):
     m = sub.add_parser("measure", help="scenarios recorded and played on the coverage builds: "
                                        "the functions each reaches")
     m.add_argument("scenarios", nargs="+", help="fixture names, or scenario names in scenarios/")
-    m.add_argument("-j", type=int, default=4, help="games at once (default 4)")
+    m.add_argument("-j", type=int, default=8, help="games at once (default 8)")
     m.add_argument("--end", type=int, default=1800, help="GameTime each is recorded to")
     m.add_argument("--out", help="the run's folder")
     m.set_defaults(func=cmd_measure, dll=None, stock_dll=None, keep=True)
@@ -2730,13 +2731,13 @@ def main(argv=None):
     la.add_argument("--base", default="main", help="the branch the landing goes to")
     la.add_argument("--check", action="store_true",
                     help="exit 0 when a passing replay-roundtrip note covers HEAD")
-    la.add_argument("-j", type=int, default=4, help="games at once (default 4)")
+    la.add_argument("-j", type=int, default=8, help="games at once (default 8)")
     la.add_argument("--keep", action="store_true", help="keep the passing dumps")
     la.add_argument("--out", help="the run's folder")
     la.set_defaults(func=cmd_landing, dll=None, stock_dll=None)
     br = sub.add_parser("broad", help="the broad tier: every fixture, and what none exercised")
     br.add_argument("--release", metavar="DLL", help="this release DLL, without reach")
-    br.add_argument("-j", type=int, default=4, help="games at once (default 4)")
+    br.add_argument("-j", type=int, default=8, help="games at once (default 8)")
     br.add_argument("--out", help="the run's folder")
     br.set_defaults(func=cmd_broad, dll=None, stock_dll=None)
     tk = sub.add_parser("takeover", help="L, K and F alone: a fixture recorded, taken over, and "
@@ -2769,8 +2770,8 @@ def main(argv=None):
                             help="internal TA speed: 20 = 2x (default), 10 = normal; cost "
                                  "fixtures and W's speed UI test use 10")
     a = ap.parse_args(argv)
-    if a.cmd in ("run", "measure", "landing", "broad", "takeover") and not 1 <= a.j <= 9:
-        ap.error("-j is 1..9")
+    if a.cmd in ("run", "measure", "landing", "broad", "takeover") and not 1 <= a.j <= 16:
+        ap.error("-j is 1..16")
     # the subcommands that read recordings need numpy and zstandard (tarec.py through
     # reccodec.py); `features` and `list` run under the build's bare python3, and so does
     # `landing --check`, which reads git notes only
