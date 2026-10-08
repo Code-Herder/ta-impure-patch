@@ -566,6 +566,12 @@ composed image is cached by size.
 
 A painting taller than its slot therefore still fits its digits.
 
+**A part laid over the mapped recesses lays out its children from its own drawn size.** The hover
+strip covers a row's resource recesses, so its size comes out of the mapping: 134.3 × 19.4 units at
+a row 27 units tall. It spaces its three buttons with one 2.5-unit margin on every side and between
+them. Buttons placed for a fixed 141 × 22 strip ended 0.3 units from its right and bottom edges, and
+8 and 3.5 units from its left and top edges.
+
 **A tiled fill** (`tileCompose`) is drawn into one canvas as well:
 
 - **Scaled with its neighbours.** The tile is scaled to the drawn height inside a strip of three
