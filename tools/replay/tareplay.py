@@ -81,6 +81,17 @@ Cost fixtures, a fixture marked `normal_speed` (resource-geo-upgrade, whose queu
 reads the running game after a Move that finishes first at speed 20) and W's speed/settings UI
 test use normal speed;
 network/timing suites have their own speed policy.
+
+--turbo K (default 1, 0 for none) is the DLL's test-only pacing (tagpu_replay.c, THE TURBO): K
+ticks every frame from the trigger's `turbo on`, which a lane sends once its dumps and round
+trips are armed and acknowledged; before that the level runs at the game speed above. K = 1 is
+the batch a player at normal speed gets: the step's once-a-batch tail makes the batching part of
+the result, and a fixed K makes it the same on every run. It runs
+on P, R and F, and on L when no step drives the game (keys, run, type, order or apply), which
+the wall clock would otherwise place; never on Q, K, W, X or U, nor on a cost or `normal_speed`
+fixture (turbo_lane). Every game gets the test render profile (TEST_RENDER): a present cap,
+supersampling 1x and the Classic++ look keys off; the engine's own draw and its shadow switch
+stay as a player has them.
 """
 import argparse
 import atexit
@@ -131,6 +142,13 @@ PREFIX = "tareplay-"
 UNIT_LIMIT = 500
 TEST_GAME_SPEED = 20
 NORMAL_GAME_SPEED = 10
+TURBO = 1                       # the k --turbo defaults to: normal speed's batch, every frame
+INPUT_STEPS = {"keys", "run", "type", "order", "apply"}     # steps the wall clock would place
+# THE TEST RENDER PROFILE: no check reads a pixel, so a test game presents at PRESENT_CAP frames a
+# second (fps_limiter.c, test_present_cap) and draws without supersampling or the Classic++ look
+# keys (tagpu_settings.h); `shadows`, the engine's own switch, is left as a player has it
+TEST_RENDER = {"style": "custom", "assets": "0", "light": "0", "shadowres": "512", "ss": "1"}
+PRESENT_CAP = 20
 GAMETIME = "*0x511DE8+0x38A47:4"
 COB_STOP = "A unit script cannot continue safely"
 TRIGGER = "tagpu_replay.trigger"
@@ -150,6 +168,7 @@ TAKEOVER_CHECKS = {
     "victory": "timeline 1 ends complete with P's seat won, within TAKEOVER_SPAN of T",
 }
 CONTINUE = 300                  # the dump after a round trip, this many ticks on
+TWIN_AFTER = 30                 # a paced L lane's twin, paused this many ticks after Tlast
 NULL_VIEWS = tuple(f"lnv{i}" for i in range(12)) + ("lnselection",)
 LAUNCH_TIMEOUT = 400
 
@@ -271,6 +290,18 @@ def fixture_speed(fix, default):
     return NORMAL_GAME_SPEED if fix.get("cost") or fix.get("normal_speed") else default
 
 
+def turbo_lane(fix, proc, k):
+    """A lane's turbo k, 0 for none: P, R and F, and L when no step is one the wall clock would
+    place; never a cost or `normal_speed` fixture."""
+    if not k or fix.get("cost") or fix.get("normal_speed"):
+        return 0
+    if proc in "PRF":
+        return k
+    if proc == "L" and not any(st[1] in INPUT_STEPS for st in fix.get("steps", [])):
+        return k
+    return 0
+
+
 class Worker:
     """One tacli instance on one Xvfb, for the whole run."""
 
@@ -278,6 +309,7 @@ class Worker:
         if game_speed not in (NORMAL_GAME_SPEED, TEST_GAME_SPEED):
             raise CouldNotRun("test game speed must be 10 or 20")
         self.game_speed = game_speed
+        self.turbo = 0
         self.lock = None
         self.last_collection = None
         for k in range(1, 100):
@@ -389,7 +421,14 @@ class Worker:
         rows = json.loads(text[text.index("{"):])["values"]
         if len(rows) != 1 or rows[0]["value"] != speed or rows[0]["type"] != 4:
             raise CouldNotRun(f"test game speed was not stored as a dword: {last(text)}")
-        say(f"{self.name}: game speed {speed} ({speed / NORMAL_GAME_SPEED:g}x target)")
+        say(f"{self.name}: game speed {speed} ({speed / NORMAL_GAME_SPEED:g}x target)"
+            + (f", turbo k={self.turbo}" if self.turbo else ""))
+        turbo = self.gamedir / "tagpu_turbo.on"
+        if self.turbo:
+            turbo.write_text(f"{self.turbo}\n")
+        else:
+            turbo.unlink(missing_ok=True)
+        self.test_render()
         shutil.copy2(dll, self.gamedir / "ddraw.dll")
         rd = self.gamedir / "replays"
         for f in rd.glob("*") if rd.is_dir() else []:
@@ -408,6 +447,15 @@ class Worker:
             r = subprocess.run(argv, capture_output=True, text=True, timeout=300)
             if r.returncode:
                 raise CouldNotRun(f"content {' '.join(content['run'])}: {last(r.stdout + r.stderr)}")
+
+    def test_render(self):
+        """The test render profile (TEST_RENDER) in the instance's store, every other line kept,
+        and the present cap's lever."""
+        store = self.gamedir / "impure.cfg"
+        lines = store.read_text().splitlines() if store.exists() else []
+        keep = [ln for ln in lines if ln.partition("=")[0].strip().lower() not in TEST_RENDER]
+        store.write_text("\n".join(keep + [f"{k}={v}" for k, v in TEST_RENDER.items()]) + "\n")
+        (self.gamedir / "tagpu_presentcap.on").write_text(f"{PRESENT_CAP}\n")
 
     def gametime(self):
         rc, o = tacli("peek", self.name, GAMETIME, "--json", timeout=60)
@@ -578,6 +626,35 @@ def arm(w, log, line, ok_rx, bad_rx, what):
         raise CouldNotRun(f"{what}: {got.strip() if got else 'no answer in 30 s'}")
 
 
+def turbo_engage(w, log):
+    """With a turbo lane's k, `turbo on` -- after the launch acknowledged that k (tagpu_replay.c,
+    THE TURBO) and after the lane's own arms, so no armed GameTime passes before its answer."""
+    if not w.turbo:
+        return
+    got = log.wait(r"turbo: (k=\d+ (at 0x49692D|UNAVAILABLE)|tagpu_turbo\.on refused.*)", 30, 0)
+    if not got or f"turbo: k={w.turbo} at 0x49692D" not in got:
+        raise CouldNotRun(f"turbo k={w.turbo}: "
+                          + (got.strip() if got else "the launch did not acknowledge its k"))
+    arm(w, log, "turbo on", rf"turbo: on at GameTime \d+ \(k={w.turbo}\)", r"turbo: on refused",
+        "turbo on")
+
+
+def pause_at(w, log, T):
+    """The game paused at the frame visit after step T (tagpu_replay.c, THE PAUSE AT T)."""
+    arm(w, log, f"pause at {T}", rf"pause: armed for GameTime {T}", rf"pause: at {T} refused",
+        f"pause at {T}")
+
+
+def wait_paused(log, T, timeout):
+    got = log.wait(rf"pause: (paused at GameTime {T}|at {T} not taken.*)", timeout)
+    if not got or "paused at" not in got:
+        raise CouldNotRun(f"pause at {T}: {got.strip() if got else f'not reached in {timeout:.0f} s'}")
+
+
+def resume(w, log):
+    arm(w, log, "resume", r"pause: resumed at GameTime \d+", r"pause: resume refused", "resume")
+
+
 def arm_dump(w, log, name, T):
     arm(w, log, f"dump {name} at {T}", rf"recorder: dump {name} armed for GameTime {T}",
         rf"recorder: dump(:| {name}) .*(refused|please|not letters)", f"dump {name} at {T}")
@@ -655,14 +732,16 @@ def step(w, kind, arg):
         raise CouldNotRun(f"a step of kind {kind!r}")
 
 
-def twin(w, log, fix):
-    """The null twin (tarec images-gate): the live game paused, frame dump ln1; then what the
+def twin(w, log, fix, held=False):
+    """The null twin (tarec images-gate): the live game paused (`held`: by the lane's pause at
+    a GameTime, already), frame dump ln1; then what the
     viewer does without changing the game -- the arrow keys a second each way, one wheel notch in
     and out at the map's centre, the cursor over the map and over the panel, the in-game menu
     (Tab) opened -- and frame dump ln2. GameTime must not move between them; the menu's OK then
     closes it and the game runs on."""
-    tacli("keys", w.name, "pause")
-    nap(1.5)
+    if not held:
+        tacli("keys", w.name, "pause")
+        nap(1.5)
     g1 = w.gametime()
     nap(1.0)
     if w.gametime() != g1:
@@ -792,6 +871,51 @@ def live(w, fx, Ts, out):
     names = [f"l{Ts[0]}", f"l{Ts[-1]}"] if Ts else []
     for name, T in zip(names, (Ts[0], Ts[-1]) if Ts else ()):
         arm_dump(w, log, name, T)
+    if w.turbo:
+        paced_live(w, fx, log, Ts, names)
+    else:
+        polled_live(w, fx, log, Ts, names)
+    if fx["cover"]:
+        cover_ask(w, log, "L")
+    n = len(log.lines)
+    rc, o = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
+    if rc:
+        raise CouldNotRun(f"apply {END_SCENARIO.name}: {last(o)}")
+    if w.turbo:
+        resume(w, log)
+    for rx in (r"recorder: ended after", r"recorder: writer: .* closed"):
+        if not log.wait(rx, 180, n):
+            raise CouldNotRun(f"the recording did not close ({rx})")
+    wait_dumps(log, names, 5)
+    w.collect(out, recordings=True)
+    w.stop()
+    recs = sorted(out.glob("*.imprec"))
+    if not recs:
+        raise CouldNotRun("no .imprec in the live run's replays folder")
+    rec = out / f"{fx['name']}.imprec"
+    recs[-1].rename(rec)
+    return rec
+
+
+def paced_live(w, fx, log, Ts, names):
+    """A turbo L lane, which no step drives: paused at Tlast + TWIN_AFTER for the twin and at the
+    fixture's end for the end scenario, each at its GameTime exactly -- at turbo rates a poll of
+    the clock would land thousands of ticks late."""
+    fix = fx["fix"]
+    tw = Ts[-1] + TWIN_AFTER
+    pause_at(w, log, tw)
+    turbo_engage(w, log)
+    wait_paused(log, tw, 120 + 4 * tw / 30)
+    wait_dumps(log, names[1:], 30)
+    pause_at(w, log, fix["end"])
+    twin(w, log, fix, held=True)
+    wait_paused(log, fix["end"], 120 + 4 * (fix["end"] - tw) / 30)
+
+
+def polled_live(w, fx, log, Ts, names):
+    """An L lane at the game's own pace: its steps, the twin and the end each where a poll of
+    GameTime first finds the level past them."""
+    fix = fx["fix"]
     steps = sorted(fix.get("steps", []), key=lambda s: s[0])
     twinned = False
     # a frozen game or a level that ends early stops here: four times the end's real time
@@ -813,24 +937,6 @@ def live(w, fx, Ts, out):
         log.read()
         log.alive()
         nap(0.5)
-    if fx["cover"]:
-        cover_ask(w, log, "L")
-    n = len(log.lines)
-    rc, o = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
-    if rc:
-        raise CouldNotRun(f"apply {END_SCENARIO.name}: {last(o)}")
-    for rx in (r"recorder: ended after", r"recorder: writer: .* closed"):
-        if not log.wait(rx, 180, n):
-            raise CouldNotRun(f"the recording did not close ({rx})")
-    wait_dumps(log, names, 5)
-    w.collect(out, recordings=True)
-    w.stop()
-    recs = sorted(out.glob("*.imprec"))
-    if not recs:
-        raise CouldNotRun("no .imprec in the live run's replays folder")
-    rec = out / f"{fx['name']}.imprec"
-    recs[-1].rename(rec)
-    return rec
 
 
 def play(w, fx, rec, out, proc, arms, dumps, roundtrips=()):
@@ -847,6 +953,7 @@ def play(w, fx, rec, out, proc, arms, dumps, roundtrips=()):
     for name, T in roundtrips:
         arm(w, log, f"roundtrip {name} at {T}", rf"round trip {name} armed for GameTime {T}",
             rf"round trip {name}( at {T})? refused", f"roundtrip {name} at {T}")
+    turbo_engage(w, log)
     lines = {}
     for name, T in roundtrips:
         got = log.wait(rf"round trip {name} at {T}(: | not run)", 900)
@@ -1061,6 +1168,7 @@ def takeover_f(w, fx, out):
         w.stop()
         raise CouldNotRun(f"replay seek {T - TAKEOVER_BACK} --timeline {tl}: {last(o)}")
     arm_dump(w, log, f"f{at}", at)
+    turbo_engage(w, log)
     wait_dumps(log, [f"f{at}"], 600)
     if fx["cover"]:
         cover_ask(w, log, "F")
@@ -2147,6 +2255,7 @@ class Run:
         self.measure = measure
         self.keep = bool(getattr(args, "keep", False))
         self.game_speed = getattr(args, "game_speed", TEST_GAME_SPEED)
+        self.turbo = getattr(args, "turbo", 0)
         h = head()
         fixes = fixes or fixtures()
         for name in names:
@@ -2172,6 +2281,8 @@ class Run:
                              "problems": [], "rt": {}, "passed": [], "held": [],
                              "procs": {}, "cover": cover, "measure": measure,
                              "game_speed": fixture_speed(fix, self.game_speed),
+                             "turbo": [(p, turbo_lane(fix, p, self.turbo)) for p in want
+                                       if turbo_lane(fix, p, self.turbo)],
                              "map": dll.with_suffix(".map"), "want": want,
                              "tk_ask": takeover or (None, None)}
             if measure:
@@ -2217,6 +2328,7 @@ class Run:
         try:
             stopping()
             w.game_speed = NORMAL_GAME_SPEED if proc == "W" else self.game_speed
+            w.turbo = turbo_lane(fx["fix"], proc, self.turbo)
             if proc == "L":
                 cost = bool(fx["fix"].get("cost"))
                 fx["rec"] = live(w, fx, None if fx["measure"] or cost else Ts, out)
@@ -2330,7 +2442,10 @@ def fixture_report(fx, keep):
     lines = [f"== {fx['name']}: " + ("the cost game" if cost else
                                       f"T {' '.join(map(str, fx['Ts']))}") +
              f"; game speed {fx['game_speed']} ({fx['game_speed'] / NORMAL_GAME_SPEED:g}x "
-             f"target; W uses 10); {fx['out']}"]
+             f"target; W uses 10); "
+             + (f"turbo={fx['turbo'][0][1]} on {' '.join(p for p, _ in fx['turbo'])}; "
+                if fx["turbo"] else "turbo=0; ")
+             + f"{fx['out']}"]
     for proc, kind, why in fx["problems"]:
         lines.append(f"   {proc} {kind.upper()}: {why}")
         failed |= kind == "FAILED"
@@ -2753,8 +2868,8 @@ def cmd_landing(args):
         feats = sorted({f for f, _ in funcs.values()} | set(regions))
         note = (f"{NOTE} dll={dll} range={base}..{sha} features={','.join(feats) or '-'} "
                 f"fixtures={','.join(sorted(fx)) or '-'} seeds={seeds.replace(' ', ',') or '-'} "
-                f"reached={k}/{total} game_speed={args.game_speed} result=pass "
-                f"date={datetime.date.today().isoformat()}")
+                f"reached={k}/{total} game_speed={args.game_speed} turbo={args.turbo} "
+                f"result=pass date={datetime.date.today().isoformat()}")
         git("notes", "append", "-m", note, graded)
         print(f"tareplay landing: pass, noted on {sha}: {note}")
         return 0
@@ -3016,6 +3131,10 @@ def main(argv=None):
         parser.add_argument("--game-speed", type=int, choices=(10, 20), default=TEST_GAME_SPEED,
                             help="internal TA speed: 20 = 2x (default), 10 = normal; cost "
                                  "fixtures and W's speed UI test use 10")
+    for parser in (r, la, br, tk):
+        parser.add_argument("--turbo", type=int, choices=range(6), default=TURBO, metavar="K",
+                            help=f"ticks a frame on the turbo lanes once armed, 1..5, 0 for none "
+                                 f"(default {TURBO}; tagpu_replay.c, THE TURBO)")
     a = ap.parse_args(argv)
     if a.cmd in ("run", "measure", "landing", "broad", "takeover") and not 1 <= a.j <= 16:
         ap.error("-j is 1..16")

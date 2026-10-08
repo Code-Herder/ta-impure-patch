@@ -8,6 +8,9 @@
 #include "utils.h"
 #include "tagpu_log.h"
 #include "tagpu_settings.h"
+#include "tagpu_regstore.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 
 FPSLIMITER g_fpsl;
@@ -33,8 +36,36 @@ static int paced_state(HMONITOR* mon)
     return vsync;
 }
 
+/* tagpu: a test launch's present cap, the test render profile's (tagpu_presentcap.on, its text
+   the frames a second, 1 to 60), or 0. A test game is graded on the state it records, never on
+   the picture, so presents it does not need are render-thread and GPU time eight games share.
+   Only the present is capped: the game thread skips a packet the render thread has not taken
+   rather than wait for it, and forces one at the roster's cadence (tagpu_packet_pub.c, the FRESH
+   gate), and the UI's queue waits 250 ms on an idle consumer before it calls it stalled
+   (tagpu_gui_int.h, TAGPU_GUI_STALL_MS), so the cap stays well under that period. Honoured
+   only in a test launch (tagpu_regstore.h): a player's game is never capped by a stray file. */
+static int test_present_cap(void)
+{
+    char b[16] = { 0 }, *end;
+    long hz;
+    FILE* f;
+    if (!tagpu_regstore_active() || !(f = fopen("tagpu_presentcap.on", "rb")))
+        return 0;
+    fread(b, 1, sizeof b - 1, f);
+    fclose(f);
+    hz = strtol(b, &end, 10);
+    while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') end++;
+    if (end == b || *end || hz < 1 || hz > 60) {
+        tagpu_logf("frame cap: tagpu_presentcap.on refused: \"%s\" is not 1 to 60 frames a "
+                   "second", b);
+        return 0;
+    }
+    return (int)hz;
+}
+
 void fpsl_init()
 {
+    int test_cap;
     int max_fps = 0;
 
     /* tagpu: the request is cleared BEFORE anything is read, so one made while
@@ -83,6 +114,13 @@ void fpsl_init()
             tagpu_logf("frame cap: vsync on, a %d fps backstop over an assumed 60 Hz "
                        "(the monitor's rate cannot be read)", max_fps);
         }
+    }
+
+    test_cap = test_present_cap();
+    if (test_cap && (!max_fps || test_cap < max_fps))
+    {
+        max_fps = test_cap;
+        tagpu_logf("frame cap: a test launch's %d fps present cap (tagpu_presentcap.on)", max_fps);
     }
 
     if (max_fps > 0)

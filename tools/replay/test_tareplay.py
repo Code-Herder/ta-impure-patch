@@ -118,11 +118,24 @@ class CompletionCheckpoints(unittest.TestCase):
                          tareplay.gametimes("battle", 2400, "revision", last_min=None))
 
 
+class TurboLanes(unittest.TestCase):
+    def test_the_rule(self):
+        fx = tareplay.fixtures()
+        lanes = {n: "".join(p for p in "LPRQKFWXU" if tareplay.turbo_lane(fx[n], p, 2))
+                 for n in ("c3-veterancy", "secondary-orders", "battle", "tenseat",
+                           "resource-geo-upgrade", "wpn-badtgt")}
+        self.assertEqual(lanes, {"c3-veterancy": "LPRF", "secondary-orders": "PRF",
+                                 "battle": "PRF", "tenseat": "PRF", "resource-geo-upgrade": "",
+                                 "wpn-badtgt": "LPRF"})
+        self.assertEqual(tareplay.turbo_lane(fx["c3-veterancy"], "P", 0), 0)
+
+
 class FailedWorkerCleanup(unittest.TestCase):
     def test_failed_game_is_stopped_even_if_artifact_collection_fails(self):
         run = tareplay.Run.__new__(tareplay.Run)
         run.game_speed = tareplay.TEST_GAME_SPEED
-        run.fx = {"naval": {"Ts": [1], "out": Path("unused"), "rec": Path("rec"),
+        run.turbo = tareplay.TURBO
+        run.fx = {"naval": {"fix": {}, "Ts": [1], "out": Path("unused"), "rec": Path("rec"),
                             "procs": {}, "problems": []}}
         worker = Mock(name="worker")
         worker.name = "owned"
@@ -136,7 +149,8 @@ class FailedWorkerCleanup(unittest.TestCase):
     def test_worker_is_retired_if_failed_game_cannot_be_stopped(self):
         run = tareplay.Run.__new__(tareplay.Run)
         run.game_speed = tareplay.TEST_GAME_SPEED
-        run.fx = {"naval": {"Ts": [1], "out": Path("unused"), "rec": Path("rec"),
+        run.turbo = tareplay.TURBO
+        run.fx = {"naval": {"fix": {}, "Ts": [1], "out": Path("unused"), "rec": Path("rec"),
                             "procs": {}, "problems": []}}
         worker = Mock(name="worker")
         worker.name = "owned"
