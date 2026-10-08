@@ -911,15 +911,18 @@ def entries(payload):
 Block = namedtuple("Block", "ordinal offset kind flags first last raw packed payload")
 
 
-def iter_blocks(path, decode=True, rest=True, before_stream=None):
+def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None):
     """Every complete block of a recording of format 8, in order: Block(ordinal (from 1), offset,
     kind, flags, first, last, raw, packed, payload) with a stream block's payload its records.
     With decode=False, stream, snapshot and minimap payloads are None. Returns (as a generator's
     value) why the reading stopped short, or None at a clean end; raises Unreadable at a block it
     refuses. `before_stream(ordinal, flags, bytes, frame)` sees each stream block's unpacked bytes
-    and the frame it is about to be decoded with (the codec's differential test)."""
-    with open(path, "rb") as f:
-        data = f.read()
+    and the frame it is about to be decoded with (the codec's differential test). `data` is the
+    file's bytes when the caller has read them already (reccache.py hashes the very bytes it
+    decodes); `path` then names them in the messages."""
+    if data is None:
+        with open(path, "rb") as f:
+            data = f.read()
     if data[:8] != tarec.REC_MAGIC:
         raise Unreadable(f"{path}: not a recording")
     at, ordinal, frame, root_slots = 8, 0, None, None

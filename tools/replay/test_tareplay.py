@@ -25,6 +25,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import tafeat  # noqa: E402
+import reccache  # noqa: E402
 import tarec  # noqa: E402
 import tareplay  # noqa: E402
 import tarewind  # noqa: E402
@@ -688,6 +689,99 @@ class Segments(unittest.TestCase):
             with self.assertRaises(tarec.Unreadable):
                 self.segs(path)
 
+
+class DecodeCache(unittest.TestCase):
+    """reccache.py under tarec.blocks(): a hit returns what the walk returned without walking; a
+    changed file byte or decoder version misses, and an entry that is cut short or corrupt is
+    ignored and written again."""
+
+    TORN = block(tarec.RB_STREAM, 7, 7, b"x" * 8)[:20]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.cache = self.dir / "cache"
+        self.codec = tarec._codec()
+        env = patch.dict("os.environ", {reccache.ENV: str(self.cache)})
+        env.start()
+        self.addCleanup(env.stop)
+        self.addCleanup(self.tmp.cleanup)
+
+    def file(self, name, unit=1):
+        p = self.dir / name
+        p.write_bytes(tarec.REC_MAGIC + header() + stream(1, 3, unit=unit) +
+                      stream(4, 6, opens=False) + end_block(6) + self.TORN)
+        return p
+
+    def read(self, path):
+        """(tarec.blocks' four lists and stop, whether the codec walked the file)."""
+        sizes, offsets, flags = [], [], []
+        with patch.object(self.codec, "iter_blocks", wraps=self.codec.iter_blocks) as walk:
+            out, stop = tarec.blocks(path, sizes, offsets, flags)
+        return (out, sizes, offsets, flags, stop), walk.called
+
+    def entries(self):
+        return sorted(self.cache.glob("*.dec"))
+
+    def test_a_hit_is_what_the_walk_returned(self):
+        path = self.file("r.imprec")
+        cold, walked = self.read(path)
+        self.assertTrue(walked)
+        self.assertIn("cut short", cold[-1])
+        self.assertEqual(len(self.entries()), 1)
+        warm, walked = self.read(path)
+        self.assertFalse(walked)
+        self.assertEqual(warm, cold)
+        with patch.dict("os.environ", {reccache.ENV: ""}):
+            self.assertEqual(self.read(path), (cold, True))
+        self.assertEqual(list(self.cache.iterdir()), self.entries())   # no temporary file left
+
+    def test_a_changed_byte_misses(self):
+        a, b = self.file("a.imprec", unit=1), self.file("b.imprec", unit=2)
+        self.assertEqual(len(a.read_bytes()), len(b.read_bytes()))
+        want_a, _ = self.read(a)
+        got_b, walked = self.read(b)
+        self.assertTrue(walked)
+        self.assertNotEqual(got_b, want_a)
+        self.assertEqual(len(self.entries()), 2)
+        self.assertEqual(self.read(a), (want_a, False))
+
+    def test_a_changed_version_misses_and_rewrites(self):
+        path = self.file("r.imprec")
+        want, _ = self.read(path)
+        entry, = self.entries()
+        with patch.object(reccache, "_version", bytes(32)):
+            self.assertEqual(self.read(path), (want, True))
+            self.assertEqual(entry.read_bytes()[8:40], bytes(32))
+            self.assertEqual(self.read(path), (want, False))
+        self.assertEqual(self.read(path), (want, True))
+
+    def test_a_corrupt_entry_is_ignored_and_rewritten(self):
+        path = self.file("r.imprec")
+        want, _ = self.read(path)
+        entry, = self.entries()
+        good = entry.read_bytes()
+        mid = 72 + (len(good) - 72) // 2
+        import zstandard        # here: the module's imports run before devpy.ensure() re-executes
+        content = zstandard.ZstdDecompressor().stream_reader(good[72:]).read()
+        e = len(content) - 32 - len(want[-1].encode()) - 5       # the end record's "E"
+
+        def repacked(c):        # a sound zstd frame around content its own digest refuses
+            return good[:72] + zstandard.ZstdCompressor(write_checksum=True).compress(c)
+        k = content.index(tlv(tarec.RK_TICK, struct.pack("<I", 1))) + 4   # the first tick's value
+        for why, bad in (("empty", b""), ("cut short", good[:mid]), ("its prefix", b"x" + good[1:]),
+                         ("a packed byte", good[:mid] + bytes([good[mid] ^ 0x40]) + good[mid + 1:]),
+                         ("its frame's tail", good[:-4] + bytes(4)),
+                         ("a payload byte", repacked(content[:k] + b"\x02" + content[k + 1:])),
+                         ("its digest", repacked(content[:-1] + bytes([content[-1] ^ 1]))),
+                         ("a byte after its end", repacked(content + b"B")),
+                         ("a length past its end",
+                          repacked(content[:e + 1] + b"\xff\xff\xff\x7f" + content[e + 5:]))):
+            with self.subTest(why=why):
+                entry.write_bytes(bad)
+                self.assertEqual(self.read(path), (want, True))
+                self.assertEqual(entry.read_bytes(), good)
+                self.assertEqual(self.read(path), (want, False))
 
 
 def pov(player=0, cam=(100, 200), zoom=65536, flags=tarec.REC_POV_WORLD, every=3):

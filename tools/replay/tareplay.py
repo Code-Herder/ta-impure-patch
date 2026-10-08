@@ -68,7 +68,8 @@ wait, and every worker stops its instance and its Xvfb. Exit 0: every check pass
 failure; 2: something could not run (and nothing failed by name).
 
 The output folder (default ~/.local/share/ta-replay/runs/<time>, or $TAREPLAY_OUT) is outside the
-repository: its logs carry absolute paths.
+repository: its logs carry absolute paths. While the run lasts its tarec-cache/ folder holds the
+recordings' decoded blocks for every tarec call of the run (TAREC_CACHE, reccache.py).
 
 Tick-driven runs default to internal game speed 20 (2x normal); --game-speed 10 selects normal
 speed. The owned instance's private settings are written while stopped, before each launch.
@@ -78,6 +79,7 @@ running game, validated at normal speed) and W's speed/settings UI test use norm
 network/timing suites have their own speed policy.
 """
 import argparse
+import atexit
 import fcntl
 import datetime
 import hashlib
@@ -110,6 +112,7 @@ sys.path.insert(0, str(TREE / "tools"))
 import talog  # noqa: E402
 sys.path.insert(0, str(HERE))
 import tarec  # noqa: E402
+import reccache  # noqa: E402
 import tafeat  # noqa: E402
 
 # Load once before workers start; reuse tacli's own prefix-based process identity check.
@@ -2168,6 +2171,11 @@ def out_dir(args):
     out = Path(args.out) if args.out else base / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out = out.resolve()
     out.mkdir(parents=True, exist_ok=True)
+    # every tarec this run starts, in this process or a child, shares one decode cache, which no
+    # other run reads and which goes when the run does (reccache.py)
+    cache = out / "tarec-cache"
+    os.environ[reccache.ENV] = str(cache)
+    atexit.register(shutil.rmtree, cache, ignore_errors=True)
     return out
 
 

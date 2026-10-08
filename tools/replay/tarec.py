@@ -103,6 +103,9 @@ Needs numpy and zstandard, imported (through reccodec.py) only by the functions 
 file's blocks: main() re-executes under the shared venv when they are missing (devpy.py), and the
 build's `tareplay.py features --check` imports this file under a bare python3. header_only reads
 the stored header with the standard library alone.
+
+TAREC_CACHE=DIR keeps each recording's decoded blocks in DIR, keyed by the file's bytes and the
+decoder's sources, so a second command on the same file does not decode it again (reccache.py).
 """
 import os
 import re
@@ -110,6 +113,7 @@ import struct
 import sys
 import zlib
 from pathlib import Path
+import reccache
 from recmp_file import Contributions, Seats, History
 
 REC_FORMAT = 8                            # zstd blocks and the sectioned stream
@@ -255,14 +259,13 @@ def blocks(path, sizes=None, offsets=None, flags=None, decode=True):
     and why the reading stopped (None at a clean end of the file); with `sizes`, (kind, first,
     last, raw, packed) of each block appended to it (raw the block header's: a sectioned block's
     container), with `offsets` its bytes [start, end) in the file and with `flags` its flags. With
-    decode=False the stream, snapshot and minimap payloads are None and nothing is decoded."""
-    walk = _codec().iter_blocks(path, decode=decode)
+    decode=False the stream, snapshot and minimap payloads are None and nothing is decoded. A
+    decoding walk is read from TAREC_CACHE's entry for the file when there is one (reccache.py)."""
+    codec = _codec()
+    walked, stop = (reccache.walk(path, codec) if decode else
+                    reccache.collect(codec.iter_blocks(path, decode=False)))
     out = []
-    while True:
-        try:
-            b = next(walk)
-        except StopIteration as stop:
-            return out, stop.value
+    for b in walked:
         out.append((b.kind, b.first, b.last, b.payload))
         if sizes is not None:
             sizes.append((b.kind, b.first, b.last, b.raw, b.packed))
@@ -270,6 +273,7 @@ def blocks(path, sizes=None, offsets=None, flags=None, decode=True):
             offsets.append((b.offset, b.offset + 32 + b.packed))
         if flags is not None:
             flags.append(b.flags)
+    return out, stop
 
 
 def header_only(path):
