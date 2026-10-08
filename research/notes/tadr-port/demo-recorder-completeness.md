@@ -458,6 +458,33 @@ the `main+0x531` GUI pointer, which `replay-globals.tsv` now leaves with the vie
 near 60 ticks/s at 20 and 30 ticks/s at 10; startup, pauses and comparison work
 prevent inferring a whole-harness speedup from these runs.
 
+**Games and checks.** `-j` (default 8, at most 16) is the number of games at once: each worker
+plays one lane at a time. A free worker takes the queued lane first in the order X, U, K, L, W, R,
+P, F, Q — the forks, rewind and takeover lanes are the longest chains and cannot start before
+their fixture's L — and the L lanes are queued fixtures with those lanes first, then the longer
+games. Every check runs beside the games on an offline pool (the cores less two per game, no more
+processes than GiB available, at nice 10 so that the games' timed checks measure the game): a
+fixture's checks start the moment its last lane ends, and the forks and rewind lanes hand their
+file checks over and go on to their next game. A check handed over reads only files no later step
+writes — a copy, where the forks lane goes on to change its file. Results are read back in the
+order they were asked for, and the first failure in that order is the one reported, before any
+failure the lane met later, so the summary lists the same checks in the same order with the same
+verdicts as running each in its place. The decode cache keeps a file per segment
+(`reccache.py`), so a file a takeover appended to decodes only its new segment. Launching a game
+reads which other instances are running from one process listing (`tools/tacli`, `place_window`):
+a `pgrep` per instance folder took 16.8 s at every launch with 506 folders.
+
+MEASURED 2026-10-08 on the reference setup, `--cover`, the gate's seeds. Before, the landing gate
+at `-j 12` (39 fixtures) took 52 min: 31 min of games, then 20.5 min of checks in one thread after
+the last game (battle's alone 285 s), with battle's X lane 1278 s — each of its nine file checks
+re-decoded the whole file (24 s) and checked each live timeline in turn — and its X, U and K lanes
+queued behind every fixture's L for 7 min. After, alone at `-j 8`: battle 10.5 min end to end (X
+262 s, U 427 s, its checks 67 s after its last lane), stock-limits and tenseat together 8.5 min
+(X 230 and 227 s, U 409 s; a P, R or Q lane 25–35 s shorter, the launch's wait), every check's
+name, order and verdict the same as the gate's. The whole gate at `-j 8` projects to about
+21 min from those lane times (a simulation of the queue, which reproduces the 31 min of games
+from the gate's own lane times) [INFERRED until the next landing runs it].
+
 **Live rewind (U).** A fixture with `"rewind": true` also runs the
 [rewind L/P/Q checks](demo-recorder-s4-rewind.md) in `tarewind.py`. Battle and
 stock-limits use the battle on their respective DLLs. `rewind_steps` declares

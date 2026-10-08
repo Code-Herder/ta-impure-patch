@@ -497,9 +497,13 @@ to 900 reads from the segment's first iteration, there being no snapshot before 
   decision).
 - **Python.** Decoding a recording in Python takes about 28 s for the large battles, within the 30 s
   the plan allowed, and the replay gate runs `tarec.py` many times a fixture: `TAREC_CACHE=DIR`
-  (`tools/replay/reccache.py`) keeps a recording's decoded blocks keyed by the SHA-256 of its bytes
-  and of the decoder's sources, `tareplay.py` sets it for each run, and with the cache warm `tarec.py
-  info` on Town & Country takes 2.0 s.
+  (`tools/replay/reccache.py`) keeps a recording's decoded blocks, one piece per segment keyed by
+  the SHA-256 of the file's bytes to the piece's end and of the decoder's sources, `tareplay.py`
+  sets it for each run, and with the cache warm `tarec.py info` on Town & Country takes 2.0 s. A
+  segment starts a new unit frame, so a takeover's file reads its parent's pieces and decodes only
+  the fork it appended: 4–5 s instead of 24 for each of the forks lane's files on the gate's
+  battle, 11 s for one that compaction rewrote after the original (MEASURED 2026-10-08, every
+  block equal to an uncached walk's).
 
 **What L1 leaves open.**
 

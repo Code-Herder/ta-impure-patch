@@ -15,6 +15,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import zlib
@@ -144,6 +145,127 @@ class FailedWorkerCleanup(unittest.TestCase):
              patch.object(tareplay, "say"):
             self.assertIs(run.job(worker, "naval", "W"), False)
         self.assertIn("cleanup", run.fx["naval"]["problems"][-1][2])
+
+
+class OfflineOrder(unittest.TestCase):
+    """tareplay.Ordered: checks handed to the offline pool read back in the order asked, and the
+    first failure in that order is the one raised, before the caller's own later one."""
+
+    @staticmethod
+    def slow(value, s=0.2):
+        time.sleep(s)
+        return [value]
+
+    @staticmethod
+    def fail(why, s=0.0):
+        time.sleep(s)
+        raise tareplay.Failed(why)
+
+    def test_results_keep_the_order_asked(self):
+        r = tareplay.Ordered()
+        r.add("a")
+        r.later(self.slow, "b")
+        r.add("c", "d")
+        r.later(self.slow, "e", 0)
+        self.assertEqual(r.results(), ["a", "b", "c", "d", "e"])
+        self.assertEqual(r.results(), ["a", "b", "c", "d", "e"])
+
+    def test_the_first_failure_in_order_is_raised(self):
+        r = tareplay.Ordered()
+        r.add("a")
+        r.later(self.fail, "first", 0.2)
+        r.later(self.fail, "second")
+        r.add("b")
+        for _ in range(2):
+            with self.assertRaisesRegex(tareplay.Failed, "first"):
+                r.results()
+        self.assertEqual(r.settled(), ["a"])
+
+    def test_an_earlier_failure_wins_over_the_callers_own(self):
+        with self.assertRaisesRegex(tareplay.Failed, "the check"):
+            with tareplay.Ordered() as r:
+                r.later(self.fail, "the check", 0.2)
+                raise tareplay.CouldNotRun("the next game")
+        with self.assertRaisesRegex(tareplay.CouldNotRun, "the next game"):
+            with tareplay.Ordered() as r:
+                r.later(self.slow, "passes")
+                raise tareplay.CouldNotRun("the next game")
+
+    def test_then_runs_in_order_in_the_callers_thread(self):
+        r, seen = tareplay.Ordered(), []
+        got = r.start(self.slow, 7)
+        r.add("a")
+        r.then(lambda: seen.append(threading.current_thread()) or [got.result()[0] + 1])
+        r.later(self.slow, "b", 0)
+        self.assertEqual(r.results(), ["a", 8, "b"])
+        self.assertEqual(seen, [threading.current_thread()])
+
+    def test_the_pool_leaves_two_cores_to_each_game(self):
+        with patch("os.cpu_count", return_value=32):
+            self.assertEqual(tareplay.offline_workers(8), min(16, self.gib()))
+            self.assertEqual(tareplay.offline_workers(16), 2)
+
+    @staticmethod
+    def gib():
+        with open("/proc/meminfo") as f:
+            return next(int(ln.split()[1]) for ln in f if ln.startswith("MemAvailable:")) >> 20
+
+
+class Scheduling(unittest.TestCase):
+    """Run's queue: the long lanes first, and a fixture's report started when its last lane
+    ends, once."""
+
+    def run_(self, *fixtures):
+        run = tareplay.Run.__new__(tareplay.Run)
+        run.q, run.seq, run.lock = tareplay.queue.PriorityQueue(), tareplay.itertools.count(), \
+            threading.Lock()
+        run.pending, run.left, run.reports, run.measure, run.keep = 0, {}, {}, False, False
+        run.report_pool = tareplay.ThreadPoolExecutor(max_workers=2)
+        run.fx = {name: {"name": name, "want": want, "fix": {"end": end}}
+                  for name, want, end in fixtures}
+        return run
+
+    def drain(self, run):
+        out = []
+        while not run.q.empty():
+            out.append(run.q.get()[2:])
+        return out
+
+    def test_long_lanes_first_then_l_then_short(self):
+        run = self.run_(("a", "LPRQ", 900), ("b", "LPRQKFXU", 600), ("c", "LPRQW", 2000))
+        self.assertEqual(tareplay.first_lanes(run.fx), ["b", "c", "a"])
+        for name in tareplay.first_lanes(run.fx):
+            run.put(name, "L")
+        self.assertEqual(run.q.get()[2:], ("b", "L"))
+        for p in "PRQKXU":
+            run.put("b", p)
+        self.assertEqual(self.drain(run), [("b", "X"), ("b", "U"), ("b", "K"), ("c", "L"),
+                                           ("a", "L"), ("b", "R"), ("b", "P"), ("b", "Q")])
+
+    def test_the_report_starts_when_the_last_lane_ends(self):
+        run = self.run_(("a", "LPKF", 900))
+        with patch.object(tareplay, "fixture_report", return_value=(["== a"], False, False)) as rep:
+            run.put("a", "L")
+            run.put("a", "P")               # L queues its followers before it ends
+            run.done("a")
+            run.put("a", "F")               # so does K
+            run.done("a")
+            self.assertFalse(run.reports)
+            run.done("a")
+            self.assertEqual(run.report_of("a").result(), (["== a"], False, False))
+            self.assertEqual(run.report_of("a"), run.reports["a"])
+        rep.assert_called_once_with(run.fx["a"], False)
+
+    def test_a_stopped_fixture_is_reported_by_report(self):
+        run = self.run_(("a", "LPRQ", 900))
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        run.out = Path(tmp.name)
+        run.put("a", "L")                   # never taken: the run stopped
+        with patch.object(tareplay, "fixture_report", return_value=(["== a"], False, True)), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(tareplay.report(run), 2)
+        self.assertEqual((run.out / "summary.txt").read_text(), "== a\n")
 
 
 class RewindPolicy(unittest.TestCase):
@@ -754,11 +876,13 @@ class Segments(unittest.TestCase):
 
 
 class DecodeCache(unittest.TestCase):
-    """reccache.py under tarec.blocks(): a hit returns what the walk returned without walking; a
-    changed file byte or decoder version misses, and an entry that is cut short or corrupt is
-    ignored and written again."""
+    """reccache.py under tarec.blocks(): a hit returns what the walk returned without decoding; a
+    changed file byte or decoder version misses, and an entry that is cut short, corrupt or not
+    its piece is ignored and written again. A file that appends a segment to a cached one decodes
+    the segment alone, and returns and refuses what the uncached walk does."""
 
     TORN = block(tarec.RB_STREAM, 7, 7, b"x" * 8)[:20]
+    ORIGINAL = header() + stream(1, 3, unit=1) + stream(4, 6, opens=False) + end_block(6)
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -770,54 +894,70 @@ class DecodeCache(unittest.TestCase):
         self.addCleanup(env.stop)
         self.addCleanup(self.tmp.cleanup)
 
-    def file(self, name, unit=1):
+    def file(self, name, unit=1, tail=TORN):
         p = self.dir / name
         p.write_bytes(tarec.REC_MAGIC + header() + stream(1, 3, unit=unit) +
-                      stream(4, 6, opens=False) + end_block(6) + self.TORN)
+                      stream(4, 6, opens=False) + end_block(6) + tail)
+        return p
+
+    def fork(self, name, *forks, original=ORIGINAL):
+        """The original and a segment for each (timeline, unit) of `forks`, forked at 4."""
+        p = self.dir / name
+        p.write_bytes(tarec.REC_MAGIC + original + b"".join(
+            header((tl, 0, 4)) + stream(4, 5, unit=unit) + end_block(5) for tl, unit in forks))
         return p
 
     def read(self, path):
-        """(tarec.blocks' four lists and stop, whether the codec walked the file)."""
+        """(tarec.blocks' four lists and stop, the `start` of each decoding walk the codec ran:
+        None for one from the file's first block)."""
         sizes, offsets, flags = [], [], []
-        with patch.object(self.codec, "iter_blocks", wraps=self.codec.iter_blocks) as walk:
+        decoded = []
+        real = self.codec.iter_blocks
+
+        def spy(*a, **k):
+            if k.get("decode", True):
+                decoded.append(k.get("start"))
+            return real(*a, **k)
+        with patch.object(self.codec, "iter_blocks", side_effect=spy):
             out, stop = tarec.blocks(path, sizes, offsets, flags)
-        return (out, sizes, offsets, flags, stop), walk.called
+        return (out, sizes, offsets, flags, stop), decoded
+
+    def uncached(self, path):
+        with patch.dict("os.environ", {reccache.ENV: ""}):
+            return self.read(path)[0]
 
     def entries(self):
         return sorted(self.cache.glob("*.dec"))
 
     def test_a_hit_is_what_the_walk_returned(self):
         path = self.file("r.imprec")
-        cold, walked = self.read(path)
-        self.assertTrue(walked)
+        cold, decoded = self.read(path)
+        self.assertEqual(decoded, [None])
         self.assertIn("cut short", cold[-1])
         self.assertEqual(len(self.entries()), 1)
-        warm, walked = self.read(path)
-        self.assertFalse(walked)
-        self.assertEqual(warm, cold)
-        with patch.dict("os.environ", {reccache.ENV: ""}):
-            self.assertEqual(self.read(path), (cold, True))
+        self.assertEqual(self.read(path), (cold, []))
+        self.assertEqual(self.uncached(path), cold)
         self.assertEqual(list(self.cache.iterdir()), self.entries())   # no temporary file left
 
     def test_a_changed_byte_misses(self):
         a, b = self.file("a.imprec", unit=1), self.file("b.imprec", unit=2)
         self.assertEqual(len(a.read_bytes()), len(b.read_bytes()))
         want_a, _ = self.read(a)
-        got_b, walked = self.read(b)
-        self.assertTrue(walked)
+        got_b, decoded = self.read(b)
+        self.assertEqual(decoded, [None])
         self.assertNotEqual(got_b, want_a)
         self.assertEqual(len(self.entries()), 2)
-        self.assertEqual(self.read(a), (want_a, False))
+        self.assertEqual(self.read(a), (want_a, []))
 
     def test_a_changed_version_misses_and_rewrites(self):
         path = self.file("r.imprec")
         want, _ = self.read(path)
         entry, = self.entries()
         with patch.object(reccache, "_version", bytes(32)):
-            self.assertEqual(self.read(path), (want, True))
+            self.assertEqual(self.read(path), (want, [None]))
             self.assertEqual(entry.read_bytes()[8:40], bytes(32))
-            self.assertEqual(self.read(path), (want, False))
-        self.assertEqual(self.read(path), (want, True))
+            self.assertEqual(self.read(path), (want, []))
+        self.assertEqual(self.read(path), (want, [None]))
 
     def test_a_corrupt_entry_is_ignored_and_rewritten(self):
         path = self.file("r.imprec")
@@ -827,7 +967,7 @@ class DecodeCache(unittest.TestCase):
         mid = 72 + (len(good) - 72) // 2
         import zstandard        # here: the module's imports run before devpy.ensure() re-executes
         content = zstandard.ZstdDecompressor().stream_reader(good[72:]).read()
-        e = len(content) - 32 - len(want[-1].encode()) - 5       # the end record's "E"
+        n = 1 + reccache.BLOCK.size - 4                         # the first block's payload length
 
         def repacked(c):        # a sound zstd frame around content its own digest refuses
             return good[:72] + zstandard.ZstdCompressor(write_checksum=True).compress(c)
@@ -839,12 +979,65 @@ class DecodeCache(unittest.TestCase):
                          ("its digest", repacked(content[:-1] + bytes([content[-1] ^ 1]))),
                          ("a byte after its end", repacked(content + b"B")),
                          ("a length past its end",
-                          repacked(content[:e + 1] + b"\xff\xff\xff\x7f" + content[e + 5:]))):
+                          repacked(content[:n] + b"\xff\xff\xff\x7f" + content[n + 4:]))):
             with self.subTest(why=why):
                 entry.write_bytes(bad)
-                self.assertEqual(self.read(path), (want, True))
+                self.assertEqual(self.read(path), (want, [None]))
                 self.assertEqual(entry.read_bytes(), good)
-                self.assertEqual(self.read(path), (want, False))
+                self.assertEqual(self.read(path), (want, []))
+
+    def test_an_appended_segment_decodes_alone(self):
+        original = self.file("a.imprec", tail=b"")
+        self.read(original)
+        size = original.stat().st_size
+        one = self.fork("one.imprec", (1, 2))
+        got, decoded = self.read(one)
+        self.assertEqual(decoded, [(size, 4, 4)])           # four blocks before it; four slots
+        self.assertEqual(got, self.uncached(one))
+        self.assertEqual(len(self.entries()), 2)
+        two = self.fork("two.imprec", (1, 2), (2, 3))
+        got, decoded = self.read(two)
+        self.assertEqual(decoded, [(one.stat().st_size, 7, 4)])
+        self.assertEqual(got, self.uncached(two))
+        self.assertEqual(self.read(two), (got, []))
+
+    def test_a_piece_is_its_prefix_bytes(self):
+        self.read(self.fork("one.imprec", (1, 2)))
+        other = self.fork("other.imprec", (1, 3))           # another fork after the same original
+        got, decoded = self.read(other)
+        self.assertEqual(decoded, [(len(tarec.REC_MAGIC + self.ORIGINAL), 4, 4)])
+        self.assertEqual(got, self.uncached(other))
+        changed = self.fork("changed.imprec", (1, 2), original=header() + stream(1, 3, unit=3) +
+                            stream(4, 6, opens=False) + end_block(6))
+        got, decoded = self.read(changed)                   # the same fork after another original
+        self.assertEqual(decoded, [None])
+        self.assertEqual(got, self.uncached(changed))
+
+    def test_an_entry_that_is_not_its_piece_is_ignored(self):
+        path = self.fork("one.imprec", (1, 2))
+        want, _ = self.read(path)
+        bl, _ = reccache.collect(self.codec.iter_blocks(str(path)))
+        for entry in self.entries():                        # each entry holding the other piece
+            for blocks in (bl[:4], bl[4:], bl[:3]):
+                with self.subTest(entry=entry.name, blocks=len(blocks)):
+                    good = entry.read_bytes()
+                    reccache._write(str(self.cache), str(entry), good[:72], blocks)
+                    if entry.read_bytes() == good:
+                        continue
+                    got, decoded = self.read(path)
+                    self.assertEqual(got, want)
+                    self.assertTrue(decoded)
+                    self.assertEqual(entry.read_bytes(), good)
+
+    def test_a_refused_segment_is_refused_after_a_cached_one(self):
+        self.read(self.file("a.imprec", tail=b""))
+        path = self.dir / "slots.imprec"
+        path.write_bytes(tarec.REC_MAGIC + self.ORIGINAL + header((1, 0, 4), slots=6) +
+                         stream(4, 5) + end_block(5))
+        for cache in (str(self.cache), ""):
+            with patch.dict("os.environ", {reccache.ENV: cache}), \
+                    self.assertRaisesRegex(tarec.Unreadable, "a segment of 6 slots after 4"):
+                tarec.blocks(path)
 
 
 def pov(player=0, cam=(100, 200), zoom=65536, flags=tarec.REC_POV_WORLD, every=3):
@@ -1061,7 +1254,7 @@ class TakeoverAi(unittest.TestCase):
             segs = [{"id": 0, "last": 2000}, {"id": 1, "parent": 0, "last": 2000}]
             with patch.object(tareplay, "tk_ai", return_value=({1, 2, 3}, set(), fraction, 978)), \
                  patch.object(tarec, "file_segments", return_value=(segs, None)):
-                return tareplay.tk_checks(fx)[0]
+                return tareplay.tk_checks(fx).results()[0]
 
     def test_active_seats_pass_without_construction(self):
         _, verdict, detail = self.check()

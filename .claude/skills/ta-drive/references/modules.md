@@ -890,8 +890,10 @@ block that reads to its last complete block.
   `tarec.py` and the replay tools need numpy and zstandard and re-execute themselves under the main
   checkout's `.venv-undither/` when they are missing (a bare `python3` is fine). Every command that
   reads the stream decodes the whole recording in Python — about 30 s for a large battle — so set
-  `TAREC_CACHE=DIR` when running several on one file: the decoded blocks are kept in `DIR`, keyed by
-  the file's bytes and the decoder's sources (`tareplay.py` does this for its own runs).
+  `TAREC_CACHE=DIR` when running several on one file: the decoded blocks are kept in `DIR`, one
+  piece per segment keyed by the file's bytes up to that segment's end and the decoder's sources,
+  so a file a takeover appended to decodes only its new segment (`tareplay.py` does this for its
+  own runs).
 - **Check playback end to end** with `tools/replay/tareplay.py run FIXTURE… | all [-j N] [--keep]
   [--game-speed 10|20] [--out DIR]` (`list` names the fixtures of `tools/replay/fixtures.json`):
   tick-driven runs default to internal speed 20 (2x normal); `--game-speed 10` selects normal.
@@ -920,7 +922,10 @@ block that reads to its last complete block.
   edited copies refused, then the dock's speed, the Options' OK, pause, the dock's seek, the
   player cards' Sight and Full map (clock and camera unchanged), its dump
   (`w<T1>` compared like the others), resume and Leave. It runs every check above and
-  reports each by name: exit 0 all passed, 1 a named failure, 2 something could not run. It
+  reports each by name: exit 0 all passed, 1 a named failure, 2 something could not run. `-j N`
+  is the games at once (default 8, at most 16); the checks run beside them on a pool of their own
+  at lower priority, a fixture's as soon as its last lane ends, and the summary lists them in the
+  same order whatever finished first. It
   refuses a `ddraw.dll` (or `--stock-dll`) older than its sources — rebuild with `make -C
   tagpu/ddraw` (`LIMITS=stock` for the stock one) first. The run's folder is outside the
   repository (`--out`, `$TAREPLAY_OUT`); passing dumps are deleted unless `--keep`, and a dump

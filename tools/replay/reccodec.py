@@ -920,7 +920,13 @@ def entries(payload):
 Block = namedtuple("Block", "ordinal offset kind flags first last raw packed payload")
 
 
-def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None):
+def header_slots(es):
+    """The unit slots a header's entries name (RT_SLOTS), 0 when it names none."""
+    slots = [struct.unpack("<I", b)[0] for t, b in es if t == tarec.RT_SLOTS and len(b) == 4]
+    return slots[0] if slots else 0
+
+
+def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None, start=None):
     """Every complete block of a recording of format 8, in order: Block(ordinal (from 1), offset,
     kind, flags, first, last, raw, packed, payload) with a stream block's payload its records.
     With decode=False, stream, snapshot and minimap payloads are None. Returns (as a generator's
@@ -928,13 +934,20 @@ def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None):
     refuses. `before_stream(ordinal, flags, bytes, frame)` sees each stream block's unpacked bytes
     and the frame it is about to be decoded with (the codec's differential test). `data` is the
     file's bytes when the caller has read them already (reccache.py hashes the very bytes it
-    decodes); `path` then names them in the messages."""
+    decodes); `path` then names them in the messages.
+
+    `start` (offset, ordinal, root_slots) resumes a walk at an RB_HEADER block: the blocks after
+    it are what a walk from the file's start yields, given the ordinal of the block before it and
+    the slots of the file's first header (None before any). A header starts a new unit frame, so
+    nothing else of the blocks before it reaches the blocks after it (reccache.py's pieces)."""
     if data is None:
         with open(path, "rb") as f:
             data = f.read()
     if data[:8] != tarec.REC_MAGIC:
         raise Unreadable(f"{path}: not a recording")
     at, ordinal, frame, root_slots = 8, 0, None, None
+    if start is not None:
+        at, ordinal, root_slots = start
     while at < len(data):
         head = data[at:at + 32]
         if len(head) < 32:
@@ -967,8 +980,7 @@ def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None):
                 fmt = [struct.unpack("<I", b)[0] for t, b in es if t == tarec.RT_FORMAT and len(b) == 4]
                 if fmt != [REC_FORMAT]:
                     raise Unreadable(f"format {fmt[0] if fmt else None}, not {REC_FORMAT}")
-                slots = [struct.unpack("<I", b)[0] for t, b in es if t == tarec.RT_SLOTS and len(b) == 4]
-                nslots = slots[0] if slots else 0
+                nslots = header_slots(es)
                 if root_slots is not None and nslots != root_slots:
                     raise Unreadable(f"a segment of {nslots} slots after {root_slots}")
                 root_slots = nslots
