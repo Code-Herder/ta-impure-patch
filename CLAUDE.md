@@ -258,7 +258,8 @@ This matches the rule the `ta-*` skills already follow for their own pages: stat
 replace rather than annotate, and keep the landing's story in the note.
 
 **Not ours to restyle:** the vendored code — upstream cnc-ddraw (`dd.c`, `ddsurface.c`,
-`config.c`, … outside our `tagpu_*` additions), `lodepng`, Detours, the Vulkan headers and the
+`config.c`, … outside our `tagpu_*` additions), `lodepng`, zstd (`src/zstd.c`, `inc/zstd.h`,
+`inc/zstd_errors.h`, upstream's lines of `tools/zstd/zstd-in.c`), Detours, the Vulkan headers and the
 generated `inc/spirv/*.spv.h`. Our own lines inside a vendored file follow the rules above.
 
 ## Build the gate in parallel
