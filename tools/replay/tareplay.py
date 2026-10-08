@@ -1617,9 +1617,11 @@ def image_gate_options(fx):
 
 
 def codec_check(info):
-    """The live recording's end block on its unit frame, from `tarec info`'s output: a stream
-    block whose check decode differed (RT_CODEC_MISMATCH) is a codec bug, which the writer wrote
-    as records and the gate fails by name; the blocks the encoder declined are reported."""
+    """The live recording's unit frame, from `tarec info`'s output: a stream block whose check
+    decode differed (the end block's RT_CODEC_MISMATCH) is a codec bug, which the writer wrote as
+    records and the gate fails by name; so is a recording with no sectioned stream block, whose
+    codec never ran (a writer without memory for the frame writes every block as records, and its
+    end block then counts nothing). The blocks the encoder declined are reported."""
     m = re.search(r"the writer's unit frame: (\d+|absent) blocks declined, (\d+|absent) mismatched",
                   info)
     if not m:
@@ -1630,7 +1632,15 @@ def codec_check(info):
     if int(mismatched):
         return ("the unit frame", FAIL, f"the unit frame did not decode back in {mismatched} "
                                         f"blocks ({declined} declined)")
-    return ("the unit frame", PASS, f"0 mismatched, {declined} declined")
+    s = re.search(r"stream blocks: (\d+), (\d+) sectioned", info)
+    if not s:
+        return ("the unit frame", UNRUN, "no count of the sectioned stream blocks")
+    blocks, sectioned = map(int, s.groups())
+    if not sectioned:
+        return ("the unit frame", FAIL, f"none of the {blocks} stream blocks is sectioned: the "
+                                        f"codec never ran ({declined} declined)")
+    return ("the unit frame", PASS, f"0 mismatched, {declined} declined, {sectioned} of {blocks} "
+                                    f"stream blocks sectioned")
 
 
 def checks(fx):

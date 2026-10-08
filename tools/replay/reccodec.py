@@ -876,8 +876,14 @@ class Frame:
 
 # ---- zstd and the block walk -------------------------------------------------------------------
 
+WINDOW_MAX = 1 << 27                       # tagpu_reccodec.c's RECC_WINDOW_MAX
+
+
 def unpack(body, raw):
-    """One zstd frame of exactly `raw` bytes, no trailing byte; Unreadable otherwise."""
+    """One zstd frame of exactly `raw` bytes, no trailing byte, whose window is at most 2^27;
+    Unreadable otherwise. The window is bounded by name from the frame's header, as the C reader
+    bounds it: zstandard's decompressor would refuse a larger one by itself, the C one-shot
+    decompression would not."""
     if not body or not raw:
         raise Unreadable("an empty packed block")
     try:
@@ -888,6 +894,9 @@ def unpack(body, raw):
     try:
         if zstandard.frame_content_size(body) != raw:
             raise Unreadable(f"a zstd frame whose content is not {raw} bytes")
+        window = zstandard.get_frame_parameters(body).window_size
+        if window > WINDOW_MAX:
+            raise Unreadable(f"a zstd frame asking for a {window}-byte window, past 2^27")
         d = zstandard.ZstdDecompressor().decompressobj()
         out = d.decompress(body)
     except zstandard.ZstdError as e:
@@ -933,8 +942,11 @@ def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None):
         magic, kind, flags, first, last, raw, packed, crc_body, crc_head = struct.unpack("<IHHIIIIII", head)
         if magic != tarec.REC_BLOCK_MAGIC or zlib.crc32(head[:28]) != crc_head:
             return f"a torn block header at byte {at}"
+        if raw > PAYLOAD_MAX or packed > PAYLOAD_MAX:
+            raise Unreadable(f"a block at byte {at} of {packed} bytes, {raw} unpacked: past what "
+                             f"it may hold")
         body = data[at + 32:at + 32 + packed]
-        if len(body) < packed or raw > PAYLOAD_MAX or packed > PAYLOAD_MAX:
+        if len(body) < packed:
             return f"a block cut short at byte {at}"
         if zlib.crc32(body) != crc_body:
             return f"a block failing its CRC at byte {at}"

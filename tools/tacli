@@ -5303,8 +5303,16 @@ class _LogLines:
         return lines
 
 
-def _tarec():
+def _tarec(blocks=False):
+    """tools/replay/tarec.py. With `blocks`, for a command that walks the recording's blocks:
+    that needs numpy and zstandard (reccodec.py), which the system python3 lacks, so tacli
+    re-executes itself under the shared venv first (devpy.ensure; its guard stops a second
+    re-execution). Call it before the command does anything else: the re-execution starts the
+    command again from its arguments."""
     sys.path.insert(0, str(Path(__file__).resolve().parent / "replay"))
+    if blocks:
+        import devpy  # noqa: E402  the shared venv (tools/replay/devpy.py)
+        devpy.ensure()
     import tarec  # noqa: E402  the recording's reader (tools/replay/tarec.py)
     return tarec
 
@@ -5620,7 +5628,7 @@ def _replay_takeover_wait(inst, name, T, lines, first, timeout):
 
 
 def cmd_replay_forks(args):
-    tarec = _tarec()
+    tarec = _tarec(blocks=True)
     path = Path(args.recording).resolve()
     try:
         segs, stop = tarec.file_segments(path)
@@ -5673,7 +5681,7 @@ def cmd_replay_forks(args):
 
 
 def replay_prediction(args):
-    tarec = _tarec()
+    tarec = _tarec(blocks=True)
     try:
         segs, _ = tarec.file_segments(args.recording)
         evict = tarec.fork_prediction(segs, args.timeline, args.at)

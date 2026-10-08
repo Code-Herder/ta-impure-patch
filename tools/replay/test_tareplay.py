@@ -505,6 +505,21 @@ def flagged(kind, first, last, payload, flags):
     return head + struct.pack("<I", zlib.crc32(head)) + payload
 
 
+def sized(kind, payload, flags, raw, packed):
+    """A block whose header claims `raw` and `packed` bytes, whatever its payload holds."""
+    head = struct.pack("<IHHIIIII", tarec.REC_BLOCK_MAGIC, kind, flags, 1, 1, raw, packed,
+                       zlib.crc32(payload))
+    return head + struct.pack("<I", zlib.crc32(head)) + payload
+
+
+def zstd_frame(data, wlog):
+    """One zstd frame of `data` in a raw block, its header asking for a window of 2^wlog: no
+    single segment, a 4-byte content size."""
+    n = len(data)
+    return (struct.pack("<IBBI", 0xFD2FB528, 0x80, (wlog - 10) << 3, n) +
+            bytes([(1 | n << 3) & 0xFF, n >> 5 & 0xFF, n >> 13 & 0xFF]) + data)
+
+
 class Format8Blocks(unittest.TestCase):
     """What format 8's block walk refuses by name before any payload is read, as
     tagpu_recreader.c's block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
@@ -538,6 +553,54 @@ class Format8Blocks(unittest.TestCase):
     def test_a_segment_of_other_slots(self):
         self.refused(header(slots=4), end_block(0), header(timeline=(1, 0, 2), slots=6),
                      why="a segment of 6 slots after 4")
+
+    def test_a_block_past_what_it_may_hold(self):
+        # as tagpu_recreader.c's block_head refuses it: a header that passed its CRC is what the
+        # writer wrote, not a tear, whether the file holds its bytes or not
+        big = 64 << 20
+        body = b"\0" * 16
+        for raw, packed in ((big + 1, len(body)), (len(body), big + 1)):
+            with self.subTest(raw=raw, packed=packed):
+                self.refused(header(), sized(tarec.RB_SNAPSHOT, body, 0, raw, packed),
+                             why="past what it may hold")
+
+    def test_a_zstd_window_past_2_27(self):
+        # as tagpu_reccodec.c's reccodec_unpack refuses it (codectest.c checks the C side)
+        import reccodec
+        snap = tlv(tarec.RK_TICK, struct.pack("<I", 1))
+        self.assertEqual(reccodec.unpack(zstd_frame(snap, 27), len(snap)), snap)
+        with self.assertRaisesRegex(tarec.Unreadable, "past 2\\^27"):
+            reccodec.unpack(zstd_frame(snap, 28), len(snap))
+        frame = zstd_frame(snap, 28)
+        self.refused(header(), sized(tarec.RB_SNAPSHOT, frame, 0, len(snap), len(frame)),
+                     why="past 2\\^27", decodes=(True,))
+
+
+class CodecCheck(unittest.TestCase):
+    """The gate's unit frame verdict from `tarec info`'s lines (tareplay.codec_check)."""
+
+    @staticmethod
+    def info(declined="0", mismatched="0", blocks=40, sectioned=38):
+        return (f"  stream blocks: {blocks}, {sectioned} sectioned (3 restarting the frame), "
+                f"{blocks - sectioned} records\n"
+                f"  the writer's unit frame: {declined} blocks declined, {mismatched} mismatched\n")
+
+    def test_verdicts(self):
+        for info, verdict in ((self.info(), tareplay.PASS),
+                              (self.info(declined="2"), tareplay.PASS),
+                              (self.info(mismatched="1"), tareplay.FAIL),
+                              (self.info(mismatched="absent"), tareplay.FAIL),
+                              (self.info(sectioned=0), tareplay.FAIL),
+                              (self.info(blocks=0, sectioned=0), tareplay.FAIL),
+                              ("  ended: complete\n", tareplay.UNRUN)):
+            with self.subTest(info=info):
+                self.assertEqual(tareplay.codec_check(info)[1], verdict)
+
+    def test_a_codec_that_never_ran_is_named(self):
+        # a writer without memory for the frame: every block records, the end block counts 0 and 0
+        label, verdict, detail = tareplay.codec_check(self.info(sectioned=0))
+        self.assertEqual(verdict, tareplay.FAIL)
+        self.assertIn("never ran", detail)
 
 
 class Segments(unittest.TestCase):
