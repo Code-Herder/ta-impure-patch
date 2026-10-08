@@ -52,7 +52,9 @@
      bound *The perspective* states. All of it is game-thread state.
    - For the header, once: the unit-type definitions' names (UNITINFOCount of them), the weapons'
      names (the array's slots, tagpu_limits.h), the feature defs' names (their count), the
-     skirmish settings and the game's options.
+     skirmish settings and the game's options; and for the unit frame (header_codec) each def's
+     air bit +0x241, sight height +0x170 and flight fields +0x192 and +0x19A..+0x1A9, and the main
+     block's gravity, sea level and LosType.
    Every other id row's pointer is never dereferenced: its ID is one more than its row in its
    table, by arithmetic (tagpu_recfmt.h), and a pointer outside the table becomes REC_ID_BAD,
    counted and logged. Each event hook's reads are stated beside it.
@@ -148,7 +150,8 @@ _Static_assert(UD_PITCH + 4 <= UD_STRIDE && UD_AIRBITS + 4 <= UD_STRIDE,
                "the air fields lie inside a def");
 #define OFF_GRAVITY    0x14263      /* i32: gravity (replay-globals.tsv, a `leave` field)         */
 #define OFF_SEALEVEL   0x1427F      /* u8: sea level; the sight emit raises an altitude to
-                                       (it + 1) << 16 (movzx at 0x48280D)                       */
+                                       (it + 1) << 16 (0x48280B..0x482813: the byte read by
+                                       `mov al` after `xor eax, eax`, DISASSEMBLED)              */
 #define WPN_STRIDE     0x115        /* a weapon's record; its name is its first 0x20 bytes         */
 #define WPN_NAMELEN    0x20
 #define OFF_EACH       0x37EE6      /* u16: the units each player may have                        */

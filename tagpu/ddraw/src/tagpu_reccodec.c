@@ -39,8 +39,8 @@
    shifts and named divisions.
 
    MEMORY: per slot the copy (0x148 bytes), L2 (0x148), L3 (16), the winners (one byte per lane,
-   128) and four flags, about 1,150 bytes; per codec the air index (128 KB) and the scratch of the
-   largest block met so far. */
+   128) and four flags, 804 bytes (reccodec_new); per codec the air index (128 KB) and the scratch
+   of the largest block met so far. */
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -874,8 +874,12 @@ static int frame_slot(Eval* x)
         STEP(REC_LR_VX, 1, (uint32_t)(uint64_t)-asr((int64_t)SIN[((h + 0x20) >> 7) & 511] * sp + 0x1000, 13), 0, 0);
         STEP(REC_LR_VZ, 1, (uint32_t)(uint64_t)-asr((int64_t)SIN[((h + 0x4020) >> 7) & 511] * sp + 0x1000, 13), 0, 0);
     }
-    /* S6: position += velocity (0x43D7FF..0x43D839, y at 0x43D80D an aircraft's only,
-       DISASSEMBLED) */
+    /* S6: position += velocity. The placement 0x43D6D0, which the movement pass calls after
+       either step (0x43DD55), adds the velocity to x, y and z for every uncarried unit (the carried
+       test 0x43D6DD..0x43D6E5 is the only branch before it; y loaded at 0x43D80D, added at
+       0x43D813) and stores the three on each path that changes them (0x43D8C5..0x43D8D0,
+       0x43D9F1..0x43D9F7, 0x43DA20..0x43DA35), DISASSEMBLED. Predicting y only for an aircraft is
+       the codec's choice: a ground unit's altitude is a generic lane. */
     STEP(REC_LR_X, 1, L1_(REC_LR_X) + U_(REC_LR_VX), 0, 0);
     STEP(REC_LR_Z, 1, L1_(REC_LR_Z) + U_(REC_LR_VZ), 0, 0);
     if (air) STEP(REC_LR_Y, 1, L1_(REC_LR_Y) + U_(REC_LR_VY), 0, 0);
@@ -889,7 +893,10 @@ static int frame_slot(Eval* x)
        cells generic */
     STEP(REC_LR_SX, sight, (uint32_t)(uint64_t)asr(s32(U_(REC_LR_X)), 21), 0, 0);
     /* the claim stamp: GameTime when the footprint or the layer moved (0x440A83..0x440A91 writes
-       main+0x38A47 as a dword, DISASSEMBLED); the iteration labelled gt holds step gt - 1 */
+       main+0x38A47 as a dword, DISASSEMBLED); the iteration labelled gt holds step gt - 1. Other
+       writers -- the footprint stamp 0x47CC54, the pathfinder 0x440B30 and its restore 0x440BC4,
+       the mover's constructor (0x43DC16) and restore (0x43DEC5) -- are not predicted: their
+       stamps cost residuals, size only. */
     {
         int moved = U_(REC_LR_FX) != L1_(REC_LR_FX) || U_(REC_LR_FZ) != L1_(REC_LR_FZ) || layer != layer1;
         STEP(REC_LR_CLAIM, 1, moved ? x->gt - 1u : L1_(REC_LR_CLAIM), 0, 0);

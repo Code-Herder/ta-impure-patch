@@ -221,13 +221,19 @@ block counts both; the writer logs the first four of each with their GameTime ra
 closing line gives `stream N KB of records written as M KB; K blocks: S sectioned, D declined, X
 MISMATCHED; the unit frame cost T ms, at most U ms for one block`. `tareplay.py` fails a fixture
 whose recording's end block names any mismatch ("the unit frame did not decode back in N blocks")
-and reports the declined count. Without `RT_CODEC` and `RT_PHYSICS` (a dump, a synthetic test
-file), or without memory for the frame, every stream block is written as records.
+or which has no sectioned stream block at all ("the codec never ran": a writer without memory for
+the frame counts 0 declined and 0 mismatched), and reports the declined count. Without `RT_CODEC`
+and `RT_PHYSICS` (a dump, a synthetic test file), or without memory for the encoder's and check
+decoder's states, every stream block is written as records; without memory for the header's codec
+constants the recording ends before its file is opened.
 
 **What a reader refuses**, the C reader and `reccodec.py` alike, each by name (the C reader with the
 block's file offset): a flag bit it does not know, `RBF_SECTIONS` on a block that is not a stream block,
-`RBF_FRAME_RESET` without it, a packed header, end or timelines block, a packed body of no bytes, a
-body that is not exactly one zstd frame of its `raw` bytes with nothing after it; a malformed or
+`RBF_FRAME_RESET` without it, a packed header, end or timelines block, a block whose header passed
+its CRC but whose raw or stored size passes 64 MiB (`RECR_BLOCK_MAX`), a packed body of no bytes, a
+body that is not exactly one zstd frame of its `raw` bytes with nothing after it or whose frame asks
+for a window past 2^27 (zstd's streaming default, bounded by name on both sides since the C one-shot
+decompression does not bound it); a malformed or
 repeated `RT_CODEC`, `RT_PHYSICS` or `RT_AIR` (lanes that do not tile the 0x148-byte image, a role
 missing, twice or of the wrong width, air types not ascending); a sectioned block in a segment
 whose header lacks `RT_CODEC` and `RT_PHYSICS`; a segment whose unit slots differ from the first
@@ -236,9 +242,11 @@ leaves bytes in a section, or which decodes to another payload length; and an un
 block with no frame state. Every operand of a rule is clamped before it is multiplied, so no value
 in a file can overflow the arithmetic.
 
-**Memory.** A codec state is about 1,150 bytes a slot plus a 128 KB air index: the writer holds two
-(about 11.7 MB at 5,001 slots, 34.6 MB at 15,001 [INFERRED from the struct sizes]), a reader one,
-made at its first sectioned block.
+**Memory.** A codec state is 804 bytes a slot (the copy and L2, `0x148` bytes each, L3's 16, the
+winners' 128 and four flags, as `reccodec_new` allocates them) plus a 128 KB air index and the
+scratch of the largest block it has met: the writer holds two (before their scratch, 8,303,752
+bytes, about 8.3 MB, at 5,001 slots; 24,383,752, about 24.4 MB, at 15,001), a reader one, made at
+its first sectioned block.
 
 ### The game never waits
 
@@ -325,7 +333,8 @@ iterations to record.
   `check` (the stream against every snapshot the file carries) and `compare` (the stream to a
   dump's GameTime against the dump, byte for byte). Its block walk is `tools/replay/reccodec.py`'s,
   which needs numpy and zstandard: `tools/replay/devpy.py` re-executes a tool under the shared venv
-  (`.venv-undither/`) when they are missing, and `header_only` reads a stored header with the
+  (`.venv-undither/`) when they are missing — `tacli replay forks` and `replay takeover --dry-run`
+  call it before they walk a file's blocks — and `header_only` reads a stored header with the
   standard library alone, so the build's bare `python3` still runs `tareplay.py features --check`.
   Decoding a large battle in Python takes about 30 s; with `TAREC_CACHE=DIR` the decoded blocks are
   kept in `DIR`, keyed by the SHA-256 of the file's bytes and of the decoder's sources, so a second

@@ -3456,7 +3456,7 @@ them runs below UNITINFOCount `main+0x1438F`, the count the engine's own loops o
 | read | what | established by |
 |---|---|---|
 | `main+0x14263`, i32 | gravity | read by the bank `0x43D186` and 13 other instructions in `.text`, stored by none by displacement (`replay-globals.tsv`, a `leave` row). The air war's 8155 was also fitted from its banks by the size research (unique: 588,252 exact against about 503,000 for 8154 or 8156) |
-| `main+0x1427F`, u8 | sea level | `movzx` at `0x48280D` in the sight emit (below); 70 byte accesses in `.text`, one of them a store (`0x416AA3`) |
+| `main+0x1427F`, u8 | sea level | `mov al, [ecx+0x1427F]` at `0x48280D` after `xor eax, eax` at `0x48280B`, a zero-extended byte, in the sight emit (below); 70 byte accesses in `.text`, one of them a store (`0x416AA3`) |
 | `main+0x14281` bit 2 | LosType's ray fan: which sight path a unit takes | the emitter's test `0x4825BA..0x4825CE`; RT_PHYSICS stores the bit as it stands at the segment's start, since the typed command LOSType can change it during a game |
 | def `+0x241` bit 11 | the unit moves by the air step | the movement pass `0x43DD36..0x43DD44` (below) |
 | def `+0x170`, u8 | the sight emit's height term | `mov cl, byte [def+0x170]` at `0x4827FB`. The water state reads the same offset as a signed **word** (`movsx` at `0x43DBBA`); the sight emit's byte is the one RT_AIR carries |
@@ -3507,9 +3507,15 @@ mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
   research's integer bank matches the engine on 588,451 of 588,452 airborne iterations, MEASURED].
   On a landing (`0x43D210` with layer 1) Δv is zero [the size research's reading; no recording
   has met one].
-- **Position** `+0x6A`/`+0x6E`/`+0x72` += velocity, the altitude only in the air step's path
-  (`0x43D7FF..0x43D839`, the altitude `0x43D80D`); the **move stamp**, the mover's `+0x2A` =
-  GameTime when the position or layer changed (`0x43D85A..0x43D865`).
+- **Position** `+0x6A`/`+0x6E`/`+0x72` += velocity, all three for every uncarried unit, ground or
+  air: the placement `0x43D6D0`, which the movement pass calls after either step (`0x43DD55`),
+  branches before the sum only on the carried test (`[unit+0x86]`, `0x43D6DD..0x43D6E5`), then
+  adds the mover's velocity `+0x08`/`+0x0C`/`+0x10` (`0x43D7FF..0x43D81F`; the altitude loaded at
+  `0x43D80D`, added at `0x43D813`) and stores the three on each path that changes them
+  (`0x43D8C5..0x43D8D0`, `0x43D9F1..0x43D9F7`, `0x43DA20..0x43DA35`). The unit frame predicts the
+  altitude only for an aircraft; a ground unit's is a generic lane, the codec's choice and not the
+  engine's. The **move stamp**, the mover's `+0x2A` = GameTime when the position or layer changed
+  (`0x43D85A..0x43D865`).
 - **The footprint cell** `+0x76`/`+0x78` = `(x − (w << 19) + 0x80000) >> 20` with the size
   `+0x7E`/`+0x80` (`0x43D86F..0x43D895`), compared with the stored cell at `0x43D898`.
 - **The claim stamp `0x440A70(unit)`** (stdcall, `ret 4`): with a mover, it reads the mover's
@@ -3519,6 +3525,12 @@ mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
   none, it re-marks every present class (`0x440AB9..0x440ADB`). Its one caller is the end of the
   footprint clear `0x47D0E0` (`0x47D2CA`), so the stamp moves when the footprint does. The image
   sees the step before its iteration's label: the iteration labelled `gt` holds `gt − 1`.
+  `0x440A70` is not the field's only writer: the footprint stamp `0x47CC30` stores GameTime there
+  too (`0x47CC54`), the pathfinder's `0x440AF0` stores GameTime (`0x440B30`) and puts the old value
+  back (`0x440BC4`), the mover's constructor `0x43DC00` zeroes it (`0x43DC16`) and the restore
+  `0x43DD70` writes it from its copy (`0x43DEC5`) — each DISASSEMBLED, the table in
+  [the movers](tadr-port/demo-recorder-s2-movers.md). The unit frame predicts only the move of the
+  footprint or the layer; a stamp from another writer is a residual, which costs size only.
 - **The sight emit `0x4827B0(unit)`** (stdcall, `ret 4`; callers `0x43DA59`, `0x464DBF`,
   `0x465053`, `0x48AAA0`, `0x48B6BF`) builds a record on its stack (`0x4827B3..0x48281B`): `+0`
   the owner `[unit+0x96]`, `+4` the address of `unit+0x7A`, `+8` def `+0x202` as a word
