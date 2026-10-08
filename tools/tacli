@@ -285,6 +285,26 @@ def pointer_restore(display: str, pos):
     return True
 
 
+def totala_by_prefix() -> dict:
+    """{WINEPREFIX: pid} of every local TotalA.exe, from one process listing: the first pid in
+    pgrep's order for each prefix. An instance's game is the one running from its prefix."""
+    try:
+        pids = subprocess.run(["pgrep", "-x", "TotalA.exe"],
+                              capture_output=True, text=True).stdout.split()
+    except FileNotFoundError:
+        return {}
+    out = {}
+    for pid in pids:
+        try:
+            environ = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+        except (OSError, PermissionError):
+            continue
+        for entry in environ:
+            if entry.startswith(b"WINEPREFIX="):
+                out.setdefault(entry.decode(errors="replace").split("=", 1)[1], int(pid))
+    return out
+
+
 class Instance:
     def __init__(self, name: str, lenient: bool = False):
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}", name):
@@ -376,21 +396,7 @@ class Instance:
         remote instance, by the test folder it runs from."""
         if self.remote:
             return self.remote.pid()
-        try:
-            pids = subprocess.run(["pgrep", "-x", "TotalA.exe"],
-                                  capture_output=True, text=True).stdout.split()
-        except FileNotFoundError:
-            return None
-        for pid in pids:
-            try:
-                environ = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
-            except (OSError, PermissionError):
-                continue
-            for entry in environ:
-                if entry.startswith(b"WINEPREFIX="):
-                    if entry.decode(errors="replace").split("=", 1)[1] == str(self.prefix):
-                        return int(pid)
-        return None
+        return totala_by_prefix().get(str(self.prefix))
 
     def running(self) -> bool:
         return self.pid() is not None
@@ -1344,12 +1350,15 @@ def place_window(inst: "Instance", display: str):
         return None
     wid, x, y, w, h = win
     others = []
+    # one process listing for every instance, not a pgrep each: those take 16.8 s over 506
+    # instance folders (MEASURED 2026-10-08, no game running), and this runs at every launch
+    live = totala_by_prefix()
     for meta_path in INSTANCES.glob("*/instance.json"):
         other = Instance(meta_path.parent.name, lenient=True)
         if other.unusable:
             warn(other.unusable)
             continue
-        if other.remote or other.name == inst.name or not other.running():
+        if other.remote or other.name == inst.name or str(other.prefix) not in live:
             continue
         if (other.meta().get("display") or default_display()) != display:
             continue    # another X server's windows share no pixels with this one
