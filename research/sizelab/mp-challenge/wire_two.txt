@@ -1,0 +1,4 @@
+{"npz": "owner_verify_two_native_4346154.npz", "ticks": 1531, "packets_today": 1498, "today_body": 419920, "codec_body": 103571, "ratio": 4.05, "mismatched_ticks": 0}
+{"npz": "owner_verify_two_native_4346155.npz", "ticks": 1578, "packets_today": 1510, "today_body": 484032, "codec_body": 116801, "ratio": 4.14, "mismatched_ticks": 0}
+{"npz": "owner_verify_two_native_4346156.npz", "ticks": 1531, "packets_today": 1495, "today_body": 262772, "codec_body": 50905, "ratio": 5.16, "mismatched_ticks": 0}
+{"npz": "owner_verify_two_native_4346158.npz", "ticks": 1578, "packets_today": 1502, "today_body": 405404, "codec_body": 84229, "ratio": 4.81, "mismatched_ticks": 0}

@@ -13,6 +13,7 @@ evidence and the code to re-run or extend it.
 | `discrete/` | cells, orders, events, globals, snapshots | 10.2 → 3.6 MiB, lossless; the snapshot wreck base |
 | `fidelity/` | quantization, sampling rate, what must stay exact | truncate, never round; size-against-error curves |
 | `mp/` | multiplayer contributions | recording the composed world instead of the packets |
+| `mp-challenge/` | the multiplayer challenger | the timing rule re-indexed; variant K (the remote packets kept compactly) measured |
 | `challenge-a/` | the first challenger: the numbers and the engine facts | re-runs and disassembly checks |
 | `challenge-b/` | the second challenger: the combined plan | the non-double-counted stack, the landing order |
 

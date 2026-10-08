@@ -1,0 +1,15 @@
+$SCRATCH/verify/two/native.imprec
+  contribution records 20326: 9006 own state packets dropped, 3003 seals kept bodiless, 11320 kept records rebuilt byte-exact (local seals excepted); ordinals +1: True
+  contributions V0 (today, recompressed alike) 1,272.3 KiB -> V5 378.7 KiB
+  stream recompressed alike 3,521.3 KiB -> without observed remote units 3,341.9 KiB (90 contact records)
+  V5 kinds deflated alone (KiB): 8 223.1, 10 45.3, 2 18.8, 4 16.4, 6 4.5, 11 4.0, 13 0.4, 12 0.3, 7 0.1, 14 0.1, 15 0.0
+$SCRATCH/chatfix/two/native.imprec
+  contribution records 21716: 9931 own state packets dropped, 2987 seals kept bodiless, 11785 kept records rebuilt byte-exact (local seals excepted); ordinals +1: True
+  contributions V0 (today, recompressed alike) 1,188.5 KiB -> V5 300.0 KiB
+  stream recompressed alike 3,038.0 KiB -> without observed remote units 2,904.4 KiB (81 contact records)
+  V5 kinds deflated alone (KiB): 8 161.4, 10 43.0, 4 16.2, 2 15.4, 6 4.6, 11 4.2, 12 0.3, 7 0.1, 13 0.1
+$SCRATCH/v6/full/ten.imprec
+  contribution records 24498: 6543 own state packets dropped, 6098 seals kept bodiless, 17955 kept records rebuilt byte-exact (local seals excepted); ordinals +1: True
+  contributions V0 (today, recompressed alike) 731.5 KiB -> V5 216.7 KiB
+  stream recompressed alike 532.0 KiB -> without observed remote units 457.7 KiB (15 contact records)
+  V5 kinds deflated alone (KiB): 8 120.6, 4 33.1, 2 13.7, 6 8.9, 11 6.6, 10 3.6, 13 1.1, 7 0.3

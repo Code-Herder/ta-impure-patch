@@ -278,27 +278,53 @@ the raw two-peer contributions; the recorder's own packets repeat its stream exa
 the ten-seat), and of the observed remote copies the playback uses only the level-start images and
 the comparison's contact bits.
 
-**The alternative: record the composed world.** The writer composes at record time what the
-playback composes today (its own units from its simulation, each remote unit's owner-authoritative
-fields from that owner's contributions) and records that one world through the normal stream, with
-a per-source proof footer of about 0.7 KiB in place of the packets. On the category basis: −19 %
-(two-peer), −20 % and −49 % (ten-seat) against today's files; dropping only the recorder's own
-packets gives −9 to −10 %. After the size round's codecs [INFERRED, the battle's ratios]: about
-1,400 KiB with the packets kept (66 % packets) against 510–550 merged on the two-peer file, about
-716 (78 % packets) against 175–190 on the ten-seat. Under the unit codec (MEASURED, decoded back):
-today's two unit copies 168 KiB against 92 merged on the two-peer file, 30.8 against 22.7 on the
-ten-seat; composed remote units cost 20–50 % more than their owners' own sequences, because
-packets arrive bunched.
+**Two alternatives, both lossless, both replacing the slice's file design.** MEASURED by the
+researcher and re-measured by a challenger (like for like, zlib on both sides; the recordings: two-
+peer, its chat-fix variant, the five-peer ten-seat game):
 
-It rests on four invariants: the game thread publishes the contributions for T+1 before `RK_TICK`
-T+1 (program order on one thread, two single-producer rings); the writer holds back at most one
-tick; one engine-free composition module shared by the writer and the tools; a snapshot holds the
-composed world plus the held creates. What is lost: a reader's re-check of the sequence and CRC
-chain (integrity only; no key or signature is stored), re-composing old files under new rules, the
-independent Python composition, and the packet audits. Nothing on the wire changes. A chained unit
-codec on the wire would shrink unit bodies 4.1–5.2 times (the receiver publishes only a gap-free
-prefix per source, and the session refuses `DPSESSION_NOPRESERVEORDER`), after which the per-tick
-seals cost more than the units: stage 6's traffic budget.
+| | two-peer | chat-fix | ten-seat |
+|---|---:|---:|---:|
+| contributions today, share of the file | 25.9 % | 27.5 % | 49.0 % |
+| only the recorder's own packets dropped | −10 % | | −9 % |
+| **K**: keep the remote packets, compactly | **−22.0 %** | **−23.7 %** | −40.6 % |
+| **the composed world** | −19.0 % | −21.4 % | **−46.2 %** |
+
+- **The composed world.** The writer composes at record time what the playback composes today (its
+  own units from its simulation, each remote unit's owner-authoritative fields from that owner's
+  contributions) and records one world through the normal stream, with a per-source proof footer of
+  about 0.7 KiB in place of the packets. The composition needs no engine state (`mp_compose`,
+  `mp_authority` and `mp_world` read only the reader's history and the primary world), but the
+  merged stream also needs a bootstrap marker and the owners' births. Its timing rule must be: every
+  record labelled T or earlier is published before the game thread advances to T+1, so the writer
+  composes image T when it sees `RK_TICK` T+1 — not "the contributions for T+1 precede `RK_TICK`
+  T+1", which is off by one (clicks go out between steps, post-capture roots and chat at the next
+  step's start, `mp_events_flush`). It loses: a reader's re-check of each source's sequence and CRC
+  chain, re-composing old files under new rules (in use: the state-byte and explored-map rules were
+  re-applied to existing recordings on 2026-10-06, and leavers and an owner build-done root are the
+  next rule changes), the independent Python composition (`recmp_compare`), the tests that read the
+  persisted packets (`recmp_lifecycle_test.py`, `recmp_create_begin_test.py`, `recmp_compare
+  --fork`), and the ability of a later build to play a file this build's writer refused.
+- **K.** Drop the recorder's own state packets and seals (MEASURED: they repeat its stream exactly,
+  every local slot at every iteration: units, order lists, player records and the explored-map
+  bit); keep each remote packet with a 5–6-byte header from which the exact 80-byte one is rebuilt;
+  store each seal as its tick, final flag and attested CRC; drop the observed remote unit records
+  after the first iteration, keeping the few contact bits the comparer reads. Every kept record
+  rebuilt byte-exact, and every attested CRC matched the chain recomputed from the stored packets.
+  K keeps the re-checkable proof, re-composition under new rules, the comparer, the native tests
+  and today's materializer; its seek replays the packets linearly through a snapshot interval,
+  which composition checkpoints in the snapshots would bound [INFERRED].
+
+Both drop the observed copy of remote units, and with it the audits of a replica against its
+owner. The composed world wins on the ten-seat file (80 KiB: remote unit packets and seals), a gap
+that should close once the unit codec applies to the owners' sequences, which code smaller than
+the composed ones [INFERRED]. The challenger recommends K now, with snapshot checkpoints for the
+seek, and the composed world reconsidered once the composition rules settle.
+
+Nothing on the wire changes either way. A chained unit codec on the wire shrinks unit bodies
+4.05–5.16 times (MEASURED, every tick decoded back); it is safe by construction because the
+receiver accepts only the last sequence plus one and the session refuses
+`DPSESSION_NOPRESERVEORDER` (`tagpu_recmp_net.c:288`). After it, the per-tick seals cost more than
+the units: stage 6's traffic budget.
 
 ## Landing order
 
@@ -310,7 +336,7 @@ seals cost more than the units: stage 6's traffic budget.
 | L3 | cells, orders, events, globals; the snapshot wreck base | about −7 MiB |
 | L4 | the measured hour of a four-player game with AI and structures | the snapshot interval; whether lossy is needed |
 | L5 | lossy, only if L4 misses a budget | about −1 MiB per category |
-| L6 | multiplayer: the composed world (with or after L1), then the wire codec in stage 6 | multiplayer files and bandwidth |
+| L6 | multiplayer: K or the composed world (with or after L1), then the wire codec in stage 6 | multiplayer files and bandwidth |
 
 ## Decisions for the owner
 
@@ -330,7 +356,7 @@ seals cost more than the units: stage 6's traffic budget.
    edges, what a takeover between snapshots gets, stale projectile records out of snapshots.
 9. **Projectiles from launch**: whether the puppet's engine may fly its own shots, after a
    determinism probe.
-10. **Multiplayer**: record the composed world instead of the packets (a change to the slice's
-    design), accepting the weaker re-verification; keep any copy of the packets (even only for
-    tests)?
+10. **Multiplayer** (a change to the slice's design): K or the composed world; accepting the loss
+    of the replica-against-owner audits (both); for the composed world, losing the independent
+    Python composition, or keeping the packets behind a test-only lever.
 11. **The measured hour's wall time** against the ten-minute rule for a game run.

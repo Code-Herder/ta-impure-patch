@@ -1,0 +1,21 @@
+$SCRATCH/verify/two/native.imprec
+  iterations                                         1578
+  list: equal                                       35510
+  list: equal (empty)                               41854
+  map: equal                                         3156
+  player: equal                                      3156
+  unit: equal                                       38682
+$SCRATCH/chatfix/two/native.imprec
+  iterations                                         1577
+  list: equal                                       36094
+  list: equal (empty)                               41772
+  map: equal                                         3154
+  player: equal                                      3154
+  unit: equal                                       38933
+$SCRATCH/v6/full/ten.imprec
+  iterations                                         2973
+  list: equal                                        6440
+  list: equal (empty)                               12988
+  map: equal                                         5946
+  player: equal                                      5946
+  unit: equal                                        9714
