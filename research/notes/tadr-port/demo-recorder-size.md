@@ -248,8 +248,9 @@ Every one is a loosening and the owner's decision.
 ### Gaps and risks
 
 - **Multiplayer contributions**: below.
-- **One flat battle**: no aircraft or hills (pitch, roll and vertical velocity never changed). The
-  codecs stay lossless elsewhere, but their gains need re-measuring on other recordings.
+- **One flat battle**: no aircraft or hills (pitch, roll and vertical velocity never changed). L0
+  (below) re-ran every codec on three other recordings: lossless everywhere, and aircraft are the
+  one class that costs far more than the battle suggested.
 - **Seek in C**: the prototype decoder works over every live unit; a seek could take 0.2–0.6 s
   against the one-second target [INFERRED]. Decode work should grow with the moving units.
 - **The writer and the ring**: the unit encoder's cost (about 1 ms an iteration at 2,000 units) is
@@ -258,6 +259,79 @@ Every one is a loosening and the owner's decision.
   records on a mismatch, so a bug costs size, never data.
 - **Predictor resets**: every codec resets at each snapshot and each segment's first iteration, a
   rule of the format, so a seek can start at any snapshot.
+
+## L0: the codecs on other recordings
+
+On 2026-10-07 each codec ran, its rules unchanged, on three recordings unlike the battle: the replay
+gate's **Town & Country** battle (hilly; four seats, about 1,440 kbots, bases and factories, 12
+aircraft; 4,021 ticks), its **naval** fixture (Anteer Strait, 3,841 ticks) and a new **air war**
+(`scenarios/air-war.json` on Two Continents: 200 aircraft over flak-defended bases, about 96 still
+flying after ARM's air force died; 5,610 ticks). The reports, scripts and outputs are in
+`research/sizelab/l0/`.
+
+**Every codec decoded every iteration back exactly on all three** (MEASURED: units, projectiles,
+cells, orders, events, wrecks, globals, players, feature heads, the snapshot wreck base; the unit
+decoder's state equals every snapshot). MiB, writer; the totals are sums of the measured categories
+plus the small kinds, as for the battle:
+
+| | the battle | Town & Country | naval | air war |
+|---|---:|---:|---:|---:|
+| the file today | 99.6 | 79.2 | 10.1 | 46.2 |
+| units | 46.7 → 4.50 | 52.7 → 4.52 | 2.52 → 0.22 | 24.9 → **6.22** |
+| projectiles (with the guided rule) | 36.5 → 2.55 | 15.1 → 1.05 | 5.01 → 0.35 | 3.37 → 0.35 |
+| cells, orders, events, the rest | 10.2 → 3.64 | 9.38 → 2.41 | 1.04 → 0.58 | 15.3 → 2.59 |
+| snapshots (wreck base) | 1.59 → 1.22 | 0.63 → 0.43 | 0.30 → 0.10 | 0.47 → 0.17 |
+| **the file, lossless** | **≈ 12.1 (8.2×)** | **≈ 8.5 (9.3×)** | **≈ 1.3 (7.9×)** | **≈ 9.4 (4.9×)** |
+| per hour at this fight's rate | 167 | 228 | 36 | 181 |
+
+**Ground units and ships**: every engine rule stays exact (heading, velocity from the sine table,
+position from velocity while unblocked, the stamp; the countdowns 98.3–99.9 %). Ships carry the
+sticky blocked bit in 87 % of their unit-iterations, where position-from-velocity falls to 64–77 %
+and the per-unit switching falls back to linear extrapolation at no visible cost. On hilly Town &
+Country, kbots changed pitch and roll 0 times in 4.78 M unit-iterations; tracked vehicles on slopes
+are untested [INFERRED: every ground type in that battle is a kbot].
+
+**Aircraft are the finding.** Heading, position, the stamp and the countdowns stay exact, but the
+velocity rule holds on only 2.6–5 % of airborne iterations: the air step (from `0x43D2C0`, partly
+read) damps the velocity, rescales it against a speed cap in x87 floating point and adds thrust
+along the heading. Pitch changes in 66 % of their iterations, vertical velocity in 9–13.5 %, and
+three unidentified mover fields at `+0x14`, `+0x18` and `+0x1C` in 75–92 %. MEASURED: aircraft
+are about 4.0 of the air war's 6.2 MiB of units, and 586 k of 602 k aircraft iterations still
+carry a change. That is roughly ten times a ground unit's cost [INFERRED: about 0.7 MiB an hour
+per aircraft here, against about 0.07 per unit at the battle's tail], so a game with a large air
+force cannot meet the four-player budget on the current rules. What would recover it, unmeasured:
+the three mover fields identified; altitude from vertical velocity (exact on 99.97 % of aircraft
+iterations, about 0.16 MiB here); an exact air-step rule, which must reproduce the engine's x87
+arithmetic bit for bit in the writer and both readers.
+
+**Projectiles**: guided flight, rare in the battle, is 43–63 % of the projectile stream on the
+other three. The engine rebuilds a guided projectile's velocity from its own heading, pitch and
+speed (DISASSEMBLED `0x49BA74..0x49BABE`), exact on 99.9 % of changing transitions on naval, 96 %
+on the air war and 88 % on Town & Country (the rest is burst spray); as a survivor predictor it
+decodes exactly and takes Town & Country 1.27 → 1.05 MiB, naval and the air war 0.49 → 0.35, the
+battle unchanged. The `+0x67` stamp holds on 99.3–100 %. A shot event predicts its birth except for
+the aircraft weapons and one burst weapon's templates, whose births sit 4–16 wu from the event's
+fire point (804 of 2,031 births on the air war): size only. **The search cap**: at most 4
+candidates per table section, the same shooter (`+0x52`) first, costs no size on any recording
+(the battle 2.539 against 2.548) and bounds each searched record at 432 compares, so the battle's
+busiest second falls from 288 M compares to 2.2 M; picking the candidates without scanning the pool
+needs per-section lists keyed by weapon and shooter [INFERRED]. Unrestricted, the search on the
+three new recordings stays under 0.6 M compares per iteration.
+
+**Cells**: the air war's cells are 30.7 % of its file, because the engine re-files every airborne
+unit in each cell's second slot (`+0x02`) every tick (the clear `0x47D0E0` and the stamp
+`0x47CC30`), about 4.6 cells per moving aircraft, each sent twice. The tick-input repeat holds on
+all three (1,367,178 of 1,369,928 image cells on the air war). The footprint predictor extended to
+that slot predicts 89 % of its changes and cuts the tick input from 1,766 to 365 KB on the air war
+and from 1,091 to 24 KB on Town & Country (about −1.4 and −1.0 MiB [INFERRED], not in the table).
+
+**Fields the battle never moved**, absorbed by the codecs: wrecks' `+0x04/+0x06/+0x2E` on the
+hilly maps and `+0x0C` (height) on naval; ships' second weapon reload; air war deaths differing in
+12–17 dwords rather than about 5. The RNG step count is found for every change (at most 3,833).
+
+**zstd 3 as a drop-in** on whole files: Town & Country 0.80, naval 0.63, the air war 0.76 (the
+battle 0.69); decoding 1.8–3 times faster than the writer's inflate. Town & Country's blocks hold
+only 5.8 iterations each, which is why its ratio is weak; the codecs' sectioned blocks replace them.
 
 ## Multiplayer recordings
 
@@ -334,9 +408,9 @@ the units: stage 6's traffic budget.
 
 | | Landing | Gives |
 |---|---|---|
-| L0 | every codec run offline on the naval and Town & Country recordings and one with aircraft and hills | confidence the gains generalize |
+| L0 | every codec run offline on the naval and Town & Country recordings and one with aircraft and hills: DONE 2026-10-07, lossless everywhere (*L0* above) | aircraft as the open cost |
 | L1 | the sectioned container, decode-before-write with fallback, the unit frame | about −42 MiB on this battle |
-| L2 | projectiles by identity, with a capped search | about −34 MiB |
+| L2 | projectiles by identity, the guided-velocity rule, the search capped at 4 candidates, shooter first | about −34 MiB |
 | L3 | cells, orders, events, globals; the snapshot wreck base | about −7 MiB |
 | L4 | the measured hour of a four-player game with AI and structures | the snapshot interval; whether lossy is needed |
 | L5 | lossy, only if L4 misses a budget | about −1 MiB per category |

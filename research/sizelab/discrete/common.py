@@ -13,6 +13,7 @@ import tarec as T  # noqa: E402
 SCRATCH = Path(os.environ.get("SIZELAB", "."))     # the data folder: size-battle.imprec
 FILE = Path(os.environ.get("REC_FILE", SCRATCH / "size-battle.imprec"))
 OUT = Path(os.environ.get("REC_OUT", SCRATCH / "research/discrete"))
+GRID = tuple(T.header_only(str(FILE))["features"][:2])   # the map's feature grid, width x height
 
 try:
     import zstandard

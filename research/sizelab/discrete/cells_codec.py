@@ -14,7 +14,8 @@ from common import T, OUT, mb, kb, rec_bytes
 from codec import Cols, varint, read_varint, zz, unzz, packed, HOWS
 
 CB = T.REC_CELL_BYTES
-W, H = 642, 648
+from common import GRID as _GRID
+W, H = _GRID
 FIELDS = ((0, 2), (2, 4), (4, 7), (7, 8), (8, 10), (10, 12), (12, 13))
 
 

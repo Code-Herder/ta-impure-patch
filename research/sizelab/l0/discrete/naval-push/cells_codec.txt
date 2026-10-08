@@ -1,0 +1,5 @@
+the first grid: raw 4.19 MB, deflate 304 KB, zstd3 212 KB, zstd19 137 KB
+the rest today: raw 1.03 MB, deflate 134 KB, zstd3 121 KB, zstd19 97 KB
+  A dedupe   : raw 0.36 MB, deflate 79 KB (0.59x), zstd3 81 KB (0.67x), zstd19 68 KB (0.70x)  [decoded: equal]
+  B fieldwise: raw 0.10 MB, deflate 29 KB (0.21x), zstd3 32 KB (0.26x), zstd19 29 KB (0.30x)  [decoded: equal]
+1.19 s, 195484 KB maxrss

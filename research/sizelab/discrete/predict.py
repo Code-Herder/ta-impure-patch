@@ -9,7 +9,8 @@ import struct
 
 from common import OUT
 
-W, H = 642, 648
+from common import GRID as _GRID
+W, H = _GRID
 
 
 def rect(f):

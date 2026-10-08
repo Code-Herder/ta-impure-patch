@@ -12,7 +12,8 @@ from common import OUT, kb
 from codec import Cols, varint, packed
 from predict import rect
 
-W, H = 642, 648
+from common import GRID as _GRID
+W, H = _GRID
 
 
 def main():

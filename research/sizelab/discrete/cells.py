@@ -19,7 +19,7 @@ def fields_changed(a, b):
 
 def main():
     keep = pickle.load(open(OUT / "kinds.pkl", "rb"))["keep"]
-    W, H = 642, 648
+    from common import GRID as _G; W, H = _G
     grid = bytearray(W * H * CB)
     bracket = 0
     first_tick = None

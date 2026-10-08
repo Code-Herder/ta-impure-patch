@@ -10,7 +10,7 @@ from collections import namedtuple
 
 import numpy as np
 
-SLOTS = 2501
+SLOTS = int(__import__("os").environ.get("SIZELAB_SLOTS", "2501"))   # unit slots: 2501 at unit limit 250, 5001 at 500
 NDW = 82
 OP_TICK, OP_UNIT, OP_DELTA, OP_GONE, OP_CORRECT = 0, 1, 2, 3, 4
 

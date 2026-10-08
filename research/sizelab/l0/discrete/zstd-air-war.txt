@@ -1,0 +1,12 @@
+air-war.imprec: 454 blocks, file 46.21 MiB
+block kind     n   raw MiB  writer MiB  zstd3 MiB  ratio
+header         1      0.00        0.00       0.00  0.421
+minimap        1      0.06        0.01       0.01  1.211
+stream       445    123.27       45.72      34.54  0.755
+snapshot       6      5.66        0.46       0.41  0.891
+end            1      0.00        0.00       0.00  0.837
+FILE         454    128.99       46.21      34.97  0.757   (check: writer sum + framing 48454025 vs file 48454025)
+decode whole file: writer (zlib inflate) 322 ms (419 MB/s raw), zstd3 180 ms (752 MB/s)  [64-bit Python]
+encode zstd3: 416 ms (325 MB/s)
+chained zstd3 (one frame per snapshot interval, flush per block): file 33.10 MiB (0.716 of the writer)  [decoded: equal]
+iterations per stream block: mean 12.6

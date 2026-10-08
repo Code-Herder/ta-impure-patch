@@ -1,0 +1,12 @@
+battle.imprec: 696 blocks, file 79.15 MiB
+block kind     n   raw MiB  writer MiB  zstd3 MiB  ratio
+header         1      0.00        0.00       0.00  0.380
+minimap        1      0.06        0.01       0.01  1.077
+stream       689    196.65       78.49      62.59  0.797
+snapshot       4      5.46        0.63       0.55  0.881
+end            1      0.00        0.00       0.00  0.743
+FILE         696    202.18       79.15      63.17  0.798   (check: writer sum + framing 82991840 vs file 82991840)
+decode whole file: writer (zlib inflate) 516 ms (411 MB/s raw), zstd3 221 ms (960 MB/s)  [64-bit Python]
+encode zstd3: 493 ms (430 MB/s)
+chained zstd3 (one frame per snapshot interval, flush per block): file 57.23 MiB (0.723 of the writer)  [decoded: equal]
+iterations per stream block: mean 5.8

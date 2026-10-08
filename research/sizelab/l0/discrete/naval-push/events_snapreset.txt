@@ -1,0 +1,26 @@
+reset blocks: [2, 50, 68, 76, 81]
+events today: 37,077, raw 1.16 MB, deflate 261 KB, zstd3 224 KB, zstd19 200 KB
+re-encoded: raw 0.33 MB, deflate 129 KB (0.50x), zstd3 138 KB (0.62x), zstd19 126 KB (0.63x)  [decoded: equal]
+by column group (deflate per block, zstd19 per block):
+  shot             raw     53 KB  deflate    44 KB  zstd19    43 KB
+  start            raw     40 KB  deflate    22 KB  zstd19    22 KB
+  named            raw    117 KB  deflate    25 KB  zstd19    25 KB
+  reply            raw     22 KB  deflate     1 KB  zstd19     2 KB
+  spray            raw      1 KB  deflate     0 KB  zstd19     0 KB
+  death            raw      7 KB  deflate     6 KB  zstd19     7 KB
+  feature          raw     17 KB  deflate     2 KB  zstd19     3 KB
+  kind, uid, same  raw     74 KB  deflate    31 KB  zstd19    31 KB
+today, each kind alone (deflate, zstd19):
+  feature call             4 KB     4 KB
+  feature call's end       2 KB     3 KB
+  state byte               0 KB     0 KB
+  reply                    9 KB     9 KB
+  create                   2 KB     1 KB
+  broadcast start         52 KB    43 KB
+  owner's start           77 KB    57 KB
+  shot                    61 KB    58 KB
+  death                   26 KB    23 KB
+  death's end              2 KB     2 KB
+  nano spray               1 KB     1 KB
+  build done               0 KB     0 KB
+1.02 s, 104588 KB maxrss

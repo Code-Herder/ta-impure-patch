@@ -1,0 +1,71 @@
+types:
+  type   26 air       first-tick    0 created   24 unit-its    34270 y 5439488..13041664
+  type   34 floater   first-tick    1 created    1 unit-its     5447 y 5570560..5570560
+  type   51 air       first-tick    0 created   56 unit-its    25524 y 1507328..16318464
+  type   67 ground    first-tick    0 created   16 unit-its    16733 y 4849664..5963776
+  type   71 structure first-tick    0 created    6 unit-its    19685 y 1099511627776..-1
+  type  112 structure first-tick    0 created   20 unit-its    34560 y 1099511627776..-1
+  type  123 air       first-tick    0 created   20 unit-its    19321 y 5439488..21757952
+  type  167 ground    first-tick    1 created    1 unit-its     5447 y 5046272..5898240
+  type  168 ground    first-tick    0 created   16 unit-its    52360 y 4980736..7536640
+  type  183 air       first-tick    0 created   24 unit-its   129936 y 0..22478848
+  type  189 structure first-tick    0 created    1 unit-its      163 y 1099511627776..-1
+  type  204 structure first-tick    0 created    6 unit-its    27336 y 1099511627776..-1
+  type  208 structure first-tick    0 created    4 unit-its    12857 y 1099511627776..-1
+  type  241 air       first-tick    0 created   20 unit-its    94400 y 0..22806528
+  type  246 structure first-tick    0 created   20 unit-its    83104 y 1099511627776..-1
+  type  271 air       first-tick    0 created   56 unit-its   298473 y 0..20436472
+pairs {'ground': 74507, 'floater': 5446, 'air': 601724, 'structure': 177648}
+ground    heading          all     n     74507 rule exact 100.00% changed     21524 changed&exact 100.00% lin exact  84.93%
+floater   heading          all     n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+air       heading          all     n    601724 rule exact 100.00% changed    181226 changed&exact 100.00% lin exact  78.36%
+ground    mover vx         all     n     74507 rule exact 100.00% changed     12830 changed&exact 100.00% lin exact  80.93%
+floater   mover vx         all     n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+air       mover vx         all     n    601724 rule exact   4.97% changed    540028 changed&exact   0.46% lin exact  14.70%
+ground    mover vz         all     n     74507 rule exact 100.00% changed     12542 changed&exact 100.00% lin exact  81.03%
+floater   mover vz         all     n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+air       mover vz         all     n    601724 rule exact   2.64% changed    540947 changed&exact   0.45% lin exact  15.68%
+ground    x                all     n     74507 rule exact  93.28% changed     27113 changed&exact  95.92% lin exact  84.51%
+ground    x                blocked n      9050 rule exact  44.66% changed      1233 changed&exact  10.30% lin exact  88.11%
+ground    x                free    n     65457 rule exact 100.00% changed     25880 changed&exact 100.00% lin exact  84.02%
+floater   x                all     n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+floater   x                free    n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+air       x                all     n    601724 rule exact 100.00% changed    568237 changed&exact 100.00% lin exact  10.22%
+air       x                free    n    601724 rule exact 100.00% changed    568237 changed&exact 100.00% lin exact  10.22%
+ground    z                all     n     74507 rule exact  93.92% changed     25255 changed&exact  92.67% lin exact  84.46%
+ground    z                blocked n      9050 rule exact  49.92% changed      2033 changed&exact   9.00% lin exact  84.57%
+ground    z                free    n     65457 rule exact 100.00% changed     23222 changed&exact 100.00% lin exact  84.44%
+floater   z                all     n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+floater   z                free    n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+air       z                all     n    601724 rule exact 100.00% changed    568058 changed&exact 100.00% lin exact  10.07%
+air       z                free    n    601724 rule exact 100.00% changed    568058 changed&exact 100.00% lin exact  10.07%
+ground    mover stamp      all     n     74507 rule exact 100.00% changed     32042 changed&exact 100.00% lin exact  99.32%
+floater   mover stamp      all     n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+air       mover stamp      all     n    601724 rule exact 100.00% changed    588452 changed&exact 100.00% lin exact  99.96%
+ground    w1 reload        all     n     74507 rule exact  99.19% changed     45773 changed&exact  98.69% lin exact  98.05%
+floater   w1 reload        all     n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+air       w1 reload        all     n    601724 rule exact  99.83% changed     35493 changed&exact  97.20% lin exact  99.60%
+structure w1 reload        all     n    177648 rule exact  99.88% changed      3455 changed&exact  93.81% lin exact  99.68%
+ground    w2 reload        all     n     74507 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+floater   w2 reload        all     n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+air       w2 reload        all     n    601724 rule exact  99.96% changed     21344 changed&exact  98.91% lin exact  99.89%
+structure w2 reload        all     n    177648 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+ground    w3 reload        all     n     74507 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+floater   w3 reload        all     n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+air       w3 reload        all     n    601724 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+structure w3 reload        all     n    177648 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+ground    +0xFA countdown  all     n     74507 rule exact  99.57% changed     16879 changed&exact  98.18% lin exact  99.14%
+floater   +0xFA countdown  all     n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+air       +0xFA countdown  all     n    601724 rule exact  99.92% changed     33301 changed&exact  98.65% lin exact  99.85%
+structure +0xFA countdown  all     n    177648 rule exact  99.53% changed     41670 changed&exact  98.33% lin exact  99.13%
+ground    +0xFB..FE        all     n     74507 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+floater   +0xFB..FE        all     n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+air       +0xFB..FE        all     n    601724 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+structure +0xFB..FE        all     n    177648 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+ground    y (altitude)     all     n     74507 rule exact  98.37% changed      1218 changed&exact   0.00% lin exact  96.97%
+ground    y (altitude)     blocked n      9050 rule exact  99.78% changed        20 changed&exact   0.00% lin exact  99.54%
+ground    y (altitude)     free    n     65457 rule exact  98.17% changed      1198 changed&exact   0.00% lin exact  96.61%
+floater   y (altitude)     all     n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+floater   y (altitude)     free    n      5446 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+air       y (altitude)     all     n    601724 rule exact 100.00% changed     97146 changed&exact 100.00% lin exact  86.50%
+air       y (altitude)     free    n    601724 rule exact 100.00% changed     97146 changed&exact 100.00% lin exact  86.50%

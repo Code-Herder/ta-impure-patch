@@ -16,7 +16,8 @@ from common import T, OUT, FILE, mb, kb, rec_bytes
 from codec import Cols, varint, read_varint, zz, unzz, wdiff, packed, HOWS
 
 P = 0x7FFFFFFF
-W, H = 642, 648
+from common import GRID as _GRID
+W, H = _GRID
 
 
 def steps(a, b, cap=1 << 20):

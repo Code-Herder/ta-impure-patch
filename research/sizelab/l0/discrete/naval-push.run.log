@@ -1,0 +1,33 @@
+== kinds 23:22:56
+rc 0 5.41 s, 141732 KB maxrss
+== units_pass 23:23:02
+rc 0 1.19 s, 115676 KB maxrss
+== cells 23:23:03
+rc 0 0.46 s, 139076 KB maxrss
+== cells_codec 23:23:03
+rc 0 1.19 s, 195484 KB maxrss
+== cells_predict 23:23:04
+rc 0 0.15 s, 94588 KB maxrss
+== orders_fields 23:23:05
+rc 0 0.13 s, 47752 KB maxrss
+== orders_codec 23:23:05
+rc 0 0.90 s, 55476 KB maxrss
+== orders_codec2 23:23:06
+rc 0 0.83 s, 59192 KB maxrss
+== events 23:23:06
+rc 0 0.10 s, 47252 KB maxrss
+== events_snapreset 23:23:07
+rc 0 1.02 s, 104588 KB maxrss
+== small_codec 23:23:08
+rc 0 2.07 s, 78412 KB maxrss
+== globals 23:23:10
+rc 0 0.13 s, 75124 KB maxrss
+== predict 23:23:10
+rc 0 0.12 s, 60796 KB maxrss
+== snapshots 23:23:10
+rc 0 1.93 s, 78012 KB maxrss
+== snapshots2 23:23:12
+rc 0 1.21 s, 67244 KB maxrss
+== combined 23:23:13
+rc 0 2.72 s, 190244 KB maxrss
+done

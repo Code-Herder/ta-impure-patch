@@ -1,0 +1,88 @@
+the first iteration's wreck records: 8192
+
+snapshot at 901: whole raw 998 KB, deflate 87 KB, zstd19 63 KB
+   wrecks         raw    448 KB deflate   51 KB zstd19   40 KB
+   units          raw     67 KB deflate   15 KB zstd19   12 KB
+   cells          raw     27 KB deflate    6 KB zstd19    5 KB
+   projectiles    raw     13 KB deflate    5 KB zstd19    5 KB
+   orders         raw     30 KB deflate    3 KB zstd19    3 KB
+   tables         raw    143 KB deflate    2 KB zstd19    1 KB
+   players        raw      5 KB deflate    1 KB zstd19    1 KB
+   explored map   raw    263 KB deflate    0 KB zstd19    0 KB
+   other          raw      0 KB deflate    0 KB zstd19    0 KB
+   globals        raw      0 KB deflate    0 KB zstd19    0 KB
+   wrecks: 8192 records, 26 differ from the first iteration's: deflate 1 KB instead of 51 KB
+   projectiles: 117 records below hw, 117 with a weapon: deflate 5 KB instead of 5 KB
+
+snapshot at 1801: whole raw 965 KB, deflate 79 KB, zstd19 50 KB, zstd19 with the previous snapshot as its dictionary 17 KB
+   wrecks         raw    448 KB deflate   52 KB zstd19   41 KB
+   units          raw     47 KB deflate   10 KB zstd19    8 KB
+   projectiles    raw     14 KB deflate    6 KB zstd19    5 KB
+   cells          raw     24 KB deflate    5 KB zstd19    4 KB
+   orders         raw     21 KB deflate    2 KB zstd19    2 KB
+   tables         raw    143 KB deflate    2 KB zstd19    2 KB
+   players        raw      5 KB deflate    1 KB zstd19    1 KB
+   explored map   raw    263 KB deflate    0 KB zstd19    0 KB
+   other          raw      0 KB deflate    0 KB zstd19    0 KB
+   globals        raw      0 KB deflate    0 KB zstd19    0 KB
+   wrecks: 8192 records, 46 differ from the first iteration's: deflate 1 KB instead of 52 KB
+   projectiles: 122 records below hw, 122 with a weapon: deflate 6 KB instead of 6 KB
+
+snapshot at 2701: whole raw 961 KB, deflate 79 KB, zstd19 50 KB, zstd19 with the previous snapshot as its dictionary 10 KB
+   wrecks         raw    448 KB deflate   52 KB zstd19   40 KB
+   units          raw     45 KB deflate    9 KB zstd19    7 KB
+   projectiles    raw     14 KB deflate    6 KB zstd19    5 KB
+   cells          raw     23 KB deflate    5 KB zstd19    4 KB
+   tables         raw    143 KB deflate    2 KB zstd19    2 KB
+   orders         raw     20 KB deflate    2 KB zstd19    2 KB
+   players        raw      5 KB deflate    1 KB zstd19    1 KB
+   explored map   raw    263 KB deflate    0 KB zstd19    0 KB
+   other          raw      0 KB deflate    0 KB zstd19    0 KB
+   globals        raw      0 KB deflate    0 KB zstd19    0 KB
+   wrecks: 8192 records, 46 differ from the first iteration's: deflate 1 KB instead of 52 KB
+   projectiles: 122 records below hw, 122 with a weapon: deflate 6 KB instead of 6 KB
+
+snapshot at 3601: whole raw 956 KB, deflate 78 KB, zstd19 48 KB, zstd19 with the previous snapshot as its dictionary 9 KB
+   wrecks         raw    448 KB deflate   52 KB zstd19   41 KB
+   units          raw     44 KB deflate    9 KB zstd19    7 KB
+   projectiles    raw     14 KB deflate    6 KB zstd19    5 KB
+   cells          raw     19 KB deflate    4 KB zstd19    3 KB
+   orders         raw     19 KB deflate    2 KB zstd19    2 KB
+   tables         raw    143 KB deflate    2 KB zstd19    2 KB
+   players        raw      5 KB deflate    1 KB zstd19    1 KB
+   explored map   raw    263 KB deflate    0 KB zstd19    0 KB
+   other          raw      0 KB deflate    0 KB zstd19    0 KB
+   globals        raw      0 KB deflate    0 KB zstd19    0 KB
+   wrecks: 8192 records, 46 differ from the first iteration's: deflate 1 KB instead of 52 KB
+   projectiles: 122 records below hw, 122 with a weapon: deflate 6 KB instead of 6 KB
+
+snapshot at 4501: whole raw 958 KB, deflate 77 KB, zstd19 52 KB, zstd19 with the previous snapshot as its dictionary 7 KB
+   wrecks         raw    448 KB deflate   52 KB zstd19   41 KB
+   units          raw     44 KB deflate    8 KB zstd19    7 KB
+   projectiles    raw     14 KB deflate    6 KB zstd19    5 KB
+   cells          raw     22 KB deflate    4 KB zstd19    3 KB
+   tables         raw    143 KB deflate    2 KB zstd19    2 KB
+   orders         raw     19 KB deflate    2 KB zstd19    1 KB
+   players        raw      5 KB deflate    1 KB zstd19    1 KB
+   explored map   raw    263 KB deflate    0 KB zstd19    0 KB
+   other          raw      0 KB deflate    0 KB zstd19    0 KB
+   globals        raw      0 KB deflate    0 KB zstd19    0 KB
+   wrecks: 8192 records, 46 differ from the first iteration's: deflate 1 KB instead of 52 KB
+   projectiles: 122 records below hw, 122 with a weapon: deflate 6 KB instead of 6 KB
+
+snapshot at 5401: whole raw 955 KB, deflate 77 KB, zstd19 46 KB, zstd19 with the previous snapshot as its dictionary 7 KB
+   wrecks         raw    448 KB deflate   52 KB zstd19   40 KB
+   units          raw     43 KB deflate    8 KB zstd19    7 KB
+   projectiles    raw     14 KB deflate    6 KB zstd19    5 KB
+   cells          raw     19 KB deflate    4 KB zstd19    3 KB
+   tables         raw    143 KB deflate    2 KB zstd19    2 KB
+   orders         raw     19 KB deflate    2 KB zstd19    1 KB
+   players        raw      5 KB deflate    1 KB zstd19    1 KB
+   explored map   raw    263 KB deflate    0 KB zstd19    0 KB
+   other          raw      0 KB deflate    0 KB zstd19    0 KB
+   globals        raw      0 KB deflate    0 KB zstd19    0 KB
+   wrecks: 8192 records, 46 differ from the first iteration's: deflate 1 KB instead of 52 KB
+   projectiles: 122 records below hw, 122 with a weapon: deflate 6 KB instead of 6 KB
+
+totals: {'deflate': '478 KB', 'zstd19': '309 KB', 'delta': '113 KB', 'wreck saving': '305 KB', 'proj saving': '0 KB'}
+3.76 s, 192560 KB maxrss

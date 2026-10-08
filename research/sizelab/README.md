@@ -16,6 +16,7 @@ evidence and the code to re-run or extend it.
 | `mp-challenge/` | the multiplayer challenger | the timing rule re-indexed; variant K (the remote packets kept compactly) measured |
 | `challenge-a/` | the first challenger: the numbers and the engine facts | re-runs and disassembly checks |
 | `challenge-b/` | the second challenger: the combined plan | the non-double-counted stack, the landing order |
+| `l0/` | L0: every codec on Town & Country, naval and an air war | lossless everywhere; aircraft cost ~10× a ground unit; the guided-projectile rule; the search cap |
 
 Each folder's `README.md` is that area's report; `BRIEF.md` is the brief every researcher worked
 from. Outputs (`*.out`, `*.jsonl`, `*.json`) are the runs the reports cite.
@@ -30,6 +31,9 @@ from. Outputs (`*.out`, `*.jsonl`, `*.json`) are the runs the reports cite.
   `tools/replay/recsize.py` gives its breakdown. Several scripts cache large intermediates
   (`*.npy`, `*.npz`, pickles, gigabytes for `units/` and `fidelity/`) beside themselves; they are
   regenerated on demand and are not committed.
+- **Other maps and unit limits**: the discrete scripts read the map's grid from the header;
+  the unit scripts take the slot count from `$SIZELAB_SLOTS` (2501 at unit limit 250, 5001 at
+  500). `discrete/run.sh` and `units/runall.sh` run each area's pipeline on one recording.
 - **Python**: the shared venv (`.venv-undither/bin/python` at the main checkout), which has numpy,
   zstandard, brotli, lz4 and numba. The shell scripts take it as `$PY`.
 - **The exe**: `units/sintab.py` reads the engine's sine table from the pristine exe named by

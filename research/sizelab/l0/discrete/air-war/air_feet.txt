@@ -1,0 +1,2 @@
+iterations 5609: airborne units a step mean 104.9 (max 176), footprint moves a step 64.0, cells a move changes 4.64, cells a step 296.6
+footprint sizes (w, h): [((2, 2), 440525), ((3, 3), 147927)]

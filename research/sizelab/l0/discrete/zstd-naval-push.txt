@@ -1,0 +1,12 @@
+naval-push.imprec: 85 blocks, file 10.10 MiB
+block kind     n   raw MiB  writer MiB  zstd3 MiB  ratio
+header         1      0.00        0.00       0.00  0.420
+minimap        1      0.06        0.01       0.01  1.341
+stream        78     24.33        9.79       6.08  0.621
+snapshot       4      3.12        0.30       0.27  0.901
+end            1      0.00        0.00       0.00  0.808
+FILE          85     27.51       10.10       6.36  0.629   (check: writer sum + framing 10592893 vs file 10592893)
+decode whole file: writer (zlib inflate) 69 ms (415 MB/s raw), zstd3 22 ms (1341 MB/s)  [64-bit Python]
+encode zstd3: 46 ms (623 MB/s)
+chained zstd3 (one frame per snapshot interval, flush per block): file 5.99 MiB (0.593 of the writer)  [decoded: equal]
+iterations per stream block: mean 49.2

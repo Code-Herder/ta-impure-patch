@@ -12,7 +12,8 @@ import struct
 from common import T, OUT, load
 
 UD = T.REC_UNIT_DWORDS
-W, H = 642, 648
+from common import GRID as _GRID
+W, H = _GRID
 CB = T.REC_CELL_BYTES
 
 

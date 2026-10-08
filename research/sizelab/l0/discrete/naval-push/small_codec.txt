@@ -1,0 +1,24 @@
+wreck records, which u16s changed between two images of a record:
+   ['0xc']: 21,509
+   new: 8,192
+   ['0xc', '0xe']: 4,488
+   ['0x2']: 140
+   ['0x2', '0xc']: 128
+   ['0x0', '0xc']: 80
+   ['0x0', '0x2']: 65
+   ['0xc', '0x26']: 64
+   ['0xc', '0x18', '0x1a']: 53
+   ['0x0', '0x8', '0xa', '0xc', '0xe', '0x10', '0x12', '0x18', '0x1a', '0x22', '0x28', '0x2a', '0x2c']: 31
+wrecks (values)                    today raw 1.87 MB, deflate 187 KB, zstd3 157 KB, zstd19 141 KB
+                                   new   raw 0.59 MB, deflate 127 KB (0.68x), zstd3 123 KB (0.78x), zstd19 114 KB (0.81x)  [decoded: equal]
+wrecks (diffs)                     today raw 1.87 MB, deflate 187 KB, zstd3 157 KB, zstd19 141 KB
+                                   new   raw 0.56 MB, deflate 60 KB (0.32x), zstd3 58 KB (0.37x), zstd19 50 KB (0.36x)  [decoded: equal]
+players (values)                   today raw 0.03 MB, deflate 13 KB, zstd3 14 KB, zstd19 13 KB
+                                   new   raw 0.02 MB, deflate 12 KB (0.91x), zstd3 13 KB (0.94x), zstd19 12 KB (0.94x)  [decoded: equal]
+players (diffs)                    today raw 0.03 MB, deflate 13 KB, zstd3 14 KB, zstd19 13 KB
+                                   new   raw 0.02 MB, deflate 8 KB (0.62x), zstd3 10 KB (0.67x), zstd19 9 KB (0.68x)  [decoded: equal]
+globals (dod + rng steps)          today raw 0.12 MB, deflate 62 KB, zstd3 61 KB, zstd19 58 KB
+                                   new   raw 0.05 MB, deflate 14 KB (0.23x), zstd3 16 KB (0.25x), zstd19 14 KB (0.24x)  [decoded: equal]
+feature heads (cursor predicted)   today raw 0.07 MB, deflate 11 KB, zstd3 10 KB, zstd19 8 KB
+                                   new   raw 0.01 MB, deflate 2 KB (0.18x), zstd3 3 KB (0.30x), zstd19 3 KB (0.32x)  [decoded: equal]
+2.07 s, 78412 KB maxrss

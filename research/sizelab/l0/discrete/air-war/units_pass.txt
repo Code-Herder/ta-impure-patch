@@ -1,0 +1,2 @@
+deaths 290, shots 2043, tick-input cells 1367274, iterations 5610
+9.70 s, 603948 KB maxrss

@@ -1,0 +1,34 @@
+78 stream blocks
+kind                     records         raw   deflate alone  zstd19 alone
+RK_PROJ_DELTA             127929     7.62 MB        5,111 KB      2,973 KB
+RK_UNIT_DELTA             199440     6.65 MB        2,583 KB      1,673 KB
+RK_CELLS                   30475     5.22 MB          438 KB        234 KB
+RK_WRECK                   34940     1.87 MB          187 KB        141 KB
+RK_ORDERS                  12018     1.17 MB           95 KB         66 KB
+RK_EV_START_NAMED          15423     0.62 MB           77 KB         57 KB
+RK_GLOBALS_DELTA            3840     0.12 MB           62 KB         58 KB
+RK_EV_SHOT                  2148     0.08 MB           61 KB         58 KB
+RK_EV_START                 6570     0.20 MB           52 KB         43 KB
+RK_EV_DEATH                  210     0.07 MB           26 KB         23 KB
+RK_TABLE_SPAN               6202     0.12 MB           14 KB         10 KB
+RK_PLAYER_DELTA              574     0.02 MB           12 KB         13 KB
+RK_FEATURES                 3841     0.07 MB           11 KB          8 KB
+RK_PROJ                      186     0.02 MB           10 KB          9 KB
+RK_EV_REPLY                 3769     0.06 MB            9 KB          9 KB
+RK_TICK                     3841     0.03 MB            8 KB          7 KB
+RK_UNIT                      211     0.07 MB            7 KB          5 KB
+RK_PROJ_HEAD                1365     0.02 MB            4 KB          5 KB
+RK_EV_FEATURE               3931     0.05 MB            4 KB          4 KB
+RK_EV_FEATURE_END           3931     0.04 MB            2 KB          3 KB
+RK_EV_CREATE                 209     0.01 MB            2 KB          1 KB
+RK_EV_DEATH_END              210     0.00 MB            2 KB          2 KB
+RK_UNIT_GONE                 210     0.00 MB            2 KB          2 KB
+RK_EV_SPRAY                  564     0.03 MB            1 KB          1 KB
+RK_PLAYER                     10     0.01 MB            1 KB          0 KB
+RK_EV_STATE                  109     0.00 MB            0 KB          0 KB
+RK_MAPPED                      6     0.16 MB            0 KB          0 KB
+RK_POV                         5     0.00 MB            0 KB          0 KB
+RK_TABLE_SIZE                 29     0.00 MB            0 KB          0 KB
+RK_EV_BUILT                    3     0.00 MB            0 KB          0 KB
+RK_GLOBALS                     1     0.00 MB            0 KB          0 KB
+5.41 s, 141732 KB maxrss

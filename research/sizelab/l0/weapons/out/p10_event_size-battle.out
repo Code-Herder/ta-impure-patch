@@ -1,0 +1,90 @@
+event True, xpos False: 7830 iterations decoded back exactly (137 s)
+MiB, per stream block          raw    writer     zlib9    zstd19     lzma6
+today                       60.321    36.503    21.075    16.776    15.293
+re-encoded                  19.048     2.547     2.520     2.418     2.410
+per 900-tick interval, zstd19: today 11.441 MiB, re-encoded 2.205 MiB
+per 900-tick interval, lzma6: today 10.348 MiB, re-encoded 2.145 MiB
+sections (each deflated alone per block, attribution): raw / writer / zstd19, MiB
+   ctl       0.268    0.179    0.179
+   refs      0.147    0.095    0.098
+   surv     14.639    1.038    0.968
+   new       2.442    1.179    1.164
+   tail      1.551    0.130    0.128
+predictor chosen (column: mode ticks)
+   d 0: prev 7830
+   d 1: phys 7406, lin 327, prev 97
+   d 2: phys 7730, prev 97, lin 3
+   d 3: phys 7271, lin 462, prev 97
+   d 4: lin 5642, prev 2188
+   d 5: lin 5546, prev 2284
+   d 6: lin 5628, prev 2202
+   d 7: prev 7830
+   d 8: lin 7360, prev 470
+   d 9: prev 7830
+   d10: prev 7830
+   d11: prev 7830
+   d12: prev 7830
+   d13: prev 7830
+   d14: prev 7830
+   d15: prev 7830
+   d16: prev 7830
+   d17: prev 7830
+   d18: prev 7830
+   d19: prev 7830
+   d20: prev 7830
+   d21: prev 7830
+   d22: prev 7830
+   d23: prev 7827, lin 3
+   d24: prev 7830
+   d25: idx25 7711, prev 100, idx25p 19
+   d26: prev 7336, idx26 494
+parts, the writer's deflate alone per block (attribution), KiB
+   surv d23      225.1
+   surv d3       186.0
+   surv d1       182.3
+   new d9        125.6
+   new d7        125.3
+   surv d2       121.3
+   new d13       120.6
+   new d15       119.7
+   refs           97.1
+   ctl            95.3
+   new d16        94.0
+   surv d9        86.4
+   new d1         85.5
+   new d3         84.2
+   new d8         83.0
+   surv d7        81.1
+   new d14        73.3
+   new d2         71.8
+   new d23        67.0
+   new d17        60.0
+   surv d18       55.6
+   new d25        46.0
+   new d24        45.7
+   new d22        45.0
+   new d18        42.9
+   surv d16       40.7
+   new d10        39.3
+   new d12        37.4
+   surv d24       36.9
+   new d11        32.4
+   surv d4        30.1
+   surv d6        30.0
+   surv d5        27.1
+   surv d8        24.4
+   surv d26       20.7
+   tail d23       19.6
+   tail d22       18.9
+   new d4         18.8
+   new d6         18.5
+   new d20        16.0
+   new d5         15.6
+   surv d25       15.4
+   tail d13       15.1
+   tail d26       15.0
+   tail d4        14.7
+reference search (encoder): 611571 dword compares an iteration on average
+reference search (encoder) per iteration: p99 7092567, max 18773046 dword compares
+busiest second (GameTime // 30): 365812767 dword compares; iterations over 1 M: 892
+filter (weapon dword reads): 0 an iteration

@@ -1,0 +1,64 @@
+types:
+  type   32 ground    first-tick    0 created   10 unit-its    36820 y 5177344..6684672
+  type   34 ground    first-tick    2 created    2 unit-its     7722 y 5242880..5898240
+  type   51 air       first-tick    0 created   12 unit-its     2543 y 5242880..13107200
+  type   62 ground    first-tick    0 created  200 unit-its   728626 y 5111808..6291456
+  type   67 ground    first-tick    0 created   60 unit-its   212132 y 5177344..6881280
+  type   68 structure first-tick    0 created    2 unit-its     7384 y 1099511627776..-1
+  type   78 structure first-tick    0 created    2 unit-its     2994 y 1099511627776..-1
+  type   95 ground    first-tick    0 created  300 unit-its  1021038 y 5111808..5963776
+  type   98 ground    first-tick    0 created  120 unit-its   426550 y 5111808..6291456
+  type  112 structure first-tick    0 created   12 unit-its    44304 y 1099511627776..-1
+  type  132 structure first-tick    0 created    2 unit-its     7384 y 1099511627776..-1
+  type  144 ground    first-tick    0 created  300 unit-its   910945 y 5111808..6029312
+  type  165 ground    first-tick    0 created   14 unit-its    50178 y 1441792..5898240
+  type  167 ground    first-tick    2 created    2 unit-its     7722 y 0..5767168
+  type  168 ground    first-tick    0 created   60 unit-its   221276 y 5177344..6029312
+  type  189 structure first-tick    0 created    1 unit-its      160 y 1099511627776..-1
+  type  202 structure first-tick    0 created    2 unit-its     7384 y 1099511627776..-1
+  type  208 structure first-tick    0 created    1 unit-its     1415 y 1099511627776..-1
+  type  246 structure first-tick    0 created   12 unit-its    44304 y 1099511627776..-1
+  type  252 ground    first-tick    0 created  120 unit-its   434874 y 5111808..5963776
+  type  258 ground    first-tick    0 created  200 unit-its   727529 y 5111808..6029312
+  type  268 structure first-tick    0 created    1 unit-its     2584 y 1099511627776..-1
+  type  272 air       first-tick    0 created   12 unit-its     8374 y 5242880..16069420
+  type  275 structure first-tick    0 created    2 unit-its     7384 y 1099511627776..-1
+pairs {'ground': 4784024, 'floater': 0, 'air': 10893, 'structure': 125260}
+ground    heading          all     n   4784024 rule exact 100.00% changed   1723590 changed&exact 100.00% lin exact  81.24%
+air       heading          all     n     10893 rule exact 100.00% changed      4915 changed&exact 100.00% lin exact  80.33%
+ground    mover vx         all     n   4784024 rule exact 100.00% changed   1082147 changed&exact 100.00% lin exact  75.60%
+air       mover vx         all     n     10893 rule exact  20.41% changed      7726 changed&exact   8.10% lin exact  31.13%
+ground    mover vz         all     n   4784024 rule exact 100.00% changed   1091792 changed&exact 100.00% lin exact  75.52%
+air       mover vz         all     n     10893 rule exact  11.04% changed      7481 changed&exact   1.84% lin exact  34.16%
+ground    x                all     n   4784024 rule exact  78.65% changed   1818769 changed&exact  84.70% lin exact  81.48%
+ground    x                blocked n   1895398 rule exact  46.10% changed    314416 changed&exact  11.47% lin exact  88.66%
+ground    x                free    n   2888626 rule exact 100.00% changed   1504353 changed&exact 100.00% lin exact  76.77%
+air       x                all     n     10893 rule exact 100.00% changed      7744 changed&exact 100.00% lin exact  28.92%
+air       x                free    n     10893 rule exact 100.00% changed      7744 changed&exact 100.00% lin exact  28.92%
+ground    z                all     n   4784024 rule exact  78.39% changed   1864724 changed&exact  84.97% lin exact  81.16%
+ground    z                blocked n   1895398 rule exact  45.46% changed    317165 changed&exact  11.62% lin exact  88.34%
+ground    z                free    n   2888626 rule exact 100.00% changed   1547559 changed&exact 100.00% lin exact  76.44%
+air       z                all     n     10893 rule exact 100.00% changed      7543 changed&exact 100.00% lin exact  31.17%
+air       z                free    n     10893 rule exact 100.00% changed      7543 changed&exact 100.00% lin exact  31.17%
+ground    mover stamp      all     n   4784024 rule exact 100.00% changed   2745807 changed&exact 100.00% lin exact  99.45%
+air       mover stamp      all     n     10893 rule exact 100.00% changed      9888 changed&exact 100.00% lin exact  99.41%
+ground    w1 reload        all     n   4784024 rule exact  99.83% changed    412275 changed&exact  98.02% lin exact  99.61%
+air       w1 reload        all     n     10893 rule exact  99.72% changed      2109 changed&exact  98.53% lin exact  99.28%
+structure w1 reload        all     n    125260 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+ground    w2 reload        all     n   4784024 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+air       w2 reload        all     n     10893 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+structure w2 reload        all     n    125260 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+ground    w3 reload        all     n   4784024 rule exact 100.00% changed       147 changed&exact  97.28% lin exact 100.00%
+air       w3 reload        all     n     10893 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+structure w3 reload        all     n    125260 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+ground    +0xFA countdown  all     n   4784024 rule exact  99.91% changed    162377 changed&exact  97.53% lin exact  99.83%
+air       +0xFA countdown  all     n     10893 rule exact  99.44% changed      1391 changed&exact  96.55% lin exact  99.21%
+structure +0xFA countdown  all     n    125260 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+ground    +0xFB..FE        all     n   4784024 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+air       +0xFB..FE        all     n     10893 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+structure +0xFB..FE        all     n    125260 rule exact 100.00% changed         0 changed&exact   0.00% lin exact 100.00%
+ground    y (altitude)     all     n   4784024 rule exact  97.81% changed    104899 changed&exact   0.00% lin exact  95.79%
+ground    y (altitude)     blocked n   1895398 rule exact  99.69% changed      5935 changed&exact   0.00% lin exact  99.32%
+ground    y (altitude)     free    n   2888626 rule exact  96.57% changed     98964 changed&exact   0.00% lin exact  93.47%
+air       y (altitude)     all     n     10893 rule exact  99.99% changed      3957 changed&exact  99.97% lin exact  91.26%
+air       y (altitude)     free    n     10893 rule exact  99.99% changed      3957 changed&exact  99.97% lin exact  91.26%
