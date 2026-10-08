@@ -483,7 +483,75 @@ enum RecBlockKind {
 };
 #define REC_MINIMAP_HEAD  8u
 #define REC_MINIMAP_MAX   (0xFF00u - REC_MINIMAP_HEAD)   /* the most indices: a ring record's */
-#define RBF_STORED 1u
+#define RBF_STORED      1u
+#define RBF_SECTIONS    2u     /* an RB_STREAM's only: its payload is a sectioned container    */
+#define RBF_FRAME_RESET 4u     /* with RBF_SECTIONS only: the unit frame restarts at its first
+                                  iteration, from the reader's own copy of the units           */
+
+/* THE SECTIONED CONTAINER (tagpu_reccodec.c reads and writes it): the bytes of an RB_STREAM with
+   RBF_SECTIONS, which decode to exactly the records they replace. A RecSecHead, then RCS_COUNT
+   sections of len[] bytes each, in order. RCS_KINDS holds the record kinds in payload order as
+   runs, each a varint kind (1..65535) and a varint count (at least 1). A body section holds, for
+   each record of its kinds in payload order, a varint length (at most 0xFFFF) and that many bytes:
+   the record's body verbatim. RK_UNIT_DELTA has no body anywhere: the unit frame (RCS_UNITS)
+   makes it. The payload is the records in kind order, each a RecHdr, its body and zero padding to
+   a dword, as the writer's stream holds them; its first record is an RK_TICK, and an iteration is
+   an RK_TICK and the records up to the next one.
+
+   RCS_UNITS, the unit frame, is
+       varint  iterations                 RecSecHead.iterations again
+       varint  listed[iterations]         the units listed in each iteration
+       varint  gap[sum of listed]         per iteration, slot = previous + 1 + gap, previous
+                                          starting at 0
+       varint  ndict                      the distinct lane masks: 0 when nothing is listed
+       bytes   dict[ndict][mb]            mb = ceil(lanes / 8); bit j says lane j has a residual
+       ids     one per listed unit: a u8 when ndict <= 256, else a varint
+       columns for each lane in RT_CODEC's order: the zigzag varint residuals of the listed units
+               whose mask has its bit, in listed order
+   A varint is LEB128 of a value below 2^32, at most 5 bytes; zigzag maps r >= 0 to 2r and r < 0
+   to -2r - 1. tagpu_reccodec.c says what a residual is the residual of. */
+enum RecSection {
+    RCS_KINDS = 0,     /* the record kinds, as runs                                              */
+    RCS_UNITS,         /* the unit frame: every RK_UNIT_DELTA                                    */
+    RCS_PROJ,          /* the bodies of RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA                   */
+    RCS_CELLS,         /* the bodies of RK_CELLS                                                 */
+    RCS_ORDERS,        /* the bodies of RK_ORDERS                                                */
+    RCS_EVENTS,        /* the bodies of RK_EV_CREATE..RK_EV_DEATH_END and RK_EV_NET_CREATE        */
+    RCS_OTHER,         /* the bodies of every other kind                                         */
+    RCS_COUNT
+};
+typedef struct RecSecHead {
+    uint32_t payload;          /* the records' bytes it decodes to: a multiple of 4, at least 4 */
+    uint16_t iterations;       /* its RK_TICK records, at least 1                                */
+    uint16_t sections;         /* RCS_COUNT                                                      */
+    uint32_t len[RCS_COUNT];   /* each section's bytes; the head and these fill the block        */
+} RecSecHead;
+_Static_assert(sizeof(RecSecHead) == 36, "a sectioned container's head is 36 bytes");
+
+/* A record kind's section: four rules and a default, so a kind added later falls into RCS_OTHER
+   on the writer's side and the reader's alike, with no table to update. */
+static __inline unsigned rec_section_of(unsigned kind)
+{
+    if (kind == RK_UNIT_DELTA) return RCS_UNITS;
+    if (kind == RK_PROJ_HEAD || kind == RK_PROJ || kind == RK_PROJ_DELTA) return RCS_PROJ;
+    if (kind == RK_CELLS) return RCS_CELLS;
+    if (kind == RK_ORDERS) return RCS_ORDERS;
+    if ((kind >= RK_EV_CREATE && kind <= RK_EV_DEATH_END) || kind == RK_EV_NET_CREATE)
+        return RCS_EVENTS;
+    return RCS_OTHER;
+}
+_Static_assert(RK_EV_CREATE == 19 && RK_EV_DEATH_END == 32, "the event kinds RCS_EVENTS holds");
+
+/* RT_AIR's row: an aircraft type's constants for the unit frame's air rules. `type` is the unit
+   image's +0xA6, the engine's type index; the rest are the def's (+0x170 the sight emit's height
+   term, a byte; +0x192 maxvelocity, +0x19A brakerate, +0x19E acceleration, +0x1A2 bankscale,
+   +0x1A6 pitchscale, 16.16). */
+typedef struct RecAirRow {
+    uint16_t type;
+    uint8_t  sight_h, zero;
+    int32_t  maxv, brake, acc, bank, pitch;
+} RecAirRow;
+_Static_assert(sizeof(RecAirRow) == 24, "an RT_AIR row is 24 bytes");
 
 /* A header or end block's payload: entries of u16 tag, u16 length, then that many bytes, the next
    entry at the next multiple of 4. A string is its bytes, with no NUL. */
@@ -550,6 +618,13 @@ enum RecTag {
                           it replaces the parent's iterations from fork_at on                   */
     RT_MULTIPLAYER,    /* RecMpRecordHeader: copied match/origin roster, required in mode 3      */
     RT_MP_SEATS,       /* RecMpRoster: origin/recorder-seat/fixed-unit-block mapping in mode 3   */
+    RT_CODEC,          /* u16 n, u16 0, then n rows of RecLaneRow (u16 offset, u8 width, u8 role):
+                          the unit frame's lanes (replay-lanes.tsv), tiling the unit image        */
+    RT_PHYSICS,        /* i32 gravity (main+0x14263), u8 sea level (main+0x1427F), u8 the sight
+                          rule (LosType main+0x14281 bit 2 at the segment's start, 0 or 1), u16 0:
+                          the unit frame's level constants                                       */
+    RT_AIR,            /* u32 n, u32 0, then n RecAirRow, types strictly ascending: the aircraft
+                          types (def +0x241 bit 11) the unit frame predicts with its air rules    */
     RT_END_REASON = 32,/* u32 RecEnd                                                            */
     RT_LAST,           /* u32: the last recorded GameTime                                       */
     RT_ITERATIONS,     /* u32: iterations recorded                                              */
@@ -576,8 +651,12 @@ enum RecTag {
                           commander died, u32 the GameTime its last unit died when it ended the
                           game with none (its live count +0x144 at 0), 0 for none: a seat of the
                           recording                                                              */
-    RT_MP_END          /* RecMpRecordEnd: persisted source proofs cover these application cuts  */
+    RT_MP_END,         /* RecMpRecordEnd: persisted source proofs cover these application cuts  */
+    RT_CODEC_DECLINED, /* u32: stream blocks the unit frame's encoder declined, written as records */
+    RT_CODEC_MISMATCH  /* u32: stream blocks whose check decode differed, written as records: a
+                          codec bug                                                              */
 };
-_Static_assert(RT_TIMELINE < RT_END_REASON, "a header's tags stay below the end block's");
+_Static_assert(RT_AIR < RT_END_REASON, "a header's tags stay below the end block's");
+_Static_assert(RT_CODEC == 29 && RT_AIR == 31 && RT_CODEC_DECLINED == 44, "the codec's tags");
 
 #endif
