@@ -137,9 +137,9 @@
                                        0x43CD20 (0x43DD36..0x43DD44, DISASSEMBLED)               */
 #define UD_AIRBIT      0x800u
 #define UD_SIGHT_H     0x170        /* u8: the sight emit's height term (0x4827FB)                */
-#define UD_MAXV        0x192        /* i32 16.16 maxvelocity (read at 0x43D303, DISASSEMBLED)     */
+#define UD_MAXV        0x192        /* i32 16.16 maxvelocity (read at 0x43D301, DISASSEMBLED)     */
 #define UD_BRAKE       0x19A        /* i32 16.16 brakerate                                       */
-#define UD_ACC         0x19E        /* i32 16.16 acceleration (read at 0x43D2FD, DISASSEMBLED)    */
+#define UD_ACC         0x19E        /* i32 16.16 acceleration (read at 0x43D2FB, DISASSEMBLED)    */
 #define UD_BANK        0x1A2        /* i32 16.16 bankscale                                       */
 #define UD_PITCH       0x1A6        /* i32 16.16 pitchscale; these three as the def loader writes
                                        them (0x42C129..0x42C243, DISASSEMBLED by the size
