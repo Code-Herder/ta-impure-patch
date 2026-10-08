@@ -7,7 +7,9 @@
    copy of the recorded world built from the records alone, compares it with the fresh images the
    capture sends each iteration, and writes a difference into the file as a correction, counted and
    logged. The file is blocks (RecBlock): the header, stream blocks of whole iterations, a snapshot
-   of the copy every SNAPSHOT_TICKS, and the end.
+   of the copy every SNAPSHOT_TICKS, and the end. A packed block is a zstd frame; a stream block
+   goes through the stream's codec (tagpu_reccodec.c), which writes it as a sectioned container
+   when that decodes back to its records, and as the records otherwise (stream_block).
 
    A record is checked against the copy's bounds before it is applied: a slot, a player, a table
    index, an offset and a length, and an event's length. One that fails is a fault in the capture,
@@ -42,10 +44,15 @@
 #include "tagpu_recfmt.h"
 #include "tagpu_log.h"
 #include "crc32.h"
-#include "lodepng.h"
+#include "tagpu_reccodec.h"
+#include "zstd.h"
 
-#define STREAM_BYTES   (256u << 10)  /* a stream block ends at an iteration past this many bytes */
-#define STREAM_TICKS   300           /* ... or this many iterations, whichever comes first         */
+/* A stream block ends at an iteration past STREAM_BYTES or after STREAM_TICKS iterations, and
+   before every snapshot. Thirty iterations keep each block's zstd frame self-contained while the
+   unit frame's state runs on across blocks; the codec declines a block of more than
+   RECC_TICKS_MAX iterations. */
+#define STREAM_BYTES   (2u << 20)
+#define STREAM_TICKS   30
 #define SNAPSHOT_TICKS 900           /* 30 s of game time: a placeholder S3 measures (the plan)     */
 #define SPAN_CHUNK     0x7000        /* the most bytes one of a snapshot's spans carries            */
 #define CORR_MAX       256           /* distinct (kind, table, offset) correction counters          */
@@ -127,7 +134,14 @@ typedef struct Writer {
 
     unsigned       end_reason, bad_ids, ring_high, off_thread, uncredited, unobserved;
     unsigned char  seats[4 + 12 * REC_PLAYERS];   /* RK_END's game end and RT_SEAT_ENDs   */
-    unsigned long long raw, packed;   /* the stream's bytes, before and after deflate */
+    unsigned long long raw, packed;   /* the stream's records, and the bytes written for them */
+    unsigned       nstream;     /* the stream blocks written                             */
+    RecStream      codec;       /* the stream's codec (tagpu_reccodec.h), when codec_on    */
+    int            codec_on;
+    void*          cctx;        /* the ZSTD_CCtx when the codec is off; when it is on, the
+                                   codec's packs every block (block_cctx)                 */
+    RecBytes       pk;          /* the packed bytes of a block the codec does not write    */
+    LONGLONG       codec_qpc, codec_max;   /* its time, in all and for the slowest block  */
     RecMpFileState mp;
     RecMpHistory* mp_history;
     RecMpRecordEnd mp_end;
@@ -201,39 +215,37 @@ static void put(Writer* w, const void* p, DWORD n)
     }
 }
 
-/* One block: deflated when that is smaller, else stored. */
-static void block(Writer* w, unsigned kind, unsigned first, unsigned last, const unsigned char* raw,
-                  size_t n, int pack)
+/* A block's header and its body as given: `raw` the bytes the body unpacks to. */
+static void block_put(Writer* w, unsigned kind, unsigned flags, unsigned first, unsigned last,
+                      size_t raw, const unsigned char* body, size_t bn)
 {
     RecBlock b;
-    unsigned char* z = NULL;
-    size_t zn = 0;
-    const unsigned char* body = raw;
-    size_t bn = n;
     if (w->dead) return;
     memset(&b, 0, sizeof b);
     b.magic = REC_BLOCK_MAGIC;
     b.kind = (uint16_t)kind;
+    b.flags = (uint16_t)flags;
     b.first = first;
     b.last = last;
-    b.raw = (uint32_t)n;
-    if (pack && n && !lodepng_zlib_compress(&z, &zn, raw, n, &lodepng_default_compress_settings)
-        && zn < n) {
-        body = z;
-        bn = zn;
-    } else {
-        b.flags = RBF_STORED;
-    }
+    b.raw = (uint32_t)raw;
     b.packed = (uint32_t)bn;
     b.crc_body = (uint32_t)Crc32_ComputeBuf(0, body, bn);
     b.crc_head = (uint32_t)Crc32_ComputeBuf(0, &b, 28);
     put(w, &b, sizeof b);
     put(w, body, (DWORD)bn);
-    if (kind == RB_STREAM) {
-        w->raw += n;
-        w->packed += bn;
-    }
-    free(z);
+}
+
+static void* block_cctx(Writer* w) { return w->codec_on ? w->codec.cctx : w->cctx; }
+
+/* One block: a zstd frame at level 3 when that is smaller, else stored; `pack` 0 stores it (the
+   header, the end and the timelines, which tagpu_recfmt.h has always stored). */
+static void block(Writer* w, unsigned kind, unsigned first, unsigned last, const unsigned char* raw,
+                  size_t n, int pack)
+{
+    void* cctx = block_cctx(w);
+    int packed = pack && cctx && reccodec_pack(cctx, &w->pk, raw, n);
+    block_put(w, kind, packed ? 0 : RBF_STORED, first, last, n, packed ? w->pk.p : raw,
+              packed ? w->pk.n : n);
 }
 
 /* the path the capture chose, or its first free " (n)" variant */
@@ -366,9 +378,46 @@ static void delta_apply(unsigned* img, const unsigned char* bits, unsigned dword
 
 /* ---- the header ----------------------------------------------------------------------------- */
 
+/* The codec from the header's RT_CODEC, RT_PHYSICS and RT_AIR, parsed from the bytes a reader will
+   parse, so the check decoder runs on the reader's constants. 1, or 0 when the reader would refuse
+   them. Without RT_CODEC and RT_PHYSICS, or without memory for the frame, every stream block is
+   written as records. */
+static int codec_begin(Writer* w, const unsigned char* const ent[3], const unsigned nent[3])
+{
+    RecCodecParams* p = (RecCodecParams*)malloc(sizeof *p);
+    char why[160];
+    if (!p) {
+        fail(w, "no memory for the codec's constants");
+        return 1;
+    }
+    if (!reccodec_params(p, w->nslots, ent[0], nent[0], ent[1], nent[1], ent[2], nent[2], why,
+                         sizeof why)) {
+        tagpu_logf("recorder: writer: the header's unit frame entries are malformed: %s", why);
+        free(p);
+        return 0;
+    }
+    if (!p->usable)
+        tagpu_logf("recorder: writer: the header has no RT_CODEC and RT_PHYSICS: every stream "
+                   "block is written as records");
+    else if (reccodec_stream_begin(&w->codec, p))
+        w->codec_on = 1;
+    else
+        tagpu_logf("recorder: writer: no memory for the unit frame of %u slots: every stream "
+                   "block is written as records", w->nslots);
+    free(p);
+    if (!w->codec_on) {
+        w->cctx = ZSTD_createCCtx();
+        if (!w->cctx)
+            tagpu_logf("recorder: writer: no memory for zstd: every block is stored");
+    }
+    return 1;
+}
+
 static int header_apply(Writer* w, const unsigned char* b, unsigned len)
 {
     unsigned at = 0, mode = 0, each = 0, mapped = 0, seats = 0;
+    const unsigned char* ent[3] = { NULL, NULL, NULL };     /* RT_CODEC, RT_PHYSICS, RT_AIR */
+    unsigned nent[3] = { 0, 0, 0 };
     while (at + 4 <= len) {
         unsigned short tag, n;
         memcpy(&tag, b + at, 2);
@@ -408,6 +457,11 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
             memcpy(&w->npool, b + at + 12, 4);
         }
         if (tag == RT_PROJECTILES && n == 4) memcpy(&w->ncap, b + at + 4, 4);
+        if (tag >= RT_CODEC && tag <= RT_AIR) {
+            if (ent[tag - RT_CODEC]) return 0;              /* each at most once */
+            ent[tag - RT_CODEC] = b + at + 4;
+            nent[tag - RT_CODEC] = n;
+        }
         if (tag == RT_TABLE && n >= 16) {
             WTable* t;
             unsigned short ix;
@@ -442,6 +496,8 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         w->mp_history=tagpu_recmp_history_begin(&w->mp.header,roster,w->gw,w->gh);
         if (!w->mp_history) return 0;
     }
+    if (!codec_begin(w, ent, nent)) return 0;
+    if (w->dead) return 1;
     w->each = each;
     w->units = (unsigned char*)VirtualAlloc(NULL, (size_t)w->nslots * REC_UNIT_IMAGE,
                                             MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -752,11 +808,56 @@ static int all_zero(const unsigned char* p, unsigned n)
 
 /* ---- blocks of the stream ------------------------------------------------------------------- */
 
+/* A stream block of the records [p, p + n), whole iterations from GameTime `first` to `last`:
+   through the codec a sectioned block when it decodes back, else the records
+   (reccodec_stream_block, tagpu_reccodec.c's THREE INVARIANTS).
+   DECODE BEFORE WRITE: the block is sectioned only when the check decoder D has given these very
+   records back from the very bytes written; otherwise the records are written, so a codec bug
+   costs size, never data. D is a second state and not the encoder's: it starts where a reader
+   starts, from the units alone, and a check that reused the encoder's state would share its
+   arithmetic and so its faults.
+   RESET POINTS: after a records block, and after every snapshot (snapshot), the next block
+   restarts the frame (RBF_FRAME_RESET), since a reader that starts at that snapshot holds no
+   frame state from before it, and one that read the records block holds none either. */
+static void stream_block(Writer* w, unsigned first, unsigned last, const unsigned char* p, size_t n)
+{
+    unsigned flags = RBF_STORED;
+    const unsigned char* body = p;
+    size_t bn = n, raw;
+    if (w->dead) return;
+    if (w->codec_on) {
+        LARGE_INTEGER t0, t1;
+        LONGLONG dt;
+        int k;
+        QueryPerformanceCounter(&t0);
+        k = reccodec_stream_block(&w->codec, p, n, &flags, &body, &bn);
+        QueryPerformanceCounter(&t1);
+        dt = t1.QuadPart - t0.QuadPart;
+        w->codec_qpc += dt;
+        if (dt > w->codec_max) w->codec_max = dt;
+        if (k == RECC_MISMATCH && w->codec.mismatched <= 4)
+            tagpu_logf("recorder: writer: the unit frame did not decode back at GameTime %u-%u: "
+                       "the block is written as records (a codec bug)", first, last);
+        else if (k == RECC_DECLINED && w->codec.declined <= 4)
+            tagpu_logf("recorder: writer: the unit frame declined GameTime %u-%u: the block is "
+                       "written as records", first, last);
+    } else if (w->cctx && reccodec_pack(w->cctx, &w->pk, p, n)) {
+        flags = 0;
+        body = w->pk.p;
+        bn = w->pk.n;
+    }
+    raw = (flags & RBF_STORED) ? bn : (flags & RBF_SECTIONS) ? w->codec.sec.n : n;
+    block_put(w, RB_STREAM, flags, first, last, raw, body, bn);
+    w->raw += n;
+    w->packed += bn;
+    w->nstream++;
+}
+
 static void stream_flush(Writer* w)
 {
     if (!w->stream.n) return;
     if (w->stream.oom) { fail(w, "no memory for a stream block"); return; }
-    block(w, RB_STREAM, w->sfirst, w->tick, w->stream.p, w->stream.n, 1);
+    stream_block(w, w->sfirst, w->tick, w->stream.p, w->stream.n);
     w->stream.n = 0;
     w->sticks = 0;
     w->complete_bytes = 0;
@@ -770,7 +871,7 @@ static void stream_flush_complete(Writer* w)
     size_t n = w->complete_bytes;
     if (!n) return;
     if (w->stream.oom) { fail(w, "no memory for a stream block"); return; }
-    block(w, RB_STREAM, w->sfirst, w->complete_tick, w->stream.p, n, 1);
+    stream_block(w, w->sfirst, w->complete_tick, w->stream.p, n);
     memmove(w->stream.p, w->stream.p + n, w->stream.n - n);
     w->stream.n -= n;
     w->sfirst = w->tick;
@@ -871,6 +972,7 @@ static void snapshot(Writer* w)
     if (b->oom) { fail(w, "no memory for a snapshot"); return; }
     block(w, RB_SNAPSHOT, w->tick, w->tick, b->p, b->n, 1);
     w->snap_tick = w->tick;
+    w->codec.reset = 1;
 }
 
 /* The iteration at `w->tick` is complete, the events of the step after it included: its stream
@@ -1422,20 +1524,32 @@ static void finish(Writer* w)
             if (w->seats[4 + 12 * i + 1] != REC_RESULT_NONE)
                 tlv(&e, RT_SEAT_END, w->seats + 4 + 12 * i, 12);
         if (w->mp_in) tlv(&e, RT_MP_END, &w->mp_end, sizeof w->mp_end);
+        tlv_u32(&e, RT_CODEC_DECLINED, w->codec.declined);
+        tlv_u32(&e, RT_CODEC_MISMATCH, w->codec.mismatched);
         if (e.oom) fail(w, "no memory for the end block");
         else block(w, RB_END, w->tick, w->tick, e.p, e.n, 0);
     }
     if (!w->dead && w->file != INVALID_HANDLE_VALUE) {
         unsigned corr = w->corr_more;
+        LARGE_INTEGER f;
+        LONGLONG hz;
         for (i = 0; i < w->ncorr; i++) corr += w->corr[i].count;
         CloseHandle(w->file);
+        hz = QueryPerformanceFrequency(&f) && f.QuadPart > 0 ? f.QuadPart : 1;
         tagpu_logf("recorder: writer: %s closed: %u iterations to GameTime %u, %u corrections, "
-                   "stream %u KB deflated to %u KB, the ring held %u KB at most", w->path,
-                   w->iterations, w->tick, corr, (unsigned)(w->raw >> 10),
-                   (unsigned)(w->packed >> 10), w->ring_high >> 10);
+                   "stream %u KB of records written as %u KB; %u blocks: %u sectioned, %u "
+                   "declined, %u MISMATCHED; the unit frame cost %u ms, at most %u ms for one "
+                   "block; the ring held %u KB at most", w->path, w->iterations, w->tick, corr,
+                   (unsigned)(w->raw >> 10), (unsigned)(w->packed >> 10), w->nstream,
+                   w->codec.sectioned, w->codec.declined, w->codec.mismatched,
+                   (unsigned)(w->codec_qpc * 1000 / hz), (unsigned)(w->codec_max * 1000 / hz),
+                   w->ring_high >> 10);
     }
     recfile_unlock(&w->lock);
     free(e.p);
+    reccodec_stream_end(&w->codec);
+    ZSTD_freeCCtx((ZSTD_CCtx*)w->cctx);
+    free(w->pk.p);
     free(w->stream.p);
     free(w->snap.p);
     free(w->contributions.p);

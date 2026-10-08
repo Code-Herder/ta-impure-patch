@@ -907,8 +907,9 @@ void tagpu_dock_cancel_press(void)
    LIFETIME: the worker owns its reader and closes it before it returns; tagpu_dock_level_end stops
    it and waits for it on the game thread, at the teardown's entry, before the count goes back to
    0. Between two looks at the stop flag the worker reads one iteration -- at most one block
-   inflated, a bound the format sets (RECR_BLOCK_MAX) -- not a timeout. tagpu_recreader.c has no
-   mutable statics and reads no engine memory, so the worker shares nothing with the playback. */
+   unpacked and decoded, a bound the format sets (RECR_BLOCK_MAX) -- not a timeout.
+   tagpu_recreader.c has no mutable statics and reads no engine memory, so the worker shares
+   nothing with the playback. */
 _Static_assert(0x144 + 2 <= REC_PLAYER_BYTES, "the walker's two fields are in the player image");
 
 /* the log line's list: the first few markers of a kind, "T (seat p)" each */

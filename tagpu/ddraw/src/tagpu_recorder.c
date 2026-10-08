@@ -88,6 +88,7 @@
 #include "tagpu_recmp_pov.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
+#include "tagpu_reccodec.h"
 #include "tagpu_replay_layout.h"
 #include "tagpu_replay_globals.h"
 #include "tagpu_simreg.h"
@@ -131,6 +132,23 @@
 #define UD_STRIDE      0x249
 #define UD_NAME        0x20         /* UnitName                                                   */
 #define UD_NAMELEN     0x20
+/* a def's fields the unit frame's air rules take as constants (RT_AIR; tagpu_reccodec.c) */
+#define UD_AIRBITS     0x241        /* dword: bit 11 sends the unit to the air step 0x43D290, else
+                                       0x43CD20 (0x43DD36..0x43DD44, DISASSEMBLED)               */
+#define UD_AIRBIT      0x800u
+#define UD_SIGHT_H     0x170        /* u8: the sight emit's height term (0x4827FB)                */
+#define UD_MAXV        0x192        /* i32 16.16 maxvelocity (read at 0x43D303, DISASSEMBLED)     */
+#define UD_BRAKE       0x19A        /* i32 16.16 brakerate                                       */
+#define UD_ACC         0x19E        /* i32 16.16 acceleration (read at 0x43D2FD, DISASSEMBLED)    */
+#define UD_BANK        0x1A2        /* i32 16.16 bankscale                                       */
+#define UD_PITCH       0x1A6        /* i32 16.16 pitchscale; these three as the def loader writes
+                                       them (0x42C129..0x42C243, DISASSEMBLED by the size
+                                       research: research/sizelab/air-challenge/lib_int/airdefs.py) */
+_Static_assert(UD_PITCH + 4 <= UD_STRIDE && UD_AIRBITS + 4 <= UD_STRIDE,
+               "the air fields lie inside a def");
+#define OFF_GRAVITY    0x14263      /* i32: gravity (replay-globals.tsv, a `leave` field)         */
+#define OFF_SEALEVEL   0x1427F      /* u8: sea level; the sight emit raises an altitude to
+                                       (it + 1) << 16 (movzx at 0x48280D)                       */
 #define WPN_STRIDE     0x115        /* a weapon's record; its name is its first 0x20 bytes         */
 #define WPN_NAMELEN    0x20
 #define OFF_EACH       0x37EE6      /* u16: the units each player may have                        */
@@ -1857,17 +1875,27 @@ static void ring_publish(Rec* r, int now)
 
 typedef struct Tlv { unsigned char* b; unsigned n, cap; int full; } Tlv;
 
-static void tlv(Tlv* t, unsigned tag, const void* p, unsigned n)
+/* An entry of `n` bytes, its tag, length and padding written: the body to fill in, or NULL when
+   the header has no room for it (the header is then full) */
+static unsigned char* tlv_room(Tlv* t, unsigned tag, unsigned n)
 {
     unsigned size = (4 + n + 3) & ~3u;
     unsigned short h[2];
-    if (t->full || t->n + size > t->cap || n > 0xFFFF) { t->full = 1; return; }
+    unsigned char* body;
+    if (t->full || n > 0xFFFF || size > t->cap - t->n) { t->full = 1; return NULL; }
     h[0] = (unsigned short)tag;
     h[1] = (unsigned short)n;
     memcpy(t->b + t->n, h, 4);
-    if (n) memcpy(t->b + t->n + 4, p, n);
-    memset(t->b + t->n + 4 + n, 0, size - 4 - n);
+    body = t->b + t->n + 4;
+    memset(body, 0, size - 4);
     t->n += size;
+    return body;
+}
+
+static void tlv(Tlv* t, unsigned tag, const void* p, unsigned n)
+{
+    unsigned char* body = tlv_room(t, tag, n);
+    if (body && n) memcpy(body, p, n);
 }
 
 static void tlv_u32(Tlv* t, unsigned tag, unsigned v) { tlv(t, tag, &v, 4); }
@@ -2201,6 +2229,78 @@ static void header_tables(const Rec* r, Tlv* t)
         table_entry(t, r->tab[i].index, r->tab[i].d, r->tab[i].lhash);
 }
 
+/* a def whose unit takes the air step (UD_AIRBITS) */
+static int def_air(const char* d)
+{
+    unsigned bits;
+    memcpy(&bits, d + UD_AIRBITS, 4);
+    return (bits & UD_AIRBIT) != 0;
+}
+
+/* The unit frame's constants (tagpu_reccodec.c; tagpu_recfmt.h, RT_CODEC, RT_PHYSICS and RT_AIR):
+   the lane table this build carries, the level's gravity, sea level and sight rule, and each
+   aircraft type's flight fields. They are a predictor's constants: a wrong one costs size, never
+   data, since the writer writes a sectioned block only when it decodes back to its records.
+   BOUND: a def's index runs below UNITINFOCount (main+0x1438F), the count the engine's own loops
+   over the defs run to, and below 65536, the type lane's range, and every field read lies inside
+   the def's UD_STRIDE bytes. LIFETIME: the defs table lives for the level, whose teardown ends the
+   recording first. ORDERING: read once, here, on the game thread, which owns them. */
+static void header_codec(const Level* L, Tlv* t)
+{
+    const char* ta = L->ta;
+    unsigned char* b;
+    unsigned i, k, n, max, rows, all = 0;
+    b = tlv_room(t, RT_CODEC, 4 + 4 * REC_LANES_N);
+    if (b) {
+        b[0] = (unsigned char)REC_LANES_N;
+        b[1] = (unsigned char)(REC_LANES_N >> 8);
+        for (i = 0; i < REC_LANES_N; i++) {
+            unsigned char* row = b + 4 + 4 * i;
+            row[0] = (unsigned char)rec_lanes[i].off;
+            row[1] = (unsigned char)(rec_lanes[i].off >> 8);
+            row[2] = rec_lanes[i].width;
+            row[3] = rec_lanes[i].role;
+        }
+    }
+    b = tlv_room(t, RT_PHYSICS, 8);
+    if (b) {
+        memcpy(b, ta + OFF_GRAVITY, 4);
+        b[4] = (unsigned char)ta[OFF_SEALEVEL];
+        b[5] = (unsigned char)(*(const unsigned short*)(ta + OFF_LOSTYPE) >> 2 & 1);
+    }
+    /* RT_AIR: the aircraft types, the rows the header has room for and RECC_AIR_MAX at most; a
+       type without a row is predicted as a ground unit */
+    if (t->full || t->cap - t->n < 4 + 8 + 64) return;
+    max = (t->cap - t->n - 4 - 8 - 64) / sizeof(RecAirRow);
+    if (max > RECC_AIR_MAX) max = RECC_AIR_MAX;
+    n = L->defs ? L->ndefs : 0;
+    if (n > 65536) n = 65536;
+    for (i = 0; i < n; i++)
+        if (def_air(L->defs + (size_t)i * UD_STRIDE)) all++;
+    rows = all < max ? all : max;
+    b = tlv_room(t, RT_AIR, 8 + rows * (unsigned)sizeof(RecAirRow));
+    if (!b) return;
+    memcpy(b, &rows, 4);
+    for (i = 0, k = 0; i < n && k < rows; i++) {
+        const char* d = L->defs + (size_t)i * UD_STRIDE;
+        RecAirRow a;
+        if (!def_air(d)) continue;
+        a.type = (uint16_t)i;
+        a.sight_h = (uint8_t)d[UD_SIGHT_H];
+        a.zero = 0;
+        memcpy(&a.maxv, d + UD_MAXV, 4);
+        memcpy(&a.brake, d + UD_BRAKE, 4);
+        memcpy(&a.acc, d + UD_ACC, 4);
+        memcpy(&a.bank, d + UD_BANK, 4);
+        memcpy(&a.pitch, d + UD_PITCH, 4);
+        memcpy(b + 8 + k * sizeof a, &a, sizeof a);
+        k++;
+    }
+    if (rows < all)
+        tagpu_logf("recorder: the header holds %u aircraft types' rows, not the other %u: those "
+                   "are predicted as ground units, which costs size only", rows, all - rows);
+}
+
 /* ---- the files still being finished --------------------------------------------------------- */
 
 /* The `done` events of the recordings that have ended, which the exit waits for (tagpu_recorder.h,
@@ -2457,6 +2557,7 @@ static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
     t.full = 0;
     header_build(L, tick, map, &now, g->fork.file ? &g->fork : NULL, g->mp, &t);
     header_tables(r, &t);
+    header_codec(L, &t);
     for (i = 0; i < REC_PLAYERS; i++)        /* the seats header_build names (RT_PLAYER) */
         if (L->ta[OFF_PLAYERS + i * PL_STRIDE + PL_CONTROLLER]) r->seated |= (unsigned short)(1u << i);
     if (t.full) {

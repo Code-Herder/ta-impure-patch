@@ -1,10 +1,11 @@
 #ifndef TAGPU_RECREADER_H
 #define TAGPU_RECREADER_H
-/* tagpu_recreader -- reads a demo recording back (tagpu_recfmt.h): its blocks, each checked and
-   inflated, the header's entries, and the world the stream builds, one iteration at a time or
-   from a snapshot at a seek (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S2b, S3a
-   and S3b). tagpu_replay.c applies what this reads; this file reads no engine memory, and since
-   it is not on thread-split.allow the build refuses an engine address in it.
+/* tagpu_recreader -- reads a demo recording back (tagpu_recfmt.h): its blocks, each checked,
+   unpacked and, when sectioned, decoded (tagpu_reccodec.h), the header's entries, and the world
+   the stream builds, one iteration at a time or from a snapshot at a seek
+   (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S2b, S3a and S3b). tagpu_replay.c
+   applies what this reads; this file reads no engine memory, and since it is not on
+   thread-split.allow the build refuses an engine address in it.
    tools/replay/tarec.py reads the same records and accepts the same shapes: a change to one is a
    change to the other.
 
@@ -15,6 +16,7 @@
 
 #include <stdint.h>
 #include "tagpu_recfmt.h"
+#include "tagpu_reccodec.h"
 #include "tagpu_recfile.h"
 #include "tagpu_recmp_file.h"
 #include "tagpu_recmp_units.h"
@@ -26,7 +28,8 @@
 
 #define RECR_TEXT       64          /* a header string's bytes kept, NUL included            */
 #define RECR_NAME       (0x1E + 1)  /* a seat's name: the record's 0x1E bytes, NUL included  */
-#define RECR_BLOCK_MAX  (64u << 20) /* the most bytes a block may pack or inflate to         */
+#define RECR_BLOCK_MAX  (64u << 20) /* the most bytes a block may pack or unpack to, and a
+                                       sectioned block decode to                              */
 #define RECR_TIMELINES  64          /* the segments a file may hold: a file with more is refused
                                        by name                                                   */
 #define RECR_BOUNDARY   2           /* recr_tick: the chain goes on in its next segment         */
@@ -71,6 +74,9 @@ typedef struct RecHeader {
     RecMpRecordHeader mp;
     unsigned     has_mp_seats;
     RecMpRoster mp_seats;
+    unsigned     has_codec;                 /* RT_CODEC and RT_PHYSICS: a sectioned stream block
+                                               may come; without them only records blocks    */
+    RecCodecParams codec;                   /* their constants, and RT_AIR's (about 25 KB)    */
 } RecHeader;
 
 /* one node list of a live unit, its node images in list order */

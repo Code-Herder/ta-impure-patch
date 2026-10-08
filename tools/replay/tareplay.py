@@ -2148,11 +2148,15 @@ def out_dir(args):
     return out
 
 
+# the recorder's own instrumented sources (the Makefile's COVERED beside the sim files)
+RECORDER_COVERED = {"src/tagpu_recorder.c", "src/tagpu_recwriter.c", "src/tagpu_recreader.c",
+                    "src/tagpu_replay.c", "src/tagpu_recfile.c", "src/tagpu_reccodec.c"}
+
+
 def covered_sources():
     """The instrumented sources (the Makefile's COVERED): the sim files and the recorder's own."""
     d = TREE / "tagpu" / "ddraw"
-    return set(tafeat.sim_files(d)) | {"src/tagpu_recorder.c", "src/tagpu_recwriter.c",
-                                       "src/tagpu_recreader.c", "src/tagpu_replay.c", "src/tagpu_recfile.c"}
+    return set(tafeat.sim_files(d)) | RECORDER_COVERED
 
 
 def reached_of(run):
@@ -2226,7 +2230,9 @@ RECORDER_OWN = {DD + "src/tagpu_recorder.c", DD + "src/tagpu_recwriter.c",
                 DD + "inc/tagpu_replay.h", DD + "inc/tagpu_replay_globals.h",
                 DD + "inc/tagpu_replay_layout.h", DD + "replay-globals.tsv",
                 DD + "replay-layout.tsv", DD + "replay-absent.tsv",
-                "tools/replay-globals-gen.py", "tools/replay-layout-gen.py",
+                DD + "src/tagpu_reccodec.c", DD + "inc/tagpu_reccodec.h", DD + "inc/tagpu_reclanes.h",
+                DD + "replay-lanes.tsv", DD + "src/zstd.c",
+                "tools/replay-globals-gen.py", "tools/replay-layout-gen.py", "tools/replay-lanes-gen.py",
                 "tools/replay-layout-check.sh", "tools/tacli"}
 FIXTURES_JSON = "tools/replay/fixtures.json"
 NOTE = "replay-roundtrip:"
@@ -2304,9 +2310,10 @@ def gated(paths, base):
             why.append(f"{p}: the entries {' '.join(sorted(changed)) or 'none left'}")
         elif p in RECORDER_OWN or p.startswith("tools/replay/") or p == "scenarios/replay-end.json":
             fx |= every
-            # only the DLL's own sources: a coverage build compiles no test program, so no
-            # fixture could reach one of its functions (the test programs run in their suites)
-            if p.endswith(".c") and p.startswith(DD):
+            # only the DLL's instrumented sources: a coverage build compiles no test program, so
+            # no fixture could reach one of its functions (the test programs run in their
+            # suites), and it instruments no vendored file (zstd.c)
+            if p.startswith(DD) and p[len(DD):] in RECORDER_COVERED:
                 by_function.add(p)
             why.append(f"{p}: the recorder's own, every fixture")
         elif p.startswith("scenarios/") and fixture_users(Path(p).name):

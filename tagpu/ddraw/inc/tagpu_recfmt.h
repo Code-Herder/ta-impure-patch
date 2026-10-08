@@ -37,15 +37,14 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 7 adds the perspective records (RK_POV to RK_POV_AT); 6 the network create (RK_EV_NET_CREATE).
-   A reader takes every format from REC_FORMAT_OLDEST on: each added kinds and changed none. */
-#define REC_FORMAT        7
-#define REC_FORMAT_NET_CREATE 6
-#define REC_FORMAT_OLDEST 5
+/* 8: every packed block is one zstd frame, and a stream block may be a sectioned container whose
+   unit frame carries the unit deltas (THE SECTIONED CONTAINER below). A reader takes this format
+   alone. */
+#define REC_FORMAT        8
 
 static __inline int rec_format_supported(unsigned format)
 {
-    return format >= REC_FORMAT_OLDEST && format <= REC_FORMAT;
+    return format == REC_FORMAT;
 }
 
 #define REC_UNIT_BYTES    0x118   /* a unit record                                           */
@@ -291,8 +290,8 @@ enum RecKind {
     RK_COUNT_NAME,     /* dump only: u32 aux, char[REC_COUNT_NAME] NUL-padded: the script name
                           whose FNV-1a is the aux of the COB thread allocation 0x4B08C0's rows   */
     RK_MINIMAP,        /* ring only: an RB_MINIMAP's payload, right after the RK_HEADER          */
-    RK_EV_NET_CREATE,  /* RecNetCreate: CreateFromNetwork 0x4861D0 made this replica. A native
-                          file's from format 6; observed at its success exit after B4 stamps it   */
+    RK_EV_NET_CREATE,  /* RecNetCreate: CreateFromNetwork 0x4861D0 made this replica, observed at
+                          its success exit after B4 stamps it: a multiplayer recording's only     */
 
     /* THE PERSPECTIVE of the human seat the skirmish commands (tagpu_recpov.h; the plan,
        demo-recorder-perspective-streams.md). A network-mode recorder writes none of them: a
@@ -431,11 +430,22 @@ enum RecEnd {
    RT_TIMELINE. So a reader that stops at the first RB_END reads the original, as it was written,
    whatever follows: a takeover's fork is a segment appended to the file it was played from
    (research/notes/tadr-port/demo-recorder-s4-takeover.md).
-   A block is a RecBlock, then `packed` bytes: the zlib
-   stream (RFC 1950) of its `raw` bytes, or the raw bytes themselves when RBF_STORED is set.
-   `crc_body` is the CRC-32 (zlib's crc32, crc32.c's Crc32_ComputeBuf) of those `packed` bytes and `crc_head` that of the block's
-   first 28 bytes, so a block cut short, or a header torn, is known by one of them. A block is
-   written whole or not at all: a file ends at its last complete block. */
+   A block is a RecBlock, then `packed` bytes: exactly one zstd frame whose content is its `raw`
+   bytes, with no byte after it, or the raw bytes themselves when RBF_STORED is set. A packed
+   block has at least one byte each way; an RB_HEADER, an RB_END and an RB_TIMELINES are always
+   stored, so a header reads without zstd. `crc_body` is the CRC-32 (zlib's crc32, crc32.c's
+   Crc32_ComputeBuf) of those `packed` bytes and `crc_head` that of the block's first 28 bytes, so
+   a block cut short, or a header torn, is known by one of them. A block is written whole or not
+   at all: a file ends at its last complete block.
+   An RB_STREAM with RBF_SECTIONS holds a sectioned container (below) in place of its records:
+   `raw` is the container's bytes, which decode to the records. Its unit frame carries state from
+   one sectioned block to the next, and restarts -- RBF_FRAME_RESET -- at a segment's first stream
+   block, at the first after a snapshot and at the first after a stream block of records (one the
+   writer's codec declined, or whose check decode differed), from the units the reader holds at
+   the end of the iteration before it. So a stream block inside a run of sectioned blocks decodes
+   only after its predecessors since the run's reset, and a reader starts at a snapshot or at a
+   segment's start, never inside a run (tagpu_reccodec.c, THREE INVARIANTS). Any other flag bit,
+   RBF_SECTIONS on another kind of block and RBF_FRAME_RESET without RBF_SECTIONS are refused. */
 #define REC_MAGIC        "IMPREC\r\n"          /* 8 bytes, no NUL                                 */
 #define REC_BLOCK_MAGIC  0x4B4C4249u           /* "IBLK"                                          */
 
@@ -487,6 +497,7 @@ enum RecBlockKind {
 #define RBF_SECTIONS    2u     /* an RB_STREAM's only: its payload is a sectioned container    */
 #define RBF_FRAME_RESET 4u     /* with RBF_SECTIONS only: the unit frame restarts at its first
                                   iteration, from the reader's own copy of the units           */
+#define RBF_ALL         (RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET)
 
 /* THE SECTIONED CONTAINER (tagpu_reccodec.c reads and writes it): the bytes of an RB_STREAM with
    RBF_SECTIONS, which decode to exactly the records they replace. A RecSecHead, then RCS_COUNT

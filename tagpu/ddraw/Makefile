@@ -80,7 +80,8 @@ CPPFLAGS += -DTAGPU_COVER
 OBJEXT   := $(basename $(OBJEXT)).cover.o
 LDFLAGS  := -Wl,--enable-stdcall-fixup -static -shared -Wl,-Map=$(basename $(TARGET)).map
 COVERED  := $(shell awk '$$1 !~ /^\#/ && $$3 == "sim" {print $$1}' thread-split.allow) \
-            src/tagpu_recorder.c src/tagpu_recwriter.c src/tagpu_recfile.c src/tagpu_recreader.c src/tagpu_replay.c
+            src/tagpu_recorder.c src/tagpu_recwriter.c src/tagpu_recfile.c src/tagpu_recreader.c src/tagpu_replay.c \
+            src/tagpu_reccodec.c
 $(addsuffix $(OBJEXT), $(basename $(COVERED))): CFLAGS += -finstrument-functions -finstrument-functions-once -ffunction-sections
 endif
 
