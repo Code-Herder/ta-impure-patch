@@ -380,8 +380,10 @@ static void delta_apply(unsigned* img, const unsigned char* bits, unsigned dword
 
 /* The codec from the header's RT_CODEC, RT_PHYSICS and RT_AIR, parsed from the bytes a reader will
    parse, so the check decoder runs on the reader's constants. 1, or 0 when the reader would refuse
-   them. Without RT_CODEC and RT_PHYSICS, or without memory for the frame, every stream block is
-   written as records. */
+   them. Without RT_CODEC and RT_PHYSICS, or without memory for the encoder's and check decoder's
+   states, every stream block is written as records. Without memory for the constants themselves
+   the recording ends before its file is opened (fail): the entries cannot be checked without
+   them, and a header a reader might refuse is never written. */
 static int codec_begin(Writer* w, const unsigned char* const ent[3], const unsigned nent[3])
 {
     RecCodecParams* p = (RecCodecParams*)malloc(sizeof *p);

@@ -7,9 +7,10 @@
      codectest decode IN OUT        every stream block's records, C, framed for codectest.py; a
                                     line per block with its milliseconds
      codectest outcomes             synthetic payloads that must be SECTIONS, DECLINED (a delta
-                                    naming an unchanged dword; a correction on a delta's slot) and
-                                    MISMATCH (the check decoder restarted from another world), each
-                                    followed by a restarting SECTIONS block
+                                    naming an unchanged dword; a correction on a delta's slot; a
+                                    failed allocation) and MISMATCH (the check decoder restarted
+                                    from another world), each followed by a restarting SECTIONS
+                                    block; and zstd frames past and at the 2^27 window bound
      codectest fuzz IN SEED N [CASES]
                                     N mutations of the recording's sectioned blocks (flags, the
                                     head, section lengths, kinds, gaps, masks, ids, columns,
@@ -593,6 +594,45 @@ static int reader_check(RecCodec* r, World* w, const RecCodecParams* p, unsigned
     return ok;
 }
 
+/* A frame of `n` bytes in one raw block whose header asks for a window of 2^wlog (no single
+   segment, a 4-byte content size): the window is all that differs from a frame zstd writes. */
+static size_t frame_with_window(unsigned char* f, unsigned wlog, const unsigned char* src, size_t n)
+{
+    f[0] = 0x28; f[1] = 0xB5; f[2] = 0x2F; f[3] = 0xFD;
+    f[4] = 0x80;                                  /* a 4-byte content size, no checksum   */
+    f[5] = (unsigned char)((wlog - 10) << 3);     /* the exponent, no mantissa            */
+    put32(f + 6, (uint32_t)n);
+    f[10] = (unsigned char)(1 | n << 3);          /* the last block, raw, n bytes         */
+    f[11] = (unsigned char)(n >> 5);
+    f[12] = (unsigned char)(n >> 13);
+    memcpy(f + 13, src, n);
+    return 13 + n;
+}
+
+/* reccodec_unpack refuses a window past 2^27 as the Python reader does, and nothing else of
+   such a frame: the same bytes at 2^27 unpack. */
+static int zstd_window_check(void* cctx, void* dctx)
+{
+    static const unsigned char src[64] = "a block's bytes, which only the frame's window distinguishes";
+    static unsigned char zero[4096], back[sizeof zero];
+    unsigned char f[13 + sizeof src], out[sizeof src];
+    RecBytes pk;
+    size_t fn;
+    int ok = 1;
+    memset(&pk, 0, sizeof pk);
+    fn = frame_with_window(f, 27, src, sizeof src);
+    ok &= expect("zstd: a frame asking for a 2^27 window unpacks",
+                 reccodec_unpack(dctx, out, sizeof out, f, fn) && !memcmp(out, src, sizeof src), 1);
+    fn = frame_with_window(f, 28, src, sizeof src);
+    ok &= expect("zstd: the same frame asking for 2^28 is refused",
+                 reccodec_unpack(dctx, out, sizeof out, f, fn), 0);
+    ok &= expect("zstd: the writer's own frame unpacks",
+                 reccodec_pack(cctx, &pk, zero, sizeof zero) &&
+                 reccodec_unpack(dctx, back, sizeof back, pk.p, pk.n), 1);
+    rb_free(&pk);
+    return ok;
+}
+
 static int cmd_outcomes(void)
 {
     static uint32_t units[6][NDW];
@@ -633,17 +673,27 @@ static int cmd_outcomes(void)
         !reccodec_stream_begin(&st, &p) || !(rd = reccodec_new(64)))
         return 2;
     world_reset(&w, 64);
-    for (block = 0; block < 8; block++) {
-        static const int want[8] = { RECC_SECTIONS, RECC_SECTIONS, RECC_DECLINED, RECC_SECTIONS,
-                                     RECC_DECLINED, RECC_SECTIONS, RECC_MISMATCH, RECC_SECTIONS };
-        static const char* what[8] = {
+    for (block = 0; block < 10; block++) {
+        static const int want[10] = { RECC_SECTIONS, RECC_SECTIONS, RECC_DECLINED, RECC_SECTIONS,
+                                      RECC_DECLINED, RECC_SECTIONS, RECC_MISMATCH, RECC_SECTIONS,
+                                      RECC_DECLINED, RECC_SECTIONS };
+        static const char* what[10] = {
             "SECTIONS, the segment's first block", "SECTIONS, continuing",
             "DECLINED: a delta naming an unchanged dword", "SECTIONS, restarting after it",
             "DECLINED: a correction on a delta's slot", "SECTIONS, restarting after it",
-            "MISMATCH: the check decoder restarted from another world", "SECTIONS, restarting after it" };
+            "MISMATCH: the check decoder restarted from another world", "SECTIONS, restarting after it",
+            "DECLINED: the encoder's lists failed an allocation",
+            "SECTIONS, restarting after it (the reader's list failed too)" };
         char line[128];
         int o;
-        synth_block(&y, units, &gt, block == 0, block == 2, block == 4);
+        /* block 9 creates its units again, so the reader's touched list is used after its failure */
+        synth_block(&y, units, &gt, block == 0 || block == 9, block == 2, block == 4);
+        if (block == 8) {
+            /* a failed realloc, as rb_grow latches it: a restart must clear it on both sides */
+            st.enc->dl.oom = 1;
+            st.enc->hash.oom = 1;
+            rd->tl.oom = 1;
+        }
         if (block == 6) {
             static uint32_t other[64][NDW];
             static unsigned char live[64];
@@ -665,6 +715,7 @@ static int cmd_outcomes(void)
                                                                   y.p, y.n, st.dctx), 1);
         ok &= expect("  the encoder's copy is the payload's end state", world_same(&w, st.enc), 1);
     }
+    ok &= zstd_window_check(st.cctx, st.dctx);
     printf("outcomes: %u sectioned, %u declined, %u mismatched\n", st.sectioned, st.declined, st.mismatched);
     reccodec_stream_end(&st);
     reccodec_free(rd);

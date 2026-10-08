@@ -46,6 +46,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#define ZSTD_STATIC_LINKING_ONLY       /* ZSTD_getFrameHeader */
 #include "zstd.h"
 #include "tagpu_reccodec.h"
 
@@ -163,6 +164,13 @@ static void rb_free(RecBytes* b)
 {
     free(b->p);
     memset(b, 0, sizeof *b);
+}
+
+/* empty, its latched failure cleared and its memory kept */
+static void rb_clear(RecBytes* b)
+{
+    b->n = 0;
+    b->oom = 0;
 }
 
 /* LEB128 of a value below 2^32 from p[*at, end): at most 5 bytes, the fifth at most 0x0F;
@@ -534,6 +542,20 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
 {
     unsigned s, j, i;
     c->valid = 0;
+    /* A failed allocation latches its buffer's oom (rb_grow); some uses reset only its length, so
+       a latch would decline every later block of a writer and refuse every later sectioned block
+       of a reader. A restart is where both start again after a failure, so every working buffer
+       starts here empty and unlatched. */
+    rb_clear(&c->tl);
+    rb_clear(&c->dl);
+    rb_clear(&c->runs);
+    rb_clear(&c->lslot);
+    rb_clear(&c->lmask);
+    rb_clear(&c->lzz);
+    rb_clear(&c->ids);
+    rb_clear(&c->hash);
+    rb_clear(&c->cols);
+    for (i = 0; i < RCS_COUNT; i++) rb_clear(&c->sec[i]);
     if (!p->usable || p->nslots != c->nslots || p->nlanes < 1 || p->nlanes > RECC_LANES_MAX ||
         p->nair > RECC_AIR_MAX)
         return;
@@ -1537,14 +1559,25 @@ int reccodec_pack(void* cctx, RecBytes* out, const unsigned char* src, size_t n)
     return 1;
 }
 
+/* The largest window a frame may ask for, 2^27: zstd's streaming default
+   (ZSTD_WINDOWLOG_LIMIT_DEFAULT), which the Python reader's decompressor enforces and the one-shot
+   ZSTD_decompressDCtx does not. Bounding it here by the frame's header makes both readers refuse
+   the same frames. The writer's frames ask for far less: level 3's window is 2^21
+   (ZSTD_defaultCParameters), or the block's own size when that is smaller. */
+#define RECC_WINDOW_MAX (1ull << 27)
+
 int reccodec_unpack(void* dctx, unsigned char* dst, size_t raw, const unsigned char* src,
                     size_t packed)
 {
     unsigned long long size;
+    ZSTD_FrameHeader fh;
     if (!raw || !packed) return 0;
     if (ZSTD_findFrameCompressedSize(src, packed) != packed) return 0;
     size = ZSTD_getFrameContentSize(src, packed);
     if (size != (unsigned long long)raw) return 0;
+    if (ZSTD_getFrameHeader(&fh, src, packed) != 0 || fh.frameType != ZSTD_frame ||
+        fh.windowSize > RECC_WINDOW_MAX)
+        return 0;
     return ZSTD_decompressDCtx((ZSTD_DCtx*)dctx, dst, raw, src, packed) == raw;
 }
 

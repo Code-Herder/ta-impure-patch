@@ -33,7 +33,8 @@ typedef struct RecCodecParams {
     int        usable;
 } RecCodecParams;
 
-/* A growable buffer: `oom` is set, and stays set, once an allocation failed. */
+/* A growable buffer: `oom` is set once an allocation failed, and stays set until its owner
+   clears it (reccodec_restart, for a codec's own buffers). */
 typedef struct RecBytes { unsigned char* p; size_t n, cap; int oom; } RecBytes;
 
 typedef struct RecCodec RecCodec;
@@ -46,7 +47,8 @@ int  reccodec_params(RecCodecParams* p, unsigned nslots, const void* codec, unsi
 RecCodec* reccodec_new(unsigned nslots);             /* NULL: no memory                          */
 void reccodec_free(RecCodec* c);
 /* The frame restarts from a world: units[nslots * REC_UNIT_DWORDS], live[nslots] (which may be
-   the codec's own copy). Params of another slot count leave it invalid. */
+   the codec's own copy), with its working buffers empty and their failures cleared. Params of
+   another slot count leave it invalid. */
 void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* units,
                       const unsigned char* live);
 void reccodec_invalidate(RecCodec* c);
@@ -63,7 +65,8 @@ int  reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* 
                      char* why, unsigned cap);
 /* zstd level 3 into `out`: 1 when the frame is smaller than the bytes, else 0 (store them). */
 int  reccodec_pack(void* cctx, RecBytes* out, const unsigned char* src, size_t n);
-/* One zstd frame of exactly `raw` bytes, no more and no trailing byte: 1, else 0. */
+/* One zstd frame of exactly `raw` bytes, no more and no trailing byte, whose window is at most
+   2^27: 1, else 0. */
 int  reccodec_unpack(void* dctx, unsigned char* dst, size_t raw, const unsigned char* src,
                      size_t packed);
 
