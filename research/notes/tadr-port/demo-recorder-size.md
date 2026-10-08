@@ -317,8 +317,12 @@ peer, its chat-fix variant, the five-peer ten-seat game):
 Both drop the observed copy of remote units, and with it the audits of a replica against its
 owner. The composed world wins on the ten-seat file (80 KiB: remote unit packets and seals), a gap
 that should close once the unit codec applies to the owners' sequences, which code smaller than
-the composed ones [INFERRED]. The challenger recommends K now, with snapshot checkpoints for the
-seek, and the composed world reconsidered once the composition rules settle.
+the composed ones [INFERRED]. **The owner chose K (2026-10-07)**, with snapshot checkpoints for the
+seek; the composed world is reconsidered once the composition rules settle. K needs one measurement
+before it lands: the remote packets' unit bodies coded with the unit frame in the file and rebuilt
+byte-exact (MEASURED so far only as the owners' unit sequences coded: 84.1 KiB on the two-peer
+file, 16.5 on the ten-seat). If the wire codec of stage 6 lands first, the packets arrive already
+coded and the file stores them as they are.
 
 Nothing on the wire changes either way. A chained unit codec on the wire shrinks unit bodies
 4.05–5.16 times (MEASURED, every tick decoded back); it is safe by construction because the
@@ -336,7 +340,7 @@ the units: stage 6's traffic budget.
 | L3 | cells, orders, events, globals; the snapshot wreck base | about −7 MiB |
 | L4 | the measured hour of a four-player game with AI and structures | the snapshot interval; whether lossy is needed |
 | L5 | lossy, only if L4 misses a budget | about −1 MiB per category |
-| L6 | multiplayer: K or the composed world (with or after L1), then the wire codec in stage 6 | multiplayer files and bandwidth |
+| L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
 ## Decisions for the owner
 
@@ -356,7 +360,6 @@ the units: stage 6's traffic budget.
    edges, what a takeover between snapshots gets, stale projectile records out of snapshots.
 9. **Projectiles from launch**: whether the puppet's engine may fly its own shots, after a
    determinism probe.
-10. **Multiplayer** (a change to the slice's design): K or the composed world; accepting the loss
-    of the replica-against-owner audits (both); for the composed world, losing the independent
-    Python composition, or keeping the packets behind a test-only lever.
+10. **Multiplayer**: DECIDED 2026-10-07, K. Open: accepting the loss of the replica-against-owner
+    audits, which K drops with the observed remote copies.
 11. **The measured hour's wall time** against the ten-minute rule for a game run.
