@@ -79,7 +79,7 @@ for c, s in pairs:
     scale = (ph / uh) if uh <= uw else (pw / uw)      # one scale per piece, across its short side
     ent = {'w': int(pw), 'h': int(ph), 'scale': round(float(scale), 3), 'uw': uw, 'uh': uh,
            'fixed': bool(not p or p[5] == 'fixed'), 'core': bool(p and p[5] == 'core'), 'cost': 0.0 if icons else round(float(cost[c, s]), 2)}
-    if p and p[5] != 'fixed':
+    if p and p[5] not in ('fixed', 'tile'):     # a tile strip has no insets: tile.py makes it repeat along x
         bpx = p[3] * scale
         rgbf = rgb.astype(float)
         def inset(A):

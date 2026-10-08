@@ -8,7 +8,7 @@ url=$1; out=$(realpath -m "$2"); cfg=$(mktemp -d)
 echo '{ "browser": { "contextOptions": { "deviceScaleFactor": 2, "viewport": { "width": 2100, "height": 1400 } } } }' > "$cfg/dpr2.json"
 P="playwright-cli -s=hudcap$$ --config=$cfg/dpr2.json"; ev() { $P eval "$1" 2>&1 | sed -n '/Result/,/^###/p' | sed -n 2p | tr -d '"'; }
 $P open "$url" >/dev/null 2>&1; sleep 3
-for t in $(seq 1 30); do r=$(ev "() => { const g = [...document.querySelectorAll('.stage [data-gp]')]; return g.length + ':' + g.filter(e => e.style.backgroundImage.startsWith('url')).length; }"); [ "${r%%:*}" = "${r##*:}" ] && break; sleep 0.5; done
+for t in $(seq 1 30); do r=$(ev "() => { const g = [...document.querySelectorAll('.stage [data-gp], .stage [data-tile]')]; return g.length + ':' + g.filter(e => e.style.backgroundImage.startsWith('url')).length; }"); [ "${r%%:*}" = "${r##*:}" ] && break; sleep 0.5; done
 bb=$(ev "() => { const r = document.querySelector('.stage').getBoundingClientRect(); return [r.x, r.y, r.width, r.height].map(Math.round).join(','); }")
 $P run-code "async page => { await page.screenshot({ path: '$out', scale: 'device', clip: (([x, y, width, height]) => ({ x, y, width, height }))([$bb]) }); }" 2>&1 | grep -i error || true
 echo "composed $r, missing art $(ev "() => document.querySelectorAll('.stage .noart, #statwin .noart').length")"

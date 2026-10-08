@@ -11,7 +11,7 @@ shot() { $P run-code "async page => { await page.screenshot({ path: '$1', scale:
 rect() { ev "() => { const r = document.querySelector('$1').getBoundingClientRect(); return [r.x - 4, r.y - 4, r.width + 8, r.height + 8].map(Math.round).join(','); }"; }
 mid() { ev "() => { const r = document.querySelector('$1').getBoundingClientRect(); return Math.round(r.x + r.width / 2) + ' ' + Math.round(r.y + r.height / 2); }"; }
 $P open "$base?paused&res=3840x2160&hud=150&view=live&e1v=V1&nt=2&np=10&$q#E1" >/dev/null 2>&1; sleep 3
-for t in $(seq 1 30); do r=$(ev "() => { const g = [...document.querySelectorAll('.stage [data-gp]')]; return g.length + ':' + g.filter(e => e.style.backgroundImage.startsWith('url')).length; }"); [ "${r%%:*}" = "${r##*:}" ] && break; sleep 0.5; done
+for t in $(seq 1 30); do r=$(ev "() => { const g = [...document.querySelectorAll('.stage [data-gp], .stage [data-tile]')]; return g.length + ':' + g.filter(e => e.style.backgroundImage.startsWith('url')).length; }"); [ "${r%%:*}" = "${r##*:}" ] && break; sleep 0.5; done
 set -- $(mid '[data-act=play]'); $P mousemove $1 $2 >/dev/null; $P mousedown >/dev/null; sleep 0.4
 shot "${pre}_tp.png" "$(rect '[data-gp=tp_one]')"; $P mouseup >/dev/null; sleep 0.3
 shot "${pre}_foot.png" "$(rect '[data-gp=foot_one]')"

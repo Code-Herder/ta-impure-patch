@@ -9,6 +9,8 @@ that scales with the screen, in a browser prototype. The owner chose:
 - **The layout:** E1.
 - **The look:** C, *cycle button*, which is light distressed gunmetal.
 - **The buttons:** warm steel.
+- **The timeline fill:** not picked yet. Green, orange, amber and red, each repeated along the
+    groove, are in the prototype (*The exploration*, step 9).
 
 Nothing of it is drawn by the DLL yet; *Gaps* at the end says what is missing.
 
@@ -60,7 +62,9 @@ The layout is E1, settled in the prototype on 2026-10-06 and 2026-10-07 (*The ex
 
 - **The dock.** A transport plate (rewind, play, forward, speed, bookmark, UI scale, leave) and a
     timeline housing with a marker lane, a groove and a time readout. The housing is drawn as wide
-    as the screen leaves: 612 to 1226 units, MEASURED in the page.
+    as the screen leaves. On a 16:9 screen that is 1152 / HUD scale − 310 units: 458 at HUD 150 and
+    1226 at HUD 75. The fill inside its groove is 92 units shorter: 366 units at 4K and HUD 150,
+    MEASURED as 1646 device pixels in the page.
 - **The player column**, 250 units wide. Players are grouped under **team headers** that fold:
     - A header shows the team's title, its unit count, and its summed metal and energy income.
     - A **row** per player shows the colour stripe, the name, a skull when the commander is lost, the
@@ -89,6 +93,7 @@ plates are MEASURED at these sizes:
 | Timeline housing | 2056 × 259 | 4.9 | 52.9 (asked: 46) |
 | **Stats window** | 1322 × 903 | **3.1** | 292.4 (asked: 272) |
 | Buttons, warm steel | e.g. bay button 234 × 196 | 7.0 – 9.3 | — |
+| Timeline fill, one tile | 755 – 1002 × 77 | 6.4 | 12.0 (asked: 12) |
 
 **The stats window is the one part below 4.5.** At 4K and HUD 150 it is magnified 1.46×, which
 *Gaps* lists. The design height is the painting's, not the whitebox's. *One scale per part* below
@@ -177,6 +182,13 @@ toggles (map overlay, stats window open) and for the selected choice in each tra
       33-byte memo that skips it*: the side data's `metalcolor` / `energycolor`.
     - The saturated blue of TA's METAL title is the title's ramp, not the bar's. Sample an indicator
       where it lives, never a label beside it.
+- **The timeline's played fill:** a lit strip in one of TA's palette ramps, saturated so it reads
+    against the near-black groove and the light steel. Four were painted, and none is picked yet:
+    - green, TA 232–236 (`#7bff77` to `#1b7f0b`);
+    - orange, TA 197–200 (`#efa71b` to `#df4f07`);
+    - amber, TA 193–196 and 209 (`#fbf383` to `#9b832f`), close to the energy bar's yellow;
+    - red, TA 201–205 and 211 (`#ff4700` to `#7b1300`), the colour of the death and defeat markers
+      above the groove.
 - **Icons:**
     - khaki stencil `#c8c8a0` – `#abaa83`, with a thin near-black outline so they read on dark and
       light steel alike;
@@ -208,6 +220,7 @@ toggles (map overlay, stats window open) and for the selected choice in each tra
 | `gridslice.py <painting> <whitebox.json> <kit dir> <part>` | Cuts a one-piece part: the recesses as painted and the stretch bands |
 | `cut.py <parts spec> <painting> <sheet> <sheets.json> <kit dir>` | Cuts a parts sheet into 9-slice parts. `PRESSED_DARK=<weight>` makes pressed slots prefer darker shapes |
 | `iconcut.py <painting> <kit dir> <name>...` | Cuts icons as whole shapes, in reading order. `ICON_DIL=<px>` joins strokes that far apart |
+| `tile.py <kit dir> <part>...` | Makes cut strips repeat along x without a seam, in place (the timeline fill) |
 | `keying.py` | `despill`: takes the magenta back out of anti-aliased edges (all three cutters use it) |
 | `lookmerge.py <cut dir> <look> <kit dir>` | Files freshly cut parts into the kit as `<part>@<look>` |
 | `pack.py <kit dir> <out.json> [<page> <version>]` | One JSON of data URIs per kit; with a page, also its measurements into the page |
@@ -245,13 +258,16 @@ The tools need Python 3 with numpy, scipy and Pillow (the shared venv,
 
 **The separate parts** (buttons, strips, scroll parts, timeline fill, playhead, marker badge) and
 the icons are cells of a **parts sheet**. They are defined in `specs/parts_look.py` (15 parts and 23
-icons) and `specs/parts_buttons.py` (the 9 button parts alone). Each part is
+icons), `specs/parts_buttons.py` (the 9 button parts alone) and `specs/parts_fill.py` (the four
+timeline fill strips). Each part is
 `(name, w, h, border, label, mode)`, sizes in units. `mode` is one of:
 
 - `''`: a 9-slice part;
 - `'core'`: a fill. The page draws only its bright core, stretched over the bar, because its own
     frame would sit inside the slot's;
-- `'fixed'`: drawn at its own size.
+- `'fixed'`: drawn at its own size;
+- `'tile'`: a strip that repeats along x. `cut.py` measures no insets for it, `tile.py` makes it
+    repeat without a seam, and the page lays it along the whole groove (*Tiled fills*).
 
 ```
 PLAIN=1 .venv-undither/bin/python tools/hudart/sheets.py parts_buttons sheets/   # parts_col.png, sheets.json
@@ -307,6 +323,8 @@ PY=.venv-undither/bin/python; H=tools/hudart
 $PY $H/gridslice.py painted_head.png wb_head.json cut/ head_one              # one-piece parts
 PRESSED_DARK=1.5 $PY $H/cut.py parts_buttons painted_3.png col sheets/sheets.json cut3/
 ICON_DIL=25 $PY $H/iconcut.py painted_icons.png icons/ i_stats i_map i_cam ...  # names in reading order
+$PY $H/cut.py parts_fill painted_fill.png col sheets/sheets.json fill/           # fill strips are cut,
+$PY $H/tile.py fill/ track_fill_green track_fill_orange track_fill_amber track_fill_red  # then tiled
 ```
 
 **What `gridslice.py` prints:**
@@ -342,10 +360,11 @@ The look-C, warm-steel HUD draws from:
 - the six one-piece plates `@c`;
 - the remaining look-C parts `@c`;
 - the nine buttons `@c3`;
-- the 23 icons `@gm`.
+- the 23 icons `@gm`;
+- the timeline fill `track_fill_<colour>@gm`, one tile shared by every look.
 
-The kit holds 171 parts across shell steel, A, C, the four button sets and the icons. It packs to
-6.3 MB (MEASURED).
+The kit holds 175 parts across shell steel, A, C, the four button sets, the icons and the four
+fills. It packs to 6.3 MB (MEASURED).
 
 ### 6. Check
 
@@ -453,6 +472,35 @@ within 0.33 units.
 - **`ICON_DIL`.** Use about 25 for an icon made of separate strokes, like the four corner brackets
     of UI scale.
 
+### Tiled fills (`tile.py`)
+
+**Why tile.** The timeline's fill runs up to 1134 units long, painted as a strip
+200 units long. Stretched, a painting smears its wear into streaks, and the texture slides as the
+fill grows. So the strip is repeated instead, and the repeat must not show.
+
+1. **The ends go.** Columns not fully painted are dropped, then 4 % more at each end, because Codex
+    shades a strip's ends.
+2. **The length.** The tile is a slice `seg[0:L]` of the strip. For each L from 55 % of the strip
+    up, the strip's continuation `seg[L:L+o]` is compared with its start `seg[0:o]`, over an overlap
+    o of 12 % of the strip. The L where they match best wins.
+3. **The seam.** The tile's first o columns are rebuilt from those two:
+    - the continuation left of the cheapest top-to-bottom path through their difference;
+    - the start right of it;
+    - feathered over 3 px (image quilting).
+
+    Nothing is blended across the whole overlap, so the wear keeps its contrast.
+4. **Why the wrap cannot show.** The tile's last column is `seg[L-1]` and its first is `seg[L]`,
+    neighbours in the painting. The only join is the seam inside the tile, between two stretches of
+    paint chosen because they look alike there.
+
+MEASURED on the four fill strips:
+
+- **Tile lengths:** 755 to 1002 px, or 118 to 156 units.
+- **The wrap:** the colour step across it is 0.7 to 1.9 levels, against a median step between
+  neighbouring columns of 1.0 to 1.5 (0–255).
+- **Repeats:** a 366-unit groove (4K, HUD 150) shows a tile 2 to 3 times; the longest, 1134
+  units at HUD 75, 7 to 10 times.
+
 ### How the page draws a grid-sliced part
 
 Drawing at a target size T for a design length D, with stretch bands of total length S
@@ -472,6 +520,14 @@ composed image is cached by size.
 - its bar sits a fixed distance off the recess floor.
 
 A painting taller than its slot therefore still fits its digits.
+
+**A tiled fill** (`tileCompose`) is drawn into one canvas as well:
+
+- **Scaled with its neighbours.** The tile is scaled to the drawn height inside a strip of three
+  copies, so the resampling at its edges sees its periodic neighbours.
+- **Copied at whole-pixel steps,** so no copy overlaps another.
+- **Laid along the whole groove.** The fill element uncovers the strip up to the playhead, so the
+  texture stays put while the fill grows.
 
 ### Packing (`pack.py`)
 
@@ -638,6 +694,32 @@ icons. Pure flat #FF00FF everywhere else; never paint the labels. Print the gene
 stop.
 ```
 
+### The timeline fill
+
+```
+The timeline's PLAYED FILL only, the bar that fills the timeline groove from the start up to the
+playhead (today: <dock capture>; the housing it sits in: <painted_rail.png>). It must be DISTINCT, in a
+clear colour, and it must TILE along its length: a slice of it is repeated end to end to cover a
+groove up to 1200 units long, so it is never stretched.
+Paint the sheet <parts_col.png> (specs/parts_fill.py): each of the four grey cells becomes one long
+fill strip, at its place and size, in its own colour from Total Annihilation's own palette:
+1. GREEN: TA's green ramp, highlight #7bff77, body #53df4f to #33bf2b, shadow #1b9f13 to #1b7f0b.
+2. ORANGE: highlight #efa71b, body #eb8f13 to #e77b0f, shadow #df4f07.
+3. AMBER: highlight #fbf383 to #f3d34f, body #efbb33 / #ffbf00, shadow #9b832f.
+4. RED: highlight #ff4700, body #d72300 to #bf1f00, shadow #931700 to #7b1300.
+Each strip is a LIT indicator bar, saturated and bright, so it reads at a glance against the
+near-black groove and the light steel around it: a bright highlight band along its upper third,
+deepening toward the bottom, a thin darker edge along the top and the bottom. Give it the HUD's
+distressed wear at a FINE scale: light scratches, specks of grime, slight mottling, spread EVENLY
+along the whole length. NO end caps, NO rivets or screws, NO single large scratch, chip, dent or
+blotch, and no change of shade along the length: any slice of the strip must look like any other,
+because slices are repeated end to end. Both ends plain and straight (they are cut away). Exactly
+FOUR strips. Never paint the labels. Pure flat #FF00FF everywhere else.
+Print the generated image path and stop.
+```
+
+Codex returned all four strips on the first try, even along their length.
+
 ### The proportions repaint
 
 Send this when a painting came back with frames too thick:
@@ -730,6 +812,9 @@ artifact.
     to stand out more. Four rivet-free button sets were painted, each with its own pressed look.
 8. **"Ok warm steel it is"** (2026-10-07): **look C with the warm-steel buttons** is the chosen
     HUD.
+9. **The timeline fill** (2026-10-07). The owner asked for a fill colour that is more distinct
+    than the khaki, and for a fill that repeats instead of stretching. Four colours from TA's
+    palette were painted as long strips and made to tile; none is picked yet.
 
 [![The four distressed player cards](assets/hud-art/cards.jpg)](assets/hud-art/cards.jpg)
 
@@ -748,6 +833,11 @@ artifact.
 
 *Step 7: look C's buttons at native 4K: the riveted originals, then sets 1 to 4. Shown in each: play
 held, stats on, UNITS and PLAYERS selected, and a row's JUMP held. Set 3, warm steel, was picked.*
+
+[![The timeline fill in five versions](assets/hud-art/fill.jpg)](assets/hud-art/fill.jpg)
+
+*Step 9: the timeline at 4K, HUD 150. First the khaki fill, one painting stretched over the played
+part; then the four tiled colours.*
 
 ## Gaps
 
