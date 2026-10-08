@@ -11,8 +11,8 @@ that scales with the screen, in a browser prototype. The owner chose:
 - **The buttons:** warm steel.
 - **The timeline fill:** green, from TA's green ramp, repeated along the groove rather than
     stretched.
-- **The team header:** not picked yet. Seven variants are in the prototype (*The exploration*,
-    step 10).
+- **The team header:** a solid dark plate with the team's title written on it, and no corner
+    screws.
 
 Nothing of it is drawn by the DLL yet; *Gaps* at the end says what is missing.
 
@@ -49,12 +49,12 @@ original game art and are never committed** (CLAUDE.md, *Publishing*).
 - **MEASURED:** measured on the paintings or the page, with the numbers.
 - **[INFERRED]:** not proved.
 
-[![The chosen HUD at 4K, HUD 150: look C with warm-steel buttons](assets/hud-art/final.jpg)](assets/hud-art/final.jpg)
+[![The chosen HUD at 4K, HUD 150: look C, warm-steel buttons, the green timeline fill and the dark-plate team headers](assets/hud-art/final.jpg)](assets/hud-art/final.jpg)
 
 *The chosen HUD, at 3840×2160 with HUD 150 (shown halved). Its parts:*
 
 - *the dock along the bottom: the transport plate, then the timeline housing with its marker lane;*
-- *the player column on the right, grouped under team headers;*
+- *the player column on the right, grouped under dark-plate team headers;*
 - *the stats / map / capture plate under the column;*
 - *the stats window, open.*
 
@@ -157,6 +157,16 @@ Every part exists in this look too, under `@a` (*The kit's names*).
     - screws, rivets or bolts;
     - dark blocks or notches in the corners;
     - lamps.
+
+### Team header: a solid dark plate, chosen
+
+- **A solid plate,** so that the header reads as a field of paint where every row is a light frame
+  around dark recesses. Recolouring a frame does not do it (*The exploration*, step 10).
+- **Dark gunmetal** like TA's skirmish player table (`#26241f` – `#434241`), with its outer bevel worn
+  bright (`#9fa1a0` – `#c9cdcd`).
+- **The title is written on the plate,** in a text zone (*Text zones*): light `#ece6c0` with a
+  near-black outline. Only the unit sum and the two income lines sit in recesses.
+- **No screws** at the corners.
 
 ### Pressed, selected, on: one state
 
@@ -370,7 +380,7 @@ So a focused pass (one button set) only adds the parts it repaints.
 
 The look-C, warm-steel HUD draws from:
 
-- the six one-piece plates `@c`;
+- the six one-piece plates `@c`, except the team header, `head_one@h6`;
 - the remaining look-C parts `@c`;
 - the nine buttons `@c3`;
 - the 23 icons `@gm`;
@@ -794,6 +804,21 @@ screws at the four outer corners.
 whole width inside the bottom frame, under the recesses, like a glowing underline.
 ```
 
+The pick was repainted with one change:
+
+```
+Repaint your image <painted_6.png> exactly as it is (the same image size, the same dark gunmetal
+plate and wear, the same worn-bright outer bevel, the same three recesses at the same places and
+sizes, the same plain area where the title is written) with ONE change: remove the four round
+slotted screws at the corners. Each corner becomes plain worn dark plate, the bright outer bevel
+running round it unbroken. No screws, rivets, bolts or holes anywhere. Pure flat #FF00FF outside
+the header. Print the generated image path and stop.
+```
+
+It came back changed only at the corners. Its recesses measure within 0.15 units of the version
+with screws (MEASURED), so a focused repaint from Codex's own painting is a safe way to remove one
+feature.
+
 **Where the headers came back.** The first round came back 29.4 to 30.0 units tall for 23,
 like today's header. The second came back 21.9 to 24.6 units tall. Codex painted area 4 as plain
 plate, without copying its marker outline.
@@ -906,8 +931,11 @@ artifact.
       written on the paint (`head_plate`), so the header is a field of colour where every row
       is a frame around dark recesses.
 
-    **The pick is pending.** The lesson holds for any part that has to stand out from its
-    neighbours: change the part's pattern of light and dark, not only the colour of its frame.
+    **The owner picked 6, the dark plate,** without its corner screws ("It's not needed"). It
+    was repainted from its own painting with that one change.
+
+    The lesson holds for any part that has to stand out from its neighbours: change the part's
+    pattern of light and dark, not only the colour of its frame.
 
 [![The four distressed player cards](assets/hud-art/cards.jpg)](assets/hud-art/cards.jpg)
 
@@ -935,7 +963,8 @@ part; then the four tiled colours. Green was picked.*
 [![The team header in eight versions](assets/hud-art/headers.jpg)](assets/hud-art/headers.jpg)
 
 *Step 10: the player column at 4K, HUD 150, with the current header, then variants 1 to 4
-(top row, from the left) and 5 to 7 (bottom row).*
+(top row, from the left) and 5 to 7 (bottom row). 6 was picked and then repainted without its
+corner screws; the chosen HUD at the top of the page shows it.*
 
 ## Gaps
 
@@ -955,6 +984,5 @@ part; then the four tiled colours. Green was picked.*
     font. The HUD's text in the game is undecided.
 - **The stats chart shows synthetic data.** A real chart needs a per-second statistics track in the
     recording.
-- **Look A, the other three button sets, the other three fills and shell steel are kept but not
-    maintained.** A part
-    added to look C from now on is not painted in them.
+- **Look A, the other three button sets, the other three fills, the other six headers and shell
+    steel are kept but not maintained.** A part added to look C from now on is not painted in them.
