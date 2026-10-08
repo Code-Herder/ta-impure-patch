@@ -190,9 +190,11 @@ toggles (map overlay, stats window open) and for the selected choice in each tra
     It is saturated so that it reads against the near-black groove and the light steel. It is
     **repeated along the groove, never stretched** (*Tiled fills*). Orange, amber and red were
     painted too and are kept in the kit:
+
     - amber sits close to the energy bar's yellow;
     - red is the colour of the death and defeat markers above the groove;
     - orange sits near those markers' red-orange.
+
 - **Icons:**
     - khaki stencil `#c8c8a0` – `#abaa83`, with a thin near-black outline so they read on dark and
       light steel alike;
@@ -493,6 +495,7 @@ fill grows. So the strip is repeated instead, and the repeat must not show.
     - feathered over 3 px (image quilting).
 
     Nothing is blended across the whole overlap, so the wear keeps its contrast.
+
 4. **Why the wrap cannot show.** The tile's last column is `seg[L-1]` and its first is `seg[L]`,
     neighbours in the painting. The only join is the seam inside the tile, between two stretches of
     paint chosen because they look alike there.
@@ -748,6 +751,7 @@ outside the part. Print the path and stop.
 
     Nothing about the art changes, so this is the cheapest tweak. A one-piece kit entry holds the
     whole painted part, so even without the archive the packed kit can be re-cut.
+
 - **Repaint one part in the chosen look:**
     1. Render its whitebox.
     2. Send *the style block*, *look C* and *a one-piece part*, pointing at an existing look-C
@@ -788,6 +792,7 @@ artifact.
 
     The owner asked for **E**: C's dock (transport plate and thin rail) and C's player column,
     drawn with A's plates. The column must hold 10 players, and more later.
+
 2. **E1, team headers that fold**, chosen over coloured spines (E2) and a versus bar (E3). Added
     with it:
     - a **UI-scale button** on the transport plate;
@@ -798,11 +803,13 @@ artifact.
     - V3, remaster.
 
     Shell steel was carried on. Two lessons from it, now part of the method:
+
     - **A kit's parts list comes from the mockup**, not the whitebox. A generic button stretched
        everywhere looked much worse than the mockup.
     - **A compound element is painted as one piece and grid-sliced.** A row built from stacked
        9-slices "is still disparate". The row, the header, the button plate, the stats window, the
        transport plate and the timeline housing each became one painting.
+
 4. **No open player card.** Every row carries everything, and the actions moved to a hover strip
     (picked over a drawer, a foot plate and a flyout).
     - **Selected and on mean pressed in;** the green lamps went (2026-10-07).
