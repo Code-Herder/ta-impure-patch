@@ -1,0 +1,25 @@
+/* The drawing primitives hud.js places. Every length is in HUD units through --u, the CSS pixels of one unit. */
+.hud { position: absolute; inset: 0; }
+.hud .box { position: absolute; }
+/* a part: its art is painted behind its children */
+.hud .art { position: absolute; isolation: isolate; }
+.hud .art::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; }
+/* 9-slice: the slice's edges keep their painted size in units, the middle stretches */
+.hud .art.nine::before { border-style: solid; border-color: transparent; border-width: var(--bw);
+  border-image: var(--bi) var(--bsl) fill / var(--bw) stretch; }
+.hud .art.whole::before { background: var(--bi) center / 100% 100% no-repeat; }
+.hud .art.icon::before { background: var(--bi) center / contain no-repeat; }
+/* grid-sliced parts and tiled fills are composed into one image at the drawn size */
+.hud .art.composed { background-size: 100% 100%; }
+.hud .art.composed::before { display: none; }
+.hud .art.noart::before { border: 1px dashed #f0f; }
+/* text: one line, centred vertically in its box */
+.hud .t { position: absolute; display: flex; align-items: center; line-height: 1; white-space: nowrap; overflow: hidden; }
+.hud .t.c { justify-content: center; }
+.hud .hot { cursor: pointer; }
+.hud .off { pointer-events: none; }
+/* a pressed face sinks its content */
+.hud .art.pressed > .face { transform: translateY(calc(var(--press) * var(--u))); }
+.hud .hov { display: none; }
+.hud .row:hover > .hov { display: block; }
+.hud .clip { position: absolute; overflow: hidden; }

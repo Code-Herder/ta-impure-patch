@@ -14,7 +14,10 @@ that scales with the screen, in a browser prototype. The owner chose:
 - **The team header:** a solid dark plate with the team's title written on it.
 - **No screws, rivets or bolts** on any part: every corner is plain worn steel.
 
-Nothing of it is drawn by the DLL yet; *Gaps* at the end says what is missing.
+The chosen design is kept in the repository: its parts, losslessly, and its layout as data, in
+`art/hud/`, drawn by the mockup in `tools/hudart/mockup/`. [The replay HUD's layout](hud-layout.md)
+says how, and holds the rules the DLL is to share. Nothing of it is drawn by the DLL yet; *Gaps* at
+the end says what is missing.
 
 This page is the record of how the art is made, so that a part can be repainted, re-cut or tweaked
 without rediscovering the method:
@@ -27,6 +30,8 @@ without rediscovering the method:
 
 | What | Where |
 |---|---|
+| The chosen design: parts, kit, layout | `art/hud/` ([The replay HUD's layout](hud-layout.md)) |
+| The mockup, drawn from `art/hud/` | `tools/hudart/mockup/` |
 | The tools: whitebox, cutters, packer, captures | `tools/hudart/` (table in *The pipeline*) |
 | The part specs: sizes and recesses in HUD units | `tools/hudart/specs/` |
 | The style guide, the prompts, the method, the decisions | this page |
@@ -241,6 +246,7 @@ toggles (map overlay, stats window open) and for the selected choice in each tra
 | `iconcut.py <painting> <kit dir> <name>...` | Cuts icons as whole shapes, in reading order. `ICON_DIL=<px>` joins strokes that far apart |
 | `tile.py <kit dir> <part>...` | Makes cut strips repeat along x without a seam, in place (the timeline fill) |
 | `keying.py` | `despill`: takes the magenta back out of anti-aliased edges (all three cutters use it) |
+| `file.py <kit dir> [--look <l>,...] <part>[=<name>]...` | Files cut parts into `art/hud/`, the chosen design, losslessly, replacing old ones |
 | `lookmerge.py <cut dir> <look> <kit dir>` | Files freshly cut parts into the kit as `<part>@<look>` |
 | `pack.py <kit dir> <out.json> [<page> <version>]` | One JSON of data URIs per kit; with a page, also its measurements into the page |
 | `capture.sh <page url> <out.png>` | The page's HUD at device scale, after every part has been composed |
@@ -361,6 +367,14 @@ Any recess that found no dark region is named. **Look at every cut**, then draw 
 recesses on the piece, as in the figure under *How the cutters measure*.
 
 ### 5. File and pack
+
+A part of the chosen design is filed into `art/hud/`, which the mockup reads:
+
+```
+$PY $H/file.py cut/ head_one              # replaces art/hud/parts/head_one.png and its entry
+```
+
+The exploration prototype keeps its own kit of looks, and its packed copy:
 
 ```
 $PY $H/lookmerge.py cut/ c kit/V1          # head_one -> head_one@c, and so on
@@ -890,6 +904,7 @@ as in the whitebox. Pure flat #FF00FF outside the part. Print the path and stop.
        painting for consistency.
     3. Cut it with `gridslice.py`, then compare the measured recesses with the whitebox's.
     4. If the frame came back thick, send *the proportions repaint*.
+    5. File it with `file.py`, and capture the mockup.
 - **Change a part's layout** (a recess wider, one more recess):
     1. Edit its spec, including `XB` / `YB` if the bands' recesses change.
     2. Render the whitebox.

@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replay HUD mockup</title>
+<!-- The replay HUD drawn from art/hud/: layout.json, kit.json and the parts. Serve the repository root over HTTP
+     (python3 -m http.server -d <repo>) and open /tools/hudart/mockup/. research/notes/hud-layout.md says how. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="hud.css">
+<style>
+:root { --bg: #111310; --fg: #d8d8c8; --muted: #8f9384; --line: #34372e; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; padding: 12px 16px 40px; }
+header { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-bottom: 10px; }
+header h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
+header label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+select { background: #1c1e19; color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; font: inherit; }
+.wrap { max-width: 100%; overflow: auto; border: 1px solid var(--line); background: #000; }
+.stage { --u: 1px; position: relative; overflow: hidden; user-select: none; -webkit-user-select: none; }
+.stage .bg { position: absolute; inset: 0; background: #000 url("../../../research/notes/assets/hud-art/backdrop.png") 0 0 / auto 100% no-repeat; image-rendering: pixelated; }
+.toast { position: absolute; left: 50%; top: 7%; transform: translateX(-50%); font: 600 calc(10 * var(--u)) 'Oswald', sans-serif; color: #e2dcb0;
+  background: rgba(8, 10, 6, .86); border: 1px solid #4a4c3c; padding: calc(3 * var(--u)) calc(9 * var(--u)); opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 5; }
+.toast.on { opacity: 1; }
+p.note { color: var(--muted); max-width: 80ch; }
+.err { color: #ff8a6a; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Replay HUD mockup</h1>
+  <label>Screen <select id="res"><option value="fit">fit the window</option><option>1920x1080</option><option>2560x1440</option><option>3840x2160</option></select></label>
+  <label>HUD scale <select id="hud"><option value="0.75">75%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select></label>
+  <label>Players <select id="np"></select></label>
+  <label>Teams <select id="nt"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+</header>
+<div class="wrap" id="wrap"><div class="stage" id="stage"><div class="bg"></div><div class="hud" id="hud-layer"></div><div class="toast" id="toast"></div></div></div>
+<p class="note">Every size, position and style here comes from <code>art/hud/layout.json</code> and the parts in <code>art/hud/</code>;
+this page only supplies a game to show. Hover a player row for its actions; drag the timeline to seek and the window by its title.
+The numbers are synthetic.</p>
+<script src="hud.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const stage = $('#stage'), layer = $('#hud-layer');
+
+/* ---- a synthetic game: 132 seconds, up to 16 players, the second half of the seats losing their commanders in turn ---- */
+const T = 132, SPEEDS = [0.5, 1, 2, 4, 8], UI_STEPS = [0.75, 1, 1.25, 1.5];
+const NAMES = ['Fang', 'Kesh', 'Moro', 'Vex', 'Nyx', 'Ash', 'Rook', 'Sable', 'Flint', 'Vale', 'Iris', 'Dax', 'Orin', 'Hex', 'Lark', 'Juno'];
+// stand-ins for TA's player colours, and the team colours of the chart
+const SEAT_COL = ['#233bcb', '#d32b00', '#fbfbfb', '#2f771b', '#7a3fb0', '#e8d200', '#2a2a2a', '#e07018', '#6fb6e8', '#7a5230',
+  '#e070b0', '#18a090', '#8a8a20', '#8a8a8a', '#701c1c', '#9ae040'];
+const TEAM_COL = ['#e0c060', '#60b8e0', '#e07878', '#80d070', '#b090e0'];
+const MEASURES = [
+  { k: 'metal', g: 'eco', n: 'metal income', u: 'per second' }, { k: 'energy', g: 'eco', n: 'energy income', u: 'per second' },
+  { k: 'units', g: 'army', n: 'units', u: 'owned' }, { k: 'army', g: 'army', n: 'army value', u: 'metal' },
+  { k: 'kills', g: 'army', n: 'kills', u: 'so far' }, { k: 'losses', g: 'army', n: 'losses', u: 'so far' },
+  { k: 'excess', g: 'eco', n: 'wasted metal', u: 'total' }];
+
+const S = { t: 70, playing: true, speed: 1, hud: 1, res: 'fit', np: 10, nt: 2, fold: [], bm: [40], stat: true, sm: 'units', ss: 'player', sw: null, mapov: false };
+try { Object.assign(S, JSON.parse(localStorage.getItem('hud-mockup') || '{}')); } catch (e) {}
+const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ hud: S.hud, res: S.res, np: S.np, nt: S.nt, stat: S.stat, sm: S.sm, ss: S.ss, sw: S.sw })); } catch (e) {} };
+{ const q = new URLSearchParams(location.search);   // screenshot switches: res=3840x2160&hud=150&np=10&nt=2&t=70&paused
+  if (q.has('paused')) S.playing = false; if (q.get('res')) S.res = q.get('res'); if (q.get('hud')) S.hud = +q.get('hud') / 100;
+  for (const k of ['np', 'nt', 't']) if (q.get(k)) S[k] = +q.get(k); for (const k of ['sm', 'ss']) if (q.get(k)) S[k] = q.get(k);
+  if (q.has('stat')) S.stat = q.get('stat') !== '0'; }
+
+function seats() {
+  const N = S.np, lost = [...Array(N).keys()].filter(i => i > 0 && (i * 7) % 10 >= 5);
+  return [...Array(N).keys()].map(i => {
+    const r = lost.indexOf(i), l = r >= 0, units = l ? 20 + (i * 7) % 30 : 420 - 23 * i + (i * 37) % 50;
+    const mf = Math.min(1, units / 470), ef = Math.min(1, units / 420 + .08), mmax = 1000 * (2 + Math.round(units / 28)), emax = 4000 * (1 + Math.round(units / 30));
+    return { i, name: NAMES[i % 16], colour: SEAT_COL[i % SEAT_COL.length], units, lost: l, death: l ? 50 + r * 70 / Math.max(1, lost.length) : null, out: l && r % 2 === 0,
+      res: { m: Math.round(mf * mmax * .7 / 10) * 10, mmax, e: Math.round(ef * emax * .66 / 10) * 10, emax,
+             mi: Math.round(40 + mf * 90), mo: Math.round(20 + mf * 60), ei: Math.round(300 + ef * 600), eo: Math.round(150 + ef * 500) } };
+  });
+}
+const teams = () => { const N = S.np, k = Math.max(1, Math.min(S.nt, N)); return [...Array(k)].map((_, t) => [...Array(N).keys()].filter(i => Math.floor(i * k / N) === t)); };
+
+// the stats window's series: 67 samples per player over the game
+const NS = 67, DT = T / (NS - 1), frac = x => x - Math.floor(x);
+const nz = (i, k, s) => frac(Math.sin(i * 12.9898 + k * 78.233 + s * 37.719) * 43758.5453) - .5;
+const wob = (i, k, s) => { const a = Math.floor(k / 5), f = k / 5 - a, g = f * f * (3 - 2 * f); return nz(i, a, s) * (1 - g) + nz(i, a + 1, s) * g; };
+const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+function series(k, ps) {
+  return ps.map(p => {
+    const i = p.i, a = p.lost ? .55 + .3 * frac(i * .37) : Math.min(1.5, .55 + p.units / 450), td = p.lost ? p.death : Infinity;
+    const peak = p.lost ? 110 + (i * 37) % 90 : p.units * 1.15, waste = .04 + .3 * frac(i * .61);
+    let kills = 0, loss = 0, ex = 0; const v = [];
+    for (let s = 0; s < NS; s++) {
+      const t = s * DT, eco = sstep(0, .55 * T, t), dead = t >= td, fade = dead ? (p.out ? Math.exp(-(t - td) / 6) : .2 + .8 * Math.exp(-(t - td) / 6)) : 1;
+      const m = Math.max(0, (3 + 44 * a * eco + 6 * wob(i, s, 1)) * fade), e = Math.max(0, (25 + 640 * a * Math.pow(eco, .8) + 70 * wob(i, s, 2)) * fade);
+      let u = peak * sstep(0, .62 * T, t) + 14 * wob(i, s, 3) * eco;
+      if (!p.lost) u += (p.units - peak) * sstep(.62 * T, T, t);
+      else if (dead) u = p.out ? u * Math.exp(-(t - td) / 4) : p.units + (u - p.units) * Math.exp(-(t - td) / 5);
+      u = Math.max(0, u);
+      const fight = sstep(.25 * T, .5 * T, t) * (dead && p.out ? 0 : 1);
+      kills += fight * Math.max(0, .9 * a + 1.4 * nz(i, s, 4));
+      loss += fight * Math.max(0, .9 / a + 1.4 * nz(i, s, 5)) + (dead && t - td < DT ? peak * .3 : 0);
+      ex += m * DT * waste * sstep(.15 * T, .4 * T, t) * (1 - .7 * sstep(.7 * T, T, t));
+      v.push({ metal: m, energy: e, units: u, army: u * (60 + 140 * eco), kills, losses: loss, excess: ex }[k]);
+    }
+    return { name: p.name, col: p.colour, v, death: p.lost ? p.death : null };
+  });
+}
+
+/* ---- the state hud.js draws: the screen and the engine's own frame in HUD units, then the game ---- */
+function unit() { return parseFloat(stage.style.getPropertyValue('--u')) || 1; }
+function state() {
+  const u = unit(), w = parseFloat(stage.style.width), h = parseFloat(stage.style.height), s0 = h / 720;
+  const ps = seats(), tm = teams(), m = MEASURES.find(x => x.k === S.sm) || MEASURES[0];
+  const byTeam = S.ss === 'team' && tm.length > 1, pl = series(m.k, ps);
+  const groups = byTeam ? tm.map((mm, t) => ({ name: `Team ${t + 1}`, col: TEAM_COL[t % 5], death: null, v: pl[0].v.map((_, s) => mm.reduce((a, i) => a + pl[i].v[s], 0)) })) : pl;
+  const markers = ps.filter(p => p.lost).flatMap(p => [{ t: p.death, kind: 'death', seat: p.i }, ...(p.out ? [{ t: p.death + 3, kind: 'defeat', seat: p.i }] : [])])
+    .concat(S.bm.map(t => ({ t, kind: 'bookmark', seat: -1 })));
+  const L = HUD.layout, sw = S.sw || { x: L.window.x, y: L.window.y };
+  return { W: w / u, H: h / u, frame: { panel: 128 * s0 / u, top: 32 * s0 / u, bottom: 32 * s0 / u },
+    t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, seats: ps, teams: tm, folded: S.fold, markers,
+    toggles: { stats: S.stat, map: S.mapov }, measures: MEASURES,
+    stats: { open: S.stat, x: sw.x, y: sw.y, measure: m, split: byTeam ? 'team' : 'player', groups,
+      format: v => (m.k === 'metal' && v < 100 ? v.toFixed(1) : v >= 10000 ? (v / 1000).toFixed(v >= 100000 ? 0 : 1) + 'k' : String(Math.round(v))) } };
+}
+const px = () => unit() * (window.devicePixelRatio || 1);
+function build() { HUD.draw(layer, state(), px()); }
+
+/* ---- the screen: a resolution, or the window's width at 16:9; one HUD unit is the screen height / 720 x the HUD scale ---- */
+function resize() {
+  let w, h;
+  if (S.res === 'fit') { w = $('#wrap').clientWidth; h = w * 9 / 16; const maxh = window.innerHeight - 120; if (h > maxh && maxh > 240) { h = maxh; w = h * 16 / 9; } }
+  else { const [pw, ph] = S.res.split('x').map(Number), dpr = window.devicePixelRatio || 1; w = pw / dpr; h = ph / dpr; }
+  stage.style.width = w + 'px'; stage.style.height = h + 'px';
+  stage.style.setProperty('--u', (h / 720 * S.hud) + 'px');
+  build();
+}
+
+/* ---- input ---- */
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('on'), 1800); }
+let seek = null, drag = null;
+function seekTo(tr, x) { const r = tr.getBoundingClientRect(), e = +tr.dataset.ends * unit(); S.t = Math.min(T, Math.max(0, (x - r.left - e) / (r.width - 2 * e) * T)); HUD.tick(layer, state()); }
+layer.addEventListener('pointerdown', e => {
+  const b = e.target.closest('.art.hot[data-down]');
+  if (b && !b.dataset.on) { HUD.press(b, true); const up = () => { HUD.press(b, false); window.removeEventListener('pointerup', up); }; window.addEventListener('pointerup', up); }
+  const tr = e.target.closest('[data-track]');
+  if (tr) { seek = tr; tr.setPointerCapture(e.pointerId); seekTo(tr, e.clientX); return; }
+  if (e.target.closest('[data-drag]')) { const st = state().stats; drag = { x: e.clientX, y: e.clientY, ox: st.x, oy: st.y }; e.target.setPointerCapture(e.pointerId); }
+});
+layer.addEventListener('pointermove', e => {
+  if (seek) seekTo(seek, e.clientX);
+  if (drag) {
+    const u = unit(), st = state(), W = HUD.layout.window, win = $('#statwin');
+    S.sw = { x: Math.max(0, Math.min(st.W - W.w, drag.ox + (e.clientX - drag.x) / u)), y: Math.max(0, Math.min(st.H - W.h, drag.oy + (e.clientY - drag.y) / u)) };
+    win.style.left = `calc(${S.sw.x} * var(--u))`; win.style.top = `calc(${S.sw.y} * var(--u))`;
+  }
+});
+window.addEventListener('pointerup', () => { if (drag) save(); seek = drag = null; });
+layer.addEventListener('click', e => {
+  const a = e.target.closest('[data-act]'); if (!a) return;
+  switch (a.dataset.act) {
+    case 'play': if (S.t >= T) S.t = 0; S.playing = !S.playing; break;
+    case 'rew': S.t = Math.max(0, S.t - 10); break;
+    case 'fwd': S.t = Math.min(T, S.t + 10); break;
+    case 'speed': S.speed = SPEEDS[(SPEEDS.indexOf(S.speed) + 1) % SPEEDS.length]; break;
+    case 'bookmark': { const near = S.bm.findIndex(t => Math.abs(t - S.t) < 3); if (near >= 0) S.bm.splice(near, 1); else S.bm.push(Math.round(S.t));
+      toast(near >= 0 ? 'Bookmark removed' : `Bookmark at ${Math.floor(S.t / 60)}:${String(Math.round(S.t) % 60).padStart(2, '0')}`); break; }
+    case 'uiscale': S.hud = UI_STEPS[(UI_STEPS.indexOf(S.hud) + 1) % UI_STEPS.length]; $('#hud').value = S.hud; save(); resize(); return;
+    case 'leave': S.playing = false; toast('Leave this replay?'); break;
+    case 'stats': S.stat = !S.stat; save(); break;
+    case 'map': S.mapov = !S.mapov; toast(`Map overlay ${S.mapov ? 'on' : 'off'} (not drawn in the mockup)`); break;
+    case 'cam': toast('Screen capture: not in the mockup'); return;
+    case 'fold': { const t = +a.dataset.team; S.fold = S.fold.includes(t) ? S.fold.filter(x => x !== t) : S.fold.concat(t); break; }
+    case 'jump': case 'follow': toast('Camera was not recorded'); return;
+    case 'sight': return;
+    case 'close': S.stat = false; save(); break;
+    case 'chip': if (a.dataset.kind === 'measure') S.sm = a.dataset.val; else S.ss = a.dataset.val; save(); break;
+  }
+  build();
+});
+
+/* ---- playback ---- */
+let last = performance.now(), lastTick = 0;
+function frame(now) {
+  const dt = Math.min(.1, (now - last) / 1000); last = now;
+  if (S.playing) { S.t += dt * S.speed; if (S.t >= T) { S.t = T; S.playing = false; build(); } else if (now - lastTick > 100) { lastTick = now; HUD.tick(layer, state()); } }
+  requestAnimationFrame(frame);
+}
+
+/* ---- the toolbar ---- */
+$('#np').innerHTML = [...Array(15)].map((_, i) => `<option>${i + 2}</option>`).join('');
+for (const k of ['res', 'np', 'nt']) { $('#' + k).value = S[k]; $('#' + k).onchange = e => { S[k] = k === 'res' ? e.target.value : +e.target.value; if (k !== 'res') S.fold = []; save(); resize(); }; }
+$('#hud').value = S.hud; $('#hud').onchange = e => { S.hud = +e.target.value; save(); resize(); };
+window.addEventListener('resize', resize);
+document.addEventListener('keydown', e => { if (e.key === ' ' && e.target === document.body) { e.preventDefault(); S.playing = !S.playing; build(); } });
+HUD.load('../../../art/hud/').then(() => { resize(); requestAnimationFrame(frame); })
+  .catch(err => { layer.innerHTML = `<p class="err" style="padding:16px">Could not load art/hud/: ${err}. Serve the repository root over HTTP and open /tools/hudart/mockup/.</p>`; });
+</script>
+</body>
+</html>

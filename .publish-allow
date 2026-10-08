@@ -26,3 +26,7 @@ units/*.glb
 # Impure's own UI art, drawn for Impure in each style's look and checked against the
 # game's UI art by tools/artcheck.py; baked into the DLL by tools/artbake.py
 art/ui/*
+
+# The replay HUD's painted parts, lossless: painted for Impure from our whiteboxes and cut by
+# tools/hudart/ (research/notes/hud-art.md); the mockup draws them, the DLL is to bake them
+art/hud/*

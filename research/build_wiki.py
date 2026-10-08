@@ -99,6 +99,7 @@ PAGES = [
     ("tascene-design",             "tascene — browser render lab", "Tooling"),
     ("tacob-design",               "tacob — BOS/COB editor",      "Tooling"),
     ("hud-art",                    "HUD art: painted, cut, sliced", "Tooling"),
+    ("hud-layout",                 "HUD layout: one source",      "Tooling"),
     ("windowed-mode",              "Windowed mode",               "Tooling"),
 
     ("binary-patches",            "The core mechanism",        "Mechanism"),
