@@ -2,7 +2,8 @@
 each part's 9-slice insets measured off the painting.
 usage: [PRESSED_DARK=<w>] cut.py <parts spec> <painted.png> <sheet name> <sheets.json> <out dir>
     -> <out dir>/<part>.png and its <out dir>/kit.json entry
-<parts spec> names a module in specs/; <sheet name> is a key of its SHEETS (col). For icons use iconcut.py."""
+<parts spec> names a module in specs/; <sheet name> is a key of its SHEETS (col). For icons use iconcut.py.
+A part repainted on its own is cut with `one:<part>` in place of <sheets.json>: one cell, the whole painting."""
 import importlib, json, os, sys
 import numpy as np
 from PIL import Image
@@ -14,7 +15,11 @@ from keying import despill
 SHEETS = importlib.import_module(sys.argv[1]).SHEETS
 
 src, name, meta_p, out = sys.argv[2:6]
-meta = json.load(open(meta_p))[name]
+if meta_p.startswith('one:'):
+    W0, H0 = Image.open(src).size
+    meta = {'size': [W0, H0], 'cells': {meta_p[4:]: [0, 0, W0, H0]}}
+else:
+    meta = json.load(open(meta_p))[name]
 spec = {p[0]: p for p in SHEETS[name][0]} if name in SHEETS else {}
 im = np.asarray(Image.open(src).convert('RGB')).astype(float)
 H, W, _ = im.shape

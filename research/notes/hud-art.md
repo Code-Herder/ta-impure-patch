@@ -11,8 +11,8 @@ that scales with the screen, in a browser prototype. The owner chose:
 - **The buttons:** warm steel.
 - **The timeline fill:** green, from TA's green ramp, repeated along the groove rather than
     stretched.
-- **The team header:** a solid dark plate with the team's title written on it, and no corner
-    screws.
+- **The team header:** a solid dark plate with the team's title written on it.
+- **No screws, rivets or bolts** on any part: every corner is plain worn steel.
 
 Nothing of it is drawn by the DLL yet; *Gaps* at the end says what is missing.
 
@@ -125,7 +125,8 @@ role, with no map, unit or cursor pixels in the sample.
     - **Never clean, never long brushed streaks, never a smooth gradient.** Naming the wear is what
       worked: the palette alone gave clean steel.
 - **Shape.** Crisp bevels, light along the top and left and dark along the bottom and right, with
-    a thin near-black outline. Screws only at a plate's outer corners.
+    a thin near-black outline. **No screws, rivets or bolts:** a corner is plain worn steel, the
+    bevel running round it unbroken.
 - **Wells (recesses).**
     - Near-black, like TA's own wells (`#070f01`, `#0e0c13`).
     - Darker and calmer inside than the plate, because text goes on them.
@@ -136,7 +137,7 @@ role, with no map, unit or cursor pixels in the sample.
 
 - The lighter button-face steel (`#9fa1a0`, bevel light `#c9cdcd`).
 - The thick, rounded, bevelled frame of TA's cycle buttons.
-- Round slotted screws at the outer corners.
+- Plain worn corners, with no screws.
 - Heavy wear: chips, pitting, dark paint flecks, grime along the recess rims.
 - Dark wells.
 
@@ -236,7 +237,7 @@ toggles (map overlay, stats window open) and for the selected choice in each tra
 | `whitebox.py <spec> <out>` | Renders a one-piece part's whitebox: `<out>.png` for Codex and `<out>.json` for `gridslice.py` |
 | `sheets.py <parts spec> <out dir>` | Renders the parts sheets, one grey cell per part and one dashed square per icon, plus `sheets.json`. `PLAIN=1` leaves out the corner marks |
 | `gridslice.py <painting> <whitebox.json> <kit dir> <part>` | Cuts a one-piece part: the recesses as painted and the stretch bands |
-| `cut.py <parts spec> <painting> <sheet> <sheets.json> <kit dir>` | Cuts a parts sheet into 9-slice parts. `PRESSED_DARK=<weight>` makes pressed slots prefer darker shapes |
+| `cut.py <parts spec> <painting> <sheet> <sheets.json> <kit dir>` | Cuts a parts sheet into 9-slice parts. `PRESSED_DARK=<weight>` makes pressed slots prefer darker shapes. `one:<part>` in place of `<sheets.json>` cuts a part painted on its own: one cell, the whole painting |
 | `iconcut.py <painting> <kit dir> <name>...` | Cuts icons as whole shapes, in reading order. `ICON_DIL=<px>` joins strokes that far apart |
 | `tile.py <kit dir> <part>...` | Makes cut strips repeat along x without a seam, in place (the timeline fill) |
 | `keying.py` | `despill`: takes the magenta back out of anti-aliased edges (all three cutters use it) |
@@ -347,6 +348,7 @@ PRESSED_DARK=1.5 $PY $H/cut.py parts_buttons painted_3.png col sheets/sheets.jso
 ICON_DIL=25 $PY $H/iconcut.py painted_icons.png icons/ i_stats i_map i_cam ...  # names in reading order
 $PY $H/cut.py parts_fill painted_fill.png col sheets/sheets.json fill/           # fill strips are cut,
 $PY $H/tile.py fill/ track_fill_green track_fill_orange track_fill_amber track_fill_red  # then tiled
+$PY $H/cut.py parts_look painted_hover_strip.png col one:hover_strip cut/   # a sheet part painted alone
 ```
 
 **What `gridslice.py` prints:**
@@ -628,9 +630,9 @@ look, not a template. Match TA closely:
 
 ```
 LOOK C, CYCLE BUTTON: the lighter button-face steel (#9fa1a0, bevel light #c9cdcd) inside the thick
-rounded bevelled frame of TA's cycle buttons, with round slotted corner screws; heavy wear (chips,
-pitting, dark paint flecks, grime along the recess rims); dark wells. Match your painting
-<an earlier look-C painting> exactly.
+rounded bevelled frame of TA's cycle buttons, its corners plain worn steel with NO screws, rivets or
+bolts; heavy wear (chips, pitting, dark paint flecks, grime along the recess rims); dark wells. Match
+your painting <an earlier look-C painting> exactly.
 ```
 
 ```
@@ -655,8 +657,8 @@ Paint ONE image following the whitebox <wb_head.png> exactly: the same image siz
 (the part there is <1500 x 138> px, <10.87> : 1); the recesses in the same places at the same sizes;
 the frame and the bars between recesses as thin as the whitebox's grey (the frame above and below
 the recesses <n> px of <H>; measure against the whitebox, frames have come back 50% too thick).
-Screws only at the outer corners. Recesses empty, darker and calmer than the plate. Never paint the
-legend, numbers or text. Pure flat #FF00FF outside the part.
+No screws, rivets or bolts anywhere; the corners plain worn steel. Recesses empty, darker and calmer
+than the plate. Never paint the legend, numbers or text. Pure flat #FF00FF outside the part.
 <window:   A slightly heavier outer frame, since it is a window.>
 <timeline: It is stretched very wide in the game: spread the wear evenly along its length, no single
            large feature.>
@@ -685,7 +687,7 @@ button and pressed; the close button and pressed; the action strip shown over a 
 with its action button and pressed; the scroll track, thumb and arrow button; the played part of the
 timeline as a lit bar in TA's khaki (#c8c8a0 to #abaa83), worn; the playhead as a small steel
 needle; the round marker badge like a screw head with a dark centre (small red icons sit on it).
-Exactly <15> parts. Plain edges between the dashed lines; #FF00FF outside the cells.
+No screws, rivets or bolts on any other part. Exactly <15> parts. Plain edges between the dashed lines; #FF00FF outside the cells.
 Print the generated image path and stop.
 ```
 
@@ -823,19 +825,47 @@ feature.
 like today's header. The second came back 21.9 to 24.6 units tall. Codex painted area 4 as plain
 plate, without copying its marker outline.
 
+### Removing a feature from finished parts
+
+Each part is repainted from its own painting, one image per source, so nothing but the feature
+changes. This took the screws off every plate (*The exploration*, step 11):
+
+```
+Repaint each of these <7> images on its own, one generated image per source, in this order. Keep each
+exactly as it is: the same image size and aspect ratio, the same light chipped look-C steel, the same
+wear, bevels and outline, every recess at the same place and size, the same plain #FF00FF outside the
+part. Make ONE change: remove every round slotted screw. Each corner where a screw was becomes plain
+worn steel, the bright bevel running round it unbroken. No screws, rivets, bolts or holes anywhere.
+Never add text.
+1. <painted2_c.png> (the player row: screws at its four corners)
+...
+7. <src_scroll_track.png> (the scroll track: two screws at its top end and two at its bottom end; the
+ends become plain rounded steel)
+Print the <7> generated image paths, 1 to <7>, and stop.
+```
+
+- **A part cut from a parts sheet has no painting of its own.** Send its cut piece, padded with
+    the key by an eighth of its longer side all round, and cut the repaint with `cut.py
+    one:<part>`.
+- **How they came back** (MEASURED, 2026-10-07):
+    - The five one-piece plates kept their size. Their recesses moved by 0.07 to 0.33 units, and
+      their heights by 0.4 units at most.
+    - The two sheet parts came back 3.5 and 6 times larger, as whole images. The cutter takes the
+      scale from the painting, so the size only makes them sharper. Their insets came out the same
+      in units, except a soot stain that widened one fixed edge of the hover strip.
+
 ### The proportions repaint
 
 Send this when a painting came back with frames too thick:
 
 ```
-The look is right; keep it exactly as it is (colour, wear, screws, bevels). But it came out too TALL
+The look is right; keep it exactly as it is (colour, wear, bevels). But it came out too TALL
 for the slot: your part is about <1950 x 265> px (<7.4> : 1), the whitebox part is <1500 x 162> px
 (<9.26> : 1). The recesses are the right height; the outer frame and the bars between recesses are
 about <50%> too thick. Repaint it from your own image <painted.png> at the whitebox's proportions:
 the frame above and below the recesses <18> px of <162>; the bar between the upper and lower
 recesses <6> px of <162>; the frame left of the first recess and the bars between recesses as thin
-as in the whitebox. Screws stay at the outer corners and shrink with the frame. Pure flat #FF00FF
-outside the part. Print the path and stop.
+as in the whitebox. Pure flat #FF00FF outside the part. Print the path and stop.
 ```
 
 ## Recipes
@@ -859,6 +889,13 @@ outside the part. Print the path and stop.
     2. Render the whitebox.
     3. Ask Codex to repaint from **its own painting** and the new whitebox.
     4. Cut it, then update the page's builder for that part.
+- **Remove a feature from every part** (screws, a lamp):
+    1. Copy the kit directory, so the old versions stay.
+    2. Send *removing a feature from finished parts* with each part's own painting.
+    3. Cut each with the cutter that made it: `gridslice.py` with the part's whitebox, or
+       `cut.py one:<part>`.
+    4. Compare the measured recesses and insets with the old kit entries.
+    5. File them into the same look with `lookmerge.py`, so they replace the old ones.
 - **A new pressed look, or another button set:**
     1. Render `parts_buttons` with `PLAIN=1`.
     2. Send *the buttons* with the new direction.
@@ -937,6 +974,20 @@ artifact.
     The lesson holds for any part that has to stand out from its neighbours: change the part's
     pattern of light and dark, not only the colour of its frame.
 
+11. **No screws anywhere** (2026-10-07). After the header, the owner asked for every box of the
+    chosen HUD to lose its corner screws, each part re-rendered on its own. Seven parts were
+    repainted from their own paintings:
+    - the player row;
+    - the stats window;
+    - the stats / map / capture plate;
+    - the transport plate;
+    - the timeline housing;
+    - the hover strip;
+    - the scroll track.
+
+    The buttons were already rivet-free, and the marker badge, playhead, thumb and fill have
+    none. The versions with screws are no longer in the kit; the archive keeps them.
+
 [![The four distressed player cards](assets/hud-art/cards.jpg)](assets/hud-art/cards.jpg)
 
 *Step 5: the player card in the four looks, after the proportions repaint.*
@@ -965,6 +1016,11 @@ part; then the four tiled colours. Green was picked.*
 *Step 10: the player column at 4K, HUD 150, with the current header, then variants 1 to 4
 (top row, from the left) and 5 to 7 (bottom row). 6 was picked and then repainted without its
 corner screws; the chosen HUD at the top of the page shows it.*
+
+[![Five plates' corners before and after the screws were removed](assets/hud-art/noscrews.jpg)](assets/hud-art/noscrews.jpg)
+
+*Step 11: a corner of five plates at native 4K, HUD 150, before (top) and after. The scroll
+track's ends sit under its arrow buttons, so its screws never showed.*
 
 ## Gaps
 
