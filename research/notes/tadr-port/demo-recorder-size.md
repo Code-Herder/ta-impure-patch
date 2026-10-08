@@ -97,7 +97,8 @@ Python and decoded every lossless one back against the original bytes; two chall
 the headline measurements, checked the engine facts in the disassembly, and assembled the combined
 plan without counting any saving twice. Sizes in this section are binary megabytes (MiB): the file
 is 99.6 MiB, the stream 98.0 MiB. "Writer" means the recorder's own deflate (lodepng's defaults, a
-2 KB window), per block as the file is written today.
+2 KB window), per block as the file is written today. The prototypes, outputs and each area's full report are
+kept in `research/sizelab/` (its README says how to re-run them).
 
 ### Units: 46.7 → 4.5 MiB, lossless
 
