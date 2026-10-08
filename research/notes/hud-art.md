@@ -9,8 +9,8 @@ that scales with the screen, in a browser prototype. The owner chose:
 - **The layout:** E1.
 - **The look:** C, *cycle button*, which is light distressed gunmetal.
 - **The buttons:** warm steel.
-- **The timeline fill:** not picked yet. Green, orange, amber and red, each repeated along the
-    groove, are in the prototype (*The exploration*, step 9).
+- **The timeline fill:** green, from TA's green ramp, repeated along the groove rather than
+    stretched.
 
 Nothing of it is drawn by the DLL yet; *Gaps* at the end says what is missing.
 
@@ -182,13 +182,17 @@ toggles (map overlay, stats window open) and for the selected choice in each tra
       33-byte memo that skips it*: the side data's `metalcolor` / `energycolor`.
     - The saturated blue of TA's METAL title is the title's ramp, not the bar's. Sample an indicator
       where it lives, never a label beside it.
-- **The timeline's played fill:** a lit strip in one of TA's palette ramps, saturated so it reads
-    against the near-black groove and the light steel. Four were painted, and none is picked yet:
-    - green, TA 232–236 (`#7bff77` to `#1b7f0b`);
-    - orange, TA 197–200 (`#efa71b` to `#df4f07`);
-    - amber, TA 193–196 and 209 (`#fbf383` to `#9b832f`), close to the energy bar's yellow;
-    - red, TA 201–205 and 211 (`#ff4700` to `#7b1300`), the colour of the death and defeat markers
-      above the groove.
+- **The timeline's played fill: green**, a lit strip in TA's green ramp, palette 232–236:
+    - highlight `#7bff77`;
+    - body `#53df4f` to `#33bf2b`;
+    - shadow `#1b9f13` to `#1b7f0b`.
+
+    It is saturated so that it reads against the near-black groove and the light steel. It is
+    **repeated along the groove, never stretched** (*Tiled fills*). Orange, amber and red were
+    painted too and are kept in the kit:
+    - amber sits close to the energy bar's yellow;
+    - red is the colour of the death and defeat markers above the groove;
+    - orange sits near those markers' red-orange.
 - **Icons:**
     - khaki stencil `#c8c8a0` – `#abaa83`, with a thin near-black outline so they read on dark and
       light steel alike;
@@ -361,7 +365,7 @@ The look-C, warm-steel HUD draws from:
 - the remaining look-C parts `@c`;
 - the nine buttons `@c3`;
 - the 23 icons `@gm`;
-- the timeline fill `track_fill_<colour>@gm`, one tile shared by every look.
+- the timeline fill `track_fill_green@gm`, one tile shared by every look.
 
 The kit holds 175 parts across shell steel, A, C, the four button sets, the icons and the four
 fills. It packs to 6.3 MB (MEASURED).
@@ -814,7 +818,7 @@ artifact.
     HUD.
 9. **The timeline fill** (2026-10-07). The owner asked for a fill colour that is more distinct
     than the khaki, and for a fill that repeats instead of stretching. Four colours from TA's
-    palette were painted as long strips and made to tile; none is picked yet.
+    palette were painted as long strips and made to tile. **The owner picked green.**
 
 [![The four distressed player cards](assets/hud-art/cards.jpg)](assets/hud-art/cards.jpg)
 
@@ -837,7 +841,7 @@ held, stats on, UNITS and PLAYERS selected, and a row's JUMP held. Set 3, warm s
 [![The timeline fill in five versions](assets/hud-art/fill.jpg)](assets/hud-art/fill.jpg)
 
 *Step 9: the timeline at 4K, HUD 150. First the khaki fill, one painting stretched over the played
-part; then the four tiled colours.*
+part; then the four tiled colours. Green was picked.*
 
 ## Gaps
 
@@ -857,5 +861,6 @@ part; then the four tiled colours.*
     font. The HUD's text in the game is undecided.
 - **The stats chart shows synthetic data.** A real chart needs a per-second statistics track in the
     recording.
-- **Look A, the other three button sets and shell steel are kept but not maintained.** A part
+- **Look A, the other three button sets, the other three fills and shell steel are kept but not
+    maintained.** A part
     added to look C from now on is not painted in them.
