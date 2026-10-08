@@ -443,8 +443,8 @@ is in the engine map's
 - **A unit at rest is skipped**: one whose image equals the two before it and the third's lanes and
   which is not due a move stamp is a fixed point of every rule, so decode work scales with the
   units that changed in the last three iterations.
-- **The Python reader** (`tools/replay/reccodec.py`, numpy) is an independent implementation,
-  checked byte-identical with the C one.
+- **The Python reader** (`tools/replay/reccodec.py`, numpy and numba) is an independent
+  implementation, checked byte-identical with the C one.
 
 **Offline, on the four format-7 recordings** rewritten as format 8 (MEASURED 2026-10-08, native and
 under Wine): every stream block sectioned, 0 declined, 0 mismatched; the C and Python decoders and
@@ -495,11 +495,16 @@ to 900 reads from the segment's first iteration, there being no snapshot before 
   units that move, and in the opening every unit marches. This is **open**: the snapshot interval
   (`SNAPSHOT_TICKS`, 900) is tuned at L4, which measures the hour it is chosen for (the owner's
   decision).
-- **Python.** Decoding a recording in Python takes about 28 s for the large battles, within the 30 s
-  the plan allowed, and the replay gate runs `tarec.py` many times a fixture: `TAREC_CACHE=DIR`
+- **Python.** Decoding a recording in Python takes about 3 s for the large battles, as long as
+  the C decoder under Wine: Town & Country 3.1 s (C 3.4 s), the size battle 3.4 s (3.6 s), the air
+  war 1.6 s, the naval 0.5 s (`codectest.py verify`, MEASURED 2026-10-08 with numba's cache warm;
+  the first decoding after an edit of `reccodec.py` compiles its kernels for about 8 s more). The
+  unit frame runs in numba kernels, one call a block and one slot at a time. With no
+  `TAREC_CACHE`, `tarec.py check` on Town & Country takes 9.8 s, its world replay most of it, and
+  `info` 4.7 s. The replay gate runs `tarec.py` many times a fixture: `TAREC_CACHE=DIR`
   (`tools/replay/reccache.py`) keeps a recording's decoded blocks keyed by the SHA-256 of its bytes
   and of the decoder's sources, `tareplay.py` sets it for each run, and with the cache warm `tarec.py
-  info` on Town & Country takes 2.0 s.
+  info` on Town & Country takes 1.9 s.
 
 **What L1 leaves open.**
 

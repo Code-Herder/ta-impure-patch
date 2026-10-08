@@ -2772,7 +2772,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd in ("run", "measure", "landing", "broad", "takeover") and not 1 <= a.j <= 16:
         ap.error("-j is 1..16")
-    # the subcommands that read recordings need numpy and zstandard (tarec.py through
+    # the subcommands that read recordings need numpy, numba and zstandard (tarec.py through
     # reccodec.py); `features` and `list` run under the build's bare python3, and so does
     # `landing --check`, which reads git notes only
     if a.cmd not in ("features", "list") and not (a.cmd == "landing" and a.check):

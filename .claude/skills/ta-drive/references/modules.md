@@ -887,11 +887,12 @@ block that reads to its last complete block.
   (a takeover appends one): `segments FILE` lists them, `check` and `compare` take `--timeline N`
   to read timeline N's chain, and `compare-fork FILE N` compares timeline N's first iteration with
   its parent at the fork point, less the takeover's expected differences.
-  `tarec.py` and the replay tools need numpy and zstandard and re-execute themselves under the main
-  checkout's `.venv-undither/` when they are missing (a bare `python3` is fine). Every command that
-  reads the stream decodes the whole recording in Python — about 30 s for a large battle — so set
-  `TAREC_CACHE=DIR` when running several on one file: the decoded blocks are kept in `DIR`, keyed by
-  the file's bytes and the decoder's sources (`tareplay.py` does this for its own runs).
+  `tarec.py` and the replay tools need numpy, numba and zstandard and re-execute themselves under
+  the main checkout's `.venv-undither/` when they are missing (a bare `python3` is fine). Every
+  command that reads the stream decodes the whole recording in Python — about 3 s for a large
+  battle, and about 8 s more the first time after `reccodec.py` changed, while numba compiles it —
+  so set `TAREC_CACHE=DIR` when running several on one file: the decoded blocks are kept in `DIR`,
+  keyed by the file's bytes and the decoder's sources (`tareplay.py` does this for its own runs).
 - **Check playback end to end** with `tools/replay/tareplay.py run FIXTURE… | all [-j N] [--keep]
   [--game-speed 10|20] [--out DIR]` (`list` names the fixtures of `tools/replay/fixtures.json`):
   tick-driven runs default to internal speed 20 (2x normal); `--game-speed 10` selects normal.

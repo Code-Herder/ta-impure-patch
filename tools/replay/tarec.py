@@ -99,10 +99,10 @@ appended to the file it was played from. A chain of timelines is read as the DLL
 (tagpu_recreader.c): each segment to the GameTime before its child's fork_at, where the child's
 first iteration replaces the world whole.
 
-Needs numpy and zstandard, imported (through reccodec.py) only by the functions that read a
-file's blocks: main() re-executes under the shared venv when they are missing (devpy.py), and the
-build's `tareplay.py features --check` imports this file under a bare python3. header_only reads
-the stored header with the standard library alone.
+Needs numpy, numba and zstandard, imported (through reccodec.py) only by the functions that read
+a file's blocks: main() re-executes under the shared venv when they are missing (devpy.py), and
+the build's `tareplay.py features --check` imports this file under a bare python3. header_only
+reads the stored header with the standard library alone.
 
 TAREC_CACHE=DIR keeps each recording's decoded blocks in DIR, keyed by the file's bytes and the
 decoder's sources, so a second command on the same file does not decode it again (reccache.py).
@@ -244,13 +244,13 @@ class Unreadable(Exception):
 # ---- blocks ----------------------------------------------------------------------------------
 
 def _codec():
-    """reccodec.py, imported on the first read of a file's blocks: it needs numpy (and zstandard
-    for a packed block), which the build's bare python3 may lack."""
+    """reccodec.py, imported on the first read of a file's blocks: it needs numpy (numba for a
+    sectioned block and zstandard for a packed one), which the build's bare python3 may lack."""
     try:
         import reccodec
     except ImportError as e:
-        raise Unreadable(f"reading a recording's blocks needs numpy and zstandard ({e.name} is "
-                         f"missing): the shared venv (CLAUDE.md, Python tooling)") from None
+        raise Unreadable(f"reading a recording's blocks needs numpy, numba and zstandard ({e.name} "
+                         f"is missing): the shared venv (CLAUDE.md, Python tooling)") from None
     return reccodec
 
 
@@ -298,10 +298,14 @@ def header_only(path):
     return header(body)
 
 
+_REC_HEAD = struct.Struct("<HH")
+_U16 = struct.Struct("<H").unpack_from
+
+
 def records(payload):
-    at = 0
-    while at + 4 <= len(payload):
-        kind, n = struct.unpack_from("<HH", payload, at)
+    at, end, head = 0, len(payload), _REC_HEAD.unpack_from
+    while at + 4 <= end:
+        kind, n = head(payload, at)
         body = payload[at + 4:at + 4 + n]
         if len(body) < n:
             raise Unreadable(f"a record cut short at payload byte {at}")
@@ -516,6 +520,36 @@ def persp_follow(f, view_w, view_h):
     return _sat32(f[7] - view_w // 2), _sat32(f[8] - view_h // 2), z
 
 
+_RUNS = {}
+
+
+def _delta_runs(bits, dwords):
+    """A delta mask's runs of set bits among its first `dwords`, as ((image byte, its end, values
+    byte), ...), and the bytes of values they take. A recording repeats its masks -- Town &
+    Country's 3.65 million deltas carry 12,445 (MEASURED 2026-10-08) -- so each is worked out
+    once, and the cache is emptied when it reaches 65,536."""
+    got = _RUNS.get((bits, dwords))
+    if got is not None:
+        return got
+    if len(bits) < (dwords + 7) // 8:
+        raise Unreadable(f"a delta's mask of {len(bits)} bytes, for {dwords} dwords")
+    runs, k, i = [], 0, 0
+    while i < dwords:
+        if bits[i >> 3] >> (i & 7) & 1:
+            j = i
+            while j < dwords and bits[j >> 3] >> (j & 7) & 1:
+                j += 1
+            runs.append((4 * i, 4 * j, k))
+            k += 4 * (j - i)
+            i = j
+        else:
+            i += 1
+    if len(_RUNS) >= 1 << 16:
+        _RUNS.clear()
+    got = _RUNS[(bits, dwords)] = (tuple(runs), k)
+    return got
+
+
 class World:
     def __init__(self, slots, tables, header=None, dims=None):
         self.slots = slots
@@ -651,6 +685,12 @@ class World:
         cells inside the tick's feature call too, which are its input. An order list's records
         come together and in order, as the DLL's reader has them (tagpu_recreader.c,
         list_record)."""
+        if kind == RK_UNIT_DELTA and self.pend is None and not self.fbracket and not self.deaths:
+            # the stream's most common record: with no order list, feature call or death open,
+            # nothing below refuses it
+            self._delta(self.units[_U16(b)[0]], b[2:2 + REC_UNIT_BITS], REC_UNIT_DWORDS,
+                        b[REC_UNIT_DELTA_HEAD:])
+            return None
         if self.pend is not None and kind != RK_ORDERS:
             raise Unreadable(f"slot {self.pend[0]}'s order list cut short by another record")
         if kind == RK_EV_NET_CREATE:
@@ -867,11 +907,12 @@ class World:
 
     @staticmethod
     def _delta(img, bits, dwords, vals):
-        k = 0
-        for i in range(dwords):
-            if bits[i >> 3] >> (i & 7) & 1:
-                img[4 * i:4 * i + 4] = vals[4 * k:4 * k + 4]
-                k += 1
+        """img's dwords whose bit is set in `bits`, in order, from `vals`."""
+        runs, n = _delta_runs(bytes(bits), dwords)
+        if len(vals) < n:
+            raise Unreadable(f"a delta's {len(vals)} bytes of values, for {n // 4} dwords")
+        for at, end, k in runs:
+            img[at:end] = vals[k:k + end - at]
 
     def differences(self, other, names, other_names=None, limit=20, gnames=None, sight=False,
                     pov=False):
@@ -1247,17 +1288,18 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
         if kind != RB_STREAM:
             continue
         for rk, b in records(payload):
-            if rk == RK_TICK and cut is not None and struct.unpack_from("<I", b)[0] > cut:
-                skip = True
-                break
-            if rk == RK_TICK and w.tick is not None and w.base is None:
-                w.whole(True)
-                w.base = bytes(w.grid)
-            if rk == RK_TICK and want is not None and w.tick is not None and w.tick >= want:
-                w.whole(True)
-                return w
-            if rk == RK_TICK and on_record:
-                on_record(w, None, b)
+            if rk == RK_TICK:
+                if cut is not None and struct.unpack_from("<I", b)[0] > cut:
+                    skip = True
+                    break
+                if w.tick is not None and w.base is None:
+                    w.whole(True)
+                    w.base = bytes(w.grid)
+                if want is not None and w.tick is not None and w.tick >= want:
+                    w.whole(True)
+                    return w
+                if on_record:
+                    on_record(w, None, b)
             w.apply(rk, b)
             if on_record:
                 on_record(w, rk, b)
@@ -1289,11 +1331,13 @@ class EventCheck:
         if len(self.lines) < self.limit:
             self.lines.append(line)
 
+    # a unit's (type ID, build fraction, state byte), in the image's order
+    _FIELDS = struct.Struct(f"<{U_TYPE}x4s{U_BUILT - U_TYPE - 4}x4s{U_STATEBYTE - U_BUILT - 4}xB")
+
     @staticmethod
     def summary(w):
-        return {slot: (bytes(img[U_TYPE:U_TYPE + 4]), img[U_STATEBYTE],
-                       bytes(img[U_BUILT:U_BUILT + 4]))
-                for slot, img in w.units.items()}
+        fields = EventCheck._FIELDS.unpack_from
+        return {slot: fields(img) for slot, img in w.units.items()}
 
     def images_done(self, w):
         self.summary_now = self.summary(w)
@@ -1345,7 +1389,9 @@ class EventCheck:
             elif kind == RK_EV_BUILT:
                 built.add(struct.unpack_from("<I", b, 4)[0] - 1)
         at = f"the step to GameTime {tick}"
-        for slot in sorted(set(was) | set(now)):
+        # a slot whose fields stayed and that no create or death names has nothing to explain
+        changed = {slot for slot, _ in was.items() ^ now.items()}
+        for slot in sorted(changed | ((made | died) & (was.keys() | now.keys()))):
             a, b = was.get(slot), now.get(slot)
             if a is None:
                 if slot not in made:
@@ -1360,11 +1406,11 @@ class EventCheck:
                     self.note(f"{at}: unit {slot} stays live across a "
                               f"{'create' if slot in made else 'death'} alone")
                 continue
-            if a[1] != b[1] and state.get(slot) != b[1]:
-                self.note(f"{at}: unit {slot}'s +0x10E went {a[1]:#x} -> {b[1]:#x} with "
+            if a[2] != b[2] and state.get(slot) != b[2]:
+                self.note(f"{at}: unit {slot}'s +0x10E went {a[2]:#x} -> {b[2]:#x} with "
                           + (f"its last state event at {state[slot]:#x}" if slot in state
                              else "no state event"))
-            if a[2] != bytes(4) and b[2] == bytes(4) and slot not in built:
+            if a[1] != bytes(4) and b[1] == bytes(4) and slot not in built:
                 self.note(f"{at}: unit {slot}'s +0x104 reached 0.0 with no build done")
 
 

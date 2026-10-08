@@ -4,7 +4,8 @@ segments): the C parser against the coverage build's map, the features' regions,
 filter, `landing --check`, a recording's segments and chains and what format 8's block walk
 refuses, read from files built from the format alone, the fixtures' takeover entries and the W
 lane's edited header copies. No game runs. The files are read through reccodec.py, which needs
-numpy and zstandard: devpy.ensure() re-executes this under the shared venv when they are missing.
+numpy, numba and zstandard: devpy.ensure() re-executes this under the shared venv when they are
+missing.
 
     python3 tools/replay/test_tareplay.py
 """

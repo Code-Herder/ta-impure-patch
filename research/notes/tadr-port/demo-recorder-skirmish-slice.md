@@ -193,9 +193,9 @@ move stamps, the countdowns, and for aircraft the air step's velocity, speed, sm
 and bank — and the engine facts behind each are in the engine map's
 [*The demo recorder's unit frame*](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
 They are integer arithmetic only, so the writer thread's x87 precision does not matter and the
-Python reader (`tools/replay/reccodec.py`, an independent numpy implementation) agrees with the C
-one byte for byte. The capture writes the constants the rules need into the header at the
-recording's start, on the game thread: `RT_PHYSICS` (gravity `main+0x14263`, sea level
+Python reader (`tools/replay/reccodec.py`, an independent implementation in numpy and numba)
+agrees with the C one byte for byte. The capture writes the constants the rules need into the
+header at the recording's start, on the game thread: `RT_PHYSICS` (gravity `main+0x14263`, sea level
 `main+0x1427F`, LosType bit 2 at the segment's start) and one `RT_AIR` row per aircraft type (def
 `+0x241` bit 11; its sight height `+0x170` and the five flight fields), at most 1,024 rows; a type
 without one is predicted as a ground unit, which costs size only.
@@ -332,11 +332,12 @@ iterations to record.
 - `tools/replay/tarec.py`: reads a recording — `info` (the header, the blocks and how it ended),
   `check` (the stream against every snapshot the file carries) and `compare` (the stream to a
   dump's GameTime against the dump, byte for byte). Its block walk is `tools/replay/reccodec.py`'s,
-  which needs numpy and zstandard: `tools/replay/devpy.py` re-executes a tool under the shared venv
-  (`.venv-undither/`) when they are missing — `tacli replay forks` and `replay takeover --dry-run`
-  call it before they walk a file's blocks — and `header_only` reads a stored header with the
-  standard library alone, so the build's bare `python3` still runs `tareplay.py features --check`.
-  Decoding a large battle in Python takes about 30 s; with `TAREC_CACHE=DIR` the decoded blocks are
+  which needs numpy, numba and zstandard: `tools/replay/devpy.py` re-executes a tool under the
+  shared venv (`.venv-undither/`) when they are missing — `tacli replay forks` and
+  `replay takeover --dry-run` call it before they walk a file's blocks — and `header_only` reads a
+  stored header with the standard library alone, so the build's bare `python3` still runs
+  `tareplay.py features --check`.
+  Decoding a large battle in Python takes about 3 s; with `TAREC_CACHE=DIR` the decoded blocks are
   kept in `DIR`, keyed by the SHA-256 of the file's bytes and of the decoder's sources, so a second
   command on the same file reads them back (`tools/replay/reccache.py`: an entry carries its own
   checksum and anything wrong in it is a miss). `tareplay.py` points it at its run folder and removes
