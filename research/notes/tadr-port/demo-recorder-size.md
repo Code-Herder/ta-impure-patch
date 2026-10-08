@@ -299,10 +299,8 @@ three unidentified mover fields at `+0x14`, `+0x18` and `+0x1C` in 75–92 %. ME
 are about 4.0 of the air war's 6.2 MiB of units, and 586 k of 602 k aircraft iterations still
 carry a change. That is roughly ten times a ground unit's cost [INFERRED: about 0.7 MiB an hour
 per aircraft here, against about 0.07 per unit at the battle's tail], so a game with a large air
-force cannot meet the four-player budget on the current rules. What would recover it, unmeasured:
-the three mover fields identified; altitude from vertical velocity (exact on 99.97 % of aircraft
-iterations, about 0.16 MiB here); an exact air-step rule, which must reproduce the engine's x87
-arithmetic bit for bit in the writer and both readers.
+force cannot meet the four-player budget on the L0 rules. The aircraft research (*Aircraft*, below)
+found the rules that recover it.
 
 **Projectiles**: guided flight, rare in the battle, is 43–63 % of the projectile stream on the
 other three. The engine rebuilds a guided projectile's velocity from its own heading, pitch and
@@ -332,6 +330,76 @@ hilly maps and `+0x0C` (height) on naval; ships' second weapon reload; air war d
 **zstd 3 as a drop-in** on whole files: Town & Country 0.80, naval 0.63, the air war 0.76 (the
 battle 0.69); decoding 1.8–3 times faster than the writer's inflate. Town & Country's blocks hold
 only 5.8 iterations each, which is why its ratio is weak; the codecs' sectioned blocks replace them.
+
+## Aircraft
+
+Research and a challenge on 2026-10-08 (`research/sizelab/air/`, `air-challenge/`): what an
+airborne unit's movement writes each tick, and which of it a lossless codec can predict.
+
+**The step** (DISASSEMBLED, re-derived by the challenger, the constants checked against the exe).
+The movement pass `0x43DD20` runs the air step `0x43D290` for a unit whose definition has `+0x241`
+bit 11 set. In order: damping, a drift limit, a vertical clamp, the turn, a proportional-derivative
+term toward the target point the course `0x490690` supplies, the speed, then `0x43D0D0`. The
+target point, its change and the desired heading live in the course, not in the unit record.
+
+- The mover's `+0x14/+0x18/+0x1C` is a **smoothed acceleration**: A ← ((A·0xF333) >> 16) + Δv.
+- The unit's `+0x64`, which L0 called pitch, is the **bank**: round(atan2(−(x′·bankscale) >> 16,
+  (gravity << 16) / 0xCCD)·K), where x′ is A turned by the heading (x cos − z sin). `+0x68` reads
+  the same x′ with the type's pitch scale.
+
+**Exact rules**, each on 588,452 of 588,452 airborne iterations of the air war (MEASURED): speed =
+isqrt(v·v), the smoothed acceleration, the bank, `+0x68`, altitude ← altitude + vy, the footprint
+cell from the position (`0x43D86F`), the mover's `+0x26` claim stamp (GameTime when the footprint
+changes, `0x440A91`) and the sight x (x >> 21; the sight z holds on 91–100 %). The velocity is the
+one field the record does not determine, because the target point is hidden: the
+proportional-derivative term is saturated on 96 % of iterations, and predicting it as the last
+term, or that term turned by its last change, is exact on 66–70 % in straight flight and 15–28 %
+when turning.
+
+| Unit frame, writer, MiB | air war | Town & Country | naval |
+|---|---:|---:|---:|
+| L0's rules | 6.224 | 4.524 | 0.215 |
+| + speed, smoothed acceleration, bank, altitude | 3.029 | | |
+| + footprint cell, sight, claim stamp | 2.166 | | |
+| + the velocity estimate and the turned term | **1.334** | **4.034** | **0.206** |
+
+Every run decoded back with 0 mismatches (859,616 unit images on the air war), re-run by the
+challenger byte-identical. The cell rules help ground units too: they are 88 % of Town & Country's
+gain. Aircraft fall from 6.05 to 1.20 MiB; the air war's file from about 9.4 to about 4.5 MiB
+[INFERRED: the L0 total with the new unit figure]. What is left is the hidden target (about
+0.34 MiB of velocity plus framing) and bucket fields and state bits (about 0.18), roughly 0.2 MiB
+per aircraft-hour against 1.1 under L0 [INFERRED, scaled].
+
+**Integers, not floats.** The engine computes the bank in x87 floating point at 53-bit precision
+(the runtime sets `_PC_53` at start-up, `0x4EA5B0`). Reproducing it in floats would make the
+format depend on the control word, which the DLL does not control by construction: the MinGW TLS
+callback runs `fninit` on every new thread, so a writer thread starts at 64-bit precision, the DLL
+has 482 compiler-generated `fldcw`, and GCC may move x87 arithmetic across an inline one; and the
+Python reader would have to agree with the C one bit for bit, which neither the decode-before-write
+check (same C predictions) nor the snapshot check (blind to one-tick errors) would catch. The
+challenger's all-integer version of the bank and the turned term matches the engine's bank on
+588,451 of 588,452 iterations and costs +0.24 % on the air war (−0.03 % on Town & Country), so
+**the plan uses integers**: a prediction only has to be near, never bit-exact, for a lossless codec.
+The integer version also fixes three holes the float prototype's specification had: clip the turned
+term at 2^16 (the largest |A| measured is 26,214), division truncates toward zero as in C (Python's
+`//` floors), and a zero speed cap is guarded.
+
+**What L1's unit frame carries for aircraft**: gravity and sea level in the stream header (gravity
+stays a `leave` row of `replay-globals.tsv`; the header is not the replayed globals); per aircraft
+type, its air bit and about 24 bytes of definition constants written by the writer (type ids differ
+between recordings: CORVAMP is 271 on the air war, 272 on Town & Country); a third image and an age
+per slot; LosType as an input of the sight rules; the landing tick's rule (on `0x43D210(1)` the
+smoothed acceleration decays once and the bank is recomputed); and as format-version constants
+0xF333, 0xCCD, the integer tables and the sine table. Gravity and the definition offset `+0x170`
+were fitted from the data (8155 is unique: 588,252 exact banks against about 503,000 for 8154 or
+8156); the writer reads the real values.
+
+**Not covered** by the air war: landings (its 200 transition iterations are all take-offs), air
+transports and their cargo, the blocked branch, a non-zero pitch scale, the other LosType path
+(`0x4826B7`), and remote aircraft in multiplayer. A wrong rule there costs size, never data.
+Chasing the velocity further — estimating each aircraft's target from its turns (the turn reveals
+the desired heading on 86 % of iterations) or recording the course's target (26 bytes an aircraft)
+— is not measured and not in the plan unless the measured hour needs it.
 
 ## Multiplayer recordings
 
@@ -409,7 +477,7 @@ the units: stage 6's traffic budget.
 | | Landing | Gives |
 |---|---|---|
 | L0 | every codec run offline on the naval and Town & Country recordings and one with aircraft and hills: DONE 2026-10-07, lossless everywhere (*L0* above) | aircraft as the open cost |
-| L1 | the sectioned container, decode-before-write with fallback, the unit frame | about −42 MiB on this battle |
+| L1 | the sectioned container, decode-before-write with fallback, the unit frame with the aircraft and cell rules in integers | about −42 MiB on this battle |
 | L2 | projectiles by identity, the guided-velocity rule, the search capped at 4 candidates, shooter first | about −34 MiB |
 | L3 | cells, orders, events, globals; the snapshot wreck base | about −7 MiB |
 | L4 | the measured hour of a four-player game with AI and structures | the snapshot interval; whether lossy is needed |

@@ -17,6 +17,8 @@ evidence and the code to re-run or extend it.
 | `challenge-a/` | the first challenger: the numbers and the engine facts | re-runs and disassembly checks |
 | `challenge-b/` | the second challenger: the combined plan | the non-double-counted stack, the landing order |
 | `l0/` | L0: every codec on Town & Country, naval and an air war | lossless everywhere; aircraft cost ~10× a ground unit; the guided-projectile rule; the search cap |
+| `air/` | the air step's rules | aircraft 6.05 → 1.20 MiB on the air war, lossless |
+| `air-challenge/` | the aircraft challenger | the rules confirmed; the all-integer version; what the air war does not cover |
 
 Each folder's `README.md` is that area's report; `BRIEF.md` is the brief every researcher worked
 from. Outputs (`*.out`, `*.jsonl`, `*.json`) are the runs the reports cite.
