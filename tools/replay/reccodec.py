@@ -23,7 +23,9 @@ operands are not negative, which is everywhere C divides), the same clamps as th
 product reaches 2^63. The sine table is computed from its formula at import, never read from the
 executable.
 
-Needs numpy and zstandard (the shared venv; devpy.ensure() re-executes a tool under it).
+Needs numpy, and zstandard for a packed block (the shared venv; devpy.ensure() re-executes a
+tool under it). zstandard is imported where a block is unpacked, so a walk with decode=False over
+a file whose only packed blocks are its stream, snapshots and minimap runs without it.
 """
 import importlib.util
 import math
@@ -34,7 +36,6 @@ import zlib
 from collections import namedtuple
 
 import numpy as np
-import zstandard
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -481,7 +482,8 @@ class Frame:
         if flags & RBF_FRAME_RESET and not flags & RBF_SECTIONS:
             raise Unreadable("RBF_FRAME_RESET without RBF_SECTIONS")
         if not flags & RBF_SECTIONS:
-            self.apply_records(body)
+            if self.prm.usable:             # the copy feeds only a restart, which needs the params
+                self.apply_records(body)
             self.invalidate()
             return bytes(body)
         if not self.prm.usable:
@@ -879,6 +881,11 @@ def unpack(body, raw):
     if not body or not raw:
         raise Unreadable("an empty packed block")
     try:
+        import zstandard
+    except ImportError:
+        raise Unreadable("a packed block needs zstandard: the shared venv (CLAUDE.md, Python "
+                         "tooling)") from None
+    try:
         if zstandard.frame_content_size(body) != raw:
             raise Unreadable(f"a zstd frame whose content is not {raw} bytes")
         d = zstandard.ZstdDecompressor().decompressobj()
@@ -932,6 +939,8 @@ def iter_blocks(path, decode=True, rest=True, before_stream=None):
         if (flags & ~allowed or (flags & RBF_FRAME_RESET and not flags & RBF_SECTIONS) or
                 (kind in (tarec.RB_HEADER, tarec.RB_END, tarec.RB_TIMELINES) and not flags & RBF_STORED)):
             raise Unreadable(f"block flags {flags:#x} on kind {kind} at byte {at}")
+        if not flags & RBF_STORED and (not packed or not raw):
+            raise Unreadable(f"a packed body of no bytes at byte {at}")
         if flags & RBF_STORED and raw != packed:
             raise Unreadable(f"a stored block of {packed} bytes, not {raw}, at byte {at}")
         ordinal += 1
@@ -948,7 +957,13 @@ def iter_blocks(path, decode=True, rest=True, before_stream=None):
                 if root_slots is not None and nslots != root_slots:
                     raise Unreadable(f"a segment of {nslots} slots after {root_slots}")
                 root_slots = nslots
-                frame = Frame(params(es, nslots), rest=rest)
+                # parsed only when one of the three is there, as tagpu_recreader.c's header_parse
+                # does: a dump's header carries none of them and may name no slots
+                if any(t in (RT_CODEC, RT_PHYSICS, RT_AIR) for t, _ in es):
+                    prm = params(es, nslots)
+                else:
+                    prm = Params(nslots, [], 0, 0, 0, [], False)
+                frame = Frame(prm, rest=rest)
             elif kind == tarec.RB_STREAM and payload is not None:
                 if frame is None:
                     raise Unreadable("a stream block before any header")

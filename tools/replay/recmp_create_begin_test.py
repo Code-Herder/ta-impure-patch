@@ -29,6 +29,7 @@ import time
 import uuid
 import zlib
 
+import devpy
 import tarec
 import tareplay
 from recmp_file import History, RECMP_ROOT_CREATE_BEGIN
@@ -297,6 +298,7 @@ def run(output, dll, port, reproduce=False, until=0, chat=False):
 
 
 def main():
+    devpy.ensure()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dll", type=Path, default=TREE / "tagpu/ddraw/ddraw-cover.dll")

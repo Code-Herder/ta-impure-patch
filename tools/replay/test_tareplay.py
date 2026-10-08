@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments): the C parser against the coverage build's map, the features' regions, the comment
-filter, `landing --check`, a recording's segments and chains, read from files built from the
-format alone, the fixtures' takeover entries and the W lane's edited header copies. Standard
-library only; no game runs.
+filter, `landing --check`, a recording's segments and chains and what format 8's block walk
+refuses, read from files built from the format alone, the fixtures' takeover entries and the W
+lane's edited header copies. No game runs. The files are read through reccodec.py, which needs
+numpy and zstandard: devpy.ensure() re-executes this under the shared venv when they are missing.
 
     python3 tools/replay/test_tareplay.py
 """
@@ -305,22 +306,25 @@ class HeaderCopy(unittest.TestCase):
     """W's refused copies: one header entry edited, every block still read whole."""
 
     @staticmethod
-    def block(kind, payload, stored):
-        body = payload if stored else zlib.compress(payload)
-        head = struct.pack("<IHHIIIII", tarec.REC_BLOCK_MAGIC, kind, tarec.RBF_STORED if stored
-                           else 0, 1, 9, len(payload), len(body), zlib.crc32(body))
-        return head + struct.pack("<I", zlib.crc32(head)) + body
+    def block(kind, payload, flags=tarec.RBF_STORED):
+        head = struct.pack("<IHHIIIII", tarec.REC_BLOCK_MAGIC, kind, flags, 1, 9, len(payload),
+                           len(payload), zlib.crc32(payload))
+        return head + struct.pack("<I", zlib.crc32(head)) + payload
+
+    @staticmethod
+    def entry(tag, data):
+        raw = struct.pack("<HH", tag, len(data)) + data
+        return raw + b"\0" * (-len(raw) % 4)
 
     def test_edit(self):
-        def entry(tag, data):
-            raw = struct.pack("<HH", tag, len(data)) + data
-            return raw + b"\0" * (-len(raw) % 4)
+        entry = self.entry
         layout, smap = b"ab" * 32 + b"\0", b"Coast To Coast\0"
-        head = entry(tarec.RT_LAYOUT, layout) + entry(tarec.RT_SETTINGS_MAP, smap)
+        head = (entry(tarec.RT_FORMAT, struct.pack("<I", tarec.REC_FORMAT)) +
+                entry(tarec.RT_LAYOUT, layout) + entry(tarec.RT_SETTINGS_MAP, smap))
         with tempfile.TemporaryDirectory() as d:
             src, dst = Path(d) / "a.imprec", Path(d) / "b.imprec"
-            src.write_bytes(tarec.REC_MAGIC + self.block(tarec.RB_HEADER, head, False)
-                            + self.block(tarec.RB_STREAM, b"\1\2\3\4", True))
+            src.write_bytes(tarec.REC_MAGIC + self.block(tarec.RB_HEADER, head)
+                            + self.block(tarec.RB_STREAM, b"\1\2\3\4"))
             tareplay.header_copy(src, dst, tarec.RT_SETTINGS_MAP, tareplay.no_such_map)
             got, why = tarec.blocks(dst)
             self.assertIsNone(why)
@@ -331,6 +335,15 @@ class HeaderCopy(unittest.TestCase):
             tareplay.header_copy(src, dst, tarec.RT_LAYOUT, tareplay.other_layout)
             ents = dict(tarec.entries(tarec.blocks(dst)[0][0][3]))
             self.assertEqual(ents[tarec.RT_LAYOUT], b"1" + layout[1:])
+
+    def test_a_packed_header_is_refused(self):
+        head = self.entry(tarec.RT_SETTINGS_MAP, b"Coast To Coast\0")
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "a.imprec"
+            src.write_bytes(tarec.REC_MAGIC + self.block(tarec.RB_HEADER, head, 0))
+            with self.assertRaisesRegex(tareplay.CouldNotRun, "not stored"):
+                tareplay.header_copy(src, Path(d) / "b.imprec", tarec.RT_SETTINGS_MAP,
+                                     tareplay.no_such_map)
 
 
 class TakeoverRoster(unittest.TestCase):
@@ -482,6 +495,48 @@ def stream(first, last, unit=None, opens=True):
 def end_block(last, reason=1):
     return block(tarec.RB_END, last, last, tlv(tarec.RT_END_REASON, struct.pack("<I", reason)) +
                  tlv(tarec.RT_LAST, struct.pack("<I", last)))
+
+
+def flagged(kind, first, last, payload, flags):
+    """A block with these flags whose body is `payload` as it stands, packed or not."""
+    head = struct.pack("<IHHIIIII", tarec.REC_BLOCK_MAGIC, kind, flags, first, last,
+                       len(payload), len(payload), zlib.crc32(payload))
+    return head + struct.pack("<I", zlib.crc32(head)) + payload
+
+
+class Format8Blocks(unittest.TestCase):
+    """What format 8's block walk refuses by name before any payload is read, as
+    tagpu_recreader.c's block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
+
+    def refused(self, *parts, why, decodes=(True, False)):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "f.imprec"
+            path.write_bytes(tarec.REC_MAGIC + b"".join(parts))
+            for decode in decodes:
+                with self.assertRaisesRegex(tarec.Unreadable, why):
+                    tarec.blocks(path, decode=decode)
+
+    def test_flags(self):
+        snap = tlv(tarec.RK_TICK, struct.pack("<I", 1))
+        S, P, R = tarec.RBF_STORED, tarec.RBF_SECTIONS, tarec.RBF_FRAME_RESET
+        for kind, flags in ((tarec.RB_HEADER, 0), (tarec.RB_SNAPSHOT, S | P),
+                            (tarec.RB_STREAM, S | R), (tarec.RB_STREAM, S | 8)):
+            with self.subTest(kind=kind, flags=flags):
+                self.refused(header(), flagged(kind, 1, 1, snap, flags), why="block flags")
+
+    def test_a_packed_body_of_no_bytes(self):
+        self.refused(header(), flagged(tarec.RB_SNAPSHOT, 1, 1, b"", 0), why="no bytes")
+
+    def test_a_sectioned_block_without_the_codec_entries(self):
+        # refused where it is decoded: a walk that skips the stream (decode=False), like the
+        # DLL's segment scan, does not read it
+        self.refused(header(), flagged(tarec.RB_STREAM, 1, 1, bytes(36), tarec.RBF_STORED |
+                                       tarec.RBF_SECTIONS | tarec.RBF_FRAME_RESET),
+                     why="without RT_CODEC and RT_PHYSICS", decodes=(True,))
+
+    def test_a_segment_of_other_slots(self):
+        self.refused(header(slots=4), end_block(0), header(timeline=(1, 0, 2), slots=6),
+                     why="a segment of 6 slots after 4")
 
 
 class Segments(unittest.TestCase):
@@ -770,10 +825,9 @@ class Perspective(unittest.TestCase):
             self.assertEqual(code, 1, out)
             self.assertIn("unreadable", out)
         parts = list(self.good())
-        parts[0] = self.head(fmt=tarec.REC_FORMAT_NET_CREATE)
-        code, out = self.run_pov(*parts)
-        self.assertEqual(code, 1)
-        self.assertIn("outside a skirmish file of format 7", out)
+        parts[0] = self.head(fmt=7)
+        with self.assertRaisesRegex(tarec.Unreadable, "format 7, not 8"):
+            self.run_pov(*parts)
 
 
 class TakeoverFixtures(unittest.TestCase):
@@ -909,4 +963,6 @@ class CrashEndsTheWait(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    import devpy
+    devpy.ensure()
     unittest.main(verbosity=1)

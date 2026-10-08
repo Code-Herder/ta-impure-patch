@@ -1064,8 +1064,8 @@ def takeover_f(w, fx, out):
 
 def header_copy(rec, dst, tag, edit):
     """A copy of the recording `rec` at `dst` whose header entry `tag` holds edit(its bytes), of
-    the same length, the header block deflated again (or stored again) with both its CRCs: a
-    file the reader opens, which the replay's own checks then judge."""
+    the same length, the header block stored again with both its CRCs: a file the reader opens,
+    which the replay's own checks then judge. A header block is always stored (format 8)."""
     data = Path(rec).read_bytes()
     if data[:8] != tarec.REC_MAGIC:
         raise CouldNotRun(f"{rec}: not a recording")
@@ -1074,8 +1074,9 @@ def header_copy(rec, dst, tag, edit):
         struct.unpack("<IHHIIIIII", head)
     if magic != tarec.REC_BLOCK_MAGIC or kind != tarec.RB_HEADER:
         raise CouldNotRun(f"{rec}: no header block")
-    body = data[40:40 + packed]
-    payload = bytearray(body if flags & tarec.RBF_STORED else zlib.decompress(body))
+    if flags != tarec.RBF_STORED:
+        raise CouldNotRun(f"{rec}: a header block with flags {flags:#x}, not stored")
+    payload = bytearray(data[40:40 + packed])
     at, found = 0, False
     while at + 4 <= len(payload):
         t, n = struct.unpack_from("<HH", payload, at)
@@ -1088,8 +1089,8 @@ def header_copy(rec, dst, tag, edit):
         at += (4 + n + 3) & ~3
     if not found:
         raise CouldNotRun(f"{rec}: no header entry {tag}")
-    body = bytes(payload) if flags & tarec.RBF_STORED else zlib.compress(bytes(payload))
-    head = struct.pack("<IHHIIIII", magic, kind, flags, first, upto, len(payload), len(body),
+    body = bytes(payload)
+    head = struct.pack("<IHHIIIII", magic, kind, flags, first, upto, len(body), len(body),
                        zlib.crc32(body))
     head += struct.pack("<I", zlib.crc32(head))
     Path(dst).write_bytes(data[:8] + head + body + data[40 + packed:])
@@ -1612,6 +1613,23 @@ def image_gate_options(fx):
     return []
 
 
+def codec_check(info):
+    """The live recording's end block on its unit frame, from `tarec info`'s output: a stream
+    block whose check decode differed (RT_CODEC_MISMATCH) is a codec bug, which the writer wrote
+    as records and the gate fails by name; the blocks the encoder declined are reported."""
+    m = re.search(r"the writer's unit frame: (\d+|absent) blocks declined, (\d+|absent) mismatched",
+                  info)
+    if not m:
+        return ("the unit frame", UNRUN, "no end block")
+    declined, mismatched = m.groups()
+    if mismatched == "absent":
+        return ("the unit frame", FAIL, "the end block carries no RT_CODEC_MISMATCH")
+    if int(mismatched):
+        return ("the unit frame", FAIL, f"the unit frame did not decode back in {mismatched} "
+                                        f"blocks ({declined} declined)")
+    return ("the unit frame", PASS, f"0 mismatched, {declined} declined")
+
+
 def checks(fx):
     """Every check of the processes that ran: (name, verdict, detail) each. A dump tarec cannot
     read (its exit 2) could not run; only a comparison that ran and differed is a FAIL."""
@@ -1623,6 +1641,7 @@ def checks(fx):
     clean = (m and "complete" in end and " 0 id rows outside" in end and
              " 0 nano sprays uncredited" in end)
     res.append(("the end block", PASS if clean else FAIL if m else UNRUN, end))
+    res.append(codec_check(o))
     rc, o = tarec_run("check", rec)
     res.append(("tarec check", PASS if rc == 0 else FAIL if rc == 1 else UNRUN,
                 last(o) if rc == 0 else o.strip()))
@@ -2044,8 +2063,8 @@ def cost_line(fx):
     log = (fx["out"] / "L" / "tagpu.log").read_text(errors="replace")
     cap = re.search(r"recorder: (\d+) iterations captured: the first in \d+ us, the rest in "
                     r"(\d+) us on average and (\d+) us at most", log)
-    size = re.search(r"recorder: writer: .* closed: (\d+) iterations .* stream (\d+) KB deflated "
-                     r"to (\d+) KB", log)
+    size = re.search(r"recorder: writer: .* closed: (\d+) iterations .* stream (\d+) KB of records "
+                     r"written as (\d+) KB", log)
     if not cap or not size:
         return "COST: the recorder's capture or close line is missing from L's log"
     n, raw, kb = int(size.group(1)), int(size.group(2)), int(size.group(3))
@@ -2053,8 +2072,8 @@ def cost_line(fx):
         return "COST: the recording closed with no iteration"
     hour = 30 * 3600 / n
     return (f"COST: {cap.group(1)} iterations, {cap.group(2)} us an iteration on average, "
-            f"{cap.group(3)} us at most; {kb / 1024:.1f} MB ({raw / 1024:.1f} MB before "
-            f"deflate), {kb / 1024 * hour:.0f} MB an hour of game time at that rate")
+            f"{cap.group(3)} us at most; {kb / 1024:.1f} MB ({raw / 1024:.1f} MB of records), "
+            f"{kb / 1024 * hour:.0f} MB an hour of game time at that rate")
 
 
 def report(run, keep):
@@ -2073,6 +2092,10 @@ def report(run, keep):
         if cost:
             if fx["procs"].get("L") == "ran":
                 lines.append("   " + cost_line(fx))
+                label, verdict, detail = codec_check(tarec_run("info", fx["rec"])[1])
+                lines.append(f"   {verdict:4}  {label}: {detail}")
+                failed |= verdict == FAIL
+                unrun |= verdict == UNRUN
             elif "L" not in fx["procs"]:
                 lines.append("   L NEVER RAN")
                 unrun = True
@@ -2730,6 +2753,12 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd in ("run", "measure", "landing", "broad", "takeover") and not 1 <= a.j <= 9:
         ap.error("-j is 1..9")
+    # the subcommands that read recordings need numpy and zstandard (tarec.py through
+    # reccodec.py); `features` and `list` run under the build's bare python3, and so does
+    # `landing --check`, which reads git notes only
+    if a.cmd not in ("features", "list") and not (a.cmd == "landing" and a.check):
+        import devpy
+        devpy.ensure()
     return a.func(a)
 
 

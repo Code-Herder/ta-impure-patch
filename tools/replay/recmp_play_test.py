@@ -35,6 +35,7 @@ import sys
 import time
 from pathlib import Path
 
+import devpy
 import tarec
 import tareplay
 import tarewind
@@ -52,6 +53,7 @@ TREE = HERE.parents[1]
 
 
 def main():
+    devpy.ensure()
     ap = argparse.ArgumentParser()
     ap.add_argument("recording", type=Path)
     ap.add_argument("--out", type=Path, required=True)

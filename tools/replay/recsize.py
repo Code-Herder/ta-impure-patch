@@ -3,22 +3,26 @@
 
     recsize.py <file.imprec> [--json out.json] [--window 900]
 
-Reads a recording with tarec.py's block reader and reports:
+Reads a recording of format 8 with reccodec.py's block walk and reports:
 
-  - the file by block kind, raw and packed;
-  - the stream and the snapshots by record category, raw, and each category deflated alone
-    with the writer's settings (lodepng's default: a 2,048-byte window), whose sum is checked
-    against what the file really holds;
+  - the file by block kind, raw (as the block headers state it: a sectioned block's container)
+    and on disk;
+  - the stream by section of the sectioned container (tagpu_recfmt.h, RCS_*): raw, and each
+    section packed alone with zstd at level 3, the writer's setting, whose sum is checked against
+    what the file really holds; a records block's records count in the section their kind takes;
+  - the stream's decoded records by category, raw, and the snapshots by category, raw and each
+    category packed alone, checked the same way;
   - a unit delta's changed dwords, by field, with the changed units per iteration against the
     live ones, and how many bits each top field's change needs;
   - the same for projectiles and the globals, the order lists re-sent and what changed in them,
     and the feature-grid cells by where they were written;
   - bytes per window of game time (the battle against the quiet);
-  - what other compressors make of the same blocks.
+  - what other compressors make of the stream's records.
 
-The packed bytes of a category are an attribution, not a measurement: each block's records
-of one category are deflated together, apart from the rest. The check line says how far the
-sum is from the file's real packed bytes.
+The packed bytes of a section or a category are an attribution, not a measurement: each block's
+bytes of one section are packed together, apart from the rest. The check line says how far the
+sum is from the file's real packed bytes. Needs numpy and zstandard (devpy.ensure() re-executes
+under the shared venv).
 """
 import argparse
 import collections
@@ -26,16 +30,11 @@ import json
 import lzma
 import struct
 import sys
-import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import devpy  # noqa: E402
 import tarec  # noqa: E402
-
-try:
-    import zstandard
-except ImportError:            # the shared venv has it; the system python does not
-    zstandard = None
 
 T = tarec
 GROUPS = {
@@ -94,10 +93,54 @@ def field_names():
     return names
 
 
-def deflate_like_writer(data):
-    """lodepng's default settings: dynamic Huffman, LZ77 with a 2,048-byte window."""
-    c = zlib.compressobj(6, zlib.DEFLATED, 11)
-    return len(c.compress(data) + c.flush())
+SECTIONS = ("kinds", "unit frame", "projectiles", "cells", "orders", "events", "other")
+SEC_HEAD = struct.Struct("<IHH7I")      # RecSecHead: payload, iterations, sections, len[7]
+
+
+def zstd3(data):
+    """The writer's packing: one zstd frame at level 3 (tagpu_reccodec.c, reccodec_pack)."""
+    import zstandard
+    return len(zstandard.ZstdCompressor(level=3).compress(data)) if data else 0
+
+
+def sections_of(flags, unpacked):
+    """A stream block's bytes by section: a sectioned container's head and its seven sections
+    as written, or a records block's records routed to the section their kind would take."""
+    import reccodec
+    if flags & T.RBF_SECTIONS:
+        head = SEC_HEAD.unpack_from(unpacked)
+        out, at = {"container head": unpacked[:SEC_HEAD.size]}, SEC_HEAD.size
+        for name, n in zip(SECTIONS, head[3:]):
+            out[name] = unpacked[at:at + n]
+            at += n
+        return out
+    parts = collections.defaultdict(bytearray)
+    for rk, body in T.records(unpacked):
+        parts[SECTIONS[reccodec.section_of(rk)]] += \
+            struct.pack("<HH", rk, len(body)) + body + bytes(-len(body) % 4)
+    return parts
+
+
+def read(path):
+    """(blocks as tarec.blocks gives them, their (kind, first, last, raw, packed), their flags,
+    the stream's raw and packed-alone bytes by section, why the reading stopped)."""
+    import reccodec
+    sraw, salone = collections.Counter(), collections.Counter()
+
+    def count(ordinal, flags, unpacked, frame):
+        for name, data in sections_of(flags, bytes(unpacked)).items():
+            sraw[name] += len(data)
+            salone[name] += zstd3(bytes(data))
+    walk = reccodec.iter_blocks(path, before_stream=count)
+    bl, sizes, flags = [], [], []
+    while True:
+        try:
+            b = next(walk)
+        except StopIteration as stop:
+            return bl, sizes, flags, (sraw, salone), stop.value
+        bl.append((b.kind, b.first, b.last, b.payload))
+        sizes.append((b.kind, b.first, b.last, b.raw, b.packed))
+        flags.append(b.flags)
 
 
 def bitlen(v):
@@ -136,8 +179,7 @@ class Delta:
 
 
 def analyse(path, window):
-    sizes = []
-    bl, stop = T.blocks(path, sizes)
+    bl, sizes, flags, (sraw, salone), stop = read(path)
     if stop:
         print(f"note: the reading stopped early: {stop}")
     h = T.header(bl[0][3])
@@ -152,19 +194,26 @@ def analyse(path, window):
         b[0] += 1; b[1] += raw; b[2] += packed + 32
     out["blocks"] = {k: {"n": v[0], "raw": v[1], "on_disk": v[2]} for k, v in by_block.items()}
 
-    def scan(which):
+    stream_flags = [f for (k, *_), f in zip(sizes, flags) if k == T.RB_STREAM]
+    out["sections"] = {
+        "blocks": len(stream_flags),
+        "sectioned": sum(1 for f in stream_flags if f & T.RBF_SECTIONS),
+        "real_packed": sum(pk for k, _, _, _, pk in sizes if k == T.RB_STREAM),
+        "sum_alone": sum(salone.values()),
+        "sections": {n: {"raw": sraw[n], "packed_alone": salone[n]}
+                     for n in sorted(sraw, key=lambda n: -salone[n])}}
+
+    def scan(which, pack):
         raw = collections.Counter()
         alone = collections.Counter()
         nrec = collections.Counter()
         kraw = collections.Counter()
         knum = collections.Counter()
         real = 0
-        recomp = 0
         for (kind, first, last, payload), (_, _, _, r, pk) in zip(bl, sizes):
             if kind != which:
                 continue
             real += pk
-            recomp += deflate_like_writer(payload)
             parts = collections.defaultdict(bytearray)
             for rk, body in T.records(payload):
                 n = 4 + ((len(body) + 3) & ~3)
@@ -172,17 +221,19 @@ def analyse(path, window):
                 raw[g] += n; nrec[g] += 1
                 kraw[rk] += n; knum[rk] += 1
                 parts[g] += struct.pack("<HH", rk, len(body)) + body + bytes(-len(body) % 4)
-            for g, data in parts.items():
-                alone[g] += deflate_like_writer(bytes(data))
-        return raw, alone, nrec, kraw, knum, real, recomp
+            if pack:
+                for g, data in parts.items():
+                    alone[g] += zstd3(bytes(data))
+        return raw, alone, nrec, kraw, knum, real
 
     report = {}
-    for which, label in ((T.RB_STREAM, "stream"), (T.RB_SNAPSHOT, "snapshots")):
-        raw, alone, nrec, kraw, knum, real, recomp = scan(which)
-        report[label] = {"real_packed": real, "recompressed": recomp,
-                         "sum_alone": sum(alone.values()),
-                         "groups": {g: {"records": nrec[g], "raw": raw[g], "packed_alone": alone[g]}
-                                    for g in sorted(raw, key=lambda g: -alone[g])},
+    # the stream's packing is the sections' (above); its records are counted raw
+    for which, label, pack in ((T.RB_STREAM, "stream", False), (T.RB_SNAPSHOT, "snapshots", True)):
+        raw, alone, nrec, kraw, knum, real = scan(which, pack)
+        report[label] = {"real_packed": real, "sum_alone": sum(alone.values()) if pack else None,
+                         "groups": {g: {"records": nrec[g], "raw": raw[g],
+                                        "packed_alone": alone[g] if pack else None}
+                                    for g in sorted(raw, key=lambda g: -(alone[g] if pack else raw[g]))},
                          "kinds": {KIND_NAME.get(k, str(k)): {"records": knum[k], "raw": kraw[k]}
                                    for k in sorted(kraw, key=lambda k: -kraw[k])}}
     out.update(report)
@@ -315,17 +366,16 @@ def analyse(path, window):
     out["timeline"] = {f"{w * window}-{(w + 1) * window - 1}": dict(c)
                        for w, c in sorted(timeline.items())}
 
-    # other compressors on the same blocks, and on the stream as one piece
+    # other compressors on the stream's records, block by block and as one piece
+    import zstandard
     streams = [p for k, _, _, p in bl if k == T.RB_STREAM]
-    alt = {"writer (lodepng, 2 KB window)": report["stream"]["real_packed"],
-           "zlib 9, 32 KB window": sum(len(zlib.compress(p, 9)) for p in streams),
-           "lzma preset 6": sum(len(lzma.compress(p, preset=6)) for p in streams)}
-    if zstandard:
-        for lvl in (3, 19):
-            c = zstandard.ZstdCompressor(level=lvl)
-            alt[f"zstd {lvl}"] = sum(len(c.compress(p)) for p in streams)
-        c = zstandard.ZstdCompressor(level=19, write_content_size=False)
-        alt["zstd 19, the whole stream as one frame"] = len(c.compress(b"".join(streams)))
+    alt = {"the writer (sections, zstd 3)": report["stream"]["real_packed"]}
+    for lvl in (3, 19):
+        c = zstandard.ZstdCompressor(level=lvl)
+        alt[f"records, zstd {lvl}"] = sum(len(c.compress(p)) for p in streams)
+    alt["records, lzma preset 6"] = sum(len(lzma.compress(p, preset=6)) for p in streams)
+    c = zstandard.ZstdCompressor(level=19, write_content_size=False)
+    alt["records, zstd 19, the whole stream as one frame"] = len(c.compress(b"".join(streams)))
     out["compressors"] = alt
     return out
 
@@ -346,18 +396,34 @@ def show(r):
     for k, v in sorted(r["blocks"].items(), key=lambda kv: -kv[1]["on_disk"]):
         print(f"  {k:<12} {v['n']:>6} blocks  raw {kb(v['raw']):>10}  on disk {kb(v['on_disk']):>10}"
               f"  {100 * v['on_disk'] / r['bytes']:5.1f} %")
+    sc = r["sections"]
+    if sc["blocks"]:
+        tot_raw = sum(v["raw"] for v in sc["sections"].values())
+        print(f"\nthe stream by section: {sc['blocks']} blocks, {sc['sectioned']} sectioned, the "
+              f"rest records; raw {kb(tot_raw)}, packed {kb(sc['real_packed'])} (sections packed "
+              f"alone sum to {kb(sc['sum_alone'])}, "
+              f"{100 * sc['sum_alone'] / max(sc['real_packed'], 1):.1f} % of it)")
+        print(f"  {'section':<28}{'raw':>12}{'raw %':>8}{'packed alone':>14}{'%':>7}")
+        for n, v in sc["sections"].items():
+            print(f"  {n:<28}{kb(v['raw']):>12}{100 * v['raw'] / tot_raw:7.1f}%"
+                  f"{kb(v['packed_alone']):>14}"
+                  f"{100 * v['packed_alone'] / max(sc['sum_alone'], 1):6.1f}%")
     for label in ("stream", "snapshots"):
         s = r[label]
         if not s["real_packed"]:
             continue
         tot_raw = sum(g["raw"] for g in s["groups"].values())
-        print(f"\nthe {label} by category: raw {kb(tot_raw)}, packed {kb(s['real_packed'])} "
-              f"(recompressed alike {kb(s['recompressed'])}; categories deflated alone sum to "
-              f"{kb(s['sum_alone'])})")
-        print(f"  {'category':<28}{'records':>10}{'raw':>12}{'raw %':>8}{'packed alone':>14}{'%':>7}")
+        pack = s["sum_alone"] is not None
+        whose = {"stream": "the stream's", "snapshots": "the snapshots'"}[label]
+        print(f"\n{whose} records by category: raw {kb(tot_raw)}, packed {kb(s['real_packed'])}"
+              + (f" (categories packed alone sum to {kb(s['sum_alone'])})" if pack else
+                 " (as sections, above)"))
+        print(f"  {'category':<28}{'records':>10}{'raw':>12}{'raw %':>8}"
+              + (f"{'packed alone':>14}{'%':>7}" if pack else ""))
         for g, v in s["groups"].items():
             print(f"  {g:<28}{v['records']:>10}{kb(v['raw']):>12}{100 * v['raw'] / tot_raw:7.1f}%"
-                  f"{kb(v['packed_alone']):>14}{100 * v['packed_alone'] / s['sum_alone']:6.1f}%")
+                  + (f"{kb(v['packed_alone']):>14}"
+                     f"{100 * v['packed_alone'] / max(s['sum_alone'], 1):6.1f}%" if pack else ""))
     for key, title in (("unit_deltas", "unit deltas"), ("projectile_deltas", "projectile deltas"),
                        ("globals_deltas", "globals deltas")):
         d = r.get(key)
@@ -380,13 +446,14 @@ def show(r):
     for w, c in r["timeline"].items():
         print(f"  {w:<14}" + "".join(f"{kb(c.get(g, 0)):>20}" for g in top)
               + f"{kb(sum(c.values())):>12}")
-    print("\nthe stream's blocks under other compressors")
-    base = r["compressors"]["writer (lodepng, 2 KB window)"]
+    print("\nthe stream's records under other compressors")
+    base = r["compressors"]["the writer (sections, zstd 3)"]
     for k, v in r["compressors"].items():
-        print(f"  {k:<42}{kb(v):>12}  {v / base:6.2f}x the writer's")
+        print(f"  {k:<50}{kb(v):>12}  {v / max(base, 1):6.2f}x the writer's")
 
 
 def main():
+    devpy.ensure()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("file")
     ap.add_argument("--json", help="also write the numbers to this file")

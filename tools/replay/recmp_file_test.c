@@ -439,12 +439,10 @@ static int read_file(const char* path, int expected)
               recr_mp_orders(r,7,0,&ostate,order,RECMP_ORDER_MAX,why,sizeof why)==0);
         CHECK(recr_mp_apply(r,&ordinal,applied_copy,applied,why,sizeof why)==0 && !ordinal && !applied->count);
         CHECK(recr_tick(r,why,sizeof why)==1 && recr_world(r)->tick==100 && recr_world(r)->player[0][0]==0xA5);
-        if (recr_header(r)->format>=REC_FORMAT_NET_CREATE) {
-            RecNetCreate create={6,1,2,4,0x80000011u,{123456,-654321,123},0.25f,65535,0};
-            CHECK(recr_world(r)->nev==1 && recr_world(r)->ev[0].kind==RK_EV_NET_CREATE &&
-                  recr_world(r)->ev[0].len==sizeof create &&
-                  !memcmp(recr_world(r)->ev[0].b,&create,sizeof create));
-        } else CHECK(recr_header(r)->format==REC_FORMAT_OLDEST && !recr_world(r)->nev);
+        RecNetCreate create={6,1,2,4,0x80000011u,{123456,-654321,123},0.25f,65535,0};
+        CHECK(recr_world(r)->nev==1 && recr_world(r)->ev[0].kind==RK_EV_NET_CREATE &&
+              recr_world(r)->ev[0].len==sizeof create &&
+              !memcmp(recr_world(r)->ev[0].b,&create,sizeof create));
         for (unsigned i=0;i<4;i++) {
             unsigned origin=i==0 ? 11 : i==1 ? 22 : i==2 ? 55 : 66;
             if (expected) {

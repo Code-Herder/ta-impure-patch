@@ -72,8 +72,13 @@
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
-here, and REC_FORMAT says which. A recording is REC_MAGIC, then blocks; a block is a 32-byte header
-and its payload, zlib-deflated unless the block is stored, each checked by a CRC-32. A file ends at
+here, and REC_FORMAT says which; this tool reads format 8 alone. A recording is REC_MAGIC, then
+blocks; a block is a 32-byte header and its payload, one zstd frame unless the block is stored (the
+header, end and timelines blocks always are), each checked by a CRC-32. A stream block may be a
+sectioned container (RBF_SECTIONS) that decodes to exactly the records it was made from: its unit
+deltas are made by the unit frame from the header's RT_CODEC, RT_PHYSICS and RT_AIR. The walk over
+the blocks, their unpacking and that decoding are tools/replay/reccodec.py's (iter_blocks), which
+refuses what the DLL's reader refuses; every command here reads the decoded records. A file ends at
 its last complete block: a block cut short or torn ends the reading, and the file is reported as
 read to there. A dump (`dump <name>` in tagpu_replay.trigger) is REC_MAGIC, a stored header with the
 format, the build, the globals list's hash and the tables, and one stored snapshot, which carries
@@ -94,7 +99,10 @@ appended to the file it was played from. A chain of timelines is read as the DLL
 (tagpu_recreader.c): each segment to the GameTime before its child's fork_at, where the child's
 first iteration replaces the world whole.
 
-Standard library only.
+Needs numpy and zstandard, imported (through reccodec.py) only by the functions that read a
+file's blocks: main() re-executes under the shared venv when they are missing (devpy.py), and the
+build's `tareplay.py features --check` imports this file under a bare python3. header_only reads
+the stored header with the standard library alone.
 """
 import os
 import re
@@ -104,9 +112,7 @@ import zlib
 from pathlib import Path
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 7                            # the perspective records (RK_POV to RK_POV_AT)
-REC_FORMAT_NET_CREATE = 6                 # RK_EV_NET_CREATE
-REC_FORMAT_OLDEST = 5                     # every format from here on reads
+REC_FORMAT = 8                            # zstd blocks and the sectioned stream
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -196,7 +202,7 @@ RB_BOUNDARY = -1            # load()'s marker of a fork in a chain's blocks: no 
 RECR_TIMELINES = 64         # the segments a file may hold (tagpu_recreader.h)
 RB_NAMES = {RB_HEADER: "header", RB_STREAM: "stream", RB_SNAPSHOT: "snapshot", RB_END: "end",
             RB_MINIMAP: "minimap", RB_TIMELINES: "timelines", RB_CONTRIBUTIONS: "contributions"}
-RBF_STORED = 1
+RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET = 1, 2, 4
 
 (RT_FORMAT, RT_BUILD, RT_MODE, RT_MAP, RT_START, RT_WALLCLOCK, RT_SLOTS, RT_UNITS_EACH,
  RT_UNITDEFS, RT_PLAYER, RT_LEVER, RT_LAYOUT, RT_TABLE, RT_OPTIONS, RT_SETTINGS_MAP,
@@ -204,9 +210,11 @@ RBF_STORED = 1
  RT_GAME_VERSION, RT_ARCHIVE, RT_MODPRINT, RT_TIMELINE) = range(1, 27)
 RT_MULTIPLAYER = 27
 RT_MP_SEATS = 28
+RT_CODEC, RT_PHYSICS, RT_AIR = 29, 30, 31   # the unit frame's lanes, physics and aircraft
 (RT_END_REASON, RT_LAST, RT_ITERATIONS, RT_CORRECTIONS, RT_BAD_IDS, RT_RING_HIGH, RT_OFF_THREAD,
  RT_UNCREDITED, RT_UNOBSERVED, RT_GAME_END, RT_SEAT_END) = range(32, 43)
 RT_MP_END = 43
+RT_CODEC_DECLINED, RT_CODEC_MISMATCH = 44, 45   # the writer's stream blocks written as records
 RESULTS = {0: "unknown", 1: "won", 2: "lost"}
 
 END_REASONS = {1: "complete: the level ended", 2: "INCOMPLETE: the ring was full",
@@ -231,43 +239,42 @@ class Unreadable(Exception):
 
 # ---- blocks ----------------------------------------------------------------------------------
 
-def blocks(path, sizes=None, offsets=None):
-    """(kind, first, last, raw payload) for each complete block, and why the reading stopped
-    (None at a clean end of the file); with `sizes`, (kind, first, last, raw, packed) of each
-    block appended to it, and with `offsets` its bytes [start, end) in the file."""
-    with open(path, "rb") as f:
-        data = f.read()
-    if data[:8] != REC_MAGIC:
-        raise Unreadable(f"{path}: not a recording (no {REC_MAGIC!r})")
-    out, at = [], 8
-    while at < len(data):
-        head = data[at:at + 32]
-        if len(head) < 32:
-            return out, f"a block header cut short at byte {at}"
-        magic, kind, flags, first, last, raw, packed, crc_body, crc_head = \
-            struct.unpack("<IHHIIIIII", head)
-        if magic != REC_BLOCK_MAGIC or zlib.crc32(head[:28]) != crc_head:
-            return out, f"a torn block header at byte {at}"
-        body = data[at + 32:at + 32 + packed]
-        if len(body) < packed:
-            return out, f"a block cut short at byte {at} ({len(body)} of {packed} bytes)"
-        if zlib.crc32(body) != crc_body:
-            return out, f"a block whose payload fails its CRC at byte {at}"
-        payload = body if flags & RBF_STORED else zlib.decompress(body)
-        if len(payload) != raw:
-            return out, f"a block at byte {at} that inflates to {len(payload)} bytes, not {raw}"
-        out.append((kind, first, last, payload))
+def _codec():
+    """reccodec.py, imported on the first read of a file's blocks: it needs numpy (and zstandard
+    for a packed block), which the build's bare python3 may lack."""
+    try:
+        import reccodec
+    except ImportError as e:
+        raise Unreadable(f"reading a recording's blocks needs numpy and zstandard ({e.name} is "
+                         f"missing): the shared venv (CLAUDE.md, Python tooling)") from None
+    return reccodec
+
+
+def blocks(path, sizes=None, offsets=None, flags=None, decode=True):
+    """(kind, first, last, payload) for each complete block, a stream block's payload its records,
+    and why the reading stopped (None at a clean end of the file); with `sizes`, (kind, first,
+    last, raw, packed) of each block appended to it (raw the block header's: a sectioned block's
+    container), with `offsets` its bytes [start, end) in the file and with `flags` its flags. With
+    decode=False the stream, snapshot and minimap payloads are None and nothing is decoded."""
+    walk = _codec().iter_blocks(path, decode=decode)
+    out = []
+    while True:
+        try:
+            b = next(walk)
+        except StopIteration as stop:
+            return out, stop.value
+        out.append((b.kind, b.first, b.last, b.payload))
         if sizes is not None:
-            sizes.append((kind, first, last, raw, packed))
+            sizes.append((b.kind, b.first, b.last, b.raw, b.packed))
         if offsets is not None:
-            offsets.append((at, at + 32 + packed))
-        at += 32 + packed
-    return out, None
+            offsets.append((b.offset, b.offset + 32 + b.packed))
+        if flags is not None:
+            flags.append(b.flags)
 
 
 def header_only(path):
-    """A recording's header, read from its first block alone: the rest of the file is neither
-    read nor inflated."""
+    """A recording's header, read from its first block alone, which is always stored: the rest of
+    the file is neither read nor unpacked."""
     with open(path, "rb") as f:
         if f.read(8) != REC_MAGIC:
             raise Unreadable(f"{path}: not a recording (no {REC_MAGIC!r})")
@@ -278,13 +285,13 @@ def header_only(path):
             struct.unpack("<IHHIIIIII", head)
         if magic != REC_BLOCK_MAGIC or zlib.crc32(head[:28]) != crc_head or kind != RB_HEADER:
             raise Unreadable(f"{path}: no header block")
+        if flags != RBF_STORED or raw != packed:
+            raise Unreadable(f"{path}: a header block with flags {flags:#x}, {packed} bytes for "
+                             f"{raw}: a header is always stored")
         body = f.read(packed)
     if len(body) < packed or zlib.crc32(body) != crc_body:
         raise Unreadable(f"{path}: its header block is cut short or fails its CRC")
-    payload = body if flags & RBF_STORED else zlib.decompress(body)
-    if len(payload) != raw:
-        raise Unreadable(f"{path}: its header block inflates to {len(payload)} bytes, not {raw}")
-    return header(payload)
+    return header(body)
 
 
 def records(payload):
@@ -374,7 +381,12 @@ def header(payload):
             ix, n = struct.unpack_from("<HH", b)
             h.setdefault("fields", {})[ix] = [struct.unpack_from("<HHHHBB", b, 4 + 12 * k)
                                               for k in range(n)]
-    if not REC_FORMAT_OLDEST <= (h.get("format") or 0) <= REC_FORMAT:
+        elif tag in (RT_CODEC, RT_PHYSICS, RT_AIR):
+            # kept whole for reccodec.params, which bounds them (the block walk already has)
+            if tag in h.setdefault("codec", {}):
+                raise Unreadable(f"header tag {tag} twice")
+            h["codec"][tag] = bytes(b)
+    if h.get("format") != REC_FORMAT:
         raise Unreadable(f"format {h.get('format')}, this tool reads {REC_FORMAT}")
     if (h.get("mode") == 3) != ("multiplayer" in h) or ("multiplayer" in h) != ("mp_seats" in h):
         raise Unreadable("network mode and contribution roster disagree")
@@ -577,13 +589,11 @@ class World:
 
     def perspective(self, kind, b):
         """THE PERSPECTIVE, as the DLL's reader has it (tagpu_recreader.c, pov_record): a skirmish
-        file's from format 7, RK_POV and RK_CLICK a stream's and RK_POV_AT a snapshot's, a
-        selection's slots inside its seat's block as the player image applied before it names
-        it."""
+        file's, RK_POV and RK_CLICK a stream's and RK_POV_AT a snapshot's, a selection's slots
+        inside its seat's block as the player image applied before it names it."""
         h = self.header
-        if h is not None and (h.get("format", 0) < REC_FORMAT or h.get("mode") == 3):
-            raise Unreadable(f"perspective record kind {kind} outside a skirmish file of format "
-                             f"{REC_FORMAT}")
+        if h is not None and h.get("mode") == 3:
+            raise Unreadable(f"perspective record kind {kind} outside a skirmish file")
         if kind in (RK_POV, RK_POV_AT):
             if (kind == RK_POV_AT) != self.snap:
                 raise Unreadable(f"perspective record kind {kind} in a "
@@ -641,9 +651,9 @@ class World:
             raise Unreadable(f"slot {self.pend[0]}'s order list cut short by another record")
         if kind == RK_EV_NET_CREATE:
             h = self.header
-            if not h or h.get("format") < REC_FORMAT_NET_CREATE or h.get("mode") != 3 or len(b) != 32 or \
+            if not h or h.get("mode") != 3 or len(b) != 32 or \
                     "mp_seats" not in h or "unitdefs" not in h:
-                raise Unreadable("a network create outside a native file of format 6 or later")
+                raise Unreadable("a network create outside a native file")
             unit, unit_type, owner, water = struct.unpack_from("<IHBB", b)
             unfinished, _, reserved = struct.unpack_from("<fHH", b, 24)
             slot = unit - 1
@@ -1356,9 +1366,19 @@ class EventCheck:
 
 # ---- the commands ----------------------------------------------------------------------------
 
+def codec_text(h):
+    """The header's unit frame constants in a line, bounded by reccodec.params."""
+    c = h.get("codec", {})
+    if RT_CODEC not in c or RT_PHYSICS not in c:
+        return "none (no RT_CODEC and RT_PHYSICS): every stream block is records"
+    prm = _codec().params(list(c.items()), h.get("slots") or 0)
+    return (f"{len(prm.lanes)} lanes, gravity {prm.gravity}, sea level {prm.sea}, sight rule "
+            f"{prm.sight}, {len(prm.air)} aircraft types")
+
+
 def cmd_info(path):
-    sizes = []
-    all_blocks, stop = blocks(path, sizes)
+    sizes, flags = [], []
+    all_blocks, stop = blocks(path, sizes, flags=flags)
     segs = segments(all_blocks)
     if not segs:
         raise Unreadable("no header block")
@@ -1403,9 +1423,16 @@ def cmd_info(path):
     size = os.path.getsize(path)
     print(f"  {size} bytes: " + ", ".join(f"{counts[k]} {RB_NAMES.get(k, k)} ({raw[k] >> 10} KB raw)"
                                           for k in sorted(counts)))
-    sraw = sum(r for k, a, b, r, pk in sizes if k == RB_STREAM)
-    spk = sum(pk for k, a, b, r, pk in sizes if k == RB_STREAM)
-    print(f"  the stream: {sraw} bytes raw, {spk} packed")
+    stream = [(s, f) for s, f in zip(sizes, flags) if s[0] == RB_STREAM]
+    srec = sum(len(p) for k, a, b, p in all_blocks if k == RB_STREAM)
+    sraw = sum(s[3] for s, f in stream)
+    spk = sum(s[4] for s, f in stream)
+    print(f"  the stream: {srec} bytes of records, {sraw} as blocks hold them, {spk} packed")
+    print(f"  the unit frame: {codec_text(h)}")
+    nsec = sum(1 for s, f in stream if f & RBF_SECTIONS)
+    print(f"  stream blocks: {len(stream)}, {nsec} sectioned "
+          f"({sum(1 for s, f in stream if f & RBF_FRAME_RESET)} restarting the frame), "
+          f"{len(stream) - nsec} records")
     for k, first, last, r, pk in sizes:
         if k == RB_SNAPSHOT:
             print(f"  snapshot at GameTime {last}: {r} bytes raw, {pk} packed")
@@ -1438,6 +1465,8 @@ def cmd_info(path):
               f"{e.get(RT_OFF_THREAD)} events refused off the game thread, "
               f"{e.get(RT_UNCREDITED)} nano sprays uncredited, "
               f"{e.get(RT_UNOBSERVED)} grid cells changed by no observed writer")
+        print(f"  the writer's unit frame: {e.get(RT_CODEC_DECLINED, 'absent')} blocks declined, "
+              f"{e.get(RT_CODEC_MISMATCH, 'absent')} mismatched")
         if RT_GAME_END in e:
             print(f"  the game's end flags 0x{e[RT_GAME_END]:02x}")
         for seat, res, cmdr, defeat in e["seats"]:
@@ -1482,10 +1511,12 @@ def cmd_info(path):
     return 0
 
 
-def file_segments(path):
-    """The file's segments with their byte ranges, and why the reading stopped."""
+def file_segments(path, decode=False):
+    """The file's segments with their byte ranges, and why the reading stopped. Without `decode`
+    their stream, snapshot and minimap payloads are None, and zstandard is needed only for a
+    multiplayer file's contribution blocks."""
     offsets = []
-    bl, stop = blocks(path, None, offsets)
+    bl, stop = blocks(path, None, offsets, decode=decode)
     return segments(bl, offsets), stop
 
 
@@ -1706,7 +1737,7 @@ def fork_view(a, b, ha, hb):
 def cmd_compare_fork(path, n):
     """Timeline n's first iteration, the world the takeover's rebuild made, against its parent's
     chain at fork_at, through fork_view."""
-    segs, _ = file_segments(path)
+    segs, _ = file_segments(path, decode=True)
     c = chain(segs, n)[-1]
     if not c["id"]:
         raise Unreadable("timeline 0 is the original: it forks from nothing")
@@ -2495,6 +2526,8 @@ def cmd_scan(path, dump):
 
 
 def main(argv):
+    import devpy
+    devpy.ensure()
     timeline = 0
     stock_secondary_cosmetics = "--stock-secondary-cosmetics" in argv
     if stock_secondary_cosmetics:
@@ -2589,10 +2622,13 @@ def main(argv):
             return cmd_compare_counts(argv[2], *argv[3:7], absent or str(
                 Path(__file__).resolve().parents[2] / "tagpu" / "ddraw" / "replay-absent.tsv"), rewind)
         return cmd_compare(argv[2], argv[3:], puppet, timeline)
-    except (Unreadable, OSError, zlib.error, struct.error, KeyError) as e:
+    except (Unreadable, OSError, struct.error, KeyError) as e:
         print(f"tarec: {e}", file=sys.stderr)
         return 2
 
 
 if __name__ == "__main__":
+    # reccodec imports this module as `tarec`: run as a script it is __main__, and a second copy
+    # would raise an Unreadable that main() does not catch
+    sys.modules.setdefault("tarec", sys.modules[__name__])
     sys.exit(main(sys.argv))

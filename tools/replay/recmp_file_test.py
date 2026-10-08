@@ -17,6 +17,7 @@ import sys
 import tempfile
 import zlib
 
+import devpy
 import tarec
 import tareplay
 from recmp_file import History, RECMP_ROOT_CREATE_BEGIN
@@ -44,18 +45,13 @@ def network_create_controls(blocks, output, exe, log, env):
     if observed != [expected]:
         raise RuntimeError("Python network creation arguments/incarnation changed")
 
-    def changed(body, legacy=False, drop=False):
+    def changed(body):
         result = []
         for kind, first, last, raw in blocks:
-            if legacy and kind == tarec.RB_HEADER:
-                raw = b"".join(struct.pack("<HH", tag, len(b)) + b + bytes((-len(b)) % 4)
-                               for tag, b in ((tag, struct.pack("<I", 5) if tag == tarec.RT_FORMAT else b)
-                                              for tag, b in tarec.entries(raw)))
             if kind == tarec.RB_STREAM:
                 raw = b"".join(struct.pack("<HH", rk, len(b)) + b + bytes((-len(b)) % 4)
                                for rk, b in ((rk, body if rk == tarec.RK_EV_NET_CREATE else b)
-                                             for rk, b in tarec.records(raw))
-                               if not (drop and rk == tarec.RK_EV_NET_CREATE))
+                                             for rk, b in tarec.records(raw)))
             result.append((kind, first, last, raw))
         return result
 
@@ -81,24 +77,7 @@ def network_create_controls(blocks, output, exe, log, env):
         path = output / ("network-create-"+name+".imprec")
         path.write_bytes(encoded(altered))
         command(["wine", exe, "world-refuse", "Z:"+str(path).replace("/", "\\")], log, env=env)
-    altered = changed(expected, legacy=True)
-    seg = tarec.segments(altered)[0]
-    try:
-        tarec.stream_to(seg["header"], seg["blocks"])
-    except tarec.Unreadable:
-        pass
-    else:
-        raise RuntimeError("Python accepted format-5 network create")
-    path = output / "network-create-format5.imprec"
-    path.write_bytes(encoded(altered))
-    command(["wine", exe, "world-refuse", "Z:"+str(path).replace("/", "\\")], log, env=env)
-    legacy = changed(expected, legacy=True, drop=True)
-    seg = tarec.segments(legacy)[0]
-    tarec.stream_to(seg["header"], seg["blocks"])
-    path = output / "legacy-format5.imprec"
-    path.write_bytes(encoded(legacy))
-    command(["wine", exe, "read", "Z:"+str(path).replace("/", "\\")], log, env=env)
-    print("network create: exact arguments/token/carried state, 15 primary semantic refusals and legacy format-5 reading PASS", flush=True)
+    print("network create: exact arguments/token/carried state and 14 primary semantic refusals PASS", flush=True)
 
 
 def resealed(blocks):
@@ -442,7 +421,7 @@ def run(output, read_file=None, skirmish_file=None, native_file=None,
             exe = output / "recmp-file-test.exe"
             sources = ("tagpu_recmp", "tagpu_recmp_auth", "tagpu_recmp_record", "tagpu_recmp_stream", "tagpu_recmp_players",
                        "tagpu_recmp_file", "tagpu_recmp_file_state", "tagpu_recmp_history", "tagpu_recmp_units", "tagpu_recmp_named", "tagpu_recmp_roots", "tagpu_recmp_explored", "tagpu_recmp_text", "tagpu_recmp_pov", "tagpu_recmp_orders", "tagpu_recwriter",
-                       "tagpu_recreader", "tagpu_recfile", "lodepng", "crc32")
+                       "tagpu_recreader", "tagpu_recfile", "tagpu_reccodec", "zstd", "crc32")
             command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc", "-O2", "-Wall",
                      "-Wextra", "-Werror", "-std=c99", "-o", exe, HERE / "recmp_file_test.c",
                      *(TREE / f"tagpu/ddraw/src/{s}.c" for s in sources), "-lole32", "-luuid"], log)
@@ -849,6 +828,7 @@ def run(output, read_file=None, skirmish_file=None, native_file=None,
 
 
 def main():
+    devpy.ensure()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     source = parser.add_mutually_exclusive_group()

@@ -45,6 +45,7 @@ ring. Exit 0 when every dump passes.
 import struct
 import sys
 
+import devpy
 import tarec
 
 LIMIT = 20
@@ -208,7 +209,7 @@ def contacts(a, b, scan):
 
 
 def fork(path, n):
-    segs, _ = tarec.file_segments(path)
+    segs, _ = tarec.file_segments(path, decode=True)
     c = tarec.chain(segs, n)[-1]
     if not c["id"]:
         raise tarec.Unreadable("timeline 0 is the original: it forks from nothing")
@@ -347,6 +348,7 @@ def chat(path, spec, dumps):
 
 
 def main(argv):
+    devpy.ensure()
     if len(argv) >= 4 and argv[1] == "--chat":
         return chat(argv[3], argv[2], argv[4:])
     if len(argv) == 4 and argv[1] == "--fork":
