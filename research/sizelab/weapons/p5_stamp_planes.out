@@ -1,0 +1,40 @@
+stamp True, layout planes: 7830 iterations decoded back exactly (126 s)
+MiB, per stream block          raw    writer     zlib9    zstd19     lzma6
+today                       60.321    36.503    21.075    16.776    15.293
+re-encoded                  67.882     3.517     3.425     2.992     3.051
+per 900-tick interval, zstd19: today 11.441 MiB, re-encoded 2.946 MiB
+per 900-tick interval, lzma6: today 10.348 MiB, re-encoded 2.942 MiB
+sections (each deflated alone per block, attribution): raw / writer / zstd19, MiB
+   ctl       0.297    0.116    0.118
+   refs      0.134    0.094    0.097
+   surv     55.592    1.377    1.105
+   new       5.878    1.757    1.613
+   tail      5.981    0.184    0.148
+predictor chosen (column: mode ticks)
+   d 0: prev 7830
+   d 1: phys 7382, lin 351, prev 97
+   d 2: phys 7730, prev 97, lin 3
+   d 3: phys 7253, lin 480, prev 97
+   d 4: lin 5787, prev 2043
+   d 5: lin 5540, prev 2290
+   d 6: lin 5782, prev 2048
+   d 7: prev 7830
+   d 8: lin 7360, prev 470
+   d 9: prev 7830
+   d10: prev 7830
+   d11: prev 7830
+   d12: prev 7830
+   d13: prev 7830
+   d14: prev 7830
+   d15: prev 7830
+   d16: prev 7830
+   d17: prev 7830
+   d18: prev 7830
+   d19: prev 7830
+   d20: prev 7830
+   d21: prev 7830
+   d22: prev 7830
+   d23: prev 7830
+   d24: prev 7830
+   d25: idx25 7711, prev 100, idx25p 19
+   d26: prev 7336, idx26 494

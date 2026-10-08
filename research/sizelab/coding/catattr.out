@@ -1,0 +1,40 @@
+kinds 15 33 41 38
+category               records    header       pad      slot      mask  reserved      head    values   (MiB, records in thousands)
+unit deltas               3018     11.51      0.00      5.76     31.66      8.63      0.00     50.11
+projectiles                661      2.52      0.00      1.25      2.44      1.25      0.00     52.86
+orders                     241      0.92      0.00      0.00      0.00      0.00      1.84     20.39
+cells                      571      2.18      1.49      0.00      0.00      0.00      4.35     14.23
+events                     288      1.10      0.18      0.00      0.00      0.00      0.00      8.40
+other                       53      0.20      0.02      0.01      0.16      0.02      0.00      2.04
+unit images+gone             4      0.02      0.00      0.00      0.00      0.00      0.00      0.66
+iteration marks              8      0.03      0.00      0.00      0.00      0.00      0.00      0.03
+
+today: packed alone (MiB), each less the ticks-only stream
+  unit deltas         deflate2K    46.70  zstd3    38.95  zstd9 chain    33.43  
+  projectiles         deflate2K    36.52  zstd3    18.65  zstd9 chain    12.37  
+  cells               deflate2K     3.53  zstd3     2.78  zstd9 chain     1.61  
+  orders              deflate2K     2.80  zstd3     1.95  zstd9 chain     1.09  
+  events              deflate2K     2.91  zstd3     2.52  zstd9 chain     1.81  
+  unit images+gone    deflate2K     0.07  zstd3     0.06  zstd9 chain     0.05  
+  other               deflate2K     0.92  zstd3     0.87  zstd9 chain     0.66  
+  ticks               deflate2K     0.03  zstd3     0.03  zstd9 chain     0.02  
+
+H3D1: packed alone (MiB), each less the ticks-only stream
+  unit deltas         deflate2K    37.72  zstd3    35.18  zstd9 chain    31.79  
+  projectiles         deflate2K    33.27  zstd3    16.75  zstd9 chain    11.15  
+  cells               deflate2K     3.12  zstd3     2.53  zstd9 chain     1.51  
+  orders              deflate2K     2.75  zstd3     1.93  zstd9 chain     1.07  
+  events              deflate2K     2.87  zstd3     2.53  zstd9 chain     1.81  
+  unit images+gone    deflate2K     0.07  zstd3     0.06  zstd9 chain     0.05  
+  other               deflate2K     0.88  zstd3     0.84  zstd9 chain     0.64  
+  ticks               deflate2K     0.02  zstd3     0.03  zstd9 chain     0.03  
+
+H3D4T1L2: packed alone (MiB), each less the ticks-only stream
+  unit deltas         deflate2K    16.27  zstd3    16.73  zstd9 chain    14.66  
+  projectiles         deflate2K    32.52  zstd3    33.37  zstd9 chain    29.65  
+  cells               deflate2K     3.12  zstd3     2.53  zstd9 chain     1.51  
+  orders              deflate2K     2.75  zstd3     1.93  zstd9 chain     1.07  
+  events              deflate2K     2.87  zstd3     2.53  zstd9 chain     1.81  
+  unit images+gone    deflate2K     0.07  zstd3     0.06  zstd9 chain     0.05  
+  other               deflate2K     0.67  zstd3     0.64  zstd9 chain     0.40  
+  ticks               deflate2K     0.02  zstd3     0.03  zstd9 chain     0.03  

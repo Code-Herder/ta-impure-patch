@@ -1,0 +1,931 @@
+{
+ "file": "$SCRATCH/v6/full/ten.imprec",
+ "bytes": 1435340,
+ "map": "Core Prime Industrial Area",
+ "slots": 15001,
+ "players": 10,
+ "blocks": {
+  "header": {
+   "n": 1,
+   "raw": 5384,
+   "on_disk": 5416
+  },
+  "minimap": {
+   "n": 1,
+   "raw": 63512,
+   "on_disk": 13492
+  },
+  "stream": {
+   "n": 11,
+   "raw": 7187588,
+   "on_disk": 539916
+  },
+  "contributions": {
+   "n": 14,
+   "raw": 3586099,
+   "on_disk": 703927
+  },
+  "snapshot": {
+   "n": 3,
+   "raw": 2675024,
+   "on_disk": 171897
+  },
+  "end": {
+   "n": 1,
+   "raw": 652,
+   "on_disk": 684
+  }
+ },
+ "stream": {
+  "real_packed": 539564,
+  "recompressed": 544446,
+  "sum_alone": 508672,
+  "groups": {
+   "feature grid cells": {
+    "records": 2834,
+    "raw": 5487888,
+    "packed_alone": 261687
+   },
+   "units: deltas": {
+    "records": 6838,
+    "raw": 284576,
+    "packed_alone": 104139
+   },
+   "wrecks and feature heads": {
+    "records": 11170,
+    "raw": 518492,
+    "packed_alone": 59112
+   },
+   "globals": {
+    "records": 2973,
+    "raw": 151856,
+    "packed_alone": 28234
+   },
+   "tables": {
+    "records": 15657,
+    "raw": 272712,
+    "packed_alone": 27444
+   },
+   "explored map": {
+    "records": 243,
+    "raw": 235000,
+    "packed_alone": 7924
+   },
+   "players": {
+    "records": 823,
+    "raw": 33104,
+    "packed_alone": 6634
+   },
+   "iteration marks": {
+    "records": 2973,
+    "raw": 23784,
+    "packed_alone": 5145
+   },
+   "order lists": {
+    "records": 962,
+    "raw": 96024,
+    "packed_alone": 4024
+   },
+   "events": {
+    "records": 6017,
+    "raw": 77572,
+    "packed_alone": 2649
+   },
+   "units: whole images": {
+    "records": 19,
+    "raw": 6384,
+    "packed_alone": 1477
+   },
+   "units: gone": {
+    "records": 15,
+    "raw": 120,
+    "packed_alone": 108
+   },
+   "other": {
+    "records": 8,
+    "raw": 64,
+    "packed_alone": 82
+   },
+   "projectiles": {
+    "records": 1,
+    "raw": 12,
+    "packed_alone": 13
+   }
+  },
+  "kinds": {
+   "cells": {
+    "records": 2834,
+    "raw": 5487888
+   },
+   "wreck": {
+    "records": 8197,
+    "raw": 459032
+   },
+   "unit_delta": {
+    "records": 6838,
+    "raw": 284576
+   },
+   "table_span": {
+    "records": 15627,
+    "raw": 272352
+   },
+   "mapped": {
+    "records": 7,
+    "raw": 208064
+   },
+   "globals_delta": {
+    "records": 2972,
+    "raw": 151540
+   },
+   "orders": {
+    "records": 962,
+    "raw": 96024
+   },
+   "features": {
+    "records": 2973,
+    "raw": 59460
+   },
+   "ev_feature": {
+    "records": 2975,
+    "raw": 35764
+   },
+   "ev_feature_end": {
+    "records": 2975,
+    "raw": 35700
+   },
+   "player_delta": {
+    "records": 813,
+    "raw": 27824
+   },
+   "mapped_runs": {
+    "records": 236,
+    "raw": 26936
+   },
+   "tick": {
+    "records": 2973,
+    "raw": 23784
+   },
+   "unit": {
+    "records": 19,
+    "raw": 6384
+   },
+   "player": {
+    "records": 10,
+    "raw": 5280
+   },
+   "ev_death": {
+    "records": 15,
+    "raw": 5160
+   },
+   "ev_net_create": {
+    "records": 11,
+    "raw": 396
+   },
+   "table_size": {
+    "records": 30,
+    "raw": 360
+   },
+   "globals": {
+    "records": 1,
+    "raw": 316
+   },
+   "ev_state": {
+    "records": 13,
+    "raw": 156
+   },
+   "ev_start": {
+    "records": 4,
+    "raw": 128
+   },
+   "ev_death_end": {
+    "records": 15,
+    "raw": 120
+   },
+   "unit_gone": {
+    "records": 15,
+    "raw": 120
+   },
+   "ev_built": {
+    "records": 7,
+    "raw": 84
+   },
+   "ev_create": {
+    "records": 2,
+    "raw": 64
+   },
+   "controller": {
+    "records": 8,
+    "raw": 64
+   },
+   "proj_head": {
+    "records": 1,
+    "raw": 12
+   }
+  }
+ },
+ "snapshots": {
+  "real_packed": 171801,
+  "recompressed": 176007,
+  "sum_alone": 172072,
+  "groups": {
+   "wrecks and feature heads": {
+    "records": 24579,
+    "raw": 1376316,
+    "packed_alone": 156756
+   },
+   "tables": {
+    "records": 135,
+    "raw": 640812,
+    "packed_alone": 5180
+   },
+   "explored map": {
+    "records": 21,
+    "raw": 624192,
+    "packed_alone": 2958
+   },
+   "players": {
+    "records": 30,
+    "raw": 15840,
+    "packed_alone": 2454
+   },
+   "units: whole images": {
+    "records": 29,
+    "raw": 9744,
+    "packed_alone": 2229
+   },
+   "feature grid cells": {
+    "records": 113,
+    "raw": 6148,
+    "packed_alone": 1650
+   },
+   "globals": {
+    "records": 3,
+    "raw": 948,
+    "packed_alone": 322
+   },
+   "order lists": {
+    "records": 7,
+    "raw": 700,
+    "packed_alone": 292
+   },
+   "other": {
+    "records": 33,
+    "raw": 264,
+    "packed_alone": 144
+   },
+   "iteration marks": {
+    "records": 3,
+    "raw": 24,
+    "packed_alone": 48
+   },
+   "projectiles": {
+    "records": 3,
+    "raw": 36,
+    "packed_alone": 39
+   }
+  },
+  "kinds": {
+   "wreck": {
+    "records": 24576,
+    "raw": 1376256
+   },
+   "table_span": {
+    "records": 48,
+    "raw": 639768
+   },
+   "mapped": {
+    "records": 21,
+    "raw": 624192
+   },
+   "player": {
+    "records": 30,
+    "raw": 15840
+   },
+   "unit": {
+    "records": 29,
+    "raw": 9744
+   },
+   "cells": {
+    "records": 113,
+    "raw": 6148
+   },
+   "table_size": {
+    "records": 87,
+    "raw": 1044
+   },
+   "globals": {
+    "records": 3,
+    "raw": 948
+   },
+   "orders": {
+    "records": 7,
+    "raw": 700
+   },
+   "controller": {
+    "records": 30,
+    "raw": 240
+   },
+   "features": {
+    "records": 3,
+    "raw": 60
+   },
+   "proj_head": {
+    "records": 3,
+    "raw": 36
+   },
+   "tick": {
+    "records": 3,
+    "raw": 24
+   },
+   "viewer": {
+    "records": 3,
+    "raw": 24
+   }
+  }
+ },
+ "unit_deltas": {
+  "records": 6838,
+  "value_bytes": 147816,
+  "overhead_bytes": 136760,
+  "fields": [
+   {
+    "dword": 80,
+    "name": "+0x140 mover",
+    "changes": 5875,
+    "bytes": 23500,
+    "bits": {
+     "p50": 18,
+     "p90": 18,
+     "p99": 19
+    }
+   },
+   {
+    "dword": 26,
+    "name": "+0x068 position",
+    "changes": 5394,
+    "bytes": 21576,
+    "bits": {
+     "p50": 31,
+     "p90": 31,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 28,
+    "name": "+0x070 altitude",
+    "changes": 4677,
+    "bytes": 18708,
+    "bits": {
+     "p50": 31,
+     "p90": 31,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 27,
+    "name": "+0x06C altitude/position",
+    "changes": 4488,
+    "bytes": 17952,
+    "bits": {
+     "p50": 1,
+     "p90": 2,
+     "p99": 3
+    }
+   },
+   {
+    "dword": 25,
+    "name": "+0x064 turn",
+    "changes": 3707,
+    "bytes": 14828,
+    "bits": {
+     "p50": 19,
+     "p90": 28,
+     "p99": 28
+    }
+   },
+   {
+    "dword": 29,
+    "name": "+0x074 footprint x",
+    "changes": 3264,
+    "bytes": 13056,
+    "bits": {
+     "p50": 1,
+     "p90": 3,
+     "p99": 18
+    }
+   },
+   {
+    "dword": 79,
+    "name": "+0x13C mover",
+    "changes": 2463,
+    "bytes": 9852,
+    "bits": {
+     "p50": 17,
+     "p90": 21,
+     "p99": 22
+    }
+   },
+   {
+    "dword": 74,
+    "name": "+0x128 mover",
+    "changes": 1508,
+    "bytes": 6032,
+    "bits": {
+     "p50": 11,
+     "p90": 14,
+     "p99": 15
+    }
+   },
+   {
+    "dword": 72,
+    "name": "+0x120 mover",
+    "changes": 1501,
+    "bytes": 6004,
+    "bits": {
+     "p50": 11,
+     "p90": 14,
+     "p99": 16
+    }
+   },
+   {
+    "dword": 65,
+    "name": "+0x104 build fraction",
+    "changes": 436,
+    "bytes": 1744,
+    "bits": {
+     "p50": 19,
+     "p90": 21,
+     "p99": 31
+    }
+   },
+   {
+    "dword": 66,
+    "name": "+0x108 hp/water",
+    "changes": 433,
+    "bytes": 1732,
+    "bits": {
+     "p50": 2,
+     "p90": 3,
+     "p99": 20
+    }
+   },
+   {
+    "dword": 48,
+    "name": "+0x0C0 ?",
+    "changes": 432,
+    "bytes": 1728,
+    "bits": {
+     "p50": 21,
+     "p90": 25,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 49,
+    "name": "+0x0C4 ?",
+    "changes": 432,
+    "bytes": 1728,
+    "bits": {
+     "p50": 21,
+     "p90": 25,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 54,
+    "name": "+0x0D8 ?",
+    "changes": 432,
+    "bytes": 1728,
+    "bits": {
+     "p50": 22,
+     "p90": 25,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 55,
+    "name": "+0x0DC ?",
+    "changes": 432,
+    "bytes": 1728,
+    "bits": {
+     "p50": 22,
+     "p90": 25,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 44,
+    "name": "+0x0B0 ?",
+    "changes": 430,
+    "bytes": 1720,
+    "bits": {
+     "p50": 2,
+     "p90": 2,
+     "p99": 2
+    }
+   },
+   {
+    "dword": 30,
+    "name": "+0x078 footprint x/footprint z/sight xz",
+    "changes": 361,
+    "bytes": 1444,
+    "bits": {
+     "p50": 2,
+     "p90": 18,
+     "p99": 18
+    }
+   },
+   {
+    "dword": 78,
+    "name": "+0x138 mover",
+    "changes": 222,
+    "bytes": 888,
+    "bits": {
+     "p50": 15,
+     "p90": 16,
+     "p99": 17
+    }
+   },
+   {
+    "dword": 31,
+    "name": "+0x07C footprint w/sight xz",
+    "changes": 104,
+    "bytes": 416,
+    "bits": {
+     "p50": 1,
+     "p90": 2,
+     "p99": 2
+    }
+   },
+   {
+    "dword": 62,
+    "name": "+0x0F8 piece/sight h",
+    "changes": 83,
+    "bytes": 332,
+    "bits": {
+     "p50": 2,
+     "p90": 4,
+     "p99": 5
+    }
+   },
+   {
+    "dword": 68,
+    "name": "+0x110 buildpage/marks/selected/state bits/state byte/yard",
+    "changes": 66,
+    "bytes": 264,
+    "bits": {
+     "p50": 4,
+     "p90": 18,
+     "p99": 20
+    }
+   },
+   {
+    "dword": 32,
+    "name": "+0x080 bucket/footprint h/footprint w/sort bucket",
+    "changes": 58,
+    "bytes": 232,
+    "bits": {
+     "p50": 18,
+     "p90": 24,
+     "p99": 24
+    }
+   },
+   {
+    "dword": 61,
+    "name": "+0x0F4 ?",
+    "changes": 46,
+    "bytes": 184,
+    "bits": {
+     "p50": 29,
+     "p90": 32,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 67,
+    "name": "+0x10C state byte/water/yard",
+    "changes": 29,
+    "bytes": 116,
+    "bits": {
+     "p50": 25,
+     "p90": 26,
+     "p99": 26
+    }
+   },
+   {
+    "dword": 81,
+    "name": "+0x144 spare",
+    "changes": 25,
+    "bytes": 100,
+    "bits": {
+     "p50": 19,
+     "p90": 20,
+     "p99": 20
+    }
+   }
+  ]
+ },
+ "projectile_deltas": {
+  "records": 0,
+  "value_bytes": 0,
+  "overhead_bytes": 0,
+  "fields": []
+ },
+ "globals_deltas": {
+  "records": 2972,
+  "value_bytes": 103988,
+  "fields": [
+   {
+    "dword": 23,
+    "name": "dword 23",
+    "changes": 2972,
+    "bytes": 11888,
+    "bits": {
+     "p50": 15,
+     "p90": 17,
+     "p99": 17
+    }
+   },
+   {
+    "dword": 28,
+    "name": "dword 28",
+    "changes": 2972,
+    "bytes": 11888,
+    "bits": {
+     "p50": 15,
+     "p90": 17,
+     "p99": 17
+    }
+   },
+   {
+    "dword": 33,
+    "name": "dword 33",
+    "changes": 2972,
+    "bytes": 11888,
+    "bits": {
+     "p50": 2,
+     "p90": 2,
+     "p99": 2
+    }
+   },
+   {
+    "dword": 27,
+    "name": "dword 27",
+    "changes": 2637,
+    "bytes": 10548,
+    "bits": {
+     "p50": 14,
+     "p90": 16,
+     "p99": 16
+    }
+   },
+   {
+    "dword": 32,
+    "name": "dword 32",
+    "changes": 2637,
+    "bytes": 10548,
+    "bits": {
+     "p50": 14,
+     "p90": 16,
+     "p99": 16
+    }
+   },
+   {
+    "dword": 26,
+    "name": "dword 26",
+    "changes": 2216,
+    "bytes": 8864,
+    "bits": {
+     "p50": 14,
+     "p90": 15,
+     "p99": 15
+    }
+   },
+   {
+    "dword": 31,
+    "name": "dword 31",
+    "changes": 2216,
+    "bytes": 8864,
+    "bits": {
+     "p50": 14,
+     "p90": 15,
+     "p99": 15
+    }
+   },
+   {
+    "dword": 25,
+    "name": "dword 25",
+    "changes": 1796,
+    "bytes": 7184,
+    "bits": {
+     "p50": 14,
+     "p90": 15,
+     "p99": 15
+    }
+   },
+   {
+    "dword": 30,
+    "name": "dword 30",
+    "changes": 1796,
+    "bytes": 7184,
+    "bits": {
+     "p50": 14,
+     "p90": 15,
+     "p99": 15
+    }
+   },
+   {
+    "dword": 24,
+    "name": "dword 24",
+    "changes": 1376,
+    "bytes": 5504,
+    "bits": {
+     "p50": 14,
+     "p90": 14,
+     "p99": 14
+    }
+   },
+   {
+    "dword": 29,
+    "name": "dword 29",
+    "changes": 1376,
+    "bytes": 5504,
+    "bits": {
+     "p50": 14,
+     "p90": 14,
+     "p99": 14
+    }
+   },
+   {
+    "dword": 77,
+    "name": "dword 77",
+    "changes": 788,
+    "bytes": 3152,
+    "bits": {
+     "p50": 31,
+     "p90": 32,
+     "p99": 32
+    }
+   }
+  ]
+ },
+ "orders": {
+  "lists sent": 962,
+  "bytes": 96024,
+  "new or resized": 6,
+  "same length, changed": 956,
+  "images in them": 956,
+  "images changed": 956
+ },
+ "cells": {
+  "images: records": 2312,
+  "images: cells": 418306,
+  "images: bytes": 5471524,
+  "inside a feature call or death (its input): records": 522,
+  "inside a feature call or death (its input): cells": 666,
+  "inside a feature call or death (its input): bytes": 16364
+ },
+ "units_per_iteration": {
+  "iterations": 2973,
+  "live_max": 17,
+  "live_last": 4,
+  "changed_fraction_mean": 0.21588297499290557,
+  "unit_deltas_mean": 2.300033636057854
+ },
+ "live_curve": [
+  [
+   1,
+   6
+  ],
+  [
+   186,
+   10
+  ],
+  [
+   371,
+   13
+  ],
+  [
+   556,
+   13
+  ],
+  [
+   741,
+   14
+  ],
+  [
+   926,
+   16
+  ],
+  [
+   1111,
+   16
+  ],
+  [
+   1296,
+   16
+  ],
+  [
+   1481,
+   14
+  ],
+  [
+   1666,
+   14
+  ],
+  [
+   1851,
+   9
+  ],
+  [
+   2036,
+   9
+  ],
+  [
+   2221,
+   7
+  ],
+  [
+   2406,
+   7
+  ],
+  [
+   2591,
+   8
+  ],
+  [
+   2776,
+   4
+  ],
+  [
+   2961,
+   4
+  ]
+ ],
+ "timeline": {
+  "0-899": {
+   "iteration marks": 7192,
+   "units: whole images": 5376,
+   "players": 15816,
+   "tables": 272132,
+   "feature grid cells": 5436164,
+   "wrecks and feature heads": 476732,
+   "globals": 55560,
+   "projectiles": 12,
+   "explored map": 218012,
+   "events": 22036,
+   "units: deltas": 70488,
+   "order lists": 8400
+  },
+  "900-1799": {
+   "iteration marks": 7200,
+   "units: deltas": 122008,
+   "order lists": 85024,
+   "wrecks and feature heads": 18280,
+   "globals": 52616,
+   "events": 25212,
+   "players": 10388,
+   "feature grid cells": 22760,
+   "explored map": 7828,
+   "tables": 300,
+   "units: whole images": 672,
+   "units: gone": 72,
+   "other": 32
+  },
+  "1800-2699": {
+   "iteration marks": 7200,
+   "units: deltas": 80824,
+   "feature grid cells": 24388,
+   "wrecks and feature heads": 18000,
+   "globals": 35812,
+   "events": 23748,
+   "players": 5936,
+   "tables": 240,
+   "explored map": 7960,
+   "order lists": 2000,
+   "units: gone": 48,
+   "other": 32,
+   "units: whole images": 336
+  },
+  "2700-3599": {
+   "iteration marks": 2192,
+   "units: deltas": 11256,
+   "wrecks and feature heads": 5480,
+   "globals": 7868,
+   "events": 6576,
+   "players": 964,
+   "feature grid cells": 4576,
+   "explored map": 1200,
+   "order lists": 600,
+   "tables": 40
+  }
+ },
+ "compressors": {
+  "writer (lodepng, 2 KB window)": 539564,
+  "zlib 9, 32 KB window": 392674,
+  "lzma preset 6": 192864,
+  "zstd 3": 353595,
+  "zstd 19": 225396,
+  "zstd 19, the whole stream as one frame": 214435
+ }
+}

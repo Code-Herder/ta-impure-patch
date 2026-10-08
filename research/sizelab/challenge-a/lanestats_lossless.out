@@ -1,0 +1,35 @@
+total deflated (per-column attribution) 4.72 MiB; framing:
+   gaps         raw    1.29 MiB  deflated   0.64 MiB
+   mask dict    raw    2.11 MiB  deflated   0.48 MiB
+   mask ids     raw    1.27 MiB  deflated   0.86 MiB
+lane                           nonzero  varint MiB  deflated MiB
++0x13C/2 mover turn rate         695499        0.78          0.53
++0x072/4 z                       163833        0.34          0.33
++0x06A/4 x                       153746        0.33          0.32
++0x01A/2 w1 aim heading           99633        0.25          0.25
++0x138/4 mover speed             200660        0.45          0.20
++0x01C/2 w1 aim pitch             78914        0.13          0.13
++0x13E/2 mover +0x26              88997        0.09          0.08
++0x0BA/2 +0xBA                    57441        0.14          0.07
++0x01F/1 w1 flags                166229        0.16          0.06
++0x004/2 w1 target lo             51630        0.10          0.06
++0x06E/4 y (altitude)             97694        0.28          0.05
++0x108/2 hp                       40253        0.04          0.04
++0x00C/4 w1 aimed                136826        0.13          0.04
++0x0FA/1 +0xFA damage countdown     45642        0.05          0.04
++0x018/2 w1 reload                38746        0.04          0.04
++0x0B0/4 GameTime deadline        27082        0.04          0.04
++0x08E/4 next                     18919        0.03          0.03
++0x0F0/4 attacker                 21268        0.03          0.03
++0x0C0/4                           7806        0.03          0.03
++0x0C4/4                           7801        0.03          0.03
++0x0D8/4                           7328        0.03          0.03
++0x0DC/4                           7328        0.03          0.03
++0x110/4 state bits               54537        0.06          0.03
++0x0F8/1 sight h                  31858        0.03          0.03
++0x076/2 footprint x              61639        0.06          0.02
++0x006/2 w1 target hi             31465        0.09          0.02
++0x146/1 mover layer              38377        0.04          0.02
++0x078/2 footprint z              34690        0.03          0.02
++0x07A/2 sight x                  34565        0.03          0.02
++0x082/4 sort bucket              11490        0.01          0.02

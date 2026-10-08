@@ -1,0 +1,183 @@
+{
+ "windows": {
+  "0": {
+   "iteration marks": 6646,
+   "units: whole images": 54496,
+   "players": 32029,
+   "tables": 22815,
+   "feature grid cells": 1867293,
+   "wrecks and feature heads": 195710,
+   "globals": 44490,
+   "projectiles": 19749716,
+   "explored map": 278,
+   "perspective": 73,
+   "events": 1431851,
+   "_real": 42333766,
+   "units: deltas": 17982789,
+   "order lists": 526417,
+   "units: gone": 6497
+  },
+  "1": {
+   "iteration marks": 4625,
+   "units: deltas": 8998502,
+   "units: gone": 3046,
+   "players": 21959,
+   "order lists": 614887,
+   "tables": 4759,
+   "feature grid cells": 520864,
+   "wrecks and feature heads": 94457,
+   "globals": 48101,
+   "projectiles": 7147675,
+   "events": 567278,
+   "_real": 18515626,
+   "units: whole images": 1296
+  },
+  "2": {
+   "iteration marks": 3814,
+   "units: deltas": 5811094,
+   "order lists": 417624,
+   "feature grid cells": 350273,
+   "wrecks and feature heads": 56475,
+   "globals": 44773,
+   "projectiles": 3892914,
+   "events": 327697,
+   "units: gone": 1627,
+   "players": 17985,
+   "tables": 2636,
+   "_real": 11421836,
+   "units: whole images": 1047
+  },
+  "3": {
+   "iteration marks": 3102,
+   "units: deltas": 3507746,
+   "order lists": 314095,
+   "feature grid cells": 176267,
+   "wrecks and feature heads": 40888,
+   "globals": 41952,
+   "projectiles": 2825731,
+   "events": 237733,
+   "units: gone": 1172,
+   "players": 16359,
+   "tables": 1977,
+   "_real": 7674120,
+   "units: whole images": 1167
+  },
+  "4": {
+   "iteration marks": 2845,
+   "units: deltas": 3776186,
+   "order lists": 262834,
+   "feature grid cells": 246413,
+   "wrecks and feature heads": 18834,
+   "globals": 40081,
+   "projectiles": 1045823,
+   "events": 116105,
+   "units: gone": 491,
+   "players": 13371,
+   "tables": 999,
+   "_real": 6188101,
+   "units: whole images": 1003
+  },
+  "5": {
+   "iteration marks": 2624,
+   "units: deltas": 2564372,
+   "order lists": 230919,
+   "feature grid cells": 136707,
+   "wrecks and feature heads": 20245,
+   "globals": 39566,
+   "projectiles": 1278229,
+   "events": 124785,
+   "players": 14251,
+   "_real": 4987367,
+   "units: gone": 523,
+   "tables": 1060,
+   "units: whole images": 1038
+  },
+  "6": {
+   "iteration marks": 2651,
+   "units: deltas": 2894532,
+   "order lists": 187902,
+   "feature grid cells": 174004,
+   "wrecks and feature heads": 14099,
+   "globals": 38769,
+   "projectiles": 1076572,
+   "events": 93805,
+   "units: gone": 390,
+   "players": 12775,
+   "tables": 732,
+   "_real": 5080947,
+   "units: whole images": 458
+  },
+  "7": {
+   "iteration marks": 2546,
+   "units: deltas": 2481107,
+   "order lists": 239071,
+   "feature grid cells": 148581,
+   "wrecks and feature heads": 13098,
+   "globals": 36994,
+   "projectiles": 1094494,
+   "events": 98744,
+   "units: gone": 423,
+   "players": 13869,
+   "tables": 880,
+   "units: whole images": 1114,
+   "_real": 4790472
+  },
+  "8": {
+   "iteration marks": 1453,
+   "units: deltas": 937922,
+   "order lists": 136700,
+   "feature grid cells": 64410,
+   "wrecks and feature heads": 5503,
+   "globals": 21471,
+   "projectiles": 164713,
+   "events": 59680,
+   "units: gone": 729,
+   "players": 6572,
+   "tables": 983,
+   "_real": 1756144,
+   "units: whole images": 568
+  }
+ },
+ "snapshots": [
+  [
+   901,
+   1484816,
+   244771
+  ],
+  [
+   1801,
+   1304200,
+   217575
+  ],
+  [
+   2701,
+   1232336,
+   207851
+  ],
+  [
+   3601,
+   1180924,
+   198785
+  ],
+  [
+   4501,
+   1169232,
+   199606
+  ],
+  [
+   5401,
+   1154012,
+   196713
+  ],
+  [
+   6301,
+   1144504,
+   195744
+  ],
+  [
+   7201,
+   1135408,
+   195657
+  ]
+ ]
+}

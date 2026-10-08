@@ -1,0 +1,9 @@
+kinds 15 33 41 38
+H0D0T0L1 N0: 785 blocks, raw 226.3 MiB, encoded in 3s, roundtrip OK
+  deflate2K                    98.42 MiB     48.5 MB/s
+  zstd3 chain wlog24           58.43 MiB    393.5 MB/s
+  zstd3 chain wlog24 ldm       58.27 MiB    299.4 MB/s
+  zstd9 chain wlog24           52.76 MiB     77.7 MB/s
+  brotli q5 w22                60.35 MiB     82.8 MB/s
+  lzma 6                       51.92 MiB      6.1 MB/s
+  lzma 6 lp2pb2                51.58 MiB      6.1 MB/s

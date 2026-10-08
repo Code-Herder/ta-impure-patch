@@ -1,0 +1,47 @@
+unit-ticks with a previous tick: 4,667,412; live unit-ticks 4,669,500; type changes 0
+  x       changed in  1,295,339 unit-ticks   27.8 %
+  alt     changed in     96,672 unit-ticks    2.1 %
+  z       changed in  1,246,721 unit-ticks   26.7 %
+  tx      changed in          0 unit-ticks    0.0 %
+  hd      changed in  1,305,711 unit-ticks   28.0 %
+  tz      changed in          0 unit-ticks    0.0 %
+  vx      changed in    790,949 unit-ticks   16.9 %
+  vy      changed in          0 unit-ticks    0.0 %
+  vz      changed in    772,053 unit-ticks   16.5 %
+  spd     changed in    412,508 unit-ticks    8.8 %
+  w24     changed in    674,583 unit-ticks   14.5 %
+  claim   changed in     88,992 unit-ticks    1.9 %
+  moved   changed in  2,164,214 unit-ticks   46.4 %
+  layer   changed in     38,377 unit-ticks    0.8 %
+  fx      changed in     61,639 unit-ticks    1.3 %
+  fz      changed in     34,690 unit-ticks    0.7 %
+  sx      changed in     34,565 unit-ticks    0.7 %
+  sz      changed in     22,491 unit-ticks    0.5 %
+  sh      changed in     31,822 unit-ticks    0.7 %
+  bucket  changed in     11,490 unit-ticks    0.2 %
+  build   changed in     18,060 unit-ticks    0.4 %
+  hp      changed in     45,645 unit-ticks    1.0 %
+  water   changed in      2,028 unit-ticks    0.0 %
+  state   changed in     54,531 unit-ticks    1.2 %
+  state layer bits 0-1   changed          0
+  state walk class 2-3   changed     49,217
+  state fix-up bit 16    changed          0
+  state contact 8-10,12  changed      2,072
+  state selected         changed          0
+
+horizontal moves: 1,632,660 unit-ticks (35.0 %)
+  step length wu  p10 0.049 p50 1.100 p90 1.720 p99 1.800 max 1.8
+  x fraction nonzero in 92.8 % of live unit-ticks
+  moves with dx == vx(t): 1,143,119 (70.0 %), dz == vz(t): 70.8 %
+  altitude changes 96,672; dy == vy(t) in 0.0 %
+  moved == GameTime: 0; of those with x/z/alt change 0; x/z/alt change without the stamp 1,632,660
+  speed/65536 vs |vxz|: median ratio 1.0000
+
+heading changes 1,305,711: |step| deg p50 0.06 p90 6.04 p99 6.15 max 6.2
+  mover layer 0: 304,856 live unit-ticks
+  mover layer 1: 4,364,644 live unit-ticks
+  mover layer 2: 0 live unit-ticks
+  mover layer 3: 0 live unit-ticks
+  units by type (live at tick 0): [34, 167]
+
+build fraction changes 18,060; hp changes 45,645

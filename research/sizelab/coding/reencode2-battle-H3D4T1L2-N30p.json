@@ -1,0 +1,12 @@
+{
+ "deflate2K": 62114595,
+ "zstd1 alone": 56982156,
+ "zstd3 alone": 54635769,
+ "zstd9 alone": 52290807,
+ "zstd19 alone": 49241705,
+ "zstd1 chain": 56912435,
+ "zstd3 chain": 54215548,
+ "zstd5 chain": 52348578,
+ "zstd9 chain": 50643084,
+ "zstd19 chain": 46824745
+}

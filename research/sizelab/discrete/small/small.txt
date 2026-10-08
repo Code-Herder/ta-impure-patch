@@ -1,0 +1,35 @@
+== kinds.py
+RK_WRECK                    8192     0.44 MB           51 KB         40 KB
+RK_ORDERS                   9353     0.89 MB           36 KB         22 KB
+RK_GLOBALS_DELTA            2040     0.12 MB           26 KB         22 KB
+RK_PLAYER_DELTA              715     0.04 MB           13 KB         12 KB
+RK_TABLE_SPAN               5651     0.11 MB           12 KB          7 KB
+RK_FEATURES                 2041     0.04 MB            5 KB          3 KB
+RK_TICK                     2041     0.02 MB            4 KB          2 KB
+RK_EV_SPRAY                 4515     0.22 MB            3 KB          2 KB
+RK_UNIT                       37     0.01 MB            3 KB          2 KB
+RK_EV_DEATH                   36     0.01 MB            2 KB          2 KB
+RK_EV_REPLY                   71     0.00 MB            1 KB          1 KB
+RK_EV_CREATE                  27     0.00 MB            1 KB          1 KB
+RK_EV_START                   52     0.00 MB            1 KB          1 KB
+RK_PLAYER                     10     0.01 MB            1 KB          0 KB
+RK_EV_FEATURE               2041     0.02 MB            0 KB          0 KB
+RK_EV_FEATURE_END           2041     0.02 MB            0 KB          0 KB
+RK_MAPPED                      7     0.20 MB            0 KB          0 KB
+RK_EV_BUILT                   22     0.00 MB            0 KB          0 KB
+RK_EV_STATE                   23     0.00 MB            0 KB          0 KB
+RK_TABLE_SIZE                 29     0.00 MB            0 KB          0 KB
+RK_POV                         4     0.00 MB            0 KB          0 KB
+RK_EV_DEATH_END               36     0.00 MB            0 KB          0 KB
+RK_UNIT_GONE                  36     0.00 MB            0 KB          0 KB
+RK_GLOBALS                     1     0.00 MB            0 KB          0 KB
+RK_PROJ_HEAD                   1     0.00 MB            0 KB          0 KB
+== units_pass.py
+deaths 36, shots 0, tick-input cells 2614, iterations 2041
+== combined.py
+today, these kinds together per block (first grid apart): raw 2.06 MB, deflate 223 KB, zstd3 165 KB, zstd19 138 KB
+re-encoded together per block: raw 0.74 MB, deflate 101 KB (0.45x), zstd3 97 KB (0.58x), zstd19 79 KB (0.57x)
+== snapshots2.py
+901: today deflate 58 KB zstd19 31 KB | base deflate 6 KB zstd19 4 KB | base+P zstd19 4 KB | gop -  [wrecks equal]
+1801: today deflate 59 KB zstd19 34 KB | base deflate 7 KB zstd19 5 KB | base+P zstd19 5 KB | gop 2 KB  [wrecks equal]
+totals: {'today deflate': '117 KB', 'today zstd19': '65 KB', 'base deflate': '13 KB', 'base zstd19': '9 KB', 'base+P zstd19': '9 KB', 'gop': '6 KB'}

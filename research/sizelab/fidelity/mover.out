@@ -1,0 +1,4 @@
+A: vx vy vz speed w24, each against its previous           units written 1,197,043  raw   7.39  zstd19  4.03 MB  deflate2k  4.22  tail  28.1 MB/h
+B: v against the position step, w24 against the heading step units written 1,304,408  raw   5.40  zstd19  2.07 MB  deflate2k  2.22  tail  13.4 MB/h
+C: speed and w24 only (velocity derived from positions)    units written   952,286  raw   2.90  zstd19  0.66 MB  deflate2k  0.74  tail   4.9 MB/h
+C': speed only                                             units written   412,508  raw   1.81  zstd19  0.32 MB  deflate2k  0.35  tail   2.2 MB/h

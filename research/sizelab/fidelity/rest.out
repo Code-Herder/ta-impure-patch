@@ -1,0 +1,4 @@
+mover: velocity, speed, w24        changes 1,197,043  raw    7.39 MB  deflate2k   4.22  zstd19   4.03  tail  28.1 MB/h
+mover: claim, moved (pred GT-1), layer changes 2,164,214  raw    6.71 MB  deflate2k   0.32  zstd19   0.25  tail   2.0 MB/h
+derived: cells, sight, bucket, water changes   143,412  raw    0.56 MB  deflate2k   0.27  zstd19   0.26  tail   2.1 MB/h
+rest: 62 other dwords              changes 1,362,757  raw    9.08 MB  deflate2k   2.08  zstd19   1.78  tail   9.9 MB/h

@@ -1,0 +1,19 @@
+kinds 15 33 41 38
+H3D4T1L2 N0: 785 blocks, raw 172.1 MiB, encoded in 64s, roundtrip OK
+  deflate2K                    61.96 MiB     50.3 MB/s
+  zstd1 alone                  59.49 MiB    474.0 MB/s
+  zstd3 alone                  58.18 MiB    395.6 MB/s
+  zstd9 alone                  55.93 MiB     81.7 MB/s
+  zstd19 alone                 53.05 MiB      4.6 MB/s
+  zstd1 chain                  58.91 MiB    559.4 MB/s
+  zstd3 chain                  54.52 MiB    288.6 MB/s
+  zstd5 chain                  52.25 MiB    127.4 MB/s
+  zstd9 chain                  50.45 MiB     46.6 MB/s
+  zstd19 chain                 46.69 MiB      2.5 MB/s
+Traceback (most recent call last):
+  File "$SIZELAB/research/coding/reencode2.py", line 83, in <module>
+    chained("zstd3 chain wlog24", 3, 24)
+  File "$SIZELAB/research/coding/reencode2.py", line 64, in chained
+    c = zstandard.ZstdCompressor(level=level, write_content_size=False) if p is None else zstandard.ZstdCompressor(compression_params=p, write_content_size=False)
+                                                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: cannot define compression_params and write_content_size

@@ -1,0 +1,9 @@
+901: today deflate 241 KB zstd19 169 KB | base deflate 192 KB zstd19 141 KB | base+P zstd19 101 KB | gop -  [wrecks equal]
+1801: today deflate 215 KB zstd19 153 KB | base deflate 167 KB zstd19 125 KB | base+P zstd19 81 KB | gop 59 KB  [wrecks equal]
+2701: today deflate 204 KB zstd19 148 KB | base deflate 157 KB zstd19 120 KB | base+P zstd19 72 KB | gop 42 KB  [wrecks equal]
+3601: today deflate 196 KB zstd19 140 KB | base deflate 148 KB zstd19 113 KB | base+P zstd19 65 KB | gop 27 KB  [wrecks equal]
+4501: today deflate 196 KB zstd19 140 KB | base deflate 148 KB zstd19 113 KB | base+P zstd19 65 KB | gop 24 KB  [wrecks equal]
+5401: today deflate 193 KB zstd19 138 KB | base deflate 145 KB zstd19 111 KB | base+P zstd19 63 KB | gop 21 KB  [wrecks equal]
+6301: today deflate 192 KB zstd19 138 KB | base deflate 144 KB zstd19 111 KB | base+P zstd19 61 KB | gop 18 KB  [wrecks equal]
+7201: today deflate 192 KB zstd19 138 KB | base deflate 144 KB zstd19 110 KB | base+P zstd19 61 KB | gop 19 KB  [wrecks equal]
+totals: {'today deflate': '1,629 KB', 'today zstd19': '1,164 KB', 'base deflate': '1,247 KB', 'base zstd19': '943 KB', 'base+P zstd19': '569 KB', 'gop': '351 KB'}

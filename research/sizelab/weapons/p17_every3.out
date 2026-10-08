@@ -1,0 +1,86 @@
+event True, xpos False: 2610 iterations decoded back exactly (73 s)
+MiB, per stream block          raw    writer     zlib9    zstd19     lzma6
+today                       20.157    12.250     8.832     8.045     7.477
+re-encoded                   8.627     2.774     2.756     2.689     2.665
+per 900-tick interval, zstd19: today 4.840 MiB, re-encoded 2.468 MiB
+per 900-tick interval, lzma6: today 4.348 MiB, re-encoded 2.400 MiB
+sections (each deflated alone per block, attribution): raw / writer / zstd19, MiB
+   ctl       0.193    0.141    0.138
+   refs      0.113    0.101    0.103
+   surv      4.917    0.948    0.916
+   new       2.663    1.534    1.517
+   tail      0.742    0.141    0.145
+predictor chosen (column: mode ticks)
+   d 0: prev 2610
+   d 1: phys 1767, lin 565, prev 278
+   d 2: lin 2379, prev 174, phys 57
+   d 3: phys 1914, lin 425, prev 271
+   d 4: prev 1871, lin 738, phys 1
+   d 5: prev 2085, lin 525
+   d 6: prev 1956, lin 654
+   d 7: prev 2568, lin 42
+   d 8: lin 2303, prev 307
+   d 9: prev 2508, lin 102
+   d10: prev 2610
+   d11: prev 2610
+   d12: prev 2610
+   d13: prev 2610
+   d14: prev 2610
+   d15: prev 2610
+   d16: lin 2217, prev 393
+   d17: prev 2428, lin 182
+   d18: lin 2533, prev 77
+   d19: prev 2610
+   d20: prev 2610
+   d21: prev 2610
+   d22: prev 2610
+   d23: prev 2600, lin 10
+   d24: lin 2308, prev 302
+   d25: idx25 2045, idx25p 511, prev 54
+   d26: prev 2546, idx26 64
+parts, the writer's deflate alone per block (attribution), KiB
+   surv d1       200.9
+   surv d3       192.1
+   surv d2       165.8
+   new d1        145.2
+   new d3        142.5
+   new d9        121.8
+   new d7        117.9
+   surv d23      113.3
+   new d13       111.7
+   new d2        105.6
+   new d15       105.1
+   refs          103.2
+   new d4         87.1
+   new d6         85.7
+   new d16        85.4
+   surv d9        78.8
+   new d17        74.6
+   surv d7        73.5
+   surv d25       73.2
+   new d23        71.0
+   new d8         70.2
+   new d5         68.0
+   new d14        63.2
+   ctl            60.1
+   new d20        56.5
+   new d10        55.0
+   new d12        53.9
+   new d25        51.7
+   new d18        50.9
+   new d24        48.5
+   new d19        44.0
+   new d22        39.9
+   new d11        33.9
+   tail d25       27.1
+   surv d4        26.3
+   surv d16       25.0
+   surv d6        25.0
+   surv d5        22.0
+   surv d24       21.7
+   surv d8        20.8
+   tail d17       18.9
+   tail d9        18.8
+   surv d18       18.3
+   tail d1        18.0
+   tail d7        18.0

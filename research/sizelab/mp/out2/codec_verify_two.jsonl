@@ -1,0 +1,6 @@
+{"npz": "today_verify_two_native.npz", "records_writer": 462849, "frame_writer": 82401, "creates_and_gone_writer": 3945, "frame_total": 86346, "iterations": 1578, "mismatched_iterations": 0}
+{"npz": "merged_verify_two_native.npz", "records_writer": 580298, "frame_writer": 89915, "creates_and_gone_writer": 3880, "frame_total": 93795, "iterations": 1578, "mismatched_iterations": 0}
+{"npz": "owner_verify_two_native_4346154.npz", "records_writer": 157539, "frame_writer": 23841, "creates_and_gone_writer": 1090, "frame_total": 24931, "iterations": 1531, "mismatched_iterations": 0}
+{"npz": "owner_verify_two_native_4346155.npz", "records_writer": 222664, "frame_writer": 29402, "creates_and_gone_writer": 1074, "frame_total": 30476, "iterations": 1578, "mismatched_iterations": 0}
+{"npz": "owner_verify_two_native_4346156.npz", "records_writer": 57632, "frame_writer": 10434, "creates_and_gone_writer": 1219, "frame_total": 11653, "iterations": 1531, "mismatched_iterations": 0}
+{"npz": "owner_verify_two_native_4346158.npz", "records_writer": 86789, "frame_writer": 17965, "creates_and_gone_writer": 1062, "frame_total": 19027, "iterations": 1578, "mismatched_iterations": 0}

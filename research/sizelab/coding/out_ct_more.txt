@@ -1,0 +1,4 @@
+lzma 6                   26.56 MiB     7.3 MB/s (64-bit)
+lzma 6 lc0 lp2 pb2       26.34 MiB     7.5 MB/s (64-bit)
+brotli q5 w22            30.43 MiB   107.2 MB/s (64-bit)
+brotli q9 w22            30.08 MiB    24.6 MB/s (64-bit)

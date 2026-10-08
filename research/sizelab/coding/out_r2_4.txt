@@ -1,0 +1,12 @@
+kinds 15 33 41 38
+H3D1T1L2 N0: 785 blocks, raw 193.5 MiB, encoded in 54s, roundtrip OK
+  deflate2K                    63.77 MiB     46.2 MB/s
+  zstd1 alone                  59.53 MiB    636.1 MB/s
+  zstd3 alone                  58.04 MiB    461.6 MB/s
+  zstd9 alone                  55.44 MiB     99.0 MB/s
+  zstd19 alone                 51.97 MiB      4.3 MB/s
+  zstd1 chain                  58.64 MiB    576.8 MB/s
+  zstd3 chain                  54.35 MiB    320.4 MB/s
+  zstd5 chain                  51.97 MiB    137.7 MB/s
+  zstd9 chain                  50.23 MiB     55.5 MB/s
+  zstd19 chain                 45.84 MiB      2.5 MB/s

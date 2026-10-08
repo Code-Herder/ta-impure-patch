@@ -1,0 +1,193 @@
+{
+ "raw": {
+  "iteration marks": {
+   "records": 7830,
+   "header": 31320,
+   "pad": 0,
+   "values": 31320
+  },
+  "unit images+gone": {
+   "records": 4175,
+   "header": 16700,
+   "pad": 0,
+   "slot": 4176,
+   "reserved": 4176,
+   "values": 693212
+  },
+  "other": {
+   "records": 52810,
+   "header": 211240,
+   "pad": 19684,
+   "values": 2134972,
+   "slot": 11092,
+   "mask": 172572,
+   "reserved": 21204
+  },
+  "cells": {
+   "records": 570607,
+   "header": 2282428,
+   "pad": 1559951,
+   "head": 4564856,
+   "values": 14922557
+  },
+  "projectiles": {
+   "records": 660632,
+   "header": 2642528,
+   "pad": 0,
+   "values": 55430360,
+   "slot": 1308578,
+   "reserved": 1308578,
+   "mask": 2561628
+  },
+  "events": {
+   "records": 288343,
+   "header": 1153372,
+   "pad": 183977,
+   "values": 8809431
+  },
+  "unit deltas": {
+   "records": 3017794,
+   "header": 12071176,
+   "pad": 0,
+   "slot": 6035588,
+   "mask": 33195734,
+   "reserved": 9053382,
+   "values": 52547768
+  },
+  "orders": {
+   "records": 240928,
+   "header": 963712,
+   "pad": 0,
+   "head": 1927424,
+   "values": 21383648
+  }
+ },
+ "packed": {
+  "today": {
+   "unit deltas": {
+    "deflate2K": 48969903,
+    "zstd3": 40839442,
+    "zstd9 chain": 35053712
+   },
+   "projectiles": {
+    "deflate2K": 38289483,
+    "zstd3": 19554642,
+    "zstd9 chain": 12968090
+   },
+   "cells": {
+    "deflate2K": 3698325,
+    "zstd3": 2910264,
+    "zstd9 chain": 1688619
+   },
+   "orders": {
+    "deflate2K": 2940081,
+    "zstd3": 2049575,
+    "zstd9 chain": 1143674
+   },
+   "events": {
+    "deflate2K": 3055342,
+    "zstd3": 2646734,
+    "zstd9 chain": 1897620
+   },
+   "unit images+gone": {
+    "deflate2K": 71290,
+    "zstd3": 60181,
+    "zstd9 chain": 50263
+   },
+   "other": {
+    "deflate2K": 963554,
+    "zstd3": 915412,
+    "zstd9 chain": 688021
+   },
+   "ticks": {
+    "deflate2K": 30306,
+    "zstd3": 36677,
+    "zstd9 chain": 25422
+   }
+  },
+  "H3D1": {
+   "unit deltas": {
+    "deflate2K": 39553679,
+    "zstd3": 36886754,
+    "zstd9 chain": 33336279
+   },
+   "projectiles": {
+    "deflate2K": 34890202,
+    "zstd3": 17563705,
+    "zstd9 chain": 11690621
+   },
+   "cells": {
+    "deflate2K": 3269298,
+    "zstd3": 2655929,
+    "zstd9 chain": 1583253
+   },
+   "orders": {
+    "deflate2K": 2881384,
+    "zstd3": 2028140,
+    "zstd9 chain": 1124955
+   },
+   "events": {
+    "deflate2K": 3005380,
+    "zstd3": 2651824,
+    "zstd9 chain": 1902839
+   },
+   "unit images+gone": {
+    "deflate2K": 72056,
+    "zstd3": 58334,
+    "zstd9 chain": 51880
+   },
+   "other": {
+    "deflate2K": 925791,
+    "zstd3": 885084,
+    "zstd9 chain": 667138
+   },
+   "ticks": {
+    "deflate2K": 25844,
+    "zstd3": 34111,
+    "zstd9 chain": 29480
+   }
+  },
+  "H3D4T1L2": {
+   "unit deltas": {
+    "deflate2K": 17061592,
+    "zstd3": 17540693,
+    "zstd9 chain": 15372454
+   },
+   "projectiles": {
+    "deflate2K": 34095964,
+    "zstd3": 34988167,
+    "zstd9 chain": 31090593
+   },
+   "cells": {
+    "deflate2K": 3269298,
+    "zstd3": 2655929,
+    "zstd9 chain": 1583253
+   },
+   "orders": {
+    "deflate2K": 2881384,
+    "zstd3": 2028140,
+    "zstd9 chain": 1124955
+   },
+   "events": {
+    "deflate2K": 3005380,
+    "zstd3": 2651824,
+    "zstd9 chain": 1902839
+   },
+   "unit images+gone": {
+    "deflate2K": 72056,
+    "zstd3": 58334,
+    "zstd9 chain": 51880
+   },
+   "other": {
+    "deflate2K": 705339,
+    "zstd3": 676311,
+    "zstd9 chain": 421323
+   },
+   "ticks": {
+    "deflate2K": 25844,
+    "zstd3": 34111,
+    "zstd9 chain": 29480
+   }
+  }
+ }
+}

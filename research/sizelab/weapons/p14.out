@@ -1,0 +1,17 @@
+weapon kind       shots pos exact % all exact % mean life
+17 flight         31506        93.8        17.4       6.8
+17 template       10622         0.2         0.2       7.9
+89 flight          4688        99.5        14.2       4.0
+55 flight          3875         2.1         2.1      20.7
+56 flight          2431         0.2         0.2      22.2
+122 flight         2143        97.4         0.6      23.7
+121 flight         1795        98.1         2.1      20.2
+all               57072        66.9        11.0       9.5
+linear interpolation between 10 Hz samples of the true position, error (wu):
+   weapon   17:  124680 skipped ticks, p50 0.000 p99 0.000 max 117.00
+   weapon   55:   50878 skipped ticks, p50 0.124 p99 0.124 max 284.70
+   weapon   56:   34382 skipped ticks, p50 0.124 p99 0.124 max 93.52
+   weapon  122:   32532 skipped ticks, p50 0.000 p99 0.124 max 32.42
+   weapon  121:   23034 skipped ticks, p50 0.000 p99 0.000 max 62.38
+   weapon   89:    9728 skipped ticks, p50 0.000 p99 0.000 max 42.67
+   weapon   24:      66 skipped ticks, p50 0.000 p99 0.000 max 0.00

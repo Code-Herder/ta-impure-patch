@@ -1,0 +1,46 @@
+$SCRATCH/chatfix/two/native.imprec: 4,192.5 KiB; actors [(11008519, 1), (11008517, 0), (11008514, 1), (11008515, 0)]; seats [(11008519, 0, 4501, 6000), (11008517, 1, 3001, 4500), (11008514, 2, 1, 1500), (11008515, 3, 1501, 3000)]
+blocks (KiB on disk incl. 32-byte headers):
+  stream          22  raw  13,072.8  disk   2,962.3   70.7 %
+  contributions   17  raw   4,220.5  disk   1,152.4   27.5 %
+  snapshot         1  raw     919.6  disk      65.0    1.6 %
+  minimap          1  raw      62.0  disk       8.3    0.2 %
+  header           1  raw       4.0  disk       4.0    0.1 %
+  end              1  raw       0.5  disk       0.6    0.0 %
+contributions: disk 1,152.4, kinds deflated alone sum 824.5 KiB
+  kind            phase                records  entries       raw      body  env+meta    alone  share
+  units           produced (local)        3028    26832   1,107.4     870.8     236.6    312.4  37.9%
+  units           consumed (remote)       2991    17115     777.1     543.4     233.7    195.5  23.7%
+  seal            consumed (remote)       2985        0     303.2      70.0     233.2     65.2   7.9%
+  seal            produced (local)        3025        0     307.2      70.9     236.3     64.4   7.8%
+  orders          produced (local)        3223        0     574.2     322.4     251.8     50.7   6.1%
+  roots           produced (local)        1520     3894     305.7     186.9     118.8     37.8   4.6%
+  orders          consumed (remote)       2214        0     391.1     218.2     173.0     35.7   4.3%
+  roots           consumed (remote)       1131     2716     221.8     133.5      88.4     29.3   3.6%
+  explored        consumed (remote)        780        0     106.9      45.9      60.9     10.5   1.3%
+  explored        produced (local)         503        0      80.6      41.3      39.3      7.9   1.0%
+  player          consumed (remote)        144        0      20.6       9.4      11.2      7.0   0.9%
+  player          produced (local)         152        0      20.9       9.1      11.9      6.5   0.8%
+  text            consumed (remote)          4        4       0.9       0.5       0.3      0.5   0.1%
+  text            produced (local)           4        4       0.9       0.5       0.3      0.4   0.1%
+  units           proof tail                 2        4       0.3       0.2       0.2      0.2   0.0%
+  roster          consumed (remote)          2        0       0.5       0.3       0.2      0.1   0.0%
+  roster          produced (local)           2        0       0.5       0.3       0.2      0.1   0.0%
+  pov             consumed (remote)          2        0       0.2       0.1       0.2      0.1   0.0%
+  seal            proof tail                 2        0       0.2       0.0       0.2      0.1   0.0%
+  pov             produced (local)           2        0       0.2       0.1       0.2      0.1   0.0%
+  roots: consumed create begin 38 (1.5 KiB), consumed create end 38 (1.5 KiB), consumed death 25 (8.6 KiB), consumed death end 25 (0.4 KiB), consumed named start 1300 (59.2 KiB), consumed reply 508 (12.1 KiB), consumed spray 782 (45.8 KiB), produced create begin 37 (1.4 KiB), produced create end 37 (1.4 KiB), produced death 17 (5.8 KiB), produced death end 17 (0.3 KiB), produced named start 2133 (97.2 KiB), produced reply 633 (15.1 KiB), produced spray 1020 (59.8 KiB)
+  unit entries: {'produced (local)/full': 39, 'produced (local)/words': 85748, 'produced (local)/absent': 3015, 'produced (local)/delta': 23778, 'consumed (remote)/full': 40, 'consumed (remote)/words': 50551, 'consumed (remote)/absent': 3023, 'consumed (remote)/delta': 14052, 'proof tail/delta': 4, 'proof tail/words': 17}
+stream: disk 2,962.3, categories deflated alone sum 2,662.6 KiB
+  projectiles                                                      40350   3,482.5  1,609.3  60.4%
+  cells                                                             4001   6,942.8    501.8  18.8%
+  units local                                                      23834     799.8    275.4  10.3%
+  other shared                                                     29319     854.7    117.1   4.4%
+  units remote                                                      6684     246.0     84.0   3.2%
+  other events                                                      5690     121.3     35.1   1.3%
+  orders local                                                      3150     309.0     21.5   0.8%
+  explored map                                                       214     283.0      7.0   0.3%
+  death events (their 340 bytes)                                      42      14.1      4.5   0.2%
+  players local                                                      152       7.8      3.8   0.1%
+  players remote                                                     164       5.9      1.8   0.1%
+  events playback ignores (state, built, create, net create)          99       2.8      1.0   0.0%
+  players no actor                                                     6       3.1      0.3   0.0%

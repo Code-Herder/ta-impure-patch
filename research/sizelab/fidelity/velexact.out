@@ -1,0 +1,3 @@
+unit-ticks with a velocity or a step: 2,164,214; derived == recorded 1.1 %
+  derived velocity error, wu/tick: p50 0.059 p99 0.900 max 0.94
+  the true velocity at an exact point every 30 ticks: zstd19 0.23 MB for the battle

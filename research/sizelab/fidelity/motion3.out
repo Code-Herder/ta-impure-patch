@@ -1,0 +1,14 @@
+30 Hz exact                                    err p50 0.00 p99 0.00 max 0.00 | jitter p50 0.000 p90 0.000 p99 0.000 max 0.00 | hd jitter p99 0.00 | cell differs 0.00% | zstd 3.52 MB (motion.out)
+30 Hz whole wu trunc, hd u8                    err p50 0.82 p99 1.38 max 1.41 | jitter p50 0.253 p90 0.801 p99 1.096 max 1.41 | hd jitter p99 1.29 | cell differs 0.00% | zstd 1.09 MB (motion2.out)
+30 Hz 1/16 wu                                  err p50 0.02 p99 0.04 max 0.04 | jitter p50 0.026 p90 0.050 p99 0.064 max 0.09 | hd jitter p99 0.00 | cell differs 14.93% | zstd 1.90 MB (motion.out)
+10 Hz whole wu trunc, hd u8                    err p50 0.79 p99 1.38 max 2.38 | jitter p50 0.142 p90 0.298 p99 0.619 max 1.47 | hd jitter p99 3.65 | cell differs 1.28% | zstd 0.62 MB (motion2.out)
+10 Hz 1/16 wu                                  err p50 0.02 p99 0.49 max 1.22 | jitter p50 0.013 p90 0.117 p99 0.490 max 1.21 | hd jitter p99 3.66 | cell differs 14.35% | zstd 1.15 MB (motion.out)
+10 Hz 16.16                                    err p50 0.00 p99 0.48 max 1.20 | jitter p50 0.000 p90 0.116 p99 0.490 max 1.20 | hd jitter p99 3.66 | cell differs 0.60% | zstd 2.08 MB (motion.out)
+tol 0.25 wu 1 deg, 1/16                        err p50 0.05 p99 0.24 max 0.25 | jitter p50 0.011 p90 0.143 p99 0.200 max 0.33 | hd jitter p99 0.48 | cell differs 13.66% | zstd 1.45 MB
+tol 0.25 wu 1 deg, 1/16, derived 2-sided       err p50 0.03 p99 0.24 max 0.25 | jitter p50 0.012 p90 0.130 p99 0.196 max 0.29 | hd jitter p99 0.48 | cell differs 13.65% | zstd 1.94 MB
+tol 0.5 wu 1 deg, 1/16, derived 2-sided        err p50 0.03 p99 0.48 max 0.50 | jitter p50 0.016 p90 0.162 p99 0.309 max 0.53 | hd jitter p99 0.48 | cell differs 12.94% | zstd 1.84 MB
+tol 1 wu 2 deg, trunc, derived 2-sided         err p50 0.76 p99 1.37 max 1.41 | jitter p50 0.111 p90 0.418 p99 0.900 max 1.70 | hd jitter p99 1.39 | cell differs 0.00% | zstd 1.62 MB
+30 Hz x, z           alone: zstd 2.60 MB, deflate2k 2.78
+30 Hz altitude       alone: zstd 0.14 MB, deflate2k 0.15
+30 Hz heading u16    alone: zstd 0.79 MB, deflate2k 0.85
+30 Hz heading u8     alone: zstd 0.34 MB, deflate2k 0.36

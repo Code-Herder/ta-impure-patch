@@ -1,0 +1,12 @@
+kinds 15 33 41 38
+H3D4T0L2 N30 persist: 262 blocks, raw 167.1 MiB, encoded in 37s, roundtrip OK
+  deflate2K                    58.84 MiB     56.7 MB/s
+  zstd1 alone                  54.42 MiB    718.5 MB/s
+  zstd3 alone                  51.49 MiB    431.5 MB/s
+  zstd9 alone                  49.07 MiB     94.3 MB/s
+  zstd19 alone                 42.63 MiB      5.7 MB/s
+  zstd1 chain                  54.20 MiB    671.6 MB/s
+  zstd3 chain                  51.27 MiB    351.0 MB/s
+  zstd5 chain                  48.94 MiB    177.8 MB/s
+  zstd9 chain                  47.30 MiB     83.9 MB/s
+  zstd19 chain                 40.19 MiB      4.8 MB/s

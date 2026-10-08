@@ -1,0 +1,12 @@
+kinds 15 33 41 38
+H3D4T1L2 N300 persist: 28 blocks, raw 167.1 MiB, encoded in 51s, roundtrip OK
+  deflate2K                    57.96 MiB     53.0 MB/s
+  zstd1 alone                  51.76 MiB    653.8 MB/s
+  zstd3 alone                  49.05 MiB    403.5 MB/s
+  zstd9 alone                  46.32 MiB     98.3 MB/s
+  zstd19 alone                 43.22 MiB      4.7 MB/s
+  zstd1 chain                  51.76 MiB    518.0 MB/s
+  zstd3 chain                  49.23 MiB    283.0 MB/s
+  zstd5 chain                  47.48 MiB    149.5 MB/s
+  zstd9 chain                  46.35 MiB     62.9 MB/s
+  zstd19 chain                 43.04 MiB      2.8 MB/s
