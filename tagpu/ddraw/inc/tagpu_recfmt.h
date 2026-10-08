@@ -35,6 +35,7 @@
 #include <stdint.h>
 #include "tagpu_replay_globals.h"
 #include "tagpu_recpov.h"
+#include "tagpu_reclanes.h"
 
 /* 7 adds the perspective records (RK_POV to RK_POV_AT); 6 the network create (RK_EV_NET_CREATE).
    A reader takes every format from REC_FORMAT_OLDEST on: each added kinds and changed none. */
@@ -113,6 +114,7 @@ static __inline int rec_format_supported(unsigned format)
 #define REC_MAPPED_BYTES(w, h) (((w) * (h) * 2u) >> 2)
 
 _Static_assert(REC_UNIT_IMAGE == ((REC_MOVER_AT + REC_MOVER_BYTES + 3) & ~3), "the unit image");
+_Static_assert(REC_LANES_IMAGE == REC_UNIT_IMAGE, "replay-lanes.tsv tiles the unit image");
 _Static_assert(REC_PLAYER_IMAGE == REC_INFO_AT + ((REC_INFO_BYTES + 3) & ~3), "the player image");
 _Static_assert(REC_INFO_AT == ((REC_PLAYER_BYTES + 3) & ~3), "PlayerInfo at a dword");
 _Static_assert(REC_ORDER_IMAGE == ((REC_ORDER_BYTES + 3) & ~3), "the order image");

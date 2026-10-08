@@ -142,12 +142,13 @@ spirv:
 log-check:
 	../../tools/log-check.sh .
 
-# THE REPLAY LAYOUT AND GLOBALS (tools/replay-layout-gen.py, tools/replay-globals-gen.py):
-# replay-layout.tsv lists the bytes of the engine records the demo recorder does not record as
-# values, replay-globals.tsv the fields of the main block and .data it records, and
-# inc/tagpu_replay_layout.h and inc/tagpu_replay_globals.h are generated from them and committed.
-# The build re-derives each header and fails when it and its file disagree, so a loosening is
-# always a visible diff of a file. Same placement as the rules above.
+# THE REPLAY LAYOUT, GLOBALS AND LANES (tools/replay-layout-gen.py, tools/replay-globals-gen.py,
+# tools/replay-lanes-gen.py): replay-layout.tsv lists the bytes of the engine records the demo
+# recorder does not record as values, replay-globals.tsv the fields of the main block and .data it
+# records, replay-lanes.tsv how the unit codec cuts a unit image into lanes, and
+# inc/tagpu_replay_layout.h, inc/tagpu_replay_globals.h and inc/tagpu_reclanes.h are generated from
+# them and committed. The build re-derives each header and fails when it and its file disagree, so
+# a loosening is always a visible diff of a file. Same placement as the rules above.
 replay-layout:
 	../../tools/replay-layout-check.sh .
 
