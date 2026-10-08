@@ -11,6 +11,8 @@ that scales with the screen, in a browser prototype. The owner chose:
 - **The buttons:** warm steel.
 - **The timeline fill:** green, from TA's green ramp, repeated along the groove rather than
     stretched.
+- **The team header:** not picked yet. Seven variants are in the prototype (*The exploration*,
+    step 10).
 
 Nothing of it is drawn by the DLL yet; *Gaps* at the end says what is missing.
 
@@ -248,6 +250,9 @@ The tools need Python 3 with numpy, scipy and Pillow (the shared venv,
 - `ZONES`: each recess as `(x, y, w, h)` in units.
 - `LEGEND`: what goes in each recess, printed under the part.
 - `XB` / `YB`: for each stretch band, the recesses it must run through.
+- `TEXT`, optional: each **text zone**, where text is written on the plate itself rather than in a
+    recess. The whitebox outlines it, and `gridslice.py` places it from the whitebox (*Text
+    zones*).
 
 ```
 .venv-undither/bin/python tools/hudart/whitebox.py row  wb_row       # -> wb_row.png, wb_row.json
@@ -261,6 +266,7 @@ The tools need Python 3 with numpy, scipy and Pillow (the shared venv,
 | `window` | Stats window | 428 × 272 | title, close, tray_eco, tray_army, chart, legend, foot | x: title, both trays, chart, foot. y: chart and legend |
 | `transport` | Transport plate | 284 × 46 | rew, play, fwd, speed, bookmark, uiscale, leave | x: speed; uiscale. y: every bay |
 | `timeline` | Timeline housing | 420 × 46 | markers, track, time | x: markers and track. y: time with markers; time with track |
+| `head_plate` | Team header as a solid plate | 250 × 23 | sum, m_inc, e_inc; the title is a text zone | x: title; both incomes. y: the metal line; the energy line |
 
 **The separate parts** (buttons, strips, scroll parts, timeline fill, playhead, marker badge) and
 the icons are cells of a **parts sheet**. They are defined in `specs/parts_look.py` (15 parts and 23
@@ -354,6 +360,7 @@ $PY $H/pack.py kit/V1 V1.json index.html V1
 A part is filed as `<part>@<look>`. The page resolves a name in this order, taking the first that
 exists:
 
+1. `<part>@h<n>`: the team header variant n (only `head_one` has them);
 1. `<part>@c<n>`: the button set n, under look C (`@c3` is warm steel);
 2. `<part>@<look>`: `@a` or `@c`;
 3. `<part>@gm`: the shared icons;
@@ -426,6 +433,11 @@ design height is then **taken from the painting**:
 **The recesses.**
 
 1. **The dark mask.** Otsu's split of the part's brightness separates recess from plate.
+    - **A dark plate** lands on the dark side with its recesses. The cutter catches this when
+      the dark side covers more than the recesses' share of the whitebox plus 0.2, and then
+      splits the dark side again, separating near-black recess from dark paint.
+    - A light plate never triggers it: every earlier one-piece painting re-cut identically
+      (MEASURED, 16 parts).
 2. **Regions.** The dark mask is **eroded by one HUD unit**, so grime or a shadow along a rim
     cannot join two recesses into one region.
 3. **One-to-one matching.** Each whitebox recess is matched to **one** region by the Hungarian
@@ -477,6 +489,20 @@ within 0.33 units.
     from widened cells grabbed pieces of the neighbouring icon (map plus camera, 2026-10-07).
 - **`ICON_DIL`.** Use about 25 for an icon made of separate strokes, like the four corner brackets
     of UI scale.
+
+### Text zones
+
+A part may carry text on its plate rather than in a recess: the solid-plate team header writes its
+title on the paint.
+
+- **The spec** lists the area under `TEXT`.
+- **The whitebox** outlines it in light grey. The prompt calls the outline a marker that is never
+  painted.
+- **`gridslice.py`** puts it into the part's `wells` at its whitebox place, scaled to the painting's
+  height, and lists it under `text`. Nothing is measured there: the area is plain plate, so a few
+  tenths of a unit off cost nothing.
+- **The page** writes text in a text zone light (`#ece6c0`) with a near-black outline, since it sits
+  on paint rather than in a near-black well.
 
 ### Tiled fills (`tile.py`)
 
@@ -727,6 +753,51 @@ Print the generated image path and stop.
 
 Codex returned all four strips on the first try, even along their length.
 
+### The team header
+
+The first round kept the header's layout:
+
+```
+Next: the TEAM HEADER only. Today (<column capture>; its painting: <painted_head.png>) it is painted
+exactly like the player rows under it, the same light steel, frame and recesses, so it blends into
+the list. The owner wants it EASY TO SEE as the start of a team: a section header, not one more row.
+Paint FOUR variations. Each is one image following the whitebox <wb_head.png> exactly: <the size,
+aspect and frame thicknesses in pixels, as in "A one-piece part">. Keep the HUD's distressed wear and
+no cyan, teal or blue.
+1. DARK GUNMETAL: the plate in the dark gunmetal of TA's skirmish player table (#26241f to #434241),
+its bevels and edges worn bright (#9fa1a0 to #c9cdcd) ...
+2. OLIVE DRAB: the plate painted in chipped military olive-drab enamel from TA's palette (highlight
+#93936f, body #636343 to #535333, shadow #434323 to #333317), the paint worn through to bare light
+steel along the edges and around the screws ...
+3. TITLE BAR: the same light steel as the rows, but a different silhouette: the four corners cut at
+45 degrees instead of screws, a thicker rolled outer frame with a deeper shadow under it ...
+4. GREEN-LIT EDGE: the same light steel plate as the rows, with a thin LIT strip in the timeline's
+green running the whole width inside its bottom frame, under the recesses, like a glowing underline.
+```
+
+The second round made it a solid plate, on the `head_plate` whitebox:
+
+```
+Next round: the header as a SOLID PLATE, so it reads as a field of paint where a row is a frame
+around dark recesses. Paint THREE images, each following the whitebox <wb_headplate.png> exactly:
+<size and aspect>; only THREE recesses (1 unit sum, 2 metal income, 3 energy income); area 4 is
+where the game WRITES the team title directly on the plate: paint it as plain plate, NO recess, NO
+border, NO panel (its light outline in the whitebox is only a marker, never paint it). <frame
+thicknesses in pixels>.
+5. OLIVE PLATE: the whole plate chipped military olive-drab enamel from TA's palette (<the olive
+ramp>), a broad even field across area 4 so light text reads on it, the paint worn through to bare
+light steel along the outer edges and around the four corner screws.
+6. DARK PLATE: the whole plate dark gunmetal like TA's skirmish player table (#26241f to #434241), a
+broad even field across area 4, its outer bevel worn bright (#9fa1a0 to #c9cdcd), round slotted
+screws at the four outer corners.
+7. DARK PLATE WITH GREEN EDGE: exactly 6, plus a thin LIT strip in the timeline's green running the
+whole width inside the bottom frame, under the recesses, like a glowing underline.
+```
+
+**Where the headers came back.** The first round came back 29.4 to 30.0 units tall for 23,
+like today's header. The second came back 21.9 to 24.6 units tall. Codex painted area 4 as plain
+plate, without copying its marker outline.
+
 ### The proportions repaint
 
 Send this when a painting came back with frames too thick:
@@ -826,6 +897,17 @@ artifact.
 9. **The timeline fill** (2026-10-07). The owner asked for a fill colour that is more distinct
     than the khaki, and for a fill that repeats instead of stretching. Four colours from TA's
     palette were painted as long strips and made to tile. **The owner picked green.**
+10. **The team header** (2026-10-07). It was "hard to see" and "blends in too much" with the
+    player rows. Two rounds were painted:
+    - **1 to 4 keep the row's layout** and change the plate: dark gunmetal, olive drab, a title
+      bar with cut corners, a green-lit edge. They help only a little, because a header, like a
+      row, is mostly near-black recesses inside a thin frame.
+    - **5 to 7 are solid plates:** olive, dark, and dark with the green edge. The title is
+      written on the paint (`head_plate`), so the header is a field of colour where every row
+      is a frame around dark recesses.
+
+    **The pick is pending.** The lesson holds for any part that has to stand out from its
+    neighbours: change the part's pattern of light and dark, not only the colour of its frame.
 
 [![The four distressed player cards](assets/hud-art/cards.jpg)](assets/hud-art/cards.jpg)
 
@@ -849,6 +931,11 @@ held, stats on, UNITS and PLAYERS selected, and a row's JUMP held. Set 3, warm s
 
 *Step 9: the timeline at 4K, HUD 150. First the khaki fill, one painting stretched over the played
 part; then the four tiled colours. Green was picked.*
+
+[![The team header in eight versions](assets/hud-art/headers.jpg)](assets/hud-art/headers.jpg)
+
+*Step 10: the player column at 4K, HUD 150, with the current header, then variants 1 to 4
+(top row, from the left) and 5 to 7 (bottom row).*
 
 ## Gaps
 

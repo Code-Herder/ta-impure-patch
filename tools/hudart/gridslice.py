@@ -35,9 +35,15 @@ Image.fromarray(np.dstack([rgb, al * 255]).clip(0, 255).astype(np.uint8), 'RGBA'
 # recesses: darker than the plate around them; each is found from its whitebox spot outward
 L = rgb.mean(2)
 # Otsu's split of the piece's brightness: the recesses on one side, the plate on the other
-hist, edges = np.histogram(L[al > .9], bins=256, range=(0, 256)); c = (edges[:-1] + edges[1:]) / 2
-w0 = np.cumsum(hist); w1 = w0[-1] - w0; m0 = np.cumsum(hist * c) / np.maximum(w0, 1); m1 = (np.sum(hist * c) - np.cumsum(hist * c)) / np.maximum(w1, 1)
-thr = c[int(np.argmax(w0 * w1 * (m0 - m1) ** 2))]
+def otsu(v):
+    hist, edges = np.histogram(v, bins=256, range=(0, 256)); c = (edges[:-1] + edges[1:]) / 2
+    w0 = np.cumsum(hist); w1 = w0[-1] - w0; m0 = np.cumsum(hist * c) / np.maximum(w0, 1); m1 = (np.sum(hist * c) - np.cumsum(hist * c)) / np.maximum(w1, 1)
+    return c[int(np.argmax(w0 * w1 * (m0 - m1) ** 2))]
+thr = otsu(L[al > .9])
+# a dark plate lands on the dark side with its recesses: the split then holds far more than the recesses' share
+# of the whitebox, and the dark side is split again, near-black recess from dark paint
+share = sum(w * h for _, _, w, h in Z.values()) / (DW * DH)
+if (L[al > .9] < thr).mean() > share + .2: thr = otsu(L[(al > .9) & (L < thr)])
 Lr, Lp = np.median(L[(L < thr) & (al > .9)]), np.median(L[(L >= thr) & (al > .9)])
 dark = ndimage.median_filter(L < thr, size=3)
 def extent(prof, c):
@@ -74,6 +80,10 @@ for zi, ri in zip(zi_, ri_):
 for k in keys:
     if k not in wells: print(f'  {k}: no dark region left to match')
 wells = {k: wells[k] for k in keys if k in wells}
+# a text zone is plain plate the text is written on: nothing to measure, so it keeps its whitebox place, scaled
+# to the painting's height like the recesses were before matching
+TX = {k: [x, round(y * fy_, 2), w, round(h * fy_, 2)] for k, (x, y, w, h) in wb.get('text', {}).items()}
+wells.update(TX)
 
 def mid(lo, hi, f=.3): return [round(lo + (hi - lo) * f, 2), round(hi - (hi - lo) * f, 2)]
 def span(*ks, ax=0):
@@ -88,8 +98,8 @@ def plain(bands, ax):
         res.append(round(float(np.abs(A - np.median(A, axis=0)).mean()), 1))
     return res
 kp = os.path.join(out, 'kit.json'); kit = json.load(open(kp)) if os.path.exists(kp) else {}
-kit[part] = {'w': int(pw), 'h': int(ph), 'scale': round(float(sx), 3), 'grid': True, 'design': [DW, round(float(DHp), 2)], 'wells': wells, 'xs': xb, 'ys': yb}
+kit[part] = {'w': int(pw), 'h': int(ph), 'scale': round(float(sx), 3), 'grid': True, 'design': [DW, round(float(DHp), 2)], 'wells': wells, 'xs': xb, 'ys': yb, **({'text': sorted(TX)} if TX else {})}
 json.dump(kit, open(kp, 'w'), indent=1)
 print(f'{part}: {pw}x{ph} px, {sx:.2f} px/unit, design {DW} x {DHp:.2f}, plate L {Lp:.0f}, recess L {Lr:.0f}')
-for k, v in wells.items(): print(f'  {k:8s} measured {v}  whitebox {Z[k]}')
+for k, v in wells.items(): print(f'  {k:8s} ' + (f'measured {v}  whitebox {Z[k]}' if k in Z else f'text zone {v}, from the whitebox'))
 print('  x bands', xb, 'stray', plain(xb, 0)); print('  y bands', yb, 'stray', plain(yb, 1))

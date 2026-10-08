@@ -7,7 +7,7 @@ with lossless alpha, because the distressed paintings are noise PNG cannot compr
 holds at most 16 MB (measured: 25 MB as PNG, 5.3 MB this way, the rendered HUD within 1/255 on average)."""
 import base64, io, json, os, re, sys
 from PIL import Image
-KEYS = ('w', 'h', 'scale', 'slice', 'fixed', 'core', 'grid', 'tile', 'design', 'wells', 'xs', 'ys')
+KEYS = ('w', 'h', 'scale', 'slice', 'fixed', 'core', 'grid', 'tile', 'design', 'wells', 'xs', 'ys', 'text')
 
 def uri(path):
     raw = open(path, 'rb').read()
