@@ -362,10 +362,10 @@ because the launcher replaces it with right-button orders.
 
 | Fixture | Input behavior exercised | Replay checks |
 |---|---|---|
-| `resource-mex`, `resource-classic`, `stock-resource-mex` | Manual mex/Alt, manual/Quick center agreement, partial-target refusal at the snap boundary, independent toggle, both mouse layouts, plain repeat no-op, selected-only Shift cancellation across variant changes, preceding Move preserved, requeue | L/P/R/Q |
-| `resource-upgrade`, `resource-queued-upgrade` | Own mex→Moho reclaim/build, plain replacement or Shift after Move, mixed helpers, persistent Guard dedup, combat unaffected; queued-pair cancellation/requeue preserves Move and Guards | L/P/R/Q |
+| `resource-mex`, `resource-classic`, `stock-resource-mex` | Manual mex/Alt, manual/Quick center agreement, partial-target refusal at the snap boundary, independent toggle, both mouse layouts, plain repeat no-op, selected-only Shift cancellation across variant changes, preceding Guard preserved, requeue | L/P/R/Q |
+| `resource-upgrade`, `resource-queued-upgrade` | Own mex→Moho reclaim/build, plain replacement or Shift after a Guard, mixed helpers, persistent Guard dedup, combat unaffected; queued-pair cancellation/requeue preserves the preceding and helper Guards | L/P/R/Q |
 | `resource-core-upgrade` | Native save/load preflight with all ten slots active; installed Comet Catcher, native CORACK→CORMOHO contextual click, reclaim/build pair, stance, progress and completed Moho at tick 7800 | Native loader coverage + L/P/R/Q; last comparison after completion |
-| `resource-plain`, `resource-uniform`, `resource-mixed` | Background/above-background uniform metal and rich patches; manual geo/Alt, Quick geo cancellation/requeue preserving Move | L/P/R/Q |
+| `resource-plain`, `resource-uniform`, `resource-mixed` | Background/above-background uniform metal and rich patches; manual geo/Alt, Quick geo cancellation/requeue preserving a preceding Guard | L/P/R/Q |
 | `resource-geo-upgrade` | Stronger private geo variant on metal ground, queued reclaim/build, plain repeat no-op, pair cancellation/requeue, persistent helper Guard | L/P/R/Q |
 | `resource-nearby` | Two adjacent one-cell vents remain distinct; Shift appends both, cancels only the clicked plan, preserves a preceding persistent Guard and requeues | L/P/R/Q |
 | `resource-locked`, `resource-inherit` | General locks, exact-version inheritance/clamping, effective controls and policy frozen despite edits during the match | L/P/R/Q |
@@ -373,6 +373,15 @@ because the launcher replaces it with right-button orders.
 | `resource-nozoom` (stock limits) | Manual/Alt and Quick Build when zoom and widening are disabled | L/P/R/Q |
 | `resource-refusals` | Reclaim-ineligible constructor, Guard-ineligible helper retaining its queue, eligible primary and helper fallback | Native catalogue preflight + L/P/R/Q |
 | `resource-frontend` | Untouched/touched Visuals Undo preserves a raw radius above the current cap; raising the cap recovers it with packets disabled | Frontend preflight + L/P/R/Q mex |
+
+A queue is read in one consistent piece: each round of `Check.chain` reads the unit's head and
+every node found so far in one peek, which the DLL evaluates in one game-thread call, and the
+chain is taken only from a round that links the head to its end. A preceding order that a
+comparison keeps is a Guard of an owned unit, read after its first step: unlike a Move it never
+completes on its own, and its compared fields are fixed from that step on
+([the engine map](../exe-reverse-engineering.md#the-ground-guards-node-and-what-the-order-dispatch-does-with-a-handlers-result-disassembled-2026-10-09)).
+`resource-refusals` keeps a Move for its Guard-ineligible constructor and holds the world
+paused from that order to the comparison, since the click issues every order at once.
 
 L records real input and simulation; P plays it on puppet seats; R restores in place at three
 sampled ticks, compares before/after state and continues; Q seeks from a fresh process. The

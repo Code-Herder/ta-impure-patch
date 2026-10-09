@@ -18154,6 +18154,41 @@ all G-yard cells. Candidate and queued footprints must name the same anchor; tou
 anchors is ambiguous and does not permit cancellation. The generated adjacent-one-cell fixture
 exercises the distinction that a +/-16-world-unit comparison cannot establish.
 
+#### The ground Guard's node, and what the order dispatch does with a handler's result [DISASSEMBLED 2026-10-09]
+
+`tools/resource_regression.py` compares a constructor's queue before a plan and after its
+cancellation, with a Guard as the preceding order because a Guard does not finish on its own.
+What that rests on:
+
+- **`0x406300` Follow_Ground**, the handler of order type `0x12` ("Guarding"; record `0x4FC733`;
+  `tacli order guard` on a ground unit), `stdcall(unit, order, events)`, `ret 0xC`. Its exits
+  before the state switch: target `+0x16` NULL → 5 (`0x406312`); the guarder's `+0x86` nonzero →
+  7 (`0x40632F`); the target definition's `+0x241` bit 11 → 8 (`0x406352`). The state byte `+0x5`
+  selects state 0 (`0x406705`) or 1 (`0x406381`); any other state returns 7.
+- **State 0** (`0x406705..0x40677D`) writes `+0x36` = (guarder `+0x7E` + target `+0x7E` + 2) × 16
+  [INFERRED: the two units' radii] and, from `0x4B6C30(0x10000)` [INFERRED: a random angle] through
+  `0x4B70EF`/`0x4B7123` [INFERRED: sine and cosine], `+0x22/+0x26/+0x2A` as an offset of that
+  length around the target, then returns 1. So the node's position stops being the issued one at
+  its first step. MEASURED 2026-10-09 on Comet Catcher: ARMCK's Guard of ARMMSTOR, read paused
+  before that step, held (1300, 55, 1550) and `+0x36` 0; after it, (−115.3, 0, −54.7) and 128.
+- **State 1** (`0x406381..0x406702`) returns 3, with an order put in front of itself, in three
+  branches: `0x43B1F0` succeeding at `0x4063F5`, reached when the target's `+0xF0` is set among
+  other tests [INFERRED: it is attacked]; the resolver's mode 8 (repair, `0x4064F5`) when the
+  target's `+0x108` is below its definition's `+0x1FA` [INFERRED: health against maximum], the
+  node made at `0x40652B` and put first by `0x43ACB0` at `0x406532`; and a target whose head
+  order's flags `+0x42` carry `0x100000` (`0x40658A`) [INFERRED: an assist of its build],
+  through `0x43ACB0` at `0x40667A`. Otherwise it moves to the target position plus the offset (`0x438930` at
+  `0x4066E0`), waits 30 ticks (`0x439E80`), and returns 2. **No state-1 path writes
+  `+0x22..+0x2D` or `+0x36`.**
+- **The dispatch `0x43B87C`** maps a handler's result through the jump table `0x43BAA4`
+  (10 entries; above 9 → `0x43BA90`): 0 → state 0 (`0x43B89F`); 1 → state + 1 (`0x43B897`);
+  2 and 4 → nothing (`0x43B99F`); 3 → a random wait (`0x43B890` → `0x43B951`); 5 and 8 → unlink and
+  free (`0x43B8A8`); 6 → `0x43B975`; 7 → `0x43BA3D`; 9 → `0x43B8E5`. Follow_Ground never returns 0,
+  so once its first step has run, nothing returns its node to state 0.
+
+A Guard of an owned unit that is neither damaged, building nor attacked therefore keeps one node
+whose compared fields (action, target, position, `+0x36`) are fixed from its first step on.
+
 #### An upgrade preview without grid mutation
 
 `0x47CC30` stamps a footprint; callers `0x43DA41`, `0x48610F`, `0x48630C`, `0x48AA9A`, `0x48B6B9`.

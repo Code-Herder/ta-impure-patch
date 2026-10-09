@@ -77,9 +77,12 @@ recordings' decoded blocks for every tarec call of the run (TAREC_CACHE, reccach
 Tick-driven runs default to internal game speed 20 (2x normal); --game-speed 10 selects normal
 speed. The owned instance's private settings are written while stopped, before each launch.
 Simulation tick endpoints, comparisons and wall-clock deadlines retain their existing units.
-Cost fixtures, a fixture marked `normal_speed` (resource-geo-upgrade, whose queue comparison
-reads the running game after a Move that finishes first at speed 20; its script runs with the
-turbo off, below) and W's speed/settings UI test use normal speed;
+Cost fixtures, a fixture marked `normal_speed` (resource-geo-upgrade; its script runs with the
+turbo off, below) and W's speed/settings UI test use normal speed. At speed 20 that fixture failed
+its images gate once in three runs: the dump at its first point was taken as a click of the
+script reached the engine, and the mouse ring's read index 0x51F4B2 differed from the puppets'.
+Why the null twin left that byte unclassified is not established, so the mark is timing, not a
+fix (research/notes/tadr-port/demo-recorder-completeness.md, *Test speed*);
 network/timing suites have their own speed policy.
 
 --turbo K (default 1, 0 for none) is the DLL's test-only pacing (tagpu_replay.c, THE TURBO): K

@@ -41,6 +41,15 @@ class Check:
         s = self.call("peek", spec, "--json")["peeks"][0]["value"]
         return bytes.fromhex(s)
 
+    def snapshot(self, *specs):
+        """The specs' values, all read at one instant: tagpu_peek_frame evaluates a trigger's
+        every line in one call on the game thread (tagpu_triggers_frame, once per engine flip),
+        where no simulation step can run between two of them. A row missing or naming another
+        spec means the DLL did not evaluate, whole, the trigger tacli wrote."""
+        rows = self.call("peek", *specs, "--json")["peeks"]
+        assert [r["spec"] for r in rows] == list(specs), f"peek answered {len(rows)} of {len(specs)} specs"
+        return [r["value"] for r in rows]
+
     def until(self, function, message, seconds=10):
         end = time.monotonic() + seconds
         while True:
@@ -53,32 +62,43 @@ class Check:
     def address(self, kind):
         return self.base + self.units[kind] * 0x118
 
-    def orders(self, kind):
-        """The unit's order chain, read while the world is paused: each node is a separate peek,
-        and a running game can finish an order and hand its node to another unit between two of
-        them. A paused world runs no step, so the chain read is the chain the engine holds."""
-        if self.values("*0x511DE8+0x38a51:2")[0] & 1:
-            return self.chain(kind)
-        self.pause(True)
-        try:
-            return self.chain(kind)
-        finally:
-            self.pause(False)
-
     def chain(self, kind):
+        """The unit's order nodes, 0x50 bytes each, as the engine holds them at one instant,
+        paused or running.
+
+        A running game can finish an order and hand its node to another unit between two reads,
+        so no node is taken from a read that did not also take the head and every node before it.
+        Each round reads the head (unit +0x5C) and every node found so far in one snapshot and
+        follows the links that snapshot holds; a link to a node it did not read becomes the next
+        round's last read. The chain is the engine's when one snapshot links the head to a null
+        +0x4A through nodes it read itself."""
         owner = self.address(kind)
-        node = self.values(f"0x{owner + 0x5c:x}")[0]
-        result, seen = [], set()
-        while node:
-            assert node not in seen and len(seen) < 100, "cyclic/excessive fixture order chain"
-            seen.add(node)
-            b = self.bytes(f"0x{node:x}:x50")
-            assert struct.unpack_from("<I", b, 0x0e)[0] == owner, "wrong order owner"
-            result.append({"action": b[4], "target": struct.unpack_from("<I", b, 0x16)[0],
-                           "pos": struct.unpack_from("<iii", b, 0x22),
-                           "type": struct.unpack_from("<H", b, 0x36)[0]})
-            node = struct.unpack_from("<I", b, 0x4a)[0]
-        return result
+        head = f"0x{owner + 0x5c:x}"
+        nodes = []
+        for _ in range(200):
+            values = self.snapshot(head, *(f"0x{n:x}:x50" for n in nodes))
+            # A node an earlier round found may since have been freed with its page; that
+            # costs nothing unless this snapshot still links to it.
+            read = {n: bytes.fromhex(v) for n, v in zip(nodes, values[1:]) if not v.startswith("<")}
+            node, linked = int(values[0].split()[0]), []
+            while node in read:
+                assert node not in linked and len(linked) < 100, "cyclic/excessive fixture order chain"
+                linked.append(node)
+                node = struct.unpack_from("<I", read[node], 0x4a)[0]
+            assert node not in nodes, f"{kind}'s order chain links unreadable memory"
+            if not node:
+                break
+            nodes = linked + [node]
+        else:
+            raise AssertionError(f"{kind}'s order chain changed under every read")
+        for n in linked:
+            assert struct.unpack_from("<I", read[n], 0x0e)[0] == owner, "wrong order owner"
+        return [read[n] for n in linked]
+
+    def orders(self, kind):
+        return [{"action": b[4], "target": struct.unpack_from("<I", b, 0x16)[0],
+                 "pos": struct.unpack_from("<iii", b, 0x22),
+                 "type": struct.unpack_from("<H", b, 0x36)[0]} for b in self.chain(kind)]
 
     def placed(self, orders):
         if not orders:
@@ -189,6 +209,26 @@ class Check:
         self.until(lambda: self.values("*0x511DE8+0x38a47")[0] > tick,
                    "resource queue state did not reach a later simulation tick")
 
+    def guard(self, kind, target):
+        """Give `kind` the preceding order a Shift-click appends after, a Guard of an owned unit
+        that is neither damaged, building nor attacked, and return once the Guard has taken its
+        first step.
+
+        A Move completes, on the generated maps (1024 world units across) within the time a case
+        runs. Such a Guard does not, and its compared fields are fixed from its first step on
+        [DISASSEMBLED, exe-reverse-engineering.md, *The ground Guard's node*]: that step, state 0
+        of Follow_Ground 0x406300, writes the position +0x22..+0x2D as a random offset around the
+        target and +0x36 as the follow radius, no later step writes them, and the order dispatch
+        at 0x43B87C returns a node to state 0 only on a result Follow_Ground never gives. So a
+        queue read once the state byte +5 has left 0 compares equal to one read after a
+        cancellation, however many ticks pass between them."""
+        self.call("order", "guard", "unit", self.units[target], "--unit", self.units[kind],
+                  "--expect", kind, "--expect-target", target)
+        guarded = self.address(target)
+        self.until(lambda: any(struct.unpack_from("<I", b, 0x16)[0] == guarded and b[5]
+                               for b in self.chain(kind)),
+                   f"{kind}'s Guard of {target} took no first step")
+
 
 def mex(c, classic=False):
     if classic:
@@ -237,10 +277,11 @@ def mex(c, classic=False):
     assert centers == {((snapped[0] + snapped[3]) // 2, (snapped[2] + snapped[5]) // 2)}, \
         "Quick Build and the manual ghost selected different deposit centers"
     c.stop("ARMCK")
-    # A preceding Move keeps the plan unstarted by queue ordering.
-    # Pause also keeps native selection clicks on stationary constructors.
+    # A preceding Guard keeps the plan unstarted by queue ordering; the walk to the storage
+    # stays 250 world units south of the deposits clicked. Its first step needs the world
+    # running; the pause after it keeps native selection clicks on stationary constructors.
+    c.guard("ARMCK", "ARMMSTOR")
     c.pause(True)
-    c.call("order", "move", "pos", "4500", "2500", "--unit", c.units["ARMCK"], "--expect", "ARMCK")
     preceding = c.orders("ARMCK")
     c.resource_click(560, 375, shift=True)
     orders = c.until(built, "Quick Build failed with manual radius off")
@@ -260,7 +301,7 @@ def mex(c, classic=False):
     advanced = c.orders("ARMACK")
     c.pause(False)
     c.unqueue(560, 375)
-    assert c.orders("ARMCK") == preceding, "unqueue removed the preceding Move or kept the mex"
+    assert c.orders("ARMCK") == preceding, "unqueue removed the preceding Guard or kept the mex"
     assert c.orders("ARMACK") == advanced, "unqueue added an order to a constructor without the plan"
     c.pause(True)
     c.select("ARMCK")
@@ -277,8 +318,9 @@ def upgrade(c, shift=False):
     c.menu(RESOURCE=3, QUICKBUILD=1)
     c.select("ARMACK", "ARMCK", "CORCK", "ARMPW")
     if shift:
-        c.call("order", "move", "pos", "4500", "2500", "--unit", c.units["ARMACK"],
-               "--expect", "ARMACK")
+        # ARMACK and ARMCK are the owned units east of the clicked mex, and ARMCK, a helper,
+        # guards ARMACK back: the two close on each other and neither walk crosses the mex.
+        c.guard("ARMACK", "ARMCK")
         preceding = c.orders("ARMACK")
     combat = c.orders("ARMPW")
     x, z = c.screen("ARMMEX")
@@ -344,12 +386,12 @@ def terrain(c, mode):
     c.keys("up:alt")
     c.until(lambda: c.rect() == snapped, "geothermal snap did not resume")
     c.keys("esc")
-    c.call("order", "move", "pos", "900", "900", "--unit", c.units["CORCK"], "--expect", "CORCK")
+    c.guard("CORCK", "ARMMSTOR")
     preceding = c.orders("CORCK")
     c.resource_click(676, 258, shift=True)
     c.until(lambda: any(o["type"] == 193 for o in c.orders("CORCK")), "Quick geo produced no geothermal build order")
     c.unqueue(676, 258)
-    assert c.orders("CORCK") == preceding, "geo unqueue did not preserve the preceding Move"
+    assert c.orders("CORCK") == preceding, "geo unqueue did not preserve the preceding Guard"
     c.resource_click(676, 258, shift=True)
     c.until(lambda: any(o["type"] == 193 for o in c.orders("CORCK")), "cancelled geo could not be queued again")
     print(f"resource-{mode}: metal-ground classification, manual geo/Alt, Quick geo cancellation and requeue passed")
@@ -392,7 +434,7 @@ def geo_upgrade(c):
     c.select("CORCK", "ARMCK")
     types = c.call("units", "--json")["units"]
     stronger = next(t["id"] for t in types if t["name"].upper() == "RSUPGEO")
-    c.call("order", "move", "pos", "900", "900", "--unit", c.units["CORCK"], "--expect", "CORCK")
+    c.guard("CORCK", "ARMMSTOR")
     preceding = c.orders("CORCK")
     x, z = c.screen("CORGEO")
     c.resource_click(x, z, shift=True)
@@ -420,9 +462,7 @@ def nearby(c):
     c.select("CORCK")
     types = c.call("units", "--json")["units"]
     geo = next(t["id"] for t in types if t["name"].upper() == "RSGEO")
-    # Persistent Guard keeps both plans pending by queue ordering.
-    c.call("order", "guard", "unit", c.units["ARMMSTOR"], "--unit", c.units["CORCK"],
-           "--expect", "CORCK", "--expect-target", "ARMMSTOR")
+    c.guard("CORCK", "ARMMSTOR")
     def sites():
         return {(o["pos"][0] >> 16, o["pos"][2] >> 16)
                 for o in c.placed(c.orders("CORCK")) if o["type"] == geo}
@@ -489,6 +529,10 @@ def refusals(c):
     assert not c.placed(orders) and all(o["action"] for o in orders), "refused reclaim produced a build or action zero"
     c.stop("RSNRACK")
     c.select("ARMACK", "RSNRACK", "RSNGCK", "CORCK")
+    # RSNGCK cannot Guard, so its queue holds a Move, and the world stays paused until the
+    # comparison so that no step can complete it. The click issues every order it makes at
+    # once (tagpu_resource.c click), and a paused world still takes input.
+    c.pause(True)
     c.call("order", "move", "pos", "4500", "2500", "--unit", c.units["RSNGCK"], "--expect", "RSNGCK")
     before = c.orders("RSNGCK")
     c.resource_click(x, z)
@@ -497,6 +541,7 @@ def refusals(c):
     c.until(lambda: any(o["target"] == c.address("ARMACK") for o in c.orders("CORCK")),
             "eligible constructor did not receive its helper Guard")
     assert c.orders("RSNGCK") == before, "Guard refusal changed the helper's queue"
+    c.pause(False)
     print("resource-refusals: reclaim and Guard refusal, eligible upgrade and helper fallback passed")
 
 

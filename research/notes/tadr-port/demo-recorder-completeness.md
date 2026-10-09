@@ -436,8 +436,14 @@ within the retail setter's range. `--game-speed 10` selects normal speed for
 `run`, `measure`, `landing`, `broad`, `takeover`, `forks` and `rewind`. Every launch
 configures only the stopped worker's private registry store through `tacli
 registry`; its acknowledged dword is checked before launching. Cost fixtures, a fixture marked
-`normal_speed` (resource-geo-upgrade, whose script reads the running game after a Move that
-finishes first at speed 20) and W's speed/settings UI test use normal speed. The target speed is
+`normal_speed` (resource-geo-upgrade) and W's speed/settings UI test use normal speed. That
+fixture's mark is a timing mitigation with an open cause. MEASURED 2026-10-09, at speed 20 with
+its queue comparisons made independent of speed: it passed its own assertions in three runs out
+of three and failed the images gate at its first point, GameTime 451, in one. That dump was
+taken in the frames where a selection click of its script reached the engine, and 0x51F4B2, the
+mouse event ring's read index, held 09 live against 06 played and sought. The five earlier
+normal-speed runs of the fixture passed that gate. Why the null twin did not classify that byte
+as the viewer's is not established. The target speed is
 reported, and a passing landing note records it. Armed round trips bound the scheduler's batch
 before the step caches it, making the frame after T−1 available even when a frame would otherwise
 run several ticks. The guard is on the game thread and affects only puppet pacing while a round
