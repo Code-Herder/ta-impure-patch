@@ -172,6 +172,8 @@ typedef struct {
     float dim_brightness, dim_saturate;
     uint32_t res_rgb[2];            /* metal, energy                                      */
     uint32_t pos_rgb, neg_rgb;
+    int      nteam_rgb;
+    uint32_t team_rgb[8];           /* the chart's team colours, layout.json chart.teams   */
     int      nstyle;
     struct HUDSTYLE {
         char     name[24];

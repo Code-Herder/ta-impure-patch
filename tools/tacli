@@ -2275,10 +2275,14 @@ def cmd_hud(args):
             die(f"hud {verb} takes no arguments")
         d = _hud_dump(inst, tmo)
         st, hits = d["state"], d["hits"]
+        sw = st.get("stats", {})
         human = (f"t {st['t']:.1f} of {st['T']:.1f} s, {'playing' if st['playing'] else 'paused'}, "
                  f"{st['speed']:g}x, HUD {round(st['hud'] * 100)}%, sight {st['sight']}, "
                  f"follow {st['follow']}, scroll {st['scroll']} (last {hits['last']})"
-                 + (f", toast {st['toast']!r}" if st["toast"] else "") + "\n"
+                 + (f", toast {st['toast']!r}" if st["toast"] else "")
+                 + (f"\nstats: {sw['measure']} by {sw['split']} at {sw['x']:.1f},{sw['y']:.1f}, "
+                    f"{len(sw['groups'])} groups of {len(sw['groups'][0]['v']) if sw['groups'] else 0} samples "
+                    f"{sw['dt']:g} s apart from {sw['t0']:g} s" if sw.get("open") else "") + "\n"
                  + "\n".join(f"  {h['key']:<16} {h['r']}" for h in hits["at"]))
         out(d, args.json, human=human)
         return
@@ -2317,7 +2321,25 @@ def cmd_hud(args):
             human=f"scrubbed {f0:g} -> {f1:g} along x {at[0]}..{at[-1]} at y {y}")
         return
 
-    die(f"unknown hud verb {verb!r}: show, wait, click, hover, wheel, scrub")
+    if verb == "drag":
+        # a control pressed at its centre, the pointer moved by (dx, dy) client pixels in steps,
+        # released there: the stats window's title, `drag`
+        if len(rest) != 3:
+            die("usage: hud <name> drag <key> <dx> <dy>")
+        d, r = _hud_find(inst, rest[0], tmo)
+        x, y = _hud_centre(r)
+        dx, dy = int(rest[1]), int(rest[2])
+        _write_tokens(inst, f"ddown:{x},{y}")
+        for k in range(1, args.steps + 1):
+            time.sleep(args.step_ms / 1000.0)
+            _write_tokens(inst, f"dmove:{x + dx * k // args.steps},{y + dy * k // args.steps}")
+        time.sleep(args.step_ms / 1000.0)
+        _write_tokens(inst, f"dup:{x + dx},{y + dy}")
+        out({"name": args.name, "key": rest[0], "from": [x, y], "to": [x + dx, y + dy]}, args.json,
+            human=f"dragged {rest[0]} from {x},{y} by {dx},{dy}")
+        return
+
+    die(f"unknown hud verb {verb!r}: show, wait, click, hover, wheel, scrub, drag")
 
 
 def cmd_eye(args):
@@ -6868,13 +6890,14 @@ def build_parser():
     hd.add_argument("name")
     hd.add_argument("verb", nargs="?", default="show",
                     help="show | wait | click <key> | hover <key> | wheel <key> <notches> | "
-                         "scrub <from> <to> -- a key as `show` lists it (play, speed, track, "
-                         "jump:2, fold:0, cursors, ...); a row's button hovers its row first")
+                         "scrub <from> <to> | drag <key> <dx> <dy> -- a key as `show` lists it "
+                         "(play, speed, track, jump:2, fold:0, cursors, stats, chip:army, drag, "
+                         "...); a row's button hovers its row first")
     hd.add_argument("rest", nargs="*")
     hd.add_argument("--right", action="store_true", help="click: the right button")
     hd.add_argument("--timeout", type=float, default=20.0, help="seconds to wait for the HUD")
-    hd.add_argument("--steps", type=int, default=8, help="scrub: the moves between press and release")
-    hd.add_argument("--step-ms", type=int, default=120, help="scrub: the pause between moves")
+    hd.add_argument("--steps", type=int, default=8, help="scrub, drag: the moves between press and release")
+    hd.add_argument("--step-ms", type=int, default=120, help="scrub, drag: the pause between moves")
     hd.set_defaults(func=cmd_hud)
 
     e = sub.add_parser("eye", help="hold the camera at a world position")

@@ -303,6 +303,7 @@ static int      s_fillAgain;
 
 /* the replay HUD's record, built here and copied into the area: 3.4 KB, off the stack */
 static TAGPU_PK_HUD s_hud;
+static TAGPU_PK_HUDSTAT s_hudstat;
 
 static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, unsigned len,
                             unsigned* off_out, unsigned* len_out, unsigned trunc_bit)
@@ -2789,6 +2790,11 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
         e = append_area(p, &cursor, &s_hud, (unsigned)sizeof s_hud, &p->hud_off, &p->hud_len,
                         TAGPU_PK_TRUNC_HUD);
         if (e > need) need = e;
+        if (tagpu_hudstate_fill_stats(&s_hudstat, &s_hud)) {
+            e = append_area(p, &cursor, &s_hudstat, (unsigned)sizeof s_hudstat, &p->hstat_off,
+                            &p->hstat_len, TAGPU_PK_TRUNC_HUD);
+            if (e > need) need = e;
+        }
     }
 
     /* the font: header + glyph table in the header, the objects in the area */

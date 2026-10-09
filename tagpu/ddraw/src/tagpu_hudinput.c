@@ -53,6 +53,16 @@ static unsigned s_scale;                /* the scale button's choice; 0 = the st
    is gone -- answered No, or never opened. Yes tears the level down instead, and the level's end
    forgets the question. */
 static int      s_leaveWant, s_leaveAsked, s_leaveWasPaused;
+/* THE STATS WINDOW IS KEPT FOR THE SESSION, never in impure.cfg (the owner's choice of
+   2026-10-09): its measure, its split and its place, until the game exits; it is closed at every
+   replay's start. Its first measure is the mockup's (index.html, S.sm) and its first place the
+   layout's (window x, y), until the first drag. */
+static int      s_statOpen, s_statTeam, s_statPlaced;
+static char     s_statKey[TAGPU_PK_HUD_MEASURE] = "units";
+static float    s_statX, s_statY;
+static int      s_wdrag;                /* the left press is on the window's title                */
+static int      s_wdx, s_wdy;           /* where it landed, in client pixels                      */
+static float    s_wox, s_woy;           /* the window's place then, in units                      */
 
 void tagpu_hudinput_take(const TAGPU_CMD_HUD* h)
 {
@@ -118,6 +128,33 @@ static void toast(const char* fmt, ...)
     s_toastAt = GetTickCount();
 }
 
+/* the window's place as asked: the last drag's, or the layout's */
+static void stat_place(float* x, float* y)
+{
+    const HUDART* art = tagpu_hudart_get();
+    if (s_statPlaced || !art) { *x = s_statX; *y = s_statY; return; }
+    *x = tagpu_hudlay_globals(art->lay)->win_x;
+    *y = tagpu_hudlay_globals(art->lay)->win_y;
+}
+
+/* THE WINDOW DRAG, as the mockup's: the place at the press moved by the pointer's travel in units,
+   kept so the window stays on the screen (the frame of the last map drawn) */
+static void stat_drag(int cx, int cy)
+{
+    const HUDART* art = tagpu_hudart_get();
+    const HUDGLOBALS* g;
+    float x, y;
+    if (!art || !(s_hit.u > 0)) return;
+    g = tagpu_hudlay_globals(art->lay);
+    x = s_wox + (float)(cx - s_wdx) / s_hit.u;
+    y = s_woy + (float)(cy - s_wdy) / s_hit.u;
+    s_statX = x < s_hit.W - g->win_w ? x : s_hit.W - g->win_w;
+    s_statY = y < s_hit.H - g->win_h ? y : s_hit.H - g->win_h;
+    if (s_statX < 0) s_statX = 0;
+    if (s_statY < 0) s_statY = 0;
+    s_statPlaced = 1;
+}
+
 /* the timeline: the playhead's run is the recording, first to last */
 static void seek_at(int cx)
 {
@@ -140,9 +177,9 @@ static void scroll_by(int d)
     s_scroll = f < 0 ? 0 : f > (int)s_hit.last ? s_hit.last : (unsigned)f;
 }
 
-/* A click on a control, released over it. Every command is the replay's own call; a key with no
-   command -- the dock's and the column's plates, the scroll track, the disabled stats -- is taken
-   and does nothing. */
+/* A click on a control, released over it. Every command is the replay's own call or the stats
+   window's own state; a key with no command -- the dock's, the column's and the window's plates,
+   the scroll track, the window's title -- is taken and does nothing. */
 static void act(const char* key)
 {
     const char* colon = strchr(key, ':');
@@ -197,6 +234,14 @@ static void act(const char* key)
         else if (!(s_pov >> seat & 1)) toast("Camera was not recorded");
         else if (IS("jump")) tagpu_replay_follow_request(seat, 1);
         else tagpu_replay_follow_request(tagpu_replay_followed() == seat ? -1 : seat, 0);
+    } else if (IS("stats")) {
+        s_statOpen = !s_statOpen;
+    } else if (IS("close")) {
+        s_statOpen = 0;
+    } else if (IS("chip") && colon) {
+        if (!strcmp(colon + 1, "player")) s_statTeam = 0;
+        else if (!strcmp(colon + 1, "team")) s_statTeam = 1;
+        else lstrcpynA(s_statKey, colon + 1, sizeof s_statKey);
     } else if (IS("scroll_up")) {
         scroll_by(-1);
     } else if (IS("scroll_down")) {
@@ -220,18 +265,20 @@ int tagpu_hudinput_button(int cx, int cy, int gx, int gy, int down, int right)
         if (!right) {
             if (s_drag) {
                 if (cx >= 0) seek_at(cx);
+            } else if (s_wdrag) {
+                if (cx >= 0) stat_drag(cx, cy);
             } else if (s_held[0] && cx >= 0 && active() && !under_menu(gx, gy) && hit(cx, cy, key) &&
                        !strcmp(key, s_held)) {
                 act(key);
             }
-            s_drag = 0;
+            s_drag = s_wdrag = 0;
             s_held[0] = 0;
         }
         return 1;
     }
     if (s_down & bit) {
         s_down &= ~bit;
-        if (!right) { s_drag = 0; s_held[0] = 0; }
+        if (!right) { s_drag = s_wdrag = 0; s_held[0] = 0; }
     }
     if (cx < 0 || !active() || under_menu(gx, gy) || !hit(cx, cy, key)) return 0;
     s_down |= bit;
@@ -241,6 +288,11 @@ int tagpu_hudinput_button(int cx, int cy, int gx, int gy, int down, int right)
         s_drag = 1;
         s_dragT = UINT_MAX;
         seek_at(cx);
+    } else if (!strcmp(key, "drag")) {
+        s_wdrag = 1;
+        s_wdx = cx;
+        s_wdy = cy;
+        stat_place(&s_wox, &s_woy);
     }
     return 1;
 }
@@ -259,7 +311,7 @@ int tagpu_hudinput_wheel(UINT msg, WPARAM wp, LPARAM lp)
 
 void tagpu_hudinput_cancel(void)
 {
-    s_drag = 0;
+    s_drag = s_wdrag = 0;
     s_held[0] = 0;
 }
 
@@ -282,6 +334,11 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h)
         if (!active()) { s_drag = 0; s_held[0] = 0; }
         else if (mouse_last_client(&cx, &cy)) seek_at(cx);
     }
+    /* and the window follows the pointer once a frame */
+    if (s_wdrag) {
+        if (!active()) { s_wdrag = 0; s_held[0] = 0; }
+        else if (mouse_last_client(&cx, &cy)) stat_drag(cx, cy);
+    }
     h->px = h->py = -1;
     if (mouse_last_client(&cx, &cy) && cx < SHRT_MAX && cy < SHRT_MAX) { h->px = (int16_t)cx; h->py = (int16_t)cy; }
     h->folded = (uint16_t)s_folded;
@@ -289,6 +346,11 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h)
     h->toggles = 0;
     for (i = 0; i < 4; i++)
         if (tagpu_replay_overlay(SWITCHES[i].ov)) h->toggles |= (uint8_t)SWITCHES[i].bit;
+    if (s_statOpen) h->toggles |= (uint8_t)HUD_TOG_STATS;
+    h->stat_open = (uint8_t)s_statOpen;
+    h->stat_team = (uint8_t)s_statTeam;
+    memcpy(h->stat_measure, s_statKey, sizeof h->stat_measure);
+    stat_place(&h->stat_x, &h->stat_y);
     h->sight = (int8_t)tagpu_replay_sight();
     h->follow = (int8_t)tagpu_replay_followed();
     memcpy(h->held, s_held, sizeof h->held);
@@ -340,5 +402,6 @@ void tagpu_hudinput_level_end(void)
     s_drag = 0;
     s_folded = s_scroll = 0;
     s_toast[0] = 0;
+    s_statOpen = s_wdrag = 0;
     s_leaveWant = s_leaveAsked = 0;
 }

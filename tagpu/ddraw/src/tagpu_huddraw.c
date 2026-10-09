@@ -12,7 +12,12 @@
        centred with its trailing space, as Chrome centres it;
      * a drop shadow (`text-shadow: 0 s 0 rgba(0,0,0,.8)`) and the four-copy outline are the
        string again, offset, under it;
-     * an overflowing text box clips its text and its shadows: `overflow: hidden`.
+     * an overflowing text box clips its text and its shadows: `overflow: hidden`;
+     * an SVG <text> stands on its y with its pen from its x, its middle or its end there by its
+       text-anchor, and the chart's SVG clips what it holds to its box;
+     * a stroke covers a pixel by the area of it the stroke's band takes, a pixel-wide box filter
+       across it and along it: an SVG line's ends are butt, a polyline's joins round, and one
+       polyline is one shape, its overlaps covered once.
 
    THE GLYPH ATLAS is a shelf packer over one 2048 x 2048 coverage image. A glyph is keyed by
    its face, its pixel size in 1/64ths, its glyph index and its pen's fraction in quarters; the
@@ -39,7 +44,16 @@
             Gaussian of sigma B / 2 blurring the outside of the box in, so the shadow at a point
             is .55 x (1 - the blurred box's coverage there), the coverage being separable;
      DOT    the colour inside the rect's inscribed circle, its edge antialiased over a pixel;
-     GLYPH  the colour times the atlas's coverage.
+     GLYPH  the colour times the atlas's coverage;
+     LINE   the colour over a stroke from vPx.xy to vPx.zw, vPrm.y pixels each side, butt ends;
+     CHART  the chart's lines in one band of one column (the chart's image, tagpu_huddraw.h):
+            for each group in order its halo, its line and its cross composited over what is
+            under it in the group, the line's coverage the largest any of its segments within
+            reach gives (the union of round-joined segments), and the whole at the instance's
+            opacity -- an SVG <g opacity> composites its children first, so lines that cross in
+            the faint part show the top one, not the two summed;
+     DROP   CSS box-shadow: the box vPx moved down by vUV.x and blurred as SHADE blurs, drawn
+            outside the box only, as an outer shadow is.
    The dim filter of a player who is out, `brightness(b) saturate(s)`, is linear in a
    premultiplied colour, so it applies per instance and composes as the browser's does on the
    whole row. Its matrix is the Filter Effects spec's saturate. */
@@ -72,6 +86,19 @@ static const char* FS =
     "  float p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));\n"
     "  return x >= 0.0 ? 1.0 - p : p;\n"
     "}\n"
+    /* a pixel's share of a band hw either side of a line d away: a pixel-wide box filter */
+    "float cover(float d, float hw){ return clamp(min(d + 0.5, hw) - max(d - 0.5, -hw), 0.0, 1.0); }\n"
+    /* a segment's stroke: round at an end that joins another, butt at an end b0 / b1 */
+    "float seg(vec2 p, vec2 a, vec2 b, float hw, bool b0, bool b1){\n"
+    "  vec2 d = b - a;\n"
+    "  float L = length(d);\n"
+    "  vec2 u = L > 1e-4 ? d / L : vec2(1.0, 0.0);\n"
+    "  vec2 q = p - a;\n"
+    "  float al = dot(q, u), ac = abs(dot(q, vec2(-u.y, u.x)));\n"
+    "  if (al < 0.0) return b0 ? cover(ac, hw) * clamp(0.5 + al, 0.0, 1.0) : cover(length(q), hw);\n"
+    "  if (al > L) return b1 ? cover(ac, hw) * clamp(0.5 + L - al, 0.0, 1.0) : cover(length(p - b), hw);\n"
+    "  return cover(ac, hw) * (b0 ? clamp(0.5 + al, 0.0, 1.0) : 1.0) * (b1 ? clamp(0.5 + L - al, 0.0, 1.0) : 1.0);\n"
+    "}\n"
     "void main(){\n"
     "  vec2 p = gl_FragCoord.xy;\n"
     "  if (vClip.z >= vClip.x && (p.x < vClip.x || p.x >= vClip.z || p.y < vClip.y || p.y >= vClip.w)) discard;\n"
@@ -90,7 +117,44 @@ static const char* FS =
     "    vec2 ce = 0.5 * (vPx.xy + vPx.zw);\n"
     "    float r = 0.5 * (vPx.z - vPx.x);\n"
     "    c = vCol * clamp(r - length(p - ce) + 0.5, 0.0, 1.0);\n"
-    "  } else c = vCol * t.r;\n"
+    "  } else if (m == 4) c = vCol * t.r;\n"
+    "  else if (m == 5) c = vCol * seg(p, vPx.xy, vPx.zw, vPrm.y, true, true);\n"
+    "  else if (m == 6) {\n"
+    "    vec4 g0 = texelFetch(uTex, ivec2(0, 0), 0), hp = texelFetch(uTex, ivec2(1, 0), 0);\n"
+    "    vec4 ho = texelFetch(uTex, ivec2(2, 0), 0), cx = texelFetch(uTex, ivec2(3, 0), 0);\n"
+    "    int n = int(g0.x + 0.5), np = int(g0.y + 0.5), j0 = int(vPx.x + 0.5), j1 = int(vPx.y + 0.5);\n"
+    "    int bx = int(cx.z + 0.5) + int(vPx.z + 0.5);\n"
+    "    vec4 acc = vec4(0.0);\n"
+    "    for (int g = 1; g <= n; g++) {\n"
+    "      vec4 yr = texelFetch(uTex, ivec2(bx, g), 0);\n"
+    "      if (p.y < yr.x || p.y > yr.y) continue;\n"
+    "      vec4 lc = texelFetch(uTex, ivec2(0, g), 0), fl = texelFetch(uTex, ivec2(1, g), 0);\n"
+    "      float kl = 0.0, kh = 0.0;\n"
+    "      vec2 a = texelFetch(uTex, ivec2(2 + j0, g), 0).xy;\n"
+    "      for (int j = j0; j <= j1; j++) {\n"
+    "        vec2 b = texelFetch(uTex, ivec2(3 + j, g), 0).xy;\n"
+    "        kl = max(kl, seg(p, a, b, g0.z, j == 0, j == np - 2));\n"
+    "        if (fl.x > 0.5) kh = max(kh, seg(p, a, b, g0.w, j == 0, j == np - 2));\n"
+    "        a = b;\n"
+    "      }\n"
+    "      acc = hp * kh + acc * (1.0 - hp.a * kh);\n"
+    "      acc = lc * kl + acc * (1.0 - kl);\n"
+    "      if (fl.y > 0.5) {\n"
+    "        vec2 q = fl.zw;\n"
+    "        float r = cx.x;\n"
+    "        float k = max(seg(p, q - vec2(r), q + vec2(r), cx.y, true, true),\n"
+    "                      seg(p, q + vec2(r, -r), q + vec2(-r, r), cx.y, true, true));\n"
+    "        acc = (fl.x > 0.5 ? ho : lc) * k + acc * (1.0 - k);\n"
+    "      }\n"
+    "    }\n"
+    "    c = acc * vCol.a;\n"
+    "  } else {\n"
+    "    if (p.x >= vPx.x && p.x < vPx.z && p.y >= vPx.y && p.y < vPx.w) discard;\n"
+    "    float s = max(vPrm.y, 1e-3);\n"
+    "    float ix = phi((p.x - vPx.x) / s) - phi((p.x - vPx.z) / s);\n"
+    "    float iy = phi((p.y - vPx.y - vUV.x) / s) - phi((p.y - vPx.w - vUV.x) / s);\n"
+    "    c = vCol * (ix * iy);\n"
+    "  }\n"
     "  if (vPrm.z != 1.0 || vPrm.w != 1.0) {\n"
     "    float s = vPrm.w;\n"
     "    vec3 q = c.rgb * vPrm.z;\n"
@@ -306,9 +370,15 @@ static void text(B* c, const HUDOP* op)
         pen[i] = width;
         width += sc * (float)adv + sp;
     }
-    x = op->r.x * c->px + (op->centre ? (op->r.w * c->px - width) / 2 : 0);
-    /* Chrome's baseline (tagpu_hudlay_baseline), painted on a whole pixel */
-    base = floorf(tagpu_hudlay_baseline(op->r.y * c->px, op->r.h * c->px, size, f->ascent, f->descent) + 0.5f);
+    if (op->flags & HOPF_BASE) {
+        /* an SVG <text>: its anchor at x, its baseline at y, painted on a whole pixel */
+        x = op->r.x * c->px - (op->centre == 1 ? width / 2 : op->centre == 2 ? width : 0);
+        base = floorf(op->r.y * c->px + 0.5f);
+    } else {
+        x = op->r.x * c->px + (op->centre ? (op->r.w * c->px - width) / 2 : 0);
+        /* Chrome's baseline (tagpu_hudlay_baseline), painted on a whole pixel */
+        base = floorf(tagpu_hudlay_baseline(op->r.y * c->px, op->r.h * c->px, size, f->ascent, f->descent) + 0.5f);
+    }
 
     /* the copies under the text, then the text */
     copies = 0;
@@ -347,11 +417,124 @@ static void text(B* c, const HUDOP* op)
     }
 }
 
+/* ---- the chart -------------------------------------------------------------------------------
+
+   THE IMAGE (tagpu_huddraw.h) holds the lines in device pixels; THE INSTANCES are bands of
+   columns. A column is HUD_CHART_SEG segments wide, the first and the last stretched by what a
+   stroke or a cross reaches past the ends; it sees the segments within that reach of it, and each
+   group's y range there, which its band test reads. The groups' ranges in a column, merged where
+   they overlap, are its bands: every pixel a line can cover is in exactly one band, so the
+   fragment stage composites every group a pixel can see in one invocation, and a pixel no line
+   reaches is never shaded. */
+static float    s_chart[HUD_CHART_H][HUD_CHART_W][4];
+static float    s_cnext[HUD_CHART_H][HUD_CHART_W][4];
+static unsigned s_cgen = 1;
+typedef struct { float x0, y0, x1, y1; int j0, j1, col; } BAND;
+static BAND     s_band[HUD_CHART_COLS * HUD_MAXSEAT];
+static int      s_nband;
+
+const float* tagpu_huddraw_chart(unsigned* gen)
+{
+    *gen = s_cgen;
+    return &s_chart[0][0][0];
+}
+
+static void rgba4(float* t, uint32_t rgb, float a)
+{
+    t[0] = (float)((rgb >> 16) & 0xFF) / 255.0f * a;
+    t[1] = (float)((rgb >> 8) & 0xFF) / 255.0f * a;
+    t[2] = (float)(rgb & 0xFF) / 255.0f * a;
+    t[3] = a;
+}
+
+static void chart_prepare(const B* c)
+{
+    const HUDCHART* K = &c->ops->chart;
+    float px = c->px, hw = K->w * px / 2, hh = K->halo_w * px / 2, cr = K->cross * px, cw = K->cross_w * px / 2;
+    float reach = (hw > hh ? hw : hh) + 1, ce = cr + cw + 1, ends = reach > ce ? reach : ce;
+    int n = K->n < HUD_MAXSEAT ? K->n : HUD_MAXSEAT, np = K->npt < HUD_MAXPT ? K->npt : HUD_MAXPT;
+    int ncol = !n || np < 1 ? 0 : np < 2 ? 1 : (np - 2) / HUD_CHART_SEG + 1, col, g, j, k;
+    float lo[HUD_MAXSEAT], hi[HUD_MAXSEAT];
+    int ord[HUD_MAXSEAT];
+
+    memset(s_cnext, 0, sizeof s_cnext);
+    s_cnext[0][0][0] = (float)n;
+    s_cnext[0][0][1] = (float)np;
+    s_cnext[0][0][2] = hw;
+    s_cnext[0][0][3] = hh;
+    rgba4(s_cnext[0][1], K->halo_rgb, K->halo_a);
+    rgba4(s_cnext[0][2], K->halo_rgb, 1);
+    s_cnext[0][3][0] = cr;
+    s_cnext[0][3][1] = cw;
+    s_cnext[0][3][2] = (float)HUD_CHART_BOX;
+    for (g = 0; g < n; g++) {
+        float* f = s_cnext[1 + g][1];
+        rgba4(s_cnext[1 + g][0], K->g[g].rgb, 1);
+        f[0] = (float)(K->g[g].dark != 0);
+        f[1] = (float)(K->g[g].cross != 0);
+        f[2] = K->g[g].cx * px + c->ox;
+        f[3] = K->g[g].cy * px + c->oy;
+        for (j = 0; j < np; j++) {
+            s_cnext[1 + g][2 + j][0] = K->pt[g][j][0] * px + c->ox;
+            s_cnext[1 + g][2 + j][1] = K->pt[g][j][1] * px + c->oy;
+        }
+    }
+
+    /* the bands, in the screen's device pixels as emit takes them; the image is the attachment's */
+    s_nband = 0;
+#define PX(i) (K->pt[0][i][0] * px)
+    for (col = 0; col < ncol; col++) {
+        int js = col * HUD_CHART_SEG, je = np - 2 < js + HUD_CHART_SEG - 1 ? np - 2 : js + HUD_CHART_SEG - 1;
+        float x0 = col == 0 ? PX(0) - ends : PX(js), x1 = col == ncol - 1 ? PX(np - 1) + ends : PX(je + 1);
+        int j0 = js, j1 = je, nb = 0;
+        while (j0 > 0 && PX(j0) >= x0 - reach) j0--;
+        while (j1 + 1 <= np - 2 && PX(j1 + 1) <= x1 + reach) j1++;
+        for (g = 0; g < n; g++) {
+            float y0 = 1e30f, y1 = -1e30f;
+            for (j = j0; j <= j1 + 1 && j < np; j++) {
+                float y = K->pt[g][j][1] * px;
+                if (y < y0) y0 = y;
+                if (y > y1) y1 = y;
+            }
+            y0 -= reach;
+            y1 += reach;
+            if (K->g[g].cross) {
+                float cx = K->g[g].cx * px, cy = K->g[g].cy * px;
+                if (cx + ce >= x0 && cx - ce <= x1) {
+                    if (cy - ce < y0) y0 = cy - ce;
+                    if (cy + ce > y1) y1 = cy + ce;
+                }
+            }
+            s_cnext[1 + g][HUD_CHART_BOX + col][0] = y0 + c->oy;
+            s_cnext[1 + g][HUD_CHART_BOX + col][1] = y1 + c->oy;
+            lo[g] = y0;
+            hi[g] = y1;
+            for (k = nb++; k > 0 && lo[ord[k - 1]] > y0; k--) ord[k] = ord[k - 1];
+            ord[k] = g;
+        }
+        for (k = 0; k < nb; k++) {
+            BAND* b = &s_band[s_nband++];
+            float top = lo[ord[k]], bot = hi[ord[k]];
+            while (k + 1 < nb && lo[ord[k + 1]] <= bot) {
+                k++;
+                if (hi[ord[k]] > bot) bot = hi[ord[k]];
+            }
+            b->x0 = x0; b->x1 = x1; b->y0 = top; b->y1 = bot;
+            b->j0 = j0; b->j1 = j1; b->col = col;
+        }
+    }
+#undef PX
+    if (memcmp(s_cnext, s_chart, sizeof s_chart)) {
+        memcpy(s_chart, s_cnext, sizeof s_chart);
+        s_cgen++;
+    }
+}
+
 int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, float px, int ox, int oy, int w, int h,
                         HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb, int* dropped)
 {
     B c;
-    int i, j, n;
+    int i, j, n, charted = 0;
     HUDQUAD q[HUD_MAXQUAD];
     if (s_full) atlas_empty();
     memset(&c, 0, sizeof c);
@@ -370,11 +553,44 @@ int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, float px, int ox, 
             }
             break;
         case HOP_SOLID:
+            if (op->flags & HOPF_DROP) {
+                /* the blurred box reaches 3 sigma past its edges, where a Gaussian has all but
+                   0.14 % of itself */
+                float x0 = op->r.x * px, y0 = op->r.y * px, x1 = (op->r.x + op->r.w) * px, y1 = (op->r.y + op->r.h) * px;
+                float sg = op->shade * px / 2, dy = op->size * px, e = 3 * sg;
+                if (!(in = emit(&c, -1, HUDM_DROP, x0 - e, y0 - e + (dy < 0 ? dy : 0), x1 + e, y1 + e + (dy > 0 ? dy : 0), op))) break;
+                in->px[0] = x0 + c.ox; in->px[1] = y0 + c.oy; in->px[2] = x1 + c.ox; in->px[3] = y1 + c.oy;
+                in->uv[0] = in->uv[2] = dy;
+                in->uv[1] = in->uv[3] = 0;
+                colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
+                in->prm[1] = sg;
+                break;
+            }
+            /* fall through */
         case HOP_DOT:
             if (!(in = emit(&c, -1, op->kind == HOP_DOT ? HUDM_DOT : op->flags & HOPF_SHADE ? HUDM_SHADE : HUDM_SOLID,
                             op->r.x * px, op->r.y * px, (op->r.x + op->r.w) * px, (op->r.y + op->r.h) * px, op))) break;
             colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
             in->prm[1] = op->shade * px / 2;
+            break;
+        case HOP_LINE: {
+            float x0 = op->r.x * px, y0 = op->r.y * px, x1 = (op->r.x + op->r.w) * px, y1 = (op->r.y + op->r.h) * px;
+            float hw = op->size * px / 2, e = hw + 1;
+            if (!(in = emit(&c, -1, HUDM_LINE, (x0 < x1 ? x0 : x1) - e, (y0 < y1 ? y0 : y1) - e,
+                            (x0 > x1 ? x0 : x1) + e, (y0 > y1 ? y0 : y1) + e, op))) break;
+            in->px[0] = x0 + c.ox; in->px[1] = y0 + c.oy; in->px[2] = x1 + c.ox; in->px[3] = y1 + c.oy;
+            colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
+            in->prm[1] = hw;
+            break;
+        }
+        case HOP_CHART:
+            if (!charted) { chart_prepare(&c); charted = 1; }
+            for (j = 0; j < s_nband; j++) {
+                const BAND* bd = &s_band[j];
+                if (!(in = emit(&c, HUD_TEX_CHART, HUDM_CHART, bd->x0, bd->y0, bd->x1, bd->y1, op))) break;
+                in->px[0] = (float)bd->j0; in->px[1] = (float)bd->j1; in->px[2] = (float)bd->col; in->px[3] = 0;
+                colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
+            }
             break;
         case HOP_TEXT:
             text(&c, op);

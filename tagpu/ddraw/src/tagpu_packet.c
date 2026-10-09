@@ -539,6 +539,11 @@ static const char* frame_valid(const void* rec)
         h = tagpu_pk_hud(p);
         if (h->nseat > TAGPU_PK_HUD_SEATS || h->nmark > TAGPU_PK_HUD_MARKS) return "replay HUD counts";
     }
+    if (p->hstat_len) {
+        if (!p->hud_len || p->hstat_len != sizeof(TAGPU_PK_HUDSTAT) || !area_ok(p, p->hstat_off, p->hstat_len))
+            return "replay HUD stats area";
+        if (tagpu_pk_hudstat(p)->npt > TAGPU_PK_HUD_POINTS) return "replay HUD stats count";
+    }
     /* THE FOUR WORLD TABLES. Each is checked ONCE, here, against
        the record's own committed extent, so every consumer indexes with its
        `n_` and nothing else. `area_ok` does the 4-alignment, the "starts after

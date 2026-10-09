@@ -14,6 +14,7 @@
 #include "tagpu_hudstate.h"
 #include "tagpu_hudinput.h"
 #include "tagpu_hudmarks.h"
+#include "tagpu_hudart.h"
 #include "tagpu_replay.h"
 #include "tagpu_pal.h"
 #include "tagpu_hud.h"
@@ -42,6 +43,12 @@ void tagpu_hudstate_refuse(const char* why)
                    "session", why);
 }
 
+int __cdecl tagpu_hudstate_drawing(void)
+{
+    unsigned first, last;
+    return tagpu_hudstate_on() && tagpu_replay_live() && tagpu_replay_span(&first, &last);
+}
+
 int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
 {
     TAGPU_REPLAY_PLAYER pl[TAGPU_PK_HUD_SEATS];
@@ -49,7 +56,7 @@ int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
     unsigned char kind[TAGPU_PK_HUD_MARKS], seat[TAGPU_PK_HUD_MARKS];
     int n, i;
 
-    if (!tagpu_hudstate_on() || !tagpu_replay_live() || !tagpu_replay_span(&first, &last)) return 0;
+    if (!tagpu_hudstate_drawing() || !tagpu_replay_span(&first, &last)) return 0;
     memset(h, 0, sizeof *h);
     h->now = now;
     h->first = first;
@@ -86,11 +93,26 @@ int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
     return 1;
 }
 
+int tagpu_hudstate_fill_stats(TAGPU_PK_HUDSTAT* s, const TAGPU_PK_HUD* h)
+{
+    unsigned char seat[TAGPU_PK_HUD_SEATS];
+    char key[TAGPU_PK_HUD_MEASURE + 1];
+    int i, n = h->nseat < TAGPU_PK_HUD_SEATS ? h->nseat : (int)TAGPU_PK_HUD_SEATS;
+    if (!h->stat_open) return 0;
+    memcpy(key, h->stat_measure, TAGPU_PK_HUD_MEASURE);
+    key[TAGPU_PK_HUD_MEASURE] = 0;
+    for (i = 0; i < n; i++) seat[i] = h->seat[i].seat;
+    s->npt = (uint16_t)tagpu_hudmarks_stats(key, seat, n, &s->v[0][0], (int)TAGPU_PK_HUD_POINTS, &s->period, &s->base);
+    return 1;
+}
+
 /* ---- the render thread -------------------------------------------------------------------- */
 
 static HUDSTATE s_st;
 /* every marker the packet carries -- the walker's deaths and defeats, then the bookmarks -- fits */
 typedef char hud_marks_fit[(TAGPU_PK_HUD_MARKS <= HUD_MAXMARK) ? 1 : -1];
+typedef char hud_stats_fit[(TAGPU_PK_HUD_POINTS == HUD_MAXPT && TAGPU_PK_HUD_MEASURE == HUD_MEASURE
+                            && TAGPU_PK_HUD_SEATS <= HUD_MAXSEAT) ? 1 : -1];
 static int      s_have;
 static unsigned s_frame;                /* the render-thread frame `s_st` is for */
 static float    s_px;
@@ -215,7 +237,24 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
        clicks */
     fprintf(f, ",\"held\":");
     jstr(f, st->held);
-    fprintf(f, "},\"hits\":{\"track\":[%d,%d],\"first\":%u,\"last\":%u,\"at\":[",
+    /* the stats window whole, as the mockup's state carries it */
+    fprintf(f, ",\"stats\":{\"open\":%s,\"x\":%.9g,\"y\":%.9g,\"measure\":", st->stats.open ? "true" : "false",
+            st->stats.x, st->stats.y);
+    jstr(f, st->stats.measure);
+    fprintf(f, ",\"split\":\"%s\",\"dt\":%.9g,\"t0\":%.9g,\"groups\":[", st->stats.team ? "team" : "player",
+            st->stats.dt, st->stats.t0);
+    for (i = 0; i < st->stats.ngroup; i++) {
+        const HUDGROUP* g = &st->stats.group[i];
+        fprintf(f, "%s{\"name\":", i ? "," : "");
+        jstr(f, g->name);
+        fprintf(f, ",\"col\":\"#%06x\",\"death\":", (unsigned)g->colour);
+        if (g->death < 0) fprintf(f, "null");
+        else fprintf(f, "%.9g", g->death);
+        fprintf(f, ",\"v\":[");
+        for (j = 0; j < st->stats.npt; j++) fprintf(f, "%s%.9g", j ? "," : "", g->v[j]);
+        fprintf(f, "]}");
+    }
+    fprintf(f, "]}},\"hits\":{\"track\":[%d,%d],\"first\":%u,\"last\":%u,\"at\":[",
             s_map.track_x0, s_map.track_x1, (unsigned)s_map.first, (unsigned)s_map.last);
     for (i = 0; i < (int)s_map.n; i++) {
         const TAGPU_CMD_HUDHIT* t = &s_map.hit[i];
@@ -230,6 +269,61 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
     }
     tagpu_logf("hud: state dumped to %s: %d seats, %d teams, %d markers, t %.1f of %.1f s, %dx%d at %.4f px a unit",
                DUMP_OUT, st->nseat, st->nteam, st->nmark, st->t, st->T, vw, vh, u);
+}
+
+/* a sample is data from the recording: one that is not a finite number is drawn as 0 */
+static float sample(float v)
+{
+    return v == v && v < 1e30f && v > -1e30f ? v : 0.0f;
+}
+
+/* THE STATS WINDOW: its state as the input keeps it, and the groups the mockup's host makes of the
+   samples (index.html `state()`): a player each, with the cross of its first commander death, or,
+   when the split asks for teams and there are two teams to tell apart, a team each, summed, in
+   the chart's team colours. */
+static void stats(const struct TAGPU_PACKET* pk, const TAGPU_PK_HUD* h, HUDSTATE* st)
+{
+    const TAGPU_PK_HUDSTAT* hs = tagpu_pk_hudstat(pk);
+    const HUDART* art = tagpu_hudart_get();
+    const HUDGLOBALS* gl = art ? tagpu_hudlay_globals(art->lay) : NULL;
+    HUDSTATS* S = &st->stats;
+    int npt = hs ? (hs->npt < HUD_MAXPT ? hs->npt : HUD_MAXPT) : 0, i, j, k;
+
+    S->open = h->stat_open;
+    S->x = h->stat_x;
+    S->y = h->stat_y;
+    memcpy(S->measure, h->stat_measure, sizeof S->measure);
+    S->measure[sizeof S->measure - 1] = 0;
+    S->team = h->stat_team && st->nteam > 1;
+    S->dt = hs && hs->period ? (float)hs->period / TICKS : 1.0f;
+    S->t0 = hs && hs->base > h->first ? (float)(hs->base - h->first) / TICKS : 0.0f;
+    S->npt = npt;
+    if (!S->team) {
+        S->ngroup = st->nseat;
+        for (i = 0; i < st->nseat; i++) {
+            HUDGROUP* g = &S->group[i];
+            memcpy(g->name, st->seat[i].name, sizeof g->name);
+            g->colour = st->seat[i].colour;
+            g->death = -1.0f;
+            for (j = 0; j < st->nmark; j++)
+                if (st->mark[j].kind == HUD_MK_DEATH && st->mark[j].seat == i && (g->death < 0 || st->mark[j].t < g->death))
+                    g->death = st->mark[j].t;
+            for (k = 0; k < npt; k++) g->v[k] = sample(hs->v[i][k]);
+        }
+        return;
+    }
+    S->ngroup = st->nteam;
+    for (i = 0; i < st->nteam; i++) {
+        HUDGROUP* g = &S->group[i];
+        snprintf(g->name, sizeof g->name, "Team %d", i + 1);
+        g->colour = gl ? gl->team_rgb[i % gl->nteam_rgb] : 0x808080;
+        g->death = -1.0f;
+        for (k = 0; k < npt; k++) {
+            float v = 0;
+            for (j = 0; j < st->team_n[i]; j++) v += sample(hs->v[st->team_seat[i][j] % TAGPU_PK_HUD_SEATS][k]);
+            g->v[k] = v;
+        }
+    }
 }
 
 void tagpu_hudstate_present(const TAGPU_FRAME* f)
@@ -299,6 +393,8 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     }
     st->nmark = k;
 
+    stats(pk, h, st);
+
     /* THE HUD'S OWN STATE, as its input keeps it (tagpu_hudinput.c): the pointer in units, and
        Sight and Follow from recorded seats to rows */
     st->mx = st->my = -1;
@@ -357,6 +453,9 @@ void tagpu_hudstate_drawn(const HUDOPS* ops)
         tagpu_logf("hud: %d controls past the hit map's %u are not clickable (said once)", cut,
                    TAGPU_CMD_HUDHITS);
     }
+    s_map.u = s_px;
+    s_map.W = s_st.W;
+    s_map.H = s_st.H;
     s_map.track_x0 = dev((float)s_ox + ops->track_x0 * s_px);
     s_map.track_x1 = dev((float)s_ox + ops->track_x1 * s_px);
     s_map.first = (uint8_t)(ops->first < 0 ? 0 : ops->first > 255 ? 255 : ops->first);

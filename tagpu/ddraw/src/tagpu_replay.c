@@ -85,6 +85,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_gaf.h"
 #include "tagpu_packet.h"
+#include "tagpu_hudstate.h"
 #include "git.h"
 
 #define TA_MAINPP      0x00511DE8u
@@ -8357,6 +8358,33 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
     return n;
 }
 
+/* The defs are the level's, which a load makes and only the teardown frees, and their count the
+   engine's own, UNITINFOCount. A type's metal cost is the float def+0x18A (0x438650 takes
+   max(+0x18A, 10.0) as one; 0x402640 credits it times the build left); it moves when def+0x22F is
+   1, the test 0x4862CF gives a unit its mover by; and def+0x245 bit 0x40000 is the FBI
+   `commander` tag. */
+unsigned tagpu_replay_army_values(float* out, unsigned cap)
+{
+    const char* ta = ta_main();
+    const char* defs;
+    unsigned n, i;
+    if (!ta || !tagpu_replay_live()) return 0;
+    defs = *(const char* const*)(ta + OFF_UDEFS);
+    n = *(const unsigned*)(ta + OFF_UCOUNT);
+    if (!defs) return 0;
+    if (!out) return n;
+    if (n > cap) n = cap;
+    for (i = 0; i < n; i++) {
+        const char* d = defs + (size_t)i * DEF_STRIDE;
+        float cost;
+        uint32_t tags;
+        memcpy(&cost, d + 0x18A, 4);
+        memcpy(&tags, d + 0x245, 4);
+        out[i] = d[0x22F] == 1 && !(tags & 0x40000u) ? cost : 0.0f;
+    }
+    return n;
+}
+
 int tagpu_replay_sight(void)
 {
     const char* ta = ta_main();
@@ -9625,6 +9653,48 @@ static void watch_sites_init(void)
     tagpu_logf("replay: the main menu's return 0x4270A9 and the RESTART gate 0x460880 in");
 }
 
+/* THE PAUSE ICON. DrawGameScreen 0x468CF0 draws the GAF entry `igpaused` (main+0x1481B) while the
+   pause bit, bit 0 of main+0x38A51, is set: `test byte [eax+0x38A51],1` at 0x46A107 and `je
+   0x46A140` at 0x46A10E, with eax = main from 0x46A102; 0x46A110 draws it and goes on at 0x46A14E,
+   as 0x46A140 does after loading the same esi/edi. A recording played with the replay HUD shows no
+   icon: the HUD's play button carries the pause (the mockup has none), and the icon sits in the
+   middle of the world, under the stats window. The stub takes the icon's branch only when the
+   pause bit is set and tagpu_hudstate_drawing answers 0; it keeps every register, and neither
+   continuation reads the flags before setting them. Game thread, inside the draw. */
+static void pause_icon_init(void)
+{
+    enum { SITE = 0x0046A107u, DRAW = 0x0046A110u, SKIP = 0x0046A140u };
+    static const unsigned char STOLEN[9] = { 0xF6, 0x80, 0x51, 0x8A, 0x03, 0x00, 0x01,   /* test   */
+                                             0x74, 0x30 };                               /* je +30 */
+    static const unsigned char MAIN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };              /* mov eax,[main] */
+    unsigned char *stub, *p;
+    if (!tagpu_detour_bytes_ok(SITE, STOLEN, (int)sizeof STOLEN) ||
+        memcmp((const void*)(size_t)(SITE - 5), MAIN, sizeof MAIN)) {
+        tagpu_logf("replay: the pause icon's test 0x46A107 holds other bytes: a replay shows it");
+        return;
+    }
+    if (!(stub = p = tagpu_detour_stub())) {
+        tagpu_logf("replay: no memory for the pause icon's stub: a replay shows it");
+        return;
+    }
+    memcpy(p, STOLEN, 7); p += 7;                       /* test byte [eax+0x38A51],1 */
+    *p++ = 0x74; *p++ = 0x10;                           /* jz skip             */
+    *p++ = 0x60;                                        /* pushad              */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)tagpu_hudstate_drawing); p += 4;
+    *p++ = 0x85; *p++ = 0xC0;                           /* test eax,eax        */
+    *p++ = 0x61;                                        /* popad (ZF kept)     */
+    *p++ = 0x75; *p++ = 0x05;                           /* jnz skip            */
+    *p++ = 0xE9; tagpu_detour_rel(p, DRAW); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, SKIP); p += 4;     /* skip:               */
+    if (!tagpu_detour_land(SITE, stub, (int)sizeof STOLEN)) {
+        tagpu_detour_stub_free(stub);
+        tagpu_logf("replay: FAILED the pause icon's test 0x46A107 could not be written: a replay "
+                   "shows it");
+        return;
+    }
+    tagpu_logf("replay: the pause icon's test 0x46A107 in");
+}
+
 void tagpu_replay_init(void)
 {
     enum { FILL = 0x0047B092u, PERSIST = 0x0047B09Cu, START1 = 0x00497963u, START2 = 0x00497ACDu,
@@ -9633,6 +9703,7 @@ void tagpu_replay_init(void)
     unsigned char *fill, *persist, *skip, *cue, *p;
     int ok = 1;
     frame_site_init();
+    pause_icon_init();
     rw_pause_init();
     rt_pace_init();
     mp_arena_init();

@@ -1009,7 +1009,8 @@ static void line(C* c, R org, double x0, double y0, double x1, double y1, double
 
 /* ---- the chart: one line per player or team; the part after the playhead faint; the legend
    ranked at the playhead. Sample s is at t0 + s * dt seconds; the minute labels step by the first
-   of axis.every that puts them axis.space apart. In the chart's own units from cb's top left, as
+   of axis.every that puts them axis.space apart, and one nearer the playhead's label than that is
+   left out. In the chart's own units from cb's top left, as
    the SVG's viewBox has them. -------------------------------------------------------------------- */
 
 static void chart(C* c, R cb, double Rl)
@@ -1053,7 +1054,9 @@ static void chart(C* c, R cb, double Rl)
     step = tj_num(tj_at(ev, ev ? ev->n - 1 : 0), 0);
     for (k = 0; ev && k < ev->n; k++)
         if (pw * tj_num(tj_at(ev, k), 0) / T >= num(c, A, "space")) { step = tj_num(tj_at(ev, k), 0); break; }
+    /* a minute label nearer the playhead's than the labels' own spacing would lie under it */
     for (t = 0; step > 0 && t <= T; t += step) {
+        if (fabs(Lp + pw * t / T - xph) < num(c, A, "space")) continue;
         clock_s(b, sizeof b, t);
         text_at(c, b, cb, Lp + pw * t / T, Tp + ph + below, 1, asz, acol, cb);
     }
@@ -1324,6 +1327,10 @@ static int load_globals(HUDLAY* l, char* err, size_t errn)
     l->g.neg_rgb = hexrgb(str(&c, v, "neg"));
     l->g.track_ends = (float)num(&c, obj(&c, obj(&c, obj(&c, l->L, "dock"), "rail"), "track"), "ends");
     l->g.toast_ms = (unsigned)num(&c, obj(&c, l->L, "toast"), "ms");
+    v = arr(&c, obj(&c, l->L, "chart"), "teams");
+    for (l->g.nteam_rgb = 0; v && l->g.nteam_rgb < v->n && l->g.nteam_rgb < 8; l->g.nteam_rgb++)
+        l->g.team_rgb[l->g.nteam_rgb] = hexrgb(tj_str(tj_at(v, l->g.nteam_rgb), ""));
+    if (!c.bad && !l->g.nteam_rgb) { snprintf(err, errn, "layout: chart.teams is empty"); return 0; }
     v = obj(&c, l->L, "window");
     l->g.win_w = (float)num(&c, v, "w");
     l->g.win_h = (float)num(&c, v, "h");

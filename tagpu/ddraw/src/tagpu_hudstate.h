@@ -25,9 +25,18 @@ int  tagpu_hudstate_on(void);
    now on. Render thread; published with a full barrier. */
 void tagpu_hudstate_refuse(const char* why);
 
+/* The HUD draws for the level in play: it is on and a recording plays, the fill's own test. Game
+   thread; cdecl, for the pause icon's stub (tagpu_replay.c, THE PAUSE ICON). */
+int  __cdecl tagpu_hudstate_drawing(void);
+
 /* The packet's HUD record for this draw, GameTime `now`: 1 when a recording plays and the HUD is
    on, 0 (and `h` untouched) otherwise. Game thread, from the packet's fill. */
 int  tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now);
+
+/* The packet's stats area for the record `h` just filled: 1 while its window is open, with the
+   samples of its measure for its seats, 0 (and `s` untouched) otherwise. Game thread, from the
+   packet's fill. */
+int  tagpu_hudstate_fill_stats(TAGPU_PK_HUDSTAT* s, const TAGPU_PK_HUD* h);
 
 /* Once a frame, from the overlay frame, after the palette's: the HUD for this frame, or none. */
 void tagpu_hudstate_present(const struct TAGPU_FRAME* f);

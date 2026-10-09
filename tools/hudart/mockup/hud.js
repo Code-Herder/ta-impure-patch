@@ -289,7 +289,9 @@ const HUD = (() => {
       h += `<line x1="${Lp}" x2="${Lp + pw}" y1="${y}" y2="${y}" stroke="${C.grid.colour}" stroke-opacity="${C.grid.opacity}" stroke-width="${C.grid.width}"/>`
         + tx(Lp - A.gap, y + A.baseline, fv(v), `font-size="${A.size}" fill="${A.colour}" text-anchor="end"`); });
     const step = A.every.find(e => pw * e / st.T >= A.space) || A.every[A.every.length - 1];
-    for (let t = 0; t <= st.T; t += step) h += tx(Lp + pw * t / st.T, Tp + ph + A.below, clock(t), `font-size="${A.size}" fill="${A.colour}" text-anchor="middle"`);
+    // a minute label nearer the playhead's than the labels' own spacing would lie under it: left out
+    for (let t = 0; t <= st.T; t += step) if (Math.abs(Lp + pw * t / st.T - xph) >= A.space)
+      h += tx(Lp + pw * t / st.T, Tp + ph + A.below, clock(t), `font-size="${A.size}" fill="${A.colour}" text-anchor="middle"`);
     const Ln = C.line, body = G.map(g => {
       const pts = g.v.map((v, s) => `${X(s).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
       let l = (dark(g.col) ? `<polyline points="${pts}" fill="none" stroke="${Ln.halo}" stroke-width="${Ln.width + 1}" stroke-opacity="${Ln.halo_opacity}"/>` : '')

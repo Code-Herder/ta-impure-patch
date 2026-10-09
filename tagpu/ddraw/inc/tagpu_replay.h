@@ -129,6 +129,11 @@ typedef struct TAGPU_REPLAY_PLAYER {
     unsigned allies;                /* bit j: the alliance row marks recorded seat j */
 } TAGPU_REPLAY_PLAYER;
 int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap);
+/* The army value of one finished unit of each type, by the type's index (a unit's +0xA6), for the
+   stats window's walker (tagpu_hudmarks.c): its metal cost when the type moves and is not a
+   commander, 0 otherwise. Up to `cap` of them into `out`; the count, 0 when no recording plays.
+   With `out` NULL, the level's count of types. Game thread only. */
+unsigned tagpu_replay_army_values(float* out, unsigned cap);
 int tagpu_replay_sight(void);
 int tagpu_replay_sight_request(int seat);
 /* Follow, Jump and Free cam, game thread only (tagpu_replay.c, FOLLOW, JUMP AND FREE CAM): a HUD

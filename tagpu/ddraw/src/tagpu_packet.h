@@ -644,6 +644,8 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_HUD_MARKS  320u    /* the walker's 256 markers + 64 bookmarks */
 #define TAGPU_PK_HUD_KEY    24u     /* a control's key, HUD_KEYLEN             */
 #define TAGPU_PK_HUD_TOAST  64u     /* HUD_TOASTLEN                            */
+#define TAGPU_PK_HUD_POINTS 512u    /* a stats series' samples, HUD_MAXPT      */
+#define TAGPU_PK_HUD_MEASURE 12u    /* a measure's key, HUD_MEASURE            */
 enum { TAGPU_PK_MK_DEATH, TAGPU_PK_MK_DEFEAT, TAGPU_PK_MK_BOOKMARK };
 typedef struct TAGPU_PK_HUDSEAT {
     char     name[32];          /* the recording header's, NUL-terminated       */
@@ -683,12 +685,26 @@ typedef struct TAGPU_PK_HUD {
     uint8_t  scroll;            /* the column's first item, as asked             */
     int8_t   sight, follow;     /* the recorded seat Sight and Follow show; -1
                                    the full map, the free camera                 */
-    uint8_t  pad[2];
+    uint8_t  stat_open;         /* the stats window is open                      */
+    uint8_t  stat_team;         /* its split asks for the teams                  */
+    char     stat_measure[TAGPU_PK_HUD_MEASURE];  /* its measure's key           */
+    float    stat_x, stat_y;    /* its top left as asked, in HUD units           */
     char     held[TAGPU_PK_HUD_KEY];     /* the control held down; "" none       */
     char     toast[TAGPU_PK_HUD_TOAST];  /* UTF-8; "" none                       */
     TAGPU_PK_HUDSEAT seat[TAGPU_PK_HUD_SEATS];
     TAGPU_PK_HUDMARK mark[TAGPU_PK_HUD_MARKS];
 } TAGPU_PK_HUD;
+
+/* The stats window's samples, while it is open: the chosen measure's, one row
+   per seat in TAGPU_PK_HUD `seat` order, sample k at GameTime base + k * period
+   (tagpu_hudmarks.h). One record in `hstat_off`/`hstat_len`, whose length is
+   exactly sizeof(TAGPU_PK_HUDSTAT); no area when the window is closed. */
+typedef struct TAGPU_PK_HUDSTAT {
+    uint32_t period, base;
+    uint16_t npt;               /* <= TAGPU_PK_HUD_POINTS                        */
+    uint8_t  pad[2];
+    float    v[TAGPU_PK_HUD_SEATS][TAGPU_PK_HUD_POINTS];
+} TAGPU_PK_HUDSTAT;
 
 #define TAGPU_PK_SHD_ROWS   32u      /* the engine's PALETTE.SHD shade table:  */
 #define TAGPU_PK_SHD_BYTES  (TAGPU_PK_SHD_ROWS * 256u)   /* 32 x 256 bytes     */
@@ -979,6 +995,7 @@ typedef struct TAGPU_PACKET {
 
     /* ---- the replay HUD ---- */
     uint32_t hud_off, hud_len;        /* one TAGPU_PK_HUD; 0 = no recording plays */
+    uint32_t hstat_off, hstat_len;    /* one TAGPU_PK_HUDSTAT; 0 = no stats window */
     uint32_t truncated;         /* TAGPU_PK_TRUNC_* bits: what did not fit      */
     uint32_t crc;               /* CRC-32 of the slot with these two fields as
                                    zero, under `tagpu_packet.check`; else 0     */
@@ -1006,6 +1023,8 @@ typedef struct TAGPU_CMD_HUD {
     uint8_t  pad;
     uint8_t  seat[TAGPU_PK_HUD_SEATS];  /* row i's recorded seat                 */
     uint8_t  pad2[2];
+    float    u;                 /* the client pixels of a HUD unit, and the      */
+    float    W, H;              /* screen in units: the window drag's frame      */
     TAGPU_CMD_HUDHIT hit[TAGPU_CMD_HUDHITS];
 } TAGPU_CMD_HUD;
 
@@ -1122,6 +1141,8 @@ static __inline const TAGPU_PK_MAPFEAT* tagpu_pk_mapfeat(const TAGPU_PACKET* p)
 /* the replay HUD's record, or NULL: see TAGPU_PK_HUD */
 static __inline const TAGPU_PK_HUD* tagpu_pk_hud(const TAGPU_PACKET* p)
 { return p->hud_len ? (const TAGPU_PK_HUD*)(const void*)((const unsigned char*)p + p->hud_off) : (const TAGPU_PK_HUD*)0; }
+static __inline const TAGPU_PK_HUDSTAT* tagpu_pk_hudstat(const TAGPU_PACKET* p)
+{ return p->hstat_len ? (const TAGPU_PK_HUDSTAT*)(const void*)((const unsigned char*)p + p->hstat_off) : (const TAGPU_PK_HUDSTAT*)0; }
 
 /* ---- lifetime ---- */
 /* DLL attach, before either thread exists — never lazily: reserves the slots

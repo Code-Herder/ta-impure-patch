@@ -22,7 +22,12 @@
    FRAME'S OWN COMMAND BUFFER through the slot's staging buffer, behind a barrier whose first scope
    includes every frame already submitted (the order tagpu_vk_stage.c's in-frame copies rest on),
    as many as the buffer has room for; the rest go on the next frames, and until the last has
-   gone the frame's glyphs are transparent (hide_glyphs). Text can be late; nothing waits.
+   gone the frame's glyphs are transparent (hide_mode). Text can be late; nothing waits.
+
+   THE CHART'S IMAGE (tagpu_huddraw.h) is 157 KB of RGBA32F, sent whole in the frame's own
+   command buffer when its generation moves, behind the same barrier; a frame that has no room for
+   it draws no chart lines (hide_chart), and the next sends it. Its first generation goes before
+   the HUD draws at all, so every draw that binds it binds a written image.
 
    IT KNOWS NOTHING ABOUT A WINDOW, and reads no engine state: everything arrives in its
    arguments or in the loaded HUD (tagpu_hudart.h), which is immutable. */
@@ -83,7 +88,9 @@ static VkPipelineLayout      s_plo;
 static VkPipeline            s_pipe;
 static VkDescriptorPool      s_dpool;
 static VkSampler             s_clamp, s_repeat, s_glyph;
-static TEX                   s_part[MAXPART], s_atlas;
+static TEX                   s_part[MAXPART], s_atlas, s_chart;
+static VkSampler             s_near;
+static unsigned              s_cgen;            /* the chart generation the device holds; 0 none */
 static int                   s_nparts;
 static int                   s_nsent;           /* the parts uploaded and their chains blitted */
 static int                   s_sent;            /* all of them                                 */
@@ -415,8 +422,9 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
        it instead of the pass drawing nothing. */
     if (!format_ok(d, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT
                                               | VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT)
-        || !format_ok(d, VK_FORMAT_R8_UNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
-        plog(d, "hud: this device cannot filter or blit RGBA8 / R8 - the pass stays down");
+        || !format_ok(d, VK_FORMAT_R8_UNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)
+        || !format_ok(d, VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+        plog(d, "hud: this device cannot filter or blit RGBA8 / R8, or sample RGBA32F - the pass stays down");
         return 0;
     }
     s_nparts = tagpu_hudlay_nparts(art->lay);
@@ -426,11 +434,20 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
     if (!mk_sampler(d, &s_clamp, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, 1)
         || !mk_sampler(d, &s_repeat, VK_SAMPLER_ADDRESS_MODE_REPEAT, 1)
         || !mk_sampler(d, &s_glyph, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, 0)) return 0;
+    /* the chart's image is data, read with texelFetch; RGBA32F need not filter, so its sampler
+       does not ask it to */
+    {
+        VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+        sci.magFilter = sci.minFilter = VK_FILTER_NEAREST;
+        sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        if (vkCreateSampler(d->dev, &sci, NULL, &s_near) != VK_SUCCESS) return 0;
+    }
 
     memset(&ps, 0, sizeof ps);
     ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps.descriptorCount = (uint32_t)s_nparts + 1;
-    dpi.maxSets = (uint32_t)s_nparts + 1;
+    ps.descriptorCount = (uint32_t)s_nparts + 2;
+    dpi.maxSets = (uint32_t)s_nparts + 2;
     dpi.poolSizeCount = 1;
     dpi.pPoolSizes = &ps;
     if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) return 0;
@@ -445,6 +462,7 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
         }
     }
     if (!mk_tex(d, &s_atlas, VK_FORMAT_R8_UNORM, HUD_ATLAS, HUD_ATLAS, 1, s_glyph)) return 0;
+    if (!mk_tex(d, &s_chart, VK_FORMAT_R32G32B32A32_SFLOAT, HUD_CHART_W, HUD_CHART_H, 1, s_near)) return 0;
 
     bci.size = IBYTES * d->slots;
     bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
@@ -462,6 +480,7 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
 
     s_nsent = s_sent = 0;
     s_agen = 0;
+    s_cgen = 0;
     plog(d, "hud: the pass is up - %d parts, a %dx%d glyph atlas, %u frame slots",
          s_nparts, HUD_ATLAS, HUD_ATLAS, (unsigned)d->slots);
     return 1;
@@ -511,7 +530,7 @@ static int send_atlas(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* 
     }
     /* AFTER IT, ONLY THE CHANGED ROWS, a new generation's included (tagpu_huddraw.h), in this
        frame's command buffer and as many as its buffer has room for; the rest go next frame, and
-       the text waits for them (hide_glyphs). Nothing here waits on the device. */
+       the text waits for them (hide_mode). Nothing here waits on the device. */
     if (y1 <= y0) { s_agen = gen; return 1; }
     off = (st->used + 3) & ~(VkDeviceSize)3;
     if (!st->map || off >= st->cap) return 0;
@@ -554,17 +573,64 @@ static int send_atlas(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* 
     return 1;
 }
 
+/* The chart's image, whole, in this frame's command buffer when it fits what the slot mapped, once
+   its generation has moved. Every texel is written, so the image's old contents go: the barrier
+   leaves UNDEFINED, and its first scope still holds the reads of every frame already submitted.
+   1 the device holds the generation, 0 not this frame. */
+static int send_chart(VkCommandBuffer cb, TAGPU_VKSTAGE* st)
+{
+    unsigned gen;
+    const float* a = tagpu_huddraw_chart(&gen);
+    VkDeviceSize off, bytes = (VkDeviceSize)HUD_CHART_W * HUD_CHART_H * 4 * sizeof(float);
+    VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    VkBufferImageCopy rg;
+
+    if (gen == s_cgen) return 1;
+    off = (st->used + 15) & ~(VkDeviceSize)15;
+    if (!st->map || off + bytes > st->cap) return 0;
+    memcpy(st->map + off, a, (size_t)bytes);
+    st->used = off + bytes;
+    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = s_chart.img;
+    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    b.subresourceRange.levelCount = 1;
+    b.subresourceRange.layerCount = 1;
+    b.srcAccessMask = 0;
+    b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, NULL, 0, NULL, 1, &b);
+    memset(&rg, 0, sizeof rg);
+    rg.bufferOffset = off;
+    rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    rg.imageSubresource.layerCount = 1;
+    rg.imageExtent.width = HUD_CHART_W;
+    rg.imageExtent.height = HUD_CHART_H;
+    rg.imageExtent.depth = 1;
+    vkCmdCopyBufferToImage(cb, st->buf, s_chart.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
+    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, NULL, 0, NULL, 1, &b);
+    s_cgen = gen;
+    return 1;
+}
+
 /* ---- the frame ------------------------------------------------------------------------------- */
 
-/* The glyphs of a frame whose atlas the device does not hold yet, made transparent: changed rows
-   still waiting for room in a frame's buffer (send_atlas), or a frame with no staging, would
-   otherwise be sampled where the instances say -- empty texels, or an older generation's
-   glyphs. Fills and parts in the same runs still draw. */
-static void hide_glyphs(HUDINST* in, int n)
+/* The instances of one mode made transparent: a frame's glyphs whose atlas the device does not
+   hold yet -- changed rows still waiting for room in a frame's buffer (send_atlas), or a frame
+   with no staging -- which would otherwise be sampled where the instances say, empty texels or an
+   older generation's glyphs; and a frame's chart bands whose image is an older generation's,
+   whose points are not this frame's. Fills and parts in the same runs still draw. */
+static void hide_mode(HUDINST* in, int n, int mode)
 {
     int i;
     for (i = 0; i < n; i++)
-        if (in[i].prm[0] == (float)HUDM_GLYPH) in[i].rgba[0] = in[i].rgba[1] = in[i].rgba[2] = in[i].rgba[3] = 0;
+        if (in[i].prm[0] == (float)mode) in[i].rgba[0] = in[i].rgba[1] = in[i].rgba[2] = in[i].rgba[3] = 0;
 }
 
 int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
@@ -618,10 +684,11 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        with nothing to send gives its buffer back (tagpu_vk_stage.h, THE SHAPE). */
     sg = &s_stage[slot];
     {
-        unsigned gen;
+        unsigned gen, cgen;
         int y0, y1;
         tagpu_huddraw_atlas(&gen, &y0, &y1);
-        due = !s_sent || gen != s_agen || y1 > y0;
+        tagpu_huddraw_chart(&cgen);
+        due = !s_sent || gen != s_agen || y1 > y0 || cgen != s_cgen;
     }
     if (!due) {
         if (sg->buf) tagpu_vk_stage_drop(d, sg);
@@ -634,15 +701,19 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             }
         }
         if (s_sent && (r = send_atlas(d, cb, sg)) < 0) goto lost;
+        if (s_sent && s_agen) send_chart(cb, sg);
     }
-    if (!s_sent || !s_agen) { s_ninst = 0; return 0; }
+    if (!s_sent || !s_agen || !s_cgen) { s_ninst = 0; return 0; }
     /* THE TEXT DRAWS ONLY FROM WHAT THE DEVICE HOLDS: this build's glyphs are in the atlas the
        device has once its generation is s_agen and no row is left dirty */
     {
         unsigned gen;
         int y0, y1;
         tagpu_huddraw_atlas(&gen, &y0, &y1);
-        if (gen != s_agen || y1 > y0) hide_glyphs((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_ninst);
+        if (gen != s_agen || y1 > y0) hide_mode((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_ninst, HUDM_GLYPH);
+        /* and the chart's lines only from the generation this build wrote */
+        tagpu_huddraw_chart(&gen);
+        if (gen != s_cgen) hide_mode((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_ninst, HUDM_CHART);
     }
     /* what this frame draws is what a click is tested against */
     if (s_ninst > 0) tagpu_hudstate_drawn(&s_ops);
@@ -682,7 +753,8 @@ void tagpu_vk_hud_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     vkCmdBindVertexBuffers(cb, 0, 1, &s_ibuf, &off);
     for (i = 0; i < s_nbatch; i++) {
         const HUDBATCH* b = &s_batch[i];
-        const TEX* t = b->tex == HUD_TEX_ATLAS ? &s_atlas : b->tex >= 0 && b->tex < s_nparts ? &s_part[b->tex] : &s_atlas;
+        const TEX* t = b->tex == HUD_TEX_ATLAS ? &s_atlas : b->tex == HUD_TEX_CHART ? &s_chart
+                     : b->tex >= 0 && b->tex < s_nparts ? &s_part[b->tex] : &s_atlas;
         if (!b->count) continue;
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo, 0, 1, &t->set, 0, NULL);
         vkCmdDraw(cb, 4, (uint32_t)b->count, 0, (uint32_t)b->first);
@@ -701,17 +773,20 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     if (s_plo)   { vkDestroyPipelineLayout(dev, s_plo, NULL); s_plo = VK_NULL_HANDLE; }
     for (i = 0; i < MAXPART; i++) free_tex(dev, &s_part[i]);
     free_tex(dev, &s_atlas);
+    free_tex(dev, &s_chart);
     /* the sets go back with the pool */
     if (s_dpool) { vkDestroyDescriptorPool(dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_dsl)   { vkDestroyDescriptorSetLayout(dev, s_dsl, NULL); s_dsl = VK_NULL_HANDLE; }
     if (s_clamp)  { vkDestroySampler(dev, s_clamp, NULL); s_clamp = VK_NULL_HANDLE; }
     if (s_repeat) { vkDestroySampler(dev, s_repeat, NULL); s_repeat = VK_NULL_HANDLE; }
     if (s_glyph)  { vkDestroySampler(dev, s_glyph, NULL); s_glyph = VK_NULL_HANDLE; }
+    if (s_near)   { vkDestroySampler(dev, s_near, NULL); s_near = VK_NULL_HANDLE; }
     if (s_imap)  { vkUnmapMemory(dev, s_imem); s_imap = NULL; }
     if (s_ibuf)  { vkDestroyBuffer(dev, s_ibuf, NULL); s_ibuf = VK_NULL_HANDLE; }
     if (s_imem)  { vkFreeMemory(dev, s_imem, NULL); s_imem = VK_NULL_HANDLE; }
     s_nsent = s_sent = 0;
     s_agen = 0;
+    s_cgen = 0;
     s_ninst = s_nbatch = 0;
     /* UNBUILT, not REFUSED: a teardown or a resize must let the pass come back */
     s_state = ST_UNBUILT;
