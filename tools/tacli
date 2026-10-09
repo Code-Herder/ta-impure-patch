@@ -1916,8 +1916,9 @@ def _launch(args) -> dict:
                   "tagpu_peek.trigger", "tagpu_ui.trigger", "tagpu_eye.txt",
                   "tagpu_replay.play", "tagpu_keys.txt"):
         (inst.gamedir / stale).unlink(missing_ok=True)
-    for stale in inst.gamedir.glob("tagpu_keys.*.tmp"):
-        stale.unlink(missing_ok=True)
+    for pattern in ("tagpu_keys.*.tmp", "tagpu_*.tacli-tmp"):
+        for stale in inst.gamedir.glob(pattern):
+            stale.unlink(missing_ok=True)
     for log in inst.gamedir.glob("cnc-ddraw-*.log"):
         log.unlink()
 
@@ -2353,7 +2354,7 @@ def _peek(inst: Instance, specs, timeout: float):
     if not inst.running():
         die(f"{inst.name} is not running")
     cursor = _log_cursor(inst)
-    (inst.gamedir / "tagpu_peek.trigger").write_text("\n".join(specs) + "\n")
+    put_trigger(inst.gamedir / "tagpu_peek.trigger", "\n".join(specs) + "\n")
 
     deadline = time.time() + timeout
     rows = []
@@ -2408,7 +2409,7 @@ def cmd_weapons(args):
     result = inst.gamedir / "tagpu_weapons.json"
     since = result.stat().st_mtime if result.exists() else 0
     spec = "all" if not args.units else "\n".join(str(u) for u in args.units)
-    (inst.gamedir / "tagpu_weapons.trigger").write_text(spec + "\n")
+    put_trigger(inst.gamedir / "tagpu_weapons.trigger", spec + "\n")
     if not _wait_file(result, args.timeout, since):
         die("no weapon dump appeared (needs a running game past its first frame)")
     data = json.loads(result.read_text())
@@ -2606,6 +2607,24 @@ class _RemoteCursor:
     def text(self, advance=False) -> str:
         _log_root(self.inst)
         return self.cursor.text(advance)
+
+
+def put_trigger(path, text: str):
+    """A trigger the DLL reads whole and deletes, put in place whole. Written under a name of its
+    own and renamed over the target, so a poll finds no file or the complete one: a file created
+    empty and written after can be read empty and deleted in between, and the text then lands in
+    the deleted file. A remote path's write_text already moves a whole file into place."""
+    if isinstance(path, taremote.RemotePath):
+        path.write_text(text)
+        return
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tacli-tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def _log_cursor(inst: Instance):
@@ -4845,7 +4864,7 @@ def _scn_apply(inst: Instance, wire: str, timeout: float) -> dict:
     result = inst.gamedir / "tagpu_scenario.json"
     before = result.stat().st_mtime_ns if result.exists() else 0
     watch = CrashWatch(inst, "the scenario result")
-    (inst.gamedir / "tagpu_scenario.trigger").write_text(wire)
+    put_trigger(inst.gamedir / "tagpu_scenario.trigger", wire)
     deadline = time.time() + timeout
     while time.time() < deadline:
         if result.exists() and result.stat().st_mtime_ns > before:
@@ -4898,7 +4917,7 @@ def _scn_apply_run(inst: Instance, exp: dict, timeout: float, catalogue) -> dict
     # using the eye it actually wrote rather than re-deriving the projection here.
     eye = res.get("eye")
     if res.get("pin") and eye:
-        (inst.gamedir / "tagpu_eye.txt").write_text(f"{eye[0]} {eye[1]}\n")
+        put_trigger(inst.gamedir / "tagpu_eye.txt", f"{eye[0]} {eye[1]}\n")
     return res
 
 
@@ -6052,7 +6071,7 @@ def cmd_switches(args):
 
     result = inst.gamedir / "tagpu_switches.json"
     before = result.stat().st_mtime_ns if result.exists() else 0
-    (inst.gamedir / "tagpu_switches.trigger").write_text("\n".join(wants) + "\n")
+    put_trigger(inst.gamedir / "tagpu_switches.trigger", "\n".join(wants) + "\n")
     deadline = time.time() + args.timeout
     res = None
     while time.time() < deadline:

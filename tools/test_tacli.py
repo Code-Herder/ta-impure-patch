@@ -429,6 +429,38 @@ class KeyBatches(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["log"])
 
 
+class Triggers(unittest.TestCase):
+    """A content trigger is renamed into place whole: a DLL that reads it whenever it is there and
+    deletes it never reads it empty or in part."""
+
+    def test_a_polling_reader_reads_every_trigger_whole(self):
+        import threading
+        with tempfile.TemporaryDirectory() as d:
+            trig, stop, seen = Path(d) / "tagpu_peek.trigger", threading.Event(), []
+
+            def dll():
+                while not stop.is_set() or trig.exists():
+                    try:
+                        text = trig.read_text()
+                    except FileNotFoundError:
+                        continue
+                    trig.unlink()
+                    seen.append(text)
+
+            reader = threading.Thread(target=dll)
+            reader.start()
+            for i in range(300):
+                text = "".join(f"*0x511DE8+0x{i:x}:4 #{k}\n" for k in range(40))
+                tacli.put_trigger(trig, text)
+                while trig.exists():
+                    time.sleep(0.0005)
+            stop.set()
+            reader.join()
+            self.assertEqual(len(seen), 300)
+            self.assertTrue(all(t.count("\n") == 40 for t in seen))
+            self.assertEqual([p.name for p in Path(d).iterdir()], [])
+
+
 class Groups(unittest.TestCase):
     """assoc is on every gadget, so only a shared one is worth showing."""
 

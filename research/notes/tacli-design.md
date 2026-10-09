@@ -589,6 +589,14 @@ one function that makes a script, and it is unit-tested:
   means every event was consumed by the engine (`input-firewall.md`, *The transport*), `--json`
   carries the done line's counts, and a refusal or max(30 s, 0.2 s a token) of silence fails
   the command with that batch's last line.
+- **A trigger with content is renamed into place whole** (`put_trigger`): peek, weapons,
+  scenario, switches and the eye pin. The DLL polls each name, reads what is there and deletes
+  it, so a file created empty and written after can be read empty and deleted in between, and
+  its text then lands in the deleted file: under load, a peek that is never answered. A local
+  trigger is written under a name of its own (`tagpu_peek.trigger.<random>.tacli-tmp`) and
+  renamed over the target; a remote one's `write_text` already moves a whole file into place.
+  A launch deletes any `tagpu_*.tacli-tmp` a killed tacli left behind. An empty marker trigger
+  (`tagpu_ui.trigger`, `tagpu_shot.trigger`) is whole as soon as it exists.
 - **Nothing of the player's copy is replaced or deleted without its original beside it**
   (`RemotePath._guard`, which runs before every write, delete and rename, on both ends of a
   rename):
