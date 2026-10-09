@@ -4,31 +4,141 @@
 The live lane must produce real build/reclaim/guard orders before tareplay
 compares it with playback, restoration and fresh-process seeks. Memory reads
 are measurements through tacli's game-thread peek; all actions use its input.
+
+IN LOCKSTEP: a case holds the world (the DLL's `pause at` and `resume`, a test
+launch's own pacing, tagpu_replay.c THE PAUSE AT T) and advances it by exact
+ticks. Every click and key lands on a held world, so the world a click meets
+is a function of the ticks the case asked for, never of wall-clock pacing; an
+input's direct effect is read once after `tacli keys` returns (it returns once
+the engine has consumed every event); simulation progress is read after each
+tick of an explicit, bounded advance.
 """
 import argparse
 import json
+import os
 import re
 import struct
 import subprocess
 import sys
 import time
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
 TREE = Path(__file__).resolve().parents[1]
 TACLI = TREE / "tools/tacli"
 GAMETIME = "*0x511DE8+0x38a47"
-PAUSED = "*0x511DE8+0x38a51:2"   # bit 0: the pause the Pause key flips
+PAUSED = "*0x511DE8+0x38a51:2"   # bit 0: the pause the Pause key flips, and THE PAUSE AT T sets
+TRIGGER = "tagpu_replay.trigger"
+
+
+def tacli_api():
+    """tacli as a module, for its instance paths and its log reader (as tareplay loads it)."""
+    spec = spec_from_loader("_resource_cli", SourceFileLoader("_resource_cli", str(TACLI)))
+    api = module_from_spec(spec)
+    spec.loader.exec_module(api)
+    return api
 
 
 class Check:
     def __init__(self, name):
         self.name = name
+        self.lockstep()
         self.base = self.values("*0x511DE8+0x14357")[0]
         def loaded():
             roster = self.call("roster", "--json")["units"]
             units = {u["type"].upper(): u["engine_index"] for u in roster if u["owner"] == 0}
             return units if {"ARMCK", "ARMACK", "CORCK", "ARMPW", "ARMMEX"} <= units.keys() else None
         self.units = self.until(loaded, "resource fixture units have not reached the roster")
+
+    # -- lockstep: the world held, advanced by exact ticks
+    def lockstep(self):
+        """The trigger file and a log reader from now on; the world not yet held."""
+        api = tacli_api()
+        instance = api.Instance(self.name)
+        self.gamedir = instance.gamedir
+        self.reader = api._LogLines(api._log_cursor(instance))
+        self.log = []
+        self.held = False
+
+    def _answer(self, rx, start, seconds=60):
+        """The first log line from index `start` on matching `rx`."""
+        end = time.monotonic() + seconds
+        while True:
+            self.log += [ln.rstrip() for ln in self.reader()]
+            for ln in self.log[start:]:
+                if re.search(rx, ln):
+                    return ln
+            assert time.monotonic() < end, f"no line matching {rx!r} in {seconds} s"
+            time.sleep(0.02)
+
+    def _write(self, line):
+        """One line of the replay trigger, written whole and renamed into place as tareplay writes
+        it; the log index its answer is looked for from. Each caller awaits the answer before the
+        next line, so no line replaces one the DLL has not read."""
+        self.log += [ln.rstrip() for ln in self.reader()]
+        tmp = self.gamedir / (TRIGGER + ".tmp")
+        tmp.write_text(line + "\n")
+        os.replace(tmp, self.gamedir / TRIGGER)
+        return len(self.log)
+
+    def _resume(self):
+        start = self._write("resume")
+        got = self._answer(r"pause: resumed at GameTime \d+|resume: refused: .*", start)
+        assert got.startswith("pause: resumed"), f"resume: {got}"
+
+    def _pause_at(self, T):
+        """`pause at T` armed; the index its taking is looked for from. A refusal names the
+        GameTime the level is at, or None when the refusal is another."""
+        start = self._write(f"pause at {T}")
+        got = self._answer(rf"pause: (armed for GameTime {T}$|at {T} refused: .*)", start)
+        if "armed for" in got:
+            return start, None
+        m = re.search(r"the level is at GameTime (\d+)", got)
+        assert m, f"pause at {T}: {got}"
+        return None, int(m.group(1))
+
+    def _taken(self, T, start):
+        got = self._answer(rf"pause: (paused at GameTime {T}$|at {T} not taken.*)", start)
+        assert "paused at" in got, got
+        self.held, self.tick = True, T
+
+    def _still_held(self):
+        """The pause bit THE PAUSE AT T set is still set: nothing let the world run under a case
+        that holds it (`resume` checks only that the DLL took a pause)."""
+        assert self.values(PAUSED)[0] & 1, f"the world held at GameTime {self.tick} ran free"
+
+    def hold(self):
+        """The world held a few ticks on, wherever it was running; the case's lockstep starts
+        there. The level may pass a T before it is armed (the refusal names where it is). A world
+        an earlier process left held is resumed first; one the player paused refuses that."""
+        if self.values(PAUSED)[0] & 1:
+            self._resume()
+        T = self.values(GAMETIME)[0] + 2
+        for _ in range(5):
+            start, now = self._pause_at(T)
+            if start is not None:
+                return self._taken(T, start)
+            T = now + 30
+        raise AssertionError("the level ran past every GameTime the hold asked for")
+
+    def advance(self, n=1):
+        """Exactly `n` simulation ticks, and held again: `pause at` the held tick plus n, then
+        `resume` (which clears only the pause THE PAUSE AT T took)."""
+        assert self.held, "advance needs the world held"
+        self._still_held()
+        T = self.tick + n
+        start, now = self._pause_at(T)
+        assert start is not None, f"pause at {T}: the level is at GameTime {now}"
+        self._resume()
+        self._taken(T, start)
+
+    def release(self):
+        """The world running again, as tareplay's lane handed it over."""
+        if self.held:
+            self._still_held()
+            self.held = False
+            self._resume()
 
     def call(self, command, *args):
         r = subprocess.run([sys.executable, str(TACLI), command, self.name, *map(str, args)],
@@ -52,11 +162,11 @@ class Check:
         assert [r["spec"] for r in rows] == list(specs), f"peek answered {len(rows)} of {len(specs)} specs"
         return [r["value"] for r in rows]
 
-    def until(self, function, message, seconds=10, ticks=None):
-        """Poll until `function` answers. Without `ticks`, for `seconds` of wall clock: the camera
-        and the menus, which no simulation step drives. With `ticks`, simulation progress: bounded
-        by GameTime advancing that many ticks, failing at once if the world is paused (it would
-        never advance), and the wall clock only catching a game that stopped drawing frames."""
+    def until(self, function, message, seconds=10, ticks=None, step=1):
+        """Until `function` answers. Without `ticks`, polled for `seconds` of wall clock: the
+        camera and the menus, which no simulation step drives. With `ticks`, simulation progress
+        in lockstep: read on the held world, then after each advance of `step` ticks, at most
+        `ticks` ticks in all."""
         if ticks is None:
             end = time.monotonic() + seconds
             while True:
@@ -65,16 +175,13 @@ class Check:
                     return result
                 assert time.monotonic() < end, message
                 time.sleep(0.1)
-        start, end = self.values(GAMETIME)[0], time.monotonic() + 60
-        while True:
-            now, paused = self.values(GAMETIME, PAUSED)
+        for done in range(0, ticks + 1, step):
             result = function()
             if result:
                 return result
-            assert not paused & 1, f"{message} (the world is paused at GameTime {now})"
-            assert now - start < ticks, f"{message} in {ticks} ticks"
-            assert time.monotonic() < end, f"{message}: no frame in 60 s"
-            time.sleep(0.05)
+            if done + step <= ticks:
+                self.advance(step)
+        raise AssertionError(f"{message} in {ticks} ticks")
 
     @staticmethod
     def once(result, message):
@@ -171,12 +278,6 @@ class Check:
     def mode(self):
         return self.values("*0x511DE8+0x2cc3:1")[0]
 
-    def pause(self, on):
-        if bool(self.values("*0x511DE8+0x38a51:2")[0] & 1) != on:
-            self.keys("pause")
-        self.once(bool(self.values(PAUSED)[0] & 1) == on,
-                  "native pause did not reach the fixture state")
-
     def rect(self):
         return struct.unpack("<iiiiii", self.bytes("*0x511DE8+0x2c92:x18"))
 
@@ -216,21 +317,16 @@ class Check:
         self.resource_click(x, z, shift=shift)
         self.once(count() > before, "repeat click was not consumed as already queued")
 
-    def unqueue(self, x, z):
+    def unqueue(self, x, z, message="Shift-click did not cancel the queued resource plan"):
         def count():
             return len(self.call("log", "--grep", "resource: unqueued", "--tail", 100, "--json")["lines"])
-        # Both queue images must reach recorder capture points. A later
-        # render frame or command acknowledgement alone does not prove that.
-        self.next_tick()
+        # Both queue images must reach recorder capture points: a tick before the click and
+        # one after it. A render frame or the click's acknowledgement alone is none.
+        self.advance(1)
         before = count()
         self.resource_click(x, z, shift=True)
-        self.once(count() > before, "Shift-click did not cancel the queued resource plan")
-        self.next_tick()
-
-    def next_tick(self):
-        tick = self.values(GAMETIME)[0]
-        self.until(lambda: self.values(GAMETIME)[0] > tick,
-                   "resource queue state did not reach a later simulation tick", ticks=2)
+        self.once(count() > before, message)
+        self.advance(1)
 
     def guard(self, kind, target):
         """Give `kind` the preceding order a Shift-click appends after, a Guard of an owned unit
@@ -249,6 +345,25 @@ class Check:
                   "--expect", kind, "--expect-target", target)
         self.stepped(kind, target, f"{kind}'s Guard of {target} took no first step")
 
+    def occupy(self, kind, order):
+        """`kind`, unselected, ordered onto the footprint of the build `order` and advanced until
+        the engine's grid holds its index in a cell of that footprint: the ground the site test
+        0x47D2E0 refuses (a cell's unit word +0x00, the 13-byte cells at main+0x14287, row width
+        main+0x14233)."""
+        defs = self.values("*0x511DE8+0x1439b")[0]
+        fx, fz = struct.unpack("<hh", self.bytes(f"0x{defs + order['type'] * 0x249 + 0x14a:x}:x4"))
+        px, pz = order["pos"][0] >> 16, order["pos"][2] >> 16
+        x0, z0 = (px - fx * 8) // 16, (pz - fz * 8) // 16
+        grid, width = self.values("*0x511DE8+0x14287", "*0x511DE8+0x14233")
+        rows = [f"0x{grid + ((z0 + dz) * width + x0) * 13:x}:x{13 * fx}" for dz in range(fz)]
+        index = self.units[kind]
+        def stamped():
+            return any(struct.unpack_from("<H", bytes.fromhex(v), 13 * dx)[0] == index
+                       for v in self.snapshot(*rows) for dx in range(fx))
+        self.call("order", "move", "pos", px - 8 * fx, pz - 8 * fz, "--unit", index,
+                  "--expect", kind)
+        self.until(stamped, f"{kind} never stood on the queued site", ticks=900, step=15)
+
     def stepped(self, kind, target, message):
         """Return once `kind` holds a Guard of `target` past its first step (state +5 not 0): the
         point from which its compared fields are fixed (guard)."""
@@ -261,7 +376,7 @@ def mex(c, classic=False):
     if classic:
         # Launch forces right-button orders. Select the native interface
         # after launch so this fixture actually reaches the left-click gate.
-        c.keys("tab", "tab")
+        c.keys("tab")
         c.call("ui", "click", "PREFS")
         c.call("ui", "click", "SPEEDS")
         c.call("ui", "set", "LEFTCLICK", 0)
@@ -269,6 +384,8 @@ def mex(c, classic=False):
         c.call("ui", "click", "OK")
     c.until(lambda: c.values("*0x511DE8+0x37efa")[0] == int(not classic),
             "mex regression did not reach its required mouse interface")
+    # held after the options menu, whose OK resumes a paused game (tareplay's twin)
+    c.hold()
     c.eye(1000, 950)
     c.menu(RESOURCE=3, QUICKBUILD=0)
     c.select("ARMCK")
@@ -305,42 +422,48 @@ def mex(c, classic=False):
         "Quick Build and the manual ghost selected different deposit centers"
     c.stop("ARMCK")
     # A preceding Guard keeps the plan unstarted by queue ordering; the walk to the storage
-    # stays 250 world units south of the deposits clicked. Its first step needs the world
-    # running; the pause after it keeps native selection clicks on stationary constructors.
+    # stays 250 world units south of the deposits clicked. Its first step is advanced to;
+    # the world stays held at it for every click that follows.
     c.guard("ARMCK", "ARMMSTOR")
-    c.pause(True)
     preceding = c.orders("ARMCK")
     c.resource_click(560, 375, shift=True)
     orders = c.once(built(), "Quick Build failed with manual radius off")
-    c.pause(False)
     c.repeat(560, 375)
     assert c.orders("ARMCK") == orders, "repeat click changed the queued mex orders"
     # Another selected constructor must not cancel an unselected owner's plan.
-    c.pause(True)
     c.select("CORCK")
     other = c.orders("CORCK")
-    c.pause(False)
     c.repeat(560, 375, shift=True)
     assert c.orders("ARMCK") == orders and c.orders("CORCK") == other, "unqueue changed an unselected constructor or added an order"
     # The strongest available variant is now Moho, but the queued node is MEX.
-    c.pause(True)
     c.select("ARMCK", "ARMACK")
     advanced = c.orders("ARMACK")
-    c.pause(False)
     c.unqueue(560, 375)
     assert c.orders("ARMCK") == preceding, "unqueue removed the preceding Guard or kept the mex"
     assert c.orders("ARMACK") == advanced, "unqueue added an order to a constructor without the plan"
-    c.pause(True)
     c.select("ARMCK")
-    c.pause(False)
     c.stop("ARMCK")
     c.resource_click(560, 375)
     c.once(built(), "cancelled mex could not be queued again")
+    # A queued plan is the plan's whatever stands on its site (tagpu_resource.c site): with a
+    # unit stopped on its footprint, the Shift-click still cancels it rather than leaving the
+    # engine to append an order in its place.
+    c.stop("ARMCK")
+    c.guard("ARMCK", "ARMMSTOR")
+    preceding = c.orders("ARMCK")
+    c.resource_click(560, 375, shift=True)
+    plan = c.once([o for o in c.placed(c.orders("ARMCK")) if o["type"] == 78],
+                  "the mex to stand on was not queued")
+    c.occupy("ARMPW", plan[0])
+    c.select("ARMCK", "ARMACK")
+    c.unqueue(560, 375, "Shift-click did not cancel a queued plan with a unit on its site")
+    assert c.orders("ARMCK") == preceding, "Shift-click on an occupied queued site did not cancel only its plan"
     assert c.mode() == 1, "Quick Build left contextual mode"
-    print(f"resource-mex: {'left' if classic else 'right'} interface, center parity, snap boundary, Alt, independent toggle, plain no-op, selected-only variant-safe Shift cancellation and requeue passed")
+    print(f"resource-mex: {'left' if classic else 'right'} interface, center parity, snap boundary, Alt, independent toggle, plain no-op, selected-only variant-safe Shift cancellation and requeue, cancellation on an occupied site passed")
 
 
 def upgrade(c, shift=False):
+    c.hold()
     c.eye(1250, 1200)
     c.menu(RESOURCE=3, QUICKBUILD=1)
     c.select("ARMACK", "ARMCK", "CORCK", "ARMPW")
@@ -369,8 +492,11 @@ def upgrade(c, shift=False):
         h = c.orders(helper)
         assert sum(o["target"] == c.address("ARMACK") for o in h) == 1, f"{helper} did not guard the primary"
     assert c.orders("ARMPW") == combat, "Quick Build changed a selected combat unit's orders"
+    # read on the tick the repeat lands on: waiting for the helpers' first steps advanced the
+    # world, and ARMACK's new reclaim/build pair steps with it
+    queued = c.orders("ARMACK")
     c.repeat(x, z)
-    assert c.orders("ARMACK") == orders, "repeat upgrade toggled or duplicated its queue"
+    assert c.orders("ARMACK") == queued, "repeat upgrade toggled or duplicated its queue"
     for helper in ("ARMCK", "CORCK"):
         assert sum(o["target"] == c.address("ARMACK") for o in c.orders(helper)) == 1, "repeat upgrade duplicated a helper guard"
     if shift:
@@ -386,6 +512,7 @@ def upgrade(c, shift=False):
 
 
 def terrain(c, mode):
+    c.hold()
     c.eye(100, 150)
     c.menu(RESOURCE=3, QUICKBUILD=1)
     c.select("ARMCK")
@@ -428,6 +555,7 @@ def terrain(c, mode):
 
 
 def policy(c, mode, gamedir):
+    c.hold()
     c.eye(1000, 950)
     c.call("arm", "menu.open")
     def opened():
@@ -459,6 +587,7 @@ def policy(c, mode, gamedir):
 
 
 def geo_upgrade(c):
+    c.hold()
     c.eye(100, 150)
     c.menu(RESOURCE=3, QUICKBUILD=1)
     c.select("CORCK", "ARMCK")
@@ -487,6 +616,7 @@ def geo_upgrade(c):
 
 
 def nearby(c):
+    c.hold()
     c.eye(100, 150)
     c.menu(RESOURCE=3, QUICKBUILD=1)
     c.select("CORCK")
@@ -498,7 +628,7 @@ def nearby(c):
                 for o in c.placed(c.orders("CORCK")) if o["type"] == geo}
     c.resource_click(676, 258, shift=True)
     c.once(sites() == {(648, 392)}, "first one-cell vent was not queued")
-    c.next_tick()
+    c.advance(1)
     c.resource_click(692, 258, shift=True)
     c.once(sites() == {(648, 392), (664, 392)},
            "queueing the neighboring vent toggled or replaced the first plan")
@@ -507,11 +637,12 @@ def nearby(c):
     assert any(o["target"] == c.address("ARMMSTOR") for o in c.orders("CORCK")), "unqueue removed the preceding Guard"
     c.resource_click(692, 258, shift=True)
     c.once(sites() == {(648, 392), (664, 392)}, "neighboring vent could not be requeued")
-    c.next_tick()
+    c.advance(1)
     print("resource-nearby: distinct adjacent vents, Shift append/cancel/requeue, preceding Guard and recorded cancellation passed")
 
 
 def priority(c):
+    c.hold()
     c.eye(1000, 950)
     c.menu(RESOURCE=3, QUICKBUILD=1)
     c.select("ARMCK")
@@ -545,6 +676,7 @@ def priority(c):
 
 
 def refusals(c):
+    c.hold()
     c.eye(1250, 1200)
     c.menu(RESOURCE=3, QUICKBUILD=1)
     types = {t["name"].upper(): t["id"] for t in c.call("units", "--json")["units"]}
@@ -559,10 +691,9 @@ def refusals(c):
     assert not c.placed(orders) and all(o["action"] for o in orders), "refused reclaim produced a build or action zero"
     c.stop("RSNRACK")
     c.select("ARMACK", "RSNRACK", "RSNGCK", "CORCK")
-    # RSNGCK cannot Guard, so its queue holds a Move, and the world stays paused until the
-    # comparison so that no step can complete it. The click issues every order it makes at
-    # once (tagpu_resource.c click), and a paused world still takes input.
-    c.pause(True)
+    # RSNGCK cannot Guard, so its queue holds a Move, and the world is held through the
+    # comparison, so no step can complete it. The click issues every order it makes at once
+    # (tagpu_resource.c click), and a held world still takes input.
     c.call("order", "move", "pos", "4500", "2500", "--unit", c.units["RSNGCK"], "--expect", "RSNGCK")
     before = c.orders("RSNGCK")
     c.resource_click(x, z)
@@ -571,7 +702,6 @@ def refusals(c):
     c.once(any(o["target"] == c.address("ARMACK") for o in c.orders("CORCK")),
            "eligible constructor did not receive its helper Guard")
     assert c.orders("RSNGCK") == before, "Guard refusal changed the helper's queue"
-    c.pause(False)
     print("resource-refusals: reclaim and Guard refusal, eligible upgrade and helper fallback passed")
 
 
@@ -685,8 +815,12 @@ def main():
         try:
             run(check)
         finally:
-            if a.case in ("locked", "inherit"):
-                check.call("arm", "menu.open=off")
+            try:
+                if a.case in ("locked", "inherit"):
+                    check.call("arm", "menu.open=off")
+            finally:
+                # the lane's world handed back running, as it was handed over
+                check.release()
     except (AssertionError, ValueError, subprocess.TimeoutExpired) as e:
         print(f"resource regression FAILED: {e}", file=sys.stderr)
         return 1

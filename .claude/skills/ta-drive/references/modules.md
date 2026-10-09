@@ -1092,11 +1092,14 @@ locked when the profile forbids them or the resource hooks are unavailable.
 
 Before a contextual Quick Build test, leave manual placement with Stop and wait for cursor
 mode 1; Escape while a build queue is active is insufficient evidence of that transition.
-Allow simulation to run while waiting for Stop to clear the order chain; while paused the
+Advance the simulation while waiting for Stop to clear the order chain; while paused the
 native button can change the cursor mode before its orders are processed.
 Use the contextual button from Interface Type (zero left, nonzero right). Explicit commands
-retain their native left-placement/right-cancel behavior. Input delivery is asynchronous:
-assert a new order or the `resource: already queued` acknowledgment, not an unchanged old queue.
+retain their native left-placement/right-cancel behavior. `tacli keys` returns once the engine
+has consumed the click, so read its effect straight after: assert a new order or the
+`resource: already queued` acknowledgment, not an unchanged old queue. For a world that must not
+move under the clicks, hold it with `pause at <T>` / `resume` in `tagpu_replay.trigger` and
+advance it by exact ticks, as `tools/resource_regression.py` does.
 
 `tools/resource_fixture.py` prepares the resource fixtures' generated terrain and profiles in
 an isolated stopped game folder. The `RS` maps are deliberately flat green. Stock geothermal

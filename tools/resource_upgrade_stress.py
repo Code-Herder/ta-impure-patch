@@ -4,6 +4,8 @@
 prepare reads installed map content and writes a private resource-supply unit
 and a scenario. run uses real configured mouse commands, then measures reclaim,
 nanoframe creation and completion. Original content stays in the game folder.
+Every command holds the world and advances it by exact ticks (resource_regression.py,
+IN LOCKSTEP): the clicks land on a held world and each observation reads one.
 """
 import argparse
 import json
@@ -12,11 +14,13 @@ import re
 import struct
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import hpipack
 from resource_regression import Check, TACLI
+
+OBSERVE_STEP = 150   # ticks between two observations of a stress run
+CORE_STEP = 30       # ticks between two observations of the CORE handoff, to T+600
 
 
 def supply(gamedir):
@@ -89,6 +93,7 @@ def prepare(gamedir, destination, phase, sides):
 class Stress(Check):
     def __init__(self, name, handles):
         self.name = name
+        self.lockstep()
         self.base, end, count, self.defs, self.ndefs = self.values(
             "*0x511DE8+0x14357", "*0x511DE8+0x1435b", "*0x511DE8+0x14351:2",
             "*0x511DE8+0x1439b", "*0x511DE8+0x1438f")
@@ -117,13 +122,13 @@ class Stress(Check):
         return rows
 
     def snapshot(self, cases):
-        assert self.values("*0x511DE8+0x38a51:2")[0] & 1, "order inspection requires a paused simulation"
+        assert self.values("*0x511DE8+0x38a51:2")[0] & 1, "order inspection requires a held simulation"
         roster = self.call("roster", "--json")["units"]
         heads = self.values(*(f"0x{self.address(c['bot']) + 0x5c:x}" for c in cases))
         pending = {c["bot"]: head for c, head in zip(cases, heads) if head}
         orders = {c["bot"]: [] for c in cases}
         seen = {c["bot"]: set() for c in cases}
-        # Native pause stops the unit tick and its order destructors; all reads
+        # The pause bit stops the unit tick and its order destructors; all reads
         # below are game-thread peeks with no injected order input between them.
         while pending:
             items = list(pending.items())
@@ -192,12 +197,14 @@ def run(name, scenario, out, ticks):
     # apply is restricted by tacli to the map the scenario names. Every order
     # under test below comes from its real contextual mouse dispatcher.
     shell = Stress(name, {})
-    shell.pause(True)
+    shell.hold()
     reply = subprocess.run([sys.executable, str(TACLI), "scenario", "apply", name,
                             str(scenario), "--json"], capture_output=True, text=True, timeout=60)
     assert reply.returncode == 0, reply.stdout + reply.stderr
     applied = json.loads(reply.stdout)
+    # the applied units' view of the same world, still held where the shell held it
     c = Stress(name, applied["units"])
+    c.held, c.tick = shell.held, shell.tick
     c.call("arm", "menu.open")
     c.until(lambda: {"RESOURCE", "QUICKBUILD"} <=
             {g["name"] for g in c.call("ui", "--json")["gadgets"]}, "resource controls did not open")
@@ -240,11 +247,8 @@ def run(name, scenario, out, ticks):
 
 
 def observe(c, cases, out, ticks, start):
-    c.pause(False)
-    deadline = time.monotonic() + 1800
     observed = set()
     while True:
-        c.pause(True)
         now = c.values("*0x511DE8+0x38a47")[0]
         rows = c.snapshot(cases)
         observed.update(r["mex"] for r in rows if r["replacement"])
@@ -256,10 +260,7 @@ def observe(c, cases, out, ticks, start):
         (out / "latest.json").write_text(json.dumps({"elapsed_ticks": now - start, "cases": rows}, indent=2))
         if abandoned or complete == len(accepted) or now - start >= ticks:
             break
-        assert time.monotonic() < deadline, "simulation did not reach the stress observation bound"
-        c.pause(False)
-        time.sleep(5)
-    c.pause(True)
+        c.advance(min(OBSERVE_STEP, ticks - (now - start)))
     failures = [r for r in rows if r["accepted"] and r["remaining"] != 0]
     print(f"finished: {complete}/{len(accepted)} completed; {len(cases)-len(accepted)} refused; {len(failures)} incomplete", flush=True)
     return 1 if failures else 0
@@ -273,7 +274,7 @@ def check_core(name):
         return {label: {"engine_index": units[kind]} for label, kind in
                 (("bot", "CORACK"), ("mex", "CORMEX"))} if {"CORACK", "CORMEX"} <= units.keys() else None
     c = Stress(name, shell.until(handles, "CORE handoff fixture units absent"))
-    c.pause(True)
+    c.hold()
     c.menu(RESOURCE=3, QUICKBUILD=1)
     c.eye(2300, 1300)
     c.select("bot")
@@ -284,11 +285,8 @@ def check_core(name):
     case = {"mex": "mex", "bot": "bot", "world": [2824, 1704], "mex_type": "CORMEX",
             "bot_type": "CORACK", "replacement": "CORMOHO", "accepted": True}
     start = c.values("*0x511DE8+0x38a47")[0]
-    deadline = time.monotonic() + 180
     while True:
-        c.pause(False)
-        time.sleep(1)
-        c.pause(True)
+        c.advance(CORE_STEP)
         elapsed = c.values("*0x511DE8+0x38a47")[0] - start
         row = c.snapshot([case])[0]
         abandoned = row["reclaimed"] and not row["replacement"] and not any(
@@ -296,16 +294,15 @@ def check_core(name):
         assert not abandoned, f"CORE reclaimed the mex but abandoned its Moho at T+{elapsed}: {row}"
         if elapsed >= 600:
             break
-        assert time.monotonic() < deadline, "CORE handoff simulation stopped advancing"
     assert row["reclaimed"] and row["replacement"] and row["remaining"] < 0.99, f"CORE Moho never began construction: {row}"
     assert c.values(f"0x{c.address('bot') + 0x10f:x}:1")[0] & 1, "CORE constructor never entered build stance"
-    c.pause(False)
+    c.release()
     print(f"resource-core-upgrade: real contextual reclaim/build, native stance and stock Moho progress passed at T+{elapsed} ({row['remaining']:.6f} remaining)")
 
 
 def finish_core(name):
     c = Stress(name, {})
-    c.pause(True)
+    c.hold()
     roster = c.call("roster", "--json")["units"]
     candidates = [u for u in roster if u["owner"] == 0 and u["type"].upper() == "CORMOHO"]
     assert len(candidates) == 1, "CORE completion fixture has no unique Moho"
@@ -317,7 +314,7 @@ def finish_core(name):
     assert c.types[struct.unpack_from("<H", data, 0x3c)[0]] == "CORMOHO", "CORE completion roster names a recycled unit"
     assert struct.unpack_from("<f", data, 0x9a)[0] == 0, "CORE upgrade never completed its Moho"
     assert all(u["type"].upper() != "CORMEX" for u in roster if u["owner"] == 0), "old CORE mex survived its upgrade"
-    c.pause(False)
+    c.release()
     print("resource-core-upgrade: completed stock Moho passed")
 
 
@@ -357,7 +354,7 @@ def main():
         raise SystemExit(run(a.name, a.scenario, a.out, a.ticks))
     else:
         c = Stress(a.name, json.loads((a.out / "applied.json").read_text())["units"])
-        c.pause(True)
+        c.hold()
         start = json.loads((a.out / "start.json").read_text())["tick"]
         cases = json.loads((a.out / "issued.json").read_text())
         raise SystemExit(observe(c, cases, a.out, a.ticks, start))

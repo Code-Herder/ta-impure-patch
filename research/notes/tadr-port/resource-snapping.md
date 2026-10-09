@@ -372,9 +372,22 @@ The mex fixtures verify the live mouse-interface value. `resource-classic` selec
 orders through native Interface options after launch; a prelaunch registry setting is insufficient
 because the launcher replaces it with right-button orders.
 
+**The cases run in lockstep.** A case holds the world through the DLL's test pacing (`pause at
+<T>` and `resume` in `tagpu_replay.trigger`, a test launch's own; `tagpu_replay.c`, *THE PAUSE AT
+T*) and advances it only by exact ticks, so every click and key lands on a held world and the
+world a click meets is a function of the ticks the case asked for, not of wall-clock pacing. An
+input's direct effect -- orders, selection, the placement rectangle, the cursor mode, a
+`resource:` line -- is read once after `tacli keys` returns, which is after the engine has
+consumed every event (`input-firewall.md`, *The transport*). Simulation progress -- a Guard's
+first step (90 ticks at most), Stop settling (30), a unit reaching a site (900, in steps of 15)
+-- is read on the held world and again after each advance. The camera and the menus, which no
+step drives, keep their wall-clock waits. The world is handed back running when the case ends,
+so the lane's own holds follow; `viewer`, run inside the null twin's pause, holds nothing. A
+comparison of a queue before and after a click reads both on the same held tick.
+
 | Fixture | Input behavior exercised | Replay checks |
 |---|---|---|
-| `resource-mex`, `resource-classic`, `stock-resource-mex` | Manual mex/Alt, manual/Quick center agreement, partial-target refusal at the snap boundary, independent toggle, both mouse layouts, plain repeat no-op, selected-only Shift cancellation across variant changes, preceding Guard preserved, requeue | L/P/R/Q |
+| `resource-mex`, `resource-classic`, `stock-resource-mex` | Manual mex/Alt, manual/Quick center agreement, partial-target refusal at the snap boundary, independent toggle, both mouse layouts, plain repeat no-op, selected-only Shift cancellation across variant changes, preceding Guard preserved, requeue, and Shift cancellation with a unit (ARMPW) standing on the queued site, its index read in the site's grid cells first | L/P/R/Q |
 | `resource-upgrade`, `resource-queued-upgrade` | Own mex→Moho reclaim/build, plain replacement or Shift after a Guard, mixed helpers, persistent Guard dedup, combat unaffected; queued-pair cancellation/requeue preserves the preceding and helper Guards | L/P/R/Q |
 | `resource-core-upgrade` | Native save/load preflight with all ten slots active; installed Comet Catcher, native CORACK→CORMOHO contextual click, reclaim/build pair, stance, progress and completed Moho at tick 7800 | Native loader coverage + L/P/R/Q; last comparison after completion |
 | `resource-plain`, `resource-uniform`, `resource-mixed` | Background/above-background uniform metal and rich patches; manual geo/Alt, Quick geo cancellation/requeue preserving a preceding Guard | L/P/R/Q |
@@ -392,13 +405,13 @@ chain is taken only from a round that links the head to its end. A preceding ord
 comparison keeps is a Guard of an owned unit, read after its first step: unlike a Move it never
 completes on its own, and its compared fields are fixed from that step on
 ([the engine map](../exe-reverse-engineering.md#the-ground-guards-node-and-what-the-order-dispatch-does-with-a-handlers-result-disassembled-2026-10-09)).
-`resource-refusals` keeps a Move for its Guard-ineligible constructor and holds the world
-paused from that order to the comparison, since the click issues every order at once.
+`resource-refusals` keeps a Move for its Guard-ineligible constructor; the world stays held from
+that order to the comparison, since the click issues every order at once.
 
 L records real input and simulation; P plays it on puppet seats; R restores in place at three
 sampled ticks, compares before/after state and continues; Q seeks from a fresh process. The
-queue-cancellation helper requires a later simulation GameTime before cancellation and again
-after it, so both the queued and absent states reach recorder capture points before requeue.
+queue-cancellation helper advances one tick before the cancellation and one after it, so both
+the queued and absent states reach recorder capture points before requeue.
 Native acknowledgements or later render frames alone are insufficient. The
 landing harness also checks event attribution, effect counts, address values, puppet writes and
 the complete main/.data images. Paused viewer samples exercise camera movement, GUI-consumed
@@ -426,7 +439,9 @@ supply unit removes resource starvation; the constructors, mexes, Mohos and terr
 retain their installed definitions. Generated archives and scenarios remain local.
 `run` applies that scenario in an owned instance, issues real configured contextual
 mouse clicks, and separately records refusals, accepted reclaim/build pairs, old-mex
-removal, Moho creation and completion. Native-order snapshots pause the simulation.
+removal, Moho creation and completion. It runs in the same lockstep as the regression cases:
+the clicks land on a held world, and each snapshot of the native orders reads one, 150 ticks
+after the last (`resource-core-upgrade`'s `check-core`: every 30 ticks to T+600).
 An accepted upgrade that removes its mex and loses its build without a replacement
 is a failure; a surviving unfinished build at the observation bound is reported as
 incomplete. This is a native stress test, not a replay comparison. The existing mex
