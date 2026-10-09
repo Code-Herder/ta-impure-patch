@@ -10,19 +10,24 @@
 /* DllMain's attach: first the frame visit, the in-play draw call 0x4969CD, on its own -- it reads
    the trigger tagpu_replay.trigger, whose `dump` serves live recordings too, runs a `seek` on a
    level that plays a recording and writes what the draw shows there. Independent observers
-   reassert pause while rewind owns the level (0x496920) and set the scheduler's tick batch
-   before its count is cached (0x49692D): a test launch's turbo, then the bound that gives armed
-   round trips their T-1 frame; then the Start's calls of the seat fill
+   reassert pause while rewind owns the level or a test's pause holds it (0x496920) and set the
+   scheduler's tick batch before its count is cached (0x49692D): a test launch's turbo, then the
+   bounds that give armed round trips their T-1 frame, a pause at T its T and the launch's hold
+   its one tick; then the Start's calls of the seat fill
    (0x47B092) and of the settings persist (0x47B09C), the loader's two start-unit calls (0x497963,
    0x497ACD) and an observer on the settings save (0x430F00), byte-matched and installed all or
    none. Without those a request is never read. Then the browser's two sites: the main menu's
    builder call (0x4270A9) and the RESTART gate (0x460880). */
 void tagpu_replay_init(void);
-/* THE TURBO's k (tagpu_replay.c): tagpu_turbo.on, its text a k of 1 to 5 (empty is 1), honoured
-   only in a test launch (tagpu_regstore_active) -- a configuration no player runs. DllMain's attach, before
-   tagpu_simreg_attach closes the lever list, so every recording's header names it. Nothing
-   changes until the trigger's `turbo on`. */
-void tagpu_replay_turbo_init(void);
+/* The test pacing's levers (tagpu_replay.c), each honoured only in a test launch
+   (tagpu_regstore_active) -- configurations no player runs -- and refused with a line otherwise.
+   DllMain's attach, before tagpu_simreg_attach closes the lever list, so every recording's header
+   names them.
+   - THE TURBO's k: tagpu_turbo.on, its text a k of 1 to 5 (empty is 1). Nothing changes until the
+     trigger's `turbo on`.
+   - THE LAUNCH'S HOLD: tagpu_hold.on present. The level's first batch is one tick and the level
+     is held after it, until the trigger's `resume`. */
+void tagpu_replay_pacing_init(void);
 /* File-maintenance triggers, on the game-thread flip observer, at every screen. */
 void tagpu_replay_files_frame(unsigned frame);
 

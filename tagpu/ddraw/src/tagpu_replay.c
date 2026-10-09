@@ -292,7 +292,12 @@ static struct {
     unsigned last_g, ticks;         /* its GameTime; the ticks between frames at k               */
 } s_turbo;
 static unsigned s_pause_at;         /* THE PAUSE AT T: the GameTime armed, 0 none; game thread    */
-static int s_pause_taken;           /* the pause bit is set by THE PAUSE AT T, not by the player  */
+static int s_pause_taken;           /* the pause bit is set by THE PAUSE AT T or THE LAUNCH'S
+                                       HOLD, not by the player: the hold keeper keeps it set     */
+/* THE LAUNCH'S HOLD: the state, from tagpu_hold.on read once at attach; then the game thread's
+   alone. STEP: the batch that began the hold's step ran from GameTime g0. */
+enum { LHOLD_OFF, LHOLD_ARMED, LHOLD_STEP, LHOLD_DONE };
+static struct { int state; unsigned g0; } s_lhold;
 static int s_mp_arena_in;           /* allocator's block-ownership boundary */
 static int s_engine_cells;          /* the grid's unit slots and yard bits are the engine's:
                                        a multiplayer recording's level (tagpu_puppet_begin) */
@@ -7580,6 +7585,7 @@ static const char* pacing_refusal(const char* ta);
 static void pause_at_arm(unsigned T);
 static void pause_resume(void);
 static void pause_at_visit(void);
+static void hold_visit(void);
 
 static int fork_stem(const char* s)
 {
@@ -8017,6 +8023,7 @@ static void __cdecl tagpu_replay_frame(void)
     char* ta = ta_main();
     if (ta) viewer_init(ta);
     frame_visit();
+    hold_visit();
     viewer_frame();
     if (ta) {
         overlay_visit(ta);
@@ -9310,14 +9317,21 @@ static unsigned char* before_call(unsigned engine, void (__cdecl* fn)(void))
 }
 
 /* DISASSEMBLED: 0x496920 tests main+0x38A51 bit 0 immediately before the branch
-   around scheduler 0x495230 and step 0x495490. Both the rewind state and this callback
-   belong to the game thread. Reasserting pause before that test prevents a physical
-   Pause key from advancing the suspended world; doing it at the later draw visit cannot. */
+   around scheduler 0x495230 and step 0x495490 (0x496926 jumps to 0x496969, then 0x4969CD and
+   0x4969D2: a paused frame still draws and reaches the frame visit). Both the rewind state and
+   this callback belong to the game thread. Reasserting pause before that test prevents a physical
+   Pause key from advancing the suspended world; doing it at the later draw visit cannot.
+   THE HOLD KEEPER: the same holds for a pause THE PAUSE AT T or THE LAUNCH'S HOLD took
+   (s_pause_taken). Whatever clears the bit between two frames -- the Pause key at 0x4960AA, the
+   in-game menu's OK -- is undone before the next test, so no step runs until `resume`, which
+   clears s_pause_taken before the bit. */
 static int __cdecl rw_pause_guard(void* entry_esp)
 {
     char* ta = ta_main();
     (void)entry_esp;
-    if (s_rw.state && ta) *(unsigned short*)(ta + OFF_PAUSE) |= 1;
+    if (!ta) return 0;
+    if (s_rw.state) *(unsigned short*)(ta + OFF_PAUSE) |= 1;
+    else if (s_pause_taken) *(unsigned short*)(ta + OFF_PAUSE) |= 1;
     return 0;
 }
 
@@ -9421,8 +9435,29 @@ static void pause_at_bound(char* ta)
         *(unsigned*)(ta + OFF_DUE_TICKS) = s_pause_at - now;
 }
 
+/* THE LAUNCH'S HOLD's half of the bound: the level's first batch, and every batch until the hold
+   is taken, is one tick, so the frame visit after the step that began it sees the level one tick
+   on (hold_visit). Like the other bounds it only lowers the count: a frame that runs no step
+   (count 0) or keeps the lag scale's count (past 5) is left alone and the hold waits for the
+   next. */
+static void hold_bound(char* ta)
+{
+    unsigned due;
+    if ((s_lhold.state != LHOLD_ARMED && s_lhold.state != LHOLD_STEP) || s_rw.state ||
+        pacing_refusal(ta))
+        return;
+    due = *(const unsigned*)(ta + OFF_DUE_TICKS);
+    if (due < 1 || due > 5) return;
+    *(unsigned*)(ta + OFF_DUE_TICKS) = 1;
+    if (s_lhold.state == LHOLD_ARMED) {
+        s_lhold.g0 = *(const unsigned*)(ta + OFF_GAMETIME);
+        s_lhold.state = LHOLD_STEP;
+    }
+}
+
 /* The turbo first, then the bounds: a bound only lowers the count, so whatever the turbo set,
-   an armed round trip still gets the frame after its T-1 and a pause its frame after T. */
+   an armed round trip still gets the frame after its T-1, a pause its frame after T and the
+   launch's hold its one tick. */
 static int __cdecl rt_pace_guard(void* entry_esp)
 {
     char* ta = ta_main();
@@ -9431,6 +9466,7 @@ static int __cdecl rt_pace_guard(void* entry_esp)
     turbo_due(ta);
     rt_pace_bound(ta);
     pause_at_bound(ta);
+    hold_bound(ta);
     return 0;
 }
 
@@ -9491,21 +9527,50 @@ static void pause_resume(void)
     tagpu_logf("pause: resumed at GameTime %u", *(const unsigned*)(ta + OFF_GAMETIME));
 }
 
+/* THE LAUNCH'S HOLD: a test launch whose tagpu_hold.on is present starts its level held, so a
+   test arms what it waits for -- dumps, round trips, pauses, the turbo -- on a level that cannot
+   run on until it says `resume`. THE INVARIANT: no GameTime the harness arms can pass before its
+   acknowledgement. The level's first batch is bounded to one tick (hold_bound), and the frame
+   visit after it sets the pause bit (here), which THE HOLD KEEPER (rw_pause_guard) keeps set until
+   `resume`; every arm is read and answered at a frame visit, which paused frames reach too.
+   Where each level ends up held:
+   - a skirmish, at GameTime 1;
+   - a playing, at its first step;
+   - a playing with a request's seek (`play <name> at <T>`), at T-1: the seek runs at the frame
+     visit after the first step, before this test;
+   - a takeover of a held playing, at T-1: its seek runs on a held frame.
+   The hold waits while a playing still has its first step's checks or a seek to come, so the
+   level it holds is the one the request asked for. */
+static void hold_visit(void)
+{
+    char* ta = ta_main();
+    unsigned now;
+    if (s_lhold.state != LHOLD_STEP || !ta || s_rw.state) return;
+    now = *(const unsigned*)(ta + OFF_GAMETIME);
+    if (now == s_lhold.g0) return;
+    if (tagpu_puppet_on() && s_rd && !s_dead && (s_first || s_seek.pending)) return;
+    *(unsigned short*)(ta + OFF_PAUSE) |= 1;
+    s_pause_taken = 1;
+    s_lhold.state = LHOLD_DONE;
+    tagpu_logf("pause: paused at GameTime %u (the launch's hold)", now);
+}
+
 /* `turbo on` (the trigger): the turbo until `turbo off` or the level's end, in a test launch
-   whose tagpu_turbo.on gave k. The harness sends it once every dump and round trip of the lane is
-   armed and acknowledged: at k ticks a frame, the 301 ticks before the first armed GameTime
-   pass sooner than a tacli round trip could arm them. It sends `turbo off` around a step that
-   drives the running game against the wall clock, a fixture's script. */
+   whose tagpu_turbo.on gave k. The harness sends it while the level is held (THE LAUNCH'S HOLD,
+   THE PAUSE AT T), once every dump and round trip of the lane is armed and acknowledged, so the
+   turbo's ticks start with its `resume`. */
 /* Why the test pacing (`turbo on`, `pause at`, `resume`) may not act now, or NULL. It is a test
    launch's own: the trigger file is read in every launch, and a network game's peers would run on
    while this seat alone paused or batched differently -- the Pause key sends packet 0x19 to them
-   (0x4960A4..0x4960BC, DISASSEMBLED) and this pause does not. */
+   (0x4960A4..0x4960BC, DISASSEMBLED) and this pause does not. A pause it takes stays only
+   while THE HOLD KEEPER is in, so it needs the pause guard as well as the tick-batch guard. */
 static const char* pacing_refusal(const char* ta)
 {
     if (!tagpu_regstore_active()) return "not a test launch (tagpu_regstore.h)";
     if (!ta) return "no level";
     if (ta[OFF_NETWORK] & 1) return "a network game";
     if (!s_rt_pace_in) return "the tick-batch guard is unavailable";
+    if (!s_rw_pause_in) return "the pause guard is unavailable";
     return NULL;
 }
 
@@ -9555,10 +9620,14 @@ static void pace_level_end(void)
     s_pause_taken = 0;
 }
 
-void tagpu_replay_turbo_init(void)
+void tagpu_replay_pacing_init(void)
 {
     char b[16] = {0}, *end;
     unsigned long k;
+    if (tagpu_sim_lever("tagpu_hold.on")) {
+        if (tagpu_regstore_active()) s_lhold.state = LHOLD_ARMED;
+        else tagpu_logf("hold: tagpu_hold.on refused: not a test launch (tagpu_regstore.h)");
+    }
     if (tagpu_sim_lever_read("tagpu_turbo.on", b, sizeof b) < 0) return;
     k = strtoul(b, &end, 10);
     while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') end++;
@@ -9589,6 +9658,11 @@ static void rt_pace_init(void)
     tagpu_logf("replay: tick-batch guard %s", s_rt_pace_in ? "in" : "unavailable");
     if (s_turbo_k)
         tagpu_logf("turbo: k=%u %s", s_turbo_k, s_rt_pace_in ? "at 0x49692D" : "UNAVAILABLE");
+    if (s_lhold.state == LHOLD_ARMED) {
+        if (!s_rt_pace_in || !s_rw_pause_in) s_lhold.state = LHOLD_OFF;
+        tagpu_logf("hold: the launch's hold %s", s_lhold.state ? "armed at 0x49692D and 0x496920"
+                   : "UNAVAILABLE: a guard is not in");
+    }
 }
 
 /* DISASSEMBLED: 0x48587E follows the allocator's complete ten-player sort and

@@ -275,9 +275,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            above; reads only, writes tagpu_cobtrace.log on the game thread. */
         tagpu_cobtrace_init();
 
-        /* tagpu: the replay harness's pacing lever (tagpu_replay.h, the turbo), read before the
-           registry closes its lever list, so a recording names the k it was paced at. */
-        tagpu_replay_turbo_init();
+        /* tagpu: the replay harness's pacing levers (tagpu_replay.h, the turbo and the launch's
+           hold), read before the registry closes its lever list, so a recording names the k it
+           was paced at and whether its launch was held. */
+        tagpu_replay_pacing_init();
 
         /* tagpu: the simulation-state registry (tagpu_simreg.h) -- after the last simulation
            module above has installed, so its line counts every declaration and every lever
