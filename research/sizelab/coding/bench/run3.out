@@ -1,0 +1,18 @@
+ct-N30 lodepng 2048 block raw 174.6 MB packed 59.156 MB  comp 6.65 s (26.3 MB/s) dec 1.195 s (146 MB/s)  slowest block 218.5 ms  busiest 30s 3.00 s  dict 0 B
+ct-N30 zstd 1 block raw 174.6 MB packed 38.585 MB  comp 0.32 s (542.8 MB/s) dec 0.141 s (1237 MB/s)  slowest block 9.7 ms  busiest 30s 0.13 s  dict 0 B  wlog 19 cctx est 0.6 MB cstream est 1.4 MB dstream est 1.0 MB
+ct-N30 zstd 3 block raw 174.6 MB packed 36.118 MB  comp 0.51 s (343.8 MB/s) dec 0.141 s (1237 MB/s)  slowest block 13.2 ms  busiest 30s 0.20 s  dict 0 B  wlog 21 cctx est 1.3 MB cstream est 3.7 MB dstream est 2.6 MB
+ct-N30 zstd 5 block raw 174.6 MB packed 34.366 MB  comp 1.43 s (122.4 MB/s) dec 0.136 s (1286 MB/s)  slowest block 39.8 ms  busiest 30s 0.57 s  dict 0 B  wlog 21 cctx est 3.7 MB cstream est 6.0 MB dstream est 2.6 MB
+ct-N30 zstd 9 block raw 174.6 MB packed 33.434 MB  comp 3.35 s (52.1 MB/s) dec 0.128 s (1368 MB/s)  slowest block 94.2 ms  busiest 30s 1.39 s  dict 0 B  wlog 22 cctx est 6.8 MB cstream est 17.6 MB dstream est 4.7 MB
+ct-N30 zstd 3 chain raw 174.6 MB packed 34.853 MB  comp 0.55 s (317.8 MB/s) dec 0.155 s (1127 MB/s)  slowest block 15.3 ms  busiest 30s 0.22 s  dict 0 B  wlog 21 cctx est 1.3 MB cstream est 3.7 MB dstream est 2.6 MB
+ct-N30 zstd 5 chain raw 174.6 MB packed 32.847 MB  comp 1.34 s (130.5 MB/s) dec 0.145 s (1204 MB/s)  slowest block 38.2 ms  busiest 30s 0.54 s  dict 0 B  wlog 21 cctx est 3.7 MB cstream est 6.0 MB dstream est 2.6 MB
+ct-N30 zstd 9 chain raw 174.6 MB packed 31.354 MB  comp 3.29 s (53.0 MB/s) dec 0.161 s (1081 MB/s)  slowest block 92.4 ms  busiest 30s 1.34 s  dict 0 B  wlog 22 cctx est 6.8 MB cstream est 17.6 MB dstream est 4.7 MB
+ct-N30 zstd 19 block raw 174.6 MB packed 31.097 MB  comp 30.69 s (5.7 MB/s) dec 0.150 s (1160 MB/s)  slowest block 1094.9 ms  busiest 30s 13.23 s  dict 0 B  wlog 23 cctx est 9.7 MB cstream est 93.8 MB dstream est 8.9 MB
+ct-N0 lodepng 2048 block raw 174.6 MB packed 60.553 MB  comp 6.62 s (26.4 MB/s) dec 1.131 s (154 MB/s)  slowest block 125.3 ms  busiest 30s 2.93 s  dict 0 B
+ct-N0 zstd 1 block raw 174.6 MB packed 44.298 MB  comp 0.38 s (460.1 MB/s) dec 0.166 s (1052 MB/s)  slowest block 3.5 ms  busiest 30s 0.16 s  dict 0 B  wlog 19 cctx est 0.6 MB cstream est 1.4 MB dstream est 1.0 MB
+ct-N0 zstd 3 block raw 174.6 MB packed 42.804 MB  comp 0.55 s (316.1 MB/s) dec 0.167 s (1048 MB/s)  slowest block 6.2 ms  busiest 30s 0.24 s  dict 0 B  wlog 21 cctx est 1.3 MB cstream est 3.7 MB dstream est 2.6 MB
+ct-N0 zstd 5 block raw 174.6 MB packed 41.211 MB  comp 1.59 s (109.8 MB/s) dec 0.166 s (1050 MB/s)  slowest block 12.7 ms  busiest 30s 0.68 s  dict 0 B  wlog 21 cctx est 3.7 MB cstream est 6.0 MB dstream est 2.6 MB
+ct-N0 zstd 9 block raw 174.6 MB packed 40.356 MB  comp 2.69 s (64.9 MB/s) dec 0.145 s (1206 MB/s)  slowest block 24.2 ms  busiest 30s 1.23 s  dict 0 B  wlog 22 cctx est 6.8 MB cstream est 17.6 MB dstream est 4.7 MB
+ct-N0 zstd 3 chain raw 174.6 MB packed 36.408 MB  comp 0.58 s (303.2 MB/s) dec 0.156 s (1117 MB/s)  slowest block 5.6 ms  busiest 30s 0.24 s  dict 0 B  wlog 21 cctx est 1.3 MB cstream est 3.7 MB dstream est 2.6 MB
+ct-N0 zstd 5 chain raw 174.6 MB packed 34.189 MB  comp 1.45 s (120.0 MB/s) dec 0.161 s (1082 MB/s)  slowest block 17.8 ms  busiest 30s 0.60 s  dict 0 B  wlog 21 cctx est 3.7 MB cstream est 6.0 MB dstream est 2.6 MB
+ct-N0 zstd 9 chain raw 174.6 MB packed 32.655 MB  comp 3.94 s (44.3 MB/s) dec 0.141 s (1235 MB/s)  slowest block 24.7 ms  busiest 30s 1.39 s  dict 0 B  wlog 22 cctx est 6.8 MB cstream est 17.6 MB dstream est 4.7 MB
+ct-N0 zstd 19 block raw 174.6 MB packed 37.765 MB  comp 33.23 s (5.3 MB/s) dec 0.186 s (939 MB/s)  slowest block 367.3 ms  busiest 30s 13.00 s  dict 0 B  wlog 23 cctx est 9.7 MB cstream est 93.8 MB dstream est 8.9 MB

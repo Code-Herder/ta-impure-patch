@@ -1,0 +1,20 @@
+event True, xpos False: 7830 iterations decoded back exactly (139 s)
+MiB, per stream block          raw    writer     zlib9    zstd19     lzma6
+today                       60.321    36.503    21.075    16.776    15.293
+re-encoded                  19.800     3.024     2.889     2.778     2.773
+per 900-tick interval, zstd19: today 11.441 MiB, re-encoded 2.448 MiB
+per 900-tick interval, lzma6: today 10.348 MiB, re-encoded 2.404 MiB
+sections (each deflated alone per block, attribution): raw / writer / zstd19, MiB
+   ctl       0.156    0.093    0.097
+   refs      0.147    0.095    0.098
+   surv     14.633    1.118    1.012
+   new       2.442    1.220    1.202
+   tail      1.551    0.125    0.124
+predictor chosen (column: mode ticks)
+parts, the writer's deflate alone per block (attribution), KiB
+   surv d23       68.5
+Traceback (most recent call last):
+  File "$SIZELAB/research/weapons/p16_pertick.py", line 202, in <module>
+    print(f"   {names[i]:10s} {n/1024:8.1f}")
+                ~~~~~^^^
+IndexError: list index out of range

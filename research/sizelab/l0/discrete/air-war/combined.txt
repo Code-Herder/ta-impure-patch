@@ -1,0 +1,3 @@
+today, these kinds together per block (first grid apart): raw 66.81 MB, deflate 16,020 KB, zstd3 8,262 KB, zstd19 6,500 KB
+re-encoded together per block: raw 7.62 MB, deflate 2,214 KB (0.14x), zstd3 2,226 KB (0.27x), zstd19 2,002 KB (0.31x)
+20.88 s, 1397996 KB maxrss

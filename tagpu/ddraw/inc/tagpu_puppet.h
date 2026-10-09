@@ -3,7 +3,8 @@
 /* tagpu_puppet -- what the simulation reads about a level that plays a recording
    (research/notes/tadr-port/demo-recorder-s2-host.md; the slice note's S2b). Such a level seats
    every recorded player as a type-3 record that the recording drives, a puppet seat, and the
-   viewer's own seat V beside them; tagpu_replay.c seats them and applies the recording. This
+   viewer's own seat V beside them in record 10, which is no puppet seat (tagpu_replay.c, THE
+   VIEWER'S SEAT); tagpu_replay.c seats them and applies the recording. This
    module holds whether this level is a puppet level, which records are puppet seats, what
    getter 75 answers for each, and the gates that keep the recording the only writer.
 
@@ -24,24 +25,31 @@
 
 /* 1 while this level plays a recording */
 int tagpu_puppet_on(void);
-/* 1 when `player` is below 10 and a puppet seat of this level, V included */
+/* 1 when `player` is below 10 and a puppet seat of this level */
 int tagpu_puppet_seat(unsigned player);
 /* getter 75 for a puppet seat's unit: the recording machine's answer, 1 for a seat that was
-   local there (type 1 or 2), 0 for V */
+   local there (type 1 or 2), 0 for any other record */
 int tagpu_puppet_local(unsigned player);
 /* the mode as a byte that a stub can compare (tagpu_detour_cmp_flag) */
 const volatile unsigned char* tagpu_puppet_flag(void);
 
 /* The seat fill's (tagpu_replay.c): `seat` and `local` for the ten records, then the mode on.
+   `engine_cells`: the grid's unit slots and yard bits are the engine's own on this level -- a
+   multiplayer recording's, whose units are timed by their owners while the recorder's grid
+   follows its own replicas -- so the footprint writers' writes stand (THE FOOTPRINT WRITERS).
    The teardown's: everything off. */
 void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
-                        const unsigned char local[PUPPET_PLAYERS]);
+                        const unsigned char local[PUPPET_PLAYERS], int engine_cells);
 void tagpu_puppet_end(void);
+/* engine_cells for the segment the replay plays from here on: a multiplayer file's takeover
+   timeline is a skirmish segment. Only between steps (the replay's seek); refused, and logged,
+   inside a footprint writer. */
+void tagpu_puppet_engine_cells(int engine_cells);
 
 /* THE GATES (tagpu_puppet.c): the engine functions that would write what a recording carries on
    a puppet level, or take the viewer's own input to it, refuse on one. DllMain's attach lands them
-   all, before the recorder's observers, which chain onto the two reply gates; a level plays a
-   recording only when every gate is in. */
+   all, before the recorder's observers, which chain onto the two reply gates, the seven feature
+   gates and the state gate; a level plays a recording only when every gate is in. */
 void tagpu_puppet_init(void);
 int tagpu_puppet_gates_in(void);
 /* The replay's own create and reply, bracketed on the game thread: the unit gates let through
@@ -52,6 +60,9 @@ void tagpu_puppet_open(int open);
 void tagpu_puppet_rebuild(int on);
 /* 1 while a seek's rebuild runs: the recorder's counts leave its calls out */
 int tagpu_puppet_rebuilding(void);
+/* The replay's own write of a state byte from the owner's image, bracketed on the game thread
+   (tagpu_replay.c, book_state): on a multiplayer segment the state gate lets through only it */
+void tagpu_puppet_state_open(int open);
 /* COB's engine writes on a puppet this level, by write site (tagpu_puppet.c, THE COB WRITES ON A
    PUPPET): each site's return address in va[k] and its count in n[k]; the sites, or 0 when the
    observers are not in */
@@ -71,8 +82,9 @@ void tagpu_puppet_refusals(char* out, size_t cap);
 void tagpu_puppet_play(void);
 int tagpu_puppet_features(int open);
 
-/* THE DRAWS a replayed root makes at the feature code's six calls of the simulation RNG
-   (tagpu_recfmt.h, RecDrawSite): the recording's, in order, armed by the replay around the call.
+/* THE DRAWS a replayed root makes at the feature code's six calls of the simulation RNG, and on
+   a multiplayer level at reproduction's source test (FS_SOURCE) (tagpu_recfmt.h, RecDrawSite):
+   the recording's, in order, armed by the replay around the call.
    tagpu_puppet_draw answers 1 with the next one while its site and argument are the call's;
    otherwise 0, and the call draws for itself, as do the rest of the root's calls. */
 typedef struct PuppetDraw { unsigned site, n, v; } PuppetDraw;

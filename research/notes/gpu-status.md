@@ -388,9 +388,11 @@ the star is teal — a debug mode's business, not the shipped frame's.
 | `0x498EF9` | `call 0x484B50` — the `GetTPosition` inside the mouse → world conversion | call-site redirect; clamps the world point to the scroll extent (§2.3c, "The pointer"), a no-op for any eye the engine's own bounds can produce |
 
 **The camera keeps the view centre on the map at every zoom (§2.3c).** **The level comes from
-two levers, and neither is an engine patch.** `tagpu_zoom.txt` is the
-scripted one and **wins whenever it exists**; the **mouse wheel** is the player's, and takes
-over the moment the file is gone. The wheel needs nothing from the engine because the engine
+three levers, and none is an engine patch.** `tagpu_zoom.txt` is the
+scripted one and **wins whenever it exists**; a replay's **Follow or Jump** comes next, its level
+carried in the frame packet (`follow_level`) and the wheel pinned to it until a notch or a camera
+move ends it ([perspective plan, 4c-2 as built](tadr-port/demo-recorder-perspective-streams.html#4c-2-as-built));
+the **mouse wheel** is the player's, and takes over the moment neither is in force. The wheel needs nothing from the engine because the engine
 never wanted it: TA's window procedure dispatches only `0x200..0x206` through its jump table
 at `0x4B5E3B`, so `WM_MOUSEWHEEL` (`0x20A`) fails the `CMP EAX,6` at `0x4B5E41` and falls to
 a bare `DefWindowProcA` tail call at `0x4B5FA8`. Nothing had to be taken away from anyone.
@@ -613,7 +615,10 @@ the zoom and the eye it is drawn with change together.
 scroll target) — always together, because the two disagreeing is what the per-frame stepper
 reads as a camera move in flight and would rebuild the fog grid every frame for as long as it
 lasted (G13g) — `main+0x142CB`, the minimap's view box, recomputed through the engine's own
-`0x466B70` because `0x41C3C0` is the only place it is otherwise filled, and, on a frame that
+`0x466B70` because `0x41C3C0` is the only place it is otherwise filled — after an eye it moved,
+and also, while the redirects are installed, when the level differs from the one the box was last scaled by (the box is a function of
+both: MEASURED 2026-10-07, a paused replay kept the 1x box through wheel steps to 0.456 and 0.25
+until the eye moved) — and, on a frame that
 actually steps the eye, the three **camera-follow** slots zeroed (below). After any eye it moved
 the apply also writes the two flag bits the engine's own writers do, on the game thread: it sets
 `main+0x142F1` bit 1 (the minimap's dirty flag) and clears `main+0x14281` bit 3 (the screen fog
@@ -1060,7 +1065,7 @@ is the bit's only reader (`0x466B06..0x466B16`), and every reader of the word is
 (bit 0 is the dots' blink phase [INFERRED], toggled at `0x4665A9`; bit 2 asks `0x466C20` to
 rebuild the fog composite), so all three bits are display state. The radar rebuild `0x466DC0`
 sets bit 1 unconditionally — its one exit runs through `0x46742F` — and `0x464F80` calls it for the
-local player (`0x465072`) on every sim tick, from the tick loop `0x495490` (`0x49555F`). So on a
+viewed record `main+0x2A43` (`0x465072`) on every sim tick, from the tick loop `0x495490` (`0x49555F`). So on a
 running game the apply's write decides something only on a frame that ran no tick. The apply now
 sets it after any eye it moved, on the game
 thread, exactly as the writers do; the reason it once did not — a render-thread read-modify-write
@@ -1854,7 +1859,8 @@ METAL/ENERGY block inside `DrawGameScreen` compares itself against, once per twi
 the engine redraw a block it would otherwise skip for the life of the level ([engine
 map](exe-reverse-engineering.html) "The resource block, and the 33-byte memo that skips it").
 The poison is the complement of the byte the block will write there (`PlayerStruct+0x146` of
-the local player, the player index bounded to the ten records first). Every engine writer of
+the local player, the player index bounded to the eleven records first: record 10 is a replay's
+viewer's). Every engine writer of
 that field stores 0..10 (engine map), so the poison, 0xF5..0xFF, is a value the block cannot
 compute and the compare cannot come out equal; a poison that alternated `0xFF`/`0x00` did on every second reset for player 0, and the
 bars then stayed blank until metal or energy first changed.
@@ -2065,7 +2071,7 @@ and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integratio
 | `0x511DE8` | `TAdynmemStruct**` — the root of everything below |
 | `main+0x14357` / `+0x1435B` | unit array begin/end, stride `0x118` |
 | `main+0x1435F` / `+0x14367` | HotUnits ids / count (culled to whatever the viewport rect says — the unzoomed one, or the widened one under `vpwide`) |
-| `main+0x1431F` / `+0x14323` | eyeX / eyeY. **WRITTEN, on the GAME THREAD only since 2026-09-12** (§2.17): the command apply at the top of every in-play draw steps it by the cursor anchor's delta, holds it where `tagpu_eye.txt` says, and clamps it into the camera's range in force (§2.3c: the centre range `[−W/2, map − W/2]` on a draw whose ground is ours, the engine's `[0, extent − W]` otherwise) on every in-play draw — every value written goes through `clamp_pair()`. The render thread reads the eye from the frame packet and draws from it plus the deltas not yet acknowledged; it never reads or writes the field. Sim-neutral for the same reason `ScrollSpeed` is |
+| `main+0x1431F` / `+0x14323` | eyeX / eyeY. **WRITTEN, on the GAME THREAD only since 2026-09-12** (§2.17): the command apply at the top of every in-play draw steps it by the cursor anchor's delta, writes the replay's Follow or Jump with the scroll target (handed over by the replay's frame visit before the draw call `0x4969CD`; written there instead where no apply runs, under GDI — [perspective plan, 4c-2 as built](tadr-port/demo-recorder-perspective-streams.html#4c-2-as-built)), holds it where `tagpu_eye.txt` says, and clamps it into the camera's range in force (§2.3c: the centre range `[−W/2, map − W/2]` on a draw whose ground is ours, the engine's `[0, extent − W]` otherwise) on every in-play draw — every value written goes through `clamp_pair()`. The render thread reads the eye from the frame packet and draws from it plus the deltas not yet acknowledged; it never reads or writes the field. Sim-neutral for the same reason `ScrollSpeed` is |
 | `main+0x14327` / `+0x1432B` | `MapXScrollingTo` — where the camera is heading; the stepper `0x41CA10` eases the eye toward it. **WRITTEN by the command apply, on the game thread, always together with the eye** and clamped to the same range, because a disagreement between the two is what the stepper reads as a camera move in flight and would cost the fog grid its is-current flag every frame (§2.3c). **Also WRITTEN by the three target-clamp stubs** that replace the engine's own inline clamps (`0x41C808`, `0x41C93B`, `0x41CAF7`), on the game thread, only where the engine had just computed it — clamped into the range in force instead of the engine's `[0, extent − W]`. The eye clamp's replacement deliberately does **not** touch it — three of its callers are inside the stepper, and writing the target there would stop the camera ever arriving |
 | `main+0x142CB` | the minimap's view RECT. Engine-drawn and engine-filled — `0x41C3C0` is the only place it is computed — so the command apply recomputes it through the same wrapper on the draws it moved the eye. **Game thread since 2026-09-12**; it was the one render-thread write of it before (a one-frame torn box while the game thread drew the minimap) |
 | `main+0x14281` bit 3 | the screen fog grid's is-current flag. **CLEARED by the command apply after any eye it moved, on the game thread** — the same clear the engine's own eye writers make at `0x41CB6B`, and safe only there: `0x484904` sets it with an unlocked read-modify-write, so a clear from the render thread could be swallowed ([engine map](exe-reverse-engineering.html), "who may clear `main+0x14281` bit 3"). Until landing 2 the render thread asked terrown's fog tick for the rebuild through a request/ack pair instead; that handshake is gone |
@@ -2941,21 +2947,33 @@ which the hook does not reach (`SC_CLOSE` in `wndproc.c`, `tagpu_refuse`, and th
 and unit-type refusals in `tagpu_patches.c`): the process's exit waits until the file of every
 recording that has ended is closed ([*Its lifetime*](tadr-port/demo-recorder-skirmish-slice.md#its-lifetime)).
 
-**Its events have 50 sites of their own**, byte-matched and built at `DllMain` by `tagpu_rec_init`,
-all before any lands; no recording starts without them. Twenty-five observers run a handler and then
-the stolen bytes: the create's success exit `0x4861B3`, the destructor `0x4866D0`, the build done
+**Its events have 55 sites of their own** (the attach log's `recorder: N event sites in`),
+byte-matched and built at `DllMain` by `tagpu_rec_init`, all before any lands; no recording starts
+without them. Twenty-seven observers run a handler and then the stolen bytes: the constructor
+reservation `0x486075` (the multiplayer begin root, below), the create's success exit `0x4861B3`,
+the destructor `0x4866D0`, the corpse helper `0x486360` (`FR_CORPSE`), the build done
 `0x41B8D0`, the state setter `0x48B090`, the broadcast starts `0x456190`, `0x456290` and
-`0x456218` (inside `0x456200`), the replies `0x47F780` and `0x47F850` (chained onto the puppet
-gates there, §2.6f), `QueryNanoPiece` `0x43E400`,
+`0x456218` (inside `0x456200`), the replies `0x47F780` and `0x47F850` (the setter and the replies
+chained onto the puppet gates there, §2.6f, so a refused call is neither recorded nor counted), `QueryNanoPiece` `0x43E400`,
 the nano emitters `0x4720D0` and `0x472200`, and the order dispatch at `0x43A216`, `0x43B878` and
 `0x43BB1D`; and, for the features (S3a), the feature tick `0x424050`, the spawn `0x423C50`, the
 destroy `0x4246B0`, FeatureDie `0x423550`, the burn `0x4233A0`, the damage `0x4244B0` and the swap
 `0x423710`, each with an `after` at its return and chained onto its puppet gate (§2.6f), and the
 footprint writers `0x47CC30`, `0x47D0E0` and `0x47C790`, whose `after` runs only on a puppet level
-(§2.6f). Seven more `call`s go through stubs that
+(§2.6f). Nine more `call`s go through stubs that
 call the engine's own function: the feature code's six calls of the simulation RNG `0x4B6C30`
-(`0x4234C2`, `0x423A38`, `0x423B40`, `0x424113`, `0x424159`, `0x424167`) and the destructor's
-explosion `0x49B000` at `0x486D50` ([the engine map](exe-reverse-engineering.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)). Thirteen `call`s of the COB starts `0x4B0A70` and `0x4B0940` (HitByWeapon, TakeDamage,
+(`0x4234C2`, `0x423A38`, `0x423B40`, `0x424113`, `0x424159`, `0x424167`), the destructor's
+explosion `0x49B000` at `0x486D50` ([the engine map](exe-reverse-engineering.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)),
+and the two click actions' only call sites, the left action `0x498F70` at `0x4995B3` and the right
+button's press `0x499100` at `0x4993AC`, each a 17-byte stub that records the click
+(`RK_CLICK` in a skirmish recording, `RECMP_CLICK` from a multiplayer game's contributing game
+thread) and then calls the action with the same argument
+([the engine map](exe-reverse-engineering.md#the-demo-recorders-perspective-the-clicks-and-the-world-point-disassembled-2026-10-06)).
+Reproduction's **source test** `0x424185..0x42418E` (`mov ecx,[esp+0x10]; cmp word [ecx],0; jne
+0x4241A8`) is redirected whole to a stub that makes the test through `feat_source`: the stock
+test on the engine's own cell pointer, recorded as `FS_SOURCE` by a multiplayer recording, and
+answered from the recording on a multiplayer playing's host, whose slots follow the owners'
+units; it jumps on to `0x42418F` or `0x4241A8` with `eax` and `ecx` as stock left them. Thirteen `call`s of the COB starts `0x4B0A70` and `0x4B0940` (HitByWeapon, TakeDamage,
 TransportPickup, TransportDrop, TargetCleared, EndTransport) go through a stub that records and
 then jumps to the function. The five fire functions' network tests (`0x49D7A0`, `0x49DA92`,
 `0x49DC64`, `0x49DE25`, `0x49DFAF`) are released while a skirmish is recorded, so that each builds
@@ -2987,7 +3005,13 @@ engine's function, then `tagpu_replay_phase`, keeping every register and the fla
 stamps each feature root with the phase it was made in; `tagpu_rec_capture` sets the phase back to 0.
 Off a puppet level `tagpu_replay_phase` returns at once.
 
-**Fields we write: none.** It reads the unit array with each unit's mover and order lists, the ten
+**Fields we write:** native protocol initialization writes extended start length
+`0x512AF8`, identified-text length `0x512B84`, callback `0x512ACC` and mask
+`0x512C6C`. An accepted 97-byte identified text delivery replaces the first 65
+bytes of this pump call's private receive allocation with its validated embedded
+stock packet before entering the stock text case. The receive redirect writes
+only the pump's stack message pointer; a nested pump restores its parent's
+`main+0x4C9/+0x4CD` transport metadata before resuming it. Capture reads the unit array with each unit's mover and order lists, the ten
 player records with their PlayerInfo, the controlled and viewed players, the unit types, the
 sort buckets, GameTime, the game mode and the map's path, the feature grid, the wreck pool, its
 heads and the reproduction cursor, the feature defs, and at the create's exit the new unit's water
@@ -3024,6 +3048,276 @@ marks nothing). `cover <name>` in `tagpu_replay.trigger` writes `replays\cover-<
 the count, each function's RVA) at once, and the first name armed is written again at the level's
 end (`tagpu_rec_level_end`). Any other build refuses the line (`cover: <name> refused: not a
 coverage build`).
+
+**Multiplayer contributions:** `tagpu_recmp.c` carries contributions on one worker's distinct native TCP/IP application/session, and `tagpu_recmp_orders.c` caches authoritative human/hosted-AI queues without following remote list objects. Native observed-world files are written on request, and the puppet host plays, seeks and takes them over through the owner-authority materializer (§2.6f). The host's start call `0x496D25` carries a fresh match ID; observer `0x4553BE` retains the original start action and initializer `0x4520BE` writes its 25-byte length. Native CreatePlayer at `0x4CA762` appends a public key to the original 21-byte prefix; system size branch `0x454315` accepts 21 or 301 bytes. All five sites are checked and made writable before any changes. B3's `tagpu_wire_received` supplies the start action's actual delivered span. The primary Receive wrapper is stock. Details: [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.md).
+
+The game thread copies the native host address and bounded actor roster/public keys/ownership. The worker retains no primary interface or engine pointer. `tagpu_recmp_net.c` owns sixteen native async completion contexts, while signed bindings freeze each primary human/AI origin's private session, stream and actual SDK sender. Data waits in bounded storage until every expected actor binds and identity announcements precede data on the private sender. A full transmit queue ends contributions incomplete, as unbound (`RECMP_UNBOUND`, naming the primary IDs that never bound) when an expected actor has not bound; the game never joins the worker. A private session open that loses the TCP/IP provider's listener port to another peer is opened again, at most ten times, and a send SendEx answers with DP_OK keeps its context until its completion as a pending one does. A remote packet the game cannot apply, a full receive queue, or a stop with no recording attached ends only this peer's consumption (`tagpu_recmp_relinquish`): its own recording ends incomplete, while its sends, seals, final seals and receipts continue. Details: [channel failure handling](tadr-port/demo-recorder-multiplayer-slice.md#channel-failure-handling).
+
+The native fixture delivers sixteen DATA packets per peer through the production channel initialized after both primary interfaces close. Actual TA also verifies the isolated channel with two humans and one hosted AI each: both bind their two remote actors and receive resources and nonempty queues without loss/failure. These tests do not establish terminal completeness, physical bandwidth bounds or a network file. The engine map records why the viewed-row `0x4655A1` resource send cannot advertise every idle AI; no resource-message patch is installed.
+
+Source-prefix seals (`tagpu_recmp_stream.c`) validate contiguous sequences, closed source ticks, cumulative DATA bytes and CRC before publication. B2 closes the previous capture tick only when its clock advances; a final seal freezes a local producer, while capture failure aborts without success. The game consumer refuses a seal with a partial order transaction, and relinquishes consumption. Native fixture peers receive exact final human/AI prefixes after primary Close; a withheld last DATA fails at its valid final seal. Both live TA workers also finish after ordinary peer exits. The earlier exit test leaves two markers unread on the joiner after its game consumer stops. A vanished unsealed peer prevents transmission retirement; the drain deadline fails incomplete. Frozen per-source consumption cuts now require covering seals, and authenticated 48-byte final receipts validate against the worker's accepted marker. A retained sole consumer can drain late packets after end without moving those cuts. Active-source, withheld receipt/cut and altered receipt controls pass; the native fixture validates four receipts per peer. Actual TA verifies the departing host closes with cuts 2/2 and four receipts while the joiner remains in play, then the joiner exits cleanly with cuts 2/2. Game capture now attaches a file context before the first publication; engine authority application remains open.
+
+An optional engine-free source/application journal now copies local publications and remote consumptions into one bounded 16 MiB SPSC stream. It preserves source envelopes, assigns a global consumption/production ordinal and retains application ticks separately. A failed local journal detaches while mandatory contributions continue. `RecRing` can transfer its copied context to the actual writer, which writes contribution blocks and a validated cut footer; the readers read recording format 8 only. The synthetic `.imprec` fixture passes normal closure, C/Python reading, world seeking, missing-proof/local-save failure and semantic corruption controls. Game capture attaches that context on local recording opt-in, before the first publication/consumption and writer start. Full owner authority, engine authority application and network playback remain open. No new engine address, patch or engine write is added by the container.
+
+The production adapter's resource-only samples are now full normalized 520-byte human/hosted-AI player images and changed-word deltas (`tagpu_recmp_players.c`). A copied roster freezes each primary origin's recorder-local seat and bounded fixed unit block; remote queues use it for authorization. Complete player updates preserve source stream/tick/sequence and actual application tick, while unknown or malformed input cannot publish a replacement. The player-cache/journal fixture reconstructs all four exact source images in C and Python and passes roster/provenance/guard-page controls. Actual TA with two humans and one AI hosted by each verifies all four first full-image CRCs/source stamps, nonempty queues through frozen blocks and successful cuts/receipts at ordinary exit. The optional file context now copies the roster into `RT_MP_SEATS`; writer and C/Python readers require exact source/world/seat ownership agreement. The synthetic container passes 23 malformed-mapping refusals, including file-info validation when mode is falsified. This does not close remaining owner-only effects, declared Impure state, takeover or game network playback integration. The adapter reuses existing B2/player-image reads and writes only its owned caches; no new patch or engine field write.
+
+The file writer and reader validate semantic player/unit/order history (`tagpu_recmp_history.c`). Bounded source/application cache groups keep partial updates and proof tails from replacing the last complete recorded image/list/absence. Reader queries reconstruct authority at the current world tick after playback/seek; returned images remain separate from `RecWorld` and engine application. The controlled 3,108-byte file reconstructs four synthetic full players, two mapped AI unit/mover images, explicit absent slots and an exact nonempty list, preserving application authority across partial/proof updates. All five lifecycles and 43 body refusals whose raw source seals/cuts remain valid pass.
+
+The copied-image player-row mapper validates source/destination origin sets and global blocks, permutes five player-indexed vectors and the self row, and preserves every other byte. Its isolated C fixture passes 640 roster permutations, 3,520 exact round trips, unchanged-output refusals and guarded spans. Wire-version-2 source kind 7 announces each copied frozen roster at sequence 1. The game adapter validates local/remote images against it; file history keeps source/applied maps separate and reader player queries use recorder coordinates with original provenance. C and Python verify every vector entry, including vacant/dummy rows, and proof-only maps establish no applied authority. The native four-actor rerun verifies first-roster/full-image sequences, actual human row swaps and ordinary-exit cuts/receipts. An earlier private-session SDK join timeout remains unexplained; the adapter names its failure stage. No engine field write or patch is added.
+
+`tagpu_recmp_units.c` now bounds/maps owner/resource-player IDs and attacker/owner rows in copied 328-byte unit/mover images. Kind 8 carries full/changed-word images and explicit absence with birth/source/application provenance. Its game-thread cache validates the entire batch and source/cache allocation agreement before publishing any slot. The isolated fixture passes 464,640 exact inverse mappings over 640 rosters, atomic refusal and guard-page controls, 201-entry batches and final-slot bounds at 65,531 slots. Actual native TA verifies all four human/hosted-AI first full unit-image source checksums/provenance and mapped human rows, plus ordinary-exit cuts/receipts. C/Python file queries retain unknown-versus-absent and proof-only delta isolation through synthetic seek. The adapter reads bounded frozen local blocks and the existing declared birth table, and writes only owned caches. Engine application, COB/model/order-owned objects, effects/projectiles, AI planner, complete declared Impure authority and native engine playback/seek remain open. The engine map documents create/resource/damage/death and lookup helpers read for this audit, including the uncalled helper and unbounded initializer.
+
+Owner constructor begins/creates, deaths/returns, script starts, replies and nano sprays share one copied kind-10
+carrier and 4,096-call game-thread queue (`tagpu_recmp_roots.c`), independently
+of the recording switch. The existing thirteen start observers, extra-weapons
+helper, constructor reservation and successful exit, destructor entry/return, two reply observers, nano query/dispatch credit and two spray observers
+supply unchanged root payloads. Mixed kinds and contiguous actor switches retain
+call order, source clock, incarnation and pre/post-B2 phase. Old calls drain before
+source seals and final calls before teardown seals. Whole-batch bounds validate
+frozen ownership, names/arguments, 24 reply kinds and ten signed spray layers
+before publication; an uncredited multiplayer spray refuses contributions.
+The constructor-begin observer byte-matches nine bytes at `0x486075`, after
+B4 fixes the selected slot/birth and before initialization or child roots. It
+copies the same 28-byte arguments into distinct root `0x100`; the ordinary
+creation event remains at the successful return. The span has no relative
+instruction, since the generic observer copies without relocation. No engine
+field is written. The worker sees copied packets only.
+The legacy kind-9 cache remains for reading earlier experimental contributions.
+Death entry copies the normalized victim/mover image while this same-thread
+destructor still owns it. Return publishes its saved source/birth identity without
+reading the freed mover or cleared slot. Frozen source-owner rows, killer IDs,
+player indices and the live image validate before publication. These brackets
+also run with recording off; frame/queue exhaustion makes capture incomplete.
+Codec/queue controls pass 83 atomic refusals, 1,300 guarded batch truncations,
+485 guarded per-kind short spans, maximum 167 replies/251 returns and 8,392
+ordered mixed calls, including source owner-row authorization and every
+constructor/finished/position bit. The synthetic C/Python file verifies six mixed
+applied batches and per-origin exploration through seek, proof-only isolation,
+five lifecycles, 23 header and 135 body refusals. Queries return copied authority
+separately from `RecWorld`. The current four-actor native coverage fixture
+matches all 28 first root observations between source, recipient and saved file;
+71 exact constructor begin/success pairs bracket eight private reply calls.
+Its complete 2,845,687-byte recording ends at tick 558 with zero corrections.
+C/Python retain all 8,146 applications, 2,061,238 bytes and CRC `8EA54D8E`
+through reader world seek; both peers reach the new boundary/payload helpers.
+All 23 shared `secondary-orders` skirmish checks pass at internal speed 20,
+including three exact poisoned round trips. The native run observes speed 10;
+native engine play/seek and complete authority remain unfinished.
+`tagpu_recmp_lifecycle.c` consumes that ordered prefix into normalized owner
+lifetime actions. Whole-batch incarnation/type/bracket validation precedes every
+callback; initial full images bootstrap units, proof-only images do not. A failed
+callback stops the consumer permanently. Against the saved four-actor file,
+independent C/Python audits retain 10,372,503 action bytes/CRC `8CF737F2`, all
+6,000 owned slots, 71 construction and 24 destruction pairs, eight constructor
+replies and five script starts during destruction through fresh reader seek.
+This adds no hook or engine field write. Native construction/destruction and
+suppression of regenerated child roots remain the adapter's open work; saved
+network engine playback is still refused.
+The allocator ownership boundary at `0x48587E` now orders the ten player pointers
+by frozen global actor blocks before the native initializer writes their paired
+fields. Copied input validates before any stack write; other levels remain inert.
+A relocated retail-allocator fixture passes 206 layouts, two untouched native
+ordering controls and all ten paired blocks. The production hook is installed
+through all four coverage skirmish processes; all 23 replay checks pass at internal
+speed 20. Multiplayer loader admission and engine reconstruction remain open.
+`recr_mp_apply` visits every application envelope in recorded ordinal order
+through the current world tick, retaining both clocks and the full copied batch.
+Its separate cursor prevents copied-state queries from consuming playback data.
+All 30 envelopes match independent Python bytes/provenance; A/B/A batches,
+resumed ordinals, repeated polls and backward/forward seek preserve the sequence.
+The engine map corrects the notice-table stride to 24 bytes and documents both
+reply viewer filters and spray's signed low layer index. Engine application,
+independent clock mapping, remaining roots/Impure authority and native engine
+playback/seek remain open. Native normal-speed four-actor TA with recording off
+verifies all twelve first script/reply/spray observations against recipient bytes,
+source metadata, event index, incarnation and phase, plus ordinary-exit cuts and
+receipts. Only post-B2 calls are observed in that native sample. This is a worktree
+checkpoint. The current coverage build passes all 23 skirmish `secondary-orders`
+checks, including the shared constructor observer, puppet playback, restore,
+fresh seek, inventory and three exact poisoned round trips. No exclusion or
+comparison rule is changed.
+
+Current native COVER verifies all 24 first root-kind observations across four
+human/hosted-AI actors, with host recording and joiner off. The complete
+2,432,312-byte file (ticks 1..468, zero corrections) has 22 matched owner
+destructor entry/return pairs; five local primary death images match the copied
+payloads exactly. Both peers reach the entry, return and new saved-identity
+helpers. C/Python retain all 5,994 application envelopes and 1,054 root batches
+through fresh world seek. The applied calls observe both B2 phases; the death
+pairs in this sample are post-B2. All 23 skirmish replay checks still pass at 2x,
+including three exact poisoned round trips. Separate constructor-arrival analysis
+finds two later Reclaiming replies before the recorder's replica exists. Owner
+timing was chosen by the owner in product decision 7: unit creation/death follows
+its owner and private roots keep recorded application order. The owner-authority
+materializer (§2.6f) applies each unit's images to that exact incarnation only.
+The engine map records the unbounded native constructor inputs, its occupied-slot
+death, and why unfinished construction plus B4 carried state differs from a
+finished local constructor. These reads install no network constructor patch.
+
+Current COVER native capture also verifies all sixteen first constructor/script/
+reply/spray batch observations with one peer's recording off. Seventy exact
+constructor tokens join their carried live source type/owner; all 35 primary
+local constructor payloads equal the contribution bytes. Eight other roots
+precede their constructor's success exit. The complete 1,401,962-byte recording
+retains 3,052 ordered applications and 508 root batches through C/Python fresh
+world seek, with zero corrections; coverage reaches `ev_create` on both peers.
+These dependencies remain separate from observed-world authority. Native engine
+materialization/playback and the complete multiplayer landing gate remain open.
+
+Native `mp_record_begin` now transfers `RecMpFile` into the writer before any
+source publication or consumption. Mode-3 headers retain copied transport and
+seat/block metadata. The primary stream captures this peer's observed world and
+local queues; controller 3/4 list heads are skipped before traversal, with exact
+owner queues preserved separately in the contribution ledger. Script/reply/spray
+owner batches have no duplicate primary-stream events. Native capture keeps the
+skirmish fire lever false and excludes live rewind. The producer clears its file
+borrow before publishing context end; local-save failure detaches the journal
+without ending mandatory contributions, while channel teardown permits sole
+proof-consumer transfer. No new engine field write, patch or exclusion is added.
+
+A native normal-DLL four-actor game, host recording enabled and joiner disabled,
+produces a complete 2,524,535-byte file at GameTimes 1–536. The writer reports zero
+corrections. C and independent Python validate 6,697 ordered applications,
+1,673,880 application bytes, 1,073 root batches, all four players and unit-block
+bounds through sequential reading and world seek. Source/recipient roster/player
+and first script/reply/spray bytes match; ordinary host exit validates cuts 2/2
+and four receipts before the joiner exits. Actual native speed is 10. This is
+observed-world capture and copied authority; playback through the materializer
+(§2.6f), the perspectives, chat and ten seats came later, and the physical traffic
+budget and host migration remain open. See the multiplayer
+slice's *Native observed-world file capture* for exact conditions.
+The native file also stores replica creation roots from B4's existing success
+callout at `0x48634F`, after the incarnation and carried build/HP state are set.
+The 32-byte `RK_EV_NET_CREATE` retains constructor arguments, owner, water,
+birth and post-B4 unfinished fraction/HP. No byte patch or engine field write is
+added. C/Python readers bound the root to its frozen owner block/type/enum and
+fraction before exposing it; format-5 reading remains supported. The writer's
+3,554-byte fixture passes exact preservation, fifteen malformed-root controls
+and the existing contribution/seek/lifecycle checks. This supplies capture data;
+native engine playback and causal ordering of early owner roots remain open.
+An actual normal-build native recording verifies all 35 replica roots against
+the next B2 type/owner/birth/build/HP images, with identical C/Python root bytes
+through seek; all 353 observed-world transitions are explained. The complete
+format-6 file ends at tick 354 with zero corrections and 4,086 ordered authority
+applications. A coverage attempt fails private session creation (`80004005`)
+and ends incomplete at tick 2; successful native coverage remains required.
+A native local-save failure at tick 1 also leaves all four actors contributing
+and ordinary cuts/receipts valid. The same process then records a complete
+mode-2 skirmish to tick 1,293 with zero corrections, 908 shots, 1,985 script roots
+and no contribution blocks at speed 20. A separate coverage-build attempt fails
+private SDK enumeration with `80004005` before binding; it remains a startup
+reliability gap, alongside the earlier join timeout.
+The recorder also captures each controlling human/hosted AI's explored-map
+bit history as kind-11 origin-keyed full/delta bitmap transactions, retaining
+the complete LosType and source/application stamps. B2 bounds the raw u16
+reads by LoadMap's nonwrapping allocation geometry and uses game-thread level
+lifetime. The copied codec publishes only END, source seals refuse partial
+transactions, and file readers keep proof-only source state separate from
+applied exploration. Codec and controlled file/seek checks pass. A native COVER
+sample verifies all four first source/recipient bitmap CRCs, but its exit/chat
+driver fails; the complete native map file/mode/seek gate remains open after
+three attempts. The current `secondary-orders` replay has 22 passes and one
+images-inventory failure at three bytes of `main+0x531`; all simulation
+comparisons and three exact poisoned round trips pass. `main+0x531` is the `leave` row `guitop` in `replay-globals.tsv` (the owner's decision, 2026-10-06), and `secondary-orders --cover` then passes all 25 checks, the images gate included (MEASURED 2026-10-06). This adds no hook, field write or exclusion. Effective POV
+engine playback, other view streams and communication audiences remain open;
+see the multiplayer slice's *Per-origin explored-map history*.
+
+The native text path also carries `(fresh match GUID, native sender, 64-bit
+serial)` beside the original 65-byte text packet. Source GUI scope/format/send
+call-site replacements at `0x493FAF`, `0x463E9F`, `0x4533F9`, `0x45348B` and
+`0x4534B6` preserve the original audience logic. The new `0x2B` dispatch slot
+`0x456028` validates the exact 97-byte delivery and bounded actor identities,
+then enters stock's text case at `0x45522E`. It preserves the pump pointer and
+copies no engine address to a worker. Normal/COVER builds and 168 copied-packet
+guarded/malformed controls pass. Intended targets and actual recipient
+observations remain separate; playback,
+loading-phase acceptance and pings/drawings remain open. The first native wire
+probe fails input acknowledgement and exposes an inactive start-token guard;
+the corrected in-play scope replaced that guard. No passing native wire-ID
+gate is claimed from that attempt. The corrected COVER three-human run, local
+recording off, verifies five unique source events and exact packet CRCs: the
+selected recipient accepts all five; the other peer accepts four, excluding the
+private event. Repeated identical lines remain distinct, and a full-length line
+has equal 63-character displays on every peer. This is in-play queued native
+delivery; the open playback/loading/raw gates remain.
+The engine map and multiplayer slice record the invariants and verification.
+
+Kind 12 persists text sources and actual receipt observations, including the
+original tick, recipient-owned clock, recorder application tick/order, intended
+target-call IDs, display flags and exact stock packet bytes. A fixed identity
+join validates all 65 bytes even when a receipt precedes its original. Targeted
+intent bounds actual receipts. Exhaustion of 65,536 identities or the 4,096
+copied queue refuses contributions; it never truncates an event history.
+Root/text queues drain in tick order before the shared clock advances or seals.
+Writer and C/Python semantic histories validate proof-only originals without
+publishing them, and a complete end refuses a receipt whose original is absent.
+`recr_mp_text` inspects the latest applied batch; all batches remain in the
+ordered application visitor. Copied controls and the existing file regression
+suite pass. A COVER three-human match stores five originals and nine actual
+receipts in a complete native recording with zero corrections; saving is off
+on both recipients. Public repeats, the sampled private recipient and a
+full-length line retain exact wire CRCs and separate clocks. This does not
+enable multiplayer replay display or close loading/raw transport/POV/budget
+gates. The multiplayer slice records the current native reader verification.
+An independent three-human COVER run also retains private originals from two
+saving-off authors, both actual receipts and a public marker: seven entries,
+three distinct author/serial-1 identities. The recording host has neither
+private line in its sampled display and no private receipt. The complete file
+has zero corrections and all 324 application envelopes / 160,587 bytes remain
+exact through C/Python reader seek. The reusable saved-evidence fixture passes
+both this recording and the fourteen-entry repeated/full-length recording.
+The loading audit identifies state-5 deliveries before B2 and two loading
+pumps sharing the retail receive allocation. The recorder redirects the
+whole primary pump at `0x453D40` and its receive call at `0x453D94`: one persistent
+storage slot per recursion depth survives return and is reused across calls,
+threads and levels. A recursive critical section serializes native
+receive/dispatch metadata; busy admission returns 0 without waiting or consuming
+an SDK message. Nested calls retain independent
+storage and restore their parent's source/destination words. Native sends
+continue using their own shared output buffer; input never borrows it. A full
+u16 allocation bounds the unchecked queued copy; raw/system messages negotiate
+larger sizes before publication. The native three-human COVER run retains
+correct private/public audiences and closes at tick 709 with zero corrections;
+seven text entries agree through C/Python reader seek. A separate raw run
+closes at tick 799 with zero corrections and seven exact entries through reader
+seek. Exact-core controls cover maximum queued size, raw growth, nested
+lifetime/metadata/span, refusal, two-thread receive ordering and the actual
+guarded movement copy. That copy now uses the shared receive-span API; native
+queued and raw movement tests observe both commanders on both peers with no stale
+refusals. Exact-core controls also verify packet aliases after return, depth-slot
+reuse and a foreign thread's busy refusal while the owner holds the lock. These
+lifetime and admission invariants remove early packet freeing and introduced
+lock waits; they do not prove every native parser reentrant, SDK callback/cost
+behaviour or separate output-builder lifetime. The installed 32-byte wrapper
+also passes queued/raw movement fixtures after those changes, with positive
+movement counts and every sampled stale count zero.
+The identified mask is now 7, with the adapter restricted to loading/play
+states 5/6. A fixed process-owned inbox publishes copied match metadata and
+4,096 bounded observations from either pump caller to the first B2 producer.
+Its held bodies acquire no other lock and make no engine/SDK/log/allocation
+call. Acceptance clocks are copied inside publication ownership; the frozen
+roster bounds IDs before transfer. Pending start survives load reset and is
+claimed once. B2 drains before source advance. Teardown transfers final entries
+and closes admission under one ownership interval before final seals/queue
+free. Exact inbox
+and state-5 receiver controls pass; native loading delivery/clock/file gates
+remain open. Whole-game receive
+cost, bandwidth and continued migration remain open.
+The snapshot also publishes inline `edit_index`/`caret` without engine writes.
+A two-peer COVER run verifies acknowledged text replacement and the engine's
+Mapping toggle. This is driver verification, not a native replay gate.
+
+| Fields we write in the multiplayer checkpoint | Invariant |
+|---|---|
+| `0x486075..0x48607D` constructor reservation code | One whole-span-matched observer jump; its stub preserves registers/flags and runs the original two nonrelative argument loads. Reads only bounded fixed-array owner/water fields and the already assigned exact birth, publishing copied begin arguments before initialization. No engine data field is changed. |
+| `0x512AF8` startup packet-length entry | 25, written by the redirected initializer store; start sender, receive observer and initializer are installed together. |
+| Host start's message bytes | Fixed 25-byte stack value passed through the existing generic sender; its reliable queue copies before return. No remote engine resources or order fields are written. |
+| Native CreatePlayer initial data | The original 21-byte password/version prefix followed by a fixed 280-byte public-key record. Only public material is exported; key failure forwards the stock data and refuses faithful contributions. The size handler retains the original accepted-prefix tests. |
+| `0x512B84`, `0x512ACC`, `0x512C6C` | Fixed identified-text size 97, generic `ret 4` callback `0x44FD40` and receive mask 7, written by the same startup initializer; the copied-inbox adapter accepts only states 5/6. All thirteen primary sites are acquired before any is written. |
+| Scoped GUI text message | Copied 97-byte stack wire value through the original target/generic sender. The native queue copies before returning; ordinary binary `0x05` messages retain their existing size. |
+| `0x453D40`, `0x453D94` / pump stack `+0x10` | Byte-matched entry wrapper and receive-call redirect. A 32-byte stack frame publishes an exact active TLS span; one process-lifetime allocation per recursion depth retains the last packet across return. Nonblocking recursive ownership covers receive/dispatch; busy admission returns 0 and consumes nothing. Success writes the current input pointer to the dispatcher's existing stack slot. All original return registers/flags are preserved. |
+| `main+0x4C9`, `main+0x4CD` | Native receive writes source/destination as before. A nested pump restores its parent's saved words before returning to that parent's dispatcher; the process-lifetime main block remains owned. No primary interface is retained. |
+| First 65 bytes of this pump's private receive allocation | Exact delivered pointer/97-byte length and copied version/match/serial/actor validation precede the bounded stock-image replacement. The original text case reads that same allocation before the next receive; native sends cannot overwrite it. |
 
 ### 2.6f Watching a recording (`tagpu_replay.c`, `tagpu_puppet.c`, `tagpu_recreader.c`, on request)
 
@@ -3071,6 +3365,20 @@ The **pause guard at `0x496920`**, stolen `84 98 51 8A 03 00`, observes before t
 engine's pause test and reasserts pause while rewind owns the level. Failure to
 install it disables live rewind.
 
+The **round-trip batch guard at `0x49692D`**, stolen `A1 E8 1D 51 00`, runs after
+the scheduler `0x495230` returns at `0x496928` and before the count test at
+`0x496932` and step call at `0x49693E`. The two calls and the count test are
+byte-matched too. On a puppet with round trips armed, it bounds the due count by
+the nearest upcoming T−1 before `0x495490` caches that count in EBX. This makes
+the required frame boundary independent of frame timing. It preserves registers
+and flags and changes no iteration's step size. An unavailable guard refuses
+round trips; the frame dump and playback sites remain independent. The same
+observer carries a test launch's pacing: after `turbo on` (`tagpu_turbo.on`'s k)
+it sets the count to k, or to 0 while the recorder's ring is more than half
+full, and an armed `pause at <T>` bounds it to end at T; the frame visit then
+sets the pause bit (*The scheduler, the clock and the test pacing* in the
+engine map). An unavailable guard refuses the turbo and the pause too.
+
 The harness's AI activity observation brackets `0x408C40`, stops attribution
 at the shared targeting phase `0x4089A0`, samples constructors at `0x43A0C0`,
 and forgets destroyed samples at `0x43A1F0`. Existing dispatch observers
@@ -3079,9 +3387,27 @@ byte-matched observers; the existing weapons acquisition wrapper ends planner
 attribution without another patch at `0x4089A0`. **Fields we write:** diagnostic storage only; these
 observers write no engine field and no recording payload.
 
-**Sites.** Four call sites of the Start and the loader, installed by `tagpu_replay_init` and inert
-without an accepted request: the seat fill's call `0x47B092`, the settings persist's call
-`0x47B09C`, and the start units' calls `0x497963` and `0x497ACD`; with them an **observer on the
+The **multiplayer allocator ownership observer at `0x48587E`** checks the whole
+nine-byte span `33 FF C6 85 FF 00 00 00 FF` and preserves registers/flags around
+its callback. The loader's stack contains ten sorted pointers at `esp+0x18`
+and the fresh arena at `esp+0x14`. Only a multiplayer puppet reorders that
+validated permutation before the native ownership loop. Saved multiplayer
+playback is still refused; the installed observer is inert on existing levels.
+This callback runs on the loader thread. Seating publishes a copied immutable
+roster before thread creation; interlocked claim/result operations carry it to
+the allocator and READY/FAILED back to the first game-thread step after the
+engine's load-done gate. The loader reads no mutable replay reader and does not
+write its failure flag.
+
+**Sites.** Six call sites of the Start, the loader and the destructor, installed by
+`tagpu_replay_init`, all or none, and inert without an accepted request: the destructor's death cue
+`0x4869EB` (`call 0x494FF0`, the music's combat ring +5 when a death's killer byte equals the
+controlled index), which returns with its argument popped on a puppet level, where the controlled
+record is the viewer's record 10; the seat fill's call `0x47B092`, the settings
+persist's call `0x47B09C`, the start units' calls `0x497963` and `0x497ACD`, and the level init's
+call `0x4919C8` (`E8 C3 2F FD FF`), retargeted to `tagpu_replay_level_players`, which calls
+`0x464990` and then, on the loader thread and only on a level the seating armed, the player init
+`0x464700` on record 10, the viewer's ([the engine map](exe-reverse-engineering.md#the-replay-viewers-record-player-record-10-and-the-level-inits-call-0x4919c8-disassembled-2026-10-06)); with them an **observer on the
 settings save `0x430F00`** (`tagpu_detour_observe`, stolen `A1 E8 1D 51 00`, a `before` and an
 `after`), inert unless a recording's options are in. The teardown wrap's post hook (§2.7) calls
 `tagpu_replay_level_after` once `0x491B60` has returned. The step runs from B2's stub at
@@ -3092,7 +3418,7 @@ in-play frame callback's `call 0x468CF0`: checked by `call_is` and rewritten to 
 the site's own return address `0x4969D2` and the observers on `0x468CF0` see the frames they saw.
 It is installed first and on its own, since a dump of a live recording needs it too, and runs on
 paused frames as well, between two sim steps, before the draw; the scenario applier's hook at
-`0x4969D2` takes the next instruction's bytes. **Twenty prologue gates** (`tagpu_puppet.c`,
+`0x4969D2` takes the next instruction's bytes. **Twenty-one prologue gates** (`tagpu_puppet.c`,
 `tagpu_detour_gate`), landed at `DllMain` before the recorder's observers, refuse on a puppet level:
 the apply `0x489CE0` and `Send_UnitDeath 0x4864B0` for a puppet's unit; COB's SET (at `0x480B26`,
 its second instruction), ATTACH `0x481340`, DROP `0x4813B0` and the two replies `0x47F780` and
@@ -3102,23 +3428,44 @@ shower `0x437DE0`, typed commands `0x417B50`, the debug keys `0x4956C0`, the res
 the feature tick `0x424050` and the six feature functions (`0x423C50`, `0x4246B0`, `0x423550`,
 `0x4233A0`, `0x4244B0`, `0x423710`); and while a seek rebuilds the level, the skirmish
 elimination `0x47BD70` (stolen `81 EC C8 00 00 00`, `ret 4`), so the rebuild's kills announce no
-defeat. On any other level a gate reads only the mode byte. The
+defeat; and on a multiplayer recording's segment, the state setter `0x48B090` (stolen
+`51 8B 44 24 0C`, `ret 8`) for a call that would change a puppet's `+0x10E` by the setter's own
+rule, outside the replay's write of the byte from the owner's composed image
+(`tagpu_puppet_state_open`, around `book_state` alone), so each change starts its scripts once.
+On any other level a gate reads only the mode byte. The
 recorder's hooks serve a puppet level too (§2.6e): the six draws answer from the recording, the
 explosion stub makes a replayed death's feature calls, and the footprint writers' `after` undoes
-their grid writes. A recording plays only when all twenty gates and the recorder's hooks are in,
+their grid writes. A recording plays only when all twenty-one gates and the recorder's hooks are in,
 and the teardown wrap too (§2.7), which ends the puppet level before the cascade destroys its
 units. **Three count-only observers** (`tagpu_puppet.c`, *THE COB WRITES ON A PUPPET*, installed
 after the gates; without them the dumps carry no COB-write counts) on the state setter `0x48B090`
-(stolen `51 8B 44 24 0C`), the yard `0x47DAC0` (`53 8B 5C 24 0C`) and the carry link `0x48AAC0`
+(stolen `51 8B 44 24 0C`, chained onto its gate, so a refused call is not counted), the yard `0x47DAC0` (`53 8B 5C 24 0C`) and the carry link `0x48AAC0`
 (`8B 4C 24 04 83 EC 08`) count, on a puppet level outside the replay's own calls, each call
 returning to one of COB's five write sites (`0x480B57`, `0x480BF1`, `0x480BB3`, `0x4813AB`,
 `0x481427`) on a puppet's unit, the unit bounded as a slot of the array first; the first 16 are
 logged. The gates make them zero; the observers prove it. **The step's phases** (§2.6e) call
 `tagpu_replay_phase` after the host's projectile tick and after its explosion tick.
 
-**Fields we write**, on the game thread, during playback, takeover or live rewind:
+**Fields we write**, on the game thread during playback, takeover or live rewind,
+and on the loader thread at the allocator ownership boundary and the level init's call:
 
-- live rewind: pause bit 0 at `main+0x38A51`; the spectator's seat and buffers
+- multiplayer allocation: only the loader's ten-pointer stack table at the
+  `0x48587E` boundary. The unchanged native loop then initializes all player
+  `+0x67/+0x6B/+0x6F/+0x71` and unit `+0x96/+0xFF/+0xAC` ownership pairs.
+  No live unit, arena pointer, slot ID or native transport ID is changed;
+
+- armed round trips on a puppet: the scheduler's due-tick count at
+  `main+0x38A3B`, validated within 0..5 and only reduced to the next T−1
+  boundary. This pacing word is already `leave` in `replay-globals.tsv`;
+
+- a test launch's turbo and `pause at <T>`: the same count set to k (1..5) or
+  0, then reduced to end at T; the pause bit `main+0x38A51` bit 0 set at the
+  frame visit after step T and cleared by `resume`;
+
+- the level init's call, on a puppet level: record 10's buffers through `0x464700`; when they
+  cannot be made, `main+0x2A42` and `main+0x2A43` = the lowest recorded seat;
+
+- live rewind: pause bit 0 at `main+0x38A51`; the spectator's seat (record 10) and buffers
   through `0x464290` and `0x464700`; recorded seats' type through `0x463C60`,
   acquisition table through `0x40B390`, and AI `+0x74` cleared only after all their
   units have been destroyed. V gets the fresh loader's WinLoseTime `+0xF4 = 0`,
@@ -3131,9 +3478,11 @@ logged. The gates make them zero; the observers prove it. **The step's phases** 
   applied on that return;
 
 - at the seat fill: each seat's record through `0x464290(seat, 3)`, then PlayerInfo `+0x95` and
-  `+0x96`, the name at `+0x2B` and `+0x49`, and the alliance row `+0x108..+0x112`; V's through
-  `0x464290(V, 3)`, with PlayerInfo `+0x9B` bit 6 (the watcher bit) and the recording viewer's
-  side at `+0x95`; `0x464290(r, 0)` for a record the stock fill activated that the recording does
+  `+0x96`, the name at `+0x2B` and `+0x49`, and the alliance row `+0x108..+0x112`; V's, record
+  10's, through `0x464290(10, 3)`, with PlayerInfo `+0x9B` bit 6 (the watcher bit) and the
+  recording viewer's side at `+0x95`, the empty block `+0x67` = 1, `+0x6B` = 0 and the ID range
+  `+0x6F` = `+0x71` = 1 (the whole record kept beforehand, and put back after the teardown with
+  `main+0x2A42`/`+0x2A43` = 0 when either names it); `0x464290(r, 0)` for a record the stock fill activated that the recording does
   not seat; `main+0x2A42` = V, `main+0x2A43` = the view, `main+0x2A3C` = the recorded player
   count; the objective disarmed (`0x4904B0`);
 - the skirmish settings (`+0x108..+0x11B`), `main+0x37EEE` and `main+0x37EEC`, which the
@@ -3144,11 +3493,17 @@ logged. The gates make them zero; the observers prove it. **The step's phases** 
 - each step: every unit's record and mover under `replay-layout.tsv`'s classes, positions through
   `0x48A9F0` with `0x43DA70` and `0x43DB50`, carry links through `0x48AB70`, order lists through
   `0x43A0C0`, `0x43A1F0`, `0x43AD10` and `0x489690`, a yard's change through `0x47C790` and
-  `0x440A40`; every player record but V's under the same classes, but `+0xF0`, the 30-tick
+  `0x440A40`; every player record 0–9 under the same classes, but `+0xF0`, the 30-tick
   deadline the host's players phase keeps, and only with both names ended inside their fields and
   a seat's PlayerInfo side and colour within this game's counts; and each seat's `+0x18` = GameTime;
+- on a multiplayer segment, with each unit's image: its model's composite frame `Object3do+0x10`
+  (`[unit+0x9E]+0x10`) = 0 when the composed image changes whether its build is finished (the
+  model the host's create made, freed only by its destructor on this thread; a NULL model
+  skipped), and `main+0x37EBE` bit 4 when that finishes a unit the viewer has selected
+  (`tagpu_replay.c`, *THE BUILD FINISH ON A MULTIPLAYER LEVEL*);
 - the events, through `0x485F50`, C4's death wrap, `0x49D270`, `0x4B0B00`, `0x4B0A70`,
-  `0x4B0940`, `0x41B8D0`, `0x48B090`, `0x47F780`, `0x47F850`, `0x4720D0` and `0x472200`;
+  `0x4B0940`, `0x41B8D0` (not on a multiplayer segment), `0x48B090`, `0x47F780`, `0x47F850`,
+  `0x4720D0` and `0x472200`;
 - the features' changes, through the feature tick and the six feature functions with the
   recorded arguments, bounded by the level's grid, defs and weapons, each at the phase of the step
   the recording machine made it in: a unit-tick root at the replay step, a projectile-tick root
@@ -3187,15 +3542,21 @@ logged. The gates make them zero; the observers prove it. **The step's phases** 
   and, before the `write` rows, each live unit's water state `+0x10A` (bounded by its enum) and
   sight stamp's fields `+0x7A`, `+0x7C`, `+0xF8` (through the removal `0x482090` and the stamp
   `0x482270`, a circle's radius index bounded by the frame table's count) where they differ from
-  the recording's (`books_put`);
+  the recording's (`books_put`); on a multiplayer recording's segment also each live unit's state
+  byte `+0x10E` from its owner's composed image, through `0x48B090` with the state gate open, where
+  it differs (`book_state`);
 - at each create: the new unit's water state `+0x10A`, from the create event, bounded by its enum;
 - after each step's images: the cells the feature tick's input wrote, again from the next
   iteration's world through the same cell write (the whole grid after an overflow);
-- at the first step: V's sight counters (`[rec+0x7C]`, `[rec+0x88]` bytes of 1), V's bit
-  (`[V+0x146]`) in every entry of the explored map `[main+0x14273]`, `main+0x14281` bit 3 cleared,
-  then `main+0x142F1` bit 2 and the minimap's fog composite `0x466C20` (also after each LosType
-  change and at a seek); V's energy `+0x8C` and metal `+0x98` = 0; and `s_windState` seeded from the
-  recording's first image;
+- at the first frame visit or step: V's sight counters (`[rec+0x7C]`, `[rec+0x88]` bytes of 1),
+  V's bit (`[V+0x146]`, 10) in every entry of the explored map `[main+0x14273]`, `main+0x14281`
+  bit 3 cleared, then `main+0x142F1` bit 2 and the minimap's fog composite `0x466C20` (also after
+  each LosType change and at a seek), and V's `+0xF0` = the next multiple of 30; and, at the first
+  step, `s_windState` seeded from the recording's first image;
+- while record 10 is viewed on a puppet level, once a GameTime at the frame visit: the minimap
+  rebuild `0x466DC0`, and when record 10's `+0xF0` is due, `+0xF0` = the next multiple of 30, the
+  radar pass `0x467440` and the fog composite `0x466C20` (the players phase's viewed-record work,
+  which its loop over records 0–9 never reaches);
 - at a seek, on the frame visit, in this order: the projectile count 0 (and `main+0x142F7` when it
   points into the pool); every unit killed through C4's wrap of the destructor `0x4866D0` with
   severity and corpse 0; every temporary sight record's `+0x1C` zeroed, then `0x482130`; LosType
@@ -3908,7 +4269,7 @@ with RENDER.GUI ([renderers](renderers.html) §2.10).
 |---|---|---|
 | `DLL_PROCESS_ATTACH` | `impure/dock.gui` and `anims/dock.gaf` into `impure-patch.ufo`: the ground as eight 512×86 uncompressed frames and the buttons' frames, composed from `art/ui/retail`, every frame tagged `TAGPU_GAF_EXACT` at `+0x0C` so the Classic++ UI restorer leaves it alone; nothing arms without the art | — |
 | `DrawGameScreen 0x468CF0` (the menu's tick) | push `DOCK.GUI` through the slot; place it before stage 1 at the HUD scale in force (`tagpu_dock_rect`), and publish the magnified region's word while the engine's chain holds it; repaint the ground and compare the Leave guard's bytes after it; then each frame, while it is the top screen, push the play stage, the speed stage, the greying and the two readouts through the engine's setters, attribs bit 8 on each greyed button and off each live one; put back the pause Leave's question took; start the walker once a level | game |
-| `GUIMEMSTRUCT+0x08` (its `OnCommand`) | seeks, pause, speed, a bookmark, Leave (the pause taken, `0x512FF8 = 0`, `0x460680`, the title set); every handled click answered with `0x4AB0A0` | game |
+| `GUIMEMSTRUCT+0x08` (its `OnCommand`) | seeks, pause, speed, a bookmark, the Overlays menu opened or closed (§2.12c), Leave (the pause taken, `0x512FF8 = 0`, `0x460680`, the title set); every handled click answered with `0x4AB0A0` | game |
 | `tagpu_shield.c`, both paths | the strip's left and right buttons through `tagpu_menu_click` / `tagpu_menu_rclick`; a drag's seek cancelled on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and a deactivating `WM_ACTIVATEAPP`, its release still consumed | game |
 | `0x46A308` (post-GUI) | the strip's fill, markers and playhead into the back buffer through `0x4B7F90`, unless a screen above the dock overlaps it | game |
 | the walker | reads the recording file through its own `RecReader` and publishes markers; joined at the teardown wrap's entry | its own |
@@ -3917,7 +4278,7 @@ with RENDER.GUI ([renderers](renderers.html) §2.10).
 the word read-modify-written); `main+0x38A4B` and `+0x38A4D` (the speed's ceiling and live value,
 the presets 5..80 only, the player's put back at the teardown and exchanged around every settings
 save); the dword `0x512FF8` (YESORNO's question, 0); the dock's parsed records' rects before stage 1,
-and after it the attribs dword (`+0x1B`, bit 8 only) of its six greyable buttons; its own ground
+and after it the attribs dword (`+0x1B`, bit 8 only) of its seven greyable buttons; its own ground
 tiles' planes; `main+0x37EA0` through the slot. `replays\index.dat`'s bookmarks
 field. Nothing the recording carries.
 
@@ -3930,7 +4291,7 @@ No new byte patch: the cards reuse the dock's model tick, post-GUI observer and 
 |---|---|---|
 | dock open/tick/close | model and layout, top-screen check, enabled card-scale word | game |
 | post-GUI `0x46A308` | immutable GAF frames through `0x4B7F90`; bounded ASCII labels through `0x4C14F0`, font measured with `0x4C1440`/`0x4C1480`/`0x4C1450` | game |
-| both shield button paths; wheel before zoom | card actions, paired release consumption, scroll; current `main+0x531` compared with the dock identity | game |
+| both shield button paths; wheel before zoom | card actions, paired release consumption, scroll; current `main+0x531` compared with the dock identity; the dock's Overlays menu, drawn over the panel's bottom right and hit-tested before the cards, its four rows the replay's overlay and chat switches, closed by a press anywhere but itself and the dock's `DKOVER` ([perspective plan, 4c-3 as built](tadr-port/demo-recorder-perspective-streams.html#4c-3-as-built)) | game |
 | replay frame visit at `0x4969CD` | pending Sight after display-state application: independent death-history reader, expiry, view selection, temporary sight adds, minimap fog and radar passes | game |
 | flip marker and composite | `OP_FLIP.dy` → `PK_FRAME.h` → presented card scale; bottom-right region uniforms at 128/144/160, total block176 bytes | game → render |
 
@@ -4295,7 +4656,7 @@ reach it only through the packet.
 
 | site | what we do there | thread |
 |---|---|---|
-| `DrawGameScreen 0x468CF0`, the observer's **`before`** (the in-play gate `0x4969D2`) | **the command apply**: take the latest record the render thread posted (a second instance of the packet's mailbox, latest wins, no waiting either side) and write every engine word it names, on the thread that owns them — after whichever of the frame callback's own camera writers ran this frame (the stepper and the scroll poll both precede the draw call, and both can be skipped: the stepper when paused, both under an in-game GUI screen) and before the draw's first read of the eye, which nothing inside `DrawGameScreen` stores ([engine map](exe-reverse-engineering.html), "The commands, applied in `before`"). `tagpu_zoom_apply`: the level → the minimap rect's scale, `ScrollSpeed` at base/z; the terrain request → which range is in force (§2.3c); a NEW record's anchor delta (`cum − applied`, consumed exactly once) → the follow released first when the gesture asked (`0x41C390`'s three stores), then eye and scroll target stepped together; the `tagpu_eye.txt` hold clamped into the camera range and written when it differs; the eye and target clamped into the range in force on every in-play draw (the walk home when the ground goes back to the engine); any eye moved → the minimap box through `0x466B70` and **bit 3 of `main+0x14281` cleared**, as `0x41CB6B` does. `tagpu_vpwide_apply`: the rect widened to the transform's range at the commanded level, or restored; W/H never written, a disagreement counted. Under `tagpu_packet.off` nothing is applied: the engine keeps its own range, rect and rate ([engine map](exe-reverse-engineering.html), "The commands, applied in `before`") | game |
+| `DrawGameScreen 0x468CF0`, the observer's **`before`** (the in-play gate `0x4969D2`) | **the command apply**: take the latest record the render thread posted (a second instance of the packet's mailbox, latest wins, no waiting either side) and write every engine word it names, on the thread that owns them — after whichever of the frame callback's own camera writers ran this frame (the stepper and the scroll poll both precede the draw call, and both can be skipped: the stepper when paused, both under an in-game GUI screen) and before the draw's first read of the eye, which nothing inside `DrawGameScreen` stores ([engine map](exe-reverse-engineering.html), "The commands, applied in `before`"). `tagpu_zoom_apply`: the level → the minimap rect's scale, `ScrollSpeed` at base/z; the terrain request → which range is in force (§2.3c); the replay's Follow ended when the scroll target at entry is not where its last write left it, or when the record's `follow_broken` (a wheel notch) or, for a Jump, `follow_seen` names its epoch, and the engine's follow released on an epoch's first write; a NEW record's anchor delta (`cum − applied`, consumed exactly once) → the follow released first when the gesture asked (`0x41C390`'s three stores), then eye and scroll target stepped together; the replay's Follow written to the eye and the target together, clamped into the range (the hold wins), and the epoch and its level published in the packet (`follow_epoch`, `follow_level`), which the render thread's follow lever pins the wheel to; the `tagpu_eye.txt` hold clamped into the camera range and written when it differs; the eye and target clamped into the range in force on every in-play draw (the walk home when the ground goes back to the engine); any eye moved → the minimap box through `0x466B70` and **bit 3 of `main+0x14281` cleared**, as `0x41CB6B` does. `tagpu_vpwide_apply`: the rect widened to the transform's range at the commanded level, or restored; W/H never written, a disagreement counted. Under `tagpu_packet.off` nothing is applied: the engine keeps its own range, rect and rate ([engine map](exe-reverse-engineering.html), "The commands, applied in `before`") | game |
 | the observer's **`after`** | the packet grew: `vp_addr` (the rect the engine can name, `+0x37E27..`), `pal` (1 KB, `main+0x143A7`), `gamma` (`[0x51FBD0]+0x614`, bounded), `cmd_ack_seq`/`cmd_ack_dx`/`cmd_ack_dy` (what the apply had done by this draw), `zoom_applied`, `cam_centre` (which camera range the apply chose for this draw) | game |
 | the level teardown (the packet's level-end provider) | `tagpu_zoom_level_end` + `tagpu_vpwide_level_end` before the out-of-game packet: the engine's own range back in force and the eye and target walked into it, `ScrollSpeed` restored to the base, the true rect restored — the shell inherits nothing | game |
 | `tagpu_overlay.c`, once per frame before any pass | `tagpu_zoom_read_lever(packet)`: the levers and the wheel's tween; the cursor anchor's step (zoom-in only) is pre-clamped against the same range computed from the packet's copy of the map size and the true viewport and added to a cumulative sum; the **predicted eye** = the packet's eye + the sum the packet has not acknowledged, clamped — what the native pass, the scaffold and every gather draw from (`tagpu_zoom_predicted_eye`). No packet, or an out-of-game one, is no world drawn | render |
@@ -4426,6 +4787,7 @@ Object3do ([cross-thread engine reads](cross-thread-engine-reads.html) §5 row 2
 | `tagpu_native.c` | the unit and wreck gathers, the whole pose path (`pose_accum_body`, `posed_pose`, `hires_pose`, `pose_dump`, the pose CRC), the ownership test, the ground height, the option bits, the sub-pixel table's key: all from the packet. What it still reads is per-LEVEL assets under `tagpu_reclaim`'s teardown fence — the model templates behind `MODEL_PTRS`, whose base is read LIVE every call (the teardown nulls it at `0x42DCD8`, and that null is the refusal) while the bound is the packet's `udef_count`, and the screen fog descriptor, which is landing 4b's | render |
 | `tagpu_scaffold.c`, `tagpu_feat.c` | the anchors, the map and sweep dimensions, the units they stamp for; the FeatureDef and wreck RECORDS stay, under the fence. Their bases are read LIVE at every use (the teardown nulls both, and those nulls are the refusal) and their indices are bounded without a probe: a def row by `min(live NumFeatureDefs, the packet's)`, a wreck record by the engine's fixed 2048-record pool | render |
 | `tagpu_mark.c`, `tagpu_overlay.c`, `tagpu_lerp.c`, `tagpu_hires.c` | off the allow-list entirely: they name no engine memory at all | render |
+| the same `after`, on a level that plays a recording | **the replay's overlays**, copied by value from what the replay's frame visit built before the draw call `0x4969CD` out of the recording alone: `PK_OVERLAY` (16 B, at most 128: a recorded cursor or click, its player, its colour, a click's age and the world point), `ov_col[10]` (each recorded player's palette index) and `PK_UNIT.rsel` (bit p: recorded player p's selection holds the unit, drawn only while the slot holds a live unit of the entry's birth), in what was `pad_[3]` — `pad0` at 85 and `rsel` at 86, the record still 104 B, all asserted. The acquire bounds the count and every item's kind and player. `tagpu_mark.c` draws the cursors and the click rings after the build cursor with the fog off; `tagpu_native.c` draws a recorded selection as its selection rectangle in `ov_col` of the lowest player. Zero outside a playback, and on GDI nothing draws them ([perspective plan, 4c-3 as built](tadr-port/demo-recorder-perspective-streams.html#4c-3-as-built)) | game → render |
 | `tagpu_render3do.c` | the shade table and the build-state formulas take the packet's copies; the **write-back is deleted** | render |
 
 **The lerp is rekeyed, and its arena is gone.** `tagpu_lerp.c` kept 3.4 MB of pose banks keyed on
@@ -20125,8 +20487,8 @@ edit. A key naming no section folds nothing.
 **Threads.** The keys are written on the LOADER thread inside the load; the fold runs where the
 menu-time loader runs, before the seal; everything else runs on the thread that runs the death:
 the GAME thread in play (every death, the cargo loop, kill-all, the pick and the `0x4C`'s
-receipt), and during a network load either thread that pumps. The pump `0x453D40` holds no lock
-across its dispatch, and both the loader (`0x49727D`) and the game thread's load loop (`0x49852E`) reach its leave case
+receipt), and during a network load either thread that pumps. The retail pump `0x453D40` holds no lock
+across its dispatch; the recorder's owned primary wrapper serializes it when armed. Both the loader (`0x49727D`) and the game thread's load loop (`0x49852E`) reach its leave case
 and the removal's kill-all. So the running kill-all is the thread's own: its token, from an
 interlocked counter, lives in a TLS slot, and a kill mark matches only the kill-all that wrote it;
 two threads' kill-alls never honour each other's marks, and a mark left behind matches no later

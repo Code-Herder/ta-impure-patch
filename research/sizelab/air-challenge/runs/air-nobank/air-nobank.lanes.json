@@ -1,0 +1,434 @@
+{
+ "tag": "air-nobank",
+ "framing": {
+  "gaps": 108681,
+  "mask dict": 220966,
+  "mask ids": 396208
+ },
+ "lanes": [
+  {
+   "lane": "+0x064/2",
+   "deflated_KiB": 270.6,
+   "air_nz": 332697,
+   "other_nz": 0,
+   "air_varint_KiB": 372.9,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x120/4",
+   "deflated_KiB": 147.0,
+   "air_nz": 189415,
+   "other_nz": 0,
+   "air_varint_KiB": 209.5,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x124/4",
+   "deflated_KiB": 100.8,
+   "air_nz": 34809,
+   "other_nz": 0,
+   "air_varint_KiB": 100.3,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x128/4",
+   "deflated_KiB": 100.8,
+   "air_nz": 178376,
+   "other_nz": 0,
+   "air_varint_KiB": 184.8,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x08E/4",
+   "deflated_KiB": 84.2,
+   "air_nz": 52044,
+   "other_nz": 416,
+   "air_varint_KiB": 84.0,
+   "other_varint_KiB": 0.6
+  },
+  {
+   "lane": "+0x13C/2",
+   "deflated_KiB": 78.9,
+   "air_nz": 130680,
+   "other_nz": 11554,
+   "air_varint_KiB": 138.0,
+   "other_varint_KiB": 13.2
+  },
+  {
+   "lane": "+0x110/4",
+   "deflated_KiB": 74.0,
+   "air_nz": 107030,
+   "other_nz": 816,
+   "air_varint_KiB": 425.7,
+   "other_varint_KiB": 1.0
+  },
+  {
+   "lane": "+0x01A/2",
+   "deflated_KiB": 28.8,
+   "air_nz": 14441,
+   "other_nz": 3676,
+   "air_varint_KiB": 17.0,
+   "other_varint_KiB": 9.2
+  },
+  {
+   "lane": "+0x01C/2",
+   "deflated_KiB": 27.9,
+   "air_nz": 15997,
+   "other_nz": 3274,
+   "air_varint_KiB": 18.7,
+   "other_varint_KiB": 5.7
+  },
+  {
+   "lane": "+0x082/4",
+   "deflated_KiB": 27.3,
+   "air_nz": 51106,
+   "other_nz": 282,
+   "air_varint_KiB": 74.6,
+   "other_varint_KiB": 0.4
+  },
+  {
+   "lane": "+0x0F8/1",
+   "deflated_KiB": 12.8,
+   "air_nz": 14097,
+   "other_nz": 524,
+   "air_varint_KiB": 14.0,
+   "other_varint_KiB": 0.6
+  },
+  {
+   "lane": "+0x038/2",
+   "deflated_KiB": 12.5,
+   "air_nz": 9529,
+   "other_nz": 0,
+   "air_varint_KiB": 10.8,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x036/2",
+   "deflated_KiB": 12.3,
+   "air_nz": 9683,
+   "other_nz": 0,
+   "air_varint_KiB": 11.2,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x0BA/2",
+   "deflated_KiB": 11.6,
+   "air_nz": 2787,
+   "other_nz": 2324,
+   "air_varint_KiB": 6.5,
+   "other_varint_KiB": 5.6
+  },
+  {
+   "lane": "+0x01F/1",
+   "deflated_KiB": 7.5,
+   "air_nz": 838,
+   "other_nz": 6049,
+   "air_varint_KiB": 0.8,
+   "other_varint_KiB": 5.9
+  },
+  {
+   "lane": "+0x00C/4",
+   "deflated_KiB": 6.2,
+   "air_nz": 0,
+   "other_nz": 5369,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 5.2
+  },
+  {
+   "lane": "+0x138/4",
+   "deflated_KiB": 6.1,
+   "air_nz": 0,
+   "other_nz": 2320,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 5.2
+  },
+  {
+   "lane": "+0x018/2",
+   "deflated_KiB": 5.9,
+   "air_nz": 1535,
+   "other_nz": 1214,
+   "air_varint_KiB": 1.8,
+   "other_varint_KiB": 1.8
+  },
+  {
+   "lane": "+0x004/2",
+   "deflated_KiB": 5.7,
+   "air_nz": 1415,
+   "other_nz": 1314,
+   "air_varint_KiB": 2.4,
+   "other_varint_KiB": 2.0
+  },
+  {
+   "lane": "+0x0B0/4",
+   "deflated_KiB": 5.7,
+   "air_nz": 1160,
+   "other_nz": 833,
+   "air_varint_KiB": 1.6,
+   "other_varint_KiB": 1.5
+  },
+  {
+   "lane": "+0x07C/2",
+   "deflated_KiB": 5.1,
+   "air_nz": 3375,
+   "other_nz": 566,
+   "air_varint_KiB": 3.3,
+   "other_varint_KiB": 0.6
+  },
+  {
+   "lane": "+0x0C8/4",
+   "deflated_KiB": 4.8,
+   "air_nz": 10192,
+   "other_nz": 633,
+   "air_varint_KiB": 49.8,
+   "other_varint_KiB": 3.1
+  },
+  {
+   "lane": "+0x072/4",
+   "deflated_KiB": 4.7,
+   "air_nz": 0,
+   "other_nz": 1428,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 3.0
+  },
+  {
+   "lane": "+0x06E/4",
+   "deflated_KiB": 4.6,
+   "air_nz": 0,
+   "other_nz": 1248,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 3.7
+  },
+  {
+   "lane": "+0x0C0/4",
+   "deflated_KiB": 4.5,
+   "air_nz": 0,
+   "other_nz": 811,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 3.4
+  },
+  {
+   "lane": "+0x0FA/1",
+   "deflated_KiB": 4.4,
+   "air_nz": 638,
+   "other_nz": 1765,
+   "air_varint_KiB": 0.7,
+   "other_varint_KiB": 1.9
+  },
+  {
+   "lane": "+0x108/2",
+   "deflated_KiB": 4.3,
+   "air_nz": 468,
+   "other_nz": 1278,
+   "air_varint_KiB": 0.8,
+   "other_varint_KiB": 1.4
+  },
+  {
+   "lane": "+0x06A/4",
+   "deflated_KiB": 4.2,
+   "air_nz": 0,
+   "other_nz": 1135,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 2.6
+  },
+  {
+   "lane": "+0x0F0/4",
+   "deflated_KiB": 3.1,
+   "air_nz": 398,
+   "other_nz": 769,
+   "air_varint_KiB": 0.5,
+   "other_varint_KiB": 0.9
+  },
+  {
+   "lane": "+0x020/2",
+   "deflated_KiB": 3.0,
+   "air_nz": 1320,
+   "other_nz": 0,
+   "air_varint_KiB": 2.1,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x0D0/4",
+   "deflated_KiB": 2.9,
+   "air_nz": 200,
+   "other_nz": 647,
+   "air_varint_KiB": 1.0,
+   "other_varint_KiB": 3.1
+  },
+  {
+   "lane": "+0x0D8/4",
+   "deflated_KiB": 2.3,
+   "air_nz": 0,
+   "other_nz": 410,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 1.5
+  },
+  {
+   "lane": "+0x0C4/4",
+   "deflated_KiB": 1.8,
+   "air_nz": 0,
+   "other_nz": 303,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 1.1
+  },
+  {
+   "lane": "+0x146/1",
+   "deflated_KiB": 1.7,
+   "air_nz": 200,
+   "other_nz": 352,
+   "air_varint_KiB": 0.2,
+   "other_varint_KiB": 0.3
+  },
+  {
+   "lane": "+0x0F6/1",
+   "deflated_KiB": 1.7,
+   "air_nz": 442,
+   "other_nz": 593,
+   "air_varint_KiB": 0.7,
+   "other_varint_KiB": 0.7
+  },
+  {
+   "lane": "+0x0E4/4",
+   "deflated_KiB": 1.7,
+   "air_nz": 0,
+   "other_nz": 250,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 1.2
+  },
+  {
+   "lane": "+0x0DC/4",
+   "deflated_KiB": 1.7,
+   "air_nz": 0,
+   "other_nz": 280,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 1.0
+  },
+  {
+   "lane": "+0x0F7/1",
+   "deflated_KiB": 1.6,
+   "air_nz": 416,
+   "other_nz": 562,
+   "air_varint_KiB": 0.6,
+   "other_varint_KiB": 0.6
+  },
+  {
+   "lane": "+0x006/2",
+   "deflated_KiB": 1.2,
+   "air_nz": 348,
+   "other_nz": 0,
+   "air_varint_KiB": 1.0,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x10E/1",
+   "deflated_KiB": 1.1,
+   "air_nz": 200,
+   "other_nz": 239,
+   "air_varint_KiB": 0.2,
+   "other_varint_KiB": 0.2
+  },
+  {
+   "lane": "+0x0F4/1",
+   "deflated_KiB": 1.1,
+   "air_nz": 133,
+   "other_nz": 119,
+   "air_varint_KiB": 0.1,
+   "other_varint_KiB": 0.1
+  },
+  {
+   "lane": "+0x034/2",
+   "deflated_KiB": 1.0,
+   "air_nz": 261,
+   "other_nz": 0,
+   "air_varint_KiB": 0.5,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x03B/1",
+   "deflated_KiB": 0.9,
+   "air_nz": 644,
+   "other_nz": 0,
+   "air_varint_KiB": 0.6,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x0B8/2",
+   "deflated_KiB": 0.9,
+   "air_nz": 119,
+   "other_nz": 22,
+   "air_varint_KiB": 0.1,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x0CC/4",
+   "deflated_KiB": 0.9,
+   "air_nz": 200,
+   "other_nz": 205,
+   "air_varint_KiB": 1.0,
+   "other_varint_KiB": 1.0
+  },
+  {
+   "lane": "+0x0F5/1",
+   "deflated_KiB": 0.8,
+   "air_nz": 127,
+   "other_nz": 83,
+   "air_varint_KiB": 0.1,
+   "other_varint_KiB": 0.1
+  },
+  {
+   "lane": "+0x104/4",
+   "deflated_KiB": 0.7,
+   "air_nz": 0,
+   "other_nz": 107,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 0.3
+  },
+  {
+   "lane": "+0x0E8/4",
+   "deflated_KiB": 0.3,
+   "air_nz": 0,
+   "other_nz": 24,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 0.1
+  },
+  {
+   "lane": "+0x068/2",
+   "deflated_KiB": 0.2,
+   "air_nz": 108,
+   "other_nz": 0,
+   "air_varint_KiB": 0.2,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x10A/2",
+   "deflated_KiB": 0.2,
+   "air_nz": 589,
+   "other_nz": 38,
+   "air_varint_KiB": 0.6,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x0AC/4",
+   "deflated_KiB": 0.1,
+   "air_nz": 100,
+   "other_nz": 61,
+   "air_varint_KiB": 0.1,
+   "other_varint_KiB": 0.1
+  },
+  {
+   "lane": "+0x10F/1",
+   "deflated_KiB": 0.1,
+   "air_nz": 0,
+   "other_nz": 8,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x057/1",
+   "deflated_KiB": 0.1,
+   "air_nz": 0,
+   "other_nz": 8,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 0.0
+  }
+ ]
+}

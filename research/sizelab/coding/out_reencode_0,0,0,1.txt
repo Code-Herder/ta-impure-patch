@@ -1,0 +1,2 @@
+kinds 15 33 41 38
+H0D0T0L1 raw 226.3 MiB (frame 226.3 values 0.0)  deflate2K 98.42  zstd3 66.83  zstd9 63.87  zstd19 59.51  roundtrip OK  62s

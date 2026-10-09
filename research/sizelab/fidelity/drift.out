@@ -1,0 +1,2 @@
+open-loop change quantization (round): error p50 6.08 p99 62.66 max 418.0 wu
+open-loop change quantization (truncate): error p50 39.43 p99 386.52 max 836.1 wu

@@ -1,0 +1,27 @@
+stream blocks 785 raw 237.3 MB, writer packed 102.72 MB
+zlib 6 wbits11 (writer-like)         103.20 MB  1.005x  comp     53.3 MB/s  dec    468.1 MB/s
+zlib 1 32K                            98.76 MB  0.961x  comp    128.9 MB/s  dec    436.5 MB/s
+zlib 6 32K                            87.18 MB  0.849x  comp     36.9 MB/s  dec    523.6 MB/s
+zlib 9 32K                            86.13 MB  0.838x  comp      6.4 MB/s  dec    546.0 MB/s
+zstd 1                                76.33 MB  0.743x  comp    581.2 MB/s  dec   1688.7 MB/s
+zstd 2                                72.12 MB  0.702x  comp    505.5 MB/s  dec   1735.2 MB/s
+zstd 3                                70.08 MB  0.682x  comp    478.9 MB/s  dec   1657.2 MB/s
+zstd 5                                68.61 MB  0.668x  comp    226.8 MB/s  dec   1670.3 MB/s
+zstd 7                                67.39 MB  0.656x  comp    154.4 MB/s  dec   1803.4 MB/s
+zstd 9                                66.98 MB  0.652x  comp    127.2 MB/s  dec   1844.7 MB/s
+zstd 12                               66.85 MB  0.651x  comp     91.6 MB/s  dec   1812.6 MB/s
+zstd 15                               66.80 MB  0.650x  comp     33.5 MB/s  dec   1884.4 MB/s
+zstd 17                               64.79 MB  0.631x  comp     15.3 MB/s  dec   1605.6 MB/s
+zstd 19                               62.40 MB  0.607x  comp      6.1 MB/s  dec   1464.2 MB/s
+zstd 22                               62.39 MB  0.607x  comp      5.7 MB/s  dec   1466.2 MB/s
+zstd -1 (fast)                        93.00 MB  0.905x  comp    665.9 MB/s  dec   2287.2 MB/s
+zstd -5 (fast)                       116.54 MB  1.134x  comp    809.9 MB/s  dec   2603.7 MB/s
+lz4 default                          119.13 MB  1.160x  comp    876.6 MB/s  dec   4924.1 MB/s
+lz4 hc 9                              89.71 MB  0.873x  comp     44.0 MB/s  dec   5419.1 MB/s
+brotli q5 w22                         63.29 MB  0.616x  comp     90.6 MB/s  dec    606.2 MB/s
+brotli q9 w22                         62.76 MB  0.611x  comp     15.5 MB/s  dec    609.8 MB/s
+brotli q11 w22                        58.16 MB  0.566x  comp      0.8 MB/s  dec    459.7 MB/s
+lzma preset 1                         59.38 MB  0.578x  comp     21.8 MB/s  dec    115.0 MB/s
+lzma preset 6                         54.44 MB  0.530x  comp      5.7 MB/s  dec    120.5 MB/s
+lzma preset 9                         54.44 MB  0.530x  comp      3.3 MB/s  dec    113.4 MB/s
+lzma 6 lc0 lp2 pb2                    54.08 MB  0.526x  comp      4.3 MB/s  dec    118.6 MB/s

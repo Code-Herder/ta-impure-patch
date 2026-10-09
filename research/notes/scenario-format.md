@@ -154,14 +154,13 @@ unit names by scanning the live definition table. This design follows its recipe
   of them, so a slot **is** the engine's 0-based `Players[]` index, `0..9`. (Phase A
   bounded it `1..10` and so could not name the human seat a plain launch uses.)
   When `setup.players` is present, an `owner` outside it is an error.
-- **A skirmish seats four players.** MEASURED 2026-09-24: ten named in `setup.players` on Core
-  Prime Industrial Area, a ten-player map, and the engine refused every unit of slots 4–9 as
-  `player slot N is not in this game`. Ten players are a network game (`tools/mp_lobby.sh`).
-  The four is the SKIRMISH screen's seat count `main+0x38D81`, which the seat fill walks (engine
-  map, *Seating a level*): a demo-recorder probe that activated records 4–9 through the engine's
-  own seat activation had the applier accept slots 4, 5 and 9 (MEASURED 2026-09-29,
-  [the puppet host](tadr-port/demo-recorder-state-evidence.md#the-puppet-host-measured)).
-  Ordinary scenario loading does not activate those extra seats.
+- **A skirmish seats as many players as the SKIRMISH screen's count** `main+0x38D81`, which the
+  seat fill walks (engine map, *Seating a level*); its default is 4. `scenario load` sets the count
+  (`NumSkirmishPlayers`) to the highest slot in `setup.players` plus one ([CLI surface](#cli-surface)). MEASURED 2026-10-06: `replay-tenseat-load.json`
+  seats ten players on Core Prime Industrial Area, a ten-player map, each with its commander
+  ("live with 10 units"). Before that (MEASURED 2026-09-24), with the count left at 4, the engine
+  refused every unit of slots 4–9 as `player slot N is not in this game`. The count persists in the
+  instance's registry store.
 - Handles are `[A-Za-z0-9][A-Za-z0-9_.-]{0,31}`. An entity with no `id` gets a synthesized
   one containing `#`, which an author's cannot — so a file that names nothing is still
   reported entity by entity, with no chance of collision. Group members are
@@ -333,7 +332,7 @@ Every call is `__stdcall` and every address is from the merged community symbol 
 | name → type index | scan `taPtr->UnitDef[i].UnitName` over `UNITINFOCount` | — | What TADR's spawner does. `UNITINFO_Name2ID 0x488B10` exists but the scan is the proven path and needs no call. Case-insensitive here, so the wire may carry either spelling. |
 | create a unit | `UNITS_CreateUnit(owner, typeIdx, x, height, y, fullHp, stateMask, unitNumber)` → `UnitStruct*` | `0x485F50` | Positions are **16.16 fixed point** in the 3-D convention `(x, altitude, depth)`. `unitNumber = 0` lets the engine allocate; `fullHp = 1`, `stateMask = 1`, exactly TADR's call. [VERIFIED live] |
 | snap to ground | read `FeatureMap[(x>>20) + (z>>20)*FeatureMapSizeX].height` | `main+0x14287` | TADR's own height rule; feature cells are **16 world units**, `FeatureStruct` stride `0x0D`, `height` at `+0x04`. |
-| feature name → id | `FeatureName2ID(name)`, then `LoadFeature(name)` if it is `-1` | `0x422DD0`, `0x4224B0` | The two-step is TADR's `TAMap.PlaceFeatureOnMap`: a feature the map never loaded is loaded on demand. |
+| feature name → id | `FeatureName2ID(name)` | `0x422DD0` | Only a feature the level loaded: a name it did not load is an error ("no feature named … in this game"). TADR's `TAMap.PlaceFeatureOnMap` falls back to `LoadFeature 0x4224B0`, which is not safe in a live game: it searches the TDF index `[0x511FB4]`, which the level load frees and zeroes (`0x4223E0` at `0x4918DE`, the store at `0x422452`), so it reads through NULL at `0x4224BB` (DISASSEMBLED). |
 | feature grid cell | `GetGridPosPLOT(x/16, z/16)` → `PlotGrid*` | `0x481550` | `SpawnFeatureOnMap` wants the cell, not the coordinate. |
 | place a feature | `SpawnFeatureOnMap(gridPlot, defIdx, position, volume, playerId)` | `0x423C50` | Silent and instant. `position` is 16.16 `(x, altitude, depth)`; `volume` is the `{bank, pitch, heading}` word triple; `playerId = 10` is what TADR passes for a map feature. [VERIFIED live] |
 | order name → script index | `ScriptAction_Type2Index(&idx, orderType, unit, target, pos)` → `char*` | `0x43F0E0` | **Not** `ScriptAction_Name2Index`. TADR's `SendOrder` resolves the *per-unit* script index from the order type, the unit and its target; the returned `char*` points at the byte to pass on, and `NULL` means this unit cannot take that order. Its `ScriptAction_Index2Handler` (`0x438830`) call is dead — that function is a pure `base + *ecx*25` address computation whose result TADR discards. |
@@ -617,7 +616,7 @@ highest declared slot plus one, through the instance's locked registry store
 before launch. The schema bounds slots to 0..9; an omitted roster leaves the
 saved seat preset alone. Controller keys alone are insufficient: playback writes
 its recorded seat extent, which can be smaller than the next scenario's roster.
-This does not extend native skirmish seating beyond the four-player limit above.
+With ten slots declared it seats ten (the seating rule under the schema's notes).
 
 MEASURED 2026-10-05 on the stock-limits coverage DLL: with saved count 2,
 `replay-battle-load.json` launched two commanders and the battle applier refused

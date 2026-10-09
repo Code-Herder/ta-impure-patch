@@ -1,0 +1,6 @@
+order lists: 38,724 sends; today raw 5.53 MB, deflate 567 KB, zstd3 443 KB, zstd19 405 KB
+  rows    values: raw 0.68 MB, deflate 142 KB (0.25x), zstd3 148 KB (0.33x), zstd19 136 KB (0.34x)  [decoded back: equal]
+  rows    diffs : raw 0.66 MB, deflate 134 KB (0.24x), zstd3 142 KB (0.32x), zstd19 131 KB (0.32x)  [decoded back: equal]
+  columns values: raw 0.68 MB, deflate 141 KB (0.25x), zstd3 146 KB (0.33x), zstd19 136 KB (0.34x)  [decoded back: equal]
+  columns diffs : raw 0.66 MB, deflate 141 KB (0.25x), zstd3 149 KB (0.34x), zstd19 139 KB (0.34x)  [decoded back: equal]
+4.40 s, 446184 KB maxrss

@@ -137,8 +137,248 @@ tools/tacli launch h1 --dplay --dplay-port 47731 --free-dplay-port   # the host
 tools/tacli launch j1 --dplay --dplay-port 47731                     # a joiner, as many as nine
 tools/mp_lobby.sh --map 'Two Continents' h1 j1      # menus -> battle room -> live
 MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
-tools/mp_leave.sh h1                                 # surrender -> main menu; a host's ends it for all
+tools/mp_leave.sh h1                                 # surrender -> main menu
 ```
+
+Use instance names of at most ten characters with `mp_lobby.sh`: it uses the
+uppercased instance name for TA's ten-character nickname field.
+
+The recorder's isolated native backend has a standalone transport fixture:
+`python3 tools/replay/recmp_net_test.py --port 47733 --out /tmp/recmp-net-run`.
+Add `--channel` to exercise the production channel, initialized after both primary
+interfaces close, including roster/configuration copying, signed human/AI bindings,
+source sequences, source-prefix/final seals and packet delivery. The default exercises the backend directly,
+including its sixteen completion-context bound and refusal of an early Close.
+With `--channel`, `--body-bytes 1..4032` varies the copied DATA body (default 16);
+4032 exercises the maximum 4096-byte application packet with its 64-byte header.
+`--trace-network` requires strace and retains `host.trace.*` and `join.trace.*`
+from only the owned native peers and their descendants. Successful kernel network
+calls show datagram framing and fragmentation below the SDK. They include Wine
+IPC and discovery traffic: do not label all traced bytes as private contributions.
+Tracing perturbs timing; the logs establish neither physical wire bandwidth nor
+undisturbed game latency. Use the maximum-payload probe as follows:
+
+```bash
+python3 tools/replay/recmp_net_test.py --port 47733 --channel \
+    --body-bytes 4032 --trace-network --out /tmp/recmp-wire-run
+```
+
+Both modes run authentication, stream-ledger bounds/corruption/missing-tail tests,
+and controlled channel bounds/gap/wrong-source/missing-tail/abandoned-drain tests.
+The runner also checks frozen consumption cuts, final receipts, retained tail
+draining and source/application journal wrap/overflow. The production-channel
+fixture keeps separate `release.host.journal` and `release.join.journal` packet
+histories; these are fixture journals, not playable `.imprec` recordings. Missing-receipt and missing-cut controls each take the production
+deadline and must fail incomplete, as does the abandoned-drain control; elapsed
+time cannot prove successful receipt.
+Run this standalone fixture separately from menu-driving tests: its instance removal can race the global `tacli ls` inventory used by `mp_lobby.sh`. Choose a free discovery port and a new output directory. The runner creates and
+removes two private-registry prefixes and an X display, retaining logs and test
+executables. It uses primary-session stand-ins; it does not launch TA or verify
+terminal recording completeness, bandwidth, recording or playback.
+
+For a single coverage completion, create `talog.Cursor(gamedir)` before writing
+`cover <name>` to `tagpu_replay.trigger`, then observe its `text()` and copy the
+completed file. `tacli wait` observes only lines written after it starts; starting
+it after the trigger can miss the one completion line. Retain the tested COVER
+DLL and its matching linker map beside the collected bitmaps.
+
+The contribution file container has a separate controlled fixture:
+`python3 tools/replay/recmp_file_test.py --out /tmp/recmp-file-run`.
+It uses the actual world-file writer, compressor, lock and C/Python readers in one
+owned prefix/private display, without launching TA. It writes format-6 synthetic
+`.imprec` files, validates source/application/proof records and the frozen-cut
+footer, seeks the synthetic world, and refuses missing proofs, local-save failure
+and logically corrupted packets/footers. `--native-file <recording>` checks an
+actual complete native file with C/Python application-byte/order/provenance
+agreement, all owner players/unit-block bounds and world seeking; this reads
+copied state without engine playback. `--read-file <fixture.imprec>` runs the
+reader controls against an existing fixture file; `--skirmish-file <recording>` also checks an actual skirmish header/summary/info. The mode-3 header carries copied origin/seat/unit-block mapping, with world allocation and seat ownership validation; malformed mapping controls rebuild outer CRCs before expecting refusal. The typed fixture verifies source-roster carriage, complete eleven-row remapping,
+proof-only roster isolation, and reader player/unit/order authority queries through playback/seek, mapped owner/attacker rows, known absence versus unknown slots, exact nonempty list bytes and provenance, partial-list retention and proof-tail isolation. Body controls rebuild source seals as well as outer checksums before semantic refusal. These files do not prove game
+capture, full owner authority, engine authority application or multiplayer playback.
+
+The complete normalized player-image contribution has a bounded-cache fixture:
+`python3 tools/replay/recmp_players_test.py --out /tmp/recmp-players-run`.
+It uses one owned prefix/private display without launching TA. C exercises frozen
+origin/seat/block bounds, complete human/AI images, deltas, source/application
+provenance and guard-page truncations. C also checks copied-image player-row mapping:
+640 roster permutations, 3,520 exact inverse round trips, identity and fixed-block
+agreement, retained vacant/dummy entries, in-place mapping and unchanged-output
+refusals. The immutable source-map cache checks first-sequence/version/stream prerequisites;
+wire version 2 contributes a copied roster before player/order state. File authority
+queries map player vectors/self rows to recorder coordinates. C and Python independently reconstruct
+the four exact images from a raw contribution journal and refuse corruption or
+a missing tail. It does not test game `.imprec` playback, seek or AI takeover.
+
+Copied unit/mover images have a separate bounded-cache fixture:
+`python3 tools/replay/recmp_units_test.py --out /tmp/recmp-units-run`.
+One owned prefix/private display runs C controls without launching TA: 640 roster
+permutations and 464,640 exact inverse mappings across every bounded attacker row
+and nullable player ID; sixteen unchanged-output mapping refusals; full/delta,
+type/birth/death, provenance and unknown-versus-absent checks; twenty-seven atomic
+batch refusals. Guard controls cover all 372 truncations of a mixed full-live and
+absent packet, exact spans, a maximum 201-entry batch, source-map/cache allocation
+disagreement and the maximum 65,531-slot allocation's final-slot bounds. The file
+fixture independently checks mapped unit authority and proof-tail isolation in
+C/Python through synthetic seek. These fixtures do not test engine application,
+owned COB/model/effect objects or native multiplayer recording/playback.
+
+Owner begin/create/death/return/script/reply/spray contribution bounds use:
+`python3 tools/replay/recmp_roots_test.py --out /tmp/recmp-roots-run`.
+One owned prefix/private display runs copied-cache and 4,096-call queue controls:
+83 atomic refusals, all 1,300 guarded batch truncations, 485 per-kind short spans,
+maximum 167 replies/251 death returns and 8,392 mixed
+calls across packet splits/actor switches/queue wrap. Overflow, backwards source
+time or failed emission permanently refuse. Payloads preserve exact argument/text/
+spray/constructor bytes, source clock, incarnation token and pre/post-capture phase.
+Constructor payloads retain the source owner row, validated through its frozen
+source roster, and all finished/position bits. Contribution-only constructor
+begin `0x100` precedes initialization/child roots; ordinary CREATE is the success.
+Death payloads keep the complete normalized victim/mover image and source owner
+indices; four-byte returns retain the saved exact incarnation. These brackets
+run with recording off and return follows no freed engine object. The file fixture checks ordered
+applied mixed batches through synthetic seek and proof
+isolation. Native constructor ordering uses the coverage DLL:
+`python3 tools/replay/recmp_create_begin_test.py --port 47818 --out /tmp/recmp-birth-run`.
+`--reproduce` installs `tools/reproduce_fixture.py`'s archive (the stock trees and shrubs with
+`reproduce=100`, generated from the install, written only into the instances and `--out`) on
+both peers, and `--until T` keeps the game running to GameTime T before the host leaves: the
+feature cursor visits one cell per tick from the map's last cell, and on Two Continents it meets
+a tree at rest at tick 387, then none until 1577, and 18 by 2000 (`--until 2000`).
+`--chat` has the two humans talk once the roots are in, through each one's `TALK` box: a public
+line from each and a private line each way (`1:` picks the other human), so the file carries
+originals and receipts for every audience a two-human game has.
+For copied owner lifetime dispatch from a saved file, use
+`python3 tools/replay/recmp_lifecycle_test.py --native-file <recording> --out <directory>`.
+It owns one isolated Wine prefix/private display and launches no game. C/Python
+check exact action order/provenance, incarnation dependencies, normalized owner
+fields, proof-tail isolation and fresh reconstruction after reader seek. This
+checks the dispatch layer; it does not establish native engine playback or Seek.
+For fixed global owner blocks, use
+`python3 tools/replay/recmp_arena_test.py --out <directory>`.
+It owns a private Wine prefix/display and launches no game. It checks copied
+permutations and executes a relocated retail unit allocator, replacing only its
+heap calls and retargeting verified absolute operands. All ten paired ownership
+blocks are checked; multiplayer loader admission and saved playback are not.
+It creates two fresh instances on a private display, adds one hosted AI per
+human, records on the host while the peer's saving is off, compares source and
+recipient first-root bytes, and checks exact begin/child/success order in the
+completed file. It retains that file, logs, DLL/map and coverage, then stops and
+removes only its own instances. Run the saved file through
+`python3 tools/replay/recmp_file_test.py --native-file FILE --out /tmp/recmp-birth-read`
+to compare complete C/Python application delivery through reader world seek.
+These are native capture/reader tests. Saved multiplayer playback is measured with
+`python3 tools/replay/recmp_play_test.py FILE --out <directory> [--at T ...] [--to-end]
+[--perspective N] [--content ARCHIVE ...]`, which plays FILE on one tareplay worker at speed 20,
+dumps at each T and exits through the game so the playing's counts are logged (`--content`
+copies an archive the recording was made with, such as the recording run's `zzrepro.ufo`, into
+the worker for the playing and removes it after). The same script seeks:
+`--roundtrip T` (dump A, poison, seek, dump B; compare the pair with `tarec.py
+compare-dumps`), `--seek A:T` (at GameTime A seek to T in the same process,
+dumps s<T> and s<T+120>), `--fresh T` alone (a fresh process at T, dump
+q<T>), or `--takeover T:P` alone (a fresh process takes over at T as P, dump
+k<T+120>, then tareplay's AI-activity check; the file with its timeline is
+kept as `fork-<name>`; `recmp_compare.py --fork 1 FILE` compares the fork's
+first iteration with the composed parent). `--timeline N` plays or seeks
+timeline N's chain; `--hide-chat` writes `chat hide` once the playing starts
+(`recmp_compare.py --chat VIEW[:SINCE] FILE DUMP...` checks a dump's chat lines
+for the viewed record, `full` for the full map); then
+`python3 tools/replay/recmp_compare.py FILE <directory>/dump-p<T>.bin ...` compares each dump
+with the owner-authority world the recording implies (the multiplayer slice note's
+*Owner-authority materializer*). The fixture requests speed 20; count it as 2x evidence only if live
+heartbeats confirm 20. The retained legacy named-only codec is exercised by
+`python3 tools/replay/recmp_named_test.py --out /tmp/recmp-named-run` (28 atomic
+refusals and 94 guarded truncations). Codec/file controls do not launch TA;
+neither they nor the native constructor fixture establish engine root application.
+Run owned-prefix codec/file fixtures
+separately from multiplayer menu drivers, as for the channel fixture above.
+
+Native multiplayer can start at speed 10 despite a stopped-instance setting of
+20. Check the in-game `packet:` heartbeat's `speed` and `tps` before labelling a
+network run accelerated. Tick-based skirmish replay fixtures use 20; multiplayer
+timing and bandwidth tests retain their own speed policy.
+
+Per-origin explored-map contributions use:
+`python3 tools/replay/recmp_explored_test.py --out /tmp/recmp-explored-run`.
+The owned-prefix codec fixture checks ten permuted origins, copied encoder input,
+multipart full/delta atomicity, mode-only updates, malformed/guarded spans,
+unused tail bits and failed emission. The file fixture also checks bitmap/mode/
+provenance queries through seek and proof-only isolation. With `--native-file`,
+it compares C/Python exploration queries and local-origin snapshots against the
+recording's independent raw primary map at the same B2 tick. These tests do not
+enable native engine playback or complete POV capture. In a live game,
+`recmp: local explored map` / `remote explored map` logs the first complete
+bitmap's origin, source sequence/tick, application tick, geometry, LosType and
+CRC; match source/recipient by origin, with each side's application clock
+retained separately. Run the standalone prefix-removing fixture separately from
+multiplayer menu drivers.
+
+`python3 tools/replay/recmp_chat_wire_test.py --out /tmp/recmp-chat-wire-run`
+checks copied identified text packets, repeated full-length text with distinct
+serials, alias-safe copies, guarded truncated spans and malformed packet
+refusal. It cleans up its owned prefix/display and runs separately from menu
+drivers. The native `recmp: text source` / `text received` logs carry sender
+identity, event serial, text-packet CRC and separate source/recipient ticks.
+These logs do not establish persisted communication or replay playback.
+
+`python3 tools/replay/recmp_text_test.py --out /tmp/recmp-text-run` checks
+copied kind-12 text batches, all ten origins, receipt-before-original joins,
+repeated/reordered receipts, full-length bytes, malformed/guarded spans,
+identity/queue capacity and failed publication. C/Python copied file-history
+controls check missing-original refusal, proof-only isolation and application
+prefix reconstruction. This fixture removes its owned prefix/display and runs
+separately from menu drivers. Native `local text batch` / `remote text batch`
+logs identify contribution publication/consumption, not replay display. Source
+entries include local echo and intended target calls; received entries belong
+to the actual recipient's stream and clock. `recr_mp_text` inspects the latest
+applied batch; every observation remains in the ordered application ledger.
+
+Saved native chat evidence uses:
+`python3 tools/replay/recmp_file_test.py --out /tmp/recmp-chat-read --native-text-file FILE --chat-evidence DIR`.
+`DIR/roster.json` maps each instance name to its ten native player rows;
+`DIR/NAME-tagpu.log` retains each human endpoint's source/received wire logs.
+The fixture requires text observations, checks the complete footer and every
+C/Python text entry, application bytes and latest-batch query through reader
+seek, then compares author/serial/CRC and source/recipient clocks with those
+logs. Authors and actual recipients must all have evidence, including a saving
+peer that receives no private messages. Run this owned-prefix fixture after
+the native menu driver has stopped. `--native-file` retains the separate
+combat effects and independent primary exploration oracle gates. Neither
+reader mode tests engine multiplayer playback or loading-phase delivery.
+
+`python3 tools/replay/recmp_receive_test.py --out /tmp/recmp-receive-run` checks
+the exact production primary receive core, receive-span API and movement copy
+with controlled SDK/statistics boundaries: maximum u16 message, raw buffer
+growth, independent native output,
+nested storage/span/source-destination restoration, aliases retained after
+return and depth-slot reuse, error/size refusal and two-thread receives. A busy
+foreign caller must finish without consuming an SDK message while the owner
+holds dispatch. The fixture also checks movement header clamping/padding and
+retail fallback. It
+cleans up its own Wine prefix/display. Use the native menu driver separately
+to exercise the installed entry/call wrapper; these
+controls do not prove loading-chat admission or native raw transport. When the
+primary installer arms, `recmp: ARMED owned primary receive frames and serialized
+dispatch` identifies the path. Identified chat accepts loading/play states 5/6
+through a copied current-match inbox, including receipt before the B2 producer.
+
+`python3 tools/replay/recmp_chat_inbox_test.py --out /tmp/recmp-chat-inbox-run`
+checks the production copied inbox/text queue and exact receive adapter:
+pending reset survival, once-only bootstrap, original zero/source clocks,
+publication ownership, final transfer/admission closure before queue free,
+concurrent receipts, overflow with stock restoration,
+frozen-roster/match refusal and state-5 calls on game/foreign threads without a
+producer. Main/mode/span/log boundaries are controlled; this does not prove a
+native loading receipt, its display or persisted application clocks. Its own
+prefix/display are removed.
+
+`python3 tools/replay/recmp_primary_test.py --port PORT --out /tmp/recmp-primary-run`
+checks native live movement through the installed primary wrapper in two owned
+human instances, with saving off and a 20-unit limit. Both commanders must move
+on both observers; native movement counts must be positive and stale refusals
+zero. Add `--raw` for the unqueued primary transport. The fixture retains the
+tested DLL/map/hash, native ticks, rosters and logs, then removes its own
+instances/display. This does not test saved-file completeness, engine replay,
+loading chat, bandwidth or continued migration.
 
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
   `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin. **The NAT
@@ -161,12 +401,20 @@ tools/mp_leave.sh h1                                 # surrender -> main menu; a
   are left alone, and never `pkill -x dplaysvr.exe` by hand — that takes every game down.
 - After running `dptest` against a prefix, **let it settle** before launching TA there: a wineserver
   still shutting down produced a launch with no process and no `ErrorLog.txt`.
+- **Leaving a peer returns that peer to its main menu.** Inspect the other peer's screen: a four-seat game can remain in play after the host leaves. For a peer on `ENDMSN.GUI`, click `MainMenu`; for one still in play, run its own `tools/mp_leave.sh`.
 - **`START` ungreys only when every player is ready, the host included.** Each client lists
   *itself* as row 0, so the host's own toggle is `READY0` on its screen and the joiner's is `READY0`
   on theirs. `PLAYER0`/`READY0`/`PLAYER1`… are created at runtime and sit past the end of the
   default `ui` snapshot; reach them with `ui <inst> show READY1`.
 - **Lobby state syncs**: set the map on the host and read it back on the joiner
   (`ui <join> show MAPNAME`) as a cheap proof the link is live.
+- **Hosted AIs occupy their own rows and native DirectPlay IDs.** Choose a map with enough
+  seats (*Town & Country* takes ten), stop the lobby helper with `MP_NO_START=1`, and read an
+  unused row with `ui <inst> show PLAYER2` before clicking it. On the host the row cycles
+  `UNUSED -> [BLOCKED] -> AI:<host>`; on a joiner `UNUSED -> AI:<joiner>`. For two humans and
+  one AI hosted by each, use host `PLAYER2` and joiner `PLAYER3`. Ready each human's `READY0`
+  and start on the host. A hosted AI is controller 2 on its hosting peer and controller 3 on
+  the other peer; match it across peers by `player+4`, independently of its host's human ID.
 - **Every peer creates its own units.** `scenario apply` on a peer replicates the units that peer
   owns to the others, through TA's own create packet. `owner` is the LOCAL player index — each
   peer is owner 0 on its own screen — so units a file gives owner 1 are created for the other
@@ -314,9 +562,11 @@ tools/tacli log c1 -g datakeys            # every key read at load, every mask a
   <i> cheats=on`**: the chat grants the debug run level only with that bit. **It kills every unit
   of that type first** — a side left with no unit ends the game on `ENDMSN.GUI` — so keep another
   unit per side, and spawn the type again with `scenario apply` to test the reloaded def.
-- **Type into the chat bar four characters per `keys` call, with a `tacli shot` between calls,
-  and read the line back**: a long `char:` run loses characters, and the first batch after the
-  `return` that opens the bar can be lost too. Clear a wrong line with `backspace`.
+- **Wait for `TALK` after opening chat, then use `ui fill TALK <text> --json` and compare
+  `text` with `wanted` before submitting.** The fill posts at most four characters per batch
+  and waits for exact prefix acknowledgement; one snapshot can precede the edit. A differing
+  field is a failed input attempt. Long direct `keys char:…` runs can fill the engine's
+  character ring; token-file consumption does not prove a field edit.
 
 ### The weapon keys
 
@@ -600,12 +850,19 @@ exe, is not loaded at attach. Drive them the way the compat suite does:
 
 ## The demo recorder: recordings and dumps
 
-**A skirmish is recorded while `tagpu_recorder.on` is in the game folder** — `tacli arm <i>
+**A skirmish or native multiplayer game is recorded while `tagpu_recorder.on` is in the game folder** — `tacli arm <i>
 recorder.on` before the level starts, since the recorder looks for it at each level's first
 iteration — from that iteration to the level's end, to `gamedir/replays/<date> <time> <map>.imprec`.
 Without it the log says `recorder: not recording: tagpu_recorder.on is absent`. The log says
 `recorder: recording …` at the start and `recorder: writer: … closed: …` when the file is done, with
 the corrections, which must be 0; `recorder: N iterations captured: …` gives the capture's cost.
+A native file contains this peer's observed world plus the separate exact-owner
+contribution ledger. `tacli replay play` plays it with every actor a puppet beside the viewer,
+`replay seek` and the `seek` trigger seek it, and `replay takeover` takes it over into a skirmish
+timeline of the same file; it has no ten-seat hosting yet (the multiplayer slice note's
+*Owner-authority materializer* and the sections after it).
+Mandatory contributions run with the recording switch off and continue after a
+local save failure. Live rewind is available only for a recorded skirmish.
 Quitting waits for the file of a game that has ended — the in-game menu's `EXIT` then `EXITGAME`,
 or closing the window after the level's end (`recorder: the exit waits for …`) — so that file is
 complete. For exit coverage, the replay harness uses the game's menus: `ENDMSN.GUI`'s active
@@ -624,14 +881,36 @@ block that reads to its last complete block.
   counts of the engine's roots and sinks: `counts FILE DUMP` lists them, and `compare-counts FILE
   L_A L_B P_A P_B` compares a live game's (two of its dumps) with a playing's over the same
   window — roots exactly, sinks within `tagpu/ddraw/replay-absent.tsv`'s band less its rows, and no
-  COB engine write on the puppet. `images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1`
+  COB engine write or native owner-only script start on the puppet. `images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1`
   classifies every uncovered byte where the live game and a playing or a fresh seek differ, and
   `scan FILE DUMP` fails a plain value that is an address. A file holds one or more timelines
   (a takeover appends one): `segments FILE` lists them, `check` and `compare` take `--timeline N`
   to read timeline N's chain, and `compare-fork FILE N` compares timeline N's first iteration with
   its parent at the fork point, less the takeover's expected differences.
+  `tarec.py` and the replay tools need numpy, numba and zstandard and re-execute themselves under
+  the main checkout's `.venv-undither/` when they are missing (a bare `python3` is fine). Every
+  command that reads the stream decodes the whole recording in Python — about 3 s for a large
+  battle, and about 8 s more the first time after `reccodec.py` changed, while numba compiles it —
+  so set `TAREC_CACHE=DIR` when running several on one file: the decoded blocks are kept in `DIR`,
+  one piece per segment keyed by the file's bytes up to that segment's end and the decoder's
+  sources, so a file a takeover appended to decodes only its new segment (`tareplay.py` does this
+  for its own runs).
 - **Check playback end to end** with `tools/replay/tareplay.py run FIXTURE… | all [-j N] [--keep]
-  [--out DIR]` (`list` names the fixtures of `tools/replay/fixtures.json`): each fixture is
+  [--game-speed 10|20] [--out DIR]` (`list` names the fixtures of `tools/replay/fixtures.json`):
+  tick-driven runs default to internal speed 20 (2x normal); `--game-speed 10` selects normal.
+  Each stopped owned instance's private registry store is configured before launch.
+  Cost fixtures and W's speed/settings UI test use normal speed. Tick endpoints,
+  round-trip windows and comparison rules keep their existing units; wall-clock
+  deadlines are not shortened. Armed round trips bound the tick batch at T−1,
+  so their frame checks cannot be skipped by faster simulation progression.
+  Use normal speed for timing, network latency and bandwidth measurements.
+  The same option applies to `measure`, `landing`,
+  `broad`, `takeover`, `forks` and `rewind`, and so does `--turbo K` (default 1, 0 for none): once
+  a lane's dumps are armed, L, P, R, F, K, X and U run K ticks a frame (`tagpu_turbo.on`, below),
+  never Q, W or a cost fixture. Every lane acts at GameTimes: it holds the level at each step's,
+  the twin's and the end's tick (`pause at <T>`), acts on the held level and resumes it; a `run`
+  step's script runs with the turbo off at the fixture's speed. Every game gets the test render
+  profile: a 20 fps present cap, `ss=1`, `shadowres=512` and the Classic++ look keys off. Each fixture is
   recorded live, played on puppets, played again with three round trips and sought from a fresh
   process, each on its own Xvfb; the live game also takes the null twin (paused, the camera, the
   wheel, the cursor and the in-game menu moved, two endpoints and intermediate paused
@@ -649,7 +928,10 @@ block that reads to its last complete block.
   edited copies refused, then the dock's speed, the Options' OK, pause, the dock's seek, the
   player cards' Sight and Full map (clock and camera unchanged), its dump
   (`w<T1>` compared like the others), resume and Leave. It runs every check above and
-  reports each by name: exit 0 all passed, 1 a named failure, 2 something could not run. It
+  reports each by name: exit 0 all passed, 1 a named failure, 2 something could not run. `-j N`
+  is the games at once (default 8, at most 16); the checks run beside them on a pool of their own
+  at lower priority, a fixture's as soon as its last lane ends, and the summary lists them in the
+  same order whatever finished first. It
   refuses a `ddraw.dll` (or `--stock-dll`) older than its sources — rebuild with `make -C
   tagpu/ddraw` (`LIMITS=stock` for the stock one) first. The run's folder is outside the
   repository (`--out`, `$TAREPLAY_OUT`); passing dumps are deleted unless `--keep`, and a dump
@@ -657,8 +939,8 @@ block that reads to its last complete block.
   `takeover` entry also runs K (its recording taken over at T2, ordered, dumped and ended) and F
   (K's file played from T−300 across the fork); `tareplay.py takeover FIXTURE` runs the live game,
   K and F alone, with the checks `judge`, `line`, `orders`, `ai`, `fork` and `victory` its entry
-  names. The `ai` check observes 1800 future ticks, armed under an acknowledged engine
-  pause after takeover. Every AI seat must issue fresh planner orders that reach normal
+  names. K judges the units drawn 240 ticks after T, and the `ai` check observes 1800 future
+  ticks, armed on the level held after the takeover. Every AI seat must issue fresh planner orders that reach normal
   dispatch, and at least 25% of AI mobile units must move more than 8 wu. Construction
   is reported only; K waits for the observation to complete before ending the game.
 - **Native fixture input** uses a `keys` step with a list of `tacli keys` tokens.
@@ -699,6 +981,16 @@ block that reads to its last complete block.
   `recorder: dump <name> armed for GameTime <T>` (the game deletes the file when it reads it), then
   the next; up to 8 at once. `… refused: the level is at GameTime <t>` means T has passed, and
   `… not taken: …` that a forward seek or the level's end passed it.
+- **Ticks on demand** (the trigger, any level in play outside a rewind): `pause at <T>` pauses the
+  level at the frame visit after step T, the batch bounded to end there
+  (`pause: armed for GameTime <T>`, then `pause: paused at GameTime <T>`; a passed T answers
+  `pause: at <T> refused: … the level is at GameTime <t>`), and `resume` clears the pause bit as
+  the Pause key does, without its packet. In a launch with `tagpu_turbo.on` (its text k, 1..5,
+  empty for 1; a tacli test launch only, `turbo: k=<k> at 0x49692D` at attach), `turbo on` runs k
+  ticks every frame from then on (`turbo: on at GameTime <g> (k=<k>)`) and `turbo off` gives the
+  game its own pacing back; a frame runs no tick while the recorder's ring is more than half full.
+  The level's end logs `turbo: from GameTime … ticks in … ms of play (<n> a second) … held for the
+  writer`. `tagpu_presentcap.on` (10..60) caps a test launch's presents a second.
 - **Play one**: `tacli replay play <i> FILE [--perspective RECORD]` launches the instance on the
   recording's map and seats and starts the skirmish; it exits 0 on `replay: playing <name>`.
 - **Seek**: `tacli replay seek <i> T` moves the instance's running playback to GameTime T, forward
@@ -714,6 +1006,22 @@ block that reads to its last complete block.
   line, which leaves it at T − 1).
   `replay play` and `replay seek --recording` take `--timeline N` to play a forked timeline; the
   playing crosses each fork with a seek (`replay: <name>: timeline <N> continues from GameTime <T>`).
+- **The recorded camera** (a skirmish recording whose human seat's camera was recorded): `tacli replay follow <i> SEAT` is the cards' Follow — the camera shows that
+  seat's, its zoom fitted to this screen, until the camera is moved (arrow keys, edge scroll,
+  minimap) or the wheel turned; `tacli replay follow <i> free` is Free cam; `tacli replay jump
+  <i> SEAT` puts the camera there once. Each waits for `replay: <name>: follow seat <S>, epoch
+  <E>` (`jump to seat …`) or `… refused: <why>`. The end is logged as `replay: <name>: follow
+  ended: camera moved|zoomed|free cam|…` (`jump ended: drawn` for a Jump). `tacli replay pov <i>`
+  prints what the latest frame visit computed — `follow|jump epoch E seat S, tick n, sample …,
+  view WxH, eye (x, y), level L/65536` — which `tools/replay/tarec.py pov FILE --eye n --viewer
+  W,H` computes from the file (the eye before the camera's range clamp), then `; overlays: <n>
+  items, <m> selected units`. Triggers: `follow <S>`, `follow free`, `jump <S>`, `pov`.
+- **The overlays** (the same recordings; Vulkan only, GDI draws none): every recorded player's
+  cursor, click rings and selection rectangles, in that player's colour. `tacli replay overlay
+  <i> cursors|clicks|selections|chat on|off` is a switch of the dock's Overlays menu (the dock's
+  pointer-arrow button, left of Leave); it waits for `replay: overlay <name> on|off`, or `replay:
+  chat hidden|shown` for the chat. Every switch is on when a playing starts. Triggers: `overlay
+  <name> on|off`, and `chat hide` / `chat show`.
 - **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P
   [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish at T as player P,
   every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2 when it had

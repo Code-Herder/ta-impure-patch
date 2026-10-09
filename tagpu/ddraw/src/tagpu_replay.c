@@ -13,7 +13,8 @@
      destroyed; the recording's format and exclusion file, a skirmish, no network, the map the
      Start has just read, the seats, the unit limit and the view. On success every recorded seat
      becomes a type-3 record with its recorded side, logo, name and alliance row, the viewer's
-     own seat V is seated beside them (§1.1) and +0x2A43 names the view, the objective's victory
+     own seat V, the engine's no-player record 10, is seated beside them (THE VIEWER'S SEAT) and
+     +0x2A43 names the view, the objective's victory
      and defeat tests are disarmed (0x4904B0), and the puppet table is built. On any failure the
      log says why, and the Start goes on as the skirmish its settings describe.
    - S-b, the Start's call of the settings persist 0x430F00 (0x47B09C). After the persist has
@@ -22,7 +23,8 @@
      the player's in their place, and the teardown puts the player's back (THE PLAYER'S
      SETTINGS).
    - S-c, the loader's two calls of the seat setup 0x496EE0 (0x497963, 0x497ACD), which create
-     the start units: skipped on a puppet level.
+     the start units: skipped on a puppet level. And the level init's call 0x4919C8, which on a
+     puppet level also gives V's record its buffers (THE VIEWER'S SEAT).
    - S-d, the first step: what needs the loaded level is checked -- its counts, its map, the unit
      and weapon data, its first GameTime. On a mismatch nothing is ever applied and the level
      stays empty, which the viewer sees and the log explains. Otherwise the start units are made,
@@ -31,8 +33,8 @@
    capture point, and the frame visit before the in-play draw call 0x4969CD reads the trigger,
    runs a seek (THE SEEK) and writes what the draw after a step shows (THE GLOBALS AND THE
    PROJECTILES).
-   The teardown (S-e) ends the replay and gives V's PlayerInfo back once it has returned (THE
-   VIEWER'S SEAT), and the recorder refuses a puppet level (S-f).
+   The teardown (S-e) ends the replay and gives V's record and PlayerInfo back once it has
+   returned (THE VIEWER'S SEAT), and the recorder refuses a puppet level (S-f).
    The Replays browser starts a playback without the request file or the SKIRMISH screen: its
    Watch runs the Start's route itself, with the seating and the options where S-a and S-b run
    them, and refuses rather than falling back to a skirmish (THE BROWSER'S START). A puppet level
@@ -41,12 +43,15 @@
    of GameTime T with the recorded seats local, one of them the player's, and the level goes on as
    a live skirmish, recorded as a new timeline of the same file.
 
-   WHAT IT READS AND WRITES. Everything here runs on the game thread: the Start handler, the
-   sim step and the frame callback 0x496790 are the engine's own game-thread code, and the
+   WHAT IT READS AND WRITES. The allocator ownership callback and the level init's call run on
+   the loader thread and consume only a copied plan published before that thread starts. Their
+   atomic results are read at the first game-thread step after the engine's load-done gate. The
+   other paths run on the
+   game thread: the Start handler, sim step and frame callback 0x496790, and the
    teardown is entered only from the engine's state handlers there. The player records and their
    PlayerInfo blocks live in the main block for the process (tagpu_recorder.c says why); a seat
-   index is below 10 before it addresses one (the reader refuses anything else, and V is chosen
-   below 10). The skirmish
+   index is below 10 before it addresses one (the reader refuses anything else), and V is record
+   10, the eleventh the engine constructs (0x41D97E..0x41D997). The skirmish
    settings [main+0x29A0], GameingState [main+0x391E9] and the objective [main+0x391ED] are the
    ones the Start has just used: the settings for its fill, GameingState for its mode, and the
    objective armed by the .ota read at 0x47AF77 (the browser's Start: its own call of the same
@@ -54,10 +59,14 @@
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "tagpu_replay.h"
 #include "tagpu_cover.h"
 #include "tagpu_recreader.h"
+#include "tagpu_recmp_arena.h"
+#include "tagpu_recmp_lifecycle.h"
+#include "tagpu_recmp_text.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_recorder.h"
 #include "tagpu_replay_layout.h"
@@ -70,7 +79,12 @@
 #include "tagpu_simreg.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
+#include "tagpu_regstore.h"
 #include "tagpu_replays.h"
+#include "tagpu_persp.h"
+#include "tagpu_zoom.h"
+#include "tagpu_cards.h"
+#include "tagpu_packet.h"
 #include "git.h"
 
 #define TA_MAINPP      0x00511DE8u
@@ -92,6 +106,15 @@
 #define PL_MAPBIT      0x146        /* u8: the record's bit in an explored-map entry (0x48194B)   */
 #define PL_ENERGY      0x8C         /* float: the energy the level start gives (0x465F04) ...     */
 #define PL_METAL       0x98         /* ... and the metal (0x465F1A)                               */
+#define PL_BLOCKFIRST  0x67         /* the record's first and last unit, inclusive                 */
+#define PL_BLOCKLAST   0x6B
+#define PL_IDFIRST     0x6F         /* u16: the first and last ID of the block, the range the ID
+                                       cycle 0x48C190 walks for the controlled record (0x48C1CA) */
+#define PL_IDLAST      0x71
+#define PL_AI          0x74         /* the AI object                                               */
+#define PL_GROUPS      0x78         /* the control-group table (0x480190)                          */
+#define PL_EC          0xEC         /* the object the player init makes when NULL (0x4647CF)       */
+#define PL_LIVE        0x144        /* u16, the live count (0x486DFC)                              */
 #define OFF_NPLAYERS   0x2A3C       /* u16: the player count                                      */
 #define OFF_CONTROLLED 0x2A42       /* u8: the player the local game commands                     */
 #define OFF_VIEWED     0x2A43       /* u8: the player whose view it draws                        */
@@ -125,6 +148,7 @@
                                        its frames at +0x28, 8 bytes each                         */
 #define OFF_NSLOTS     0x14351      /* u16: the unit array's slots                                */
 #define OFF_GAMETIME   0x38A47
+#define OFF_DUE_TICKS  0x38A3B      /* u32: scheduler 0x495230 bounds this frame's steps to 0..5 */
 #define OFF_SPEED_CEIL 0x38A4B      /* u16: the game speed the player chose, 10 = 1x                 */
 #define OFF_SPEED_LIVE 0x38A4D      /* u16: the speed the scheduler runs at, raised toward the
                                        ceiling by its throttle (0x495465..0x49547B)               */
@@ -137,6 +161,7 @@
 #define OFF_MMFLAGS    0x142F1      /* u8: bit 2 asks 0x466C20 for the minimap's fog; bit 1 is
                                        DrawMinimap's redraw (0x466B11)                           */
 #define MODE_SKIRMISH  2
+#define MODE_NETWORK   3   /* RT_MODE of a multiplayer recording (tagpu_recorder.c) */
 
 /* 0x464290(seat, type): the seat activation (stdcall, `ret 8`; seat and type are read as bytes) */
 typedef void (__stdcall* PFN_ActivateSeat)(unsigned seat, unsigned type);
@@ -164,6 +189,8 @@ static int        s_over;           /* the recording has nothing more to apply  
 static int        s_endlog;         /* its counts wait for the last step's phases (THE PHASES)    */
 static unsigned   s_endat;          /* ... and the GameTime it ended at                           */
 static unsigned   s_notes;          /* the level's anomalies logged                               */
+#define NOTE_SITES     48           /* above the call sites of note(), so each has its own count  */
+static struct { const char* fmt; unsigned n; } s_nsite[NOTE_SITES]; /* per call site, by format */
 #define EV_KINDS (RK_EV_SPRAY - RK_EV_CREATE + 1)
 static struct {
     unsigned steps, late, made, refused, missing, lingering, other, bad_ids, links, unlinked;
@@ -172,7 +199,7 @@ static struct {
 } s_st;                             /* the level's counts, logged at its end                      */
 static struct {
     unsigned roots, rrefused, rdiffer, deaths, dmissed, left, cells, cstruct, cbad, wrecks,
-             wstruct, wbad, heads, cursor, tcells, tover;
+             wstruct, wbad, heads, cursor, tcells, tover, corpses;
 } s_fst;                            /* ... and its features' (THE FEATURES)                       */
 /* The runs the feature tick's input wrote since the last images (THE TICK'S INPUT). 4096 runs:
    MEASURED in the six fixtures of 2026-10-01, the runs of one step's input were at most 432
@@ -192,7 +219,7 @@ typedef struct {
 } TabCounts;
 
 typedef struct {
-    unsigned water, stamps, refused;
+    unsigned water, states, stamps, refused;
 } Books;                            /* the units' bookkeeping written (THE UNITS' BOOKKEEPING)     */
 static struct {
     unsigned puts, late, refused, reacts, dropped, unbounded, mputs, mentries, mrefused;
@@ -219,6 +246,13 @@ static struct {
 static int s_rw_pause_in;
 static int rw_prepare(char* ta, char* why, unsigned cap);
 static void rw_seats(char* ta);
+/* rewind keeps a live skirmish's own recording: a live multiplayer game has no rewind */
+static int rw_skirmish(const RecHeader* h, char* why, unsigned cap)
+{
+    if (h->mode != MODE_NETWORK) return 1;
+    snprintf(why, cap, "a multiplayer recording has no rewind");
+    return 0;
+}
 static void rw_finish(char* ta, int back);
 static void rw_poll(void);
 static int rw_trigger(const char* line);
@@ -245,6 +279,107 @@ static struct {
     LONGLONG t_ai, t_pass;                  /* TK1's and TK4a's ticks                            */
 } s_tk;
 #define RT_ARMED 24                 /* a broad entry's round trips, armed at once (fixtures.json) */
+static int s_rt_pace_in;            /* attach-time guard before the skirmish step loop */
+/* THE TURBO (turbo_due): k, read once at attach, 0 when off; the rest the game thread's alone */
+static unsigned s_turbo_k;
+static struct {
+    int      live;                  /* `turbo on` holds now (`turbo off` clears it)              */
+    int      engaged;               /* ... or did at some point of this level                    */
+    unsigned g0;                    /* GameTime at the first acknowledgement                     */
+    unsigned frames, lagged, held;  /* frames run at k; left to the lag scale; held for writer */
+    DWORD    last, ms;              /* the last frame's GetTickCount; the play between frames    */
+    unsigned last_g, ticks;         /* its GameTime; the ticks between frames at k               */
+} s_turbo;
+static unsigned s_pause_at;         /* THE PAUSE AT T: the GameTime armed, 0 none; game thread    */
+static int s_pause_taken;           /* the pause bit is set by THE PAUSE AT T, not by the player  */
+static int s_mp_arena_in;           /* allocator's block-ownership boundary */
+static int s_engine_cells;          /* the grid's unit slots and yard bits are the engine's:
+                                       a multiplayer recording's level (tagpu_puppet_begin) */
+enum { MP_ARENA_OFF, MP_ARENA_ARMED, MP_ARENA_WORKING, MP_ARENA_READY, MP_ARENA_FAILED };
+static struct { RecMpRoster roster; volatile LONG state; } s_mp_arena;
+#define MP_CREATE 29                /* a create's 28 argument bytes, then 1 once it returned     */
+/* THE MULTIPLAYER MATERIALIZER's state */
+static struct {
+    int             level;          /* this level plays a mode-3 file (mp_begin)                 */
+    int             on;             /* ... and the reader stands in its multiplayer segment       */
+    int             failed;
+    RecMpLifecycle* life;
+    uint64_t        ordinal;        /* the last envelope the consumer was given                  */
+    unsigned        slots;
+    const struct Lv* L;             /* the step's level, for the action callback                 */
+    unsigned char*  held;           /* [slots] live here, no composed image yet                  */
+    unsigned char*  create;         /* [slots * MP_CREATE] a held unit's create, for a seek      */
+    unsigned char*  live;           /* [slots] the composed world's                              */
+    uint32_t*       unit;           /* [slots * REC_UNIT_DWORDS]                                 */
+    RecList*        list;           /* [slots * 2]                                               */
+    unsigned char*  nodes;          /* one list's query buffer, RECMP_ORDER_MAX nodes            */
+    uint32_t        player[REC_PLAYERS][REC_PLAYER_DWORDS];
+    unsigned char   actor[REC_PLAYERS]; /* the record is an actor's: its owner describes it      */
+    unsigned        xbytes;         /* one owner's explored bitmap: a bit per map entry          */
+    unsigned char*  xmap;           /* [REC_PLAYERS * xbytes] each actor's, by its record          */
+    unsigned char   xvalid[REC_PLAYERS];
+    unsigned char*  mapped;         /* the composed explored map (mp_world)                      */
+    /* each actor's perspective at the application tick, by its record (mp_authority), in
+       RecWorld's shape: the samples' ticks are application ticks (persp_world) */
+    unsigned        npov[REC_PLAYERS];
+    RecPov          pov[REC_PLAYERS][2];
+    unsigned        pov_tick[REC_PLAYERS][2];
+    unsigned        nsel[REC_PLAYERS];
+    RecSelEntry*    sel;            /* [REC_PLAYERS * REC_SEL_MAX], seat-major                     */
+    RecWorld        W;
+    RecWorld        P;              /* the world the perspective reads (persp_world)             */
+    unsigned char*  s_live;         /* the level-start composed world, which a seek composes on  */
+    uint32_t*       s_unit;
+    RecList*        s_list;
+    uint32_t        s_player[REC_PLAYERS][REC_PLAYER_DWORDS];
+    int             compose;        /* the actions compose data only (mp_rebuild)                */
+    unsigned        rebuilt, croots;
+    struct MpHeld*  q;              /* envelopes read and not yet applied, in ledger order       */
+    unsigned        nq, capq;
+    unsigned        observed, ocorpse;  /* the recorder's deaths, and those with a corpse level   */
+    unsigned        made, destroyed, images, roots, rplayed;
+    unsigned        bfinished, bunfinished; /* composites cleared: an image finished a build, or
+                                               unfinished one (THE BUILD FINISH ON A MULTIPLAYER
+                                               LEVEL)                                             */
+    unsigned        said, shown;   /* text entries applied, and lines given to the message log  */
+    char            why[200];
+} s_mp;
+static int s_chat_hidden;           /* 1 = the Overlays menu's Chat switch is off (`chat hide`,
+                                       `chat show`, `overlay chat`): THE OVERLAYS               */
+/* THE OVERLAYS' state (game thread only) */
+#define OV_RING 64                  /* the clicks held: the most recent, each with its tick      */
+static struct {
+    unsigned char    off[TAGPU_OV_CHAT];   /* a switched-off overlay, by TAGPU_OV_*: 0 is on      */
+    int              live;                 /* item, n and s_rsel are this playing's this frame   */
+    int              col_ok;               /* col holds this playing's colours                   */
+    unsigned char    col[TAGPU_PK_OV_PLAYERS];
+    TAGPU_PK_OVERLAY item[TAGPU_PK_MAX_OVERLAY];
+    unsigned         n;
+    unsigned         nrsel;                /* the slots s_rselAt lists                            */
+    struct { unsigned tick; RecClick c; } ring[OV_RING];
+    unsigned         rn, rnext;            /* clicks held, and the entry the next one takes       */
+} s_ov;
+/* each slot's recorded-selection bits, bit p for player p, and the slots that have any: every
+   slot is listed once, when its bits first become nonzero, so nrsel <= TAGPU_PK_MAX_UNITS */
+static uint16_t s_rsel[TAGPU_PK_MAX_UNITS];
+static uint16_t s_rselAt[TAGPU_PK_MAX_UNITS];
+_Static_assert(TAGPU_PK_OV_PLAYERS == REC_PLAYERS, "ov_col has a row for every recorded player");
+_Static_assert(TAGPU_PK_OV_PLAYERS <= 16, "rsel has a bit for every recorded player");
+_Static_assert(REC_CLICK_SHOW <= 256, "a click's age fits PK_OVERLAY.age");
+/* FOLLOW, JUMP AND FREE CAM's state (game thread only) */
+static struct {
+    int      req;                   /* a request for the next frame visit: FQ_*                  */
+    int      rseat, ronce;          /* ... a Follow's or Jump's seat, and which                  */
+    int      seat;                  /* the seat the epoch in force shows, -1 none                */
+    int      once;                  /* ... and whether it is a Jump                              */
+    unsigned E;                     /* that epoch (tagpu_zoom_follow), 0 none                    */
+    int      handed;                /* the epoch has been handed to tagpu_zoom                   */
+    int      pov;                   /* `pov` asked: logged after this visit's answer             */
+    struct { unsigned n; int how, vw, vh, x, y; uint32_t level; } at;   /* that answer           */
+} s_fl = { 0, 0, 0, -1, 0, 0, 0, 0, { 0, 0, 0, 0, 0, 0, 0 } };
+/* the epochs handed out since the DLL loaded: never reset, so tagpu_zoom never sees one twice */
+static unsigned s_flEpochs;
+enum { FQ_NONE, FQ_FOLLOW, FQ_FREE };
 static struct {
     unsigned n;
     struct { char name[37]; unsigned T; } a[RT_ARMED];
@@ -269,6 +404,17 @@ static struct {
     unsigned char* at;              /* V's PlayerInfo, or NULL                                    */
     unsigned char  was[REC_INFO_BYTES];
 } s_vinfo;                          /* as the Start's fill left it (THE VIEWER'S SEAT)            */
+static struct {
+    int            taken;
+    unsigned char  was[PL_STRIDE];
+} s_vrec;                           /* record 10 as the level's first seating found it            */
+enum { VB_OFF, VB_ARMED, VB_READY, VB_FAILED };
+static volatile LONG s_vbuf;        /* record 10 was activated for this level's viewer (ARMED), and
+                                       the level init's call gave it its buffers (READY) or could
+                                       not (FAILED): THE VIEWER'S SEAT's ORDERING                 */
+static unsigned   s_vlowest;        /* the lowest recorded seat, where FAILED moves the indexes   */
+static int        s_vready;         /* viewer_init has run this level                             */
+static unsigned   s_vframe = ~0u;   /* the GameTime of viewer_frame's last run                    */
 
 static char* ta_main(void) { return *(char**)(size_t)TA_MAINPP; }
 
@@ -283,18 +429,35 @@ static unsigned colour_count(const char* ta)
 
 static void pend_reset(void);
 static void counts_log(const char* when, unsigned now);
+static void mp_end(void);
+static void follow_close(const char* why);
+static void follow_visit(char* ta);
+static void overlay_close(void);
+static void overlay_visit(char* ta);
+static int overlay_trigger(const char* line);
+static void ov_clicks_take(const RecWorld* W);
+static void ov_clicks_clear(void);
+static void ov_click_put(unsigned tick, const RecClick* c);
 
 static void replay_close(void)
 {
+    /* Start's undo precedes thread creation; level teardown follows the engine's
+       load-done gate. No loader can still consume this immutable plan. */
+    InterlockedExchange(&s_mp_arena.state,MP_ARENA_OFF);
     s_viewPending = 0;
+    follow_close("the playing ended");
+    overlay_close();
+    mp_end();
     recr_close(s_rd);
     recfile_leave();
     s_rd = NULL;
     s_path[0] = 0;
     memset(&s_span, 0, sizeof s_span);
     s_first = s_dead = s_over = 0;
+    s_engine_cells = 0;
     s_endlog = 0;
     s_notes = 0;
+    memset(s_nsite, 0, sizeof s_nsite);
     memset(&s_st, 0, sizeof s_st);
     memset(&s_fst, 0, sizeof s_fst);
     s_tin.n = 0;
@@ -472,11 +635,19 @@ static int data_match(const char* ta, const RecHeader* h, char* why, unsigned ca
 }
 
 /* Everything the seating rests on that the recording alone decides, and the sites it needs in
-   (§6.4). 1 with V in `viewer`. */
+   (§6.4). 1 with V, record 10, in `viewer`. */
+/* The map a playback's Start reads. A skirmish starts from the SKIRMISH screen's map, which its
+   recording keeps as the settings map; a network game's is the battleroom's, its level's own
+   (RT_MAP), while its settings map is whatever the host's SKIRMISH screen last held. tacli's
+   replay play makes the same choice. */
+static const char* start_map(const RecHeader* h)
+{
+    return h->mode == MODE_NETWORK ? h->map : h->settings_map;
+}
+
 static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned* viewer,
                            Refusal* r)
 {
-    unsigned char seated[REC_PLAYERS] = { 0 };
     unsigned i;
     if (strcmp(h->layout, TAGPU_REPLAY_LAYOUT_SHA256)) {
         snprintf(why, cap, "it was recorded with another exclusion file (replay-layout.tsv)");
@@ -499,8 +670,13 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
                  "holds %u", h->proj_cap, (unsigned)TAGPU_LIM_PROJ);
         return 0;
     }
-    if (h->mode != MODE_SKIRMISH) {
-        snprintf(why, cap, "it is not a skirmish (mode %u)", h->mode);
+    if (h->mode != MODE_SKIRMISH && h->mode != MODE_NETWORK) {
+        snprintf(why, cap, "it is neither a skirmish nor a multiplayer game (mode %u)", h->mode);
+        return 0;
+    }
+    if (h->mode == MODE_NETWORK && (!h->has_mp || !h->has_mp_seats || !h->has_unitdefs)) {
+        snprintf(why, cap, "it is a multiplayer game without its contributors, seats or unit "
+                 "types");
         return 0;
     }
     if (!tagpu_puppet_gates_in()) {
@@ -517,25 +693,28 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
                  "replay takes the feature draws, a death's explosion and the footprint writes");
         return 0;
     }
-    if (!h->has_settings_map || !h->has_options) {
+    if (!start_map(h)[0] || (h->mode != MODE_NETWORK && !h->has_settings_map) ||
+        !h->has_options) {
         snprintf(why, cap, "the recording lacks the map or the options");
         return 0;
     }
+    /* and at most ten, every record a game seats: the reader refuses an eleventh (RT_PLAYER), and
+       the viewer takes record 10 (THE VIEWER'S SEAT) */
     if (h->nseats < 2) {
         snprintf(why, cap, "it seats %u players", h->nseats);
         return 0;
     }
-    if (h->nseats >= REC_PLAYERS) {
-        snprintf(why, cap, "it seats all ten records, which leaves the viewer none");
-        return 0;
-    }
+    /* a multiplayer recording seats every remote player, human or AI, as 3, as its recorder held
+       it (MEASURED 2026-10-05, the four-actor recording). The explosion's owner gate tests 3 alone
+       (0x49A043), and THE DEATHS ON A MULTIPLAYER LEVEL rest on it, so no other type is
+       admitted */
     for (i = 0; i < h->nseats; i++) {
-        if (h->seats[i].controller != 1 && h->seats[i].controller != 2) {
+        if (h->seats[i].controller < 1 ||
+            h->seats[i].controller > (h->mode == MODE_NETWORK ? 3u : 2u)) {
             snprintf(why, cap, "seat %u's controller is %u", h->seats[i].index,
                      h->seats[i].controller);
             return 0;
         }
-        seated[h->seats[i].index] = 1;
     }
     /* the engine sizes the share list by the count (0x4938B7..0x4938C7) and copies every active
        record that is neither local nor a watcher into it (0x4938FF..0x4939BA): every seat */
@@ -548,14 +727,41 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
                  TAGPU_LIM_UNITS);
         return 0;
     }
-    for (i = 0; i < REC_PLAYERS && seated[i]; i++) {}
-    *viewer = i;    /* below 10: at most nine are seated */
+    *viewer = REC_VIEWER;
     return 1;
 }
 
-/* ... and what it rests on in the engine's state the Start has just made: not a network game, a
-   skirmish's GameingState, the map the Start read, and the tables the fill indexes. */
-static int validate_engine(const char* ta, const RecHeader* h, char* why, unsigned cap)
+#define REPORTER_DLL   0x0051E58Cu  /* nonzero once reporter.dll is loaded: set only by 0x46C00F */
+
+/* Record 10 is the engine's free record (THE VIEWER'S SEAT): no type, no AI object, no unit, its
+   PlayerInfo made; and at a Start none of the three buffers the player init makes, so the level
+   init's call leaks nothing (a live rewind finds the ones its earlier rewind made, and reuses
+   them). And no reporter.dll: its export receives +0x2A42 as a value (0x46C7CC..0x46C7E7), and
+   10 names no seat there. */
+static int viewer_free(const char* ta, int start, char* why, unsigned cap)
+{
+    const char* rec = ta + OFF_PLAYERS + (size_t)REC_VIEWER * PL_STRIDE;
+    if (rec[PL_CONTROLLER] || *(void* const*)(rec + PL_AI) ||
+        *(const unsigned short*)(rec + PL_LIVE) || !*(void* const*)(rec + PL_INFO)) {
+        snprintf(why, cap, "the viewer's record 10 is not the engine's free record");
+        return 0;
+    }
+    if (start && (*(void* const*)(rec + PL_GROUPS) || *(void* const*)(rec + PL_SIGHT) ||
+                  *(void* const*)(rec + PL_EC))) {
+        snprintf(why, cap, "the viewer's record 10 holds buffers already");
+        return 0;
+    }
+    if (*(const unsigned*)(size_t)REPORTER_DLL) {
+        snprintf(why, cap, "the network reporter is loaded");
+        return 0;
+    }
+    return 1;
+}
+
+/* ... and what it rests on in the engine's state the Start has just made (`start`) or a live
+   rewind finds: not a network game, a skirmish's GameingState, the map the Start read, the tables
+   the fill indexes, and the viewer's record free. */
+static int validate_engine(const char* ta, const RecHeader* h, char* why, unsigned cap, int start)
 {
     const char* set = *(const char* const*)(ta + OFF_SETTINGS);
     const char* gs = *(const char* const*)(ta + OFF_GSTATE);
@@ -575,9 +781,9 @@ static int validate_engine(const char* ta, const RecHeader* h, char* why, unsign
     }
     for (i = 0; i + 1 < sizeof map && set[SET_MAP + i]; i++) map[i] = set[SET_MAP + i];
     map[i] = 0;
-    if (_stricmp(map, h->settings_map)) {
+    if (_stricmp(map, start_map(h))) {
         snprintf(why, cap, "the Start read the map %s, the recording's is %s", map,
-                 h->settings_map);
+                 start_map(h));
         return 0;
     }
     /* the engine indexes its side and colour tables with a seat's side and colour unbounded
@@ -595,6 +801,7 @@ static int validate_engine(const char* ta, const RecHeader* h, char* why, unsign
         snprintf(why, cap, "the settings walk %u entries", *(const unsigned*)(ta + OFF_NSEATS));
         return 0;
     }
+    if (!viewer_free(ta, start, why, cap)) return 0;
     if (strcmp(h->build, GIT_COMMIT))
         tagpu_logf("replay: recorded by the build %s, played by %s: a puppet computes nothing a "
                    "build changes (D8)", h->build, GIT_COMMIT);
@@ -622,13 +829,72 @@ static void name_put(char* dst, const char* name)
     memcpy(dst, name, n);
 }
 
+/* THE VIEWER'S SEAT (demo-recorder-ten-seats.md). V is record 10 on every playback. The engine
+   constructs eleven player records with their PlayerInfo (0x41D97E..0x41D997, each through
+   0x463BE0), its players reset clears eleven (0x4644D7..0x46450F) and its player teardown frees
+   eleven records' buffers (0x464A00..0x464A9B); record 10 is its "no player", which no players
+   loop reaches (0x4655A8, 0x481707..0x48177A, 0x465F87, 0x41DEC5) and no recording carries
+   (replay-globals.tsv, `viewerrec`). So nothing recorded is ever overwritten with viewer state,
+   and every record 0-9, seated or not, is applied and compared as recorded.
+   - The activation 0x464290(10, 3) writes only inside record 10 -- its five 11-byte rows, +0x146,
+     +0x147 and +0x148 = 10, [rec+0] = 1, +0x74 = 0 without a free -- and clears its PlayerInfo's
+     +0x9B bit 5 (0x4642BE..0x4644BE). BOUND:
+     type 3 with [rec+0] set before the player init 0x464700 ever sees the record is what makes it
+     skip the AI object and 0x40B320 (0x46489D..0x4648A5), which would write the ten-entry table
+     0x5119C0 at index 10 (0x40B340).
+   - The empty block, first above last (+0x67 = 1, +0x6B = 0, no address at all): every walk of
+     the controlled or viewed block tests `first > last` before its first unit (the eleven, from
+     0x41C345 to 0x48DD40, demo-recorder-ten-seats.md §3), and a walker that missed the test would
+     fault at once rather than act on a seat's unit. And the ID range [+0x6F, +0x71] = [1, 1]: the
+     ID cycle 0x48C190 walks the controlled record's range and turns ID 0 into a NULL unit it
+     reads (0x48C1EF..0x48C213), so with [1, 1] it reads slot 1 alone, which every unit array has,
+     and finds it unselected, since every selection setter walks the controlled block. The level
+     init gives blocks to records 0-9 only (0x48592B), so nothing else writes these.
+   - The watcher bit, as the network watcher switch sets it (0x46569D), and the side and colour of
+     `shown`, a seat of the recording. BOUND: both are the header's, which validate_engine has
+     checked against the side count and the colour sequence's count before either caller runs; the
+     sequence main+0x148DB has one writer, at start-up (0x431911). Record 10's own colour is not
+     one: the players reset gives every record its index (0x46461E, the loop 0..10), the sequence
+     holds ten frames, and the resource bar draws the viewed record's colour frame with no bound
+     (0x468E4B, 0x467C18..0x467C24, GAF_DrawTransformed 0x4C7580), so with V viewed it would draw
+     the dword past the ten frames as a frame.
+   seat_level and rw_prepare share it; its buffers are the level init's call's (THE VIEWER'S
+   BUFFERS) or rw_prepare's. */
+static void viewer_seat(char* ta, const RecSeat* shown)
+{
+    char* rec = player_rec(ta, REC_VIEWER);
+    unsigned char* info;
+    const uint32_t first = 1, last = 0;
+    const uint16_t id = 1;
+    E_ActivateSeat(REC_VIEWER, 3);
+    info = *(unsigned char**)(rec + PL_INFO);
+    if (info) {
+        info[INFO_FLAGS] |= INFO_WATCHER;
+        info[INFO_SIDE] = shown->side;
+        info[INFO_LOGO] = shown->logo;
+    }
+    memcpy(rec + PL_BLOCKFIRST, &first, 4);
+    memcpy(rec + PL_BLOCKLAST, &last, 4);
+    memcpy(rec + PL_IDFIRST, &id, 2);
+    memcpy(rec + PL_IDLAST, &id, 2);
+}
+
+/* record 10 whole, as the first seating of the level found it, for tagpu_replay_level_after */
+static void viewer_take(const char* ta)
+{
+    if (s_vrec.taken) return;
+    memcpy(s_vrec.was, ta + OFF_PLAYERS + (size_t)REC_VIEWER * PL_STRIDE, PL_STRIDE);
+    s_vrec.taken = 1;
+}
+
 /* §6.4's seating, after validate; `view` the viewed player, V or a recorded seat (§2.9) */
-static void seat_level(char* ta, const RecHeader* h, unsigned v, unsigned view)
+static void seat_level(char* ta, const RecHeader* h, unsigned view)
 {
     unsigned char seatv[REC_PLAYERS] = { 0 }, localv[REC_PLAYERS] = { 0 };
     unsigned char* info;
     void* objective;
-    unsigned i;
+    unsigned i, lowest = REC_PLAYERS;
+    const RecSeat* shown = &h->seats[0];        /* validate_header: at least two seats */
     for (i = 0; i < h->nseats; i++) {
         const RecSeat* s = &h->seats[i];
         char* rec = player_rec(ta, s->index);
@@ -642,34 +908,97 @@ static void seat_level(char* ta, const RecHeader* h, unsigned v, unsigned view)
         name_put(rec + PL_NAME2, s->name);
         memcpy(rec + PL_ALLY, s->ally, 11);     /* the activation zeroes the row */
         seatv[s->index] = 1;
-        localv[s->index] = 1;                   /* validate: every controller is 1 or 2 */
+        localv[s->index] = s->controller == 1 || s->controller == 2;   /* getter 75 there */
+        if (s->index == h->controlled) shown = s;
+        if (s->index < lowest) lowest = s->index;
     }
-    /* V shows the recording's controlled player's side. With full visibility V is the viewed
-       record, and the interface takes the viewed record's side: MAIN2 is loaded once from it
-       (0x497B56..0x497BD8), and the chrome and both bars read it every frame
-       (0x467D98..0x467DB3); the side menus %sGEN and %sDL take the controlled record's, which is
-       V too (0x41B2E0). What V's PlayerInfo held goes back after the teardown (THE VIEWER'S SEAT). */
-    info = *(unsigned char**)(player_rec(ta, v) + PL_INFO);
+    /* V shows the side and colour of the recording's controlled player, or of its first seat when
+       the controlled record is not seated. With full visibility V is the viewed record, and the
+       interface takes the viewed record's side and colour: MAIN2 is loaded once from its side
+       (0x497B56..0x497BD8), the chrome and both bars read the side every frame
+       (0x467D98..0x467DB3), and the resource bar draws its colour (0x467C00 at 0x4690AB); the
+       side menus %sGEN and %sDL take the controlled record's, which is V too (0x41B2E0). What
+       record 10 and its PlayerInfo held goes back after the teardown (tagpu_replay_level_after).
+       V is no puppet seat: the puppet table has ten entries, and every gate keys on a unit's
+       owner, which is never 10. */
+    viewer_take(ta);
+    info = *(unsigned char**)(player_rec(ta, REC_VIEWER) + PL_INFO);
     s_vinfo.at = info;
     if (info) memcpy(s_vinfo.was, info, REC_INFO_BYTES);
-    E_ActivateSeat(v, 3);
-    if (info) {
-        info[INFO_FLAGS] |= INFO_WATCHER;
-        for (i = 0; i < h->nseats; i++)
-            if (h->seats[i].index == h->controlled) info[INFO_SIDE] = h->seats[i].side;
-    }
-    seatv[v] = 1;
+    viewer_seat(ta, shown);
     /* a record the stock fill activated that the recording does not seat */
     for (i = 0; i < REC_PLAYERS; i++) {
         char c = player_rec(ta, i)[PL_CONTROLLER];
         if (!seatv[i] && (c == 1 || c == 2)) E_ActivateSeat(i, 0);
     }
-    ta[OFF_CONTROLLED] = (char)v;
+    /* +0x2A43 = 10 before the load is safe: the first reader of the viewed record's counters, the
+       sight rebuild's fog 0x466C20 through 0x4816A0(1) at 0x497AE5, follows the level init's call
+       0x4919C8 at 0x497581, which gives record 10 its counters (THE VIEWER'S BUFFERS) */
+    ta[OFF_CONTROLLED] = (char)REC_VIEWER;
     ta[OFF_VIEWED] = (char)view;
     *(unsigned short*)(ta + OFF_NPLAYERS) = (unsigned short)h->nplayers;
     objective = *(void**)(ta + OFF_OBJECTIVE);
     if (objective) E_Disarm(objective);
-    tagpu_puppet_begin(seatv, localv);
+    s_engine_cells = h->mode == MODE_NETWORK;
+    s_vlowest = lowest;
+    InterlockedExchange(&s_vbuf, VB_ARMED);
+    tagpu_puppet_begin(seatv, localv, s_engine_cells);
+}
+
+/* 0x464990(): the level init's players, no argument, plain `ret` (0x4649C6): 0x464700 for each of
+   records 0-9 with a type (+0x73), then the AI script 0x4648E0 */
+typedef void (__cdecl* PFN_PlayersInit)(void);
+#define E_PlayersInit ((PFN_PlayersInit)0x00464990u)
+/* 0x464700(rec): the player init, stdcall `ret 4` (0x4648D6). It allocates the sight counters
+   +0x7C (freeing the old ones, 0x464855) at the map's size, the group table +0x78 through 0x480190
+   (0x464898; it frees no old one, 0x4801A1..0x4801B1) and +0xEC when NULL (0x4647CF..0x4647EA),
+   zeroes the resources and storage (0x46476B..0x464795) and sets +0xF0, +0xF4 and +0xF8 to
+   GameTime (0x464715, 0x464727, 0x464765) */
+typedef void (__stdcall* PFN_PlayerInit)(char* rec);
+#define E_PlayerInit ((PFN_PlayerInit)0x00464700u)
+
+/* record 10's buffers through the player init, after the two values that make it skip the AI
+   object (THE VIEWER'S SEAT) and with none of its buffers there yet, so the call leaks nothing;
+   1 when all three exist afterwards */
+static int viewer_buffers(char* ta)
+{
+    char* rec = player_rec(ta, REC_VIEWER);
+    if (*(const uint32_t*)rec != 1 || rec[PL_CONTROLLER] != 3 || *(void**)(rec + PL_GROUPS) ||
+        *(void**)(rec + PL_SIGHT))
+        return 0;
+    E_PlayerInit(rec);
+    return *(void**)(rec + PL_SIGHT) && *(void**)(rec + PL_GROUPS) && *(void**)(rec + PL_EC);
+}
+
+/* THE VIEWER'S BUFFERS: the level init's call 0x4919C8, in LoadGameData_Main 0x4917D0 on the
+   LOADER thread (0x497581), its only call site, retargeted here. The engine's own init first,
+   then, on a level the seating armed, record 10's buffers. Three invariants:
+   - ORDERING. s_vbuf and s_vlowest are written on the game thread at the seating, before the load
+     state creates the loader thread (0x4982C5..0x4982CA), and s_vbuf is cleared at the level's
+     end, after the loader has exited, and at every fill before a seating, so a seating that never
+     reached its level's end arms no later level; the loader acts on it only on a puppet level,
+     whose mode the same seating set before the loader thread existed. This thread's result is published through an interlocked
+     write and read at the first step, which follows the loader's last write (bit 1 of
+     main+0x38D75, set at 0x497C5F, tested at 0x498342).
+   - LIFETIME. Record 10 gets its buffers at the point of the load where records 0-9 get theirs,
+     and loses them where they do (0x464A00 at 0x491BA9), so from the loader's first reader of the
+     viewed record's counters (0x497AE5) to the teardown, record 10 is shaped as a seat's.
+   - BOUND. The activation as type 3 before this call (seat_level) keeps 0x5119C0[10] unwritten.
+   On a failure the controlled and viewed indexes move to the lowest seat, whose counters the
+   engine's own init made, and the first step refuses: the level stays empty, as the engine's own
+   out-of-memory leaves a seat. */
+static void __cdecl tagpu_replay_level_players(void)
+{
+    char* ta;
+    int ok;
+    E_PlayersInit();
+    if (!tagpu_puppet_on() ||
+        InterlockedCompareExchange(&s_vbuf, VB_ARMED, VB_ARMED) != VB_ARMED) return;
+    ta = ta_main();
+    ok = ta && viewer_buffers(ta);
+    if (!ok && ta) ta[OFF_CONTROLLED] = ta[OFF_VIEWED] = (char)s_vlowest;
+    InterlockedExchange(&s_vbuf, ok ? VB_READY : VB_FAILED);
+    if (!ok) tagpu_log("replay: the viewer's record 10 could not be given its buffers");
 }
 
 /* The open recording's path and its first and last GameTime, for the dock (tagpu_dock.h): the
@@ -690,15 +1019,32 @@ static void span_read(const char* path)
 }
 
 /* The seating, once everything it rests on has been checked: S-a's, for both routes. */
+static void mp_arena_prepare(const RecHeader* header)
+{
+    if (header->mode!=3) { InterlockedExchange(&s_mp_arena.state,MP_ARENA_OFF); return; }
+    if (!s_mp_arena_in || !header->has_mp || !header->has_mp_seats ||
+        header->slots!=header->mp_seats.slots || header->units_each!=header->mp_seats.each ||
+        !tagpu_recmp_roster_valid(&header->mp_seats)) {
+        InterlockedExchange(&s_mp_arena.state,MP_ARENA_FAILED);
+        return;
+    }
+    /* The game thread fills this once before the loader-start call at 0x4982CA. The
+       plan stays immutable through loader completion; publication and the
+       loader's result use interlocked operations, not an assumed delay. */
+    s_mp_arena.roster=header->mp_seats;
+    InterlockedExchange(&s_mp_arena.state,MP_ARENA_ARMED);
+}
+
 static void seat(char* ta, const char* name, unsigned v, int view)
 {
     s_view = view >= 0 ? (unsigned)view : v;
-    seat_level(ta, recr_header(s_rd), v, s_view);
+    seat_level(ta, recr_header(s_rd), s_view);
+    mp_arena_prepare(recr_header(s_rd));
     snprintf(s_name, sizeof s_name, "%s", name);
     s_viewer = v;
     s_first = 1;
     tagpu_logf("replay: %s seated: %u players on %s, the viewer at record %u", name,
-               recr_header(s_rd)->nseats, recr_header(s_rd)->settings_map, v);
+               recr_header(s_rd)->nseats, start_map(recr_header(s_rd)), v);
     if (s_seek.pending)
         tagpu_logf("replay: %s: a seek to GameTime %u waits for the first step", name, s_seek.T);
 }
@@ -712,6 +1058,7 @@ static void __cdecl replay_fill(void)
     Refusal r = { 0, 0, 0 };
     replay_close();
     tagpu_puppet_end();
+    InterlockedExchange(&s_vbuf, VB_OFF);
     k = request_read(name, sizeof name, &view, why, sizeof why);
     if (!k) return;
     if (k < 0) {
@@ -725,7 +1072,7 @@ static void __cdecl replay_fill(void)
         return;
     }
     if (!ta || !validate_header(recr_header(s_rd), why, sizeof why, &v, &r) ||
-        !validate_engine(ta, recr_header(s_rd), why, sizeof why) ||
+        !validate_engine(ta, recr_header(s_rd), why, sizeof why, 1) ||
         !view_ok(recr_header(s_rd), view, why, sizeof why)) {
         tagpu_logf("replay: not playing %s: %s", name, ta ? why : "no main block");
         refused(&r, path);
@@ -894,6 +1241,14 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
     unsigned each = *(const unsigned short*)(ta + OFF_EACH);
     unsigned slots = *(const unsigned short*)(ta + OFF_NSLOTS);
     unsigned now = *(const unsigned*)(ta + OFF_GAMETIME);
+    if (at_start && InterlockedCompareExchange(&s_vbuf, VB_READY, VB_READY) != VB_READY) {
+        snprintf(why, cap, "the viewer's record could not be prepared");
+        return 0;
+    }
+    if (h->mode==3 && InterlockedCompareExchange(&s_mp_arena.state,0,0)!=MP_ARENA_READY) {
+        snprintf(why,cap,"the loader did not establish the recorded unit-block ownership");
+        return 0;
+    }
     if (each != h->units_each || slots != h->slots) {
         snprintf(why, cap, "the level allows %u units a player in %u slots, the recording %u in %u",
                  each, slots, h->units_each, h->slots);
@@ -956,7 +1311,7 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    so a unit the recording marks dying lives until its recorded death, in the step it died in
    there.
 
-   A PLAYER'S IMAGE is written raw under the same exclusions, every record's but V's, and but
+   A PLAYER'S IMAGE is written raw under the same exclusions, for every record 0-9, but
    +0xF0, the players phase's 30-tick deadline (0x46507D..0x465092). Image T+1 carries it as the
    recording machine's phase of T left it, already advanced, so written it would keep the host's
    phase from ever finding a seat's pass due -- and the viewed record's radar pass 0x467440 and
@@ -979,8 +1334,6 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define PL_NETID       0x04         /* the seat activation sets it to the seat (0x464290)          */
 #define PL_PACE        0x18         /* the pacing gate's stamp (0x4952CF..0x495303)                */
 #define PL_PASS        0xF0         /* the players phase's 30-tick deadline, the host's own        */
-#define PL_BLOCKFIRST  0x67         /* the record's first and last unit, inclusive                 */
-#define PL_BLOCKLAST   0x6B
 #define U_ALT          0x6E
 #define U_TYPEIX       0xA6         /* u16, the type's index; 0 for a free slot (0x486DC7)          */
 #define U_GROUP        0xAC         /* the control group, or -1: the setter 0x480250's alone        */
@@ -989,6 +1342,14 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define U_OWNERIX      0xFF
 #define U_BUILT        0x104        /* the build left, a float: 0.0 when finished                  */
 #define U_STATE        0x110
+#define U_SELECTED     0x10u        /* +0x110 bit 4: the viewer's own selection (a drop row)      */
+#define U_MODEL        0x9E         /* the model instance (Object3do): the create 0x485D40 stores it
+                                       (0x485DCC, 0x485E0E) and only the destructor frees it,
+                                       nulling the field at once (0x486D93..0x486DA3)            */
+#define O3_FRAME       0x10         /* ... its composite frame, the cached 1x bake (stored through
+                                       0x4586FA..0x45871E); 0 makes the next draw bake it again  */
+#define OFF_GUIWORD    0x37EBE      /* the GUI word, the viewer's own: bit 4 asks for a refresh  */
+#define GUI_REFRESH    0x10u
 #define U_ALIVE        0x10000000u
 #define U_WATER        0x10A        /* the water state, 0..4: 0x43DB50 its only writer and reader,
                                        a dword, read and stored whole (0x43DB6B, 0x43DBED)        */
@@ -1007,6 +1368,8 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define MV_LAYER       0x2E         /* the mover's layer, bits 0-1                                 */
 #define U_DEF          0x92         /* the type's definition, *(main+0x1439B) + 0x249 the index    */
 #define U_FOOTXZ       0x76         /* the footprint's cell x and z, i16 each (0x47D98E)           */
+#define U_POS          0x6A         /* x, altitude, z: i32 each                                    */
+#define U_TURN         0x64         /* the turn, u16 x3                                            */
 #define U_FOOTWH       0x7E         /* its width and height, i16 each: the def's +0x14A (0x485AAA) */
 #define U_YARD         0x10F        /* bit 2: the yard is open (0x47DAF1)                          */
 #define U_RECLAIM      0x08000000u  /* +0x110 bit 27: the re-claim is owed (0x47DAEC)              */
@@ -1047,9 +1410,6 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define H_PARALYZE        0x00402D10u
 #define H_ATTACKCHASE     0x004034A0u
 #define U_SLOTWEAPON   0x10         /* + p1 * 0x1C: a stock slot's weapon (0x402B7F..0x402B89)     */
-#define PL_AI          0x74         /* the AI object                                               */
-#define PL_GROUPS      0x78         /* the control-group table (0x480190)                          */
-#define PL_LIVE        0x144        /* u16, the live count (0x486DFC)                              */
 #define ACQ_TABLE      0x005119C0u  /* ten acquisition records, by seat (0x40A10A..0x40A13A)       */
 #define OBJ_ARMED      0x88         /* the objective's test switch (0x48DF90, 0x4904B0)            */
 #define DESC_BEGIN     0x00512344u  /* the order descriptors, 0x19 bytes each, to *(0x512348)      */
@@ -1064,6 +1424,9 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    carried (17), and the create's 28-31 */
 #define U_ENGINE_BITS  0xF003170Fu
 #define NOTES_MAX      32           /* the log lines a level's anomalies may take                 */
+#define NOTES_PER_SITE 3            /* ... and one call site's: an anomaly that repeats every step
+                                       is counted in the level's counts, so its first lines stand
+                                       for the rest and leave the budget to the other kinds        */
 
 /* 0x485F50(owner, type, x, altitude, z, finished, layer, slot): the create (stdcall, `ret 0x20`);
    a nonzero slot is taken exactly, and an occupied one refused (0x486002..0x486043) */
@@ -1256,7 +1619,9 @@ static void masks_init(void)
     m_bytes(s_raw1, U_OWNERIX, 1, 0);
     m_bytes(s_raw1, U_GROUP, 4, 0);         /* the control group, group_put's              */
     m_bytes(s_raw1, 0x10A, 1, 0);           /* the water state, books_put's                    */
-    m_bytes(s_raw1, 0x10E, 1, 0);           /* the state byte                                  */
+    m_bytes(s_raw1, 0x10E, 1, 0);           /* the state byte: the state events' in a skirmish,
+                                               books_put's from the composed image on a
+                                               multiplayer segment                             */
     m_field(s_raw1, U_YARD, 1, 0x04, 0);    /* the yard, YARD_OPEN's                           */
     m_field(s_raw1, U_STATE, 4, U_ENGINE_BITS, 0);
     m_bytes(s_raw1, REC_MOVER_AT + 0x26, 8, 0);
@@ -1327,7 +1692,15 @@ static void note(const char* fmt, ...)
 {
     char line[256];
     va_list ap;
+    unsigned i;
     if (s_notes >= NOTES_MAX) return;
+    for (i = 0; i < NOTE_SITES && s_nsite[i].fmt && s_nsite[i].fmt != fmt; i++) ;
+    if (i < NOTE_SITES) {
+        s_nsite[i].fmt = fmt;
+        if (s_nsite[i].n >= NOTES_PER_SITE) return;
+        if (++s_nsite[i].n == NOTES_PER_SITE)
+            tagpu_log("replay: (the last line of this kind; the level's counts hold the rest)");
+    }
     if (++s_notes == NOTES_MAX) tagpu_log("replay: (the last line of this level's notes)");
     va_start(ap, fmt);
     vsnprintf(line, sizeof line, fmt, ap);
@@ -1424,12 +1797,80 @@ static void group_put(const Lv* L, char* u, const uint32_t* img, unsigned slot)
     E_SetGroup(u, want);
 }
 
-/* one unit's image, by the recipe above; the slot holds() it */
+/* Whether a build fraction is finished, by the engine's own test: the C3 of an x87 compare with
+   0.0 (0x4586DF and its siblings), true for 0.0, -0.0 and a NaN alike. */
+static int build_finished(float f)
+{
+    return !(f < 0.0f || f > 0.0f);
+}
+
+/* one unit's image, by the recipe above; the slot holds() it.
+
+   THE BUILD FINISH ON A MULTIPLAYER LEVEL.
+
+   What the finish writes. 0x41B8D0(builder, built) (DISASSEMBLED 0x41B8D0..0x41BA51) writes on
+   the built unit its model's composite frame [+0x9E]+0x10 = 0, +0x104 = 0 and +0x110 bit 13.
+   Behind owner type 1/2 it makes a GUI refresh or the detach 0x48AAC0; under def+0x241 bit 18 it
+   calls the activation 0x48B090(1, 1); when the GUI tracks the builder it refreshes the builder's
+   menu counts (0x4199B0); under def bit 24 it sets +0xF5 = 7 and +0x110 bit 14; for a type-1/2
+   owner it sends the 0x12; when either unit is selected it sets the GUI word's refresh bit.
+
+   Where each effect comes from here. On a multiplayer segment the owner's image carries every
+   unit field of that on the owner's clock: the fraction, +0x110 bits 13 and 14 and +0xF5 by this
+   recipe, the state byte by book_state. A puppet's owner is type 3, so the owner-only parts never
+   run here. The primary's build done -- the recorder's copy finishing at its receipt of the
+   engine's 0x12, on its own clock -- is not played (mp_owned_event).
+
+   What the image cannot carry: the composite, the host's cached 1x bake of the unit. Its bytes
+   depend on the fraction only through whether it is 0.0: an unfinished unit's bake has a depth
+   plane (0x4586DF..0x4586F0) and every visible piece, a finished unit's holds only the cached
+   pieces (0x459963..0x459985, 0x459DB8..0x459DCC). The draw bakes it again only when it is 0, or
+   for a structure that is still a nanoframe (0x458870..0x4588F2). So a write here that changes
+   whether the fraction is 0.0 clears it, as the finish clears its own (0x41B923) and the remote
+   refresh a copy's (0x48B4A6), and the next draw bakes it for the unit the image describes. Kept,
+   a finished unit would draw its nanoframe bake: on GDI its dont-cache pieces twice (0x459641
+   redraws them over the bake's frozen copy), and in both renderers the waterline and digger
+   clips a depth plane selects (0x45927E; tagpu_native.c).
+
+   THE INVARIANT is an ordering. On such a segment this write is the fraction's one writer after a
+   unit's create:
+   - a puppet runs no order code, hence no build step (0x48AEB5..0x48AECD);
+   - a puppet level is no network game, so neither the 0x12 receiver nor the round robin runs
+     [INFERRED];
+   - the primary's build done is not played;
+   - the create clears the composite itself (0x485DF2, 0x485E1F).
+   So every bake follows the last class written here. A seek, whose creates start every unit with
+   no composite, holds the same as a forward playing at every draw.
+
+   THE LIFETIME. +0x9E is the model the host's create made for this unit (0x485DCC, 0x485E0E).
+   Only the destructor frees it, nulling the field in the same call (0x486D93..0x486DA3), on this
+   thread. replay-layout.tsv's `model` row keeps the image off it, and every caller has bounded
+   the slot (holds). A NULL model is skipped, as the destructor skips one (0x486D99).
+
+   The finish's GUI refresh is made for the built unit when the viewer has it selected (+0x110
+   bit 4, the viewer's own). The builder's half -- its refresh bit and its menu counts 0x4199B0 --
+   has no unit here to name and is not made. */
 static void unit_put(const Lv* L, unsigned slot, const uint32_t* img)
 {
     char* u = unit_at(L, slot);
     char* mover = *(char**)u;           /* the create made it for a type with one (def +0x22F) */
+    float was, now;
+    memcpy(&was, u + U_BUILT, 4);
     put_masked(u, img, s_raw1, 0, REC_UNIT_BYTES);
+    memcpy(&now, u + U_BUILT, 4);
+    if (s_mp.on && build_finished(was) != build_finished(now)) {
+        char* model;
+        uint32_t st;
+        memcpy(&model, u + U_MODEL, 4);
+        if (model) *(uint32_t*)(model + O3_FRAME) = 0;
+        if (build_finished(now)) {
+            memcpy(&st, u + U_STATE, 4);
+            if (st & U_SELECTED) *(uint16_t*)(L->ta + OFF_GUIWORD) |= GUI_REFRESH;
+            s_mp.bfinished++;
+        } else {
+            s_mp.bunfinished++;
+        }
+    }
     if (mover) {
         const char* ib = (const char*)img;
         int32_t x, z, alt, a_pre, vy;
@@ -1458,13 +1899,13 @@ static void unit_put(const Lv* L, unsigned slot, const uint32_t* img)
     group_put(L, u, img, slot);
 }
 
-/* `slot` is in the unit block of `owner`, a seat other than V: the create scales the owner's
-   record unbounded (0x485F5C..0x485F78), and a slot outside its block would be another seat's */
+/* `slot` is in the unit block of `owner`, a puppet seat: the create scales the owner's record
+   unbounded (0x485F5C..0x485F78), and a slot outside its block would be another seat's */
 static int owner_holds(const Lv* L, unsigned owner, unsigned slot)
 {
     const char* rec;
     const char *first, *last, *u;
-    if (owner >= REC_PLAYERS || owner == s_viewer || !tagpu_puppet_seat(owner)) return 0;
+    if (owner >= REC_PLAYERS || !tagpu_puppet_seat(owner)) return 0;
     if (slot < 1 || slot >= L->nslots) return 0;
     rec = player_rec(L->ta, owner);
     memcpy(&first, rec + PL_BLOCKFIRST, 4);
@@ -1473,9 +1914,12 @@ static int owner_holds(const Lv* L, unsigned owner, unsigned slot)
     return first && last && u >= first && u <= last;
 }
 
-/* the create of a recorded unit in its recorded slot; 1 made */
+/* the create of a recorded unit in its recorded slot; 1 made. `open` lets the create's nested
+   COB writes and replies through: a skirmish's exit-only create, whose recorded children have no
+   unit when played (THE OTHER EVENTS). A multiplayer owner's create keeps them shut: its
+   recording carries those children inside its bracket (THE MULTIPLAYER MATERIALIZER). */
 static int make(const Lv* L, unsigned slot, unsigned owner, unsigned type, const int32_t pos[3],
-                uint32_t finished, unsigned layer)
+                uint32_t finished, unsigned layer, int open)
 {
     char* u;
     if (!owner_holds(L, owner, slot) || !type || type >= L->ndefs) {
@@ -1489,9 +1933,9 @@ static int make(const Lv* L, unsigned slot, unsigned owner, unsigned type, const
              L->now, *(const unsigned short*)(unit_at(L, slot) + U_TYPEIX));
         return 0;
     }
-    tagpu_puppet_open(1);           /* what it nests is the recording's (THE OTHER EVENTS) */
+    if (open) tagpu_puppet_open(1);
     u = E_Create(owner, type, pos[0], pos[1], pos[2], finished, layer, slot);
-    tagpu_puppet_open(0);
+    if (open) tagpu_puppet_open(0);
     if (u != unit_at(L, slot)) {
         s_st.refused++;
         note("replay: the create of slot %u gave %s %u", slot, u ? "slot" : "nothing,",
@@ -1515,8 +1959,8 @@ static unsigned level_units(const Lv* L, const RecWorld* W)
         if (!W->live[slot]) continue;
         memcpy(pos, ib + 0x6A, 12);
         memcpy(&built, ib + U_BUILT, 4);
-        if (make(L, slot, (unsigned char)ib[U_OWNERIX], img_type(img), pos, built == 0.0f,
-                 img[U_STATE / 4] & 3u))
+        if (make(L, slot, (unsigned char)ib[U_OWNERIX], img_type(img), pos, build_finished(built),
+                 img[U_STATE / 4] & 3u, 1))
             made++;
     }
     return made;
@@ -1732,7 +2176,7 @@ static void units_put(const Lv* L, const RecWorld* W)
     for (slot = 1; slot < L->nslots; slot++) {
         const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
         if (!W->live[slot]) {
-            if (host_live(L, slot)) {
+            if (host_live(L, slot) && !(s_mp.on && s_mp.held[slot])) {
                 s_st.lingering++;
                 note("replay: GameTime %u: slot %u is live here, not in the recording", L->now,
                      slot);
@@ -1823,9 +2267,10 @@ static void states_put(const Lv* L, const RecWorld* W)
     }
 }
 
-/* Every record but V's: the seats, and the records neither the recording nor the host seats, which
-   hold what the level start 0x465E30 gave all ten from the skirmish menu's entries (their energy
-   and metal, 0x465EF5..0x465F1A), and which no loop over the players reads while inactive. An
+/* Every record the recording carries, 0-9 (V's, record 10, it does not): the seats, and the records
+   neither the recording nor the host seats, which hold what the level start 0x465E30 gave all
+   ten from the skirmish menu's entries (their energy and metal, 0x465EF5..0x465F1A), and which
+   no loop over the players reads while inactive. An
    image goes in only with each name ended inside its field, since the engine copies a name to
    its end (0x49395F..0x493977, into a list of 0x1E bytes a player); and a seat's PlayerInfo image
    only with its side and colour within this game's counts, which the engine indexes its tables
@@ -1840,7 +2285,6 @@ static void players_put(const Lv* L, const RecWorld* W)
         const unsigned char* img = rimg + REC_INFO_AT;
         char* rec;
         char* info;
-        if (p == s_viewer) continue;
         if (!memchr(rimg + PL_NAME, 0, PL_NAMELEN) || !memchr(rimg + PL_NAME2, 0, PL_NAMELEN)) {
             s_st.bad_ids++;
             note("replay: GameTime %u: record %u's name runs past its field; its image is left",
@@ -2240,7 +2684,7 @@ static int ev_create(const Lv* L, const unsigned char* b, unsigned len)
     memcpy(&type, b + 4, 2);
     memcpy(&finished, b + 8, 4);
     memcpy(pos, b + 12, 12);
-    if (!make(L, id - 1, b[6], type, pos, finished, b[7] & 3u)) return 0;
+    if (!make(L, id - 1, b[6], type, pos, finished, b[7] & 3u, 1)) return 0;
     water = b[24];
     if (water <= WATER_MAX) {
         memcpy(unit_at(L, id - 1) + U_WATER, &water, 4);
@@ -2255,8 +2699,12 @@ static int ev_create(const Lv* L, const unsigned char* b, unsigned len)
 /* RK_EV_DEATH: the victim's fields as the destructor found them (s2-events §1.9), then the
    destructor through C4's wrap, as a remote's death is applied: mode 0, the killer's player by
    the host's netid for it (every seat's is its index, 0x464290), and C4's carried decision armed
-   from the recording */
-static int ev_death(const Lv* L, const unsigned char* b, unsigned len)
+   from the recording. `corpse` 0 clears the record's corpse level, +0xA's low nibble: the
+   destructor reads it only at 0x486D55..0x486D69, to call the corpse helper 0x486360 at 0x486D6F
+   (its only caller); its other reads of +0xA take the high nibble (0x4867DA, 0x486880, 0x486CA2,
+   0x486D42), and the record reaches no callee (DISASSEMBLED 0x4866D0..0x486E60). So 0 removes
+   the corpse and its flare and nothing else. */
+static int ev_death(const Lv* L, const unsigned char* b, unsigned len, int corpse)
 {
     uint32_t id, kid, netid = 0xFFFFFFFFu;
     unsigned slot, ks, kp = b[8];
@@ -2274,7 +2722,7 @@ static int ev_death(const Lv* L, const unsigned char* b, unsigned len)
         return 0;
     }
     unit_put(L, slot, img);
-    if (kp < REC_PLAYERS && kp != s_viewer && tagpu_puppet_seat(kp))
+    if (kp < REC_PLAYERS && tagpu_puppet_seat(kp))
         memcpy(&netid, player_rec(L->ta, kp) + PL_NETID, 4);
     ks = kid && kid - 1 < L->nslots ? kid - 1 : 0;
     memset(rec, 0, sizeof rec);
@@ -2285,7 +2733,7 @@ static int ev_death(const Lv* L, const unsigned char* b, unsigned len)
     rec[7] = (unsigned char)ks;
     rec[8] = (unsigned char)(ks >> 8);
     rec[9] = b[9];
-    rec[10] = b[10];
+    rec[10] = corpse ? b[10] : (unsigned char)(b[10] & 0xF0);
     if (tagpu_tx_replay_death(rec, b[11])) return 1;
     s_st.refused++;
     return 0;
@@ -2330,8 +2778,9 @@ static int ev_state(const Lv* L, const unsigned char* b, unsigned len)
 }
 
 /* RK_EV_BUILT: 0x41B8D0(builder, built), which tests the builder's build list and both units'
-   lives itself (0x41B8D6..0x41B917); only the frame's nanoframe flag, [+0x9E]+0x10, has no
-   other writer here */
+   lives itself (0x41B8D6..0x41B917); of what it writes, the model's composite frame [+0x9E]+0x10
+   is the one the images do not carry (THE BUILD FINISH ON A MULTIPLAYER LEVEL); a multiplayer
+   segment does not play it (mp_owned_event) */
 static int ev_built(const Lv* L, const unsigned char* b, unsigned len)
 {
     uint32_t bid, uid;
@@ -2497,8 +2946,11 @@ static int ev_spray(const Lv* L, const unsigned char* b, unsigned len)
      are armed around it (tagpu_puppet_draws): the feature code's six calls of the simulation RNG
      take the recording's values, in order, while their site and argument agree. The tick is the
      root that also carries cells: the grid's changes since the iteration's images, put in before
-     it runs, since its reproduction reads the source cell's unit slot (0x424189).
-   - A DEATH is replayed as ev_death replays it, with the feature gates open: the host's destructor
+     it runs, since its reproduction reads the source cell's unit slot (0x424189) -- on a
+     multiplayer recording's level, whose slots are the host's, that read takes the recording's
+     value instead (FS_SOURCE, tagpu_replay_source).
+   - A multiplayer recording's DEATH: THE DEATHS ON A MULTIPLAYER LEVEL. A skirmish recording's
+     DEATH is replayed as ev_death replays it, with the feature gates open: the host's destructor
      makes what every machine makes, its corpse through 0x486360 (0x486D6F). The damage of its
      explosion it cannot make: the owner gate (0x49A01B..0x49A047) passes a type-3 owner's
      explosion by, and every puppet seat is one. So the roots that explosion made, which the
@@ -2519,10 +2971,12 @@ static int ev_spray(const Lv* L, const unsigned char* b, unsigned len)
    value that indexes is bounded before it goes in: a cell's unit slots by the unit array's count,
    a sequence's frame by the sequence's own count, as 0x4B8B30 bounds it, and the reproduction
    cursor by the grid's cells, the range the tick keeps it in (0x4240A3..0x4240CC).
-   THE UNIT SLOTS AND THE YARD BIT come from the images alone: every write the stamp, the clear and
-   the re-claim make to them on this level -- for the placements below, the creates and deaths,
-   and the host's own unit tick -- is undone at the writer's return (tagpu_puppet.c, THE
-   FOOTPRINT WRITERS), so the cells the recording did not change keep the recording's values. */
+   THE UNIT SLOTS AND THE YARD BIT come from the images alone on a skirmish recording's level: every
+   write the stamp, the clear and the re-claim make to them -- for the placements below, the
+   creates and deaths, and the host's own unit tick -- is undone at the writer's return
+   (tagpu_puppet.c, THE FOOTPRINT WRITERS), so the cells the recording did not change keep the
+   recording's values. On a multiplayer recording's level they are the host engine's own
+   (s_engine_cells): its units follow their owners, not the recorder's replicas. */
 
 #define OFF_FGRID      0x14287      /* the feature grid (tagpu_recorder.c, *The features*)          */
 #define OFF_FGRIDW     0x14233
@@ -2531,6 +2985,8 @@ static int ev_spray(const Lv* L, const unsigned char* b, unsigned len)
 #define OFF_FDEFS      0x1426F
 #define OFF_WRECKS     0x1420B      /* the wreck pool, TAGPU_LIM_WRECKS records                    */
 #define OFF_WR_HEADS   0x14213      /* the active, settled and free lists' heads, i32 each         */
+#define WR_NEXT        0x00         /* a wreck record's list links, i16: the next, the previous   */
+#define WR_PREV        0x02         /*   (the list mover 0x4232F0)                                */
 #define OFF_FCURSOR    0x14257      /* the reproduction cursor                                    */
 #define FD_STRIDE      0x100
 #define FD_MASK        0xFE         /* bit 0: a GAF feature                                       */
@@ -2538,6 +2994,7 @@ static int ev_spray(const Lv* L, const unsigned char* b, unsigned len)
 #define CELL_BACK      0x0A         /* a footprint cell's rows and columns back to its anchor, an
                                        anchor's record, or a resting GAF anchor's damage         */
 #define CELL_FLAGS     0x0C         /* bit 0: the anchor holds a record                           */
+#define CELL_YARDBIT   0x02         /* +0x0C bit 1, the yard's (tagpu_puppet.c, THE FOOTPRINT WRITERS) */
 #define DEF_FOOTPRINT  0xFFFE
 #define WR_STATE1      0x04         /* a GAF record's sequence states: u16 frame, u16 timer, u8
                                        loop, the sequence at +8 (0x4B8B30)                        */
@@ -2639,6 +3096,16 @@ static int cell_put(const Lv* L, char* c, const unsigned char* img, unsigned x, 
                  "recording: its structure is the engine's, and it is left as it is", L->now, x, z,
                  hdef, rdef);
         return 0;
+    }
+    if (s_engine_cells) {
+        /* THE MULTIPLAYER MATERIALIZER: the slots and the yard bit are the engine's own */
+        for (k = 0; k < REC_CELL_BYTES; k++) {
+            unsigned char m = k < 4 ? 0 : s_cval[k];
+            if (k == CELL_FLAGS) m &= (unsigned char)~CELL_YARDBIT;
+            if (back && (k == CELL_BACK || k == CELL_BACK + 1)) m = 0;
+            c[k] = (char)(((unsigned char)c[k] & ~m) | (img[k] & m));
+        }
+        return 1;
     }
     memcpy(slot, img, 4);
     /* a slot is a unit the engine follows from the cell: the stamp's contest dereferences the
@@ -2830,6 +3297,30 @@ static unsigned draws_gather(const RecWorld* W, unsigned i, unsigned* n)
     return j;
 }
 
+static int addr_of(const Lv* L, unsigned simid, uint32_t id, char** p);
+
+typedef void (__stdcall* PFN_FCorpse)(char* unit, unsigned level, unsigned smoke);
+#define E_FCorpse  ((PFN_FCorpse)0x00486360u)   /* `ret 0xC` (0x486454)                      */
+#define UD_CORPSE  0x1BC     /* u16 the unit def's corpse feature (0x48636E)                       */
+#define FD_DEAD    0xF4      /* u16 a feature def's next corpse level (0x48639F)                    */
+#define FDEF_NONE  0xFFFB    /* a def at or above it is no feature (0x486384)                       */
+
+/* 0x486360's walk to the corpse def (0x48636E..0x4863B1): the unit def's +0x1BC, then level - 1
+   times FeatureDef +0xF4 while below 0xFFFB. The helper bounds nothing but 0xFFFB, and the spawn
+   indexes FeatureDef by what the walk ends on (0x423CD2). So each index it reads through, and a
+   last one below 0xFFFB, must name a feature def. 1 when they do. */
+static int corpse_def_ok(const Lv* L, const char* udef, unsigned level)
+{
+    uint16_t f;
+    const char* d;
+    memcpy(&f, udef + UD_CORPSE, 2);
+    for (; level > 1 && f < FDEF_NONE; level--) {
+        if (!(d = fdef_of(L, f))) return 0;
+        memcpy(&f, d + FD_DEAD, 2);
+    }
+    return f >= FDEF_NONE || fdef_of(L, f) != NULL;
+}
+
 /* the recorded arguments of a root, bounded, and the call; 0 when a bound refused it, with the
    result in `got` otherwise */
 static int root_call(const Lv* L, unsigned root, const unsigned char* a, uint32_t* got)
@@ -2883,6 +3374,42 @@ static int root_call(const Lv* L, unsigned root, const unsigned char* a, uint32_
             return 0;
         E_FDamage(cell, x, z, weapon);
         return 1;
+    case FR_CORPSE: {
+        /* The corpse helper on a stack record holding exactly what it reads of its unit: +0x92
+           (0x486368, 0x486404), +0x76 and +0x78 (0x4863B7, 0x4863BB), the position +0x6A and the
+           turn +0x64 by address (0x4863D0, 0x4863F1, 0x48642C), and +0xFF (0x4863EB, 0x486426).
+           It writes none of them, and every callee copies what it takes: the spawn the position
+           and the turn (0x423E28..0x423E38, 0x423E9B..0x423EA6), the smoke's and the flare's
+           inits 12 bytes of the point (0x47515D..0x475178, 0x474D5D..0x474D7C). So nothing keeps
+           a pointer into the record past the call (DISASSEMBLED). The effect is the helper's
+           own: the spawn, the underwater velocity (0x486416) and the flare, as on the recording
+           machine. Bounds: the type by the unit types' count (addr_of); the level 1..15 and the
+           smoke 0..1, as 0x486D58..0x486D69 pass them; the corpse defs (corpse_def_ok); the cell
+           by 0x481550 itself (0x481551..0x481593), the height by 0x485070 itself
+           (0x48508F..0x4850C4); the owner byte reaches only the anchor's flag nibble
+           (0x423EFB). */
+        char u[REC_UNIT_BYTES];
+        char* udef;
+        uint32_t type;
+        int16_t fx, fz;
+        memcpy(&type, a, 4);
+        memcpy(&fx, a + 8, 2);
+        memcpy(&fz, a + 10, 2);
+        if (a[4] < 1 || a[4] > 15 || a[5] > 1 || a[7] || a[30] || a[31] ||
+            !addr_of(L, SIM_ID_UNIT_TYPE, type, &udef) || !udef || !corpse_def_ok(L, udef, a[4]))
+            return 0;
+        memset(u, 0, sizeof u);
+        memcpy(u + U_DEF, &udef, 4);
+        memcpy(u + U_TURN, a + 24, 6);
+        memcpy(u + U_POS, a + 12, 12);
+        memcpy(u + U_FOOTXZ, a + 8, 4);
+        u[U_OWNERIX] = (char)a[6];
+        E_FCorpse(u, a[4], a[5]);
+        cell = cell_at(L, fx, fz);
+        *got = cell && (cell[CELL_FLAGS] & 1) ? (uint32_t)*(const uint16_t*)(cell + CELL_BACK) + 1
+                                              : REC_ID_NULL;
+        return 1;
+    }
     default:
         return 0;
     }
@@ -2918,9 +3445,12 @@ static void root_play(const Lv* L, const RecWorld* W, unsigned i)
         return;
     }
     s_fst.roots++;
+    if (root == FR_CORPSE) s_fst.corpses++;
     s_fst.left += left;
-    if ((root == FR_SPAWN || root == FR_SWAP || root == FR_DESTROY) && got != want &&
-        !s_fst.rdiffer++)
+    /* a corpse whose spawn took no record on the recording machine is checked by the next
+       images' structure compare */
+    if ((root == FR_SPAWN || root == FR_SWAP || root == FR_DESTROY ||
+         (root == FR_CORPSE && want != REC_ID_NULL)) && got != want && !s_fst.rdiffer++)
         note("replay: GameTime %u: the feature call from 0x%06X returned %u here, %u in the "
              "recording", L->now, site, got, want);
 }
@@ -2968,7 +3498,7 @@ static int death_play(const Lv* L, const RecWorld* W, unsigned i)
     s_dying.blasted = 0;
     memcpy(&s_dying.id, W->ev[i].b, 4);
     was = tagpu_puppet_features(1);
-    done = ev_death(L, W->ev[i].b, W->ev[i].len);
+    done = ev_death(L, W->ev[i].b, W->ev[i].len, 1);
     tagpu_puppet_features(was);
     s_dying.W = NULL;
     if (roots && !s_dying.blasted && !s_fst.dmissed++)
@@ -2977,6 +3507,11 @@ static int death_play(const Lv* L, const RecWorld* W, unsigned i)
     s_fst.left += stray;
     s_fst.deaths++;
     return done;
+}
+
+int tagpu_replay_source(unsigned n, unsigned* v)
+{
+    return s_engine_cells && tagpu_puppet_on() && tagpu_puppet_draw(FS_SOURCE, n, v);
 }
 
 void tagpu_replay_blast(const char* unit)
@@ -3006,8 +3541,10 @@ void tagpu_replay_blast(const char* unit)
    the unit tick's at the replay step, in recorded order with the step's other events; the
    projectile tick's once the host's projectile tick has returned; the rest once its explosion
    tick has returned, and the step's feature images after them, since they are the world
-   after every root of the step (THE TICK'S INPUT). Roots inside a death's bracket go with the
-   death, at the replay step. The deferred brackets are copied, since the iteration is read on
+   after every root of the step (THE TICK'S INPUT). Roots inside a skirmish recording's death go
+   with the death, at the replay step; inside a multiplayer recording's, each at its own phase,
+   like any other (THE DEATHS ON A MULTIPLAYER LEVEL). The deferred brackets are copied, since the
+   iteration is read on
    before the projectile tick runs; past the store's room the step's remaining roots go in at
    the replay step, in recorded order, the ones already held first.
    The cells' unit slots of the next image go in early (slots_put), for the host's projectile
@@ -3015,7 +3552,9 @@ void tagpu_replay_blast(const char* unit)
    source cell's unit slot, 0x424189), and the recording machine's tick saw the iteration's slots
    and its input, not the next image's. So each early slot's previous bytes are kept, and put back
    just before the tick root, whose input then goes in over them (THE TICK'S INPUT); features_put
-   writes the next image's afterwards. A cell past the store's room is not written early. */
+   writes the next image's afterwards. A cell past the store's room is not written early. On a
+   multiplayer recording's level no slot is written (s_engine_cells), and the tick's one read of
+   one, the source test, takes the recording's value (FS_SOURCE). */
 #define PEND_EVENTS 8192
 #define PEND_BYTES  (2u << 20)
 #define PEND_SLOTS  16384
@@ -3087,8 +3626,11 @@ static void slots_restore(void)
     for (i = s_pend.nslots; i-- > 0;) memcpy(s_pend.slot[i].cell, s_pend.slot[i].was, 4);
 }
 
+static int mp_owned_event(unsigned kind);
+
 /* the held brackets of phases up to `phase`, in recorded order: each root, then the events its
-   bracket holds, as the step plays them */
+   bracket holds, as the step plays them. On a multiplayer level the owners' private events a
+   held root nested are their ROOT actions (the materializer), as at the step. */
 static void pend_play(unsigned phase)
 {
     s_pendW.ev = s_pend.ev;
@@ -3099,7 +3641,7 @@ static void pend_play(unsigned phase)
             if (e->b[1] > phase) return;
             if (e->b[0] == FR_TICK) slots_restore();
             root_play(&s_pend.L, &s_pendW, s_pend.next);
-        } else {
+        } else if (!mp_owned_event(e->kind)) {
             ev_play(&s_pend.L, e);
         }
         s_pend.next++;
@@ -3143,24 +3685,828 @@ void __cdecl tagpu_replay_phase(unsigned phase)
     if (phase >= REC_PHASE_LATE) pend_finish();
 }
 
-/* The step's events in recorded order; with `defer`, the roots of a later phase into the store */
+/* ---- THE MULTIPLAYER MATERIALIZER ----------------------------------------------------------
+   A mode-3 recording (demo-recorder-multiplayer-slice.md, *Owner-authority materializer*). The
+   recorder's primary stream supplies the shared world -- features, wrecks, the grid, the
+   projectiles, the globals, the declared tables -- and the broadcast events it observed. Each
+   unit's lifetime, record and mover, each player record and each order list come from the
+   owners' contributions, applied in ledger order where the recorder's capture took them (THE
+   CLOCK, mp_apply_held), through the lifecycle consumer
+   (tagpu_recmp_lifecycle.h) and the reader's authority queries. images_put reads a composed
+   world: the primary world's shared parts with this materializer's own unit, live, player and
+   list arrays, so the reader's world stays its own delta baseline.
+
+   An initial unit is made from the level-start image as the loader made it (level_units), and
+   that image stays its composed one until its owner's first image applies: a remote owner's
+   first contribution reaches the recorder some fifty steps after the level starts (MEASURED
+   2026-10-05, the four-actor recording: ticks 54..57). A unit the recording creates is made at
+   CREATE_BEGIN with the puppet gates shut -- the recording's bracketed children are the only
+   ones (*Exactly-once private children*) -- and holds no composed image until its owner's
+   first, while `held` keeps units_put from counting it as lingering. Its death runs at
+   DEATH_END through ev_death with the entry's saved image, the feature gates shut and its
+   corpse level cleared; its corpse and the rest of its feature calls come from the recorder's
+   stream (THE DEATHS ON A MULTIPLAYER LEVEL).
+
+   A unit's state byte +0x10E is its composed image's too. The recorder's state events are its
+   own copy's changes at its own receipt times, so they are not played (mp_owned_event); books_put
+   writes the composed byte through the setter at every capture point, as R8b does at a seek, and
+   the puppet's state gate refuses every other change of a puppet's byte on this segment -- the
+   create's, a script's -- so each change starts its scripts once (THE UNITS' BOOKKEEPING,
+   tagpu_puppet.c). A unit's build finish is its image's too: the primary's build done is not
+   played, and unit_put clears the unit's composite when the image changes whether its build is
+   finished (THE BUILD FINISH ON A MULTIPLAYER LEVEL).
+
+   Every action names a slot of the recording's frozen blocks, which first_checks has matched
+   to the level's array; the consumer bounds every type by the level's definition count
+   before a callback runs. A refused action stops the playing: the consumer cannot be resumed,
+   and an applied effect is never retried. */
+
+/* one envelope copied out of the reader, until its turn (THE MULTIPLAYER MATERIALIZER) */
+typedef struct MpHeld {
+    RecMpRecord   where;
+    RecMpHeader   packet;
+    unsigned      bytes;
+    unsigned char body[RECMP_BODY_MAX];
+} MpHeld;
+
+static void mp_end(void)
+{
+    unsigned i;
+    if (s_mp.list)
+        for (i = 0; i < s_mp.slots * 2; i++) free(s_mp.list[i].img);
+    if (s_mp.s_list)
+        for (i = 0; i < s_mp.slots * 2; i++) free(s_mp.s_list[i].img);
+    free(s_mp.create);
+    free(s_mp.xmap);
+    free(s_mp.mapped);
+    free(s_mp.sel);
+    free(s_mp.s_live);
+    free(s_mp.s_unit);
+    free(s_mp.s_list);
+    if (s_mp.life) tagpu_recmp_lifecycle_end(s_mp.life);
+    free(s_mp.held);
+    free(s_mp.live);
+    free(s_mp.unit);
+    free(s_mp.list);
+    free(s_mp.nodes);
+    free(s_mp.q);
+    memset(&s_mp, 0, sizeof s_mp);
+}
+
+static void mp_fail(const char* fmt, ...)
+{
+    va_list ap;
+    if (s_mp.failed) return;
+    s_mp.failed = 1;
+    s_over = 1;                     /* whichever phase of the step refused, nothing follows it */
+    va_start(ap, fmt);
+    vsnprintf(s_mp.why, sizeof s_mp.why, fmt, ap);
+    va_end(ap);
+    tagpu_logf("replay: %s stops: %s", s_name, s_mp.why);
+}
+
+/* A slot's composed order lists emptied: a new incarnation, or none, shows no list until its owner
+   describes one for its own birth (mp_authority) */
+static void mp_lists_clear(unsigned slot)
+{
+    s_mp.list[(size_t)slot * 2].n = 0;
+    s_mp.list[(size_t)slot * 2 + 1].n = 0;
+}
+
+/* a copy of a list image into a composed list, its buffer grown to fit */
+static int mp_list_put(RecList* l, const unsigned char* img, unsigned n)
+{
+    if (n > l->cap) {
+        unsigned char* p = realloc(l->img, (size_t)n * REC_ORDER_IMAGE);
+        if (!p) return 0;
+        l->img = p;
+        l->cap = n;
+    }
+    if (n) memcpy(l->img, img, (size_t)n * REC_ORDER_IMAGE);
+    l->n = n;
+    return 1;
+}
+
+/* At the first step, once level_units has made the level-start world: the consumer, and the
+   composed world as that image. 1 ready. */
+static int mp_begin(const Lv* L, const RecWorld* W)
+{
+    const RecHeader* h = recr_header(s_rd);
+    unsigned i;
+    mp_end();
+    s_mp.slots = W->slots;
+    s_mp.life = tagpu_recmp_lifecycle_begin(&h->mp, &h->mp_seats, L->ndefs);
+    s_mp.held = calloc(W->slots, 1);
+    s_mp.live = malloc(W->slots);
+    s_mp.unit = malloc((size_t)W->slots * REC_UNIT_IMAGE);
+    s_mp.list = calloc((size_t)W->slots * 2, sizeof *s_mp.list);
+    s_mp.nodes = malloc((size_t)RECMP_ORDER_MAX * REC_ORDER_IMAGE);
+    s_mp.level = 1;
+    s_mp.create = malloc((size_t)W->slots * MP_CREATE);
+    s_mp.s_live = malloc(W->slots);
+    s_mp.s_unit = malloc((size_t)W->slots * REC_UNIT_IMAGE);
+    s_mp.s_list = calloc((size_t)W->slots * 2, sizeof *s_mp.s_list);
+    s_mp.xbytes = (W->mapped_bytes / 2 + 7) / 8;
+    s_mp.xmap = malloc((size_t)REC_PLAYERS * s_mp.xbytes + 1);
+    s_mp.mapped = malloc(W->mapped_bytes + 1);
+    s_mp.sel = malloc((size_t)REC_PLAYERS * REC_SEL_MAX * sizeof *s_mp.sel);
+    s_mp.on = 1;
+    if (W->slots != L->nslots || !s_mp.life || !s_mp.held || !s_mp.live || !s_mp.unit ||
+        !s_mp.list || !s_mp.nodes || !s_mp.create || !s_mp.s_live || !s_mp.s_unit ||
+        !s_mp.s_list || !s_mp.xmap || !s_mp.mapped || !s_mp.sel) {
+        mp_fail("the materializer could not be set up for %u slots", W->slots);
+        return 0;
+    }
+    memcpy(s_mp.live, W->live, W->slots);
+    memcpy(s_mp.unit, W->unit, (size_t)W->slots * REC_UNIT_IMAGE);
+    memcpy(s_mp.player, W->player, sizeof s_mp.player);
+    for (i = 0; i < recr_header(s_rd)->mp_seats.count; i++) {
+        unsigned seat = recr_header(s_rd)->mp_seats.actor[i].seat;
+        if (seat < REC_PLAYERS) s_mp.actor[seat] = 1;
+    }
+    for (i = 0; i < W->slots * 2; i++)
+        if (!mp_list_put(&s_mp.list[i], W->list[i].img, W->list[i].n) ||
+            !mp_list_put(&s_mp.s_list[i], W->list[i].img, W->list[i].n)) {
+            mp_fail("no memory for the level-start order lists");
+            return 0;
+        }
+    memcpy(s_mp.s_live, W->live, W->slots);
+    memcpy(s_mp.s_unit, W->unit, (size_t)W->slots * REC_UNIT_IMAGE);
+    memcpy(s_mp.s_player, W->player, sizeof s_mp.s_player);
+    return 1;
+}
+
+/* the action's slot is one of the level's: first_checks matched the counts to the recording's */
+static int mp_slot_ok(const Lv* L, const RecMpLifeAction* a)
+{
+    return a->slot >= 1 && a->slot < L->nslots && a->slot < s_mp.slots;
+}
+
+/* An initial unit the recorder's level start did not hold -- a remote owner's, which reaches the
+   recorder as a network replica -- made from its owner's first image as level_units makes one:
+   its loader made it with its Create script's children, which nothing records. */
+static int mp_bootstrap_make(const Lv* L, unsigned slot, const uint32_t* img)
+{
+    const char* ib = (const char*)img;
+    int32_t pos[3];
+    float built;
+    memcpy(pos, ib + 0x6A, 12);
+    memcpy(&built, ib + U_BUILT, 4);
+    if (!make(L, slot, (unsigned char)ib[U_OWNERIX], img_type(img), pos, build_finished(built),
+              img[U_STATE / 4] & 3u, 1))
+        return 0;
+    s_mp.made++;
+    return 1;
+}
+
+static int mp_create(const Lv* L, const RecMpLifeAction* a)
+{
+    const unsigned char* b = a->image;
+    uint32_t id, finished;
+    unsigned short type;
+    int32_t pos[3];
+    if (a->bytes != 28) return 0;
+    memcpy(&id, b, 4);
+    memcpy(&type, b + 4, 2);
+    memcpy(&finished, b + 8, 4);
+    memcpy(pos, b + 12, 12);
+    if (id - 1 != a->slot || !make(L, a->slot, b[6], type, pos, finished, b[7] & 3u, 0))
+        return 0;
+    memcpy(s_mp.create + (size_t)a->slot * MP_CREATE, b, 28);
+    s_mp.create[(size_t)a->slot * MP_CREATE + 28] = 0;
+    s_mp.held[a->slot] = 1;
+    s_mp.live[a->slot] = 0;
+    mp_lists_clear(a->slot);
+    s_mp.made++;
+    return 1;
+}
+
+/* the create's water state, as ev_create writes it: the success exit's own value */
+static int mp_created(const Lv* L, const RecMpLifeAction* a)
+{
+    uint32_t water;
+    if (a->bytes != 28 || !host_live(L, a->slot)) return 0;
+    water = a->image[24];
+    if (water > WATER_MAX) return 0;
+    memcpy(unit_at(L, a->slot) + U_WATER, &water, 4);
+    s_mp.create[(size_t)a->slot * MP_CREATE + 24] = (unsigned char)water;
+    s_mp.create[(size_t)a->slot * MP_CREATE + 28] = 1;
+    return 1;
+}
+
+/* THE DEATHS ON A MULTIPLAYER LEVEL. A unit's end is its owner's: DEATH_END runs the destructor
+   through ev_death at the owner's time, with the feature gates shut and the record's corpse level
+   cleared, so it changes neither the grid nor the pool. A death's feature effects are the
+   recorder's: its corpse (FR_CORPSE, the destructor's call of 0x486360 recorded as a root) and
+   its explosion's feature calls are roots of the primary stream, made by root_play at their
+   recorded phase and in recorded order like every other root. The unit's end and its corpse
+   therefore split in time on the recorder's units seen from another machine: the approved rule
+   keeps deaths on the owner's clock and features on the recorder's.
+
+   THE INVARIANT is an ordering. On such a level the feature grid's structure and the wreck pool's
+   structure change only through the recorder's feature roots, made here in recorded order at
+   their recorded phases: the seven feature gates refuse every other call, and the owner-timed
+   destructor runs with them shut and its corpse level cleared. Each root reads only what the
+   recording makes equal -- the grid and the pool, by induction; the feature and unit defs, which
+   data_match pins; its draws, armed; the one unit slot a feature call tests, FS_SOURCE; its
+   recorded arguments, bounded. A spawn takes the free list's head (0x423DA8) and the list mover
+   pushes at it (0x4232F0, LIFO), so one call out of order would shift every later record; in
+   order, from the level's start, every spawn meets the free list the recorder's met and takes the
+   record, the cell and the list place the recorder's took. The images keep comparing structure
+   and never write it.
+
+   A death's other events are its owner's (the materializer's ROOT actions), and a draw a death's
+   destructor made outside any root is counted, not played. The pump 0x4954C8 runs before the
+   capture 0x4954ED, so a remote unit's death the recorder applied from the network is recorded
+   LATE, after its iteration's tick root, and its corpse goes in there. MEASURED 2026-10-05, the
+   four-actor recording: 24 deaths; the 17 of remote units LATE with no root inside; the
+   recorder's own 7 at phase 0, 6 holding explosion roots; every remote death applied by its owner
+   2..7 ticks before the recorder observed it. */
+static int mp_death(const Lv* L, const RecMpLifeAction* a)
+{
+    int done = ev_death(L, a->image, a->bytes, 0);
+    s_fst.deaths++;
+    return done;
+}
+
+static int mp_root(const Lv* L, const RecMpLifeAction* a)
+{
+    int done;
+    unsigned k = a->kind;
+    switch (k) {
+    case RK_EV_START_NAMED: done = ev_start_named(L, a->image, a->bytes); break;
+    case RK_EV_REPLY:       done = ev_reply(L, a->image, a->bytes); break;
+    case RK_EV_SPRAY:       done = ev_spray(L, a->image, a->bytes); break;
+    default:                return 0;
+    }
+    s_mp.roots++;
+    if (done) {
+        s_mp.rplayed++;
+        s_st.played[k - RK_EV_CREATE]++;
+    } else {
+        s_st.skipped[k - RK_EV_CREATE]++;
+    }
+    return 1;
+}
+
+/* THE SEEK OF A MULTIPLAYER RECORDING. The composed world of iteration T is what the forward
+   playing holds when the world holds iteration T: every envelope read through T, those of T
+   applied up to its first post-capture root batch, the rest of T held (THE CLOCK). mp_rebuild makes
+   it so by construction: the level-start composed world, a fresh consumer, every envelope from
+   the first (recr_mp_apply from ordinal 0, the reader standing at T), then mp_apply_held and
+   mp_authority as mp_step_image calls them -- the same reads, the same order, the same split.
+   Only the actions differ: here they compose data and touch no engine state (mp_compose), since
+   the seek then makes every unit of the composed world itself, as it makes a skirmish's (R7),
+   and a unit created but not yet described from its create's own arguments (mp_make_held). A
+   private root is not played, as a skirmish seek plays no event before T. What a refusal leaves:
+   mp_fail stops the playing, so nothing composed half is ever applied. */
+static int mp_compose(const Lv* L, const RecMpLifeAction* a)
+{
+    unsigned char* c = s_mp.create + (size_t)a->slot * MP_CREATE;
+    switch (a->action) {
+    case RECMP_LIFE_BOOTSTRAP:
+    case RECMP_LIFE_IMAGE:
+        if (a->bytes != REC_UNIT_IMAGE) break;
+        memcpy(s_mp.unit + (size_t)a->slot * REC_UNIT_DWORDS, a->image, REC_UNIT_IMAGE);
+        s_mp.live[a->slot] = 1;
+        s_mp.held[a->slot] = 0;
+        return 1;
+    case RECMP_LIFE_ABSENCE:
+        s_mp.live[a->slot] = 0;
+        return 1;
+    case RECMP_LIFE_CREATE_BEGIN:
+        if (a->bytes != 28) break;
+        memcpy(c, a->image, 28);
+        c[28] = 0;
+        s_mp.held[a->slot] = 1;
+        s_mp.live[a->slot] = 0;
+        mp_lists_clear(a->slot);
+        return 1;
+    case RECMP_LIFE_CREATE_END:
+        if (a->bytes != 28) break;
+        if (s_mp.held[a->slot]) {
+            c[24] = a->image[24];
+            c[28] = 1;
+        }
+        return 1;
+    case RECMP_LIFE_DEATH_BEGIN:
+        return 1;
+    case RECMP_LIFE_DEATH_END:
+        if (a->bytes != 12 + REC_UNIT_IMAGE) break;
+        s_mp.live[a->slot] = 0;
+        s_mp.held[a->slot] = 0;
+        mp_lists_clear(a->slot);
+        return 1;
+    case RECMP_LIFE_ROOT:
+        s_mp.croots++;
+        return 1;
+    default:
+        break;
+    }
+    mp_fail("GameTime %u: an owner action %u of slot %u (%u bytes) cannot be composed", L->now,
+            a->action, a->slot, a->bytes);
+    return 0;
+}
+
+static int mp_action(void* ctx, const RecMpLifeAction* a)
+{
+    const Lv* L = s_mp.L;
+    const char* what = "";
+    (void)ctx;
+    if (!mp_slot_ok(L, a)) {
+        mp_fail("GameTime %u: an owner action names slot %u, outside the level", L->now, a->slot);
+        return 0;
+    }
+    if (s_mp.compose) return mp_compose(L, a);
+    switch (a->action) {
+    case RECMP_LIFE_BOOTSTRAP:
+        if (a->bytes == REC_UNIT_IMAGE && !host_live(L, a->slot) &&
+            !mp_bootstrap_make(L, a->slot, (const uint32_t*)(const void*)a->image)) {
+            what = "a first image";
+            break;
+        }
+        /* fall through: the unit is here, as its owner's loader made it */
+    case RECMP_LIFE_IMAGE:
+        if (a->bytes != REC_UNIT_IMAGE ||
+            !holds(L, a->slot, (const uint32_t*)(const void*)a->image)) {
+            what = a->action == RECMP_LIFE_BOOTSTRAP ? "a first image" : "an image";
+            break;
+        }
+        memcpy(s_mp.unit + (size_t)a->slot * REC_UNIT_DWORDS, a->image, REC_UNIT_IMAGE);
+        s_mp.live[a->slot] = 1;
+        s_mp.held[a->slot] = 0;
+        s_mp.images++;
+        return 1;
+    case RECMP_LIFE_ABSENCE:
+        if (host_live(L, a->slot)) {
+            what = "an absence";
+            break;
+        }
+        s_mp.live[a->slot] = 0;
+        return 1;
+    case RECMP_LIFE_CREATE_BEGIN:
+        if (mp_create(L, a)) return 1;
+        what = "a create";
+        break;
+    case RECMP_LIFE_CREATE_END:
+        if (mp_created(L, a)) return 1;
+        what = "a create's return";
+        break;
+    case RECMP_LIFE_DEATH_BEGIN:
+        if (host_live(L, a->slot)) return 1;
+        what = "a death";
+        break;
+    case RECMP_LIFE_DEATH_END:
+        if (a->bytes == 12 + REC_UNIT_IMAGE && mp_death(L, a)) {
+            s_mp.live[a->slot] = 0;
+            s_mp.held[a->slot] = 0;
+            mp_lists_clear(a->slot);
+            s_mp.destroyed++;
+            return 1;
+        }
+        what = "a death's return";
+        break;
+    case RECMP_LIFE_ROOT:
+        if (mp_root(L, a)) return 1;
+        what = "a private root";
+        break;
+    default:
+        what = "an unknown action";
+        break;
+    }
+    mp_fail("GameTime %u: %s of slot %u (owner %u, birth %u) does not apply here", L->now, what,
+            a->slot, a->source.origin, a->birth);
+    return 0;
+}
+
+/* THE CLOCK. The recorder's B2 at GameTime T (tagpu_recorder.c, mp_capture) flushes its own
+   roots of unit tick T-1, advances, flushes the roots its pump made at T, publishes its own
+   player images of T, consumes every remote contribution that has arrived, then publishes its
+   own unit, order and explored images of T; the roots its unit tick T then makes are flushed
+   at the next B2, still labelled T. So the
+   envelopes of application tick T are, in ledger order, those the recorder held when it
+   captured image T, then its own post-capture roots of T. The replay plays image T at step T-1:
+   step T-1 applies tick T's envelopes up to the first post-capture root batch the recorder
+   produced, and step T applies the rest after its primary events, where its unit tick made
+   them. */
+static void mp_envelope(void* ctx, const RecMpRecord* where, const RecMpHeader* packet,
+                        const void* body, unsigned bytes)
+{
+    MpHeld* e;
+    (void)ctx;
+    if (s_mp.failed) return;
+    if (bytes > RECMP_BODY_MAX) {
+        mp_fail("an envelope of %u bytes, past the %u a packet holds", bytes,
+                (unsigned)RECMP_BODY_MAX);
+        return;
+    }
+    if (s_mp.nq == s_mp.capq) {
+        unsigned cap = s_mp.capq ? s_mp.capq * 2 : 64;
+        MpHeld* q = realloc(s_mp.q, (size_t)cap * sizeof *q);
+        if (!q) {
+            mp_fail("no memory for %u held envelopes", cap);
+            return;
+        }
+        s_mp.q = q;
+        s_mp.capq = cap;
+    }
+    e = &s_mp.q[s_mp.nq++];
+    e->where = *where;
+    e->packet = *packet;
+    e->bytes = bytes;
+    memcpy(e->body, body, bytes);
+}
+
+/* THE CHAT OF A MULTIPLAYER RECORDING. Each text entry is shown when the recorder applied it, the
+   clock every composed contribution keeps (THE CLOCK), through the stock display sink 0x463CA0
+   (text, flags, unit, source row) that the text receive case 0x45522E calls. Who sees it follows
+   the viewed record: the viewer's own record V is the full map, where every message shows once,
+   at its author's original (a SOURCE entry, whose origin is its recipient); a player's view shows
+   what that player's machine showed -- its own lines as the formatter's local echo (source row
+   10, the entry's display flags, 0x463ED4) and the lines its machine received (RECEIVED entries
+   whose recipient is its origin, flags 8 as the receive case passes). An origin no actor of the
+   roster holds names no row and shows nothing. The sink copies 64 bytes and ends the line at 63
+   (0x463D25..0x463D41), so the text is copied out with a NUL after the packet's 64. A seek
+   empties the message log (sk_deadlines) and shows no line before T, as it plays no event
+   before T; hidden, nothing is shown. */
+typedef void (__stdcall *PFN_ChatShow)(const char* text, int flags, int unit, int row);
+#define E_ChatShow ((PFN_ChatShow)0x00463CA0u)
+
+static int mp_row(uint32_t origin)
+{
+    const RecHeader* h = recr_header(s_rd);
+    unsigned i;
+    for (i = 0; i < h->mp_seats.count; i++)
+        if (h->mp_seats.actor[i].origin == origin && h->mp_seats.actor[i].seat < REC_PLAYERS)
+            return (int)h->mp_seats.actor[i].seat;
+    return -1;
+}
+
+static void mp_text(const Lv* L, const MpHeld* e)
+{
+    unsigned count, i;
+    unsigned viewed = (unsigned char)L->ta[OFF_VIEWED];
+    int full = viewed == s_viewer;
+    uint32_t mine = 0;
+    if (!full) {
+        const RecHeader* h = recr_header(s_rd);
+        for (i = 0; i < h->mp_seats.count; i++)
+            if (h->mp_seats.actor[i].seat == viewed) mine = h->mp_seats.actor[i].origin;
+    }
+    if (e->bytes < 4) return;
+    memcpy(&count, e->body, 4);
+    if (count > RECMP_TEXT_COUNT || e->bytes != 4 + count * sizeof(RecMpTextEntry)) return;
+    for (i = 0; i < count; i++) {
+        RecMpTextEntry t;
+        char line[RECMP_CHAT_STOCK_BYTES];
+        int author;
+        memcpy(&t, e->body + 4 + (size_t)i * sizeof t, sizeof t);
+        s_mp.said++;
+        if (!tagpu_recmp_text_entry_valid(&t) || (author = mp_row(t.origin)) < 0) continue;
+        memcpy(line, t.stock + 1, sizeof line - 1);
+        line[sizeof line - 1] = 0;
+        if (s_chat_hidden) continue;
+        if (full ? t.phase == RECMP_TEXT_SOURCE :
+            t.phase == RECMP_TEXT_SOURCE ? t.origin == mine : t.recipient == mine) {
+            int own = !full && t.phase == RECMP_TEXT_SOURCE;
+            E_ChatShow(line, own ? (int)t.display : 8, 0, own ? 10 : author);
+            s_mp.shown++;
+        }
+    }
+}
+
+/* A recorded click, shown from its application tick (THE CLOCK), as chat is. The reader's history
+   has checked its length and fields (tagpu_recmp_pov_put); its origin names the seat, bounded
+   below REC_PLAYERS by mp_row, and an origin no actor holds shows nothing. A seek shows no click
+   from before T: mp_rebuild composes with the actions only, which take none. */
+static void mp_click(const MpHeld* e)
+{
+    RecClick c;
+    int seat;
+    if (e->bytes != sizeof c || (seat = mp_row(e->packet.origin)) < 0) return;
+    memcpy(&c, e->body, sizeof c);
+    if (c.player != RECMP_POV_PLAYER || !rec_click_ok(&c)) return;
+    c.player = (uint8_t)seat;
+    ov_click_put(e->where.tick, &c);
+}
+
+/* a root batch the recorder's own unit tick made after its capture point */
+static int mp_post_capture(const MpHeld* e)
+{
+    return e->where.phase == RECMP_RECORD_PRODUCED && e->packet.kind == RECMP_ROOTS &&
+           e->bytes >= 4 + sizeof(RecMpRootsEntry) &&
+           !((const RecMpRootsEntry*)(const void*)(e->body + 4))->before_capture;
+}
+
+/* the held envelopes through tick T, and with `image` tick T+1's up to its post-capture roots */
+static void mp_apply_held(const Lv* L, unsigned T, int image)
+{
+    unsigned i = 0;
+    s_mp.L = L;
+    for (; i < s_mp.nq && !s_mp.failed; i++) {
+        const MpHeld* e = &s_mp.q[i];
+        if (e->where.tick > T + (image ? 1u : 0u) ||
+            (image && e->where.tick == T + 1 && mp_post_capture(e)))
+            break;
+        if (!tagpu_recmp_lifecycle_record(s_mp.life, &e->where, &e->packet, e->body, e->bytes,
+                                          mp_action, NULL) && !s_mp.failed)
+            mp_fail("GameTime %u: the owners' contributions refused: %s", L->now,
+                    tagpu_recmp_lifecycle_error(s_mp.life));
+        if (!s_mp.compose && e->where.phase != RECMP_RECORD_PROOF && e->packet.kind == RECMP_TEXT)
+            mp_text(L, e);
+        if (!s_mp.compose && e->where.phase != RECMP_RECORD_PROOF && e->packet.kind == RECMP_CLICK)
+            mp_click(e);
+    }
+    memmove(s_mp.q, s_mp.q + i, (size_t)(s_mp.nq - i) * sizeof *s_mp.q);
+    s_mp.nq -= i;
+    s_mp.L = NULL;
+}
+
+/* The players and order lists through step T, by the reader's application authority; a player
+   or a list no owner has described yet keeps its level-start image. An order list goes in only
+   for the incarnation its owner described: the create and the death empty the slot's lists
+   (mp_lists_clear), and a list whose birth is another incarnation's is not copied. */
+static void mp_authority(const Lv* L)
+{
+    const RecHeader* h = recr_header(s_rd);
+    unsigned i, slot, list;
+    char why[sizeof s_mp.why];
+    for (i = 0; i < h->mp_seats.count && !s_mp.failed; i++) {
+        const RecMpSeat* st = &h->mp_seats.actor[i];
+        RecMpPlayerState ps;
+        int k = recr_mp_player(s_rd, st->origin, &ps, why, sizeof why);
+        if (k < 0) mp_fail("GameTime %u: player authority: %s", L->now, why);
+        else if (k && st->seat < REC_PLAYERS) memcpy(s_mp.player[st->seat], ps.image, sizeof ps.image);
+    }
+    /* each actor's explored map, by the same authority as its player record */
+    for (i = 0; i < h->mp_seats.count && !s_mp.failed; i++) {
+        const RecMpSeat* st = &h->mp_seats.actor[i];
+        RecMpExploreState es;
+        int k;
+        if (st->seat >= REC_PLAYERS) continue;
+        k = recr_mp_explored(s_rd, st->origin, &es, s_mp.xmap + (size_t)st->seat * s_mp.xbytes,
+                             s_mp.xbytes, why, sizeof why);
+        if (k < 0) mp_fail("GameTime %u: explored-map authority: %s", L->now, why);
+        else if (k && es.bytes != s_mp.xbytes)
+            mp_fail("GameTime %u: origin %u's explored map is %u bytes, the level's %u", L->now,
+                    st->origin, es.bytes, s_mp.xbytes);
+        else s_mp.xvalid[st->seat] = (unsigned char)k;
+    }
+    /* each actor's camera samples and selection, by the same authority: the samples' ticks are
+       the recorder's application ticks, the clock the displayed tick n counts in (persp_world).
+       The history has held every selection entry inside the actor's own block and below
+       REC_SEL_MAX (tagpu_recmp_pov_put); a seat is below REC_PLAYERS */
+    for (i = 0; i < h->mp_seats.count && !s_mp.failed; i++) {
+        const RecMpSeat* st = &h->mp_seats.actor[i];
+        RecMpPovState ps;
+        RecMpSelectState ss;
+        unsigned n;
+        int k;
+        if (st->seat >= REC_PLAYERS) continue;
+        k = recr_mp_pov(s_rd, st->origin, &ps, why, sizeof why);
+        if (k < 0) {
+            mp_fail("GameTime %u: perspective authority: %s", L->now, why);
+            break;
+        }
+        s_mp.npov[st->seat] = k ? ps.count : 0;
+        for (n = 0; k && n < ps.count && n < 2; n++) {
+            s_mp.pov[st->seat][n] = ps.sample[n].pov;
+            s_mp.pov[st->seat][n].player = (uint8_t)st->seat;
+            s_mp.pov_tick[st->seat][n] = ps.sample[n].applied_tick;
+        }
+        k = recr_mp_select(s_rd, st->origin, &ss, s_mp.sel + (size_t)st->seat * REC_SEL_MAX,
+                           REC_SEL_MAX, why, sizeof why);
+        if (k < 0) mp_fail("GameTime %u: selection authority: %s", L->now, why);
+        else s_mp.nsel[st->seat] = k ? ss.count : 0;
+    }
+    for (slot = 1; slot < s_mp.slots && !s_mp.failed; slot++) {
+        RecMpLifeState ls;
+        if (!s_mp.live[slot] && !s_mp.held[slot]) continue;
+        if (tagpu_recmp_lifecycle_get(s_mp.life, slot, &ls) != 1) continue;
+        for (list = 0; list < 2; list++) {
+            RecMpOrderState os;
+            RecList* l = &s_mp.list[(size_t)slot * 2 + list];
+            int k = recr_mp_orders(s_rd, slot, list, &os, s_mp.nodes, RECMP_ORDER_MAX, why,
+                                   sizeof why);
+            if (k < 0) {
+                mp_fail("GameTime %u: order authority: %s", L->now, why);
+                break;
+            }
+            if (!k || os.birth != ls.birth) continue;
+            if (!mp_list_put(l, s_mp.nodes, os.count)) mp_fail("no memory for an order list");
+        }
+    }
+}
+
+/* Step T's own post-capture roots, after its primary events (THE CLOCK) */
+static void mp_step_events(const Lv* L, unsigned T)
+{
+    if (!s_mp.on || s_mp.failed) return;
+    mp_apply_held(L, T, 0);
+    if (s_mp.failed) s_over = 1;
+}
+
+/* What image T+1 rests on, once the world holds iteration T+1 (THE CLOCK): the envelopes read
+   through T+1, those of T+1 up to its post-capture roots applied, then the players and lists */
+static void mp_step_image(const Lv* L, unsigned T)
+{
+    char why[160];
+    if (!s_mp.on || s_mp.failed) return;
+    if (recr_mp_apply(s_rd, &s_mp.ordinal, mp_envelope, NULL, why, sizeof why) < 0)
+        mp_fail("GameTime %u: the contributions cannot be read: %s", L->now, why);
+    if (!s_mp.failed) mp_apply_held(L, T, 1);
+    if (!s_mp.failed) mp_authority(L);
+    if (s_mp.failed) s_over = 1;
+}
+
+/* the world images_put reads: the primary world with the composed units, lists and actors'
+   player records. A record no actor holds has no owner to describe it, so the recorder's
+   observation is its one source: the destructor's rank update moves every record's +0x148, the
+   unseated ones included -- its loop over the ten records has no activity test
+   (0x486BE7..0x486C13, DISASSEMBLED). */
+static const RecWorld* mp_world(const RecWorld* W)
+{
+    unsigned p, i, n;
+    if (!s_mp.on || W == &s_mp.W) return W;
+    s_mp.W = *W;
+    s_mp.W.live = s_mp.live;
+    s_mp.W.unit = s_mp.unit;
+    s_mp.W.list = s_mp.list;
+    for (p = 0; p < REC_PLAYERS; p++)
+        if (s_mp.actor[p]) memcpy(s_mp.W.player[p], s_mp.player[p], sizeof s_mp.player[p]);
+    /* The explored map: an actor's bit in every entry is its owner's, a bit for each entry in
+       the map's own order (tagpu_recmp_explored.h), the other bits the recorder's. The bit is the
+       record's +0x146 as the recording machine stamped it, bounded to the entry's 16. */
+    memcpy(s_mp.mapped, W->mapped, W->mapped_bytes);
+    n = W->mapped_bytes / 2;
+    for (p = 0; p < REC_PLAYERS; p++) {
+        const unsigned char* x = s_mp.xmap + (size_t)p * s_mp.xbytes;
+        unsigned b = ((const unsigned char*)W->player[p])[PL_MAPBIT];
+        if (!s_mp.xvalid[p]) continue;
+        if (b >= 16) {
+            mp_fail("record %u's explored-map bit is %u", p, b);
+            break;
+        }
+        for (i = 0; i < n; i++) {
+            uint16_t v;
+            memcpy(&v, s_mp.mapped + 2 * i, 2);
+            v = (uint16_t)((v & ~(1u << b)) | ((x[i >> 3] >> (i & 7) & 1u) << b));
+            memcpy(s_mp.mapped + 2 * i, &v, 2);
+        }
+    }
+    s_mp.W.mapped = s_mp.mapped;
+    return &s_mp.W;
+}
+
+/* The world the perspective reads -- Follow, the overlays and the cards: in a multiplayer
+   recording's own segment the reader's world with the composed units and lists and the actors'
+   samples and selections (mp_authority), anywhere else the reader's own. The samples' ticks are
+   the recorder's application ticks and W->tick is the application tick the world holds, so the
+   displayed tick n is the composed application tick. A copy of the world's fixed part, rewritten
+   at each call on the game thread; the explored map is the primary world's, which nothing here
+   reads. */
+static const RecWorld* persp_world(void)
+{
+    const RecWorld* W = recr_world(s_rd);
+    if (!s_mp.on) return W;
+    s_mp.P = *W;
+    s_mp.P.live = s_mp.live;
+    s_mp.P.unit = s_mp.unit;
+    s_mp.P.list = s_mp.list;
+    memcpy(s_mp.P.npov, s_mp.npov, sizeof s_mp.npov);
+    memcpy(s_mp.P.pov, s_mp.pov, sizeof s_mp.pov);
+    memcpy(s_mp.P.pov_tick, s_mp.pov_tick, sizeof s_mp.pov_tick);
+    memcpy(s_mp.P.nsel, s_mp.nsel, sizeof s_mp.nsel);
+    s_mp.P.sel = s_mp.sel;
+    return &s_mp.P;
+}
+
+/* the composed world of iteration T, the reader standing at T (THE SEEK OF A MULTIPLAYER
+   RECORDING); 1 composed, 0 the playing stopped */
+static int mp_rebuild(const Lv* L, unsigned T)
+{
+    const RecHeader* h = recr_header(s_rd);
+    char why[160];
+    unsigned i;
+    if (s_mp.failed) return 0;
+    tagpu_recmp_lifecycle_end(s_mp.life);
+    s_mp.life = tagpu_recmp_lifecycle_begin(&h->mp, &h->mp_seats, L->ndefs);
+    if (!s_mp.life) {
+        mp_fail("no memory for the seek's owner consumer");
+        return 0;
+    }
+    memcpy(s_mp.live, s_mp.s_live, s_mp.slots);
+    memcpy(s_mp.unit, s_mp.s_unit, (size_t)s_mp.slots * REC_UNIT_IMAGE);
+    memcpy(s_mp.player, s_mp.s_player, sizeof s_mp.player);
+    memset(s_mp.held, 0, s_mp.slots);
+    memset(s_mp.xvalid, 0, sizeof s_mp.xvalid);
+    memset(s_mp.npov, 0, sizeof s_mp.npov);
+    memset(s_mp.nsel, 0, sizeof s_mp.nsel);
+    for (i = 0; i < s_mp.slots * 2; i++)
+        if (!mp_list_put(&s_mp.list[i], s_mp.s_list[i].img, s_mp.s_list[i].n)) {
+            mp_fail("no memory for the seek's order lists");
+            return 0;
+        }
+    s_mp.nq = 0;
+    s_mp.ordinal = 0;
+    s_mp.croots = 0;
+    s_mp.compose = 1;
+    if (recr_mp_apply(s_rd, &s_mp.ordinal, mp_envelope, NULL, why, sizeof why) < 0)
+        mp_fail("the seek to %u cannot read the contributions: %s", T, why);
+    if (!s_mp.failed) mp_apply_held(L, T - 1, 1);
+    s_mp.compose = 0;
+    if (!s_mp.failed) mp_authority(L);
+    if (s_mp.failed) return 0;
+    s_mp.rebuilt++;
+    return 1;
+}
+
+/* a unit its owner created and has not yet described, made from its create's arguments as
+   mp_create made it, its water from the create's return; how many */
+static unsigned mp_make_held(const Lv* L)
+{
+    unsigned slot, made = 0;
+    for (slot = 1; slot < s_mp.slots; slot++) {
+        const unsigned char* c = s_mp.create + (size_t)slot * MP_CREATE;
+        uint32_t id, finished, water;
+        unsigned short type;
+        int32_t pos[3];
+        if (!s_mp.held[slot]) continue;
+        memcpy(&id, c, 4);
+        memcpy(&type, c + 4, 2);
+        memcpy(&finished, c + 8, 4);
+        memcpy(pos, c + 12, 12);
+        if (id - 1 != slot || !make(L, slot, c[6], type, pos, finished, c[7] & 3u, 0)) continue;
+        water = c[24];
+        if (c[28] && water <= WATER_MAX) memcpy(unit_at(L, slot) + U_WATER, &water, 4);
+        made++;
+    }
+    return made;
+}
+
+/* The materializer follows the segment the reader stands in. A multiplayer file's takeover timeline
+   is a skirmish segment: a live skirmish recorded it, every unit its own seat's, so there the
+   replay plays it as a skirmish's -- the recorded world whole, the cells' slots and yard bits the
+   recording's -- and in the file's own segment it composes T's world (THE SEEK OF A MULTIPLAYER
+   RECORDING). Called after every reader seek, before the seek writes anything. 1, or 0 the
+   playing stopped. */
+static int mp_follow(const Lv* L, unsigned T)
+{
+    int here;
+    if (!s_mp.level) return 1;
+    here = recr_segment_mp(s_rd);
+    s_mp.on = here;
+    s_engine_cells = here;
+    tagpu_puppet_engine_cells(here);
+    return here ? mp_rebuild(L, T) : !s_mp.failed;
+}
+
+/* the primary events a mode-3 world carries for what the owners contribute. RK_EV_STATE and
+   RK_EV_BUILT among them: the recorder's copy takes a state change from the engine's 0x11 and a
+   build's finish from its 0x12 (the receiver 0x4555BA -> 0x41B8D0) at its own receipt time, on
+   another session, so that step is not the composed image's. The image's state byte is written
+   by books_put (THE UNITS' BOOKKEEPING), a finish by the image's own write (THE BUILD FINISH ON A
+   MULTIPLAYER LEVEL). */
+static int mp_owned_event(unsigned kind)
+{
+    return s_mp.on && (kind == RK_EV_CREATE || kind == RK_EV_START_NAMED ||
+                       kind == RK_EV_REPLY || kind == RK_EV_SPRAY || kind == RK_EV_STATE ||
+                       kind == RK_EV_BUILT);
+}
+
+/* The step's events in recorded order; with `defer`, the roots of a later phase into the store.
+   A skirmish recording's death is played whole by death_play, the roots inside it among them; a
+   multiplayer recording's death is its owner's, and only its roots go in here, each at its own
+   phase like any other (THE DEATHS ON A MULTIPLAYER LEVEL). */
 static void events_put(const Lv* L, const RecWorld* W, int defer)
 {
-    unsigned i, end, deaths = 0;
+    unsigned i, end, deaths = 0, mdeaths = 0;
+    int inroot = 0;
     if (defer) s_pend.L = *L;
     for (i = 0; i < W->nev; i++) {
         unsigned k = W->ev[i].kind;
+        if (mp_owned_event(k)) continue;
         switch (k) {
         case RK_EV_DEATH:
+            if (s_mp.on) {
+                mdeaths++;
+                s_mp.observed++;
+                if (W->ev[i].b[10] & 0xF) s_mp.ocorpse++;
+                break;
+            }
             if (death_play(L, W, i)) s_st.played[k - RK_EV_CREATE]++;
             else s_st.skipped[k - RK_EV_CREATE]++;
             deaths++;
             break;
         case RK_EV_DEATH_END:
-            deaths--;
+            if (s_mp.on) mdeaths--;
+            else deaths--;
+            break;
+        case RK_EV_FEATURE_END:
+            inroot = 0;
             break;
         case RK_EV_FEATURE:
-            if (deaths) break;
+            if (deaths) break;          /* death_play made it inside the destructor */
             if (defer && !s_pend.full && W->ev[i].b[1] > REC_PHASE_UNITS) {
                 if ((end = pend_add(W, i)) != 0) {
                     i = end;            /* the bracket's events go with its root */
@@ -3171,8 +4517,13 @@ static void events_put(const Lv* L, const RecWorld* W, int defer)
                 pend_play(REC_PHASE_LATE);  /* the held ones first: the order stays recorded */
             }
             root_play(L, W, i);
+            inroot = 1;
             break;
         default:
+            if (mdeaths && !inroot) {   /* a death's own events are its owner's */
+                if (k == RK_EV_DRAW) s_fst.left++;  /* a draw no recorded call made */
+                break;
+            }
             ev_play(L, &W->ev[i]);
             break;
         }
@@ -3185,7 +4536,7 @@ static void pace(char* ta, unsigned now)
 {
     unsigned p;
     for (p = 0; p < REC_PLAYERS; p++)
-        if (p != s_viewer && tagpu_puppet_seat(p)) memcpy(player_rec(ta, p) + PL_PACE, &now, 4);
+        if (tagpu_puppet_seat(p)) memcpy(player_rec(ta, p) + PL_PACE, &now, 4);
 }
 
 /* The cells' unit slots of the next image, ahead of its features (THE PHASES): the host's
@@ -3199,6 +4550,7 @@ static void slots_put(const Lv* L, const RecWorld* W)
 {
     unsigned i, k, j;
     uint16_t h[4], slot[2];
+    if (s_engine_cells) return;
     for (i = 0; i < W->nfeat; i++) {
         const unsigned char* b = W->feat[i].b;
         if (W->feat[i].kind != RK_CELLS) continue;
@@ -3245,9 +4597,10 @@ static void images_put(const Lv* L, const RecWorld* W, int defer)
 typedef void (__cdecl* PFN_MinimapFog)(void);
 #define E_MinimapFog  ((PFN_MinimapFog)0x00466C20u)
 
-/* FULL VISIBILITY (demo-recorder-s2-host.md §2.9), at the first step, once the loader's sight
-   rebuild 0x4816A0(1) (0x497AE5) has filled every seat's: V's sight counters all 1, the value
-   that rebuild writes when true LOS is off, and V's bit in every cell of the explored map, each
+/* FULL VISIBILITY (demo-recorder-s2-host.md §2.9), at the first frame visit or step
+   (viewer_init), after the loader's sight rebuild 0x4816A0(1) (0x497AE5) has filled every seat's
+   and reset the explored map: V's sight counters, record 10's, all 1, the value that rebuild
+   writes when true LOS is off, and V's bit in every cell of the explored map, each
    within the engine's own size of it -- the counters' byte count at +0x88, and the map's bytes as
    0x483CF6 allocates them and 0x4816A0 fills them. V owns no unit, so no stamp ever takes a
    count or a bit away, and the level shows everything while V is viewed: a perspective is only
@@ -3262,9 +4615,9 @@ typedef void (__cdecl* PFN_MinimapFog)(void);
    runs it as 0x4816A0 does. It composites whoever is viewed; in a seat's view it redoes that
    seat's picture from the same inputs. Its images exist from the level init (0x4919C3) to the
    teardown (0x491BAE), and so do the viewed record's counters, V's or a seated record's (the
-   player init 0x464700 to 0x464A00); every caller runs between the first step and the teardown
-   wrap, on the game thread, the one thread that reads them (the frame packet copies the images
-   in the in-play draw).
+   player init 0x464700 to 0x464A00); every caller runs in the in-play frame callback 0x496790
+   (the frame visit or the step) before the teardown wrap, on the game thread, the one thread that
+   reads them (the frame packet copies the images in the in-play draw).
    V's bit in the map is the one the engine's own setter 0x481930 sets for V, 1 << [V+0x146]
    (DISASSEMBLED 0x48194B..0x481951: `mov cl,[eax+0x146]; shl ebx,cl`), each entry a u16, so a
    value of 16 or more names no bit of it and nothing is set. */
@@ -3637,7 +4990,6 @@ static void mapped_put(char* ta, const RecWorld* W)
     *(uint16_t*)(ta + OFF_LOSTYPE) &= (uint16_t)~8u;
 }
 
-#define U_POS          0x6A         /* x, altitude, z: i32 each                                    */
 #define U_LOSXZ        0x7A         /* the sight stamp: its cell or corner, i16 x and z ...        */
 #define U_LOSH         0xF8         /* ... and its height or circle radius index, u8              */
 #define U_OWNERREC     0x96         /* the owner's player record                                   */
@@ -3703,6 +5055,21 @@ static int book_water(char* u, const unsigned char* ib, Books* b)
     return 1;
 }
 
+/* R8b's state half: the image's state byte where the host's differs, through the setter as ev_state
+   sets it -- the bits set, then the rest cleared -- so its scripts and replies start as on the
+   recording machine. The state gate is open around the two calls alone (tagpu_puppet.c): on a
+   multiplayer segment this is the byte's one writer on a puppet. 1 written */
+static int book_state(char* u, const unsigned char* ib, Books* b)
+{
+    if ((unsigned char)u[U_STATEBYTE] == ib[U_STATEBYTE]) return 0;
+    tagpu_puppet_state_open(1);
+    E_SetState(u, ib[U_STATEBYTE], 1);
+    E_SetState(u, (unsigned char)~ib[U_STATEBYTE], 0);
+    tagpu_puppet_state_open(0);
+    b->states++;
+    return 1;
+}
+
 /* R8b's stamp half (seek_unit_books has the engine's invariant and the bound): the circle's radius
    index bounded first, then, where the fields differ, the host's stamp removed through 0x482090
    when it made one, the image's three written, and stamped through 0x482270 when they describe
@@ -3758,7 +5125,17 @@ static int book_stamp(const Lv* L, char* u, const unsigned char* ib, uint16_t lo
    write puts the recording machine's values for that point, and nothing between the write and the
    recorder's capture, or the next unit tick, emits or runs 0x43DB50. The counters stay exact by
    R8b's own argument: the host's fields describe the host's stamps, so the removal takes back
-   exactly what was stamped. */
+   exactly what was stamped.
+   ON A MULTIPLAYER SEGMENT the state byte +0x10E is written here too, from W, the composed world:
+   its owner's image is the byte's one source there, since the recorder's state events follow the
+   recorder's own receipt of each change (mp_owned_event leaves them out) and the state gate
+   refuses every other change of a puppet's byte (tagpu_puppet.c). book_state writes it through
+   the setter as R8b does, so the scripts and replies a change starts run once, here. The
+   invariant is the same ordering: this is the last writer of the byte before the recorder's
+   capture and dump at every capture point, and R8b writes the same composed byte at a seek, so a
+   forward playing and a seek hold the same byte at every capture point. The bound is the loop's:
+   a slot below the level's count whose unit is of the image's type (holds). In a skirmish the
+   recorded state events are the byte's writer and nothing is written here. */
 static void books_put(const Lv* L, const RecWorld* W)
 {
     unsigned slot;
@@ -3776,6 +5153,7 @@ static void books_put(const Lv* L, const RecWorld* W)
         int made, wrote_w, wrote_s;
         if (!W->live[slot] || !holds(L, slot, img)) continue;
         u = unit_at(L, slot);
+        if (s_mp.on) book_state(u, ib, &s_gst.books);
         water = (unsigned char)u[U_WATER];
         memcpy(was, u + U_LOSXZ, 4);
         wasb = (unsigned char)u[U_LOSH];
@@ -3807,14 +5185,16 @@ static void tables_put(const Lv* L, const RecWorld* W, TabCounts* c, int seek);
    bits 1-2 the stamp's pair reads */
 static void recorded_put(const Lv* L, const RecWorld* W)
 {
+    const RecWorld* C = mp_world(W);    /* each unit's books and the explored map, whichever
+                                           stream drives them */
     masks_init();
     los_react(L->ta, W);
-    books_put(L, W);
+    books_put(L, C);
     tables_put(L, W, &s_gst.tab, 0);
     globals_put(L->ta, W);
     if (s_tk.on) holds_put(L->ta, W);
     proj_put(L, W);
-    mapped_put(L->ta, W);
+    mapped_put(L->ta, C);
     s_gst.puts++;
 }
 
@@ -3888,8 +5268,6 @@ void __cdecl tagpu_replay_capture(void)
                                        untested (0x423EBB..0x423EC2)                              */
 #define CELL_DRAWDEFER 0x04         /* flags bit 2: the draw's own (replay-layout.tsv, drawdefer)   */
 #define DEF_BORDER     0xFFFB       /* a cell def at or above this is no feature (0x4246EC)       */
-#define WR_NEXT        0x00         /* a wreck record's list links, i16: the next, the previous   */
-#define WR_PREV        0x02         /*   (the list mover 0x4232F0)                                */
 #define PL_RECORDS     11           /* the player records a SIM_ID_PLAYER may name                */
 #define PL_DISPLAY     0xF8         /* DisplayTimer, a GameTime deadline (0x464765)               */
 #define PASS_TICKS     30           /* the players phase's period (0x46507D..0x465092)            */
@@ -3919,6 +5297,12 @@ typedef void (__stdcall* PFN_ObjFree)(char* instance);
    owner, which a puppet host has none of. */
 typedef void (__cdecl* PFN_RadarPass)(void);
 #define E_RadarPass   ((PFN_RadarPass)0x00467440u)
+/* 0x466DC0(): the minimap's unit and projectile picture for the viewed record, no argument, plain
+   `ret` (0x46743D), which the players phase runs every tick for the viewed record alone
+   (0x465065..0x465072). Display state: its count main+0x1436B and main+0x142F1 bit 1 are the
+   viewer's own (replay-globals.tsv). */
+typedef void (__cdecl* PFN_MinimapRebuild)(void);
+#define E_MinimapRebuild ((PFN_MinimapRebuild)0x00466DC0u)
 /* the level init's resets, no argument, plain `ret`: the notices 0x47EE30 (DISASSEMBLED
    0x47EE30..0x47EEDA: the queue *(0x51E68C) emptied from its last entry, each queued text freed,
    the last sound's time +0x9D = 0, the 24 per-kind cooldowns at 0x5086EC + 0x18 k = 0) and the chat
@@ -4204,7 +5588,7 @@ static void sk_kills(const Lv* L)
             if (!host_live(L, slot)) continue;
             memcpy(&built, u + U_BUILT, 4);
             memcpy(&carrier, u + U_CARRIER, 4);
-            kind = built != 0.0f ? 0 : carrier ? 1 : 2;
+            kind = !build_finished(built) ? 0 : carrier ? 1 : 2;
             if (kind != pass) continue;
             memset(rec, 0, sizeof rec);
             rec[0] = 0x0C;
@@ -4217,13 +5601,38 @@ static void sk_kills(const Lv* L)
         if (host_live(L, slot)) s_sk.left++;
 }
 
+/* R3b, on a level whose cells are the engine's (s_engine_cells): every cell as the engine's own
+   would be with no unit alive. A unit's death clears the footprint it stands in, which on such a
+   level is where the engine put it; but the segment the reader stood in before this seek may be a
+   takeover timeline, whose cells were the recording's (mp_follow), and there a death leaves the
+   recorded cells that named the unit somewhere else. So a slot naming no live unit is dropped
+   (host_live), and with every unit gone (sk_kills' count) no yard bit stands. R7's creates and
+   R8's moves then stamp the composed world on a grid that holds nothing else. */
+static void sk_cells_clear(const Lv* L)
+{
+    unsigned c, k, ncells = L->gw * L->gh;
+    for (c = 0; c < ncells; c++) {
+        char* cell = L->grid + (size_t)c * REC_CELL_BYTES;
+        uint16_t slot[2];
+        memcpy(slot, cell, 4);
+        for (k = 0; k < 2; k++)
+            if (slot[k] && (slot[k] >= L->nslots || !host_live(L, slot[k]))) {
+                slot[k] = 0;
+                s_sk.fdropped++;
+            }
+        memcpy(cell, slot, 4);
+        if (!s_sk.left) cell[CELL_FLAGS] = (char)((unsigned char)cell[CELL_FLAGS] & ~CELL_YARDBIT);
+    }
+}
+
 /* R5: LosType bits 0-2 the recording's, then 0x4816A0 always, with 1 when Mapping changed (the
    Mapping command's own call, 0x416DA6) and 0 otherwise. With no unit alive and no temporary
    record left, its fill gives every record that passes its seat test the mode's base and its unit
    loop finds nothing, so the counters after R8 are the base plus the stamps of the units made at
    T at their image positions, and after R8b the base plus exactly the stamps the image's fields
-   describe, the recording machine's at T: a function of T alone either way. It undoes
-   sight_fill(V), which R14 redoes. */
+   describe, the recording machine's at T: a function of T alone either way. Its fill stops
+   before V's counters, record 10's (0x481707..0x48177A), and with 1 it clears V's bit of the
+   explored map (0x4816AF..0x4816FB); R14's sight_fill writes both again. */
 static void sk_sight_reset(char* ta, const RecWorld* W)
 {
     const ReplayGlobalSlot* g = &tagpu_replay_globals[0];
@@ -4248,7 +5657,9 @@ static void sk_sight_reset(char* ta, const RecWorld* W)
      it, so the bound is its enum's; a value past it keeps the host's and is counted. Setting it
      starts no script: COB restarts at a seek, and the unit's next change starts setSFXoccupy.
    - The state byte through the setter, as ev_state sets it; its scripts and its send run as in
-     R7's creates, which call it from the frame visit already (0x486148).
+     R7's creates, which call it from the frame visit already (0x486148). On a multiplayer
+     segment the state gate refuses the creates' call, and this write, book_state's, is the
+     byte's one change.
    - The sight stamp, by the engine's invariant (DISASSEMBLED): with LosType bit 1, in the ray fan
      a unit's byte is not 0 exactly when its fields describe a stamp it made, and in the circle its
      fields always do -- the create's 0x482AC0 stores byte 0 and goes through the emitter in the
@@ -4270,8 +5681,9 @@ static void sk_sight_reset(char* ta, const RecWorld* W)
      stamp, and is counted. The walks bound the words themselves (0x4822F8/0x482304, 0x481DD8,
      the circle's frame clipped at 0x4824F5..0x482547), and every byte is a height the emitter
      can store (0x4825EA..0x4825F2).
-   The water and stamp halves are book_water and book_stamp. In playback, books_put runs them at
-   every capture point (THE UNITS' BOOKKEEPING). Here they run for the seek's own reason, and
+   The water, state and stamp halves are book_water, book_state and book_stamp. In playback,
+   books_put runs the water and stamp halves at every capture point, and the state half on a
+   multiplayer segment (THE UNITS' BOOKKEEPING). Here they run for the seek's own reason, and
    R13's books_put then finds them equal. */
 static void seek_unit_books(const Lv* L, const RecWorld* W)
 {
@@ -4279,7 +5691,7 @@ static void seek_unit_books(const Lv* L, const RecWorld* W)
     uint16_t los;
     const uint16_t* circles = *(const uint16_t* const*)(L->ta + OFF_CIRCLES);
     unsigned char rec[SIGHT_REC];
-    Books b = { 0, 0, 0 };
+    Books b = { 0, 0, 0, 0 };
     memcpy(&los, L->ta + OFF_LOSTYPE, 2);
     for (slot = 1; slot < L->nslots; slot++) {
         const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
@@ -4288,14 +5700,11 @@ static void seek_unit_books(const Lv* L, const RecWorld* W)
         if (!W->live[slot] || !holds(L, slot, img)) continue;
         u = unit_at(L, slot);
         book_water(u, ib, &b);
-        if ((unsigned char)u[U_STATEBYTE] != ib[U_STATEBYTE]) {
-            E_SetState(u, ib[U_STATEBYTE], 1);
-            E_SetState(u, (unsigned char)~ib[U_STATEBYTE], 0);
-            s_sk.states++;
-        }
+        book_state(u, ib, &b);
         book_stamp(L, u, ib, los, circles, rec, &b);
     }
     s_sk.water += b.water;
+    s_sk.states += b.states;
     s_sk.stamps += b.stamps;
     s_sk.brefused += b.refused;
 }
@@ -4434,10 +5843,21 @@ static void sk_features(const Lv* L, const RecWorld* W)
         const unsigned char* img = W->grid + (size_t)c * REC_CELL_BYTES;
         char* cell = L->grid + (size_t)c * REC_CELL_BYTES;
         unsigned char keep = (unsigned char)cell[CELL_FLAGS] & CELL_DRAWDEFER;
-        uint16_t slot[2];
+        unsigned char yard = (unsigned char)cell[CELL_FLAGS] & CELL_YARDBIT;
+        uint16_t slot[2], host[2];
         unsigned k;
+        memcpy(host, cell, 4);
         memcpy(cell, img, REC_CELL_BYTES);
         cell[CELL_FLAGS] = (char)(((unsigned char)cell[CELL_FLAGS] & ~CELL_DRAWDEFER) | keep);
+        if (s_engine_cells) {
+            /* the slots and the yard bit are the engine's own (THE MULTIPLAYER MATERIALIZER):
+               R3's kills and R3b's clear took every unit off the grid and R7's creates and R8's
+               moves put the composed world's units on it, so the host's are that world's */
+            memcpy(cell, host, 4);
+            cell[CELL_FLAGS] = (char)(((unsigned char)cell[CELL_FLAGS] & ~CELL_YARDBIT) | yard);
+            s_sk.fcells++;
+            continue;
+        }
         memcpy(slot, img, 4);
         for (k = 0; k < 2; k++)
             if (slot[k] && (slot[k] >= L->nslots || !host_live(L, slot[k]))) {
@@ -4874,10 +6294,11 @@ static void sk_tables(const Lv* L, const RecWorld* W)
    - each seat's +0xF0, the players phase's 30-tick deadline, from image T: the step masks it
      because image T+1 carries it advanced by step T's phase, but image T's is what the recording
      machine's phase found at step T (0x46507D..0x465092: `if (+0xF0 <= GameTime) +0xF0 += 30`);
-   - V's +0xF0 the next multiple of 30 above GameTime, the engine's invariant (0x464990 zeroes it
-     at GameTime 0, the loader's players phase 0x497C10 sets 30, each step adds 30 once GameTime
-     reaches it): V's pass runs the radar pass and the minimap fog while V is viewed;
-   - every record's DisplayTimer +0xF8 = GameTime, as the player init sets it (0x464765);
+   - V's +0xF0, record 10's, the next multiple of 30 above GameTime, the engine's invariant for a
+     seat (the player init sets it to GameTime, 0 at the load, 0x464715; the loader's players
+     phase 0x497C10 sets 30; each step adds 30 once GameTime reaches it): V's pass runs the radar
+     pass and the minimap fog while V is viewed (viewer_frame);
+   - every record's DisplayTimer +0xF8 = GameTime, V's too, as the player init sets it (0x464765);
    - the notices and the chat lines through the level init's own resets 0x47EE30 and 0x463C80:
      the creates' queued replies go, and a backward seek leaves no cooldown or line stamped in the
      future.
@@ -4886,12 +6307,14 @@ static void sk_tables(const Lv* L, const RecWorld* W)
 static void sk_deadlines(char* ta, const RecWorld* W, unsigned now)
 {
     unsigned p, next = PASS_TICKS * (now / PASS_TICKS + 1);
+    char* v = player_rec(ta, REC_VIEWER);
     for (p = 0; p < REC_PLAYERS; p++) {
         char* rec = player_rec(ta, p);
-        if (p == s_viewer) memcpy(rec + PL_PASS, &next, 4);
-        else if (tagpu_puppet_seat(p)) memcpy(rec + PL_PASS, (const char*)W->player[p] + PL_PASS, 4);
+        if (tagpu_puppet_seat(p)) memcpy(rec + PL_PASS, (const char*)W->player[p] + PL_PASS, 4);
         memcpy(rec + PL_DISPLAY, &now, 4);
     }
+    memcpy(v + PL_PASS, &next, 4);
+    memcpy(v + PL_DISPLAY, &now, 4);
     E_NoticeReset();
     E_ChatReset();
 }
@@ -5011,7 +6434,8 @@ static void sight_change(char* ta)
     char why[200] = "the selected timeline is unavailable";
     const RecTimeline* timeline;
     s_viewPending = 0;
-    if (seat >= REC_PLAYERS || !level_of(ta, &L) || L.now == UINT32_MAX) return;
+    /* a recorded seat (tagpu_replay_sight_request), or V's record 10 for the full map */
+    if (seat > REC_VIEWER || !level_of(ta, &L) || L.now == UINT32_MAX) return;
     /* Expiry removes stamps with an expiry strictly below GameTime. At zero it can remove
        none; a seek to the first image has no stamps, so that case still permits Sight. */
     if (!L.now && *(const int*)(ta + OFF_NSIGHTRECS) != 0) {
@@ -5046,6 +6470,9 @@ static void sight_change(char* ta)
     minimap_fog(ta);
     E_RadarPass();
     E_SightExpire();
+    /* the new record's minimap picture now: on a paused frame no players phase runs, and
+       viewer_frame rebuilds record 10's only on a new GameTime */
+    E_MinimapRebuild();
     s_view = seat;
     tagpu_logf("replay: sight is seat %u at GameTime %u; death vision %u made, %u refused",
                seat, L.now, s_eye.made, s_eye.refused);
@@ -5059,7 +6486,10 @@ refused:
 static void sk_back(const Lv* L, unsigned prev)
 {
     char why[200];
-    if (recr_seek(s_rd, prev, 0, NULL, NULL, why, sizeof why) == 1) return;
+    if (recr_seek(s_rd, prev, 0, NULL, NULL, why, sizeof why) == 1) {
+        mp_follow(L, prev);             /* the materializer follows the reader */
+        return;
+    }
     s_over = 1;
     tagpu_logf("replay: %s cannot be read back to GameTime %u: %s; the units stop here", s_name,
                prev, why);
@@ -5184,9 +6614,10 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
         snprintf(why, cap, "the fork could not be played: %s", w2);
         return 0;
     }
-    /* TK4a's 0x464290 zeroes V's +0x74 without freeing it (0x46434A) */
+    /* TK4a's 0x464290 zeroes V's +0x74 without freeing it (0x46434A). The table 0x5119C0 has ten
+       entries, and record 10's is never written: THE VIEWER'S SEAT's BOUND */
     rec = player_rec(L->ta, s_viewer);
-    if (*(void* const*)(rec + PL_AI) || acq[s_viewer]) {
+    if (*(void* const*)(rec + PL_AI)) {
         snprintf(why, cap, "the viewer's record holds an AI object");
         return 0;
     }
@@ -5327,8 +6758,10 @@ static void tk_seats(char* ta, unsigned P, unsigned D)
    - the controlled and viewed record P: the end tests run only in the controlled record's
      iteration of the players phase (0x464FC7..0x46509D), so P's type 1 and this store are what
      let the level end;
-   - V deactivated through the seat activation. V's watcher bit and s_vinfo stay, and
-     tagpu_replay_level_after puts V's PlayerInfo back after the teardown. An active type-0 record
+   - V deactivated through the seat activation, index-safe for record 10 (THE VIEWER'S SEAT); it
+     writes PlayerInfo +0x94 = 0. V's watcher bit, its buffers and s_vinfo stay, and
+     tagpu_replay_level_after puts record 10 and its PlayerInfo back after the teardown, which
+     frees the buffers (0x464A00). An active type-0 record
      matches a never-activated one in every later reader but as the viewed or controlled record,
      which the store above has moved away;
    - every unit deselected, 0x48BD00 alone: under a modal screen it defers through 0x491D70(0),
@@ -5428,6 +6861,8 @@ static void rw_contacts(const Lv* L, const RecWorld* W)
 static int seek_run(char* ta)
 {
     RecWorld* W = recr_world(s_rd);
+    const RecWorld* V = W;                  /* the world the units are made from: in mode 3, the
+                                               composed one (THE SEEK OF A MULTIPLAYER RECORDING) */
     const int back = s_seek.mode == SK_NOW, convert = s_seek.mode == SK_REWIND;
     const int tk = s_seek.mode == SK_TAKEOVER || back;
     unsigned T = s_seek.T, prev = W->tick, h, nheads = 0, refused0, built0, P = s_seek.P;
@@ -5440,6 +6875,11 @@ static int seek_run(char* ta)
     s_seek.mode = SK_SEEK;                  /* consumed: rt_due's seek_run is a SEEK */
     s_seek.boundary = 0;
     snprintf(dump, sizeof dump, "%s", s_seek.dump);
+    ov_clicks_clear();                      /* no click from before T is shown after it */
+    if (s_mp.level && (convert || back)) {
+        sk_refused(tk, T, "a multiplayer recording has no rewind");
+        return 0;
+    }
     pend_finish();                          /* the step before it, whole (THE PHASES) */
     /* R0: position and validate; nothing of the host is touched before TK0 returns */
     if (!level_of(ta, &L)) {
@@ -5459,10 +6899,15 @@ static int seek_run(char* ta)
         if (k < 0 && !back) sk_back(&L, prev);
         return 0;
     }
+    if (!mp_follow(&L, T)) {
+        sk_refused(tk, T, s_mp.why);
+        return 0;
+    }
+    V = mp_world(W);
     QueryPerformanceCounter(&t1);
     memset(&s_sk, 0, sizeof s_sk);
     masks_init();
-    if (!sk_bound(&L, W, &nheads, why, sizeof why)) {
+    if (!sk_bound(&L, V, &nheads, why, sizeof why)) {
         sk_refused(tk, T, why);
         if (!back) sk_back(&L, prev);
         return 0;
@@ -5473,7 +6918,7 @@ static int seek_run(char* ta)
     }
     if (tk) {
         memset(&s_tk, 0, sizeof s_tk);
-        if (!tk_bound(&L, W, P, &D, back, why, sizeof why) ||
+        if (!tk_bound(&L, V, P, &D, back, why, sizeof why) ||
             (!back && !tk_open(T, why, sizeof why))) {
             tagpu_logf("replay: %s: takeover at %u refused: %s", s_name, T, why);
             if (!back) sk_back(&L, prev);
@@ -5490,6 +6935,7 @@ static int seek_run(char* ta)
     /* R3, on the clock the host holds: GameTime h >= 1, which R0 enforces (sk_bound) */
     refused0 = s_st.refused;
     sk_kills(&L);
+    if (s_engine_cells) sk_cells_clear(&L);
     if (convert) rw_seats(ta);
     /* R4: every temporary sight record dropped through the engine's own removal (the drop's
        comment): no temporary record outlives R5's refill, whose counters its later expiry would
@@ -5505,29 +6951,30 @@ static int seek_run(char* ta)
     if (tk) tk_seats(ta, P, (unsigned)D);
     /* R7: every unit of iteration T, made as the first step makes them; a refused create is a
        difference the comparison names, never a hazard (make bounds what it passes) */
-    s_sk.made = level_units(&L, W);
+    s_sk.made = level_units(&L, V);
+    if (s_mp.on) s_sk.made += mp_make_held(&L);
     /* R8: S2b's appliers, the features left to R10 */
-    links_put(&L, W);
-    units_put(&L, W);
-    yards_put(&L, W);
-    states_put(&L, W);
-    players_put(&L, W);
+    links_put(&L, V);
+    units_put(&L, V);
+    yards_put(&L, V);
+    states_put(&L, V);
+    players_put(&L, V);
     if (tk) tk_types(ta, P);
     built0 = s_st.obuilt;
-    orders_put(&L, W);
-    if (tk) s_tk.orphans = tk_orphans(&L, W);
+    orders_put(&L, V);
+    if (tk) s_tk.orphans = tk_orphans(&L, V);
     s_sk.refused = s_st.refused - refused0;
     /* R8b, after R8's moves, which re-emit */
-    seek_unit_books(&L, W);
+    seek_unit_books(&L, V);
     /* R9, R10, R11, R12 */
-    sk_buckets(&L, W, nheads);
-    sk_features(&L, W);
+    sk_buckets(&L, V, nheads);
+    sk_features(&L, V);
     s_sk.effects = tagpu_effects_clear();
-    sk_tables(&L, W);
+    sk_tables(&L, V);
     /* R13: the globals, the pool and the explored map, after R7's draws of the simulation RNG and
        R11; the LosType step finds R5's bits and does nothing */
     refused0 = s_gst.refused;
-    recorded_put(&L, W);
+    recorded_put(&L, V);
     s_sk.pool = s_gst.refused == refused0;
     /* R14a: the viewed seat's temporary sight records (THE SEEK'S SIGHT RECORDS) */
     eye_put(&L, T);
@@ -5559,13 +7006,24 @@ static int seek_run(char* ta)
     /* R14c: the records' expiry, as 0x495688 follows the players phase (THE SEEK'S SIGHT
        RECORDS) */
     E_SightExpire();
-    /* R15 */
+    /* R14d: the viewed record's minimap picture from the world at T, after the contacts it reads
+       (R14b). A playing rebuilds it every tick, in the players phase for a seat and in
+       viewer_frame for record 10; a seek on a paused frame runs neither, and a seat's picture
+       would show the world before the seek until the next tick. A takeover's waits for TK4a, whose
+       deselect removes the selected units' range circles the picture draws (+0x110 bit 4,
+       0x466F42..0x467039). */
+    if (!tk) E_MinimapRebuild();
+    /* R15, from the recorder's images: a deadline is the host's own clock's, which the recorder's
+       carries, where an owner's player image carries its own machine's (mp_world, players_put) */
     sk_deadlines(ta, W, T - 1);
     /* R16: inside the frame visit, before the next frame's scheduler 0x495230 sees the stamps: no
        lag, even after a forward seek of 900 ticks or more */
     pace(ta, T - 1);
     /* TK4a (THE TAKEOVER, tk_live) */
-    if (tk) tk_live(ta, P);
+    if (tk) {
+        tk_live(ta, P);
+        E_MinimapRebuild();
+    }
     /* R17: the next tick makes GameTime T; at its capture point the world holds iteration T and
        the step plays T's events and reads T+1, the play loop's own invariant */
     tagpu_puppet_rebuild(0);
@@ -5596,6 +7054,17 @@ static int seek_run(char* ta)
                s_sk.pool ? "written" : "REFUSED", W->proj_hw,
                s_sk.effects ? "cleared" : "NOT cleared", s_eye.made, s_eye.refused, s_eye.capped,
                SR_MAX);
+    if (s_mp.on) {
+        unsigned slot, live = 0, held = 0;
+        for (slot = 1; slot < s_mp.slots; slot++) {
+            live += s_mp.live[slot];
+            held += s_mp.held[slot];
+        }
+        tagpu_logf("replay: %s: the seek to %u composed the owners' contributions from the "
+                   "first (composition %u): %u units described, %u created and not yet "
+                   "described, %u envelopes of %u held, %u private roots not played", s_name, T,
+                   s_mp.rebuilt, live, held, s_mp.nq, T, s_mp.croots);
+    }
     /* TK4b (THE TAKEOVER, tk_end): s_rd is gone afterwards */
     if (back) rw_finish(ta, 1);
     else if (tk)
@@ -5630,6 +7099,7 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
     unsigned char seats[REC_PLAYERS] = {0}, locals[REC_PLAYERS] = {0};
     char path[MAX_PATH], *rec;
     unsigned char* info;
+    const RecSeat* shown = NULL;
     static unsigned serial;
     s_rw.P = (unsigned char)ta[OFF_CONTROLLED];
     s_rw.viewed = (unsigned char)ta[OFF_VIEWED];
@@ -5640,9 +7110,18 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
         return 0;
     }
     rec = player_rec(ta, v);
-    if (rec[PL_CONTROLLER] || *(void**)(rec + PL_AI) ||
-        ((void**)ACQ_TABLE)[v] || *(unsigned short*)(rec + PL_LIVE)) {
+    if (rec[PL_CONTROLLER] || *(void**)(rec + PL_AI) || *(unsigned short*)(rec + PL_LIVE) ||
+        !*(void**)(rec + PL_INFO)) {
         snprintf(why, cap, "the spectator seat is occupied");
+        return 0;
+    }
+    /* Record 10 holds no buffers until the level's first rewind takes it, and a later rewind
+       reuses the ones that one made; the player init frees old sight counters but no old group
+       table (0x464855, 0x4801A1..0x4801B1), so it runs only with both missing */
+    if ((!s_vrec.taken && (*(void**)(rec + PL_SIGHT) || *(void**)(rec + PL_GROUPS) ||
+                           *(void**)(rec + PL_EC))) ||
+        (!*(void**)(rec + PL_SIGHT) && *(void**)(rec + PL_GROUPS))) {
+        snprintf(why, cap, "the spectator seat holds buffers the rewind did not make");
         return 0;
     }
     for (i = 0; i < h->nseats; i++) {
@@ -5655,7 +7134,9 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
             return 0;
         }
         seats[st] = locals[st] = 1;
+        if (st == s_rw.P) shown = &h->seats[i];
     }
+    /* seats[P] is set only in the iteration that sets `shown`: past this test, P's header seat */
     if (!seats[s_rw.P] || s_rw.types[s_rw.P] != 1) {
         snprintf(why, cap, "the controlled seat is not a recorded local player");
         return 0;
@@ -5676,14 +7157,15 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
     s_rw.objective_armed = *(uint32_t*)(*(char**)(ta + OFF_OBJECTIVE) + OBJ_ARMED);
     memcpy(s_rw.messages, ta + 0x12EF, sizeof s_rw.messages);
     memcpy(s_rw.message_at, ta + 0x2A3E, sizeof s_rw.message_at);
+    viewer_take(ta);
     info = *(unsigned char**)(rec + PL_INFO);
     if (!s_vinfo.at) {
         s_vinfo.at = info;
         memcpy(s_vinfo.was, info, REC_INFO_BYTES);
     }
-    E_ActivateSeat(v, 3);
-    if (!*(void**)(rec + PL_SIGHT)) ((void (__stdcall*)(void*))0x464700u)(rec);
-    if (!*(void**)(rec + PL_SIGHT) || !*(void**)(rec + PL_GROUPS) || !*(void**)(rec + 0xEC)) {
+    viewer_seat(ta, shown);
+    if (!*(void**)(rec + PL_SIGHT)) E_PlayerInit(rec);
+    if (!*(void**)(rec + PL_SIGHT) || !*(void**)(rec + PL_GROUPS) || !*(void**)(rec + PL_EC)) {
         tagpu_refuse("Rewinding failed: the spectator's player buffers could not be allocated.");
         return 0;
     }
@@ -5695,14 +7177,12 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
         INFO_WATCHER | 0x10u | (*(unsigned short*)(ta + OFF_NPLAYERS) & 0x0Fu));
     info[0xA7] = (unsigned char)ta[1];
     info[0xA8] = (unsigned char)ta[2];
-    info[INFO_SIDE] = (*(unsigned char**)(player_rec(ta, s_rw.P) + PL_INFO))[INFO_SIDE];
     ta[OFF_CONTROLLED] = (char)v;
     ta[OFF_VIEWED] = (char)s_rw.P;
     s_viewer = v;
     s_view = s_rw.P;
     E_Disarm(*(void**)(ta + OFF_OBJECTIVE));
-    seats[v] = 1;
-    tagpu_puppet_begin(seats, locals);
+    tagpu_puppet_begin(seats, locals, 0);
     tagpu_puppet_play();
     s_first = s_dead = s_over = 0;
     s_rw.state = RW_PAST;
@@ -5820,7 +7300,8 @@ static void rw_poll(void)
         s_rd = recr_open(s_rw.path, why, sizeof why);
         if (!s_rd || recr_timeline(s_rd, s_rw.timeline, why, sizeof why) != 1 ||
             !validate_header(recr_header(s_rd), why, sizeof why, &s_rw.viewer, &refusal) ||
-            !validate_engine(ta, recr_header(s_rd), why, sizeof why) ||
+            !rw_skirmish(recr_header(s_rd), why, sizeof why) ||
+            !validate_engine(ta, recr_header(s_rd), why, sizeof why, 0) ||
             !first_checks(ta, recr_header(s_rd), why, sizeof why, &refusal, 0)) {
             tagpu_logf("rewind: open refused: %s", why); rw_close_unmoved(ta); return;
         }
@@ -5967,8 +7448,20 @@ static int rw_trigger(const char* line)
    - `takeover <P> at <T>` or `takeover <P> at <T> difficulty <D>`: on a level that plays a
      recording, the takeover waits for the next frame visit after the first step (THE TAKEOVER);
      the checks that need the world at T are R0's, so its refusals come from seek_run.
+   - `follow <seat>`, `jump <seat>`, `follow free`: the cards' Follow, Jump and Free cam
+     (FOLLOW, JUMP AND FREE CAM), for the next frame visit; a refusal is logged at once.
+   - `pov`: the next frame visit logs its Follow's answer -- the epoch, the seat, the displayed
+     tick, the sample the clock took, the view, the eye and the level -- or that nothing is
+     followed.
    - `cover <name>`: the coverage build's functions that ran, at once (tagpu_cover_write); any
-     other build refuses it with a line. */
+     other build refuses it with a line.
+   - `turbo on`: k ticks every frame until `turbo off` or the level's end, in a test launch whose
+     tagpu_turbo.on gave k (THE TURBO); refused with a line otherwise. `turbo off`: the game's own
+     pacing again.
+   - `pause at <T>`, T a decimal u32 past the level's GameTime: in a test launch's skirmish level
+     outside rewind, the game paused at the frame visit after step T (THE PAUSE AT T); one at a
+     time, a second replacing the first. `resume`: the pause bit cleared, as the Pause key clears
+     it, when THE PAUSE AT T set it; refused with a line otherwise (pacing_refusal). */
 /* `p` is a decimal u32 and nothing after it: 1 with its value */
 static int u32_word(const char* p, unsigned* v)
 {
@@ -6015,6 +7508,13 @@ static int takeover_words(const char* p, unsigned* P, unsigned* T, int* D)
 }
 
 static void rt_arm(const char* name, unsigned T);
+static void turbo_on(void);
+static void turbo_off(void);
+static void pace_level_end(void);
+static const char* pacing_refusal(const char* ta);
+static void pause_at_arm(unsigned T);
+static void pause_resume(void);
+static void pause_at_visit(void);
 
 static int fork_stem(const char* s)
 {
@@ -6092,8 +7592,29 @@ static void trigger_read(void)
             return;
         }
     }
+    if (!strcmp(line, "chat hide") || !strcmp(line, "chat show")) {
+        tagpu_replay_overlay_set(TAGPU_OV_CHAT, line[5] == 's');
+        return;
+    }
+    if (overlay_trigger(line)) return;
     if (sscanf(line, "cover %39s%n", name, &end) == 1 && !line[end]) {
         tagpu_cover_write(name);
+        return;
+    }
+    if (!strcmp(line, "turbo on")) {
+        turbo_on();
+        return;
+    }
+    if (!strcmp(line, "turbo off")) {
+        turbo_off();
+        return;
+    }
+    if (!strncmp(line, "pause at ", 9) && u32_word(line + 9, &T)) {
+        pause_at_arm(T);
+        return;
+    }
+    if (!strcmp(line, "resume")) {
+        pause_resume();
         return;
     }
     if (sscanf(line, "ai-activity %39s from %u until %u%n", name, &T, &P, &end) == 3 &&
@@ -6103,6 +7624,24 @@ static void trigger_read(void)
     }
     if (s_rw.state) {
         tagpu_logf("replay: refused: use rewind commands while live rewind owns the level");
+        return;
+    }
+    if (!strcmp(line, "pov")) {
+        if (tagpu_replay_live()) s_fl.pov = 1;
+        else tagpu_logf("replay: pov refused: this level plays no recording");
+        return;
+    }
+    if (!strcmp(line, "follow free")) {
+        if (!tagpu_replay_follow_request(-1, 0))
+            tagpu_logf("replay: free cam refused: this level plays no recording");
+        return;
+    }
+    if (!strncmp(line, "follow ", 7) && u32_word(line + 7, &P)) {
+        tagpu_replay_follow_request(P > 0x7FFFFFFFu ? 0x7FFFFFFF : (int)P, 0);
+        return;
+    }
+    if (!strncmp(line, "jump ", 5) && u32_word(line + 5, &P)) {
+        tagpu_replay_follow_request(P > 0x7FFFFFFFu ? 0x7FFFFFFF : (int)P, 1);
         return;
     }
     if (sscanf(line, "roundtrip %39s%n", name, &end) == 1 && !strncmp(line + end, " at ", 4) &&
@@ -6202,13 +7741,17 @@ void tagpu_replay_files_frame(unsigned frame)
    poison check's comparison exact: a frame dump <name>-a; the TRANSIENT declarations put back to
    the values saved at the playing's first frame visit (tagpu_simreg.h); the seek to T with the
    poison check; a frame dump <name>-b; one line. tarec compare-dumps A B must be EQUAL. One the
-   host passes is dropped with a line (a frame can run several steps), which tareplay reports as
-   could not run. */
+   reader already passed is dropped with a line. The pacing guard bounds the ordinary step
+   batch at each upcoming T-1, so simulation progression cannot skip an armed future target. */
 static void rt_arm(const char* name, unsigned T)
 {
     size_t i, n = strlen(name);
     if (!tagpu_puppet_on() || !s_rd || s_dead) {
         tagpu_logf("replay: round trip %s refused: this level plays no recording", name);
+        return;
+    }
+    if (!s_rt_pace_in) {
+        tagpu_logf("replay: round trip %s refused: the tick-batch guard is unavailable", name);
         return;
     }
     if (!n || n > 36 || T < 2) {
@@ -6300,13 +7843,65 @@ int tagpu_replay_held(void)
     return s_rd && s_hold;
 }
 
+/* The viewer's record's first fill, once a level whose record 10 the level init's call prepared:
+   its sight counters all 1 and its bit in every entry of the explored map, with the minimap's fog
+   (sight_fill), and its pass due at the next multiple of 30 above GameTime, as the loader's
+   players phase leaves a seat's (0x497C10). Called at the frame visit before its first-step
+   return and at the step, so a level's first draw, which can precede its first step (the frame
+   callback 0x496790 runs the steps 0x495490, possibly none, before the draw call 0x4969CD), shows
+   the whole map. ORDERING: both callers run inside 0x496790, the in-play callback, which runs only
+   once the loading loop has seen the loader's last write (bit 1 of main+0x38D75, set at
+   0x497C5F, tested at 0x498342), so the loader's READY is read after it was written. */
+static void viewer_init(char* ta)
+{
+    unsigned now, next;
+    if (s_vready || !tagpu_puppet_on() || !s_rd || s_dead ||
+        InterlockedCompareExchange(&s_vbuf, VB_READY, VB_READY) != VB_READY)
+        return;
+    s_vready = 1;
+    sight_fill(ta, REC_VIEWER);
+    now = *(const unsigned*)(ta + OFF_GAMETIME);
+    next = PASS_TICKS * (now / PASS_TICKS + 1);
+    memcpy(player_rec(ta, REC_VIEWER) + PL_PASS, &next, 4);
+}
+
+/* The players phase's work for the viewed record, while record 10 is viewed: its loop runs over
+   records 0-9 (0x4655A8..0x4655AF), so it never reaches V's iteration, where it would rebuild the
+   minimap every tick (0x465065..0x465072) and, on the record's 30-tick pass (+0xF0,
+   0x46507D..0x465092), run the radar pass and the minimap's fog (0x465565..0x465572). Once a
+   GameTime, at the frame visit, it shows what the draw after the frame's last tick would show: the
+   rebuild reads the projectile pool, which the step moves after its hook (0x49B720 at 0x495513).
+   A paused frame keeps its GameTime and runs nothing, as stock does. Several 30-tick boundaries in
+   one frame run the pass once [INFERRED to be equivalent: the pass recomputes the contact bits
+   from the present state]. LIFETIME: +0x2A43 names record 10 only while its buffers exist, from
+   the level init's call (THE VIEWER'S BUFFERS) or rw_prepare to the teardown, and the teardown
+   wrap's entry ends puppet mode (tagpu_replay_level_end) before 0x464A00 frees them. */
+static void viewer_frame(void)
+{
+    char* ta = ta_main();
+    char* rec;
+    unsigned now, pass;
+    if (!ta || !tagpu_puppet_on() || (unsigned char)ta[OFF_VIEWED] != REC_VIEWER) return;
+    now = *(const unsigned*)(ta + OFF_GAMETIME);
+    if (now == s_vframe) return;
+    s_vframe = now;
+    E_MinimapRebuild();
+    rec = player_rec(ta, REC_VIEWER);
+    memcpy(&pass, rec + PL_PASS, 4);
+    if (pass > now) return;
+    pass = PASS_TICKS * (now / PASS_TICKS + 1);
+    memcpy(rec + PL_PASS, &pass, 4);
+    E_RadarPass();
+    E_MinimapFog();
+}
+
 /* THE FRAME VISIT, before the in-play draw call 0x4969CD, on the game thread, between two sim
    steps and on paused frames too: the trigger; then, on a level that plays a recording and has
    played its first step, a pending seek (THE SEEK) or takeover (THE TAKEOVER), or else, once a
    GameTime, what the draw after a step shows (THE GLOBALS AND THE PROJECTILES). A seek or a
    takeover the trigger puts in place of a boundary's and that is refused leaves the reader at the
    boundary (sk_back), so the hold and its seek are put back. */
-static void __cdecl tagpu_replay_frame(void)
+static void frame_visit(void)
 {
     char* ta;
     unsigned now;
@@ -6315,6 +7910,7 @@ static void __cdecl tagpu_replay_frame(void)
     trigger_read();
     rw_poll();
     if (s_rw.state) return;
+    pause_at_visit();
     if (!tagpu_puppet_on() || !s_rd || s_dead || s_first) return;
     ta = ta_main();
     if (!ta) return;
@@ -6347,6 +7943,20 @@ static void __cdecl tagpu_replay_frame(void)
     /* Sight sees the same LosType and explored map as the draw, including a paused frame or
        the frozen state after EOF. A timeline boundary or takeover still has priority. */
     if (s_rd && s_viewPending && !s_seek.pending && !s_hold) sight_change(ta);
+}
+
+/* the frame visit, with the viewer's record's first fill before it and its viewed work and
+   Follow's camera after it, whichever way the visit returns */
+static void __cdecl tagpu_replay_frame(void)
+{
+    char* ta = ta_main();
+    if (ta) viewer_init(ta);
+    frame_visit();
+    viewer_frame();
+    if (ta) {
+        overlay_visit(ta);
+        follow_visit(ta);
+    }
 }
 
 /* once a level: at the recording's end, or at the level's when that comes first */
@@ -6384,11 +7994,13 @@ static void counts_log(const char* when, unsigned now)
                "another iteration; the pool refused %u times; the sight mode changed %u times, "
                "%u temporary sight records dropped, %u changes not made; the explored map changed "
                "by %u writes, %u entries in all, refused %u times; the units' bookkeeping: %u water "
-               "states and %u sight stamps written, %u refused; %u units made in the step before, "
+               "states, %u state bytes and %u sight stamps written, %u refused; %u units made in "
+               "the step before (water and stamps), "
                "%u others; the declared tables: %u rows written over the host's own values (in "
                "%s), %u values kept, %u skipped, %u repaired", s_name, s_gst.puts, s_gst.late,
                s_gst.refused, s_gst.reacts, s_gst.dropped, s_gst.unbounded, s_gst.mputs,
-               s_gst.mentries, s_gst.mrefused, s_gst.books.water, s_gst.books.stamps,
+               s_gst.mentries, s_gst.mrefused, s_gst.books.water, s_gst.books.states,
+               s_gst.books.stamps,
                s_gst.books.refused, s_gst.bmade, s_gst.bother, s_gst.tab.changed,
                s_gst.tab.names[0] ? s_gst.tab.names : "none", s_gst.tab.kept, s_gst.tab.skipped,
                s_gst.tab.repaired);
@@ -6396,6 +8008,15 @@ static void counts_log(const char* when, unsigned now)
     tagpu_logf("replay: %s: refused on puppets: %s", s_name, gates);
     tagpu_puppet_footprints(gates, sizeof gates);
     tagpu_logf("replay: %s: footprint writes: %s", s_name, gates);
+    if (s_mp.on)
+        tagpu_logf("replay: %s: owners: %u units made, %u destroyed, %u images, %u private roots "
+                   "(%u played), envelope %llu; %u deaths the recorder observed, %u with a corpse "
+                   "level; %u corpses made from its stream; %u builds finished and %u unfinished "
+                   "by an image; %u text entries, %u lines shown%s%s",
+                   s_name, s_mp.made, s_mp.destroyed, s_mp.images, s_mp.roots, s_mp.rplayed,
+                   (unsigned long long)s_mp.ordinal, s_mp.observed, s_mp.ocorpse, s_fst.corpses,
+                   s_mp.bfinished, s_mp.bunfinished, s_mp.said, s_mp.shown,
+                   s_mp.failed ? "; stopped: " : "", s_mp.failed ? s_mp.why : "");
 }
 
 /* The next iteration into the world; 0 when there is none, and the playing stops, or when it is
@@ -6464,17 +8085,16 @@ static void play(const Lv* L, int first)
     masks_init();
     if (first) {
         s_st.made += level_units(L, W);
-        images_put(L, W, 0);
+        if (recr_header(s_rd)->mode == MODE_NETWORK) {
+            if (mp_begin(L, W)) mp_step_image(L, W->tick - 1);
+            if (s_mp.failed) {
+                s_over = 1;
+                return;
+            }
+        }
+        images_put(L, mp_world(W), 0);
         wind_seed(W);
         sight_fill(L->ta, s_viewer);
-        /* V owns nothing, so its energy and metal are 0. The level start 0x465E30 reads them from
-           V's skirmish settings entry, which the SKIRMISH screen does not fill (0x465EF5..0x465F1A;
-           MEASURED 1365/16385 and 11/10 in three processes). Nothing writes them afterwards on a
-           puppet host: the economy 0x401360 runs only for a type-1 or type-2 record
-           (0x465539..0x46555A). So every host of a recording holds the same V. The first step
-           follows the loader's last act (THE PLAYER'S SETTINGS), so the level start has run. */
-        memset(player_rec(L->ta, s_viewer) + PL_ENERGY, 0, 4);
-        memset(player_rec(L->ta, s_viewer) + PL_METAL, 0, 4);
     }
     /* The world holds iteration k: its images went in at the step before k, its events are
        step k's. An iteration of an earlier GameTime is played late rather than dropped, since its
@@ -6486,9 +8106,13 @@ static void play(const Lv* L, int first)
             note("replay: the events of GameTime %u played at GameTime %u", W->tick, L->now);
         }
         events_put(L, W, now);
+        ov_clicks_take(W);
+        mp_step_events(L, W->tick);
         s_st.steps++;
-        if (!iteration_read(L)) break;
-        images_put(L, W, now && !s_pend.full);
+        if (s_over || !iteration_read(L)) break;
+        mp_step_image(L, W->tick - 1);
+        if (s_over) break;
+        images_put(L, mp_world(W), now && !s_pend.full);
     }
 }
 
@@ -6502,6 +8126,7 @@ void __cdecl tagpu_replay_step(void)
     if (!tagpu_puppet_on() || !s_rd || s_dead) return;
     ta = ta_main();
     if (!ta) return;
+    viewer_init(ta);
     pend_finish();
     if (s_first) {
         s_first = 0;
@@ -6536,6 +8161,7 @@ void tagpu_replay_level_end(void)
 {
     char* ta = ta_main();
     int stale = s_opt.stale;
+    pace_level_end();
     rw_dispose();
     if (options_restore(ta) && stale) E_SaveSettings();     /* THE PLAYER'S SETTINGS */
     /* both cases log `replay: <name> at its level's end, GameTime <t>`, the line tacli's
@@ -6559,6 +8185,11 @@ void tagpu_replay_level_end(void)
             tagpu_logf("replay: forks %s: touch skipped: file worker unavailable", path);
     } else replay_close();
     tagpu_puppet_end();
+    /* the loader has exited (THE VIEWER'S BUFFERS' ORDERING), and from here no frame visit runs
+       viewer_frame: the puppet mode is off */
+    InterlockedExchange(&s_vbuf, VB_OFF);
+    s_vready = 0;
+    s_vframe = ~0u;
 }
 
 /* ---- THE DOCK'S REQUESTS (tagpu_dock.h) -----------------------------------------------------
@@ -6609,6 +8240,7 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
 {
     const RecHeader* h;
     const RecWorld* W;
+    const RecWorld* P;
     char* ta = ta_main();
     Lv L;
     unsigned i, slot;
@@ -6616,14 +8248,15 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
     int n = 0;
     if (!out || cap <= 0 || !tagpu_replay_live()) return 0;
     h = recr_header(s_rd);
-    W = recr_world(s_rd);
+    W = mp_world(recr_world(s_rd));     /* in mode 3 the composed world the puppets hold */
+    P = persp_world();
     valid = ta && level_of(ta, &L);
     for (i = 0; i < REC_PLAYERS; i++) rows[i] = sides[i] = -1;
     for (i = 0; i < h->nseats && i < REC_PLAYERS && n < cap; i++) {
         unsigned seat = h->seats[i].index;
         const char* p;
         TAGPU_REPLAY_PLAYER* dst;
-        if (seat >= REC_PLAYERS || seat == s_viewer) continue;
+        if (seat >= REC_PLAYERS) continue;
         p = (const char*)W->player[seat];
         dst = &out[n++];
         memset(dst, 0, sizeof *dst);
@@ -6632,6 +8265,8 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
         dst->commander_alive = valid && h->seats[i].side < L.sides && h->seats[i].side < 5 ? 0 : -1;
         dst->seat = seat;
         dst->colour = h->seats[i].logo;
+        /* a seat with a camera sample: a skirmish's recorded, a multiplayer actor's contributed */
+        dst->pov = P->npov[seat] != 0;
         lstrcpynA(dst->name, h->seats[i].name, sizeof dst->name);
         /* The same image the puppet applier uses, held at the final image after EOF. The reader
            owns REC_PLAYERS fixed records and only this thread advances it. None of these fields
@@ -6703,6 +8338,392 @@ int tagpu_replay_sight_request(int seat)
     return 0;
 }
 
+/* ---- FOLLOW, JUMP AND FREE CAM (research/notes/tadr-port/demo-recorder-perspective-streams.md,
+   *Playback*) ---------------------------------------------------------------------------------
+   A Follow shows a recorded seat's camera: at every frame visit the perspective clock picks or
+   interpolates the seat's sample for the displayed GameTime, W->tick (tagpu_persp.h), Follow's fit
+   puts it on this screen, and tagpu_zoom_follow hands the eye and the level to the apply at the
+   top of the draw that follows, which writes the camera on the thread that owns it. A Jump is the
+   same for one epoch that tagpu_zoom ends once the render thread has drawn its level; Free cam
+   ends the epoch. tagpu_zoom ends a Follow on its own when the camera is moved under it or the
+   wheel is turned, and the next visit logs why. Each start and each end is one log line.
+   A seek leaves the camera alone and a Follow goes on from the new GameTime; the end of the
+   recording holds its last samples; a takeover, the level's end and any other end of the playing
+   end the epoch (follow_close). A multiplayer recording's perspectives are its contributions,
+   composed at the application tick (persp_world), so there W->tick is the composed application
+   tick and a sample's tick the one the recorder applied it at. Everything here is the game
+   thread's: the requests come from the cards (in the wndproc TA pumps on that thread) and the
+   trigger, and the visit runs before the in-play draw call 0x4969CD. */
+
+#define OFF_VIEW_W     0x37E37      /* the 1x view, as the recorder's samples carry it (RecPov)    */
+#define OFF_VIEW_H     0x37E3B
+
+/* the seat has a sample to show, or why not */
+static const char* follow_refusal(int seat)
+{
+    const RecHeader* h;
+    unsigned i;
+    if (!tagpu_replay_live()) return "this level plays no recording";
+    h = recr_header(s_rd);
+    for (i = 0; i < h->nseats && i < REC_PLAYERS; i++)
+        if (seat >= 0 && seat < REC_PLAYERS && h->seats[i].index == (unsigned)seat)
+            return persp_world()->npov[seat] ? NULL : "its camera was not recorded";
+    return "no such recorded seat";
+}
+
+int tagpu_replay_follow_request(int seat, int once)
+{
+    const char* why;
+    if (seat < 0) {
+        if (!tagpu_replay_live()) return 0;
+        s_fl.req = FQ_FREE;
+        return 1;
+    }
+    why = follow_refusal(seat);
+    if (why) {
+        tagpu_logf("replay: %s: %s %d refused: %s", tagpu_replay_live() ? s_name : "-",
+                   once ? "jump" : "follow", seat, why);
+        return 0;
+    }
+    s_fl.req = FQ_FOLLOW;
+    s_fl.rseat = seat;
+    s_fl.ronce = once;
+    return 1;
+}
+
+int tagpu_replay_followed(void)
+{
+    if (s_fl.req == FQ_FREE) return -1;
+    if (s_fl.req == FQ_FOLLOW) return s_fl.ronce ? -1 : s_fl.rseat;
+    return s_fl.E && !s_fl.once ? s_fl.seat : -1;
+}
+
+static const char* follow_why(int st)
+{
+    switch (st) {
+    case TAGPU_FOLLOW_MOVED:   return "camera moved";
+    case TAGPU_FOLLOW_ZOOMED:  return "zoomed";
+    case TAGPU_FOLLOW_DRAWN:   return "drawn";
+    case TAGPU_FOLLOW_STOPPED: return "stopped";
+    case TAGPU_FOLLOW_LEVEL:   return "the level ended";
+    default:                   return "unknown";
+    }
+}
+
+/* the epoch in force ends, tagpu_zoom's side with it, with one line saying why */
+static void follow_end_log(const char* why)
+{
+    if (!s_fl.E) return;
+    tagpu_zoom_follow_stop(s_fl.E);
+    tagpu_logf("replay: %s: %s ended: %s", s_name, s_fl.once ? "jump" : "follow", why);
+    s_fl.E = 0;
+    s_fl.seat = -1;
+    s_fl.handed = 0;
+}
+
+static void follow_close(const char* why)
+{
+    follow_end_log(why);
+    s_fl.req = FQ_NONE;
+    s_fl.pov = 0;
+}
+
+/* The frame visit's part, after any seek and on every path out of the visit, paused frames
+   included. */
+static void follow_visit(char* ta)
+{
+    const RecWorld* W;
+    RecPov p;
+    if (s_fl.req) {
+        const int req = s_fl.req;
+        const char* why = req == FQ_FOLLOW ? follow_refusal(s_fl.rseat) : NULL;
+        s_fl.req = FQ_NONE;
+        /* a seek since the request can have taken the seat's samples away */
+        if (why) tagpu_logf("replay: %s: %s %d refused: %s", s_name,
+                            s_fl.ronce ? "jump" : "follow", s_fl.rseat, why);
+        else if (req == FQ_FREE && !s_fl.E)
+            tagpu_logf("replay: %s: free cam: nothing was followed", s_name);
+        else follow_end_log(req == FQ_FREE ? "free cam" : s_fl.ronce ? "a jump" : "another follow");
+        if (!why && req == FQ_FOLLOW) {
+            s_fl.seat = s_fl.rseat;
+            s_fl.once = s_fl.ronce;
+            s_fl.E = ++s_flEpochs;
+            s_fl.handed = 0;
+            tagpu_logf("replay: %s: %s seat %d, epoch %u", s_name, s_fl.once ? "jump to" : "follow",
+                       s_fl.seat, s_fl.E);
+        }
+    }
+    if (s_fl.E && !tagpu_replay_live()) follow_end_log("the playing ended");
+    if (s_fl.E && s_fl.handed) {
+        const int st = tagpu_zoom_follow_state(s_fl.E);
+        if (st != TAGPU_FOLLOW_ACTIVE) follow_end_log(follow_why(st));
+    }
+    memset(&s_fl.at, 0, sizeof s_fl.at);
+    if (s_fl.E) {
+        W = persp_world();
+        s_fl.at.n = W->tick;
+        s_fl.at.vw = *(const int*)(ta + OFF_VIEW_W);
+        s_fl.at.vh = *(const int*)(ta + OFF_VIEW_H);
+        /* the seat is a header seat (follow_refusal), so below REC_PLAYERS. A seek to before the
+           seat's first sample leaves it none: the camera stays where the last write put it */
+        s_fl.at.how = persp_sample(W->npov[s_fl.seat], W->pov[s_fl.seat], W->pov_tick[s_fl.seat],
+                                   W->tick, &p);
+        if (s_fl.at.how && persp_follow(&p, s_fl.at.vw, s_fl.at.vh, &s_fl.at.x, &s_fl.at.y,
+                                        &s_fl.at.level)) {
+            tagpu_zoom_follow(ta, s_fl.at.x, s_fl.at.y, s_fl.at.level, s_fl.E, s_fl.once);
+            s_fl.handed = 1;
+        } else s_fl.at.how = PERSP_NONE;
+    }
+    if (s_fl.pov) {
+        static const char* const how[] = { "none", "latest", "between", "earlier" };
+        s_fl.pov = 0;
+        if (!s_fl.E)
+            tagpu_logf("replay: %s: pov at GameTime %u: no follow; overlays: %u items, %u "
+                       "selected units", s_name, *(const unsigned*)(ta + OFF_GAMETIME), s_ov.n,
+                       s_ov.nrsel);
+        else
+            tagpu_logf("replay: %s: pov at GameTime %u: %s epoch %u seat %d, tick %u, sample %s, "
+                       "view %dx%d, eye (%d, %d), level %u/65536 (%.4f); overlays: %u items, %u "
+                       "selected units", s_name,
+                       *(const unsigned*)(ta + OFF_GAMETIME), s_fl.once ? "jump" : "follow",
+                       s_fl.E, s_fl.seat, s_fl.at.n, how[s_fl.at.how], s_fl.at.vw, s_fl.at.vh,
+                       s_fl.at.x, s_fl.at.y, (unsigned)s_fl.at.level,
+                       (double)s_fl.at.level / 65536.0, s_ov.n, s_ov.nrsel);
+    }
+}
+
+/* ---- THE OVERLAYS (research/notes/tadr-port/demo-recorder-perspective-streams.md, *Playback*)
+   Every recorded player's cursor, clicks and selection at once, whatever Sight shows (the owner's
+   answer Q5), each behind its switch in the dock's Overlays menu (tagpu_cards.c), which also holds
+   the chat's. Built at the frame visit, after any seek and after Follow's own reading of the same
+   world, from the reader's world alone (persp_world) -- nothing of the engine's:
+   - a cursor: the perspective clock's sample for the displayed tick W->tick, as Follow takes it
+     (tagpu_persp.h), when it was over the world (REC_POV_WORLD);
+   - a click: REC_CLICK_SHOW ticks from the iteration it came with, aged against GameTime + 1,
+     which is W->tick while the playing runs and goes on growing past the recording's end, so a
+     last click expires there while the last cursor and selection hold;
+   - a selection's unit: only while its slot holds a live unit whose birth is the entry's, read
+     from the recording's own births column -- on a puppet host the engine's column is host-own
+     (THE SEEK, "B4's per-slot columns"), so a unit made in the slot since is never taken for the
+     one selected; in a multiplayer recording's own segment from the composed lifecycle's birth,
+     the reference its order lists are held to (mp_authority).
+   THE PUBLISHER COPIES THE RESULT BY VALUE (tagpu_packet_pub.c, fill_overlay and the unit walk),
+   in the `after` of the draw this visit precedes, on this same thread; the render thread sees
+   only that copy. The switches are the game thread's too: the menu's clicks come in the wndproc
+   TA pumps on it, the trigger at the frame visit. A switched-off overlay produces nothing, so the
+   render side has no switch. A multiplayer recording's perspectives are its contributions: its
+   cursors and selections at the composed application tick (persp_world), its clicks from the
+   held envelopes at their application tick (mp_click). */
+
+#define BIRTHS_TABLE "src/tagpu_patches.c:s_hitStamp"   /* the births column's RT_TABLE name */
+#define OV_GREY      59             /* a player with no colour: the cards' own fallback       */
+
+static const char* const OV_NAME[TAGPU_OV_N] = { "cursors", "clicks", "selections", "chat" };
+
+int tagpu_replay_overlay(int which)
+{
+    if (which == TAGPU_OV_CHAT) return !s_chat_hidden;
+    return which >= 0 && which < TAGPU_OV_CHAT && !s_ov.off[which];
+}
+
+void tagpu_replay_overlay_set(int which, int on)
+{
+    if (which == TAGPU_OV_CHAT) {
+        s_chat_hidden = !on;
+        tagpu_logf("replay: chat %s", s_chat_hidden ? "hidden" : "shown");
+        return;
+    }
+    if (which < 0 || which >= TAGPU_OV_CHAT) return;
+    s_ov.off[which] = (unsigned char)!on;
+    tagpu_logf("replay: overlay %s %s", OV_NAME[which], on ? "on" : "off");
+}
+
+/* `overlay <cursors|clicks|selections|chat> <on|off>` */
+static int overlay_trigger(const char* line)
+{
+    char name[16], state[8];
+    int end = 0, k;
+    if (sscanf(line, "overlay %15s %7s%n", name, state, &end) != 2 || line[end]) return 0;
+    if (strcmp(state, "on") && strcmp(state, "off")) return 0;
+    for (k = 0; k < TAGPU_OV_N; k++)
+        if (!strcmp(name, OV_NAME[k])) {
+            tagpu_replay_overlay_set(k, state[1] == 'n');
+            return 1;
+        }
+    return 0;
+}
+
+static void ov_clicks_clear(void)
+{
+    s_ov.rn = s_ov.rnext = 0;
+}
+
+/* a click into the ring, shown from `tick`; the player is bounded here against ov_col */
+static void ov_click_put(unsigned tick, const RecClick* c)
+{
+    if (c->player >= TAGPU_PK_OV_PLAYERS) return;
+    s_ov.ring[s_ov.rnext].tick = tick;
+    s_ov.ring[s_ov.rnext].c = *c;
+    s_ov.rnext = (s_ov.rnext + 1) % OV_RING;
+    if (s_ov.rn < OV_RING) s_ov.rn++;
+}
+
+/* The iteration's clicks into the ring, from play(), which applies each iteration's events once:
+   so each click is taken once, at the tick of the iteration it came with. The reader checked
+   each one's length and fields (rec_click_ok). */
+static void ov_clicks_take(const RecWorld* W)
+{
+    unsigned i;
+    for (i = 0; i < W->nclick; i++) {
+        RecClick c;
+        if (W->click[i].kind != RK_CLICK || W->click[i].len != sizeof c) continue;
+        memcpy(&c, W->click[i].b, sizeof c);
+        ov_click_put(W->tick, &c);
+    }
+}
+
+static void ov_rsel_clear(void)
+{
+    unsigned i;
+    for (i = 0; i < s_ov.nrsel; i++) s_rsel[s_rselAt[i]] = 0;
+    s_ov.nrsel = 0;
+}
+
+static void ov_item(unsigned kind, unsigned p, unsigned age, int32_t x, int32_t h, int32_t z)
+{
+    TAGPU_PK_OVERLAY* o;
+    if (s_ov.n >= TAGPU_PK_MAX_OVERLAY) return;
+    o = &s_ov.item[s_ov.n++];
+    o->kind = (uint8_t)kind;
+    o->player = (uint8_t)p;
+    o->colour = s_ov.col[p];
+    o->age = (uint8_t)age;
+    o->x = x;
+    o->h = h;
+    o->z = z;
+}
+
+/* the recording's births column at W, or NULL when it carries none */
+static const RecTable* ov_births(const RecWorld* W)
+{
+    const RecHeader* h = recr_header(s_rd);
+    unsigned i;
+    for (i = 0; i < h->ntab && i < W->ntab; i++)
+        if (!strcmp(h->tab[i].name, BIRTHS_TABLE) && h->tab[i].stride == sizeof(uint32_t))
+            return &W->tab[i];
+    return NULL;
+}
+
+/* An entry's unit is the displayed one: in a multiplayer recording's own segment, the composed
+   lifecycle's birth for the slot, the reference its order lists are held to (mp_authority);
+   elsewhere the recording's births column, which `b` holds `rows` rows of. */
+static int ov_born(const RecTable* b, unsigned rows, unsigned slot, uint32_t birth)
+{
+    uint32_t at;
+    if (s_mp.on) {
+        RecMpLifeState ls;
+        return tagpu_recmp_lifecycle_get(s_mp.life, slot, &ls) == 1 && ls.birth == birth;
+    }
+    if (!b || slot >= rows) return 0;
+    memcpy(&at, b->img + (size_t)slot * sizeof at, sizeof at);
+    return at == birth;
+}
+
+/* THE SELECTION DISPLAY RULE. BOUND: a slot is used only below the world's slot count and
+   s_rsel's length, and a births column's rows (ov_born) or the lifecycle's own slots
+   (tagpu_recmp_lifecycle_get refuses any other); the reader has already held every entry inside
+   its seat's block (rec_sel_entries_ok, tagpu_recmp_pov_put), and a seat is a header seat below
+   REC_PLAYERS. */
+static void ov_selections(const RecWorld* W)
+{
+    const RecHeader* h = recr_header(s_rd);
+    const RecTable* b = s_mp.on ? NULL : ov_births(W);
+    unsigned rows = b ? b->size / (unsigned)sizeof(uint32_t) : 0, i, k;
+    for (i = 0; (rows || s_mp.on) && i < h->nseats && i < REC_PLAYERS; i++) {
+        unsigned p = h->seats[i].index;
+        const RecSelEntry* e;
+        if (p >= TAGPU_PK_OV_PLAYERS) continue;
+        e = W->sel + (size_t)p * REC_SEL_MAX;
+        for (k = 0; k < W->nsel[p] && k < REC_SEL_MAX; k++) {
+            unsigned slot = e[k].slot;
+            if (slot >= W->slots || slot >= TAGPU_PK_MAX_UNITS || !W->live[slot] ||
+                !(img_u32(W, slot, U_STATE) & U_ALIVE) || !ov_born(b, rows, slot, e[k].birth))
+                continue;
+            if (!s_rsel[slot]) s_rselAt[s_ov.nrsel++] = (uint16_t)slot;
+            s_rsel[slot] |= (uint16_t)(1u << p);
+        }
+    }
+}
+
+/* The frame visit's part, every in-play frame, paused ones included; before Follow's, so that
+   `pov` reports this visit's counts. */
+static void overlay_visit(char* ta)
+{
+    const RecHeader* h;
+    const RecWorld* W;
+    unsigned i, now;
+    s_ov.n = 0;
+    ov_rsel_clear();
+    s_ov.live = tagpu_replay_live();
+    if (!s_ov.live) return;
+    h = recr_header(s_rd);
+    W = persp_world();
+    if (!s_ov.col_ok) {
+        memset(s_ov.col, OV_GREY, sizeof s_ov.col);
+        for (i = 0; i < h->nseats && i < REC_PLAYERS; i++)
+            if (h->seats[i].index < TAGPU_PK_OV_PLAYERS)
+                s_ov.col[h->seats[i].index] = (unsigned char)tagpu_cards_colour(h->seats[i].logo);
+        s_ov.col_ok = 1;
+    }
+    if (!s_ov.off[TAGPU_OV_CURSORS])
+        for (i = 0; i < h->nseats && i < REC_PLAYERS; i++) {
+            unsigned p = h->seats[i].index;
+            RecPov pv;
+            if (p >= TAGPU_PK_OV_PLAYERS ||
+                !persp_sample(W->npov[p], W->pov[p], W->pov_tick[p], W->tick, &pv) ||
+                !(pv.flags & REC_POV_WORLD))
+                continue;
+            ov_item(TAGPU_PK_OV_CURSOR, p, 0, pv.cur_x, pv.cur_h, pv.cur_z);
+        }
+    if (!s_ov.off[TAGPU_OV_CLICKS]) {
+        now = *(const unsigned*)(ta + OFF_GAMETIME) + 1u;
+        for (i = 0; i < s_ov.rn; i++) {             /* the oldest first: a newer ring on top */
+            unsigned at = (s_ov.rnext + OV_RING - s_ov.rn + i) % OV_RING;
+            unsigned age = now - s_ov.ring[at].tick;
+            const RecClick* c = &s_ov.ring[at].c;
+            if (age < REC_CLICK_SHOW) ov_item(TAGPU_PK_OV_CLICK, c->player, age, c->x, c->h, c->z);
+        }
+    }
+    if (!s_ov.off[TAGPU_OV_SELECTIONS]) ov_selections(W);
+}
+
+/* The playing ended: nothing is shown until the next one, whose switches are all on. */
+static void overlay_close(void)
+{
+    s_ov.n = 0;
+    ov_rsel_clear();
+    s_ov.live = 0;
+    s_ov.col_ok = 0;
+    ov_clicks_clear();
+    memset(s_ov.off, 0, sizeof s_ov.off);
+    s_chat_hidden = 0;
+}
+
+unsigned tagpu_replay_overlays(TAGPU_PK_OVERLAY* out, unsigned cap, unsigned char col[10])
+{
+    unsigned n = s_ov.live ? s_ov.n : 0;
+    if (n > cap) n = cap;
+    if (n) memcpy(out, s_ov.item, (size_t)n * sizeof *out);
+    if (s_ov.live) memcpy(col, s_ov.col, TAGPU_PK_OV_PLAYERS);
+    else memset(col, 0, TAGPU_PK_OV_PLAYERS);
+    return n;
+}
+
+unsigned tagpu_replay_rsel(unsigned slot)
+{
+    return s_ov.live && slot < TAGPU_PK_MAX_UNITS ? s_rsel[slot] : 0;
+}
+
 int tagpu_replay_paused(void)
 {
     const char* ta = ta_main();
@@ -6742,9 +8763,15 @@ int tagpu_replay_speed_set(unsigned gs)
     return 1;
 }
 
-/* THE VIEWER'S SEAT. V is a record the playback seats for itself, and the only one whose PlayerInfo
-   the recording does not describe: seat_level sets its watcher bit (+0x9B bit 6) and its side. The
-   seat activation clears only bit 5 (0x464378); the front end's reset 0x4644D0 zeroes every
+/* THE VIEWER'S SEAT, at the level's end. V is record 10, which the playback seats for itself and
+   the recording does not describe: viewer_seat activates it, gives it the empty block and sets
+   its watcher bit (+0x9B bit 6) and its side. Record 10 goes back whole as the level's first
+   seating took it: its buffer pointers were NULL then, which matches the state 0x464A00 has left
+   them in (freed and zeroed, 0x464A2D, 0x4801F0 from 0x464A3C, 0x464A76..0x464A7E), and the
+   pointer +0x27 to its PlayerInfo never changes. Then, when +0x2A42 or +0x2A43 names record 10,
+   both become 0, the players reset's values (0x46451B, 0x46452D), so no ten-entry table can be
+   indexed with 10 outside a level that seats record 10. Of the PlayerInfo, the seat activation
+   clears only bit 5 (0x464378); the front end's reset 0x4644D0 zeroes every
    PlayerInfo (0x46458B..0x464598), but only from its three calls (0x42734F, 0x427D73, 0x4518AC),
    and a surrender to the main menu reaches none of them (MEASURED 2026-09-30: record 0's name still
    in place at the menu). So V's PlayerInfo goes back as the Start's fill left it, whatever path
@@ -6764,8 +8791,14 @@ int tagpu_replay_speed_set(unsigned gs)
    every seat it activates (0x47A79F..0x47A7C1 for a player, 0x47A7F2..0x47A813 for an AI). */
 void tagpu_replay_level_after(void)
 {
+    char* ta = ta_main();
+    if (ta && s_vrec.taken) memcpy(player_rec(ta, REC_VIEWER), s_vrec.was, PL_STRIDE);
+    s_vrec.taken = 0;
     if (s_vinfo.at) memcpy(s_vinfo.at, s_vinfo.was, REC_INFO_BYTES);
     s_vinfo.at = NULL;
+    if (ta && ((unsigned char)ta[OFF_CONTROLLED] == REC_VIEWER ||
+               (unsigned char)ta[OFF_VIEWED] == REC_VIEWER))
+        ta[OFF_CONTROLLED] = ta[OFF_VIEWED] = 0;
 }
 
 /* ---- THE BROWSER'S START -------------------------------------------------------------------- */
@@ -6954,7 +8987,7 @@ static int settings_in(char* ta, const RecHeader* h)
         *(unsigned*)(e + ENT_COLOUR) = h->seats[i].logo;
     }
     memset(set + SET_MAP, 0, SET_MAPLEN);
-    memcpy(set + SET_MAP, h->settings_map, strnlen(h->settings_map, SET_MAPLEN - 1));
+    memcpy(set + SET_MAP, start_map(h), strnlen(start_map(h), SET_MAPLEN - 1));
     *(unsigned*)(ta + OFF_NSEATS) = count;
     return 1;
 }
@@ -7036,6 +9069,14 @@ int tagpu_replay_watch(void* gi, const char* file, int view, void (*back)(void* 
         refused(&r, path);              /* before the notice: the browser is still on top */
         return watch_refuse(gi, name, why);
     }
+    /* Watch's Start fills the skirmish menu from the recorded controllers, which knows types 1 and
+       2 only; a multiplayer recording plays through tacli replay play, which fills it as human
+       and AI */
+    if (h->mode == MODE_NETWORK) {
+        replay_close();
+        return watch_refuse(gi, name, "a multiplayer recording plays through tacli replay play "
+                            "only");
+    }
 
     /* B: the stock order; each refusal undoes before its notice */
     E_PlayersReset();
@@ -7055,7 +9096,7 @@ int tagpu_replay_watch(void* gi, const char* file, int view, void (*back)(void* 
     if (*(unsigned short*)(ta + OFF_NPLAYERS) > (unsigned)E_MapSeats(gs))
         return watch_undo(ta, gi, name, E_Translate(STR_TOOMANY), 0);
     if (E_OneAlly()) return watch_undo(ta, gi, name, E_Translate(STR_ALLIES), 0);
-    if (!validate_engine(ta, h, why, sizeof why)) return watch_undo(ta, gi, name, why, 1);
+    if (!validate_engine(ta, h, why, sizeof why, 1)) return watch_undo(ta, gi, name, why, 1);
 
     /* C: the commit; nothing below refuses */
     *(unsigned short*)(ta + OFF_NPLAYERS) = (unsigned short)(ais + controlled_by(ta, CTRL_HUMAN));
@@ -7159,6 +9200,312 @@ static void rw_pause_init(void)
     tagpu_logf("rewind: scheduler pause guard %s", s_rw_pause_in ? "in" : "unavailable");
 }
 
+#define TURBO_GAP_MS 250
+#define TURBO_RING_BYTES (REC_RING_BYTES / 2)
+
+/* THE TURBO: a test launch's pacing, k ticks every frame. DISASSEMBLED: the scheduler 0x495230
+   writes DeltaTime main+0x38A3B from the 30-Hz clock 0x4B6340 and clamps it to 5 (0x4953F5),
+   reading back only what it wrote this call; after its return only the count test 0x496932,
+   the step 0x495490, which caches it at 0x495497, and a debug sprintf (0x46AA09) read it. So k, bounded to the scheduler's own
+   1..5 at attach, written here between that return and that load, makes the frame run k
+   unchanged stock iterations and the step's once-a-call tail (0x495674..0x495688) once: the batch
+   speed 10k gives a frame that lands on a 30-Hz edge. Nothing an iteration reads is written.
+   THE BATCH IS PART OF THE RESULT. The tail -- 0x428BD0, 0x428BE0, 0x428BF0 (each a bare ret),
+   the chat expiry 0x463EF0 and the temporary sight records' expiry 0x482130 -- runs once a batch, so where the
+   batches fall changes what units see and so what they do. Stock pacing at speed 20 mixes
+   batches of 2 with an odd one after a slow frame: of two pairs of takeovers of one recording at
+   speed 20 one parted in 1328 unit fields, while both pairs at a fixed k agreed in everything but
+   the meteor shower's points, which the CRT rand feeds (MEASURED 2026-10-08, tenseat taken over
+   at 931, dumped at 2731). The harness runs k = 1, the batch a player at normal speed gets.
+   This observer lies on the skirmish branch past the front-end test 0x496918 and the pause test
+   0x496920, so it never runs in a network game, a menu, a paused frame or a rewind (whose pause
+   guard holds the pause bit). Bit 1 of main+0x38A51 is the scheduler's lag scale (0x49535C),
+   set only when a type-3 player lags 900 ticks: such a frame keeps the stock count.
+   THE WRITER'S BACK-PRESSURE. The recorder's ring never blocks the capture (tagpu_recorder.h): a
+   level that writes faster than the writer drains ends its recording INCOMPLETE when the ring
+   fills. The battle fixtures write ~56 KB of records a tick, and at k = 1 the stock-limits battle
+   ran 314 ticks a second and filled the 16 MiB ring by GameTime 1003 (MEASURED 2026-10-08, two
+   games at once). So a turbo frame runs no tick while the ring holds more than TURBO_RING_BYTES:
+   the count test 0x496932 then skips the step, its tail included, so every batch is still k
+   ticks and only when the batches run waits on the writer. A single batch that writes more than
+   the rest of the ring still fills it, as it would at stock pacing.
+   What turbo does not make tick-exact is what stock pacing does not either: the readers of wall
+   time and the CRT rand draws of the frame -- the hover wave in the unit tick (0x48A66A), the
+   meteor tick's draws (0x437E37..0x437FB5) against the draw path's from the same stream, the
+   camera scroll by wall elapsed (0x41CEA2) -- each a function of the frames and the time between
+   two ticks (exe-reverse-engineering.md, the scheduler). */
+static void turbo_due(char* ta)
+{
+    DWORD now;
+    if (!s_turbo.live || s_rw.state) return;
+    if (*(const unsigned short*)(ta + OFF_PAUSE) & 2) {
+        s_turbo.lagged++;
+        return;
+    }
+    if (tagpu_rec_ring_used() > TURBO_RING_BYTES) {
+        *(unsigned*)(ta + OFF_DUE_TICKS) = 0;
+        s_turbo.held++;
+    } else {
+        *(unsigned*)(ta + OFF_DUE_TICKS) = s_turbo_k;
+        s_turbo.frames++;
+    }
+    /* the rate's clock: a gap of TURBO_GAP_MS or more between two frames is a pause, which
+       reaches no frame here, and is not play */
+    now = GetTickCount();
+    if (s_turbo.last && now - s_turbo.last < TURBO_GAP_MS) {
+        s_turbo.ms += now - s_turbo.last;
+        s_turbo.ticks += *(const unsigned*)(ta + OFF_GAMETIME) - s_turbo.last_g;
+    }
+    s_turbo.last = now;
+    s_turbo.last_g = *(const unsigned*)(ta + OFF_GAMETIME);
+}
+
+/* DISASSEMBLED: the scheduler returns before 0x49692D; 0x496932 tests its count,
+   and 0x495490 loads that count once at 0x495497, then decrements EBX at 0x49566C.
+   A future round trip needs the frame after T-1. Bounding the batch before that
+   load makes the frame boundary a fact, independent of speed or frame timing.
+   Only pacing changes: every simulation iteration still advances by one tick. */
+static void rt_pace_bound(char* ta)
+{
+    unsigned now, due, i;
+    if (!tagpu_puppet_on() || !s_rd || s_dead || s_over || s_rw.state || !s_rt.n)
+        return;
+    now = *(const unsigned*)(ta + OFF_GAMETIME);
+    due = *(const unsigned*)(ta + OFF_DUE_TICKS);
+    if (due > 5) return;
+    for (i = 0; i < s_rt.n; i++) {
+        unsigned last = s_rt.a[i].T - 1;
+        if (last > now && last - now < due) due = last - now;
+    }
+    *(unsigned*)(ta + OFF_DUE_TICKS) = due;
+}
+
+/* THE PAUSE AT T's half of the bound, on any level in play: the batch ends at T, so the frame
+   visit after step T is reached with GameTime T, the round trip's argument above. */
+static void pause_at_bound(char* ta)
+{
+    unsigned now, due;
+    if (!s_pause_at || s_rw.state) return;
+    now = *(const unsigned*)(ta + OFF_GAMETIME);
+    due = *(const unsigned*)(ta + OFF_DUE_TICKS);
+    if (due <= 5 && s_pause_at > now && s_pause_at - now < due)
+        *(unsigned*)(ta + OFF_DUE_TICKS) = s_pause_at - now;
+}
+
+/* The turbo first, then the bounds: a bound only lowers the count, so whatever the turbo set,
+   an armed round trip still gets the frame after its T-1 and a pause its frame after T. */
+static int __cdecl rt_pace_guard(void* entry_esp)
+{
+    char* ta = ta_main();
+    (void)entry_esp;
+    if (!ta) return 0;
+    turbo_due(ta);
+    rt_pace_bound(ta);
+    pause_at_bound(ta);
+    return 0;
+}
+
+/* THE PAUSE AT T: a test that drives the game at a GameTime of its own -- a key, an order, a
+   scenario -- has it paused there, whatever the pacing, instead of racing a clock it cannot see.
+   The bound above ends the batch at T; the frame visit after step T, on the same game thread,
+   sets bit 0 of main+0x38A51, the bit the Pause key flips (0x4960AA..0x4960BC, DISASSEMBLED) and
+   the frame callback tests at 0x496920 before the scheduler and the step. A GameTime a seek has
+   moved past is dropped with a line, never paused at. Nothing is paused without an armed T. */
+static void pause_at_arm(unsigned T)
+{
+    char* ta = ta_main();
+    const char* why = pacing_refusal(ta);
+    unsigned now;
+    if (why) {
+        tagpu_logf("pause: at %u refused: %s", T, why);
+        return;
+    }
+    now = *(const unsigned*)(ta + OFF_GAMETIME);
+    if (T <= now) {
+        tagpu_logf("pause: at %u refused: the level is at GameTime %u", T, now);
+        return;
+    }
+    if (s_pause_at)
+        tagpu_logf("pause: at %u replaces the pause at %u", T, s_pause_at);
+    s_pause_at = T;
+    tagpu_logf("pause: armed for GameTime %u", T);
+}
+
+static void pause_at_visit(void)
+{
+    char* ta = ta_main();
+    unsigned now;
+    if (!s_pause_at || !ta) return;
+    now = *(const unsigned*)(ta + OFF_GAMETIME);
+    if (now < s_pause_at) return;
+    if (now == s_pause_at) {
+        *(unsigned short*)(ta + OFF_PAUSE) |= 1;
+        s_pause_taken = 1;
+        tagpu_logf("pause: paused at GameTime %u", now);
+    } else {
+        tagpu_logf("pause: at %u not taken: the level is at GameTime %u", s_pause_at, now);
+    }
+    s_pause_at = 0;
+}
+
+/* Clears only the pause THE PAUSE AT T took: a pause the player or a rewind set stays theirs. */
+static void pause_resume(void)
+{
+    char* ta = ta_main();
+    const char* why = pacing_refusal(ta);
+    if (why || !s_pause_taken) {
+        tagpu_logf("resume: refused: %s", why ? why : "no pause at T was taken");
+        return;
+    }
+    s_pause_taken = 0;
+    *(unsigned short*)(ta + OFF_PAUSE) &= (unsigned short)~1u;
+    tagpu_logf("pause: resumed at GameTime %u", *(const unsigned*)(ta + OFF_GAMETIME));
+}
+
+/* `turbo on` (the trigger): the turbo until `turbo off` or the level's end, in a test launch
+   whose tagpu_turbo.on gave k. The harness sends it once every dump and round trip of the lane is
+   armed and acknowledged: at k ticks a frame, the 301 ticks before the first armed GameTime
+   pass sooner than a tacli round trip could arm them. It sends `turbo off` around a step that
+   drives the running game against the wall clock, a fixture's script. */
+/* Why the test pacing (`turbo on`, `pause at`, `resume`) may not act now, or NULL. It is a test
+   launch's own: the trigger file is read in every launch, and a network game's peers would run on
+   while this seat alone paused or batched differently -- the Pause key sends packet 0x19 to them
+   (0x4960A4..0x4960BC, DISASSEMBLED) and this pause does not. */
+static const char* pacing_refusal(const char* ta)
+{
+    if (!tagpu_regstore_active()) return "not a test launch (tagpu_regstore.h)";
+    if (!ta) return "no level";
+    if (ta[OFF_NETWORK] & 1) return "a network game";
+    if (!s_rt_pace_in) return "the tick-batch guard is unavailable";
+    return NULL;
+}
+
+static void turbo_on(void)
+{
+    char* ta = ta_main();
+    const char* why = pacing_refusal(ta);
+    if (why || !s_turbo_k) {
+        tagpu_logf("turbo: on refused: %s", why ? why : "this launch has no tagpu_turbo.on k");
+        return;
+    }
+    if (!s_turbo.engaged) {
+        s_turbo.engaged = 1;
+        s_turbo.g0 = *(const unsigned*)(ta + OFF_GAMETIME);
+    }
+    s_turbo.live = 1;
+    tagpu_logf("turbo: on at GameTime %u (k=%u)", *(const unsigned*)(ta + OFF_GAMETIME),
+               s_turbo_k);
+}
+
+static void turbo_off(void)
+{
+    char* ta = ta_main();
+    if (!s_turbo.live || !ta) {
+        tagpu_logf("turbo: off refused: the turbo is not on");
+        return;
+    }
+    s_turbo.live = 0;
+    s_turbo.last = 0;               /* the time at the game's own pacing is not the turbo's play */
+    tagpu_logf("turbo: off at GameTime %u", *(const unsigned*)(ta + OFF_GAMETIME));
+}
+
+/* the level's turbo account; no turbo and no pause carries into the next level */
+static void pace_level_end(void)
+{
+    char* ta = ta_main();
+    unsigned g1 = ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0;
+    if (s_turbo.engaged)
+        tagpu_logf("turbo: from GameTime %u to %u, %u frames at k=%u, %u ticks in %lu ms of play "
+                   "(%lu a second), %u left to the lag scale, %u held for the writer",
+                   s_turbo.g0, g1, s_turbo.frames, s_turbo_k, s_turbo.ticks,
+                   (unsigned long)s_turbo.ms,
+                   s_turbo.ms ? (unsigned long)(s_turbo.ticks * 1000ull / s_turbo.ms) : 0ul,
+                   s_turbo.lagged, s_turbo.held);
+    memset(&s_turbo, 0, sizeof s_turbo);
+    s_pause_at = 0;
+    s_pause_taken = 0;
+}
+
+void tagpu_replay_turbo_init(void)
+{
+    char b[16] = {0}, *end;
+    unsigned long k;
+    if (tagpu_sim_lever_read("tagpu_turbo.on", b, sizeof b) < 0) return;
+    k = strtoul(b, &end, 10);
+    while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') end++;
+    if (!*end && strspn(b, " \t\r\n") == strlen(b)) {
+        k = 1;                          /* an empty lever: normal speed's batch */
+        end = b + strlen(b);
+    }
+    if (!tagpu_regstore_active())
+        tagpu_logf("turbo: tagpu_turbo.on refused: not a test launch (tagpu_regstore.h)");
+    else if (end == b || *end || k < 1 || k > 5)
+        tagpu_logf("turbo: tagpu_turbo.on refused: \"%s\" is not a k of 1 to 5, the "
+                   "scheduler's own range (0x4953F5)", b);
+    else
+        s_turbo_k = (unsigned)k;
+}
+
+static void rt_pace_init(void)
+{
+    static const unsigned char MAIN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };
+    static const unsigned char COUNT[10] = {
+        0x8B, 0x88, 0x3B, 0x8A, 0x03, 0x00, 0x85, 0xC9, 0x74, 0x2D
+    };
+    s_rt_pace_in = call_is(0x00496928u, 0x00495230u) &&
+        tagpu_detour_bytes_ok(0x0049692Du, MAIN, sizeof MAIN) &&
+        tagpu_detour_bytes_ok(0x00496932u, COUNT, sizeof COUNT) &&
+        call_is(0x0049693Eu, 0x00495490u) &&
+        tagpu_detour_observe(0x0049692Du, MAIN, sizeof MAIN, rt_pace_guard, NULL);
+    tagpu_logf("replay: tick-batch guard %s", s_rt_pace_in ? "in" : "unavailable");
+    if (s_turbo_k)
+        tagpu_logf("turbo: k=%u %s", s_turbo_k, s_rt_pace_in ? "at 0x49692D" : "UNAVAILABLE");
+}
+
+/* DISASSEMBLED: 0x48587E follows the allocator's complete ten-player sort and
+   precedes every owner/block store. Its live stack owns ten pointers at +0x18;
+   +0x14 holds the freshly zeroed arena. Reorder only that bounded permutation:
+   0x4858BD..0x485925 then initializes player +0x67/+0x6B/+0x6F/+0x71 and unit
+   +0x96/+0xFF/+0xAC together, before any constructor can use a block. The
+   loader owns this fresh arena/stack. It reads no mutable reader or playback
+   state: only the copied plan published before its creation, then atomically
+   publishes a result for the first step after load completion. No live unit moves. */
+static int __cdecl mp_arena_order(void* entry_esp)
+{
+    char* ta;
+    uint32_t row[RECMP_ACTORS];
+    unsigned short slots, each;
+    void* arena;
+    const RecMpRoster* roster=&s_mp_arena.roster;
+    if (InterlockedCompareExchange(&s_mp_arena.state,MP_ARENA_WORKING,MP_ARENA_ARMED)!=MP_ARENA_ARMED)
+        return 0;
+    ta=ta_main();
+    if (!ta) goto refused;
+    memcpy(&slots,ta+OFF_NSLOTS,sizeof slots);
+    memcpy(&each,ta+OFF_EACH,sizeof each);
+    memcpy(&arena,(const char*)entry_esp+0x14,4);
+    if (!arena || arena!=*(void**)(ta+OFF_BEGIN) || slots!=roster->slots || each!=roster->each)
+        goto refused;
+    for (unsigned i=0;i<RECMP_ACTORS;i++) row[i]=(uint32_t)(size_t)player_rec(ta,i);
+    if (!tagpu_recmp_arena_order(roster,row,(uint32_t*)((char*)entry_esp+0x18)))
+        goto refused;
+    InterlockedExchange(&s_mp_arena.state,MP_ARENA_READY);
+    tagpu_logf("replay: multiplayer unit blocks ordered: %u actors, %u slots",roster->count,slots);
+    return 0;
+refused:
+    InterlockedExchange(&s_mp_arena.state,MP_ARENA_FAILED);
+    tagpu_log("replay: multiplayer allocator ownership refused; no units will be applied");
+    return 0;
+}
+
+static void mp_arena_init(void)
+{
+    static const unsigned char FIRST[9]={0x33,0xFF,0xC6,0x85,0xFF,0x00,0x00,0x00,0xFF};
+    s_mp_arena_in=tagpu_detour_bytes_ok(0x0048587Eu,FIRST,sizeof FIRST) &&
+        tagpu_detour_observe(0x0048587Eu,FIRST,sizeof FIRST,mp_arena_order,NULL);
+    tagpu_logf("replay: multiplayer allocator ownership boundary %s",s_mp_arena_in ? "in" : "unavailable");
+}
+
 /* The frame visit's site: the in-play draw call `call 0x468CF0` at 0x4969CD (`push ebx; push ebx`
    before it, DISASSEMBLED). Two facts it rests on:
    - the stub is entered by the site's call and leaves by a jump, so DrawGameScreen runs with the
@@ -7241,14 +9588,18 @@ static void watch_sites_init(void)
 
 void tagpu_replay_init(void)
 {
-    enum { FILL = 0x0047B092u, PERSIST = 0x0047B09Cu, START1 = 0x00497963u, START2 = 0x00497ACDu };
+    enum { FILL = 0x0047B092u, PERSIST = 0x0047B09Cu, START1 = 0x00497963u, START2 = 0x00497ACDu,
+           PLAYERS = 0x004919C8u, DEATHCUE = 0x004869EBu };
     static const unsigned char SAVE[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };   /* mov eax,[main] */
-    unsigned char *fill, *persist, *skip, *p;
+    unsigned char *fill, *persist, *skip, *cue, *p;
     int ok = 1;
     frame_site_init();
     rw_pause_init();
+    rt_pace_init();
+    mp_arena_init();
     if (!call_is(FILL, 0x0047A760u) || !call_is(PERSIST, 0x00430F00u) ||
-        !call_is(START1, 0x00496EE0u) || !call_is(START2, 0x00496EE0u)) {
+        !call_is(START1, 0x00496EE0u) || !call_is(START2, 0x00496EE0u) ||
+        !call_is(PLAYERS, 0x00464990u) || !call_is(DEATHCUE, 0x00494FF0u)) {
         tagpu_logf("replay: the Start's or the loader's calls hold other bytes: no replays");
         return;
     }
@@ -7262,13 +9613,15 @@ void tagpu_replay_init(void)
        as it would, with the two arguments popped; otherwise it jumps to it with the site's
        return address on top */
     skip = p = tagpu_detour_stub();
+    cue = tagpu_detour_stub();
     /* THE PLAYER'S SETTINGS: no site goes in unless the save's observer is in. Without the
        persist's site it stays inert: nothing else puts a recording's options in. */
-    if (!fill || !persist || !skip ||
+    if (!fill || !persist || !skip || !cue ||
         !tagpu_detour_observe(0x00430F00u, SAVE, 5, save_before, save_after)) {
         tagpu_detour_stub_free(fill);
         tagpu_detour_stub_free(persist);
         tagpu_detour_stub_free(skip);
+        tagpu_detour_stub_free(cue);
         tagpu_logf("replay: no memory for the sites, or the settings save cannot be observed: no "
                    "replays");
         return;
@@ -7278,15 +9631,33 @@ void tagpu_replay_init(void)
     *p++ = 0xE9; tagpu_detour_rel(p, 0x00496EE0u); p += 4;
     *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;              /* ret 8               */
 
+    /* THE DEATH CUE: the destructor's 0x494FF0(5) at 0x4869EB, stdcall `ret 4` (0x495000), adds 5
+       to the music's combat ring when a death's killer byte +0xF4 equals the controlled index
+       (0x4869D7..0x4869E3). On a puppet level the controlled record is the viewer's, record 10,
+       and +0xF4 holds 10 on most deaths (MEASURED 2026-10-06: 906 of 1448 in the battle fixture,
+       every one in the ten-seat fixture), so the playback would lean to the battle music for
+       deaths no seat of the viewer's caused. There the stub returns with the argument popped, as
+       the cue never fired for a viewer before it had record 10; elsewhere it jumps to the cue.
+       The hit cue 0x489DE6 compares owners (+0xFF), which are never 10, and needs no gate. */
+    p = cue;
+    p = tagpu_detour_cmp_flag(p, (volatile unsigned char*)tagpu_puppet_flag());
+    *p++ = 0x75; *p++ = 0x05;                           /* jne over the jump   */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00494FF0u); p += 4;
+    *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;              /* ret 4               */
+
+    /* THE VIEWER'S BUFFERS: the level init's own call, made by the C function itself, which, like
+       0x464990, takes no argument and leaves nothing the site reads but the registers C keeps */
+    call_write(PLAYERS, (const unsigned char*)(size_t)tagpu_replay_level_players, &ok);
     call_write(START1, skip, &ok);
     call_write(START2, skip, &ok);
     call_write(PERSIST, persist, &ok);
     call_write(FILL, fill, &ok);
+    call_write(DEATHCUE, cue, &ok);
     if (!ok) {
         tagpu_logf("replay: FAILED a site could not be written: no request is read");
         return;
     }
-    tagpu_logf("replay: 4 sites and the settings save's observer in");
+    tagpu_logf("replay: 6 sites and the settings save's observer in");
     s_sitesIn = 1;
     watch_sites_init();
 }

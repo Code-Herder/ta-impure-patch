@@ -6,6 +6,9 @@ recorded seat is an AI, and the viewer's seat V is dropped. The game after T is 
 **timeline** of the file the level plays, and a playing of that timeline crosses from its parent to
 it with a seek. The engine facts are in the engine map's
 [*The takeover from a recording*](../exe-reverse-engineering.md#the-takeover-from-a-recording-seat-types-the-ais-objects-passability-and-the-order-nodes-disassembled-2026-10-02).
+A multiplayer recording is taken over the same way, on its composed world, and its timeline is a
+skirmish segment of the multiplayer file:
+[*The takeover of a multiplayer recording*](demo-recorder-multiplayer-slice.md#the-takeover-of-a-multiplayer-recording).
 
 ## Driving it
 

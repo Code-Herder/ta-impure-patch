@@ -2,9 +2,13 @@
 
 Implemented and runtime-validated, including two independent high-effort reviews and their
 frame-boundary corrections. This is the card portion
-of [the S5 design](demo-recorder-s5-ui.md). Camera streams and the Overlays panel remain separate
-work. The existing recording format has no camera stream, so Jump, Follow and Free cam are
-visibly disabled. Hovering a camera control explains “Camera was not recorded.”
+of [the S5 design](demo-recorder-s5-ui.md). The dock's Overlays menu is drawn and hit-tested by
+this layer (*The Overlays menu* below). Jump, Follow
+and Free cam play a skirmish recording's camera stream
+([the perspective plan's 4c-2](demo-recorder-perspective-streams.md#4c-2-as-built)): Jump and
+Follow are enabled for a seat with a recorded camera sample, Follow is drawn active for
+the followed seat and Free cam otherwise; these three are built and await that plan's V2 run.
+Hovering a disabled Jump or Follow explains “Camera was not recorded.”
 
 The [native-mod QoL audit](quality-of-life.md) confirms `.lockon` camera follow is available in
 all five native recorder/TADR pairings when the replay contains camera data. This is a specific
@@ -33,6 +37,21 @@ press owns its release, even after closing the panel; a cancelled press cannot i
 Wheel messages over the cards are handled before either the world zoom or the GUI list wheel.
 Config replaces the dock through the existing screen slot; teardown clears the card region.
 
+## The Overlays menu
+
+The dock's `DKOVER` toggles a menu that this layer draws over the panel's bottom right: 100 x 89
+engine px, 4 px in from the panel's right edge, its bottom on the panel's, right above the
+button. Its four rows -- Cursors, Clicks, Selections, Chat -- are 92-px toggles drawn as Sight and
+Follow are, on while pressed with the lit bar. Each row flips one of the replay's switches
+(`tagpu_replay_overlay_set`). While open it covers what lies under it: its rows and its ground are
+actions of their own (`ACT_ROW`, `ACT_MENU`), so a press there never reaches a card, and the wheel
+over it does nothing. It opens only while the cards are shown, and closes when they hide. The
+dock closes it on a press anywhere but the menu and `DKOVER`, and that press then acts as usual.
+Being inside the panel's rect, it is magnified and pointer-mapped with the cards at every HUD
+scale. The overlays it switches are the
+[perspective plan's 4c-3](demo-recorder-perspective-streams.md#4c-3-as-built); its art is a
+stand-in.
+
 ## Recorded model
 
 `tagpu_replay_players` reads the same `RecWorld` player images the puppet applier uses, including
@@ -46,7 +65,7 @@ An unavailable definition produces unknown status, not a claim that the commande
 
 ## Sight, independently of the camera
 
-Sight queues a recorded seat; Full map queues the playback's spare viewer seat. A pending seek
+Sight queues a recorded seat; Full map queues the viewer's record 10. A pending seek
 or timeline boundary has priority. The game-thread frame visit first applies the display state
 for the current iteration, then handles Sight, including paused frames and EOF.
 

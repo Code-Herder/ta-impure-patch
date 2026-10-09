@@ -255,15 +255,17 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            targeting keys' engine sites are in tagpu_patches.c. */
         tagpu_datakeys_init();
 
-        /* tagpu: the puppet host's gates (tagpu_puppet.c): nineteen engine functions -- the damage
-           apply, Send_UnitDeath, COB's SET, ATTACH and DROP, the two replies, the meteor shower,
-           typed commands, the debug keys, the resource transfer, the save, and the feature tick
-           and the six feature functions -- each refused on a level that plays a recording, and
-           inert on every other. Byte-matched, disjoint from every detour above. MUST run before
-           tagpu_rec_init(): the recorder's observers on the two replies and on the seven feature
-           entries chain onto these gates. A recording plays only when all nineteen are in. Then
-           three observers counting COB's engine writes while a recording plays (the state setter
-           0x48B090, 0x47DAC0, 0x48AAC0), installed whole or not at all. */
+        /* tagpu: the puppet host's gates (tagpu_puppet.c): twenty-one engine functions -- the
+           damage apply, Send_UnitDeath, COB's SET, ATTACH and DROP, the two replies, the meteor
+           shower, typed commands, the debug keys, the resource transfer, the save, the feature
+           tick and the six feature functions, the skirmish elimination and the state setter
+           0x48B090 -- each refused on a level that plays a recording, and inert on every other.
+           Byte-matched, disjoint from every detour above. MUST run before tagpu_rec_init(): the
+           recorder's observers on the two replies, on the seven feature entries and on the state
+           setter chain onto these gates, and see only the calls a gate lets through. A recording
+           plays only when all twenty-one are in. Then three observers counting COB's engine
+           writes while a recording plays (the state setter, chained onto its gate, 0x47DAC0,
+           0x48AAC0), installed whole or not at all. */
         tagpu_puppet_init();
 
         /* tagpu: the COB script-call oracle. No-op unless
@@ -272,6 +274,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            0x4B15E0), byte-matched, all-or-nothing, disjoint from every detour
            above; reads only, writes tagpu_cobtrace.log on the game thread. */
         tagpu_cobtrace_init();
+
+        /* tagpu: the replay harness's pacing lever (tagpu_replay.h, the turbo), read before the
+           registry closes its lever list, so a recording names the k it was paced at. */
+        tagpu_replay_turbo_init();
 
         /* tagpu: the simulation-state registry (tagpu_simreg.h) -- after the last simulation
            module above has installed, so its line counts every declaration and every lever
@@ -291,11 +297,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            features*): twenty-five observers, the five fire functions' network tests, thirteen
            calls of the COB starts by name, the feature code's six calls of the simulation RNG and
            the destructor's explosion call, byte-matched, installed only whole, and disjoint from
-           every detour above but the puppet gates on the two replies and the seven feature
-           entries and the puppet's COB-write observer on 0x48B090, onto which those observers
-           chain. Then the counts' 21 sink observers, each on its own: a sink whose bytes differ
-           is left out of the counts and logged -- 0x4B08C0 when tagpu_cobtrace.on has armed the
-           oracle there. Each records only while a skirmish is
+           every detour above but the puppet gates on the two replies, the seven feature entries
+           and the state setter 0x48B090, and the puppet's COB-write observer there, onto which
+           those observers chain. Then the counts' 21 sink observers, each on its own: a sink
+           whose bytes differ is left out of the counts and logged -- 0x4B08C0 when
+           tagpu_cobtrace.on has armed the oracle there. Each records only while a skirmish is
            recorded (tagpu_recorder.on); the network tests then let the fire functions build the
            0x0D the recorder takes, and change no simulation state. On a level that plays a
            recording the draws answer from it, the explosion plays its feature calls, and the

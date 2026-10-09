@@ -1,0 +1,34 @@
+4,669,500 live unit-ticks, 2088 lives, moving 1,653,600
+30 Hz 16.16, u16 lin                         pos p50 0.000 p99 0.000 max 0.00 | hd p99 0.00 max 0.0 | px 0.0% | zstd 4.27/3.52 MB defl 5.05/3.81
+30 Hz 1/16 wu, u16 lin                       pos p50 0.022 p99 0.041 max 0.04 | hd p99 0.00 max 0.0 | px 19.9% | zstd 2.46/1.90 MB defl 2.82/2.13
+30 Hz whole wu, u8 lin                       pos p50 0.349 p99 0.648 max 0.71 | hd p99 0.70 max 0.7 | px 74.5% | zstd 1.18/1.09 MB defl 1.34/1.26
+15 Hz 16.16, u16 lin                         pos p50 0.000 p99 0.281 max 0.90 | hd p99 2.70 max 6.2 | px 3.1% | zstd 2.90/2.58 MB defl 3.24/2.73
+15 Hz 16.16, u16 CR                          pos p50 0.000 p99 0.193 max 0.80 | hd p99 2.05 max 6.8 | px 5.8% | zstd 2.90/2.58 MB defl 3.24/2.73
+15 Hz 1/16 wu, u16 lin                       pos p50 0.022 p99 0.281 max 0.91 | hd p99 2.70 max 6.2 | px 20.5% | zstd 1.69/1.39 MB defl 1.84/1.53
+15 Hz 1/16 wu, u16 CR                        pos p50 0.021 p99 0.193 max 0.82 | hd p99 2.05 max 6.8 | px 22.6% | zstd 1.69/1.39 MB defl 1.84/1.53
+15 Hz whole wu, u8 lin                       pos p50 0.289 p99 0.632 max 1.14 | hd p99 2.55 max 6.9 | px 67.3% | zstd 0.84/0.74 MB defl 0.94/0.84
+15 Hz whole wu, u8 CR                        pos p50 0.304 p99 0.635 max 1.09 | hd p99 1.94 max 7.0 | px 72.1% | zstd 0.84/0.74 MB defl 0.94/0.84
+10 Hz 16.16, u16 lin                         pos p50 0.000 p99 0.508 max 1.20 | hd p99 3.66 max 8.2 | px 6.4% | zstd 2.25/2.08 MB defl 2.46/2.18
+10 Hz 16.16, u16 CR                          pos p50 0.000 p99 0.357 max 1.11 | hd p99 2.67 max 8.2 | px 10.9% | zstd 2.25/2.08 MB defl 2.46/2.18
+10 Hz 1/16 wu, u16 lin                       pos p50 0.023 p99 0.502 max 1.22 | hd p99 3.66 max 8.2 | px 22.5% | zstd 1.36/1.15 MB defl 1.45/1.24
+10 Hz 1/16 wu, u16 CR                        pos p50 0.023 p99 0.357 max 1.11 | hd p99 2.67 max 8.2 | px 25.6% | zstd 1.36/1.15 MB defl 1.45/1.24
+10 Hz whole wu, u8 lin                       pos p50 0.286 p99 0.671 max 1.48 | hd p99 3.70 max 8.7 | px 62.2% | zstd 0.68/0.61 MB defl 0.75/0.67
+10 Hz whole wu, u8 CR                        pos p50 0.307 p99 0.646 max 1.28 | hd p99 2.78 max 8.7 | px 69.2% | zstd 0.68/0.61 MB defl 0.75/0.67
+5 Hz 16.16, u16 lin                          pos p50 0.004 p99 1.227 max 2.73 | hd p99 7.34 max 18.5 | px 17.8% | zstd 1.47/1.45 MB defl 1.55/1.49
+5 Hz 16.16, u16 CR                           pos p50 0.007 p99 0.913 max 2.58 | hd p99 5.66 max 17.6 | px 23.0% | zstd 1.47/1.45 MB defl 1.55/1.49
+5 Hz 1/16 wu, u16 lin                        pos p50 0.026 p99 1.228 max 2.72 | hd p99 7.34 max 18.5 | px 31.3% | zstd 0.93/0.83 MB defl 0.97/0.88
+5 Hz 1/16 wu, u16 CR                         pos p50 0.030 p99 0.914 max 2.58 | hd p99 5.66 max 17.6 | px 33.9% | zstd 0.93/0.83 MB defl 0.97/0.88
+5 Hz whole wu, u8 lin                        pos p50 0.313 p99 1.300 max 2.89 | hd p99 7.42 max 19.1 | px 60.5% | zstd 0.47/0.46 MB defl 0.50/0.49
+5 Hz whole wu, u8 CR                         pos p50 0.323 p99 0.987 max 2.51 | hd p99 5.67 max 17.8 | px 65.3% | zstd 0.47/0.46 MB defl 0.50/0.49
+3 Hz 16.16, u16 lin                          pos p50 0.021 p99 2.334 max 4.58 | hd p99 12.88 max 30.8 | px 33.1% | zstd 1.06/1.08 MB defl 1.10/1.11
+3 Hz 16.16, u16 CR                           pos p50 0.079 p99 1.956 max 4.68 | hd p99 10.67 max 29.7 | px 38.0% | zstd 1.06/1.08 MB defl 1.10/1.11
+3 Hz 1/16 wu, u16 lin                        pos p50 0.034 p99 2.333 max 4.57 | hd p99 12.88 max 30.8 | px 43.9% | zstd 0.67/0.65 MB defl 0.69/0.68
+3 Hz 1/16 wu, u16 CR                         pos p50 0.081 p99 1.957 max 4.68 | hd p99 10.67 max 29.7 | px 46.0% | zstd 0.67/0.65 MB defl 0.69/0.68
+3 Hz whole wu, u8 lin                        pos p50 0.380 p99 2.408 max 4.73 | hd p99 12.86 max 31.5 | px 66.1% | zstd 0.35/0.35 MB defl 0.37/0.38
+3 Hz whole wu, u8 CR                         pos p50 0.386 p99 2.003 max 4.94 | hd p99 10.67 max 30.2 | px 68.7% | zstd 0.35/0.35 MB defl 0.37/0.38
+tol 0.25 wu 1.0 deg q 1/16 wu, hd 65536 steps pos p50 0.053 p99 0.241 max 0.25 | hd p99 0.90 max 1.0 | px 22.0% | zstd 1.45/1.51 MB defl 1.48/1.54
+tol 0.5 wu 1.0 deg q 1/16 wu, hd 65536 steps pos p50 0.091 p99 0.483 max 0.50 | hd p99 0.90 max 1.0 | px 28.5% | zstd 1.31/1.39 MB defl 1.34/1.42
+tol 1.0 wu 2.0 deg q 1/16 wu, hd 65536 steps pos p50 0.208 p99 0.968 max 1.00 | hd p99 1.78 max 2.0 | px 48.7% | zstd 1.00/1.05 MB defl 1.01/1.07
+tol 1.0 wu 2.0 deg q 16/16 wu, hd 256 steps  pos p50 0.382 p99 0.951 max 1.00 | hd p99 1.75 max 2.0 | px 62.7% | zstd 0.75/0.78 MB defl 0.77/0.79
+tol 2.0 wu 4.0 deg q 1/16 wu, hd 65536 steps pos p50 0.347 p99 1.941 max 2.00 | hd p99 3.33 max 4.0 | px 61.0% | zstd 0.83/0.88 MB defl 0.85/0.89
+tol 2.0 wu 4.0 deg q 16/16 wu, hd 256 steps  pos p50 0.497 p99 1.923 max 2.00 | hd p99 3.35 max 4.0 | px 73.0% | zstd 0.62/0.64 MB defl 0.63/0.65

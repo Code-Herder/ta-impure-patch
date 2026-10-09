@@ -1,0 +1,132 @@
+{
+ "H0D0T0L1": {
+  "raw": 8420980,
+  "frame": 8420980,
+  "values": 0,
+  "deflate2K": 808952,
+  "zstd3": 479485,
+  "zstd9": 409097,
+  "zstd19": 334212,
+  "roundtrip": true
+ },
+ "H1D0T0L1": {
+  "raw": 8275166,
+  "frame": 8275166,
+  "values": 0,
+  "deflate2K": 788261,
+  "zstd3": 481365,
+  "zstd9": 402545,
+  "zstd19": 329698,
+  "roundtrip": true
+ },
+ "H2D0T0L1": {
+  "raw": 8222569,
+  "frame": 8222569,
+  "values": 0,
+  "deflate2K": 769656,
+  "zstd3": 467884,
+  "zstd9": 399043,
+  "zstd19": 341128,
+  "roundtrip": true
+ },
+ "H3D0T0L1": {
+  "raw": 8196616,
+  "frame": 8196616,
+  "values": 0,
+  "deflate2K": 767360,
+  "zstd3": 470145,
+  "zstd9": 404598,
+  "zstd19": 337394,
+  "roundtrip": true
+ },
+ "H3D1T0L1": {
+  "raw": 8138405,
+  "frame": 7726497,
+  "values": 411908,
+  "deflate2K": 682616,
+  "zstd3": 453943,
+  "zstd9": 391193,
+  "zstd19": 331875,
+  "roundtrip": true
+ },
+ "H3D2T0L1": {
+  "raw": 8033795,
+  "frame": 7621887,
+  "values": 411908,
+  "deflate2K": 674994,
+  "zstd3": 458375,
+  "zstd9": 394725,
+  "zstd19": 334447,
+  "roundtrip": true
+ },
+ "H3D3T0L1": {
+  "raw": 8004038,
+  "frame": 7592130,
+  "values": 411908,
+  "deflate2K": 670942,
+  "zstd3": 460944,
+  "zstd9": 396798,
+  "zstd19": 334955,
+  "roundtrip": true
+ },
+ "H3D4T0L1": {
+  "raw": 7980569,
+  "frame": 7568661,
+  "values": 411908,
+  "deflate2K": 662853,
+  "zstd3": 457911,
+  "zstd9": 395288,
+  "zstd19": 333632,
+  "roundtrip": true
+ },
+ "H3D4T1L1": {
+  "raw": 7980569,
+  "frame": 7568661,
+  "values": 411908,
+  "deflate2K": 520391,
+  "zstd3": 328592,
+  "zstd9": 260090,
+  "zstd19": 208563,
+  "roundtrip": true
+ },
+ "H3D4T2L1": {
+  "raw": 7980569,
+  "frame": 7568661,
+  "values": 411908,
+  "deflate2K": 610417,
+  "zstd3": 408315,
+  "zstd9": 342342,
+  "zstd19": 286332,
+  "roundtrip": true
+ },
+ "H3D4T1L2": {
+  "raw": 7980569,
+  "frame": 7568661,
+  "values": 411908,
+  "deflate2K": 499542,
+  "zstd3": 305854,
+  "zstd9": 243815,
+  "zstd19": 193392,
+  "roundtrip": true
+ },
+ "H3D4T1L3": {
+  "raw": 7980569,
+  "frame": 7568661,
+  "values": 411908,
+  "deflate2K": 514324,
+  "zstd3": 317116,
+  "zstd9": 255055,
+  "zstd19": 203042,
+  "roundtrip": true
+ },
+ "H3D4T1L0": {
+  "raw": 7980569,
+  "frame": 7568661,
+  "values": 411908,
+  "deflate2K": 581473,
+  "zstd3": 333202,
+  "zstd9": 263676,
+  "zstd19": 210443,
+  "roundtrip": true
+ }
+}

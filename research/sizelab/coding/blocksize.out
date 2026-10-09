@@ -1,0 +1,49 @@
+7830 iterations, raw 226.3 MiB, snapshots at [901, 1801, 2701, 3601, 4501, 5401, 6301, 7201]
+today's blocks (256 KB / 300 it)             zstd  3 alone         785 blocks     66.83 MiB   305.2 MB/s
+today's blocks (256 KB / 300 it)             zstd  3 chain         785 blocks     58.53 MiB   316.8 MB/s
+today's blocks (256 KB / 300 it)             zstd  9 alone         785 blocks     63.87 MiB   107.4 MB/s
+today's blocks (256 KB / 300 it)             zstd  9 chain         785 blocks     53.06 MiB    64.6 MB/s
+1 iterations a block                         zstd  3 alone        7830 blocks     91.84 MiB   248.0 MB/s
+1 iterations a block                         zstd  3 chain        7830 blocks     59.01 MiB   242.0 MB/s
+1 iterations a block                         zstd  9 alone        7830 blocks     88.33 MiB    52.5 MB/s
+1 iterations a block                         zstd  9 chain        7830 blocks     53.47 MiB    82.3 MB/s
+3 iterations a block                         zstd  3 alone        2611 blocks     72.71 MiB   439.4 MB/s
+3 iterations a block                         zstd  3 chain        2611 blocks     58.59 MiB   376.7 MB/s
+3 iterations a block                         zstd  9 alone        2611 blocks     69.66 MiB    94.5 MB/s
+3 iterations a block                         zstd  9 chain        2611 blocks     53.10 MiB    75.8 MB/s
+10 iterations a block                        zstd  3 alone         784 blocks     63.75 MiB   444.7 MB/s
+10 iterations a block                        zstd  3 chain         784 blocks     58.54 MiB   358.8 MB/s
+10 iterations a block                        zstd  9 alone         784 blocks     60.30 MiB    99.5 MB/s
+10 iterations a block                        zstd  9 chain         784 blocks     53.07 MiB    80.4 MB/s
+30 iterations a block                        zstd  3 alone         262 blocks     60.47 MiB   444.9 MB/s
+30 iterations a block                        zstd  3 chain         262 blocks     58.53 MiB   370.3 MB/s
+30 iterations a block                        zstd  9 alone         262 blocks     56.64 MiB    98.9 MB/s
+30 iterations a block                        zstd  9 chain         262 blocks     53.07 MiB    87.0 MB/s
+100 iterations a block                       zstd  3 alone          80 blocks     58.92 MiB   430.5 MB/s
+100 iterations a block                       zstd  3 chain          80 blocks     58.52 MiB   369.7 MB/s
+100 iterations a block                       zstd  9 alone          80 blocks     54.33 MiB    94.0 MB/s
+100 iterations a block                       zstd  9 chain          80 blocks     53.06 MiB    74.0 MB/s
+300 iterations a block                       zstd  3 alone          28 blocks     58.40 MiB   431.4 MB/s
+300 iterations a block                       zstd  3 chain          28 blocks     58.52 MiB   362.9 MB/s
+300 iterations a block                       zstd  9 alone          28 blocks     53.35 MiB    82.3 MB/s
+300 iterations a block                       zstd  9 chain          28 blocks     53.06 MiB    87.9 MB/s
+900 iterations a block                       zstd  3 alone          10 blocks     58.29 MiB   431.5 MB/s
+900 iterations a block                       zstd  3 chain          10 blocks     58.52 MiB   381.4 MB/s
+900 iterations a block                       zstd  9 alone          10 blocks     53.04 MiB    95.8 MB/s
+900 iterations a block                       zstd  9 chain          10 blocks     53.06 MiB    66.6 MB/s
+64 KB a block                                zstd  3 alone        2497 blocks     78.69 MiB   415.8 MB/s
+64 KB a block                                zstd  3 chain        2497 blocks     58.52 MiB   300.4 MB/s
+1024 KB a block                              zstd  3 alone         220 blocks     61.05 MiB   415.4 MB/s
+1024 KB a block                              zstd  3 chain         220 blocks     58.53 MiB   356.9 MB/s
+4096 KB a block                              zstd  3 alone          61 blocks     58.96 MiB   432.4 MB/s
+4096 KB a block                              zstd  3 chain          61 blocks     58.52 MiB   367.4 MB/s
+today's blocks, snapshot as prefix           zstd  3 chain+snap    785 blocks     58.53 MiB   342.4 MB/s
+today's blocks, snapshot as prefix           zstd  9 chain+snap    785 blocks     53.02 MiB    54.4 MB/s
+dict tenseat 16 KB, today's blocks           zstd  3 alone         785 blocks     67.34 MiB   305.5 MB/s
+dict tenseat 16 KB, 1 iteration a block      zstd  3 alone        7830 blocks     92.04 MiB   236.3 MB/s
+dict tenseat 112 KB, today's blocks          zstd  3 alone         785 blocks     67.40 MiB   293.7 MB/s
+dict tenseat 112 KB, 1 iteration a block     zstd  3 alone        7830 blocks     92.74 MiB   206.0 MB/s
+dict battle-first 16 KB, today's blocks      zstd  3 alone         785 blocks     67.22 MiB   307.7 MB/s
+dict battle-first 16 KB, 1 iteration a block zstd  3 alone        7830 blocks     91.67 MiB   231.6 MB/s
+dict battle-first 112 KB, today's blocks     zstd  3 alone         785 blocks     66.99 MiB   333.9 MB/s
+dict battle-first 112 KB, 1 iteration a block zstd  3 alone        7830 blocks     90.78 MiB   231.4 MB/s

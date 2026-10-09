@@ -1,0 +1,5 @@
+moving ticks' x/z fractions: within 1/32 wu below the next whole unit 10.1 %, exactly 0xFFFF 7.4 %, zero 0.1 %
+tol 0.25 wu 1 deg, 1/16 TRUNC                    err p50 0.08 p99 0.24 max 0.25 | jitter p99 0.201 | hd p99 0.90 max 1.00 | high word differs 9.1% cell 0.35% sight-x 0.20% | zstd 1.45 MB, deflate2k 1.49, tail 10.6 MB/h
+tol 0.25 wu 1 deg, 1/16 TRUNC, derived 2-sided   err p50 0.06 p99 0.24 max 0.25 | jitter p99 0.199 | hd p99 0.90 max 1.00 | high word differs 6.2% cell 0.00% sight-x 0.00% | zstd 1.95 MB, deflate2k 2.01, tail 14.6 MB/h
+tol 0.5 wu 1 deg, 1/16 TRUNC, derived 2-sided    err p50 0.06 p99 0.48 max 0.50 | jitter p99 0.308 | hd p99 0.90 max 1.00 | high word differs 10.9% cell 0.00% sight-x 0.00% | zstd 1.85 MB, deflate2k 1.90, tail 14.0 MB/h
+tol 0.5 wu 2 deg, 1/16 TRUNC, derived 2-sided    err p50 0.06 p99 0.48 max 0.50 | jitter p99 0.308 | hd p99 1.78 max 2.00 | high word differs 10.9% cell 0.00% sight-x 0.00% | zstd 1.81 MB, deflate2k 1.87, tail 13.8 MB/h

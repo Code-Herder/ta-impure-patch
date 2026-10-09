@@ -308,7 +308,7 @@ bookmark, every button and Leave's dialog through device-space clicks; and at HU
 | 1 | `TNOW`, the strip, `TEND` | the time now (the drag's target while dragging) and the length, `m:ss` or `h:mm:ss` of GameTime / 30 from the recording's first; the strip, which is the DLL's |
 | 2 | `DKREW`, `DKPLAY`, `DKFWD` | a seek 300 GameTime (10 s) back or forward; pause and play, the bit the Pause key flips |
 | 2 | `DKSPEED` | 1/2x, 1x, 2x, 4x, 8x: GameSpeed 5, 10, 20, 40, 80, written to the ceiling and the live speed |
-| 2 | `DKMARK`, `DKLEAVE` | a bookmark at now; Leave, through the engine's own YESORNO retitled "Leave this replay?" |
+| 2 | `DKMARK`, `DKOVER`, `DKLEAVE` | a bookmark at now; the Overlays menu (*The Overlays menu*); Leave, through the engine's own YESORNO retitled "Leave this replay?" |
 
 **One screen slot.** `tagpu_menu.c` holds RENDER.GUI and the dock in one slot, the one owner of
 `main+0x37EA0`: RENDER wins while the player wants it, the dock comes back when it closes. The
@@ -360,6 +360,18 @@ asked and ran again after No; from paused, it stayed paused after No.
 **Bookmarks** are one field of `replays\index.dat`, after the seats: comma-separated GameTimes,
 at most 64, none within 30 of another, written through the index's temporary file and rename.
 
+**The Overlays menu.** `DKOVER`, left of Leave at `dock_w - 72`, opens a menu of four toggles --
+Cursors, Clicks, Selections and Chat: the recorded players' overlays and the hide-chat switch
+(owner, 2026-10-06). Every toggle is on when a playing starts, and none is saved. The menu is drawn
+and hit-tested by the cards' layer at the cards panel's bottom right, right above the button. So it
+shares the panel's magnified region and pointer map at every HUD scale, and it hides with the
+cards under a modal. `DKOVER` is greyed while the cards are not shown. A press of either button
+anywhere but the menu and `DKOVER` closes it; the press then acts as usual. The toggles, the
+overlays and their art are in the
+[perspective plan's 4c-3](demo-recorder-perspective-streams.md#4c-3-as-built). Its art is a
+stand-in: a plate cut from `dock-tex`, the cards' toggle plates and a pointer-arrow glyph drawn in
+code.
+
 **The speed and the pause are the player's.** Neither is recorded. The dock writes both only on a
 playback level; the player's speed is exchanged around every settings save and put back at the
 teardown, ceiling and live speed both, so the registry's `gamespeed` and the next game keep it --
@@ -369,7 +381,8 @@ stage for is put on the nearest preset (a tie goes to the slower).
 **Measured on retail** (1280×720, private Xvfb, Vulkan; the pictures also under `tagpu_gdi.on`):
 
 - the speeds, GameTime a second over 5 s: 1/2x 15.1, 1x 30.5, 2x 59.1, 4x 118.9, **8x 150.5**
-  -- 8x is as fast as the frame steps it, five ticks at most;
+  -- 8x is bounded by the scheduler's clamp, five ticks per step of the 30 Hz clock
+  ([engine map](../exe-reverse-engineering.md#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08));
 - seeks from the dock 6-34 ms on the small recording; a `tacli replay seek` of the battle to 2701
   in 446 ms, its dump EQUAL to the recording (`tarec compare --puppet`), and `tareplay run
   forest-fire` passing with the dock up on its playings;
@@ -398,8 +411,8 @@ stage for is put on the nearest preset (a tie goes to the slower).
   `dock-tex`, `strip-track`, `strip-fill` and all 28 sprite frames. The title, transport icons,
   strip, playhead and bookmark were checked in the running retail browser (640×480) and
   watching dock (1280×720) on the reference setup. Player cards are implemented, runtime-tested
-  and independently reviewed; they are covered by [their module note](demo-recorder-player-cards.md). Overlays and live rewind
-  remain proposals.
+  and independently reviewed; they are covered by [their module note](demo-recorder-player-cards.md). The Overlays menu is
+  built with stand-in art (*The Overlays menu*); live rewind remains a proposal.
 - **GDI does not implement HUD scale**, for the dock as for the bars: the picture stays 1x while
   the pointer map is magnified (GUI renderer §22.7).
 - **Why bit 8 stops a live stage button's clicks** is not known: the pump's click arm reads no
@@ -412,7 +425,7 @@ S5 asks for these instead of editing it:
 
 1. **The minimap in the header.** The TNT's minimap picture, the GAF frame at `main+0x1426B`, alive
    for the whole level and NULL when the file has none (VERIFIED 2026-09-12, `tagpu_packet_pub.c`):
-   at most about 252×252 bytes, deflated with the block.
+   at most about 252×252 bytes, packed with the block.
 2. **A summary in the end block**: each player's result, and each commander death and defeat with
    its GameTime, so the browser and the timeline need not walk the stream.
 3. **The mod**: its name as the per-mod table knows it (empty for retail or an unknown mod), its
@@ -455,4 +468,6 @@ and leave, polling for error boxes, with a picture per screen.
 - **Dock style selection.** The dock explicitly selects retail's kit (`tagpu_dock.c`,
   `tagpu_art_entry("retail", ART[i])`); Escalation's supplied dock sprites are baked but are
   not selected by the current dock. Player cards are implemented on this branch, with runtime checks complete and review
-  pending ([card note](demo-recorder-player-cards.md)); Overlays and live rewind remain proposals.
+  pending ([card note](demo-recorder-player-cards.md)); the Overlays menu is built with stand-in art,
+  which the owner's kit is to replace (an Overlays glyph, the menu's ground, the toggle row); live
+  rewind remains a proposal.

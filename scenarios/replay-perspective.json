@@ -1,0 +1,24 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's perspective fixture (demo-recorder-perspective-streams.md). The human's commander stands at the camera's centre, two Peewees north-west of it inside the drag box the fixture draws, and nothing else of the human's on screen; the AI's one solar is far away, so no unit dies. The fixture's keys move the pointer, left-click the commander, right-click the ground, drag-select the Peewees, scroll with an arrow key and turn the wheel once. The camera is not pinned, so the scroll moves it.",
+ "setup": {
+  "map": "Core Prime Industrial Area",
+  "res": "1024x768",
+  "unit_limit": 500,
+  "clear_existing": true,
+  "los": "permanent",
+  "mapping": true,
+  "switches": {"noshake": true},
+  "players": [
+   {"slot": 0, "controller": "human", "side": "arm", "color": 0},
+   {"slot": 1, "controller": "ai", "side": "core", "color": 1}
+  ]
+ },
+ "units": [
+  {"id": "cmdr", "type": "ARMCOM", "owner": 0, "pos": [1600, 1600]},
+  {"id": "pw_a", "type": "ARMPW", "owner": 0, "pos": [1480, 1520]},
+  {"id": "pw_b", "type": "ARMPW", "owner": 0, "pos": [1520, 1520]},
+  {"id": "keep_ai", "type": "CORSOLAR", "owner": 1, "pos": [7500, 7000]}
+ ],
+ "camera": {"center_on": "cmdr"}
+}

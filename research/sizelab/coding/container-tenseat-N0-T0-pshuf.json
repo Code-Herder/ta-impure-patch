@@ -1,0 +1,74 @@
+{
+ "raw": {
+  "seq": 33684,
+  "uf": 48887,
+  "uv": 300260,
+  "pf": 0,
+  "pv": 0,
+  "pi": 0,
+  "ce": 5515163,
+  "or": 895952,
+  "ev": 268216,
+  "ot": 911959
+ },
+ "zstd3 alone one": {
+  "all": 295994
+ },
+ "zstd3 alone per-section": {
+  "seq": 4469,
+  "ce": 120534,
+  "ev": 6677,
+  "ot": 79222,
+  "uf": 17047,
+  "uv": 41509,
+  "or": 22258
+ },
+ "zstd3 chain one": {
+  "all": 293836
+ },
+ "zstd3 chain per-section": {
+  "seq": 4148,
+  "ce": 120825,
+  "ev": 5214,
+  "ot": 77811,
+  "uf": 16268,
+  "uv": 40669,
+  "or": 20431
+ },
+ "zstd9 alone one": {
+  "all": 231862
+ },
+ "zstd9 alone per-section": {
+  "seq": 3430,
+  "ce": 67947,
+  "ev": 6436,
+  "ot": 76285,
+  "uf": 15904,
+  "uv": 36965,
+  "or": 21861
+ },
+ "zstd9 chain one": {
+  "all": 227589
+ },
+ "zstd9 chain per-section": {
+  "seq": 3162,
+  "ce": 67517,
+  "ev": 4862,
+  "ot": 74486,
+  "uf": 15200,
+  "uv": 36627,
+  "or": 19855
+ },
+ "zstd19 alone one": {
+  "all": 181759
+ },
+ "zstd19 alone per-section": {
+  "seq": 3319,
+  "ce": 46856,
+  "ev": 5908,
+  "ot": 64354,
+  "uf": 15174,
+  "uv": 34335,
+  "or": 22818
+ }
+}

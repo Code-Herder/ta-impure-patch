@@ -5,9 +5,9 @@
 #
 #   ./mp_leave.sh <instance>
 #
-# The host leaving ends the game on every peer (each joiner drops to its own units and goes
-# to ENDMSN); a joiner leaving leaves the others playing. Measured in
-# research/notes/tadr-port/sim-fixes.md (B5, the departing host).
+# Other peers can remain in play after the host leaves. Inspect each peer: ENDMSN
+# has MainMenu; a peer still in play needs its own surrender. Departure roots:
+# research/notes/tadr-port/sim-fixes.md (B5).
 set -eu
 
 [ $# -eq 1 ] || { echo "usage: mp_leave.sh <instance>" >&2; exit 2; }

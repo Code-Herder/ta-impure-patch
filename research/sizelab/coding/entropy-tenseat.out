@@ -1,0 +1,23 @@
+kinds 15 33 41 38
+block 0/11 0s
+
+tenseat N=0: the delta kinds' changed values only (unit, projectile, player, globals), MiB
+  ans0 T1                    0.20
+  ans0 T3                    0.07
+  ans1n T1                   0.20
+  ans1n T3                   0.07
+  ans1u T1                   0.20
+  ans1u T3                   0.07
+  bytes0 T0                  0.23
+  bytes0 T1                  0.13
+  colzstd19 T1               0.06
+  colzstd19 T3               0.06
+  raw T0                     0.39
+  raw T1                     0.39
+  raw T3                     0.39
+  zstd19 T0                  0.14
+  zstd19 T1                  0.04
+  zstd19 T3                  0.04
+  zstd3 T0                   0.17
+  zstd3 T1                   0.05
+  zstd3 T3                   0.05

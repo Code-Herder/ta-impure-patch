@@ -3,11 +3,13 @@
 /* tagpu_recorder -- the demo recorder (research/notes/tadr-port/demo-recorder-skirmish-slice.md).
    tagpu_recorder.c is the capture, on the game thread. tagpu_recwriter.c is the writer thread; it
    reads no engine memory, and since it is not on thread-split.allow the build refuses an engine
-   address in it. The records that pass between them are tagpu_recfmt.h's. A skirmish is recorded
-   only while tagpu_recorder.on is in the game's folder at the level's first iteration. */
+   address in it. The records that pass between them are tagpu_recfmt.h's. A skirmish or native
+   game is saved when tagpu_recorder.on is in the game's folder at the level's first iteration;
+   native owner contributions run independently of that local save request. */
 
 #include <windows.h>
 #include "tagpu_recfile.h"
+#include "tagpu_recmp_file.h"
 
 /* Game-thread VM allocation with a stable START/CALL counter key. */
 int tagpu_rec_cob_child(char* cob, unsigned script, int call);
@@ -54,13 +56,20 @@ void tagpu_rec_level_end(void);
 void tagpu_rec_init(void);
 int tagpu_rec_hooks_in(void);
 
+/* Actual delivered span in this thread's owned primary receive frame. Zero
+   means the pointer is not that frame's current packet. No engine buffer is
+   borrowed; recursive pump depths have independent storage. The native last
+   packet survives return until another receive at that depth overwrites it. */
+unsigned tagpu_rec_wire_received(const void* message);
+
 /* The running game's mod fingerprint, as a recording's RT_MODPRINT states it: FNV-1a over each
    archive the engine mounted, in mount order, its lowercased name without its folder, NUL, size
    and mtime, Impure's own impure-patch.ufo left out. Game thread: the engine mounts there. */
 unsigned tagpu_rec_mod_print(void);
 
-/* The callouts of the events whose sites belong to other modules, on the game thread; each is
-   inert unless a skirmish is being recorded.
+/* The callouts of the events whose sites belong to other modules, on the game thread. Shots
+   and intercepts copy into an active recording; owner script roots also contribute in native
+   games whose local recording is off.
    - tagpu_rec_shot: a fire function's 0x0D packet at its send (wpn_tx_fired), `meteor` for the
      meteor spawn's, whose sender leaves +0x1A..+0x23 as the stack held them.
    - tagpu_rec_intercept: area damage's 0x0E, from its target point (three dwords) and the
@@ -70,6 +79,9 @@ unsigned tagpu_rec_mod_print(void);
      the slots from 3 up): `now` is the start's third argument, `a0` its one argument. */
 void tagpu_rec_shot(const unsigned char* pkt, int meteor);
 void tagpu_rec_intercept(const unsigned char* point, unsigned weapon);
+/* B4's existing CreateFromNetwork success observer, after its incarnation stamp.
+   The record's first 17 bytes are the constructor's bounded input; no worker reads it. */
+void tagpu_rec_network_created(const char* unit, const unsigned char* record, unsigned birth);
 void tagpu_rec_start_named(const char* unit, const char* name, int now, int argc, int a0);
 
 /* What a recording's header says about the game it was made in, computed as the header computes
@@ -170,6 +182,8 @@ typedef struct RecRing {
                                           Islands, 21 MB)                                      */
     RecFork        fork;               /* a fork's file and append point; fork.file NULL for an
                                           ordinary recording, which creates its own file       */
+    RecMpFile*     mp;                 /* copied contribution context, set before writer start;
+                                          producer end precedes the final ring publication     */
 } RecRing;
 
 /* Starts the writer thread on a ring whose first record is RK_HEADER. From then on the writer
@@ -192,6 +206,10 @@ int tagpu_rec_fork_arm(RecFork* f);
 int tagpu_rec_rewind_open(unsigned* timeline, char* why, unsigned whycap);
 int tagpu_rec_rewind_flush(char* path, unsigned cap);
 int tagpu_rec_suspend(int on);
+
+/* The bytes of the ring the game thread's recording holds unwritten, 0 when it records none.
+   Game thread only. The turbo's back-pressure (tagpu_replay.c, THE TURBO). */
+unsigned tagpu_rec_ring_used(void);
 typedef void (*RecPendingVisit)(void* ctx, unsigned kind, const unsigned char* body, unsigned len);
 void tagpu_rec_pending_events(RecPendingVisit visit, void* ctx);
 /* Ends the original with its pending events. The caller owns the returned done-event duplicate

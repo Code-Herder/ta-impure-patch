@@ -1,0 +1,11 @@
+death image vs the images' unit image, dwords that differ: [(0, 13), (1, 39), (10, 5), (11, 9), (12, 21), (13, 38), (14, 48), (15, 28), (16, 26), (17, 12), (18, 7), (19, 4), (2, 11), (20, 1), (3, 3), (4, 3), (5, 3), (6, 5), (7, 6), (8, 4), (9, 4)]
+shot start - shooter position, bits of the largest axis (world units): [(0, 978), (2, 236), (3, 14), (4, 132), (5, 465), (6, 218)]
+shot target - target position, bits: [(0, 53), (1, 24), (2, 80), (3, 501), (4, 482), (5, 114), (7, 3)]
+a shot: (186739806, 8088523, 108789690) (203587584, 5970329, 108804505) shooter (185335808, 5505024, 108789760) target (203685888, 5505024, 108789760)
+  actual, predicted same value: 10,084
+  slot A changes: 10,644
+  cells in the tick input: 1,367,274
+  actual, not predicted: 560
+  predicted, no change: 41
+the new slot A value against the slots: {'slot == value': 16483}
+1.07 s, 481256 KB maxrss

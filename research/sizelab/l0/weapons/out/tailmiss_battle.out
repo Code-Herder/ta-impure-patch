@@ -1,0 +1,6 @@
+paired                                                  8136
+tail != start                                           31
+  tail - start == pos - tail (one tick late)            0
+  tail - start == vel                                   0
+by weapon [(110, 23), (109, 8)]
+delta magnitude (bits, signed) per axis [((-20, 18, -21), 6), ((-18, 17, -19), 4), ((19, 17, -18), 3), ((19, 17, -19), 2), ((19, -16, -19), 2), ((21, -20, -20), 1), ((21, 18, -19), 1), ((-19, 18, 19), 1)]

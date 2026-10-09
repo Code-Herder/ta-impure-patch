@@ -1,10 +1,11 @@
 #ifndef TAGPU_RECREADER_H
 #define TAGPU_RECREADER_H
-/* tagpu_recreader -- reads a demo recording back (tagpu_recfmt.h): its blocks, each checked and
-   inflated, the header's entries, and the world the stream builds, one iteration at a time or
-   from a snapshot at a seek (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S2b, S3a
-   and S3b). tagpu_replay.c applies what this reads; this file reads no engine memory, and since
-   it is not on thread-split.allow the build refuses an engine address in it.
+/* tagpu_recreader -- reads a demo recording back (tagpu_recfmt.h): its blocks, each checked,
+   unpacked and, when sectioned, decoded (tagpu_reccodec.h), the header's entries, and the world
+   the stream builds, one iteration at a time or from a snapshot at a seek
+   (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S2b, S3a and S3b). tagpu_replay.c
+   applies what this reads; this file reads no engine memory, and since it is not on
+   thread-split.allow the build refuses an engine address in it.
    tools/replay/tarec.py reads the same records and accepts the same shapes: a change to one is a
    change to the other.
 
@@ -15,11 +16,20 @@
 
 #include <stdint.h>
 #include "tagpu_recfmt.h"
+#include "tagpu_reccodec.h"
 #include "tagpu_recfile.h"
+#include "tagpu_recmp_file.h"
+#include "tagpu_recmp_units.h"
+#include "tagpu_recmp_named.h"
+#include "tagpu_recmp_roots.h"
+#include "tagpu_recmp_explored.h"
+#include "tagpu_recmp_text.h"
+#include "tagpu_recmp_pov.h"
 
 #define RECR_TEXT       64          /* a header string's bytes kept, NUL included            */
 #define RECR_NAME       (0x1E + 1)  /* a seat's name: the record's 0x1E bytes, NUL included  */
-#define RECR_BLOCK_MAX  (64u << 20) /* the most bytes a block may pack or inflate to         */
+#define RECR_BLOCK_MAX  (64u << 20) /* the most bytes a block may pack or unpack to, and a
+                                       sectioned block decode to                              */
 #define RECR_TIMELINES  64          /* the segments a file may hold: a file with more is refused
                                        by name                                                   */
 #define RECR_BOUNDARY   2           /* recr_tick: the chain goes on in its next segment         */
@@ -60,6 +70,13 @@ typedef struct RecHeader {
     RecSeat      seats[REC_PLAYERS];            /* in the header's order               */
     unsigned     ntab;
     RecTableInfo tab[REC_TABLE_MAX];
+    unsigned     has_mp;
+    RecMpRecordHeader mp;
+    unsigned     has_mp_seats;
+    RecMpRoster mp_seats;
+    unsigned     has_codec;                 /* RT_CODEC and RT_PHYSICS: a sectioned stream block
+                                               may come; without them only records blocks    */
+    RecCodecParams codec;                   /* their constants, and RT_AIR's (about 25 KB)    */
 } RecHeader;
 
 /* one node list of a live unit, its node images in list order */
@@ -81,7 +98,7 @@ typedef struct RecEvent { unsigned kind, len; const unsigned char* b; } RecEvent
 
 /* The recorded world at the end of one iteration's images: every live slot's image and lists,
    the ten players, the controllers and the viewer, the declared tables, the features, the
-   globals, the projectile pool and the explored map. */
+   globals, the projectile pool, the explored map and the human seat's perspective. */
 typedef struct RecWorld {
     unsigned       slots;       /* slots 1 .. slots - 1 hold units, as the engine's array     */
     unsigned       tick;        /* the GameTime of the images it holds                        */
@@ -114,6 +131,17 @@ typedef struct RecWorld {
     unsigned       mapped_bytes;   /* REC_MAPPED_BYTES of the header's grid                   */
     int            mapped_whole;   /* its RK_MAPPED records have all come                     */
     unsigned       corrections; /* RK_CORRECTs read: the recording machine's own repairs      */
+    /* THE PERSPECTIVE (tagpu_recpov.h): a skirmish's human seat's, as its RK_POV, RK_SELECT and
+       RK_CLICK records leave it, and as a snapshot's RK_POV_AT and RK_SELECT rebuild it */
+    unsigned       npov[REC_PLAYERS];          /* a seat's samples held: 0, 1 or 2               */
+    RecPov         pov[REC_PLAYERS][2];        /* ... the earlier first, the latest last          */
+    unsigned       pov_tick[REC_PLAYERS][2];   /* ... and the GameTime each was taken             */
+    unsigned       nsel[REC_PLAYERS];          /* a seat's selection, ascending by slot ...       */
+    RecSelEntry*   sel;                        /* ... [REC_PLAYERS * REC_SEL_MAX], seat-major    */
+    unsigned       nclick;      /* the iteration's clicks, in the order they came: after the
+                                   step's events, so each is a click of the frames between this
+                                   capture point and the next                                 */
+    RecEvent*      click;
 } RecWorld;
 
 typedef struct RecReader RecReader;
@@ -213,6 +241,9 @@ int recr_timelines(RecReader* r, RecTimeline* out, unsigned cap, char* why, unsi
 int recr_timeline(RecReader* r, unsigned id, char* why, unsigned cap);
 /* the chosen timeline */
 const RecTimeline* recr_selected(const RecReader* r);
+/* 1 when the segment the world was last read from carries a multiplayer roster: a multiplayer
+   file's own segment, never a takeover's timeline, which a skirmish level records */
+int recr_segment_mp(const RecReader* r);
 /* Where a fork at `at` is appended, found afresh: the caller holds the file open for writing
    first, so no other writer can change it until the fork's writer has used this (tagpu_replay.c,
    TK0). A torn last block is not kept, an unfinished last segment with no complete iteration is
@@ -222,6 +253,42 @@ const RecTimeline* recr_selected(const RecReader* r);
 int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsigned cap);
 /* 1 when the file HANDLE `f` is the file the reader holds open: one volume, one file index */
 int recr_same_file(const RecReader* r, void* f);
+
+/* Authority at the currently read world tick. Rebuild after seek/segment/index
+   changes; advancing queries consume only new application records. Unknown stays
+   unknown; late proof records never publish. 1 found, 0 unknown, -1 invalid (why).
+   Player images use recorder row coordinates and retain source provenance.
+   These return copied normalized values, never write engine state. */
+int recr_mp_player(RecReader* r, unsigned origin, RecMpPlayerState* out, char* why, unsigned cap);
+int recr_mp_explored(RecReader* r, unsigned origin, RecMpExploreState* out, void* image, unsigned capacity,
+                      char* why, unsigned cap);
+/* An actor's last two camera/cursor samples and its last whole selection (tagpu_recmp_pov.h);
+   a NULL `entries` asks for the selection's metadata only, else `capacity` holds every entry. */
+int recr_mp_pov(RecReader* r, unsigned origin, RecMpPovState* out, char* why, unsigned cap);
+int recr_mp_select(RecReader* r, unsigned origin, RecMpSelectState* out, RecSelEntry* entries,
+                   unsigned capacity, char* why, unsigned cap);
+int recr_mp_unit(RecReader* r, unsigned slot, RecMpUnitState* out, char* why, unsigned cap);
+/* Latest applied batch for inspection; every root remains in the ordered ledger. */
+int recr_mp_roots(RecReader* r, unsigned origin, RecMpRootsState* out, char* why, unsigned cap);
+int recr_mp_named(RecReader* r, unsigned origin, RecMpNamedState* out, char* why, unsigned cap);
+int recr_mp_text(RecReader* r, unsigned origin, RecMpTextState* out, char* why, unsigned cap);
+int recr_mp_orders(RecReader* r, unsigned slot, unsigned list, RecMpOrderState* out,
+                     void* image, unsigned capacity, char* why, unsigned cap);
+
+typedef void (*RecMpApplyVisit)(void* ctx, const RecMpRecord* where,
+                                const RecMpHeader* packet, const void* body, unsigned bytes);
+/* Visit every application envelope after *ordinal through the current world
+   tick, in recorded order. Both clocks, source sequence and batch bytes stay
+   intact; proof tails never visit. Arguments are borrowed until the callback
+   returns; callbacks must not call into this reader. Set *ordinal to zero for a
+   new reconstruction, including after seeking backwards. A copied-state query
+   cannot consume this cursor. Repeating an acknowledged prefix visits nothing.
+   1 success, 0 before a world/non-multiplayer, -1 invalid (why). Each completed
+   callback advances *ordinal even if a later read fails, so retry cannot repeat
+   an already delivered batch. An ordinal beyond this world's prefix is refused
+   before any callback. No engine state is read or written here. */
+int recr_mp_apply(RecReader* r, uint64_t* ordinal, RecMpApplyVisit visit, void* ctx,
+                    char* why, unsigned cap);
 
 /* What the Replays browser shows of a recording, read from its header, its minimap block and its
    end block alone (the stream's blocks are skipped unread). */

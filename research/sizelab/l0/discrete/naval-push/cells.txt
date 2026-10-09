@@ -1,0 +1,42 @@
+first iteration (GameTime 1): 337552 cells, raw 4.19 MB, deflate 304 KB, zstd19 137 KB
+  first: cells: 337,552
+  images: cells: 26,069
+  images: records: 15,044
+  tick input: cells: 22,981
+  tick input: records: 14,847
+  images: cell in the last tick input: 22,981
+  images: same bytes as the last tick input: 22,981
+run length (cells a record, 9 = 9+): [(1, 24920), (2, 512), (3, 153), (4, 2559), (5, 1015), (6, 275), (7, 90), (8, 150), (9, 217)]
+
+images' changed cells by the fields that changed:
+  slotA: 21,745
+  slotA+def+back: 1,399
+  def: 1,389
+  def+back: 476
+  slotA+back: 398
+  slotA+flags: 278
+  back: 120
+  slotA+def+back+flags: 118
+  def+flags: 58
+  def+back+flags: 51
+  slotA+def: 31
+  slotA+def+flags: 2
+  back+flags: 2
+  slotA+back+flags: 2
+
+tick input cells by the fields that differ from the images' grid:
+  slotA: 18,882
+  slotA+def+back: 1,399
+  def: 1,389
+  def+back: 476
+  slotA+back: 398
+  back: 120
+  slotA+def+back+flags: 118
+  def+flags: 58
+  slotA+flags: 53
+  def+back+flags: 51
+  slotA+def: 31
+  slotA+def+flags: 2
+  back+flags: 2
+  slotA+back+flags: 2
+0.46 s, 139076 KB maxrss

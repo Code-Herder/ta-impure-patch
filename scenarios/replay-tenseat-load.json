@@ -1,0 +1,98 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's ten-seat fixture: all ten records seated (the human and nine AIs) on Core Prime Industrial Area, a ten-player map; the replay's viewer takes record 10, outside them (demo-recorder-ten-seats.md).",
+ "setup": {
+  "map": "Core Prime Industrial Area",
+  "res": "1024x768",
+  "unit_limit": 250,
+  "clear_existing": false,
+  "los": "permanent",
+  "mapping": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 2,
+    "controller": "ai",
+    "side": "arm",
+    "color": 2,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 3,
+    "controller": "ai",
+    "side": "core",
+    "color": 3,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 4,
+    "controller": "ai",
+    "side": "arm",
+    "color": 4,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 5,
+    "controller": "ai",
+    "side": "core",
+    "color": 5,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 6,
+    "controller": "ai",
+    "side": "arm",
+    "color": 6,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 7,
+    "controller": "ai",
+    "side": "core",
+    "color": 7,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 8,
+    "controller": "ai",
+    "side": "arm",
+    "color": 8,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 9,
+    "controller": "ai",
+    "side": "core",
+    "color": 9,
+    "metal": 10000,
+    "energy": 10000
+   }
+  ]
+ }
+}

@@ -49,9 +49,9 @@
    "the game thread owns all of main" is false during a load and true for
    every in-play draw — exactly the set the return-address gate selects, and
    what closes the audit's begin/end hazard by ORDERING rather than by speed.
-   No instruction clears bit 0 or bit 1 (every reference to the word is
-   listed in the exe note), so whether they are reset between two games in
-   one process is settled by the log lines here, not by the disassembly.
+   The in-play entry zeroes the flag word with bulk stores at 0x49847E and
+   0x498480, after the catch-up frame and the state-6 store. That frame's
+   first draw can therefore see flags 3; later draws see 0 with no live loader.
    The observer on 0x497C70 (stolen `55 8B EC 6A FF`, position-independent)
    logs the loader's thread id at its entry — a direct measurement rather than
    a call-chain inference.
@@ -112,6 +112,7 @@
 #include "tagpu_feat.h"      /* whether the mirror wants the map's own features */
 #include "tagpu_hudstate.h"   /* the replay HUD's record, through the replay's own calls */
 #include "tagpu_datakeys.h"  /* the build ghost's piece masks, computed on THIS thread */
+#include "tagpu_replay.h"    /* the replay's overlays, built at its frame visit on THIS thread */
 
 /* DrawGameScreen's prologue, `sub esp,0x214` — the same six bytes
    tagpu_menu.c observes */
@@ -357,6 +358,9 @@ typedef char pk_maxpiece_agrees[(TAGPU_PK_MAXPIECE == TAGPU_PBMAXPIECE) ? 1 : -1
 typedef char pk_units_design[(TAGPU_PK_MAX_UNITS >= TAGPU_PK_DESIGN_SLOTS) ? 1 : -1];
 typedef char pk_limit_design[(10u * TAGPU_LIM_UNITS + 1u <= TAGPU_PK_DESIGN_SLOTS) ? 1 : -1];
 typedef char pk_unit_size  [(sizeof(TAGPU_PK_UNIT)   == 104) ? 1 : -1];
+typedef char pk_unit_rsel  [(offsetof(TAGPU_PK_UNIT, pad0) == 85 &&
+                             offsetof(TAGPU_PK_UNIT, rsel) == 86) ? 1 : -1];
+typedef char pk_overlay_size[(sizeof(TAGPU_PK_OVERLAY) == 16) ? 1 : -1];
 typedef char pk_piece_size [(sizeof(TAGPU_PK_PIECE)  ==  24) ? 1 : -1];
 typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  44) ? 1 : -1];
 typedef char pk_anchor_size[(sizeof(TAGPU_PK_ANCHOR) ==  16) ? 1 : -1];
@@ -832,6 +836,9 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             if (!(st & ST_ALIVE) || (st & ST_EXCLUDED)) continue;
             ue = &s_uScratch[nu];
             fill_unit(ue, ta, u, i, udefCount, udefs);
+            /* the recorded selections this slot is in, as the replay's frame visit left them
+               before this draw (fill_overlay below states the ordering) */
+            ue->rsel = (uint16_t)tagpu_replay_rsel(i);
             /* the ground height under the anchor: the shadow's height, and the
                one feature-grid read a unit needs.
 
@@ -2481,6 +2488,21 @@ static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
     return need;
 }
 
+/* THE REPLAY'S OVERLAYS, COPIED BY VALUE. The replay builds them at its frame visit, before
+   the draw call 0x4969CD, from the recording alone; this fill runs in the `after` of that same
+   draw, at 0x4969D2, on the same game thread -- so a packet carries the overlays of the frame it
+   describes, and nothing in it points into the replay's state. The items are at most
+   TAGPU_PK_MAX_OVERLAY, the bound the acquire checks again with every item's kind and player. */
+static TAGPU_PK_OVERLAY s_ovScratch[TAGPU_PK_MAX_OVERLAY];
+
+static unsigned fill_overlay(TAGPU_PACKET* p, unsigned* cursor)
+{
+    unsigned n = tagpu_replay_overlays(s_ovScratch, TAGPU_PK_MAX_OVERLAY, p->ov_col);
+    if (n > TAGPU_PK_MAX_OVERLAY) n = TAGPU_PK_MAX_OVERLAY;
+    return append_table(p, cursor, s_ovScratch, n, (unsigned)sizeof(TAGPU_PK_OVERLAY),
+                        &p->off_overlay, &p->n_overlay, TAGPU_PK_TRUNC_OVERLAY);
+}
+
 static unsigned fill_gui(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 {
     unsigned need = *cursor, e;
@@ -2660,6 +2682,8 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        thread reconciles its prediction against these */
     tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied, &p->cmd_epoch,
                        &p->cam_centre);
+    /* the replay's Follow the same apply wrote the eye for, read below */
+    tagpu_zoom_follow_pub(&p->follow_epoch, &p->follow_level);
     p->gui_flips   = tagpu_gui_flips();
     p->draw_seq    = s_cDraws;
     p->eye[0]       = RD32(ta, OFF_EYE_X);      p->eye[1]       = RD32(ta, OFF_EYE_Y);
@@ -2715,8 +2739,8 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        world tables straight after them, and then the map's own features while
        the mirror is taking them -- the reserve holds all of those at the
        design point (tagpu_packet.c, PK_RESERVE) -- and what an overflow can
-       reach is what follows: the build orders, the effects, the UI's render
-       half, the font, and last the effects models' five tables, the one layer
+       reach is what follows: the build orders, the replay's overlays, the
+       effects, the UI's render half, the font, and last the effects models' five tables, the one layer
        an engine count can drive past the design point (fill_fxmodels). A
        frame below 1x without its fog grids is drawn bare, one without its
        unit tables drops its whole unit hand-over, and one without its
@@ -2749,6 +2773,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     if (e > need) need = e;
     /* ---- the build-orders table (the ghost pass) ---- */
     e = fill_builds(p, &cursor);
+    if (e > need) need = e;
+    /* ---- the replay's overlays: 2 KB at most ---- */
+    e = fill_overlay(p, &cursor);
     if (e > need) need = e;
     /* ---- the effects and the particle layers ---- */
     e = fill_fx(p, ta, &cursor);

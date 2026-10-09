@@ -82,7 +82,7 @@ int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
         s->units = pl[i].units;
         s->allies = (uint16_t)pl[i].allies;
         s->seat = (uint8_t)pl[i].seat;
-        s->pal = (uint8_t)tagpu_cards_logo_pal(pl[i].colour);
+        s->pal = (uint8_t)tagpu_cards_colour(pl[i].colour);
         s->lost = (uint8_t)(pl[i].commander_losses > 0);
         h->nseat++;
     }

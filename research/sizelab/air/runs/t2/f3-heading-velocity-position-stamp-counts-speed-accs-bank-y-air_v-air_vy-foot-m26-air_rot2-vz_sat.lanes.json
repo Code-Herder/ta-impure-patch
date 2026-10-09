@@ -1,0 +1,426 @@
+{
+ "tag": "f3-heading-velocity-position-stamp-counts-speed-accs-bank-y-air_v-air_vy-foot-m26-air_rot2-vz_sat",
+ "framing": {
+  "gaps": 39022,
+  "mask dict": 109348,
+  "mask ids": 136769
+ },
+ "lanes": [
+  {
+   "lane": "+0x120/4",
+   "deflated_KiB": 52.2,
+   "air_nz": 61029,
+   "other_nz": 0,
+   "air_varint_KiB": 66.3,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x128/4",
+   "deflated_KiB": 38.4,
+   "air_nz": 62591,
+   "other_nz": 0,
+   "air_varint_KiB": 65.0,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x124/4",
+   "deflated_KiB": 35.5,
+   "air_nz": 12080,
+   "other_nz": 0,
+   "air_varint_KiB": 34.7,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x13C/2",
+   "deflated_KiB": 30.0,
+   "air_nz": 44095,
+   "other_nz": 5986,
+   "air_varint_KiB": 47.3,
+   "other_varint_KiB": 6.8
+  },
+  {
+   "lane": "+0x08E/4",
+   "deflated_KiB": 23.1,
+   "air_nz": 12731,
+   "other_nz": 280,
+   "air_varint_KiB": 21.5,
+   "other_varint_KiB": 0.4
+  },
+  {
+   "lane": "+0x110/4",
+   "deflated_KiB": 20.7,
+   "air_nz": 26416,
+   "other_nz": 433,
+   "air_varint_KiB": 104.1,
+   "other_varint_KiB": 0.6
+  },
+  {
+   "lane": "+0x01C/2",
+   "deflated_KiB": 16.3,
+   "air_nz": 9944,
+   "other_nz": 1647,
+   "air_varint_KiB": 11.9,
+   "other_varint_KiB": 3.1
+  },
+  {
+   "lane": "+0x01A/2",
+   "deflated_KiB": 15.9,
+   "air_nz": 8608,
+   "other_nz": 1906,
+   "air_varint_KiB": 10.5,
+   "other_varint_KiB": 4.8
+  },
+  {
+   "lane": "+0x082/4",
+   "deflated_KiB": 8.0,
+   "air_nz": 11561,
+   "other_nz": 148,
+   "air_varint_KiB": 15.4,
+   "other_varint_KiB": 0.2
+  },
+  {
+   "lane": "+0x0F8/1",
+   "deflated_KiB": 7.3,
+   "air_nz": 10488,
+   "other_nz": 333,
+   "air_varint_KiB": 10.4,
+   "other_varint_KiB": 0.4
+  },
+  {
+   "lane": "+0x07C/2",
+   "deflated_KiB": 6.8,
+   "air_nz": 17485,
+   "other_nz": 304,
+   "air_varint_KiB": 17.1,
+   "other_varint_KiB": 0.3
+  },
+  {
+   "lane": "+0x07A/2",
+   "deflated_KiB": 6.3,
+   "air_nz": 31420,
+   "other_nz": 473,
+   "air_varint_KiB": 30.8,
+   "other_varint_KiB": 0.5
+  },
+  {
+   "lane": "+0x036/2",
+   "deflated_KiB": 5.6,
+   "air_nz": 4235,
+   "other_nz": 0,
+   "air_varint_KiB": 5.1,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x0BA/2",
+   "deflated_KiB": 5.6,
+   "air_nz": 1921,
+   "other_nz": 1078,
+   "air_varint_KiB": 4.5,
+   "other_varint_KiB": 2.5
+  },
+  {
+   "lane": "+0x038/2",
+   "deflated_KiB": 5.5,
+   "air_nz": 4057,
+   "other_nz": 0,
+   "air_varint_KiB": 4.6,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x01F/1",
+   "deflated_KiB": 3.5,
+   "air_nz": 636,
+   "other_nz": 3214,
+   "air_varint_KiB": 0.6,
+   "other_varint_KiB": 3.1
+  },
+  {
+   "lane": "+0x004/2",
+   "deflated_KiB": 3.0,
+   "air_nz": 711,
+   "other_nz": 680,
+   "air_varint_KiB": 1.2,
+   "other_varint_KiB": 1.1
+  },
+  {
+   "lane": "+0x018/2",
+   "deflated_KiB": 2.9,
+   "air_nz": 1290,
+   "other_nz": 544,
+   "air_varint_KiB": 1.5,
+   "other_varint_KiB": 0.8
+  },
+  {
+   "lane": "+0x0B0/4",
+   "deflated_KiB": 2.8,
+   "air_nz": 923,
+   "other_nz": 396,
+   "air_varint_KiB": 1.3,
+   "other_varint_KiB": 0.7
+  },
+  {
+   "lane": "+0x072/4",
+   "deflated_KiB": 2.8,
+   "air_nz": 0,
+   "other_nz": 924,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 1.9
+  },
+  {
+   "lane": "+0x0FA/1",
+   "deflated_KiB": 2.7,
+   "air_nz": 457,
+   "other_nz": 1374,
+   "air_varint_KiB": 0.5,
+   "other_varint_KiB": 1.4
+  },
+  {
+   "lane": "+0x138/4",
+   "deflated_KiB": 2.7,
+   "air_nz": 0,
+   "other_nz": 983,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 2.2
+  },
+  {
+   "lane": "+0x00C/4",
+   "deflated_KiB": 2.6,
+   "air_nz": 0,
+   "other_nz": 2866,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 2.8
+  },
+  {
+   "lane": "+0x108/2",
+   "deflated_KiB": 2.5,
+   "air_nz": 337,
+   "other_nz": 899,
+   "air_varint_KiB": 0.6,
+   "other_varint_KiB": 1.0
+  },
+  {
+   "lane": "+0x06A/4",
+   "deflated_KiB": 2.3,
+   "air_nz": 0,
+   "other_nz": 626,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 1.4
+  },
+  {
+   "lane": "+0x0F0/4",
+   "deflated_KiB": 2.0,
+   "air_nz": 292,
+   "other_nz": 625,
+   "air_varint_KiB": 0.4,
+   "other_varint_KiB": 0.7
+  },
+  {
+   "lane": "+0x06E/4",
+   "deflated_KiB": 2.0,
+   "air_nz": 0,
+   "other_nz": 653,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 1.9
+  },
+  {
+   "lane": "+0x0C0/4",
+   "deflated_KiB": 1.8,
+   "air_nz": 0,
+   "other_nz": 328,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 1.5
+  },
+  {
+   "lane": "+0x020/2",
+   "deflated_KiB": 1.6,
+   "air_nz": 699,
+   "other_nz": 0,
+   "air_varint_KiB": 1.1,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x0D0/4",
+   "deflated_KiB": 1.1,
+   "air_nz": 200,
+   "other_nz": 289,
+   "air_varint_KiB": 1.0,
+   "other_varint_KiB": 1.4
+  },
+  {
+   "lane": "+0x006/2",
+   "deflated_KiB": 1.1,
+   "air_nz": 334,
+   "other_nz": 0,
+   "air_varint_KiB": 1.0,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x146/1",
+   "deflated_KiB": 0.9,
+   "air_nz": 200,
+   "other_nz": 199,
+   "air_varint_KiB": 0.2,
+   "other_varint_KiB": 0.2
+  },
+  {
+   "lane": "+0x0F4/1",
+   "deflated_KiB": 0.9,
+   "air_nz": 121,
+   "other_nz": 112,
+   "air_varint_KiB": 0.1,
+   "other_varint_KiB": 0.1
+  },
+  {
+   "lane": "+0x0F6/1",
+   "deflated_KiB": 0.8,
+   "air_nz": 374,
+   "other_nz": 413,
+   "air_varint_KiB": 0.6,
+   "other_varint_KiB": 0.5
+  },
+  {
+   "lane": "+0x0F7/1",
+   "deflated_KiB": 0.7,
+   "air_nz": 354,
+   "other_nz": 376,
+   "air_varint_KiB": 0.6,
+   "other_varint_KiB": 0.5
+  },
+  {
+   "lane": "+0x0F5/1",
+   "deflated_KiB": 0.7,
+   "air_nz": 116,
+   "other_nz": 80,
+   "air_varint_KiB": 0.1,
+   "other_varint_KiB": 0.1
+  },
+  {
+   "lane": "+0x10E/1",
+   "deflated_KiB": 0.6,
+   "air_nz": 200,
+   "other_nz": 140,
+   "air_varint_KiB": 0.2,
+   "other_varint_KiB": 0.1
+  },
+  {
+   "lane": "+0x034/2",
+   "deflated_KiB": 0.6,
+   "air_nz": 152,
+   "other_nz": 0,
+   "air_varint_KiB": 0.3,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x0B8/2",
+   "deflated_KiB": 0.5,
+   "air_nz": 77,
+   "other_nz": 10,
+   "air_varint_KiB": 0.1,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x0C4/4",
+   "deflated_KiB": 0.5,
+   "air_nz": 0,
+   "other_nz": 75,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 0.3
+  },
+  {
+   "lane": "+0x0CC/4",
+   "deflated_KiB": 0.5,
+   "air_nz": 200,
+   "other_nz": 154,
+   "air_varint_KiB": 1.0,
+   "other_varint_KiB": 0.8
+  },
+  {
+   "lane": "+0x0DC/4",
+   "deflated_KiB": 0.5,
+   "air_nz": 0,
+   "other_nz": 71,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 0.3
+  },
+  {
+   "lane": "+0x0D8/4",
+   "deflated_KiB": 0.5,
+   "air_nz": 0,
+   "other_nz": 71,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 0.3
+  },
+  {
+   "lane": "+0x0C8/4",
+   "deflated_KiB": 0.5,
+   "air_nz": 970,
+   "other_nz": 59,
+   "air_varint_KiB": 4.7,
+   "other_varint_KiB": 0.3
+  },
+  {
+   "lane": "+0x03B/1",
+   "deflated_KiB": 0.4,
+   "air_nz": 216,
+   "other_nz": 0,
+   "air_varint_KiB": 0.2,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x10A/2",
+   "deflated_KiB": 0.2,
+   "air_nz": 589,
+   "other_nz": 38,
+   "air_varint_KiB": 0.6,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x104/4",
+   "deflated_KiB": 0.1,
+   "air_nz": 0,
+   "other_nz": 17,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 0.1
+  },
+  {
+   "lane": "+0x0E4/4",
+   "deflated_KiB": 0.1,
+   "air_nz": 0,
+   "other_nz": 10,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x0AC/4",
+   "deflated_KiB": 0.1,
+   "air_nz": 100,
+   "other_nz": 55,
+   "air_varint_KiB": 0.1,
+   "other_varint_KiB": 0.1
+  },
+  {
+   "lane": "+0x0E8/4",
+   "deflated_KiB": 0.1,
+   "air_nz": 0,
+   "other_nz": 6,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x10F/1",
+   "deflated_KiB": 0.0,
+   "air_nz": 0,
+   "other_nz": 2,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 0.0
+  },
+  {
+   "lane": "+0x057/1",
+   "deflated_KiB": 0.0,
+   "air_nz": 0,
+   "other_nz": 2,
+   "air_varint_KiB": 0.0,
+   "other_varint_KiB": 0.0
+  }
+ ]
+}

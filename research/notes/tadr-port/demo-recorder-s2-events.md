@@ -79,8 +79,9 @@ The step T tick, in order: the network pump 0x453D40 (network only), then these 
      neither.
    - **Why not CreateFromNetwork.** CreateFromNetwork 0x4861D0 is the live remote's path. It is
      always unfinished, checks nothing and destroys an occupant: the wrong tool.
-   - **Build progress.** `+0x104` (a float, build remaining) and HP ride in the image. The
-     nanoframe look (`[+0x9E]+0x10`) has one writer, the build-done event.
+   - **Build progress.** `+0x104` (a float, build remaining) and HP ride in the image, and the
+     nanoframe look follows `+0x104`. The model's composite frame (`[+0x9E]+0x10`, the cached
+     1x bake) is cleared at a finish only by the build-done event.
 4. **Sounds (§4).** The replayed receivers make every sound a live remote makes, with no help:
    - fire sounds (0x49C866);
    - bursts (0x49B87A);
@@ -458,8 +459,8 @@ The step T tick, in order: the network pump 0x453D40 (network only), then these 
   - Bound the IDs first. The recorder calls it directly, so `kill_s12`, the wire's bound at
     0x4555BA, does not apply.
 - **Writes, on every machine:**
-  - `[built+0x9E]+0x10` = 0, the model's nanoframe flag (0x41B923). It is **not** a record
-    byte, so this event is its only writer on the host.
+  - `[built+0x9E]+0x10` = 0, the model's composite frame, the cached 1x bake (0x41B923). It is
+    **not** a record byte, so this event is what clears it at a finish on the host.
   - `+0x110` bit 13 and `+0x104` = 0.0 (0x41B930..0x41B93D).
   - `activatewhenbuilt` → `0x48B090(1,1)` (0x41B9BF).
   - `isfeature` → `+0xF5` = 7 and bit 14 (0x41B9F8..0x41BA08).
@@ -766,9 +767,13 @@ are wanted.
   - `+0x104` (float, build remaining; 0.0 = done) and HP `+0x108` are record bytes, so the image
     carries them every step.
   - The builder's order that raises them is owner code and does not run on a puppet.
-  - The **model's nanoframe flag** `[+0x9E]+0x10` is not a record byte. It is cleared only by
-    0x41B8D0, so the **build-done event is required**: without it a finished unit keeps its
-    nanoframe look.
+  - The **model's composite frame** `[+0x9E]+0x10` (the cached 1x bake) is not a record byte.
+    At a finish only 0x41B8D0 clears it, so in a skirmish the **build-done event is required**:
+    without it a finished structure keeps its nanoframe bake (on GDI its dont-cache pieces drawn
+    twice, in both renderers the depth plane's waterline and digger clips; the engine map's
+    *The composite and the build fraction*). A multiplayer segment clears it at the image's
+    write instead ([the multiplayer slice](demo-recorder-multiplayer-slice.md), *The build
+    finish*).
   - The nano spray is the owner's order code and is not reproduced. It is the S2 row's own
     item.
 - **When a recorded unit appears, playback:**

@@ -1,0 +1,5 @@
+today: raw 1.17 MB, deflate 95 KB, zstd3 79 KB, zstd19 66 KB
+  bytes  raw 0.18 MB, deflate 52 KB (0.54x), zstd3 56 KB (0.71x), zstd19 51 KB (0.78x)  [decoded: equal]
+  dod    raw 0.21 MB, deflate 58 KB (0.61x), zstd3 62 KB (0.79x), zstd19 57 KB (0.87x)  [decoded: equal]
+  tick   raw 0.24 MB, deflate 50 KB (0.52x), zstd3 53 KB (0.67x), zstd19 48 KB (0.73x)  [decoded: equal]
+0.83 s, 59192 KB maxrss

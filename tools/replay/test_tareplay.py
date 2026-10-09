@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments): the C parser against the coverage build's map, the features' regions, the comment
-filter, `landing --check`, a recording's segments and chains, read from files built from the
-format alone, the fixtures' takeover entries and the W lane's edited header copies. Standard
-library only; no game runs.
+filter, `landing --check`, a recording's segments and chains and what format 8's block walk
+refuses, read from files built from the format alone, the fixtures' takeover entries and the W
+lane's edited header copies. No game runs. The files are read through reccodec.py, which needs
+numpy, numba and zstandard: devpy.ensure() re-executes this under the shared venv when they are
+missing.
 
     python3 tools/replay/test_tareplay.py
 """
@@ -14,6 +16,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import zlib
 from unittest.mock import Mock, patch
@@ -23,11 +27,40 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import tafeat  # noqa: E402
+import reccache  # noqa: E402
 import tarec  # noqa: E402
 import tareplay  # noqa: E402
 import tarewind  # noqa: E402
 
 MAPS = [tafeat.DDRAW / "ddraw-cover.map", tafeat.DDRAW / "ddraw-stocklimits-cover.map"]
+
+
+class KernelCompileAcrossThreads(unittest.TestCase):
+    """tareplay decodes from several threads of one process: the first decodings, together, each
+    find every kernel replaced once, none decorated twice."""
+
+    def test_threads_compile_together(self):
+        code = """
+import sys, threading
+sys.path.insert(0, sys.argv[1])
+import reccodec
+gate, errors = threading.Barrier(16), []
+def go():
+    gate.wait()
+    try:
+        reccodec._compile()
+    except Exception as e:
+        errors.append(repr(e))
+threads = [threading.Thread(target=go) for _ in range(16)]
+for t in threads: t.start()
+for t in threads: t.join()
+plain = [n for n, _ in reccodec._KERNELS if not hasattr(reccodec.__dict__[n], "py_func")]
+print(errors, plain)
+"""
+        out = subprocess.run([sys.executable, "-c", code, str(Path(__file__).parent)],
+                             capture_output=True, text=True, timeout=120)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), "[] []")
 
 
 class NativeCosmeticImagePolicy(unittest.TestCase):
@@ -114,10 +147,24 @@ class CompletionCheckpoints(unittest.TestCase):
                          tareplay.gametimes("battle", 2400, "revision", last_min=None))
 
 
+class TurboLanes(unittest.TestCase):
+    def test_the_rule(self):
+        fx = tareplay.fixtures()
+        lanes = {n: "".join(p for p in "LPRQKFWXU" if tareplay.turbo_lane(fx[n], p, 2))
+                 for n in ("c3-veterancy", "secondary-orders", "battle", "tenseat",
+                           "resource-geo-upgrade", "wpn-badtgt")}
+        self.assertEqual(lanes, {"c3-veterancy": "LPRKFXU", "secondary-orders": "LPRKFXU",
+                                 "battle": "LPRKFXU", "tenseat": "LPRKFXU",
+                                 "resource-geo-upgrade": "LPRKFXU", "wpn-badtgt": "LPRKFXU"})
+        self.assertEqual(tareplay.turbo_lane(fx["c3-veterancy"], "P", 0), 0)
+
+
 class FailedWorkerCleanup(unittest.TestCase):
     def test_failed_game_is_stopped_even_if_artifact_collection_fails(self):
         run = tareplay.Run.__new__(tareplay.Run)
-        run.fx = {"naval": {"Ts": [1], "out": Path("unused"), "rec": Path("rec"),
+        run.game_speed = tareplay.TEST_GAME_SPEED
+        run.turbo = tareplay.TURBO
+        run.fx = {"naval": {"fix": {}, "Ts": [1], "out": Path("unused"), "rec": Path("rec"),
                             "procs": {}, "problems": []}}
         worker = Mock(name="worker")
         worker.name = "owned"
@@ -130,7 +177,9 @@ class FailedWorkerCleanup(unittest.TestCase):
 
     def test_worker_is_retired_if_failed_game_cannot_be_stopped(self):
         run = tareplay.Run.__new__(tareplay.Run)
-        run.fx = {"naval": {"Ts": [1], "out": Path("unused"), "rec": Path("rec"),
+        run.game_speed = tareplay.TEST_GAME_SPEED
+        run.turbo = tareplay.TURBO
+        run.fx = {"naval": {"fix": {}, "Ts": [1], "out": Path("unused"), "rec": Path("rec"),
                             "procs": {}, "problems": []}}
         worker = Mock(name="worker")
         worker.name = "owned"
@@ -139,6 +188,127 @@ class FailedWorkerCleanup(unittest.TestCase):
              patch.object(tareplay, "say"):
             self.assertIs(run.job(worker, "naval", "W"), False)
         self.assertIn("cleanup", run.fx["naval"]["problems"][-1][2])
+
+
+class OfflineOrder(unittest.TestCase):
+    """tareplay.Ordered: checks handed to the offline pool read back in the order asked, and the
+    first failure in that order is the one raised, before the caller's own later one."""
+
+    @staticmethod
+    def slow(value, s=0.2):
+        time.sleep(s)
+        return [value]
+
+    @staticmethod
+    def fail(why, s=0.0):
+        time.sleep(s)
+        raise tareplay.Failed(why)
+
+    def test_results_keep_the_order_asked(self):
+        r = tareplay.Ordered()
+        r.add("a")
+        r.later(self.slow, "b")
+        r.add("c", "d")
+        r.later(self.slow, "e", 0)
+        self.assertEqual(r.results(), ["a", "b", "c", "d", "e"])
+        self.assertEqual(r.results(), ["a", "b", "c", "d", "e"])
+
+    def test_the_first_failure_in_order_is_raised(self):
+        r = tareplay.Ordered()
+        r.add("a")
+        r.later(self.fail, "first", 0.2)
+        r.later(self.fail, "second")
+        r.add("b")
+        for _ in range(2):
+            with self.assertRaisesRegex(tareplay.Failed, "first"):
+                r.results()
+        self.assertEqual(r.settled(), ["a"])
+
+    def test_an_earlier_failure_wins_over_the_callers_own(self):
+        with self.assertRaisesRegex(tareplay.Failed, "the check"):
+            with tareplay.Ordered() as r:
+                r.later(self.fail, "the check", 0.2)
+                raise tareplay.CouldNotRun("the next game")
+        with self.assertRaisesRegex(tareplay.CouldNotRun, "the next game"):
+            with tareplay.Ordered() as r:
+                r.later(self.slow, "passes")
+                raise tareplay.CouldNotRun("the next game")
+
+    def test_then_runs_in_order_in_the_callers_thread(self):
+        r, seen = tareplay.Ordered(), []
+        got = r.start(self.slow, 7)
+        r.add("a")
+        r.then(lambda: seen.append(threading.current_thread()) or [got.result()[0] + 1])
+        r.later(self.slow, "b", 0)
+        self.assertEqual(r.results(), ["a", 8, "b"])
+        self.assertEqual(seen, [threading.current_thread()])
+
+    def test_the_pool_leaves_two_cores_to_each_game(self):
+        with patch("os.cpu_count", return_value=32):
+            self.assertEqual(tareplay.offline_workers(8), min(16, self.gib()))
+            self.assertEqual(tareplay.offline_workers(16), 2)
+
+    @staticmethod
+    def gib():
+        with open("/proc/meminfo") as f:
+            return next(int(ln.split()[1]) for ln in f if ln.startswith("MemAvailable:")) >> 20
+
+
+class Scheduling(unittest.TestCase):
+    """Run's queue: the long lanes first, and a fixture's report started when its last lane
+    ends, once."""
+
+    def run_(self, *fixtures):
+        run = tareplay.Run.__new__(tareplay.Run)
+        run.q, run.seq, run.lock = tareplay.queue.PriorityQueue(), tareplay.itertools.count(), \
+            threading.Lock()
+        run.pending, run.left, run.reports, run.measure, run.keep = 0, {}, {}, False, False
+        run.report_pool = tareplay.ThreadPoolExecutor(max_workers=2)
+        run.fx = {name: {"name": name, "want": want, "fix": {"end": end}}
+                  for name, want, end in fixtures}
+        return run
+
+    def drain(self, run):
+        out = []
+        while not run.q.empty():
+            out.append(run.q.get()[2:])
+        return out
+
+    def test_long_lanes_first_then_l_then_short(self):
+        run = self.run_(("a", "LPRQ", 900), ("b", "LPRQKFXU", 600), ("c", "LPRQW", 2000))
+        self.assertEqual(tareplay.first_lanes(run.fx), ["b", "c", "a"])
+        for name in tareplay.first_lanes(run.fx):
+            run.put(name, "L")
+        self.assertEqual(run.q.get()[2:], ("b", "L"))
+        for p in "PRQKXU":
+            run.put("b", p)
+        self.assertEqual(self.drain(run), [("b", "X"), ("b", "U"), ("b", "K"), ("c", "L"),
+                                           ("a", "L"), ("b", "R"), ("b", "P"), ("b", "Q")])
+
+    def test_the_report_starts_when_the_last_lane_ends(self):
+        run = self.run_(("a", "LPKF", 900))
+        with patch.object(tareplay, "fixture_report", return_value=(["== a"], False, False)) as rep:
+            run.put("a", "L")
+            run.put("a", "P")               # L queues its followers before it ends
+            run.done("a")
+            run.put("a", "F")               # so does K
+            run.done("a")
+            self.assertFalse(run.reports)
+            run.done("a")
+            self.assertEqual(run.report_of("a").result(), (["== a"], False, False))
+            self.assertEqual(run.report_of("a"), run.reports["a"])
+        rep.assert_called_once_with(run.fx["a"], False)
+
+    def test_a_stopped_fixture_is_reported_by_report(self):
+        run = self.run_(("a", "LPRQ", 900))
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        run.out = Path(tmp.name)
+        run.put("a", "L")                   # never taken: the run stopped
+        with patch.object(tareplay, "fixture_report", return_value=(["== a"], False, True)), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(tareplay.report(run), 2)
+        self.assertEqual((run.out / "summary.txt").read_text(), "== a\n")
 
 
 class RewindPolicy(unittest.TestCase):
@@ -302,22 +472,25 @@ class HeaderCopy(unittest.TestCase):
     """W's refused copies: one header entry edited, every block still read whole."""
 
     @staticmethod
-    def block(kind, payload, stored):
-        body = payload if stored else zlib.compress(payload)
-        head = struct.pack("<IHHIIIII", tarec.REC_BLOCK_MAGIC, kind, tarec.RBF_STORED if stored
-                           else 0, 1, 9, len(payload), len(body), zlib.crc32(body))
-        return head + struct.pack("<I", zlib.crc32(head)) + body
+    def block(kind, payload, flags=tarec.RBF_STORED):
+        head = struct.pack("<IHHIIIII", tarec.REC_BLOCK_MAGIC, kind, flags, 1, 9, len(payload),
+                           len(payload), zlib.crc32(payload))
+        return head + struct.pack("<I", zlib.crc32(head)) + payload
+
+    @staticmethod
+    def entry(tag, data):
+        raw = struct.pack("<HH", tag, len(data)) + data
+        return raw + b"\0" * (-len(raw) % 4)
 
     def test_edit(self):
-        def entry(tag, data):
-            raw = struct.pack("<HH", tag, len(data)) + data
-            return raw + b"\0" * (-len(raw) % 4)
+        entry = self.entry
         layout, smap = b"ab" * 32 + b"\0", b"Coast To Coast\0"
-        head = entry(tarec.RT_LAYOUT, layout) + entry(tarec.RT_SETTINGS_MAP, smap)
+        head = (entry(tarec.RT_FORMAT, struct.pack("<I", tarec.REC_FORMAT)) +
+                entry(tarec.RT_LAYOUT, layout) + entry(tarec.RT_SETTINGS_MAP, smap))
         with tempfile.TemporaryDirectory() as d:
             src, dst = Path(d) / "a.imprec", Path(d) / "b.imprec"
-            src.write_bytes(tarec.REC_MAGIC + self.block(tarec.RB_HEADER, head, False)
-                            + self.block(tarec.RB_STREAM, b"\1\2\3\4", True))
+            src.write_bytes(tarec.REC_MAGIC + self.block(tarec.RB_HEADER, head)
+                            + self.block(tarec.RB_STREAM, b"\1\2\3\4"))
             tareplay.header_copy(src, dst, tarec.RT_SETTINGS_MAP, tareplay.no_such_map)
             got, why = tarec.blocks(dst)
             self.assertIsNone(why)
@@ -328,6 +501,15 @@ class HeaderCopy(unittest.TestCase):
             tareplay.header_copy(src, dst, tarec.RT_LAYOUT, tareplay.other_layout)
             ents = dict(tarec.entries(tarec.blocks(dst)[0][0][3]))
             self.assertEqual(ents[tarec.RT_LAYOUT], b"1" + layout[1:])
+
+    def test_a_packed_header_is_refused(self):
+        head = self.entry(tarec.RT_SETTINGS_MAP, b"Coast To Coast\0")
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "a.imprec"
+            src.write_bytes(tarec.REC_MAGIC + self.block(tarec.RB_HEADER, head, 0))
+            with self.assertRaisesRegex(tareplay.CouldNotRun, "not stored"):
+                tareplay.header_copy(src, Path(d) / "b.imprec", tarec.RT_SETTINGS_MAP,
+                                     tareplay.no_such_map)
 
 
 class TakeoverRoster(unittest.TestCase):
@@ -408,6 +590,15 @@ class Landing(unittest.TestCase):
         self.assertFalse(regions or functions or headers)
         self.assertTrue(why)
 
+    def test_a_test_program_selects_every_fixture_and_no_function(self):
+        fx = {"one": {"load": "one.json"}}
+        with patch.object(tareplay, "fixtures", return_value=fx), \
+             patch.object(tareplay, "sim_paths", return_value=set()):
+            selected, regions, functions, headers, why = tareplay.gated(
+                {"tools/replay/recmp_x_test.c", tareplay.DD + "src/tagpu_replay.c"}, "main")
+        self.assertEqual(selected, set(fx))
+        self.assertEqual(functions, {tareplay.DD + "src/tagpu_replay.c"})
+
     def test_check(self):
         self.commit("README", "r2\n")
         self.assertEqual(tareplay.landing_check("main"), 0)       # nothing gated
@@ -470,6 +661,111 @@ def stream(first, last, unit=None, opens=True):
 def end_block(last, reason=1):
     return block(tarec.RB_END, last, last, tlv(tarec.RT_END_REASON, struct.pack("<I", reason)) +
                  tlv(tarec.RT_LAST, struct.pack("<I", last)))
+
+
+def flagged(kind, first, last, payload, flags):
+    """A block with these flags whose body is `payload` as it stands, packed or not."""
+    head = struct.pack("<IHHIIIII", tarec.REC_BLOCK_MAGIC, kind, flags, first, last,
+                       len(payload), len(payload), zlib.crc32(payload))
+    return head + struct.pack("<I", zlib.crc32(head)) + payload
+
+
+def sized(kind, payload, flags, raw, packed):
+    """A block whose header claims `raw` and `packed` bytes, whatever its payload holds."""
+    head = struct.pack("<IHHIIIII", tarec.REC_BLOCK_MAGIC, kind, flags, 1, 1, raw, packed,
+                       zlib.crc32(payload))
+    return head + struct.pack("<I", zlib.crc32(head)) + payload
+
+
+def zstd_frame(data, wlog):
+    """One zstd frame of `data` in a raw block, its header asking for a window of 2^wlog: no
+    single segment, a 4-byte content size."""
+    n = len(data)
+    return (struct.pack("<IBBI", 0xFD2FB528, 0x80, (wlog - 10) << 3, n) +
+            bytes([(1 | n << 3) & 0xFF, n >> 5 & 0xFF, n >> 13 & 0xFF]) + data)
+
+
+class Format8Blocks(unittest.TestCase):
+    """What format 8's block walk refuses by name before any payload is read, as
+    tagpu_recreader.c's block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
+
+    def refused(self, *parts, why, decodes=(True, False)):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "f.imprec"
+            path.write_bytes(tarec.REC_MAGIC + b"".join(parts))
+            for decode in decodes:
+                with self.assertRaisesRegex(tarec.Unreadable, why):
+                    tarec.blocks(path, decode=decode)
+
+    def test_flags(self):
+        snap = tlv(tarec.RK_TICK, struct.pack("<I", 1))
+        S, P, R = tarec.RBF_STORED, tarec.RBF_SECTIONS, tarec.RBF_FRAME_RESET
+        for kind, flags in ((tarec.RB_HEADER, 0), (tarec.RB_SNAPSHOT, S | P),
+                            (tarec.RB_STREAM, S | R), (tarec.RB_STREAM, S | 8)):
+            with self.subTest(kind=kind, flags=flags):
+                self.refused(header(), flagged(kind, 1, 1, snap, flags), why="block flags")
+
+    def test_a_packed_body_of_no_bytes(self):
+        self.refused(header(), flagged(tarec.RB_SNAPSHOT, 1, 1, b"", 0), why="no bytes")
+
+    def test_a_sectioned_block_without_the_codec_entries(self):
+        # refused where it is decoded: a walk that skips the stream (decode=False), like the
+        # DLL's segment scan, does not read it
+        self.refused(header(), flagged(tarec.RB_STREAM, 1, 1, bytes(36), tarec.RBF_STORED |
+                                       tarec.RBF_SECTIONS | tarec.RBF_FRAME_RESET),
+                     why="without RT_CODEC and RT_PHYSICS", decodes=(True,))
+
+    def test_a_segment_of_other_slots(self):
+        self.refused(header(slots=4), end_block(0), header(timeline=(1, 0, 2), slots=6),
+                     why="a segment of 6 slots after 4")
+
+    def test_a_block_past_what_it_may_hold(self):
+        # as tagpu_recreader.c's block_head refuses it: a header that passed its CRC is what the
+        # writer wrote, not a tear, whether the file holds its bytes or not
+        big = 64 << 20
+        body = b"\0" * 16
+        for raw, packed in ((big + 1, len(body)), (len(body), big + 1)):
+            with self.subTest(raw=raw, packed=packed):
+                self.refused(header(), sized(tarec.RB_SNAPSHOT, body, 0, raw, packed),
+                             why="past what it may hold")
+
+    def test_a_zstd_window_past_2_27(self):
+        # as tagpu_reccodec.c's reccodec_unpack refuses it (codectest.c checks the C side)
+        import reccodec
+        snap = tlv(tarec.RK_TICK, struct.pack("<I", 1))
+        self.assertEqual(reccodec.unpack(zstd_frame(snap, 27), len(snap)), snap)
+        with self.assertRaisesRegex(tarec.Unreadable, "past 2\\^27"):
+            reccodec.unpack(zstd_frame(snap, 28), len(snap))
+        frame = zstd_frame(snap, 28)
+        self.refused(header(), sized(tarec.RB_SNAPSHOT, frame, 0, len(snap), len(frame)),
+                     why="past 2\\^27", decodes=(True,))
+
+
+class CodecCheck(unittest.TestCase):
+    """The gate's unit frame verdict from `tarec info`'s lines (tareplay.codec_check)."""
+
+    @staticmethod
+    def info(declined="0", mismatched="0", blocks=40, sectioned=38):
+        return (f"  stream blocks: {blocks}, {sectioned} sectioned (3 restarting the frame), "
+                f"{blocks - sectioned} records\n"
+                f"  the writer's unit frame: {declined} blocks declined, {mismatched} mismatched\n")
+
+    def test_verdicts(self):
+        for info, verdict in ((self.info(), tareplay.PASS),
+                              (self.info(declined="2"), tareplay.PASS),
+                              (self.info(mismatched="1"), tareplay.FAIL),
+                              (self.info(mismatched="absent"), tareplay.FAIL),
+                              (self.info(sectioned=0), tareplay.FAIL),
+                              (self.info(blocks=0, sectioned=0), tareplay.FAIL),
+                              ("  ended: complete\n", tareplay.UNRUN)):
+            with self.subTest(info=info):
+                self.assertEqual(tareplay.codec_check(info)[1], verdict)
+
+    def test_a_codec_that_never_ran_is_named(self):
+        # a writer without memory for the frame: every block records, the end block counts 0 and 0
+        label, verdict, detail = tareplay.codec_check(self.info(sectioned=0))
+        self.assertEqual(verdict, tareplay.FAIL)
+        self.assertIn("never ran", detail)
 
 
 class Segments(unittest.TestCase):
@@ -622,6 +918,310 @@ class Segments(unittest.TestCase):
                 self.segs(path)
 
 
+class DecodeCache(unittest.TestCase):
+    """reccache.py under tarec.blocks(): a hit returns what the walk returned without decoding; a
+    changed file byte or decoder version misses, and an entry that is cut short, corrupt or not
+    its piece is ignored and written again. A file that appends a segment to a cached one decodes
+    the segment alone, and returns and refuses what the uncached walk does."""
+
+    TORN = block(tarec.RB_STREAM, 7, 7, b"x" * 8)[:20]
+    ORIGINAL = header() + stream(1, 3, unit=1) + stream(4, 6, opens=False) + end_block(6)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.cache = self.dir / "cache"
+        self.codec = tarec._codec()
+        env = patch.dict("os.environ", {reccache.ENV: str(self.cache)})
+        env.start()
+        self.addCleanup(env.stop)
+        self.addCleanup(self.tmp.cleanup)
+
+    def file(self, name, unit=1, tail=TORN):
+        p = self.dir / name
+        p.write_bytes(tarec.REC_MAGIC + header() + stream(1, 3, unit=unit) +
+                      stream(4, 6, opens=False) + end_block(6) + tail)
+        return p
+
+    def fork(self, name, *forks, original=ORIGINAL):
+        """The original and a segment for each (timeline, unit) of `forks`, forked at 4."""
+        p = self.dir / name
+        p.write_bytes(tarec.REC_MAGIC + original + b"".join(
+            header((tl, 0, 4)) + stream(4, 5, unit=unit) + end_block(5) for tl, unit in forks))
+        return p
+
+    def read(self, path):
+        """(tarec.blocks' four lists and stop, the `start` of each decoding walk the codec ran:
+        None for one from the file's first block)."""
+        sizes, offsets, flags = [], [], []
+        decoded = []
+        real = self.codec.iter_blocks
+
+        def spy(*a, **k):
+            if k.get("decode", True):
+                decoded.append(k.get("start"))
+            return real(*a, **k)
+        with patch.object(self.codec, "iter_blocks", side_effect=spy):
+            out, stop = tarec.blocks(path, sizes, offsets, flags)
+        return (out, sizes, offsets, flags, stop), decoded
+
+    def uncached(self, path):
+        with patch.dict("os.environ", {reccache.ENV: ""}):
+            return self.read(path)[0]
+
+    def entries(self):
+        return sorted(self.cache.glob("*.dec"))
+
+    def test_a_hit_is_what_the_walk_returned(self):
+        path = self.file("r.imprec")
+        cold, decoded = self.read(path)
+        self.assertEqual(decoded, [None])
+        self.assertIn("cut short", cold[-1])
+        self.assertEqual(len(self.entries()), 1)
+        self.assertEqual(self.read(path), (cold, []))
+        self.assertEqual(self.uncached(path), cold)
+        self.assertEqual(list(self.cache.iterdir()), self.entries())   # no temporary file left
+
+    def test_a_changed_byte_misses(self):
+        a, b = self.file("a.imprec", unit=1), self.file("b.imprec", unit=2)
+        self.assertEqual(len(a.read_bytes()), len(b.read_bytes()))
+        want_a, _ = self.read(a)
+        got_b, decoded = self.read(b)
+        self.assertEqual(decoded, [None])
+        self.assertNotEqual(got_b, want_a)
+        self.assertEqual(len(self.entries()), 2)
+        self.assertEqual(self.read(a), (want_a, []))
+
+    def test_a_changed_version_misses_and_rewrites(self):
+        path = self.file("r.imprec")
+        want, _ = self.read(path)
+        entry, = self.entries()
+        with patch.object(reccache, "_version", bytes(32)):
+            self.assertEqual(self.read(path), (want, [None]))
+            self.assertEqual(entry.read_bytes()[8:40], bytes(32))
+            self.assertEqual(self.read(path), (want, []))
+        self.assertEqual(self.read(path), (want, [None]))
+
+    def test_a_corrupt_entry_is_ignored_and_rewritten(self):
+        path = self.file("r.imprec")
+        want, _ = self.read(path)
+        entry, = self.entries()
+        good = entry.read_bytes()
+        mid = 72 + (len(good) - 72) // 2
+        import zstandard        # here: the module's imports run before devpy.ensure() re-executes
+        content = zstandard.ZstdDecompressor().stream_reader(good[72:]).read()
+        n = 1 + reccache.BLOCK.size - 4                         # the first block's payload length
+
+        def repacked(c):        # a sound zstd frame around content its own digest refuses
+            return good[:72] + zstandard.ZstdCompressor(write_checksum=True).compress(c)
+        k = content.index(tlv(tarec.RK_TICK, struct.pack("<I", 1))) + 4   # the first tick's value
+        for why, bad in (("empty", b""), ("cut short", good[:mid]), ("its prefix", b"x" + good[1:]),
+                         ("a packed byte", good[:mid] + bytes([good[mid] ^ 0x40]) + good[mid + 1:]),
+                         ("its frame's tail", good[:-4] + bytes(4)),
+                         ("a payload byte", repacked(content[:k] + b"\x02" + content[k + 1:])),
+                         ("its digest", repacked(content[:-1] + bytes([content[-1] ^ 1]))),
+                         ("a byte after its end", repacked(content + b"B")),
+                         ("a length past its end",
+                          repacked(content[:n] + b"\xff\xff\xff\x7f" + content[n + 4:]))):
+            with self.subTest(why=why):
+                entry.write_bytes(bad)
+                self.assertEqual(self.read(path), (want, [None]))
+                self.assertEqual(entry.read_bytes(), good)
+                self.assertEqual(self.read(path), (want, []))
+
+    def test_an_appended_segment_decodes_alone(self):
+        original = self.file("a.imprec", tail=b"")
+        self.read(original)
+        size = original.stat().st_size
+        one = self.fork("one.imprec", (1, 2))
+        got, decoded = self.read(one)
+        self.assertEqual(decoded, [(size, 4, 4)])           # four blocks before it; four slots
+        self.assertEqual(got, self.uncached(one))
+        self.assertEqual(len(self.entries()), 2)
+        two = self.fork("two.imprec", (1, 2), (2, 3))
+        got, decoded = self.read(two)
+        self.assertEqual(decoded, [(one.stat().st_size, 7, 4)])
+        self.assertEqual(got, self.uncached(two))
+        self.assertEqual(self.read(two), (got, []))
+
+    def test_a_piece_is_its_prefix_bytes(self):
+        self.read(self.fork("one.imprec", (1, 2)))
+        other = self.fork("other.imprec", (1, 3))           # another fork after the same original
+        got, decoded = self.read(other)
+        self.assertEqual(decoded, [(len(tarec.REC_MAGIC + self.ORIGINAL), 4, 4)])
+        self.assertEqual(got, self.uncached(other))
+        changed = self.fork("changed.imprec", (1, 2), original=header() + stream(1, 3, unit=3) +
+                            stream(4, 6, opens=False) + end_block(6))
+        got, decoded = self.read(changed)                   # the same fork after another original
+        self.assertEqual(decoded, [None])
+        self.assertEqual(got, self.uncached(changed))
+
+    def test_an_entry_that_is_not_its_piece_is_ignored(self):
+        path = self.fork("one.imprec", (1, 2))
+        want, _ = self.read(path)
+        bl, _ = reccache.collect(self.codec.iter_blocks(str(path)))
+        for entry in self.entries():                        # each entry holding the other piece
+            for blocks in (bl[:4], bl[4:], bl[:3]):
+                with self.subTest(entry=entry.name, blocks=len(blocks)):
+                    good = entry.read_bytes()
+                    reccache._write(str(self.cache), str(entry), good[:72], blocks)
+                    if entry.read_bytes() == good:
+                        continue
+                    got, decoded = self.read(path)
+                    self.assertEqual(got, want)
+                    self.assertTrue(decoded)
+                    self.assertEqual(entry.read_bytes(), good)
+
+    def test_a_refused_segment_is_refused_after_a_cached_one(self):
+        self.read(self.file("a.imprec", tail=b""))
+        path = self.dir / "slots.imprec"
+        path.write_bytes(tarec.REC_MAGIC + self.ORIGINAL + header((1, 0, 4), slots=6) +
+                         stream(4, 5) + end_block(5))
+        for cache in (str(self.cache), ""):
+            with patch.dict("os.environ", {reccache.ENV: cache}), \
+                    self.assertRaisesRegex(tarec.Unreadable, "a segment of 6 slots after 4"):
+                tarec.blocks(path)
+
+
+def pov(player=0, cam=(100, 200), zoom=65536, flags=tarec.REC_POV_WORLD, every=3):
+    """A RecPov of a 640 x 480 view with its cursor at the camera."""
+    return tarec.REC_POV.pack(player, every, flags, 0, 640, 480, zoom, *cam, cam[0], 0, cam[1])
+
+
+def selection(player, units):
+    return tarec.REC_SEL.pack(player, tarec.REC_SEL_BEGIN | tarec.REC_SEL_END, len(units), 0,
+                              len(units)) + b"".join(tarec.REC_SEL_ENTRY.pack(*u) for u in units)
+
+
+def block_player(first_id=2, last_id=3):
+    """Player 0's image with its unit block, IDs first_id..last_id (slots one less)."""
+    img = bytearray(tarec.REC_PLAYER_IMAGE)
+    struct.pack_into("<II", img, tarec.PL_BLOCKFIRST, first_id, 0)
+    struct.pack_into("<I", img, tarec.PL_BLOCKLAST, last_id)
+    return tlv(tarec.RK_PLAYER, struct.pack("<HH", 0, 0) + bytes(img))
+
+
+class Perspective(unittest.TestCase):
+    """tarec's perspective records and `pov --check`, on files built from the format alone."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def head(self, fmt=None):
+        h = bytearray(header())
+        # the RK_HEADER block's payload begins after its 32-byte head; RT_FORMAT is its first entry
+        p = bytes(h[32:])
+        p = p.replace(tlv(tarec.RT_FORMAT, struct.pack("<I", tarec.REC_FORMAT)),
+                      tlv(tarec.RT_FORMAT, struct.pack("<I", fmt or tarec.REC_FORMAT)), 1)
+        p += tlv(tarec.RT_UNITS_EACH, struct.pack("<I", 2))
+        return block(tarec.RB_HEADER, 0, 0, p)
+
+    def run_pov(self, *parts):
+        path = Path(self.tmp.name) / "p.imprec"
+        path.write_bytes(tarec.REC_MAGIC + b"".join(parts))
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = tarec.cmd_pov(str(path), True)
+        return code, out.getvalue()
+
+    def good(self, second=None, snap_sel=((1, 0x11),), snap_pov=None):
+        first = pov()
+        second = second or pov(cam=(130, 200))
+        s1 = (tlv(tarec.RK_TICK, struct.pack("<I", 1)) + block_player() +
+              tlv(tarec.RK_MAPPED, struct.pack("<I", 0) + bytes(2)) +
+              tlv(tarec.RK_POV, first) + tlv(tarec.RK_SELECT, selection(0, [(1, 0x11)])) +
+              tlv(tarec.RK_CLICK, tarec.REC_CLICK.pack(0, 0, 1, 2, 2, 0, 4, 100, 0, 200)) +
+              tlv(tarec.RK_TICK, struct.pack("<I", 2)) +
+              tlv(tarec.RK_TICK, struct.pack("<I", 4)) + tlv(tarec.RK_POV, second))
+        snap_pov = snap_pov or [(1, first), (4, second)]
+        snap = (tlv(tarec.RK_TICK, struct.pack("<I", 4)) + block_player() +
+                b"".join(tlv(tarec.RK_POV_AT, struct.pack("<I", t) + b) for t, b in snap_pov) +
+                tlv(tarec.RK_SELECT, selection(0, list(snap_sel))) +
+                tlv(tarec.RK_MAPPED, struct.pack("<I", 0) + bytes(2)))
+        s2 = tlv(tarec.RK_TICK, struct.pack("<I", 5))
+        return (self.head(), block(tarec.RB_STREAM, 1, 4, s1), block(tarec.RB_SNAPSHOT, 4, 4, snap),
+                block(tarec.RB_STREAM, 5, 5, s2), end_block(5))
+
+    def test_well_formed(self):
+        code, out = self.run_pov(*self.good())
+        self.assertEqual(code, 0, out)
+        self.assertIn("2 samples, 1 clicks, 1 selections; 1 snapshots", out)
+        self.assertIn("left click at (100, 0, 200)", out)
+
+    def test_spacing_and_change(self):
+        parts = list(self.good(second=pov()))
+        code, out = self.run_pov(*parts)
+        self.assertEqual(code, 1)
+        self.assertIn("equal to the last one", out)
+        code, out = self.run_pov(*self.good(second=pov(cam=(130, 200), every=4)))
+        self.assertEqual(code, 1)
+        self.assertIn("under its every 4", out)
+
+    def test_snapshot_must_rebuild_the_stream(self):
+        code, out = self.run_pov(*self.good(snap_sel=()))
+        self.assertEqual(code, 1)
+        self.assertIn("player 0's selection: 1 units in the recording, 0 in the snapshot", out)
+        code, out = self.run_pov(*self.good(snap_pov=[(4, pov(cam=(130, 200)))]))
+        self.assertEqual(code, 1)
+        self.assertIn("player 0's samples: recording at GameTime [1, 4], snapshot at [4]", out)
+
+    def test_clock_and_fit(self):
+        """The mirror of tagpu_persp.c on the plan's rules (persp_test.py checks it against the C
+        on random cases)."""
+        held = [(1, pov()), (4, pov(cam=(130, 170)))]
+        self.assertEqual(tarec.persp_sample([], 9), (tarec.PERSP_NONE, None))
+        how, f = tarec.persp_sample(held, 7)                 # t = 4: the latest
+        self.assertEqual((how, f[7], f[8]), (tarec.PERSP_LATEST, 130, 170))
+        how, f = tarec.persp_sample(held, 5)                 # t = 2: a third of the way
+        self.assertEqual((how, f[7], f[8]), (tarec.PERSP_BETWEEN, 110, 190))
+        how, f = tarec.persp_sample([(1, pov()), (4, pov(cam=(130, 160)))], 5)
+        self.assertEqual(f[8], 187)                          # -40/3 truncated toward zero
+        how, f = tarec.persp_sample(held, 3)                 # t = 0: before the earlier one
+        self.assertEqual((how, f[7]), (tarec.PERSP_EARLIER, 100))
+        how, f = tarec.persp_sample([(1, pov()), (8, pov(cam=(130, 170)))], 9)
+        self.assertEqual((how, f[7]), (tarec.PERSP_EARLIER, 100))   # 7 apart > 2 * every
+        f = tarec.REC_POV.unpack(pov(cam=(1000, 800)))
+        self.assertEqual(tarec.persp_follow(f, 640, 480), (680, 560, 65536))
+        self.assertEqual(tarec.persp_follow(f, 1000, 600), (500, 500, 81920))
+        self.assertEqual(tarec.persp_follow(f, 700, 500)[2], 68266)
+        self.assertIsNone(tarec.persp_follow(f, 0, 480))
+
+    def test_eye(self):
+        path = Path(self.tmp.name) / "p.imprec"
+        path.write_bytes(tarec.REC_MAGIC + b"".join(self.good()))
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = tarec.main(["tarec.py", "pov", str(path), "--eye", "5", "--viewer", "800,600"])
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertIn("sample between of the samples at [1, 4]: camera (110, 200)",
+                      out.getvalue())
+        self.assertIn("on 800x600: eye (-290, -100), level 81920/65536", out.getvalue())
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(tarec.main(["tarec.py", "pov", str(path), "--eye", "3", "--viewer",
+                                         "800,600"]), 1)   # no iteration 3
+            self.assertEqual(tarec.main(["tarec.py", "pov", str(path), "--eye", "5", "--viewer",
+                                         "800,600", "--seat", "1"]), 1)   # no samples
+
+    def test_refusals(self):
+        for bad in (selection(0, [(2, 1), (1, 1)]),          # descending
+                    selection(0, [(3, 1)]),                  # outside the block [1, 2]
+                    selection(0, [(1, 1), (2, 1), (2, 2)]),  # past units_each
+                    pov(zoom=1)):                            # a zoom no level has
+            kind = tarec.RK_POV if len(bad) == tarec.REC_POV.size else tarec.RK_SELECT
+            parts = list(self.good())
+            parts[3] = block(tarec.RB_STREAM, 5, 5, tlv(tarec.RK_TICK, struct.pack("<I", 5)) +
+                             tlv(kind, bad))
+            code, out = self.run_pov(*parts)
+            self.assertEqual(code, 1, out)
+            self.assertIn("unreadable", out)
+        parts = list(self.good())
+        parts[0] = self.head(fmt=7)
+        with self.assertRaisesRegex(tarec.Unreadable, "format 7, not 8"):
+            self.run_pov(*parts)
+
 
 class TakeoverFixtures(unittest.TestCase):
     """fixtures.json's takeover entries, and the processes they make a fixture run."""
@@ -697,7 +1297,7 @@ class TakeoverAi(unittest.TestCase):
             segs = [{"id": 0, "last": 2000}, {"id": 1, "parent": 0, "last": 2000}]
             with patch.object(tareplay, "tk_ai", return_value=({1, 2, 3}, set(), fraction, 978)), \
                  patch.object(tarec, "file_segments", return_value=(segs, None)):
-                return tareplay.tk_checks(fx)[0]
+                return tareplay.tk_checks(fx).results()[0]
 
     def test_active_seats_pass_without_construction(self):
         _, verdict, detail = self.check()
@@ -719,5 +1319,43 @@ class TakeoverAi(unittest.TestCase):
         self.assertEqual(self.check(fraction=None)[1], tareplay.UNRUN)
 
 
+class CrashEndsTheWait(unittest.TestCase):
+    """A crash ends a log wait at once instead of after its timeout."""
+
+    class Worker:
+        def __init__(self, gamedir, up):
+            self.gamedir, self.up = gamedir, list(up)
+
+        def running(self):
+            return self.up.pop(0) if len(self.up) > 1 else self.up[0]
+
+    def log(self, gamedir, up):
+        log = tareplay.Log(self.Worker(gamedir, up))
+        log.ALIVE_EVERY = 0
+        return log
+
+    def test_an_errorlog_ends_the_wait(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = self.log(Path(d), [True])
+            (Path(d) / "ErrorLog.txt").write_text(
+                "TotalA caused an Access Violation in\nmodule TotalA.exe at 0023:004c74c7.\n")
+            t0 = time.time()
+            with self.assertRaisesRegex(tareplay.Failed, "crashed: module TotalA.exe at 0023:004c74c7"):
+                log.wait(r"never", 60)
+            self.assertLess(time.time() - t0, 5)
+
+    def test_a_process_that_exits_ends_the_wait(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = self.log(Path(d), [True, False])
+            with self.assertRaisesRegex(tareplay.Failed, "process exited"):
+                log.wait(r"never", 60)
+
+    def test_a_process_not_yet_seen_running_does_not(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(self.log(Path(d), [False]).wait(r"never", 1))
+
+
 if __name__ == "__main__":
+    import devpy
+    devpy.ensure()
     unittest.main(verbosity=1)

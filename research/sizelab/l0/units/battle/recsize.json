@@ -1,0 +1,1109 @@
+{
+ "file": "$SIZELAB/l0/battle.imprec",
+ "bytes": 82991840,
+ "map": "Town & Country",
+ "slots": 5001,
+ "players": 4,
+ "blocks": {
+  "header": {
+   "n": 1,
+   "raw": 3744,
+   "on_disk": 3776
+  },
+  "minimap": {
+   "n": 1,
+   "raw": 63512,
+   "on_disk": 8737
+  },
+  "stream": {
+   "n": 689,
+   "raw": 206205408,
+   "on_disk": 82322719
+  },
+  "snapshot": {
+   "n": 4,
+   "raw": 5723196,
+   "on_disk": 656432
+  },
+  "end": {
+   "n": 1,
+   "raw": 136,
+   "on_disk": 168
+  }
+ },
+ "stream": {
+  "real_packed": 82300671,
+  "recompressed": 83050370,
+  "sum_alone": 81091083,
+  "groups": {
+   "units: deltas": {
+    "records": 3144052,
+    "raw": 125261160,
+    "packed_alone": 55289834
+   },
+   "projectiles": {
+    "records": 304171,
+    "raw": 26532864,
+    "packed_alone": 15880976
+   },
+   "feature grid cells": {
+    "records": 867045,
+    "raw": 32386300,
+    "packed_alone": 6950328
+   },
+   "order lists": {
+    "records": 166423,
+    "raw": 16671340,
+    "packed_alone": 1622030
+   },
+   "events": {
+    "records": 85536,
+    "raw": 3016424,
+    "packed_alone": 862617
+   },
+   "wrecks and feature heads": {
+    "records": 24735,
+    "raw": 1240404,
+    "packed_alone": 234417
+   },
+   "globals": {
+    "records": 4021,
+    "raw": 179840,
+    "packed_alone": 127564
+   },
+   "units: whole images": {
+    "records": 1449,
+    "raw": 486864,
+    "packed_alone": 39507
+   },
+   "players": {
+    "records": 1102,
+    "raw": 56108,
+    "packed_alone": 31735
+   },
+   "tables": {
+    "records": 10140,
+    "raw": 184332,
+    "packed_alone": 24865
+   },
+   "iteration marks": {
+    "records": 4021,
+    "raw": 32168,
+    "packed_alone": 21204
+   },
+   "units: gone": {
+    "records": 1448,
+    "raw": 11584,
+    "packed_alone": 5616
+   },
+   "explored map": {
+    "records": 5,
+    "raw": 145840,
+    "packed_alone": 204
+   },
+   "perspective": {
+    "records": 5,
+    "raw": 180,
+    "packed_alone": 186
+   }
+  },
+  "kinds": {
+   "unit_delta": {
+    "records": 3144052,
+    "raw": 125261160
+   },
+   "cells": {
+    "records": 867045,
+    "raw": 32386300
+   },
+   "proj_delta": {
+    "records": 301073,
+    "raw": 26445144
+   },
+   "orders": {
+    "records": 166423,
+    "raw": 16671340
+   },
+   "wreck": {
+    "records": 20714,
+    "raw": 1159984
+   },
+   "ev_start_named": {
+    "records": 21689,
+    "raw": 919148
+   },
+   "ev_start": {
+    "records": 19771,
+    "raw": 632672
+   },
+   "ev_death": {
+    "records": 1448,
+    "raw": 498112
+   },
+   "unit": {
+    "records": 1449,
+    "raw": 486864
+   },
+   "ev_shot": {
+    "records": 8210,
+    "raw": 328400
+   },
+   "ev_reply": {
+    "records": 17151,
+    "raw": 282976
+   },
+   "table_span": {
+    "records": 10090,
+    "raw": 183732
+   },
+   "globals_delta": {
+    "records": 4020,
+    "raw": 179524
+   },
+   "mapped": {
+    "records": 5,
+    "raw": 145840
+   },
+   "ev_spray": {
+    "records": 2356,
+    "raw": 122512
+   },
+   "ev_feature": {
+    "records": 5887,
+    "raw": 100500
+   },
+   "features": {
+    "records": 4021,
+    "raw": 80420
+   },
+   "ev_feature_end": {
+    "records": 5887,
+    "raw": 70644
+   },
+   "proj": {
+    "records": 486,
+    "raw": 56376
+   },
+   "player_delta": {
+    "records": 1092,
+    "raw": 50828
+   },
+   "ev_create": {
+    "records": 1445,
+    "raw": 46240
+   },
+   "tick": {
+    "records": 4021,
+    "raw": 32168
+   },
+   "proj_head": {
+    "records": 2612,
+    "raw": 31344
+   },
+   "ev_death_end": {
+    "records": 1448,
+    "raw": 11584
+   },
+   "unit_gone": {
+    "records": 1448,
+    "raw": 11584
+   },
+   "player": {
+    "records": 10,
+    "raw": 5280
+   },
+   "ev_draw": {
+    "records": 177,
+    "raw": 2832
+   },
+   "ev_state": {
+    "records": 64,
+    "raw": 768
+   },
+   "table_size": {
+    "records": 50,
+    "raw": 600
+   },
+   "globals": {
+    "records": 1,
+    "raw": 316
+   },
+   "pov": {
+    "records": 5,
+    "raw": 180
+   },
+   "ev_built": {
+    "records": 3,
+    "raw": 36
+   }
+  }
+ },
+ "snapshots": {
+  "real_packed": 656304,
+  "recompressed": 662087,
+  "sum_alone": 643572,
+  "groups": {
+   "units: whole images": {
+    "records": 5255,
+    "raw": 1765680,
+    "packed_alone": 269665
+   },
+   "wrecks and feature heads": {
+    "records": 32772,
+    "raw": 1835088,
+    "packed_alone": 213638
+   },
+   "feature grid cells": {
+    "records": 8574,
+    "raw": 451348,
+    "packed_alone": 102822
+   },
+   "projectiles": {
+    "records": 442,
+    "raw": 50856,
+    "packed_alone": 24370
+   },
+   "order lists": {
+    "records": 5121,
+    "raw": 513596,
+    "packed_alone": 20748
+   },
+   "tables": {
+    "records": 159,
+    "raw": 500180,
+    "packed_alone": 7558
+   },
+   "players": {
+    "records": 40,
+    "raw": 21120,
+    "packed_alone": 2996
+   },
+   "explored map": {
+    "records": 20,
+    "raw": 583360,
+    "packed_alone": 816
+   },
+   "globals": {
+    "records": 4,
+    "raw": 1264,
+    "packed_alone": 477
+   },
+   "perspective": {
+    "records": 8,
+    "raw": 320,
+    "packed_alone": 238
+   },
+   "other": {
+    "records": 44,
+    "raw": 352,
+    "packed_alone": 180
+   },
+   "iteration marks": {
+    "records": 4,
+    "raw": 32,
+    "packed_alone": 64
+   }
+  },
+  "kinds": {
+   "wreck": {
+    "records": 32768,
+    "raw": 1835008
+   },
+   "unit": {
+    "records": 5255,
+    "raw": 1765680
+   },
+   "mapped": {
+    "records": 20,
+    "raw": 583360
+   },
+   "orders": {
+    "records": 5121,
+    "raw": 513596
+   },
+   "table_span": {
+    "records": 43,
+    "raw": 498788
+   },
+   "cells": {
+    "records": 8574,
+    "raw": 451348
+   },
+   "proj": {
+    "records": 438,
+    "raw": 50808
+   },
+   "player": {
+    "records": 40,
+    "raw": 21120
+   },
+   "table_size": {
+    "records": 116,
+    "raw": 1392
+   },
+   "globals": {
+    "records": 4,
+    "raw": 1264
+   },
+   "controller": {
+    "records": 40,
+    "raw": 320
+   },
+   "pov_at": {
+    "records": 8,
+    "raw": 320
+   },
+   "features": {
+    "records": 4,
+    "raw": 80
+   },
+   "proj_head": {
+    "records": 4,
+    "raw": 48
+   },
+   "tick": {
+    "records": 4,
+    "raw": 32
+   },
+   "viewer": {
+    "records": 4,
+    "raw": 32
+   }
+  }
+ },
+ "unit_deltas": {
+  "records": 3144052,
+  "value_bytes": 62380120,
+  "overhead_bytes": 62881040,
+  "fields": [
+   {
+    "dword": 80,
+    "name": "+0x140 mover",
+    "changes": 2755695,
+    "bytes": 11022780,
+    "bits": {
+     "p50": 18,
+     "p90": 18,
+     "p99": 18
+    }
+   },
+   {
+    "dword": 28,
+    "name": "+0x070 altitude",
+    "changes": 1882325,
+    "bytes": 7529300,
+    "bits": {
+     "p50": 31,
+     "p90": 32,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 26,
+    "name": "+0x068 position",
+    "changes": 1826507,
+    "bytes": 7306028,
+    "bits": {
+     "p50": 31,
+     "p90": 32,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 25,
+    "name": "+0x064 turn",
+    "changes": 1731697,
+    "bytes": 6926788,
+    "bits": {
+     "p50": 21,
+     "p90": 28,
+     "p99": 28
+    }
+   },
+   {
+    "dword": 29,
+    "name": "+0x074 footprint x",
+    "changes": 1267372,
+    "bytes": 5069488,
+    "bits": {
+     "p50": 2,
+     "p90": 3,
+     "p99": 18
+    }
+   },
+   {
+    "dword": 27,
+    "name": "+0x06C altitude/position",
+    "changes": 1159188,
+    "bytes": 4636752,
+    "bits": {
+     "p50": 1,
+     "p90": 2,
+     "p99": 3
+    }
+   },
+   {
+    "dword": 74,
+    "name": "+0x128 mover",
+    "changes": 1099273,
+    "bytes": 4397092,
+    "bits": {
+     "p50": 13,
+     "p90": 15,
+     "p99": 17
+    }
+   },
+   {
+    "dword": 72,
+    "name": "+0x120 mover",
+    "changes": 1089873,
+    "bytes": 4359492,
+    "bits": {
+     "p50": 13,
+     "p90": 15,
+     "p99": 17
+    }
+   },
+   {
+    "dword": 79,
+    "name": "+0x13C mover",
+    "changes": 990569,
+    "bytes": 3962276,
+    "bits": {
+     "p50": 4,
+     "p90": 21,
+     "p99": 24
+    }
+   },
+   {
+    "dword": 78,
+    "name": "+0x138 mover",
+    "changes": 545393,
+    "bytes": 2181572,
+    "bits": {
+     "p50": 14,
+     "p90": 15,
+     "p99": 17
+    }
+   },
+   {
+    "dword": 6,
+    "name": "+0x018 ?",
+    "changes": 424912,
+    "bytes": 1699648,
+    "bits": {
+     "p50": 1,
+     "p90": 1,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 62,
+    "name": "+0x0F8 piece/sight h",
+    "changes": 200299,
+    "bytes": 801196,
+    "bits": {
+     "p50": 17,
+     "p90": 17,
+     "p99": 22
+    }
+   },
+   {
+    "dword": 30,
+    "name": "+0x078 footprint x/footprint z/sight xz",
+    "changes": 129481,
+    "bytes": 517924,
+    "bits": {
+     "p50": 2,
+     "p90": 18,
+     "p99": 24
+    }
+   },
+   {
+    "dword": 68,
+    "name": "+0x110 buildpage/marks/selected/state bits/state byte/yard",
+    "changes": 86105,
+    "bytes": 344420,
+    "bits": {
+     "p50": 4,
+     "p90": 4,
+     "p99": 20
+    }
+   },
+   {
+    "dword": 81,
+    "name": "+0x144 spare",
+    "changes": 71524,
+    "bytes": 286096,
+    "bits": {
+     "p50": 20,
+     "p90": 20,
+     "p99": 20
+    }
+   },
+   {
+    "dword": 7,
+    "name": "+0x01C ?",
+    "changes": 49262,
+    "bytes": 197048,
+    "bits": {
+     "p50": 25,
+     "p90": 30,
+     "p99": 30
+    }
+   },
+   {
+    "dword": 31,
+    "name": "+0x07C footprint w/sight xz",
+    "changes": 48001,
+    "bytes": 192004,
+    "bits": {
+     "p50": 2,
+     "p90": 2,
+     "p99": 9
+    }
+   },
+   {
+    "dword": 3,
+    "name": "+0x00C ?",
+    "changes": 37445,
+    "bytes": 149780,
+    "bits": {
+     "p50": 2,
+     "p90": 2,
+     "p99": 2
+    }
+   },
+   {
+    "dword": 52,
+    "name": "+0x0D0 ?",
+    "changes": 36613,
+    "bytes": 146452,
+    "bits": {
+     "p50": 31,
+     "p90": 31,
+     "p99": 31
+    }
+   },
+   {
+    "dword": 35,
+    "name": "+0x08C cargo/next",
+    "changes": 34486,
+    "bytes": 137944,
+    "bits": {
+     "p50": 24,
+     "p90": 28,
+     "p99": 28
+    }
+   },
+   {
+    "dword": 32,
+    "name": "+0x080 bucket/footprint h/footprint w/sort bucket",
+    "changes": 20231,
+    "bytes": 80924,
+    "bits": {
+     "p50": 24,
+     "p90": 24,
+     "p99": 24
+    }
+   },
+   {
+    "dword": 1,
+    "name": "+0x004 weapon1",
+    "changes": 18733,
+    "bytes": 74932,
+    "bits": {
+     "p50": 12,
+     "p90": 32,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 46,
+    "name": "+0x0B8 ?",
+    "changes": 17957,
+    "bytes": 71828,
+    "bits": {
+     "p50": 30,
+     "p90": 32,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 44,
+    "name": "+0x0B0 ?",
+    "changes": 10554,
+    "bytes": 42216,
+    "bits": {
+     "p50": 5,
+     "p90": 9,
+     "p99": 13
+    }
+   },
+   {
+    "dword": 76,
+    "name": "+0x130 mover",
+    "changes": 9790,
+    "bytes": 39160,
+    "bits": {
+     "p50": 9,
+     "p90": 13,
+     "p99": 18
+    }
+   }
+  ]
+ },
+ "projectile_deltas": {
+  "records": 301073,
+  "value_bytes": 22832268,
+  "overhead_bytes": 3612876,
+  "fields": [
+   {
+    "dword": 3,
+    "name": "+0x0C",
+    "changes": 300528,
+    "bytes": 1202112,
+    "bits": {
+     "p50": 25,
+     "p90": 27,
+     "p99": 28
+    }
+   },
+   {
+    "dword": 1,
+    "name": "+0x04",
+    "changes": 300460,
+    "bytes": 1201840,
+    "bits": {
+     "p50": 25,
+     "p90": 28,
+     "p99": 28
+    }
+   },
+   {
+    "dword": 2,
+    "name": "+0x08",
+    "changes": 298812,
+    "bytes": 1195248,
+    "bits": {
+     "p50": 19,
+     "p90": 22,
+     "p99": 23
+    }
+   },
+   {
+    "dword": 7,
+    "name": "+0x1C",
+    "changes": 270299,
+    "bytes": 1081196,
+    "bits": {
+     "p50": 20,
+     "p90": 22,
+     "p99": 22
+    }
+   },
+   {
+    "dword": 9,
+    "name": "+0x24",
+    "changes": 270154,
+    "bytes": 1080616,
+    "bits": {
+     "p50": 20,
+     "p90": 21,
+     "p99": 22
+    }
+   },
+   {
+    "dword": 13,
+    "name": "+0x34",
+    "changes": 269718,
+    "bytes": 1078872,
+    "bits": {
+     "p50": 31,
+     "p90": 32,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 14,
+    "name": "+0x38",
+    "changes": 268013,
+    "bytes": 1072052,
+    "bits": {
+     "p50": 13,
+     "p90": 32,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 4,
+    "name": "+0x10",
+    "changes": 262298,
+    "bytes": 1049192,
+    "bits": {
+     "p50": 26,
+     "p90": 28,
+     "p99": 29
+    }
+   },
+   {
+    "dword": 6,
+    "name": "+0x18",
+    "changes": 262295,
+    "bytes": 1049180,
+    "bits": {
+     "p50": 25,
+     "p90": 27,
+     "p99": 28
+    }
+   },
+   {
+    "dword": 20,
+    "name": "+0x50",
+    "changes": 261948,
+    "bytes": 1047792,
+    "bits": {
+     "p50": 24,
+     "p90": 28,
+     "p99": 28
+    }
+   },
+   {
+    "dword": 16,
+    "name": "+0x40",
+    "changes": 261523,
+    "bytes": 1046092,
+    "bits": {
+     "p50": 18,
+     "p90": 19,
+     "p99": 21
+    }
+   },
+   {
+    "dword": 15,
+    "name": "+0x3C",
+    "changes": 261071,
+    "bytes": 1044284,
+    "bits": {
+     "p50": 31,
+     "p90": 32,
+     "p99": 32
+    }
+   }
+  ]
+ },
+ "globals_deltas": {
+  "records": 4020,
+  "value_bytes": 115204,
+  "fields": [
+   {
+    "dword": 25,
+    "name": "pfsearches+8",
+    "changes": 4020,
+    "bytes": 16080,
+    "bits": {
+     "p50": 16,
+     "p90": 16,
+     "p99": 16
+    }
+   },
+   {
+    "dword": 33,
+    "name": "pfcalls",
+    "changes": 4020,
+    "bytes": 16080,
+    "bits": {
+     "p50": 2,
+     "p90": 2,
+     "p99": 2
+    }
+   },
+   {
+    "dword": 23,
+    "name": "pfsearches",
+    "changes": 4019,
+    "bytes": 16076,
+    "bits": {
+     "p50": 15,
+     "p90": 16,
+     "p99": 16
+    }
+   },
+   {
+    "dword": 24,
+    "name": "pfsearches+4",
+    "changes": 4016,
+    "bytes": 16064,
+    "bits": {
+     "p50": 16,
+     "p90": 16,
+     "p99": 16
+    }
+   },
+   {
+    "dword": 26,
+    "name": "pfsearches+12",
+    "changes": 4012,
+    "bytes": 16048,
+    "bits": {
+     "p50": 16,
+     "p90": 16,
+     "p99": 16
+    }
+   },
+   {
+    "dword": 77,
+    "name": "rngseed",
+    "changes": 3553,
+    "bytes": 14212,
+    "bits": {
+     "p50": 31,
+     "p90": 32,
+     "p99": 32
+    }
+   },
+   {
+    "dword": 46,
+    "name": "mcwatermark05",
+    "changes": 3546,
+    "bytes": 14184,
+    "bits": {
+     "p50": 2,
+     "p90": 2,
+     "p99": 3
+    }
+   },
+   {
+    "dword": 41,
+    "name": "mcwatermark00",
+    "changes": 1075,
+    "bytes": 4300,
+    "bits": {
+     "p50": 2,
+     "p90": 4,
+     "p99": 7
+    }
+   },
+   {
+    "dword": 1,
+    "name": "unitcount",
+    "changes": 277,
+    "bytes": 1108,
+    "bits": {
+     "p50": 1,
+     "p90": 2,
+     "p99": 5
+    }
+   },
+   {
+    "dword": 43,
+    "name": "mcwatermark02",
+    "changes": 66,
+    "bytes": 264,
+    "bits": {
+     "p50": 7,
+     "p90": 7,
+     "p99": 9
+    }
+   },
+   {
+    "dword": 75,
+    "name": "sitesum",
+    "changes": 34,
+    "bytes": 136,
+    "bits": {
+     "p50": 11,
+     "p90": 12,
+     "p99": 12
+    }
+   },
+   {
+    "dword": 74,
+    "name": "sitebyte",
+    "changes": 31,
+    "bytes": 124,
+    "bits": {
+     "p50": 8,
+     "p90": 8,
+     "p99": 8
+    }
+   }
+  ]
+ },
+ "orders": {
+  "lists sent": 166423,
+  "bytes": 16671340,
+  "new or resized": 1481,
+  "same length, changed": 164942,
+  "images in them": 165218,
+  "images changed": 164944
+ },
+ "cells": {
+  "images: records": 435723,
+  "images: cells": 910963,
+  "images: bytes": 18195800,
+  "inside a feature call or death (its input): records": 431322,
+  "inside a feature call or death (its input): cells": 607356,
+  "inside a feature call or death (its input): bytes": 14190500
+ },
+ "units_per_iteration": {
+  "iterations": 4021,
+  "live_max": 1444,
+  "live_last": 1,
+  "changed_fraction_mean": 0.5900648393332845,
+  "unit_deltas_mean": 781.9079830887839
+ },
+ "live_curve": [
+  [
+   1,
+   4
+  ],
+  [
+   252,
+   1444
+  ],
+  [
+   503,
+   1427
+  ],
+  [
+   754,
+   1426
+  ],
+  [
+   1005,
+   1425
+  ],
+  [
+   1256,
+   1418
+  ],
+  [
+   1507,
+   1392
+  ],
+  [
+   1758,
+   1376
+  ],
+  [
+   2009,
+   1364
+  ],
+  [
+   2260,
+   1336
+  ],
+  [
+   2511,
+   1305
+  ],
+  [
+   2762,
+   1272
+  ],
+  [
+   3013,
+   1249
+  ],
+  [
+   3264,
+   1213
+  ],
+  [
+   3515,
+   1189
+  ],
+  [
+   3766,
+   1154
+  ],
+  [
+   4017,
+   1
+  ]
+ ],
+ "timeline": {
+  "0-899": {
+   "iteration marks": 7192,
+   "units: whole images": 485184,
+   "players": 13112,
+   "tables": 160732,
+   "feature grid cells": 12504940,
+   "wrecks and feature heads": 476732,
+   "globals": 39108,
+   "projectiles": 68088,
+   "explored map": 145840,
+   "perspective": 108,
+   "events": 327060,
+   "units: deltas": 39178140,
+   "order lists": 2678452,
+   "units: gone": 144
+  },
+  "900-1799": {
+   "iteration marks": 7200,
+   "units: deltas": 32286648,
+   "order lists": 4570476,
+   "feature grid cells": 8077952,
+   "wrecks and feature heads": 203696,
+   "globals": 40984,
+   "projectiles": 2284472,
+   "events": 440932,
+   "players": 10528,
+   "units: gone": 416,
+   "tables": 1316,
+   "units: whole images": 672
+  },
+  "1800-2699": {
+   "iteration marks": 7200,
+   "units: deltas": 27253336,
+   "order lists": 4347232,
+   "feature grid cells": 6386660,
+   "wrecks and feature heads": 145904,
+   "globals": 41344,
+   "projectiles": 7748580,
+   "events": 705312,
+   "units: gone": 776,
+   "players": 13668,
+   "tables": 1644,
+   "units: whole images": 336
+  },
+  "2700-3599": {
+   "iteration marks": 7200,
+   "units: deltas": 19966012,
+   "order lists": 3903328,
+   "feature grid cells": 3961592,
+   "wrecks and feature heads": 237856,
+   "globals": 40804,
+   "projectiles": 12884084,
+   "events": 884264,
+   "players": 14080,
+   "units: gone": 856,
+   "tables": 1804,
+   "perspective": 72,
+   "units: whole images": 336
+  },
+  "3600-4499": {
+   "iteration marks": 3376,
+   "units: deltas": 6577024,
+   "order lists": 1171852,
+   "feature grid cells": 1455156,
+   "wrecks and feature heads": 176216,
+   "globals": 17600,
+   "projectiles": 3547640,
+   "events": 658856,
+   "players": 4720,
+   "units: gone": 9392,
+   "tables": 18836,
+   "units: whole images": 336
+  }
+ },
+ "compressors": {
+  "writer (lodepng, 2 KB window)": 82300671,
+  "zlib 9, 32 KB window": 76848919,
+  "lzma preset 6": 50575056,
+  "zstd 3": 65629160,
+  "zstd 19": 58420340,
+  "zstd 19, the whole stream as one frame": 46573918
+ }
+}

@@ -1,0 +1,2 @@
+battle N30 pvals T0 blockbase: 278 blocks, encoded 39s, roundtrip OK; raw MiB seq 0.53 uf 8.08 uv 50.11 pf 3.06 pv 52.87 pi 0.00 ce 18.58 or 22.23 ev 8.54 ot 2.95 total 166.95
+  zstd3 alone one              36.53 MiB    494.8 MB/s  

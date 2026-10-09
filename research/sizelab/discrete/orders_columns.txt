@@ -1,0 +1,4 @@
+orders column key    raw   527 KB deflate  245 KB zstd19  237 KB
+orders column mask   raw   494 KB deflate  120 KB zstd19  124 KB
+orders column val    raw 2,901 KB deflate  527 KB zstd19  495 KB
+orders column whole  raw   191 KB deflate    6 KB zstd19    6 KB

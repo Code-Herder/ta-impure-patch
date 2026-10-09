@@ -68,6 +68,18 @@
    "steps": [[120, "keys", ["pclick:512,384"]], [180, "keys", ["ctrl+d"]]],
    "end": 900
   },
+  "perspective": {
+   "load": "replay-perspective.json",
+   "steps": [[180, "keys", ["pmove:600,400", "pclick:512,384"]],
+             [270, "keys", ["pmove:360,270", "down:lbutton"]], [360, "keys", ["pmove:470,340"]],
+             [450, "keys", ["up:lbutton"]], [540, "keys", ["down:shift", "pclick:512,384", "up:shift"]],
+             [630, "keys", ["prclick:700,500", "pclick:850,150"]],
+             [780, "keys", ["down:right"]], [840, "keys", ["up:right"]],
+             [960, "keys", ["pmove:512,384", "wheel:1"]]],
+   "first": 721,
+   "end": 1500,
+   "watch": true
+  },
   "nomapalert": {
    "load": "c2-nomapalert.json",
    "content": {"run": ["tools/datakeys_fixture.py", "{gamedir}/zzkeys.ufo"], "files": ["zzkeys.ufo"]},
@@ -119,6 +131,14 @@
    "end": 900,
    "takeover": {"player": 0, "switches": {"cheats": true}, "type": "+iwin", "dump": 60,
                 "checks": ["judge", "line", "fork", "victory"]}
+  },
+  "tenseat": {
+   "load": "replay-tenseat-load.json",
+   "steps": [[900, "type", "+los"]],
+   "end": 1800,
+   "watch": true,
+   "forks": true,
+   "takeover": {"player": "controlled", "checks": ["judge", "line", "fork"]}
   },
   "resource-mex": {
    "load": "resource-snapping.json",
@@ -686,6 +706,7 @@
    }
   },
   "resource-geo-upgrade": {
+   "normal_speed": true,
    "load": "resource-geo-upgrade.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",

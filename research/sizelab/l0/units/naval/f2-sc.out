@@ -1,0 +1,1 @@
+{"tag": "frame2-rulesetstamp,counts", "raw": 803216, "sections": 78, "encode_decode_s": 694.5, "units": 75218, "residuals": 270595, "lanes": 113, "checked_ticks": 3841, "checked_units": 232294, "mismatch_ticks": 0, "writer": 410153, "zlib9": 405555, "zstd3": 422924, "zstd19": 392337, "lzma": 376500}

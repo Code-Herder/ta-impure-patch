@@ -94,6 +94,7 @@
 #include "tagpu_pal.h"
 #include "tagpu_vk.h"      /* tagpu_vk_ab_arm, for the A/B claim */
 #include "tagpu_packet.h"   /* the frame packet: the view, the tables */
+#include "tagpu_recpov.h"   /* REC_CLICK_SHOW: how long a recorded click's ring lasts */
 #include "tagpu_log.h"
 
 /* ---- what the marker block reads, and where it comes from ----------------
@@ -768,6 +769,106 @@ static void gather_cursor(const TAGPU_FXVIEW* v)
     s_ncurs = nv - CURSBASE;
 }
 
+/* ---- THE REPLAY'S OVERLAYS ----------------------------------------------
+   A playback's recorded cursors and clicks, out of the packet's PK_OVERLAY table
+   (tagpu_replay.c, THE OVERLAYS, builds it on the game thread from the
+   recording; the selections are the native pass's rectangles, from
+   PK_UNIT.rsel). Drawn last and WITH THE FOG OFF, as the build cursor is: a
+   recorded player's pointer is not a thing the viewer's sight hides.
+
+   THE PROJECTION is the engine's, selbox_emit's: x - eyeX + vpL and
+   z - floor(h / 2) - eyeY + vpT, in the frame's pre-zoom units. Each shape's
+   offsets are multiplied by `s_px`, one screen pixel in those units, so it
+   keeps its screen size at every zoom, and its anchor goes on the device grid
+   by `snap_device`. A cursor is a filled arrow, 18 screen px tall, with a
+   one-pixel outline in the GUI's black; a click a 16-segment ring in its
+   player's colour whose radius shrinks from 16 to 4 screen px over the
+   REC_CLICK_SHOW ticks it lasts.
+
+   BOUND: the coordinates are data. An item whose anchor lies more than
+   OV_REACH screen px outside the zoom's effective rect is dropped before any
+   vertex is made, so no triangle carries a far coordinate, and every line
+   goes through put_line's TAGPU_LINE_FAR bound and the viewport clip. The
+   buckets hold the acquire's TAGPU_PK_MAX_OVERLAY items of either kind. */
+#define OV_ARROW_N   7
+static const float OV_ARROW[OV_ARROW_N][2] = {
+    { 0, 0 }, { 0, 15 }, { 4, 11 }, { 7, 17 }, { 9, 16 }, { 6, 10 }, { 11, 10 } };
+static const unsigned char OV_ARROW_TRI[5][3] = {
+    { 0, 1, 2 }, { 0, 2, 5 }, { 0, 5, 6 }, { 2, 3, 4 }, { 2, 4, 5 } };
+#define OV_SEG       16
+#define OV_REACH     32
+#define MAXOVT       ((int)TAGPU_PK_MAX_OVERLAY * 5 * 3)      /* arrow triangle verts     */
+#define MAXOVL       ((int)TAGPU_PK_MAX_OVERLAY * OV_SEG)     /* rings or arrow outlines  */
+static float s_ovt[MAXOVT * MVST];
+static float s_ovl[MAXOVL * MVST];
+static int   s_novt, s_novl, s_novlRing;   /* the rings' lines come first in s_ovl */
+
+static void ov_line(double x0, double y0, double x1, double y1, int col, float wx, float wz)
+{
+    if (s_novl < MAXOVL &&
+        put_line(s_ovl + (size_t)s_novl * MVST, x0, y0, x1, y1, NULL, wx, wz,
+                 (float)col / 255.0f, 0.0f))
+        s_novl++;
+}
+
+/* An item's anchor in the frame's pre-zoom units, on the device grid, and the world point the
+   vertex carries; 0 for one past OV_REACH, which makes no vertex. */
+static int ov_anchor(const TAGPU_FXVIEW* v, const TAGPU_PK_OVERLAY* o, float* x, float* y,
+                     float* wz)
+{
+    const double reach = OV_REACH * s_px;
+    const double z = (double)o->z - floor((double)o->h * 0.5);
+    const double px = (double)o->x - v->eyeX + v->vpL, py = z - v->eyeY + v->vpT;
+    if (px < v->evpL - reach || px > v->evpL + v->evw + reach ||
+        py < v->evpT - reach || py > v->evpT + v->evh + reach)
+        return 0;
+    *x = (float)px;
+    *y = (float)py;
+    *wz = (float)z;
+    snap_device(x, y);
+    return 1;
+}
+
+static void gather_overlay(const TAGPU_FXVIEW* v)
+{
+    const TAGPU_PACKET* pk = v->packet;
+    const TAGPU_PK_OVERLAY* ov = tagpu_pk_overlay(pk);
+    unsigned i;
+    int k, j;
+    float x, y, wz;
+    s_novt = s_novl = s_novlRing = 0;
+    if (!ov) return;
+    /* the rings first, so a cursor is drawn over a click it has just made */
+    for (i = 0; i < pk->n_overlay; i++) {
+        const TAGPU_PK_OVERLAY* o = &ov[i];
+        unsigned age = o->age < REC_CLICK_SHOW ? o->age : REC_CLICK_SHOW - 1;
+        double r = (4.0 + 12.0 * (double)(REC_CLICK_SHOW - age) / REC_CLICK_SHOW) * s_px;
+        if (o->kind != TAGPU_PK_OV_CLICK || !ov_anchor(v, o, &x, &y, &wz)) continue;
+        for (k = 0; k < OV_SEG; k++) {
+            double a0 = 6.283185307179586 * k / OV_SEG, a1 = 6.283185307179586 * (k + 1) / OV_SEG;
+            ov_line(x + r * cos(a0), y + r * sin(a0), x + r * cos(a1), y + r * sin(a1), o->colour,
+                    (float)o->x, wz);
+        }
+    }
+    s_novlRing = s_novl;
+    for (i = 0; i < pk->n_overlay; i++) {
+        const TAGPU_PK_OVERLAY* o = &ov[i];
+        if (o->kind != TAGPU_PK_OV_CURSOR || !ov_anchor(v, o, &x, &y, &wz)) continue;
+        for (k = 0; k < 5 && s_novt + 3 <= MAXOVT; k++)
+            for (j = 0; j < 3; j++) {
+                const float* c = OV_ARROW[OV_ARROW_TRI[k][j]];
+                put_ord(s_ovt, s_novt++, x + (float)(c[0] * s_px), y + (float)(c[1] * s_px),
+                        (float)o->x, wz, (float)o->colour / 255.0f);
+            }
+        for (k = 0; k < OV_ARROW_N; k++) {
+            const float* a = OV_ARROW[k];
+            const float* b = OV_ARROW[(k + 1) % OV_ARROW_N];
+            ov_line(x + a[0] * s_px, y + a[1] * s_px, x + b[0] * s_px, y + b[1] * s_px,
+                    pk->gui_col[GUI_BLACK], (float)o->x, wz);
+        }
+    }
+}
+
 /* Grow one of the two unit-scaled buckets to `need` vertices. Grow only,
    doubling; 0 leaves the bucket and its capacity as they were. */
 static int grow_verts(float** p, unsigned* cap, unsigned need)
@@ -806,6 +907,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     s_nbar = 0; s_cBar = 0; s_nordt = 0; s_nordl = 0; s_nordx = 0;
     s_nsel = 0; s_selover = 0; s_lfar = 0;
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
+    s_novt = 0; s_novl = 0; s_novlRing = 0;
     if (!pk || !pk->in_game) return 0;
     /* BEFORE ANYTHING EMITS: a bar per unit at most, a selection rect per unit
        at most, and the unit count is bounded by the packet's own table. A
@@ -839,6 +941,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
        markers are health bars, and neither `damagebars` nor `nobars` has
        anything to say about them */
     gather_cursor(v);
+    if (s_armed == 1 && !s_passive) gather_overlay(v);
     if (s_armed == 1 && !s_passive) tagpu_order_gather(v);
     else if (s_passive) tagpu_markown_set_orders(0);
     tagpu_order_frame_done(v);
@@ -1063,7 +1166,7 @@ int tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now)
 
 void tagpu_mark_render(const TAGPU_FXVIEW* v)
 {
-    int total, textBase = 0, selBase = 0;
+    int total, textBase = 0, selBase = 0, ovtBase, ovlBase;
 
     /* THIS PASS BUILDS THE RECORD THE TWIN DRAWS FROM, and nothing else:
        `mk_push` and `mk_draw` are the record and are pure CPU. */
@@ -1083,7 +1186,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     }
 
     if (s_nbar == 0 && s_ncurs == 0 && s_nsel == 0 &&
-        s_nordt == 0 && s_nordl == 0 && s_nordx == 0) return;
+        s_nordt == 0 && s_nordl == 0 && s_nordx == 0 && s_novt == 0 && s_novl == 0) return;
 
     /* ---- the A/B's lever ---- */
     {
@@ -1111,6 +1214,10 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_nordx) mk_push(s_ordx, s_nordx);
     selBase = textBase + s_nordx;
     if (s_nsel) mk_push(s_sel, s_nsel);
+    ovtBase = selBase + s_nsel;
+    if (s_novt) mk_push(s_ovt, s_novt);
+    ovlBase = ovtBase + s_novt;
+    if (s_novl) mk_push(s_ovl, s_novl);
 
     /* THE SELECTION RECTS FIRST, and depth-tested: the engine draws each one
        inside the unit sweep, immediately before its own unit (`0x4699EB`,
@@ -1161,6 +1268,12 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_ncurs) {
         mk_draw(CURSBASE, s_ncurs, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
     }
+    /* the replay's overlays, over everything and with the fog off: the click rings, then the
+       cursor arrows' fills, then their outlines */
+    if (s_novlRing) mk_draw(ovlBase, s_novlRing, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    if (s_novt) mk_draw(ovtBase, s_novt, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    if (s_novl > s_novlRing)
+        mk_draw(ovlBase + s_novlRing, s_novl - s_novlRing, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);
 
     if (s_abTaking) {
         /* THE A/B CLAIM. `tagpu_vk_ab_arm` unlinks the target `_vk.ppm` at the instant the claim latches, which

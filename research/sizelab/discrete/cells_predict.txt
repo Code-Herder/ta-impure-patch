@@ -1,0 +1,5 @@
+  predicted exactly: 356,862
+  not predicted or another value: 1,375
+  cells whose change is not slot A alone (coded as B): 2,635
+  predicted, no change: 1,135
+the tick input under the prediction, estimated: raw 33 KB, deflate 20 KB, zstd19 25 KB

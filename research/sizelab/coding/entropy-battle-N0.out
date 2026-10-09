@@ -1,0 +1,30 @@
+kinds 15 33 41 38
+block 0/785 0s
+block 100/785 38s
+block 200/785 72s
+block 300/785 99s
+block 400/785 122s
+block 500/785 142s
+block 600/785 159s
+block 700/785 176s
+
+battle N=0: the delta kinds' changed values only (unit, projectile, player, globals), MiB
+  ans0 T1                   65.22
+  ans0 T3                   52.62
+  ans1n T1                  65.70
+  ans1n T3                  53.26
+  ans1u T1                  65.24
+  ans1u T3                  52.83
+  bytes0 T0                 49.88
+  bytes0 T1                 45.56
+  colzstd19 T1              41.06
+  colzstd19 T3              46.03
+  raw T0                   102.00
+  raw T1                   102.00
+  raw T3                   102.00
+  zstd19 T0                 37.79
+  zstd19 T1                 39.92
+  zstd19 T3                 45.07
+  zstd3 T0                  45.01
+  zstd3 T1                  43.13
+  zstd3 T3                  48.21

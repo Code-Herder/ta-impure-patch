@@ -1,0 +1,468 @@
+{
+ "file": "$SCRATCH/chatfix/two/native.imprec",
+ "bytes": 4293146,
+ "actors": [
+  [
+   11008519,
+   1
+  ],
+  [
+   11008517,
+   0
+  ],
+  [
+   11008514,
+   1
+  ],
+  [
+   11008515,
+   0
+  ]
+ ],
+ "seats": [
+  [
+   11008519,
+   0,
+   4501,
+   6000
+  ],
+  [
+   11008517,
+   1,
+   3001,
+   4500
+  ],
+  [
+   11008514,
+   2,
+   1,
+   1500
+  ],
+  [
+   11008515,
+   3,
+   1501,
+   3000
+  ]
+ ],
+ "blocks": {
+  "header": {
+   "n": 1,
+   "raw": 4068,
+   "disk": 4100
+  },
+  "minimap": {
+   "n": 1,
+   "raw": 63512,
+   "disk": 8468
+  },
+  "stream": {
+   "n": 22,
+   "raw": 13386596,
+   "disk": 3033416
+  },
+  "contributions": {
+   "n": 17,
+   "raw": 4321776,
+   "disk": 1180017
+  },
+  "snapshot": {
+   "n": 1,
+   "raw": 941624,
+   "disk": 66549
+  },
+  "end": {
+   "n": 1,
+   "raw": 556,
+   "disk": 588
+  }
+ },
+ "contributions": {
+  "disk": 1180017,
+  "sum_alone": 844315,
+  "by": [
+   {
+    "kind": "units",
+    "phase": "produced (local)",
+    "records": 3028,
+    "raw": 1133984,
+    "body": 891744,
+    "envelopes": 242240,
+    "entries": 26832,
+    "packed_alone": 319864
+   },
+   {
+    "kind": "units",
+    "phase": "consumed (remote)",
+    "records": 2991,
+    "raw": 795748,
+    "body": 556468,
+    "envelopes": 239280,
+    "entries": 17115,
+    "packed_alone": 200180
+   },
+   {
+    "kind": "seal",
+    "phase": "consumed (remote)",
+    "records": 2985,
+    "raw": 310440,
+    "body": 71640,
+    "envelopes": 238800,
+    "entries": 0,
+    "packed_alone": 66738
+   },
+   {
+    "kind": "seal",
+    "phase": "produced (local)",
+    "records": 3025,
+    "raw": 314600,
+    "body": 72600,
+    "envelopes": 242000,
+    "entries": 0,
+    "packed_alone": 65951
+   },
+   {
+    "kind": "orders",
+    "phase": "produced (local)",
+    "records": 3223,
+    "raw": 588016,
+    "body": 330176,
+    "envelopes": 257840,
+    "entries": 0,
+    "packed_alone": 51920
+   },
+   {
+    "kind": "roots",
+    "phase": "produced (local)",
+    "records": 1520,
+    "raw": 313022,
+    "body": 191422,
+    "envelopes": 121600,
+    "entries": 3894,
+    "packed_alone": 38691
+   },
+   {
+    "kind": "orders",
+    "phase": "consumed (remote)",
+    "records": 2214,
+    "raw": 400512,
+    "body": 223392,
+    "envelopes": 177120,
+    "entries": 0,
+    "packed_alone": 36516
+   },
+   {
+    "kind": "roots",
+    "phase": "consumed (remote)",
+    "records": 1131,
+    "raw": 227163,
+    "body": 136683,
+    "envelopes": 90480,
+    "entries": 2716,
+    "packed_alone": 30047
+   },
+   {
+    "kind": "explored",
+    "phase": "consumed (remote)",
+    "records": 780,
+    "raw": 109419,
+    "body": 47019,
+    "envelopes": 62400,
+    "entries": 0,
+    "packed_alone": 10794
+   },
+   {
+    "kind": "explored",
+    "phase": "produced (local)",
+    "records": 503,
+    "raw": 82540,
+    "body": 42300,
+    "envelopes": 40240,
+    "entries": 0,
+    "packed_alone": 8040
+   },
+   {
+    "kind": "player",
+    "phase": "consumed (remote)",
+    "records": 144,
+    "raw": 21132,
+    "body": 9612,
+    "envelopes": 11520,
+    "entries": 0,
+    "packed_alone": 7213
+   },
+   {
+    "kind": "player",
+    "phase": "produced (local)",
+    "records": 152,
+    "raw": 21444,
+    "body": 9284,
+    "envelopes": 12160,
+    "entries": 0,
+    "packed_alone": 6630
+   },
+   {
+    "kind": "text",
+    "phase": "consumed (remote)",
+    "records": 4,
+    "raw": 880,
+    "body": 560,
+    "envelopes": 320,
+    "entries": 4,
+    "packed_alone": 466
+   },
+   {
+    "kind": "text",
+    "phase": "produced (local)",
+    "records": 4,
+    "raw": 880,
+    "body": 560,
+    "envelopes": 320,
+    "entries": 4,
+    "packed_alone": 453
+   },
+   {
+    "kind": "units",
+    "phase": "proof tail",
+    "records": 2,
+    "raw": 316,
+    "body": 156,
+    "envelopes": 160,
+    "entries": 4,
+    "packed_alone": 188
+   },
+   {
+    "kind": "roster",
+    "phase": "consumed (remote)",
+    "records": 2,
+    "raw": 512,
+    "body": 352,
+    "envelopes": 160,
+    "entries": 0,
+    "packed_alone": 136
+   },
+   {
+    "kind": "roster",
+    "phase": "produced (local)",
+    "records": 2,
+    "raw": 512,
+    "body": 352,
+    "envelopes": 160,
+    "entries": 0,
+    "packed_alone": 131
+   },
+   {
+    "kind": "pov",
+    "phase": "consumed (remote)",
+    "records": 2,
+    "raw": 224,
+    "body": 64,
+    "envelopes": 160,
+    "entries": 0,
+    "packed_alone": 122
+   },
+   {
+    "kind": "seal",
+    "phase": "proof tail",
+    "records": 2,
+    "raw": 208,
+    "body": 48,
+    "envelopes": 160,
+    "entries": 0,
+    "packed_alone": 120
+   },
+   {
+    "kind": "pov",
+    "phase": "produced (local)",
+    "records": 2,
+    "raw": 224,
+    "body": 64,
+    "envelopes": 160,
+    "entries": 0,
+    "packed_alone": 115
+   }
+  ],
+  "roots": [
+   {
+    "phase": "consumed (remote)",
+    "root": "create begin",
+    "n": 38,
+    "bytes": 1520
+   },
+   {
+    "phase": "consumed (remote)",
+    "root": "create end",
+    "n": 38,
+    "bytes": 1520
+   },
+   {
+    "phase": "consumed (remote)",
+    "root": "death",
+    "n": 25,
+    "bytes": 8800
+   },
+   {
+    "phase": "consumed (remote)",
+    "root": "death end",
+    "n": 25,
+    "bytes": 400
+   },
+   {
+    "phase": "consumed (remote)",
+    "root": "named start",
+    "n": 1300,
+    "bytes": 60580
+   },
+   {
+    "phase": "consumed (remote)",
+    "root": "reply",
+    "n": 508,
+    "bytes": 12419
+   },
+   {
+    "phase": "consumed (remote)",
+    "root": "spray",
+    "n": 782,
+    "bytes": 46920
+   },
+   {
+    "phase": "produced (local)",
+    "root": "create begin",
+    "n": 37,
+    "bytes": 1480
+   },
+   {
+    "phase": "produced (local)",
+    "root": "create end",
+    "n": 37,
+    "bytes": 1480
+   },
+   {
+    "phase": "produced (local)",
+    "root": "death",
+    "n": 17,
+    "bytes": 5984
+   },
+   {
+    "phase": "produced (local)",
+    "root": "death end",
+    "n": 17,
+    "bytes": 272
+   },
+   {
+    "phase": "produced (local)",
+    "root": "named start",
+    "n": 2133,
+    "bytes": 99512
+   },
+   {
+    "phase": "produced (local)",
+    "root": "reply",
+    "n": 633,
+    "bytes": 15414
+   },
+   {
+    "phase": "produced (local)",
+    "root": "spray",
+    "n": 1020,
+    "bytes": 61200
+   }
+  ],
+  "units": {
+   "produced (local)/full": 39,
+   "produced (local)/words": 85748,
+   "produced (local)/absent": 3015,
+   "produced (local)/delta": 23778,
+   "consumed (remote)/full": 40,
+   "consumed (remote)/words": 50551,
+   "consumed (remote)/absent": 3023,
+   "consumed (remote)/delta": 14052,
+   "proof tail/delta": 4,
+   "proof tail/words": 17
+  }
+ },
+ "stream": {
+  "disk": 3033416,
+  "sum_alone": 2726469,
+  "by": [
+   {
+    "cat": "projectiles",
+    "records": 40350,
+    "raw": 3566060,
+    "packed_alone": 1647875
+   },
+   {
+    "cat": "cells",
+    "records": 4001,
+    "raw": 7109384,
+    "packed_alone": 513804
+   },
+   {
+    "cat": "units local",
+    "records": 23834,
+    "raw": 819000,
+    "packed_alone": 282034
+   },
+   {
+    "cat": "other shared",
+    "records": 29319,
+    "raw": 875260,
+    "packed_alone": 119961
+   },
+   {
+    "cat": "units remote",
+    "records": 6684,
+    "raw": 251924,
+    "packed_alone": 86026
+   },
+   {
+    "cat": "other events",
+    "records": 5690,
+    "raw": 124232,
+    "packed_alone": 35950
+   },
+   {
+    "cat": "orders local",
+    "records": 3150,
+    "raw": 316408,
+    "packed_alone": 22066
+   },
+   {
+    "cat": "explored map",
+    "records": 214,
+    "raw": 289804,
+    "packed_alone": 7148
+   },
+   {
+    "cat": "death events (their 340 bytes)",
+    "records": 42,
+    "raw": 14448,
+    "packed_alone": 4585
+   },
+   {
+    "cat": "players local",
+    "records": 152,
+    "raw": 8036,
+    "packed_alone": 3879
+   },
+   {
+    "cat": "players remote",
+    "records": 164,
+    "raw": 6008,
+    "packed_alone": 1856
+   },
+   {
+    "cat": "events playback ignores (state, built, create, net create)",
+    "records": 99,
+    "raw": 2864,
+    "packed_alone": 1008
+   },
+   {
+    "cat": "players no actor",
+    "records": 6,
+    "raw": 3168,
+    "packed_alone": 277
+   }
+  ]
+ }
+}

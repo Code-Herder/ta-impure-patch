@@ -1,13 +1,22 @@
 /* tagpu_recreader.c -- reads a demo recording back (tagpu_recreader.h): the blocks, the header's
    entries, and the world the stream builds, one iteration at a time.
 
-   A block is checked before anything reads it: its header's magic and CRC, its sizes against
-   RECR_BLOCK_MAX, its payload's CRC, and the inflated size against the header's. A block that
-   fails ends the reading there, as it ends tarec.py's. The inflate itself (lodepng) grows its
-   output as it goes and fails cleanly when it cannot allocate; a recording is the local game's
-   own file, so a stream crafted to inflate without end is not guarded beyond that.
+   A block is checked before anything reads it: its header's magic and CRC, its flags, its sizes
+   against RECR_BLOCK_MAX, its payload's CRC, and its unpacked size against the header's: a packed
+   body is exactly one zstd frame of `raw` bytes, unpacked into a buffer of that size. A block that
+   fails ends the reading there, as it ends tarec.py's.
 
-   SEQUENTIAL READING skips snapshot blocks unread -- not inflated, their CRC not checked -- since
+   THE UNIT FRAME (tagpu_reccodec.c). A sectioned stream block decodes to its records through the
+   reader's own codec state, which a flagged block (RBF_FRAME_RESET) restarts from the world's
+   units and an unflagged one continues. The ORDERING that makes the world the state the writer's
+   encoder restarted from: tick_read loads a block only once the previous block's iterations are
+   all applied, so at a block the world's units are the copy at the end of the iteration before
+   it; a seek, a crossing and a timeline's choice reset the world (world_reset), which invalidates
+   the frame, and start at a snapshot or a segment's first stream block, both of which the writer
+   follows with a flagged block. A sectioned block met with no valid frame is refused by name,
+   never misread.
+
+   SEQUENTIAL READING skips snapshot blocks unread -- not unpacked, their CRC not checked -- since
    a playing from the start never needs one. A SEEK reads them: the index (every block's header)
    finds the last snapshot before the target, whose payload is then checked like any block's, and
    the stream is read on from the iteration after it. A snapshot carries only the cells that
@@ -30,8 +39,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_recreader.h"
-#include "lodepng.h"
+#include "tagpu_recmp_history.h"
+#include "tagpu_reccodec.h"
+#include "zstd.h"
 #include "crc32.h"
+
+_Static_assert(RECC_PAYLOAD_MAX == RECR_BLOCK_MAX,
+               "a sectioned block decodes to at most what a records block may hold");
 
 /* one block of the file, by its header alone */
 typedef struct RecIndexEntry {
@@ -49,6 +63,13 @@ typedef struct RecSeg {
     int                ended;       /* an RB_END closes it                                     */
 } RecSeg;
 
+typedef struct {
+    unsigned epoch, segment, tick, index, done;
+    RecMpHistory* history;
+    unsigned char* payload;
+    size_t bytes, at;
+} RecMpRead;
+
 struct RecReader {
     HANDLE             f;
     unsigned long long off;         /* the file offset of the next block                      */
@@ -56,8 +77,14 @@ struct RecReader {
     RecWorld           w;
     unsigned char*     pk;          /* the block's packed bytes                               */
     unsigned           pkcap;
-    unsigned char*     raw;         /* its payload: pk for a stored block, else the inflate's  */
+    unsigned char*     raw;         /* its payload: pk for a stored block, dec.p for a sectioned
+                                       one, else a buffer of its own                          */
     size_t             rawn;
+    RecCodec*          codec;       /* the unit frame, from the first sectioned block on       */
+    void*              dctx;        /* the ZSTD_DCtx, from the first packed block on           */
+    unsigned char*     sec;         /* a packed sectioned block's container ...                */
+    size_t             seccap;
+    RecBytes           dec;         /* ... and the records it decodes to                       */
     size_t             at;          /* the next record in the payload                         */
     int                ended;       /* the end block, or the file's end, has been read         */
     char               end[160];    /* how the recording ended, once `ended`                   */
@@ -66,7 +93,8 @@ struct RecReader {
     unsigned           end_iters;   /* does not carry                                         */
     unsigned*          touched;     /* the slots whose `changed` is set                        */
     unsigned           ntouched;
-    unsigned           evcap, fcap;
+    unsigned           evcap, fcap, clickcap;
+    int                snap;        /* the records applied are a snapshot's (snapshot_apply)   */
     unsigned           fbracket;    /* an RK_EV_FEATURE's root + 1, until its END             */
     unsigned           ndeaths;     /* the deaths whose RK_EV_DEATH_END is still to come      */
     unsigned           death[REC_DEATHS_MAX];
@@ -80,6 +108,8 @@ struct RecReader {
     RecIndexEntry*     idx;         /* every block of every segment but their headers, to the
                                        first torn one, or to an end block no header follows   */
     unsigned           nidx;
+    unsigned           scan_epoch;
+    RecMpRead          mp_query, mp_apply;
     RecSeg             seg[RECR_TIMELINES];
     unsigned           nseg;
     unsigned           nstates, max_id;
@@ -112,7 +142,7 @@ static const char* const END_REASONS[] = {
 
 static void payload_free(RecReader* r)
 {
-    if (r->raw && r->raw != r->pk) free(r->raw);
+    if (r->raw && r->raw != r->pk && r->raw != r->dec.p) free(r->raw);
     r->raw = NULL;
     r->rawn = 0;
     r->at = 0;
@@ -139,6 +169,29 @@ static int file_at(RecReader* r, unsigned long long off)
     return 1;
 }
 
+/* What format 8 refuses in a block's flags and sizes (tagpu_recfmt.h, RecBlock), or NULL. */
+static const char* block_flags_bad(const RecBlock* b)
+{
+    if (b->flags & ~RBF_ALL) return "flags it does not know";
+    if ((b->flags & RBF_SECTIONS) && b->kind != RB_STREAM)
+        return "sections, not being a stream block";
+    if ((b->flags & RBF_FRAME_RESET) && !(b->flags & RBF_SECTIONS))
+        return "a frame reset, not being sectioned";
+    if (!(b->flags & RBF_STORED) &&
+        (b->kind == RB_HEADER || b->kind == RB_END || b->kind == RB_TIMELINES))
+        return "a packed header, end or timelines body, which are always stored";
+    if (!(b->flags & RBF_STORED) && (!b->packed || !b->raw)) return "a packed body of no bytes";
+    return NULL;
+}
+
+/* the zstd decompression context, made at the first packed block a reading meets: NULL, no
+   memory */
+static void* dctx_of(RecReader* r)
+{
+    if (!r->dctx) r->dctx = ZSTD_createDCtx();
+    return r->dctx;
+}
+
 /* The header of the block at r->off, checked. 1 read; 0 the file's end; -1 a header that cannot
    be read (why). */
 static int block_head(RecReader* r, RecBlock* b, char* why, unsigned cap)
@@ -160,18 +213,62 @@ static int block_head(RecReader* r, RecBlock* b, char* why, unsigned cap)
     }
     if (b->packed > RECR_BLOCK_MAX || b->raw > RECR_BLOCK_MAX ||
         ((b->flags & RBF_STORED) && b->packed != b->raw)) {
-        snprintf(why, cap, "a block at byte %llu of %u bytes, %u inflated: past what it may hold",
+        snprintf(why, cap, "a block at byte %llu of %u bytes, %u unpacked: past what it may hold",
                  r->off, b->packed, b->raw);
+        return -1;
+    }
+    if (block_flags_bad(b)) {
+        snprintf(why, cap, "a block of kind %u at byte %llu with %s", b->kind, r->off,
+                 block_flags_bad(b));
         return -1;
     }
     return 1;
 }
 
-/* The payload of the block whose header block_head has just read: checked and inflated into raw.
-   1, or -1 (why). */
+static const RecHeader* seg_header(const RecReader* r);
+
+/* A sectioned stream block's container, `sec` its `n` bytes, decoded into raw by the unit frame
+   (the head of this file, THE UNIT FRAME). 1, or -1 (why). */
+static int sections_body(RecReader* r, const RecBlock* b, const unsigned char* sec, size_t n,
+                         char* why, unsigned cap)
+{
+    const RecHeader* h = seg_header(r);
+    char w2[160];
+    if (!h->has_codec) {
+        snprintf(why, cap, "a sectioned stream block at byte %llu in a segment whose header has no "
+                 "RT_CODEC and RT_PHYSICS", r->off);
+        return -1;
+    }
+    if (!r->codec) r->codec = reccodec_new(r->w.slots);
+    if (!r->codec) {
+        snprintf(why, cap, "no memory for the unit frame of %u slots, at byte %llu", r->w.slots,
+                 r->off);
+        return -1;
+    }
+    /* ORDERING: the world's units are the copy at the end of the iteration before this block
+       (tick_read loads a block only between iterations), which is what the writer's encoder
+       restarted from. The codec was made for w->slots, which every segment's header equals
+       (segs_scan); h->codec is this segment's own. */
+    if (b->flags & RBF_FRAME_RESET) {
+        reccodec_restart(r->codec, &h->codec, r->w.unit, r->w.live);
+    } else if (!reccodec_valid(r->codec)) {
+        snprintf(why, cap, "a stream block that continues a unit frame this reading did not start, "
+                 "at byte %llu", r->off);
+        return -1;
+    }
+    if (!reccodec_decode(r->codec, sec, n, &r->dec, w2, sizeof w2)) {
+        snprintf(why, cap, "the sectioned block at byte %llu: %s", r->off, w2);
+        return -1;
+    }
+    r->raw = r->dec.p;
+    r->rawn = r->dec.n;
+    return 1;
+}
+
+/* The payload of the block whose header block_head has just read: checked, unpacked and, when
+   sectioned, decoded into raw. 1, or -1 (why). */
 static int block_body(RecReader* r, const RecBlock* b, char* why, unsigned cap)
 {
-    unsigned lz;
     if (b->packed > r->pkcap) {
         unsigned char* n = (unsigned char*)realloc(r->pk, b->packed);
         if (!n) {
@@ -189,24 +286,52 @@ static int block_body(RecReader* r, const RecBlock* b, char* why, unsigned cap)
         snprintf(why, cap, "a block whose payload fails its CRC at byte %llu", r->off);
         return -1;
     }
-    if (b->flags & RBF_STORED) {
+    if (b->flags & RBF_SECTIONS) {
+        const unsigned char* sec = r->pk;
+        if (!(b->flags & RBF_STORED)) {
+            if (b->raw > r->seccap) {
+                unsigned char* n = (unsigned char*)realloc(r->sec, b->raw);
+                if (!n) {
+                    snprintf(why, cap, "no memory for a block of %u bytes", b->raw);
+                    return -1;
+                }
+                r->sec = n;
+                r->seccap = b->raw;
+            }
+            if (!dctx_of(r)) {
+                snprintf(why, cap, "no memory for zstd, at byte %llu", r->off);
+                return -1;
+            }
+            if (!reccodec_unpack(r->dctx, r->sec, b->raw, r->pk, b->packed)) {
+                snprintf(why, cap, "a block at byte %llu that is not one zstd frame of its %u bytes",
+                         r->off, b->raw);
+                return -1;
+            }
+            sec = r->sec;
+        }
+        if (sections_body(r, b, sec, b->raw, why, cap) < 0) return -1;
+    } else if (b->flags & RBF_STORED) {
         r->raw = r->pk;
         r->rawn = b->packed;
     } else {
-        unsigned char* out = NULL;
-        size_t outn = 0;
-        lz = b->packed ? lodepng_zlib_decompress(&out, &outn, r->pk, b->packed,
-                                                 &lodepng_default_decompress_settings)
-                       : 1;
-        if (lz || outn != b->raw) {
+        unsigned char* out = (unsigned char*)malloc(b->raw);
+        if (!out) {
+            snprintf(why, cap, "no memory for a block of %u bytes", b->raw);
+            return -1;
+        }
+        if (!dctx_of(r) || !reccodec_unpack(r->dctx, out, b->raw, r->pk, b->packed)) {
             free(out);
-            snprintf(why, cap, "a block at byte %llu that does not inflate to its %u bytes",
-                     r->off, b->raw);
+            if (!r->dctx) snprintf(why, cap, "no memory for zstd, at byte %llu", r->off);
+            else snprintf(why, cap, "a block at byte %llu that is not one zstd frame of its %u "
+                          "bytes", r->off, b->raw);
             return -1;
         }
         r->raw = out;
-        r->rawn = outn;
+        r->rawn = b->raw;
     }
+    /* a stream block of records leaves the frame behind: the writer restarts it at the next */
+    if (b->kind == RB_STREAM && !(b->flags & RBF_SECTIONS) && r->codec)
+        reccodec_invalidate(r->codec);
     r->off += sizeof *b + b->packed;
     return 1;
 }
@@ -263,6 +388,8 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
 {
     size_t at = 0;
     unsigned seen = 0, i;
+    const unsigned char* ent[3] = { NULL, NULL, NULL };     /* RT_CODEC, RT_PHYSICS, RT_AIR */
+    unsigned nent[3] = { 0, 0, 0 };
     memset(h, 0, sizeof *h);
     while (at + 4 <= len) {
         unsigned short tag, n;
@@ -277,6 +404,25 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         case RT_FORMAT:        if (n == 4) { h->format = u32(p); seen |= 1; } break;
         case RT_BUILD:         text(h->build, sizeof h->build, p, n); break;
         case RT_MODE:          if (n == 4) { h->mode = u32(p); seen |= 2; } break;
+        case RT_MULTIPLAYER: {
+            RecMpFileState state;
+            if (h->has_mp || n != sizeof h->mp) {
+                snprintf(why, cap, "malformed multiplayer roster"); return 0;
+            }
+            memcpy(&h->mp, p, sizeof h->mp);
+            if (!tagpu_recmp_file_state(&state, &h->mp)) {
+                snprintf(why, cap, "invalid multiplayer roster"); return 0;
+            }
+            h->has_mp = 1;
+            break;
+        }
+        case RT_MP_SEATS:
+            if (h->has_mp_seats || n != sizeof h->mp_seats) {
+                snprintf(why, cap, "malformed multiplayer seat mapping"); return 0;
+            }
+            memcpy(&h->mp_seats, p, sizeof h->mp_seats);
+            h->has_mp_seats = 1;
+            break;
         case RT_MAP:           text(h->map, sizeof h->map, p, n); break;
         case RT_WALLCLOCK:     if (n == 8) memcpy(&h->wallclock, p, 8); break;
         case RT_START:         if (n == 4) h->start = u32(p); break;
@@ -317,6 +463,16 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             }
             break;
         case RT_GLOBALS:       text(h->globals, sizeof h->globals, p, n); break;
+        case RT_CODEC:
+        case RT_PHYSICS:
+        case RT_AIR:
+            if (ent[tag - RT_CODEC]) {
+                snprintf(why, cap, "header entry %u twice", tag);
+                return 0;
+            }
+            ent[tag - RT_CODEC] = p;
+            nent[tag - RT_CODEC] = n;
+            break;
         case RT_PROJECTILES:   if (n == 4) { h->proj_cap = u32(p); seen |= 16; } break;
         case RT_SETTINGS_MAP:
             text(h->settings_map, sizeof h->settings_map, p, n);
@@ -391,7 +547,7 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         }
         at += (4 + (size_t)n + 3) & ~(size_t)3;
     }
-    if ((seen & 1) && h->format != REC_FORMAT) {
+    if ((seen & 1) && !rec_format_supported(h->format)) {
         snprintf(why, cap, "format %u, this build reads %u", h->format, REC_FORMAT);
         return 0;
     }
@@ -399,6 +555,24 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         snprintf(why, cap, "a header without its format, mode, slots, features or projectile "
                  "pool");
         return 0;
+    }
+    if ((h->mode == 3) != !!h->has_mp || h->has_mp != h->has_mp_seats) {
+        snprintf(why, cap, "network mode and contribution roster disagree"); return 0;
+    }
+    if (h->has_mp) {
+        if (!tagpu_recmp_file_roster_valid(&h->mp,&h->mp_seats) ||
+            h->slots!=h->mp_seats.slots || h->units_each!=h->mp_seats.each ||
+            h->nseats!=h->mp_seats.count) {
+            snprintf(why, cap, "contribution mapping disagrees with world allocation or seats"); return 0;
+        }
+        for (i=0;i<h->mp_seats.count;i++) {
+            unsigned k;
+            for (k=0;k<h->nseats;k++) if (h->seats[k].index==h->mp_seats.actor[i].seat) break;
+            if (k==h->nseats || h->seats[k].controller<1 || h->seats[k].controller>4 ||
+                h->mp.actor[i].local!=(h->seats[k].controller==1 || h->seats[k].controller==2)) {
+                snprintf(why, cap, "contribution origin has no matching owned seat"); return 0;
+            }
+        }
     }
     /* a projectile record's index is a u16 (RK_PROJ) */
     if (!h->proj_cap || h->proj_cap > 0xFFFF) {
@@ -409,6 +583,12 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         snprintf(why, cap, "a unit array of %u slots", h->slots);
         return 0;
     }
+    /* after the loop: the codec's constants are bounded by RT_SLOTS, which may follow them */
+    if ((ent[0] || ent[1] || ent[2]) &&
+        !reccodec_params(&h->codec, h->slots, ent[0], nent[0], ent[1], nent[1], ent[2], nent[2],
+                         why, cap))
+        return 0;
+    h->has_codec = (unsigned)h->codec.usable;
     if (!h->grid_w || h->grid_w > 0xFFFF || !h->grid_h || h->grid_h > 0xFFFF || !h->wrecks ||
         h->wrecks > 0x8000) {
         snprintf(why, cap, "a feature grid of %u x %u cells, or a wreck pool of %u records",
@@ -479,6 +659,9 @@ static void world_reset(RecReader* r, int from_base)
     const RecHeader* h = seg_header(r);
     unsigned i;
     payload_free(r);
+    /* the units the frame continues from are gone: the next stream block a reading meets after a
+       reset is flagged (a segment's first, or the first after a snapshot) */
+    if (r->codec) reccodec_invalidate(r->codec);
     r->in_seg = 0;
     memset(w->live, 0, w->slots);
     memset(w->changed, 0, w->slots);
@@ -496,6 +679,9 @@ static void world_reset(RecReader* r, int from_base)
     for (i = 0; i < w->ntab; i++) w->tab[i].size = 0;
     w->nev = 0;
     w->nfeat = 0;
+    w->nclick = 0;
+    memset(w->npov, 0, sizeof w->npov);
+    memset(w->nsel, 0, sizeof w->nsel);
     if (from_base) memcpy(w->grid, r->base, grid_bytes(r));
     else memset(w->grid, 0, grid_bytes(r));
     memset(w->pool, 0, (size_t)r->h.wrecks * REC_WRECK_BYTES);
@@ -539,8 +725,9 @@ static int world_init(RecReader* r, char* why, unsigned cap)
     w->proj = (unsigned char*)calloc(r->h.proj_cap, REC_PROJ_IMAGE);
     w->mapped_bytes = REC_MAPPED_BYTES(r->h.grid_w, r->h.grid_h);
     w->mapped = (unsigned char*)malloc(w->mapped_bytes ? w->mapped_bytes : 1);
+    w->sel = (RecSelEntry*)calloc((size_t)REC_PLAYERS * REC_SEL_MAX, sizeof *w->sel);
     if (!w->live || !w->changed || !w->list || !w->unit || !r->touched || !w->tab || !w->grid ||
-        !r->base || !w->pool || !w->proj || !w->mapped) {
+        !r->base || !w->pool || !w->proj || !w->mapped || !w->sel) {
         snprintf(why, cap, "no memory for the world of %u slots and %u x %u cells", w->slots,
                  r->h.grid_w, r->h.grid_h);
         return 0;
@@ -629,15 +816,35 @@ static int list_add(RecEvent** l, unsigned* n, unsigned* cap, unsigned kind, uns
 
 /* An event of the step, by the brackets' grammar (tagpu_recwriter.c, feature_record): a feature
    call's holds no other and cells only when it is the tick's, which is inside none; a death's
-   holds its explosion's feature calls and may hold deaths; a draw is inside one. 1 taken, 0
-   malformed. */
+   holds its explosion's feature calls, in a multiplayer recording its corpse's (FR_CORPSE, inside
+   a death only), and may hold deaths; a draw is inside one, FS_SOURCE inside a multiplayer
+   recording's tick only. 1 taken, 0 malformed. */
 static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsigned len)
 {
     RecWorld* w = &r->w;
+    const RecHeader* h = seg_header(r);   /* a takeover's segment is a skirmish's */
     unsigned id;
     switch (kind) {
+    case RK_EV_NET_CREATE: {
+        RecNetCreate create;
+        unsigned i, slot;
+        if (h->mode != 3 || !h->has_mp_seats ||
+            !h->has_unitdefs || !rec_event_len(kind, len)) return 0;
+        memcpy(&create, b, sizeof create);
+        slot = create.unit - 1;
+        if (slot < 1 || slot >= w->slots || !create.type || create.type >= h->ndefs ||
+            create.owner >= REC_PLAYERS || create.water > 4 || create.reserved ||
+            !(create.unfinished >= 0.0f && create.unfinished <= 1.0f)) return 0;
+        for (i = 0; i < h->mp_seats.count; i++) {
+            const RecMpSeat* seat = &h->mp_seats.actor[i];
+            if (seat->seat == create.owner && slot >= seat->first && slot <= seat->last) break;
+        }
+        if (i == h->mp_seats.count) return 0;
+        break;
+    }
     case RK_EV_FEATURE:
         if (r->fbracket || (b[0] == FR_TICK && r->ndeaths) ||
+            (b[0] == FR_CORPSE && (!r->ndeaths || h->mode != 3)) ||
             b[1] > REC_PHASE_LATE || b[2] || b[3] ||
             !rec_root_len(b[0], len))
             return 0;
@@ -659,7 +866,8 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
         break;
     case RK_EV_DRAW:
         if ((!r->fbracket && !r->ndeaths) || !rec_event_len(kind, len) || b[0] >= FS_SITES ||
-            b[1] || b[2] || b[3])
+            b[1] || b[2] || b[3] ||
+            (b[0] == FS_SOURCE && (r->fbracket != FR_TICK + 1 || h->mode != 3)))
             return 0;
         break;
     case RK_CELLS:
@@ -708,6 +916,69 @@ static int list_record(RecReader* r, const unsigned char* b, unsigned len)
     return 1;
 }
 
+/* A sample, `tick` its GameTime, as the seat's latest: later than the one it replaces. */
+static int pov_take(RecWorld* w, const unsigned char* b, unsigned tick)
+{
+    RecPov p;
+    unsigned s;
+    memcpy(&p, b, sizeof p);
+    s = p.player;
+    if (s >= REC_PLAYERS || !rec_pov_ok(&p) || tick > w->tick ||
+        (w->npov[s] && w->pov_tick[s][w->npov[s] - 1] >= tick))
+        return 0;
+    if (w->npov[s] == 2) {
+        w->pov[s][0] = w->pov[s][1];
+        w->pov_tick[s][0] = w->pov_tick[s][1];
+        w->npov[s] = 1;
+    }
+    w->pov[s][w->npov[s]] = p;
+    w->pov_tick[s][w->npov[s]] = tick;
+    w->npov[s]++;
+    return 1;
+}
+
+/* THE PERSPECTIVE (tagpu_recpov.h): a skirmish segment's, outside every bracket, as
+   the writer has them (tagpu_recwriter.c, pov_record). RK_POV and RK_CLICK are a stream's, RK_POV_AT
+   a snapshot's; a selection's slots lie inside the seat's block as its player image, applied
+   before it, names it. 1 applied, 0 malformed. */
+static int pov_record(RecReader* r, unsigned kind, const unsigned char* b, unsigned len)
+{
+    RecWorld* w = &r->w;
+    const RecHeader* h = seg_header(r);
+    if (h->has_mp || r->fbracket || r->ndeaths) return 0;
+    switch (kind) {
+    case RK_POV:
+        return !r->snap && len == sizeof(RecPov) && pov_take(w, b, w->tick);
+    case RK_POV_AT:
+        return r->snap && len == REC_POV_AT_BYTES && pov_take(w, b + 4, u32(b));
+    case RK_CLICK: {
+        RecClick c;
+        if (r->snap || len != sizeof c) return 0;
+        memcpy(&c, b, sizeof c);
+        if (c.player >= REC_PLAYERS || !rec_click_ok(&c)) return 0;
+        return list_add(&w->click, &w->nclick, &r->clickcap, kind, len, b);
+    }
+    case RK_SELECT: {
+        RecSel head;
+        unsigned lo, hi;
+        long prev = -1;
+        if (!rec_sel_head(b, len, h->units_each, &head) || !rec_sel_whole(&head) ||
+            head.player >= REC_PLAYERS)
+            return 0;
+        if (head.count && (!rec_sel_block((const unsigned char*)w->player[head.player], w->slots,
+                                          &lo, &hi) ||
+                           !rec_sel_entries_ok(b + sizeof head, head.count, lo, hi, &prev)))
+            return 0;
+        memcpy(w->sel + (size_t)head.player * REC_SEL_MAX, b + sizeof head,
+               (size_t)head.count * sizeof(RecSelEntry));
+        w->nsel[head.player] = head.count;
+        return 1;
+    }
+    default:
+        return 0;
+    }
+}
+
 /* One record of an iteration after its tick. 1 applied, 0 malformed. */
 static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned len, int* events)
 {
@@ -717,7 +988,10 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
     RecTable* t;
     if (r->pend.next < r->pend.total && kind != RK_ORDERS) return 0;
     if (len >= 2) memcpy(&id, b, 2);
-    if ((kind >= RK_EV_CREATE && kind <= RK_EV_DEATH_END) || (kind == RK_CELLS && *events)) {
+    /* a click follows the step's events, and may follow the images directly */
+    if (kind == RK_CLICK) return pov_record(r, kind, b, len);
+    if ((kind >= RK_EV_CREATE && kind <= RK_EV_DEATH_END) || kind == RK_EV_NET_CREATE ||
+        (kind == RK_CELLS && *events)) {
         if (!event_take(r, kind, b, len)) return 0;
         *events = 1;
         return 1;
@@ -874,6 +1148,10 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
         if (len != 4) return 0;
         w->corrections++;
         return 1;
+    case RK_POV:
+    case RK_POV_AT:
+    case RK_SELECT:
+        return pov_record(r, kind, b, len);
     default:
         return 0;   /* the ring's own kinds are never in a block, nor a dump's RK_IMAGE */
     }
@@ -912,6 +1190,7 @@ static int tick_read(RecReader* r, char* why, unsigned cap)
     memset(w->pchanged, 0, sizeof w->pchanged);
     w->nev = 0;
     w->nfeat = 0;
+    w->nclick = 0;
     for (;;) {
         RecHdr hd;
         const unsigned char* b;
@@ -1062,18 +1341,24 @@ static int crc_stream(RecReader* r, unsigned long long off, const RecBlock* b)
     return crc == b->crc_body ? BLK_WHOLE : BLK_TORN;
 }
 
-/* The payload of the block whose header `b` is at `off`, checked and inflated into a buffer of its
+/* The payload of the block whose header `b` is at `off`, checked and unpacked into a buffer of its
    own (*out, *n), so the reading's payload -- which the world's events point into -- is left
    alone. BLK_WHOLE; BLK_TORN when the bytes fail their CRC; BLK_UNREADABLE (why) when they cannot
-   be read, the buffer cannot be had, or bytes that passed their CRC do not inflate to the size
-   the header names. The file's position moves. */
+   be read, the buffer cannot be had, the block's flags are refused -- sectioned among them, which
+   none of the kinds read here may be -- or bytes that passed their CRC are not one zstd frame of
+   the size the header names. The file's position moves. */
 static int body_get(RecReader* r, unsigned long long off, const RecBlock* b, unsigned char** out,
                     size_t* n, char* why, unsigned cap)
 {
-    unsigned char* pk = (unsigned char*)malloc(b->packed ? b->packed : 1);
-    unsigned char* raw = NULL;
-    size_t rawn = 0;
+    unsigned char* pk;
+    unsigned char* raw;
     *out = NULL;
+    if (block_flags_bad(b) || (b->flags & RBF_SECTIONS)) {
+        snprintf(why, cap, "a block of kind %u at byte %llu with %s", b->kind, off,
+                 block_flags_bad(b) ? block_flags_bad(b) : "sections");
+        return BLK_UNREADABLE;
+    }
+    pk = (unsigned char*)malloc(b->packed ? b->packed : 1);
     if (!pk) {
         snprintf(why, cap, "no memory for the block at byte %llu", off);
         return BLK_UNREADABLE;
@@ -1092,17 +1377,20 @@ static int body_get(RecReader* r, unsigned long long off, const RecBlock* b, uns
         *n = b->packed;
         return BLK_WHOLE;
     }
-    if (!b->packed || lodepng_zlib_decompress(&raw, &rawn, pk, b->packed,
-                                              &lodepng_default_decompress_settings) ||
-        rawn != b->raw) {
+    raw = (unsigned char*)malloc(b->raw);
+    if (!raw || !dctx_of(r) || !reccodec_unpack(r->dctx, raw, b->raw, pk, b->packed)) {
+        if (!raw || !r->dctx)
+            snprintf(why, cap, "no memory to unpack the block at byte %llu", off);
+        else
+            snprintf(why, cap, "the block at byte %llu is not one zstd frame of its %u bytes", off,
+                     b->raw);
         free(raw);
         free(pk);
-        snprintf(why, cap, "the block at byte %llu does not inflate to its %u bytes", off, b->raw);
         return BLK_UNREADABLE;
     }
     free(pk);
     *out = raw;
-    *n = rawn;
+    *n = b->raw;
     return BLK_WHOLE;
 }
 
@@ -1169,6 +1457,7 @@ static unsigned seg_index(const RecReader* r, unsigned id)
    -1 (why). */
 static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
 {
+    RecMpHistory* mp = NULL;
     RecSeg* sg = (RecSeg*)calloc(RECR_TIMELINES, sizeof *sg);
     RecIndexEntry* ix = NULL;
     unsigned nix = 0, room = 0, ns = 0, i, j;
@@ -1202,11 +1491,12 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
             break;
         }
         if (b.packed > RECR_BLOCK_MAX || b.raw > RECR_BLOCK_MAX ||
-            ((b.flags & RBF_STORED) && b.packed != b.raw)) {
+            ((b.flags & RBF_STORED) && b.packed != b.raw) || block_flags_bad(&b)) {
             /* a header that passed its CRC: what the writer wrote, not a tear */
             if (tail) {
-                snprintf(why, cap, "a block at byte %llu of %u bytes, %u inflated: past what it "
-                         "may hold", off, b.packed, b.raw);
+                snprintf(why, cap, "a block of kind %u at byte %llu of %u bytes, %u unpacked: %s",
+                         b.kind, off, b.packed, b.raw,
+                         block_flags_bad(&b) ? block_flags_bad(&b) : "past what it may hold");
                 goto done;
             }
             break;
@@ -1274,6 +1564,13 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
                     snprintf(why, cap, "the segment at byte %llu names no timeline", off);
                     goto done;
                 }
+                /* the world and the unit frame are allocated by the first header's slots */
+                if (s->h->slots != r->h.slots) {
+                    ns++;
+                    snprintf(why, cap, "the segment at byte %llu has %u unit slots, not the "
+                             "recording's %u", off, s->h->slots, r->h.slots);
+                    goto done;
+                }
                 s->t.id = s->h->tl_id;
                 s->t.parent = s->h->tl_parent;
                 s->t.fork_at = s->h->tl_fork_at;
@@ -1285,11 +1582,31 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
             s->t.header_off = off;
             s->t.first_off = s->t.end_off = off + sizeof b + b.packed;
             s->i0 = nix;
+            tagpu_recmp_history_end(mp); mp=NULL;
+            if (s->h->has_mp && !(mp=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats,s->h->grid_w,s->h->grid_h))) {
+                snprintf(why, cap, "invalid contribution roster or no memory for history"); goto done;
+            }
             after_end = 0;
             off = s->t.first_off;
             continue;
         }
         s = &sg[ns - 1];
+        if (s->h->mode == 3 && !s->h->has_mp) {
+            snprintf(why, cap, "network recording has no contribution roster"); goto done;
+        }
+        if (b.kind == RB_CONTRIBUTIONS) {
+            k = body_get(r, off, &b, &p, &n, why, cap);
+            if (k == BLK_UNREADABLE) goto done;
+            if (k == BLK_TORN) {
+                if (failed_block(r, off, off + sizeof b + b.packed, size, tail, why, cap) < 0)
+                    goto done;
+                break;
+            }
+            if (!s->h->has_mp || !tagpu_recmp_history_block(mp, p, (unsigned)n)) {
+                free(p); snprintf(why, cap, "invalid contribution block at byte %llu", off); goto done;
+            }
+            free(p);
+        }
         if (b.kind == RB_HEADER) {
             snprintf(why, cap, "a header block at byte %llu inside timeline %u", off, s->t.id);
             goto done;
@@ -1303,6 +1620,25 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
                 break;
             }
             s->t.end_reason = entry_u32(p, n, RT_END_REASON);
+            {
+                unsigned at = 0, found = 0;
+                while (at + 4 <= n) {
+                    unsigned short tag, len;
+                    memcpy(&tag, p + at, 2); memcpy(&len, p + at + 2, 2);
+                    if (len > n - at - 4) break;
+                    if (tag == RT_MP_END) {
+                        RecMpRecordEnd end;
+                        if (!s->h->has_mp || found || len != sizeof end) break;
+                        memcpy(&end, p + at + 4, sizeof end);
+                        if (!tagpu_recmp_history_footer(mp, &end)) break;
+                        found = 1;
+                    }
+                    at += (4u + len + 3u) & ~3u;
+                }
+                if (found != !!s->h->has_mp || at != n) {
+                    free(p); snprintf(why, cap, "missing or invalid contribution end proof"); goto done;
+                }
+            }
             s->ended = 1;
             free(p);
         }
@@ -1426,6 +1762,7 @@ done:
             free(r->idx);
             r->idx = ix;
             r->nidx = nix;
+            r->scan_epoch++;
             r->file_end = off;
             r->max_id = max_id;
             r->nstates = nstates;
@@ -1442,6 +1779,7 @@ done:
         free(ix);
     }
     free(sg);
+    tagpu_recmp_history_end(mp);
     if (!seek_to(r->f, r->off)) {
         snprintf(why, cap, "cannot return to byte %llu (%lu)", r->off, GetLastError());
         return -1;
@@ -1468,6 +1806,8 @@ static const char* shape_differs(const RecHeader* a, const RecHeader* b)
     unsigned i;
     if (a->slots != b->slots) return "unit slots";
     if (a->units_each != b->units_each) return "units a player";
+    if (a->has_mp && b->has_mp && (memcmp(&a->mp,&b->mp,sizeof a->mp) ||
+        memcmp(&a->mp_seats,&b->mp_seats,sizeof a->mp_seats))) return "multiplayer source/seat mapping";
     if (a->has_unitdefs != b->has_unitdefs || a->ndefs != b->ndefs || a->defs_hash != b->defs_hash)
         return "unit types";
     if (a->has_weapons != b->has_weapons || a->nweapons != b->nweapons ||
@@ -1635,11 +1975,145 @@ int recr_same_file(const RecReader* r, void* f)
            a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow;
 }
 
+static void mp_read_free(RecMpRead* m)
+{
+    tagpu_recmp_history_end(m->history);
+    free(m->payload);
+    memset(m,0,sizeof *m);
+}
+
+static int mp_read(RecReader* r, RecMpRead* m, uint64_t* ordinal,
+                    RecMpApplyVisit visit, void* ctx, char* why, unsigned cap)
+{
+    const RecSeg* s;
+    unsigned segment;
+    int ok=1;
+    if (!r->in_seg) return 0;
+    segment=r->chain[r->cur]; s=&r->seg[segment];
+    if (!s->h->has_mp) return 0;
+    if (!m->history || m->epoch!=r->scan_epoch || m->segment!=segment ||
+        r->w.tick<m->tick || (ordinal &&
+        *ordinal!=tagpu_recmp_history_ledger(m->history)->records)) {
+        mp_read_free(m);
+        m->history=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats,s->h->grid_w,s->h->grid_h);
+        if (!m->history) { snprintf(why,cap,"no memory for multiplayer authority"); return -1; }
+        m->epoch=r->scan_epoch; m->segment=segment; m->tick=0;
+        m->index=s->i0; m->done=0;
+    }
+    while (!m->done) {
+        RecMpRecord where;
+        RecMpHeader packet;
+        const unsigned char* body;
+        if (m->at==m->bytes) {
+            const RecIndexEntry* ix;
+            RecBlock b;
+            free(m->payload); m->payload=NULL; m->bytes=m->at=0;
+            while (m->index<s->i0+s->n && r->idx[m->index].kind!=RB_CONTRIBUTIONS)
+                m->index++;
+            if (m->index==s->i0+s->n) break;
+            ix=&r->idx[m->index++];
+            if (!seek_to(r->f,ix->off) || !read_all(r->f,&b,sizeof b) ||
+                b.magic!=REC_BLOCK_MAGIC || (uint32_t)Crc32_ComputeBuf(0,&b,28)!=b.crc_head ||
+                b.kind!=RB_CONTRIBUTIONS || b.raw!=ix->raw || b.packed!=ix->packed ||
+                b.raw>RECR_BLOCK_MAX || b.packed>RECR_BLOCK_MAX ||
+                ((b.flags&RBF_STORED) && b.raw!=b.packed) ||
+                body_get(r,ix->off,&b,&m->payload,&m->bytes,why,cap)!=BLK_WHOLE) {
+                ok=-1; break;
+            }
+        }
+        if (m->bytes-m->at<sizeof where+sizeof packet) { ok=-1; break; }
+        memcpy(&where,m->payload+m->at,sizeof where);
+        memcpy(&packet,m->payload+m->at+sizeof where,sizeof packet);
+        if (packet.bytes<sizeof packet || packet.bytes>RECMP_PACKET_MAX ||
+            packet.bytes>m->bytes-m->at-sizeof where) { ok=-1; break; }
+        if (where.phase==RECMP_RECORD_PROOF) { m->done=1; break; }
+        if (where.tick>r->w.tick) break;
+        body=m->payload+m->at+sizeof where+sizeof packet;
+        if (!tagpu_recmp_history_record(m->history,&where,&packet,body,packet.bytes-sizeof packet)) {
+            ok=-1; break;
+        }
+        m->at+=sizeof where+packet.bytes;
+        if (ordinal && where.ordinal>*ordinal) {
+            visit(ctx,&where,&packet,body,packet.bytes-sizeof packet);
+            *ordinal=where.ordinal;
+        }
+    }
+    /* Either authority cursor preserves the world's next file read. */
+    if (!seek_to(r->f,r->off)) ok=-1;
+    if (ok<0) {
+        mp_read_free(m);
+        snprintf(why,cap,"invalid multiplayer authority at GameTime %u",r->w.tick);
+    } else m->tick=r->w.tick;
+    return ok;
+}
+
+static int mp_sync(RecReader* r, char* why, unsigned cap)
+{
+    return mp_read(r,&r->mp_query,NULL,NULL,NULL,why,cap);
+}
+
+int recr_mp_apply(RecReader* r, uint64_t* ordinal, RecMpApplyVisit visit, void* ctx,
+                    char* why, unsigned cap)
+{
+    int k;
+    if (!ordinal || !visit) {
+        snprintf(why,cap,"multiplayer application cursor and visitor are required");
+        return -1;
+    }
+    /* Validate the complete available prefix before delivering anything. Queries
+       and application use separate histories so neither can skip the other's
+       envelopes, even when a query already advanced to this world tick. */
+    k=mp_sync(r,why,cap);
+    if (k<=0) return k;
+    if (*ordinal>tagpu_recmp_history_ledger(r->mp_query.history)->records) {
+        snprintf(why,cap,"multiplayer application ordinal is beyond GameTime %u",r->w.tick);
+        return -1;
+    }
+    return mp_read(r,&r->mp_apply,ordinal,visit,ctx,why,cap);
+}
+
+int recr_mp_player(RecReader* r, unsigned origin, RecMpPlayerState* out, char* why, unsigned cap)
+{
+    int k=mp_sync(r,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_player(r->mp_query.history,origin,out);
+}
+
+int recr_mp_unit(RecReader* r, unsigned slot, RecMpUnitState* out, char* why, unsigned cap)
+{
+    int k=mp_sync(r,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_unit(r->mp_query.history,slot,out);
+}
+
+int recr_mp_roots(RecReader* r, unsigned origin, RecMpRootsState* out, char* why, unsigned cap)
+{
+    int k=mp_sync(r,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_roots(r->mp_query.history,origin,out);
+}
+
+int recr_mp_named(RecReader* r, unsigned origin, RecMpNamedState* out, char* why, unsigned cap)
+{
+    int k=mp_sync(r,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_named(r->mp_query.history,origin,out);
+}
+
+int recr_mp_text(RecReader* r, unsigned origin, RecMpTextState* out, char* why, unsigned cap)
+{
+    int k=mp_sync(r,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_text(r->mp_query.history,origin,out);
+}
+
+int recr_mp_orders(RecReader* r, unsigned slot, unsigned list, RecMpOrderState* out,
+                     void* image, unsigned capacity, char* why, unsigned cap)
+{
+    int k=mp_sync(r,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_orders(r->mp_query.history,slot,list,out,image,capacity);
+}
+
 /* ---- seeking -------------------------------------------------------------------------------- */
 
 /* The snapshot block whose header block_head has just read, applied over the reset world: a TICK
    at the block's GameTime, then images only (tagpu_recfmt.h, RB_SNAPSHOT). 1, or -1 (why). */
-static int snapshot_apply(RecReader* r, const RecBlock* blk, char* why, unsigned cap)
+static int snapshot_records(RecReader* r, const RecBlock* blk, char* why, unsigned cap)
 {
     RecWorld* w = &r->w;
     int events = 0;
@@ -1685,7 +2159,18 @@ static int snapshot_apply(RecReader* r, const RecBlock* blk, char* why, unsigned
     /* its records point into the payload: the stream's next iteration replaces them */
     w->nfeat = 0;
     payload_free(r);
+    /* the world was rebuilt: the stream block after a snapshot restarts the frame */
+    if (r->codec) reccodec_invalidate(r->codec);
     return 1;
+}
+
+static int snapshot_apply(RecReader* r, const RecBlock* blk, char* why, unsigned cap)
+{
+    int k;
+    r->snap = 1;
+    k = snapshot_records(r, blk, why, cap);
+    r->snap = 0;
+    return k;
 }
 
 int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx, char* why,
@@ -1727,7 +2212,10 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
         const RecSeg* s = chain_seg(r, from);
         const RecIndexEntry* next = snap + 1;
         /* the stream goes on from S + 1 within the segment, unless the chain leaves it at S; the
-           writer starts it there (tagpu_recwriter.c, iteration_done) */
+           writer starts it there (tagpu_recwriter.c, iteration_done). A multiplayer recording's
+           contributions blocks may stand between the two, and tick_read steps over them as it
+           steps over every block that is not the stream's */
+        while (next < r->idx + s->i0 + s->n && next->kind == RB_CONTRIBUTIONS) next++;
         if (snap->last < cover_end(r, from) &&
             (next >= r->idx + s->i0 + s->n || next->kind != RB_STREAM ||
              next->first != snap->last + 1)) {
@@ -1931,6 +2419,13 @@ int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap)
     lstrcpynA(s->map, r->h.map, sizeof s->map);
     for (i = 0; i < r->h.nseats; i++) lstrcpynA(s->name[i], r->h.seats[i].name, RECR_NAME);
     s->nseats = r->h.nseats;
+    if (r->h.has_mp) {
+        if (segs_scan(r, 0, why, cap) < 0) goto done;
+        s->last = r->seg[0].t.last ? r->seg[0].t.last : s->start;
+        s->end_reason = r->seg[0].t.end_reason;
+        ok = 1;
+        goto done;
+    }
     if (!GetFileSizeEx(r->f, &fs)) {
         snprintf(why, cap, "cannot size the file (%lu)", GetLastError());
         goto done;
@@ -1939,7 +2434,7 @@ int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap)
     for (off = r->off; off + sizeof b <= size; off += sizeof b + b.packed) {
         if (!file_at(r, off) || !read_all(r->f, &b, sizeof b) || b.magic != REC_BLOCK_MAGIC ||
             (uint32_t)Crc32_ComputeBuf(0, &b, 28) != b.crc_head || b.packed > RECR_BLOCK_MAX ||
-            b.raw > RECR_BLOCK_MAX || off + sizeof b + b.packed > size)
+            b.raw > RECR_BLOCK_MAX || block_flags_bad(&b) || off + sizeof b + b.packed > size)
             break;
         if (b.kind == RB_END) {
             if (block_body(r, &b, why, cap) > 0) {
@@ -1958,6 +2453,8 @@ done:
 }
 
 const RecHeader* recr_header(const RecReader* r) { return &r->h; }
+
+int recr_segment_mp(const RecReader* r) { return r->in_seg && seg_header(r)->has_mp; }
 
 /* 1 the header is of this format */
 static int info_header(RecInfo* o, const unsigned char* b, size_t len)
@@ -1985,7 +2482,7 @@ static int info_header(RecInfo* o, const unsigned char* b, size_t len)
             o->seat[p[0]].present = 1;
         at += (4 + (size_t)n + 3) & ~(size_t)3;
     }
-    return format == REC_FORMAT;
+    return rec_format_supported(format);
 }
 
 static void info_end(RecInfo* o, const unsigned char* b, size_t len)
@@ -2051,9 +2548,14 @@ int recr_info(const char* path, RecInfo* out, char* why, unsigned cap)
         if (k >= 0) snprintf(why, cap, "%s has no header block", path);
         goto done;
     }
+    if (!header_parse(&r->h, r->raw, r->rawn, why, cap)) goto done;
     if (!info_header(out, r->raw, r->rawn)) {
         snprintf(why, cap, "%s is not a recording of format %u", path, REC_FORMAT);
         goto done;
+    }
+    if (r->h.has_mp) {
+        unsigned long long first = r->off;
+        if (segs_scan(r, 0, why, cap) < 0 || !file_at(r, first)) goto done;
     }
     ok = 1;
     if (!GetFileSizeEx(r->f, &size)) goto done;
@@ -2081,8 +2583,14 @@ void recr_close(RecReader* r)
     unsigned i;
     if (!r) return;
     payload_free(r);
+    mp_read_free(&r->mp_query);
+    mp_read_free(&r->mp_apply);
     if (r->f && r->f != INVALID_HANDLE_VALUE) CloseHandle(r->f);
     free(r->pk);
+    reccodec_free(r->codec);
+    ZSTD_freeDCtx((ZSTD_DCtx*)r->dctx);
+    free(r->sec);
+    free(r->dec.p);
     if (r->w.list)
         for (i = 0; i < r->w.slots * 2; i++) free(r->w.list[i].img);
     for (i = 0; i < r->w.ntab && r->w.tab; i++) free(r->w.tab[i].img);
@@ -2092,6 +2600,8 @@ void recr_close(RecReader* r)
     free(r->w.changed);
     free(r->w.ev);
     free(r->w.feat);
+    free(r->w.click);
+    free(r->w.sel);
     free(r->w.pool);
     free(r->w.proj);
     free(r->w.mapped);
@@ -2309,4 +2819,24 @@ done:
     recr_close(r);
     recfile_unlock(&lock);
     return ok;
+}
+
+int recr_mp_explored(RecReader* r, unsigned origin, RecMpExploreState* out, void* image, unsigned capacity,
+                      char* why, unsigned cap)
+{
+    int k=mp_read(r,&r->mp_query,NULL,NULL,NULL,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_explored(r->mp_query.history,origin,out,image,capacity);
+}
+
+int recr_mp_pov(RecReader* r, unsigned origin, RecMpPovState* out, char* why, unsigned cap)
+{
+    int k=mp_sync(r,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_pov(r->mp_query.history,origin,out);
+}
+
+int recr_mp_select(RecReader* r, unsigned origin, RecMpSelectState* out, RecSelEntry* entries,
+                   unsigned capacity, char* why, unsigned cap)
+{
+    int k=mp_sync(r,why,cap);
+    return k<=0 ? k : tagpu_recmp_history_select(r->mp_query.history,origin,out,entries,capacity);
 }

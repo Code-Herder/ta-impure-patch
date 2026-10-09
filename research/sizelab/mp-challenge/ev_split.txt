@@ -1,0 +1,37 @@
+$SCRATCH/verify/two/native.imprec
+  RK_EV_SHOT               1258     49.1 KiB raw
+  RK_EV_START              1436     44.9 KiB raw
+  RK_EV_FEATURE            1702     22.5 KiB raw
+  RK_EV_FEATURE_END        1702     19.9 KiB raw
+  RK_EV_DEATH                41     13.8 KiB raw
+  RK_EV_NET_CREATE           38      1.3 KiB raw
+  RK_EV_CREATE               36      1.1 KiB raw
+  RK_EV_DEATH_END            41      0.3 KiB raw
+  RK_EV_STATE                15      0.2 KiB raw
+  RK_EV_BUILT                 7      0.1 KiB raw
+  RK_EV_DRAW                  3      0.0 KiB raw
+  stream deflated 3520.5 KiB; without the undispatched kinds 3519.7 KiB (0.8 less)
+$SCRATCH/chatfix/two/native.imprec
+  RK_EV_SHOT               1046     40.9 KiB raw
+  RK_EV_START              1218     38.1 KiB raw
+  RK_EV_FEATURE            1691     22.2 KiB raw
+  RK_EV_FEATURE_END        1691     19.8 KiB raw
+  RK_EV_DEATH                42     14.1 KiB raw
+  RK_EV_NET_CREATE           39      1.4 KiB raw
+  RK_EV_CREATE               37      1.2 KiB raw
+  RK_EV_DEATH_END            42      0.3 KiB raw
+  RK_EV_STATE                15      0.2 KiB raw
+  RK_EV_BUILT                 8      0.1 KiB raw
+  RK_EV_DRAW                  2      0.0 KiB raw
+  stream deflated 3037.3 KiB; without the undispatched kinds 3036.5 KiB (0.8 less)
+$SCRATCH/v6/full/ten.imprec
+  RK_EV_FEATURE            2975     34.9 KiB raw
+  RK_EV_FEATURE_END        2975     34.9 KiB raw
+  RK_EV_DEATH                15      5.0 KiB raw
+  RK_EV_NET_CREATE           11      0.4 KiB raw
+  RK_EV_STATE                13      0.2 KiB raw
+  RK_EV_START                 4      0.1 KiB raw
+  RK_EV_DEATH_END            15      0.1 KiB raw
+  RK_EV_BUILT                 7      0.1 KiB raw
+  RK_EV_CREATE                2      0.1 KiB raw
+  stream deflated 531.7 KiB; without the undispatched kinds 531.3 KiB (0.4 less)

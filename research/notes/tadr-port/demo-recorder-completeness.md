@@ -428,7 +428,114 @@ frame visit, before the in-play draw and on paused frames too; it knows `dump <n
 capture point), `dump <name> at <T>` (the capture point of GameTime T exactly, whatever the speed or
 pauses, since a puppet host's speed keys change nothing), `dump <name> now` (a frame dump, at
 once), `seek <T> [dump <name>]`, `dock seek <T>` (the dock's own seek entry,
-`tagpu_replay_seek_request`, which takes no dump) and `roundtrip <name> at <T>`.
+`tagpu_replay_seek_request`, which takes no dump), `roundtrip <name> at <T>`, `turbo on` and `turbo
+off`, `pause at <T>` and `resume` (*Test speed* below).
+
+**Test speed.** Tick-driven runs default to internal game speed 20 (2x normal),
+within the retail setter's range. `--game-speed 10` selects normal speed for
+`run`, `measure`, `landing`, `broad`, `takeover`, `forks` and `rewind`. Every launch
+configures only the stopped worker's private registry store through `tacli
+registry`; its acknowledged dword is checked before launching. Cost fixtures, a fixture marked
+`normal_speed` (resource-geo-upgrade, whose script reads the running game after a Move that
+finishes first at speed 20) and W's speed/settings UI test use normal speed. The target speed is
+reported, and a passing landing note records it. Armed round trips bound the scheduler's batch
+before the step caches it, making the frame after T−1 available even when a frame would otherwise
+run several ticks. The guard is on the game thread and affects only puppet pacing while a round
+trip is armed; an unavailable guard refuses the round trip. The
+[engine map](../exe-reverse-engineering.md#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08)
+gives the scheduler's disassembly and the measured tick rates.
+
+**The turbo.** Speed 20 runs about 60 ticks a second because the clock steps 30 times a second
+and grants each step two ticks; the frames, ~180 a second in play, are mostly idle. A test
+launch's `tagpu_turbo.on` (its text k, 1 to 5, empty for 1; honoured only with the per-instance
+registry store, refused with a line otherwise) arms the turbo: once the trigger says `turbo on`
+the observer at `0x49692D` writes k into DeltaTime every frame, so the level runs k ticks a frame
+as fast as frames come, until `turbo off` or the level's end. The step itself is unchanged — the
+same per-tick function, called k times. The harness (`--turbo K`, default 1, 0 for none) sends
+`turbo on` once a lane's dumps and round trips are armed and acknowledged, on L, P, R, F, K, X and
+U; not on Q, which plays one tick, nor W, whose ticks pass between its interface steps; never on a
+cost fixture, which measures the game's own pacing. The recorder's ring never blocks the capture,
+so a turbo frame runs no tick while the ring holds more than half its 16 MiB: the step is then
+skipped whole, and every batch is still k ticks (*the writer's back-pressure* in tagpu_replay.c;
+without it the stock-limits battle at 314 ticks a second filled the ring by GameTime 1003).
+MEASURED 2026-10-08 at k = 1: a light L lane about 1,500 ticks a second, P and R 200–385 (the
+puppet's write is the cost), the battle's lanes 64–230 with up to 1,652 frames held for the
+writer, against ~60 at speed 20.
+
+**Why k = 1.** The step's tail — `0x428BD0`, `0x428BE0`, `0x428BF0` (each a bare `ret`), the chat expiry `0x463EF0`
+and the temporary sight records' expiry `0x482130` — runs once a call of `0x495490`, not once a
+tick, so where the batches fall changes what units see and so what they do. Speed 20 mixes batches
+of two with an odd one after a slow frame, and the mix differs run to run; a fixed k makes every
+batch the same on every run. MEASURED 2026-10-08 (tenseat taken over at 931 as player 0, dumped
+at 2731): of two pairs of takeovers at speed 20 one parted in 1,328 unit fields; pairs at a fixed
+k (2, then 1) agreed in everything but the meteor shower's two points (*Open items*); a takeover at
+speed 20 against one at k = 2 differed in 1,272 and 1,383 unit fields. k = 1 is the batch a player
+at normal speed gets. The lever keeps 1..5: five is the scheduler's own clamp (`0x4953F5`), so no
+batch is one stock pacing never produces.
+
+**Ticks, not polls.** Whatever the pacing, a live lane acts at GameTimes. The trigger's
+`pause at <T>` sets the engine's pause bit at the frame visit after step T (the same observer bounds
+the batch so the step stops at T exactly), `resume` clears it; a T the level has passed is refused
+with its GameTime, and the harness then holds the level 30 ticks on and says so. So an L step —
+keys, a chat line, an order, a scenario — is given while the level is held at its T, then the
+level resumes; the twin (Tlast + 30) and the end scenario (at the fixture's end) are held ticks
+too. A `run` step, a script that drives the running game and waits on it, starts at its tick and
+runs with the turbo off at the fixture's speed; a later step its script outlasts runs held 30 ticks
+past where the script left the level. K holds the level, arms its AI window, judges the units
+Impure draws 240 ticks after T (what its old 4 s reached at speed 20), gives its order and chat line
+there, and ends at its dump's GameTime; X's forks end at their dump's GameTime. U holds the level
+at 601 and 1501, 1 (mod 30) as every dump of the harness is (the radar pass's step, O14), and its
+two judges watch 3,600 ticks each (their old 60 s at speed 20), the units read 240 ticks in, the
+window and its boxes throughout. Each conversion keeps a check where the old run measured it: at
+speed 20 the old 4 s and 60 s were 240 and ~3,600 ticks, and a rewind fork from GameTime 3301
+instead of ~5300 rebuilds about 1,270 units instead of ~1,030 and took 2,010 ms against the
+2,000 ms bound. What stays open: the wall-clock checks — the takeover line's bound, the rewind's
+times — measure under whatever load the run puts on the machine, and the battle's line, whose read
+from the snapshot at 900 to T = 1771 is the longest, failed its 2,000 ms bound once in three runs
+(2,061 ms, the read 1,868, twelve games at once; 1,651 ms alone).
+
+**The test render profile.** Every game the harness launches writes `style=custom`, `assets=0`,
+`light=0`, `shadowres=512` and `ss=1` into the worker's `impure.cfg`, and a 20 fps present cap
+(`tagpu_presentcap.on`, test launch only): the Classic++ look keys off, the engine's own draw and
+its shadow switch as a player has them. A configuration players do not run, accepted for the gate
+by the owner (2026-10-08).
+
+MEASURED 2026-10-05 on the reference setup: at internal speed 20,
+`secondary-orders` passes all 23 checks, `wpn-badtgt --cover` all 33 (W starting
+at 10), and `takeover battle --cover` all ten reported checks, including fresh
+executed AI orders and exact fork playback. The normal-speed
+`secondary-orders` control passes 22 checks and fails its images inventory at
+the `main+0x531` GUI pointer, which `replay-globals.tsv` now leaves with the viewer
+(`guitop`, the owner's decision, 2026-10-06). Simulation runs
+near 60 ticks/s at 20 and 30 ticks/s at 10; startup, pauses and comparison work
+prevent inferring a whole-harness speedup from these runs.
+
+**Games and checks.** `-j` (default 8, at most 16) is the number of games at once: each worker
+plays one lane at a time. A free worker takes the queued lane first in the order X, U, K, L, W, R,
+P, F, Q — the forks, rewind and takeover lanes are the longest chains and cannot start before
+their fixture's L — and the L lanes are queued fixtures with those lanes first, then the longer
+games. Every check runs beside the games on an offline pool (the cores less two per game, no more
+processes than GiB available, at nice 10 so that the games' timed checks measure the game): a
+fixture's checks start the moment its last lane ends, and the forks and rewind lanes hand their
+file checks over and go on to their next game. A check handed over reads only files no later step
+writes — a copy, where the forks lane goes on to change its file. Results are read back in the
+order they were asked for, and the first failure in that order is the one reported, before any
+failure the lane met later, so the summary lists the same checks in the same order with the same
+verdicts as running each in its place. The decode cache keeps a file per segment
+(`reccache.py`), so a file a takeover appended to decodes only its new segment. Launching a game
+reads which other instances are running from one process listing (`tools/tacli`, `place_window`):
+a `pgrep` per instance folder took 16.8 s at every launch with 506 folders.
+
+MEASURED 2026-10-08 on the reference setup, `--cover`, the gate's seeds. Before, the landing gate
+at `-j 12` (39 fixtures) took 52 min: 31 min of games, then 20.5 min of checks in one thread after
+the last game (battle's alone 285 s), with battle's X lane 1278 s — each of its nine file checks
+re-decoded the whole file (24 s) and checked each live timeline in turn — and its X, U and K lanes
+queued behind every fixture's L for 7 min. After, alone at `-j 8`: battle 10.5 min end to end (X
+262 s, U 427 s, its checks 67 s after its last lane), stock-limits and tenseat together 8.5 min
+(X 230 and 227 s, U 409 s; a P, R or Q lane 25–35 s shorter, the launch's wait), every check's
+name, order and verdict the same as the gate's. The whole gate at `-j 8` projects to about
+21 min from those lane times (a simulation of the queue, which reproduces the 31 min of games
+from the gate's own lane times) [INFERRED until the next landing runs it].
 
 **Live rewind (U).** A fixture with `"rewind": true` also runs the
 [rewind L/P/Q checks](demo-recorder-s4-rewind.md) in `tarewind.py`. Battle and
@@ -585,6 +692,10 @@ cannot see an address recorded as a value; the scan looks for one instead.
   `0x4813AB`, `0x481427`), counted on a puppet's unit outside the replay's own calls; the first 16
   logged by unit, owner and GameTime. The playing's, the round trips' and the fresh seek's dumps
   must hold 0.
+- **No native owner-only start on a puppet**: the thirteen calls `tagpu_recorder.c`'s
+  `START_SITES` observes, counted at each call. On a puppet level only the replay starts those
+  scripts, through `0x4B0A70` itself; the playing's, the round trips' and the fresh seek's dumps
+  must hold 0 at every site ([why](demo-recorder-multiplayer-slice.md#exactly-once-private-children)).
 - No emission without its `QueryNanoPiece`; zero self-verification corrections (`tarec.py check`).
 - **UNCOVERED.** The landing tier fails `UNCOVERED <file>:<function>` for a changed function none
   of the fixtures it ran reached, on the coverage build; the broad tier fails it for a feature none
@@ -702,6 +813,7 @@ region with whether its fixtures reach it.
 | 2026-10-02 | **A takeover starts every order node from the constructor's state** (S4's D1, the s2-orders decision 8): `+5`, `+6`, `+0xA`, `+0x4E` and `+0x52` as the node's constructor leaves them, except the measured adoption of in-progress builds (BuildingBuild and MobileBuild at state 3 when their target is set). Every handler starts from that state, so it is the one safe by construction; keeping the recorded `+5` would resume handlers mid-state with `+0x52` NULL, and the destructor's event-2 dispatch for `+6` bit 1 is a named crash path. Orders restart: a patrol leg, an attack's acquisition, a reclaim. |
 | 2026-10-02 | **The takeover checks' expected differences** (S4's D2, a loosening approved by the owner): the order-node fields of D1; the player records outside the fork's seats (the viewer seat and the records the seat fill deactivated); the controllers, `RK_VIEWER` and PlayerInfo `+0x94` where the takeover changed a seat's role; and the contact bits only where the viewed seats agree (the existing `compare --puppet` rule). Any other difference is a bug. |
 | 2026-10-02 | **A fork is always recorded**, whatever `tagpu_recorder.on` says (S4's D3); a takeover whose file cannot be appended is refused before the rebuild, with the reason. **B4's per-slot columns are recorded** (D4, landing S4a). **The fork rules' last-used times live in the recording** (D5), appended when a watching session ends and skipped with a log line when the file cannot be written. |
+| 2026-10-08 | **The harness runs a test-only turbo** (*Test speed*): k ticks a frame, k = 1 by default and 1..5 in the lever; a live lane acts at GameTimes by `pause at <T>` and the K and U judges are bound to ticks; every game gets the test render profile (a 20 fps present cap, `shadowres=512`). **The meteor shower's strike points after a takeover stay an open gap** (*Open items*). |
 
 The owner approved one additional UI-only count exception on 2026-10-05: the native
 immediate-command click (`0x41A0F1` → `0x47F1A0("immediateorders", 0)`, return `0x41A0F6`),
@@ -741,6 +853,16 @@ and `0x4D0640` by file name. Nothing on that path calls the sound entry `0x47F0C
 are `0x45562D`, `0x47F1FA`, `0x47F274` and `0x47F31A`, so no `0x13` is sent. S2 records the replies
 and makes the engine's own reply calls inert on a puppet host, so a recorded `+0x10E` change applied
 there plays nothing twice.
+
+**A takeover does not reproduce the meteor shower's strike points** (open; the owner's ruling,
+2026-10-08: a known gap, not fixed now). The meteor tick draws its strike points `0x512334` and
+`0x512320` from the CRT's `rand`, as the forced shower `0x438070` draws `0x512334`, whose state is per thread and in neither image, and on the game
+thread the draw path draws from the same stream every frame
+([engine map](../exe-reverse-engineering.md#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08)).
+A takeover does not restore that state, so two takeovers of one recording at one T part there and
+nowhere else: MEASURED 2026-10-08, tenseat taken over at 931 and dumped at 2731, at a fixed turbo
+k and at speed 20 alike. Closing it needs the stream's state recorded and restored at a takeover,
+or the shower's draws moved off the shared stream.
 
 Gaps stated, not closed: in a multiplayer recording, getter 75 per seat reproduces the recording
 machine's view, so other players' owner-only indicators, which that machine never showed, are

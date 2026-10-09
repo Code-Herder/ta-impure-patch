@@ -1,0 +1,6 @@
+30 Hz, 0 fraction bits, heading 8-bit: err p50 0.822 max 1.414 wu | jitter p99 1.096 | hd max 0.70 | cell differs 0.00% | zstd 1.07 MB, deflate2k 1.24, tail 7.7 MB/h
+30 Hz, 0 fraction bits, heading 16-bit: err p50 0.822 max 1.414 wu | jitter p99 1.096 | hd max 0.00 | cell differs 0.00% | zstd 1.48 MB, deflate2k 1.69, tail 10.8 MB/h
+30 Hz, 2 fraction bits, heading 8-bit: err p50 0.203 max 0.354 wu | jitter p99 0.264 | hd max 0.70 | cell differs 0.00% | zstd 1.23 MB, deflate2k 1.42, tail 8.7 MB/h
+30 Hz, 2 fraction bits, heading 16-bit: err p50 0.203 max 0.354 wu | jitter p99 0.264 | hd max 0.00 | cell differs 0.00% | zstd 1.62 MB, deflate2k 1.85, tail 11.6 MB/h
+30 Hz, 4 fraction bits, heading 8-bit: err p50 0.050 max 0.088 wu | jitter p99 0.066 | hd max 0.70 | cell differs 0.00% | zstd 1.50 MB, deflate2k 1.71, tail 10.5 MB/h
+30 Hz, 4 fraction bits, heading 16-bit: err p50 0.050 max 0.088 wu | jitter p99 0.066 | hd max 0.00 | cell differs 0.00% | zstd 1.90 MB, deflate2k 2.13, tail 13.4 MB/h

@@ -1,0 +1,12 @@
+kinds 15 33 41 38
+battle N30 pvals T1 pshuf: 262 blocks, encoded 45s, roundtrip OK; raw MiB seq 0.53 uf 7.66 uv 50.11 pf 3.06 pv 51.38 pi 1.48 ce 18.58 or 22.23 ev 8.54 ot 2.95 total 166.52
+  zstd3 alone one              51.62 MiB    422.6 MB/s  
+  zstd3 alone per-section      51.38 MiB    460.1 MB/s  seq 0.20 uf 3.26 uv 11.31 pf 0.74 pv 28.75 pi 0.66 ce 2.06 or 1.65 ev 2.12 ot 0.63
+  zstd3 chain one              51.73 MiB    362.6 MB/s  
+  zstd3 chain per-section      50.39 MiB    274.4 MB/s  seq 0.18 uf 3.10 uv 11.41 pf 0.72 pv 29.19 pi 0.59 ce 1.72 or 1.16 ev 1.84 ot 0.48
+  zstd9 alone one              49.71 MiB    100.1 MB/s  
+  zstd9 alone per-section      49.42 MiB     93.6 MB/s  seq 0.19 uf 3.11 uv 10.50 pf 0.63 pv 28.27 pi 0.65 ce 1.87 or 1.53 ev 2.06 ot 0.60
+  zstd9 chain one              49.05 MiB     88.0 MB/s  
+  zstd9 chain per-section      47.99 MiB     81.6 MB/s  seq 0.17 uf 2.90 uv 10.42 pf 0.62 pv 28.63 pi 0.58 ce 1.46 or 1.04 ev 1.72 ot 0.45
+  zstd19 alone one             46.43 MiB      7.2 MB/s  
+  zstd19 alone per-section     46.31 MiB      5.6 MB/s  seq 0.18 uf 2.96 uv 9.70 pf 0.56 pv 26.74 pi 0.63 ce 1.62 or 1.39 ev 1.96 ot 0.57

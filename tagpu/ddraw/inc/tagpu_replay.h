@@ -9,12 +9,20 @@
 
 /* DllMain's attach: first the frame visit, the in-play draw call 0x4969CD, on its own -- it reads
    the trigger tagpu_replay.trigger, whose `dump` serves live recordings too, runs a `seek` on a
-   level that plays a recording and writes what the draw shows there; then the Start's calls of the seat fill
+   level that plays a recording and writes what the draw shows there. Independent observers
+   reassert pause while rewind owns the level (0x496920) and set the scheduler's tick batch
+   before its count is cached (0x49692D): a test launch's turbo, then the bound that gives armed
+   round trips their T-1 frame; then the Start's calls of the seat fill
    (0x47B092) and of the settings persist (0x47B09C), the loader's two start-unit calls (0x497963,
    0x497ACD) and an observer on the settings save (0x430F00), byte-matched and installed all or
    none. Without those a request is never read. Then the browser's two sites: the main menu's
    builder call (0x4270A9) and the RESTART gate (0x460880). */
 void tagpu_replay_init(void);
+/* THE TURBO's k (tagpu_replay.c): tagpu_turbo.on, its text a k of 1 to 5 (empty is 1), honoured
+   only in a test launch (tagpu_regstore_active) -- a configuration no player runs. DllMain's attach, before
+   tagpu_simreg_attach closes the lever list, so every recording's header names it. Nothing
+   changes until the trigger's `turbo on`. */
+void tagpu_replay_turbo_init(void);
 /* File-maintenance triggers, on the game-thread flip observer, at every screen. */
 void tagpu_replay_files_frame(unsigned frame);
 
@@ -68,10 +76,16 @@ void __cdecl tagpu_replay_step(void);
 void __cdecl tagpu_replay_phase(unsigned phase);
 
 /* The destructor's explosion has returned (tagpu_recorder.c, rec_blast, at 0x486D50), on the game
-   thread. While a death is replayed, the feature calls the recording's explosion made are made
-   here: the host's explosion makes none, its owner being a puppet seat (the owner gate,
-   0x49A01B..0x49A047). */
+   thread. While a skirmish recording's death is replayed, the feature calls the recording's
+   explosion made are made here: the host's explosion makes none, its owner being a puppet seat
+   (the owner gate, 0x49A01B..0x49A047). */
 void tagpu_replay_blast(const char* unit);
+
+/* Reproduction's source test (tagpu_recorder.c, feat_source) on a multiplayer recording's level:
+   1 with the slot word the recording's tick read for cell n -- the next armed draw, when it is
+   that cell's FS_SOURCE; 0 on any other level, with the armed draws untouched, and the engine
+   tests its own slot. Game thread, inside the replay's tick root. */
+int tagpu_replay_source(unsigned n, unsigned* v);
 
 /* tagpu_reclaim's teardown wrap, on entry to 0x491B60, on the game thread: the level's replay
    ends, the skirmish settings get back what the player had, and the puppet table is cleared. */
@@ -95,13 +109,15 @@ int  tagpu_replay_speed(void);
 int  tagpu_replay_speed_set(unsigned gs);
 
 /* Player cards, game thread only. Rows stay in the recording header's order, including defeated
-   seats. Values come from the player's current recorded image, held after EOF. Sight is independent of the
+   seats. Values come from the player's current recorded image, held after EOF -- in a multiplayer
+   recording the composed one, its owners' (THE MULTIPLAYER MATERIALIZER). Sight is independent of the
    camera: -1 selects the full-map viewer, otherwise a recorded seat index. The request runs at
    the frame boundary and rebuilds death vision, minimap fog and contacts before publishing the
-   selected seat. There is no camera stream in this recording format. */
+   selected seat. */
 typedef struct TAGPU_REPLAY_PLAYER {
     unsigned seat, colour, units, commander_losses;
     int commander_alive; /* 1 present, 0 absent, -1 unavailable */
+    int pov;             /* the seat's camera was recorded and a sample is held: Jump and Follow */
     char name[32];
     float metal, energy, metal_in, metal_out, energy_in, energy_out;
     float metal_max, energy_max;    /* the storage maxima the economy pass sums */
@@ -110,6 +126,26 @@ typedef struct TAGPU_REPLAY_PLAYER {
 int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap);
 int tagpu_replay_sight(void);
 int tagpu_replay_sight_request(int seat);
+/* Follow, Jump and Free cam, game thread only (tagpu_replay.c, FOLLOW, JUMP AND FREE CAM): the
+   cards' actions 3k+2, 3k and 34. `seat` a recorded seat whose camera was recorded, its Follow or,
+   with `once`, its Jump; -1 Free cam. Applied at the next frame visit; 0 refused, with a log line
+   naming why. followed: the seat a Follow shows, -1 under Free cam (a Jump included). */
+int tagpu_replay_follow_request(int seat, int once);
+int tagpu_replay_followed(void);
+
+/* THE OVERLAYS, game thread only (tagpu_replay.c, THE OVERLAYS): every recorded player's cursor,
+   clicks and selection, built at the frame visit from the recording, and the four switches of the
+   dock's Overlays menu -- the three overlays and the chat -- each on at every playing's start and
+   never saved. `which` is a TAGPU_OV_*; a switched-off overlay produces nothing. */
+enum { TAGPU_OV_CURSORS, TAGPU_OV_CLICKS, TAGPU_OV_SELECTIONS, TAGPU_OV_CHAT, TAGPU_OV_N };
+int  tagpu_replay_overlay(int which);
+void tagpu_replay_overlay_set(int which, int on);
+/* The publisher's two reads, after the draw the frame visit precedes: this frame's cursor and
+   click items, at most `cap`, with each recorded player's palette index in `col` (10 rows), and
+   a unit slot's recorded-selection bits, bit p for player p. Nothing outside a playback. */
+struct TAGPU_PK_OVERLAY;
+unsigned tagpu_replay_overlays(struct TAGPU_PK_OVERLAY* out, unsigned cap, unsigned char col[10]);
+unsigned tagpu_replay_rsel(unsigned slot);
 
 /* tagpu_reclaim's teardown wrap, once 0x491B60 has returned, on the thread that entered it: V's
    PlayerInfo gets back what the Start's fill left in it. */

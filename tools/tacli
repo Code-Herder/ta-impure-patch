@@ -285,6 +285,26 @@ def pointer_restore(display: str, pos):
     return True
 
 
+def totala_by_prefix() -> dict:
+    """{WINEPREFIX: pid} of every local TotalA.exe, from one process listing: the first pid in
+    pgrep's order for each prefix. An instance's game is the one running from its prefix."""
+    try:
+        pids = subprocess.run(["pgrep", "-x", "TotalA.exe"],
+                              capture_output=True, text=True).stdout.split()
+    except FileNotFoundError:
+        return {}
+    out = {}
+    for pid in pids:
+        try:
+            environ = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+        except (OSError, PermissionError):
+            continue
+        for entry in environ:
+            if entry.startswith(b"WINEPREFIX="):
+                out.setdefault(entry.decode(errors="replace").split("=", 1)[1], int(pid))
+    return out
+
+
 class Instance:
     def __init__(self, name: str, lenient: bool = False):
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}", name):
@@ -376,21 +396,7 @@ class Instance:
         remote instance, by the test folder it runs from."""
         if self.remote:
             return self.remote.pid()
-        try:
-            pids = subprocess.run(["pgrep", "-x", "TotalA.exe"],
-                                  capture_output=True, text=True).stdout.split()
-        except FileNotFoundError:
-            return None
-        for pid in pids:
-            try:
-                environ = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
-            except (OSError, PermissionError):
-                continue
-            for entry in environ:
-                if entry.startswith(b"WINEPREFIX="):
-                    if entry.decode(errors="replace").split("=", 1)[1] == str(self.prefix):
-                        return int(pid)
-        return None
+        return totala_by_prefix().get(str(self.prefix))
 
     def running(self) -> bool:
         return self.pid() is not None
@@ -1344,12 +1350,15 @@ def place_window(inst: "Instance", display: str):
         return None
     wid, x, y, w, h = win
     others = []
+    # one process listing for every instance, not a pgrep each: those take 16.8 s over 506
+    # instance folders (MEASURED 2026-10-08, no game running), and this runs at every launch
+    live = totala_by_prefix()
     for meta_path in INSTANCES.glob("*/instance.json"):
         other = Instance(meta_path.parent.name, lenient=True)
         if other.unusable:
             warn(other.unusable)
             continue
-        if other.remote or other.name == inst.name or not other.running():
+        if other.remote or other.name == inst.name or str(other.prefix) not in live:
             continue
         if (other.meta().get("display") or default_display()) != display:
             continue    # another X server's windows share no pixels with this one
@@ -2081,10 +2090,9 @@ KEYS_BATCH = 900
 def _write_tokens(inst: Instance, tokens: str, timeout: float = 5.0):
     """Append tokens to the in-process input file (consumed once by the game).
 
-    `ui fill` can emit a token per character plus a backspace per character
-    already in the field, which overruns a single batch. Long batches are split
-    and each piece waits for the game to swallow the one before it, so the tail
-    is never silently dropped.
+    Long batches are split on the token file's byte budget. Taking that file
+    acknowledges posting input, not the engine editing a field; `ui fill` waits
+    for its text separately and bounds each character batch.
     """
     path = inst.gamedir / "tagpu_keys.txt"
     words = tokens.split()
@@ -3127,6 +3135,28 @@ def _ui_bound_list(snap: dict, slider: dict):
     return None
 
 
+def _ui_wait_field_text(inst: Instance, before: dict, field: dict,
+                        wanted: str, timeout: float, editing: bool = False):
+    """Wait for the same field to acknowledge text; queued input is not an edit."""
+    deadline = time.monotonic() + timeout
+    got = None
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None if editing else got
+        snap = _ui_snapshot(inst, timeout=remaining, soft=True)
+        if snap is None:
+            return None
+        hits = _ui_match(snap, f'#{field["i"]}')
+        if (snap.get("gui") != before.get("gui") or len(hits) != 1 or
+                hits[0].get("name") != field.get("name") or
+                hits[0].get("id") != field.get("id")):
+            die(f'{field["name"]} changed while waiting for its text')
+        got = hits[0].get("text")
+        if got == wanted and (not editing or snap.get("edit_index") == field["i"]):
+            return got
+
+
 def _ui_resolve(inst: Instance, selector: str, timeout: float,
                 wait: bool = True, actionable: bool = True):
     """Resolve one gadget, auto-waiting for it to appear and become actionable.
@@ -3530,6 +3560,8 @@ def cmd_ui(args):
         selector, text = rest[0], rest[1]
         tokens = _ui_text_tokens(text)
         snap, g = _ui_resolve(inst, selector, tmo, wait=args.wait)
+        if g["type"] != "field":
+            die(f'{g["name"]} is a {_ui_kind(g)}, not a text field')
 
         # The field's own limit is knowable before we type, so refuse rather than
         # deliver a silently truncated string and call it a fill.
@@ -3537,44 +3569,46 @@ def cmd_ui(args):
         if cap and len(text) > cap:
             die(f'{g["name"]} holds {cap} characters and {text!r} is {len(text)}')
 
-        _ui_click_gadget(inst, g, snap, settle=False)     # focus the field
-        time.sleep(0.2)
-        # Clearing is one backspace at a time, each one waited for. Characters go
-        # as WM_CHAR and queue, so a whole word lands from a single batch; backspace
-        # is a key token, and the shield holds a key down for 150 ms because TA
-        # *polls* the keyboard — so a batch of five overlapping presses is one edge
-        # and deletes one character. Send one, wait for the field to actually get
-        # shorter, repeat. A click can place the caret inside existing text: after
-        # backspace consumes the left side, delete must consume the right side.
-        # Neither key is evidence of progress until the field acknowledges it.
-        left = len(g.get("text") or "")
-        while left:
-            was = left
-            for key in ("backspace", "delete"):
-                _write_tokens(inst, key)
-                deadline = time.time() + 3.0
-                while time.time() < deadline:
-                    time.sleep(0.15)
-                    now = _ui_match(_ui_snapshot(inst), g["name"])
-                    if len(now) != 1:
-                        die(f'{g["name"]} disappeared while clearing its text')
-                    left = len(now[0].get("text") or "")
-                    if left < was:
-                        break
-                if left < was:
-                    break
-            if left >= was:
-                die(f'{g["name"]} still reads {was} characters after backspace and delete')
-        if tokens:
-            _write_tokens(inst, " ".join(tokens))
-        time.sleep(0.3)
-
-        after = _ui_snapshot(inst)
-        hits = _ui_match(after, g["name"])
-        got = hits[0].get("text") if len(hits) == 1 else None
+        # Clicking an active editor resets its character ring. The snapshot's
+        # edit index lets us keep that editor, or acknowledge a focus change
+        # before sending text. Older snapshots still acknowledge every edit.
+        if snap.get("edit_index") != g["i"]:
+            _ui_click_gadget(inst, g, snap, settle=False)
+            old = g.get("text") or ""
+            got = _ui_wait_field_text(inst, snap, g, old, tmo,
+                                      editing="edit_index" in snap)
+            if got != old:
+                die(f'{g["name"]} did not acknowledge focus: reads {got!r}')
+        # End queues the editor's 0xF1 code; backspace produces WM_CHAR(8).
+        # A click can position the caret inside the text. Each exact shortened
+        # prefix acknowledges the edit at its end, before another batch is sent.
+        remaining = g.get("text") or ""
+        step = 4
+        first = True
+        while remaining:
+            count = min(step, len(remaining))
+            batch = " ".join(["backspace"] * count)
+            _write_tokens(inst, ("end " if first else "") + batch)
+            first = False
+            remaining = remaining[:-count]
+            got = _ui_wait_field_text(inst, snap, g, remaining, tmo)
+            if got != remaining:
+                die(f'{g["name"]} did not acknowledge clearing: '
+                    f'reads {got!r}, wanted {remaining!r}')
+        # TA's character ring holds at most 29 queued entries. Its snapshot can
+        # also run before posted WM_CHAR messages are edited. Four characters
+        # followed by exact field acknowledgement bound the queue and establish
+        # completion without treating a sleep or token-file deletion as proof.
+        got = _ui_wait_field_text(inst, snap, g, "", tmo) if not tokens else ""
+        for offset in range(0, len(tokens), step):
+            _write_tokens(inst, " ".join(tokens[offset:offset + step]))
+            wanted = text[:offset + step]
+            got = _ui_wait_field_text(inst, snap, g, wanted, tmo)
+            if got != wanted:
+                break
         note = "" if got == text else (
-            f" (field now reads {got!r}, not {text!r} — TA validates what a field "
-            "accepts and drops the rest)")
+            f" (field reads {got!r}; it did not acknowledge {text!r} "
+            f"within {tmo:g}s — check focus and the field's character rules)")
         out({"name": g["name"], "text": got, "wanted": text}, args.json,
             human=f"filled {g['name']}{note}")
         return
@@ -3640,11 +3674,10 @@ def cmd_ui(args):
 def _ui_text_tokens(text: str):
     """Text -> `tacli keys` tokens, refusing what the input layer cannot type.
 
-    Every character goes as `char:`, the WM_CHAR token, rather than as a key
-    token. A key token carries a modifier the shield deliberately *holds* for
-    150 ms because TA polls it, so `shift+c` in a batch capitalises everything
-    typed behind it — "Claude" arrives as "CLAUDE". WM_CHAR carries the
-    character with no modifier state at all, which is what a text field wants.
+    Printable characters use `char:`, the WM_CHAR token. Space uses its key
+    token because whitespace delimits the input file. Modified key tokens hold
+    their modifier for 150 ms because TA polls it, so `shift+c` in a batch also
+    capitalises following characters. WM_CHAR carries no modifier state.
 
     Which characters a field then keeps is TA's business, not ours: the
     save-name field accepts letters, digits, space and underscore and silently
@@ -5260,7 +5293,7 @@ REPLAY_REQUEST = "tagpu_replay.play"
 REPLAY_TRIGGER = "tagpu_replay.trigger"
 REPLAY_RX = re.compile(r"replay: (playing|not playing)\b(.*)")
 REPLAY_PLAYING_RX = re.compile(r"replay: playing ([A-Za-z0-9_-]+):")
-REPLAY_SEATS_MAX = 9    # the viewer needs a record of its own (decision D2)
+REPLAY_SEATS_MAX = 10   # every record a game seats: the viewer takes record 10 (tagpu_replay.c)
 REPLAY_SEEK_TIMEOUT = 120.0
 REPLAY_TAKEOVER_TIMEOUT = 120.0
 REPLAY_NAME_RX = re.compile(r"[A-Za-z0-9_-]{1,39}")    # the DLL's name rule for a dump
@@ -5279,8 +5312,16 @@ class _LogLines:
         return lines
 
 
-def _tarec():
+def _tarec(blocks=False):
+    """tools/replay/tarec.py. With `blocks`, for a command that walks the recording's blocks:
+    that needs numpy and zstandard (reccodec.py), which the system python3 lacks, so tacli
+    re-executes itself under the shared venv first (devpy.ensure; its guard stops a second
+    re-execution). Call it before the command does anything else: the re-execution starts the
+    command again from its arguments."""
     sys.path.insert(0, str(Path(__file__).resolve().parent / "replay"))
+    if blocks:
+        import devpy  # noqa: E402  the shared venv (tools/replay/devpy.py)
+        devpy.ensure()
     import tarec  # noqa: E402  the recording's reader (tools/replay/tarec.py)
     return tarec
 
@@ -5301,16 +5342,23 @@ def _replay_start(args, verb, tail=""):
     except (OSError, tarec.Unreadable) as e:
         die(f"{args.recording}: {e}")
     seats = sorted(h["players"], key=lambda p: p["index"])
-    if h.get("mode") != 2:
-        die(f"{args.recording} is not a skirmish's (mode {h.get('mode')})")
+    network = h.get("mode") == 3
+    if h.get("mode") != 2 and not network:
+        die(f"{args.recording} is neither a skirmish's nor a multiplayer game's "
+            f"(mode {h.get('mode')})")
     if not 2 <= len(seats) <= REPLAY_SEATS_MAX:
         die(f"{args.recording} seats {len(seats)} players: a replay plays 2 to "
-            f"{REPLAY_SEATS_MAX}, since the viewer takes a record of its own")
-    if any(p["controller"] not in (1, 2) for p in seats):
+            f"{REPLAY_SEATS_MAX}")
+    # a multiplayer recorder holds every remote player, human or AI, as 3 (validate_header)
+    if any(p["controller"] not in ((1, 2, 3) if network else (1, 2)) for p in seats):
         die(f"{args.recording} has a seat that was neither human nor AI")
-    smap = h.get("settings_map")
+    # a skirmish starts from the SKIRMISH screen's map, which its recording keeps as the settings
+    # map; a network game's map is the battleroom's, its level's own, while its settings map is
+    # whatever the host's SKIRMISH screen last held
+    smap = h.get("map") if network else h.get("settings_map")
     if not smap:
-        die(f"{args.recording} does not name its map as the skirmish settings did")
+        die(f"{args.recording} does not name its map"
+            + ("" if network else " as the skirmish settings did"))
     if args.perspective is not None and args.perspective not in {p["index"] for p in seats}:
         die(f"--perspective {args.perspective}: {args.recording} seats records "
             f"{', '.join(str(p['index']) for p in seats)}")
@@ -5324,10 +5372,14 @@ def _replay_start(args, verb, tail=""):
     # as off, so the stock seat fill activates exactly the recorded seats
     count = seats[-1]["index"] + 1
     by = {p["index"]: p for p in seats}
-    players = [f"{i}:{by[i]['controller']}:{by[i]['side']}:{by[i]['logo']}" if i in by
-               else f"{i}:0" for i in range(count)]
+    # the skirmish menu knows human and AI only: a remote seat is filled as an AI, and the DLL
+    # seats every recorded player as a puppet whatever the fill made it
+    players = [f"{i}:{1 if by[i]['controller'] == 1 else 2}:{by[i]['side']}:{by[i]['logo']}"
+               if i in by else f"{i}:0" for i in range(count)]
     launched = _launch(argparse.Namespace(
         name=args.name, json=True, force=False, res=tuple(args.res) if args.res else None,
+        # no UnitLimit: options_exchange (tagpu_replay.c) writes the recording's units-each before
+        # the Start, and a limit given here would stay the instance's for every later launch
         map=smap, vsync=args.vsync, unit_limit=None, player=players,
         skirmish_players=count, display=args.display, slot=None, sound=None, intro=False,
         shield=None, dplay=None, dplay_port=None, free_dplay_port=False, title=None,
@@ -5585,7 +5637,7 @@ def _replay_takeover_wait(inst, name, T, lines, first, timeout):
 
 
 def cmd_replay_forks(args):
-    tarec = _tarec()
+    tarec = _tarec(blocks=True)
     path = Path(args.recording).resolve()
     try:
         segs, stop = tarec.file_segments(path)
@@ -5638,7 +5690,7 @@ def cmd_replay_forks(args):
 
 
 def replay_prediction(args):
-    tarec = _tarec()
+    tarec = _tarec(blocks=True)
     try:
         segs, _ = tarec.file_segments(args.recording)
         evict = tarec.fork_prediction(segs, args.timeline, args.at)
@@ -5807,6 +5859,113 @@ def cmd_replay_takeover(args):
         human.append(f"  the fork: {got['fork']}")
     out(res, args.json, human="\n".join(human))
     if not got["taken"] or "recording" not in got:
+        sys.exit(1)
+
+
+# The playback's camera (tagpu_replay.c, FOLLOW, JUMP AND FREE CAM): the cards' Follow, Jump and
+# Free cam as trigger lines, and `pov`, the frame visit's own account of what Follow computed and
+# of the overlays it built (THE OVERLAYS).
+REPLAY_POV_RX = re.compile(
+    r"pov at GameTime (\d+): (?:no follow|(follow|jump) epoch (\d+) seat (\d+), tick (\d+), "
+    r"sample (\w+), view (-?\d+)x(-?\d+), eye \((-?\d+), (-?\d+)\), level (\d+)/65536 \([^)]*\))"
+    r"(?:; overlays: (\d+) items, (\d+) selected units)?")
+
+
+def _replay_camera(args, line, rx):
+    """Writes `line` to the running playback's trigger and waits for the first log line `rx`
+    matches after it, or for a refusal; returns (name, the line, its match or None)."""
+    inst = Instance(args.name)
+    if inst.remote:
+        die(f"{args.name} is remote: the replay's camera verbs drive a local instance")
+    name, why = _replay_playing(inst)
+    if name is None:
+        die(f"{args.name}: not playing: {why}")
+    lines = _LogLines(_log_cursor(inst))
+    trig = inst.gamedir / REPLAY_TRIGGER
+    tmp = trig.with_name(trig.name + ".tmp")
+    tmp.write_text(line + "\n")
+    os.replace(tmp, trig)
+    refused = re.compile(r"replay: (?:[^:]*: )?(?:follow|jump|free cam|pov|overlay)\b[^:]* refused: .*"
+                         rf"|replay: {re.escape(REPLAY_TRIGGER)}: not understood: .*")
+    deadline = time.time() + args.timeout
+    while time.time() < deadline:
+        for got in lines():
+            m = rx.search(got)
+            if m:
+                return name, got[m.start():].strip(), m
+            r = refused.search(got)
+            if r:
+                return name, got[r.start():].strip(), None
+        if not inst.running():
+            die(f"{args.name} exited (tacli log {args.name} -n 40)")
+        time.sleep(0.1)
+    die(f"{args.name}: no answer to `{line}` in {args.timeout:g}s (tacli log {args.name} -g replay)")
+
+
+def cmd_replay_follow(args):
+    """Follow a recorded seat's camera, or Free cam (`follow NAME free`)."""
+    if args.seat == "free":
+        line, rx = "follow free", re.compile(r"replay: .*: (?:follow|jump) ended: free cam|"
+                                             r"replay: .*: free cam: nothing was followed")
+    elif args.seat.isdigit():
+        line = f"follow {args.seat}"
+        rx = re.compile(rf"replay: .*: follow seat {args.seat}, epoch (\d+)")
+    else:
+        die(f"follow: SEAT is a recorded seat's number or `free`, not {args.seat!r}")
+    name, got, m = _replay_camera(args, line, rx)
+    res = {"name": args.name, "as": name, "seat": args.seat, "done": m is not None, "line": got}
+    if m and m.groups():
+        res["epoch"] = int(m[1])
+    out(res, args.json, human=got)
+    if not m:
+        sys.exit(1)
+
+
+def cmd_replay_jump(args):
+    """Put the camera where a recorded seat's was, once."""
+    rx = re.compile(rf"replay: .*: jump to seat {args.seat}, epoch (\d+)")
+    name, got, m = _replay_camera(args, f"jump {args.seat}", rx)
+    res = {"name": args.name, "as": name, "seat": args.seat, "done": m is not None, "line": got}
+    if m:
+        res["epoch"] = int(m[1])
+    out(res, args.json, human=got)
+    if not m:
+        sys.exit(1)
+
+
+def cmd_replay_pov(args):
+    """What the playback's Follow computed at its latest frame visit."""
+    name, got, m = _replay_camera(args, "pov", REPLAY_POV_RX)
+    res = {"name": args.name, "as": name, "line": got, "done": m is not None}
+    if m:
+        res["gametime"] = int(m[1])
+        res["following"] = m[2] is not None
+        if m[12] is not None:
+            res.update(overlay_items=int(m[12]), selected_units=int(m[13]))
+        if m[2]:
+            res.update(kind=m[2], epoch=int(m[3]), seat=int(m[4]), tick=int(m[5]), sample=m[6],
+                       view=[int(m[7]), int(m[8])], eye=[int(m[9]), int(m[10])],
+                       level_q16=int(m[11]))
+    out(res, args.json, human=got)
+    if not m:
+        sys.exit(1)
+
+
+REPLAY_OVERLAYS = ("cursors", "clicks", "selections", "chat")
+
+
+def cmd_replay_overlay(args):
+    """One of the dock's Overlays switches: a recorded overlay, or the chat."""
+    on = args.state == "on"
+    if args.overlay == "chat":
+        rx = re.compile(rf"replay: chat {'shown' if on else 'hidden'}")
+    else:
+        rx = re.compile(rf"replay: overlay {args.overlay} {args.state}")
+    name, got, m = _replay_camera(args, f"overlay {args.overlay} {args.state}", rx)
+    res = {"name": args.name, "as": name, "overlay": args.overlay, "on": on, "done": m is not None,
+           "line": got}
+    out(res, args.json, human=got)
+    if not m:
         sys.exit(1)
 
 
@@ -6920,6 +7079,52 @@ def build_parser():
     rpt.add_argument("--dry-run", action="store_true",
                      help="print which fork would be deleted; with FILE, inspect without launching")
     rpt.set_defaults(func=cmd_replay_takeover)
+
+    rpfo = rpv.add_parser(
+        "follow", help="follow a recorded seat's camera in the running playback, or Free cam",
+        description="The cards' Follow (SEAT) or Free cam (`free`), through the playback's "
+                    "trigger: Follow shows the seat's recorded camera, fitted to this screen, "
+                    "until the camera is moved or the wheel turned (tacli log -g 'follow "
+                    "ended'). Prints the DLL's line, with the epoch.")
+    add_common(rpfo)
+    rpfo.add_argument("name", help="the instance whose playback runs")
+    rpfo.add_argument("seat", metavar="SEAT", help="a recorded seat's number, or `free`")
+    rpfo.add_argument("--timeout", type=float, default=30.0)
+    rpfo.set_defaults(func=cmd_replay_follow)
+
+    rpj = rpv.add_parser("jump", help="put the camera where a recorded seat's was, once",
+                         description="The cards' Jump: the seat's recorded camera, fitted to "
+                                     "this screen, written until the renderer has drawn its "
+                                     "level; then the camera is free.")
+    add_common(rpj)
+    rpj.add_argument("name", help="the instance whose playback runs")
+    rpj.add_argument("seat", type=int, metavar="SEAT", help="a recorded seat's number")
+    rpj.add_argument("--timeout", type=float, default=30.0)
+    rpj.set_defaults(func=cmd_replay_jump)
+
+    rppv = rpv.add_parser("pov", help="what the playback's Follow computed at its last frame visit",
+                          description="The follow epoch, the seat, the displayed GameTime, the "
+                                      "sample the perspective clock took, the view, the eye and "
+                                      "the level x 65536 -- the numbers `tarec.py pov FILE --eye "
+                                      "T --viewer W,H` computes from the file -- and the overlays "
+                                      "the visit built: the cursor and click items, and the units "
+                                      "a recorded selection's rectangle is drawn on.")
+    add_common(rppv)
+    rppv.add_argument("name", help="the instance whose playback runs")
+    rppv.add_argument("--timeout", type=float, default=30.0)
+    rppv.set_defaults(func=cmd_replay_pov)
+
+    rpov = rpv.add_parser("overlay", help="switch one of the dock's Overlays menu entries",
+                          description="The Overlays menu's switches, through the playback's "
+                                      "trigger: the recorded players' cursors, clicks and "
+                                      "selections, and the chat. Every switch is on when a "
+                                      "playing starts and none is saved.")
+    add_common(rpov)
+    rpov.add_argument("name", help="the instance whose playback runs")
+    rpov.add_argument("overlay", choices=REPLAY_OVERLAYS)
+    rpov.add_argument("state", choices=("on", "off"))
+    rpov.add_argument("--timeout", type=float, default=30.0)
+    rpov.set_defaults(func=cmd_replay_overlay)
 
     rpf = rpv.add_parser("forks", help="list a recording's timelines, or delete/export a fork")
     add_common(rpf)

@@ -1,0 +1,112 @@
+$SCRATCH/verify/two/native.imprec: 4,744 KB, Two Continents, 4 players, 15001 slots
+  1578 iterations; live units at most 73, 36 at the end; on average 21 unit deltas an iteration, 45 % of the live units
+  live units: 1:3, 99:72, 197:73, 295:65, 393:57, 491:52, 589:45, 687:43, 785:42, 883:43, 981:41, 1079:40, 1177:40, 1275:38, 1373:38, 1471:36, 1569:36
+
+the file by block kind (on disk = packed + 32-byte block headers)
+  stream           25 blocks  raw    13.5 MB  on disk   3,437 KB   72.4 %
+  contributions     17 blocks  raw   4,209 KB  on disk   1,228 KB   25.9 %
+  snapshot          1 blocks  raw     921 KB  on disk      66 KB    1.4 %
+  minimap           1 blocks  raw      62 KB  on disk       8 KB    0.2 %
+  header            1 blocks  raw       4 KB  on disk       4 KB    0.1 %
+  end               1 blocks  raw       1 KB  on disk       1 KB    0.0 %
+
+the stream by category: raw 13.5 MB, packed 3,436 KB (recompressed alike 3,521 KB; categories deflated alone sum to 3,079 KB)
+  category                       records         raw   raw %  packed alone      %
+  projectiles                      47317    4,117 KB   29.9%      1,922 KB  62.4%
+  feature grid cells                4648    6,962 KB   50.5%        506 KB  16.4%
+  units: deltas                    33006    1,144 KB    8.3%        448 KB  14.5%
+  wrecks and feature heads         10814      536 KB    3.9%         62 KB   2.0%
+  events                            6279      153 KB    1.1%         50 KB   1.6%
+  tables                           15789      268 KB    1.9%         27 KB   0.9%
+  globals                           1578       62 KB    0.5%         26 KB   0.8%
+  order lists                       2011      197 KB    1.4%         18 KB   0.6%
+  explored map                       231      285 KB    2.1%          8 KB   0.3%
+  players                            327       17 KB    0.1%          5 KB   0.2%
+  units: whole images                 77       25 KB    0.2%          4 KB   0.1%
+  iteration marks                   1578       12 KB    0.1%          3 KB   0.1%
+  units: gone                         41        0 KB    0.0%          0 KB   0.0%
+
+the snapshots by category: raw 921 KB, packed 66 KB (recompressed alike 68 KB; categories deflated alone sum to 65 KB)
+  category                       records         raw   raw %  packed alone      %
+  wrecks and feature heads          8193      448 KB   48.6%         51 KB  78.9%
+  projectiles                        112       13 KB    1.4%          6 KB   9.0%
+  units: whole images                 43       14 KB    1.5%          3 KB   4.4%
+  tables                              43      171 KB   18.6%          2 KB   2.5%
+  feature grid cells                  81        5 KB    0.6%          1 KB   2.1%
+  explored map                         9      263 KB   28.5%          1 KB   1.4%
+  players                             10        5 KB    0.6%          1 KB   1.1%
+  order lists                         21        2 KB    0.2%          0 KB   0.4%
+  globals                              1        0 KB    0.0%          0 KB   0.2%
+  other                               11        0 KB    0.0%          0 KB   0.1%
+  iteration marks                      1        0 KB    0.0%          0 KB   0.0%
+
+unit deltas: 33006 records, 499 KB of changed values + 645 KB of headers and bitmaps; changed dwords, most first (bits = the change's size, p50/p90/p99)
+  +0x0F8 piece/sight h                             19567      76 KB  p50 17 p90 17 p99 22
+  +0x018 ?                                         15966      62 KB  p50 1 p90 25 p99 32
+  +0x140 mover                                     11033      43 KB  p50 18 p90 19 p99 20
+  +0x068 position                                  10032      39 KB  p50 31 p90 32 p99 32
+  +0x070 altitude                                   9358      37 KB  p50 31 p90 32 p99 32
+  +0x128 mover                                      7979      31 KB  p50 12 p90 14 p99 16
+  +0x120 mover                                      7925      31 KB  p50 12 p90 14 p99 16
+  +0x064 turn                                       7468      29 KB  p50 26 p90 28 p99 29
+  +0x138 mover                                      6483      25 KB  p50 12 p90 14 p99 16
+  +0x06C altitude/position                          5927      23 KB  p50 2 p90 3 p99 4
+  +0x074 footprint x                                5686      22 KB  p50 1 p90 3 p99 18
+  +0x13C mover                                      3675      14 KB  p50 17 p90 21 p99 25
+  +0x01C ?                                          3277      13 KB  p50 25 p90 26 p99 30
+  +0x00C ?                                          2787      11 KB  p50 2 p90 2 p99 2
+  +0x0B0 ?                                          2166       8 KB  p50 5 p90 7 p99 11
+  +0x108 hp/water                                   1978       8 KB  p50 4 p90 6 p99 20
+  +0x0B8 ?                                          1025       4 KB  p50 31 p90 32 p99 32
+  +0x0F0 attacker                                    936       4 KB  p50 4 p90 12 p99 14
+  +0x078 footprint x/footprint z/sight xz            665       3 KB  p50 2 p90 18 p99 18
+  +0x0F4 ?                                           657       3 KB  p50 27 p90 32 p99 32
+  +0x110 buildpage/marks/selected/state bits/state byte/yard       386       2 KB  p50 4 p90 17 p99 28
+  +0x104 build fraction                              363       1 KB  p50 19 p90 21 p99 31
+  +0x0C0 ?                                           362       1 KB  p50 21 p90 25 p99 32
+  +0x0C4 ?                                           362       1 KB  p50 21 p90 25 p99 32
+  +0x0D8 ?                                           362       1 KB  p50 22 p90 25 p99 32
+
+projectile deltas: 45397 records, 3,483 KB of changed values + 532 KB of headers and bitmaps; changed dwords, most first (bits = the change's size, p50/p90/p99)
+  +0x04                                            44639     174 KB  p50 23 p90 25 p99 25
+  +0x0C                                            44630     174 KB  p50 23 p90 25 p99 26
+  +0x08                                            44550     174 KB  p50 18 p90 21 p99 23
+  +0x40                                            40762     159 KB  p50 18 p90 20 p99 21
+  +0x24                                            40700     159 KB  p50 20 p90 21 p99 22
+  +0x1C                                            40675     159 KB  p50 20 p90 22 p99 22
+  +0x10                                            40446     158 KB  p50 23 p90 25 p99 26
+  +0x18                                            40423     158 KB  p50 24 p90 25 p99 26
+  +0x14                                            40277     157 KB  p50 17 p90 20 p99 23
+  +0x3C                                            40146     157 KB  p50 32 p90 32 p99 32
+  +0x34                                            40066     157 KB  p50 31 p90 32 p99 32
+  +0x50                                            40010     156 KB  p50 28 p90 29 p99 30
+
+globals deltas: 1577 records, 37 KB of changed values; changed dwords, most first (bits = the change's size, p50/p90/p99)
+  dword 23                                          1577       6 KB  p50 16 p90 16 p99 16
+  dword 24                                          1577       6 KB  p50 16 p90 16 p99 16
+  dword 25                                          1577       6 KB  p50 16 p90 16 p99 16
+  dword 26                                          1577       6 KB  p50 16 p90 16 p99 16
+  dword 33                                          1577       6 KB  p50 2 p90 2 p99 2
+  dword 77                                          1402       5 KB  p50 31 p90 32 p99 32
+  dword 46                                           102       0 KB  p50 5 p90 7 p99 7
+  dword 1                                             55       0 KB  p50 1 p90 3 p99 7
+  dword 73                                            52       0 KB  p50 2 p90 2 p99 2
+  dword 75                                            15       0 KB  p50 10 p90 12 p99 12
+  dword 10                                            12       0 KB  p50 1 p90 2 p99 2
+  dword 43                                            12       0 KB  p50 7 p90 10 p99 10
+
+order lists: lists sent 2,011, bytes 202,156, new or resized 39, same length, changed 1,972, images in them 1,984, images changed 1,972
+feature grid cells: images: records 3,409, images: cells 541,533, images: bytes 7,087,612, inside a feature call or death (its input): records 1,239, inside a feature call or death (its input): cells 1,769, inside a feature call or death (its input): bytes 41,072
+
+the stream's raw bytes per window of GameTime (the five largest categories)
+  GameTime        feature grid cells         projectiles       units: deltas  wrecks and feature        explored map         all
+  0-899                     6,905 KB            2,883 KB              728 KB              497 KB              277 KB     11.6 MB
+  900-1799                     56 KB            1,234 KB              416 KB               39 KB                8 KB    1,915 KB
+
+the stream's blocks under other compressors
+  writer (lodepng, 2 KB window)                 3,436 KB    1.00x the writer's
+  zlib 9, 32 KB window                          2,017 KB    0.59x the writer's
+  lzma preset 6                                 1,349 KB    0.39x the writer's
+  zstd 3                                        1,911 KB    0.56x the writer's
+  zstd 19                                       1,519 KB    0.44x the writer's
+  zstd 19, the whole stream as one frame        1,362 KB    0.40x the writer's

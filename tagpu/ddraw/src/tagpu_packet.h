@@ -15,7 +15,8 @@
 
    THE OTHER DIRECTION is the same primitive with the threads
    swapped: the render thread posts a COMMAND record — the zoom level in
-   force, the cursor anchor's eye delta, the camera hold, the follow release —
+   force, the cursor anchor's eye delta, the camera hold, the follow release,
+   and what the render thread made of the replay's Follow —
    and the game thread takes the latest one at the top of every in-play draw
    (the observer's `before`, post-tick, pre-draw) and writes the engine's
    words there, on the thread that owns them. The render thread stores into
@@ -38,8 +39,9 @@
    mouse and the build cursor, the engine's shade table); the four effect
    tables — projectiles, explosions, flying debris and the ten particle
    layers' sub-particles — with the LHT ramp, the ALP/LHT capability bits and
-   the whole 256-byte GUI colour LUT they need; the two fog grids; and the UI
-   layer's render half. Every table has its `off`/`n` here. The acquire is
+   the whole 256-byte GUI colour LUT they need; the two fog grids; the UI
+   layer's render half; and a playback's overlays, its recorded cursors and
+   clicks with each recorded player's colour. Every table has its `off`/`n` here. The acquire is
    tick-aware, so the two packets the consumer holds always span two distinct
    sim ticks. The effect tables' gather is CACHED PER SIM TICK in the
    publisher: the engine's two effect passes read their arrays and write
@@ -135,7 +137,11 @@ typedef struct TAGPU_PK_UNIT {
                                 player's chosen colour and is NOT the owner id;
                                 TAGPU_PK_LOGO_NONE when the read did not
                                 validate                                        */
-    uint8_t  pad_[3];
+    uint8_t  pad0;
+    uint16_t rsel;           /* THE REPLAY'S SELECTION OVERLAY: bit p set = the
+                                recorded player p's selection holds this unit,
+                                p in 0..9 (tagpu_replay.c, THE OVERLAYS); 0
+                                outside a playback or with the overlay off    */
     char     name[16];       /* UnitDef+0x20 UnitName, LOWERCASED and NUL-padded:
                                 what the roster and scaffold log lines print.
                                 16 is the FBI
@@ -283,6 +289,27 @@ typedef struct TAGPU_PK_GHOSTMASK {
     uint32_t root;            /* MODEL_PTRS[type] as the game thread read it    */
     uint32_t bits[8];         /* TAGPU_PK_MAXPIECE bits                         */
 } TAGPU_PK_GHOSTMASK;
+
+/* 16 B, one per item of the replay's cursor and click overlays, at most
+   TAGPU_PK_MAX_OVERLAY. Built at the replay's frame visit from the recording
+   alone -- no engine memory -- and copied here BY VALUE (tagpu_replay.c, THE
+   OVERLAYS). The coordinates are a world point as the recording names it: the
+   integer halves of x, height and z, data and never an index; the marker pass
+   projects them and its clip bounds them. The acquire checks `kind` and
+   `player`, so a consumer reads both without a test of its own. */
+typedef struct TAGPU_PK_OVERLAY {
+    uint8_t  kind;            /* TAGPU_PK_OV_*                                  */
+    uint8_t  player;          /* the recorded player, 0..9                       */
+    uint8_t  colour;          /* the player's palette index (ov_col)             */
+    uint8_t  age;             /* a click's ticks since it was made, 0..14; 0 for
+                                 a cursor                                        */
+    int32_t  x, h, z;         /* world x, height and z, world px                */
+} TAGPU_PK_OVERLAY;
+
+#define TAGPU_PK_OV_CURSOR    0u    /* a recorded seat's pointer                    */
+#define TAGPU_PK_OV_CLICK     1u    /* a recorded click, as a ring that shrinks     */
+#define TAGPU_PK_MAX_OVERLAY  128u
+#define TAGPU_PK_OV_PLAYERS   10u   /* ov_col's rows and the players rsel names    */
 
 /* ---- THE EFFECTS AND THE PARTICLE LAYERS --------------------------------
    The engine's four per-frame effect arrays, copied by the thread that owns
@@ -598,6 +625,8 @@ typedef struct TAGPU_PK_PART {
                                             level's snapshot hit its own cap */
 #define TAGPU_PK_TRUNC_GHOSTMASK 0x100000u /* did not fit, OR more masked types
                                              than the table's cap          */
+#define TAGPU_PK_TRUNC_OVERLAY 0x200000u  /* the replay's overlay items did not
+                                             fit this packet                */
 
 #define TAGPU_PK_TRUNC_HUD     0x200000u  /* the replay HUD's record          */
 
@@ -620,8 +649,8 @@ typedef struct TAGPU_PK_HUDSEAT {
                                    marks recorded seat j                         */
     uint8_t  seat;              /* the recorded seat, < TAGPU_PK_HUD_SEATS       */
     uint8_t  pal;               /* the player's colour as a palette index: the
-                                   middle pixel of its logo frame, the cards'
-                                   rule (tagpu_cards.c)                          */
+                                   middle pixel of its logo frame
+                                   (tagpu_cards_colour)                          */
     uint8_t  lost;              /* the commander has died at least once          */
     uint8_t  pad[3];
 } TAGPU_PK_HUDSEAT;
@@ -751,6 +780,13 @@ typedef struct TAGPU_PACKET {
                                    0 = the engine's own [0, extent - W]. The
                                    render thread's anchor and prediction clamp
                                    with the same range from this              */
+    uint32_t follow_epoch;      /* the replay's Follow or Jump the apply wrote
+                                   the camera for before this draw (its epoch,
+                                   unique in the process); 0 = none           */
+    uint32_t follow_level;      /* ... and the level it fits, x 65536: the
+                                   render thread pins the wheel to it while
+                                   the epoch is in force (tagpu_zoom.c, "the
+                                   follow lever")                             */
     uint32_t pal_ok;            /* 1 = pal[] and gamma below were copied        */
     float    gamma;             /* the engine's gamma factor, bounded 0.05..8.0 */
     uint8_t  pal[1024];         /* the engine's own palette table, 256 x RGBA,
@@ -834,6 +870,16 @@ typedef struct TAGPU_PACKET {
     uint32_t mapfeat_ok;              /* 1: this packet carries the level's whole
                                          list, n_mapfeat entries -- 0 of them on a
                                          map with no features; 0: no list rides  */
+
+    /* ---- the replay's overlays (tagpu_replay.c, THE OVERLAYS) ---- */
+    uint32_t n_overlay, off_overlay;  /* PK_OVERLAY: the recorded cursors and
+                                         clicks this frame shows, at most
+                                         TAGPU_PK_MAX_OVERLAY; 0 outside a
+                                         playback                               */
+    uint8_t  ov_col[TAGPU_PK_OV_PLAYERS]; /* each recorded player's palette
+                                         index, the colour PK_UNIT.rsel's
+                                         rectangles take                        */
+    uint8_t  ov_pad[2];
 
     /* ---- the effects and the particle layers ---- */
     uint32_t n_proj,   off_proj;      /* PK_PROJ,   the live projectiles        */
@@ -952,6 +998,11 @@ typedef struct TAGPU_CMD {
                                    wants the camera: release the follow when
                                    applying it (the engine's own rule for a
                                    manual camera move)                         */
+    uint32_t follow_broken;     /* the follow epoch a wheel notch ended: the
+                                   render thread took the level back for the
+                                   wheel, and the apply stops writing         */
+    uint32_t follow_seen;       /* the latest follow epoch the render thread
+                                   drew at its level: a Jump ends there       */
     uint32_t crc;               /* the primitive's suffix, as above            */
     uint32_t tail_seq;
 } TAGPU_CMD;
@@ -1020,6 +1071,9 @@ static __inline const TAGPU_PK_BUILD* tagpu_pk_builds(const TAGPU_PACKET* p)
 /* the ghost masks, sorted by type, or NULL */
 static __inline const TAGPU_PK_GHOSTMASK* tagpu_pk_ghostmask(const TAGPU_PACKET* p)
 { return p->n_ghostmask ? (const TAGPU_PK_GHOSTMASK*)(const void*)((const unsigned char*)p + p->off_ghostmask) : (const TAGPU_PK_GHOSTMASK*)0; }
+/* the replay's cursor and click overlay items, or NULL */
+static __inline const TAGPU_PK_OVERLAY* tagpu_pk_overlay(const TAGPU_PACKET* p)
+{ return p->n_overlay ? (const TAGPU_PK_OVERLAY*)(const void*)((const unsigned char*)p + p->off_overlay) : (const TAGPU_PK_OVERLAY*)0; }
 /* the map's own features, or NULL: see TAGPU_PK_MAPFEAT for when it rides */
 static __inline const TAGPU_PK_MAPFEAT* tagpu_pk_mapfeat(const TAGPU_PACKET* p)
 { return p->n_mapfeat ? (const TAGPU_PK_MAPFEAT*)(const void*)((const unsigned char*)p + p->off_mapfeat) : (const TAGPU_PK_MAPFEAT*)0; }

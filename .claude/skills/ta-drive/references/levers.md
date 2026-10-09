@@ -405,6 +405,8 @@ that map's size.
 | `recorder.on` | the demo recorder records a skirmish to `gamedir/replays/`; looked for at each level's first iteration, so arm it before the level starts (`references/modules.md`) |
 | `tagpu_<pass>.ab` | the one-frame capture (`references/measuring.md`) |
 | `dmgdelay.on=K` | **test only, never on a player's instance**: every hit this peer sends leaves K ticks late (default 30, at most 3600), so a hit lands after its victim's slot has been reused; logs `enginefix: stale hits: TEST LEVER …` and a `take <slot> (first-free <slot>) at <GameTime>` line per local create. Arm it on the attacking peer (`references/modules.md`, *Stale hits*) |
+| `turbo.on=K` | **test only, a tacli test launch**: K ticks a frame (1..5, empty for 1) once `turbo on` reaches `tagpu_replay.trigger`, none while the recorder's ring is more than half full; `turbo: k=K at 0x49692D` at attach (`references/modules.md`, the demo recorder) |
+| `presentcap.on=N` | **test only, a tacli test launch**: at most N presents a second (10..60); `frame cap: a test launch's N fps present cap (tagpu_presentcap.on)` |
 | `ghostq.off` | **test only**: the ghost-commander queue holds and notes nothing, so a create refused during the load waits for the round robin as on stock; the dirty create's position still applies, which is how that half is measured alone. Logs `enginefix: ghost commander: TEST LEVER …` |
 
 ## The heartbeats: what must read zero

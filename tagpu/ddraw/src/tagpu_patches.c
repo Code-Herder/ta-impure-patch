@@ -3034,6 +3034,15 @@ static DWORD s_wireTlsBuf = TLS_OUT_OF_INDEXES, s_wireTlsLen = TLS_OUT_OF_INDEXE
 SIM_TLS(s_wireTlsBuf, SIM_TRANSIENT);
 SIM_TLS(s_wireTlsLen, SIM_TRANSIENT);
 
+unsigned int tagpu_wire_received(const void* message)
+{
+    unsigned int owned = tagpu_rec_wire_received(message);
+    if (owned) return owned;
+    if (!message || s_wireTlsBuf == TLS_OUT_OF_INDEXES || s_wireTlsLen == TLS_OUT_OF_INDEXES ||
+        message != TlsGetValue(s_wireTlsBuf)) return 0;
+    return (unsigned int)(size_t)TlsGetValue(s_wireTlsLen);
+}
+
 static void wire_drop(unsigned int* c, const char* what, unsigned int a, unsigned int b)
 {
     (*c)++;
@@ -3043,7 +3052,11 @@ static void wire_drop(unsigned int* c, const char* what, unsigned int a, unsigne
 
 /* ---- the 0x2C length ----------------------------------------------------------------------
 
-   A message's bytes are the receive's own: 0x4534E0 takes one message into the buffer at
+   tagpu_wire_received reports the current owned receive frame's exact delivered span,
+   or the retail receive note's span when the primary installer has not armed. The 0x2C
+   copy uses that same API as identified chat; an interior pointer inherits no bound.
+
+   On the retail path, 0x4534E0 takes one message into the buffer at
    main+0x2A38 and learns its length, which it hands only to the statistics call 0x415EF0 and
    then drops. wire_rx_note keeps both, per thread, at those two calls (0x453595 for the
    transport 0x462F30, 0x45361F for a raw DirectPlay receive, `-p` below 0). On the transport
@@ -3124,12 +3137,11 @@ SIM_VAR(s_wire2cBuf, SIM_TRANSIENT);
 static int __cdecl wire_s2c_copy(unsigned int* r)
 {
     const unsigned char* pkt = (const unsigned char*)(size_t)r[PR_EAX];
-    const unsigned char* buf = (const unsigned char*)TlsGetValue(s_wireTlsBuf);
-    unsigned int len = (unsigned int)(size_t)TlsGetValue(s_wireTlsLen);
+    unsigned int len = tagpu_wire_received(pkt);
     unsigned char* copy = s_wire2cBuf;
     s_wire2cRd = 0;
     s_wire2cCopy = 0;
-    if (!pkt || pkt != buf) {
+    if (!len) {
         wire_drop(&s_wireDiag.drop2CStale, "a 0x2C is not the message the receive delivered; dropped",
                   0, len);
         return 0;
@@ -6792,6 +6804,7 @@ static void __cdecl hit_created(unsigned int* r)
     }
     t->stamp[idx] = stamp;
     t->local[idx] = HIT_GAMETIME(ta);
+    tagpu_rec_network_created(slot, rec, stamp);
 }
 
 /* In place of 0x456050's `call 0x451DF0` (0x4560AE), with its signature: the unit's 0x09,

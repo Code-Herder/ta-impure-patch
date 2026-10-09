@@ -1,0 +1,8 @@
+died at the end                               15
+new                                           2216
+new, 67 >= old count                          2146
+survivor                                      123751
+died before it                                2201
+survivor, 67 == old index                     123751
+new, 67 < old count                           70
+[]

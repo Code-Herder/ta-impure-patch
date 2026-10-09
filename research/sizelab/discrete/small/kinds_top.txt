@@ -1,0 +1,12 @@
+11 stream blocks
+kind                     records         raw   deflate alone  zstd19 alone
+RK_CELLS                    4336     5.29 MB          262 KB         47 KB
+RK_UNIT_DELTA              16279     0.60 MB          218 KB        158 KB
+RK_WRECK                    8192     0.44 MB           51 KB         40 KB
+RK_ORDERS                   9353     0.89 MB           36 KB         22 KB
+RK_GLOBALS_DELTA            2040     0.12 MB           26 KB         22 KB
+RK_PLAYER_DELTA              715     0.04 MB           13 KB         12 KB
+RK_TABLE_SPAN               5651     0.11 MB           12 KB          7 KB
+RK_FEATURES                 2041     0.04 MB            5 KB          3 KB
+RK_TICK                     2041     0.02 MB            4 KB          2 KB
+RK_EV_SPRAY                 4515     0.22 MB            3 KB          2 KB

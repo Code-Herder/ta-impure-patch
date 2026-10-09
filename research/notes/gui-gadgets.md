@@ -71,6 +71,7 @@ GUI0IDControl*  ctrl = top->ControlsAry;                 /* top + 0x04 */
 | `+0x08` | `OnCommand` — `__stdcall void(GUIInfo*)`; reads the actuated index from `gi->UIChange_f`, **not** an argument, **and writes its answer back to the same field** (clear it to `-1` or the pump pops the screen — see §1.3) | [BINARY-VERIFIED] `0x4A967F`, `0x4AA790` |
 | `+0x10` | flags (bit `0x800` re-runs a stage on pop) | [BINARY-VERIFIED] `0x4A96B7` |
 | `+0x14` | `Active_b` — set to 1 on the GUI newly exposed by a pop | [BINARY-VERIFIED] `0x4A96A7` |
+| `+0x20` | focused gadget index | [BINARY-VERIFIED] `0x4A9BA6`, chat opener and textfield click write it |
 | `+0x24` | **background surface** — `GUI_StageUpdateDraw`'s `0x40` redraw repaints the WHOLE panel surface from it, `0x4C6B70(panel+0xBC, this, 0, 0)`, before it draws a single gadget; NULL falls back to the picture handler `0x4B0230(gi, 0, panel+0xC4)` | [BINARY-VERIFIED 2026-09-18] `0x4A90FE`, `0x4A9105` |
 | `+0x4F` | `GUIName[16]` | [CORPUS] |
 
@@ -81,7 +82,9 @@ GUI0IDControl*  ctrl = top->ControlsAry;                 /* top + 0x04 */
 | `+0x18` | `main+0x531` | `TheActive_GUIMEM` (topmost = the only interactive screen) | [BINARY-VERIFIED] |
 | `+0x3C` | `main+0x555` | cursor / rect block, 6 dwords; `[0]`,`[1]` are the pointer x,y | [BINARY-VERIFIED] `0x49FD20` |
 | `+0x60` | `main+0x579` | `UIChange_f` — index of the last actuated gadget, or `-1`. **Bidirectional**: the pump writes the index before calling `OnCommand` (`0x4AA675`) and reads it back after (`0x4AA79A`) to decide whether the screen handled the click or should be popped | [BINARY-VERIFIED] `0x4A9673`, `0x4AB0A4`, `0x4AA675`/`0x4AA79A` |
-| `+0x64`, `+0x68` | | reset to `-1` alongside `UIChange_f` on pop (focus/hot, [INFERRED]) | [BINARY-VERIFIED] reset only |
+| `+0x64` | `main+0x57D` | active textfield edit index, or `-1` | [BINARY-VERIFIED] `0x49FC50`, `0x4A74C8` |
+| `+0x68` | `main+0x581` | mouse gadget index [INFERRED]; type-3 hit arm writes its gadget index here, also reset on pop | [BINARY-VERIFIED] `0x4A73D4` and pop reset |
+| `+0x74` | `main+0x58D` | caret character offset | [BINARY-VERIFIED] `0x49FCD5`, `0x4AB720` |
 
 ### 1.3 The stack is real
 
@@ -391,6 +394,29 @@ misses, and notches dropped — by a full queue, or arriving on a thread that is
 |---|---|---|
 | `+0xB6` | `text[128]` | [LIVE] |
 | `+0x138` | `maxchars` (`i16`) | [BINARY-VERIFIED] serializer `0x4AE8D7` |
+
+**Editing and painting are separate.** `0x4A7290` handles the type-3 input;
+`0x4A4D70` paints it. GUIInfo `+0x64` is the active edit index, `+0x74` the
+caret; the GUI object's `+0x20` is focus. `0x49FC50` establishes the edit index
+and initializes the caret. A field click sets both indices, initializes its
+inline text through `0x4AB6C0`, then resets the engine's character ring. The
+editor `0x4AB720` consumes characters and updates the inline buffer.
+[DISASSEMBLED 2026-10-05; full addresses and guards in the engine map's
+*Textfield input beneath the chat GUI*.]
+
+**A requested snapshot can precede a requested edit.** The trigger family posts
+input from the flip and snapshots the GUI there; posted messages have not been
+dispatched yet. MEASURED 2026-10-05, normal build, native two-peer game on the
+reference setup: TALK's first snapshot after one character is empty while a
+later caret read is 1; the next snapshot contains the character. `tacli ui fill`
+waits for exact prefix acknowledgement in batches of at most four characters.
+The engine ring holds at most 29 queued entries; a long direct character batch
+can overflow it. A short read is not enough to distinguish validation from
+unprocessed input. Snapshots also publish `edit_index` and `caret` from the
+inline main block on its owning game thread. `focus` remains the panel's
+default-focus name; it is not the active editor. A fill keeps an already active
+editor and acknowledges a changed edit index before sending keys, because
+clicking the active field resets its character ring.
 
 ### 2.6 Slider — `id 4`
 
@@ -736,8 +762,9 @@ an actionability check needs both tests. `SINGLE.GUI`'s `AnyMsn` is the `active=
   `VISUALS.GUI`. Check a `.GUI` name against the exe's string table before spending a
   session trying to reach it. [BINARY-VERIFIED, strings]
 - **Textfields validate their own content.** `GAMENAME` (`maxchars=20`) keeps letters,
-  digits, space and `_`, and silently drops `- . , ! # @`. A `fill` that comes back short
-  is TA refusing characters, not input being lost.
+  digits, space and `_`, and silently drops `- . , ! # @`. `ui fill` waits for exact
+  prefix acknowledgement; a differing result requires checking focus and validation.
+  One early snapshot can also precede an edit (§2.5).
 - **A held modifier bleeds across a batch.** The shield holds `shift` for 150 ms because
   TA polls it, so a `shift+c` token in a `fill` batch capitalises every character behind
   it — `Claude` arrived as `CLAUDE`. Typing through the `char:` (WM_CHAR) token instead

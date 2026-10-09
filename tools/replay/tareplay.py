@@ -64,16 +64,50 @@ for the whole run, and holds an exclusive lock on INSTANCES/tareplay-<k>.lock fo
 another run holds is skipped, so two runs never touch each other's games. Nothing is ever stopped
 by name or pattern, only by tacli on an instance this run holds, or by the PID it started.
 SIGTERM or Ctrl-C stops the run: no new game starts, each game in progress is stopped at its next
-wait, and every worker stops its instance and its Xvfb. Exit 0: every check passed; 1: a named
+wait, and every worker stops its instance and its Xvfb. The workers play the games, -j of them at
+most; the checks run beside them on an offline pool, a fixture's as soon as its last lane ends
+and the forks and rewind lanes' while those lanes play on (*the offline work*), and the summary
+lists every check in the order it was asked for. Exit 0: every check passed; 1: a named
 failure; 2: something could not run (and nothing failed by name).
 
 The output folder (default ~/.local/share/ta-replay/runs/<time>, or $TAREPLAY_OUT) is outside the
-repository: its logs carry absolute paths.
+repository: its logs carry absolute paths. While the run lasts its tarec-cache/ folder holds the
+recordings' decoded blocks for every tarec call of the run (TAREC_CACHE, reccache.py).
+
+Tick-driven runs default to internal game speed 20 (2x normal); --game-speed 10 selects normal
+speed. The owned instance's private settings are written while stopped, before each launch.
+Simulation tick endpoints, comparisons and wall-clock deadlines retain their existing units.
+Cost fixtures, a fixture marked `normal_speed` (resource-geo-upgrade, whose queue comparison
+reads the running game after a Move that finishes first at speed 20; its script runs with the
+turbo off, below) and W's speed/settings UI test use normal speed;
+network/timing suites have their own speed policy.
+
+--turbo K (default 1, 0 for none) is the DLL's test-only pacing (tagpu_replay.c, THE TURBO): K
+ticks every frame from the trigger's `turbo on`, which a lane sends once its dumps and round
+trips are armed and acknowledged; before that the level runs at the game speed above. K = 1 is
+the batch a player at normal speed gets: the step's once-a-batch tail makes the batching part of
+the result, and a fixed K makes it the same on every run. It runs on L, P, R, F, K, X and U; not
+on Q, which plays one tick, nor W, whose ticks pass only between its interface steps; never on a
+cost fixture, which measures the game's own pacing (turbo_lane).
+
+Whatever the pacing, a live lane acts at GameTimes, not at what a poll of the clock finds
+(run_to): the DLL pauses the level at the frame visit after step T (`pause at T`), the lane acts
+on the held level and resumes it. So an L step lands on its own tick -- keys, a chat line, an
+order or a scenario given while held -- as do the twin (Tlast + 30) and the end scenario (at the
+fixture's end); K's takeover judge reads the units JUDGE_TICKS after T, its order and chat line
+are given there, and it ends at its dump's GameTime; U's spans are ticks. A `run` step, a script
+that drives the running game and waits on it, starts at its tick and runs with the turbo off.
+
+Every game gets the test render profile (TEST_RENDER): a present cap,
+supersampling 1x and the Classic++ look keys off; the engine's own draw and its shadow switch
+stay as a player has them.
 """
 import argparse
+import atexit
 import fcntl
 import datetime
 import hashlib
+import itertools
 import json
 import os
 import queue
@@ -88,6 +122,7 @@ import sys
 import threading
 import time
 import zlib
+from concurrent.futures import ThreadPoolExecutor, wait
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
@@ -103,6 +138,7 @@ sys.path.insert(0, str(TREE / "tools"))
 import talog  # noqa: E402
 sys.path.insert(0, str(HERE))
 import tarec  # noqa: E402
+import reccache  # noqa: E402
 import tafeat  # noqa: E402
 
 # Load once before workers start; reuse tacli's own prefix-based process identity check.
@@ -113,6 +149,14 @@ _CLI_SPEC.loader.exec_module(_CLI_API)
 
 PREFIX = "tareplay-"
 UNIT_LIMIT = 500
+TEST_GAME_SPEED = 20
+NORMAL_GAME_SPEED = 10
+TURBO = 1                       # the k --turbo defaults to: normal speed's batch, every frame
+# THE TEST RENDER PROFILE: no check reads a pixel, so a test game presents at PRESENT_CAP frames a
+# second (fps_limiter.c, test_present_cap) and draws without supersampling or the Classic++ look
+# keys (tagpu_settings.h); `shadows`, the engine's own switch, is left as a player has it
+TEST_RENDER = {"style": "custom", "assets": "0", "light": "0", "shadowres": "512", "ss": "1"}
+PRESENT_CAP = 20
 GAMETIME = "*0x511DE8+0x38A47:4"
 COB_STOP = "A unit script cannot continue safely"
 TRIGGER = "tagpu_replay.trigger"
@@ -121,7 +165,7 @@ TAKEOVER_SPAN = 1800            # K's dump and the takeover's checks, this many 
 TAKEOVER_BACK = 300             # F's seek, this many ticks before T, and its dump after it
 TAKEOVER_CHECKS = {
     "judge": "the window alive with no box and no ErrorLog.txt, and at least 90 % of the units "
-             "the takeover made seen",
+             "the takeover made seen JUDGE_TICKS after T",
     "line": "the takeover's line, no create refused, and in less than the entry's `ms`",
     "orders": "the entry's `order` unit of P's moves more than 64 wu when ordered",
     "ai": "every AI seat issues fresh planner orders that reach normal dispatch during an "
@@ -132,6 +176,10 @@ TAKEOVER_CHECKS = {
     "victory": "timeline 1 ends complete with P's seat won, within TAKEOVER_SPAN of T",
 }
 CONTINUE = 300                  # the dump after a round trip, this many ticks on
+TWIN_AFTER = 30                 # an L lane's twin, held this many ticks after Tlast
+LATE = (30, 300, 3000)          # a GameTime the level had passed is held this many ticks on
+JUDGE_TICKS = 240               # the takeover judge's sample, this many ticks after T: its old 4 s
+                                # at speed 20
 NULL_VIEWS = tuple(f"lnv{i}" for i in range(12)) + ("lnselection",)
 LAUNCH_TIMEOUT = 400
 
@@ -247,10 +295,30 @@ def last(text):
     return lines[-1] if lines else ""
 
 
+
+def fixture_speed(fix, default):
+    """A fixture's game speed: normal for a cost fixture and one marked `normal_speed`."""
+    return NORMAL_GAME_SPEED if fix.get("cost") or fix.get("normal_speed") else default
+
+
+def turbo_lane(fix, proc, k):
+    """A lane's turbo k, 0 for none: every lane that waits on ticks, each of its GameTimes held
+    (run_to) or armed in the DLL; not Q, which plays one tick, nor W, whose ticks pass only between
+    its interface steps; never a cost fixture. A `normal_speed` fixture's script still runs at
+    normal speed: run_to turns the turbo off for a `run` step."""
+    if not k or fix.get("cost"):
+        return 0
+    return k if proc in "LPRFKXU" else 0
+
+
 class Worker:
     """One tacli instance on one Xvfb, for the whole run."""
 
-    def __init__(self, out):
+    def __init__(self, out, game_speed=TEST_GAME_SPEED):
+        if game_speed not in (NORMAL_GAME_SPEED, TEST_GAME_SPEED):
+            raise CouldNotRun("test game speed must be 10 or 20")
+        self.game_speed = game_speed
+        self.turbo = 0
         self.lock = None
         self.last_collection = None
         for k in range(1, 100):
@@ -355,6 +423,21 @@ class Worker:
         """The DLL and this fixture's content in the game folder, before a launch: every fixture's
         content files removed first, so one fixture's units never reach another's game."""
         self.last_collection = None
+        speed = fixture_speed(fix, self.game_speed)
+        rc, text = tacli("registry", self.name, f"gamespeed={speed}", "--json")
+        if rc:
+            raise CouldNotRun(f"test game speed: {last(text)}")
+        rows = json.loads(text[text.index("{"):])["values"]
+        if len(rows) != 1 or rows[0]["value"] != speed or rows[0]["type"] != 4:
+            raise CouldNotRun(f"test game speed was not stored as a dword: {last(text)}")
+        say(f"{self.name}: game speed {speed} ({speed / NORMAL_GAME_SPEED:g}x target)"
+            + (f", turbo k={self.turbo}" if self.turbo else ""))
+        turbo = self.gamedir / "tagpu_turbo.on"
+        if self.turbo:
+            turbo.write_text(f"{self.turbo}\n")
+        else:
+            turbo.unlink(missing_ok=True)
+        self.test_render()
         shutil.copy2(dll, self.gamedir / "ddraw.dll")
         rd = self.gamedir / "replays"
         for f in rd.glob("*") if rd.is_dir() else []:
@@ -373,6 +456,15 @@ class Worker:
             r = subprocess.run(argv, capture_output=True, text=True, timeout=300)
             if r.returncode:
                 raise CouldNotRun(f"content {' '.join(content['run'])}: {last(r.stdout + r.stderr)}")
+
+    def test_render(self):
+        """The test render profile (TEST_RENDER) in the instance's store, every other line kept,
+        and the present cap's lever."""
+        store = self.gamedir / "impure.cfg"
+        lines = store.read_text().splitlines() if store.exists() else []
+        keep = [ln for ln in lines if ln.partition("=")[0].strip().lower() not in TEST_RENDER]
+        store.write_text("\n".join(keep + [f"{k}={v}" for k, v in TEST_RENDER.items()]) + "\n")
+        (self.gamedir / "tagpu_presentcap.on").write_text(f"{PRESENT_CAP}\n")
 
     def gametime(self):
         rc, o = tacli("peek", self.name, GAMETIME, "--json", timeout=60)
@@ -399,13 +491,56 @@ class Worker:
         (into / "tagpu.log").write_text(talog.run_text(self.gamedir))
 
 
+def crash_report(path: Path) -> str:
+    """TA's ErrorLog.txt in one line: where the exception was and what it read or wrote."""
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return "ErrorLog.txt (unreadable)"
+    keep = [ln.strip() for ln in text.splitlines()
+            if re.match(r"\s*(module |Access violation|ExceptionCode|Instruction pointer)", ln)]
+    return "; ".join(keep[:4]) or text.strip().splitlines()[0][:200]
+
+
 class Log:
-    """The instance's log from a launch on, across rotation; a COB stop ends the process."""
+    """The instance's log from a launch on, across rotation; a COB stop ends the process, and a
+    crash ends every wait at once (`alive`)."""
+
+    ALIVE_EVERY = 2.0      # s between the process checks of a wait: each asks tacli
 
     def __init__(self, w: Worker):
+        self.w = w
         self.cursor = talog.Cursor(w.gamedir)
         self.part = ""
         self.lines = []
+        self.errorlog = w.gamedir / "ErrorLog.txt"
+        self.errorlog_was = self.errorlog.stat().st_mtime if self.errorlog.exists() else None
+        self.seen_running = False
+        self.checked = 0.0
+        self.turbo = False      # `turbo on` holds on this level (turbo_engage, turbo_off)
+        self.held = False       # a pause of hold_at's holds the level now
+        self.pending = None     # the GameTime hold_at armed and the level has not reached yet
+        self.hold_from = 0      # where in `lines` to look for its pause
+        self.at = None          # the GameTime the level was last held at
+
+    def alive(self):
+        """Raise Failed when the game has crashed since this log began: TA wrote ErrorLog.txt
+        (its exception handler, which can leave the process up behind a box), or the process
+        that was running is gone. A wait would otherwise sit out its whole timeout -- up to
+        half an hour -- on a game that cannot answer."""
+        if self.errorlog.exists() and self.errorlog.stat().st_mtime != self.errorlog_was:
+            self.read()
+            raise Failed(f"the game crashed: {crash_report(self.errorlog)}")
+        now = time.time()
+        if now - self.checked < self.ALIVE_EVERY:
+            return
+        self.checked = now
+        if self.w.running():
+            self.seen_running = True
+        elif self.seen_running:
+            self.read()
+            raise Failed("the game's process exited during a wait"
+                         + (f": {self.lines[-1].strip()}" if self.lines else ""))
 
     def read(self):
         got = (self.part + self.cursor.text(advance=True)).split("\n")
@@ -429,6 +564,8 @@ class Log:
                 return None
             nap(0.4)
             self.read()
+            if not any(rx.search(ln) for ln in self.lines[start:]):
+                self.alive()
 
 
 # ---- the fixtures and the GameTimes ---------------------------------------------------------
@@ -467,11 +604,17 @@ def head():
     return r.stdout.strip() or "no-head"
 
 
-def gametimes(name, end, h, trips=3, last_min=None):
-    """T1 and `trips` round trips: T = 1 (mod 30) between 301 and 0.8 x end, with room for the
-    dump after a round trip, sorted, from a generator seeded by the fixture and HEAD."""
+def gametimes(name, end, h, trips=3, first=301, last_min=None):
+    """T1 and `trips` round trips: T = 1 (mod 30) between `first` and 0.8 x end, with room for
+    the dump after a round trip, sorted, from a generator seeded by the fixture and HEAD. A
+    fixture's `first` puts every point after its human's interface work (the images gate reads
+    the recording machine's interface state as unlisted state, the null twin classifying only
+    what a viewer does without changing the game); it moves where the checks run, not what they
+    check. Its `last_min` makes the last point reach a named completion checkpoint."""
+    if first % 30 != 1:
+        raise CouldNotRun(f"{name}: first {first} is not 1 (mod 30)")
     hi = min(int(0.8 * end), end - CONTINUE - 30)
-    pool = list(range(301, hi + 1, 30))
+    pool = list(range(first, hi + 1, 30))
     if len(pool) < trips + 1:
         raise CouldNotRun(f"{name}: end {end} leaves fewer than {trips + 1} GameTimes")
     rng = random.Random(int(hashlib.sha1((name + h).encode()).hexdigest()[:8], 16))
@@ -495,6 +638,125 @@ def arm(w, log, line, ok_rx, bad_rx, what):
     got = log.wait(f"{ok_rx}|{bad}", 30, n)
     if not got or re.search(bad, got):
         raise CouldNotRun(f"{what}: {got.strip() if got else 'no answer in 30 s'}")
+
+
+def turbo_engage(w, log):
+    """With a turbo lane's k, `turbo on` -- after the launch acknowledged that k (tagpu_replay.c,
+    THE TURBO) and after the lane's own arms, so no armed GameTime passes before its answer."""
+    if not w.turbo:
+        return
+    got = log.wait(r"turbo: (k=\d+ (at 0x49692D|UNAVAILABLE)|tagpu_turbo\.on refused.*)", 30, 0)
+    if not got or f"turbo: k={w.turbo} at 0x49692D" not in got:
+        raise CouldNotRun(f"turbo k={w.turbo}: "
+                          + (got.strip() if got else "the launch did not acknowledge its k"))
+    arm(w, log, "turbo on", rf"turbo: on at GameTime \d+ \(k={w.turbo}\)", r"turbo: on refused",
+        "turbo on")
+    log.turbo = True
+
+
+def turbo_off(w, log):
+    """The game's own pacing again, while a step races the wall clock."""
+    if log.turbo:
+        arm(w, log, "turbo off", r"turbo: off at GameTime \d+", r"turbo: off refused",
+            "turbo off")
+        log.turbo = False
+
+
+def hold_at(w, log, T):
+    """The level paused at the frame visit after step T (tagpu_replay.c, THE PAUSE AT T); a T the
+    level has passed becomes one LATE ticks past where it is, said. Returns the T armed."""
+    want = T
+    for late in LATE:
+        n = len(log.lines)
+        w.trigger(f"pause at {T}")
+        got = log.wait(rf"pause: (armed for GameTime {T}|at {T} refused: .*)", 30, n)
+        if got and "armed for" in got:
+            if T != want:
+                say(f"{w.name}: GameTime {want} had passed; held at {T}")
+            log.pending, log.hold_from = T, n
+            return T
+        m = got and re.search(r"the level is at GameTime (\d+)", got)
+        if not m:
+            raise CouldNotRun(f"pause at {T}: {got.strip() if got else 'no answer in 30 s'}")
+        T = int(m.group(1)) + late
+    raise CouldNotRun(f"pause at {want}: the level ran past every GameTime asked for")
+
+
+def wait_paused(w, log, T, poll=None):
+    """Until the pause at T is taken: a crash, a frozen level or one that ends first stops it, as
+    does `poll` (called every half second, for a lane that watches the window meanwhile)."""
+    deadline = time.time() + 120 + 4 * max(0, T - w.gametime()) / 30
+    rx = re.compile(rf"pause: (paused at GameTime {T}$|at {T} not taken.*)")
+    start = log.hold_from
+    while True:
+        for ln in log.lines[start:]:
+            m = rx.search(ln.rstrip())
+            if m and "paused at" in m.group(0):
+                log.pending, log.held, log.at = None, True, T
+                return
+            if m:
+                raise CouldNotRun(f"pause at {T}: {m.group(0)}")
+        start = len(log.lines)
+        if poll:
+            poll()
+        if time.time() > deadline:
+            raise CouldNotRun(f"the level did not reach GameTime {T} (at {w.gametime()})")
+        nap(0.5)
+        log.read()
+        log.alive()
+
+
+def resume(w, log):
+    arm(w, log, "resume", r"pause: resumed at GameTime \d+", r"pause: resume refused", "resume")
+
+
+def settle(w, kind):
+    """A step's input delivered while the level is held: the token file taken (tagpu_input.c),
+    then half a second of paused frames for the engine's own pump and the modifiers' hold."""
+    if kind == "keys":
+        keys = w.gamedir / "tagpu_keys.txt"
+        deadline = time.time() + 10
+        while keys.exists():
+            if time.time() > deadline:
+                raise CouldNotRun("the game did not take its key tokens in 10 s")
+            nap(0.1)
+    if kind in ("keys", "type", "order"):
+        nap(0.5)
+
+
+def run_to(w, log, G, steps, poll=None):
+    """The level driven to GameTime G and held there, each step of `steps` ((T, kind, arg),
+    sorted, popped as run) with T <= G run while the level is held at its T, so it lands on that
+    tick whatever the pacing. A `run` step is a script that drives the running game and waits on
+    it: it runs with the level going at its game speed, the turbo off. The turbo goes on (a turbo
+    lane) once the first pause is armed. Returns the GameTime held."""
+    while True:
+        if log.held and log.at >= G and not (steps and steps[0][0] <= log.at):
+            return log.at
+        T = min(steps[0][0], G) if steps else G
+        # a hold armed before (live's first, or the one after the twin) is this one: it was armed
+        # for T, or past it where T had passed
+        at = log.pending if log.pending is not None else hold_at(w, log, T)
+        if w.turbo and not log.turbo:
+            turbo_engage(w, log)
+        if log.held:
+            resume(w, log)
+            log.held = False
+        wait_paused(w, log, at, poll)
+        ran_script = False
+        while steps and steps[0][0] <= at and not ran_script:
+            _, kind, arg = steps.pop(0)
+            if kind == "run":
+                turbo_off(w, log)
+                resume(w, log)
+                log.held = False
+                step(w, kind, arg)
+                ran_script = True
+            else:
+                step(w, kind, arg)
+                settle(w, kind)
+        if not ran_script and at >= G and not (steps and steps[0][0] <= G):
+            return at
 
 
 def arm_dump(w, log, name, T):
@@ -574,14 +836,16 @@ def step(w, kind, arg):
         raise CouldNotRun(f"a step of kind {kind!r}")
 
 
-def twin(w, log, fix):
-    """The null twin (tarec images-gate): the live game paused, frame dump ln1; then what the
+def twin(w, log, fix, held=False):
+    """The null twin (tarec images-gate): the live game paused (`held`: by the lane's pause at
+    a GameTime, already), frame dump ln1; then what the
     viewer does without changing the game -- the arrow keys a second each way, one wheel notch in
     and out at the map's centre, the cursor over the map and over the panel, the in-game menu
     (Tab) opened -- and frame dump ln2. GameTime must not move between them; the menu's OK then
     closes it and the game runs on."""
-    tacli("keys", w.name, "pause")
-    nap(1.5)
+    if not held:
+        tacli("keys", w.name, "pause")
+        nap(1.5)
     g1 = w.gametime()
     nap(1.0)
     if w.gametime() != g1:
@@ -708,35 +972,30 @@ def live(w, fx, Ts, out):
     got = log.wait(r"recorder: (recording|not recording|FAILED)", 120)
     if not got or "recorder: recording" not in got:
         raise CouldNotRun(f"the recorder: {got.strip() if got else 'no line in 120 s'}")
+    steps = sorted(fix.get("steps", []), key=lambda st: st[0])
+    # the first hold before the dumps (whose GameTimes are 301 and on): an early step's tick
+    # passes while they are armed
+    hold_at(w, log, min([st[0] for st in steps[:1]] +
+                        [Ts[-1] + TWIN_AFTER if Ts else fix["end"]]))
     names = [f"l{Ts[0]}", f"l{Ts[-1]}"] if Ts else []
     for name, T in zip(names, (Ts[0], Ts[-1]) if Ts else ()):
         arm_dump(w, log, name, T)
-    steps = sorted(fix.get("steps", []), key=lambda s: s[0])
-    twinned = False
-    # a frozen game or a level that ends early stops here: four times the end's real time
-    deadline = time.time() + 120 + 4 * fix["end"] / 30
-    while True:
-        if time.time() > deadline:
-            raise CouldNotRun(f"the live game did not reach GameTime {fix['end']} in "
-                              f"{120 + 4 * fix['end'] / 30:.0f} s (at {w.gametime()})")
-        g = w.gametime()
-        while steps and steps[0][0] <= g:
-            _, kind, arg = steps.pop(0)
-            step(w, kind, arg)
-        if Ts and not twinned and g > Ts[-1] + 5:
-            wait_dumps(log, names[1:], 30)
-            twin(w, log, fix)
-            twinned = True
-        if g >= fix["end"] and not steps:
-            break
-        log.read()
-        nap(0.5)
+    if Ts:
+        run_to(w, log, Ts[-1] + TWIN_AFTER, steps)
+        wait_dumps(log, names[1:], 30)
+        # the twin resumes the level itself (the in-game menu's OK): the next hold goes first
+        hold_at(w, log, min(steps[0][0], fix["end"]) if steps else fix["end"])
+        twin(w, log, fix, held=True)
+        log.held = False
+    run_to(w, log, fix["end"], steps)
     if fx["cover"]:
         cover_ask(w, log, "L")
     n = len(log.lines)
     rc, o = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
     if rc:
         raise CouldNotRun(f"apply {END_SCENARIO.name}: {last(o)}")
+    resume(w, log)
+    log.held = False
     for rx in (r"recorder: ended after", r"recorder: writer: .* closed"):
         if not log.wait(rx, 180, n):
             raise CouldNotRun(f"the recording did not close ({rx})")
@@ -765,6 +1024,7 @@ def play(w, fx, rec, out, proc, arms, dumps, roundtrips=()):
     for name, T in roundtrips:
         arm(w, log, f"roundtrip {name} at {T}", rf"round trip {name} armed for GameTime {T}",
             rf"round trip {name}( at {T})? refused", f"roundtrip {name} at {T}")
+    turbo_engage(w, log)
     lines = {}
     for name, T in roundtrips:
         got = log.wait(rf"round trip {name} at {T}(: | not run)", 900)
@@ -843,74 +1103,82 @@ def takeover_k(w, fx, out):
         why = got.get("line") or got.get("not_recorded") or got.get("timeout") or last(o)
         raise CouldNotRun(f"replay takeover: {why}")
     res.update(got)
-    t_line = time.time()
-    if "ai" in tk.get("checks", []):
-        import tarewind
-        rc, o = tacli("keys", w.name, "pause")
-        if rc:
-            raise CouldNotRun(f"K pause: {last(o)}")
-        deadline = time.monotonic() + 30
-        # The engine's pause bit is the acknowledgement: the future window cannot
-        # begin until we resume after the observer's armed acknowledgement.
-        while not peek(w, "*0x511DE8+0x38A51:2") & 1:
-            if time.monotonic() > deadline:
-                raise CouldNotRun("K: the engine did not acknowledge pause")
-            nap(.1)
-        start = w.gametime() + 1
-        stop = start + TAKEOVER_SPAN
-        tarewind.arm_ai(sys.modules[__name__], w, log, "takeover", start, stop)
-        res["ai_window"] = [start, stop]
-        rc, o = tacli("keys", w.name, "pause")
-        if rc:
-            raise CouldNotRun(f"K resume: {last(o)}")
-    if fx["cover"]:
-        cover_ask(w, log, "K")
-    # what Impure draws 4 s after the line, against what the takeover made (judge)
-    nap(max(0.0, t_line + 4 - time.time()))
-    res["alive_seen"] = tc.alive_seen(w.gamedir)
-    if tk.get("switches"):
-        rc, o = tacli("switches", w.name, *[f"{k}={'on' if v else 'off'}"
-                                            for k, v in tk["switches"].items()], timeout=60)
-        if rc:
-            raise CouldNotRun(f"switches: {last(o)}")
-    if tk.get("type"):
-        step(w, "type", tk["type"])
-    if tk.get("order"):
-        res["ordered"] = tk_order(w, P, tk["order"], takeover_roster(log, T, P))
     display = int(w.xvfb.display.lstrip(":"))
     seen = set()
     t0 = time.time()
-    deadline = t0 + 120 + 4 * max(span, res.get("ai_window", [T, T])[1] - T) / 30
-    while True:
+
+    def watch():
+        """the window, its boxes and ErrorLog.txt, at every wait from the takeover's line on"""
         tc.new_boxes(display, seen, res["boxes"], t0)
         if (w.gamedir / "ErrorLog.txt").exists():
             res["errorlog"] = True
         if not any(tc.main_window(*x) for x in tc.x_windows(display)):
             res["gone"] = True
-            break
-        log.read()
-        ended = any(re.search(r"recorder: writer: .* closed", ln) for ln in log.lines)
-        dumped = any(re.search(
-            rf"recorder: dump {dump} (at GameTime|for GameTime \d+ not taken|refused)", ln)
-            for ln in log.lines)
-        observed = "ai_window" not in res or any(
-            "recorder: AI activity takeover done " in ln for ln in log.lines)
-        if ended or (dumped and observed):
-            break
-        if time.time() > deadline:
-            raise CouldNotRun(f"K: no dump {dump} and no end in {deadline - t0:.0f} s")
-        nap(2.0)
-    if not res["gone"]:
+            raise Failed("K: the game's window went away")
+
+    try:
+        # Held first, wherever the line left the level: each GameTime below is then the tick it
+        # names, whatever the pacing.
+        held = run_to(w, log, w.gametime() + LATE[0], [], watch)
+        if "ai" in tk.get("checks", []):
+            import tarewind
+            start = held + 1
+            stop = start + TAKEOVER_SPAN
+            tarewind.arm_ai(sys.modules[__name__], w, log, "takeover", start, stop)
+            res["ai_window"] = [start, stop]
+        if fx["cover"]:
+            cover_ask(w, log, "K")
+        # what Impure draws JUDGE_TICKS after T, against what the takeover made (judge): the
+        # first roster header the held level publishes
+        held = run_to(w, log, max(T + JUDGE_TICKS, held), [], watch)
+        n = len(log.lines)
+        alive = log.wait(r"^units: alive=(\d+)", 30, n)
+        res["alive_seen"] = int(re.search(r"alive=(\d+)", alive).group(1)) if alive else None
+        res["judged_at"] = held
+        if tk.get("switches"):
+            rc, o = tacli("switches", w.name, *[f"{k}={'on' if v else 'off'}"
+                                                for k, v in tk["switches"].items()], timeout=60)
+            if rc:
+                raise CouldNotRun(f"switches: {last(o)}")
+        if tk.get("type"):
+            step(w, "type", tk["type"])
+            settle(w, "type")
+        if tk.get("order"):
+            res["ordered"] = tk_order(w, P, tk["order"], takeover_roster(log, T, P))
+            settle(w, "order")
         # a takeover that checks the victory ends by its own chat line (the entry's `type`); any
-        # other, by the end scenario, as L ends
-        victory = "victory" in tk.get("checks", [])
-        n = 0 if victory else len(log.lines)
-        if not victory:
+        # other, by the end scenario at its dump's GameTime and the AI window's end, as L ends
+        if "victory" in tk.get("checks", []):
+            # the chat line can end the level on the held frames themselves (MEASURED
+            # 2026-10-08: `+iwin` did), so the resume is asked for and not waited on, and taken
+            # back if no level was left to read it
+            n = 0
+            log.read()
+            if not any(re.search(r"recorder: ended after", ln) for ln in log.lines):
+                w.trigger("resume")
+            log.held = False
+            deadline = time.time() + 120 + 4 * TAKEOVER_SPAN / 30
+            while not any(re.search(r"recorder: writer: .* closed", ln) for ln in log.lines):
+                watch()
+                if time.time() > deadline:
+                    raise CouldNotRun(f"K: no end in {deadline - t0:.0f} s")
+                log.read()
+                log.alive()
+                nap(1.0)
+            (w.gamedir / TRIGGER).unlink(missing_ok=True)
+        else:
+            run_to(w, log, max(T + span, res.get("ai_window", [0, 0])[1], held), [], watch)
+            n = len(log.lines)
             rc, o = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
             if rc:
                 raise CouldNotRun(f"apply {END_SCENARIO.name}: {last(o)}")
+            resume(w, log)
+            log.held = False
         if not log.wait(r"recorder: writer: .* closed", 120, n):
             raise CouldNotRun("K: the fork's file did not close")
+    except Failed:
+        if not res["gone"]:
+            raise
     w.collect(out, recordings=True)
     w.stop()
     recs = sorted(out.glob("*.imprec"))
@@ -979,6 +1247,7 @@ def takeover_f(w, fx, out):
         w.stop()
         raise CouldNotRun(f"replay seek {T - TAKEOVER_BACK} --timeline {tl}: {last(o)}")
     arm_dump(w, log, f"f{at}", at)
+    turbo_engage(w, log)
     wait_dumps(log, [f"f{at}"], 600)
     if fx["cover"]:
         cover_ask(w, log, "F")
@@ -991,8 +1260,8 @@ def takeover_f(w, fx, out):
 
 def header_copy(rec, dst, tag, edit):
     """A copy of the recording `rec` at `dst` whose header entry `tag` holds edit(its bytes), of
-    the same length, the header block deflated again (or stored again) with both its CRCs: a
-    file the reader opens, which the replay's own checks then judge."""
+    the same length, the header block stored again with both its CRCs: a file the reader opens,
+    which the replay's own checks then judge. A header block is always stored (format 8)."""
     data = Path(rec).read_bytes()
     if data[:8] != tarec.REC_MAGIC:
         raise CouldNotRun(f"{rec}: not a recording")
@@ -1001,8 +1270,9 @@ def header_copy(rec, dst, tag, edit):
         struct.unpack("<IHHIIIIII", head)
     if magic != tarec.REC_BLOCK_MAGIC or kind != tarec.RB_HEADER:
         raise CouldNotRun(f"{rec}: no header block")
-    body = data[40:40 + packed]
-    payload = bytearray(body if flags & tarec.RBF_STORED else zlib.decompress(body))
+    if flags != tarec.RBF_STORED:
+        raise CouldNotRun(f"{rec}: a header block with flags {flags:#x}, not stored")
+    payload = bytearray(data[40:40 + packed])
     at, found = 0, False
     while at + 4 <= len(payload):
         t, n = struct.unpack_from("<HH", payload, at)
@@ -1015,8 +1285,8 @@ def header_copy(rec, dst, tag, edit):
         at += (4 + n + 3) & ~3
     if not found:
         raise CouldNotRun(f"{rec}: no header entry {tag}")
-    body = bytes(payload) if flags & tarec.RBF_STORED else zlib.compress(bytes(payload))
-    head = struct.pack("<IHHIIIII", magic, kind, flags, first, upto, len(payload), len(body),
+    body = bytes(payload)
+    head = struct.pack("<IHHIIIII", magic, kind, flags, first, upto, len(body), len(body),
                        zlib.crc32(body))
     head += struct.pack("<I", zlib.crc32(head))
     Path(dst).write_bytes(data[:8] + head + body + data[40 + packed:])
@@ -1129,8 +1399,38 @@ def watch_cards(w, log, rec):
             raise Failed(f"the player cards: {got.strip() if got else 'no Sight reply'}")
         if w.gametime() != tick or tuple(peek(w, s) for s in eye_specs) != eye:
             raise Failed("the player cards: Sight changed the paused clock or camera")
+
+    def device(what, x, y, want):
+        n = len(log.lines)
+        rc, output = tacli("click", w.name, x, y, "--device", timeout=60)
+        if rc:
+            raise CouldNotRun(f"the player cards' {what}: {last(output)}")
+        got = log.wait(want, 30, n)
+        if not got:
+            raise Failed(f"the player cards' {what}: no line matching {want!r} in 30 s")
+        return got.strip()
+
+    # Follow, Jump and Free cam on the card of the seat the recording's human commanded (the
+    # perspective streams carry that seat's camera), then the Overlays menu's Cursors row off and
+    # on again and the menu closed by its own button; all paused, so the clock must not move
+    h = tarec.header_only(rec)
+    own = (h.get("options") or {}).get("controlled")
+    row = next((k for k, p in enumerate(seats) if p["index"] == own), None)
+    if row is None:
+        raise CouldNotRun(f"the player cards: the controlled seat {own} has no card")
+    y = 40 + row_height * (row + 1) - 14
+    lines = [device("Follow", width - 40, y, rf"replay: [^:]+: follow seat {own}, epoch \d+"),
+             device("Jump", width - 168, y, rf"replay: [^:]+: jump to seat {own}, epoch \d+"),
+             device("Free cam", width - 56, height - 148, r"replay: [^:]+: .*free cam")]
+    ui(w, "click", "DKOVER")
+    lines += [device("Cursors off", width - 54, height - 206, r"replay: overlay cursors off"),
+              device("Cursors on", width - 54, height - 206, r"replay: overlay cursors on")]
+    ui(w, "click", "DKOVER")
+    if w.gametime() != tick:
+        raise Failed(f"the player cards: Follow, Jump or the Overlays menu moved the paused "
+                     f"clock from {tick} to {w.gametime()}")
     return ("W: player cards", PASS, f"Sight {seats[0]['index']} and Full map {viewer}; "
-            f"GameTime {tick} and camera {eye} unchanged")
+            f"GameTime {tick} and camera {eye} unchanged; " + "; ".join(lines))
 
 
 def watch_lane(w, fx, rec, out, T):
@@ -1278,7 +1578,26 @@ def watch_lane(w, fx, rec, out, T):
 
 def forks_lane(w, fx, out):
     """L's recording, four root forks, an LRU touch, a fork of a fork, parent deletion,
-    chain playback/export, and deletion of the highest ID followed by another fork."""
+    chain playback/export, and deletion of the highest ID followed by another fork. The tarec
+    checks of each step run on the offline pool while the lane plays its next steps (Ordered):
+    the lane's results and its first failure are the ones it would have met in order."""
+    results = Ordered()
+    with results:
+        forks_steps(w, fx, out, results)
+        got = results.results()
+    shutil.rmtree(out / "checked", ignore_errors=True)    # kept where a check did not pass
+    return got
+
+
+def check_or_fail(why, *args):
+    """A tarec check that stops the forks lane: Failed(`why`: its last line) unless it exits 0."""
+    rc, text = tarec_run(*args)
+    if rc:
+        raise Failed(f"{why}: {last(text)}")
+    return []
+
+
+def forks_steps(w, fx, out, results):
     import hashlib
     out.mkdir(parents=True, exist_ok=True)
     source = out / "forks.imprec"
@@ -1286,11 +1605,19 @@ def forks_lane(w, fx, out):
     original, _ = tarec.file_segments(source)
     lo, hi = original[0]["range"]
     original_hash = hashlib.sha256(source.read_bytes()[lo:hi]).hexdigest()
-    results = []
     P = tarec.header_only(source)["options"]["controlled"]
     base = max(601, fx["Ts"][0] + 120)
     if base + 900 >= fx["fix"]["end"]:
         base = 301
+
+    def copies(label, *paths):
+        """What a check handed over reads: copies taken now, in out/checked/<label>/, of files
+        the lane goes on to change (`source`) or to delete (the game's replays folder)."""
+        d = out / "checked" / re.sub(r"\W+", "-", label)
+        d.mkdir(parents=True, exist_ok=True)
+        for p in paths:
+            shutil.copy2(p, d / Path(p).name)
+        return [d / Path(p).name for p in paths]
 
     def check_file(path, label):
         segs, stop = tarec.file_segments(path)
@@ -1299,16 +1626,16 @@ def forks_lane(w, fx, out):
         live = [s for s in segs if s["state"] == 1]
         if len([s for s in live if s["id"]]) > 3:
             raise Failed(f"{label}: more than three live forks")
+        copy, = copies(label, path)
         for s in live:
-            rc, detail = tarec_run("check", path, "--timeline", s["id"])
-            if rc:
-                raise Failed(f"{label}: timeline {s['id']}: {last(detail)}")
+            results.later(check_or_fail, f"{label}: timeline {s['id']}", "check", copy,
+                          "--timeline", s["id"])
         if path == source:
             lo, hi = segs[0]["range"]
             if hashlib.sha256(path.read_bytes()[lo:hi]).hexdigest() != original_hash:
                 raise Failed(f"{label}: original blocks changed")
-        results.append((f"forks: {label}", PASS,
-                        f"live {[s['id'] for s in live]}, physical {[s['id'] for s in segs]}"))
+        results.add((f"forks: {label}", PASS,
+                     f"live {[s['id'] for s in live]}, physical {[s['id'] for s in segs]}"))
         return segs
 
     def finish_play(log, tl):
@@ -1335,11 +1662,15 @@ def forks_lane(w, fx, out):
         got = json.loads(text[text.index("{"):])
         if got.get("timeline") != tid:
             raise Failed(f"forks: K{tid} allocated {got.get('timeline')}")
+        # held at the dump's GameTime, so the fork ends there whatever the pacing
+        run_to(w, log, T + 450, [])
         if fx["cover"]:
             cover_ask(w, log, f"K{tid}")
         wait_dumps(log, [f"fork{tid}"], 180)
         n = len(log.lines)
         rc, text = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
+        if not rc:
+            resume(w, log)
         if rc or not log.wait(r"recorder: writer: .* closed", 120, n):
             raise CouldNotRun(f"forks: K{tid} did not end: {last(text)}")
         if not log.wait(r"replay: forks .*: (done|refused):", 120, n):
@@ -1423,11 +1754,11 @@ def forks_lane(w, fx, out):
     w.stop()
     log = start_play(5, base - 120)
     arm_dump(w, log, "chain5", T5 + 300)
+    turbo_engage(w, log)
     wait_dumps(log, ["chain5"], 180)
-    dump = w.gamedir / "replays" / "dump-chain5.bin"
-    rc, text = tarec_run("compare", "--puppet", source, dump, "--timeline", 5)
-    if rc:
-        raise Failed(f"forks: descendant across two boundaries: {last(text)}")
+    rec, dump = copies("chain5", source, w.gamedir / "replays" / "dump-chain5.bin")
+    results.later(check_or_fail, "forks: descendant across two boundaries", "compare", "--puppet",
+                  rec, dump, "--timeline", 5)
     finish_play(log, 5)
     command("export", 5, "export5")
     command("export", 5, "export5", expect=False)     # an existing export is never overwritten
@@ -1442,11 +1773,11 @@ def forks_lane(w, fx, out):
     source = exported
     log = start_play(5, base - 120)
     arm_dump(w, log, "export5", T5 + 300)
+    turbo_engage(w, log)
     wait_dumps(log, ["export5"], 180)
-    rc, text = tarec_run("compare", "--puppet", exported,
-                        w.gamedir / "replays" / "dump-export5.bin", "--timeline", 5)
-    if rc:
-        raise Failed(f"forks: exported chain playback: {last(text)}")
+    dump, = copies("export5", w.gamedir / "replays" / "dump-export5.bin")
+    results.later(check_or_fail, "forks: exported chain playback", "compare", "--puppet",
+                  exported, dump, "--timeline", 5)
     w.collect(out / "export-play")
     w.stop()
     source = saved
@@ -1462,8 +1793,8 @@ def forks_lane(w, fx, out):
     w.collect(out / "highest")
     w.stop()
     fork(6, base + 600)
-    results.append(("forks: two-boundary and exported puppet dumps", PASS,
-                    "both EQUAL; highest deleted ID 5 followed by ID 6"))
+    results.add(("forks: two-boundary and exported puppet dumps", PASS,
+                 "both EQUAL; highest deleted ID 5 followed by ID 6"))
     # A read-only directory is a real writer refusal, without a DLL fault-injection lever.
     w.place(fx["fix"], fx["dll"])
     rd = w.gamedir / "replays"
@@ -1487,9 +1818,126 @@ def forks_lane(w, fx, out):
         raise Failed("writer-refused: the game did not continue")
     w.collect(out / "writer-refused")
     w.stop()
-    results.append(("forks: unwritable recording and graceful exit", PASS,
-                    "writer refused; game continued; exit completed before collection"))
-    return results
+    results.add(("forks: unwritable recording and graceful exit", PASS,
+                 "writer refused; game continued; exit completed before collection"))
+
+
+# ---- the offline work -----------------------------------------------------------------------
+#
+# A check reads files the games wrote and plays no game, so it runs on the offline pool and never
+# in a worker's slot: a lane hands its checks over and goes on to its next game, and a fixture's
+# report starts as soon as its last lane ends, while other fixtures' games still run.
+#
+# NO DEADLOCK, by what runs where: a task on the pool is a leaf -- a tarec process, or a function
+# that reads files -- and never waits for other pool work. Only the workers and the report
+# threads wait, and neither runs on the pool.
+#
+# A CHECK READS WHAT IT WOULD HAVE READ where it was asked for: what a lane hands over reads only
+# files nothing writes after the handing over -- a lane's collected dumps and recordings, which
+# no later step touches, or a copy of a file the lane goes on to change (forks_lane's `copies`).
+#
+# THE SAME VERDICTS IN THE SAME ORDER (Ordered): results are read back in the order they were
+# asked for, and the first exception in that order is the one raised, before any exception the
+# lane met later in its own steps.
+
+_POOL = None
+_POOL_LOCK = threading.Lock()
+
+
+def offline(games=1):
+    """The offline pool, sized by its first caller for `games` games at once (run_threads)."""
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is None:
+            _POOL = ThreadPoolExecutor(max_workers=offline_workers(games),
+                                       thread_name_prefix="offline", initializer=yield_to_games)
+        return _POOL
+
+
+def yield_to_games():
+    """A pool thread, and every tarec process it starts, gives the CPU to the games first: their
+    timed checks (rewind's 2000 ms, a takeover's `ms`) measure the game, not the checks beside it.
+    Linux keeps a nice value per thread, and a child starts with its thread's (MEASURED
+    2026-10-08: a child of a thread set to 10 reads 10, one of the main thread 0)."""
+    try:
+        os.setpriority(os.PRIO_PROCESS, 0, 10)
+    except (AttributeError, OSError):
+        pass
+
+
+def offline_workers(games):
+    """Checks at once: the cores less two for each game, and no more than the GiB available -- a
+    tarec process holds 0.3 to 0.7 GB (`check` and `compare-fork` on a battle, MEASURED
+    2026-10-08)."""
+    try:
+        with open("/proc/meminfo") as f:
+            gib = next(int(ln.split()[1]) for ln in f if ln.startswith("MemAvailable:")) >> 20
+    except (OSError, StopIteration, ValueError):
+        gib = os.cpu_count()
+    return max(2, min(os.cpu_count() - 2 * games, gib))
+
+
+class Ordered:
+    """Results in the order they were asked for, some still running on the offline pool. `add`
+    takes results now; `later(fn, *args)` runs fn on the pool, a leaf returning a list of results;
+    `start` runs one whose value an item reads; `then(fn)` calls fn when results() reaches it, in
+    the caller's thread, after every item before it -- it may wait for pool work it holds and
+    write the caller's state. results() waits for all the pool work, then gives every item's
+    results in order or raises the first exception in that order, the same on every call. As a
+    context it settles before an exception of the caller's own leaves, so a failure asked for
+    earlier is the one the caller stops at."""
+
+    def __init__(self):
+        self.items, self.futures, self.outcome = [], [], None
+
+    def add(self, *results):
+        self.items.append(lambda: list(results))
+
+    def start(self, fn, *args):
+        """fn(*args) on the pool, a leaf, waited for by results() but no item of its own."""
+        f = offline().submit(fn, *args)
+        self.futures.append(f)
+        return f
+
+    def later(self, fn, *args):
+        f = self.start(fn, *args)
+        self.items.append(f.result)
+        return f
+
+    def then(self, fn):
+        self.items.append(fn)
+
+    def results(self):
+        if self.outcome is None:
+            wait(self.futures)
+            out = []
+            try:
+                for item in self.items:
+                    out += item()
+            except BaseException as e:
+                self.outcome = (out, e)
+                raise
+            self.outcome = (out, None)
+        out, e = self.outcome
+        if e is not None:
+            raise e
+        return list(out)
+
+    def settled(self):
+        """The results before the first exception, which this does not raise."""
+        try:
+            self.results()
+        except BaseException:
+            pass
+        return list(self.outcome[0])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, kind, e, tb):
+        if kind is not None:
+            self.results()
+        return False
 
 
 # ---- the checks -----------------------------------------------------------------------------
@@ -1509,30 +1957,63 @@ def image_gate_options(fx):
     return []
 
 
+def codec_check(info):
+    """The live recording's unit frame, from `tarec info`'s output: a stream block whose check
+    decode differed (the end block's RT_CODEC_MISMATCH) is a codec bug, which the writer wrote as
+    records and the gate fails by name; so is a recording with no sectioned stream block, whose
+    codec never ran (a writer without memory for the frame writes every block as records, and its
+    end block then counts nothing). The blocks the encoder declined are reported."""
+    m = re.search(r"the writer's unit frame: (\d+|absent) blocks declined, (\d+|absent) mismatched",
+                  info)
+    if not m:
+        return ("the unit frame", UNRUN, "no end block")
+    declined, mismatched = m.groups()
+    if mismatched == "absent":
+        return ("the unit frame", FAIL, "the end block carries no RT_CODEC_MISMATCH")
+    if int(mismatched):
+        return ("the unit frame", FAIL, f"the unit frame did not decode back in {mismatched} "
+                                        f"blocks ({declined} declined)")
+    s = re.search(r"stream blocks: (\d+), (\d+) sectioned", info)
+    if not s:
+        return ("the unit frame", UNRUN, "no count of the sectioned stream blocks")
+    blocks, sectioned = map(int, s.groups())
+    if not sectioned:
+        return ("the unit frame", FAIL, f"none of the {blocks} stream blocks is sectioned: the "
+                                        f"codec never ran ({declined} declined)")
+    return ("the unit frame", PASS, f"0 mismatched, {declined} declined, {sectioned} of {blocks} "
+                                    f"stream blocks sectioned")
+
+
 def checks(fx):
-    """Every check of the processes that ran: (name, verdict, detail) each. A dump tarec cannot
-    read (its exit 2) could not run; only a comparison that ran and differed is a FAIL."""
+    """Every check of the processes that ran, as an Ordered of (name, verdict, detail), each
+    tarec call already started on the offline pool. A dump tarec cannot read (its exit 2) could
+    not run; only a comparison that ran and differed is a FAIL. A compared dump goes to
+    fx["passed"] or fx["held"] as its result is read back, in order."""
     rec, Ts, out, ran = fx["rec"], fx["Ts"], fx["out"], fx["procs"]
-    res = list(fx.get("xres", [])) + list(fx.get("ures", []))
-    rc, o = tarec_run("info", rec)
-    m = re.search(r"ended: (.*)", o)
-    end = m.group(1) if m else "no end block"
-    clean = (m and "complete" in end and " 0 id rows outside" in end and
-             " 0 nano sprays uncredited" in end)
-    res.append(("the end block", PASS if clean else FAIL if m else UNRUN, end))
-    rc, o = tarec_run("check", rec)
-    res.append(("tarec check", PASS if rc == 0 else FAIL if rc == 1 else UNRUN,
-                last(o) if rc == 0 else o.strip()))
+    res = Ordered()
+    res.add(*fx.get("xres", []), *fx.get("ures", []))
+
+    def info():
+        rc, o = tarec_run("info", rec)
+        m = re.search(r"ended: (.*)", o)
+        end = m.group(1) if m else "no end block"
+        clean = (m and "complete" in end and " 0 id rows outside" in end and
+                 " 0 nano sprays uncredited" in end)
+        return [("the end block", PASS if clean else FAIL if m else UNRUN, end), codec_check(o)]
+    res.later(info)
+    res.later(tarec_verdict, "tarec check", "check", rec)
 
     def compare(label, *args, files=()):
         missing = [f for f in files if not Path(f).exists()]
         if missing:
-            res.append((label, UNRUN, f"no {', '.join(Path(f).name for f in missing)}"))
+            res.add((label, UNRUN, f"no {', '.join(Path(f).name for f in missing)}"))
             return
-        rc, o = tarec_run(*args)
-        res.append((label, PASS if rc == 0 else FAIL if rc == 1 else UNRUN,
-                    last(o) if rc == 0 else o.strip()))
-        fx["passed" if rc == 0 else "held"] += list(files)
+        got = res.later(tarec_verdict, label, *args)
+
+        def file_dumps():
+            fx["passed" if got.result()[0][1] == PASS else "held"].extend(files)
+            return []
+        res.then(file_dumps)
 
     for n in (f"l{Ts[0]}", f"l{Ts[-1]}"):
         d = out / "L" / f"dump-{n}.bin"
@@ -1570,27 +2051,44 @@ def checks(fx):
         if ran.get(proc) != "ran":
             continue
         if not d.exists():
-            res.append((f"{proc}: COB engine writes on a puppet", UNRUN, f"no {d.name}"))
+            res.add((f"{proc}: COB engine writes on a puppet", UNRUN, f"no {d.name}"),
+                    (f"{proc}: native owner-only starts on a puppet", UNRUN, f"no {d.name}"))
             continue
-        rc, o = tarec_run("counts", rec, d)
-        writes = [ln.strip() for ln in o.splitlines() if "COB write" in ln and not ln.endswith(": 0")]
-        res.append((f"{proc}: COB engine writes on a puppet",
-                    UNRUN if rc else FAIL if writes else PASS,
-                    o.strip() if rc else "; ".join(writes) if writes else f"none ({d.name})"))
+        res.later(puppet_counts, proc, rec, d)
     if ran.get("R") == "ran":
         for T in Ts[1:]:
             line = fx["rt"].get(f"rt{T}", "")
             m = re.search(r"(\d+) tables poisoned, residue (\d+)", line)
             ok = bool(m) and int(m.group(1)) > 0 and m.group(2) == "0"
-            res.append((f"round trip {T}: the poison check", PASS if ok else FAIL if m else UNRUN,
-                        line or "no line"))
+            res.add((f"round trip {T}: the poison check", PASS if ok else FAIL if m else UNRUN,
+                     line or "no line"))
             a, b = out / "R" / f"dump-rt{T}-a.bin", out / "R" / f"dump-rt{T}-b.bin"
             compare(f"round trip {T}: A against B", "compare-dumps", rec, a, b, files=[a, b])
     if ran.get("W") == "ran":
-        res += fx["wres"]
+        res.add(*fx["wres"])
         d = out / "W" / f"dump-w{Ts[0]}.bin"
         compare(f"W w{Ts[0]} (the dock's seek, in a playing Watch started)", "compare",
                 "--puppet", rec, d, files=[d])
+    return res
+
+
+def tarec_verdict(label, *args):
+    """[(label, verdict, detail)] of one tarec check: PASS and its last line on exit 0, FAIL on
+    1, could not run on anything else, with its whole output."""
+    rc, o = tarec_run(*args)
+    return [(label, PASS if rc == 0 else FAIL if rc == 1 else UNRUN,
+             last(o) if rc == 0 else o.strip())]
+
+
+def puppet_counts(proc, rec, d):
+    """The two engine-write checks of a puppet's dump, from `tarec counts`."""
+    rc, o = tarec_run("counts", rec, d)
+    res = []
+    for what, label in (("COB engine writes", "COB write"),
+                        ("native owner-only starts", "owner-only start")):
+        hits = [ln.strip() for ln in o.splitlines() if label in ln and not ln.endswith(": 0")]
+        res.append((f"{proc}: {what} on a puppet", UNRUN if rc else FAIL if hits else PASS,
+                    o.strip() if rc else "; ".join(hits) if hits else f"none ({d.name})"))
     return res
 
 
@@ -1653,14 +2151,15 @@ def tk_moved(path, tl, ordered):
 
 
 def tk_checks(fx):
-    """The takeover's checks, as the entry's `checks` lists them: (name, verdict, detail) each."""
+    """The takeover's checks, as the entry's `checks` lists them: an Ordered of (name, verdict,
+    detail), each check's reading of the file already started on the offline pool."""
     tk, ran, out = fx["fix"]["takeover"], fx["procs"], fx["out"]
     want = tk.get("checks", [])
     k = fx.get("tk") or {}
-    res = []
+    res = Ordered()
 
     def unrun(name, why):
-        res.append((f"takeover {name}", UNRUN, why))
+        res.add((f"takeover {name}", UNRUN, why))
 
     if ran.get("K") != "ran":
         for name in want:
@@ -1673,92 +2172,111 @@ def tk_checks(fx):
                if k["boxes"] else []) + (["ErrorLog.txt"] if k["errorlog"] else []) + \
               (["the window went away"] if k["gone"] else [])
         if seen is None:
-            res.append(("takeover judge", UNRUN if not bad else FAIL,
-                        "; ".join(bad + ["no `units: alive=` line"])))
+            res.add(("takeover judge", UNRUN if not bad else FAIL,
+                     "; ".join(bad + ["no `units: alive=` line"])))
         else:
             if seen < 0.9 * made:
                 bad.append(f"{seen} units seen of the {made} made")
-            res.append(("takeover judge", FAIL if bad else PASS,
-                        "; ".join(bad) or f"{seen} units seen of the {made} made"))
+            res.add(("takeover judge", FAIL if bad else PASS,
+                     "; ".join(bad) or f"{seen} units seen at GameTime {k.get('judged_at')} of "
+                                       f"the {made} made"))
     if "line" in want:
-        rc, o = tarec_run("segments", path)
-        size = re.search(rf"timeline {tl}: bytes (\d+) to (\d+)", o)
-        log = (out / "K" / "tagpu.log").read_text(errors="replace")
-        first = re.search(r"recorder: \d+ iterations captured: the first in (\d+) us", log)
-        bad = []
-        if k["units_refused"]:
-            bad.append(f"{k['units_refused']} creates refused")
-        if tk.get("ms") and k["ms"] >= tk["ms"]:
-            bad.append(f"{k['ms']} ms, the entry's bound {tk['ms']}")
-        res.append(("takeover line", FAIL if bad else PASS,
-                    "; ".join(bad) or
-                    f"{k['ms']} ms (passability {k['passability_ms']}, AI {k['ai_ms']}); the "
-                    f"fork's first iteration "
-                    f"{first.group(1) + ' us' if first else 'not in the log'}, its segment "
-                    f"{int(size.group(2)) - int(size.group(1)) if size else '?'} bytes; {k['line']}"))
+        def line():
+            rc, o = tarec_run("segments", path)
+            size = re.search(rf"timeline {tl}: bytes (\d+) to (\d+)", o)
+            log = (out / "K" / "tagpu.log").read_text(errors="replace")
+            first = re.search(r"recorder: \d+ iterations captured: the first in (\d+) us", log)
+            bad = []
+            if k["units_refused"]:
+                bad.append(f"{k['units_refused']} creates refused")
+            if tk.get("ms") and k["ms"] >= tk["ms"]:
+                bad.append(f"{k['ms']} ms, the entry's bound {tk['ms']}")
+            return [("takeover line", FAIL if bad else PASS,
+                     "; ".join(bad) or
+                     f"{k['ms']} ms (passability {k['passability_ms']}, AI {k['ai_ms']}); the "
+                     f"fork's first iteration "
+                     f"{first.group(1) + ' us' if first else 'not in the log'}, its segment "
+                     f"{int(size.group(2)) - int(size.group(1)) if size else '?'} bytes; "
+                     f"{k['line']}")]
+        res.later(line)
     if "orders" in want:
-        try:
-            d, why = tk_moved(path, tl, k["ordered"]) if k.get("ordered") else (None, "no order")
-        except tarec.Unreadable as e:
-            d, why = None, str(e)
-        res.append(("takeover orders", UNRUN if d is None else PASS if d > 64 else FAIL,
-                    why if d is None else
-                    f"unit {k['ordered']['slot']} moved {d:.0f} wu from GameTime "
-                    f"{k['ordered']['at']} to {k['ordered']['at'] + 300}"))
+        def orders():
+            try:
+                d, why = (tk_moved(path, tl, k["ordered"]) if k.get("ordered") else
+                          (None, "no order"))
+            except tarec.Unreadable as e:
+                d, why = None, str(e)
+            return [("takeover orders", UNRUN if d is None else PASS if d > 64 else FAIL,
+                     why if d is None else
+                     f"unit {k['ordered']['slot']} moved {d:.0f} wu from GameTime "
+                     f"{k['ordered']['at']} to {k['ordered']['at'] + 300}")]
+        res.later(orders)
     if "ai" in want:
-        import tarewind
-        try:
-            if "ai_window" not in k:
-                raise tarec.Unreadable("no armed AI activity window")
-            start, stop = k["ai_window"]
-            ai, made, frac, n = tk_ai(path, tl, start, stop - 1)
-            lines = (out / "K" / "tagpu.log").read_text(errors="replace").splitlines()
-            active, detail = tarewind.ai_activity(lines, "takeover", start, stop, ai)
-            if frac is None:
-                raise tarec.Unreadable(f"the AI seats hold no mobile unit at GameTime {start}")
-            res.append(("takeover ai", PASS if active and frac >= .25 else FAIL,
-                        f"{detail}; {frac:.0%} of {n} mobile units moved; "
-                        f"construction observed for seats {sorted(made)} (reported only)"))
-        except tarec.Unreadable as e:
-            res.append(("takeover ai", UNRUN, str(e)))
+        def ai_check():
+            import tarewind
+            try:
+                if "ai_window" not in k:
+                    raise tarec.Unreadable("no armed AI activity window")
+                start, stop = k["ai_window"]
+                ai, made, frac, n = tk_ai(path, tl, start, stop - 1)
+                lines = (out / "K" / "tagpu.log").read_text(errors="replace").splitlines()
+                active, detail = tarewind.ai_activity(lines, "takeover", start, stop, ai)
+                if frac is None:
+                    raise tarec.Unreadable(f"the AI seats hold no mobile unit at GameTime {start}")
+                return [("takeover ai", PASS if active and frac >= .25 else FAIL,
+                         f"{detail}; {frac:.0%} of {n} mobile units moved; "
+                         f"construction observed for seats {sorted(made)} (reported only)")]
+            except tarec.Unreadable as e:
+                return [("takeover ai", UNRUN, str(e))]
+        res.later(ai_check)
     if "fork" in want:
-        parts, bad, unread = [], [], []
-        rc, o = tarec_run("compare-fork", path, tl)
-        (parts if rc == 0 else bad if rc == 1 else unread).append(f"compare-fork: {o.strip()}")
-        rc, o = tarec_run("segments", path)
-        m = re.search(r"original sha256 ([0-9a-f]+)", o)
-        mine = hashlib.sha256(Path(fx["rec"]).read_bytes()).hexdigest()
-        if not m:
-            unread.append(f"segments: {o.strip()}")
-        elif m.group(1) != mine:
-            bad.append("the original's bytes changed")
-        else:
-            parts.append("the original untouched")
-        for t in (0, tl):
-            rc, o = tarec_run("check", path, "--timeline", t)
-            (parts if rc == 0 else bad if rc == 1 else unread).append(
-                f"check --timeline {t}: {last(o) if rc == 0 else o.strip()}")
-        try:
-            seg = [s for s in tarec.file_segments(path)[0] if s["id"] == tl][0]
-            ends = [b for b in seg["blocks"] if b[0] == tarec.RB_END]
-            e = tarec.end(ends[0][3]) if ends else None
-            if not e or e.get(tarec.RT_END_REASON) != 1 or e["corrections"]:
-                bad.append(f"timeline {tl} ends "
-                           + ("with no end block" if not e else
-                              f"{tarec.END_REASONS.get(e.get(tarec.RT_END_REASON))}, "
-                              f"{len(e['corrections'])} corrections"))
-        except tarec.Unreadable as ex:
-            unread.append(str(ex))
+        compare_fork = res.start(tarec_run, "compare-fork", path, tl)
+        segments = res.start(tarec_run, "segments", path)
+        timelines = [(t, res.start(tarec_run, "check", path, "--timeline", t)) for t in (0, tl)]
+        dumps = []
         for proc, d, puppet in (("K", out / "K" / f"dump-k{T + tk.get('dump', TAKEOVER_SPAN)}.bin", ()),
                                 ("F", out / "F" / f"dump-f{fx.get('tk_f', 0)}.bin", ("--puppet",))):
-            if not d.exists():
-                unread.append(f"no {proc} dump {d.name}")
-                continue
-            rc, o = tarec_run("compare", *puppet, "--timeline", tl, path, d)
-            (parts if rc == 0 else bad if rc == 1 else unread).append(
-                f"{proc} {d.stem[5:]}: {last(o) if rc == 0 else o.strip()}")
-        res.append(("takeover fork", FAIL if bad else UNRUN if unread else PASS,
-                    "; ".join(bad + unread + parts)))
+            dumps.append((proc, d, d.exists() and
+                          res.start(tarec_run, "compare", *puppet, "--timeline", tl, path, d)))
+
+        def fork():
+            parts, bad, unread = [], [], []
+            rc, o = compare_fork.result()
+            (parts if rc == 0 else bad if rc == 1 else unread).append(f"compare-fork: {o.strip()}")
+            rc, o = segments.result()
+            m = re.search(r"original sha256 ([0-9a-f]+)", o)
+            mine = hashlib.sha256(Path(fx["rec"]).read_bytes()).hexdigest()
+            if not m:
+                unread.append(f"segments: {o.strip()}")
+            elif m.group(1) != mine:
+                bad.append("the original's bytes changed")
+            else:
+                parts.append("the original untouched")
+            for t, f in timelines:
+                rc, o = f.result()
+                (parts if rc == 0 else bad if rc == 1 else unread).append(
+                    f"check --timeline {t}: {last(o) if rc == 0 else o.strip()}")
+            try:
+                seg = [s for s in tarec.file_segments(path)[0] if s["id"] == tl][0]
+                ends = [b for b in seg["blocks"] if b[0] == tarec.RB_END]
+                e = tarec.end(ends[0][3]) if ends else None
+                if not e or e.get(tarec.RT_END_REASON) != 1 or e["corrections"]:
+                    bad.append(f"timeline {tl} ends "
+                               + ("with no end block" if not e else
+                                  f"{tarec.END_REASONS.get(e.get(tarec.RT_END_REASON))}, "
+                                  f"{len(e['corrections'])} corrections"))
+            except tarec.Unreadable as ex:
+                unread.append(str(ex))
+            for proc, d, f in dumps:
+                if not f:
+                    unread.append(f"no {proc} dump {d.name}")
+                    continue
+                rc, o = f.result()
+                (parts if rc == 0 else bad if rc == 1 else unread).append(
+                    f"{proc} {d.stem[5:]}: {last(o) if rc == 0 else o.strip()}")
+            return [("takeover fork", FAIL if bad else UNRUN if unread else PASS,
+                     "; ".join(bad + unread + parts))]
+        res.then(fork)
     if "victory" in want:
         try:
             seg = [s for s in tarec.file_segments(path)[0] if s["id"] == tl][0]
@@ -1767,12 +2285,12 @@ def tk_checks(fx):
             won = [r for st, r, _, _ in e.get("seats", []) if st == P]
             ok = (e.get(tarec.RT_END_REASON) == 1 and won == [1] and
                   seg["last"] is not None and seg["last"] <= T + TAKEOVER_SPAN)
-            res.append(("takeover victory", PASS if ok else FAIL,
-                        f"timeline {tl} to GameTime {seg['last']}: "
-                        f"{tarec.END_REASONS.get(e.get(tarec.RT_END_REASON), 'no end block')}; "
-                        f"player {P} {tarec.RESULTS.get(won[0], won[0]) if won else 'has no result'}"))
+            res.add(("takeover victory", PASS if ok else FAIL,
+                     f"timeline {tl} to GameTime {seg['last']}: "
+                     f"{tarec.END_REASONS.get(e.get(tarec.RT_END_REASON), 'no end block')}; "
+                     f"player {P} {tarec.RESULTS.get(won[0], won[0]) if won else 'has no result'}"))
         except tarec.Unreadable as ex:
-            res.append(("takeover victory", UNRUN, str(ex)))
+            res.add(("takeover victory", UNRUN, str(ex)))
     return res
 
 
@@ -1787,17 +2305,43 @@ def build_dll(stock, cover):
     return d / name, make
 
 
+# The order a free worker takes queued lanes in: the long ones first -- X, U and K start the
+# longest chains a fixture has, and none can start before its fixture's L ends -- then L, then
+# the short ones, which fill the run's end. It orders the games only; a lane's own steps and
+# every check are the same whatever runs beside it.
+LANE_ORDER = "XUKLWRPFQ"
+
+
+def first_lanes(fxs):
+    """The order the fixtures' L lanes are queued in: those whose L starts a long chain (X, U or
+    K follows it) first, then the longer games."""
+    return sorted(fxs, key=lambda n: (not set("XUK") & set(fxs[n]["want"]), -fxs[n]["fix"]["end"]))
+
+
 class Run:
     """`fixes` the fixtures by name (fixtures.json's, or measure's scenarios); `measure` runs L
-    and P only, with no dump and no check, for the coverage files."""
+    and P only, with no dump and no check, for the coverage files.
+
+    A fixture's report (fixture_report: its checks, then its lines of the summary) starts on the
+    report threads when its last lane ends -- `left` counts the lanes queued or running, and a
+    lane queues the lanes that follow it before it ends -- so the checks of one fixture overlap
+    the games of the others."""
 
     def __init__(self, names, args, out, fixes=None, measure=False, takeover=None):
-        self.q = queue.Queue()
+        self.q = queue.PriorityQueue()
+        self.seq = itertools.count()
         self.lock = threading.Lock()
         self.pending = 0
+        self.left = {}
+        self.reports = {}
+        self.report_pool = ThreadPoolExecutor(max_workers=max(1, len(names)),
+                                              thread_name_prefix="report")
         self.fx = {}
         self.out = out
         self.measure = measure
+        self.keep = bool(getattr(args, "keep", False))
+        self.game_speed = getattr(args, "game_speed", TEST_GAME_SPEED)
+        self.turbo = getattr(args, "turbo", 0)
         h = head()
         fixes = fixes or fixtures()
         for name in names:
@@ -1814,13 +2358,17 @@ class Run:
                 raise CouldNotRun(f"{name}: no DLL at {dll} ({make})")
             if dll.stat().st_mtime < sources_mtime():
                 raise CouldNotRun(f"{name}: {dll} is older than its sources ({make})")
-            Ts = gametimes(name, fix["end"], h, fix.get("trips", 3), fix.get("last_min"))
+            Ts = gametimes(name, fix["end"], h, fix.get("trips", 3), fix.get("first", 301),
+                           fix.get("last_min"))
             # `takeover`, (player, at) of `tareplay.py takeover`: L, K and F alone
             want = (("L", "K", "F") if takeover else ("L", "P") if measure else
                     ("L",) if fix.get("cost") else procs(fix))
             self.fx[name] = {"name": name, "fix": fix, "dll": dll, "Ts": Ts, "out": out / name,
                              "problems": [], "rt": {}, "passed": [], "held": [],
                              "procs": {}, "cover": cover, "measure": measure,
+                             "game_speed": fixture_speed(fix, self.game_speed),
+                             "turbo": [(p, turbo_lane(fix, p, self.turbo)) for p in want
+                                       if turbo_lane(fix, p, self.turbo)],
                              "map": dll.with_suffix(".map"), "want": want,
                              "tk_ask": takeover or (None, None)}
             if measure:
@@ -1830,16 +2378,31 @@ class Run:
             else:
                 say(f"{name}: T1 {Ts[0]}, round trips {' '.join(map(str, Ts[1:]))}, "
                     f"Tlast {Ts[-1]}")
-            self.put((name, "L"))
+        for name in first_lanes(self.fx):
+            self.put(name, "L")
 
-    def put(self, job):
+    def put(self, name, proc):
         with self.lock:
             self.pending += 1
-        self.q.put(job)
+            self.left[name] = self.left.get(name, 0) + 1
+        self.q.put((LANE_ORDER.index(proc), next(self.seq), name, proc))
 
-    def done(self):
+    def done(self, name):
         with self.lock:
             self.pending -= 1
+            self.left[name] -= 1
+            last = self.left[name] == 0
+        if last and not self.measure:
+            self.report_of(name)
+
+    def report_of(self, name):
+        """The future of the fixture's report, started once: when its last lane ends, or by
+        report() for a fixture a stopped run left with lanes never run."""
+        with self.lock:
+            if name not in self.reports:
+                self.reports[name] = self.report_pool.submit(fixture_report, self.fx[name],
+                                                             self.keep)
+            return self.reports[name]
 
     def job(self, w, name, proc):
         """One process. Anything that stops it short of its claim -- a tool's timeout, an
@@ -1850,16 +2413,22 @@ class Run:
         say(f"{name} {proc}: start on {w.name}")
         try:
             stopping()
+            w.game_speed = NORMAL_GAME_SPEED if proc == "W" else self.game_speed
+            w.turbo = turbo_lane(fx["fix"], proc, self.turbo)
             if proc == "L":
                 cost = bool(fx["fix"].get("cost"))
                 fx["rec"] = live(w, fx, None if fx["measure"] or cost else Ts, out)
                 h = tarec.header_only(str(fx["rec"]))
                 fx["viewed"] = h["options"]["viewed"]
+                if not fx["measure"]:
+                    # the decode cache filled while the next lanes play (reccache.py): every
+                    # check of the report, and the K and X lanes' files after L's, read it
+                    fx["warm"] = offline().submit(tarec_run, "info", fx["rec"])
                 if "K" in fx["want"]:
                     fx["tk_T"], fx["tk_P"] = tk_point(fx, h, *fx["tk_ask"])
                 for p in fx["want"][1:]:
                     if p != "F":                # F follows K, which it reads
-                        self.put((name, p))
+                        self.put(name, p)
             elif proc == "P" and fx["measure"]:
                 play(w, fx, fx["rec"], out, "P", [], [])
             elif proc == "P":
@@ -1871,7 +2440,7 @@ class Run:
                                 [(f"rt{T}", T) for T in Ts[1:]])
             elif proc == "K":
                 fx["tk"] = takeover_k(w, fx, out)
-                self.put((name, "F"))
+                self.put(name, "F")
             elif proc == "F":
                 fx["tk_f"] = takeover_f(w, fx, out)
             elif proc == "X":
@@ -1914,7 +2483,7 @@ class Run:
         try:
             while not STOP.is_set():
                 try:
-                    name, proc = self.q.get(timeout=2)
+                    _, _, name, proc = self.q.get(timeout=2)
                 except queue.Empty:
                     with self.lock:
                         if self.pending == 0:
@@ -1924,7 +2493,7 @@ class Run:
                     if self.job(w, name, proc) is False:
                         return
                 finally:
-                    self.done()
+                    self.done(name)
         finally:
             w.close()
 
@@ -1935,8 +2504,8 @@ def cost_line(fx):
     log = (fx["out"] / "L" / "tagpu.log").read_text(errors="replace")
     cap = re.search(r"recorder: (\d+) iterations captured: the first in \d+ us, the rest in "
                     r"(\d+) us on average and (\d+) us at most", log)
-    size = re.search(r"recorder: writer: .* closed: (\d+) iterations .* stream (\d+) KB deflated "
-                     r"to (\d+) KB", log)
+    size = re.search(r"recorder: writer: .* closed: (\d+) iterations .* stream (\d+) KB of records "
+                     r"written as (\d+) KB", log)
     if not cap or not size:
         return "COST: the recorder's capture or close line is missing from L's log"
     n, raw, kb = int(size.group(1)), int(size.group(2)), int(size.group(3))
@@ -1944,47 +2513,72 @@ def cost_line(fx):
         return "COST: the recording closed with no iteration"
     hour = 30 * 3600 / n
     return (f"COST: {cap.group(1)} iterations, {cap.group(2)} us an iteration on average, "
-            f"{cap.group(3)} us at most; {kb / 1024:.1f} MB ({raw / 1024:.1f} MB before "
-            f"deflate), {kb / 1024 * hour:.0f} MB an hour of game time at that rate")
+            f"{cap.group(3)} us at most; {kb / 1024:.1f} MB ({raw / 1024:.1f} MB of records), "
+            f"{kb / 1024 * hour:.0f} MB an hour of game time at that rate")
 
 
-def report(run, keep):
+def fixture_report(fx, keep):
+    """One fixture's part of the summary: (lines, failed, unrun) -- its lanes' problems and every
+    check of the lanes that ran -- with its passing dumps deleted unless `keep`. It runs once the
+    fixture's lanes have all ended (Run.done), so nothing else writes fx while it reads it."""
+    if fx.get("warm"):
+        fx["warm"].result()             # the cache filled once, not by every check at once
     failed = unrun = False
-    lines = []
-    for name, fx in run.fx.items():
-        cost = bool(fx["fix"].get("cost"))
-        lines.append(f"== {name}: " + ("the cost game" if cost else
-                                       f"T {' '.join(map(str, fx['Ts']))}") + f"; {fx['out']}")
-        for proc, kind, why in fx["problems"]:
-            lines.append(f"   {proc} {kind.upper()}: {why}")
-            failed |= kind == "FAILED"
-            unrun |= kind != "FAILED"
-        if cost:
-            if fx["procs"].get("L") == "ran":
-                lines.append("   " + cost_line(fx))
-            elif "L" not in fx["procs"]:
-                lines.append("   L NEVER RAN")
-                unrun = True
-            continue
-        for proc in fx["want"]:
-            if proc not in fx["procs"]:
-                lines.append(f"   {proc} NEVER RAN")
-                unrun = True
-        if fx["procs"].get("L") != "ran":
-            continue
-        for label, verdict, detail in checks(fx) + (tk_checks(fx) if "K" in fx["want"] else []):
-            lines.append(f"   {verdict:4}  {label}: "
-                         + (detail.splitlines()[0] if verdict == PASS
-                            else detail.replace("\n", "\n         ")))
+    cost = bool(fx["fix"].get("cost"))
+    lines = [f"== {fx['name']}: " + ("the cost game" if cost else
+                                      f"T {' '.join(map(str, fx['Ts']))}") +
+             f"; game speed {fx['game_speed']} ({fx['game_speed'] / NORMAL_GAME_SPEED:g}x "
+             f"target; W uses 10); "
+             + (f"turbo={fx['turbo'][0][1]} on {' '.join(p for p, _ in fx['turbo'])}; "
+                if fx["turbo"] else "turbo=0; ")
+             + f"{fx['out']}"]
+    for proc, kind, why in fx["problems"]:
+        lines.append(f"   {proc} {kind.upper()}: {why}")
+        failed |= kind == "FAILED"
+        unrun |= kind != "FAILED"
+    if cost:
+        if fx["procs"].get("L") == "ran":
+            lines.append("   " + cost_line(fx))
+            label, verdict, detail = codec_check(tarec_run("info", fx["rec"])[1])
+            lines.append(f"   {verdict:4}  {label}: {detail}")
             failed |= verdict == FAIL
             unrun |= verdict == UNRUN
-        for T in fx["Ts"][1:]:
-            if f"rt{T}" in fx["rt"]:
-                lines.append(f"         {fx['rt'][f'rt{T}']}")
-        if not keep:
-            # a dump any check did not pass on stays, whatever else passed on it
-            for f in set(map(str, fx["passed"])) - set(map(str, fx["held"])):
-                Path(f).unlink(missing_ok=True)
+        elif "L" not in fx["procs"]:
+            lines.append("   L NEVER RAN")
+            unrun = True
+        return lines, failed, unrun
+    for proc in fx["want"]:
+        if proc not in fx["procs"]:
+            lines.append(f"   {proc} NEVER RAN")
+            unrun = True
+    if fx["procs"].get("L") != "ran":
+        return lines, failed, unrun
+    planned = [checks(fx)] + ([tk_checks(fx)] if "K" in fx["want"] else [])
+    for label, verdict, detail in [r for p in planned for r in p.results()]:
+        lines.append(f"   {verdict:4}  {label}: "
+                     + (detail.splitlines()[0] if verdict == PASS
+                        else detail.replace("\n", "\n         ")))
+        failed |= verdict == FAIL
+        unrun |= verdict == UNRUN
+    for T in fx["Ts"][1:]:
+        if f"rt{T}" in fx["rt"]:
+            lines.append(f"         {fx['rt'][f'rt{T}']}")
+    if not keep:
+        # a dump any check did not pass on stays, whatever else passed on it
+        for f in set(map(str, fx["passed"])) - set(map(str, fx["held"])):
+            Path(f).unlink(missing_ok=True)
+    return lines, failed, unrun
+
+
+def report(run):
+    """The summary, fixture by fixture in the run's order, each from its report (Run.report_of)."""
+    failed = unrun = False
+    lines = []
+    for name in run.fx:
+        got, f, u = run.report_of(name).result()
+        lines += got
+        failed |= f
+        unrun |= u
     text = "\n".join(lines).replace(f"{run.out}/", "") + "\n"
     print(text, end="")
     (run.out / "summary.txt").write_text(text)
@@ -2006,14 +2600,16 @@ def cmd_run(args):
         return 2
     run.j = args.j
     run_threads(run)
-    status = report(run, args.keep)
+    status = report(run)
     if STOP.is_set():
         return status or 2
     return status
 
 
 def run_threads(run):
-    """The run's workers to their end; a stop by SIGTERM or Ctrl-C lets each finish its game."""
+    """The run's workers to their end; a stop by SIGTERM or Ctrl-C lets each finish its game.
+    The workers are the only threads that play games, one each: never more than -j at once."""
+    offline(run.j)
     threads = [threading.Thread(target=run.worker) for _ in range(run.j)]
 
     def interrupted(signum, frame):
@@ -2034,14 +2630,28 @@ def out_dir(args):
     out = Path(args.out) if args.out else base / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out = out.resolve()
     out.mkdir(parents=True, exist_ok=True)
+    # every tarec this run starts, in this process or a child, shares one decode cache, which no
+    # other run reads and which goes when the run does (reccache.py)
+    cache = out / "tarec-cache"
+    os.environ[reccache.ENV] = str(cache)
+    atexit.register(shutil.rmtree, cache, ignore_errors=True)
+    # a tarec process runs one thread of numpy and numba work: their default pools spin beside it
+    # for nothing (MEASURED 2026-10-08: `check` on a forks file 10.4 s wall either way, 13.8 s of
+    # CPU by default and 10.2 s with one thread), CPU the games and the other checks then lack
+    for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
+        os.environ.setdefault(var, "1")
     return out
+
+
+# the recorder's own instrumented sources (the Makefile's COVERED beside the sim files)
+RECORDER_COVERED = {"src/tagpu_recorder.c", "src/tagpu_recwriter.c", "src/tagpu_recreader.c",
+                    "src/tagpu_replay.c", "src/tagpu_recfile.c", "src/tagpu_reccodec.c"}
 
 
 def covered_sources():
     """The instrumented sources (the Makefile's COVERED): the sim files and the recorder's own."""
     d = TREE / "tagpu" / "ddraw"
-    return set(tafeat.sim_files(d)) | {"src/tagpu_recorder.c", "src/tagpu_recwriter.c",
-                                       "src/tagpu_recreader.c", "src/tagpu_replay.c", "src/tagpu_recfile.c"}
+    return set(tafeat.sim_files(d)) | RECORDER_COVERED
 
 
 def reached_of(run):
@@ -2115,7 +2725,9 @@ RECORDER_OWN = {DD + "src/tagpu_recorder.c", DD + "src/tagpu_recwriter.c",
                 DD + "inc/tagpu_replay.h", DD + "inc/tagpu_replay_globals.h",
                 DD + "inc/tagpu_replay_layout.h", DD + "replay-globals.tsv",
                 DD + "replay-layout.tsv", DD + "replay-absent.tsv",
-                "tools/replay-globals-gen.py", "tools/replay-layout-gen.py",
+                DD + "src/tagpu_reccodec.c", DD + "inc/tagpu_reccodec.h", DD + "inc/tagpu_reclanes.h",
+                DD + "replay-lanes.tsv", DD + "src/zstd.c",
+                "tools/replay-globals-gen.py", "tools/replay-layout-gen.py", "tools/replay-lanes-gen.py",
                 "tools/replay-layout-check.sh", "tools/tacli"}
 FIXTURES_JSON = "tools/replay/fixtures.json"
 NOTE = "replay-roundtrip:"
@@ -2193,7 +2805,10 @@ def gated(paths, base):
             why.append(f"{p}: the entries {' '.join(sorted(changed)) or 'none left'}")
         elif p in RECORDER_OWN or p.startswith("tools/replay/") or p == "scenarios/replay-end.json":
             fx |= every
-            if p.endswith(".c"):
+            # only the DLL's instrumented sources: a coverage build compiles no test program, so
+            # no fixture could reach one of its functions (the test programs run in their
+            # suites), and it instruments no vendored file (zstd.c)
+            if p.startswith(DD) and p[len(DD):] in RECORDER_COVERED:
                 by_function.add(p)
             why.append(f"{p}: the recorder's own, every fixture")
         elif p.startswith("scenarios/") and fixture_users(Path(p).name):
@@ -2311,7 +2926,7 @@ def cmd_landing(args):
             return 2
         run.j = args.j
         run_threads(run)
-        status = report(run, args.keep)
+        status = report(run)
         if STOP.is_set():
             return status or 2
     # reach per build: a line only the stock-limits build compiles is reached only by a fixture
@@ -2344,7 +2959,8 @@ def cmd_landing(args):
         feats = sorted({f for f, _ in funcs.values()} | set(regions))
         note = (f"{NOTE} dll={dll} range={base}..{sha} features={','.join(feats) or '-'} "
                 f"fixtures={','.join(sorted(fx)) or '-'} seeds={seeds.replace(' ', ',') or '-'} "
-                f"reached={k}/{total} result=pass date={datetime.date.today().isoformat()}")
+                f"reached={k}/{total} game_speed={args.game_speed} turbo={args.turbo} "
+                f"result=pass date={datetime.date.today().isoformat()}")
         git("notes", "append", "-m", note, graded)
         print(f"tareplay landing: pass, noted on {sha}: {note}")
         return 0
@@ -2394,7 +3010,7 @@ def cmd_broad(args):
         return 2
     run.j = args.j
     run_threads(run)
-    status = report(run, True)
+    status = report(run)
     if STOP.is_set():
         return status or 2
     lines = []
@@ -2465,7 +3081,7 @@ def cmd_takeover(args):
         return 2
     run.j = args.j
     run_threads(run)
-    status = report(run, args.keep)
+    status = report(run)
     if STOP.is_set():
         return status or 2
     return status
@@ -2476,14 +3092,17 @@ def cmd_forks(args):
     if not fix or not fix.get("takeover"):
         raise CouldNotRun("forks needs a takeover fixture")
     out = out_dir(args)
-    w = Worker(out)
+    w = Worker(out, args.game_speed)
     dll, make = build_dll(fix.get("dll") == "stock", args.cover)
     try:
         if not dll.exists() or dll.stat().st_mtime < sources_mtime():
             raise CouldNotRun(f"build {make} first")
         fx = {"name": args.fixture, "fix": fix, "dll": dll.resolve(), "cover": args.cover,
-              "Ts": gametimes(args.fixture, fix["end"], head(), 3, fix.get("last_min"))}
+              "Ts": gametimes(args.fixture, fix["end"], head(), 3, fix.get("first", 301),
+                            fix.get("last_min"))}
+        w.turbo = turbo_lane(fix, "L", args.turbo)
         fx["rec"] = live(w, fx, None, out / "L")
+        w.turbo = turbo_lane(fix, "X", args.turbo)
         res = forks_lane(w, fx, out / "X")
         for name, status, detail in res:
             say(name, status, detail)
@@ -2512,10 +3131,11 @@ def cmd_rewind(args):
     dll, make = build_dll(args.stock, args.cover)
     if not dll.exists() or dll.stat().st_mtime < sources_mtime():
         raise CouldNotRun(f"build {make} first")
-    w = Worker(out)
+    w = Worker(out, args.game_speed)
     try:
         fx = {"name": "battle", "fix": fixtures()["battle"], "dll": dll.resolve(),
               "cover": args.cover}
+        w.turbo = turbo_lane(fx["fix"], "U", args.turbo)
         res = rewind_lane(w, fx, out)
         text = "\n".join(f"{status} {name}: {detail}" for name, status, detail in res)
         (out / "summary.txt").write_text(text + "\n")
@@ -2544,7 +3164,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="record each fixture and check it on puppets")
     r.add_argument("fixtures", nargs="+", help="fixture names, or `all`")
-    r.add_argument("-j", type=int, default=4, help="games at once (default 4)")
+    r.add_argument("-j", type=int, default=8, help="games at once (default 8)")
     r.add_argument("--dll", help="the build under test (default the tree's, its coverage twin "
                                  "with --cover)")
     r.add_argument("--stock-dll", help="the stock-limits build, for a fixture that names it")
@@ -2558,7 +3178,7 @@ def main(argv=None):
     m = sub.add_parser("measure", help="scenarios recorded and played on the coverage builds: "
                                        "the functions each reaches")
     m.add_argument("scenarios", nargs="+", help="fixture names, or scenario names in scenarios/")
-    m.add_argument("-j", type=int, default=4, help="games at once (default 4)")
+    m.add_argument("-j", type=int, default=8, help="games at once (default 8)")
     m.add_argument("--end", type=int, default=1800, help="GameTime each is recorded to")
     m.add_argument("--out", help="the run's folder")
     m.set_defaults(func=cmd_measure, dll=None, stock_dll=None, keep=True)
@@ -2567,13 +3187,13 @@ def main(argv=None):
     la.add_argument("--base", default="main", help="the branch the landing goes to")
     la.add_argument("--check", action="store_true",
                     help="exit 0 when a passing replay-roundtrip note covers HEAD")
-    la.add_argument("-j", type=int, default=4, help="games at once (default 4)")
+    la.add_argument("-j", type=int, default=8, help="games at once (default 8)")
     la.add_argument("--keep", action="store_true", help="keep the passing dumps")
     la.add_argument("--out", help="the run's folder")
     la.set_defaults(func=cmd_landing, dll=None, stock_dll=None)
     br = sub.add_parser("broad", help="the broad tier: every fixture, and what none exercised")
     br.add_argument("--release", metavar="DLL", help="this release DLL, without reach")
-    br.add_argument("-j", type=int, default=4, help="games at once (default 4)")
+    br.add_argument("-j", type=int, default=8, help="games at once (default 8)")
     br.add_argument("--out", help="the run's folder")
     br.set_defaults(func=cmd_broad, dll=None, stock_dll=None)
     tk = sub.add_parser("takeover", help="L, K and F alone: a fixture recorded, taken over, and "
@@ -2601,9 +3221,23 @@ def main(argv=None):
     fe.add_argument("--check", metavar="DIR", help="the link's check of tagpu/ddraw: exit 0 "
                                                    "clean, 1 a named problem, 2 could not run")
     fe.set_defaults(func=cmd_features)
+    for parser in (r, m, la, br, tk, fk, rw):
+        parser.add_argument("--game-speed", type=int, choices=(10, 20), default=TEST_GAME_SPEED,
+                            help="internal TA speed: 20 = 2x (default), 10 = normal; cost "
+                                 "fixtures and W's speed UI test use 10")
+    for parser in (r, la, br, tk, fk, rw):
+        parser.add_argument("--turbo", type=int, choices=range(6), default=TURBO, metavar="K",
+                            help=f"ticks a frame on the turbo lanes once armed, 1..5, 0 for none "
+                                 f"(default {TURBO}; tagpu_replay.c, THE TURBO)")
     a = ap.parse_args(argv)
-    if a.cmd in ("run", "measure", "landing", "broad", "takeover") and not 1 <= a.j <= 9:
-        ap.error("-j is 1..9")
+    if a.cmd in ("run", "measure", "landing", "broad", "takeover") and not 1 <= a.j <= 16:
+        ap.error("-j is 1..16")
+    # the subcommands that read recordings need numpy, numba and zstandard (tarec.py through
+    # reccodec.py); `features` and `list` run under the build's bare python3, and so does
+    # `landing --check`, which reads git notes only
+    if a.cmd not in ("features", "list") and not (a.cmd == "landing" and a.check):
+        import devpy
+        devpy.ensure()
     return a.func(a)
 
 

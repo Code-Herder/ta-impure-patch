@@ -5,12 +5,14 @@
    WHERE IT RUNS. B2's stub at the sim step's call of the unit tick (0x4954ED, the only call of
    0x48AD30) calls tagpu_rec_capture before anything else: GameTime has just been incremented
    (0x4954C0) and every phase of the previous iteration has run, so a capture sees the world
-   between two iterations, on the thread that owns it. A skirmish, the only game recorded, calls
-   the step with 0 (0x49693C), so the step's network pump (0x4954C8) does not run. During play the
+   between two iterations, on the thread that owns it. Multiplayer file capture and mandatory
+   contributions follow the step's network pump (0x4954C8) at the same B2 boundary. During play the
    game thread is the only writer of the engine records and of every SIM_STATE table the capture
    reads: the loader thread's writes end before the in-play entry (0x497F40 reads the loader's
    last store, bit 1 of main+0x38D75, before the first iteration). The event hooks (*The events*)
-   record what the engine does between two captures, and only on that thread.
+   record what the engine does between two captures, and only on that thread. The primary
+   receive wrapper also runs on the loader's pump: it owns only its stack frame, private
+   packet bytes and exact receive span, serializing receive/dispatch with the other pump.
 
    WHAT IT READS, AND WHY EACH READ IS IN BOUNDS.
    - The unit array [begin, begin + nslots * 0x118): nslots is the engine's own count
@@ -43,14 +45,31 @@
    - The fields of the main block and .data replay-globals.tsv lists, and the projectile pool and
      its count: *The globals and the projectiles* below; for the harness's dump, the main block
      and .data whole.
+   - The perspective of a skirmish's human seat, and in a multiplayer game of each local actor a
+     human controls: the camera's scroll target, the view's size, the world point under the
+     pointer, the region bits and, at the two click redirects, the armed order, the cursor index,
+     the Interface Type and the click's own message; and the seat's unit block, walked within the
+     bound *The perspective* states. All of it is game-thread state.
    - For the header, once: the unit-type definitions' names (UNITINFOCount of them), the weapons'
      names (the array's slots, tagpu_limits.h), the feature defs' names (their count), the
-     skirmish settings and the game's options.
+     skirmish settings and the game's options; and for the unit frame (header_codec) each def's
+     air bit +0x241, sight height +0x170 and flight fields +0x192 and +0x19A..+0x1A9, and the main
+     block's gravity, sea level and LosType.
    Every other id row's pointer is never dereferenced: its ID is one more than its row in its
    table, by arithmetic (tagpu_recfmt.h), and a pointer outside the table becomes REC_ID_BAD,
    counted and logged. Each event hook's reads are stated beside it.
 
-   WHAT IT WRITES: its own memory -- the shadow images, the ring and the dump file. The event
+   WHAT IT WRITES: its own memory -- the shadow images, contribution caches, ring and dump file --
+   and the startup packet-length entry 0x512AF8, identified-text length/callback/mask
+   entries 0x512B84/0x512ACC/0x512C6C through its redirected initializer. The primary
+   receiver writes its dispatcher's stack pointer to privately owned packet storage;
+   nested pumps restore their parent's main+0x4C9/+0x4CD transport metadata. Validated
+   identified text replaces the first 65 bytes of that private receive allocation
+   before entering the stock text case. The host's extended start retains the engine's
+   original start action (mp_start_send / mp_start_receive). Native CreatePlayer receives
+   the original 21-byte prefix plus a public key through the redirect at 0x4CA762;
+   the native-create size branch at 0x454315 accepts that fixed 301-byte span as well
+   as the original 21 bytes. The event
    hooks write nothing the simulation reads; the one site that changes a path, the network tests
    of the five fire functions, builds a packet on the fire function's own stack while a skirmish
    is recorded (*The events*). */
@@ -58,8 +77,20 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_recorder.h"
+#include "tagpu_recmp.h"
+#include "tagpu_recmp_channel.h"
+#include "tagpu_recmp_players.h"
+#include "tagpu_recmp_units.h"
+#include "tagpu_recmp_named.h"
+#include "tagpu_recmp_roots.h"
+#include "tagpu_recmp_explored.h"
+#include "tagpu_recmp_chat_wire.h"
+#include "tagpu_recmp_chat_inbox.h"
+#include "tagpu_recmp_text.h"
+#include "tagpu_recmp_pov.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
+#include "tagpu_reccodec.h"
 #include "tagpu_replay_layout.h"
 #include "tagpu_replay_globals.h"
 #include "tagpu_simreg.h"
@@ -71,8 +102,10 @@
 #include "tagpu_patches.h"
 #include "tagpu_puppet.h"
 #include "tagpu_replay.h"
+#include "tagpu_zoom.h"
 #include "crc32.h"
 #include "git.h"
+#include "dd.h"
 
 #define TA_MAINPP      0x00511DE8u
 #define OFF_PLAYERS    0x1B63       /* the eleven player records, 0x14B apart                     */
@@ -101,6 +134,24 @@
 #define UD_STRIDE      0x249
 #define UD_NAME        0x20         /* UnitName                                                   */
 #define UD_NAMELEN     0x20
+/* a def's fields the unit frame's air rules take as constants (RT_AIR; tagpu_reccodec.c) */
+#define UD_AIRBITS     0x241        /* dword: bit 11 sends the unit to the air step 0x43D290, else
+                                       0x43CD20 (0x43DD36..0x43DD44, DISASSEMBLED)               */
+#define UD_AIRBIT      0x800u
+#define UD_SIGHT_H     0x170        /* u8: the sight emit's height term (0x4827FB)                */
+#define UD_MAXV        0x192        /* i32 16.16 maxvelocity (read at 0x43D301, DISASSEMBLED)     */
+#define UD_BRAKE       0x19A        /* i32 16.16 brakerate                                       */
+#define UD_ACC         0x19E        /* i32 16.16 acceleration (read at 0x43D2FB, DISASSEMBLED)    */
+#define UD_BANK        0x1A2        /* i32 16.16 bankscale                                       */
+#define UD_PITCH       0x1A6        /* i32 16.16 pitchscale; these three as the def loader writes
+                                       them (0x42C129..0x42C243, DISASSEMBLED by the size
+                                       research: research/sizelab/air-challenge/lib_int/airdefs.py) */
+_Static_assert(UD_PITCH + 4 <= UD_STRIDE && UD_AIRBITS + 4 <= UD_STRIDE,
+               "the air fields lie inside a def");
+#define OFF_GRAVITY    0x14263      /* i32: gravity (replay-globals.tsv, a `leave` field)         */
+#define OFF_SEALEVEL   0x1427F      /* u8: sea level; the sight emit raises an altitude to
+                                       (it + 1) << 16 (0x48280B..0x482813: the byte read by
+                                       `mov al` after `xor eax, eax`, DISASSEMBLED)              */
 #define WPN_STRIDE     0x115        /* a weapon's record; its name is its first 0x20 bytes         */
 #define WPN_NAMELEN    0x20
 #define OFF_EACH       0x37EE6      /* u16: the units each player may have                        */
@@ -109,6 +160,7 @@
 #define GS_TNT         0x204
 #define OFF_CONTROLLED 0x2A42       /* u8: the player the local game commands                      */
 #define OFF_VIEWED     0x2A43       /* u8: the player whose view it draws                         */
+#define OFF_NETWORK    0x2A44       /* bit 0: network game, tested by Send_UnitDeath 0x4864B0 */
 #define OFF_NPLAYERS   0x2A3C       /* u16: the player count the SKIRMISH screen set (0x47AF39)     */
 #define OFF_LOSTYPE    0x14281      /* u16: bits 0-2 the options; bit 3 is the fog grid's own      */
 #define OFF_CMDRDEATH  0x37EF6      /* u32: ActiveCommanderDeath                                  */
@@ -122,6 +174,7 @@
 #define OFF_GRID_W     0x14233      /* the feature grid's columns and rows, i32                   */
 #define OFF_GRID_H     0x14237
 #define MODE_SKIRMISH  2
+#define MODE_NETWORK   3
 #define U_MOVER        0x00         /* the mover, a record of its own (the image's tail)           */
 #define U_ORDERS       0x5C         /* the order lists' heads: the main list and the sub list      */
 #define U_SUBORDERS    0x60
@@ -147,6 +200,8 @@
 #define HEADER_MAX     0xFF00       /* an RK_HEADER's body; its length is a u16                    */
 #define IMG_DWORDS     (REC_PLAYER_DWORDS > REC_UNIT_DWORDS ? REC_PLAYER_DWORDS : REC_UNIT_DWORDS)
 #define ORD_SCRATCH    (REC_ORDERS_MAX * REC_ORDER_IMAGE)
+_Static_assert(RECMP_ORDER_BYTES == REC_ORDER_IMAGE && RECMP_ORDER_MAX == REC_ORDERS_MAX,
+               "contributions carry the recorder's bounded order images");
 
 /* ---- the layout, as masks ------------------------------------------------------------------- */
 
@@ -255,6 +310,1145 @@ static int level_read(char* ta, Level* L)
 
 static unsigned s_bad;                   /* pointers outside their tables, this recording      */
 static unsigned s_badlog;                /* of them, the ones logged                           */
+
+static unsigned char s_mp_sites, s_mp_tried;
+static RecMpChatInbox* s_mp_chat_inbox;
+static GUID s_mp_active_match;
+static DWORD s_mp_local;
+typedef struct {
+    unsigned active, origin, tick;
+    uint64_t event;
+    GUID match;
+    unsigned text_seen;
+    RecMpTextEntry text;
+} MpChatContext;
+static MpChatContext s_mp_chat;
+static uint64_t s_mp_chat_serial;
+static RecMpText* s_mp_text;
+static RecMpTextQueue* s_mp_text_queue;
+static unsigned s_mp_text_failed;
+static RecMpChannel* s_mp_channel;
+/* Whether this game thread still applies what the channel delivers. Cleared for good by
+   mp_relinquish, while s_mp_channel lives on for this peer's own contributions. */
+static unsigned s_mp_consuming;
+/* Borrowed by the game producer until file_end. The ring's writer owns its
+   lifetime and cannot free it before that end publication. */
+static RecMpFile* s_mp_file;
+static void mp_record_begin(const Level* L, int tick, const RecMpConfig* config);
+static void mp_record_end(int channel_ended);
+static RecMpRoster s_mp_roster;
+static RecMpPlayers* s_mp_players;
+static RecMpSeatMaps* s_mp_seats;
+static RecMpUnits* s_mp_units;
+static RecMpExplored* s_mp_explored;
+static const unsigned char* s_mp_explored_map;
+static unsigned char* s_mp_explored_image;
+static unsigned s_mp_explored_w, s_mp_explored_h, s_mp_explored_cells, s_mp_explored_bytes;
+static RecMpNamed* s_mp_named;
+/* each local actor's perspective as contributed, and every remote one's as received
+   (mp_pov_capture); s_mp_advanced: the channel has advanced once, so a click has a capture tick to
+   be published at; s_mp_pov_failed: a click's publication was refused, which mp_capture turns into
+   the contribution's refusal at its next B2 */
+static RecMpPov* s_mp_pov;
+static unsigned s_mp_advanced, s_mp_pov_failed, s_mp_clicks_odd;
+static unsigned char s_mp_pov_seen[RECMP_ACTORS];
+static RecSelEntry s_mp_sel_now[REC_SEL_MAX], s_mp_sel_last[REC_SEL_MAX];
+static int mp_pov_capture(const Level* L, unsigned tick);
+static void mp_pov_log(const RecMpHeader* h, unsigned tick, const char* where);
+static void mp_pov_end(void);
+static RecMpRoots* s_mp_roots;
+static RecMpRootsQueue* s_mp_roots_queue;
+static const char* s_nano_unit;
+static const void* s_nano_out;
+static Level s_mp_level;
+static DWORD s_mp_tid;
+static unsigned s_mp_tick, s_mp_roots_failed;
+static unsigned char s_mp_roots_seen[RECMP_ACTORS];
+typedef struct { unsigned origin, tick, birth, before_capture; } MpRootRef;
+static void mp_roots_end(void);
+static int mp_events_flush(unsigned through);
+static void mp_roots_push(const char* unit, unsigned kind, const void* image, unsigned bytes);
+static int mp_roots_prepare(const char* unit, MpRootRef* out);
+static void mp_roots_publish(const MpRootRef* ref, unsigned kind, const void* image, unsigned bytes);
+static unsigned mp_roots_unit(const char* unit, unsigned cob, int check_cob);
+static void mp_roots_log(const RecMpPacket* packet, unsigned applied_tick, const char* where);
+static unsigned s_mp_logtick;
+static RecMpOrderCache* s_mp_orders;
+static unsigned char s_mp_order_scratch[ORD_SCRATCH];
+static unsigned char s_mp_orders_seen[REC_PLAYERS];
+static int mp_orders_capture(const Level* L, unsigned tick);
+static int mp_units_capture(const Level* L, unsigned tick);
+static void mp_units_log(const RecMpPacket* packet, unsigned tick, const char* where);
+static int mp_orders_receive(const Level* L, const RecMpPacket* packet, unsigned tick);
+static const unsigned* mp_births(const Level* L);
+static unsigned id_in(const char* p, const char* base, unsigned stride, unsigned n);
+static void player_image(const Level* L, unsigned i, unsigned* img);
+
+static void mp_match_log(const char* action, DWORD origin, const GUID* match)
+{
+    tagpu_logf("recmp: %s match %08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X, host ID %u",
+               action, (unsigned)match->Data1, match->Data2, match->Data3,
+               match->Data4[0], match->Data4[1], match->Data4[2], match->Data4[3],
+               match->Data4[4], match->Data4[5], match->Data4[6], match->Data4[7], (unsigned)origin);
+}
+
+/* The queued receiver copies a split message without checking its caller's
+   capacity (0x46354F..0x463567). Every split length is a u16: a 0x2C's own
+   16-bit size field (0x463919..0x463923, read by the call at 0x46391F) or the
+   fixed table word at 0x463931. Reserve their full
+   range before calling it. Raw/system messages use the SDK's size negotiation.
+   Native sends continue to use main+0x2A38, so they cannot overwrite this input.
+   The pump lock owns the transport's receive cursors and main+0x4C9/0x4CD from
+   receive through dispatch. A recursive call gets distinct storage and restores
+   its parent's metadata. Storage survives pump return: retail consumers may
+   retain the last packet between receives. The receiver reuses or resizes it
+   only on a subsequent receive at this depth; the retail shared buffer can
+   already be reused or resized by any subsequent receive. Native dispatch
+   retains its own packet mutations. */
+#define MP_RX_BYTES 65536u
+typedef struct MpReceiveStorage {
+    struct MpReceiveStorage* nested;
+    unsigned char* buffer;
+    unsigned capacity;
+} MpReceiveStorage;
+typedef struct MpReceiveFrame {
+    struct MpReceiveFrame* previous;
+    MpReceiveStorage* storage;
+    char* ta;
+    unsigned char* buffer;
+    unsigned capacity, bytes, from, to;
+} MpReceiveFrame;
+_Static_assert(sizeof(MpReceiveFrame)<=127, "receive frame fits the wrapper's stack instruction");
+static DWORD s_mp_rx_tls = TLS_OUT_OF_INDEXES;
+static CRITICAL_SECTION s_mp_rx_lock;
+/* The serialized pump reuses one slot per recursion depth, across threads and
+   levels. Only peak depth grows this process-lifetime chain; entering another
+   frame or ending a level never invalidates the last packet's native aliases. */
+static MpReceiveStorage s_mp_rx_storage;
+
+unsigned tagpu_rec_wire_received(const void* message)
+{
+    MpReceiveFrame* frame;
+    if (!message || s_mp_rx_tls==TLS_OUT_OF_INDEXES) return 0;
+    frame=TlsGetValue(s_mp_rx_tls);
+    return frame && message==frame->buffer ? frame->bytes : 0;
+}
+
+/* The wrapper reserves this frame on its own stack before entering the stock
+   no-argument pump. All original registers/flags survive each callout. */
+static int __cdecl mp_receive_enter(MpReceiveFrame* frame)
+{
+    /* A busy pump consumes no SDK message and adds no lock-wait edge to the
+       engine's loading/game-thread locks. Its current owner keeps receiving;
+       the other caller returns the pump's ordinary no-work result. */
+    if (!TryEnterCriticalSection(&s_mp_rx_lock)) return 0;
+    memset(frame,0,sizeof *frame);
+    frame->previous=TlsGetValue(s_mp_rx_tls);
+    if (frame->previous) {
+        MpReceiveStorage* parent=frame->previous->storage;
+        if (!parent->nested)
+            parent->nested=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof *parent->nested);
+        frame->storage=parent->nested;
+        if (!frame->storage) {
+            LeaveCriticalSection(&s_mp_rx_lock);
+            return 0;
+        }
+    } else frame->storage=&s_mp_rx_storage;
+    frame->buffer=frame->storage->buffer;
+    frame->capacity=frame->storage->capacity;
+    frame->ta=ta_main();
+    if (frame->ta) {
+        memcpy(&frame->from,frame->ta+0x4C9,4);
+        memcpy(&frame->to,frame->ta+0x4CD,4);
+    }
+    if (!TlsSetValue(s_mp_rx_tls,frame)) {
+        LeaveCriticalSection(&s_mp_rx_lock);
+        tagpu_logf("recmp: primary receive frame unavailable");
+        return 0;
+    }
+    return 1;
+}
+
+static void __cdecl mp_receive_leave(MpReceiveFrame* frame)
+{
+    if (frame->previous && frame->ta) {
+        memcpy(frame->ta+0x4C9,&frame->from,4);
+        memcpy(frame->ta+0x4CD,&frame->to,4);
+    }
+    TlsSetValue(s_mp_rx_tls,frame->previous);
+    LeaveCriticalSection(&s_mp_rx_lock);
+}
+
+/* Call-entered at 0x453D94: entry[5] is the stock pump's message pointer at
+   esp+0x10. The SDK writes only into this frame's allocation. A too-small
+   response must increase capacity; it has not consumed the pending message.
+   Allocation failure leaves that message pending for a later pump visit. */
+static int __cdecl mp_receive_packet(unsigned* entry)
+{
+    typedef HRESULT (__attribute__((thiscall)) *QueuedFn)(void*,void*,void*,DWORD*);
+    typedef HRESULT (__stdcall *RawFn)(void*,void*,DWORD*);
+    typedef void (__stdcall *StatsFn)(unsigned,unsigned,unsigned);
+    MpReceiveFrame* frame=TlsGetValue(s_mp_rx_tls);
+    unsigned raw=*(const unsigned*)0x506DBC==0;
+    HRESULT result;
+    DWORD bytes;
+    if (!frame || !frame->ta || !((unsigned char)frame->ta[OFF_NETWORK]&1)) return 0;
+    frame->bytes=0;
+    if (!frame->buffer) {
+        frame->buffer=HeapAlloc(GetProcessHeap(),0,MP_RX_BYTES);
+        if (!frame->buffer) return 0;
+        frame->capacity=MP_RX_BYTES;
+        frame->storage->buffer=frame->buffer;
+        frame->storage->capacity=frame->capacity;
+    }
+    for (;;) {
+        bytes=frame->capacity;
+        result=raw ? ((RawFn)(size_t)0x4C9840)(frame->ta+0x14,frame->buffer,&bytes) :
+                     ((QueuedFn)(size_t)0x462F30)((void*)0x51E300,frame->ta+0x14,
+                                                 frame->buffer,&bytes);
+        if (result!=(HRESULT)0x8877001E) break;
+        if (bytes<=frame->capacity) return 0;
+        unsigned char* next=HeapReAlloc(GetProcessHeap(),0,frame->buffer,bytes);
+        if (!next) return 0;
+        frame->buffer=next; frame->capacity=bytes;
+        frame->storage->buffer=next; frame->storage->capacity=bytes;
+    }
+    if (result!=S_OK || !bytes || bytes>frame->capacity) return 0;
+    frame->bytes=bytes;
+    entry[5]=(unsigned)(size_t)frame->buffer;
+    ((StatsFn)(size_t)0x415EF0)(frame->buffer[0],bytes,0);
+    if (raw) ((StatsFn)(size_t)0x415F40)(bytes,0,0);
+    return 1;
+}
+
+/* DISASSEMBLED: only the host branch of 0x496CE0 reaches call 0x496D25;
+   PlayerInfo+0x97 bit 0 selects it. 0x451DF0 copies this stack packet into
+   the engine queue (0x462710/0x4628D0), or sends it before returning in raw
+   mode. Keep its start action and stdcall ret 12, with a fresh ID per call. */
+static int __stdcall mp_start_send(DWORD origin, const void* message, unsigned bytes)
+{
+    typedef int (__stdcall *SendFn)(DWORD, const void*, unsigned);
+    RecMpStart start;
+    GUID match;
+    (void)message;
+    (void)bytes;
+    memset(&start, 0, sizeof start);
+    start.code = 0x08;
+    start.version = RECMP_VERSION;
+    start.bytes = sizeof start;
+    start.origin = origin;
+    unsigned ready = SUCCEEDED(CoCreateGuid(&match));
+    if (ready) {
+        start.match = match;
+        mp_match_log("send", origin, &match);
+    } else {
+        /* The splitter always expects the extended size. A zero ID preserves
+           the engine start while every recorder refuses this match. */
+        memset(&start.match, 0, sizeof start.match);
+        tagpu_logf("recmp: no fresh match ID: no contributions");
+    }
+    tagpu_recmp_chat_inbox_start(s_mp_chat_inbox,ready ? &match : NULL,ready ? origin : 0);
+    return ((SendFn)(size_t)0x451DF0)(origin, &start, sizeof start);
+}
+
+/* DISASSEMBLED: the 0x08 case enters at 0x4553BE with its message at esp+0x10
+   and source player in EDI (esp+0x14 holds its row index). Only the game thread
+   in lobby/start states 2/3 accepts
+   metadata. tagpu_wire_received supplies the actual span, not buffer capacity.
+   The ten-row bound precedes the process-lifetime PlayerInfo read. */
+static void __cdecl mp_start_receive(void* frame)
+{
+    const void* message = ((const void* const*)frame)[4];
+    const char* player = *(const char* const*)((const char*)frame - 0x24);
+    char* ta = ta_main();
+    const char* info;
+    size_t off;
+    unsigned state, id;
+    DWORD from;
+    GUID match;
+    if (!ta || GetCurrentThreadId() != g_ddraw.gui_thread_id || game_mode(ta) != 3 ||
+        !((unsigned char)ta[OFF_NETWORK] & 1)) return;
+    memcpy(&state, ta + 0x391F1, sizeof state);
+    if (state != 2 && state != 3) return;
+    tagpu_recmp_chat_inbox_start(s_mp_chat_inbox,NULL,0);
+    off = (size_t)player - (size_t)(ta + OFF_PLAYERS);
+    if (off % PL_STRIDE || off / PL_STRIDE >= REC_PLAYERS) return;
+    memcpy(&from, ta + 0x4C9, sizeof from);
+    memcpy(&id, player + 4, sizeof id);
+    memcpy(&info, player + PL_INFO, sizeof info);
+    if (!info || !from || id != from || !((unsigned char)info[0x97] & 1) ||
+        !tagpu_recmp_start_read(message, tagpu_wire_received(message), from, &match)) {
+        tagpu_logf("recmp: start metadata refused: no contributions");
+        return;
+    }
+    tagpu_recmp_chat_inbox_start(s_mp_chat_inbox,&match,from);
+    mp_match_log("receive", from, &match);
+}
+
+/* DISASSEMBLED: native CreatePlayer at 0x4CA762 receives the engine's 21-byte
+   initial data. Preserve that prefix (including its password/version) and add
+   only a public key. The primary SDK binds the data to the actual native owner;
+   a private peer cannot replace another owner's key. Private bindings are signed
+   off-thread and require no extra primary-session send during play. */
+static HRESULT __stdcall mp_create_player(IDirectPlay2A* dp, DWORD* id, DPNAME* name,
+                                           HANDLE event, const void* data,
+                                           DWORD bytes, DWORD flags)
+{
+    const RecMpKey* key;
+    unsigned char extended[RECMP_PRIMARY_BYTES + sizeof(RecMpPublic)];
+    RecMpPublic public;
+    if (!data || bytes != RECMP_PRIMARY_BYTES || !(key = tagpu_recmp_key())) {
+        tagpu_logf("recmp: primary identity unavailable: no faithful contributions");
+        return IDirectPlay2_CreatePlayer(dp, id, name, event, (void*)data, bytes, flags);
+    }
+    memcpy(extended, data, RECMP_PRIMARY_BYTES);
+    tagpu_recmp_public(key, &public);
+    memcpy(extended + RECMP_PRIMARY_BYTES, &public, sizeof public);
+    return IDirectPlay2_CreatePlayer(dp, id, name, event, extended, sizeof extended, flags);
+}
+
+static int mp_public_key(IDirectPlay2A* dp, DWORD origin, RecMpPublic* public)
+{
+    unsigned char data[RECMP_PRIMARY_BYTES + sizeof(RecMpPublic)];
+    DWORD bytes = sizeof data;
+    return IDirectPlay2_GetPlayerData(dp, origin, data, &bytes, DPGET_REMOTE) == DP_OK &&
+           bytes == sizeof data &&
+           tagpu_recmp_public_read(data + RECMP_PRIMARY_BYTES, sizeof *public, public);
+}
+
+/* DISASSEMBLED: only the in-match GUI callback calls 0x463E50 at 0x493FAF.
+   Scope one identity over formatting, every native target send and local echo.
+   Its stack copy restores the outer identity if a callback nests. Only the
+   owning game thread can enter this scope or read its mutable context. */
+static int __stdcall mp_chat_gui_send(const char* player, const char* text,
+                                      unsigned flags, const char* caption)
+{
+    typedef int (__stdcall *SendFn)(const char*,const char*,unsigned,const char*);
+    if (GetCurrentThreadId()!=g_ddraw.gui_thread_id)
+        return ((SendFn)(size_t)0x463E50)(player,text,flags,caption);
+    MpChatContext previous=s_mp_chat;
+    char* ta=ta_main();
+    size_t offset=ta ? (size_t)player-(size_t)(ta+OFF_PLAYERS) : (size_t)-1;
+    unsigned state=0;
+    GUID match;
+    int result;
+    if (ta) memcpy(&state,ta+0x391F1,sizeof state);
+    s_mp_chat.active=0;
+    s_mp_chat.text_seen=0;
+    memset(&s_mp_chat.text,0,sizeof s_mp_chat.text);
+    /* The copied start survives loading reset until the first B2 claim.
+       The game thread owns this GUI scope; loaders use only the copied inbox. */
+    if (ta && (state==5 || state==6) &&
+        tagpu_recmp_chat_inbox_match(s_mp_chat_inbox,&match) &&
+        game_mode(ta)==3 && ((unsigned char)ta[OFF_NETWORK]&1) &&
+        offset%PL_STRIDE==0 && offset/PL_STRIDE<REC_PLAYERS &&
+        *(const unsigned*)player && (unsigned char)player[0x73]==1) {
+        if (s_mp_chat_serial==UINT64_MAX) {
+            tagpu_recmp_chat_inbox_fail(s_mp_chat_inbox);
+            if (s_mp_channel) tagpu_recmp_abort(s_mp_channel,HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW));
+            tagpu_logf("recmp: text identity exhausted: incomplete contributions");
+        } else {
+            s_mp_chat.active=1;
+            memcpy(&s_mp_chat.origin,player+4,4);
+            memcpy(&s_mp_chat.tick,ta+OFF_GAMETIME,4);
+            s_mp_chat.event=++s_mp_chat_serial;
+            s_mp_chat.match=match;
+            s_mp_chat.text.phase=RECMP_TEXT_SOURCE;
+            s_mp_chat.text.mode=(unsigned char)ta[0x2BF0];
+            s_mp_chat.text.origin=s_mp_chat.text.recipient=s_mp_chat.origin;
+            s_mp_chat.text.source_tick=s_mp_chat.tick;
+            s_mp_chat.text.display=flags;
+            s_mp_chat.text.event=s_mp_chat.event;
+        }
+    }
+    result=((SendFn)(size_t)0x463E50)(player,text,flags,caption);
+    /* The formatter returns after its unconditional local sink call at
+       0x463ED4. Target calls and exact packet bytes are now copied facts. */
+    if (s_mp_chat.active && s_mp_chat.text_seen &&
+        !tagpu_recmp_chat_inbox_source(s_mp_chat_inbox,&s_mp_chat.match,
+                                       s_mp_chat.tick,&s_mp_chat.text))
+        tagpu_recmp_chat_inbox_fail(s_mp_chat_inbox);
+    s_mp_chat=previous;
+    return result;
+}
+
+/* 0x453360 constructs exactly 65 bytes before any target call. Its two target
+   sites and its generic site remain the engine's audience/filter logic. The
+   queue copies the enlarged packet before returning (0x462919..0x46292C). */
+static int mp_chat_wire(RecMpChatWire* wire, DWORD origin, const void* message, unsigned bytes)
+{
+    if (GetCurrentThreadId()!=g_ddraw.gui_thread_id || !s_mp_chat.active) return 0;
+    if (origin==s_mp_chat.origin &&
+        tagpu_recmp_chat_wire_make(wire,&s_mp_chat.match,s_mp_chat.event,s_mp_chat.tick,message,bytes))
+        return 1;
+    tagpu_recmp_chat_inbox_fail(s_mp_chat_inbox);
+    if (s_mp_channel) tagpu_recmp_abort(s_mp_channel,E_INVALIDARG);
+    tagpu_logf("recmp: text sender/packet disagrees with GUI identity: incomplete contributions");
+    return 0;
+}
+
+static int __stdcall mp_chat_send_all(DWORD origin, const void* message, unsigned bytes)
+{
+    typedef int (__stdcall *SendFn)(DWORD,const void*,unsigned);
+    RecMpChatWire wire;
+    if (mp_chat_wire(&wire,origin,message,bytes)) { message=&wire; bytes=sizeof wire; }
+    return ((SendFn)(size_t)0x451DF0)(origin,message,bytes);
+}
+
+static int __stdcall mp_chat_send_one(DWORD origin, DWORD destination,
+                                      const void* message, unsigned bytes)
+{
+    typedef int (__stdcall *SendFn)(DWORD,DWORD,const void*,unsigned);
+    RecMpChatWire wire;
+    if (mp_chat_wire(&wire,origin,message,bytes)) {
+        unsigned i;
+        message=&wire; bytes=sizeof wire;
+        for (i=0;i<RECMP_ACTORS;i++) {
+            if (s_mp_chat.text.target[i]==destination) break;
+            if (!s_mp_chat.text.target[i]) { s_mp_chat.text.target[i]=destination; break; }
+        }
+        if (!destination || i==RECMP_ACTORS) {
+            s_mp_text_failed=1;
+            tagpu_recmp_chat_inbox_fail(s_mp_chat_inbox);
+        }
+    }
+    return ((SendFn)(size_t)0x451BC0)(origin,destination,message,bytes);
+}
+
+static int __stdcall mp_chat_send_line(const char* line)
+{
+    typedef int (__stdcall *SendFn)(const char*);
+    unsigned char stock[RECMP_CHAT_STOCK_BYTES];
+    if (GetCurrentThreadId()==g_ddraw.gui_thread_id && s_mp_chat.active) {
+        unsigned i;
+        memset(stock,0,sizeof stock);
+        stock[0]=5;
+        for (i=0;i<sizeof stock-1 && line[i];i++) stock[i+1]=(unsigned char)line[i];
+        if (s_mp_chat.text_seen) {
+            s_mp_text_failed=1;
+            tagpu_recmp_chat_inbox_fail(s_mp_chat_inbox);
+        }
+        memcpy(s_mp_chat.text.stock,stock,sizeof stock); s_mp_chat.text_seen=1;
+        tagpu_logf("recmp: text source origin %u event %llu tick %u CRC %08X",
+                   s_mp_chat.origin,(unsigned long long)s_mp_chat.event,s_mp_chat.tick,
+                   (unsigned)Crc32_ComputeBuf(0,stock,sizeof stock));
+    }
+    return ((SendFn)(size_t)0x453360)(line);
+}
+
+/* Whether a received 0x2B line enters the recording: the metadata checks and the inbox, which
+   copies what it records before the caller moves the stock packet over the envelope. */
+static int mp_chat_record(void* frame, unsigned char* message, unsigned bytes)
+{
+    const char* sender=*(const char* const*)((const char*)frame-0x24);
+    const char* destination=*(const char* const*)((const char*)frame-0x14);
+    char* ta=ta_main();
+    RecMpChatWire wire;
+    size_t source_offset, target_offset;
+    DWORD from, to, source_id, target_id;
+    unsigned tick, state;
+    if (!ta || game_mode(ta)!=3 || !((unsigned char)ta[OFF_NETWORK]&1)) return 0;
+    memcpy(&state,ta+0x391F1,sizeof state);
+    if (state!=5 && state!=6) return 0;
+    source_offset=(size_t)sender-(size_t)(ta+OFF_PLAYERS);
+    target_offset=(size_t)destination-(size_t)(ta+OFF_PLAYERS);
+    if (source_offset%PL_STRIDE || source_offset/PL_STRIDE>=REC_PLAYERS ||
+        target_offset%PL_STRIDE || target_offset/PL_STRIDE>=REC_PLAYERS) return 0;
+    memcpy(&from,ta+0x4C9,4); memcpy(&to,ta+0x4CD,4);
+    memcpy(&source_id,sender+4,4); memcpy(&target_id,destination+4,4);
+    if (!from || from!=source_id || to!=target_id ||
+        *((const unsigned char*)frame+0x14)!=source_offset/PL_STRIDE || !*(const unsigned*)sender ||
+        (unsigned char)sender[0x73]!=3 || !*(const unsigned*)destination ||
+        (unsigned char)destination[0x73]!=1 ||
+        !tagpu_recmp_chat_inbox_receive(s_mp_chat_inbox,from,to,message,bytes,
+            (const volatile unsigned*)(ta+OFF_GAMETIME),&wire,&tick)) return 0;
+    tagpu_logf("recmp: text received origin %u event %llu source %u tick %u recipient %u CRC %08X",
+               from,(unsigned long long)wire.event,wire.tick,tick,to,
+               (unsigned)Crc32_ComputeBuf(0,wire.stock,sizeof wire.stock));
+    return 1;
+}
+
+/* The new 0x2B case has the dispatcher's original frame and its private receive allocation.
+   SHOWING A LINE NEVER DEPENDS ON RECORDING IT: every well-formed envelope moves its embedded
+   stock packet to the front of that allocation and enters stock's 0x05 case unchanged, which
+   checks its own destination (0x45522E..0x455250) and is admitted by the same state mask as the
+   stock code (mask 7). Only entering the recording depends on the sender's identity, the level's
+   state and the match (mp_chat_record), so a line refused there -- a sender row the engine has
+   cleared at the game's end, an inbox that has closed -- is shown as the stock game shows it and
+   is not recorded. A malformed envelope is dropped (0x455F50). */
+static int __cdecl mp_chat_receive(void* frame)
+{
+    unsigned char* message=((unsigned char**)frame)[4];
+    unsigned bytes=tagpu_wire_received(message);
+    RecMpChatWire envelope;
+    if (bytes!=sizeof envelope) return 0;
+    memcpy(&envelope,message,sizeof envelope);
+    if (envelope.code!=RECMP_CHAT_CODE || envelope.version!=RECMP_CHAT_WIRE_VERSION ||
+        envelope.bytes!=sizeof envelope || envelope.stock[0]!=5) return 0;
+    if (!mp_chat_record(frame,message,bytes))
+        tagpu_logf("recmp: text event %llu shown and not recorded",
+                   (unsigned long long)envelope.event);
+    memcpy(message,envelope.stock,sizeof envelope.stock);
+    return 1;
+}
+
+static void mp_init(void)
+{
+    static const unsigned char pump_entry[5]={0xA1,0xE8,0x1D,0x51,0x00};
+    static const unsigned char pump_receive[5]={0xE8,0x47,0xF7,0xFF,0xFF};
+    static const unsigned char split_variable[11]={0x6A,0x10,0x8D,0x4C,0x24,0x18,0xE8,0x9C,0x24,0xFB,0xFF};
+    static const unsigned char split_fixed[8]={0x66,0x8B,0x04,0x85,0xD8,0x2A,0x51,0x00};
+    static const unsigned char launch[] = {
+        0xC6,0x44,0x24,0x07,0x08,0x8B,0x40,0x04,0x8D,0x54,0x24,0x07,
+        0x6A,0x01,0x52,0x50,0xE8,0xC6,0xB0,0xFB,0xFF
+    };
+    static const unsigned char received[] = { 0xA1,0xE8,0x1D,0x51,0x00 };
+    static const unsigned char length[] = { 0x89,0x35,0xF8,0x2A,0x51,0x00 };
+    static const unsigned char created[] = {
+        0x6A,0x00,0x66,0x89,0x44,0x24,0x2F,0x8B,0x0E,0x6A,0x15,0x52,
+        0x8B,0x54,0x24,0x44,0x8D,0x44,0x24,0x14,0x6A,0x00,0x50,0x52,
+        0x56,0xFF,0x51,0x18,0x33,0xC9
+    };
+    static const unsigned char data_size[] = { 0x83,0x7D,0x14,0x15,0x74,0x40 };
+    static const struct { unsigned va; unsigned char stock[5]; } chat_call[] = {
+        { 0x493FAF, {0xE8,0x9C,0xFE,0xFC,0xFF} },
+        { 0x463E9F, {0xE8,0xBC,0xF4,0xFE,0xFF} },
+        { 0x4534B6, {0xE8,0x35,0xE9,0xFF,0xFF} },
+        { 0x4533F9, {0xE8,0xC2,0xE7,0xFF,0xFF} },
+        { 0x45348B, {0xE8,0x30,0xE7,0xFF,0xFF} }
+    };
+    struct { unsigned va, n; unsigned char now[6]; DWORD protection; } site[] = {
+        { 0x496D25, 5 }, { 0x4553BE, 5 }, { 0x4520BE, 6 },
+        { 0x4CA762, 5 }, { 0x454315, 6 }, { 0x493FAF,5 }, { 0x463E9F,5 },
+        { 0x4534B6,5 }, { 0x4533F9,5 }, { 0x45348B,5 }, { 0x456028,4 },
+        { 0x453D40,5 }, { 0x453D94,5 }
+    };
+    unsigned char *observe = NULL, *sized = NULL, *create = NULL, *accept = NULL, *chat = NULL, *p;
+    unsigned char *pump=NULL, *receive=NULL, *tail;
+    const unsigned sites = sizeof site / sizeof site[0];
+    unsigned i, writable = 0, value, locked=0;
+    if (memcmp((const void*)(size_t)0x496D15, launch, sizeof launch) ||
+        memcmp((const void*)(size_t)0x4553BE, received, sizeof received) ||
+        *(const unsigned*)(size_t)0x455F9C != 0x4553BE ||
+        memcmp((const void*)(size_t)0x4520BE, length, sizeof length) ||
+        memcmp((const void*)(size_t)0x4CA749, created, sizeof created) ||
+        memcmp((const void*)(size_t)0x454315, data_size, sizeof data_size) ||
+        *(const unsigned*)(size_t)0x456028!=0x455F50 ||
+        tagpu_detour_landed(0x453D40,NULL,NULL) ||
+        memcmp((const void*)0x453D40,pump_entry,sizeof pump_entry) ||
+        memcmp((const void*)0x453D94,pump_receive,sizeof pump_receive) ||
+        memcmp((const void*)0x463919,split_variable,sizeof split_variable) ||
+        memcmp((const void*)0x463931,split_fixed,sizeof split_fixed)) goto refused;
+    for (i=0;i<sizeof chat_call/sizeof chat_call[0];i++)
+        if (memcmp((const void*)(size_t)chat_call[i].va,chat_call[i].stock,5)) goto refused;
+    observe = tagpu_detour_stub();
+    sized = tagpu_detour_stub();
+    create = tagpu_detour_stub();
+    accept = tagpu_detour_stub();
+    chat = tagpu_detour_stub();
+    pump = tagpu_detour_stub();
+    receive = tagpu_detour_stub();
+    if (!observe || !sized || !create || !accept || !chat || !pump || !receive) goto refused;
+    s_mp_rx_tls=TlsAlloc();
+    if (s_mp_rx_tls==TLS_OUT_OF_INDEXES) goto refused;
+    s_mp_chat_inbox=tagpu_recmp_chat_inbox_begin();
+    if (!s_mp_chat_inbox) goto refused;
+    if (!InitializeCriticalSectionAndSpinCount(&s_mp_rx_lock,0)) goto refused;
+    locked=1;
+    p=pump;
+    *p++=0x83; *p++=0xEC; *p++=sizeof(MpReceiveFrame);
+    *p++=0x9C; *p++=0x60;
+    *p++=0x8D; *p++=0x44; *p++=0x24; *p++=0x24;
+    *p++=0x50; *p++=0xE8; tagpu_detour_rel(p,(unsigned)(size_t)mp_receive_enter); p+=4;
+    *p++=0x83; *p++=0xC4; *p++=4;
+    *p++=0x85; *p++=0xC0; *p++=0x61;
+    *p++=0x0F; *p++=0x84; tail=p; p+=4;
+    *p++=0x9D;
+    *p++=0xE8; unsigned char* original=p; p+=4;
+    *p++=0x9C; *p++=0x60;
+    *p++=0x8D; *p++=0x44; *p++=0x24; *p++=0x24;
+    *p++=0x50; *p++=0xE8; tagpu_detour_rel(p,(unsigned)(size_t)mp_receive_leave); p+=4;
+    *p++=0x83; *p++=0xC4; *p++=4; *p++=0x61; *p++=0x9D;
+    *p++=0x8D; *p++=0x64; *p++=0x24; *p++=sizeof(MpReceiveFrame); *p++=0xC3;
+    tagpu_detour_rel(tail,(unsigned)(size_t)p);
+    *p++=0x9D; *p++=0x83; *p++=0xC4; *p++=sizeof(MpReceiveFrame);
+    *p++=0x33; *p++=0xC0; *p++=0xC3;
+    tagpu_detour_rel(original,(unsigned)(size_t)p);
+    memcpy(p,pump_entry,sizeof pump_entry); p+=sizeof pump_entry;
+    *p++=0xE9; tagpu_detour_rel(p,0x453D45);
+    p=receive;
+    *p++=0x9C; *p++=0x60;
+    *p++=0x8D; *p++=0x44; *p++=0x24; *p++=0x24;
+    *p++=0x50; *p++=0xE8; tagpu_detour_rel(p,(unsigned)(size_t)mp_receive_packet); p+=4;
+    *p++=0x83; *p++=0xC4; *p++=4;
+    *p++=0x89; *p++=0x44; *p++=0x24; *p++=0x1C;
+    *p++=0x61; *p++=0x9D; *p++=0xC3;
+    p = observe;
+    *p++ = 0x9C; *p++ = 0x60;                  /* flags and all registers */
+    *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x24;
+    *p++ = 0x50; *p++ = 0xE8;
+    tagpu_detour_rel(p, (unsigned)(size_t)mp_start_receive); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    *p++ = 0x61; *p++ = 0x9D;
+    memcpy(p, received, sizeof received); p += sizeof received;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x4553C3);
+    p = sized;
+    *p++ = 0xC7; *p++ = 0x05;
+    value = 0x512AF8; memcpy(p, &value, 4); p += 4;
+    value = sizeof(RecMpStart); memcpy(p, &value, 4); p += 4;
+    /* DISASSEMBLED: the initializer leaves code 0x2B's length/callback zero
+       and its dispatch slot points to the loop. All three splitter walks use
+       this length table. Mask 7 preserves stock text's state admission; the
+       identified handler bounds itself to loading/play states 5/6. */
+    { const unsigned entries[][2] = {
+        {0x512B84,sizeof(RecMpChatWire)}, {0x512ACC,0x44FD40}, {0x512C6C,7}
+      };
+      for (i=0;i<sizeof entries/sizeof entries[0];i++) {
+          *p++=0xC7; *p++=0x05;
+          memcpy(p,&entries[i][0],4); p+=4;
+          memcpy(p,&entries[i][1],4); p+=4;
+      }
+    }
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x4520C4);
+    p = create;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)mp_create_player); p += 4;
+    *p++ = 0x33; *p++ = 0xC9;                 /* original HRESULT-to-BOOL scratch */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x4CA767);
+    p = accept;
+    memcpy(p, data_size, 4); p += 4;
+    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, 0x45435B); p += 4;
+    *p++ = 0x81; *p++ = 0x7D; *p++ = 0x14;
+    value = RECMP_PRIMARY_BYTES + sizeof(RecMpPublic); memcpy(p, &value, 4); p += 4;
+    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, 0x45435B); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x45431B);
+    p=chat;
+    *p++=0x9C; *p++=0x60;
+    *p++=0x8D; *p++=0x44; *p++=0x24; *p++=0x24;
+    *p++=0x50; *p++=0xE8;
+    tagpu_detour_rel(p,(unsigned)(size_t)mp_chat_receive); p+=4;
+    *p++=0x83; *p++=0xC4; *p++=0x04;
+    *p++=0x85; *p++=0xC0; *p++=0x61;
+    *p++=0x74; *p++=0x06;
+    *p++=0x9D; *p++=0xE9; tagpu_detour_rel(p,0x45522E); p+=4;
+    *p++=0x9D; *p++=0xE9; tagpu_detour_rel(p,0x455F50);
+    for (i = 0; i < sites; i++) {
+        unsigned target = i == 0 ? (unsigned)(size_t)mp_start_send :
+                          i == 1 ? (unsigned)(size_t)observe :
+                          i == 2 ? (unsigned)(size_t)sized :
+                          i == 3 ? (unsigned)(size_t)create :
+                          i == 4 ? (unsigned)(size_t)accept :
+                          i == 5 ? (unsigned)(size_t)mp_chat_gui_send :
+                          i == 6 ? (unsigned)(size_t)mp_chat_send_line :
+                          i == 7 ? (unsigned)(size_t)mp_chat_send_all :
+                          i == 8 || i == 9 ? (unsigned)(size_t)mp_chat_send_one :
+                          i == 10 ? (unsigned)(size_t)chat :
+                          i == 11 ? (unsigned)(size_t)pump : (unsigned)(size_t)receive;
+        if (i==10) { memcpy(site[i].now,&target,4); continue; }
+        site[i].now[0] = i == 0 || (i>=5 && i!=11) ? 0xE8 : 0xE9;
+        value = target - (site[i].va + 5);
+        memcpy(site[i].now + 1, &value, 4);
+        site[i].now[5] = 0x90;
+    }
+    /* Attach precedes engine startup. Acquire every page before changing any
+       instruction, so a protection/allocation failure leaves the stock protocol. */
+    for (i = 0; i < sites; i++) {
+        if (!VirtualProtect((void*)(size_t)site[i].va, site[i].n, PAGE_EXECUTE_READWRITE,
+                             &site[i].protection)) goto refused;
+        writable++;
+    }
+    for (i = 0; i < sites; i++)
+        memcpy((void*)(size_t)site[i].va, site[i].now, site[i].n);
+    FlushInstructionCache(GetCurrentProcess(), NULL, 0);
+    for (i = 0; i < sites; i++) {
+        DWORD ignored;
+        VirtualProtect((void*)(size_t)site[i].va, site[i].n, site[i].protection, &ignored);
+    }
+    s_mp_sites = 1;
+    tagpu_logf("recmp: ARMED %u-byte fresh start and %u-byte native player identity",
+               (unsigned)sizeof(RecMpStart), RECMP_PRIMARY_BYTES + (unsigned)sizeof(RecMpPublic));
+    tagpu_logf("recmp: ARMED %u-byte identified in-match text; native audience and display case",
+               (unsigned)sizeof(RecMpChatWire));
+    tagpu_logf("recmp: ARMED owned primary receive frames and serialized dispatch");
+    return;
+refused:
+    for (i = 0; i < writable; i++) {
+        DWORD ignored;
+        VirtualProtect((void*)(size_t)site[i].va, site[i].n, site[i].protection, &ignored);
+    }
+    tagpu_detour_stub_free(observe);
+    tagpu_detour_stub_free(sized);
+    tagpu_detour_stub_free(create);
+    tagpu_detour_stub_free(accept);
+    tagpu_detour_stub_free(chat);
+    tagpu_detour_stub_free(pump);
+    tagpu_detour_stub_free(receive);
+    if (locked) DeleteCriticalSection(&s_mp_rx_lock);
+    tagpu_recmp_chat_inbox_end(s_mp_chat_inbox); s_mp_chat_inbox=NULL;
+    if (s_mp_rx_tls!=TLS_OUT_OF_INDEXES) TlsFree(s_mp_rx_tls);
+    s_mp_rx_tls=TLS_OUT_OF_INDEXES;
+    tagpu_logf("recmp: start/player-data/text sites differ or cannot be patched: no contributions");
+}
+
+static void mp_explored_end(void)
+{
+    tagpu_recmp_explored_end(s_mp_explored); s_mp_explored=NULL;
+    if (s_mp_explored_image) HeapFree(GetProcessHeap(),0,s_mp_explored_image);
+    s_mp_explored_image=NULL; s_mp_explored_map=NULL;
+    s_mp_explored_w=s_mp_explored_h=s_mp_explored_cells=s_mp_explored_bytes=0;
+}
+
+static void mp_pov_end(void)
+{
+    tagpu_recmp_pov_end(s_mp_pov); s_mp_pov=NULL;
+    s_mp_advanced=s_mp_pov_failed=s_mp_clicks_odd=0;
+    memset(s_mp_pov_seen,0,sizeof s_mp_pov_seen);
+}
+
+static int mp_explored_begin(const Level* L, const RecMpRoster* roster)
+{
+    unsigned w=*(const unsigned*)(L->ta+OFF_GRID_W), h=*(const unsigned*)(L->ta+OFF_GRID_H);
+    unsigned cells=tagpu_recmp_explored_cells(w,h);
+    const unsigned char* map=*(const unsigned char* const*)(L->ta+OFF_MAPPED);
+    if (!cells || !map) return 0;
+    s_mp_explored=tagpu_recmp_explored_begin(roster,w,h);
+    s_mp_explored_bytes=(cells+7)/8;
+    s_mp_explored_image=HeapAlloc(GetProcessHeap(),0,s_mp_explored_bytes);
+    if (!s_mp_explored || !s_mp_explored_image) { mp_explored_end(); return 0; }
+    s_mp_explored_w=w; s_mp_explored_h=h; s_mp_explored_cells=cells; s_mp_explored_map=map;
+    return 1;
+}
+
+static void mp_explored_log(unsigned origin, unsigned tick, const char* where)
+{
+    RecMpExploreState state;
+    if (tagpu_recmp_explored_get(s_mp_explored,origin,&state,s_mp_explored_image,s_mp_explored_bytes))
+        tagpu_logf("recmp: %s explored map ID %u, source tick %u seq %u applied tick %u, "
+                   "%u cells / %u bytes, lostype %u crc %08X",where,origin,state.source_tick,
+                   state.sequence,tick,state.cells,state.bytes,state.lostype,
+                   (unsigned)Crc32_ComputeBuf(0,s_mp_explored_image,state.bytes));
+}
+
+typedef struct { unsigned tick; } MpExploreEmit;
+static int mp_explored_emit(void* ctx, unsigned origin, const void* body, unsigned bytes)
+{
+    MpExploreEmit* e=ctx;
+    RecMpHeader header;
+    RecMpExploreState state;
+    int known=tagpu_recmp_explored_get(s_mp_explored,origin,&state,NULL,0);
+    if (!tagpu_recmp_send_from(s_mp_channel,origin,RECMP_EXPLORED,e->tick,body,bytes,&header) ||
+        !tagpu_recmp_explored_put(s_mp_explored,s_mp_seats,&header,body,bytes,e->tick)) return 0;
+    if (!known) mp_explored_log(origin,e->tick,"local");
+    return 1;
+}
+
+static int mp_explored_capture(const Level* L, unsigned tick)
+{
+    MpExploreEmit emit={tick};
+    unsigned short lostype;
+    if (*(const unsigned char* const*)(L->ta+OFF_MAPPED)!=s_mp_explored_map ||
+        *(const unsigned*)(L->ta+OFF_GRID_W)!=s_mp_explored_w ||
+        *(const unsigned*)(L->ta+OFF_GRID_H)!=s_mp_explored_h) return 0;
+    memcpy(&lostype,L->ta+OFF_LOSTYPE,sizeof lostype);
+    /* LoadMap owns exactly cells*2 bytes, with no 32-bit wrap, and only level
+       teardown frees this frozen pointer. B2 and teardown share the game thread.
+       Each bounded u16 contributes only this local controller's player bit. */
+    for (unsigned seat=0;seat<REC_PLAYERS;seat++) {
+        const char* player=L->ta+OFF_PLAYERS+seat*PL_STRIDE;
+        unsigned controller=(unsigned char)player[PL_CONTROLLER], origin;
+        if (controller!=1 && controller!=2) continue;
+        memcpy(&origin,player+4,sizeof origin);
+        memset(s_mp_explored_image,0,s_mp_explored_bytes);
+        for (unsigned cell=0;cell<s_mp_explored_cells;cell++) {
+            unsigned short word;
+            memcpy(&word,s_mp_explored_map+(size_t)cell*2,sizeof word);
+            s_mp_explored_image[cell>>3]|=((word>>seat)&1u)<<(cell&7);
+        }
+        if (!tagpu_recmp_explored_encode(s_mp_explored,origin,s_mp_explored_image,
+                                          s_mp_explored_bytes,lostype,mp_explored_emit,&emit)) return 0;
+    }
+    return 1;
+}
+
+/* This peer stops applying remote contributions for the rest of the game: its own
+   recording ends incomplete, and only that. Aborting the channel instead would also end
+   this peer's sends, seals and receipts, on which every other recorder's completeness
+   rests. MEASURED 2026-10-06, five peers: at the game's end each joiner's engine clears
+   every other remote player's row (active 0, ID 0xFFFFFFFF, controller 0; the removal
+   0x452CC0 [INFERRED]) while those players still contribute, so their next player image
+   is refused here (mp_apply) on every joiner. */
+static void mp_relinquish(unsigned tick)
+{
+    tagpu_logf("recmp: tick %u: this peer stops applying contributions; its own continue, its "
+               "recording ends incomplete", tick);
+    s_mp_consuming = 0;
+    tagpu_recmp_relinquish(s_mp_channel);
+    mp_record_end(0);
+}
+
+/* A remote packet this peer cannot apply, named; the caller relinquishes consumption. */
+static int mp_refuse(const RecMpHeader* h, unsigned tick, const char* why)
+{
+    tagpu_logf("recmp: tick %u: cannot apply ID %u kind %u seq %u source tick %u: %s", tick,
+               h->origin, h->kind, h->sequence, h->tick, why);
+    return 0;
+}
+
+/* Everything the channel delivered by this capture point, applied in delivery order:
+   1 when the queue is empty, 0 when a packet is refused or consumption has ended, -1
+   when the channel failed. */
+static int mp_apply(const Level* L, unsigned tick)
+{
+    RecMpPacket packet;
+    unsigned i;
+    int taken;
+    while ((taken = tagpu_recmp_take_at(s_mp_channel, &packet, tick)) > 0) {
+        RecMpPlayerState before, state;
+        if (packet.h.kind == RECMP_SEAL) {
+            if (!tagpu_recmp_orders_idle(s_mp_orders, packet.h.origin) ||
+                !tagpu_recmp_explored_idle(s_mp_explored,packet.h.origin) ||
+                !tagpu_recmp_pov_idle(s_mp_pov,packet.h.origin))
+                return mp_refuse(&packet.h,tick,"a seal closes a partial order, explored-map or "
+                                 "selection transaction");
+            continue;
+        }
+        if (packet.h.kind == RECMP_SEATS) {
+            if (!tagpu_recmp_seats_put(s_mp_seats,&packet.h,packet.body,packet.h.bytes-sizeof packet.h))
+                return mp_refuse(&packet.h,tick,"its source roster differs from this peer's");
+            tagpu_logf("recmp: remote source roster ID %u seq %u, %u actors, applied tick %u, crc %08X",
+                       packet.h.origin,packet.h.sequence,s_mp_roster.count,tick,
+                       (unsigned)Crc32_ComputeBuf(0,packet.body,packet.h.bytes-sizeof packet.h));
+            continue;
+        }
+        if (packet.h.kind == RECMP_EXPLORED) {
+            RecMpExploreState state;
+            int known=tagpu_recmp_explored_get(s_mp_explored,packet.h.origin,&state,NULL,0);
+            if (!tagpu_recmp_explored_put(s_mp_explored,s_mp_seats,&packet.h,packet.body,
+                                          packet.h.bytes-sizeof packet.h,tick))
+                return mp_refuse(&packet.h,tick,"the explored-map cache refuses it");
+            if (!known) mp_explored_log(packet.h.origin,tick,"remote");
+            continue;
+        }
+        if (packet.h.kind == RECMP_POV || packet.h.kind == RECMP_CLICK ||
+            packet.h.kind == RECMP_SELECT) {
+            if (!tagpu_recmp_pov_put(s_mp_pov,s_mp_seats,&packet.h,packet.body,
+                                     packet.h.bytes-sizeof packet.h,tick))
+                return mp_refuse(&packet.h,tick,"the perspective cache refuses it");
+            mp_pov_log(&packet.h,tick,"remote");
+            continue;
+        }
+        if (packet.h.kind == RECMP_TEXT) {
+            if (!tagpu_recmp_text_put(s_mp_text,s_mp_seats,&packet.h,packet.body,
+                                      packet.h.bytes-sizeof packet.h,tick))
+                return mp_refuse(&packet.h,tick,"the text cache refuses it");
+            tagpu_logf("recmp: remote text batch ID %u source tick %u seq %u applied tick %u, %u bytes CRC %08X",
+                       packet.h.origin,packet.h.tick,packet.h.sequence,tick,
+                       packet.h.bytes-(unsigned)sizeof packet.h,
+                       (unsigned)Crc32_ComputeBuf(0,packet.body,packet.h.bytes-sizeof packet.h));
+            continue;
+        }
+        if (packet.h.kind == RECMP_UNITS) {
+            if (!tagpu_recmp_units_put(s_mp_units,s_mp_seats,&packet.h,packet.body,
+                                       packet.h.bytes-sizeof packet.h,tick))
+                return mp_refuse(&packet.h,tick,"the unit cache refuses it");
+            mp_units_log(&packet,tick,"remote");
+            continue;
+        }
+        if (packet.h.kind == RECMP_ROOTS) {
+            if (!tagpu_recmp_roots_put(s_mp_roots,s_mp_seats,&packet.h,packet.body,
+                                       packet.h.bytes-sizeof packet.h,tick))
+                return mp_refuse(&packet.h,tick,"the root cache refuses it");
+            mp_roots_log(&packet,tick,"remote");
+            continue;
+        }
+        if (packet.h.kind == RECMP_NAMED) {
+            if (!tagpu_recmp_named_put(s_mp_named,s_mp_seats,&packet.h,packet.body,
+                                       packet.h.bytes-sizeof packet.h,tick))
+                return mp_refuse(&packet.h,tick,"the named-start cache refuses it");
+            continue;
+        }
+        if (packet.h.kind == RECMP_ORDERS) {
+            if (!tagpu_recmp_seats_get(s_mp_seats,packet.h.origin,NULL,NULL))
+                return mp_refuse(&packet.h,tick,"orders precede the source's roster");
+            if (!mp_orders_receive(L, &packet, tick))
+                return mp_refuse(&packet.h,tick,"the order cache refuses it");
+            continue;
+        }
+        if (packet.h.kind != RECMP_PLAYER) return mp_refuse(&packet.h,tick,"no recorder applies its kind");
+        for (i = 0; i < s_mp_roster.count; i++) if (s_mp_roster.actor[i].origin == packet.h.origin) break;
+        if (i == s_mp_roster.count) return mp_refuse(&packet.h,tick,"its origin is not in the roster");
+        {
+            unsigned seat = s_mp_roster.actor[i].seat, origin;
+            unsigned mapped[REC_PLAYER_DWORDS];
+            const char* player = L->ta + OFF_PLAYERS + seat * PL_STRIDE;
+            int valid = tagpu_recmp_players_get(s_mp_players, packet.h.origin, &before);
+            memcpy(&origin, player + 4, sizeof origin);
+            if (origin != packet.h.origin || (unsigned char)player[PL_CONTROLLER] != 3) {
+                tagpu_logf("recmp: seat %u holds ID %u controller %u", seat, origin,
+                           (unsigned char)player[PL_CONTROLLER]);
+                return mp_refuse(&packet.h,tick,"its seat no longer holds that remote player");
+            }
+            if (!tagpu_recmp_seats_get(s_mp_seats,origin,NULL,NULL))
+                return mp_refuse(&packet.h,tick,"a player image precedes the source's roster");
+            if (!tagpu_recmp_players_put(s_mp_players, &packet.h, packet.body,
+                                         packet.h.bytes-sizeof packet.h, tick) ||
+                !tagpu_recmp_players_get(s_mp_players,origin,&state) ||
+                !tagpu_recmp_seats_image(s_mp_seats,origin,&state.stream,state.image,sizeof state.image,
+                                         mapped,sizeof mapped))
+                return mp_refuse(&packet.h,tick,"the player cache refuses it");
+            if (!valid) {
+                tagpu_logf("recmp: remote player image ID %u -> seat %u owner controller %u, "
+                           "source tick %u seq %u, applied tick %u, %u image bytes crc %08X", origin,
+                           seat, state.controller, state.source_tick, state.sequence, tick,
+                           REC_PLAYER_IMAGE, (unsigned)Crc32_ComputeBuf(0,state.image,sizeof state.image));
+                tagpu_logf("recmp: mapped player ID %u self %u -> %u, image crc %08X", origin,
+                           ((const unsigned char*)state.image)[0x146],
+                           ((const unsigned char*)mapped)[0x146],
+                           (unsigned)Crc32_ComputeBuf(0,mapped,sizeof mapped));
+            }
+        }
+    }
+    if (taken == -2) {
+        tagpu_logf("recmp: tick %u: the receive queue filled before this peer applied it", tick);
+        return 0;
+    }
+    return taken < 0 ? -1 : 1;
+}
+
+static void mp_capture(const Level* L, unsigned tick)
+{
+    unsigned i;
+    RecMpStats stats;
+    const char* why;
+    if (!s_mp_tried) {
+        union { DPSESSIONDESC2 desc; unsigned char bytes[4096]; } session;
+        IDirectPlay2A* dp;
+        RecMpConfig config = {0};
+        RecMpRoster roster = { .version=1, .slots=L->nslots };
+        unsigned short each;
+        DWORD bytes = sizeof session, origin, host = 0;
+        unsigned seat = (unsigned char)L->ta[OFF_CONTROLLED];
+        GUID zero = { 0 };
+        GUID match = {0};
+        unsigned ready = tagpu_recmp_chat_inbox_claim(s_mp_chat_inbox,&match,&host);
+        s_mp_tried = 1;
+        memset(&session, 0, sizeof session);
+        memcpy(&dp, L->ta + 0x4D9, sizeof dp);
+        if (!s_mp_sites || seat >= REC_PLAYERS || !dp) return;
+        if (!ready) { tagpu_logf("recmp: no current engine-start match ID: no contributions"); return; }
+        memcpy(&origin, L->ta + OFF_PLAYERS + seat * PL_STRIDE + 4, sizeof origin);
+        if (IDirectPlay2_GetSessionDesc(dp, session.bytes, &bytes) != DP_OK ||
+            bytes > sizeof session || bytes < sizeof session.desc ||
+            session.desc.dwSize != sizeof session.desc ||
+            !memcmp(&session.desc.guidInstance, &zero, sizeof zero) ||
+            (session.desc.dwFlags & DPSESSION_NOMESSAGEID)) {
+            tagpu_logf("recmp: no bounded session descriptor: no contributions");
+            return;
+        }
+        config.net.match = match;
+        config.net.host = host == origin;
+        config.origin = origin;
+        config.signer = tagpu_recmp_key();
+        memcpy(&each, L->ta + OFF_EACH, sizeof each);
+        roster.each = each;
+        for (i = 0; i < REC_PLAYERS; i++) {
+            const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
+            unsigned active, ctl = (unsigned char)player[PL_CONTROLLER];
+            DWORD native;
+            DPCAPS caps = {0};
+            RecMpPublic public;
+            memcpy(&active, player, sizeof active);
+            if (!active || ctl < 1 || ctl > 4) continue;
+            memcpy(&native, player + 4, sizeof native);
+            caps.dwSize = sizeof caps;
+            if (!mp_public_key(dp, native, &public) ||
+                IDirectPlay2_GetPlayerCaps(dp, native, &caps, 0) != DP_OK ||
+                !!(caps.dwFlags & DPPLAYERCAPS_LOCAL) != (ctl == 1 || ctl == 2)) {
+                tagpu_logf("recmp: primary-owned identity missing for native ID %u: no contributions", native);
+                return;
+            }
+            config.actor[config.count].origin = native;
+            config.actor[config.count].local = ctl == 1 || ctl == 2;
+            config.actor[config.count++].public = public;
+            {
+                unsigned first = id_in(*(const char* const*)(player + 0x67), L->begin,
+                                       REC_UNIT_BYTES, L->nslots);
+                unsigned last = id_in(*(const char* const*)(player + 0x6B), L->begin,
+                                      REC_UNIT_BYTES, L->nslots);
+                if (first == REC_ID_BAD || last == REC_ID_BAD || first <= 1 || last <= 1) {
+                    tagpu_logf("recmp: unbounded unit block for native ID %u: no contributions", native);
+                    return;
+                }
+                roster.actor[roster.count++] = (RecMpSeat){native, i, first-1, last-1};
+            }
+            tagpu_logf("recmp: primary-owned key ID %u seat %u controller %u data bytes %u",
+                       native, i, ctl, RECMP_PRIMARY_BYTES + (unsigned)sizeof public);
+        }
+        if (!tagpu_recmp_roster_valid(&roster)) {
+            tagpu_logf("recmp: primary seat/unit blocks disagree with %u slots, each %u: no contributions",
+                       roster.slots, roster.each);
+            return;
+        }
+        bytes = sizeof config.net.address;
+        if (!host || IDirectPlay2_GetPlayerAddress(dp, host, config.net.address, &bytes) != DP_OK ||
+            !bytes || bytes > sizeof config.net.address) {
+            tagpu_logf("recmp: no bounded primary host address: no contributions");
+            return;
+        }
+        config.net.address_bytes = bytes;
+        s_mp_players = tagpu_recmp_players_begin(&roster);
+        s_mp_seats = tagpu_recmp_seats_begin(&roster);
+        s_mp_units = tagpu_recmp_units_begin(&roster);
+        s_mp_named = tagpu_recmp_named_begin(&roster);
+        s_mp_roots = tagpu_recmp_roots_begin(&roster);
+        s_mp_roots_queue = tagpu_recmp_roots_queue_begin();
+        s_mp_text = tagpu_recmp_text_begin(&roster);
+        s_mp_text_queue = tagpu_recmp_text_queue_begin();
+        s_mp_orders = tagpu_recmp_orders_begin(L->nslots);
+        s_mp_pov = tagpu_recmp_pov_begin(&roster);
+        if (!mp_explored_begin(L,&roster) || !s_mp_players || !s_mp_seats || !s_mp_units || !s_mp_orders ||
+            !s_mp_named || !s_mp_roots || !s_mp_roots_queue || !s_mp_text || !s_mp_text_queue ||
+            !s_mp_pov) {
+            tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
+            tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
+            tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
+            mp_explored_end();
+            mp_pov_end();
+            mp_roots_end();
+            tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
+            tagpu_logf("recmp: no bounded player/order cache: no contributions");
+            return;
+        }
+        s_mp_roster = roster;
+        s_mp_channel = tagpu_recmp_begin(&config);
+        if (!s_mp_channel) {
+            tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
+            tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
+            tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
+            mp_explored_end();
+            mp_pov_end();
+            mp_roots_end();
+            tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
+            tagpu_logf("recmp: contribution worker could not start%s",
+                       tagpu_recmp_worker_running() ?
+                       ": the previous match's worker has not ended" : "");
+            return;
+        }
+        tagpu_logf("recmp: contributions begin at tick %u, transport ID %u", tick, origin);
+        s_mp_consuming = 1;
+        s_mp_logtick = tick;
+        s_mp_level = *L;
+        s_mp_active_match = match;
+        s_mp_local = origin;
+        s_mp_tick = tick;
+        s_mp_roots_failed = 0;
+        s_mp_tid = GetCurrentThreadId();
+        /* Journal attachment precedes every publication and game consumption.
+           The worker never touches the journal or the file producer pointer. */
+        mp_record_begin(L,(int)tick,&config);
+    }
+    if (!s_mp_channel) return;
+    if (!tagpu_recmp_chat_inbox_drain(s_mp_chat_inbox,&s_mp_active_match,s_mp_local,
+                                      &s_mp_roster,s_mp_text_queue)) {
+        why = "the copied chat inbox did not drain into the text queue";
+        goto incomplete;
+    }
+    /* The pump at 0x4954C8 can start roots at T before B2. Post-B2 roots
+       from T-1 must be sent before advance seals that source tick. */
+    if (s_mp_roots_failed || s_mp_text_failed || s_mp_pov_failed || !mp_events_flush(s_mp_tick)) {
+        why = "a root, text or click publication was refused";
+        goto incomplete;
+    }
+    if (!tagpu_recmp_advance(s_mp_channel, tick) || !mp_events_flush(tick)) {
+        why = "the source clock did not advance";
+        goto incomplete;
+    }
+    s_mp_tick = tick;
+    s_mp_advanced = 1;
+    for (i = 0; i < REC_PLAYERS; i++) {
+        const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
+        unsigned img[REC_PLAYER_DWORDS], origin;
+        unsigned char body[sizeof(RecMpPlayerDelta)+REC_PLAYER_IMAGE];
+        RecMpHeader header;
+        int bytes;
+        unsigned ctl = (unsigned char)player[PL_CONTROLLER];
+        if (ctl != 1 && ctl != 2) continue;
+        memcpy(&origin, player + 4, sizeof origin);
+        if (!tagpu_recmp_seats_get(s_mp_seats,origin,NULL,NULL)) {
+            if (!tagpu_recmp_send_from(s_mp_channel,origin,RECMP_SEATS,tick,&s_mp_roster,
+                                       sizeof s_mp_roster,&header) ||
+                !tagpu_recmp_seats_put(s_mp_seats,&header,&s_mp_roster,sizeof s_mp_roster)) {
+                why = "the local source roster was not published";
+                goto incomplete;
+            }
+            tagpu_logf("recmp: local source roster ID %u seq %u, %u actors, crc %08X", origin,
+                       header.sequence,s_mp_roster.count,
+                       (unsigned)Crc32_ComputeBuf(0,&s_mp_roster,sizeof s_mp_roster));
+        }
+        player_image(L, i, img);
+        {
+            GUID stream;
+            unsigned mapped[REC_PLAYER_DWORDS];
+            if (!tagpu_recmp_seats_get(s_mp_seats,origin,NULL,&stream) ||
+                !tagpu_recmp_seats_image(s_mp_seats,origin,&stream,img,sizeof img,mapped,sizeof mapped)) {
+                why = "a local player image does not map through its seats";
+                goto incomplete;
+            }
+        }
+        bytes = tagpu_recmp_players_delta(s_mp_players, origin, ctl, img, body, sizeof body);
+        if (bytes < 0) {
+            why = "a local player image delta was refused";
+            goto incomplete;
+        }
+        if (!bytes) continue;
+        /* The accepted source envelope is the baseline's publication point.
+           An unsent delta cannot suppress a later capture of those bytes. */
+        if (!tagpu_recmp_send_from(s_mp_channel, origin, RECMP_PLAYER, tick, body, bytes, &header) ||
+            !tagpu_recmp_players_put(s_mp_players, &header, body, bytes, tick)) {
+            why = "a local player image was not published";
+            goto incomplete;
+        }
+        if (((const RecMpPlayerDelta*)body)->full)
+            tagpu_logf("recmp: local player image ID %u seat %u controller %u, source tick %u seq %u, "
+                       "%u image bytes crc %08X", origin, i, ctl, tick, header.sequence,
+                       REC_PLAYER_IMAGE, (unsigned)Crc32_ComputeBuf(0,img,sizeof img));
+    }
+    if (s_mp_consuming) {
+        int applied = mp_apply(L, tick);
+        if (applied < 0) { why = "the channel failed"; goto incomplete; }
+        if (!applied) mp_relinquish(tick);
+    }
+    why = !mp_units_capture(L, tick) ? "the local unit capture was refused" :
+          !mp_orders_capture(L, tick) ? "the local order capture was refused" :
+          !mp_explored_capture(L, tick) ? "the local explored-map capture was refused" :
+          !mp_pov_capture(L, tick) ? "the local perspective capture was refused" : NULL;
+    if (why) goto incomplete;
+    if (tick - s_mp_logtick >= 150) {
+        tagpu_recmp_stats(s_mp_channel, &stats);
+        tagpu_logf("recmp: tick=%u sent=%u bytes=%u received=%u queued=%u lost=%u failed=%08X "
+                   "bound=%u/%u private=%u pending=%u completed=%u/%uB seals=%u final=%u", tick,
+                   stats.sent, stats.bytes, stats.received, stats.queued, stats.lost, (unsigned)stats.failed,
+                   stats.bound, stats.expected, stats.player, stats.pending, stats.completed, stats.completed_bytes,
+                   stats.seals, stats.ended);
+        s_mp_logtick = tick;
+    }
+    return;
+incomplete:
+    tagpu_recmp_stats(s_mp_channel, &stats);
+    tagpu_logf("recmp: contribution refused at tick %u: %s (channel %08X): contributions end "
+               "incomplete", tick, why, (unsigned)stats.failed);
+    s_mp_consuming = 0;
+    mp_roots_end();
+    tagpu_recmp_abort(s_mp_channel, E_ABORT);
+    tagpu_recmp_end(s_mp_channel);
+    mp_record_end(1);
+    s_mp_channel = NULL;
+    tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
+    tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
+    tagpu_recmp_units_end(s_mp_units); s_mp_units = NULL;
+    mp_explored_end();
+    mp_pov_end();
+    tagpu_recmp_orders_end(s_mp_orders); s_mp_orders = NULL;
+}
 
 /* a row's ID: one more than its index, so NULL's ID is 0 (tagpu_recfmt.h) */
 static unsigned id_in(const char* p, const char* base, unsigned stride, unsigned n)
@@ -537,6 +1731,7 @@ typedef struct Rec {
     unsigned       high;        /* the most bytes the ring has held                     */
     char*          begin;       /* the level it records                                 */
     unsigned       nslots;
+    unsigned       mode;
     int            tick;        /* the last GameTime captured                           */
     int            first;       /* the first iteration is still to be captured          */
     Level          L;           /* the level as the last capture read it: the events'   */
@@ -585,6 +1780,15 @@ typedef struct Rec {
     unsigned char  rewind_end[4 + 12 * REC_PLAYERS];
     unsigned       defeat[REC_PLAYERS]; /* the GameTime its live count last reached 0, 0 none:
                                            a seat ends defeated only while it is still 0       */
+    unsigned       each;        /* the units a player may have, as the header states it    */
+    RecPov         pov[REC_PLAYERS];      /* each seat's last RK_POV (*The perspective*)    */
+    unsigned       pov_tick[REC_PLAYERS]; /* ... the GameTime it was sent                   */
+    unsigned char  pov_in[REC_PLAYERS];   /* ... and whether there is one                    */
+    unsigned short nsel[REC_PLAYERS];     /* each seat's last RK_SELECT                      */
+    RecSelEntry    sel[REC_PLAYERS][REC_SEL_MAX];
+    RecSelEntry    selnow[REC_SEL_MAX];   /* the walk's, this capture point                  */
+    int            sel_refused;           /* the walk's refusal is logged                    */
+    unsigned       clicks_odd;  /* clicks not recorded: an Interface Type above 1        */
 } Rec;
 
 static void olist_drop(Rec* r, unsigned slot);
@@ -674,17 +1878,27 @@ static void ring_publish(Rec* r, int now)
 
 typedef struct Tlv { unsigned char* b; unsigned n, cap; int full; } Tlv;
 
-static void tlv(Tlv* t, unsigned tag, const void* p, unsigned n)
+/* An entry of `n` bytes, its tag, length and padding written: the body to fill in, or NULL when
+   the header has no room for it (the header is then full) */
+static unsigned char* tlv_room(Tlv* t, unsigned tag, unsigned n)
 {
     unsigned size = (4 + n + 3) & ~3u;
     unsigned short h[2];
-    if (t->full || t->n + size > t->cap || n > 0xFFFF) { t->full = 1; return; }
+    unsigned char* body;
+    if (t->full || n > 0xFFFF || size > t->cap - t->n) { t->full = 1; return NULL; }
     h[0] = (unsigned short)tag;
     h[1] = (unsigned short)n;
     memcpy(t->b + t->n, h, 4);
-    if (n) memcpy(t->b + t->n + 4, p, n);
-    memset(t->b + t->n + 4 + n, 0, size - 4 - n);
+    body = t->b + t->n + 4;
+    memset(body, 0, size - 4);
     t->n += size;
+    return body;
+}
+
+static void tlv(Tlv* t, unsigned tag, const void* p, unsigned n)
+{
+    unsigned char* body = tlv_room(t, tag, n);
+    if (body && n) memcpy(body, p, n);
 }
 
 static void tlv_u32(Tlv* t, unsigned tag, unsigned v) { tlv(t, tag, &v, 4); }
@@ -838,7 +2052,7 @@ static void archive_entry(void* ctx, const char* name, unsigned n, unsigned size
 
 /* the header's entries; `fork`, for a fork's, adds RT_TIMELINE after RT_START */
 static void header_build(const Level* L, int tick, const char* map, const FILETIME* now,
-                         const RecFork* fork, Tlv* t)
+                         const RecFork* fork, const RecMpFile* mp, Tlv* t)
 {
     unsigned i, n;
     unsigned char pl[16 + REC_INFO_BYTES + PL_NAMELEN];
@@ -847,7 +2061,11 @@ static void header_build(const Level* L, int tick, const char* map, const FILETI
 
     tlv_u32(t, RT_FORMAT, REC_FORMAT);
     tlv(t, RT_BUILD, GIT_COMMIT, (unsigned)strlen(GIT_COMMIT));
-    tlv_u32(t, RT_MODE, MODE_SKIRMISH);
+    tlv_u32(t, RT_MODE, mp ? MODE_NETWORK : MODE_SKIRMISH);
+    if (mp) {
+        tlv(t, RT_MULTIPLAYER, tagpu_recmp_file_header(mp), sizeof(RecMpRecordHeader));
+        tlv(t, RT_MP_SEATS, tagpu_recmp_file_roster(mp), sizeof(RecMpRoster));
+    }
     tlv(t, RT_MAP, map, (unsigned)strlen(map));
     tlv_u32(t, RT_START, (unsigned)tick);
     if (fork) {
@@ -1014,6 +2232,78 @@ static void header_tables(const Rec* r, Tlv* t)
         table_entry(t, r->tab[i].index, r->tab[i].d, r->tab[i].lhash);
 }
 
+/* a def whose unit takes the air step (UD_AIRBITS) */
+static int def_air(const char* d)
+{
+    unsigned bits;
+    memcpy(&bits, d + UD_AIRBITS, 4);
+    return (bits & UD_AIRBIT) != 0;
+}
+
+/* The unit frame's constants (tagpu_reccodec.c; tagpu_recfmt.h, RT_CODEC, RT_PHYSICS and RT_AIR):
+   the lane table this build carries, the level's gravity, sea level and sight rule, and each
+   aircraft type's flight fields. They are a predictor's constants: a wrong one costs size, never
+   data, since the writer writes a sectioned block only when it decodes back to its records.
+   BOUND: a def's index runs below UNITINFOCount (main+0x1438F), the count the engine's own loops
+   over the defs run to, and below 65536, the type lane's range, and every field read lies inside
+   the def's UD_STRIDE bytes. LIFETIME: the defs table lives for the level, whose teardown ends the
+   recording first. ORDERING: read once, here, on the game thread, which owns them. */
+static void header_codec(const Level* L, Tlv* t)
+{
+    const char* ta = L->ta;
+    unsigned char* b;
+    unsigned i, k, n, max, rows, all = 0;
+    b = tlv_room(t, RT_CODEC, 4 + 4 * REC_LANES_N);
+    if (b) {
+        b[0] = (unsigned char)REC_LANES_N;
+        b[1] = (unsigned char)(REC_LANES_N >> 8);
+        for (i = 0; i < REC_LANES_N; i++) {
+            unsigned char* row = b + 4 + 4 * i;
+            row[0] = (unsigned char)rec_lanes[i].off;
+            row[1] = (unsigned char)(rec_lanes[i].off >> 8);
+            row[2] = rec_lanes[i].width;
+            row[3] = rec_lanes[i].role;
+        }
+    }
+    b = tlv_room(t, RT_PHYSICS, 8);
+    if (b) {
+        memcpy(b, ta + OFF_GRAVITY, 4);
+        b[4] = (unsigned char)ta[OFF_SEALEVEL];
+        b[5] = (unsigned char)(*(const unsigned short*)(ta + OFF_LOSTYPE) >> 2 & 1);
+    }
+    /* RT_AIR: the aircraft types, the rows the header has room for and RECC_AIR_MAX at most; a
+       type without a row is predicted as a ground unit */
+    if (t->full || t->cap - t->n < 4 + 8 + 64) return;
+    max = (t->cap - t->n - 4 - 8 - 64) / sizeof(RecAirRow);
+    if (max > RECC_AIR_MAX) max = RECC_AIR_MAX;
+    n = L->defs ? L->ndefs : 0;
+    if (n > 65536) n = 65536;
+    for (i = 0; i < n; i++)
+        if (def_air(L->defs + (size_t)i * UD_STRIDE)) all++;
+    rows = all < max ? all : max;
+    b = tlv_room(t, RT_AIR, 8 + rows * (unsigned)sizeof(RecAirRow));
+    if (!b) return;
+    memcpy(b, &rows, 4);
+    for (i = 0, k = 0; i < n && k < rows; i++) {
+        const char* d = L->defs + (size_t)i * UD_STRIDE;
+        RecAirRow a;
+        if (!def_air(d)) continue;
+        a.type = (uint16_t)i;
+        a.sight_h = (uint8_t)d[UD_SIGHT_H];
+        a.zero = 0;
+        memcpy(&a.maxv, d + UD_MAXV, 4);
+        memcpy(&a.brake, d + UD_BRAKE, 4);
+        memcpy(&a.acc, d + UD_ACC, 4);
+        memcpy(&a.bank, d + UD_BANK, 4);
+        memcpy(&a.pitch, d + UD_PITCH, 4);
+        memcpy(b + 8 + k * sizeof a, &a, sizeof a);
+        k++;
+    }
+    if (rows < all)
+        tagpu_logf("recorder: the header holds %u aircraft types' rows, not the other %u: those "
+                   "are predicted as ground units, which costs size only", rows, all - rows);
+}
+
 /* ---- the files still being finished --------------------------------------------------------- */
 
 /* The `done` events of the recordings that have ended, which the exit waits for (tagpu_recorder.h,
@@ -1113,6 +2403,11 @@ static void rec_free(Rec* r)
 static void ring_free(RecRing* g)
 {
     if (!g) return;
+    /* Only called before writer start: the game still owns the whole context. */
+    if (g->mp) {
+        tagpu_recmp_file_end(g->mp,0);
+        tagpu_recmp_file_free(g->mp);
+    }
     if (g->fork.file) CloseHandle(g->fork.file);    /* THE FORK'S HANDLE: the ring owned it */
     recfile_unlock(&g->fork.lock);
     if (g->buf) VirtualFree(g->buf, 0, MEM_RELEASE);
@@ -1134,7 +2429,7 @@ static HANDLE dup_event(HANDLE e)
 
 /* Everything a recording will need, taken now. After this the capture allocates only from its own
    heap, for the order lists' images, and for a heap table that grows (table_grow). */
-static Rec* rec_start(const Level* L, int tick)
+static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
 {
     HANDLE heap = GetProcessHeap();
     Rec* r = (Rec*)HeapAlloc(heap, HEAP_ZERO_MEMORY, sizeof *r);
@@ -1173,6 +2468,8 @@ static Rec* rec_start(const Level* L, int tick)
     r->ring = g;
     r->begin = L->begin;
     r->nslots = L->nslots;
+    r->each = *(const unsigned short*)(L->ta + OFF_EACH);
+    r->mode = mp ? MODE_NETWORK : MODE_SKIRMISH;
     r->tick = tick - 1;
     r->first = 1;
     r->L = *L;
@@ -1241,6 +2538,13 @@ static Rec* rec_start(const Level* L, int tick)
     }
     r->rowbuf = (unsigned char*)HeapAlloc(heap, HEAP_ZERO_MEMORY, widest);
     if (!r->rowbuf) goto fail;
+    if (mp) {
+        g->mp=tagpu_recmp_file_begin(mp,s_mp_channel,&s_mp_roster);
+        if (!g->mp) {
+            tagpu_logf("recorder: FAILED contribution journal could not attach: not recording");
+            goto fail;
+        }
+    }
 
     map_stem(L->ta, map, sizeof map);
     GetLocalTime(&lt);
@@ -1254,8 +2558,9 @@ static Rec* rec_start(const Level* L, int tick)
     t.n = 0;
     t.cap = sizeof hb;
     t.full = 0;
-    header_build(L, tick, map, &now, g->fork.file ? &g->fork : NULL, &t);
+    header_build(L, tick, map, &now, g->fork.file ? &g->fork : NULL, g->mp, &t);
     header_tables(r, &t);
+    header_codec(L, &t);
     for (i = 0; i < REC_PLAYERS; i++)        /* the seats header_build names (RT_PLAYER) */
         if (L->ta[OFF_PLAYERS + i * PL_STRIDE + PL_CONTROLLER]) r->seated |= (unsigned short)(1u << i);
     if (t.full) {
@@ -1272,6 +2577,7 @@ static Rec* rec_start(const Level* L, int tick)
         tagpu_logf("recorder: FAILED no writer thread (%lu): not recording", GetLastError());
         goto fail;
     }
+    s_mp_file=g->mp;
     if (g->fork.id)
         tagpu_logf("recorder: recording timeline %u of %s from GameTime %d (parent %u): %u slots, "
                    "%u tables", g->fork.id, g->path, tick, g->fork.parent, L->nslots, r->ntab);
@@ -1332,6 +2638,9 @@ static void rec_end(Rec* r, unsigned reason)
     unsigned short why = (unsigned short)reason, z = 0;
     unsigned pos, off = (unsigned)InterlockedCompareExchange(&s_offthread, 0, 0);
     unsigned unobserved = feat_unobserved(r);
+    /* A local save failure detaches its journal while mandatory contributions
+       continue. At teardown the channel already handed its sole consumer over. */
+    mp_record_end(0);
     s_rec_fired = 0;
     r->w = (unsigned)InterlockedCompareExchange(&r->ring->wpub, 0, 0);
     memcpy(b, &why, 2);
@@ -1391,7 +2700,7 @@ static void rec_end(Rec* r, unsigned reason)
                                             "began with, or its count is past its records" :
                reason == REC_END_MAPPED   ? "INCOMPLETE, the explored map is not the one it began "
                                             "with" :
-                                            "INCOMPLETE, the game stopped being a skirmish", s_bad,
+                                            "INCOMPLETE, the recorded mode or contribution authority ended", s_bad,
                off, r->uncredited, r->oodd);
     feat_log(r);
     tagpu_logf("recorder: the projectiles: %u record images; the pool's written extent reached %u "
@@ -1508,7 +2817,7 @@ static int cap_players(Rec* r, const Level* L)
 
 /* ---- the order lists ------------------------------------------------------------------------ */
 
-enum { OL_OK, OL_TOO_LONG, OL_NOT_A_NODE };
+enum { OL_OK, OL_TOO_LONG, OL_NOT_A_NODE, OL_REMOTE_OWNER };
 
 /* One of a live unit's lists (0 the main list, 1 the sub list), its nodes' images into `out`, and
    how many. The head of this file says why each read is sound; a node that fails the vtable test,
@@ -1519,9 +2828,35 @@ static int olist_read(const Level* L, unsigned slot, unsigned list, unsigned cha
                       unsigned* count, unsigned* odd)
 {
     const char* unit = L->begin + (size_t)slot * REC_UNIT_BYTES;
-    const char* node = *(const char* const*)(unit + (list ? U_SUBORDERS : U_ORDERS));
+    const char* node;
     unsigned n = 0;
     unsigned char raw[REC_ORDER_IMAGE];
+    /* A remote air proxy can delete the node's +0x52 object without clearing that pointer.
+       Only the controlling peer has the node-owned lifetime stated above. Bound the owner
+       before reading its controller, and refuse before following either list head. Puppet
+       hosts have no network bit and restore +0x52 to zero (replay-layout.tsv). */
+    if ((unsigned char)L->ta[OFF_NETWORK] & 1) {
+        unsigned owner = id_in(*(const char* const*)(unit + U_OWNER),
+                               L->ta + OFF_PLAYERS, PL_STRIDE, REC_PLAYERS);
+        unsigned ctl;
+        if (owner == REC_ID_BAD) return OL_REMOTE_OWNER;
+        ctl = (unsigned char)L->ta[OFF_PLAYERS + (owner - 1) * PL_STRIDE + PL_CONTROLLER];
+        if (ctl != 1 && ctl != 2) {
+            RecMpOrderState state;
+            const unsigned* birth = mp_births(L);
+            unsigned origin;
+            memcpy(&origin, L->ta + OFF_PLAYERS + (owner - 1) * PL_STRIDE + 4, sizeof origin);
+            /* Copy only a complete queue for this exact incarnation. The owner's
+               contribution replaces following remote nodes; an unknown/lower-bound
+               stamp cannot authorize attaching an old queue to a recycled slot. */
+            if (ctl != 3 || !s_mp_channel || !birth || (birth[slot] & 0x80000000u) ||
+                !tagpu_recmp_orders_get(s_mp_orders, slot, list, &state, out, REC_ORDERS_MAX) ||
+                state.origin != origin || state.birth != birth[slot]) return OL_REMOTE_OWNER;
+            *count = state.count;
+            return OL_OK;
+        }
+    }
+    node = *(const char* const*)(unit + (list ? U_SUBORDERS : U_ORDERS));
     for (; node; node = *(const char* const*)(node + ORD_NEXT)) {
         unsigned flags;
         if (n == REC_ORDERS_MAX) return OL_TOO_LONG;
@@ -1537,6 +2872,214 @@ static int olist_read(const Level* L, unsigned slot, unsigned list, unsigned cha
     }
     *count = n;
     return OL_OK;
+}
+
+/* hit_reset publishes this declared column during loading. Its allocation is never
+   freed, its own count bounds every row, and capture runs after loading's last write.
+   See tagpu_patches.c's hit_layout lifetime and ordering argument. */
+static const unsigned* mp_births(const Level* L)
+{
+    unsigned i;
+    for (i = 0; i < tagpu_simreg_count(); i++) {
+        const SimDesc* d = tagpu_simreg_at(i);
+        if (strcmp(d->name, "src/tagpu_patches.c:s_hitStamp")) continue;
+        if (d->flags != SIMD_HEAP || d->stride != sizeof(unsigned) || !d->rows ||
+            *d->rows < L->nslots || *d->rows > 65536u) return NULL;
+        return *(const unsigned* const*)d->addr;
+    }
+    return NULL;
+}
+
+/* The unit cache has already validated every entry and the exact packet span.
+   A full live image is contiguous here; deltas advance by their selected words. */
+static void mp_units_log(const RecMpPacket* packet, unsigned tick, const char* where)
+{
+    unsigned count, at=4, i, word;
+    memcpy(&count,packet->body,4);
+    for (i=0;i<count;i++) {
+        RecMpUnitDelta entry;
+        memcpy(&entry,packet->body+at,sizeof entry); at+=sizeof entry;
+        if (entry.live && entry.full) {
+            RecMpUnitState state;
+            if (tagpu_recmp_units_get(s_mp_units,s_mp_seats,entry.slot,&state))
+                tagpu_logf("recmp: %s unit image ID %u slot %u birth %u, source tick %u seq %u, "
+                           "applied tick %u, %u image bytes crc %08X mapped %08X", where,packet->h.origin,
+                           entry.slot,entry.birth,packet->h.tick,packet->h.sequence,tick,REC_UNIT_IMAGE,
+                           (unsigned)Crc32_ComputeBuf(0,packet->body+at,REC_UNIT_IMAGE),
+                           (unsigned)Crc32_ComputeBuf(0,state.image,sizeof state.image));
+        }
+        for (word=0;word<REC_UNIT_DWORDS;word++) if (entry.bits[word>>3]>>(word&7)&1) at+=4;
+    }
+}
+
+static int mp_units_send(unsigned origin, unsigned tick, RecMpPacket* packet, unsigned count, unsigned bytes)
+{
+    memcpy(packet->body,&count,4);
+    if (!tagpu_recmp_send_from(s_mp_channel,origin,RECMP_UNITS,tick,packet->body,bytes,&packet->h) ||
+        !tagpu_recmp_units_put(s_mp_units,s_mp_seats,&packet->h,packet->body,bytes,tick)) return 0;
+    mp_units_log(packet,tick,"local");
+    return 1;
+}
+
+static int mp_units_capture(const Level* L, unsigned tick)
+{
+    const unsigned* birth=mp_births(L);
+    unsigned actor;
+    if (!birth) return 0;
+    for (actor=0;actor<s_mp_roster.count;actor++) {
+        const RecMpSeat* seat=&s_mp_roster.actor[actor];
+        const char* player=L->ta+OFF_PLAYERS+seat->seat*PL_STRIDE;
+        unsigned ctl=(unsigned char)player[PL_CONTROLLER], origin, slot, count=0, bytes=4;
+        RecMpPacket packet;
+        if (ctl!=1 && ctl!=2) continue;
+        memcpy(&origin,player+4,4);
+        if (origin!=seat->origin) return 0;
+        for (slot=seat->first;slot<=seat->last;slot++) {
+            unsigned img[REC_UNIT_DWORDS], live=unit_live(L,slot), incarnation=birth[slot];
+            unsigned char entry[sizeof(RecMpUnitDelta)+REC_UNIT_IMAGE];
+            int n;
+            if (live) {
+                const char* unit=L->begin+(size_t)slot*REC_UNIT_BYTES;
+                /* The frozen global block and bounded owner must agree before
+                   following the mover of this locally controlled live unit. */
+                unsigned owner=id_in(*(const char* const*)(unit+U_OWNER),
+                                     L->ta+OFF_PLAYERS,PL_STRIDE,REC_PLAYERS);
+                if (owner!=seat->seat+1 || (incarnation&0x80000000u)) return 0;
+                unit_image(L,slot,img);
+            } else if (incarnation&0x80000000u) {
+                /* Never-created slots have no birth, but the bounded unit's
+                   cleared live bit establishes their authoritative absence. */
+                incarnation=0;
+            }
+            n=tagpu_recmp_units_delta(s_mp_units,origin,slot,incarnation,live,
+                                      live ? img : NULL,live ? sizeof img : 0,entry,sizeof entry);
+            if (n<0) return 0;
+            if (!n) continue;
+            if (bytes+(unsigned)n>sizeof packet.body) {
+                if (!mp_units_send(origin,tick,&packet,count,bytes)) return 0;
+                count=0; bytes=4;
+            }
+            memcpy(packet.body+bytes,entry,n); bytes+=n; count++;
+        }
+        if (count && !mp_units_send(origin,tick,&packet,count,bytes)) return 0;
+    }
+    return 1;
+}
+
+static int mp_orders_capture(const Level* L, unsigned tick)
+{
+    const unsigned* birth = mp_births(L);
+    unsigned slot, list;
+    if (!birth) { tagpu_logf("recmp: no declared incarnation column for %u slots", L->nslots); return 0; }
+    for (slot = 1; slot < L->nslots; slot++) {
+        const char* unit = L->begin + (size_t)slot * REC_UNIT_BYTES;
+        unsigned owner, origin, ctl;
+        const char* player;
+        if (!unit_live(L, slot)) continue;
+        owner = id_in(*(const char* const*)(unit + U_OWNER),
+                       L->ta + OFF_PLAYERS, PL_STRIDE, REC_PLAYERS);
+        if (owner == REC_ID_BAD || !owner) {
+            tagpu_logf("recmp: live slot %u has no bounded player owner", slot);
+            return 0;
+        }
+        player = L->ta + OFF_PLAYERS + (owner - 1) * PL_STRIDE;
+        ctl = (unsigned char)player[PL_CONTROLLER];
+        if (ctl != 1 && ctl != 2) continue;
+        memcpy(&origin, player + 4, sizeof origin);
+        if (!origin || (birth[slot] & 0x80000000u)) {
+            tagpu_logf("recmp: local slot %u has transport ID %u, nonexact birth %08X",
+                       slot, origin, birth[slot]);
+            return 0;
+        }
+        for (list = 0; list < 2; list++) {
+            unsigned count, first = 0;
+            int why = olist_read(L, slot, list, s_mp_order_scratch, &count, NULL);
+            if (why != OL_OK) {
+                tagpu_logf("recmp: local slot %u list %u refused (%d)", slot, list, why);
+                return 0;
+            }
+            if (tagpu_recmp_orders_same(s_mp_orders, slot, list, origin, birth[slot],
+                                        s_mp_order_scratch, count)) continue;
+            do {
+                unsigned char body[RECMP_BODY_MAX];
+                RecMpHeader header;
+                RecMpOrders chunk = { .slot = slot, .list = list, .birth = birth[slot],
+                                      .total = count, .first = first };
+                unsigned n = count - first < RECMP_ORDER_CHUNK ? count - first : RECMP_ORDER_CHUNK;
+                unsigned bytes = sizeof chunk + n * RECMP_ORDER_BYTES;
+                chunk.count = n;
+                memcpy(body, &chunk, sizeof chunk);
+                memcpy(body + sizeof chunk, s_mp_order_scratch + (size_t)first * RECMP_ORDER_BYTES,
+                       n * RECMP_ORDER_BYTES);
+                if (!tagpu_recmp_send_from(s_mp_channel, origin, RECMP_ORDERS, tick,
+                                          body, bytes, &header)) {
+                    RecMpStats stats;
+                    tagpu_recmp_stats(s_mp_channel, &stats);
+                    tagpu_logf("recmp: local order send refused: ID %u slot %u list %u, "
+                               "queued %u failed %08X", origin, slot, list, stats.queued,
+                               (unsigned)stats.failed);
+                    return 0;
+                }
+                if (tagpu_recmp_orders_put(s_mp_orders, &header, body, bytes, tick) < 0) {
+                    tagpu_logf("recmp: local queue transaction refused: ID %u slot %u list %u, "
+                               "tick %u seq %u, %u/%u+%u", origin, slot, list, tick,
+                               header.sequence, first, count, n);
+                    return 0;
+                }
+                first += n;
+            } while (first < count);
+        }
+    }
+    return 1;
+}
+
+static int mp_orders_receive(const Level* L, const RecMpPacket* packet, unsigned tick)
+{
+    RecMpOrders chunk;
+    unsigned i, bytes = packet->h.bytes - sizeof packet->h;
+    if (bytes < sizeof chunk) return 0;
+    memcpy(&chunk, packet->body, sizeof chunk);
+    for (i = 0; i < s_mp_roster.count; i++) {
+        const RecMpSeat* seat = &s_mp_roster.actor[i];
+        const char* player = L->ta + OFF_PLAYERS + seat->seat * PL_STRIDE;
+        unsigned origin;
+        int result;
+        memcpy(&origin, player + 4, sizeof origin);
+        if (seat->origin != packet->h.origin) continue;
+        if (origin != seat->origin) return 0;
+        if ((unsigned char)player[PL_CONTROLLER] == 1 ||
+            (unsigned char)player[PL_CONTROLLER] == 2) return 1;
+        if ((unsigned char)player[PL_CONTROLLER] != 3) continue;
+        /* DISASSEMBLED: 0x4858A6..0x4858E0 assigns inclusive fixed blocks by
+           native-ID rank. Bootstrap bounds and freezes them before use; a queue
+           may precede its stock create, so the recycled slot is not authority. */
+        if (chunk.slot < seat->first || chunk.slot > seat->last ||
+            (chunk.birth & 0x80000000u)) {
+            tagpu_logf("recmp: remote order authorization refused: ID %u slot %u, "
+                       "block slots %u..%u birth %08X", origin, chunk.slot, seat->first, seat->last, chunk.birth);
+            return 0;
+        }
+        result = tagpu_recmp_orders_put(s_mp_orders, &packet->h, packet->body, bytes, tick);
+        if (result < 0) {
+            RecMpOrderState state = { 0 };
+            tagpu_recmp_orders_get(s_mp_orders, chunk.slot, chunk.list, &state,
+                                    s_mp_order_scratch, REC_ORDERS_MAX);
+            tagpu_logf("recmp: remote queue transaction refused: ID %u slot %u list %u, "
+                       "tick %u seq %u, %u/%u+%u; committed tick %u seq %u", origin,
+                       chunk.slot, chunk.list, packet->h.tick, packet->h.sequence,
+                       chunk.first, chunk.total, chunk.count, state.source_tick, state.sequence);
+            return 0;
+        }
+        if (result && chunk.total && !(s_mp_orders_seen[seat->seat] & (1u << chunk.list))) {
+            tagpu_logf("recmp: remote orders ID %u -> seat %u, slot %u birth %u, "
+                       "source tick %u seq %u, applied tick %u, list %u nodes %u", origin, seat->seat, chunk.slot,
+                       chunk.birth, packet->h.tick, packet->h.sequence, tick, chunk.list, chunk.total);
+            s_mp_orders_seen[seat->seat] |= 1u << chunk.list;
+        }
+        return 1;
+    }
+    tagpu_logf("recmp: remote order source ID %u has no active player", packet->h.origin);
+    return 0;
 }
 
 /* a list's records: several when it is longer than one carries, one when it is empty */
@@ -1575,7 +3118,25 @@ static void olist_fail(unsigned slot, unsigned list, int why)
                list ? "sub" : "main",
                why == OL_TOO_LONG   ? "is too long to record" :
                why == OL_NOT_A_NODE ? "reaches a node whose vtable is not an order's" :
+               why == OL_REMOTE_OWNER ? "requires its controlling peer's contribution" :
                                       "has no memory for its image", REC_ORDERS_MAX);
+}
+
+/* The native world's inline records are observed on this peer. Remote queues
+   belong to the separate contribution ledger, with their exact owner birth;
+   they cannot be attached to a replicated slot's unknown/lower-bound stamp.
+   Bound the owner before its controller and never follow a remote list head. */
+static int capture_lists(const Rec* r, const Level* L, unsigned slot)
+{
+    const char* unit;
+    unsigned owner, ctl;
+    if (r->mode!=MODE_NETWORK) return 1;
+    unit=L->begin+(size_t)slot*REC_UNIT_BYTES;
+    owner=id_in(*(const char* const*)(unit+U_OWNER),L->ta+OFF_PLAYERS,PL_STRIDE,REC_PLAYERS);
+    if (!owner || owner==REC_ID_BAD) return -1;
+    ctl=(unsigned char)L->ta[OFF_PLAYERS+(owner-1)*PL_STRIDE+PL_CONTROLLER];
+    if (ctl<1 || ctl>4) return -1;
+    return ctl==1 || ctl==2;
 }
 
 /* Every live unit's two lists: the whole list, when its image changed. 0 when the ring is full,
@@ -1584,7 +3145,11 @@ static int cap_orders(Rec* r, const Level* L)
 {
     unsigned slot, list, n;
     for (slot = 1; slot < L->nslots; slot++) {
+        int owned;
         if (!r->ulive[slot]) continue;
+        owned=capture_lists(r,L,slot);
+        if (owned<0) { olist_fail(slot,0,OL_REMOTE_OWNER); return -1; }
+        if (!owned) continue;
         for (list = 0; list < 2; list++) {
             OList** at = &r->olist[slot * 2 + list];
             OList* ol = *at;
@@ -1836,14 +3401,16 @@ static int cap_verify(Rec* r, const Level* L)
     for (k = 0; k < per; k++) {
         unsigned short pre[2];
         unsigned list, n;
-        int live;
+        int live, owned;
         if (++r->vslot >= L->nslots) r->vslot = 1;
         live = unit_live(L, r->vslot);
         pre[0] = (unsigned short)r->vslot;
         pre[1] = (unsigned short)live;
         if (live) unit_image(L, r->vslot, img);
         if (!ring_put(r, RK_VERIFY_UNIT, pre, 4, img, live ? REC_UNIT_IMAGE : 0)) return 0;
-        for (list = 0; live && list < 2; list++) {
+        owned=live ? capture_lists(r,L,r->vslot) : 0;
+        if (owned<0) { olist_fail(r->vslot,0,OL_REMOTE_OWNER); return -1; }
+        for (list = 0; owned && list < 2; list++) {
             int why = olist_read(L, r->vslot, list, r->oscratch, &n, NULL);
             if (why != OL_OK) { olist_fail(r->vslot, list, why); return -1; }
             if (!olist_put(r, RK_VERIFY_ORDERS, r->vslot, list, r->oscratch, n)) return 0;
@@ -2150,6 +3717,244 @@ static int cap_mapped(Rec* r, const Level* L)
     return 1;
 }
 
+/* ---- the perspective ------------------------------------------------------------------------ */
+
+/* THE PERSPECTIVE of the human seat a skirmish commands (tagpu_recpov.h; the plan,
+   demo-recorder-perspective-streams.md): its camera and cursor, and its selection, at the capture
+   point. None of it is simulation state: the simulation reads none of these records, and the
+   copies below are the recorder's own.
+   THE ORDERING (E1-E3) that makes the capture point read this frame's values: IdleTick 0x499890
+   copies the frame's one mouse record into main+0x2C76 and calls the mode-6 handler 0x499200
+   (0x499A1C); the handler fills the world point main+0x2CAA and the region bits main+0x2CC6
+   through 0x498DA0 (0x499221), runs any click action, and then calls GameFrame 0x496790
+   (0x4995B8) on every path, whose tick loop 0x495490 reaches this capture point (B2, 0x4954ED).
+   So the world point is the one this frame's handler stored, and the scroll target is what the
+   last draw's apply and this frame's stepper 0x41CA10 (inside the earlier ticks) left; the scroll
+   poll 0x41CE90 runs after the ticks and lands in the next capture.
+   ONE THREAD (E8): every field read here is written by game-thread code. The mouse thread
+   0x4C2990 writes only the graphics object's 0x51F4B6 and 0x51F4D6 (replay-globals.tsv rows
+   cursorpos and cursordrawn), and nothing here reads either. */
+#define OFF_SCROLL_X   0x14327      /* i32: the scroll target, where the camera is heading        */
+#define OFF_SCROLL_Y   0x1432B
+#define OFF_VIEW_W     0x37E37      /* i32: the 1x view's width and height                        */
+#define OFF_VIEW_H     0x37E3B
+#define OFF_POINT_X    0x2CAC       /* i16: the integer halves of the world point main+0x2CAA's
+                                       16.16 x, height and z (DrawGameScreen reads them as words,
+                                       0x468DC4..0x468DD2)                                     */
+#define OFF_POINT_H    0x2CB0
+#define OFF_POINT_Z    0x2CB4
+#define OFF_REGION     0x2CC6       /* u8: bit 0 the minimap, bit 1 the world viewport (E5)       */
+#define OFF_ORDER      0x2CC3       /* u8: the armed order                                       */
+#define OFF_CURSOR_IX  0x2CBE       /* u8: the cursor index (0x49925D, 0x4992AD)                  */
+#define OFF_ITYPE      0x37EFA      /* u32: the Interface Type (0x499352, 0x499567)                */
+#define PL_BLOCKFIRST  0x67         /* the player's unit block, first and last slot's address,    */
+#define PL_BLOCKLAST   0x6B         /*   inclusive (E9)                                           */
+#define U_SELECTED     0x10u        /* +0x110 bit 4, which the destructor clears (0x486DE8)        */
+
+/* The sample this capture point would send, into `p`, for `player` (0xFF in a contribution) and
+   a sampler `every` ticks apart; 0 when the view's size is no view's. */
+static int pov_sample(const char* ta, unsigned player, unsigned every, RecPov* p)
+{
+    int w = *(const int*)(ta + OFF_VIEW_W), h = *(const int*)(ta + OFF_VIEW_H);
+    unsigned seq, centre, epoch, region = (unsigned char)ta[OFF_REGION];
+    int dx, dy;
+    float level;
+    if (w < 1 || w > (int)REC_POV_VIEW_MAX || h < 1 || h > (int)REC_POV_VIEW_MAX) return 0;
+    tagpu_zoom_applied(&seq, &dx, &dy, &level, &epoch, &centre);
+    if (!(level >= TAGPU_ZOOM_MIN)) level = TAGPU_ZOOM_MIN;
+    if (level > TAGPU_ZOOM_MAX) level = TAGPU_ZOOM_MAX;
+    memset(p, 0, sizeof *p);
+    p->player = (uint8_t)player;
+    p->every = (uint8_t)every;
+    p->flags = (uint8_t)(((region & 2) ? REC_POV_WORLD : 0) | ((region & 1) ? REC_POV_MINIMAP : 0));
+    p->view_w = (uint16_t)w;
+    p->view_h = (uint16_t)h;
+    p->zoom = (uint32_t)(level * 65536.0f + 0.5f);
+    /* unsigned, so a target the clamps never produce wraps rather than overflows */
+    p->cam_x = (int32_t)(*(const uint32_t*)(ta + OFF_SCROLL_X) + (uint32_t)(w / 2));
+    p->cam_y = (int32_t)(*(const uint32_t*)(ta + OFF_SCROLL_Y) + (uint32_t)(h / 2));
+    p->cur_x = *(const int16_t*)(ta + OFF_POINT_X);
+    p->cur_h = *(const int16_t*)(ta + OFF_POINT_H);
+    p->cur_z = *(const int16_t*)(ta + OFF_POINT_Z);
+    return 1;
+}
+
+/* The seat's live selected units, ascending, into `out`; their count, or -1 when the walk is
+   refused. THE BOUND, the one tagpu_patches.c's player_units rests on: the block's first and last
+   unit (the player record's +0x67, +0x6B) are slots of the unit array -- inside [begin, the last
+   slot], whose count level_read checked against the array's own last-slot pointer -- aligned to
+   its 0x118-byte stride and in order, and the block holds at most REC_SEL_MAX of them and at most
+   the units a player may have, the readers' bound on a selection's total. Each slot
+   is then an index below nslots by arithmetic, and the births column holds nslots rows at least
+   (mp_births). A unit is read only at its own slot, during play, on this thread. */
+static int sel_walk(const Level* L, unsigned player, unsigned each, const unsigned* birth,
+                    RecSelEntry* out)
+{
+    const char* rec = L->ta + OFF_PLAYERS + player * PL_STRIDE;
+    const char* first = *(const char* const*)(rec + PL_BLOCKFIRST);
+    const char* last = *(const char* const*)(rec + PL_BLOCKLAST);
+    const char* end = L->begin + (size_t)(L->nslots - 1) * REC_UNIT_BYTES;
+    unsigned s, s0, s1;
+    int n = 0;
+    if (first < L->begin || last > end || first > last ||
+        (size_t)(first - L->begin) % REC_UNIT_BYTES || (size_t)(last - L->begin) % REC_UNIT_BYTES)
+        return -1;
+    s0 = (unsigned)((size_t)(first - L->begin) / REC_UNIT_BYTES);
+    s1 = (unsigned)((size_t)(last - L->begin) / REC_UNIT_BYTES);
+    if (!s0 || s1 - s0 >= REC_SEL_MAX || s1 - s0 >= each || !birth) return -1;
+    for (s = s0; s <= s1; s++) {
+        unsigned state = *(const unsigned*)(L->begin + (size_t)s * REC_UNIT_BYTES + U_STATE);
+        if ((state & U_ALIVE) && (state & U_SELECTED)) {
+            out[n].slot = (uint16_t)s;
+            out[n].birth = birth[s];
+            n++;
+        }
+    }
+    return n;
+}
+
+/* The selection changed other than by a death: the last record's `nlast` entries whose unit is
+   still live with the same birth differ from the walk's. A death alone leaves the two equal, so a
+   battle does not resend the set each tick. The last record's slots are the walk's of an earlier
+   capture point, inside the same block, so below nslots. */
+static int sel_changed(const RecSelEntry* last, unsigned nlast, const Level* L,
+                       const unsigned* birth, const RecSelEntry* now, unsigned n)
+{
+    unsigned i, k = 0;
+    for (i = 0; i < nlast; i++) {
+        const RecSelEntry* e = &last[i];
+        unsigned state = *(const unsigned*)(L->begin + (size_t)e->slot * REC_UNIT_BYTES + U_STATE);
+        if (!(state & U_ALIVE) || birth[e->slot] != e->birth) continue;
+        if (k == n || now[k].slot != e->slot || now[k].birth != e->birth) return 1;
+        k++;
+    }
+    return k != n;
+}
+
+/* The seat's camera and cursor, at most every REC_POV_EVERY ticks and only when the sample differs
+   from the last one sent; then its selection, every capture point, when it changed. The seat is
+   the controlled player when a human controls it (+0x73 == 1). 0 when the ring is full. */
+static int cap_pov(Rec* r, const Level* L, int tick)
+{
+    unsigned p = (unsigned char)L->ta[OFF_CONTROLLED];
+    const unsigned* birth;
+    RecPov pov;
+    int n;
+    if (r->mode != MODE_SKIRMISH || p >= REC_PLAYERS ||
+        (unsigned char)L->ta[OFF_PLAYERS + p * PL_STRIDE + PL_CONTROLLER] != 1)
+        return 1;
+    if ((!r->pov_in[p] || (unsigned)tick - r->pov_tick[p] >= REC_POV_EVERY) &&
+        pov_sample(L->ta, p, REC_POV_EVERY, &pov) &&
+        (!r->pov_in[p] || memcmp(&pov, &r->pov[p], sizeof pov))) {
+        if (!ring_put(r, RK_POV, &pov, sizeof pov, NULL, 0)) return 0;
+        r->pov[p] = pov;
+        r->pov_tick[p] = (unsigned)tick;
+        r->pov_in[p] = 1;
+    }
+    birth = mp_births(L);
+    n = sel_walk(L, p, r->each, birth, r->selnow);
+    if (n < 0) {
+        if (!r->sel_refused)
+            tagpu_logf("recorder: player %u's selection is not recorded at GameTime %d: its unit "
+                       "block is not a run of at most %u slots of the array, or the births column "
+                       "is missing", p, tick, r->each < REC_SEL_MAX ? r->each : REC_SEL_MAX);
+        r->sel_refused = 1;
+    } else if (sel_changed(r->sel[p], r->nsel[p], L, birth, r->selnow, (unsigned)n)) {
+        RecSel head;
+        head.player = (uint8_t)p;
+        head.flags = REC_SEL_BEGIN | REC_SEL_END;
+        head.total = head.count = (uint16_t)n;
+        head.first = 0;
+        if (!ring_put(r, RK_SELECT, &head, sizeof head, r->selnow, (unsigned)n * sizeof(RecSelEntry)))
+            return 0;
+        memcpy(r->sel[p], r->selnow, (size_t)n * sizeof(RecSelEntry));
+        r->nsel[p] = (unsigned short)n;
+    }
+    return 1;
+}
+
+/* the first envelope of each perspective kind an origin publishes here or the channel delivers */
+static void mp_pov_log(const RecMpHeader* h, unsigned tick, const char* where)
+{
+    static const char* const what[] = { "camera sample", "click", "selection" };
+    unsigned row, k = h->kind - RECMP_POV;
+    for (row = 0; row < s_mp_roster.count; row++)
+        if (s_mp_roster.actor[row].origin == h->origin) break;
+    if (row == s_mp_roster.count || k > 2 || (s_mp_pov_seen[row] & (1u << k))) return;
+    s_mp_pov_seen[row] |= (unsigned char)(1u << k);
+    tagpu_logf("recmp: %s %s ID %u source tick %u seq %u applied tick %u, %u bytes",
+               where, what[k], h->origin, h->tick, h->sequence, tick,
+               h->bytes - (unsigned)sizeof *h);
+}
+
+static int mp_pov_send(unsigned origin, unsigned kind, unsigned tick, const void* body,
+                       unsigned bytes)
+{
+    RecMpHeader header;
+    if (!tagpu_recmp_send_from(s_mp_channel, origin, kind, tick, body, bytes, &header) ||
+        !tagpu_recmp_pov_put(s_mp_pov, s_mp_seats, &header, body, bytes, tick)) return 0;
+    mp_pov_log(&header, tick, "local");
+    return 1;
+}
+
+static int mp_select_emit(void* ctx, unsigned origin, const void* body, unsigned bytes)
+{
+    return mp_pov_send(origin, RECMP_SELECT, *(const unsigned*)ctx, body, bytes);
+}
+
+/* THE PERSPECTIVE of each local actor a human controls (+0x73 == 1), as its contributions
+   RECMP_POV and RECMP_SELECT (the plan's *Multiplayer*): what cap_pov takes for a skirmish's seat,
+   with cap_pov's ORDERING and ONE THREAD, at this capture point after the explored map. A camera
+   sample goes at most every RECMP_POV_EVERY ticks and only when it changed, and is skipped while
+   the transmit queue has fewer than RECMP_POV_ROOM free slots (tagpu_recmp_pov_due): the room can
+   only grow before the publication, since this thread is the queue's only producer
+   (tagpu_recmp_room). A selection is reliable: it goes whole, as one transaction, whenever it
+   changed other than by a death. The BOUND is sel_walk's, under the roster's units per player;
+   and every slot the walk names must lie in the actor's own roster block, the block the readers
+   hold a selection to, or the contribution is refused. 0 refuses it. */
+static int mp_pov_capture(const Level* L, unsigned tick)
+{
+    const unsigned* birth = mp_births(L);
+    unsigned seat, i;
+    for (seat = 0; seat < REC_PLAYERS; seat++) {
+        const char* player = L->ta + OFF_PLAYERS + seat * PL_STRIDE;
+        const RecMpSeat* actor = NULL;
+        RecMpSelectState last;
+        RecPov pov;
+        unsigned origin, nlast;
+        int n;
+        if ((unsigned char)player[PL_CONTROLLER] != 1) continue;
+        memcpy(&origin, player + 4, sizeof origin);
+        for (i = 0; i < s_mp_roster.count; i++)
+            if (s_mp_roster.actor[i].origin == origin) actor = &s_mp_roster.actor[i];
+        if (!actor || actor->seat != seat) return 0;
+        if (pov_sample(L->ta, RECMP_POV_PLAYER, RECMP_POV_EVERY, &pov)) {
+            int due = tagpu_recmp_pov_due(s_mp_pov, origin, &pov, tick, tagpu_recmp_room(s_mp_channel));
+            if (due < 0 || (due && !mp_pov_send(origin, RECMP_POV, tick, &pov, sizeof pov)))
+                return 0;
+        }
+        n = sel_walk(L, seat, s_mp_roster.each, birth, s_mp_sel_now);
+        if (n < 0) {
+            tagpu_logf("recmp: player %u's selection cannot be walked at tick %u: its unit block is "
+                       "not a run of at most %u slots of the array, or the births column is missing",
+                       seat, tick, s_mp_roster.each < REC_SEL_MAX ? s_mp_roster.each : REC_SEL_MAX);
+            return 0;
+        }
+        for (i = 0; i < (unsigned)n; i++)
+            if (s_mp_sel_now[i].slot < actor->first || s_mp_sel_now[i].slot > actor->last) {
+                tagpu_logf("recmp: player %u selects slot %u at tick %u, outside its block %u..%u",
+                           seat, s_mp_sel_now[i].slot, tick, actor->first, actor->last);
+                return 0;
+            }
+        nlast = tagpu_recmp_pov_select(s_mp_pov, origin, &last, s_mp_sel_last, REC_SEL_MAX) ?
+                last.count : 0;
+        if (sel_changed(s_mp_sel_last, nlast, L, birth, s_mp_sel_now, (unsigned)n) &&
+            !tagpu_recmp_select_encode(s_mp_pov, origin, s_mp_sel_now, (unsigned)n,
+                                       mp_select_emit, &tick)) return 0;
+    }
+    return 1;
+}
+
 /* ---- the harness's dump --------------------------------------------------------------------- */
 
 static FILE*         s_dump;
@@ -2327,7 +4132,7 @@ static int dump_write(const Level* L, int tick, const char* name, int frame)
         FILETIME now;
         map_stem(L->ta, map, sizeof map);
         GetSystemTimeAsFileTime(&now);
-        header_build(L, tick, map, &now, NULL, &t);
+        header_build(L, tick, map, &now, NULL, NULL, &t);
         tlv_u32(&t, RT_FRAME, (unsigned)frame);
     } else {
         tlv_u32(&t, RT_FORMAT, REC_FORMAT);
@@ -2585,6 +4390,10 @@ static Rec* ev_rec(void)
 
 static void ev_put(Rec* r, unsigned kind, const void* b, unsigned n)
 {
+    /* These owner-only roots have one ordered source in a native file: the
+       contribution ledger, including this peer's publications. */
+    if (r->mode==MODE_NETWORK &&
+        (kind==RK_EV_START_NAMED || kind==RK_EV_REPLY || kind==RK_EV_SPRAY)) return;
     if (r->ev_full || ring_put(r, kind, b, n, NULL, 0)) return;
     r->ev_full = 1;
     tagpu_logf("recorder: an event did not fit in the ring after GameTime %d: the recording ends "
@@ -2833,6 +4642,41 @@ static void ai_finish(unsigned tick)
     s_ai.tid = 0;
 }
 
+static void create_image(const Level* L, const void* E, const char* unit, unsigned id,
+                          unsigned char b[28])
+{
+    unsigned owner=id_of(L,RL_T_PLAYER,*(const char* const*)(unit+U_OWNER)), v;
+    memcpy(b,&id,4);
+    v=ARG(E,0x1C)&0xFFFF;
+    memcpy(b+4,&v,2);
+    b[6]=(unsigned char)(owner && owner!=REC_ID_BAD ? owner-1 : 0xFF);
+    b[7]=(unsigned char)(ARG(E,0x30)&3);
+    v=ARG(E,0x2C);
+    memcpy(b+8,&v,4);
+    memcpy(b+12,(const unsigned char*)E+0x20,12);
+    b[24]=(unsigned char)unit[U_WATER];
+    b[25]=b[26]=b[27]=0;
+}
+
+/* DISASSEMBLED: 0x486075 follows B4's slot reservation/stamp at 0x486036,
+   before type store 0x486086 and init 0x485A40. ESI is the chosen fixed-array
+   slot; its owner fields already belong to the unit-array allocation. Both
+   observed sites have the same saved-register depth and argument offsets.
+   Publishing here orders the incarnation before every constructor child root.
+   No relative instruction is stolen: observe copies its span without relocation. */
+static int __cdecl mp_create_begin(void* E)
+{
+    const char* unit=PTR(REG_ESI(E));
+    MpRootRef ref;
+    unsigned id=mp_roots_unit(unit,0,0);
+    unsigned char b[28];
+    if (!id || !mp_roots_prepare(unit,&ref)) return 0;
+    cnt(0x00486075u,0,0);
+    create_image(&s_mp_level,E,unit,id,b);
+    mp_roots_publish(&ref,RECMP_ROOT_CREATE_BEGIN,b,sizeof b);
+    return 0;
+}
+
 /* The create 0x485F50's success exit 0x4861B3 (`mov eax,esi`): esi is the unit it made, in the
    slot it actually took -- B4's hit_take may move a first-free create past its first choice. The
    function has pushed five registers, so its arguments start at +0x18; the first, the owner, is
@@ -2843,25 +4687,41 @@ static int __cdecl ev_create(void* E)
 {
     Rec* r;
     const char* unit;
-    unsigned id, owner, v;
+    unsigned id;
     unsigned char b[28];
     cnt(0x004861B3u, 0, 0);
-    if (!(r = ev_rec())) return 0;
+    r = ev_rec();
     unit = PTR(REG_ESI(E));
-    if (!(id = ev_unit(r, unit))) return 0;
-    owner = id_of(&r->L, RL_T_PLAYER, *(const char* const*)(unit + U_OWNER));
-    memcpy(b, &id, 4);
-    v = ARG(E, 0x1C) & 0xFFFF;                        /* the type: `mov dx,[esp+0x1C]`, 0x486079 */
-    memcpy(b + 4, &v, 2);
-    b[6] = (unsigned char)(owner && owner != REC_ID_BAD ? owner - 1 : 0xFF);
-    b[7] = (unsigned char)(ARG(E, 0x30) & 3);         /* the create keeps bits 0-1 (0x4860F1)    */
-    v = ARG(E, 0x2C);
-    memcpy(b + 8, &v, 4);
-    memcpy(b + 12, (const unsigned char*)E + 0x20, 12);   /* the position, three dwords by value */
-    b[24] = (unsigned char)unit[U_WATER];
-    b[25] = b[26] = b[27] = 0;
-    ev_put(r, RK_EV_CREATE, b, sizeof b);
+    id = r ? ev_unit(r, unit) : mp_roots_unit(unit, 0, 0);
+    if (!id) return 0;
+    create_image(r ? &r->L : &s_mp_level,E,unit,id,b);
+    if (r) ev_put(r, RK_EV_CREATE, b, sizeof b);
+    mp_roots_push(unit, RK_EV_CREATE, b, sizeof b);
     return 0;
+}
+
+void tagpu_rec_network_created(const char* unit, const unsigned char* record, unsigned birth)
+{
+    Rec* r = ev_rec();
+    RecNetCreate b;
+    unsigned owner;
+    if (!r || r->mode != MODE_NETWORK || !(b.unit = ev_unit(r, unit))) return;
+    /* B4 bounds the slot before calling us. Its engine constructor reads exactly
+       these type/position arguments; the game thread owns both through the return. */
+    owner = id_of(&r->L, RL_T_PLAYER, *(const char* const*)(unit + U_OWNER));
+    b.owner = (unsigned char)(owner && owner != REC_ID_BAD ? owner - 1 : 0xFF);
+    memcpy(&b.type, record + 1, sizeof b.type);
+    b.water = (unsigned char)unit[U_WATER];
+    b.birth = birth;
+    memcpy(b.position, record + 5, sizeof b.position);
+    /* The carried create applies these fields before B4 reaches this observer.
+       A bare constructor leaves every replica unfinished, so its arguments alone
+       cannot reproduce a carried finished create (kill_apply_state). */
+    memcpy(&b.unfinished, unit + 0x104, sizeof b.unfinished);
+    memcpy(&b.hp, unit + 0x108, sizeof b.hp);
+    b.reserved = 0;
+    cnt(0x0048634Fu, 0, 0);
+    ev_put(r, RK_EV_NET_CREATE, &b, sizeof b);
 }
 
 /* the player a netid names, by 0x44FE40's rule: the first seat with a controller whose netid it
@@ -2886,7 +4746,7 @@ static unsigned player_of_netid(const char* ta, unsigned netid)
    the unit's own movement step, so the iteration's image is a step early for the wreck and the
    blast. */
 static int death_room(Rec* r);
-static int death_enter(Rec* r, void* E, unsigned id, unsigned owner);
+static int death_enter(Rec* r, void* E, unsigned id, unsigned owner, const MpRootRef* mp);
 
 #define OFF_SIDES      0x37F39      /* u32: the sides this game loaded; the lobby clamps a side at
                                        or above it (0x447EC0..0x447ECE)                          */
@@ -2927,6 +4787,9 @@ static int is_commander(const Level* L, const char* unit, unsigned owner)
 static int __cdecl ev_death(void* E)
 {
     Rec* r;
+    const Level* L;
+    const char* unit;
+    MpRootRef mp={0};
     const unsigned char* msg = (const unsigned char*)PTR(ARG(E, 4));
     unsigned short slot, ks;
     unsigned id, kid;
@@ -2935,26 +4798,34 @@ static int __cdecl ev_death(void* E)
     /* the destructor's own alive test (0x486706) on a slot bounded first */
     if (cnt_on() && slot && slot < s_cnt.L.nslots && unit_live(&s_cnt.L, slot))
         cnt_add(0x004866D0u, ARG(E, 0), 0);
-    if (!(r = ev_rec())) return 0;
-    if (!slot || slot >= r->L.nslots || !unit_live(&r->L, slot)) return 0;
+    r = ev_rec();
+    if (!r && (!s_mp_tid || GetCurrentThreadId()!=s_mp_tid || !s_mp_channel)) return 0;
+    L = r ? &r->L : &s_mp_level;
+    if (!slot || slot >= L->nslots || !unit_live(L, slot)) return 0;
+    unit = L->begin + (size_t)slot * REC_UNIT_BYTES;
+    mp_roots_prepare(unit, &mp);
+    if (!r && !mp.origin) return 0;
     if (!death_room(r)) return 0;
     memcpy(&ks, msg + 7, 2);
     id = slot + 1u;
-    kid = ks && ks < r->L.nslots ? ks + 1u : 0;
+    kid = ks && ks < L->nslots ? ks + 1u : 0;
     memcpy(b, &id, 4);
     memcpy(b + 4, &kid, 4);
-    b[8] = (unsigned char)player_of_netid(r->L.ta, *(const unsigned*)(msg + 3));
+    b[8] = (unsigned char)player_of_netid(L->ta, *(const unsigned*)(msg + 3));
     b[9] = msg[9];
     b[10] = msg[0xA];
-    b[11] = (unsigned char)tagpu_tx_carried(r->L.begin + (size_t)slot * REC_UNIT_BYTES);
-    unit_image(&r->L, slot, (unsigned*)(b + 12));
-    ev_put(r, RK_EV_DEATH, b, sizeof b);
+    b[11] = (unsigned char)tagpu_tx_carried(unit);
+    /* The bounded victim's mover is still owned by this destructor at its
+       entry. Its free occurs later in this same game-thread call, so the copied
+       image needs no pointer probe. The return uses only the saved identity. */
+    unit_image(L, slot, (unsigned*)(b + 12));
+    if (r) ev_put(r, RK_EV_DEATH, b, sizeof b);
+    if (mp.origin) mp_roots_publish(&mp, RK_EV_DEATH, b, sizeof b);
     {
-        const char* unit = r->L.begin + (size_t)slot * REC_UNIT_BYTES;
-        unsigned owner = owner_index(r->L.ta, *(const char* const*)(unit + U_OWNER));
-        if (owner < REC_PLAYERS && is_commander(&r->L, unit, owner))
-            r->cmdr[owner] = *(const unsigned*)(r->L.ta + OFF_GAMETIME);
-        return death_enter(r, E, id, owner);
+        unsigned owner = owner_index(L->ta, *(const char* const*)(unit + U_OWNER));
+        if (r && owner < REC_PLAYERS && is_commander(L, unit, owner))
+            r->cmdr[owner] = *(const unsigned*)(L->ta + OFF_GAMETIME);
+        return death_enter(r, E, id, owner, &mp);
     }
 }
 
@@ -3095,9 +4966,11 @@ static void ev_reply(void* E, unsigned root)
 {
     Rec* r = ev_rec();
     const char* text;
+    const char* unit=PTR(ARG(E,4));
     unsigned id, kind, n = 0;
     unsigned char b[12 + REC_TEXT_MAX];
-    if (!r || !(id = ev_unit(r, PTR(ARG(E, 4))))) return;
+    id=r ? ev_unit(r,unit) : mp_roots_unit(unit,0,0);
+    if (!id) return;
     kind = ARG(E, 8);
     text = PTR(ARG(E, 0xC));
     memcpy(b, &id, 4);
@@ -3109,19 +4982,178 @@ static void ev_reply(void* E, unsigned root)
         n = (unsigned)bounded_len(text, REC_TEXT_MAX);
         memcpy(b + 12, text, n);
     }
-    ev_put(r, RK_EV_REPLY, b, 12 + n);
+    if (r) ev_put(r, RK_EV_REPLY, b, 12 + n);
+    mp_roots_push(unit,RK_EV_REPLY,b,12+n);
 }
 
 static int __cdecl ev_reply0(void* E) { cnt(0x0047F780u, ARG(E, 0), 0); ev_reply(E, 0); return 0; }
 static int __cdecl ev_reply1(void* E) { cnt(0x0047F850u, ARG(E, 0), 0); ev_reply(E, 1); return 0; }
 
+static void mp_roots_end(void)
+{
+    s_mp_tid=0;
+    tagpu_recmp_chat_inbox_level_end(s_mp_chat_inbox);
+    tagpu_recmp_named_end(s_mp_named); s_mp_named=NULL;
+    tagpu_recmp_roots_end(s_mp_roots); s_mp_roots=NULL;
+    tagpu_recmp_roots_queue_end(s_mp_roots_queue); s_mp_roots_queue=NULL;
+    tagpu_recmp_text_end(s_mp_text); s_mp_text=NULL;
+    tagpu_recmp_text_queue_end(s_mp_text_queue); s_mp_text_queue=NULL;
+    s_mp_text_failed=0;
+    s_nano_unit=NULL; s_nano_out=NULL;
+    memset(&s_mp_level,0,sizeof s_mp_level);
+    memset(s_mp_roots_seen,0,sizeof s_mp_roots_seen);
+    s_mp_roots_failed=0;
+}
+
+static void mp_roots_log(const RecMpPacket* packet, unsigned applied_tick, const char* where)
+{
+    unsigned row, count, at=4;
+    for (row=0;row<s_mp_roster.count;row++)
+        if (s_mp_roster.actor[row].origin==packet->h.origin) break;
+    if (row==s_mp_roster.count) return;
+    memcpy(&count,packet->body,4);
+    for (unsigned i=0;i<count;i++) {
+        RecMpRootsEntry e;
+        unsigned id, bit;
+        memcpy(&e,packet->body+at,sizeof e); at+=sizeof e;
+        memcpy(&id,packet->body+at,4);
+        bit=e.kind==RK_EV_START_NAMED ? 1 : e.kind==RK_EV_REPLY ? 2 :
+            e.kind==RK_EV_SPRAY ? 4 : e.kind==RK_EV_CREATE ? 8 :
+            e.kind==RK_EV_DEATH ? 16 : e.kind==RECMP_ROOT_CREATE_BEGIN ? 64 : 32;
+        if (!(s_mp_roots_seen[row]&bit)) {
+            s_mp_roots_seen[row]|=bit;
+            tagpu_logf("recmp: %s owned roots ID %u source tick %u seq %u applied tick %u, "
+                       "%u calls %u bytes crc %08X, event %u kind %u unit %u birth %u before %u",
+                       where,packet->h.origin,packet->h.tick,packet->h.sequence,applied_tick,
+                       count,packet->h.bytes-(unsigned)sizeof packet->h,
+                       (unsigned)Crc32_ComputeBuf(0,packet->body,packet->h.bytes-sizeof packet->h),
+                       i,e.kind,id,e.birth,e.before_capture);
+        }
+        at+=e.bytes;
+    }
+}
+
+static int mp_roots_send(void* context, unsigned origin, unsigned tick,
+                          const void* body, unsigned bytes)
+{
+    RecMpPacket packet;
+    (void)context;
+    if (!tagpu_recmp_advance(s_mp_channel,tick) ||
+        !tagpu_recmp_send_from(s_mp_channel,origin,RECMP_ROOTS,tick,body,bytes,&packet.h) ||
+        !tagpu_recmp_roots_put(s_mp_roots,s_mp_seats,&packet.h,body,bytes,tick)) return 0;
+    memcpy(packet.body,body,bytes);
+    mp_roots_log(&packet,tick,"local");
+    return 1;
+}
+
+static int mp_text_send(void* context, unsigned origin, unsigned tick,
+                         const void* body, unsigned bytes)
+{
+    RecMpHeader header;
+    (void)context;
+    if (!tagpu_recmp_advance(s_mp_channel,tick) ||
+        !tagpu_recmp_send_from(s_mp_channel,origin,RECMP_TEXT,tick,body,bytes,&header) ||
+        !tagpu_recmp_text_put(s_mp_text,s_mp_seats,&header,body,bytes,tick)) return 0;
+    tagpu_logf("recmp: local text batch ID %u source tick %u seq %u, %u bytes CRC %08X",
+               origin,tick,header.sequence,bytes,(unsigned)Crc32_ComputeBuf(0,body,bytes));
+    return 1;
+}
+
+/* Both copied queues share the producer's clock. Draining the earliest tick
+   first prevents one feature from sealing a tick the other still owns, also
+   during teardown when several ticks can remain. The game thread owns both. */
+static int mp_events_flush(unsigned through)
+{
+    for (;;) {
+        unsigned roots=0, text=0, tick;
+        int r=tagpu_recmp_roots_queue_tick(s_mp_roots_queue,&roots);
+        int t=tagpu_recmp_text_queue_tick(s_mp_text_queue,&text);
+        if (r<0 || t<0) return 0;
+        if (!r && !t) return 1;
+        tick=r && (!t || roots<=text) ? roots : text;
+        if (tick>through) return 1;
+        if (r && roots==tick &&
+            !tagpu_recmp_roots_queue_flush(s_mp_roots_queue,tick,mp_roots_send,NULL)) return 0;
+        if (t && text==tick &&
+            !tagpu_recmp_text_queue_flush(s_mp_text_queue,tick,mp_text_send,NULL)) return 0;
+    }
+}
+
+/* A matching thread ID establishes ownership before following the level context.
+   The fixed unit/player arrays live until level_end clears that ID on the same
+   thread. Pointer arithmetic bounds the unit before reading its owner or COB;
+   no COB object or remote-owned heap is followed. */
+static unsigned mp_roots_unit(const char* unit, unsigned cob, int check_cob)
+{
+    unsigned id;
+    if (!s_mp_tid || GetCurrentThreadId()!=s_mp_tid || !s_mp_channel) return 0;
+    id=id_in(unit,s_mp_level.begin,REC_UNIT_BYTES,s_mp_level.nslots);
+    if (id==REC_ID_BAD || id<2 || (check_cob && *(const unsigned*)(unit+U_COB)!=cob)) {
+        s_mp_roots_failed=1; return 0;
+    }
+    {
+        unsigned owner=id_in(*(const char* const*)(unit+U_OWNER),
+                              s_mp_level.ta+OFF_PLAYERS,PL_STRIDE,REC_PLAYERS), ctl;
+        if (owner==REC_ID_BAD || !owner) { s_mp_roots_failed=1; return 0; }
+        ctl=(unsigned char)s_mp_level.ta[OFF_PLAYERS+(owner-1)*PL_STRIDE+PL_CONTROLLER];
+        if (ctl==3 || ctl==4) return 0;
+        if (ctl!=1 && ctl!=2) { s_mp_roots_failed=1; return 0; }
+    }
+    return id;
+}
+
+static int mp_roots_prepare(const char* unit, MpRootRef* out)
+{
+    unsigned id=mp_roots_unit(unit,0,0), owner, origin, row, tick, ctl;
+    const char* player;
+    const unsigned* birth;
+    memset(out,0,sizeof *out);
+    if (!id) return 0;
+    owner=id_in(*(const char* const*)(unit+U_OWNER),
+                s_mp_level.ta+OFF_PLAYERS,PL_STRIDE,REC_PLAYERS);
+    if (owner==REC_ID_BAD || !owner) goto invalid;
+    player=s_mp_level.ta+OFF_PLAYERS+(owner-1)*PL_STRIDE;
+    ctl=(unsigned char)player[PL_CONTROLLER];
+    if (ctl==3 || ctl==4) return 0;
+    if (ctl!=1 && ctl!=2) goto invalid;
+    memcpy(&origin,player+4,4);
+    for (row=0;row<s_mp_roster.count;row++)
+        if (s_mp_roster.actor[row].origin==origin) break;
+    if (row==s_mp_roster.count || s_mp_roster.actor[row].seat!=owner-1 ||
+        id-1<s_mp_roster.actor[row].first || id-1>s_mp_roster.actor[row].last) goto invalid;
+    birth=mp_births(&s_mp_level);
+    tick=*(const unsigned*)(s_mp_level.ta+OFF_GAMETIME);
+    if (!birth || birth[id-1]&0x80000000u ||
+        (tick!=s_mp_tick && (s_mp_tick==~0u || tick!=s_mp_tick+1))) goto invalid;
+    *out=(MpRootRef){origin,tick,birth[id-1],tick!=s_mp_tick};
+    return 1;
+invalid:
+    s_mp_roots_failed=1;
+    return 0;
+}
+
+/* A destructor's return cannot reread its cleared slot or freed mover. Its
+   game-thread entry saved the bounded source identity and exact incarnation. */
+static void mp_roots_publish(const MpRootRef* ref, unsigned kind, const void* image, unsigned bytes)
+{
+    if (!tagpu_recmp_roots_queue_push(s_mp_roots_queue,ref->origin,ref->tick,ref->birth,
+                                      ref->before_capture,kind,image,bytes)) s_mp_roots_failed=1;
+}
+
+static void mp_roots_push(const char* unit, unsigned kind, const void* image, unsigned bytes)
+{
+    MpRootRef ref;
+    if (mp_roots_prepare(unit,&ref)) mp_roots_publish(&ref,kind,image,bytes);
+}
+
 /* A start of a script by name that only the owner's machine makes: the unit, the start's third
    argument (nonzero runs it at once, 0x4B0B84), its arguments and the name. */
-static void ev_named(Rec* r, unsigned id, const char* name, unsigned now, unsigned argc,
+static void ev_named(Rec* r, const char* unit, unsigned id, const char* name, unsigned now, unsigned argc,
                      const unsigned char* args)
 {
     unsigned char b[24 + REC_NAME_MAX];
     unsigned n = (unsigned)bounded_len(name, REC_NAME_MAX);
+    unsigned mp_valid=argc<=4 && n;
     memcpy(b, &id, 4);
     b[4] = (unsigned char)argc;
     b[5] = (unsigned char)(now != 0);
@@ -3129,7 +5161,9 @@ static void ev_named(Rec* r, unsigned id, const char* name, unsigned now, unsign
     if (args) memcpy(b + 8, args, 16);
     else memset(b + 8, 0, 16);
     memcpy(b + 24, name, n);
-    ev_put(r, RK_EV_START_NAMED, b, 24 + n);
+    if (r) ev_put(r, RK_EV_START_NAMED, b, 24 + n);
+    if (mp_valid) mp_roots_push(unit,RK_EV_START_NAMED,b,24+n);
+    else if (s_mp_tid && GetCurrentThreadId()==s_mp_tid) s_mp_roots_failed=1;
 }
 
 void tagpu_rec_start_named(const char* unit, const char* name, int now, int argc, int a0)
@@ -3137,9 +5171,10 @@ void tagpu_rec_start_named(const char* unit, const char* name, int now, int argc
     Rec* r = ev_rec();
     int a[4] = { 0, 0, 0, 0 };
     unsigned id;
-    if (!r || !(id = ev_unit(r, unit))) return;
+    id=r ? ev_unit(r,unit) : mp_roots_unit(unit,0,0);
+    if (!id) return;
     a[0] = a0;
-    ev_named(r, id, name, (unsigned)now, (unsigned)argc, (const unsigned char*)a);
+    ev_named(r, unit, id, name, (unsigned)now, (unsigned)argc, (const unsigned char*)a);
 }
 
 /* THE OWNER-ONLY STARTS. Each site is a `call` of 0x4B0A70(name, 0, now, argc, a0..a3) or of
@@ -3178,14 +5213,15 @@ static int __cdecl ev_start_site(void* E, unsigned site)
     const char* unit;
     unsigned id;
     cnt(st->call, 0, 0);
-    if (!(r = ev_rec())) return 0;
+    r = ev_rec();
     unit = PTR(((const unsigned*)((const unsigned char*)E - 0x24))[st->reg]);
-    if (!(id = ev_unit(r, unit))) return 0;
+    id=r ? ev_unit(r,unit) : mp_roots_unit(unit,REG_ECX(E),1);
+    if (!id) return 0;
     if (*(const unsigned*)(unit + U_COB) != REG_ECX(E)) {
         s_bad++;                                      /* not the unit the disassembly says */
         return 0;
     }
-    ev_named(r, id, PTR(ARG(E, 4)), ARG(E, 0xC), st->target == 0x004B0A70u ? ARG(E, 0x10) : 0,
+    ev_named(r, unit, id, PTR(ARG(E, 4)), ARG(E, 0xC), st->target == 0x004B0A70u ? ARG(E, 0x10) : 0,
              st->target == 0x004B0A70u ? (const unsigned char*)E + 0x14 : NULL);
     return 0;
 }
@@ -3196,14 +5232,11 @@ static int __cdecl ev_start_site(void* E, unsigned site)
    the point (the engine map, *The nano spray*). A spray is credited to the unit of the last query
    whose out buffer is its point; the handler calls, the only way into an emitter, forget the last
    query, so a query cannot credit a spray of another handler's call. A spray with no such query is
-   recorded with ID 0 and counted. */
-static const char* s_nano_unit;
-static const void* s_nano_out;
-
+   recorded with ID 0 and counted in skirmish; multiplayer refuses an uncredited spray. */
 static int __cdecl ev_nano_query(void* E)
 {
     cnt(0x0043E400u, ARG(E, 0), 0);
-    if (ev_rec()) {
+    if (ev_rec() || (s_mp_tid && GetCurrentThreadId()==s_mp_tid)) {
         s_nano_unit = PTR(ARG(E, 4));
         s_nano_out = PTR(ARG(E, 8));
     }
@@ -3214,7 +5247,8 @@ static int __cdecl ev_nano_query(void* E)
 static int __cdecl ev_nano_handler(void* E)
 {
     (void)E;
-    if (ev_rec()) s_nano_unit = NULL, s_nano_out = NULL;
+    if (ev_rec() || (s_mp_tid && GetCurrentThreadId()==s_mp_tid))
+        s_nano_unit = NULL, s_nano_out = NULL;
     return 0;
 }
 static int __cdecl ev_nano_h0(void* E) { cnt(0x0043A216u, 0, 0); return ev_nano_handler(E); }
@@ -3228,19 +5262,113 @@ static void ev_spray(void* E, unsigned reverse)
     const void* box = PTR(ARG(E, reverse ? 4 : 8));
     unsigned id = 0, layer = ARG(E, 0xC);
     unsigned char b[48];
-    if (!r) return;
-    if (s_nano_unit && point == s_nano_out) id = ev_unit(r, s_nano_unit);
-    if (!id) r->uncredited++;
+    if (!r && (!s_mp_tid || GetCurrentThreadId()!=s_mp_tid)) return;
+    if (s_nano_unit && point == s_nano_out)
+        id=r ? ev_unit(r,s_nano_unit) : mp_roots_unit(s_nano_unit,0,0);
+    else if (!r) { s_mp_roots_failed=1; return; }
+    if (!id && r) r->uncredited++;
+    if (!id && !r) return;
     memcpy(b, &id, 4);
     memcpy(b + 4, &reverse, 4);
     memcpy(b + 8, point, 12);
     memcpy(b + 20, box, 24);
     memcpy(b + 44, &layer, 4);
-    ev_put(r, RK_EV_SPRAY, b, sizeof b);
+    if (r) ev_put(r, RK_EV_SPRAY, b, sizeof b);
+    mp_roots_push(s_nano_unit,RK_EV_SPRAY,b,sizeof b);
 }
 
 static int __cdecl ev_spray0(void* E) { cnt(0x004720D0u, ARG(E, 0), 0); ev_spray(E, 0); return 0; }
 static int __cdecl ev_spray1(void* E) { cnt(0x00472200u, ARG(E, 0), 0); ev_spray(E, 1); return 0; }
+
+/* THE CLICKS (*The perspective*). Each of the engine's two click actions has exactly one call site
+   in the image (DISASSEMBLED, the plan's E6, re-scanned 2026-10-06: every E8/E9 rel32 of the
+   executable section reaching either entry, and no absolute dword anywhere in the file naming
+   one, so no table or vtable calls them): the left
+   action 0x498F70 only at 0x4995B3 (`e8 b8 f9 ff ff`), which a command-mode left press, a short
+   still left release and an Interface-Type-0 minimap press all reach, and the right button's
+   press 0x499100 only at 0x4993AC (`e8 4f fd ff ff`). Impure's order_check calls 0x499100 from
+   the DLL as a cancel, which is no click and does not pass here. Both sites lie in the mode-6
+   handler 0x499200 after 0x498DA0 (0x499221) stored this message's world point and region and
+   after the cursor choice stored its cursor index (0x4992AD), so the fields read here are the
+   ones the action acts on. Each action is stdcall(record), `ret 4`, and both start by saving ecx
+   and reloading main (0x498F70, 0x499100): they read no register of their caller's. The record
+   is the handler's own stack copy (0x499210..0x49921A), its wParam at +8 (0x498FA9, 0x49917A).
+   The redirect records, then calls the action with the same argument. A skirmish recording's
+   game thread records the click as RK_CLICK (ev_rec). A multiplayer game's contributing game
+   thread (s_mp_tid) publishes it as RECMP_CLICK at the channel's capture tick, the last B2's,
+   which send_from accepts until the next advance; the click runs before this frame's tick loop
+   (E3), so no later tick has been advanced to. Not before the channel's first advance, which
+   gives the capture tick. Everywhere else it only passes through. */
+typedef void (__stdcall* PFN_Click)(void* msg);
+#define E_ClickLeft      ((PFN_Click)0x00498F70u)
+#define E_ClickRight     ((PFN_Click)0x00499100u)
+#define CLICK_LEFT_CALL  0x004995B3u
+#define CLICK_RIGHT_CALL 0x004993ACu
+
+/* the click this message makes, for `player` (0xFF in a contribution) */
+static void click_fill(const char* ta, const void* msg, unsigned button, unsigned player,
+                       RecClick* c)
+{
+    c->player = (uint8_t)player;
+    c->button = (uint8_t)button;
+    c->order = (uint8_t)ta[OFF_ORDER];
+    c->cursor = (uint8_t)ta[OFF_CURSOR_IX];
+    c->region = (uint8_t)(ta[OFF_REGION] & 3);
+    c->itype = (uint8_t)*(const unsigned*)(ta + OFF_ITYPE);
+    c->keys = (uint16_t)(*(const unsigned*)((const char*)msg + 8) & REC_CLICK_KEYS);
+    c->x = *(const int16_t*)(ta + OFF_POINT_X);
+    c->h = *(const int16_t*)(ta + OFF_POINT_H);
+    c->z = *(const int16_t*)(ta + OFF_POINT_Z);
+}
+
+/* The controlled player's click as its actor's RECMP_CLICK. A refused publication refuses the
+   contribution at the next B2 (s_mp_pov_failed), since a hook cannot end the channel itself. */
+static void mp_click(const void* msg, unsigned button)
+{
+    const char* ta = s_mp_level.ta;
+    unsigned p = (unsigned char)ta[OFF_CONTROLLED], itype = *(const unsigned*)(ta + OFF_ITYPE);
+    unsigned origin, i;
+    RecClick c;
+    if (p >= REC_PLAYERS || (unsigned char)ta[OFF_PLAYERS + p * PL_STRIDE + PL_CONTROLLER] != 1)
+        return;
+    if (itype > 1) {
+        if (!s_mp_clicks_odd++)
+            tagpu_logf("recmp: a click at tick %u is not contributed: the Interface Type "
+                       "main+0x37EFA is %u, not 0 or 1", s_mp_tick, itype);
+        return;
+    }
+    memcpy(&origin, ta + OFF_PLAYERS + p * PL_STRIDE + 4, sizeof origin);
+    for (i = 0; i < s_mp_roster.count; i++)
+        if (s_mp_roster.actor[i].origin == origin && s_mp_roster.actor[i].seat == p) break;
+    click_fill(ta, msg, button, RECMP_POV_PLAYER, &c);
+    if (i == s_mp_roster.count || !mp_pov_send(origin, RECMP_CLICK, s_mp_tick, &c, sizeof c))
+        s_mp_pov_failed = 1;
+}
+
+static void __stdcall rec_click(void* msg, unsigned button)
+{
+    Rec* r = ev_rec();
+    if (r && r->mode == MODE_SKIRMISH && !r->ev_full) {
+        const char* ta = r->L.ta;
+        unsigned p = (unsigned char)ta[OFF_CONTROLLED];
+        unsigned itype = *(const unsigned*)(ta + OFF_ITYPE);
+        if (p < REC_PLAYERS && (unsigned char)ta[OFF_PLAYERS + p * PL_STRIDE + PL_CONTROLLER] == 1) {
+            if (itype > 1) {
+                if (!r->clicks_odd++)
+                    tagpu_logf("recorder: a click at GameTime %d is not recorded: the Interface "
+                               "Type main+0x37EFA is %u, not 0 or 1", r->tick, itype);
+            } else {
+                RecClick c;
+                click_fill(ta, msg, button, p, &c);
+                ev_put(r, RK_CLICK, &c, sizeof c);
+            }
+        }
+    } else if (s_mp_channel && s_mp_pov && s_mp_advanced && !s_mp_pov_failed && s_mp_tid &&
+               GetCurrentThreadId() == s_mp_tid) {
+        mp_click(msg, button);
+    }
+    (button == REC_CLICK_RIGHT ? E_ClickRight : E_ClickLeft)(msg);
+}
 
 /* ---- the features --------------------------------------------------------------------------- */
 
@@ -3286,8 +5414,10 @@ static int __cdecl ev_spray1(void* E) { cnt(0x00472200u, ARG(E, 0), 0); ev_spray
    the cells that changed since the iteration's images: the unit slots the unit tick moved, which
    reproduction reads (0x424189). That is what a replay needs to run the same call to the same
    end (tagpu_replay.c). The depth is a LIFO of the return addresses the observers' `after`
-   restores, pushed only while this thread records: a call that is not recorded pushes nothing
-   and has no `after`, and a recording neither starts nor ends inside a feature call -- it starts
+   restores. Feature calls push only while this thread records; locally owned multiplayer
+   deaths also push while recording is off so their return can close the contributed bracket.
+   A call with neither recording nor contribution pushes nothing and has no `after`.
+   A recording neither starts nor ends inside a feature call -- it starts
    and ends at a capture, at the unit tick's call, or on the teardown's entry, outside every one.
 
    A UNIT'S DEATH is a frame too, from the destructor's entry, where its RK_EV_DEATH is taken, to
@@ -3736,9 +5866,9 @@ static Feat* feat_start(const char* ta, RecRing* g)
    explosion it is a root (*The features*, A UNIT'S DEATH). `id` is a death's unit's ID. */
 #define FR_DEATH       FR_ROOTS
 #define FR_BLAST       (FR_ROOTS + 1)
-typedef struct FFrame { unsigned ret, id; unsigned char root, recorded, owner; } FFrame;
+typedef struct FFrame { unsigned ret, id; unsigned char root, recorded, owner; MpRootRef mp; } FFrame;
 static FFrame   s_fstack[FDEPTH_MAX];
-static unsigned s_fdepth;           /* moved only on the recording's game thread (feat_enter) */
+static unsigned s_fdepth;           /* moved only by game-thread feature/death frames */
 static unsigned char s_fphase;      /* the step's phase (tagpu_rec_phase), on the game thread    */
 
 void __cdecl tagpu_rec_phase(unsigned phase) { s_fphase = (unsigned char)phase; }
@@ -3803,6 +5933,26 @@ static unsigned root_args(Rec* r, Feat* f, void* E, unsigned root, unsigned char
         memcpy(b + 8, &v, 4);
         mark_feature(f, defs, x, z);
         return 12;
+    case FR_CORPSE: {
+        /* What 0x486360 reads of its unit, which it writes none of: the type +0x92 (0x486368,
+           0x486404), the cell +0x76/+0x78 (0x4863B7, 0x4863BB), the position +0x6A and the turn
+           +0x64 by address (0x4863D0, 0x4863F1, 0x48642C), and +0xFF (0x4863EB, 0x486426). Its
+           spawn marks the cells it writes, a nested root of its own */
+        const char* u = PTR(ARG(E, 4));
+        unsigned id = REC_ID_BAD;
+        memset(b, 0, 32);
+        if (ev_unit(r, u)) {
+            id = id_of(&r->L, RL_T_TYPE, *(const char* const*)(u + U_TYPE));
+            b[6] = (unsigned char)u[0xFF];
+            memcpy(b + 8, u + 0x76, 4);
+            memcpy(b + 12, u + 0x6A, 12);
+            memcpy(b + 24, u + 0x64, 6);
+        }
+        memcpy(b, &id, 4);
+        b[4] = (unsigned char)ARG(E, 8);
+        b[5] = (unsigned char)ARG(E, 12);
+        return 32;
+    }
     default:
         return 0;
     }
@@ -3825,7 +5975,13 @@ static int feat_enter(void* E, unsigned root)
     fr->ret = ARG(E, 0);
     fr->id = 0;
     fr->root = (unsigned char)root;
-    fr->recorded = !s_fdepth || s_fstack[s_fdepth - 1].root == FR_BLAST;
+    {
+        const FFrame* up = s_fdepth ? &s_fstack[s_fdepth - 1] : NULL;
+        /* the corpse is a root directly inside the death that is recorded; anything else is one
+           outside every frame or inside an explosion */
+        fr->recorded = root == FR_CORPSE ? (up && up->root == FR_DEATH && up->recorded)
+                                         : (!up || up->root == FR_BLAST);
+    }
     if (fr->recorded) {
         unsigned site = ARG(E, 0) - 5;
         b[0] = (unsigned char)root;
@@ -3848,6 +6004,10 @@ static void* __cdecl feat_leave(unsigned* regs)
 {
     FFrame* fr = &s_fstack[--s_fdepth];
     Rec* r;
+    /* the corpse's spawn, nested in it: the record it took is the corpse's END */
+    if (fr->root == FR_SPAWN && s_fdepth && s_fstack[s_fdepth - 1].root == FR_CORPSE &&
+        s_fstack[s_fdepth - 1].recorded && (r = ev_rec()) != NULL && r->feat)
+        s_fstack[s_fdepth - 1].id = wreck_id(r->feat, regs[7]);
     if (fr->recorded && (r = ev_rec()) != NULL && r->feat) {
         unsigned char b[8];
         unsigned v = regs[7];
@@ -3855,8 +6015,9 @@ static void* __cdecl feat_leave(unsigned* regs)
            cell, or a value that is no record for a cell holding no feature (0x423734 ->
            0x4237C3), which wreck_id makes REC_ID_BAD on both machines; 0x4246B0 a 0 or 1
            (0x4246F2, 0x42471E, 0x42482A); the others end on a network send's or a field's
-           value */
+           value; 0x486360's END is the record its spawn took, 0 for none */
         if (fr->root == FR_SPAWN || fr->root == FR_SWAP) v = wreck_id(r->feat, v);
+        else if (fr->root == FR_CORPSE) v = fr->id;
         else if (fr->root != FR_DESTROY) v = 0;
         b[0] = fr->root;
         b[1] = b[2] = b[3] = 0;
@@ -3866,28 +6027,28 @@ static void* __cdecl feat_leave(unsigned* regs)
     return (void*)(size_t)fr->ret;
 }
 
-/* Whether the stack has room for a death's frame, asked before its RK_EV_DEATH goes in, so that no
-   death is published without the bracket that closes it. Without room the next capture ends the
-   recording. */
+/* Reserve the return frame before publishing a death to either recording or
+   contribution storage. Exhaustion makes the applicable capture incomplete. */
 static int death_room(Rec* r)
 {
     if (s_fdepth < FDEPTH_MAX) return 1;
-    r->feat->broken = 1;
+    if (r) r->feat->broken = 1;
+    if (s_mp_tid==GetCurrentThreadId()) s_mp_roots_failed=1;
     return 0;
 }
 
-/* The destructor's entry, once its RK_EV_DEATH is in: the death is a frame, so the feature calls
+/* The destructor's entry, once its RK_EV_DEATH is copied: the death is a frame, so the feature calls
    it makes itself are its own (*The features*, A UNIT'S DEATH). Nothing about the grid is marked
    here: each call it makes marks its own. */
-static int death_enter(Rec* r, void* E, unsigned id, unsigned owner)
+static int death_enter(Rec* r, void* E, unsigned id, unsigned owner, const MpRootRef* mp)
 {
     FFrame* fr = &s_fstack[s_fdepth++];
-    (void)r;
     fr->ret = ARG(E, 0);
     fr->id = id;
     fr->root = FR_DEATH;
-    fr->recorded = 1;
+    fr->recorded = r != NULL;
     fr->owner = (unsigned char)owner;
+    fr->mp = *mp;
     return 1;
 }
 
@@ -3898,12 +6059,13 @@ static void* __cdecl death_leave(unsigned* regs)
     FFrame* fr = &s_fstack[--s_fdepth];
     Rec* r = ev_rec();
     (void)regs;
-    if (r) {
+    if (fr->recorded && r) {
         ev_put(r, RK_EV_DEATH_END, &fr->id, 4);
         if (fr->owner < REC_PLAYERS &&
             !*(const unsigned short*)(r->L.ta + OFF_PLAYERS + (size_t)fr->owner * PL_STRIDE + PL_LIVE))
             r->defeat[fr->owner] = *(const unsigned*)(r->L.ta + OFF_GAMETIME);
     }
+    if (fr->mp.origin) mp_roots_publish(&fr->mp,RK_EV_DEATH_END,&fr->id,4);
     return (void*)(size_t)fr->ret;
 }
 
@@ -3935,7 +6097,7 @@ static void __stdcall rec_blast(char* unit, unsigned selfd)
 }
 
 /* the feature functions' entries, by RecRoot, for the counts */
-static const unsigned FEAT_VA[FR_ROOTS] = { 0x00424050u, 0x00423C50u, 0x004246B0u, 0x00423550u,
+static const unsigned FEAT_VA[FR_CORPSE] = { 0x00424050u, 0x00423C50u, 0x004246B0u, 0x00423550u,
                                             0x004233A0u, 0x004244B0u, 0x00423710u };
 static int feat_counted(void* E, unsigned root)
 {
@@ -3949,6 +6111,19 @@ static int __cdecl ob_die(void* E) { return feat_counted(E, FR_DIE); }
 static int __cdecl ob_burn(void* E) { return feat_counted(E, FR_BURN); }
 static int __cdecl ob_damage(void* E) { return feat_counted(E, FR_DAMAGE); }
 static int __cdecl ob_swap(void* E) { return feat_counted(E, FR_SWAP); }
+
+/* The corpse helper 0x486360(unit, level, smoke), the destructor's only call of it (0x486D6F; no
+   other call or stored address in the image). In a multiplayer recording it is a root of its own
+   inside the death, FR_CORPSE: the host's destructor runs at its owner's time and makes no corpse,
+   and the corpse comes from this root (tagpu_replay.c, THE DEATHS ON A MULTIPLAYER LEVEL). In a
+   skirmish recording the replay's destructor makes it: no frame, and no count, which would add a
+   row to every skirmish recording's counts. */
+static int __cdecl ob_corpse(void* E)
+{
+    Rec* r = ev_rec();
+    if (!r || !r->feat || r->mode != MODE_NETWORK) return 0;
+    return feat_enter(E, FR_CORPSE);
+}
 
 /* the stamp, the clear and the re-claim, each (unit): the unit's footprint, a cell wider. On a
    puppet level, where nothing records, the call's grid writes are undone at its return instead
@@ -3996,8 +6171,39 @@ static unsigned __stdcall feat_draw(unsigned site, unsigned n)
     return v;
 }
 
-static const unsigned DRAW_SITES[FS_SITES] = { 0x004234C2u, 0x00423A38u, 0x00423B40u,
-                                               0x00424113u, 0x00424159u, 0x00424167u };
+static const unsigned DRAW_SITES[FS_RNG_SITES] = { 0x004234C2u, 0x00423A38u, 0x00423B40u,
+                                                   0x00424113u, 0x00424159u, 0x00424167u };
+
+/* THE SOURCE TEST. Reproduction spreads a feature only from a source cell no unit stands on:
+   `cmp word [cell],0` at 0x424189, slot A of the cursor's cell [esp+0x10] (0x4240E5). It is the
+   one value a feature call reads from outside the feature world: area damage's slot sums are
+   never read by its feature branch (0x49A407, 0x49A40D), and the spawn, the destroy and the tick
+   read no other unit slot (DISASSEMBLED). A multiplayer playing's host keeps its own slots,
+   because its units follow their owners, so a multiplayer recording records the slot the tick
+   read (FS_SOURCE) and such a host answers from it (tagpu_replay_source). Everywhere else this is
+   the stock test on the engine's own pointer. n is a key compared with the recording's, never an
+   index. 1: a unit holds the source. */
+static int __cdecl feat_source(const unsigned char* cell)
+{
+    const char* ta = *(const char* const*)(size_t)TA_MAINPP;
+    const unsigned char* grid = ta ? *(const unsigned char* const*)(ta + OFF_GRID) : NULL;
+    unsigned n = grid ? (unsigned)((size_t)(cell - grid) / REC_CELL_BYTES) : 0, v;
+    uint16_t a;
+    Rec* r;
+    if (tagpu_replay_source(n, &v)) return v != 0;
+    memcpy(&a, cell, 2);
+    if (s_fdepth && (r = ev_rec()) != NULL && r->feat && r->mode == MODE_NETWORK) {
+        unsigned char b[12];
+        unsigned w = a;
+        b[0] = FS_SOURCE;
+        b[1] = b[2] = b[3] = 0;
+        memcpy(b + 4, &n, 4);
+        memcpy(b + 8, &w, 4);
+        ev_put(r, RK_EV_DRAW, b, 12);
+        r->feat->draws++;
+    }
+    return a != 0;
+}
 
 /* The features as a dump's records: every cell, every record whose image is not all zero, and
    the lists' heads and the cursor, read as the capture reads them and within the same counts. A
@@ -4056,6 +6262,7 @@ typedef struct ObserveSite {
                                            footprint writers' undo on a puppet level             */
 } ObserveSite;
 static const ObserveSite OBSERVE_SITES[] = {
+    { 0x00486075u, 9, { 0x8B, 0x7C, 0x24, 0x2C, 0x66, 0x8B, 0x54, 0x24, 0x1C }, mp_create_begin, NULL },
     { 0x004861B3u, 5, { 0x8B, 0xC6, 0x5F, 0x5E, 0x5D }, ev_create, NULL },
     { 0x004866D0u, 9, { 0x83, 0xEC, 0x68, 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 }, ev_death,
       death_leave },
@@ -4080,6 +6287,8 @@ static const ObserveSite OBSERVE_SITES[] = {
     { 0x004233A0u, 8, { 0x8B, 0x44, 0x24, 0x08, 0x8B, 0x4C, 0x24, 0x04 }, ob_burn, feat_leave },
     { 0x004244B0u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, ob_damage, feat_leave },
     { 0x00423710u, 8, { 0x8B, 0x44, 0x24, 0x08, 0x8B, 0x4C, 0x24, 0x04 }, ob_swap, feat_leave },
+    /* the corpse helper: no gate lands there */
+    { 0x00486360u, 8, { 0x53, 0x55, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x14 }, ob_corpse, feat_leave },
     { 0x0047CC30u, 5, { 0x83, 0xEC, 0x18, 0x53, 0x55 }, ob_stamp, foot_leave },
     { 0x0047D0E0u, 10, { 0x83, 0xEC, 0x08, 0x53, 0x8B, 0x1D, 0xE8, 0x1D, 0x51, 0x00 }, ob_clear,
       foot_leave },
@@ -4322,6 +6531,16 @@ static void dump_counts(void)
     }
 }
 
+/* Reproduction's source test (THE SOURCE TEST): `mov ecx,[esp+0x10]; cmp word [ecx],0; jne
+   0x4241A8`, redirected whole to a stub that makes the test through feat_source. 0x42418F reads
+   eax, the target cell, and 0x424197 ecx, the source cell, both as stock leaves them; 0x4241A8
+   reads no flags. No branch lands inside the ten bytes (DISASSEMBLED 0x424050..0x4244B0). */
+#define SOURCE_TEST 0x00424185u
+#define SOURCE_SKIP 0x004241A8u     /* 0x42418D's target: a unit holds the source, no spread     */
+#define SOURCE_ON   0x0042418Fu     /* the target cell's test                                    */
+static const unsigned char SOURCE_BYTES[10] = { 0x8B, 0x4C, 0x24, 0x10, 0x66, 0x83, 0x39, 0x00,
+                                                0x75, 0x19 };
+
 /* the fire functions' network tests, `test byte [reg+0x2A44],1` then a je */
 static const unsigned NET_TESTS[5] = { 0x0049D7A0u, 0x0049DA92u, 0x0049DC64u, 0x0049DE25u,
                                        0x0049DFAFu };
@@ -4337,10 +6556,17 @@ void tagpu_rec_init(void)
 {
     unsigned char* net[5] = { 0 };
     unsigned char* calls[START_SITE_COUNT] = { 0 };
-    unsigned char* draws[FS_SITES] = { 0 };
+    unsigned char* draws[FS_RNG_SITES] = { 0 };
     unsigned char* blast = NULL;
+    unsigned char* source = NULL;
+    unsigned char* clicks[2] = { 0 };
     unsigned i, k;
     static const unsigned char regs[8] = { 0x8F, 0x8E, 0x8D, 0, 0x8B, 0, 0, 0 };
+    /* THE CLICKS: the left action's and the right press's call sites, by REC_CLICK_* */
+    static const unsigned CLICK_CALL[2] = { CLICK_LEFT_CALL, CLICK_RIGHT_CALL };
+    static const PFN_Click CLICK_ACTION[2] = { E_ClickLeft, E_ClickRight };
+
+    mp_init();
 
     /* every site first */
     for (i = 0; i < OBSERVE_SITE_COUNT; i++)
@@ -4372,7 +6598,7 @@ void tagpu_rec_init(void)
             return;
         }
     }
-    for (i = 0; i < FS_SITES; i++) {
+    for (i = 0; i < FS_RNG_SITES; i++) {
         unsigned char c[5];
         int32_t rel = (int32_t)((unsigned)(size_t)E_Rand - (DRAW_SITES[i] + 5));
         c[0] = 0xE8;
@@ -4391,6 +6617,22 @@ void tagpu_rec_init(void)
         if (!pristine(BLAST_CALL, c, 5)) {
             tagpu_logf("recorder: the destructor's explosion call 0x%06X holds other bytes: no "
                        "event hooks, and nothing will be recorded", BLAST_CALL);
+            return;
+        }
+    }
+    if (!pristine(SOURCE_TEST, SOURCE_BYTES, sizeof SOURCE_BYTES)) {
+        tagpu_logf("recorder: reproduction's source test 0x%06X holds other bytes: no event hooks, "
+                   "and nothing will be recorded", SOURCE_TEST);
+        return;
+    }
+    for (i = 0; i < 2; i++) {
+        unsigned char c[5];
+        int32_t rel = (int32_t)((unsigned)(size_t)CLICK_ACTION[i] - (CLICK_CALL[i] + 5));
+        c[0] = 0xE8;
+        memcpy(c + 1, &rel, 4);
+        if (!pristine(CLICK_CALL[i], c, 5)) {
+            tagpu_logf("recorder: the click call 0x%06X holds other bytes: no event hooks, and "
+                       "nothing will be recorded", CLICK_CALL[i]);
             return;
         }
     }
@@ -4420,7 +6662,7 @@ void tagpu_rec_init(void)
         *p++ = 0x9D;                                    /* popfd                                */
         *p++ = 0xE9; tagpu_detour_rel(p, START_SITES[i].target);
     }
-    for (i = 0; i < FS_SITES; i++) {
+    for (i = 0; i < FS_RNG_SITES; i++) {
         unsigned char* p = draws[i] = tagpu_detour_stub();
         if (!p) goto fail;
         *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x04;   /* push dword [esp+4]: the n      */
@@ -4435,6 +6677,27 @@ void tagpu_rec_init(void)
         *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x08;   /* push dword [esp+8]: the unit   */
         *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)rec_blast); p += 4;
         *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;          /* ret 8, the explosion's own           */
+    }
+    {
+        unsigned char* p = source = tagpu_detour_stub();
+        if (!p) goto fail;
+        memcpy(p, SOURCE_BYTES, 4); p += 4;             /* mov ecx,[esp+0x10]: the source cell   */
+        *p++ = 0x60;                                    /* pushad                               */
+        *p++ = 0x51;                                    /* push ecx                             */
+        *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)feat_source); p += 4;
+        *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;          /* add esp,4                            */
+        *p++ = 0x85; *p++ = 0xC0;                       /* test eax,eax                         */
+        *p++ = 0x61;                                    /* popad, which leaves EFLAGS alone     */
+        *p++ = 0x0F; *p++ = 0x85; tagpu_detour_rel(p, SOURCE_SKIP); p += 4;   /* jnz: no spread  */
+        *p++ = 0xE9; tagpu_detour_rel(p, SOURCE_ON);    /* ecx and eax as stock left them       */
+    }
+    for (i = 0; i < 2; i++) {
+        unsigned char* p = clicks[i] = tagpu_detour_stub();
+        if (!p) goto fail;
+        *p++ = 0x68; memcpy(p, &i, 4); p += 4;          /* push the button                      */
+        *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x08;   /* push dword [esp+8]: the record */
+        *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)rec_click); p += 4;
+        *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;          /* ret 4, the action's own              */
     }
 
     /* then all of them */
@@ -4459,7 +6722,7 @@ void tagpu_rec_init(void)
         if (!tagpu_detour_write(START_SITES[k].call, c, 5)) goto landfail;
         calls[k] = NULL;
     }
-    for (k = 0; k < FS_SITES; k++) {
+    for (k = 0; k < FS_RNG_SITES; k++) {
         unsigned char c[5];
         int32_t rel = (int32_t)((unsigned)(size_t)draws[k] - (DRAW_SITES[k] + 5));
         c[0] = 0xE8;
@@ -4475,9 +6738,19 @@ void tagpu_rec_init(void)
         if (!tagpu_detour_write(BLAST_CALL, c, 5)) goto landfail;
         blast = NULL;
     }
+    if (!tagpu_detour_land(SOURCE_TEST, source, sizeof SOURCE_BYTES)) goto landfail;
+    source = NULL;
+    for (k = 0; k < 2; k++) {
+        unsigned char c[5];
+        int32_t rel = (int32_t)((unsigned)(size_t)clicks[k] - (CLICK_CALL[k] + 5));
+        c[0] = 0xE8;
+        memcpy(c + 1, &rel, 4);
+        if (!tagpu_detour_write(CLICK_CALL[k], c, 5)) goto landfail;
+        clicks[k] = NULL;
+    }
     s_sites = 1;
     tagpu_logf("recorder: %u event sites in",
-               (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + FS_SITES + 1));
+               (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + FS_RNG_SITES + 2 + 2));
     cnt_sinks_init();
     ai_hooks_init();
     return;
@@ -4488,8 +6761,10 @@ landfail:
 fail:
     for (i = 0; i < 5; i++) tagpu_detour_stub_free(net[i]);
     for (i = 0; i < START_SITE_COUNT; i++) tagpu_detour_stub_free(calls[i]);
-    for (i = 0; i < FS_SITES; i++) tagpu_detour_stub_free(draws[i]);
+    for (i = 0; i < FS_RNG_SITES; i++) tagpu_detour_stub_free(draws[i]);
     tagpu_detour_stub_free(blast);
+    tagpu_detour_stub_free(source);
+    for (i = 0; i < 2; i++) tagpu_detour_stub_free(clicks[i]);
 }
 
 /* ---- the entry points ----------------------------------------------------------------------- */
@@ -4565,18 +6840,44 @@ int tagpu_rec_fork_arm(RecFork* f)
 
 /* the recording's start at this capture point: the counts kept since the level's last start are
    this recording's from here */
-static void rec_begin(const Level* L, int tick)
+static void rec_begin(const Level* L, int tick, const RecMpConfig* mp)
 {
     s_bad = s_badlog = 0;
     InterlockedExchange(&s_offthread, 0);
     s_nano_unit = NULL;
     s_nano_out = NULL;
-    s_rec = rec_start(L, tick);
+    s_rec = rec_start(L, tick, mp);
     if (s_rec) {
         s_state = ST_RECORDING;
-        s_rec_fired = 1;
+        s_rec_fired = s_rec->mode==MODE_SKIRMISH;
         s_tid = s_rec->tid;
     }
+}
+
+static void mp_record_begin(const Level* L, int tick, const RecMpConfig* config)
+{
+    if (s_state!=ST_IDLE) return;
+    s_state=ST_DONE;
+    if (!tagpu_opt_on(REC_ON)) return;
+    if (!tagpu_reclaim_level_tracked() || !tagpu_simreg_count() || !s_sites) {
+        tagpu_logf("recorder: native file prerequisites unavailable: contributions continue");
+        return;
+    }
+    cnt_start(L,1);
+    rec_begin(L,tick,config);
+    if (s_rec)
+        tagpu_logf("recorder: native file retains observed world and owner contributions; "
+                   "it plays forward from its start, with no seek");
+}
+
+static void mp_record_end(int channel_ended)
+{
+    RecMpFile* f=s_mp_file;
+    if (!f) return;
+    /* Clear the producer's borrow before the writer can acquire ended and free.
+       The channel journal is game-thread-only, so detach closes every producer. */
+    s_mp_file=NULL;
+    tagpu_recmp_file_end(f,channel_ended);
 }
 
 static void rec_stop(unsigned reason)
@@ -4587,10 +6888,19 @@ static void rec_stop(unsigned reason)
     s_state = ST_DONE;
 }
 
+/* rec_end lets the ring go (`r->ring` NULL) before rec_stop and the teardown clear s_rec, all on
+   this thread */
+unsigned tagpu_rec_ring_used(void)
+{
+    Rec* r = s_rec;
+    if (s_state != ST_RECORDING || !r || !r->ring || s_tid != GetCurrentThreadId()) return 0;
+    return ring_used(r);
+}
+
 int tagpu_rec_rewind_open(unsigned* timeline, char* why, unsigned whycap)
 {
     Rec* r = s_rec;
-    if (s_state != ST_RECORDING || !r || s_suspended || r->ev_full ||
+    if (s_state != ST_RECORDING || !r || r->mode!=MODE_SKIRMISH || s_suspended || r->ev_full ||
         InterlockedCompareExchange(&r->ring->failed, 0, 0)) {
         snprintf(why, whycap, "no healthy live recording");
         return 0;
@@ -4606,7 +6916,7 @@ int tagpu_rec_rewind_open(unsigned* timeline, char* why, unsigned whycap)
 int tagpu_rec_rewind_flush(char* path, unsigned cap)
 {
     Rec* r = s_rec;
-    if (s_state != ST_RECORDING || !r || r->ev_full ||
+    if (s_state != ST_RECORDING || !r || r->mode!=MODE_SKIRMISH || r->ev_full ||
         InterlockedCompareExchange(&r->ring->failed, 0, 0)) return -1;
     if (InterlockedCompareExchange(&r->ring->flush_done, 0, 0) !=
         InterlockedCompareExchange(&r->ring->flush_req, 0, 0)) return 0;
@@ -4620,7 +6930,7 @@ int tagpu_rec_suspend(int on)
 {
     unsigned z;
     Rec* r = s_rec;
-    if (s_state != ST_RECORDING || !r) return 0;
+    if (s_state != ST_RECORDING || !r || r->mode!=MODE_SKIRMISH) return 0;
     if (on) {
         if (tagpu_rec_rewind_flush(NULL, 0) != 1) return 0;
         seats_end(r, REC_END_FORKED, r->rewind_end);
@@ -4686,6 +6996,7 @@ void __cdecl tagpu_rec_capture(void)
     masks_init();
     tick = *(int*)(ta + OFF_GAMETIME);
     mode = game_mode(ta);
+    if (mode == MODE_NETWORK && ((unsigned char)ta[OFF_NETWORK] & 1)) mp_capture(&L, (unsigned)tick);
     ai_finish((unsigned)tick);
 
     if (s_state == ST_IDLE && s_fork.file) {
@@ -4702,7 +7013,7 @@ void __cdecl tagpu_rec_capture(void)
             s_fork.file = NULL;
             recfile_unlock(&s_fork.lock);
         } else {
-            rec_begin(&L, tick);
+            rec_begin(&L, tick, NULL);
             if (s_fork.file) {          /* rec_start failed before the ring took it */
                 CloseHandle(s_fork.file);
                 s_fork.file = NULL;
@@ -4730,7 +7041,7 @@ void __cdecl tagpu_rec_capture(void)
             else if (!s_sites)
                 tagpu_logf("recorder: not recording: the event hooks are not in (tagpu_rec_init)");
             else
-                rec_begin(&L, tick);
+                rec_begin(&L, tick, NULL);
         }
     }
     dumps_take(&L, tick);
@@ -4739,7 +7050,10 @@ void __cdecl tagpu_rec_capture(void)
     r = s_rec;
     if (r->ev_full) { rec_stop(REC_END_RING); return; }
     if (InterlockedCompareExchange(&r->ring->failed, 0, 0)) { rec_stop(REC_END_WRITE); return; }
-    if (mode != MODE_SKIRMISH) { rec_stop(REC_END_MODE); return; }
+    if ((unsigned)mode != r->mode ||
+        (r->mode==MODE_NETWORK && (!s_mp_channel || !((unsigned char)ta[OFF_NETWORK]&1)))) {
+        rec_stop(REC_END_MODE); return;
+    }
     if (L.begin != r->begin || L.nslots != r->nslots || tick <= r->tick) {
         rec_stop(REC_END_LEVEL);
         return;
@@ -4763,6 +7077,7 @@ void __cdecl tagpu_rec_capture(void)
     if (t < 0) { r->w = w0; rec_stop(REC_END_PROJ); return; }
     t = t ? cap_mapped(r, &L) : 0;
     if (t < 0) { r->w = w0; rec_stop(REC_END_MAPPED); return; }
+    t = t ? cap_pov(r, &L, tick) : 0;
     if (!t) {
         /* the iteration does not fit: the recording ends after the last whole one, and what this
            one wrote is dropped unpublished */
@@ -4808,6 +7123,40 @@ static void cover_wait(int fin)
 void tagpu_rec_level_end(void)
 {
     unsigned i, k = 0;
+    /* Teardown enters on the producer's game thread before the unit-array free.
+       Copied final roots precede final source seals; no hook can retain this
+       level context after it is cleared. */
+    if (s_mp_channel) {
+        const char* why =
+            !tagpu_recmp_chat_inbox_finish(s_mp_chat_inbox,&s_mp_active_match,s_mp_local,
+                                           &s_mp_roster,s_mp_text_queue)
+                ? "the copied chat inbox did not finish into the text queue" :
+            s_mp_roots_failed || s_mp_text_failed || s_mp_pov_failed
+                ? "a root, text or click publication was refused" :
+            !mp_events_flush(~0u) ? "the final events did not flush" : NULL;
+        if (why) {
+            tagpu_logf("recmp: final contributions refused at the level's end: %s", why);
+            tagpu_recmp_abort(s_mp_channel,E_ABORT);
+        }
+    }
+    mp_roots_end();
+    tagpu_recmp_end(s_mp_channel);
+    mp_record_end(1);
+    s_mp_channel = NULL;
+    s_mp_consuming = 0;
+    tagpu_recmp_orders_end(s_mp_orders);
+    s_mp_orders = NULL;
+    tagpu_recmp_players_end(s_mp_players);
+    s_mp_players = NULL;
+    tagpu_recmp_seats_end(s_mp_seats);
+    s_mp_seats = NULL;
+    tagpu_recmp_units_end(s_mp_units);
+    s_mp_units = NULL;
+    mp_explored_end();
+    mp_pov_end();
+    memset(&s_mp_roster, 0, sizeof s_mp_roster);
+    s_mp_tried = 0;
+    memset(s_mp_orders_seen, 0, sizeof s_mp_orders_seen);
     /* a timed dump does not outlive its level, whose GameTime the next level starts again; an
        untimed one is taken at the next level's first capture point */
     for (i = 0; i < s_narmed; i++) {

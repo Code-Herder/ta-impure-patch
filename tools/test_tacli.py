@@ -313,19 +313,21 @@ class TextTokens(unittest.TestCase):
         for caret in (0, 3, 6):
             with self.subTest(caret=caret):
                 state = dict(text='abcdef', caret=caret, time=0)
-                field = gadget(type='textbox', name='NICKNAME', text=state['text'], maxchars=32)
+                field = gadget(type='field', name='NICKNAME', text=state['text'], maxchars=32)
 
                 def write(inst, tokens):
                     for key in tokens.split():
                         at, text = state['caret'], state['text']
-                        if key == 'backspace' and at:
+                        if key == 'end':
+                            state['caret'] = len(text)
+                        elif key == 'backspace' and at:
                             state.update(text=text[:at-1] + text[at:], caret=at-1)
                         elif key == 'delete':
                             state['text'] = text[:at] + text[at+1:]
                         elif key.startswith('char:'):
                             state.update(text=text[:at] + key[5:] + text[at:], caret=at+1)
 
-                def snap(*args):
+                def snap(*args, **kwargs):
                     return snapshot([dict(field, text=state['text'])])
 
                 def sleep(seconds):

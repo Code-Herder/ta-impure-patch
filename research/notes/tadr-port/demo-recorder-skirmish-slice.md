@@ -2,6 +2,11 @@
 
 ## Status
 
+The recorder writes recording format 8 and its readers take format 8 alone (*The file*, below).
+Enabled native multiplayer recording carries an observed world, a contribution container and cut
+footer, plus replica creation roots. Native engine playback remains unfinished; the container
+and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
+
 The [product page](demo-recorder.md#milestones-and-delivery-order)'s second milestone, planned
 2026-09-29: recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser
 and `tacli` automation, with the verification the
@@ -46,9 +51,9 @@ Each landing adds one capability that can be verified by itself, and the ones af
 | **S5 — the browser and the controls** | the Replays browser, the timeline bar, perspectives, camera follow, the overlays, the recording switch in the settings screen | the browser and the controls driven through `tacli ui`, with pictures |
 
 **S1 and S2 record every value exactly, at every tick.** That is what makes their checks exact. The
-product page's stream — ten samples a second in whole world units, interpolated in playback — is a
-landing of its own after S2, once playback can show its error; S1 measures the exact stream's size
-so that the gap to the budget is known before then. Until that landing a skirmish is recorded only
+reduced stream — the same exact values, coded losslessly ([making recordings
+smaller](demo-recorder-size.md)) — is a landing of its own after S2; S1 measures the exact stream's
+size so that the gap to the budget is known before then. Until that landing a skirmish is recorded only
 when asked, by the file `tagpu_recorder.on` in the game's folder, because the exact stream is too
 large to write for every game (*Measured*). That landing turns recording on for every skirmish and
 retires the file, and it packs the stream tighter as well: a scratch repacking of the exact stream
@@ -131,30 +136,117 @@ check is not vacuous.
 
 One file per recording, `replays\<date> <time> <map>.imprec` in the game's folder, or its first free
 ` (2)`…` (9)` variant, written by the writer thread alone. It is `IMPREC\r\n` and then blocks: a
-32-byte header — the block's kind, the first and last GameTime it covers, its raw and stored sizes, a
-CRC-32 of the stored bytes and one of the header — and the payload, deflated with lodepng's
-`lodepng_zlib_compress` when that is smaller, else stored. `inc/tagpu_recfmt.h` is the format:
+32-byte header — the block's kind, its flags, the first and last GameTime it covers, its raw and
+stored sizes, a CRC-32 of the stored bytes and one of the header — and the payload: exactly one
+zstd frame of the raw bytes (level 3, the vendored zstd 1.5.7 in `src/zstd.c`) when that is
+smaller, else the bytes stored. The header, the end and the timelines blocks are always stored, so
+a header reads without zstd. `inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 8; a reader takes
+that format alone:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
   GameTime, the wall clock, the unit array's slots and the units each player may have, the unit
   types' count and a hash of their names, the players (index, controller, side, logo and name), the
   registry's levers and their text, the exclusion file's SHA-256, and the recorded declarations
-  (index, class, key, row size, flags and name), so a reader can walk their images; and the main
+  (index, class, key, row size, flags and name), so a reader can walk their images; the main
   menu's version text, the mounted archives and the mod's fingerprint (*What the Replays browser
-  asks of a recording*);
+  asks of a recording*); and the unit frame's constants (below): `RT_CODEC`, `RT_PHYSICS`, `RT_AIR`;
 - **a minimap block** right after it, when the map has a picture;
-- **stream blocks** of whole iterations, each ending at the first iteration past 256 KB or at 300
-  iterations;
+- **stream blocks** of whole iterations, each ending at the first iteration past 2 MiB or at 30
+  iterations, and before every snapshot;
 - **a snapshot block** every 900 iterations (30 seconds at normal speed), built from the writer's
   copy: since format 4 (S3b) with only the cells that differ from the first iteration's grid and
-  no table span that is all zero. The interval stays 900 unless the seek-time series's worst seek
-  exceeds one second, when it becomes 450 (*Decided 2026-10-01*);
+  no table span that is all zero. The interval is chosen at the size plan's L4, against the
+  one-second seek target (*Decided 2026-10-01* set the target): format 8's seeks read in under a
+  second except in the first interval of the two largest battles measured, 1.15–1.23 s
+  ([making recordings smaller](demo-recorder-size.md#l1-recording-format-8-measured));
 - **the end block**: why the recording ended, the last GameTime, the iterations, the corrections,
-  the id rows found outside their tables, the most the ring held, the game's end flags, and each
-  seat's result, first commander death and elimination.
+  the id rows found outside their tables, the most the ring held, the game's end flags, each
+  seat's result, first commander death and elimination, and the stream blocks the unit frame
+  declined (`RT_CODEC_DECLINED`) and whose check failed (`RT_CODEC_MISMATCH`).
 
 A block is written whole or not at all, so a file cut short reads up to its last complete block, and
 a file with no end block is incomplete.
+
+**The sectioned container.** A stream block with `RBF_SECTIONS` holds, in place of its records, a
+container that decodes to exactly those records, so everything that reads a block's payload — the
+C reader's `apply`, `tarec.py`, `recsize.py` — sees the records as before. It is a 36-byte
+`RecSecHead` (the payload's bytes, the iterations, the section count and each section's length),
+then seven sections: the record kinds in payload order as runs; the **unit frame**, which makes
+every `RK_UNIT_DELTA`; and the bodies of the projectile, cell, order, event and every other kind,
+each verbatim behind a varint length. A kind added later falls into the last section on both sides
+(`rec_section_of`), with no table to update.
+
+**The unit frame** (`src/tagpu_reccodec.c`) keeps, per slot, the image at the end of the previous
+iteration, the one before it, five lanes of the one before that and which of four candidates last
+predicted each lane: the engine's own rule, the previous value, the linear extrapolation, or for an
+aircraft's horizontal velocity the steering term turned by its last change. The image is cut into
+lanes by the header's `RT_CODEC`, the rows of `tagpu/ddraw/replay-lanes.tsv` (112 lanes;
+`tools/replay-lanes-gen.py` checks the file and generates `inc/tagpu_reclanes.h`), and the rules
+find their lanes by role, never by offset; since each recording carries its own table, editing the
+TSV never orphans a file, and a wrong width costs size only. A unit is listed in an iteration only
+when a lane differs from its prediction, and then as residuals per lane. A unit *at rest* — its
+image equal to the two before it and to the third's lanes, and either not moving or with a move
+stamp older than the step before — is skipped without evaluating it, which is exact because it is a
+fixed point of every rule (the argument beside `slot_advance`). The rules — heading by turn rate, ground
+velocity from the sine table, position by velocity, the footprint and sight cells, the claim and
+move stamps, the countdowns, and for aircraft the air step's velocity, speed, smoothed acceleration
+and bank — and the engine facts behind each are in the engine map's
+[*The demo recorder's unit frame*](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
+They are integer arithmetic only, so the writer thread's x87 precision does not matter and the
+Python reader (`tools/replay/reccodec.py`, an independent implementation in numpy and numba)
+agrees with the C one byte for byte. The capture writes the constants the rules need into the
+header at the recording's start, on the game thread: `RT_PHYSICS` (gravity `main+0x14263`, sea level
+`main+0x1427F`, LosType bit 2 at the segment's start) and one `RT_AIR` row per aircraft type (def
+`+0x241` bit 11; its sight height `+0x170` and the five flight fields), at most 1,024 rows; a type
+without one is predicted as a ground unit, which costs size only.
+
+**Reset points.** The unit frame's state crosses block boundaries only inside a run of sectioned
+blocks. It restarts — `RBF_FRAME_RESET` — at a segment's first stream block, at the first after a
+snapshot and at the first after a stream block of records, from the units the reader holds at the
+end of the iteration before it. So a block inside a run decodes only after its predecessors since
+the run's reset: a reader starts at a snapshot or a segment's start (the seek already does), and a
+sectioned block met with no frame state is refused by name, never misread. The zstd frame itself is
+per block.
+
+**Decode before write, and the fallback.** The writer encodes each stream block, packs it, unpacks
+those bytes and decodes them with a second codec state, started from the units alone as a reader's
+is, and writes the sectioned block only when that gives back the records byte for byte. Otherwise
+it writes the block as records — **declined** when the encoder met what the frame does not carry
+(a delta on a slot that is not live or that an `RK_UNIT` or `RK_UNIT_GONE` names in the same
+iteration, deltas whose slots do not ascend, a bitmap that is not exactly the dwords that differ
+from the copy, a block of more than 256 iterations, a unit frame past 16 MiB, no memory),
+**MISMATCHED** when the check differed, which is a codec bug — and the next block restarts the
+frame. A codec bug therefore costs size, never data. The end
+block counts both; the writer logs the first four of each with their GameTime range, and its
+closing line gives `stream N KB of records written as M KB; K blocks: S sectioned, D declined, X
+MISMATCHED; the unit frame cost T ms, at most U ms for one block`. `tareplay.py` fails a fixture
+whose recording's end block names any mismatch ("the unit frame did not decode back in N blocks")
+or which has no sectioned stream block at all ("the codec never ran": a writer without memory for
+the frame counts 0 declined and 0 mismatched), and reports the declined count. Without `RT_CODEC`
+and `RT_PHYSICS` (a dump, a synthetic test file), or without memory for the encoder's and check
+decoder's states, every stream block is written as records; without memory for the header's codec
+constants the recording ends before its file is opened.
+
+**What a reader refuses**, the C reader and `reccodec.py` alike, each by name (the C reader with the
+block's file offset): a flag bit it does not know, `RBF_SECTIONS` on a block that is not a stream block,
+`RBF_FRAME_RESET` without it, a packed header, end or timelines block, a block whose header passed
+its CRC but whose raw or stored size passes 64 MiB (`RECR_BLOCK_MAX`), a packed body of no bytes, a
+body that is not exactly one zstd frame of its `raw` bytes with nothing after it or whose frame asks
+for a window past 2^27 (zstd's streaming default, bounded by name on both sides since the C one-shot
+decompression does not bound it); a malformed or
+repeated `RT_CODEC`, `RT_PHYSICS` or `RT_AIR` (lanes that do not tile the 0x148-byte image, a role
+missing, twice or of the wrong width, air types not ascending); a sectioned block in a segment
+whose header lacks `RT_CODEC` and `RT_PHYSICS`; a segment whose unit slots differ from the first
+header's; a container whose head, kinds, lengths, slots, masks or columns exceed their bounds, which
+leaves bytes in a section, or which decodes to another payload length; and an unflagged sectioned
+block with no frame state. Every operand of a rule is clamped before it is multiplied, so no value
+in a file can overflow the arithmetic.
+
+**Memory.** A codec state is 804 bytes a slot (the copy and L2, `0x148` bytes each, L3's 16, the
+winners' 128 and four flags, as `reccodec_new` allocates them) plus a 128 KB air index and the
+scratch of the largest block it has met: the writer holds two (before their scratch, 8,303,752
+bytes, about 8.3 MB, at 5,001 slots; 24,383,752, about 24.4 MB, at 15,001), a reader one, made at
+its first sectioned block.
 
 ### The game never waits
 
@@ -229,9 +321,27 @@ iterations to record.
   `hit_no_memory` and `lim_types_refused` (`tagpu_patches.c`) — call `tagpu_rec_exit` first.
 - `tagpu_simreg`: a walk of the declarations and of the levers for the recorder, and
   `MEM_WRITE_WATCH` on every heap table `SIM_ALLOC` takes.
+- `src/tagpu_reccodec.c`, `inc/tagpu_reccodec.h`: the stream codec — the sectioned container, the
+  unit frame and the zstd packing — portable C99 with no Windows call, no engine address and no
+  writable static, used by the writer, the reader and `tests/codectest.c` (`make codectest`;
+  `tests/codectest.py` transcodes, decodes, fuzzes and compares C with Python, natively under ASan
+  and UBSan with `--native`). `src/zstd.c`, `inc/zstd.h`, `inc/zstd_errors.h`: zstd 1.5.7, vendored
+  (`tools/zstd/amalgamate.sh` rebuilds them from the release tarball). `replay-lanes.tsv` and
+  `tools/replay-lanes-gen.py`: the unit frame's lanes; `replay-layout-check.sh` runs the
+  generator's `--check` on every build.
 - `tools/replay/tarec.py`: reads a recording — `info` (the header, the blocks and how it ended),
   `check` (the stream against every snapshot the file carries) and `compare` (the stream to a
-  dump's GameTime against the dump, byte for byte).
+  dump's GameTime against the dump, byte for byte). Its block walk is `tools/replay/reccodec.py`'s,
+  which needs numpy, numba and zstandard: `tools/replay/devpy.py` re-executes a tool under the
+  shared venv (`.venv-undither/`) when they are missing — `tacli replay forks` and
+  `replay takeover --dry-run` call it before they walk a file's blocks — and `header_only` reads a
+  stored header with the standard library alone, so the build's bare `python3` still runs
+  `tareplay.py features --check`.
+  Decoding a large battle in Python takes about 3 s; with `TAREC_CACHE=DIR` the decoded blocks are
+  kept in `DIR`, keyed by the SHA-256 of the file's bytes and of the decoder's sources, so a second
+  command on the same file reads them back (`tools/replay/reccache.py`: an entry carries its own
+  checksum and anything wrong in it is a miss). `tareplay.py` points it at its run folder and removes
+  it at exit.
 - The verb `dump <name>` in `tagpu_replay.trigger` (read by the replay's frame visit since S3b, which
   also takes `dump <name> at <T>`; *S3b — the globals, and seeking*): the capture point that takes it
   writes the live world's images to `replays\dump-<name>.bin`, a stored snapshot of the state that
@@ -389,7 +499,8 @@ puppet host and verifies it against the recording.
   - **Shots**, from the `0x0D` packet of the five fire functions, with their network tests released
     while recording; and **interceptions**.
   - **Script starts** through the three broadcasters `0x456190`, `0x456200` and `0x456290`.
-  - **Build done**, `0x41B8D0`, the only writer of the model's nanoframe flag.
+  - **Build done**, `0x41B8D0`, which clears the model's composite frame `[+0x9E]+0x10` (the
+    cached 1x bake), so a finished unit bakes again as a finished one.
   - **The state byte** `+0x10E`, as its new value, from `0x48B090`.
   - **Unit replies**, at `0x47F780` and `0x47F850` before their viewer test, for every player.
   - **The script starts only the owner's machine makes**: `HitByWeapon` and `TakeDamage` in the hit
@@ -511,12 +622,16 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
     A save before the first step, which no known path makes, writes the recording's, and the
     teardown then saves again.
   - **The start units' calls `0x497963` and `0x497ACD`**, skipped.
+  - **The level init's call `0x4919C8`**, retargeted: after `0x464990`, record 10's buffers through
+    `0x464700`, on the loader thread ([the ten-seat note](demo-recorder-ten-seats.md) §4.2).
   - **The first step**, at B2's stub `0x4954ED`: the level's counts, map, unit and weapon data and
     first GameTime against the header; then the start units through the create, the first image,
     the wind's seed and V's sight.
-- **The viewer's seat** V is the lowest record the recording does not seat: type 3, with the watcher
-  bit, holding `+0x2A42` for the whole level. Its PlayerInfo goes back as the Start's fill left it
-  once the teardown `0x491B60` has returned, after the post-game table has left the watcher out:
+- **The viewer's seat** V is player record 10, the engine's no-player record, which no recording
+  carries ([the ten-seat note](demo-recorder-ten-seats.md)): type 3, with the watcher bit and an
+  empty block, holding `+0x2A42` for the whole level. The record and its PlayerInfo go back as the
+  Start found them once the teardown `0x491B60` has returned, after the post-game table has left
+  the watcher out:
   the seat activation does not clear the watcher bit, and a surrender to the main menu passes no
   reset (MEASURED).
   - Every path that selects or orders walks the controlled player's units, of which this seat has
@@ -524,7 +639,7 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
   - Four gates cover the rest of the viewer's input: typed commands (`0x417B50`, every one
     refused), the debug keys (`0x4956C0`), the resource transfer (`0x464C60`) and saving
     (`0x4326B0`).
-  - A recording that seats all ten records leaves no seat for the viewer, and is refused by name.
+  - A recording may seat all ten records: the viewer's seat is record 10, outside them.
 - **What the viewer sees.** Without `--perspective`, everything: V's sight counters are filled, V's
   bit is set in every cell of the explored map, and the radar pass marks every unit for a watcher.
   With `--perspective N`, `+0x2A43` is record N and the host's own radar pass computes N's radar
@@ -593,8 +708,8 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
   with a header naming its tables, and `tools/replay/tarec.py compare --puppet` compares it with
   the recording read back to its GameTime: every unit, player and order list image and every
   declared table, paired by name, since each build numbers its tables in its own order; less the
-  contact bits, V's record, the controllers and the viewer, and with the contact bits when the
-  dump's viewed player is the recording's.
+  contact bits, the controllers and the viewer, and with the contact bits when the dump's viewed
+  player is the recording's. V's record, record 10, is in neither the recording nor the dump.
 
 #### S2b, verified and measured
 
@@ -997,11 +1112,12 @@ The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
   appears. The constructor clears the reference again for an action whose descriptor lacks bit 9,
   and the recording machine's handlers set it afterwards; before, the node stayed empty for one step,
   and at a seek every such target was empty at T.
-- **V's energy and metal are 0** from the first step. The level start reads them from V's skirmish
-  settings entry, which the SKIRMISH screen does not fill (MEASURED 1365/16385 and 11/10 in three
-  processes), and nothing changes a type-3 record's pair afterwards, so every host of a recording now
-  holds the same V. The resource bar showed 0 before as well: it clamps to the storages, which the
-  player init zeroes.
+- **V's energy and metal are 0** on every host. V is record 10, which the player init zeroes
+  (`0x46476B`, `0x46477D`) and the level start `0x465E30` does not reach (`0x465F87`); nothing
+  changes a type-3 record's pair afterwards. (While V was the lowest unseated record, the level
+  start read them from its skirmish settings entry, which the SKIRMISH screen does not fill,
+  MEASURED 1365/16385 and 11/10 in three processes.) The resource bar shows 0 either way: it clamps
+  to the storages, which the player init zeroes.
 - **V's minimap follows V's sight.** The minimap's fog is composited by `0x466C20` only when
   `main+0x142F1` bit 2 asks, and the engine asks for the viewed player's own units' stamps, sets and
   removals; V owns no unit, so under true LOS V's minimap kept the composite of the sight rebuild's
@@ -1374,7 +1490,7 @@ capture-point dump or one of another frame; `compare` refuses a frame dump (`com
 compare-dumps`), since no capture point's image holds what it holds.
 
 **The round trip.** `roundtrip <name> at <T>` in the trigger, on a level that plays a recording
-(refused elsewhere), T ≥ 2 and the name 1 to 36 letters, digits, `-` and `_`, up to 4 armed. At the
+(refused elsewhere), T ≥ 2 and the name 1 to 36 letters, digits, `-` and `_`, up to 24 armed. At the
 first frame visit of GameTime T−1, the reader at iteration T, right after that visit's
 `recorded_put` — so A's tables are the recording's, which the poison check needs — the replay takes
 the frame dump `<name>-a`, puts the TRANSIENT declarations back, seeks to T with the poison check,
@@ -1382,8 +1498,14 @@ takes the frame dump `<name>-b` and logs one line: `replay: <rec>: round trip <n
 TRANSIENT <b> bytes reset (<names>); <n> tables poisoned, residue <r> (<names>); seek <ms> ms`.
 `tarec.py compare-dumps <rec> <name>-a <name>-b` must be EQUAL: A is a playing's state, B a rebuild
 to T in place with nothing between them, so a difference is the seek's by construction. A round
-trip the host passes (a frame can run several steps) is dropped with `... not run: the level is at
+trip already behind the reader is dropped with `... not run: the level is at
 GameTime <t>`, and one whose seek is refused logs the refusal and takes no B.
+For an upcoming target, the byte-matched observer at `0x49692D` bounds the due-tick
+batch before `0x495490` caches it in EBX. The batch cannot advance beyond T−1,
+so ordinary simulation progression reaches that frame at any supported speed.
+The observer changes pacing only on a puppet with round trips armed, on the same
+game thread that arms and runs them. A round trip is refused if this guard could
+not install. Explicit seeks can still move the reader past an armed target.
 
 - **The TRANSIENT reset** (`tagpu_simreg_transient_save`, `tagpu_simreg_transient_reset`,
   `tagpu_simreg.c`): the static `SIM_TRANSIENT` declarations — not TLS, heap or engine ones —
@@ -1756,6 +1878,9 @@ image as the destructor found it, so no format change was needed.
   `0x495688` follows the players phase. The invariant is a lifetime: the add makes each record with
   its stamp and only the expiry removes both, so the counters stay the engine's own; nothing after
   R14a rebuilds the viewed record's counters (R14 writes V's alone, and V owns no unit).
+- **R14d**, after R14c (a takeover's after TK4a's deselect): the viewed record's minimap picture
+  `0x466DC0`, which a playing rebuilds every tick (the players phase for a seat, `viewer_frame`
+  for record 10) and a paused frame does not — display state, the viewer's own.
 - **The seek's line** gains `temporary sight records: <m> made again, <r> refused, <c> deaths past
   the engine's 20 (the records may differ from a playing's)`.
 - **`tarec.py compare-dumps` is strict again**: O9's fold is deleted, and `replay-globals.tsv`'s
@@ -2001,7 +2126,7 @@ comes between S4a and S4b, because S4b turns the file into segments. Every addit
 block an older reader skips, so `REC_FORMAT` stays 4.
 
 **Decided:**
-- **The minimap** is an `RB_MINIMAP` block right after the header, deflated. It holds the TNT's
+- **The minimap** is an `RB_MINIMAP` block right after the header, packed like the other blocks. It holds the TNT's
   picture, the GAF frame at `main+0x1426B`, as w×h palette indices, plus the box `main+0x142EB`,
   `+0x142ED`; the engine shows the part [0, 2·columns) × [0, 2·rows).
   - LoadMap stores the frame (`0x483900`), and only the teardown frees it (`0x483DFE`).

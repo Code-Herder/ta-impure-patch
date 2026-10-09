@@ -8,7 +8,7 @@
 #include "tagpu_log.h"
 #include "tagpu_simreg.h"
 
-SIM_FEATURE(puppet_host, SIM_PUPPET_RUNS, "battle-los");
+SIM_FEATURE(puppet_host, SIM_PUPPET_RUNS, "battle-los tenseat");
 
 typedef struct PuppetTable {
     volatile unsigned char on;              /* this level plays a recording                 */
@@ -18,8 +18,9 @@ typedef struct PuppetTable {
                                                of it: the loader's feature calls end before
                                                the load word's bit 1 that the first step
                                                waits on (0x497C5F, 0x498342)                */
-    unsigned char seat[PUPPET_PLAYERS];     /* the record is a puppet seat, V included      */
+    unsigned char seat[PUPPET_PLAYERS];     /* the record is a puppet seat                  */
     unsigned char local[PUPPET_PLAYERS];    /* getter 75's answer for its units             */
+    unsigned char engine_cells;             /* the footprint writers' writes stand          */
 } PuppetTable;
 static PuppetTable s_pup;
 SIM_VAR(s_pup, SIM_CONTENT);
@@ -97,6 +98,20 @@ const volatile unsigned char* tagpu_puppet_flag(void) { return &s_pup.on; }
      (tagpu_puppet_rebuild): the destructor calls it when an owner's live count +0x144 reaches 0
      (0x486E54), and the rebuild kills every unit; it writes the message ring, draws the C
      runtime's rand and plays "MessageArrived". A recorded elimination is the recording's own.
+   - The state setter 0x48B090(mask, on), `ret 8`, ecx the unit, on a multiplayer recording's
+     segment (engine_cells): a call on a puppet's unit that would change its state byte +0x10E,
+     outside the replay's own write (tagpu_puppet_state_open). There the owner's composed image
+     is the byte's one source, written through this setter at every capture point
+     (tagpu_replay.c, THE UNITS' BOOKKEEPING), and a change starts Activate or Deactivate (bit 0)
+     and StartBuilding or StopBuilding (bit 3) by name and queues its replies
+     (0x48B0E4..0x48B1AA, DISASSEMBLED); any other caller -- the create's 0x486148 or a
+     script's SET; the replay plays no build done on such a segment -- would start them a second
+     time. The test is the setter's own (0x48B09A..0x48B0D4): now = on ? was | mask :
+     was & ~mask, and a call that leaves the byte as it is returns at once (0x48B0DE), so it is
+     let through. The setter has no result: EAX holds whatever its last load or call left, and
+     the engine caller that reaches a puppet's unit here, the create, goes on at 0x48614D
+     without reading it, so the gate's EAX 0 changes nothing. On a skirmish recording the byte
+     comes from the recorded state events and the gate lets every call through.
 
    THE REPLAY'S OWN CALLS open the COB and reply gates while they run (tagpu_puppet_open), on
    the game thread. A recorded event nested in a root is recorded after the root's record when the
@@ -107,7 +122,9 @@ const volatile unsigned char* tagpu_puppet_flag(void) { return &s_pup.on; }
    the recorded arguments, makes those again. A replayed reply is the other own call. Inside
    every other replayed root the gates stay shut: what a start, a state change or a build-done
    nests, the replay plays as its own events, and what a death nests is about a unit the death
-   has destroyed. */
+   has destroyed. The state gate has its own bracket (tagpu_puppet_state_open), around the
+   replay's write of a state byte from the owner's image and nothing else, so neither the create's
+   nor a reply's opening lets a second change of the byte through. */
 
 #define TA_MAINPP     0x00511DE8u
 #define OFF_UFIRST    0x14357       /* the unit array's first slot ...        */
@@ -115,6 +132,7 @@ const volatile unsigned char* tagpu_puppet_flag(void) { return &s_pup.on; }
 #define OFF_GAMETIME  0x38A47       /* int GameTime                           */
 #define UNIT_STRIDE   0x118
 #define U_OWNER       0xFF
+#define U_STATEBYTE   0x10E         /* the state byte: the setter 0x48B090's */
 /* this+COB_MODEL: the block whose +0xC is the script's unit; the raised limits grow the COB
    object and move the field, at every site that reads it (tagpu_patches.c, cob_runtime_sites) */
 #ifdef TAGPU_LIMITS_STOCK
@@ -126,7 +144,7 @@ const volatile unsigned char* tagpu_puppet_flag(void) { return &s_pup.on; }
 
 enum { G_HIT, G_DEATH, G_SET, G_ATTACH, G_DROP, G_REPLY0, G_REPLY1, G_METEOR, G_COMMAND,
        G_DEBUGKEY, G_TRANSFER, G_SAVE, G_FTICK, G_FSPAWN, G_FDESTROY, G_FDIE, G_FBURN, G_FDAMAGE,
-       G_FSWAP, G_ELIM, G_COUNT };
+       G_FSWAP, G_ELIM, G_STATE, G_COUNT };
 
 static struct { unsigned refused[G_COUNT]; } s_gateDiag;
 SIM_VAR(s_gateDiag, SIM_PRIVATE);
@@ -150,6 +168,11 @@ SIM_VAR(s_open, SIM_TRANSIENT);
    from load. */
 static unsigned char s_rebuild;
 SIM_VAR(s_rebuild, SIM_TRANSIENT);
+/* The replay's own write of a state byte is running: set just before its two setter calls and
+   cleared just after them (tagpu_replay.c, book_state), on the game thread inside the capture
+   point's write or a seek, so at every tick boundary it is 0, its value from load. */
+static unsigned char s_state_open;
+SIM_VAR(s_state_open, SIM_TRANSIENT);
 
 #define E_ARG(E, n)  (((const unsigned*)(E))[n])
 #define E_ECX(E)     (*(const unsigned*)((const unsigned char*)(E) - 0x0C))
@@ -241,6 +264,18 @@ static int __cdecl gate_fdamage(void* E) { return feature_refused(E, G_FDAMAGE);
 static int __cdecl gate_fswap(void* E) { return feature_refused(E, G_FSWAP); }
 static int __cdecl gate_elim(void* E) { (void)E; return s_pup.on && s_rebuild && refuse(G_ELIM); }
 
+/* the setter's own rule (0x48B09A..0x48B0D4) on its unit ecx, mask [1] and on [2]: a change of a
+   puppet's state byte on a multiplayer segment, outside the replay's own write */
+static int __cdecl gate_state(void* E)
+{
+    const char* u = (const char*)(size_t)E_ECX(E);
+    unsigned char was, now;
+    if (!s_pup.on || !s_pup.engine_cells || s_state_open || !puppet_unit(u)) return 0;
+    was = (unsigned char)u[U_STATEBYTE];
+    now = E_ARG(E, 2) ? (unsigned char)(was | E_ARG(E, 1)) : (unsigned char)(was & ~E_ARG(E, 1));
+    return now != was && refuse(G_STATE);
+}
+
 typedef struct Gate {
     unsigned va;
     unsigned char n, retn, stolen[8];
@@ -267,6 +302,7 @@ static const Gate GATES[G_COUNT] = {
     { 0x004244B0u, 6, 0x10, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, gate_fdamage },
     { 0x00423710u, 8, 0x0C, { 0x8B, 0x44, 0x24, 0x08, 0x8B, 0x4C, 0x24, 0x04 }, gate_fswap },
     { 0x0047BD70u, 6, 0x04, { 0x81, 0xEC, 0xC8, 0x00, 0x00, 0x00 }, gate_elim },
+    { 0x0048B090u, 5, 0x08, { 0x51, 0x8B, 0x44, 0x24, 0x0C }, gate_state },
 };
 
 /* THE COB WRITES ON A PUPPET. The gates at SET, ATTACH and DROP make these zero by construction;
@@ -276,7 +312,9 @@ static const Gate GATES[G_COUNT] = {
    0x48B090 (ecx the unit), SET's YARD_OPEN 0x480BB3 through 0x47DAC0 ([esp+4] the unit), ATTACH
    0x4813AB and DROP 0x481427 through 0x48AAC0 (the parent [esp+8], the cargo [esp+4]). The unit is
    a slot of the array (puppet_unit) before any field of it is read. The first 16 are logged; the
-   counts reach the recorder's dumps (tagpu_puppet_cob_writes). */
+   counts reach the recorder's dumps (tagpu_puppet_cob_writes). The observer on 0x48B090 chains
+   onto the state gate there (tagpu_puppet_init lands the gates first), so it counts only the
+   calls the gate lets through, as the recorder's state observer does. */
 static const struct { unsigned ret; unsigned char arg; const char* what; } COB_WRITES[] = {
     { 0x00480B57u, 0, "SET ACTIVATION (0x48B090)" },
     { 0x00480BF1u, 0, "SET ARMORED (0x48B090)" },
@@ -367,6 +405,8 @@ void tagpu_puppet_open(int open) { s_open = open ? 1 : 0; }
 
 void tagpu_puppet_rebuild(int on) { s_rebuild = on ? 1 : 0; }
 
+void tagpu_puppet_state_open(int open) { s_state_open = open ? 1 : 0; }
+
 int tagpu_puppet_rebuilding(void) { return s_rebuild; }
 
 /* ---- THE FOOTPRINT WRITERS ------------------------------------------------------------------
@@ -383,6 +423,10 @@ int tagpu_puppet_rebuilding(void) { return s_rebuild; }
    slot follows its position by an iteration, while the replay's placement stamps it at the
    image's position, an iteration early (MEASURED 2026-09-30, the battle: at GameTime 1280 one
    cell's slot B held the host's unit 858 where the recording's held 854).
+
+   A multiplayer recording's level is the exception (engine_cells, tagpu_puppet_begin): its
+   units are timed by their owners, while the recorder's grid names its own replicas at its own
+   times, so no recorded slot is the truth there and the engine's writes stand.
 
    So each call's grid writes are undone at its return. The recorder's observer at each entry hands
    the unit over (tagpu_puppet.h); this saves the unit's footprint -- +0x76, +0x78 by +0x7E, +0x80,
@@ -435,7 +479,8 @@ int tagpu_puppet_foot_enter(const char* unit, unsigned ret)
     unsigned char* grid;
     FootFrame* fr;
     int W, H, x0, z0, x1, z1, w, h, x, z, k;
-    if (!s_pup.on || !(ta = *(const char* const*)(size_t)TA_MAINPP)) return 0;
+    if (!s_pup.on || s_pup.engine_cells || !(ta = *(const char* const*)(size_t)TA_MAINPP))
+        return 0;
     if (s_foot.depth >= FOOT_DEPTH) {
         if (!s_footDiag.nested++)
             tagpu_logf("puppet: a footprint writer called from 0x%06X inside %d open ones, the "
@@ -505,11 +550,11 @@ void tagpu_puppet_refusals(char* out, size_t cap)
     const unsigned* r = s_gateDiag.refused;
     snprintf(out, cap, "hits %u, deaths %u, COB sets %u, attaches %u, drops %u, replies %u, "
              "meteor showers %u, typed commands %u, debug keys %u, transfers %u, saves %u, "
-             "feature ticks %u, feature calls %u, eliminations in a seek %u", r[G_HIT],
-             r[G_DEATH], r[G_SET], r[G_ATTACH],
+             "feature ticks %u, feature calls %u, eliminations in a seek %u, state changes %u",
+             r[G_HIT], r[G_DEATH], r[G_SET], r[G_ATTACH],
              r[G_DROP], r[G_REPLY0] + r[G_REPLY1], r[G_METEOR], r[G_COMMAND], r[G_DEBUGKEY],
              r[G_TRANSFER], r[G_SAVE], r[G_FTICK], r[G_FSPAWN] + r[G_FDESTROY] + r[G_FDIE] +
-             r[G_FBURN] + r[G_FDAMAGE] + r[G_FSWAP], r[G_ELIM]);
+             r[G_FBURN] + r[G_FDAMAGE] + r[G_FSWAP], r[G_ELIM], r[G_STATE]);
 }
 
 void tagpu_puppet_footprints(char* out, size_t cap)
@@ -563,7 +608,7 @@ unsigned tagpu_puppet_draws_end(void)
 }
 
 void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
-                        const unsigned char local[PUPPET_PLAYERS])
+                        const unsigned char local[PUPPET_PLAYERS], int engine_cells)
 {
     unsigned i;
     for (i = 0; i < PUPPET_PLAYERS; i++) {
@@ -576,17 +621,32 @@ void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
     s_open = 0;
     s_fopen = 0;
     s_rebuild = 0;
+    s_state_open = 0;
     s_pup.playing = 0;
+    s_pup.engine_cells = engine_cells ? 1 : 0;
     s_pup.on = 1;
+}
+
+void tagpu_puppet_engine_cells(int engine_cells)
+{
+    /* a writer's frame saved under one rule is put back under it (foot_enter, foot_leave) */
+    if (s_foot.depth) {
+        tagpu_logf("puppet: the cells' rule not changed inside %u open footprint writers",
+                   s_foot.depth);
+        return;
+    }
+    s_pup.engine_cells = engine_cells ? 1 : 0;
 }
 
 void tagpu_puppet_end(void)
 {
     s_pup.on = 0;
     s_pup.playing = 0;
+    s_pup.engine_cells = 0;
     s_open = 0;
     s_fopen = 0;
     s_rebuild = 0;
+    s_state_open = 0;
     memset(s_pup.seat, 0, sizeof s_pup.seat);
     memset(s_pup.local, 0, sizeof s_pup.local);
 }

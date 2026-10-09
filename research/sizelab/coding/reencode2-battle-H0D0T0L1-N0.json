@@ -1,0 +1,9 @@
+{
+ "deflate2K": 103203289,
+ "zstd3 chain wlog24": 61265482,
+ "zstd3 chain wlog24 ldm": 61100008,
+ "zstd9 chain wlog24": 55320865,
+ "brotli q5 w22": 63286376,
+ "lzma 6": 54441044,
+ "lzma 6 lp2pb2": 54082773
+}

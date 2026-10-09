@@ -3784,11 +3784,14 @@ reproduction and completion checks. Ten is not a proven capacity for every mod s
 | Player cards and independent Sight | implemented and verified | recorded stats and commander presence; compact/normal rows and scrolling; Full map/Sight without camera movement; disabled camera controls for recordings without streams |
 | Runtime verification | passed | four-seat compact/normal layouts and HUD125/150/Auto; synthetic nine-row scroll; zero-time/EOF controls; death-vision dump comparisons; both builds; full 18-fixture replay gate, six of six changed functions reached |
 | Independent review | passed after corrections | two high-effort reviews; complete frame draining and rejection of captures without a final marker; focused synchronization re-review |
+| Jump, Follow and Free cam | verified 2026-10-06 (V2) | a skirmish recording's camera stream: Follow fits the recorded view to this screen and ends on a camera move or a wheel notch, Jump writes it until its level is drawn; GDI shows the camera; a multiplayer recording's through 4c-4 ([perspective plan, 4c-2](tadr-port/demo-recorder-perspective-streams.html#4c-2-as-built)) |
+| The overlays and the dock's Overlays menu | verified 2026-10-06 (V3) | every recorded player's cursor, click rings and selection rectangles in that player's colour, on Vulkan; the dock's Overlays button opens four toggles (Cursors, Clicks, Selections, Chat) with stand-in art; GDI draws none; a multiplayer recording's through 4c-4 ([perspective plan, 4c-3](tadr-port/demo-recorder-perspective-streams.html#4c-3-as-built)) |
+| Multiplayer perspectives (contribution kinds 13-15) | verified 2026-10-06 (V4, two peers) | each Impure peer's human contributes its camera and cursor (5 Hz, skipped while the transmit queue is short), clicks and selection; a multiplayer playback plays them as Follow, Jump and the overlays at the recorder's application ticks; every peer needs the same build ([perspective plan, 4c-4](tadr-port/demo-recorder-perspective-streams.html#4c-4-as-built)) |
 
 The [player-card note](tadr-port/demo-recorder-player-cards.html) records the implementation,
 bounds, frame ordering, measured checks and remaining feature gaps. The cards share the dock's post-GUI
-path so the world between the two panels remains interactive. Camera streams and Overlays are
-separate recorder/UI work.
+path so the world between the two panels remains interactive. The camera controls play the
+perspective plan's camera stream, and the Overlays its cursors, clicks and selections.
 
 ## Hardware portability: depth, lines, and a remote Windows test (G21)  [LANDED 2026-09-25]
 
@@ -3907,9 +3910,29 @@ open, seek, return-to-now, fork and close through tacli on a recorded skirmish
 functions reached on every required build. AI activity after return and fork is
 checked by new planner orders reaching normal dispatch. The note records the
 approved sight, reconstructed COB-thread and bounded naval flare-count limits.
-In-game rewind controls and network recording remain separate work; a network
-game played with Impure records no demo.
+In-game rewind controls remain separate work.
 
+**The multiplayer slice, stages 1–5** ([the slice note](tadr-port/demo-recorder-multiplayer-slice.html),
+landed 2026-10-06). Every Impure peer contributes the authoritative state of its humans and hosted
+AIs — player and unit images, order queues, creates and deaths, owner-only script starts, replies
+and sprays, each player's explored map and its chat with the audiences it had — on a native
+DirectPlay session of its own, signed per actor, sealed per source and cut at the game's end,
+whether or not it saves its own recording. A peer that cannot apply what it receives ends only
+its own recording. A saving peer writes one file, its observed world beside that contribution
+ledger, and the puppet host plays it through the owner-authority materializer, seeks it, and takes
+it over with the other seats as AI; a unit's state byte and build finish come from its owner's
+image. Stage 4c records each human seat's camera, cursor, clicks and selection, in skirmish and
+multiplayer recordings alike, and plays them as Follow, Jump and the overlays
+([the perspective plan](tadr-port/demo-recorder-perspective-streams.html)). Stage 5 seats the
+viewer in player record 10 on every playback, so a recording that fills all ten seats plays
+([the ten-seat note](tadr-port/demo-recorder-ten-seats.html)).
+
+**Open:** stage 6, the traffic budget and admission control — the physical bandwidth measurement,
+which actors a channel expects before every one has bound, and the 11–15 s send stall after a
+peer departs; a player who leaves the game, a lifecycle landing of its own; host migration and
+cross-address discovery; and the slice note's named residuals, among them a remote death's corpse
+placed at the recorder's clock and orders that still name a unit its owner destroyed. Every
+contributing peer needs the same build, and a ten-peer network game has not been run.
 
 ## The restorer as compute (2026-09-27)
 

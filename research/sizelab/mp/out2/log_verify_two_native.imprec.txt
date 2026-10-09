@@ -1,0 +1,83 @@
+{
+ "file": "$SCRATCH/verify/two/native.imprec",
+ "bytes": 4857697,
+ "iterations": 1578,
+ "today": {
+  "stream": 3519097,
+  "contributions": 1257910,
+  "other": 80682,
+  "total": 4857689
+ },
+ "merged": {
+  "stream": 3957706,
+  "footer": 656,
+  "other": 80682,
+  "total": 4039044
+ },
+ "stream_recompressed_alike": 3605837,
+ "removed_raw": {
+  "remote unit records": 320732,
+  "remote player records": 6100,
+  "events playback does not play": 2784
+ },
+ "added_raw": {
+  "composed remote units": 617444,
+  "composed remote players": 10716,
+  "owner-only records": 513604
+ },
+ "local_check": {
+  "local live: equal": 24288,
+  "local absent: primary absent": 3017
+ },
+ "local_diff_dwords": {},
+ "merged_categories": {
+  "projectiles": {
+   "raw": 4216140,
+   "alone": 1967760
+  },
+  "cells": {
+   "raw": 7128684,
+   "alone": 517889
+  },
+  "units, local": {
+   "raw": 876704,
+   "alone": 329833
+  },
+  "units, remote (composed)": {
+   "raw": 617444,
+   "alone": 209306
+  },
+  "other shared": {
+   "raw": 1345916,
+   "alone": 190836
+  },
+  "owner roots (lifecycle, starts, replies, sprays)": {
+   "raw": 298448,
+   "alone": 40507
+  },
+  "order lists, remote (owners')": {
+   "raw": 213176,
+   "alone": 19342
+  },
+  "order lists, local": {
+   "raw": 202156,
+   "alone": 18412
+  },
+  "players, remote (composed)": {
+   "raw": 10716,
+   "alone": 4903
+  },
+  "players, others": {
+   "raw": 11012,
+   "alone": 4145
+  },
+  "perspective": {
+   "raw": 860,
+   "alone": 523
+  },
+  "chat": {
+   "raw": 1120,
+   "alone": 313
+  }
+ }
+}

@@ -1,0 +1,19 @@
+$SCRATCH/verify/two/native.imprec
+  images            cells                         541533
+  images            first iteration               537600
+  images            only slots/yard changed         2080
+  images            other bytes changed               84
+  images            unchanged                       1769
+  inside a bracket  cells                           1769
+  inside a bracket  only slots/yard changed         1679
+  inside a bracket  other bytes changed               90
+  stream recompressed 3,520.5 KiB; without slot/yard-only cells 3,494.0 KiB (26.5 KiB less)
+$SCRATCH/v6/full/ten.imprec
+  images            cells                         418306
+  images            first iteration               416016
+  images            only slots/yard changed         1590
+  images            other bytes changed               34
+  images            unchanged                        666
+  inside a bracket  cells                            666
+  inside a bracket  only slots/yard changed          666
+  stream recompressed 531.7 KiB; without slot/yard-only cells 518.6 KiB (13.0 KiB less)

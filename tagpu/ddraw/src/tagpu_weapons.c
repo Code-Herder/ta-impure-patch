@@ -115,11 +115,15 @@ static const SimField def_layout[] = {
 };
 /* A side slot is the engine's 28-byte slot. A running aim script's thread record +0x20 holds the
    address of +0x04, the callback object whose RETURN writes the aim result +0x08
-   (exe-reverse-engineering.md, the slots' "COB thread handle"). */
+   (exe-reverse-engineering.md, the slots' "COB thread handle"). The angle and +0x14..+0x1B
+   (reload, heading, pitch, stock, state) are numbers: as dwords they can take any value, an
+   address's included, so the address scan passes over them while the replay compares them. */
 static const SimField side_layout[] = {
     { offsetof(WSlot, target), 4, WPN_SIDE, sizeof(WSlot), SIMF_TARGET, SIM_ID_UNIT_SLOT },
     { offsetof(WSlot, thread), 8, WPN_SIDE, sizeof(WSlot), SIMF_PINNED, SIM_ID_NONE },
     SIM_FIELD_EACH(WSlot, weapon, WPN_SIDE, SIMF_ADDR, SIM_ID_WEAPON),
+    SIM_FIELD_EACH(WSlot, zangle, WPN_SIDE, SIMF_OPAQUE, SIM_ID_NONE),
+    { offsetof(WSlot, reload), 8, WPN_SIDE, sizeof(WSlot), SIMF_OPAQUE, SIM_ID_NONE },
     SIM_FIELD_END
 };
 

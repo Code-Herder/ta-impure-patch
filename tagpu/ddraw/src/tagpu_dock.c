@@ -69,7 +69,8 @@ typedef void  (__cdecl   *void_fn)(void);
 #define TILE_W       512                /* one ground frame: under TAGPU_GAF_DECMAX, the widest
                                            frame the GUI mirror carries as a sprite              */
 #define NTILE        (DOCK_MAX_W / TILE_W)
-#define DOCK_MIN_W   400                /* the row of buttons with Leave clear of the bookmark  */
+#define DOCK_MIN_W   400                /* the row of buttons with Overlays and Leave clear of the
+                                           bookmark                                             */
 #define DOCK_GAP     8                  /* from the side panel and the screen's right edge      */
 #define DOCK_LIFT    4                  /* above the bottom bar                                 */
 #define STRIP_X      60                 /* the strip: (60, 8, dock_w - 124, 21)                 */
@@ -87,6 +88,8 @@ typedef void  (__cdecl   *void_fn)(void);
 #define SPD_H        20
 #define TEND_RX      60                 /* TEND's xpos is dock_w - 60                           */
 #define LEAVE_RX     36                 /* DKLEAVE's, dock_w - 36                               */
+#define OVER_RX      72                 /* DKOVER's, dock_w - 72: left of Leave, under the cards'
+                                           panel, where the Overlays menu opens (tagpu_cards.c) */
 #define KEY          9                  /* the frames' transparent index, the art's (artbake.py) */
 #define GREY         59                 /* a greyed glyph, the menu's ramp 55..63               */
 #define SNAP_PX      4                  /* a click this close to a marker takes the marker's T  */
@@ -122,11 +125,12 @@ static int    s_leaveOk;
    time the dock is on top again -- the question answered No, or never opened. Yes tears the level
    down instead, and the level's end forgets the question. */
 static int    s_leaveAsk, s_leaveWasPaused;
-static struct { int valid, play, speed, grey, leave; char now[16], end[16]; } s_push;
+static struct { int valid, play, speed, grey, leave, over; char now[16], end[16]; } s_push;
 
 /* the strip's presses: `s_held` and `s_rpress` a press consumed, whose release is consumed too;
    `s_drag` the seek the left one asks for on its release, which a lost mouse cancels */
 static int    s_held, s_drag, s_rpress;
+static int    s_dismissed, s_rdismissed;   /* a press that closed the Overlays menu, either button */
 
 /* the post-GUI frames: 0x18-byte engine headers over the art's own pixels, which tagpu_art keeps
    for the process and never writes; the fill also in every narrower width, for the tile the
@@ -222,7 +226,7 @@ static int build_gui(char* b, int cap)
         "\ttotalgadgets=%d;\r\n"
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
         "\tpanel=;\r\n\tcrdefault=;\r\n\tescdefault=;\r\n\tdefaultfocus=;\r\n\t}\r\n",
-        w, DOCK_H, NTILE + 8);
+        w, DOCK_H, NTILE + 9);
     /* the ground: id-12 pictures whose NAME is the frame, resolved in the panel's own bank
        (0x4A8ACA), side by side. The ones past the dock's width fall outside the panel's surface,
        to which the blit clips them (0x4B807B..0x4B80C6). */
@@ -240,8 +244,9 @@ static int build_gui(char* b, int cap)
     at = button(b, cap, at, g++, "DKSPEED", 164, SPD_Y, SPD_W, SPD_H, SPEED_BLANK + 1,
                 "1/2x|1x|2x|4x|8x|");
     at = button(b, cap, at, g++, "DKMARK", 296, BTN_Y, BTN_W, BTN_H, 0, "");
+    at = button(b, cap, at, g++, "DKOVER", w - OVER_RX, BTN_Y, BTN_W, BTN_H, 0, "");
     at = button(b, cap, at, g++, "DKLEAVE", w - LEAVE_RX, BTN_Y, BTN_W, BTN_H, 0, "");
-    return g - 1 == NTILE + 8 ? at : -1;
+    return g - 1 == NTILE + 9 ? at : -1;
 }
 
 /* ---- composing frames from the art ------------------------------------------------------------ */
@@ -299,6 +304,36 @@ static void draw_plain(unsigned char* p, int w, int h, int frame, int arg)
 {
     well(p, w, h);
     glyph(p, w, h, arg, frame == 1, frame == 2);
+}
+
+/* DKOVER's glyph, a pointer arrow -- the cursor overlay's own shape -- drawn here in the play
+   glyph's colour: a STAND-IN until the art kit carries an Overlays glyph. Frames as
+   draw_plain's: normal, pressed (one pixel down and right), greyed. */
+static const char* const OVER_GLYPH[] = {
+    "X......", "XX.....", "XXX....", "XXXX...", "XXXXX..", "XXXXXX.", "XXXXXXX",
+    "XXXX...", "XX.XX..", "X...XX.", "....XX." };
+#define OVER_GW 7
+#define OVER_GH ((int)(sizeof OVER_GLYPH / sizeof OVER_GLYPH[0]))
+
+static void draw_over(unsigned char* p, int w, int h, int frame, int arg)
+{
+    const TAGPU_ART_FRAME* g = s_art[A_PLAY];
+    unsigned char ink = GREY;
+    int i, j, x0, y0;
+    (void)arg;
+    for (i = 0; i < g->w * g->h; i++)
+        if (g->pix[i] != g->key) { ink = g->pix[i]; break; }
+    well(p, w, h);
+    x0 = (w - OVER_GW) / 2 + (frame == 1);
+    y0 = (h - OVER_GH) / 2 + (frame == 1);
+    for (j = 0; j < OVER_GH; j++)
+        for (i = 0; i < OVER_GW; i++) {
+            int dx = x0 + i, dy = y0 + j;
+            if (OVER_GLYPH[j][i] != 'X' || dx < 0 || dy < 0 || dx >= w || dy >= h ||
+                p[dy * w + dx] == KEY)
+                continue;
+            p[dy * w + dx] = frame == 2 ? GREY : ink;
+        }
 }
 
 /* DKPLAY, a two-stage button: the stages, a spare, the pressed frame at count - 2, and the greyed
@@ -369,6 +404,7 @@ static const DockEnt ENTS[] = {
     { "DKFWD",   BTN_W, BTN_H,       3, draw_plain,  A_FWD   },
     { "DKSPEED", SPD_W, SPD_H,       8, draw_speed,  0       },
     { "DKMARK",  BTN_W, BTN_H,       3, draw_plain,  A_MARK  },
+    { "DKOVER",  BTN_W, BTN_H,       3, draw_over,   0       },
     { "DKLEAVE", BTN_W, BTN_H,       3, draw_plain,  A_LEAVE },
 };
 #define NENTS (int)(sizeof ENTS / sizeof ENTS[0])
@@ -565,10 +601,10 @@ static char* find_rec(char* ctrls, const char* name)
 #define G_GREYED    0x13C               /* bit 0: greyed, SetGrayed's (0x4A12B6..0x4A12D0)      */
 static int greyed_last(char* ctrls)
 {
-    static const char* const GREYABLE[6] = { "DKREW", "DKPLAY", "DKFWD", "DKSPEED", "DKMARK",
-                                              "DKLEAVE" };
+    static const char* const GREYABLE[7] = { "DKREW", "DKPLAY", "DKFWD", "DKSPEED", "DKMARK",
+                                              "DKOVER", "DKLEAVE" };
     int i, changed = 0;
-    for (i = 0; ctrls && i < 6; i++) {
+    for (i = 0; ctrls && i < 7; i++) {
         char* r = find_rec(ctrls, GREYABLE[i]);
         int a, want;
         if (!r) continue;
@@ -594,6 +630,7 @@ void tagpu_dock_place(char* ctrls)
     *(short*)(ctrls + G_H) = (short)DOCK_H;
     if ((r = find_rec(ctrls, "TEND")) != NULL) *(short*)(r + G_XPOS) = (short)(s_w - TEND_RX);
     if ((r = find_rec(ctrls, "DKLEAVE")) != NULL) *(short*)(r + G_XPOS) = (short)(s_w - LEAVE_RX);
+    if ((r = find_rec(ctrls, "DKOVER")) != NULL) *(short*)(r + G_XPOS) = (short)(s_w - OVER_RX);
 }
 
 /* THE GROUND, for this dock's width: composed whole, then cut into the tiles. BOUND: a tile is
@@ -766,6 +803,22 @@ static int cursor_x(void)
     return (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
 }
 
+/* THE OVERLAYS MENU CLOSES ON A PRESS ANYWHERE BUT ITSELF AND ITS BUTTON, either button, and on
+   the top screen that press does nothing else: it is consumed, with its release (THE
+   CONSUMED-PRESS RULE), so closing the menu never selects a unit or presses what lies under it.
+   Under an engine dialog the press closes the menu and goes on to the dialog, as THE ON-TOP RULE
+   leaves the engine's clicks to it. A press on DKOVER is left to it: the engine's click on its
+   release toggles the menu (tagpu_dock_oncommand). Whether the press was consumed. */
+static int menu_dismiss(int gx, int gy, int on_top)
+{
+    if (!tagpu_cards_menu_open() || tagpu_cards_menu_owns(gx, gy)) return 0;
+    if (s_open && gx >= s_ex + s_w - OVER_RX && gx < s_ex + s_w - OVER_RX + BTN_W &&
+        gy >= s_ey + BTN_Y && gy < s_ey + BTN_Y + BTN_H)
+        return 0;
+    tagpu_cards_menu_close();
+    return on_top;
+}
+
 /* THE CONSUMED-PRESS RULE, the sprocket's (tagpu_menu.c): a release is consumed exactly when its
    press was, so the engine never sees half a click and is never left holding a button; a press
    whose release was lost ends at the next press, with no seek. A lost mouse cancels the seek and
@@ -775,6 +828,16 @@ static int cursor_x(void)
 int tagpu_dock_click(int gx, int gy, int down, int on_top)
 {
     unsigned first, last;
+    if (down) {
+        s_dismissed = menu_dismiss(gx, gy, on_top);
+        if (s_dismissed) {
+            s_held = s_drag = 0;
+            return 1;
+        }
+    } else if (s_dismissed) {
+        s_dismissed = 0;
+        return 1;
+    }
     if (tagpu_cards_click(gx, gy, down, 0, on_top)) return 1;
     if (!down) {
         int was = s_held;
@@ -795,6 +858,16 @@ int tagpu_dock_rclick(int gx, int gy, int down, int on_top)
 {
     unsigned first, last;
     int i, best = SNAP_PX + 1, k = -1;
+    if (down) {
+        s_rdismissed = menu_dismiss(gx, gy, on_top);
+        if (s_rdismissed) {
+            s_rpress = 0;
+            return 1;
+        }
+    } else if (s_rdismissed) {
+        s_rdismissed = 0;
+        return 1;
+    }
     if (tagpu_cards_click(gx, gy, down, 1, on_top)) return 1;
     if (!down) {
         int was = s_rpress;
@@ -835,8 +908,9 @@ void tagpu_dock_cancel_press(void)
    LIFETIME: the worker owns its reader and closes it before it returns; tagpu_dock_level_end stops
    it and waits for it on the game thread, at the teardown's entry, before the count goes back to
    0. Between two looks at the stop flag the worker reads one iteration -- at most one block
-   inflated, a bound the format sets (RECR_BLOCK_MAX) -- not a timeout. tagpu_recreader.c has no
-   mutable statics and reads no engine memory, so the worker shares nothing with the playback. */
+   unpacked and decoded, a bound the format sets (RECR_BLOCK_MAX) -- not a timeout.
+   tagpu_recreader.c has no mutable statics and reads no engine memory, so the worker shares
+   nothing with the playback. */
 _Static_assert(0x144 + 2 <= REC_PLAYER_BYTES, "the walker's two fields are in the player image");
 
 /* the log line's list: the first few markers of a kind, "T (seat p)" each */
@@ -1046,6 +1120,12 @@ void tagpu_dock_tick(void* gi, int on_top)
         for (i = 0; i < 5; i++) ((set_grayed_fn)VA_SETGRAYED)(gi, GREYED_LIVE[i], s_push.grey);
         dirty = 1;
     }
+    /* the menu opens over the cards, so Overlays is live exactly while they are shown */
+    if (!s_push.valid || s_push.over != !(live && tagpu_cards_menu_available())) {
+        s_push.over = !(live && tagpu_cards_menu_available());
+        ((set_grayed_fn)VA_SETGRAYED)(gi, "DKOVER", s_push.over);
+        dirty = 1;
+    }
     if (!s_push.valid || s_push.leave != !s_leaveOk) {
         s_push.leave = !s_leaveOk;
         ((set_grayed_fn)VA_SETGRAYED)(gi, "DKLEAVE", s_push.leave);
@@ -1114,6 +1194,8 @@ void __stdcall tagpu_dock_oncommand(void* gi)
         tagpu_replay_speed_set(PRESET[st < SPEED_BLANK ? st : 0]);
     } else if (!strncmp(r + G_NAME, "DKMARK", 16)) {
         mark_here(now);
+    } else if (!strncmp(r + G_NAME, "DKOVER", 16)) {
+        tagpu_cards_menu_toggle();
     } else if (!strncmp(r + G_NAME, "DKLEAVE", 16)) {
         if (!s_leaveOk) return;
         /* the engine's own Exit -> Main Menu path, EXITMENU's handler at 0x46082B..0x46083A:

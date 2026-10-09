@@ -1,0 +1,48 @@
+mode best: 7830 iterations decoded back exactly (101 s)
+per stream block            raw     writer      zlib9     zstd19      lzma6
+today                    63.252     38.276     22.099     17.591     16.036
+identity                 20.761      3.524      3.472      3.329      3.306
+per 900-tick interval, zstd19: today 11.997 MB, identity 3.086 MB
+per 900-tick interval, lzma6: today 10.851 MB, identity 2.990 MB
+by part: raw LEB bytes, zero bytes, zstd19 per block alone (attribution)
+   surv d23     raw    1043.3 KB  zeros     308.3 KB  zstd19    330.9 KB
+   surv d3      raw     625.2 KB  zeros     491.2 KB  zstd19    197.0 KB
+   surv d1      raw     620.6 KB  zeros     491.1 KB  zstd19    193.5 KB
+   surv d9      raw     602.9 KB  zeros     502.0 KB  zstd19    152.4 KB
+   surv d7      raw     591.2 KB  zeros     502.1 KB  zstd19    145.6 KB
+   new d1       raw     138.1 KB  zeros      26.2 KB  zstd19    136.4 KB
+   new d3       raw     133.8 KB  zeros      26.8 KB  zstd19    132.4 KB
+   surv d2      raw     595.0 KB  zeros     505.7 KB  zstd19    132.2 KB
+   new d25      raw     262.4 KB  zeros       1.7 KB  zstd19    127.5 KB
+   new d9       raw     122.7 KB  zeros      20.8 KB  zstd19    125.5 KB
+   new d7       raw     118.1 KB  zeros      20.9 KB  zstd19    121.0 KB
+   new d4       raw     126.5 KB  zeros      31.7 KB  zstd19    119.7 KB
+   new d6       raw     124.6 KB  zeros      31.7 KB  zstd19    117.7 KB
+   new d13      raw     146.7 KB  zeros      31.8 KB  zstd19    117.4 KB
+   new d2       raw     112.9 KB  zeros      29.6 KB  zstd19    109.4 KB
+   new d15      raw     135.4 KB  zeros      36.8 KB  zstd19    109.4 KB
+   refs         raw     142.6 KB  zeros       0.0 KB  zstd19    102.2 KB
+   ctl          raw     163.2 KB  zeros      71.1 KB  zstd19    101.6 KB
+   new d5       raw     103.4 KB  zeros      33.3 KB  zstd19     95.7 KB
+   surv d18     raw     657.6 KB  zeros     480.8 KB  zstd19     94.5 KB
+   new d16      raw     137.4 KB  zeros      14.0 KB  zstd19     93.3 KB
+   new d17      raw     188.3 KB  zeros       4.3 KB  zstd19     85.1 KB
+   new d20      raw     109.8 KB  zeros      37.2 KB  zstd19     78.4 KB
+   new d8       raw      89.1 KB  zeros      39.0 KB  zstd19     77.7 KB
+   surv d16     raw     625.2 KB  zeros     496.7 KB  zstd19     73.8 KB
+   new d10      raw      89.6 KB  zeros      44.2 KB  zstd19     73.4 KB
+   new d12      raw      88.4 KB  zeros      44.2 KB  zstd19     72.3 KB
+   new d14      raw      79.5 KB  zeros      33.5 KB  zstd19     70.8 KB
+   new d19      raw      94.8 KB  zeros      43.7 KB  zstd19     65.3 KB
+   new d23      raw      89.5 KB  zeros      39.4 KB  zstd19     63.6 KB
+   new d18      raw      98.8 KB  zeros      37.6 KB  zstd19     57.9 KB
+   new d24      raw      82.0 KB  zeros      10.5 KB  zstd19     57.5 KB
+   surv d24     raw     539.8 KB  zeros     497.6 KB  zstd19     52.0 KB
+   new d11      raw      72.5 KB  zeros      49.6 KB  zstd19     45.7 KB
+   new d22      raw      80.6 KB  zeros      48.5 KB  zstd19     45.1 KB
+   surv d4      raw     547.5 KB  zeros     536.0 KB  zstd19     34.3 KB
+   surv d6      raw     547.3 KB  zeros     536.0 KB  zstd19     34.1 KB
+   surv d5      raw     546.8 KB  zeros     536.2 KB  zstd19     32.1 KB
+   surv d8      raw     546.5 KB  zeros     533.1 KB  zstd19     31.1 KB
+   new d0       raw      64.7 KB  zeros      51.7 KB  zstd19     30.5 KB
+sum of parts zstd19 4.688804

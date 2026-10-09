@@ -54,6 +54,14 @@ The boot line says which case you are in; **grep for `no tacli verb can answer`*
 
 ## Verbs and tokens
 
+**Text input uses `tacli ui <i> fill <field> <text> --json`.** It keeps an active
+editor, or clicks and waits for `edit_index` to acknowledge focus. It clears old
+text with acknowledged key presses, then sends at most four text
+characters per batch. It waits for the same screen/gadget to show the exact
+prefix before sending more. Compare returned `text` with `wanted` before
+submitting: a timeout reports unacknowledged text. A snapshot can precede an
+edit, and the engine's character ring can overflow a long direct `keys` batch.
+
 ```bash
 tools/tacli gui <i> on            # arm BEFORE launch (the leaves install at attach); the draw follows the file live
 tools/tacli gui <i> off           # writes `off`: leaves installed, layer not drawn — the live A/B
@@ -149,12 +157,13 @@ taken on the instance. A world restored twin is restored from the engine's unsca
 Gamma; the UI's twin is restored through the presented palette, so an offline restore of a UI
 atlas must use that one, never the archives' `palette.pal`.
 
-**Type a chat line slowly and check it before sending.** `keys return`, the `char:` tokens and
-`keys return` back to back drop the opening `return` often enough to matter; the run then types
-the cheat as hotkeys. A second between the three, and a shot of the bottom strip to read the
-field back. On a `scenario load` fixture the chat line may not open under injection at all —
-peek the address the cheat writes (`+showranges` → `main+0x391BF`, `+gamma` → `main+0x37F08`)
-before trusting that it landed.
+**Check chat input before sending.** Open with `keys return`, wait for `TALK`,
+then use `ui fill TALK <text> --json`. Compare `text` with `wanted` before
+submitting Return. The fill clears from the end and waits for each exact text
+prefix; a fixed sleep or token-file consumption does not acknowledge the edit.
+On a `scenario load` fixture the chat line may not open under injection at all —
+peek the address the cheat writes (`+showranges` → `main+0x391BF`, `+gamma` →
+`main+0x37F08`) before trusting that it landed.
 
 ## Cursor, text, minimap
 

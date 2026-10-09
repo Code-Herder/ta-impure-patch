@@ -1,0 +1,12 @@
+kinds 15 33 41 38
+battle N300 pvals T0 blockbase: 28 blocks, encoded 42s, roundtrip OK; raw MiB seq 0.53 uf 7.68 uv 50.11 pf 3.06 pv 52.87 pi 0.00 ce 18.58 or 22.23 ev 8.54 ot 2.95 total 166.55
+  zstd3 alone one              31.70 MiB    453.4 MB/s  
+  zstd3 alone per-section      31.72 MiB    540.1 MB/s  seq 0.17 uf 3.13 uv 10.90 pf 0.71 pv 11.51 ce 1.78 or 1.16 ev 1.86 ot 0.51
+  zstd3 chain one              31.79 MiB    431.2 MB/s  
+  zstd3 chain per-section      31.54 MiB    427.0 MB/s  seq 0.16 uf 3.10 uv 10.95 pf 0.70 pv 11.47 ce 1.71 or 1.16 ev 1.82 ot 0.47
+  zstd9 alone one              28.90 MiB    119.3 MB/s  
+  zstd9 alone per-section      28.96 MiB    122.1 MB/s  seq 0.15 uf 2.93 uv 10.07 pf 0.60 pv 10.38 ce 1.54 or 1.05 ev 1.76 ot 0.48
+  zstd9 chain one              28.88 MiB    107.7 MB/s  
+  zstd9 chain per-section      28.68 MiB    101.7 MB/s  seq 0.15 uf 2.90 uv 10.10 pf 0.60 pv 10.29 ce 1.44 or 1.04 ev 1.71 ot 0.44
+  zstd19 alone one             26.64 MiB      5.0 MB/s  
+  zstd19 alone per-section     26.80 MiB      5.1 MB/s  seq 0.14 uf 2.74 uv 9.19 pf 0.50 pv 9.93 ce 1.29 or 0.90 ev 1.66 ot 0.44

@@ -1,0 +1,9 @@
+K 6 QUANT 0: writer 2.586 MiB, zstd19 2.523 MiB per stream block
+position error over all survivor-ticks (wu): p50 0.000 p90 51.476 p99 10499.239 max 32749.78; exact 69.0 %
+   weapon   17: n  298363 exact  76.4 % p99  101.790 max 29806.20 wu
+   weapon   55: n   80065 exact  29.1 % p99 27220.249 max 32749.78 wu
+   weapon   56: n   53860 exact  28.3 % p99 14465.618 max 32729.94 wu
+   weapon  122: n   50851 exact  98.7 % p99    1.742 max 32586.88 wu
+   weapon  121: n   36292 exact  99.5 % p99    0.000 max 32427.53 wu
+   weapon   89: n   18703 exact  99.8 % p99    0.000 max  2947.18 wu
+   weapon   24: n     105 exact  80.0 % p99 28203.632 max 32508.77 wu

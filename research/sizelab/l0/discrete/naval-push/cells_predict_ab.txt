@@ -1,0 +1,8 @@
+  cells with another field changed: 4,099
+  slot A: another value: 740
+  slot A: not predicted: 206
+  slot A: predicted exactly: 19,939
+  slot A: predicted, no change: 714
+tick input, B coding (reference): raw 108 KB, deflate 27 KB, zstd3 29 KB, zstd19 27 KB
+tick input under both-slot prediction: raw 27 KB, deflate 11 KB, zstd3 12 KB, zstd19 11 KB
+1.34 s 150956 KB

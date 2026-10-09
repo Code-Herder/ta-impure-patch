@@ -1,0 +1,13 @@
+event True, xpos False: 7830 iterations decoded back exactly (100 s)
+MiB, per stream block          raw    writer
+today                       60.321    36.503
+re-encoded                  19.048     2.547
+window 0 today 19749716 new 1077059
+window 900 today 7147675 new 485103
+window 1800 today 3892914 new 313360
+window 2700 today 2825731 new 227623
+window 3600 today 1045823 new 132841
+window 4500 today 1278229 new 148345
+window 5400 today 1076572 new 122235
+window 6300 today 1094494 new 122858
+window 7200 today 164713 new 41198

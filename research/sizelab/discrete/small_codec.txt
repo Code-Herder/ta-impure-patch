@@ -1,0 +1,43 @@
+wreck records, which u16s changed between two images of a record:
+   new: 8,192
+   ['0x26']: 6,946
+   ['0x2']: 3,486
+   ['0x0']: 1,138
+   ['0x0', '0x2', '0x26', '0x2c']: 525
+   ['0x0', '0x8', '0xa', '0xe', '0x10', '0x12', '0x22', '0x28', '0x2a', '0x2c']: 510
+   ['0x0', '0x2', '0x26']: 324
+   ['0x0', '0x8', '0xa', '0xe', '0x10', '0x12', '0x22', '0x26', '0x28', '0x2a', '0x2c']: 160
+   ['0x8', '0xa', '0xe', '0x10', '0x12', '0x22', '0x28', '0x2a', '0x2c']: 139
+   ['0x2', '0x26']: 129
+wrecks (values)                    today raw 1.19 MB, deflate 405 KB, zstd3 398 KB, zstd19 366 KB
+                                   new   raw 0.56 MB, deflate 172 KB (0.43x), zstd3 172 KB (0.43x), zstd19 161 KB (0.44x)  [decoded: equal]
+wrecks (diffs)                     today raw 1.19 MB, deflate 405 KB, zstd3 398 KB, zstd19 366 KB
+                                   new   raw 0.55 MB, deflate 166 KB (0.41x), zstd3 170 KB (0.43x), zstd19 160 KB (0.44x)  [decoded: equal]
+table spans (values)               today raw 0.16 MB, deflate 36 KB, zstd3 35 KB, zstd19 34 KB
+                                   new   raw 0.09 MB, deflate 29 KB (0.80x), zstd3 40 KB (1.14x), zstd19 28 KB (0.82x)  [NOT EQUAL]
+table spans (diffs)                today raw 0.16 MB, deflate 36 KB, zstd3 35 KB, zstd19 34 KB
+                                   new   raw 0.09 MB, deflate 29 KB (0.81x), zstd3 40 KB (1.14x), zstd19 28 KB (0.83x)  [NOT EQUAL]
+players (values)                   today raw 0.25 MB, deflate 146 KB, zstd3 156 KB, zstd19 147 KB
+                                   new   raw 0.19 MB, deflate 132 KB (0.90x), zstd3 143 KB (0.92x), zstd19 135 KB (0.92x)  [decoded: equal]
+players (diffs)                    today raw 0.25 MB, deflate 146 KB, zstd3 156 KB, zstd19 147 KB
+                                   new   raw 0.16 MB, deflate 102 KB (0.70x), zstd3 115 KB (0.74x), zstd19 108 KB (0.74x)  [decoded: equal]
+Traceback (most recent call last):
+  File "$SIZELAB/research/discrete/small_codec.py", line 330, in <module>
+    main()
+  File "$SIZELAB/research/discrete/small_codec.py", line 323, in main
+    gb, ok = globals_predicted(keep)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "$SIZELAB/research/discrete/small_codec.py", line 155, in globals_predicted
+    rng = names.index("rngseed")
+          ^^^^^^^^^^^
+AttributeError: 'dict' object has no attribute 'index'
+wrecks (diffs)                     today raw 1.19 MB, deflate 405 KB, zstd3 398 KB, zstd19 366 KB
+                                   new   raw 0.55 MB, deflate 166 KB (0.41x), zstd3 170 KB (0.43x), zstd19 160 KB (0.44x)  [decoded: equal]
+players (values)                   today raw 0.25 MB, deflate 146 KB, zstd3 156 KB, zstd19 147 KB
+                                   new   raw 0.19 MB, deflate 132 KB (0.90x), zstd3 143 KB (0.92x), zstd19 135 KB (0.92x)  [decoded: equal]
+players (diffs)                    today raw 0.25 MB, deflate 146 KB, zstd3 156 KB, zstd19 147 KB
+                                   new   raw 0.16 MB, deflate 102 KB (0.70x), zstd3 115 KB (0.74x), zstd19 108 KB (0.74x)  [decoded: equal]
+globals (dod + rng steps)          today raw 0.50 MB, deflate 348 KB, zstd3 349 KB, zstd19 337 KB
+                                   new   raw 0.20 MB, deflate 112 KB (0.32x), zstd3 124 KB (0.36x), zstd19 116 KB (0.35x)  [decoded: equal]
+feature heads (cursor predicted)   today raw 0.15 MB, deflate 47 KB, zstd3 55 KB, zstd19 49 KB
+                                   new   raw 0.03 MB, deflate 21 KB (0.45x), zstd3 29 KB (0.52x), zstd19 28 KB (0.56x)  [decoded: equal]

@@ -1,0 +1,5 @@
+none             raw    112.9 MB  deflated   48.95 MB  removed   0.00 MB
+position+turn    raw     91.4 MB  deflated   30.48 MB  removed  18.48 MB
++mover           raw     45.9 MB  deflated   15.58 MB  removed  33.38 MB
++derived         raw     34.9 MB  deflated   10.82 MB  removed  38.13 MB
+mover alone      raw     86.0 MB  deflated   37.58 MB  removed  11.38 MB
