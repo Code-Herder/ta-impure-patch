@@ -143,14 +143,14 @@ and the folders of the sessions written in the last 24 hours for their running r
 liveness is read from `/proc`, as above. Nothing in it writes a file a tool reads or acts on a run.
 
 - **The pane** (`/runs`): this session's open runs and its last five ended ones, each with the runs
-  filed under it. A running run is open, an ended one folded unless it went wrong (fail, unrun,
-  stopped, died, abandoned); a press on a run's line opens or folds it. Inside: the run's problems,
+  filed under it. A running run is open, an ended one folded unless it did not pass (fail, unrun,
+  stopped, died, abandoned, exited); a press on a run's line opens or folds it. Inside: the run's problems,
   then each started item (a running item lists its steps — instance, GameTime against target, time
   — and an ended one only what went wrong, each failed or unrun step with its reason and each
   failed check), the planned items on one line, and the tool's report once it ended. Other
   sessions' running runs sit under one folded line, `other sessions: N running`, labelled by
-  worktree. The pane opens by itself for a new gate run of this session only where it docks beside
-  the transcript (the fullscreen layout); a tacli game never opens it.
+  worktree. The pane opens by itself for a new run of this session only where it docks beside the
+  transcript (the fullscreen layout); a tacli game never opens it.
 - **The band** above the prompt, while anything runs: a row per running run of this session, with
   the progress of a child run that is running after it (`landing … › tareplay landing …`), and one
   row for the other sessions. It sits under whatever else draws there.
