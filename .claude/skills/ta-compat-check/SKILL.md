@@ -46,7 +46,9 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
 - **The side panel after a deselect**, on every battle stage before the scenario: `ctrl+c`
   selects the commander, a click on the ground deselects it (right, then left if the engine's
   panel did not change — the right-click layout), and the side panel below the minimap on screen
-  (`import`) is compared with the engine's surface (`tacli shot`). More than 5 % different is
+  (`import`) is compared with the engine's surface (`tacli shot`), once a shot taken after the
+  input and two `GUI flips=` heartbeats of the UI layer (one every 600 presented frames) say the
+  screen has presented the engine's answer. More than 5 % different is
   UNEXPECTED; a deselect that changed under 20 % of the engine's own strip fails as not
   exercised. The captures stay in the instance's `gamedir/hudcheck/`, the numbers in
   `summary.json` under the battle's `hud`. These two are the only checks that look at pixels.
@@ -59,14 +61,23 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   `log\startup-failure.txt`), `tadr-refused` ("TADR engine-limit error"), `loader-refused`,
   `crash` (a crash report or crash box before the menu), `battle-crash` (after the menu, while
   the skirmish loads or fights), `other-box`, `exited`, `no-result`.
-- **The battle stage** (Wine only, on by default, 60 s): every setup that reaches the main
+- **No verdict is decided by the wall clock.** `--battle`, `--mp` and `--watch` are SECONDS of
+  game time, counted as SECONDS × 30 ticks of GameTime (the network game: the host's) or, at the
+  menu, of presented frames, so a loaded machine makes a run longer, never its verdict different.
+  A wall bound only gives up on a game that stopped: 120 s of GameTime (or of frames) standing
+  still, 60 s for a one-frame answer, 300 s for a screen of the menus or the battle room to come
+  up. The start-up watch ends at the process gone, a box, or the menu watched for `--watch` × 30
+  presented frames; a game Impure is not in has no frames to count and is watched `--watch` s
+  of wall clock once its window is up, an observation window and not a verdict.
+- **The battle stage** (Wine only, on by default, 60 s of game time): every setup that reaches the main
   menu clicks through to a skirmish on Two Continents and applies `scenarios/200v200.json`.
   Collisions between two patchers show where the limits are *used*, not at start-up: Impure
   v0.2.3 beside Total Mayhem 11.3.0 reached the menu and crashed on the first skirmish load, which
   a start-up-only run passes. **The units must be seen, not only made**: after the scenario, the
   newest `units: alive=N` header in `tagpu.log` (the frame packet — what Impure draws and
   `tacli roster` lists) must hold nine in ten of the units the applier made. A game whose units
-  exist but that Impure cannot see passes everything else.
+  exist but that Impure cannot see passes everything else. The header read is the first logged
+  after the applier's `scenario: applied=` line, so it is of a frame that holds the units.
 - **Every player has a commander**, before the battle's scenario clears the map and on each
   peer of the network game: `tacli units` reports the engine's seats in the game (`players`,
   from its player records) and its living commanders (the FBI `commander` bit), and every
@@ -261,9 +272,9 @@ Run the new setup before writing its `today` — write down what it did, not wha
   real separator still fails and a drop recovers. A failure at the *same* index every time is the
   structural one.
 - **The joiner's session list fills when SELGAME opens and on UPDATE, never by itself**: a host
-  still busy with its map load is missing from it. The runner presses UPDATE while JOIN is grey,
-  as a player would, twelve rounds of five seconds (Total Mayhem needed it one run in three;
-  Escalation's host was still grey after six).
+  still busy with its map load is missing from it. The runner presses UPDATE every five seconds
+  while JOIN is grey, as a player would, for up to 300 s (Total Mayhem needed it one run in three;
+  Escalation's host was still grey after six presses).
 - **A mod's front end is not stock's, and a screen still coming up is not a failure.** Both walks
   retry a click while the answer is "no active gui" or a gadget that is not there yet, and the
   single-player walk stops early when a click lands on `ARMMAIN`/`CORMAIN`: Escalation's Skirmish

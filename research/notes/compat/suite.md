@@ -38,6 +38,15 @@ names the gap). The hives are private because the store `tacli` keeps
   0, which every earlier check had passed. Every game runs silent but with a sound device: Wine is kept off
   PulseAudio and its ALSA driver opens a null device (`asound-null.conf`), because TA:ESC with no
   device at all stops at "No sound driver is available for use."; no file of the setup changes.
+- **No verdict is decided by the wall clock**: `--watch`, `--battle` and `--mp` are SECONDS of
+  game time, counted as SECONDS × 30 ticks of GameTime (`main+0x38A47` through `tacli peek`; the
+  network game's, the host's) or, at the menu, of presented frames — the UI layer's `GUI flips=`
+  heartbeat is logged once every 600 of the render thread's frames (`tagpu_gui_flush`, called
+  from `tagpu_overlay_draw`). A wall bound only gives up on a game that stopped: 120 s of
+  GameTime or frames standing still, 60 s for a one-frame answer, 300 s for a screen of the menus
+  or the battle room to come up. A game Impure is not in has no frames to count, and its
+  start-up is watched `--watch` s of wall clock once its window is up: an observation window,
+  not a verdict, since what it ends as is read from the process and the files.
 - **The network stage** (`wine --mp SECONDS`, 30 by default, 0 for none): for each player's
   setup whose single-player run showed Impure running, a second instance of the same folder
   (`compat-<setup>-j`), both games on their own displays, hosted and joined through the game's
@@ -124,7 +133,9 @@ counts every box that crossed as engine pixels — which the layer drops — by 
 `copy-freed` there is UNEXPECTED: a copy whose source surface was freed before it was published,
 the class of Escalation's stale orders panel ([GUI renderer](../gui-renderer.md) §28). The
 battle stage, before its scenario, selects the commander, deselects it and compares the side
-panel below the minimap on screen with the engine's own surface: over 5 % different is UNEXPECTED,
+panel below the minimap on screen with the engine's own surface, once a shot taken after the input
+and two UI heartbeats (at least 600 presented frames) say the screen holds the engine's answer:
+over 5 % different is UNEXPECTED,
 and a deselect that did not change the engine's panel fails as not exercised. Measured: v0.3 22.5 %
 on Escalation, the fix 0.12 %, retail 0.06 % on both.
 

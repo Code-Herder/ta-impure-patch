@@ -165,6 +165,16 @@ IN_GAME_PANEL = re.compile(r"\b[A-Z]+MAIN\d*\b")
 MP_PORT_BASE = dpport.STOCK + 1
 # An archive the game reads and never writes is linked into a Wine folder, not copied.
 LINKED = {".ufo", ".gp3", ".hpi", ".ccx", ".ufo2"}
+# NO OUTCOME IS DECIDED BY THE WALL CLOCK: a loaded machine runs every game slower, never
+# differently. A soak counts the game's own progress -- GameTime ticks in play, presented frames
+# at the menu, SECONDS x TICKS_PER_S of either -- and a wall bound only says when a game that
+# stopped making progress is given up on: STALL_S of GameTime (or of frames) standing still,
+# ACK_S for a one-frame answer, POLL_S for a screen of the menus or the battle room to come up.
+GAMETIME = "*0x511DE8+0x38a47"          # main+0x38A47, the simulation's tick count
+TICKS_PER_S = 30                        # GameTime at normal speed; the menu's frames are counted alike
+STALL_S = 120
+ACK_S = 60
+POLL_S = 300
 
 
 def die(msg, code=2):
@@ -878,15 +888,109 @@ def mod_content(setup, inst) -> "dict | None":
     return {"want": want, "types": len(have), "missing": [u for u in want if u.upper() not in have]}
 
 
-def alive_seen(gamedir: Path) -> "int | None":
-    """The newest `units: alive=N` header in the game's tagpu.log: the units in the frame packet,
-    which is what Impure draws and what `tacli roster` lists."""
+def gametime(name) -> "int | None":
+    """The game's GameTime (main+0x38A47) through tacli's game-thread peek, None when it does not
+    answer."""
     try:
-        text = (gamedir / "log" / "tagpu.log").read_text(errors="replace")
+        r = tacli("peek", name, GAMETIME, "--json", timeout=ACK_S + 30)
+        return int(str(json.loads(r.stdout)["peeks"][0]["value"]).split()[0])
+    except (ValueError, KeyError, IndexError, subprocess.TimeoutExpired):
+        return None
+
+
+class Progress:
+    """A soak's measure: `want` units of the game's own progress, and STALL_S of none as the only
+    wall bound. `read()` is the counter -- GameTime, or presented frames -- None while it
+    cannot be read, which counts as standing still. The soak counts from the first value read or,
+    `after_next`, from the first that differs from it: a heartbeat's count was logged before the
+    soak began, its next one after."""
+
+    def __init__(self, read, want, after_next=False):
+        self.read, self.want, self.after_next = read, want, after_next
+        self.start, self.last = None, read()
+        self.since = time.monotonic()
+
+    def done(self) -> bool:
+        """Whether the soak has run its course; raises Stalled when the counter stood still for
+        STALL_S."""
+        now, v = time.monotonic(), self.read()
+        moved = v is not None and v != self.last
+        if moved:
+            self.last, self.since = v, now
+        elif now - self.since > STALL_S:
+            raise Stalled(f"{self.last if self.last is not None else 'nothing'} for {STALL_S} s")
+        if self.start is None and v is not None and (moved or not self.after_next):
+            self.start = v
+        return self.start is not None and v is not None and v - self.start >= self.want
+
+
+class Stalled(Exception):
+    pass
+
+
+# THE PRESENTS, COUNTED. The UI layer's heartbeat `GUI flips=` is logged by tagpu_gui_flush,
+# which tagpu_overlay_draw calls with the render thread's frame counter, once every
+# PRESENTS_PER_BEAT of its frames: so heartbeats count presented frames, at the menus too. Its
+# `flips=` value is something else (the GUI's own count) and is not read. The GDI backend never
+# reaches tagpu_overlay_draw and logs none.
+PRESENTS_PER_BEAT = 600
+
+
+def beats(gamedir: Path, since=0) -> "tuple[int, int] | None":
+    """(heartbeats in tagpu.log from byte `since` on, the file's length), None when it cannot be
+    read. A file shorter than `since` was rotated, and is read whole."""
+    try:
+        data = (gamedir / "log" / "tagpu.log").read_bytes()
     except OSError:
         return None
-    found = re.findall(r"^units: alive=(\d+)", text, re.M)
-    return int(found[-1]) if found else None
+    if len(data) < since:
+        since = 0
+    return len(re.findall(rb"^GUI flips=", data[since:], re.M)), len(data)
+
+
+def presents(gamedir: Path) -> "int | None":
+    """The presented frames tagpu.log's heartbeats count, PRESENTS_PER_BEAT a heartbeat: what
+    the menu's soak counts, where no GameTime runs."""
+    got = beats(gamedir)
+    return got[0] * PRESENTS_PER_BEAT if got else None
+
+
+def presents_after(gamedir: Path, n=2) -> bool:
+    """Until `n` heartbeats are logged after now, so at least (n - 1) x PRESENTS_PER_BEAT frames
+    were presented after it; False when the heartbeats stood still for STALL_S."""
+    got = beats(gamedir)
+    if got is None:
+        return False
+    since, seen, at = got[1], 0, time.monotonic()
+    while True:
+        got = beats(gamedir, since)
+        if got and got[0] >= n:
+            return True
+        if got and got[0] != seen:
+            seen, at = got[0], time.monotonic()
+        elif time.monotonic() - at > STALL_S:
+            return False
+        time.sleep(0.5)
+
+
+def alive_after_apply(gamedir: Path) -> "int | None":
+    """The first `units: alive=N` header after the newest applier line (`scenario: applied=`) in
+    tagpu.log, polled for ACK_S. The applier creates the units in the tick at 0x4969D2 and logs
+    from a later flip's trigger family, and the header is written from a frame's packet, so a
+    header after that line is of a frame that holds the units. None when there is none."""
+    end = time.monotonic() + ACK_S
+    while True:
+        try:
+            text = (gamedir / "log" / "tagpu.log").read_text(errors="replace")
+        except OSError:
+            text = ""
+        at = text.rfind("scenario: applied=")
+        m = re.search(r"^units: alive=(\d+)", text[at:], re.M) if at >= 0 else None
+        if m:
+            return int(m.group(1))
+        if time.monotonic() >= end:
+            return None
+        time.sleep(0.5)
 
 
 def scenarios(setup) -> dict:
@@ -921,11 +1025,18 @@ def hud_strip_diff(a: Path, b: Path) -> "float | None":
         return None
 
 
-def hud_deselect(name, display, where: Path) -> dict:
+def hud_deselect(name, display, gamedir: Path, where: Path) -> dict:
     """Select the commander (ctrl+c), deselect it, and compare the side panel on screen with
     the engine's surface. `opened` is how much the deselect changed the engine's own strip --
     the proof the step exercised anything -- and `stale` the share of the strip where the
     screen disagrees with the engine after it.
+
+    THE SCREEN IS READ ONCE IT HAS PRESENTED THE ENGINE'S ANSWER. `tacli keys` and `click`
+    return once the engine has consumed the input; a `tacli shot` after that is a frame the
+    engine flipped after its trigger (tagpu_overlay.c), so its surface, and the packet it
+    published, hold the answer; two heartbeats later at least PRESENTS_PER_BEAT frames have
+    been presented from that packet or a newer one (`presents_after`). Then the screen and the
+    engine are captured back to back, as they are compared.
 
     WHICH CLICK DESELECTS IS THE PLAYER'S SETTING. Under the default layout a right click on
     the ground deselects and a left click orders a move; under the right-click layout it is
@@ -936,20 +1047,21 @@ def hud_deselect(name, display, where: Path) -> dict:
 
     def capture(step):
         pair = (where / f"{step}-screen.png", where / f"{step}-engine.png")
+        tacli("shot", name, "-o", str(pair[1]), timeout=ACK_S)
+        if not presents_after(gamedir):
+            raise Unsettled(f"no frame presented for {STALL_S} s after the {step} input")
         subprocess.run(["import", "-display", f":{display}", "-window", "root", str(pair[0])],
                        capture_output=True, timeout=30)
-        tacli("shot", name, "-o", str(pair[1]), timeout=30)
+        tacli("shot", name, "-o", str(pair[1]), timeout=ACK_S)
         return pair
 
     # The left click aims elsewhere: under the right-click layout the right click was a move
-    # order to its own point, and the commander may be standing on it three seconds later.
+    # order to its own point, and the commander may be standing on it by then.
     try:
         tacli("keys", name, "ctrl+c", timeout=150)   # past tacli's own 90 s input bound
-        time.sleep(3)
         sel = capture("selected")
         for click in (["--right", name, "700", "600"], [name, "900", "400"]):
             tacli("click", *click, timeout=150)
-            time.sleep(3)
             desel = capture("deselected")
             opened = hud_strip_diff(sel[1], desel[1])
             if opened is None or opened >= HUD_OPENED:
@@ -957,6 +1069,12 @@ def hud_deselect(name, display, where: Path) -> dict:
         return {"opened": opened, "stale": hud_strip_diff(*desel), "where": str(where)}
     except subprocess.TimeoutExpired as e:
         return {"opened": None, "stale": None, "where": f"{where}: timed out: {e.cmd[:2]}"}
+    except Unsettled as e:
+        return {"opened": None, "stale": None, "where": f"{where}: {e}"}
+
+
+class Unsettled(Exception):
+    pass
 
 
 def hud_misses(hud: "dict | None", exp: dict) -> list:
@@ -991,7 +1109,7 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
         if in_game or IN_GAME_PANEL.search(
                 (tacli("ui", name, timeout=20).stdout.splitlines() or [""])[0]):
             break
-        end, last = time.time() + 45, ""
+        end, last = time.time() + POLL_S, ""
         while True:
             r = tacli("ui", name, "click", gadget, timeout=60)
             if r.returncode == 0:
@@ -1006,7 +1124,7 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
             if time.time() >= end or not re.search(r"no active gui|is not on|no gadget", last):
                 return {"ok": False, "why": f"ui click {gadget}: {last}"}
             time.sleep(3)
-    deadline = time.time() + 90
+    deadline = time.time() + POLL_S
     while time.time() < deadline:
         time.sleep(3)
         if proc.poll() is not None:
@@ -1024,7 +1142,7 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
                 "why": "the skirmish started without a commander each: " + cmd["why"]}
     # Before the scenario: the start is the one moment the commander is sure to exist and the
     # view to hold nothing else a right click could land on.
-    hud = hud_deselect(name, display, gamedir / "hudcheck")
+    hud = hud_deselect(name, display, gamedir, gamedir / "hudcheck")
     r = tacli("scenario", "apply", name, scenario, timeout=180)
     if r.returncode != 0:
         return {"ok": False, "why": f"scenario apply: {(r.stderr or r.stdout).strip()[:200]}", "hud": hud}
@@ -1037,19 +1155,24 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
     if not made:
         return {"ok": False, "hud": hud, "why": f"the applier's count is unreadable, so the units seen cannot be judged ({applied})"}
     want = int(made.group(1))
-    time.sleep(4)
-    got = alive_seen(gamedir)
+    got = alive_after_apply(gamedir)
     if got is None or got < max(1, want * 9 // 10):
         return {"ok": False, "hud": hud, "why": f"Impure sees {got if got is not None else 'no'} unit(s) of "
                                     f"the {want} the scenario made ({applied})"}
-    end = time.time() + seconds
-    while time.time() < end:
+    # the fight runs `seconds` of game time: TICKS_PER_S ticks each, however slowly they come
+    soak = Progress(lambda: gametime(name), seconds * TICKS_PER_S)
+    while True:
         time.sleep(2)
         new_boxes(display, seen, boxes, t0)
         if proc.poll() is not None:
             return {"ok": False, "hud": hud, "why": f"the game exited during the battle ({applied})"}
         if boxes or (gamedir / "ErrorLog.txt").exists():
             return {"ok": False, "hud": hud, "why": f"a box or a crash report during the battle ({applied})"}
+        try:
+            if soak.done():
+                break
+        except Stalled as e:
+            return {"ok": False, "hud": hud, "why": f"the battle stood at GameTime {e} ({applied})"}
     return {"ok": True, "why": f"{cmd['why']}; {applied}", "hud": hud}
 
 
@@ -1467,12 +1590,25 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
     boxes, seen, menu, shots = [], set(), None, {}
     first_box_at = exited_at = None
     impure_log = gamedir / "log" / "tagpu.log"
+    # THE START-UP WATCH ends on a fact: the process gone, a box, or the menu watched for
+    # `watch` x TICKS_PER_S presented frames (`presents`) once it is up; frames that stop coming for
+    # STALL_S end it too, and decide nothing. A game Impure is not in has no frames to count, and
+    # is watched for `watch` s once its main window is up -- ddraw.dll is TotalA.exe's first
+    # static import and Impure's DllMain opens its log (tagpu_log_init), so a log is there by
+    # then if Impure is -- which is an observation window, not a verdict: what it ends as is
+    # read from the process and the files. POLL_S bounds a start that reaches none of these.
+    soak, watch_end, window_at = None, None, None
     try:
-        while time.time() - t0 < watch:
+        while True:
             time.sleep(1.0)
+            if not soak and time.time() - t0 > POLL_S:
+                watch_end = f"no menu in {POLL_S} s"
+                break
             labelled = impure_log.exists() and impure_log.stat().st_mtime >= t0
             for title, w, h in x_windows(display):
                 if main_window(title, w, h):
+                    if window_at is None:
+                        window_at = time.time()
                     continue
                 if (title, w, h) not in seen:
                     seen.add((title, w, h))
@@ -1494,6 +1630,17 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
                 first = (r.stdout.splitlines() or [""])[0]
                 if r.returncode == 0 and "MAINMENU" in first:
                     menu = True
+                    soak = Progress(lambda: presents(gamedir), watch * TICKS_PER_S,
+                                    after_next=True)
+            if soak:
+                try:
+                    if soak.done():
+                        break
+                except Stalled as e:
+                    watch_end = f"the menu's frames stood at {e}"
+                    break
+            elif not labelled and window_at and time.time() - window_at >= watch:
+                break
         content = mod_content(setup, inst) if menu and proc.poll() is None else None
         fight = None
         if battle and menu and not boxes and proc.poll() is None:
@@ -1540,7 +1687,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         "failure": read(gamedir / "log" / "startup-failure.txt"),
         "modules_known": True, "folder_modules": folder_modules,
         "battle": fight, "hooks": hooks, "content": content,
-        "seconds": round(time.time() - t0, 1),
+        "seconds": round(time.time() - t0, 1), "watch_end": watch_end,
     }
     logs = other_logs(gamedir / "log", t0)
     o["tadr_ran"] = tadr_evidence(o["tdrawlog"], logs) + hook_evidence(hooks)
@@ -1679,7 +1826,7 @@ def lobby_ui(inst, *argv, timeout=40) -> str:
     # is a moment with no gadget layer at all, and a mod with more content than stock stays in it
     # longer than one call's patience (MEASURED 2026-09-27: Escalation's host on START). Retried
     # while that is what it says, and no longer.
-    end, last = time.time() + 40, ""
+    end, last = time.time() + POLL_S, ""
     while True:
         r = tacli("ui", inst, *argv, "--timeout", str(timeout), timeout=timeout + 30)
         if r.returncode == 0:
@@ -1736,24 +1883,26 @@ def wine_lobby(host, join, port):
     lobby_to_selgame(join, "JOIN")
     # The session list is filled when SELGAME opens and again on UPDATE, never by itself: a
     # host still answering its map load when the joiner looked is missing until someone
-    # presses UPDATE, as a player would (seen with Total Mayhem 11.3.0, 2026-09-27).
-    # Twelve rounds, not six: a mod's host is still answering its own map load well past the
-    # half-minute stock TA needs (MEASURED 2026-09-27: Escalation's host, where JOINGAME was
-    # still grey after six).
-    for _ in range(12):
+    # presses UPDATE, as a player would (seen with Total Mayhem 11.3.0, 2026-09-27). It is
+    # pressed until the session is listed, POLL_S at most: a mod's host answers its own map load
+    # well past the half-minute stock TA needs (MEASURED 2026-09-27: Escalation's host, where
+    # JOINGAME was still grey after six presses five seconds apart).
+    end = time.time() + POLL_S
+    while True:
         if re.search(r"^grayed\s+0\s*$", lobby_ui(join, "show", "JOINGAME"), re.M):
             break
+        if time.time() >= end:
+            # Say who answers the joiner's enumeration: the host's own name server, a stale one
+            # of another prefix, or nobody -- three different failures that read the same on
+            # screen.
+            try:
+                holders = dplay_holders(port) or "nobody"
+            except (OSError, subprocess.SubprocessError) as e:
+                holders = f"(not read: {e})"
+            raise Lobby(f"{join}: no session listed after {POLL_S} s of UPDATEs; DirectPlay port "
+                        f"{port} held by {holders}", sockets=game_sockets())
         lobby_ui(join, "click", "UPDATE")
         time.sleep(5)
-    else:
-        # Say who answers the joiner's enumeration: the host's own name server, a stale one of
-        # another prefix, or nobody -- three different failures that read the same on screen.
-        try:
-            holders = dplay_holders(port) or "nobody"
-        except (OSError, subprocess.SubprocessError) as e:
-            holders = f"(not read: {e})"
-        raise Lobby(f"{join}: no session listed after 12 UPDATEs; DirectPlay port {port} held by "
-                    f"{holders}", sockets=game_sockets())
     lobby_ui(join, "click", "JOINGAME", timeout=30)
     lobby_ui(join, "wait", "--gui", "LOUNGE2", timeout=30)
     lobby_ui(join, "click", "READY0", timeout=20)     # each client lists itself as row 0
@@ -1768,7 +1917,7 @@ def wine_lobby(host, join, port):
         if not re.search(r"no active gui", str(e)) and not IN_GAME_PANEL.search(str(e)):
             raise
     for inst in (host, join):
-        r = tacli("wait", inst, "alive=[1-9]", "--timeout", "150", timeout=200)
+        r = tacli("wait", inst, "alive=[1-9]", "--timeout", str(POLL_S), timeout=POLL_S + 50)
         if r.returncode != 0:
             raise Lobby(f"{inst}: the game never came alive: {(r.stderr or r.stdout).strip()[:200]}")
     # Each peer must hold BOTH commanders: its own, and the other's as the network sent it.
@@ -1832,7 +1981,7 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dic
             games["host"] = start_wine(peers["host"], host_display)
             time.sleep(3)
             games["join"] = start_wine(peers["join"], join_display)
-            deadline = time.time() + 60
+            deadline = time.time() + POLL_S
             menus = set()
             while len(menus) < 2 and time.time() < deadline and not boxes:
                 time.sleep(2)
@@ -1851,8 +2000,9 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dic
                 r = tacli("scenario", "apply", peers[role]["name"], scen, timeout=180)
                 if r.returncode != 0:
                     raise Lobby(f"{role}: scenario apply {scen}: {(r.stderr or r.stdout).strip()[:200]}")
-            end = time.time() + seconds
-            while time.time() < end and not why:
+            # `seconds` of the host's game time, TICKS_PER_S ticks each
+            soak = Progress(lambda: gametime(peers["host"]["name"]), seconds * TICKS_PER_S)
+            while not why:
                 time.sleep(2)
                 for role, g in games.items():
                     new_boxes(g["display"], seen, boxes, t0)
@@ -1862,6 +2012,11 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dic
                         why = f"the {role}'s game wrote a crash report"
                 if boxes and not why:
                     why = f"a box during the fight: {boxes[0]['title']}"
+                try:
+                    if not why and soak.done():
+                        break
+                except Stalled as e:
+                    why = f"the host's game stood at GameTime {e}"
             for role, g in games.items():        # while the games are still up (exe_hooks)
                 if g["proc"].poll() is None:
                     hooks[role] = exe_hooks(g["proc"].pid, peers[role]["gamedir"])
@@ -1995,8 +2150,10 @@ def cmd_wine(args):
         stop_xvfb(xv)
     # Every prefix this run made, for free_dplay_port: the only ones it may end.
     mine = {str(s["_inst"]["prefix"]) for s in ready}
-    print(f"running {len(ready)} setups, {args.jobs} at a time, {args.watch} s each"
-          + (f"; a two-player game of {args.mp} s for each that starts" if args.mp else ""))
+    print(f"running {len(ready)} setups, {args.jobs} at a time, each menu watched {args.watch} s "
+          f"of frames" + (f", a {args.battle} s battle" if args.battle else "")
+          + (f"; a two-player game of {args.mp} s for each that starts" if args.mp else "")
+          + " (game time: x30 ticks or frames)")
     results, mp_futs = [], {}
     # Each network game is queued the moment its setup's single-player run shows Impure
     # running, beside the other runs, and `--mp-jobs` play at once -- one DirectPlay port each.
@@ -2316,7 +2473,7 @@ def windows_smoke(w: Win, setup, seconds):
         path = rem.root / ('tagpu_' + kind + '.json')
         before = path.stat().st_mtime_ns if path.exists() else 0
         (rem.root / ('tagpu_' + kind + '.trigger')).write_text(contents)
-        deadline = time.monotonic() + 60
+        deadline = time.monotonic() + ACK_S
         while time.monotonic() < deadline:
             if path.exists() and path.stat().st_mtime_ns > before:
                 return json.loads(path.read_text())
@@ -2356,7 +2513,7 @@ def windows_smoke(w: Win, setup, seconds):
             launch += ['--player', ':'.join(str(n) for n in fields)]
         checked(*launch, timeout=180)
         for gadget in ('SINGLE', 'Skirmish', 'Start'):
-            deadline = time.monotonic() + 90
+            deadline = time.monotonic() + POLL_S
             while True:
                 ui = checked('ui', name)
                 if IN_GAME_PANEL.search((ui.splitlines() or [''])[0]):
@@ -2367,7 +2524,7 @@ def windows_smoke(w: Win, setup, seconds):
                 if time.monotonic() >= deadline:
                     raise RuntimeError(r.stderr or r.stdout)
                 time.sleep(1)
-        deadline = time.monotonic() + 90
+        deadline = time.monotonic() + POLL_S
         while not IN_GAME_PANEL.search((checked('ui', name).splitlines() or [''])[0]):
             if time.monotonic() >= deadline:
                 raise RuntimeError('skirmish did not enter play')
@@ -2384,7 +2541,7 @@ def windows_smoke(w: Win, setup, seconds):
         if not applied.get('ok'):
             raise RuntimeError('scenario rejected: ' + json.dumps(applied))
         result['applied'] = applied
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + ACK_S
         before = roster()
         while len(before) < 10 and time.monotonic() < deadline:
             time.sleep(1)
@@ -2690,15 +2847,17 @@ def main():
     wi.add_argument("--jobs", "-j", type=int, default=6)
     wi.add_argument("--prep-jobs", type=int, default=8, metavar="N",
                     help="instances prepared at once (each has registry hives of its own)")
-    wi.add_argument("--watch", type=int, default=45, help="seconds each setup is watched")
+    wi.add_argument("--watch", type=int, default=45, metavar="SECONDS",
+                    help="the start-up watch: the menu watched for SECONDS x 30 engine frames once "
+                         "it is up (a game Impure is not in: SECONDS of wall clock)")
     wi.add_argument("--screens", action="store_true", help="keep a picture of every run's display")
     wi.add_argument("--strict", action="store_true", help="a known gap fails the run too")
     wi.add_argument("--battle", type=int, default=60, metavar="SECONDS",
-                    help="where the menu is reached, also fight a 200v200 skirmish this long "
-                         "(0: start-up only)")
+                    help="where the menu is reached, also fight a 200v200 skirmish for SECONDS x 30 "
+                         "ticks of game time (0: start-up only)")
     wi.add_argument("--mp", type=int, default=30, metavar="SECONDS",
-                    help="where Impure runs, also play a two-player network game this long "
-                         "(0: none)")
+                    help="where Impure runs, also play a two-player network game for SECONDS x 30 "
+                         "ticks of the host's game time (0: none)")
     # MEASURED 2026-09-28, full runs: 4 at once 633 s, 6 at once 572 s, 0 UNEXPECTED each; the
     # six battles are what hold the reference setup at its limits (load 28 of 32 cores), and
     # GPU memory reaches ~11 of 12 GB at any count, each game's restorer sizing its atlas to

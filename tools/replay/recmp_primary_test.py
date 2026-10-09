@@ -21,6 +21,7 @@ import uuid
 import tareplay
 
 TREE = Path(__file__).resolve().parents[2]
+MOVE_TICKS = 300        # the movement's bound: ten seconds of game time at normal speed
 sys.path.insert(0, str(TREE / "tools"))
 import talog
 
@@ -92,7 +93,12 @@ def run(args, output):
                     cli("order", name, "--unit", unit["engine_index"], "--expect", "ARMCOM",
                         "move", "pos", *goal)
                 (output / "targets.json").write_text(json.dumps(targets, indent=2))
-                deadline = time.monotonic() + 75
+                # The bound is game time: MOVE_TICKS of every peer's own GameTime past its first
+                # sample for a 48 wu walk; peers whose GameTime stands still for tareplay.STALL_S
+                # are a hung game. A loaded machine makes the wait longer, never the verdict
+                # different.
+                starts = {name: first[name]["tick"] for name in names}
+                last_ticks, moved_at = None, time.monotonic()
                 while True:
                     state = snapshot()
                     moved = []
@@ -107,8 +113,15 @@ def run(args, output):
                             moved.append(abs(x-target["start"][0]) + abs(y-target["start"][1]) >= 48)
                     if all(moved):
                         break
-                    if time.monotonic() > deadline:
-                        raise RuntimeError("native remote movement not observed; inspect samples.json")
+                    ticks = {name: state[name]["tick"] for name in names}
+                    if all(ticks[n] - starts[n] >= MOVE_TICKS for n in names):
+                        raise RuntimeError(f"native remote movement not observed in {MOVE_TICKS} "
+                                           f"ticks; inspect samples.json")
+                    if ticks != last_ticks:
+                        last_ticks, moved_at = ticks, time.monotonic()
+                    elif time.monotonic() - moved_at > tareplay.STALL_S:
+                        raise RuntimeError(f"the peers' GameTime stood at {ticks} for "
+                                           f"{tareplay.STALL_S} s; inspect samples.json")
                     time.sleep(.5)
                 for name in names:
                     text = talog.run_text(instances / name / "gamedir")
