@@ -1008,7 +1008,7 @@ static void __stdcall mm_oncommand(void* gi)
        I<gen> version modprint has_modprint archives mod result,commander,defeat...
        L code modprint buildkey a b                                         (tab-separated)
    `played` is when Watch last started it, in seconds since 1970 (UTC), 0 for never. `marks` is the
-   dock's bookmarks, comma-separated GameTimes inside [start, last], sorted; a line without the
+   replay HUD's bookmarks, comma-separated GameTimes inside [start, last], sorted; a line without the
    field, as this version's first lines were written, has none.
    From `I` on, what recr_info read: the version text, the archive fingerprint (hex) and whether
    the recording has one, the archives mounted, the mod named from them (mod_of), and each seat's
@@ -1256,8 +1256,8 @@ static int put_ent(char* b, int cap, int at, const Ent* e)
 }
 
 /* The whole index, written beside the old one and renamed over it. On the game thread, in the
-   shell, where no simulation is waiting on it, or on a level that plays a recording (the dock's
-   bookmarks): a playback is a skirmish, mode 2, with no peer, so the write can stall only the
+   shell, where no simulation is waiting on it, or on a level that plays a recording (the replay
+   HUD's bookmarks): a playback is a skirmish, mode 2, with no peer, so the write can stall only the
    playback's own frame. The rule against a file write inside an OnCommand (tagpu_menu.c) is for a
    network game, which a playback never is. */
 static void index_save(void)
@@ -1489,7 +1489,7 @@ static void summarize(Ent* e)
     info_read(e);
 }
 
-/* ---- the dock's bookmarks ---------------------------------------------------------------------
+/* ---- the replay HUD's bookmarks ---------------------------------------------------------------
    On the game thread, on a level that plays a recording, where the browser is closed: its rows are
    rebuilt by scan() whenever it opens, so reading the index into s_ent here takes nothing from it. */
 
@@ -2218,8 +2218,8 @@ static void rows_refresh(char* gi)
 
 /* THE LOCK's mark, from Watch's checks (tagpu_replays.h). The browser's own entries are marked
    while its screen exists, the screen's rows redrawn when it is on top, as it is at Watch's
-   header check, before the notice; otherwise the line on disk, as the dock's bookmarks are
-   written. */
+   header check, before the notice; otherwise the line on disk, as the replay HUD's bookmarks
+   are written. */
 void tagpu_replays_refused(const char* file, unsigned code, unsigned a, unsigned b)
 {
     char path[MAX_PATH];

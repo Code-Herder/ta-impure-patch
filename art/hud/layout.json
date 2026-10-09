@@ -81,7 +81,7 @@
  },
 
  "row": {
-  "part": "row_one", "h": 27,
+  "part": "row_one", "h": 27, "act": "row",
   "stripe": {"in": "stripe", "pad": [0.8, 0.8, 0.8, 0.8], "shade": 1},
   "name":   {"in": "name", "pad": [4, 0, 3, 0], "lost_pad": [4, 0, 16, 0], "bind": "name", "style": "name"},
   "skull":  {"in": "name", "pad": [0, 0, 3, 0], "w": 11, "h": 10, "ax": "r", "icon": "skull"},

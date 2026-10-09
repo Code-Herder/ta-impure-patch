@@ -344,7 +344,7 @@ static struct {
     unsigned        said, shown;   /* text entries applied, and lines given to the message log  */
     char            why[200];
 } s_mp;
-static int s_chat_hidden;           /* 1 = the Overlays menu's Chat switch is off (`chat hide`,
+static int s_chat_hidden;           /* 1 = the HUD's Chat toggle is off (`chat hide`,
                                        `chat show`, `overlay chat`): THE OVERLAYS               */
 /* THE OVERLAYS' state (game thread only) */
 #define OV_RING 64                  /* the clicks held: the most recent, each with its tick      */
@@ -1001,8 +1001,8 @@ static void __cdecl tagpu_replay_level_players(void)
     if (!ok) tagpu_log("replay: the viewer's record 10 could not be given its buffers");
 }
 
-/* The open recording's path and its first and last GameTime, for the dock (tagpu_dock.h): the
-   summary walks the block headers only. */
+/* The open recording's path and its first and last GameTime, for the replay HUD's timeline and
+   bookmarks (tagpu_hudstate.c, tagpu_hudmarks.c): the summary walks the block headers only. */
 static void span_read(const char* path)
 {
     RecSummary sm;
@@ -1014,7 +1014,7 @@ static void span_read(const char* path)
         s_span.last = sm.last;
         s_span.ok = 1;
     } else {
-        tagpu_logf("replay: %s: no span for the dock: %s", path, why);
+        tagpu_logf("replay: %s: no span for the HUD: %s", path, why);
     }
 }
 
@@ -1184,9 +1184,10 @@ static int options_restore(char* ta)
    save writes SkirmishMap from +0x11C and Player%dController..Energy from the entries below the
    count (0x4314F0..0x43171D), so with those three exchanged it writes the player's own.
    The game speed's ceiling main+0x38A4B travels the same way: the save writes it to the registry's
-   `gamespeed` (0x43136B), and the dock changes it during a playback (tagpu_replay_speed_set), so
-   the save writes the player's speed and the teardown puts it back. A change the Options screen's
-   GAME speed slider makes during a playback is put back with the rest. */
+   `gamespeed` (0x43136B), and the HUD's speed button changes it during a playback
+   (tagpu_replay_speed_set), so the save writes the player's speed and the teardown puts it back. A
+   change the Options screen's GAME speed slider makes during a playback is put back with the
+   rest. */
 static void* s_saveRet;
 
 /* the live options and s_opt's, each put in the other's place */
@@ -4358,7 +4359,7 @@ static const RecWorld* mp_world(const RecWorld* W)
     return &s_mp.W;
 }
 
-/* The world the perspective reads -- Follow, the overlays and the cards: in a multiplayer
+/* The world the perspective reads -- Follow, the overlays and the HUD's rows: in a multiplayer
    recording's own segment the reader's world with the composed units and lists and the actors'
    samples and selections (mp_authority), anywhere else the reader's own. The samples' ticks are
    the recorder's application ticks and W->tick is the application tick the world holds, so the
@@ -7442,13 +7443,14 @@ static int rw_trigger(const char* line)
    - `seek <T>` or `seek <T> dump <name>`: on a level that plays a recording, the seek waits for
      the next frame visit after the first step (THE SEEK), and the dump is taken at the capture
      point of T.
-   - `dock seek <T>`: the seek the dock's strip asks for, through its own entry point
+   - `hud seek <T>`: the seek the HUD's timeline asks for, through its own entry point
      (tagpu_replay_seek_request), which clamps T to the recording and takes no dump: a test drives
-     the dock's seek at a GameTime of its choosing, which a click on the strip cannot name exactly.
+     the HUD's seek at a GameTime of its choosing, which a click on the timeline cannot name
+     exactly.
    - `takeover <P> at <T>` or `takeover <P> at <T> difficulty <D>`: on a level that plays a
      recording, the takeover waits for the next frame visit after the first step (THE TAKEOVER);
      the checks that need the world at T are R0's, so its refusals come from seek_run.
-   - `follow <seat>`, `jump <seat>`, `follow free`: the cards' Follow, Jump and Free cam
+   - `follow <seat>`, `jump <seat>`, `follow free`: the HUD's Follow, Jump and Free cam
      (FOLLOW, JUMP AND FREE CAM), for the next frame visit; a refusal is logged at once.
    - `pov`: the next frame visit logs its Follow's answer -- the epoch, the seat, the displayed
      tick, the sample the clock took, the view, the eye and the level -- or that nothing is
@@ -7649,7 +7651,7 @@ static void trigger_read(void)
         rt_arm(name, T);
         return;
     }
-    if (!strncmp(line, "dock seek ", 10) && u32_word(line + 10, &T)) {
+    if (!strncmp(line, "hud seek ", 9) && u32_word(line + 9, &T)) {
         tagpu_replay_seek_request(T);
         return;
     }
@@ -8192,9 +8194,10 @@ void tagpu_replay_level_end(void)
     s_vframe = ~0u;
 }
 
-/* ---- THE DOCK'S REQUESTS (tagpu_dock.h) -----------------------------------------------------
-   Every caller is on the game thread: the dock's OnCommand from the pump's dispatch, its strip
-   click from the wndproc TA pumps on that thread, and its tick from the DrawGameScreen observer.
+/* ---- THE REPLAY HUD'S REQUESTS (tagpu_hudinput.c) -------------------------------------------
+   Every caller is on the game thread: the HUD's clicks from the shield's mouse paths and the
+   wndproc TA pumps on that thread, the timeline drag's seek and Leave's pause from the packet's
+   fill, and Leave's pause from the DrawGameScreen observer when its question does not open.
    The fields written here are the player's own, which a playback level does not record
    (replay-globals.tsv lists neither the speeds nor the pause word). */
 
@@ -8223,7 +8226,7 @@ const char* tagpu_replay_path(void)
 int tagpu_replay_seek_request(unsigned T)
 {
     if (s_rw.state || !tagpu_replay_live() || !s_span.ok) {
-        tagpu_logf("replay: a seek to %u from the dock refused: the level plays no recording", T);
+        tagpu_logf("replay: a seek to %u from the HUD refused: the level plays no recording", T);
         return 0;
     }
     if (T < s_span.first + 1) T = s_span.first + 1;
@@ -8232,7 +8235,7 @@ int tagpu_replay_seek_request(unsigned T)
     s_seek.dump[0] = 0;
     s_seek.poison = 0;
     s_seek.pending = 1;
-    tagpu_logf("replay: %s: seek to %u asked by the dock", s_name, T);
+    tagpu_logf("replay: %s: seek to %u asked by the HUD", s_name, T);
     return 1;
 }
 
@@ -8390,7 +8393,7 @@ int tagpu_replay_sight_request(int seat)
    end the epoch (follow_close). A multiplayer recording's perspectives are its contributions,
    composed at the application tick (persp_world), so there W->tick is the composed application
    tick and a sample's tick the one the recorder applied it at. Everything here is the game
-   thread's: the requests come from the cards (in the wndproc TA pumps on that thread) and the
+   thread's: the requests come from the HUD (in the wndproc TA pumps on that thread) and the
    trigger, and the visit runs before the in-play draw call 0x4969CD. */
 
 #define OFF_VIEW_W     0x37E37      /* the 1x view, as the recorder's samples carry it (RecPov)    */

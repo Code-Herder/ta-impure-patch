@@ -203,7 +203,7 @@ static void do_keys(HWND hwnd)
         int last = (*q == 0);
         *q = 0;
         if (*p) {
-            int gx, gy, done = 1;
+            int gx, gy, gn, done = 1;
             char tok[64];
             int mods[4], nmods = 0;
             const char* base = p;
@@ -259,6 +259,26 @@ static void do_keys(HWND hwnd)
             else if (sscanf(p, "drclick:%d,%d", &gx, &gy) == 2) inject_click_at(hwnd, gx, gy, 1, 1);
             else if (sscanf(p, "dmove:%d,%d", &gx, &gy) == 2)
                 tagpu_shield_mouse(hwnd, TAGPU_M_MOVE | TAGPU_M_DEV, gx, gy);
+            /* the left button alone, in device space and with no parking: a drag is `ddown:`,
+               `dmove:`s and `dup:`, as a player's hand makes it */
+            else if (sscanf(p, "ddown:%d,%d", &gx, &gy) == 2) {
+                tagpu_shield_mouse(hwnd, TAGPU_M_MOVE | TAGPU_M_DEV, gx, gy);
+                tagpu_shield_mouse(hwnd, TAGPU_M_LDOWN | TAGPU_M_DEV, gx, gy);
+            }
+            else if (sscanf(p, "dup:%d,%d", &gx, &gy) == 2) {
+                tagpu_shield_mouse(hwnd, TAGPU_M_MOVE | TAGPU_M_DEV, gx, gy);
+                tagpu_shield_mouse(hwnd, TAGPU_M_LUP | TAGPU_M_DEV, gx, gy);
+            }
+            /* `dwheel:x,y,n`: n notches at a device point, the pointer moved there first and kept
+               there, so the wheel finds it as a player's finds the pointer (mouse_last_client) */
+            else if (sscanf(p, "dwheel:%d,%d,%d", &gx, &gy, &gn) == 3) {
+                int k = gn < 0 ? -gn : gn;
+                int code = (gn < 0 ? TAGPU_M_WHEELDN : TAGPU_M_WHEELUP) | TAGPU_M_DEV;
+                if (k > 64) k = 64;
+                tagpu_shield_mouse(hwnd, TAGPU_M_MOVE | TAGPU_M_DEV, gx, gy);
+                while (k-- > 0)
+                    tagpu_shield_mouse(hwnd, code, TAGPU_M_HERE, TAGPU_M_HERE);
+            }
             /* injected move with no click and no parking: what a hover is. The
                plain "mouse:" token falls back to SendInput when the shield is
                down, which would drag the human's real pointer. */

@@ -723,11 +723,15 @@ static void row(C* c, int seat, double ox, double oy)
     double W = num(c, obj(c, c->L, "column"), "w"), h = num(c, Rw, "h");
     F f = frame(c->l, W, h, str(c, Rw, "part"));
     unsigned saved = c->flags;
-    char s[96], a[32], b[32];
+    char s[96], a[32], b[32], key[HUD_KEYLEN];
     PL p;
     R sb;
     HUDOP* o;
     int i;
+
+    /* the row is a control of its own, under its hover's buttons: hovering it is what shows them */
+    snprintf(key, sizeof key, "%s:%d", str(c, Rw, "act"), seat);
+    hot(c, box(ox, oy, W, h), key);
 
     if (q->out) c->flags |= HOPF_DIM;
     art(c, str(c, Rw, "part"), box(ox, oy, W, h), 1);

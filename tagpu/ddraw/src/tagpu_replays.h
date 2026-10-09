@@ -31,7 +31,7 @@ void tagpu_replays_install(int ready);
 /* Does GUI_Load read `name` out of our folder? Asked by tagpu_menu.c's redirect. */
 int  tagpu_replays_redirects(const char* name);
 
-/* The watching dock's bookmarks (tagpu_dock.h), in replays\\index.dat, on the game thread of a
+/* The replay HUD's bookmarks (tagpu_hudmarks.h), in replays\\index.dat, on the game thread of a
    level that plays a recording. `file` is the name in replays\\ and `size` its size: a line for
    another size has none. get copies at most `cap`, sorted, and returns how many. add refuses a T
    outside the recording, within 30 GameTime of another or past 64, remove refuses a T that is not

@@ -261,7 +261,9 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     end = h->last > h->first ? h->last : h->first;
     st->T = (float)(end - h->first) / TICKS;
     st->t = (float)((h->now < h->first ? h->first : h->now > end ? end : h->now) - h->first) / TICKS;
-    st->playing = !h->paused;
+    /* at the recording's end the button shows play, as the mockup's does: the playhead has
+       stopped, and a click there starts the recording over (tagpu_hudinput.c) */
+    st->playing = !h->paused && h->now < end;
     st->speed = (float)h->speed / 10.0f;
     st->hud = (float)h->scale / 100.0f;
 

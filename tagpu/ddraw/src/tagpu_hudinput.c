@@ -124,21 +124,22 @@ static void seek_at(int cx)
     tagpu_replay_seek_request(T);
 }
 
+/* from the scroll last asked, not the one last drawn: notches that arrive within one frame add up */
 static void scroll_by(int d)
 {
-    int f = (int)s_hit.first + d;
+    int f = (int)(s_scroll < s_hit.last ? s_scroll : s_hit.last) + d;
     s_scroll = f < 0 ? 0 : f > (int)s_hit.last ? s_hit.last : (unsigned)f;
 }
 
-/* A click on a control, released over it. Every command is the replay's own call, as the watching
-   dock's were; a key with no command -- the dock's and the column's plates, the scroll track, the
-   disabled stats -- is taken and does nothing. */
+/* A click on a control, released over it. Every command is the replay's own call; a key with no
+   command -- the dock's and the column's plates, the scroll track, the disabled stats -- is taken
+   and does nothing. */
 static void act(const char* key)
 {
     const char* colon = strchr(key, ':');
     size_t k = colon ? (size_t)(colon - key) : strlen(key);
     int n = colon ? atoi(colon + 1) : -1, i;
-#define IS(s) (k == sizeof(s) - 1 && !strncmp(key, s, k))
+#define IS(s) (k == sizeof(s "") - 1 && !strncmp(key, s, k))   /* a literal only */
     if (IS("rew")) {
         tagpu_replay_seek_request(s_now > JUMP ? s_now - JUMP : 0);
     } else if (IS("fwd")) {
@@ -193,7 +194,8 @@ static void act(const char* key)
         scroll_by(1);
     } else {
         for (i = 0; i < 4; i++)
-            if (IS(SWITCHES[i].key)) tagpu_replay_overlay_set(SWITCHES[i].ov, !tagpu_replay_overlay(SWITCHES[i].ov));
+            if (k == strlen(SWITCHES[i].key) && !strncmp(key, SWITCHES[i].key, k))
+                tagpu_replay_overlay_set(SWITCHES[i].ov, !tagpu_replay_overlay(SWITCHES[i].ov));
     }
 #undef IS
 }

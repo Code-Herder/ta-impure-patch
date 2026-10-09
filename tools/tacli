@@ -2206,6 +2206,118 @@ def cmd_wheel(args):
         human=f"sent: {' '.join(tokens)}")
 
 
+HUD_ASK = "tagpu_replayhud.dump"      # the trigger the replay HUD answers (tagpu_hudstate.c)
+HUD_OUT = "tagpu_replayhud.json"
+
+
+def _hud_dump(inst: Instance, timeout: float) -> dict:
+    """The replay HUD's state and the controls of the frame on screen, as the game dumps them: the
+    old answer removed, the trigger written, and the new answer read once the game has taken the
+    trigger. Only a Vulkan replay's HUD answers."""
+    ask, ans = inst.gamedir / HUD_ASK, inst.gamedir / HUD_OUT
+    ans.unlink(missing_ok=True)
+    ask.write_text("")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not ask.exists() and ans.exists():
+            try:
+                return json.loads(ans.read_text())
+            except ValueError:
+                pass
+        time.sleep(0.1)
+    ask.unlink(missing_ok=True)
+    die(f"no replay HUD answered in {timeout:g}s (a recording playing on the Vulkan renderer?)")
+
+
+def _hud_rect(dump: dict, key: str):
+    """The topmost control named `key`, [x0, y0, x1, y1) in client pixels, or None."""
+    return next((h["r"] for h in dump["hits"]["at"] if h["key"] == key), None)
+
+
+def _hud_centre(r):
+    return (r[0] + r[2]) // 2, (r[1] + r[3]) // 2
+
+
+def _hud_find(inst: Instance, key: str, timeout: float):
+    """`key`'s rect, hovering its row first when it is one of a row's buttons ("jump:2" is on
+    "row:2", and shows only while the pointer is over that row)."""
+    d = _hud_dump(inst, timeout)
+    r = _hud_rect(d, key)
+    if r is None and ":" in key:
+        row = _hud_rect(d, "row:" + key.split(":", 1)[1])
+        if row is not None:
+            _write_tokens(inst, "dmove:%d,%d" % _hud_centre(row))
+            deadline = time.time() + timeout
+            while r is None and time.time() < deadline:
+                d = _hud_dump(inst, timeout)
+                r = _hud_rect(d, key)
+    if r is None:
+        die(f"the replay HUD shows no control {key!r}: "
+            + " ".join(h["key"] for h in d["hits"]["at"]))
+    return d, r
+
+
+def cmd_hud(args):
+    """The replay HUD: its state, and its controls driven by name in device space.
+
+    Every action is a device-space injection at the control's place in the frame the game last
+    drew -- the same path a player's click takes, and not a call of the replay's API -- so a
+    command that works here works for the mouse."""
+    inst = Instance(args.name)
+    if not inst.running():
+        die(f"{args.name} is not running")
+    verb, rest, tmo = args.verb, list(args.rest), args.timeout
+
+    if verb in ("show", "wait"):
+        if rest:
+            die(f"hud {verb} takes no arguments")
+        d = _hud_dump(inst, tmo)
+        st, hits = d["state"], d["hits"]
+        human = (f"t {st['t']:.1f} of {st['T']:.1f} s, {'playing' if st['playing'] else 'paused'}, "
+                 f"{st['speed']:g}x, HUD {round(st['hud'] * 100)}%, sight {st['sight']}, "
+                 f"follow {st['follow']}, scroll {st['scroll']} (last {hits['last']})"
+                 + (f", toast {st['toast']!r}" if st["toast"] else "") + "\n"
+                 + "\n".join(f"  {h['key']:<16} {h['r']}" for h in hits["at"]))
+        out(d, args.json, human=human)
+        return
+
+    if verb in ("click", "hover", "wheel"):
+        if len(rest) != (2 if verb == "wheel" else 1):
+            die(f"usage: hud <name> {verb} <key>" + (" <notches>" if verb == "wheel" else ""))
+        d, r = _hud_find(inst, rest[0], tmo)
+        x, y = _hud_centre(r)
+        token = {"click": f"{'drclick' if args.right else 'dclick'}:{x},{y}",
+                 "hover": f"dmove:{x},{y}",
+                 "wheel": f"dwheel:{x},{y},{int(rest[1]) if verb == 'wheel' else 0}"}[verb]
+        _write_tokens(inst, token)
+        out({"name": args.name, "key": rest[0], "at": [x, y], "token": token}, args.json,
+            human=f"{verb} {rest[0]} at {x},{y}")
+        return
+
+    if verb == "scrub":
+        # the timeline pressed at one fraction of the recording, dragged in steps, released at
+        # another: a seek a frame, the newest winning
+        if len(rest) != 2:
+            die("usage: hud <name> scrub <from 0..1> <to 0..1>")
+        f0, f1 = float(rest[0]), float(rest[1])
+        d, r = _hud_find(inst, "track", tmo)
+        x0, x1 = d["hits"]["track"]
+        y = (r[1] + r[3]) // 2
+        at = [round(x0 + (x1 - x0) * min(1.0, max(0.0, f0 + (f1 - f0) * k / args.steps)))
+              for k in range(args.steps + 1)]
+        _write_tokens(inst, f"ddown:{at[0]},{y}")
+        for x in at[1:]:
+            time.sleep(args.step_ms / 1000.0)
+            _write_tokens(inst, f"dmove:{x},{y}")
+        time.sleep(args.step_ms / 1000.0)
+        _write_tokens(inst, f"dup:{at[-1]},{y}")
+        out({"name": args.name, "from": f0, "to": f1, "x": at, "y": y}, args.json,
+            human=f"scrubbed {f0:g} -> {f1:g} along x {at[0]}..{at[-1]} at y {y}")
+        return
+
+    die(f"unknown hud verb {verb!r}: show, wait, click, hover, wheel, scrub")
+
+
 def cmd_eye(args):
     inst = Instance(args.name)
     path = inst.gamedir / "tagpu_eye.txt"
@@ -5862,8 +5974,8 @@ def cmd_replay_takeover(args):
         sys.exit(1)
 
 
-# The playback's camera (tagpu_replay.c, FOLLOW, JUMP AND FREE CAM): the cards' Follow, Jump and
-# Free cam as trigger lines, and `pov`, the frame visit's own account of what Follow computed and
+# The playback's camera (tagpu_replay.c, FOLLOW, JUMP AND FREE CAM): a HUD row's Follow and Jump,
+# and the free camera, as trigger lines, and `pov`, the frame visit's own account of what Follow computed and
 # of the overlays it built (THE OVERLAYS).
 REPLAY_POV_RX = re.compile(
     r"pov at GameTime (\d+): (?:no follow|(follow|jump) epoch (\d+) seat (\d+), tick (\d+), "
@@ -5955,7 +6067,7 @@ REPLAY_OVERLAYS = ("cursors", "clicks", "selections", "chat")
 
 
 def cmd_replay_overlay(args):
-    """One of the dock's Overlays switches: a recorded overlay, or the chat."""
+    """One of the replay HUD's overlay switches: a recorded overlay, or the chat."""
     on = args.state == "on"
     if args.overlay == "chat":
         rx = re.compile(rf"replay: chat {'shown' if on else 'hidden'}")
@@ -6744,6 +6856,20 @@ def build_parser():
                          "and scrolls only over a list")
     wh.set_defaults(func=cmd_wheel)
 
+    hd = sub.add_parser("hud", help="the replay HUD: its state, and its controls by name")
+    add_common(hd)
+    hd.add_argument("name")
+    hd.add_argument("verb", nargs="?", default="show",
+                    help="show | wait | click <key> | hover <key> | wheel <key> <notches> | "
+                         "scrub <from> <to> -- a key as `show` lists it (play, speed, track, "
+                         "jump:2, fold:0, cursors, ...); a row's button hovers its row first")
+    hd.add_argument("rest", nargs="*")
+    hd.add_argument("--right", action="store_true", help="click: the right button")
+    hd.add_argument("--timeout", type=float, default=20.0, help="seconds to wait for the HUD")
+    hd.add_argument("--steps", type=int, default=8, help="scrub: the moves between press and release")
+    hd.add_argument("--step-ms", type=int, default=120, help="scrub: the pause between moves")
+    hd.set_defaults(func=cmd_hud)
+
     e = sub.add_parser("eye", help="hold the camera at a world position")
     add_common(e)
     e.add_argument("name")
@@ -7082,7 +7208,7 @@ def build_parser():
 
     rpfo = rpv.add_parser(
         "follow", help="follow a recorded seat's camera in the running playback, or Free cam",
-        description="The cards' Follow (SEAT) or Free cam (`free`), through the playback's "
+        description="A HUD row's Follow (SEAT) or the free camera (`free`), through the playback's "
                     "trigger: Follow shows the seat's recorded camera, fitted to this screen, "
                     "until the camera is moved or the wheel turned (tacli log -g 'follow "
                     "ended'). Prints the DLL's line, with the epoch.")
@@ -7093,7 +7219,7 @@ def build_parser():
     rpfo.set_defaults(func=cmd_replay_follow)
 
     rpj = rpv.add_parser("jump", help="put the camera where a recorded seat's was, once",
-                         description="The cards' Jump: the seat's recorded camera, fitted to "
+                         description="A HUD row's Jump: the seat's recorded camera, fitted to "
                                      "this screen, written until the renderer has drawn its "
                                      "level; then the camera is free.")
     add_common(rpj)
@@ -7114,8 +7240,8 @@ def build_parser():
     rppv.add_argument("--timeout", type=float, default=30.0)
     rppv.set_defaults(func=cmd_replay_pov)
 
-    rpov = rpv.add_parser("overlay", help="switch one of the dock's Overlays menu entries",
-                          description="The Overlays menu's switches, through the playback's "
+    rpov = rpv.add_parser("overlay", help="switch one of the replay HUD's overlay switches",
+                          description="The replay HUD's foot plate switches, through the playback's "
                                       "trigger: the recorded players' cursors, clicks and "
                                       "selections, and the chat. Every switch is on when a "
                                       "playing starts and none is saved.")

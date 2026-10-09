@@ -220,7 +220,8 @@ const HUD = (() => {
         + text(signed(rate(r[l.res + 'i']), rate(r[l.res + 'o'])), place(F, { ...Rw.income, in: l.inc }), Rw.income.style, Rw.income);
     }
     h += hover(st, p, place(F, Rw.hover));
-    return `<div class="box row${p.out ? ' dim' : ''}" style="${rect({ x: 0, y, w: W, h: Rw.h })}${p.out ? `;filter:brightness(${L.dim.brightness}) saturate(${L.dim.saturate})` : ''}">${h}</div>`;
+    // the row is a control of its own, under its hover's buttons: hovering it is what shows them
+    return `<div class="box row${p.out ? ' dim' : ''}" data-act="${Rw.act}" data-seat="${p.i}" style="${rect({ x: 0, y, w: W, h: Rw.h })}${p.out ? `;filter:brightness(${L.dim.brightness}) saturate(${L.dim.saturate})` : ''}">${h}</div>`;
   }
 
   /* the actions over a hovered row: one margin round the strip's edge and between its buttons. Sight and Follow are

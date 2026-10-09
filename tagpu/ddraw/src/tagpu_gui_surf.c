@@ -142,11 +142,6 @@ typedef struct TWIN {
 static TWIN   s_twins[MAX_TWINS];
 static int    s_ntwins = 0;
 static unsigned s_presented = 0;        /* the last PK_FRAME's surface         */
-/* the last PK_FRAME's dock region scale, 0 = none: the region the composite
-   magnifies, taken from the marker of the flip whose ops it has drained, so
-   the region and the pixels it samples are one frame's (tagpu_hud.h) */
-static int s_presDockQ8 = 0;
-static int s_presCardsQ8 = 0;
 
 static TAGPU_GAFATLAS s_atlas;
 static TAGPU_GAFENT   s_ents[ATLAS_MAX];
@@ -581,12 +576,6 @@ static const char* LAY_FS =
        w = s. w == 1 is the whole feature off and every line below is then the
        identity, which is the s = 1 gate. */
     "uniform vec4 uHud;\n"
-    /* THE DOCK REGION (tagpu_hud.h), a fourth magnified region inside the
-       world: uDock its screen rect [x0,x1) x [y0,y1); uDockMap the corner it is
-       magnified about, engine (l, t + h) and screen (x0, y1); uDockS 1/s and s
-       at the scale it was placed at. All zero is no dock. */
-    "uniform vec4 uDock; uniform vec4 uDockMap; uniform vec2 uDockS;\n"
-    "uniform vec4 uCards; uniform vec4 uCardsMap; uniform vec2 uCardsS;\n"
     /* ONE TAP OF THE MIRROR, premultiplied by its coverage. rgb is the
        restored colour where this texel has one and the live palette
        everywhere else (the per-texel rule of 3.4, unchanged); a is coverage,
@@ -637,14 +626,6 @@ static const char* LAY_FS =
     "    if (d.x < uHud.x || d.y < uHud.y) { sd = d * uHud.z; ramp = uHud.w; }\n"
     "    else if (d.y >= H - uHud.y) {\n"
     "      sd = vec2(d.x * uHud.z, H - (H - d.y) * uHud.z); ramp = uHud.w; }\n"
-    /* THE DOCK, about its bottom-left corner as the bottom bar is about
-       its own: tagpu_hud_to_engine's dock branch is this sum in integers, at
-       the same pixel centre, so the pointer lands on the texel shown. */
-    "    else if (d.x >= uDock.x && d.x < uDock.z && d.y >= uDock.y && d.y < uDock.w) {\n"
-    "      sd = vec2(uDockMap.x + (d.x - uDockMap.z) * uDockS.x,\n"
-    "                uDockMap.y - (uDockMap.w - d.y) * uDockS.x); ramp = uDockS.y; }\n"
-    "    else if (d.x >= uCards.x && d.x < uCards.z && d.y >= uCards.y && d.y < uCards.w) {\n"
-    "      sd = uCardsMap.xy - (uCardsMap.zw - d) * uCardsS.x; ramp = uCardsS.y; }\n"
     /* THE WORLD IS TRANSLATED, NOT MAGNIFIED (22.6). The engine's viewport is
        the visible window itself -- it draws the world into [128, R] x
        [32, B] of its own surface -- and this puts that block where the player
@@ -953,8 +934,6 @@ static void twins_reset(void)
 {
     while (s_ntwins) twin_drop(&s_twins[0]);
     s_presented = 0;
-    s_presDockQ8 = 0;
-    s_presCardsQ8 = 0;
     tagpu_gaf_atlas_reset(&s_atlas);
 }
 
@@ -1488,7 +1467,7 @@ static void drain(void)
             tagpu_text_glyph_feed(o->font_id, o->font_rows, o->font_yoff,
                                   g_guiq.arena + o->aoff, o->gcount, o->alen);
         switch (o->kind) {
-        case PK_FRAME:  s_presented = o->surf; s_presDockQ8 = o->w; s_presCardsQ8 = o->h; break;
+        case PK_FRAME:  s_presented = o->surf; break;
         case PK_RESET:  twins_reset();
             tagpu_gui_reset_record(&s_mirReset);
             { TAGPU_GUIOP* m = mir_op(); if (m) m->kind = TAGPU_GUIOP_RESET; }
@@ -2460,38 +2439,6 @@ static void draw_layer(const TAGPU_FRAME* f)
            tagpu_hud_live() */
         s_mHand.hud[0] = (float)hudPw; s_mHand.hud[1] = (float)hudBh;
         s_mHand.hud[2] = 256.0f / (float)hudQ8; s_mHand.hud[3] = s_hudS;
-        /* THE DOCK REGION, from the presented frame's own marker and the
-           surface it was drawn on: the same map tagpu_hud_to_engine sends the
-           pointer through. All zero is no region; the shader tests it only
-           inside the HUD branch, so at stock it is never read. */
-        {
-            TAGPU_HUD_DOCKMAP dk;
-            memset(s_mHand.dock, 0, sizeof s_mHand.dock);
-            memset(s_mHand.dockMap, 0, sizeof s_mHand.dockMap);
-            memset(s_mHand.dockS, 0, sizeof s_mHand.dockS);
-            if (hudQ8 > 256 && tagpu_hud_dock_map(t->w, t->h, s_presDockQ8, &dk)) {
-                s_mHand.dock[0] = (float)dk.x0; s_mHand.dock[1] = (float)dk.y0;
-                s_mHand.dock[2] = (float)dk.x1; s_mHand.dock[3] = (float)dk.y1;
-                s_mHand.dockMap[0] = (float)dk.l;  s_mHand.dockMap[1] = (float)(dk.t + dk.h);
-                s_mHand.dockMap[2] = (float)dk.x0; s_mHand.dockMap[3] = (float)dk.y1;
-                s_mHand.dockS[0] = 256.0f / (float)dk.q8;
-                s_mHand.dockS[1] = (float)dk.q8 / 256.0f;
-            }
-        }
-        {
-            TAGPU_HUD_DOCKMAP c;
-            memset(s_mHand.cards, 0, sizeof s_mHand.cards);
-            memset(s_mHand.cardsMap, 0, sizeof s_mHand.cardsMap);
-            memset(s_mHand.cardsS, 0, sizeof s_mHand.cardsS);
-            if (hudQ8 > 256 && tagpu_hud_cards_map(t->w, t->h, s_presCardsQ8, &c)) {
-                s_mHand.cards[0] = (float)c.x0; s_mHand.cards[1] = (float)c.y0;
-                s_mHand.cards[2] = (float)c.x1; s_mHand.cards[3] = (float)c.y1;
-                s_mHand.cardsMap[0] = (float)(c.l + c.w);
-                s_mHand.cardsMap[1] = (float)(c.t + c.h);
-                s_mHand.cardsMap[2] = (float)c.x1; s_mHand.cardsMap[3] = (float)c.y1;
-                s_mHand.cardsS[0] = 256.0f / c.q8; s_mHand.cardsS[1] = c.q8 / 256.0f;
-            }
-        }
         s_mLayer = 1;
     }
 }
