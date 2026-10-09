@@ -18,7 +18,7 @@ Two problems, one mechanism:
 
 Trigger file **`tagpu_shield.on`** next to the exe, same idiom as `tagpu_nowarp.on`.
 tacli writes it at create/launch (**on by default**); `tacli shield <name> on|off` flips it
-live and a running game picks it up within 15 frames.
+live and a running game picks it up within 15 trigger ticks (about a quarter of a second).
 
 `tagpu_shield.c` / `inc/tagpu_shield.h`:
 
@@ -39,9 +39,10 @@ live and a running game picks it up within 15 frames.
   off-screen clamp `0x41CF1C` ([engine map](exe-reverse-engineering.html), *The movie
   player*). Disarmed, the real answer passes through, so a player's game that loses focus
   pauses its movie as the stock game does.
-- **Modifiers are held, not interleaved.** A combo posts the modifier down with a
-  **150 ms hold** (`MOD_HOLD_MS`); the frame hook posts the up when it expires. An
-  interleaved up races the poll; a hold cannot.
+- **Modifiers are held, not interleaved.** A key is virtually down from its delivered down
+  to its delivered up, and the transport below posts nothing until the event before has been
+  handled, so `ctrl+d` is ctrl down, d down, d up, ctrl up, each handled in turn: the poll
+  `0x4C1D56` inside the `d` keydown sees ctrl down, as it does for a player.
 
 Tagged messages are honoured whether or not the shield is armed — arming only decides
 whether hardware input is let through *alongside* them.
@@ -53,16 +54,54 @@ messages never pass through it, so `deliver_key()` runs `ToAscii()` against the 
 keyboard state and dispatches the `WM_CHAR` itself. That is what keeps menu accelerators
 and chat typing working, and it makes `shift+key` type an upper-case character.
 
+## The transport: one event in flight
+
+`tacli keys` writes one **batch**, `#<id> <tokens>` (the id 1 to 16 hex digits, the file at most
+1023 bytes), under a temporary name and hard-links it to `tagpu_keys.txt`; a link never replaces
+a file, so the DLL never reads half a batch and a second driver waits for the first batch to be
+taken. The DLL (`tagpu_input.c`, game thread, every trigger tick) takes the file only while no
+batch is in progress, parses it whole -- an unknown token, a missing id or more than 4096 events
+refuses the batch before anything is posted -- and logs `input: batch <id> taken: <tokens>`.
+
+Then it posts **one event at a time**. Each tagged message carries a 16-bit sequence number
+(`wParam` bits 16..31 for keys and the mouse, `lParam` for a character); the wndproc hands it
+back once it has delivered the message, and the event is **consumed** when that has happened
+and, at a later trigger tick, both of the engine's input rings read empty from their own
+indices (`tagpu_gui_input_rings`: the mouse ring at graphics globals `+0x18E`/`+0x192`, the key
+ring at `+0x16E`/`+0x172`). The window procedure pushes while it handles the message and IdleTick
+pops before its handler and its frame ([engine map](exe-reverse-engineering.html), *Who pushes
+the two rings*), so an empty ring after the delivery is the engine having handled the event. A
+move or a wheel notch pushes nothing: delivery and a later tick consume it. The next event is
+posted only onto empty rings. After the last, `input: batch <id> done: N events; engine E, menu
+M, dropped D, untracked U` (the sprocket took M, the display-only ring dropped D, SendInput sent
+U with the shield disarmed); a post that fails refuses the rest. `tacli keys` waits for that
+line and fails on `REFUSED` or silence. Nothing is timed: a state in which the engine never
+empties a ring stops injection there, visibly -- `input: batch <id> waiting: event i/n <token>
+delivered=d mouse=p key=q` after two seconds, and tacli's timeout.
+
+What that buys: a burst cannot overflow a ring (the push drops silently when full, and a batch
+of ten clicks used to fill the 20-entry mouse ring in one drain); no release overtakes the press
+whose handler polls it; a modifier is down for exactly the events between its down and its up;
+and a return from `tacli keys` means the input's direct effects -- orders, selection, the
+placement rectangle -- are written. One residual: the in-game setup's flush `0x4C2BB0` empties
+the mouse ring unhandled, so an event in flight across a level's start would be acknowledged;
+the harness cannot reach it, because `tacli keys` returns only on consumption and a Start click
+is popped before the setup runs *[INFERRED]*.
+
+Players are unaffected: nothing runs without a batch file.
+
 ## Token surface (`tagpu_keys.txt`, i.e. `tacli keys`)
 
 | token | effect |
 |---|---|
 | `a` `space` `f5` `plus` … | tap: tagged down+up |
-| `ctrl+d`, `shift+2`, `alt+f4`, `ctrl+shift+a` | stackable modifier prefixes, modifier held 150 ms |
+| `ctrl+d`, `shift+2`, `alt+f4`, `ctrl+shift+a` | stackable modifier prefixes: each modifier down, the key down and up, the modifiers up in reverse |
 | `down:<tok>` / `up:<tok>` | explicit hold/release; `<tok>` may be `ctrl`/`shift`/`alt` or `lbutton`/`rbutton`/`mbutton` (→ drag-select: `down:lbutton`, `mouse:x,y`, `up:lbutton`) |
 | `pclick:x,y` / `prclick:x,y` | injected click at exact game coordinates, then parks the cursor at view centre (an edge-parked cursor makes the engine scroll forever) |
 | `mouse:` `click:` `rclick:` `mouserel:` | injected while armed; fall back to the old SendInput path only when disarmed (SendInput moves the human's real pointer) |
-| `char:X`, `keydown:<vk>`, `keyup:<vk>` | tagged raw forms |
+| `char:X`, `keydown:<vk>`, `keyup:<vk>` | tagged raw forms (vk 1..255) |
+| `wheel:N` | N notches (at most 64 a token) where the pointer is |
+| `mouselock` | the fork's mouse lock |
 
 ## Evidence
 
@@ -80,17 +119,17 @@ while `g_mouse_locked`, which activation alone does not set. So the pre-shield h
 "human clicks in the window once, then owns the game's cursor from anywhere on the
 desktop" (there is no fencing either — `tagpu_nowarp.on`).
 
-**Modifier polls** — the shield logs each hold when it expires:
+**The transport** [MEASURED 2026-10-09, an instance at the main menu, then the
+`resource-snapping` scenario paused]:
 
-```
-shield: vk=17 released after 150ms, polls=2 down=2
-```
+| | before (appended file, every token posted at once) | after (one event in flight) |
+|---|---|---|
+| 5,000 one-token `pmove` batches, one driver, every 15±10 ms | 4,997 logged: three batches lost whole (ids 3716, 4460, 4558) | 5,000 taken, 5,000 done |
+| two concurrent drivers, 2,500 batches each | -- | 2,500 + 2,500 taken and done, no `waiting` line |
+| ARMCK selected, one `keys down:shift`, 12 × `prclick` on open ground, `up:shift` | 10 Moves: the last two clicks overflowed the mouse ring | 12 Moves, in order (50 events) |
 
-VK 17 = `VK_CONTROL`: TA asked twice during the keystroke and was told "down" both times.
-`polls=0` would mean TA does not poll that key there and a modifier has to arrive some
-other way — that is the diagnostic to read first if a combo misbehaves.
-
-**End to end**: `tacli click` the commander (build panel appears → selected) then
+**End to end** [MEASURED 2026-09-01, with the hold this transport replaced]: `tacli click` the
+commander (build panel appears → selected) then
 `tacli keys <name> ctrl+d` → the commander self-destructs after TA's ~5 s countdown, the
 roster loses its `own=0` unit, and the game shows **DEFEAT** with Losses = 1. First
 modifier combo ever landed in this project.

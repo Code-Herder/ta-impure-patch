@@ -402,14 +402,16 @@ class Worker:
                 raise CouldNotRun(f"the main menu's exit: {last(text)}")
         elif gui in ("ARMMAIN2.GUI", "CORMAIN2.GUI", "DOCK.GUI", "ARMOPT.GUI"):
             if gui != "ARMOPT.GUI":
-                rc, text = tacli("keys", self.name, "tab", "tab", timeout=60)
+                rc, text = tacli("keys", self.name, "tab", timeout=60)
                 if rc:
                     raise CouldNotRun(f"the exit's options: {last(text)}")
             ui(self, "click", "EXIT")
             ui(self, "click", "EXITGAME")
             ui_on(self, "YESORNO.GUI", 30)
-            rc, text = tacli("keys", self.name, "y", "y", timeout=60)
-            if rc:
+            # the Yes ends the process, which can take the key's release with it: the batch then
+            # fails with the game gone, which is this step's success
+            rc, text = tacli("keys", self.name, "y", timeout=60)
+            if rc and self.running():
                 raise CouldNotRun(f"the exit's Yes: {last(text)}")
         else:
             raise CouldNotRun(f"no graceful exit route from {gui}")
@@ -711,16 +713,10 @@ def resume(w, log):
 
 
 def settle(w, kind):
-    """A step's input delivered while the level is held: the token file taken (tagpu_input.c),
-    then half a second of paused frames for the engine's own pump and the modifiers' hold."""
-    if kind == "keys":
-        keys = w.gamedir / "tagpu_keys.txt"
-        deadline = time.time() + 10
-        while keys.exists():
-            if time.time() > deadline:
-                raise CouldNotRun("the game did not take its key tokens in 10 s")
-            nap(0.1)
-    if kind in ("keys", "type", "order"):
+    """A step's effect landed while the level is held. Keys and chat need nothing more: `tacli
+    keys` returns once the engine has consumed every event (tagpu_input.c). An order gets half a
+    second of paused frames for the engine's own pump."""
+    if kind == "order":
         nap(0.5)
 
 
@@ -800,16 +796,16 @@ def step(w, kind, arg):
         if rc:
             raise CouldNotRun(f"keys {arg}: {last(o)}")
     elif kind == "type":
-        # the chat line: one return opens it, the characters, return sends it; a second return
-        # straight after the first closes the line again and the characters land as hotkeys. A
-        # second between the three, since back to back the opening return can be dropped. A
-        # space goes as the `space` key: `char: ` is no token the input layer types (tacli,
-        # _ui_text_tokens)
-        tacli("keys", w.name, "return")
-        time.sleep(1.0)
-        tacli("keys", w.name, *["space" if c == " " else f"char:{c}" for c in arg])
-        time.sleep(1.0)
-        tacli("keys", w.name, "return")
+        # the chat line: one return opens it, the characters, return sends it. Each call returns
+        # once the engine has consumed its events, so the opening return is handled before a
+        # character is posted. A space goes as the `space` key: `char: ` is no token the input
+        # layer types (tacli, _ui_text_tokens). The last second is the message's own: it is sent
+        # and shown by the frames after its return.
+        for tokens in (["return"], ["space" if c == " " else f"char:{c}" for c in arg],
+                       ["return"]):
+            rc, o = tacli("keys", w.name, *tokens)
+            if rc:
+                raise CouldNotRun(f"type {arg!r}: tacli keys {' '.join(tokens)}: {last(o)}")
         time.sleep(1.5)
     elif kind == "order":
         rc, o = tacli("roster", w.name, "--json", timeout=60)
@@ -836,6 +832,14 @@ def step(w, kind, arg):
         raise CouldNotRun(f"a step of kind {kind!r}")
 
 
+def keys(w, *tokens):
+    """`tacli keys`, which returns once the engine has consumed every event; a failure is the
+    run's, named."""
+    rc, o = tacli("keys", w.name, *tokens)
+    if rc:
+        raise CouldNotRun(f"tacli keys {' '.join(tokens)}: {last(o)}")
+
+
 def twin(w, log, fix, held=False):
     """The null twin (tarec images-gate): the live game paused (`held`: by the lane's pause at
     a GameTime, already), frame dump ln1; then what the
@@ -844,8 +848,7 @@ def twin(w, log, fix, held=False):
     (Tab) opened -- and frame dump ln2. GameTime must not move between them; the menu's OK then
     closes it and the game runs on."""
     if not held:
-        tacli("keys", w.name, "pause")
-        nap(1.5)
+        keys(w, "pause")
     g1 = w.gametime()
     nap(1.0)
     if w.gametime() != g1:
@@ -883,23 +886,21 @@ def twin(w, log, fix, held=False):
                        (1 << (height.bit_length() - 1)) - 1), (width - 1, height - 1))
     for i, name in enumerate(NULL_VIEWS[:-1]):
         x, y = labels[i % len(labels)]["click"]
-        tacli("keys", w.name, f"pclick:{x},{y}")
+        keys(w, f"pclick:{x},{y}")
         # Click injection returns the pointer to screen centre. A separate
-        # move and its native GUI echo establish the coordinate in this view.
+        # move and its native GUI echo establish the coordinate in this view:
+        # the GUI pump copies the event when it runs, before the move is
+        # acknowledged (tagpu_input.c), so one read after the call is the echo.
         x, y = points[i % len(points)]
-        tacli("keys", w.name, f"pmove:{x},{y}")
-        deadline = time.monotonic() + 10
-        while True:
-            rc, o = tacli("peek", w.name, "*0x511DE8+0x555", "*0x511DE8+0x559",
-                          "*0x511DE8+0x565", "--json", timeout=60)
-            if rc:
-                raise CouldNotRun(f"the twin: native mouse echo: {last(o)}")
-            event = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
-            if event == [x, y, 0x200]:
-                break
-            if time.monotonic() >= deadline:
-                raise CouldNotRun(f"the twin: mouse event {event}, wanted {[x, y, 0x200]}")
-            nap(0.1)
+        keys(w, f"pmove:{x},{y}")
+        rc, o = tacli("peek", w.name, "*0x511DE8+0x555", "*0x511DE8+0x559",
+                      "*0x511DE8+0x565", "--json", timeout=60)
+        if rc:
+            raise CouldNotRun(f"the twin: native mouse echo: {last(o)}")
+        event = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
+        if event != [x, y, 0x200]:
+            raise CouldNotRun(f"the twin: mouse event {event} after pmove:{x},{y}, "
+                              f"wanted {[x, y, 0x200]}")
         # The engine clamps these eyes to the map. The views are observations,
         # not assertions about the camera's permitted range.
         tacli("eye", w.name, i * map_width // (len(NULL_VIEWS) - 2),
@@ -922,24 +923,22 @@ def twin(w, log, fix, held=False):
             raise CouldNotRun("the twin: selection frame dump not taken")
         if w.gametime() != g1:
             raise CouldNotRun("the twin: GameTime moved during the selection view")
+    # the arrows held a second each and the wheel's tween (250 ms) are time the view moves in;
+    # every other call returns once the engine has consumed its events
     for key in ("up", "down", "left", "right"):
-        tacli("keys", w.name, f"down:{key}")
+        keys(w, f"down:{key}")
         nap(1.0)
-        tacli("keys", w.name, f"up:{key}")
-        nap(0.3)
-    tacli("keys", w.name, "pmove:512,384")
-    nap(0.3)
-    tacli("keys", w.name, "wheel:+1")
+        keys(w, f"up:{key}")
+    keys(w, "pmove:512,384")
+    keys(w, "wheel:+1")
     nap(0.8)
-    tacli("keys", w.name, "wheel:-1")
+    keys(w, "wheel:-1")
     nap(0.8)
-    tacli("keys", w.name, "pmove:700,500")
-    nap(0.5)
-    tacli("keys", w.name, "pmove:60,300")
-    nap(0.5)
+    keys(w, "pmove:700,500")
+    keys(w, "pmove:60,300")
     # the in-game menu is Tab (ARMOPT.GUI): ln2 is taken with it open, since its OK resumes the
     # game (MEASURED: GameTime moved between the dumps when ln2 followed the OK); Esc does nothing
-    tacli("keys", w.name, "tab")
+    keys(w, "tab")
     rc, o = tacli("ui", w.name, "wait", "--gui", "ARMOPT.GUI", "--timeout", "10", timeout=60)
     if rc:
         raise CouldNotRun(f"the twin: the in-game menu did not open: {last(o)}")
@@ -954,7 +953,7 @@ def twin(w, log, fix, held=False):
         raise CouldNotRun(f"the twin: the in-game menu's OK: {last(o)}")
     nap(1.5)
     if w.gametime() == g1:
-        tacli("keys", w.name, "pause")
+        keys(w, "pause")
         nap(2.0)
         if w.gametime() == g1:
             raise CouldNotRun("the twin: the game did not resume")
@@ -1644,10 +1643,10 @@ def forks_steps(w, fx, out, results):
 
     def finish_play(log, tl):
         n = len(log.lines)
-        tacli("keys", w.name, "tab", "tab")
+        keys(w, "tab")
         ui(w, "click", "EXIT")
         ui(w, "click", "MAINMENU")
-        tacli("keys", w.name, "y", "y")
+        keys(w, "y")
         if not log.wait(r"replay: .* at its level's end", 120, n):
             raise CouldNotRun("forks: playback did not leave")
         if not log.wait(rf"replay: forks .*: done: touched timeline {tl}", 120, n):

@@ -80,7 +80,8 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    and the in-game panel (1024×768); `MAINMENU→SINGLE→Skirmish→Start→ARMSOLAR→placed`
    driven entirely by gadget name, **no screenshot between steps and no throwaway key** —
    auto-wait did retire the dropped-first-key workaround for `ui` (blind `keys` sequences
-   still drop theirs, and `SKILL.md` says so). `crdefault`/`escdefault`/`defaultfocus`,
+   kept dropping theirs until the one-event transport, `input-firewall.md`: MEASURED
+   2026-10-09, one `tab` raises `ARMOPT.GUI` and a second leaves it up). `crdefault`/`escdefault`/`defaultfocus`,
    `stages`, `status_curnt` and `text` all confirmed live; 2-stage toggles and 3-stage
    cycles both render and `set` correctly.
 
@@ -579,10 +580,15 @@ one function that makes a script, and it is unit-tested:
 - **Every write replaces the file whole**: written as `<name>.tacli-tmp`, then moved over the
   target, so the DLL never reads half of one. The move is retried when a reader holds the target.
 - **Key batches are never appended.** The DLL reads `tagpu_keys.txt` whole and deletes it; an
-  append could land between the read and the delete and be lost with the file. A remote batch
-  is written under a temporary name and **moved into place only when the name is free**
-  (`RemotePath.create_new`), and `.NET`'s `File.Move` never overwrites. So the DLL only ever
-  sees a complete batch, and tacli, the only writer of the name, waits for each to be taken.
+  append could land between the read and the delete and be lost with the file. A batch is
+  `#<id> <tokens>`: a local one is written as `tagpu_keys.<id>.tmp` and **hard-linked** to the
+  name, a remote one written under a temporary name and **moved into place only when the name
+  is free** (`RemotePath.create_new`); neither a link nor `.NET`'s `File.Move` overwrites. So
+  the DLL only ever sees a complete batch, and tacli then waits for the DLL's
+  `input: batch <id> done` (or `REFUSED`) in the log: a return from `keys`, `click` or `wheel`
+  means every event was consumed by the engine (`input-firewall.md`, *The transport*), `--json`
+  carries the done line's counts, and a refusal or max(30 s, 0.2 s a token) of silence fails
+  the command with that batch's last line.
 - **Nothing of the player's copy is replaced or deleted without its original beside it**
   (`RemotePath._guard`, which runs before every write, delete and rename, on both ends of a
   rename):

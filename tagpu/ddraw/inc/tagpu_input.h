@@ -8,11 +8,18 @@
    the token half needs none and drives the game, the hold half dereferences
    f->packet and feeds the render thread's command record. */
 
-/* The token half: keys, clicks, the shield's expiries. GAME THREAD, from
-   tagpu_gui_hook.c's before_flip via tagpu_triggers_frame — which is what lets
+/* The token half: the batch file, one event in flight, each posted once the
+   engine has consumed the one before (tagpu_input.c, THE INVARIANT). GAME THREAD,
+   from tagpu_gui_hook.c's before_flip via tagpu_triggers_frame — which is what lets
    `tacli keys` and `tacli click` reach the GDI backend, where tagpu_overlay_draw
    is never called. Reads no packet; posts, never sends. */
 void tagpu_input_frame(const TAGPU_FRAME* f);
+
+/* The shield's wndproc has delivered the tagged message carrying `seq`, with what
+   became of it (TAGPU_DELIVER_*, tagpu_shield.h). Ignored unless `seq` is the
+   event in flight. GAME THREAD: the wndproc of the game's window runs on the
+   thread that flips, and a call from any other is ignored. */
+void tagpu_input_delivered(unsigned seq, int outcome);
 
 /* The hold half: tagpu_eye.txt. RENDER THREAD, from tagpu_overlay_draw. Needs
    f->packet, and its output is read on that same thread (tagpu_input_cmd

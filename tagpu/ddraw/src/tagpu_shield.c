@@ -20,6 +20,7 @@
 #include "mouse.h"
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
+#include "tagpu_input.h"
 #include "tagpu_log.h"
 
 #define SHIELD_TRIGGER  "tagpu_shield.on"
@@ -28,10 +29,6 @@ static volatile LONG s_armed = -1;      /* -1 until the trigger is first read */
 static BYTE  s_down[256];               /* injected key/button down state */
 static BYTE  s_toggle[256];             /* caps/num-style toggle bit */
 static BYTE  s_async[256];              /* pressed since the last async read */
-static DWORD s_release[256];            /* auto-release deadline, 0 = held/none */
-static DWORD s_held_since[256];         /* when a hold started (for its report) */
-static volatile LONG s_polls[256];      /* how often the game asked about a key */
-static volatile LONG s_downpolls[256];  /* ...and was told "down" */
 
 static void slog(const char* s)
 {
@@ -98,13 +95,11 @@ static void clear_state(void)
 {
     ZeroMemory((void*)s_down, sizeof(s_down));
     ZeroMemory((void*)s_async, sizeof(s_async));
-    ZeroMemory((void*)s_release, sizeof(s_release));
 }
 
-void tagpu_shield_frame(HWND hwnd)
+void tagpu_shield_frame(void)
 {
-    /* the trigger is a file: probe it every 15th frame like the other triggers,
-       but expire held keys every frame so a hold means what it says */
+    /* the trigger is a file: probe it every 15th trigger tick like the other triggers */
     static unsigned calls;
 
     if (calls++ % 15 == 0)
@@ -128,31 +123,6 @@ void tagpu_shield_frame(HWND hwnd)
                 clear_state();
         }
     }
-
-    if (!hwnd)
-        return;
-
-    DWORD tick = GetTickCount();
-
-    for (int vk = 0; vk < 256; vk++)
-    {
-        if (s_release[vk] && (LONG)(tick - s_release[vk]) >= 0)
-        {
-            s_release[vk] = 0;
-            PostMessageA(hwnd, WM_TAGPU_KEY, (WPARAM)vk, TAGPU_KEY_UP);
-
-            /* Did the game actually look? The line says "held for Nms, the
-               game asked K times and was told down D times". D=0 with K>0 means it polls other keys but not
-               this one; K=0 means it does not poll the keyboard at all here
-               and a modifier has to reach it some other way. */
-            char b[128];
-            _snprintf(b, sizeof b,
-                      "shield: vk=%d released after %ums, polls=%ld down=%ld",
-                      vk, (unsigned)(tick - s_held_since[vk]),
-                      (long)s_polls[vk], (long)s_downpolls[vk]);
-            slog(b);
-        }
-    }
 }
 
 BOOL tagpu_shield_key_state(int vk, BOOL async, SHORT* state)
@@ -164,13 +134,8 @@ BOOL tagpu_shield_key_state(int vk, BOOL async, SHORT* state)
 
     if (vk > 0 && vk < 256)
     {
-        s_polls[vk]++;
-
         if (s_down[vk])
-        {
             s |= (SHORT)0x8000;
-            s_downpolls[vk]++;
-        }
 
         if (async)
         {
@@ -240,7 +205,8 @@ static void deliver_key(HWND hwnd, int vk, BOOL up)
     }
 }
 
-static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
+/* What became of an injected mouse event: TAGPU_DELIVER_*, for its acknowledgement. */
+static int deliver_mouse(HWND hwnd, int code, int gx, int gy)
 {
     int cur_x = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
     int cur_y = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
@@ -257,7 +223,7 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
            origin from a delta and then add the cursor. Nothing does it today;
            it is refused rather than left latent, because the header invites
            the flag to be OR'd into any code. */
-        if (code == TAGPU_M_MOVEREL) return;
+        if (code == TAGPU_M_MOVEREL) return TAGPU_DELIVER_DROPPED;
         if (!(gx < 0 && gy < 0))
             mouse_client_to_game(gx, gy, &gx, &gy);
     }
@@ -325,7 +291,7 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
         (vk == VK_RBUTTON && tagpu_menu_rclick(gx, gy, down)))
     {
         if (!down) set_key(vk, FALSE);
-        return;
+        return TAGPU_DELIVER_MENU;
     }
 
     /* A PRESS in the display-only ring is dropped WHOLE — the virtual key state
@@ -338,7 +304,7 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
     {
         int drop = vk ? tagpu_zoom_drop_mouse(msg, MAKELPARAM(gx, gy)) : 0;
         if (vk && !(down && drop)) set_key(vk, down ? TRUE : FALSE);
-        if (drop) return;
+        if (drop) return TAGPU_DELIVER_DROPPED;
     }
 
     WPARAM wparam = 0;
@@ -354,24 +320,32 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
     /* the game expects game-space coordinates in lParam — that is what the
        wndproc hands it after unscaling a hardware message */
     to_game(hwnd, msg, wparam, MAKELPARAM(gx, gy));
+    return TAGPU_DELIVER_ENGINE;
 }
 
 BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESULT* result)
 {
+    /* Each tagged message reports its sequence number once its delivery has returned: TA's
+       window procedure has pushed whatever the message pushes into the engine's rings by then,
+       which is the half of consumption tagpu_input.c cannot read from the rings themselves. */
     switch (msg)
     {
     case WM_TAGPU_KEY:
-        deliver_key(hwnd, (int)wparam, (lparam & TAGPU_KEY_UP) != 0);
+        deliver_key(hwnd, (int)(wparam & TAGPU_KEY_VK), (lparam & TAGPU_KEY_UP) != 0);
+        tagpu_input_delivered(TAGPU_SEQ(wparam), TAGPU_DELIVER_ENGINE);
         *result = 0;
         return TRUE;
 
     case WM_TAGPU_CHAR:
         to_game(hwnd, WM_CHAR, wparam, 1);
+        tagpu_input_delivered((unsigned)lparam, TAGPU_DELIVER_ENGINE);
         *result = 0;
         return TRUE;
 
     case WM_TAGPU_MOUSE:
-        deliver_mouse(hwnd, (int)wparam, (short)LOWORD(lparam), (short)HIWORD(lparam));
+        tagpu_input_delivered(TAGPU_SEQ(wparam),
+                              deliver_mouse(hwnd, (int)(wparam & TAGPU_M_CODE),
+                                            (short)LOWORD(lparam), (short)HIWORD(lparam)));
         *result = 0;
         return TRUE;
     }
@@ -439,50 +413,27 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
 
 /* -------------------------------------------------------------- injection */
 
-/* s_release belongs to the injector; s_down/s_toggle to the wndproc. Keeping the
-   two apart is what makes the timed release race-free — set the deadline before
-   posting, and never clear it from delivery.
-
-   BOTH ARE THE GAME THREAD. The token half of tagpu_input.c runs at the
-   engine's flip, so tagpu_shield_frame and every tagpu_shield_* injection run
-   where the wndproc and the GetKeyState hooks already run. The separation
-   above is still the rule to keep -- it is what makes the deadline
-   unambiguous -- but it is not load-bearing as a THREAD split, and it should
-   not be cited as one.
-
-   The same placement keeps clear_state(), which memsets s_down/s_async/
-   s_release -- the wndproc's arrays -- on the wndproc's own thread. */
-void tagpu_shield_key(HWND hwnd, int vk, BOOL up)
+/* Each returns PostMessageA's answer: the injector refuses the rest of its batch on a FALSE.
+   GAME THREAD, like the wndproc that delivers them: the token half of tagpu_input.c runs at the
+   engine's flip. That placement is also what keeps clear_state(), which memsets the wndproc's
+   s_down/s_async, on the wndproc's own thread. */
+BOOL tagpu_shield_key(HWND hwnd, int vk, BOOL up, unsigned seq)
 {
     if (!hwnd || vk <= 0 || vk >= 256)
-        return;
+        return FALSE;
 
-    s_release[vk] = 0;              /* explicit down/up: the script owns the state */
-    PostMessageA(hwnd, WM_TAGPU_KEY, (WPARAM)vk, up ? TAGPU_KEY_UP : 0);
+    return PostMessageA(hwnd, WM_TAGPU_KEY, (WPARAM)vk | TAGPU_SEQ_WPARAM(seq),
+                        up ? TAGPU_KEY_UP : 0);
 }
 
-void tagpu_shield_key_hold(HWND hwnd, int vk, DWORD hold_ms)
+BOOL tagpu_shield_char(HWND hwnd, char ch, unsigned seq)
 {
-    if (!hwnd || vk <= 0 || vk >= 256)
-        return;
-
-    DWORD now = GetTickCount();
-    DWORD deadline = now + hold_ms;
-
-    s_polls[vk] = s_downpolls[vk] = 0;
-    s_held_since[vk] = now;
-    s_release[vk] = deadline ? deadline : 1;
-    PostMessageA(hwnd, WM_TAGPU_KEY, (WPARAM)vk, 0);
+    return hwnd && PostMessageA(hwnd, WM_TAGPU_CHAR, (WPARAM)(BYTE)ch, (LPARAM)(seq & 0xFFFF));
 }
 
-void tagpu_shield_char(HWND hwnd, char ch)
+BOOL tagpu_shield_mouse(HWND hwnd, int code, int gx, int gy, unsigned seq)
 {
-    if (hwnd)
-        PostMessageA(hwnd, WM_TAGPU_CHAR, (WPARAM)(BYTE)ch, 0);
-}
-
-void tagpu_shield_mouse(HWND hwnd, int code, int gx, int gy)
-{
-    if (hwnd)
-        PostMessageA(hwnd, WM_TAGPU_MOUSE, (WPARAM)code, MAKELPARAM(gx, gy));
+    return hwnd && PostMessageA(hwnd, WM_TAGPU_MOUSE,
+                                (WPARAM)(code & TAGPU_M_CODE) | TAGPU_SEQ_WPARAM(seq),
+                                MAKELPARAM(gx, gy));
 }

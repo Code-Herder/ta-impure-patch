@@ -44,11 +44,11 @@
    `packet` stays NULL, and none of these six reads it at all; do not take that
    as a null-check they perform, because they do not. That is the line the
    family is drawn along, and `tagpu_input.c` is SPLIT on it: its token half
-   (`tagpu_input_frame` -- keys, clicks, the shield's expiries) reads no packet
-   and belongs to the set, while the half that dereferences `f->packet` through
-   `do_eye` stays on the render thread as `tagpu_input_eye_frame`. Each half
-   keeps its own poll counter, so each runs at the cadence of the clock it is
-   handed.
+   (`tagpu_input_frame` -- keys, clicks, one event in flight, the shield's
+   trigger) reads no packet and belongs to the set, while the half that
+   dereferences `f->packet` through `do_eye` stays on the render thread as
+   `tagpu_input_eye_frame`. The token half runs on every call, one event a call
+   at most; the eye half keeps its own poll counter.
 
    AND THE CALLER OWES A CLOCK, NOT A FLIP. These throttle themselves on
    `frame_counter % 5` (`% 15` for peek), written against the PRESENT rate of ~60/s; the engine's

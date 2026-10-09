@@ -3956,6 +3956,40 @@ exactly these eight bytes; the owner approved both four-byte leave rows on 2026-
 Enqueue stores are `0x4C1A47`, `0x4C1A87`, `0x4C1B5C`, `0x4C1B66`;
 dequeue stores are `0x4C1A4D`, `0x4C1A8D`, `0x4C1ADC`, `0x4C1AE4`.
 
+**Who pushes the two rings, and in what order they drain [DISASSEMBLED 2026-10-09].** TA's window
+procedure is the only pusher: `WM_KEYDOWN` reaches the keydown translator `0x4C1D50` at `0x4B5D8E`
+and `WM_SYSKEYDOWN` at `0x4B5DC3`; `WM_CHAR` appends through `0x4C1B20` at `0x4B5DEA`; button
+messages push the mouse ring through `0x4C2E30` at `0x4B5F51` (the mouse object, below). A move
+and a key-up push nothing. Each push drops its entry silently when the ring is full (`0x4C1D9D`,
+`0x4C1B3A`, `0x4C2E4A..0x4C2E50`); the mouse ring holds 20 (`0x4C2BD0(20)` at `0x4B5A67`), the
+key ring at most 30. The main loop `0x49EB80` dispatches every queued message before it runs an
+IdleTick: `PeekMessageA` at `0x49EC47`, and on a message `GetMessageA` / `TranslateMessage` /
+`DispatchMessageA` (`0x49ECA0..0x49ECBA`) and back to the top (`0x49ECC0`); IdleTick `0x499890`
+(`0x49EC63`) runs only when the queue is empty. One IdleTick pops the key ring at
+`0x4998B6`/`0x4998D7`/`0x49991D`, runs the GUI pump `0x4A9FD0` (`0x499992`), which pops one mouse
+entry at `0x4AB654`, pops one more at `0x4999C4`, calls the handler `[eax+0x391F5]` at `0x499A1C`,
+and only then reaches the frame `0x4995B8` → `0x496790`, which draws and flips. So a burst of
+messages is pushed whole before anything pops it, and ten clicks (twenty button entries) fill the
+mouse ring in one drain. That no flip falls between a pop and its handler is *[INFERRED]* from
+this order, here and in the modal pump `0x49F9C4`. The modifier state a handler sees is polled,
+not carried: `GetAsyncKeyState` (IAT `0x4FC350`) for `VK_CONTROL` at the head of the keydown
+translator (`0x4C1D56`) and for `VK_MENU` in the hotkey query (`0x4C1BA3`). The mouse ring has a
+flush that handles nothing, `0x4C2BB0` (zeroes `+0x18E`/`+0x192`), with one call, `0x426636`, in
+the in-game setup.
+
+**Five message pumps.** Four read `PeekMessageA` out of its IAT slot into a register and loop on
+it — `0x47C6D4`, `0x49EB74` (the main loop above), `0x49F9C4` (the modal pump), `0x4C9E8E` — and
+`0x4DA331` calls `GetMessageA`. USER32's IAT starts at `0x4FC2BC`, member *n* at `0x4FC2BC + 4n`:
+`PostMessageA 0x4FC2D0`, `PeekMessageA 0x4FC2D4`, `GetMessageA 0x4FC2D8`, `DispatchMessageA
+0x4FC310`, `GetAsyncKeyState 0x4FC350`, `TranslateMessage 0x4FC364` (the import table of the
+pristine executable, `objdump -p`).
+
+**What Impure builds on this.** The injection (`tagpu_input.c`) posts one tagged message at a
+time and the next only when both rings' own indices read empty at a flip after the shield
+delivered it (`tagpu_gui_input_rings`, in `tagpu_gui_hook.c`), so a burst never overflows a ring
+and a modifier is down while every event between its down and its up is handled
+([input firewall](input-firewall.md)).
+
 **Every wall clock the engine stores.** The sources are `GetTickCount` (IAT `0x4FC0DC`; `0x4B6560`
 is `jmp` to it, and `0x4B6340` is `GetTickCount · rate / 1000`), `QueryPerformanceCounter` (IAT
 `0x4FC0BC`; `0x4E1730` in seconds), and the C runtime's `time` `0x4E6480`; there is no

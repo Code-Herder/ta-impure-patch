@@ -159,7 +159,7 @@ fixture that only arms the pass produces no picture:
 | health bars | a unit of the **watched** player on screen, and the `damagebars` registry value set (`main+0x37F06` bit 0, read from the packet's copy) |
 | selection rects | a unit of the local player **selected** (`ctrl+a`, or a `click` on it) and the engine's `SelBoxes` toggle on (the default); not under `noselbox` or `passive` |
 | group digits | `u->squad` non-zero — `tacli keys <i> ctrl+1` on a selection; `damagebars` too |
-| order lines | `order.on` **and** SHIFT physically held (`down:shift` … `up:shift`; a bare `shift` is a 150 ms tap) **and** an order that does not complete — `move` completes and takes its markers with it; `patrol` never does |
+| order lines | `order.on` **and** SHIFT physically held (`down:shift` … `up:shift`; a bare `shift` is a tap, down and up) **and** an order that does not complete — `move` completes and takes its markers with it; `patrol` never does |
 | order triangles | the route dots — only for the **hovered** unit; `pmove:x,y` onto it from a fresh roster, at game speed 1 so it does not walk away |
 | labels | `+showranges`, typed into the chat |
 | cursors | a **held** drag (`pmove:x0,y0`, `down:lbutton`, `pmove:x1,y1`, capture, `up:lbutton`) or a build placement. The one draw with the fog off: over fogged ground it stays undarkened, which is what an A/B of the post-fog draw needs on screen. `mark.on=nocursor` hands both back to the engine and draws neither |

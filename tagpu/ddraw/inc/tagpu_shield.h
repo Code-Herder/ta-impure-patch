@@ -21,11 +21,24 @@
    The tagged messages are honoured whether or not the shield is armed — arming
    only decides whether hardware input is let through alongside them. */
 
-#define WM_TAGPU_KEY    (WM_APP + 140)   /* wParam = VK, lParam = TAGPU_KEY_UP?      */
-#define WM_TAGPU_MOUSE  (WM_APP + 141)   /* wParam = TAGPU_M_* (| TAGPU_M_DEV), lParam = x,y */
-#define WM_TAGPU_CHAR   (WM_APP + 142)   /* wParam = character                       */
+#define WM_TAGPU_KEY    (WM_APP + 140)   /* wParam = VK | seq<<16, lParam = TAGPU_KEY_UP?   */
+#define WM_TAGPU_MOUSE  (WM_APP + 141)   /* wParam = TAGPU_M_* (| TAGPU_M_DEV) | seq<<16,
+                                            lParam = x,y                                   */
+#define WM_TAGPU_CHAR   (WM_APP + 142)   /* wParam = character, lParam = seq                */
 
 #define TAGPU_KEY_UP    1
+#define TAGPU_KEY_VK    0xFF             /* wParam's key bits                               */
+
+/* THE SEQUENCE NUMBER: the injector's 16 bits naming the one event it has in flight
+   (tagpu_input.c), handed back through tagpu_input_delivered() once the wndproc has delivered
+   the message. Never 0. */
+#define TAGPU_SEQ(wparam)        ((unsigned)((wparam) >> 16) & 0xFFFFu)
+#define TAGPU_SEQ_WPARAM(seq)    ((WPARAM)((seq) & 0xFFFFu) << 16)
+
+/* What became of a tagged message: it reached the game's window procedure, the
+   render-options sprocket took it, or it was dropped (a press in the display-only ring,
+   tagpu_zoom.h, or a device-space relative move). */
+enum { TAGPU_DELIVER_ENGINE, TAGPU_DELIVER_MENU, TAGPU_DELIVER_DROPPED };
 
 enum {
     TAGPU_M_MOVE = 0,
@@ -52,24 +65,22 @@ enum {
    Outside the letterboxed viewport the conversion yields the centre of the
    engine's screen, which is what a hardware click there does. */
 #define TAGPU_M_DEV     0x100
+#define TAGPU_M_CODE    0x1FF            /* wParam's code bits, TAGPU_M_DEV included        */
 
 BOOL tagpu_shield_on(void);
 
-/* Re-read the trigger file and release keys whose hold has expired.
+/* Re-read the trigger file (every 15th call), clearing the virtual key state on the
+   disarm edge.
 
    CALL THIS ON THE GAME THREAD -- the wndproc's thread. It is called from the
    engine's flip 0x4C63A0 through tagpu_triggers_frame.
 
-   IT IS NOT THREAD-FREE. The big one: on the disarm
-   edge this function calls clear_state(), which memsets s_down/s_async/
-   s_release -- and s_down/s_async are written by the wndproc, per key, through
+   IT IS NOT THREAD-FREE: on the disarm edge it calls clear_state(), which memsets
+   s_down/s_async -- and those are written by the wndproc, per key, through
    set_one(). Off the wndproc's thread that memset races those writes, and what
    it produces is a key or a mouse button left stuck down with nothing in the
-   log. The release sweep is smaller but not nothing either: it writes
-   s_release[vk] = 0, which the injector also writes when it sets a deadline --
-   one aligned dword against the memset's 768 bytes, but the same kind of
-   exposure. Call this from any other thread and both races are open. */
-void tagpu_shield_frame(HWND hwnd);
+   log. */
+void tagpu_shield_frame(void);
 
 /* TRUE when the message was consumed: either a tagged injection (delivered to
    the game) or hardware input swallowed by the armed shield. */
@@ -79,12 +90,13 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
    or GetAsyncKeyState layout when async). */
 BOOL tagpu_shield_key_state(int vk, BOOL async, SHORT* state);
 
-/* Injection: post a tagged message to the game window. hold_ms > 0 keeps a key
-   virtually down for that long (modifiers must outlive the keystroke they
-   qualify — TA polls them a frame or more after the message). */
-void tagpu_shield_key(HWND hwnd, int vk, BOOL up);
-void tagpu_shield_key_hold(HWND hwnd, int vk, DWORD hold_ms);
-void tagpu_shield_char(HWND hwnd, char ch);
-void tagpu_shield_mouse(HWND hwnd, int code, int gx, int gy);
+/* Injection: post a tagged message carrying `seq` to the game window; PostMessageA's
+   answer. A key stays virtually down from its down to its up, so a modifier is held
+   for exactly the events posted between them -- TA polls modifier state
+   (GetAsyncKeyState, IAT 0x4FC350) while it handles a message, so it sees what a
+   player's held key shows. */
+BOOL tagpu_shield_key(HWND hwnd, int vk, BOOL up, unsigned seq);
+BOOL tagpu_shield_char(HWND hwnd, char ch, unsigned seq);
+BOOL tagpu_shield_mouse(HWND hwnd, int code, int gx, int gy, unsigned seq);
 
 #endif

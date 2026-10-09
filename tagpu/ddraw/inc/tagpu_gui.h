@@ -51,6 +51,10 @@ unsigned tagpu_gui_flips(void);                     /* the publisher's flip coun
    engine's space. It only queues the notch; the game thread scrolls the list
    under its point at the next GUI pump (tagpu_gui_hook.c, "the list wheel"). */
 void tagpu_gui_wheel(UINT msg, WPARAM wparam, LPARAM lparam);
+/* GAME THREAD: the entries the engine's mouse ring (graphics globals +0x18E/+0x192) and key ring
+   (+0x16E/+0x172) hold, from their own indices: 1 read, 0 when either ring's fields are out of
+   range or the caller is another thread. tagpu_input.c posts its next event only when both read 0. */
+int tagpu_gui_input_rings(int* mouse_pending, int* key_pending);
 /* GAME THREAD, after a backdrop's decode and before its first copy: the box
    (l, t, w, h) of the decoded PCX surface whose pixels are at `pixels` holds
    Impure's own art, drawn for the palette, which Classic++'s picture store

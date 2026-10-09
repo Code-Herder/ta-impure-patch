@@ -25,6 +25,7 @@ import math
 import ntpath
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -1907,13 +1908,16 @@ def _launch(args) -> dict:
     # a game — measured 2026-09-01, when a leftover scenario spawned itself into a
     # fresh skirmish. Triggers are requests, not state, and the same goes for the
     # eye hold, which would otherwise pin the new game's camera to the old one's
-    # coordinates. Results go too: a stale one would satisfy the next poll.
+    # coordinates, and a key batch nobody waits for any more. Results go too: a stale
+    # one would satisfy the next poll.
     for stale in ("tagpu_scenario.trigger", "tagpu_scenario.json",
                   "tagpu_switches.trigger", "tagpu_switches.json",
                   "tagpu_units.trigger", "tagpu_features.trigger",
                   "tagpu_peek.trigger", "tagpu_ui.trigger", "tagpu_eye.txt",
-                  "tagpu_replay.play"):
+                  "tagpu_replay.play", "tagpu_keys.txt"):
         (inst.gamedir / stale).unlink(missing_ok=True)
+    for stale in inst.gamedir.glob("tagpu_keys.*.tmp"):
+        stale.unlink(missing_ok=True)
     for log in inst.gamedir.glob("cnc-ddraw-*.log"):
         log.unlink()
 
@@ -2082,62 +2086,111 @@ def cmd_ls(args):
                   f"{shield:<7} {m['gamedir']}")
 
 
-# The fork reads tagpu_keys.txt in one bounded gulp and deletes it, so a batch
-# larger than its buffer loses its tail with the file. Split below that.
+# The fork reads tagpu_keys.txt in one bounded gulp of 1023 bytes and refuses a longer batch
+# whole, so a batch and its `#<id> ` prefix stay below that.
 KEYS_BATCH = 900
+KEYS_DONE_RX = re.compile(r"(\d+) events; engine (\d+), menu (\d+), dropped (\d+), untracked (\d+)")
+KEYS_COUNTS = ("events", "engine", "menu", "dropped", "untracked")
 
 
-def _write_tokens(inst: Instance, tokens: str, timeout: float = 5.0):
-    """Append tokens to the in-process input file (consumed once by the game).
+def _write_tokens(inst: Instance, tokens: str) -> dict:
+    """Send tokens to the game and return once it has consumed every event they make.
 
-    Long batches are split on the token file's byte budget. Taking that file
-    acknowledges posting input, not the engine editing a field; `ui fill` waits
-    for its text separately and bounds each character batch.
+    Long batches are split on the token file's byte budget. Each batch carries an id, and the
+    DLL posts its events one at a time, each once the engine's own input rings show the one
+    before consumed (tagpu_input.c, THE INVARIANT); `input: batch <id> done: ...` ends it. So a
+    return means the engine has handled the input -- a click's orders are issued, a key's
+    handler has run -- and an effect that is written while the event is handled can be read
+    straight after. Refused or never consumed is fatal. Returns the summed counts of the done
+    lines: events, and how many reached the engine, the options sprocket, were dropped (the
+    display-only ring), or went by SendInput untracked.
     """
-    path = inst.gamedir / "tagpu_keys.txt"
+    totals = dict.fromkeys(KEYS_COUNTS, 0)
     words = tokens.split()
     if not words:
-        return
-
+        return totals
+    budget = KEYS_BATCH - len("#") - 12 - 1          # the id: token_hex(6), and a space
     batches, cur = [], ""
     for w in words:
-        if cur and len(cur) + 1 + len(w) > KEYS_BATCH:
+        if cur and len(cur) + 1 + len(w) > budget:
             batches.append(cur)
             cur = w
         else:
             cur = f"{cur} {w}" if cur else w
     batches.append(cur)
-
-    if inst.remote:
-        # Never appended: a batch is moved into place once the DLL has taken the last
-        # one (RemotePath.create_new), so the DLL never reads half a batch and no
-        # append can land between its read and its delete.
-        wait = max(timeout, 10.0)
-        for batch in batches:
-            deadline = time.time() + wait
-            while not path.create_new((batch + "\n").encode()):
-                if time.time() >= deadline:
-                    die(f"{inst.name}: the game has not taken the previous key batch in "
-                        f"{wait:g}s -- is it running? (tacli log {inst.name} -n 20)")
-                time.sleep(0.05)
-        return
-
     for batch in batches:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            pending = path.stat().st_size if path.exists() else 0
-            if pending + len(batch) + 1 <= KEYS_BATCH:
-                break
+        for k, v in _send_key_batch(inst, batch).items():
+            totals[k] += v
+    return totals
+
+
+def _send_key_batch(inst: Instance, batch: str) -> dict:
+    """One batch placed and its done line awaited (_write_tokens)."""
+    bid = secrets.token_hex(6)
+    data = f"#{bid} {batch}\n"
+    timeout = max(30.0, 0.2 * len(batch.split()))
+    path = inst.gamedir / "tagpu_keys.txt"
+    # opened before the batch exists, so its answer cannot land before the cursor
+    lines = _LogLines(_log_cursor(inst))
+    deadline = time.monotonic() + timeout
+    if inst.remote:
+        # moved into place once the DLL has taken the last batch (RemotePath.create_new), so the
+        # DLL never reads half a batch
+        while not path.create_new(data.encode()):
+            if time.monotonic() >= deadline:
+                die(f"{inst.name}: the game has not taken the previous key batch in "
+                    f"{timeout:g}s -- is it running? (tacli log {inst.name} -n 20)")
             time.sleep(0.05)
-        with open(path, "a") as f:
-            f.write(batch + "\n")
+    else:
+        # written whole under its own name and hard-linked into place: a link never replaces a
+        # file, so a batch is never read half-written and never overwrites one not yet taken
+        tmp = inst.gamedir / f"tagpu_keys.{bid}.tmp"
+        try:
+            tmp.write_text(data)
+            while True:
+                try:
+                    os.link(tmp, path)
+                    break
+                except FileExistsError:
+                    if time.monotonic() >= deadline:
+                        die(f"{inst.name}: the game has not taken the previous key batch in "
+                            f"{timeout:g}s -- is it running? (tacli log {inst.name} -n 20)")
+                    time.sleep(0.02)
+        finally:
+            tmp.unlink(missing_ok=True)
+    rx = re.compile(rf"input: batch {bid} (taken|waiting|done|REFUSED)\b:? ?(.*)")
+    last, alive_at = None, time.monotonic()
+    while True:
+        for line in lines():
+            m = rx.search(line)
+            if not m:
+                continue
+            last = m.group(0).strip()
+            if m[1] == "REFUSED":
+                die(f"{inst.name}: {last}")
+            if m[1] == "done":
+                c = KEYS_DONE_RX.search(m[2])
+                if not c:
+                    die(f"{inst.name}: unreadable answer: {last}")
+                return dict(zip(KEYS_COUNTS, map(int, c.groups())))
+        now = time.monotonic()
+        if now >= deadline:
+            die(f"{inst.name}: key batch {bid} not consumed in {timeout:g}s: "
+                + (last or "the game never took it -- is it running? "
+                           f"(tacli log {inst.name} -n 20)"))
+        if not inst.remote and now - alive_at >= 2.0:
+            alive_at = now
+            if not inst.running():
+                die(f"{inst.name}: the game exited with key batch {bid} unconsumed"
+                    + (f" ({last})" if last else ""))
+        time.sleep(0.25 if inst.remote else 0.02)
 
 
 def cmd_keys(args):
     inst = Instance(args.name)
-    _write_tokens(inst, " ".join(args.tokens))
-    out({"name": args.name, "tokens": args.tokens}, args.json,
-        human=f"sent: {' '.join(args.tokens)}")
+    counts = _write_tokens(inst, " ".join(args.tokens))
+    out({"name": args.name, "tokens": args.tokens, **counts}, args.json,
+        human=f"done: {' '.join(args.tokens)}")
 
 
 def cmd_click(args):
@@ -2147,8 +2200,8 @@ def cmd_click(args):
     else:
         verb = "prclick" if args.right else "pclick"
     token = f"{verb}:{args.x},{args.y}"
-    _write_tokens(inst, token)
-    out({"name": args.name, "token": token}, args.json, human=f"sent: {token}")
+    counts = _write_tokens(inst, token)
+    out({"name": args.name, "token": token, **counts}, args.json, human=f"done: {token}")
 
 
 def device_point(snap: dict, gx: int, gy: int):
@@ -2201,9 +2254,9 @@ def cmd_wheel(args):
         chunk = min(n, 64)
         tokens.append(f"wheel:{step * chunk:+d}")
         n -= chunk
-    _write_tokens(inst, " ".join(tokens))
-    out({"name": args.name, "notches": args.notches, "at": args.at}, args.json,
-        human=f"sent: {' '.join(tokens)}")
+    counts = _write_tokens(inst, " ".join(tokens))
+    out({"name": args.name, "notches": args.notches, "at": args.at, **counts}, args.json,
+        human=f"done: {' '.join(tokens)}")
 
 
 def cmd_eye(args):
@@ -6131,12 +6184,13 @@ REMOTE_LOCAL_ONLY = (("--window", "window", None), ("--display", "display", None
                      ("--no-restore-pointer", "no_restore_pointer", False))
 
 # Requests and results a previous run may have left: the list `_launch` clears, and
-# the key file, since a remote batch is moved in only once the last one is gone.
+# the key file and its temporary name (RemotePath.create_new), since a remote batch is
+# moved in only once the last one is gone.
 STALE_TRIGGERS = ("tagpu_scenario.trigger", "tagpu_scenario.json",
                   "tagpu_switches.trigger", "tagpu_switches.json",
                   "tagpu_units.trigger", "tagpu_features.trigger",
                   "tagpu_peek.trigger", "tagpu_ui.trigger", "tagpu_replay.trigger",
-                  "tagpu_eye.txt", "tagpu_keys.txt")
+                  "tagpu_eye.txt", "tagpu_keys.txt", "tagpu_keys.txt.tacli-tmp")
 
 TA_ARG_RX = re.compile(r"[-/][A-Za-z0-9._=:]{1,40}|[A-Za-z0-9._=:]{1,40}")
 

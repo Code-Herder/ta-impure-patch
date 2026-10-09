@@ -4719,6 +4719,15 @@ typedef void (__stdcall *lw_gadget_fn)(void* gi, int idx);
 #define LW_MR_HEAD    0x18E               /* i32 write index, [0, cap)      */
 #define LW_MR_TAIL    0x192               /* i32 read index, [0, cap)       */
 #define LW_MR_MAXCAP  4096                /* a bound on a value read from memory */
+/* The key ring beside it [DISASSEMBLED]: the init 0x4C1A60 clamps the capacity to 30
+   (`cmp ecx,0x1e` at 0x4C1A69) and zeroes both indices; the entries are inline, dwords at
+   +0xF6..+0x16D, which is what the clamp bounds. WM_CHAR pushes through 0x4C1B20 (0x4B5DEA)
+   and WM_KEYDOWN / WM_SYSKEYDOWN through 0x4C1D50 (0x4B5D8E, 0x4B5DC3), each dropping the
+   entry when the ring is full; the pop 0x4C1AB0 reads at the read index. */
+#define KR_CAP        0xF2                /* i32 capacity                   */
+#define KR_HEAD       0x16E               /* i32 write index, [0, cap)      */
+#define KR_TAIL       0x172               /* i32 read index, [0, cap)       */
+#define KR_MAXCAP     30                  /* the init's clamp: the inline array's length */
 
 #define LWQ 64                            /* divides 2^32: the indices wrap freely */
 typedef struct { LONG delta, xy; ULONG seq; } LWNOTCH;
@@ -4754,6 +4763,25 @@ static int lw_evring(int* head, int* tail)
     if (cap < 3 || cap > LW_MR_MAXCAP || h < 0 || h >= cap || t < 0 || t >= cap) return 0;
     *head = h; *tail = t;
     return cap;
+}
+
+/* THE INJECTION'S CONSUMPTION TEST (tagpu_input.c): how many entries the engine's mouse and key
+   rings hold, read from their own indices. 0 when either ring's fields do not describe one, or
+   off the game thread: the game thread is the rings' only writer (the window procedure pushes,
+   IdleTick pops), so read here they are a fact, not a sample. */
+int tagpu_gui_input_rings(int* mouse_pending, int* key_pending)
+{
+    const char* g;
+    int mh, mt, mcap, kcap, kh, kt;
+    if (!on_game_thread() || !(mcap = lw_evring(&mh, &mt))) return 0;
+    g = *(const char* const*)TA_GFX_PP;
+    kcap = *(const int*)(g + KR_CAP);
+    kh   = *(const int*)(g + KR_HEAD);
+    kt   = *(const int*)(g + KR_TAIL);
+    if (kcap < 1 || kcap > KR_MAXCAP || kh < 0 || kh >= kcap || kt < 0 || kt >= kcap) return 0;
+    *mouse_pending = (mh - mt + mcap) % mcap;
+    *key_pending   = (kh - kt + kcap) % kcap;
+    return 1;
 }
 
 /* Brings `s_lwPops` up to the ring's tail. Exact while fewer than `cap` pops

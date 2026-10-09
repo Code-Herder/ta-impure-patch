@@ -16,6 +16,8 @@ from pathlib import Path
 
 TREE = Path(__file__).resolve().parents[1]
 TACLI = TREE / "tools/tacli"
+GAMETIME = "*0x511DE8+0x38a47"
+PAUSED = "*0x511DE8+0x38a51:2"   # bit 0: the pause the Pause key flips
 
 
 class Check:
@@ -50,14 +52,38 @@ class Check:
         assert [r["spec"] for r in rows] == list(specs), f"peek answered {len(rows)} of {len(specs)} specs"
         return [r["value"] for r in rows]
 
-    def until(self, function, message, seconds=10):
-        end = time.monotonic() + seconds
+    def until(self, function, message, seconds=10, ticks=None):
+        """Poll until `function` answers. Without `ticks`, for `seconds` of wall clock: the camera
+        and the menus, which no simulation step drives. With `ticks`, simulation progress: bounded
+        by GameTime advancing that many ticks, failing at once if the world is paused (it would
+        never advance), and the wall clock only catching a game that stopped drawing frames."""
+        if ticks is None:
+            end = time.monotonic() + seconds
+            while True:
+                result = function()
+                if result:
+                    return result
+                assert time.monotonic() < end, message
+                time.sleep(0.1)
+        start, end = self.values(GAMETIME)[0], time.monotonic() + 60
         while True:
+            now, paused = self.values(GAMETIME, PAUSED)
             result = function()
             if result:
                 return result
-            assert time.monotonic() < end, message
-            time.sleep(0.1)
+            assert not paused & 1, f"{message} (the world is paused at GameTime {now})"
+            assert now - start < ticks, f"{message} in {ticks} ticks"
+            assert time.monotonic() < end, f"{message}: no frame in 60 s"
+            time.sleep(0.05)
+
+    @staticmethod
+    def once(result, message):
+        """An input's direct effect, read once: `tacli keys` returns once the engine has consumed
+        every event (tagpu_input.c), and orders, selection, the placement rectangle and the cursor
+        mode are written while the event is handled or in the frame drawn before its
+        acknowledgement."""
+        assert result, message
+        return result
 
     def address(self, kind):
         return self.base + self.units[kind] * 0x118
@@ -110,13 +136,10 @@ class Check:
     def stop(self, kind):
         self.call("ui", "click", "ARMSTOP")
         self.until(lambda: self.mode() == 1 and all(o["action"] == 41 for o in self.orders(kind)),
-                   "Stop did not restore contextual idle state")
+                   "Stop did not restore contextual idle state", ticks=30)
 
     def keys(self, *tokens):
         self.call("keys", *tokens)
-        # A peek visits a later game frame; delivery remains asynchronous,
-        # so behavior-specific predicates below establish the observed state.
-        self.values("*0x511DE8+0x38a47")
 
     def eye(self, x, z):
         self.call("eye", x, z)
@@ -141,8 +164,8 @@ class Check:
                 x, z = self.screen(kind)
             self.keys(*(["down:shift"] if i else []), f"pclick:{x},{z}",
                       *(["up:shift"] if i else []))
-        self.until(lambda: all(self.values(f"0x{self.address(k) + 0x110:x}")[0] & 0x10
-                               for k in kinds), f"selection did not reach fixture units {kinds}")
+        self.once(all(self.values(f"0x{self.address(k) + 0x110:x}")[0] & 0x10 for k in kinds),
+                  f"selection did not reach fixture units {kinds}")
         self.eye(*eye)
 
     def mode(self):
@@ -151,8 +174,8 @@ class Check:
     def pause(self, on):
         if bool(self.values("*0x511DE8+0x38a51:2")[0] & 1) != on:
             self.keys("pause")
-        self.until(lambda: bool(self.values("*0x511DE8+0x38a51:2")[0] & 1) == on,
-                   "native pause did not reach the fixture state")
+        self.once(bool(self.values(PAUSED)[0] & 1) == on,
+                  "native pause did not reach the fixture state")
 
     def rect(self):
         return struct.unpack("<iiiiii", self.bytes("*0x511DE8+0x2c92:x18"))
@@ -191,7 +214,7 @@ class Check:
             return len(self.call("log", "--grep", "resource: already queued", "--tail", 100, "--json")["lines"])
         before = count()
         self.resource_click(x, z, shift=shift)
-        self.until(lambda: count() > before, "repeat click was not consumed as already queued")
+        self.once(count() > before, "repeat click was not consumed as already queued")
 
     def unqueue(self, x, z):
         def count():
@@ -201,13 +224,13 @@ class Check:
         self.next_tick()
         before = count()
         self.resource_click(x, z, shift=True)
-        self.until(lambda: count() > before, "Shift-click did not cancel the queued resource plan")
+        self.once(count() > before, "Shift-click did not cancel the queued resource plan")
         self.next_tick()
 
     def next_tick(self):
-        tick = self.values("*0x511DE8+0x38a47")[0]
-        self.until(lambda: self.values("*0x511DE8+0x38a47")[0] > tick,
-                   "resource queue state did not reach a later simulation tick")
+        tick = self.values(GAMETIME)[0]
+        self.until(lambda: self.values(GAMETIME)[0] > tick,
+                   "resource queue state did not reach a later simulation tick", ticks=2)
 
     def guard(self, kind, target):
         """Give `kind` the preceding order a Shift-click appends after, a Guard of an owned unit
@@ -231,7 +254,7 @@ class Check:
         point from which its compared fields are fixed (guard)."""
         guarded = self.address(target)
         self.until(lambda: any(struct.unpack_from("<I", b, 0x16)[0] == guarded and b[5]
-                               for b in self.chain(kind)), message)
+                               for b in self.chain(kind)), message, ticks=90)
 
 
 def mex(c, classic=False):
@@ -251,32 +274,32 @@ def mex(c, classic=False):
     c.select("ARMCK")
     c.call("ui", "click", "ARMMEX")
     c.keys("pmove:588,377")
-    snapped = c.until(lambda: c.rect() if c.mode() == 14 and c.rect()[0] == 1408 else None,
-                      "manual mex did not snap to the real deposit")
+    snapped = c.once(c.rect() if c.mode() == 14 and c.rect()[0] == 1408 else None,
+                     "manual mex did not snap to the real deposit")
     c.keys("down:alt")
-    c.until(lambda: c.rect()[0] == 1440, "stationary Alt did not bypass manual snapping")
+    c.once(c.rect()[0] == 1440, "stationary Alt did not bypass manual snapping")
     c.keys("up:alt")
-    c.until(lambda: c.rect() == snapped, "manual snapping did not resume after Alt")
+    c.once(c.rect() == snapped, "manual snapping did not resume after Alt")
     c.keys("pmove:620,375")
-    c.until(lambda: c.rect()[0] == 1472, "manual snapping accepted a partial deposit at the range boundary")
+    c.once(c.rect()[0] == 1472, "manual snapping accepted a partial deposit at the range boundary")
     c.keys("pmove:588,377")
-    c.until(lambda: c.rect() == snapped, "manual snapping did not return to the deposit center")
+    c.once(c.rect() == snapped, "manual snapping did not return to the deposit center")
     c.keys("down:shift", "pclick:588,377", "up:shift")
     def built():
         orders = c.orders("ARMCK")
         return orders if any(o["type"] == 78 and o["pos"][0] >> 16 == 1432 for o in orders) else None
-    orders = c.until(built, "manual snapped build produced no order")
+    orders = c.once(built(), "manual snapped build produced no order")
     assert any(o["pos"][0] >> 16 == 1432 for o in orders), "manual order lost its snapped position"
     # Stop leaves manual placement before the independent Quick Build click.
     c.menu(RESOURCE=0, QUICKBUILD=1)
     c.stop("ARMCK")
     c.resource_click(620, 375)
-    partial = c.until(lambda: c.orders("ARMCK") if any(o["action"] != 41 for o in c.orders("ARMCK")) else None,
-                      "snap-range boundary click produced no contextual order")
+    partial = c.once(c.orders("ARMCK") if any(o["action"] != 41 for o in c.orders("ARMCK")) else None,
+                     "snap-range boundary click produced no contextual order")
     assert not c.placed(partial), "Quick Build accepted a partial deposit at the snap-range boundary"
     c.stop("ARMCK")
     c.resource_click(588, 377)
-    orders = c.until(built, "Quick Build did not match the manual snapped placement")
+    orders = c.once(built(), "Quick Build did not match the manual snapped placement")
     centers = {(o["pos"][0] >> 16, o["pos"][2] >> 16) for o in c.placed(orders)}
     assert centers == {((snapped[0] + snapped[3]) // 2, (snapped[2] + snapped[5]) // 2)}, \
         "Quick Build and the manual ghost selected different deposit centers"
@@ -288,7 +311,7 @@ def mex(c, classic=False):
     c.pause(True)
     preceding = c.orders("ARMCK")
     c.resource_click(560, 375, shift=True)
-    orders = c.until(built, "Quick Build failed with manual radius off")
+    orders = c.once(built(), "Quick Build failed with manual radius off")
     c.pause(False)
     c.repeat(560, 375)
     assert c.orders("ARMCK") == orders, "repeat click changed the queued mex orders"
@@ -312,7 +335,7 @@ def mex(c, classic=False):
     c.pause(False)
     c.stop("ARMCK")
     c.resource_click(560, 375)
-    c.until(built, "cancelled mex could not be queued again")
+    c.once(built(), "cancelled mex could not be queued again")
     assert c.mode() == 1, "Quick Build left contextual mode"
     print(f"resource-mex: {'left' if classic else 'right'} interface, center parity, snap boundary, Alt, independent toggle, plain no-op, selected-only variant-safe Shift cancellation and requeue passed")
 
@@ -332,7 +355,7 @@ def upgrade(c, shift=False):
     def upgraded():
         orders = c.orders("ARMACK")
         return orders if any(o["type"] == 88 for o in orders) else None
-    orders = c.until(upgraded, "upgrade produced no orders")
+    orders = c.once(upgraded(), "upgrade produced no orders")
     offset = int(shift)
     assert len(orders) >= offset + 2 and orders[offset]["target"] == c.address("ARMMEX"), "missing reclaim before upgrade"
     assert orders[offset + 1]["type"] != 0 and orders[offset + 1]["target"] == 0, "missing upgrade build after reclaim"
@@ -340,7 +363,7 @@ def upgrade(c, shift=False):
         def guarded():
             h = c.orders(helper)
             return h if any(o["target"] == c.address("ARMACK") for o in h) else None
-        c.until(guarded, f"{helper} received no assist order")
+        c.once(guarded(), f"{helper} received no assist order")
         # a helper's Guard is compared later too: read it once its first step has fixed it
         c.stepped(helper, "ARMACK", f"{helper}'s assist took no first step")
         h = c.orders(helper)
@@ -357,7 +380,7 @@ def upgrade(c, shift=False):
         assert all(c.orders(k) == orders for k, orders in helpers.items()), "unqueue changed persistent helpers"
         assert c.orders("ARMPW") == combat, "unqueue changed selected combat orders"
         c.resource_click(x, z, shift=True)
-        c.until(upgraded, "cancelled upgrade could not be queued again")
+        c.once(upgraded(), "cancelled upgrade could not be queued again")
     assert c.mode() == 1, "upgrade left contextual mode"
     print("resource-upgrade: reclaim/build sequence, mixed helpers, combat priority and repeat no-op passed")
 
@@ -373,7 +396,7 @@ def terrain(c, mode):
     def ordered():
         orders = c.orders("ARMCK")
         return orders if orders and orders[0]["action"] != 41 else None
-    orders = c.until(ordered, "metal-map contextual click did nothing")
+    orders = c.once(ordered(), "metal-map contextual click did nothing")
     if mode == "mixed":
         assert any(o["type"] == 78 for o in orders), "rich deposit on metal ground was not built"
     else:
@@ -387,20 +410,20 @@ def terrain(c, mode):
         r = c.rect()
         green = c.values("*0x511DE8+0x2cc6:1")[0] & 0x40
         return r if c.mode() == 14 and green else None
-    snapped = c.until(vent, "manual geothermal snap did not find the generated vent")
+    snapped = c.once(vent(), "manual geothermal snap did not find the generated vent")
     c.keys("down:alt")
-    c.until(lambda: c.rect() != snapped, "Alt did not bypass geothermal snapping")
+    c.once(c.rect() != snapped, "Alt did not bypass geothermal snapping")
     c.keys("up:alt")
-    c.until(lambda: c.rect() == snapped, "geothermal snap did not resume")
+    c.once(c.rect() == snapped, "geothermal snap did not resume")
     c.keys("esc")
     c.guard("CORCK", "ARMMSTOR")
     preceding = c.orders("CORCK")
     c.resource_click(676, 258, shift=True)
-    c.until(lambda: any(o["type"] == 193 for o in c.orders("CORCK")), "Quick geo produced no geothermal build order")
+    c.once(any(o["type"] == 193 for o in c.orders("CORCK")), "Quick geo produced no geothermal build order")
     c.unqueue(676, 258)
     assert c.orders("CORCK") == preceding, "geo unqueue did not preserve the preceding Guard"
     c.resource_click(676, 258, shift=True)
-    c.until(lambda: any(o["type"] == 193 for o in c.orders("CORCK")), "cancelled geo could not be queued again")
+    c.once(any(o["type"] == 193 for o in c.orders("CORCK")), "cancelled geo could not be queued again")
     print(f"resource-{mode}: metal-ground classification, manual geo/Alt, Quick geo cancellation and requeue passed")
 
 
@@ -430,7 +453,7 @@ def policy(c, mode, gamedir):
     c.until(lambda: c.call("ui", "--json")["gui"] != "RENDER.GUI", "options did not close")
     c.select("ARMCK")
     c.resource_click(560, 375)
-    c.until(lambda: any(o["action"] != 41 for o in c.orders("ARMCK")), "locked contextual click did nothing")
+    c.once(any(o["action"] != 41 for o in c.orders("ARMCK")), "locked contextual click did nothing")
     assert not any(o["type"] == 78 for o in c.orders("ARMCK")), "locked Quick Build issued a mex order"
     print(f"resource-policy-{mode}: locks, inheritance/clamping and match freeze passed")
 
@@ -448,7 +471,7 @@ def geo_upgrade(c):
     def upgraded():
         orders = c.orders("CORCK")
         return orders if any(o["type"] == stronger for o in orders) else None
-    orders = c.until(upgraded, "geothermal upgrade did not append a stronger plant")
+    orders = c.once(upgraded(), "geothermal upgrade did not append a stronger plant")
     reclaim = next(i for i, o in enumerate(orders) if o["target"] == c.address("CORGEO"))
     assert orders[reclaim + 1]["type"] == stronger, "geo upgrade lost reclaim/build ordering"
     c.repeat(x, z)
@@ -459,7 +482,7 @@ def geo_upgrade(c):
     assert c.orders("CORCK") == preceding, "geo unqueue did not remove only the reclaim/build pair"
     assert c.orders("ARMCK") == helper, "geo unqueue changed the persistent helper"
     c.resource_click(x, z, shift=True)
-    c.until(upgraded, "cancelled geo upgrade could not be queued again")
+    c.once(upgraded(), "cancelled geo upgrade could not be queued again")
     print("resource-geo-upgrade: stronger variant, Shift reclaim/build and persistent helper passed")
 
 
@@ -474,16 +497,16 @@ def nearby(c):
         return {(o["pos"][0] >> 16, o["pos"][2] >> 16)
                 for o in c.placed(c.orders("CORCK")) if o["type"] == geo}
     c.resource_click(676, 258, shift=True)
-    c.until(lambda: sites() == {(648, 392)}, "first one-cell vent was not queued")
+    c.once(sites() == {(648, 392)}, "first one-cell vent was not queued")
     c.next_tick()
     c.resource_click(692, 258, shift=True)
-    c.until(lambda: sites() == {(648, 392), (664, 392)},
-            "queueing the neighboring vent toggled or replaced the first plan")
+    c.once(sites() == {(648, 392), (664, 392)},
+           "queueing the neighboring vent toggled or replaced the first plan")
     c.unqueue(692, 258)
     assert sites() == {(648, 392)}, "unqueue cancelled the neighboring vent instead of its own plan"
     assert any(o["target"] == c.address("ARMMSTOR") for o in c.orders("CORCK")), "unqueue removed the preceding Guard"
     c.resource_click(692, 258, shift=True)
-    c.until(lambda: sites() == {(648, 392), (664, 392)}, "neighboring vent could not be requeued")
+    c.once(sites() == {(648, 392), (664, 392)}, "neighboring vent could not be requeued")
     c.next_tick()
     print("resource-nearby: distinct adjacent vents, Shift append/cancel/requeue, preceding Guard and recorded cancellation passed")
 
@@ -496,7 +519,7 @@ def priority(c):
         c.stop("ARMCK")
         if case == "move":
             c.call("ui", "click", "ARMMOVE")
-            c.until(lambda: c.mode() != 1, "explicit Move mode did not arm")
+            c.once(c.mode() != 1, "explicit Move mode did not arm")
         if case == "alt":
             c.keys("down:alt")
         if case == "off":
@@ -515,8 +538,8 @@ def priority(c):
             c.resource_click(x, z)
         if case == "alt":
             c.keys("up:alt")
-        orders = c.until(lambda: c.orders("ARMCK") if any(o["action"] != 41 for o in c.orders("ARMCK")) else None,
-                         f"{case} priority produced no contextual order")
+        orders = c.once(c.orders("ARMCK") if any(o["action"] != 41 for o in c.orders("ARMCK")) else None,
+                        f"{case} priority produced no contextual order")
         assert not c.placed(orders), f"{case} priority incorrectly issued a resource build"
     print("resource-priority: explicit Move, Alt, equal owned mex and player toggle off passed")
 
@@ -531,8 +554,8 @@ def refusals(c):
     c.select("RSNRACK")
     x, z = c.screen("ARMMEX")
     c.resource_click(x, z)
-    orders = c.until(lambda: c.orders("RSNRACK") if any(o["action"] != 41 for o in c.orders("RSNRACK")) else None,
-                     "reclaim-ineligible builder received no ordinary contextual order")
+    orders = c.once(c.orders("RSNRACK") if any(o["action"] != 41 for o in c.orders("RSNRACK")) else None,
+                    "reclaim-ineligible builder received no ordinary contextual order")
     assert not c.placed(orders) and all(o["action"] for o in orders), "refused reclaim produced a build or action zero"
     c.stop("RSNRACK")
     c.select("ARMACK", "RSNRACK", "RSNGCK", "CORCK")
@@ -543,10 +566,10 @@ def refusals(c):
     c.call("order", "move", "pos", "4500", "2500", "--unit", c.units["RSNGCK"], "--expect", "RSNGCK")
     before = c.orders("RSNGCK")
     c.resource_click(x, z)
-    c.until(lambda: any(o["type"] == 88 for o in c.orders("ARMACK")), "eligible builder did not upgrade")
+    c.once(any(o["type"] == 88 for o in c.orders("ARMACK")), "eligible builder did not upgrade")
     assert not c.placed(c.orders("RSNRACK")), "reclaim-ineligible builder became a primary"
-    c.until(lambda: any(o["target"] == c.address("ARMACK") for o in c.orders("CORCK")),
-            "eligible constructor did not receive its helper Guard")
+    c.once(any(o["target"] == c.address("ARMACK") for o in c.orders("CORCK")),
+           "eligible constructor did not receive its helper Guard")
     assert c.orders("RSNGCK") == before, "Guard refusal changed the helper's queue"
     c.pause(False)
     print("resource-refusals: reclaim and Guard refusal, eligible upgrade and helper fallback passed")
@@ -557,8 +580,8 @@ def viewer(c, kind="ARMACK"):
     assert paused & 1, "viewer probe requires the world paused"
     types = {t["name"].upper(): t["id"] for t in c.call("units", "--json")["units"]}
     c.select(kind)
-    c.until(lambda: c.values("*0x511DE8+0x37e9e:2")[0] == types[kind],
-            "native selection did not display the advanced constructor's type")
+    c.once(c.values("*0x511DE8+0x37e9e:2")[0] == types[kind],
+           "native selection did not display the advanced constructor's type")
     assert c.values("*0x511DE8+0x38a47")[0] == tick, "viewer selection advanced the simulation"
     print(f"resource viewer: paused native {kind} selection updated the displayed unit type")
 

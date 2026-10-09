@@ -131,17 +131,18 @@ target; `--sel` asks the engine what is selected. Failures are loud and exit non
 
 **Drive menus by name.** `ui click SINGLE`, `ui click Skirmish`, `ui click Start`, then
 `tacli wait t1 'alive=[1-9]' --timeout 150`. Each click auto-waits for the gadget and reports the
-screen it landed on; blind `keys` sequences drop their first token, `ui click` does not.
+screen it landed on. `keys` returns once the engine has consumed every event it sent, so a
+key's handler has run and a click's orders exist when it returns.
 `tacli scenario load` does that whole path, map and players included.
 
 **Leaving a game for the main menu is four steps, and none of them is Esc** (Esc in game does
 nothing). The exit button sits on `ARMOPT.GUI`, which **Tab** raises over the world:
 
 ```bash
-tools/tacli keys t1 tab tab          # TWICE: a keys invocation drops its first token
+tools/tacli keys t1 tab              # raises ARMOPT.GUI (a second tab leaves it up)
 tools/tacli ui   t1 click EXIT       # ARMOPT.GUI -> EXITMENU.GUI (also RESTART, EXITGAME, CANCEL)
 tools/tacli ui   t1 click MAINMENU   # -> YESORNO.GUI, "Surrender this battle…?"
-tools/tacli keys t1 y y              # CHOICE1 — the click on it is unreliable, the key is not
+tools/tacli keys t1 y                # CHOICE1 — the click on it is unreliable, the key is not
 tools/tacli ui   t1                  # confirm: MAINMENU.GUI 640x480 (the shell is always 640x480)
 ```
 
@@ -168,8 +169,8 @@ as well. By hand: `ui t1 set Mapping 1`, `ui t1 set LineOfSight 0` before `Start
   button, then a MOVE back to the screen centre. So after any click the pointer is at the centre,
   and `wheel:` notches or a position-less `click`/`rclick` land there unless you `pmove:X,Y`.
 - **Key tokens**: names (`space return esc tab plus minus up down left right backspace delete
-  home end y …`), combos `ctrl+d`/`shift+2`/`ctrl+shift+a` (the modifier is held 150 ms because
-  TA polls it), `char:c`, `down:<tok>`/`up:<tok>` to hold keys or `lbutton`/`rbutton`/`mbutton`
+  home end y …`), combos `ctrl+d`/`shift+2`/`ctrl+shift+a` (modifier down, key down and up,
+  modifier up, each handled before the next is sent, so TA's poll sees the modifier), `char:c`, `down:<tok>`/`up:<tok>` to hold keys or `lbutton`/`rbutton`/`mbutton`
   across frames, `mouse:x,y`, `pmove:x,y`, `click:x,y`/`rclick:x,y`/`pclick:x,y`, `wheel:n`, and
   `dmove:x,y`/`dclick:x,y` in **device** pixels. Drag-select: `down:lbutton`, `mouse:x,y`,
   `up:lbutton`.

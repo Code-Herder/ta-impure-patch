@@ -21,6 +21,7 @@ import ntpath
 import re
 import shutil
 import tempfile
+import time
 import types
 import unittest
 from unittest.mock import Mock, patch
@@ -369,6 +370,63 @@ class Batching(unittest.TestCase):
     def test_no_token_is_lost_or_split(self):
         tokens = ["char:x"] * 300
         self.assertEqual(" ".join(self.split(tokens)).split(), tokens)
+
+
+class KeyBatches(unittest.TestCase):
+    """A local key batch is linked into place whole and waited for by its id (tagpu_input.c)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        (self.dir / "log").mkdir()
+        (self.dir / "log/tagpu.log").write_bytes(b"log: run R1 part 1 of tagpu.log, started\n")
+        self.inst = types.SimpleNamespace(name="k1", gamedir=self.dir, remote=None,
+                                          running=lambda: True)
+
+    def game(self, stop, seen):
+        """The DLL's half: take a batch file whole, delete it, answer its id in the log."""
+        keys, log = self.dir / "tagpu_keys.txt", self.dir / "log/tagpu.log"
+        while not stop.is_set():
+            try:
+                text = keys.read_text()
+            except FileNotFoundError:
+                time.sleep(0.001)
+                continue
+            keys.unlink()
+            seen.append(text)
+            bid, _, tokens = text.strip().partition(" ")
+            with open(log, "ab") as f:
+                f.write(f"input: batch {bid[1:]} done: {len(tokens.split())} events; engine "
+                        f"{len(tokens.split())}, menu 0, dropped 0, untracked 0\n".encode())
+
+    def test_two_drivers_each_get_every_batch_answered_whole(self):
+        import threading
+        stop, seen, bad = threading.Event(), [], []
+        game = threading.Thread(target=self.game, args=(stop, seen))
+        game.start()
+
+        def driver(tag):
+            for i in range(25):
+                try:
+                    got = tacli._write_tokens(self.inst, f"pmove:{tag},{i} pmove:{i},{tag}")
+                    if got["events"] != 2:
+                        bad.append(got)
+                except SystemExit as e:
+                    bad.append(e)
+
+        drivers = [threading.Thread(target=driver, args=(t,)) for t in (1, 2)]
+        for t in drivers:
+            t.start()
+        for t in drivers:
+            t.join()
+        stop.set()
+        game.join()
+        self.assertEqual(bad, [])
+        self.assertEqual(len(seen), 50)
+        self.assertTrue(all(re.fullmatch(r"#[0-9a-f]{12} pmove:\d+,\d+ pmove:\d+,\d+\n", t)
+                            for t in seen))
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["log"])
 
 
 class Groups(unittest.TestCase):
@@ -2343,10 +2401,44 @@ class RemoteRouting(unittest.TestCase):
         self.assertIsNone(self.win.get(self.FOLDER + r"\tagpu_shield.on"))
         self.assertFalse(self.meta_now()["shield"])
 
-    def test_keys_wait_for_the_last_batch_and_never_append(self):
-        self.main("keys", "r1", "tab", "tab")
-        self.assertEqual(bytes(self.win.get(self.FOLDER + r"\tagpu_keys.txt")), b"tab tab\n")
+    def game_takes_key_batches(self, answer="done: {n} events; engine {n}, menu 0, dropped 0, "
+                                              "untracked 0"):
+        """The game as tagpu_input.c is to tacli: each batch file taken as it lands, deleted,
+        and answered in the log by its id. Returns the batches taken, as their files read."""
+        log = (self.FOLDER + r"\log\tagpu.log").lower()
+        keys = (self.FOLDER + r"\tagpu_keys.txt").lower()
+        self.win.put(log, b"log: run R1 part 1 of tagpu.log, started\n")
+        taken, real = [], self.win.answer
+
+        def take(st, v):
+            out = real(st, v)
+            if keys in self.win.files:
+                text = bytes(self.win.files.pop(keys)).decode()
+                taken.append(text)
+                bid, _, tokens = text.strip().partition(" ")
+                n = 2 * len(tokens.split())
+                self.win.files[log] += (f"input: batch {bid[1:]} taken: {tokens}\n"
+                                        f"input: batch {bid[1:]} {answer.format(n=n)}\n").encode()
+            return out
+        self.win.answer = take
+        return taken
+
+    def test_keys_wait_for_their_batch_answer_and_never_append(self):
+        taken = self.game_takes_key_batches()
+        code, out, _ = self.main("keys", "r1", "tab", "tab", "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual(len(taken), 1)
+        self.assertRegex(taken[0], r"^#[0-9a-f]{12} tab tab\n$")
+        res = json.loads(out)
+        self.assertEqual((res["events"], res["engine"], res["dropped"]), (4, 4, 0))
+        self.assertIsNone(self.win.get(self.FOLDER + r"\tagpu_keys.txt"))
         self.assertFalse(any("AppendAllText" in s for s in self.win.sent))
+
+    def test_a_refused_key_batch_fails_the_command(self):
+        self.game_takes_key_batches(answer="REFUSED: not a token: tab")
+        code, _, err = self.main("keys", "r1", "tab", "tab")
+        self.assertNotEqual(code, 0)
+        self.assertIn("REFUSED: not a token", err)
 
     def test_crash_reads_the_test_folders_error_log(self):
         self.win.put(self.FOLDER + r"\ErrorLog.txt",

@@ -572,11 +572,13 @@ class RemotePath:
     def create_new(self, data: bytes) -> bool:
         """Put the file in place only if it is absent; False if it is there.
 
-        The key file's protocol: the DLL reads `tagpu_keys.txt` whole and deletes it.
-        Appending to a file it is reading could land after its read and be deleted
-        with it, so a batch is written under a temporary name and MOVED into place
-        when the previous one is gone. A move never overwrites, so tacli is the only
-        writer of the name and the DLL only ever sees a complete batch."""
+        The key file's protocol: the DLL reads `tagpu_keys.txt` whole, deletes it, and
+        takes no other while that batch's events are still being posted; each batch
+        carries an id and is answered `input: batch <id> done` or `REFUSED` in the log,
+        which tacli waits for. Appending to a file it is reading could land after its
+        read and be deleted with it, so a batch is written under a temporary name and
+        MOVED into place when the previous one is gone. A move never overwrites, so the
+        DLL only ever sees a complete batch."""
         tmp, p = ps_str(self.win + ".tacli-tmp"), ps_str(self.win)
         b64 = base64.b64encode(data).decode("ascii")
         out = self._run([
