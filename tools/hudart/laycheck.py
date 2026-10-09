@@ -45,6 +45,8 @@ CASES = [
     ("4k-auto-scroll", "res=3840x2160&game=auto&hud=150&np=16&nt=4&t=100&stat=0&paused", None, ""),
     ("1080-100-one-team", "res=1920x1080&game=off&hud=100&np=6&nt=1&t=20&stat=0", None, ""),
     ("1440-75-hover-held", "res=2560x1440&game=200&hud=75&np=8&nt=2&t=90&stat=0&paused", "row2", "play"),
+    ("4k-150-free-for-all", "res=3840x2160&game=150&hud=150&np=6&nt=6&t=60&stat=0&paused", None, ""),
+    ("4k-150-2v1v1", "res=3840x2160&game=150&hud=150&np=4&nt=3&t=60&stat=0&paused", None, ""),
 ]
 
 # the mockup's state and boxes, in units from the stage's top left

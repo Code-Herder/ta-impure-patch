@@ -150,11 +150,12 @@ static int root(int* par, int i)
 }
 
 /* THE TEAMS ARE THE MUTUAL ALLIANCES, joined transitively: the rows a player and those it allies
-   with, who ally with it back. A game with no alliance is one team, drawn without headers, as the
-   mockup draws one; otherwise every group is a team, a lone player too, in the players' order. */
+   with, who ally with it back. Every group is a team, a lone player too, in the players' order;
+   whether they get headers is the layout's rule (tagpu_hudlay.c, `headed`): none in a
+   free-for-all. */
 static void teams(const TAGPU_PK_HUD* h, HUDSTATE* st)
 {
-    int par[TAGPU_PK_HUD_SEATS], tof[TAGPU_PK_HUD_SEATS], i, j, n = st->nseat, big = 0;
+    int par[TAGPU_PK_HUD_SEATS], tof[TAGPU_PK_HUD_SEATS], i, j, n = st->nseat;
     for (i = 0; i < n; i++) { par[i] = i; tof[i] = -1; }
     for (i = 0; i < n; i++)
         for (j = i + 1; j < n; j++)
@@ -165,12 +166,6 @@ static void teams(const TAGPU_PK_HUD* h, HUDSTATE* st)
         int r = root(par, i);
         if (tof[r] < 0) { tof[r] = st->nteam; st->team_n[st->nteam++] = 0; }
         st->team_seat[tof[r]][st->team_n[tof[r]]++] = (uint8_t)i;
-        if (st->team_n[tof[r]] > big) big = st->team_n[tof[r]];
-    }
-    if (big <= 1) {
-        st->nteam = 1;
-        st->team_n[0] = n;
-        for (i = 0; i < n; i++) st->team_seat[0][i] = (uint8_t)i;
     }
 }
 

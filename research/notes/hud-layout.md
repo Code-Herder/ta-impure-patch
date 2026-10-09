@@ -209,7 +209,8 @@ At those sizes the game's line sits a pixel off the mockup's.
 - A button draws its `part`. While held, and while on for a toggle, it draws its `pressed` part
   instead.
 - The content on a pressed face sinks by `press_shift` units.
-- A disabled chip (TEAMS with one team) is drawn at the `split.off` opacity and takes no input.
+- A disabled chip (TEAMS when the teams are not told apart: one team, or a free-for-all) is drawn
+  at the `split.off` opacity and takes no input.
 
 ### The dock
 
@@ -232,9 +233,13 @@ At those sizes the game's line sits a pixel off the mockup's.
 
 - **Its box** is `w` wide, `r` from the screen's right, and starts `t` below the top bar. It
   ends `dock_gap` above the dock.
-- **Its items:** for each team, a header when there is more than one team, then the team's
-  players unless the team is folded. A header is `header.h` tall, with `header_gap` above every
-  header but the first; a row is `row.h` tall; `gap` separates items.
+- **Its items:** for each team, a header when the teams are told apart, then the team's players
+  unless the team is folded. The teams are told apart (`headed`, in `hud.js` and
+  `tagpu_hudlay.c`) when there is more than one and at least one has two players: a
+  free-for-all, every player alone, has no team header at all, while a 2v1v1 gives each lone
+  player a header of its own. A team without a header cannot be folded, so its rows always
+  show. A header is `header.h` tall, with `header_gap` above every header but the first; a row is
+  `row.h` tall; `gap` separates items.
 - **It shows the items that fit,** from the first, in its height less `foot.gap` and `foot.h`,
   and always at least one. When some are left out, a scroll bar is drawn left of the column:
     - the buttons at `button.x`;
@@ -319,9 +324,9 @@ ranked by the values at the playhead.
 
 ## Checking the C against the mockup
 
-`tools/hudart/laycheck.py` opens the mockup headless for four cases (4K at 150 with two teams, 4K
+`tools/hudart/laycheck.py` opens the mockup headless for six cases (4K at 150 with two teams, 4K
 at Auto with the list scrolled, 1080p at 100 with one team, 1440p at 75 with a row hovered and a
-button held), takes the mockup's state and every element's box in HUD units, runs
+button held, 4K at 150 as a six-player free-for-all, and 4K at 150 as a 2v1v1), takes the mockup's state and every element's box in HUD units, runs
 `tagpu_hudlay.c` compiled natively (`laycheck.c`) on the same state, and pairs the two element
 by element: every part by name, every text by its string, every solid by its colour, every
 clickable by its key. It also measures every text's baseline in the browser — a zero-size

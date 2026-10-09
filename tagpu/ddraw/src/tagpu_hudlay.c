@@ -509,6 +509,17 @@ static void dock(C* c)
 
 static int folded(const HUDSTATE* st, int t) { return t < 32 && (st->folded >> t) & 1u; }
 
+/* Teams are told apart only when one of them has two players: a free-for-all, every player alone,
+   has no headers, while a 2v1v1 gives each lone player a header of its own (hud.js, `headed`). */
+static int headed(const HUDSTATE* st)
+{
+    int t;
+    if (st->nteam < 2) return 0;
+    for (t = 0; t < st->nteam && t < HUD_MAXSEAT; t++)
+        if (st->team_n[t] > 1) return 1;
+    return 0;
+}
+
 static void header(C* c, int t, double ox, double oy);
 static void row(C* c, int seat, double ox, double oy);
 
@@ -523,9 +534,11 @@ static void column(C* c)
     double used = 0, yy = 0, fyy;
     int item[HUD_MAXSEAT * 2], nitem = 0, n = 0, t, i, k;
 
+    /* a team without a header cannot be folded, so its rows always show */
+    int hd = headed(st);
     for (t = 0; t < st->nteam && t < HUD_MAXSEAT; t++) {
-        if (st->nteam > 1) item[nitem++] = -1 - t;
-        if (!folded(st, t))
+        if (hd) item[nitem++] = -1 - t;
+        if (!hd || !folded(st, t))
             for (i = 0; i < st->team_n[t] && i < HUD_MAXSEAT; i++) item[nitem++] = st->team_seat[t][i];
     }
 #define HOF(it, k) ((it) < 0 ? hh + ((k) ? hgap : 0) : rh)

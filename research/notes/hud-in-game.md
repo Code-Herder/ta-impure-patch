@@ -196,7 +196,12 @@ The owner's decisions (2026-10-08):
   the HUD does not show, is dropped.
 - **The teams are the mutual alliances**, joined transitively with union-find
   (`teams`, `tagpu_hudstate.c`): two seats are one team when each one's alliance row marks the
-  other. When every seat is alone the HUD shows one team with no headers, as a free-for-all.
+  other; a lone player is a team of one. Whether teams get headers is the layout's rule
+  ([The replay HUD's layout](hud-layout.md), *The column*): a free-for-all has no team header at
+  all, and a 2v1v1 gives each lone player a header of its own. MEASURED 2026-10-09 on two
+  recordings of the four-seat test bed (ally groups 5 5 5 5, and 0 0 1 2): the free-for-all's
+  column is four rows with no header and the 2v1v1's is Team 1 · 2/2 over two rows, then Team 2
+  and Team 3 at 1/1 each over one, both matching the mockup fed the game's dump at best shift 0.
   In a skirmish the alliances are the SKIRMISH screen's: the seat fill `0x47A760` marks allied
   every human or AI seat that shares an alliance group other than 5 (the store at `0x47A890`;
   [engine map](exe-reverse-engineering.md), *The seat fill*). The group is saved in the registry as

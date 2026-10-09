@@ -148,13 +148,18 @@ const HUD = (() => {
     return h;
   }
 
+  /* Teams are told apart only when one of them has two players: a free-for-all, every player alone, has no
+     headers and no team split, while a 2v1v1 gives each lone player a header of its own. */
+  function headed(st) { return st.teams.length > 1 && st.teams.some(m => m.length > 1); }
+
   /* ---- the column: team headers and player rows from the top bar down, as many as fit above the dock and its foot
      plate; the rest scroll ---- */
   function column(st) {
     const C = L.column, Fo = C.foot, x = st.W - C.r - C.w, top = st.frame.top + C.t;
     const bottom = st.H - st.frame.bottom - L.dock.h - C.dock_gap, area = bottom - top - Fo.gap - Fo.h;
     const items = [];
-    st.teams.forEach((m, t) => { if (st.teams.length > 1) items.push({ team: t }); if (!st.folded.includes(t)) m.forEach(i => items.push({ seat: i })); });
+    const hd = headed(st);   // a team without a header cannot be folded, so its rows always show
+    st.teams.forEach((m, t) => { if (hd) items.push({ team: t }); if (!hd || !st.folded.includes(t)) m.forEach(i => items.push({ seat: i })); });
     const hOf = (it, k) => it.team != null ? L.header.h + (k ? C.header_gap : 0) : L.row.h;
     let used = 0, n = 0;
     while (n < items.length && used + (n ? C.gap : 0) + hOf(items[n], n) <= area) { used += (n ? C.gap : 0) + hOf(items[n], n); n++; }
@@ -241,7 +246,7 @@ const HUD = (() => {
         let r = tb.x + tb.w - Wn.split.end;
         for (const q of [...Wn.split.chips].reverse()) {
           const b = { x: r - q.w, y: tb.y + (tb.h - ch.h) / 2, w: q.w, h: ch.h };
-          h += chip(b, q.text, S.split === q.value, { kind: 'split', val: q.value }, q.value === 'team' && st.teams.length < 2 && Wn.split.off);
+          h += chip(b, q.text, S.split === q.value, { kind: 'split', val: q.value }, q.value === 'team' && !headed(st) && Wn.split.off);
           r -= q.w + ch.gap;
         }
       }
