@@ -493,8 +493,10 @@ slower, never differently. The held lanes (L, P, R, F, K, X and U; `held_lane`) 
 LAUNCH'S HOLD) bounds the level's first batch to one tick at `0x49692D` and sets the pause bit at
 the frame visit after it: a skirmish is held at GameTime 1 with its scenario applied on the held
 frames (the applier hook `0x4969D2` lies on the paused path; MEASURED 2026-10-09, `resource-mex`
-held at 1 with its 8 units applied), a playing at its first step, a seek or a takeover at T−1
-once its rebuild is done, so nothing a lane arms can pass before its answer. From there a lane
+held at 1 with its 8 units applied), a playing at its first step — or, when the launch's seek is
+already pending there, once the seek has rebuilt the level at T−1 — and a takeover or seek asked
+for later runs on the held frames and leaves the level held at T−1, so nothing a lane arms can
+pass before its answer. From there a lane
 acts at GameTimes: the trigger's `pause at <T>` sets the pause bit at the frame visit after step
 T (the same observer bounds the batch so the step stops at T exactly), `resume` clears it, and
 **the hold keeper** at the pause test `0x496920` puts the bit back before every test while a pause

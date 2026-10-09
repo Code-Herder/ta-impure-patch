@@ -15155,7 +15155,8 @@ and the setter are in *The speeds* above, the step's iteration in
   round trip lowers the count to stop at T−1; an armed `pause at <T>` lowers it to stop at T; and
   **a test launch's hold** (`tagpu_hold.on`, THE LAUNCH'S HOLD) lowers the level's first batch to
   one tick. The pause itself is set at the frame visit `0x4969CD` after step T (the hold's: after
-  that first step, or once a seek or takeover the launch asked for has rebuilt its level) and
+  that first step, or after a seek already pending there once it has rebuilt the level; a seek or
+  takeover asked for later runs on the held frames, which keep the level held at T−1) and
   cleared by `resume`, as the Pause key's toggle of bit 0 (`0x4960AA..0x4960BC`) does without its
   network packet; the hold keeper at `0x496920` (above) keeps it set until then. MEASURED at
   k = 1: a light fixture's live lane ~1,500 ticks a second, a puppet's P and R 200–385, the battle's

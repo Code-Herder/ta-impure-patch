@@ -999,8 +999,9 @@ block that reads to its last complete block.
   launch (`hold: the launch's hold armed at 0x49692D and 0x496920` at attach; refused with a line
   otherwise) bounds the level's first batch to one tick and pauses it at the frame visit after —
   a skirmish at GameTime 1, with `scenario load`'s scenario applied on the held frames; a playing
-  at its first step; `replay seek --recording` and `replay takeover FILE` at T−1, once the rebuild
-  is done (`pause: paused at GameTime <g> (the launch's hold)`). `resume` lets it run. While a
+  at its first step (`pause: paused at GameTime <g> (the launch's hold)`), or at T−1 when
+  `replay seek --recording`'s seek is already pending there; a takeover or a seek asked for on
+  the held level runs on the held frames and leaves it held at T−1. `resume` lets it run. While a
   pause the DLL took is held, the Pause key and the in-game menu's OK do not release it (the hold
   keeper at `0x496920`).
 - **A seek's work**: every seek logs `replay: <name>: the seek to <T>'s work: <I> iterations read
