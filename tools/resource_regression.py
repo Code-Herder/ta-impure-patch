@@ -786,6 +786,9 @@ def catalogue(name):
         c.call("stop")
 
 
+CHECK_FAILURES = (AssertionError, ValueError, subprocess.TimeoutExpired)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("instance")
@@ -812,16 +815,34 @@ def main():
          **{m: (lambda c, m=m: policy(c, m, a.gamedir)) for m in ("locked", "inherit")},
          **{m: (lambda c, m=m: terrain(c, m)) for m in ("plain", "uniform", "mixed")}}[a.case]
         check = Check(a.instance)
+        # The case's own failure is the exit reason and is printed first; a cleanup step that
+        # fails after it is reported beside it, never in its place. A case that raised anything
+        # else leaves the traceback as the reason, and the cleanup failures as the lines above it.
+        failures, raised = [], True
         try:
             run(check)
+            raised = False
+        except CHECK_FAILURES as e:
+            failures.append(("", e))
+            raised = False
         finally:
-            try:
-                if a.case in ("locked", "inherit"):
-                    check.call("arm", "menu.open=off")
-            finally:
-                # the lane's world handed back running, as it was handed over
-                check.release()
-    except (AssertionError, ValueError, subprocess.TimeoutExpired) as e:
+            cleanup = [("release", check.release)]   # the world handed back running, as it was
+            if a.case in ("locked", "inherit"):
+                cleanup.insert(0, ("menu.open=off", lambda: check.call("arm", "menu.open=off")))
+            for what, step in cleanup:
+                try:
+                    step()
+                except CHECK_FAILURES as e:
+                    failures.append((what, e))
+            for i, (what, e) in enumerate(failures):
+                if i == 0 and not raised:
+                    print(f"resource regression FAILED: {what + ': ' if what else ''}{e}",
+                          file=sys.stderr)
+                else:
+                    print(f"resource regression: {what} failed as well: {e}", file=sys.stderr)
+        if failures:
+            return 1
+    except CHECK_FAILURES as e:
         print(f"resource regression FAILED: {e}", file=sys.stderr)
         return 1
     return 0
