@@ -58,6 +58,18 @@ TREE = HERE.parent
 # the default arm set of the ta-drive skill, less gui.on (the walk arms its own mode)
 ARM_SET = ["native.on=all wrecks", "terr.on", "feat.on", "fx.on", "sfx.on", "mark.on=log", "order.on",
            "zoom.on", "vpwide.on"]
+# EVERY WAIT IS ON A FACT. A stop reads the screen once the game has shown it -- engine flips
+# counted by the census, presented frames counted by the UI layer's heartbeat, a log line, a
+# peek answered at a later flip -- and a wall bound only gives up on a game that stopped
+# answering (ACK_S for a frame's answer, STALL_S for a count that stood still), so a loaded
+# machine makes a walk slower, never its numbers different.
+GAMETIME = "*0x511DE8+0x38a47"
+EYE = ("*0x511DE8+0x1431F:4", "*0x511DE8+0x14323:4")    # the camera's eye, x and z
+ACK_S = 60
+STALL_S = 120
+WINDOW_FLIPS = 60       # the census window: this many engine flips into the new screen
+MOVE_TICKS = 90         # order_far: the game time a commander walks before its position is read
+
 # Aim every gadget click in CLIENT-AREA pixels and let the engine work back
 # to a logical pixel by its own arithmetic. A walk that mixes the two proves
 # nothing, so it is a whole-run switch (`--device`).
@@ -132,8 +144,8 @@ def game_walk(side):
         ("move", ["select-commander", "order-far"]),
         ("move-stop", [["ui", "click", f"{P}STOP"], "park"]),
         # --- the minimap's view box after the camera moves (the fixture pins the eye,
-        # so release it and edge-scroll right for a second; parking the pointer stops it) ---
-        ("scroll-box", ["release-eye", "edge-scroll", "wait:1.0", "park"]),
+        # so release it and edge-scroll right until the eye moves; parking the pointer stops it) ---
+        ("scroll-box", ["release-eye", "edge-scroll", "eye-moved", "park"]),
     ]
 
 
@@ -154,13 +166,14 @@ def cycle_walk(side, k):
     # (0x491ADC) and pushes MAINMENU; cnc-ddraw restarts its render thread (a new
     # swapchain) on the way, which is the switch the counters are read across
     shell_stops = [(f"MAINMENU{sfx}", [["ui", "click", "CHOICE1"],
-                                       ["ui", "wait", "--gui", "MAINMENU", "--timeout", "30"], "wait:3.0"])]
+                                       ["ui", "wait", "--gui", "MAINMENU", "--timeout", str(ACK_S)],
+                                       "presented"])]
     shell_stops += [(f"{lbl}{sfx}", acts) for lbl, acts in SHELL_WALK[1:]]
     shell_stops += [(f"SINGLE{sfx}b", [["ui", "click", "SINGLE"]]),
                     # Mapped, like `scenario load` sets it: the gadget decides, not the registry
                     (f"SKIRMISH{sfx}b", [["ui", "click", "Skirmish"], ["ui", "set", "Mapping", "1"]])]
     game_stops = [
-        (f"{P}MAIN2{sfx}", ["apply-fixture", "wait:3.0", "park"]),
+        (f"{P}MAIN2{sfx}", ["apply-fixture", "park"]),
         (f"{P}COM1{sfx}", ["select-commander"]),
         (f"ARMOPT{sfx}", [["keys", "tab"]]),
         (f"game-back{sfx}", [["ui", "click", "PREV", "CANCEL", "PREVMENU", "OK"], "park"]),
@@ -170,8 +183,8 @@ def cycle_walk(side, k):
         # the one play-time lever that makes the presented palette differ from the
         # engine's table (`paldiff` > 0), and the stop where the layer's palette
         # source is proven. 10 puts it back.
-        (f"gamma15{sfx}", [*chat("+gamma 15"), "wait:4.0"]),     # the heartbeat is 5 s apart: let it catch the change
-        (f"gamma10{sfx}", [*chat("+gamma 10"), "wait:4.0"]),
+        (f"gamma15{sfx}", [*chat("+gamma 15"), "heartbeat"]),
+        (f"gamma10{sfx}", [*chat("+gamma 10"), "heartbeat"]),
     ]
     return exit_stops, shell_stops, game_stops
 
@@ -205,6 +218,7 @@ class Walk:
         self.restore = restore
         self.scenario = scenario
         self.W, self.H = [int(v) for v in res.lower().split("x")]
+        self.eye0 = None                # the eye an edge scroll started from
 
     def log_cursor(self):
         return talog.Cursor(self.gamedir) if self.gamedir else None
@@ -230,6 +244,47 @@ class Walk:
             self.census_cursor = talog.Cursor.run_start(self.gamedir)
         data = self.census_cursor.read(advance=True)
         return [l for l in data.decode("latin-1", "replace").splitlines() if "gui census:" in l]
+
+    def peek(self, *specs):
+        """The specs' values, read on the game thread at one flip."""
+        rc, out = tacli("peek", self.inst, *specs, "--json", timeout=ACK_S + 30)
+        try:
+            return [int(str(p["value"]).split()[0]) for p in json.loads(out)["peeks"]]
+        except (ValueError, KeyError, IndexError):
+            return None
+
+    def until(self, fact, what, seconds=ACK_S):
+        """Until `fact()` answers, `seconds` at most; None, said, when it does not."""
+        end = time.monotonic() + seconds
+        while True:
+            got = fact()
+            if got:
+                return got
+            if time.monotonic() >= end:
+                print(f"  {what}: not in {seconds} s", file=sys.stderr)
+                return None
+            time.sleep(0.1)
+
+    def logged(self, cursor, rx, n, what):
+        """Until `n` lines matching `rx` are logged after `cursor`; a count that stands still
+        for STALL_S gives up, said. The lines, or None."""
+        seen, at = -1, time.monotonic()
+        while True:
+            lines = self.log_since(cursor, rx)
+            if len(lines) >= n:
+                return lines
+            if len(lines) != seen:
+                seen, at = len(lines), time.monotonic()
+            elif time.monotonic() - at > STALL_S:
+                print(f"  {what}: {len(lines)} of {n} lines in {STALL_S} s", file=sys.stderr)
+                return None
+            time.sleep(0.2)
+
+    def presented(self, n=2):
+        """Until `n` UI heartbeats are logged after now: the layer logs `GUI flips=` once every
+        600 of the render thread's frames (tagpu_gui_flush, from tagpu_overlay_draw), so at
+        least (n - 1) x 600 frames were presented after it."""
+        return self.logged(self.log_cursor(), r"^GUI flips=", n, "presented frames")
 
     def top_gui(self):
         rc, uiout = tacli("ui", self.inst)
@@ -262,7 +317,11 @@ class Walk:
         for u in cands:
             sx, sy = u["screen"]
             tacli("click", self.inst, str(int(sx)), str(int(sy)))
-            time.sleep(0.6)
+            # the click returns once the engine consumed it, the selection made; the next frame
+            # callback opens the build page (0x4969A4..0x4969B4: bit 4 of main+0x37EBE, set by the
+            # selection, cleared before 0x41B2E0 [INFERRED: the page's opener]), and a peek is
+            # answered at a later flip than that
+            self.peek(GAMETIME)
             after = self.top_gui()
             if after != before or after.upper().endswith("COM1.GUI"):
                 return True
@@ -281,12 +340,12 @@ class Walk:
         if level == "reset":
             tmp.write_text("1.0\n")
             os.replace(tmp, path)
-            time.sleep(1.0)
+            self.presented()
             path.unlink(missing_ok=True)
             return
         tmp.write_text(f"{float(level):.3f}\n")
         os.replace(tmp, path)
-        time.sleep(1.5)                  # the zoom eases over thirteen presented frames
+        self.presented()                 # the zoom eases over thirteen presented frames
 
     def order_far(self, label):
         """Right-click ground far from the commander until it walks (a click on water is
@@ -299,7 +358,7 @@ class Walk:
         W, H = self.W, self.H
         for (x, y) in ((W - 260, H - 140), (300, H - 140), (W - 260, 140), (300, 140), (W // 2, H - 120)):
             tacli("click", self.inst, str(x), str(y), "--right")
-            time.sleep(6.0)              # the roster block is logged every 300 frames
+            self.walked(MOVE_TICKS)
             after = [u for u in self.my_units() if u.get("id") == uid]
             pos = tuple(after[0].get("world", (0, 0))[:2]) if after else before
             if pos != before:
@@ -307,6 +366,24 @@ class Walk:
                 return True
         print(f"  [{label}] the commander did not move (every right-click rejected?)", file=sys.stderr)
         return False
+
+    def walked(self, ticks):
+        """Until `ticks` of game time have passed and a roster block was logged after them, so
+        the roster read next is of a later tick; a GameTime that stands still for STALL_S gives
+        up, said."""
+        g0 = self.peek(GAMETIME)
+        last, at = g0, time.monotonic()
+        while g0:
+            g = self.peek(GAMETIME)
+            if g and g[0] - g0[0] >= ticks:
+                break
+            if g != last:
+                last, at = g, time.monotonic()
+            elif time.monotonic() - at > STALL_S:
+                print(f"  GameTime stood at {g} for {STALL_S} s", file=sys.stderr)
+                return
+            time.sleep(0.2)
+        self.logged(self.log_cursor(), r"^\s+u\d{3} ", 1, "a roster block")
 
     def act(self, label, a):
         """One action: a walk verb (string) or a tacli argument list."""
@@ -318,7 +395,6 @@ class Walk:
                 if cands:
                     sx, sy = cands[0]["screen"]
                     tacli("keys", self.inst, f"mouse:{int(sx)},{int(sy)}")
-                    time.sleep(0.3)
             elif a == "park":
                 self.park()
             elif a.startswith("zoom:"):
@@ -329,14 +405,27 @@ class Walk:
                 tacli("eye", self.inst, "--release")
             elif a == "edge-scroll":
                 # TA's edge trigger is an equality on the outermost pixel (ta-drive skill)
+                self.eye0 = self.peek(*EYE)
                 tacli("keys", self.inst, f"mouse:{self.W - 1},{self.H // 2}")
-            elif a.startswith("wait:"):
-                time.sleep(float(a.split(":", 1)[1]))
+            elif a == "eye-moved":
+                # the release is read every 15 render frames, then the edge scroll moves the eye
+                self.until(lambda: self.peek(*EYE) != self.eye0, f"[{label}] the camera moving")
+            elif a == "presented":
+                self.presented()
+            elif a == "heartbeat":
+                # the layer's `gui: twins=` line every 5 s; the second after now covers a window
+                # that began after the change
+                self.logged(self.log_cursor(), r"^gui: twins=", 2, f"[{label}] the layer's heartbeat")
             elif a == "apply-fixture":
                 # the fixture back onto the game the cycle just started: apply works on
-                # a running game and clears the skirmish's own commanders first
+                # a running game and clears the skirmish's own commanders first; the stop
+                # waits for a roster header after the applier's line, a frame that holds them
+                cursor = self.log_cursor()
                 rc, out = tacli("scenario", "apply", self.inst, self.scenario, timeout=300)
                 print(f"  [{label}] {out.strip().splitlines()[-1] if out.strip() else 'apply: no output'}", file=sys.stderr)
+                if self.logged(cursor, r"^scenario: applied=", 1, f"[{label}] the applier's line"):
+                    applied = self.log_cursor()
+                    self.logged(applied, r"^units: alive=", 1, f"[{label}] the units")
             else:
                 print(f"  [{label}] unknown verb {a}", file=sys.stderr)
             return
@@ -377,8 +466,7 @@ class Walk:
         the atlas has grown and whether colour is live (`col=`, `colvalid=`)."""
         for act in actions:
             self.act(label, act)
-            time.sleep(0.4)
-        time.sleep(2.0)
+        self.presented()
         rc, uiout = tacli("ui", self.inst)
         screen = uiout.splitlines()[0].strip() if uiout.strip() else "?"
         hb = self.heartbeat()
@@ -441,17 +529,24 @@ class Walk:
             self.census_lines()             # start the first window here
         for a in actions:
             self.act(label, a)
-            time.sleep(0.4)
         # the transition is where a retained UI draws, so the window starts
         # before the actions (census_lines() was drained at the end of the last
-        # stop) and runs two seconds into the new screen
-        time.sleep(2.0)
+        # stop) and runs WINDOW_FLIPS engine flips into the new screen, counted by
+        # the census lines' own `flip=` (one line every 50 censuses)
+        into = self.log_cursor()
+
+        def flips():
+            got = [int(m.group(1)) for m in (re.search(r"flip=(\d+)", ln) for ln in
+                                             self.log_since(into, "gui census:")) if m]
+            return got and got[-1] - got[0] >= WINDOW_FLIPS
+        self.until(flips, f"[{label}] the census window", STALL_S)
         lines = self.census_lines()
         rc, uiout = tacli("ui", self.inst)
         screen = uiout.splitlines()[0].strip() if uiout.strip() else "?"
         # the PGM of the last flip, and the engine's surface
+        asked = self.log_cursor()
         tacli("arm", self.inst, "gui_census.trigger")
-        time.sleep(0.6)
+        self.logged(asked, r"gui census: pgm written", 1, f"[{label}] the census PGM")
         pgm_png = self.out / f"{label}-census.png"
         if self.gamedir and (self.gamedir / "tagpu_gui_census.pgm").exists():
             try:
@@ -480,10 +575,11 @@ class Walk:
         print(f"  {label:14s} {screen:40s} flips={summary['flips']:4d} changed={summary['changed']:7d} "
               f"unexplained={summary['unexplained']:7d} worst={summary['worst']}{hitstr}", file=sys.stderr)
 
-    def stop_loading(self, label, timeout=150.0):
+    def stop_loading(self, label, timeout=300.0):
         """The loading screen, held until the world is alive. It is presented exactly
         ONCE: the game entry handler paints it (`0x4288D0("loadgame2bg")`) and flips, and
-        nothing presents again until the map is loaded and the mode switches."""
+        nothing presents again until the map is loaded and the mode switches. `timeout` only
+        gives up on a load that never ends."""
         start = self.log_cursor()
         rc, out = tacli("ui", self.inst, "click", "Start")
         if rc != 0:
@@ -491,13 +587,15 @@ class Walk:
         t0 = time.time()
         alive = False
         while time.time() - t0 < timeout:
-            # "alive" is read only after the game's mode switch: the overlay's `units:` line
-            # keeps reporting the dead game's array from the shell (MEASURED 2026-09-07:
-            # `alive=4` two seconds after Start), so the switch -- the Vulkan lane coming
-            # up again at the game's resolution -- is the first sign the map has loaded,
+            # "alive" is read only after the new level's first in-play packet: the overlay's
+            # `units:` line keeps reporting the dead game's array from the shell (MEASURED
+            # 2026-09-07: `alive=4` two seconds after Start), and the Vulkan lane does not come
+            # up again between levels, so the publisher's `first in-play packet` line for the
+            # new level generation (tagpu_packet_pub.c) is the first sign the map has loaded,
             # and the roster after it the second
             lines = self.log_since(start)
-            at = next((i for i, l in enumerate(lines) if re.search(r"^vk: up in \d+ ms", l)), None)
+            at = next((i for i, l in enumerate(lines)
+                       if re.search(r"^packet: level gen \d+: first in-play packet", l)), None)
             if at is not None and any(re.search(r"units: alive=[1-9]", l) for l in lines[at:]):
                 alive = True
                 break
@@ -665,7 +763,8 @@ def main():
         print(out.strip().splitlines()[-1] if out.strip() else "", file=sys.stderr)
         w.gamedir = w.gamedir or instance_dir(a.inst) or (TREE / "tagpu" / "instances" / a.inst / "gamedir")
         w.census_cursor = None                 # the census window starts with the new run
-        time.sleep(3.0)
+        main2 = f"{a.side[:3].upper()}MAIN2"
+        tacli("ui", a.inst, "wait", "--gui", main2, "--timeout", str(ACK_S), timeout=ACK_S + 30)
         walk = game_walk(a.side)
         if a.screens_only:
             walk = walk[:walk.index(next(s for s in walk if s[0] == "clock"))]
@@ -679,7 +778,7 @@ def main():
                 w.stop_at(label, actions)
             w.stop_loading(f"loading#{k}")
             w.census_cursor = w.log_cursor()   # the census window restarts with the game
-            time.sleep(3.0)
+            tacli("ui", a.inst, "wait", "--gui", main2, "--timeout", str(ACK_S), timeout=ACK_S + 30)
             for label, actions in game_stops:
                 w.stop_at(label, actions, in_game=True)
             w.report()                          # a partial report survives a killed run
