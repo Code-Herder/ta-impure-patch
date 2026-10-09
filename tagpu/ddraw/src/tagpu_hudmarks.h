@@ -9,8 +9,9 @@
 
 /* The level's markers and bookmarks, for the HUD's packet fill: up to `cap` of them into
    `T`/`kind`/`seat` -- kind 0 a commander's death, 1 a defeat, 2 a bookmark, whose seat is 0xFF --
-   the deaths and defeats as far as the worker has walked the recording. Starts that worker on the
-   first call that finds the playback live. */
+   the deaths and defeats as far as the worker has walked the timeline that plays. Starts that
+   worker on the first call that finds the playback live, and again, after joining the last, when
+   the playback has moved to another timeline. */
 int  tagpu_hudmarks_get(unsigned* T, unsigned char* kind, unsigned char* seat, int cap);
 
 /* The bookmark button: removes the bookmark nearest `now` within `within` GameTime of it, else adds

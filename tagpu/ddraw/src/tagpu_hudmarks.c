@@ -24,6 +24,7 @@ static volatile LONG   s_walkStop;
 static HANDLE          s_walkH;
 static int             s_walkStarted;
 static char            s_walkPath[MAX_PATH];
+static unsigned        s_walkTl;        /* the timeline walked: the one the playback plays        */
 /* the bookmarks: index.dat keys a recording by its name in replays\ and its size */
 static unsigned        s_bm[BM_MAX];
 static int             s_nbm;
@@ -41,10 +42,15 @@ static int             s_keyOk;
    player image: replay-layout.tsv excludes neither.
    ORDERING: an entry is written whole before InterlockedExchange publishes the count that covers
    it, and entries are never rewritten, so the game thread reads entries below the count it read.
-   LIFETIME: the worker owns its reader and closes it before it returns; tagpu_hudmarks_level_end
-   stops it and waits for it on the game thread, at the teardown's entry, before the count goes
-   back to 0. Between two looks at the stop flag the worker reads one iteration -- at most one block
-   unpacked and decoded, a bound the format sets (RECR_BLOCK_MAX) -- not a timeout.
+   LIFETIME: the worker owns its reader and closes it before it returns; walk_stop stops it and
+   waits for it on the game thread -- at the teardown's entry, and when the playback moves to
+   another timeline -- before the count goes back to 0. The wait is bounded by the file, not by a
+   timeout: before its first look at the stop flag the worker opens the reader, which reads every
+   block header (recr_open's segment scan), and between two looks it reads one iteration -- at
+   most one block unpacked and decoded, a bound the format sets (RECR_BLOCK_MAX).
+   THE TIMELINE WALKED IS THE ONE THAT PLAYS (tagpu_replay_timeline): the reader is moved onto its
+   chain before the first iteration, as the playback's own is, and crosses each fork on it by a
+   seek, one segment's first iteration read whole.
    tagpu_recreader.c has no mutable statics and reads no engine memory, so the worker shares
    nothing with the playback. */
 _Static_assert(0x144 + 2 <= REC_PLAYER_BYTES, "the walker's two fields are in the player image");
@@ -89,8 +95,9 @@ static DWORD WINAPI walker(void* arg)
     (void)arg;
 
     r = recr_open(s_walkPath, why, sizeof why);
-    if (!r) {
+    if (!r || recr_timeline(r, s_walkTl, why, sizeof why) != 1) {
         tagpu_logf("hud: markers: none - %s", why);
+        if (r) recr_close(r);
         return 0;
     }
     h = recr_header(r);
@@ -98,6 +105,10 @@ static DWORD WINAPI walker(void* arg)
         RecWorld* W;
         if (InterlockedCompareExchange(&s_walkStop, 0, 0)) { stop = "stopped at the level's end"; break; }
         k = recr_tick(r, why, sizeof why);
+        /* a fork's chain goes on in its next timeline, which only a seek reads: to the iteration
+           after the world's, the child's first (recr_tick, THE BOUNDARY) */
+        if (k == RECR_BOUNDARY && recr_seek(r, recr_world(r)->tick + 1, 0, NULL, NULL, why, sizeof why) != 1)
+            k = -1;
         if (k <= 0) { if (k < 0) stop = why; break; }
         W = recr_world(r);
         iters++;
@@ -127,13 +138,14 @@ static DWORD WINAPI walker(void* arg)
     return 0;
 }
 
-/* The level's markers and bookmarks, once per level, on the first fill that sees the playback's
-   first step played. */
+/* The playing's markers and bookmarks, on the first fill that sees its first step played: once per
+   level, and again when a rewind moves the playback to another timeline. */
 static void walk_start(void)
 {
     const char* path = tagpu_replay_path();
     WIN32_FILE_ATTRIBUTE_DATA fa;
     s_walkStarted = 1;
+    s_walkTl = tagpu_replay_timeline();
     if (!path) return;
     lstrcpynA(s_walkPath, path, sizeof s_walkPath);
     s_keyOk = 0;
@@ -150,10 +162,23 @@ static void walk_start(void)
     if (!s_walkH) tagpu_logf("hud: markers: none - the walker did not start (%lu)", GetLastError());
 }
 
+static void walk_stop(void)
+{
+    if (s_walkH) {
+        InterlockedExchange(&s_walkStop, 1);
+        WaitForSingleObject(s_walkH, INFINITE);
+        CloseHandle(s_walkH);
+        s_walkH = NULL;
+    }
+    InterlockedExchange(&s_mkN, 0);
+    s_walkStarted = 0;
+}
+
 int tagpu_hudmarks_get(unsigned* T, unsigned char* kind, unsigned char* seat, int cap)
 {
     LONG n;
     int i, k = 0;
+    if (s_walkStarted && tagpu_replay_timeline() != s_walkTl) walk_stop();
     if (!s_walkStarted && tagpu_replay_live()) walk_start();
     /* the walker writes an entry, then publishes the count: the entries below it are whole */
     n = InterlockedCompareExchange(&s_mkN, 0, 0);
@@ -200,14 +225,7 @@ int tagpu_hudmarks_bookmark(unsigned now, unsigned within, unsigned* at)
 
 void tagpu_hudmarks_level_end(void)
 {
-    if (s_walkH) {
-        InterlockedExchange(&s_walkStop, 1);
-        WaitForSingleObject(s_walkH, INFINITE);
-        CloseHandle(s_walkH);
-        s_walkH = NULL;
-    }
-    InterlockedExchange(&s_mkN, 0);
-    s_walkStarted = 0;
+    walk_stop();
     s_nbm = 0;
     s_keyOk = 0;
 }

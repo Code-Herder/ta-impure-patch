@@ -48,7 +48,14 @@ device space where the dump said it was drawn, through `tacli hud`):
 - the modal test: with ARMOPT open (Tab), a click on the HUD's bookmark reached the engine — no
   bookmark was written — and the engine closed ARMOPT, as it closes it for any click outside it;
 - the walker's markers on the `hud-2v2-selfd` recording: a commander death at 1677 and a defeat
-  at 2906, both seat 0;
+  at 2906, both seat 0; on timeline 4 of the fork fixture's `forks.imprec` (forked from the
+  original at 1501), 2130 iterations walked to the fork's end, against the original's 1980, and
+  nine defeats at 1952;
+- the render-options panel open over the column: a device click on its FPS row, over the
+  column's plate, reached the panel (the counter came on) and the HUD took nothing;
+- Leave's question open: Tab opens nothing over it (the question stays on top, the pause held);
+  a click on the world closes it, as one closes ARMOPT, and that counts as No — the pause came
+  back and the playback went on; No from playing and from paused, each put back as it was;
 - under `tagpu_gdi.on`: the playback runs, with no HUD and no marker walk.
 
 Three faults were found that way and fixed before the landing: the four switches matched no
@@ -259,8 +266,14 @@ The owner's decisions:
   thread with its own reader of the recording, started by the first fill that finds the playback
   live; it marks a death where a seat's commander-loss counter `+0x106` rises and a defeat where
   its live count `+0x144` falls to 0, at most 256, and publishes each entry before the count that
-  covers it. The teardown wrap's entry (`tagpu_reclaim.c`) stops and joins it before
-  `tagpu_replay_level_end`, while the recording it reads is still the level's. A marker outside the recording's span, or for a
+  covers it. **It walks the timeline that plays** (`tagpu_replay_timeline`): it chooses it before
+  its first read, as the playback does, and crosses each fork on its chain by a seek to the
+  iteration after the world's (`recr_tick` answers `RECR_BOUNDARY` there). When a rewind moves
+  the playback to another timeline, the next fill stops and joins it and starts it again. The
+  teardown wrap's entry (`tagpu_reclaim.c`) stops and joins it before `tagpu_replay_level_end`,
+  while the recording it reads is still the level's. A stop waits for the reader's open, which
+  reads every block header of the file, and then for one iteration at most — bounded by the
+  file, not a timeout. A marker outside the recording's span, or for a
   seat the HUD does not show, is dropped.
 - **The teams are the mutual alliances**, joined transitively with union-find
   (`teams`, `tagpu_hudstate.c`): two seats are one team when each one's alliance row marks the
@@ -300,13 +313,17 @@ over the world, is `tagpu_menu_modal`'s.
   bar's track and two arrows; the foot plate's four enabled switches. With them go the
   timeline's playhead run (`track_x0`, `track_x1`: the track's ends inset by `track.ends`), the
   column's first item as drawn and the greatest it can be (`first`, `last`), and each row's
-  recorded seat (`seat[]`). A frame that draws no HUD, or has nothing to draw yet, posts `n` = 0.
+  recorded seat (`seat[]`). **Each drawn frame's map is posted once**: `tagpu_hudstate_cmd`
+  empties it as it copies it, so a frame that draws no HUD — the pass ran and drew none, or
+  `tagpu_vk_frame` returned before the pass ran (no swapchain size yet, a rebuild, a display-mode
+  change) — posts `n` = 0, and a click there is the engine's.
 - **The next command record carries it** (`TAGPU_CMD_HUD` in `TAGPU_CMD`, `tagpu_packet.h`):
   `tagpu_zoom_frame_end` fills it through `tagpu_hudstate_cmd` beside the zoom's fields. It is a
   level, as the record's other levels are.
 - **The game thread copies it at the take** (`tagpu_hudinput_take`, from the command record's
   apply in `tagpu_packet_pub.c`), before every in-play draw, bounding `n` and `nseat` by the
-  arrays. A click between two takes reads this copy.
+  arrays. A click between two takes reads this copy. A take with no record the exchange vouches
+  for (`tagpu_cmd_take` NULL: the exchange stopped, or no record yet) empties it.
 - **It describes the frame on screen.** The overlay driver, which posts the record, runs before
   `tagpu_vk_frame` in `render_vk.c`, so the map a record carries is the previous frame's — the
   one being shown. That is by design: the map is one frame behind the HUD being built, and level
@@ -351,8 +368,12 @@ buttons; it is how `tacli` finds a row to hover before clicking one of its butto
       engine's own space (`click:`, `pclick:`) has no client point (`cx` < 0), never reaches the
       HUD and passes under it to the engine.
 - **A press is taken only when** the map is not empty, `tagpu_hudstate_on`, `tagpu_replay_live`
-  and not `tagpu_menu_modal`, and the point is on a control. A press taken is dropped whole: no
-  message and no virtual key state reach the engine.
+  and not `tagpu_menu_modal`, and the point is on a control and not on the Impure Config panel
+  or its sprocket (`tagpu_menu_owns_point`, at the point converted to the engine's space by
+  `mouse_client_to_game`, the conversion every message takes). The panel hangs from the top right
+  below the bar, over the column, and is drawn above the HUD; its clicks are answered by the
+  engine's pump, which runs after this test. A press taken is dropped whole: no message and no
+  virtual key state reach the engine.
 - **A release is taken exactly when its press was**, whatever is under it then, so the engine
   never sees half a click; a press whose release was lost ends at the next press of the same
   button. A left click acts at the release, when the release is over the control the press
@@ -369,7 +390,7 @@ buttons; it is how `tacli` finds a row to hover before clicking one of its butto
   injected path) and `fake_WndProc`, at the pointer `mouse_last_client` holds. Over the column or
   its scroll bar each notch scrolls one item, down for a notch toward the player; over any other
   control it is taken and does nothing; over the world it is not taken, and the zoom has it.
-  Under the same gate as a press.
+  Under the same gate as a press, the panel's rectangle included.
 - **The scroll** is asked from the scroll last asked, not the one last drawn, so notches that
   arrive within one frame add up, and is held to [0, `last`]; the layout holds it there again
   when it builds.
@@ -394,9 +415,14 @@ buttons; it is how `tacli` finds a row to hover before clicking one of its butto
 - **The question is open while a screen named `YESORNO.GUI` is on the GUI stack**: from the top,
   `main+0x531`, down the `+0` links, at most 32 steps, each screen's name being its record 0's —
   `[gm+4]+2`, 16 bytes, the field the engine's own compare `0x4AB060` reads (`named_on_stack`).
-  Once it is gone — No pops it — the next fill puts the pause back as it was before the click.
-  If the guard or the opener refused, the pause is put back at once and the toast says "Leave
-  from the game menu".
+  Once it is gone — No pops it, and so does a click outside it — the observer puts the pause back
+  as it was before the click (`tagpu_hudinput_leave_shown`). The observer runs every in-game frame
+  whatever the HUD's state, so the pause comes back even when the HUD has stopped drawing. If the
+  guard or the opener refused, the pause is put back at once and the toast says "Leave from the
+  game menu".
+- **It is not modal to the engine.** It is opened without ARMOPT under it, so bit 0 of
+  `main+0x37EBE` is clear: a click outside it closes it, as one closes ARMOPT, which is a No.
+  Tab opens nothing while it is up. MEASURED 2026-10-09 (*Status*).
 - **Yes** runs the engine's quit tail (`0x460630`): the teardown, and the shell, which opens the
   Replays browser again after a Watch.
 
@@ -411,7 +437,9 @@ needs the name test: its opener `0x460680` sets neither (bit 0's setters are `0x
 `0x49477E` and `0x45D002`), and Impure opens it without ARMOPT under it. A build menu
 stacks on the base screen without either test, so a name compare of the top screen would not do
 [INFERRED: the build pages' bits not traced].
-Under a menu every click is the engine's: MEASURED 2026-10-09 (*Status*).
+Under a menu every click is the engine's: MEASURED 2026-10-09 (*Status*). The Impure Config
+panel sets neither bit, so it is not part of this test: the press tests its rectangle instead
+(*The press*), and the HUD goes on answering clicks outside it while it is open.
 
 ### Driving it: `tacli hud`
 

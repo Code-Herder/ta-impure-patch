@@ -8219,6 +8219,11 @@ const char* tagpu_replay_path(void)
     return tagpu_puppet_on() && s_rd && s_path[0] ? s_path : NULL;
 }
 
+unsigned tagpu_replay_timeline(void)
+{
+    return s_tl;
+}
+
 /* THE SEEK, as tacli's `seek` asks for it: the frame visit before 0x4969CD consumes it, paused
    frames included, on the game thread as this is, so a second request before the visit replaces
    the first. T is clamped to [first + 1, last]: the seek writes GameTime T - 1 (seek_run), and the

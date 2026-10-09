@@ -56,7 +56,7 @@ static int      s_leaveWant, s_leaveAsked, s_leaveWasPaused;
 
 void tagpu_hudinput_take(const TAGPU_CMD_HUD* h)
 {
-    if (!h) return;
+    if (!h) { s_hit.n = 0; return; }
     s_hit = *h;
     if (s_hit.n > TAGPU_CMD_HUDHITS) s_hit.n = TAGPU_CMD_HUDHITS;
     if (s_hit.nseat > TAGPU_PK_HUD_SEATS) s_hit.nseat = TAGPU_PK_HUD_SEATS;
@@ -69,6 +69,16 @@ void tagpu_hudinput_take(const TAGPU_CMD_HUD* h)
 static int active(void)
 {
     return s_hit.n && tagpu_hudstate_on() && tagpu_replay_live() && !tagpu_menu_modal();
+}
+
+/* THE RENDER-OPTIONS PANEL AND ITS SPROCKET ARE DRAWN OVER THE HUD, and the engine's pump, which
+   answers the panel, runs after this: a point they own is theirs. tagpu_menu_owns_point tests the
+   engine's space, the one the client point converts to here as for every message. */
+static int under_menu(int cx, int cy)
+{
+    int gx, gy;
+    return mouse_client_inside(cx, cy) && mouse_client_to_game(cx, cy, &gx, &gy) &&
+           tagpu_menu_owns_point(gx, gy);
 }
 
 /* the topmost control under the point: its key into `key` */
@@ -211,7 +221,8 @@ int tagpu_hudinput_button(int cx, int cy, int down, int right)
         if (!right) {
             if (s_drag) {
                 if (cx >= 0) seek_at(cx);
-            } else if (s_held[0] && cx >= 0 && active() && hit(cx, cy, key) && !strcmp(key, s_held)) {
+            } else if (s_held[0] && cx >= 0 && active() && !under_menu(cx, cy) && hit(cx, cy, key) &&
+                       !strcmp(key, s_held)) {
                 act(key);
             }
             s_drag = 0;
@@ -223,7 +234,7 @@ int tagpu_hudinput_button(int cx, int cy, int down, int right)
         s_down &= ~bit;
         if (!right) { s_drag = 0; s_held[0] = 0; }
     }
-    if (cx < 0 || !active() || !hit(cx, cy, key)) return 0;
+    if (cx < 0 || !active() || under_menu(cx, cy) || !hit(cx, cy, key)) return 0;
     s_down |= bit;
     if (right) return 1;
     memcpy(s_held, key, sizeof s_held);
@@ -239,7 +250,9 @@ int tagpu_hudinput_wheel(UINT msg, WPARAM wp)
 {
     int cx, cy, d = (short)HIWORD(wp);
     char key[TAGPU_PK_HUD_KEY];
-    if (msg != WM_MOUSEWHEEL || !active() || !mouse_last_client(&cx, &cy) || !hit(cx, cy, key)) return 0;
+    if (msg != WM_MOUSEWHEEL || !active() || !mouse_last_client(&cx, &cy) || under_menu(cx, cy) ||
+        !hit(cx, cy, key))
+        return 0;
     if (d && over_column(cx, cy)) scroll_by(d > 0 ? -1 : 1);
     return 1;
 }
@@ -269,11 +282,6 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h)
         if (!active()) { s_drag = 0; s_held[0] = 0; }
         else if (mouse_last_client(&cx, &cy)) seek_at(cx);
     }
-    if (s_leaveAsked && !tagpu_menu_leave_open()) {
-        s_leaveAsked = 0;
-        tagpu_replay_pause(s_leaveWasPaused);
-    }
-
     h->px = h->py = -1;
     if (mouse_last_client(&cx, &cy) && cx < SHRT_MAX && cy < SHRT_MAX) { h->px = (int16_t)cx; h->py = (int16_t)cy; }
     h->folded = (uint16_t)s_folded;
@@ -314,6 +322,14 @@ void tagpu_hudinput_leave_opened(int opened)
     }
     tagpu_replay_pause(s_leaveWasPaused);
     toast("Leave from the game menu");
+}
+
+void tagpu_hudinput_leave_shown(int open)
+{
+    if (s_leaveAsked && !open) {
+        s_leaveAsked = 0;
+        tagpu_replay_pause(s_leaveWasPaused);
+    }
 }
 
 void tagpu_hudinput_level_end(void)

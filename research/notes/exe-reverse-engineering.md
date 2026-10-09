@@ -14683,7 +14683,9 @@ EXITMENU to pop: `[0x512FF8] = 0`, `call 0x460680`, then the title. That call is
 pump's dispatch, so no click is waiting on an answer and nothing calls `ActDone`; the pump's pop of
 the new top above happens only to a screen pushed inside an `OnCommand`. MEASURED 2026-10-09: the
 question opens titled "Leave this replay?", No pops it and the playback goes on, Yes runs the
-quit tail to the shell. Before every call Impure compares `0x460680..0x4607F1` and
+quit tail to the shell. Opened this way bit 0 of `main+0x37EBE` is clear (no ARMOPT under it):
+MEASURED 2026-10-09, Tab opens nothing over it, and a device click on the world closes it, as
+one closes ARMOPT. Before every call Impure compares `0x460680..0x4607F1` and
 `0x4605C0..0x46065C` by FNV-1a against `0x8B2B971E` and `0x9EF8B480`, recomputed from
 `pristine/TotalA.exe.pristine`, and refuses Leave on a mismatch.
 

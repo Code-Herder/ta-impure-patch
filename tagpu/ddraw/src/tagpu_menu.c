@@ -1619,12 +1619,6 @@ int tagpu_menu_leave_ready(void)
     return s_installed;
 }
 
-int tagpu_menu_leave_open(void)
-{
-    char* main_p = *(char**)TA_MAIN;
-    return main_p && named_on_stack(main_p, YESORNO_SCREEN);
-}
-
 /* THE LEAVE GUARD. Leave calls the engine's YESORNO opener and leaves the rest to its OnCommand
    and the quit tail it jumps to (0x460630: the teardown, UpdateIngameGUI(1), GUI_Pop, the menu).
    Both are compared by FNV-1a against the retail exe's bytes at every Leave; on a mismatch Leave
@@ -1711,6 +1705,7 @@ static void menu_tick(void)
         lstrcpynA(main_p + OFF_EXPECT, SCREEN, 16);
     }
     if (tagpu_hudinput_leave_due()) tagpu_hudinput_leave_opened(leave_open(main_p));
+    tagpu_hudinput_leave_shown(named_on_stack(main_p, YESORNO_SCREEN));
 }
 
 static int __cdecl before_update(void* entry_esp)

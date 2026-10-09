@@ -94,7 +94,8 @@ void tagpu_replay_level_end(void);
 /* The replay HUD's requests (tagpu_hudinput.c), on the game thread.
    live: the level plays a recording and its first step has played, which was not refused.
    span: the recording's first and last GameTime, from its summary at the open; 0 when none.
-   path: "replays\\<file>" while a recording is open, else NULL.
+   path: "replays\\<file>" while a recording is open, else NULL; timeline: the timeline of it
+   that plays, 0 the original -- a rewind into a fork changes it within the level.
    seek_request: a seek to T, clamped to [first + 1, last], for the next frame visit; 0 refused.
    paused / pause: bit 0 of main+0x38A51, the Pause key's bit.
    speed / speed_set: the game speed's ceiling main+0x38A4B, 10 = 1x; speed_set takes 5, 10, 20, 40
@@ -102,6 +103,7 @@ void tagpu_replay_level_end(void);
 int  tagpu_replay_live(void);
 int  tagpu_replay_span(unsigned* first, unsigned* last);
 const char* tagpu_replay_path(void);
+unsigned    tagpu_replay_timeline(void);
 int  tagpu_replay_seek_request(unsigned T);
 int  tagpu_replay_paused(void);
 void tagpu_replay_pause(int on);
