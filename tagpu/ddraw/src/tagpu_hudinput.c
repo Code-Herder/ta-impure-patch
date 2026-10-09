@@ -72,13 +72,12 @@ static int active(void)
 }
 
 /* THE RENDER-OPTIONS PANEL AND ITS SPROCKET ARE DRAWN OVER THE HUD, and the engine's pump, which
-   answers the panel, runs after this: a point they own is theirs. tagpu_menu_owns_point tests the
-   engine's space, the one the client point converts to here as for every message. */
-static int under_menu(int cx, int cy)
+   answers the panel, runs after this: a point they own is theirs. (gx, gy) is the engine's point
+   the same message carries -- the one tagpu_menu_click and the zoom are asked with -- so the HUD
+   and the panel split the screen on one conversion, to the pixel. */
+static int under_menu(int gx, int gy)
 {
-    int gx, gy;
-    return mouse_client_inside(cx, cy) && mouse_client_to_game(cx, cy, &gx, &gy) &&
-           tagpu_menu_owns_point(gx, gy);
+    return tagpu_menu_owns_point(gx, gy);
 }
 
 /* the topmost control under the point: its key into `key` */
@@ -210,7 +209,7 @@ static void act(const char* key)
 #undef IS
 }
 
-int tagpu_hudinput_button(int cx, int cy, int down, int right)
+int tagpu_hudinput_button(int cx, int cy, int gx, int gy, int down, int right)
 {
     int bit = right ? 2 : 1;
     char key[TAGPU_PK_HUD_KEY];
@@ -221,7 +220,7 @@ int tagpu_hudinput_button(int cx, int cy, int down, int right)
         if (!right) {
             if (s_drag) {
                 if (cx >= 0) seek_at(cx);
-            } else if (s_held[0] && cx >= 0 && active() && !under_menu(cx, cy) && hit(cx, cy, key) &&
+            } else if (s_held[0] && cx >= 0 && active() && !under_menu(gx, gy) && hit(cx, cy, key) &&
                        !strcmp(key, s_held)) {
                 act(key);
             }
@@ -234,7 +233,7 @@ int tagpu_hudinput_button(int cx, int cy, int down, int right)
         s_down &= ~bit;
         if (!right) { s_drag = 0; s_held[0] = 0; }
     }
-    if (cx < 0 || !active() || under_menu(cx, cy) || !hit(cx, cy, key)) return 0;
+    if (cx < 0 || !active() || under_menu(gx, gy) || !hit(cx, cy, key)) return 0;
     s_down |= bit;
     if (right) return 1;
     memcpy(s_held, key, sizeof s_held);
@@ -246,11 +245,12 @@ int tagpu_hudinput_button(int cx, int cy, int down, int right)
     return 1;
 }
 
-int tagpu_hudinput_wheel(UINT msg, WPARAM wp)
+int tagpu_hudinput_wheel(UINT msg, WPARAM wp, LPARAM lp)
 {
     int cx, cy, d = (short)HIWORD(wp);
     char key[TAGPU_PK_HUD_KEY];
-    if (msg != WM_MOUSEWHEEL || !active() || !mouse_last_client(&cx, &cy) || under_menu(cx, cy) ||
+    if (msg != WM_MOUSEWHEEL || !active() || !mouse_last_client(&cx, &cy) ||
+        under_menu((short)LOWORD(lp), (short)HIWORD(lp)) ||
         !hit(cx, cy, key))
         return 0;
     if (d && over_column(cx, cy)) scroll_by(d > 0 ? -1 : 1);

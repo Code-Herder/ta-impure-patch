@@ -44,10 +44,12 @@ static int             s_keyOk;
    it, and entries are never rewritten, so the game thread reads entries below the count it read.
    LIFETIME: the worker owns its reader and closes it before it returns; walk_stop stops it and
    waits for it on the game thread -- at the teardown's entry, and when the playback moves to
-   another timeline -- before the count goes back to 0. The wait is bounded by the file, not by a
-   timeout: before its first look at the stop flag the worker opens the reader, which reads every
-   block header (recr_open's segment scan), and between two looks it reads one iteration -- at
-   most one block unpacked and decoded, a bound the format sets (RECR_BLOCK_MAX).
+   another timeline -- before the count goes back to 0. The wait is bounded by the file and the
+   format, not by a timeout: before its first look at the stop flag the worker opens the reader,
+   which reads every block header (recr_open's segment scan), and between two looks it reads one
+   iteration -- at most one block unpacked and decoded (RECR_BLOCK_MAX) -- or crosses one fork,
+   a seek that scans the headers again and rebuilds from the last snapshot before the fork
+   (SNAPSHOT_TICKS apart when written) plus the child's first iteration.
    THE TIMELINE WALKED IS THE ONE THAT PLAYS (tagpu_replay_timeline): the reader is moved onto its
    chain before the first iteration, as the playback's own is, and crosses each fork on it by a
    seek, one segment's first iteration read whole.
@@ -103,7 +105,7 @@ static DWORD WINAPI walker(void* arg)
     h = recr_header(r);
     for (;;) {
         RecWorld* W;
-        if (InterlockedCompareExchange(&s_walkStop, 0, 0)) { stop = "stopped at the level's end"; break; }
+        if (InterlockedCompareExchange(&s_walkStop, 0, 0)) { stop = "stopped: the level ended or the playback moved to another timeline"; break; }
         k = recr_tick(r, why, sizeof why);
         /* a fork's chain goes on in its next timeline, which only a seek reads: to the iteration
            after the world's, the child's first (recr_tick, THE BOUNDARY) */

@@ -19,13 +19,15 @@
 void tagpu_hudinput_take(const TAGPU_CMD_HUD* h);
 
 /* A left or right button at the window's client point (cx, cy) -- cx < 0 when the point is not
-   known, an injected click in the engine's own space -- from either of the shield's paths. 1 =
-   consumed: the engine never sees it. A release is consumed exactly when its press was. A point
-   the render-options panel or its sprocket owns is never the HUD's (tagpu_menu_owns_point). */
-int  tagpu_hudinput_button(int cx, int cy, int down, int right);
+   known, an injected click in the engine's own space -- from either of the shield's paths, and
+   (gx, gy), the engine's point the same message carries. 1 = consumed: the engine never sees it.
+   A release is consumed exactly when its press was. A point the render-options panel or its
+   sprocket owns is never the HUD's (tagpu_menu_owns_point, at the engine's point). */
+int  tagpu_hudinput_button(int cx, int cy, int gx, int gy, int down, int right);
 
-/* WM_MOUSEWHEEL at the pointer: over the column it scrolls it, over any control it is taken. */
-int  tagpu_hudinput_wheel(UINT msg, WPARAM wp);
+/* WM_MOUSEWHEEL at the pointer: over the column it scrolls it, over any control it is taken.
+   `lp` is the game point the zoom is given, which the panel's test takes. */
+int  tagpu_hudinput_wheel(UINT msg, WPARAM wp, LPARAM lp);
 
 /* The window lost the mouse: a drag ends where it is; its release, should it come, is still
    consumed. */

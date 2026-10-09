@@ -272,8 +272,10 @@ The owner's decisions:
   the playback to another timeline, the next fill stops and joins it and starts it again. The
   teardown wrap's entry (`tagpu_reclaim.c`) stops and joins it before `tagpu_replay_level_end`,
   while the recording it reads is still the level's. A stop waits for the reader's open, which
-  reads every block header of the file, and then for one iteration at most — bounded by the
-  file, not a timeout. A marker outside the recording's span, or for a
+  reads every block header of the file, then for one iteration or one fork's crossing at most —
+  a seek that scans the headers again and rebuilds from the last snapshot before the fork
+  (`SNAPSHOT_TICKS`, 900, apart as written) plus the child's first iteration. Bounded by the file
+  and the format, not a timeout. A marker outside the recording's span, or for a
   seat the HUD does not show, is dropped.
 - **The teams are the mutual alliances**, joined transitively with union-find
   (`teams`, `tagpu_hudstate.c`): two seats are one team when each one's alliance row marks the
@@ -369,10 +371,12 @@ buttons; it is how `tacli` finds a row to hover before clicking one of its butto
       HUD and passes under it to the engine.
 - **A press is taken only when** the map is not empty, `tagpu_hudstate_on`, `tagpu_replay_live`
   and not `tagpu_menu_modal`, and the point is on a control and not on the Impure Config panel
-  or its sprocket (`tagpu_menu_owns_point`, at the point converted to the engine's space by
-  `mouse_client_to_game`, the conversion every message takes). The panel hangs from the top right
-  below the bar, over the column, and is drawn above the HUD; its clicks are answered by the
-  engine's pump, which runs after this test. A press taken is dropped whole: no message and no
+  or its sprocket (`tagpu_menu_owns_point`, at the engine's point the same message carries: the
+  sprocket's `g_ddraw.cursor` on the real path, the injection's converted point on the injected
+  one — the point `tagpu_menu_click` is asked with — so the HUD and the panel split the screen on
+  one conversion, to the pixel). The panel hangs from the top right below the bar, over the
+  column, and is drawn above the HUD; its clicks are answered by the engine's pump, which runs
+  after this test. A press taken is dropped whole: no message and no
   virtual key state reach the engine.
 - **A release is taken exactly when its press was**, whatever is under it then, so the engine
   never sees half a click; a press whose release was lost ends at the next press of the same
@@ -390,7 +394,8 @@ buttons; it is how `tacli` finds a row to hover before clicking one of its butto
   injected path) and `fake_WndProc`, at the pointer `mouse_last_client` holds. Over the column or
   its scroll bar each notch scrolls one item, down for a notch toward the player; over any other
   control it is taken and does nothing; over the world it is not taken, and the zoom has it.
-  Under the same gate as a press, the panel's rectangle included.
+  Under the same gate as a press, the panel's rectangle included, tested at the wheel's game
+  point, the one the zoom is given.
 - **The scroll** is asked from the scroll last asked, not the one last drawn, so notches that
   arrive within one frame add up, and is held to [0, `last`]; the layout holds it there again
   when it builds.

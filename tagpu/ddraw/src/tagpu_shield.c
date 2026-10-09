@@ -202,7 +202,7 @@ static LRESULT to_game(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
            click` and the human's mouse would disagree about the world — and
            the same is true of the wheel, which is why an injected notch is
            offered to the zoom here rather than short-circuited at the token */
-        if (tagpu_hudinput_wheel(msg, wparam)) return 0;
+        if (tagpu_hudinput_wheel(msg, wparam, lparam)) return 0;
         if (tagpu_zoom_wheel(msg, wparam, lparam))
             return 0;
         tagpu_gui_wheel(msg, wparam, lparam);
@@ -330,7 +330,7 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
        injection can reach it; a click in the engine's own space passes under
        it to the engine. */
     if ((vk == VK_LBUTTON && tagpu_menu_click(gx, gy, down)) ||
-        ((vk == VK_LBUTTON || vk == VK_RBUTTON) && tagpu_hudinput_button(dev_x, dev_y, down, vk == VK_RBUTTON)))
+        ((vk == VK_LBUTTON || vk == VK_RBUTTON) && tagpu_hudinput_button(dev_x, dev_y, gx, gy, down, vk == VK_RBUTTON)))
     {
         if (!down) set_key(vk, FALSE);
         return;
@@ -391,8 +391,9 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
        unscaled a hardware message into game space; the preceding WM_MOUSEMOVE
        has already put the game-space point there, and it is the same value the
        injected path hands the same function. The HUD's is lParam itself, the
-       client point. A double click is a press to the HUD: the window's class
-       may turn a second press into one. */
+       client point, and it tests the panel at the sprocket's point, so the two
+       split the screen on one conversion. A double click is a press to the
+       HUD: the window's class may turn a second press into one. */
     if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP ||
         msg == WM_LBUTTONDBLCLK || msg == WM_RBUTTONDBLCLK)
     {
@@ -401,7 +402,7 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         int right = msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_RBUTTONDBLCLK;
         int down = msg != WM_LBUTTONUP && msg != WM_RBUTTONUP;
         int took = (!right && msg != WM_LBUTTONDBLCLK && tagpu_menu_click(cx, cy, down)) ||
-                   tagpu_hudinput_button(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), down, right);
+                   tagpu_hudinput_button(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), cx, cy, down, right);
 
         if (took)
         {
