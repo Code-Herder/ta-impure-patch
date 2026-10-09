@@ -4262,27 +4262,31 @@ open), but the rebuild is visible if you look for it.
 A replay's controls: the column of team headers and player rows with its foot plate of switches,
 and the dock of transport buttons, timeline and clock, drawn at the device's resolution from
 `art/hud/` while a recording plays on the Vulkan lane, and its input. Design, uploads, the input,
-the check against the mockup and the gaps: [The replay HUD in game](hud-in-game.html). **No byte
-patch and no engine detour of its own**: it reads the playback's player images through the
-replay's calls, hit-tests clicks on the game thread against the frame on screen, and draws a pass
-of its own on the render thread. On GDI a replay has no on-screen controls. The watching dock and
+the check against the mockup and the gaps: [The replay HUD in game](hud-in-game.html). **One
+byte patch, the pause icon's stub at `0x46A107`** (`tagpu_replay.c`, below), and no other engine
+detour: it reads the playback's player images through the replay's calls, its stats window's
+samples from the recording file through the walker's own reader, and each unit type's army value
+from the level's defs on the game thread; it hit-tests clicks on the game thread against the
+frame on screen, and draws a pass of its own on the render thread. On GDI a replay has no
+on-screen controls, and the engine's `PAUSED` icon stays. The watching dock and
 the player cards it replaced are deleted, and with them the dock's and the cards' HUD-scale
 regions (§2.15).
 
 | site | what we do there | thread |
 |---|---|---|
-| `fill_frame` (`tagpu_packet_pub.c`), after the UI's render half | `tagpu_hudstate_fill`: one `TAGPU_PK_HUD` record into the packet's area `hud_off`/`hud_len` — the clock, the speed and pause, the HUD's scale, up to 10 seats from `tagpu_replay_players`, up to 320 markers from `tagpu_hudmarks_get`, and the HUD's own state from `tagpu_hudinput_fill` (the pointer, the folds, the switches, the scroll, Sight's and Follow's seats, the key held, the toast); in it, the timeline drag's seek once a frame. No area unless the Vulkan lane draws the HUD and a recording plays. A record that does not fit sets `TAGPU_PK_TRUNC_HUD` (`0x800000`) | game |
-| `frame_valid` (`tagpu_packet.c`) | refuses a HUD area whose length is not `sizeof(TAGPU_PK_HUD)` or lies outside the slot, and a record whose `nseat` or `nmark` passes its array | render |
-| `tagpu_overlay_draw`, after `tagpu_gui_present` | `tagpu_hudstate_present`: the record as the layout's state — HUD units from the viewport, the engine's frame from `tagpu_hud_live`, colours through the presented palette, the teams, the names as Latin-1, the pointer in units, Sight and Follow as rows — stamped with the frame's `frame_counter`, which `tagpu_hudstate_frame` compares with the pass's `frame`; and the state dump on `tagpu_replayhud.dump`, with the hit map of the frame on screen | render |
-| `vk_present` (`tagpu_vk.c`) | `tagpu_vk_hud_prepare` just before `tagpu_vk_gui_prepare`; `tagpu_vk_hud_record` after the world's composite and just before `tagpu_vk_gui_record`, so the engine's UI and the cursor draw over it. It counts in the census's drawn passes (`hud=N` on the `vk: census` line) and claims no A/B frame, so an A/B capture with it drawn stands down. A frame it will draw hands its ops to `tagpu_hudstate_drawn`, the hit map; any other frame empties the map | render |
-| `tagpu_zoom_frame_end` | `tagpu_hudstate_cmd`: the hit map into the command record's `TAGPU_CMD_HUD`, emptied as it is copied, so each drawn frame's map is posted once and a frame `vk_present` did not prepare posts none | render |
+| `fill_frame` (`tagpu_packet_pub.c`), after the UI's render half | `tagpu_hudstate_fill`: one `TAGPU_PK_HUD` record into the packet's area `hud_off`/`hud_len` — the clock, the speed and pause, the HUD's scale, up to 10 seats from `tagpu_replay_players`, up to 320 markers from `tagpu_hudmarks_get`, and the HUD's own state from `tagpu_hudinput_fill` (the pointer, the folds, the switches, the scroll, Sight's and Follow's seats, the key held, the toast, and the stats window's open, split, measure and place); in it, the timeline drag's seek and the window drag's move once a frame. Then, while the window is open, `tagpu_hudstate_fill_stats`: one `TAGPU_PK_HUDSTAT` into `hstat_off`/`hstat_len` — the chosen measure's samples for the record's seats from `tagpu_hudmarks_stats`, with their period and base. No area unless the Vulkan lane draws the HUD and a recording plays. A record or a stats area that does not fit sets `TAGPU_PK_TRUNC_HUD` (`0x800000`) | game |
+| `frame_valid` (`tagpu_packet.c`) | refuses a HUD area whose length is not `sizeof(TAGPU_PK_HUD)` or lies outside the slot, and a record whose `nseat` or `nmark` passes its array; a stats area with no HUD record, of any length but `sizeof(TAGPU_PK_HUDSTAT)`, outside the slot, or with `npt` above 512 | render |
+| `tagpu_overlay_draw`, after `tagpu_gui_present` | `tagpu_hudstate_present`: the record as the layout's state — HUD units from the viewport, the engine's frame from `tagpu_hud_live`, colours through the presented palette, the teams, the names as Latin-1, the pointer in units, Sight and Follow as rows, the stats window's groups (a player each, or a team each, summed, when the split asks for teams and they are told apart, `tagpu_hudlay_headed`; a non-finite sample as 0) — stamped with the frame's `frame_counter`, which `tagpu_hudstate_frame` compares with the pass's `frame`; and the state dump on `tagpu_replayhud.dump`, with the hit map of the frame on screen | render |
+| `vk_present` (`tagpu_vk.c`) | `tagpu_vk_hud_prepare` just before `tagpu_vk_gui_prepare`; `tagpu_vk_hud_record` after the world's composite and just before `tagpu_vk_gui_record`, so the engine's UI and the cursor draw over it. It counts in the census's drawn passes (`hud=N` on the `vk: census` line) and claims no A/B frame, so an A/B capture with it drawn stands down. In `prepare`, the chart's RGBA32F image (`tagpu_huddraw_chart`, 157 KB) goes whole through the slot's staging in the frame's own command buffer when its generation moves; the HUD does not draw until a first generation is on the device, and a frame whose image is an older generation hides the chart's instances. A frame it will draw hands its ops to `tagpu_hudstate_drawn`, the hit map; any other frame empties the map | render |
+| `tagpu_zoom_frame_end` | `tagpu_hudstate_cmd`: the hit map into the command record's `TAGPU_CMD_HUD`, with the window drag's frame (`u`, the client pixels of a HUD unit, and `W`, `H`, the screen in units), emptied as it is copied, so each drawn frame's map is posted once and a frame `vk_present` did not prepare posts none | render |
 | the command record's take (`tagpu_packet_pub.c`), before every in-play draw | `tagpu_hudinput_take`: the map copied for the game thread's hit tests | game |
 | `tagpu_shield_wndproc`, before the shield's gate | `tagpu_hudinput_button` at `lParam`'s client point, for both buttons' presses, double clicks and releases, after the sprocket's `tagpu_menu_click`; `tagpu_hudinput_cancel` on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and a deactivating `WM_ACTIVATEAPP` | game |
 | `deliver_mouse` (`tagpu_shield.c`) | `tagpu_hudinput_button` at a device injection's client point; an injection in the engine's space passes under the HUD | game |
 | `to_game` (`tagpu_shield.c`), `fake_WndProc` (`wndproc.c`) | `tagpu_hudinput_wheel`, before the zoom's, at `mouse_last_client` | game |
+| `0x46A107` in `DrawGameScreen 0x468CF0`, the pause icon's test (`pause_icon_init`, `tagpu_replay.c`) | a stub over the 9-byte `test`/`je`, byte-checked with the `mov eax,[main]` before it: the pause bit tested as the engine does, and `igpaused` drawn (`0x46A110`) only when `tagpu_hudstate_drawing` answers 0, else `0x46A140`. Writes nothing ([engine map](exe-reverse-engineering.html), *The replay HUD's stats window and the pause icon*) | game |
 | `DrawGameScreen 0x468CF0` (the menu's tick) | Leave's question: the guard over `0x460680..0x4607F1` and `0x4605C0..0x46065C`, `0x512FF8 = 0`, the opener `0x460680`, the title through `0x4A07D0`; no `ActDone`, outside the pump; every frame, the pause Leave held put back once `YESORNO.GUI` is off the stack (`tagpu_hudinput_leave_shown`) | game |
-| the marker walker (`tagpu_hudmarks.c`) | reads the recording file through its own `RecReader` and publishes markers; started by the first fill that finds the playback live | its own |
-| teardown wrap's entry (`tagpu_reclaim.c`) | after `tagpu_menu_level_end`: `tagpu_hudmarks_level_end` (the walker stopped and joined, the markers and bookmarks forgotten) and `tagpu_hudinput_level_end` (the map, the held press, the folds, the scroll, the toast, Leave's question), before `tagpu_replay_level_end` | game |
+| the marker walker (`tagpu_hudmarks.c`) | reads the recording file through its own `RecReader` and publishes markers and the stats window's samples; started by the first fill that finds the playback live, after the game thread has copied each unit type's army value out of the level's defs (`tagpu_replay_army_values`: `main+0x1439B`, count `main+0x1438F`, def `+0x18A`, `+0x22F`, `+0x245`) into a table it frees after the join | its own; the table's copy, game |
+| teardown wrap's entry (`tagpu_reclaim.c`) | after `tagpu_menu_level_end`: `tagpu_hudmarks_level_end` (the walker stopped and joined, the markers and bookmarks forgotten) and `tagpu_hudinput_level_end` (the map, the held press, the folds, the scroll, the toast, the stats window's open and its drag, Leave's question), before `tagpu_replay_level_end` | game |
 | `vk_down`, `passes_down` | `tagpu_vk_hud_down`, behind the seam's `vkDeviceWaitIdle`; the pass builds again on its next frame | render |
 
 **Fields we write**, through the replay's calls and `tagpu_menu.c`, on the game thread, on a
@@ -4295,6 +4299,11 @@ Sight](tadr-port/demo-recorder-player-cards.html) and the perspective plan's 4c-
 YESORNO it opened and `gi+0xCCA`. Of our own: `replays\index.dat`'s bookmarks field, the store's
 `replayhud` (`impure.cfg`), the game folder's `tagpu_replayhud.json` (and its `.tmp`), and the
 deletion of `tagpu_replayhud.dump`. Nothing the recording carries.
+
+**Fields we read** beyond the replay's calls: `main+0x38A51` bit 0, in the pause icon's stub;
+the level's unit defs as listed above, on the game thread; and, in the walker, nothing of the
+engine's — the recording's player images (`+0x90`, `+0x9C`, `+0xD4`, `+0xFC`, `+0xFE`, `+0x144`,
+with `+0x106` for the markers) and unit images (`+0xA6`, `+0xFF`, `+0x104`, `+0x110` bit 28).
 
 ### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09
 

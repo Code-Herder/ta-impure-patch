@@ -3777,13 +3777,13 @@ eight-record saves remain accepted. The stock-limits comparison build stays nati
 The [resource regression](tadr-port/resource-snapping.html) records the Comet Catcher
 reproduction and completion checks. Ten is not a proven capacity for every mod script.
 
-### Replay controls: the replay HUD — landings 1 and 2 built
+### Replay controls: the replay HUD — landings 1 to 3 built
 
 | gate | state | scope |
 |---|---|---|
 | Replay HUD landing 1: the HUD draws | built, verified 2026-10-08 | a Vulkan pass of our own drawing `art/hud/` by the mockup's rules: the column of team headers and player rows, the dock of transport, timeline, markers and clock; the game's capture and the mockup fed the game's dump match at best shift 0 ([The replay HUD in game](hud-in-game.html)) |
 | Replay HUD landing 2: input, replacing the dock and the cards | built, verified 2026-10-09 | the hit map of the frame on screen handed back in the command record; clicks, hover and the wheel on the game thread; every command (seek, pause, speed, bookmark, scale, the timeline drag, the switches, folds, Sight, Follow, Jump, the scroll, Leave behind the engine's YESORNO); the menu-over-the-world test; `tacli hud` and the W lane; the watching dock, the player cards and their HUD-scale regions deleted. GDI: no on-screen controls (owner) |
-| Replay HUD landing 3: the stats window | open | needs a per-second stats track the recorder does not write; its button is drawn disabled until then |
+| Replay HUD landing 3: the stats window | built, verified 2026-10-09 | the marker walker samples each player's economy and army measures off the recording it already walks (no recorder change); the chosen measure in the packet; the window and its chart drawn by the mockup's rules (a per-pixel chart op, antialiased lines, baseline text, the drop shadow); the stats button, chips, close and the title drag, kept for the session; no `PAUSED` icon under the HUD (owner); the game's capture matches the mockup fed its dump ([The replay HUD in game](hud-in-game.html)). GDI: no stats window |
 | Player rows and independent Sight | verified | recorded stats; Sight and the full map without camera movement; death-vision dump comparisons; zero-time/EOF ([the replay's players and Sight](tadr-port/demo-recorder-player-cards.html)) |
 | Jump, Follow and Free cam | verified 2026-10-06 (V2) | a skirmish recording's camera stream: Follow fits the recorded view to this screen and ends on a camera move or a wheel notch, Jump writes it until its level is drawn; on the HUD, the pressed Follow clicked again is the free camera; GDI shows the camera; a multiplayer recording's through 4c-4 ([perspective plan, 4c-2](tadr-port/demo-recorder-perspective-streams.html#4c-2-as-built)) |
 | The overlays and their switches | verified 2026-10-06 (V3) | every recorded player's cursor, click rings and selection rectangles in that player's colour, on Vulkan; four switches (Cursors, Clicks, Selections, Chat), now the HUD's foot plate; GDI draws none; a multiplayer recording's through 4c-4 ([perspective plan, 4c-3](tadr-port/demo-recorder-perspective-streams.html#4c-3-as-built)) |

@@ -1026,16 +1026,24 @@ block that reads to its last complete block.
 - **The replay HUD** is a replay's controls on every Vulkan playing; there is no lever, and on GDI
   a replay has no on-screen controls. **Drive it with `tacli hud <i>`**, by the keys of the frame
   on screen, never by coordinates: `show` (the default; `wait` is the same) prints the clock, the
-  speed, Sight, Follow, the scroll, any toast and every control with its client rect, waiting up to
-  `--timeout` for an answer; `click <key>` (`--right` for the right button), `hover <key>`,
-  `wheel <key> <n>` (n notches, positive away from the player: the column scrolls up) and `scrub
-  <from> <to>` (fractions of the recording; a press, `--steps` moves `--step-ms` apart, a
-  release). Keys are the layout's: `rew` `play` `fwd` `speed` `bookmark` `uiscale` `leave`
-  `track`, `cursors` `clicks` `selections` `chat`, `fold:<t>`, `row:<i>`, `jump:<i>` `sight:<i>`
-  `follow:<i>`, `scroll_up` `scroll_down`; a row's button shows only under the pointer, so `hud`
-  hovers `row:<i>` first. Each action is a device token at the control's centre (`dclick:`,
-  `drclick:`, `dmove:`, `dwheel:`, and `ddown:`/`dup:` for the scrub), the path a player's click
-  takes; a token in the engine's space (`click:`, `pclick:`) passes under the HUD. The HUD takes
+  speed, Sight, Follow, the scroll, any toast, a `stats:` line while the stats window is open
+  (measure, split, place, groups, samples, their spacing) and every control with its client rect,
+  waiting up to `--timeout` for an answer; `click <key>` (`--right` for the right button),
+  `hover <key>`, `wheel <key> <n>` (n notches, positive away from the player: the column scrolls
+  up), `scrub <from> <to>` (fractions of the recording; a press, `--steps` moves `--step-ms`
+  apart, a release) and `drag <key> <dx> <dy>` (a press at the control's centre, `--steps` moves
+  `--step-ms` apart to dx, dy client pixels away, a release there). Keys are the layout's: `rew`
+  `play` `fwd` `speed` `bookmark` `uiscale` `leave` `track`, `stats` `cursors` `clicks`
+  `selections` `chat`, `fold:<t>`, `row:<i>`, `jump:<i>` `sight:<i>` `follow:<i>`, `scroll_up`
+  `scroll_down`, and with the stats window open `close`, `chip:<k>` (`metal` `energy` `excess`
+  `units` `army` `kills` `losses`), `chip:player` `chip:team` and `drag`, its title; a row's
+  button shows only under the pointer, so `hud` hovers `row:<i>` first. `click stats` opens the
+  window, closed at every replay's start; `drag drag 200 -80` moves it. The window follows the
+  pointer once a frame, and a pointer outside the picture has no client point: at a low frame
+  rate a drag whose later steps leave the picture ends where the last frame sampled an
+  in-picture step, so keep every step inside it. Each action is a device token at the control's
+  centre (`dclick:`, `drclick:`, `dmove:`, `dwheel:`, and `ddown:`/`dup:` for the scrub and the
+  drag), the path a player's click takes; a token in the engine's space (`click:`, `pclick:`) passes under the HUD. The HUD takes
   nothing while a menu covers the world (ARMOPT, the chat, Leave's question): the click is the
   engine's. Leave opens the engine's `YESORNO.GUI` titled "Leave this replay?" (`ui click CHOICE1`
   is Yes); the scale button writes `impure.cfg`'s `replayhud=` (`hud: the replay HUD's scale is
@@ -1050,7 +1058,9 @@ block that reads to its last complete block.
   unshifted. **Markers need a commander death in the recording**: in the live skirmish being
   recorded, `tacli keys <i> ctrl+c` selects the commander and `ctrl+d` self-destructs it; the
   walker logs what it found once it has read the recording (`hud: markers: N commander deaths at
-  <T> (seat <S>), M defeats …`). A defeat marker is a seat whose live units reach 0.
+  <T> (seat <S>), M defeats …`, ending `; n stats samples P GameTime apart, K unit types
+  valued`). A defeat marker is a seat whose live units reach 0. A paused replay shows no
+  `PAUSED` icon under the HUD; GDI shows it.
 - **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P
   [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish at T as player P,
   every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2 when it had

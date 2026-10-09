@@ -214,7 +214,9 @@ the file before launch for exactly that reason:
 **The FBI `commander` tag is `UnitDef+0x245` bit `0x40000`** [DISASSEMBLED 2026-09-28]. The
 FBI reader pushes the tag's name (`0x5039F0`) at `0x42CB7D`, reads it with `0x4C46C0`, masks it to
 one bit, `shl 0x12`, clears that bit of the dword at `+0x245` and ORs it in, and stores the dword
-back at `0x42CBAB` (`89 85 45 02 00 00`). `tagpu_cat.c` reads it to list a game's living commanders
+back at `0x42CBAB` (`89 85 45 02 00 00`). `tagpu_replay_army_values` reads it to leave commanders
+out of the replay HUD's army value (*The replay HUD's stats window and the pause icon*).
+`tagpu_cat.c` reads it to list a game's living commanders
 for the compat suite, beside the seats in the game: a player record (`main+0x1B63`, stride `0x14B`)
 with a nonzero first dword and a controller byte `+0x73` of 1 to 4 — local human, local AI,
 remote human, remote AI. `0x48664B..0x486660` tests the dword and then 1 and 2 for a local player
@@ -1732,7 +1734,8 @@ index `+0xA6` holds.
 
 - **`+0x00`, the mover** (0x2F bytes, constructor `0x43DC00`, destructor `0x43DD10`), made by the
   creates `0x485F50` and `0x4861D0` only when def `+0x22F` is 1 (`0x4860BB`, `0x4862CF`), freed
-  and nulled by the destructor (`0x486DBF`). MEASURED: no type has samples both with and without.
+  and nulled by the destructor (`0x486DBF`). The replay HUD's army value counts only the types
+  with that byte 1 (`tagpu_replay_army_values`). MEASURED: no type has samples both with and without.
 - **`+0x5C` and `+0x60`, the order lists** (nodes of 0x56 bytes). An order goes on `+0x60` when its
   descriptor's flags carry `0x40000` — BuildWeapon `0x0D` and SelfDestruct `0x26`, no other — and
   on `+0x5C` otherwise (`0x43AC6A`, `0x43ACBA`, `0x43AD19`). Every write goes through the head's
@@ -1921,19 +1924,19 @@ loader is `0x466050`.
 | `+0x74` | the AI object | init `0x4648C1` (not for an active type 3); activation 0 without a free; reset; teardown | the players phase (`0x46502A`) |
 | `+0x78` | control groups, 10 × 0x20 | `0x480190`, `0x4801F0` | kept by `0x480250(unit, group)` from unit `+0xAC`; the restore rebuilds it (`0x487270`) |
 | `+0x7C..+0x88` | sight counters; the grid's width, height and length | init `0x464849..0x46487B`; teardown | `0x4827B0`, `0x4816A0` |
-| `+0x8C..+0xE0` | the economy: the saver's keys | the economy pass `0x401360` (types 1 and 2), the `0x28` receiver, the transfers, the level start `0x465E30`, the ATM cheat `0x4170C0` | the resource bars of DrawGameScreen (the energy fill `0x46912E` over `+0xA4`, the metal fill `0x469412` over `+0xA8`); the replay HUD, from the playback's image of the record (`tagpu_replay_players`): floats energy `+0x8C`, income `+0x90`, expense `+0x94`, metal `+0x98`/`+0x9C`/`+0xA0`, storage maxima energy `+0xA4` and metal `+0xA8`. MEASURED 2026-10-08 in the HUD's state dumps of a skirmish recording: the maxima read 2,000 metal and 5,000 energy at the start, as the engine's bars showed |
+| `+0x8C..+0xE0` | the economy: the saver's keys | the economy pass `0x401360` (types 1 and 2), the `0x28` receiver, the transfers, the level start `0x465E30`, the ATM cheat `0x4170C0` | the resource bars of DrawGameScreen (the energy fill `0x46912E` over `+0xA4`, the metal fill `0x469412` over `+0xA8`); the replay HUD, from the playback's image of the record (`tagpu_replay_players`): floats energy `+0x8C`, income `+0x90`, expense `+0x94`, metal `+0x98`/`+0x9C`/`+0xA0`, storage maxima energy `+0xA4` and metal `+0xA8`. MEASURED 2026-10-08 in the HUD's state dumps of a skirmish recording: the maxima read 2,000 metal and 5,000 energy at the start, as the engine's bars showed; the replay HUD's stats walker, from the recording's image (`tagpu_hudmarks.c`): income `+0x90` and `+0x9C`, and MetalWasted, the double `+0xD4` |
 | `+0xE4`/`+0xE8` | share limits | SetShareMetal `0x4193C5`, SetShareEnergy `0x419485` | the auto-share `0x457D30`, network only |
 | `+0xEC` | a 0x34-byte resource accumulator | init `0x4647D7` | |
 | `+0xF0` | UpdateTime, the 30-tick pass | init `0x464715`; the players phase adds 30 (`0x465092`) | |
 | `+0xF4` | WinLoseTime | init, loader | the saver only |
 | `+0xF8` | DisplayTimer, a GameTime deadline | init `0x464765` (GameTime), loader, DrawGameScreen `0x468F87` | a write on the draw path, for the viewed record only: 30 is added while it is below GameTime, and then the resource bar's rates refresh (`0x468F73..0x468F9A`) |
-| `+0xFC`/`+0xFE` | kills, losses | the destructor `0x4868C1`, `0x486906`, `0x486A33`; the `0x28` receiver | |
+| `+0xFC`/`+0xFE` | kills, losses | the destructor `0x4868C1`, `0x486906`, `0x486A33`; the `0x28` receiver | the replay HUD's stats walker, from the recording's image (`tagpu_hudmarks.c`), as words |
 | `+0x100`/`+0x102` | −1 at init | `0x464817`, `0x46481E` | no reader found |
 | `+0x104`/`+0x106` | commander kills, losses, words | the destructor `0x486981`, `0x486996` (`incw [eax+0x106]` on the dead unit's owner record, unit `+0x96`), `0x486A8C` | the lead ranking in mode 2; the replay HUD's skull, `+0x106` above 0 (`tagpu_replay_players`). DIS |
 | `+0x108`/`+0x113`, 11 each | alliances and their mirror: byte j of `+0x108` is 1 when this record allies record j; the reset and the activation set the record's own byte, so a record always allies itself | `0x452960`, the lobby, the removal, dispatcher `0x454D2A`, the seat fill `0x47A760` (the store at `0x47A890`), the reset `0x4645B3`, the activation `0x464290` | the allied victory `0x490080`, the skirmish victory `0x490230`; the replay HUD's teams, which join two records when each one's row marks the other (`tagpu_hudstate.c`) |
 | `+0x11E`/`+0x129`/`+0x134`, 11 each | the final-statistics handshake | `0x45591D`, `0x455930`, `0x45768A` | |
 | `+0x13F` | the lobby team, 5 for none | activation, reset, the lobby | lobby code only |
-| `+0x140`/`+0x144` | units created, alive (`+0x144` a word: `decw` at `0x486DFC`, `cmp bx` at `0x486E09`) | the creates, the destructor | "out" = none alive of some created; the replay HUD's units and its dimmed "out" row (`+0x144` = 0). DIS |
+| `+0x140`/`+0x144` | units created, alive (`+0x144` a word: `decw` at `0x486DFC`, `cmp bx` at `0x486E09`) | the creates, the destructor | "out" = none alive of some created; the replay HUD's units and its dimmed "out" row (`+0x144` = 0); its marker walker's defeats and its stats walker's units, from the recording's image (`tagpu_hudmarks.c`). DIS |
 | `+0x146` | own index, 10 when free | ctor, reset, activation, the lobby's renumbering | copied into unit `+0xFF` |
 | `+0x147` | start position | activation, `0x45517B`, `0x456C96` | the network level setup |
 | `+0x148` | scoreboard rank | activation, the destructor; the scoreboard `0x4948E0` (`0x494E27`), whose one caller is DrawGameScreen (`0x469F65`), compacts the ranks while the scoreboard is shown (`[0x51F2D8]` > 0, `0x494986`). In a network or mode-2 game (`0x435100` = 3 or 2) the destructor's rank update reads a ranked record's `+0x148` (`0x486B2D`), computes its new rank from the other records' scores, then increments every record's rank that is at least the new one and below the old one — a loop over all ten records with **no activity test** (`0x486BE7..0x486C13`), so unseated records at rank 0 become 1 when the new rank is 0 — and stores the new rank (`0x486C17`). DISASSEMBLED; MEASURED 2026-10-05 in a four-actor network recording: rows 4..9 (unseated) went 0 → 1 at one death | the destructor's lead message (`0x486B2D..0x486C17`) |
@@ -6056,8 +6059,8 @@ load its `.ota` (`0x47BCD7`).
 **The bit.** `main+0x38A51` is a u16 of flags; bit 0 is the pause. While it is set the frame
 function `0x496790` skips the scheduler `0x495230` and the tick `0x495490` (`0x4968AA`,
 `0x496920`), and those two are called from nowhere else (`0x4967F3`, `0x49680C`, `0x496928`,
-`0x49693E`). The scheduler tests it as well (`0x4953D9`), the status icons show it (`0x46A107`,
-`0x46A2A8`), and the pause key flips it and puts the new bit into a message `0x19`
+`0x49693E`). The scheduler tests it as well (`0x4953D9`), the pause icon `igpaused` shows it (`0x46A107`;
+`0x46A2A8` beside it tests bit 1, not the pause), and the pause key flips it and puts the new bit into a message `0x19`
 (`0x4960AA..0x4960E0`) [INFERRED: `0x451DF0` sends it to the peers]; the `0x19` receiver stores a
 peer's bit (`0x455967..0x45597A`). Bits 1 and 2 are the scheduler's (`0x49535C`, `0x495367`,
 `0x49527A`). Every other store of the word: set bit 0 at `0x44BE61`, `0x45D0A1` (in `0x45CFC0`,
@@ -14147,7 +14150,7 @@ call order, with each gate (`ebx` is the function's `drawUnits` argument):
 | `0x469FB8` `0x468380` | `[main+0x391C3] != 0` — the **`+bps`** cheat's flag (handler `0x419540`: `xor [main+0x391C3],1`) | `"Receive - %1.1f K/s"` / `"Send - %1.1f K/s"` (`0x5076A4`, `0x5076B8`), two `DrawTextCustomFont` lines at x `0x81`, y `[main+0x37E23] − 0x5F` and `+8` (the prologue). **Not `+netstats`**: its handler `0x417570` only zeroes the counters `0x511A60..0x511C64` |
 | `0x469FCB` `DrawChatText 0x464060` | `ebx` | the chat lines |
 | `0x469FD5..0x46A102` | `[main+0x3923B] & 2` and `ebx` | the debug line: `"FRATE: %d"`, `"%.1f"`, `"MODE %s INFO %s"` with `NORMAL`/`DEBUG` and `[Release]` (`0x507828..0x50781C`, `0x5077FC`, `0x50780C..0x507814`, `0x502558/0x50255C`) at x `0x83`, `0xBC`, `0x1EE`, plus a fourth string from `0x415FA0` under `[main+0x2A44] & 1`. **Negative result**: bit 1 of `main+0x3923B` is flipped only at `0x49631B`, behind `main+0x37F2F` bit 1 (`0x4962F8..0x496303`), the engine's debug mode (set at `0x417009`, `0x430E68`); it is cleared at game entry (`0x49128E`) and no cheat in the NORMAL table sets it — not reachable in play, not exercised |
-| `0x46A107..0x46A1CB` | `[main+0x38A51] & 1` → the GAF `main+0x1481B` frame 0 at (`[esp+0xAC]`, `[esp+0xB0]`); else, unless the local player's `[player+0x9B] & 0x40`, `main+0x3923B` bit 5 → `main+0x14813`, bit 6 → `main+0x14817` | status icons [INFERRED: pause/speed indicators]; not exercised |
+| `0x46A107..0x46A1CB` | `0x46A102` loads `eax` = main; `test byte [eax+0x38A51],1` at `0x46A107`, `je 0x46A140` at `0x46A10E`. Set: `0x46A110..0x46A13E` draws the GAF `main+0x1481B` (`igpaused`) frame 0 at (`[esp+0xAC]`, `[esp+0xB0]`) through `GAF_SequenceIndex2Frame 0x4B7F30` and `CopyGafToContext 0x4B7F90`, reloads `eax` and jumps to `0x46A14E`; clear: `0x46A140` loads the same `esi`/`edi` and falls into `0x46A14E`. **From `0x46A14E`, paused or not**, unless the local player's PlayerInfo (`[main + 0x14B·[main+0x2A42] + 0x1B8A]`) has `+0x9B & 0x40` (a watcher), `main+0x3923B` bit 5 → `main+0x14813`, bit 6 → `main+0x14817` | the pause icon `PAUSED`, in the middle of the world (MEASURED 2026-10-09 on the Vulkan lane: a paused replay drew it there, over the replay HUD's stats window); then the won and lost status icons [INFERRED from bits 5, 6 being the game end's won and lost]. DISASSEMBLED. The replay HUD's stub sits on the test at `0x46A107` (*The replay HUD's stats window and the pause icon*) |
 | **`0x46A1D0..0x46A2A3`** | **`main+0x37F2F` bit 6 — the `+clock` cheat** (handler `0x417300`: the bit flipped, then `0x430F00`) | the sim tick `main+0x38A47` split into h:m:s (÷108 000, ÷1 800, ÷30 — 30 ticks a second), `"%s : %02d:%02d:%02d"` (`0x507794`) with `"Game Time"` (`0x504910`, through `0x4C5740` [INFERRED: the string table]); `DrawTextCustomFont 0x4C14F0` at x `0x82`, y `[gfx+0xD8]` (`0x4B6710` [INFERRED: the primary's height]) `− 0x22 −` the font height (`0x4C1450`): the viewport's bottom-left, just above the bottom bar. **The seconds tick between two shots** — the walk measures it with the in-game menu open, which pauses the sim and the clock with it **in single player** (the pause is a separate flagged action, not a property of the push -- see *The screen lifecycle* below; a network game cannot be paused unilaterally) |
 | `0x46A2A8` | `[main+0x38A51] & 2` | the GAF `main+0x148CF` frame 0 at (`screenW − 0x10`, `screenH − 0x50`); not exercised |
 | `0x46A2E7`, `0x46A303` | — | clip reset `0x4C69C0`, then the retained GUI blit `0x4AB170` |
@@ -14528,8 +14531,10 @@ side-panel rect as a build page, pushed the same way — yet the build page leav
 running (LIVE 2026-09-09: selecting a commander gives `ARMCOM1.GUI`, `under: ARMMAIN2.GUI`,
 with the game running). The pause is a separate action on a flag; the `PAUSED` indicator is
 not text but the GAF entry **`igpaused`** (`0x5035BC`), looked up once at `0x429B66` through
-`0x4B8D40` into `main+0x1481B` beside two siblings at `main+0x14813`/`+0x14817`, and drawn on
-`[main+0x38A51] & 1`. **The pause is single-player only** — a network game cannot be paused
+`0x4B8D40` into `main+0x1481B` beside two siblings at `main+0x14813`/`+0x14817`, and drawn by
+DrawGameScreen at `0x46A107..0x46A139` while `[main+0x38A51] & 1` (*The frame's HUD extras*); a
+replay with the replay HUD skips it (*The replay HUD's stats window and the pause icon*).
+**The pause is single-player only** — a network game cannot be paused
 unilaterally — so the earlier statements need that qualifier.
 
 ### The pump's dispatch contract: `gi->UIChange_f` is the ANSWER, and an unanswered click POPS THE SCREEN [VERIFIED 2026-09-11]
@@ -17807,7 +17812,7 @@ them: [The replay HUD in game](hud-in-game.md).
 | `0x4C1440`, `0x4C1450`, `0x4C1480` | The FNT face in force, its height, and a string's measured width. `0x4C14F0(ctx,text,x,y,maxWidth)` draws, stdcall `ret0x14`; `ctx=NULL` locks the back buffer. The cards' labels were measured and bounded before drawing; nothing of ours calls them now. DISASSEMBLED getters/measure at `0x4C1440..0x4C14EF`; draw and font-table limits in *The in-game bitmap font* above. |
 | `main+0x148DB` | Player-colour GAF sequence, loaded at `0x431911`; u16 count at sequence+0, frame pointers at +0x28 with stride8. `0x467C1E..0x467C24` reads a frame using PlayerInfo+0x96 without a bound. `tagpu_replay.c`'s `logo_colour` bounds the logo by the sequence count, decodes only a nonempty frame at most 64×64 into a fixed plane and keeps its centre pixel's palette index: the seat colour of the replay HUD's rows and markers and of the overlays, taken once a playing (`seat_colours`). The sequence lives with the game's loaded resources. DISASSEMBLED caller and existing replay seat validation. |
 | player `+0x8C/+0x90/+0x94`, `+0x98/+0x9C/+0xA0` | Energy and metal current/production/expense floats. Card values come from the reader's recorded player image, not a new economy calculation. Existing `0x401360`/`0x466050` evidence in *The unit and player records*; no exclusion of these fields in `replay-layout.tsv`. |
-| player `+0x144`, `+0x106` | Units alive and commander losses are words, written at `0x486DFC` and `0x486996`. These recorded fields feed the replay HUD's rows (the units, the skull, the dimmed row) and its marker walker (`tagpu_hudmarks.c`). A loss count alone does not establish whether a commander currently exists. |
+| player `+0x144`, `+0x106` | Units alive and commander losses are words, written at `0x486DFC` and `0x486996`. These recorded fields feed the replay HUD's rows (the units, the skull, the dimmed row), its marker walker and its stats walker (`tagpu_hudmarks.c`; `+0x144` only, *The replay HUD's stats window and the pause icon*). A loss count alone does not establish whether a commander currently exists. |
 | `0x4864CB..0x48650F`, `0x48691B..0x486958` | Commander tests compare the unit definition's UnitName at +0x20 with the owner's side's commander name, case-insensitively. The latter indexes `main+0x37F5F` by side×0x232. `tagpu_replay_players` applies the test to recorded live units, bounding owner and definition IDs and using the recorded seat's side, into `commander_alive`, which nothing reads since the cards went. DISASSEMBLED; also `tagpu_recorder.c:is_commander`. |
 | `0x431A20`, `0x431A60`, `0x431B6D` | Side-table free loop advances0x232 until0xAFA (`0x431A4A..0x431A56`): five records. The loader starts at `main+0x37F3D` and requests a32-byte commander name (`0x431B6D`), matching the bounded compare. `tagpu_replay_players` requires side below both five and the loaded count at `main+0x37F39`. DISASSEMBLED. |
 | `main+0x2A43`, `0x482130`, `0x482910`, `0x466C20`, `0x467440` | Viewed seat, temporary sight expiry/add, minimap fog and radar pass. Sight drops the old view's temporary records before writing the new viewed byte, recreates unexpired death vision from a separate recording reader, then runs the fog/contact passes. The existing seek's sight notes establish the pool bound, ownership of stamps and engine root contracts; the request adds no direct counter writes. The current frame's recorded display state is applied before the view request. The replay HUD's Sight asks it (`tagpu_replay_sight_request`), and -1, its pressed Sight clicked again, the full map. |
@@ -17817,6 +17822,27 @@ kept GameTime 476; a switch to the full map kept a separately checked eye at (18
 are input and camera-isolation checks; the death-vision comparison is the `battle-los` one in
 [the replay's players and Sight](tadr-port/demo-recorder-player-cards.md), *Verification*. Through
 the replay HUD (2026-10-09), Sight on seat 2 and the pressed Sight clicked again (record 10).
+
+## The replay HUD's stats window and the pause icon
+
+Read for the replay HUD's stats window ([The replay HUD in game](hud-in-game.md), *The stats
+window*). One patched address, the pause icon's test; everything else is read. The stats walker
+reads **the recording's image** of each record through its own `RecReader`, never engine memory;
+only the unit types' values come from the engine, copied on the game thread.
+
+| address or field | fact and evidence |
+|---|---|
+| `0x46A107` (DrawGameScreen `0x468CF0`) | **Patched.** The pause icon's test, `test byte [eax+0x38A51],1` (`F6 80 51 8A 03 00 01`) then `je 0x46A140` (`74 30`), `eax` = main from `mov eax,[0x511DE8]` at `0x46A102` (`A1 E8 1D 51 00`). `0x46A110` draws `igpaused` and goes on at `0x46A14E`; `0x46A140` loads the same `esi`/`edi` and falls into `0x46A14E` (*The frame's HUD extras*). `pause_icon_init` (`tagpu_replay.c`, THE PAUSE ICON, from `tagpu_replay_init`) checks the nine stolen bytes and the five before them, then lands a stub: the test repeated; when the bit is set, `tagpu_hudstate_drawing` called (cdecl, inside `pushad`/`popad`, which leaves ZF as the `test eax,eax` set it), and `0x46A110` taken only when it answers 0, else `0x46A140`. Game thread, inside the draw; it writes nothing. A replay with the replay HUD (the Vulkan lane, a live playback with a span) draws no `PAUSED`: the HUD's play button carries the pause, as the mockup shows (the owner's decision, 2026-10-09). GDI, a refused HUD and every level that plays no recording keep the icon. DISASSEMBLED; MEASURED 2026-10-09: the log's `replay: the pause icon's test 0x46A107 in`, and a paused replay with the stub shows no icon. |
+| `main+0x1439B`, `main+0x1438F` | The level's unit defs (stride `0x249`) and their count, UNITINFOCount. `tagpu_replay_army_values` reads each def's value on the game thread, before the walker's `CreateThread`, into a table the walker owns until `walk_stop` frees it after the join. The defs are the load's and only the teardown frees them. MEASURED: `279 unit types valued` on Two Continents. |
+| def `+0x18A` | The metal cost, a float (`0x438650` takes `max(+0x18A, 10.0)`; `0x402640` credits it × (1.0 − the target's build left), row `0x402640` above). A type's army value. |
+| def `+0x22F` | 1: the type moves — the test `0x4862CF` gives a unit its mover by (*The unit and player records*, `+0x00`). A type that does not move is worth 0. |
+| def `+0x245` bit `0x40000` | The FBI `commander` tag (DISASSEMBLED at `0x42CBAB`, above). A commander is worth 0 (the owner's choice, 2026-10-09). |
+| unit `+0xA6`, `+0xFF`, `+0x104`, `+0x110` bit 28 | From the recording's unit images: the type index (u16), the owner (byte), the build left (a float; finished when it is 0.0 by the engine's own test, the C3 of an x87 compare as at `0x4586DF`, `build_finished` in `tagpu_replay.c`) and alive (`0x10000000`). A unit counts toward its owner's army value when its slot is live, bit 28 is set, it is finished, its owner is below 10 and its type below the table's count; a type index past the count is data the recording holds and is worth nothing. |
+| player `+0x90`, `+0x9C`, `+0xD4`, `+0xFC`, `+0xFE`, `+0x144` | From the recording's player images, for the recorded seats: energy and metal income (floats), MetalWasted (a double, written by the economy pass's clamp `0x401AB3..0x401B27`), kills and losses (u16), units alive (u16). |
+
+`tagpu/ddraw/replay-layout.tsv` excludes none of these unit and player bytes: its unit rows stop
+at `0xA2..0xA5` and mask `+0x110` with `0x10`, `0xC0` and `0x3C00000` only. The sampling, the
+period and the publication are in the hud-in-game note.
 
 
 ## Direct AI order activity observer

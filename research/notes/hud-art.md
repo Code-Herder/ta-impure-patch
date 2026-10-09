@@ -83,7 +83,7 @@ The layout is E1, settled in the prototype on 2026-10-06 and 2026-10-07 (*The ex
 - **The foot plate**, a button plate under the column with five bays: game stats, then the
     four switches of a replay's overlays, Cursors, Clicks, Selections and Chat (owner,
     2026-10-08). Each has its own icon, `i_stats`, `i_cursors`, `i_clicks`, `i_selections` and
-    `i_chat`. The stats button is drawn disabled until the recorder has a stats track.
+    `i_chat`. The stats button opens and closes the stats window.
 - **The stats window.** It has a title strip, a close bay, an economy tray and an army tray of
     choice buttons, a line chart, its legend and a caption line.
 

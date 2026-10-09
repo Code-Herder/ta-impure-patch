@@ -42,6 +42,7 @@ style. The mockup in `tools/hudart/mockup/` draws the HUD from those files and n
 | The rules, for the DLL | `tagpu/ddraw/src/tagpu_hudlay.c` |
 | The faces, cut down, and their licences | `art/hud/fonts/`, cut by `tools/hudart/fonts.py` |
 | The mockup: a synthetic game, the controls, the input | `tools/hudart/mockup/index.html` |
+| The rules checked against each other | `tools/hudart/laycheck.py`, `laycheck.c` |
 | Filing cut parts into `art/hud/` | `tools/hudart/file.py` |
 | The replay frame drawn behind the mockup | `research/notes/assets/hud-art/backdrop.png` |
 
@@ -59,20 +60,20 @@ teams. The same switches, and more, go in the URL, for captures:
 
 - `res=3840x2160`, `game=150` (`off`, `auto` or a percentage), `hud=150`, `np=10`, `nt=2`;
 - `t=70` (seconds into the 132-second game), `paused`;
-- `stat=1` or `stat=0` (the stats window), `sm=units` (its measure), `ss=team` (players or teams).
-  The stats button is disabled until the recorder has a stats track, so `stat=1` is the only way
-  to open the window, to review its design; it is not remembered between visits;
+- `stat=1` or `stat=0` (the stats window), `sm=units` (its measure), `ss=team` (players or teams),
+  `sx=150&sy=56` (its place). The window opens closed on every visit, as a replay does; the page
+  keeps its measure, split and place;
 - `scroll=3` (the column's first item), `sight=0` and `follow=0` (a row's Sight and Follow drawn
   pressed), `toast=<text>` (a toast shown);
 - `state=<url>`: draw the state the game dumped (`tagpu_replayhud.json`) — its screen, its
-  engine frame and its players — instead of the synthetic game.
+  engine frame, its players and its stats window with the game's samples — instead of the
+  synthetic game. The synthetic game's chart is 67 made-up samples over its 132 seconds.
 
 `tools/hudart/capture.sh "<url>?paused&res=3840x2160&game=150&hud=150" out.png` captures the stage at
 native 4K. It lays the page out at device scale factor 1, one CSS pixel to a screen pixel, as the
 game draws (*Text* says why). `compare.sh` captures the button states — play held, the foot
 plate, the stats window's chips, a row hovered with JUMP held — at device scale factor 2. On the
-mockup its query needs `stat=1`: the chips are the stats window's, which opens only through that
-switch.
+mockup its query carries `stat=1`, so that the chips it captures are on screen.
 
 ## Iterating
 
@@ -221,8 +222,8 @@ At those sizes the game's line sits a pixel off the mockup's.
   `fold:0`, `row:4`. The game hit-tests these, topmost (last painted) first
   ([The replay HUD in game](hud-in-game.md), *Input*).
 - **A disabled control** is drawn at its `off` opacity, its icon too, and has no clickable of its
-  own: the stats button on the foot plate (`off` 0.45), and the TEAMS chip when the teams are not
-  told apart (one team, or a free-for-all) at `split.off`.
+  own: the TEAMS chip when the teams are not told apart (one team, or a free-for-all), at
+  `split.off` (0.45).
 - **An inset edge** (a resource bar's) is flagged on its ops (`HOPF_EDGE`), so `laycheck` matches
   it with the mockup's `box-shadow` by that flag, not by its colour.
 
@@ -271,8 +272,8 @@ At those sizes the game's line sits a pixel off the mockup's.
   bottom, under everything in it: a click on a row's body is the HUD's, and the wheel over it
   scrolls it.
 - **The foot plate** sits right-aligned, `foot.gap` below the list: five bays, `foot.w` × `foot.h`
-  (204 × 35). Their buttons are `stats`, drawn disabled until the recorder has a stats track,
-  then the four switches `cursors`, `clicks`, `selections` and `chat`, each a toggle drawn
+  (204 × 35). Their buttons are `stats`, which opens and closes the stats window, then the four
+  switches `cursors`, `clicks`, `selections` and `chat`; each of the five is a toggle drawn
   pressed while on. A `toggle` name the DLL does not know stops the build (`layout: no toggle
   '…'`).
 
@@ -310,31 +311,58 @@ metrics. It shows for `toast.ms` (1800).
 
 ### The stats window
 
-- **Its box** is `w` × `h` at (`x`, `y`), kept on the screen, with a drop shadow [dy, blur,
-  opacity].
-- **The title well** holds the grip and the title, and is the drag handle. The close button
-  fills its well, padded.
+- **Its box** is `w` × `h` at (`x`, `y`) until the first drag, then where it was dragged, held
+  to [0, screen − `w`] and [0, screen − `h`], with a drop shadow [dy, blur, opacity] — a CSS outer
+  box shadow (`HOPF_DROP` in the DLL). The whole box is the clickable `window.act` (`window`),
+  under everything in it.
+- **The title well** holds the grip and the title, `Game stats · <measure> <unit>`, and is the
+  clickable `drag`, the drag handle. The close button fills its well, padded, the clickable
+  `close`.
+- **The measures** are `window.measures`, each a key `k`, a tray `g` (`eco` or `army`), a name
+  `n` and a unit `u`: metal income, energy income and wasted metal in the economy tray; units,
+  army value, kills and losses in the army tray. A measure the state names that the list lacks
+  reads as the first.
 - **The trays:** the label, then a chip per measure from `chip.start` in, each as wide as `chips`
-  gives, `chip.gap` apart, `chip.h` tall and centred in the tray. The economy tray also holds
-  the players / teams chips, flush right, `split.end` from its right.
+  gives, `chip.gap` apart, `chip.h` tall and centred in the tray, the clickable `chip:<k>`, drawn
+  pressed for the measure shown. The economy tray also holds the players / teams chips,
+  `chip:player` and `chip:team`, flush right, `split.end` from its right.
+- **The split:** a line per player, or, when the split asks for teams and the teams are told
+  apart (`headed`, as for the column's headers), a line per team, `Team N`, the sum of its
+  players, in the `chart.teams` colours. When they are not told apart the TEAMS chip is disabled
+  and the lines are the players'.
 - **The chart** covers the chart and legend wells, padded by 1. Its legend column is the legend
   well's right edge minus the chart well's right edge, plus 1.
 - **The caption** is in the `foot` well.
 
 ### The chart
 
-Every number of it is in `chart`:
+Every number of it is in `chart`, and its text in the style `chart.style` (`styles.chart`):
 
 - the plot's margins;
-- the value and minute labels: size, colour, gap, baseline, how far below, how often;
+- the value and minute labels: size, colour, gap, baseline, how far below; `axis.every`, the
+  minute steps to choose from, and `axis.space`, the least spacing in units;
 - the grid lines;
 - the playhead's line and label;
 - the lines: width, the opacity of the part after the playhead, the halo drawn under a dark
   player colour, the cross where a commander died;
+- `teams`, the colours of the team lines;
 - the legend's row height, swatch and text placement.
 
-Each player (or team) is one line, bright up to the playhead and faint after it. The legend is
-ranked by the values at the playhead.
+The rules:
+
+- **Sample s is at t0 + s · dt seconds** (the state's `stats.t0` and `stats.dt`), on the x of
+  that time over the recording, 0 to T.
+- **Each group is one line**, bright up to the playhead and faint after it. The faint part is
+  one SVG group at `line.faint`, so where lines cross the top one shows, not the two summed. A
+  dark colour's halo is a polyline `line.width` + 1 wide under it; both join round. The cross is
+  at the sample nearest the group's death.
+- **The minute labels step by the first of `axis.every` that puts them `axis.space` apart**
+  (in units of plot width), else by its last. A minute label nearer the playhead's than
+  `axis.space` is left out, so the two never overlap.
+- **The value labels** are 0, half and the top: the largest sample rounded up to 1, 2, 2.5 or 5
+  times a power of ten (`nice`), written by `statFormat`: metal income in tenths below 100,
+  thousands as `k` from 10 000 (whole from 100 000), whole numbers otherwise.
+- **The legend is ranked by the values at the playhead**, the sample nearest it.
 
 ## Checked against the prototype
 
@@ -363,21 +391,29 @@ ranked by the values at the playhead.
 
 ## Checking the C against the mockup
 
-`tools/hudart/laycheck.py` opens the mockup headless for eight cases (4K at 150 with two teams, 4K
-at Auto with the list too long, 1080p at 100 with one team, 1440p at 75 with a row hovered and a
-button held, 4K at 150 as a six-player free-for-all, 4K at 150 as a 2v1v1, 4K at 150 with
-fourteen players scrolled to item 3 and a toast, and 1440p at 75 with the first row hovered and
-Sight and Follow on it), takes the mockup's state and every element's box in HUD units, runs
-`tagpu_hudlay.c` compiled natively (`laycheck.c`) on the same state, and pairs the two element
-by element: every part by name and painted opacity (its own times its ancestors', as a disabled
-button's icon is dimmed), every text by its string, every solid by its colour, every clickable by
-its key; an inset edge is set aside by its flag. It also measures every text's baseline in the browser — a zero-size
+`tools/hudart/laycheck.py` opens the mockup headless for thirteen cases (4K at 150 with two
+teams, 4K at Auto with the list too long, 1080p at 100 with one team, 1440p at 75 with a row
+hovered and a button held, 4K at 150 as a six-player free-for-all, 4K at 150 as a 2v1v1, 4K at
+150 with fourteen players scrolled to item 3 and a toast, 1440p at 75 with the first row hovered
+and Sight and Follow on it, and five with the stats window open: `4k-150-stats-units`,
+`1440-75-stats-teams-metal`, `1080-100-stats-ffa-army-held` (a free-for-all asking for teams,
+close held), `4k-auto-stats-16-excess-start` (sixteen players at 0:00) and
+`4k-150-stats-clamped-energy` (placed past the screen's right and top edges)), takes the mockup's state and
+every element's box in HUD units, runs `tagpu_hudlay.c` compiled natively (`laycheck.c`) on the
+same state, and pairs the two element by element: every part by name and painted opacity (its own
+times its ancestors', as a disabled button's icon is dimmed), every text by its string, every
+solid by its colour, every clickable by its key; an inset edge is set aside by its flag. From the
+chart's SVG it pairs the line ops by colour (with width and opacity), the SVG texts by string
+(with anchor, size and colour), the two chart ops by opacity (with their clip) and the drop
+shadow (offset, blur, opacity), and compares every group's colour, halo, points and cross, a
+point within a tenth of a unit, the precision both sides write. It also measures every text's baseline in the browser — a zero-size
 inline-block probe on the text's own line — against `tagpu_hudlay_baseline` from the faces'
 metrics. It exits 1 on a box or baseline more than its tolerance off, a part's opacity more than
 one level off, a dim that disagrees, or an element only one side has.
 
-MEASURED 2026-10-08 on the first six cases, and again on all eight once the controls were laid
-out for input (2026-10-09): the two agree. At 4K every box is within 0.015 units and every baseline
+MEASURED 2026-10-08 on the first six cases, again on all eight once the controls were laid out
+for input, and on all thirteen with the stats window (2026-10-09): the two agree. A halo
+polyline is told from its line by its `stroke-opacity`, which only the halo carries. At 4K every box is within 0.015 units and every baseline
 within 0.0142. The Oswald residual above is named, not failed, and only where the same rule on
 Chrome's own rounded ascent and descent (`measureText`'s `fontBoundingBoxAscent`/`Descent`) gives
 the browser's baseline, so a wrong line rule still fails: in the 1080p and 1440p cases the `name`
@@ -388,5 +424,3 @@ the browser's baseline for every one of them.
 
 - **The HUD font is not decided.** Oswald and Barlow Condensed (both OFL) are the mockup's, and
   ship with the OFL texts beside them.
-- **The stats window's data is synthetic.** A real one needs a per-second stats track in the
-  recorder ([S5](tadr-port/demo-recorder-s5-ui.md)); the game's dump carries no series.
