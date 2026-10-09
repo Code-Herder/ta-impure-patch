@@ -101,9 +101,21 @@ function stepDetail(s: Step, now: number): string {
 
 function itemSummary(it: Item): string {
   const c = it.checks
-  if (!c) return it.state === 'running' ? '' : it.state
-  return [`${c.pass} pass`, c.fail.length ? `${c.fail.length} FAIL` : '',
-          c.unrun.length ? `${c.unrun.length} could not run` : ''].filter(Boolean).join(' · ')
+  const said = c ? [c.pass ? `${c.pass} pass` : '', c.fail.length ? `${c.fail.length} FAIL` : '',
+                    c.unrun.length ? `${c.unrun.length} could not run` : ''] : []
+  const text = said.filter(Boolean).join(' · ')
+  return text || (it.state === 'running' ? '' : it.state)
+}
+
+/** What went wrong in an ended item, one line each: its failed and unrun steps with why, then
+ * its failed and unrun checks. */
+function wrong(it: Item): [string, string][] {
+  return [
+    ...it.steps.filter(s => s.state === 'fail' || s.state === 'unrun')
+      .map((s): [string, string] => [s.state, `${s.id}: ${s.detail ?? 'did not run'}`]),
+    ...(it.checks?.fail ?? []).map((f): [string, string] => ['fail', f]),
+    ...(it.checks?.unrun ?? []).map((f): [string, string] => ['unrun', f]),
+  ]
 }
 
 /** The toast when one of this session's runs ends. */
@@ -180,8 +192,9 @@ function body(c: Ctx, run: Run, depth: number): RenderElement[] {
       if (it.state === 'running') {
         rows.push(...stepRows(c, run, it, depth + 1))
       } else {
-        for (const f of failures({ ...run, items: [{ ...it, id: '' }] })) {
-          rows.push(line(els, depth + 1, <els.Text color="error">✗ {f}</els.Text>))
+        for (const [state, why] of wrong(it)) {
+          rows.push(line(els, depth + 1, Glyph(els, state),
+                         <els.Text color={state === 'fail' ? 'error' : undefined}> {why}</els.Text>))
         }
       }
     }
@@ -269,8 +282,9 @@ export function bandRows(
     )
   })
   if (others.length) {
-    const said = others.map(r => `${worktreeName(r)} ${r.tool} ${r.kind} ` +
-      summary(r, state.now, state.utcOffset)).join('; ')
+    const said = others.map(r => [worktreeName(r), r.tool, r.kind,
+                                  summary(r, state.now, state.utcOffset)].filter(Boolean).join(' '))
+      .join('; ')
     rows.push(<Box><Text dimColor wrap="truncate-end">  others: {said}</Text></Box>)
   }
   return <Box flexDirection="column">{rows.slice(0, Math.max(1, maxRows))}</Box>

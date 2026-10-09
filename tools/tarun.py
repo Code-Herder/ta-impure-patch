@@ -35,8 +35,8 @@ otherwise, one started while this session and worktree have a run open that thes
 gate's own step already names the instance it plays on.
 
 THE ESTIMATE. Each step's expected seconds are the median of its last five finished runs with the
-same tool, item, step and variant (the run's speed settings); a running step with GameTime readings
-is extrapolated from their rate instead. The remaining steps are then scheduled onto the run's
+same tool, item, step and variant (the run's speed settings); a running step is left whichever is
+longer of that less its elapsed time and, with GameTime readings, their rate's time to its target. The remaining steps are then scheduled onto the run's
 pools (a pool is the workers that play one kind of step: tareplay's -j games, tacompat's network
 games) in the order the tool queues them, each after the steps it waits for. A step with no history
 counts as zero, and the estimate then says it is a lower bound; with nothing known it is absent.
@@ -217,15 +217,16 @@ def schedule(doc, history, now):
             if s["state"] in ENDED:
                 finish[key] = 0.0
             elif s["state"] == "running":
-                left = None
+                # the larger of what history leaves and what the GameTime rate leaves: history
+                # knows the lane's tail after its last GameTime (dumps, collection, the exit),
+                # the rate knows a lane running slower than it ever has
+                e = expect(item["id"], s)
+                guesses = [] if e is None else [max(0.0, e - (now - s["started"]))]
                 g = s.get("gt_seen")
                 if g and s.get("gt_target") and g[1] > g[0] and s["gt"] < s["gt_target"]:
                     rate = (g[1] - g[0]) / max(1e-3, g[3] - g[2])       # GameTime a second
-                    left = (s["gt_target"] - s["gt"]) / rate
-                else:
-                    e = expect(item["id"], s)
-                    if e is not None:
-                        left = max(0.0, e - (now - s["started"]))
+                    guesses.append((s["gt_target"] - s["gt"]) / rate)
+                left = max(guesses) if guesses else None
                 if left is None:
                     unknown, left = True, 0.0
                 else:
@@ -508,7 +509,10 @@ def tacli_command(name, words):
     try:
         r = instance_run(name)
         if r:
-            edit(r["id"], lambda run: run.note(last=" ".join(words)[:120]))
+            said = list(words)
+            if name in said:                # the row names the instance already
+                said.remove(name)
+            edit(r["id"], lambda run: run.note(last=" ".join(said)[:120]))
     except Exception as e:  # noqa: BLE001
         print(f"tarun: {type(e).__name__}: {e}", file=sys.stderr)
 

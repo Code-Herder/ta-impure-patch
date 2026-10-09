@@ -42,7 +42,7 @@ function doc(id: string, over: Record<string, unknown> = {}): Record<string, unk
 
 /** The world beneath the plugin: a run folder, /proc, the session id and the clock. */
 function world(on: On, files: Files, procs: Map<number, number>, toasts: string[] = []) {
-  mock.env(on, { HOME: '/home/u', TARUN_DIR: '/runs' })
+  mock.env(on, { HOME: '/nowhere', TARUN_DIR: '/runs' })
   const clock = mock.clock(on, { now: T0 })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -193,6 +193,26 @@ describe('the band and the toasts', () => {
                                      component: 'AbovePrompt', props: BAND_PROPS })
     expect(await after.find({ text: /tareplay landing a/ })).toBeUndefined()
     await after.unmount()
+  })
+})
+
+describe('an ended run', () => {
+  test('names each lane that could not run, and why', async ($, on) => {
+    const ended = doc('a', { state: 'unrun', ended: T0 / 1000 - 5, items: [{
+      id: 'c2-weapon-keys', state: 'unrun', checks: { pass: 0, fail: [], unrun: [] },
+      steps: [{ id: 'L', state: 'unrun', detail: 'the twin: mouse event [512, 384, 512]' },
+              { id: 'P', state: 'unrun' }],
+    }] })
+    const files: Files = new Map([[`${ROOT}/${SID}/a.json`, JSON.stringify(ended)]])
+    const clock = world(on, files, new Map())
+    await start($)
+    await clock.advance(2000)
+    const ui = await $.ui.mount({ plugin: 'ta-runs', surface: 'terminal', component: 'Pane',
+                                  props: PANE_PROPS, requestId: 'ta-runs' })
+    expect(await ui.find({ text: /c2-weapon-keys unrun$/ })).toBeDefined()
+    expect(await ui.find({ text: /\? L: the twin: mouse event \[512, 384, 512\]/ })).toBeDefined()
+    expect(await ui.find({ text: /\? P: did not run/ })).toBeDefined()
+    await ui.unmount()
   })
 })
 

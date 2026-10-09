@@ -128,7 +128,7 @@ class Nesting(Base):
 
     def test_a_tacli_game_is_a_run_from_launch_to_stop(self):
         tarun.tacli_launched("probe", os.getpid(), ":5")
-        tarun.tacli_command("probe", ["ui", "click", "OK"])
+        tarun.tacli_command("probe", ["ui", "probe", "click", "OK"])
         r = tarun.instance_run("probe")
         self.assertEqual((r["last"], r["items"][0]["steps"][0]["state"]), ("ui click OK", "running"))
         tarun.tacli_stopped("probe")
@@ -179,13 +179,21 @@ class Estimate(Base):
         doc["items"][0]["steps"][0].update(state="running", started=now)
         self.assertEqual(tarun.schedule(doc, h, now), (100, False))
 
-    def test_a_running_lane_follows_its_gametime_rate(self):
-        doc, h = self.run_with({("battle", "L"): [1000]}, [("battle", lanes("L"))], {"game": 1})
+    def test_a_lane_slower_than_ever_follows_its_gametime_rate(self):
+        doc, h = self.run_with({("battle", "L"): [200]}, [("battle", lanes("L"))], {"game": 1})
         now = time.time()
-        # 1000 GameTime in 100 s, 4000 to go: 400 s, whatever the history said
+        # 1000 GameTime in 100 s, 4000 to go: 400 s, though history leaves 80
         doc["items"][0]["steps"][0].update(state="running", started=now - 120, gt=2000,
                                            gt_target=6000, gt_seen=[1000, 2000, now - 100, now])
         self.assertEqual(tarun.schedule(doc, h, now)[0], 400)
+
+    def test_a_lanes_tail_after_its_last_gametime_comes_from_history(self):
+        doc, h = self.run_with({("battle", "L"): [55]}, [("battle", lanes("L"))], {"game": 1})
+        now = time.time()
+        # the rate says 5 s to the end GameTime; history says the lane runs 44 s more
+        doc["items"][0]["steps"][0].update(state="running", started=now - 11, gt=571,
+                                           gt_target=900, gt_seen=[301, 571, now - 4, now])
+        self.assertEqual(tarun.schedule(doc, h, now)[0], 44)
 
     def test_a_step_with_no_history_makes_it_a_lower_bound(self):
         doc, h = self.run_with({("battle", "L"): [100]}, [("battle", lanes("L", "P"))],

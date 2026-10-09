@@ -91,6 +91,7 @@ PAGES = [
     ("tacli-design",               "tacli — launcher & driver",   "Tooling"),
     ("capture-workflows",          "Capture workflows & limits", "Tooling"),
     ("logging",                    "Logs: the capped sink",       "Tooling"),
+    ("runs-viewer",                "Runs viewer — gates in progress", "Tooling"),
     ("model-export",               "Model export (3DO → glTF)",   "Tooling"),
     ("model-import",               "Model import (glTF → engine)","Tooling"),
     ("input-firewall",             "The input firewall",          "Tooling"),
