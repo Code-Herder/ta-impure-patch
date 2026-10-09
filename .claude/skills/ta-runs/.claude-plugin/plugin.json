@@ -1,0 +1,6 @@
+{
+  "name": "ta-runs",
+  "version": "0.1.0",
+  "description": "What the gates and games of this session are doing: tareplay, tacompat, tacli instances and landings, planned, running, passed or failed, with the time left",
+  "types": "./types/index.d.ts"
+}

@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import talog  # noqa: E402  the DLL's logs across their rotations (tools/talog.py)
 import taremote  # noqa: E402  remote instances: PowerShell over SSH (tools/taremote.py)
 import dpport  # noqa: E402  DirectPlay's port, per prefix (tools/dpport.py)
+import tarun  # noqa: E402  an instance's game as a run, for the runs viewer (tools/tarun.py)
 
 # --------------------------------------------------------------------------- paths
 
@@ -1994,6 +1995,7 @@ def _launch(args) -> dict:
     restored = pointer_restore(display, pointer_before)
     meta["last_launch"] = time.strftime("%Y-%m-%d %H:%M:%S")
     inst.save_meta(meta)
+    tarun.tacli_launched(args.name, pid, display)
     return {"name": args.name, "pid": pid, "launcher_pid": proc.pid,
             "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
             "map": args.map, "unit_limit": meta.get("unit_limit"),
@@ -2759,6 +2761,7 @@ def _stop(inst: Instance, hard: bool = False) -> dict:
 
 def cmd_stop(args):
     res = _stop(Instance(args.name), args.hard)
+    tarun.tacli_stopped(args.name)
     out(res, args.json, human=f"stopped {args.name}")
 
 
@@ -2770,6 +2773,7 @@ def cmd_rm(args):
         if not args.force:
             die(f"{args.name} is running (tacli stop {args.name}, or --force)")
         _stop(inst, hard=True)
+        tarun.tacli_stopped(args.name)
     shutil.rmtree(inst.dir)
     out({"name": args.name, "removed": True}, args.json, human=f"removed {args.name}")
 
@@ -6408,6 +6412,7 @@ def cmd_remote_launch(args):
         out(res, args.json, human=f"{args.name} already running on the remote machine "
                                   f"(pid {res['pid']})")
         return
+    tarun.tacli_launched(args.name, res["pid"], remote=True)
     lines = [f"launched {args.name} on the remote machine pid={res['pid']} "
              f"shield={'on' if res['shield'] else 'off'}"
              + (" defaults=on" if res.get("defaults") else "")]
@@ -7175,17 +7180,27 @@ def build_parser():
     return p
 
 
+# The verbs that open or close an instance's run themselves, or name no game
+OWN_RUN_VERBS = ("cmd_launch", "cmd_remote_launch", "cmd_stop", "cmd_rm", "cmd_create", "cmd_ls")
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     if not hasattr(args, "json"):
         args.json = False
     INSTANCES.mkdir(parents=True, exist_ok=True)
     atexit.register(taremote.close_all)
+    verb = getattr(getattr(args, "func", None), "__name__", "")
     try:
         _route_remote(args)
         args.func(args)
     except taremote.RemoteError as e:
         die(f"{getattr(args, 'name', '')}: on the remote machine: {e}")
+    finally:
+        if verb not in OWN_RUN_VERBS:
+            tarun.tacli_command(getattr(args, "name", None),
+                                [w for w in (sys.argv[1:] if argv is None else argv)
+                                 if w != "--json"])
 
 
 if __name__ == "__main__":

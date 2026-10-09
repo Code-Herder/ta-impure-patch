@@ -11,6 +11,7 @@ running game.
     python3 tools/test_tacli.py [-v]
 """
 
+import atexit
 import base64
 import contextlib
 import fnmatch
@@ -18,6 +19,7 @@ import hashlib
 import io
 import json
 import ntpath
+import os
 import re
 import shutil
 import tempfile
@@ -27,6 +29,10 @@ from unittest.mock import Mock, patch
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
+# The launches here are mocks: none of them is a run of the session's runs viewer (tools/tarun.py)
+RUNS = tempfile.mkdtemp(prefix="tacli-test-runs-")
+os.environ["TARUN_DIR"] = RUNS
+atexit.register(shutil.rmtree, RUNS, ignore_errors=True)
 tacli = SourceFileLoader("tacli", str(Path(__file__).with_name("tacli"))).load_module()
 
 

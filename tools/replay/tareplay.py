@@ -136,6 +136,7 @@ END_SCENARIO = SCENARIOS / "replay-end.json"
 STOCK_FIXTURE = "stock-limits"          # the fixture that plays the stock-limits build
 sys.path.insert(0, str(TREE / "tools"))
 import talog  # noqa: E402
+import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
 sys.path.insert(0, str(HERE))
 import tarec  # noqa: E402
 import reccache  # noqa: E402
@@ -204,6 +205,7 @@ def main_checkout() -> Path:
 INSTANCES = main_checkout() / "tagpu" / "instances"
 PRINT = threading.Lock()
 STOP = threading.Event()        # set by SIGTERM / Ctrl-C: every wait gives up, no job starts
+J = tarun.NULL                  # the run's journal once its games start (run_threads)
 
 
 def say(*a):
@@ -319,6 +321,7 @@ class Worker:
             raise CouldNotRun("test game speed must be 10 or 20")
         self.game_speed = game_speed
         self.turbo = 0
+        self.lane = None                # (fixture, lane) while a job plays, for the journal
         self.lock = None
         self.last_collection = None
         for k in range(1, 100):
@@ -470,7 +473,10 @@ class Worker:
         rc, o = tacli("peek", self.name, GAMETIME, "--json", timeout=60)
         if rc:
             raise CouldNotRun(f"tacli peek: {last(o)}")
-        return int(str(json.loads(o[o.index("{"):])["peeks"][0]["value"]).split()[0])
+        g = int(str(json.loads(o[o.index("{"):])["peeks"][0]["value"]).split()[0])
+        if self.lane:
+            J.progress(*self.lane, g)
+        return g
 
     def trigger(self, text):
         """Written whole and renamed into place: the frame visit never reads half a line."""
@@ -693,6 +699,8 @@ def wait_paused(w, log, T, poll=None):
             m = rx.search(ln.rstrip())
             if m and "paused at" in m.group(0):
                 log.pending, log.held, log.at = None, True, T
+                if w.lane:
+                    J.progress(*w.lane, T)
                 return
             if m:
                 raise CouldNotRun(f"pause at {T}: {m.group(0)}")
@@ -2342,6 +2350,10 @@ class Run:
         self.keep = bool(getattr(args, "keep", False))
         self.game_speed = getattr(args, "game_speed", TEST_GAME_SPEED)
         self.turbo = getattr(args, "turbo", 0)
+        self.kind = getattr(args, "cmd", "run")
+        # what the estimate keys a lane's past times by: the pacing and the build's kind
+        self.variant = (f"gs{self.game_speed}-turbo{self.turbo}"
+                        f"{'-cover' if getattr(args, 'cover', False) else ''}")
         h = head()
         fixes = fixes or fixtures()
         for name in names:
@@ -2400,7 +2412,7 @@ class Run:
         report() for a fixture a stopped run left with lanes never run."""
         with self.lock:
             if name not in self.reports:
-                self.reports[name] = self.report_pool.submit(fixture_report, self.fx[name],
+                self.reports[name] = self.report_pool.submit(journaled_report, self.fx[name],
                                                              self.keep)
             return self.reports[name]
 
@@ -2411,6 +2423,9 @@ class Run:
         Ts, out = fx["Ts"], fx["out"] / proc
         t0 = time.time()
         say(f"{name} {proc}: start on {w.name}")
+        w.lane = (name, proc)
+        J.start(name, proc, instance=w.name, display=str(w.xvfb.display),
+                gt_target=lane_target(fx, proc))
         try:
             stopping()
             w.game_speed = NORMAL_GAME_SPEED if proc == "W" else self.game_speed
@@ -2452,12 +2467,16 @@ class Run:
             else:
                 fresh(w, fx, fx["rec"], out, Ts[0])
             fx["procs"][proc] = "ran"
+            w.lane = None
+            J.finish(name, proc, "done")
         except Exception as e:
             kind = "FAILED" if isinstance(e, Failed) else "could not run"
             why = str(e) if isinstance(e, (CouldNotRun, Failed)) else f"{type(e).__name__}: {e}"
             fx["procs"][proc] = kind
             fx["problems"].append((proc, kind, why))
             say(f"{name} {proc}: {kind}: {why}")
+            w.lane = None
+            J.finish(name, proc, "fail" if kind == "FAILED" else "unrun", why.splitlines()[0])
             try:
                 w.collect(out)
             except Exception:
@@ -2540,6 +2559,7 @@ def fixture_report(fx, keep):
         if fx["procs"].get("L") == "ran":
             lines.append("   " + cost_line(fx))
             label, verdict, detail = codec_check(tarec_run("info", fx["rec"])[1])
+            fx["verdicts"] = [(label, verdict, detail)]
             lines.append(f"   {verdict:4}  {label}: {detail}")
             failed |= verdict == FAIL
             unrun |= verdict == UNRUN
@@ -2554,7 +2574,8 @@ def fixture_report(fx, keep):
     if fx["procs"].get("L") != "ran":
         return lines, failed, unrun
     planned = [checks(fx)] + ([tk_checks(fx)] if "K" in fx["want"] else [])
-    for label, verdict, detail in [r for p in planned for r in p.results()]:
+    fx["verdicts"] = [r for p in planned for r in p.results()]
+    for label, verdict, detail in fx["verdicts"]:
         lines.append(f"   {verdict:4}  {label}: "
                      + (detail.splitlines()[0] if verdict == PASS
                         else detail.replace("\n", "\n         ")))
@@ -2568,6 +2589,37 @@ def fixture_report(fx, keep):
         for f in set(map(str, fx["passed"])) - set(map(str, fx["held"])):
             Path(f).unlink(missing_ok=True)
     return lines, failed, unrun
+
+
+def journaled_report(fx, keep):
+    """fixture_report, its checks told to the journal: how many passed, and every one that did
+    not by its label and the first line of its detail."""
+    J.start(fx["name"], "checks")
+    try:
+        got = fixture_report(fx, keep)
+    except Exception as e:
+        J.finish(fx["name"], "checks", "unrun", f"{type(e).__name__}: {e}")
+        raise
+    v = fx.get("verdicts", [])
+
+    def named(verdict):
+        return [f"{label}: {detail.splitlines()[0] if detail else ''}"[:160]
+                for label, vd, detail in v if vd == verdict]
+    fails, unrun = named(FAIL), named(UNRUN)
+    J.checks(fx["name"], sum(vd == PASS for _, vd, _ in v), fails, unrun)
+    J.finish(fx["name"], "checks", "fail" if fails else "unrun" if unrun or not v else "pass")
+    return got
+
+
+def lane_target(fx, proc):
+    """The GameTime a lane plays to, where one GameTime says how far it has come: None for the
+    lanes whose course is not a run up the clock (K, F, X, U, W)."""
+    Ts = fx.get("Ts")
+    if proc == "L" or (proc == "P" and fx["measure"]):
+        return fx["fix"]["end"]
+    if not Ts:
+        return None
+    return {"P": Ts[-1], "R": Ts[-1] + CONTINUE, "Q": Ts[0]}.get(proc)
 
 
 def report(run):
@@ -2609,7 +2661,9 @@ def cmd_run(args):
 def run_threads(run):
     """The run's workers to their end; a stop by SIGTERM or Ctrl-C lets each finish its game.
     The workers are the only threads that play games, one each: never more than -j at once."""
+    global J
     offline(run.j)
+    J = journal(run)
     threads = [threading.Thread(target=run.worker) for _ in range(run.j)]
 
     def interrupted(signum, frame):
@@ -2622,6 +2676,28 @@ def run_threads(run):
         t.start()
     while any(t.is_alive() for t in threads):
         time.sleep(1)
+
+
+def journal(run):
+    """The run planned for the journal: each fixture's lanes on -j game workers in the order a
+    free worker takes them (LANE_ORDER, then the fixtures' L order), each after the lane it reads,
+    and its checks after them all on the offline pool, which never waits for a game."""
+    rank = {n: k for k, n in enumerate(first_lanes(run.fx))}
+    items = []
+    for name, fx in run.fx.items():
+        steps = [{"id": p, "pool": "game", "order": LANE_ORDER.index(p) * 1000 + rank[name],
+                  "after": [] if p == "L" else ["K"] if p == "F" else ["L"]}
+                 for p in fx["want"]]
+        if not run.measure:
+            steps.append({"id": "checks", "pool": "offline", "order": 10 ** 6,
+                          "after": list(fx["want"])})
+        items.append((name, steps))
+    names = list(run.fx)
+    title = (f"tareplay {run.kind} " + (" ".join(names) if len(names) <= 3 else
+                                        f"({len(names)} fixtures)") + f" -j {run.j}")
+    return tarun.begin("tareplay", items, kind=run.kind, title=title, gate=True,
+                       pools={"game": run.j, "offline": 0}, variant=run.variant,
+                       summary=str(run.out / "summary.txt"))
 
 
 def out_dir(args):
@@ -2950,6 +3026,7 @@ def cmd_landing(args):
                             f"{'+'.join(sorted(bs))}")
     for p in problems:
         print(f"tareplay landing: {p}")
+    J.note(problems=problems)
     k = sum(1 for key, (_, bs) in funcs.items() if reached([key], bs)) + sum(
         1 for fns, bs in regions.values() if reached(fns, bs))
     total = len(funcs) + len(regions)
@@ -3048,6 +3125,7 @@ def cmd_broad(args):
         if ix not in changed:
             lines.append(f"UNCOVERED table {nm}: no recording changed it between T1 and Tlast")
     text = "\n".join(lines) + ("\n" if lines else "")
+    J.note(problems=lines)
     print(text or "tareplay broad: every feature, site and table exercised\n", end="")
     (out / "broad.txt").write_text(text)
     return status or (1 if lines else 0)
@@ -3238,7 +3316,12 @@ def main(argv=None):
     if a.cmd not in ("features", "list") and not (a.cmd == "landing" and a.check):
         import devpy
         devpy.ensure()
-    return a.func(a)
+    rc = 2                              # a CouldNotRun or anything unforeseen: it could not run
+    try:
+        rc = a.func(a)
+    finally:
+        J.end("stopped" if STOP.is_set() else {0: "pass", 1: "fail"}.get(rc, "unrun"))
+    return rc
 
 
 if __name__ == "__main__":
