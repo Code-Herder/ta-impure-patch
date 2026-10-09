@@ -18296,20 +18296,27 @@ The graphics globals base is `0x51F320`. Its event-ring write/read indices `+0x1
 `0x51F4AE`/`0x51F4B2`, capacity `+0x186 = 20`; `0x4C2E30` and `0x4C2D60` advance them through
 mouse-button messages even when a modal GUI consumes the click. The GUI is `main+0x519`:
 its latest event occupies `main+0x555..+0x56C` (`GUI+0x3C..+0x53`): six dwords x, y,
-wParam, timestamp, message and double-click flag. Thus `main+0x559` is y and `main+0x561..+0x564`
-is its timestamp, while `main+0x533` is inside
+wParam, timestamp, message and double-click flag. Thus `main+0x559` is y, `main+0x561..+0x564`
+its timestamp, `main+0x565` its message and `main+0x569` its double-click flag, and `main+0x56D`
+is `GUI+0x54`, the wParam of the last event the pump popped, while `main+0x533` is inside
 its active-screen pointer `+0x18`, and `main+0x585` is the previous hovered/help gadget index at `GUI+0x6C`: `0x4AA596`
 and `0x4A00B5` copy `GUI+0x68` into it before selecting that gadget's text at record `+0x33`. The existing event-ring and GUI pump sections establish those owners. A two-image null
 twin whose arrows cancel and whose keyboard menu opens without clicks cannot observe every
 changed ring/eye bit. A native injected click returns the pointer to screen centre, so the
 harness follows each sampled click with a separate move and requires the GUI x/y/message echo
-before dumping. It samples GUI-consumed clicks through a ring turn, every valid coordinate bit
-and several eyes at one paused GameTime, and requires its carried simulation records to remain equal.
+before dumping. It samples GUI-consumed clicks, every valid coordinate bit and several eyes at
+one paused GameTime, and requires its carried simulation records to remain equal. A click is two
+ring entries, its press and its release, so the twin's whole clicks move the read index by even
+steps of the ring of 20 and never change its low bit: the images gate cannot count that bit as the
+viewer's. MEASURED 2026-10-09, resource-geo-upgrade at speed 20: a dump at T1 451 taken as a click
+of the script reached the engine held a read index of 9 live against 6 played and sought, and
+failed the gate on that bit.
 The recorder's 60 recorded global slots / 78 dwords are unchanged. Owner-approved `leave`
 rows keep the active GUI pointer (`main+0x531`, four bytes), GUI mouse-event clock
 (`main+0x561`, four bytes) and bitmap-font pointer (`0x51F524`, four bytes) local.
 The three additional UI fields below and the two keyboard indices above also have exact
-owner-approved rows. Coordinates and text colours retain their existing classification;
+owner-approved rows, and so, since 2026-10-09, do the mouse-button ring's indices and the GUI's
+copy of the popped event (*The mouse-button ring is viewer input*, below). Coordinates and text colours retain their existing classification;
 orders and carried simulation records retain their existing comparisons.
 
 The GUI event timestamp is a wall-clock sample. `0x4B5E70`, `0x4B5ED1` and `0x4B5F1D`
@@ -18328,6 +18335,39 @@ copy all six dwords to their stack (`0x4A44B7..0x4A44D1`, `0x4A6B57..0x4A6B63`,
 gadget-relative, has no direct caller and no stored address in the image. The `leave` row
 `guistamp` (`main+0x561`) rests on this. Ordinary native moves and clicks produce another clock sample. A short paused
 probe cannot establish a change of every clock bit by waiting for arithmetic rollover.
+
+**The mouse-button ring is viewer input [DISASSEMBLED 2026-10-09].** The ring lives in the
+graphics object `0x51F320` (`0x4B6220` returns it): capacity `+0x186`, entries at `[+0x18A]`
+(24 bytes each, the six-dword mouse record), write index `+0x18E` (`0x51F4AE`) and read index
+`+0x192` (`0x51F4B2`). Its writers: the init `0x4C2BD0`, whose one call `0x4B5A67` passes a
+capacity of 20, allocates the entries (`MEM_AllocNamed 0x4D83B0`, `0x4C2BEF`) and zeroes both
+indices (`0x4C2C0B`, `0x4C2C11`); the flush `0x4C2BB0` (`0x4C2BB7`, `0x4C2BBD`; one call,
+`0x426636`); the push `0x4C2E30`, which advances and wraps the write index (`0x4C2E78`,
+`0x4C2E82`) and whose one caller `0x4B5F51` is the window procedure's `0x201..0x206` arms (the
+switch at `0x4B5E3B`); and the pop `0x4C2D60`, which advances and wraps the read index (`0x4C2DB5`,
+`0x4C2DBF`). The peek `0x4C2DE0` reads both and writes neither. The pop is called only from the
+input pass `0x499890` (`0x4999C4`) and the GUI pump's refresh `0x4AB5D0` (`0x4AB654`), the peek from
+the same two (`0x499982`, `0x49999C`, `0x4AB60F`). No ring function's address, and neither index's,
+is stored in the image (a search of the file for each as a little-endian dword). The 25 other
+instructions with a `+0x18E` or `+0x192` displacement (`0x413060..0x48A68F`) form their base with no
+fetch of the graphics object in the 25 instructions before them [INFERRED: other objects' fields].
+A recursive descent over direct calls and jumps from the step `0x495490` (946 functions reached,
+173 of them with an indirect call or jump it does not follow) reaches the pop and the peek only
+through `0x4AB5D0` ← `0x4A9FD0` ← `0x4ABD90` ← the players phase `0x464F80`: the watch-mode notice
+("You are placed in watch mode because you…", `0x507338`), a dialog box opened at `0x465816` whose
+pump runs at `0x4AC035`, which computes no simulation state. It does not reach the push, the init
+or the flush.
+
+The GUI's copy of the event: `GUI+0x4C` (the message, `main+0x565`) and `GUI+0x50` (the
+double-click flag, `main+0x569`) are written only by the six-dword copies `0x4AB66C` (from the
+popped entry) and `0x4C2356` (`0x4C2340`, from the current record when the ring is empty, called at
+`0x4AB67B`). `GUI+0x54` (`main+0x56D`) takes the popped entry's wParam at `0x4AB664` and is zeroed
+at `0x4AB502` by `0x4AB4E0`, which the process init `0x491200` calls once with `main+0x519`
+(`0x491537`). Their readers are the GUI's: the button tests `0x4AB510` (a press or a double click)
+and `0x4AB570` (a double click) read `GUI+0x4C`, and `0x4AB5B0` reads `GUI+0x54`, all from the gadget
+handlers (call sites above and below); a displacement search over `0x4A0000..0x4AFFFF` finds no
+reader of `GUI+0x50`. All five are `leave` rows of `replay-globals.tsv`, the owner's (2026-10-09):
+`mousehead`, `mousetail`, `guimsg`, `guidblclick` and `guipopwparam`.
 
 `main+0x531..+0x534` is the full active GUI pointer (`GUI+0x18`), not a unit type or a
 simulation pointer. Init zeros it at `0x4AA85E`; `GUI_Load` links its allocated screen to

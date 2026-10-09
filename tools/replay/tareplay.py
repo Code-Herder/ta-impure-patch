@@ -80,13 +80,8 @@ recordings' decoded blocks for every tarec call of the run (TAREC_CACHE, reccach
 Tick-driven runs default to internal game speed 20 (2x normal); --game-speed 10 selects normal
 speed. The owned instance's private settings are written while stopped, before each launch.
 Simulation tick endpoints, comparisons and wall-clock deadlines retain their existing units.
-Cost fixtures, a fixture marked `normal_speed` (resource-geo-upgrade; its script runs with the
-turbo off, below) and W's speed/settings UI test use normal speed. At speed 20 that fixture failed
-its images gate once in three runs: the dump at its first point was taken as a click of the
-script reached the engine, and the mouse ring's read index 0x51F4B2 differed from the puppets'.
-Why the null twin left that byte unclassified is not established, so the mark is timing, not a
-fix (research/notes/tadr-port/demo-recorder-completeness.md, *Test speed*);
-network/timing suites have their own speed policy.
+Cost fixtures and W's speed/settings UI test use normal speed; network/timing suites have their
+own speed policy.
 
 --turbo K (default 1, 0 for none) is the DLL's test-only pacing (tagpu_replay.c, THE TURBO): K
 ticks every frame from the trigger's `turbo on`, which a lane sends once its dumps and round
@@ -303,15 +298,14 @@ def last(text):
 
 
 def fixture_speed(fix, default):
-    """A fixture's game speed: normal for a cost fixture and one marked `normal_speed`."""
-    return NORMAL_GAME_SPEED if fix.get("cost") or fix.get("normal_speed") else default
+    """A fixture's game speed: normal for a cost fixture."""
+    return NORMAL_GAME_SPEED if fix.get("cost") else default
 
 
 def turbo_lane(fix, proc, k):
     """A lane's turbo k, 0 for none: every lane that waits on ticks, each of its GameTimes held
     (run_to) or armed in the DLL; not Q, which plays one tick, nor W, whose ticks pass only between
-    its interface steps; never a cost fixture. A `normal_speed` fixture's script still runs at
-    normal speed: run_to turns the turbo off for a `run` step."""
+    its interface steps; never a cost fixture."""
     if not k or fix.get("cost"):
         return 0
     return k if proc in "LPRFKXU" else 0
@@ -860,10 +854,14 @@ def twin(w, log, fix, held=False):
     w.trigger("dump ln1 now")
     if not log.wait(r"recorder: frame dump ln1 at GameTime", 30, n):
         raise CouldNotRun("the twin: frame dump ln1 not taken in 30 s")
-    # A button message changes the event ring even when a modal GUI consumes
-    # it. Sample a complete ring turn and several camera positions while the
-    # world is paused: returning to the same eye or ring index would hide these
-    # viewer writes from a two-image observation.
+    # Sample clicks, cursor positions and camera positions while the world is
+    # paused: returning to the same eye or coordinate would hide these viewer
+    # writes from a two-image observation. A click is two entries of the
+    # mouse-button ring, its press and its release, so whole clicks move the
+    # read index by even steps only and never sample its low bit. The ring's
+    # indices and the GUI's copy of the event do not rest on this sampling:
+    # they are `leave` rows of replay-globals.tsv (mousehead, mousetail,
+    # guimsg, guidblclick, guipopwparam).
     tacli("arm", w.name, "menu.open")
     rc, o = tacli("ui", w.name, "wait", "--gui", "RENDER.GUI", "--timeout", "10", timeout=60)
     if rc:

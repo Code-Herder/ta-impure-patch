@@ -706,7 +706,6 @@
    }
   },
   "resource-geo-upgrade": {
-   "normal_speed": true,
    "load": "resource-geo-upgrade.json",
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
