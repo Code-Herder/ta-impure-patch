@@ -5607,6 +5607,17 @@ REPLAY_SEATS_MAX = 10   # every record a game seats: the viewer takes record 10 
 REPLAY_SEEK_TIMEOUT = 120.0
 REPLAY_TAKEOVER_TIMEOUT = 120.0
 REPLAY_NAME_RX = re.compile(r"[A-Za-z0-9_-]{1,39}")    # the DLL's name rule for a dump
+# THE LAUNCH'S HOLD (tagpu_replay.c): a test launch whose tagpu_hold.on was present says so at
+# attach, and holds its level from the first step on until the trigger's `resume`. A held level
+# takes no step: a dump at T and a fork's first capture wait for whoever resumes it.
+REPLAY_HOLD_ARMED_RX = re.compile(r"hold: the launch's hold armed")
+REPLAY_HOLD_RX = re.compile(r"pause: paused at GameTime (\d+) \(the launch's hold\)")
+
+
+def _replay_held_launch(inst: Instance) -> bool:
+    """Whether this run of the instance holds its level (THE LAUNCH'S HOLD): its log says so at
+    attach, before any level."""
+    return bool(REPLAY_HOLD_ARMED_RX.search(talog.run_text(inst.gamedir)))
 
 
 class _LogLines:
@@ -5781,11 +5792,12 @@ def _replay_playing(inst: Instance):
     return None, "no level of this run has played a recording"
 
 
-def _replay_seek_wait(inst, name, T, dump, lines, first, timeout):
+def _replay_seek_wait(inst, name, T, dump, lines, first, timeout, held=False):
     """Waits for the seek's arrival or refusal and, with a dump, for the dump's line; returns
     what they say. The arrival comes at the frame visit that runs the seek, paused or not; the
     dump comes at the capture point of T, which a paused playback reaches at its first step after
-    the pause."""
+    the pause. On a `held` launch (THE LAUNCH'S HOLD) it returns at the arrival: the dump is armed
+    for T and taken once the caller resumes the level (`dump_pending`)."""
     n, d = re.escape(name), re.escape(dump or "")
     arrive_rx = re.compile(rf"replay: {n}: at GameTime {T}, sought from GameTime (\d+) in (\d+) ms "
                            rf"\(read (\d+), rebuild (\d+)\); units (\d+) killed, (\d+) made, "
@@ -5825,6 +5837,10 @@ def _replay_seek_wait(inst, name, T, dump, lines, first, timeout):
             m = dump_bad_rx.search(line)
             if m:
                 res["dump_failed"] = line[m.start():].strip()
+        if res["arrived"] and "wrote" in res and held and dump and not (
+                "dump" in res or "dump_failed" in res):
+            res["dump_pending"] = f"armed for GameTime {T}: the level is held until `resume`"
+            return res
         if res["arrived"] and "wrote" in res and (
                 not dump or "dump" in res or "dump_failed" in res):
             return res
@@ -5877,10 +5893,13 @@ def cmd_replay_seek(args):
         os.replace(tmp, trig)
         rest = []
     res["as"] = name
-    got = _replay_seek_wait(inst, name, args.T, args.dump, lines, rest, args.timeout)
+    got = _replay_seek_wait(inst, name, args.T, args.dump, lines, rest, args.timeout,
+                            held=_replay_held_launch(inst))
     res.update(got, steps=steps)
     human = [f"{name}: on {args.name}"] + [f"  {s}" for s in steps]
     human += [f"  {got[k]}" for k in ("line", "wrote", "dump_failed") if k in got]
+    if "dump_pending" in got:
+        human.append(f"  dump {args.dump}: {got['dump_pending']}")
     if "dump" in got:
         human.append(f"  dump {args.dump} at GameTime {got['dump_at']}: {got['dump']}")
     if "timeout" in got:
@@ -5893,9 +5912,12 @@ def cmd_replay_seek(args):
         sys.exit(1)
 
 
-def _replay_takeover_wait(inst, name, T, lines, first, timeout):
+def _replay_takeover_wait(inst, name, T, lines, first, timeout, held=False):
     """Waits for the takeover's line or its refusal, then for the recorder's start of the new
-    timeline or its refusal; returns what they say."""
+    timeline or its refusal; returns what they say. On a `held` launch (THE LAUNCH'S HOLD) the
+    recorder starts the new timeline at its first capture, which comes only once the caller
+    resumes the level: the wait returns at the takeover's line once the hold's line is seen too,
+    whichever came first (`held`), and the recording's line is the caller's to wait for."""
     n = re.escape(name)
     taken_rx = re.compile(
         rf"replay: {n}: taken over at GameTime {T} as player (\d+), difficulty (\d+), in (\d+) ms "
@@ -5927,6 +5949,10 @@ def _replay_takeover_wait(inst, name, T, lines, first, timeout):
                                        "bounded", "orphans"), map(int, m.groups()[:15]))),
                            seats=m.group(16), timeline=int(m.group(17)))
                 continue
+            m = REPLAY_HOLD_RX.search(line)
+            if m:
+                res["held"] = line[m.start():].strip()
+                continue
             m = rec_rx.search(line)
             if m:
                 res.update(recording=line[m.start():].strip(), file=m.group(2))
@@ -5935,10 +5961,13 @@ def _replay_takeover_wait(inst, name, T, lines, first, timeout):
             if m:
                 res["not_recorded"] = line[m.start():].strip()
                 return res
+        if held and res["taken"] and "held" in res:
+            return res
         if not inst.running():
             die(f"{inst.name} exited during the takeover (tacli log {inst.name} -n 40)")
         if time.time() >= deadline:
             missing = ("the takeover's line or refusal" if not res["taken"] else
+                       "line of the launch's hold" if held else
                        "the recorder's start of the new timeline")
             res["timeout"] = f"no {missing} in {timeout:g}s"
             return res
@@ -6108,7 +6137,9 @@ def cmd_replay_takeover(args):
         if name is None:
             die(f"{args.name}: not playing: {why}")
         lines = _LogLines(_log_cursor(inst))
-        rest = []
+        # a running playback's hold, if its launch has one, was taken before this call
+        rest = [m.group(0) for m in REPLAY_HOLD_RX.finditer(talog.run_text(inst.gamedir))]
+    held = _replay_held_launch(inst)
     # the frame visit reads the trigger at most every 100 ms and deletes it, read or not:
     # written whole and renamed into place, so a poll never finds it half written
     trig = inst.gamedir / REPLAY_TRIGGER
@@ -6141,15 +6172,17 @@ def cmd_replay_takeover(args):
         armed_rx = re.compile(rf"recorder: dump {re.escape(args.dump)} armed for GameTime "
                               rf"{args.dump_at}|recorder: dump {re.escape(args.dump)}.* refused.*")
         trigger(f"dump {args.dump} at {args.dump_at}")
-        deadline, got_line, pending = time.time() + 30, None, rest
+        deadline, got_line, pending, read = time.time() + 30, None, rest, []
         while got_line is None and time.time() < deadline:
             for line in pending:
                 m = armed_rx.search(line)
                 if m:
                     got_line = m.group(0)
+            read += pending
             pending = lines()
             time.sleep(0.1)
-        rest = []
+        # what the takeover's wait reads next: every line after the verdict, the hold's among them
+        rest = read + pending
         if got_line is None or "refused" in got_line:
             res.update(taken=False, dump_refused=got_line or "no answer in 30 s")
             out(res, args.json, human=f"{name}: on {args.name}, not taken over: dump "
@@ -6158,17 +6191,20 @@ def cmd_replay_takeover(args):
         res["dump_armed"] = got_line
     trigger(f"takeover {args.player} at {args.at}"
             + (f" difficulty {args.difficulty}" if args.difficulty is not None else ""))
-    got = _replay_takeover_wait(inst, name, args.at, lines, rest, args.timeout)
+    got = _replay_takeover_wait(inst, name, args.at, lines, rest, args.timeout, held=held)
     res.update(got, steps=steps)
     if "file" in got:
         # the recorder names the fork's file relative to the game's folder
         got["fork"] = res["fork"] = str(inst.gamedir / got["file"].replace("\\", "/"))
     human = [f"{name}: on {args.name}"] + [f"  {s}" for s in steps]
-    human += [f"  {got[k]}" for k in ("line", "recording", "not_recorded", "timeout") if k in got]
+    human += [f"  {got[k]}" for k in ("line", "recording", "not_recorded", "held", "timeout")
+              if k in got]
     if "fork" in got:
         human.append(f"  the fork: {got['fork']}")
+    if "held" in got and "recording" not in got:
+        human.append("  the new timeline is recorded from the first step after `resume`")
     out(res, args.json, human="\n".join(human))
-    if not got["taken"] or "recording" not in got:
+    if not got["taken"] or not ("recording" in got or (held and "held" in got)):
         sys.exit(1)
 
 
@@ -7368,7 +7404,8 @@ def build_parser():
                           "(the launch options below apply only with it)")
     rps.add_argument("--dump", type=dump_name_type, metavar="DUMPNAME",
                      help="also take a dump, replays\\dump-DUMPNAME.bin, at the capture point "
-                          "of T, and print its path")
+                          "of T, and print its path; on a launch with the test hold "
+                          "(tagpu_hold.on) it is armed and taken after the trigger's `resume`")
     rps.add_argument("--timeout", type=float, default=REPLAY_SEEK_TIMEOUT,
                      help=f"seconds to wait for the seek's lines, the dump's included "
                           f"(default {REPLAY_SEEK_TIMEOUT:g})")
@@ -7384,7 +7421,10 @@ def build_parser():
                     "side's chrome, is P's side; the level plays the instance's copy of the "
                     "recording (its replays folder), so the fork goes into that copy, whose path "
                     "is printed, and the file given is left as it was. Without one the "
-                    "instance's running playback is taken over, in the side it loaded with.")
+                    "instance's running playback is taken over, in the side it loaded with. "
+                    "On a launch with the test hold (tagpu_hold.on) the level stays held at T-1 "
+                    "after the takeover: the command returns at its line, and the new timeline "
+                    "is recorded from the first step after the trigger's `resume`.")
     add_common(rpt)
     rpt.add_argument("name", help="the instance: the one to launch with a recording, else the "
                                   "one whose running playback is taken over")
@@ -7402,8 +7442,9 @@ def build_parser():
     rpt.add_argument("--dump-at", type=gametime_type, default=None, metavar="G",
                      help="the GameTime of --dump, after T")
     rpt.add_argument("--timeout", type=float, default=REPLAY_TAKEOVER_TIMEOUT,
-                     help=f"seconds to wait for the takeover's line and the recorder's start "
-                          f"(default {REPLAY_TAKEOVER_TIMEOUT:g})")
+                     help=f"seconds to wait for the takeover's line and the recorder's start, "
+                          f"or on a held launch the hold's line (default "
+                          f"{REPLAY_TAKEOVER_TIMEOUT:g})")
     add_replay_launch(rpt, perspective=False)
     rpt.add_argument("--dry-run", action="store_true",
                      help="print which fork would be deleted; with FILE, inspect without launching")

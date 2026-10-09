@@ -3902,5 +3902,63 @@ class ForkResults(unittest.TestCase):
                           (gamedir / tacli.REPLAY_TRIGGER).read_text())
 
 
+class LaunchHold(unittest.TestCase):
+    """THE LAUNCH'S HOLD (tagpu_replay.c): on a held launch the takeover's wait returns at its line
+    once the hold's line is seen, in either order, since the fork's recording starts only after
+    `resume`; on any other it still waits for the recording's line."""
+
+    TAKEN = ("replay: rec: taken over at GameTime 1771 as player 0, difficulty 0, in 1231 ms "
+             "(read 1094, rebuild 136, AI 1, passability 119); units 4 killed, 1340 made, 0 "
+             "refused; orders 1325 built, 2 adopted, 0 resumed, 0 bounded, 0 units' lists torn "
+             "down; seats 0=human 1=ai; timeline 1 (parent 0) is recorded from GameTime 1771")
+    HOLD = "pause: paused at GameTime 18 (the launch's hold)"
+    RECORDING = ("recorder: recording timeline 1 of replays\\rec.imprec from GameTime 1771 "
+                 "(parent 0)")
+
+    def wait(self, first, later=(), held=True, timeout=5):
+        inst = Mock()
+        inst.running.return_value = True
+        chunks = iter(later)
+        clock = iter(range(0, 1000))
+        with patch.object(tacli.time, "sleep"), \
+             patch.object(tacli.time, "time", side_effect=lambda: next(clock)):
+            return tacli._replay_takeover_wait(inst, "rec", 1771, lambda: next(chunks, []),
+                                               list(first), timeout, held=held)
+
+    def test_held_returns_at_the_takeover_once_the_hold_was_seen_before_it(self):
+        got = self.wait([self.HOLD], [[self.TAKEN]])
+        self.assertTrue(got["taken"])
+        self.assertEqual(got["held"], self.HOLD)
+        self.assertNotIn("recording", got)
+        self.assertNotIn("timeout", got)
+
+    def test_held_waits_for_a_hold_that_follows_the_takeover(self):
+        got = self.wait([self.TAKEN], [[], [self.HOLD]])
+        self.assertEqual(got["held"], self.HOLD)
+        self.assertNotIn("timeout", got)
+
+    def test_held_without_its_hold_line_names_the_hold(self):
+        got = self.wait([self.TAKEN], held=True)
+        self.assertEqual(got["timeout"], "no line of the launch's hold in 5s")
+
+    def test_unheld_still_waits_for_the_recording(self):
+        got = self.wait([self.HOLD, self.TAKEN], [[], [self.RECORDING]], held=False)
+        self.assertEqual(got["file"], "replays\\rec.imprec")
+        self.assertNotIn("timeout", got)
+
+    def test_a_held_seek_returns_at_its_arrival_with_the_dump_pending(self):
+        inst = Mock()
+        inst.running.return_value = True
+        first = ["replay: rec: at GameTime 1471, sought from GameTime 18 in 900 ms (read 880, "
+                 "rebuild 20); units 4 killed, 1000 made, 0 refused",
+                 "replay: rec: the seek to 1471 wrote: 0 units left alive by the kills"]
+        with patch.object(tacli.time, "sleep"):
+            got = tacli._replay_seek_wait(inst, "rec", 1471, "f1771", lambda: [], first, 5,
+                                          held=True)
+        self.assertTrue(got["arrived"])
+        self.assertIn("dump_pending", got)
+        self.assertNotIn("timeout", got)
+
+
 if __name__ == "__main__":
     unittest.main()
