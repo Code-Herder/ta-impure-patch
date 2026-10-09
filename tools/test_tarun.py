@@ -67,6 +67,35 @@ class Files(Base):
         self.assertEqual(P["state"], "unrun")
         self.assertEqual((d["state"], d["eta"]), ("stopped", None))
 
+    def test_lanes_that_will_never_start_end_unrun_and_started_ones_stay(self):
+        run = tarun.begin("tareplay", [("battle", lanes("L", "P", "K", "F")),
+                                       ("other", lanes("L", "P"))], pools={"game": 1})
+        run.start("battle", "K")
+        run.start("battle", "L")
+        run.finish("battle", "L", "unrun", "the twin: mouse event")
+        run.never("battle", ["P", "K", "F", "W"], "L did not finish")     # W is not planned
+        self.assertFalse(run.off)
+        d = self.doc(run)
+        L, P, K, F = d["items"][0]["steps"]
+        self.assertEqual((P["state"], P["detail"], F["state"]), ("unrun", "L did not finish", "unrun"))
+        self.assertEqual(K["state"], "running")
+        run.finish("battle", "K", "done")
+        it = self.doc(run)["items"][0]
+        self.assertEqual(it["state"], "unrun")
+        # what is left to estimate is the other fixture alone
+        self.assertEqual([s["id"] for i in self.doc(run)["items"] for s in i["steps"]
+                          if s["state"] == "planned"], ["L", "P"])
+
+    def test_a_step_started_again_drops_what_its_last_attempt_said(self):
+        run = tarun.begin("landing", [("", [{"id": "build", "after": [], "pool": "main"}])])
+        run.start("", "build")
+        run.finish("", "build", "fail", "link error")
+        run.start("", "build")
+        run.finish("", "build", "pass")
+        build = self.doc(run)["items"][0]["steps"][0]
+        self.assertEqual(build["state"], "pass")
+        self.assertNotIn("detail", build)
+
     def test_checks_name_every_failure_and_fail_the_item(self):
         run = tarun.begin("tareplay", [("battle", lanes("L"))])
         run.start("battle", "L")

@@ -77,7 +77,8 @@ Items are the fixtures; steps are each fixture's lanes (`L` first, every other l
 after `K`) on the `game` pool of `-j` workers, ordered as a free worker takes them (`LANE_ORDER`,
 then the fixtures' `L` order), and a `checks` step after all of them on the `offline` pool, which
 never waits for a game (`measure` has no checks). A lane ends `done`, or `fail` (a `Failed`) or
-`unrun` (`CouldNotRun`, or anything else) with the first line of its reason. A fixture's checks
+`unrun` (`CouldNotRun`, or anything else) with the first line of its reason; the lanes it would
+have queued then end `unrun` too (`L` queues all the others, `K` its `F`). A fixture's checks
 end `fail` with every failing check's label and first line, `unrun` when none ran, else `pass`.
 `landing`'s `UNCOVERED` lines and `broad`'s unexercised features, sites and tables are the run's
 `problems`. The run ends `pass`, `fail` or `unrun` by the exit status, `stopped` after SIGTERM or
@@ -99,8 +100,8 @@ with `--smoke`, one setup at a time.
 
 **tacli.** `launch` (and every verb that launches through it) outside a gate opens a run owned by
 the game process. Any other verb naming the instance writes its command line (less the instance's
-name) as the run's `last`; `stop` and `rm` end it. A relaunch of the same name ends the previous
-run `unrun`.
+name) as the run's `last`; `stop` and `rm` end it, a remote instance's as well. A relaunch of the same name ends the
+previous run `unrun`.
 
 **The landing.** `/git_commit_merge_wt` begins a `landing` run with the steps `commit merge build
 docs replay review ff` and marks each as it goes:
@@ -113,7 +114,8 @@ tools/tarun.py step landing replay pass        # fail, unrun, or skipped --detai
 tools/tarun.py end landing pass
 ```
 
-The same commands serve any script: `begin TOOL [--jobs N] STEP...` (the steps in order, or `N` at
+A gate run again after a fix is started again, and drops what its last attempt said. The same
+commands serve any script: `begin TOOL [--jobs N] STEP...` (the steps in order, or `N` at
 once), `step RUN STEP start|done|pass|fail|unrun|skipped`, `end RUN pass|fail|unrun|stopped`, where
 `RUN` is a run id or the newest open run of that tool in this session and worktree.
 

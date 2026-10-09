@@ -6434,6 +6434,7 @@ def _remote_stop(inst: Instance) -> dict:
 
 def cmd_remote_stop(args):
     res = _remote_stop(Instance(args.name))
+    tarun.tacli_stopped(args.name)
     out(res, args.json, human=f"stopped {args.name}" + (
         f" (pid {res['was']})" if res["was"] else " (it was not running)"))
 
@@ -6447,6 +6448,7 @@ def cmd_remote_rm(args):
         if rem.pid() and not args.force:
             die(f"{args.name} is running (tacli stop {args.name}, or --force)")
         _remote_stop(inst)
+        tarun.tacli_stopped(args.name)
         tasks = rem.task_remove()
     else:
         tasks = "not looked at"

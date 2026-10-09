@@ -279,6 +279,8 @@ class Run:
     def start(self, item, step, **fields):
         with self.lock:
             s = self.steps[(item, step)]
+            for stale in ("detail", "seconds", "gt", "gt_seen"):    # a step started again
+                s.pop(stale, None)
             s.update(state="running", started=time.time(), ended=None, **fields)
             self.write()
 
@@ -316,6 +318,18 @@ class Run:
                     append_history(entry)
                     self.history.setdefault((item, step, entry["variant"]), []).append(
                         s["seconds"])
+            self.write()
+
+    @guarded
+    def never(self, item, steps, detail):
+        """Steps the tool will not start after all: each one still planned ends unrun. A step
+        already started or ended, or not in the plan, is left as it is."""
+        with self.lock:
+            now = time.time()
+            for step in steps:
+                s = self.steps.get((item, step))
+                if s and s["state"] == "planned":
+                    s.update(state="unrun", ended=now, detail=detail)
             self.write()
 
     @guarded

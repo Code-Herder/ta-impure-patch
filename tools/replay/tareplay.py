@@ -2477,6 +2477,9 @@ class Run:
             say(f"{name} {proc}: {kind}: {why}")
             w.lane = None
             J.finish(name, proc, "fail" if kind == "FAILED" else "unrun", why.splitlines()[0])
+            # the lanes this one queues on success never start: L queues all the others, K its F
+            J.never(name, fx["want"][1:] if proc == "L" else ["F"] if proc == "K" else [],
+                    f"{proc} did not finish")
             try:
                 w.collect(out)
             except Exception:
