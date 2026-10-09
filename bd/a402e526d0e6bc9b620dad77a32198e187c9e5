@@ -1,0 +1,2 @@
+landing-review: model=claude-opus-5-5 effort=high range=3cda1512..bda402e5 findings=3 acted=3 rejected=0 date=2026-10-09
+a fresh read-only review of the commits acting on the first review (191f063b, bda402e5). Acted in a756303d: the walker's wait bound left out a fork's crossing (comment and note); its stop logged 'the level's end' on a timeline change too; the panel test converted the client point by truncation where the panel and the zoom get cnc-ddraw's rounded point (an edge strip under half an engine pixel) -- now the callers hand the HUD that engine point.
