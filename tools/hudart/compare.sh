@@ -6,6 +6,7 @@
 set -e
 base=$1; q=$2; pre=$(realpath -m "$3"); cfg=$(mktemp -d)
 echo '{ "browser": { "contextOptions": { "deviceScaleFactor": 2, "viewport": { "width": 2100, "height": 1400 } } } }' > "$cfg/dpr2.json"
+cd "$cfg"   # playwright-cli writes its console logs into the working directory
 P="playwright-cli -s=hudcmp$$ --config=$cfg/dpr2.json"; ev() { $P eval "$1" 2>&1 | sed -n '/Result/,/^###/p' | sed -n 2p | tr -d '"'; }
 shot() { $P run-code "async page => { await page.screenshot({ path: '$1', scale: 'device', clip: (([x, y, width, height]) => ({ x, y, width, height }))([$2]) }); }" 2>&1 | grep -i error || true; }
 rect() { ev "() => { const r = document.querySelector('$1').getBoundingClientRect(); return [r.x - 4, r.y - 4, r.width + 8, r.height + 8].map(Math.round).join(','); }"; }

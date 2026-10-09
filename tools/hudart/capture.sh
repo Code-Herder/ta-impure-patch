@@ -6,6 +6,7 @@
 set -e
 url=$1; out=$(realpath -m "$2"); cfg=$(mktemp -d)
 echo '{ "browser": { "contextOptions": { "deviceScaleFactor": 2, "viewport": { "width": 2100, "height": 1400 } } } }' > "$cfg/dpr2.json"
+cd "$cfg"   # playwright-cli writes its console logs into the working directory
 P="playwright-cli -s=hudcap$$ --config=$cfg/dpr2.json"; ev() { $P eval "$1" 2>&1 | sed -n '/Result/,/^###/p' | sed -n 2p | tr -d '"'; }
 $P open "$url" >/dev/null 2>&1; sleep 3
 for t in $(seq 1 30); do r=$(ev "() => { const g = [...document.querySelectorAll('.stage [data-gp], .stage [data-tile]')]; return g.length + ':' + g.filter(e => e.style.backgroundImage.startsWith('url')).length; }"); [ "${r%%:*}" = "${r##*:}" ] && break; sleep 0.5; done

@@ -4,7 +4,9 @@
    research/notes/hud-layout.md writes the same rules down for the DLL, which is to implement them over the
    same files. A change to the HUD's look or geometry is a change to the data, not to this file.
 
-   Coordinates are HUD units: one unit is the screen height / 720 x the HUD scale. A part's children are
+   Coordinates are HUD units: one unit is the screen height / 720 x the replay HUD's own scale, which does not
+   follow the game's. The host gives the engine's frame (st.frame: the side panel's width, the bars' heights)
+   in units; the dock and the column anchor to it and stretch over what it leaves. A part's children are
    placed against its FRAME: for a grid-sliced part, its painted design box and measured wells, mapped to
    the drawn size through its stretch bands; for any other box, the box itself. */
 const HUD = (() => {

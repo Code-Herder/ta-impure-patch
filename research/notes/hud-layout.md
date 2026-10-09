@@ -10,6 +10,19 @@ style. The mockup in `tools/hudart/mockup/` draws the HUD from those files and n
 - **The DLL does not draw it yet.** When it does, it is to bake the same files at build time,
   as `tools/artbake.py` bakes `art/ui/`, and implement the rules on this page. The numbers then
   have one home, so the mockup and the game cannot disagree about one.
+- **The game draws it with a pass of our own, not a UI library** (the owner's choice,
+  2026-10-08). It is a new alpha-blended Vulkan pass at the device's resolution, with
+  [stb_truetype](https://github.com/nothings/stb) (C, public domain) rasterising the fonts.
+  Each library considered fails on one of these facts:
+    - **The layout.** None of them can express the band map and the wells, and the game must run
+      the mockup's rules to stay 1:1 with it, so a library would add only fonts, a draw list and
+      button state. Of those, only the fonts are hard.
+    - **The shaders.** The build takes shaders only as GLSL in C strings through
+      `tools/spirv-gen.py`, and every pass owns its pipelines; a library's Vulkan backend brings
+      its own.
+    - **The language.** The DLL is C99 with no C++ toolchain, which rules out Dear ImGui and
+      RmlUi. Nuklear is C, but would leave only its font baker (stb_truetype itself) and its
+      draw list in use.
 - **The rules are implemented twice:** in `hud.js` now, in C later. This page is what keeps
   them in step, with a capture of each compared (*Gaps*).
 - **The exploration prototype** (the published artifact, with looks A to D, the button sets,
@@ -35,14 +48,14 @@ python3 -m http.server 8000 -d "$(git rev-parse --show-toplevel)"
 # then open http://127.0.0.1:8000/tools/hudart/mockup/
 ```
 
-The toolbar sets the screen, the HUD scale, the players and the teams. The same switches, and
-more, go in the URL, for captures:
+The toolbar sets the screen, the game's HUD scale, the replay HUD's scale, the players and the
+teams. The same switches, and more, go in the URL, for captures:
 
-- `res=3840x2160`, `hud=150`, `np=10`, `nt=2`;
+- `res=3840x2160`, `game=150` (`off`, `auto` or a percentage), `hud=150`, `np=10`, `nt=2`;
 - `t=70` (seconds into the 132-second game), `paused`;
 - `stat=1` or `stat=0` (the stats window), `sm=units` (its measure), `ss=team` (players or teams).
 
-`tools/hudart/capture.sh "<url>?paused&res=3840x2160&hud=150" out.png` captures the stage at
+`tools/hudart/capture.sh "<url>?paused&res=3840x2160&game=150&hud=150" out.png` captures the stage at
 native 4K. `compare.sh` captures the button states: play held, stats on, the chips, a row
 hovered with JUMP held.
 
@@ -64,18 +77,32 @@ hovered with JUMP held.
 - **A new element** needs data, a rule in `hud.js`, and later the same rule in the DLL. It is
   the only kind of change that touches code.
 
-- **After any change,** capture at 3840×2160 and HUD 150, the owner's setting, and look at it.
+- **After any change,** capture at 3840×2160 with both scales at 150, the owner's setting, and
+  look at it. Check `game=auto` too, where the engine's frame is largest and the list scrolls.
 
 ## Units and the screen
 
-- **One HUD unit** is the screen height / 720 × the HUD scale, so 4.5 pixels at 4K and HUD 150.
-  Every length in both files is in units, except a 9-slice's slice, which is in its PNG's
-  pixels.
-- **The host supplies** the screen's width and height in units, and the engine's own frame:
-  `panel` (the left side panel's width), `top` (the top bar's height) and `bottom` (the bottom
-  bar's height), in units. The dock and the column are anchored to that frame.
-- **The mockup models the engine frame** as a 1280 × 720 frame scaled to the screen height: 128,
-  32 and 32 of its pixels. The backdrop is that frame, a replay captured from our renderer.
+**The HUD keeps its own scale and fits the space the engine's frame leaves** (the owner's
+rule, 2026-10-08):
+
+- **One HUD unit** is the screen height / 720 × the replay HUD's scale, so 4.5 pixels at 4K and
+  150 %. The scale is the replay HUD's own, set by its scale button (75, 100, 125 and 150 %), and
+  does not follow the game's HUD scale. Every length in both files is in units, except a
+  9-slice's slice, which is in its PNG's pixels.
+- **The engine's frame** is where the game's own side panel and bars end: `panel` (the left side
+  panel's width), `top` (the top bar's height) and `bottom` (the bottom bar's height). The host
+  supplies them, with the screen's width and height, in units. The dock and the column are
+  anchored to them, and the parts that stretch (the timeline housing along the dock, the list
+  down the column) take whatever space is left.
+- **The frame follows the game's HUD scale**, as `tagpu_hud_geom` (`tagpu/ddraw/src/tagpu_hud.c`)
+  lays it out: 128 engine pixels of panel and 32 of bar, magnified by q8 / 256 and floored to
+  whole pixels. q8 is 256 when the setting is off, and otherwise the setting's percentage × 256 /
+  100. It never goes below 256, nor past the ceiling: the lesser of 480 panel rows in the screen's
+  height and 256 pixels of view left beside the panel. Auto is the ceiling. At 3840 × 2160 the
+  panel is 192 pixels at 150 % and 576 at Auto; the bars 48 and 144.
+- **The mockup computes the frame the same way** from its *Game HUD* setting. Its backdrop is a
+  1280 × 720 replay frame from our renderer, recut so that its panel and bars are drawn at that
+  magnification and its world fills the rest.
 
 ## kit.json
 
@@ -260,11 +287,11 @@ ranked by the values at the playhead.
     - implement these rules;
     - take the frame's `panel`, `top` and `bottom` from the engine;
     - compare its capture with the mockup's at the same screen and state.
-- **The engine frame of the game is not established.** The mockup's 128, 32 and 32 pixels of a
-  720p frame stand for the engine's side panel and bars. Where those land in the game, with the
-  engine's own HUD scale applied, is open.
 - **The fonts,** Oswald and Barlow Condensed (both OFL), are loaded from Google Fonts by the
-  mockup. The game would need them baked in, and the HUD font is not decided.
+  mockup. The game needs them in the release, cut down to the characters the HUD draws: four
+  faces, Oswald 500 and 700 and Barlow Condensed 600 and 700, come to 51 KB zipped for ASCII and
+  74 KB with Latin-1 (MEASURED, 2026-10-08). The OFL then asks for each face's copyright notice
+  and the licence text beside them. The HUD font itself is not decided.
 - **The column does not scroll.** It shows the items that fit from the first, as the prototype
   did.
 - **The data is synthetic.** A real stats window needs a per-second stats track in the recorder
