@@ -1594,9 +1594,15 @@ viewed seat's scan (R14b), and an owner's image carries its own machine's: a
 player's own units are in contact on its own machine. So when both worlds view
 the same player, a composed unit takes the recorder's bits from the primary
 stream. A unit that stream does not hold yet is compared without them and
-counted. Both measured forks counted 0. A seek in that view takes bits 8–10 from
-the primary stream itself (R14b), so it starts from the recorder's scan wherever
-a slot holds the primary's unit. A dump comparison takes the same rule
+counted. Both measured forks counted 0. A seek in that view, and a change of
+view to it, take bits 8–10 from the primary stream itself (R14b,
+`sight_change`), on every slot live in the primary's image whose host slot holds
+a live unit of its type: that is all `rw_contacts` checks, not the unit's
+identity. The host's unit comes from the composed world and the bits from the
+primary, so where the primary's image of a slot still describes an earlier unit
+of the same type than the one the composed world put there, the new unit shows
+that unit's contacts until the viewed record's next radar pass — display state
+on a puppet host. A dump comparison takes the same rule
 whenever the dump views the seat the recorder viewed (a playing with
 `--perspective` of the recorder's own record); in full view, or from another
 seat, the views differ and the contact bits are not compared. The count of

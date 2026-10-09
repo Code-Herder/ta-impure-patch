@@ -1305,7 +1305,8 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    (0x48B090's); the yard's bit, +0x10F bit 2 (YARD_OPEN's); the create's +0x110 bits 28-31; and
    the contact bits 8-10 and 12, which the host's radar pass computes for its own view (D1),
    except that a seek puts the recorded ones back through rw_contacts: bits 8-10 when the host
-   shows the recording's own viewed player, all four on return-to-now (R14b). The harness
+   shows the recording's own viewed player, as a change to that view does (sight_change), all
+   four on return-to-now (R14b). The harness
    compares them all but the contact bits (tools/replay/tarec.py compare --puppet), and bits 8-10
    too when the host shows the recording's own viewed player. +0x110 bit 14, dying, is
    a value like the rest: the reaper's Send_UnitDeath is refused for a puppet (tagpu_puppet.c),
@@ -6435,12 +6436,25 @@ static void eye_put(const Lv* L, unsigned T)
    images or events. No host state changes until the history is whole and the temporary-record
    count is bounded by sight_records_drop. Its expiry removes each old stamp before the new
    viewed record is selected. All of this runs between steps on the game thread, before draw.
-   At EOF the host clock can outlive the file: expired deaths are omitted, never restamped. */
+   At EOF the host clock can outlive the file: expired deaths are omitted, never restamped.
+   The contact bits follow R14b's rule: the new record's radar pass runs once, and when the new
+   record is the recording's own viewed record, bits 8-10 are then taken from the image the host
+   holds, iteration GameTime+1 -- in that view a playing computes the same pass from the same
+   inputs at the same phase (D1), so the recording's bits are a playing's, where the pass alone
+   shows the world now instead of the last pass's. The bound is rw_contacts': a slot live in the
+   image whose host slot holds a live unit of its type; any other keeps the pass's bits. With no
+   whole image of GameTime+1 -- past the recording's end, or after a refused read -- nothing is
+   copied. The residuals, display state on a puppet host until the record's next pass: a
+   recording whose viewed record changed within the 30 ticks before holds the old record's
+   scan; in any other view the pass's bits stand (O14); and in a multiplayer recording a slot
+   rw_contacts lets through may carry an earlier unit's contacts (rw_contacts). */
+static void rw_contacts(const Lv* L, const RecWorld* W, uint32_t mask);
 static void sight_change(char* ta)
 {
     unsigned seat = s_viewPending - 1, i, j, T;
     Lv L;
     RecReader* r;
+    const RecWorld* W;
     char why[200] = "the selected timeline is unavailable";
     const RecTimeline* timeline;
     s_viewPending = 0;
@@ -6479,6 +6493,9 @@ static void sight_change(char* ta)
     eye_put(&L, L.now + 1);
     minimap_fog(ta);
     E_RadarPass();
+    W = recr_world(s_rd);
+    if (!s_over && W->tick == L.now + 1 && W->view[1] == (unsigned char)seat)
+        rw_contacts(&L, W, CONTACT_VIEWED);
     E_SightExpire();
     /* the new record's minimap picture now: on a paused frame no players phase runs, and
        viewer_frame rebuilds record 10's only on a new GameTime */
@@ -6849,11 +6866,17 @@ static void sk_refused(int tk, unsigned T, const char* why)
      on its 30-tick deadline (DISASSEMBLED 0x46507D..0x465092, call 0x46556D); running 0x467440
      between those deadlines would reveal newly created units early and rewrite +0xB0. The saved
      image holds both, and R15 restores the seated records' deadlines;
-   - a seek in the recording's own viewed record, CONTACT_VIEWED, after its radar pass.
+   - a seek, or a change of view (sight_change), in the recording's own viewed record,
+     CONTACT_VIEWED, after its radar pass.
    W is the primary stream: in a multiplayer recording it is the recording machine's own scan,
-   where mp_world's owners' images carry their machines'. Each slot is bounded and its identity
-   verified before the copy; one that fails keeps what the host holds, and the next scheduled
-   engine scan owns them all again. */
+   where mp_world's owners' images carry their machines'. The bound, slot by slot: below the
+   array's count, live in W's image, and on the host a live unit of the image's type (holds); a
+   slot that fails keeps what the host holds, and the next scheduled engine scan owns them all
+   again. That is not an identity check. In a skirmish recording W is the world the host's units
+   are written from; in a multiplayer one they are written from the composed world, so where W's
+   image of a slot still describes an earlier unit of the same type than the one the composed
+   world put there, the new unit takes that unit's contacts until the next scan: display state on
+   a puppet host. */
 static void rw_contacts(const Lv* L, const RecWorld* W, uint32_t mask)
 {
     unsigned slot;

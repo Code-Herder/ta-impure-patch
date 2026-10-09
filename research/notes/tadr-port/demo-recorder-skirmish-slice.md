@@ -1263,9 +1263,11 @@ The owner's answers to the plan's questions, as recommended unless said otherwis
 - **The rebuild's flag is `SIM_TRANSIENT`**, as S2b's `s_open`.
 - **The declared tables are not written between seeks** (deferred to S3c); S3c-1 closes it
   (*S3c-1*).
-- **A seek lands on any GameTime it is asked for**, and for up to 29 ticks after it the contact bits
-  — and in a seat's view the minimap's fog — are one radar pass fresher than a playing's (*What S3b
-  leaves*). The alternative was to round every target down to the viewed record's last pass tick,
+- **A seek lands on any GameTime it is asked for**, and for up to 29 ticks after it, until the
+  viewed record's next radar pass, the contact bits in any view but the recording's own viewed
+  record — and in every seat's view the minimap's fog — are computed from T's world where a
+  playing's are its last pass's (O14, *What S3b leaves*). In the recording's own viewed record the
+  seek takes bits 8–10 from the recording, and those are a playing's. The alternative was to round every target down to the viewed record's last pass tick,
   a seek granularity of one second.
 - **The COB guard's stop is a landing of its own.** A unit script's CALL that finds no free thread
   record stops the game under the guard published in v0.3.1 (stock lets that script thread wait for

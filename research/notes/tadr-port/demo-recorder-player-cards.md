@@ -75,7 +75,11 @@ the same timeline and collects that seat's death history with the existing bound
 window. A failed read cannot displace the playback reader's next image or events. Only after a
 successful read does it drop the old temporary records through the engine's expiry, select the
 new viewed seat and add the new records through the engine's sight root. It then rebuilds
-minimap fog and radar contacts and runs expiry. Deaths expired at the host's current time are
+minimap fog and radar contacts and runs expiry. When the new seat is the recording's own viewed
+record, contact bits 8–10 are then taken from the image the host holds, by the seek's rule
+(R14b in `tagpu_replay.c`): in that view a playing holds the recording's bits, where the pass
+alone shows the present world until the next 30-tick pass. Past the recording's end nothing is
+copied. Deaths expired at the host's current time are
 omitted, including when the clock has advanced beyond EOF.
 
 The order is load-bearing: removing old stamps precedes selecting the new view; new stamps
