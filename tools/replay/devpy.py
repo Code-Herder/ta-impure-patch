@@ -2,15 +2,17 @@
 
     import devpy; devpy.ensure()        # at the top of a tool's main()
 
-A tool that reads a recording's blocks needs numpy and zstandard (reccodec.py). The system
-python3 has neither, and the shared venv at the main checkout (CLAUDE.md, *Python tooling*) has
-both: ensure() returns at once when both import, else re-executes this process under the venv's
-interpreter with the same arguments, found the way research/build_wiki.py's find_python finds it
-(this checkout's root, then the main checkout of a worktree). An environment variable stops a
-second re-execution, so a venv that lacks them fails here, by name, instead of looping.
+A tool that reads a recording's blocks needs numpy, numba and zstandard (reccodec.py). The system
+python3 has none of them, and the shared venv at the main checkout (CLAUDE.md, *Python tooling*)
+has all three: ensure() returns at once when they are there, else re-executes this process under
+the venv's interpreter with the same arguments, found the way research/build_wiki.py's
+find_python finds it (this checkout's root, then the main checkout of a worktree). An environment
+variable stops a second re-execution, so a venv that lacks them fails here, by name, instead of
+looping.
 
 Standard library only: it runs under whichever python3 started the tool.
 """
+import importlib.util
 import os
 import subprocess
 import sys
@@ -26,7 +28,9 @@ def _have():
         import zstandard  # noqa: F401
     except ImportError:
         return False
-    return True
+    # looked up, not imported: importing numba costs a tenth of a second, which reccodec.py pays
+    # only when it decodes a sectioned block
+    return importlib.util.find_spec("numba") is not None
 
 
 def venv_python():
@@ -46,7 +50,8 @@ def ensure():
         return
     py = None if os.environ.get(GUARD) else venv_python()
     if py is None:
-        print("needs numpy and zstandard: the shared venv (CLAUDE.md, Python tooling)", file=sys.stderr)
+        print("needs numpy, numba and zstandard: the shared venv (CLAUDE.md, Python tooling)",
+              file=sys.stderr)
         sys.exit(2)
     os.environ[GUARD] = "1"
     os.execv(py, [py] + sys.argv)

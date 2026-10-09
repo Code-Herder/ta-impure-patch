@@ -22,7 +22,7 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
 --native builds tests/codectest-asan.exe with the host's gcc and -fsanitize=address,undefined and
 runs that instead of tests/codectest.exe under Wine (WINEPREFIX: the main checkout's wineprefix/).
 IN is a recording of format 8. Exit 0 when every check holds, 1 when one fails, 2 when it cannot
-run. Needs numpy and zstandard (devpy.ensure() re-executes under the shared venv).
+run. Needs numpy, numba and zstandard (devpy.ensure() re-executes under the shared venv).
 """
 import os
 import struct

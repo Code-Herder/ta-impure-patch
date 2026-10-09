@@ -3,11 +3,11 @@
     TAREC_CACHE=DIR tools/replay/tarec.py check FILE    # a second call on FILE reads DIR
 
 Every command that reads a recording's stream decodes it in Python through reccodec.py: about
-24 s for a Town & Country battle, and tareplay.py runs tarec a dozen times and more on each
-fixture's recording. With TAREC_CACHE naming a directory, tarec.blocks() keeps what the decoding
-walk yields, every Block in order, and the next call on the same bytes reads that instead. Unset
-or empty, nothing is read or written here. tareplay.py points it at a folder of its run and
-removes the folder when the run ends.
+3 s for a Town & Country battle (MEASURED 2026-10-08, numba's cache warm), and tareplay.py runs
+tarec a dozen times and more on each fixture's recording. With TAREC_CACHE naming a directory,
+tarec.blocks() keeps what the decoding walk yields, every Block in order, and the next call on the
+same bytes reads that instead. Unset or empty, nothing is read or written here. tareplay.py points
+it at a folder of its run and removes the folder when the run ends.
 
 PIECES: a file is kept as pieces, one per segment -- from an RB_HEADER block (the file's first
 block for the first piece) to the next RB_HEADER or the end of the file's last complete block. A

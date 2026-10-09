@@ -21,8 +21,8 @@ Reads a recording of format 8 with reccodec.py's block walk and reports:
 
 The packed bytes of a section or a category are an attribution, not a measurement: each block's
 bytes of one section are packed together, apart from the rest. The check line says how far the
-sum is from the file's real packed bytes. Needs numpy and zstandard (devpy.ensure() re-executes
-under the shared venv).
+sum is from the file's real packed bytes. Needs numpy, numba and zstandard (devpy.ensure()
+re-executes under the shared venv).
 """
 import argparse
 import collections
