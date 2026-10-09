@@ -6535,6 +6535,28 @@ static unsigned sk_ms(LONGLONG ticks, LONGLONG hz)
     return hz ? (unsigned)(ticks * 1000 / hz) : 0;
 }
 
+/* THE SEEK'S WORK: the game thread's own CPU time, user and kernel, in 100-ns units, from
+   GetThreadTimes. A seek's cost is checked on it rather than on the wall clock, which time-slicing
+   stretches when other games share the core. MEASURED 2026-10-09 under Wine 9.0 (a probe calling
+   it around fixed work): its resolution is 10 ms; kernel time is counted (file reads: 110 of 200
+   ms); a Sleep counts nothing; a call costs 15 us. QueryThreadCycleTime returned no usable count
+   there. THE RESIDUAL: CPU time still grows with contention for the core itself -- the same fixed
+   work took 2,510-2,730 ms quiet and 3,830-3,920 ms with its SMT sibling busy (x1.5, a 7950X), and
+   an all-core load lowers the clock further -- so the harness's bound (tools/replay/fixtures.json,
+   `cpu_ms`) is set with that factor in it. */
+typedef struct { ULONGLONG user, kernel; } SkCpu;
+
+static SkCpu sk_cpu(void)
+{
+    FILETIME c, e, k, u;
+    SkCpu t = {0, 0};
+    if (GetThreadTimes(GetCurrentThread(), &c, &e, &k, &u)) {
+        t.user = ((ULONGLONG)u.dwHighDateTime << 32) | u.dwLowDateTime;
+        t.kernel = ((ULONGLONG)k.dwHighDateTime << 32) | k.dwLowDateTime;
+    }
+    return t;
+}
+
 /* THE TAKEOVER (seek_run's TAKEOVER mode; research/notes/tadr-port/demo-recorder-s4-takeover.md):
    `takeover <P> at <T>` makes the world of GameTime T as a seek does, with player P human and the
    other recorded seats AI, and the level goes on as a live skirmish from T, recorded as a new
@@ -6899,6 +6921,30 @@ static void rw_contacts(const Lv* L, const RecWorld* W, uint32_t mask)
     }
 }
 
+/* The seek's work, the line after its `wrote` line: what the reader `rd` read to reach the world
+   it made (recr_seek_work) -- a return to now reads the live recording to G-1, every other seek its
+   own reader to T -- what the image held and what became of it, and THE SEEK'S WORK's CPU time
+   beside the wall time. The image's units: V's live slots, and a multiplayer world's units created
+   and not yet described, each of which level_units or mp_make_held hands to one create, made or
+   refused (make, whose three refusals each count); the kills leave none alive (sk_kills). */
+static void sk_work_log(const Lv* L, const RecWorld* V, unsigned T, const RecReader* rd, SkCpu c0,
+                        SkCpu c2, unsigned wall)
+{
+    const RecSeekWork* w = recr_seek_work(rd);
+    unsigned slot, live = 0;
+    ULONGLONG user = c2.user - c0.user, kernel = c2.kernel - c0.kernel;
+    for (slot = 1; slot < L->nslots; slot++) live += V->live[slot] != 0;
+    if (s_mp.on)
+        for (slot = 1; slot < s_mp.slots; slot++) live += s_mp.held[slot] != 0;
+    tagpu_logf("replay: %s: the seek to %u's work: %u iterations read to GameTime %u from %s at "
+               "GameTime %u; the image: %u units live, %u made, %u refused, %u killed, %u left "
+               "alive; cpu %u ms (user %u, kernel %u) of the game thread, %u ms wall", s_name, T,
+               w->iterations, w->target, w->from_snapshot ? "the snapshot" : "the first iteration",
+               w->from, live, s_sk.made, s_sk.refused, s_sk.killed, s_sk.left,
+               (unsigned)((user + kernel) / 10000), (unsigned)(user / 10000),
+               (unsigned)(kernel / 10000), wall);
+}
+
 /* THE SEEK's steps, R0-R17, in their order, in one of two modes, read once at entry:
    - SEEK (THE SEEK): kills as puppets, makes as puppets, and the level plays on from T;
    - TAKEOVER (THE TAKEOVER): kills as puppets, then the seats turn local and get their AI, the
@@ -6913,6 +6959,7 @@ static int seek_run(char* ta)
     unsigned T = s_seek.T, prev = W->tick, h, nheads = 0, refused0, built0, P = s_seek.P;
     int D = s_seek.D;
     LARGE_INTEGER hz, t0, t1, t2;
+    SkCpu c0, c2;
     char why[200], dump[sizeof s_seek.dump];
     Lv L;
     int k;
@@ -6935,6 +6982,7 @@ static int seek_run(char* ta)
     h = L.now;
     QueryPerformanceFrequency(&hz);
     QueryPerformanceCounter(&t0);
+    c0 = sk_cpu();
     eye_begin(ta, T);
     if (tk) s_eye.viewed = (unsigned char)P;
     k = back ? rw_eye(&L, T, why, sizeof why) :
@@ -7102,6 +7150,7 @@ static int seek_run(char* ta)
        own line instead of taking it at another GameTime under this seek's name */
     if (dump[0]) tagpu_rec_dump_arm(dump, T);
     QueryPerformanceCounter(&t2);
+    c2 = sk_cpu();
     tagpu_logf("replay: %s: at GameTime %u, sought from GameTime %u in %u ms (read %u, rebuild "
                "%u); units %u killed, %u made, %u refused", s_name, T, h,
                sk_ms(t2.QuadPart - t0.QuadPart, hz.QuadPart),
@@ -7123,6 +7172,8 @@ static int seek_run(char* ta)
                s_sk.pool ? "written" : "REFUSED", W->proj_hw,
                s_sk.effects ? "cleared" : "NOT cleared", s_eye.made, s_eye.refused, s_eye.capped,
                SR_MAX);
+    sk_work_log(&L, V, T, back ? s_rw.live : s_rd, c0, c2,
+                sk_ms(t2.QuadPart - t0.QuadPart, hz.QuadPart));
     if (s_mp.on) {
         unsigned slot, live = 0, held = 0;
         for (slot = 1; slot < s_mp.slots; slot++) {

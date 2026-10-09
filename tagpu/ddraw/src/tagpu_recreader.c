@@ -121,6 +121,7 @@ struct RecReader {
     unsigned           cur;         /* the chain's segment being read                          */
     int                in_seg;      /* the world holds an iteration of segment chain[cur]      */
     int                read_any;    /* an iteration has been read: the chain is fixed          */
+    RecSeekWork        work;        /* the last recr_seek's (recr_seek_work)                   */
 };
 
 static const char* const END_REASONS[] = {
@@ -2181,6 +2182,8 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
     const RecIndexEntry* snap = NULL;
     unsigned i, j, hold, from = 0, prev;
     int read, k;
+    memset(&r->work, 0, sizeof r->work);
+    r->work.target = T;
     if (segs_scan(r, 0, why, cap) < 0) return -1;      /* a fork may have been appended since */
     if (!chain_seg(r, 0)->nstream) {
         snprintf(why, cap, "the recording holds no complete stream block");
@@ -2234,12 +2237,15 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
                 return -1;
             }
             k = tick_take(r, why, cap);
+            r->work.iterations++;
             if (k <= 0) {
                 if (!k) snprintf(why, cap, "timeline %u's first iteration cannot be read",
                                  s->t.id);
                 return -1;
             }
         }
+        r->work.from = snap->last;
+        r->work.from_snapshot = 1;
         r->cur = from;
         world_reset(r, 1);
         if (!file_at(r, snap->off)) {
@@ -2258,6 +2264,7 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
         /* the first segment of the chain whose part reaches T - lead, from its first iteration */
         unsigned lo = T > lead ? T - lead : 0;
         for (from = 0; from < hold && cover_end(r, from) < lo; from++) {}
+        r->work.from = chain_seg(r, from)->t.first;
         r->cur = from;
         world_reset(r, 0);
         if (!file_at(r, chain_seg(r, from)->t.first_off)) {
@@ -2282,6 +2289,7 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
             read = 0;
         }
         k = tick_take(r, why, cap);
+        r->work.iterations++;
         if (k <= 0) {
             if (!k) snprintf(why, cap, "the recording ends at GameTime %u, before GameTime %u",
                              w->tick, T);
@@ -2305,6 +2313,11 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
             return -1;
         }
     }
+}
+
+const RecSeekWork* recr_seek_work(const RecReader* r)
+{
+    return &r->work;
 }
 
 /* ---- open and close ------------------------------------------------------------------------- */

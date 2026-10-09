@@ -187,6 +187,16 @@ int recr_tick(RecReader* r, char* why, unsigned cap);
 typedef void (*RecVisit)(void* ctx, const RecWorld* w);
 int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx, char* why,
               unsigned cap);
+/* What the reader's last recr_seek did, valid when it returned 1: the GameTime T it was asked for
+   (`target`); the iteration it built from (`from`), the snapshot's GameTime S (`from_snapshot`
+   1) or the first iteration of the segment it read from (0); and the iterations it read
+   (`iterations`), each read of an iteration counted, a snapshot's base segment's first included,
+   so iterations <= T - from + 1. tools/replay/tarec.py's seek_start computes `from` from the file
+   alone. */
+typedef struct RecSeekWork {
+    unsigned target, from, from_snapshot, iterations;
+} RecSeekWork;
+const RecSeekWork* recr_seek_work(const RecReader* r);
 
 void recr_close(RecReader* r);
 
