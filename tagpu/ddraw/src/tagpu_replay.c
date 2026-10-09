@@ -291,6 +291,7 @@ static struct {
     unsigned last_g, ticks;         /* its GameTime; the ticks between frames at k               */
 } s_turbo;
 static unsigned s_pause_at;         /* THE PAUSE AT T: the GameTime armed, 0 none; game thread    */
+static int s_pause_taken;           /* the pause bit is set by THE PAUSE AT T, not by the player  */
 static int s_mp_arena_in;           /* allocator's block-ownership boundary */
 static int s_engine_cells;          /* the grid's unit slots and yard bits are the engine's:
                                        a multiplayer recording's level (tagpu_puppet_begin) */
@@ -7457,9 +7458,10 @@ static int rw_trigger(const char* line)
    - `turbo on`: k ticks every frame until `turbo off` or the level's end, in a test launch whose
      tagpu_turbo.on gave k (THE TURBO); refused with a line otherwise. `turbo off`: the game's own
      pacing again.
-   - `pause at <T>`, T a decimal u32 past the level's GameTime: on any level in play outside
-     rewind, the game paused at the frame visit after step T (THE PAUSE AT T); one at a time, a
-     second replacing the first. `resume`: the pause bit cleared, as the Pause key clears it. */
+   - `pause at <T>`, T a decimal u32 past the level's GameTime: in a test launch's skirmish level
+     outside rewind, the game paused at the frame visit after step T (THE PAUSE AT T); one at a
+     time, a second replacing the first. `resume`: the pause bit cleared, as the Pause key clears
+     it, when THE PAUSE AT T set it; refused with a line otherwise (pacing_refusal). */
 /* `p` is a decimal u32 and nothing after it: 1 with its value */
 static int u32_word(const char* p, unsigned* v)
 {
@@ -7509,6 +7511,7 @@ static void rt_arm(const char* name, unsigned T);
 static void turbo_on(void);
 static void turbo_off(void);
 static void pace_level_end(void);
+static const char* pacing_refusal(const char* ta);
 static void pause_at_arm(unsigned T);
 static void pause_resume(void);
 static void pause_at_visit(void);
@@ -9193,13 +9196,13 @@ static void rw_pause_init(void)
 
 /* THE TURBO: a test launch's pacing, k ticks every frame. DISASSEMBLED: the scheduler 0x495230
    writes DeltaTime main+0x38A3B from the 30-Hz clock 0x4B6340 and clamps it to 5 (0x4953F5),
-   reading back only what it wrote this call; after its return only the count test 0x496932 and
-   the step 0x495490, which caches it at 0x495497, read it. So k, bounded to the scheduler's own
+   reading back only what it wrote this call; after its return only the count test 0x496932,
+   the step 0x495490, which caches it at 0x495497, and a debug sprintf (0x46AA09) read it. So k, bounded to the scheduler's own
    1..5 at attach, written here between that return and that load, makes the frame run k
    unchanged stock iterations and the step's once-a-call tail (0x495674..0x495688) once: the batch
    speed 10k gives a frame that lands on a 30-Hz edge. Nothing an iteration reads is written.
-   THE BATCH IS PART OF THE RESULT. The tail -- 0x428BD0, 0x428BE0, 0x428BF0, the chat expiry
-   0x463EF0 and the temporary sight records' expiry 0x482130 -- runs once a batch, so where the
+   THE BATCH IS PART OF THE RESULT. The tail -- 0x428BD0, 0x428BE0, 0x428BF0 (each a bare ret),
+   the chat expiry 0x463EF0 and the temporary sight records' expiry 0x482130 -- runs once a batch, so where the
    batches fall changes what units see and so what they do. Stock pacing at speed 20 mixes
    batches of 2 with an odd one after a slow frame: of two pairs of takeovers of one recording at
    speed 20 one parted in 1328 unit fields, while both pairs at a fixed k agreed in everything but
@@ -9302,11 +9305,15 @@ static int __cdecl rt_pace_guard(void* entry_esp)
 static void pause_at_arm(unsigned T)
 {
     char* ta = ta_main();
-    unsigned now = ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0;
-    if (!ta || !s_rt_pace_in || T <= now) {
-        tagpu_logf("pause: at %u refused: %s %u", T,
-                   !s_rt_pace_in ? "the tick-batch guard is unavailable; GameTime" :
-                   "the level is at GameTime", now);
+    const char* why = pacing_refusal(ta);
+    unsigned now;
+    if (why) {
+        tagpu_logf("pause: at %u refused: %s", T, why);
+        return;
+    }
+    now = *(const unsigned*)(ta + OFF_GAMETIME);
+    if (T <= now) {
+        tagpu_logf("pause: at %u refused: the level is at GameTime %u", T, now);
         return;
     }
     if (s_pause_at)
@@ -9324,6 +9331,7 @@ static void pause_at_visit(void)
     if (now < s_pause_at) return;
     if (now == s_pause_at) {
         *(unsigned short*)(ta + OFF_PAUSE) |= 1;
+        s_pause_taken = 1;
         tagpu_logf("pause: paused at GameTime %u", now);
     } else {
         tagpu_logf("pause: at %u not taken: the level is at GameTime %u", s_pause_at, now);
@@ -9331,10 +9339,16 @@ static void pause_at_visit(void)
     s_pause_at = 0;
 }
 
+/* Clears only the pause THE PAUSE AT T took: a pause the player or a rewind set stays theirs. */
 static void pause_resume(void)
 {
     char* ta = ta_main();
-    if (!ta) return;
+    const char* why = pacing_refusal(ta);
+    if (why || !s_pause_taken) {
+        tagpu_logf("resume: refused: %s", why ? why : "no pause at T was taken");
+        return;
+    }
+    s_pause_taken = 0;
     *(unsigned short*)(ta + OFF_PAUSE) &= (unsigned short)~1u;
     tagpu_logf("pause: resumed at GameTime %u", *(const unsigned*)(ta + OFF_GAMETIME));
 }
@@ -9344,12 +9358,25 @@ static void pause_resume(void)
    armed and acknowledged: at k ticks a frame, the 301 ticks before the first armed GameTime
    pass sooner than a tacli round trip could arm them. It sends `turbo off` around a step that
    drives the running game against the wall clock, a fixture's script. */
+/* Why the test pacing (`turbo on`, `pause at`, `resume`) may not act now, or NULL. It is a test
+   launch's own: the trigger file is read in every launch, and a network game's peers would run on
+   while this seat alone paused or batched differently -- the Pause key sends packet 0x19 to them
+   (0x4960A4..0x4960BC, DISASSEMBLED) and this pause does not. */
+static const char* pacing_refusal(const char* ta)
+{
+    if (!tagpu_regstore_active()) return "not a test launch (tagpu_regstore.h)";
+    if (!ta) return "no level";
+    if (ta[OFF_NETWORK] & 1) return "a network game";
+    if (!s_rt_pace_in) return "the tick-batch guard is unavailable";
+    return NULL;
+}
+
 static void turbo_on(void)
 {
     char* ta = ta_main();
-    if (!s_turbo_k || !s_rt_pace_in || !ta) {
-        tagpu_logf("turbo: on refused: %s", !s_turbo_k ? "this launch has no tagpu_turbo.on k"
-                   : !s_rt_pace_in ? "the tick-batch guard is unavailable" : "no level");
+    const char* why = pacing_refusal(ta);
+    if (why || !s_turbo_k) {
+        tagpu_logf("turbo: on refused: %s", why ? why : "this launch has no tagpu_turbo.on k");
         return;
     }
     if (!s_turbo.engaged) {
@@ -9387,18 +9414,19 @@ static void pace_level_end(void)
                    s_turbo.lagged, s_turbo.held);
     memset(&s_turbo, 0, sizeof s_turbo);
     s_pause_at = 0;
+    s_pause_taken = 0;
 }
 
 void tagpu_replay_turbo_init(void)
 {
-    char b[16], *end;
+    char b[16] = {0}, *end;
     unsigned long k;
     if (tagpu_sim_lever_read("tagpu_turbo.on", b, sizeof b) < 0) return;
     k = strtoul(b, &end, 10);
     while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') end++;
     if (!*end && strspn(b, " \t\r\n") == strlen(b)) {
         k = 1;                          /* an empty lever: normal speed's batch */
-        end = b + 1;
+        end = b + strlen(b);
     }
     if (!tagpu_regstore_active())
         tagpu_logf("turbo: tagpu_turbo.on refused: not a test launch (tagpu_regstore.h)");

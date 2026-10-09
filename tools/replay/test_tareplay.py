@@ -35,6 +35,34 @@ import tarewind  # noqa: E402
 MAPS = [tafeat.DDRAW / "ddraw-cover.map", tafeat.DDRAW / "ddraw-stocklimits-cover.map"]
 
 
+class KernelCompileAcrossThreads(unittest.TestCase):
+    """tareplay decodes from several threads of one process: the first decodings, together, each
+    find every kernel replaced once, none decorated twice."""
+
+    def test_threads_compile_together(self):
+        code = """
+import sys, threading
+sys.path.insert(0, sys.argv[1])
+import reccodec
+gate, errors = threading.Barrier(16), []
+def go():
+    gate.wait()
+    try:
+        reccodec._compile()
+    except Exception as e:
+        errors.append(repr(e))
+threads = [threading.Thread(target=go) for _ in range(16)]
+for t in threads: t.start()
+for t in threads: t.join()
+plain = [n for n, _ in reccodec._KERNELS if not hasattr(reccodec.__dict__[n], "py_func")]
+print(errors, plain)
+"""
+        out = subprocess.run([sys.executable, "-c", code, str(Path(__file__).parent)],
+                             capture_output=True, text=True, timeout=120)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), "[] []")
+
+
 class NativeCosmeticImagePolicy(unittest.TestCase):
     RANGES = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x1E88F),
               (1, 0x511DF0 - tarec.REC_DATA_BEGIN, 0x511F80 - tarec.REC_DATA_BEGIN))

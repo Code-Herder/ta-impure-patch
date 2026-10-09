@@ -990,7 +990,7 @@ block that reads to its last complete block.
   ticks every frame from then on (`turbo: on at GameTime <g> (k=<k>)`) and `turbo off` gives the
   game its own pacing back; a frame runs no tick while the recorder's ring is more than half full.
   The level's end logs `turbo: from GameTime … ticks in … ms of play (<n> a second) … held for the
-  writer`. `tagpu_presentcap.on` (1..60) caps a test launch's presents a second.
+  writer`. `tagpu_presentcap.on` (10..60) caps a test launch's presents a second.
 - **Play one**: `tacli replay play <i> FILE [--perspective RECORD]` launches the instance on the
   recording's map and seats and starts the skirmish; it exits 0 on `replay: playing <name>`.
 - **Seek**: `tacli replay seek <i> T` moves the instance's running playback to GameTime T, forward

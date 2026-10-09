@@ -14841,21 +14841,24 @@ and the setter are in *The speeds* above, the step's iteration in
   *The speeds*.
 - **DeltaTime's readers**: the step `0x495490` (`0x495497`, which caches it for the call), the
   frame function (`0x4967FD`, and the count test `0x496932` before the step call `0x49693E`), the
-  scheduler, a debug `sprintf` `0x46AA09` and the load wait `0x498175`. The speed fields' readers
+  scheduler and a debug `sprintf` `0x46AA09`; the load wait writes it (`0x498175`, `mov
+  [edx+0x38A3B], ebp`). The speed fields' readers
   are the Options screen, the save `0x43136B`, the HUD `0x468C0B`, the setter `0x490E16`, the keys
   `0x496559` and the scheduler — no tick code (a displacement scan of `.text`). The registry's
   `gamespeed` (`0x504550`) is copied into the ceiling and the live speed **unclamped** at start-up
   (`0x430509`, `0x43052B`).
 - **The batch is part of the result.** The step runs its iterations DeltaTime times and then its
-  tail once a call — `0x428BD0`, `0x428BE0`, `0x428BF0`, the chat expiry `0x463EF0`, the temporary
-  sight records' expiry `0x482130` (`0x495674..0x495688`) — so a sight record outlives its deadline
+  tail once a call — `0x428BD0`, `0x428BE0`, `0x428BF0` (each a bare `ret`), the chat expiry
+  `0x463EF0`, the temporary sight records' expiry `0x482130` (`0x495674..0x495688`) — so a sight record outlives its deadline
   by up to one batch, and where the batches fall changes what units see. MEASURED (tenseat taken
   over at 931 as player 0, each takeover dumped at 2731, compared field by field): of two pairs of
   takeovers at speed 20, whose batches are twos with an odd one after a slow frame, one pair parted
   in 1,328 unit fields; two pairs at a fixed batch (k = 2, then k = 1) differed only in the meteor
   shower's two points (next bullet); speed 20 against k = 2 differed in 1,272 and 1,383 unit fields.
 - **The meteor shower and the CRT `rand`.** The meteor tick `0x437DE0` draws the CRT's `rand`
-  `0x4E4870` at six sites (`0x437E37..0x437FB5`) for the strike points `0x512334` and `0x512320`. On
+  `0x4E4870` at six sites (`0x437E37..0x437FB5`) for the strike points `0x512334` and `0x512320`;
+  the forced shower `0x438070` (one caller, `0x41778A`) draws it too (`0x4380AD`, `0x4380CE`) and
+  writes `0x512334` (`0x4380FB`). On
   the game thread the draw path draws from the same per-thread stream every frame (static call
   graph: `0x49BE60`, `0x420B00 → 0x421550 → 0x472AB0`, `0x418310`), so on a live host the strike
   points depend on how many frames were drawn between ticks, and a takeover, which does not restore

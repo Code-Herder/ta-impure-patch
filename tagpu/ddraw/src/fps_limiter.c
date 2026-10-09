@@ -37,12 +37,13 @@ static int paced_state(HMONITOR* mon)
 }
 
 /* tagpu: a test launch's present cap, the test render profile's (tagpu_presentcap.on, its text
-   the frames a second, 1 to 60), or 0. A test game is graded on the state it records, never on
+   the frames a second, 10 to 60), or 0. A test game is graded on the state it records, never on
    the picture, so presents it does not need are render-thread and GPU time eight games share.
    Only the present is capped: the game thread skips a packet the render thread has not taken
    rather than wait for it, and forces one at the roster's cadence (tagpu_packet_pub.c, the FRESH
    gate), and the UI's queue waits 250 ms on an idle consumer before it calls it stalled
-   (tagpu_gui_int.h, TAGPU_GUI_STALL_MS), so the cap stays well under that period. Honoured
+   (tagpu_gui_int.h, TAGPU_GUI_STALL_MS): the floor of 10 keeps a capped frame's period, 100 ms
+   at most, well under it. Honoured
    only in a test launch (tagpu_regstore.h): a player's game is never capped by a stray file. */
 static int test_present_cap(void)
 {
@@ -55,8 +56,8 @@ static int test_present_cap(void)
     fclose(f);
     hz = strtol(b, &end, 10);
     while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') end++;
-    if (end == b || *end || hz < 1 || hz > 60) {
-        tagpu_logf("frame cap: tagpu_presentcap.on refused: \"%s\" is not 1 to 60 frames a "
+    if (end == b || *end || hz < 10 || hz > 60) {
+        tagpu_logf("frame cap: tagpu_presentcap.on refused: \"%s\" is not 10 to 60 frames a "
                    "second", b);
         return 0;
     }

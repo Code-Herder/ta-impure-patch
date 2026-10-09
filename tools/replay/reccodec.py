@@ -38,6 +38,7 @@ import math
 import os
 import struct
 import sys
+import threading
 import zlib
 from collections import namedtuple
 
@@ -207,6 +208,7 @@ def params(entries, nslots):
 
 _KERNELS = []
 _compiled = False
+_compile_lock = threading.Lock()
 
 
 def _jit(f):
@@ -224,18 +226,26 @@ def _inline(f):
 
 def _compile():
     """Every kernel replaced by its numba dispatcher, once. Each compiles, or loads from the
-    cache, at its first call, and by then finds the kernels it calls as dispatchers too."""
+    cache, at its first call, and by then finds the kernels it calls as dispatchers too.
+
+    tareplay decodes from several threads of one process: the replacement runs under
+    _compile_lock and _compiled turns true only after the last kernel is replaced, so a thread
+    that skips the lock never finds a kernel half replaced, and none is decorated twice."""
     global _compiled
     if _compiled:
         return
-    try:
-        import numba
-    except ImportError:
-        raise Unreadable("a sectioned block needs numba: the shared venv (CLAUDE.md, Python "
-                         "tooling)") from None
-    for name, options in _KERNELS:
-        globals()[name] = numba.njit(cache=True, error_model="numpy", **options)(globals()[name])
-    _compiled = True
+    with _compile_lock:
+        if _compiled:
+            return
+        try:
+            import numba
+        except ImportError:
+            raise Unreadable("a sectioned block needs numba: the shared venv (CLAUDE.md, Python "
+                             "tooling)") from None
+        for name, options in _KERNELS:
+            globals()[name] = numba.njit(cache=True, error_model="numpy",
+                                         **options)(globals()[name])
+        _compiled = True
 
 
 # ---- integer arithmetic, one slot at a time (the C's operations; its bounds hold here) ----------

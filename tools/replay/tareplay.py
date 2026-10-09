@@ -2635,6 +2635,11 @@ def out_dir(args):
     cache = out / "tarec-cache"
     os.environ[reccache.ENV] = str(cache)
     atexit.register(shutil.rmtree, cache, ignore_errors=True)
+    # a tarec process runs one thread of numpy and numba work: their default pools spin beside it
+    # for nothing (MEASURED 2026-10-08: `check` on a forks file 10.4 s wall either way, 13.8 s of
+    # CPU by default and 10.2 s with one thread), CPU the games and the other checks then lack
+    for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
+        os.environ.setdefault(var, "1")
     return out
 
 

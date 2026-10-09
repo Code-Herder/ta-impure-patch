@@ -462,7 +462,7 @@ MEASURED 2026-10-08 at k = 1: a light L lane about 1,500 ticks a second, P and R
 puppet's write is the cost), the battle's lanes 64–230 with up to 1,652 frames held for the
 writer, against ~60 at speed 20.
 
-**Why k = 1.** The step's tail — `0x428BD0`, `0x428BE0`, `0x428BF0`, the chat expiry `0x463EF0`
+**Why k = 1.** The step's tail — `0x428BD0`, `0x428BE0`, `0x428BF0` (each a bare `ret`), the chat expiry `0x463EF0`
 and the temporary sight records' expiry `0x482130` — runs once a call of `0x495490`, not once a
 tick, so where the batches fall changes what units see and so what they do. Speed 20 mixes batches
 of two with an odd one after a slow frame, and the mix differs run to run; a fixed k makes every
@@ -856,7 +856,7 @@ there plays nothing twice.
 
 **A takeover does not reproduce the meteor shower's strike points** (open; the owner's ruling,
 2026-10-08: a known gap, not fixed now). The meteor tick draws its strike points `0x512334` and
-`0x512320` from the CRT's `rand`, whose state is per thread and in neither image, and on the game
+`0x512320` from the CRT's `rand`, as the forced shower `0x438070` draws `0x512334`, whose state is per thread and in neither image, and on the game
 thread the draw path draws from the same stream every frame
 ([engine map](../exe-reverse-engineering.md#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08)).
 A takeover does not restore that state, so two takeovers of one recording at one T part there and
