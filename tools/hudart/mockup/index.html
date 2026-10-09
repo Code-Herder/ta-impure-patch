@@ -48,28 +48,23 @@ const stage = $('#stage'), layer = $('#hud-layer');
 /* ---- a synthetic game: 132 seconds, up to 16 players, the second half of the seats losing their commanders in turn ---- */
 const T = 132, SPEEDS = [0.5, 1, 2, 4, 8], UI_STEPS = [0.75, 1, 1.25, 1.5];
 const NAMES = ['Fang', 'Kesh', 'Moro', 'Vex', 'Nyx', 'Ash', 'Rook', 'Sable', 'Flint', 'Vale', 'Iris', 'Dax', 'Orin', 'Hex', 'Lark', 'Juno'];
-// stand-ins for TA's player colours, and the team colours of the chart
+// stand-ins for TA's player colours; the chart's team colours and its measures are layout.json's
 const SEAT_COL = ['#233bcb', '#d32b00', '#fbfbfb', '#2f771b', '#7a3fb0', '#e8d200', '#2a2a2a', '#e07018', '#6fb6e8', '#7a5230',
   '#e070b0', '#18a090', '#8a8a20', '#8a8a8a', '#701c1c', '#9ae040'];
-const TEAM_COL = ['#e0c060', '#60b8e0', '#e07878', '#80d070', '#b090e0'];
-const MEASURES = [
-  { k: 'metal', g: 'eco', n: 'metal income', u: 'per second' }, { k: 'energy', g: 'eco', n: 'energy income', u: 'per second' },
-  { k: 'units', g: 'army', n: 'units', u: 'owned' }, { k: 'army', g: 'army', n: 'army value', u: 'metal' },
-  { k: 'kills', g: 'army', n: 'kills', u: 'so far' }, { k: 'losses', g: 'army', n: 'losses', u: 'so far' },
-  { k: 'excess', g: 'eco', n: 'wasted metal', u: 'total' }];
 
-// the four overlay switches are on whenever a replay starts, and never saved; the stats button is disabled until the
-// recorder has a stats track, so its window opens only through the stat=1 switch, to review its design
+// the four overlay switches are on whenever a replay starts, and never saved; the stats window is closed whenever a
+// replay starts, and keeps its measure, its split and its place
 const S = { t: 70, playing: true, speed: 1, hud: 1, game: 150, res: 'fit', np: 10, nt: 2, fold: [], bm: [40], stat: false, sm: 'units', ss: 'player', sw: null,
   ov: { cursors: true, clicks: true, selections: true, chat: true }, sight: -1, follow: -1, scroll: 0, toast: '' };
 try { const o = JSON.parse(localStorage.getItem('hud-mockup') || '{}'); delete o.stat; Object.assign(S, o); } catch (e) {}
 const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ hud: S.hud, game: S.game, res: S.res, np: S.np, nt: S.nt, sm: S.sm, ss: S.ss, sw: S.sw })); } catch (e) {} };
 { const q = new URLSearchParams(location.search);   // screenshot switches: res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&paused,
-  // and scroll=<first item>, sight=<seat>, follow=<seat>, toast=<text>
+  // and scroll=<first item>, sight=<seat>, follow=<seat>, toast=<text>, stat=1, sm=<measure>, ss=<player|team>, sx=<x>&sy=<y> (the window's place)
   if (q.has('paused')) S.playing = false; if (q.get('res')) S.res = q.get('res'); if (q.get('hud')) S.hud = +q.get('hud') / 100;
   if (q.get('game')) S.game = { off: -1, auto: 0 }[q.get('game')] ?? +q.get('game');
   for (const k of ['np', 'nt', 't', 'scroll', 'sight', 'follow']) if (q.get(k)) S[k] = +q.get(k); for (const k of ['sm', 'ss', 'toast']) if (q.get(k)) S[k] = q.get(k);
-  if (q.has('stat')) S.stat = q.get('stat') !== '0'; }
+  if (q.has('stat')) S.stat = q.get('stat') !== '0';
+  if (q.has('sx')) S.sw = { x: +q.get('sx'), y: +(q.get('sy') || 0) }; }
 
 /* ---- the game's own state: state=<url> loads what the game dumped (tagpu_replayhud.dump, tagpu_hudstate.c) -- the screen,
    the engine frame's scale and the HUD's state in units -- and draws that instead of the made-up game below, still ---- */
@@ -135,22 +130,24 @@ function unit() { return parseFloat(stage.style.getPropertyValue('--u')) || 1; }
 function state() {
   const u = unit(), w = parseFloat(stage.style.width), h = parseFloat(stage.style.height);
   const dv = device(), ef = engineFrame(dv.W, dv.H, S.game), ud = u * dv.d;
-  const ps = seats(), tm = teams(), m = MEASURES.find(x => x.k === S.sm) || MEASURES[0];
+  const L = HUD.layout, MS = L.window.measures, TC = L.chart.teams;
+  const ps = seats(), tm = teams(), m = MS.find(x => x.k === S.sm) || MS[0];
+  // the samples are grouped by team only when there are two teams to tell apart
   const byTeam = S.ss === 'team' && tm.length > 1, pl = series(m.k, ps);
-  const groups = byTeam ? tm.map((mm, t) => ({ name: `Team ${t + 1}`, col: TEAM_COL[t % 5], death: null, v: pl[0].v.map((_, s) => mm.reduce((a, i) => a + pl[i].v[s], 0)) })) : pl;
+  const groups = byTeam ? tm.map((mm, t) => ({ name: `Team ${t + 1}`, col: TC[t % TC.length], death: null, v: pl[0].v.map((_, s) => mm.reduce((a, i) => a + pl[i].v[s], 0)) })) : pl;
   const markers = ps.filter(p => p.lost).flatMap(p => [{ t: p.death, kind: 'death', seat: p.i }, ...(p.out ? [{ t: p.death + 3, kind: 'defeat', seat: p.i }] : [])])
     .concat(S.bm.map(t => ({ t, kind: 'bookmark', seat: -1 })));
-  const L = HUD.layout, sw = S.sw || { x: L.window.x, y: L.window.y };
+  const sw = S.sw || { x: L.window.x, y: L.window.y };
+  // the game's dump carries its stats whole: the window, its measure and split, and the groups as the game drew them
   if (GAME) { const g = GAME.state;
     return { W: g.W, H: g.H, frame: g.frame, t: g.t, T: g.T, playing: g.playing, speed: g.speed, hud: g.hud, seats: g.seats, teams: g.teams,
-      folded: g.folded, markers: g.markers, toggles: g.toggles, sight: g.sight, follow: g.follow, scroll: g.scroll, toast: g.toast, measures: MEASURES,
-      stats: { open: false, x: sw.x, y: sw.y, measure: m, split: 'player', groups: pl, format: String } }; }
+      folded: g.folded, markers: g.markers, toggles: g.toggles, sight: g.sight, follow: g.follow, scroll: g.scroll, toast: g.toast,
+      stats: g.stats }; }
   return { W: w / u, H: h / u, frame: { panel: ef.panel / ud, top: ef.bar / ud, bottom: ef.bar / ud },
     t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, seats: ps, teams: tm, folded: S.fold, markers,
     sight: S.sight, follow: S.follow, scroll: S.scroll, toast: S.toast,
-    toggles: { ...S.ov }, measures: MEASURES,
-    stats: { open: S.stat, x: sw.x, y: sw.y, measure: m, split: byTeam ? 'team' : 'player', groups,
-      format: v => (m.k === 'metal' && v < 100 ? v.toFixed(1) : v >= 10000 ? (v / 1000).toFixed(v >= 100000 ? 0 : 1) + 'k' : String(Math.round(v))) } };
+    toggles: { ...S.ov, stats: S.stat },
+    stats: { open: S.stat, x: sw.x, y: sw.y, measure: m.k, split: byTeam ? 'team' : 'player', groups, dt: DT, t0: 0 } };
 }
 const px = () => unit() * (window.devicePixelRatio || 1);
 function build() { HUD.draw(layer, state(), px()); }
@@ -196,7 +193,7 @@ layer.addEventListener('pointerdown', e => {
   if (b && !b.dataset.on) { HUD.press(b, true); const up = () => { HUD.press(b, false); window.removeEventListener('pointerup', up); }; window.addEventListener('pointerup', up); }
   const tr = e.target.closest('[data-track]');
   if (tr) { seek = tr; tr.setPointerCapture(e.pointerId); seekTo(tr, e.clientX); return; }
-  if (e.target.closest('[data-drag]')) { const st = state().stats; drag = { x: e.clientX, y: e.clientY, ox: st.x, oy: st.y }; e.target.setPointerCapture(e.pointerId); }
+  if (e.target.closest('[data-act="drag"]')) { const st = state().stats; drag = { x: e.clientX, y: e.clientY, ox: st.x, oy: st.y }; e.target.setPointerCapture(e.pointerId); }
 });
 layer.addEventListener('pointermove', e => {
   if (seek) seekTo(seek, e.clientX);
@@ -224,6 +221,7 @@ layer.addEventListener('click', e => {
     case 'uiscale': S.hud = UI_STEPS[(UI_STEPS.indexOf(S.hud) + 1) % UI_STEPS.length]; $('#hud').value = S.hud; save(); resize(); return;
     case 'leave': S.playing = false; toast('Leave this replay?'); break;
     case 'cursors': case 'clicks': case 'selections': case 'chat': S.ov[a.dataset.act] = !S.ov[a.dataset.act]; break;
+    case 'stats': S.stat = !S.stat; break;
     case 'fold': { const t = +a.dataset.team; S.fold = S.fold.includes(t) ? S.fold.filter(x => x !== t) : S.fold.concat(t); break; }
     case 'jump': case 'follow': { const i = +a.dataset.seat;
       if (!state().seats[i].cam) toast('Camera was not recorded');

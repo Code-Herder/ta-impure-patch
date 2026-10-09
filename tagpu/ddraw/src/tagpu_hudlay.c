@@ -3,8 +3,7 @@
    EACH FUNCTION BELOW IS ONE OF hud.js's, under the same name and in the same order, and emits
    its elements in hud.js's document order, which is the order the browser paints them. A rule
    changed in one file is changed in the other; tools/hudart/laycheck.py is what notices when
-   they disagree. The stats window and its chart are not here: they need a recorder track that
-   does not exist yet (research/notes/hud-in-game.md, *The landings*).
+   they disagree.
 
    The arithmetic is in double, as JavaScript's is, so the two files' rectangles agree to far
    below a device pixel; ops are stored in float. */
@@ -821,6 +820,318 @@ static void hover(C* c, int seat, R b)
     }
 }
 
+/* ---- the stats window: chips in two trays, the chart over the chart and legend recesses. The
+   window is the HUD's whole, as the column is: a click on its body is taken and does nothing ---- */
+
+static const TJV* measure(C* c, const char* k)
+{
+    const TJV* ms = arr(c, obj(c, c->L, "window"), "measures");
+    int i;
+    for (i = 0; ms && i < ms->n; i++)
+        if (!strcmp(tj_str(tj_get(tj_at(ms, i), "k"), ""), k)) return tj_at(ms, i);
+    return ms && ms->n ? tj_at(ms, 0) : NULL;
+}
+
+static void chip(C* c, const TJV* ch, R b, const char* label, int on, const char* val, double off)
+{
+    char key[HUD_KEYLEN];
+    BTN bt;
+    memset(&bt, 0, sizeof bt);
+    snprintf(key, sizeof key, "chip:%s", val);
+    bt.key = key;
+    bt.textspec = obj(c, ch, "text");
+    bt.text = label;
+    bt.off = off;
+    button(c, &bt, ch, b, on);
+}
+
+static void chart(C* c, R cb, double Rl);
+
+static void window_(C* c)
+{
+    const HUDSTATE* st = c->st;
+    const HUDSTATS* S = &st->stats;
+    const TJV *Wn = obj(c, c->L, "window"), *m = measure(c, S->measure), *ch = obj(c, Wn, "chip");
+    const TJV *trays = arr(c, Wn, "trays"), *ms = arr(c, Wn, "measures"), *grip = obj(c, Wn, "grip");
+    const TJV *ti = obj(c, Wn, "title"), *cl = obj(c, Wn, "close"), *lab = obj(c, Wn, "label");
+    const TJV *chips = obj(c, Wn, "chips"), *sp = obj(c, Wn, "split"), *chs = obj(c, Wn, "chart");
+    const TJV *fo = obj(c, Wn, "foot"), *shd = arr(c, Wn, "shadow");
+    double w = num(c, Wn, "w"), h = num(c, Wn, "h"), x, y, chh = num(c, ch, "h"), gap = num(c, ch, "gap");
+    const char *mk = str(c, m, "k"), *mn = str(c, m, "n"), *mu = str(c, m, "u");
+    char s[128], t0[16], t1[16];
+    F f;
+    PL p;
+    R cb, lg, cw;
+    HUDOP* o;
+    BTN bt;
+    int i, j;
+
+    x = fmax(0, fmin(st->W - w, S->x));
+    y = fmax(0, fmin(st->H - h, S->y));
+    f = frame(c->l, w, h, str(c, Wn, "part"));
+    if ((o = solid(c, box(x, y, w, h), 0, tj_num(tj_at(shd, 2), 0)))) {
+        o->flags |= HOPF_DROP;
+        o->size = (float)tj_num(tj_at(shd, 0), 0);
+        o->shade = (float)tj_num(tj_at(shd, 1), 0);
+    }
+    /* placed before everything in it, so the hit test, last first, finds its controls over it */
+    hot(c, box(x, y, w, h), str(c, Wn, "act"));
+    art(c, str(c, Wn, "part"), box(x, y, w, h), 1);
+    p = spec(grip);
+    icon(c, str(c, grip, "icon"), at(place(c, &f, &p), x, y));
+    snprintf(s, sizeof s, "Game stats \xC2\xB7 %s %s", mn, mu);          /* U+00B7 MIDDLE DOT */
+    p = spec(ti);
+    text(c, s, at(place(c, &f, &p), x, y), str(c, ti, "style"), &p, 0, 0);
+    /* the title well is the drag handle */
+    memset(&p, 0, sizeof p);
+    pl_in(&p, tj_get(ti, "in"));
+    hot(c, at(place(c, &f, &p), x, y), "drag");
+    memset(&bt, 0, sizeof bt);
+    bt.key = str(c, cl, "act");
+    bt.icon = obj(c, cl, "icon");
+    p = spec(cl);
+    button(c, &bt, cl, at(place(c, &f, &p), x, y), 0);
+
+    for (i = 0; trays && i < trays->n; i++) {
+        const TJV* tr = tj_at(trays, i);
+        const char* g = str(c, tr, "group");
+        double cx;
+        R tb;
+        memset(&p, 0, sizeof p);
+        pl_in(&p, tj_get(tr, "in"));
+        tb = place(c, &f, &p);
+        p = spec(lab);
+        pl_in(&p, tj_get(tr, "in"));
+        text(c, str(c, tr, "label"), at(place(c, &f, &p), x, y), str(c, lab, "style"), &p, 0, 0);
+        cx = tb.x + num(c, ch, "start");
+        for (j = 0; ms && j < ms->n; j++) {
+            const TJV* q = tj_at(ms, j);
+            const char* k = str(c, q, "k");
+            double qw;
+            if (strcmp(str(c, q, "g"), g)) continue;
+            qw = num(c, chips, k);
+            chip(c, ch, box(x + cx, y + tb.y + (tb.h - chh) / 2, qw, chh), str(c, q, "n"), !strcmp(k, mk), k, 0);
+            cx += qw + gap;
+        }
+        if (tj_is(tj_get(tr, "split"), TJ_TRUE)) {
+            const TJV* sc = arr(c, sp, "chips");
+            double r = tb.x + tb.w - num(c, sp, "end");
+            for (j = sc ? sc->n - 1 : -1; j >= 0; j--) {
+                const TJV* q = tj_at(sc, j);
+                const char* v = str(c, q, "value");
+                double qw = num(c, q, "w");
+                int team = !strcmp(v, "team");
+                chip(c, ch, box(x + r - qw, y + tb.y + (tb.h - chh) / 2, qw, chh), str(c, q, "text"),
+                     team == (S->team != 0), v, team && !headed(st) ? num(c, sp, "off") : 0);
+                r -= qw + gap;
+            }
+        }
+    }
+    p = spec(chs);
+    cb = place(c, &f, &p);
+    memset(&p, 0, sizeof p);
+    pl_in(&p, tj_get(chs, "legend"));
+    lg = place(c, &f, &p);
+    memset(&p, 0, sizeof p);
+    pl_in(&p, tj_at(tj_get(chs, "in"), 0));
+    cw = place(c, &f, &p);
+    chart(c, at(cb, x, y), lg.x + lg.w - (cw.x + cw.w) + 1);
+    clock_s(t0, sizeof t0, st->t);
+    clock_s(t1, sizeof t1, st->T);
+    /* "<Name> <unit> · <t> / <T>", NO-BREAK SPACEs round the dot */
+    snprintf(s, sizeof s, "%c%s %s\xC2\xA0\xC2\xB7\xC2\xA0%s / %s",
+             mn[0] >= 'a' && mn[0] <= 'z' ? mn[0] - 32 : mn[0], mn[0] ? mn + 1 : "", mu, t0, t1);
+    p = spec(fo);
+    text(c, s, at(place(c, &f, &p), x, y), str(c, fo, "style"), &p, 0, 0);
+}
+
+/* hud.js statFormat: metal income in tenths below 100, thousands in k from 10 000 on, whole
+   numbers otherwise */
+static void stat_format(char* o, size_t n, const char* k, double v)
+{
+    if (!strcmp(k, "metal") && v < 100) snprintf(o, n, "%.1f", to_fixed1(v));
+    else if (v >= 10000) {
+        if (v >= 100000) snprintf(o, n, "%.0fk", js_round(v / 1000));
+        else snprintf(o, n, "%.1fk", to_fixed1(v / 1000));
+    } else jsnum(o, n, js_round(v));
+}
+
+/* hud.js nice: the axis's top, 1, 2, 2.5 or 5 times a power of ten at or above v */
+static double nice(double v)
+{
+    double q, f;
+    if (!(v > 0)) return 1;
+    q = pow(10, floor(log10(v)));
+    f = v / q;
+    return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * q;
+}
+
+static int dark(C* c, uint32_t rgb, const TJV* Ln)
+{
+    return .3 * (rgb >> 16) + .59 * ((rgb >> 8) & 255) + .11 * (rgb & 255) < num(c, Ln, "dark");
+}
+
+/* an SVG <text> of the chart: anchored at (x, y) as hud.js's `tx` writes them, to a tenth */
+static void text_at(C* c, const char* s, R org, double x, double y, int anchor, double size, uint32_t rgb, R clip)
+{
+    int st = style_index(c->l, str(c, obj(c, c->L, "chart"), "style"));
+    HUDOP* p;
+    HUDRUN* r;
+    int off;
+    if (st < 0) {
+        if (!c->bad++ && c->err && c->errn) snprintf(c->err, c->errn, "layout: no style for the chart");
+        return;
+    }
+    if (c->o->nrun + 1 > HUD_MAXRUN) { c->o->overflow = 1; return; }
+    if (!(p = op(c, HOP_TEXT, box(org.x + to_fixed1(x), org.y + to_fixed1(y), 0, 0)))) return;
+    p->flags |= HOPF_BASE;
+    p->style = (int16_t)st;
+    p->centre = (uint8_t)anchor;
+    p->size = (float)size;
+    p->clip.x = (float)clip.x; p->clip.y = (float)clip.y; p->clip.w = (float)clip.w; p->clip.h = (float)clip.h;
+    if ((off = text_put(c, s)) < 0) return;
+    r = &c->o->run[c->o->nrun++];
+    r->rgb = rgb;
+    r->resource = 0;
+    r->off = (uint16_t)off;
+    r->len = (uint16_t)strlen(s);
+    p->run = (uint16_t)(r - c->o->run);
+    p->nrun = 1;
+}
+
+static void line(C* c, R org, double x0, double y0, double x1, double y1, double w, uint32_t rgb, double alpha)
+{
+    HUDOP* p = op(c, HOP_LINE, box(org.x + x0, org.y + y0, x1 - x0, y1 - y0));
+    if (!p) return;
+    p->size = (float)w;
+    p->rgba = (rgb << 8) | (uint32_t)lround(255.0 * alpha);
+}
+
+/* ---- the chart: one line per player or team; the part after the playhead faint; the legend
+   ranked at the playhead. Sample s is at t0 + s * dt seconds; the minute labels step by the first
+   of axis.every that puts them axis.space apart. In the chart's own units from cb's top left, as
+   the SVG's viewBox has them. -------------------------------------------------------------------- */
+
+static void chart(C* c, R cb, double Rl)
+{
+    const HUDSTATE* st = c->st;
+    const HUDSTATS* S = &st->stats;
+    const TJV *Ch = obj(c, c->L, "chart"), *Pl = obj(c, Ch, "plot"), *A = obj(c, Ch, "axis"), *Gr = obj(c, Ch, "grid");
+    const TJV *Nw = obj(c, Ch, "now"), *Ln = obj(c, Ch, "line"), *Lg = obj(c, Ch, "legend"), *ev = arr(c, A, "every");
+    const char* mk = str(c, measure(c, S->measure), "k");
+    double W = cb.w, H = cb.h, Lp = num(c, Pl, "l"), Tp = num(c, Pl, "t"), pw = W - Lp - Rl, ph = H - Tp - num(c, Pl, "b");
+    double T = st->T > 0 ? st->T : 1, DT = S->dt, mx = -HUGE_VAL, xph, step, t, gap = num(c, A, "gap"), asz = num(c, A, "size");
+    double below = num(c, A, "below"), lx, ly, lw, lh, rh, fs, sw, sy, sh, tx, ty, th;
+    uint32_t acol = hexrgb(str(c, A, "colour")), ncol = hexrgb(str(c, Nw, "colour"));
+    uint32_t halo = hexrgb(str(c, Ln, "halo")), edge = hexrgb(str(c, Lg, "swatch_edge"));
+    int ng = S->ngroup < HUD_MAXSEAT ? S->ngroup : HUD_MAXSEAT, NS = ng && DT > 0 ? (S->npt < HUD_MAXPT ? S->npt : HUD_MAXPT) : 0;
+    int now = 0, g, s, k, rank[HUD_MAXSEAT];
+    HUDCHART* K = &c->o->chart;
+    HUDOP* o;
+    char b[32];
+    double v;
+    R past;
+
+    if (NS) {
+        now = (int)js_round((st->t - S->t0) / DT);
+        now = now > NS - 1 ? NS - 1 : now < 0 ? 0 : now;
+    }
+    for (g = 0; g < ng; g++)
+        for (s = 0; s < NS; s++) mx = fmax(mx, S->group[g].v[s]);
+    mx = nice(mx);
+#define X(i) (Lp + pw * (S->t0 + (i) * DT) / T)
+#define Y(val) (Tp + ph * (1 - (val) / mx))
+    xph = Lp + pw * st->t / T;
+    for (k = 0; k < 3; k++) {
+        double y;
+        v = k * mx / 2;
+        y = Y(v);
+        line(c, cb, Lp, y, Lp + pw, y, num(c, Gr, "width"), hexrgb(str(c, Gr, "colour")), num(c, Gr, "opacity"));
+        stat_format(b, sizeof b, mk, v);
+        text_at(c, b, cb, Lp - gap, y + num(c, A, "baseline"), 2, asz, acol, cb);
+    }
+    step = tj_num(tj_at(ev, ev ? ev->n - 1 : 0), 0);
+    for (k = 0; ev && k < ev->n; k++)
+        if (pw * tj_num(tj_at(ev, k), 0) / T >= num(c, A, "space")) { step = tj_num(tj_at(ev, k), 0); break; }
+    for (t = 0; step > 0 && t <= T; t += step) {
+        clock_s(b, sizeof b, t);
+        text_at(c, b, cb, Lp + pw * t / T, Tp + ph + below, 1, asz, acol, cb);
+    }
+
+    /* the lines: the points to a tenth, as the polylines' `points` are written; the cross at the
+       sample of the death, unrounded, as its path is */
+    memset(K, 0, sizeof *K - sizeof K->pt);
+    K->n = ng;
+    K->npt = NS;
+    K->w = (float)num(c, Ln, "width");
+    K->halo_w = K->w + 1;
+    K->cross = (float)num(c, Ln, "cross");
+    K->cross_w = (float)num(c, Ln, "cross_w");
+    K->halo_rgb = halo;
+    K->halo_a = (float)num(c, Ln, "halo_opacity");
+    for (g = 0; g < ng; g++) {
+        const HUDGROUP* G = &S->group[g];
+        K->g[g].rgb = G->colour;
+        K->g[g].dark = dark(c, G->colour, Ln);
+        for (s = 0; s < NS; s++) {
+            K->pt[g][s][0] = (float)(cb.x + to_fixed1(X(s)));
+            K->pt[g][s][1] = (float)(cb.y + to_fixed1(Y(G->v[s])));
+        }
+        s = G->death >= 0 ? (int)js_round((G->death - S->t0) / DT) : -1;
+        if (s >= 0 && s < NS) {
+            K->g[g].cross = 1;
+            K->g[g].cx = (float)(cb.x + X(s));
+            K->g[g].cy = (float)(cb.y + Y(G->v[s]));
+        }
+    }
+    /* the whole faint, then the part before the playhead over it: clipPath `past`, its width to
+       a tenth */
+    if ((o = op(c, HOP_CHART, cb))) {
+        o->clip = o->r;
+        o->rgba = 0xFFFFFF00u | (uint32_t)lround(255.0 * num(c, Ln, "faint"));
+    }
+    past = box(cb.x, cb.y, fmax(0, fmin(W, to_fixed1(xph))), H);
+    if ((o = op(c, HOP_CHART, cb))) {
+        o->clip.x = (float)past.x; o->clip.y = (float)past.y; o->clip.w = (float)past.w; o->clip.h = (float)past.h;
+    }
+    line(c, cb, xph, Tp - num(c, Nw, "over"), xph, Tp + ph + num(c, Nw, "over"), num(c, Nw, "width"), ncol, 1);
+    clock_s(b, sizeof b, st->t);
+    text_at(c, b, cb, xph, Tp + ph + below, 1, asz, ncol, cb);
+
+    /* the legend, ranked by the value at the playhead; equal values keep the groups' order, as
+       JavaScript's sort does */
+    lx = W - Rl + num(c, Lg, "x") + num(c, Lg, "pad");
+    ly = Tp + num(c, Lg, "pad");
+    lw = Rl - num(c, Lg, "r") - 2 * num(c, Lg, "pad");
+    lh = ph - 2 * num(c, Lg, "pad");
+    for (g = 0; g < ng; g++) {
+        double vg = NS ? S->group[g].v[now] : 0;
+        for (k = g; k > 0 && (NS ? S->group[rank[k - 1]].v[now] : 0) < vg; k--) rank[k] = rank[k - 1];
+        rank[k] = g;
+    }
+    rh = fmin(num(c, Lg, "row"), ng ? lh / ng : HUGE_VAL);
+    fs = fmin(num(c, Lg, "size"), rh * num(c, Lg, "text_h"));
+    sw = num(c, Lg, "swatch");
+    sy = num(c, Lg, "swatch_y");
+    sh = num(c, Lg, "swatch_h");
+    tx = num(c, Lg, "text_x");
+    ty = num(c, Lg, "text_y");
+    th = num(c, Lg, "swatch_edge_w");
+    for (k = 0; k < ng; k++) {
+        const HUDGROUP* G = &S->group[rank[k]];
+        double yy = ly + k * rh;
+        R sb = box(cb.x + lx, cb.y + yy + rh * sy, sw, rh * sh);
+        solid(c, sb, G->colour, 1);
+        /* the stroke on the swatch's edge, half in and half out */
+        if (dark(c, G->colour, Ln)) ring(c, box(sb.x - th / 2, sb.y - th / 2, sb.w + th, sb.h + th), th, edge, 1);
+        text_at(c, G->name, cb, lx + tx, yy + rh * ty, 0, fs, hexrgb(str(c, Lg, "name")), cb);
+        stat_format(b, sizeof b, mk, NS ? G->v[now] : 0);
+        text_at(c, b, cb, lx + lw, yy + rh * ty, 2, fs, hexrgb(str(c, Lg, "value")), cb);
+    }
+#undef X
+#undef Y
+}
+
 /* ---- the toast: a short message in a dark box centred across the screen, above everything; the box
    is the layout's size, not the text's, since this file has no faces to measure text with ------- */
 
@@ -852,6 +1163,7 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
     if (err && errn) err[0] = 0;
     dock(&c);
     column(&c);
+    if (st->stats.open) window_(&c);
     if (st->toast[0]) toast(&c);
     return !c.bad;
 }
@@ -1012,6 +1324,11 @@ static int load_globals(HUDLAY* l, char* err, size_t errn)
     l->g.neg_rgb = hexrgb(str(&c, v, "neg"));
     l->g.track_ends = (float)num(&c, obj(&c, obj(&c, obj(&c, l->L, "dock"), "rail"), "track"), "ends");
     l->g.toast_ms = (unsigned)num(&c, obj(&c, l->L, "toast"), "ms");
+    v = obj(&c, l->L, "window");
+    l->g.win_w = (float)num(&c, v, "w");
+    l->g.win_h = (float)num(&c, v, "h");
+    l->g.win_x = (float)num(&c, v, "x");
+    l->g.win_y = (float)num(&c, v, "y");
     styles = obj(&c, l->L, "styles");
     for (s = styles ? styles->first : NULL; s && !c.bad; s = s->next) {
         struct HUDSTYLE* y;
@@ -1055,7 +1372,8 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
 
     /* Every branch once: teams with headers, a folded team, a lost commander, a player out of
        the game, each marker kind, a hovered row with Sight on, a held button, every toggle, a
-       toast, and a column too short for its items and scrolled, so the scroll bar is drawn. */
+       toast, the stats window with a dark line and a commander's cross, and a column too short
+       for its items and scrolled, so the scroll bar is drawn. */
     st->W = 1280; st->H = 720; st->panel = 128; st->top = 32; st->bottom = 32;
     st->t = 30; st->T = 60; st->playing = 1; st->speed = 1; st->hud = 1;
     st->nseat = HUD_MAXSEAT;
@@ -1075,6 +1393,19 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     for (i = 0; i < 3; i++) { st->mark[i].t = 10.0f * (float)i; st->mark[i].kind = i; st->mark[i].seat = i == 2 ? -1 : 1; }
     strcpy(st->held, "play");
     st->mx = 1280 - 8 - 250 + 125; st->my = 32 + 8 + 25 + 2 + 10;
+    st->stats.open = 1;
+    st->stats.x = 150; st->stats.y = 56;
+    strcpy(st->stats.measure, "metal");
+    st->stats.dt = 1;
+    st->stats.npt = 3;
+    st->stats.ngroup = 2;
+    for (i = 0; i < 2; i++) {
+        HUDGROUP* g = &st->stats.group[i];
+        snprintf(g->name, sizeof g->name, "P%d", i);
+        g->colour = i ? 0xFFFFFF : 0x202020;
+        g->death = i ? -1.0f : 1.0f;
+        g->v[0] = 1; g->v[1] = 2; g->v[2] = 3;
+    }
     if (!tagpu_hudlay_build(l, st, o, err, errn)) goto done;
     st->H = 300; st->scroll = 1;    /* the scroll bar */
     if (!tagpu_hudlay_build(l, st, o, err, errn)) goto done;

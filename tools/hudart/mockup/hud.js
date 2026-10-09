@@ -233,20 +233,22 @@ const HUD = (() => {
       Hv.button, { x: m + k * (bw + m), y: m, w: bw, h: b.h - 2 * m }, st, st[s.act] === p.i)).join('') + `</div>`;
   }
 
-  /* ---- the stats window: chips in two trays, the chart over the chart and legend recesses ---- */
+  /* ---- the stats window: chips in two trays, the chart over the chart and legend recesses. The window is the HUD's
+     whole, as the column is: a click on its body is taken and does nothing ---- */
+  const measure = k => L.window.measures.find(q => q.k === k) || L.window.measures[0];
   function windowHtml(st) {
-    const Wn = L.window, S = st.stats, F = frame(Wn.w, Wn.h, Wn.part), m = S.measure;
+    const Wn = L.window, S = st.stats, F = frame(Wn.w, Wn.h, Wn.part), m = measure(S.measure);
     const ch = Wn.chip, tray = s => place(F, { in: s.in });
     const chip = (b, label, on, data, off) => button({ act: 'chip', text: { ...ch.text, html: label }, data, off }, ch, b, st, on);
     let h = art(Wn.part, zero(Wn.w, Wn.h))
       + icon(Wn.grip.icon, place(F, Wn.grip)) + text(`Game stats · ${m.n} ${m.u}`, place(F, Wn.title), Wn.title.style, Wn.title)
-      + `<div class="box" data-drag style="${rect(place(F, { in: Wn.title.in }))};cursor:move"></div>`
+      + `<div class="box" data-act="drag" style="${rect(place(F, { in: Wn.title.in }))};cursor:move"></div>`
       + button({ act: Wn.close.act, icon: Wn.close.icon }, Wn.close, place(F, Wn.close), st);
     for (const s of Wn.trays) {
       const tb = tray(s);
       h += text(s.label, place(F, { ...Wn.label, in: s.in }), Wn.label.style, Wn.label);
       let x = tb.x + ch.start;
-      for (const q of st.measures.filter(q => q.g === s.group)) {
+      for (const q of Wn.measures.filter(q => q.g === s.group)) {
         const w = Wn.chips[q.k];
         h += chip({ x, y: tb.y + (tb.h - ch.h) / 2, w, h: ch.h }, q.n, q.k === m.k, { kind: 'measure', val: q.k });
         x += w + ch.gap;
@@ -265,34 +267,42 @@ const HUD = (() => {
     h += `<svg data-chart="${cb.w} ${cb.h} ${R}" viewBox="0 0 ${cb.w} ${cb.h}" style="position:absolute;${rect(cb)}">${chart(st, cb.w, cb.h, R)}</svg>`
       + text(`${m.n[0].toUpperCase() + m.n.slice(1)} ${m.u}&nbsp;·&nbsp;<span data-time>${clock(st.t)} / ${clock(st.T)}</span>`, place(F, Wn.foot), Wn.foot.style, Wn.foot);
     const x = Math.max(0, Math.min(st.W - Wn.w, S.x)), y = Math.max(0, Math.min(st.H - Wn.h, S.y)), [dy, blur, a] = Wn.shadow;
-    return `<div class="box" id="statwin" style="${rect({ x, y, w: Wn.w, h: Wn.h })};box-shadow:0 ${U(dy)} ${U(blur)} rgba(0,0,0,${a})">${h}</div>`;
+    return `<div class="box" id="statwin" data-act="${Wn.act}" style="${rect({ x, y, w: Wn.w, h: Wn.h })};box-shadow:0 ${U(dy)} ${U(blur)} rgba(0,0,0,${a})">${h}</div>`;
   }
 
-  /* ---- the chart: one line per player or team; the part after the playhead faint; the legend ranked at the playhead ---- */
+  /* a measure's value: metal income in tenths below 100, thousands in k from 10 000 on, whole numbers otherwise */
+  const statFormat = (k, v) => k === 'metal' && v < 100 ? v.toFixed(1) : v >= 10000 ? (v / 1000).toFixed(v >= 100000 ? 0 : 1) + 'k' : String(Math.round(v));
+
+  /* ---- the chart: one line per player or team; the part after the playhead faint; the legend ranked at the playhead.
+     Sample s is at t0 + s * dt seconds (st.stats.t0, .dt); the minute labels step by the first of axis.every that puts
+     them axis.space apart ---- */
   function chart(st, W, H, R) {
-    const C = L.chart, S = st.stats, G = S.groups, NS = G[0].v.length, DT = st.T / (NS - 1);
-    const Lp = C.plot.l, Tp = C.plot.t, pw = W - Lp - R, ph = H - Tp - C.plot.b, X = s => Lp + pw * s * DT / st.T, now = Math.min(NS - 1, Math.round(st.t / DT));
-    const max = nice(Math.max(...G.flatMap(g => g.v))), Y = v => Tp + ph * (1 - v / max), fv = v => S.format(v);
+    const C = L.chart, TS = L.styles[C.style], S = st.stats, G = S.groups, NS = G.length ? G[0].v.length : 0, DT = S.dt;
+    const Lp = C.plot.l, Tp = C.plot.t, pw = W - Lp - R, ph = H - Tp - C.plot.b, X = s => Lp + pw * (S.t0 + s * DT) / st.T;
+    const now = Math.max(0, Math.min(NS - 1, Math.round((st.t - S.t0) / DT)));
+    const max = nice(Math.max(...G.flatMap(g => g.v))), Y = v => Tp + ph * (1 - v / max), fv = v => statFormat(S.measure, v);
     const dark = c => { const n = parseInt(c.slice(1), 16); return .3 * (n >> 16) + .59 * ((n >> 8) & 255) + .11 * (n & 255) < C.line.dark; };
-    const tx = (x, y, s, o) => `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="${C.font}" font-weight="${C.weight}" letter-spacing="${C.spacing}em"${C.upper ? ' style="text-transform:uppercase"' : ''} ${o}>${s}</text>`;
+    const tx = (x, y, s, o) => `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="${TS.font}" font-weight="${TS.weight}" letter-spacing="${TS.spacing}em"${TS.upper ? ' style="text-transform:uppercase"' : ''} ${o}>${s}</text>`;
     const A = C.axis, xph = Lp + pw * st.t / st.T;
     let h = `<defs><clipPath id="past"><rect x="0" y="0" width="${xph.toFixed(1)}" height="${H}"/></clipPath></defs>`;
     [0, max / 2, max].forEach(v => { const y = Y(v);
       h += `<line x1="${Lp}" x2="${Lp + pw}" y1="${y}" y2="${y}" stroke="${C.grid.colour}" stroke-opacity="${C.grid.opacity}" stroke-width="${C.grid.width}"/>`
         + tx(Lp - A.gap, y + A.baseline, fv(v), `font-size="${A.size}" fill="${A.colour}" text-anchor="end"`); });
-    for (let t = 0; t <= st.T; t += A.every) h += tx(Lp + pw * t / st.T, Tp + ph + A.below, clock(t), `font-size="${A.size}" fill="${A.colour}" text-anchor="middle"`);
+    const step = A.every.find(e => pw * e / st.T >= A.space) || A.every[A.every.length - 1];
+    for (let t = 0; t <= st.T; t += step) h += tx(Lp + pw * t / st.T, Tp + ph + A.below, clock(t), `font-size="${A.size}" fill="${A.colour}" text-anchor="middle"`);
     const Ln = C.line, body = G.map(g => {
       const pts = g.v.map((v, s) => `${X(s).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
       let l = (dark(g.col) ? `<polyline points="${pts}" fill="none" stroke="${Ln.halo}" stroke-width="${Ln.width + 1}" stroke-opacity="${Ln.halo_opacity}"/>` : '')
         + `<polyline points="${pts}" fill="none" stroke="${g.col}" stroke-width="${Ln.width}" stroke-linejoin="round"/>`;
-      if (g.death != null) { const s = Math.round(g.death / DT), x = X(s), y = Y(g.v[s]), c = Ln.cross;
+      const s = g.death != null ? Math.round((g.death - S.t0) / DT) : -1;
+      if (s >= 0 && s < NS) { const x = X(s), y = Y(g.v[s]), c = Ln.cross;
         l += `<path d="M${x - c},${y - c}l${2 * c},${2 * c}m0,${-2 * c}l${-2 * c},${2 * c}" stroke="${dark(g.col) ? Ln.halo : g.col}" stroke-width="${Ln.cross_w}"/>`; }
       return l; }).join('');
     h += `<g opacity="${Ln.faint}">${body}</g><g clip-path="url(#past)">${body}</g>`
       + `<line x1="${xph}" x2="${xph}" y1="${Tp - C.now.over}" y2="${Tp + ph + C.now.over}" stroke="${C.now.colour}" stroke-width="${C.now.width}"/>`
       + tx(xph, Tp + ph + A.below, clock(st.t), `font-size="${A.size}" fill="${C.now.colour}" text-anchor="middle" font-weight="700"`);
     const Lg = C.legend, lx = W - R + Lg.x + Lg.pad, ly = Tp + Lg.pad, lw = R - Lg.r - 2 * Lg.pad, lh = ph - 2 * Lg.pad;
-    const ranked = G.map(g => ({ g, v: g.v[now] })).sort((a, b) => b.v - a.v), rh = Math.min(Lg.row, lh / ranked.length), fs = Math.min(Lg.size, rh * Lg.text_h);
+    const ranked = G.map(g => ({ g, v: NS ? g.v[now] : 0 })).sort((a, b) => b.v - a.v), rh = Math.min(Lg.row, lh / ranked.length), fs = Math.min(Lg.size, rh * Lg.text_h);
     return h + ranked.map((e, k) => { const yy = ly + k * rh;
       return `<rect x="${lx}" y="${yy + rh * Lg.swatch_y}" width="${Lg.swatch}" height="${rh * Lg.swatch_h}" fill="${e.g.col}" stroke="${dark(e.g.col) ? Lg.swatch_edge : 'none'}" stroke-width="${Lg.swatch_edge_w}"/>`
         + tx(lx + Lg.text_x, yy + rh * Lg.text_y, e.g.name, `font-size="${fs}" fill="${Lg.name}"`)

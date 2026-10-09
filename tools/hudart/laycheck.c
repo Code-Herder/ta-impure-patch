@@ -125,23 +125,51 @@ int main(int argc, char** argv)
     st->follow = (int)tj_num(tj_get(S, "follow"), -1);
     st->scroll = (int)tj_num(tj_get(S, "scroll"), 0);
     snprintf(st->toast, sizeof st->toast, "%s", tj_str(tj_get(S, "toast"), ""));
+    v = tj_get(S, "stats");
+    if (v) {
+        HUDSTATS* x = &st->stats;
+        x->open = tj_is(tj_get(v, "open"), TJ_TRUE);
+        x->x = (float)tj_num(tj_get(v, "x"), 0);
+        x->y = (float)tj_num(tj_get(v, "y"), 0);
+        snprintf(x->measure, sizeof x->measure, "%s", tj_str(tj_get(v, "measure"), ""));
+        x->team = !strcmp(tj_str(tj_get(v, "split"), ""), "team");
+        x->dt = (float)tj_num(tj_get(v, "dt"), 0);
+        x->t0 = (float)tj_num(tj_get(v, "t0"), 0);
+        e = tj_get(v, "groups");
+        for (e = e ? e->first : NULL; e && x->ngroup < HUD_MAXSEAT; e = e->next) {
+            HUDGROUP* g = &x->group[x->ngroup++];
+            const TJV* d = tj_get(e, "death");
+            const TJV* vs = tj_get(e, "v");
+            snprintf(g->name, sizeof g->name, "%s", tj_str(tj_get(e, "name"), ""));
+            g->colour = (uint32_t)strtoul(tj_str(tj_get(e, "col"), "#000000") + 1, NULL, 16);
+            g->death = tj_is(d, TJ_NUM) ? (float)d->num : -1.0f;
+            for (j = 0; vs && j < vs->n && j < HUD_MAXPT; j++) g->v[j] = (float)tj_num(tj_at(vs, j), 0);
+            x->npt = j;
+        }
+    }
 
     if (!tagpu_hudlay_build(l, st, o, err, sizeof err)) { fprintf(stderr, "laycheck: %s\n", err); return 1; }
     printf("{\"overflow\":%d,\"ops\":[\n", o->overflow);
     for (i = 0; i < o->n; i++) {
         const HUDOP* p = &o->op[i];
-        static const char* kinds[] = { "part", "solid", "dot", "text", "hot" };
+        static const char* kinds[] = { "part", "solid", "dot", "text", "hot", "line", "chart" };
+        const char* kind = p->kind == HOP_SOLID && (p->flags & HOPF_DROP) ? "shadow"
+                         : p->kind == HOP_TEXT && (p->flags & HOPF_BASE) ? "svgtext" : kinds[p->kind];
         printf("%s{\"kind\":\"%s\",\"x\":%.4f,\"y\":%.4f,\"w\":%.4f,\"h\":%.4f,\"dim\":%d,\"edge\":%d", i ? ",\n" : "",
-               kinds[p->kind], p->r.x, p->r.y, p->r.w, p->r.h, (p->flags & HOPF_DIM) != 0, (p->flags & HOPF_EDGE) != 0);
+               kind, p->r.x, p->r.y, p->r.w, p->r.h, (p->flags & HOPF_DIM) != 0, (p->flags & HOPF_EDGE) != 0);
+        if (p->flags & HOPF_DROP) printf(",\"dy\":%.4f,\"blur\":%.4f", p->size, p->shade);
+        if (p->kind == HOP_LINE || p->kind == HOP_CHART) printf(",\"rgba\":\"%08x\",\"width\":%.4f", p->rgba, p->size);
+        if (p->kind == HOP_CHART) printf(",\"clip\":[%.4f,%.4f,%.4f,%.4f]", p->clip.x, p->clip.y, p->clip.w, p->clip.h);
         if (p->kind == HOP_PART) {
             printf(",\"part\":"); json_str(tagpu_hudlay_part(l, p->part)->name, (int)strlen(tagpu_hudlay_part(l, p->part)->name));
             printf(",\"alpha\":%u", p->rgba & 0xFF);
         }
         if (p->kind == HOP_SOLID || p->kind == HOP_DOT) printf(",\"rgba\":\"%08x\"", p->rgba);
-        if (p->clip.w >= 0 && p->kind != HOP_TEXT) printf(",\"clip\":[%.4f,%.4f,%.4f,%.4f]", p->clip.x, p->clip.y, p->clip.w, p->clip.h);
+        if (p->clip.w >= 0 && p->kind != HOP_TEXT && p->kind != HOP_CHART) printf(",\"clip\":[%.4f,%.4f,%.4f,%.4f]", p->clip.x, p->clip.y, p->clip.w, p->clip.h);
         if (p->kind == HOP_TEXT) {
             const char* sn = tagpu_hudlay_globals(l)->style[p->style].name;
             printf(",\"style\":\"%s\",\"size\":%.4f,\"centre\":%d", sn, p->size, p->centre);
+            if (p->nrun) printf(",\"rgb\":\"%06x\"", o->run[p->run].rgb);
             /* the baseline at `px` a unit, from the face metrics the state carries per style */
             if (argc == 4) {
                 const TJV* fm = tj_get(tj_get(tagpu_json_root(sd), "faces"), sn);
@@ -165,6 +193,16 @@ int main(int argc, char** argv)
         if (p->kind == HOP_HOT) { printf(",\"key\":"); json_str(o->text + p->run, (int)strlen(o->text + p->run)); }
         putchar('}');
     }
-    printf("\n]}\n");
+    printf("\n],\"chart\":{\"n\":%d,\"npt\":%d,\"w\":%.4f,\"halo_w\":%.4f,\"groups\":[", o->chart.n, o->chart.npt,
+           o->chart.w, o->chart.halo_w);
+    for (i = 0; i < o->chart.n; i++) {
+        printf("%s{\"rgb\":\"%06x\",\"dark\":%d,\"cross\":", i ? "," : "", o->chart.g[i].rgb, o->chart.g[i].dark);
+        if (o->chart.g[i].cross) printf("[%.4f,%.4f]", o->chart.g[i].cx, o->chart.g[i].cy);
+        else printf("null");
+        printf(",\"pts\":[");
+        for (j = 0; j < o->chart.npt; j++) printf("%s[%.4f,%.4f]", j ? "," : "", o->chart.pt[i][j][0], o->chart.pt[i][j][1]);
+        printf("]}");
+    }
+    printf("]}}\n");
     return 0;
 }

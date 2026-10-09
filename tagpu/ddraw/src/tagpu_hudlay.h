@@ -46,6 +46,27 @@ const char* tagpu_hudlay_toggle_name(unsigned bit);
 
 #define HUD_TOASTLEN 64
 
+/* THE STATS WINDOW (hud.js `windowHtml`, `chart`): its place, its measure and its split as the
+   input keeps them, and the groups the host made of the samples -- one per player, or one per
+   team summed -- as index.html's `state()` makes them. */
+#define HUD_MAXPT    512        /* a group's samples: TAGPU_PK_HUD_POINTS                     */
+#define HUD_MEASURE  12         /* a measure's key, layout.json window.measures `k`            */
+typedef struct {
+    char     name[32];          /* UTF-8 */
+    uint32_t colour;            /* 0xRRGGBB */
+    float    death;             /* the commander's death, seconds: a cross on the line; < 0 none */
+    float    v[HUD_MAXPT];
+} HUDGROUP;
+typedef struct {
+    int      open;
+    float    x, y;              /* the window's top left as asked; the build keeps it on screen */
+    char     measure[HUD_MEASURE];
+    int      team;              /* the groups are the teams: `teams` is the split pressed       */
+    float    dt, t0;            /* sample s is at t0 + s * dt seconds                           */
+    int      npt, ngroup;
+    HUDGROUP group[HUD_MAXSEAT];
+} HUDSTATS;
+
 typedef struct {
     float    W, H;                  /* the screen                                            */
     float    panel, top, bottom;    /* the engine's frame: side panel width, bar heights     */
@@ -68,13 +89,22 @@ typedef struct {
                                        full map and the free camera                          */
     int      scroll;                /* the column's first item; held to its last in the build */
     char     toast[HUD_TOASTLEN];   /* UTF-8; "" = none                                       */
+    HUDSTATS stats;
 } HUDSTATE;
 
-/* What to draw, in paint order, and where a click lands. */
-enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT };
+/* What to draw, in paint order, and where a click lands.
+     HOP_LINE   a straight stroke with butt ends, from (r.x, r.y) to (r.x + r.w, r.y + r.h), `size`
+                units wide: an SVG <line>;
+     HOP_CHART  the chart's lines (HUDOPS `chart`) in the box r, every group composited in order
+                and the whole at the op's opacity: an SVG <g opacity> of polylines. */
+enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART };
 #define HOPF_DIM    1u      /* the dim filter of a player who is out (layout.json `dim`) */
 #define HOPF_SHADE  2u      /* HOP_SOLID: an inner shadow `shade` units deep, black 55 % */
 #define HOPF_EDGE   4u      /* HOP_SOLID: one side of an inset edge, the mockup's box-shadow */
+#define HOPF_DROP   8u      /* HOP_SOLID: CSS box-shadow 0 `size` `shade` round the box r, in the
+                               op's colour, painted outside r only */
+#define HOPF_BASE   16u     /* HOP_TEXT: an SVG <text>, r.x its anchor and r.y its baseline;
+                               `centre` is its text-anchor, 0 start, 1 middle, 2 end */
 
 typedef struct {
     uint8_t  kind, flags;
@@ -91,6 +121,18 @@ typedef struct {
 
 typedef struct { uint32_t rgb; int resource; uint16_t off, len; } HUDRUN;   /* rgb: 0 = the style's */
 
+/* The chart's lines, in units from the screen's top left, for the HOP_CHART ops that draw them:
+   each group a polyline `w` wide, under it a halo `halo_w` wide when its colour is dark, and the
+   cross of its commander's death, two strokes `cross_w` wide `cross` from its centre. */
+typedef struct {
+    int      n, npt;
+    float    w, halo_w, cross, cross_w;
+    uint32_t halo_rgb;
+    float    halo_a;
+    struct { uint32_t rgb; int dark, cross; float cx, cy; } g[HUD_MAXSEAT];
+    float    pt[HUD_MAXSEAT][HUD_MAXPT][2];
+} HUDCHART;
+
 #define HUD_MAXOP   4096
 #define HUD_MAXRUN  2048
 #define HUD_TEXTMAX 32768
@@ -101,6 +143,7 @@ typedef struct {
     int     first, last;    /* the column's first item as drawn, and the greatest it can be:
                                the scroll the state asked for, held to [0, last]           */
     float   track_x0, track_x1; /* the playhead's run along the timeline, start to end     */
+    HUDCHART chart;
     HUDOP   op[HUD_MAXOP];
     HUDRUN  run[HUD_MAXRUN];
     char    text[HUD_TEXTMAX];
@@ -123,6 +166,7 @@ typedef struct {
 
 typedef struct {
     float press_shift;
+    float win_w, win_h, win_x, win_y;   /* the stats window's size and its first place       */
     float track_ends;               /* the playhead's inset at each end of the track      */
     unsigned toast_ms;              /* how long a toast shows                             */
     float dim_brightness, dim_saturate;
@@ -159,7 +203,7 @@ const HUDGLOBALS* tagpu_hudlay_globals(const HUDLAY* l);
 int               tagpu_hudlay_nparts(const HUDLAY* l);
 const HUDPART*    tagpu_hudlay_part(const HUDLAY* l, int i);
 
-/* The ops for state `st`, into `out` (about 400 KB: never on a stack). Returns 0 when a field
+/* The ops for state `st`, into `out` (about 500 KB: never on a stack). Returns 0 when a field
    the rules read is missing, which tagpu_hudlay_load has already ruled out for every branch. */
 int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* err, size_t errn);
 

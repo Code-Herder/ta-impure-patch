@@ -20,7 +20,8 @@
   "face_num_sm": {"font": "Barlow Condensed", "weight": 600, "size": 7.5,  "colour": "#e2dcb0", "upper": true,  "spacing": 0.02, "outline": [0.25, 0.3, -0.2, -0.2]},
   "face_xs":     {"font": "Oswald",           "weight": 500, "size": 6.3,  "colour": "#e2dcb0", "upper": true,  "spacing": 0.05, "outline": [0.25, 0.3, -0.2, -0.2]},
   "face_chip":   {"font": "Oswald",           "weight": 500, "size": 6.8,  "colour": "#e2dcb0", "upper": true,  "spacing": 0.05, "outline": [0.25, 0.3, -0.2, -0.2]},
-  "toast":       {"font": "Oswald",           "weight": 700, "size": 10,   "colour": "#e2dcb0", "upper": false, "spacing": 0,    "shadow": 0}
+  "toast":       {"font": "Oswald",           "weight": 700, "size": 10,   "colour": "#e2dcb0", "upper": false, "spacing": 0,    "shadow": 0},
+  "chart":       {"font": "Barlow Condensed", "weight": 600, "size": 6.5,  "colour": "#8a93a8", "upper": true,  "spacing": 0.03, "shadow": 0}
  },
 
  "toast": {"top": 0.07, "w": 150, "h": 18, "bg": "#080a06", "alpha": 0.86, "edge": 0.25, "edge_colour": "#4a4c3c", "style": "toast", "ms": 1800},
@@ -57,7 +58,7 @@
   "foot": {"part": "foot_one", "w": 204, "h": 35, "gap": 6,
    "button": {"pad": [0.5, 0.5, 0.5, 0.5], "part": "bay_button", "pressed": "bay_button_down"},
    "buttons": [
-    {"in": "bay_stats",      "act": "stats",      "toggle": "stats",      "off": 0.45, "icon": {"name": "stats", "w": 17, "h": 17}},
+    {"in": "bay_stats",      "act": "stats",      "toggle": "stats",      "icon": {"name": "stats", "w": 17, "h": 17}},
     {"in": "bay_cursors",    "act": "cursors",    "toggle": "cursors",    "icon": {"name": "cursors", "w": 17, "h": 17}},
     {"in": "bay_clicks",     "act": "clicks",     "toggle": "clicks",     "icon": {"name": "clicks", "w": 17, "h": 17}},
     {"in": "bay_selections", "act": "selections", "toggle": "selections", "icon": {"name": "selections", "w": 17, "h": 17}},
@@ -103,7 +104,11 @@
  },
 
  "window": {
-  "part": "win_one", "w": 428, "h": 272, "x": 150, "y": 56, "shadow": [4, 18, 0.6],
+  "part": "win_one", "w": 428, "h": 272, "x": 150, "y": 56, "shadow": [4, 18, 0.6], "act": "window",
+  "measures": [{"k": "metal", "g": "eco", "n": "metal income", "u": "per second"}, {"k": "energy", "g": "eco", "n": "energy income", "u": "per second"},
+               {"k": "units", "g": "army", "n": "units", "u": "owned"}, {"k": "army", "g": "army", "n": "army value", "u": "metal"},
+               {"k": "kills", "g": "army", "n": "kills", "u": "so far"}, {"k": "losses", "g": "army", "n": "losses", "u": "so far"},
+               {"k": "excess", "g": "eco", "n": "wasted metal", "u": "total"}],
   "grip":  {"in": "title", "pad": [3, 0, 0, 0], "w": 10, "h": 10, "ax": "l", "icon": "grip"},
   "title": {"in": "title", "pad": [16, 0, 2, 0], "bind": "measure", "style": "title"},
   "close": {"in": "close", "pad": [0.5, 0.5, 0.5, 0.5], "act": "close", "part": "close_face", "pressed": "close_face_down", "icon": {"name": "close", "padf": 0.22}},
@@ -117,12 +122,13 @@
  },
 
  "chart": {
-  "font": "Barlow Condensed", "weight": 600, "upper": true, "spacing": 0.03,
+  "style": "chart",
+  "teams": ["#e0c060", "#60b8e0", "#e07878", "#80d070", "#b090e0"],
   "plot": {"l": 28, "t": 5, "b": 13},
-  "axis": {"size": 6.5, "colour": "#8a93a8", "gap": 3, "baseline": 2.4, "below": 9, "every": 30},
+  "axis": {"size": 6.5, "colour": "#8a93a8", "gap": 3, "baseline": 2.4, "below": 9, "every": [30, 60, 120, 300, 600, 900, 1800, 3600], "space": 22},
   "grid": {"colour": "#7a8cb0", "opacity": 0.25, "width": 0.5},
   "now": {"colour": "#f0c850", "width": 0.9, "over": 2},
   "line": {"width": 1.1, "faint": 0.28, "dark": 60, "halo": "#9aa2b4", "halo_opacity": 0.6, "cross": 2.5, "cross_w": 1},
-  "legend": {"pad": 2, "x": 8, "r": 10, "row": 10, "swatch": 4, "swatch_y": 0.18, "swatch_h": 0.64, "swatch_edge": "#888", "swatch_edge_w": 0.4, "text_x": 7, "text_y": 0.72, "text_h": 0.8, "size": 7, "name": "#d8d8d8", "value": "#e8e8e8"}
+  "legend": {"pad": 2, "x": 8, "r": 10, "row": 10, "swatch": 4, "swatch_y": 0.18, "swatch_h": 0.64, "swatch_edge": "#888888", "swatch_edge_w": 0.4, "text_x": 7, "text_y": 0.72, "text_h": 0.8, "size": 7, "name": "#d8d8d8", "value": "#e8e8e8"}
  }
 }

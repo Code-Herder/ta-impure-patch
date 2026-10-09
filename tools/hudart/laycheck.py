@@ -49,7 +49,15 @@ CASES = [
     ("4k-150-2v1v1", "res=3840x2160&game=150&hud=150&np=4&nt=3&t=60&stat=0&paused", None, ""),
     ("4k-150-scrolled-toast", "res=3840x2160&game=150&hud=150&np=14&nt=2&t=70&stat=0&paused&scroll=3&toast=Camera%20was%20not%20recorded", None, ""),
     ("1440-75-sight-follow", "res=2560x1440&game=200&hud=75&np=8&nt=2&t=90&stat=0&paused&sight=0&follow=0", "row0", ""),
+    ("4k-150-stats-units", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&stat=1&sm=units&ss=player&paused", None, ""),
+    ("1440-75-stats-teams-metal", "res=2560x1440&game=200&hud=75&np=8&nt=2&t=90&stat=1&sm=metal&ss=team&paused", None, ""),
+    ("1080-100-stats-ffa-army-held", "res=1920x1080&game=off&hud=100&np=6&nt=6&t=20&stat=1&sm=army&ss=team&paused", None, "close"),
+    ("4k-auto-stats-16-excess-start", "res=3840x2160&game=auto&hud=150&np=16&nt=4&t=0&stat=1&sm=excess&ss=player&paused", None, ""),
+    ("4k-150-stats-clamped-energy", "res=3840x2160&game=150&hud=100&np=4&nt=2&t=132&stat=1&sm=energy&ss=player&paused&sx=2000&sy=-40", None, ""),
 ]
+# a chart point is a float in the game and a double in the mockup, and both write it to a tenth: one
+# within 1e-5 of a tenth's half can round either way, so a point may differ by that tenth
+TOL_POINT = 0.1
 
 # the mockup's state and boxes, in units from the stage's top left
 COLLECT = r"""() => {
@@ -77,7 +85,7 @@ COLLECT = r"""() => {
       els.push({ kind: 'part', part, r: R(e), dim, alpha: Math.round(255 * a) });
     }
     if (e.dataset.act && !e.classList.contains('off')) {   // a disabled control takes no input
-      const k = e.dataset.act + (e.dataset.team != null ? ':' + e.dataset.team : e.dataset.seat != null ? ':' + e.dataset.seat : '');
+      const k = e.dataset.act + (e.dataset.val != null ? ':' + e.dataset.val : e.dataset.team != null ? ':' + e.dataset.team : e.dataset.seat != null ? ':' + e.dataset.seat : '');
       els.push({ kind: 'hot', key: k, r: R(e) });
     }
     if (e.dataset.track != null) els.push({ kind: 'hot', key: 'track', r: R(e) });
@@ -102,7 +110,42 @@ COLLECT = r"""() => {
       els.push({ kind: e.style.borderRadius ? 'dot' : 'solid', rgb: c, r: R(e), dim });
     }
   }
-  return JSON.stringify({ state: st, els, u });
+  // the stats window's drop shadow, and the chart: its SVG's own numbers, in units from its origin
+  const win = document.querySelector('#statwin');
+  if (win) {
+    const m = getComputedStyle(win).boxShadow.match(/rgba?\(([^)]*)\)\s+(-?[\d.]+)px\s+(-?[\d.]+)px\s+([\d.]+)px/);
+    if (m) els.push({ kind: 'shadow', r: R(win), dy: +m[3] / u, blur: +m[4] / u, alpha: Math.round(255 * +(m[1].split(',')[3] || 1)) });
+  }
+  const hex = c => { const n = parseInt(c.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
+  const chart = { groups: [] };
+  for (const svg of document.querySelectorAll('#hud-layer svg[data-chart]')) {
+    const o = R(svg), A = (e, k) => +e.getAttribute(k);
+    const [faint, past] = svg.querySelectorAll(':scope > g'), cw = A(svg.querySelector('clipPath rect'), 'width');
+    els.push({ kind: 'chart', r: o, alpha: Math.round(255 * +faint.getAttribute('opacity')), clip: o });
+    els.push({ kind: 'chart', r: o, alpha: 255, clip: [o[0], o[1], Math.max(0, Math.min(o[2], cw)), o[3]] });
+    for (const l of svg.querySelectorAll(':scope > line'))
+      els.push({ kind: 'line', rgb: hex(l.getAttribute('stroke')), alpha: Math.round(255 * +(l.getAttribute('stroke-opacity') || 1)), width: A(l, 'stroke-width'),
+                 r: [o[0] + A(l, 'x1'), o[1] + A(l, 'y1'), A(l, 'x2') - A(l, 'x1'), A(l, 'y2') - A(l, 'y1')] });
+    for (const t of svg.querySelectorAll(':scope > text'))
+      els.push({ kind: 'svgtext', text: t.textContent, r: [o[0] + A(t, 'x'), o[1] + A(t, 'y'), 0, 0], size: A(t, 'font-size'),
+                 anchor: { start: 0, middle: 1, end: 2 }[t.getAttribute('text-anchor') || 'start'], rgb: hex(t.getAttribute('fill')) });
+    for (const r of svg.querySelectorAll(':scope > rect'))
+      els.push({ kind: 'solid', rgb: hex(r.getAttribute('fill')), r: [o[0] + A(r, 'x'), o[1] + A(r, 'y'), A(r, 'width'), A(r, 'height')], dim: false });
+    // the body, in paint order: a group's halo (a dark colour's), its line, its cross
+    let halo = false;
+    for (const e of faint.children) {
+      if (e.tagName === 'polyline' && !e.getAttribute('stroke-linejoin')) halo = true;
+      else if (e.tagName === 'polyline') {
+        chart.groups.push({ rgb: hex(e.getAttribute('stroke')), dark: halo, cross: null,
+                            pts: e.getAttribute('points').split(' ').filter(Boolean).map(q => q.split(',').map(Number)).map(([x, y]) => [o[0] + x, o[1] + y]) });
+        halo = false;
+      } else if (e.tagName === 'path') {
+        const [x, y] = e.getAttribute('d').slice(1).split('l')[0].split(',').map(Number), c = HUD.layout.chart.line.cross;
+        chart.groups[chart.groups.length - 1].cross = [o[0] + x + c, o[1] + y + c];
+      }
+    }
+  }
+  return JSON.stringify({ state: st, els, u, chart });
 }"""
 
 
@@ -222,19 +265,22 @@ def main():
                 keep.mkdir(parents=True, exist_ok=True)
                 (keep / f"{name}.dom.json").write_text(json.dumps(dom, indent=1))
                 (keep / f"{name}.ops.json").write_text(r.stdout)
-            cs = {"part": [], "text": [], "solid": [], "dot": [], "hot": [], "clip": []}
+            cs = {"part": [], "text": [], "solid": [], "dot": [], "hot": [], "clip": [], "svgtext": [], "line": [], "chart": [], "shadow": []}
             for o in ops["ops"]:
                 o["r"] = [o["x"], o["y"], o["w"], o["h"]]
                 if o.get("edge"):
                     continue                      # an inset edge: a box-shadow in the mockup
                 cs[o["kind"]].append(o)
-                if "clip" in o:
+                if "clip" in o and o["kind"] != "chart":     # a chart's clip is compared with its op
                     cs["clip"].append({"r": o["clip"]})
             ds = {k: [e for e in dom["els"] if e["kind"] == k] for k in cs}
             keys = {"part": lambda e: e["part"], "text": lambda e: e["text"], "hot": lambda e: e["key"],
                     "solid": lambda e: tuple(e["rgb"]) if "rgb" in e else tuple(int(e["rgba"][i:i + 2], 16) for i in (0, 2, 4)),
                     "dot": lambda e: tuple(e["rgb"]) if "rgb" in e else tuple(int(e["rgba"][i:i + 2], 16) for i in (0, 2, 4)),
-                    "clip": lambda e: 0}
+                    "clip": lambda e: 0, "shadow": lambda e: 0,
+                    "svgtext": lambda e: e["text"],
+                    "line": lambda e: tuple(e["rgb"]) if "rgb" in e else tuple(int(e["rgba"][i:i + 2], 16) for i in (0, 2, 4)),
+                    "chart": lambda e: e["alpha"] if "alpha" in e else int(e["rgba"][6:8], 16)}
             TOL = TOL_CSS / dom["u"]
             print(f"{name}: {len(ops['ops'])} ops, {len(dom['els'])} mockup elements, tolerance {TOL:.3f} units")
             for k in cs:
@@ -267,6 +313,25 @@ def main():
                         bad += 1
                         for c, d in sorted(rule, key=lambda p: -abs(p[0]["base"] - p[1]["base"]))[:3]:
                             print(f"        {c['text']!r} ({c['style']}): baseline DLL {c['base']:.3f} mockup {d['base']:.3f}")
+                if k == "svgtext":
+                    # the anchor, the size and the colour as well as the point
+                    att = sum(1 for c, d in pairs if c["centre"] != d["anchor"] or abs(c["size"] - d["size"]) > TOL
+                              or c["rgb"] != "%02x%02x%02x" % tuple(d["rgb"]))
+                    extra += f", anchor/size/colour disagree {att}" if att else ""
+                    bad += att
+                if k == "line":
+                    att = sum(1 for c, d in pairs if abs(c["width"] - d["width"]) > TOL or abs(int(c["rgba"][6:8], 16) - d["alpha"]) > 1)
+                    extra += f", width/opacity disagree {att}" if att else ""
+                    bad += att
+                if k == "chart":
+                    cw = max((max(abs(a - b) for a, b in zip(c["clip"], d["clip"])) for c, d in pairs), default=0)
+                    extra += f", clip within {cw:.4f}"
+                    bad += cw > TOL
+                if k == "shadow":
+                    att = sum(1 for c, d in pairs if abs(c["dy"] - d["dy"]) > TOL or abs(c["blur"] - d["blur"]) > TOL
+                              or abs(int(c["rgba"][6:8], 16) - d["alpha"]) > 1)
+                    extra += f", offset/blur/opacity disagree {att}" if att else ""
+                    bad += att
                 if k in ("part", "text", "solid"):
                     dm = sum(1 for c, d in pairs if bool(c.get("dim")) != bool(d.get("dim")))
                     extra += f", dim disagrees {dm}" if dm else ""
@@ -285,6 +350,23 @@ def main():
                 for c, d in sorted(pairs, key=lambda p: -max(abs(a - b) for a, b in zip(p[0]['r'], p[1]['r'])))[:3]:
                     if max(abs(a - b) for a, b in zip(c["r"], d["r"])) > TOL:
                         print(f"        {keys[k](c)!r}: DLL {[round(v, 3) for v in c['r']]} mockup {[round(v, 3) for v in d['r']]}")
+            # the chart's lines, group by group in paint order: colour, halo, every point, the cross
+            cg, dg = ops["chart"]["groups"], dom["chart"]["groups"]
+            if cg or dg:
+                worst, att = 0, 0
+                if len(cg) != len(dg):
+                    att += 1
+                for c, d in zip(cg, dg):
+                    att += c["rgb"] != "%02x%02x%02x" % tuple(d["rgb"]) or bool(c["dark"]) != d["dark"] or len(c["pts"]) != len(d["pts"])
+                    att += (c["cross"] is None) != (d["cross"] is None)
+                    if c["cross"] and d["cross"]:
+                        worst = max(worst, *(abs(a - b) for a, b in zip(c["cross"], d["cross"])))
+                    for a, b in zip(c["pts"], d["pts"]):
+                        worst = max(worst, abs(a[0] - b[0]), abs(a[1] - b[1]))
+                flag = " <-- DIFFERS" if att or worst > TOL_POINT + TOL else ""
+                bad += bool(att) or worst > TOL_POINT + TOL
+                print(f"  lines {len(cg):4d} groups, {sum(len(c['pts']) for c in cg)} points, worst {worst:.4f} units"
+                      f"{f', {att} disagree in colour, halo, length or cross' if att else ''}{flag}")
     finally:
         httpd.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)

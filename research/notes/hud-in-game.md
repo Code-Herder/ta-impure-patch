@@ -505,8 +505,31 @@ and Leave, answered Yes through `tacli ui`.
    composite's shader, whose uniform block is now 80 bytes, and the `OP_FLIP` words that carried
    their scale) and the lever deleted. `tacli hud` and the W lane drive it. Checked as *Status*
    says (2026-10-09).
-3. **The stats window.** It needs a per-second stats track the recorder does not write yet, so it
-   follows a recorder landing. Its button is drawn disabled until then.
+3. **The stats window** — in progress. No recorder track: every measure is in the recorded
+   images already, so the marker walker samples them as it walks the timeline (*The stats*).
+   The parts:
+   - **The samples.** The walker records, every period, each player's metal and energy income
+     (`+0x9C`, `+0x90`), wasted metal (`+0xD4`), units (`+0x144`), kills (`+0xFC`), losses
+     (`+0xFE`) and army value: the metal cost (`def+0x18A`) of every finished unit (`+0x104`
+     0.0) whose type moves (`def+0x22F` = 1, the engine's own test at `0x4862CF`) and is not a
+     commander (`def+0x245` bit `0x40000`) — the owner's choice of 2026-10-09. The per-type
+     values are copied from the engine's table on the game thread before the walker starts. The
+     period is a whole number of seconds chosen from the recording's span so that it fits 512
+     samples.
+   - **The packet.** The window's state in `TAGPU_PK_HUD`, and while it is open one more area
+     with the chosen measure's samples per seat; the render thread groups them into players or
+     teams as the mockup's host does.
+   - **The layout.** hud.js's `windowHtml` and `chart` in C, with the measures, the team colours
+     and the chart's text style moved into `layout.json` so the two read one source. New ops: an
+     antialiased line, the chart's lines as one op the fragment stage composites per pixel (the
+     SVG's group opacity, exactly), a text placed on a baseline at an anchor, and the window's
+     drop shadow.
+   - **The input.** The stats button, close, the measure and split chips, the title drag and the
+     window's plate. The position, the measure and the split are kept for the session, never in
+     `impure.cfg`, and the window is closed at every replay's start (the owner's choice of
+     2026-10-09).
+   - **The checks.** laycheck cases with the window open, the dump carrying the stats so the
+     mockup draws the game's chart, and `tacli hud` driving the chips and the drag.
 
 Each landing is reviewed at `high`: it adds a pass and a hand-over between the game thread and
 the render thread.
