@@ -48,13 +48,18 @@ int tagpu_recmp_identity_read(const void* bytes, unsigned size, const GUID* matc
    inside this open (retail+tadr1, prota-4.8; MEASURED 2026-10-09); which call jumped there
    is not established. So the system DirectPlay is loaded by its full path, and a full path
    names a file, not a module: on Windows the rule that a loaded module of the same name
-   wins applies only to a name without a path (the DLL search order), and under Wine the
+   wins applies only to a name without a path (the DLL search order) [INFERRED from the
+   loader's documented rules; not measured on Windows], and under Wine the
    full-path load returns the system module beside the stand-in the exe has bound (MEASURED
    2026-10-09, both setups' host and joiner: `recmp: private channel on
    C:\windows\system32\dplayx.dll`, then the session open), as the takeover's forwarders
    already load it (tagpu_takeover.c, dp_proc). The module loaded is checked anyway: one whose
    file is in the game's folder is refused, and the open fails, logged, which refuses
-   multiplayer recording while the game plays on. */
+   multiplayer recording while the game plays on.
+   THE RESIDUAL: DirectPlay loads its TCP/IP service provider itself, by the name its registry
+   entry gives [INFERRED: `dpwsockx.dll`, a bare name], so a game folder shipping that file
+   would shadow it as the stand-ins shadowed dplayx. No setup the compatibility suite runs
+   ships one (checked 2026-10-09). */
 static HMODULE system_dplay(HRESULT* hr)
 {
     wchar_t path[MAX_PATH], got[MAX_PATH], exe[MAX_PATH];

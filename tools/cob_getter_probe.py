@@ -272,7 +272,7 @@ def enter_skirmish(name, failure_path=None):
             ui = compat.tacli("ui", name, timeout=20).stdout
             if compat.IN_GAME_PANEL.search((ui.splitlines() or [""])[0]):
                 return
-            result = compat.tacli("ui", name, "click", gadget, timeout=60)
+            result = compat.tacli("ui", name, "click", gadget, timeout=150)
             if result.returncode == 0:
                 break
             if time.monotonic() >= deadline:

@@ -289,6 +289,12 @@ def stop_xvfb(p):
         p.wait()
 
 
+# tacli's own wait on an input batch is bounded at its KEYS_STALL_S + KEYS_ABANDON_S (90 s): it
+# abandons a stalled batch itself, which lets its keys up. A caller's timeout under that kills
+# tacli first and leaves the batch standing, so every input call keeps at least this.
+INPUT_TIMEOUT = 150
+
+
 def tacli(*args, timeout=180):
     r = subprocess.run([sys.executable, str(TACLI), *map(str, args)], capture_output=True,
                        text=True, timeout=timeout)
@@ -402,12 +408,12 @@ class Worker:
             ui_on(self, "MAINMENU.GUI", 30)
             gui = "MAINMENU.GUI"
         if gui == "MAINMENU.GUI":
-            rc, text = tacli("ui", self.name, "click", "EXIT", "--timeout", 5, timeout=30)
+            rc, text = tacli("ui", self.name, "click", "EXIT", "--timeout", 5, timeout=INPUT_TIMEOUT)
             if rc and self.running():
                 raise CouldNotRun(f"the main menu's exit: {last(text)}")
         elif gui in ("ARMMAIN2.GUI", "CORMAIN2.GUI", "ARMOPT.GUI"):
             if gui != "ARMOPT.GUI":
-                rc, text = tacli("keys", self.name, "tab", timeout=60)
+                rc, text = tacli("keys", self.name, "tab", timeout=INPUT_TIMEOUT)
                 if rc:
                     raise CouldNotRun(f"the exit's options: {last(text)}")
             ui(self, "click", "EXIT")
@@ -415,7 +421,7 @@ class Worker:
             ui_on(self, "YESORNO.GUI", 30)
             # the Yes ends the process, which can take the key's release with it: the batch then
             # fails with the game gone, which is this step's success
-            rc, text = tacli("keys", self.name, "y", timeout=60)
+            rc, text = tacli("keys", self.name, "y", timeout=INPUT_TIMEOUT)
             if rc and self.running():
                 raise CouldNotRun(f"the exit's Yes: {last(text)}")
         else:
@@ -962,7 +968,7 @@ def twin(w, log, fix, held=False):
         raise CouldNotRun("the twin: frame dump ln2 not taken in 30 s")
     if w.gametime() != g1:
         raise CouldNotRun("the twin: GameTime moved between its dumps")
-    rc, o = tacli("ui", w.name, "click", "OK", timeout=60)
+    rc, o = tacli("ui", w.name, "click", "OK", timeout=INPUT_TIMEOUT)
     if rc:
         raise CouldNotRun(f"the twin: the in-game menu's OK: {last(o)}")
     nap(1.5)
@@ -1370,7 +1376,8 @@ def in_world(w, timeout):
 
 def hud(w, *args, timeout=60):
     """`tacli hud`: the replay HUD's controls, clicked in device space where the game drew them."""
-    rc, o = tacli("hud", w.name, *args, "--timeout", timeout, timeout=timeout + 30)
+    rc, o = tacli("hud", w.name, *args, "--timeout", timeout,
+               timeout=timeout + INPUT_TIMEOUT)
     if rc:
         raise CouldNotRun(f"tacli hud {' '.join(map(str, args))}: {last(o)}")
     return o
@@ -1530,7 +1537,7 @@ def watch_lane(w, fx, rec, out, T):
     ceil1, live1 = peek(w, SPEED_CEIL), peek(w, SPEED_LIVE)
     if ceil1 == ceil0 or ceil1 not in (5, 10, 20, 40, 80) or live1 != ceil1:
         raise Failed(f"the HUD's speed: {ceil0} became ceiling {ceil1}, live {live1}")
-    rc, o = tacli("keys", w.name, "tab", timeout=60)
+    rc, o = tacli("keys", w.name, "tab", timeout=INPUT_TIMEOUT)
     if rc:
         raise CouldNotRun(f"tacli keys tab: {last(o)}")
     ui_on(w, "ARMOPT.GUI", 20)

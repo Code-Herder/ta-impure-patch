@@ -367,6 +367,13 @@ class Batching(unittest.TestCase):
         tokens = ["char:x"] * 300
         self.assertEqual(" ".join(tacli._key_batches(tokens)).split(), tokens)
 
+    def test_hud_wheel_is_split_at_64_notches(self):
+        self.assertEqual(tacli._dwheel_tokens(1, 2, 150),
+                         ["dwheel:1,2,64", "dwheel:1,2,64", "dwheel:1,2,22"])
+        self.assertEqual(tacli._dwheel_tokens(1, 2, -128), ["dwheel:1,2,-64"] * 2)
+        self.assertEqual(tacli._dwheel_tokens(1, 2, -3), ["dwheel:1,2,-3"])
+        self.assertEqual(tacli._dwheel_tokens(1, 2, 0), ["dwheel:1,2,0"])
+
     def test_events_are_counted_as_the_dll_parses_them(self):
         counts = {"pclick:10,20": 4, "prclick:1,2": 4, "dclick:3,4": 4, "click:5,6": 4,
                   "pmove:1,2": 1, "mouse:3,4": 1, "dmove:5,6": 1, "mouserel:-1,2": 1,

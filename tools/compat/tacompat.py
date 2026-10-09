@@ -944,11 +944,11 @@ def hud_deselect(name, display, where: Path) -> dict:
     # The left click aims elsewhere: under the right-click layout the right click was a move
     # order to its own point, and the commander may be standing on it three seconds later.
     try:
-        tacli("keys", name, "ctrl+c", timeout=20)
+        tacli("keys", name, "ctrl+c", timeout=150)   # past tacli's own 90 s input bound
         time.sleep(3)
         sel = capture("selected")
         for click in (["--right", name, "700", "600"], [name, "900", "400"]):
-            tacli("click", *click, timeout=20)
+            tacli("click", *click, timeout=150)
             time.sleep(3)
             desel = capture("deselected")
             opened = hud_strip_diff(sel[1], desel[1])

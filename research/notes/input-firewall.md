@@ -86,8 +86,9 @@ was.
 
 **No clock decides a live game's outcome; a stall ends by abandon.** `tacli keys` waits for the
 done line as long as the DLL's queue moves: every `taken`, `progress` or end line of any batch
-restarts its 60-second bound, so a slow game, a long batch or a click whose handler starts a
-level load is waited out. It fails at once on `REFUSED`, and when the game exits. Every pop in
+restarts its 60-second bound, so a slow game and a long batch are waited out; a click whose
+handler starts a level load is waited out while the load lasts under 60 s, since the event stays undelivered
+through a synchronous load and `waiting` does not restart the bound. It fails at once on `REFUSED`, and when the game exits. Every pop in
 the engine is conditional, though: in the message-box loop `0x49F9C0` (`MSGBOX.GUI`, its one
 caller) a press outside the box's panel is never popped, and in game a key would wait while the
 in-game key pass is skipped and the GUI pump does not take it. Then nothing moves for 60 s, and

@@ -2110,6 +2110,15 @@ KEYS_ABANDON_S = 30.0
 _KEY_CLICKS = ("click", "rclick", "pclick", "prclick", "dclick", "drclick")
 
 
+def _dwheel_tokens(x: int, y: int, n: int) -> list:
+    """`dwheel:` tokens for n notches at a device point: tagpu_input.c takes at most 64 a token,
+    and each token moves to the point first, so the split changes nothing the engine sees."""
+    step = 64 if n > 0 else -64
+    full, rest = divmod(abs(n), 64)
+    return [f"dwheel:{x},{y},{step}"] * full + ([f"dwheel:{x},{y},{n - step * full}"]
+                                                 if rest or not n else [])
+
+
 def _token_events(tok: str) -> int:
     """How many events tagpu_input.c's parse_token makes of one token with the shield armed,
     the most it can make: armed, a click is move, press, release and the park; disarmed, one
@@ -2436,9 +2445,11 @@ def cmd_hud(args):
             die(f"usage: hud <name> {verb} <key>" + (" <notches>" if verb == "wheel" else ""))
         d, r = _hud_find(inst, rest[0], tmo)
         x, y = _hud_centre(r)
-        token = {"click": f"{'drclick' if args.right else 'dclick'}:{x},{y}",
-                 "hover": f"dmove:{x},{y}",
-                 "wheel": f"dwheel:{x},{y},{int(rest[1]) if verb == 'wheel' else 0}"}[verb]
+        if verb == "wheel":
+            token = " ".join(_dwheel_tokens(x, y, int(rest[1])))
+        else:
+            token = {"click": f"{'drclick' if args.right else 'dclick'}:{x},{y}",
+                     "hover": f"dmove:{x},{y}"}[verb]
         _write_tokens(inst, token)
         out({"name": args.name, "key": rest[0], "at": [x, y], "token": token}, args.json,
             human=f"{verb} {rest[0]} at {x},{y}")

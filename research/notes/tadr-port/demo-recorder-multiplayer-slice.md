@@ -436,14 +436,19 @@ prota-4.8 crashed on both peers at EIP 0 inside the open, before `recmp: isolate
 session open` (MEASURED 2026-10-09 under Wine; plain retail, with no stand-in, opened
 at the same commit; which call jumped to 0 was not established). A full path names a
 file: on Windows the rule that an already-loaded module of the same name wins is the
-search order's, for a name without a path, and under Wine the full-path load returns
+search order's, for a name without a path [INFERRED from the loader's documented rules; not
+measured on Windows], and under Wine the full-path load returns
 the system module beside the stand-in the exe has bound -- MEASURED 2026-10-09 on both
 setups' host and joiner, `recmp: private channel on C:\windows\system32\dplayx.dll`
 and then `recmp: isolated session open`, the takeover having logged the exe's
 DirectPlay slots pointed at Windows' own. The adapter still checks the module it got:
 one whose file is in the game's folder is refused, the open fails at `native library`
 (logged), and the worker's failure refuses multiplayer recording while the game plays
-on. That refusal path is the one every failed open takes; it was not provoked here. Worker discovery retries are installed; cross-address discovery, host migration and production terminal manifests remain unverified.
+on. That refusal path is the one every failed open takes; it was not provoked here.
+DirectPlay loads its TCP/IP service provider itself, by the name its registry entry gives
+[INFERRED: `dpwsockx.dll`, a bare name], so a game folder that shipped that file would
+shadow it as the stand-ins shadowed dplayx; no setup the compatibility suite runs ships
+one (checked 2026-10-09). Worker discovery retries are installed; cross-address discovery, host migration and production terminal manifests remain unverified.
 
 The SDK's [GetPlayerAddress contract](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpref_7jqx.content.htm)
 allows several local network addresses and returns both text forms. The first

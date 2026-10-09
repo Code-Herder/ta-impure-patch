@@ -141,8 +141,9 @@ class Check:
             self._resume()
 
     def call(self, command, *args):
+        # past tacli's own 90 s bound on an input batch, so tacli abandons a stalled one itself
         r = subprocess.run([sys.executable, str(TACLI), command, self.name, *map(str, args)],
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True, timeout=150)
         assert r.returncode == 0, r.stdout + r.stderr
         return json.loads(r.stdout) if "--json" in args else r.stdout
 

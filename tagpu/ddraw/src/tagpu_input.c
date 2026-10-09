@@ -193,7 +193,10 @@ static void si_mouse(const TAGPU_FRAME* f, int gx, int gy, DWORD buttons)
    has stopped advancing). The batch ends ABANDONED, and every key and button its posted events
    left down gets an up, posted like any event, so the shield's virtual state holds no key the
    batch pressed. The engine keeps the record it would not pop, so the next batch waits on that
-   ring until the engine pops it.
+   ring until the engine pops it -- and handles it then under the modifiers of that moment: the
+   ups are dispatched before the next IdleTick, so a stalled `ctrl+d` whose `d` is still in the
+   key ring is acted on later as a plain `d`. A batch REFUSED after it posted events lets its
+   keys up the same way.
 
    THE RESIDUAL: the in-game setup's flush 0x4C2BB0 (its one call, 0x426636) empties the mouse
    ring without handling it, so an event in flight across a level's start would be acknowledged
@@ -553,6 +556,8 @@ static int event_vk(const InEvent* e, int* up)
     return 0;
 }
 
+static void release_held(HWND w, char* rel, int cap);
+
 /* The next event posted; 0 when it could not be, and the batch is refused. */
 static int post_next(HWND w)
 {
@@ -570,11 +575,14 @@ static int post_next(HWND w)
         break;
     }
     if (!ok) {
-        char b[160];
+        char b[160], rel[256];
+        DWORD err = GetLastError();
         _snprintf(b, sizeof b, "event %u/%u %.64s could not be posted (error %lu)",
-                  s_qi + 1, s_qn, s_text + s_tok[e->tok], (unsigned long)GetLastError());
+                  s_qi + 1, s_qn, s_text + s_tok[e->tok], (unsigned long)err);
         b[sizeof b - 1] = 0;
-        refuse(b);
+        release_held(w, rel, sizeof rel);       /* what its posted events left down */
+        tagpu_logf("input: batch %s REFUSED: %s; released%s", s_id, b, rel);
+        finish();
         return 0;
     }
     if ((vk = event_vk(e, &up)) > 0 && vk < 256) s_held[vk] = (unsigned char)!up;
@@ -600,9 +608,9 @@ static void report(int mp, int kp)
     if (done > s_reported)
         tagpu_logf("input: batch %s progress: %u/%u events consumed", s_id, done, s_qn);
     else
-        tagpu_logf("input: batch %s waiting: event %u/%u %s delivered=%d mouse=%d key=%d",
-                   s_id, done + 1, s_qn, s_text + s_tok[s_q[done].tok],
-                   s_inflight && s_delivered, mp, kp);
+        tagpu_logf("input: batch %s waiting%s: event %u/%u %s delivered=%d mouse=%d key=%d",
+                   s_id, s_withhold ? " (" STALL_LEVER ")" : "", done + 1, s_qn,
+                   s_text + s_tok[s_q[done].tok], s_inflight && s_delivered, mp, kp);
     s_reported = done;
 }
 
@@ -632,12 +640,11 @@ static void advance(HWND w)
    left down, through the shield like any event but with sequence number 0, which is never the
    one in flight, so its delivery acknowledges nothing. They queue behind whatever is still
    undelivered, the event in flight included, so each up follows its down. */
-static void abandon(HWND w)
+/* An up for every key and button the batch's posted events left down, posted like any event, so
+   the shield's virtual state holds none the batch pressed; their list, for the log line. */
+static void release_held(HWND w, char* rel, int cap)
 {
-    char rel[256];
-    int mp = -1, kp = -1, vk, len = 0;
-    unsigned at = consumed();
-    if (!tagpu_gui_input_rings(&mp, &kp)) mp = kp = -1;
+    int vk, len = 0;
     rel[0] = 0;
     for (vk = 1; vk < 256; vk++) {
         int code, ok;
@@ -645,12 +652,22 @@ static void abandon(HWND w)
         code = button_code(vk, 1);
         ok = code >= 0 ? tagpu_shield_mouse(w, code, TAGPU_M_HERE, TAGPU_M_HERE, 0)
                        : tagpu_shield_key(w, vk, TRUE, 0);
-        if (len < (int)sizeof rel - 24)
-            len += _snprintf(rel + len, sizeof rel - len, " 0x%02X%s", vk, ok ? "" : " (not posted)");
+        if (len < cap - 24)
+            len += _snprintf(rel + len, cap - len, " 0x%02X%s", vk, ok ? "" : " (not posted)");
     }
-    tagpu_logf("input: batch %s ABANDONED: event %u/%u %s mouse=%d key=%d; released%s",
-               s_id, at + 1, s_qn, at < s_qn ? s_text + s_tok[s_q[at].tok] : "-", mp, kp,
-               len ? rel : " nothing");
+    if (!len) lstrcpynA(rel, " nothing", cap);
+}
+
+static void abandon(HWND w)
+{
+    char rel[256];
+    int mp = -1, kp = -1;
+    unsigned at = consumed();
+    if (!tagpu_gui_input_rings(&mp, &kp)) mp = kp = -1;
+    release_held(w, rel, sizeof rel);
+    tagpu_logf("input: batch %s ABANDONED%s: event %u/%u %s mouse=%d key=%d; released%s",
+               s_id, s_withhold ? " (" STALL_LEVER ")" : "", at + 1, s_qn,
+               at < s_qn ? s_text + s_tok[s_q[at].tok] : "-", mp, kp, rel);
     finish();
 }
 
