@@ -5,9 +5,9 @@
      * a part is premultiplied (tagpu_hudart.c) and blended ONE, ONE_MINUS_SRC_ALPHA;
      * a box's edges fall where its fractional edges round, as Chrome snaps a background to
        device pixels: the rasteriser's pixel-centre rule does that for a quad;
-     * text sits on a baseline at its box's centre plus (ascent - descent) / 2 em, which is
-       where `display: flex; align-items: center; line-height: 1` puts it; the baseline is
-       rounded to a whole pixel and the pen keeps its fraction, as Skia draws horizontal text;
+     * text sits on the baseline `display: flex; align-items: center; line-height: 1` gives it,
+       with Blink's roundings (tagpu_hudlay_baseline); the baseline is rounded to a whole pixel
+       and the pen keeps its fraction, as Skia draws horizontal text;
      * `letter-spacing` follows every character, the last included, so a centred string is
        centred with its trailing space, as Chrome centres it;
      * a drop shadow (`text-shadow: 0 s 0 rgba(0,0,0,.8)`) and the four-copy outline are the
@@ -303,7 +303,8 @@ static void text(B* c, const HUDOP* op)
         width += sc * (float)adv + sp;
     }
     x = op->r.x * c->px + (op->centre ? (op->r.w * c->px - width) / 2 : 0);
-    base = floorf(op->r.y * c->px + op->r.h * c->px / 2 + (f->ascent - f->descent) / 2 * size + 0.5f);
+    /* Chrome's baseline (tagpu_hudlay_baseline), painted on a whole pixel */
+    base = floorf(tagpu_hudlay_baseline(op->r.y * c->px, op->r.h * c->px, size, f->ascent, f->descent) + 0.5f);
 
     /* the copies under the text, then the text */
     copies = 0;
@@ -347,7 +348,7 @@ int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, float px, int ox, 
 {
     B c;
     int i, j, n;
-    HUDQUAD q[16];
+    HUDQUAD q[HUD_MAXQUAD];
     if (s_full) atlas_empty();
     memset(&c, 0, sizeof c);
     c.art = art; c.ops = ops; c.px = px; c.ox = (float)ox; c.oy = (float)oy; c.W = (float)w; c.H = (float)h;
@@ -357,7 +358,7 @@ int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, float px, int ox, 
         HUDINST* in;
         switch (op->kind) {
         case HOP_PART:
-            n = tagpu_hudlay_expand(art->lay, op, px, q, 16);
+            n = tagpu_hudlay_expand(art->lay, op, px, q, HUD_MAXQUAD);
             for (j = 0; j < n; j++) {
                 if (!(in = emit(&c, op->part, HUDM_PART, q[j].x0, q[j].y0, q[j].x1, q[j].y1, op))) break;
                 in->uv[0] = q[j].u0; in->uv[1] = q[j].v0; in->uv[2] = q[j].u1; in->uv[3] = q[j].v1;

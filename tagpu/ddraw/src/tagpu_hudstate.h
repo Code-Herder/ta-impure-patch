@@ -15,8 +15,9 @@
 struct TAGPU_FRAME;
 
 /* `tagpu_replayhud.on`: the replay HUD is drawn in place of the watching dock and the player
-   cards. Read once, the first time anything asks; a number in the file (75, 100, 125, 150) is
-   the HUD's scale, ahead of the settings store's. Game thread. */
+   cards. Read once, the first time anything asks; `scale=N` in the file (75, 100, 125, 150) is
+   the HUD's scale, ahead of the settings store's, as tagpu_hud.on carries the game's. Game
+   thread. */
 int  tagpu_hudstate_on(void);
 
 /* The packet's HUD record for this draw, GameTime `now`: 1 when a recording plays and the HUD is

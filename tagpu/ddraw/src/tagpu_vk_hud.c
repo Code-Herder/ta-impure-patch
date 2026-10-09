@@ -84,7 +84,8 @@ static VkDescriptorPool      s_dpool;
 static VkSampler             s_clamp, s_repeat, s_glyph;
 static TEX                   s_part[MAXPART], s_atlas;
 static int                   s_nparts;
-static int                   s_sent;            /* every part uploaded and its chain blitted */
+static int                   s_nsent;           /* the parts uploaded and their chains blitted */
+static int                   s_sent;            /* all of them                                 */
 static unsigned              s_agen;            /* the atlas generation the device holds; 0 none */
 static VkBuffer              s_ibuf;
 static VkDeviceMemory        s_imem;
@@ -458,7 +459,7 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
     if (vkMapMemory(d->dev, s_imem, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS) return 0;
     s_imap = (unsigned char*)p;
 
-    s_sent = 0;
+    s_nsent = s_sent = 0;
     s_agen = 0;
     plog(d, "hud: the pass is up - %d parts, a %dx%d glyph atlas, %u frame slots",
          s_nparts, HUD_ATLAS, HUD_ATLAS, (unsigned)d->slots);
@@ -467,15 +468,22 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
 
 /* ---- the uploads ----------------------------------------------------------------------------- */
 
-/* Every part, whole, then its chain. 1 done, 0 not this frame (no staging), -1 the device. */
+/* The parts, whole, each followed by its chain, from where the last frame stopped: 23 MB of
+   them against a slot's 2 MiB, so they take a dozen frames, and the HUD draws once the last is
+   there. A part that would not fit what this frame's buffer has left waits for the next frame,
+   where it is the first copy: in the frame's own command buffer when it fits the slot's whole
+   buffer, banded when it does not -- the three largest parts, uploaded once after the pass is
+   built, which is the banded path's own event (tagpu_vk_stage.h). 1 all sent, 0 more next
+   frame, -1 the device. */
 static int send_parts(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st, const HUDART* art)
 {
-    int i;
-    for (i = 0; i < s_nparts; i++) {
-        const HUDIMG* im = &art->img[i];
-        int r = tagpu_vk_stage_copy(d, cb, st, s_part[i].img, 0, im->rgba, im->w * 4, im->w, im->h, 4);
+    for (; s_nsent < s_nparts; s_nsent++) {
+        const HUDIMG* im = &art->img[s_nsent];
+        int r;
+        if (st->used && !tagpu_vk_stage_fits(st, (VkDeviceSize)im->w * im->h * 4)) return 0;
+        r = tagpu_vk_stage_copy(d, cb, st, s_part[s_nsent].img, 0, im->rgba, im->w * 4, im->w, im->h, 4);
         if (r <= 0) return r;
-        blit_chain(cb, &s_part[i]);
+        blit_chain(cb, &s_part[s_nsent]);
     }
     return 1;
 }
@@ -492,6 +500,8 @@ static int send_atlas(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* 
     VkBufferImageCopy rg;
 
     if (gen != s_agen) {
+        /* the first copy of its frame, as a part's is: 4 MiB, banded */
+        if (st->used) return 0;
         r = tagpu_vk_stage_copy(d, cb, st, s_atlas.img, s_agen != 0, a, HUD_ATLAS, HUD_ATLAS, HUD_ATLAS, 1);
         if (r > 0) { s_agen = gen; tagpu_huddraw_atlas_sent(); }
         return r;
@@ -595,7 +605,13 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (!s_sent || !s_agen) { s_ninst = 0; return 0; }
     return s_ninst > 0;
 lost:
-    plog(d, "hud: the device failed an upload - the pass comes down");
+    /* THE DEVICE FAILED A SUBMIT OR A FENCE partway (tagpu_vk_stage.h): an image is half written
+       and the banded path's resources may still be in flight, so the pass stops drawing and asks
+       for nothing more. Nothing is destroyed here, mid-frame, where other slots' submits still
+       name these objects: tagpu_vk_hud_down gives them back behind the seam's vkDeviceWaitIdle
+       on the seam's next teardown (vk_down, passes_down), and leaves the pass UNBUILT to come back. */
+    plog(d, "hud: the device failed an upload - the pass stops drawing until the passes are rebuilt");
+    s_state = ST_REFUSED;
     s_ninst = 0;
     return 0;
 }
@@ -649,7 +665,7 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     if (s_imap)  { vkUnmapMemory(dev, s_imem); s_imap = NULL; }
     if (s_ibuf)  { vkDestroyBuffer(dev, s_ibuf, NULL); s_ibuf = VK_NULL_HANDLE; }
     if (s_imem)  { vkFreeMemory(dev, s_imem, NULL); s_imem = VK_NULL_HANDLE; }
-    s_sent = 0;
+    s_nsent = s_sent = 0;
     s_agen = 0;
     s_ninst = s_nbatch = 0;
     /* UNBUILT, not REFUSED: a teardown or a resize must let the pass come back */

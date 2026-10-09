@@ -7,7 +7,9 @@ The inputs are the Google Fonts releases (github.com/google/fonts, ofl/oswald an
 ofl/barlowcondensed). Oswald is a variable font; the HUD draws it at weights 500 and 700, so
 each is instanced to a static face, the outlines the browser draws at those weights. Every face
 is then cut down to the characters the HUD can draw -- ASCII, Latin-1 (players' names) and the
-four signs its strings use, U+00B7, U+00D7, U+03A3, U+2212 -- keeping its kerning and its names.
+three signs its strings use, U+00B7, U+00D7, U+2212 -- keeping its kerning and its names. A
+character the source face lacks stops the cut: neither family has Greek, which is why the team
+header's unit total carries no sigma.
 The hinting goes: the DLL's rasteriser (stb_truetype) does not read it.
 
 Needs fontTools, which the shared venv carries. The OFL asks for each family's copyright notice
@@ -21,10 +23,15 @@ from fontTools.ttLib import TTFont
 from fontTools.varLib import instancer
 
 OUT = Path(__file__).resolve().parents[2] / "art" / "hud" / "fonts"
-TEXT = "".join(map(chr, range(0x20, 0x7F))) + "".join(map(chr, range(0xA0, 0x100))) + "·×Σ−"
+# Latin-1 without the soft hyphen, which Oswald lacks and which the DLL writes as '-' (tagpu_hudstate.c)
+TEXT = "".join(map(chr, range(0x20, 0x7F))) + "".join(chr(c) for c in range(0xA0, 0x100) if c != 0xAD) + "·×−"
 
 
 def cut(font, out):
+    cmap = font.getBestCmap()
+    missing = [f"U+{ord(c):04X}" for c in TEXT if ord(c) not in cmap]
+    if missing:
+        sys.exit(f"{out.name}: the source face lacks {', '.join(missing)}")
     o = subset.Options()
     o.layout_features = ["kern"]
     o.name_IDs = ["*"]

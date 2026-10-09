@@ -55,10 +55,10 @@ static int png_size(void* ctx, const char* part, int* w, int* h)
 /* ---- the faces ---------------------------------------------------------------------------------
 
    A style names a family and a weight; its face is fonts/<family, lower case, no spaces>-<weight>
-   .ttf. THE LINE'S METRICS ARE THE BROWSER'S: with line-height 1, the mockup's text sits on a
-   baseline at the box's centre plus (ascent - descent) / 2 em, from the OS/2 table's typo metrics
-   when the face sets USE_TYPO_METRICS (fsSelection bit 7) and from hhea otherwise -- the rule
-   Chrome follows. Both faces of 2026-10-08 set the bit and carry equal values in both tables. */
+   .ttf. THE LINE'S METRICS ARE THE BROWSER'S: the ascent and descent tagpu_hudlay_baseline places
+   a line by come from the OS/2 table's typo metrics when the face sets USE_TYPO_METRICS
+   (fsSelection bit 7) and from hhea otherwise -- the rule Chrome follows. The faces of 2026-10-08
+   set the bit and carry equal values in both tables. */
 static int face_open(HUDFACE* f, char* err, size_t errn)
 {
     size_t n;

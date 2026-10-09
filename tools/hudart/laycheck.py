@@ -7,16 +7,25 @@ For each case below it opens the mockup in a headless browser (playwright-cli, a
 does), takes the mockup's own state and every element's box in HUD units, runs laycheck.c --
 tagpu_hudlay.c compiled natively -- on the same state, and pairs the two sides element by element:
 every part by name, every text by its string, every solid fill by its colour, every clickable by
-its key. It prints the worst difference per kind and every element only one side has, and exits 1
-when a box differs by more than TOL units or an element is unmatched.
+its key, and every text's baseline -- the browser's, measured with a probe on the text's own line,
+against tagpu_hudlay_baseline from the faces' metrics. It prints the worst difference per kind and
+every element only one side has, and exits 1 when a box or a baseline differs by more than TOL
+units or an element is unmatched.
+
+A baseline that differs where Chrome rounds the face's ascent or descent to another whole pixel than
+round(em x size) does is named, not failed: the line rule is the one checked, and Chrome's rounding
+of Oswald's 1.193 em ascent departs from the plain one at about one size in three hundred by an
+arithmetic not identified (hud-layout.md, "Text").
 
 The standard library, gcc and playwright-cli; it serves the repository root itself.
 """
 import http.server
 import json
+import math
 import os
 import shutil
 import socketserver
+import struct
 import subprocess
 import sys
 import tempfile
@@ -50,7 +59,7 @@ COLLECT = r"""() => {
     row.querySelector('.hov').style.display = 'block';
     st.mx = r[0] + r[2] / 2; st.my = r[1] + r[3] / 2;
   }
-  const els = [];
+  const els = [], ctx = document.createElement('canvas').getContext('2d');
   for (const e of document.querySelectorAll('#hud-layer *')) {
     if (!e.getClientRects().length) continue;
     const dim = !!(e.closest('.row') && e.closest('.row').style.filter);
@@ -65,8 +74,20 @@ COLLECT = r"""() => {
     }
     if (e.dataset.track != null) els.push({ kind: 'hot', key: 'track', r: R(e) });
     if (e.classList.contains('clip')) els.push({ kind: 'clip', r: R(e) });
-    if (e.classList.contains('t')) els.push({ kind: 'text', text: e.textContent, r: R(e), dim,
-      size: parseFloat(getComputedStyle(e).fontSize) / u });
+    if (e.classList.contains('t')) {
+      // the baseline: an empty inline-block on the text's own line sits on it (the text and the probe
+      // wrapped in one span, which takes the anonymous flex item's place and lays out as it does)
+      const keep = e.innerHTML;
+      e.innerHTML = '<span>' + keep + '<i style="display:inline-block;width:0;height:0"></i></span>';
+      const base = (e.querySelector('span > i:last-child').getBoundingClientRect().bottom - s.top) / u;
+      e.innerHTML = keep;
+      // the face's ascent and descent as Blink rounds them, in CSS pixels
+      const cs = getComputedStyle(e);
+      ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      const fm = ctx.measureText('M');
+      els.push({ kind: 'text', text: e.textContent, r: R(e), dim, size: parseFloat(cs.fontSize) / u, base,
+                 asc: fm.fontBoundingBoxAscent, desc: fm.fontBoundingBoxDescent });
+    }
     const bg = e.style.background || e.style.backgroundColor;
     if (bg && !e.classList.contains('art')) {
       const c = getComputedStyle(e).backgroundColor.match(/\d+/g).slice(0, 3).map(Number);
@@ -75,6 +96,26 @@ COLLECT = r"""() => {
   }
   return JSON.stringify({ state: st, els, u });
 }"""
+
+
+def face_metrics():
+    """Each text style's ascent and descent in em, descent positive, read from its face as
+    tagpu_hudart.c face_open reads them: OS/2's typo metrics when the face sets USE_TYPO_METRICS,
+    hhea's otherwise."""
+    lay = json.loads((ROOT / "art/hud/layout.json").read_text())
+    out = {}
+    for name, st in lay["styles"].items():
+        b = (ROOT / "art/hud/fonts" / f"{st['font'].lower().replace(' ', '')}-{st['weight']}.ttf").read_bytes()
+        tab = {b[12 + 16 * i:16 + 16 * i].decode("latin-1"): struct.unpack(">I", b[20 + 16 * i:24 + 16 * i])[0]
+               for i in range(struct.unpack(">H", b[4:6])[0])}
+        upem = struct.unpack(">H", b[tab["head"] + 18:tab["head"] + 20])[0]
+        os2 = tab.get("OS/2")
+        if os2 is not None and struct.unpack(">H", b[os2 + 62:os2 + 64])[0] & 0x80:
+            asc, desc = struct.unpack(">hh", b[os2 + 68:os2 + 72])
+        else:
+            asc, desc = struct.unpack(">hh", b[tab["hhea"] + 4:tab["hhea"] + 8])
+        out[name] = [asc / upem, -desc / upem]
+    return out
 
 
 def result(out):
@@ -157,13 +198,15 @@ def main():
     if cc.returncode:
         sys.exit("laycheck: the native build failed\n" + cc.stderr)
     httpd = serve()
+    faces = face_metrics()
     bad = 0
     try:
         for name, query, hover, held in CASES:
             dom = mockup(httpd.server_address[1], query, hover, held, tmp)
             sp = tmp / f"{name}.state.json"
-            sp.write_text(json.dumps(dom["state"]))
-            r = subprocess.run([str(exe), str(ROOT / "art/hud"), str(sp)], capture_output=True, text=True)
+            sp.write_text(json.dumps({**dom["state"], "faces": faces}))
+            # the baseline is computed at the mockup's CSS pixels, the grid Blink rounds a face's metrics to
+            r = subprocess.run([str(exe), str(ROOT / "art/hud"), str(sp), repr(dom["u"])], capture_output=True, text=True)
             if r.returncode:
                 sys.exit(f"laycheck: {name}: {r.stderr}")
             ops = json.loads(r.stdout)
@@ -192,9 +235,23 @@ def main():
                 extra = ""
                 if k == "text":
                     sz = max((abs(c["size"] - d["size"]) for c, d in pairs), default=0)
-                    extra = f", size within {sz:.4f}"
-                    if sz > TOL:
+                    def chrome_rounds(c, d):
+                        """Chrome's whole-pixel ascent or descent is not round(em x size)."""
+                        s = d["size"] * dom["u"]
+                        a, de = faces[c["style"]]
+                        return (math.floor(a * s + 0.5), math.floor(de * s + 0.5)) != (d["asc"], d["desc"])
+                    off = [(c, d) for c, d in pairs if abs(c["base"] - d["base"]) > TOL]
+                    metric = [(c, d) for c, d in off if chrome_rounds(c, d)]
+                    rule = [(c, d) for c, d in off if not chrome_rounds(c, d)]
+                    bl = max((abs(c["base"] - d["base"]) for c, d in pairs if (c, d) not in metric), default=0)
+                    extra = f", size within {sz:.4f}, baseline within {bl:.4f}"
+                    if metric:
+                        sizes = sorted({(c["style"], round(d["size"] * dom["u"], 4)) for c, d in metric})
+                        extra += f", Chrome's metric rounding moves {len(metric)} by a pixel at {sizes}"
+                    if sz > TOL or rule:
                         bad += 1
+                        for c, d in sorted(rule, key=lambda p: -abs(p[0]["base"] - p[1]["base"]))[:3]:
+                            print(f"        {c['text']!r} ({c['style']}): baseline DLL {c['base']:.3f} mockup {d['base']:.3f}")
                 if k in ("part", "text", "solid"):
                     dm = sum(1 for c, d in pairs if bool(c.get("dim")) != bool(d.get("dim")))
                     extra += f", dim disagrees {dm}" if dm else ""

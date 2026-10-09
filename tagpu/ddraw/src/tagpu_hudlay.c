@@ -342,6 +342,18 @@ static void jsnum(char* o, size_t n, double v)
     if (v == floor(v) && fabs(v) < 1e15) snprintf(o, n, "%.0f", v);
     else snprintf(o, n, "%.15g", v);
 }
+/* JavaScript's Math.round: the nearer integer, the larger on a tie (x - floor(x) is exact) */
+static double js_round(double x)
+{
+    double f = floor(x);
+    return x - f >= 0.5 ? f + 1 : f;
+}
+/* hud.js rate: a row's rate in tenths below 100, as the game's incomes are fractional, whole
+   numbers from there */
+static void rate(char* o, size_t n, double v)
+{
+    jsnum(o, n, fabs(v) < 100 ? js_round(v * 10) / 10 : js_round(v));
+}
 /* JavaScript's x.toFixed(1): the n / 10 nearest x's exact value, the larger on a tie. Each fma
    rounds once, which cannot change the sign of an exact difference, so the comparisons are
    exact where x * 10 or x * 20 computed directly would not be. */
@@ -596,10 +608,10 @@ static void header(C* c, int t, double ox, double oy)
     snprintf(s, sizeof s, "Team %d \xC2\xB7 %d/%d cmdrs", t + 1, alive, nm);   /* U+00B7 MIDDLE DOT */
     p = spec(ti);
     text(c, s, at(place(c, &f, &p), ox, oy), str(c, ti, "style"), &p, 0, 0);
+    /* the team's units, a bare number as a row's are: the faces carry no Greek, so no sigma */
     k1(a, sizeof a, units);
-    snprintf(s, sizeof s, "\xCE\xA3 %s", a);                                     /* U+03A3 SIGMA */
     p = spec(sm);
-    text(c, s, at(place(c, &f, &p), ox, oy), str(c, sm, "style"), &p, 0, 0);
+    text(c, a, at(place(c, &f, &p), ox, oy), str(c, sm, "style"), &p, 0, 0);
     for (i = 0; lines && i < lines->n; i++) {
         const TJV* l = tj_at(lines, i);
         const char* res = str(c, l, "res");
@@ -688,8 +700,8 @@ static void row(C* c, int seat, double ox, double oy)
             fr = mx > 0 ? to_fixed1(100 * fmin(1, v / mx)) / 100 : 0;
             solid(c, box(bb.x, bb.y, bb.w * fr, bb.h), c->l->g.res_rgb[e], 1);
         }
-        jsnum(a, sizeof a, e ? q->ei : q->mi);
-        jsnum(b, sizeof b, e ? q->eo : q->mo);
+        rate(a, sizeof a, e ? q->ei : q->mi);
+        rate(b, sizeof b, e ? q->eo : q->mo);
         p = spec(inc); pl_in(&p, tj_get(l, "inc"));
         signed_text(c, a, b, at(place(c, &f, &p), ox, oy), str(c, inc, "style"), &p);
     }
@@ -755,6 +767,12 @@ int tagpu_hudlay_hit(const HUDOPS* ops, float x, float y, char* key, size_t keyn
    in units unless the box is smaller than both together, when all four shrink by one factor;
    a tiled fill scaled to its height and repeated along x at a whole-pixel period; an icon kept
    to its aspect and centred. */
+float tagpu_hudlay_baseline(float y, float h, float size, float asc, float desc)
+{
+    float A = floorf(asc * size + 0.5f), D = floorf(desc * size + 0.5f);
+    return y + (h - size) / 2 + A + floorf((size - A - D) / 2);
+}
+
 int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, int cap)
 {
     const HUDPART* k;

@@ -104,6 +104,8 @@ const HUD = (() => {
   }
   const signed = (a, b) => { const g = L.signs; return `<b style="color:${g.pos};font-weight:${g.weight}">+${a}</b>&nbsp;/&nbsp;<b style="color:${g.neg};font-weight:${g.weight}">−${b}</b>`; };
   const k1 = n => Math.round(n).toLocaleString('en');
+  // a row's rate: tenths below 100, as the game's incomes are fractional, whole numbers from there
+  const rate = n => String(Math.abs(n) < 100 ? Math.round(n * 10) / 10 : Math.round(n));
   // the header's sums: thousands in K from 10 000 on, so a ten-player team's income still fits its recess
   const kK = n => n >= 10000 ? (n / 1000).toFixed(0) + 'K' : k1(n);
   const clock = t => { t = Math.max(0, Math.round(t)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
@@ -183,7 +185,7 @@ const HUD = (() => {
     return `<div class="box hot" data-act="${Hd.act}" data-team="${t}" style="${rect({ x: 0, y, w: W, h: Hd.h })}">` + art(Hd.part, zero(W, Hd.h))
       + icon(fold ? Hd.fold.closed : Hd.fold.open, place(F, Hd.fold))
       + text(`Team ${t + 1} · ${sum.alive}/${m.length} cmdrs`, place(F, Hd.title), Hd.title.style, Hd.title)
-      + text(`Σ ${k1(sum.units)}`, place(F, Hd.sum), Hd.sum.style, Hd.sum)
+      + text(k1(sum.units), place(F, Hd.sum), Hd.sum.style, Hd.sum)   // a bare number, as a row's: the faces carry no Greek
       + Hd.lines.map(l => text(l.res.toUpperCase(), place(F, { ...Hd.letter, in: l.in }), Hd.letter.style, Hd.letter, L.resource[l.res])
         + text(signed(kK(inc(l.res + 'i')), kK(inc(l.res + 'o'))), place(F, { ...Hd.value, in: l.in }), Hd.value.style, Hd.value)).join('') + `</div>`;
   }
@@ -202,8 +204,8 @@ const HUD = (() => {
       h += text(l.res.toUpperCase(), lb, Rw.letter.style, Rw.letter, L.resource[l.res])
         + text(`${k1(v)} / ${k1(max)}`, vb, Rw.value.style, fit)
         + `<div class="box" style="${rect(bb)};background:${Rw.bar.bg};box-shadow:inset 0 0 0 ${U(Rw.bar.edge)} rgba(0,0,0,.8)">`
-        + `<i style="position:absolute;left:0;top:0;bottom:0;width:${(100 * Math.min(1, v / max)).toFixed(1)}%;background:${L.resource[l.res]}"></i></div>`
-        + text(signed(r[l.res + 'i'], r[l.res + 'o']), place(F, { ...Rw.income, in: l.inc }), Rw.income.style, Rw.income);
+        + `<i style="position:absolute;left:0;top:0;bottom:0;width:${(100 * (max > 0 ? Math.min(1, v / max) : 0)).toFixed(1)}%;background:${L.resource[l.res]}"></i></div>`
+        + text(signed(rate(r[l.res + 'i']), rate(r[l.res + 'o'])), place(F, { ...Rw.income, in: l.inc }), Rw.income.style, Rw.income);
     }
     h += hover(st, p, place(F, Rw.hover));
     return `<div class="box row${p.out ? ' dim' : ''}" style="${rect({ x: 0, y, w: W, h: Rw.h })}${p.out ? `;filter:brightness(${L.dim.brightness}) saturate(${L.dim.saturate})` : ''}">${h}</div>`;

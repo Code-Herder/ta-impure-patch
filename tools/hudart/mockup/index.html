@@ -6,9 +6,12 @@
 <title>Replay HUD mockup</title>
 <!-- The replay HUD drawn from art/hud/: layout.json, kit.json and the parts. Serve the repository root over HTTP
      (python3 -m http.server -d <repo>) and open /tools/hudart/mockup/. research/notes/hud-layout.md says how. -->
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
+<!-- The faces the game draws with, the files in art/hud/fonts/: a glyph they lack is missing here as it is in game. -->
+<style>
+@font-face { font-family: 'Oswald'; font-weight: 500; src: url('../../../art/hud/fonts/oswald-500.ttf'); }
+@font-face { font-family: 'Oswald'; font-weight: 700; src: url('../../../art/hud/fonts/oswald-700.ttf'); }
+@font-face { font-family: 'Barlow Condensed'; font-weight: 600; src: url('../../../art/hud/fonts/barlowcondensed-600.ttf'); }
+</style>
 <link rel="stylesheet" href="hud.css">
 <style>
 :root { --bg: #111310; --fg: #d8d8c8; --muted: #8f9384; --line: #34372e; }
@@ -67,6 +70,11 @@ const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ h
   for (const k of ['np', 'nt', 't']) if (q.get(k)) S[k] = +q.get(k); for (const k of ['sm', 'ss']) if (q.get(k)) S[k] = q.get(k);
   if (q.has('stat')) S.stat = q.get('stat') !== '0'; }
 
+/* ---- the game's own state: state=<url> loads what the game dumped (tagpu_replayhud.dump, tagpu_hudstate.c) -- the screen,
+   the engine frame's scale and the HUD's state in units -- and draws that instead of the made-up game below, still ---- */
+let GAME = null;
+const GAME_URL = new URLSearchParams(location.search).get('state');
+
 function seats() {
   const N = S.np, lost = [...Array(N).keys()].filter(i => i > 0 && (i * 7) % 10 >= 5);
   return [...Array(N).keys()].map(i => {
@@ -111,8 +119,8 @@ function series(k, ps) {
    setting's percentage otherwise, never past the ceiling (480 panel rows in the screen's height, 256 pixels of view left
    beside the panel), and Auto is the ceiling. In device pixels. */
 function engineFrame(W, H, pct) {
-  let q = 256;
-  if (pct >= 0) {
+  let q = GAME ? GAME.q8 : 256;
+  if (!GAME && pct >= 0) {
     const cap = Math.max(256, Math.min(Math.floor(H * 256 / 480), Math.floor((W - 256) * 256 / 128)));
     q = Math.min(cap, Math.max(256, pct === 0 ? cap : Math.floor(pct * 256 / 100)));
   }
@@ -131,6 +139,10 @@ function state() {
   const markers = ps.filter(p => p.lost).flatMap(p => [{ t: p.death, kind: 'death', seat: p.i }, ...(p.out ? [{ t: p.death + 3, kind: 'defeat', seat: p.i }] : [])])
     .concat(S.bm.map(t => ({ t, kind: 'bookmark', seat: -1 })));
   const L = HUD.layout, sw = S.sw || { x: L.window.x, y: L.window.y };
+  if (GAME) { const g = GAME.state;
+    return { W: g.W, H: g.H, frame: g.frame, t: g.t, T: g.T, playing: g.playing, speed: g.speed, hud: g.hud, seats: g.seats, teams: g.teams,
+      folded: g.folded, markers: g.markers, toggles: g.toggles, measures: MEASURES,
+      stats: { open: false, x: sw.x, y: sw.y, measure: m, split: 'player', groups: pl, format: String } }; }
   return { W: w / u, H: h / u, frame: { panel: ef.panel / ud, top: ef.bar / ud, bottom: ef.bar / ud },
     t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, seats: ps, teams: tm, folded: S.fold, markers,
     toggles: { stats: S.stat, map: S.mapov }, measures: MEASURES,
@@ -230,7 +242,11 @@ $('#hud').value = S.hud; $('#hud').onchange = e => { S.hud = +e.target.value; sa
 $('#game').value = S.game; $('#game').onchange = e => { S.game = +e.target.value; save(); resize(); };
 window.addEventListener('resize', resize);
 document.addEventListener('keydown', e => { if (e.key === ' ' && e.target === document.body) { e.preventDefault(); S.playing = !S.playing; build(); } });
-HUD.load('../../../art/hud/').then(() => { resize(); requestAnimationFrame(frame); })
+// the faces are loaded before the first layout, so no text is measured in a fallback
+const FACES = ['500 10px Oswald', '700 10px Oswald', '600 10px "Barlow Condensed"'].map(f => document.fonts.load(f));
+Promise.all([HUD.load('../../../art/hud/'), GAME_URL ? fetch(GAME_URL).then(r => r.json()) : null, ...FACES]).then(([, g]) => {
+  if (g) { GAME = g; S.res = `${g.device.W}x${g.device.H}`; S.hud = g.state.hud; S.playing = false; }
+  resize(); requestAnimationFrame(frame); })
   .catch(err => { layer.innerHTML = `<p class="err" style="padding:16px">Could not load art/hud/: ${err}. Serve the repository root over HTTP and open /tools/hudart/mockup/.</p>`; });
 </script>
 </body>

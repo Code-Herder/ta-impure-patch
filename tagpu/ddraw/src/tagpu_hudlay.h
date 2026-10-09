@@ -149,9 +149,26 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
 /* The topmost HOP_HOT under (x, y), its key into `key`; 0 when none. */
 int tagpu_hudlay_hit(const HUDOPS* ops, float x, float y, char* key, size_t keyn);
 
-/* A part op as textured quads at `px` device pixels a unit: up to 16 of them, each a
-   destination rectangle in device pixels and a source rectangle in the part's texture
-   coordinates (u may run past 1 for a tiled fill, which repeats). Returns the count. */
+/* THE BASELINE OF A TEXT OP, AS CHROME LAYS IT: the line box, the font size tall at line-height 1,
+   centred in the op's box `y`, `h`; the face's ascent and descent, `asc` and `desc` in em, each
+   rounded to a whole pixel at `size` pixels; the half-leading, here negative, floored to a pixel;
+   the baseline the line's top plus the ascent plus that. All in CSS pixels, which in game are the
+   device's, and not yet snapped for painting. Pure.
+
+   MEASURED 2026-10-08 (hud-layout.md, "Text"): tools/hudart/laycheck.py checks it against a probe
+   on every text's line, and a sweep of the faces' rounded metrics over 1..60 px in 1/64ths matches
+   round(em x size) everywhere but at 26 of 7554 Oswald values, where Chrome rounds an ascent or a
+   descent that lies just past a half down -- by an arithmetic not identified -- and the line sits
+   a pixel off the mockup's. */
+float tagpu_hudlay_baseline(float y, float h, float size, float asc, float desc);
+
+/* A part op as textured quads at `px` device pixels a unit, each a destination rectangle in
+   device pixels and a source rectangle in the part's texture coordinates (u may run past 1 for
+   a tiled fill, which repeats). Returns the count, at most `cap`: a grid part is one quad a
+   cell, and its HUD_MAXBAND bands an axis cut that axis into at most 2 * HUD_MAXBAND + 1
+   segments, so HUD_MAXQUAD is every cell of the largest grid and a caller that offers that many
+   loses none. */
+#define HUD_MAXQUAD ((2 * HUD_MAXBAND + 1) * (2 * HUD_MAXBAND + 1))
 typedef struct { float x0, y0, x1, y1, u0, v0, u1, v1; } HUDQUAD;
 int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, int cap);
 

@@ -67,7 +67,7 @@ int main(int argc, char** argv)
     HUDOPS* o = (HUDOPS*)malloc(sizeof(HUDOPS));
     int i, j;
 
-    if (argc != 3) { fprintf(stderr, "usage: laycheck <art/hud dir> <state.json>\n"); return 2; }
+    if (argc != 3 && argc != 4) { fprintf(stderr, "usage: laycheck <art/hud dir> <state.json> [<px a unit>]\n"); return 2; }
     snprintf(path, sizeof path, "%s/layout.json", argv[1]);
     if (!(lt = slurp(path, &nl))) { fprintf(stderr, "laycheck: cannot read %s\n", path); return 2; }
     snprintf(path, sizeof path, "%s/kit.json", argv[1]);
@@ -136,7 +136,17 @@ int main(int argc, char** argv)
         if (p->kind == HOP_SOLID || p->kind == HOP_DOT) printf(",\"rgba\":\"%08x\"", p->rgba);
         if (p->clip.w >= 0 && p->kind != HOP_TEXT) printf(",\"clip\":[%.4f,%.4f,%.4f,%.4f]", p->clip.x, p->clip.y, p->clip.w, p->clip.h);
         if (p->kind == HOP_TEXT) {
-            printf(",\"style\":\"%s\",\"size\":%.4f,\"centre\":%d,\"text\":", tagpu_hudlay_globals(l)->style[p->style].name, p->size, p->centre);
+            const char* sn = tagpu_hudlay_globals(l)->style[p->style].name;
+            printf(",\"style\":\"%s\",\"size\":%.4f,\"centre\":%d", sn, p->size, p->centre);
+            /* the baseline at `px` a unit, from the face metrics the state carries per style */
+            if (argc == 4) {
+                const TJV* fm = tj_get(tj_get(tagpu_json_root(sd), "faces"), sn);
+                float px = (float)atof(argv[3]);
+                if (fm)
+                    printf(",\"base\":%.4f", tagpu_hudlay_baseline(p->r.y * px, p->r.h * px, p->size * px,
+                                                                  (float)tj_num(tj_at(fm, 0), 0), (float)tj_num(tj_at(fm, 1), 0)) / px);
+            }
+            printf(",\"text\":");
             putchar('"');
             for (j = 0; j < p->nrun; j++) {
                 const HUDRUN* r = &o->run[p->run + j];
