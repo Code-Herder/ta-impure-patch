@@ -5,8 +5,8 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
     make -C tagpu/ddraw codectest && tagpu/ddraw/tests/codectest.py outcomes
     tagpu/ddraw/tests/codectest.py --native outcomes
 
-    outcomes                 SECTIONS, DECLINED and MISMATCH from synthetic payloads, each followed
-                             by a block that restarts (codectest.c)
+    outcomes                 SECTIONS, DECLINED and MISMATCH from synthetic payloads of units and
+                             projectiles, each followed by a block that restarts (codectest.c)
     transcode IN OUT         every stream block decoded and written again through the writer's
                              codec: 0 declined and 0 mismatched expected
     verify IN                each stream block's records from the C decoder against the Python
@@ -21,7 +21,7 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
 
 --native builds tests/codectest-asan.exe with the host's gcc and -fsanitize=address,undefined and
 runs that instead of tests/codectest.exe under Wine (WINEPREFIX: the main checkout's wineprefix/).
-IN is a recording of format 8. Exit 0 when every check holds, 1 when one fails, 2 when it cannot
+IN is a recording of format 9. Exit 0 when every check holds, 1 when one fails, 2 when it cannot
 run. Needs numpy, numba and zstandard (devpy.ensure() re-executes under the shared venv).
 """
 import os
@@ -159,7 +159,7 @@ def cmd_fuzzdiff(src, cases_path):
                 else:
                     es = [(t, e) for t, e in zip((reccodec.RT_CODEC, reccodec.RT_PHYSICS, reccodec.RT_AIR), ents)
                           if e is not None]
-                    prm = reccodec.params(es, frame.prm.nslots)
+                    prm = reccodec.params(es, frame.prm.nslots, frame.prm.nproj)
                     if not prm.usable:
                         raise reccodec.Unreadable("not usable")
                     f.restart(prm)

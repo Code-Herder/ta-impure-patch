@@ -37,10 +37,10 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 8: every packed block is one zstd frame, and a stream block may be a sectioned container whose
-   unit frame carries the unit deltas (THE SECTIONED CONTAINER below). A reader takes this format
-   alone. */
-#define REC_FORMAT        8
+/* 9: every packed block is one zstd frame, and a stream block may be a sectioned container whose
+   unit frame carries the unit deltas and whose pool frame carries the projectile pool coded by
+   identity (THE SECTIONED CONTAINER below). A reader takes this format alone. */
+#define REC_FORMAT        9
 
 static __inline int rec_format_supported(unsigned format)
 {
@@ -438,11 +438,11 @@ enum RecEnd {
    a block cut short, or a header torn, is known by one of them. A block is written whole or not
    at all: a file ends at its last complete block.
    An RB_STREAM with RBF_SECTIONS holds a sectioned container (below) in place of its records:
-   `raw` is the container's bytes, which decode to the records. Its unit frame carries state from
-   one sectioned block to the next, and restarts -- RBF_FRAME_RESET -- at a segment's first stream
-   block, at the first after a snapshot and at the first after a stream block of records (one the
-   writer's codec declined, or whose check decode differed), from the units the reader holds at
-   the end of the iteration before it. So a stream block inside a run of sectioned blocks decodes
+   `raw` is the container's bytes, which decode to the records. Its unit and pool frames carry
+   state from one sectioned block to the next, and restart -- RBF_FRAME_RESET -- at a segment's
+   first stream block, at the first after a snapshot and at the first after a stream block of
+   records (one the writer's codec declined, or whose check decode differed), from the units and
+   the projectile pool the reader holds at the end of the iteration before it. So a stream block inside a run of sectioned blocks decodes
    only after its predecessors since the run's reset, and a reader starts at a snapshot or at a
    segment's start, never inside a run (tagpu_reccodec.c, THREE INVARIANTS). Any other flag bit,
    RBF_SECTIONS on another kind of block and RBF_FRAME_RESET without RBF_SECTIONS are refused. */
@@ -495,8 +495,9 @@ enum RecBlockKind {
 #define REC_MINIMAP_MAX   (0xFF00u - REC_MINIMAP_HEAD)   /* the most indices: a ring record's */
 #define RBF_STORED      1u
 #define RBF_SECTIONS    2u     /* an RB_STREAM's only: its payload is a sectioned container    */
-#define RBF_FRAME_RESET 4u     /* with RBF_SECTIONS only: the unit frame restarts at its first
-                                  iteration, from the reader's own copy of the units           */
+#define RBF_FRAME_RESET 4u     /* with RBF_SECTIONS only: the unit and pool frames restart at its
+                                  first iteration, from the reader's own copies of the units
+                                  and the projectile pool                                     */
 #define RBF_ALL         (RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET)
 
 /* THE SECTIONED CONTAINER (tagpu_reccodec.c reads and writes it): the bytes of an RB_STREAM with
@@ -504,8 +505,9 @@ enum RecBlockKind {
    sections of len[] bytes each, in order. RCS_KINDS holds the record kinds in payload order as
    runs, each a varint kind (1..65535) and a varint count (at least 1). A body section holds, for
    each record of its kinds in payload order, a varint length (at most 0xFFFF) and that many bytes:
-   the record's body verbatim. RK_UNIT_DELTA has no body anywhere: the unit frame (RCS_UNITS)
-   makes it. The payload is the records in kind order, each a RecHdr, its body and zero padding to
+   the record's body verbatim. Neither RK_UNIT_DELTA nor RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA
+   has a body anywhere: the unit frame (RCS_UNITS) and the pool frame (RCS_PROJ) make them. The
+   payload is the records in kind order, each a RecHdr, its body and zero padding to
    a dword, as the writer's stream holds them; its first record is an RK_TICK, and an iteration is
    an RK_TICK and the records up to the next one.
 
@@ -519,12 +521,33 @@ enum RecBlockKind {
        ids     one per listed unit: a u8 when ndict <= 256, else a varint
        columns for each lane in RT_CODEC's order: the zigzag varint residuals of the listed units
                whose mask has its bit, in listed order
+   RCS_PROJ, the pool frame, is
+       varint  iterations                 RecSecHead.iterations again
+       per iteration, in order:
+         varint  zigzag(c1 - c0)          the pool's count after it, c0 the count before
+         varint  h1 - h0                  its extent after it, h0 the extent before
+         varint  nd, then nd gaps         the records of [0, c0) that died: slot = previous + 1 +
+                                          gap, previous starting at -1
+         varint  nt, then nt gaps         the stale slots [c1, h1) that changed: slot = previous +
+                                          1 + gap, previous starting at c1 - 1
+       varint  codes                      per iteration, a reference code for each birth, then
+                                          for each tail slot: 0 the zero row, else 1 +
+                                          (zigzag(row - anchor) << 2 | section)
+       columns the 32-bit zigzag residuals: the survivors' in the survivor step's dword order
+               (13, 14, 15, 7, 8, 9, 0 .. 6, 10, 11, 12, 16 .. 26), a column a dword with every
+               iteration's survivors in order; then the births' and the tail's, dwords 0 .. 26
+   The survivors are the records of [0, c0) that did not die, in order, and become [0, c0 - nd);
+   the births follow them up to c1. Every count, slot and reference is bounded by RT_PROJECTILES,
+   the iterations and the section's bytes; an iteration's projectile records are exactly its
+   changed slots below h1, ascending, after at most one RK_PROJ_HEAD, which it carries whenever
+   the count or the extent changes. A block with no projectile costs 1 + 4 x iterations bytes.
    A varint is LEB128 of a value below 2^32, at most 5 bytes; zigzag maps r >= 0 to 2r and r < 0
-   to -2r - 1. tagpu_reccodec.c says what a residual is the residual of. */
+   to -2r - 1 (a 32-bit residual r >= 2^31 to 2 (2^32 - r) - 1). tagpu_reccodec.c says what a
+   residual is the residual of, and what a reference row and its sections are. */
 enum RecSection {
     RCS_KINDS = 0,     /* the record kinds, as runs                                              */
     RCS_UNITS,         /* the unit frame: every RK_UNIT_DELTA                                    */
-    RCS_PROJ,          /* the bodies of RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA                   */
+    RCS_PROJ,          /* the pool frame: every RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA          */
     RCS_CELLS,         /* the bodies of RK_CELLS                                                 */
     RCS_ORDERS,        /* the bodies of RK_ORDERS                                                */
     RCS_EVENTS,        /* the bodies of RK_EV_CREATE..RK_EV_DEATH_END and RK_EV_NET_CREATE        */

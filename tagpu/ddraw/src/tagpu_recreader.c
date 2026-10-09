@@ -239,20 +239,21 @@ static int sections_body(RecReader* r, const RecBlock* b, const unsigned char* s
                  "RT_CODEC and RT_PHYSICS", r->off);
         return -1;
     }
-    if (!r->codec) r->codec = reccodec_new(r->w.slots);
+    if (!r->codec) r->codec = reccodec_new(r->w.slots, r->h.proj_cap);
     if (!r->codec) {
-        snprintf(why, cap, "no memory for the unit frame of %u slots, at byte %llu", r->w.slots,
-                 r->off);
+        snprintf(why, cap, "no memory for the codec of %u slots and %u projectiles, at byte %llu",
+                 r->w.slots, r->h.proj_cap, r->off);
         return -1;
     }
-    /* ORDERING: the world's units are the copy at the end of the iteration before this block
-       (tick_read loads a block only between iterations), which is what the writer's encoder
-       restarted from. The codec was made for w->slots, which every segment's header equals
-       (segs_scan); h->codec is this segment's own. */
+    /* ORDERING: the world's units and its pool are the copies at the end of the iteration before
+       this block (tick_read loads a block only between iterations), which is what the writer's
+       encoder restarted from. The codec was made for w->slots and h.proj_cap, which every
+       segment's header equals (segs_scan); h->codec is this segment's own. */
     if (b->flags & RBF_FRAME_RESET) {
-        reccodec_restart(r->codec, &h->codec, r->w.unit, r->w.live);
+        reccodec_restart(r->codec, &h->codec, r->w.unit, r->w.live, r->w.proj, r->w.nproj,
+                         r->w.proj_hw);
     } else if (!reccodec_valid(r->codec)) {
-        snprintf(why, cap, "a stream block that continues a unit frame this reading did not start, "
+        snprintf(why, cap, "a stream block that continues a frame this reading did not start, "
                  "at byte %llu", r->off);
         return -1;
     }
@@ -585,8 +586,8 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
     }
     /* after the loop: the codec's constants are bounded by RT_SLOTS, which may follow them */
     if ((ent[0] || ent[1] || ent[2]) &&
-        !reccodec_params(&h->codec, h->slots, ent[0], nent[0], ent[1], nent[1], ent[2], nent[2],
-                         why, cap))
+        !reccodec_params(&h->codec, h->slots, h->proj_cap, ent[0], nent[0], ent[1], nent[1],
+                         ent[2], nent[2], why, cap))
         return 0;
     h->has_codec = (unsigned)h->codec.usable;
     if (!h->grid_w || h->grid_w > 0xFFFF || !h->grid_h || h->grid_h > 0xFFFF || !h->wrecks ||

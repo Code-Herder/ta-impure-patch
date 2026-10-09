@@ -6,20 +6,26 @@
                                     bytes, milliseconds) and the outcomes
      codectest decode IN OUT        every stream block's records, C, framed for codectest.py; a
                                     line per block with its milliseconds
-     codectest outcomes             synthetic payloads that must be SECTIONS, DECLINED (a delta
-                                    naming an unchanged dword; a correction on a delta's slot; a
-                                    failed allocation) and MISMATCH (the check decoder restarted
-                                    from another world), each followed by a restarting SECTIONS
-                                    block; and zstd frames past and at the 2^27 window bound
+     codectest outcomes             synthetic payloads of units and projectiles that must be
+                                    SECTIONS, DECLINED (a unit delta naming an unchanged dword; a
+                                    correction on a delta's slot; a failed allocation; a
+                                    projectile slot named twice, two RK_PROJ_HEAD, an extent that
+                                    shrinks, a projectile delta naming an unchanged dword or with
+                                    a pad that is not zero) and MISMATCH (the check decoder
+                                    restarted from other units, from another pool), each followed
+                                    by a restarting SECTIONS block; and zstd frames past and at
+                                    the 2^27 window bound
      codectest fuzz IN SEED N [CASES]
                                     N mutations of the recording's sectioned blocks (flags, the
-                                    head, section lengths, kinds, gaps, masks, ids, columns,
-                                    bodies, the header's codec entries, truncations), each decoded
-                                    from a copy of the state the block starts from; with CASES,
-                                    every case and its result for codectest.py's differential
+                                    head, section lengths, kinds, the unit frame's gaps, masks,
+                                    ids and columns, the pool frame's control values, codes and
+                                    columns, bodies, the header's codec entries, truncations),
+                                    each decoded from a copy of the state the block starts from;
+                                    with CASES, every case and its result for codectest.py's
+                                    differential
      codectest sin                  the sine table, for codectest.py's check against its formula
 
-   IN is a recording of format 8. Exit 0 when every check holds, 1 when one fails, 2 when a file
+   IN is a recording of format 9. Exit 0 when every check holds, 1 when one fails, 2 when a file
    cannot be read. The codec is included rather than linked: the fuzz copies a decoder's state,
    which the codec's interface keeps opaque. */
 #include <stdint.h>
@@ -78,7 +84,7 @@ static unsigned char* read_file(const char* path, size_t* n)
     return d;
 }
 
-/* ---- a recording of format 8, block by block ------------------------------------------------- */
+/* ---- a recording of format 9, block by block ------------------------------------------------- */
 
 typedef struct Reader {
     const unsigned char* d;
@@ -146,7 +152,7 @@ static int next_block(Reader* r)
 }
 
 typedef struct Header {
-    unsigned format, slots;
+    unsigned format, slots, nproj;
     const unsigned char* e[3];      /* RT_CODEC, RT_PHYSICS, RT_AIR */
     unsigned ne[3];
 } Header;
@@ -161,6 +167,7 @@ static int header_of(const unsigned char* p, size_t n, Header* h, char* why, uns
         if (len > n - at - 4) REFUSE("a header entry cut short");
         if (tag == RT_FORMAT && len == 4) h->format = get32(b);
         if (tag == RT_SLOTS && len == 4) h->slots = get32(b);
+        if (tag == RT_PROJECTILES && len == 4) h->nproj = get32(b);
         k = tag == RT_CODEC ? 0 : tag == RT_PHYSICS ? 1 : tag == RT_AIR ? 2 : 3;
         if (k < 3) {
             if (h->e[k]) REFUSE("header tag %u twice", tag);
@@ -169,27 +176,60 @@ static int header_of(const unsigned char* p, size_t n, Header* h, char* why, uns
         }
         at += (4 + (size_t)len + 3) & ~(size_t)3;
     }
-    if (h->format != 8) REFUSE("format %u, not 8", h->format);
+    if (h->format != REC_FORMAT) REFUSE("format %u, not %u", h->format, REC_FORMAT);
     return 1;
 }
 
-/* the reader's copy of the units */
-typedef struct World { unsigned nslots; uint32_t* unit; unsigned char* live; } World;
+/* the reader's copies of the units and of the projectile pool */
+typedef struct World {
+    unsigned nslots, nproj, pcount, phw;
+    uint32_t* unit;
+    unsigned char* live;
+    unsigned char* pool;          /* nproj images; zero from phw on */
+} World;
 
-static void world_reset(World* w, unsigned nslots)
+static void world_reset(World* w, unsigned nslots, unsigned nproj)
 {
     free(w->unit);
     free(w->live);
+    free(w->pool);
     w->nslots = nslots;
+    w->nproj = nproj;
+    w->pcount = w->phw = 0;
     w->unit = (uint32_t*)calloc(nslots, IMG);
     w->live = (unsigned char*)calloc(nslots, 1);
+    w->pool = (unsigned char*)calloc(nproj ? nproj : 1, PIMG);
 }
 
 static void world_free(World* w)
 {
     free(w->unit);
     free(w->live);
+    free(w->pool);
     memset(w, 0, sizeof *w);
+}
+
+/* a projectile record onto the world's pool by tagpu_recreader.c's rules, which a reader that
+   refuses one would stop at: such a record is skipped here */
+static void world_proj(World* w, unsigned kind, const unsigned char* b, unsigned len)
+{
+    unsigned id = len >= 2 ? get16(b) : 0, i, n = 0, k;
+    if (kind == RK_PROJ_HEAD && len == 8) {
+        uint32_t v0 = get32(b), v1 = get32(b + 4);
+        if (v0 > v1 || v1 > w->nproj) return;
+        if (v1 < w->phw) memset(w->pool + (size_t)v1 * PIMG, 0, (size_t)(w->phw - v1) * PIMG);
+        w->pcount = v0;
+        w->phw = v1;
+    } else if (kind == RK_PROJ && len == 4 + PIMG && !b[2] && !b[3] && id < w->phw) {
+        memcpy(w->pool + (size_t)id * PIMG, b + 4, PIMG);
+    } else if (kind == RK_PROJ_DELTA && len >= REC_PROJ_DELTA_HEAD && id < w->phw) {
+        for (i = 0; i < 32; i++) n += bit_of(b + 2, i);
+        for (i = PDW; i < 32; i++)
+            if (bit_of(b + 2, i)) return;
+        if (len != REC_PROJ_DELTA_HEAD + 4 * n) return;
+        for (i = 0, k = 0; i < PDW; i++)
+            if (bit_of(b + 2, i)) memcpy(w->pool + (size_t)id * PIMG + 4 * i, b + REC_PROJ_DELTA_HEAD + 4 * k++, 4);
+    }
 }
 
 static void world_apply(World* w, const unsigned char* pl, size_t n)
@@ -200,6 +240,7 @@ static void world_apply(World* w, const unsigned char* pl, size_t n)
         size_t rl = ((size_t)4 + len + 3) & ~(size_t)3;
         const unsigned char* b = pl + at + 4;
         if (rl > n - at) break;
+        if (kind == RK_PROJ_HEAD || kind == RK_PROJ || kind == RK_PROJ_DELTA) world_proj(w, kind, b, len);
         s = len >= 2 ? get16(b) : 0;
         if (s >= 1 && s < w->nslots) {
             if (kind == RK_UNIT && len == 4 + IMG) {
@@ -222,14 +263,17 @@ static void world_apply(World* w, const unsigned char* pl, size_t n)
     }
 }
 
-/* the live slots of the codec's copy against the world's */
+/* the live slots and the pool of the codec's copies against the world's */
 static int world_same(const World* w, const RecCodec* c)
 {
-    unsigned s;
+    unsigned s, i;
     for (s = 1; s < w->nslots; s++) {
         if (!w->live[s] != !c->live[s]) return 0;
         if (w->live[s] && memcmp(w->unit + (size_t)s * NDW, c->unit + (size_t)s * NDW, IMG)) return 0;
     }
+    if (w->pcount != c->pcount || w->phw != c->phw) return 0;
+    for (i = 0; i < w->phw * PDW; i++)
+        if (get32(w->pool + 4 * (size_t)i) != c->pool[i]) return 0;
     return 1;
 }
 
@@ -295,16 +339,17 @@ static int reading_next(Reading* g, double* ms)
     if (k <= 0) return k;
     if (g->r.b.kind == RB_HEADER) {
         if (!header_of(g->r.bytes, g->r.b.raw, &g->h, g->r.why, sizeof g->r.why)) return -1;
-        if (!reccodec_params(&g->p, g->h.slots, g->h.e[0], g->h.ne[0], g->h.e[1], g->h.ne[1], g->h.e[2],
-                             g->h.ne[2], g->r.why, sizeof g->r.why))
+        if (!reccodec_params(&g->p, g->h.slots, g->h.nproj, g->h.e[0], g->h.ne[0], g->h.e[1], g->h.ne[1],
+                             g->h.e[2], g->h.ne[2], g->r.why, sizeof g->r.why))
             return -1;
-        if (g->dec && g->w.nslots != g->h.slots) {
-            snprintf(g->r.why, sizeof g->r.why, "a segment of %u slots after %u", g->h.slots, g->w.nslots);
+        if (g->dec && (g->w.nslots != g->h.slots || g->w.nproj != g->h.nproj)) {
+            snprintf(g->r.why, sizeof g->r.why, "a segment of %u slots and %u projectiles after %u and %u",
+                     g->h.slots, g->h.nproj, g->w.nslots, g->w.nproj);
             return -1;
         }
-        world_reset(&g->w, g->h.slots);
-        if (!g->dec) g->dec = reccodec_new(g->h.slots);
-        if (!g->dec || !g->w.unit || !g->w.live) {
+        world_reset(&g->w, g->h.slots, g->h.nproj);
+        if (!g->dec) g->dec = reccodec_new(g->h.slots, g->h.nproj);
+        if (!g->dec || !g->w.unit || !g->w.live || !g->w.pool) {
             snprintf(g->r.why, sizeof g->r.why, "no memory");
             return -1;
         }
@@ -319,7 +364,8 @@ static int reading_next(Reading* g, double* ms)
             snprintf(g->r.why, sizeof g->r.why, "a sectioned block in a segment without RT_CODEC and RT_PHYSICS");
             return -1;
         }
-        if (g->r.b.flags & RBF_FRAME_RESET) reccodec_restart(g->dec, &g->p, g->w.unit, g->w.live);
+        if (g->r.b.flags & RBF_FRAME_RESET)
+            reccodec_restart(g->dec, &g->p, g->w.unit, g->w.live, g->w.pool, g->w.pcount, g->w.phw);
         if (!reccodec_decode(g->dec, g->r.bytes, g->r.b.raw, &g->pay, g->r.why, sizeof g->r.why)) return -1;
         *ms = ms_since(t0);
     } else {
@@ -341,14 +387,14 @@ static int cmd_transcode(const char* in, const char* outp)
     FILE* out;
     int k, on = 0, bad = 0;
     double ms, tot = 0, worst = 0;
-    size_t raw = 0, written = 0, secbytes = 0, unitbytes = 0;
+    size_t raw = 0, written = 0, secbytes = 0, unitbytes = 0, poolbytes = 0;
     unsigned nblk = 0;
     memset(&st, 0, sizeof st);
     if (!reading_open(&g, in)) return 2;
     out = fopen(outp, "wb");
     if (!out) return 2;
     fwrite(REC_MAGIC, 1, 8, out);
-    printf("block kind first last raw section units packed flags outcome ms\n");
+    printf("block kind first last raw section units pool packed flags outcome ms\n");
     while ((k = reading_next(&g, &ms)) > 0) {
         RecBlock* b = &g.r.b;
         if (b->kind == RB_HEADER) {
@@ -370,13 +416,15 @@ static int cmd_transcode(const char* in, const char* outp)
             if (o == RECC_SECTIONS) {
                 secbytes += st.sec.n;
                 unitbytes += sh->len[RCS_UNITS];
+                poolbytes += sh->len[RCS_PROJ];
             }
             put_block(out, b->kind, flags, b->first, b->last,
                       (uint32_t)(o == RECC_SECTIONS ? st.sec.n : g.pay.n), body, bn);
-            printf("%u stream %lu %lu %lu %lu %lu %lu %#x %s %.2f\n", g.r.ordinal, (unsigned long)b->first,
+            printf("%u stream %lu %lu %lu %lu %lu %lu %lu %#x %s %.2f\n", g.r.ordinal, (unsigned long)b->first,
                    (unsigned long)b->last, (unsigned long)g.pay.n,
                    (unsigned long)(o == RECC_SECTIONS ? st.sec.n : 0),
-                   (unsigned long)(o == RECC_SECTIONS ? sh->len[RCS_UNITS] : 0), (unsigned long)bn, flags,
+                   (unsigned long)(o == RECC_SECTIONS ? sh->len[RCS_UNITS] : 0),
+                   (unsigned long)(o == RECC_SECTIONS ? sh->len[RCS_PROJ] : 0), (unsigned long)bn, flags,
                    o == RECC_SECTIONS ? "sections" : o == RECC_DECLINED ? "DECLINED" : "MISMATCH", t);
             if (o != RECC_SECTIONS) bad = 1;
             if (!world_same(&g.w, st.enc)) {
@@ -418,9 +466,10 @@ static int cmd_transcode(const char* in, const char* outp)
     }
     reading_close(&g);
     printf("summary: %u stream blocks: %u sectioned, %u declined, %u mismatched; records %lu bytes, "
-           "containers %lu (unit frames %lu), written %lu; encode+check %.0f ms, at most %.2f ms a block\n",
+           "containers %lu (unit frames %lu, pool frames %lu), written %lu; encode+check %.0f ms, at most "
+           "%.2f ms a block\n",
            nblk, st.sectioned, st.declined, st.mismatched, (unsigned long)raw, (unsigned long)secbytes,
-           (unsigned long)unitbytes, (unsigned long)written, tot, worst);
+           (unsigned long)unitbytes, (unsigned long)poolbytes, (unsigned long)written, tot, worst);
     if (on) reccodec_stream_end(&st);
     return bad || st.declined || st.mismatched ? 1 : 0;
 }
@@ -515,11 +564,175 @@ static void lane_add(uint32_t* img, unsigned role, uint32_t add, int set)
             lane_put((unsigned char*)img, &rec_lanes[j], (set ? 0 : lane_get((unsigned char*)img, &rec_lanes[j])) + add);
 }
 
+/* ---- the outcomes' projectile pool: an engine in miniature and its capture ---------------------- */
+
+#define PJ_N 64                         /* RT_PROJECTILES of the outcomes' header */
+enum { PJ_NONE, PJ_TWICE, PJ_HEADS, PJ_SHRINK, PJ_UNCHANGED, PJ_PAD };
+
+typedef struct PSim {
+    uint32_t eng[PJ_N][PDW];            /* the engine's pool, every slot's bytes            */
+    uint32_t sh[PJ_N][PDW];             /* the capture's last image of each slot            */
+    unsigned count, hw, scount, shw, first;
+    unsigned char shot[4][SHOT];        /* fired in the step after the iteration: its births */
+    unsigned nshot;
+    unsigned births, deaths, guided, tail, grows;   /* what the iterations exercised       */
+} PSim;
+
+/* The step: every record moves (a guided one turns, speeds up and takes the guided rule's
+   velocity, the rest fall), the last step's shots are appended at the count over what their
+   slots held, and the compaction stamps each record with its index and drops the spent ones,
+   leaving the slots past the new count as they were -- the engine's pool as
+   exe-reverse-engineering.md has it. */
+static void psim_step(PSim* q)
+{
+    unsigned i, k, w;
+    for (i = 0; i < q->count; i++) {
+        uint32_t* r = q->eng[i];
+        if (r[0] == 1) {
+            uint32_t v[3], sp = (r[14] >> 16 | r[15] << 16) + 0x2000;
+            if (sp > 0x60000) sp = 0x60000;
+            r[13] += 0x300u << 16;
+            r[14] = (r[14] & 0xFFFF) | sp << 16;
+            r[15] = (r[15] & 0xFFFF0000u) | sp >> 16;
+            guided(r, v);
+            r[7] = v[0];
+            r[8] = v[1];
+            r[9] = v[2];
+            q->guided++;
+        } else {
+            r[8] -= 0x800;
+        }
+        r[1] += r[7];
+        r[2] += r[8];
+        r[3] += r[9];
+        r[22]--;
+    }
+    for (k = 0; k < q->nshot && q->count < PJ_N; k++) {
+        const unsigned char* b = q->shot[k];
+        unsigned char* r = (unsigned char*)q->eng[q->count++];
+        put32(r, b[0x19] + 1u);
+        memcpy(r + 0x04, b + 0x01, 12);
+        memcpy(r + 0x10, b + 0x01, 12);
+        put32(r + 0x1C, 0x9000u * (k + 1));
+        put32(r + 0x20, 0x4000);
+        put32(r + 0x24, 0xFFFF7000u);
+        memcpy(r + 0x28, b + 0x0D, 12);
+        put32(r + 0x34, 0x00400000u * (k + 2));
+        put32(r + 0x38, 0x00011000u + 0x300 * k);
+        put32(r + 0x4E, get16(b + 0x1F));
+        put32(r + 0x52, get16(b + 0x21));
+        put32(r + 0x58, 6 + (q->births + k) % 4);
+        q->births++;
+    }
+    for (i = 0, w = 0; i < q->count; i++) {
+        uint32_t* r = q->eng[i];
+        r[25] = (r[25] & 0x00FFFFFFu) | (i & 0xFF) << 24;
+        r[26] = (r[26] & 0xFFFFFF00u) | (i >> 8 & 0xFF);
+        if ((int32_t)r[22] <= 0) {
+            q->deaths++;
+            continue;
+        }
+        if (w != i) memcpy(q->eng[w], r, PIMG);
+        w++;
+    }
+    q->count = w;
+    if (q->count > q->hw) {
+        q->hw = q->count;
+        q->grows++;
+    }
+}
+
+/* The capture (cap_proj): a head when the count or the extent changed, then every slot below the
+   extent whose image changed, whole when it is new to the extent or when a delta is no smaller.
+   `fault` makes the iteration one the codec must decline: a correction naming a slot again, a
+   second head, an extent that shrinks (giving up the engine's stale slots with it), a delta
+   naming an unchanged dword, a delta whose pad is not zero. */
+static void psim_capture(PSim* q, RecBytes* b, int fault)
+{
+    unsigned i, d, n, again = ~0u, deltas = 0;
+    uint32_t hd[2];
+    int head = q->first || q->count != q->scount || q->hw != q->shw;
+    if (fault == PJ_SHRINK && q->count < q->hw) {
+        memset(q->eng[q->count], 0, (size_t)(q->hw - q->count) * PIMG);
+        memset(q->sh[q->count], 0, (size_t)(q->shw - q->count) * PIMG);
+        q->hw = q->shw = q->count;
+        head = 1;
+    }
+    hd[0] = q->count;
+    hd[1] = q->hw;
+    if (head || fault == PJ_HEADS) rec_put(b, RK_PROJ_HEAD, hd, 8);
+    if (fault == PJ_HEADS) rec_put(b, RK_PROJ_HEAD, hd, 8);
+    for (i = 0; i < q->hw; i++) {
+        uint32_t* r = q->eng[i], * sh = q->sh[i];
+        unsigned char body[4 + PIMG];
+        int fresh = i >= q->shw;
+        for (d = 0, n = 0; d < PDW; d++) n += r[d] != sh[d];
+        if (!fresh && !n) continue;
+        if (fresh || REC_PROJ_DELTA_HEAD + 4 * n >= 4 + PIMG) {
+            rec_put(b, RK_PROJ, body, pool_body(RK_PROJ, i, sh, r, body));
+        } else {
+            unsigned len = pool_body(RK_PROJ_DELTA, i, sh, r, body);
+            if (fault == PJ_UNCHANGED && !deltas) {
+                uint32_t bits = get32(body + 2);
+                for (d = 0; d < PDW && r[d] != sh[d]; d++) ;
+                put32(body + 2, bits | (uint32_t)1 << d);
+                len = 8;
+                for (n = 0; n < PDW; n++)
+                    if (bits >> n & 1 || n == d) {
+                        put32(body + len, r[n]);
+                        len += 4;
+                    }
+            }
+            if (fault == PJ_PAD && !deltas) body[7] = 1;
+            rec_put(b, RK_PROJ_DELTA, body, len);
+            deltas++;
+        }
+        if (i >= q->count) q->tail++;
+        if (again == ~0u) again = i;
+        memcpy(sh, r, PIMG);
+    }
+    if (fault == PJ_TWICE && again != ~0u) {
+        unsigned char body[4 + PIMG];
+        uint32_t c = 0;
+        rec_put(b, RK_CORRECT, &c, 4);
+        rec_put(b, RK_PROJ, body, pool_body(RK_PROJ, again, q->sh[again], q->eng[again], body));
+    }
+    q->scount = q->count;
+    q->shw = q->hw;
+    q->first = 0;
+}
+
+/* the shots of the step after the iteration, as RK_EV_SHOT: two shooters, a guided weapon (ID 1)
+   every other step and a ballistic one (ID 2) every step */
+static void psim_shots(PSim* q, RecBytes* b, uint32_t gt)
+{
+    unsigned k;
+    q->nshot = 0;
+    for (k = 0; k < 2; k++) {
+        unsigned char* s = q->shot[q->nshot];
+        if (k == 0 && gt % 2) continue;
+        memset(s, 0, SHOT);
+        s[0] = 0x0D;
+        put32(s + 0x01, 0x01000000u * (3 + k) + gt * 0x1000);
+        put32(s + 0x05, 0x00200000u);
+        put32(s + 0x09, 0x02000000u * (1 + k));
+        put32(s + 0x0D, 0x05000000u);
+        put32(s + 0x11, 0x00100000u);
+        put32(s + 0x15, 0x06000000u + gt * 0x10);
+        s[0x19] = (unsigned char)k;
+        s[0x1F] = 9;
+        s[0x21] = (unsigned char)(3 + k);
+        rec_put(b, RK_EV_SHOT, s, SHOT);
+        q->nshot++;
+    }
+}
+
 /* Six iterations of five units: two ground movers and an aircraft moving, a still unit, and one
-   whose plain dword changes unpredictably. `force`: in the fourth iteration a delta names a dword
-   of the still unit it does not change; `correct`: a correction of a unit whose delta the same
-   iteration carries. */
-static void synth_block(RecBytes* b, uint32_t units[][NDW], uint32_t* gt, int create, int force, int correct)
+   whose plain dword changes unpredictably; and the projectile pool, `pfault` in the fourth
+   iteration. `force`: in the fourth iteration a delta names a dword of the still unit it does not
+   change; `correct`: a correction of a unit whose delta the same iteration carries. */
+static void synth_block(RecBytes* b, uint32_t units[][NDW], PSim* q, uint32_t* gt, int create,
+                        int force, int correct, int pfault)
 {
     static uint32_t prev[6][NDW];
     unsigned it, s;
@@ -527,6 +740,9 @@ static void synth_block(RecBytes* b, uint32_t units[][NDW], uint32_t* gt, int cr
     for (it = 0; it < 6; it++, (*gt)++) {
         uint32_t c = 0;
         rec_put(b, RK_TICK, gt, 4);
+        psim_step(q);
+        psim_capture(q, b, it == 3 ? pfault : PJ_NONE);
+        psim_shots(q, b, *gt);
         if (create && !it) {
             for (s = 1; s <= 5; s++) {
                 memset(units[s], 0, IMG);
@@ -581,7 +797,7 @@ static int reader_check(RecCodec* r, World* w, const RecCodecParams* p, unsigned
         bn = raw;
     }
     if (flags & RBF_SECTIONS) {
-        if (flags & RBF_FRAME_RESET) reccodec_restart(r, p, w->unit, w->live);
+        if (flags & RBF_FRAME_RESET) reccodec_restart(r, p, w->unit, w->live, w->pool, w->pcount, w->phw);
         ok = reccodec_decode(r, body, bn, &out, why, sizeof why) && out.n == n && !memcmp(out.p, pay, n);
         if (!ok) printf("  reader: %s\n", why);
     } else {
@@ -636,6 +852,8 @@ static int zstd_window_check(void* cctx, void* dctx)
 static int cmd_outcomes(void)
 {
     static uint32_t units[6][NDW];
+    static PSim q;
+    unsigned seen[5] = { 0, 0, 0, 0, 0 };
     RecBytes y;
     RecCodecParams p;
     RecStream st;
@@ -669,25 +887,38 @@ static int cmd_outcomes(void)
     put32(air + 16, 6 << 16);
     put32(air + 20, 22937);
     put32(air + 24, 1 << 16);
-    if (!reccodec_params(&p, 64, codec, sizeof codec, phys, 8, air, sizeof air, NULL, 0) ||
-        !reccodec_stream_begin(&st, &p) || !(rd = reccodec_new(64)))
+    if (!reccodec_params(&p, 64, PJ_N, codec, sizeof codec, phys, 8, air, sizeof air, NULL, 0) ||
+        !reccodec_stream_begin(&st, &p) || !(rd = reccodec_new(64, PJ_N)))
         return 2;
-    world_reset(&w, 64);
-    for (block = 0; block < 10; block++) {
-        static const int want[10] = { RECC_SECTIONS, RECC_SECTIONS, RECC_DECLINED, RECC_SECTIONS,
+    world_reset(&w, 64, PJ_N);
+    q.first = 1;
+    for (block = 0; block < 22; block++) {
+        static const int want[22] = { RECC_SECTIONS, RECC_SECTIONS, RECC_DECLINED, RECC_SECTIONS,
                                       RECC_DECLINED, RECC_SECTIONS, RECC_MISMATCH, RECC_SECTIONS,
-                                      RECC_DECLINED, RECC_SECTIONS };
-        static const char* what[10] = {
+                                      RECC_DECLINED, RECC_SECTIONS, RECC_DECLINED, RECC_SECTIONS,
+                                      RECC_DECLINED, RECC_SECTIONS, RECC_DECLINED, RECC_SECTIONS,
+                                      RECC_DECLINED, RECC_SECTIONS, RECC_DECLINED, RECC_SECTIONS,
+                                      RECC_MISMATCH, RECC_SECTIONS };
+        static const int pfault[22] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, PJ_TWICE, 0, PJ_HEADS, 0,
+                                        PJ_SHRINK, 0, PJ_UNCHANGED, 0, PJ_PAD, 0, 0, 0 };
+        static const char* what[22] = {
             "SECTIONS, the segment's first block", "SECTIONS, continuing",
             "DECLINED: a delta naming an unchanged dword", "SECTIONS, restarting after it",
             "DECLINED: a correction on a delta's slot", "SECTIONS, restarting after it",
-            "MISMATCH: the check decoder restarted from another world", "SECTIONS, restarting after it",
+            "MISMATCH: the check decoder restarted from other units", "SECTIONS, restarting after it",
             "DECLINED: the encoder's lists failed an allocation",
-            "SECTIONS, restarting after it (the reader's list failed too)" };
+            "SECTIONS, restarting after it (the reader's list failed too)",
+            "DECLINED: a correction naming a projectile slot again", "SECTIONS, restarting after it",
+            "DECLINED: two RK_PROJ_HEAD", "SECTIONS, restarting after it",
+            "DECLINED: an RK_PROJ_HEAD that shrinks the extent", "SECTIONS, restarting after it",
+            "DECLINED: a projectile delta naming an unchanged dword", "SECTIONS, restarting after it",
+            "DECLINED: a projectile delta whose pad is not zero", "SECTIONS, restarting after it",
+            "MISMATCH: the check decoder restarted from another pool", "SECTIONS, restarting after it" };
         char line[128];
+        unsigned before[5] = { q.births, q.deaths, q.guided, q.tail, q.grows }, k;
         int o;
         /* block 9 creates its units again, so the reader's touched list is used after its failure */
-        synth_block(&y, units, &gt, block == 0 || block == 9, block == 2, block == 4);
+        synth_block(&y, units, &q, &gt, block == 0 || block == 9, block == 2, block == 4, pfault[block]);
         if (block == 8) {
             /* a failed realloc, as rb_grow latches it: a restart must clear it on both sides */
             st.enc->dl.oom = 1;
@@ -700,8 +931,24 @@ static int cmd_outcomes(void)
             memcpy(other, reccodec_units(st.enc), sizeof other);
             memcpy(live, reccodec_live(st.enc), sizeof live);
             other[2][20] ^= 0x10;
-            reccodec_restart(st.enc, &st.p, reccodec_units(st.enc), reccodec_live(st.enc));
-            reccodec_restart(st.chk, &st.p, &other[0][0], live);
+            {
+                unsigned count, hw;
+                const unsigned char* pool = reccodec_pool(st.enc, &count, &hw);
+                reccodec_restart(st.enc, &st.p, reccodec_units(st.enc), reccodec_live(st.enc), pool, count, hw);
+                reccodec_restart(st.chk, &st.p, &other[0][0], live, pool, count, hw);
+            }
+            st.reset = 0;
+        }
+        if (block == 20) {
+            /* every live record's x one unit off: each survivor's prediction differs */
+            static unsigned char other[PJ_N * PIMG];
+            unsigned count, hw, i;
+            memcpy(other, reccodec_pool(st.enc, &count, &hw), sizeof other);
+            for (i = 0; i < count; i++) other[(size_t)i * PIMG + 4] ^= 1;
+            ok &= expect("  the pool has a live record to differ in", count > 0, 1);
+            reccodec_restart(st.enc, &st.p, reccodec_units(st.enc), reccodec_live(st.enc),
+                             reccodec_pool(st.enc, &count, &hw), count, hw);
+            reccodec_restart(st.chk, &st.p, reccodec_units(st.enc), reccodec_live(st.enc), other, count, hw);
             st.reset = 0;
         }
         o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
@@ -714,7 +961,15 @@ static int cmd_outcomes(void)
                                                                   o == RECC_SECTIONS ? st.sec.n : y.n,
                                                                   y.p, y.n, st.dctx), 1);
         ok &= expect("  the encoder's copy is the payload's end state", world_same(&w, st.enc), 1);
+        if (o == RECC_SECTIONS) {
+            unsigned after[5] = { q.births, q.deaths, q.guided, q.tail, q.grows };
+            for (k = 0; k < 5; k++) seen[k] += after[k] - before[k];
+        }
     }
+    printf("the sectioned blocks carried %u births from shots, %u deaths, %u guided steps, %u changed "
+           "stale slots and %u extent growths\n", seen[0], seen[1], seen[2], seen[3], seen[4]);
+    ok &= expect("projectiles: births, deaths, guided survivors, a changed tail, a growing extent",
+                 seen[0] && seen[1] && seen[2] && seen[3] && seen[4], 1);
     ok &= zstd_window_check(st.cctx, st.dctx);
     printf("outcomes: %u sectioned, %u declined, %u mismatched\n", st.sectioned, st.declined, st.mismatched);
     reccodec_stream_end(&st);
@@ -736,7 +991,7 @@ static uint64_t rnd(void)
 }
 static size_t rndn(size_t n) { return n ? (size_t)(rnd() % n) : 0; }
 
-/* a copy of a decoder's state: what the frame reads and writes */
+/* a copy of a decoder's state: what the frames read and write */
 static void codec_copy(RecCodec* d, const RecCodec* s)
 {
     size_t n = s->nslots;
@@ -760,6 +1015,17 @@ static void codec_copy(RecCodec* d, const RecCodec* s)
     memcpy(d->rest, s->rest, n);
     memcpy(d->live, s->live, n);
     memcpy(d->touched, s->touched, n);
+    n = s->nproj;
+    d->pcount = s->pcount;
+    d->phw = s->phw;
+    d->nshots = s->nshots;
+    memcpy(d->pool, s->pool, n * PIMG);
+    memcpy(d->pool_n, s->pool_n, n * PIMG);
+    memcpy(d->pool_l2, s->pool_l2, n * PIMG);
+    memcpy(d->pwin, s->pwin, n * PDW);
+    memcpy(d->page, s->page, n);
+    memcpy(d->lastnew, s->lastnew, (size_t)(RECC_WEAPON_IDS + 1) * PIMG);
+    memcpy(d->shots, s->shots, (size_t)RECC_SHOTS_MAX * SHOT);
 }
 
 /* the varint at `at` and its end; 0 when it does not read */
@@ -794,6 +1060,45 @@ static void unit_regions(const unsigned char* sec, size_t a, size_t e, unsigned 
     r[3] = at < e ? at : e;
 }
 
+/* RCS_PROJ's regions from the count c0 the block starts with: [0] the control values, [1] the
+   codes, [2] the survivors' columns, [3] the births', [4] the tail's, [5] the end */
+static void pool_regions(const unsigned char* sec, size_t a, size_t e, unsigned c0, size_t r[6])
+{
+    uint32_t it, v, i, k;
+    uint64_t ns = 0, nb = 0, nt = 0, n, c = c0;
+    size_t at = a;
+    r[0] = r[1] = r[2] = r[3] = r[4] = a;
+    r[5] = e;
+    if (!varint_get(sec, e, &at, &it)) return;
+    for (i = 0; i < it && i < 256; i++) {
+        uint64_t c1, nd, t;
+        if (!varint_get(sec, e, &at, &v)) return;
+        c1 = (uint64_t)((int64_t)c + unzz64(v));
+        if (!(at = skip_varint(sec, e, at)) || !varint_get(sec, e, &at, &v)) return;
+        nd = v;
+        for (k = 0; k < nd; k++)
+            if (!(at = skip_varint(sec, e, at))) return;
+        if (!varint_get(sec, e, &at, &v)) return;
+        t = v;
+        for (k = 0; k < t; k++)
+            if (!(at = skip_varint(sec, e, at))) return;
+        ns += c - nd;
+        nb += c1 - (c - nd);
+        nt += t;
+        c = c1;
+    }
+    r[1] = at;
+    for (n = 0; n < nb + nt; n++)
+        if (!(at = skip_varint(sec, e, at))) return;
+    r[2] = at;
+    for (n = 0; n < PDW * ns; n++)
+        if (!(at = skip_varint(sec, e, at))) return;
+    r[3] = at;
+    for (n = 0; n < PDW * nb; n++)
+        if (!(at = skip_varint(sec, e, at))) return;
+    r[4] = at;
+}
+
 typedef struct Case {
     unsigned type;                  /* 0 the block mutated, 1 the header's entries mutated */
     unsigned flags;
@@ -812,10 +1117,11 @@ static void mutate_byte(unsigned char* p)
     }
 }
 
-static void mutate(Case* c, const unsigned char* sec, size_t n, unsigned flags, const Header* h, unsigned nlanes)
+static void mutate(Case* c, const unsigned char* sec, size_t n, unsigned flags, const Header* h, unsigned nlanes,
+                   unsigned pc0)
 {
-    size_t off[RCS_COUNT + 1], i, at, r[5];
-    unsigned what = (unsigned)(rnd() % 12);
+    size_t off[RCS_COUNT + 1], i, at, r[6];
+    unsigned what = (unsigned)(rnd() % 17);
     c->type = 0;
     c->flags = flags;
     c->body.n = 0;
@@ -849,8 +1155,15 @@ static void mutate(Case* c, const unsigned char* sec, size_t n, unsigned flags, 
         else if (off[2] > off[1]) mutate_byte(c->body.p + off[1] + rndn(off[2] - off[1]));
         break;
     }
+    case 11: case 12: case 13: case 14: case 15: {   /* the pool frame: control, codes, columns */
+        pool_regions(sec, off[RCS_PROJ], off[RCS_PROJ + 1], pc0, r);
+        i = what - 11;
+        if (r[i + 1] > r[i]) mutate_byte(c->body.p + r[i] + rndn(r[i + 1] - r[i]));
+        else if (off[RCS_PROJ + 1] > off[RCS_PROJ]) mutate_byte(c->body.p + off[RCS_PROJ] + rndn(off[RCS_PROJ + 1] - off[RCS_PROJ]));
+        break;
+    }
     case 8: {                                     /* a body section */
-        size_t s = RCS_PROJ + rndn(RCS_COUNT - RCS_PROJ);
+        size_t s = RCS_CELLS + rndn(RCS_COUNT - RCS_CELLS);
         if (off[s + 1] > off[s]) mutate_byte(c->body.p + off[s] + rndn(off[s + 1] - off[s]));
         break;
     }
@@ -925,11 +1238,11 @@ static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecPa
     codec_copy(d, from);
     if (c->type == 1) {
         RecCodecParams q;
-        if (!reccodec_params(&q, p->nslots, c->has[0] ? c->ent[0] : NULL, c->nent[0],
+        if (!reccodec_params(&q, p->nslots, p->nproj, c->has[0] ? c->ent[0] : NULL, c->nent[0],
                              c->has[1] ? c->ent[1] : NULL, c->nent[1], c->has[2] ? c->ent[2] : NULL,
                              c->nent[2], why, sizeof why) || !q.usable)
             return 0;
-        reccodec_restart(d, &q, w->unit, w->live);
+        reccodec_restart(d, &q, w->unit, w->live, w->pool, w->pcount, w->phw);
         return reccodec_decode(d, sec, n, out, why, sizeof why);
     }
     if (c->flags & ~(unsigned)(RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET)) return 0;
@@ -939,7 +1252,7 @@ static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecPa
         rb_put(out, c->body.p, c->body.n);
         return 1;
     }
-    if (c->flags & RBF_FRAME_RESET) reccodec_restart(d, p, w->unit, w->live);
+    if (c->flags & RBF_FRAME_RESET) reccodec_restart(d, p, w->unit, w->live, w->pool, w->pcount, w->phw);
     return reccodec_decode(d, c->body.p, c->body.n, out, why, sizeof why);
 }
 
@@ -972,11 +1285,12 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
         /* the cases of this block, from the state the block starts from */
         if (b->kind == RB_STREAM && (b->flags & RBF_SECTIONS) && g.dec) {
             unsigned want = (unsigned)(((uint64_t)ncases * (k2 + 1)) / nsect - ((uint64_t)ncases * k2) / nsect), i;
-            if (!d) d = reccodec_new(g.dec->nslots);
+            if (!d) d = reccodec_new(g.dec->nslots, g.dec->nproj);
             for (i = 0; i < want; i++) {
                 int ok;
                 uint64_t hsh = 0;
-                mutate(&c, g.r.bytes, b->raw, b->flags, &g.h, g.p.nlanes);
+                mutate(&c, g.r.bytes, b->raw, b->flags, &g.h, g.p.nlanes,
+                       (b->flags & RBF_FRAME_RESET) ? g.w.pcount : g.dec->pcount);
                 ok = case_run(&c, d, g.dec, &g.p, &g.w, g.r.bytes, b->raw, &out);
                 accepted += ok;
                 if (ok) hsh = fnv64(out.p, out.n);

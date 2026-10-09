@@ -14,7 +14,7 @@ block for the first piece) to the next RB_HEADER or the end of the file's last c
 takeover appends a segment to the file it was played from and leaves the bytes before it as they
 were, so a fork's file reads its parent's pieces and decodes only what was appended (the forks
 lane checks its file after every one of six forks). A piece's walk resumes at its header
-(reccodec.iter_blocks' `start`): a header starts a new unit frame, and what else the walk carries
+(reccodec.iter_blocks' `start`): a header starts new frames, and what else the walk carries
 across -- the block ordinal and the first header's slots -- is read off the pieces before it.
 
 AN ENTRY CANNOT BE STALE, by its key: the SHA-256 of the file's bytes from its start to the

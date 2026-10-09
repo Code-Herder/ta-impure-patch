@@ -1,9 +1,10 @@
 /* tagpu_reccodec.c -- the demo recorder's stream codec.
 
    A stream block may be a SECTIONED CONTAINER (tagpu_recfmt.h, RecSecHead and RCS_*): the
-   record kinds as runs, each category's record bodies verbatim in a section of their own, and the
-   UNIT FRAME, which carries every RK_UNIT_DELTA as residuals against a prediction. It decodes to
-   exactly the records it was made from, so whatever reads a block's payload is unchanged.
+   record kinds as runs, each category's record bodies verbatim in a section of their own, the
+   UNIT FRAME, which carries every RK_UNIT_DELTA as residuals against a prediction, and the POOL
+   FRAME, which carries every RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA. It decodes to exactly the
+   records it was made from, so whatever reads a block's payload is unchanged.
 
    THE UNIT FRAME. The codec keeps a copy of every unit image (L1: the image at the end of the
    previous iteration), the image one iteration before (L2), five lanes of the one before that
@@ -17,21 +18,34 @@
    decoded values alone. A unit that changes nothing costs nothing; the decoder rebuilds each
    RK_UNIT_DELTA from the units whose prediction made them differ from L1.
 
+   THE POOL FRAME. RCS_PROJ carries the projectile pool coded by identity. The compaction keeps
+   the survivors in order at the front and appends at the count (exe-reverse-engineering.md, the
+   projectile pool), so an iteration is: the old records that died, the survivors (each predicted
+   from its own last image by the engine's rules, pool_step), the births (each against a reference
+   row: the new pool so far, the old pool, the old pool advanced a step, or a row made from the
+   last iteration's shot events), and the stale slots past the count that changed. The decoder
+   rebuilds the pool and makes every record's body from it (pool_decode): the records are the
+   changed slots of the pool, so the pool before and after an iteration fix them (pool_check).
+
    THREE INVARIANTS make this lossless whatever the codec gets wrong:
    - DECODE BEFORE WRITE (an ordering). The writer encodes a block with its encoder, packs it,
      unpacks those bytes and decodes them with a second state through this file's decoder, and
      writes the sectioned block only when that gives back the records byte for byte; otherwise it
      writes the records (reccodec_stream_block). A codec bug costs size, never data.
-   - RESET POINTS (an ordering). The frame's state crosses block boundaries only inside a run of
-     sectioned blocks. It restarts (RBF_FRAME_RESET) at a segment's first stream block, at the
-     first after a snapshot and at the first after a records block, from the copy of the units a
-     reader holds there: a reader starts only at a snapshot or a segment's start and reads a block
-     only between iterations. A block that continues a frame this decoder did not start is
-     refused, never misread.
+   - RESET POINTS (an ordering). The frames' state crosses block boundaries only inside a run of
+     sectioned blocks. Both restart (RBF_FRAME_RESET) at a segment's first stream block, at the
+     first after a snapshot and at the first after a records block, from the copy of the units
+     and of the projectile pool a reader holds there: a reader starts only at a snapshot or a
+     segment's start and reads a block only between iterations. Every piece of pool frame state
+     that crosses a block is rebuilt from that pool or cleared (reccodec_restart). A block that
+     continues a frame this decoder did not start is refused, never misread.
    - BOUNDS. Every value read from a file is data. Each length, count, slot, varint, lane, role and
      flag is tested against its bound before it is used and a refusal names it; every operand of a
      rule is clamped before it is multiplied, so no int64 product can overflow; the constants a
-     header carries (the defs' values, gravity) are clamped where they are used.
+     header carries (the defs' values, gravity) are clamped where they are used. The pool frame's
+     counts, slots, gaps and references are tested against RT_PROJECTILES, the head's
+     iterations and the section's bytes before use; its encoder's work is bounded by
+     construction (pool_encode), not by the game's behaviour.
 
    NO FLOATING POINT. The writer thread starts at x87 precision 64 (mingw's TLS callback runs
    `fninit` on every thread it attaches), the engine runs at 53, and the Python reader
@@ -39,8 +53,13 @@
    shifts and named divisions.
 
    MEMORY: per slot the copy (0x148 bytes), L2 (0x148), L3 (16), the winners (one byte per lane,
-   128) and four flags, 804 bytes (reccodec_new); per codec the air index (128 KB) and the scratch
-   of the largest block met so far. */
+   128) and four flags, 804 bytes; per projectile record the pool and its next image, their
+   images one iteration before, the winners (27 bytes each), the ages, the advanced image and the
+   survivors' maps, 613 bytes; per codec the air index (128 KB), the last birth of each weapon
+   (442 KB), the shot events and their rows (590 KB), the search's three indexes over
+   max(nproj, 4,096) rows (12 bytes a row each, and a table of 8-byte slots at least twice the
+   rows: 393 KB up to 4,096 records), and the scratch of the largest block met so far
+   (reccodec_new). At 3,000 records the pool frame is about 3.4 MB a codec. */
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -417,6 +436,20 @@ static void rot(int64_t x1, int64_t z1, int64_t x2, int64_t z2, int64_t* px, int
 
 /* ---- the state ------------------------------------------------------------------------------ */
 
+#define PDW   REC_PROJ_DWORDS         /* a projectile image's dwords, 27                          */
+#define PIMG  REC_PROJ_IMAGE
+#define SHOT  36                      /* an RK_EV_SHOT's body                                     */
+
+/* The encoder's search index over one reference section's rows (pool_encode): per weapon key the
+   latest row and each row's predecessor of the same key, and an open-addressing table of
+   (weapon, shooter) keys with each row's predecessor of the same pair. */
+typedef struct Chains {
+    int32_t   headw[RECC_WEAPON_IDS + 1];
+    int32_t  *prevw, *prevws, *top;   /* [rows], [rows], [tsize]: -1 for none                 */
+    uint32_t *key, *used;             /* [tsize]; the table slots taken, [rows]               */
+    unsigned  tsize, tbits, nused;
+} Chains;
+
 struct RecCodec {
     unsigned nslots;
     int valid;
@@ -433,16 +466,76 @@ struct RecCodec {
     RecBytes tl, dl, runs, lslot, lmask, lzz, ids, hash, cols;
     RecBytes sec[RCS_COUNT];              /* the encoder's sections                             */
     unsigned lcount[RECC_TICKS_MAX];
-    int over;                             /* the encoder's frame passed RECC_FRAME_CAP          */
+    int over;                             /* an encoder's frame passed RECC_FRAME_CAP           */
+    /* the pool frame (THE POOL FRAME, pool_restart): nproj records of PDW dwords each */
+    unsigned nproj, pcount, phw;          /* the pool's count and extent: pcount <= phw <= nproj */
+    unsigned ncount, nhw, nchg, nshots, evnext;
+    uint32_t *pool, *pool_n;              /* P, and Pn: the image the iteration makes          */
+    uint32_t *pool_l2, *pool_l2n;         /* each live record's image one iteration before     */
+    unsigned char *pwin, *pwin_n;         /* each live record's winner per dword, 0..2          */
+    unsigned char *page, *page_n;         /* 0 past the count, 1 no history yet, 2               */
+    uint32_t* lastnew;                    /* per weapon ID, the last birth with that +0x00      */
+    unsigned char* shots;                 /* the last iteration's RK_EV_SHOT bodies             */
+    uint32_t* ev;                         /* their rows, PS_EV                                  */
+    uint32_t* adv;                        /* PS_ADV's rows, made on demand ...                  */
+    unsigned char* adv_done;              /* ... once an iteration                              */
+    int32_t *pm, *pinv;                   /* each survivor's old slot; an old slot's new index  */
+    uint32_t *pchg, *ptl;                 /* the changed slots; the tail's                      */
+    Chains ch[3];                         /* the encoder's search: PS_OUT, PS_OLD, PS_EV        */
+    RecBytes pctl, pref, psurv, pbirth, ptail;   /* the encoder's pool frame, per block         */
+    RecBytes pb;                          /* the decoder's projectile records' bodies           */
+    size_t pat[RECC_TICKS_MAX];           /* the decoder's: each iteration's control values     */
 };
 
-RecCodec* reccodec_new(unsigned nslots)
+RecCodec* reccodec_new(unsigned nslots, unsigned nproj)
 {
     RecCodec* c;
-    if (nslots < 2 || nslots > 0xFFFF) return NULL;
+    unsigned i, rows = nproj > RECC_SHOTS_MAX ? nproj : RECC_SHOTS_MAX;
+    int ok = 1;
+    if (nslots < 2 || nslots > 0xFFFF || nproj < 1 || nproj > 0xFFFF) return NULL;
     c = (RecCodec*)calloc(1, sizeof *c);
     if (!c) return NULL;
     c->nslots = nslots;
+    c->nproj = nproj;
+    c->pool = (uint32_t*)calloc(nproj, PIMG);
+    c->pool_n = (uint32_t*)calloc(nproj, PIMG);
+    c->pool_l2 = (uint32_t*)calloc(nproj, PIMG);
+    c->pool_l2n = (uint32_t*)calloc(nproj, PIMG);
+    c->pwin = (unsigned char*)calloc(nproj, PDW);
+    c->pwin_n = (unsigned char*)calloc(nproj, PDW);
+    c->page = (unsigned char*)calloc(nproj, 1);
+    c->page_n = (unsigned char*)calloc(nproj, 1);
+    c->lastnew = (uint32_t*)calloc(RECC_WEAPON_IDS + 1, PIMG);
+    c->shots = (unsigned char*)calloc(RECC_SHOTS_MAX, SHOT);
+    c->ev = (uint32_t*)calloc(RECC_SHOTS_MAX, PIMG);
+    c->adv = (uint32_t*)calloc(nproj, PIMG);
+    c->adv_done = (unsigned char*)calloc(nproj, 1);
+    c->pm = (int32_t*)calloc(nproj, sizeof *c->pm);
+    c->pinv = (int32_t*)calloc(nproj, sizeof *c->pinv);
+    c->pchg = (uint32_t*)calloc(nproj, sizeof *c->pchg);
+    c->ptl = (uint32_t*)calloc(nproj, sizeof *c->ptl);
+    ok = c->pool && c->pool_n && c->pool_l2 && c->pool_l2n && c->pwin && c->pwin_n && c->page &&
+         c->page_n && c->lastnew && c->shots && c->ev && c->adv && c->adv_done && c->pm && c->pinv &&
+         c->pchg && c->ptl;
+    /* a table of at least twice the rows, so a lookup's probes run at a load of at most 1/2 */
+    for (i = 0; i < 3 && ok; i++) {
+        Chains* x = &c->ch[i];
+        unsigned k;
+        for (x->tbits = 1; (1u << x->tbits) < 2 * rows; x->tbits++) ;
+        x->tsize = 1u << x->tbits;
+        x->prevw = (int32_t*)calloc(rows, sizeof *x->prevw);
+        x->prevws = (int32_t*)calloc(rows, sizeof *x->prevws);
+        x->used = (uint32_t*)calloc(rows, sizeof *x->used);
+        x->top = (int32_t*)malloc(x->tsize * sizeof *x->top);
+        x->key = (uint32_t*)calloc(x->tsize, sizeof *x->key);
+        ok = x->prevw && x->prevws && x->used && x->top && x->key;
+        if (ok)
+            for (k = 0; k < x->tsize; k++) x->top[k] = -1;
+    }
+    if (!ok) {
+        reccodec_free(c);
+        return NULL;
+    }
     c->airix = (uint16_t*)malloc(65536 * sizeof *c->airix);
     c->unit = (uint32_t*)calloc(nslots, IMG);
     c->l2 = (uint32_t*)calloc(nslots, IMG);
@@ -473,6 +566,36 @@ void reccodec_free(RecCodec* c)
     free(c->rest);
     free(c->live);
     free(c->touched);
+    free(c->pool);
+    free(c->pool_n);
+    free(c->pool_l2);
+    free(c->pool_l2n);
+    free(c->pwin);
+    free(c->pwin_n);
+    free(c->page);
+    free(c->page_n);
+    free(c->lastnew);
+    free(c->shots);
+    free(c->ev);
+    free(c->adv);
+    free(c->adv_done);
+    free(c->pm);
+    free(c->pinv);
+    free(c->pchg);
+    free(c->ptl);
+    for (i = 0; i < 3; i++) {
+        free(c->ch[i].prevw);
+        free(c->ch[i].prevws);
+        free(c->ch[i].used);
+        free(c->ch[i].top);
+        free(c->ch[i].key);
+    }
+    rb_free(&c->pctl);
+    rb_free(&c->pref);
+    rb_free(&c->psurv);
+    rb_free(&c->pbirth);
+    rb_free(&c->ptail);
+    rb_free(&c->pb);
     rb_free(&c->tl);
     rb_free(&c->dl);
     rb_free(&c->runs);
@@ -490,6 +613,12 @@ void reccodec_invalidate(RecCodec* c) { c->valid = 0; }
 int reccodec_valid(const RecCodec* c) { return c->valid; }
 const uint32_t* reccodec_units(const RecCodec* c) { return c->unit; }
 const unsigned char* reccodec_live(const RecCodec* c) { return c->live; }
+const unsigned char* reccodec_pool(const RecCodec* c, unsigned* count, unsigned* hw)
+{
+    *count = c->pcount;
+    *hw = c->phw;
+    return (const unsigned char*)c->pool;
+}
 
 static uint32_t lane_get(const unsigned char* img, const RecLaneRow* r)
 {
@@ -537,8 +666,11 @@ static void slot_fresh(RecCodec* c, unsigned s)
     c->age[s] = 1;
 }
 
+static int pool_restart(RecCodec* c, const unsigned char* pool, unsigned count, unsigned hw);
+
 void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* units,
-                      const unsigned char* live)
+                      const unsigned char* live, const unsigned char* pool, unsigned count,
+                      unsigned hw)
 {
     unsigned s, j, i;
     c->valid = 0;
@@ -555,9 +687,15 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
     rb_clear(&c->ids);
     rb_clear(&c->hash);
     rb_clear(&c->cols);
+    rb_clear(&c->pctl);
+    rb_clear(&c->pref);
+    rb_clear(&c->psurv);
+    rb_clear(&c->pbirth);
+    rb_clear(&c->ptail);
+    rb_clear(&c->pb);
     for (i = 0; i < RCS_COUNT; i++) rb_clear(&c->sec[i]);
-    if (!p->usable || p->nslots != c->nslots || p->nlanes < 1 || p->nlanes > RECC_LANES_MAX ||
-        p->nair > RECC_AIR_MAX)
+    if (!p->usable || p->nslots != c->nslots || p->nproj != c->nproj || p->nlanes < 1 ||
+        p->nlanes > RECC_LANES_MAX || p->nair > RECC_AIR_MAX)
         return;
     if (p != &c->p) c->p = *p;
     for (i = 0; i < REC_LR_N; i++) c->lane_of[i] = -1;
@@ -598,18 +736,20 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
         memcpy(c->win + (size_t)s * RECC_LANES_MAX, c->defwin, RECC_LANES_MAX);
         c->age[s] = c->live[s];
     }
-    c->valid = 1;
+    c->valid = pool_restart(c, pool, count, hw);
 }
 
 /* ---- the header's codec entries ------------------------------------------------------------- */
 
-int reccodec_params(RecCodecParams* p, unsigned nslots, const void* codec, unsigned ncodec,
-                    const void* physics, unsigned nphysics, const void* air, unsigned nair,
-                    char* why, unsigned cap)
+int reccodec_params(RecCodecParams* p, unsigned nslots, unsigned nproj, const void* codec,
+                    unsigned ncodec, const void* physics, unsigned nphysics, const void* air,
+                    unsigned nair, char* why, unsigned cap)
 {
     memset(p, 0, sizeof *p);
     p->nslots = nslots;
+    p->nproj = nproj;
     if (nslots < 2 || nslots > 0xFFFF) REFUSE("RT_SLOTS %u is outside 2..65535", nslots);
+    if (nproj < 1 || nproj > 0xFFFF) REFUSE("RT_PROJECTILES %u is outside 1..65535", nproj);
     if (codec) {
         const unsigned char* b = (const unsigned char*)codec;
         unsigned n, i, at = 0, counts = 0;
@@ -997,19 +1137,664 @@ static void touched_end(RecCodec* c)
 
 static int bit_of(const unsigned char* bits, unsigned i) { return bits[i >> 3] >> (i & 7) & 1; }
 
+/* ---- the pool frame ------------------------------------------------------------------------- */
+
+/* A reference's section (tagpu_recfmt.h, RCS_PROJ): the new pool so far, the old pool, the old
+   pool advanced one step, the rows made from the last iteration's shot events. */
+enum { PS_OUT, PS_OLD, PS_ADV, PS_EV };
+
+/* The survivor step's dword order, which the format fixes: each rule reads only dwords decoded
+   before it -- the velocity (7..9) reads the heading, pitch and speed (13..15), the position
+   (1..3) the velocity. */
+static const unsigned char PORDER[PDW] = { 13, 14, 15, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 10, 11, 12,
+                                           16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26 };
+
+/* The encoder's search, policy and not format: the decoder reads only the section and the row a
+   code names, so another choice here costs size, never readability. */
+#define RECC_CAND          4    /* candidates a section at most                                */
+#define RECC_MATCH_WINDOW  8    /* the old slots the matcher tries after its last pairing      */
+#define RECC_MATCH_EQUAL   12   /* the dwords of 27 a pairing needs equal, +0x00 among them    */
+#define RECC_TAIL_WINDOW   16   /* a tail slot's rows: within this of the section's anchor     */
+#define RECC_PROBE_MAX     32   /* the slots a (weapon, shooter) lookup probes at most         */
+
+/* a 32-bit residual's zigzag: r < 2^31 -> 2r, else 2 (2^32 - r) - 1, and back */
+static uint32_t zz32(uint32_t r)
+{
+    return r < 0x80000000u ? 2u * r : (uint32_t)(2 * (UINT64_C(0x100000000) - r) - 1);
+}
+static uint32_t unzz32(uint32_t z) { return (0u - (z & 1)) ^ (z >> 1); }
+/* a signed count or row distance's zigzag, |d| < 2^31 */
+static uint32_t zz64(int64_t d) { return (uint32_t)(d >= 0 ? 2 * d : -2 * d - 1); }
+static int64_t unzz64(uint32_t v) { return v & 1 ? -(int64_t)(v >> 1) - 1 : (int64_t)(v >> 1); }
+static unsigned leblen(uint32_t v)
+{
+    return 1u + (v >= 1u << 7) + (v >= 1u << 14) + (v >= 1u << 21) + (v >= 1u << 28);
+}
+
+/* THE GUIDED RULE. The velocity the projectile tick gives a weapon with +0x111 bit 20 in flight
+   (0x49BA74..0x49BABE, DISASSEMBLED), after its speed step (0x49BA16..0x49BA31) and its aim and
+   turn (0x49BA34..0x49BA6F): vy = 0x4B70EF(pitch +0x38, speed +0x3A), h = 0x4B7123(pitch,
+   speed), vx = -0x4B70EF(heading +0x36, h), vz = -0x4B7123(heading, h) -- dwords 7..9 from the
+   heading (dword 13's high half), the pitch (dword 14's low half) and the speed (dword 14's high
+   half and dword 15's low half). |SIN * speed| and |SIN * h| are at most 2^13 * 2^31. */
+static void guided(const uint32_t* x, uint32_t v[3])
+{
+    uint32_t heading = x[13] >> 16, pitch = x[14] & 0xFFFF;
+    int64_t speed = s32((int64_t)((x[14] >> 16) | (x[15] & 0xFFFF) << 16));
+    int64_t h = cosmul(pitch, speed);
+    v[0] = (uint32_t)(uint64_t)-sinmul(heading, h);
+    v[1] = (uint32_t)(uint64_t)sinmul(pitch, speed);
+    v[2] = (uint32_t)(uint64_t)-cosmul(heading, h);
+}
+
+/* The image's own velocity follows the guided rule -- a guided shot in flight, and the zero row.
+   It stands in for the weapon bit the codec does not have. A predictor: wrong, it costs size. */
+static int held(const uint32_t* x)
+{
+    uint32_t v[3];
+    guided(x, v);
+    return v[0] == x[7] && v[1] == x[8] && v[2] == x[9];
+}
+
+/* THE SURVIVOR STEP of old slot m (its last image L = P[m], the one before L2 = H[m], its age):
+   dword by dword in PORDER, the prediction is candidate win[d] of the rule k0, the last value k1
+   and the line through the last two k2; the residual is applied (dec) or made (enc), and the
+   next winner is the first candidate closest to the value. k0 is
+   - for the position, the last value plus this iteration's velocity, with the last step's drift
+     carried: position += velocity on every path of the tick (0x49BB3A..0x49BB58, DISASSEMBLED);
+   - for the velocity, the guided rule when the last image followed it, else the last value;
+   - for +0x67 (dword 25's top byte, dword 26's low byte), the compaction's stamp: 0x49AE20
+     writes each record's index there before it slides the survivors down (0x49AE5F,
+     DISASSEMBLED), so a survivor's stamp is the slot it held in the last image, m;
+   - else the last value.
+   Each is a predictor: a wrong one costs size. */
+static void pool_step(const RecCodec* c, unsigned m, uint32_t* u, uint32_t* res, unsigned char* win,
+                      int dec)
+{
+    const uint32_t* L = c->pool + (size_t)m * PDW;
+    const uint32_t* L2 = c->pool_l2 + (size_t)m * PDW;
+    unsigned a = c->page[m], i, k, best;
+    int hl = held(L);
+    uint32_t g[3] = { 0, 0, 0 }, cand[3];
+    for (i = 0; i < PDW; i++) {
+        unsigned d = PORDER[i];
+        uint32_t l1 = L[d], l2 = a >= 2 ? L2[d] : l1;
+        cand[1] = l1;
+        cand[2] = 2u * l1 - l2;
+        if (d >= 1 && d <= 3) {
+            cand[0] = l1 + u[d + 6] + (a >= 2 ? l1 - l2 - L[d + 6] : 0u);
+        } else if (d >= 7 && d <= 9) {
+            if (d == 7 && hl) guided(u, g);
+            cand[0] = hl ? g[d - 7] : l1;
+        } else if (d == 25) {
+            cand[0] = (cand[2] & 0x00FFFFFFu) | (uint32_t)(m & 0xFF) << 24;
+        } else if (d == 26) {
+            cand[0] = (l1 & 0xFFFFFF00u) | (m >> 8 & 0xFF);
+        } else {
+            cand[0] = l1;
+        }
+        if (dec) u[d] = cand[win[d]] + res[d];
+        else res[d] = u[d] - cand[win[d]];
+        best = 0;
+        for (k = 1; k < 3; k++)
+            if (err_of(u[d], cand[k], 0xFFFFFFFFu) < err_of(u[d], cand[best], 0xFFFFFFFFu)) best = k;
+        win[d] = (unsigned char)best;
+    }
+}
+
+/* PS_ADV's row kk: the survivor step of old slot kk with no residual and a scratch copy of its
+   winners, from the state before this iteration; made once an iteration (adv_done). */
+static const uint32_t* adv_row(RecCodec* c, unsigned kk)
+{
+    uint32_t* u = c->adv + (size_t)kk * PDW;
+    if (!c->adv_done[kk]) {
+        uint32_t zero[PDW];
+        unsigned char w[PDW];
+        memset(zero, 0, sizeof zero);
+        memcpy(w, c->pwin + (size_t)kk * PDW, PDW);
+        pool_step(c, kk, u, zero, w, 1);
+        c->adv_done[kk] = 1;
+    }
+    return u;
+}
+
+/* An EV row from a shot body b: the last birth of its weapon (lastnew), with what the 0x0D
+   packet says of the shot written over it. The sender (0x49D7AD..0x49D81D, DISASSEMBLED) puts
+   three dwords of the fire function's locals at +0x01 ([INFERRED] the fire point), the target
+   point at +0x0D, the weapon's ID byte at +0x19 and the target's and shooter's unit indices at
+   +0x1F and +0x21; the recorder masks the event (tagpu_recfmt.h RK_EV_SHOT) and puts the weapon
+   index's high bits in +0x23's high nibble in the raised build. So: +0x00 the weapon ID (index
+   + 1), the position +0x04 and the tail +0x10 the fire point, the target point +0x28, and the
+   target +0x4E and attacker +0x52 as the image's unit IDs, which are the event's. In the
+   stock-limits build that nibble is not weapon bits [INFERRED]: the row may name the wrong
+   weapon, which costs size only. */
+static void ev_row(const RecCodec* c, const unsigned char* b, uint32_t* row)
+{
+    unsigned w = b[0x19] | (unsigned)(b[0x23] >> 4) << 8, i;
+    unsigned char r[PIMG];
+    const uint32_t* base = c->lastnew + (size_t)(w + 1) * PDW;
+    for (i = 0; i < PDW; i++) put32(r + 4 * i, base[i]);
+    put32(r, w + 1);
+    memcpy(r + 0x04, b + 0x01, 12);
+    memcpy(r + 0x10, b + 0x01, 12);
+    memcpy(r + 0x28, b + 0x0D, 12);
+    put32(r + 0x4E, get16(b + 0x1F));
+    put32(r + 0x52, get16(b + 0x21));
+    for (i = 0; i < PDW; i++) row[i] = get32(r + 4 * i);
+}
+
+/* +0x67's stamp: a birth appended at the count holds slot c0 + i until the compaction writes
+   its index there (every append is at the count: the ten appends, exe-reverse-engineering.md) */
+static void stamp_row(uint32_t* r, unsigned s)
+{
+    r[25] = (r[25] & 0x00FFFFFFu) | (uint32_t)(s & 0xFF) << 24;
+    r[26] = (r[26] & 0xFFFFFF00u) | (s >> 8 & 0xFF);
+}
+
+/* THE REFERENCE-CODED ROW of R (NULL: the zero row), stamped with s for a birth: every dword but
+   the velocity is R's plus its residual; the velocity is then the guided rule of the row itself
+   when R follows the rule, else R's, plus its residual. The row is made from `res` (dec) or `res`
+   from the row (enc). */
+static void ref_row(const uint32_t* R, int birth, unsigned s, uint32_t* res, uint32_t* row, int dec)
+{
+    uint32_t p[PDW], g[3];
+    unsigned d;
+    if (R) memcpy(p, R, PIMG);
+    else memset(p, 0, PIMG);
+    if (birth) stamp_row(p, s);
+    for (d = 0; d < PDW; d++) {
+        if (d >= 7 && d <= 9) continue;
+        if (dec) row[d] = p[d] + res[d];
+        else res[d] = row[d] - p[d];
+    }
+    if (held(p)) {
+        guided(row, g);
+        p[7] = g[0];
+        p[8] = g[1];
+        p[9] = g[2];
+    }
+    for (d = 7; d <= 9; d++) {
+        if (dec) row[d] = p[d] + res[d];
+        else res[d] = row[d] - p[d];
+    }
+}
+
+/* A projectile record onto an image of the pool by the reader's rules (tagpu_recreader.c,
+   RK_PROJ_HEAD..RK_PROJ_DELTA, but for the order of the file, which decode before write makes
+   irrelevant: the bytes decoded are the bytes encoded). 0 where the reader refuses. */
+static int pool_apply(const RecCodec* c, uint32_t* img, unsigned* count, unsigned* hw, unsigned kind,
+                      const unsigned char* b, unsigned len)
+{
+    unsigned id, i, n = 0, k;
+    uint32_t bits;
+    if (kind == RK_PROJ_HEAD) {
+        uint32_t v0, v1;
+        if (len != 8) return 0;
+        v0 = get32(b);
+        v1 = get32(b + 4);
+        if (v0 > v1 || v1 > c->nproj) return 0;
+        /* records past the extent are zero in every copy: a shrink gives them up */
+        if (v1 < *hw) memset(img + (size_t)v1 * PDW, 0, (size_t)(*hw - v1) * PIMG);
+        *count = v0;
+        *hw = v1;
+        return 1;
+    }
+    if (len < 2) return 0;
+    id = get16(b);
+    if (kind == RK_PROJ) {
+        if (len != 4 + PIMG || b[2] || b[3] || id >= *hw) return 0;
+        for (i = 0; i < PDW; i++) img[(size_t)id * PDW + i] = get32(b + 4 + 4 * i);
+        return 1;
+    }
+    if (len < REC_PROJ_DELTA_HEAD || id >= *hw) return 0;
+    bits = get32(b + 2);
+    if (bits >> PDW) return 0;
+    for (i = 0; i < PDW; i++) n += bits >> i & 1;
+    if (len != REC_PROJ_DELTA_HEAD + 4 * n) return 0;
+    for (i = 0, k = 0; i < PDW; i++)
+        if (bits >> i & 1) img[(size_t)id * PDW + i] = get32(b + REC_PROJ_DELTA_HEAD + 4 * k++);
+    return 1;
+}
+
+/* The body of an RK_PROJ (whole) or RK_PROJ_DELTA (the dwords that differ from `old`) for slot
+   j with image `row`, as the capture makes it (cap_proj): its length. */
+static unsigned pool_body(unsigned kind, unsigned j, const uint32_t* old, const uint32_t* row,
+                          unsigned char* out)
+{
+    unsigned d, n = 0;
+    uint32_t bits = 0;
+    out[0] = (unsigned char)j;
+    out[1] = (unsigned char)(j >> 8);
+    if (kind == RK_PROJ) {
+        out[2] = out[3] = 0;
+        for (d = 0; d < PDW; d++) put32(out + 4 + 4 * d, row[d]);
+        return 4 + PIMG;
+    }
+    for (d = 0; d < PDW; d++)
+        if (row[d] != old[d]) {
+            bits |= (uint32_t)1 << d;
+            put32(out + REC_PROJ_DELTA_HEAD + 4 * n++, row[d]);
+        }
+    put32(out + 2, bits);
+    out[6] = out[7] = 0;
+    return REC_PROJ_DELTA_HEAD + 4 * n;
+}
+
+/* The pool frame restarts from a world's pool (tagpu_reccodec.h): the copy and its count and
+   extent from the world, every other piece of state cleared -- no history, the rule the first
+   winner, no last birth, no shot. 0: a count past the extent or an extent past the pool. */
+static int pool_restart(RecCodec* c, const unsigned char* pool, unsigned count, unsigned hw)
+{
+    unsigned i, n = c->nproj;
+    if (count > hw || hw > n) return 0;
+    if (pool != (const unsigned char*)c->pool)
+        for (i = 0; i < hw * PDW; i++) c->pool[i] = get32(pool + 4 * (size_t)i);
+    memset(c->pool + (size_t)hw * PDW, 0, (size_t)(n - hw) * PIMG);
+    memset(c->pool_n, 0, (size_t)n * PIMG);
+    memset(c->pwin, 0, (size_t)n * PDW);
+    memset(c->page, 0, n);
+    memset(c->page, 1, count);
+    memset(c->lastnew, 0, (size_t)(RECC_WEAPON_IDS + 1) * PIMG);
+    c->pcount = count;
+    c->phw = hw;
+    c->nshots = 0;
+    return 1;
+}
+
+/* THE CANONICAL TEST. The capture sends, after an optional RK_PROJ_HEAD, one record for each
+   slot below hw whose image changed, ascending, whole or as the delta of exactly the dwords that
+   changed (cap_proj), and records past the extent are zero in every copy, so the pool before and
+   after an iteration fix every body but each record's kind, which RCS_KINDS keeps. An iteration
+   of another form -- a writer's correction naming a slot twice, a second head, an extent that
+   shrinks -- is declined before anything of it is applied: 0. Otherwise the iteration's pool is
+   in pool_n, its count and extent in ncount and nhw, and its changed slots in pchg. Work: the
+   records times 27 dwords, and the changed scan, nhw * 27. */
+static int pool_check(RecCodec* c, const unsigned char* pl, size_t at, size_t end)
+{
+    unsigned count = c->pcount, hw = c->phw, heads = 0, nslot = 0, j, q;
+    size_t p;
+    unsigned char body[4 + PIMG];
+    /* pool_n is zero from phw on: it is the pool of the iteration before, or a restart's zeros */
+    memcpy(c->pool_n, c->pool, (size_t)c->phw * PIMG);
+    for (p = at; p < end; p += (4 + (size_t)get16(pl + p + 2) + 3) & ~(size_t)3) {
+        unsigned kind = get16(pl + p), len = get16(pl + p + 2);
+        if (kind != RK_PROJ_HEAD && kind != RK_PROJ && kind != RK_PROJ_DELTA) continue;
+        if (!pool_apply(c, c->pool_n, &count, &hw, kind, pl + p + 4, len)) return 0;
+        if (kind == RK_PROJ_HEAD && (++heads > 1 || hw < c->phw)) return 0;
+        if (kind != RK_PROJ_HEAD) nslot++;
+    }
+    c->nchg = 0;
+    for (j = 0; j < hw; j++)
+        if (memcmp(c->pool_n + (size_t)j * PDW, c->pool + (size_t)j * PDW, PIMG)) c->pchg[c->nchg++] = j;
+    if (nslot != c->nchg) return 0;
+    for (p = at, q = 0; p < end; p += (4 + (size_t)get16(pl + p + 2) + 3) & ~(size_t)3) {
+        unsigned kind = get16(pl + p), len = get16(pl + p + 2);
+        if (kind != RK_PROJ && kind != RK_PROJ_DELTA) continue;
+        j = c->pchg[q++];
+        if (pool_body(kind, j, c->pool + (size_t)j * PDW, c->pool_n + (size_t)j * PDW, body) != len ||
+            memcmp(body, pl + p + 4, len))
+            return 0;
+    }
+    c->ncount = count;
+    c->nhw = hw;
+    return 1;
+}
+
+/* the search's keys: the weapon ID (+0x00) when it is one, else 0; the attacker (+0x52) */
+static unsigned wkey(const uint32_t* r) { return r[0] >= 1 && r[0] <= RECC_WEAPON_IDS ? r[0] : 0; }
+static unsigned shkey(const uint32_t* r) { return r[20] >> 16; }
+
+static unsigned chains_slot(const Chains* x, uint32_t key, unsigned i)
+{
+    return (((key * 2654435761u) >> (32 - x->tbits)) + i) & (x->tsize - 1);
+}
+
+static void chains_reset(Chains* x)
+{
+    unsigned i;
+    for (i = 0; i <= RECC_WEAPON_IDS; i++) x->headw[i] = -1;
+    for (i = 0; i < x->nused; i++) x->top[x->used[i]] = -1;
+    x->nused = 0;
+}
+
+/* Row r, the section's latest: a row whose (weapon, shooter) key finds no slot within
+   RECC_PROBE_MAX stays out of the table and in its weapon chain (size only). */
+static void chains_add(Chains* x, unsigned r, const uint32_t* row)
+{
+    unsigned w = wkey(row), i;
+    uint32_t key = (uint32_t)w << 16 | shkey(row);
+    x->prevw[r] = x->headw[w];
+    x->headw[w] = (int32_t)r;
+    x->prevws[r] = -1;
+    for (i = 0; i < RECC_PROBE_MAX; i++) {
+        unsigned t = chains_slot(x, key, i);
+        if (x->top[t] < 0) {
+            x->key[t] = key;
+            x->top[t] = (int32_t)r;
+            x->used[x->nused++] = t;
+            return;
+        }
+        if (x->key[t] == key) {
+            x->prevws[r] = x->top[t];
+            x->top[t] = (int32_t)r;
+            return;
+        }
+    }
+}
+
+/* Up to RECC_CAND rows of weapon key w: those of shooter sh first, then the rest, each group the
+   latest first -- RECC_CAND + 3 chain steps at most. */
+static unsigned chains_cands(const Chains* x, unsigned w, unsigned sh, int32_t* out)
+{
+    uint32_t key = (uint32_t)w << 16 | sh;
+    unsigned n = 0, t, i, k;
+    int32_t r;
+    for (i = 0; i < RECC_PROBE_MAX; i++) {
+        unsigned s = chains_slot(x, key, i);
+        if (x->top[s] < 0) break;
+        if (x->key[s] == key) {
+            for (r = x->top[s]; r >= 0 && n < RECC_CAND; r = x->prevws[r]) out[n++] = r;
+            break;
+        }
+    }
+    t = n;
+    for (r = x->headw[w]; r >= 0 && n < RECC_CAND; r = x->prevw[r]) {
+        for (k = 0; k < t && out[k] != r; k++) ;
+        if (k == t) out[n++] = r;
+    }
+    return n;
+}
+
+/* a section's row kk (in range) */
+static const uint32_t* sec_row(RecCodec* c, unsigned sec, unsigned kk)
+{
+    switch (sec) {
+    case PS_OUT: return c->pool_n + (size_t)kk * PDW;
+    case PS_OLD: return c->pool + (size_t)kk * PDW;
+    case PS_ADV: return adv_row(c, kk);
+    default:     return c->ev + (size_t)kk * PDW;
+    }
+}
+
+/* The best reference so far: the lowest cost, ties to the earlier section, then to the earlier
+   candidate. The cost is the residuals' varint bytes. */
+typedef struct Best { unsigned cost, sec; int64_t kk; int any; } Best;
+
+static void consider(RecCodec* c, Best* b, unsigned sec, unsigned kk, int birth, unsigned s,
+                     uint32_t* row)
+{
+    uint32_t res[PDW];
+    unsigned d, cost = 0;
+    ref_row(sec_row(c, sec, kk), birth, s, res, row, 0);
+    for (d = 0; d < PDW; d++) cost += leblen(zz32(res[d]));
+    if (!b->any || cost < b->cost) {
+        b->any = 1;
+        b->cost = cost;
+        b->sec = sec;
+        b->kk = kk;
+    }
+}
+
+/* A reference's code (tagpu_recfmt.h, RCS_PROJ): 0 the zero row, else 1 + (zigzag(kk - anchor)
+   << 2 | section). */
+static uint32_t ref_code(const Best* b, const int64_t anchor[4])
+{
+    return b->any ? 1 + (zz64(b->kk - anchor[b->sec]) << 2 | b->sec) : 0;
+}
+
+/* The reference of birth k (stamp s): per section the RECC_CAND rows of its weapon, the shooter
+   first, then the latest -- the research's "same weapon, same shooter first, nearest the
+   anchor" for anchors at the sections' ends -- PS_ADV taking PS_OLD's rows; with no row of its
+   weapon anywhere, the last RECC_CAND rows of each section, ordered the same. */
+static uint32_t pool_birth_ref(RecCodec* c, unsigned k, unsigned s, uint32_t* row, unsigned c0,
+                               unsigned ne, uint32_t* res, Best* b)
+{
+    static const unsigned SEC[3] = { PS_OUT, PS_OLD, PS_EV };
+    int32_t cand[3][RECC_CAND];
+    unsigned n[3], len[3] = { k, c0, ne }, w = wkey(row), sh = shkey(row), i, q, t;
+    int64_t anchor[4];
+    anchor[PS_OUT] = (int64_t)k - 1;
+    anchor[PS_OLD] = anchor[PS_ADV] = (int64_t)c0 - 1;
+    anchor[PS_EV] = c->evnext < ne ? (int64_t)c->evnext : (int64_t)ne - 1;
+    for (i = 0; i < 3; i++) n[i] = c->ch[i].headw[w] >= 0 ? chains_cands(&c->ch[i], w, sh, cand[i]) : 0;
+    if (!n[0] && !n[1] && !n[2])
+        for (i = 0; i < 3; i++) {
+            const uint32_t* base = SEC[i] == PS_OUT ? c->pool_n : SEC[i] == PS_OLD ? c->pool : c->ev;
+            unsigned lo = len[i] > RECC_CAND ? len[i] - RECC_CAND : 0, pass;
+            for (pass = 0; pass < 2; pass++)
+                for (t = len[i]; t-- > lo;)
+                    if ((shkey(base + (size_t)t * PDW) == sh) == !pass) cand[i][n[i]++] = (int32_t)t;
+        }
+    memset(b, 0, sizeof *b);
+    for (q = 0; q < 4; q++) {
+        unsigned from = q == PS_OUT ? 0 : q == PS_EV ? 2 : 1;
+        for (t = 0; t < n[from]; t++) consider(c, b, q, (unsigned)cand[from][t], 1, s, row);
+    }
+    ref_row(b->any ? sec_row(c, b->sec, (unsigned)b->kk) : NULL, 1, s, res, row, 0);
+    if (b->any && b->sec == PS_EV) c->evnext = (unsigned)b->kk + 1;
+    return ref_code(b, anchor);
+}
+
+/* The reference of tail slot j: in each section the rows within RECC_TAIL_WINDOW of its anchor
+   with its weapon -- and in PS_OLD slot j itself whatever its weapon, but no other stale slot --
+   the shooter first, then the nearest, then the lower; RECC_CAND of them. With none in any
+   section, the same windows without the weapon test. */
+static uint32_t pool_tail_ref(RecCodec* c, unsigned j, uint32_t* row, const int64_t anchor[4],
+                              const unsigned len[4], unsigned c0, uint32_t* res)
+{
+    int32_t cand[4][2 * RECC_TAIL_WINDOW + 1];
+    unsigned n[4], w = wkey(row), sh = shkey(row), q, t, any = 0, pass;
+    Best b;
+    for (pass = 0; pass < 2 && !any; pass++)
+        for (q = 0; q < 4; q++) {
+            int64_t r, lo = anchor[q] - RECC_TAIL_WINDOW, hi = anchor[q] + RECC_TAIL_WINDOW;
+            n[q] = 0;
+            if (lo < 0) lo = 0;
+            if (hi > (int64_t)len[q] - 1) hi = (int64_t)len[q] - 1;
+            for (r = lo; r <= hi; r++) {
+                int own = q == PS_OLD && r == j;
+                if (q == PS_OLD && r >= c0 && !own) continue;
+                if (pass == 0 && !own && wkey(sec_row(c, q, (unsigned)r)) != w) continue;
+                cand[q][n[q]++] = (int32_t)r;
+            }
+            any |= n[q];
+        }
+    memset(&b, 0, sizeof b);
+    for (q = 0; q < 4; q++) {
+        /* the first RECC_CAND by (another shooter, distance, row): an insertion sort of <= 33 */
+        unsigned i, k;
+        for (i = 1; i < n[q]; i++) {
+            int32_t r = cand[q][i];
+            int64_t key = (int64_t)(shkey(sec_row(c, q, (unsigned)r)) != sh) << 32 |
+                          (r > anchor[q] ? r - anchor[q] : anchor[q] - r) << 16 | r;
+            for (k = i; k > 0; k--) {
+                int32_t o = cand[q][k - 1];
+                int64_t ko = (int64_t)(shkey(sec_row(c, q, (unsigned)o)) != sh) << 32 |
+                             (o > anchor[q] ? o - anchor[q] : anchor[q] - o) << 16 | o;
+                if (ko <= key) break;
+                cand[q][k] = o;
+            }
+            cand[q][k] = r;
+        }
+        for (t = 0; t < n[q] && t < RECC_CAND; t++) consider(c, &b, q, (unsigned)cand[q][t], 0, 0, row);
+    }
+    ref_row(b.any ? sec_row(c, b.sec, (unsigned)b.kk) : NULL, 0, 0, res, row, 0);
+    return ref_code(&b, anchor);
+}
+
+static void pool_put(RecCodec* c, RecBytes* b, const uint32_t* res)
+{
+    unsigned d;
+    uint32_t z[PDW];
+    if (c->over) return;
+    for (d = 0; d < PDW; d++) z[d] = zz32(res[d]);
+    rb_put(b, z, sizeof z);
+}
+
+/* One iteration that passed pool_check, coded into the block's buffers, then committed: the
+   state takes it whatever the buffers do (past RECC_FRAME_CAP the block is declined after its
+   iterations, so the state always ends as the payload leaves the pool).
+   THE MATCHER pairs the new records with the old: a new record whose stamp names an old slot
+   after the last pairing and is similar to it -- the same +0x00 and RECC_MATCH_EQUAL dwords --
+   is that record, else the first similar slot of the next RECC_MATCH_WINDOW; the survivors are
+   the new records up to the first with no pairing. Policy: any pairing it makes is valid frame
+   input (the survivors a prefix, their old slots ascending), and a wrong one costs size.
+   BOUNDED BY CONSTRUCTION, per iteration (N = nproj): the matcher 9 similarity tests a record;
+   a survivor one step of 27 dwords; a birth 3 lookups of RECC_PROBE_MAX probes and RECC_CAND + 3
+   chain steps, then at most 4 x RECC_CAND candidates of 27 dwords; a tail slot 4 windows of
+   2 RECC_TAIL_WINDOW + 1 rows and 4 x RECC_CAND candidates; PS_ADV at most c0 steps. Births and
+   tail slots together are at most N. */
+static void pool_encode(RecCodec* c, const unsigned char* pl, size_t at, size_t end)
+{
+    const unsigned N = c->nproj, c0 = c->pcount, h0 = c->phw, c1 = c->ncount, h1 = c->nhw;
+    unsigned ns, nt = 0, j, i, prev, d;
+    int64_t last = -1;
+    uint32_t res[PDW];
+    size_t p;
+    /* the matcher */
+    for (j = 0; j < c1; j++) {
+        const uint32_t* u = c->pool_n + (size_t)j * PDW;
+        unsigned s = u[25] >> 24 | (u[26] & 0xFF) << 8, s2, hi;
+        int64_t hit = -1;
+        if ((int64_t)s > last && s < c0 && u[0] == c->pool[(size_t)s * PDW]) {
+            unsigned eq = 0;
+            for (d = 0; d < PDW; d++) eq += u[d] == c->pool[(size_t)s * PDW + d];
+            if (eq >= RECC_MATCH_EQUAL) hit = s;
+        }
+        hi = (unsigned)(last + 1 + RECC_MATCH_WINDOW < c0 ? last + 1 + RECC_MATCH_WINDOW : c0);
+        for (s2 = (unsigned)(last + 1); hit < 0 && s2 < hi; s2++) {
+            unsigned eq = 0;
+            if (u[0] != c->pool[(size_t)s2 * PDW]) continue;
+            for (d = 0; d < PDW; d++) eq += u[d] == c->pool[(size_t)s2 * PDW + d];
+            if (eq >= RECC_MATCH_EQUAL) hit = s2;
+        }
+        if (hit < 0) break;
+        c->pm[j] = (int32_t)hit;
+        last = hit;
+    }
+    ns = j;
+    for (i = 0; i < c0; i++) c->pinv[i] = -1;
+    for (j = 0; j < ns; j++) c->pinv[c->pm[j]] = (int32_t)j;
+    for (i = 0; i < c->nchg; i++)
+        if (c->pchg[i] >= c1) c->ptl[nt++] = c->pchg[i];
+    /* the control values */
+    if (!c->over) {
+        rb_varint(&c->pctl, zz64((int64_t)c1 - c0));
+        rb_varint(&c->pctl, h1 - h0);
+        rb_varint(&c->pctl, c0 - ns);
+        for (i = 0, prev = 0; i < c0; i++)
+            if (c->pinv[i] < 0) {
+                rb_varint(&c->pctl, i - prev);
+                prev = i + 1;
+            }
+        rb_varint(&c->pctl, nt);
+        for (i = 0, prev = c1; i < nt; i++) {
+            rb_varint(&c->pctl, c->ptl[i] - prev);
+            prev = c->ptl[i] + 1;
+        }
+    }
+    /* the survivors */
+    for (j = 0; j < ns; j++) {
+        unsigned m = (unsigned)c->pm[j];
+        memcpy(c->pwin_n + (size_t)j * PDW, c->pwin + (size_t)m * PDW, PDW);
+        pool_step(c, m, c->pool_n + (size_t)j * PDW, res, c->pwin_n + (size_t)j * PDW, 0);
+        pool_put(c, &c->psurv, res);
+        memcpy(c->pool_l2n + (size_t)j * PDW, c->pool + (size_t)m * PDW, PIMG);
+        c->page_n[j] = (unsigned char)(c->page[m] >= 2 ? 2 : c->page[m] + 1);
+    }
+    /* the reference sections, from the state before the births */
+    for (i = 0; i < c->nshots; i++) ev_row(c, c->shots + (size_t)i * SHOT, c->ev + (size_t)i * PDW);
+    memset(c->adv_done, 0, c0);
+    for (i = 0; i < 3; i++) chains_reset(&c->ch[i]);
+    for (j = 0; j < ns; j++) chains_add(&c->ch[0], j, c->pool_n + (size_t)j * PDW);
+    for (j = 0; j < c0; j++) chains_add(&c->ch[1], j, c->pool + (size_t)j * PDW);
+    for (j = 0; j < c->nshots; j++) chains_add(&c->ch[2], j, c->ev + (size_t)j * PDW);
+    /* the births */
+    c->evnext = 0;
+    for (j = ns; j < c1; j++) {
+        uint32_t* row = c->pool_n + (size_t)j * PDW;
+        Best b;
+        uint32_t code = pool_birth_ref(c, j, (c0 + j - ns) & 0xFFFF, row, c0, c->nshots, res, &b);
+        if (!c->over) rb_varint(&c->pref, code);
+        pool_put(c, &c->pbirth, res);
+        if (row[0] >= 1 && row[0] <= RECC_WEAPON_IDS) memcpy(c->lastnew + (size_t)row[0] * PDW, row, PIMG);
+        chains_add(&c->ch[0], j, row);
+        memset(c->pwin_n + (size_t)j * PDW, 0, PDW);
+        c->page_n[j] = 1;
+    }
+    /* the tail */
+    for (i = 0; i < nt; i++) {
+        unsigned tj = c->ptl[i], len[4] = { c1, h0, c0, c->nshots };
+        int64_t anchor[4];
+        anchor[PS_OUT] = tj < c0 ? (c->pinv[tj] >= 0 ? c->pinv[tj] : (tj < c1 ? tj : (int64_t)c1 - 1))
+                                 : (ns + (tj - c0) < c1 ? ns + (tj - c0) : (int64_t)c1 - 1);
+        anchor[PS_OLD] = tj < h0 ? tj : (int64_t)h0 - 1;
+        anchor[PS_ADV] = tj < c0 ? tj : (int64_t)c0 - 1;
+        anchor[PS_EV] = (int64_t)c->nshots - 1;
+        {
+            uint32_t code = pool_tail_ref(c, tj, c->pool_n + (size_t)tj * PDW, anchor, len, c0, res);
+            if (!c->over) rb_varint(&c->pref, code);
+        }
+        pool_put(c, &c->ptail, res);
+    }
+    if (c->pctl.n + c->pref.n + c->psurv.n + c->pbirth.n + c->ptail.n > RECC_FRAME_CAP) c->over = 1;
+    /* the commit */
+    memset(c->page_n + c1, 0, N - c1);
+    {
+        uint32_t* t = c->pool; c->pool = c->pool_n; c->pool_n = t;
+        t = c->pool_l2; c->pool_l2 = c->pool_l2n; c->pool_l2n = t;
+    }
+    {
+        unsigned char* t = c->pwin; c->pwin = c->pwin_n; c->pwin_n = t;
+        t = c->page; c->page = c->page_n; c->page_n = t;
+    }
+    c->pcount = c1;
+    c->phw = h1;
+    c->nshots = 0;
+    for (p = at; p < end; p += (4 + (size_t)get16(pl + p + 2) + 3) & ~(size_t)3)
+        if (get16(pl + p) == RK_EV_SHOT && get16(pl + p + 2) == SHOT && c->nshots < RECC_SHOTS_MAX)
+            memcpy(c->shots + (size_t)c->nshots++ * SHOT, pl + p + 4, SHOT);
+}
+
+/* RCS_PROJ from the block's buffers (tagpu_recfmt.h): 0 when it passes RECC_FRAME_CAP or memory */
+static int pool_write(RecCodec* c, unsigned iterations)
+{
+    RecBytes* o = &c->sec[RCS_PROJ];
+    const RecBytes* part[3] = { &c->psurv, &c->pbirth, &c->ptail };
+    unsigned i, d;
+    size_t r, rows;
+    o->n = 0;
+    o->oom = 0;
+    rb_varint(o, iterations);
+    rb_put(o, c->pctl.p, c->pctl.n);
+    rb_put(o, c->pref.p, c->pref.n);
+    for (i = 0; i < 3; i++) {
+        const uint32_t* z = (const uint32_t*)part[i]->p;
+        rows = part[i]->n / PIMG;
+        for (d = 0; d < PDW; d++) {
+            unsigned dw = i ? d : PORDER[d];
+            for (r = 0; r < rows; r++) rb_varint(o, z[r * PDW + dw]);
+        }
+    }
+    return !o->oom && o->n <= RECC_FRAME_CAP;
+}
+
 /* ---- the encoder ---------------------------------------------------------------------------- */
 
-/* The copy takes records [at, n) by the writer's own rules (tagpu_recwriter.c `apply`): every
-   iteration's RK_UNIT and RK_UNIT_GONE, and on a decline the deltas the frame did not carry, so
-   the copy always ends as the payload leaves the units. A delta the frame did carry is U already,
-   which applying it again leaves. */
-static void plain_apply(RecCodec* c, const unsigned char* pl, size_t at, size_t n)
+/* The copies take records [at, n) by the writer's own rules (tagpu_recwriter.c `apply`): every
+   iteration's RK_UNIT and RK_UNIT_GONE, and on a decline (with_pool) the deltas the unit frame
+   and the projectile records the pool frame did not carry, so the copies always end as the
+   payload leaves the units and the pool. A delta the frame did carry is U already, which applying
+   it again leaves; an iteration the pool frame carried is committed already (pool_encode). */
+static void plain_apply(RecCodec* c, const unsigned char* pl, size_t at, size_t n, int with_pool)
 {
     while (n - at >= 4) {
         unsigned kind = get16(pl + at), len = get16(pl + at + 2), s, i, k;
         size_t rl = ((size_t)4 + len + 3) & ~(size_t)3;
         const unsigned char* b = pl + at + 4;
         if (rl > n - at) break;
+        if (with_pool && (kind == RK_PROJ_HEAD || kind == RK_PROJ || kind == RK_PROJ_DELTA))
+            pool_apply(c, c->pool, &c->pcount, &c->phw, kind, b, len);
         s = len >= 2 ? get16(b) : 0;
         if (s >= 1 && s < c->nslots) {
             if (kind == RK_UNIT && len == 4 + IMG) {
@@ -1033,8 +1818,8 @@ static void plain_apply(RecCodec* c, const unsigned char* pl, size_t at, size_t 
     }
 }
 
-/* Every record checked and routed: the kinds as runs, the bodies into their sections. 0: the
-   frame does not carry this payload. */
+/* Every record checked and routed: the kinds as runs, the bodies into their sections but for the
+   kinds the frames make. 0: the frames do not carry this payload. */
 static int enc_prepass(RecCodec* c, const unsigned char* pl, size_t n, unsigned* ticks)
 {
     size_t at = 0;
@@ -1054,7 +1839,7 @@ static int enc_prepass(RecCodec* c, const unsigned char* pl, size_t n, unsigned*
         if ((kind == RK_UNIT || kind == RK_UNIT_GONE) && (get16(b) < 1 || get16(b) >= c->nslots)) return 0;
         if (kind == RK_UNIT_DELTA && len < REC_UNIT_DELTA_HEAD) return 0;
         nt += kind == RK_TICK;
-        if (kind != RK_UNIT_DELTA) {
+        if (rec_section_of(kind) != RCS_UNITS && rec_section_of(kind) != RCS_PROJ) {
             RecBytes* s = &c->sec[rec_section_of(kind)];
             rb_varint(s, len);
             rb_put(s, b, len);
@@ -1075,7 +1860,7 @@ static int enc_prepass(RecCodec* c, const unsigned char* pl, size_t n, unsigned*
     return nt >= 1 && nt <= RECC_TICKS_MAX;
 }
 
-/* one iteration [at, end) of the payload; 0: declined, nothing of it applied yet */
+/* one iteration [at, end) of the payload, both frames; 0: declined, nothing of it applied yet */
 static int enc_iteration(RecCodec* c, const unsigned char* pl, size_t at, size_t end, unsigned it)
 {
     size_t p, nd, k;
@@ -1111,6 +1896,7 @@ static int enc_iteration(RecCodec* c, const unsigned char* pl, size_t at, size_t
         if (!nb || len != REC_UNIT_DELTA_HEAD + 4 * nb) goto decline;
         prev = s;
     }
+    if (!pool_check(c, pl, at, end)) goto decline;
     memset(&x, 0, sizeof x);
     x.c = c;
     x.gt = gt;
@@ -1146,7 +1932,8 @@ static int enc_iteration(RecCodec* c, const unsigned char* pl, size_t at, size_t
         }
         slot_advance(c, s, x.u, gt);
     }
-    plain_apply(c, pl, at, end);
+    pool_encode(c, pl, at, end);
+    plain_apply(c, pl, at, end, 0);
     touched_end(c);
     return 1;
 decline:
@@ -1249,25 +2036,28 @@ int reccodec_encode(RecCodec* e, const unsigned char* pl, size_t n, RecBytes* ou
     size_t at = 0;
     RecSecHead h;
     if (!e->valid || !enc_prepass(e, pl, n, &ticks)) {
-        plain_apply(e, pl, 0, n);
+        plain_apply(e, pl, 0, n, 1);
         e->valid = 0;
         return RECC_DECLINED;
     }
     e->lslot.n = e->lmask.n = e->lzz.n = 0;
     e->lslot.oom = e->lmask.oom = e->lzz.oom = 0;
+    e->pctl.n = e->pref.n = e->psurv.n = e->pbirth.n = e->ptail.n = 0;
+    e->pctl.oom = e->pref.oom = e->psurv.oom = e->pbirth.oom = e->ptail.oom = 0;
     e->over = 0;
     while (at < n) {
         size_t end = at + 8;            /* the iteration's RK_TICK is 8 bytes */
         while (end < n && get16(pl + end) != RK_TICK) end += ((4 + (size_t)get16(pl + end + 2) + 3) & ~(size_t)3);
         if (!enc_iteration(e, pl, at, end, it)) {
-            plain_apply(e, pl, at, n);
+            plain_apply(e, pl, at, n, 1);
             e->valid = 0;
             return RECC_DECLINED;
         }
         at = end;
         it++;
     }
-    if (e->over || e->lslot.oom || e->lmask.oom || e->lzz.oom || !units_write(e, ticks)) {
+    if (e->over || e->lslot.oom || e->lmask.oom || e->lzz.oom || e->pctl.oom || e->pref.oom ||
+        e->psurv.oom || e->pbirth.oom || e->ptail.oom || !units_write(e, ticks) || !pool_write(e, ticks)) {
         e->valid = 0;
         return RECC_DECLINED;
     }
@@ -1289,6 +2079,273 @@ int reccodec_encode(RecCodec* e, const unsigned char* pl, size_t n, RecBytes* ou
 
 /* ---- the decoder ---------------------------------------------------------------------------- */
 
+/* A walk over one iteration's records in the kinds' runs */
+typedef struct RunAt { size_t run, left; } RunAt;
+
+/* the next record's kind, or 0 at the iteration's end (`first`: the iteration's own RK_TICK) */
+static uint32_t run_next(const RecCodec* d, RunAt* a, int* first)
+{
+    const uint32_t* runs = (const uint32_t*)d->runs.p;
+    uint32_t kind;
+    if (!a->left) {
+        if (++a->run >= d->runs.n / 8) return 0;
+        a->left = runs[2 * a->run + 1];
+    }
+    kind = runs[2 * a->run];
+    if (kind == RK_TICK && !*first) return 0;
+    *first = 0;
+    a->left--;
+    return kind;
+}
+
+/* the 27 residuals of one row from its columns' cursors (read once already) */
+static void cols_get(const unsigned char* sec, size_t* colat, const size_t* colend, unsigned first,
+                     int order, uint32_t* res)
+{
+    unsigned i;
+    uint32_t z = 0;
+    for (i = 0; i < PDW; i++) {
+        varint_get(sec, colend[first + i], &colat[first + i], &z);
+        res[order ? PORDER[i] : i] = unzz32(z);
+    }
+}
+
+/* The block's pool frame, RCS_PROJ: everything read and bounded first -- the control values
+   against the pool (nproj) and the head's iterations, then the codes and the columns against
+   the section's bytes -- then the iterations decoded, each projectile record's body made from
+   the pool before and after it into d->pb, in record order, and the state committed. Runs
+   before the unit iterations, whose pass B takes the bodies from d->pb. 1, or 0 with `why`. */
+static int pool_decode(RecCodec* d, const unsigned char* sec, const size_t* off, unsigned iterations,
+                       size_t payload, char* why, unsigned cap)
+{
+    const unsigned N = d->nproj;
+    size_t at = off[RCS_PROJ], end = off[RCS_PROJ + 1], refat, colat[3 * PDW], colend[3 * PDW];
+    size_t evat = off[RCS_EVENTS], pbtot = 0;
+    uint64_t c0 = d->pcount, h0 = d->phw, nsall = 0, nball = 0, ntall = 0, need, k;
+    uint32_t v;
+    unsigned it, i;
+    RunAt cur;
+    if (!varint_get(sec, end, &at, &v) || v != iterations)
+        REFUSE("the pool frame's iterations are not the head's %u", iterations);
+    for (it = 0; it < iterations; it++) {
+        uint64_t c1, h1, nd, nt;
+        int64_t last;
+        d->pat[it] = at;
+        if (!varint_get(sec, end, &at, &v)) REFUSE("iteration %u's count cut short", it);
+        last = (int64_t)c0 + unzz64(v);
+        if (last < 0 || last > N) REFUSE("iteration %u's count %lld is outside 0..%u", it, (long long)last, N);
+        c1 = (uint64_t)last;
+        if (!varint_get(sec, end, &at, &v)) REFUSE("iteration %u's extent cut short", it);
+        h1 = h0 + v;
+        if (h1 > N) REFUSE("iteration %u's extent %llu is past the pool's %u", it, (unsigned long long)h1, N);
+        if (c1 > h1) REFUSE("iteration %u's count %llu is past its extent %llu", it, (unsigned long long)c1, (unsigned long long)h1);
+        if (!varint_get(sec, end, &at, &v)) REFUSE("iteration %u's deaths cut short", it);
+        nd = v;
+        if (nd > c0) REFUSE("iteration %u: %llu deaths among %llu records", it, (unsigned long long)nd, (unsigned long long)c0);
+        for (last = -1, k = 0; k < nd; k++) {
+            if (!varint_get(sec, end, &at, &v)) REFUSE("iteration %u's dead slots cut short", it);
+            last += 1 + (int64_t)v;
+            if (last >= (int64_t)c0) REFUSE("iteration %u: a dead slot %lld past the %llu records", it, (long long)last, (unsigned long long)c0);
+        }
+        if (c0 - nd > c1) REFUSE("iteration %u: %llu survivors past its count %llu", it, (unsigned long long)(c0 - nd), (unsigned long long)c1);
+        if (!varint_get(sec, end, &at, &v)) REFUSE("iteration %u's tail cut short", it);
+        nt = v;
+        if (nt > h1 - c1) REFUSE("iteration %u: %llu tail slots past the count", it, (unsigned long long)nt);
+        for (last = (int64_t)c1 - 1, k = 0; k < nt; k++) {
+            if (!varint_get(sec, end, &at, &v)) REFUSE("iteration %u's tail slots cut short", it);
+            last += 1 + (int64_t)v;
+            if (last >= (int64_t)h1) REFUSE("iteration %u: a tail slot %lld past the extent", it, (long long)last);
+        }
+        nsall += c0 - nd;
+        nball += c1 - (c0 - nd);
+        ntall += nt;
+        c0 = c1;
+        h0 = h1;
+    }
+    /* one byte at least a varint: checked before the walk the counts size */
+    need = nball + ntall + (uint64_t)PDW * (nsall + nball + ntall);
+    if (need > end - at)
+        REFUSE("the pool frame's codes and columns need %llu bytes, %lu are left", (unsigned long long)need, (unsigned long)(end - at));
+    refat = at;
+    for (k = 0; k < nball + ntall; k++)
+        if (!varint_get(sec, end, &at, &v)) REFUSE("a reference code cut short at byte %lu", (unsigned long)at);
+    for (i = 0; i < 3 * PDW; i++) {
+        uint64_t n = i < PDW ? nsall : i < 2 * PDW ? nball : ntall;
+        colat[i] = at;
+        for (k = 0; k < n; k++)
+            if (!varint_get(sec, end, &at, &v)) REFUSE("pool frame column %u cut short at byte %lu", i, (unsigned long)at);
+        colend[i] = at;
+    }
+    if (at != end) REFUSE("%lu bytes left in the pool frame", (unsigned long)(end - at));
+
+    d->pb.n = 0;
+    d->pb.oom = 0;
+    cur.run = 0;
+    cur.left = ((const uint32_t*)d->runs.p)[1];
+    for (it = 0; it < iterations; it++) {
+        const unsigned pc0 = d->pcount, ph0 = d->phw;
+        unsigned pc1, ph1, nd, nt, ns = 0, heads = 0, slots = 0, nshot = 0, ne = d->nshots, q, j;
+        int first = 1;
+        size_t cat = d->pat[it];
+        uint32_t kind, res[PDW], code;
+        RunAt a;
+        /* the control values, read and bounded above */
+        varint_get(sec, end, &cat, &v);
+        pc1 = (unsigned)((int64_t)pc0 + unzz64(v));
+        varint_get(sec, end, &cat, &v);
+        ph1 = ph0 + v;
+        varint_get(sec, end, &cat, &v);
+        nd = v;
+        for (i = 0; i < pc0; i++) d->pinv[i] = 0;
+        for (i = 0, j = 0; i < nd; i++) {
+            varint_get(sec, end, &cat, &v);
+            j += v;
+            d->pinv[j++] = -1;
+        }
+        for (i = 0; i < pc0; i++)
+            if (!d->pinv[i]) {
+                d->pinv[i] = (int32_t)ns;
+                d->pm[ns++] = (int32_t)i;
+            } else {
+                d->pinv[i] = -1;
+            }
+        varint_get(sec, end, &cat, &v);
+        nt = v;
+        for (i = 0, j = pc1; i < nt; i++) {
+            varint_get(sec, end, &cat, &v);
+            j += v;
+            d->ptl[i] = j++;
+        }
+        /* the EV rows, from the shots and the last births as they stand before this iteration */
+        for (i = 0; i < ne; i++) ev_row(d, d->shots + (size_t)i * SHOT, d->ev + (size_t)i * PDW);
+        /* the iteration's records: its shots (the next iteration's references) and its kinds */
+        a = cur;
+        while ((kind = run_next(d, &a, &first)) != 0) {
+            if (rec_section_of(kind) == RCS_EVENTS) {
+                if (!varint_get(sec, off[RCS_EVENTS + 1], &evat, &v) || v > 0xFFFF || v > off[RCS_EVENTS + 1] - evat)
+                    REFUSE("a body of kind %lu cut short or past 0xFFFF in section %u at byte %lu",
+                           (unsigned long)kind, RCS_EVENTS, (unsigned long)evat);
+                if (kind == RK_EV_SHOT && v == SHOT && nshot < RECC_SHOTS_MAX)
+                    memcpy(d->shots + (size_t)nshot++ * SHOT, sec + evat, SHOT);
+                evat += v;
+            }
+            heads += kind == RK_PROJ_HEAD;
+            slots += kind == RK_PROJ || kind == RK_PROJ_DELTA;
+        }
+        if (heads > 1) REFUSE("iteration %u has %u RK_PROJ_HEAD", it, heads);
+        if (!heads && (pc1 != pc0 || ph1 != ph0)) REFUSE("iteration %u changes the pool's count or extent with no RK_PROJ_HEAD", it);
+        /* the new pool: the survivors, the births, the tail, the rest as they were */
+        memcpy(d->pool_n, d->pool, (size_t)ph0 * PIMG);
+        for (j = 0; j < ns; j++) {
+            unsigned m = (unsigned)d->pm[j];
+            memcpy(d->pwin_n + (size_t)j * PDW, d->pwin + (size_t)m * PDW, PDW);
+            cols_get(sec, colat, colend, 0, 1, res);
+            pool_step(d, m, d->pool_n + (size_t)j * PDW, res, d->pwin_n + (size_t)j * PDW, 1);
+            memcpy(d->pool_l2n + (size_t)j * PDW, d->pool + (size_t)m * PDW, PIMG);
+            d->page_n[j] = (unsigned char)(d->page[m] >= 2 ? 2 : d->page[m] + 1);
+        }
+        memset(d->adv_done, 0, pc0);
+        d->evnext = 0;
+        for (j = ns; j < pc1; j++) {
+            uint32_t* row = d->pool_n + (size_t)j * PDW;
+            const uint32_t* R = NULL;
+            varint_get(sec, end, &refat, &code);
+            if (code) {
+                unsigned sc = (code - 1) & 3, len[4];
+                int64_t anchor[4], kk;
+                len[PS_OUT] = j;
+                len[PS_OLD] = ph0;
+                len[PS_ADV] = pc0;
+                len[PS_EV] = ne;
+                anchor[PS_OUT] = (int64_t)j - 1;
+                anchor[PS_OLD] = anchor[PS_ADV] = (int64_t)pc0 - 1;
+                anchor[PS_EV] = d->evnext < ne ? (int64_t)d->evnext : (int64_t)ne - 1;
+                kk = anchor[sc] + unzz64((code - 1) >> 2);
+                if (kk < 0 || kk >= (int64_t)len[sc])
+                    REFUSE("iteration %u: birth %u's reference %lld is past section %u's %u rows", it, j - ns, (long long)kk, sc, len[sc]);
+                R = sec_row(d, sc, (unsigned)kk);
+                if (sc == PS_EV) d->evnext = (unsigned)kk + 1;
+            }
+            cols_get(sec, colat, colend, PDW, 0, res);
+            ref_row(R, 1, (pc0 + j - ns) & 0xFFFF, res, row, 1);
+            if (row[0] >= 1 && row[0] <= RECC_WEAPON_IDS) memcpy(d->lastnew + (size_t)row[0] * PDW, row, PIMG);
+            memset(d->pwin_n + (size_t)j * PDW, 0, PDW);
+            d->page_n[j] = 1;
+        }
+        for (i = 0; i < nt; i++) {
+            unsigned tj = d->ptl[i];
+            const uint32_t* R = NULL;
+            varint_get(sec, end, &refat, &code);
+            if (code) {
+                unsigned sc = (code - 1) & 3, len[4];
+                int64_t anchor[4], kk;
+                len[PS_OUT] = pc1;
+                len[PS_OLD] = ph0;
+                len[PS_ADV] = pc0;
+                len[PS_EV] = ne;
+                anchor[PS_OUT] = tj < pc0 ? (d->pinv[tj] >= 0 ? d->pinv[tj] : (tj < pc1 ? tj : (int64_t)pc1 - 1))
+                                          : (ns + (tj - pc0) < pc1 ? ns + (tj - pc0) : (int64_t)pc1 - 1);
+                anchor[PS_OLD] = tj < ph0 ? tj : (int64_t)ph0 - 1;
+                anchor[PS_ADV] = tj < pc0 ? tj : (int64_t)pc0 - 1;
+                anchor[PS_EV] = (int64_t)ne - 1;
+                kk = anchor[sc] + unzz64((code - 1) >> 2);
+                if (kk < 0 || kk >= (int64_t)len[sc])
+                    REFUSE("iteration %u: tail slot %u's reference %lld is past section %u's %u rows", it, tj, (long long)kk, sc, len[sc]);
+                R = sec_row(d, sc, (unsigned)kk);
+            }
+            cols_get(sec, colat, colend, 2 * PDW, 0, res);
+            ref_row(R, 0, 0, res, d->pool_n + (size_t)tj * PDW, 1);
+        }
+        /* the changed slots: below the count, then the tail (the pool is zero from ph0 on) */
+        d->nchg = 0;
+        for (j = 0; j < pc1; j++)
+            if (memcmp(d->pool_n + (size_t)j * PDW, d->pool + (size_t)j * PDW, PIMG)) d->pchg[d->nchg++] = j;
+        for (i = 0; i < nt; i++)
+            if (memcmp(d->pool_n + (size_t)d->ptl[i] * PDW, d->pool + (size_t)d->ptl[i] * PDW, PIMG))
+                d->pchg[d->nchg++] = d->ptl[i];
+        if (slots != d->nchg)
+            REFUSE("iteration %u: the pool frame changes %u records, its kinds hold %u", it, d->nchg, slots);
+        /* their bodies, in record order */
+        a = cur;
+        first = 1;
+        q = 0;
+        while ((kind = run_next(d, &a, &first)) != 0) {
+            unsigned char body[4 + PIMG];
+            unsigned len;
+            if (kind == RK_PROJ_HEAD) {
+                put32(body, pc1);
+                put32(body + 4, ph1);
+                len = 8;
+            } else if (kind == RK_PROJ || kind == RK_PROJ_DELTA) {
+                j = d->pchg[q++];
+                len = pool_body(kind, j, d->pool + (size_t)j * PDW, d->pool_n + (size_t)j * PDW, body);
+            } else {
+                continue;
+            }
+            pbtot += (4 + (size_t)len + 3) & ~(size_t)3;
+            if (pbtot > payload) REFUSE("the records pass the head's %lu-byte payload", (unsigned long)payload);
+            rb_u32(&d->pb, len);
+            rb_put(&d->pb, body, len);
+        }
+        cur = a;
+        /* the commit */
+        memset(d->page_n + pc1, 0, N - pc1);
+        {
+            uint32_t* t = d->pool; d->pool = d->pool_n; d->pool_n = t;
+            t = d->pool_l2; d->pool_l2 = d->pool_l2n; d->pool_l2n = t;
+        }
+        {
+            unsigned char* t = d->pwin; d->pwin = d->pwin_n; d->pwin_n = t;
+            t = d->page; d->page = d->page_n; d->page_n = t;
+        }
+        d->pcount = pc1;
+        d->phw = ph1;
+        d->nshots = nshot;
+    }
+    if (d->pb.oom) REFUSE("no memory for the projectile records");
+    return 1;
+}
+
 typedef struct Cursor {             /* a walk over the kinds' runs and the body sections */
     size_t run, left;               /* the run, and its records not yet walked            */
     size_t at[RCS_COUNT];
@@ -1304,8 +2361,9 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
     uint32_t v, kind;
     uint32_t listed[RECC_TICKS_MAX];
     const unsigned char* dict;
+    size_t pbat = 0;
     Cursor cur;
-    if (!d->valid) REFUSE("a sectioned block with no unit frame to continue");
+    if (!d->valid) REFUSE("a sectioned block with no frame to continue");
     d->valid = 0;
     d->tl.n = 0;
     if (n < sizeof h) REFUSE("a sectioned block of %lu bytes, under its 36-byte head", (unsigned long)n);
@@ -1406,6 +2464,7 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
         }
     }
     if (at != off[RCS_UNITS + 1]) REFUSE("%lu bytes left in the unit frame", (unsigned long)(off[RCS_UNITS + 1] - at));
+    if (!pool_decode(d, sec, off, h.iterations, h.payload, why, cap)) return 0;
 
     out->n = 0;
     out->oom = 0;
@@ -1441,6 +2500,7 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
                 ndelta++;
                 continue;
             }
+            if (rec_section_of(kind) == RCS_PROJ) continue;      /* pool_decode made it */
             sc = rec_section_of(kind);
             if (!varint_get(sec, off[sc + 1], &a.at[sc], &len) || len > 0xFFFF || len > off[sc + 1] - a.at[sc])
                 REFUSE("a body of kind %lu cut short or past 0xFFFF in section %u at byte %lu",
@@ -1524,6 +2584,10 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
                     memcpy(&len, d->dl.p + dat, 4);
                     b = d->dl.p + dat + 4;
                     dat += 4 + len;
+                } else if (rec_section_of(kind) == RCS_PROJ) {
+                    memcpy(&len, d->pb.p + pbat, 4);
+                    b = d->pb.p + pbat + 4;
+                    pbat += 4 + len;
                 } else {
                     sc = rec_section_of(kind);
                     varint_get(sec, off[sc + 1], &cur.at[sc], &len);    /* read in pass A */
@@ -1545,7 +2609,7 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
         }
         touched_end(d);
     }
-    for (i = RCS_PROJ; i < RCS_COUNT; i++)
+    for (i = RCS_CELLS; i < RCS_COUNT; i++)
         if (cur.at[i] != off[i + 1]) REFUSE("%lu bytes left in section %lu", (unsigned long)(off[i + 1] - cur.at[i]), (unsigned long)i);
     if (out->n != h.payload) REFUSE("the records are %lu bytes, not the head's %lu", (unsigned long)out->n, (unsigned long)h.payload);
     d->valid = 1;
@@ -1594,8 +2658,8 @@ int reccodec_stream_begin(RecStream* s, const RecCodecParams* p)
 {
     memset(s, 0, sizeof *s);
     s->p = *p;
-    s->enc = reccodec_new(p->nslots);
-    s->chk = reccodec_new(p->nslots);
+    s->enc = reccodec_new(p->nslots, p->nproj);
+    s->chk = reccodec_new(p->nslots, p->nproj);
     s->cctx = ZSTD_createCCtx();
     s->dctx = ZSTD_createDCtx();
     s->reset = 1;
@@ -1624,14 +2688,17 @@ void reccodec_stream_end(RecStream* s)
    state a reader will have, gives back these records from the very bytes written. D is a second
    state, not the encoder's: the check has to start where a reader starts and must not share the
    encoder's arithmetic. A records block, and every snapshot (the writer's), make the next block
-   restart both from the encoder's copy, which is always the payload's end state. */
+   restart both frames of both from the encoder's copies of the units and the pool, which are
+   always the payload's end state. */
 int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, unsigned* flags,
                           const unsigned char** body, size_t* bn)
 {
     int k, reset = s->reset, packed;
     if (reset) {
-        reccodec_restart(s->enc, &s->p, reccodec_units(s->enc), reccodec_live(s->enc));
-        reccodec_restart(s->chk, &s->p, reccodec_units(s->enc), reccodec_live(s->enc));
+        unsigned count, hw;
+        const unsigned char* pool = reccodec_pool(s->enc, &count, &hw);
+        reccodec_restart(s->enc, &s->p, reccodec_units(s->enc), reccodec_live(s->enc), pool, count, hw);
+        reccodec_restart(s->chk, &s->p, reccodec_units(s->enc), reccodec_live(s->enc), pool, count, hw);
     }
     k = reccodec_encode(s->enc, payload, n, &s->sec);
     if (k == RECC_SECTIONS) {

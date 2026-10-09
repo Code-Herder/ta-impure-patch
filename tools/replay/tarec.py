@@ -72,11 +72,12 @@
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
-here, and REC_FORMAT says which; this tool reads format 8 alone. A recording is REC_MAGIC, then
+here, and REC_FORMAT says which; this tool reads format 9 alone. A recording is REC_MAGIC, then
 blocks; a block is a 32-byte header and its payload, one zstd frame unless the block is stored (the
 header, end and timelines blocks always are), each checked by a CRC-32. A stream block may be a
 sectioned container (RBF_SECTIONS) that decodes to exactly the records it was made from: its unit
-deltas are made by the unit frame from the header's RT_CODEC, RT_PHYSICS and RT_AIR. The walk over
+deltas are made by the unit frame from the header's RT_CODEC, RT_PHYSICS and RT_AIR, and its
+projectile records by the pool frame from the pool of RT_PROJECTILES records. The walk over
 the blocks, their unpacking and that decoding are tools/replay/reccodec.py's (iter_blocks), which
 refuses what the DLL's reader refuses; every command here reads the decoded records. A file ends at
 its last complete block: a block cut short or torn ends the reading, and the file is reported as
@@ -116,7 +117,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 8                            # zstd blocks and the sectioned stream
+REC_FORMAT = 9                            # zstd blocks, the sectioned stream and its pool frame
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -1421,7 +1422,7 @@ def codec_text(h):
     c = h.get("codec", {})
     if RT_CODEC not in c or RT_PHYSICS not in c:
         return "none (no RT_CODEC and RT_PHYSICS): every stream block is records"
-    prm = _codec().params(list(c.items()), h.get("slots") or 0)
+    prm = _codec().params(list(c.items()), h.get("slots") or 0, h.get("projectiles") or 0)
     return (f"{len(prm.lanes)} lanes, gravity {prm.gravity}, sea level {prm.sea}, sight rule "
             f"{prm.sight}, {len(prm.air)} aircraft types")
 

@@ -392,8 +392,8 @@ static int codec_begin(Writer* w, const unsigned char* const ent[3], const unsig
         fail(w, "no memory for the codec's constants");
         return 1;
     }
-    if (!reccodec_params(p, w->nslots, ent[0], nent[0], ent[1], nent[1], ent[2], nent[2], why,
-                         sizeof why)) {
+    if (!reccodec_params(p, w->nslots, w->ncap, ent[0], nent[0], ent[1], nent[1], ent[2], nent[2],
+                         why, sizeof why)) {
         tagpu_logf("recorder: writer: the header's unit frame entries are malformed: %s", why);
         free(p);
         return 0;
