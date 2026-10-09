@@ -74,9 +74,13 @@ The owner's decisions (2026-10-08):
 - **It claims no A/B frame.** The census counts it among the passes that drew (`hud=N` on the
   `vk: census` line) and not among those that claimed, so an A/B capture in a playing with the
   HUD drawn stands down rather than comparing the wrong frame.
-- **The game thread feeds it through the overlay frame.** `tagpu_overlay.c` calls
-  `tagpu_hudstate_present` after `tagpu_gui_present`; the pass reads that frame's state through
-  `tagpu_hudstate_frame`.
+- **The render thread builds its state in the overlay frame.** `tagpu_overlay.c` calls
+  `tagpu_hudstate_present` after `tagpu_gui_present`, which turns the packet's record into the
+  layout's state and stamps it with the frame's `frame_counter`; the pass takes it through
+  `tagpu_hudstate_frame`, which refuses any frame but its own (`tagpu_vk_pass.h`, `frame`). A
+  frame whose overlay returned before `present` — a level teardown, `tagpu_overlay.off` — draws
+  no HUD rather than the last one (MEASURED 2026-10-08: under `tagpu_overlay.off` the frame is
+  black, and the HUD is back unchanged when the file goes).
 - **Teardown.** `tagpu_vk_hud_down` runs in `vk_down` and in `passes_down`, behind the seam's
   `vkDeviceWaitIdle`, and leaves the pass UNBUILT so that it builds again on the next frame
   that has a HUD.
@@ -105,8 +109,9 @@ The owner's decisions (2026-10-08):
 ### The uploads
 
 - **The parts go once per build, across frames.** Their level 0 totals 22.9 MB against a slot's
-  2 MiB staging cap (`TAGPU_VK_STAGE_CAP`, `tagpu_vk_stage.h`), so they take about a dozen
-  frames. Each frame resumes where the last stopped (`s_nsent`).
+  2 MiB staging cap (`TAGPU_VK_STAGE_CAP`, `tagpu_vk_stage.h`), so they take several frames:
+  each frame resumes where the last stopped (`s_nsent`), a banded part uses none of a frame's
+  room, and the rest go as many as fit it.
 - **A part that does not fit what is left of this frame's buffer waits** to be the next frame's
   first copy. That copy goes in the frame's own command buffer when it fits the whole buffer,
   and banded when it does not. The banded ones are the four parts over 2 MiB: `win_one`,
@@ -116,19 +121,27 @@ The owner's decisions (2026-10-08):
   level down from the one above with `vkCmdBlitImage` and a linear filter, in the frame's command
   buffer. The parts are premultiplied, so a linear average is the right one.
 - **The HUD draws once every part is on the device** and the atlas has a generation there.
-- **The glyph atlas** is one 2048 × 2048 R8 image. A new generation (the sizes changed with the
-  screen or the HUD's scale) goes whole as the frame's first copy, 4 MiB, banded. Otherwise only
-  the rows the frame added go, in the frame's own command buffer, when they fit what the slot
-  mapped.
-- **The text draws only from an atlas the device holds.** When this frame's new generation or
-  dirty rows could not go (the banded path not ready, no staging), the frame's glyph instances
-  are made transparent for that frame (`hide_glyphs`); the fills and parts in the same runs still
-  draw. In a normal frame it changes nothing (MEASURED: the 150/150 capture is unchanged).
+- **The glyph atlas** is one 2048 × 2048 R8 image. It goes whole once after a build, as the
+  frame's first copy, 4 MiB, banded. After that only the rows that changed go, in the frame's own
+  command buffer, as many as the slot's buffer has room for, the rest on the next frames; nothing
+  waits on the device in play. That holds for a new generation too: when a glyph does not fit,
+  the atlas is emptied to zeros and refilled, and every glyph it then holds lies, with the empty
+  texel round it, inside the changed rows, so the older generation's rows the device keeps are
+  never sampled (`tagpu_huddraw.h`).
+- **The text draws only from an atlas the device holds.** While changed rows wait for room, or in
+  a frame with no staging, the frame's glyph instances are made transparent (`hide_glyphs`); the
+  fills and parts in the same runs still draw. In a normal frame it changes nothing (MEASURED:
+  the 150/150 capture is unchanged).
 - **A failed upload refuses the pass** (`ST_REFUSED`): a submit or a fence the device failed,
   `-1` from the stage. The pass stops drawing at once and destroys nothing mid-frame,
   where other slots' submits still name its objects. `tagpu_vk_hud_down` gives them back behind
-  the seam's `vkDeviceWaitIdle` on the next `vk_down` or `passes_down`, and leaves the pass
-  UNBUILT so that it comes back.
+  the seam's `vkDeviceWaitIdle` on the next `vk_down` or `passes_down`.
+- **A HUD that cannot draw gives the dock back.** Its art failing to load, its pass failing to
+  build, the device failing an upload, or its layout failing to build: each calls
+  `tagpu_hudstate_refuse` on the render thread, an interlocked store `tagpu_hudstate_on` reads on
+  the game thread. From then on, for the session, the lever counts as off: no record is filled,
+  and the watching dock and the cards open (`hud: the replay HUD cannot draw (…) - the dock and the
+  cards come back`). Not run: none of the four can be brought about without breaking the build.
 
 ### The rules in C
 

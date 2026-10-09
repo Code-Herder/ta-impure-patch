@@ -330,8 +330,11 @@ metrics. It exits 1 on a box or baseline more than its tolerance off, or an elem
 has.
 
 MEASURED 2026-10-08: the two agree. At 4K every box is within 0.015 units and every baseline
-within 0.0142. The Oswald residual above is named, not failed: in the 1080p and 1440p cases the
-`name` style at 7.125 CSS px moves by a pixel (6 and 8 texts).
+within 0.0142. The Oswald residual above is named, not failed, and only where the same rule on
+Chrome's own rounded ascent and descent (`measureText`'s `fontBoundingBoxAscent`/`Descent`) gives
+the browser's baseline, so a wrong line rule still fails: in the 1080p and 1440p cases the `name`
+style at 7.125 CSS px moves by a pixel (6 and 8 texts), and the rule on Chrome's metrics lands on
+the browser's baseline for every one of them.
 
 ## Gaps
 
