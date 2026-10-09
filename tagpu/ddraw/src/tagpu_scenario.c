@@ -245,7 +245,8 @@ static unsigned g_armed_at;                       /* frame the arena went ARMED 
    scheduler 0x495230 and the tick 0x495490, a network game's paused branch
    (0x4968AA..0x4968B0) rejoins at 0x496969, and every path through the frame
    callback 0x496790 falls through to the draw call at 0x4969CD and so to
-   0x4969D2. No apply on a paused frame has been measured live. */
+   0x4969D2. MEASURED 2026-10-09: a test launch held at GameTime 1 (tagpu_replay.c,
+   THE LAUNCH'S HOLD) applied resource-mex's 8 units on paused frames. */
 #define SCN_ARM_FRAMES 600u
 
 /* ------------------------------------------------------------------ utilities */
@@ -2317,8 +2318,8 @@ void tagpu_scenario_frame(const TAGPU_FRAME* f)
         if (InterlockedCompareExchange(&g_state, ST_IDLE, ST_ARMED) == ST_ARMED)
         {
             scn_err("the game's main loop never reached the apply point in %u frames "
-                    "-- apply needs a running game, not the menus, the mission-end "
-                    "screen or a paused one", SCN_ARM_FRAMES);
+                    "-- apply needs a level in play, not the menus or the mission-end "
+                    "screen", SCN_ARM_FRAMES);
             write_result();
         }
         return;

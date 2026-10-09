@@ -3465,7 +3465,27 @@ entry through this frame path, even when input has toggled it since the previous
 draw. The later draw observer alone cannot provide that ordering. The preceding
 `main+0x37EBE` test at `0x496918` may branch directly to `0x49697B`, bypassing
 both this test and simulation. [Live rewind](tadr-port/demo-recorder-s4-rewind.md)
-records the pause-key measurements.
+records the pause-key measurements. **The hold keeper** is the same observer: while a pause the
+DLL's test pacing took is held (THE PAUSE AT T, or a test launch's hold, below), it sets bit 0
+before the test as rewind does, so a Pause key (`0x4960AA..0x4960BC` toggles the bit) or the
+in-game menu's OK clears it for nothing; `resume` forgets the pause first. MEASURED 2026-10-09
+(`resource-mex` held at GameTime 1): after the Pause key, and after ARMOPT opened and its OK
+clicked, two peeks each read GameTime 1 with the bit set; after `resume` the level ran on.
+
+**What the paused path keeps, and the arrows on a held level** [DISASSEMBLED 2026-10-09]. The
+scroll poll `0x41CE90` (called at `0x496976`, on paused frames too unless `main+0x37EBE` bit 0, an
+in-game GUI screen, is set: `0x496969`/`0x49696F`) steps the camera by the byte `main+0x1434D`
+(ScrollSpeed) times the dword `main+0x38A3F` (`0x41CE9B..0x41CEA2`), capped at `0x80`, and skips
+the step when it is 0 (`0x41CEBA`). `main+0x38A3F` is the 30-Hz clock's ticks since the
+scheduler's previous call (`0x495243..0x495249`, the clock `0x4B6340`), which a paused frame does
+not call (`0x496926`), so a held level keeps the last running frame's value: a frame shorter than
+a 30-Hz tick leaves 0, and then no arrow moves the camera. MEASURED 2026-10-09 (c2-weapon-keys,
+held at 301 after a run at the turbo's k = 1): `main+0x38A3F` read 0 and an arrow held two seconds
+moved nothing; at the game's own pacing it read 1 and the arrow scrolled. A level held at a
+launch's first step keeps the load's value and scrolls. The page that a selected unit's build
+menu opens on comes from the same frame callback: `0x4969A4` tests bit 4 of `main+0x37EBE` (set
+by the selection, `0x41C110`), `0x4969A8` clears it and `0x4969B4` calls `0x41B2E0` [INFERRED: the
+page's opener], so the page is up by the frame after the selecting click.
 
 
 **Corrections to this map's earlier lines**, each re-read here: `0x416390` (`call 0x424840; ret 4`)
@@ -12489,8 +12509,10 @@ above]. In `0x496790` the pause tests skip only the tick: the single-player test
 `0x496920..0x496926` (`IsGamePaused`, `main+0x38A51`) jumps over the tick calls `0x495230` and
 `0x495490` to `0x496969`, and the network branch's test of the same byte at `0x4968AA..0x4968B0`
 also lands at `0x496969`. Every path from there reaches `0x4969CB` and the draw call `0x4969CD`, so
-the scenario applier's stub runs on paused frames too, and its watchdog's "or a paused one" does
-not describe a cause.
+the scenario applier's stub runs on paused frames too, and applies there: MEASURED 2026-10-09,
+`resource-mex` launched under a test launch's hold applied its 8 units on frames held at
+GameTime 1, which stayed 1. Its watchdog's message names the menus and the mission-end screen
+only.
 
 **THE SHELL HAS NO DRAWGAMESCREEN CALL, SO IT HAS NO RETURN ADDRESS TO GATE ON — and the flip
 cannot stand in for one [VERIFIED 2026-09-13].** `tagpu_gui_hook` already observes `0x4C63A0`
@@ -15130,9 +15152,12 @@ and the setter are in *The speeds* above, the step's iteration in
   paused frame. In order: the turbo writes k into DeltaTime, or 0 while the recorder's ring holds
   more than half its 16 MiB (the count test then skips the step, tail included, so every batch
   stays k ticks), and leaves a frame with the lag bit set at the stock count; a puppet's armed
-  round trip lowers the count to stop at T−1; an armed `pause at <T>` lowers it to stop at T. The
-  pause itself is set at the frame visit `0x4969CD` after step T and cleared by `resume`, as the
-  Pause key's toggle of bit 0 (`0x4960AA..0x4960BC`) does without its network packet. MEASURED at
+  round trip lowers the count to stop at T−1; an armed `pause at <T>` lowers it to stop at T; and
+  **a test launch's hold** (`tagpu_hold.on`, THE LAUNCH'S HOLD) lowers the level's first batch to
+  one tick. The pause itself is set at the frame visit `0x4969CD` after step T (the hold's: after
+  that first step, or once a seek or takeover the launch asked for has rebuilt its level) and
+  cleared by `resume`, as the Pause key's toggle of bit 0 (`0x4960AA..0x4960BC`) does without its
+  network packet; the hold keeper at `0x496920` (above) keeps it set until then. MEASURED at
   k = 1: a light fixture's live lane ~1,500 ticks a second, a puppet's P and R 200–385, the battle's
   lanes 64 (twelve games at once) to 230 (one), against ~60 at speed 20. Without the ring's
   back-pressure the stock-limits battle ran 314 ticks a second and filled the ring by GameTime

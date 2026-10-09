@@ -487,26 +487,49 @@ speed 20 against one at k = 2 differed in 1,272 and 1,383 unit fields. k = 1 is 
 at normal speed gets. The lever keeps 1..5: five is the scheduler's own clamp (`0x4953F5`), so no
 batch is one stock pacing never produces.
 
-**Ticks, not polls.** Whatever the pacing, a live lane acts at GameTimes. The trigger's
-`pause at <T>` sets the engine's pause bit at the frame visit after step T (the same observer bounds
-the batch so the step stops at T exactly), `resume` clears it; a T the level has passed is refused
-with its GameTime, and the harness then holds the level 30 ticks on and says so. So an L step —
-keys, a chat line, an order, a scenario — is given while the level is held at its T, then the
-level resumes; the twin (Tlast + 30) and the end scenario (at the fixture's end) are held ticks
-too. A `run` step, a script that drives the running game and waits on it, starts at its tick and
-runs with the turbo off at the fixture's speed; a later step its script outlasts runs held 30 ticks
-past where the script left the level. K holds the level, arms its AI window, judges the units
-Impure draws 240 ticks after T (what its old 4 s reached at speed 20), gives its order and chat line
-there, and ends at its dump's GameTime; X's forks end at their dump's GameTime. U holds the level
-at 601 and 1501, 1 (mod 30) as every dump of the harness is (the radar pass's step, O14), and its
-two judges watch 3,600 ticks each (their old 60 s at speed 20), the units read 240 ticks in, the
-window and its boxes throughout. Each conversion keeps a check where the old run measured it: at
-speed 20 the old 4 s and 60 s were 240 and ~3,600 ticks, and a rewind fork from GameTime 3301
-instead of ~5300 rebuilds about 1,270 units instead of ~1,030 and took 2,010 ms against the
-2,000 ms bound. What stays open: the wall-clock checks — the takeover line's bound, the rewind's
-times — measure under whatever load the run puts on the machine, and the battle's line, whose read
-from the snapshot at 900 to T = 1771 is the longest, failed its 2,000 ms bound once in three runs
-(2,061 ms, the read 1,868, twelve games at once; 1,651 ms alone).
+**Ticks, not polls.** No check is decided by the wall clock: a loaded machine runs every lane
+slower, never differently. The held lanes (L, P, R, F, K, X and U; `held_lane`) launch with
+`tagpu_hold.on`, honoured on a test launch only, and **the launch's hold** (`tagpu_replay.c`, THE
+LAUNCH'S HOLD) bounds the level's first batch to one tick at `0x49692D` and sets the pause bit at
+the frame visit after it: a skirmish is held at GameTime 1 with its scenario applied on the held
+frames (the applier hook `0x4969D2` lies on the paused path; MEASURED 2026-10-09, `resource-mex`
+held at 1 with its 8 units applied), a playing at its first step, a seek or a takeover at T−1
+once its rebuild is done, so nothing a lane arms can pass before its answer. From there a lane
+acts at GameTimes: the trigger's `pause at <T>` sets the pause bit at the frame visit after step
+T (the same observer bounds the batch so the step stops at T exactly), `resume` clears it, and
+**the hold keeper** at the pause test `0x496920` puts the bit back before every test while a pause
+of the DLL's is taken, so neither the Pause key nor the in-game menu's OK lets a held level run.
+An L step — keys, a chat line, an order, a scenario — is given while the level is held at its T,
+then the level resumes; the twin (Tlast + 30) and the end scenario (at the fixture's end) are held
+ticks too. A `run` step, a script, is handed the level held at its tick with the turbo on,
+advances it by exact ticks itself (`pause at` and `resume`, `resource_regression.py`'s IN
+LOCKSTEP) and hands it back held; a later step whose T it ran past could not run, named. K's
+takeover returns held at T−1 (`tacli replay takeover` returns once the hold's line is logged),
+arms its AI window, judges the units Impure draws 240 ticks after T, gives its order and chat
+line there, and ends at its dump's GameTime; X's forks end at their dump's GameTime. U holds the
+level at 601 and 1501, 1 (mod 30) as every dump of the harness is (the radar pass's step, O14),
+and its two judges watch 3,600 ticks each, the units read 240 ticks in, the window and its boxes
+throughout. A wait on a one-frame answer is bounded by 60 s (`ACK_S`); a wait on a running level
+by 120 s of GameTime standing still (`STALL_S`, `Stall`): each catches a hung or dead game, never
+an outcome.
+
+**A seek's work, not its time.** Every seek logs its work line (`sk_work_log`): the iterations
+the reader read and where it built from, the image's units live, made, refused, killed and left
+alive, and the game thread's CPU time (`GetThreadTimes`) beside the wall's. The harness checks
+every one in R, Q, F, K, X and U against the file (`work_verdict`): **W1**, exact, the reader
+started where the file's index says it must (`tarec.seek_start`, the reader's own choice: the
+last snapshot of the chain's part more than 123 ticks before the target, else the first iteration
+of the chain's first segment whose part reaches 123 ticks before it) and read no more than from
+there to its target; **W2**, exact, every
+live unit made or refused, none left alive by the kills, and none refused by a takeover, a return
+to now or a fork; **W3**, the takeover's, the return to now's and the rewind fork's CPU time
+within the fixture's `cpu_ms` (4,000 ms, the battle's). CPU time does not stretch when other
+games take turns on the core, but it does when they contend for the core itself: an SMT sibling
+made fixed work cost ×1.5 (MEASURED 2026-10-09, `tagpu_replay.c`, THE SEEK'S WORK), and the
+all-core clock lowers it further. That is W3's residual and the gate's last timing-dependent
+check, accepted by the owner (2026-10-09). Wine 9.0's `GetThreadTimes` counts kernel time and
+not `Sleep`, in 10 ms steps (MEASURED 2026-10-09). The rewind's conversion seek reports its CPU
+time only.
 
 **The test render profile.** Every game the harness launches writes `style=custom`, `assets=0`,
 `light=0`, `shadowres=512` and `ss=1` into the worker's `impure.cfg`, and a 20 fps present cap
@@ -844,6 +867,7 @@ region with whether its fixtures reach it.
 | 2026-10-02 | **The takeover checks' expected differences** (S4's D2, a loosening approved by the owner): the order-node fields of D1; the player records outside the fork's seats (the viewer seat and the records the seat fill deactivated); the controllers, `RK_VIEWER` and PlayerInfo `+0x94` where the takeover changed a seat's role; and the contact bits only where the viewed seats agree (the existing `compare --puppet` rule). Any other difference is a bug. |
 | 2026-10-02 | **A fork is always recorded**, whatever `tagpu_recorder.on` says (S4's D3); a takeover whose file cannot be appended is refused before the rebuild, with the reason. **B4's per-slot columns are recorded** (D4, landing S4a). **The fork rules' last-used times live in the recording** (D5), appended when a watching session ends and skipped with a log line when the file cannot be written. |
 | 2026-10-08 | **The harness runs a test-only turbo** (*Test speed*): k ticks a frame, k = 1 by default and 1..5 in the lever; a live lane acts at GameTimes by `pause at <T>` and the K and U judges are bound to ticks; every game gets the test render profile (a 20 fps present cap, `shadowres=512`). **The meteor shower's strike points after a takeover stay an open gap** (*Open items*). |
+| 2026-10-09 | **No check of the gate is decided by the wall clock** (*Ticks, not polls*): a test launch's hold starts its level held (its pause bit and one-tick first batch written from `tagpu_replay.c`, a `presentation` file, on test launches only: a loosening the owner approved); a seek's cost is its game thread's CPU time, bounded by 4,000 ms with SMT and clock contention named as the residual; the fixture worlds change once, deterministically, as scenarios now land at GameTime 1; the compat suite's soaks and `--watch` count game ticks or presented frames (SECONDS × 30) with a 120 s stall bound. |
 
 The owner approved one additional UI-only count exception on 2026-10-05: the native
 immediate-command click (`0x41A0F1` → `0x47F1A0("immediateorders", 0)`, return `0x41A0F6`),

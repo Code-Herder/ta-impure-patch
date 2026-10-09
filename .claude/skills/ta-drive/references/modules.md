@@ -907,9 +907,12 @@ block that reads to its last complete block.
   The same option applies to `measure`, `landing`,
   `broad`, `takeover`, `forks` and `rewind`, and so does `--turbo K` (default 1, 0 for none): once
   a lane's dumps are armed, L, P, R, F, K, X and U run K ticks a frame (`tagpu_turbo.on`, below),
-  never Q, W or a cost fixture. Every lane acts at GameTimes: it holds the level at each step's,
-  the twin's and the end's tick (`pause at <T>`), acts on the held level and resumes it; a `run`
-  step's script runs with the turbo off at the fixture's speed. Every game gets the test render
+  never Q, W or a cost fixture. Those lanes launch held (`tagpu_hold.on`, below) and act at
+  GameTimes: each holds the level at each step's, the twin's and the end's tick (`pause at <T>`),
+  acts on the held level and resumes it; a `run` step's script is handed the level held at its
+  tick with the turbo on, advances it by exact ticks and hands it back held. No check waits on the
+  wall clock: a one-frame answer is bounded by 60 s, a running level by 120 s of GameTime
+  standing still, and a seek's cost is its work line's CPU time. Every game gets the test render
   profile: a 20 fps present cap, `ss=1`, `shadowres=512` and the Classic++ look keys off. Each fixture is
   recorded live, played on puppets, played again with three round trips and sought from a fresh
   process, each on its own Xvfb; the live game also takes the null twin (paused, the camera, the
@@ -992,6 +995,18 @@ block that reads to its last complete block.
   game its own pacing back; a frame runs no tick while the recorder's ring is more than half full.
   The level's end logs `turbo: from GameTime … ticks in … ms of play (<n> a second) … held for the
   writer`. `tagpu_presentcap.on` (10..60) caps a test launch's presents a second.
+  **A launch held from its first step**: an empty `tagpu_hold.on` in the game folder of a test
+  launch (`hold: the launch's hold armed at 0x49692D and 0x496920` at attach; refused with a line
+  otherwise) bounds the level's first batch to one tick and pauses it at the frame visit after —
+  a skirmish at GameTime 1, with `scenario load`'s scenario applied on the held frames; a playing
+  at its first step; `replay seek --recording` and `replay takeover FILE` at T−1, once the rebuild
+  is done (`pause: paused at GameTime <g> (the launch's hold)`). `resume` lets it run. While a
+  pause the DLL took is held, the Pause key and the in-game menu's OK do not release it (the hold
+  keeper at `0x496920`).
+- **A seek's work**: every seek logs `replay: <name>: the seek to <T>'s work: <I> iterations read
+  to GameTime <R> from the snapshot|the first iteration at GameTime <S>; the image: <N> units
+  live, <M> made, <F> refused, <K> killed, <A> left alive; cpu <C> ms (user …, kernel …) of the
+  game thread, <W> ms wall` — the replay harness's W1–W3 (`tareplay.py`, `work_verdict`).
 - **Play one**: `tacli replay play <i> FILE [--perspective RECORD]` launches the instance on the
   recording's map and seats and starts the skirmish; it exits 0 on `replay: playing <name>`.
 - **Seek**: `tacli replay seek <i> T` moves the instance's running playback to GameTime T, forward
@@ -999,7 +1014,8 @@ block that reads to its last complete block.
   `--dump D` also takes a dump at T and prints its path. It waits for
   `replay: <name>: at GameTime <T>, sought from GameTime <h> in <ms> ms (read <ms>, rebuild <ms>)`
   or `replay: <name>: seek to <T> refused: <why>`, and exits 0 when it arrived, 1 when it was
-  refused, timed out or nothing was playing, 2 on a usage error. A playback that has played to its
+  refused, timed out or nothing was playing, 2 on a usage error. A launch held by `tagpu_hold.on`
+  returns at the arrival, held at T−1, its `--dump` armed and taken once the level is resumed. A playback that has played to its
   end still seeks; a level that has ended does not (`replay: <name> at its level's end, …`). By
   hand, `seek <T>` or `seek <T> dump <name>` in the trigger does the same on a playing level;
   `hud seek <T>` asks it through the replay HUD's timeline's own entry, as a click on the
@@ -1067,7 +1083,9 @@ block that reads to its last complete block.
   no AI). With FILE it launches the instance on it, P viewed, and takes over once it plays;
   without, it takes over the running playback. It waits for `replay: <name>: taken over at
   GameTime <T> as player <P>, …` and the recorder's `recording timeline <I> of …`, and exits 1 on
-  `… takeover at <T> refused: <why>`. The game after T is appended as timeline I to the file the
+  `… takeover at <T> refused: <why>`. A launch held by `tagpu_hold.on` returns at the hold's line
+  instead (the level held at T−1; `--json` gives the hold's line as `held`): the recorder's line,
+  and `--dump`, come once the level is resumed. The game after T is appended as timeline I to the file the
   level plays: the instance's copy, `gamedir/replays/<name>.imprec`, whose path tacli prints (`the
   fork:`), never FILE itself. `--dump` arms a dump of the live game at G before the takeover, so it
   is never late. By hand: `takeover <P> at <T>[ difficulty <D>]` in the trigger. The file must be
@@ -1137,8 +1155,9 @@ Use the contextual button from Interface Type (zero left, nonzero right). Explic
 retain their native left-placement/right-cancel behavior. `tacli keys` returns once the engine
 has consumed the click, so read its effect straight after: assert a new order or the
 `resource: already queued` acknowledgment, not an unchanged old queue. For a world that must not
-move under the clicks, hold it with `pause at <T>` / `resume` in `tagpu_replay.trigger` and
-advance it by exact ticks, as `tools/resource_regression.py` does.
+move under the clicks, launch it held (`tagpu_hold.on`) and advance it by exact ticks with
+`pause at <T>` / `resume` in `tagpu_replay.trigger`, as `tools/resource_regression.py` does; its
+cases refuse a world that runs and hand it back held.
 
 `tools/resource_fixture.py` prepares the resource fixtures' generated terrain and profiles in
 an isolated stopped game folder. The `RS` maps are deliberately flat green. Stock geothermal
@@ -1159,8 +1178,8 @@ insufficient: every launch restores right-button orders. Other mex fixtures veri
 For reclaim-to-Moho failures on Comet Catcher, use `tools/resource_upgrade_stress.py` in
 an owned isolated instance. While stopped, `prepare <gamedir> /tmp/comet-upgrades.json
 --phase 0 --sides mixed` creates private supply content and a scenario covering every
-installed metal deposit. Load it with `tacli scenario load <name>
-/tmp/comet-upgrades.json --defaults`, then `run <name> /tmp/comet-upgrades.json
+installed metal deposit. Put an empty `tagpu_hold.on` in the game folder and load it with
+`tacli scenario load <name> /tmp/comet-upgrades.json --defaults`, then `run <name> /tmp/comet-upgrades.json
 --out /tmp/comet-upgrades-run`. Native mouse clicks issue the upgrades; the JSON report
 distinguishes refusal, reclaim, nanoframe creation and completed construction. Use a
 different phase or side for another sweep. Order inspection pauses the unit tick;

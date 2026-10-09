@@ -750,10 +750,11 @@ split build bar), and `camera.pin` (which writes the eye the fork chose into
   `Game_MainLoopTick` stops and the applier is never called again. That is the engine
   being right, not a bug — but the first version reported it as a silent 30-second CLI
   timeout. There is now a 600-frame watchdog in the present path that gives up and says
-  *"the game's main loop never reached the apply point — apply needs a running game, not
-  the menus, the mission-end screen or a paused one"*. The pause clause is contradicted by the
-  disassembly recorded in the watchdog comment in `tagpu_scenario.c` (a pause skips only the
-  tick; the frame still reaches the apply point), and a paused apply has not been measured.
+  *"the game's main loop never reached the apply point — apply needs a level in play, not the
+  menus or the mission-end screen"*. A pause does not stop it: a pause skips only the tick, the
+  frame still reaches the apply point (the watchdog comment in `tagpu_scenario.c`), and an apply
+  on paused frames is measured — a test launch held at GameTime 1 applied `resource-mex`'s 8
+  units there (2026-10-09).
 - **Order positions are 16.16 in the 3-D convention `{x, altitude, depth}`** — the same
   language `UNITS_CreateUnit` speaks. This line used to say the opposite ("whole world units
   in the screen convention, stored verbatim — measured"), and the measurement behind it was a

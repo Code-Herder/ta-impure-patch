@@ -3375,9 +3375,11 @@ and flags and changes no iteration's step size. An unavailable guard refuses
 round trips; the frame dump and playback sites remain independent. The same
 observer carries a test launch's pacing: after `turbo on` (`tagpu_turbo.on`'s k)
 it sets the count to k, or to 0 while the recorder's ring is more than half
-full, and an armed `pause at <T>` bounds it to end at T; the frame visit then
-sets the pause bit (*The scheduler, the clock and the test pacing* in the
-engine map). An unavailable guard refuses the turbo and the pause too.
+full, an armed `pause at <T>` bounds it to end at T, and a test launch's hold
+(`tagpu_hold.on`) bounds the level's first batch to one tick; the frame visit
+then sets the pause bit (*The scheduler, the clock and the test pacing* in the
+engine map), which the pause guard at `0x496920` keeps set until `resume`. An
+unavailable guard refuses the turbo and the pause too, and leaves the hold off.
 
 The harness's AI activity observation brackets `0x408C40`, stops attribution
 at the shared targeting phase `0x4089A0`, samples constructors at `0x43A0C0`,

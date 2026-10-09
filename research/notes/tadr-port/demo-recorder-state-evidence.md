@@ -894,15 +894,13 @@ The same change corrects these statements elsewhere; the correct facts, all DIS:
   reaches the draw call at `0x4969CD` and so `0x4969D2`. A paused apply was measured live on
   2026-09-29 (§2 *Rebuild, takeover and rewind, measured*).
 
-**Still stale:** the watchdog's own message in `tagpu_scenario.c`, *"apply needs a running game, not
-the menus, the mission-end screen or a paused one"*, which [scenario format](../scenario-format.md)
-quotes (phase C, *What the live runs corrected*). By the disassembly above a pause does not keep the
-frame from the apply point, so "or a paused one" is wrong, and a paused apply is now measured
-live (§2 *Rebuild, takeover and rewind, measured*); the message is a string in code, left for a
-code change. Likewise `tools/tacli`'s
-warning when `apply` is asked for resources, and the comment above its player keys, still say the
-engine recomputes storage "every tick"; it is the 30-tick economy pass. Both are code text, left
-for a code change.
+The watchdog's own message names the menus and the mission-end screen only, and the scenario
+applier's arm is measured on paused frames as well: a test launch held at GameTime 1 applied
+`resource-mex`'s 8 units there (2026-10-09).
+
+**Still stale:** `tools/tacli`'s warning when `apply` is asked for resources, and the comment above
+its player keys, still say the engine recomputes storage "every tick"; it is the 30-tick economy
+pass. Both are code text, left for a code change.
 
 Refuted during the research and not carried: that stock shares no radar with allies (`0x4674BA`
 reads ShareRadar); that `player+0x7C` is separate from current sight (it is the true-LOS counter);
