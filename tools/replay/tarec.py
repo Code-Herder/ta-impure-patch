@@ -1516,7 +1516,7 @@ def cmd_info(path):
               f"{e.get(RT_OFF_THREAD)} events refused off the game thread, "
               f"{e.get(RT_UNCREDITED)} nano sprays uncredited, "
               f"{e.get(RT_UNOBSERVED)} grid cells changed by no observed writer")
-        print(f"  the writer's unit frame: {e.get(RT_CODEC_DECLINED, 'absent')} blocks declined, "
+        print(f"  the writer's codec: {e.get(RT_CODEC_DECLINED, 'absent')} blocks declined, "
               f"{e.get(RT_CODEC_MISMATCH, 'absent')} mismatched")
         if RT_GAME_END in e:
             print(f"  the game's end flags 0x{e[RT_GAME_END]:02x}")

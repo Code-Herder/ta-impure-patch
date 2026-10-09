@@ -3488,7 +3488,11 @@ static int cap_verify(Rec* r, const Level* L)
    extent is found by scanning on from the last hw while +0x00 is non-NULL, bounded by the pool:
    hw = max(count, that slot) -- exact, and usually one read. A record below hw goes out when its
    bytes moved since it was last imaged: whole the first time it is in the extent, else as a delta
-   of its image unless that is no smaller; the count and hw (RK_PROJ_HEAD) when either changed. */
+   of its image unless that is no smaller; the count and hw (RK_PROJ_HEAD) when either changed.
+   The stream codec's pool frame relies on this set (tagpu_reccodec.c, pool_check): an
+   iteration's projectile records are one head at most, which never lowers hw, and the slots
+   below hw whose image changed, ascending, each once, each body the one this rule makes; it
+   declines any other set, and that block is written as records. */
 static const unsigned char* global_at(const char* ta, const ReplayGlobalSlot* g)
 {
     return g->where == RG_MAIN ? (const unsigned char*)ta + g->offset

@@ -80,7 +80,7 @@ struct RecReader {
     unsigned char*     raw;         /* its payload: pk for a stored block, dec.p for a sectioned
                                        one, else a buffer of its own                          */
     size_t             rawn;
-    RecCodec*          codec;       /* the unit frame, from the first sectioned block on       */
+    RecCodec*          codec;       /* the stream codec's frames, from the first sectioned block */
     void*              dctx;        /* the ZSTD_DCtx, from the first packed block on           */
     unsigned char*     sec;         /* a packed sectioned block's container ...                */
     size_t             seccap;
@@ -227,8 +227,8 @@ static int block_head(RecReader* r, RecBlock* b, char* why, unsigned cap)
 
 static const RecHeader* seg_header(const RecReader* r);
 
-/* A sectioned stream block's container, `sec` its `n` bytes, decoded into raw by the unit frame
-   (the head of this file, THE UNIT FRAME). 1, or -1 (why). */
+/* A sectioned stream block's container, `sec` its `n` bytes, decoded into raw by the stream
+   codec's frames (tagpu_reccodec.c, THE UNIT FRAME and THE POOL FRAME). 1, or -1 (why). */
 static int sections_body(RecReader* r, const RecBlock* b, const unsigned char* sec, size_t n,
                          char* why, unsigned cap)
 {

@@ -49,7 +49,7 @@
 
 /* A stream block ends at an iteration past STREAM_BYTES or after STREAM_TICKS iterations, and
    before every snapshot. Thirty iterations keep each block's zstd frame self-contained while the
-   unit frame's state runs on across blocks; the codec declines a block of more than
+   frames' state runs on across blocks; the codec declines a block of more than
    RECC_TICKS_MAX iterations. */
 #define STREAM_BYTES   (2u << 20)
 #define STREAM_TICKS   30
@@ -394,7 +394,7 @@ static int codec_begin(Writer* w, const unsigned char* const ent[3], const unsig
     }
     if (!reccodec_params(p, w->nslots, w->ncap, ent[0], nent[0], ent[1], nent[1], ent[2], nent[2],
                          why, sizeof why)) {
-        tagpu_logf("recorder: writer: the header's unit frame entries are malformed: %s", why);
+        tagpu_logf("recorder: writer: the header's codec entries are malformed: %s", why);
         free(p);
         return 0;
     }
@@ -404,8 +404,8 @@ static int codec_begin(Writer* w, const unsigned char* const ent[3], const unsig
     else if (reccodec_stream_begin(&w->codec, p))
         w->codec_on = 1;
     else
-        tagpu_logf("recorder: writer: no memory for the unit frame of %u slots: every stream "
-                   "block is written as records", w->nslots);
+        tagpu_logf("recorder: writer: no memory for the codec of %u slots and %u projectiles: "
+                   "every stream block is written as records", w->nslots, w->ncap);
     free(p);
     if (!w->codec_on) {
         w->cctx = ZSTD_createCCtx();
@@ -838,10 +838,10 @@ static void stream_block(Writer* w, unsigned first, unsigned last, const unsigne
         w->codec_qpc += dt;
         if (dt > w->codec_max) w->codec_max = dt;
         if (k == RECC_MISMATCH && w->codec.mismatched <= 4)
-            tagpu_logf("recorder: writer: the unit frame did not decode back at GameTime %u-%u: "
+            tagpu_logf("recorder: writer: the codec did not decode back at GameTime %u-%u: "
                        "the block is written as records (a codec bug)", first, last);
         else if (k == RECC_DECLINED && w->codec.declined <= 4)
-            tagpu_logf("recorder: writer: the unit frame declined GameTime %u-%u: the block is "
+            tagpu_logf("recorder: writer: the codec declined GameTime %u-%u: the block is "
                        "written as records", first, last);
     } else if (w->cctx && reccodec_pack(w->cctx, &w->pk, p, n)) {
         flags = 0;
@@ -1540,7 +1540,7 @@ static void finish(Writer* w)
         hz = QueryPerformanceFrequency(&f) && f.QuadPart > 0 ? f.QuadPart : 1;
         tagpu_logf("recorder: writer: %s closed: %u iterations to GameTime %u, %u corrections, "
                    "stream %u KB of records written as %u KB; %u blocks: %u sectioned, %u "
-                   "declined, %u MISMATCHED; the unit frame cost %u ms, at most %u ms for one "
+                   "declined, %u MISMATCHED; the codec cost %u ms, at most %u ms for one "
                    "block; the ring held %u KB at most", w->path, w->iterations, w->tick, corr,
                    (unsigned)(w->raw >> 10), (unsigned)(w->packed >> 10), w->nstream,
                    w->codec.sectioned, w->codec.declined, w->codec.mismatched,

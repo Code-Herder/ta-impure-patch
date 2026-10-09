@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments): the C parser against the coverage build's map, the features' regions, the comment
-filter, `landing --check`, a recording's segments and chains and what format 8's block walk
+filter, `landing --check`, a recording's segments and chains and what format 9's block walk
 refuses, read from files built from the format alone, the fixtures' takeover entries and the W
 lane's edited header copies. No game runs. The files are read through reccodec.py, which needs
 numpy, numba and zstandard: devpy.ensure() re-executes this under the shared venv when they are
@@ -686,7 +686,7 @@ def zstd_frame(data, wlog):
 
 
 class Format8Blocks(unittest.TestCase):
-    """What format 8's block walk refuses by name before any payload is read, as
+    """What format 9's block walk refuses by name before any payload is read, as
     tagpu_recreader.c's block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
 
     def refused(self, *parts, why, decodes=(True, False)):
@@ -742,13 +742,13 @@ class Format8Blocks(unittest.TestCase):
 
 
 class CodecCheck(unittest.TestCase):
-    """The gate's unit frame verdict from `tarec info`'s lines (tareplay.codec_check)."""
+    """The gate's stream codec verdict from `tarec info`'s lines (tareplay.codec_check)."""
 
     @staticmethod
     def info(declined="0", mismatched="0", blocks=40, sectioned=38):
         return (f"  stream blocks: {blocks}, {sectioned} sectioned (3 restarting the frame), "
                 f"{blocks - sectioned} records\n"
-                f"  the writer's unit frame: {declined} blocks declined, {mismatched} mismatched\n")
+                f"  the writer's codec: {declined} blocks declined, {mismatched} mismatched\n")
 
     def test_verdicts(self):
         for info, verdict in ((self.info(), tareplay.PASS),
@@ -1219,7 +1219,7 @@ class Perspective(unittest.TestCase):
             self.assertIn("unreadable", out)
         parts = list(self.good())
         parts[0] = self.head(fmt=7)
-        with self.assertRaisesRegex(tarec.Unreadable, "format 7, not 8"):
+        with self.assertRaisesRegex(tarec.Unreadable, f"format 7, not {tarec.REC_FORMAT}"):
             self.run_pov(*parts)
 
 

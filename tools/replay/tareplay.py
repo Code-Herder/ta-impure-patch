@@ -1261,7 +1261,7 @@ def takeover_f(w, fx, out):
 def header_copy(rec, dst, tag, edit):
     """A copy of the recording `rec` at `dst` whose header entry `tag` holds edit(its bytes), of
     the same length, the header block stored again with both its CRCs: a file the reader opens,
-    which the replay's own checks then judge. A header block is always stored (format 8)."""
+    which the replay's own checks then judge. A header block is always stored (format 9)."""
     data = Path(rec).read_bytes()
     if data[:8] != tarec.REC_MAGIC:
         raise CouldNotRun(f"{rec}: not a recording")
@@ -1958,30 +1958,30 @@ def image_gate_options(fx):
 
 
 def codec_check(info):
-    """The live recording's unit frame, from `tarec info`'s output: a stream block whose check
+    """The live recording's stream codec, from `tarec info`'s output: a stream block whose check
     decode differed (the end block's RT_CODEC_MISMATCH) is a codec bug, which the writer wrote as
     records and the gate fails by name; so is a recording with no sectioned stream block, whose
-    codec never ran (a writer without memory for the frame writes every block as records, and its
+    codec never ran (a writer without memory for the codec writes every block as records, and its
     end block then counts nothing). The blocks the encoder declined are reported."""
-    m = re.search(r"the writer's unit frame: (\d+|absent) blocks declined, (\d+|absent) mismatched",
+    m = re.search(r"the writer's codec: (\d+|absent) blocks declined, (\d+|absent) mismatched",
                   info)
     if not m:
-        return ("the unit frame", UNRUN, "no end block")
+        return ("the stream codec", UNRUN, "no end block")
     declined, mismatched = m.groups()
     if mismatched == "absent":
-        return ("the unit frame", FAIL, "the end block carries no RT_CODEC_MISMATCH")
+        return ("the stream codec", FAIL, "the end block carries no RT_CODEC_MISMATCH")
     if int(mismatched):
-        return ("the unit frame", FAIL, f"the unit frame did not decode back in {mismatched} "
-                                        f"blocks ({declined} declined)")
+        return ("the stream codec", FAIL, f"the stream codec did not decode back in {mismatched} "
+                                          f"blocks ({declined} declined)")
     s = re.search(r"stream blocks: (\d+), (\d+) sectioned", info)
     if not s:
-        return ("the unit frame", UNRUN, "no count of the sectioned stream blocks")
+        return ("the stream codec", UNRUN, "no count of the sectioned stream blocks")
     blocks, sectioned = map(int, s.groups())
     if not sectioned:
-        return ("the unit frame", FAIL, f"none of the {blocks} stream blocks is sectioned: the "
-                                        f"codec never ran ({declined} declined)")
-    return ("the unit frame", PASS, f"0 mismatched, {declined} declined, {sectioned} of {blocks} "
-                                    f"stream blocks sectioned")
+        return ("the stream codec", FAIL, f"none of the {blocks} stream blocks is sectioned: the "
+                                          f"codec never ran ({declined} declined)")
+    return ("the stream codec", PASS, f"0 mismatched, {declined} declined, {sectioned} of {blocks} "
+                                      f"stream blocks sectioned")
 
 
 def checks(fx):
