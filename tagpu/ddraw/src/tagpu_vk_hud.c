@@ -546,6 +546,17 @@ static int send_atlas(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* 
 
 /* ---- the frame ------------------------------------------------------------------------------- */
 
+/* The glyphs of a frame whose atlas the device does not hold yet, made transparent: an atlas
+   generation or dirty rows that could not go this frame (the banded path not ready, no staging)
+   would otherwise be sampled where the instances say -- the previous generation's glyphs, or
+   empty texels. Fills and parts in the same runs still draw. */
+static void hide_glyphs(HUDINST* in, int n)
+{
+    int i;
+    for (i = 0; i < n; i++)
+        if (in[i].prm[0] == (float)HUDM_GLYPH) in[i].rgba[0] = in[i].rgba[1] = in[i].rgba[2] = in[i].rgba[3] = 0;
+}
+
 int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                          uint32_t w, uint32_t h)
 {
@@ -603,6 +614,14 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (s_sent && (r = send_atlas(d, cb, sg)) < 0) goto lost;
     }
     if (!s_sent || !s_agen) { s_ninst = 0; return 0; }
+    /* THE TEXT DRAWS ONLY FROM WHAT THE DEVICE HOLDS: this build's glyphs are in the atlas the
+       device has once its generation is s_agen and no row is left dirty */
+    {
+        unsigned gen;
+        int y0, y1;
+        tagpu_huddraw_atlas(&gen, &y0, &y1);
+        if (gen != s_agen || y1 > y0) hide_glyphs((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_ninst);
+    }
     return s_ninst > 0;
 lost:
     /* THE DEVICE FAILED A SUBMIT OR A FENCE partway (tagpu_vk_stage.h): an image is half written
