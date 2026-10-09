@@ -7,7 +7,7 @@
 with what drawing each part needs, and a layout file holding every size, position, gap and text
 style. The mockup in `tools/hudart/mockup/` draws the HUD from those files and nothing else.
 
-- **The DLL does not draw it yet.** When it does, it is to bake the same files at build time,
+- **The DLL does not draw it yet** ([the plan](hud-in-game.md)). When it does, it is to bake the same files at build time,
   as `tools/artbake.py` bakes `art/ui/`, and implement the rules on this page. The numbers then
   have one home, so the mockup and the game cannot disagree about one.
 - **The game draws it with a pass of our own, not a UI library** (the owner's choice,
