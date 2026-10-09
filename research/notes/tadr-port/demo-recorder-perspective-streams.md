@@ -4,15 +4,18 @@
 
 Planned 2026-10-06; the four landings are built, their verification runs passed on 2026-10-06,
 and they land with the multiplayer slice's stages 1–5: 4c-1 (the skirmish capture), 4c-2 (Follow, Jump and Free cam on
-a skirmish playback, [as built](#4c-2-as-built)), 4c-3 (the overlays and the dock's Overlays menu,
+a skirmish playback, [as built](#4c-2-as-built)), 4c-3 (the overlays and their switches,
 [as built](#4c-3-as-built)) and 4c-4 (multiplayer, contribution kinds 13-15,
 [as built](#4c-4-as-built)). This is stage 4c of the
 [multiplayer slice](demo-recorder-multiplayer-slice.md#stage-4-perspectives-and-communication)
 and landing 3 of [S5](demo-recorder-s5-ui.md#landings) ("the streams and the cards"). It records
 each human seat's camera, cursor, clicks and selection: the local human in a skirmish recording
 (owner decision 2026-10-06), and each Impure peer's human in a multiplayer one, as contributions.
-It also plays them back as Follow, Jump and Free cam on the [player cards](demo-recorder-player-cards.md),
-with three switchable overlays. AI seats have no camera or cursor and record none of these.
+It also plays them back as Follow, Jump and the free camera, on the replay HUD's rows
+([The replay HUD in game](../hud-in-game.md), *Input*), with three switchable overlays whose
+switches are on the HUD's foot plate. They were built first on the player cards and the watching
+dock's Overlays menu, which the replay HUD replaced and which are deleted. AI seats have no camera
+or cursor and record none of these.
 
 The product contract is [demo-recorder.md](demo-recorder.md#player-perspectives-and-overlays):
 free camera, an optional Follow that reproduces the recorded position and zoom and ends on a
@@ -55,7 +58,7 @@ session unless a note is cited), **MEASURED** (with the numbers), **[INFERRED]**
 | Format | **Shared payloads** in a new `inc/tagpu_recpov.h`. **Skirmish:** `RK_POV` 52, `RK_CLICK` 53, `RK_SELECT` 54, the snapshot-only `RK_POV_AT` 55, `REC_FORMAT` 7, and readers accept 5..7. **Multiplayer:** `RECMP_POV` 13, `RECMP_CLICK` 14, `RECMP_SELECT` 15. A network-mode recorder writes none of the RK kinds | One payload and one consumer per kind. A multiplayer file has one source for perspectives, the contribution ledger, as `ev_put` already does for owner-only roots |
 | Follow's mechanism | **The apply writes the eye and target every draw from the interpolated sample.** Follow ends when the target at the apply's entry differs from Follow's last write, or when the render thread reports a wheel notch for Follow's epoch | The apply runs after every engine camera writer of the frame (E3), and every player camera move writes the target (E7). That makes "someone else moved the camera" an observed fact, not a guess |
 | Overlays' renderer | **Vulkan:** cursors and click rings in the marker pass with fog off, and selections as the native pass's selection rectangle in the player's colour. **GDI: none** (owner Q2) | The marker pass already draws world-anchored geometry through the zoom transform. The selection rectangle is the engine's own look for "selected" |
-| Simulation-state class | **None of the new statics is simulation state.** All of them live in `presentation` files (`tagpu_recorder.c`, `tagpu_replay.c`, `tagpu_zoom.c`, `tagpu_cards.c`, `tagpu_native.c`, `tagpu_mark.c`) or in new engine-free files (`tagpu_persp.c`, `tagpu_recmp_pov.c`), so `tagpu_simreg.h` declares nothing. The simulation reads none of them. The camera rows stay `leave` and `selected` stays `drop` | No loosening: no exclusion, no `presentation` change to a sim file, no tolerance |
+| Simulation-state class | **None of the new statics is simulation state.** All of them live in `presentation` files (`tagpu_recorder.c`, `tagpu_replay.c`, `tagpu_zoom.c`, `tagpu_native.c`, `tagpu_mark.c`) or in new engine-free files (`tagpu_persp.c`, `tagpu_recmp_pov.c`), so `tagpu_simreg.h` declares nothing. The simulation reads none of them. The camera rows stay `leave` and `selected` stays `drop` | No loosening: no exclusion, no `presentation` change to a sim file, no tolerance |
 
 ## The records (`inc/tagpu_recpov.h`, new; packed, little-endian)
 
@@ -187,8 +190,8 @@ multiplayer the composed application tick):
   `b.tick > t`. In multiplayer, application ticks can bunch, so the rule falls back to `a`.
 
 **Follow, Jump and Free cam** (`tagpu_replay.c` with `tagpu_persp.c`; `tagpu_zoom.c`):
-- **The request.** A card's Follow (action `3k+2`) or `tacli replay follow <seat>` starts epoch `E`
-  (a game-thread counter). It is refused while the seat has no sample.
+- **The request.** A row's Follow on the replay HUD (`follow:i`) or `tacli replay follow <seat>`
+  starts epoch `E` (a game-thread counter). It is refused while the seat has no sample.
 - **The frame visit** computes, after any seek, the viewer's eye `cam - (W_v/2, H_v/2)` from
   `main+0x37E37/+0x37E3B` and the level. Owner Q1 recommends fitting the recorded view:
   `z_v = clamp(z_r * min(W_v/W_r, H_v/H_r), 0.25, 8)`, in Q16 integer arithmetic. It then calls
@@ -216,13 +219,14 @@ multiplayer the composed application tick):
   - **Every command record** carries `follow_broken` and `follow_seen`.
 - **When Follow ends,** for any reason, the wheel keeps the last follow level, because it was
   pinned there.
-- **Jump** (action `3k`) is a `once` epoch. The apply keeps writing the camera until
+- **Jump** (`jump:i`) is a `once` epoch. The apply keeps writing the camera until
   `c->follow_seen == E`, so the render thread has drawn its level at least once, then ends the
   epoch with no "broken" report.
-- **Free cam** (action 34) ends the epoch.
-- **The cards and the log.** The replay polls `tagpu_zoom_follow_state(E)` at the frame visit.
-  The cards show Follow active for the followed seat and Free otherwise. One log line records
-  each start and end, with its reason.
+- **Free cam** — the pressed Follow clicked again, or `tacli replay follow <i> free` — ends the
+  epoch.
+- **The HUD and the log.** The replay polls `tagpu_zoom_follow_state(E)` at the frame visit. The
+  HUD draws Follow pressed on the followed seat's row (`tagpu_replay_followed`), and none under
+  the free camera. One log line records each start and end, with its reason.
 
 **Overlays** (built at the frame visit after `recorded_put`; copied by value into the packet at
 `0x4969D2`; no pointer crosses):
@@ -234,10 +238,11 @@ multiplayer the composed application tick):
 | Selections | A slot in the seat's selection whose displayed unit is live **with the entry's birth** (E10: skirmish from the recorded births column in `RecWorld`, found by its RT_TABLE name; multiplayer from `ls.birth`) gets bit `p` of `PK_UNIT.rsel` | `tagpu_native.c`: `selbox_emit` for `pu->rsel` in `pk->ov_col[lowest bit]`, depth-tested like the engine's own rectangle |
 
 Further rules:
-- **Colours** come from the cards' `colour(logo)`, computed once a level and published in
-  `ov_col[10]`.
+- **Colours** come from `tagpu_replay.c`'s `seat_colours` (`logo_colour` of each seat's logo),
+  computed once a playing and published in `ov_col[10]`.
 - **Switches:** three game-thread bits (Cursors, Clicks, Selections), default on, reset at each
-  playback, not persisted, in the watching dock's **Overlays** menu beside the chat's (owner Q4).
+  playback, not persisted, beside the chat's: the replay HUD's foot plate (owner Q4 put them with
+  the chat's).
   A switched-off overlay produces no items, so the render side needs no switch.
 - **Players:** every recorded player is shown at once, whatever Sight shows (owner Q5).
 - **Packet:** `PK_UNIT` replaces `pad_[3]` with `uint8_t pad0; uint16_t rsel;` (offsets 85 and 86,
@@ -252,8 +257,8 @@ target-compare does not fire. **Takeover:** Follow and the overlays end. **After
 file:** the last state holds and clicks expire. **Level end:** the zoom's epoch bump ends
 everything.
 
-**Cards:** Jump and Follow are enabled for a seat with a sample. The three switches live in the
-dock's Overlays menu with the chat's (owner Q4), not in the cards' footer.
+**The HUD's rows:** Jump and Follow act for a seat with a sample; on one without, they show the
+toast "Camera was not recorded". The three switches are on the foot plate with the chat's.
 **tacli** triggers: `replay follow <seat>|free`, `replay jump <seat>`, `replay overlay <name>
 on|off`, and `replay pov`, which logs the follow epoch, the computed eye and level, the item
 count and the number of `rsel` units.
@@ -262,8 +267,8 @@ count and the number of `rsel` units.
 
 Built 2026-10-06; its V2 run passed the same day (*Status*). The code: `src/tagpu_persp.c` (the clock and the fit),
 the follow lever and the follow's apply in `src/tagpu_zoom.c`, the frame visit's part
-(`follow_visit`) and the requests in `src/tagpu_replay.c`, the cards in `src/tagpu_cards.c`, and
-`tacli replay follow|jump|pov`. What it settled that the plan left open:
+(`follow_visit`) and the requests in `src/tagpu_replay.c`, the controls (then the cards, now the
+replay HUD's rows, `src/tagpu_hudinput.c`), and `tacli replay follow|jump|pov`. What it settled that the plan left open:
 
 - **The fit rounds down.** Each of `z_r * W_v / W_r` and `z_r * H_v / H_r` is truncated in 64-bit
   integers before the minimum and the clamp, so the viewer's view/z_v is never smaller than the
@@ -299,10 +304,10 @@ the follow lever and the follow's apply in `src/tagpu_zoom.c`, the frame visit's
   owes the engine; the same target comparison ends a Follow there, and a Jump ends with its write.
 - **A seek before the seat's first sample** leaves it none: the epoch stays and the camera stays
   where the last write put it.
-- **The cards**: Jump and Follow are enabled for a seat whose `RecWorld` holds a sample
-  (`TAGPU_REPLAY_PLAYER.pov`); Follow is drawn active for the followed seat and Free cam active
-  otherwise, a Jump included. "Camera was not recorded." now explains only a disabled Jump or
-  Follow.
+- **The controls**: Jump and Follow act for a seat whose `RecWorld` holds a sample
+  (`TAGPU_REPLAY_PLAYER.pov`, the packet's `pov`); Follow is drawn pressed on the followed seat
+  and on none otherwise, a Jump included (`tagpu_replay_followed` is -1 under a Jump). On a seat
+  without a sample they show the toast "Camera was not recorded".
 - **Log lines**: `replay: <name>: follow seat <S>, epoch <E>` / `jump to seat <S>, epoch <E>`;
   `follow ended: camera moved|zoomed|free cam|another follow|a jump|the playing ended|the level
   ended` (`jump ended: drawn` for a completed Jump); `<follow|jump> <S> refused: <why>`; and
@@ -326,32 +331,18 @@ Built 2026-10-06; its V3 run passed the same day (*Status*). The code: the build
 `src/tagpu_replay.c` (THE OVERLAYS), the copy into the packet in `src/tagpu_packet_pub.c`
 (`fill_overlay` and the unit walk's `rsel`), the acquire's checks in `src/tagpu_packet.c`, the
 cursor and ring in `src/tagpu_mark.c` (`gather_overlay`), the recorded selection's rectangle in
-`src/tagpu_native.c`, the Overlays button in `src/tagpu_dock.c` and its menu in
-`src/tagpu_cards.c`, and `tacli replay overlay`. What it settled that the plan left open:
+`src/tagpu_native.c`, the switches' buttons (then the dock's Overlays menu, now the replay HUD's
+foot plate, `src/tagpu_hudinput.c`), and `tacli replay overlay`. What it settled that the plan
+left open:
 
-- **The menu.** The dock's row gains **DKOVER**, a plain button at `dock_w - 72`, left of Leave
-  (at the 400-px minimum width it starts 4 px right of the bookmark button and ends 8 px left
-  of Leave). Its press toggles a
-  menu of four rows -- Cursors, Clicks, Selections, Chat -- each a toggle drawn as the cards'
-  Sight and Follow are (pressed with the lit bar while on). The menu is drawn and hit-tested by
-  the cards' layer, at the cards panel's bottom right, which sits right above the button at every
-  HUD scale (the dock grows from its bottom-left corner, the panel from its bottom-right, and the
-  button is 44 to 72 engine px from the dock's right end). That keeps it inside the panel's
-  magnified region and pointer map; a menu of its own above the dock would have been a fifth
-  region of both. It is 100 x 89 engine px, under the 90-row floor every panel has.
-  - It opens only while the cards are shown, and DKOVER is greyed otherwise. It closes on a press
-    of either button anywhere but the menu and DKOVER, on a second press of DKOVER, and whenever
-    the cards hide (a modal, the dock off the top). On the top screen the press that closes it does
-    nothing else: it and its release are consumed (owner, 2026-10-06), so closing the menu never
-    selects a unit or presses what lies under it; under an engine dialog the press goes on to the
-    dialog. The wheel over it does nothing.
-  - **Stand-in art**: the menu's ground is a 100 x 89 plate cut from `dock-tex`, its rows the
-    cards' 92-px toggle plates, its captions the engine's font; DKOVER's glyph is a 7 x 11 pointer
-    arrow drawn in code in the play glyph's colour.
+- **The buttons.** The switches were first a menu of four toggles opened by the dock's DKOVER
+  and drawn by the cards' layer; with the dock and the cards that menu is deleted, and the four
+  are the replay HUD's foot-plate buttons `cursors`, `clicks`, `selections` and `chat`, each
+  drawn pressed while on ([The replay HUD in game](../hud-in-game.md), *Input*).
 - **The switches** are `TAGPU_OV_*` (`tagpu_replay.h`); Chat's is the existing hide-chat bit.
   All four come back on when a playing's state is reset: at the next playing's Start
   (`replay_fill`) and at the level's end. The triggers `overlay <cursors|clicks|selections|chat>
-  <on|off>` and `chat hide|show` set them, and so does the menu. Each logs `replay: overlay <name>
+  <on|off>` and `chat hide|show` set them, and so do the HUD's foot-plate buttons. Each logs `replay: overlay <name>
   on|off`, or `replay: chat hidden|shown` for the chat, which `recmp_play_test.py --hide-chat`
   waits for.
 - **The clicks' clock.** The ring takes an iteration's clicks where `play()` applies its events
@@ -372,9 +363,9 @@ cursor and ring in `src/tagpu_mark.c` (`gather_overlay`), the recorded selection
   selection keeps the engine's colour and wins. Otherwise the rectangle takes
   `ov_col[lowest set bit of rsel & 0x3FF]`. It is not behind the engine's SelBoxes option (the
   overlay has its own switch).
-- **Colours** are taken once a playing, at its first frame visit, from each header seat's `logo`
-  through the cards' `tagpu_cards_colour` (now exported). A player with no seat gets 59, the
-  cards' own fallback.
+- **Colours** are taken once a playing, at the first frame visit or the first HUD fill that asks,
+  from each header seat's `logo` through `logo_colour` (`seat_colours`, `tagpu_replay.c`). A
+  player with no seat, or a logo past the colour sequence's count, gets 59 (`OV_GREY`).
 - **The drawing.**
   - **Cursor**: an arrow 12 x 18 screen px, its tip at the projected point. The fill is five flat
     triangles in the player's colour, with a one-line outline in the GUI's black (`gui_col[0]`)
@@ -404,12 +395,6 @@ Gaps 4c-3 leaves:
 
 - **A multiplayer playback showed no overlays** here; [4c-4](#4c-4-as-built) brings them.
 - **GDI shows none** (owner Q2).
-- **Art**: the menu and DKOVER are stand-ins. The owner's kit is to supply:
-  - an Overlays glyph for the dock (about 20 x 16, like the transport glyphs, with its pressed
-    and greyed forms);
-  - the menu's ground: a panel about 100 x 89, or a 9-slice;
-  - the toggle row in its off and on states, with a checkbox or lamp for on, in place of the
-    cards' pressed plate.
 
 ## Multiplayer (kinds 13-15)
 
@@ -487,7 +472,7 @@ settled that the plan left open:
   - `mp_authority` copies each actor's samples (their application ticks as the samples' ticks)
     and selection from the reader at its tick, after the explored map, and `mp_rebuild` clears
     them before it, so a seek rebuilds them as it rebuilds the map.
-  - `persp_world` gives Follow, the overlays and the cards a copy of the reader's world with the
+  - `persp_world` gives Follow, the overlays and the HUD's rows a copy of the reader's world with the
     composed units, lists, samples and selections. Its `tick` is the reader's, the application
     tick the world holds, which is the displayed tick n.
   - A click goes into the ring from `mp_apply_held`, at its envelope's application tick, unless
@@ -613,9 +598,9 @@ sets `"watch": true` and ends at tick 1500.
 2. **GDI:** overlays on Vulkan only; GDI shows Follow's camera and no overlays (a named gap).
 3. **Multiplayer rate:** camera and cursor at 5 Hz in multiplayer (`RECMP_POV_EVERY` 6), 10 Hz in
    a skirmish. The physical-budget measurement stays open (stage 6).
-4. **The switches:** in the watching dock's **Overlays** menu, beside the hide-chat switch (the
-   owner's choice for hide-chat, 2026-10-06), not in the cards' footer; stand-in art until the
-   owner's kit supplies the button.
+4. **The switches:** beside the hide-chat switch (the owner's choice for hide-chat, 2026-10-06):
+   then in the watching dock's Overlays menu, and since the replay HUD (owner, 2026-10-08) the
+   four buttons of its foot plate, each with its own icon.
 5. **Whose overlays:** every recorded player's at once, independent of Sight.
 6. **Issued orders:** the engine's order markers from the recorded queues, already done; nothing
    further.

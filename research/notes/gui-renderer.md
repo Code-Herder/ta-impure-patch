@@ -2203,14 +2203,16 @@ G15b already built.
   capture carries it with the frame's header (`TAGPU_PUBOP.exact`), the UI key hashes it, and
   `restore_frame_of` leaves an entry so marked out of the restore list. Art drawn for the palette
   has no dither to undo, and a fine texture is flattened as though it were dither: the watching
-  dock's stand-in ground was. The dock tags every frame it makes; MEASURED 2026-10-01 at 1280×720
-  with the UI restorer active, its rect differs in 0 px between Vulkan and `tagpu_gdi.on`
-  ([demo recorder S5](tadr-port/demo-recorder-s5-ui.html), *The watching dock*). A frame wider or
-  taller than `TAGPU_GAF_DECMAX` (640) is not carried as a sprite at all, and the drain drops the
-  `PK_PIXELS` it falls to, which is why the dock's ground is eight 512-px tiles.
+  dock's stand-in ground was. The Replays browser's badges carry it (`tagpu_replays.c`);
+  MEASURED 2026-10-01 at 1280×720 with the UI restorer active, the dock, which tagged every frame
+  it made, differed in 0 px between Vulkan and `tagpu_gdi.on`. A frame wider or taller than
+  `TAGPU_GAF_DECMAX` (640) is not carried as a sprite at all, and the drain drops the
+  `PK_PIXELS` it falls to; art of ours wider than that is cut into tiles, as the dock's ground was
+  into eight of 512 px.
 - **A greyed gadget is grey on Vulkan as on GDI**: the grey remap `0x4BFE10` crosses as a tint
-  through its own row (§26.1). The dock still keeps its buttons off the greyed arm with attribs
-  bit 8, which draws the sequence's last frame, its own greyed art.
+  through its own row (§26.1). Attribs bit 8 on a greyed button draws the sequence's last frame
+  instead, the button's own greyed art ([engine map](exe-reverse-engineering.html), *The in-game
+  quit, YESORNO, a button's frame*).
 - **The UI steps the restorer when nothing else does** [the landing review found this; the GL
   half of it was deleted in 11-5e-2 — see below]. The only other caller of `tagpu_rglsl_step` was
   the native pass, and it returns early when there is no unit array — **in the shell, and in game with the world passes disarmed**. The UI atlas is the
@@ -2698,8 +2700,11 @@ The transform a hardware click takes was inline in `wndproc`'s button cases and 
 is now `mouse_client_to_game` (`mouse.c`), unchanged including the centre-on-letterbox rule, and
 **the harness calls the same function rather than a copy** — a copy could drift from the path a
 player's click takes and the test would still pass. `TAGPU_M_DEV`, the tokens `dclick`/`drclick`/
-`dmove`, `tacli click --device`, `tacli ui click --device` and `viewport` in the UI snapshot are
-the rest of it.
+`dmove`, `ddown`/`dup` (the left button alone, a drag's two ends) and `dwheel:x,y,n` (n notches
+at a point the pointer is moved to and kept at), `tacli click --device`, `tacli ui click --device`
+and `viewport` in the UI snapshot are the rest of it. A device token also hands its client point
+to the replay HUD, which hit-tests in client pixels before the transform
+([The replay HUD in game](hud-in-game.html), *Input*).
 
 `uiwalk`'s `hit_check` then runs at **every stop of every walk** (one snapshot, no clicking):
 each gadget aimed where the *renderer* draws it, put through the *fork's* own inverse, checked
@@ -4004,83 +4009,29 @@ and a second correction would be a double one.
 overdraw of 22.5 is gone (the engine draws only the visible window) but that has not been
 measured as a frame-time change.
 
-### 22.7 The dock, a fourth region  [MEASURED 2026-10-01]
+### 22.7 Three regions; the replay HUD is not one  [MEASURED 2026-10-01, 2026-10-09]
 
-The watching dock ([demo recorder S5](tadr-port/demo-recorder-s5-ui.html), *The watching dock*)
-is an engine screen in the world region, so 22.2's *Extent* left it at 1x with RENDER's
-drop-down and the engine's dialogs. The owner chose to magnify it like the bars. It is a fourth
-region of the same map, in the composite (`uDock`, `uDockMap`, `uDockS` in `LAY_FS`) and in the
-pointer (`tagpu_hud_to_engine` / `_to_screen`), tested after the bars and before the world.
+HUD scale magnifies three regions, the side panel and the two bars, in the composite (`uHud` in
+`LAY_FS`, whose uniform block is 80 bytes) and in the pointer (`tagpu_hud_to_engine` /
+`_to_screen`). The watching dock and the player cards of
+[S5](tadr-port/demo-recorder-s5-ui.html) were engine-drawn screens in the world region and were
+magnified as a fourth and a fifth region, each with its own uniforms (`uDock*`, `uCards*`), its
+own pointer branch and its scale carried on the flip marker (`OP_FLIP`'s `dx`/`dy`, `PK_FRAME`'s
+`w`/`h`); all of that is deleted with them.
 
-**About its bottom-left corner.** The world's translation takes the dock's engine corner
-`(l, t + h)` to the screen point `(x0, y1)`, and the magnified rect grows up and right from
-there, so the 1x dock the engine drew always lies inside the magnified one and never shows.
-Its gap to the panel, its lift above the bar and its height scale with it. The engine width
-is the screen's width over `s`.
-
-**A pure function of the surface and the scale.** `tagpu_dock_rect(W, H, q8)` is the dock's
-placement and the region's source rect alike, and `tagpu_hud_dock_map` validates the result
-against the world region at that scale. The pointer map, the composite and the dock's own
-placement call the same function. So the only things that cross threads are whether a dock is
-drawn and the scale it was placed at.
-
-**The ordering.**
-
-- **The pointer's word** (`tagpu_hud_dock_set`, one `LONG`, written only on the game thread).
-  It is set when stage 1 has built the dock (`tagpu_dock_built`) and re-checked every frame
-  against the engine's GUI chain, read down the `+0` links from the top screen and bounded at
-  32. It is cleared in `tagpu_dock_closed` before the slot pops the dock, which covers RENDER
-  taking the slot and the level's teardown (`slot_forget` at `0x491B60`'s entry), and again at
-  `tagpu_dock_level_end`. TA pumps the wndproc on the game thread, between the engine's own
-  calls, so a click is mapped into the dock exactly while the engine holds the dock to take it.
-- **The picture's copy** rides the flip marker. `before_flip` reads the word into `OP_FLIP` on
-  the game thread, the publisher puts it on `PK_FRAME`, and the drain keeps it beside
-  `s_presented`. So the region and the pixels it samples come through one FIFO queue, and the
-  composite magnifies exactly the frames whose ops drew the dock. A window whose marker did not
-  fit keeps the previous region, as it keeps the previous surface.
-- **What a stale value can do.** Every reader validates the rect against the surface it maps
-  on, so any whole value of either word names a rect inside the world region, and the reads are
-  arithmetic only. On the render thread the word is read only by the sharp cursor's injected
-  fallback, where a stale value moves a cursor for one frame.
-
-**No point the dock covers reaches the world.** The pointer branch sends each device pixel to
-the engine texel the composite samples at its centre: `l + (x + 0.5 − x0)/s` and
-`t + h − (y1 − y − 0.5)/s`, in integers, then clamped into the dock's rect. Checked
-exhaustively for seven scales between 1.17 and 4.52 on a 700×86 dock: every pixel matches the
-shader's centre texel, and `to_screen` then `to_engine` returns every texel. The zoom's
-ownership gate (`tagpu_menu_owns_point`, in engine coordinates) therefore sees the dock too.
-
-**Measured** on Vulkan at 1920×1080, the playback paused, all clicks in device space (`dclick:`,
-`dmove:`, `down:`/`up:`, `drclick:`):
-
-| | HUD 150 % | Auto (225 %) |
-|---|---|---|
-| engine rect | (140, 924, 1136, 86) | (146, 873, 709, 86) |
-| screen rect | [204, 1908) × [897, 1026) | [306, 1901) × [806, 999) |
-| 25 % of the track on screen | x 678 → engine 456, asks **735** (predicted 735) | x 777 → engine 355, asks **734** (predicted 734) |
-| 75 % | x 1428 → 956, asks **2205** (2205) | x 1422 → 642, asks **2206** (2206) |
-| a drag from 30 % to 60 % | no seek while dragging, one at the release: 1764 (predicted 1764) | 1765 (1765) |
-| the buttons | Play/Pause, the speed cycle, Rewind (−300), Forward (+300), the bookmark (added to `index.dat`), Leave and No | the same |
-| right-click on the bookmark | removed from `index.dat` | removed |
-
-The recording runs GameTime 1..2940, so 25 % and 75 % are 735.75 and 2205.25 exactly. At Auto
-one engine pixel is 2.25 device pixels, about 5 ticks of this recording. **At HUD 100 nothing
-changes**: the dock rect is 0 px from the picture taken before the region existed (1280×720,
-same recording and seek). Leave's question stays 1x in the world above the magnified dock, as
-the engine's dialogs do.
+**The replay HUD that replaced them needs no region.** It keeps its own scale (75 to 150 %),
+draws in a pass of its own at the device's resolution after the world and before the UI pass,
+and is anchored to the frame `tagpu_hud_live` reports — the panel's width and the bars' height
+at the game's HUD scale ([The replay HUD in game](hud-in-game.html)). Its clicks are hit-tested
+in client pixels against the frame it drew, before any client → game conversion, so the pointer
+map never sees a point the HUD takes. MEASURED 2026-10-09, the game at 1920×1080 on a
+3840×2160 display: every control answered a device click at the place the dump gave for it.
 
 **GDI does not implement HUD scale.** Under `tagpu_gdi.on` the screen is the engine's own
-surface: the panel, the bars and the dock all at 1x, the world rect pulled in by `apply_rect`,
-and nothing translated. The pointer map still applies, so the picture and the pointer disagree
-under GDI with HUD scale on, for the bars as for the dock. MEASURED at 150 %: a device click on
-the pictured DKPLAY (246, 979) did nothing, and one at the magnified DKPLAY's place on Vulkan
-(363, 980) toggled the pause.
-
-**Not covered.** An engine dialog that reaches into the dock's magnified rect is covered there:
-the region is a remap of the picture and the pointer alike, so the two stay one relation, and
-the dialog loses that strip. Leave's question, centred, stays clear of it at both scales
-measured; the other engine dialogs were not checked. A drag that leaves the dock's screen rect hands the strip the world's x for
-as long as it is outside, and `target` clamps it to the track.
+surface: the panel and the bars at 1x, the world rect pulled in by `apply_rect`, and nothing
+translated. The pointer map still applies, so the picture and the pointer disagree under GDI with
+HUD scale on. MEASURED 2026-10-01 at 150 %: a device click on the dock's pictured play button did
+nothing, and one at its magnified place on Vulkan toggled the pause. GDI draws no replay HUD.
 
 ## 23. The render half reads the packet — the frame packet exchange's landing 4c  [2026-09-12]
 
@@ -4917,7 +4868,7 @@ with a scratch build forcing it every 600 frames, over the shell tour and 35 s o
 
 The picture store restores every decoded PCX, so the Replays screen's ground, a whole PCX of
 our own, and the main menu's REPLAYS plate, drawn into the mod's FrontendX after its decode,
-were undithered like the mod's art. They are drawn for the palette, as the dock is (§14,
+were undithered like the mod's art. They are drawn for the palette, as the browser's badges are (§14,
 `TAGPU_GAF_EXACT`), and Classic++ now leaves them as drawn:
 
 - **`tagpu_gui_asset_exact(pixels, l, t, w, h)`**, on the game thread after the decode and

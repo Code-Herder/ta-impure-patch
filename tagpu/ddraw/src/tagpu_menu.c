@@ -73,7 +73,7 @@
 #include "tagpu_opt.h"
 #include "tagpu_art.h"
 #include "tagpu_replays.h"
-#include "tagpu_dock.h"
+#include "tagpu_hudinput.h"
 
 /* the engine's Visuals options: the section "owned by the store" below */
 static void eng_push(int what);
@@ -149,6 +149,18 @@ typedef void  (__stdcall *gaf_blit_fn)(void* ctx, const void* frame, int x, int 
 typedef int   (__stdcall *file_open_fn)(const char* path);
 typedef void* (__stdcall *gaf_load_fn)(const char* path);
 typedef void* (__stdcall *gaf_find_fn)(void* bank, const char* name);
+typedef void  (__stdcall *set_label_fn)(void* gi, const char* name, const char* text);
+typedef void  (__cdecl   *void_fn)(void);
+
+/* the in-game menu over the world, as the engine itself tests it (0x37EBE, 0x2BEE: see
+   tagpu_menu_modal), and Leave's question */
+#define OFF_GUISTATE      0x37EBEu      /* u16: bit 0 the options stack, 2 TALK, 5, 6 SHARE, 11 */
+#define OFF_GUISTATE2     0x2BEEu       /* u8: bits 5-7                        */
+#define VA_SETLABEL       0x004A07D0u   /* (gi, name, text): the TOP screen, by name; copies 0x80
+                                           bytes and sets gi+0xCCA itself (0x4A085E) */
+#define VA_YESORNO        0x00460680u   /* the in-game YESORNO opener, void cdecl */
+#define VA_YESORNO_KIND   0x00512FF8u   /* int: which question it asks; 0 = quit to the menu */
+#define YESORNO_SCREEN    "YESORNO.GUI"
 
 /* DrawGameScreen's prologue: `sub esp,0x214`.
 
@@ -322,13 +334,6 @@ static int    s_installed;
 static int    s_nrows = R_COUNT;
 static void*  s_gm;                     /* our GUIMEMSTRUCT while open, else 0 */
 static char   s_saved[16];              /* what main+0x37EA0 held              */
-/* THE SLOT: which of our two screens over the world s_gm is. One string names the screen the
-   engine keeps on top (main+0x37EA0), so two screens each re-asserting their own name would make
-   every UpdateIngameGUI pop the other; one owner of that buffer and of s_saved, holding at most
-   one screen, has one writer by construction. RENDER.GUI wins while the player wants it; the
-   watching dock (tagpu_dock.h) is pushed while a level plays a recording and RENDER is not. */
-enum { SCR_NONE, SCR_RENDER, SCR_DOCK };
-static int    s_slot;
 static int    s_stage[R_COUNT];
 static volatile LONG s_vkDirty;         /* the GPU row moved: the store's gpu= */
 static DWORD  s_lastPoll;
@@ -1141,12 +1146,7 @@ static int on_stack(char* main_p, void* gm)
 
    An ordinary click on one of our own rows never reaches this path: it is
    answered by `menu_accept`. */
-static const char* slot_screen(int slot)
-{
-    return slot == SCR_DOCK ? TAGPU_DOCK_SCREEN : SCREEN;
-}
-
-static void slot_open(char* main_p, int slot, int fresh)
+static void slot_open(char* main_p, int fresh)
 {
     void* gi = main_p + OFF_GUIINFO;
     char* expect = main_p + OFF_EXPECT;
@@ -1154,36 +1154,29 @@ static void slot_open(char* main_p, int slot, int fresh)
     void* gm;
 
     lstrcpynA(s_saved, expect, sizeof s_saved);
-    lstrcpynA(expect, slot_screen(slot), 16);
+    lstrcpynA(expect, SCREEN, 16);
     /* 0x20 is what 0x495207 passes; 0x400 additionally suppresses GUI_Load's
        own repaint so the panel is never drawn at the placeholder xpos. */
     gm = ((gui_load_fn)VA_GUI_LOAD)(gi, expect, 0x20 | 0x400);
     if (!gm) {
         lstrcpynA(expect, s_saved, 16);
-        mlog(slot == SCR_DOCK ? "menu: GUI_Load returned NULL - " GUI_DIR "\\" TAGPU_DOCK_SCREEN " not readable"
-                              : "menu: GUI_Load returned NULL - " GUI_DIR "\\" SCREEN " not readable");
+        mlog("menu: GUI_Load returned NULL - " GUI_DIR "\\" SCREEN " not readable");
         return;
     }
 
     ctrls = *(char**)((char*)gm + GM_CTRLS);
-    if (ctrls && slot == SCR_DOCK) {
-        tagpu_dock_place(ctrls);
-    } else if (ctrls) {
+    if (ctrls) {
         int px, py;
         panel_rect(&px, &py);
         *(short*)(ctrls + G_XPOS) = (short)px;
         *(short*)(ctrls + G_YPOS) = (short)py;
     }
-    *(void**)((char*)gm + GM_ONCMD) =
-        slot == SCR_DOCK ? (void*)tagpu_dock_oncommand : (void*)tagpu_menu_oncommand;
+    *(void**)((char*)gm + GM_ONCMD) = (void*)tagpu_menu_oncommand;
     *(void**)((char*)gm + GM_CTX)   = main_p;
     s_gm = gm;
-    s_slot = slot;
 
-    if (slot == SCR_RENDER) {
-        if (fresh) read_state();
-        push_stages(gi);
-    }
+    if (fresh) read_state();
+    push_stages(gi);
 
     /* STAGE 1 IS WHAT BUILDS THE PANEL'S OWN SURFACE, and 0x400 suppressed it
        along with the draw -- so this is not a repaint, it is the call GUI_Load
@@ -1202,17 +1195,14 @@ static void slot_open(char* main_p, int slot, int fresh)
     /* Stage 1 is what loaded `anims\\RENDER.GAF` (the id 0 branch at 0x4A84F2),
        so the plane exists only now. Repaint it from the player's own install
        and ask for the redraw. */
-    if (slot == SCR_DOCK) tagpu_dock_built(gi, gm);
-    else repaint_ground(ctrls);
+    repaint_ground(ctrls);
     ((set_dirty_fn)VA_SETDIRTY)(gi);
 }
 
-/* the slot holds nothing any more: what the screen it held keeps of it goes too */
+/* the slot holds nothing any more */
 static void slot_forget(void)
 {
-    if (s_slot == SCR_DOCK) tagpu_dock_closed();
     s_gm = 0;
-    s_slot = SCR_NONE;
 }
 
 /* UpdateIngameGUI IS NOT A POP, IT IS A COLLAPSE, and closing with it takes
@@ -1261,8 +1251,7 @@ static void slot_close(char* main_p)
    instead; the shell's stack still ends as MAINMENU alone, but the buffer reaches the shell
    naming our screen (MEASURED 2026-10-01, RENDER open at Exit -> Main Menu -> Yes: "RENDER.GUI"
    in the shell without this release, "ARMMAIN2.GUI" with it). So the buffer is restored and the
-   screen forgotten WITHOUT a pop: the engine's own pops follow. Then the dock's worker is joined,
-   whether or not the dock held the slot. */
+   screen forgotten WITHOUT a pop: the engine's own pops follow. */
 void tagpu_menu_level_end(void)
 {
     char* main_p = *(char**)TA_MAIN;
@@ -1270,7 +1259,6 @@ void tagpu_menu_level_end(void)
         lstrcpynA(main_p + OFF_EXPECT, s_saved, 16);
         slot_forget();
     }
-    tagpu_dock_level_end();
 }
 
 /* ---- the engine calls this ----------------------------------------------- */
@@ -1530,16 +1518,8 @@ int tagpu_menu_owns_point(int gx, int gy)
     }
 
     if (!s_gm) return 0;
-    if (s_slot == SCR_DOCK) return tagpu_dock_owns(gx, gy);
     panel_rect(&x, &y);
     return gx >= x && gx < x + PANEL_W && gy >= y && gy < y + PANEL_H;
-}
-
-/* the dock's strip takes a click only while the dock is the top screen, as the pump serves the
-   top screen only */
-static int dock_on_top(char* main_p)
-{
-    return s_slot == SCR_DOCK && s_gm && *(void**)(main_p + OFF_TOPGUI) == s_gm;
 }
 
 int tagpu_menu_click(int gx, int gy, int down)
@@ -1552,15 +1532,8 @@ int tagpu_menu_click(int gx, int gy, int down)
 
     if (!down) {                        /* a release we own, and nothing else */
         int was = s_pressed;
-        int dock = tagpu_dock_click(gx, gy, 0, dock_on_top(main_p));
         s_pressed = 0;
-        return was || dock;
-    }
-
-    /* the strip first: its press ends the sprocket's, and its own ends at any press */
-    if (tagpu_dock_click(gx, gy, 1, dock_on_top(main_p))) {
-        s_pressed = 0;
-        return 1;
+        return was;
     }
 
     trigger_rect(&x, &y);
@@ -1603,21 +1576,93 @@ static void draw_trigger(void)
     ((gaf_blit_fn)VA_GAFBLIT)(NULL, s_trigFrame[st], x, y);
 }
 
-int tagpu_menu_rclick(int gx, int gy, int down)
-{
-    char* main_p = *(char**)TA_MAIN;
-    if (!s_installed || !s_drawTrigger || !main_p) return 0;
-    return tagpu_dock_rclick(gx, gy, down, dock_on_top(main_p));
-}
-
 static int __cdecl before_postgui(void* entry_esp)
 {
-    char* main_p = *(char**)TA_MAIN;
     (void)entry_esp;
     draw_trigger();
-    if (main_p && s_slot == SCR_DOCK && s_gm && on_stack(main_p, s_gm))
-        tagpu_dock_draw(*(void**)(main_p + OFF_TOPGUI), s_gm);
     return 0;
+}
+
+/* ---- the replay HUD's two engine questions ------------------------------- */
+
+/* Is a screen named `name` anywhere on the stack? From the top down its +0 links, at most 32 steps
+   (on_stack's bound); a screen's name is its record 0's, the one the engine's own compare 0x4AB060
+   reads ([top+4]+2, 16 bytes). */
+static int named_on_stack(char* main_p, const char* name)
+{
+    char* p = *(char**)(main_p + OFF_TOPGUI);
+    int n;
+    for (n = 0; p && n < 32; n++) {
+        const char* ctrls = *(const char* const*)(p + GM_CTRLS);
+        if (ctrls && !strncmp(ctrls + G_NAME, name, 16)) return 1;
+        p = *(char**)p;
+    }
+    return 0;
+}
+
+/* THE ENGINE'S OWN TEST FOR A MENU OVER THE WORLD, as its order check makes it (tagpu_patches.c,
+   order_check): main+0x37EBE & 0x865 -- bit 0 the options stack F2/Tab opens (ARMOPT, EXITMENU,
+   YESORNO, the preferences), bit 2 TALK.GUI, bit 6 SHARE.GUI -- or main+0x2BEE & 0xE0. The build
+   pages stack on the base screen without either, so a name compare would not do. Leave's question
+   is opened outside that stack, by its opener alone, and is named. */
+int tagpu_menu_modal(void)
+{
+    char* main_p = *(char**)TA_MAIN;
+    if (!main_p) return 0;
+    return (*(const unsigned short*)(main_p + OFF_GUISTATE) & 0x865) ||
+           (*(const unsigned char*)(main_p + OFF_GUISTATE2) & 0xE0) ||
+           named_on_stack(main_p, YESORNO_SCREEN);
+}
+
+int tagpu_menu_leave_ready(void)
+{
+    return s_installed;
+}
+
+/* THE LEAVE GUARD. Leave calls the engine's YESORNO opener and leaves the rest to its OnCommand
+   and the quit tail it jumps to (0x460630: the teardown, UpdateIngameGUI(1), GUI_Pop, the menu).
+   Both are compared by FNV-1a against the retail exe's bytes at every Leave; on a mismatch Leave
+   is refused, and the engine's own menu still leaves. */
+static const struct { unsigned first, last, fnv; } LEAVE_GUARD[2] = {
+    { 0x460680, 0x4607F1, 0x8B2B971Eu },     /* the opener, to its ret                           */
+    { 0x4605C0, 0x46065C, 0x9EF8B480u },     /* its OnCommand, through the quit tail's ret 4     */
+};
+
+static int leave_guard(void)
+{
+    int i;
+    for (i = 0; i < 2; i++) {
+        unsigned h = 0x811C9DC5u, va;
+        for (va = LEAVE_GUARD[i].first; va <= LEAVE_GUARD[i].last; va++)
+            h = (h ^ *(const unsigned char*)(size_t)va) * 0x01000193u;
+        if (h != LEAVE_GUARD[i].fnv) {
+            char b[160];
+            _snprintf(b, sizeof b, "menu: Leave refused - 0x%06X..0x%06X holds other bytes than it "
+                      "was made against", LEAVE_GUARD[i].first, LEAVE_GUARD[i].last);
+            b[sizeof b - 1] = 0;
+            mlog(b);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* LEAVE'S QUESTION, OPENED WHERE THIS OBSERVER OPENS THE ENGINE'S SCREENS: the engine's own Exit ->
+   Main Menu path, EXITMENU's handler at 0x46082B..0x46083A -- question 0, "return to the main
+   menu", then the opener -- with our title. Its OnCommand 0x4605C0 runs the quit tail on Yes and
+   pops itself on No. Outside the pump's dispatch no click is waiting on an answer, so nothing is
+   answered with ActDone here. */
+static int leave_open(char* main_p)
+{
+    if (named_on_stack(main_p, YESORNO_SCREEN) || !leave_guard()) return 0;
+    *(int*)VA_YESORNO_KIND = 0;
+    ((void_fn)VA_YESORNO)();
+    if (!named_on_stack(main_p, YESORNO_SCREEN)) {
+        mlog("menu: Leave - the YESORNO opener pushed no question");
+        return 0;
+    }
+    ((set_label_fn)VA_SETLABEL)(main_p + OFF_GUIINFO, "TITLE", "Leave this replay?");
+    return 1;
 }
 
 /* ---- the per-frame tick, on the game thread ------------------------------ */
@@ -1626,7 +1671,6 @@ static void menu_tick(void)
     static int s_firstTick;
     char* main_p = *(char**)TA_MAIN;
     DWORD now;
-    int want;
 
     if (!main_p) return;
     if (!s_firstTick) { s_firstTick = 1; mlog("menu: first frame tick (DrawGameScreen)"); }
@@ -1652,18 +1696,16 @@ static void menu_tick(void)
             if (f) s_fresh = 1;
         }
     }
-    want = s_want ? SCR_RENDER : tagpu_dock_wanted() ? SCR_DOCK : SCR_NONE;
-    if (s_gm && s_slot != want) slot_close(main_p);
-    if (!s_gm && want == SCR_RENDER) { slot_open(main_p, SCR_RENDER, s_fresh); s_fresh = 0; }
-    else if (!s_gm && want == SCR_DOCK) slot_open(main_p, SCR_DOCK, 0);
+    if (s_gm && !s_want) slot_close(main_p);
+    if (!s_gm && s_want) { slot_open(main_p, s_fresh); s_fresh = 0; }
     else if (s_gm) {
         /* Re-assert the name every frame. The engine rebuilds the in-game stack
            on its own account, and the buffer is the only thing that keeps a
            screen over the world from being popped at the next of 21 sites. */
-        lstrcpynA(main_p + OFF_EXPECT, slot_screen(s_slot), 16);
-        if (s_slot == SCR_DOCK)
-            tagpu_dock_tick(main_p + OFF_GUIINFO, *(void**)(main_p + OFF_TOPGUI) == s_gm);
+        lstrcpynA(main_p + OFF_EXPECT, SCREEN, 16);
     }
+    if (tagpu_hudinput_leave_due()) tagpu_hudinput_leave_opened(leave_open(main_p));
+    tagpu_hudinput_leave_shown(named_on_stack(main_p, YESORNO_SCREEN));
 }
 
 static int __cdecl before_update(void* entry_esp)
@@ -3319,7 +3361,7 @@ static int __cdecl gui_redirect(void* esp)
        `0x4AA9B0` addresses it as `esp+0x2C` after the `add esp,0xC`) --
        anything else means this is not that call */
     if (path != (char*)esp + 0x38 || !name) return 0;
-    if (!lstrcmpiA(name, SCREEN) || tagpu_replays_redirects(name) || tagpu_dock_redirects(name) ||
+    if (!lstrcmpiA(name, SCREEN) || tagpu_replays_redirects(name) ||
         (s_redirVis && (!lstrcmpiA(name, "VISUALS.GUI") || !lstrcmpiA(name, "VISUALRT.GUI"))))
         lstrcpynA(path, GUI_DIR "\\", 0x100);
     return 0;
@@ -3356,9 +3398,9 @@ void tagpu_menu_init(void)
     static const GafEnt RTENTS[1] = { { ART_VRTBG, VRT_W, VRT_H, draw_vrtbg } };
     static const GafEnt ENTS[1]  = { { ART_NAME,  PANEL_W, PANEL_H, draw_panel_frame } };
     static const GafEnt VENTS[1] = { { ART_VISBG, VP_W,    VP_H,    draw_visbg       } };
-    TAGPU_UFO_FILE f[13];             /* ours, six at most, the Replays screen's five, the dock's two */
+    TAGPU_UFO_FILE f[11];             /* ours, six at most, and the Replays screen's five */
     char b[300];
-    int len, vlen, rtlen, wrote, armed, visOk, redirected, nf, nrep, ndock;
+    int len, vlen, rtlen, wrote, armed, visOk, redirected, nf, nrep;
     unsigned glen, vglen, rtglen;
 
     read_tokens();
@@ -3423,13 +3465,8 @@ void tagpu_menu_init(void)
        (tagpu_replays.h); its hooks go in only once both are. */
     nf = visOk ? 6 : 2;
     nrep = exists(OFF_FILE) ? 0 : tagpu_replays_files(f + nf, (int)(sizeof f / sizeof f[0]) - nf);
-    /* and so does the watching dock's screen (tagpu_dock.h); it arms once the frame tick and the
-       post-GUI observer are in as well */
-    ndock = exists(OFF_FILE) ? 0
-          : tagpu_dock_files(f + nf + nrep, (int)(sizeof f / sizeof f[0]) - nf - nrep);
-    wrote = tagpu_ufo_write(UFO_FILE, f, nf + nrep + ndock);
+    wrote = tagpu_ufo_write(UFO_FILE, f, nf + nrep);
     tagpu_replays_files_free();
-    tagpu_dock_files_free();
     redirected = wrote && !exists(OFF_FILE) && gui_redirect_install();
     tagpu_replays_install(redirected && nrep > 0);
 
@@ -3447,7 +3484,6 @@ void tagpu_menu_init(void)
                                  before_postgui, NULL);
         vis_install();
         s_redirVis = visOk && s_visArmed;
-        tagpu_dock_install(ndock > 0 && s_drawTrigger);
         /* the store owns the engine's options only where the screens that
            write it are in; the first registry load is still ahead */
         if (s_visArmed) engopt_install();

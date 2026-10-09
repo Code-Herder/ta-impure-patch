@@ -138,6 +138,7 @@
 #include "tagpu_window.h"
 #include "tagpu_vk_gui.h"
 #include "tagpu_vk_fps.h"
+#include "tagpu_vk_hud.h"
 #include "tagpu_vk_scaffold.h"
 #include "tagpu_vk_surf.h"
 #include "tagpu_vk_world.h"
@@ -1875,6 +1876,7 @@ static void vk_down(void)
            -- nothing of theirs is still in a queue. */
         tagpu_vk_gui_down(&s_pass);
         tagpu_vk_fps_down(&s_pass);
+        tagpu_vk_hud_down(&s_pass);
         tagpu_vk_scaffold_down(&s_pass);
         tagpu_vk_feat_down(&s_pass);
         tagpu_vk_terr_down(&s_pass);
@@ -2508,7 +2510,7 @@ static int vk_present(void)
         int draw_world = 0;
         uint32_t tw = 0, th = 0;    /* the world target's extent, when there is one */
         int draw_fps = 0, draw_scaf = 0, draw_feat = 0, draw_terr = 0, draw_fx = 0;
-        int draw_gui = 0;
+        int draw_gui = 0, draw_hud = 0;
         int draw_mark = 0, ab_mark = 0;
         int draw_unit = 0;
         int ab_fps = 0, ab_scaf = 0, ab_feat = 0, ab_terr = 0, ab_fx = 0;
@@ -2631,6 +2633,9 @@ static int vk_present(void)
                and render passes may not nest, so the whole op replay has to
                happen out here -- exactly as the shadow map records its map in
                `prepare`. */
+            /* THE REPLAY HUD, over the world and under the engine's UI. It claims no A/B frame,
+               so a capture with it drawn stands down (the census below). */
+            draw_hud = tagpu_vk_hud_prepare(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             draw_gui = tagpu_vk_gui_prepare(&s_pass, cb, fi);
             ab_gui = tagpu_vk_gui_ab_frame();
             draw_fps = tagpu_vk_fps_prepare(&s_pass, cb, fi);
@@ -2660,7 +2665,7 @@ static int vk_present(void)
 
         }
         ndraw = draw_terr + draw_feat + draw_unit + draw_fx + draw_mark + draw_scaf +
-                draw_gui + draw_fps;
+                draw_gui + draw_fps + draw_hud;
         nclaim = ab_terr + ab_feat + ab_unit + ab_fx + ab_mark + ab_scaf + ab_gui + ab_fps;
         /* THE CLAIMED PASS'S FILE, out of the one list of them in this file
            (`s_abFiles`, above). The row order decides which pass wins a
@@ -2757,6 +2762,10 @@ static int vk_present(void)
                and the dialogs or they hide it. The return is not kept: the
                engine's own cursor blit reaches only the golden source, and
                suppressing it would just put a hole in the reference. */
+            /* the replay HUD covers the world and nothing else: the engine's dialogs, its
+               messages and the cursor draw over it */
+            if (draw_hud)
+                tagpu_vk_hud_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_gui)
                 tagpu_vk_gui_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_scaf)
@@ -2799,9 +2808,9 @@ static int vk_present(void)
            counters print on different frames and cannot be compared. */
         if ((s_pass.frame % 300u) == 0u)
             vklog("census: frame %u: %d pass(es) drew and %d claimed (terr=%d "
-                  "feat=%d unit=%d fx=%d mark=%d scaf=%d gui=%d fps=%d)",
+                  "feat=%d unit=%d fx=%d mark=%d scaf=%d gui=%d fps=%d hud=%d)",
                   (unsigned)s_pass.frame, ndraw, nclaim, draw_terr, draw_feat,
-                  draw_unit, draw_fx, draw_mark, draw_scaf, draw_gui, draw_fps);
+                  draw_unit, draw_fx, draw_mark, draw_scaf, draw_gui, draw_fps, draw_hud);
         /* WHICH IMAGE THE CAPTURE READS, AND IT IS NOT ALWAYS THE FRAME.
 
            A WORLD PASS'S CAPTURE IS THE WORLD TARGET, NOT THE WINDOW: `gw*ss`
@@ -2919,6 +2928,7 @@ static int vk_present(void)
 static void passes_down(void)
 {
     tagpu_vk_fps_down(&s_pass);
+    tagpu_vk_hud_down(&s_pass);
     tagpu_vk_scaffold_down(&s_pass);
     tagpu_vk_feat_down(&s_pass);
     tagpu_vk_terr_down(&s_pass);

@@ -91,10 +91,11 @@ int tagpu_replay_source(unsigned n, unsigned* v);
    ends, the skirmish settings get back what the player had, and the puppet table is cleared. */
 void tagpu_replay_level_end(void);
 
-/* The watching dock's requests (tagpu_dock.h), on the game thread.
+/* The replay HUD's requests (tagpu_hudinput.c), on the game thread.
    live: the level plays a recording and its first step has played, which was not refused.
    span: the recording's first and last GameTime, from its summary at the open; 0 when none.
-   path: "replays\\<file>" while a recording is open, else NULL.
+   path: "replays\\<file>" while a recording is open, else NULL; timeline: the timeline of it
+   that plays, 0 the original -- a rewind into a fork changes it within the level.
    seek_request: a seek to T, clamped to [first + 1, last], for the next frame visit; 0 refused.
    paused / pause: bit 0 of main+0x38A51, the Pause key's bit.
    speed / speed_set: the game speed's ceiling main+0x38A4B, 10 = 1x; speed_set takes 5, 10, 20, 40
@@ -102,30 +103,41 @@ void tagpu_replay_level_end(void);
 int  tagpu_replay_live(void);
 int  tagpu_replay_span(unsigned* first, unsigned* last);
 const char* tagpu_replay_path(void);
+unsigned    tagpu_replay_timeline(void);
 int  tagpu_replay_seek_request(unsigned T);
 int  tagpu_replay_paused(void);
 void tagpu_replay_pause(int on);
 int  tagpu_replay_speed(void);
 int  tagpu_replay_speed_set(unsigned gs);
 
-/* Player cards, game thread only. Rows stay in the recording header's order, including defeated
+/* The replay HUD's rows, game thread only. Rows stay in the recording header's order, including defeated
    seats. Values come from the player's current recorded image, held after EOF -- in a multiplayer
    recording the composed one, its owners' (THE MULTIPLAYER MATERIALIZER). Sight is independent of the
    camera: -1 selects the full-map viewer, otherwise a recorded seat index. The request runs at
    the frame boundary and rebuilds death vision, minimap fog and contacts before publishing the
    selected seat. */
 typedef struct TAGPU_REPLAY_PLAYER {
-    unsigned seat, colour, units, commander_losses;
+    unsigned seat;
+    unsigned colour;     /* a palette index: the middle of the seat's frame in the engine's
+                            colour sequence, as the overlays draw the seat */
+    unsigned units, commander_losses;
     int commander_alive; /* 1 present, 0 absent, -1 unavailable */
     int pov;             /* the seat's camera was recorded and a sample is held: Jump and Follow */
     char name[32];
     float metal, energy, metal_in, metal_out, energy_in, energy_out;
+    float metal_max, energy_max;    /* the storage maxima the economy pass sums */
+    unsigned allies;                /* bit j: the alliance row marks recorded seat j */
 } TAGPU_REPLAY_PLAYER;
 int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap);
+/* The army value of one finished unit of each type, by the type's index (a unit's +0xA6), for the
+   stats window's walker (tagpu_hudmarks.c): its metal cost when the type moves and is not a
+   commander, 0 otherwise. Up to `cap` of them into `out`; the count, 0 when no recording plays.
+   With `out` NULL, the level's count of types. Game thread only. */
+unsigned tagpu_replay_army_values(float* out, unsigned cap);
 int tagpu_replay_sight(void);
 int tagpu_replay_sight_request(int seat);
-/* Follow, Jump and Free cam, game thread only (tagpu_replay.c, FOLLOW, JUMP AND FREE CAM): the
-   cards' actions 3k+2, 3k and 34. `seat` a recorded seat whose camera was recorded, its Follow or,
+/* Follow, Jump and Free cam, game thread only (tagpu_replay.c, FOLLOW, JUMP AND FREE CAM): a HUD
+   row's Follow and Jump, and Follow pressed again. `seat` a recorded seat whose camera was recorded, its Follow or,
    with `once`, its Jump; -1 Free cam. Applied at the next frame visit; 0 refused, with a log line
    naming why. followed: the seat a Follow shows, -1 under Free cam (a Jump included). */
 int tagpu_replay_follow_request(int seat, int once);
@@ -133,7 +145,7 @@ int tagpu_replay_followed(void);
 
 /* THE OVERLAYS, game thread only (tagpu_replay.c, THE OVERLAYS): every recorded player's cursor,
    clicks and selection, built at the frame visit from the recording, and the four switches of the
-   dock's Overlays menu -- the three overlays and the chat -- each on at every playing's start and
+   HUD's foot plate -- the three overlays and the chat -- each on at every playing's start and
    never saved. `which` is a TAGPU_OV_*; a switched-off overlay produces nothing. */
 enum { TAGPU_OV_CURSORS, TAGPU_OV_CLICKS, TAGPU_OV_SELECTIONS, TAGPU_OV_CHAT, TAGPU_OV_N };
 int  tagpu_replay_overlay(int which);

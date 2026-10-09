@@ -1,4 +1,3 @@
-#include "tagpu_cards.h"
 /* tagpu_shield.c — the input firewall.
 
    Rationale and message contract: inc/tagpu_shield.h.
@@ -11,12 +10,13 @@
    invisible to the game; the desktop stays theirs. */
 
 #include <windows.h>
+#include <windowsx.h>
 #include <stdio.h>
 #include "dd.h"
 #include "hook.h"
 #include "tagpu_shield.h"
 #include "tagpu_menu.h"
-#include "tagpu_dock.h"
+#include "tagpu_hudinput.h"
 #include "mouse.h"
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
@@ -167,7 +167,7 @@ static LRESULT to_game(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
            click` and the human's mouse would disagree about the world — and
            the same is true of the wheel, which is why an injected notch is
            offered to the zoom here rather than short-circuited at the token */
-        if (tagpu_cards_wheel(msg, wparam, lparam)) return 0;
+        if (tagpu_hudinput_wheel(msg, wparam, lparam)) return 0;
         if (tagpu_zoom_wheel(msg, wparam, lparam))
             return 0;
         tagpu_gui_wheel(msg, wparam, lparam);
@@ -210,6 +210,7 @@ static int deliver_mouse(HWND hwnd, int code, int gx, int gy)
 {
     int cur_x = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
     int cur_y = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
+    int dev_x = -1, dev_y = -1;         /* the client point a device injection names */
 
     /* device-space injection: x,y are client-area pixels and go through
        the SAME transform a hardware click takes, so this is a test of the
@@ -225,7 +226,11 @@ static int deliver_mouse(HWND hwnd, int code, int gx, int gy)
            the flag to be OR'd into any code. */
         if (code == TAGPU_M_MOVEREL) return TAGPU_DELIVER_DROPPED;
         if (!(gx < 0 && gy < 0))
+        {
+            dev_x = gx;
+            dev_y = gy;
             mouse_client_to_game(gx, gy, &gx, &gy);
+        }
     }
     else
     {
@@ -280,15 +285,18 @@ static int deliver_mouse(HWND hwnd, int code, int gx, int gy)
     case TAGPU_M_WHEELDN: msg = WM_MOUSEWHEEL; wheel = -WHEEL_DELTA; break;
     }
 
-    /* The render-options sprocket owns its own 28x28 of the top bar, and it is
-       hit-tested HERE as well as on the real-message path below: with the
-       shield armed this is the ONLY path a tacli instance's clicks take, and
-       with it disarmed it is the only path a player's do not. A press it
-       consumes is dropped whole -- no message and no virtual key state, which
-       the engine polls -- and its release is dropped too, but always clears
-       the key so the engine is never left holding a button. */
+    /* The render-options sprocket owns its own 28x28 of the top bar, and the
+       replay HUD its controls; both are hit-tested HERE as well as on the
+       real-message path below: with the shield armed this is the ONLY path a
+       tacli instance's clicks take, and with it disarmed it is the only path a
+       player's do not. A press one consumes is dropped whole -- no message and
+       no virtual key state, which the engine polls -- and its release is
+       dropped too, but always clears the key so the engine is never left
+       holding a button. The HUD is hit in client pixels, so only a device
+       injection can reach it; a click in the engine's own space passes under
+       it to the engine. */
     if ((vk == VK_LBUTTON && tagpu_menu_click(gx, gy, down)) ||
-        (vk == VK_RBUTTON && tagpu_menu_rclick(gx, gy, down)))
+        ((vk == VK_LBUTTON || vk == VK_RBUTTON) && tagpu_hudinput_button(dev_x, dev_y, gx, gy, down, vk == VK_RBUTTON)))
     {
         if (!down) set_key(vk, FALSE);
         return TAGPU_DELIVER_MENU;
@@ -350,20 +358,25 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         return TRUE;
     }
 
-    /* The sprocket, on the REAL path -- before the shield's own gate, so it
-       answers a player's mouse whether the shield is armed or not. The point
-       comes from g_ddraw.cursor rather than lParam because this hook runs at
-       the top of the wndproc, before cnc-ddraw has unscaled a hardware
-       message into game space; the preceding WM_MOUSEMOVE has already put the
-       game-space point there, and it is the same value the injected path
-       hands the same function. */
-    if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP)
+    /* The sprocket and the replay HUD, on the REAL path -- before the shield's
+       own gate, so they answer a player's mouse whether the shield is armed or
+       not. The sprocket's point comes from g_ddraw.cursor rather than lParam
+       because this hook runs at the top of the wndproc, before cnc-ddraw has
+       unscaled a hardware message into game space; the preceding WM_MOUSEMOVE
+       has already put the game-space point there, and it is the same value the
+       injected path hands the same function. The HUD's is lParam itself, the
+       client point, and it tests the panel at the sprocket's point, so the two
+       split the screen on one conversion. A double click is a press to the
+       HUD: the window's class may turn a second press into one. */
+    if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP ||
+        msg == WM_LBUTTONDBLCLK || msg == WM_RBUTTONDBLCLK)
     {
         int cx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
         int cy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
-        int took = msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP
-                 ? tagpu_menu_click(cx, cy, msg == WM_LBUTTONDOWN)
-                 : tagpu_menu_rclick(cx, cy, msg == WM_RBUTTONDOWN);
+        int right = msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_RBUTTONDBLCLK;
+        int down = msg != WM_LBUTTONUP && msg != WM_RBUTTONUP;
+        int took = (!right && msg != WM_LBUTTONDBLCLK && tagpu_menu_click(cx, cy, down)) ||
+                   tagpu_hudinput_button(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), cx, cy, down, right);
 
         if (took)
         {
@@ -372,10 +385,10 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         }
     }
 
-    /* The window lost the mouse: a release may never come, so the dock's drag ends here rather
-       than leaving its ghost playhead up until the next press. The messages go on as before. */
+    /* The window lost the mouse: a release may never come, so the HUD's drag ends here. The
+       messages go on as before. */
     if (msg == WM_KILLFOCUS || msg == WM_CAPTURECHANGED || (msg == WM_ACTIVATEAPP && !wparam))
-        tagpu_dock_cancel_press();
+        tagpu_hudinput_cancel();
 
     if (!tagpu_shield_on())
         return FALSE;

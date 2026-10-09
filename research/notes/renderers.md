@@ -1248,14 +1248,13 @@ already swallows the wheel, and our pixels cover the engine's cursor. That last 
 exactly what a DLL overlay forwarding the trigger click would rest on, which is why the open
 question above has two answers and not one.
 
-**One screen slot, shared with the watching dock** [BUILT 2026-10-01, S5 landing 2]. The demo
-recorder's dock ([demo recorder S5](tadr-port/demo-recorder-s5-ui.html), *The watching dock*) is the
-second screen of ours over the world, and `main+0x37EA0` can name one: two screens each
+**One screen slot.** `main+0x37EA0` can name one screen over the world: two screens each
 re-asserting their own name would make every `UpdateIngameGUI` pop the other. So `tagpu_menu.c`
-holds **one slot** — `s_gm`, `s_saved` and which screen it is — and is the buffer's only writer:
-RENDER.GUI wins while the player wants it, and on a level that plays a recording the dock is pushed
-whenever RENDER is not. The open is the sequence above with the screen's own rect writer before
-stage 1 and its own work after it; the close pops whichever screen the slot holds.
+holds **one slot** — `s_gm` and `s_saved` — and is the buffer's only writer, and RENDER.GUI is the
+only screen it holds. The watching dock of the demo recorder shared it with RENDER until the
+replay HUD, a Vulkan pass and no engine screen, replaced it
+([The replay HUD in game](hud-in-game.html)). The slot opens with the sequence above and closes
+by popping its screen.
 
 **The teardown lets the slot go.** The in-game quit runs the teardown `0x491B60` first and the
 engine's pops after it (`0x460630`), and the teardown never touches the buffer. So
@@ -1342,6 +1341,7 @@ exception: nothing but the menu ever wrote it and it was never released, so it i
 | `edge` | `mirror` | `mirror` or `black`: what the view shows past the map ([GPU status](gpu-status.html) §2.90). Not a render key, so the preset never rewrites it; `tagpu_mirror.on`/`.off` are its levers |
 | `mixingbuffers` | 32 | 8, 16, 24 or 32: the sounds the engine plays at once. No row; not a Visuals value, but the same loader reads it |
 | `vsync` | 1 | on: the present waits for the vertical blank, and the frame limiter keeps a backstop just above the monitor's rate; off: nothing holds the frame rate. The only pacing there is (§2.10c) |
+| `replayhud` | 100 | 75, 100, 125 or 150: the replay HUD's own scale, in percent; one HUD unit is the screen height / 720 times it, whatever `hudscale` is ([The replay HUD in game](hud-in-game.html)). No settings row: the HUD's own scale button writes it, cycling the four |
 
 **The preset is derived, so Classic++ can improve under a player.** While `style` is `classic`
 or `classic++`, the render keys (`assets`, `light`, `shadowres`) are **rewritten from the DLL's

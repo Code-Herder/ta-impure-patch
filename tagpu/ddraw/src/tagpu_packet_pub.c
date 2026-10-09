@@ -110,6 +110,8 @@
 #include "tagpu_surf.h"      /* the golden source: TA's composed frame, copied on
                                 THIS thread at the one point it is finished      */
 #include "tagpu_feat.h"      /* whether the mirror wants the map's own features */
+#include "tagpu_hudstate.h"   /* the replay HUD's record, through the replay's own calls */
+#include "tagpu_hudinput.h"   /* ...and the controls it drew, handed back */
 #include "tagpu_datakeys.h"  /* the build ghost's piece masks, computed on THIS thread */
 #include "tagpu_replay.h"    /* the replay's overlays, built at its frame visit on THIS thread */
 
@@ -298,6 +300,10 @@ static unsigned s_fillShort;
    PK_FILL_COUNTS / PK_FC_UNDO (above fill_frame) take back what the
    discarded fill counted. */
 static int      s_fillAgain;
+
+/* the replay HUD's record, built here and copied into the area: 3.4 KB, off the stack */
+static TAGPU_PK_HUD s_hud;
+static TAGPU_PK_HUDSTAT s_hudstat;
 
 static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, unsigned len,
                             unsigned* off_out, unsigned* len_out, unsigned trunc_bit)
@@ -2779,6 +2785,17 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     /* ---- the UI's render half ---- */
     e = fill_gui(p, ta, &cursor);
     if (e > need) need = e;
+    /* ---- the replay HUD's record, while a recording plays (tagpu_hudstate.c) ---- */
+    if (tagpu_hudstate_fill(&s_hud, p->tick)) {
+        e = append_area(p, &cursor, &s_hud, (unsigned)sizeof s_hud, &p->hud_off, &p->hud_len,
+                        TAGPU_PK_TRUNC_HUD);
+        if (e > need) need = e;
+        if (tagpu_hudstate_fill_stats(&s_hudstat, &s_hud)) {
+            e = append_area(p, &cursor, &s_hudstat, (unsigned)sizeof s_hudstat, &p->hstat_off,
+                            &p->hstat_len, TAGPU_PK_TRUNC_HUD);
+            if (e > need) need = e;
+        }
+    }
 
     /* the font: header + glyph table in the header, the objects in the area */
     p->font_gen   = s_fontGen;
@@ -3118,6 +3135,8 @@ static int __cdecl before_draw(void* entry_esp)
         unsigned us;
         QueryPerformanceCounter(&t0);
         c = tagpu_cmd_take();
+        /* the replay HUD's controls as the player last saw them, for a click before the next take */
+        tagpu_hudinput_take(c ? &c->hud : NULL);
         /* THE CAMERA AND THE RECT, THEN THE TERRAIN LATCH: the eye may only
            be off the engine's range, and the rect only wide, on a draw whose
            ground is ours. The render thread's request is read ONCE, the camera

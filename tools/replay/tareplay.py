@@ -39,11 +39,13 @@ and a fifth where fixtures.json gives the fixture `"watch": true`:
 
     W  watch     the playing a player starts and drives (watch_lane): from the main menu's
                  REPLAYS, Watch refuses two edited copies of the recording (another layout
-                 hash; a map no archive has, which the Start refuses), then plays it; the dock's
-                 DKSPEED, the in-game Options' OK with the store's gamespeed unchanged, DKPLAY to
-                 pause, the trigger `dock seek T1` (the dock's own seek entry), the cards' Sight
-                 and Full map with clock and camera unchanged, dump w<T1>,
-                 DKPLAY to resume, DKLEAVE and Yes back to the browser, and a second Watch
+                 hash; a map no archive has, which the Start refuses), then plays it; the replay
+                 HUD's speed, the in-game Options' OK with the store's gamespeed unchanged, its
+                 play to pause, the trigger `hud seek T1` (the HUD's own seek entry), a row's
+                 Sight and Sight again with clock and camera unchanged, Follow, Follow again and
+                 Jump, the Cursors switch off and on, dump w<T1>, play to resume, Leave and Yes
+                 back to the browser, and a second Watch -- every HUD control clicked in device
+                 space where the game drew it (`tacli hud`)
 
 and every check fails by name: the recording's end block and `tarec check`; L's dumps `tarec
 compare`; P's, R's, Q's and W's capture dumps `tarec compare --puppet`; each round trip's line has
@@ -137,6 +139,7 @@ END_SCENARIO = SCENARIOS / "replay-end.json"
 STOCK_FIXTURE = "stock-limits"          # the fixture that plays the stock-limits build
 sys.path.insert(0, str(TREE / "tools"))
 import talog  # noqa: E402
+import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
 sys.path.insert(0, str(HERE))
 import tarec  # noqa: E402
 import reccache  # noqa: E402
@@ -205,6 +208,7 @@ def main_checkout() -> Path:
 INSTANCES = main_checkout() / "tagpu" / "instances"
 PRINT = threading.Lock()
 STOP = threading.Event()        # set by SIGTERM / Ctrl-C: every wait gives up, no job starts
+J = tarun.NULL                  # the run's journal once its games start (run_threads)
 
 
 def say(*a):
@@ -319,6 +323,7 @@ class Worker:
             raise CouldNotRun("test game speed must be 10 or 20")
         self.game_speed = game_speed
         self.turbo = 0
+        self.lane = None                # (fixture, lane) while a job plays, for the journal
         self.lock = None
         self.last_collection = None
         for k in range(1, 100):
@@ -400,7 +405,7 @@ class Worker:
             rc, text = tacli("ui", self.name, "click", "EXIT", "--timeout", 5, timeout=30)
             if rc and self.running():
                 raise CouldNotRun(f"the main menu's exit: {last(text)}")
-        elif gui in ("ARMMAIN2.GUI", "CORMAIN2.GUI", "DOCK.GUI", "ARMOPT.GUI"):
+        elif gui in ("ARMMAIN2.GUI", "CORMAIN2.GUI", "ARMOPT.GUI"):
             if gui != "ARMOPT.GUI":
                 rc, text = tacli("keys", self.name, "tab", timeout=60)
                 if rc:
@@ -472,7 +477,10 @@ class Worker:
         rc, o = tacli("peek", self.name, GAMETIME, "--json", timeout=60)
         if rc:
             raise CouldNotRun(f"tacli peek: {last(o)}")
-        return int(str(json.loads(o[o.index("{"):])["peeks"][0]["value"]).split()[0])
+        g = int(str(json.loads(o[o.index("{"):])["peeks"][0]["value"]).split()[0])
+        if self.lane:
+            J.progress(*self.lane, g)
+        return g
 
     def trigger(self, text):
         """Written whole and renamed into place: the frame visit never reads half a line."""
@@ -695,6 +703,8 @@ def wait_paused(w, log, T, poll=None):
             m = rx.search(ln.rstrip())
             if m and "paused at" in m.group(0):
                 log.pending, log.held, log.at = None, True, T
+                if w.lane:
+                    J.progress(*w.lane, T)
                 return
             if m:
                 raise CouldNotRun(f"pause at {T}: {m.group(0)}")
@@ -866,52 +876,56 @@ def twin(w, log, fix, held=False):
     # they are `leave` rows of replay-globals.tsv (mousehead, mousetail,
     # guimsg, guidblclick, guipopwparam).
     tacli("arm", w.name, "menu.open")
-    rc, o = tacli("ui", w.name, "wait", "--gui", "RENDER.GUI", "--timeout", "10", timeout=60)
-    if rc:
-        raise CouldNotRun(f"the twin: Impure options did not open: {last(o)}")
-    rc, o = tacli("ui", w.name, "--json")
-    if rc:
-        raise CouldNotRun(f"the twin: Impure options could not be read: {last(o)}")
-    gui = json.loads(o)
-    labels = [g for g in gui["gadgets"] if g["type"] == "label" and g["active"]]
-    if not labels:
-        raise CouldNotRun("the twin: Impure options has no inert labels to sample")
-    width, height = gui["surface"]
-    rc, o = tacli("peek", w.name, "*0x511DE8+0x1422b", "*0x511DE8+0x1422f",
-                  "--json", timeout=60)
-    if rc:
-        raise CouldNotRun(f"the twin: map dimensions: {last(o)}")
-    map_width, map_height = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
-    points = ((0, 0), ((1 << (width.bit_length() - 1)) - 1,
-                       (1 << (height.bit_length() - 1)) - 1), (width - 1, height - 1))
-    for i, name in enumerate(NULL_VIEWS[:-1]):
-        x, y = labels[i % len(labels)]["click"]
-        keys(w, f"pclick:{x},{y}")
-        # Click injection returns the pointer to screen centre. A separate
-        # move and its native GUI echo establish the coordinate in this view:
-        # the GUI pump copies the event when it runs, before the move is
-        # acknowledged (tagpu_input.c), so one read after the call is the echo.
-        x, y = points[i % len(points)]
-        keys(w, f"pmove:{x},{y}")
-        rc, o = tacli("peek", w.name, "*0x511DE8+0x555", "*0x511DE8+0x559",
-                      "*0x511DE8+0x565", "--json", timeout=60)
+    try:
+        rc, o = tacli("ui", w.name, "wait", "--gui", "RENDER.GUI", "--timeout", "10", timeout=60)
         if rc:
-            raise CouldNotRun(f"the twin: native mouse echo: {last(o)}")
-        event = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
-        if event != [x, y, 0x200]:
-            raise CouldNotRun(f"the twin: mouse event {event} after pmove:{x},{y}, "
-                              f"wanted {[x, y, 0x200]}")
-        # The engine clamps these eyes to the map. The views are observations,
-        # not assertions about the camera's permitted range.
-        tacli("eye", w.name, i * map_width // (len(NULL_VIEWS) - 2),
-              i * map_height // (len(NULL_VIEWS) - 2))
-        n = len(log.lines)
-        w.trigger(f"dump {name} now")
-        if not log.wait(rf"recorder: frame dump {name} at GameTime", 30, n):
-            raise CouldNotRun(f"the twin: frame dump {name} not taken")
-        if w.gametime() != g1:
-            raise CouldNotRun("the twin: GameTime moved during the viewer samples")
-    tacli("arm", w.name, "menu.open=off")
+            raise CouldNotRun(f"the twin: Impure options did not open: {last(o)}")
+        rc, o = tacli("ui", w.name, "--json")
+        if rc:
+            raise CouldNotRun(f"the twin: Impure options could not be read: {last(o)}")
+        gui = json.loads(o)
+        labels = [g for g in gui["gadgets"] if g["type"] == "label" and g["active"]]
+        if not labels:
+            raise CouldNotRun("the twin: Impure options has no inert labels to sample")
+        width, height = gui["surface"]
+        rc, o = tacli("peek", w.name, "*0x511DE8+0x1422b", "*0x511DE8+0x1422f",
+                      "--json", timeout=60)
+        if rc:
+            raise CouldNotRun(f"the twin: map dimensions: {last(o)}")
+        map_width, map_height = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
+        points = ((0, 0), ((1 << (width.bit_length() - 1)) - 1,
+                           (1 << (height.bit_length() - 1)) - 1), (width - 1, height - 1))
+        for i, name in enumerate(NULL_VIEWS[:-1]):
+            x, y = labels[i % len(labels)]["click"]
+            keys(w, f"pclick:{x},{y}")
+            # Click injection returns the pointer to screen centre. A separate
+            # move and its native GUI echo establish the coordinate in this view:
+            # the GUI pump copies the event when it runs, before the move is
+            # acknowledged (tagpu_input.c), so one read after the call is the echo.
+            x, y = points[i % len(points)]
+            keys(w, f"pmove:{x},{y}")
+            rc, o = tacli("peek", w.name, "*0x511DE8+0x555", "*0x511DE8+0x559",
+                          "*0x511DE8+0x565", "--json", timeout=60)
+            if rc:
+                raise CouldNotRun(f"the twin: native mouse echo: {last(o)}")
+            event = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
+            if event != [x, y, 0x200]:
+                raise CouldNotRun(f"the twin: mouse event {event} after pmove:{x},{y}, "
+                                  f"wanted {[x, y, 0x200]}")
+            # The engine clamps these eyes to the map. The views are observations,
+            # not assertions about the camera's permitted range.
+            tacli("eye", w.name, i * map_width // (len(NULL_VIEWS) - 2),
+                  i * map_height // (len(NULL_VIEWS) - 2))
+            n = len(log.lines)
+            w.trigger(f"dump {name} now")
+            if not log.wait(rf"recorder: frame dump {name} at GameTime", 30, n):
+                raise CouldNotRun(f"the twin: frame dump {name} not taken")
+            if w.gametime() != g1:
+                raise CouldNotRun("the twin: GameTime moved during the viewer samples")
+    finally:
+        # disarmed on every way out: an armed panel opens in every later game on this instance,
+        # and no exit route leaves RENDER.GUI
+        tacli("arm", w.name, "menu.open=off")
     selections = [("lnselection", fix.get("viewer"))] + [
         (f"lnselection{i}", command) for i, command in enumerate(fix.get("viewer_more", []))]
     for name, command in selections:
@@ -1259,7 +1273,7 @@ def takeover_f(w, fx, out):
     return at
 
 
-# ---- W: the browser's Watch and the dock --------------------------------------------------
+# ---- W: the browser's Watch and the replay HUD ---------------------------------------------
 
 def header_copy(rec, dst, tag, edit):
     """A copy of the recording `rec` at `dst` whose header entry `tag` holds edit(its bytes), of
@@ -1342,6 +1356,26 @@ def ui_on(w, gui, timeout):
     ui(w, "wait", "--gui", gui, "--timeout", timeout, timeout=timeout)
 
 
+def in_world(w, timeout):
+    """The base in-game screen on top again, no menu over the world."""
+    deadline = time.time() + timeout
+    while True:
+        gui = json.loads(ui(w, "--json"))["gui"].upper()
+        if gui in ("ARMMAIN2.GUI", "CORMAIN2.GUI"):
+            return
+        if time.time() >= deadline:
+            raise CouldNotRun(f"the world: {gui} still on top after {timeout} s")
+        nap(0.2)
+
+
+def hud(w, *args, timeout=60):
+    """`tacli hud`: the replay HUD's controls, clicked in device space where the game drew them."""
+    rc, o = tacli("hud", w.name, *args, "--timeout", timeout, timeout=timeout + 30)
+    if rc:
+        raise CouldNotRun(f"tacli hud {' '.join(map(str, args))}: {last(o)}")
+    return o
+
+
 def browser_watch(w, log, row, name):
     """Row `row` of the Replays browser selected and Watch pressed; the line that judged it:
     `replay: playing <name>` or `replay: not playing <name>: <why>`. The browser names the file
@@ -1374,74 +1408,62 @@ def watch_button(w):
     return m.group(1)
 
 
-def watch_cards(w, log, rec):
-    """Exercise the visible card controls at the worker's unscaled HUD while paused."""
-    match = re.search(r"^gui DOCK.GUI\s+(\d+)x(\d+)", ui(w))
-    if not match:
-        raise CouldNotRun("the player cards: no dock dimensions")
-    width, height = map(int, match.groups())
+def watch_hud(w, log, rec):
+    """The replay HUD's row actions and switches, clicked in device space while paused: Sight on
+    the first row and again (the full map), with the clock and the camera unchanged; Follow,
+    Follow again (the free camera) and Jump on the row of the seat the recording's human
+    commanded (the perspective streams carry that seat's camera); the Cursors switch off and on.
+    A row's buttons show while the pointer is over the row, which `tacli hud` hovers first."""
     seats = tarec.header_only(rec)["players"]
     if not seats:
-        raise CouldNotRun("the player cards: no recorded seats")
-    row_height = 54 if len(seats) > 4 or len(seats) * 74 - 4 > height - 202 else 70
+        raise CouldNotRun("the HUD's rows: no recorded seats")
     viewed = "*0x511DE8+0x2A43:1"
     viewer, tick = peek(w, viewed), w.gametime()
     eye_specs = ("*0x511DE8+0x1431F:4", "*0x511DE8+0x14323:4")
     eye = tuple(peek(w, s) for s in eye_specs)
-    # The worker creates a fresh instance with no HUD-scale arm. These are device clicks,
-    # so a broken card input route cannot pass by calling the replay API directly.
-    for seat, x, y in ((seats[0]["index"], width - 112, 40 + row_height - 14),
-                       (viewer, width - 160, height - 148)):
+
+    def device(what, key, want):
         n = len(log.lines)
-        rc, output = tacli("click", w.name, x, y, "--device", timeout=60)
-        if rc:
-            raise CouldNotRun(f"the player cards: {last(output)}")
+        hud(w, "click", key)
+        got = log.wait(want, 30, n)
+        if not got:
+            raise Failed(f"the HUD's {what}: no line matching {want!r} in 30 s")
+        return got.strip()
+
+    # the rows are the recording header's seats in order (tagpu_replay_players)
+    for seat in (seats[0]["index"], viewer):
+        n = len(log.lines)
+        hud(w, "click", "sight:0")
         got = log.wait(rf"replay: sight is seat {seat} at GameTime {tick};|"
                        rf"replay: sight change to seat {seat} refused:", 30, n)
         if not got or "refused:" in got or peek(w, viewed) != seat:
-            raise Failed(f"the player cards: {got.strip() if got else 'no Sight reply'}")
+            raise Failed(f"the HUD's Sight: {got.strip() if got else 'no Sight reply'}")
         if w.gametime() != tick or tuple(peek(w, s) for s in eye_specs) != eye:
-            raise Failed("the player cards: Sight changed the paused clock or camera")
+            raise Failed("the HUD's Sight changed the paused clock or camera")
 
-    def device(what, x, y, want):
-        n = len(log.lines)
-        rc, output = tacli("click", w.name, x, y, "--device", timeout=60)
-        if rc:
-            raise CouldNotRun(f"the player cards' {what}: {last(output)}")
-        got = log.wait(want, 30, n)
-        if not got:
-            raise Failed(f"the player cards' {what}: no line matching {want!r} in 30 s")
-        return got.strip()
-
-    # Follow, Jump and Free cam on the card of the seat the recording's human commanded (the
-    # perspective streams carry that seat's camera), then the Overlays menu's Cursors row off and
-    # on again and the menu closed by its own button; all paused, so the clock must not move
     h = tarec.header_only(rec)
     own = (h.get("options") or {}).get("controlled")
     row = next((k for k, p in enumerate(seats) if p["index"] == own), None)
     if row is None:
-        raise CouldNotRun(f"the player cards: the controlled seat {own} has no card")
-    y = 40 + row_height * (row + 1) - 14
-    lines = [device("Follow", width - 40, y, rf"replay: [^:]+: follow seat {own}, epoch \d+"),
-             device("Jump", width - 168, y, rf"replay: [^:]+: jump to seat {own}, epoch \d+"),
-             device("Free cam", width - 56, height - 148, r"replay: [^:]+: .*free cam")]
-    ui(w, "click", "DKOVER")
-    lines += [device("Cursors off", width - 54, height - 206, r"replay: overlay cursors off"),
-              device("Cursors on", width - 54, height - 206, r"replay: overlay cursors on")]
-    ui(w, "click", "DKOVER")
+        raise CouldNotRun(f"the HUD's rows: the controlled seat {own} has no row")
+    lines = [device("Follow", f"follow:{row}", rf"replay: [^:]+: follow seat {own}, epoch \d+"),
+             device("Follow again", f"follow:{row}", r"replay: [^:]+: .*free cam"),
+             device("Jump", f"jump:{row}", rf"replay: [^:]+: jump to seat {own}, epoch \d+"),
+             device("Cursors off", "cursors", r"replay: overlay cursors off"),
+             device("Cursors on", "cursors", r"replay: overlay cursors on")]
     if w.gametime() != tick:
-        raise Failed(f"the player cards: Follow, Jump or the Overlays menu moved the paused "
-                     f"clock from {tick} to {w.gametime()}")
-    return ("W: player cards", PASS, f"Sight {seats[0]['index']} and Full map {viewer}; "
-            f"GameTime {tick} and camera {eye} unchanged; " + "; ".join(lines))
+        raise Failed(f"the HUD's rows: Follow, Jump or a switch moved the paused clock from {tick} "
+                     f"to {w.gametime()}")
+    return ("W: the HUD's rows and switches", PASS, f"Sight {seats[0]['index']} and again "
+            f"{viewer}; GameTime {tick} and camera {eye} unchanged; " + "; ".join(lines))
 
 
 def watch_lane(w, fx, rec, out, T):
     """W: the playback started as a player starts it, through the Replays browser's Watch, and
-    driven through the dock: two copies of the recording refused, the data refusal's marked and the
-    missing map's not, then the recording watched, its
-    speed changed on the dock, the in-game Options' OK (the settings save), a pause, the dock's
-    seek to T with dump w<T>, the resume, Leave, and a second Watch from the browser it returns to.
+    driven through the replay HUD: two copies of the recording refused, the data refusal's marked
+    and the missing map's not, then the recording watched, its speed changed on the HUD, the
+    in-game Options' OK (the settings save), a pause, the HUD's seek to T with dump w<T>, the
+    resume, Leave, and a second Watch from the browser it returns to.
     Returns its own checks, (name, verdict, detail) each; a claim that does not hold is Failed."""
     fix, stem, res = fx["fix"], fx["name"], []
     w.stop()
@@ -1499,15 +1521,15 @@ def watch_lane(w, fx, rec, out, T):
     got = browser_watch(w, log, len(copies), stem)
     if not got.startswith(f"replay: playing {stem}:"):
         raise Failed(f"Watch {stem}: {got}")
-    ui_on(w, "DOCK.GUI", 60)
+    hud(w, "wait", timeout=60)
     res.append((f"W: Watch plays {stem}", PASS, got))
 
-    # the dock's speed, then the settings save with it changed: the store keeps the player's
-    ui(w, "click", "DKSPEED")
+    # the HUD's speed, then the settings save with it changed: the store keeps the player's
+    hud(w, "click", "speed")
     nap(1.0)
     ceil1, live1 = peek(w, SPEED_CEIL), peek(w, SPEED_LIVE)
     if ceil1 == ceil0 or ceil1 not in (5, 10, 20, 40, 80) or live1 != ceil1:
-        raise Failed(f"the dock's speed: {ceil0} became ceiling {ceil1}, live {live1}")
+        raise Failed(f"the HUD's speed: {ceil0} became ceiling {ceil1}, live {live1}")
     rc, o = tacli("keys", w.name, "tab", timeout=60)
     if rc:
         raise CouldNotRun(f"tacli keys tab: {last(o)}")
@@ -1521,35 +1543,35 @@ def watch_lane(w, fx, rec, out, T):
         raise Failed(f"the settings save during the playing: the store's gamespeed {stored} -> "
                      f"{after}, the ceiling {ceil1} -> {ceil2}")
     ui(w, "click", "OK")
-    ui_on(w, "DOCK.GUI", 20)
-    res.append(("W: the dock's speed and the settings save", PASS,
-                f"speed {ceil0} -> {ceil1} on the dock; the save stored gamespeed {after}, the "
+    in_world(w, 20)
+    res.append(("W: the HUD's speed and the settings save", PASS,
+                f"speed {ceil0} -> {ceil1} on the HUD; the save stored gamespeed {after}, the "
                 f"player's, and left the playing at {ceil2}"))
 
-    # pause, the dock's seek to T with its dump, resume
-    ui(w, "click", "DKPLAY")
+    # pause, the HUD's seek to T with its dump, resume
+    hud(w, "click", "play")
     nap(1.0)
     g1 = w.gametime()
     nap(1.5)
     if not peek(w, PAUSE_WORD) & 1 or w.gametime() != g1:
-        raise Failed(f"the dock's pause: the pause word or GameTime moved (at {g1})")
+        raise Failed(f"the HUD's pause: the pause word or GameTime moved (at {g1})")
     n = len(log.lines)
-    w.trigger(f"dock seek {T}")
+    w.trigger(f"hud seek {T}")
     got = log.wait(rf"replay: {re.escape(stem)}: (at GameTime {T}, sought from|seek to {T} "
-                   rf"refused)|a seek to {T} from the dock refused", 60, n)
+                   rf"refused)|a seek to {T} from the HUD refused", 60, n)
     if not got or "sought from" not in got:
-        raise Failed(f"the dock's seek to {T}: {got.strip() if got else 'no line in 60 s'}")
-    res.append(watch_cards(w, log, rec))
+        raise Failed(f"the HUD's seek to {T}: {got.strip() if got else 'no line in 60 s'}")
+    res.append(watch_hud(w, log, rec))
     arm_dump(w, log, f"w{T}", T)
-    ui(w, "click", "DKPLAY")
+    hud(w, "click", "play")
     wait_dumps(log, [f"w{T}"], 120)
     if peek(w, PAUSE_WORD) & 1:
-        raise Failed("the dock's resume: the pause word still set")
-    res.append(("W: the dock's pause, seek and resume", PASS, got[got.index("replay:"):].strip()))
+        raise Failed("the HUD's resume: the pause word still set")
+    res.append(("W: the HUD's pause, seek and resume", PASS, got[got.index("replay:"):].strip()))
 
     # Leave: the teardown puts the player's speed back, and the browser returns
     n = len(log.lines)
-    ui(w, "click", "DKLEAVE")
+    hud(w, "click", "leave")
     ui_on(w, "YESORNO.GUI", 20)
     ui(w, "click", "CHOICE1")
     if not log.wait(rf"replay: {re.escape(stem)} at its level's end", 120, n):
@@ -2070,7 +2092,7 @@ def checks(fx):
     if ran.get("W") == "ran":
         res.add(*fx["wres"])
         d = out / "W" / f"dump-w{Ts[0]}.bin"
-        compare(f"W w{Ts[0]} (the dock's seek, in a playing Watch started)", "compare",
+        compare(f"W w{Ts[0]} (the HUD's seek, in a playing Watch started)", "compare",
                 "--puppet", rec, d, files=[d])
     return res
 
@@ -2345,6 +2367,10 @@ class Run:
         self.keep = bool(getattr(args, "keep", False))
         self.game_speed = getattr(args, "game_speed", TEST_GAME_SPEED)
         self.turbo = getattr(args, "turbo", 0)
+        self.kind = getattr(args, "cmd", "run")
+        # what the estimate keys a lane's past times by: the pacing and the build's kind
+        self.variant = (f"gs{self.game_speed}-turbo{self.turbo}"
+                        f"{'-cover' if getattr(args, 'cover', False) else ''}")
         h = head()
         fixes = fixes or fixtures()
         for name in names:
@@ -2403,7 +2429,7 @@ class Run:
         report() for a fixture a stopped run left with lanes never run."""
         with self.lock:
             if name not in self.reports:
-                self.reports[name] = self.report_pool.submit(fixture_report, self.fx[name],
+                self.reports[name] = self.report_pool.submit(journaled_report, self.fx[name],
                                                              self.keep)
             return self.reports[name]
 
@@ -2414,6 +2440,9 @@ class Run:
         Ts, out = fx["Ts"], fx["out"] / proc
         t0 = time.time()
         say(f"{name} {proc}: start on {w.name}")
+        w.lane = (name, proc)
+        J.start(name, proc, instance=w.name, display=str(w.xvfb.display),
+                gt_target=lane_target(fx, proc))
         try:
             stopping()
             w.game_speed = NORMAL_GAME_SPEED if proc == "W" else self.game_speed
@@ -2455,12 +2484,19 @@ class Run:
             else:
                 fresh(w, fx, fx["rec"], out, Ts[0])
             fx["procs"][proc] = "ran"
+            w.lane = None
+            J.finish(name, proc, "done")
         except Exception as e:
             kind = "FAILED" if isinstance(e, Failed) else "could not run"
             why = str(e) if isinstance(e, (CouldNotRun, Failed)) else f"{type(e).__name__}: {e}"
             fx["procs"][proc] = kind
             fx["problems"].append((proc, kind, why))
             say(f"{name} {proc}: {kind}: {why}")
+            w.lane = None
+            J.finish(name, proc, "fail" if kind == "FAILED" else "unrun", why.splitlines()[0])
+            # the lanes this one queues on success never start: L queues all the others, K its F
+            J.never(name, fx["want"][1:] if proc == "L" else ["F"] if proc == "K" else [],
+                    f"{proc} did not finish")
             try:
                 w.collect(out)
             except Exception:
@@ -2543,6 +2579,7 @@ def fixture_report(fx, keep):
         if fx["procs"].get("L") == "ran":
             lines.append("   " + cost_line(fx))
             label, verdict, detail = codec_check(tarec_run("info", fx["rec"])[1])
+            fx["verdicts"] = [(label, verdict, detail)]
             lines.append(f"   {verdict:4}  {label}: {detail}")
             failed |= verdict == FAIL
             unrun |= verdict == UNRUN
@@ -2557,7 +2594,8 @@ def fixture_report(fx, keep):
     if fx["procs"].get("L") != "ran":
         return lines, failed, unrun
     planned = [checks(fx)] + ([tk_checks(fx)] if "K" in fx["want"] else [])
-    for label, verdict, detail in [r for p in planned for r in p.results()]:
+    fx["verdicts"] = [r for p in planned for r in p.results()]
+    for label, verdict, detail in fx["verdicts"]:
         lines.append(f"   {verdict:4}  {label}: "
                      + (detail.splitlines()[0] if verdict == PASS
                         else detail.replace("\n", "\n         ")))
@@ -2571,6 +2609,37 @@ def fixture_report(fx, keep):
         for f in set(map(str, fx["passed"])) - set(map(str, fx["held"])):
             Path(f).unlink(missing_ok=True)
     return lines, failed, unrun
+
+
+def journaled_report(fx, keep):
+    """fixture_report, its checks told to the journal: how many passed, and every one that did
+    not by its label and the first line of its detail."""
+    J.start(fx["name"], "checks")
+    try:
+        got = fixture_report(fx, keep)
+    except Exception as e:
+        J.finish(fx["name"], "checks", "unrun", f"{type(e).__name__}: {e}")
+        raise
+    v = fx.get("verdicts", [])
+
+    def named(verdict):
+        return [f"{label}: {detail.splitlines()[0] if detail else ''}"[:160]
+                for label, vd, detail in v if vd == verdict]
+    fails, unrun = named(FAIL), named(UNRUN)
+    J.checks(fx["name"], sum(vd == PASS for _, vd, _ in v), fails, unrun)
+    J.finish(fx["name"], "checks", "fail" if fails else "unrun" if unrun or not v else "pass")
+    return got
+
+
+def lane_target(fx, proc):
+    """The GameTime a lane plays to, where one GameTime says how far it has come: None for the
+    lanes whose course is not a run up the clock (K, F, X, U, W)."""
+    Ts = fx.get("Ts")
+    if proc == "L" or (proc == "P" and fx["measure"]):
+        return fx["fix"]["end"]
+    if not Ts:
+        return None
+    return {"P": Ts[-1], "R": Ts[-1] + CONTINUE, "Q": Ts[0]}.get(proc)
 
 
 def report(run):
@@ -2612,7 +2681,9 @@ def cmd_run(args):
 def run_threads(run):
     """The run's workers to their end; a stop by SIGTERM or Ctrl-C lets each finish its game.
     The workers are the only threads that play games, one each: never more than -j at once."""
+    global J
     offline(run.j)
+    J = journal(run)
     threads = [threading.Thread(target=run.worker) for _ in range(run.j)]
 
     def interrupted(signum, frame):
@@ -2625,6 +2696,28 @@ def run_threads(run):
         t.start()
     while any(t.is_alive() for t in threads):
         time.sleep(1)
+
+
+def journal(run):
+    """The run planned for the journal: each fixture's lanes on -j game workers in the order a
+    free worker takes them (LANE_ORDER, then the fixtures' L order), each after the lane it reads,
+    and its checks after them all on the offline pool, which never waits for a game."""
+    rank = {n: k for k, n in enumerate(first_lanes(run.fx))}
+    items = []
+    for name, fx in run.fx.items():
+        steps = [{"id": p, "pool": "game", "order": LANE_ORDER.index(p) * 1000 + rank[name],
+                  "after": [] if p == "L" else ["K"] if p == "F" else ["L"]}
+                 for p in fx["want"]]
+        if not run.measure:
+            steps.append({"id": "checks", "pool": "offline", "order": 10 ** 6,
+                          "after": list(fx["want"])})
+        items.append((name, steps))
+    names = list(run.fx)
+    title = (f"tareplay {run.kind} " + (" ".join(names) if len(names) <= 3 else
+                                        f"({len(names)} fixtures)") + f" -j {run.j}")
+    return tarun.begin("tareplay", items, kind=run.kind, title=title, gate=True,
+                       pools={"game": run.j, "offline": 0}, variant=run.variant,
+                       summary=str(run.out / "summary.txt"))
 
 
 def out_dir(args):
@@ -2953,6 +3046,7 @@ def cmd_landing(args):
                             f"{'+'.join(sorted(bs))}")
     for p in problems:
         print(f"tareplay landing: {p}")
+    J.note(problems=problems)
     k = sum(1 for key, (_, bs) in funcs.items() if reached([key], bs)) + sum(
         1 for fns, bs in regions.values() if reached(fns, bs))
     total = len(funcs) + len(regions)
@@ -3051,6 +3145,7 @@ def cmd_broad(args):
         if ix not in changed:
             lines.append(f"UNCOVERED table {nm}: no recording changed it between T1 and Tlast")
     text = "\n".join(lines) + ("\n" if lines else "")
+    J.note(problems=lines)
     print(text or "tareplay broad: every feature, site and table exercised\n", end="")
     (out / "broad.txt").write_text(text)
     return status or (1 if lines else 0)
@@ -3241,7 +3336,12 @@ def main(argv=None):
     if a.cmd not in ("features", "list") and not (a.cmd == "landing" and a.check):
         import devpy
         devpy.ensure()
-    return a.func(a)
+    rc = 2                              # a CouldNotRun or anything unforeseen: it could not run
+    try:
+        rc = a.func(a)
+    finally:
+        J.end("stopped" if STOP.is_set() else {0: "pass", 1: "fail"}.get(rc, "unrun"))
+    return rc
 
 
 if __name__ == "__main__":

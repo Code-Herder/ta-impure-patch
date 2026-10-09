@@ -83,8 +83,9 @@
 #include "tagpu_replays.h"
 #include "tagpu_persp.h"
 #include "tagpu_zoom.h"
-#include "tagpu_cards.h"
+#include "tagpu_gaf.h"
 #include "tagpu_packet.h"
+#include "tagpu_hudinput.h"
 #include "git.h"
 
 #define TA_MAINPP      0x00511DE8u
@@ -344,7 +345,7 @@ static struct {
     unsigned        said, shown;   /* text entries applied, and lines given to the message log  */
     char            why[200];
 } s_mp;
-static int s_chat_hidden;           /* 1 = the Overlays menu's Chat switch is off (`chat hide`,
+static int s_chat_hidden;           /* 1 = the HUD's Chat toggle is off (`chat hide`,
                                        `chat show`, `overlay chat`): THE OVERLAYS               */
 /* THE OVERLAYS' state (game thread only) */
 #define OV_RING 64                  /* the clicks held: the most recent, each with its tick      */
@@ -1001,8 +1002,8 @@ static void __cdecl tagpu_replay_level_players(void)
     if (!ok) tagpu_log("replay: the viewer's record 10 could not be given its buffers");
 }
 
-/* The open recording's path and its first and last GameTime, for the dock (tagpu_dock.h): the
-   summary walks the block headers only. */
+/* The open recording's path and its first and last GameTime, for the replay HUD's timeline and
+   bookmarks (tagpu_hudstate.c, tagpu_hudmarks.c): the summary walks the block headers only. */
 static void span_read(const char* path)
 {
     RecSummary sm;
@@ -1014,7 +1015,7 @@ static void span_read(const char* path)
         s_span.last = sm.last;
         s_span.ok = 1;
     } else {
-        tagpu_logf("replay: %s: no span for the dock: %s", path, why);
+        tagpu_logf("replay: %s: no span for the HUD: %s", path, why);
     }
 }
 
@@ -1184,9 +1185,10 @@ static int options_restore(char* ta)
    save writes SkirmishMap from +0x11C and Player%dController..Energy from the entries below the
    count (0x4314F0..0x43171D), so with those three exchanged it writes the player's own.
    The game speed's ceiling main+0x38A4B travels the same way: the save writes it to the registry's
-   `gamespeed` (0x43136B), and the dock changes it during a playback (tagpu_replay_speed_set), so
-   the save writes the player's speed and the teardown puts it back. A change the Options screen's
-   GAME speed slider makes during a playback is put back with the rest. */
+   `gamespeed` (0x43136B), and the HUD's speed button changes it during a playback
+   (tagpu_replay_speed_set), so the save writes the player's speed and the teardown puts it back. A
+   change the Options screen's GAME speed slider makes during a playback is put back with the
+   rest. */
 static void* s_saveRet;
 
 /* the live options and s_opt's, each put in the other's place */
@@ -4367,7 +4369,7 @@ static const RecWorld* mp_world(const RecWorld* W)
     return &s_mp.W;
 }
 
-/* The world the perspective reads -- Follow, the overlays and the cards: in a multiplayer
+/* The world the perspective reads -- Follow, the overlays and the HUD's rows: in a multiplayer
    recording's own segment the reader's world with the composed units and lists and the actors'
    samples and selections (mp_authority), anywhere else the reader's own. The samples' ticks are
    the recorder's application ticks and W->tick is the application tick the world holds, so the
@@ -7504,13 +7506,14 @@ static int rw_trigger(const char* line)
    - `seek <T>` or `seek <T> dump <name>`: on a level that plays a recording, the seek waits for
      the next frame visit after the first step (THE SEEK), and the dump is taken at the capture
      point of T.
-   - `dock seek <T>`: the seek the dock's strip asks for, through its own entry point
+   - `hud seek <T>`: the seek the HUD's timeline asks for, through its own entry point
      (tagpu_replay_seek_request), which clamps T to the recording and takes no dump: a test drives
-     the dock's seek at a GameTime of its choosing, which a click on the strip cannot name exactly.
+     the HUD's seek at a GameTime of its choosing, which a click on the timeline cannot name
+     exactly.
    - `takeover <P> at <T>` or `takeover <P> at <T> difficulty <D>`: on a level that plays a
      recording, the takeover waits for the next frame visit after the first step (THE TAKEOVER);
      the checks that need the world at T are R0's, so its refusals come from seek_run.
-   - `follow <seat>`, `jump <seat>`, `follow free`: the cards' Follow, Jump and Free cam
+   - `follow <seat>`, `jump <seat>`, `follow free`: the HUD's Follow, Jump and Free cam
      (FOLLOW, JUMP AND FREE CAM), for the next frame visit; a refusal is logged at once.
    - `pov`: the next frame visit logs its Follow's answer -- the epoch, the seat, the displayed
      tick, the sample the clock took, the view, the eye and the level -- or that nothing is
@@ -7711,7 +7714,7 @@ static void trigger_read(void)
         rt_arm(name, T);
         return;
     }
-    if (!strncmp(line, "dock seek ", 10) && u32_word(line + 10, &T)) {
+    if (!strncmp(line, "hud seek ", 9) && u32_word(line + 9, &T)) {
         tagpu_replay_seek_request(T);
         return;
     }
@@ -8254,9 +8257,10 @@ void tagpu_replay_level_end(void)
     s_vframe = ~0u;
 }
 
-/* ---- THE DOCK'S REQUESTS (tagpu_dock.h) -----------------------------------------------------
-   Every caller is on the game thread: the dock's OnCommand from the pump's dispatch, its strip
-   click from the wndproc TA pumps on that thread, and its tick from the DrawGameScreen observer.
+/* ---- THE REPLAY HUD'S REQUESTS (tagpu_hudinput.c) -------------------------------------------
+   Every caller is on the game thread: the HUD's clicks from the shield's mouse paths and the
+   wndproc TA pumps on that thread, the timeline drag's seek and Leave's pause from the packet's
+   fill, and Leave's pause from the DrawGameScreen observer when its question does not open.
    The fields written here are the player's own, which a playback level does not record
    (replay-globals.tsv lists neither the speeds nor the pause word). */
 
@@ -8278,6 +8282,11 @@ const char* tagpu_replay_path(void)
     return tagpu_puppet_on() && s_rd && s_path[0] ? s_path : NULL;
 }
 
+unsigned tagpu_replay_timeline(void)
+{
+    return s_tl;
+}
+
 /* THE SEEK, as tacli's `seek` asks for it: the frame visit before 0x4969CD consumes it, paused
    frames included, on the game thread as this is, so a second request before the visit replaces
    the first. T is clamped to [first + 1, last]: the seek writes GameTime T - 1 (seek_run), and the
@@ -8285,7 +8294,7 @@ const char* tagpu_replay_path(void)
 int tagpu_replay_seek_request(unsigned T)
 {
     if (s_rw.state || !tagpu_replay_live() || !s_span.ok) {
-        tagpu_logf("replay: a seek to %u from the dock refused: the level plays no recording", T);
+        tagpu_logf("replay: a seek to %u from the HUD refused: the level plays no recording", T);
         return 0;
     }
     if (T < s_span.first + 1) T = s_span.first + 1;
@@ -8294,8 +8303,46 @@ int tagpu_replay_seek_request(unsigned T)
     s_seek.dump[0] = 0;
     s_seek.poison = 0;
     s_seek.pending = 1;
-    tagpu_logf("replay: %s: seek to %u asked by the dock", s_name, T);
+    tagpu_logf("replay: %s: seek to %u asked by the HUD", s_name, T);
     return 1;
+}
+
+/* ---- THE SEATS' COLOURS -------------------------------------------------------------------
+   The engine's colour sequence lives with the main block, loaded at startup (0x431911), and a
+   seat's logo is bounded against its count. A frame is decoded, at most 64x64, into a fixed plane
+   and only a palette index escapes. The engine reads the same sequence at 0x467C1E..0x467C24. */
+#define OV_GREY      59             /* a player with no colour                                */
+
+static unsigned logo_colour(unsigned logo)
+{
+    const char* ta = ta_main();
+    const unsigned char *seq, *f;
+    unsigned w, h;
+    unsigned char pix[64 * 64];
+    if (!ta) return OV_GREY;
+    seq = *(const unsigned char* const*)(ta + 0x148DB);
+    if (!seq || logo >= *(const unsigned short*)seq) return OV_GREY;
+    f = *(const unsigned char* const*)(seq + 0x28 + logo * 8);
+    if (!f) return OV_GREY;
+    w = *(const unsigned short*)f; h = *(const unsigned short*)(f + 2);
+    if (!w || !h || w > 64 || h > 64 || !tagpu_gaf_decode(f, w, h, pix)) return OV_GREY;
+    return pix[(h / 2) * w + w / 2];
+}
+
+/* each recorded seat's colour, taken once a playing: the HUD's rows and the overlays' marks */
+static const unsigned char* seat_colours(void)
+{
+    const RecHeader* h;
+    unsigned i;
+    if (!s_ov.col_ok) {
+        h = recr_header(s_rd);
+        memset(s_ov.col, OV_GREY, sizeof s_ov.col);
+        for (i = 0; i < h->nseats && i < REC_PLAYERS; i++)
+            if (h->seats[i].index < TAGPU_PK_OV_PLAYERS)
+                s_ov.col[h->seats[i].index] = (unsigned char)logo_colour(h->seats[i].logo);
+        s_ov.col_ok = 1;
+    }
+    return s_ov.col;
 }
 
 int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
@@ -8326,7 +8373,7 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
         sides[seat] = h->seats[i].side;
         dst->commander_alive = valid && h->seats[i].side < L.sides && h->seats[i].side < 5 ? 0 : -1;
         dst->seat = seat;
-        dst->colour = h->seats[i].logo;
+        dst->colour = seat < TAGPU_PK_OV_PLAYERS ? seat_colours()[seat] : OV_GREY;
         /* a seat with a camera sample: a skirmish's recorded, a multiplayer actor's contributed */
         dst->pov = P->npov[seat] != 0;
         lstrcpynA(dst->name, h->seats[i].name, sizeof dst->name);
@@ -8341,6 +8388,15 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
         memcpy(&dst->metal, p + PL_METAL, 4);
         memcpy(&dst->metal_in, p + 0x9C, 4);
         memcpy(&dst->metal_out, p + 0xA0, 4);
+        memcpy(&dst->energy_max, p + 0xA4, 4);
+        memcpy(&dst->metal_max, p + 0xA8, 4);
+        /* the alliance row, one byte per player record (+0x108, 11 of them: the seat fill
+           0x47A890 writes it, the allied victory 0x490080 reads it) */
+        {
+            unsigned j;
+            for (j = 0; j < REC_PLAYERS; j++)
+                if (p[0x108 + j]) dst->allies |= 1u << j;
+        }
     }
     /* The engine's commander test compares UnitName with the owning side's commander name
        (0x4864CB..0x48650F). The loader stores a 32-byte name (0x431B6D); the table has five
@@ -8360,6 +8416,33 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
         }
         if (!_strnicmp(def + 0x20, ta + 0x37F5F + (size_t)sides[owner] * 0x232, 0x20))
             out[row].commander_alive = 1;
+    }
+    return n;
+}
+
+/* The defs are the level's, which a load makes and only the teardown frees, and their count the
+   engine's own, UNITINFOCount. A type's metal cost is the float def+0x18A (0x438650 takes
+   max(+0x18A, 10.0) as one; 0x402640 credits it times one less the build left); it moves when
+   def+0x22F is 1, the test 0x4862CF gives a unit its mover by; and def+0x245 bit 0x40000 is the
+   FBI `commander` tag. */
+unsigned tagpu_replay_army_values(float* out, unsigned cap)
+{
+    const char* ta = ta_main();
+    const char* defs;
+    unsigned n, i;
+    if (!ta || !tagpu_replay_live()) return 0;
+    defs = *(const char* const*)(ta + OFF_UDEFS);
+    n = *(const unsigned*)(ta + OFF_UCOUNT);
+    if (!defs) return 0;
+    if (!out) return n;
+    if (n > cap) n = cap;
+    for (i = 0; i < n; i++) {
+        const char* d = defs + (size_t)i * DEF_STRIDE;
+        float cost;
+        uint32_t tags;
+        memcpy(&cost, d + 0x18A, 4);
+        memcpy(&tags, d + 0x245, 4);
+        out[i] = d[0x22F] == 1 && !(tags & 0x40000u) ? cost : 0.0f;
     }
     return n;
 }
@@ -8405,7 +8488,7 @@ int tagpu_replay_sight_request(int seat)
    end the epoch (follow_close). A multiplayer recording's perspectives are its contributions,
    composed at the application tick (persp_world), so there W->tick is the composed application
    tick and a sample's tick the one the recorder applied it at. Everything here is the game
-   thread's: the requests come from the cards (in the wndproc TA pumps on that thread) and the
+   thread's: the requests come from the HUD (in the wndproc TA pumps on that thread) and the
    trigger, and the visit runs before the in-play draw call 0x4969CD. */
 
 #define OFF_VIEW_W     0x37E37      /* the 1x view, as the recorder's samples carry it (RecPov)    */
@@ -8547,8 +8630,8 @@ static void follow_visit(char* ta)
 
 /* ---- THE OVERLAYS (research/notes/tadr-port/demo-recorder-perspective-streams.md, *Playback*)
    Every recorded player's cursor, clicks and selection at once, whatever Sight shows (the owner's
-   answer Q5), each behind its switch in the dock's Overlays menu (tagpu_cards.c), which also holds
-   the chat's. Built at the frame visit, after any seek and after Follow's own reading of the same
+   answer Q5), each behind its switch on the replay HUD's foot plate (tagpu_hudinput.c), which also
+   holds the chat's. Built at the frame visit, after any seek and after Follow's own reading of the same
    world, from the reader's world alone (persp_world) -- nothing of the engine's:
    - a cursor: the perspective clock's sample for the displayed tick W->tick, as Follow takes it
      (tagpu_persp.h), when it was over the world (REC_POV_WORLD);
@@ -8569,7 +8652,6 @@ static void follow_visit(char* ta)
    held envelopes at their application tick (mp_click). */
 
 #define BIRTHS_TABLE "src/tagpu_patches.c:s_hitStamp"   /* the births column's RT_TABLE name */
-#define OV_GREY      59             /* a player with no colour: the cards' own fallback       */
 
 static const char* const OV_NAME[TAGPU_OV_N] = { "cursors", "clicks", "selections", "chat" };
 
@@ -8721,13 +8803,7 @@ static void overlay_visit(char* ta)
     if (!s_ov.live) return;
     h = recr_header(s_rd);
     W = persp_world();
-    if (!s_ov.col_ok) {
-        memset(s_ov.col, OV_GREY, sizeof s_ov.col);
-        for (i = 0; i < h->nseats && i < REC_PLAYERS; i++)
-            if (h->seats[i].index < TAGPU_PK_OV_PLAYERS)
-                s_ov.col[h->seats[i].index] = (unsigned char)tagpu_cards_colour(h->seats[i].logo);
-        s_ov.col_ok = 1;
-    }
+    seat_colours();
     if (!s_ov.off[TAGPU_OV_CURSORS])
         for (i = 0; i < h->nseats && i < REC_PLAYERS; i++) {
             unsigned p = h->seats[i].index;
@@ -9639,6 +9715,50 @@ static void watch_sites_init(void)
     tagpu_logf("replay: the main menu's return 0x4270A9 and the RESTART gate 0x460880 in");
 }
 
+/* THE PAUSE ICON. DrawGameScreen 0x468CF0 draws the GAF entry `igpaused` (main+0x1481B) while the
+   pause bit, bit 0 of main+0x38A51, is set: `test byte [eax+0x38A51],1` at 0x46A107 and `je
+   0x46A140` at 0x46A10E, with eax = main from 0x46A102; 0x46A110 draws it and goes on at 0x46A14E,
+   as 0x46A140 does after loading the same esi/edi. A recording played with the replay HUD shows no
+   icon: the HUD's play button carries the pause (the mockup has none), and the icon sits in the
+   middle of the world, under the stats window. The stub takes the icon's branch only when the
+   pause bit is set and tagpu_hudinput_on_screen answers 0 -- the frame on the screen shows no HUD,
+   its art still loading or its pass down, so the icon is the pause's only sign; it keeps every
+   register, and neither continuation reads the flags before setting them. Game thread, inside the
+   draw, after the in-play draw's take of the command record. */
+static void pause_icon_init(void)
+{
+    enum { SITE = 0x0046A107u, DRAW = 0x0046A110u, SKIP = 0x0046A140u };
+    static const unsigned char STOLEN[9] = { 0xF6, 0x80, 0x51, 0x8A, 0x03, 0x00, 0x01,   /* test   */
+                                             0x74, 0x30 };                               /* je +30 */
+    static const unsigned char MAIN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };              /* mov eax,[main] */
+    unsigned char *stub, *p;
+    if (!tagpu_detour_bytes_ok(SITE, STOLEN, (int)sizeof STOLEN) ||
+        memcmp((const void*)(size_t)(SITE - 5), MAIN, sizeof MAIN)) {
+        tagpu_logf("replay: the pause icon's test 0x46A107 holds other bytes: a replay shows it");
+        return;
+    }
+    if (!(stub = p = tagpu_detour_stub())) {
+        tagpu_logf("replay: no memory for the pause icon's stub: a replay shows it");
+        return;
+    }
+    memcpy(p, STOLEN, 7); p += 7;                       /* test byte [eax+0x38A51],1 */
+    *p++ = 0x74; *p++ = 0x10;                           /* jz skip             */
+    *p++ = 0x60;                                        /* pushad              */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)tagpu_hudinput_on_screen); p += 4;
+    *p++ = 0x85; *p++ = 0xC0;                           /* test eax,eax        */
+    *p++ = 0x61;                                        /* popad (ZF kept)     */
+    *p++ = 0x75; *p++ = 0x05;                           /* jnz skip            */
+    *p++ = 0xE9; tagpu_detour_rel(p, DRAW); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, SKIP); p += 4;     /* skip:               */
+    if (!tagpu_detour_land(SITE, stub, (int)sizeof STOLEN)) {
+        tagpu_detour_stub_free(stub);
+        tagpu_logf("replay: FAILED the pause icon's test 0x46A107 could not be written: a replay "
+                   "shows it");
+        return;
+    }
+    tagpu_logf("replay: the pause icon's test 0x46A107 in");
+}
+
 void tagpu_replay_init(void)
 {
     enum { FILL = 0x0047B092u, PERSIST = 0x0047B09Cu, START1 = 0x00497963u, START2 = 0x00497ACDu,
@@ -9647,6 +9767,7 @@ void tagpu_replay_init(void)
     unsigned char *fill, *persist, *skip, *cue, *p;
     int ok = 1;
     frame_site_init();
+    pause_icon_init();
     rw_pause_init();
     rt_pace_init();
     mp_arena_init();

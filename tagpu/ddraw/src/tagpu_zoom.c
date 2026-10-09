@@ -26,6 +26,7 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_input.h"
 #include "tagpu_packet.h"
+#include "tagpu_hudstate.h"
 #include "tagpu_log.h"
 
 /* Published view. Volatile because two threads touch it; each is one aligned
@@ -1725,6 +1726,7 @@ void tagpu_zoom_frame_end(void)
     rec.follow_broken = s_followBroken;
     rec.follow_seen   = s_followSeen;
     tagpu_input_cmd(&rec);
+    tagpu_hudstate_cmd(&rec.hud);
     tagpu_cmd_post(&rec);
 }
 

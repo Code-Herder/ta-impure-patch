@@ -1512,7 +1512,7 @@ played by `tools/replay/recmp_play_test.py`:
 ### The seek of a multiplayer recording
 
 `seek_run` seeks a mode-3 recording within a playing (the `seek` trigger, the
-dock, a round trip) and from a fresh process (`tacli replay seek`). A live
+replay HUD, a round trip) and from a fresh process (`tacli replay seek`). A live
 multiplayer game has no rewind, so the rewind's return to now refuses one. *THE SEEK OF A MULTIPLAYER RECORDING* in
 `tagpu_replay.c` holds the argument:
 

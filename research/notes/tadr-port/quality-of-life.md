@@ -213,9 +213,11 @@ examined together rather than inferring absence from module names:
 - `tagpu_menu.c` exposes renderer/display and resource settings, without the other listed TADR options/panels.
   `tagpu_shield.c` handles `WM_CHAR` as a low byte and `tagpu_text.h` uses byte glyphs; the
   Unicode/chat extensions are missing.
-- `tagpu_cards.c` provides replay resource cards and Sight. Camera Jump/Follow/Free controls are
-  disabled and say that the camera was not recorded. Live allied income, whiteboard and camera
-  transport remain missing; current replay playback and seeking are separate implemented work.
+- The replay HUD (`tagpu_hudstate.c`, `tagpu_hudinput.c`; [The replay HUD in game](../hud-in-game.md))
+  shows each recorded player's resources and gives Sight, and Jump and Follow on the recorded
+  cameras ([perspective streams](demo-recorder-perspective-streams.md)), with the cursors,
+  clicks and selections overlays; on GDI a replay has no on-screen controls. Live allied income,
+  whiteboard and camera transport remain missing.
 - The native map-DT draw path has no owner-11 LOS bypass. Retaining a mod's marker bytes under
   takeover does not reproduce TADR's rendering hook.
 

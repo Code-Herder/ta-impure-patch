@@ -35,7 +35,7 @@
    `TAGPU_GAF_EXACT` is never handed to the Classic++ restorer: its texels stay
    the palette's, as the engine's own surface shows them. The art is made for
    the palette, so there is no dither to undo, and the restorer would flatten
-   a texture it cannot tell from one (tagpu_dock.c's ground).
+   a texture it cannot tell from one.
    WHY THIS WORD: the loader `0x4B8C60` rewrites only `+0x10` and the sub-frame
    pointers of a loaded frame (`0x4B8CBA`..`0x4B8CF5`), so a file's `+0x0C`
    reaches memory as written; the two GUI blits `0x4B7F90` and `0x4B8310` read

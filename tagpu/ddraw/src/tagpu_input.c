@@ -332,6 +332,26 @@ static const char* parse_token(const char* p)
         PUSH(EV_MOUSE, 0, TAGPU_M_MOVE | TAGPU_M_DEV, gx, gy);
         return NULL;
     }
+    /* the left button alone, in device space and with no parking: a drag is `ddown:`,
+       `dmove:`s and `dup:`, as a player's hand makes it */
+    if (sscanf(p, "ddown:%d,%d", &gx, &gy) == 2 || sscanf(p, "dup:%d,%d", &gx, &gy) == 2) {
+        int up = (p[1] == 'u' || p[1] == 'U');
+        if (!xy_ok(gx, gy)) return BAD;
+        PUSH(EV_MOUSE, 0, TAGPU_M_MOVE | TAGPU_M_DEV, gx, gy);
+        PUSH(EV_MOUSE, 0, (up ? TAGPU_M_LUP : TAGPU_M_LDOWN) | TAGPU_M_DEV, gx, gy);
+        return NULL;
+    }
+    /* `dwheel:x,y,n`: n notches at a device point, the pointer moved there first and kept
+       there, so the wheel finds it as a player's finds the pointer (mouse_last_client). At most
+       64 notches a token, as `wheel:`. */
+    if (sscanf(p, "dwheel:%d,%d,%d", &gx, &gy, &i) == 3) {
+        int n = i < 0 ? -i : i;
+        if (!xy_ok(gx, gy) || i < -64 || i > 64) return BAD;
+        code = (i < 0 ? TAGPU_M_WHEELDN : TAGPU_M_WHEELUP) | TAGPU_M_DEV;
+        PUSH(EV_MOUSE, 0, TAGPU_M_MOVE | TAGPU_M_DEV, gx, gy);
+        while (n-- > 0) PUSH(EV_MOUSE, 0, code, TAGPU_M_HERE, TAGPU_M_HERE);
+        return NULL;
+    }
     /* injected move with no click and no parking: what a hover is. The plain "mouse:" token
        falls back to SendInput when the shield is down, which would drag the human's real
        pointer. */

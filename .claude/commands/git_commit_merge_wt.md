@@ -1,5 +1,5 @@
 ---
-allowed-tools: Bash(git:*), Bash(make:*), Bash(.venv-undither/bin/python:*), Bash(grep:*), Read, Edit, Write, Agent
+allowed-tools: Bash(git:*), Bash(make:*), Bash(.venv-undither/bin/python:*), Bash(grep:*), Bash(tools/tarun.py:*), Read, Edit, Write, Agent
 description: Land this worktree on local main — commit, merge main in, then CHECK every landing gate (build, documentation pass, dedicated review) and run whichever is missing before fast-forwarding main
 ---
 
@@ -25,6 +25,21 @@ The gates, in order:
    reviewed; findings verified and fixed as new commits; build re-run if anything changed.
 6. Fast-forward local `main` to this branch. Landing is local: publishing to GitHub is the
    separate `/git_publish`, with the content scan in front of it — this command never pushes.
+
+**The landing is a run in the runs viewer** (`/runs`, `.claude/skills/ta-runs`): its gates are
+the steps, and the replay gate's `tareplay` run files itself under the step that is running. Begin
+it before Step 1, mark each gate as it starts and ends, and end it with the landing:
+
+```bash
+tools/tarun.py begin landing --title "landing $(git branch --show-current) -> main" \
+    commit merge build docs replay review ff
+tools/tarun.py step landing build start
+tools/tarun.py step landing build pass        # fail, or skipped --detail "already met: <record>"
+tools/tarun.py end landing pass               # fail; unrun when it stops on an escalation
+```
+
+A gate run again after a fix is started again. Nothing here gates the landing: a `tarun` call
+that fails says so and the landing carries on.
 
 **Drive this to `main` without stopping to ask.** `CLAUDE.md`'s *Land it yourself — what
 actually requires a human* is the policy and this command obeys it: a failing build, a review

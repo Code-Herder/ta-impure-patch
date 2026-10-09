@@ -117,4 +117,7 @@ renders/
 !/.claude/skills/ta-capture/
 !/.claude/skills/ta-compat-check/
 !/.claude/skills/ta-drive/
+!/.claude/skills/ta-runs/
+# the engine lays its API declarations beside a mod at every load: generated, never ours
+/.claude/skills/ta-runs/.claude-plugin/types/
 !/.claude/skills/ta-video-montage/

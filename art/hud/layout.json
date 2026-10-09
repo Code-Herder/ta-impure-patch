@@ -1,0 +1,134 @@
+{
+ "format": 1,
+ "about": "The replay HUD's layout, in HUD units. Read with kit.json by the mockup (tools/hudart/mockup/) and, later, by the DLL. The rules that turn it into rectangles are in research/notes/hud-layout.md.",
+
+ "press_shift": 0.7,
+ "dim": {"brightness": 0.5, "saturate": 0.35},
+ "resource": {"m": "#d3dbff", "e": "#ffff00"},
+ "signs": {"pos": "#54e454", "neg": "#fc5a2c", "weight": 600},
+
+ "styles": {
+  "name":        {"font": "Oswald",           "weight": 500, "size": 9.5,  "colour": "#c8c8a0", "upper": true,  "spacing": 0.05, "shadow": 0.6},
+  "num":         {"font": "Barlow Condensed", "weight": 600, "size": 9.5,  "colour": "#e4e4d6", "upper": true,  "spacing": 0.02, "shadow": 0.6},
+  "num_sm":      {"font": "Barlow Condensed", "weight": 600, "size": 7.5,  "colour": "#e4e4d6", "upper": true,  "spacing": 0.02, "shadow": 0.6},
+  "res":         {"font": "Oswald",           "weight": 700, "size": 7.5,  "colour": "resource", "upper": true, "spacing": 0.05, "shadow": 0.6},
+  "header":      {"font": "Oswald",           "weight": 500, "size": 8.5,  "colour": "#ece6c0", "upper": true,  "spacing": 0.05, "outline": [0.3, 0.35, -0.25, -0.25]},
+  "title":       {"font": "Oswald",           "weight": 500, "size": 11.5, "colour": "#e4e4d0", "upper": true,  "spacing": 0.05, "shadow": 0.6},
+  "label":       {"font": "Oswald",           "weight": 500, "size": 7.5,  "colour": "#a8aa98", "upper": true,  "spacing": 0.05, "shadow": 0.6},
+  "window_foot": {"font": "Barlow Condensed", "weight": 600, "size": 8.5,  "colour": "#c8c8b8", "upper": false, "spacing": 0.02, "shadow": 0.6},
+  "face_big":    {"font": "Oswald",           "weight": 500, "size": 11.5, "colour": "#e2dcb0", "upper": true,  "spacing": 0.05, "outline": [0.25, 0.3, -0.2, -0.2]},
+  "face_num_sm": {"font": "Barlow Condensed", "weight": 600, "size": 7.5,  "colour": "#e2dcb0", "upper": true,  "spacing": 0.02, "outline": [0.25, 0.3, -0.2, -0.2]},
+  "face_xs":     {"font": "Oswald",           "weight": 500, "size": 6.3,  "colour": "#e2dcb0", "upper": true,  "spacing": 0.05, "outline": [0.25, 0.3, -0.2, -0.2]},
+  "face_chip":   {"font": "Oswald",           "weight": 500, "size": 6.8,  "colour": "#e2dcb0", "upper": true,  "spacing": 0.05, "outline": [0.25, 0.3, -0.2, -0.2]},
+  "toast":       {"font": "Oswald",           "weight": 700, "size": 10,   "colour": "#e2dcb0", "upper": false, "spacing": 0,    "shadow": 0},
+  "chart":       {"font": "Barlow Condensed", "weight": 600, "size": 6.5,  "colour": "#8a93a8", "upper": true,  "spacing": 0.03, "shadow": 0}
+ },
+
+ "toast": {"top": 0.07, "w": 150, "h": 18, "bg": "#080a06", "alpha": 0.86, "edge": 0.25, "edge_colour": "#4a4c3c", "style": "toast", "ms": 1800},
+
+ "dock": {
+  "h": 46, "act": "dock",
+  "transport": {
+   "part": "tp_one", "l": 8, "w": 284,
+   "button": {"pad": [0.5, 0.5, 0.5, 0.5], "part": "bay_button", "pressed": "bay_button_down"},
+   "buttons": [
+    {"in": "rew",      "act": "rew",      "icon": {"name": "rew", "w": 16, "h": 16}},
+    {"in": "play",     "act": "play",     "icon": {"name": "play", "playing": "pause", "w": 16, "h": 16}},
+    {"in": "fwd",      "act": "fwd",      "icon": {"name": "fwd", "w": 16, "h": 16}},
+    {"in": "speed",    "act": "speed",    "text": {"bind": "speed", "style": "face_big", "align": "c"}},
+    {"in": "bookmark", "act": "bookmark", "icon": {"name": "bookmark", "w": 16, "h": 16}},
+    {"in": "uiscale",  "act": "uiscale",  "icon": {"name": "uiscale", "pad": [4, 0, 0, 0], "w": 12, "h": 12, "ax": "l"},
+                                          "text": {"bind": "hud", "pad": [16, 0, 2, 0], "style": "face_num_sm", "align": "c"}},
+    {"in": "leave",    "act": "leave",    "icon": {"name": "leave", "w": 16, "h": 16}}
+   ]
+  },
+  "rail": {
+   "part": "rail_one", "gap": 10, "r": 8,
+   "markers": {"in": {"x": "track", "y": "markers"}, "h": 12, "ends": 2,
+               "badge": {"part": "marker_badge", "dot": 2.64, "icon": 2.16},
+               "icons": {"death": "death", "defeat": "defeat", "bookmark": "flag"}, "bookmark_dot": "#c8c8a0"},
+   "track": {"in": "track", "ends": 2, "fill": {"part": "track_fill", "pad": [2, 2, 2, 2]},
+             "playhead": {"part": "playhead", "w": 4, "pad": [0, -1, 0, -1]}},
+   "time": {"in": "time", "bind": "time", "style": "num", "align": "c"}
+  }
+ },
+
+ "column": {
+  "r": 8, "t": 8, "w": 250, "gap": 2, "header_gap": 4, "dock_gap": 8, "act": "column",
+  "foot": {"part": "foot_one", "w": 204, "h": 35, "gap": 6,
+   "button": {"pad": [0.5, 0.5, 0.5, 0.5], "part": "bay_button", "pressed": "bay_button_down"},
+   "buttons": [
+    {"in": "bay_stats",      "act": "stats",      "toggle": "stats",      "icon": {"name": "stats", "w": 17, "h": 17}},
+    {"in": "bay_cursors",    "act": "cursors",    "toggle": "cursors",    "icon": {"name": "cursors", "w": 17, "h": 17}},
+    {"in": "bay_clicks",     "act": "clicks",     "toggle": "clicks",     "icon": {"name": "clicks", "w": 17, "h": 17}},
+    {"in": "bay_selections", "act": "selections", "toggle": "selections", "icon": {"name": "selections", "w": 17, "h": 17}},
+    {"in": "bay_chat",       "act": "chat",       "toggle": "chat",       "icon": {"name": "chat", "w": 17, "h": 17}}
+   ]},
+  "scroll": {
+   "button": {"x": -15, "w": 11, "h": 11, "part": "scroll_button", "icon_padf": 0.22, "up": "arrow_up", "down": "arrow_down", "acts": ["scroll_up", "scroll_down"]},
+   "track":  {"x": -14, "w": 9, "ends": 13, "part": "scroll_track", "act": "scroll_track"},
+   "thumb":  {"x": -13, "w": 7, "inset": 1, "min": 10, "part": "scroll_thumb"}
+  }
+ },
+
+ "header": {
+  "part": "head_one", "h": 25, "act": "fold",
+  "fold":  {"in": "title", "pad": [3.5, 0, 0, 0], "w": 8, "h": 8, "ax": "l", "open": "fold_open", "closed": "fold_closed"},
+  "title": {"in": "title", "pad": [15, 0, 2, 0], "bind": "team", "style": "header"},
+  "sum":   {"in": "sum", "bind": "units", "style": "num", "align": "c"},
+  "lines": [{"res": "m", "in": "m_inc"}, {"res": "e", "in": "e_inc"}],
+  "letter": {"pad": [3, -0.5, 0, 0], "w": 5, "ax": "l", "style": "res"},
+  "value":  {"pad": [10, -0.5, 2, 0], "bind": "income", "style": "num_sm"}
+ },
+
+ "row": {
+  "part": "row_one", "h": 27, "act": "row",
+  "stripe": {"in": "stripe", "pad": [0.8, 0.8, 0.8, 0.8], "shade": 1},
+  "name":   {"in": "name", "pad": [4, 0, 3, 0], "lost_pad": [4, 0, 16, 0], "bind": "name", "style": "name"},
+  "skull":  {"in": "name", "pad": [0, 0, 3, 0], "w": 11, "h": 10, "ax": "r", "icon": "skull"},
+  "units":  {"in": "units", "bind": "units", "style": "num", "align": "c"},
+  "lines": [{"res": "m", "store": "m_store", "inc": "m_inc"}, {"res": "e", "store": "e_store", "inc": "e_inc"}],
+  "letter": {"pad": [2.5, 0.4, 0, 2.7], "w": 5, "ax": "l", "style": "res", "fit": 0.8},
+  "value":  {"pad": [10, 0.4, 2, 2.7], "bind": "stored", "style": "num_sm", "fit": 0.8},
+  "bar":    {"pad": [10, 0, 3, 1], "h": 1.2, "ay": "b", "bg": "#060806", "edge": 0.3},
+  "income": {"pad": [0, -0.5, 0, 0.5], "bind": "income", "style": "num_sm", "align": "c"},
+  "hover":  {"in": ["m_store", "e_store", "m_inc", "e_inc"], "pad": [-2, -0.5, -1.5, -0.5]}
+ },
+
+ "hover": {
+  "part": "hover_strip", "margin": 2.5,
+  "button": {"part": "act_button_wide", "pressed": "act_button_wide_down",
+             "icon": {"pad": [4, 0, 0, 0], "w": 11, "h": 11, "ax": "l"},
+             "text": {"pad": [16, 0, 3, 0], "style": "face_xs"}},
+  "buttons": [{"act": "jump", "icon": "jump", "text": "jump"}, {"act": "sight", "icon": "sight", "text": "sight"}, {"act": "follow", "icon": "follow", "text": "follow"}]
+ },
+
+ "window": {
+  "part": "win_one", "w": 428, "h": 272, "x": 150, "y": 56, "shadow": [4, 18, 0.6], "act": "window",
+  "measures": [{"k": "metal", "g": "eco", "n": "metal income", "u": "per second"}, {"k": "energy", "g": "eco", "n": "energy income", "u": "per second"},
+               {"k": "units", "g": "army", "n": "units", "u": "owned"}, {"k": "army", "g": "army", "n": "army value", "u": "metal"},
+               {"k": "kills", "g": "army", "n": "kills", "u": "so far"}, {"k": "losses", "g": "army", "n": "losses", "u": "so far"},
+               {"k": "excess", "g": "eco", "n": "wasted metal", "u": "total"}],
+  "grip":  {"in": "title", "pad": [3, 0, 0, 0], "w": 10, "h": 10, "ax": "l", "icon": "grip"},
+  "title": {"in": "title", "pad": [16, 0, 2, 0], "bind": "measure", "style": "title"},
+  "close": {"in": "close", "pad": [0.5, 0.5, 0.5, 0.5], "act": "close", "part": "close_face", "pressed": "close_face_down", "icon": {"name": "close", "padf": 0.22}},
+  "trays": [{"in": "tray_eco", "label": "Economy", "group": "eco", "split": true}, {"in": "tray_army", "label": "Army", "group": "army"}],
+  "label": {"pad": [4, 0, 0, 0], "w": 36, "ax": "l", "style": "label"},
+  "chip":  {"start": 42, "gap": 3, "h": 15, "part": "chip_face", "pressed": "chip_face_down", "text": {"pad": [3, 0, 3, 0], "style": "face_chip", "align": "c"}},
+  "chips": {"metal": 58, "energy": 60, "excess": 58, "units": 37, "army": 50, "kills": 32, "losses": 38},
+  "split": {"end": 3, "off": 0.45, "chips": [{"value": "player", "text": "players", "w": 50}, {"value": "team", "text": "teams", "w": 42}]},
+  "chart": {"in": ["chart", "legend"], "pad": [1, 1, 1, 1], "legend": "legend"},
+  "foot":  {"in": "foot", "pad": [4, 0, 4, 0], "bind": "caption", "style": "window_foot"}
+ },
+
+ "chart": {
+  "style": "chart",
+  "teams": ["#e0c060", "#60b8e0", "#e07878", "#80d070", "#b090e0"],
+  "plot": {"l": 28, "t": 5, "b": 13},
+  "axis": {"size": 6.5, "colour": "#8a93a8", "gap": 3, "baseline": 2.4, "below": 9, "every": [30, 60, 120, 300, 600, 900, 1800, 3600], "space": 22},
+  "grid": {"colour": "#7a8cb0", "opacity": 0.25, "width": 0.5},
+  "now": {"colour": "#f0c850", "width": 0.9, "over": 2},
+  "line": {"width": 1.1, "faint": 0.28, "dark": 60, "halo": "#9aa2b4", "halo_opacity": 0.6, "cross": 2.5, "cross_w": 1},
+  "legend": {"pad": 2, "x": 8, "r": 10, "row": 10, "swatch": 4, "swatch_y": 0.18, "swatch_h": 0.64, "swatch_edge": "#888888", "swatch_edge_w": 0.4, "text_x": 7, "text_y": 0.72, "text_h": 0.8, "size": 7, "name": "#d8d8d8", "value": "#e8e8e8"}
+ }
+}

@@ -3,8 +3,10 @@
 ## Status
 
 **Planned 2026-10-01. Landings 0 to 2 are implemented**: the art
-pipeline, the shell (REPLAYS and the browser) and the watching dock (*The watching dock*). This is
-the plan for the
+pipeline, the shell (REPLAYS and the browser) and watching (*Watching*). Watching's controls are
+the replay HUD's ([The replay HUD in game](../hud-in-game.md)), a Vulkan pass of our own that
+replaced the watching dock and the player cards this plan first built; those two are deleted.
+This is the plan for the
 [skirmish slice](demo-recorder-skirmish-slice.md)'s S5: the Replays browser, the timeline bar,
 perspectives, camera follow, the overlays and the recording switch in the settings screen. It
 covers how the screens are drawn, where their art comes from, what each mod gets, what S5 needs
@@ -32,7 +34,9 @@ Three screens, each chosen from three prototyped directions:
 - **Watching (direction D):** a dock along the bottom of the world with the transport (rewind,
   play/pause, forward, speeds), the timeline strip with its markers (deaths, defeats, bookmarks,
   forks) and the playhead, and the Overlays, Timeline and Leave buttons; player cards on the right
-  edge with Jump, Sight and Follow per player.
+  edge with Jump, Sight and Follow per player. It was built as the watching dock and the player
+  cards, and redesigned as the replay HUD: layout E1, its art painted
+  ([HUD art](../hud-art.md)) and drawn by a pass of its own, which replaced both.
 
 The **in-game settings panel** is renamed **Impure Config** (it was *Render options*) and gains two
 rows, *Record games* and *Keep replays*.
@@ -41,8 +45,8 @@ rows, *Record games* and *Keep replays*.
 
 | Question | Decision | Why |
 |---|---|---|
-| How the dock, cards and browser are built | **Engine GUI screens plus blits**, as the Impure Config panel is: `.gui` screens written into `impure-patch.ufo`, the engine doing buttons, pressed states, hit-testing and quickkeys (it has no hover state: MEASURED 2026-10-01, landing 2), the DLL blitting only what a `.gui` cannot express (markers, the playhead, a card's live numbers) | The panel already proves the pattern non-modal and live over the world ([renderers](../renderers.md) §2.10); its traps — the re-push on every world click, the zoom transform — are known and fixed |
-| The timeline strip | **One rect the DLL owns**: the dock's screen draws nothing there; the DLL draws the strip and hit-tests press, drag, release and marker clicks, and `tagpu_zoom` passes its points through untouched the way it does for `tagpu_menu_owns_point` | An `id=4` slider would paint the SLIDERS kit, add its own one-pixel arrow buttons and cannot make markers clickable ([gui-gadgets](../gui-gadgets.md) §2.4.1, §2.6) |
+| How the browser is built (and how the dock and the cards were, before the replay HUD replaced them) | **Engine GUI screens plus blits**, as the Impure Config panel is: `.gui` screens written into `impure-patch.ufo`, the engine doing buttons, pressed states, hit-testing and quickkeys (it has no hover state: MEASURED 2026-10-01, landing 2), the DLL blitting only what a `.gui` cannot express (markers, the playhead, a card's live numbers) | The panel already proves the pattern non-modal and live over the world ([renderers](../renderers.md) §2.10); its traps — the re-push on every world click, the zoom transform — are known and fixed |
+| The dock's timeline strip | **One rect the DLL owns**: the dock's screen draws nothing there; the DLL draws the strip and hit-tests press, drag, release and marker clicks, and `tagpu_zoom` passes its points through untouched the way it does for `tagpu_menu_owns_point` | An `id=4` slider would paint the SLIDERS kit, add its own one-pixel arrow buttons and cannot make markers clickable ([gui-gadgets](../gui-gadgets.md) §2.4.1, §2.6) |
 | The recording list | **A stock `id=2` listbox** for selection, scrolling, the scroll bar, the wheel and the keyboard; the DLL blits the badges and the right-aligned length over each visible row from the list's own `top` and row height; the favourite star is hit-tested in its column | Everything a list does is the engine's; only the decoration is ours |
 | Recordings' summaries and the player's marks | **`replays\index.dat`**, one rebuildable file: a summary per recording keyed by file name and size, the favourite flag and the last-played time; a recording that does not match is re-read from its own header and end block; written atomically (a temporary file, then a rename) | Opening the screen reads one small file, and every summary can be rebuilt; only the marks live in the index alone |
 | *Record games* and *Keep replays* against the panel's rule that every row is live | **Both rows are live.** Off stops the recording now (the file ends, its end block saying why); On starts one at the current tick from a snapshot. Lowering *Keep replays* is in force at once and shown on the Replays screen; files are deleted when the next recording starts, oldest non-favourite first | Keeps the rule without an exception; a cycling click never deletes anything |
@@ -79,10 +83,9 @@ bar, checkboxes, sliders) already look like each mod's own; a style only has to 
 | The Replays screen's ground | 640×480 | painted with recesses where the engine draws the list, the buttons and the minimap |
 | The title font | A–Z and 0–9 | a GAF font shaped like `hattfont12.gaf`: one frame per character code, the baseline in the frame's hotspot |
 | The main menu's REPLAYS plate | about 115×35 | the empty button recess, pasted into the slot below the centre |
-| The dock kit | tiles of about 64×32 | a tileable strip, end caps and a card frame, laid out by code at any width |
-| The glyphs | 28 sprites | dock icons, timeline markers, list badges and the rewind button's four states |
+| The glyphs | sprites | list badges, the fork markers and timeline glyph for S4's selector, and the rewind button's four states |
 
-**The glyphs as they stand** (one set, drawn 2026-10-01): 5,645 pixels in all — 6.6 KB as an
+**The glyphs as drawn on 2026-10-01**, the dock's icons and markers among them: 5,645 pixels in all — 6.6 KB as an
 uncompressed GAF, **4.5 KB** with GAF's run-length rows, about 0.9 KB deflated (MEASURED). They are
 redrawn per style.
 
@@ -145,7 +148,7 @@ style's files into `impure-patch.ufo` beside `render.gaf` and the two Visuals sc
 
 ## Text
 
-Captions, column headings, button labels and the dock's labels are ordinary `id=5` labels and
+Captions, column headings and button labels are ordinary `id=5` labels and
 button texts: the engine sets them in the mod's own `hattfont11`/`hattfont12`.
 
 The engine's largest face is 17 px (`armfont`, `hatt14`, `gaf12`; `tools/guifont.py --list`),
@@ -189,13 +192,11 @@ return of the PCX loader `0x429290` (the header of `tagpu_replays.c` lists the f
 
 ## The screens
 
-**Over the world, the dock** is a GUI screen pushed through the Impure Config panel's slot
-(`tagpu_menu.c`), non-modal and re-pushed when a world click rebuilds the in-game stack. **The
-cards** are its post-GUI companion: engine GAF blits and FNT text on the right, with their own
-bounded input rectangle, as the dock strip already has. Only the top engine GUI receives input;
-using a single rectangular GUI for both regions would also block the world between them. The
-cards hide under a modal and follow the dock's teardown. Their implementation and verification
-are in [Replay player cards](demo-recorder-player-cards.md).
+**Over the world, the replay HUD** is no engine screen: a Vulkan pass of our own draws it over the
+world and under the engine's dialogs, and the DLL hit-tests its controls on the game thread
+against the frame on screen ([The replay HUD in game](../hud-in-game.md)). It holds the
+transport and the timeline at the bottom and the players' column on the right, and between them
+the world stays the world's: a click is the HUD's only on one of its controls or plates.
 
 **The Replays browser** is a shell screen of its own: our ground, the engine's list and buttons over
 it, the minimap and the badges blitted.
@@ -285,138 +286,70 @@ read by `recr_info` (`tagpu_replays.c`):
 **Impure Config** gains *Record games* (On/Off) and *Keep replays* (a count), on the panel's 28 px
 row pitch, with the caption **Impure Config**.
 
-## The watching dock
+## Watching
 
-Built as landing 2 (`tagpu_dock.c`, with `tagpu_menu.c`'s slot, `tagpu_replay.c`'s requests and
-`tagpu_replays.c`'s bookmarks); the engine facts are in the [engine map](../exe-reverse-engineering.md),
-*The watching dock*.
+On a level that plays a recording — Watch's, or `tacli replay play`'s — the controls are the
+replay HUD's, on the Vulkan renderer; its input, its commands and Leave are in
+[The replay HUD in game](../hud-in-game.md), *Input*. On GDI a replay has no on-screen controls
+(the owner's decision, 2026-10-09), and the engine's menu leaves. What watching does, whoever
+draws it:
 
-**What it is.** On a level that plays a recording, Watch's or `tacli replay play`'s, `DOCK.GUI`
-sits right of the side panel and above the bottom bar: screen x from the panel's width + 8 to the
-screen's width - 8, its bottom 4 px above the bar, 86 px tall (136, 598, 1136, 86 at 1280×720). It
-does not open narrower than 400 px. **Under HUD scale it is magnified like the bars**, a fourth
-region of the composite and the pointer map ([GUI renderer](../gui-renderer.html) §22.7), about
-its bottom-left corner: its gap, lift and height scale with the HUD and its width is the
-screen's over the scale. MEASURED at 1920×1080 on Vulkan, device-space clicks at 25 % and 75 %
-of the track on screen asking exactly the GameTime the map predicts (735 and 2205 at 150 %, 734
-and 2206 at Auto, where an engine pixel is 2.25 device pixels); a drag, the right-click on a
-bookmark, every button and Leave's dialog through device-space clicks; and at HUD 100 the dock
-0 px from the picture taken before the region existed.
-
-| Row | Gadget | What it does |
-|---|---|---|
-| 1 | `TNOW`, the strip, `TEND` | the time now (the drag's target while dragging) and the length, `m:ss` or `h:mm:ss` of GameTime / 30 from the recording's first; the strip, which is the DLL's |
-| 2 | `DKREW`, `DKPLAY`, `DKFWD` | a seek 300 GameTime (10 s) back or forward; pause and play, the bit the Pause key flips |
-| 2 | `DKSPEED` | 1/2x, 1x, 2x, 4x, 8x: GameSpeed 5, 10, 20, 40, 80, written to the ceiling and the live speed |
-| 2 | `DKMARK`, `DKOVER`, `DKLEAVE` | a bookmark at now; the Overlays menu (*The Overlays menu*); Leave, through the engine's own YESORNO retitled "Leave this replay?" |
-
-**One screen slot.** `tagpu_menu.c` holds RENDER.GUI and the dock in one slot, the one owner of
-`main+0x37EA0`: RENDER wins while the player wants it, the dock comes back when it closes. The
-slot lets its screen go at the teardown wrap's entry, before the engine's own pops.
-
-**The strip.** The DLL draws it at the post-GUI observer `0x46A308` -- the fill to the playhead,
-the death and defeat markers, the bookmarks, a ghost playhead while dragging, the playhead -- and
-skips it while a screen above the dock overlaps it. It takes a press only while the dock is the top
-screen, as the pump does, and its release is consumed exactly when its press was: a drag seeks
-once, at the release, and TNOW shows the target meanwhile. A point within 4 px of a marker takes
-the marker's time: 5 s before a death or a defeat, a bookmark's own. A right click on a bookmark
-removes it. Losing focus, activation or capture (`WM_KILLFOCUS`, `WM_ACTIVATEAPP` 0,
-`WM_CAPTURECHANGED`) ends a drag with no seek, and its release, should it come, is still consumed:
-the press was taken from the engine, so its release is too.
+| Control | What it does |
+|---|---|
+| rewind, forward | a seek 300 GameTime (10 s) back or forward |
+| play | pause and play, the bit the Pause key flips; at the recording's end, from its start |
+| speed | ½×, 1×, 2×, 4×, 8×: GameSpeed 5, 10, 20, 40, 80, written to the ceiling and the live speed |
+| bookmark | a bookmark at now, or the one within 3 s removed |
+| Leave | the engine's own YESORNO, retitled "Leave this replay?" |
+| the timeline | a seek where it is pressed, and once a frame along a drag |
+| Sight, Follow, Jump | a player's view, camera follow, and the camera put on theirs once ([the replay's players and Sight](demo-recorder-player-cards.md), [the perspective plan](demo-recorder-perspective-streams.md)) |
+| Cursors, Clicks, Selections, Chat | the overlays' and the chat's switches, on at every playing's start, never saved |
 
 **The markers** come from a worker thread with its own reader of the recording, which walks it
-once a level: a commander death is a player's `+0x106` rising, a defeat its `+0x144` reaching 0.
-They work on every recording, old and cut short ones included; ask 2 is still the browser's.
-MEASURED: 2940 iterations of a 2-minute skirmish in 43-46 ms, 3990 of the 85 MB battle in 2033 ms
-(0.51 ms an iteration); a Leave 1 s after the dock opened stopped the walk at 1784 iterations, and
-the teardown, a second Watch and the process went on.
-
-At most 256 markers reach the strip; the walk logs how many it found past that ("1 past the 2 the
-strip holds", MEASURED on the battle with the cap lowered to 2 in a scratch build).
-
-**The ground** is eight 512-px tiles, `DOCKBG0` to `DOCKBG7`, side by side; the dock's own width is
-composed once at open and cut into them. One 4096-px frame would be wider than the GUI mirror's
-largest sprite (`TAGPU_GAF_DECMAX`, 640), which the mirror does not carry, so Vulkan would not draw
-the ground at all. Every frame the dock makes carries `TAGPU_GAF_EXACT` at frame header `+0x0C`
-(`tagpu_gaf.h`), so Classic++'s UI restorer never takes it: the art is drawn in the palette, with no
-dither to undo, and a texture would be flattened as one. MEASURED 2026-10-01 at 1280×720, Classic++
-with the UI restorer active, a paused playback: the dock rect (1136×86) differs in **0 px** between
-Vulkan and `tagpu_gdi.on`.
-
-**Greyed.** While the playback is not live (its first step, or a recording that fails its first
-check), DKREW, DKPLAY, DKFWD, DKSPEED and DKMARK are greyed and refuse their clicks. A greyed button
-of the dock carries attribs bit 8, which draws its last frame: a stage button has no greyed look of
-its own without it, and a plain button takes it too so the row has one greyed look, the dock's own
-art, rather than the engine's grey remap and shade over it (GUI renderer §26). The bit is set on the parsed records after stage 1, which discards a stage button's file
-attribs, and only while the button is greyed: on a live stage button it stopped the clicks. DKSPEED
-shows a sixth, blank stage while greyed, because its caption is drawn unshaded under the bit.
-MEASURED: on a recording whose unit-defs hash was altered, clicks on DKPLAY and DKSPEED changed
-neither the pause nor the speed, and the button row differs in 0 px between Vulkan and GDI.
+once a level (`tagpu_hudmarks.c`): a commander death is a player's `+0x106` rising, a defeat its
+`+0x144` reaching 0. They work on every recording, old and cut short ones included; ask 2 is still
+the browser's. MEASURED 2026-10-01 with the same walker under the dock: 2940 iterations of a
+2-minute skirmish in 43-46 ms, 3990 of the 85 MB battle in 2033 ms (0.51 ms an iteration); a
+Leave 1 s after the playing opened stopped the walk at 1784 iterations, and the teardown, a second
+Watch and the process went on. At most 256 markers reach the timeline; the walk logs how many it
+found past that ("1 past the 2 the timeline holds", MEASURED on the battle with the cap lowered to
+2 in a scratch build).
 
 **Leave's question holds the playback.** Leave pauses it before the question opens; No puts the
-pause back as it was before the click, Yes leaves. MEASURED: from playing, GameTime held while
-asked and ran again after No; from paused, it stayed paused after No.
+pause back as it was before the click, Yes leaves. MEASURED, with the dock (2026-10-01) and with
+the HUD (2026-10-09): from playing, GameTime held while asked and ran again after No; from
+paused, it stayed paused after No.
 
 **Bookmarks** are one field of `replays\index.dat`, after the seats: comma-separated GameTimes,
 at most 64, none within 30 of another, written through the index's temporary file and rename.
 
-**The Overlays menu.** `DKOVER`, left of Leave at `dock_w - 72`, opens a menu of four toggles --
-Cursors, Clicks, Selections and Chat: the recorded players' overlays and the hide-chat switch
-(owner, 2026-10-06). Every toggle is on when a playing starts, and none is saved. The menu is drawn
-and hit-tested by the cards' layer at the cards panel's bottom right, right above the button. So it
-shares the panel's magnified region and pointer map at every HUD scale, and it hides with the
-cards under a modal. `DKOVER` is greyed while the cards are not shown. A press of either button
-anywhere but the menu and `DKOVER` closes it; the press then acts as usual. The toggles, the
-overlays and their art are in the
-[perspective plan's 4c-3](demo-recorder-perspective-streams.md#4c-3-as-built). Its art is a
-stand-in: a plate cut from `dock-tex`, the cards' toggle plates and a pointer-arrow glyph drawn in
-code.
+**The speed and the pause are the player's.** Neither is recorded. The replay writes both only on
+a playback level (`tagpu_replay_speed_set`, `tagpu_replay_pause`); the player's speed is exchanged
+around every settings save and put back at the teardown, ceiling and live speed both, so the
+registry's `gamespeed` and the next game keep it -- and a change the Options screen makes during a
+playback is put back too. The HUD's speed button steps to the next preset above the speed in
+force, and from 8× to ½×.
 
-**The speed and the pause are the player's.** Neither is recorded. The dock writes both only on a
-playback level; the player's speed is exchanged around every settings save and put back at the
-teardown, ceiling and live speed both, so the registry's `gamespeed` and the next game keep it --
-and a change the Options screen makes during a playback is put back too. A speed the dock has no
-stage for is put on the nearest preset (a tie goes to the slower).
-
-**Measured on retail** (1280×720, private Xvfb, Vulkan; the pictures also under `tagpu_gdi.on`):
+**Measured on retail** (1280×720, private Xvfb, Vulkan, 2026-10-01, through the dock's buttons,
+which called the same replay functions the HUD's do):
 
 - the speeds, GameTime a second over 5 s: 1/2x 15.1, 1x 30.5, 2x 59.1, 4x 118.9, **8x 150.5**
   -- 8x is bounded by the scheduler's clamp, five ticks per step of the 30 Hz clock
   ([engine map](../exe-reverse-engineering.md#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08));
-- seeks from the dock 6-34 ms on the small recording; a `tacli replay seek` of the battle to 2701
-  in 446 ms, its dump EQUAL to the recording (`tarec compare --puppet`), and `tareplay run
-  forest-fire` passing with the dock up on its playings;
-- Leave and No keep the dock; Leave and Yes reach the main menu, the browser reopens, the shell's
-  stack is MAINMENU and REPLAYS, and the speed is the player's again;
-- the in-game menu over the dock: its buttons and the strip leave the click to the engine;
-- **the harness drives S5 on every landing** that touches the recorder: `tareplay.py`'s W process
-  on `stock-limits` and `wpn-badtgt` (the [completeness note](demo-recorder-completeness.md#the-replay-test-harness))
-  starts the playing through REPLAYS and Watch, has Watch refuse two edited copies, then uses
-  DKSPEED, the Options' OK (the store's `gamespeed` must stay the player's), DKPLAY, the dock's
-  seek (the trigger `dock seek <T>`, whose dump must compare EQUAL with the recording), DKPLAY
-  again, and Leave and Yes; `watch_refuse_engine` alone stays unreached, since the CD check it
-  reports never refuses in this exe;
-- RENDER's sprocket replaces the dock and gives it back; twenty such round trips cost 840 KB
-  once, then nothing;
-- no hover state on a plain button; the engine's stage captions (`1x` .. `8x`) drawn at the
-  plate's left; `text=|` gives a stage button no caption;
-- a drag cut by a lost mouse, the window still holding the button: `WM_KILLFOCUS`,
-  `WM_ACTIVATEAPP` 0 and `WM_CAPTURECHANGED` posted mid-drag, and the X focus moved to another
-  client on the same display mid-drag -- no seek asked, GameTime unchanged, and the next press on
-  DKPLAY and on the strip each answered as usual.
+- seeks 6-34 ms on the small recording; a `tacli replay seek` of the battle to 2701 in 446 ms,
+  its dump EQUAL to the recording (`tarec compare --puppet`);
+- Leave and Yes reach the main menu, the browser reopens, the shell's stack is MAINMENU and
+  REPLAYS, and the speed is the player's again.
 
-**Gaps.**
-
-- **The retail art is supplied.** The owner's 2026-10-02 kit replaces the title font,
-  `dock-tex`, `strip-track`, `strip-fill` and all 28 sprite frames. The title, transport icons,
-  strip, playhead and bookmark were checked in the running retail browser (640×480) and
-  watching dock (1280×720) on the reference setup. Player cards are implemented, runtime-tested
-  and independently reviewed; they are covered by [their module note](demo-recorder-player-cards.md). The Overlays menu is
-  built with stand-in art (*The Overlays menu*); live rewind remains a proposal.
-- **GDI does not implement HUD scale**, for the dock as for the bars: the picture stays 1x while
-  the pointer map is magnified (GUI renderer §22.7).
-- **Why bit 8 stops a live stage button's clicks** is not known: the pump's click arm reads no
-  attribs (`0x4AA35A..0x4AA39D`) and the press arm's attribs test is bit 4 (`0x4A9D80`).
+**The harness drives watching on every landing** that touches the recorder: `tareplay.py`'s W
+process on every fixture marked `"watch": true` (`stock-limits`, `perspective`, `wpn-badtgt` and
+`tenseat` in `tools/replay/fixtures.json`; the
+[completeness note](demo-recorder-completeness.md#the-replay-test-harness)) starts the playing
+through REPLAYS and Watch, has Watch refuse two edited copies, then drives the replay HUD through
+`tacli hud`: the speed, the Options' OK (the store's `gamespeed` must stay the player's), play,
+the HUD's seek (the trigger `hud seek <T>`, whose dump must compare EQUAL with the recording),
+Sight, Follow, Jump and a switch, play again, and Leave and Yes; `watch_refuse_engine` alone stays
+unreached, since the CD check it reports never refuses in this exe.
 
 ## What S5 asks of the recorder
 
@@ -443,8 +376,8 @@ Items 1 to 3 are needed by landing 1, item 4 by landing 5.
 |---|---|---|
 | **0 — the art pipeline** | `art/ui/`, the `.publish-allow` class, `tools/artbake.py` and its checks, the make rule, the retail style | — |
 | **1 — the shell** | the per-mod table, REPLAYS on the main menu, the Replays browser, `index.dat`, its dialogs | asks 1–3 |
-| **2 — watching** | the dock: the timeline strip, its markers, the transport, the speeds, bookmarks, Leave (built: *The watching dock*); the timeline selector waits for S4 | — |
-| **3 — the streams and the cards** | each player's camera, cursor, clicks and selection recorded; the player cards (Jump, Sight, Follow); the Overlays | a recorder change of its own, planned with it |
+| **2 — watching** | the timeline, its markers, the transport, the speeds, bookmarks, Leave (built: *Watching*, first as the watching dock, now the replay HUD's); the timeline selector waits for S4 | — |
+| **3 — the streams and the cards** | each player's camera, cursor, clicks and selection recorded; Jump, Sight and Follow per player; the Overlays (built: first as the player cards and the dock's Overlays menu, now the replay HUD's rows and foot plate) | a recorder change of its own, planned with it |
 | **4 — live rewind** | the rewind button, the timeline in a live skirmish, Back to now, Play from here | S4 |
 | **5 — the switches** | *Record games* and *Keep replays* | ask 4 |
 
@@ -461,13 +394,9 @@ and leave, polling for error boxes, with a picture per screen.
 
 ## Open
 
-- **The remaining style.** Retail and Escalation each have their 67 supplied replacement
-  PNGs. Escalation's own title font and favourite badge were checked in its running
+- **The remaining style.** Retail and Escalation each have their supplied replacement PNGs, 52
+  each in `art/ui/`. Escalation's own title font and favourite badge were checked in its running
   `REPLAYSE.GUI` at 640×480 on the reference setup, with the mod's executable and archives.
-  Twilight still needs its font, dock pieces, 28 sprite frames and browser ground.
-- **Dock style selection.** The dock explicitly selects retail's kit (`tagpu_dock.c`,
-  `tagpu_art_entry("retail", ART[i])`); Escalation's supplied dock sprites are baked but are
-  not selected by the current dock. Player cards are implemented on this branch, with runtime checks complete and review
-  pending ([card note](demo-recorder-player-cards.md)); the Overlays menu is built with stand-in art,
-  which the owner's kit is to replace (an Overlays glyph, the menu's ground, the toggle row); live
-  rewind remains a proposal.
+  Twilight still needs its font, its sprite frames and its browser ground.
+- **The replay HUD has one look for every mod**: `art/hud/` is not a per-mod style.
+- **Live rewind** remains a proposal.

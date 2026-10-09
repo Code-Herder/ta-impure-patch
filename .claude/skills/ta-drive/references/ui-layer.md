@@ -281,7 +281,7 @@ tools/tacli log <i> -g 'k=[0-9.]* s='       # the gui heartbeat carries s= besid
   (at 4K Auto: `128 32 3264 1872`). A moved `L` means a torn world.
 - **`tacli` coordinates are the engine's, and at `s > 1` that is not where the thing is drawn.**
   The world is shifted by `(128s−128, 32s−32)`, so `roster`'s `screen`, `pmove:`, `click` and
-  `ui show` are all in engine space. `dmove:`/`dclick:` speak device pixels and go through the
+  `ui show` are all in engine space. `dmove:`/`dclick:` (and `drclick:`, `ddown:`, `dup:`, `dwheel:`) speak device pixels and go through the
   map, so **a device click is the only click that tests "what you click is what you see"**: take a
   unit's `screen`, add the shift, `keys <i> dclick:X+dx,Y+dy`, then `order <i> --sel stop` reports
   `1 issued` if it selected. Use a click, not a hover — `main+0x2CBA` drifts back to the centre

@@ -11,6 +11,7 @@ running game.
     python3 tools/test_tacli.py [-v]
 """
 
+import atexit
 import base64
 import contextlib
 import fnmatch
@@ -18,6 +19,7 @@ import hashlib
 import io
 import json
 import ntpath
+import os
 import re
 import shutil
 import tempfile
@@ -28,6 +30,10 @@ from unittest.mock import Mock, patch
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
+# The launches here are mocks: none of them is a run of the session's runs viewer (tools/tarun.py)
+RUNS = tempfile.mkdtemp(prefix="tacli-test-runs-")
+os.environ["TARUN_DIR"] = RUNS
+atexit.register(shutil.rmtree, RUNS, ignore_errors=True)
 tacli = SourceFileLoader("tacli", str(Path(__file__).with_name("tacli"))).load_module()
 
 
@@ -366,7 +372,8 @@ class Batching(unittest.TestCase):
                   "pmove:1,2": 1, "mouse:3,4": 1, "dmove:5,6": 1, "mouserel:-1,2": 1,
                   "wheel:+64": 64, "wheel:-3": 3, "tab": 2, "ctrl+d": 4, "ctrl+shift+a": 6,
                   "char:x": 1, "down:shift": 1, "up:lbutton": 1, "keydown:65": 1,
-                  "mouselock": 1, "click": 2}
+                  "mouselock": 1, "click": 2, "ddown:1,2": 2, "dup:3,4": 2,
+                  "dwheel:5,6,-3": 4, "dwheel:5,6,0": 1}
         self.assertEqual({t: tacli._token_events(t) for t in counts}, counts)
 
     def test_no_batch_holds_more_events_than_the_dll_takes(self):

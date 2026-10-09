@@ -175,9 +175,8 @@ as well. By hand: `ui t1 set Mapping 1`, `ui t1 set LineOfSight 0` before `Start
 - **Key tokens**: names (`space return esc tab plus minus up down left right backspace delete
   home end y …`), combos `ctrl+d`/`shift+2`/`ctrl+shift+a` (modifier down, key down and up,
   modifier up, each handled before the next is sent, so TA's poll sees the modifier), `char:c`, `down:<tok>`/`up:<tok>` to hold keys or `lbutton`/`rbutton`/`mbutton`
-  across frames, `mouse:x,y`, `pmove:x,y`, `click:x,y`/`rclick:x,y`/`pclick:x,y`, `wheel:n`, and
-  `dmove:x,y`/`dclick:x,y` in **device** pixels. Drag-select: `down:lbutton`, `mouse:x,y`,
-  `up:lbutton`.
+  across frames, `mouse:x,y`, `pmove:x,y`, `click:x,y`/`rclick:x,y`/`pclick:x,y`, `wheel:n`; **device** pixels:
+  `dmove:` `dclick:` `drclick:` `ddown:` `dup:` (`x,y`), `dwheel:x,y,n`. Drag-select: `down:lbutton`, `mouse:x,y`, `up:lbutton`.
 - **Injected modifiers need the shield ON.** A polled modifier reaches TA only through the
   shield's `GetAsyncKeyState`; with `--no-shield` your `down:shift` is invisible, so anything
   gated on a held modifier (the order markers, `Ctrl+C` follow) is untestable with the shield
@@ -323,7 +322,7 @@ Design and engine recipe: `research/notes/scenario-format.md`.
   `tacli ls --json`. No `tacli` verb captures it in-process.
 - **The census** is the first thing to read when something is missing:
   `tacli log <i> -g 'vk: census'` → `census: frame N: 6 pass(es) drew and 0 claimed (terr=1
-  feat=1 unit=1 fx=1 mark=1 scaf=0 gui=1 fps=0)` is the play set. `mark=0` is the marker pass
+  feat=1 unit=1 fx=1 mark=1 scaf=0 gui=1 fps=0 hud=0)` is the play set. `mark=0` is the marker pass
   standing down; fewer passes right after a load is the level not being up yet.
 - **`tacli crash <name>`** — the last crash TA recorded, **symbolised** from
   `tools/ta_symbols.txt` (the nearest preceding name: a neighbourhood, not a signature).

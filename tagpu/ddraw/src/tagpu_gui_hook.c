@@ -54,7 +54,6 @@
 #include "../inc/tagpu.h"
 #include "tagpu_trigger.h"
 #include "tagpu_log.h"
-#include "tagpu_hud.h"    /* the dock region's scale, carried on the flip marker */
 #include "tagpu_profiles.h"
 
 #define TA_MAINPP     0x00511DE8u
@@ -637,9 +636,7 @@ typedef struct OP {
     unsigned char fcomp, fsub, fsubn;
     unsigned char exact;                        /* TAGPU_GAF_EXACT (tagpu_gaf.h)  */
     unsigned sgen;                              /* the seen table `glen` was decided against */
-    short dx, dy;                               /* sprite: unclipped top-left;
-                                                   flip: dx the dock region's
-                                                   scale (tagpu_hud.h), 0 none */
+    short dx, dy;                               /* sprite: unclipped top-left    */
     unsigned src; short sl, st;                 /* copy: source, its top-left */
     /* WHICH PHASE OF THE ENGINE'S DRAW THIS OP WAS OBSERVED IN, and it is the
        only field here that is about PROVENANCE rather than about the draw. 1
@@ -2896,8 +2893,6 @@ static void publish_window(unsigned flipSurf)
             s = pub_surf(op->base);
             if (s && seed_due(s) && !pub_seed(s)) return;
             o = pub_op(PK_FRAME, op->base); if (!o) return;
-            o->w = op->dx;
-            o->h = op->dy;
             pub_commit();
             continue;
         }
@@ -3902,12 +3897,6 @@ static int __cdecl before_flip(void* entry_esp)
         OP* o = &s_ops[s_nops++];
         memset(o, 0, sizeof *o);
         o->kind = OP_FLIP; o->base = s->base;
-        /* THE DOCK'S REGION AS THIS FRAME DREW IT: read here, on the thread
-           that writes it, at the flip of the frame it describes, so the
-           marker the composite takes it from follows exactly the ops that
-           drew (or stopped drawing) the dock. */
-        o->dx = (short)tagpu_hud_dock_q8();
-        o->dy = (short)tagpu_hud_cards_q8();
         frameRecorded = 1;
     }
     /* the cursor is drawn into the back buffer INSIDE the flip and its
