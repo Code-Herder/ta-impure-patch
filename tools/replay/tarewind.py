@@ -3,6 +3,8 @@ import json
 import re
 import time
 
+JUDGE_SPAN = 3600   # a judge watches this many ticks of play: 60 s at the harness's speed 20
+
 
 def ai_activity(lines, name, start, stop, seats):
     """Require fresh AI orders that reached a normal handler in the armed window."""
@@ -74,23 +76,8 @@ def run(t, w, fx, out):
         return data
 
     def until(G, judge=None):
-        deadline = time.monotonic() + 120 + 4 * max(0, G - w.gametime()) / 30
-        while True:
-            g = w.gametime()
-            while steps and steps[0][0] <= g:
-                _, kind, arg = steps.pop(0)
-                t.step(w, kind, arg)
-            if g >= G:
-                break
-            log.read()
-            log.alive()
-            if judge:
-                judge()
-            if time.monotonic() > deadline:
-                raise t.Failed(f"rewind: did not reach GameTime {G}")
-            t.nap(0.5)
-        if judge:
-            judge()
+        """held at GameTime G, the fixture's steps up to it run at theirs (tareplay's run_to)"""
+        return t.run_to(w, log, G, steps, judge)
 
     def objective_armed():
         objective = t.peek(w, "*0x511DE8+0x391ED:4")
@@ -106,13 +93,15 @@ def run(t, w, fx, out):
         t.nap(1)
         check(label, w.gametime() == g, f"Pause key at GameTime {g}")
 
-    def judge_span(label, ticks, seconds):
+    def judge_span(label, ticks):
+        """From the GameTime the level is held at, `ticks` of play watched -- the window, its
+        boxes and ErrorLog.txt -- and the units Impure draws JUDGE_TICKS on against what the last
+        rebuild made; the level is held at the span's end."""
         tc = t.compat()
         display = int(w.xvfb.display[1:])
         boxes, seen = [], set()
-        begin = time.monotonic()
         wall_start = time.time()
-        G = w.gametime()
+        G = log.at
         made = None
         log.read()
         for line in reversed(log.lines):
@@ -120,27 +109,26 @@ def run(t, w, fx, out):
             if m:
                 made = int(m[2])
                 break
-        alive = None
         error = gone = False
 
         def poll():
-            nonlocal error, gone, alive
+            nonlocal error, gone
             tc.new_boxes(display, seen, boxes, wall_start)
             error |= (w.gamedir / "ErrorLog.txt").exists()
             gone |= not any(tc.main_window(*x) for x in tc.x_windows(display))
-            if alive is None and time.monotonic() - begin >= 4:
-                alive = tc.alive_seen(w.gamedir)
             if gone:
                 raise t.Failed(f"rewind {label}: game window disappeared")
 
+        until(G + t.JUDGE_TICKS, poll)
+        n = len(log.lines)
+        got = log.wait(r"^units: alive=(\d+)", 30, n)
+        alive = int(re.search(r"alive=(\d+)", got).group(1)) if got else None
         until(G + ticks, poll)
-        while time.monotonic() - begin < seconds:
-            poll()
-            t.nap(0.5)
+        poll()
         check(label, not boxes and not error and not gone and alive is not None and
               made is not None and alive >= .9 * made,
-              f"{len(boxes)} boxes, errorlog={error}, gone={gone}, {alive} seen / {made} made; "
-              f"{time.monotonic() - begin:.1f} s")
+              f"{len(boxes)} boxes, errorlog={error}, gone={gone}, {alive} seen at GameTime "
+              f"{G + t.JUDGE_TICKS} / {made} made; GameTime {G} to {G + ticks}")
 
     try:
         with results:
@@ -152,7 +140,9 @@ def run(t, w, fx, out):
                                fix.get("unit_limit", t.UNIT_LIMIT), timeout=t.LAUNCH_TIMEOUT)
             if rc:
                 raise t.CouldNotRun(text)
-            until(600)
+            # the holds G0 and G1 are 1 (mod 30), the radar pass's step, as every dump of the
+            # harness is (O14): the dumps below are G0 + 30, G1 + 30 and G1 + 600
+            until(601)
             log.read()
             start = len(log.lines)
             opened = command("open", dump="open")
@@ -175,10 +165,7 @@ def run(t, w, fx, out):
             log.read()
             check("open-close", not any("sought from GameTime" in ln for ln in log.lines[start:]),
                   "no rebuild between open and close")
-            until(1500)
-            t.tacli("keys", w.name, "pause")
-            t.nap(1)
-            G1 = w.gametime()
+            G1 = until(1501)
             # The engine creates this unit after the last radar scan. Returning to now
             # must retain that scan's contact bits, rather than reveal the new unit early.
             t.step(w, "apply", fix["rewind_paused"])
@@ -194,8 +181,9 @@ def run(t, w, fx, out):
             check("return clock", returned["dump_at"] == G1, f"GameTime {G1}")
             check("return objective", objective_armed() == 0, "saved disabled switch retained")
             arm_ai(t, w, log, "now", G1 + 1, G1 + 1801)
-            t.tacli("keys", w.name, "pause")
-            judge_span("now judge", 1800, 60)
+            # the return to now puts back the pause bit the open saved, the hold's (rw_finish)
+            log.at = w.gametime()
+            judge_span("now judge", JUDGE_SPAN)
             until(G1 + 1801)
             until(max(3000, G1 + 1800))
             opened = command("open", dump="fork-pre")
@@ -204,12 +192,16 @@ def run(t, w, fx, out):
             command("seek", T2)
             forked = command("fork", dump="fork")
             check("fork objective", objective_armed() == 1, "takeover arms objectives")
-            t.tacli("keys", w.name, "pause")
-            t.nap(1)
-            AF = w.gametime() + 1
+            # the fork puts back the pause bit the open saved, the hold's (tagpu_replay.c,
+            # rw_finish): the AI window and the judge start from the held level
+            if t.peek(w, t.PAUSE_WORD) & 1:
+                log.held, log.pending, log.at = True, None, w.gametime()
+            else:
+                log.held = False
+                until(w.gametime() + t.LATE[0])
+            AF = log.at + 1
             arm_ai(t, w, log, "fork", AF, AF + 1800)
-            t.tacli("keys", w.name, "pause")
-            judge_span("fork judge", 1800, 60)
+            judge_span("fork judge", JUDGE_SPAN)
             until(AF + 1800)
             for label, data in (("conversion", converted), ("now", returned), ("fork", forked)):
                 match = re.search(r"in (\d+) ms", data["detail"])
@@ -222,6 +214,8 @@ def run(t, w, fx, out):
             log.read()
             start = len(log.lines)
             t.step(w, "apply", "replay-end.json")
+            t.resume(w, log)
+            log.held = False
             if not log.wait(r"recorder: writer: .* closed", 120, start):
                 raise t.CouldNotRun("rewind: fork writer did not close")
             w.collect(live, recordings=True)

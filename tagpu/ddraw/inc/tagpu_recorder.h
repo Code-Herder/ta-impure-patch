@@ -206,6 +206,10 @@ int tagpu_rec_fork_arm(RecFork* f);
 int tagpu_rec_rewind_open(unsigned* timeline, char* why, unsigned whycap);
 int tagpu_rec_rewind_flush(char* path, unsigned cap);
 int tagpu_rec_suspend(int on);
+
+/* The bytes of the ring the game thread's recording holds unwritten, 0 when it records none.
+   Game thread only. The turbo's back-pressure (tagpu_replay.c, THE TURBO). */
+unsigned tagpu_rec_ring_used(void);
 typedef void (*RecPendingVisit)(void* ctx, unsigned kind, const unsigned char* body, unsigned len);
 void tagpu_rec_pending_events(RecPendingVisit visit, void* ctx);
 /* Ends the original with its pending events. The caller owns the returned done-event duplicate

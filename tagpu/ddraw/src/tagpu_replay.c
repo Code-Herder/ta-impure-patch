@@ -283,10 +283,12 @@ static int s_rt_pace_in;            /* attach-time guard before the skirmish ste
 /* THE TURBO (turbo_due): k, read once at attach, 0 when off; the rest the game thread's alone */
 static unsigned s_turbo_k;
 static struct {
-    int      live;                  /* `turbo on` was acknowledged on this level                 */
-    unsigned g0;                    /* GameTime at the acknowledgement                           */
-    unsigned frames, lagged;        /* frames run at k; frames left to the lag scale             */
+    int      live;                  /* `turbo on` holds now (`turbo off` clears it)              */
+    int      engaged;               /* ... or did at some point of this level                    */
+    unsigned g0;                    /* GameTime at the first acknowledgement                     */
+    unsigned frames, lagged, held;  /* frames run at k; left to the lag scale; held for writer */
     DWORD    last, ms;              /* the last frame's GetTickCount; the play between frames    */
+    unsigned last_g, ticks;         /* its GameTime; the ticks between frames at k               */
 } s_turbo;
 static unsigned s_pause_at;         /* THE PAUSE AT T: the GameTime armed, 0 none; game thread    */
 static int s_mp_arena_in;           /* allocator's block-ownership boundary */
@@ -7452,8 +7454,9 @@ static int rw_trigger(const char* line)
      followed.
    - `cover <name>`: the coverage build's functions that ran, at once (tagpu_cover_write); any
      other build refuses it with a line.
-   - `turbo on`: k ticks every frame for the rest of the level, in a test launch whose
-     tagpu_turbo.on gave k (THE TURBO); refused with a line otherwise.
+   - `turbo on`: k ticks every frame until `turbo off` or the level's end, in a test launch whose
+     tagpu_turbo.on gave k (THE TURBO); refused with a line otherwise. `turbo off`: the game's own
+     pacing again.
    - `pause at <T>`, T a decimal u32 past the level's GameTime: on any level in play outside
      rewind, the game paused at the frame visit after step T (THE PAUSE AT T); one at a time, a
      second replacing the first. `resume`: the pause bit cleared, as the Pause key clears it. */
@@ -7504,6 +7507,7 @@ static int takeover_words(const char* p, unsigned* P, unsigned* T, int* D)
 
 static void rt_arm(const char* name, unsigned T);
 static void turbo_on(void);
+static void turbo_off(void);
 static void pace_level_end(void);
 static void pause_at_arm(unsigned T);
 static void pause_resume(void);
@@ -7596,6 +7600,10 @@ static void trigger_read(void)
     }
     if (!strcmp(line, "turbo on")) {
         turbo_on();
+        return;
+    }
+    if (!strcmp(line, "turbo off")) {
+        turbo_off();
         return;
     }
     if (!strncmp(line, "pause at ", 9) && u32_word(line + 9, &T)) {
@@ -9181,6 +9189,7 @@ static void rw_pause_init(void)
 }
 
 #define TURBO_GAP_MS 250
+#define TURBO_RING_BYTES (REC_RING_BYTES / 2)
 
 /* THE TURBO: a test launch's pacing, k ticks every frame. DISASSEMBLED: the scheduler 0x495230
    writes DeltaTime main+0x38A3B from the 30-Hz clock 0x4B6340 and clamps it to 5 (0x4953F5),
@@ -9200,11 +9209,19 @@ static void rw_pause_init(void)
    0x496920, so it never runs in a network game, a menu, a paused frame or a rewind (whose pause
    guard holds the pause bit). Bit 1 of main+0x38A51 is the scheduler's lag scale (0x49535C),
    set only when a type-3 player lags 900 ticks: such a frame keeps the stock count.
+   THE WRITER'S BACK-PRESSURE. The recorder's ring never blocks the capture (tagpu_recorder.h): a
+   level that writes faster than the writer drains ends its recording INCOMPLETE when the ring
+   fills. The battle fixtures write ~56 KB of records a tick, and at k = 1 the stock-limits battle
+   ran 314 ticks a second and filled the 16 MiB ring by GameTime 1003 (MEASURED 2026-10-08, two
+   games at once). So a turbo frame runs no tick while the ring holds more than TURBO_RING_BYTES:
+   the count test 0x496932 then skips the step, its tail included, so every batch is still k
+   ticks and only when the batches run waits on the writer. A single batch that writes more than
+   the rest of the ring still fills it, as it would at stock pacing.
    What turbo does not make tick-exact is what stock pacing does not either: the readers of wall
    time and the CRT rand draws of the frame -- the hover wave in the unit tick (0x48A66A), the
    meteor tick's draws (0x437E37..0x437FB5) against the draw path's from the same stream, the
-   camera scroll by wall elapsed (0x41CEA2) -- each a function of frames per tick, which k
-   constant fixes and stock pacing does not (exe-reverse-engineering.md, the scheduler). */
+   camera scroll by wall elapsed (0x41CEA2) -- each a function of the frames and the time between
+   two ticks (exe-reverse-engineering.md, the scheduler). */
 static void turbo_due(char* ta)
 {
     DWORD now;
@@ -9213,13 +9230,22 @@ static void turbo_due(char* ta)
         s_turbo.lagged++;
         return;
     }
-    *(unsigned*)(ta + OFF_DUE_TICKS) = s_turbo_k;
-    s_turbo.frames++;
+    if (tagpu_rec_ring_used() > TURBO_RING_BYTES) {
+        *(unsigned*)(ta + OFF_DUE_TICKS) = 0;
+        s_turbo.held++;
+    } else {
+        *(unsigned*)(ta + OFF_DUE_TICKS) = s_turbo_k;
+        s_turbo.frames++;
+    }
     /* the rate's clock: a gap of TURBO_GAP_MS or more between two frames is a pause, which
        reaches no frame here, and is not play */
     now = GetTickCount();
-    if (s_turbo.last && now - s_turbo.last < TURBO_GAP_MS) s_turbo.ms += now - s_turbo.last;
+    if (s_turbo.last && now - s_turbo.last < TURBO_GAP_MS) {
+        s_turbo.ms += now - s_turbo.last;
+        s_turbo.ticks += *(const unsigned*)(ta + OFF_GAMETIME) - s_turbo.last_g;
+    }
     s_turbo.last = now;
+    s_turbo.last_g = *(const unsigned*)(ta + OFF_GAMETIME);
 }
 
 /* DISASSEMBLED: the scheduler returns before 0x49692D; 0x496932 tests its count,
@@ -9313,10 +9339,11 @@ static void pause_resume(void)
     tagpu_logf("pause: resumed at GameTime %u", *(const unsigned*)(ta + OFF_GAMETIME));
 }
 
-/* `turbo on` (the trigger): the turbo for the rest of this level, in a test launch whose
-   tagpu_turbo.on gave k. The harness sends it once every dump and round trip of the lane is
+/* `turbo on` (the trigger): the turbo until `turbo off` or the level's end, in a test launch
+   whose tagpu_turbo.on gave k. The harness sends it once every dump and round trip of the lane is
    armed and acknowledged: at k ticks a frame, the 301 ticks before the first armed GameTime
-   pass sooner than a tacli round trip could arm them. */
+   pass sooner than a tacli round trip could arm them. It sends `turbo off` around a step that
+   drives the running game against the wall clock, a fixture's script. */
 static void turbo_on(void)
 {
     char* ta = ta_main();
@@ -9325,12 +9352,25 @@ static void turbo_on(void)
                    : !s_rt_pace_in ? "the tick-batch guard is unavailable" : "no level");
         return;
     }
-    if (!s_turbo.live) {
-        s_turbo.live = 1;
+    if (!s_turbo.engaged) {
+        s_turbo.engaged = 1;
         s_turbo.g0 = *(const unsigned*)(ta + OFF_GAMETIME);
     }
+    s_turbo.live = 1;
     tagpu_logf("turbo: on at GameTime %u (k=%u)", *(const unsigned*)(ta + OFF_GAMETIME),
                s_turbo_k);
+}
+
+static void turbo_off(void)
+{
+    char* ta = ta_main();
+    if (!s_turbo.live || !ta) {
+        tagpu_logf("turbo: off refused: the turbo is not on");
+        return;
+    }
+    s_turbo.live = 0;
+    s_turbo.last = 0;               /* the time at the game's own pacing is not the turbo's play */
+    tagpu_logf("turbo: off at GameTime %u", *(const unsigned*)(ta + OFF_GAMETIME));
 }
 
 /* the level's turbo account; no turbo and no pause carries into the next level */
@@ -9338,12 +9378,13 @@ static void pace_level_end(void)
 {
     char* ta = ta_main();
     unsigned g1 = ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0;
-    if (s_turbo.live)
-        tagpu_logf("turbo: from GameTime %u to %u, %u frames at k=%u in %lu ms of play (%lu ticks "
-                   "a second), %u left to the lag scale", s_turbo.g0, g1, s_turbo.frames,
-                   s_turbo_k, (unsigned long)s_turbo.ms,
-                   s_turbo.ms ? (unsigned long)((g1 - s_turbo.g0) * 1000ull / s_turbo.ms) : 0ul,
-                   s_turbo.lagged);
+    if (s_turbo.engaged)
+        tagpu_logf("turbo: from GameTime %u to %u, %u frames at k=%u, %u ticks in %lu ms of play "
+                   "(%lu a second), %u left to the lag scale, %u held for the writer",
+                   s_turbo.g0, g1, s_turbo.frames, s_turbo_k, s_turbo.ticks,
+                   (unsigned long)s_turbo.ms,
+                   s_turbo.ms ? (unsigned long)(s_turbo.ticks * 1000ull / s_turbo.ms) : 0ul,
+                   s_turbo.lagged, s_turbo.held);
     memset(&s_turbo, 0, sizeof s_turbo);
     s_pause_at = 0;
 }

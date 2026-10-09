@@ -124,9 +124,9 @@ class TurboLanes(unittest.TestCase):
         lanes = {n: "".join(p for p in "LPRQKFWXU" if tareplay.turbo_lane(fx[n], p, 2))
                  for n in ("c3-veterancy", "secondary-orders", "battle", "tenseat",
                            "resource-geo-upgrade", "wpn-badtgt")}
-        self.assertEqual(lanes, {"c3-veterancy": "LPRF", "secondary-orders": "PRF",
-                                 "battle": "PRF", "tenseat": "PRF", "resource-geo-upgrade": "",
-                                 "wpn-badtgt": "LPRF"})
+        self.assertEqual(lanes, {"c3-veterancy": "LPRKFXU", "secondary-orders": "LPRKFXU",
+                                 "battle": "LPRKFXU", "tenseat": "LPRKFXU",
+                                 "resource-geo-upgrade": "LPRKFXU", "wpn-badtgt": "LPRKFXU"})
         self.assertEqual(tareplay.turbo_lane(fx["c3-veterancy"], "P", 0), 0)
 
 

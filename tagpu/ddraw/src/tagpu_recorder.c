@@ -6888,6 +6888,15 @@ static void rec_stop(unsigned reason)
     s_state = ST_DONE;
 }
 
+/* rec_end lets the ring go (`r->ring` NULL) before rec_stop and the teardown clear s_rec, all on
+   this thread */
+unsigned tagpu_rec_ring_used(void)
+{
+    Rec* r = s_rec;
+    if (s_state != ST_RECORDING || !r || !r->ring || s_tid != GetCurrentThreadId()) return 0;
+    return ring_used(r);
+}
+
 int tagpu_rec_rewind_open(unsigned* timeline, char* why, unsigned whycap)
 {
     Rec* r = s_rec;
