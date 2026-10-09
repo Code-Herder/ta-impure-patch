@@ -243,6 +243,17 @@ it unchanged. Both consume the command click rather than issuing Move or duplica
 Cancellation does not undo construction or reclamation that has already happened; an unfinished
 resource building retains native contextual repair/assist priority.
 
+**Whether a plan is queued at a site is decided before whether its ground is free.** A unit
+standing on a queued plan's footprint or walking across it, or a wreck on it, makes the engine's
+site test `0x47D2E0` refuse the site; that refusal never hides the plan, so the repeat and the
+Shift-cancel still reach it instead of a native order being issued in its place. This holds for
+a new site's search (`site`, for mex and geo plans) and for an owned building's upgrade
+(`quick_choice`): occupied ground or another plan's yard is the click's only as a queued plan's
+site, and a free site with no plan in the way is decided as it was. The ghost on such a site takes
+the altitude the engine's build cursor gives a blocked site (`0x47D820`). The unit under the
+pointer is still the click's target first: a click on a unit standing on the plan is a click on
+that unit, as it is for the stock game.
+
 ### Owned-building upgrades
 
 Offer upgrades only for completed mexes or geothermal plants owned by the player. The selected
@@ -300,7 +311,8 @@ come from `0x43F0E0`; build action names come from `0x438760`. Upgrades issue re
 an appended build. Helper constructors retain persistent Guards; the engine may prepend its own
 assist/reclaim work. Selected combat units receive no order from this path. Queued builds are
 identified by the engine descriptor's placed-build capability, excluding factory build counts.
-Actual yard occupancy bits determine queued collisions. Plain repeated clicks consume the input
+Actual yard occupancy bits determine queued collisions; a site the occupancy test refuses is
+still matched against the queued plans before it is dropped (above). Plain repeated clicks consume the input
 without changing orders. Shift cancellation selects the actual queued node and removes it through
 the exact native root `0x439F80(unit,node)`. The mouse toggle root `0x43AFC0` ignores build type and
 treats positions within 16 world units as a match; it cannot distinguish adjacent one-cell vents.

@@ -35,6 +35,7 @@
 
 typedef int (__stdcall* GridTest)(const void*, unsigned, unsigned, const void*);
 typedef unsigned (__stdcall* SiteHeight)(void);
+typedef unsigned (__stdcall* BlockedHeight)(const void*, unsigned);
 typedef const unsigned char* (__stdcall* Resolve)(int*, unsigned, void*, void*, const void*);
 typedef void (__stdcall* Order)(int, int, void*, void*, const void*, int, int);
 typedef void (__stdcall* RemoveOrder)(void*, const void*);
@@ -202,15 +203,35 @@ static int coverage(const World* w, int x, int z, int fx, int fz)
     return count;
 }
 
+/* The footprint inside the map's placeable interior and every cell of it explored: what fits()
+   asks before the engine's site test, and all a queued plan's site has to satisfy. */
+static int site_known(const World* w, unsigned type, int x, int z)
+{
+    int fx, fz, dx, dz;
+    if (!footprint(w->defs + type * D_STRIDE, &fx, &fz) || x < 1 || z < 1 ||
+        x + fx >= w->w || z + fz >= w->h ||
+        x * 16 + fx * 8 > 32767 || z * 16 + fz * 8 > 32767) return 0;
+    for (dz = 0; dz < fz; dz++) for (dx = 0; dx < fx; dx++)
+        if (!discovered(w, x + dx, z + dz)) return 0;
+    return 1;
+}
+
+/* DISASSEMBLED 0x47D820, stdcall (def, x | z << 16), `ret 8`: the altitude the build cursor gives
+   a blocked site (0x4198FE; 0x47C780 at 0x4198F5 gives a free one's, from the site test's
+   scratch). It reads the def's footprint and yardmap and the map's heights and sea level, writes
+   nothing outside its own frame, and answers 0 for a footprint outside [1, w) x [1, h). */
+static int blocked_height(const World* w, unsigned type, int x, int z)
+{
+    return (int)(((BlockedHeight)0x0047D820u)(w->defs + type * D_STRIDE,
+                                              (unsigned)x | (unsigned)z << 16) & 255);
+}
+
 static int fits(const World* w, unsigned type, int x, int z, unsigned ignore, int* height)
 {
     char* d = w->defs + type * D_STRIDE;
     int fx, fz, dx, dz, ok;
     unsigned char copy[D_STRIDE], yard[64 * 64];
-    if (!footprint(d, &fx, &fz) || x < 1 || z < 1 || x + fx >= w->w || z + fz >= w->h ||
-        x * 16 + fx * 8 > 32767 || z * 16 + fz * 8 > 32767) return 0;
-    for (dz = 0; dz < fz; dz++) for (dx = 0; dx < fx; dx++)
-        if (!discovered(w, x + dx, z + dz)) return 0;
+    if (!site_known(w, type, x, z) || !footprint(d, &fx, &fz)) return 0;
     if (ignore) {
         const char* old = unit(w, ignore);
         unsigned id;
@@ -270,16 +291,24 @@ static int site(const World* w, unsigned type, const int seed[3], const int raw[
             x * 16 + fx * 8 > 32767 || z * 16 + fz * 8 > 32767) continue;
         count = k == 1 ? coverage(w, x, z, fx, fz) : 1;
         if (!count || count < best || (count == best && dist >= distance)) continue;
-        if ((legal || k == 2) && !fits(w, type, x, z, ignore, &h)) continue;
         if (legal) {
             Choice candidate = {0};
+            int taken = !fits(w, type, x, z, ignore, &h);
+            if (taken && !site_known(w, type, x, z)) continue;
             candidate.type = type; candidate.kind = k; candidate.x = x; candidate.z = z;
             candidate.height = h; candidate.target = ignore;
-            if (plans_block(w, &candidate)) {
+            /* WHETHER A PLAN IS QUEUED HERE IS DECIDED BEFORE WHETHER ITS GROUND IS FREE. Ground
+               the engine's site test refuses -- a unit standing on the site or crossing it, a
+               wreck -- or another plan's yard is this click's only as the site of a plan
+               already queued, and then it is that plan's whatever stands on it: the click
+               reaches the repeat and the Shift-cancel (click), never a native order in the
+               plan's place. A free site with no plan in the way is decided as before. */
+            if (taken || plans_block(w, &candidate)) {
                 if (k == 1 && !ignore && !distinct(w, &candidate, fx, fz)) continue;
                 if (!queued(w, &candidate)) continue;
+                if (taken) h = blocked_height(w, type, x, z);
             }
-        }
+        } else if (k == 2 && !fits(w, type, x, z, ignore, &h)) continue;
         best = count; distance = dist; bx = x; bz = z; height = h;
     }
     if (!best) return 0;
@@ -620,8 +649,12 @@ static int quick_choice(const World* w, Choice* chosen)
             memcpy(pos, target + U_XFIX, sizeof pos);
             c.x = ((pos[0] >> 16) - fx * 8 + 8) / 16;
             c.z = ((pos[2] >> 16) - fz * 8 + 8) / 16;
-            if (!fits(w, t, c.x, c.z, *(unsigned short*)(target + U_INDEX), &c.height)) continue;
-            c.type = t; c.kind = k;
+            c.type = t; c.kind = k; c.target = target_id;
+            /* the rule of site(): an upgrade already queued here is decided before the ground */
+            if (!fits(w, t, c.x, c.z, *(unsigned short*)(target + U_INDEX), &c.height)) {
+                if (!site_known(w, t, c.x, c.z) || !queued(w, &c)) continue;
+                c.height = blocked_height(w, t, c.x, c.z);
+            }
         } else {
             if (!snapped_site(w, t, s_raw, p->radius, 1, &c)) continue;
             if (k == 1 && !distinct(w, &c, fx, fz)) continue;
