@@ -1623,9 +1623,9 @@ int tagpu_menu_leave_ready(void)
    and the quit tail it jumps to (0x460630: the teardown, UpdateIngameGUI(1), GUI_Pop, the menu).
    Both are compared by FNV-1a against the retail exe's bytes at every Leave; on a mismatch Leave
    is refused, and the engine's own menu still leaves. */
-static const struct { unsigned a, b, fnv; } LEAVE_GUARD[2] = {
-    { 0x460680, 0x4607F2, 0x8B2B971Eu },     /* the opener, to its ret                           */
-    { 0x4605C0, 0x46065D, 0x9EF8B480u },     /* its OnCommand, through the quit tail's ret 4     */
+static const struct { unsigned first, last, fnv; } LEAVE_GUARD[2] = {
+    { 0x460680, 0x4607F1, 0x8B2B971Eu },     /* the opener, to its ret                           */
+    { 0x4605C0, 0x46065C, 0x9EF8B480u },     /* its OnCommand, through the quit tail's ret 4     */
 };
 
 static int leave_guard(void)
@@ -1633,12 +1633,12 @@ static int leave_guard(void)
     int i;
     for (i = 0; i < 2; i++) {
         unsigned h = 0x811C9DC5u, va;
-        for (va = LEAVE_GUARD[i].a; va < LEAVE_GUARD[i].b; va++)
+        for (va = LEAVE_GUARD[i].first; va <= LEAVE_GUARD[i].last; va++)
             h = (h ^ *(const unsigned char*)(size_t)va) * 0x01000193u;
         if (h != LEAVE_GUARD[i].fnv) {
             char b[160];
             _snprintf(b, sizeof b, "menu: Leave refused - 0x%06X..0x%06X holds other bytes than it "
-                      "was made against", LEAVE_GUARD[i].a, LEAVE_GUARD[i].b - 1);
+                      "was made against", LEAVE_GUARD[i].first, LEAVE_GUARD[i].last);
             b[sizeof b - 1] = 0;
             mlog(b);
             return 0;
