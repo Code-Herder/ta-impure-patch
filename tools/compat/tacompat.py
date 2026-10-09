@@ -60,6 +60,7 @@ TREE = HERE.parents[1]
 sys.path.insert(0, str(TREE / "tools"))
 import taremote  # noqa: E402  PowerShell over SSH, one checked statement a line
 import dpport  # noqa: E402  DirectPlay's port, per prefix (tools/dpport.py)
+import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
 
 TACLI = TREE / "tools" / "tacli"
 DPINSTALL = TREE / "tools" / "dpinstall.sh"
@@ -88,6 +89,7 @@ WINEDEBUG = ",".join(filter(None, ("+loaddll", TRACE)))
 ASOUND_NULL = HERE / "asound-null.conf"
 RETAIL_MD5 = "8e74a1dffa1f5988624c52048f5b20cd"      # TotalA.exe 3.1, pristine/manifest.md5
 PREFIX = "compat-"                                   # every Wine instance this tool owns
+J = tarun.NULL                                       # the suite's journal once it starts
 
 
 def main_checkout() -> Path:
@@ -1923,6 +1925,37 @@ def threw(setup, platform, fut) -> dict:
                 "_files": {}, "_temps": {}}
 
 
+def ran(setup, step, o):
+    """A setup's game ended: done with its outcome, or unrun when the run itself threw."""
+    if o.get("outcome") == "no-result":
+        J.finish(setup["name"], step, "unrun", o.get("why"))
+    else:
+        J.finish(setup["name"], step, "done", f"{o['outcome']}, {o['verdict']}")
+
+
+def judged(setup, o):
+    """A setup's final verdict as its one check: UNEXPECTED fails by each way it differs."""
+    if o.get("outcome") == "no-result":
+        J.checks(setup["name"], 0, unrun=[o.get("why") or "no result"])
+    elif o["verdict"] == "UNEXPECTED":
+        J.checks(setup["name"], 0, failed=[f"UNEXPECTED: {m}" for m in
+                                           o.get("differs_today") or o.get("differs") or
+                                           [o["outcome"]]])
+    else:
+        J.checks(setup["name"], 1)
+
+
+def journaled(setup, step, fn, *a):
+    """fn(*a) as the setup's step: started when a worker takes it; an exception ends it unrun,
+    anything else is ended by the caller, which knows the verdict."""
+    J.start(setup["name"], step, instance=inst_name(setup["name"]))
+    try:
+        return fn(*a)
+    except BaseException as e:
+        J.finish(setup["name"], step, "unrun", f"{type(e).__name__}: {e}")
+        raise
+
+
 def cmd_wine(args):
     source = Path(args.dll).resolve()
     if not source.is_file():
@@ -1937,12 +1970,26 @@ def cmd_wine(args):
         die("nothing to run")
     started = time.time()
     taken = set()
+    global J
+    J = tarun.begin("tacompat", [(s["name"], [
+        {"id": "prepare", "pool": "prep", "order": k},
+        {"id": "run", "pool": "game", "after": ["prepare"], "order": k},
+    ] + ([{"id": "mp", "pool": "mp", "after": ["run"], "order": k}] if args.mp and mp_eligible(s)
+         else [])) for k, s in enumerate(ready)],
+        kind="wine", title=f"tacompat wine ({len(ready)} setups) -j {args.jobs}", gate=True,
+        pools={"prep": max(1, args.prep_jobs), "game": args.jobs, "mp": max(1, args.mp_jobs)},
+        variant=f"watch{args.watch}-battle{args.battle}-mp{args.mp}")
+
+    def prepared(s):
+        inst = journaled(s, "prepare", prepare_wine, s, dll, create_display)
+        J.finish(s["name"], "prepare", "done")
+        return inst
     xv = start_xvfb()
     create_display = xv.tacompat_display
     try:
         print(f"preparing {len(ready)} setups, {args.prep_jobs} at a time")
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.prep_jobs)) as prep:
-            for s, inst in zip(ready, prep.map(lambda s: prepare_wine(s, dll, create_display), ready)):
+            for s, inst in zip(ready, prep.map(prepared, ready)):
                 s["_inst"] = inst
     finally:
         stop_xvfb(xv)
@@ -1959,33 +2006,43 @@ def cmd_wine(args):
         ports.put(MP_PORT_BASE + k)
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool, \
             concurrent.futures.ThreadPoolExecutor(max_workers=mp_jobs) as mp_pool:
-        futs = {pool.submit(run_wine, s, dll, args.watch, None, args.screens,
-                            args.battle): s
+        futs = {pool.submit(journaled, s, "run", run_wine, s, dll, args.watch, None,
+                            args.screens, args.battle): s
                 for s in ready}
         for f in concurrent.futures.as_completed(futs):
             s = futs[f]
             o = threw(s, "wine", f)         # a run that threw is its own result, and reported
             verdict(o, s, "wine")
+            ran(s, "run", o)
             print(f"  {s['name']}: {o['outcome']} ({o['verdict']})")
             results.append(o)
             if s.get("no_network_game"):
                 o["mp_skip"] = s["no_network_game"]
             if args.mp and mp_eligible(s) and o["outcome"] == "impure-active" and o.get("menu"):
-                mp_futs[s["name"]] = (s, o, mp_pool.submit(run_wine_mp, s, dll, args.mp,
-                                                           taken, mine, ports))
+                mp_futs[s["name"]] = (s, o, mp_pool.submit(journaled, s, "mp", run_wine_mp, s,
+                                                           dll, args.mp, taken, mine, ports))
+            else:
+                if args.mp and mp_eligible(s):
+                    J.finish(s["name"], "mp", "skipped", "Impure did not reach the menu")
+                judged(s, o)
         for name, (s, o, f) in mp_futs.items():
             try:
                 m = f.result()
             except BaseException as e:
                 m = {"ok": False, "why": f"{type(e).__name__}: {e}", "evidence": []}
+            J.finish(name, "mp", "done" if m["ok"] else
+                     "unrun" if m["why"].startswith("could not run") else "fail", m.get("why"))
             o["_files"].update(m.pop("_files", {}))
             o["_temps"].update(m.pop("_temps", {}))
             o["tadr_ran"] = o.get("tadr_ran", []) + m["evidence"]
             o["mp"] = m
             verdict(o, s, "wine")
+            judged(s, o)
             print(f"  {name}: network game {'ok' if m['ok'] else 'FAILED: ' + m['why']} ({o['verdict']})")
     results.sort(key=lambda r: [s["name"] for s in SETUPS].index(r["setup"]))
     rc = report(results, "wine", dll, started, args.strict, source)
+    J.note(summary=str(RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}-wine"
+                       / "summary.txt"))
     shutil.rmtree(dll.parent, ignore_errors=True)
     return rc
 
@@ -2406,6 +2463,12 @@ def cmd_windows(args):
     if not ready:
         die("nothing to run")
     started = time.time()
+    global J
+    J = tarun.begin("tacompat", [(s["name"], [{"id": "run", "order": k}] + (
+        [{"id": "smoke", "after": ["run"], "order": k}] if args.smoke else []))
+        for k, s in enumerate(ready)], kind="windows",
+        title=f"tacompat windows ({len(ready)} setups)", gate=True, pools={"main": 1},
+        variant=f"watch{args.watch}-smoke{args.smoke}")
     w = Win(cfg)
     try:
         running = w.game_procs()
@@ -2431,11 +2494,16 @@ def cmd_windows(args):
         results = []
         for s in ready:
             print(f"  {s['name']} ...", end="", flush=True)
-            o = run_windows_setup(w, s, args.watch)
+            o = journaled(s, "run", run_windows_setup, w, s, args.watch)
+            J.finish(s["name"], "run", "done", o["outcome"])
             if args.smoke and o['outcome'] == 'impure-active':
-                o['smoke'], smoke_files = windows_smoke(w, s, args.smoke)
+                o['smoke'], smoke_files = journaled(s, "smoke", windows_smoke, w, s, args.smoke)
                 o['_files'].update(smoke_files)
+                J.finish(s["name"], "smoke", "done")
+            elif args.smoke:
+                J.finish(s["name"], "smoke", "skipped", f"outcome {o['outcome']}")
             verdict(o, s, "windows")
+            judged(s, o)
             print(f" {o['outcome']} ({o['verdict']})")
             results.append(o)
     finally:
@@ -2451,6 +2519,8 @@ def cmd_windows(args):
                 pass
         w.s.close()
     rc = report(results, "windows", dll, started, args.strict, source)
+    J.note(summary=str(RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}"
+                                 f"-windows" / "summary.txt"))
     shutil.rmtree(dll.parent, ignore_errors=True)
     return rc
 
@@ -2650,7 +2720,12 @@ def main():
     sub.add_parser("selftest", help="check the hook decode against every shape it claims"
                    ).set_defaults(fn=cmd_selftest)
     args = ap.parse_args()
-    sys.exit(args.fn(args))
+    rc = 2                              # die() and anything unforeseen: it could not run
+    try:
+        rc = args.fn(args)
+    finally:
+        J.end({0: "pass", 1: "fail"}.get(rc, "unrun"))
+    sys.exit(rc)
 
 
 if __name__ == "__main__":
