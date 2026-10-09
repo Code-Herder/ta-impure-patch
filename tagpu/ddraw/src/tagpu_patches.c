@@ -2507,7 +2507,8 @@ static int __cdecl wpn_model_reuse(unsigned int* regs)
    stays stock's. At the send (0x49DB4D) the function's esp is the call's + 0xC, its three
    pushes: the start is at +0x1C and the packet, built at esp+0x1C (0x49DAA2; 0x49DB47 passes
    it), at +0x28, which bounds the frame. Nothing writes the start between the build and the
-   send: 0x49C9C0, 0x49C740 and the emitter 0x4729D0 (its method 0x474D50) only read it, the
+   send: 0x49C9C0, 0x49C740, 0x47F300 (from 0x49C866) and the emitter 0x4729D0 (its method
+   0x474D50) only read it, the
    network block writes from esp+0x1C up, and the extra weapons' splice at 0x49DAD5 writes
    registers and g_diag only (DISASSEMBLED). */
 static int __cdecl wpn_tx_fired(unsigned int which, unsigned int* regs)

@@ -224,10 +224,14 @@ class Check:
         cancellation, however many ticks pass between them."""
         self.call("order", "guard", "unit", self.units[target], "--unit", self.units[kind],
                   "--expect", kind, "--expect-target", target)
+        self.stepped(kind, target, f"{kind}'s Guard of {target} took no first step")
+
+    def stepped(self, kind, target, message):
+        """Return once `kind` holds a Guard of `target` past its first step (state +5 not 0): the
+        point from which its compared fields are fixed (guard)."""
         guarded = self.address(target)
         self.until(lambda: any(struct.unpack_from("<I", b, 0x16)[0] == guarded and b[5]
-                               for b in self.chain(kind)),
-                   f"{kind}'s Guard of {target} took no first step")
+                               for b in self.chain(kind)), message)
 
 
 def mex(c, classic=False):
@@ -336,7 +340,10 @@ def upgrade(c, shift=False):
         def guarded():
             h = c.orders(helper)
             return h if any(o["target"] == c.address("ARMACK") for o in h) else None
-        h = c.until(guarded, f"{helper} received no assist order")
+        c.until(guarded, f"{helper} received no assist order")
+        # a helper's Guard is compared later too: read it once its first step has fixed it
+        c.stepped(helper, "ARMACK", f"{helper}'s assist took no first step")
+        h = c.orders(helper)
         assert sum(o["target"] == c.address("ARMACK") for o in h) == 1, f"{helper} did not guard the primary"
     assert c.orders("ARMPW") == combat, "Quick Build changed a selected combat unit's orders"
     c.repeat(x, z)
@@ -446,7 +453,7 @@ def geo_upgrade(c):
     assert orders[reclaim + 1]["type"] == stronger, "geo upgrade lost reclaim/build ordering"
     c.repeat(x, z)
     assert c.orders("CORCK") == orders, "repeat geo upgrade altered its queue"
-    c.until(lambda: any(o["target"] == c.address("CORCK") for o in c.orders("ARMCK")), "geo helper received no persistent guard")
+    c.stepped("ARMCK", "CORCK", "geo helper received no persistent guard past its first step")
     helper = c.orders("ARMCK")
     c.unqueue(x, z)
     assert c.orders("CORCK") == preceding, "geo unqueue did not remove only the reclaim/build pair"

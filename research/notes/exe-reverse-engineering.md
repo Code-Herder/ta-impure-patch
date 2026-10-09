@@ -2373,7 +2373,8 @@ unit's `+0x6A..+0x75` as the start (`0x49DA9F..0x49DAB6`) before sending it at `
 targets `msg+0xD` (`0x49D547..0x49D558`), so on every other peer, and on a replay that plays the
 packet as sent, that sender's projectile starts at the centre and not at the piece.
 
-Nothing writes the piece point between the build and the send: `0x49C9C0` reads it (`0x49CA39..0x49CA47`) and hands it to `0x49C740`, which reads it, and to the emitter `0x4729D0(pos, 9)`
+Nothing writes the piece point between the build and the send: `0x49C9C0` reads it (`0x49CA39..0x49CA47`) and hands it to `0x49C740`, which reads it and passes it on to `0x47F300` (`0x49C85C..0x49C866`), which
+only reads it (`0x47F372`), and to the emitter `0x4729D0(pos, 9)`
 (`0x49CC00`), whose method `0x474D50` (the vtable `0x4FD618`, slot `+0x18`) copies it to its own
 `+0x2C`; their stack writes land in their own argument slots, below the function's `esp`; the
 network block writes from `esp+0x1C` up; Impure's splice at `0x49DAD5` writes registers and
@@ -18221,14 +18222,16 @@ What that rests on:
   target's `+0x108` is below its definition's `+0x1FA` [INFERRED: health against maximum], the
   node made at `0x40652B` and put first by `0x43ACB0` at `0x406532`; and a target whose head
   order's flags `+0x42` carry `0x100000` (`0x40658A`) [INFERRED: an assist of its build],
-  through `0x43ACB0` at `0x40667A`. Otherwise it moves to the target position plus the offset (`0x438930` at
+  through `0x43ACB0` at `0x40667A`; that branch is skipped when the target's head order targets
+  the guarder itself (`0x406597`), which keeps two units guarding each other out of it. Otherwise it moves to the target position plus the offset (`0x438930` at
   `0x4066E0`), waits 30 ticks (`0x439E80`), and returns 2. **No state-1 path writes
   `+0x22..+0x2D` or `+0x36`.**
 - **The dispatch `0x43B87C`** maps a handler's result through the jump table `0x43BAA4`
   (10 entries; above 9 → `0x43BA90`): 0 → state 0 (`0x43B89F`); 1 → state + 1 (`0x43B897`);
   2 and 4 → nothing (`0x43B99F`); 3 → a random wait (`0x43B890` → `0x43B951`); 5 and 8 → unlink and
-  free (`0x43B8A8`); 6 → `0x43B975`; 7 → `0x43BA3D`; 9 → `0x43B8E5`. Follow_Ground never returns 0,
-  so once its first step has run, nothing returns its node to state 0.
+  free (`0x43B8A8`); 6 → `0x43B975`; 7 → `0x43BA3D`; 9 → `0x43B8E5`, which also returns a node with
+  no successor (`+0x4A` null, `0x43B8F8` → `0x43B94B`) to state 0. Follow_Ground returns only 1, 2,
+  3, 5, 7 and 8, never 0 or 9, so once its first step has run, nothing returns its node to state 0.
 
 A Guard of an owned unit that is neither damaged, building nor attacked therefore keeps one node
 whose compared fields (action, target, position, `+0x36`) are fixed from its first step on.
