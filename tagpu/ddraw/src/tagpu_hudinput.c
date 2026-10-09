@@ -182,7 +182,7 @@ static void act(const char* key)
         /* a row's index is the drawn frame's; the replay takes the recorded seat, and refuses one
            it does not hold */
         int seat;
-        if (n < 0 || n >= s_hit.nseat) return;
+        if (n < 0 || n >= s_hit.nseat || s_hit.seat[n] >= TAGPU_PK_HUD_SEATS) return;
         seat = s_hit.seat[n];
         if (IS("sight")) tagpu_replay_sight_request(tagpu_replay_sight() == seat ? -1 : seat);
         else if (!(s_pov >> seat & 1)) toast("Camera was not recorded");
