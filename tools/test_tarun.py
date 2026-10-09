@@ -224,6 +224,11 @@ class Estimate(Base):
                                            gt_target=900, gt_seen=[301, 571, now - 4, now])
         self.assertEqual(tarun.schedule(doc, h, now)[0], 44)
 
+    def test_a_new_fixture_borrows_its_lanes_median_from_the_others(self):
+        doc, h = self.run_with({("a", "L"): [60], ("b", "L"): [100], ("c", "L"): [90]},
+                               [("new", lanes("L"))], {"game": 1})
+        self.assertEqual(tarun.schedule(doc, h, time.time()), (90, False))
+
     def test_a_step_with_no_history_makes_it_a_lower_bound(self):
         doc, h = self.run_with({("battle", "L"): [100]}, [("battle", lanes("L", "P"))],
                                {"game": 1})

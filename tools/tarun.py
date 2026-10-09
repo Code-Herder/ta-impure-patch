@@ -207,9 +207,19 @@ def schedule(doc, history, now):
     free = {p: [] for p, cap in pools.items() if cap}
     finish, todo, unknown, known = {}, [], False, False
 
+    # a step with no history of its own (a new fixture, the first run of a variant) borrows the
+    # median of the same step over the items that have one, each item counted once
+    by_step = {}
+    for (i, step, v), past in history.items():
+        if v == variant and past:
+            by_step.setdefault(step, []).append(statistics.median(past[-KEEP_HISTORY:]))
+
     def expect(item, s):
         past = history.get((item, s["id"], variant))
-        return statistics.median(past[-KEEP_HISTORY:]) if past else None
+        if past:
+            return statistics.median(past[-KEEP_HISTORY:])
+        lent = by_step.get(s["id"])
+        return statistics.median(lent) if lent else None
 
     for item in doc["items"]:
         for s in item["steps"]:

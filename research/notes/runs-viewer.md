@@ -128,8 +128,10 @@ expected time less its elapsed time and, where it has two GameTime readings, the
 takes to its target: history knows a lane's tail after its last GameTime (dumps, collection, the
 exit), the rate knows a lane running slower than it ever has. The steps left are then laid onto
 the run's pools in the tool's queue order, each after the steps it waits for; the estimate is when
-the last one ends. A step with no history counts as zero and the estimate becomes a lower bound
-(`≥`); with nothing known there is none.
+the last one ends. A step with no history of its own (a new fixture, the first run of a variant)
+borrows the median of the same step over the tool's other items in that variant, each item
+counted once; a step with none at all counts as zero and the estimate becomes a lower bound (`≥`);
+with nothing known there is none.
 
 MEASURED 2026-10-09, three runs of `tareplay.py run secondary-orders c2-weapon-keys -j 2` (two
 lanes at once, about two minutes): with the second and third run's history, the estimate read at
@@ -137,6 +139,10 @@ lanes at once, about two minutes): with the second and third run's history, the 
 68, 53 and 38 s actually left. It reads low early by the workers' start-up (each worker creates
 its instance and starts its Xvfb before its first lane, about 20 s here), which is no step, and
 converges as the lanes end.
+
+MEASURED 2026-10-09, the 39-fixture `tareplay.py landing` at `-j 8` on the coverage build: planned
+from scratch with the history its own run left, the estimate is 832 s against the 842 s it took.
+With one fixture's history removed (`battle-los`), its lanes borrow 154 s against its own 199 s.
 
 ## The viewer
 
@@ -168,5 +174,6 @@ liveness is read from `/proc`, as above. Nothing in it writes a file a tool read
 - A lane's GameTime moves only at its pauses and the harness's own peeks; between them the
   estimate counts down.
 - The estimate leaves out the workers' start-up, and `-j` is not part of the variant: a run at
-  another `-j` uses the same history.
+  another `-j` uses the same history. A borrowed lane time is the median over fixtures whose
+  lanes differ in length (an `L` lane ran 58 to 141 s on the coverage build).
 - Another session's run is shown only while it runs.
