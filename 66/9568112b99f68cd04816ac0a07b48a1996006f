@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high range=main..66956811 findings=5 acted=4 rejected=0 deferred=1 date=2026-10-09 (two reviewers; 2 HIGH malformed-input overflows C+Python, 3 LOW; fixed in 87bd9527; the crafted-extent seek stall recorded as open in demo-recorder-size.md)
