@@ -1571,6 +1571,34 @@ def file_segments(path, decode=False):
     return segments(bl, offsets), stop
 
 
+def seek_start(path, timeline, T, lead):
+    """Where the DLL's reader builds a seek to T of `timeline` from, as recr_seek
+    (tagpu_recreader.c) chooses it from the file's index: (S, from_snapshot). The last snapshot of
+    the chain's part -- each segment's to its child's fork_at - 1 -- with S + lead < T, else the
+    first iteration of the chain's first segment whose part reaches T - lead. Unreadable when T is
+    outside the chain, as the reader refuses it."""
+    ch = chain(file_segments(path)[0], timeline)
+
+    def cover_end(i):
+        return ch[i + 1]["fork_at"] - 1 if i + 1 < len(ch) else ch[i]["last"]
+    hold = next((i for i, s in enumerate(ch) if s["first"] is not None and
+                 s["first"] <= T <= cover_end(i)), None)
+    if hold is None:
+        raise Unreadable(f"GameTime {T} is outside timeline {timeline}'s chain")
+    snap = None
+    for i in range(hold + 1):
+        for kind, _first, last, _payload in ch[i]["blocks"]:
+            if kind == RB_SNAPSHOT and last <= cover_end(i) and last + lead < T:
+                snap = last
+    if snap is not None:
+        return snap, True
+    lo = T - lead if T > lead else 0
+    i = 0
+    while i < hold and cover_end(i) < lo:
+        i += 1
+    return ch[i]["first"], False
+
+
 def cmd_segments(path):
     """One line per segment, then the SHA-256 of the original's bytes: what a fork's writer must
     leave as it was."""

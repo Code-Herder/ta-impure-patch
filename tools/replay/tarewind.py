@@ -86,12 +86,15 @@ def run(t, w, fx, out):
         return t.peek(w, f"0x{objective + 0x88:X}:4")
 
     def pause_probe(label):
+        """The Pause key while rewind owns the level: `tacli keys` returns once the engine has
+        consumed it, and of two peeks after it the second answers at a later flip than the first,
+        so a frame's pause test has run between the key and that peek."""
         g = w.gametime()
-        rc, text = t.tacli("keys", w.name, "pause")
+        rc, text = t.tacli("keys", w.name, "pause", timeout=t.INPUT_TIMEOUT)
         if rc:
             raise t.CouldNotRun(text)
-        t.nap(1)
-        check(label, w.gametime() == g, f"Pause key at GameTime {g}")
+        g1, g2 = w.gametime(), w.gametime()
+        check(label, g1 == g2 == g, f"Pause key at GameTime {g}: {g1}, then {g2}")
 
     def judge_span(label, ticks):
         """From the GameTime the level is held at, `ticks` of play watched -- the window, its
@@ -121,7 +124,7 @@ def run(t, w, fx, out):
 
         until(G + t.JUDGE_TICKS, poll)
         n = len(log.lines)
-        got = log.wait(r"^units: alive=(\d+)", 30, n)
+        got = log.wait(r"^units: alive=(\d+)", t.ACK_S, n)
         alive = int(re.search(r"alive=(\d+)", got).group(1)) if got else None
         until(G + ticks, poll)
         poll()
@@ -140,6 +143,7 @@ def run(t, w, fx, out):
                                fix.get("unit_limit", t.UNIT_LIMIT), timeout=t.LAUNCH_TIMEOUT)
             if rc:
                 raise t.CouldNotRun(text)
+            t.held_start(w, log)
             # the holds G0 and G1 are 1 (mod 30), the radar pass's step, as every dump of the
             # harness is (O14): the dumps below are G0 + 30, G1 + 30 and G1 + 600
             until(601)
@@ -174,15 +178,16 @@ def run(t, w, fx, out):
             T1 = (G1 - 601) // 30 * 30 + 1
             t.arm_dump(w, log, "b", G1 + 30)
             t.arm_dump(w, log, "c", G1 + 600)
-            converted = command("seek", T1, dump="r")
+            command("seek", T1, dump="r")
             pause_probe("past pause guard")
             command("seek", T1 + 300)
             returned = command("now", dump="post")
             check("return clock", returned["dump_at"] == G1, f"GameTime {G1}")
             check("return objective", objective_armed() == 0, "saved disabled switch retained")
             arm_ai(t, w, log, "now", G1 + 1, G1 + 1801)
-            # the return to now puts back the pause bit the open saved, the hold's (rw_finish)
-            log.at = w.gametime()
+            # the return to now puts back the pause bit the open saved, the hold's (rw_finish),
+            # and the hold keeper keeps it
+            t.adopt_held(w, log, "the return to now")
             judge_span("now judge", JUDGE_SPAN)
             until(G1 + 1801)
             until(max(3000, G1 + 1800))
@@ -190,34 +195,25 @@ def run(t, w, fx, out):
             G2 = opened["dump_at"]
             T2 = (G2 - 601) // 30 * 30 + 1
             command("seek", T2)
-            forked = command("fork", dump="fork")
+            command("fork", dump="fork")
             check("fork objective", objective_armed() == 1, "takeover arms objectives")
             # the fork puts back the pause bit the open saved, the hold's (tagpu_replay.c,
-            # rw_finish): the AI window and the judge start from the held level
-            if t.peek(w, t.PAUSE_WORD) & 1:
-                log.held, log.pending, log.at = True, None, w.gametime()
-            else:
-                log.held = False
-                until(w.gametime() + t.LATE[0])
+            # rw_finish), and the hold keeper keeps it: the AI window and the judge start from
+            # the held level
+            t.adopt_held(w, log, "the fork")
             AF = log.at + 1
             arm_ai(t, w, log, "fork", AF, AF + 1800)
             judge_span("fork judge", JUDGE_SPAN)
             until(AF + 1800)
-            for label, data in (("conversion", converted), ("now", returned), ("fork", forked)):
-                match = re.search(r"in (\d+) ms", data["detail"])
-                ms = int(match[1]) if match else None
-                check(label + " time", ms is not None and (label == "conversion" or ms < 2000),
-                      f"{ms} ms")
             metadata.update(G0=G0, G1=G1, G2=G2, T1=T1, T2=T2, ai_fork=AF)
+            works = rewind_works(t, log.lines)
             if fx["cover"]:
                 t.cover_ask(w, log, "rewind-L")
             log.read()
             start = len(log.lines)
             t.step(w, "apply", "replay-end.json")
             t.resume(w, log)
-            log.held = False
-            if not log.wait(r"recorder: writer: .* closed", 120, start):
-                raise t.CouldNotRun("rewind: fork writer did not close")
+            log.wait_running(r"recorder: writer: .* closed", start)
             w.collect(live, recordings=True)
             w.stop()
             records = sorted(live.glob("*.imprec"))
@@ -231,6 +227,7 @@ def run(t, w, fx, out):
             for tl in (0, 1):
                 compare(f"check timeline {tl}", "check", rec, "--timeline", tl)
             compare("fork", "compare-fork", rec, 1)
+            results.later(work_checks, t, works, rec, fix["takeover"].get("cpu_ms"))
             segs, stop = t.tarec.file_segments(rec)
             check("segments", not stop and len(segs) == 2 and segs[0]["end_reason"] == 13 and
                   segs[0]["last"] == G2 and segs[1]["parent"] == 0 and segs[1]["fork_at"] == T2,
@@ -249,7 +246,7 @@ def run(t, w, fx, out):
             log.read()
             start = len(log.lines)
             w.trigger(f"seek-frame {T1} dump q")
-            if not log.wait(r"recorder: frame dump q at GameTime", 60, start):
+            if not log.wait(r"recorder: frame dump q at GameTime", t.ACK_S, start):
                 raise t.Failed("fresh seek: no atomic frame dump")
             if fx["cover"]:
                 t.cover_ask(w, log, "rewind-Q")
@@ -269,6 +266,46 @@ def run(t, w, fx, out):
     finally:
         (out / "rewind.json").write_text(json.dumps({**metadata, "results": results.settled()},
                                                     indent=2))
+
+
+def rewind_works(t, lines):
+    """The work lines (tareplay.work_lines) of the rewind's seeks, by what each was: the first
+    conversion's (`rewind seek` from the live level), the return to now's and the fork's -- each
+    the last work line before the line that ends it."""
+    works, last = {}, None
+    for ln in lines:
+        got = t.work_lines(ln)
+        if got:
+            last = got[0]
+        elif last and re.search(r"rewind: seek \d+ complete", ln) and "conversion" not in works:
+            works["conversion"] = last
+        elif last and "rewind: returned to now at GameTime" in ln:
+            works["now"] = last
+        elif last and "rewind: forked at GameTime" in ln:
+            works["fork"] = last
+    return works
+
+
+def work_checks(t, works, rec, cpu_ms):
+    """The return to now's and the fork's work, W1 to W3 (tareplay.work_verdict) against the
+    recording's original timeline, which both read: the return to now to G-1 of the live file,
+    the fork to its T. The conversion's CPU time is reported only."""
+    res = []
+    for label in ("now", "fork"):
+        w = works.get(label)
+        if w is None:
+            res.append(("rewind " + label + " work", t.UNRUN, "no work line"))
+            continue
+        try:
+            bad = t.work_verdict(w, rec, 0, True, cpu_ms)
+        except t.tarec.Unreadable as e:
+            res.append(("rewind " + label + " work", t.UNRUN, str(e)))
+            continue
+        res.append(outcome(t, label + " work", not bad, "; ".join(bad) or t.work_summary(w)))
+    w = works.get("conversion")
+    res.append(("rewind conversion work", t.PASS if w else t.UNRUN,
+                f"cpu {w['C']} ms ({w['W']} ms wall), reported only" if w else "no work line"))
+    return res
 
 
 def outcome(t, label, ok, detail):

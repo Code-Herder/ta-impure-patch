@@ -204,6 +204,45 @@ class TurboLanes(unittest.TestCase):
                                  "resource-geo-upgrade": "LPRKFXU", "wpn-badtgt": "LPRKFXU"})
         self.assertEqual(tareplay.turbo_lane(fx["c3-veterancy"], "P", 0), 0)
 
+    def test_the_held_lanes_are_the_turbo_lanes_whatever_k(self):
+        fx = tareplay.fixtures()
+        for k in (0, 1):
+            self.assertEqual("".join(p for p in "LPRQKFWXU" if tareplay.held_lane(fx["battle"], p)),
+                             "LPRKFXU")
+            self.assertTrue(all(tareplay.turbo_lane(fx["battle"], p, k) in (0, k)
+                                for p in "LPRQKFWXU"))
+        self.assertFalse(tareplay.held_lane({"cost": True}, "L"))
+
+
+class RunTo(unittest.TestCase):
+    """run_to on a held level: a step whose GameTime a script ran past could not run, named; a
+    level not held is refused before anything is armed."""
+
+    def log(self, at, held=True):
+        log = Mock()
+        log.held, log.at, log.pending = held, at, None
+        return log
+
+    def test_a_passed_step_is_named(self):
+        with patch.object(tareplay, "hold_at") as hold_at:
+            with self.assertRaisesRegex(tareplay.CouldNotRun, r"`keys` at GameTime 120 had "
+                                                              r"passed: the level is held at 300"):
+                tareplay.run_to(Mock(), self.log(300), 900, [(120, "keys", ["a"])])
+            hold_at.assert_not_called()
+
+    def test_an_unheld_level_is_refused(self):
+        with self.assertRaisesRegex(tareplay.CouldNotRun, "not held"):
+            tareplay.run_to(Mock(), self.log(1, held=False), 900, [])
+
+    def test_steps_at_the_held_tick_run_without_moving_it(self):
+        ran = []
+        with patch.object(tareplay, "step", side_effect=lambda w, kind, arg: ran.append(arg)), \
+             patch.object(tareplay, "hold_at") as hold_at:
+            self.assertEqual(tareplay.run_to(Mock(), self.log(1), 1, [(1, "apply", "a.json"),
+                                                                      (1, "keys", ["b"])]), 1)
+        self.assertEqual(ran, ["a.json", ["b"]])
+        hold_at.assert_not_called()
+
 
 class FailedWorkerCleanup(unittest.TestCase):
     def test_failed_game_is_stopped_even_if_artifact_collection_fails(self):
@@ -559,7 +598,8 @@ class HeaderCopy(unittest.TestCase):
 
 
 class TakeoverRoster(unittest.TestCase):
-    """A cached loader roster and a partial new dump cannot supply the takeover's order."""
+    """A cached loader roster, one from before the judge's hold and a partial new dump cannot
+    supply the takeover's order."""
 
     class Log:
         def __init__(self, lines):
@@ -569,25 +609,25 @@ class TakeoverRoster(unittest.TestCase):
             return next((line for line in self.lines[start:] if re.search(rx, line)), None)
 
     old = "  u001 armck own=0 idx=99 world=(1,2,3) screen=(4,5) nano=0.00\r"
-    mark = "replay: battle: taken over at GameTime 1441 as player 0, difficulty 0\r"
+    mark = "pause: paused at GameTime 1681\r"
     new = "  u001 armck own=0 idx=344 world=(4260,1170,85) screen=(4388,1159) nano=0.00\r"
     head = "units: alive=1 onscreen=0 eye=(0,0) me=0\r"
 
     def test_only_the_roster_after_the_acknowledgement_is_used(self):
         log = self.Log([self.old, self.head, self.mark, self.head, self.new, self.head])
-        self.assertEqual(tareplay.takeover_roster(log, 1441, 0),
+        self.assertEqual(tareplay.takeover_roster(log, 1681, 0),
                          [{"type": "armck", "owner": 0, "engine_index": 344,
                            "world": [4260, 1170]}])
 
     def test_the_old_roster_does_not_complete_the_wait(self):
         with self.assertRaisesRegex(tareplay.CouldNotRun, "no roster after takeover"):
             tareplay.takeover_roster(self.Log([self.old, self.head, self.mark, self.head]),
-                                     1441, 0)
+                                     1681, 0)
 
     def test_a_partial_dump_does_not_complete_the_wait(self):
         with self.assertRaisesRegex(tareplay.CouldNotRun, "roster is incomplete"):
             tareplay.takeover_roster(self.Log([self.old, self.head, self.mark, self.new]),
-                                     1441, 0)
+                                     1681, 0)
 
 
 class Landing(unittest.TestCase):
@@ -964,6 +1004,98 @@ class Segments(unittest.TestCase):
                 self.segs(path)
 
 
+class SeekStart(unittest.TestCase):
+    """tarec.seek_start: where the DLL's reader builds a seek from (recr_seek), from the file's
+    index alone."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def file(self, *parts):
+        p = Path(self.tmp.name) / "r.imprec"
+        p.write_bytes(tarec.REC_MAGIC + b"".join(parts))
+        return str(p)
+
+    def test_the_last_snapshot_more_than_the_lead_before(self):
+        path = self.file(header(), stream(1, 10, unit=1), block(tarec.RB_SNAPSHOT, 10, 10, b"s"),
+                         stream(11, 20, opens=False), block(tarec.RB_SNAPSHOT, 20, 20, b"s"),
+                         stream(21, 30, opens=False), end_block(30))
+        self.assertEqual(tarec.seek_start(path, 0, 25, 3), (20, True))
+        self.assertEqual(tarec.seek_start(path, 0, 23, 3), (10, True))     # 20 + 3 is not < 23
+        self.assertEqual(tarec.seek_start(path, 0, 13, 3), (1, False))     # 10 + 3 is not < 13
+        with self.assertRaises(tarec.Unreadable):
+            tarec.seek_start(path, 0, 31, 3)
+
+    def test_a_chain_takes_only_each_segments_part(self):
+        fork = (header((1, 0, 15)), stream(15, 30, unit=2), block(tarec.RB_SNAPSHOT, 25, 25, b"s"),
+                stream(26, 30, opens=False), end_block(30))
+        path = self.file(header(), stream(1, 10, unit=1), block(tarec.RB_SNAPSHOT, 10, 10, b"s"),
+                         stream(11, 20, opens=False), block(tarec.RB_SNAPSHOT, 20, 20, b"s"),
+                         stream(21, 30, opens=False), end_block(30), *fork)
+        # the parent's snapshot at 20 lies past the fork: timeline 1 never reads it
+        self.assertEqual(tarec.seek_start(path, 1, 24, 3), (10, True))
+        self.assertEqual(tarec.seek_start(path, 1, 29, 3), (25, True))
+        self.assertEqual(tarec.seek_start(path, 0, 24, 3), (20, True))
+        # no snapshot before: the first segment of the chain whose part reaches T - lead
+        self.assertEqual(tarec.seek_start(path, 1, 13, 3), (1, False))
+        path = self.file(header(), stream(1, 20, unit=1), end_block(20), *fork)
+        self.assertEqual(tarec.seek_start(path, 1, 18, 2), (15, False))
+        self.assertEqual(tarec.seek_start(path, 1, 16, 2), (1, False))
+
+
+class SeekWork(unittest.TestCase):
+    """The seek's work line (tagpu_replay.c, sk_work_log) parsed and judged: W1 against the file,
+    W2 by its counts, W3 against a CPU bound."""
+
+    LINE = ("replay: battle: the seek to 225's work: {I} iterations read to GameTime 225 from "
+            "the snapshot at GameTime {S}; the image: 10 units live, {M} made, {F} refused, 2 "
+            "killed, {A} left alive; cpu {C} ms (user 1100, kernel 0) of the game thread, 1104 ms "
+            "wall")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "r.imprec"
+        self.path.write_bytes(tarec.REC_MAGIC + header() + stream(1, 10, unit=1) +
+                              block(tarec.RB_SNAPSHOT, 10, 10, b"s") +
+                              stream(11, 300, opens=False) + end_block(300))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def work(self, I=215, S=10, M=10, F=0, A=0, C=1100):
+        got = tareplay.work_lines("x\n" + self.LINE.format(I=I, S=S, M=M, F=F, A=A, C=C) + "\r\n")
+        self.assertEqual(len(got), 1)
+        return got[0]
+
+    def test_a_good_line(self):
+        w = self.work()
+        self.assertEqual((w["T"], w["R"], w["S"], w["kind"], w["C"], w["W"]),
+                         (225, 225, 10, "the snapshot", 1100, 1104))
+        self.assertEqual(tareplay.work_verdict(w, str(self.path), 0, True, 4000), [])
+
+    def test_each_rule(self):
+        verdict = lambda w, **kw: tareplay.work_verdict(w, str(self.path), 0, **kw)
+        self.assertRegex(verdict(self.work(S=1))[0], "W1: built from the snapshot at 1")
+        self.assertRegex(verdict(self.work(I=217))[0], "W1: 217 iterations read from 10 to 225")
+        self.assertRegex(verdict(self.work(M=9))[0], "W2: 9 made and 0 refused of 10")
+        self.assertEqual(verdict(self.work(M=9, F=1)), [])
+        self.assertRegex(verdict(self.work(M=9, F=1), takeover=True)[0], "W2: 1 creates refused")
+        self.assertRegex(verdict(self.work(A=3))[0], "W2: 3 units left alive")
+        self.assertRegex(verdict(self.work(C=4001), cpu_ms=4000)[0], "W3: 4001 ms")
+
+    def test_a_log_with_no_line_could_not_run(self):
+        log = Path(self.tmp.name) / "tagpu.log"
+        log.write_text("nothing\n")
+        self.assertEqual(tareplay.work_check("R", log, str(self.path), 0, False)[0][1],
+                         tareplay.UNRUN)
+        log.write_text(self.LINE.format(I=215, S=10, M=10, F=0, A=0, C=5) + "\n")
+        self.assertEqual(tareplay.work_check("R", log, str(self.path), 0, False)[0][1],
+                         tareplay.PASS)
+
+
 class DecodeCache(unittest.TestCase):
     """reccache.py under tarec.blocks(): a hit returns what the walk returned without decoding; a
     changed file byte or decoder version misses, and an entry that is cut short, corrupt or not
@@ -1277,7 +1409,7 @@ class TakeoverFixtures(unittest.TestCase):
         took = {n: f["takeover"] for n, f in fixes.items() if "takeover" in f}
         self.assertIn("battle", took)
         self.assertIn("takeover-end", took)
-        known = {"player", "order", "switches", "type", "dump", "ms", "checks"}
+        known = {"player", "order", "switches", "type", "dump", "cpu_ms", "checks"}
         for name, t in took.items():
             self.assertLessEqual(set(t), known, name)
             self.assertTrue(t["player"] == "controlled" or isinstance(t["player"], int), name)
