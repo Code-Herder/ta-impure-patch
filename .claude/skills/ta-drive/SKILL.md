@@ -67,7 +67,8 @@ builtin ddraw and fails with the same dialog, so it proves nothing.
 
 **TA's registry key is the instance's own file**, `gamedir/tacli-state/registry.txt`, seeded
 from the template's `user.reg` (`gamespeed` 10). **Tick-based replay tests use internal 20 (2x) as standard;
-timing measurements use 10.** `tacli registry <i> gamespeed=20` sets the stopped instance's store.
+timing measurements use 10.** The replay harness also runs its lanes at one tick a frame once armed
+(`tagpu_turbo.on`, `references/modules.md`, the demo recorder). `tacli registry <i> gamespeed=20` sets the stopped instance's store.
 The DLL serves it only with `-xtacli-test` (tacli adds it; hand-run Wine is refused). `wine reg`
 reaches the shared prefix hive; a `--keep-dll` build without the store runs on it, with a warning.
 

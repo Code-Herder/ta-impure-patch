@@ -904,7 +904,12 @@ block that reads to its last complete block.
   so their frame checks cannot be skipped by faster simulation progression.
   Use normal speed for timing, network latency and bandwidth measurements.
   The same option applies to `measure`, `landing`,
-  `broad`, `takeover`, `forks` and `rewind`. Each fixture is
+  `broad`, `takeover`, `forks` and `rewind`, and so does `--turbo K` (default 1, 0 for none): once
+  a lane's dumps are armed, L, P, R, F, K, X and U run K ticks a frame (`tagpu_turbo.on`, below),
+  never Q, W or a cost fixture. Every lane acts at GameTimes: it holds the level at each step's,
+  the twin's and the end's tick (`pause at <T>`), acts on the held level and resumes it; a `run`
+  step's script runs with the turbo off at the fixture's speed. Every game gets the test render
+  profile: a 20 fps present cap, `ss=1`, `shadowres=512` and the Classic++ look keys off. Each fixture is
   recorded live, played on puppets, played again with three round trips and sought from a fresh
   process, each on its own Xvfb; the live game also takes the null twin (paused, the camera, the
   wheel, the cursor and the in-game menu moved, two endpoints and intermediate paused
@@ -933,8 +938,8 @@ block that reads to its last complete block.
   `takeover` entry also runs K (its recording taken over at T2, ordered, dumped and ended) and F
   (K's file played from T−300 across the fork); `tareplay.py takeover FIXTURE` runs the live game,
   K and F alone, with the checks `judge`, `line`, `orders`, `ai`, `fork` and `victory` its entry
-  names. The `ai` check observes 1800 future ticks, armed under an acknowledged engine
-  pause after takeover. Every AI seat must issue fresh planner orders that reach normal
+  names. K judges the units drawn 240 ticks after T, and the `ai` check observes 1800 future
+  ticks, armed on the level held after the takeover. Every AI seat must issue fresh planner orders that reach normal
   dispatch, and at least 25% of AI mobile units must move more than 8 wu. Construction
   is reported only; K waits for the observation to complete before ending the game.
 - **Native fixture input** uses a `keys` step with a list of `tacli keys` tokens.
@@ -975,6 +980,16 @@ block that reads to its last complete block.
   `recorder: dump <name> armed for GameTime <T>` (the game deletes the file when it reads it), then
   the next; up to 8 at once. `… refused: the level is at GameTime <t>` means T has passed, and
   `… not taken: …` that a forward seek or the level's end passed it.
+- **Ticks on demand** (the trigger, any level in play outside a rewind): `pause at <T>` pauses the
+  level at the frame visit after step T, the batch bounded to end there
+  (`pause: armed for GameTime <T>`, then `pause: paused at GameTime <T>`; a passed T answers
+  `pause: at <T> refused: … the level is at GameTime <t>`), and `resume` clears the pause bit as
+  the Pause key does, without its packet. In a launch with `tagpu_turbo.on` (its text k, 1..5,
+  empty for 1; a tacli test launch only, `turbo: k=<k> at 0x49692D` at attach), `turbo on` runs k
+  ticks every frame from then on (`turbo: on at GameTime <g> (k=<k>)`) and `turbo off` gives the
+  game its own pacing back; a frame runs no tick while the recorder's ring is more than half full.
+  The level's end logs `turbo: from GameTime … ticks in … ms of play (<n> a second) … held for the
+  writer`. `tagpu_presentcap.on` (1..60) caps a test launch's presents a second.
 - **Play one**: `tacli replay play <i> FILE [--perspective RECORD]` launches the instance on the
   recording's map and seats and starts the skirmish; it exits 0 on `replay: playing <name>`.
 - **Seek**: `tacli replay seek <i> T` moves the instance's running playback to GameTime T, forward

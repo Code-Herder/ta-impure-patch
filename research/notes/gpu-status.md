@@ -3372,7 +3372,12 @@ byte-matched too. On a puppet with round trips armed, it bounds the due count by
 the nearest upcoming T−1 before `0x495490` caches that count in EBX. This makes
 the required frame boundary independent of frame timing. It preserves registers
 and flags and changes no iteration's step size. An unavailable guard refuses
-round trips; the frame dump and playback sites remain independent.
+round trips; the frame dump and playback sites remain independent. The same
+observer carries a test launch's pacing: after `turbo on` (`tagpu_turbo.on`'s k)
+it sets the count to k, or to 0 while the recorder's ring is more than half
+full, and an armed `pause at <T>` bounds it to end at T; the frame visit then
+sets the pause bit (*The scheduler, the clock and the test pacing* in the
+engine map). An unavailable guard refuses the turbo and the pause too.
 
 The harness's AI activity observation brackets `0x408C40`, stops attribution
 at the shared targeting phase `0x4089A0`, samples constructors at `0x43A0C0`,
@@ -3452,6 +3457,10 @@ and on the loader thread at the allocator ownership boundary and the level init'
 - armed round trips on a puppet: the scheduler's due-tick count at
   `main+0x38A3B`, validated within 0..5 and only reduced to the next T−1
   boundary. This pacing word is already `leave` in `replay-globals.tsv`;
+
+- a test launch's turbo and `pause at <T>`: the same count set to k (1..5) or
+  0, then reduced to end at T; the pause bit `main+0x38A51` bit 0 set at the
+  frame visit after step T and cleared by `resume`;
 
 - the level init's call, on a puppet level: record 10's buffers through `0x464700`; when they
   cannot be made, `main+0x2A42` and `main+0x2A43` = the lowest recorded seat;

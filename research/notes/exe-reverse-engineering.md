@@ -3860,7 +3860,9 @@ the objective's draw `0x490385` is never reached in this exe; the skirmish start
 the packet loss are network-only. Every site a puppet host does recompute is presentation (feature
 smoke, particles, lightning, replies, elimination texts, music), the viewer's camera shake
 `0x41C6F0`, or the front end. A new simulation use of `0x4E4870` would diverge silently: neither
-image holds its state.
+image holds its state. A live host's meteor shower is one already: its strike points share the
+game thread's stream with the draw path, so a takeover cannot reproduce them
+([*The scheduler, the clock and the test pacing*](#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08)).
 
 **Values in the records that look like addresses** (MEASURED on the first run's last live dumps of
 four fixtures; the DLL loaded at `0x76CF0000`, `SizeOfImage` `0x4949000`): 261 of 169,140 plain
@@ -14699,11 +14701,12 @@ watcher (`0x496550`, `0x4965AA`). Writers of `+0x38A4B`/`+0x38A4D`: the Options 
 (`0x45C143`, `0x45C6F3`, `0x45CA6D`, `0x45CD67`, `0x45EBE4`, `0x45ECA8`, `0x45FEA6`),
 `0x490DC0`, `0x490E9B`, the level setups `0x4912C9` and `0x49199F` (a reset to 10 in network mode
 3 only, so a skirmish keeps its speed into the next level), the start-up load `0x430509..0x43052B`
-(the registry's `gamespeed` into both) and the scheduler. The settings save `0x430F00` writes the
+(the registry's `gamespeed` into both, unclamped) and the scheduler. The settings save `0x430F00` writes the
 ceiling to `gamespeed` (`0x43136B`); the Options screen's OK reaches it at `0x45FD5F`. MEASURED on a
 playback, GameTime a second over 5 s with the ceiling and the live speed written together: 5 ->
-15.1, 10 -> 30.5, 20 -> 59.1, 40 -> 118.9, 80 -> **150.5**, the live speed still 80 after the 5 s
-(the frame, not the speed, bounds 8x on the reference setup).
+15.1, 10 -> 30.5, 20 -> 59.1, 40 -> 118.9, 80 -> **150.5**, the live speed still 80 after the 5 s:
+the clamp, not the speed, bounds 8x, at five ticks per step of the 30 Hz clock
+([*The scheduler, the clock and the test pacing*](#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08)).
 
 **Testing at higher speed.** Retail `SetGameSpeed` forms its displayed offset as
 `speed-10` at `0x490E21` and selects the positive sign at `0x490E57..0x490E67`;
@@ -14807,6 +14810,70 @@ then sends packet `0x19` through `0x451DF0`, with no watcher test. The level set
 every recorded player image. MEASURED: a skirmish whose player's commander self-destructs with
 "commander dies: game ends" gives one `+0x106` rise and one `+0x144` fall to 0 for seat 0, both at
 GameTime 2779.
+
+### The scheduler, the clock and the test pacing [DISASSEMBLED + MEASURED 2026-10-08]
+
+Read from `pristine/TotalA.exe.pristine` (`objdump -d`) for the replay harness's turbo
+([*Test speed*](tadr-port/demo-recorder-completeness.md#the-replay-test-harness)); the speed fields
+and the setter are in *The speeds* above, the step's iteration in
+[*tick boundaries*](#the-demo-recorders-tick-boundaries-the-sim-step-0x495490-and-its-callers-disassembled-2026-10-01).
+
+- **The clock `0x4B6340`** is GetTickCount (IAT `0x4FC0DC`) × `[*(0x51FBD0)+0xE8]` / 1000, integer
+  (`0x4B6340..0x4B6361`); `+0xE8` reads 30, so it steps in whole thirtieths of a second. Its callers
+  outside the scheduler include the main menu's idle timer `0x426BCA`, the GUI animation
+  `0x478992..0x478BEB`, the player records' join and receive stamps and the hover wave `0x48A66A`
+  (*The unit and player records, byte by byte*).
+- **The scheduler `0x495230`** (called at `0x496928` in a skirmish, `0x4967F3` in a network game):
+  elapsed = clock − the base `main+0x38A37`, kept at `+0x38A3F`; due = elapsed × the live speed
+  `+0x38A4D` × 0.1 (`0x4FDA28`), × the lag scale when it applies, + the fraction `+0x38A43`; the
+  floor goes to **DeltaTime** `main+0x38A3B` and the rest back to the fraction
+  (`0x495236..0x4953B9`). DeltaTime is 0 while the pause bit `+0x38A51` bit 0 is set
+  (`0x4953D9..0x4953E2`). **The clamp `0x4953F5`**: a due above 5 becomes 5, the excess dropped,
+  and the throttle counter `+0x38A4F` takes one (past 10 the live speed drops by one); an unclamped
+  frame gives one back (past −100 the live speed rises by one, up to the ceiling `+0x38A4B`)
+  (`0x4953EF..0x49547B`). The lag scale applies only when the oldest type-3 record lags 900 ticks
+  or more, and sets `+0x38A51` bit 1 (`0x49531F..0x49535C`).
+- **So the rate is the clock's, not the frame's.** A frame that sees no new clock step runs no
+  tick; one that sees a step runs speed × 0.1 ticks of it, at most five. At speed 20 that is two
+  ticks every thirtieth of a second however many frames run in between: MEASURED 60.1 ticks/s with
+  frames at ~180/s in play. Above speed 50 the clamp, not the speed, is the bound: five ticks per
+  clock step, 150 a second at any frame rate of 30 or more — the 150.5 MEASURED at speed 80 in
+  *The speeds*.
+- **DeltaTime's readers**: the step `0x495490` (`0x495497`, which caches it for the call), the
+  frame function (`0x4967FD`, and the count test `0x496932` before the step call `0x49693E`), the
+  scheduler, a debug `sprintf` `0x46AA09` and the load wait `0x498175`. The speed fields' readers
+  are the Options screen, the save `0x43136B`, the HUD `0x468C0B`, the setter `0x490E16`, the keys
+  `0x496559` and the scheduler — no tick code (a displacement scan of `.text`). The registry's
+  `gamespeed` (`0x504550`) is copied into the ceiling and the live speed **unclamped** at start-up
+  (`0x430509`, `0x43052B`).
+- **The batch is part of the result.** The step runs its iterations DeltaTime times and then its
+  tail once a call — `0x428BD0`, `0x428BE0`, `0x428BF0`, the chat expiry `0x463EF0`, the temporary
+  sight records' expiry `0x482130` (`0x495674..0x495688`) — so a sight record outlives its deadline
+  by up to one batch, and where the batches fall changes what units see. MEASURED (tenseat taken
+  over at 931 as player 0, each takeover dumped at 2731, compared field by field): of two pairs of
+  takeovers at speed 20, whose batches are twos with an odd one after a slow frame, one pair parted
+  in 1,328 unit fields; two pairs at a fixed batch (k = 2, then k = 1) differed only in the meteor
+  shower's two points (next bullet); speed 20 against k = 2 differed in 1,272 and 1,383 unit fields.
+- **The meteor shower and the CRT `rand`.** The meteor tick `0x437DE0` draws the CRT's `rand`
+  `0x4E4870` at six sites (`0x437E37..0x437FB5`) for the strike points `0x512334` and `0x512320`. On
+  the game thread the draw path draws from the same per-thread stream every frame (static call
+  graph: `0x49BE60`, `0x420B00 → 0x421550 → 0x472AB0`, `0x418310`), so on a live host the strike
+  points depend on how many frames were drawn between ticks, and a takeover, which does not restore
+  that stream (it is in neither image, *The two random streams*), cannot reproduce them. A
+  puppet host never runs the meteor tick: the shower's state is recorded.
+- **The test pacing: the observer at `0x49692D`** (tagpu_replay.c, `rt_pace_init`), between the
+  scheduler's call `0x496928` and the count test `0x496932`, on the skirmish branch only — past the
+  front-end test `0x496918` and the pause test `0x496920`, so never in a network game, a menu or a
+  paused frame. In order: the turbo writes k into DeltaTime, or 0 while the recorder's ring holds
+  more than half its 16 MiB (the count test then skips the step, tail included, so every batch
+  stays k ticks), and leaves a frame with the lag bit set at the stock count; a puppet's armed
+  round trip lowers the count to stop at T−1; an armed `pause at <T>` lowers it to stop at T. The
+  pause itself is set at the frame visit `0x4969CD` after step T and cleared by `resume`, as the
+  Pause key's toggle of bit 0 (`0x4960AA..0x4960BC`) does without its network packet. MEASURED at
+  k = 1: a light fixture's live lane ~1,500 ticks a second, a puppet's P and R 200–385, the battle's
+  lanes 64 (twelve games at once) to 230 (one), against ~60 at speed 20. Without the ring's
+  back-pressure the stock-limits battle ran 314 ticks a second and filled the ring by GameTime
+  1003: it writes ~56 KB of records a tick.
 
 ### The pump's entry, the pointer it reads, and what a list scroll is [DISASSEMBLED 2026-09-26]
 

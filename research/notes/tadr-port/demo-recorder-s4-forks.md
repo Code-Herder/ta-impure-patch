@@ -170,7 +170,7 @@ remain separate work; these file rules do not close them.
 
 ### Harness ordering found by the landing tier
 
-The takeover's four-second judge observation does not establish that the roster
+The takeover's judge observation does not establish that the roster
 belongs to the takeover. `tagpu_packet_pub.c:roster_log` emits full dumps every
 five seconds; the first battle attempt read the loader's four commanders before
 the next dump. The collected later dump still contained all three ARMCK builders
