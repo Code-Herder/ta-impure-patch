@@ -639,6 +639,12 @@ offline one.
   snapshots.
 - **The stock-limits build's shot rows** may name the wrong weapon (the high nibble of the
   packet's `+0x23` [INFERRED]): size only.
+- **A crafted file can make a seek slow, not unsafe**: the reader copies the pool's extent every
+  iteration (`pool_decode`), so a header claiming `RT_PROJECTILES` 65,535 and one extent that
+  grows to it costs about 7 MB of copying an iteration, about 1.8 GB for a 256-iteration block,
+  on the game thread during a seek. Every bound holds; only the time does not. Our writer's
+  pools stay at their engine's 3,000 records (about 324 KB an iteration). Closing it needs the
+  extent's growth bounded by the section's bytes, or a copy of only the changed slots.
 
 ## Multiplayer recordings
 
