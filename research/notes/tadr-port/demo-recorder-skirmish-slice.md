@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 8 and its readers take format 8 alone (*The file*, below).
+The recorder writes recording format 9 and its readers take format 9 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -140,7 +140,7 @@ One file per recording, `replays\<date> <time> <map>.imprec` in the game's folde
 stored sizes, a CRC-32 of the stored bytes and one of the header — and the payload: exactly one
 zstd frame of the raw bytes (level 3, the vendored zstd 1.5.7 in `src/zstd.c`) when that is
 smaller, else the bytes stored. The header, the end and the timelines blocks are always stored, so
-a header reads without zstd. `inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 8; a reader takes
+a header reads without zstd. `inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 9; a reader takes
 that format alone:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
@@ -156,12 +156,12 @@ that format alone:
 - **a snapshot block** every 900 iterations (30 seconds at normal speed), built from the writer's
   copy: since format 4 (S3b) with only the cells that differ from the first iteration's grid and
   no table span that is all zero. The interval is chosen at the size plan's L4, against the
-  one-second seek target (*Decided 2026-10-01* set the target): format 8's seeks read in under a
-  second except in the first interval of the two largest battles measured, 1.15–1.23 s
-  ([making recordings smaller](demo-recorder-size.md#l1-recording-format-8-measured));
+  one-second seek target (*Decided 2026-10-01* set the target): format 9's seeks read in under a
+  second except in the first interval of the two largest battles measured, 1.22–1.26 s, and one
+  of 1.01 s in the second ([making recordings smaller](demo-recorder-size.md#l2-the-pool-frame-measured));
 - **the end block**: why the recording ended, the last GameTime, the iterations, the corrections,
   the id rows found outside their tables, the most the ring held, the game's end flags, each
-  seat's result, first commander death and elimination, and the stream blocks the unit frame
+  seat's result, first commander death and elimination, and the stream blocks the codec
   declined (`RT_CODEC_DECLINED`) and whose check failed (`RT_CODEC_MISMATCH`).
 
 A block is written whole or not at all, so a file cut short reads up to its last complete block, and
@@ -172,8 +172,9 @@ container that decodes to exactly those records, so everything that reads a bloc
 C reader's `apply`, `tarec.py`, `recsize.py` — sees the records as before. It is a 36-byte
 `RecSecHead` (the payload's bytes, the iterations, the section count and each section's length),
 then seven sections: the record kinds in payload order as runs; the **unit frame**, which makes
-every `RK_UNIT_DELTA`; and the bodies of the projectile, cell, order, event and every other kind,
-each verbatim behind a varint length. A kind added later falls into the last section on both sides
+every `RK_UNIT_DELTA`; the **pool frame**, which makes every `RK_PROJ_HEAD`, `RK_PROJ` and
+`RK_PROJ_DELTA`; and the bodies of the cell, order, event and every other kind, each verbatim
+behind a varint length. A kind added later falls into the last section on both sides
 (`rec_section_of`), with no table to update.
 
 **The unit frame** (`src/tagpu_reccodec.c`) keeps, per slot, the image at the end of the previous
@@ -200,10 +201,28 @@ header at the recording's start, on the game thread: `RT_PHYSICS` (gravity `main
 `+0x241` bit 11; its sight height `+0x170` and the five flight fields), at most 1,024 rows; a type
 without one is predicted as a ground unit, which costs size only.
 
-**Reset points.** The unit frame's state crosses block boundaries only inside a run of sectioned
-blocks. It restarts — `RBF_FRAME_RESET` — at a segment's first stream block, at the first after a
-snapshot and at the first after a stream block of records, from the units the reader holds at the
-end of the iteration before it. So a block inside a run decodes only after its predecessors since
+**The pool frame** (`src/tagpu_reccodec.c`, THE POOL FRAME) codes the projectile pool by identity.
+The engine's compaction keeps the survivors in order at the front of the pool and appends at the
+count, so each iteration is written as its new count and extent, the old records that died (as
+gaps), the births (the count's growth) and the stale slots past the count that changed. A survivor
+is predicted dword by dword from its own last image and the one before it: position by velocity
+with the last step's drift, a guided weapon's velocity from its heading, pitch and speed (when its
+last image already follows that rule), the `+0x67` stamp as its old slot, otherwise the previous
+value or the linear extrapolation, whichever was closest last. A birth or a changed stale slot is
+a reference — the zero row, or a row of the new pool so far, of the old pool, of the old pool
+advanced a step, or one made from the last iteration's `RK_EV_SHOT` events and the last birth of
+that weapon — and residuals against it; a birth also takes the stamp of the slot it was appended
+at. The decoder rebuilds the pool and makes each projectile record from it: an iteration's records
+are exactly its changed slots below the extent, ascending, and at most one `RK_PROJ_HEAD`, which it
+carries whenever the count or the extent changes. The frame's one parameter is the header's `RT_PROJECTILES`; its constants
+— the dword order, the four sections and their anchors, the stamp, the guided rule and the sine
+table — are the format's. The engine facts are the engine map's
+[*The demo recorder's pool frame*](../exe-reverse-engineering.md#the-demo-recorders-pool-frame-the-engine-facts-it-predicts-from-disassembled-measured-2026-10-08).
+
+**Reset points.** The frames' state crosses block boundaries only inside a run of sectioned
+blocks. Both restart — `RBF_FRAME_RESET` — at a segment's first stream block, at the first after a
+snapshot and at the first after a stream block of records, from the units and the projectile pool
+the reader holds at the end of the iteration before it. So a block inside a run decodes only after its predecessors since
 the run's reset: a reader starts at a snapshot or a segment's start (the seek already does), and a
 sectioned block met with no frame state is refused by name, never misread. The zstd frame itself is
 per block.
@@ -214,15 +233,18 @@ is, and writes the sectioned block only when that gives back the records byte fo
 it writes the block as records — **declined** when the encoder met what the frame does not carry
 (a delta on a slot that is not live or that an `RK_UNIT` or `RK_UNIT_GONE` names in the same
 iteration, deltas whose slots do not ascend, a bitmap that is not exactly the dwords that differ
-from the copy, a block of more than 256 iterations, a unit frame past 16 MiB, no memory),
+from the copy; projectile records that are not exactly the changed slots below the extent,
+ascending, each once, after at most one head that does not lower the extent — a writer's
+correction names a slot twice; a block of more than 256 iterations, a frame past 16 MiB, no
+memory),
 **MISMATCHED** when the check differed, which is a codec bug — and the next block restarts the
-frame. A codec bug therefore costs size, never data. The end
+frames. A codec bug therefore costs size, never data. The end
 block counts both; the writer logs the first four of each with their GameTime range, and its
 closing line gives `stream N KB of records written as M KB; K blocks: S sectioned, D declined, X
-MISMATCHED; the unit frame cost T ms, at most U ms for one block`. `tareplay.py` fails a fixture
-whose recording's end block names any mismatch ("the unit frame did not decode back in N blocks")
-or which has no sectioned stream block at all ("the codec never ran": a writer without memory for
-the frame counts 0 declined and 0 mismatched), and reports the declined count. Without `RT_CODEC`
+MISMATCHED; the codec cost T ms, at most U ms for one block`. `tareplay.py` fails a fixture
+whose recording's end block names any mismatch ("the stream codec did not decode back in N
+blocks") or which has no sectioned stream block at all ("the codec never ran": a writer without
+memory for the codec counts 0 declined and 0 mismatched), and reports the declined count. Without `RT_CODEC`
 and `RT_PHYSICS` (a dump, a synthetic test file), or without memory for the encoder's and check
 decoder's states, every stream block is written as records; without memory for the header's codec
 constants the recording ends before its file is opened.
@@ -238,15 +260,24 @@ repeated `RT_CODEC`, `RT_PHYSICS` or `RT_AIR` (lanes that do not tile the 0x148-
 missing, twice or of the wrong width, air types not ascending); a sectioned block in a segment
 whose header lacks `RT_CODEC` and `RT_PHYSICS`; a segment whose unit slots differ from the first
 header's; a container whose head, kinds, lengths, slots, masks or columns exceed their bounds, which
-leaves bytes in a section, or which decodes to another payload length; and an unflagged sectioned
-block with no frame state. Every operand of a rule is clamped before it is multiplied, so no value
+leaves bytes in a section, or which decodes to another payload length; a pool frame whose
+iterations are not the head's, whose count or extent leaves `[0, RT_PROJECTILES]` or whose count
+passes its extent, which names more dead slots than the old count or a dead or stale slot out of
+its range, more survivors than the new count, a reference past its section, fewer bytes than its
+codes and columns need, or bytes after them, or whose iteration's projectile records are not its
+changed slots or carry no head (or two) where the count or the extent changed; and an unflagged
+sectioned block with no frame state. Every operand of a rule is clamped before it is multiplied, so no value
 in a file can overflow the arithmetic.
 
 **Memory.** A codec state is 804 bytes a slot (the copy and L2, `0x148` bytes each, L3's 16, the
-winners' 128 and four flags, as `reccodec_new` allocates them) plus a 128 KB air index and the
-scratch of the largest block it has met: the writer holds two (before their scratch, 8,303,752
-bytes, about 8.3 MB, at 5,001 slots; 24,383,752, about 24.4 MB, at 15,001), a reader one, made at
-its first sectioned block.
+winners' 128 and four flags, as `reccodec_new` allocates them) and 613 bytes a projectile record
+(the pool and the image it is making, both one iteration before, the winners, the ages, the
+advanced image and the survivors' maps), plus a 128 KB air index, 1,425,528 bytes of the pool
+frame's tables (the last birth of each of 4,096 weapon IDs, 4,096 shot events and their rows,
+and the encoder's search over at least 4,096 rows) and the scratch of the largest block it has
+met: the writer holds two (before their scratch, 14,832,808 bytes, about 14.8 MB, at 5,001 slots
+and 3,000 records; 30,912,808, about 30.9 MB, at 15,001), a reader one, made at its first
+sectioned block.
 
 ### The game never waits
 

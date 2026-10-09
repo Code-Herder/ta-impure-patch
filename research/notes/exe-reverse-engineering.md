@@ -3008,7 +3008,7 @@ stdcall `ret 0x18`; a field init does not write keeps the bytes of the slot's la
 | `+0x62` | the firing piece | init, with an attacker (`0x49C833`) | Impure's B7 for a received stone |
 | `+0x64` | a flame's spin | never | the tick |
 | `+0x66` | the owner, 10 without an attacker | init | — |
-| `+0x67` | the record's index before this compaction | — | the compaction (`0x49AE5F`) |
+| `+0x67` | the record's index before this compaction | — | the compaction (`0x49AE5F`); the recorder's pool frame keys a survivor by it (*The demo recorder's pool frame*, below) |
 | `+0x69` | bit 0 a weapon stage, **bit 1 done**, bits 4–5 a bit-24 weapon's stage | init, the append | the removers |
 
 - **Which pointers dangle.** `+0x4E` and `+0x52` name unit slots (Mode B): nothing clears them when
@@ -3438,7 +3438,7 @@ fixture.
 
 ### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 8 carries a stream block's unit deltas as residuals against a prediction, the
+Recording format 9 carries a stream block's unit deltas as residuals against a prediction, the
 *unit frame* (`tagpu/ddraw/src/tagpu_reccodec.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the plan and its measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md)). Where a rule exists the prediction
@@ -3563,6 +3563,75 @@ mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
 **Not predicted**, each costing size only: the circle's sight path (LosType bit 2 clear); a
 landing (`0x43D210` with layer 1: the rule is written, never met); air transports' cargo; a
 non-zero pitch scale (none of the recordings had one); the steering term's hidden target.
+
+### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
+
+Recording format 9 carries a stream block's projectile records as the *pool frame*
+(`tagpu/ddraw/src/tagpu_reccodec.c`, THE POOL FRAME; the bytes in the skirmish slice's
+[*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
+[making recordings smaller](tadr-port/demo-recorder-size.md#l2-the-pool-frame-measured)): the
+pool coded by identity, each surviving record predicted from its own last image, each new one
+against a reference row. Every fact below is a predictor's: a wrong one costs size, never data,
+because the writer writes a block in the frame only when a second decoder gives its records back.
+Each was re-read in `pristine/TotalA.exe.pristine` on 2026-10-08 (`objdump -d -M intel`); the
+pool's layout and its appends are *The projectile pool* above.
+
+- **Survivors keep their order and come first.** The compaction `0x49AE20` walks `[0, count)`,
+  tests the done bit `+0x69` bit 1 (`shr cl,1; test cl,1` at `0x49AE63..0x49AE65`) and copies each
+  survivor behind the first hole whole; every append is at the count. So an iteration is the old
+  records that died, the survivors in order at `[0, c0 − died)`, the births after them, and the
+  stale slots past the new count, which keep their bytes.
+- **The stamp `+0x67` is the old slot.** The compaction stores each record's index before the move
+  in the word at `+0x67` (`mov word [eax+0x11], si` at `0x49AE5F`, `eax` = the record + `0x56`, so
+  `+0x13` from it is `+0x69` at `0x49AE5C`), the removed records included. The frame predicts a
+  survivor's stamp as its old slot and a birth's as `c0 + i`, the slot it was appended at.
+- **The guided velocity** (the projectile tick, the branch for a weapon with `+0x111` bit 20,
+  tested at `0x49B9C2..0x49B9D0`). A record whose death GameTime `+0x46` is still ahead of
+  GameTime `main+0x38A47` (`cmp` at `0x49B9DF`, `jbe` to the expired path `0x49BAC3`, which for
+  bit 23 calls `0x499EB0` and otherwise subtracts gravity `main+0x14263` from vy at
+  `0x49BAD3..0x49BADE`) takes the
+  speed step — `+0x3A += weapon +0x70` while below `weapon +0x68`, then capped at it
+  (`0x49BA16..0x49BA31`, unsigned compares) — and the aim and turn (`0x49BA34..0x49BA6F`, through
+  `0x49B3E0`, `0x49B520` and `0x499EB0`), then sets the velocity from the angles and the speed
+  (`0x49BA74..0x49BABE`): vy `+0x20` = `0x4B70EF`(pitch `+0x38`, speed `+0x3A`), h =
+  `0x4B7123`(pitch, speed), vx `+0x1C` = −`0x4B70EF`(heading `+0x36`, h), vz `+0x24` =
+  −`0x4B7123`(heading, h). With bit 16 also set and a word compare against the sea level
+  `main+0x1427F` passing (`0x49B9EB..0x49BA11`), it subtracts gravity from vy and stores the pitch
+  instead [the compared word not traced]. The codec has no weapon table, so it does not test bit
+  20: it applies the rule to a survivor whose last image already satisfies it (`held`, a pure
+  function of the image), and to a birth whose reference row does.
+- **Position += velocity** on every path of the tick, after the velocity's update: `+0x04 +=
+  +0x1C`, `+0x08 += +0x20`, `+0x0C += +0x24` (`0x49BB3A..0x49BB58`). The frame predicts the
+  position from the velocity it has just decoded, plus the last step's drift (whatever moved the
+  record besides its velocity).
+- **`0x4B70EF` and `0x4B7123`** are the sine and cosine products of *`DrawRangeCircle
+  0x438EA0`*, below (the table `0x509F00`, `+0x1000` and `shrd 13`), equal to the codec's `sinmul` and
+  `cosmul` on every input: bits 7–15 of `angle + 0x20` do not depend on how the word is extended.
+- **The shot packet `0x0D`** (built at `0x49D7AD..0x49D859` and sent through `0x451DF0`, 36
+  bytes): `+0x01..+0x0C` three dwords of the fire function's locals (`[esp+0x18..0x20]`
+  [INFERRED: the fire point]), `+0x0D..+0x18` the three dwords at `[ebp]` (the target point),
+  `+0x19` the weapon's ID byte (`[weapon+0x10A]`, `0x49D7E5`), `+0x1F` the target's and `+0x21`
+  the shooter's unit index (`[unit+0xA8]`, `0x49D812` and `0x49D802`), `+0x23` the weapon slot
+  (`shr al,2; and al,3`, `0x49D7D9..0x49D7ED`), where the raised build also writes the weapon
+  ID's bits 8–11 in the high nibble (`tagpu_patches.c`, THE WIRE). The recorder keeps it as
+  `RK_EV_SHOT`; the frame makes a reference row of each of the last iteration's shots from the
+  last birth of that weapon (`+0x00` = the twelve-bit ID + 1), its position and tail from the fire point, its target point and its two unit IDs. In the
+  stock-limits build `+0x23`'s high nibble is not weapon bits [INFERRED], so a row may name the
+  wrong weapon: size only.
+
+**What each fact buys**, MEASURED by the format's prototype on L1's four recordings (the battle,
+Town & Country, naval, the air war; the pool frame packed alone, zstd 3, MiB, on a configuration
+slightly before the final one): without the stamp 2.73 / 1.24 / 0.43 / 0.50 against 2.42 / 1.11 /
+0.40 / 0.46; without the shot events 2.98 / 1.30 / 0.44 / 0.51. The guided rule saves 0.31 MiB on
+Town & Country and 0.14 on naval and on the air war, nothing on the battle, where applied to every
+survivor it *cost* 0.20 MiB; the `held` test is what removes that cost. The rule on births holds
+for 63 % of Town & Country's births and 53 % of the air war's, −0.13 MiB on the battle.
+
+**Not predicted**, each costing size only: a birth's fields its builder computes from the
+attacker (a burst copy's spray, the RNG), the guidance's turn (`0x49B3E0` reads the target's
+position), the bit-16 branch and the expired path's gravity, and a record's last cell hit
+`+0x5A..+0x5F` (the collision `0x49B090`) — the survivors' dword 23, `+0x5C..+0x5F`, is the
+largest residual column of the battle, 214 KiB of its 2.09 MiB.
 
 ### The demo recorder's tick boundaries: the sim step `0x495490` and its callers [DISASSEMBLED 2026-10-01]
 
@@ -10297,8 +10366,10 @@ table at **`0x509F00`**: 512 `s16` entries, `8192 = 1.0` (`shrd …,0xD` after a
 round), indexed `((angle + 0x20) >> 6) & 0x3FE`, and TurnZ adds a quarter turn (`+0x4020`)
 before the same shift; the table is `round(8192 · sin(2πi / 512))` on all 512 entries, none
 within 0.0016 of a rounding tie (MEASURED 2026-10-08 against `pristine/TotalA.exe.pristine`; the
-demo recorder's unit frame carries it as a literal of that formula). Both are **cdecl** — the
-callers `add esp,8`. So the engine's
+demo recorder's unit and pool frames carry it as a literal of that formula). Both are **cdecl** —
+the callers `add esp,8`; `0x4B70EF` has 67 call sites in `.text` and `0x4B7123` 69 (`objdump -d`,
+2026-10-08), among them the projectile tick's guided velocity `0x49BA7D`, `0x49BA91`, `0x49BAA1`
+and `0x49BAB4` (*The demo recorder's pool frame*, above). So the engine's
 parameterisation is `p.x = centre.x + r·sin(a)`, `p.z = centre.z + r·cos(a)`, which is the
 mirror of the usual cos/sin pair: on a round circle it is the same circle entered a quarter
 turn along, and it matters only when you want a point on it at the engine's own angle.

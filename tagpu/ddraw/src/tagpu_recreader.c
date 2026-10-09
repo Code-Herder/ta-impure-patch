@@ -169,7 +169,7 @@ static int file_at(RecReader* r, unsigned long long off)
     return 1;
 }
 
-/* What format 8 refuses in a block's flags and sizes (tagpu_recfmt.h, RecBlock), or NULL. */
+/* What format 9 refuses in a block's flags and sizes (tagpu_recfmt.h, RecBlock), or NULL. */
 static const char* block_flags_bad(const RecBlock* b)
 {
     if (b->flags & ~RBF_ALL) return "flags it does not know";

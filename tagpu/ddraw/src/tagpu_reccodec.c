@@ -59,7 +59,7 @@
    (442 KB), the shot events and their rows (590 KB), the search's three indexes over
    max(nproj, 4,096) rows (12 bytes a row each, and a table of 8-byte slots at least twice the
    rows: 393 KB up to 4,096 records), and the scratch of the largest block met so far
-   (reccodec_new). At 3,000 records the pool frame is about 3.4 MB a codec. */
+   (reccodec_new). At 3,000 records the pool frame is about 3.3 MB a codec. */
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>

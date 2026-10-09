@@ -2,11 +2,12 @@
 
 ## Status
 
-**L1 is built and measured, not landed** (*L1: recording format 8, measured*, below): recording
-format 8 packs every block with zstd and carries the unit deltas in a unit frame predicted from the
-engine's own rules, and a new run of the battle below recorded in 29.1 MiB where the measured one
-took 99.6 (not like for like: another game of the same scenario). L2 to L6 are
-plans. The page gathers what has been measured about the size of a demo recording, the research
+**L1 and L2 are landed** (*L1: recording format 8, measured* and *L2: the pool frame, measured*,
+below). Recording format 9 packs every block with zstd, carries the unit deltas in a unit frame
+predicted from the engine's own rules and the projectiles in a pool frame coded by identity: the
+battle below, recorded anew, takes 15.3 MiB where the measured one took 99.6 (not like for like:
+another game of the same scenario), and on the very games L1 recorded L2 takes the battle's file
+from 29.09 to 16.40 MiB, Town & Country's from 18.97 to 11.51. L3 to L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -161,6 +162,22 @@ decoded back exactly and re-run by a challenger; decoding forward from each snap
 other recordings also decoded exactly: Town & Country's battle 28.2 → 2.44 MiB, naval 4.85 → 0.46.
 The decoder never searches; the encoder's bounded search averages 154k dword compares an
 iteration, but the busiest second needs 288 million, so the search needs a cap.
+
+**As built** (format 9's pool frame, *L2* below). The research's codec, run at zstd 3 on L1's four
+recordings, gives 2.33 / 1.13 / 0.41 / 0.55 MiB (the battle, Town & Country, naval, the air war);
+the pool frame gives 2.09 / 0.99 / 0.39 / 0.41. A survivor is predicted dword by dword from its
+own last image, the rule the engine's tick follows where there is one — position by the velocity
+with the last step's drift, the guided velocity from heading, pitch and speed, the `+0x67` stamp
+as its old slot — and keeps, per dword, whichever of the rule, the previous value and the linear
+extrapolation was closest last. The guided rule applies only to a record whose last image already
+follows it (the codec carries no weapon table, so it cannot test the weapon's bit 20): applied to
+every survivor it cost the battle 0.20 MiB. A birth or a changed stale slot is coded against a
+reference row in one of four sections — the new pool so far, the old pool, the old pool advanced a
+step, or a row made from the last iteration's shot events — and a birth whose reference row
+follows the guided rule takes its velocity from the rule as well. The search is capped by
+construction: the matcher tries the stamp and then an eight-wide window; a birth's candidates
+come from per-weapon chains and a (weapon, shooter) table, at most 32 probes and 4 candidates a
+section; a stale slot looks ±16 rows around each section's anchor.
 
 Sampling or quantizing projectiles does not pay: 10 Hz is larger than exact 30 Hz (2.77 against
 2.55), whole world units every tick 3.10 against 2.96. Births are 46 % of the stream and are
@@ -416,7 +433,7 @@ the desired heading on 86 % of iterations) or recording the course's target (26 
 
 ## L1: recording format 8, measured
 
-**What L1 is** (built, not landed). Recording format 8: every packed block is one zstd frame at
+**What L1 is** (landed 2026-10-08). Recording format 8: every packed block is one zstd frame at
 level 3 (zstd 1.5.7, vendored), and a stream block — at most 30 iterations or 2 MiB, ending at each
 snapshot — is written as a **sectioned container**: the record kinds as runs, one section of
 verbatim bodies per category (projectiles, cells, orders, events, the rest), and the **unit
@@ -424,8 +441,8 @@ frame**, which replaces every unit delta with residuals against per-lane predict
 rules (heading, ground and air velocity, position, the footprint and sight cells, the claim and
 move stamps, the countdowns, the aircraft's speed, smoothed acceleration and bank), the previous
 value or the linear extrapolation — all in integers. The writer writes a sectioned block only when
-a second decoder gives its records back byte for byte, else the records. Both readers take format 8
-alone (decision 6). The bytes, the reset points, the fallback and the refusals are the skirmish
+a second decoder gives its records back byte for byte, else the records. Both readers took format 8
+alone (decision 6); format 9 (L2, below) keeps all of it and replaces the projectiles' section. The bytes, the reset points, the fallback and the refusals are the skirmish
 slice's [*The file*](demo-recorder-skirmish-slice.md#the-file); every engine fact the rules rest on
 is in the engine map's
 [*The demo recorder's unit frame*](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
@@ -517,8 +534,111 @@ to 900 reads from the segment's first iteration, there being no snapshot before 
 - **Never met in a recording**, each costing size only if a rule is wrong: the circle's sight path
   (LosType bit 2 clear), a landing, air transports' cargo, a non-zero pitch scale, remote aircraft
   in a multiplayer recording.
-- **The other categories ride verbatim**: projectiles, cells, orders and events are L2's and L3's;
+- **The other categories ride verbatim**: projectiles (L2's, below), cells, orders and events (L3's);
   a multiplayer file's contributions stay records blocks, zstd-packed (K is L6).
+
+## L2: the pool frame, measured
+
+**What L2 is** (landed). Recording format 9: format 8 with the sectioned container's projectile
+section replaced by the **pool frame**, the projectile pool coded by identity. An iteration says
+which old records died, how many were born and which stale slots past the count changed; a
+survivor is predicted from its own last image by the projectile tick's rules (*As built*, under
+*Projectiles* above), a birth and a changed stale slot are coded against a reference row, and
+RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA keep their place in the kinds but have no body: the
+decoder makes each from the pool it rebuilds. The writer still writes a sectioned block only
+when a second decoder gives the records back byte for byte, and both frames restart at the same
+reset points, from the reader's units and pool. No header entry is added: the frame's one
+parameter is RT_PROJECTILES, which every header carries. Both readers take format 9 alone
+(decision 6); format 8 was never published. The bytes are the skirmish slice's
+[*The file*](demo-recorder-skirmish-slice.md#the-file); the engine facts are the engine map's
+[*The demo recorder's pool frame*](../exe-reverse-engineering.md#the-demo-recorders-pool-frame-the-engine-facts-it-predicts-from-disassembled-measured-2026-10-08).
+
+**Where it departs from the plan above**, each decided in the building:
+
+- **A new format, not a flag in format 8**: one decode path for the projectiles in each reader is
+  what keeps the two readers' refusals provably equal (`codectest.py fuzzdiff`).
+- **The guided rule tests the image, not the weapon**: the codec carries no weapon table, so it
+  applies the rule to a record whose last image already follows it; applied to every survivor it
+  cost the battle 0.20 MiB.
+- **The rule reaches births too**: a birth whose reference row follows it takes its velocity from
+  the rule.
+- **The search is capped by construction** (*As built*, above), so the writer's work for a block
+  has a bound whatever the game does.
+
+**Offline, like for like**: L1's four recordings rewritten as format 9 — the same games, every
+stream block decoded by L1's reader and encoded again by L2's writer codec (MEASURED 2026-10-08,
+native and under Wine, the two writing identical bytes): every block sectioned, 0 declined, 0
+mismatched, the C and Python decoders and the records identical on every block.
+
+| | the battle | Town & Country | naval | air war |
+|---|---:|---:|---:|---:|
+| **the projectiles, packed alone, MiB, format 9** | **2.088** | **0.986** | **0.387** | **0.414** |
+| the projectiles, packed alone, MiB, format 8 | 14.96 | 8.44 | 3.24 | 3.33 |
+| **the file, MiB, format 9** | **16.40** | **11.51** | **1.92** | **11.18** |
+| the file, MiB, format 8 | 29.09 | 18.97 | 4.76 | 14.15 |
+| the writer's codec under Wine (four files at once), ms in all / at most for one block | 8,571 / 75 | 7,609 / 91 | 594 / 26 | 3,833 / 30 |
+| the C decoder under Wine, ms in all, format 9 (format 8) | 3,765 (3,559) | 3,369 (3,278) | 251 (220) | 1,671 (1,632) |
+| the longest run from a reset point, ms, format 9 (format 8) | 1,142 (1,063) | 1,025 (1,048) | 149 (128) | 316 (306) |
+| Python, `codectest.py verify`, s | 3.8 | 3.2 | 0.6 | 1.7 |
+
+The projectiles land within 0.5 % of the format's prototype (2.09 / 0.99 / 0.39 / 0.41). On the
+battle the pool frame's 2.09 MiB is the survivors' columns 0.92, the births' 0.97, the stale
+tail's 0.09 and the control values and reference codes 0.13. 200,000 fuzzed naval blocks under
+ASan and UBSan gave no report, and C and Python agreed on 2 × 2,000 fuzzed cases.
+
+**In the game** (MEASURED 2026-10-08 on the reference setup: the default build, recorder armed,
+game speed 20, each scenario played anew under Wine, so **not like for like** with L1's runs; a
+naval-push smoke on the stock-limits build wrote 39 sectioned blocks, 0 declined, 0 mismatched).
+
+| | the battle | Town & Country | naval | air war |
+|---|---:|---:|---:|---:|
+| ticks | 7,411 | 4,201 | 3,840 | 5,940 |
+| **the file, MiB** | **15.30** | **11.80** | **1.83** | **8.19** |
+| the projectiles, packed alone, MiB | 1.78 | 0.96 | 0.35 | 0.26 |
+| projectile records (L1's game) | 588,905 (666,251) | 368,426 (357,567) | 126,631 (135,483) | 68,264 (156,799) |
+| stream blocks sectioned / declined / mismatched | 263 / 0 / 0 | 146 / 0 / 0 | 129 / 0 / 0 | 199 / 0 / 0 |
+| the codec on the writer thread, ms in all / at most for one block (L1) | 8,169 / 75 (8,136 / 70) | 8,168 / 97 (7,419 / 95) | 642 / 23 (565 / 21) | 2,937 / 36 (3,718 / 29) |
+| the ring's high water, KiB of 16 MiB (L1) | 2,022 (2,164) | 1,718 (1,748) | 981 (945) | 1,043 (1,061) |
+| a seek's read, ms, to GameTime 900 / 1800 / 2700 / 3600 | 1,259 / 638 / — / — | 1,219 / 1,013 / 994 / 655 | 175 / 74 / 34 / 23 | 352 / 261 / 197 / 184 |
+| `codectest.py verify`: blocks where C and Python differ | 0 | 0 | 0 | 0 |
+| Python decode, `tarec.py info`, s | 5.2 | 5.1 | 1.0 | 2.3 |
+
+The battle's and the air war's projectiles are 15 % and 38 % below the offline figure because
+these games fired less (the records' row); per record the battle's frame is within 4 % of the
+offline one.
+
+**Against the plan.**
+
+- **Size.** The landing order planned about −34 MiB, measured against the pre-L1 file; on L1's
+  own files L2 takes −12.7 MiB from the battle (29.09 → 16.40), −7.5 from Town & Country, −2.8
+  from naval and −3.0 from the air war, because L1's zstd had already packed the battle's
+  projectiles from 36.5 to 15.0 MiB.
+- **The writer.** The most for one block was 97 ms (Town & Country), as L1's 95; the ring never
+  held more than 2.0 MiB. The encoder's work is bounded by construction (`pool_encode`): the
+  matcher tries 8 old slots, a birth at most 32 table probes and 4 candidates a section, a stale
+  slot ±16 rows.
+- **The seek.** Like for like, the pool frame adds up to 8 % to a seek window's decode on the
+  large games (`codectest` decode under Wine, per 900-tick window) and 21 ms (+17 %) to naval's
+  first window, whose stream is mostly projectiles. In
+  the new games naval's seeks read 175 / 74 ms against L1's 148 / 58, and Town & Country's seek
+  to 2,700 994 ms against 725 — that game's window is busier (its blocks decode in 795 ms there
+  against 650 for L1's game). Every seek reads in under one second except in the first interval
+  of the two large battles, 1.22–1.26 s, and Town & Country's seek to 1,800, 1.01 s: the seek in a
+  large battle stays open for L4 (*What L1 leaves open*).
+- **Memory.** The pool frame adds 613 bytes a projectile record and about 1.4 MB a codec (the
+  last birth of each weapon, the shot events and their rows, the encoder's search tables): about
+  3.3 MB a codec at 3,000 records; the writer holds two codecs, a reader one.
+
+**What L2 leaves open.**
+
+- **The survivors' dword 23** (`+0x5C..+0x5F`, the ground under the last cell hit, written by the
+  collision `0x49B090`) is the largest residual column, 214 KiB of the battle's 2.09 MiB.
+- **Births are still half the frame**: a birth's spray and guidance are not predicted, and a
+  burst copy's spray draws the simulation's random numbers.
+- **The snapshots' projectiles stay verbatim**: 439 KB packed of the battle's 1,483 KB of
+  snapshots.
+- **The stock-limits build's shot rows** may name the wrong weapon (the high nibble of the
+  packet's `+0x23` [INFERRED]): size only.
 
 ## Multiplayer recordings
 
@@ -596,8 +716,8 @@ the units: stage 6's traffic budget.
 | | Landing | Gives |
 |---|---|---|
 | L0 | every codec run offline on the naval and Town & Country recordings and one with aircraft and hills: DONE 2026-10-07, lossless everywhere (*L0* above) | aircraft as the open cost |
-| L1 | the sectioned container, decode-before-write with fallback, the unit frame with the aircraft and cell rules in integers: BUILT, measured, not landed (*L1* above) | planned about −42 MiB on this battle; MEASURED 99.6 → 29.1 MiB on a new run of it, not like for like |
-| L2 | projectiles by identity, the guided-velocity rule, the search capped at 4 candidates, shooter first | about −34 MiB |
+| L1 | the sectioned container, decode-before-write with fallback, the unit frame with the aircraft and cell rules in integers: LANDED (*L1* above) | planned about −42 MiB on this battle; MEASURED 99.6 → 29.1 MiB on a new run of it, not like for like |
+| L2 | projectiles by identity (format 9's pool frame), the guided-velocity rule, the search capped at 4 candidates, shooter first: LANDED (*L2* above) | planned about −34 MiB against the pre-L1 file; MEASURED −12.7 MiB on L1's own battle file (29.09 → 16.40), because L1's zstd had already packed its projectiles from 36.5 to 15.0 MiB |
 | L3 | cells, orders, events, globals; the snapshot wreck base | about −7 MiB |
 | L4 | the measured hour of a four-player game with AI and structures | the snapshot interval; whether lossy is needed |
 | L5 | lossy, only if L4 misses a budget | about −1 MiB per category |
