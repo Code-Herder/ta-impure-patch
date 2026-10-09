@@ -3600,8 +3600,11 @@ pool's layout and its appends are *The projectile pool* above.
   instead [the compared word not traced]. The codec has no weapon table, so it does not test bit
   20: it applies the rule to a survivor whose last image already satisfies it (`held`, a pure
   function of the image), and to a birth whose reference row does.
-- **Position += velocity** on every path of the tick, after the velocity's update: `+0x04 +=
-  +0x1C`, `+0x08 += +0x20`, `+0x0C += +0x24` (`0x49BB3A..0x49BB58`). The frame predicts the
+- **Position += velocity** for every record that survives the tick, after the velocity's update:
+  `+0x04 += +0x1C`, `+0x08 += +0x20`, `+0x0C += +0x24`, each branch with its own add (the guided
+  one `0x49BB3A..0x49BB58`; `0x49BB82`, `0x49BC37`, `0x49BCE3`, `0x49BD12`, `0x49BD50`); the paths
+  without one (`0x49BC67` → `0x499EB0`, and `0x49BCD0`) mark the record done (`0x499EB0` sets
+  `+0x69` bit 1 at `0x499F32` and `0x499FA0`). The frame predicts the
   position from the velocity it has just decoded, plus the last step's drift (whatever moved the
   record besides its velocity).
 - **`0x4B70EF` and `0x4B7123`** are the sine and cosine products of *`DrawRangeCircle

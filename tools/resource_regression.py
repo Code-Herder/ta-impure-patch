@@ -54,6 +54,18 @@ class Check:
         return self.base + self.units[kind] * 0x118
 
     def orders(self, kind):
+        """The unit's order chain, read while the world is paused: each node is a separate peek,
+        and a running game can finish an order and hand its node to another unit between two of
+        them. A paused world runs no step, so the chain read is the chain the engine holds."""
+        if self.values("*0x511DE8+0x38a51:2")[0] & 1:
+            return self.chain(kind)
+        self.pause(True)
+        try:
+            return self.chain(kind)
+        finally:
+            self.pause(False)
+
+    def chain(self, kind):
         owner = self.address(kind)
         node = self.values(f"0x{owner + 0x5c:x}")[0]
         result, seen = [], set()

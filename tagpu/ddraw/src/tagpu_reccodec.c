@@ -438,6 +438,8 @@ static void rot(int64_t x1, int64_t z1, int64_t x2, int64_t z2, int64_t* px, int
 
 #define PDW   REC_PROJ_DWORDS         /* a projectile image's dwords, 27                          */
 #define PIMG  REC_PROJ_IMAGE
+/* the longest body pool_body writes: a delta of all 27 dwords (116), past a whole record's 112 */
+#define POOL_BODY_MAX (REC_PROJ_DELTA_HEAD + PIMG)
 #define SHOT  36                      /* an RK_EV_SHOT's body                                     */
 
 /* The encoder's search index over one reference section's rows (pool_encode): per weapon key the
@@ -1201,7 +1203,9 @@ static int held(const uint32_t* x)
    and the line through the last two k2; the residual is applied (dec) or made (enc), and the
    next winner is the first candidate closest to the value. k0 is
    - for the position, the last value plus this iteration's velocity, with the last step's drift
-     carried: position += velocity on every path of the tick (0x49BB3A..0x49BB58, DISASSEMBLED);
+     carried: every record that survives the tick moved by its velocity, each branch with its own
+     add (the guided one 0x49BB3A..0x49BB58; 0x49BB82, 0x49BC37, 0x49BCE3, 0x49BD12, 0x49BD50), and
+     the paths without one mark the record done (0x499EB0 sets +0x69 bit 1), DISASSEMBLED;
    - for the velocity, the guided rule when the last image followed it, else the last value;
    - for +0x67 (dword 25's top byte, dword 26's low byte), the compaction's stamp: 0x49AE20
      writes each record's index there before it slides the survivors down (0x49AE5F,
@@ -1413,7 +1417,7 @@ static int pool_check(RecCodec* c, const unsigned char* pl, size_t at, size_t en
 {
     unsigned count = c->pcount, hw = c->phw, heads = 0, nslot = 0, j, q;
     size_t p;
-    unsigned char body[4 + PIMG];
+    unsigned char body[POOL_BODY_MAX];
     /* pool_n is zero from phw on: it is the pool of the iteration before, or a restart's zeros */
     memcpy(c->pool_n, c->pool, (size_t)c->phw * PIMG);
     for (p = at; p < end; p += (4 + (size_t)get16(pl + p + 2) + 3) & ~(size_t)3) {
@@ -2310,7 +2314,7 @@ static int pool_decode(RecCodec* d, const unsigned char* sec, const size_t* off,
         first = 1;
         q = 0;
         while ((kind = run_next(d, &a, &first)) != 0) {
-            unsigned char body[4 + PIMG];
+            unsigned char body[POOL_BODY_MAX];
             unsigned len;
             if (kind == RK_PROJ_HEAD) {
                 put32(body, pc1);

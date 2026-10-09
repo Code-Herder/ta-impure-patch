@@ -85,6 +85,7 @@ RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA = tarec.RK_PROJ_HEAD, tarec.RK_PROJ, tarec.
 RK_EV_SHOT = tarec.RK_EV_SHOT
 PDW = 27                                   # a projectile image's dwords (REC_PROJ_DWORDS)
 PIMG = 4 * PDW
+_POOL_BODY_MAX = tarec.REC_PROJ_DELTA_HEAD + PIMG  # a delta of all 27 dwords: 116 bytes
 SHOT = 36                                  # an RK_EV_SHOT's body
 SHOTS_MAX, WEAPON_IDS = 4096, 4096         # RECC_SHOTS_MAX, RECC_WEAPON_IDS
 M32 = 0xFFFFFFFF
@@ -1522,12 +1523,15 @@ class Frame:
         B = np.ascontiguousarray(res[k:k + PDW * nb].reshape(PDW, nb).T)
         k += PDW * nb
         T = np.ascontiguousarray(res[k:].reshape(PDW, nt).T)
-        pbuf = np.zeros(payload, np.uint8)
+        # _pool_block writes a body before it tests the payload's bound, with pos at most the
+        # payload: the slack holds the longest body, a delta of all 27 dwords (8 + 108 bytes), so
+        # numba's unchecked stores stay in the array whatever the file says
+        pbuf = np.zeros(payload + _POOL_BODY_MAX, np.uint8)
         p_at, p_ln = np.zeros((2, len(kinds)), np.int64)
         if _pool_block(sec, ctl, codes, S, B, T, kinds, rec_at, rec_ln, self.P, self.H, self.pwin,
                        self.page, self.lastnew, self.shots, self.meta, payload, pbuf, p_at, p_ln, err):
             _refuse(err)
-        return pbuf, p_at, p_ln
+        return pbuf[:payload], p_at, p_ln
 
     def _units_parse(self, sec, at, end, iters):
         """The unit frame's section: how many slots each iteration lists, those slots in one array

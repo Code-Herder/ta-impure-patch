@@ -539,8 +539,8 @@ enum RecBlockKind {
    The survivors are the records of [0, c0) that did not die, in order, and become [0, c0 - nd);
    the births follow them up to c1. Every count, slot and reference is bounded by RT_PROJECTILES,
    the iterations and the section's bytes; an iteration's projectile records are exactly its
-   changed slots below h1, ascending, after at most one RK_PROJ_HEAD, which it carries whenever
-   the count or the extent changes. A block with no projectile costs 1 + 4 x iterations bytes.
+   changed slots below h1, ascending, and at most one RK_PROJ_HEAD, anywhere among them, which it
+   carries whenever the count or the extent changes. A block with no projectile costs 1 + 4 x iterations bytes.
    A varint is LEB128 of a value below 2^32, at most 5 bytes; zigzag maps r >= 0 to 2r and r < 0
    to -2r - 1 (a 32-bit residual r >= 2^31 to 2 (2^32 - r) - 1). tagpu_reccodec.c says what a
    residual is the residual of, and what a reference row and its sections are. */
