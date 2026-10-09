@@ -17,7 +17,7 @@
 #include "tagpu_json.h"
 
 #define HUD_MAXSEAT  16
-#define HUD_MAXMARK  256
+#define HUD_MAXMARK  320
 #define HUD_KEYLEN   24
 
 typedef struct { float x, y, w, h; } HUDRECT;

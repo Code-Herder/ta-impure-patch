@@ -32,11 +32,14 @@ typedef struct { int tex, first, count; } HUDBATCH;
 int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, float px, int ox, int oy, int w, int h,
                         HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb, int* dropped);
 
-/* THE GLYPH ATLAS: one R8 coverage image. `gen` changes when it is rebuilt from empty, which
-   makes every texel stale; otherwise only the rows [*y0, *y1) changed since the last
-   tagpu_huddraw_atlas_sent. */
+/* THE GLYPH ATLAS: one R8 coverage image. `gen` changes when it is emptied because a glyph did
+   not fit; the rows [*y0, *y1) are the ones changed since tagpu_huddraw_atlas_sent last covered
+   them. An emptied atlas is all zeros and every glyph it then takes lies, with the empty texels
+   round it, inside the changed rows -- so a device copy of an older generation is current once
+   those rows are sent, whatever the rest of it holds. */
 #define HUD_ATLAS 2048
 const unsigned char* tagpu_huddraw_atlas(unsigned* gen, int* y0, int* y1);
-void                 tagpu_huddraw_atlas_sent(void);
+/* The changed rows below `y` are on the device. */
+void                 tagpu_huddraw_atlas_sent(int y);
 
 #endif

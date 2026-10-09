@@ -16,12 +16,13 @@
    down from it, linearly, in this frame's command buffer. The parts are premultiplied, so a
    linear average is the right one.
 
-   THE GLYPH ATLAS changes in play, as text first needs a glyph at a size and a pen fraction. The
-   rows a frame added go IN THE FRAME'S OWN COMMAND BUFFER through the slot's staging buffer,
-   behind a barrier whose first scope includes every frame already submitted (the order
-   tagpu_vk_stage.c's in-frame copies rest on), and are dropped from this frame when they do not
-   fit -- that text is then missing for a frame, never waited for. Only a rebuilt atlas (a new
-   generation: the sizes changed with the screen or the HUD's scale) goes whole, banded.
+   THE GLYPH ATLAS changes in play, as text first needs a glyph at a size and a pen fraction. It
+   goes whole once after a build, banded. After that only the rows that changed go -- a new
+   generation's too, the atlas emptied because a glyph did not fit (tagpu_huddraw.h) -- IN THE
+   FRAME'S OWN COMMAND BUFFER through the slot's staging buffer, behind a barrier whose first scope
+   includes every frame already submitted (the order tagpu_vk_stage.c's in-frame copies rest on),
+   as many as the buffer has room for; the rest go on the next frames, and until the last has
+   gone the frame's glyphs are transparent (hide_glyphs). Text can be late; nothing waits.
 
    IT KNOWS NOTHING ABOUT A WINDOW, and reads no engine state: everything arrives in its
    arguments or in the loaded HUD (tagpu_hudart.h), which is immutable. */
@@ -493,23 +494,31 @@ static int send_parts(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* 
 static int send_atlas(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st)
 {
     unsigned gen;
-    int y0, y1, r;
+    int y0, y1, n, r;
     const unsigned char* a = tagpu_huddraw_atlas(&gen, &y0, &y1);
     VkDeviceSize off, bytes;
     VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
     VkBufferImageCopy rg;
 
-    if (gen != s_agen) {
-        /* the first copy of its frame, as a part's is: 4 MiB, banded */
+    /* THE FIRST UPLOAD AFTER A BUILD goes whole, the frame's first copy as a part's is: the image
+       has no contents and no layout yet, and 4 MiB is banded -- the post-build event the banded
+       path is for (tagpu_vk_stage.h) */
+    if (!s_agen) {
         if (st->used) return 0;
-        r = tagpu_vk_stage_copy(d, cb, st, s_atlas.img, s_agen != 0, a, HUD_ATLAS, HUD_ATLAS, HUD_ATLAS, 1);
-        if (r > 0) { s_agen = gen; tagpu_huddraw_atlas_sent(); }
+        r = tagpu_vk_stage_copy(d, cb, st, s_atlas.img, 0, a, HUD_ATLAS, HUD_ATLAS, HUD_ATLAS, 1);
+        if (r > 0) { s_agen = gen; tagpu_huddraw_atlas_sent(HUD_ATLAS); }
         return r;
     }
-    if (y1 <= y0) return 1;
+    /* AFTER IT, ONLY THE CHANGED ROWS, a new generation's included (tagpu_huddraw.h), in this
+       frame's command buffer and as many as its buffer has room for; the rest go next frame, and
+       the text waits for them (hide_glyphs). Nothing here waits on the device. */
+    if (y1 <= y0) { s_agen = gen; return 1; }
     off = (st->used + 3) & ~(VkDeviceSize)3;
+    if (!st->map || off >= st->cap) return 0;
+    n = (int)((st->cap - off) / HUD_ATLAS);
+    if (n <= 0) return 0;
+    if (n < y1 - y0) y1 = y0 + n;
     bytes = (VkDeviceSize)(y1 - y0) * HUD_ATLAS;
-    if (!st->map || off + bytes > st->cap) return 0;
     memcpy(st->map + off, a + (size_t)y0 * HUD_ATLAS, (size_t)bytes);
     st->used = off + bytes;
 
@@ -540,16 +549,17 @@ static int send_atlas(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* 
     b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                          0, 0, NULL, 0, NULL, 1, &b);
-    tagpu_huddraw_atlas_sent();
+    s_agen = gen;
+    tagpu_huddraw_atlas_sent(y1);
     return 1;
 }
 
 /* ---- the frame ------------------------------------------------------------------------------- */
 
-/* The glyphs of a frame whose atlas the device does not hold yet, made transparent: an atlas
-   generation or dirty rows that could not go this frame (the banded path not ready, no staging)
-   would otherwise be sampled where the instances say -- the previous generation's glyphs, or
-   empty texels. Fills and parts in the same runs still draw. */
+/* The glyphs of a frame whose atlas the device does not hold yet, made transparent: changed rows
+   still waiting for room in a frame's buffer (send_atlas), or a frame with no staging, would
+   otherwise be sampled where the instances say -- empty texels, or an older generation's
+   glyphs. Fills and parts in the same runs still draw. */
 static void hide_glyphs(HUDINST* in, int n)
 {
     int i;
@@ -568,20 +578,32 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     int dropped = 0, r, due, ox, oy;
 
     s_ninst = s_nbatch = 0;
-    if (s_state == ST_REFUSED || !tagpu_hudstate_frame(&st, &px, &ox, &oy)) return 0;
+    if (s_state == ST_REFUSED || !tagpu_hudstate_frame(d->frame, &st, &px, &ox, &oy)) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || w == 0 || h == 0 || !(px > 0)) return 0;
 
     /* NOTHING IS BUILT UNTIL THE HUD HAS LOADED: tagpu_hudart decodes the parts on a thread of
-       its own, and the HUD appears on the first frame after it has published them. */
-    if (!(art = tagpu_hudart_get())) { tagpu_hudart_start(); return 0; }
+       its own, and the HUD appears on the first frame after it has published them. Every way the
+       HUD cannot draw for the session is told to tagpu_hudstate_refuse, which gives the dock and
+       the cards back. */
+    if (!(art = tagpu_hudart_get())) {
+        if (tagpu_hudart_failed()) tagpu_hudstate_refuse("its art did not load");
+        else tagpu_hudart_start();
+        return 0;
+    }
 
     if (s_state == ST_UNBUILT) {
-        if (!build(d, art)) { tagpu_vk_hud_down(d); s_state = ST_REFUSED; return 0; }
+        if (!build(d, art)) {
+            tagpu_vk_hud_down(d);
+            s_state = ST_REFUSED;
+            tagpu_hudstate_refuse("its pass could not be built");
+            return 0;
+        }
         s_state = ST_READY;
     }
 
     if (!tagpu_hudlay_build(art->lay, st, &s_ops, err, sizeof err)) {
         if (!s_saidMiss) { s_saidMiss = 1; plog(d, "hud: %s", err); }
+        tagpu_hudstate_refuse("its layout did not build");
         return 0;
     }
     s_ninst = tagpu_huddraw_build(art, &s_ops, px, ox, oy, (int)w, (int)h, (HUDINST*)(s_imap + (size_t)slot * IBYTES),
@@ -628,9 +650,11 @@ lost:
        and the banded path's resources may still be in flight, so the pass stops drawing and asks
        for nothing more. Nothing is destroyed here, mid-frame, where other slots' submits still
        name these objects: tagpu_vk_hud_down gives them back behind the seam's vkDeviceWaitIdle
-       on the seam's next teardown (vk_down, passes_down), and leaves the pass UNBUILT to come back. */
-    plog(d, "hud: the device failed an upload - the pass stops drawing until the passes are rebuilt");
+       on the seam's next teardown (vk_down, passes_down). The HUD stays off for the session, and
+       the dock and the cards come back (tagpu_hudstate_refuse). */
+    plog(d, "hud: the device failed an upload - the pass stops drawing");
     s_state = ST_REFUSED;
+    tagpu_hudstate_refuse("the device failed an upload");
     s_ninst = 0;
     return 0;
 }

@@ -13,7 +13,8 @@ every element only one side has, and exits 1 when a box or a baseline differs by
 units or an element is unmatched.
 
 A baseline that differs where Chrome rounds the face's ascent or descent to another whole pixel than
-round(em x size) does is named, not failed: the line rule is the one checked, and Chrome's rounding
+round(em x size) does, and that the same rule on Chrome's own metrics reproduces, is named, not
+failed: the line rule is the one checked, and Chrome's rounding
 of Oswald's 1.193 em ascent departs from the plain one at about one size in three hundred by an
 arithmetic not identified (hud-layout.md, "Text").
 
@@ -240,9 +241,16 @@ def main():
                         s = d["size"] * dom["u"]
                         a, de = faces[c["style"]]
                         return (math.floor(a * s + 0.5), math.floor(de * s + 0.5)) != (d["asc"], d["desc"])
+                    def chrome_line(d):
+                        """The same rule (tagpu_hudlay_baseline) on Chrome's own rounded metrics."""
+                        u = dom["u"]
+                        s, y, h, A, D = d["size"] * u, d["r"][1] * u, d["r"][3] * u, d["asc"], d["desc"]
+                        return (y + (h - s) / 2 + A + math.floor((s - A - D) / 2)) / u
                     off = [(c, d) for c, d in pairs if abs(c["base"] - d["base"]) > TOL]
-                    metric = [(c, d) for c, d in off if chrome_rounds(c, d)]
-                    rule = [(c, d) for c, d in off if not chrome_rounds(c, d)]
+                    # excused only where Chrome's metrics differ AND the rule on them gives the
+                    # browser's baseline: a line rule that is wrong still fails
+                    metric = [(c, d) for c, d in off if chrome_rounds(c, d) and abs(chrome_line(d) - d["base"]) <= TOL]
+                    rule = [p for p in off if p not in metric]
                     bl = max((abs(c["base"] - d["base"]) for c, d in pairs if (c, d) not in metric), default=0)
                     extra = f", size within {sz:.4f}, baseline within {bl:.4f}"
                     if metric:

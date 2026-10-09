@@ -195,6 +195,11 @@ void tagpu_hudart_start(void)
     CloseHandle(t);
 }
 
+int tagpu_hudart_failed(void)
+{
+    return InterlockedCompareExchange(&s_ready, 0, 0) == 2;
+}
+
 const HUDART* tagpu_hudart_get(void)
 {
     return InterlockedCompareExchange(&s_ready, 0, 0) == 1 ? &s_art : NULL;

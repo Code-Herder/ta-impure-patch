@@ -28,6 +28,7 @@
 /* ---- the game thread ---------------------------------------------------------------------- */
 
 static volatile LONG s_on = -1;         /* -1 unread, 0 off, else the scale's lever value or 1 */
+static volatile LONG s_refused;         /* the render thread: the HUD cannot draw this session  */
 
 int tagpu_hudstate_on(void)
 {
@@ -47,9 +48,16 @@ int tagpu_hudstate_on(void)
             tagpu_logf("hud: the replay HUD is on (%s)%s", LEVER, v > 1 ? ", scale from the lever" : "");
         v = InterlockedCompareExchange(&s_on, 0, 0);
     }
-    /* drawn only on the Vulkan lane, the packet's only reader: on GDI, or after the lane falls
-       back to it (render_vk.c), the HUD is off and the dock and the cards stand where they were */
-    return v != 0 && g_ddraw.renderer == vk_render_main;
+    /* drawn only on the Vulkan lane, the packet's only reader, and only while the pass has not
+       refused: on GDI, after the lane falls back to it (render_vk.c), or once the HUD cannot draw,
+       it is off and the dock and the cards stand where they were */
+    return v != 0 && g_ddraw.renderer == vk_render_main && !InterlockedCompareExchange(&s_refused, 0, 0);
+}
+
+void tagpu_hudstate_refuse(const char* why)
+{
+    if (InterlockedExchange(&s_refused, 1) == 0)
+        tagpu_logf("hud: the replay HUD cannot draw (%s) - the dock and the cards come back", why);
 }
 
 static unsigned scale_pct(void)
@@ -107,7 +115,10 @@ int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
 /* ---- the render thread -------------------------------------------------------------------- */
 
 static HUDSTATE s_st;
+/* every marker the packet carries -- the walker's deaths and defeats, then the bookmarks -- fits */
+typedef char hud_marks_fit[(TAGPU_PK_HUD_MARKS <= HUD_MAXMARK) ? 1 : -1];
 static int      s_have;
+static unsigned s_frame;                /* the render-thread frame `s_st` is for */
 static float    s_px;
 static int      s_ox, s_oy;
 
@@ -292,6 +303,7 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     st->nmark = k;
     st->mx = st->my = -1;
     s_px = u;
+    s_frame = f->frame_counter;
     s_have = 1;
     if ((f->frame_counter % 30u) == 0u && GetFileAttributesA(DUMP_ASK) != INVALID_FILE_ATTRIBUTES) {
         DeleteFileA(DUMP_ASK);
@@ -299,9 +311,11 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     }
 }
 
-int tagpu_hudstate_frame(const HUDSTATE** st, float* px, int* ox, int* oy)
+int tagpu_hudstate_frame(unsigned frame, const HUDSTATE** st, float* px, int* ox, int* oy)
 {
-    if (!s_have) return 0;
+    /* this frame's state or none: a frame whose overlay returned before `present` (a teardown,
+       tagpu_overlay.off) would otherwise draw the last one it saw (tagpu_vk_pass.h, `frame`) */
+    if (!s_have || s_frame != frame) return 0;
     *st = &s_st;
     *px = s_px;
     *ox = s_ox;

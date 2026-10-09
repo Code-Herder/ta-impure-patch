@@ -44,4 +44,7 @@ void          tagpu_hudart_start(void);
 /* The loaded HUD, or NULL while it loads and for good when it failed (the log says why). */
 const HUDART* tagpu_hudart_get(void);
 
+/* 1 once the load has failed, for good. Any thread. */
+int           tagpu_hudart_failed(void);
+
 #endif

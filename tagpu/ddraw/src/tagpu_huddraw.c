@@ -138,7 +138,11 @@ const unsigned char* tagpu_huddraw_atlas(unsigned* gen, int* y0, int* y1)
     *y1 = s_dirty1;
     return s_atlas;
 }
-void tagpu_huddraw_atlas_sent(void) { s_dirty0 = HUD_ATLAS; s_dirty1 = 0; }
+void tagpu_huddraw_atlas_sent(int y)
+{
+    if (y >= s_dirty1) { s_dirty0 = HUD_ATLAS; s_dirty1 = 0; }
+    else if (y > s_dirty0) s_dirty0 = y;
+}
 
 /* The glyph's place in the atlas, rasterised on first use; NULL when it does not fit. */
 static const GLYPH* glyph(const HUDFACE* f, int fi, float size, int g, int quarter)
