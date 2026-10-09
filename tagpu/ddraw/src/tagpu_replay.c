@@ -1304,9 +1304,10 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    the slot, the owner); the carry links and the attach piece (0x48AB70's); the state byte
    (0x48B090's); the yard's bit, +0x10F bit 2 (YARD_OPEN's); the create's +0x110 bits 28-31; and
    the contact bits 8-10 and 12, which the host's radar pass computes for its own view (D1),
-   except that return-to-now restores their saved history through rw_contacts. The
-   harness compares them all but the contact bits (tools/replay/tarec.py compare --puppet), and
-   bits 8-10 too when the host shows the recording's own viewed player. +0x110 bit 14, dying, is
+   except that a seek puts the recorded ones back through rw_contacts: bits 8-10 when the host
+   shows the recording's own viewed player, all four on return-to-now (R14b). The harness
+   compares them all but the contact bits (tools/replay/tarec.py compare --puppet), and bits 8-10
+   too when the host shows the recording's own viewed player. +0x110 bit 14, dying, is
    a value like the rest: the reaper's Send_UnitDeath is refused for a puppet (tagpu_puppet.c),
    so a unit the recording marks dying lives until its recorded death, in the step it died in
    there.
@@ -1343,6 +1344,10 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define U_BUILT        0x104        /* the build left, a float: 0.0 when finished                  */
 #define U_STATE        0x110
 #define U_SELECTED     0x10u        /* +0x110 bit 4: the viewer's own selection (a drop row)      */
+#define CONTACT_VIEWED 0x700u       /* +0x110 bits 8-10: the viewed record's contacts, which only
+                                       0x467440 and its visitors write on a puppet host           */
+#define CONTACT_SCAN   0x1700u      /* ... and bit 12, which loop 1 clears and loop 4 sets for a
+                                       type-1 or type-2 owner: the whole scan                     */
 #define U_MODEL        0x9E         /* the model instance (Object3do): the create 0x485D40 stores it
                                        (0x485DCC, 0x485E0E) and only the destructor frees it,
                                        nulling the field at once (0x486D93..0x486DA3)            */
@@ -1420,7 +1425,7 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define OFF_FXLAYERS   0x38D77      /* the particle layer table, FX_LAYERS of 16 bytes (0x471D90)  */
 #define FX_LAYERS      10
 /* +0x110 bits excluded from the general image writes: layer and walk class (0-3), contact bits
-   (8-10, 12; rw_contacts restores them only on return-to-now), the fix-up's bit (16, step 3),
+   (8-10, 12; R14b's rw_contacts restores them in a seek), the fix-up's bit (16, step 3),
    carried (17), and the create's 28-31 */
 #define U_ENGINE_BITS  0xF003170Fu
 #define NOTES_MAX      32           /* the log lines a level's anomalies may take                 */
@@ -5242,13 +5247,15 @@ void __cdecl tagpu_replay_capture(void)
      set from T (R15).
    So a seek in a fresh process, a seek forwards and a seek backwards to T agree.
    The contact bits +0x110 8-10 and 12 hold the viewed seat's scan history (D1). On a puppet
-   host only the viewed record's 30-tick pass writes the contact bits, and R14b sets them from T
-   with that pass. The minimap's fog is composited by that pass when a sight change has asked for
-   it, by the sight rebuild 0x4816A0, and by sight_fill, so at a seek R14 composites it from T's
-   counters. A playing holds its last pass's values until its next, so the two hosts agree from
-   the next pass on, which R15 schedules at the same GameTime on both, and at T itself when T-1
-   is a multiple of 30 (O14). In V's view the minimap's fog is the same on both hosts at every T:
-   V's counters are all 1 and V's bit is in every cell.
+   host only the viewed record's 30-tick pass writes the contact bits; R14b runs that pass and,
+   when the host views the recording's viewed record, puts the recorded bits 8-10 back, which
+   are what a playing in that view holds at T. The minimap's fog is composited by that pass when
+   a sight change has asked for it, by the sight rebuild 0x4816A0, and by sight_fill, so at a
+   seek R14 composites it from T's counters. A playing holds its last pass's values until its
+   next, so in any other view, and for the fog in every seat's view, the two hosts agree from the
+   next pass on, which R15 schedules at the same GameTime on both (O14). In V's view the
+   minimap's fog is the same on both hosts at every T: V's counters are all 1 and V's bit is in
+   every cell.
    Host-own state that survives, none of it read on a puppet host: B4's per-slot columns (births
    stay strictly increasing per slot), the passability cache, the order inside the seats'
    control-group vectors. The bytes a slot dead at T holds also survive, and a later create starts
@@ -6837,12 +6844,17 @@ static void sk_refused(int tk, unsigned T, const char* why)
     else tagpu_logf("replay: %s: seek to %u refused: %s", s_name, T, why);
 }
 
-/* Return-to-now keeps the viewed seat's scan history. The engine scans only on its 30-tick
-   deadline (DISASSEMBLED 0x46507D..0x465092, call 0x46556D); running 0x467440 between those
-   deadlines would reveal newly created units early and rewrite +0xB0. The saved image holds
-   both, and R15 restores the seated records' deadlines. Bound each slot and verify its identity
-   before copying only the four contact bits; the next scheduled engine scan owns them again. */
-static void rw_contacts(const Lv* L, const RecWorld* W)
+/* The recorded contact bits `mask` of +0x110, put back from W's images (R14b):
+   - return-to-now, CONTACT_SCAN: it keeps the viewed seat's scan history. The engine scans only
+     on its 30-tick deadline (DISASSEMBLED 0x46507D..0x465092, call 0x46556D); running 0x467440
+     between those deadlines would reveal newly created units early and rewrite +0xB0. The saved
+     image holds both, and R15 restores the seated records' deadlines;
+   - a seek in the recording's own viewed record, CONTACT_VIEWED, after its radar pass.
+   W is the primary stream: in a multiplayer recording it is the recording machine's own scan,
+   where mp_world's owners' images carry their machines'. Each slot is bounded and its identity
+   verified before the copy; one that fails keeps what the host holds, and the next scheduled
+   engine scan owns them all again. */
+static void rw_contacts(const Lv* L, const RecWorld* W, uint32_t mask)
 {
     unsigned slot;
     for (slot = 1; slot < L->nslots; slot++) {
@@ -6852,7 +6864,7 @@ static void rw_contacts(const Lv* L, const RecWorld* W)
         if (!W->live[slot] || !holds(L, slot, img)) continue;
         u = unit_at(L, slot);
         memcpy(&state, u + U_STATE, 4);
-        state = (state & ~0x1700u) | (img[U_STATE / 4] & 0x1700u);
+        state = (state & ~mask) | (img[U_STATE / 4] & mask);
         memcpy(u + U_STATE, &state, 4);
     }
 }
@@ -6986,26 +6998,50 @@ static int seek_run(char* ta)
        made */
     if (tk) minimap_fog(ta);
     else sight_fill(ta, s_viewer);
-    /* R14b: the viewed record's radar pass, once, as its 30-tick pass runs it (0x46556D).
-       Return-to-now instead restores the saved scan through rw_contacts. On a puppet host,
-       after the creates, only that pass
-       writes them: R7's creates clear bits 8-10 and set bit 9 from the def (0x485B4C,
-       0x485C3E..0x485C44), so until the next pass no unit has a contact. One pass at the end of
-       the seek computes them from the world at T. A playing's last pass ran in step
-       P = 30*floor((T-1)/30), on iteration P+1, because the players phase 0x49555F follows the
-       replay step in the unit tick's stub 0x4954ED. So the two hosts agree from the next pass
-       on, at GameTime P+30, which R15 schedules on both, and at T itself when T-1 is a multiple
-       of 30; until the next pass the seek shows T's contacts, and in a seat's view T's minimap
-       fog, where a playing shows those of P+1 (O14). The pass's other call, the minimap fog
-       0x466C20, ran in R14 (sight_fill), and the radar pass asks for no other: neither it
-       (0x467440..0x467836) nor its callees -- the unit walk 0x47E890 with its visitors 0x467840,
-       0x467960 and 0x467980, 0x40B0D0, the math helpers 0x4E4400 and 0x4E43D0 -- write
-       main+0x142F1 (DISASSEMBLED; the `or` of bit 1 at 0x46742F, just before, is the radar
-       rebuild 0x466DC0's last store, whose ret is at 0x46743D). It runs after the last write it
-       reads -- R7's units, R8's positions and alliances, R13's LosType and explored map, R14a's
-       records' stamps -- and before R15, which it does not read. */
-    if (back) rw_contacts(&L, W);
-    else E_RadarPass();
+    /* R14b: the contact bits, +0x110 8-10 and 12 (D1). Return-to-now restores the saved scan
+       through rw_contacts. Otherwise the viewed record's radar pass runs once, as its 30-tick
+       pass runs it (0x46556D). On a puppet host, after the creates, only that pass writes the
+       bits: R7's creates clear bits 8-10 and set bit 9 from the def (0x485B4C,
+       0x485C3E..0x485C44), so without it no unit would have a contact; and its first loop
+       clears bit 12 on every live unit (0x4674AE), which its fourth sets only for a type-1 or
+       type-2 owner (0x4676A1..0x4676AA), of which a puppet host has none.
+       The pass alone does not give a playing's bits 8-10, not even at T = P+1. A playing's last
+       pass ran in step P = 30*floor((T-1)/30), in the players phase 0x49555F after the unit tick
+       0x4954ED: it read iteration P+1's units, but the globals as they stood mid-step, and a
+       write after it in step P reaches image P+1 and not that pass. MEASURED 2026-10-09 on the
+       tenseat fixture, whose LOS command is typed at GameTime 900: image 901 carries LosType 6
+       and the bit 8 a LosType-4 pass set on every enemy unit, which a playing holds until its
+       pass at 930 and this pass, run on any image of 901..930, clears on every unit the viewed
+       record's sight counters do not cover (19 at 901).
+       So in a seek, when the host views the recording's viewed record, the recorded bits 8-10
+       replace the pass's. The invariant: in that view a playing computes the same pass from the
+       same inputs at the same phase (D1; R15 keeps the phase), so what the recording holds at T
+       is what a playing holds at T -- every capture-point dump in that view compares the radar
+       picture strictly and is EQUAL (tarec.py compare --puppet). The bound: a slot live in the
+       image whose host slot holds a live unit of its type (rw_contacts); any other keeps the
+       pass's bits. The residual: a recording whose viewed record changed within the 30 ticks
+       before T holds the old record's scan, where a playing holds its own, until the next pass.
+       With any other view nothing recorded is the truth: the seek shows the pass's contacts at
+       T where a playing shows those of P+1, until the next pass at P+30, which R15 schedules on
+       both (O14); display state on a puppet host. In a seat's view, the recording's viewed
+       record's included, the minimap fog R14 composited is T's where a playing shows that of
+       its last pass until the next (O14). A takeover keeps the pass's bits, which its AI's
+       acquisition 0x40AA40 reads (0x40AB3F): an open question, not this seek's.
+       The pass's other call, the minimap fog 0x466C20, ran in R14 (sight_fill), and the radar
+       pass asks for no other: neither it (0x467440..0x467836) nor its callees -- the unit walk
+       0x47E890 with its visitors 0x467840, 0x467960 and 0x467980, 0x40B0D0, the math helpers
+       0x4E4400 and 0x4E43D0 -- write main+0x142F1 (DISASSEMBLED; the `or` of bit 1 at 0x46742F,
+       just before, is the radar rebuild 0x466DC0's last store, whose ret is at 0x46743D). It
+       runs after the last write it reads -- R7's units, R8's positions and alliances, R13's
+       LosType and explored map, R14a's records' stamps -- and before R15, which it does not
+       read. */
+    if (back) {
+        rw_contacts(&L, W, CONTACT_SCAN);
+    } else {
+        E_RadarPass();
+        if (!tk && W->view[1] == (unsigned char)ta[OFF_VIEWED])
+            rw_contacts(&L, W, CONTACT_VIEWED);
+    }
     /* R14c: the records' expiry, as 0x495688 follows the players phase (THE SEEK'S SIGHT
        RECORDS) */
     E_SightExpire();

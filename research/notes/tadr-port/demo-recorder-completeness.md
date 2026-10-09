@@ -588,8 +588,11 @@ place to T with the poison check, and takes frame dump B; `tarec.py compare-dump
 strictly — units and their order lists, players, declared tables, features and wrecks, the globals,
 the projectile pool, the explored map and every player's sight counters — and A against B must be
 EQUAL, with no exception: with nothing between them, a difference is the rebuild's. The seek makes
-the viewed seat's temporary sight records again, so the viewed record's counters and the units'
-contact bits compare strictly too. The live in-place restore, which a
+the viewed seat's temporary sight records again, so the viewed record's counters compare strictly
+too, and the units' contact bits: the R process views the recording's viewed player, in which the
+seek runs the radar pass and then takes `+0x110` bits 8–10 from the recording, since no image
+reproduces the pass a playing holds (the skirmish slice's O14). So a round trip agrees at every
+T, not only at the pass's step. The live in-place restore, which a
 recording machine cannot do without the takeover's own steps, is built and verified with the
 takeover in S4. Inside the rebuild, just before its table write (R12), every declaration the
 recorder records is filled with `0xA5` outside the bytes its layout keeps, and a byte the write must
@@ -873,6 +876,16 @@ A takeover does not restore that state, so two takeovers of one recording at one
 nowhere else: MEASURED 2026-10-08, tenseat taken over at 931 and dumped at 2731, at a fixed turbo
 k and at speed 20 alike. Closing it needs the stream's state recorded and restored at a takeover,
 or the shower's draws moved off the shared stream.
+
+**A takeover's contact bits are its own radar pass's** (open; the owner's question). The seek takes
+`+0x110` bits 8–10 from the recording when the host views the recording's viewed player, since the
+pass a playing holds read its step's globals mid-step and no image reproduces it (the skirmish
+slice's O14: the tenseat fixture's LOS command at GameTime 900 leaves image 901 with LosType 6 and
+contacts a LosType-4 pass set). The takeover still runs only the pass on T's world, and those bits
+are its AI's input: the acquisition scan `0x40AA40` puts every non-allied unit with bit 8 on each
+local seat's radar list (`0x40AB3F`). Whether the fork's first acquisitions should read the
+recording's contacts instead is not decided; the harness's GameTimes stay ≡ 1 (mod 30) for
+the takeover lanes meanwhile.
 
 **Battle-los's ground and feature impacts differ by a few calls, cause unknown** (open, inside the
 band). The impact `0x499EB0` from the collision test's feature, ground and water path

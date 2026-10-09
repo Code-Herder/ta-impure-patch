@@ -1594,7 +1594,9 @@ viewed seat's scan (R14b), and an owner's image carries its own machine's: a
 player's own units are in contact on its own machine. So when both worlds view
 the same player, a composed unit takes the recorder's bits from the primary
 stream. A unit that stream does not hold yet is compared without them and
-counted. Both measured forks counted 0. A dump comparison takes the same rule
+counted. Both measured forks counted 0. A seek in that view takes bits 8–10 from
+the primary stream itself (R14b), so it starts from the recorder's scan wherever
+a slot holds the primary's unit. A dump comparison takes the same rule
 whenever the dump views the seat the recorder viewed (a playing with
 `--perspective` of the recorder's own record); in full view, or from another
 seat, the views differ and the contact bits are not compared. The count of

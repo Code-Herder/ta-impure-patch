@@ -1209,7 +1209,8 @@ The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
   (`tagpu_patches_restored`, `tagpu_weapons_restored`); the globals, the pool and the explored map
   are written; V's sight is filled and the minimap's fog composited from T's counters (R14); the
   viewed record's radar pass `0x467440` runs once (R14b), so the contact bits are T's rather than
-  those the creates left, which hold no contact; the deadlines the recording does not carry are reset (V's
+  those the creates left, which hold no contact, and when the host views the recording's viewed
+  record bits 8–10 are then taken from the recording (O14, *What S3b leaves*); the deadlines the recording does not carry are reset (V's
   players-phase deadline to the next multiple of 30, every DisplayTimer to GameTime, the notices
   `0x47EE30` and the chat lines `0x463C80`, the level init's own resets) and every seat's pacing
   stamp is set.
@@ -1399,18 +1400,37 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
   where the playing found one free [INFERRED from that one script]. The guard, published in v0.3.1,
   then stops the game where stock would leave that script thread waiting. The remedy is the guard's
   own landing (O15), not the recorder's.
-- **For up to 29 ticks after a seek, the contact bits are one radar pass fresher than a playing's.**
-  They are display state, written on a puppet host only by the viewed record's 30-tick radar pass;
-  the seek runs that pass once from T's world, where a playing still holds what its last pass, at
-  iteration P+1 (P = 30·⌊(T−1)/30⌋), computed. In V's view the difference is only `+0x110` bits 8
-  and 9 of a unit the recording makes in steps P+1..T−1 (set after the seek, clear on the playing,
-  unless the unit's def sets bit 9) and bit 12 where such a unit's slot held it (clear after the
-  seek, kept on the playing) — MEASURED once
-  (*S3b, verified and measured*, unit 1502 at 2490). In a seat's view it also covers units that
-  entered or left that seat's radar since P+1, and the minimap's fog; that half is established by
-  the disassembly, not measured: the harness seeks only to GameTimes T ≡ 1 (mod 30), where the two
-  agree at once. From the next pass on, scheduled at the same
-  GameTime on both hosts, the two agree, and at a T with T−1 a multiple of 30 they agree at once.
+- **For up to 29 ticks after a seek in any view but the recording's own, the contact bits are not
+  a playing's** (O14). They are display state, written on a puppet host only by the viewed record's
+  30-tick radar pass, which reads the units the unit tick of its step has just moved and the
+  globals mid-step, so no image reproduces it (the engine map's *The radar pass `0x467440` and the
+  minimap's fog composite*). The seek runs that pass once on T's world (R14b), where a playing
+  still holds what its last pass, in step P = 30·⌊(T−1)/30⌋, computed. **When the host views the
+  recording's viewed record the seek then takes bits 8–10 from the recording**, on every slot live
+  in the image whose host slot holds a live unit of its type: in that view a playing computes the
+  same pass from the same inputs at the same phase (D1), so what the recording holds at T is what a
+  playing holds — every capture-point dump in that view compares the radar picture strictly and is
+  EQUAL. That closes O14 for the contact bits in that view at every T, T = P+1 included, where the
+  pass alone is wrong whenever something the pass read changed later in its step: MEASURED
+  2026-10-09, the tenseat fixture's LOS command typed at GameTime 900 leaves images 901..930 with
+  LosType 6 and the bit 8 a LosType-4 pass set on its 19 enemy units; the pass alone cleared them,
+  and the round trip at 901 differed A against B in exactly those 19 `+0x110` (and at 911 in a
+  process with no round trip before it); with the recorded bits the round trips at 901, 911 and 931
+  are EQUAL. Its residual: a recording whose viewed record changed within the 30 ticks before T
+  holds the old record's scan until its next pass, where a playing holds its own. In any other view
+  nothing recorded is the truth, and the seek shows the pass's contacts at T until the next pass:
+  in V's view only `+0x110` bits 8 and 9 of a unit the recording makes in steps P+1..T−1 (set after
+  the seek, clear on the playing, unless the unit's def sets bit 9) and bit 12 where such a unit's
+  slot held it (clear after the seek, kept on the playing) — MEASURED once (*S3b, verified and
+  measured*, unit 1502 at 2490); in another seat's view also the units that entered or left that
+  seat's radar since P+1, established by the disassembly, not measured. In a seat's view, the
+  recording's viewed record included, the minimap's fog R14 composites from T's counters is T's
+  where a playing shows its last pass's. From the next pass on, scheduled at the same GameTime on
+  both hosts, the two agree. **A takeover keeps the pass's bits** (open, the owner's question): the
+  fork's AI reads them, since the acquisition scan `0x40AA40` puts a non-allied unit with bit 8 on
+  every local seat's radar list (`0x40AB3F`), so where the pass on T's world differs from the bits
+  the recording holds at T the fork's AI acquires from other contacts than the recording machine's
+  would have [INFERRED from the disassembly, not measured].
 - **A unit the recording machine made after its players phase is drawn one frame early** on a puppet
   host, which makes it in the step's unit tick, before that step's draw; `books_put` makes its
   bookkeeping the recording's at the next capture point, and the picture of one frame stays. Its
@@ -1572,7 +1592,10 @@ not install. Explicit seeks can still move the reader past an armed target.
 
 **`tools/replay/tareplay.py`.** `run FIXTURE... [-j N] [--dll PATH] [--stock-dll PATH] [--keep]
 [--out DIR]` (`all` for every fixture) and `list`. For each fixture four GameTimes, each T ≡ 1 (mod
-30) so a seek's contact bits agree at once (O14), in [301, min(0.8·end, end−330)] — room for the
+30) so a takeover's contact bits, which its own radar pass makes, agree at once unless something
+the pass read changed later in its step (O14) — a seek in the recording's viewed player, which the
+R and Q processes play in, takes them from the recording and agrees at every T — in
+[301, min(0.8·end, end−330)] — room for the
 continuation dump 300 ticks after the last round trip — drawn by a generator seeded with the
 fixture's name and HEAD and printed: T1 the smallest, T2..T4 the round trips, Tlast = T4. The lower
 bound is 301, not the plan's 90, and there are no dumps at GameTime 30: the dumps are armed through

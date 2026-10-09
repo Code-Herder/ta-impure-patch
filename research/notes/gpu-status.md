@@ -3573,7 +3573,8 @@ and on the loader thread at the allocator ownership boundary and the level init'
   again through the engine's add `0x482910`, one for each recorded death of a live viewed-seat unit
   under true LOS whose 60 ticks a playing still holds, the reader having started at least 123
   iterations before T to find them; V's sight with the minimap's composite; the viewed record's
-  radar pass `0x467440` once (contact bits `+0x110` 8–10 and 12); the records' expiry `0x482130`
+  radar pass `0x467440` once (contact bits `+0x110` 8–10 and 12), then, when the host views the
+  recording's viewed record, bits 8–10 from the primary stream's images; the records' expiry `0x482130`
   once; every seat's `+0xF0` from the image
   and V's to the next multiple of 30, every record's `+0xF8` = GameTime, the notices `0x47EE30` and
   the chat lines `0x463C80`; and every seat's `+0x18`;

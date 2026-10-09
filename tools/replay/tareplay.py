@@ -18,8 +18,11 @@ such a note covers HEAD. `broad` runs every fixture and fixtures.json's `broad` 
 what the tier never exercised.
 
 FIXTURE is a name in tools/replay/fixtures.json, or `all`. For each fixture four GameTimes are
-drawn (one more for each round trip a broad entry's `trips` asks for beyond three), each T = 1 (mod 30) -- the radar pass's step, so a seek's contact bits agree at once (O14)
--- between 301 and 0.8 x its end, from a generator seeded by the fixture's name and HEAD, and
+drawn (one more for each round trip a broad entry's `trips` asks for beyond three), each T = 1 (mod 30)
+-- the radar pass's step, so a takeover's contact bits, which its own pass makes, agree at once
+unless something the pass read changed later in its step (O14); a seek in the recording's viewed
+player takes them from the recording and agrees at every T -- between 301 and 0.8 x its end, from
+a generator seeded by the fixture's name and HEAD, and
 printed: T1 the first, T2..T4 the round trips, Tlast = T4.
 An entry's `last_min` requires Tlast to reach a named completion checkpoint; it keeps late
 construction events inside the live/puppet comparison on every commit's random seed.
