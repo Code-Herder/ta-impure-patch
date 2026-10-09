@@ -23,9 +23,6 @@ select { background: #1c1e19; color: var(--fg); border: 1px solid var(--line); b
 .wrap { max-width: 100%; overflow: auto; border: 1px solid var(--line); background: #000; }
 .stage { --u: 1px; position: relative; overflow: hidden; user-select: none; -webkit-user-select: none; }
 .stage .bg { position: absolute; inset: 0; width: 100%; height: 100%; background: #000; }
-.toast { position: absolute; left: 50%; top: 7%; transform: translateX(-50%); font: 600 calc(10 * var(--u)) 'Oswald', sans-serif; color: #e2dcb0;
-  background: rgba(8, 10, 6, .86); border: 1px solid #4a4c3c; padding: calc(3 * var(--u)) calc(9 * var(--u)); opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 5; }
-.toast.on { opacity: 1; }
 p.note { color: var(--muted); max-width: 80ch; }
 .err { color: #ff8a6a; }
 </style>
@@ -39,7 +36,7 @@ p.note { color: var(--muted); max-width: 80ch; }
   <label>Players <select id="np"></select></label>
   <label>Teams <select id="nt"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
 </header>
-<div class="wrap" id="wrap"><div class="stage" id="stage"><canvas class="bg" id="bg"></canvas><div class="hud" id="hud-layer"></div><div class="toast" id="toast"></div></div></div>
+<div class="wrap" id="wrap"><div class="stage" id="stage"><canvas class="bg" id="bg"></canvas><div class="hud" id="hud-layer"></div></div></div>
 <p class="note">Every size, position and style here comes from <code>art/hud/layout.json</code> and the parts in <code>art/hud/</code>;
 this page only supplies a game to show. Hover a player row for its actions; drag the timeline to seek and the window by its title.
 The numbers are synthetic.</p>
@@ -61,13 +58,17 @@ const MEASURES = [
   { k: 'kills', g: 'army', n: 'kills', u: 'so far' }, { k: 'losses', g: 'army', n: 'losses', u: 'so far' },
   { k: 'excess', g: 'eco', n: 'wasted metal', u: 'total' }];
 
-const S = { t: 70, playing: true, speed: 1, hud: 1, game: 150, res: 'fit', np: 10, nt: 2, fold: [], bm: [40], stat: true, sm: 'units', ss: 'player', sw: null, mapov: false };
-try { Object.assign(S, JSON.parse(localStorage.getItem('hud-mockup') || '{}')); } catch (e) {}
-const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ hud: S.hud, game: S.game, res: S.res, np: S.np, nt: S.nt, stat: S.stat, sm: S.sm, ss: S.ss, sw: S.sw })); } catch (e) {} };
-{ const q = new URLSearchParams(location.search);   // screenshot switches: res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&paused
+// the four overlay switches are on whenever a replay starts, and never saved; the stats button is disabled until the
+// recorder has a stats track, so its window opens only through the stat=1 switch, to review its design
+const S = { t: 70, playing: true, speed: 1, hud: 1, game: 150, res: 'fit', np: 10, nt: 2, fold: [], bm: [40], stat: false, sm: 'units', ss: 'player', sw: null,
+  ov: { cursors: true, clicks: true, selections: true, chat: true }, sight: -1, follow: -1, scroll: 0, toast: '' };
+try { const o = JSON.parse(localStorage.getItem('hud-mockup') || '{}'); delete o.stat; Object.assign(S, o); } catch (e) {}
+const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ hud: S.hud, game: S.game, res: S.res, np: S.np, nt: S.nt, sm: S.sm, ss: S.ss, sw: S.sw })); } catch (e) {} };
+{ const q = new URLSearchParams(location.search);   // screenshot switches: res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&paused,
+  // and scroll=<first item>, sight=<seat>, follow=<seat>, toast=<text>
   if (q.has('paused')) S.playing = false; if (q.get('res')) S.res = q.get('res'); if (q.get('hud')) S.hud = +q.get('hud') / 100;
   if (q.get('game')) S.game = { off: -1, auto: 0 }[q.get('game')] ?? +q.get('game');
-  for (const k of ['np', 'nt', 't']) if (q.get(k)) S[k] = +q.get(k); for (const k of ['sm', 'ss']) if (q.get(k)) S[k] = q.get(k);
+  for (const k of ['np', 'nt', 't', 'scroll', 'sight', 'follow']) if (q.get(k)) S[k] = +q.get(k); for (const k of ['sm', 'ss', 'toast']) if (q.get(k)) S[k] = q.get(k);
   if (q.has('stat')) S.stat = q.get('stat') !== '0'; }
 
 /* ---- the game's own state: state=<url> loads what the game dumped (tagpu_replayhud.dump, tagpu_hudstate.c) -- the screen,
@@ -80,7 +81,8 @@ function seats() {
   return [...Array(N).keys()].map(i => {
     const r = lost.indexOf(i), l = r >= 0, units = l ? 20 + (i * 7) % 30 : 420 - 23 * i + (i * 37) % 50;
     const mf = Math.min(1, units / 470), ef = Math.min(1, units / 420 + .08), mmax = 1000 * (2 + Math.round(units / 28)), emax = 4000 * (1 + Math.round(units / 30));
-    return { i, name: NAMES[i % 16], colour: SEAT_COL[i % SEAT_COL.length], units, lost: l, death: l ? 50 + r * 70 / Math.max(1, lost.length) : null, out: l && r % 2 === 0,
+    // only the first seat's camera was recorded, as in a skirmish where the others are AI
+    return { i, name: NAMES[i % 16], colour: SEAT_COL[i % SEAT_COL.length], units, lost: l, death: l ? 50 + r * 70 / Math.max(1, lost.length) : null, out: l && r % 2 === 0, cam: i === 0,
       res: { m: Math.round(mf * mmax * .7 / 10) * 10, mmax, e: Math.round(ef * emax * .66 / 10) * 10, emax,
              mi: Math.round(40 + mf * 90), mo: Math.round(20 + mf * 60), ei: Math.round(300 + ef * 600), eo: Math.round(150 + ef * 500) } };
   });
@@ -141,11 +143,12 @@ function state() {
   const L = HUD.layout, sw = S.sw || { x: L.window.x, y: L.window.y };
   if (GAME) { const g = GAME.state;
     return { W: g.W, H: g.H, frame: g.frame, t: g.t, T: g.T, playing: g.playing, speed: g.speed, hud: g.hud, seats: g.seats, teams: g.teams,
-      folded: g.folded, markers: g.markers, toggles: g.toggles, measures: MEASURES,
+      folded: g.folded, markers: g.markers, toggles: g.toggles, sight: g.sight, follow: g.follow, scroll: g.scroll, toast: g.toast, measures: MEASURES,
       stats: { open: false, x: sw.x, y: sw.y, measure: m, split: 'player', groups: pl, format: String } }; }
   return { W: w / u, H: h / u, frame: { panel: ef.panel / ud, top: ef.bar / ud, bottom: ef.bar / ud },
     t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, seats: ps, teams: tm, folded: S.fold, markers,
-    toggles: { stats: S.stat, map: S.mapov }, measures: MEASURES,
+    sight: S.sight, follow: S.follow, scroll: S.scroll, toast: S.toast,
+    toggles: { ...S.ov }, measures: MEASURES,
     stats: { open: S.stat, x: sw.x, y: sw.y, measure: m, split: byTeam ? 'team' : 'player', groups,
       format: v => (m.k === 'metal' && v < 100 ? v.toFixed(1) : v >= 10000 ? (v / 1000).toFixed(v >= 100000 ? 0 : 1) + 'k' : String(Math.round(v))) } };
 }
@@ -185,7 +188,7 @@ function resize() {
 }
 
 /* ---- input ---- */
-function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('on'), 1800); }
+function toast(msg) { S.toast = msg; clearTimeout(toast.h); toast.h = setTimeout(() => { S.toast = ''; build(); }, HUD.layout.toast.ms); }
 let seek = null, drag = null;
 function seekTo(tr, x) { const r = tr.getBoundingClientRect(), e = +tr.dataset.ends * unit(); S.t = Math.min(T, Math.max(0, (x - r.left - e) / (r.width - 2 * e) * T)); HUD.tick(layer, state()); }
 layer.addEventListener('pointerdown', e => {
@@ -204,6 +207,11 @@ layer.addEventListener('pointermove', e => {
   }
 });
 window.addEventListener('pointerup', () => { if (drag) save(); seek = drag = null; });
+// the wheel over the column scrolls it an item a notch
+layer.addEventListener('wheel', e => {
+  const c = e.target.closest('[data-last]'); if (!c || !e.deltaY) return;
+  e.preventDefault(); S.scroll = Math.max(0, Math.min(+c.dataset.last, +c.dataset.first + Math.sign(e.deltaY))); build();
+}, { passive: false });
 layer.addEventListener('click', e => {
   const a = e.target.closest('[data-act]'); if (!a) return;
   switch (a.dataset.act) {
@@ -215,13 +223,16 @@ layer.addEventListener('click', e => {
       toast(near >= 0 ? 'Bookmark removed' : `Bookmark at ${Math.floor(S.t / 60)}:${String(Math.round(S.t) % 60).padStart(2, '0')}`); break; }
     case 'uiscale': S.hud = UI_STEPS[(UI_STEPS.indexOf(S.hud) + 1) % UI_STEPS.length]; $('#hud').value = S.hud; save(); resize(); return;
     case 'leave': S.playing = false; toast('Leave this replay?'); break;
-    case 'stats': S.stat = !S.stat; save(); break;
-    case 'map': S.mapov = !S.mapov; toast(`Map overlay ${S.mapov ? 'on' : 'off'} (not drawn in the mockup)`); break;
-    case 'cam': toast('Screen capture: not in the mockup'); return;
+    case 'cursors': case 'clicks': case 'selections': case 'chat': S.ov[a.dataset.act] = !S.ov[a.dataset.act]; break;
     case 'fold': { const t = +a.dataset.team; S.fold = S.fold.includes(t) ? S.fold.filter(x => x !== t) : S.fold.concat(t); break; }
-    case 'jump': case 'follow': toast('Camera was not recorded'); return;
-    case 'sight': return;
-    case 'close': S.stat = false; save(); break;
+    case 'jump': case 'follow': { const i = +a.dataset.seat;
+      if (!state().seats[i].cam) toast('Camera was not recorded');
+      else S.follow = a.dataset.act === 'jump' || S.follow === i ? -1 : i;   // a jump moves the camera once and ends a follow
+      break; }
+    case 'sight': { const i = +a.dataset.seat; S.sight = S.sight === i ? -1 : i; break; }
+    case 'scroll_up': case 'scroll_down': { const c = a.closest('[data-last]');
+      S.scroll = Math.max(0, Math.min(+c.dataset.last, +c.dataset.first + (a.dataset.act === 'scroll_up' ? -1 : 1))); break; }
+    case 'close': S.stat = false; break;
     case 'chip': if (a.dataset.kind === 'measure') S.sm = a.dataset.val; else S.ss = a.dataset.val; save(); break;
   }
   build();

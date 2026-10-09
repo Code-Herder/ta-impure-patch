@@ -222,8 +222,14 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
     for (i = 0; i < st->nmark; i++)
         fprintf(f, "%s{\"t\":%.9g,\"kind\":\"%s\",\"seat\":%d}", i ? "," : "", st->mark[i].t,
                 KIND[st->mark[i].kind % 3], st->mark[i].seat);
-    fprintf(f, "],\"toggles\":{\"stats\":%s,\"map\":%s}}}\n",
-            st->toggles & HUD_TOG_STATS ? "true" : "false", st->toggles & HUD_TOG_MAP ? "true" : "false");
+    fprintf(f, "],\"toggles\":{");
+    for (i = j = 0; i < 32; i++) {
+        const char* n = tagpu_hudlay_toggle_name(1u << i);
+        if (n) fprintf(f, "%s\"%s\":%s", j++ ? "," : "", n, st->toggles >> i & 1 ? "true" : "false");
+    }
+    fprintf(f, "},\"sight\":%d,\"follow\":%d,\"scroll\":%d,\"toast\":", st->sight, st->follow, st->scroll);
+    jstr(f, st->toast);
+    fprintf(f, "}}\n");
     if (fclose(f) != 0 || !MoveFileExA(DUMP_OUT ".tmp", DUMP_OUT, MOVEFILE_REPLACE_EXISTING)) {
         tagpu_logf("hud: the state dump could not be written (%lu)", (unsigned long)GetLastError());
         return;

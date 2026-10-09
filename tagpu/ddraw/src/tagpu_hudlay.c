@@ -125,12 +125,13 @@ static HUDOP* art(C* c, const char* part, R b, double opacity)
     p->rgba = 0xFFFFFF00u | (uint32_t)lround(255.0 * (opacity < 0 ? 0 : opacity > 1 ? 1 : opacity));
     return p;
 }
-static void icon(C* c, const char* name, R b)
+static void icon_a(C* c, const char* name, R b, double opacity)
 {
     char n[40];
     snprintf(n, sizeof n, "i_%s", name);
-    art(c, n, b, 1);
+    art(c, n, b, opacity);
 }
+static void icon(C* c, const char* name, R b) { icon_a(c, name, b, 1); }
 static void hot(C* c, R b, const char* key)
 {
     HUDOP* p = op(c, HOP_HOT, b);
@@ -139,10 +140,11 @@ static void hot(C* c, R b, const char* key)
     if ((at = text_put(c, key)) < 0) { c->o->n--; return; }
     p->run = (uint16_t)at;
 }
-static void solid(C* c, R b, uint32_t rgb, double alpha)
+static HUDOP* solid(C* c, R b, uint32_t rgb, double alpha)
 {
     HUDOP* p = op(c, HOP_SOLID, b);
     if (p) p->rgba = (rgb << 8) | (uint32_t)lround(255.0 * alpha);
+    return p;
 }
 
 /* ---- the band map and the placement rule (hud.js bandMap, frame, extent, place) ------------- */
@@ -262,6 +264,21 @@ static R place(C* c, const F* f, const PL* s)
 static R at(R b, double ox, double oy) { b.x += ox; b.y += oy; return b; }
 static R box(double x, double y, double w, double h) { R b; b.x = x; b.y = y; b.w = w; b.h = h; return b; }
 
+/* an inset edge `e` units deep round box b, as one ring: top and bottom whole, the sides between them */
+static void ring(C* c, R b, double e, uint32_t rgb, double alpha)
+{
+    R side[4];
+    int k;
+    side[0] = box(b.x, b.y, b.w, e);
+    side[1] = box(b.x, b.y + b.h - e, b.w, e);
+    side[2] = box(b.x, b.y + e, e, b.h - 2 * e);
+    side[3] = box(b.x + b.w - e, b.y + e, e, b.h - 2 * e);
+    for (k = 0; k < 4; k++) {
+        HUDOP* p = solid(c, side[k], rgb, alpha);
+        if (p) p->flags |= HOPF_EDGE;
+    }
+}
+
 /* ---- text -------------------------------------------------------------------------------------- */
 
 static int style_index(const HUDLAY* l, const char* name)
@@ -380,6 +397,23 @@ static void signed_text(C* c, const char* a, const char* b, R box_, const char* 
 
 /* ---- the controls -------------------------------------------------------------------------- */
 
+static const char* const TOGGLES[] = { "stats", "cursors", "clicks", "selections", "chat" };
+
+unsigned tagpu_hudlay_toggle(const char* name)
+{
+    unsigned i;
+    for (i = 0; name && i < sizeof TOGGLES / sizeof *TOGGLES; i++)
+        if (!strcmp(name, TOGGLES[i])) return 1u << i;
+    return 0;
+}
+const char* tagpu_hudlay_toggle_name(unsigned bit)
+{
+    unsigned i;
+    for (i = 0; i < sizeof TOGGLES / sizeof *TOGGLES; i++)
+        if (bit == 1u << i) return TOGGLES[i];
+    return NULL;
+}
+
 /* a button: its part, pressed while held (and while on, for a toggle), its icon and text placed
    on its face, which sinks by press_shift while pressed */
 typedef struct {
@@ -395,15 +429,15 @@ static void button(C* c, const BTN* s, const TJV* kind, R b, int on)
 {
     F f = frame(c->l, b.w, b.h, NULL);
     int pressed = on || (c->st->held[0] && !strcmp(c->st->held, s->key));
-    double dy = pressed ? c->l->g.press_shift : 0;
-    art(c, str(c, kind, pressed ? "pressed" : "part"), b, s->off ? s->off : 1);
+    double dy = pressed ? c->l->g.press_shift : 0, a = s->off ? s->off : 1;
+    art(c, str(c, kind, pressed ? "pressed" : "part"), b, a);
     if (!s->off) hot(c, b, s->key);
     if (s->icon) {
         PL p = spec(s->icon);
         const char* n = s->icon_name ? s->icon_name
                       : tj_get(s->icon, "playing") && c->st->playing ? str(c, s->icon, "playing") : str(c, s->icon, "name");
         R r = at(place(c, &f, &p), b.x, b.y + dy);
-        icon(c, n, r);
+        icon_a(c, n, r, a);
     }
     if (s->textspec) {
         PL p = spec(s->textspec);
@@ -505,7 +539,7 @@ static void dock(C* c)
 }
 
 /* ---- the column: team headers and player rows from the top bar down, as many as fit above the
-   dock and its foot plate; the rest scroll ------------------------------------------------------- */
+   dock and its foot plate, from the first item the scroll shows -------------------------------- */
 
 static int folded(const HUDSTATE* st, int t) { return t < 32 && (st->folded >> t) & 1u; }
 
@@ -531,8 +565,9 @@ static void column(C* c)
     double bottom = st->H - st->bottom - num(c, obj(c, c->L, "dock"), "h") - num(c, Cl, "dock_gap");
     double Foh = num(c, Fo, "h"), Fog = num(c, Fo, "gap"), area = bottom - top - Fog - Foh;
     double gap = num(c, Cl, "gap"), hgap = num(c, Cl, "header_gap"), hh = num(c, Hd, "h"), rh = num(c, Rw, "h");
-    double used = 0, yy = 0, fyy;
-    int item[HUD_MAXSEAT * 2], nitem = 0, n = 0, t, i, k;
+    double used = 0, yy = 0, fyy, u;
+    int item[HUD_MAXSEAT * 2], nitem = 0, n = 0, t, i, k, last = 0, first;
+    const int* vis;
 
     /* a team without a header cannot be folded, so its rows always show */
     int hd = headed(st);
@@ -542,24 +577,44 @@ static void column(C* c)
             for (i = 0; i < st->team_n[t] && i < HUD_MAXSEAT; i++) item[nitem++] = st->team_seat[t][i];
     }
 #define HOF(it, k) ((it) < 0 ? hh + ((k) ? hgap : 0) : rh)
-    while (n < nitem && used + (n ? gap : 0) + HOF(item[n], n) <= area) { used += (n ? gap : 0) + HOF(item[n], n); n++; }
-    if (nitem) {
-        if (n < 1) n = 1;
-        if (used < HOF(item[0], 0)) used = HOF(item[0], 0);
+    /* the scroll is held to the last first item from which every item to the end still fits */
+    for (; last < nitem - 1; last++) {
+        for (u = 0, k = last; k < nitem && u <= area; k++) u += (k > last ? gap : 0) + HOF(item[k], k - last);
+        if (u <= area) break;
+    }
+    first = st->scroll < 0 ? 0 : st->scroll > last ? last : st->scroll;
+    c->o->first = first;
+    c->o->last = last;
+    vis = item + first;
+    /* the whole column is the HUD's: a click on a row's body is taken and does nothing, and the
+       wheel scrolls it. Its box is known only below, so the hot is placed now and sized there. */
+    {
+        HUDOP* ch = NULL;
+        int at0 = c->o->n;
+        hot(c, box(x, top, Cw, 0), str(c, Cl, "act"));
+        if (c->o->n > at0) ch = &c->o->op[at0];
+        while (n < nitem - first && used + (n ? gap : 0) + HOF(vis[n], n) <= area) { used += (n ? gap : 0) + HOF(vis[n], n); n++; }
+        if (nitem) {
+            if (n < 1) n = 1;
+            if (used < HOF(vis[0], 0)) used = HOF(vis[0], 0);
+        }
+        if (ch) ch->r.h = (float)(used + Fog + Foh);
     }
     for (k = 0; k < n; k++) {
-        if (item[k] < 0) header(c, -1 - item[k], x, top + yy + (k ? hgap : 0));
-        else row(c, item[k], x, top + yy);
-        yy += HOF(item[k], k) + gap;
+        if (vis[k] < 0) header(c, -1 - vis[k], x, top + yy + (k ? hgap : 0));
+        else row(c, vis[k], x, top + yy);
+        yy += HOF(vis[k], k) + gap;
     }
     if (n < nitem) {
         const TJV *S = obj(c, Cl, "scroll"), *Bt = obj(c, S, "button"), *Tk = obj(c, S, "track"), *Th = obj(c, S, "thumb");
+        const TJV* acts = arr(c, Bt, "acts");
         double tke = num(c, Tk, "ends"), ins = num(c, Th, "inset");
         double len = used - 2 * tke - 2 * ins, th = fmax(num(c, Th, "min"), len * n / nitem);
+        double ty = tke + ins + (last ? (len - th) * first / last : 0);
         double bh = num(c, Bt, "h"), bw = num(c, Bt, "w"), bx = num(c, Bt, "x");
         int j;
         art(c, str(c, Tk, "part"), box(x + num(c, Tk, "x"), top + tke, num(c, Tk, "w"), used - 2 * tke), 1);
-        art(c, str(c, Th, "part"), box(x + num(c, Th, "x"), top + tke + ins, num(c, Th, "w"), th), 1);
+        art(c, str(c, Th, "part"), box(x + num(c, Th, "x"), top + ty, num(c, Th, "w"), th), 1);
         for (j = 0; j < 2; j++) {
             R b = box(x + bx, top + (j ? used - bh : 0), bw, bh);
             F bf = frame(c->l, bw, bh, NULL);
@@ -567,6 +622,7 @@ static void column(C* c)
             memset(&p, 0, sizeof p);
             p.padf = num(c, Bt, "icon_padf");
             art(c, str(c, Bt, "part"), b, 1);
+            hot(c, b, tj_str(tj_at(acts, j), ""));
             icon(c, str(c, Bt, j ? "down" : "up"), at(place(c, &bf, &p), b.x, b.y));
         }
     }
@@ -581,12 +637,15 @@ static void column(C* c)
         for (i = 0; btns && i < btns->n; i++) {
             const TJV* s = tj_at(btns, i);
             const char* tg = tj_str(tj_get(s, "toggle"), NULL);
-            unsigned bit = !tg ? 0 : !strcmp(tg, "stats") ? HUD_TOG_STATS : !strcmp(tg, "map") ? HUD_TOG_MAP : 0;
+            unsigned bit = tagpu_hudlay_toggle(tg);
             BTN b;
             PL p;
+            if (tg && !bit && !c->bad++ && c->err && c->errn)
+                snprintf(c->err, c->errn, "layout: no toggle '%s' (tagpu_hudlay.c, TOGGLES)", tg);
             memset(&b, 0, sizeof b);
             b.key = str(c, s, "act");
             b.icon = tj_get(s, "icon");
+            b.off = tj_num(tj_get(s, "off"), 0);
             memset(&p, 0, sizeof p);
             pl_in(&p, tj_get(s, "in"));
             pl_pad(&p, tj_get(fbtn, "pad"));
@@ -704,11 +763,7 @@ static void row(C* c, int seat, double ox, double oy)
         {
             double ed = num(c, bar, "edge");
             solid(c, bb, hexrgb(str(c, bar, "bg")), 1);
-            /* the inset edge as one ring: top and bottom whole, the sides between them */
-            solid(c, box(bb.x, bb.y, bb.w, ed), 0, 0.8);
-            solid(c, box(bb.x, bb.y + bb.h - ed, bb.w, ed), 0, 0.8);
-            solid(c, box(bb.x, bb.y + ed, ed, bb.h - 2 * ed), 0, 0.8);
-            solid(c, box(bb.x + bb.w - ed, bb.y + ed, ed, bb.h - 2 * ed), 0, 0.8);
+            ring(c, bb, ed, 0, 0.8);
             /* the fill's width as the mockup writes it, (100 * min(1, v / max)).toFixed(1) % */
             fr = mx > 0 ? to_fixed1(100 * fmin(1, v / mx)) / 100 : 0;
             solid(c, box(bb.x, bb.y, bb.w * fr, bb.h), c->l->g.res_rgb[e], 1);
@@ -725,7 +780,8 @@ static void row(C* c, int seat, double ox, double oy)
     c->flags = saved;
 }
 
-/* the actions over a hovered row: one margin round the strip's edge and between its buttons */
+/* the actions over a hovered row: one margin round the strip's edge and between its buttons. Sight
+   and Follow are pressed in on the player they are set to, and a click on the pressed one undoes it */
 static void hover(C* c, int seat, R b)
 {
     const TJV *Hv = obj(c, c->L, "hover"), *btns = arr(c, Hv, "buttons"), *kind = obj(c, Hv, "button");
@@ -744,8 +800,30 @@ static void hover(C* c, int seat, R b)
         bt.icon_name = str(c, s, "icon");
         bt.textspec = obj(c, kind, "text");
         bt.text = str(c, s, "text");
-        button(c, &bt, kind, box(b.x + m + k * (bw + m), b.y + m, bw, b.h - 2 * m), 0);
+        {
+            const char* a = str(c, s, "act");
+            int on = (!strcmp(a, "sight") && c->st->sight == seat) || (!strcmp(a, "follow") && c->st->follow == seat);
+            button(c, &bt, kind, box(b.x + m + k * (bw + m), b.y + m, bw, b.h - 2 * m), on);
+        }
     }
+}
+
+/* ---- the toast: a short message in a dark box centred across the screen, above everything; the box
+   is the layout's size, not the text's, since this file has no faces to measure text with ------- */
+
+static void toast(C* c)
+{
+    const HUDSTATE* st = c->st;
+    const TJV* Ts = obj(c, c->L, "toast");
+    double w = num(c, Ts, "w"), h = num(c, Ts, "h"), e = num(c, Ts, "edge");
+    R b = box((st->W - w) / 2, st->H * num(c, Ts, "top"), w, h);
+    uint32_t ec = hexrgb(str(c, Ts, "edge_colour"));
+    PL p;
+    solid(c, b, hexrgb(str(c, Ts, "bg")), num(c, Ts, "alpha"));
+    ring(c, b, e, ec, 1);
+    memset(&p, 0, sizeof p);
+    p.centre = 1;
+    text(c, st->toast, b, str(c, Ts, "style"), &p, 0, 0);
 }
 
 /* ---- the entry points ------------------------------------------------------------------------- */
@@ -759,6 +837,7 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
     if (err && errn) err[0] = 0;
     dock(&c);
     column(&c);
+    if (st->toast[0]) toast(&c);
     return !c.bad;
 }
 
@@ -972,8 +1051,8 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     if (!load_globals(l, err, errn)) goto done;
 
     /* Every branch once: teams with headers, a folded team, a lost commander, a player out of
-       the game, each marker kind, a hovered row, a held button, both toggles, and a column
-       too short for its items, so the scroll bar is drawn. */
+       the game, each marker kind, a hovered row with Sight on, a held button, every toggle, a
+       toast, and a column too short for its items and scrolled, so the scroll bar is drawn. */
     st->W = 1280; st->H = 720; st->panel = 128; st->top = 32; st->bottom = 32;
     st->t = 30; st->T = 60; st->playing = 1; st->speed = 1; st->hud = 1;
     st->nseat = HUD_MAXSEAT;
@@ -986,13 +1065,15 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     }
     st->nteam = 3;
     st->folded = 4;
-    st->toggles = HUD_TOG_STATS | HUD_TOG_MAP;
+    st->toggles = HUD_TOG_STATS | HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT;
+    st->sight = 0; st->follow = -1;
+    strcpy(st->toast, "toast");
     st->nmark = 3;
     for (i = 0; i < 3; i++) { st->mark[i].t = 10.0f * (float)i; st->mark[i].kind = i; st->mark[i].seat = i == 2 ? -1 : 1; }
     strcpy(st->held, "play");
     st->mx = 1280 - 8 - 250 + 125; st->my = 32 + 8 + 25 + 2 + 10;
     if (!tagpu_hudlay_build(l, st, o, err, errn)) goto done;
-    st->H = 300;    /* the scroll bar */
+    st->H = 300; st->scroll = 1;    /* the scroll bar */
     if (!tagpu_hudlay_build(l, st, o, err, errn)) goto done;
     ok = 1;
 done:

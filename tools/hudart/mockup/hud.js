@@ -153,7 +153,7 @@ const HUD = (() => {
   function headed(st) { return st.teams.length > 1 && st.teams.some(m => m.length > 1); }
 
   /* ---- the column: team headers and player rows from the top bar down, as many as fit above the dock and its foot
-     plate; the rest scroll ---- */
+     plate, from the first item the scroll shows ---- */
   function column(st) {
     const C = L.column, Fo = C.foot, x = st.W - C.r - C.w, top = st.frame.top + C.t;
     const bottom = st.H - st.frame.bottom - L.dock.h - C.dock_gap, area = bottom - top - Fo.gap - Fo.h;
@@ -161,25 +161,31 @@ const HUD = (() => {
     const hd = headed(st);   // a team without a header cannot be folded, so its rows always show
     st.teams.forEach((m, t) => { if (hd) items.push({ team: t }); if (!hd || !st.folded.includes(t)) m.forEach(i => items.push({ seat: i })); });
     const hOf = (it, k) => it.team != null ? L.header.h + (k ? C.header_gap : 0) : L.row.h;
+    // the scroll is held to the last first item from which every item to the end still fits
+    const fits = f => { let u = 0; for (let k = f; k < items.length; k++) { u += (k > f ? C.gap : 0) + hOf(items[k], k - f); if (u > area) return false; } return true; };
+    let last = 0;
+    while (last < items.length - 1 && !fits(last)) last++;
+    const first = Math.max(0, Math.min(st.scroll || 0, last)), vis = items.slice(first);
     let used = 0, n = 0;
-    while (n < items.length && used + (n ? C.gap : 0) + hOf(items[n], n) <= area) { used += (n ? C.gap : 0) + hOf(items[n], n); n++; }
-    n = Math.max(1, n); used = Math.max(used, hOf(items[0], 0));
+    while (n < vis.length && used + (n ? C.gap : 0) + hOf(vis[n], n) <= area) { used += (n ? C.gap : 0) + hOf(vis[n], n); n++; }
+    n = Math.max(1, n); used = Math.max(used, hOf(vis[0], 0));
     let h = '', y = 0;
-    items.slice(0, n).forEach((it, k) => {
+    vis.slice(0, n).forEach((it, k) => {
       h += it.team != null ? header(st, it.team, y + (k ? C.header_gap : 0)) : row(st, st.seats[it.seat], y);
       y += hOf(it, k) + C.gap;
     });
     if (n < items.length) {
       const S = C.scroll, Bt = S.button, Tk = S.track, Th = S.thumb, len = used - 2 * Tk.ends - 2 * Th.inset;
-      const th = Math.max(Th.min, len * n / items.length);
-      h += art(Tk.part, { x: Tk.x, y: Tk.ends, w: Tk.w, h: used - 2 * Tk.ends }) + art(Th.part, { x: Th.x, y: Tk.ends + Th.inset, w: Th.w, h: th })
-        + [[0, Bt.up], [used - Bt.h, Bt.down]].map(([by, ic]) => { const b = { x: Bt.x, y: by, w: Bt.w, h: Bt.h };
-          return art(Bt.part, b, icon(ic, place(frame(b.w, b.h), { padf: Bt.icon_padf }))); }).join('');
+      const th = Math.max(Th.min, len * n / items.length), ty = Tk.ends + Th.inset + (last ? (len - th) * first / last : 0);
+      h += art(Tk.part, { x: Tk.x, y: Tk.ends, w: Tk.w, h: used - 2 * Tk.ends }) + art(Th.part, { x: Th.x, y: ty, w: Th.w, h: th })
+        + [[0, Bt.up, Bt.acts[0]], [used - Bt.h, Bt.down, Bt.acts[1]]].map(([by, ic, act]) => { const b = { x: Bt.x, y: by, w: Bt.w, h: Bt.h };
+          return art(Bt.part, b, icon(ic, place(frame(b.w, b.h), { padf: Bt.icon_padf })), 'hot', { act }); }).join('');
     }
     const FF = frame(Fo.w, Fo.h, Fo.part), fy = used + Fo.gap;
     h += `<div class="box" style="${rect({ x: C.w - Fo.w, y: fy, w: Fo.w, h: Fo.h })}">` + art(Fo.part, zero(Fo.w, Fo.h))
       + Fo.buttons.map(s => button(s, Fo.button, place(FF, { in: s.in, pad: Fo.button.pad }), st, s.toggle && st.toggles[s.toggle])).join('') + `</div>`;
-    return `<div class="box" style="${rect({ x, y: top, w: C.w, h: fy + Fo.h })}">${h}</div>`;
+    // the whole column is the HUD's: a click on a row's body is taken and does nothing, and the wheel scrolls it
+    return `<div class="box" data-act="${C.act}" data-first="${first}" data-last="${last}" style="${rect({ x, y: top, w: C.w, h: fy + Fo.h })}">${h}</div>`;
   }
 
   function header(st, t, y) {
@@ -216,12 +222,13 @@ const HUD = (() => {
     return `<div class="box row${p.out ? ' dim' : ''}" style="${rect({ x: 0, y, w: W, h: Rw.h })}${p.out ? `;filter:brightness(${L.dim.brightness}) saturate(${L.dim.saturate})` : ''}">${h}</div>`;
   }
 
-  // the actions over a hovered row: one margin round the strip's edge and between its buttons
+  /* the actions over a hovered row: one margin round the strip's edge and between its buttons. Sight and Follow are
+     pressed in on the player they are set to (st.sight, st.follow), and a click on the pressed one undoes it */
   function hover(st, p, b) {
     const Hv = L.hover, m = Hv.margin, n = Hv.buttons.length, bw = (b.w - (n + 1) * m) / n;
     return `<div class="box hov" style="${rect(b)}">` + art(Hv.part, zero(b.w, b.h)) + Hv.buttons.map((s, k) => button(
       { act: s.act, icon: { ...Hv.button.icon, name: s.icon }, text: { ...Hv.button.text, html: s.text }, data: { seat: p.i } },
-      Hv.button, { x: m + k * (bw + m), y: m, w: bw, h: b.h - 2 * m }, st)).join('') + `</div>`;
+      Hv.button, { x: m + k * (bw + m), y: m, w: bw, h: b.h - 2 * m }, st, st[s.act] === p.i)).join('') + `</div>`;
   }
 
   /* ---- the stats window: chips in two trays, the chart over the chart and legend recesses ---- */
@@ -326,10 +333,18 @@ const HUD = (() => {
     el.querySelectorAll('[data-tile]').forEach(e => { e.style.backgroundImage = `url("${composeTile(e.dataset.tile, +e.dataset.w, +e.dataset.h, px)}")`; });
   }
 
+  /* ---- the toast: a short message in a dark box centred across the screen, above everything; the box is the layout's
+     size, not the text's, since the DLL lays the HUD out without the faces' metrics ---- */
+  function toast(st) {
+    const Ts = L.toast, b = { x: (st.W - Ts.w) / 2, y: st.H * Ts.top, w: Ts.w, h: Ts.h }, n = parseInt(Ts.bg.slice(1), 16);
+    return `<div class="box" style="${rect(b)};background:rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${Ts.alpha});box-shadow:inset 0 0 0 ${U(Ts.edge)} ${Ts.edge_colour}">`
+      + text(esc(st.toast), zero(b.w, b.h), Ts.style, { align: 'c' }) + `</div>`;
+  }
+
   // the whole HUD for a state; see index.html for the state's fields
   function draw(el, st, px) {
     el.style.setProperty('--press', L.press_shift);
-    el.innerHTML = dock(st) + column(st) + (st.stats.open ? windowHtml(st) : '');
+    el.innerHTML = dock(st) + column(st) + (st.stats.open ? windowHtml(st) : '') + (st.toast ? toast(st) : '');
     compose(el, px);
   }
   // what moves while the replay plays, without rebuilding: the fill, the playhead, the clocks and the chart

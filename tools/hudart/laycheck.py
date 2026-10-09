@@ -47,6 +47,8 @@ CASES = [
     ("1440-75-hover-held", "res=2560x1440&game=200&hud=75&np=8&nt=2&t=90&stat=0&paused", "row2", "play"),
     ("4k-150-free-for-all", "res=3840x2160&game=150&hud=150&np=6&nt=6&t=60&stat=0&paused", None, ""),
     ("4k-150-2v1v1", "res=3840x2160&game=150&hud=150&np=4&nt=3&t=60&stat=0&paused", None, ""),
+    ("4k-150-scrolled-toast", "res=3840x2160&game=150&hud=150&np=14&nt=2&t=70&stat=0&paused&scroll=3&toast=Camera%20was%20not%20recorded", None, ""),
+    ("1440-75-sight-follow", "res=2560x1440&game=200&hud=75&np=8&nt=2&t=90&stat=0&paused&sight=0&follow=0", "row0", ""),
 ]
 
 # the mockup's state and boxes, in units from the stage's top left
@@ -69,9 +71,12 @@ COLLECT = r"""() => {
     if (e.classList.contains('art')) {
       let part = e.dataset.gp || e.dataset.tile;
       if (!part) { const m = /parts\/([^/]+)\.png/.exec(e.style.getPropertyValue('--bi')); part = m && m[1]; }
-      els.push({ kind: 'part', part, r: R(e), dim, alpha: Math.round(255 * +(getComputedStyle(e).opacity)) });
+      // the opacity it is painted with: its own times every ancestor's, as a disabled button's icon is dimmed
+      let a = 1;
+      for (let q = e; q && q.id !== 'hud-layer'; q = q.parentElement) a *= +getComputedStyle(q).opacity;
+      els.push({ kind: 'part', part, r: R(e), dim, alpha: Math.round(255 * a) });
     }
-    if (e.dataset.act) {
+    if (e.dataset.act && !e.classList.contains('off')) {   // a disabled control takes no input
       const k = e.dataset.act + (e.dataset.team != null ? ':' + e.dataset.team : e.dataset.seat != null ? ':' + e.dataset.seat : '');
       els.push({ kind: 'hot', key: k, r: R(e) });
     }
@@ -220,8 +225,8 @@ def main():
             cs = {"part": [], "text": [], "solid": [], "dot": [], "hot": [], "clip": []}
             for o in ops["ops"]:
                 o["r"] = [o["x"], o["y"], o["w"], o["h"]]
-                if o["kind"] == "solid" and o["rgba"] == "000000cc":
-                    continue                      # the bars' inset edge: a box-shadow in the mockup
+                if o.get("edge"):
+                    continue                      # an inset edge: a box-shadow in the mockup
                 cs[o["kind"]].append(o)
                 if "clip" in o:
                     cs["clip"].append({"r": o["clip"]})

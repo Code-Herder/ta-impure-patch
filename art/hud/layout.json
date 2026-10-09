@@ -19,8 +19,11 @@
   "face_big":    {"font": "Oswald",           "weight": 500, "size": 11.5, "colour": "#e2dcb0", "upper": true,  "spacing": 0.05, "outline": [0.25, 0.3, -0.2, -0.2]},
   "face_num_sm": {"font": "Barlow Condensed", "weight": 600, "size": 7.5,  "colour": "#e2dcb0", "upper": true,  "spacing": 0.02, "outline": [0.25, 0.3, -0.2, -0.2]},
   "face_xs":     {"font": "Oswald",           "weight": 500, "size": 6.3,  "colour": "#e2dcb0", "upper": true,  "spacing": 0.05, "outline": [0.25, 0.3, -0.2, -0.2]},
-  "face_chip":   {"font": "Oswald",           "weight": 500, "size": 6.8,  "colour": "#e2dcb0", "upper": true,  "spacing": 0.05, "outline": [0.25, 0.3, -0.2, -0.2]}
+  "face_chip":   {"font": "Oswald",           "weight": 500, "size": 6.8,  "colour": "#e2dcb0", "upper": true,  "spacing": 0.05, "outline": [0.25, 0.3, -0.2, -0.2]},
+  "toast":       {"font": "Oswald",           "weight": 700, "size": 10,   "colour": "#e2dcb0", "upper": false, "spacing": 0,    "shadow": 0}
  },
+
+ "toast": {"top": 0.07, "w": 150, "h": 18, "bg": "#080a06", "alpha": 0.86, "edge": 0.25, "edge_colour": "#4a4c3c", "style": "toast", "ms": 1800},
 
  "dock": {
   "h": 46,
@@ -50,16 +53,18 @@
  },
 
  "column": {
-  "r": 8, "t": 8, "w": 250, "gap": 2, "header_gap": 4, "dock_gap": 8,
-  "foot": {"part": "foot_one", "w": 124, "h": 32, "gap": 6,
+  "r": 8, "t": 8, "w": 250, "gap": 2, "header_gap": 4, "dock_gap": 8, "act": "column",
+  "foot": {"part": "foot_one", "w": 204, "h": 35, "gap": 6,
    "button": {"pad": [0.5, 0.5, 0.5, 0.5], "part": "bay_button", "pressed": "bay_button_down"},
    "buttons": [
-    {"in": "bay_stats", "act": "stats", "toggle": "stats", "icon": {"name": "stats", "w": 17, "h": 17}},
-    {"in": "bay_map",   "act": "map",   "toggle": "map",   "icon": {"name": "map", "w": 17, "h": 17}},
-    {"in": "bay_cam",   "act": "cam",                      "icon": {"name": "cam", "w": 17, "h": 17}}
+    {"in": "bay_stats",      "act": "stats",      "toggle": "stats",      "off": 0.45, "icon": {"name": "stats", "w": 17, "h": 17}},
+    {"in": "bay_cursors",    "act": "cursors",    "toggle": "cursors",    "icon": {"name": "cursors", "w": 17, "h": 17}},
+    {"in": "bay_clicks",     "act": "clicks",     "toggle": "clicks",     "icon": {"name": "clicks", "w": 17, "h": 17}},
+    {"in": "bay_selections", "act": "selections", "toggle": "selections", "icon": {"name": "selections", "w": 17, "h": 17}},
+    {"in": "bay_chat",       "act": "chat",       "toggle": "chat",       "icon": {"name": "chat", "w": 17, "h": 17}}
    ]},
   "scroll": {
-   "button": {"x": -15, "w": 11, "h": 11, "part": "scroll_button", "icon_padf": 0.22, "up": "arrow_up", "down": "arrow_down"},
+   "button": {"x": -15, "w": 11, "h": 11, "part": "scroll_button", "icon_padf": 0.22, "up": "arrow_up", "down": "arrow_down", "acts": ["scroll_up", "scroll_down"]},
    "track":  {"x": -14, "w": 9, "ends": 13, "part": "scroll_track"},
    "thumb":  {"x": -13, "w": 7, "inset": 1, "min": 10, "part": "scroll_thumb"}
   }

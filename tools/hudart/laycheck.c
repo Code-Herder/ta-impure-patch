@@ -108,8 +108,8 @@ int main(int argc, char** argv)
     v = tj_get(S, "folded");
     for (e = v ? v->first : NULL; e; e = e->next) st->folded |= 1u << (int)tj_num(e, 0);
     v = tj_get(S, "toggles");
-    if (tj_is(tj_get(v, "stats"), TJ_TRUE)) st->toggles |= HUD_TOG_STATS;
-    if (tj_is(tj_get(v, "map"), TJ_TRUE)) st->toggles |= HUD_TOG_MAP;
+    for (e = v ? v->first : NULL; e; e = e->next)
+        if (tj_is(e, TJ_TRUE)) st->toggles |= tagpu_hudlay_toggle(e->key);
     v = tj_get(S, "markers");
     for (e = v ? v->first : NULL; e && st->nmark < HUD_MAXMARK; e = e->next) {
         HUDMARK* m = &st->mark[st->nmark++];
@@ -121,14 +121,18 @@ int main(int argc, char** argv)
     st->mx = (float)tj_num(tj_get(S, "mx"), -1);
     st->my = (float)tj_num(tj_get(S, "my"), -1);
     snprintf(st->held, sizeof st->held, "%s", tj_str(tj_get(S, "held"), ""));
+    st->sight = (int)tj_num(tj_get(S, "sight"), -1);
+    st->follow = (int)tj_num(tj_get(S, "follow"), -1);
+    st->scroll = (int)tj_num(tj_get(S, "scroll"), 0);
+    snprintf(st->toast, sizeof st->toast, "%s", tj_str(tj_get(S, "toast"), ""));
 
     if (!tagpu_hudlay_build(l, st, o, err, sizeof err)) { fprintf(stderr, "laycheck: %s\n", err); return 1; }
     printf("{\"overflow\":%d,\"ops\":[\n", o->overflow);
     for (i = 0; i < o->n; i++) {
         const HUDOP* p = &o->op[i];
         static const char* kinds[] = { "part", "solid", "dot", "text", "hot" };
-        printf("%s{\"kind\":\"%s\",\"x\":%.4f,\"y\":%.4f,\"w\":%.4f,\"h\":%.4f,\"dim\":%d", i ? ",\n" : "",
-               kinds[p->kind], p->r.x, p->r.y, p->r.w, p->r.h, (p->flags & HOPF_DIM) != 0);
+        printf("%s{\"kind\":\"%s\",\"x\":%.4f,\"y\":%.4f,\"w\":%.4f,\"h\":%.4f,\"dim\":%d,\"edge\":%d", i ? ",\n" : "",
+               kinds[p->kind], p->r.x, p->r.y, p->r.w, p->r.h, (p->flags & HOPF_DIM) != 0, (p->flags & HOPF_EDGE) != 0);
         if (p->kind == HOP_PART) {
             printf(",\"part\":"); json_str(tagpu_hudlay_part(l, p->part)->name, (int)strlen(tagpu_hudlay_part(l, p->part)->name));
             printf(",\"alpha\":%u", p->rgba & 0xFF);

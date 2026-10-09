@@ -35,8 +35,16 @@ typedef struct {
 enum { HUD_MK_DEATH, HUD_MK_DEFEAT, HUD_MK_BOOKMARK };
 typedef struct { float t; int kind; int seat; } HUDMARK;   /* seat < 0: a bookmark */
 
-#define HUD_TOG_STATS 1u
-#define HUD_TOG_MAP   2u
+/* The foot plate's toggles, one bit each, named as layout.json's `toggle`. */
+#define HUD_TOG_STATS       1u
+#define HUD_TOG_CURSORS     2u
+#define HUD_TOG_CLICKS      4u
+#define HUD_TOG_SELECTIONS  8u
+#define HUD_TOG_CHAT        16u
+unsigned tagpu_hudlay_toggle(const char* name);    /* 0: no such toggle */
+const char* tagpu_hudlay_toggle_name(unsigned bit);
+
+#define HUD_TOASTLEN 64
 
 typedef struct {
     float    W, H;                  /* the screen                                            */
@@ -56,12 +64,17 @@ typedef struct {
     HUDMARK  mark[HUD_MAXMARK];
     float    mx, my;                /* the pointer, for the hovered row; < 0: none           */
     char     held[HUD_KEYLEN];      /* the key of the button held down; "" = none            */
+    int      sight, follow;         /* the seat Sight and Follow are set to; < 0: none, the
+                                       full map and the free camera                          */
+    int      scroll;                /* the column's first item; held to its last in the build */
+    char     toast[HUD_TOASTLEN];   /* UTF-8; "" = none                                       */
 } HUDSTATE;
 
 /* What to draw, in paint order, and where a click lands. */
 enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT };
 #define HOPF_DIM    1u      /* the dim filter of a player who is out (layout.json `dim`) */
 #define HOPF_SHADE  2u      /* HOP_SOLID: an inner shadow `shade` units deep, black 55 % */
+#define HOPF_EDGE   4u      /* HOP_SOLID: one side of an inset edge, the mockup's box-shadow */
 
 typedef struct {
     uint8_t  kind, flags;
@@ -85,6 +98,8 @@ typedef struct { uint32_t rgb; int resource; uint16_t off, len; } HUDRUN;   /* r
 typedef struct {
     int     n, nrun, ntext;
     int     overflow;       /* something did not fit and was dropped                      */
+    int     first, last;    /* the column's first item as drawn, and the greatest it can be:
+                               the scroll the state asked for, held to [0, last]           */
     HUDOP   op[HUD_MAXOP];
     HUDRUN  run[HUD_MAXRUN];
     char    text[HUD_TEXTMAX];
