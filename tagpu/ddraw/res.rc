@@ -1,6 +1,9 @@
 #include "inc/version.h"
 #include "inc/git.h"
 
+/* The replay HUD: art/hud/ packed by tools/hudpak.py (Makefile, THE HUD ARCHIVE). */
+HUDPAK RCDATA "inc/tagpu_hudpak.bin"
+
 
 1 VERSIONINFO
 FILEVERSION VERSION

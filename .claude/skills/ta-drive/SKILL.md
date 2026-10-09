@@ -318,7 +318,7 @@ Design and engine recipe: `research/notes/scenario-format.md`.
   `tacli ls --json`. No `tacli` verb captures it in-process.
 - **The census** is the first thing to read when something is missing:
   `tacli log <i> -g 'vk: census'` → `census: frame N: 6 pass(es) drew and 0 claimed (terr=1
-  feat=1 unit=1 fx=1 mark=1 scaf=0 gui=1 fps=0)` is the play set. `mark=0` is the marker pass
+  feat=1 unit=1 fx=1 mark=1 scaf=0 gui=1 fps=0 hud=0)` is the play set. `mark=0` is the marker pass
   standing down; fewer passes right after a load is the level not being up yet.
 - **`tacli crash <name>`** — the last crash TA recorded, **symbolised** from
   `tools/ta_symbols.txt` (the nearest preceding name: a neighbourhood, not a signature).

@@ -205,6 +205,8 @@ PROGRAMS = [
     ("pose_wire",    "tagpu_posedraw::WVS",     "tagpu_native::FS"),
     # one pass each
     ("fps",          "tagpu_fps::VS",           "tagpu_fps::FS"),
+    # tagpu_huddraw.c (paired in tagpu_vk_hud.c) -- the replay HUD: parts, fills and glyphs
+    ("hud",          "tagpu_huddraw::VS",       "tagpu_huddraw::FS"),
     ("mark",         "tagpu_mark::VS",          "tagpu_mark::FS"),
     # the marker lines -- the selection rect, order lines, build squares --
     # as bands whose fragment stage keeps the engine's Bresenham per game pixel
@@ -288,7 +290,7 @@ def conv_key(cin, cout, last, th):
 # Every C source a shader is read out of, in the order the headers are emitted.
 SOURCES = ["tagpu_gui_surf", "tagpu_native", "tagpu_shadow", "tagpu_terr",
            "tagpu_posedraw", "tagpu_fps", "tagpu_mark", "tagpu_scaffold",
-           "tagpu_fx", "tagpu_feat"]
+           "tagpu_fx", "tagpu_feat", "tagpu_huddraw"]
 
 # WHERE A VERTEX ATTRIBUTE'S LOCATION COMES FROM WHEN THE GLSL DOES NOT SAY.
 # Our passes all write `layout(location = N) in ...` and need nothing here, so

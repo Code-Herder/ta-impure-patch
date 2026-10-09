@@ -84,6 +84,10 @@ static const Opt O_MIXING[]  = { {"32", 32}, {"8", 8}, {"16", 16}, {"24", 24} };
 static const Opt O_EDGE[]    = { {"mirror", 1}, {"black", 0}, {"1", 1}, {"0", 0},
                                  {"on", 1}, {"off", 0} };
 
+/* The replay HUD's own scale, which its scale button steps through (art/hud/layout.json): one
+   HUD unit is the screen height / 720 times this, whatever the game's HUD scale. */
+static const Opt O_REPLAYHUD[] = { {"100", 100}, {"75", 75}, {"125", 125}, {"150", 150} };
+
 #define N(a) (int)(sizeof a / sizeof a[0])
 
 /* TS_MONITOR and TS_RESOLUTION have no option list: the monitor is stored by
@@ -112,6 +116,7 @@ static const Key s_key[TS_NKEYS] = {
     /* ON: a player sees no tearing unless they ask for the lower latency
        (renderers.md 2.10b). */
     { "vsync",     O_BOOL,    N(O_BOOL),    1 },
+    { "replayhud", O_REPLAYHUD, N(O_REPLAYHUD), 100 },
     { "resource_radius.unknown", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
     { "quick_build.unknown", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
     { "resource_radius.retail", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },

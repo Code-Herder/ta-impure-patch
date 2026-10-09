@@ -38,8 +38,14 @@ int  tagpu_dock_redirects(const char* name);
 int  tagpu_dock_rect(int W, int H, int q8, int* ex, int* ey, int* w, int* h);
 
 /* 1 when the level plays a recording and the dock fits between the side panel and the screen's
-   right edge. */
+   right edge, and the replay HUD (tagpu_hudstate.h) is not drawn in its place. */
 int  tagpu_dock_wanted(void);
+
+/* The level's markers and bookmarks, for the replay HUD (tagpu_hudstate.c), on the game thread:
+   up to `cap` of them into `T`/`kind`/`seat` -- kind 0 a commander's death, 1 a defeat, 2 a
+   bookmark, whose seat is 0xFF -- the deaths and defeats as far as the worker has walked the
+   recording. Starts that worker on a level that plays one, as the dock's own tick does. */
+int  tagpu_dock_marks(unsigned* T, unsigned char* kind, unsigned char* seat, int cap);
 
 /* The slot's open, around GUI_Load(DOCK.GUI) and its stage 1: `place` writes the rects into the
    parsed records before stage 1 sizes the panel's surface from them, `built` repaints the ground
