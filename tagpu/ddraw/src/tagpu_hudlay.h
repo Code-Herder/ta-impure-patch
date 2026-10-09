@@ -232,4 +232,8 @@ float tagpu_hudlay_baseline(float y, float h, float size, float asc, float desc)
 typedef struct { float x0, y0, x1, y1, u0, v0, u1, v1; } HUDQUAD;
 int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, int cap);
 
+/* Whether the state's teams are told apart: two or more, one of them with two players (hud.js,
+   `headed`). The column's headers, the teams chip and the stats window's team split follow it. */
+int tagpu_hudlay_headed(const HUDSTATE* st);
+
 #endif

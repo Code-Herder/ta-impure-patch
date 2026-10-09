@@ -8360,9 +8360,9 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
 
 /* The defs are the level's, which a load makes and only the teardown frees, and their count the
    engine's own, UNITINFOCount. A type's metal cost is the float def+0x18A (0x438650 takes
-   max(+0x18A, 10.0) as one; 0x402640 credits it times the build left); it moves when def+0x22F is
-   1, the test 0x4862CF gives a unit its mover by; and def+0x245 bit 0x40000 is the FBI
-   `commander` tag. */
+   max(+0x18A, 10.0) as one; 0x402640 credits it times one less the build left); it moves when
+   def+0x22F is 1, the test 0x4862CF gives a unit its mover by; and def+0x245 bit 0x40000 is the
+   FBI `commander` tag. */
 unsigned tagpu_replay_army_values(float* out, unsigned cap)
 {
     const char* ta = ta_main();

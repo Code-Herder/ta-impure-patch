@@ -279,8 +279,8 @@ static float sample(float v)
 
 /* THE STATS WINDOW: its state as the input keeps it, and the groups the mockup's host makes of the
    samples (index.html `state()`): a player each, with the cross of its first commander death, or,
-   when the split asks for teams and there are two teams to tell apart, a team each, summed, in
-   the chart's team colours. */
+   when the split asks for teams and the teams are told apart (tagpu_hudlay_headed, the test the
+   teams chip is enabled by), a team each, summed, in the chart's team colours. */
 static void stats(const struct TAGPU_PACKET* pk, const TAGPU_PK_HUD* h, HUDSTATE* st)
 {
     const TAGPU_PK_HUDSTAT* hs = tagpu_pk_hudstat(pk);
@@ -294,7 +294,7 @@ static void stats(const struct TAGPU_PACKET* pk, const TAGPU_PK_HUD* h, HUDSTATE
     S->y = h->stat_y;
     memcpy(S->measure, h->stat_measure, sizeof S->measure);
     S->measure[sizeof S->measure - 1] = 0;
-    S->team = h->stat_team && st->nteam > 1;
+    S->team = h->stat_team && tagpu_hudlay_headed(st);
     S->dt = hs && hs->period ? (float)hs->period / TICKS : 1.0f;
     S->t0 = hs && hs->base > h->first ? (float)(hs->base - h->first) / TICKS : 0.0f;
     S->npt = npt;

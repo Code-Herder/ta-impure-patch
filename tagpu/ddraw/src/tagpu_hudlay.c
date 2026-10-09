@@ -551,7 +551,7 @@ static int folded(const HUDSTATE* st, int t) { return t < 32 && (st->folded >> t
 
 /* Teams are told apart only when one of them has two players: a free-for-all, every player alone,
    has no headers, while a 2v1v1 gives each lone player a header of its own (hud.js, `headed`). */
-static int headed(const HUDSTATE* st)
+int tagpu_hudlay_headed(const HUDSTATE* st)
 {
     int t;
     if (st->nteam < 2) return 0;
@@ -576,7 +576,7 @@ static void column(C* c)
     const int* vis;
 
     /* a team without a header cannot be folded, so its rows always show */
-    int hd = headed(st);
+    int hd = tagpu_hudlay_headed(st);
     for (t = 0; t < st->nteam && t < HUD_MAXSEAT; t++) {
         if (hd) item[nitem++] = -1 - t;
         if (!hd || !folded(st, t))
@@ -922,7 +922,7 @@ static void window_(C* c)
                 double qw = num(c, q, "w");
                 int team = !strcmp(v, "team");
                 chip(c, ch, box(x + r - qw, y + tb.y + (tb.h - chh) / 2, qw, chh), str(c, q, "text"),
-                     team == (S->team != 0), v, team && !headed(st) ? num(c, sp, "off") : 0);
+                     team == (S->team != 0), v, team && !tagpu_hudlay_headed(st) ? num(c, sp, "off") : 0);
                 r -= qw + gap;
             }
         }

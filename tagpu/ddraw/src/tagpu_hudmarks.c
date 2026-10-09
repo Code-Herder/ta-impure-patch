@@ -291,10 +291,11 @@ int tagpu_hudmarks_stats(const char* key, const unsigned char* seat, int nseat, 
     int m, i, k;
     for (m = 0; m < ST_N && strcmp(key, ST_KEY[m]); m++) {}
     *period = s_period;
+    /* the walker writes the base and then a sample before it publishes the count: the base read
+       after a count is that walk's, and the samples below it are whole */
+    n = InterlockedCompareExchange(&s_svN, 0, 0);
     *base = s_base;
     if (m == ST_N) return 0;
-    /* the walker writes a sample, then publishes the count: the samples below it are whole */
-    n = InterlockedCompareExchange(&s_svN, 0, 0);
     if (n > cap) n = cap;
     for (i = 0; i < nseat; i++)
         for (k = 0; k < n; k++) v[(size_t)i * (size_t)cap + (size_t)k] = seat[i] < REC_PLAYERS ? s_sv[k][seat[i]][m] : 0.0f;

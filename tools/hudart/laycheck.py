@@ -134,7 +134,7 @@ COLLECT = r"""() => {
     // the body, in paint order: a group's halo (a dark colour's), its line, its cross
     let halo = false;
     for (const e of faint.children) {
-      if (e.tagName === 'polyline' && !e.getAttribute('stroke-linejoin')) halo = true;
+      if (e.tagName === 'polyline' && e.getAttribute('stroke-opacity')) halo = true;   // only the halo has one
       else if (e.tagName === 'polyline') {
         chart.groups.push({ rgb: hex(e.getAttribute('stroke')), dark: halo, cross: null,
                             pts: e.getAttribute('points').split(' ').filter(Boolean).map(q => q.split(',').map(Number)).map(([x, y]) => [o[0] + x, o[1] + y]) });

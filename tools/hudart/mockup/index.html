@@ -132,8 +132,8 @@ function state() {
   const dv = device(), ef = engineFrame(dv.W, dv.H, S.game), ud = u * dv.d;
   const L = HUD.layout, MS = L.window.measures, TC = L.chart.teams;
   const ps = seats(), tm = teams(), m = MS.find(x => x.k === S.sm) || MS[0];
-  // the samples are grouped by team only when there are two teams to tell apart
-  const byTeam = S.ss === 'team' && tm.length > 1, pl = series(m.k, ps);
+  // the samples are grouped by team only when the teams are told apart, as the teams chip is enabled (hud.js, headed)
+  const byTeam = S.ss === 'team' && tm.length > 1 && tm.some(mm => mm.length > 1), pl = series(m.k, ps);
   const groups = byTeam ? tm.map((mm, t) => ({ name: `Team ${t + 1}`, col: TC[t % TC.length], death: null, v: pl[0].v.map((_, s) => mm.reduce((a, i) => a + pl[i].v[s], 0)) })) : pl;
   const markers = ps.filter(p => p.lost).flatMap(p => [{ t: p.death, kind: 'death', seat: p.i }, ...(p.out ? [{ t: p.death + 3, kind: 'defeat', seat: p.i }] : [])])
     .concat(S.bm.map(t => ({ t, kind: 'bookmark', seat: -1 })));
