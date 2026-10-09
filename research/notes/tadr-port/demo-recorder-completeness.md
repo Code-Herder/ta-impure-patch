@@ -682,7 +682,11 @@ cannot see an address recorded as a value; the scan looks for one instead.
   `extra` rows (an all-or-nothing difference the owner accepted, each with its reason) and `same`
   rows (one effect the engine reaches through another path on a puppet host — a shot built by the
   fire function live and by the shot receiver on a puppet — whose listed callers are compared
-  summed). The band is the owner's standard: a replay is a good approximation of what the game
+  summed). The receiver builds from the shot event's start, which is the one the live build used
+  for every fire function: `0x49D9C0` sends the shooter's centre in its packet, so the recorder
+  records that function's build start from the send's frame ([engine map](../exe-reverse-engineering.md#what-a-shots-packet-says-of-its-start-0x49d9c0-0x49d270-disassembled-measured-2026-10-09)); a
+  replayed shot that starts elsewhere meets other cells in the collision test `0x49B090`, which
+  is what moved battle-los's slot-B impacts by three. The band is the owner's standard: a replay is a good approximation of what the game
   showed, not a tick-exact copy; the roots stay exact. A key table that overflows fails by name.
   The owner-approved bounded COB flare allowance applies only to
   `(0x472630, 0x420AE6, 0x4812D3)`: after its own band fails, the corresponding
@@ -869,6 +873,15 @@ A takeover does not restore that state, so two takeovers of one recording at one
 nowhere else: MEASURED 2026-10-08, tenseat taken over at 931 and dumped at 2731, at a fixed turbo
 k and at speed 20 alike. Closing it needs the stream's state recorded and restored at a takeover,
 or the shower's draws moved off the shared stream.
+
+**Battle-los's ground and feature impacts differ by a few calls, cause unknown** (open, inside the
+band). The impact `0x499EB0` from the collision test's feature, ground and water path
+(`0x49B3D2`) counted 6191 live against 6194 on the playing by GameTime 3031 (MEASURED 2026-10-09,
+before the shot start was recorded from the build), and 2516 against 2517 over [1021, 2281)
+after it, with slot A and slot B equal. One candidate, not traced to a shot [INFERRED]: within one
+phase the recording's feature roots go in after the host's whole projectile call, so a later
+projectile can still meet a tree an earlier impact felled on the recording machine
+([skirmish slice](demo-recorder-skirmish-slice.html)).
 
 Gaps stated, not closed: in a multiplayer recording, getter 75 per seat reproduces the recording
 machine's view, so other players' owner-only indicators, which that machine never showed, are

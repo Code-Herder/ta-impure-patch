@@ -71,13 +71,15 @@ unsigned tagpu_rec_mod_print(void);
    and intercepts copy into an active recording; owner script roots also contribute in native
    games whose local recording is off.
    - tagpu_rec_shot: a fire function's 0x0D packet at its send (wpn_tx_fired), `meteor` for the
-     meteor spawn's, whose sender leaves +0x1A..+0x23 as the stack held them.
+     meteor spawn's, whose sender leaves +0x1A..+0x23 as the stack held them; `start`, when not
+     NULL, the 12 bytes the build started the projectile from, recorded at +1 in place of the
+     packet's (0x49D9C0 sends the shooter's centre there).
    - tagpu_rec_intercept: area damage's 0x0E, from its target point (three dwords) and the
      weapon's index (wpn_tx_intercept).
    - tagpu_rec_start_named: a start of the script `name` on `unit` that only the owner's machine
      makes, as the engine's own sites of it are recorded (tagpu_weapons.c's TargetCleared of
      the slots from 3 up): `now` is the start's third argument, `a0` its one argument. */
-void tagpu_rec_shot(const unsigned char* pkt, int meteor);
+void tagpu_rec_shot(const unsigned char* pkt, int meteor, const unsigned char* start);
 void tagpu_rec_intercept(const unsigned char* point, unsigned weapon);
 /* B4's existing CreateFromNetwork success observer, after its incarnation stamp.
    The record's first 17 bytes are the constructor's bounded input; no worker reads it. */

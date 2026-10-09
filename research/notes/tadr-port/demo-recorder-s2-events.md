@@ -397,7 +397,7 @@ The step T tick, in order: the network pump 0x453D40 (network only), then these 
   | Offset | Field |
   |---|---|
   | +0 | 0x0D |
-  | +1 | start (3 dwords) |
+  | +1 | start (3 dwords): the build's, except `0x49D9C0`'s, which is the shooter's centre `+0x6A`; the recorder records that sender's build start in its place ([engine map](../exe-reverse-engineering.md#what-a-shots-packet-says-of-its-start-0x49d9c0-0x49d270-disassembled-measured-2026-10-09)) |
   | +0xD | target point (3 dwords) |
   | +0x19 | weapon ID, low byte |
   | +0x1A | bit 0 = intercepting weapon |

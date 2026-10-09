@@ -960,8 +960,9 @@ def _survive(L, L2, a, m, win, res, U, g):
 
 @_jit
 def _ev_row(b, lastnew, row):
-    """A shot event's row: the last birth of its weapon, with the 0x0D packet's fire point as
-    the position and the tail, its target point, its weapon ID and its two unit IDs."""
+    """A shot event's row: the last birth of its weapon, with the shot's start (the build's,
+    body +0x01) as the position and the tail, its target point, its weapon ID and its two unit
+    IDs."""
     w = np.int64(b[0x19]) | (np.int64(b[0x23]) >> 4) << 8
     by = np.empty(PIMG, np.uint8)
     for d in range(PDW):

@@ -194,10 +194,11 @@ enum RecKind {
                           u8 the record's +0xA, u8 carried (C4's decision), then the unit's image as
                           the destructor 0x4866D0 found it. It opens a bracket its RK_EV_DEATH_END
                           closes                                                                  */
-    RK_EV_SHOT,        /* the 36-byte 0x0D of a fire function, as it would be sent, but +0x1A
-                          masked to bit 0 and the units at +0x1F and +0x21 as their IDs (u16;
-                          0xFFFF for a slot past the array); a meteor's +0x1A..+0x22 and the low
-                          nibble of +0x23 are zero                                               */
+    RK_EV_SHOT,        /* the 36-byte 0x0D of a fire function, as it would be sent, but +1..+0xC
+                          the start its build used (0x49D9C0 sends the shooter's centre there
+                          instead: tagpu_patches.c, wpn_tx_fired), +0x1A masked to bit 0 and the
+                          units at +0x1F and +0x21 as their IDs (u16; 0xFFFF for a slot past the
+                          array); a meteor's +0x1A..+0x22 and the low nibble of +0x23 are zero  */
     RK_EV_INTERCEPT,   /* i32 x, y, z, u16 the weapon (its index), u16 0: area damage 0x49A120
                           intercepted a projectile with this target point and weapon            */
     RK_EV_START,       /* u32 unit ID, i32 script index, u32 argc, i32 args x4: a broadcast

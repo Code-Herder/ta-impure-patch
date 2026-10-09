@@ -2280,6 +2280,7 @@ static struct {
     volatile LONG notes;
     volatile LONG chatNotes;      /* its own budget: out of play a companion drops by design,
                                      and must not use up the malformed messages' notes */
+    volatile LONG frameNotes;     /* wpn_tx_fired's frame test failed: logged once */
     unsigned int  drops0D, in0D;
 } s_wpnDiag;
 SIM_VAR(s_wpnDiag, SIM_PRIVATE);
@@ -2491,11 +2492,29 @@ static int __cdecl wpn_model_reuse(unsigned int* regs)
    and 0x49DD27, and ebx at 0x49DEEE. The meteor's (0x49DFF6) is its function's argument, at the
    send's esp+0x40; that sender leaves +0x1A..+0x23 as the stack held them, so they are
    cleared. The recorder then takes the packet, and 0 skips the send when there is no network:
-   a skirmish reaches this site only while it is recorded, and stock sends it nothing. */
+   a skirmish reaches this site only while it is recorded, and stock sends it nothing.
+
+   THE BUILD'S START. Three of the four unit senders copy into the packet's +1 the three dwords
+   their build started the projectile from (0x49D7AD, 0x49DC71, 0x49DE32). 0x49D9C0 does not: it
+   builds through 0x49C9C0 from the piece point 0x43E240 wrote to its esp+0x10 (0x49D9D9, passed
+   at 0x49DA76), and sends the shooter's centre, unit+0x6A (0x49DA9F..0x49DAB6). The receiver
+   0x49D270 builds from msg+1 (0x49D547..0x49D558), so a replay of the packet as sent starts the
+   projectile 4-22 px off and its collision test 0x49B090 can hit another unit (DISASSEMBLED;
+   MEASURED 2026-10-09 on battle-los, each shot's +1 against the spawn point +0x10 of its
+   projectile at the next capture: from the packet, 24 of 24 of this sender's shots off it and
+   8543 of 8543 of the others' on it; with the start below, 8227 of 8227 on it). The recorder
+   therefore takes this site's start from the frame. The packet sent is not touched, so the wire
+   stays stock's. At the send (0x49DB4D) the function's esp is the call's + 0xC, its three
+   pushes: the start is at +0x1C and the packet, built at esp+0x1C (0x49DAA2; 0x49DB47 passes
+   it), at +0x28, which bounds the frame. Nothing writes the start between the build and the
+   send: 0x49C9C0, 0x49C740 and the emitter 0x4729D0 (its method 0x474D50) only read it, the
+   network block writes from esp+0x1C up, and the extra weapons' splice at 0x49DAD5 writes
+   registers and g_diag only (DISASSEMBLED). */
 static int __cdecl wpn_tx_fired(unsigned int which, unsigned int* regs)
 {
     unsigned char* pkt = (unsigned char*)(size_t)regs[PR_RET + 2];
     const char* ta = *(const char* const*)0x00511DE8;
+    const unsigned char* start = NULL;
 #ifndef TAGPU_LIMITS_STOCK
     const char* w;
     int i;
@@ -2511,7 +2530,14 @@ static int __cdecl wpn_tx_fired(unsigned int which, unsigned int* regs)
         pkt[0x23] = (unsigned char)((pkt[0x23] & 0x0F) | ((i >> 8) << 4));
     }
 #endif
-    tagpu_rec_shot(pkt, which == 4);
+    if (which == 1) {
+        if (pkt == WPN_ESP_CALL(regs) + 0x28) start = WPN_ESP_CALL(regs) + 0x1C;
+        else if (InterlockedIncrement(&s_wpnDiag.frameNotes) == 1)
+            tagpu_logf("enginefix: weapon IDs: the 0x0D at 0x49DB4D is not in its frame "
+                       "(packet %p, esp %p): the shot is recorded with the packet's start",
+                       (void*)pkt, (void*)WPN_ESP_CALL(regs));
+    }
+    tagpu_rec_shot(pkt, which == 4, start);
     return ta && (*(const unsigned char*)(ta + 0x2A44) & 1);
 }
 

@@ -2844,7 +2844,10 @@ static int ev_start_named(const Lv* L, const unsigned char* b, unsigned len)
 }
 
 /* RK_EV_SHOT: the 0x0D through its receiver 0x49D270, as a live remote gets it, with the IDs made
-   slots again. The receiver's own bounds apply (wpn_rx_fired at 0x49D280: the weapon, the units
+   slots again. Its +1 is the start the live build used, which the receiver builds from
+   (0x49D547..0x49D558), so the puppet's projectile starts where the live one did, also for
+   0x49D9C0's shots, whose sent packet carries the shooter's centre (tagpu_patches.c,
+   wpn_tx_fired). The receiver's own bounds apply (wpn_rx_fired at 0x49D280: the weapon, the units
    against the array, B3's diverged shooter); the replay adds the two its path lacks: a unit's
    shot from a unit that is live here, and a dropped weapon's (flag bit 8) from a unit with a
    mover, whose speed it reads (0x49D50F). A meteor names no unit (flag bit 5). */

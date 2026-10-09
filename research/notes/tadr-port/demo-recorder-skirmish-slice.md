@@ -528,7 +528,10 @@ puppet host and verifies it against the recording.
     reaper runs after the unit's own movement step, so image T is a step early for the wreck's cell
     and the blast.
   - **Shots**, from the `0x0D` packet of the five fire functions, with their network tests released
-    while recording; and **interceptions**.
+    while recording; and **interceptions**. The event's start (`+1..+0xC`) is the one the build
+    used: `0x49D9C0` sends the shooter's centre there instead, so for its shots the recorder takes
+    the build's start from the send's frame and leaves the packet sent as it is
+    ([engine map](../exe-reverse-engineering.md#what-a-shots-packet-says-of-its-start-0x49d9c0-0x49d270-disassembled-measured-2026-10-09)).
   - **Script starts** through the three broadcasters `0x456190`, `0x456200` and `0x456290`.
   - **Build done**, `0x41B8D0`, which clears the model's composite frame `[+0x9E]+0x10` (the
     cached 1x bake), so a finished unit bakes again as a finished one.
@@ -707,7 +710,8 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
     `0x43A1F0`, with every node's puppet rows held.
   - **Events are replayed through the functions that made them:** a create through `0x485F50`
     into the recorded slot; a death through C4's wrap of the destructor, after the victim's
-    recorded fields; a shot through the receiver `0x49D270`; a script start through `0x4B0B00`,
+    recorded fields; a shot through the receiver `0x49D270`, which builds from the recorded start,
+    so the projectile starts where the live one did; a script start through `0x4B0B00`,
     `0x4B0A70` or `0x4B0940`; a build done through `0x41B8D0`; a state change through `0x48B090`;
     a reply through `0x47F780` or `0x47F850`, whose own viewer test plays the watched seat's; a
     nano spray through `0x4720D0` or `0x472200`. What a create nests is recorded before the create

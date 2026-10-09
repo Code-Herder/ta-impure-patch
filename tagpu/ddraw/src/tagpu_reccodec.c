@@ -1263,12 +1263,14 @@ static const uint32_t* adv_row(RecCodec* c, unsigned kk)
 }
 
 /* An EV row from a shot body b: the last birth of its weapon (lastnew), with what the 0x0D
-   packet says of the shot written over it. The sender (0x49D7AD..0x49D81D, DISASSEMBLED) puts
-   three dwords of the fire function's locals at +0x01 ([INFERRED] the fire point), the target
-   point at +0x0D, the weapon's ID byte at +0x19 and the target's and shooter's unit indices at
-   +0x1F and +0x21; the recorder masks the event (tagpu_recfmt.h RK_EV_SHOT) and puts the weapon
+   packet says of the shot written over it. The event's +0x01 is the start the build used, which
+   0x49C740 writes to the record's position and tail (0x49C754..0x49C77B): the sender's three
+   locals at +0x01 (0x49D7AD..0x49D81D, DISASSEMBLED), or for 0x49D9C0, whose packet carries the
+   shooter's centre, the recorder's copy of its build's start (tagpu_patches.c, wpn_tx_fired).
+   The sender puts the target point at +0x0D, the weapon's ID byte at +0x19 and the target's and
+   shooter's unit indices at +0x1F and +0x21; the recorder masks the event (tagpu_recfmt.h RK_EV_SHOT) and puts the weapon
    index's high bits in +0x23's high nibble in the raised build. So: +0x00 the weapon ID (index
-   + 1), the position +0x04 and the tail +0x10 the fire point, the target point +0x28, and the
+   + 1), the position +0x04 and the tail +0x10 the start, the target point +0x28, and the
    target +0x4E and attacker +0x52 as the image's unit IDs, which are the event's. In the
    stock-limits build that nibble is not weapon bits [INFERRED]: the row may name the wrong
    weapon, which costs size only. */

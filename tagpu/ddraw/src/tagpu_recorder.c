@@ -4845,12 +4845,13 @@ static void shot_id(const Rec* r, unsigned char* at)
     memcpy(at, &v, 2);
 }
 
-void tagpu_rec_shot(const unsigned char* pkt, int meteor)
+void tagpu_rec_shot(const unsigned char* pkt, int meteor, const unsigned char* start)
 {
     Rec* r = ev_rec();
     unsigned char b[36];
     if (!r) return;
     memcpy(b, pkt, sizeof b);
+    if (start) memcpy(b + 1, start, 12);
     if (meteor) {
         /* the stack's leftovers; only the raised build carries weapon bits 8-11 at +0x23 */
         memset(b + 0x1A, 0, 9);

@@ -2355,6 +2355,40 @@ extra weapons' `wpn_tx_fired`, which hands the packet to the recorder and skips 
 is no network. This is the one place the recorder changes what the engine does, and it changes
 nothing a skirmish keeps: the packet is the fire function's own stack.
 
+#### What a shot's packet says of its start — `0x49D9C0`, `0x49D270` [DISASSEMBLED + MEASURED 2026-10-09]
+
+**Three of the four unit senders send the start their build used; `0x49D9C0` sends the shooter's
+centre.** The builders copy the start they are given to the projectile's position `+0x04` and tail
+`+0x10` (`0x49C740`, `0x49C754..0x49C77B`). The turret function `0x49D580` builds from its local at
+`[esp+0x18]` (passed at `0x49D776` or `0x49D766`) and copies the same local into the packet at
+`0x49D7AD..`; `0x49DB70` builds `0x49CC20` from `[esp+0x10]` (`0x49DC4A`) and copies it at
+`0x49DC71..`; `0x49DD60` calls `0x49C740` from its `[esp+0x10]` (`0x49DDD8`) and copies it at
+`0x49DE32..`. `0x49D9C0` (flag bits 0 or 20) asks
+`0x43E240(unit, &out, slot, −1)` for the firing piece's point into its `esp+0x10` (`0x49D9D9`,
+the function's `esp` after its four saved registers), builds `0x49C9C0(slot, unit, &out, target,
+target unit)` from it (`0x49DA76..0x49DA7F`), and then fills the packet, at its `esp+0x1C`, with the
+unit's `+0x6A..+0x75` as the start (`0x49DA9F..0x49DAB6`) before sending it at `0x49DB4D` (`push
+0x24`, `lea eax,[esp+0x20]`, `push eax`, `push edx`: at the call the packet is the call's
+`esp+0x28` and the piece point its `esp+0x1C`). The receiver `0x49D270` builds from `msg+1` and
+targets `msg+0xD` (`0x49D547..0x49D558`), so on every other peer, and on a replay that plays the
+packet as sent, that sender's projectile starts at the centre and not at the piece.
+
+Nothing writes the piece point between the build and the send: `0x49C9C0` reads it (`0x49CA39..0x49CA47`) and hands it to `0x49C740`, which reads it, and to the emitter `0x4729D0(pos, 9)`
+(`0x49CC00`), whose method `0x474D50` (the vtable `0x4FD618`, slot `+0x18`) copies it to its own
+`+0x2C`; their stack writes land in their own argument slots, below the function's `esp`; the
+network block writes from `esp+0x1C` up; Impure's splice at `0x49DAD5` writes registers and
+`SIM_PRIVATE` diagnostics. The recorder therefore records the event's `+1..+0xC` from `[esp+0x1C]` of
+the send's frame, after checking the packet is at `[esp+0x28]`, and sends the packet untouched
+(`tagpu_patches.c`, `wpn_tx_fired`).
+
+MEASURED (2026-10-09, battle-los, every shot of step *k* against its projectile at capture *k*+1 —
+same weapon, spawn GameTime `+0x42` = *k*, attacker `+0x52` — is the shot's `+1` the spawn point
+`+0x10`?): from the packet, 8543 of 8543 shots of the other senders' weapons on it and 24 of 24 of `w109`/`w110`
+(the `0x49D9C0` weapons of that battle) off it by 4 to 22 px; the puppet's first tick then differed,
+and on that recording the slot-B impacts `0x499EB0` from `0x49B27A` were 28 live against 31 on the
+playing by GameTime 3031. With the build's start recorded, 8227 of 8227 on it, `w109`/`w110` included, and the
+counts over [1021, 2281) equal (slot B 1/1, slot A `0x49B218` 1291/1291).
+
 **Interceptions** need no release: area damage `0x49A120` builds its two `0x0E` with no network
 test, and the extra weapons' reads of the weapon's ID byte (`0x49A78C`, `0x49A7CD`,
 `wpn_tx_intercept`) hand the recorder the target point and the weapon's index.
@@ -3611,14 +3645,16 @@ pool's layout and its appends are *The projectile pool* above.
   0x438EA0`*, below (the table `0x509F00`, `+0x1000` and `shrd 13`), equal to the codec's `sinmul` and
   `cosmul` on every input: bits 7–15 of `angle + 0x20` do not depend on how the word is extended.
 - **The shot packet `0x0D`** (built at `0x49D7AD..0x49D859` and sent through `0x451DF0`, 36
-  bytes): `+0x01..+0x0C` three dwords of the fire function's locals (`[esp+0x18..0x20]`
-  [INFERRED: the fire point]), `+0x0D..+0x18` the three dwords at `[ebp]` (the target point),
+  bytes): `+0x01..+0x0C` three dwords of the fire function's locals (`[esp+0x18..0x20]`, the start
+  its build used, which `0x49C740` copies to the record's position and tail; `0x49D9C0` alone sends
+  the shooter's centre there, and the recorder writes its build's start in the event instead:
+  [*What a shot's packet says of its start*](#what-a-shots-packet-says-of-its-start-0x49d9c0-0x49d270-disassembled-measured-2026-10-09)), `+0x0D..+0x18` the three dwords at `[ebp]` (the target point),
   `+0x19` the weapon's ID byte (`[weapon+0x10A]`, `0x49D7E5`), `+0x1F` the target's and `+0x21`
   the shooter's unit index (`[unit+0xA8]`, `0x49D812` and `0x49D802`), `+0x23` the weapon slot
   (`shr al,2; and al,3`, `0x49D7D9..0x49D7ED`), where the raised build also writes the weapon
   ID's bits 8–11 in the high nibble (`tagpu_patches.c`, THE WIRE). The recorder keeps it as
   `RK_EV_SHOT`; the frame makes a reference row of each of the last iteration's shots from the
-  last birth of that weapon (`+0x00` = the twelve-bit ID + 1), its position and tail from the fire point, its target point and its two unit IDs. In the
+  last birth of that weapon (`+0x00` = the twelve-bit ID + 1), its position and tail from the start, its target point and its two unit IDs. In the
   stock-limits build `+0x23`'s high nibble is not weapon bits [INFERRED], so a row may name the
   wrong weapon: size only.
 
@@ -3735,6 +3771,14 @@ ending the test:
 | `0x49B218` | the cell's unit slot A, `[cell+0]` (`0x49B1C7..0x49B213`) | a unit of another owner than `proj+0x66` whose `+0x6E` plus its def's `+0x16E` is above the projectile's altitude `proj+8` |
 | `0x49B27A` | slot B, `[cell+2]` (`0x49B222..0x49B275`) | the same owner test, the altitude between `+0x6E` + def `+0x162` and `+0x6E` + def `+0x16E` |
 | `0x49B3D2` | the cell's feature, the ground or the water (victim 0, `0x49B28A..0x49B3CD`) | skipped for a weapon with `+0x111` bit 14 (`0x49B294`). The feature: the cell's `+8` index below the def count `main+0x14253` (`0xFFFE` resolved to its anchor through `+0xA`/`+0xB`, the other values from `0xFFFB` none), its def `[main+0x1426F] + idx·0x100`, hit when the def's height `+0xFA` plus the cell's height byte `+6` is above the projectile's altitude word `+0xA`, once a cell (`+0x5A`/`+0x5C` hold the last one). Else the ground: the cell's `+6` above the altitude bounces a weapon with bit 15 (`+0x20 = −(v >> 2)`) and hits otherwise; else the water: no bit 16, the altitude below the sea level `main+0x1427F` and `[[main+0x391E9]+0xD48]` zero |
+
+Slot A is the cell's `+0`, slot B its `+2`, each a unit index scaled by `0x118` into
+`main+0x14357`; the unit's def is its `+0x92`. Slot A hits anything below the unit's top, `+0x6E`
+plus def `+0x16E`; slot B only inside the band from `+0x6E` plus def `+0x162` to `+0x6E` plus def
+`+0x16E` (`jl`, `jg`, `0x49B265`, `0x49B271`). Both read only the projectile's position after its
+step, so a projectile that starts a few pixels elsewhere can meet another slot or none: a shot
+replayed from a start the live build did not use moved battle-los's slot-B count
+([*What a shot's packet says of its start*](#what-a-shots-packet-says-of-its-start-0x49d9c0-0x49d270-disassembled-measured-2026-10-09)).
 
 `0x499EB0`'s other callers are the area damage `0x49A120` (`0x49A764`), the `0x0E` receiver
 `0x49AF90` (`0x49AFEB`), the destructor's explosion `0x49B000` (`0x49B074`, returning to
