@@ -1886,6 +1886,18 @@ def puppet_hold(w, rows):
                 img[at + off:at + off + size] = v.to_bytes(size, "little")
 
 
+def globals_opaque(h):
+    """The globals image's dwords of `opaque` slots, when this checkout's list is the recording's;
+    with another list, none (every dword is scanned)."""
+    if not h.get("globals"):
+        return set()
+    try:
+        slots = globals_list(h["globals"])[2]
+    except Unreadable:
+        return set()
+    return {sl["dword"] + k for sl in slots if sl["opaque"] for k in range((sl["size"] + 3) // 4)}
+
+
 def known_names(h):
     """The globals' names when this checkout's list is the recording's, else None (dword numbers)."""
     if not h.get("globals"):
@@ -2503,7 +2515,8 @@ def cmd_scan(path, dump):
     unit array, the unit defs, the projectile pool, the feature grid, the wreck pool, the explored
     map or Impure's DLL is an address recorded as a value -- a recorded table's fields but its ID,
     ADDR, OWNED, LOCAL, COLUMN and OPAQUE ones (each aligned dword of a table without a layout),
-    and the globals image against the engine's ranges only. A value that merely looks like one
+    and the globals image against the engine's ranges only, less its `opaque` slots (a dump made
+    with another replay-globals.tsv is scanned whole). A value that merely looks like one
     fails too: the line says where it points. The unit, player and projectile images' bytes no
     replay-layout.tsv row names are tested against the engine's ranges and reported."""
     h = header_only(path)
@@ -2554,7 +2567,10 @@ def cmd_scan(path, dump):
                     report.append(f"{what} {k} +0x{at:03X} holds 0x{v:08X}, {hit}")
     if w.globals is not None:
         gnames = known_names(h) or {}
+        opaque = globals_opaque(h)
         for i in range(0, len(w.globals) - 3, 4):
+            if i // 4 in opaque:
+                continue
             v = struct.unpack_from("<I", w.globals, i)[0]
             hit = v and scan_hit(engine, v)
             if hit:

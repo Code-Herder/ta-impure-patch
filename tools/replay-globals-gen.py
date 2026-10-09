@@ -42,6 +42,11 @@ THE FILE, tab-separated, `#` comments and blank lines ignored, one row per field
   writers   the engine's stores to the field: comma-separated instruction addresses in .text, or
             `-` when none was found (the evidence says how the search was made)
   evidence  how each fact was established (DISASSEMBLED, MEASURED, [INFERRED]) and where
+  value     optional, globals rows only: `opaque` for a plain value whose bits are arbitrary (a
+            random generator's state), as SIMF_OPAQUE declares one in a recorded table
+            (inc/tagpu_simreg.h): recorded, written and compared byte for byte as any other, and
+            passed over by tools/replay/tarec.py's address scan, which cannot tell such a word
+            from an address. Absent, the value is plain and scanned. Every row of one slot agrees
 
 THE IMAGE. Rows on one field (the same where, offset and size) are one slot of the image, and their
 masks are disjoint. Each slot, in file order, starts at the next dword of the image and takes its
@@ -77,6 +82,7 @@ PUPPET = ("write", "hold", "react")
 # The executable's .text: its virtual address and size in the pristine TotalA.exe's section table.
 TEXT_BEGIN, TEXT_END = 0x401000, 0x4FB92A
 COLUMNS = ("where", "offset", "size", "mask", "carried", "puppet", "name", "writers", "evidence")
+VALUE = ("opaque",)   # the optional tenth column's words
 
 
 class Invalid(Exception):
@@ -85,15 +91,21 @@ class Invalid(Exception):
 
 def parse(text):
     """The rows: where, offset (from main, or the absolute address), size, mask (None for every
-    byte of a field wider than four), carried, puppet (None outside `globals`) and name."""
+    byte of a field wider than four), carried, puppet (None outside `globals`), name and opaque."""
     rows = []
     for n, line in enumerate(text.splitlines(), 1):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         cols = line.split("\t")
-        if len(cols) != len(COLUMNS):
-            raise Invalid(f"line {n}: {len(cols)} columns, want {len(COLUMNS)} ({', '.join(COLUMNS)})")
-        where, off, size, mask, carried, puppet, name, writers, evidence = (c.strip() for c in cols)
+        if len(cols) not in (len(COLUMNS), len(COLUMNS) + 1):
+            raise Invalid(f"line {n}: {len(cols)} columns, want {len(COLUMNS)} ({', '.join(COLUMNS)})"
+                          f" and an optional value")
+        where, off, size, mask, carried, puppet, name, writers, evidence = (c.strip() for c in cols[:9])
+        value = cols[9].strip() if len(cols) > len(COLUMNS) else None
+        if value is not None and value not in VALUE:
+            raise Invalid(f"line {n}: value {value!r} is not one of {', '.join(VALUE)}")
+        if value is not None and carried != "globals":
+            raise Invalid(f"line {n}: a {carried} row has no value class; only globals rows do")
         if where not in WHERE:
             raise Invalid(f"line {n}: where {where!r} is not one of {', '.join(WHERE)}")
         if not re.fullmatch(r"0x[0-9A-Fa-f]+", off):
@@ -134,7 +146,8 @@ def parse(text):
         if not evidence:
             raise Invalid(f"line {n}: no evidence")
         rows.append(dict(line=n, where=where, offset=off, size=size, mask=maskv, carried=carried,
-                         puppet=None if puppet == "-" else puppet, name=name))
+                         puppet=None if puppet == "-" else puppet, name=name,
+                         opaque=value == "opaque"))
     if not rows:
         raise Invalid("no rows")
     names = {}
@@ -177,8 +190,8 @@ def coverage(rows):
 def slots(rows):
     """The image's slots in order: where, offset (from main, or from .data's start), size, dword
     (the first in the image), the three puppet classes' masks over the field (every bit of a field
-    wider than four bytes is its one row's: that class's mask is then 0xFFFFFFFF) and the rows'
-    names joined by '+'."""
+    wider than four bytes is its one row's: that class's mask is then 0xFFFFFFFF), the rows'
+    names joined by '+' and whether its value is opaque."""
     out, index, dword = [], {}, 0
     for r in rows:
         if r["carried"] != "globals":
@@ -193,9 +206,13 @@ def slots(rows):
             index[key] = len(out)
             out.append(dict(where=r["where"],
                             offset=r["offset"] - (DATA_BEGIN if r["where"] == "data" else 0),
-                            size=r["size"], dword=dword, write=0, hold=0, react=0, names=r["name"]))
+                            size=r["size"], dword=dword, write=0, hold=0, react=0, names=r["name"],
+                            opaque=r["opaque"]))
             dword += (r["size"] + 3) // 4
         else:
+            if out[index[key]]["opaque"] != r["opaque"]:
+                raise Invalid(f"line {r['line']}: its value class differs from its slot's "
+                              f"{out[index[key]]['names']}")
             out[index[key]]["names"] += "+" + r["name"]
         s = out[index[key]]
         s[r["puppet"]] |= 0xFFFFFFFF if r["mask"] is None else r["mask"]

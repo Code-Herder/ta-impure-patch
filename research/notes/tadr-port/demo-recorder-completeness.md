@@ -673,9 +673,13 @@ cannot see an address recorded as a value; the scan looks for one instead.
   [engine map](../exe-reverse-engineering.md#the-demo-recorders-counts-and-the-steps-phases-sinks-impacts-emitters-and-the-images-gates-map-disassembled-measured-2026-10-01)).
   **`SIMF_OPAQUE`** declares a plain value whose bits are arbitrary — a random generator's state, a
   hash — recorded and compared as any other and passed over by the scan, which cannot tell such a
-  word from an address (`s_windState`, `tagpu_patches.c`). The residual: a random word in the
-  globals image (the simulation RNG `0x51FC88`) can still land in the main block and fail a dump,
-  about one in 9,000 [INFERRED: the block's `0x3924D` bytes among the generator's 2^31 values].
+  word from an address (`s_windState`, `tagpu_patches.c`). The globals image's counterpart is the
+  `opaque` value class of `replay-globals.tsv` (its optional tenth column), which the simulation RNG
+  `rngseed` (`0x51FC88`) carries: its dword is recorded, written on a puppet and compared byte for
+  byte as before, and the scan passes over it. It knows the class only through this checkout's
+  list, so a dump made with another one is scanned whole, and there the seed can still land in the
+  main block, about one in 9,000 [INFERRED: the block's `0x3924D` bytes among the generator's 2^31
+  values].
 
 **Also asserted:**
 

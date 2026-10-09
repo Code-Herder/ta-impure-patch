@@ -1814,7 +1814,10 @@ records and the globals image against the engine's own ranges only (the owner's 
 run's two failures were random words — `s_windState`, the wind's splitmix state, in battle-los, and
 the simulation RNG `rngseed` in forest-circle — and its 261 record hits were u16 pairs, none an
 address (the engine map). `s_windState` is declared `SIMF_OPAQUE`, a new kind: a plain value whose
-bits are arbitrary, recorded and compared as any other and passed over by the scan.
+bits are arbitrary, recorded and compared as any other and passed over by the scan. `rngseed` is
+the same in `replay-globals.tsv`: its row carries `opaque` in the optional tenth column, the
+globals image's counterpart (`tools/replay-globals-gen.py`), so the scan passes over its dword
+when the dump was made with this checkout's list and scans the whole image otherwise.
 
 **tareplay** (`tools/replay/tareplay.py`). The live process takes the **null twin** once GameTime
 passes Tlast + 5: the pause key, frame dump `ln1`, the arrow keys a second each way, a wheel notch
@@ -1897,8 +1900,9 @@ ten minutes or less.
   record leaves in the viewed record's counters (*The seek's sight records*).
 - **O15** — the COB guard's stop (`CORMSHIP.COB`) — still reaches naval fixtures' round-trip
   processes on some runs; it has a landing of its own.
-- **The scan's residual**: a random word of the globals image can still land in the main block
-  and fail a dump [INFERRED: about one in 9,000].
+- **The scan's residual**: the globals image's random word, `rngseed`, is `opaque` and passed
+  over; a dump made with another `replay-globals.tsv` than the checkout's is scanned whole, and
+  there the seed can still land in the main block [INFERRED: about one in 9,000].
 - **The images gate's own limits**: a bit equal at both ends of [T1, Tlast] on each machine counts
   as unwritten in play; the twin covers the camera, the zoom, the cursor and the in-game menu, not
   every screen a viewer can open.

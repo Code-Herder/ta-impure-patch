@@ -129,6 +129,52 @@ class NativeCosmeticImagePolicy(unittest.TestCase):
                                          "--stock-secondary-cosmetics"]), 2)
 
 
+class OpaqueGlobals(unittest.TestCase):
+    """replay-globals.tsv's `opaque` value class: the parser's rules, and the address scan passing
+    over an opaque slot of the globals image while it still fails a plain one."""
+    ROW = "data\t0x51FC88\t4\t-\t{carried}\t{puppet}\t{name}\t-\tevidence"
+
+    def setUp(self):
+        self.gen = tarec._generator("replay-globals-gen")
+
+    def parse(self, *rows):
+        return self.gen.parse("\n".join(rows))
+
+    def test_opaque_is_a_globals_rows_optional_tenth_column(self):
+        gen = self.gen
+        rows = self.parse(self.ROW.format(carried="globals", puppet="write", name="seed") + "\topaque")
+        self.assertTrue(rows[0]["opaque"])
+        self.assertTrue(gen.slots(rows)[0][0]["opaque"])
+        self.assertFalse(self.parse(self.ROW.format(carried="globals", puppet="write",
+                                                    name="seed"))[0]["opaque"])
+        for bad in (self.ROW.format(carried="globals", puppet="write", name="seed") + "\trandom",
+                    self.ROW.format(carried="leave", puppet="-", name="seed") + "\topaque"):
+            with self.subTest(row=bad), self.assertRaises(gen.Invalid):
+                self.parse(bad)
+        lo = "data\t0x51FC88\t4\t0xFFFF\tglobals\twrite\tlo\t-\tevidence\topaque"
+        hi = "data\t0x51FC88\t4\t0xFFFF0000\tglobals\twrite\thi\t-\tevidence"
+        with self.assertRaises(gen.Invalid):
+            gen.slots(self.parse(lo, hi))
+
+    def test_the_scan_passes_over_an_opaque_slot_only(self):
+        slots = [dict(dword=0, size=4, opaque=True, names="seed"),
+                 dict(dword=1, size=4, opaque=False, names="plain")]
+        world = Mock(tables={}, units={}, players=[], proj=b"", phead=None,
+                     globals=struct.pack("<II", 0x1800, 0x1800))
+        output = io.StringIO()
+        with patch.object(tarec, "header_only", return_value={"globals": "digest"}), \
+                patch.object(tarec, "dump_world", return_value=({}, world)), \
+                patch.object(tarec, "dump_images", return_value=(301, "digest", None)), \
+                patch.object(tarec, "scan_ranges", return_value=[(0x1000, 0x2000, "the main block", 1)]), \
+                patch.object(tarec, "globals_list", return_value=(None, [], slots, "digest")), \
+                redirect_stdout(output):
+            result = tarec.cmd_scan("fixture.imprec", "l301")
+        self.assertEqual(result, 1)
+        self.assertIn("globals plain holds 0x00001800", output.getvalue())
+        self.assertNotIn("seed", output.getvalue())
+        self.assertIn("1 VALUES THAT ARE ADDRESSES", output.getvalue())
+
+
 class CompletionCheckpoints(unittest.TestCase):
     def test_completed_moho_is_compared_for_every_commit_seed(self):
         for revision in range(256):
