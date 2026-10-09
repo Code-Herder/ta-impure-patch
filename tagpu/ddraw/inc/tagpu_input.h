@@ -9,7 +9,9 @@
    f->packet and feeds the render thread's command record. */
 
 /* The token half: the batch file, one event in flight, each posted once the
-   engine has consumed the one before (tagpu_input.c, THE INVARIANT). GAME THREAD,
+   engine has consumed the one before (tagpu_input.c, THE INVARIANT), and the
+   abandon trigger that ends a batch the engine has stopped consuming (THE
+   STALL). GAME THREAD,
    from tagpu_gui_hook.c's before_flip via tagpu_triggers_frame — which is what lets
    `tacli keys` and `tacli click` reach the GDI backend, where tagpu_overlay_draw
    is never called. Reads no packet; posts, never sends. */

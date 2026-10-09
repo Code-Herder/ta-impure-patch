@@ -586,9 +586,12 @@ one function that makes a script, and it is unit-tested:
   is free** (`RemotePath.create_new`); neither a link nor `.NET`'s `File.Move` overwrites. So
   the DLL only ever sees a complete batch, and tacli then waits for the DLL's
   `input: batch <id> done` (or `REFUSED`) in the log: a return from `keys`, `click` or `wheel`
-  means every event was consumed by the engine (`input-firewall.md`, *The transport*), `--json`
-  carries the done line's counts, and a refusal or max(30 s, 0.2 s a token) of silence fails
-  the command with that batch's last line.
+  means every event was consumed by the engine (`input-firewall.md`, *The transport*), and
+  `--json` carries the done line's counts. Tokens are split into batches by bytes and by the
+  DLL's 4096-event cap, counted per token as the DLL parses it. The wait has no deadline while
+  the DLL's queue moves (every batch's `taken`, `progress` or end line restarts a 60 s bound);
+  after 60 s without one tacli writes `tagpu_keys.<id>.abandon` and dies with the DLL's
+  `ABANDONED` line. A refusal or the game's exit fails the command at once.
 - **A trigger with content is renamed into place whole** (`put_trigger`): peek, weapons,
   scenario, switches and the eye pin. The DLL polls each name, reads what is there and deletes
   it, so a file created empty and written after can be read empty and deleted in between, and

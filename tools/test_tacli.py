@@ -348,28 +348,43 @@ class TextTokens(unittest.TestCase):
 
 
 class Batching(unittest.TestCase):
-    """The fork reads the token file in one bounded gulp and deletes it."""
-
-    def split(self, tokens):
-        batches, cur = [], ""
-        for w in tokens:
-            if cur and len(cur) + 1 + len(w) > tacli.KEYS_BATCH:
-                batches.append(cur)
-                cur = w
-            else:
-                cur = f"{cur} {w}" if cur else w
-        batches.append(cur)
-        return batches
+    """The fork reads the token file in one bounded gulp, deletes it, and refuses a batch of more
+    than Q_CAP events (tagpu_input.c)."""
 
     def test_every_batch_fits_the_forks_buffer(self):
-        batches = self.split(["backspace"] * 200)
+        batches = tacli._key_batches(["backspace"] * 200)
         self.assertGreater(len(batches), 1)
         for b in batches:
             self.assertLessEqual(len(b) + 1, tacli.KEYS_BATCH)
 
     def test_no_token_is_lost_or_split(self):
         tokens = ["char:x"] * 300
-        self.assertEqual(" ".join(self.split(tokens)).split(), tokens)
+        self.assertEqual(" ".join(tacli._key_batches(tokens)).split(), tokens)
+
+    def test_events_are_counted_as_the_dll_parses_them(self):
+        counts = {"pclick:10,20": 4, "prclick:1,2": 4, "dclick:3,4": 4, "click:5,6": 4,
+                  "pmove:1,2": 1, "mouse:3,4": 1, "dmove:5,6": 1, "mouserel:-1,2": 1,
+                  "wheel:+64": 64, "wheel:-3": 3, "tab": 2, "ctrl+d": 4, "ctrl+shift+a": 6,
+                  "char:x": 1, "down:shift": 1, "up:lbutton": 1, "keydown:65": 1,
+                  "mouselock": 1, "click": 2}
+        self.assertEqual({t: tacli._token_events(t) for t in counts}, counts)
+
+    def test_no_batch_holds_more_events_than_the_dll_takes(self):
+        tokens = ["wheel:+64"] * 70 + ["pclick:1,1"] * 3
+        batches = tacli._key_batches(tokens)
+        self.assertEqual(" ".join(batches).split(), tokens)
+        self.assertEqual([sum(map(tacli._token_events, b.split())) for b in batches],
+                         [tacli.KEYS_Q_CAP, 6 * 64 + 12])
+
+    def test_a_token_over_the_cap_is_refused_before_anything_is_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            inst = types.SimpleNamespace(name="k1", gamedir=Path(d), remote=None,
+                                         running=lambda: True)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+                tacli._write_tokens(inst, "tab wheel:+5000")
+            self.assertIn("5000 events, more than the 4096", err.getvalue())
+            self.assertEqual(list(Path(d).iterdir()), [])
 
 
 class KeyBatches(unittest.TestCase):
@@ -427,6 +442,68 @@ class KeyBatches(unittest.TestCase):
         self.assertTrue(all(re.fullmatch(r"#[0-9a-f]{12} pmove:\d+,\d+ pmove:\d+,\d+\n", t)
                             for t in seen))
         self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["log"])
+
+    def stalled_game(self, stop, honour_abandon=True, progress=0):
+        """The DLL's half for a batch the engine never consumes: taken, `progress` lines 0.1 s
+        apart, then `waiting` until its abandon trigger appears, answered as tagpu_input.c
+        does -- or never, a game that has stopped ticking."""
+        keys, log = self.dir / "tagpu_keys.txt", self.dir / "log/tagpu.log"
+
+        def line(text):
+            with open(log, "ab") as f:
+                f.write((text + "\n").encode())
+        while not stop.is_set() and not keys.exists():
+            time.sleep(0.001)
+        if stop.is_set():
+            return
+        text = keys.read_text()
+        keys.unlink()
+        bid = text.split()[0][1:]
+        line(f"input: batch {bid} taken: {text.split(' ', 1)[1].strip()}")
+        for i in range(progress):
+            time.sleep(0.1)
+            line(f"input: batch {bid} progress: {i + 1}/{progress + 4} events consumed")
+        abandon = self.dir / f"tagpu_keys.{bid}.abandon"
+        while not stop.is_set():
+            if honour_abandon and abandon.exists():
+                abandon.unlink()
+                line(f"input: batch {bid} ABANDONED: event 2/4 pclick:5,5 mouse=1 key=0; "
+                     f"released 0x01")
+                return
+            line(f"input: batch {bid} waiting: event 2/4 pclick:5,5 delivered=1 mouse=1 key=0")
+            time.sleep(0.05)
+
+    def run_stalled(self, **game):
+        import threading
+        stop = threading.Event()
+        dll = threading.Thread(target=self.stalled_game, args=(stop,), kwargs=game)
+        dll.start()
+        err = io.StringIO()
+        began = time.monotonic()
+        try:
+            with patch.object(tacli, "KEYS_STALL_S", 0.3), patch.object(tacli, "KEYS_ABANDON_S", 0.5), \
+                 contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+                tacli._write_tokens(self.inst, "pclick:5,5")
+        finally:
+            stop.set()
+            dll.join()
+        return err.getvalue(), time.monotonic() - began
+
+    def test_a_stalled_batch_is_abandoned_and_fails_with_the_dlls_line(self):
+        err, _ = self.run_stalled()
+        self.assertRegex(err, r"input: batch [0-9a-f]{12} ABANDONED: event 2/4 pclick:5,5 "
+                              r"mouse=1 key=0; released 0x01")
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["log"])
+
+    def test_progress_restarts_the_stall_bound(self):
+        err, took = self.run_stalled(progress=8)
+        self.assertIn("ABANDONED", err)
+        self.assertGreater(took, 0.8 + 0.3)
+
+    def test_a_game_that_answers_nothing_fails_after_the_abandon(self):
+        err, _ = self.run_stalled(honour_abandon=False)
+        self.assertIn("has not answered its abandon", err)
+        self.assertIn("waiting: event 2/4", err)
 
 
 class Triggers(unittest.TestCase):

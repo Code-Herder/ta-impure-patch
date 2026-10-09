@@ -11,13 +11,19 @@
                       once (deleted after reading) while no batch is in
                       progress. Its events are posted ONE AT A TIME, each only
                       once the engine has consumed the one before, and the
-                      batch ends in `input: batch <id> done: ...` or
-                      `input: batch <id> REFUSED: ...` -- the line `tacli keys`
-                      waits for. Tokens: a..z 0..9 space return escape plus
-                      minus up down left right f1..f12 tab and the rest of
-                      token_vk below, `ctrl+`/`shift+`/`alt+` prefixes, the
+                      batch ends in `input: batch <id> done: ...`,
+                      `input: batch <id> REFUSED: ...` or
+                      `input: batch <id> ABANDONED: ...` -- the line `tacli
+                      keys` waits for. Tokens: a..z 0..9 space return escape
+                      plus minus up down left right f1..f12 tab and the rest
+                      of token_vk below, `ctrl+`/`shift+`/`alt+` prefixes, the
                       pointer tokens, `down:`/`up:`, `keydown:`/`keyup:`,
                       `char:`, `wheel:` and `mouselock`.
+
+     tagpu_keys.<id>.abandon
+                      its presence ends batch <id>, running or still standing
+                      as tagpu_keys.txt: what its waiter writes once the batch
+                      has stopped advancing (THE STALL, below).
 
      tagpu_eye.txt    "X Y" (world px). While the file exists the camera eye
                       (main+0x1431F/0x14323) is held there: the point rides
@@ -28,8 +34,11 @@
                       is display state, not sim state — read-only-over-sim
                       holds, and this module writes no engine memory at all.
 
-   The key file is looked for at every trigger tick on the game thread, the eye
-   file every 15 render frames on the render thread.
+   The key file is looked for every fifth trigger tick on the game thread while
+   no batch runs, and the abandon trigger every fifth while one does, each with a
+   GetFileAttributes probe before any open: the trigger family's cadence and
+   cost (tagpu_overlay.c, tagpu_triggers_frame). The eye file is looked for
+   every 15 render frames on the render thread.
 
    Keys and clicks travel as tagged WM_TAGPU_*
    messages that the shield translates in the wndproc, so they survive the
@@ -158,19 +167,33 @@ static void si_mouse(const TAGPU_FRAME* f, int gx, int gy, DWORD buttons)
    shield has delivered its tagged message (its sequence number comes back through
    tagpu_input_delivered) and, at a later trigger tick, both of the engine's input rings read
    empty (tagpu_gui_input_rings). The window procedure pushes into those rings while it
-   handles the message; IdleTick pops them, and pops before it hands the entry to its handler
-   and before the frame it draws and flips (the GUI pump 0x499992 and its pop 0x4AB654, the
-   in-game pop 0x4999C4, the handler 0x499A1C, the frame 0x4995B8 -> 0x496790, DISASSEMBLED;
-   that no flip falls between a pop and its handler, here or in the modal pump 0x49F9C4, is
-   [INFERRED]), so an empty ring at a flip after the delivery means the event's handler has run. A move or a
-   wheel notch pushes nothing, so for them delivery and a later tick are consumption. With the
-   shield armed only our messages reach the push sites; disarmed, a player's entries are ahead
-   of ours in the same FIFO, which the emptiness test waits out as well.
+   handles the message, and each engine site that pops an entry hands it to its handler before
+   the frame it draws and flips -- the pop sites, and the conditions every one of them runs
+   under, are the engine map's *Who pushes the two rings* (DISASSEMBLED; that no flip falls
+   between a pop and its handler is [INFERRED] from their order) -- so an empty ring at a flip
+   after the delivery means the event's handler has run. A move or a wheel notch pushes
+   nothing, so for them delivery and a later tick are consumption. With the shield armed only
+   our messages reach the push sites; disarmed, a player's entries are ahead of ours in the same
+   FIFO, which the emptiness test waits out as well.
 
    So nothing can overflow a ring (a full push 0x4C2E30 drops silently, `0x4C2E4A..0x4C2E50`),
    no release overtakes the press whose handler polls it, and a modifier is down for exactly the
    events posted between its down and its up. No clock decides anything: the 2 s below only
-   delays a report.
+   paces a report.
+
+   THE STALL, AND HOW IT ENDS. Every pop is conditional, so nothing promises that a ring
+   empties. The message-box loop 0x49F9C0 pops the mouse ring only through its GUI pump
+   (0x4AB654), which leaves a record whose point is outside the top screen's panel while it
+   carries a button (0x4AB5D0: the panel rect 0x4A1680, the inclusive test 0x4A1920,
+   0x4AB643..0x4AB64D); a key waits in game while the key pass 0x495E90 is skipped (an in-game
+   screen is up) and the GUI pump does not take it (0x4AA034 runs only when the top screen's
+   +0x18 is set). The event in flight then never reads consumed, and the batch reports
+   `waiting` every 2 s.
+   No clock here ends it: its waiter does, with `tagpu_keys.<id>.abandon` (tacli, once the batch
+   has stopped advancing). The batch ends ABANDONED, and every key and button its posted events
+   left down gets an up, posted like any event, so the shield's virtual state holds no key the
+   batch pressed. The engine keeps the record it would not pop, so the next batch waits on that
+   ring until the engine pops it.
 
    THE RESIDUAL: the in-game setup's flush 0x4C2BB0 (its one call, 0x426636) empties the mouse
    ring without handling it, so an event in flight across a level's start would be acknowledged
@@ -192,10 +215,11 @@ typedef struct {
     unsigned short tok;             /* the token it came from, for the `waiting` line       */
 } InEvent;
 
-#define Q_CAP      4096
+#define Q_CAP      4096                     /* tacli's KEYS_Q_CAP counts against this    */
 #define BATCH_MAX  1023                     /* bytes of one batch file                   */
 #define TOK_CAP    (BATCH_MAX / 2 + 1)      /* a character and a separator each, at least */
-#define WAIT_MS    2000                     /* the `waiting` line's delay                */
+#define REPORT_MS  2000                     /* a running batch's progress/waiting line   */
+#define POLL_TICKS 5                        /* the trigger family's file-probe cadence   */
 
 static InEvent        s_q[Q_CAP];
 static unsigned       s_qn, s_qi;           /* the batch's events; the next one to post   */
@@ -207,8 +231,10 @@ static char           s_id[17];
 static unsigned       s_seq;                /* the last sequence number posted, 1..0xFFFF */
 static int            s_inflight, s_delivered;
 static unsigned       s_out[3], s_untracked;/* TAGPU_DELIVER_* and EV_UNTRACKED counts    */
-static DWORD          s_since, s_tid;
-static int            s_warned;
+static unsigned char  s_held[256];          /* vks the batch's posted events left down    */
+static int            s_withhold;           /* the batch was taken under tagpu_input.stall */
+static DWORD          s_report, s_tid;      /* when the batch last logged a line          */
+static unsigned       s_reported;           /* events consumed as of that line            */
 static const TAGPU_FRAME* s_frame;          /* the caller's frame, inside tagpu_input_frame only */
 
 static int push(int kind, int up, int code, int x, int y)
@@ -369,6 +395,7 @@ static void finish(void)
 {
     s_active = s_inflight = 0;
     s_qn = s_qi = s_ntok = 0;
+    memset(s_held, 0, sizeof s_held);
 }
 
 static void refuse(const char* why)
@@ -377,15 +404,41 @@ static void refuse(const char* why)
     finish();
 }
 
+/* THE TEST LEVER `tagpu_input.stall` (`tacli arm <i> input.stall`): a batch taken while it
+   exists has no event acknowledged, so it stalls at its first tracked event -- the state the
+   abandon ends, made on demand. No engine state makes it reliably: the one loop that leaves a
+   mouse record unpopped, 0x49F9C0, runs only for MSGBOX.GUI after "Unable to initialize scores
+   reporting." (its one caller, 0x4437B0), and the shell and the game run IdleTick, whose pop
+   0x4999C4 takes the record its GUI pump left. Read once per batch taken, so a player, who
+   takes none, never reads it. */
+#define STALL_LEVER "tagpu_input.stall"
+
+/* A batch file's leading `#<id>` (1 to 16 hex digits, then whitespace or the end) into `id`;
+   what follows it, or NULL with `id` empty. */
+static char* batch_id(char* p, char id[17])
+{
+    unsigned i;
+    id[0] = 0;
+    while (*p && (unsigned char)*p <= ' ') p++;
+    if (*p != '#') return NULL;
+    for (i = 0; i < 16 && ((p[1 + i] >= '0' && p[1 + i] <= '9') ||
+                           (p[1 + i] >= 'a' && p[1 + i] <= 'f') ||
+                           (p[1 + i] >= 'A' && p[1 + i] <= 'F')); i++)
+        id[i] = p[1 + i];
+    id[i] = 0;
+    if (!i || (unsigned char)p[1 + i] > ' ') { id[0] = 0; return NULL; }
+    return p + 1 + i;
+}
+
 /* The batch file, read whole and deleted, then parsed whole: an unknown token, a bad id or too
    many events refuses the batch before anything is posted. tacli puts the file in place by a
    hard link of a complete one (or a move, remote), so it is never read half-written, and it
    never places one while another stands. */
 static void take(void)
 {
-    char line[BATCH_MAX + 64];
+    char line[BATCH_MAX + 96];
     DWORD n = 0, size;
-    unsigned i, lo;
+    unsigned lo;
     char* p;
     HANDLE h = CreateFileA("tagpu_keys.txt", GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
@@ -398,27 +451,18 @@ static void take(void)
     s_text[n] = 0;
     finish();
     s_active = 1;
-    s_id[0] = 0;
     memset(s_out, 0, sizeof s_out);
     s_untracked = 0;
 
-    p = s_text;
-    while (*p && (unsigned char)*p <= ' ') p++;
-    if (*p == '#') {
-        for (i = 0; i < 16 && ((p[1 + i] >= '0' && p[1 + i] <= '9') ||
-                               (p[1 + i] >= 'a' && p[1 + i] <= 'f') ||
-                               (p[1 + i] >= 'A' && p[1 + i] <= 'F')); i++)
-            s_id[i] = p[1 + i];
-        s_id[i] = 0;
-        if (!i || (unsigned char)p[1 + i] > ' ') s_id[0] = 0;
-        else p += 1 + i;
-    }
-    if (!s_id[0]) { refuse("no batch id"); return; }
+    if (!(p = batch_id(s_text, s_id))) { refuse("no batch id"); return; }
     if (size > BATCH_MAX) { refuse("longer than 1023 bytes"); return; }
 
+    s_withhold = GetFileAttributesA(STALL_LEVER) != INVALID_FILE_ATTRIBUTES;
     /* `line` holds it all: the tokens and their separators are at most the file's BATCH_MAX
-       bytes, and the prefix is under 64 */
-    lo = (unsigned)_snprintf(line, sizeof line, "input: batch %s taken:", s_id);
+       bytes, and the prefix is under 96 */
+    lo = (unsigned)_snprintf(line, sizeof line, s_withhold
+                             ? "input: batch %s taken (" STALL_LEVER ": no acknowledgement):"
+                             : "input: batch %s taken:", s_id);
     while (*p) {
         const char* why;
         char* q;
@@ -438,8 +482,8 @@ static void take(void)
         p = q;
     }
     tagpu_log(line);
-    s_since = GetTickCount();
-    s_warned = 0;
+    s_report = GetTickCount();
+    s_reported = 0;
 }
 
 static void untracked(const InEvent* e)
@@ -465,38 +509,35 @@ static void untracked(const InEvent* e)
     }
 }
 
-/* Once per trigger tick: the event in flight checked for consumption, then the next posted --
-   one event a tick at most, and only onto empty rings. */
-static void advance(HWND w)
+/* The events of the batch the engine has consumed; the one after is the one it waits on. */
+static unsigned consumed(void)
 {
-    int mp = -1, kp = -1, rings, ok = 1;
-    const InEvent* e;
-    if (!s_active) return;
-    rings = tagpu_gui_input_rings(&mp, &kp);
-    if (!rings) mp = kp = -1;
-    if (s_inflight && s_delivered && rings && !mp && !kp) {
-        s_inflight = 0;
-        s_since = GetTickCount();
-        s_warned = 0;
+    return s_qi - (s_inflight ? 1u : 0u);
+}
+
+/* The vk a posted event leaves down (its down) or lets up (its up), for s_held; 0 for one that
+   moves no key. EV_UNTRACKED's buttons press and release in one SendInput pair. */
+static int event_vk(const InEvent* e, int* up)
+{
+    *up = e->up;
+    if (e->kind == EV_KEY) return e->code;
+    if (e->kind != EV_MOUSE) return 0;
+    switch (e->code & ~TAGPU_M_DEV) {
+    case TAGPU_M_LDOWN: *up = 0; return VK_LBUTTON;
+    case TAGPU_M_LUP:   *up = 1; return VK_LBUTTON;
+    case TAGPU_M_RDOWN: *up = 0; return VK_RBUTTON;
+    case TAGPU_M_RUP:   *up = 1; return VK_RBUTTON;
+    case TAGPU_M_MDOWN: *up = 0; return VK_MBUTTON;
+    case TAGPU_M_MUP:   *up = 1; return VK_MBUTTON;
     }
-    if (!s_inflight && s_qi == s_qn) {
-        tagpu_logf("input: batch %s done: %u events; engine %u, menu %u, dropped %u, untracked %u",
-                   s_id, s_qn, s_out[TAGPU_DELIVER_ENGINE], s_out[TAGPU_DELIVER_MENU],
-                   s_out[TAGPU_DELIVER_DROPPED], s_untracked);
-        finish();
-        return;
-    }
-    if (s_inflight || !rings || mp || kp) {
-        if (!s_warned && GetTickCount() - s_since >= WAIT_MS) {
-            unsigned at = s_inflight ? s_qi - 1 : s_qi;
-            s_warned = 1;
-            tagpu_logf("input: batch %s waiting: event %u/%u %s delivered=%d mouse=%d key=%d",
-                       s_id, at + 1, s_qn, s_text + s_tok[s_q[at].tok],
-                       s_inflight && s_delivered, mp, kp);
-        }
-        return;
-    }
-    e = &s_q[s_qi];
+    return 0;
+}
+
+/* The next event posted; 0 when it could not be, and the batch is refused. */
+static int post_next(HWND w)
+{
+    const InEvent* e = &s_q[s_qi];
+    int ok = 1, vk, up;
     if (++s_seq > 0xFFFFu) s_seq = 1;
     switch (e->kind) {
     case EV_KEY:   ok = tagpu_shield_key(w, e->code, e->up, s_seq); break;
@@ -514,22 +555,126 @@ static void advance(HWND w)
                   s_qi + 1, s_qn, s_text + s_tok[e->tok], (unsigned long)GetLastError());
         b[sizeof b - 1] = 0;
         refuse(b);
-        return;
+        return 0;
     }
+    if ((vk = event_vk(e, &up)) > 0 && vk < 256) s_held[vk] = (unsigned char)!up;
     s_qi++;
-    s_since = GetTickCount();
-    s_warned = 0;
     if (e->kind == EV_UNTRACKED || e->kind == EV_LOCK) {
         s_untracked++;              /* consumed at posting: nothing can say otherwise */
-        return;
+        return 1;
     }
     s_inflight = 1;
     s_delivered = 0;
+    return 1;
+}
+
+/* A running batch says how it is going, one line at most every REPORT_MS: `progress` when an
+   event was consumed since its last line, `waiting` -- where, and what the rings hold -- when
+   none was. This is what tacli's no-progress bound reads: a long batch shows it is moving, a
+   stalled one where it stands. */
+static void report(int mp, int kp)
+{
+    unsigned done = consumed();
+    if (GetTickCount() - s_report < REPORT_MS) return;
+    s_report = GetTickCount();
+    if (done > s_reported)
+        tagpu_logf("input: batch %s progress: %u/%u events consumed", s_id, done, s_qn);
+    else
+        tagpu_logf("input: batch %s waiting: event %u/%u %s delivered=%d mouse=%d key=%d",
+                   s_id, done + 1, s_qn, s_text + s_tok[s_q[done].tok],
+                   s_inflight && s_delivered, mp, kp);
+    s_reported = done;
+}
+
+/* Once per trigger tick: the event in flight checked for consumption, then the next posted --
+   one event a tick at most, and only onto empty rings. */
+static void advance(HWND w)
+{
+    int mp = -1, kp = -1, rings;
+    if (!s_active) return;
+    rings = tagpu_gui_input_rings(&mp, &kp);
+    if (!rings) mp = kp = -1;
+    if (s_inflight && s_delivered && rings && !mp && !kp)
+        s_inflight = 0;
+    if (!s_inflight && s_qi == s_qn) {
+        tagpu_logf("input: batch %s done: %u events; engine %u, menu %u, dropped %u, untracked %u",
+                   s_id, s_qn, s_out[TAGPU_DELIVER_ENGINE], s_out[TAGPU_DELIVER_MENU],
+                   s_out[TAGPU_DELIVER_DROPPED], s_untracked);
+        finish();
+        return;
+    }
+    if (!s_inflight && rings && !mp && !kp && !post_next(w))
+        return;
+    report(mp, kp);
+}
+
+/* The batch ended where it stands (THE STALL): an up posted for every key and button its events
+   left down, through the shield like any event but with sequence number 0, which is never the
+   one in flight, so its delivery acknowledges nothing. They queue behind whatever is still
+   undelivered, the event in flight included, so each up follows its down. */
+static void abandon(HWND w)
+{
+    char rel[256];
+    int mp = -1, kp = -1, vk, len = 0;
+    unsigned at = consumed();
+    if (!tagpu_gui_input_rings(&mp, &kp)) mp = kp = -1;
+    rel[0] = 0;
+    for (vk = 1; vk < 256; vk++) {
+        int code, ok;
+        if (!s_held[vk]) continue;
+        code = button_code(vk, 1);
+        ok = code >= 0 ? tagpu_shield_mouse(w, code, TAGPU_M_HERE, TAGPU_M_HERE, 0)
+                       : tagpu_shield_key(w, vk, TRUE, 0);
+        if (len < (int)sizeof rel - 24)
+            len += _snprintf(rel + len, sizeof rel - len, " 0x%02X%s", vk, ok ? "" : " (not posted)");
+    }
+    tagpu_logf("input: batch %s ABANDONED: event %u/%u %s mouse=%d key=%d; released%s",
+               s_id, at + 1, s_qn, at < s_qn ? s_text + s_tok[s_q[at].tok] : "-", mp, kp,
+               len ? rel : " nothing");
+    finish();
+}
+
+/* `tagpu_keys.<id>.abandon` for the batch running, or for the one standing behind it as
+   tagpu_keys.txt, which is then deleted untaken. Only while a batch runs: with none running a
+   standing batch is taken at the next probe, so there is nothing for one to end. */
+static void poll_abandon(HWND w)
+{
+    char name[48], text[64], standing[17];
+    DWORD n = 0;
+    HANDLE h;
+    _snprintf(name, sizeof name, "tagpu_keys.%s.abandon", s_id);
+    if (GetFileAttributesA(name) != INVALID_FILE_ATTRIBUTES) {
+        DeleteFileA(name);
+        abandon(w);
+        return;
+    }
+    if (GetFileAttributesA("tagpu_keys.txt") == INVALID_FILE_ATTRIBUTES) return;
+    h = CreateFileA("tagpu_keys.txt", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    if (!ReadFile(h, text, sizeof text - 1, &n, NULL)) n = 0;
+    CloseHandle(h);
+    text[n] = 0;
+    if (!batch_id(text, standing)) return;
+    _snprintf(name, sizeof name, "tagpu_keys.%s.abandon", standing);
+    if (GetFileAttributesA(name) == INVALID_FILE_ATTRIBUTES) return;
+    DeleteFileA("tagpu_keys.txt");
+    DeleteFileA(name);
+    {
+        int mp = -1, kp = -1;
+        unsigned at = consumed();
+        if (!tagpu_gui_input_rings(&mp, &kp)) mp = kp = -1;
+        tagpu_logf("input: batch %s ABANDONED: not taken; batch %s at event %u/%u %s mouse=%d key=%d",
+                   standing, s_id, at + 1, s_qn, at < s_qn ? s_text + s_tok[s_q[at].tok] : "-",
+                   mp, kp);
+    }
 }
 
 void tagpu_input_delivered(unsigned seq, int outcome)
 {
-    if (GetCurrentThreadId() != s_tid || !s_inflight || s_delivered || seq != s_seq) return;
+    if (GetCurrentThreadId() != s_tid || !s_inflight || s_delivered || seq != s_seq ||
+        s_withhold)
+        return;
     s_delivered = 1;
     if (outcome >= 0 && outcome < (int)(sizeof s_out / sizeof s_out[0])) s_out[outcome]++;
 }
@@ -622,9 +767,9 @@ void tagpu_input_cmd(TAGPU_CMD* rec)
 
    NOTHING HERE REENTERS THE ENGINE. Every injection leaves by PostMessageA (a
    tagged WM_TAGPU_*) or by SendInput; there is no SendMessage on any path out
-   of advance(), mouse_lock() included. So an event posted inside the flip
-   detour is DELIVERED by the engine's own message pump afterwards, not
-   dispatched into its wndproc halfway through a present. That is the reason
+   of advance() or poll_abandon(), mouse_lock() included. So an event posted
+   inside the flip detour is DELIVERED by the engine's own message pump
+   afterwards, not dispatched into its wndproc halfway through a present. That is the reason
    this is safe to call from inside an engine call and not merely untested
    there.
 
@@ -667,8 +812,11 @@ void tagpu_input_frame(const TAGPU_FRAME* f)
        dereference, not a quiet no-op. Restoring makes the bracket true by
        construction instead of by caller count, and it costs one word. */
     s_frame = f;
+    if (s_active && f->frame_counter % POLL_TICKS == 0)
+        poll_abandon(w);
     advance(w);
-    if (!s_active) {
+    if (!s_active && f->frame_counter % POLL_TICKS == 0 &&
+        GetFileAttributesA("tagpu_keys.txt") != INVALID_FILE_ATTRIBUTES) {
         take();
         advance(w);
     }

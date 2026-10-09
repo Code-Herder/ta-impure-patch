@@ -48,7 +48,8 @@
    trigger) reads no packet and belongs to the set, while the half that
    dereferences `f->packet` through `do_eye` stays on the render thread as
    `tagpu_input_eye_frame`. The token half runs on every call, one event a call
-   at most; the eye half keeps its own poll counter.
+   at most, and probes its files every fifth; the eye half keeps its own poll
+   counter.
 
    AND THE CALLER OWES A CLOCK, NOT A FLIP. These throttle themselves on
    `frame_counter % 5` (`% 15` for peek), written against the PRESENT rate of ~60/s; the engine's

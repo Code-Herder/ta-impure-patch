@@ -132,7 +132,11 @@ target; `--sel` asks the engine what is selected. Failures are loud and exit non
 **Drive menus by name.** `ui click SINGLE`, `ui click Skirmish`, `ui click Start`, then
 `tacli wait t1 'alive=[1-9]' --timeout 150`. Each click auto-waits for the gadget and reports the
 screen it landed on. `keys` returns once the engine has consumed every event it sent, so a
-key's handler has run and a click's orders exist when it returns.
+key's handler has run and a click's orders exist when it returns. It waits as long as the game
+consumes input; a batch nothing has advanced for 60 s is abandoned and `keys` exits non-zero with
+the DLL's `input: batch <id> ABANDONED: event i/n <token> mouse=p key=q; released <vks>` line:
+the event the engine never took, what its rings held, the keys and buttons it let up.
+`arm <i> input.stall` makes such a batch on demand (`references/levers.md`).
 `tacli scenario load` does that whole path, map and players included.
 
 **Leaving a game for the main menu is four steps, and none of them is Esc** (Esc in game does

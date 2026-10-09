@@ -1916,7 +1916,7 @@ def _launch(args) -> dict:
                   "tagpu_peek.trigger", "tagpu_ui.trigger", "tagpu_eye.txt",
                   "tagpu_replay.play", "tagpu_keys.txt"):
         (inst.gamedir / stale).unlink(missing_ok=True)
-    for pattern in ("tagpu_keys.*.tmp", "tagpu_*.tacli-tmp"):
+    for pattern in ("tagpu_keys.*.tmp", "tagpu_keys.*.abandon", "tagpu_*.tacli-tmp"):
         for stale in inst.gamedir.glob(pattern):
             stale.unlink(missing_ok=True)
     for log in inst.gamedir.glob("cnc-ddraw-*.log"):
@@ -2088,60 +2088,159 @@ def cmd_ls(args):
 
 
 # The fork reads tagpu_keys.txt in one bounded gulp of 1023 bytes and refuses a longer batch
-# whole, so a batch and its `#<id> ` prefix stay below that.
+# whole, so a batch and its `#<id> ` prefix stay below that. It also refuses a batch of more
+# than Q_CAP events (tagpu_input.c), which tacli counts as the DLL does.
 KEYS_BATCH = 900
+KEYS_Q_CAP = 4096
 KEYS_DONE_RX = re.compile(r"(\d+) events; engine (\d+), menu (\d+), dropped (\d+), untracked (\d+)")
 KEYS_COUNTS = ("events", "engine", "menu", "dropped", "untracked")
+KEYS_LINE_RX = re.compile(
+    r"input: batch ([0-9A-Fa-f]+) (taken|progress|waiting|done|REFUSED|ABANDONED)\b:? ?(.*)")
+# Lines that say the DLL's queue moved: a batch taken, an event consumed, a batch ended.
+KEYS_MOVED = ("taken", "progress", "done", "REFUSED", "ABANDONED")
+# How long no batch may advance before tacli abandons its own. Not a bound on how long input
+# may take -- every consumed event restarts it, and a running batch reports one at least every
+# 2 s -- but on a batch the engine has stopped consuming (tagpu_input.c, THE STALL).
+KEYS_STALL_S = 60.0
+# How long the DLL may take to answer an abandon: it reads the trigger every fifth trigger tick,
+# so only a game that has stopped ticking runs this out.
+KEYS_ABANDON_S = 30.0
+_KEY_CLICKS = ("click", "rclick", "pclick", "prclick", "dclick", "drclick")
+
+
+def _token_events(tok: str) -> int:
+    """How many events tagpu_input.c's parse_token makes of one token with the shield armed,
+    the most it can make: armed, a click is move, press, release and the park; disarmed, one
+    SendInput. A token the DLL does not know counts as a tap, and the DLL refuses it."""
+    t, mods = tok.lower(), 0
+    while mods < 4 and t.startswith(("ctrl+", "shift+", "alt+")):
+        t, mods = t.split("+", 1)[1], mods + 1
+    if mods:
+        return 2 * mods + 2
+    m = re.match(r"([a-z]+):[-+]?\d+,[-+]?\d+", t)
+    if m:
+        return 4 if m[1] in _KEY_CLICKS else 1
+    m = re.match(r"wheel:([-+]?\d+)", t)
+    if m:
+        return abs(int(m[1]))
+    if t == "mouselock" or t.startswith(("char:", "down:", "up:", "keydown:", "keyup:")):
+        return 1
+    return 2
+
+
+def _key_batches(words) -> list:
+    """The tokens split into batches the DLL takes whole: each within the file's byte budget
+    and Q_CAP events. A token that alone makes more than Q_CAP events is refused here, before
+    any batch is written."""
+    budget = KEYS_BATCH - len("#") - 12 - 1          # the id: token_hex(6), and a space
+    batches, cur, events = [], "", 0
+    for w in words:
+        n = _token_events(w)
+        if n > KEYS_Q_CAP:
+            die(f"{w}: {n} events, more than the {KEYS_Q_CAP} one batch holds")
+        if cur and (len(cur) + 1 + len(w) > budget or events + n > KEYS_Q_CAP):
+            batches.append(cur)
+            cur, events = w, n
+        else:
+            cur, events = (f"{cur} {w}" if cur else w), events + n
+    batches.append(cur)
+    return batches
 
 
 def _write_tokens(inst: Instance, tokens: str) -> dict:
     """Send tokens to the game and return once it has consumed every event they make.
 
-    Long batches are split on the token file's byte budget. Each batch carries an id, and the
-    DLL posts its events one at a time, each once the engine's own input rings show the one
-    before consumed (tagpu_input.c, THE INVARIANT); `input: batch <id> done: ...` ends it. So a
-    return means the engine has handled the input -- a click's orders are issued, a key's
-    handler has run -- and an effect that is written while the event is handled can be read
-    straight after. Refused or never consumed is fatal. Returns the summed counts of the done
-    lines: events, and how many reached the engine, the options sprocket, were dropped (the
+    Long batches are split on the token file's byte budget and the DLL's event cap. Each batch
+    carries an id, and the DLL posts its events one at a time, each once the engine's own input
+    rings show the one before consumed (tagpu_input.c, THE INVARIANT); `input: batch <id> done:
+    ...` ends it. So a return means the engine has handled the input -- a click's orders are
+    issued, a key's handler has run -- and an effect that is written while the event is handled
+    can be read straight after. The exception is a SendInput token (`mouse:`, `click:` and
+    their kin with the shield disarmed): nothing can tag it, so it counts as consumed when it is
+    posted. Refused or abandoned is fatal (_send_key_batch). Returns the summed counts of the
+    done lines: events, and how many reached the engine, the options sprocket, were dropped (the
     display-only ring), or went by SendInput untracked.
     """
     totals = dict.fromkeys(KEYS_COUNTS, 0)
     words = tokens.split()
     if not words:
         return totals
-    budget = KEYS_BATCH - len("#") - 12 - 1          # the id: token_hex(6), and a space
-    batches, cur = [], ""
-    for w in words:
-        if cur and len(cur) + 1 + len(w) > budget:
-            batches.append(cur)
-            cur = w
-        else:
-            cur = f"{cur} {w}" if cur else w
-    batches.append(cur)
-    for batch in batches:
+    for batch in _key_batches(words):
         for k, v in _send_key_batch(inst, batch).items():
             totals[k] += v
     return totals
 
 
+class _KeyBatchWait:
+    """The log, read for one batch: its answer, and whether the DLL's queue still moves."""
+
+    def __init__(self, inst: Instance, bid: str):
+        self.inst, self.bid = inst, bid
+        # opened before the batch exists, so its answer cannot land before the cursor
+        self.lines = _LogLines(_log_cursor(inst))
+        self.last = self.ahead = None          # this batch's last line; another batch's
+        self.moved = self.alive_at = time.monotonic()
+
+    def poll(self):
+        """The done line's counts once it is there, else None. Dies on REFUSED or ABANDONED, and
+        when the game has exited."""
+        for line in self.lines():
+            m = KEYS_LINE_RX.search(line)
+            if not m:
+                continue
+            if m[2] in KEYS_MOVED:
+                self.moved = time.monotonic()
+            if m[1] != self.bid:
+                self.ahead = m[0].strip()
+                continue
+            self.last = m[0].strip()
+            if m[2] in ("REFUSED", "ABANDONED"):
+                die(f"{self.inst.name}: {self.last}")
+            if m[2] == "done":
+                c = KEYS_DONE_RX.search(m[3])
+                if not c:
+                    die(f"{self.inst.name}: unreadable answer: {self.last}")
+                return dict(zip(KEYS_COUNTS, map(int, c.groups())))
+        now = time.monotonic()
+        if not self.inst.remote and now - self.alive_at >= 2.0:
+            self.alive_at = now
+            if not self.inst.running():
+                die(f"{self.inst.name}: the game exited with key batch {self.bid} unconsumed"
+                    + (f" ({self.last})" if self.last else ""))
+        return None
+
+    def stalled(self) -> bool:
+        return time.monotonic() - self.moved >= KEYS_STALL_S
+
+    def nap(self):
+        time.sleep(0.25 if self.inst.remote else 0.02)
+
+
 def _send_key_batch(inst: Instance, batch: str) -> dict:
-    """One batch placed and its done line awaited (_write_tokens)."""
+    """One batch placed and its done line awaited (_write_tokens).
+
+    No clock decides the outcome of a live game: the wait lasts as long as the DLL's queue
+    moves. Once nothing has moved for KEYS_STALL_S, tacli writes `tagpu_keys.<id>.abandon` and
+    dies with the DLL's ABANDONED line, which says where the batch stood and which keys it
+    released; a game that answers nothing in KEYS_ABANDON_S more has stopped ticking."""
     bid = secrets.token_hex(6)
     data = f"#{bid} {batch}\n"
-    timeout = max(30.0, 0.2 * len(batch.split()))
     path = inst.gamedir / "tagpu_keys.txt"
-    # opened before the batch exists, so its answer cannot land before the cursor
-    lines = _LogLines(_log_cursor(inst))
-    deadline = time.monotonic() + timeout
+    wait = _KeyBatchWait(inst, bid)
+
+    def slot_wait():
+        wait.poll()
+        if wait.stalled():
+            die(f"{inst.name}: the game has not taken the previous key batch, and no batch has "
+                f"advanced in {KEYS_STALL_S:g}s: "
+                + (wait.ahead or f"no batch line -- is it running? (tacli log {inst.name} -n 20)"))
+        wait.nap()
+
     if inst.remote:
         # moved into place once the DLL has taken the last batch (RemotePath.create_new), so the
         # DLL never reads half a batch
         while not path.create_new(data.encode()):
-            if time.monotonic() >= deadline:
-                die(f"{inst.name}: the game has not taken the previous key batch in "
-                    f"{timeout:g}s -- is it running? (tacli log {inst.name} -n 20)")
-            time.sleep(0.05)
+            slot_wait()
     else:
         # written whole under its own name and hard-linked into place: a link never replaces a
         # file, so a batch is never read half-written and never overwrites one not yet taken
@@ -2153,38 +2252,26 @@ def _send_key_batch(inst: Instance, batch: str) -> dict:
                     os.link(tmp, path)
                     break
                 except FileExistsError:
-                    if time.monotonic() >= deadline:
-                        die(f"{inst.name}: the game has not taken the previous key batch in "
-                            f"{timeout:g}s -- is it running? (tacli log {inst.name} -n 20)")
-                    time.sleep(0.02)
+                    slot_wait()
         finally:
             tmp.unlink(missing_ok=True)
-    rx = re.compile(rf"input: batch {bid} (taken|waiting|done|REFUSED)\b:? ?(.*)")
-    last, alive_at = None, time.monotonic()
-    while True:
-        for line in lines():
-            m = rx.search(line)
-            if not m:
-                continue
-            last = m.group(0).strip()
-            if m[1] == "REFUSED":
-                die(f"{inst.name}: {last}")
-            if m[1] == "done":
-                c = KEYS_DONE_RX.search(m[2])
-                if not c:
-                    die(f"{inst.name}: unreadable answer: {last}")
-                return dict(zip(KEYS_COUNTS, map(int, c.groups())))
-        now = time.monotonic()
-        if now >= deadline:
-            die(f"{inst.name}: key batch {bid} not consumed in {timeout:g}s: "
-                + (last or "the game never took it -- is it running? "
-                           f"(tacli log {inst.name} -n 20)"))
-        if not inst.remote and now - alive_at >= 2.0:
-            alive_at = now
-            if not inst.running():
-                die(f"{inst.name}: the game exited with key batch {bid} unconsumed"
-                    + (f" ({last})" if last else ""))
-        time.sleep(0.25 if inst.remote else 0.02)
+    while not wait.stalled():
+        counts = wait.poll()
+        if counts is not None:
+            return counts
+        wait.nap()
+    abandon = inst.gamedir / f"tagpu_keys.{bid}.abandon"
+    put_trigger(abandon, "")
+    deadline = time.monotonic() + KEYS_ABANDON_S
+    while time.monotonic() < deadline:
+        counts = wait.poll()
+        if counts is not None:
+            abandon.unlink(missing_ok=True)
+            return counts
+        wait.nap()
+    die(f"{inst.name}: key batch {bid} has not advanced in {KEYS_STALL_S:g}s and the game has "
+        f"not answered its abandon in {KEYS_ABANDON_S:g}s -- is it running? "
+        + (wait.last or f"(tacli log {inst.name} -n 20)"))
 
 
 def cmd_keys(args):

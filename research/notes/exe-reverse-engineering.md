@@ -3948,37 +3948,75 @@ index and returns zero when empty; `0x4C1B00` peeks; `0x4C1B20` appends unless
 the next slot equals the dequeue index, then advances/wraps the enqueue index.
 The WM_CHAR path calls the append at `0x4B5DEA`; `0x4C1FBE..0x4C21C2` also
 translate special keys into that ring. Readers include gameplay keys at
-`0x495E9A`, menus at `0x4998B6/0x4998D7/0x49991D`, and GUI input at
-`0x4AA034`. On the long CORE upgrade replay's T451/T9181 images, the recording
+`0x495E9A`, IdleTick's three special codes at `0x4998B6/0x4998D7/0x49991D`, and
+GUI input at `0x4AA034` (when each pops: *Who pushes the two rings*, below). On the long CORE upgrade replay's T451/T9181 images, the recording
 had both indices 9, playback and fresh seek both 0: equal enqueue/dequeue indices
 mean drained input, not a construction counter. The replay exception is
 exactly these eight bytes; the owner approved both four-byte leave rows on 2026-10-05.
 Enqueue stores are `0x4C1A47`, `0x4C1A87`, `0x4C1B5C`, `0x4C1B66`;
 dequeue stores are `0x4C1A4D`, `0x4C1A8D`, `0x4C1ADC`, `0x4C1AE4`.
 
-**Who pushes the two rings, and in what order they drain [DISASSEMBLED 2026-10-09].** TA's window
+**Who pushes the two rings, and who pops them [DISASSEMBLED 2026-10-09].** TA's window
 procedure is the only pusher: `WM_KEYDOWN` reaches the keydown translator `0x4C1D50` at `0x4B5D8E`
 and `WM_SYSKEYDOWN` at `0x4B5DC3`; `WM_CHAR` appends through `0x4C1B20` at `0x4B5DEA`; button
 messages push the mouse ring through `0x4C2E30` at `0x4B5F51` (the mouse object, below). A move
-and a key-up push nothing. Each push drops its entry silently when the ring is full (`0x4C1D9D`,
-`0x4C1B3A`, `0x4C2E4A..0x4C2E50`); the mouse ring holds 20 (`0x4C2BD0(20)` at `0x4B5A67`), the
-key ring at most 30. The main loop `0x49EB80` dispatches every queued message before it runs an
-IdleTick: `PeekMessageA` at `0x49EC47`, and on a message `GetMessageA` / `TranslateMessage` /
-`DispatchMessageA` (`0x49ECA0..0x49ECBA`) and back to the top (`0x49ECC0`); IdleTick `0x499890`
-(`0x49EC63`) runs only when the queue is empty. One IdleTick pops the key ring at
-`0x4998B6`/`0x4998D7`/`0x49991D`, runs the GUI pump `0x4A9FD0` (`0x499992`), which pops one mouse
-entry at `0x4AB654`, pops one more at `0x4999C4`, calls the handler `[eax+0x391F5]` at `0x499A1C`,
-and only then reaches the frame `0x4995B8` → `0x496790`, which draws and flips. So a burst of
-messages is pushed whole before anything pops it, and ten clicks (twenty button entries) fill the
-mouse ring in one drain. That no flip falls between a pop and its handler is *[INFERRED]* from
-this order, here and in the modal pump `0x49F9C4`. The modifier state a handler sees is polled,
-not carried: `GetAsyncKeyState` (IAT `0x4FC350`) for `VK_CONTROL` at the head of the keydown
-translator (`0x4C1D56`) and for `VK_MENU` in the hotkey query (`0x4C1BA3`). The mouse ring has a
-flush that handles nothing, `0x4C2BB0` (zeroes `+0x18E`/`+0x192`), with one call, `0x426636`, in
-the in-game setup.
+and a key-up push nothing. A mouse record is six dwords: x, y, the message's wParam (the buttons
+held), a time, the message (stored at `0x4B5F4C`) and a double-click flag. Each push drops its
+entry silently when the ring is full, and full is one short of the capacity: the push refuses
+when the next write slot equals the read index (`0x4C1D9D`, `0x4C1B3A`, `0x4C2E4A..0x4C2E50`). So
+the mouse ring holds 19 records (`0x4C2BD0(20)` at `0x4B5A67`) and the key ring at most 29 (its
+capacity clamped to 30 by `0x4C1A60`). The main loop `0x49EB80` dispatches every queued message
+before it runs an IdleTick: `PeekMessageA` at `0x49EC47`, and on a message `GetMessageA` /
+`TranslateMessage` / `DispatchMessageA` (`0x49ECA0..0x49ECBA`) and back to the top (`0x49ECC0`);
+IdleTick `0x499890` (`0x49EC63`) runs only when the queue is empty. So a burst of messages is
+pushed whole before anything pops it, and ten clicks (twenty button records) overflow the mouse
+ring in one drain.
+
+Every pop is conditional:
+
+- **The mouse ring** has two pops of `0x4C2D60`. The GUI pump `0x4A9FD0` pops through `0x4AB5D0`
+  (`0x4AB654`), and only the head record whose point lies inside the top screen's panel (the
+  rect `0x4A1680(gadgets, 0, &rect)`, right and bottom inclusive; the test `0x4A1920`) or whose
+  wParam is 0 (`0x4AB643..0x4AB64D`); any other it leaves at the head (`0x4AB680`). IdleTick peeks
+  the head before the pump (`0x499982`) and after it (`0x49999C`) and pops at `0x4999C4` only when
+  the two carry the same message (`0x4999AB..0x4999B5`), a record the pump left; when they differ
+  it copies one of them to `main+0x2C76` without a pop (`0x4999CB..0x499A04`, the earlier one for
+  `WM_LBUTTONUP`/`WM_RBUTTONUP`). An empty ring's peek and pop copy the current move record and
+  move nothing (`0x4C2D73`, `0x4C2DF3`). So wherever IdleTick runs a record waits at most one
+  IdleTick, and it runs in the shell as well as in game: a press at (20,460), outside
+  `SELMAP.GUI`'s panel (84,12, 494×420), with the button and shift held, was popped and its
+  batch done in 0.2 s (MEASURED 2026-10-09, `tacli keys … down:shift pclick:20,460`), and the
+  pump would not pop it, so `0x4999C4` did. The one loop that runs the pump without that second
+  pop is the message box's: `0x49F9C0(gi, name)` runs, while the top screen's panel keeps that
+  name (`0x4FAB50` at `0x49F9EC`), one `PeekMessageA` / `TranslateMessage` / `DispatchMessageA`
+  (`0x49F9F8..0x49FA14`), the pump (`0x49FA1B`), the blit `0x4AB0B0`, `0x4C2870` and the flip
+  `0x4C63A0` (`0x49FA32`), and its one caller, `0x4437B0`, runs it for `MSGBOX.GUI` (`0x502BD4`)
+  after `"Unable to initialize scores reporting."` (`0x505900`, `ReportError`). There a press
+  outside the box's panel stays at the head, and every record behind it waits, until the box
+  closes.
+- **The key ring** (`0x4C1AB0`, 28 call sites). The in-game keys `0x495E90` pop one at `0x495E9A`;
+  the frame callback calls them at `0x496971` and skips them while `main+0x37EBE` bit 0 is set
+  (`0x496918` and `0x496969` both jump to `0x49697B`; the bit is set at `0x45D002` while an
+  in-game GUI screen is up). The GUI pump pops one at `0x4AA034` only when its top screen's
+  `+0x18` is non-zero (`0x4AA00F..0x4AA017`); otherwise it peeks (`0x4AA019`) and leaves the key.
+  IdleTick peeks at `0x499898` and pops only three codes: `0x7E` at `0x4998B6` while
+  `main+0x37F2F` bit 1 is set (then `0x4B5910`), `0xE3` at `0x4998D7` while `main+0x37EBE` bit 0
+  is set (then `0x491D70(0)` and the bit cleared, the in-game screen closed *[INFERRED]*), and
+  `0xD6` at `0x49991D`, the screenshot (`"%s\screenshots"` `0x5024FC`, `"SHOT"` `0x50966C`).
+  The other pops are the shell's and the gadgets' own (`0x41FE73` to `0x427D1A`, `0x4A45FD`,
+  `0x4A716A`, `0x4A82FF`, `0x4A9E8A`, `0x4AB765`, `0x4AB9CF`, `0x4C9F5D`), not traced here.
+
+Each popper hands its entry to its handler before the frame draws and flips: in IdleTick the pump
+and the pop at `0x4999C4` come before the handler `[eax+0x391F5]` (`0x499A1C`) and the frame
+`0x4995B8` → `0x496790`, and the in-game keys pop and handle inside the frame callback before its
+draw. That no flip falls between a pop and its handler is *[INFERRED]* from this order, here and
+in the message-box loop. The modifier state a handler sees is polled, not carried: `GetAsyncKeyState`
+(IAT `0x4FC350`) for `VK_CONTROL` at the head of the keydown translator (`0x4C1D56`) and for
+`VK_MENU` in the hotkey query (`0x4C1BA3`). The mouse ring has a flush that handles nothing,
+`0x4C2BB0` (zeroes `+0x18E`/`+0x192`), with one call, `0x426636`, in the in-game setup.
 
 **Five message pumps.** Four read `PeekMessageA` out of its IAT slot into a register and loop on
-it — `0x47C6D4`, `0x49EB74` (the main loop above), `0x49F9C4` (the modal pump), `0x4C9E8E` — and
+it — `0x47C6D4`, `0x49EB74` (the main loop above), `0x49F9C4` (the message-box loop), `0x4C9E8E` — and
 `0x4DA331` calls `GetMessageA`. USER32's IAT starts at `0x4FC2BC`, member *n* at `0x4FC2BC + 4n`:
 `PostMessageA 0x4FC2D0`, `PeekMessageA 0x4FC2D4`, `GetMessageA 0x4FC2D8`, `DispatchMessageA
 0x4FC310`, `GetAsyncKeyState 0x4FC350`, `TranslateMessage 0x4FC364` (the import table of the
@@ -3987,8 +4025,10 @@ pristine executable, `objdump -p`).
 **What Impure builds on this.** The injection (`tagpu_input.c`) posts one tagged message at a
 time and the next only when both rings' own indices read empty at a flip after the shield
 delivered it (`tagpu_gui_input_rings`, in `tagpu_gui_hook.c`), so a burst never overflows a ring
-and a modifier is down while every event between its down and its up is handled
-([input firewall](input-firewall.md)).
+and a modifier is down while every event between its down and its up is handled. Because every
+pop is conditional, a ring can stay non-empty -- a press outside the message box's panel, a key
+while the in-game key pass is skipped and the GUI pump does not take it -- and the batch then
+waits until its waiter abandons it ([input firewall](input-firewall.md), *The transport*).
 
 **Every wall clock the engine stores.** The sources are `GetTickCount` (IAT `0x4FC0DC`; `0x4B6560`
 is `jmp` to it, and `0x4B6340` is `GetTickCount · rate / 1000`), `QueryPerformanceCounter` (IAT
@@ -12245,7 +12285,7 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
 
 `void (void)`, plain `ret`; prologue `81 EC F4 00 00 00` (6, or 10 with the four pushes). 44
 `call`s and 3 tail `jmp`s (`0x4257BA`, `0x425B7B`, `0x45CFB8`): `0x46A3DB` in DrawGameScreen,
-`0x49FA32` in the shell's modal loop `0x49F9C0`, `0x467E41` in the HUD painter, and 41 more.
+`0x49FA32` in the message-box loop `0x49F9C0`, `0x467E41` in the HUD painter, and 41 more.
 The DirectDraw arm (`0x4C6475`) requires `[globals+0xDC]`, takes **`edi = *(globals+0xBC)`** as
 the source, checks it against the screen size, locks the primary, builds a context over it at
 `[esp+0x38]`, **draws the cursor into the back buffer with `0x4C67C0(globals, edi)`**, copies
@@ -13581,7 +13621,8 @@ which is why `slot` is the third argument. Glyphs then come out of it through `G
 `stdcall`, `ret 0xC`, prologue `83 EC 10 57 8B 7C 24 18` (8): recurses bottom-to-top over
 `per_active`, and blits **`0x4C6B70(dst, panel+0xBC, xpos, ypos)`** (`0x4AB158`) only if
 `mem+0x14 == 1` (cleared after) or `0x4B67D0(&panelRect, dirty)` [INFERRED name] says the rect
-overlaps. Two callers: `0x49FA28` in the **shell modal loop `0x49F9C0(gi, untilScreen)`** —
+overlaps. Two callers: `0x49FA28` in the **message-box loop `0x49F9C0(gi, untilScreen)`**
+(one caller, `0x4437B0`, for `MSGBOX.GUI`; *Who pushes the two rings*) —
 `{pump messages; 0x4A9FD0(gi); 0x4AB0B0(top, NULL, NULL); 0x4C2870; 0x4C63A0}` — and
 `0x4AB182` in the thunk **`0x4AB170(gi, ctx, dirty)`** (`ret 0xC`, prologue
 `8B 44 24 0C 8B 54 24 04 8B 4C 24 08`), called once per frame from DrawGameScreen at
@@ -14471,8 +14512,8 @@ those two calls; harmless for that reason, corrected anyway.
 **Which flip is a game frame**: `DrawGameScreen`'s `call 0x4C63A0` is at `0x46A3DB`, so the
 flip observer reads its own return address and compares it with **`0x46A3E0`**; a match means
 the frame is the game's (the viewport is the terrain skip's key fill, subtracted by the census,
-cleared by the layer), anything else is the shell's, whose flip runs from the modal loop
-`0x49F9C0` and 41 other sites.
+cleared by the layer), anything else is the shell's, whose flip runs from the flip's other
+callers, the message-box loop's `0x49FA32` among them.
 
 **Read on the render thread, never written** (both already in this map; listed because the
 layer is a new reader on the other thread):
@@ -15046,18 +15087,20 @@ entry, on the game thread ([GUI gadgets](gui-gadgets.html) §2.4.1).*
 
 - **`0x4A9FD0(GUIInfo* gi)`** — stdcall `ret 4`, prologue `83 EC 34 53 55` (5 bytes; the list
   wheel's observer steals exactly these). Seven `E8` callers: `0x41F7B7`, `0x41F9EA`,
-  `0x41FFBE`, `0x42056D`, `0x499992`, `0x49FA1B` (the shell modal loop `0x49F9C0`) and
+  `0x41FFBE`, `0x42056D`, `0x499992`, `0x49FA1B` (the message-box loop `0x49F9C0`) and
   `0x4AC035`. Its first read is `gi->TheActive_GUIMEM` (`mov eax,[ebp+0x18]` at `0x4A9FDB`);
   with no screen it returns 0.
 - **At the entry, the pointer `gi+0x3C` is the previous pump's.** It is refreshed at most once a
   pump, at `0x4AA00A`, by `0x4AB5D0(gi)` (`ret 4`, that one caller). When the engine's event ring
   holds a record (`0x4C2DE0`, a peek) and a screen is up, it tests the record against the top
-  screen (`0x4A1680`, `0x4A1920` [INFERRED: a rect fetch and a point-in-rect test]) and pops it
+  screen (`0x4A1680` fetches the panel's rect, right and bottom inclusive; `0x4A1920` tests the
+  point against it [DISASSEMBLED 2026-10-09]) and pops it
   through `0x4C2D60` into a local only when its point is inside or its third dword — the
   message's wParam, the buttons held — is 0 (`0x4AB643..0x4AB64D`); it then copies six dwords of
   it to `gi+0x3C` (`0x4AB667..0x4AB66C`) and its third to `gi+0x54`. Otherwise it returns at
-  `0x4AB680` with the record still at the head and `gi+0x3C` unchanged, and in the shell, where
-  the pump is the only pop, every click behind that record waits. With the ring empty it fills
+  `0x4AB680` with the record still at the head and `gi+0x3C` unchanged; IdleTick then pops it
+  at `0x4999C4`, and only in the message-box loop `0x49F9C0`, where the pump is the only pop,
+  does every click behind it wait (*Who pushes the two rings*). With the ring empty it fills
   `gi+0x3C` from `0x4C2340` instead. So an observer at the entry that needs the point a message
   was aimed at has to carry the point itself.
 - **The engine's event ring, and how far it can move between two pump entries.** It lives in
@@ -15071,8 +15114,9 @@ entry, on the game thread ([GUI gadgets](gui-gadgets.html) §2.4.1).*
   pump when the ring is empty. The pop `0x4C2D60`
   has two callers: `0x4AB654`, inside `0x4AB5D0` (the pump's one refresh), and `0x4999C4`, which
   follows the in-game pump call at `0x499992` in straight-line code (`0x4999B5` is the only
-  branch in that span, and it leaves it); `0x4C2DE0` is a peek and moves nothing. So between
-  two entries of the pump the read index moves at most two slots. The one other writer of the
+  branch in that span, and it skips the pop when the pump took the head: *Who pushes the two
+  rings*); `0x4C2DE0` is a peek and moves nothing. So between two entries of the pump the read
+  index moves at most two slots. The one other writer of the
   indices is the flush `0x4C2BB0` (both to 0), called once, at `0x426636`, in the in-game setup
   `0x4263B0` (the frontend state machine's call at `0x4270A9`), which discards whatever was
   queued. The list wheel's ordering rests on these facts ([GUI gadgets](gui-gadgets.html) §2.4.1).

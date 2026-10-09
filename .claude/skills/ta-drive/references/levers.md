@@ -386,6 +386,7 @@ that map's size.
 | `menu.off` | attach | the render-options screen off (`references/modules.md`) |
 | `hud.on`, `hud.off` | attach | HUD scale (`references/ui-layer.md`) |
 | `gui.on`, `gui.off` | attach + live | the UI layer (`references/ui-layer.md`) |
+| `input.stall` | per key batch | a test lever: a batch taken while it exists has no event acknowledged (`input: batch <id> taken (tagpu_input.stall: no acknowledgement): …`), so it reports `waiting` until tacli abandons it -- the abandon path on demand. Remove it before the next batch |
 | `tagpu_nowarp.on`, `tagpu_title.txt`, `tagpu_defaults.off`, `tagpu_shield.on`, `tagpu_keys.txt`, the `*.trigger` files | | tacli's own plumbing: the pointer-warp suppression, the window title, the defaults opt-out, the firewall, the injected tokens, the on-demand verbs |
 
 ## Instruments

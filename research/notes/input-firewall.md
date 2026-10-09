@@ -59,7 +59,10 @@ and chat typing working, and it makes `shift+key` type an upper-case character.
 `tacli keys` writes one **batch**, `#<id> <tokens>` (the id 1 to 16 hex digits, the file at most
 1023 bytes), under a temporary name and hard-links it to `tagpu_keys.txt`; a link never replaces
 a file, so the DLL never reads half a batch and a second driver waits for the first batch to be
-taken. The DLL (`tagpu_input.c`, game thread, every trigger tick) takes the file only while no
+taken. tacli splits a long list of tokens into batches that fit the file and the DLL's 4096
+events, counting each token's events as the DLL parses it (a click is four, `wheel:+64` sixty-four),
+and refuses a token that alone makes more before it writes anything. The DLL (`tagpu_input.c`,
+game thread, a `GetFileAttributes` probe every fifth trigger tick) takes the file only while no
 batch is in progress, parses it whole -- an unknown token, a missing id or more than 4096 events
 refuses the batch before anything is posted -- and logs `input: batch <id> taken: <tokens>`.
 
@@ -68,20 +71,39 @@ Then it posts **one event at a time**. Each tagged message carries a 16-bit sequ
 back once it has delivered the message, and the event is **consumed** when that has happened
 and, at a later trigger tick, both of the engine's input rings read empty from their own
 indices (`tagpu_gui_input_rings`: the mouse ring at graphics globals `+0x18E`/`+0x192`, the key
-ring at `+0x16E`/`+0x172`). The window procedure pushes while it handles the message and IdleTick
-pops before its handler and its frame ([engine map](exe-reverse-engineering.html), *Who pushes
-the two rings*), so an empty ring after the delivery is the engine having handled the event. A
-move or a wheel notch pushes nothing: delivery and a later tick consume it. The next event is
-posted only onto empty rings. After the last, `input: batch <id> done: N events; engine E, menu
-M, dropped D, untracked U` (the sprocket took M, the display-only ring dropped D, SendInput sent
-U with the shield disarmed); a post that fails refuses the rest. `tacli keys` waits for that
-line and fails on `REFUSED` or silence. Nothing is timed: a state in which the engine never
-empties a ring stops injection there, visibly -- `input: batch <id> waiting: event i/n <token>
-delivered=d mouse=p key=q` after two seconds, and tacli's timeout.
+ring at `+0x16E`/`+0x172`). The window procedure pushes while it handles the message, and each
+engine site that pops an entry hands it to its handler before the frame draws and flips
+([engine map](exe-reverse-engineering.html), *Who pushes the two rings, and who pops them*), so
+an empty ring after the delivery is the engine having handled the event. A move or a wheel notch
+pushes nothing: delivery and a later tick consume it. The next event is posted only onto empty
+rings. After the last, `input: batch <id> done: N events; engine E, menu M, dropped D, untracked
+U` (the sprocket took M, the display-only ring dropped D, SendInput sent U with the shield
+disarmed; a SendInput token counts as consumed when it is sent, since nothing can tag it); a
+post that fails refuses the rest. While a batch runs it logs at most one line every two
+seconds: `input: batch <id> progress: c/n events consumed` when an event was consumed since its
+last line, `input: batch <id> waiting: event i/n <token> delivered=d mouse=p key=q` when none
+was.
+
+**No clock decides a live game's outcome; a stall ends by abandon.** `tacli keys` waits for the
+done line as long as the DLL's queue moves: every `taken`, `progress` or end line of any batch
+restarts its 60-second bound, so a slow game, a long batch or a click whose handler starts a
+level load is waited out. It fails at once on `REFUSED`, and when the game exits. Every pop in
+the engine is conditional, though: in the message-box loop `0x49F9C0` (`MSGBOX.GUI`, its one
+caller) a press outside the box's panel is never popped, and in game a key would wait while the
+in-game key pass is skipped and the GUI pump does not take it. Then nothing moves for 60 s, and
+tacli writes `tagpu_keys.<id>.abandon`. The
+DLL, which looks for it every fifth trigger tick while a batch runs, ends the batch with `input:
+batch <id> ABANDONED: event i/n <token> mouse=p key=q; released <vks>`, posting an up for every
+key and button the batch's events left down, and tacli dies with that line. A batch still
+standing untaken behind a stalled one is deleted instead (`ABANDONED: not taken; batch <other>
+at event ...`). A game that does not answer the abandon in 30 s more has stopped ticking, and
+tacli says so. The abandon ends the batch, not the engine's state: the record the engine would
+not pop is still at the head of its ring, so the next batch waits on that ring until the engine
+pops it.
 
 What that buys: a burst cannot overflow a ring (the push drops silently when full, and a batch
-of ten clicks used to fill the 20-entry mouse ring in one drain); no release overtakes the press
-whose handler polls it; a modifier is down for exactly the events between its down and its up;
+of ten clicks used to overflow the mouse ring, which holds 19 records, in one drain); no release
+overtakes the press whose handler polls it; a modifier is down for exactly the events between its down and its up;
 and a return from `tacli keys` means the input's direct effects -- orders, selection, the
 placement rectangle -- are written. One residual: the in-game setup's flush `0x4C2BB0` empties
 the mouse ring unhandled, so an event in flight across a level's start would be acknowledged;
@@ -127,6 +149,17 @@ desktop" (there is no fencing either — `tagpu_nowarp.on`).
 | 5,000 one-token `pmove` batches, one driver, every 15±10 ms | 4,997 logged: three batches lost whole (ids 3716, 4460, 4558) | 5,000 taken, 5,000 done |
 | two concurrent drivers, 2,500 batches each | -- | 2,500 + 2,500 taken and done, no `waiting` line |
 | ARMCK selected, one `keys down:shift`, 12 × `prclick` on open ground, `up:shift` | 10 Moves: the last two clicks overflowed the mouse ring | 12 Moves, in order (50 events) |
+
+**The abandon** [MEASURED 2026-10-09, a skirmish, the `input.stall` lever]: with shift held
+through `down:shift q up:shift` the chat line read `<Player> Q`. With the lever armed,
+`tacli keys <i> down:shift pmove:500,400` logged 29 `waiting` lines at event 1/2 and, 60.2 s
+after it was sent, `ABANDONED: event 1/2 down:shift mouse=0 key=0; released 0x10`, and tacli
+exited 1 with that line. With the lever removed, the next batch `return z return` was done in
+one call and the chat line read `<Player> z`: the abandon had let shift up. Two drivers at once,
+the first `down:lbutton pmove:1,1`, the second `pmove:2,2` placed a second later: both ended
+`ABANDONED` (`released 0x01`, then the second taken and ended), and the next batch was done.
+A press outside `SELMAP.GUI`'s panel in the shell is consumed (0.2 s): IdleTick runs there, so
+the lever is the only on-demand way to a batch the engine does not consume.
 
 **End to end** [MEASURED 2026-09-01, with the hold this transport replaced]: `tacli click` the
 commander (build panel appears → selected) then
