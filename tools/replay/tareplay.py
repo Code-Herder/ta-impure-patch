@@ -869,54 +869,58 @@ def twin(w, log, fix, held=False):
     # world is paused: returning to the same eye or ring index would hide these
     # viewer writes from a two-image observation.
     tacli("arm", w.name, "menu.open")
-    rc, o = tacli("ui", w.name, "wait", "--gui", "RENDER.GUI", "--timeout", "10", timeout=60)
-    if rc:
-        raise CouldNotRun(f"the twin: Impure options did not open: {last(o)}")
-    rc, o = tacli("ui", w.name, "--json")
-    if rc:
-        raise CouldNotRun(f"the twin: Impure options could not be read: {last(o)}")
-    gui = json.loads(o)
-    labels = [g for g in gui["gadgets"] if g["type"] == "label" and g["active"]]
-    if not labels:
-        raise CouldNotRun("the twin: Impure options has no inert labels to sample")
-    width, height = gui["surface"]
-    rc, o = tacli("peek", w.name, "*0x511DE8+0x1422b", "*0x511DE8+0x1422f",
-                  "--json", timeout=60)
-    if rc:
-        raise CouldNotRun(f"the twin: map dimensions: {last(o)}")
-    map_width, map_height = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
-    points = ((0, 0), ((1 << (width.bit_length() - 1)) - 1,
-                       (1 << (height.bit_length() - 1)) - 1), (width - 1, height - 1))
-    for i, name in enumerate(NULL_VIEWS[:-1]):
-        x, y = labels[i % len(labels)]["click"]
-        tacli("keys", w.name, f"pclick:{x},{y}")
-        # Click injection returns the pointer to screen centre. A separate
-        # move and its native GUI echo establish the coordinate in this view.
-        x, y = points[i % len(points)]
-        tacli("keys", w.name, f"pmove:{x},{y}")
-        deadline = time.monotonic() + 10
-        while True:
-            rc, o = tacli("peek", w.name, "*0x511DE8+0x555", "*0x511DE8+0x559",
-                          "*0x511DE8+0x565", "--json", timeout=60)
-            if rc:
-                raise CouldNotRun(f"the twin: native mouse echo: {last(o)}")
-            event = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
-            if event == [x, y, 0x200]:
-                break
-            if time.monotonic() >= deadline:
-                raise CouldNotRun(f"the twin: mouse event {event}, wanted {[x, y, 0x200]}")
-            nap(0.1)
-        # The engine clamps these eyes to the map. The views are observations,
-        # not assertions about the camera's permitted range.
-        tacli("eye", w.name, i * map_width // (len(NULL_VIEWS) - 2),
-              i * map_height // (len(NULL_VIEWS) - 2))
-        n = len(log.lines)
-        w.trigger(f"dump {name} now")
-        if not log.wait(rf"recorder: frame dump {name} at GameTime", 30, n):
-            raise CouldNotRun(f"the twin: frame dump {name} not taken")
-        if w.gametime() != g1:
-            raise CouldNotRun("the twin: GameTime moved during the viewer samples")
-    tacli("arm", w.name, "menu.open=off")
+    try:
+        rc, o = tacli("ui", w.name, "wait", "--gui", "RENDER.GUI", "--timeout", "10", timeout=60)
+        if rc:
+            raise CouldNotRun(f"the twin: Impure options did not open: {last(o)}")
+        rc, o = tacli("ui", w.name, "--json")
+        if rc:
+            raise CouldNotRun(f"the twin: Impure options could not be read: {last(o)}")
+        gui = json.loads(o)
+        labels = [g for g in gui["gadgets"] if g["type"] == "label" and g["active"]]
+        if not labels:
+            raise CouldNotRun("the twin: Impure options has no inert labels to sample")
+        width, height = gui["surface"]
+        rc, o = tacli("peek", w.name, "*0x511DE8+0x1422b", "*0x511DE8+0x1422f",
+                      "--json", timeout=60)
+        if rc:
+            raise CouldNotRun(f"the twin: map dimensions: {last(o)}")
+        map_width, map_height = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
+        points = ((0, 0), ((1 << (width.bit_length() - 1)) - 1,
+                           (1 << (height.bit_length() - 1)) - 1), (width - 1, height - 1))
+        for i, name in enumerate(NULL_VIEWS[:-1]):
+            x, y = labels[i % len(labels)]["click"]
+            tacli("keys", w.name, f"pclick:{x},{y}")
+            # Click injection returns the pointer to screen centre. A separate
+            # move and its native GUI echo establish the coordinate in this view.
+            x, y = points[i % len(points)]
+            tacli("keys", w.name, f"pmove:{x},{y}")
+            deadline = time.monotonic() + 10
+            while True:
+                rc, o = tacli("peek", w.name, "*0x511DE8+0x555", "*0x511DE8+0x559",
+                              "*0x511DE8+0x565", "--json", timeout=60)
+                if rc:
+                    raise CouldNotRun(f"the twin: native mouse echo: {last(o)}")
+                event = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
+                if event == [x, y, 0x200]:
+                    break
+                if time.monotonic() >= deadline:
+                    raise CouldNotRun(f"the twin: mouse event {event}, wanted {[x, y, 0x200]}")
+                nap(0.1)
+            # The engine clamps these eyes to the map. The views are observations,
+            # not assertions about the camera's permitted range.
+            tacli("eye", w.name, i * map_width // (len(NULL_VIEWS) - 2),
+                  i * map_height // (len(NULL_VIEWS) - 2))
+            n = len(log.lines)
+            w.trigger(f"dump {name} now")
+            if not log.wait(rf"recorder: frame dump {name} at GameTime", 30, n):
+                raise CouldNotRun(f"the twin: frame dump {name} not taken")
+            if w.gametime() != g1:
+                raise CouldNotRun("the twin: GameTime moved during the viewer samples")
+    finally:
+        # disarmed on every way out: an armed panel opens in every later game on this instance,
+        # and no exit route leaves RENDER.GUI
+        tacli("arm", w.name, "menu.open=off")
     selections = [("lnselection", fix.get("viewer"))] + [
         (f"lnselection{i}", command) for i, command in enumerate(fix.get("viewer_more", []))]
     for name, command in selections:
