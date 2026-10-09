@@ -4303,6 +4303,26 @@ and invokes `0x466C20`; `0x467440` derives unit contact flags from the selected 
 controlled seat, camera and recording file are untouched. The card model itself reads recorded
 images and passes no mutable model pointer to the render thread.
 
+### 2.12d The replay HUD (`tagpu_hudstate.c`, `tagpu_vk_hud.c`, off unless armed, `tagpu_replayhud.on`)
+
+The column of team headers and player rows and the dock of transport buttons, timeline and clock,
+drawn at the device's resolution from `art/hud/` while a recording plays, with no input yet. Design,
+uploads, the check against the mockup and the gaps: [The replay HUD in game](hud-in-game.html).
+**No byte patch and no engine detour**: it reads the playback's player images and the dock's
+markers on the game thread and draws a pass of its own on the render thread. Vulkan only.
+
+| site | what we do there | thread |
+|---|---|---|
+| `fill_frame` (`tagpu_packet_pub.c`), after the UI's render half | `tagpu_hudstate_fill`: one `TAGPU_PK_HUD` record into the packet's area `hud_off`/`hud_len` — the clock, the speed and pause, the HUD's scale, up to 10 seats from `tagpu_replay_players` and up to 320 markers from `tagpu_dock_marks`; no area unless the lever is on and a recording plays. A record that does not fit sets `TAGPU_PK_TRUNC_HUD` (`0x800000`) | game |
+| `frame_valid` (`tagpu_packet.c`) | refuses a HUD area whose length is not `sizeof(TAGPU_PK_HUD)` or lies outside the slot, and a record whose `nseat` or `nmark` passes its array | render |
+| `tagpu_overlay_draw`, after `tagpu_gui_present` | `tagpu_hudstate_present`: the record as the layout's state — HUD units from the viewport, the engine's frame from `tagpu_hud_live`, colours through the presented palette, the teams, the names as Latin-1 — and the state dump on `tagpu_replayhud.dump` | render |
+| `vk_present` (`tagpu_vk.c`) | `tagpu_vk_hud_prepare` just before `tagpu_vk_gui_prepare`; `tagpu_vk_hud_record` after the world's composite and just before `tagpu_vk_gui_record`, so the engine's UI and the cursor draw over it. It counts in the census's drawn passes (`hud=N` on the `vk: census` line) and claims no A/B frame, so an A/B capture with it drawn stands down | render |
+| `vk_down`, `passes_down` | `tagpu_vk_hud_down`, behind the seam's `vkDeviceWaitIdle`; the pass builds again on its next frame | render |
+| `tagpu_dock_wanted` | `!tagpu_hudstate_on()`: under the lever the watching dock's screen does not open, and with it the player cards (§2.12b, §2.12c); `tagpu_hudstate_on` answers yes only on the Vulkan lane, so on GDI the dock and the cards open as without the lever. Its marker walker still runs, started by `tagpu_dock_marks` | game |
+
+**Fields we write:** none of the engine's. The game folder's `tagpu_replayhud.json` (and its
+`.tmp`), and the deletion of `tagpu_replayhud.dump`.
+
 ### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09
 
 The design, the invariants and the gate results are [smooth motion](smooth-motion.html); this is

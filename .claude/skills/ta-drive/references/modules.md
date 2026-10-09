@@ -1022,6 +1022,19 @@ block that reads to its last complete block.
   pointer-arrow button, left of Leave); it waits for `replay: overlay <name> on|off`, or `replay:
   chat hidden|shown` for the chat. Every switch is on when a playing starts. Triggers: `overlay
   <name> on|off`, and `chat hide` / `chat show`.
+- **The replay HUD** (Vulkan only): `tacli arm <i> replayhud.on` before the launch
+  (`replayhud.on=scale=150` for its own scale) draws the column and the dock of
+  `art/hud/` in place of the watching dock and the cards, which then do not open; on GDI the
+  lever does nothing and the dock and the cards open as usual. It takes no input: seek with `tacli replay seek`. **Its state
+  dump**: `touch gamedir/tagpu_replayhud.dump`; within 30 frames the game deletes it and writes
+  `gamedir/tagpu_replayhud.json` (`hud: state dumped to tagpu_replayhud.json: …`). **Compare it
+  with the mockup** at native 4K: capture the game (`import -window root g.png` on its display),
+  serve the repository root, and capture the mockup fed the dump with
+  `tools/hudart/capture.sh "<mockup url>?state=<url of the json>" m.png`; the two must line up
+  unshifted. **Markers need a commander death in the recording**: in the live skirmish being
+  recorded, `tacli keys <i> ctrl+c` selects the commander and `ctrl+d` self-destructs it; the
+  dock's walker logs what it found once it has read the recording (`dock: markers: N commander
+  deaths at <T> (seat <S>), M defeats …`). A defeat marker is a seat whose live units reach 0.
 - **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P
   [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish at T as player P,
   every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2 when it had

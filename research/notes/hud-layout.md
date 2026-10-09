@@ -7,9 +7,10 @@
 with what drawing each part needs, and a layout file holding every size, position, gap and text
 style. The mockup in `tools/hudart/mockup/` draws the HUD from those files and nothing else.
 
-- **The DLL does not draw it yet** ([the plan](hud-in-game.md)). When it does, it is to bake the same files at build time,
-  as `tools/artbake.py` bakes `art/ui/`, and implement the rules on this page. The numbers then
-  have one home, so the mockup and the game cannot disagree about one.
+- **The DLL draws it in game**, behind a lever and with no input yet
+  ([The replay HUD in game](hud-in-game.md)). It embeds the same files, packed as they are by
+  `tools/hudpak.py`, reads the JSON at run time and implements the rules on this page. The
+  numbers have one home, so the mockup and the game cannot disagree about one.
 - **The game draws it with a pass of our own, not a UI library** (the owner's choice,
   2026-10-08). It is a new alpha-blended Vulkan pass at the device's resolution, with
   [stb_truetype](https://github.com/nothings/stb) (C, public domain) rasterising the fonts.
@@ -23,8 +24,11 @@ style. The mockup in `tools/hudart/mockup/` draws the HUD from those files and n
     - **The language.** The DLL is C99 with no C++ toolchain, which rules out Dear ImGui and
       RmlUi. Nuklear is C, but would leave only its font baker (stb_truetype itself) and its
       draw list in use.
-- **The rules are implemented twice:** in `hud.js` now, in C later. This page is what keeps
-  them in step, with a capture of each compared (*Gaps*).
+- **The rules are implemented twice:** in `hud.js` and in `tagpu/ddraw/src/tagpu_hudlay.c`.
+  This page states them; `tools/hudart/laycheck.py` compares the two element by element
+  (*Checking the C against the mockup*), and a capture of the game is compared with the mockup
+  fed the game's own state ([The replay HUD in game](hud-in-game.md), *Checking it against the
+  mockup*).
 - **The exploration prototype** (the published artifact, with looks A to D, the button sets,
   fills and header variants) stays the record of how the design was chosen. It is not
   maintained.
@@ -35,6 +39,8 @@ style. The mockup in `tools/hudart/mockup/` draws the HUD from those files and n
 | What drawing each part needs | `art/hud/kit.json` |
 | Every size, position, gap and text style | `art/hud/layout.json` |
 | The rules, for the browser | `tools/hudart/mockup/hud.js`, `hud.css` |
+| The rules, for the DLL | `tagpu/ddraw/src/tagpu_hudlay.c` |
+| The faces, cut down, and their licences | `art/hud/fonts/`, cut by `tools/hudart/fonts.py` |
 | The mockup: a synthetic game, the controls, the input | `tools/hudart/mockup/index.html` |
 | Filing cut parts into `art/hud/` | `tools/hudart/file.py` |
 | The replay frame drawn behind the mockup | `research/notes/assets/hud-art/backdrop.png` |
@@ -53,11 +59,14 @@ teams. The same switches, and more, go in the URL, for captures:
 
 - `res=3840x2160`, `game=150` (`off`, `auto` or a percentage), `hud=150`, `np=10`, `nt=2`;
 - `t=70` (seconds into the 132-second game), `paused`;
-- `stat=1` or `stat=0` (the stats window), `sm=units` (its measure), `ss=team` (players or teams).
+- `stat=1` or `stat=0` (the stats window), `sm=units` (its measure), `ss=team` (players or teams);
+- `state=<url>`: draw the state the game dumped (`tagpu_replayhud.json`) — its screen, its
+  engine frame and its players — instead of the synthetic game.
 
 `tools/hudart/capture.sh "<url>?paused&res=3840x2160&game=150&hud=150" out.png` captures the stage at
-native 4K. `compare.sh` captures the button states: play held, stats on, the chips, a row
-hovered with JUMP held.
+native 4K. It lays the page out at device scale factor 1, one CSS pixel to a screen pixel, as the
+game draws (*Text* says why). `compare.sh` captures the button states — play held, stats on, the
+chips, a row hovered with JUMP held — at device scale factor 2.
 
 ## Iterating
 
@@ -74,8 +83,8 @@ hovered with JUMP held.
     everything through them, so its text follows its recesses. A well renamed or removed must be
     renamed in `layout.json` too: the page names any well it cannot find.
 
-- **A new element** needs data, a rule in `hud.js`, and later the same rule in the DLL. It is
-  the only kind of change that touches code.
+- **A new element** needs data, a rule in `hud.js`, and the same rule in `tagpu_hudlay.c`,
+  checked by `laycheck.py`. It is the only kind of change that touches code.
 
 - **After any change,** capture at 3840×2160 with both scales at 150, the owner's setting, and
   look at it. Check `game=auto` too, where the engine's frame is largest and the list scrolls.
@@ -162,8 +171,38 @@ the lesser of the style's size and the box's height / `fit`. That keeps the digi
 line clear of its bar when a row is drawn shorter than it was painted.
 
 - **Signed pairs**, the income and spending, read "+a / −b" in the `signs` colours and weight.
+- **A row's rates** read one decimal below 100 in magnitude and whole numbers from 100, rounded
+  half up as JavaScript's `Math.round` rounds (`rate` in `hud.js`; `rate` and `js_round` in
+  `tagpu_hudlay.c`), since the game's incomes are fractional.
 - **Numbers** use a thousands separator. A team header's income sums switch to thousands with a
   K from 10 000 on. The clock reads m:ss.
+- **A team header's unit sum is the bare number.** The faces carry no Greek, so there is no
+  sigma before it.
+- **A resource bar whose storage is 0 is empty.**
+
+**The faces** are Oswald 500 and 700 and Barlow Condensed 600, in `art/hud/fonts/`, which the
+mockup loads with `@font-face` and the DLL embeds. `tools/hudart/fonts.py` cuts them from the
+Google Fonts releases to ASCII, Latin-1 without the soft hyphen, and `·`, `×` and `−`, and stops,
+naming the character, when a source face lacks one. Neither family has Greek. The DLL draws a
+player's name as Latin-1 with its control codes as `?` and its soft hyphen as `-`, so nothing
+reaches the rasteriser that the faces lack.
+
+**The baseline is Chrome's** (`tagpu_hudlay_baseline`): the line box, the font size tall at
+line-height 1, is centred in the text's box; the face's ascent and descent (OS/2's typo metrics
+when the face sets `USE_TYPO_METRICS`, as these do, else hhea) are each rounded to a whole pixel
+at the font size; the half-leading, here negative, is floored to a pixel; the baseline is the
+line's top plus the ascent plus that. Blink rounds these metrics in CSS pixels, which is why
+`capture.sh` lays the mockup out at device scale factor 1: at a factor of 2 the baselines fell on
+a two-pixel grid the game does not have. In the game the baseline is then painted on a whole
+pixel and the pen keeps its fraction, in quarters of a pixel in the atlas, as Skia draws
+horizontal text.
+
+**One residual, MEASURED 2026-10-08.** A sweep of Chrome's rounded metrics (canvas
+`measureText`'s `fontBoundingBoxAscent` and `fontBoundingBoxDescent`) over 1 to 60 px in 1/64
+steps matches round(em × size) everywhere for Barlow Condensed, and at all but 26 of 7554 Oswald
+values. There Chrome rounds down an ascent or descent that lies just past a half, by an
+arithmetic not identified: float32, FreeType 26.6 and 16.16 models were all tried and fit worse.
+At those sizes the game's line sits a pixel off the mockup's.
 
 ### Buttons
 
@@ -278,21 +317,27 @@ ranked by the values at the playhead.
 5. **A held button's icon or label sinks with its face**, as a toggle's already did.
 6. **The close button** shows its pressed part while held.
 
+## Checking the C against the mockup
+
+`tools/hudart/laycheck.py` opens the mockup headless for four cases (4K at 150 with two teams, 4K
+at Auto with the list scrolled, 1080p at 100 with one team, 1440p at 75 with a row hovered and a
+button held), takes the mockup's state and every element's box in HUD units, runs
+`tagpu_hudlay.c` compiled natively (`laycheck.c`) on the same state, and pairs the two element
+by element: every part by name, every text by its string, every solid by its colour, every
+clickable by its key. It also measures every text's baseline in the browser — a zero-size
+inline-block probe on the text's own line — against `tagpu_hudlay_baseline` from the faces'
+metrics. It exits 1 on a box or baseline more than its tolerance off, or an element only one side
+has.
+
+MEASURED 2026-10-08: the two agree. At 4K every box is within 0.015 units and every baseline
+within 0.0142. The Oswald residual above is named, not failed: in the 1080p and 1440p cases the
+`name` style at 7.125 CSS px moves by a pixel (6 and 8 texts).
+
 ## Gaps
 
-- **The DLL draws none of it.** The pass needs the decision named in
-  [HUD art](hud-art.md), *Gaps*: a full-colour, alpha-blended draw at the device's resolution.
-  When it lands:
-    - bake `art/hud/` at build time;
-    - implement these rules;
-    - take the frame's `panel`, `top` and `bottom` from the engine;
-    - compare its capture with the mockup's at the same screen and state.
-- **The fonts,** Oswald and Barlow Condensed (both OFL), are loaded from Google Fonts by the
-  mockup. The game needs them in the release, cut down to the characters the HUD draws: four
-  faces, Oswald 500 and 700 and Barlow Condensed 600 and 700, come to 51 KB zipped for ASCII and
-  74 KB with Latin-1 (MEASURED, 2026-10-08). The OFL then asks for each face's copyright notice
-  and the licence text beside them. The HUD font itself is not decided.
+- **The HUD font is not decided.** Oswald and Barlow Condensed (both OFL) are the mockup's, and
+  ship with the OFL texts beside them.
 - **The column does not scroll.** It shows the items that fit from the first, as the prototype
   did.
-- **The data is synthetic.** A real stats window needs a per-second stats track in the recorder
-  ([S5](tadr-port/demo-recorder-s5-ui.md)).
+- **The stats window's data is synthetic.** A real one needs a per-second stats track in the
+  recorder ([S5](tadr-port/demo-recorder-s5-ui.md)); the game's dump carries no series.

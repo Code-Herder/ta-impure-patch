@@ -16,8 +16,9 @@ that scales with the screen, in a browser prototype. The owner chose:
 
 The chosen design is kept in the repository: its parts, losslessly, and its layout as data, in
 `art/hud/`, drawn by the mockup in `tools/hudart/mockup/`. [The replay HUD's layout](hud-layout.md)
-says how, and holds the rules the DLL is to share. Nothing of it is drawn by the DLL yet; *Gaps* at
-the end says what is missing.
+says how, and holds the rules the DLL shares. The DLL draws it in game with a pass of its own,
+behind a lever ([The replay HUD in game](hud-in-game.md)); *Gaps* at the end says what is
+missing.
 
 This page is the record of how the art is made, so that a part can be repainted, re-cut or tweaked
 without rediscovering the method:
@@ -249,8 +250,8 @@ toggles (map overlay, stats window open) and for the selected choice in each tra
 | `file.py <kit dir> [--look <l>,...] <part>[=<name>]...` | Files cut parts into `art/hud/`, the chosen design, losslessly, replacing old ones |
 | `lookmerge.py <cut dir> <look> <kit dir>` | Files freshly cut parts into the kit as `<part>@<look>` |
 | `pack.py <kit dir> <out.json> [<page> <version>]` | One JSON of data URIs per kit; with a page, also its measurements into the page |
-| `capture.sh <page url> <out.png>` | The page's HUD at device scale, after every part has been composed |
-| `compare.sh <page> <query> <prefix>` and `compose.py` | The button states of one set (play held, stats on, choices selected, a row's Jump held), side by side |
+| `capture.sh <page url> <out.png>` | The page's HUD in device pixels, laid out at device scale factor 1, after every part has been composed |
+| `compare.sh <page> <query> <prefix>` and `compose.py` | The button states of one set (play held, stats on, choices selected, a row's Jump held), side by side, laid out at device scale factor 2 |
 
 The tools need Python 3 with numpy, scipy and Pillow (the shared venv,
 `.venv-undither/bin/python`), plus DejaVu Sans Bold for the sheet labels. The captures need
@@ -413,7 +414,15 @@ tools/hudart/compare.sh http://127.0.0.1:<port>/index.html 'look=c&btn=3' cmp/w3
 .venv-undither/bin/python tools/hudart/compose.py cmp.png '3 · Warm steel=cmp/w3'
 ```
 
-- **Run every capture at device scale.** `capture.sh` and `compare.sh` both do.
+- **Run every capture at device scale.** `capture.sh` and `compare.sh` both screenshot through
+    `run-code` at scale `'device'`.
+    - **`capture.sh` lays the page out at device scale factor 1**, in a 3900 × 2400 viewport, so a
+      `res=3840x2160` stage is 3840 × 2160 device pixels with one CSS pixel to each, as the game
+      draws. Blink rounds a face's ascent and descent to whole CSS pixels; at a factor of 2 the
+      text's baselines would fall on a two-pixel grid the game does not have
+      ([The replay HUD's layout](hud-layout.md), *Text*).
+    - **`compare.sh` lays out at device scale factor 2**, in a 2100 × 1400 viewport, for the
+      button-state crops.
 - **Wait for the art.** They wait until every grid-sliced part has its composed image, and print
     "missing art" (it must be 0).
 - **Look at native 4K.** Judge the art at native 4K, never through a downscaled capture.
@@ -1045,20 +1054,19 @@ track's ends sit under its arrow buttons, so its screws never showed.*
 
 ## Gaps
 
-- **The DLL does not draw any of this.** The watching dock that landed is an engine GUI screen in
-    engine pixels, magnified by HUD scale, and its art goes through `tools/artbake.py`.
-    - `artbake` refuses any colour outside TA's palette and any partial alpha.
-    - The distressed paintings are full colour, with soft edges.
-    - Putting them in the game needs a decision and a device-resolution, alpha-blended draw pass for
-      the HUD. That changes S5's art pipeline ([S5](tadr-port/demo-recorder-s5-ui.md), *The art*).
+- **The DLL draws it behind a lever only, with no input.** The art travels as it is, full colour
+    and soft-edged, packed by `tools/hudpak.py` and drawn by an alpha-blended pass at the device's
+    resolution, not through `tools/artbake.py`, which refuses any colour outside TA's palette and
+    any partial alpha ([The replay HUD in game](hud-in-game.md)). The watching dock that the HUD
+    is to replace is still an engine GUI screen whose art goes through `artbake`.
 - **The stats window is painted below the resolution it is drawn at:** 3.1 px per unit against
     4.5 at 4K and HUD 150, so it is magnified 1.46×. A repaint at a larger size, or as more than one
     painting, would close it.
 - **The paintings exist only in the local archive and the artifact's packed kit.** A painting
     cannot be reproduced: Codex never paints the same image twice. The prompts here reproduce the
     style, not the pixels.
-- **The text is the page's web font (Oswald).** S5 has text drawn by the engine, in each style's
-    font. The HUD's text in the game is undecided.
+- **The HUD's font is undecided.** The page and the game both draw Oswald and Barlow Condensed,
+    from the faces in `art/hud/fonts/`.
 - **The stats chart shows synthetic data.** A real chart needs a per-second statistics track in the
     recording.
 - **Look A, the other three button sets, the other three fills, the other six headers and shell

@@ -359,6 +359,7 @@ of ours draws, no golden source is captured, and every `tacli` verb except `eye`
 | `devres.on` | the world at the device's resolution: `ss` follows `ceil(k)` (`references/ui-layer.md`) |
 | `fps.on` | the frame-rate readout (the lever over the FPS counter row), drawn from TA's own glyphs; needs the font the packet carries, which `markown` produces — with only `fps.on` armed the packet reads `font=0/0B` and the readout draws nothing |
 | `scaffold.on` | the scene-depth scaffold overlay; a debug instrument that tints every tall feature purple. Not in the arm set |
+| `replayhud.on` | the replay HUD in place of the watching dock and the player cards, while a recording plays; read once a process, so arm it before the launch. `replayhud.on=scale=150` (75, 100, 125, 150) sets its scale over `impure.cfg`'s `replayhud=`. No input yet: the dock's buttons are gone and the HUD's do nothing. Log `hud: the replay HUD is on (tagpu_replayhud.on)`, `hud: loaded N parts …`, `hud: the parts are on the device`; the census reads `hud=1`. Its state dump and the mockup comparison: `references/modules.md`, the demo recorder |
 | `tagpu_<pass>.ab` | a one-frame capture of the presented frame as `tagpu_<pass>_vk.ppm` — `references/measuring.md` |
 
 Read `tacli log <i> -g '^vk:'` for the window, the device, the swapchain and the census.
