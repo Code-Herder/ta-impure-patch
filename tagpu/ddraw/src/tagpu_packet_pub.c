@@ -110,6 +110,7 @@
 #include "tagpu_surf.h"      /* the golden source: TA's composed frame, copied on
                                 THIS thread at the one point it is finished      */
 #include "tagpu_feat.h"      /* whether the mirror wants the map's own features */
+#include "tagpu_hudstate.h"   /* the replay HUD's record, through the replay's own calls */
 #include "tagpu_datakeys.h"  /* the build ghost's piece masks, computed on THIS thread */
 
 /* DrawGameScreen's prologue, `sub esp,0x214` — the same six bytes
@@ -297,6 +298,9 @@ static unsigned s_fillShort;
    PK_FILL_COUNTS / PK_FC_UNDO (above fill_frame) take back what the
    discarded fill counted. */
 static int      s_fillAgain;
+
+/* the replay HUD's record, built here and copied into the area: 3.4 KB, off the stack */
+static TAGPU_PK_HUD s_hud;
 
 static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, unsigned len,
                             unsigned* off_out, unsigned* len_out, unsigned trunc_bit)
@@ -2752,6 +2756,12 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     /* ---- the UI's render half ---- */
     e = fill_gui(p, ta, &cursor);
     if (e > need) need = e;
+    /* ---- the replay HUD's record, while a recording plays (tagpu_hudstate.c) ---- */
+    if (tagpu_hudstate_fill(&s_hud, p->tick)) {
+        e = append_area(p, &cursor, &s_hud, (unsigned)sizeof s_hud, &p->hud_off, &p->hud_len,
+                        TAGPU_PK_TRUNC_HUD);
+        if (e > need) need = e;
+    }
 
     /* the font: header + glyph table in the header, the objects in the area */
     p->font_gen   = s_fontGen;

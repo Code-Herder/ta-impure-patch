@@ -104,6 +104,8 @@ typedef struct TAGPU_REPLAY_PLAYER {
     int commander_alive; /* 1 present, 0 absent, -1 unavailable */
     char name[32];
     float metal, energy, metal_in, metal_out, energy_in, energy_out;
+    float metal_max, energy_max;    /* the storage maxima the economy pass sums */
+    unsigned allies;                /* bit j: the alliance row marks recorded seat j */
 } TAGPU_REPLAY_PLAYER;
 int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap);
 int tagpu_replay_sight(void);

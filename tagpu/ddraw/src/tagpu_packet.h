@@ -599,6 +599,51 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_GHOSTMASK 0x100000u /* did not fit, OR more masked types
                                              than the table's cap          */
 
+#define TAGPU_PK_TRUNC_HUD     0x200000u  /* the replay HUD's record          */
+
+/* ---- THE REPLAY HUD (tagpu_hudstate.c) ----------------------------------
+   What the replay HUD draws, in a level that plays a recording: the clock,
+   each recorded player's image as the playback holds it, and the timeline's
+   markers. The game thread takes it through the replay's own calls
+   (inc/tagpu_replay.h) and the dock's markers (tagpu_dock.h), so the fill
+   names no engine address. One record, in the area `hud_off`/`hud_len`, whose
+   length is exactly sizeof(TAGPU_PK_HUD); no area when no recording plays. */
+#define TAGPU_PK_HUD_SEATS  10u     /* REC_PLAYERS: the recorder's seats       */
+#define TAGPU_PK_HUD_MARKS  320u    /* the dock's 256 markers + 64 bookmarks   */
+enum { TAGPU_PK_MK_DEATH, TAGPU_PK_MK_DEFEAT, TAGPU_PK_MK_BOOKMARK };
+typedef struct TAGPU_PK_HUDSEAT {
+    char     name[32];          /* the recording header's, NUL-terminated       */
+    float    m, mmax, mi, mo;   /* metal: stored, storage, income, spending      */
+    float    e, emax, ei, eo;   /* energy, the same                              */
+    uint32_t units;             /* units alive (+0x144)                          */
+    uint16_t allies;            /* bit j: this player's alliance row (+0x108)
+                                   marks recorded seat j                         */
+    uint8_t  seat;              /* the recorded seat, < TAGPU_PK_HUD_SEATS       */
+    uint8_t  pal;               /* the player's colour as a palette index: the
+                                   middle pixel of its logo frame, the cards'
+                                   rule (tagpu_cards.c)                          */
+    uint8_t  lost;              /* the commander has died at least once          */
+    uint8_t  pad[3];
+} TAGPU_PK_HUDSEAT;
+typedef struct TAGPU_PK_HUDMARK {
+    uint32_t t;                 /* GameTime                                      */
+    uint8_t  kind;              /* TAGPU_PK_MK_*                                 */
+    uint8_t  seat;              /* a recorded seat; 0xFF for a bookmark          */
+    uint8_t  pad[2];
+} TAGPU_PK_HUDMARK;
+typedef struct TAGPU_PK_HUD {
+    uint32_t now;               /* GameTime, which runs on past the recording    */
+    uint32_t first, last;       /* the recording's first and last GameTime       */
+    uint16_t speed;             /* the replay's speed ceiling, 10 = 1x           */
+    uint8_t  paused;
+    uint8_t  nseat;             /* <= TAGPU_PK_HUD_SEATS                         */
+    uint16_t nmark;             /* <= TAGPU_PK_HUD_MARKS                         */
+    uint16_t scale;             /* the replay HUD's own scale, percent: 75, 100,
+                                   125 or 150 (tagpu_hudstate_on)                */
+    TAGPU_PK_HUDSEAT seat[TAGPU_PK_HUD_SEATS];
+    TAGPU_PK_HUDMARK mark[TAGPU_PK_HUD_MARKS];
+} TAGPU_PK_HUD;
+
 #define TAGPU_PK_SHD_ROWS   32u      /* the engine's PALETTE.SHD shade table:  */
 #define TAGPU_PK_SHD_BYTES  (TAGPU_PK_SHD_ROWS * 256u)   /* 32 x 256 bytes     */
 
@@ -868,6 +913,9 @@ typedef struct TAGPU_PACKET {
     int32_t  mmpic_w, mmpic_h;        /* the decoded minimap picture, in the
                                          LEVEL'S FIRST in-play packet only       */
     uint32_t mmpic_off, mmpic_len;    /* mmpic_w * mmpic_h palette indices       */
+
+    /* ---- the replay HUD ---- */
+    uint32_t hud_off, hud_len;        /* one TAGPU_PK_HUD; 0 = no recording plays */
     uint32_t truncated;         /* TAGPU_PK_TRUNC_* bits: what did not fit      */
     uint32_t crc;               /* CRC-32 of the slot with these two fields as
                                    zero, under `tagpu_packet.check`; else 0     */
@@ -975,6 +1023,10 @@ static __inline const TAGPU_PK_GHOSTMASK* tagpu_pk_ghostmask(const TAGPU_PACKET*
 /* the map's own features, or NULL: see TAGPU_PK_MAPFEAT for when it rides */
 static __inline const TAGPU_PK_MAPFEAT* tagpu_pk_mapfeat(const TAGPU_PACKET* p)
 { return p->n_mapfeat ? (const TAGPU_PK_MAPFEAT*)(const void*)((const unsigned char*)p + p->off_mapfeat) : (const TAGPU_PK_MAPFEAT*)0; }
+
+/* the replay HUD's record, or NULL: see TAGPU_PK_HUD */
+static __inline const TAGPU_PK_HUD* tagpu_pk_hud(const TAGPU_PACKET* p)
+{ return p->hud_len ? (const TAGPU_PK_HUD*)(const void*)((const unsigned char*)p + p->hud_off) : (const TAGPU_PK_HUD*)0; }
 
 /* ---- lifetime ---- */
 /* DLL attach, before either thread exists — never lazily: reserves the slots

@@ -163,6 +163,17 @@ inc/tagpu_art_gen.h: ../../tools/artbake.py ../../unditherer/ta-palette.json $(A
 
 src/tagpu_art.o src/tagpu_art.stock.o tests/arttest.exe: inc/tagpu_art_gen.h
 
+# THE HUD ARCHIVE (tools/hudpak.py; src/tagpu_hudart.h): the replay HUD's files under art/hud/,
+# packed as they are -- JSON, PNG, TrueType -- into inc/tagpu_hudpak.bin, which res.rc embeds as
+# the RCDATA resource HUDPAK. Generated and never committed, like the art above, and for the same
+# reason: the HUD in the DLL cannot disagree with the HUD in git, or with the mockup that reads it.
+HUD_DIR  := ../../art/hud
+HUD_SRCS := $(shell find $(HUD_DIR) -type d -o -type f 2>/dev/null)
+inc/tagpu_hudpak.bin: ../../tools/hudpak.py $(HUD_SRCS)
+	python3 ../../tools/hudpak.py $(HUD_DIR) $@
+
+res.o res.stock.o res.cover.o res.stock.cover.o: inc/tagpu_hudpak.bin
+
 # THE SIMULATION-STATE RULE (inc/tagpu_simreg.h): every writable static of a file marked `sim`
 # in thread-split.allow is declared, and no `sim` object allocates, takes a TLS index, changes a
 # page or names a lever itself. It reads the objects this link uses, so it runs in the link's own

@@ -531,6 +531,14 @@ static const char* frame_valid(const void* rec)
         if (p->shd_len != TAGPU_PK_SHD_BYTES || !area_ok(p, p->shd_off, p->shd_len))
             return "shade table area";
     }
+    /* the replay HUD's record: its counts are the loops its consumer runs */
+    if (p->hud_len) {
+        const TAGPU_PK_HUD* h;
+        if (p->hud_len != sizeof(TAGPU_PK_HUD) || !area_ok(p, p->hud_off, p->hud_len))
+            return "replay HUD area";
+        h = tagpu_pk_hud(p);
+        if (h->nseat > TAGPU_PK_HUD_SEATS || h->nmark > TAGPU_PK_HUD_MARKS) return "replay HUD counts";
+    }
     /* THE FOUR WORLD TABLES. Each is checked ONCE, here, against
        the record's own committed extent, so every consumer indexes with its
        `n_` and nothing else. `area_ok` does the 4-alignment, the "starts after

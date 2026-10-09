@@ -11,4 +11,8 @@ int tagpu_cards_owns(int x, int y);
 int tagpu_cards_click(int x, int y, int down, int right, int on_top);
 int tagpu_cards_wheel(UINT msg, WPARAM wp, LPARAM lp);
 void tagpu_cards_cancel(void);
+/* A player's colour as a palette index: the middle pixel of its logo's frame in the engine's
+   colour sequence, which is what a card's header chip shows; 59 when the sequence or the frame
+   does not validate. Game thread. */
+unsigned tagpu_cards_logo_pal(unsigned logo);
 #endif

@@ -23,6 +23,7 @@
 #include "tagpu_recfmt.h"
 #include "tagpu_art.h"
 #include "tagpu_hud.h"
+#include "tagpu_hudstate.h"
 #include "tagpu_gaf.h"
 #include "tagpu_log.h"
 
@@ -532,7 +533,7 @@ static int geom(int* ex, int* ey, int* w, int* q8)
 int tagpu_dock_wanted(void)
 {
     int x, y, w, q;
-    return s_armed && tagpu_replay_path() && geom(&x, &y, &w, &q);
+    return s_armed && !tagpu_hudstate_on() && tagpu_replay_path() && geom(&x, &y, &w, &q);
 }
 
 /* a record by name, bounded by the panel's own count and by the 200 records GUI_Load allocates
@@ -937,6 +938,26 @@ static void walk_start(void)
     InterlockedExchange(&s_mkN, 0);
     s_walkH = CreateThread(NULL, 0, walker, NULL, 0, NULL);
     if (!s_walkH) tagpu_logf("dock: markers: none - the walker did not start (%lu)", GetLastError());
+}
+
+int tagpu_dock_marks(unsigned* T, unsigned char* kind, unsigned char* seat, int cap)
+{
+    LONG n;
+    int i, k = 0;
+    if (!s_walkStarted && tagpu_replay_live()) walk_start();
+    /* the walker writes an entry, then publishes the count: the entries below it are whole */
+    n = InterlockedCompareExchange(&s_mkN, 0, 0);
+    for (i = 0; i < n && i < MK_MAX && k < cap; i++, k++) {
+        T[k] = s_mk[i].T;
+        kind[k] = s_mk[i].kind;
+        seat[k] = s_mk[i].seat;
+    }
+    for (i = 0; i < s_nbm && k < cap; i++, k++) {
+        T[k] = s_bm[i];
+        kind[k] = 2;
+        seat[k] = 0xFF;
+    }
+    return k;
 }
 
 void tagpu_dock_level_end(void)

@@ -140,6 +140,11 @@ static unsigned colour(unsigned logo)
     return pix[(h / 2) * w + w / 2];
 }
 
+unsigned tagpu_cards_logo_pal(unsigned logo)
+{
+    return colour(logo);
+}
+
 static int inside(int x, int y)
 {
     const char* ta = *(const char* const*)0x00511DE8u;

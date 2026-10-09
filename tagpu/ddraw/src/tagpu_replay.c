@@ -6644,6 +6644,15 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
         memcpy(&dst->metal, p + PL_METAL, 4);
         memcpy(&dst->metal_in, p + 0x9C, 4);
         memcpy(&dst->metal_out, p + 0xA0, 4);
+        memcpy(&dst->energy_max, p + 0xA4, 4);
+        memcpy(&dst->metal_max, p + 0xA8, 4);
+        /* the alliance row, one byte per player record (+0x108, 11 of them: the seat fill
+           0x47A890 writes it, the allied victory 0x490080 reads it) */
+        {
+            unsigned j;
+            for (j = 0; j < REC_PLAYERS; j++)
+                if (p[0x108 + j]) dst->allies |= 1u << j;
+        }
     }
     /* The engine's commander test compares UnitName with the owning side's commander name
        (0x4864CB..0x48650F). The loader stores a 32-byte name (0x431B6D); the table has five
