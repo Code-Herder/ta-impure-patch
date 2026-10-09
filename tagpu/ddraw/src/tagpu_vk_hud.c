@@ -472,7 +472,7 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
    them against a slot's 2 MiB, so they take a dozen frames, and the HUD draws once the last is
    there. A part that would not fit what this frame's buffer has left waits for the next frame,
    where it is the first copy: in the frame's own command buffer when it fits the slot's whole
-   buffer, banded when it does not -- the three largest parts, uploaded once after the pass is
+   buffer, banded when it does not -- the parts larger than the cap, uploaded once after the pass is
    built, which is the banded path's own event (tagpu_vk_stage.h). 1 all sent, 0 more next
    frame, -1 the device. */
 static int send_parts(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st, const HUDART* art)

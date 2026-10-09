@@ -628,7 +628,7 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_OVERLAY 0x200000u  /* the replay's overlay items did not
                                              fit this packet                */
 
-#define TAGPU_PK_TRUNC_HUD     0x200000u  /* the replay HUD's record          */
+#define TAGPU_PK_TRUNC_HUD     0x800000u  /* the replay HUD's record          */
 
 /* ---- THE REPLAY HUD (tagpu_hudstate.c) ----------------------------------
    What the replay HUD draws, in a level that plays a recording: the clock,

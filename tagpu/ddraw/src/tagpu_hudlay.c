@@ -2,7 +2,7 @@
 
    EACH FUNCTION BELOW IS ONE OF hud.js's, under the same name and in the same order, and emits
    its elements in hud.js's document order, which is the order the browser paints them. A rule
-   changed in one file is changed in the other; tools/hudart/laycheck.sh is what notices when
+   changed in one file is changed in the other; tools/hudart/laycheck.py is what notices when
    they disagree. The stats window and its chart are not here: they need a recorder track that
    does not exist yet (research/notes/hud-in-game.md, *The landings*).
 

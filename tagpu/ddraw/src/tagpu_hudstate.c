@@ -19,6 +19,8 @@
 #include "tagpu_pal.h"
 #include "tagpu_hud.h"
 #include "tagpu_log.h"
+#include "dd.h"
+#include "render_vk.h"
 
 #define LEVER "tagpu_replayhud.on"
 #define TICKS 30.0f                     /* GameTime runs at 30 a second */
@@ -45,7 +47,9 @@ int tagpu_hudstate_on(void)
             tagpu_logf("hud: the replay HUD is on (%s)%s", LEVER, v > 1 ? ", scale from the lever" : "");
         v = InterlockedCompareExchange(&s_on, 0, 0);
     }
-    return v != 0;
+    /* drawn only on the Vulkan lane, the packet's only reader: on GDI, or after the lane falls
+       back to it (render_vk.c), the HUD is off and the dock and the cards stand where they were */
+    return v != 0 && g_ddraw.renderer == vk_render_main;
 }
 
 static unsigned scale_pct(void)

@@ -2,7 +2,7 @@
 #define TAGPU_HUDLAY_H
 /* tagpu_hudlay -- the replay HUD's layout rules: tools/hudart/mockup/hud.js, in C, over the same
    art/hud/layout.json and art/hud/kit.json. research/notes/hud-layout.md states the rules both
-   implement; tools/hudart/laycheck.sh compares this file's rectangles with the mockup's.
+   implement; tools/hudart/laycheck.py compares this file's rectangles with the mockup's.
 
    A PURE FUNCTION OF ITS INPUTS. tagpu_hudlay_build reads the loaded files and the state it is
    given, and nothing else: no engine memory, no global, no clock. So the render thread can call
