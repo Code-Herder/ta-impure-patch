@@ -4104,7 +4104,7 @@ one small archive.
 | gadget `+0x144` of `GAMMA` and `VIDSLDR` | the slider callbacks `0x45BD20` / `0x45BBF0` are wrapped, per visit and only while the field still holds the engine's own: the wrapper calls it, then records the value it wrote into the store | game |
 | open | `GUI_Load 0x4AA8F0(gi, main+0x37EA0, flags)` with `0x20` + `0x400`, patch the panel rect, set `+0x08`/`+0x0C`, then `0x4C2470(); GUI_StageUpdateDraw(gi, 0x21); 0x4C2870()` — GUI_Load's own suppressed stage 1, reproduced; then repaint the ground and set `gi+0xCCA` | game |
 | close | restore `main+0x37EA0`, then `GUI_Pop 0x4A9660` when our screen is on top, else `UpdateIngameGUI 0x491D70(1)` | game |
-| teardown wrap's entry (`tagpu_reclaim.c`) | `tagpu_menu_level_end`: restore `main+0x37EA0` and forget the slot's screen without a pop, then join the dock's walker | game |
+| teardown wrap's entry (`tagpu_reclaim.c`) | `tagpu_menu_level_end`: restore `main+0x37EA0` and forget the slot's screen without a pop | game |
 
 **Answering the pump is not optional** [VERIFIED 2026-09-11]. `gi->UIChange_f` is
 bidirectional: the pump writes the actuated index into it before calling `OnCommand`
@@ -4257,71 +4257,44 @@ panel hangs over the world, so clicking a row costs one frame of the panel being
 The row's own state survives it (the model is ours; the levers are read only on the player's
 open), but the rebuild is visible if you look for it.
 
-### 2.12b The watching dock (`tagpu_dock.c`, armed with the menu) — S5 landing 2
+### 2.12b The replay HUD (`tagpu_hudstate.c`, `tagpu_hudinput.c`, `tagpu_vk_hud.c`; every Vulkan replay)
 
-The bar a level that plays a recording shows along the bottom of the world. Design and runs:
-[demo recorder S5](tadr-port/demo-recorder-s5-ui.html), *The watching dock*; the engine facts:
-[engine map](exe-reverse-engineering.html), *The watching dock*. It rides §2.12's machinery: the
-same archive, the same redirect, the same frame tick and post-GUI observer, and **one screen slot**
-with RENDER.GUI ([renderers](renderers.html) §2.10).
-
-| site | what we do there | thread |
-|---|---|---|
-| `DLL_PROCESS_ATTACH` | `impure/dock.gui` and `anims/dock.gaf` into `impure-patch.ufo`: the ground as eight 512×86 uncompressed frames and the buttons' frames, composed from `art/ui/retail`, every frame tagged `TAGPU_GAF_EXACT` at `+0x0C` so the Classic++ UI restorer leaves it alone; nothing arms without the art | — |
-| `DrawGameScreen 0x468CF0` (the menu's tick) | push `DOCK.GUI` through the slot; place it before stage 1 at the HUD scale in force (`tagpu_dock_rect`), and publish the magnified region's word while the engine's chain holds it; repaint the ground and compare the Leave guard's bytes after it; then each frame, while it is the top screen, push the play stage, the speed stage, the greying and the two readouts through the engine's setters, attribs bit 8 on each greyed button and off each live one; put back the pause Leave's question took; start the walker once a level | game |
-| `GUIMEMSTRUCT+0x08` (its `OnCommand`) | seeks, pause, speed, a bookmark, the Overlays menu opened or closed (§2.12c), Leave (the pause taken, `0x512FF8 = 0`, `0x460680`, the title set); every handled click answered with `0x4AB0A0` | game |
-| `tagpu_shield.c`, both paths | the strip's left and right buttons through `tagpu_menu_click` / `tagpu_menu_rclick`; a drag's seek cancelled on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and a deactivating `WM_ACTIVATEAPP`, its release still consumed | game |
-| `0x46A308` (post-GUI) | the strip's fill, markers and playhead into the back buffer through `0x4B7F90`, unless a screen above the dock overlaps it | game |
-| the walker | reads the recording file through its own `RecReader` and publishes markers; joined at the teardown wrap's entry | its own |
-
-**Fields we write**, on the game thread, on a playback level only: `main+0x38A51` bit 0 (the pause,
-the word read-modify-written); `main+0x38A4B` and `+0x38A4D` (the speed's ceiling and live value,
-the presets 5..80 only, the player's put back at the teardown and exchanged around every settings
-save); the dword `0x512FF8` (YESORNO's question, 0); the dock's parsed records' rects before stage 1,
-and after it the attribs dword (`+0x1B`, bit 8 only) of its seven greyable buttons; its own ground
-tiles' planes; `main+0x37EA0` through the slot. `replays\index.dat`'s bookmarks
-field. Nothing the recording carries.
-
-### 2.12c Replay player cards (`tagpu_cards.c`, with the watching dock)
-
-The implementation and its remaining validation are in [Replay player cards](tadr-port/demo-recorder-player-cards.html).
-No new byte patch: the cards reuse the dock's model tick, post-GUI observer and paired-click path.
-
-| entry | operation | thread |
-|---|---|---|
-| dock open/tick/close | model and layout, top-screen check, enabled card-scale word | game |
-| post-GUI `0x46A308` | immutable GAF frames through `0x4B7F90`; bounded ASCII labels through `0x4C14F0`, font measured with `0x4C1440`/`0x4C1480`/`0x4C1450` | game |
-| both shield button paths; wheel before zoom | card actions, paired release consumption, scroll; current `main+0x531` compared with the dock identity; the dock's Overlays menu, drawn over the panel's bottom right and hit-tested before the cards, its four rows the replay's overlay and chat switches, closed by a press anywhere but itself and the dock's `DKOVER` ([perspective plan, 4c-3 as built](tadr-port/demo-recorder-perspective-streams.html#4c-3-as-built)) | game |
-| replay frame visit at `0x4969CD` | pending Sight after display-state application: independent death-history reader, expiry, view selection, temporary sight adds, minimap fog and radar passes | game |
-| flip marker and composite | `OP_FLIP.dy` → `PK_FRAME.h` → presented card scale; bottom-right region uniforms at 128/144/160, total block176 bytes | game → render |
-
-**Fields we write:** text-state foreground/background at globals `+0x208/+0x20C` through
-`0x4C13A0`, restored after each label; `main+0x2A43` for Sight. Temporary-record expiry fields
-are zeroed only after their count is bounded; the engine's expiry/add roots then maintain the
-records and their per-player counters. `minimap_fog` clears LosType bit3, sets minimap flag bit2
-and invokes `0x466C20`; `0x467440` derives unit contact flags from the selected view. The clock,
-controlled seat, camera and recording file are untouched. The card model itself reads recorded
-images and passes no mutable model pointer to the render thread.
-
-### 2.12d The replay HUD (`tagpu_hudstate.c`, `tagpu_vk_hud.c`, off unless armed, `tagpu_replayhud.on`)
-
-The column of team headers and player rows and the dock of transport buttons, timeline and clock,
-drawn at the device's resolution from `art/hud/` while a recording plays, with no input yet. Design,
-uploads, the check against the mockup and the gaps: [The replay HUD in game](hud-in-game.html).
-**No byte patch and no engine detour**: it reads the playback's player images and the dock's
-markers on the game thread and draws a pass of its own on the render thread. Vulkan only.
+A replay's controls: the column of team headers and player rows with its foot plate of switches,
+and the dock of transport buttons, timeline and clock, drawn at the device's resolution from
+`art/hud/` while a recording plays on the Vulkan lane, and its input. Design, uploads, the input,
+the check against the mockup and the gaps: [The replay HUD in game](hud-in-game.html). **No byte
+patch and no engine detour of its own**: it reads the playback's player images through the
+replay's calls, hit-tests clicks on the game thread against the frame on screen, and draws a pass
+of its own on the render thread. On GDI a replay has no on-screen controls. The watching dock and
+the player cards it replaced are deleted, and with them the dock's and the cards' HUD-scale
+regions (§2.15).
 
 | site | what we do there | thread |
 |---|---|---|
-| `fill_frame` (`tagpu_packet_pub.c`), after the UI's render half | `tagpu_hudstate_fill`: one `TAGPU_PK_HUD` record into the packet's area `hud_off`/`hud_len` — the clock, the speed and pause, the HUD's scale, up to 10 seats from `tagpu_replay_players` and up to 320 markers from `tagpu_dock_marks`; no area unless the lever is on and a recording plays. A record that does not fit sets `TAGPU_PK_TRUNC_HUD` (`0x800000`) | game |
+| `fill_frame` (`tagpu_packet_pub.c`), after the UI's render half | `tagpu_hudstate_fill`: one `TAGPU_PK_HUD` record into the packet's area `hud_off`/`hud_len` — the clock, the speed and pause, the HUD's scale, up to 10 seats from `tagpu_replay_players`, up to 320 markers from `tagpu_hudmarks_get`, and the HUD's own state from `tagpu_hudinput_fill` (the pointer, the folds, the switches, the scroll, Sight's and Follow's seats, the key held, the toast); in it, the timeline drag's seek once a frame and Leave's pause put back. No area unless the Vulkan lane draws the HUD and a recording plays. A record that does not fit sets `TAGPU_PK_TRUNC_HUD` (`0x800000`) | game |
 | `frame_valid` (`tagpu_packet.c`) | refuses a HUD area whose length is not `sizeof(TAGPU_PK_HUD)` or lies outside the slot, and a record whose `nseat` or `nmark` passes its array | render |
-| `tagpu_overlay_draw`, after `tagpu_gui_present` | `tagpu_hudstate_present`: the record as the layout's state — HUD units from the viewport, the engine's frame from `tagpu_hud_live`, colours through the presented palette, the teams, the names as Latin-1 — stamped with the frame's `frame_counter`, which `tagpu_hudstate_frame` compares with the pass's `frame`; and the state dump on `tagpu_replayhud.dump` | render |
-| `vk_present` (`tagpu_vk.c`) | `tagpu_vk_hud_prepare` just before `tagpu_vk_gui_prepare`; `tagpu_vk_hud_record` after the world's composite and just before `tagpu_vk_gui_record`, so the engine's UI and the cursor draw over it. It counts in the census's drawn passes (`hud=N` on the `vk: census` line) and claims no A/B frame, so an A/B capture with it drawn stands down | render |
+| `tagpu_overlay_draw`, after `tagpu_gui_present` | `tagpu_hudstate_present`: the record as the layout's state — HUD units from the viewport, the engine's frame from `tagpu_hud_live`, colours through the presented palette, the teams, the names as Latin-1, the pointer in units, Sight and Follow as rows — stamped with the frame's `frame_counter`, which `tagpu_hudstate_frame` compares with the pass's `frame`; and the state dump on `tagpu_replayhud.dump`, with the hit map of the frame on screen | render |
+| `vk_present` (`tagpu_vk.c`) | `tagpu_vk_hud_prepare` just before `tagpu_vk_gui_prepare`; `tagpu_vk_hud_record` after the world's composite and just before `tagpu_vk_gui_record`, so the engine's UI and the cursor draw over it. It counts in the census's drawn passes (`hud=N` on the `vk: census` line) and claims no A/B frame, so an A/B capture with it drawn stands down. A frame it will draw hands its ops to `tagpu_hudstate_drawn`, the hit map; any other frame empties the map | render |
+| `tagpu_zoom_frame_end` | `tagpu_hudstate_cmd`: the hit map into the command record's `TAGPU_CMD_HUD` | render |
+| the command record's take (`tagpu_packet_pub.c`), before every in-play draw | `tagpu_hudinput_take`: the map copied for the game thread's hit tests | game |
+| `tagpu_shield_wndproc`, before the shield's gate | `tagpu_hudinput_button` at `lParam`'s client point, for both buttons' presses, double clicks and releases, after the sprocket's `tagpu_menu_click`; `tagpu_hudinput_cancel` on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and a deactivating `WM_ACTIVATEAPP` | game |
+| `deliver_mouse` (`tagpu_shield.c`) | `tagpu_hudinput_button` at a device injection's client point; an injection in the engine's space passes under the HUD | game |
+| `to_game` (`tagpu_shield.c`), `fake_WndProc` (`wndproc.c`) | `tagpu_hudinput_wheel`, before the zoom's, at `mouse_last_client` | game |
+| `DrawGameScreen 0x468CF0` (the menu's tick) | Leave's question: the guard over `0x460680..0x4607F1` and `0x4605C0..0x46065C`, `0x512FF8 = 0`, the opener `0x460680`, the title through `0x4A07D0`; no `ActDone`, outside the pump | game |
+| the marker walker (`tagpu_hudmarks.c`) | reads the recording file through its own `RecReader` and publishes markers; started by the first fill that finds the playback live | its own |
+| teardown wrap's entry (`tagpu_reclaim.c`) | after `tagpu_menu_level_end`: `tagpu_hudmarks_level_end` (the walker stopped and joined, the markers and bookmarks forgotten) and `tagpu_hudinput_level_end` (the map, the held press, the folds, the scroll, the toast, Leave's question), before `tagpu_replay_level_end` | game |
 | `vk_down`, `passes_down` | `tagpu_vk_hud_down`, behind the seam's `vkDeviceWaitIdle`; the pass builds again on its next frame | render |
-| `tagpu_dock_wanted` | `!tagpu_hudstate_on()`: under the lever the watching dock's screen does not open, and with it the player cards (§2.12b, §2.12c); `tagpu_hudstate_on` answers yes only on the Vulkan lane and until the render thread's `tagpu_hudstate_refuse` (the HUD's art, pass, upload or layout failed; an interlocked store), so on GDI, or once the HUD cannot draw, the dock and the cards open as without the lever. Its marker walker still runs, started by `tagpu_dock_marks` | game |
 
-**Fields we write:** none of the engine's. The game folder's `tagpu_replayhud.json` (and its
-`.tmp`), and the deletion of `tagpu_replayhud.dump`.
+**Fields we write**, through the replay's calls and `tagpu_menu.c`, on the game thread, on a
+playback level only: `main+0x38A51` bit 0 (the pause, read-modify-written); `main+0x38A4B` and
+`+0x38A4D` (the speed's ceiling and live value, the presets 5..80 only, the player's put back at
+the teardown and exchanged around every settings save); `main+0x2A43` and the temporary sight
+records for Sight, and the camera for Jump and Follow, as [the replay's players and
+Sight](tadr-port/demo-recorder-player-cards.html) and the perspective plan's 4c-2 state; the dword
+`0x512FF8` (YESORNO's question, 0) and, through `0x4A07D0`, the `TITLE` record's text of the
+YESORNO it opened and `gi+0xCCA`. Of our own: `replays\index.dat`'s bookmarks field, the store's
+`replayhud` (`impure.cfg`), the game folder's `tagpu_replayhud.json` (and its `.tmp`), and the
+deletion of `tagpu_replayhud.dump`. Nothing the recording carries.
 
 ### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09
 
@@ -4448,9 +4421,8 @@ covers the outer world instead of asking for it.
 
 | site | what we do there | thread |
 |---|---|---|
-| the UI composite (`tagpu_gui_surf.c`'s shader, `tagpu_vk_gui.c`) | `uHud` — the two integers, `1/s` and `s`. Three regions sample the twin at `s` texels per device pixel; the ramp widens by `s` with them; the world region is sampled back by the shift. `uDock`, `uDockMap`, `uDockS`: the watching dock, a fourth region magnified about its bottom-left corner, from the presented frame's `PK_FRAME` ([GUI renderer](gui-renderer.html) §22.7). Inert at `s = 1` | render |
-| `mouse.c`, `winapi_hooks.c` ×4, `wndproc.c` ×3 | `tagpu_hud_to_engine()` at the end of every client → game conversion: inside a HUD region the engine is handed the point on its own 1× HUD grid, and inside the dock's magnified rect the point on the dock | message |
-| `tagpu_dock.c` (built, the tick, closed, the level's end); `before_flip` | the dock region's word, `tagpu_hud_dock_set`: the open dock's scale while the engine's GUI chain holds it, else 0; read into the flip marker for the composite | game |
+| the UI composite (`tagpu_gui_surf.c`'s shader, `tagpu_vk_gui.c`) | `uHud` — the two integers, `1/s` and `s`. Three regions sample the twin at `s` texels per device pixel; the ramp widens by `s` with them; the world region is sampled back by the shift. The three regions are the side panel and the two bars; the shader's uniform block is 80 bytes. Inert at `s = 1` | render |
+| `mouse.c`, `winapi_hooks.c` ×4, `wndproc.c` ×3 | `tagpu_hud_to_engine()` at the end of every client → game conversion: inside a HUD region the engine is handed the point on its own 1× HUD grid | message |
 | `sharp_cursor`, `sharp_minimap` | `tagpu_hud_to_screen()` — the engine's own cursor position (the fallback path only) and the minimap's box go the other way, so the sharp layer lands on the magnified art | render |
 | `tagpu_menu.c` | the "UI scale" row, `trigger_rect()` and `panel_rect()` | game / window |
 | `0x4288D0` (observer), gated on return address `0x498242` | write `R`, `B`, `viewW`, `viewH` so the engine's viewport IS the visible window — `L`/`T` untouched, because the projection bakes them. Writes nothing at stock | game |
@@ -4468,8 +4440,7 @@ that keeps at least 256 px of world width.
 never written** — that is the whole lesson of §22.5. Because viewW/viewH size the SORT buffers at
 LoadMap, the setting is game-entry-time: a scale chosen mid-game waits for the next game.
 
-**Why a stale scale is safe.** Two words cross threads: the dock's, whose ordering argument is
-in [GUI renderer](gui-renderer.html) §22.7, and the percentage in force, which every
+**Why a stale scale is safe.** One word crosses threads, the percentage in force, which every
 consumer re-resolves against the screen *it* sees, so either value a racing 32-bit read can
 return is one that fits that screen. The worst a mid-frame change can do is leave the pointer
 map and the picture one frame apart, and neither is engine state. The shell needs no signal of

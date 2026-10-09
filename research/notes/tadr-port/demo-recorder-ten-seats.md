@@ -267,7 +267,7 @@ the render-feeding readers bound. Each run below is a game of 10 minutes or less
    `sight_fill(10)`), `watch: true`, `forks: true`, `takeover: {"player": "controlled", "checks":
    ["judge", "line", "fork"]}`. Expect: P logs "the viewer at record 10"; the puppet compare passes
    with all ten records compared (no blanked record); the images gate passes with record 10 under
-   its `leave` row; W's cards switch seat 0 ↔ full map ("sight is seat 10"); W's second Watch in the
+   its `leave` row; W's Sight switches seat 0 ↔ full map ("sight is seat 10"); W's second Watch in the
    same process seats again (record 10 restored and free); K's takeover deactivates record 10 and the
    fork plays.
 3. **Every existing playback moves V**, so re-run `battle` (rewind U lane through `rw_prepare` with
@@ -317,8 +317,11 @@ MEASURED 2026-10-06 on the reference setup:
   seek in a seat's view the minimap showed no unit until play resumed (the seek's R14d and a Sight
   change now rebuild the picture; MEASURED 2026-10-07 on 2acc422e: the box 23x16 at 0.456 and 41x29
   at 0.25 while paused, in the replay and in a paused live skirmish alike, and seat 0's one dot right
-  after a paused seek to 1500 and after each paused Sight switch). The card list shows 9 of the 10 seats at 100 % and 5 at
-  hudscale 150: the dock's ten-seat layout is the open 9-slice HUD work.
+  after a paused seek to 1500 and after each paused Sight switch). The player cards of that run
+  showed 9 of the 10 seats at 100 % and 5 at hudscale 150. The replay HUD that replaced them
+  scrolls its column by whole items: MEASURED 2026-10-09, a ten-seat, five-team recording at the
+  HUD's 150 % scrolled from item 0 to 4 by its arrows and by the wheel
+  ([The replay HUD in game](../hud-in-game.md)).
 
 ## 6. Residuals and gaps
 

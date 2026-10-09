@@ -7,7 +7,7 @@
 with what drawing each part needs, and a layout file holding every size, position, gap and text
 style. The mockup in `tools/hudart/mockup/` draws the HUD from those files and nothing else.
 
-- **The DLL draws it in game**, behind a lever and with no input yet
+- **The DLL draws it in game** on every Vulkan replay, and takes its input there
   ([The replay HUD in game](hud-in-game.md)). It embeds the same files, packed as they are by
   `tools/hudpak.py`, reads the JSON at run time and implements the rules on this page. The
   numbers have one home, so the mockup and the game cannot disagree about one.
@@ -59,14 +59,20 @@ teams. The same switches, and more, go in the URL, for captures:
 
 - `res=3840x2160`, `game=150` (`off`, `auto` or a percentage), `hud=150`, `np=10`, `nt=2`;
 - `t=70` (seconds into the 132-second game), `paused`;
-- `stat=1` or `stat=0` (the stats window), `sm=units` (its measure), `ss=team` (players or teams);
+- `stat=1` or `stat=0` (the stats window), `sm=units` (its measure), `ss=team` (players or teams).
+  The stats button is disabled until the recorder has a stats track, so `stat=1` is the only way
+  to open the window, to review its design; it is not remembered between visits;
+- `scroll=3` (the column's first item), `sight=0` and `follow=0` (a row's Sight and Follow drawn
+  pressed), `toast=<text>` (a toast shown);
 - `state=<url>`: draw the state the game dumped (`tagpu_replayhud.json`) — its screen, its
   engine frame and its players — instead of the synthetic game.
 
 `tools/hudart/capture.sh "<url>?paused&res=3840x2160&game=150&hud=150" out.png` captures the stage at
 native 4K. It lays the page out at device scale factor 1, one CSS pixel to a screen pixel, as the
-game draws (*Text* says why). `compare.sh` captures the button states — play held, stats on, the
-chips, a row hovered with JUMP held — at device scale factor 2.
+game draws (*Text* says why). `compare.sh` captures the button states — play held, the foot
+plate, the stats window's chips, a row hovered with JUMP held — at device scale factor 2. On the
+mockup its query needs `stat=1`: the chips are the stats window's, which opens only through that
+switch.
 
 ## Iterating
 
@@ -204,25 +210,36 @@ values. There Chrome rounds down an ascent or descent that lies just past a half
 arithmetic not identified: float32, FreeType 26.6 and 16.16 models were all tried and fit worse.
 At those sizes the game's line sits a pixel off the mockup's.
 
-### Buttons
+### Buttons and controls
 
 - A button draws its `part`. While held, and while on for a toggle, it draws its `pressed` part
   instead.
 - The content on a pressed face sinks by `press_shift` units.
-- A disabled chip (TEAMS when the teams are not told apart: one team, or a free-for-all) is drawn
-  at the `split.off` opacity and takes no input.
+- **A control is its `act`.** Every enabled button, and every plate that takes a click, is a
+  clickable op (`HOP_HOT` in the DLL, `data-act` in the mockup) keyed by its `act`; a row's, a
+  team's and a hover button's key adds the row's or the team's index in the frame, `jump:2`,
+  `fold:0`, `row:4`. The game hit-tests these, topmost (last painted) first
+  ([The replay HUD in game](hud-in-game.md), *Input*).
+- **A disabled control** is drawn at its `off` opacity, its icon too, and has no clickable of its
+  own: the stats button on the foot plate (`off` 0.45), and the TEAMS chip when the teams are not
+  told apart (one team, or a free-for-all) at `split.off`.
+- **An inset edge** (a resource bar's) is flagged on its ops (`HOPF_EDGE`), so `laycheck` matches
+  it with the mockup's `box-shadow` by that flag, not by its colour.
 
 ### The dock
 
-- **Both pieces** are `dock.h` tall, standing on the bottom bar.
+- **Both pieces** are `dock.h` tall, standing on the bottom bar. Each is a clickable `dock.act`
+  (`dock`) under its buttons, so a click between them is the HUD's.
 - **The transport plate** starts `transport.l` right of the side panel and is `transport.w`
   wide. Each button fills its well, padded by `transport.button.pad`. The play button shows
   `playing`'s icon while the replay plays.
 - **The timeline housing** runs from `rail.gap` right of the plate to `rail.r` from the screen's
   right.
-    - **The track** is its `track` well. The fill is inset by `fill.pad` and uncovered up to
-      the played fraction p of its width. The playhead is `playhead.w` wide, centred at
-      `ends` + (w − 2 × `ends`) × p, and extended above and below by its pad.
+    - **The track** is its `track` well, and the clickable `track`. The fill is inset by
+      `fill.pad` and uncovered up to the played fraction p of its width. The playhead is
+      `playhead.w` wide, centred at `ends` + (w − 2 × `ends`) × p, and extended above and below
+      by its pad. The playhead's run, from p = 0 to p = 1, is handed out with the ops
+      (`track_x0`, `track_x1` in `HUDOPS`) for the timeline's seek.
     - **The markers' lane** takes its x from the `track` well and its y from the `markers` well,
       `markers.h` tall. Each badge is h × h, centred at `ends` + (w − 2 × `ends`) × t / T.
       Its dot is inset by `dot` and drawn in the player's colour, or `bookmark_dot` for a
@@ -240,23 +257,35 @@ At those sizes the game's line sits a pixel off the mockup's.
   player a header of its own. A team without a header cannot be folded, so its rows always
   show. A header is `header.h` tall, with `header_gap` above every header but the first; a row is
   `row.h` tall; `gap` separates items.
-- **It shows the items that fit,** from the first, in its height less `foot.gap` and `foot.h`,
-  and always at least one. When some are left out, a scroll bar is drawn left of the column:
-    - the buttons at `button.x`;
-    - the track between `track.ends` from each end;
+- **It scrolls by whole items.** `last` is the greatest first item from which every item to the
+  end still fits in its height less `foot.gap` and `foot.h`; the state's `scroll` is held to
+  [0, `last`] and is the first item shown. Both go out with the ops (`first`, `last` in
+  `HUDOPS`; `data-first`, `data-last` on the mockup's column) for the scroll's input.
+- **It shows the items that fit,** from that first, and always at least one. When some are left
+  out, a scroll bar is drawn left of the column:
+    - the buttons at `button.x`, the clickables `button.acts` (`scroll_up`, `scroll_down`);
+    - the track between `track.ends` from each end, the clickable `track.act` (`scroll_track`);
     - the thumb inside the track, inset by `thumb.inset`. Its length is the travel × shown / all,
-      at least `thumb.min`; it sits at the top, since the list shows its first items.
-- **The foot plate** (stats, map, capture) sits right-aligned, `foot.gap` below the list.
+      at least `thumb.min`; it sits at `first` / `last` of the travel left.
+- **The whole column is a clickable**, `column.act` (`column`), from its top to the foot plate's
+  bottom, under everything in it: a click on a row's body is the HUD's, and the wheel over it
+  scrolls it.
+- **The foot plate** sits right-aligned, `foot.gap` below the list: five bays, `foot.w` × `foot.h`
+  (204 × 35). Their buttons are `stats`, drawn disabled until the recorder has a stats track,
+  then the four switches `cursors`, `clicks`, `selections` and `chat`, each a toggle drawn
+  pressed while on. A `toggle` name the DLL does not know stops the build (`layout: no toggle
+  '…'`).
 
 ### The header, the row and the hover strip
 
-- **The header** is the fold button, the whole of it:
+- **The header** is the fold button, the whole of it, the clickable `fold:t`:
     - the fold icon, open or closed;
     - the title: the team, and its commanders standing out of all;
     - the unit sum;
     - for each resource line, the letter in the resource's colour and the team's income and
       spending.
-- **The row:**
+- **The row** is a clickable of its own, `row:i`, under its hover strip's buttons; hovering it
+  is what shows them. It draws:
     - the stripe, in the player's colour, with an inner shade of `stripe.shade` units;
     - the name, padded by `lost_pad` when the commander is lost, with the skull;
     - the units;
@@ -267,7 +296,17 @@ At those sizes the game's line sits a pixel off the mockup's.
     A defeated player's row is drawn through the `dim` filter: brightness, then saturation.
 
 - **The hover strip** covers the union of the row's four resource wells, padded outward. Its
-  buttons share its width, with `margin` around them and between them.
+  buttons, `jump:i`, `sight:i` and `follow:i`, share its width, with `margin` around them and
+  between them. **Sight and Follow are drawn pressed on the row they are set to** (the state's
+  `sight`, `follow`; -1 for none), and a click on the pressed one undoes it.
+
+### The toast
+
+A short message (`toast` in the state) in a dark box centred across the screen, `toast.top` of
+its height down, above everything: a `toast.w` × `toast.h` box (150 × 18) in `toast.bg` at
+`toast.alpha`, an edge of `toast.edge` in `toast.edge_colour`, the text in the `toast` style,
+centred. The box is the layout's size, not the text's, since the DLL lays out without the faces'
+metrics. It shows for `toast.ms` (1800).
 
 ### The stats window
 
@@ -324,17 +363,21 @@ ranked by the values at the playhead.
 
 ## Checking the C against the mockup
 
-`tools/hudart/laycheck.py` opens the mockup headless for six cases (4K at 150 with two teams, 4K
-at Auto with the list scrolled, 1080p at 100 with one team, 1440p at 75 with a row hovered and a
-button held, 4K at 150 as a six-player free-for-all, and 4K at 150 as a 2v1v1), takes the mockup's state and every element's box in HUD units, runs
+`tools/hudart/laycheck.py` opens the mockup headless for eight cases (4K at 150 with two teams, 4K
+at Auto with the list too long, 1080p at 100 with one team, 1440p at 75 with a row hovered and a
+button held, 4K at 150 as a six-player free-for-all, 4K at 150 as a 2v1v1, 4K at 150 with
+fourteen players scrolled to item 3 and a toast, and 1440p at 75 with the first row hovered and
+Sight and Follow on it), takes the mockup's state and every element's box in HUD units, runs
 `tagpu_hudlay.c` compiled natively (`laycheck.c`) on the same state, and pairs the two element
-by element: every part by name, every text by its string, every solid by its colour, every
-clickable by its key. It also measures every text's baseline in the browser — a zero-size
+by element: every part by name and painted opacity (its own times its ancestors', as a disabled
+button's icon is dimmed), every text by its string, every solid by its colour, every clickable by
+its key; an inset edge is set aside by its flag. It also measures every text's baseline in the browser — a zero-size
 inline-block probe on the text's own line — against `tagpu_hudlay_baseline` from the faces'
-metrics. It exits 1 on a box or baseline more than its tolerance off, or an element only one side
-has.
+metrics. It exits 1 on a box or baseline more than its tolerance off, a part's opacity more than
+one level off, a dim that disagrees, or an element only one side has.
 
-MEASURED 2026-10-08: the two agree. At 4K every box is within 0.015 units and every baseline
+MEASURED 2026-10-08 on the first six cases, and again on all eight once the controls were laid
+out for input (2026-10-09): the two agree. At 4K every box is within 0.015 units and every baseline
 within 0.0142. The Oswald residual above is named, not failed, and only where the same rule on
 Chrome's own rounded ascent and descent (`measureText`'s `fontBoundingBoxAscent`/`Descent`) gives
 the browser's baseline, so a wrong line rule still fails: in the 1080p and 1440p cases the `name`
@@ -345,7 +388,5 @@ the browser's baseline for every one of them.
 
 - **The HUD font is not decided.** Oswald and Barlow Condensed (both OFL) are the mockup's, and
   ship with the OFL texts beside them.
-- **The column does not scroll.** It shows the items that fit from the first, as the prototype
-  did.
 - **The stats window's data is synthetic.** A real one needs a per-second stats track in the
   recorder ([S5](tadr-port/demo-recorder-s5-ui.md)); the game's dump carries no series.

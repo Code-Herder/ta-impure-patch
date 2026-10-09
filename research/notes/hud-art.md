@@ -17,8 +17,8 @@ that scales with the screen, in a browser prototype. The owner chose:
 The chosen design is kept in the repository: its parts, losslessly, and its layout as data, in
 `art/hud/`, drawn by the mockup in `tools/hudart/mockup/`. [The replay HUD's layout](hud-layout.md)
 says how, and holds the rules the DLL shares. The DLL draws it in game with a pass of its own,
-behind a lever ([The replay HUD in game](hud-in-game.md)); *Gaps* at the end says what is
-missing.
+as every Vulkan replay's controls ([The replay HUD in game](hud-in-game.md)); *Gaps* at the end
+says what is missing.
 
 This page is the record of how the art is made, so that a part can be repainted, re-cut or tweaked
 without rediscovering the method:
@@ -61,7 +61,8 @@ original game art and are never committed** (CLAUDE.md, *Publishing*).
 
 - *the dock along the bottom: the transport plate, then the timeline housing with its marker lane;*
 - *the player column on the right, grouped under dark-plate team headers;*
-- *the stats / map / capture plate under the column;*
+- *the foot plate under the column, here with the three bays it was first painted with (stats,
+  map, capture); it has five now (*What is painted*);*
 - *the stats window, open.*
 
 ## What is painted
@@ -79,7 +80,10 @@ The layout is E1, settled in the prototype on 2026-10-06 and 2026-10-07 (*The ex
       unit count, metal and energy stored over storage with a bar, and metal and energy income.
     - Hovering a row shows a strip with **Jump, Sight and Follow**.
     - A player cannot be selected (owner, 2026-10-07).
-- **A button plate** with three bays: stats, map overlay and capture.
+- **The foot plate**, a button plate under the column with five bays: game stats, then the
+    four switches of a replay's overlays, Cursors, Clicks, Selections and Chat (owner,
+    2026-10-08). Each has its own icon, `i_stats`, `i_cursors`, `i_clicks`, `i_selections` and
+    `i_chat`. The stats button is drawn disabled until the recorder has a stats track.
 - **The stats window.** It has a title strip, a close bay, an economy tray and an army tray of
     choice buttons, a line chart, its legend and a caption line.
 
@@ -96,7 +100,7 @@ plates are MEASURED at these sizes:
 |---|---|---|---|
 | Player row | 2024 × 237 | 8.1 | 29.3 (asked: 27) |
 | Team header | 2046 × 242 | 8.2 | 29.6 (asked: 23) |
-| Button plate | 1833 × 477 | 14.8 | 32.3 (asked: 36) |
+| Foot plate, five bays | 1944 × 365 | 9.5 | 38.3 (asked: 36) |
 | Transport plate | 1945 × 312 | 6.8 | 45.6 (asked: 46) |
 | Timeline housing | 2056 × 259 | 4.9 | 52.9 (asked: 46) |
 | **Stats window** | 1322 × 903 | **3.1** | 292.4 (asked: 272) |
@@ -280,7 +284,7 @@ The tools need Python 3 with numpy, scipy and Pillow (the shared venv,
 |---|---|---|---|---|
 | `row` | Player row | 250 × 27 | stripe, name, units, m_store, m_inc, e_store, e_inc | x: name; both stores; both incomes. y: the metal line; the energy line |
 | `head` | Team header | 250 × 23 | title, sum, m_inc, e_inc | x: title; both incomes. y: the metal line; the energy line |
-| `plate` | Stats / map / capture plate | 124 × 36 | three bays | x: each bay. y: all three |
+| `plate` | The foot plate | 204 × 36 | five bays: `bay_stats`, `bay_cursors`, `bay_clicks`, `bay_selections`, `bay_chat` | x: each bay. y: all five |
 | `window` | Stats window | 428 × 272 | title, close, tray_eco, tray_army, chart, legend, foot | x: title, both trays, chart, foot. y: chart and legend |
 | `transport` | Transport plate | 284 × 46 | rew, play, fwd, speed, bookmark, uiscale, leave | x: speed; uiscale. y: every bay |
 | `timeline` | Timeline housing | 420 × 46 | markers, track, time | x: markers and track. y: time with markers; time with track |
@@ -288,8 +292,9 @@ The tools need Python 3 with numpy, scipy and Pillow (the shared venv,
 
 **The separate parts** (buttons, strips, scroll parts, timeline fill, playhead, marker badge) and
 the icons are cells of a **parts sheet**. They are defined in `specs/parts_look.py` (15 parts and 23
-icons), `specs/parts_buttons.py` (the 9 button parts alone) and `specs/parts_fill.py` (the four
-timeline fill strips). Each part is
+icons, of which `map` and `cam` are no longer in the kit), `specs/parts_ov.py` (the four switch
+icons, painted to match the shared set), `specs/parts_buttons.py` (the 9 button parts alone) and
+`specs/parts_fill.py` (the four timeline fill strips). Each part is
 `(name, w, h, border, label, mode)`, sizes in units. `mode` is one of:
 
 - `''`: a 9-slice part;
@@ -352,7 +357,7 @@ The prompts are in *The prompts*.
 PY=.venv-undither/bin/python; H=tools/hudart
 $PY $H/gridslice.py painted_head.png wb_head.json cut/ head_one              # one-piece parts
 PRESSED_DARK=1.5 $PY $H/cut.py parts_buttons painted_3.png col sheets/sheets.json cut3/
-ICON_DIL=25 $PY $H/iconcut.py painted_icons.png icons/ i_stats i_map i_cam ...  # names in reading order
+ICON_DIL=25 $PY $H/iconcut.py painted_ov.png icons/ i_cursors i_clicks i_selections i_chat  # names in reading order
 $PY $H/cut.py parts_fill painted_fill.png col sheets/sheets.json fill/           # fill strips are cut,
 $PY $H/tile.py fill/ track_fill_green track_fill_orange track_fill_amber track_fill_red  # then tiled
 $PY $H/cut.py parts_look painted_hover_strip.png col one:hover_strip cut/   # a sheet part painted alone
@@ -1018,6 +1023,15 @@ artifact.
     The buttons were already rivet-free, and the marker badge, playhead, thumb and fill have
     none. The versions with screws are no longer in the kit; the archive keeps them.
 
+12. **Five bays on the foot plate** (2026-10-08, for the replay HUD's input). The owner removed
+    the map and capture buttons and moved the four switches of the old Overlays menu onto the
+    plate. The plate was repainted from its own screwless painting with five bays (`specs/plate.py`,
+    204 × 36 units), and four icons were painted to match the shared set (`specs/parts_ov.py`):
+    cursors, clicks, selections, chat. `i_map` and `i_cam` left the kit.
+    - **The chat icon's pale dot was keyed out**: its pixels with r − g > 25 and b − g > −5 were
+      made transparent. MEASURED on the filed PNG: no opaque pixel of `i_chat` meets that test,
+      where `i_clicks` has 348 that do.
+
 [![The four distressed player cards](assets/hud-art/cards.jpg)](assets/hud-art/cards.jpg)
 
 *Step 5: the player card in the four looks, after the proportions repaint.*
@@ -1054,11 +1068,12 @@ track's ends sit under its arrow buttons, so its screws never showed.*
 
 ## Gaps
 
-- **The DLL draws it behind a lever only, with no input.** The art travels as it is, full colour
-    and soft-edged, packed by `tools/hudpak.py` and drawn by an alpha-blended pass at the device's
+- **The art reaches the game as painted, on Vulkan only.** It travels full colour and
+    soft-edged, packed by `tools/hudpak.py` and drawn by an alpha-blended pass at the device's
     resolution, not through `tools/artbake.py`, which refuses any colour outside TA's palette and
-    any partial alpha ([The replay HUD in game](hud-in-game.md)). The watching dock that the HUD
-    is to replace is still an engine GUI screen whose art goes through `artbake`.
+    any partial alpha ([The replay HUD in game](hud-in-game.md)). The GDI renderer draws no HUD.
+- **The stats button is painted but disabled**, and the capture bay is gone: a capture button,
+    when it comes, needs a bay and an icon.
 - **The stats window is painted below the resolution it is drawn at:** 3.1 px per unit against
     4.5 at 4K and HUD 150, so it is magnified 1.46×. A repaint at a larger size, or as more than one
     painting, would close it.

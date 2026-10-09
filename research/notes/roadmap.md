@@ -3777,21 +3777,22 @@ eight-record saves remain accepted. The stock-limits comparison build stays nati
 The [resource regression](tadr-port/resource-snapping.html) records the Comet Catcher
 reproduction and completion checks. Ten is not a proven capacity for every mod script.
 
-### Replay player cards — implemented and verified
+### Replay controls: the replay HUD — landings 1 and 2 built
 
 | gate | state | scope |
 |---|---|---|
-| Player cards and independent Sight | implemented and verified | recorded stats and commander presence; compact/normal rows and scrolling; Full map/Sight without camera movement; disabled camera controls for recordings without streams |
-| Runtime verification | passed | four-seat compact/normal layouts and HUD125/150/Auto; synthetic nine-row scroll; zero-time/EOF controls; death-vision dump comparisons; both builds; full 18-fixture replay gate, six of six changed functions reached |
-| Independent review | passed after corrections | two high-effort reviews; complete frame draining and rejection of captures without a final marker; focused synchronization re-review |
-| Jump, Follow and Free cam | verified 2026-10-06 (V2) | a skirmish recording's camera stream: Follow fits the recorded view to this screen and ends on a camera move or a wheel notch, Jump writes it until its level is drawn; GDI shows the camera; a multiplayer recording's through 4c-4 ([perspective plan, 4c-2](tadr-port/demo-recorder-perspective-streams.html#4c-2-as-built)) |
-| The overlays and the dock's Overlays menu | verified 2026-10-06 (V3) | every recorded player's cursor, click rings and selection rectangles in that player's colour, on Vulkan; the dock's Overlays button opens four toggles (Cursors, Clicks, Selections, Chat) with stand-in art; GDI draws none; a multiplayer recording's through 4c-4 ([perspective plan, 4c-3](tadr-port/demo-recorder-perspective-streams.html#4c-3-as-built)) |
+| Replay HUD landing 1: the HUD draws | built, verified 2026-10-08 | a Vulkan pass of our own drawing `art/hud/` by the mockup's rules: the column of team headers and player rows, the dock of transport, timeline, markers and clock; the game's capture and the mockup fed the game's dump match at best shift 0 ([The replay HUD in game](hud-in-game.html)) |
+| Replay HUD landing 2: input, replacing the dock and the cards | built, verified 2026-10-09 | the hit map of the frame on screen handed back in the command record; clicks, hover and the wheel on the game thread; every command (seek, pause, speed, bookmark, scale, the timeline drag, the switches, folds, Sight, Follow, Jump, the scroll, Leave behind the engine's YESORNO); the menu-over-the-world test; `tacli hud` and the W lane; the watching dock, the player cards and their HUD-scale regions deleted. GDI: no on-screen controls (owner) |
+| Replay HUD landing 3: the stats window | open | needs a per-second stats track the recorder does not write; its button is drawn disabled until then |
+| Player rows and independent Sight | verified | recorded stats; Sight and the full map without camera movement; death-vision dump comparisons; zero-time/EOF ([the replay's players and Sight](tadr-port/demo-recorder-player-cards.html)) |
+| Jump, Follow and Free cam | verified 2026-10-06 (V2) | a skirmish recording's camera stream: Follow fits the recorded view to this screen and ends on a camera move or a wheel notch, Jump writes it until its level is drawn; on the HUD, the pressed Follow clicked again is the free camera; GDI shows the camera; a multiplayer recording's through 4c-4 ([perspective plan, 4c-2](tadr-port/demo-recorder-perspective-streams.html#4c-2-as-built)) |
+| The overlays and their switches | verified 2026-10-06 (V3) | every recorded player's cursor, click rings and selection rectangles in that player's colour, on Vulkan; four switches (Cursors, Clicks, Selections, Chat), now the HUD's foot plate; GDI draws none; a multiplayer recording's through 4c-4 ([perspective plan, 4c-3](tadr-port/demo-recorder-perspective-streams.html#4c-3-as-built)) |
 | Multiplayer perspectives (contribution kinds 13-15) | verified 2026-10-06 (V4, two peers) | each Impure peer's human contributes its camera and cursor (5 Hz, skipped while the transmit queue is short), clicks and selection; a multiplayer playback plays them as Follow, Jump and the overlays at the recorder's application ticks; every peer needs the same build ([perspective plan, 4c-4](tadr-port/demo-recorder-perspective-streams.html#4c-4-as-built)) |
 
-The [player-card note](tadr-port/demo-recorder-player-cards.html) records the implementation,
-bounds, frame ordering, measured checks and remaining feature gaps. The cards share the dock's post-GUI
-path so the world between the two panels remains interactive. The camera controls play the
-perspective plan's camera stream, and the Overlays its cursors, clicks and selections.
+The controls were built first as the watching dock and the player cards, engine GUI screens with
+their own input path and HUD-scale regions, and are now the replay HUD's. The HUD's design is
+[The replay HUD's layout](hud-layout.html) and [HUD art](hud-art.html); its build, input and gaps
+are [The replay HUD in game](hud-in-game.html).
 
 ## Hardware portability: depth, lines, and a remote Windows test (G21)  [LANDED 2026-09-25]
 

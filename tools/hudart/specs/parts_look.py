@@ -18,9 +18,9 @@ COL = [
     ('marker_badge', 12, 12, 0, 'round marker badge', 'fixed'),
 ]
 WIN = []
-ICONS = ['stats', 'map', 'cam', 'rew', 'play', 'pause', 'fwd', 'bookmark', 'uiscale', 'leave', 'grip', 'close',
+ICONS = ['stats', 'rew', 'play', 'pause', 'fwd', 'bookmark', 'uiscale', 'leave', 'grip', 'close',
          'skull', 'fold_open', 'fold_closed', 'jump', 'sight', 'follow', 'arrow_up', 'arrow_down', 'death', 'defeat', 'flag']
-ICON_LABEL = {'stats': 'stats', 'map': 'map', 'cam': 'camera', 'rew': 'rewind', 'fwd': 'forward', 'uiscale': 'UI scale',
+ICON_LABEL = {'stats': 'stats', 'rew': 'rewind', 'fwd': 'forward', 'uiscale': 'UI scale',
               'close': 'close X', 'fold_open': 'team open', 'fold_closed': 'team shut', 'arrow_up': 'up', 'arrow_down': 'down',
               'death': 'RED skull', 'defeat': 'RED X'}
 SHEETS = {'col': (COL, 5)}

@@ -209,7 +209,7 @@ commit can change.
   without writing the SIM_STATE cache. A first hover at a frozen tick therefore cannot change
   recorded state; no declaration or comparison is excluded by this rule.
   Puppet cache misses also use local storage, leaving the recording the only writer
-  even when the viewer pauses through the replay dock instead of native Pause.
+  even when the viewer pauses through the replay HUD instead of native Pause.
   The cursor's row is published whenever a build is on the cursor, from the packet's own
   `build_unit_id`, so the cursor ghost never draws from a packet without it; the queued sites'
   types ride the builds table's gate. It reaches the render

@@ -16,11 +16,12 @@ techniques from accepted requirements.
 
 The shared engineering rules are in [the TADR port overview](overview.md). Recording is a new
 feature of Impure; it does not require running the original recorder alongside Impure.
-The [QoL coverage audit](quality-of-life.md) separates its implemented playback/seeking from the
-native recorder's remaining interface conveniences: whiteboard/camera/income transport and
-recorded-camera follow. All five native mod pairings include those functions; Impure's replay
-resource cards are implemented, while Jump/Follow/Free cam remain disabled because the format
-has no camera stream ([player cards](demo-recorder-player-cards.md)).
+The [QoL coverage audit](quality-of-life.md) separates its implemented playback, seeking and
+recorded-camera follow from the native recorder's remaining interface conveniences: whiteboard,
+camera and income transport, which all five native mod pairings include. Impure's replay shows
+each player's resources and plays the recorded cameras (Jump, Follow) and overlays on the replay
+HUD ([The replay HUD in game](../hud-in-game.md); [the replay's players and
+Sight](demo-recorder-player-cards.md); [perspective streams](demo-recorder-perspective-streams.md)).
 
 **A skirmish can be recorded, watched, sought and taken over. Fork management and
 live rewind are available through tacli; in-game rewind controls follow.** The three feasibility experiments

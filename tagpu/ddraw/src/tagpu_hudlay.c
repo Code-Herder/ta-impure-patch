@@ -856,19 +856,6 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
     return !c.bad;
 }
 
-int tagpu_hudlay_hit(const HUDOPS* ops, float x, float y, char* key, size_t keyn)
-{
-    int i;
-    for (i = ops->n - 1; i >= 0; i--) {
-        const HUDOP* p = &ops->op[i];
-        if (p->kind == HOP_HOT && x >= p->r.x && x < p->r.x + p->r.w && y >= p->r.y && y < p->r.y + p->r.h) {
-            if (key && keyn) snprintf(key, keyn, "%s", ops->text + p->run);
-            return 1;
-        }
-    }
-    return 0;
-}
-
 /* The kit's drawing, as quads. A grid-sliced part is drawn cell by cell, the cells sharing
    their edges; a 9-slice part as CSS border-image draws it, its slice's edges kept at their size
    in units unless the box is smaller than both together, when all four shrink by one factor;

@@ -925,8 +925,9 @@ block that reads to its last complete block.
   controller keys; a prior playback's smaller roster cannot truncate the next fixture.
   A fixture with `"watch": true`
   runs a fifth process, W: the playing started from REPLAYS and Watch as a player starts it, two
-  edited copies refused, then the dock's speed, the Options' OK, pause, the dock's seek, the
-  player cards' Sight and Full map (clock and camera unchanged), its dump
+  edited copies refused, then, through `tacli hud`, the HUD's speed, the Options' OK, pause, the
+  HUD's seek (`hud seek <T>`), Sight on the first row and again (clock and camera unchanged),
+  Follow, Follow again and Jump on the controlled seat's row, Cursors off and on, its dump
   (`w<T1>` compared like the others), resume and Leave. It runs every check above and
   reports each by name: exit 0 all passed, 1 a named failure, 2 something could not run. `-j N`
   is the games at once (default 8, at most 16); the checks run beside them on a pool of their own
@@ -1001,14 +1002,14 @@ block that reads to its last complete block.
   refused, timed out or nothing was playing, 2 on a usage error. A playback that has played to its
   end still seeks; a level that has ended does not (`replay: <name> at its level's end, …`). By
   hand, `seek <T>` or `seek <T> dump <name>` in the trigger does the same on a playing level;
-  `dock seek <T>` asks it through the dock's own entry, as a click on its strip does (clamped to
-  the recording, no dump: on a paused playback, arm `dump <name> at <T>` after the `sought from`
-  line, which leaves it at T − 1).
+  `hud seek <T>` asks it through the replay HUD's timeline's own entry, as a click on the
+  timeline does (clamped to the recording, no dump: on a paused playback, arm `dump <name> at <T>`
+  after the `sought from` line, which leaves it at T − 1).
   `replay play` and `replay seek --recording` take `--timeline N` to play a forked timeline; the
   playing crosses each fork with a seek (`replay: <name>: timeline <N> continues from GameTime <T>`).
-- **The recorded camera** (a skirmish recording whose human seat's camera was recorded): `tacli replay follow <i> SEAT` is the cards' Follow — the camera shows that
+- **The recorded camera** (a skirmish recording whose human seat's camera was recorded): `tacli replay follow <i> SEAT` is a HUD row's Follow — the camera shows that
   seat's, its zoom fitted to this screen, until the camera is moved (arrow keys, edge scroll,
-  minimap) or the wheel turned; `tacli replay follow <i> free` is Free cam; `tacli replay jump
+  minimap) or the wheel turned; `tacli replay follow <i> free` is the free camera (the pressed Follow clicked again); `tacli replay jump
   <i> SEAT` puts the camera there once. Each waits for `replay: <name>: follow seat <S>, epoch
   <E>` (`jump to seat …`) or `… refused: <why>`. The end is logged as `replay: <name>: follow
   ended: camera moved|zoomed|free cam|…` (`jump ended: drawn` for a Jump). `tacli replay pov <i>`
@@ -1018,23 +1019,38 @@ block that reads to its last complete block.
   items, <m> selected units`. Triggers: `follow <S>`, `follow free`, `jump <S>`, `pov`.
 - **The overlays** (the same recordings; Vulkan only, GDI draws none): every recorded player's
   cursor, click rings and selection rectangles, in that player's colour. `tacli replay overlay
-  <i> cursors|clicks|selections|chat on|off` is a switch of the dock's Overlays menu (the dock's
-  pointer-arrow button, left of Leave); it waits for `replay: overlay <name> on|off`, or `replay:
+  <i> cursors|clicks|selections|chat on|off` is one of the replay HUD's four foot-plate switches;
+  it waits for `replay: overlay <name> on|off`, or `replay:
   chat hidden|shown` for the chat. Every switch is on when a playing starts. Triggers: `overlay
   <name> on|off`, and `chat hide` / `chat show`.
-- **The replay HUD** (Vulkan only): `tacli arm <i> replayhud.on` before the launch
-  (`replayhud.on=scale=150` for its own scale) draws the column and the dock of
-  `art/hud/` in place of the watching dock and the cards, which then do not open; on GDI the
-  lever does nothing and the dock and the cards open as usual. It takes no input: seek with `tacli replay seek`. **Its state
-  dump**: `touch gamedir/tagpu_replayhud.dump`; within 30 frames the game deletes it and writes
-  `gamedir/tagpu_replayhud.json` (`hud: state dumped to tagpu_replayhud.json: …`). **Compare it
+- **The replay HUD** is a replay's controls on every Vulkan playing; there is no lever, and on GDI
+  a replay has no on-screen controls. **Drive it with `tacli hud <i>`**, by the keys of the frame
+  on screen, never by coordinates: `show` (the default; `wait` is the same) prints the clock, the
+  speed, Sight, Follow, the scroll, any toast and every control with its client rect, waiting up to
+  `--timeout` for an answer; `click <key>` (`--right` for the right button), `hover <key>`,
+  `wheel <key> <n>` (n notches, positive away from the player: the column scrolls up) and `scrub
+  <from> <to>` (fractions of the recording; a press, `--steps` moves `--step-ms` apart, a
+  release). Keys are the layout's: `rew` `play` `fwd` `speed` `bookmark` `uiscale` `leave`
+  `track`, `cursors` `clicks` `selections` `chat`, `fold:<t>`, `row:<i>`, `jump:<i>` `sight:<i>`
+  `follow:<i>`, `scroll_up` `scroll_down`; a row's button shows only under the pointer, so `hud`
+  hovers `row:<i>` first. Each action is a device token at the control's centre (`dclick:`,
+  `drclick:`, `dmove:`, `dwheel:`, and `ddown:`/`dup:` for the scrub), the path a player's click
+  takes; a token in the engine's space (`click:`, `pclick:`) passes under the HUD. The HUD takes
+  nothing while a menu covers the world (ARMOPT, the chat, Leave's question): the click is the
+  engine's. Leave opens the engine's `YESORNO.GUI` titled "Leave this replay?" (`ui click CHOICE1`
+  is Yes); the scale button writes `impure.cfg`'s `replayhud=` (`hud: the replay HUD's scale is
+  N%`). **Its state dump** is what `hud` reads: `touch gamedir/tagpu_replayhud.dump`; within 30
+  frames the game deletes it and writes `gamedir/tagpu_replayhud.json` (`hud: state dumped to
+  tagpu_replayhud.json: …`) — the state in the mockup's shape, `held` among it, and `hits`, the
+  controls of the frame on screen (`track`, `first`, `last`, `at`: key and rect, topmost first).
+  At a low frame rate the dump can miss a toast (1.8 s); check a toast with a capture. **Compare it
   with the mockup** at native 4K: capture the game (`import -window root g.png` on its display),
   serve the repository root, and capture the mockup fed the dump with
   `tools/hudart/capture.sh "<mockup url>?state=<url of the json>" m.png`; the two must line up
   unshifted. **Markers need a commander death in the recording**: in the live skirmish being
   recorded, `tacli keys <i> ctrl+c` selects the commander and `ctrl+d` self-destructs it; the
-  dock's walker logs what it found once it has read the recording (`dock: markers: N commander
-  deaths at <T> (seat <S>), M defeats …`). A defeat marker is a seat whose live units reach 0.
+  walker logs what it found once it has read the recording (`hud: markers: N commander deaths at
+  <T> (seat <S>), M defeats …`). A defeat marker is a seat whose live units reach 0.
 - **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P
   [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish at T as player P,
   every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2 when it had

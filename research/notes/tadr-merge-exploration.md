@@ -287,9 +287,10 @@ Several tdraw features have their network half in the recorder:
 Porting one of these tdraw features means porting its recorder half as well. The
 [native bundle audit](tadr-port/quality-of-life.md#activation-evidence-for-older-conveniences)
 confirms all five supported mod pairings contain these conveniences. `.lockon` is a local replay
-command, requires recorded camera data and is separate from Impure's working playback/seeking;
-Impure's camera Jump/Follow/Free controls remain disabled. Live allied income, whiteboard and
-camera transport remain missing.
+command and requires recorded camera data; Impure records each human's camera and plays it back
+as Jump and Follow on the replay HUD's rows ([perspective streams](tadr-port/demo-recorder-perspective-streams.md),
+[The replay HUD in game](hud-in-game.md)). Live allied income, whiteboard and camera transport
+remain missing.
 
 #### Recording and replay: tooling, not a port group
 

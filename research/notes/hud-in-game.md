@@ -2,17 +2,21 @@
 
 ## Status
 
-**Landing 1 is built: the replay HUD draws in game, behind a lever, with no input.** The replay
+**Landings 1 and 2 are built: the replay HUD is a replay's controls on Vulkan.** The replay
 HUD of [The replay HUD's layout](hud-layout.md) — the column of team headers and player rows at
-the top right, and the dock at the bottom with its transport buttons, the timeline and its
-markers, and the clock — is drawn by a Vulkan pass of our own while a recording plays and
-`tagpu_replayhud.on` is in the game folder. It reads the same files as the mockup, `art/hud/`,
-and implements the same rules, so the two stay 1:1. Under the lever the watching dock and the
-player cards of [S5](tadr-port/demo-recorder-s5-ui.md) stand aside; nothing yet takes their
-input, so a playing watched with the lever on has no seek, pause, speed or Leave on screen
-(*The landings*, *Gaps*).
+the top right with its foot plate of switches, and the dock at the bottom with its transport
+buttons, the timeline and its markers, and the clock — is drawn by a Vulkan pass of our own on
+every level that plays a recording, and it takes the player's clicks, hover and wheel
+(*Input*). It reads the same files as the mockup, `art/hud/`, and implements the same rules, so
+the two stay 1:1. It replaces the watching dock and the player cards of
+[S5](tadr-port/demo-recorder-s5-ui.md), which are deleted; on the GDI renderer a replay has no
+on-screen controls (*When it draws*). The stats window waits for landing 3.
 
-**Verified on 2026-10-08** (MEASURED, the reference setup: a private 3840 × 2160 Xvfb with the
+The word **dock** on this page and in `layout.json` is the HUD's own bottom part, the transport
+plate and the timeline housing; the engine GUI screen of the same name (`DOCK.GUI`,
+`tagpu_dock.c`) no longer exists.
+
+**Layout verified on 2026-10-08** (MEASURED, the reference setup: a private 3840 × 2160 Xvfb with the
 RTX presenting, a four-seat 2v2 skirmish recording on Two Continents). At replay HUD 150 with the
 game's HUD at 150, and at the store's 100 with the game's HUD at Auto (450 %), the game's
 capture and the mockup fed the game's own dump match: the column, the dock, the team headers, the
@@ -21,26 +25,70 @@ markers. The best vertical and horizontal shift of the game's crop against the m
 for the column, for the dock and for every text crop tested. How the check is run:
 *Checking it against the mockup*.
 
-The owner's decisions (2026-10-08):
+**Input verified on 2026-10-09** (MEASURED, the reference setup: a private 3840 × 2160 Xvfb, the
+game at 1920 × 1080 on Vulkan, about 5 frames a second on that display; every control clicked in
+device space where the dump said it was drawn, through `tacli hud`):
 
-- **A pass of our own, not a UI library**, with stb_truetype for the fonts. The reasons are in
-  [The replay HUD's layout](hud-layout.md), *Status*.
-- **The HUD keeps its own scale and fits the space the engine's frame leaves.** The replay HUD's
-  scale sets the unit; the engine's side panel and bars, at the game's HUD scale, set the
-  anchors (*Units and the screen* there).
+- pause and resume; the speed through every preset and the wrap from 8× to ½×; ±10 s; a bookmark
+  added and removed, with `replays\index.dat` changed each time; the scale button through 100,
+  125, 150, 75 and back to 100, written to `impure.cfg`; a team folded and unfolded;
+- the four switches, each logging its line (`replay: overlay cursors off` … `replay: chat
+  hidden`);
+- hover showing a row's Jump, Sight and Follow; Sight on seat 2, then Sight again (record 10, the
+  full map); Follow, then Follow again (`follow ended: free cam`); Jump; on a seat whose camera
+  was not recorded, the toast "Camera was not recorded" (seen in a capture);
+- a right click on a control taken with no action; the wheel over the column taken (no zoom line)
+  and over the world zooming; a ten-seat, five-team recording at the replay HUD's 150 % scrolled from 0 to 4 by
+  the arrows and by the wheel;
+- the timeline scrubbed from 20 % to 60 %: one seek a frame, the last at 20671 against 20665
+  computed, a pixel of that track being 14 ticks; play at the recording's end starting it over;
+- Leave then No, from playing and from paused, each putting the pause back as it was; Leave then
+  Yes, back to the Replays browser; a second Watch starting fresh (every switch on, nothing
+  folded);
+- the modal test: with ARMOPT open (Tab), a click on the HUD's bookmark reached the engine — no
+  bookmark was written — and the engine closed ARMOPT, as it closes it for any click outside it;
+- the walker's markers on the `hud-2v2-selfd` recording: a commander death at 1677 and a defeat
+  at 2906, both seat 0;
+- under `tagpu_gdi.on`: the playback runs, with no HUD and no marker walk.
 
-## Turning it on
+Three faults were found that way and fixed before the landing: the four switches matched no
+name (`IS()` in `act` compared through `sizeof` of a pointer, and now takes literals only),
+several wheel notches in one frame moved the column one item, and the play button at the
+recording's end showed pause.
 
-- **`tagpu_replayhud.on`** in the game folder (`tacli arm <i> replayhud.on`). It is read once a
-  process, the first time the game thread's packet fill or the dock's gate asks
-  (`tagpu_hudstate_on`, `tagpu_hudstate.c`), and latched with an `InterlockedCompareExchange`
-  because either can ask first. Arm it before the launch.
-- **`scale=N` in the file**, N one of 75, 100, 125 and 150, is the HUD's own scale and wins over
-  the settings store's, as `tagpu_hud.on` carries the game's HUD scale. An empty file, or any
-  other content, turns the HUD on at the store's scale.
-- **The store's key is `replayhud`** in `impure.cfg` (`TS_REPLAYHUD`, `inc/tagpu_settings.h`):
-  100 by default, or 75, 125 or 150 ([Renderers](renderers.md), *the defaults*). No settings row
-  writes it yet; the HUD's scale button will (landing 2).
+The owner's decisions:
+
+- **A pass of our own, not a UI library**, with stb_truetype for the fonts (2026-10-08). The
+  reasons are in [The replay HUD's layout](hud-layout.md), *Status*.
+- **The HUD keeps its own scale and fits the space the engine's frame leaves** (2026-10-08). The
+  replay HUD's scale sets the unit; the engine's side panel and bars, at the game's HUD scale, set
+  the anchors (*Units and the screen* there).
+- **The HUD replaces the dock and the cards, which go whole** (2026-10-08); **GDI gets no replay
+  controls** — "GDI gets nothing, this is just vulkan" (2026-10-09).
+- **Sight and Follow are drawn pressed on the player they are set to, and a click on the pressed
+  one undoes it** — the full map, the free camera. That replaces the cards' Full map and Free cam
+  (2026-10-08).
+- **The foot plate's five buttons:** game stats, disabled until landing 3 in the mockup and the
+  game alike, then Cursors, Clicks, Selections and Chat, the four switches of the dock's old
+  Overlays menu. The map button and the capture button are removed (2026-10-08).
+- Everything else follows the mockup, `tools/hudart/mockup/`, which is the HUD's specification.
+
+## When it draws
+
+- **On every level that plays a recording, on the Vulkan lane.** There is no lever:
+  `tagpu_hudstate_on` (`tagpu_hudstate.c`) answers yes while `g_ddraw.renderer` is
+  `vk_render_main` and the pass has not refused (`tagpu_hudstate_refuse`, below), and
+  `tagpu_hudstate_fill` fills the packet's record while the playback is live
+  (`tagpu_replay_live`) and its span is known.
+- **On GDI, or once the Vulkan lane has handed the session to it, a replay has no on-screen
+  controls**: no record is filled, the marker walker never starts (it starts from the fill), and
+  the engine's own menu leaves (Tab, Exit). `tacli replay seek`, the trigger's commands and the
+  keyboard still work.
+- **The HUD's scale** is `tagpu_hudinput_scale` (`tagpu_hudinput.c`): the scale button's last
+  choice in this process, else the settings store's `replayhud` in `impure.cfg` (`TS_REPLAYHUD`,
+  `inc/tagpu_settings.h`) when it is 75, 100, 125 or 150, else 100. The button cycles 75, 100,
+  125, 150 and records each choice in the store (`tagpu_settings_set`), which the render thread
+  writes to `impure.cfg` at its next flush ([Renderers](renderers.md), *the defaults*).
 - **One HUD unit is the viewport height / 720 × the replay HUD's scale**
   (`tagpu_hudstate_present`), whatever the game's HUD scale. The engine's frame — the side
   panel's width and the bars' height at the game's HUD scale, from `tagpu_hud_live` — gives the
@@ -50,13 +98,17 @@ The owner's decisions (2026-10-08):
 
 | File | What it holds | Thread |
 |---|---|---|
-| `tagpu_hudstate.c`/`.h` | the lever; the packet's HUD record filled; the record turned into the layout's state, the teams, the names and the dump | game (fill), render (present) |
-| `tagpu_hudlay.c`/`.h` | `hud.js`'s placement and builders in C, over `layout.json` and `kit.json`; the text baseline; a part op as quads; the hit-test (no caller yet) | either: a pure function |
+| `tagpu_hudstate.c`/`.h` | whether the HUD draws; the packet's HUD record filled; the record turned into the layout's state, the teams, the names and the dump; the drawn frame's hit map, handed back in the command record | game (fill), render (present, the map) |
+| `tagpu_hudinput.c`/`.h` | the input: the hit map's copy, the press and release, the wheel, the commands, the HUD's own state (the held key, the folds, the scroll, the toast, the scale) and Leave's pause | game |
+| `tagpu_hudmarks.c`/`.h` | the timeline's markers: the walker over the recording, and the bookmarks in `replays\index.dat` | game; the walker its own thread |
+| `tagpu_menu.c` | the modal test `tagpu_menu_modal`, and Leave's question opened from the DrawGameScreen observer behind its guard | game |
+| `tagpu_shield.c`, `wndproc.c`, `tagpu_input.c` | the mouse paths into `tagpu_hudinput_button` and `tagpu_hudinput_wheel`; the device tokens `ddown:`, `dup:` and `dwheel:` | game |
+| `tagpu_hudlay.c`/`.h` | `hud.js`'s placement and builders in C, over `layout.json` and `kit.json`; the text baseline; a part op as quads; the controls as `HOP_HOT` ops | either: a pure function |
 | `tagpu_huddraw.c`/`.h` | the ops as instances; the glyph atlas; the shader pair | render |
 | `tagpu_hudart.c`/`.h` | the loader: the `HUDPAK` resource, the parts decoded, the faces opened | its own, then immutable |
 | `tagpu_vk_hud.c`/`.h` | the pass: the images, the uploads, one pipeline, a draw per run of instances | render |
 | `tagpu_json.c`/`.h` | the JSON parser the layout reads its two files with | either |
-| `tagpu_packet.h`, `tagpu_packet_pub.c`, `tagpu_packet.c` | `TAGPU_PK_HUD`, its area `hud_off`/`hud_len`, its fill, and `frame_valid`'s bounds on `nseat` and `nmark` | game → render |
+| `tagpu_packet.h`, `tagpu_packet_pub.c`, `tagpu_packet.c` | `TAGPU_PK_HUD`, its area `hud_off`/`hud_len`, its fill, and `frame_valid`'s bounds on `nseat` and `nmark`; `TAGPU_CMD_HUD` in the command record, and its take | game → render, render → game |
 | `tools/hudpak.py`, `res.rc`, the Makefile | `art/hud/` packed into `inc/tagpu_hudpak.bin` (gitignored), embedded as the `RCDATA` resource `HUDPAK` | build |
 
 ### Where it is drawn
@@ -136,12 +188,13 @@ The owner's decisions (2026-10-08):
   `-1` from the stage. The pass stops drawing at once and destroys nothing mid-frame,
   where other slots' submits still name its objects. `tagpu_vk_hud_down` gives them back behind
   the seam's `vkDeviceWaitIdle` on the next `vk_down` or `passes_down`.
-- **A HUD that cannot draw gives the dock back.** Its art failing to load, its pass failing to
-  build, the device failing an upload, or its layout failing to build: each calls
-  `tagpu_hudstate_refuse` on the render thread, an interlocked store `tagpu_hudstate_on` reads on
-  the game thread. From then on, for the session, the lever counts as off: no record is filled,
-  and the watching dock and the cards open (`hud: the replay HUD cannot draw (…) - the dock and the
-  cards come back`). Not run: none of the four can be brought about without breaking the build.
+- **A HUD that cannot draw leaves a replay without on-screen controls for the session.** Its art
+  failing to load, its pass failing to build, the device failing an upload, or its layout failing
+  to build: each calls `tagpu_hudstate_refuse` on the render thread, an interlocked store
+  `tagpu_hudstate_on` reads on the game thread. From then on no record is filled and no click is
+  the HUD's (`hud: the replay HUD cannot draw (…) - a replay has no on-screen controls this
+  session`); the engine's menu still leaves. Not run: none of the four can be brought about
+  without breaking the build.
 
 ### The rules in C
 
@@ -150,8 +203,9 @@ The owner's decisions (2026-10-08):
   or a clickable, each with its rectangle in HUD units and its clip. It reads no engine state and
   no global, so the game thread and the render thread can call it on the same inputs and get the
   same rectangles.
-- **The render thread calls it to draw.** `tagpu_hudlay_hit` is there for the game thread to
-  hit-test a click against the same rectangles; nothing calls it yet (landing 2).
+- **The render thread calls it to draw**, and its `HOP_HOT` ops become the hit map
+  (*Input*). The game thread does not lay out again: it tests the drawn frame's map, so a click
+  is tested against what was on screen.
 - **Grid-sliced parts are drawn cell by cell** (`tagpu_hudlay_expand`). A part expands into at
   most `HUD_MAXQUAD` = (2·`HUD_MAXBAND` + 1)² quads (`tagpu_hudlay.h`), the bound the loader
   enforces on each part's bands. The mockup composes a grid part into one image instead; at a
@@ -179,21 +233,35 @@ The owner's decisions (2026-10-08):
 - **The game thread publishes the HUD's state in the frame packet** as one `TAGPU_PK_HUD` record
   in the area `hud_off`/`hud_len`, present only while a recording plays and the HUD is on
   (`tagpu_hudstate_fill`, from `fill_frame`). It carries the clock (`now`, `first`, `last`), the
-  replay's speed and pause, the HUD's scale, up to ten seats and up to 320 markers.
+  replay's speed and pause, the HUD's scale, up to ten seats (each with `pov`, its camera
+  recorded) and up to 320 markers, and the HUD's own state as its input keeps it
+  (`tagpu_hudinput_fill`): the pointer in client pixels (`px`, `py`; -1 when not known), the
+  folded teams, the four switches (`toggles`), the column's scroll as asked, the recorded seats
+  Sight and Follow are set to (-1: the full map, the free camera), the key held down and the
+  toast. The render thread turns the pointer into HUD units for the hover, and Sight's and
+  Follow's seats into rows.
   `frame_valid` checks the length and bounds `nseat` and `nmark` by the record's arrays before
   the render thread loops over them. A record that does not fit the slot sets
   `TAGPU_PK_TRUNC_HUD` (`0x800000`), and that frame draws no HUD.
 - **Each seat comes from the replay's image of its player record**, `W->player[seat]`, through
   `tagpu_replay_players` (`tagpu_replay.c`): the name, metal and energy stored, income and
   spending, the two storage maxima, the units alive, the commander-loss counter and the
-  alliance row (the offsets are the [engine map](exe-reverse-engineering.md)'s player-record table). The colour is the
-  cards' rule, `tagpu_cards_colour`, resolved through the presented palette.
+  alliance row (the offsets are the [engine map](exe-reverse-engineering.md)'s player-record table). The colour is a
+  palette index, `TAGPU_REPLAY_PLAYER.colour`: the middle pixel of the seat's logo frame in the
+  engine's colour sequence `*(main+0x148DB)`, the logo bounded by the sequence's count and the
+  frame decoded only when it is at most 64 × 64 (`logo_colour`, `tagpu_replay.c`), taken once a
+  playing for every seat (`seat_colours`, which the overlays share). The render thread resolves
+  it through the presented palette.
 - **"Lost"** is a commander-loss counter above 0 (the skull); **"out"** is no unit alive (the
   dimmed row).
-- **The markers** are the watching dock's: its marker walker still runs under the lever and feeds
-  the HUD through `tagpu_dock_marks` — the commanders' deaths and the defeats as far as the walker
-  has read the recording, and the bookmarks. A marker outside the recording's span, or for a seat
-  the HUD does not show, is dropped.
+- **The markers** come from `tagpu_hudmarks.c` (`tagpu_hudmarks_get`): the commanders' deaths and
+  the defeats as far as its walker has read the recording, then the bookmarks. The walker is a
+  thread with its own reader of the recording, started by the first fill that finds the playback
+  live; it marks a death where a seat's commander-loss counter `+0x106` rises and a defeat where
+  its live count `+0x144` falls to 0, at most 256, and publishes each entry before the count that
+  covers it. The teardown wrap's entry (`tagpu_reclaim.c`) stops and joins it before
+  `tagpu_replay_level_end`, while the recording it reads is still the level's. A marker outside the recording's span, or for a
+  seat the HUD does not show, is dropped.
 - **The teams are the mutual alliances**, joined transitively with union-find
   (`teams`, `tagpu_hudstate.c`): two seats are one team when each one's alliance row marks the
   other; a lone player is a team of one. Whether teams get headers is the layout's rule
@@ -210,7 +278,166 @@ The owner's decisions (2026-10-08):
 - **The rates** — a row's income and spending — read one decimal below 100 in magnitude and whole
   numbers from 100, rounded half up as JavaScript's `Math.round` rounds (`rate` and `js_round`,
   `tagpu_hudlay.c`; `rate`, `hud.js`). A resource bar whose storage is 0 is empty.
-- **No engine state is written**, and the HUD adds no byte patch.
+- **The HUD writes no engine state of its own**, and adds no byte patch. Its commands go through
+  the replay's calls (`inc/tagpu_replay.h`), which write the pause and the speed as
+  [S5](tadr-port/demo-recorder-s5-ui.md) states, and Leave through `tagpu_menu.c` (*Leave*).
+
+## Input
+
+The HUD takes a click where the player saw its controls. Everything on the game thread is
+`tagpu_hudinput.c`'s, which names no engine memory: the one engine fact its gate needs, a menu
+over the world, is `tagpu_menu_modal`'s.
+
+### The hit map: the frame on screen, handed back
+
+- **The render thread makes it from the frame it draws.** Once `tagpu_vk_hud_prepare` has built
+  a frame it will draw, it hands the ops to `tagpu_hudstate_drawn`, which turns every `HOP_HOT`
+  op into a rectangle in the window's client pixels, **topmost first** (the build paints in
+  order, so the last control painted is on top), at most `TAGPU_CMD_HUDHITS` = 64 (the rest are
+  logged once, `hud: N controls past the hit map's 64 are not clickable`). Counted from the
+  builders, a frame has at most 40: the dock's two plates, seven transport buttons and the track;
+  the column; ten rows and at most nine team headers; one hovered row's three buttons; the scroll
+  bar's track and two arrows; the foot plate's four enabled switches. With them go the
+  timeline's playhead run (`track_x0`, `track_x1`: the track's ends inset by `track.ends`), the
+  column's first item as drawn and the greatest it can be (`first`, `last`), and each row's
+  recorded seat (`seat[]`). A frame that draws no HUD, or has nothing to draw yet, posts `n` = 0.
+- **The next command record carries it** (`TAGPU_CMD_HUD` in `TAGPU_CMD`, `tagpu_packet.h`):
+  `tagpu_zoom_frame_end` fills it through `tagpu_hudstate_cmd` beside the zoom's fields. It is a
+  level, as the record's other levels are.
+- **The game thread copies it at the take** (`tagpu_hudinput_take`, from the command record's
+  apply in `tagpu_packet_pub.c`), before every in-play draw, bounding `n` and `nseat` by the
+  arrays. A click between two takes reads this copy.
+- **It describes the frame on screen.** The overlay driver, which posts the record, runs before
+  `tagpu_vk_frame` in `render_vk.c`, so the map a record carries is the previous frame's — the
+  one being shown. That is by design: the map is one frame behind the HUD being built, and level
+  with the picture.
+- **Keys are the layout's own.** A control's key is its `act` in `layout.json`, and a row's or a
+  team's carries its index in the drawn frame: `jump:2` is row 2's Jump, `fold:0` the first
+  team's fold. `seat[]` turns a row into the recorded seat the replay's calls take.
+
+| Key | Where | What a click does |
+|---|---|---|
+| `rew`, `fwd` | transport | a seek 300 GameTime (10 s) back or forward, through `tagpu_replay_seek_request` |
+| `play` | transport | the pause toggled; at the recording's end a seek to its start and the pause cleared (the button shows play there, as the mockup's does) |
+| `speed` | transport | the next preset above the speed in force, 5, 10, 20, 40, 80 (½× to 8×), and from 8× back to ½× |
+| `bookmark` | transport | the bookmark nearest now within 90 GameTime (3 s) removed, else one added at now (`tagpu_hudmarks_bookmark`, through `tagpu_replays_mark_add`/`_remove` into `replays\index.dat`); the toast "Bookmark at m:ss" or "Bookmark removed", nothing when the recording was not opened from `replays\` or the list is full |
+| `uiscale` | transport | the HUD's scale to the next of 75, 100, 125, 150, wrapping, and into the settings store (`hud: the replay HUD's scale is N%`) |
+| `leave` | transport | Leave's question (*Leave*) |
+| `track` | timeline | a seek where it was pressed, one a frame while it is dragged, and one where it is released (*The press*) |
+| `stats` | foot plate | disabled: drawn at 45 % with no hot of its own, so the column's hot under it takes the click |
+| `cursors`, `clicks`, `selections`, `chat` | foot plate | the replay's switch toggled (`tagpu_replay_overlay_set`); each is on when a playing starts and never saved; drawn pressed while on |
+| `fold:t` | team header | team t folded or unfolded |
+| `sight:i` | a row's hover | Sight on row i's seat (`tagpu_replay_sight_request`), or, pressed already, the full map (-1, record 10) |
+| `follow:i` | a row's hover | Follow row i's seat (`tagpu_replay_follow_request(seat, 0)`), or, pressed already, the free camera |
+| `jump:i` | a row's hover | the camera put on row i's seat's once (`tagpu_replay_follow_request(seat, 1)`) |
+| `scroll_up`, `scroll_down` | the column's scroll bar | the column's first item one up or down |
+| `dock`, `column`, `row:i`, `scroll_track` | the plates | taken, and nothing done: a click on a plate between controls is the HUD's, not the world's |
+
+Jump and Follow on a seat whose camera was not recorded (`pov` 0) do nothing but show the toast
+"Camera was not recorded". A toast shows for `toast.ms` (1800 ms, `layout.json`), measured on the
+game thread's tick count. Each row is a control of its own, `row:i`, painted under its hover's
+buttons; it is how `tacli` finds a row to hover before clicking one of its buttons.
+
+### The press
+
+- **Two paths, one function.** `tagpu_hudinput_button(cx, cy, down, right)` takes a client point:
+    - **The real path**, at the top of the shield's wndproc hook (`tagpu_shield_wndproc`), before
+      the shield's own gate, so a player's mouse reaches it whether the shield is armed or not.
+      The point is `lParam`, the client point; a double click (`WM_LBUTTONDBLCLK`,
+      `WM_RBUTTONDBLCLK`) counts as a press, since the window's class may turn a second press into
+      one. The Impure Config sprocket (`tagpu_menu_click`) is asked first.
+    - **The injected path**, in `deliver_mouse`: only a **device-space** injection carries a
+      client point (`dclick:`, `drclick:`, `dmove:`, `ddown:`, `dup:`, `dwheel:`); a click in the
+      engine's own space (`click:`, `pclick:`) has no client point (`cx` < 0), never reaches the
+      HUD and passes under it to the engine.
+- **A press is taken only when** the map is not empty, `tagpu_hudstate_on`, `tagpu_replay_live`
+  and not `tagpu_menu_modal`, and the point is on a control. A press taken is dropped whole: no
+  message and no virtual key state reach the engine.
+- **A release is taken exactly when its press was**, whatever is under it then, so the engine
+  never sees half a click; a press whose release was lost ends at the next press of the same
+  button. A left click acts at the release, when the release is over the control the press
+  landed on (`held`, drawn pressed meanwhile). A right press on a control is taken and does
+  nothing.
+- **The timeline drag:** a press on `track` seeks to the pointer at once; each packet fill then
+  seeks to the pointer's x (`mouse_last_client`) when it has moved to a new GameTime, one request
+  a frame, the newest replacing one not yet run; the release seeks to where it is. x maps along
+  the playhead's run from the recording's first GameTime to its last, clamped to the run. A drag
+  ends if the HUD stops taking clicks (`active` false at a fill).
+- **Focus loss ends a drag** where it is: `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and
+  `WM_ACTIVATEAPP` 0 call `tagpu_hudinput_cancel`. The release, should it come, is still consumed.
+- **The wheel**, `tagpu_hudinput_wheel`, runs before the zoom's in both `to_game` (the shield's
+  injected path) and `fake_WndProc`, at the pointer `mouse_last_client` holds. Over the column or
+  its scroll bar each notch scrolls one item, down for a notch toward the player; over any other
+  control it is taken and does nothing; over the world it is not taken, and the zoom has it.
+  Under the same gate as a press.
+- **The scroll** is asked from the scroll last asked, not the one last drawn, so notches that
+  arrive within one frame add up, and is held to [0, `last`]; the layout holds it there again
+  when it builds.
+
+### Leave
+
+- **The click pauses and queues the question.** It remembers whether the playback was paused,
+  pauses it, and sets a request; when the menu's hooks did not arm (`tagpu_menu_leave_ready`) it
+  shows the toast "Leave from the game menu" instead.
+- **The DrawGameScreen observer opens it** (`menu_tick` in `tagpu_menu.c`, `leave_open`), where
+  the engine's own screens are opened — the engine's Exit → Main Menu path, EXITMENU's handler
+  at `0x46082B..0x46083A` without its `GUI_Pop`, there being no EXITMENU to pop: the question
+  `*(int*)0x512FF8 = 0`, YESORNO's opener `0x460680`, then the title set with `0x4A07D0(gi,
+  "TITLE", "Leave this replay?")`. It is opened outside the pump's dispatch, where no click waits
+  on an answer, so nothing is answered with `ActDone` ([engine map](exe-reverse-engineering.md),
+  *The in-game quit*).
+- **The guard.** Before every open the observer compares `0x460680..0x4607F1` (the opener, to its
+  `ret`) and `0x4605C0..0x46065C` (its `OnCommand`, through the quit tail's `ret 4`) by FNV-1a
+  against the retail bytes, `0x8B2B971E` and `0x9EF8B480` (DISASSEMBLED and recomputed from
+  `pristine/TotalA.exe.pristine`). On a mismatch it logs `menu: Leave refused - …` and opens
+  nothing. If the opener pushed no YESORNO, it logs that too.
+- **The question is open while a screen named `YESORNO.GUI` is on the GUI stack**: from the top,
+  `main+0x531`, down the `+0` links, at most 32 steps, each screen's name being its record 0's —
+  `[gm+4]+2`, 16 bytes, the field the engine's own compare `0x4AB060` reads (`named_on_stack`).
+  Once it is gone — No pops it — the next fill puts the pause back as it was before the click.
+  If the guard or the opener refused, the pause is put back at once and the toast says "Leave
+  from the game menu".
+- **Yes** runs the engine's quit tail (`0x460630`): the teardown, and the shell, which opens the
+  Replays browser again after a Watch.
+
+### The menu over the world
+
+`tagpu_menu_modal` is the gate's engine fact: **`(*(u16*)(main+0x37EBE) & 0x865) ||
+(main[0x2BEE] & 0xE0)`** — the engine's own test for deferring menu work, as
+`tagpu_patches.c`'s `order_check` also makes it ([engine map](exe-reverse-engineering.md),
+*Where the cancel cannot be called*) — or `YESORNO.GUI` on the stack. Bit 0 covers the options
+stack (ARMOPT, EXITMENU, YESORNO, the preferences), bit 2 the chat, bit 6 SHARE. Leave's question
+needs the name test: its opener `0x460680` sets neither (bit 0's setters are `0x4961C1`,
+`0x49477E` and `0x45D002`), and Impure opens it without ARMOPT under it. A build menu
+stacks on the base screen without either test, so a name compare of the top screen would not do
+[INFERRED: the build pages' bits not traced].
+Under a menu every click is the engine's: MEASURED 2026-10-09 (*Status*).
+
+### Driving it: `tacli hud`
+
+`tacli hud <i> show|wait|click <key>|hover <key>|wheel <key> <n>|scrub <from> <to>`
+(`tools/tacli`, `cmd_hud`) drives the HUD as a player's hand does — a device-space injection at a
+control's place in the frame on screen — and never calls the replay's API:
+
+- **It reads the state dump** (*Checking it against the mockup*): it removes the old answer,
+  writes `tagpu_replayhud.dump`, and reads `tagpu_replayhud.json` once the game has taken the
+  trigger. The dump's `hits` object is the hit map of the frame on screen,
+  `{"track": [x0, x1], "first": …, "last": …, "at": [{"key": …, "r": [x0, y0, x1, y1]}, …]}`,
+  topmost first, and the state carries `held`, `sight`, `follow`, `scroll` and `toast`.
+- **`click`** writes `dclick:` (`drclick:` with `--right`) at the control's centre, **`hover`**
+  `dmove:`, and **`wheel`** `dwheel:x,y,n`, n notches (positive: away from the player, and the
+  column scrolls up). A row's button (`jump:2`) shows only under the pointer, so tacli hovers its
+  row (`row:2`) first and waits for the button to appear in the dump.
+- **`scrub`** presses on the track at one fraction of the recording (`ddown:`), moves in
+  `--steps` steps `--step-ms` apart (`dmove:`), and releases at the other (`dup:`).
+- **`show` and `wait`** print the state and every control; they wait up to `--timeout` (20 s) for
+  an answer, which only a Vulkan replay's HUD gives.
+
+The replay harness's W lane drives the HUD through it ([completeness](tadr-port/demo-recorder-completeness.md),
+*The replay test harness*): the speed, play, the trigger's `hud seek <T>` (the timeline's own
+seek entry, at a GameTime of the test's choosing), Sight twice on row 0, Follow, Follow again and
+Jump on the row of the seat the recording's human commanded, Cursors off and on, play again,
+and Leave, answered Yes through `tacli ui`.
 
 ## Checking it against the mockup
 
@@ -226,42 +453,45 @@ The owner's decisions (2026-10-08):
   capture the mockup fed the game's dump
   (`tools/hudart/capture.sh "<mockup url>?state=<json url>" m.png`), and compare the two at native
   4K, region by region, for the best shift.
-- **Where the dock's markers come from in a test:** a recording in which a commander dies. In a
-  live skirmish, `ctrl+c` selects the commander and `ctrl+d` self-destructs it; the run above
-  logged `dock: markers: 1 commander deaths at 1677 (seat 0), 1 defeats at 2906 (seat 0)`. The
-  walker (`tagpu_dock.c`) marks a death where a seat's commander-loss counter `+0x106` rises and a
-  defeat where its live count `+0x144` falls to 0.
+- **Where the markers come from in a test:** a recording in which a commander dies. In a
+  live skirmish, `ctrl+c` selects the commander and `ctrl+d` self-destructs it. Once the walker
+  has read the recording it logs what it found, `hud: markers: N commander deaths at <T> (seat
+  <S>), M defeats at <T> (seat <S>), … iterations walked in … ms`; on `hud-2v2-selfd` that is one
+  death at 1677 and one defeat at 2906, both seat 0.
 
 ## The landings
 
-1. **The HUD draws, behind a lever** — built. The pass, the archive, the parser, the rules in C
-   and the text, drawing the dock and the column from the replay's data, with no input; under the
-   lever the old dock and cards do not open. Checked as *Status* says.
-2. **The HUD replaces the dock and the cards.** Input, hover, the commands (seek, pause, speed,
-   bookmark, Leave, the sight request), the scroll and the scale button; the lever goes, and the
-   old dock's screen and drawing are deleted. Clicks are to be consumed in the shield's chain, as
-   the dock's are (`tagpu_shield.c`); hover is not consumed. Whether the GDI renderer keeps a HUD
-   is decided here.
+1. **The HUD draws** — built. The pass, the archive, the parser, the rules in C and the text,
+   drawing the dock and the column from the replay's data. Checked as *Status* says (2026-10-08).
+2. **The HUD replaces the dock and the cards** — built. The layout's controls for input (the
+   five-bay foot plate, the column's scroll, Sight and Follow drawn pressed, the toast, each row a
+   control); the hit map, the input and the commands; Leave behind the engine's YESORNO; the
+   marker walker and the bookmarks moved to `tagpu_hudmarks.c` and the seat colours to
+   `tagpu_replay.c`; then `tagpu_dock.c`/`.h`, `tagpu_cards.c`/`.h`, `DOCK.GUI`, their art in
+   `art/ui/`, the HUD-scale regions that magnified the two (`uDock*` and `uCards*` in the UI
+   composite's shader, whose uniform block is now 80 bytes, and the `OP_FLIP` words that carried
+   their scale) and the lever deleted. `tacli hud` and the W lane drive it. Checked as *Status*
+   says (2026-10-09).
 3. **The stats window.** It needs a per-second stats track the recorder does not write yet, so it
-   follows a recorder landing.
+   follows a recorder landing. Its button is drawn disabled until then.
 
 Each landing is reviewed at `high`: it adds a pass and a hand-over between the game thread and
 the render thread.
 
 ## Gaps
 
-- **No input.** Under the lever nothing on screen seeks, pauses, changes the speed or leaves,
-  and the HUD's buttons do nothing; `tacli replay seek` and the trigger's `seek` still work.
-  Landing 2.
-- **The stats window is never drawn.** The state's toggles are all off and nothing can turn
-  them on; its data needs the recorder track of landing 3.
-- **A bookmark marker is drawn but untested in game**: without input there is no way to add one
-  under the lever.
-- **Vulkan only.** The packet is the HUD's only way to the screen, and only the Vulkan lane reads
-  it, so `tagpu_hudstate_on` answers yes only while `g_ddraw.renderer` is `vk_render_main`. On GDI,
-  or once the Vulkan lane has handed the session to it, the lever does nothing: the watching dock
-  and the cards open as they do without it (MEASURED 2026-10-08 under `tagpu_gdi.on`: `DOCK.GUI`
-  over `ARMMAIN2`, no HUD pass). Whether GDI gets the HUD is landing 2's question.
+- **The stats window is never drawn.** Its button is disabled and the state's stats toggle is
+  never on; its data needs the recorder track of landing 3.
+- **No capture button.** The foot plate's old capture bay is gone; a screen capture is a later
+  landing's.
+- **GDI has no replay controls**, by the owner's decision: the packet is the HUD's only way to
+  the screen, and only the Vulkan lane reads it. A GDI player leaves through the engine's menu and
+  has no on-screen seek, pause, speed, Sight or Follow.
+- **The dump answers every 30 frames**, so at a low frame rate `tacli hud show` can miss a toast
+  that lasts 1.8 s: at about 5 frames a second a dump is 6 s apart. Check a toast with a capture.
+- **The hit map is one frame behind the HUD being built**, by design: it is the frame on screen.
+  A control that moves between two frames (a row's buttons appearing under the pointer, the
+  column scrolling) is clickable where the player saw it, not where the next frame draws it.
 - **A one-pixel Oswald residual.** At 26 of 7554 sizes swept, Chrome rounds Oswald's ascent or
   descent differently from the rule the DLL follows, and the line sits a pixel off the mockup's
   ([The replay HUD's layout](hud-layout.md), *Text*).

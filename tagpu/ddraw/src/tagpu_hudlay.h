@@ -5,9 +5,9 @@
    implement; tools/hudart/laycheck.py compares this file's rectangles with the mockup's.
 
    A PURE FUNCTION OF ITS INPUTS. tagpu_hudlay_build reads the loaded files and the state it is
-   given, and nothing else: no engine memory, no global, no clock. So the render thread can call
-   it to draw and the game thread to hit-test a click, each on its own copy of the state, and
-   both get the same rectangles for the same state. A HUDLAY is immutable once loaded and is
+   given, and nothing else: no engine memory, no global, no clock. So the render thread's frame
+   and tools/hudart/'s native build of this file get the same rectangles for the same state, and
+   the frame's HOP_HOT ops are the hit map a click is tested against (tagpu_hudstate_drawn). A HUDLAY is immutable once loaded and is
    never freed while the HUD can draw (tagpu_json.h says why that is enough).
 
    Pure C99 and the C library, like tagpu_json.c, so tools/hudart/ compiles it natively.
@@ -162,9 +162,6 @@ const HUDPART*    tagpu_hudlay_part(const HUDLAY* l, int i);
 /* The ops for state `st`, into `out` (about 400 KB: never on a stack). Returns 0 when a field
    the rules read is missing, which tagpu_hudlay_load has already ruled out for every branch. */
 int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* err, size_t errn);
-
-/* The topmost HOP_HOT under (x, y), its key into `key`; 0 when none. */
-int tagpu_hudlay_hit(const HUDOPS* ops, float x, float y, char* key, size_t keyn);
 
 /* THE BASELINE OF A TEXT OP, AS CHROME LAYS IT: the line box, the font size tall at line-height 1,
    centred in the op's box `y`, `h`; the face's ascent and descent, `asc` and `desc` in em, each

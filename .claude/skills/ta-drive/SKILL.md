@@ -170,9 +170,8 @@ as well. By hand: `ui t1 set Mapping 1`, `ui t1 set LineOfSight 0` before `Start
 - **Key tokens**: names (`space return esc tab plus minus up down left right backspace delete
   home end y …`), combos `ctrl+d`/`shift+2`/`ctrl+shift+a` (the modifier is held 150 ms because
   TA polls it), `char:c`, `down:<tok>`/`up:<tok>` to hold keys or `lbutton`/`rbutton`/`mbutton`
-  across frames, `mouse:x,y`, `pmove:x,y`, `click:x,y`/`rclick:x,y`/`pclick:x,y`, `wheel:n`, and
-  `dmove:x,y`/`dclick:x,y` in **device** pixels. Drag-select: `down:lbutton`, `mouse:x,y`,
-  `up:lbutton`.
+  across frames, `mouse:x,y`, `pmove:x,y`, `click:x,y`/`rclick:x,y`/`pclick:x,y`, `wheel:n`; **device** pixels:
+  `dmove:` `dclick:` `drclick:` `ddown:` `dup:` (`x,y`), `dwheel:x,y,n`. Drag-select: `down:lbutton`, `mouse:x,y`, `up:lbutton`.
 - **Injected modifiers need the shield ON.** A polled modifier reaches TA only through the
   shield's `GetAsyncKeyState`; with `--no-shield` your `down:shift` is invisible, so anything
   gated on a held modifier (the order markers, `Ctrl+C` follow) is untestable with the shield
