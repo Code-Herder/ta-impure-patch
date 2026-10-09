@@ -44,12 +44,17 @@ int  tagpu_menu_owns_point(int gx, int gy);
    hit-test on either alone works for exactly half its users. */
 int  tagpu_menu_click(int gx, int gy, int down);
 
-/* The right button, for the watching dock's strip (tagpu_dock.h): the same contract. */
-int  tagpu_menu_rclick(int gx, int gy, int down);
+/* The replay HUD's two questions about the engine's screens (tagpu_hudinput.c), game thread:
+   modal -- a menu covers the world, as the engine's own test has it, or Leave's question is
+   open; leave_ready -- the observer that opens Leave's question runs (the menu armed);
+   leave_open -- Leave's question, YESORNO.GUI, is on the stack. */
+int  tagpu_menu_modal(void);
+int  tagpu_menu_leave_ready(void);
+int  tagpu_menu_leave_open(void);
 
 /* tagpu_reclaim's teardown wrap, on entry to 0x491B60, on the game thread: the screen slot lets
    its screen go without a pop, so the engine's own pops after the teardown find the stack and
-   main+0x37EA0 as stock has them, and the dock's worker is joined (tagpu_menu.c). */
+   main+0x37EA0 as stock has them (tagpu_menu.c). */
 void tagpu_menu_level_end(void);
 
 /* The render thread's frame. Does the DEFERRED WRITE: a row click records its

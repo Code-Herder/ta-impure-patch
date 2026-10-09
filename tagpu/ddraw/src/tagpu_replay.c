@@ -83,7 +83,7 @@
 #include "tagpu_replays.h"
 #include "tagpu_persp.h"
 #include "tagpu_zoom.h"
-#include "tagpu_cards.h"
+#include "tagpu_gaf.h"
 #include "tagpu_packet.h"
 #include "git.h"
 
@@ -8236,6 +8236,44 @@ int tagpu_replay_seek_request(unsigned T)
     return 1;
 }
 
+/* ---- THE SEATS' COLOURS -------------------------------------------------------------------
+   The engine's colour sequence lives with the main block, loaded at startup (0x431911), and a
+   seat's logo is bounded against its count. A frame is decoded, at most 64x64, into a fixed plane
+   and only a palette index escapes. The engine reads the same sequence at 0x467C1E..0x467C24. */
+#define OV_GREY      59             /* a player with no colour                                */
+
+static unsigned logo_colour(unsigned logo)
+{
+    const char* ta = ta_main();
+    const unsigned char *seq, *f;
+    unsigned w, h;
+    unsigned char pix[64 * 64];
+    if (!ta) return OV_GREY;
+    seq = *(const unsigned char* const*)(ta + 0x148DB);
+    if (!seq || logo >= *(const unsigned short*)seq) return OV_GREY;
+    f = *(const unsigned char* const*)(seq + 0x28 + logo * 8);
+    if (!f) return OV_GREY;
+    w = *(const unsigned short*)f; h = *(const unsigned short*)(f + 2);
+    if (!w || !h || w > 64 || h > 64 || !tagpu_gaf_decode(f, w, h, pix)) return OV_GREY;
+    return pix[(h / 2) * w + w / 2];
+}
+
+/* each recorded seat's colour, taken once a playing: the HUD's rows and the overlays' marks */
+static const unsigned char* seat_colours(void)
+{
+    const RecHeader* h;
+    unsigned i;
+    if (!s_ov.col_ok) {
+        h = recr_header(s_rd);
+        memset(s_ov.col, OV_GREY, sizeof s_ov.col);
+        for (i = 0; i < h->nseats && i < REC_PLAYERS; i++)
+            if (h->seats[i].index < TAGPU_PK_OV_PLAYERS)
+                s_ov.col[h->seats[i].index] = (unsigned char)logo_colour(h->seats[i].logo);
+        s_ov.col_ok = 1;
+    }
+    return s_ov.col;
+}
+
 int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
 {
     const RecHeader* h;
@@ -8264,7 +8302,7 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
         sides[seat] = h->seats[i].side;
         dst->commander_alive = valid && h->seats[i].side < L.sides && h->seats[i].side < 5 ? 0 : -1;
         dst->seat = seat;
-        dst->colour = h->seats[i].logo;
+        dst->colour = seat < TAGPU_PK_OV_PLAYERS ? seat_colours()[seat] : OV_GREY;
         /* a seat with a camera sample: a skirmish's recorded, a multiplayer actor's contributed */
         dst->pov = P->npov[seat] != 0;
         lstrcpynA(dst->name, h->seats[i].name, sizeof dst->name);
@@ -8494,8 +8532,8 @@ static void follow_visit(char* ta)
 
 /* ---- THE OVERLAYS (research/notes/tadr-port/demo-recorder-perspective-streams.md, *Playback*)
    Every recorded player's cursor, clicks and selection at once, whatever Sight shows (the owner's
-   answer Q5), each behind its switch in the dock's Overlays menu (tagpu_cards.c), which also holds
-   the chat's. Built at the frame visit, after any seek and after Follow's own reading of the same
+   answer Q5), each behind its switch on the replay HUD's foot plate (tagpu_hudinput.c), which also
+   holds the chat's. Built at the frame visit, after any seek and after Follow's own reading of the same
    world, from the reader's world alone (persp_world) -- nothing of the engine's:
    - a cursor: the perspective clock's sample for the displayed tick W->tick, as Follow takes it
      (tagpu_persp.h), when it was over the world (REC_POV_WORLD);
@@ -8516,7 +8554,6 @@ static void follow_visit(char* ta)
    held envelopes at their application tick (mp_click). */
 
 #define BIRTHS_TABLE "src/tagpu_patches.c:s_hitStamp"   /* the births column's RT_TABLE name */
-#define OV_GREY      59             /* a player with no colour: the cards' own fallback       */
 
 static const char* const OV_NAME[TAGPU_OV_N] = { "cursors", "clicks", "selections", "chat" };
 
@@ -8668,13 +8705,7 @@ static void overlay_visit(char* ta)
     if (!s_ov.live) return;
     h = recr_header(s_rd);
     W = persp_world();
-    if (!s_ov.col_ok) {
-        memset(s_ov.col, OV_GREY, sizeof s_ov.col);
-        for (i = 0; i < h->nseats && i < REC_PLAYERS; i++)
-            if (h->seats[i].index < TAGPU_PK_OV_PLAYERS)
-                s_ov.col[h->seats[i].index] = (unsigned char)tagpu_cards_colour(h->seats[i].logo);
-        s_ov.col_ok = 1;
-    }
+    seat_colours();
     if (!s_ov.off[TAGPU_OV_CURSORS])
         for (i = 0; i < h->nseats && i < REC_PLAYERS; i++) {
             unsigned p = h->seats[i].index;

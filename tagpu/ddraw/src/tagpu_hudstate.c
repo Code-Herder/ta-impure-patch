@@ -2,72 +2,44 @@
    Contract: tagpu_hudstate.h.
 
    NOTHING HERE NAMES ENGINE MEMORY. The game-thread half reads through the replay's calls
-   (inc/tagpu_replay.h), the dock's markers and the cards' colour rule, all of them on the thread
-   that owns what they read; the render-thread half reads the packet's copy, the presented
-   palette and the HUD scale's one published word. */
+   (inc/tagpu_replay.h), the markers' walker and the HUD's input, all of them on the thread that
+   owns what they read; the render-thread half reads the packet's copy, the presented palette and
+   the HUD scale's one published word, and keeps the hit map of the frame it drew. */
 #include <windows.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu.h"
 #include "tagpu_hudstate.h"
+#include "tagpu_hudinput.h"
+#include "tagpu_hudmarks.h"
 #include "tagpu_replay.h"
-#include "tagpu_dock.h"
-#include "tagpu_cards.h"
-#include "tagpu_settings.h"
-#include "tagpu_opt.h"
 #include "tagpu_pal.h"
 #include "tagpu_hud.h"
 #include "tagpu_log.h"
 #include "dd.h"
 #include "render_vk.h"
 
-#define LEVER "tagpu_replayhud.on"
 #define TICKS 30.0f                     /* GameTime runs at 30 a second */
 
 /* ---- the game thread ---------------------------------------------------------------------- */
 
-static volatile LONG s_on = -1;         /* -1 unread, 0 off, else the scale's lever value or 1 */
 static volatile LONG s_refused;         /* the render thread: the HUD cannot draw this session  */
 
 int tagpu_hudstate_on(void)
 {
-    LONG v = InterlockedCompareExchange(&s_on, 0, 0);
-    if (v < 0) {
-        char b[128];
-        const char* k;
-        int pct;
-        v = 0;
-        if (tagpu_opt_read(LEVER, b, sizeof b) >= 0) {
-            /* `scale=N`, as tagpu_hud.on carries the game's HUD scale */
-            pct = (k = strstr(b, "scale=")) ? atoi(k + 6) : 0;
-            v = pct == 75 || pct == 100 || pct == 125 || pct == 150 ? pct : 1;
-        }
-        /* the game thread's fill and the dock's gate both ask: the first answer stands */
-        if (InterlockedCompareExchange(&s_on, v, -1) == -1 && v)
-            tagpu_logf("hud: the replay HUD is on (%s)%s", LEVER, v > 1 ? ", scale from the lever" : "");
-        v = InterlockedCompareExchange(&s_on, 0, 0);
-    }
     /* drawn only on the Vulkan lane, the packet's only reader, and only while the pass has not
        refused: on GDI, after the lane falls back to it (render_vk.c), or once the HUD cannot draw,
-       it is off and the dock and the cards stand where they were */
-    return v != 0 && g_ddraw.renderer == vk_render_main && !InterlockedCompareExchange(&s_refused, 0, 0);
+       a replay has no on-screen controls */
+    return g_ddraw.renderer == vk_render_main && !InterlockedCompareExchange(&s_refused, 0, 0);
 }
 
 void tagpu_hudstate_refuse(const char* why)
 {
     if (InterlockedExchange(&s_refused, 1) == 0)
-        tagpu_logf("hud: the replay HUD cannot draw (%s) - the dock and the cards come back", why);
-}
-
-static unsigned scale_pct(void)
-{
-    LONG v = InterlockedCompareExchange(&s_on, 0, 0);
-    int s;
-    if (v > 1) return (unsigned)v;
-    if (tagpu_settings_get(TS_REPLAYHUD, &s) && (s == 75 || s == 100 || s == 125 || s == 150))
-        return (unsigned)s;
-    return 100;
+        tagpu_logf("hud: the replay HUD cannot draw (%s) - a replay has no on-screen controls this "
+                   "session", why);
 }
 
 int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
@@ -84,7 +56,7 @@ int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
     h->last = last;
     h->speed = (uint16_t)tagpu_replay_speed();
     h->paused = (uint8_t)(tagpu_replay_paused() != 0);
-    h->scale = (uint16_t)scale_pct();
+    h->scale = (uint16_t)tagpu_hudinput_scale();
 
     n = tagpu_replay_players(pl, (int)TAGPU_PK_HUD_SEATS);
     for (i = 0; i < n && i < (int)TAGPU_PK_HUD_SEATS; i++) {
@@ -97,18 +69,20 @@ int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
         s->units = pl[i].units;
         s->allies = (uint16_t)pl[i].allies;
         s->seat = (uint8_t)pl[i].seat;
-        s->pal = (uint8_t)tagpu_cards_colour(pl[i].colour);
+        s->pal = (uint8_t)pl[i].colour;
         s->lost = (uint8_t)(pl[i].commander_losses > 0);
+        s->pov = (uint8_t)(pl[i].pov != 0);
         h->nseat++;
     }
 
-    n = tagpu_dock_marks(T, kind, seat, (int)TAGPU_PK_HUD_MARKS);
+    n = tagpu_hudmarks_get(T, kind, seat, (int)TAGPU_PK_HUD_MARKS);
     for (i = 0; i < n && i < (int)TAGPU_PK_HUD_MARKS; i++) {
         h->mark[i].t = T[i];
         h->mark[i].kind = kind[i];
         h->mark[i].seat = seat[i];
     }
     h->nmark = (uint16_t)i;
+    tagpu_hudinput_fill(h);
     return 1;
 }
 
@@ -121,6 +95,12 @@ static int      s_have;
 static unsigned s_frame;                /* the render-thread frame `s_st` is for */
 static float    s_px;
 static int      s_ox, s_oy;
+static uint8_t  s_seatOf[TAGPU_PK_HUD_SEATS];   /* row i's recorded seat, this frame's   */
+/* THE HIT MAP OF THE LAST FRAME DRAWN: written by the Vulkan pass once it has built a frame it will
+   draw (tagpu_hudstate_drawn), read by the next command record (tagpu_hudstate_cmd) and the dump,
+   all on this thread. A frame that draws no HUD empties it. */
+static TAGPU_CMD_HUD s_map;
+static int      s_mapCut;               /* a frame had more controls than the map: said once */
 
 /* THE NAMES IN WHAT THE FACES CARRY. A recording's names are the engine's 8-bit text, read as
    Latin-1, and the faces are cut to ASCII and Latin-1 (tools/hudart/fonts.py): a control code
@@ -229,7 +209,19 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
     }
     fprintf(f, "},\"sight\":%d,\"follow\":%d,\"scroll\":%d,\"toast\":", st->sight, st->follow, st->scroll);
     jstr(f, st->toast);
-    fprintf(f, "}}\n");
+    /* the controls of the frame on screen, in client pixels, topmost first: what `tacli hud`
+       clicks */
+    fprintf(f, ",\"held\":");
+    jstr(f, st->held);
+    fprintf(f, "},\"hits\":{\"track\":[%d,%d],\"first\":%u,\"last\":%u,\"at\":[",
+            s_map.track_x0, s_map.track_x1, (unsigned)s_map.first, (unsigned)s_map.last);
+    for (i = 0; i < (int)s_map.n; i++) {
+        const TAGPU_CMD_HUDHIT* t = &s_map.hit[i];
+        fprintf(f, "%s{\"key\":", i ? "," : "");
+        jstr(f, t->key);
+        fprintf(f, ",\"r\":[%d,%d,%d,%d]}", t->x0, t->y0, t->x1, t->y1);
+    }
+    fprintf(f, "]}}\n");
     if (fclose(f) != 0 || !MoveFileExA(DUMP_OUT ".tmp", DUMP_OUT, MOVEFILE_REPLACE_EXISTING)) {
         tagpu_logf("hud: the state dump could not be written (%lu)", (unsigned long)GetLastError());
         return;
@@ -302,7 +294,27 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
         k++;
     }
     st->nmark = k;
+
+    /* THE HUD'S OWN STATE, as its input keeps it (tagpu_hudinput.c): the pointer in units, and
+       Sight and Follow from recorded seats to rows */
     st->mx = st->my = -1;
+    if (h->px >= 0) {
+        st->mx = (float)(h->px - s_ox) / u;
+        st->my = (float)(h->py - s_oy) / u;
+    }
+    st->folded = h->folded;
+    st->toggles = h->toggles;
+    st->scroll = h->scroll;
+    st->sight = st->follow = -1;
+    for (i = 0; i < st->nseat; i++) {
+        s_seatOf[i] = h->seat[i].seat;
+        if (h->sight >= 0 && h->seat[i].seat == (uint8_t)h->sight) st->sight = i;
+        if (h->follow >= 0 && h->seat[i].seat == (uint8_t)h->follow) st->follow = i;
+    }
+    memcpy(st->held, h->held, sizeof st->held);
+    st->held[sizeof st->held - 1] = 0;
+    memcpy(st->toast, h->toast, sizeof st->toast);
+    st->toast[sizeof st->toast - 1] = 0;
     s_px = u;
     s_frame = f->frame_counter;
     s_have = 1;
@@ -310,6 +322,48 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
         DeleteFileA(DUMP_ASK);
         dump(st, vw, vh, u, q8);
     }
+}
+
+static int16_t dev(float v)
+{
+    float r = floorf(v + 0.5f);
+    return (int16_t)(r < -32768.0f ? -32768 : r > 32767.0f ? 32767 : r);
+}
+
+void tagpu_hudstate_drawn(const HUDOPS* ops)
+{
+    int i, cut = 0;
+    s_map.n = 0;
+    if (!ops || !s_have) return;
+    /* topmost first: the build paints in order, so the last control painted is on top */
+    for (i = ops->n - 1; i >= 0; i--) {
+        const HUDOP* p = &ops->op[i];
+        TAGPU_CMD_HUDHIT* t;
+        if (p->kind != HOP_HOT) continue;
+        if (s_map.n >= TAGPU_CMD_HUDHITS) { cut++; continue; }
+        t = &s_map.hit[s_map.n++];
+        t->x0 = dev((float)s_ox + p->r.x * s_px);
+        t->y0 = dev((float)s_oy + p->r.y * s_px);
+        t->x1 = dev((float)s_ox + (p->r.x + p->r.w) * s_px);
+        t->y1 = dev((float)s_oy + (p->r.y + p->r.h) * s_px);
+        lstrcpynA(t->key, ops->text + p->run, sizeof t->key);
+    }
+    if (cut && !s_mapCut) {
+        s_mapCut = 1;
+        tagpu_logf("hud: %d controls past the hit map's %u are not clickable (said once)", cut,
+                   TAGPU_CMD_HUDHITS);
+    }
+    s_map.track_x0 = dev((float)s_ox + ops->track_x0 * s_px);
+    s_map.track_x1 = dev((float)s_ox + ops->track_x1 * s_px);
+    s_map.first = (uint8_t)(ops->first < 0 ? 0 : ops->first > 255 ? 255 : ops->first);
+    s_map.last = (uint8_t)(ops->last < 0 ? 0 : ops->last > 255 ? 255 : ops->last);
+    s_map.nseat = (uint8_t)(s_st.nseat < (int)TAGPU_PK_HUD_SEATS ? s_st.nseat : (int)TAGPU_PK_HUD_SEATS);
+    memcpy(s_map.seat, s_seatOf, sizeof s_map.seat);
+}
+
+void tagpu_hudstate_cmd(TAGPU_CMD_HUD* out)
+{
+    *out = s_map;
 }
 
 int tagpu_hudstate_frame(unsigned frame, const HUDSTATE** st, float* px, int* ox, int* oy)

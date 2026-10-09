@@ -578,13 +578,13 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     int dropped = 0, r, due, ox, oy;
 
     s_ninst = s_nbatch = 0;
+    tagpu_hudstate_drawn(NULL);
     if (s_state == ST_REFUSED || !tagpu_hudstate_frame(d->frame, &st, &px, &ox, &oy)) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || w == 0 || h == 0 || !(px > 0)) return 0;
 
     /* NOTHING IS BUILT UNTIL THE HUD HAS LOADED: tagpu_hudart decodes the parts on a thread of
        its own, and the HUD appears on the first frame after it has published them. Every way the
-       HUD cannot draw for the session is told to tagpu_hudstate_refuse, which gives the dock and
-       the cards back. */
+       HUD cannot draw for the session is told to tagpu_hudstate_refuse. */
     if (!(art = tagpu_hudart_get())) {
         if (tagpu_hudart_failed()) tagpu_hudstate_refuse("its art did not load");
         else tagpu_hudart_start();
@@ -644,14 +644,16 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         tagpu_huddraw_atlas(&gen, &y0, &y1);
         if (gen != s_agen || y1 > y0) hide_glyphs((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_ninst);
     }
+    /* what this frame draws is what a click is tested against */
+    if (s_ninst > 0) tagpu_hudstate_drawn(&s_ops);
     return s_ninst > 0;
 lost:
     /* THE DEVICE FAILED A SUBMIT OR A FENCE partway (tagpu_vk_stage.h): an image is half written
        and the banded path's resources may still be in flight, so the pass stops drawing and asks
        for nothing more. Nothing is destroyed here, mid-frame, where other slots' submits still
        name these objects: tagpu_vk_hud_down gives them back behind the seam's vkDeviceWaitIdle
-       on the seam's next teardown (vk_down, passes_down). The HUD stays off for the session, and
-       the dock and the cards come back (tagpu_hudstate_refuse). */
+       on the seam's next teardown (vk_down, passes_down). The HUD stays off for the session
+       (tagpu_hudstate_refuse). */
     plog(d, "hud: the device failed an upload - the pass stops drawing");
     s_state = ST_REFUSED;
     tagpu_hudstate_refuse("the device failed an upload");

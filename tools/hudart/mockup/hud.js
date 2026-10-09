@@ -126,7 +126,8 @@ const HUD = (() => {
     const D = L.dock, T = D.transport, R = D.rail, y = st.H - st.frame.bottom - D.h;
     const tb = { x: st.frame.panel + T.l, y, w: T.w, h: D.h }, F = frame(T.w, D.h, T.part);
     const bound = { speed: `${st.speed}×`, hud: `${Math.round(st.hud * 100)}%` };
-    let h = `<div class="box" style="${rect(tb)}">` + art(T.part, zero(T.w, D.h)) + T.buttons.map(s => button(
+    // the transport plate and the timeline housing are the HUD's whole: a click between their buttons is taken too
+    let h = `<div class="box" data-act="${D.act}" style="${rect(tb)}">` + art(T.part, zero(T.w, D.h)) + T.buttons.map(s => button(
       { ...s, text: s.text && { ...s.text, html: bound[s.text.bind] } }, T.button, place(F, { in: s.in, pad: T.button.pad }), st)).join('') + `</div>`;
     const rx = tb.x + T.w + R.gap, rw = st.W - R.r - rx, FR = frame(rw, D.h, R.part);
     const lane = place(FR, R.markers), tr = place(FR, R.track), p = st.t / st.T, M = R.markers, B = M.badge;
@@ -139,7 +140,7 @@ const HUD = (() => {
     }).join('');
     const fp = R.track.fill.pad, fb = { x: fp[0], y: fp[1], w: tr.w - fp[0] - fp[2], h: tr.h - fp[1] - fp[3] };
     const ph = R.track.playhead, phb = place(frame(tr.w, tr.h), { pad: ph.pad }), phx = along(tr.w, R.track.ends, p);
-    h += `<div class="box" style="${rect({ x: rx, y, w: rw, h: D.h })}">` + art(R.part, zero(rw, D.h))
+    h += `<div class="box" data-act="${D.act}" style="${rect({ x: rx, y, w: rw, h: D.h })}">` + art(R.part, zero(rw, D.h))
       + `<div class="box" style="${rect(lane)}">${marks}</div>`
       + `<div class="box" data-track data-ends="${R.track.ends}" style="${rect(tr)}">`
       + `<div class="clip" data-fill="${fb.w}" style="${rect({ ...fb, w: fb.w * p })}">${art(R.track.fill.part, zero(fb.w, fb.h))}</div>`
@@ -177,7 +178,7 @@ const HUD = (() => {
     if (n < items.length) {
       const S = C.scroll, Bt = S.button, Tk = S.track, Th = S.thumb, len = used - 2 * Tk.ends - 2 * Th.inset;
       const th = Math.max(Th.min, len * n / items.length), ty = Tk.ends + Th.inset + (last ? (len - th) * first / last : 0);
-      h += art(Tk.part, { x: Tk.x, y: Tk.ends, w: Tk.w, h: used - 2 * Tk.ends }) + art(Th.part, { x: Th.x, y: ty, w: Th.w, h: th })
+      h += art(Tk.part, { x: Tk.x, y: Tk.ends, w: Tk.w, h: used - 2 * Tk.ends }, '', '', { act: Tk.act }) + art(Th.part, { x: Th.x, y: ty, w: Th.w, h: th })
         + [[0, Bt.up, Bt.acts[0]], [used - Bt.h, Bt.down, Bt.acts[1]]].map(([by, ic, act]) => { const b = { x: Bt.x, y: by, w: Bt.w, h: Bt.h };
           return art(Bt.part, b, icon(ic, place(frame(b.w, b.h), { padf: Bt.icon_padf })), 'hot', { act }); }).join('');
     }

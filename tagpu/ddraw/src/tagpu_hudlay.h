@@ -100,6 +100,7 @@ typedef struct {
     int     overflow;       /* something did not fit and was dropped                      */
     int     first, last;    /* the column's first item as drawn, and the greatest it can be:
                                the scroll the state asked for, held to [0, last]           */
+    float   track_x0, track_x1; /* the playhead's run along the timeline, start to end     */
     HUDOP   op[HUD_MAXOP];
     HUDRUN  run[HUD_MAXRUN];
     char    text[HUD_TEXTMAX];
@@ -123,6 +124,7 @@ typedef struct {
 typedef struct {
     float press_shift;
     float track_ends;               /* the playhead's inset at each end of the track      */
+    unsigned toast_ms;              /* how long a toast shows                             */
     float dim_brightness, dim_saturate;
     uint32_t res_rgb[2];            /* metal, energy                                      */
     uint32_t pos_rgb, neg_rgb;

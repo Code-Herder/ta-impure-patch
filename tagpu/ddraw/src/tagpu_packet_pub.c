@@ -111,6 +111,7 @@
                                 THIS thread at the one point it is finished      */
 #include "tagpu_feat.h"      /* whether the mirror wants the map's own features */
 #include "tagpu_hudstate.h"   /* the replay HUD's record, through the replay's own calls */
+#include "tagpu_hudinput.h"   /* ...and the controls it drew, handed back */
 #include "tagpu_datakeys.h"  /* the build ghost's piece masks, computed on THIS thread */
 #include "tagpu_replay.h"    /* the replay's overlays, built at its frame visit on THIS thread */
 
@@ -3128,6 +3129,8 @@ static int __cdecl before_draw(void* entry_esp)
         unsigned us;
         QueryPerformanceCounter(&t0);
         c = tagpu_cmd_take();
+        /* the replay HUD's controls as the player last saw them, for a click before the next take */
+        tagpu_hudinput_take(c ? &c->hud : NULL);
         /* THE CAMERA AND THE RECT, THEN THE TERRAIN LATCH: the eye may only
            be off the engine's range, and the rect only wide, on a draw whose
            ground is ours. The render thread's request is read ONCE, the camera

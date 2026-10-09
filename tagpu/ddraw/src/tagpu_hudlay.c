@@ -469,6 +469,10 @@ static void dock(C* c)
     jsnum(sp, sizeof sp - 3, st->speed);
     strcat(sp, "\xC3\x97");                                  /* U+00D7 MULTIPLICATION SIGN */
     snprintf(hd, sizeof hd, "%ld%%", lround(st->hud * 100));
+    /* the transport plate and the timeline housing are the HUD's whole: a click between their
+       buttons is taken too. Placed before the buttons, so the hit test, last first, finds a
+       button over its plate. */
+    hot(c, tb, str(c, D, "act"));
     art(c, str(c, T, "part"), tb, 1);
     for (i = 0; btns && i < btns->n; i++) {
         const TJV* s = tj_at(btns, i);
@@ -495,6 +499,7 @@ static void dock(C* c)
     lane = place(c, &fr, &pl);
     pl = spec(tk);
     tr = place(c, &fr, &pl);
+    hot(c, box(rx, y, rw, Dh), str(c, D, "act"));
     art(c, str(c, Rl, "part"), box(rx, y, rw, Dh), 1);
     {
         double me = num(c, M, "ends"), dot = num(c, Bd, "dot"), ic = num(c, Bd, "icon");
@@ -519,6 +524,8 @@ static void dock(C* c)
         R trb = at(tr, rx, y);
         F tf = frame(c->l, tr.w, tr.h, NULL);
         hot(c, trb, "track");
+        c->o->track_x0 = (float)(trb.x + along(tr.w, ends, 0));
+        c->o->track_x1 = (float)(trb.x + along(tr.w, ends, 1));
         fb = box(trb.x + p0, trb.y + p1, tr.w - p0 - p2, tr.h - p1 - p3);
         if ((a = art(c, str(c, fill, "part"), fb, 1))) {
             a->clip.x = (float)fb.x; a->clip.y = (float)fb.y; a->clip.w = (float)(fb.w * p); a->clip.h = (float)fb.h;
@@ -613,7 +620,9 @@ static void column(C* c)
         double ty = tke + ins + (last ? (len - th) * first / last : 0);
         double bh = num(c, Bt, "h"), bw = num(c, Bt, "w"), bx = num(c, Bt, "x");
         int j;
-        art(c, str(c, Tk, "part"), box(x + num(c, Tk, "x"), top + tke, num(c, Tk, "w"), used - 2 * tke), 1);
+        R tkb = box(x + num(c, Tk, "x"), top + tke, num(c, Tk, "w"), used - 2 * tke);
+        art(c, str(c, Tk, "part"), tkb, 1);
+        hot(c, tkb, str(c, Tk, "act"));
         art(c, str(c, Th, "part"), box(x + num(c, Th, "x"), top + ty, num(c, Th, "w"), th), 1);
         for (j = 0; j < 2; j++) {
             R b = box(x + bx, top + (j ? used - bh : 0), bw, bh);
@@ -834,6 +843,8 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
     memset(&c, 0, sizeof c);
     c.l = l; c.L = l->L; c.st = st; c.o = out; c.err = err; c.errn = errn;
     out->n = out->nrun = out->ntext = out->overflow = 0;
+    out->first = out->last = 0;
+    out->track_x0 = out->track_x1 = 0;
     if (err && errn) err[0] = 0;
     dock(&c);
     column(&c);
@@ -1009,6 +1020,7 @@ static int load_globals(HUDLAY* l, char* err, size_t errn)
     l->g.pos_rgb = hexrgb(str(&c, v, "pos"));
     l->g.neg_rgb = hexrgb(str(&c, v, "neg"));
     l->g.track_ends = (float)num(&c, obj(&c, obj(&c, obj(&c, l->L, "dock"), "rail"), "track"), "ends");
+    l->g.toast_ms = (unsigned)num(&c, obj(&c, l->L, "toast"), "ms");
     styles = obj(&c, l->L, "styles");
     for (s = styles ? styles->first : NULL; s && !c.bad; s = s->next) {
         struct HUDSTYLE* y;

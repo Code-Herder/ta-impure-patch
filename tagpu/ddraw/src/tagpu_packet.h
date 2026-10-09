@@ -632,13 +632,18 @@ typedef struct TAGPU_PK_PART {
 
 /* ---- THE REPLAY HUD (tagpu_hudstate.c) ----------------------------------
    What the replay HUD draws, in a level that plays a recording: the clock,
-   each recorded player's image as the playback holds it, and the timeline's
-   markers. The game thread takes it through the replay's own calls
-   (inc/tagpu_replay.h) and the dock's markers (tagpu_dock.h), so the fill
-   names no engine address. One record, in the area `hud_off`/`hud_len`, whose
-   length is exactly sizeof(TAGPU_PK_HUD); no area when no recording plays. */
+   each recorded player's image as the playback holds it, the timeline's
+   markers, and the HUD's own state -- the pointer, the button held, the
+   folds, the scroll, the switches and the toast -- which its input keeps on
+   the game thread (tagpu_hudinput.c). The game thread takes it through the
+   replay's own calls (inc/tagpu_replay.h) and the markers' walker
+   (tagpu_hudmarks.h), so the fill names no engine address. One record, in the
+   area `hud_off`/`hud_len`, whose length is exactly sizeof(TAGPU_PK_HUD); no
+   area when no recording plays. */
 #define TAGPU_PK_HUD_SEATS  10u     /* REC_PLAYERS: the recorder's seats       */
-#define TAGPU_PK_HUD_MARKS  320u    /* the dock's 256 markers + 64 bookmarks   */
+#define TAGPU_PK_HUD_MARKS  320u    /* the walker's 256 markers + 64 bookmarks */
+#define TAGPU_PK_HUD_KEY    24u     /* a control's key, HUD_KEYLEN             */
+#define TAGPU_PK_HUD_TOAST  64u     /* HUD_TOASTLEN                            */
 enum { TAGPU_PK_MK_DEATH, TAGPU_PK_MK_DEFEAT, TAGPU_PK_MK_BOOKMARK };
 typedef struct TAGPU_PK_HUDSEAT {
     char     name[32];          /* the recording header's, NUL-terminated       */
@@ -650,9 +655,10 @@ typedef struct TAGPU_PK_HUDSEAT {
     uint8_t  seat;              /* the recorded seat, < TAGPU_PK_HUD_SEATS       */
     uint8_t  pal;               /* the player's colour as a palette index: the
                                    middle pixel of its logo frame
-                                   (tagpu_cards_colour)                          */
+                                   (tagpu_replay_players)                        */
     uint8_t  lost;              /* the commander has died at least once          */
-    uint8_t  pad[3];
+    uint8_t  pov;               /* the seat's camera was recorded: Jump, Follow  */
+    uint8_t  pad[2];
 } TAGPU_PK_HUDSEAT;
 typedef struct TAGPU_PK_HUDMARK {
     uint32_t t;                 /* GameTime                                      */
@@ -668,7 +674,18 @@ typedef struct TAGPU_PK_HUD {
     uint8_t  nseat;             /* <= TAGPU_PK_HUD_SEATS                         */
     uint16_t nmark;             /* <= TAGPU_PK_HUD_MARKS                         */
     uint16_t scale;             /* the replay HUD's own scale, percent: 75, 100,
-                                   125 or 150 (tagpu_hudstate_on)                */
+                                   125 or 150 (its scale button)                 */
+    int16_t  px, py;            /* the pointer in the window's client pixels;
+                                   px < 0: not known (mouse_last_client)         */
+    uint16_t folded;            /* bit t: the t-th team, in the render thread's
+                                   grouping of `seat`, is folded                 */
+    uint8_t  toggles;           /* HUD_TOG_*: the overlay switches that are on   */
+    uint8_t  scroll;            /* the column's first item, as asked             */
+    int8_t   sight, follow;     /* the recorded seat Sight and Follow show; -1
+                                   the full map, the free camera                 */
+    uint8_t  pad[2];
+    char     held[TAGPU_PK_HUD_KEY];     /* the control held down; "" none       */
+    char     toast[TAGPU_PK_HUD_TOAST];  /* UTF-8; "" none                       */
     TAGPU_PK_HUDSEAT seat[TAGPU_PK_HUD_SEATS];
     TAGPU_PK_HUDMARK mark[TAGPU_PK_HUD_MARKS];
 } TAGPU_PK_HUD;
@@ -969,6 +986,29 @@ typedef struct TAGPU_PACKET {
                                    or the consumer's frame_end counts a violation */
 } TAGPU_PACKET;
 
+/* THE REPLAY HUD'S HIT MAP, in the command record: the controls of the last
+   frame the HUD was drawn on, for the game thread to hit-test a click against
+   what the player saw (tagpu_hudinput.c). A LEVEL: a frame that did not draw the
+   HUD posts n = 0. Topmost first, in the window's client pixels, each key as
+   the layout makes it: a row's index ("jump:2") is the drawn frame's, which
+   `seat` turns into the recorded seat, and a team's the t-th of its grouping. */
+#define TAGPU_CMD_HUDHITS 64u
+typedef struct TAGPU_CMD_HUDHIT {
+    int16_t  x0, y0, x1, y1;    /* [x0, x1) x [y0, y1)                           */
+    char     key[TAGPU_PK_HUD_KEY];
+} TAGPU_CMD_HUDHIT;
+typedef struct TAGPU_CMD_HUD {
+    uint32_t n;                 /* <= TAGPU_CMD_HUDHITS                          */
+    int16_t  track_x0, track_x1;/* the run the playhead travels, start to end    */
+    uint8_t  first, last;       /* the column's first item as drawn, and the
+                                   greatest it can be                            */
+    uint8_t  nseat;             /* <= TAGPU_PK_HUD_SEATS                         */
+    uint8_t  pad;
+    uint8_t  seat[TAGPU_PK_HUD_SEATS];  /* row i's recorded seat                 */
+    uint8_t  pad2[2];
+    TAGPU_CMD_HUDHIT hit[TAGPU_CMD_HUDHITS];
+} TAGPU_CMD_HUD;
+
 /* THE COMMAND RECORD — render thread to game thread. One record
    per render frame, latest wins: every quantity in it is either a LEVEL (the
    game thread re-applies it before every in-play draw for as long as it
@@ -1003,6 +1043,7 @@ typedef struct TAGPU_CMD {
                                    wheel, and the apply stops writing         */
     uint32_t follow_seen;       /* the latest follow epoch the render thread
                                    drew at its level: a Jump ends there       */
+    TAGPU_CMD_HUD hud;          /* the replay HUD's controls, a level         */
     uint32_t crc;               /* the primitive's suffix, as above            */
     uint32_t tail_seq;
 } TAGPU_CMD;
