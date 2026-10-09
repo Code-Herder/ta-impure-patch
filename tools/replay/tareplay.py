@@ -1036,7 +1036,9 @@ def twin(w, log, fix):
     rc, o = tacli("ui", w.name, "click", "OK", timeout=INPUT_TIMEOUT)
     if rc:
         raise CouldNotRun(f"the twin: the in-game menu's OK: {last(o)}")
-    in_world(w, ACK_S)
+    # closed: the screen under it is the world's, or a selected unit's build menu over it
+    until_fact(w, lambda: json.loads(ui(w, "--json"))["gui"].upper() != "ARMOPT.GUI",
+               "the twin: the in-game menu did not close")
     adopt_held(w, log, "the twin's OK")
     if log.at != g1:
         raise CouldNotRun(f"the twin: the menu's OK let the level run from {g1} to {log.at}")
