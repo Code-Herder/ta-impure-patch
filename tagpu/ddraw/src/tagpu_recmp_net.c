@@ -39,6 +39,48 @@ int tagpu_recmp_identity_read(const void* bytes, unsigned size, const GUID* matc
     return 1;
 }
 
+/* THE RECORDER'S CHANNEL IS ALWAYS THE SYSTEM DIRECTPLAY, whatever the game folder ships.
+   TADR's Dplayx.dll, the Patch Loader's dplayx.dll (which forwards to tplayx.dll) and the
+   other stand-ins sit in the game folder under the system DLL's name, and a bare
+   LoadLibraryA("dplayx.dll") resolves to them -- to the module the exe has already bound,
+   or to the folder's file, the first place the search looks. They are not DirectPlay's COM
+   server: with one of them, every two-player network game crashed on both peers at EIP 0
+   inside this open (retail+tadr1, prota-4.8; MEASURED 2026-10-09); which call jumped there
+   is not established. So the system DirectPlay is loaded by its full path, and a full path
+   names a file, not a module: on Windows the rule that a loaded module of the same name
+   wins applies only to a name without a path (the DLL search order), and under Wine the
+   full-path load returns the system module beside the stand-in the exe has bound (MEASURED
+   2026-10-09, both setups' host and joiner: `recmp: private channel on
+   C:\windows\system32\dplayx.dll`, then the session open), as the takeover's forwarders
+   already load it (tagpu_takeover.c, dp_proc). The module loaded is checked anyway: one whose
+   file is in the game's folder is refused, and the open fails, logged, which refuses
+   multiplayer recording while the game plays on. */
+static HMODULE system_dplay(HRESULT* hr)
+{
+    wchar_t path[MAX_PATH], got[MAX_PATH], exe[MAX_PATH];
+    wchar_t* slash;
+    HMODULE module;
+    UINT n = GetSystemDirectoryW(path, MAX_PATH);
+    DWORD m, e;
+    got[0] = 0;
+    if (!n || n >= MAX_PATH - 12) { *hr = E_FAIL; return NULL; }
+    wcscpy(path + n, L"\\dplayx.dll");
+    module = LoadLibraryW(path);
+    if (!module) { *hr = HRESULT_FROM_WIN32(GetLastError()); return NULL; }
+    m = GetModuleFileNameW(module, got, MAX_PATH);
+    e = GetModuleFileNameW(NULL, exe, MAX_PATH);
+    slash = e && e < MAX_PATH ? wcsrchr(exe, L'\\') : NULL;
+    if (!m || m >= MAX_PATH || !slash ||
+        (!_wcsnicmp(got, exe, (size_t)(slash - exe) + 1) && !wcschr(got + (slash - exe) + 1, L'\\'))) {
+        tagpu_logf("recmp: the system DirectPlay did not load: %ls is the game folder's", got);
+        FreeLibrary(module);
+        *hr = DPERR_UNSUPPORTED;
+        return NULL;
+    }
+    tagpu_logf("recmp: private channel on %ls", got);
+    return module;
+}
+
 static HRESULT object(HMODULE module, const CLSID* clsid, const IID* iid, void** out)
 {
     typedef HRESULT (WINAPI *GetClass)(const CLSID*, const IID*, void**);
@@ -224,8 +266,8 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
     if (FAILED(hr)) goto fail;
     net->com = 1;
     stage="native library";
-    net->module = LoadLibraryA("dplayx.dll");
-    if (!net->module) { hr = HRESULT_FROM_WIN32(GetLastError()); goto fail; }
+    net->module = system_dplay(&hr);
+    if (!net->module) goto fail;
     stage="native object";
     hr = object(net->module, &CLSID_DirectPlay, &IID_IDirectPlay4A, (void**)&net->dp);
     if (hr != DP_OK) goto fail;

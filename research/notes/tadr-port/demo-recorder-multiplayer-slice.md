@@ -425,7 +425,25 @@ async sends, with sixteen fixed contexts. An accepted send, `DPERR_PENDING` or
 `DP_OK`, transfers the copied packet to the SDK; only a validated SENDCOMPLETE
 releases that context, and only success counts delivery. A seventeenth pending send and an early Close
 return BUSY. An abort ends only the worker's private interface and makes no
-delivery claim. The current backend supports TCP/IP only. Worker discovery retries are installed; cross-address discovery, host migration and production terminal manifests remain unverified.
+delivery claim. The current backend supports TCP/IP only.
+
+**The adapter's DirectPlay is always the system's**, loaded by its full path
+(`GetSystemDirectoryW` + `\dplayx.dll`), whatever the game folder ships. A bare
+`LoadLibraryA("dplayx.dll")` resolved to the game folder's stand-in -- TADR's
+`Dplayx.dll`, the Patch Loader's `dplayx.dll` that forwards to `tplayx.dll` -- which
+is not DirectPlay's COM server: every two-player network game of retail+tadr1 and
+prota-4.8 crashed on both peers at EIP 0 inside the open, before `recmp: isolated
+session open` (MEASURED 2026-10-09 under Wine; plain retail, with no stand-in, opened
+at the same commit; which call jumped to 0 was not established). A full path names a
+file: on Windows the rule that an already-loaded module of the same name wins is the
+search order's, for a name without a path, and under Wine the full-path load returns
+the system module beside the stand-in the exe has bound -- MEASURED 2026-10-09 on both
+setups' host and joiner, `recmp: private channel on C:\windows\system32\dplayx.dll`
+and then `recmp: isolated session open`, the takeover having logged the exe's
+DirectPlay slots pointed at Windows' own. The adapter still checks the module it got:
+one whose file is in the game's folder is refused, the open fails at `native library`
+(logged), and the worker's failure refuses multiplayer recording while the game plays
+on. That refusal path is the one every failed open takes; it was not provoked here. Worker discovery retries are installed; cross-address discovery, host migration and production terminal manifests remain unverified.
 
 The SDK's [GetPlayerAddress contract](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpref_7jqx.content.htm)
 allows several local network addresses and returns both text forms. The first

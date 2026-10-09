@@ -200,7 +200,10 @@ order, on the very routes where 1b did not make it inert. Every one of those fil
 ProTA's), so the file answers the same question — has **all** its slots pointed at Impure's own
 forwarders, or none of them: a slot Impure cannot name leaves the descriptor alone and says so
 in the log. A forwarder loads Windows' `dplayx.dll` by its full path on its first call, from
-the game's code and outside the loader lock, and passes every call on. TotalA.exe 3.1 imports
+the game's code and outside the loader lock, and passes every call on. The recorder's own
+multiplayer channel loads it the same way (`tagpu_recmp_net.c`): a bare `dplayx.dll` resolved to
+the game folder's stand-in and crashed every network game of a TADR or Patch Loader setup
+([the multiplayer slice](../tadr-port/demo-recorder-multiplayer-slice.md)). TotalA.exe 3.1 imports
 `DPLAYX.dll` by ordinal 1, 2 and 4 and looks up no DirectPlay name anywhere (DISASSEMBLED:
 `objdump -p`, `strings`), so those three slots are every way the exe has of reaching
 DirectPlay ([the engine map](../exe-reverse-engineering.md), *Where other patchers meet ours*).
