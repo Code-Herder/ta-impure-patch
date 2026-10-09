@@ -53,9 +53,8 @@ static unsigned s_scale;                /* the scale button's choice; 0 = the st
    is gone -- answered No, or never opened. Yes tears the level down instead, and the level's end
    forgets the question. */
 static int      s_leaveWant, s_leaveAsked, s_leaveWasPaused;
-/* THE STATS WINDOW IS KEPT FOR THE SESSION, never in impure.cfg (the owner's choice of
-   2026-10-09): its measure, its split and its place, until the game exits; it is closed at every
-   replay's start. Its first measure is the mockup's (index.html, S.sm) and its first place the
+/* THE STATS WINDOW IS KEPT FOR THE SESSION, never in impure.cfg: its measure, its split and its
+   place, until the game exits; it is closed at every replay's start. Its first measure is the mockup's (index.html, S.sm) and its first place the
    layout's (window x, y), until the first drag. */
 static int      s_statOpen, s_statTeam, s_statPlaced;
 static char     s_statKey[TAGPU_PK_HUD_MEASURE] = "units";
@@ -70,6 +69,11 @@ void tagpu_hudinput_take(const TAGPU_CMD_HUD* h)
     s_hit = *h;
     if (s_hit.n > TAGPU_CMD_HUDHITS) s_hit.n = TAGPU_CMD_HUDHITS;
     if (s_hit.nseat > TAGPU_PK_HUD_SEATS) s_hit.nseat = TAGPU_PK_HUD_SEATS;
+}
+
+int __cdecl tagpu_hudinput_on_screen(void)
+{
+    return s_hit.n && tagpu_hudstate_drawing();
 }
 
 /* THE HUD TAKES A CLICK ONLY WHERE THE PLAYER SAW IT AND COULD REACH IT: the playback is live, the
@@ -135,6 +139,21 @@ static void stat_place(float* x, float* y)
     if (s_statPlaced || !art) { *x = s_statX; *y = s_statY; return; }
     *x = tagpu_hudlay_globals(art->lay)->win_x;
     *y = tagpu_hudlay_globals(art->lay)->win_y;
+}
+
+/* where the window was drawn: its place as asked, held on the screen of the last map as the layout
+   holds it, so a place kept from a larger screen or a smaller HUD scale is no dead zone for the drag */
+static void stat_origin(float* x, float* y)
+{
+    const HUDART* art = tagpu_hudart_get();
+    stat_place(x, y);
+    if (art && s_hit.u > 0) {
+        const HUDGLOBALS* g = tagpu_hudlay_globals(art->lay);
+        if (*x > s_hit.W - g->win_w) *x = s_hit.W - g->win_w;
+        if (*y > s_hit.H - g->win_h) *y = s_hit.H - g->win_h;
+        if (*x < 0) *x = 0;
+        if (*y < 0) *y = 0;
+    }
 }
 
 /* THE WINDOW DRAG, as the mockup's: the place at the press moved by the pointer's travel in units,
@@ -292,7 +311,7 @@ int tagpu_hudinput_button(int cx, int cy, int gx, int gy, int down, int right)
         s_wdrag = 1;
         s_wdx = cx;
         s_wdy = cy;
-        stat_place(&s_wox, &s_woy);
+        stat_origin(&s_wox, &s_woy);
     }
     return 1;
 }

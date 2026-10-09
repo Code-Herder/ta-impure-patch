@@ -85,7 +85,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_gaf.h"
 #include "tagpu_packet.h"
-#include "tagpu_hudstate.h"
+#include "tagpu_hudinput.h"
 #include "git.h"
 
 #define TA_MAINPP      0x00511DE8u
@@ -9659,8 +9659,10 @@ static void watch_sites_init(void)
    as 0x46A140 does after loading the same esi/edi. A recording played with the replay HUD shows no
    icon: the HUD's play button carries the pause (the mockup has none), and the icon sits in the
    middle of the world, under the stats window. The stub takes the icon's branch only when the
-   pause bit is set and tagpu_hudstate_drawing answers 0; it keeps every register, and neither
-   continuation reads the flags before setting them. Game thread, inside the draw. */
+   pause bit is set and tagpu_hudinput_on_screen answers 0 -- the frame on the screen shows no HUD,
+   its art still loading or its pass down, so the icon is the pause's only sign; it keeps every
+   register, and neither continuation reads the flags before setting them. Game thread, inside the
+   draw, after the in-play draw's take of the command record. */
 static void pause_icon_init(void)
 {
     enum { SITE = 0x0046A107u, DRAW = 0x0046A110u, SKIP = 0x0046A140u };
@@ -9680,7 +9682,7 @@ static void pause_icon_init(void)
     memcpy(p, STOLEN, 7); p += 7;                       /* test byte [eax+0x38A51],1 */
     *p++ = 0x74; *p++ = 0x10;                           /* jz skip             */
     *p++ = 0x60;                                        /* pushad              */
-    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)tagpu_hudstate_drawing); p += 4;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)tagpu_hudinput_on_screen); p += 4;
     *p++ = 0x85; *p++ = 0xC0;                           /* test eax,eax        */
     *p++ = 0x61;                                        /* popad (ZF kept)     */
     *p++ = 0x75; *p++ = 0x05;                           /* jnz skip            */

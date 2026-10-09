@@ -18,6 +18,12 @@
    for -- is no controls. */
 void tagpu_hudinput_take(const TAGPU_CMD_HUD* h);
 
+/* The HUD is on the screen: a recording plays with the HUD on (tagpu_hudstate_drawing) and the
+   record last taken had controls -- the render thread posts the last frame's map, empty when that
+   frame drew no HUD, and the in-play draw takes it before anything it draws. Game thread; cdecl,
+   for the pause icon's stub (tagpu_replay.c, THE PAUSE ICON). */
+int  __cdecl tagpu_hudinput_on_screen(void);
+
 /* A left or right button at the window's client point (cx, cy) -- cx < 0 when the point is not
    known, an injected click in the engine's own space -- from either of the shield's paths, and
    (gx, gy), the engine's point the same message carries. 1 = consumed: the engine never sees it.

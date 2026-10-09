@@ -43,7 +43,7 @@ void tagpu_hudstate_refuse(const char* why)
                    "session", why);
 }
 
-int __cdecl tagpu_hudstate_drawing(void)
+int tagpu_hudstate_drawing(void)
 {
     unsigned first, last;
     return tagpu_hudstate_on() && tagpu_replay_live() && tagpu_replay_span(&first, &last);

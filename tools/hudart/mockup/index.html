@@ -193,7 +193,9 @@ layer.addEventListener('pointerdown', e => {
   if (b && !b.dataset.on) { HUD.press(b, true); const up = () => { HUD.press(b, false); window.removeEventListener('pointerup', up); }; window.addEventListener('pointerup', up); }
   const tr = e.target.closest('[data-track]');
   if (tr) { seek = tr; tr.setPointerCapture(e.pointerId); seekTo(tr, e.clientX); return; }
-  if (e.target.closest('[data-act="drag"]')) { const st = state().stats; drag = { x: e.clientX, y: e.clientY, ox: st.x, oy: st.y }; e.target.setPointerCapture(e.pointerId); }
+  // the drag starts from where the window is drawn: its place held on this screen, as hud.js holds it
+  if (e.target.closest('[data-act="drag"]')) { const s = state(), W = HUD.layout.window;
+    drag = { x: e.clientX, y: e.clientY, ox: Math.max(0, Math.min(s.W - W.w, s.stats.x)), oy: Math.max(0, Math.min(s.H - W.h, s.stats.y)) }; e.target.setPointerCapture(e.pointerId); }
 });
 layer.addEventListener('pointermove', e => {
   if (seek) seekTo(seek, e.clientX);

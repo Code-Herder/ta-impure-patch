@@ -294,7 +294,7 @@ int tagpu_hudmarks_stats(const char* key, const unsigned char* seat, int nseat, 
     /* the walker writes the base and then a sample before it publishes the count: the base read
        after a count is that walk's, and the samples below it are whole */
     n = InterlockedCompareExchange(&s_svN, 0, 0);
-    *base = s_base;
+    *base = n ? s_base : 0;
     if (m == ST_N) return 0;
     if (n > cap) n = cap;
     for (i = 0; i < nseat; i++)

@@ -222,8 +222,12 @@ The owner's decisions:
 - **The chart's image** (*The stats window*) is one RGBA32F image, 578 × 17 texels, 157 KB. It
   goes whole, in the frame's own command buffer through the slot's staging, behind the same
   barrier as the atlas's rows, whenever its generation moves (`send_chart`); a frame with no room
-  for it hides the chart's instances and the next frame sends it. The HUD draws nothing until a
-  first generation is on the device, so every draw that binds the image binds a written one. A
+  for it hides the chart's instances and the next frame sends it. The first frame after the
+  pass is built clears the image (`clear_chart`, `vkCmdClearColorImage` between two barriers): a
+  sampled layout whose header draws no line, so every draw that binds the image binds a written
+  one and the HUD never waits on the first upload's room; a slot whose empty buffer cannot hold
+  the image logs `hud: the chart's image (… bytes) does not fit the slot's staging (… mapped)`
+  once, and only the lines wait. A
   device that cannot sample `R32G32B32A32_SFLOAT` gets no pass (`hud: this device cannot filter
   or blit RGBA8 / R8, or sample RGBA32F - the pass stays down`).
 - **A failed upload refuses the pass** (`ST_REFUSED`): a submit or a fence the device failed,
@@ -408,9 +412,12 @@ the recorder writes nothing for it.
 DrawGameScreen draws the GAF `igpaused` in the middle of the world while the pause bit is set,
 over the window. `pause_icon_init` (`tagpu_replay.c`, THE PAUSE ICON) puts a stub on its test at
 `0x46A107`: the nine bytes of the `test`/`je`, checked with the `mov eax,[main]` before them,
-are replaced by the same test, and when the bit is set the stub calls `tagpu_hudstate_drawing`
-(the fill's own test: the Vulkan lane, the HUD not refused, a live playback with a span) and
-draws the icon only when it answers 0. Game thread, inside the draw; it writes nothing. If the
+are replaced by the same test, and when the bit is set the stub calls `tagpu_hudinput_on_screen`
+and draws the icon only when it answers 0. That is the HUD on the screen, not merely on: the
+fill's own test (`tagpu_hudstate_drawing`: the Vulkan lane, the HUD not refused, a live playback
+with a span) and controls in the command record last taken, which the render thread posts empty
+for a frame that drew no HUD and the in-play draw takes before anything it draws. While the art
+loads, the pass is down or the chart's first image is not yet on the device, the icon shows. Game thread, inside the draw; it writes nothing. If the
 bytes differ the log says `replay: the pause icon's test 0x46A107 holds other bytes: a replay
 shows it`.
 
@@ -510,8 +517,11 @@ buttons; it is how `tacli` finds a row to hover before clicking one of its butto
   a frame, the newest replacing one not yet run; the release seeks to where it is. x maps along
   the playhead's run from the recording's first GameTime to its last, clamped to the run. A drag
   ends if the HUD stops taking clicks (`active` false at a fill).
-- **The window drag:** a press on `drag` keeps the press's client point and the window's place
-  then (the last drag's, else the layout's `window.x`, `window.y`). Each packet fill, from the
+- **The window drag:** a press on `drag` keeps the press's client point and where the window is
+  drawn then: its place (the last drag's, else the layout's `window.x`, `window.y`) held on the
+  last map's screen as the layout holds it (`stat_origin`), so a place kept from a smaller HUD
+  scale or a larger screen, drawn clamped, moves with the first pixel of a drag. The mockup's
+  host starts its drag the same way. Each packet fill, from the
   last client point (`mouse_last_client`), and the release, at its own, put the window at x =
   clamp(ox + (cx − dx) / u, 0, W − `window.w`), and y likewise with `window.h`, where u, W and H
   are the frame on screen's, from the command record (`TAGPU_CMD_HUD`'s `u`, `W`, `H`). A

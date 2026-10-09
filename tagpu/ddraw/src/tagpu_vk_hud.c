@@ -65,7 +65,7 @@
     X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
     X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
-    X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier) X(vkCmdBlitImage)
+    X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier) X(vkCmdBlitImage) X(vkCmdClearColorImage)
 
 #define DECL(n) static PFN_##n n;
 IFNS(DECL)
@@ -91,6 +91,7 @@ static VkSampler             s_clamp, s_repeat, s_glyph;
 static TEX                   s_part[MAXPART], s_atlas, s_chart;
 static VkSampler             s_near;
 static unsigned              s_cgen;            /* the chart generation the device holds; 0 none */
+static int                   s_cclear;          /* the chart's image cleared since the build      */
 static int                   s_nparts;
 static int                   s_nsent;           /* the parts uploaded and their chains blitted */
 static int                   s_sent;            /* all of them                                 */
@@ -102,7 +103,7 @@ static TAGPU_VKSTAGE         s_stage[TAGPU_VK_SLOTS];
 static HUDOPS                s_ops;             /* render thread's; 400 KB, never on a stack  */
 static HUDBATCH              s_batch[HUD_MAXBATCH];
 static int                   s_nbatch, s_ninst;
-static int                   s_saidDrop, s_saidMiss;
+static int                   s_saidDrop, s_saidMiss, s_saidChart;
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
 {
@@ -481,6 +482,7 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
     s_nsent = s_sent = 0;
     s_agen = 0;
     s_cgen = 0;
+    s_cclear = 0;
     plog(d, "hud: the pass is up - %d parts, a %dx%d glyph atlas, %u frame slots",
          s_nparts, HUD_ATLAS, HUD_ATLAS, (unsigned)d->slots);
     return 1;
@@ -577,7 +579,7 @@ static int send_atlas(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* 
    its generation has moved. Every texel is written, so the image's old contents go: the barrier
    leaves UNDEFINED, and its first scope still holds the reads of every frame already submitted.
    1 the device holds the generation, 0 not this frame. */
-static int send_chart(VkCommandBuffer cb, TAGPU_VKSTAGE* st)
+static int send_chart(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st)
 {
     unsigned gen;
     const float* a = tagpu_huddraw_chart(&gen);
@@ -587,7 +589,15 @@ static int send_chart(VkCommandBuffer cb, TAGPU_VKSTAGE* st)
 
     if (gen == s_cgen) return 1;
     off = (st->used + 15) & ~(VkDeviceSize)15;
-    if (!st->map || off + bytes > st->cap) return 0;
+    if (!st->map || off + bytes > st->cap) {
+        /* a buffer with nothing else in it that cannot hold the image: the lines wait for one */
+        if (st->map && !st->used && !s_saidChart) {
+            s_saidChart = 1;
+            plog(d, "hud: the chart's image (%u bytes) does not fit the slot's staging (%u mapped): "
+                 "its lines wait for room (said once)", (unsigned)bytes, (unsigned)st->cap);
+        }
+        return 0;
+    }
     memcpy(st->map + off, a, (size_t)bytes);
     st->used = off + bytes;
     b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -617,6 +627,37 @@ static int send_chart(VkCommandBuffer cb, TAGPU_VKSTAGE* st)
                          0, 0, NULL, 0, NULL, 1, &b);
     s_cgen = gen;
     return 1;
+}
+
+/* The chart's image cleared, once after the build: a sampled layout and a header that draws no line
+   (row 0's count 0), so the HUD never waits on the image's first upload, which needs room in a
+   frame's staging -- the lines wait for it (hide_mode), the rest of the HUD does not. */
+static void clear_chart(VkCommandBuffer cb)
+{
+    VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    VkClearColorValue zero;
+    VkImageSubresourceRange all;
+
+    memset(&zero, 0, sizeof zero);
+    memset(&all, 0, sizeof all);
+    all.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    all.levelCount = 1;
+    all.layerCount = 1;
+    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = s_chart.img;
+    b.subresourceRange = all;
+    b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, NULL, 0, NULL, 1, &b);
+    vkCmdClearColorImage(cb, s_chart.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &all);
+    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, NULL, 0, NULL, 1, &b);
 }
 
 /* ---- the frame ------------------------------------------------------------------------------- */
@@ -683,6 +724,10 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     /* THE UPLOADS, through this slot's staging, which the seam's fence wait has freed; a slot
        with nothing to send gives its buffer back (tagpu_vk_stage.h, THE SHAPE). */
     sg = &s_stage[slot];
+    if (!s_cclear) {
+        clear_chart(cb);
+        s_cclear = 1;
+    }
     {
         unsigned gen, cgen;
         int y0, y1;
@@ -701,9 +746,9 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             }
         }
         if (s_sent && (r = send_atlas(d, cb, sg)) < 0) goto lost;
-        if (s_sent && s_agen) send_chart(cb, sg);
+        if (s_sent && s_agen) send_chart(d, cb, sg);
     }
-    if (!s_sent || !s_agen || !s_cgen) { s_ninst = 0; return 0; }
+    if (!s_sent || !s_agen) { s_ninst = 0; return 0; }
     /* THE TEXT DRAWS ONLY FROM WHAT THE DEVICE HOLDS: this build's glyphs are in the atlas the
        device has once its generation is s_agen and no row is left dirty */
     {
@@ -787,6 +832,7 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     s_nsent = s_sent = 0;
     s_agen = 0;
     s_cgen = 0;
+    s_cclear = 0;
     s_ninst = s_nbatch = 0;
     /* UNBUILT, not REFUSED: a teardown or a resize must let the pass come back */
     s_state = ST_UNBUILT;

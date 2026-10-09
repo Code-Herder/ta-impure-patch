@@ -26,8 +26,8 @@ int  tagpu_hudstate_on(void);
 void tagpu_hudstate_refuse(const char* why);
 
 /* The HUD draws for the level in play: it is on and a recording plays, the fill's own test. Game
-   thread; cdecl, for the pause icon's stub (tagpu_replay.c, THE PAUSE ICON). */
-int  __cdecl tagpu_hudstate_drawing(void);
+   thread. */
+int  tagpu_hudstate_drawing(void);
 
 /* The packet's HUD record for this draw, GameTime `now`: 1 when a recording plays and the HUD is
    on, 0 (and `h` untouched) otherwise. Game thread, from the packet's fill. */
