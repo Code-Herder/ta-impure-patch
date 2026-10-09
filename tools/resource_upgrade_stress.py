@@ -4,8 +4,11 @@
 prepare reads installed map content and writes a private resource-supply unit
 and a scenario. run uses real configured mouse commands, then measures reclaim,
 nanoframe creation and completion. Original content stays in the game folder.
-Every command holds the world and advances it by exact ticks (resource_regression.py,
-IN LOCKSTEP): the clicks land on a held world and each observation reads one.
+Every command is handed the world held, advances it by exact ticks and leaves it
+held (resource_regression.py, IN LOCKSTEP): the clicks land on a held world and
+each observation reads one. tareplay's lanes hold it; by hand, an empty
+`tagpu_hold.on` in the game folder before `tacli scenario load` holds the level
+after its first step (tagpu_replay.c, THE LAUNCH'S HOLD).
 """
 import argparse
 import json
@@ -17,7 +20,7 @@ import sys
 from pathlib import Path
 
 import hpipack
-from resource_regression import Check, TACLI
+from resource_regression import ACK_S, Check, TACLI
 
 OBSERVE_STEP = 150   # ticks between two observations of a stress run
 CORE_STEP = 30       # ticks between two observations of the CORE handoff, to T+600
@@ -199,7 +202,8 @@ def run(name, scenario, out, ticks):
     shell = Stress(name, {})
     shell.hold()
     reply = subprocess.run([sys.executable, str(TACLI), "scenario", "apply", name,
-                            str(scenario), "--json"], capture_output=True, text=True, timeout=60)
+                            str(scenario), "--json"], capture_output=True, text=True,
+                           timeout=ACK_S)
     assert reply.returncode == 0, reply.stdout + reply.stderr
     applied = json.loads(reply.stdout)
     # the applied units' view of the same world, still held where the shell held it

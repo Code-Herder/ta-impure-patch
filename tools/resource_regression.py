@@ -5,13 +5,15 @@ The live lane must produce real build/reclaim/guard orders before tareplay
 compares it with playback, restoration and fresh-process seeks. Memory reads
 are measurements through tacli's game-thread peek; all actions use its input.
 
-IN LOCKSTEP: a case holds the world (the DLL's `pause at` and `resume`, a test
-launch's own pacing, tagpu_replay.c THE PAUSE AT T) and advances it by exact
-ticks. Every click and key lands on a held world, so the world a click meets
-is a function of the ticks the case asked for, never of wall-clock pacing; an
-input's direct effect is read once after `tacli keys` returns (it returns once
-the engine has consumed every event); simulation progress is read after each
-tick of an explicit, bounded advance.
+IN LOCKSTEP: a case is handed the world held (tareplay's run step, on a test
+launch's own pacing: tagpu_replay.c THE LAUNCH'S HOLD and THE PAUSE AT T),
+advances it by exact ticks (`pause at` and `resume`) and hands it back held
+where it left it. Every click and key lands on a held world, so the world a
+click meets is a function of the ticks the case asked for, never of wall-clock
+pacing; an input's direct effect is read once after `tacli keys` returns (it
+returns once the engine has consumed every event); simulation progress is read
+after each tick of an explicit, bounded advance. A world that is not held is
+refused: there is no tick a running world could be stopped at for certain.
 """
 import argparse
 import json
@@ -30,6 +32,7 @@ TACLI = TREE / "tools/tacli"
 GAMETIME = "*0x511DE8+0x38a47"
 PAUSED = "*0x511DE8+0x38a51:2"   # bit 0: the pause the Pause key flips, and THE PAUSE AT T sets
 TRIGGER = "tagpu_replay.trigger"
+ACK_S = 60                       # a frame's answer: a trigger's line, the camera, a menu (tareplay)
 
 
 def tacli_api():
@@ -40,15 +43,21 @@ def tacli_api():
     return api
 
 
+FIXTURE_UNITS = {"ARMCK", "ARMACK", "CORCK", "ARMPW", "ARMMEX"}
+
+
 class Check:
-    def __init__(self, name):
+    def __init__(self, name, need=FIXTURE_UNITS):
+        """The units the case needs (`need`, the player's types) in the roster. The viewer needs
+        its constructor only: it runs at the twin, by which the fixture's own case may have
+        upgraded the mex away (resource-refusals reclaims it for a Moho from GameTime 121)."""
         self.name = name
         self.lockstep()
         self.base = self.values("*0x511DE8+0x14357")[0]
         def loaded():
             roster = self.call("roster", "--json")["units"]
             units = {u["type"].upper(): u["engine_index"] for u in roster if u["owner"] == 0}
-            return units if {"ARMCK", "ARMACK", "CORCK", "ARMPW", "ARMMEX"} <= units.keys() else None
+            return units if set(need) <= units.keys() else None
         self.units = self.until(loaded, "resource fixture units have not reached the roster")
 
     # -- lockstep: the world held, advanced by exact ticks
@@ -61,7 +70,7 @@ class Check:
         self.log = []
         self.held = False
 
-    def _answer(self, rx, start, seconds=60):
+    def _answer(self, rx, start, seconds=ACK_S):
         """The first log line from index `start` on matching `rx`."""
         end = time.monotonic() + seconds
         while True:
@@ -88,15 +97,11 @@ class Check:
         assert got.startswith("pause: resumed"), f"resume: {got}"
 
     def _pause_at(self, T):
-        """`pause at T` armed; the index its taking is looked for from. A refusal names the
-        GameTime the level is at, or None when the refusal is another."""
+        """`pause at T` armed, T past the held tick; the index its taking is looked for from."""
         start = self._write(f"pause at {T}")
         got = self._answer(rf"pause: (armed for GameTime {T}$|at {T} refused: .*)", start)
-        if "armed for" in got:
-            return start, None
-        m = re.search(r"the level is at GameTime (\d+)", got)
-        assert m, f"pause at {T}: {got}"
-        return None, int(m.group(1))
+        assert "armed for" in got, f"pause at {T}: {got}"
+        return start
 
     def _taken(self, T, start):
         got = self._answer(rf"pause: (paused at GameTime {T}$|at {T} not taken.*)", start)
@@ -104,41 +109,33 @@ class Check:
         self.held, self.tick = True, T
 
     def _still_held(self):
-        """The pause bit THE PAUSE AT T set is still set: nothing let the world run under a case
-        that holds it (`resume` checks only that the DLL took a pause)."""
+        """The hold's pause bit is still set: nothing let the world run under a case that holds it
+        (`resume` checks only that the DLL took a pause)."""
         assert self.values(PAUSED)[0] & 1, f"the world held at GameTime {self.tick} ran free"
 
     def hold(self):
-        """The world held a few ticks on, wherever it was running; the case's lockstep starts
-        there. The level may pass a T before it is armed (the refusal names where it is). A world
-        an earlier process left held is resumed first; one the player paused refuses that."""
-        if self.values(PAUSED)[0] & 1:
-            self._resume()
-        T = self.values(GAMETIME)[0] + 2
-        for _ in range(5):
-            start, now = self._pause_at(T)
-            if start is not None:
-                return self._taken(T, start)
-            T = now + 30
-        raise AssertionError("the level ran past every GameTime the hold asked for")
+        """The world as it was handed over, held: the case's lockstep starts at its GameTime. The
+        pause bit is the hold's (THE LAUNCH'S HOLD or THE PAUSE AT T, which the hold keeper keeps
+        set until `resume`), and both values are read in one peek, at one flip."""
+        tick, paused = self.values(GAMETIME, PAUSED)
+        assert paused & 1, f"the world was handed over running at GameTime {tick}: a case needs it held"
+        self.held, self.tick = True, tick
 
     def advance(self, n=1):
         """Exactly `n` simulation ticks, and held again: `pause at` the held tick plus n, then
-        `resume` (which clears only the pause THE PAUSE AT T took)."""
+        `resume` (which clears only a pause the DLL's pacing took)."""
         assert self.held, "advance needs the world held"
         self._still_held()
         T = self.tick + n
-        start, now = self._pause_at(T)
-        assert start is not None, f"pause at {T}: the level is at GameTime {now}"
+        start = self._pause_at(T)
         self._resume()
         self._taken(T, start)
 
     def release(self):
-        """The world running again, as tareplay's lane handed it over."""
+        """The world handed back held where the case left it, as tareplay's lane handed it over."""
         if self.held:
             self._still_held()
             self.held = False
-            self._resume()
 
     def call(self, command, *args):
         # past tacli's own 90 s bound on an input batch, so tacli abandons a stalled one itself
@@ -163,9 +160,10 @@ class Check:
         assert [r["spec"] for r in rows] == list(specs), f"peek answered {len(rows)} of {len(specs)} specs"
         return [r["value"] for r in rows]
 
-    def until(self, function, message, seconds=10, ticks=None, step=1):
-        """Until `function` answers. Without `ticks`, polled for `seconds` of wall clock: the
-        camera and the menus, which no simulation step drives. With `ticks`, simulation progress
+    def until(self, function, message, seconds=ACK_S, ticks=None, step=1):
+        """Until `function` answers. Without `ticks`, polled for at most `seconds` of wall clock:
+        the camera and the menus, which no simulation step drives and a frame or a few answer, so
+        the bound only catches a game that stopped answering. With `ticks`, simulation progress
         in lockstep: read on the held world, then after each advance of `step` ticks, at most
         `ticks` ticks in all."""
         if ticks is None:
@@ -385,7 +383,6 @@ def mex(c, classic=False):
         c.call("ui", "click", "OK")
     c.until(lambda: c.values("*0x511DE8+0x37efa")[0] == int(not classic),
             "mex regression did not reach its required mouse interface")
-    # held after the options menu, whose OK resumes a paused game (tareplay's twin)
     c.hold()
     c.eye(1000, 950)
     c.menu(RESOURCE=3, QUICKBUILD=0)
@@ -815,7 +812,7 @@ def main():
          "viewer": lambda c: viewer(c, a.viewer_unit),
          **{m: (lambda c, m=m: policy(c, m, a.gamedir)) for m in ("locked", "inherit")},
          **{m: (lambda c, m=m: terrain(c, m)) for m in ("plain", "uniform", "mixed")}}[a.case]
-        check = Check(a.instance)
+        check = Check(a.instance, {a.viewer_unit} if a.case == "viewer" else FIXTURE_UNITS)
         # The case's own failure is the exit reason and is printed first; a cleanup step that
         # fails after it is reported beside it, never in its place. A case that raised anything
         # else leaves the traceback as the reason, and the cleanup failures as the lines above it.
@@ -827,7 +824,7 @@ def main():
             failures.append(("", e))
             raised = False
         finally:
-            cleanup = [("release", check.release)]   # the world handed back running, as it was
+            cleanup = [("release", check.release)]   # the world handed back held, as it came
             if a.case in ("locked", "inherit"):
                 cleanup.insert(0, ("menu.open=off", lambda: check.call("arm", "menu.open=off")))
             for what, step in cleanup:
