@@ -120,7 +120,7 @@ static void proof_tail(void)
     unsigned i;
     if (f.no_consumer) flood(1,66,9);
     for (i=0;i<2;i++) {
-        if ((f.missing_cut || f.relinquish) && i==1) continue;
+        if (f.missing_cut && i==1) continue;
         if (i==1) {
             p=packet(66,RECMP_RESOURCES,f.source[i].sequence+1,9,"later",5);
             CHECK(tagpu_recmp_stream_put(&f.source[i],&p->h,p->body,5));
@@ -155,6 +155,16 @@ void tagpu_recmp_net_abort(RecMpNet* net)
     CHECK(net==&f.net && GetCurrentThreadId()!=f.game_thread); f.aborted=1;
 }
 
+/* Waits for the worker's last store. The deadline only catches a hang: whether the channel
+   failed, and what it holds, is read from the stats after the finish. */
+static void channel_finished(RecMpChannel* c, RecMpStats* stats)
+{
+    DWORD deadline=GetTickCount()+30000;
+    for (tagpu_recmp_stats(c,stats); !stats->finished; tagpu_recmp_stats(c,stats)) {
+        CHECK((LONG)(deadline-GetTickCount())>0); Sleep(1);
+    }
+}
+
 int main(int argc, char** argv)
 {
     RecMpConfig config;
@@ -167,7 +177,6 @@ int main(int argc, char** argv)
     RecMpPacket got;
     RecMpCutPoint cut, frozen;
     unsigned i, drained=0;
-    DWORD deadline;
     f.missing_receipt=argc>1 && !strcmp(argv[1],"missing_receipt");
     f.missing_cut=argc>1 && !strcmp(argv[1],"missing_cut");
     f.bad_receipt=argc>1 && !strcmp(argv[1],"bad_receipt");
@@ -239,13 +248,13 @@ int main(int argc, char** argv)
                frozen.source_tick==8 && frozen.application_tick==100 && frozen.application_order==2 &&
                frozen.stream.Data1==2);
     CHECK(!tagpu_recmp_cut(c,11,&cut) && !tagpu_recmp_cut(c,999,&cut));
+    /* A relinquished consumer's channel stops requiring cuts (tagpu_recmp.c terminal_ready).
+       Releasing the proof tail only after the finish makes that an ordering rather than a race
+       against the worker: no remote source has sealed, so the channel holds no cut, and the
+       test shows that the finish does not wait for one. */
+    if (f.relinquish) channel_finished(c,&stats);
     SetEvent(f.tail_release);
-    deadline=GetTickCount()+30000;
-    do {
-        tagpu_recmp_stats(c,&stats);
-        CHECK((LONG)(deadline-GetTickCount())>0);
-        if (!stats.finished) Sleep(1);
-    } while (!stats.finished);
+    channel_finished(c,&stats);
     if (f.missing_receipt || f.missing_cut || f.bad_receipt) {
         CHECK(f.aborted && stats.failed==(f.bad_receipt ? E_INVALIDARG : HRESULT_FROM_WIN32(ERROR_TIMEOUT)));
         if (f.missing_receipt) CHECK(stats.cuts==2 && stats.receipts==3);
@@ -260,7 +269,7 @@ int main(int argc, char** argv)
         CHECK(stats.consumption==(f.relinquish ? RECMP_RELINQUISHED : f.rx_full ? RECMP_RECEIVE_FULL :
                                   RECMP_NO_CONSUMER));
         CHECK(stats.unread==(f.rx_full ? 256u : 0u) && stats.received==(f.rx_full ? 0u : 2u));
-        if (f.relinquish) CHECK(stats.cuts==1);
+        if (f.relinquish) CHECK(stats.cuts==0);
         CHECK(tagpu_recmp_take_at(c,&got,9999)==-2 && !tagpu_recmp_cut(c,55,&cut));
         printf("PASS: %s ends consumption, not the channel: final seals, receipts and a clean close "
                "continue%s\n", f.relinquish ? "a relinquishing consumer" : f.rx_full ?

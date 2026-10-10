@@ -588,7 +588,7 @@ MEASURED 2026-10-06 on the reference setup under Wine, five Impure peers each se
 
 **Owner ruling, 2026-10-06: not a loosening.** No completeness check accepts anything it refused before. A recording whose consumption ended is refused by the cut, by file completion and by the writer, where the failed channel used to refuse it; the only change is that the other recorders no longer lose this peer's contributions with it.
 
-`recmp_cut_test.c` covers this at the production channel with a controlled backend. In `relinquish` the consumer stops after two packets and the remote source that is still active never seals. In `rx_full` 300 packets arrive before the game takes any. In `no_consumer` the journal detaches before stop and 300 packets follow. `journal_full`'s failed journal now behaves as `no_consumer`. In each, the channel finishes without failure: both local final seals go out, all four receipts return, nothing is published after consumption ends, and the cut is refused. The five-peer game under the new rules has not been run yet.
+`recmp_cut_test.c` covers this at the production channel with a controlled backend. In `relinquish` the consumer stops after two packets and the channel finishes before any remote source seals, so it holds no cut: the finish does not wait for one. In `rx_full` 300 packets arrive before the game takes any. In `no_consumer` the journal detaches before stop and 300 packets follow. `journal_full`'s failed journal now behaves as `no_consumer`. In each, the channel finishes without failure: both local final seals go out, all four receipts return, nothing is published after consumption ends, and the cut is refused. The five-peer game under the new rules has not been run yet.
 
 ### Gaps before the first code landing
 

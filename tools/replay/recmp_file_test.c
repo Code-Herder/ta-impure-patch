@@ -814,16 +814,6 @@ static int perspective_file(const char* path)
     return 0;
 }
 
-/* Waits for the worker's last store. The deadline only catches a hang: whether the channel
-   failed, and what it holds, is read from the stats after the finish. */
-static void channel_finished(RecMpChannel* c, RecMpStats* stats)
-{
-    DWORD deadline=GetTickCount()+30000;
-    for (tagpu_recmp_stats(c,stats); !stats->finished; tagpu_recmp_stats(c,stats)) {
-        CHECK((LONG)(deadline-GetTickCount())>0); Sleep(1);
-    }
-}
-
 #ifndef RECMP_FILE_TEST_MAIN
 #define RECMP_FILE_TEST_MAIN main
 #endif
