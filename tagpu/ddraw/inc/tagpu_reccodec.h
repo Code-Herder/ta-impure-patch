@@ -75,15 +75,18 @@ typedef struct RecFrameWorld {
 /* Every frame restarts: the unit and pool frames from one world -- units[nslots *
    REC_UNIT_DWORDS], live[nslots], and the projectile pool `pool` (nproj * REC_PROJ_IMAGE bytes,
    the records [hw, nproj) read as zero) with its count and extent, any of which may be the
-   codec's own copy -- and the record frames empty, with its working buffers empty and their
-   failures cleared. Params of other sizes than reccodec_new's, or a count past the extent or an
-   extent past the pool, leave it invalid; so does a world not of the codec's grid, or NULL. */
+   codec's own copy -- the cells frame from the world's grid, the other record frames empty, and
+   its working buffers empty with their failures cleared. Params of other sizes than
+   reccodec_new's, or a count past the extent or an extent past the pool, leave it invalid; so
+   does a world not of the codec's grid, or NULL. */
 void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* units,
                       const unsigned char* live, const unsigned char* pool, unsigned count,
                       unsigned hw, const RecFrameWorld* world);
 /* The encoder's world: the grid of every image it was handed since its segment began, coded or
    declined. It is meaningful only for a codec that encoded every block of its segment (the
-   writer's E). It points into the codec and is valid until its next encode. */
+   writer's E). `out->grid` points into the codec and lasts as long as the codec; its bytes are
+   this world until the codec's next reccodec_encode (plain_apply's images included) or
+   reccodec_restart. */
 void reccodec_world(const RecCodec* c, RecFrameWorld* out);
 void reccodec_invalidate(RecCodec* c);
 int  reccodec_valid(const RecCodec* c);

@@ -37,11 +37,12 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 11: format 10's bytes, written by a build whose snapshots are 1,800 ticks apart. A reader
-   takes this format alone. The bytes: every packed block is one zstd frame, and a stream block
-   may be a sectioned container whose unit frame carries the unit deltas, whose pool frame carries
-   the projectile pool coded by identity, and whose four record frames -- the cells, the orders,
-   the events and the state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). */
+/* 11: format 10 with the cells frame restarting from the reader's grid at every reset point
+   (RBF_FRAME_RESET), written by a build whose snapshots are 1,800 ticks apart. A reader takes
+   this format alone. The bytes: every packed block is one zstd frame, and a stream block may be
+   a sectioned container whose unit frame carries the unit deltas, whose pool frame carries the
+   projectile pool coded by identity, and whose four record frames -- the cells, the orders, the
+   events and the state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). */
 #define REC_FORMAT        11
 
 static __inline int rec_format_supported(unsigned format)
@@ -445,11 +446,12 @@ enum RecEnd {
    sectioned block to the next, and restart -- RBF_FRAME_RESET -- at a segment's first stream
    block, at the first after a snapshot and at the first after a stream block of records (one the
    writer's codec declined, or whose check decode differed): the unit and pool frames from the
-   units and the projectile pool the reader holds at the end of the iteration before it, the four
-   record frames empty. So a stream block inside a run of sectioned blocks decodes only after its
-   predecessors since the run's reset, and a reader starts at a snapshot or at a segment's start,
-   never inside a run (tagpu_reccodec.c, THREE INVARIANTS). Any other flag bit,
-   RBF_SECTIONS on another kind of block and RBF_FRAME_RESET without RBF_SECTIONS are refused. */
+   units and the projectile pool the reader holds at the end of the iteration before it, the cells
+   frame from the grid it holds there, the orders, events and state frames empty. So a stream
+   block inside a run of sectioned blocks decodes only after its predecessors since the run's
+   reset, and a reader starts at a snapshot or at a segment's start, never inside a run
+   (tagpu_reccodec.c, THREE INVARIANTS). Any other flag bit, RBF_SECTIONS on another kind of block
+   and RBF_FRAME_RESET without RBF_SECTIONS are refused. */
 #define REC_MAGIC        "IMPREC\r\n"          /* 8 bytes, no NUL                                 */
 #define REC_BLOCK_MAGIC  0x4B4C4249u           /* "IBLK"                                          */
 
@@ -503,9 +505,10 @@ enum RecBlockKind {
 #define RBF_STORED      1u
 #define RBF_SECTIONS    2u     /* an RB_STREAM's only: its payload is a sectioned container    */
 #define RBF_FRAME_RESET 4u     /* with RBF_SECTIONS only: the frames restart at its first
-                                  iteration, the unit and pool frames from the reader's own
-                                  copies of the units and the projectile pool, the record frames
-                                  empty                                                       */
+                                  iteration, the unit and pool frames from the units and the
+                                  projectile pool the reader holds at the end of the iteration
+                                  before it, the cells frame from the grid it holds there, the
+                                  orders, events and state frames empty                       */
 #define RBF_ALL         (RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET)
 
 /* THE SECTIONED CONTAINER (tagpu_reccodec.c reads and writes it): the bytes of an RB_STREAM with

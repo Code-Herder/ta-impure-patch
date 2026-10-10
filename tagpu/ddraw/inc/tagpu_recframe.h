@@ -11,11 +11,11 @@
    THE ORDERING every frame rests on (tagpu_reccodec.c, THREE INVARIANTS). A frame's state is a
    function of the records since the last restart, of the world the restart handed it
    (RecFrameWorld: the same bytes in every walk) and of the codec's unit copy alone. The restart
-   (RBF_FRAME_RESET) clears it -- every frame starts empty, in the writer's encoder, its check
-   decoder and every reader alike -- and the unit copy at a record is the same in every walk: the
-   unit frame's deltas of the iteration, then its RK_UNIT and RK_UNIT_GONE records up to that
-   record. So a decline or a refusal needs no rollback: the codec turns invalid, and the next block
-   restarts.
+   (RBF_FRAME_RESET) sets it: the cells frame restarts from the world's grid, and every other
+   frame empty, in the writer's encoder, its check decoder and every reader alike; and the unit
+   copy at a record is the same in every walk: the unit frame's deltas of the iteration, then its
+   RK_UNIT and RK_UNIT_GONE records up to that record. So a decline or a refusal needs no rollback:
+   the codec turns invalid, and the next block restarts.
 
    A FRAME NEVER DECLINES MID-BLOCK. Its encoder takes every record of its kinds; one it cannot
    carry, or a failed allocation, latches inside the frame, and its enc_write then returns 0,

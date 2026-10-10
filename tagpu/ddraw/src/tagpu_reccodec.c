@@ -45,19 +45,25 @@
    - RESET POINTS (an ordering). The frames' state crosses block boundaries only inside a run of
      sectioned blocks. All restart (RBF_FRAME_RESET) at a segment's first stream block, at the
      first after a snapshot and at the first after a records block: the unit and pool frames from
-     the copy of the units and of the projectile pool a reader holds there, the record frames
-     empty. A reader starts only at a snapshot or a segment's start and reads a block only between
-     iterations. Every piece of pool frame state that crosses a block is rebuilt from that pool or
-     cleared, and every record frame's cleared (reccodec_restart); the only outside state a record
-     frame reads is the unit copy, which the restart takes from the reader's units in the encoder,
-     the check decoder and every reader alike. Every reset hands the frames the reader's grid
-     there (RecFrameWorld). The encoder keeps that grid itself through every block, coded or
-     declined (the cells frame's world, plain_apply), and the writer restarts both its states
-     from it. So a record frame's state is a function of the records since the reset, and a
-     decline or a refusal needs no rollback: the codec turns invalid and the next block restarts.
-     A block that continues a frame this decoder did not start is refused, never misread. A
-     record frame never declines mid-block: it latches, and its enc_write declines the block
-     after its iterations (tagpu_recframe.h).
+     the copy of the units and of the projectile pool a reader holds there, the cells frame from
+     the grid it holds there, and the orders, events and state frames empty. A reader starts only
+     at a snapshot or a segment's start and reads a block only between iterations. Every piece of
+     pool frame state that crosses a block is rebuilt from that pool or cleared, and every record
+     frame's cleared or taken from the world (reccodec_restart); the only outside state a record
+     frame reads is the unit copy and that world, which the restart takes from the reader's units
+     and grid in the encoder, the check decoder and every reader alike. Every reset hands the
+     frames the reader's grid there (RecFrameWorld). The encoder keeps that grid itself through
+     every block, coded or declined (the cells frame's world, plain_apply), and the writer
+     restarts both its states from it. INVARIANT: the grid at a reset is the same bytes in every walk. Each is the images
+     of the segment's records so far over zeros, by one rule (an RK_CELLS with no event before it
+     in its iteration), each record bounded by the grid; a seeking reader's comes from a snapshot
+     of the writer's copy, built by the same rule (tagpu_recwriter.c, feature_record), which
+     tarec.py check compares with the stream's (reccodec_stream_block says what is constructed
+     and what is measured). So a record frame's state is a function of that world, the records
+     since the reset and the unit copy, and a decline or a refusal needs no rollback: the codec
+     turns invalid and the next block restarts. A block that continues a frame this decoder did
+     not start is refused, never misread. A record frame never declines mid-block: it latches,
+     and its enc_write declines the block after its iterations (tagpu_recframe.h).
    - BOUNDS. Every value read from a file is data. Each length, count, slot, varint, lane, role and
      flag is tested against its bound before it is used and a refusal names it; every operand of a
      rule is clamped before it is multiplied, so no int64 product can overflow; the constants a
@@ -2756,14 +2762,16 @@ int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, 
            zeroed: cells_make), applied in record order by the reader's rule -- an RK_CELLS with
            no RCS_EVENTS record before it in its iteration -- and each bounded as the reader's
            cells_ok bounds it; it takes every block's, coded or declined (plain_apply), so it is
-           the payload's end state as the units and the pool are. D is handed these bytes
+           the payload's end state as the units and the pool are. D takes these bytes by copy
            (construction). A sequential reader builds its own by the same rule (construction;
            codectest's world_same checks E's against it on every transcoded block, and verify
            decodes against the records). A seeking reader's is a snapshot of the writer's copy,
            whose grid takes the images outside the feature tick's bracket (tagpu_recwriter.c,
            feature_record): the same set on every file a reader accepts, which is MEASURED, not
            constructed -- tarec.py check compares each snapshot's world with the stream's, grid
-           included. E's restart keeps its own grid (the world aliases it). */
+           included. No reader checks a decoded block against a checksum, so a divergence there
+           would misdecode silently after a seek, as for the units, and only tarec.py check and
+           the gate would see it. E's restart keeps its own grid (the world aliases it). */
         reccodec_world(s->enc, &fw);
         reccodec_restart(s->enc, &s->p, reccodec_units(s->enc), reccodec_live(s->enc), pool, count, hw, &fw);
         reccodec_restart(s->chk, &s->p, reccodec_units(s->enc), reccodec_live(s->enc), pool, count, hw, &fw);

@@ -21,34 +21,40 @@
      (an air war); MEASURED 2026-10-10 on the same four rewritten as format 10, the tick input is
      at most 1,024 cells an iteration (the air war).
 
-   THE BYTES. Scheme 1, nine columns:
+   THE BYTES. Scheme 2, nine columns:
      flag      one u8 at an iteration's first image: 1, its images are T record for record, and
                no other column holds them; 0, they are coded as below
      rec       per coded record: varint zz32(p - e), p = z * W + x its first cell's index and e
                the end (p + cells) of the record before it in the same list -- the iteration's
                images or its tick input -- 0 for the first; then varint cells - 1
-     sym       per coded cell, against its copy in G when known, else 13 zero bytes: bits 0..5 the
-               fields that differ; 0x40, only slot A differs and it is now 0
+     sym       per coded cell, against its copy in G: bits 0..5 the fields that differ; 0x40, only
+               slot A differs and it is now 0
      f0..f5    the differing fields' bytes, a column per field, in cell order
-   THE STATE, all of it cleared at every reset (tagpu_recframe.h) but G's bytes:
-     G         the grid's copy, W * H cells, each with a known bit, which a reset clears; an image
-               writes its cells. In the encoder G is the codec's world (reccodec_world): it takes
-               every image of every record it is handed, after a latch too, and those of a
-               declined iteration through cells_plain, so it is the grid of the segment's images
+   THE STATE (tagpu_recframe.h, THE ORDERING):
+     G         the grid's copy, W * H cells: at a restart the world's grid, the reader's at the end
+               of the iteration before the reset block (tagpu_reccodec.c, RESET POINTS), then
+               every image. In the encoder G is the codec's world (reccodec_world): it takes every
+               image of every record it is handed, after a latch too, and those of a declined
+               iteration through cells_plain, so it is the grid of the segment's images, which the
+               restart hands back to it unchanged and to the check decoder by copy
      T, T'     the last iteration's tick input and this one's: each record's first cell, its cell
                count and its cells. T takes T' at an iteration's end, empty when T' passed
                CELLS_HELD cells; the rule reads the records alone, so every walk keeps the same T.
+               T and T' restart empty: no world holds a tick input, so the first iteration after a
+               reset codes its images instead of flagging them.
      the encoder's latch: a record it cannot code (a bad pad, length or run) declines the block
      after its iterations.
    THE BOUNDS. A coded record's run is 1 <= cells <= REC_CELLS_MAX on one row, x + cells <= W and
    z < H, its length 8 + 13 cells and its pad 0; a sym is 0..0x3F or 0x40; a flag 0 or 1, and with
    1 the iteration takes exactly T's records. Each column is read to its end.
 
-   MEMORY: 13.125 bytes a grid cell, G and its known bits (5.5 MB on a 642 x 648 grid), and T and
-   T', CELLS_HELD cells each at 19 bytes a cell (0.6 MB). */
+   MEMORY: 13 bytes a grid cell (5.4 MB on a 642 x 648 grid, 54.5 MB at RECC_GRID_MAX), and T and
+   T', CELLS_HELD cells each at 19 bytes a cell (0.6 MB). A restart from another codec's world
+   copies G whole: 5.4 MB on that grid, at every reset of a sequential reader and of the check
+   decoder, and at every seek. */
 #include "tagpu_recframe.h"
 
-#define CELLS_SCHEME 1
+#define CELLS_SCHEME 2
 #define CELLS_COLS   9
 #define CELLS_HELD   (4u * REC_CELLS_MAX)   /* T's cells at most: past it, T is empty           */
 #define CB           REC_CELL_BYTES
@@ -72,7 +78,6 @@ typedef struct Cells {
     unsigned       w, h;
     size_t         wh;
     unsigned char* g;           /* G: wh cells                                       */
-    unsigned char* known;       /* its known bits                                    */
     Tick           t[2];        /* t[cur] is T, t[cur ^ 1] T'                        */
     unsigned       cur;
     /* the iteration */
@@ -86,10 +91,6 @@ typedef struct Cells {
     RecBytes       col[CELLS_COLS];
     RecCol         rd[CELLS_COLS];
 } Cells;
-
-static const unsigned char ZERO[CB];
-
-static int known_at(const Cells* x, size_t q) { return x->known[q >> 3] >> (q & 7) & 1; }
 
 static void tick_empty(Tick* t)
 {
@@ -125,9 +126,7 @@ static void tick_turn(Cells* x)
 /* an image's cells into G */
 static void grid_put(Cells* x, uint32_t p, unsigned n, const unsigned char* cells)
 {
-    size_t q;
     memcpy(x->g + (size_t)p * CB, cells, (size_t)n * CB);
-    for (q = p; q < (size_t)p + n; q++) x->known[q >> 3] |= (unsigned char)(1u << (q & 7));
 }
 
 static void cells_drop(void* f)
@@ -136,7 +135,6 @@ static void cells_drop(void* f)
     unsigned i;
     if (!x) return;
     free(x->g);
-    free(x->known);
     for (i = 0; i < 2; i++) {
         free(x->t[i].p);
         free(x->t[i].n);
@@ -161,8 +159,7 @@ static void* cells_make(const RecCodecParams* p)
     x->wh = (size_t)p->gw * p->gh;
     /* zero: the world a segment starts from (tagpu_reccodec.c, reccodec_stream_block) */
     x->g = (unsigned char*)calloc(x->wh, CB);
-    x->known = (unsigned char*)calloc((x->wh + 7) / 8, 1);
-    ok = x->g && x->known;
+    ok = x->g != NULL;
     for (i = 0; i < 2; i++) {
         x->t[i].p = (uint32_t*)malloc(CELLS_HELD * sizeof *x->t[i].p);
         x->t[i].n = (uint16_t*)malloc(CELLS_HELD * sizeof *x->t[i].n);
@@ -176,13 +173,15 @@ static void* cells_make(const RecCodecParams* p)
     return x;
 }
 
-/* G's bytes stay: in the encoder they are the codec's world, which a reset hands on */
+/* G takes the world's grid; in the encoder the world is G itself (reccodec_world), so nothing
+   moves. BOUND: reccodec_restart hands over only a world of the codec's grid, the W * H this
+   frame was made for, so the copy is W * H cells on both sides. With no world the codec is
+   invalid, and G stays as it was until a restart that has one. */
 static void cells_restart(void* f, const RecFrameWorld* w)
 {
     Cells* x = (Cells*)f;
     unsigned i;
-    (void)w;
-    memset(x->known, 0, (x->wh + 7) / 8);
+    if (w && w->grid != x->g) memcpy(x->g, w->grid, x->wh * CB);
     tick_empty(&x->t[0]);
     tick_empty(&x->t[1]);
     x->cur = 0;
@@ -234,7 +233,6 @@ static int cells_copy(void* dst, const void* src)
     const Cells* s = (const Cells*)src;
     unsigned i;
     memcpy(d->g, s->g, s->wh * CB);
-    memcpy(d->known, s->known, (s->wh + 7) / 8);
     for (i = 0; i < 2; i++) {
         memcpy(d->t[i].p, s->t[i].p, s->t[i].nrec * sizeof *s->t[i].p);
         memcpy(d->t[i].n, s->t[i].n, s->t[i].nrec * sizeof *s->t[i].n);
@@ -277,7 +275,7 @@ static void enc_code(Cells* x, unsigned list, uint32_t p, unsigned n, const unsi
     for (k = 0; k < n; k++) {
         size_t q = (size_t)p + k;
         const unsigned char* c = cells + (size_t)k * CB;
-        const unsigned char* ref = known_at(x, q) ? x->g + q * CB : ZERO;
+        const unsigned char* ref = x->g + q * CB;
         unsigned m = 0;
         for (f = 0; f < 6; f++)
             if (memcmp(c + FIELD[f], ref + FIELD[f], FIELD[f + 1] - FIELD[f])) m |= 1u << f;
@@ -444,7 +442,7 @@ static int dec_code(Cells* x, unsigned list, unsigned char* body, unsigned* len,
         size_t q = (size_t)p + k;
         unsigned char c[CB];
         if (!recf_u8(&x->rd[COL_SYM], &s)) RECF_REFUSE("the cells frame's syms cut short");
-        memcpy(c, known_at(x, q) ? x->g + q * CB : ZERO, CB);
+        memcpy(c, x->g + q * CB, CB);
         if (s == SYM_A_EMPTY) {
             c[0] = c[1] = 0;
         } else {

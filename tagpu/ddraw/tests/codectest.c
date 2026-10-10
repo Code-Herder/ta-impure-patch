@@ -930,6 +930,20 @@ static int zstd_window_check(void* cctx, void* dctx)
    blocks the frame codes and reads back, each record it cannot carry latched and its block
    DECLINED with the next one restarting, and the decoder's own refusals. */
 
+/* section `s` of a sectioned container: its bounds */
+static void sec_bounds(const unsigned char* c, unsigned s, size_t* a, size_t* e)
+{
+    unsigned i;
+    *a = sizeof(RecSecHead);
+    for (i = 0; i < s; i++) *a += get32(c + 8 + 4 * i);
+    *e = *a + get32(c + 8 + 4 * s);
+}
+
+/* a record frame's section: its column table at *tab and column i at [col[i], col[i + 1]); the
+   column count, or 0 when the table does not read (defined with the fuzz) */
+static unsigned frame_regions(const unsigned char* sec, size_t a, size_t e, size_t* tab,
+                              size_t col[RECF_COLS_MAX + 1]);
+
 enum { CF_NONE, CF_PAD, CF_ROW, CF_Z, CF_EMPTY, CF_LEN };
 #define CF_W    16                      /* cmd_outcomes' grid: 16 x 16                           */
 #define CF_HELD (4 * REC_CELLS_MAX)     /* the frame's CELLS_HELD: T's cells at most              */
@@ -975,7 +989,7 @@ static int cells_flags(const RecBytes* sec, unsigned char* flag, unsigned* nflag
     for (i = 0; i < RCS_CELLS; i++) off += h.len[i];
     p = sec->p + off;
     n = h.len[RCS_CELLS];
-    if (off + n > sec->n || n < 1 || p[0] != 1 || !varint_get(p, n, &at, &v) || v != 9) return 0;
+    if (off + n > sec->n || n < 1 || p[0] != 2 || !varint_get(p, n, &at, &v) || v != 9) return 0;
     for (i = 0; i < 9; i++) {
         if (!varint_get(p, n, &at, &v)) return 0;
         len[i] = v;
@@ -997,13 +1011,18 @@ static int cells_flags(const RecBytes* sec, unsigned char* flag, unsigned* nflag
    coded: SECTIONS; then a block that declines in its fourth iteration, whose images from there on
    reach the encoder's world through plain_apply alone, and a restarting SECTIONS. After every
    block the encoder's grid is the reader's: through the latch of the malformed records and
-   through both declines. */
+   through both declines. Then the restart from the reader's grid: a block restarting as after a
+   snapshot whose one iteration re-images a run the reader holds, which codes as no change; the
+   same block with the check decoder restarted from a grid one cell off, MISMATCH, and a
+   restarting SECTIONS; and a reader's restart from a world of another grid, or none, refused. */
 static int outcomes_cells(const RecCodecParams* p)
 {
     static unsigned char grid[CF_W * CF_W * REC_CELL_BYTES];
     static const struct { unsigned x, z, n; } run[3] = { { 2, 3, 5 }, { 0, 9, 16 }, { 11, 14, 4 } };
     static uint32_t unit[NDW];
-    static const char* what[15] = {
+    /* the cells frame's columns (tagpu_recframe_cells.c, THE BYTES) */
+    enum { CC_FLAG, CC_REC, CC_SYM, CC_F0, CC_N = CC_F0 + 6 };
+    static const char* what[18] = {
         "SECTIONS, the first iteration's every cell", "SECTIONS, images flagged and coded",
         "SECTIONS, continuing", "DECLINED: an RK_CELLS whose pad is not zero",
         "SECTIONS, restarting after it", "DECLINED: an RK_CELLS past its row's end",
@@ -1012,20 +1031,25 @@ static int outcomes_cells(const RecCodecParams* p)
         "SECTIONS, restarting after it", "DECLINED: an RK_CELLS one byte short",
         "SECTIONS, restarting: images after a tick input past CELLS_HELD",
         "DECLINED in mid-block: a delta naming an unchanged dword",
-        "SECTIONS, restarting after it" };
+        "SECTIONS, restarting after it",
+        "SECTIONS, restarting from the reader's grid: the cells it already holds code as no change",
+        "MISMATCH: the check decoder restarted from another grid", "SECTIONS, restarting after it" };
     RecStream st;
     RecCodec* rd;
     World w;
-    RecBytes y;
+    RecBytes y, keep, out;
+    RecFrameWorld fw;
     uint32_t gt = 1, seed = 12345;
     unsigned block, it, i, k, c, flags, nflag = 0, ok = 1;
     unsigned char flag[64];
     int emptied = 0, o;
     const unsigned char* body;
-    size_t bn;
-    char line[128];
+    size_t bn, a, e, tab, col[RECF_COLS_MAX + 1];
+    char line[128], why[256];
     memset(&w, 0, sizeof w);
     memset(&y, 0, sizeof y);
+    memset(&keep, 0, sizeof keep);
+    memset(&out, 0, sizeof out);
     for (i = 0; i < sizeof grid; i++) grid[i] = (unsigned char)((seed = seed * 1103515245u + 12345u) >> 24);
     if (!reccodec_stream_begin(&st, p) || !(rd = reccodec_new(p))) return 0;
     world_reset(&w, p->nslots, p->nproj, p->gw, p->gh);
@@ -1036,11 +1060,34 @@ static int outcomes_cells(const RecCodecParams* p)
     lane_add(unit, REC_LR_LAYER, 1, 1);
     lane_add(unit, REC_LR_FW, 2, 1);
     lane_add(unit, REC_LR_FH, 2, 1);
-    for (block = 0; block < 15; block++) {
+    for (block = 0; block < 18; block++) {
         int fault = block >= 3 && block <= 11 && block % 2 ? (int)(block - 1) / 2 : CF_NONE;
+        if (block == 15) st.reset = 1;           /* as a snapshot does */
+        if (block == 16) {
+            /* E from its own world, D from that grid with one byte of run[0]'s first cell off;
+               the block's image of run[0] codes as no change, so D rebuilds the cell from its
+               own grid and gives back other records */
+            static unsigned char other[CF_W * CF_W * REC_CELL_BYTES];
+            unsigned count, hw;
+            const unsigned char* pool = reccodec_pool(st.enc, &count, &hw);
+            RecFrameWorld ow;
+            reccodec_world(st.enc, &fw);
+            memcpy(other, fw.grid, sizeof other);
+            other[((size_t)run[0].z * CF_W + run[0].x) * REC_CELL_BYTES + 5] ^= 0x20;
+            ow = fw;
+            ow.grid = other;
+            reccodec_restart(st.enc, &st.p, reccodec_units(st.enc), reccodec_live(st.enc), pool, count, hw, &fw);
+            reccodec_restart(st.chk, &st.p, reccodec_units(st.enc), reccodec_live(st.enc), pool, count, hw, &ow);
+            st.reset = 0;
+        }
         y.n = 0;
-        for (it = 0; it < (block == 12 ? 2u : fault ? 5u : 6u); it++, gt++) {
+        for (it = 0; it < (block == 12 ? 2u : block == 15 || block == 16 ? 1u : fault ? 5u : 6u); it++, gt++) {
             rec_put(&y, RK_TICK, &gt, 4);
+            if (block == 15 || block == 16) {
+                /* run[0] as the reader's grid holds it, and no tick input */
+                cells_rec(&y, w.grid, run[0].x, run[0].z, run[0].n, CF_NONE);
+                continue;
+            }
             /* block 13: a unit created in its first iteration, and in its fourth a delta naming a
                dword that does not change, which the unit frame cannot carry (cmd_outcomes' block
                2): the block declines there, and its last three iterations go through plain_apply */
@@ -1084,7 +1131,7 @@ static int outcomes_cells(const RecCodecParams* p)
         }
         o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
         snprintf(line, sizeof line, "cells block %u: %s", block, what[block]);
-        ok &= expect(line, o, fault || block == 13 ? RECC_DECLINED : RECC_SECTIONS);
+        ok &= expect(line, o, fault || block == 13 ? RECC_DECLINED : block == 16 ? RECC_MISMATCH : RECC_SECTIONS);
         ok &= expect("  a reader decodes it back", reader_check(rd, &w, p, flags, body, bn,
                                                                   o == RECC_SECTIONS ? st.sec.n : y.n,
                                                                   y.p, y.n, st.dctx), 1);
@@ -1098,10 +1145,48 @@ static int outcomes_cells(const RecCodecParams* p)
         if (o == RECC_SECTIONS && block == 12)
             ok &= expect("  the images after it coded",
                          cells_flags(&st.sec, flag, &nflag, &emptied) && nflag == 1 && !flag[0], 1);
+        if (o == RECC_SECTIONS && block == 15) {
+            /* scheme 1 restarted G unknown: each of the run's cells would be sym 0x3F and its
+               13 bytes in the field columns */
+            int none = 1;
+            sec_bounds(st.sec.p, RCS_CELLS, &a, &e);
+            ok &= expect("  restarting flagged RBF_FRAME_RESET", !!(flags & RBF_FRAME_RESET), 1);
+            if (frame_regions(st.sec.p, a, e, &tab, col) != CC_N) none = 0;
+            else if (col[CC_SYM + 1] - col[CC_SYM] != run[0].n) none = 0;
+            else
+                for (k = 0; k < run[0].n; k++) none &= st.sec.p[col[CC_SYM] + k] == 0;
+            if (none) none = col[CC_F0 + 6] == col[CC_F0];
+            ok &= expect("  the run's cells are sym 0, and no field column holds a byte", none, 1);
+            ok &= expect("  its first iteration's images are coded: T is empty after a restart",
+                         cells_flags(&st.sec, flag, &nflag, &emptied) && nflag == 1 && !flag[0], 1);
+        }
+        if (o == RECC_SECTIONS && block == 17) {
+            keep.n = 0;
+            rb_put(&keep, st.sec.p, st.sec.n);
+        }
     }
+    /* block 17 again, from a restart whose world is not the codec's grid, or has none */
+    fw = world_view(&w);
+    fw.gw = p->gw + 1;
+    reccodec_restart(rd, p, w.unit, w.live, w.pool, w.pcount, w.phw, &fw);
+    why[0] = 0;
+    ok &= expect("cells: a reader refuses a restart from a world of another grid",
+                 !reccodec_valid(rd) && !reccodec_decode(rd, keep.p, keep.n, &out, why, sizeof why) &&
+                 strstr(why, "no frame to continue") != NULL, 1);
+    fw = world_view(&w);
+    fw.grid = NULL;
+    reccodec_restart(rd, p, w.unit, w.live, w.pool, w.pcount, w.phw, &fw);
+    why[0] = 0;
+    ok &= expect("cells: and from a world with no grid",
+                 !reccodec_valid(rd) && !reccodec_decode(rd, keep.p, keep.n, &out, why, sizeof why) &&
+                 strstr(why, "no frame to continue") != NULL, 1);
+    reccodec_restart(rd, p, w.unit, w.live, w.pool, w.pcount, w.phw, NULL);
+    ok &= expect("cells: and from no world", reccodec_valid(rd), 0);
     reccodec_stream_end(&st);
     reccodec_free(rd);
     rb_free(&y);
+    rb_free(&keep);
+    rb_free(&out);
     world_free(&w);
     return ok;
 }
@@ -1261,8 +1346,6 @@ static int outcomes_orders(const RecCodecParams* p)
 }
 
 /* the events frame's outcomes: a payload of every event kind, two iterations of it, in blocks */
-static unsigned frame_regions(const unsigned char* sec, size_t a, size_t e, size_t* tab,
-                              size_t col[RECF_COLS_MAX + 1]);
 
 enum { EV_PLAIN, EV_PAD, EV_NO_DEATH, EV_NESTED, EV_ROOT };
 
@@ -1392,15 +1475,6 @@ static void ev_block(RecBytes* b, uint32_t units[][NDW], uint32_t* gt, int varia
             }
         ev_events(b, (const uint32_t(*)[NDW])units, variant);
     }
-}
-
-/* section `s` of a sectioned container: its bounds */
-static void sec_bounds(const unsigned char* c, unsigned s, size_t* a, size_t* e)
-{
-    unsigned i;
-    *a = sizeof(RecSecHead);
-    for (i = 0; i < s; i++) *a += get32(c + 8 + 4 * i);
-    *e = *a + get32(c + 8 + 4 * s);
 }
 
 static int outcomes_events(const RecCodecParams* p)
