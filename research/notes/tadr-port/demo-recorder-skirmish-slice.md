@@ -255,9 +255,11 @@ test launch only (`tagpu_rec_lever_init`), and named in the recording's header l
 makes the writer's codec decline stream blocks 2, 7, 12, … by the encoder's own first decline:
 `reccodec_stream_block` invalidates the encoder before `reccodec_encode`, which then takes the
 path a real decline takes (`plain_apply`, the encoder left invalid, `RECC_DECLINED`, the records
-block, `RBF_FRAME_RESET` on the next). The fixture `codec-decline` (the forest fire to GameTime
-2400, `"decline": true`) records under it, plays, round-trips and seeks across the declined blocks
-like any fixture, and its stream codec check also fails when the recording declined none.
+block, `RBF_FRAME_RESET` on the next). The fixtures `codec-decline` and its stock-limits twin
+`stock-codec-decline` (the forest fire to GameTime 2400, `"decline": true`) record under it, play,
+round-trip and seek across the declined blocks like any fixture, and their stream codec check also
+fails when the recording declined none. Two, because the landing tier asks each build that compiles
+a changed function to reach it.
 
 **What a reader refuses**, the C reader and `reccodec.py` alike, each by name (the C reader with the
 block's file offset): a flag bit it does not know, `RBF_SECTIONS` on a block that is not a stream block,

@@ -58,8 +58,9 @@ int tagpu_rec_hooks_in(void);
 /* DllMain's attach, before tagpu_simreg_attach closes the lever list, so a recording's header
    names it: THE TEST LEVER tagpu_rec.decline, honoured only in a test launch
    (tagpu_regstore_active) and refused with a line otherwise. Present, every recording's codec
-   declines stream blocks 2, 7, 12, ... (RecStream.decline): the tareplay fixture codec-decline
-   records under it and checks that the recording reads back across each declined block. */
+   declines stream blocks 2, 7, 12, ... (RecStream.decline): the tareplay fixtures codec-decline
+   and stock-codec-decline record under it and check that the recording reads back across each
+   declined block. */
 void tagpu_rec_lever_init(void);
 
 /* Actual delivered span in this thread's owned primary receive frame. Zero

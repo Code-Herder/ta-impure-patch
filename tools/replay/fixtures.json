@@ -15,6 +15,12 @@
    "decline": true,
    "end": 2400
   },
+  "stock-codec-decline": {
+   "load": "s3a-forest-fire.json",
+   "decline": true,
+   "dll": "stock",
+   "end": 2400
+  },
   "naval-push": {
    "load": "naval-push.json",
    "end": 3600
