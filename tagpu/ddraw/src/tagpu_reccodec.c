@@ -2725,9 +2725,13 @@ int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, 
         reccodec_restart(s->enc, &s->p, reccodec_units(s->enc), reccodec_live(s->enc), pool, count, hw);
         reccodec_restart(s->chk, &s->p, reccodec_units(s->enc), reccodec_live(s->enc), pool, count, hw);
     }
-    /* THE TEST LEVER (RecStream.decline): an invalid encoder is reccodec_encode's first decline,
-       so a block chosen here runs what a real decline runs -- plain_apply, the encoder left
-       invalid, RECC_DECLINED, the records block, the next block's restart -- and nothing else */
+    /* THE TEST LEVER (RecStream.decline): an invalid encoder takes reccodec_encode's first
+       branch -- plain_apply of the whole block, the encoder left invalid, RECC_DECLINED -- and
+       then this function's records block and the next block's restart. It reaches no other
+       decline: not the one in mid-block (enc_iteration fails, plain_apply from that iteration
+       on), nor those after the walk (over, a column's oom, units_write, pool_write,
+       frames_write), which return with nothing left to apply. No fixture's recording declines
+       a block of itself, so those stay unexercised by the fixtures. */
     if (s->decline) {
         unsigned b = s->sectioned + s->declined + s->mismatched;
         if (b >= 2 && (b - 2) % 5 == 0) reccodec_invalidate(s->enc);

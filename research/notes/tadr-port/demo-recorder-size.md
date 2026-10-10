@@ -2,12 +2,14 @@
 
 ## Status
 
-**L1 and L2 are landed** (*L1: recording format 8, measured* and *L2: the pool frame, measured*,
-below). Recording format 9 packs every block with zstd, carries the unit deltas in a unit frame
-predicted from the engine's own rules and the projectiles in a pool frame coded by identity: the
-battle below, recorded anew, takes 15.3 MiB where the measured one took 99.6 (not like for like:
-another game of the same scenario), and on the very games L1 recorded L2 takes the battle's file
-from 29.09 to 16.40 MiB, Town & Country's from 18.97 to 11.51. L3 to L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
+**L1, L2 and L3 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*
+and *L3: the record frames, measured*, below). Recording format 10 packs every block with zstd,
+carries the unit deltas in a unit frame predicted from the engine's own rules, the projectiles in a
+pool frame coded by identity, and the cells, orders, events and state in four record frames, and
+its snapshots store only the wreck records that differ from a base: the battle below, recorded
+anew, takes 12.00 MiB where the measured one took 99.6 (not like for like: another game of the same
+scenario), and on the very games L1 recorded the battle's file goes from 29.09 MiB (L1) to 16.40
+(L2) to 11.88 (L3), Town & Country's from 18.97 to 11.51 to 8.04. L4 to L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -199,12 +201,23 @@ MEASURED, each re-encoding decoded back equal to the records it replaces (writer
 | Events | 2,986 KB | 1,530 KB | shot points within 63 wu of the shooter, script names as strings, a death's image ~5 dwords from the unit's, repeated sprays |
 | Wrecks, globals, players, feature heads | 946 KB | 401 KB | `rngseed` as a Park-Miller step count (median 16 a tick); the pathfinder counters by delta of deltas |
 
-Two more: **every snapshot carries all 8,192 wreck records**, because the level load links each free
-record to its neighbours so none is zero; storing only those that differ from the first iteration
+Two more: **the snapshots' wreck records**. The level load links each free record to its
+neighbours, so none is zero, and a snapshot that stores every record that is not zero stores all
+8,192; storing only those that differ from the pool at the end of the segment's first iteration
 saves 0.37 MiB here and, in a small game, most of each snapshot (51 of 58 KB in the ten-seat
-fixture, about 6 MiB an hour). And the cells could be derived from the units' footprint moves
-(99.6 % predicted, about 0.6 MiB more [INFERRED]). Lower rates or priority sampling are not worth
-it here: after coding, sprays and replies cost under 24 KB.
+fixture, about 6 MiB an hour). Format 10's snapshots store only those (*L3*, below: on the battle,
+5,524 wreck records in its 8 snapshots instead of 65,536). And the cells could be derived from the
+units' footprint moves (99.6 % predicted, about 0.6 MiB more [INFERRED]; not in L3). Lower rates or
+priority sampling are not worth it here: after coding, sprays and replies cost under 24 KB.
+
+**As built** (format 10's record frames, *L3* below). Each category is a frame of columns that
+restarts empty at every reset point, coded against what it saw since: the cells against a copy of
+the grid and the last iteration's tick input, the order lists node by node against the last whole
+image of the same (slot, list), the events field by field against the last ID, the unit copy and
+dictionaries, and the globals as deltas of deltas or as Park–Miller step counts, the players by
+delta, the wreck records by a mask of changed u16s and the feature heads and cursor against their
+rule. In a new recording of the battle the four take 991 / 825 / 1,407 / 337 KiB (cells, orders,
+events, state, each packed alone with zstd 3).
 
 ### The container and the compressor
 
@@ -276,9 +289,11 @@ Every one is a loosening and the owner's decision.
 - **One flat battle**: no aircraft or hills (pitch, roll and vertical velocity never changed). L0
   (below) re-ran every codec on three other recordings: lossless everywhere, and aircraft are the
   one class that costs far more than the battle suggested.
-- **Seek in C**: decode work grows with the units that move, since a unit at rest is skipped. L1
-  MEASURED a seek under one second everywhere except the first snapshot interval of the two largest
-  battles, 1.15–1.23 s, where every unit marches (*L1*, below): open, for L4's snapshot interval.
+- **Seek in C**: decode work grows with the units that move, since a unit at rest is skipped, and
+  in format 10 with the cells the record frames decode. Format 10's seeks read in under one second
+  except the battle's first snapshot interval, 1.22–1.29 s, where every unit marches, and Town &
+  Country's to GameTime 900 and 1,800, 1,105 and 1,124 ms (*L3*, below): open, for L4's snapshot
+  interval.
 - **The writer and the ring**: L1's unit frame cost at most 95 ms for one block of 30 iterations on
   the writer thread, and the 16 MiB ring held at most 2.1 MiB (*L1*, below).
 - **A codec bug's reach**: every codec decodes its block before writing and falls back to the
@@ -646,6 +661,156 @@ offline one.
   pools stay at their engine's 3,000 records (about 324 KB an iteration). Closing it needs the
   extent's growth bounded by the section's bytes, or a copy of only the changed slots.
 
+## L3: the record frames, measured
+
+**What L3 is** (landed). Recording format 10: format 9 with the verbatim bodies of the cells, the
+orders and the events, and a new eighth section for the state, each replaced by a **record frame**
+— a section of columns, at most 32, that makes its kinds' bodies — and with the snapshots' wreck
+records coded against a **wreck base**:
+
+- **the state frame** (`RCS_STATE = 7`, 19 columns): `RK_GLOBALS`, `RK_GLOBALS_DELTA`,
+  `RK_PLAYER`, `RK_PLAYER_DELTA`, `RK_WRECK` and `RK_FEATURES`, which until format 9 rode in the
+  verbatim section; a global by delta of deltas, by a count of Park–Miller steps or raw;
+- **the events frame** (31 columns): one column a field, a shot's points against its units, a
+  death's image against the unit copy, names and texts by dictionary;
+- **the cells frame** (9 columns): against a copy of the grid and the last tick input, which the
+  next iteration's images usually repeat; the tick input kept up to `CELLS_HELD`, 16,384 cells;
+- **the orders frame** (26 columns): a re-sent list as the dwords that changed against its last
+  whole image, in an arena of at most 65,536 nodes;
+- **the wreck base**: a snapshot's `RK_WRECK`s are only the records that differ from the pool at
+  the end of the segment's first iteration, which the writer (`iteration_done`), the C reader
+  (`tick_take`) and `tarec.py` (`stream_to`) each take at that moment from the pool that iteration
+  built from zero, so the bases are equal by construction.
+
+Every record frame restarts **empty** at every reset point, and its state is a function of the
+records since then and the unit copy alone; a frame never declines in mid-block, it latches and
+its section's write declines the block. The `RecSecHead` is 40 bytes. Both readers take format 10
+alone (decision 6); format 9 was never published. The bytes and the refusals are the skirmish
+slice's [*The file*](demo-recorder-skirmish-slice.md#the-file); the engine facts are the engine
+map's
+[*The demo recorder's record frames*](../exe-reverse-engineering.md#the-demo-recorders-record-frames-the-engine-facts-they-predict-from-disassembled-measured-2026-10-10).
+
+**Where it departs from the plan above**, each decided in the building:
+
+- **Restart empty (R2), not from the reader's world (R1).** The only outside state a record frame
+  reads is the unit copy, which every reset already restarts from the reader's units in the
+  encoder, the check decoder and every reader alike; so a frame's state is a function of the
+  records since the reset, and a decline or a refusal needs no rollback. It costs the cells their
+  history at each reset: +124 / +107 / +488 KiB on the battle, the replay gate's Town & Country
+  battle and the air war (MEASURED by L3's encode-only prototypes on format-9 files).
+- **The state is a section of its own**, so `RCS_OTHER` keeps only what no frame codes: the ticks,
+  `RK_UNIT` and `RK_UNIT_GONE` (which the decoder's first pass reads) and every other kind.
+- **The Park–Miller step is a size rule**, not a claim on the engine: a global it does not reach
+  within the search goes by delta or raw. The encoder searches up to 16,384 steps only for a
+  global the step carried last time, else 64, and at most two dwords an iteration take it.
+- **Not in L3**: the cells derived from the units' footprints (−0.6 / −1.0 / −1.4 MiB on the battle,
+  Town & Country and the air war [INFERRED by the research]), and R1, which would win back R2's
+  cost.
+- **The frames' copy of a decoder is test-only**: only the codec's self-test copies one
+  (`RECF_TEST_COPY`, defined by its builds alone and listed in `tafeat.py`'s `TEST_ONLY`), so the
+  DLL carries no function nothing in it calls.
+- **A test lever forces a decline**: `tagpu_rec.decline` and the `codec-decline` and
+  `stock-codec-decline` fixtures exercise the records block and the restart after it, through the
+  encoder's first decline branch only (the skirmish slice's
+  [*The file*](demo-recorder-skirmish-slice.md#the-file)).
+
+**Offline, like for like**: L2's four recordings rewritten as format 10, the same games, with the
+wreck base's saving on their snapshots counted in (MEASURED 2026-10-10 on HEAD's DLL):
+
+| | L2, MiB | L3, MiB | change |
+|---|---:|---:|---:|
+| the battle | 16.40 | 11.88 | −27.6 % |
+| Town & Country | 11.51 | 8.04 | −30.1 % |
+| naval | 1.92 | 1.32 | −31.5 % |
+| the air war | 11.18 | 5.64 | −49.5 % |
+
+The C decoder under Wine, ms in all / the longest run from a reset point, format 10 (format 9):
+the battle 3,690 / 1,122 (3,765 / 1,142), the air war 1,722 / 339 (1,671 / 316). On the battle's
+file the 8 snapshots carry 5,524 wreck records instead of 65,536.
+
+**In the game** (MEASURED 2026-10-10 on the reference setup: HEAD's DLL, recorder armed, game
+speed 20, each scenario played anew under Wine, so **not like for like** with L2's runs). Each
+scenario was recorded twice: once with the machine at a load average of about 30 (the files the
+size, the sections, the seeks and the checks below are measured on) and once at about 3, for the
+writer's cost; each recording is its own game.
+
+| | the battle | Town & Country | naval | air war |
+|---|---:|---:|---:|---:|
+| ticks | 7,441 | 4,260 | 3,811 | 5,041 |
+| **the file, MiB** | **12.00** | **8.74** | **1.26** | **5.26** |
+| stream blocks sectioned / declined / mismatched | 266 / 0 / 0 | 149 / 0 / 0 | 128 / 0 / 0 | 169 / 0 / 0 |
+| a seek from a fresh process, ms, to GameTime 900 / 1800 / 2700 / 3600 (load about 3) | 1,263 / 684 / 539 / 398 | 1,105 / 1,124 / 827 / 705 | 155 / 71 / 34 / 24 | 361 / 390 / 332 / 255 |
+| `codectest.py verify`: blocks where C and Python differ | 0 | 0 | 0 | 0 |
+| `tarec.py check`: snapshots, differing | 8, 0 | 4, 0 | 4, 0 | 5, 0 |
+| the codec on the writer thread at load 30, ms in all / at most for one block | 12,924 / 134 | 11,094 / 127 | 850 / 64 | 3,644 / 55 |
+| the ring's high water at load 30, KiB of 16 MiB | 2,569 | 1,975 | 999 | 1,061 |
+| **at load 3**: the file, MiB; ticks | 11.56; 7,441 | 8.07; 4,230 | 1.29; 3,811 | 6.82; 5,220 |
+| at load 3: stream blocks sectioned / declined / mismatched | 264 / 0 / 0 | 148 / 0 / 0 | 128 / 0 / 0 | 175 / 0 / 0 |
+| at load 3: the codec on the writer thread, ms in all / at most for one block (L2) | 8,034 / 78 (8,169 / 75) | 7,261 / 89 (8,168 / 97) | 634 / 34 (642 / 23) | 4,720 / 54 (2,937 / 36) |
+| at load 3: the ring's high water, KiB of 16 MiB (L2) | 2,104 (2,022) | 1,480 (1,718) | 963 (981) | 1,079 (1,043) |
+
+The seek is the replay's own log line's total (`sought … in X ms`), the read nearly all of it.
+The battle's seek to 900 took 1,216–1,288 ms over five seeks, fresh and running; a seek from a
+running playback reads within about ±30 ms of the fresh process's. In the first air war the level
+ended at GameTime 5,041, shorter than L2's 5,940.
+
+The sections, each packed alone with zstd 3 (`recsize.py`), KiB:
+
+| section | the battle | Town & Country | naval | air war |
+|---|---:|---:|---:|---:|
+| unit frame | 4,809 | 4,692 | 236 | 1,498 |
+| projectiles | 2,308 | 1,060 | 361 | 378 |
+| events | 1,407 | 461 | 136 | 131 |
+| cells | 991 | 1,617 | 193 | 2,739 |
+| orders | 825 | 401 | 63 | 164 |
+| state | 337 | 135 | 140 | 126 |
+| kinds | 212 | 86 | 37 | 62 |
+| other | 97 | 62 | 28 | 59 |
+| snapshots, on disk | 1,117 | 385 | 91 | 138 |
+
+**Verified.** Each package (the state, events, cells and orders frames and the wreck base), on
+merging: five format-9 recordings (the four above and the replay gate's Town & Country battle)
+rewritten as format 10 with every stream block sectioned, 0 declined and 0 mismatched;
+`codectest.py verify` with 0 differences between the C and Python decoders and the records;
+100,000 fuzzed cases per section under ASan and UBSan with no report; `fuzzdiff`'s C and Python
+agreeing. A review at `high` on the landing's diff found nothing of MEDIUM or above.
+
+**Against the plan.**
+
+- **Size.** L3's spec estimated the battle at about 12.1 MiB from format 9's 16.40, from each
+  section packed alone; the transcode gives 11.88. The air war gains most (−49.5 %): its cells, the
+  re-filed second slot of every airborne unit, were 30.7 % of its format-7 file, and the frame
+  codes each cell's changed fields against the copy.
+- **The writer.** At a load average of about 3 the most for one block was 89 ms (Town & Country),
+  as L2's 97; at about 30, 134 ms. The ring never held more than 2.5 MiB of its 16. The air war's
+  codec cost 4,720 ms in all at load 3 against L2's game's 2,937 (5,220 ticks against 5,940); why is
+  not measured.
+- **The seek.** Like for like, the battle's decode in all is 2 % faster and its longest run from a
+  reset point 20 ms shorter; the air war's are 3 % and 23 ms slower. The battle's first interval
+  reads in 1.22–1.29 s over repeated seeks (L2: 1.22–1.26), and Town & Country's seeks to 900 and
+  1,800 in 1,105 and 1,124 ms (L2's game: 1,219 and 1,013).
+
+**What L3 leaves open.**
+
+- **The seek over one second**: the battle's first interval, and Town & Country's first two (above),
+  for L4's snapshot interval.
+- **The next landing's candidates**: the cells derived from the units' footprints (about −0.6 /
+  −1.0 / −1.4 MiB [INFERRED, research]) and R1, which wins back R2's +124 / +107 / +488 KiB of
+  cells.
+- **Memory per codec**: the record frames add about 12–13 MB a codec on the battle's 642 × 648
+  grid, most of it the cells' copy (13.125 bytes a cell, 5.5 MB) and the orders arena (up to
+  5.8 MB), and about 63–65 MB at `RECC_GRID_MAX` (4,194,304 cells, 55 MB of it the cells' copy), by
+  the files' own counts; the writer holds two codecs, a reader one. A grid past the bound turns the
+  codec off (records blocks), never the recording.
+- **The declines no fixture reaches**: the decline lever forces only the encoder's first branch; a
+  decline in mid-block (`enc_iteration`) and the declines after the walk (`over`, a column's failed
+  allocation, `units_write`, `pool_write`, `frames_write`) run in no fixture. A real game still can
+  decline a block, for one by a frame's section past 16 MiB.
+- **Multiplayer-only kinds**: `RK_EV_NET_CREATE`, the `FR_CORPSE` root and the `FS_SOURCE` site meet only
+  the fuzz and decode-before-write; no multiplayer recording was transcoded.
+- L2's open items stand: the survivors' dword 23, births, the snapshots' projectiles, the
+  stock-limits shot rows, and a crafted file's slow seek.
+
 ## Multiplayer recordings
 
 A multiplayer file holds the recording machine's world (every unit, remote players' replicated
@@ -724,7 +889,7 @@ the units: stage 6's traffic budget.
 | L0 | every codec run offline on the naval and Town & Country recordings and one with aircraft and hills: DONE 2026-10-07, lossless everywhere (*L0* above) | aircraft as the open cost |
 | L1 | the sectioned container, decode-before-write with fallback, the unit frame with the aircraft and cell rules in integers: LANDED (*L1* above) | planned about −42 MiB on this battle; MEASURED 99.6 → 29.1 MiB on a new run of it, not like for like |
 | L2 | projectiles by identity (format 9's pool frame), the guided-velocity rule, the search capped at 4 candidates, shooter first: LANDED (*L2* above) | planned about −34 MiB against the pre-L1 file; MEASURED −12.7 MiB on L1's own battle file (29.09 → 16.40), because L1's zstd had already packed its projectiles from 36.5 to 15.0 MiB |
-| L3 | cells, orders, events, globals; the snapshot wreck base | about −7 MiB |
+| L3 | cells, orders, events and state as four record frames that restart empty at every reset point; the snapshot wreck base: LANDED (*L3* above) | planned about −7 MiB against the pre-L1 file; MEASURED −4.52 MiB on L2's own battle file (16.40 → 11.88), −3.47 on Town & Country's, −0.60 on naval's, −5.54 on the air war's |
 | L4 | the measured hour of a four-player game with AI and structures | the snapshot interval; whether lossy is needed |
 | L5 | lossy, only if L4 misses a budget | about −1 MiB per category |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |

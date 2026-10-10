@@ -449,8 +449,8 @@ evidence, and keep remaining gaps visible.
    ([measured](demo-recorder-skirmish-slice.md#measured)). A ten-player battle of 2,010 units
    recorded exactly came to 99.6 MB for 4 min 21 s, about 560 MB an hour once 400 units remained;
    where those bytes go and the ideas for reducing them, ranked:
-   [making recordings smaller](demo-recorder-size.md); with its L1 and L2 landed (recording
-   format 9), the same battle recorded anew takes 15.3 MiB. Until the reduced stream lands, a
+   [making recordings smaller](demo-recorder-size.md); with its L1 to L3 landed (recording
+   format 10), the same battle recorded anew takes 12.0 MiB. Until the reduced stream lands, a
    skirmish is recorded only on request.
 3. **Snapshot interval**, chosen by measurement against the seek target and the disk budget.
 4. **Playback speed presets.**

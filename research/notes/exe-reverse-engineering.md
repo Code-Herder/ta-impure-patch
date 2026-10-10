@@ -3504,7 +3504,7 @@ fixture.
 
 ### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 9 carries a stream block's unit deltas as residuals against a prediction, the
+Recording format 10 carries a stream block's unit deltas as residuals against a prediction, the
 *unit frame* (`tagpu/ddraw/src/tagpu_reccodec.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the plan and its measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md)). Where a rule exists the prediction
@@ -3632,7 +3632,7 @@ non-zero pitch scale (none of the recordings had one); the steering term's hidde
 
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 9 carries a stream block's projectile records as the *pool frame*
+Recording format 10 carries a stream block's projectile records as the *pool frame*
 (`tagpu/ddraw/src/tagpu_reccodec.c`, THE POOL FRAME; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md#l2-the-pool-frame-measured)): the
@@ -3703,6 +3703,70 @@ attacker (a burst copy's spray, the RNG), the guidance's turn (`0x49B3E0` reads 
 position), the bit-16 branch and the expired path's gravity, and a record's last cell hit
 `+0x5A..+0x5F` (the collision `0x49B090`) — the survivors' dword 23, `+0x5C..+0x5F`, is the
 largest residual column of the battle, 214 KiB of its 2.09 MiB.
+
+### The demo recorder's record frames: the engine facts they predict from [DISASSEMBLED + MEASURED 2026-10-10]
+
+Recording format 10 makes the bodies of a stream block's cells, order lists, events and state
+records from four *record frames* (`tagpu/ddraw/src/tagpu_recframe_cells.c`, `_orders.c`,
+`_events.c`, `_state.c`; the bytes in the skirmish slice's
+[*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
+[making recordings smaller](tadr-port/demo-recorder-size.md#l3-the-record-frames-measured)). Every
+fact below is a predictor's, used as a size rule only: a value the prediction misses is coded as a
+residual or raw, and the writer writes a block in the frames only when a second decoder gives its
+records back, so a wrong fact costs size, never data. Each address was re-read in
+`pristine/TotalA.exe.pristine` on 2026-10-10 (`i686-w64-mingw32-objdump -d -M intel`).
+
+- **The simulation RNG's step, `0x4B6C30(n)`** (`stdcall`, `ret 4`), which the state frame's
+  Park–Miller method imitates. `n` < 2, compared signed (`cmp edi,2; jge` at `0x4B6C35..0x4B6C38`),
+  returns 0 without touching the seed (`0x4B6C3A..0x4B6C3D`). Otherwise it loads the seed
+  `[0x51FC88]` (`0x4B6C41`), forms 16807·s by shifts and `lea`s (`0x4B6C4C..0x4B6C75`, 7 · 5 · 5
+  · 16 + 1 = 2801, · 3 · 2 + 1 = 16807) and subtracts `q · (2^31 − 1)`, `q` = s / 127,773 by the
+  multiply-high with `0x69C16BD` (`0x4B6C47..0x4B6C60`): Schrage's form of 16807·s mod 2^31 − 1.
+  A result ≤ 0 gets `+ 0x7FFFFFFF` (`test; jg; add` at `0x4B6C7C..0x4B6C80`), the seed is stored
+  at `0x4B6C87`, and the draw is the new seed mod `n` (`div edi` at `0x4B6C8C`, the remainder
+  returned). Checked numerically: for every seed in 1..2^31 − 1 tried (2,000 consecutive and
+  200,000 random), the instruction sequence gives 16807·s mod (2^31 − 1), 0 becoming 2^31 − 1 —
+  the frame's `f`. The seed's other store is the level's seeding (*The sim RNG is per machine*,
+  above). MEASURED by the L3 research on the format-9 battle: the seed moves a median of 16 steps
+  an iteration, at most 12,622, which is why the frame codes it as a step count.
+- **The feature tick's cursor `main+0x14257`** (*The feature tick `0x424050`*, step 2, above):
+  `dec ecx` at `0x4240A9`, stored at `0x4240AA`; the `jns` at `0x4240BC` tests that decrement's
+  sign (the `mov`s between set no flags), and below 0 the cursor becomes `[main+0x14233] ·
+  [main+0x14237] − 1`, W · H − 1 (`0x4240BE..0x4240CC`), and that tick skips reproduction (`jmp
+  0x4241A8` at `0x4240D2`). The state frame predicts the cursor as `last ? last − 1 : W·H − 1` and
+  the pool's three heads as last time.
+- **The wreck pool's links** (*The pool's start*, above): the level load's loop
+  `0x421F5F..0x421F7E` stores next `i + 1` at `+0x00` and prev `i − 1` at `+0x02` of every
+  `0x30`-byte record, then −1 as record 0's prev (`0x421F8D`) and the last record's next
+  (`0x421F94`, `+0x17FD0` in stock). So no record of a level is all zero, and a snapshot that
+  stored every record that is not zero stored the whole pool; format 10's snapshots store the
+  records that differ from the pool at the end of the segment's first iteration instead (MEASURED
+  2026-10-10 on the size battle's recording rewritten as format 10: 5,524 records in its 8
+  snapshots, against 65,536).
+- **A shot's start and its units** (*What a shot's packet says of its start*, above): `0x49D9C0`
+  fills the packet's `+0x01..+0x0C` from the shooter's `+0x6A..+0x75` (`lea eax,[edi+0x6A]` at
+  `0x49DA9F`; x and y stored by `0x49DAB6`, z read at `0x49DABD` and stored at `0x49DAC7`) and
+  `+0x0D..+0x18` from the target point at `[ebx]`; the receiver `0x49D270` reads the `u16`
+  shooter at `+0x21` (`0x49D329..0x49D34A`, 0 for none) and the `u16` target at `+0x1F`
+  (`0x49D388..0x49D3B7`), each scaled by `0x118` into `main+0x14357`. The events frame codes a
+  shot's start and target point against the shooter's and the target's `+0x6A/+0x6E/+0x72` in
+  its unit copy and the target ID against the shooter's. MEASURED by the L3 research: the start
+  lies within 63 world units of the shooter and the target point within 15 of the target on
+  99.9 % of shots.
+- **A death's image** is the unit as the destructor `0x4866D0` found it (*The demo recorder's event
+  sites*, above); MEASURED by the L3 research, it differs from the unit copy in 0 to 17 dwords, so
+  the events frame codes it as a mask against the copy.
+- **An order node's timer `0x439E80`** (the handler entry facts of
+  [*the takeover from a recording*](#the-takeover-from-a-recording-seat-types-the-ais-objects-passability-and-the-order-nodes-disassembled-2026-10-02)):
+  it rewrites a node's `+0x0A` to GameTime + ticks on every call, so a list the handlers re-arm
+  is sent again every tick with one node changed; the orders frame codes it against the last
+  whole image of the same (slot, list).
+- **The cells' repeat is the recorder's, not the engine's**: the recorder's `cells_tick`
+  (`tagpu_recorder.c`) writes the feature tick's changed cells as tick input and leaves its shadow
+  as it was, so the next iteration's images repeat them. MEASURED by the L3 research on format-9
+  recordings, after each run's first iteration: the images equal the previous tick input record
+  for record in 7,399 of 7,401 iterations of the battle, 3,956 of 3,985 of Town & Country and
+  5,757 of 5,904 of the air war. The cell's fields are *The cell*, above.
 
 ### The demo recorder's tick boundaries: the sim step `0x495490` and its callers [DISASSEMBLED 2026-10-01]
 
@@ -4221,7 +4285,11 @@ is why a node rebuilt with `+0x06` = 0 waits for nothing but its next call.
   `RK_ORDERS` meet the last list of the same (slot, list) at the same length, and every one changed
   its head node (node 2: 59 times, node 1: once); Town & Country 161,642 of 167,290, the air war
   48,619 of 52,199; the longest list held 3 nodes. The recorder's orders frame codes a list
-  against that last image (`tagpu_recframe_orders.c`).
+  against that last image (`tagpu_recframe_orders.c`;
+  [*The demo recorder's record frames*](#the-demo-recorders-record-frames-the-engine-facts-they-predict-from-disassembled-measured-2026-10-10)).
+  The 75 is every `call 0x439E80` in the executable (no `jmp` to it), and the code
+  `0x439E80..0x439E9D` was re-read on 2026-10-10: `or` of `+0x06` with 1, `[main+0x38A47]` plus
+  the argument into `+0x0A`, `ret 4`.
 
 **The sim step's head, `0x4954A0..0x4954ED`**, is read in
 [*the tick boundaries*](#the-demo-recorders-tick-boundaries-the-sim-step-0x495490-and-its-callers-disassembled-2026-10-01):
