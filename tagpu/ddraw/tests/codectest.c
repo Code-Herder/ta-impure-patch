@@ -867,8 +867,9 @@ static int zstd_window_check(void* cctx, void* dctx)
 
 /* ---- each record frame's own outcomes ------------------------------------------------------------
 
-   Each takes the segment's params of cmd_outcomes and returns 1 when every check of its holds. A
-   frame of scheme 0 carries each body verbatim and has nothing of its own to decline. */
+   Each takes the segment's params of cmd_outcomes and returns 1 when every check of its holds:
+   blocks the frame codes and reads back, each record it cannot carry latched and its block
+   DECLINED with the next one restarting, and the decoder's own refusals. */
 
 enum { CF_NONE, CF_PAD, CF_ROW, CF_Z, CF_EMPTY, CF_LEN };
 #define CF_W    16                      /* cmd_outcomes' grid: 16 x 16                           */
