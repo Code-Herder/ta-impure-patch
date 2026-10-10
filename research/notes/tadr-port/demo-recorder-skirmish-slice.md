@@ -331,12 +331,14 @@ names it whenever the file is present (`tagpu_sim_lever` notes it before the tes
 refuses it, as it does `tagpu_hold.on`): the header says the file was there, not that blocks were
 declined; the end block's declined count says whether any were. The fixtures `codec-decline` (the `forest-fire`
 fixture's scenario, `s3a-forest-fire.json`, ended at GameTime 2400 instead of 4500) and its
-stock-limits twin `stock-codec-decline` (`resource-snapping.json`, ended at 2400), both with
+stock-limits twin `stock-codec-decline` (`replay-stock-decline.json`, ended at 2400), both with
 `"decline": true`, record under it, play, round-trip and seek across the declined blocks like any
 fixture, and their stream codec check also fails when the recording declined none. Two, because the
 landing tier asks each build that compiles a changed function to reach it. The stock twin plays a
-scenario where no weapon fires -- the human seat's builders and one idle combat unit, the AI seat a
-lone solar collector across the map -- because a seek on the stock-limits build leaves the engine's
+scenario where no weapon fires -- `resource-snapping.json`'s setup, the human seat's builders and
+one idle combat unit, the AI seat a lone solar collector across the map, with the advanced
+constructor patrolling to the map's corner and back all level so that the declined blocks carry
+images and the stock build reaches the frames' plain path -- because a seek on the stock-limits build leaves the engine's
 own explosion, debris and flying-piece pools empty (the owner-approved known gap in
 `demo-recorder-completeness.md`, scoped to `stock-secondary-orders`): a battle there fails the
 strict images gate whenever its T1 finds an explosion alive.

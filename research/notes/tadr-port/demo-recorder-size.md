@@ -1011,11 +1011,18 @@ snapshot at 1,800 (701 samples, 8 clicks, 11 selections, 1 snapshot), alone and 
   the longer fixtures exercise a seek from a snapshot, and with it R1's restart from a
   snapshot-built grid.
 - **The longest seek doubles in the gate too**: the battle's takeover seeks read up to about 1,923
-  iterations instead of 1,023. W3's bound, the battle's `cpu_ms` 4,000, is unchanged; if a run
-  exceeds it, raising it is a loosening and the owner's decision.
+  iterations instead of 1,023, and the U lane's return to now at 1,501 reads 1,500 from the
+  first: 3.5–4.12 s of the game thread's CPU under the gate's load (MEASURED, two landing runs),
+  past W3's 4,000. The owner raised the battle's `cpu_ms` to 5,000 (2026-10-10), the loosening
+  this interval costs ([completeness](demo-recorder-completeness.md)).
 - **The HUD markers' walker can hold the game thread for one rebuild**: its stop waits for one
   fork crossing, which rebuilds from the last snapshot before the fork, now up to about 1,800
   iterations ([the replay HUD](../hud-in-game.md)).
+- **The cells encoder's latch runs in no fixture**: it settles the images it held back when a
+  record fails its bounds, which no recording can carry (the writer refuses such a record first,
+  by the same bounds); the codec's self-test runs it (`outcomes_cells`' fault blocks), and the
+  owner chose to keep it inside `cells_enc_rec` rather than land a function no fixture reaches
+  (2026-10-10), as L3's mid-block declines are.
 - **The reset's grid copy**, 5.4 MB on a 642 × 648 grid and up to 54.5 MB at `RECC_GRID_MAX`, once
   a reset in a sequential reader and in the check decoder, and once a seek.
 - L3's other open items stand: the cells derived from the units' footprints, the declines no
