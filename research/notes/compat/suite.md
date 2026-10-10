@@ -44,9 +44,12 @@ names the gap). The hives are private because the store `tacli` keeps
   heartbeat is logged once every 600 of the render thread's frames (`tagpu_gui_flush`, called
   from `tagpu_overlay_draw`). A wall bound only gives up on a game that stopped: 120 s of
   GameTime or frames standing still, 60 s for a one-frame answer, 300 s for a screen of the menus
-  or the battle room to come up. A game Impure is not in has no frames to count, and its
-  start-up is watched `--watch` s of wall clock once its window is up: an observation window,
-  not a verdict, since what it ends as is read from the process and the files.
+  or the battle room to come up. A game Impure is not in has no frames to count: once its main
+  window is up its start-up is watched for `--watch` s of the CPU time of TotalA.exe's main
+  thread (user and system, `/proc/<pid>/task/<pid>/stat`), which a loaded machine stretches and
+  does not shorten, and a CPU time standing still for 120 s ends it too. The main thread's, not
+  the process's: Wine's dozens of spinning threads made the process's grow 12.9 s a second
+  against the main thread's 0.67 (MEASURED 2026-10-09, gammata-ota at its menu).
 - **The network stage** (`wine --mp SECONDS`, 30 by default, 0 for none): for each player's
   setup whose single-player run showed Impure running, a second instance of the same folder
   (`compat-<setup>-j`), both games on their own displays, hosted and joined through the game's
@@ -125,7 +128,9 @@ Zero's third is GoK, and a hard-coded `ARMMAIN|CORMAIN` never saw a GoK player's
 UNEXPECTED, read from the layer's own log lines. Every other check here reads state and gadgets, so
 before this a black screen passed: every Escalation run gave up on 2026-09-27 and no row said so.
 The `gui-stress` setup drives the race on purpose, a fresh start every 120 presents while colour is
-valid, and passes only if the layer never asks for one of its own and its fallback is seen to run
+valid, at the menu only (a setup with a lever plays no battle and no network game: run on through a
+battle, the stress spends the layer's 32 repaints of a palette generation by design), and passes
+only if the layer never asks for one of its own and its fallback is seen to run
 ([GPU status](../gpu-status.md), *Two colour disagreements are neither*).
 
 **Two checks read the UI's pixels, or what stood in for them.** The producer's `GUI pixels:` line

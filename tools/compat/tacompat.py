@@ -797,8 +797,8 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     for leftover in ("ErrorLog.txt", "tdrawlog.txt"):
         (gamedir / leftover).unlink(missing_ok=True)
     for lever in setup.get("levers", []):
-        name, text = lever_file(lever)
-        (gamedir / name).write_bytes(text.encode())
+        file, text = lever_file(lever)
+        (gamedir / file).write_bytes(text.encode())
     return {"name": name, "gamedir": gamedir, "prefix": prefix}
 
 
@@ -928,6 +928,23 @@ class Stalled(Exception):
     pass
 
 
+CLK_TCK = os.sysconf("SC_CLK_TCK")
+
+
+def cpu_ticks(pid: int) -> "int | None":
+    """The CPU time, user and system, of the process's main thread, the one that runs the game's
+    start-up and its message loop, in clock ticks (/proc/<pid>/task/<pid>/stat's fields 14 and
+    15, counted after the parenthesised name, which may hold spaces); None once it cannot be read.
+    Not the process's: a game Wine runs spins dozens of threads, which made the process's CPU time
+    grow 12.9 s a second against the main thread's 0.67 (MEASURED 2026-10-09, gammata-ota at its
+    menu, the reference setup unloaded), so it measures the spinning and not the start-up."""
+    try:
+        fields = Path(f"/proc/{pid}/task/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return int(fields[11]) + int(fields[12])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
 # THE PRESENTS, COUNTED. The UI layer's heartbeat `GUI flips=` is logged by tagpu_gui_flush,
 # which tagpu_overlay_draw calls with the render thread's frame counter, once every
 # PRESENTS_PER_BEAT of its frames: so heartbeats count presented frames, at the menus too. Its
@@ -1045,14 +1062,26 @@ def hud_deselect(name, display, gamedir: Path, where: Path) -> dict:
     strip has not changed, a left click on other ground."""
     where.mkdir(parents=True, exist_ok=True)
 
+    def shot(path, step):
+        """The engine's surface into `path`, a one-frame answer bounded by ACK_S: a file a
+        previous run left there is never what is compared."""
+        path.unlink(missing_ok=True)
+        r = tacli("shot", name, "-o", str(path), "--timeout", str(ACK_S), timeout=ACK_S + 30)
+        if r.returncode or not path.exists():
+            raise Unsettled(f"the engine's surface after the {step} input: "
+                            f"{(r.stderr or r.stdout).strip()[:200]}")
+
     def capture(step):
         pair = (where / f"{step}-screen.png", where / f"{step}-engine.png")
-        tacli("shot", name, "-o", str(pair[1]), timeout=ACK_S)
+        shot(pair[1], step)
         if not presents_after(gamedir):
             raise Unsettled(f"no frame presented for {STALL_S} s after the {step} input")
-        subprocess.run(["import", "-display", f":{display}", "-window", "root", str(pair[0])],
-                       capture_output=True, timeout=30)
-        tacli("shot", name, "-o", str(pair[1]), timeout=ACK_S)
+        pair[0].unlink(missing_ok=True)
+        r = subprocess.run(["import", "-display", f":{display}", "-window", "root", str(pair[0])],
+                           capture_output=True, timeout=ACK_S)
+        if r.returncode or not pair[0].exists():
+            raise Unsettled(f"the screen after the {step} input: {r.stderr.decode(errors='replace')[:200]}")
+        shot(pair[1], step)
         return pair
 
     # The left click aims elsewhere: under the right-click layout the right click was a move
@@ -1592,16 +1621,18 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
     impure_log = gamedir / "log" / "tagpu.log"
     # THE START-UP WATCH ends on a fact: the process gone, a box, or the menu watched for
     # `watch` x TICKS_PER_S presented frames (`presents`) once it is up; frames that stop coming for
-    # STALL_S end it too, and decide nothing. A game Impure is not in has no frames to count, and
-    # is watched for `watch` s once its main window is up -- ddraw.dll is TotalA.exe's first
-    # static import and Impure's DllMain opens its log (tagpu_log_init), so a log is there by
-    # then if Impure is -- which is an observation window, not a verdict: what it ends as is
-    # read from the process and the files. POLL_S bounds a start that reaches none of these.
-    soak, watch_end, window_at = None, None, None
+    # STALL_S end it too, and decide nothing. A game Impure is not in has no frames to count: once
+    # its main window is up -- ddraw.dll is TotalA.exe's first static import and Impure's DllMain
+    # opens its log (tagpu_log_init), so a log is there by then if Impure is -- it is watched for
+    # `watch` s of its main thread's CPU time (`cpu_ticks`), which a loaded machine stretches and
+    # does not shorten, and a CPU time that stands still for STALL_S ends it too. POLL_S bounds a start that
+    # reaches none of these.
+    exe_real = str((gamedir / "TotalA.exe").resolve()).lower()
+    soak, cpu, watch_end, window_at = None, None, None, None
     try:
         while True:
             time.sleep(1.0)
-            if not soak and time.time() - t0 > POLL_S:
+            if not soak and not cpu and time.time() - t0 > POLL_S:
                 watch_end = f"no menu in {POLL_S} s"
                 break
             labelled = impure_log.exists() and impure_log.stat().st_mtime >= t0
@@ -1639,11 +1670,24 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
                 except Stalled as e:
                     watch_end = f"the menu's frames stood at {e}"
                     break
-            elif not labelled and window_at and time.time() - window_at >= watch:
-                break
+            elif not labelled and window_at:
+                if not cpu:
+                    pid = game_pid(proc.pid, exe_real)
+                    if pid is not None:
+                        cpu = Progress(lambda: cpu_ticks(pid), watch * CLK_TCK)
+                if cpu:
+                    try:
+                        if cpu.done():
+                            break
+                    except Stalled as e:
+                        watch_end = f"the game's CPU time stood at {e}"
+                        break
         content = mod_content(setup, inst) if menu and proc.poll() is None else None
         fight = None
-        if battle and menu and not boxes and proc.poll() is None:
+        # A harness setup (one with a lever) checks a mechanism at the menu, as it plays no
+        # network game (mp_eligible): gui-stress's fresh start every 120 presents, run on
+        # through a battle, spends the layer's 32 repaints of a palette generation by design.
+        if battle and menu and not boxes and proc.poll() is None and not setup.get("levers"):
             fight = wine_battle(inst, proc, display, gamedir, seen, boxes, t0, battle,
                                 scenarios(setup)["battle"])
         # The last moment the game is alive: its own code, read from outside (exe_hooks).
@@ -2849,7 +2893,7 @@ def main():
                     help="instances prepared at once (each has registry hives of its own)")
     wi.add_argument("--watch", type=int, default=45, metavar="SECONDS",
                     help="the start-up watch: the menu watched for SECONDS x 30 engine frames once "
-                         "it is up (a game Impure is not in: SECONDS of wall clock)")
+                         "it is up (a game Impure is not in: SECONDS of its main thread's CPU time)")
     wi.add_argument("--screens", action="store_true", help="keep a picture of every run's display")
     wi.add_argument("--strict", action="store_true", help="a known gap fails the run too")
     wi.add_argument("--battle", type=int, default=60, metavar="SECONDS",

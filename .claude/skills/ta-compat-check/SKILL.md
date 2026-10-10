@@ -67,10 +67,10 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   A wall bound only gives up on a game that stopped: 120 s of GameTime (or of frames) standing
   still, 60 s for a one-frame answer, 300 s for a screen of the menus or the battle room to come
   up. The start-up watch ends at the process gone, a box, or the menu watched for `--watch` × 30
-  presented frames; a game Impure is not in has no frames to count and is watched `--watch` s
-  of wall clock once its window is up, an observation window and not a verdict.
-- **The battle stage** (Wine only, on by default, 60 s of game time): every setup that reaches the main
-  menu clicks through to a skirmish on Two Continents and applies `scenarios/200v200.json`.
+  presented frames; a game Impure is not in has no frames to count and is watched for `--watch` s
+  of its main thread's CPU time once its window is up (120 s of it standing still end it too).
+- **The battle stage** (Wine only, on by default, 60 s of game time): every setup without a lever that
+  reaches the main menu clicks through to a skirmish on Two Continents and applies `scenarios/200v200.json`.
   Collisions between two patchers show where the limits are *used*, not at start-up: Impure
   v0.2.3 beside Total Mayhem 11.3.0 reached the menu and crashed on the first skirmish load, which
   a start-up-only run passes. **The units must be seen, not only made**: after the scenario, the
@@ -191,7 +191,7 @@ fixture (`files`: name → md5), then a setup in `tools/compat/setups.json`:
   No setup carries it today.
 - `levers`: files put in the game folder — a name for an empty switch file, or
   `{"file": name, "text": contents}` for a setting. A setup with one checks a mechanism,
-  not a player's folder, and plays no network game: `gui-stress` writes `reseedstress=120` into
+  not a player's folder, and plays no battle and no network game: `gui-stress` writes `reseedstress=120` into
   `tagpu_gui.on`, so the UI layer asks itself for a fresh start every 120 presents, and passes
   only if the layer never asks for one of its own, never gives up, and its indexed fallback for a
   restored sprite is seen to run (`gui_stress` in its goal is the minimum number of fresh starts); `mayhem-11.3.0-net` turns the takeover off
