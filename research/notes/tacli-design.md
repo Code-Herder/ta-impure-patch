@@ -293,14 +293,19 @@ on `tacli stop` (a thread in D state outlived the leader), and never while a pro
 thread alone was killed lived on, invisible to `running()`. A launch in that window exits with
 code 255 and `exited during launch before showing a window (no ErrorLog.txt)`.
 
-So `launch`, once it knows no game of the instance runs and before its first Wine process
-(`end_prefix_wineserver`, ahead of the DirectPlay step and `apply_prefix_settings`):
+So `launch`, under the instance's lock (`regstore_lock`, taken before the check that no game
+runs, so a second launch of the same instance waits and then finds the first one's game), once
+it knows no game of the instance runs and before its first Wine process (`end_prefix_wineserver`,
+ahead of the DirectPlay step and `apply_prefix_settings`):
 
-1. **Lists the prefix's processes**: every process whose environment holds exactly this
-   `WINEPREFIX`, read through the leader or, when the leader has exited, through any of its
+1. **Lists the prefix's processes**: every process whose `WINEPREFIX` names this prefix once
+   resolved (`prefix_key`: a relative value against the process's working directory, symlinks
+   and a trailing slash followed, as Wine finds a prefix's server by the directory; `running()`
+   and the window search compare the same way), read through the leader or, when the leader has exited, through any of its
    threads (`/proc/<pid>/task/<tid>/environ`), with its name, parent, start time, the leader's
    state and the thread count.
-2. **Ends the server**: `wineserver -k`, then `wineserver -w`. A wineserver that has exited holds
+2. **Ends the server**: `wineserver -k`, then `wineserver -w`, each under a 120 s hang bound that
+   only gives up, naming the prefix's processes. A wineserver that has exited holds
    no object, and a process never changes server, so once `-w` has returned only a TotalA.exe this
    launch starts can create the name. Everything left in the prefix is stale by construction,
    because the instance's game is not running — **any other Wine program run in an instance's
