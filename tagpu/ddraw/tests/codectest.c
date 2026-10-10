@@ -1,10 +1,14 @@
 /* codectest.c -- the stream codec's self-test (src/tagpu_reccodec.c and its record frames,
    src/tagpu_recframe_*.c), driven by codectest.py.
 
-     codectest transcode IN OUT     every stream block of a recording decoded to its records and
+     codectest transcode IN OUT [--snap-every N]
+                                    every stream block of a recording decoded to its records and
                                     written again through reccodec_stream_block, restarting where
                                     the writer restarts; a line per block (raw, section and packed
-                                    bytes, milliseconds) and the outcomes
+                                    bytes, milliseconds) and the outcomes. With N, only every Nth
+                                    snapshot of a segment is kept (0: none), and the stream
+                                    restarts only after those: the file a writer whose snapshot
+                                    interval is N times IN's would have written
      codectest decode IN OUT        every stream block's records, C, framed for codectest.py; a
                                     line per block with its milliseconds
      codectest outcomes             synthetic payloads of units and projectiles that must be
@@ -396,12 +400,13 @@ static int reading_next(Reading* g, double* ms)
 
 /* ---- transcode, decode ------------------------------------------------------------------------ */
 
-static int cmd_transcode(const char* in, const char* outp)
+static int cmd_transcode(const char* in, const char* outp, int every)
 {
     Reading g;
     RecStream st;
     FILE* out;
     int k, on = 0, bad = 0;
+    unsigned nsnap = 0;
     double ms, tot = 0, worst = 0;
     size_t raw = 0, written = 0, secbytes = 0, unitbytes = 0, poolbytes = 0;
     unsigned nblk = 0;
@@ -416,6 +421,7 @@ static int cmd_transcode(const char* in, const char* outp)
         if (b->kind == RB_HEADER) {
             if (on) reccodec_stream_end(&st);
             on = g.p.usable && reccodec_stream_begin(&st, &g.p);
+            nsnap = 0;
             put_block(out, b->kind, RBF_STORED, b->first, b->last, b->raw, g.r.bytes, b->raw);
         } else if (b->kind == RB_STREAM && on) {
             unsigned flags;
@@ -463,6 +469,8 @@ static int cmd_transcode(const char* in, const char* outp)
             rb_free(&e);
         } else if (b->kind == RB_TIMELINES || b->kind == RB_STREAM) {
             put_block(out, b->kind, RBF_STORED, b->first, b->last, b->raw, g.r.bytes, b->raw);
+        } else if (b->kind == RB_SNAPSHOT && every >= 0 && (every == 0 || ++nsnap % (unsigned)every)) {
+            continue;
         } else {
             RecBytes pk;
             int packed;
@@ -2334,7 +2342,9 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
 
 int main(int argc, char** argv)
 {
-    if (argc == 4 && !strcmp(argv[1], "transcode")) return cmd_transcode(argv[2], argv[3]);
+    if (argc == 4 && !strcmp(argv[1], "transcode")) return cmd_transcode(argv[2], argv[3], -1);
+    if (argc == 6 && !strcmp(argv[1], "transcode") && !strcmp(argv[4], "--snap-every"))
+        return cmd_transcode(argv[2], argv[3], atoi(argv[5]));
     if (argc == 4 && !strcmp(argv[1], "decode")) return cmd_decode(argv[2], argv[3]);
     if (argc == 2 && !strcmp(argv[1], "outcomes")) return cmd_outcomes();
     if (argc >= 5 && !strcmp(argv[1], "fuzz")) {
@@ -2365,6 +2375,6 @@ int main(int argc, char** argv)
         for (i = 0; i < 512; i++) printf("%d\n", SIN[i]);
         return 0;
     }
-    fprintf(stderr, "usage: codectest transcode IN OUT | decode IN OUT | outcomes | fuzz IN SEED N [CASES] [--section NAME] | sin\n");
+    fprintf(stderr, "usage: codectest transcode IN OUT [--snap-every N] | decode IN OUT | outcomes | fuzz IN SEED N [CASES] [--section NAME] | sin\n");
     return 2;
 }

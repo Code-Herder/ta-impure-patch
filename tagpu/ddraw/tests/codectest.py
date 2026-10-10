@@ -7,8 +7,11 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
 
     outcomes                 SECTIONS, DECLINED and MISMATCH from synthetic payloads of units and
                              projectiles, each followed by a block that restarts (codectest.c)
-    transcode IN OUT         every stream block decoded and written again through the writer's
-                             codec: 0 declined and 0 mismatched expected
+    transcode IN OUT [--snap-every N]
+                             every stream block decoded and written again through the writer's
+                             codec: 0 declined and 0 mismatched expected; with N, every Nth
+                             snapshot of a segment kept (0: none) and the stream restarting only
+                             after those, as a writer N times IN's snapshot interval would write
     verify IN                each stream block's records from the C decoder against the Python
                              reader's, which decodes twice -- skipping the resting units and
                              evaluating every candidate -- and the C sine table against its formula
