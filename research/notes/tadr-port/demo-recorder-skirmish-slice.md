@@ -249,6 +249,16 @@ and `RT_PHYSICS` (a dump, a synthetic test file), or without memory for the enco
 decoder's states, every stream block is written as records; without memory for the header's codec
 constants the recording ends before its file is opened.
 
+**The decline on demand.** No real recording declines a block, so the fallback and the restart
+after it would run in no fixture. The test lever `tagpu_rec.decline` — read at attach, honoured in a
+test launch only (`tagpu_rec_lever_init`), and named in the recording's header like every lever —
+makes the writer's codec decline stream blocks 2, 7, 12, … by the encoder's own first decline:
+`reccodec_stream_block` invalidates the encoder before `reccodec_encode`, which then takes the
+path a real decline takes (`plain_apply`, the encoder left invalid, `RECC_DECLINED`, the records
+block, `RBF_FRAME_RESET` on the next). The fixture `codec-decline` (the forest fire to GameTime
+2400, `"decline": true`) records under it, plays, round-trips and seeks across the declined blocks
+like any fixture, and its stream codec check also fails when the recording declined none.
+
 **What a reader refuses**, the C reader and `reccodec.py` alike, each by name (the C reader with the
 block's file offset): a flag bit it does not know, `RBF_SECTIONS` on a block that is not a stream block,
 `RBF_FRAME_RESET` without it, a packed header, end or timelines block, a block whose header passed

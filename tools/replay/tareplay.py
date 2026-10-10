@@ -50,7 +50,10 @@ and a fifth where fixtures.json gives the fixture `"watch": true`:
 and every check fails by name: the recording's end block and `tarec check`; L's dumps `tarec
 compare`; P's, R's, Q's and W's capture dumps `tarec compare --puppet`; each round trip's line has
 residue 0 and `tarec compare-dumps rt<T>-a rt<T>-b` is EQUAL; W's steps each hold what they
-claim. Passing dumps are deleted unless --keep.
+claim. Passing dumps are deleted unless --keep. A fixture with `"decline": true` launches every
+process with DECLINE_LEVER in its game folder, so its recording holds blocks the writer's codec
+declined on a schedule, each read back like any other, and the stream codec's check fails when it
+holds none.
 
 A fixture fixtures.json gives a `takeover` runs two processes more, K after L and F after K:
 
@@ -172,6 +175,10 @@ TURBO = 1                       # the k --turbo defaults to: normal speed's batc
 # keys (tagpu_settings.h); `shadows`, the engine's own switch, is left as a player has it
 TEST_RENDER = {"style": "custom", "assets": "0", "light": "0", "shadowres": "512", "ss": "1"}
 PRESENT_CAP = 20
+# A fixture fixtures.json gives `"decline": true` launches with this lever in its game folder: the
+# writer's codec declines stream blocks 2, 7, 12, ... (tagpu_recorder.h, tagpu_rec_lever_init),
+# and the recording must count declined blocks (codec_check)
+DECLINE_LEVER = "tagpu_rec.decline"
 GAMETIME = "*0x511DE8+0x38A47:4"
 COB_STOP = "A unit script cannot continue safely"
 TRIGGER = "tagpu_replay.trigger"
@@ -474,6 +481,11 @@ class Worker:
         else:
             turbo.unlink(missing_ok=True)
         self.hold_lever(self.held)
+        decline = self.gamedir / DECLINE_LEVER
+        if fix.get("decline"):
+            decline.write_text("")
+        else:
+            decline.unlink(missing_ok=True)
         self.test_render()
         shutil.copy2(dll, self.gamedir / "ddraw.dll")
         rd = self.gamedir / "replays"
@@ -2135,12 +2147,14 @@ def image_gate_options(fx):
     return []
 
 
-def codec_check(info):
+def codec_check(info, decline=False):
     """The live recording's stream codec, from `tarec info`'s output: a stream block whose check
     decode differed (the end block's RT_CODEC_MISMATCH) is a codec bug, which the writer wrote as
     records and the gate fails by name; so is a recording with no sectioned stream block, whose
     codec never ran (a writer without memory for the codec writes every block as records, and its
-    end block then counts nothing). The blocks the encoder declined are reported."""
+    end block then counts nothing). The blocks the encoder declined are reported; with `decline`
+    (the fixture's DECLINE_LEVER) a recording that declined none fails, since its fallback never
+    ran."""
     m = re.search(r"the writer's codec: (\d+|absent) blocks declined, (\d+|absent) mismatched",
                   info)
     if not m:
@@ -2158,6 +2172,9 @@ def codec_check(info):
     if not sectioned:
         return ("the stream codec", FAIL, f"none of the {blocks} stream blocks is sectioned: the "
                                           f"codec never ran ({declined} declined)")
+    if decline and declined in ("0", "absent"):
+        return ("the stream codec", FAIL, f"{DECLINE_LEVER} declined no block: the fallback "
+                                          f"never ran ({sectioned} of {blocks} sectioned)")
     return ("the stream codec", PASS, f"0 mismatched, {declined} declined, {sectioned} of {blocks} "
                                       f"stream blocks sectioned")
 
@@ -2177,7 +2194,8 @@ def checks(fx):
         end = m.group(1) if m else "no end block"
         clean = (m and "complete" in end and " 0 id rows outside" in end and
                  " 0 nano sprays uncredited" in end)
-        return [("the end block", PASS if clean else FAIL if m else UNRUN, end), codec_check(o)]
+        return [("the end block", PASS if clean else FAIL if m else UNRUN, end),
+                codec_check(o, fx["fix"].get("decline", False))]
     res.later(info)
     res.later(tarec_verdict, "tarec check", "check", rec)
 
@@ -3201,6 +3219,8 @@ def landing_plan(base):
         for ln in sorted(changed_lines(path, base)):
             fn = next((f for f in fns if f[1] <= ln <= f[2]), None)
             b = bl[ln] if ln < len(bl) else tafeat.BOTH
+            if not b:                   # a test program's line (tafeat.TEST_ONLY): no game runs it
+                continue
             if "stock" in b:
                 fx.add(STOCK_FIXTURE)
             if path in by_region:

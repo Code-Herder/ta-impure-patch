@@ -104,6 +104,11 @@ typedef struct RecStream {
     void*      dctx;                  /* ZSTD_DCtx                                               */
     RecBytes   sec, pk, back, out;
     unsigned   sectioned, declined, mismatched;
+    /* A TEST LEVER, 0 from reccodec_stream_begin; the writer sets it from the recorder's
+       tagpu_rec.decline (tagpu_recorder.h, tagpu_rec_lever_init). Nonzero, the stream's blocks
+       2, 7, 12, ... are declined by the encoder's own decline, so the fallback and the restart
+       after it run in a fixture although no real recording declines a block. */
+    int        decline;
 } RecStream;
 int  reccodec_stream_begin(RecStream* s, const RecCodecParams* p);   /* 0: no memory           */
 void reccodec_stream_end(RecStream* s);

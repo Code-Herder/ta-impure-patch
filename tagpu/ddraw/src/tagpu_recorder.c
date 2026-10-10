@@ -77,6 +77,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_recorder.h"
+#include "tagpu_regstore.h"
 #include "tagpu_recmp.h"
 #include "tagpu_recmp_channel.h"
 #include "tagpu_recmp_players.h"
@@ -2427,6 +2428,8 @@ static HANDLE dup_event(HANDLE e)
     return d;
 }
 
+static int s_decline;               /* tagpu_rec.decline, set at attach (tagpu_rec_lever_init) */
+
 /* Everything a recording will need, taken now. After this the capture allocates only from its own
    heap, for the order lists' images, and for a heap table that grows (table_grow). */
 static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
@@ -2443,6 +2446,7 @@ static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
     static unsigned char hb[HEADER_MAX];
 
     if (!r || !g) goto fail;
+    g->decline = s_decline;
     if (s_fork.file) {                  /* THE FORK'S HANDLE moves to the ring */
         g->fork = s_fork;
         s_fork.file = NULL;
@@ -6556,6 +6560,17 @@ static int pristine(unsigned va, const unsigned char* bytes, unsigned n)
 }
 
 int tagpu_rec_hooks_in(void) { return s_sites; }
+
+void tagpu_rec_lever_init(void)
+{
+    if (!tagpu_sim_lever("tagpu_rec.decline")) return;
+    if (!tagpu_regstore_active()) {
+        tagpu_logf("recorder: tagpu_rec.decline refused: not a test launch (tagpu_regstore.h)");
+        return;
+    }
+    s_decline = 1;
+    tagpu_logf("recorder: tagpu_rec.decline: the codec declines stream blocks 2, 7, 12, ...");
+}
 
 void tagpu_rec_init(void)
 {

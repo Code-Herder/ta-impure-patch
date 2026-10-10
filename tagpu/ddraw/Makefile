@@ -225,13 +225,14 @@ tests/vklifetime.exe: tests/vklifetime.c src/tagpu_vk.c src/tagpu_vk.h
 # built natively with the sanitizers by `codectest.py --native`): the real tagpu_reccodec.c and its
 # record frames transcode and decode recordings, its outcomes and a fuzz, against
 # tools/replay/reccodec.py. codectest.c includes the codec's source, to copy a decoder's state the
-# interface keeps opaque; the frames, whose states their own `copy` copies, are linked.
+# interface keeps opaque; the frames, whose states their own `copy` copies, are linked. Only these
+# builds define RECF_TEST_COPY, which compiles the frames' copies (inc/tagpu_recframe.h).
 # Not part of `all` or of CI -- it needs Wine or a host compiler, and recordings.
 codectest: tests/codectest.exe
 
 RECFRAMES := $(wildcard src/tagpu_recframe_*.c)
 tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) inc/tagpu_reccodec.h inc/tagpu_recframe.h inc/tagpu_recfmt.h inc/tagpu_reclanes.h src/zstd.c
-	$(CC) -Iinc -Isrc -O2 -Wall -std=c99 -static -o $@ tests/codectest.c $(RECFRAMES) src/zstd.c
+	$(CC) -Iinc -Isrc -DRECF_TEST_COPY -O2 -Wall -std=c99 -static -o $@ tests/codectest.c $(RECFRAMES) src/zstd.c
 
 clean:
 	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe tests/arttest.exe tests/windowtest.exe tests/vklifetime.exe tests/codectest.exe tests/codectest-asan.exe inc/tagpu_art_gen.h || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))

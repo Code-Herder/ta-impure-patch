@@ -162,6 +162,7 @@ static void state_restart(void* f)
     for (i = 0; i < STATE_COLS; i++) rb_clear(&x->col[i]);
 }
 
+#ifdef RECF_TEST_COPY
 static int state_copy(void* dst, const void* src)
 {
     State* d = (State*)dst;
@@ -171,6 +172,7 @@ static int state_copy(void* dst, const void* src)
     memcpy(d->wknown, s->wknown, s->nwrecks);
     return 1;
 }
+#endif
 
 /* ---- the encoder ------------------------------------------------------------------------------ */
 
@@ -651,7 +653,10 @@ static int state_dec_close(void* f, char* why, unsigned cap)
 
 const RecFrameOps recframe_state = {
     "state", RCS_STATE,
-    state_make, state_drop, state_restart, state_copy,
+    state_make, state_drop, state_restart,
+#ifdef RECF_TEST_COPY
+    state_copy,
+#endif
     state_enc_iter, state_enc_rec, state_enc_iter_end, state_enc_write,
     state_dec_open, state_dec_iter, state_dec_rec, state_dec_iter_end, state_dec_close
 };

@@ -151,6 +151,7 @@ static void orders_restart(void* f)
     for (i = 0; i < ORDERS_COLS; i++) rb_clear(&x->col[i]);
 }
 
+#ifdef RECF_TEST_COPY
 static int orders_copy(void* dst, const void* src)
 {
     Orders* d = (Orders*)dst;
@@ -164,6 +165,7 @@ static int orders_copy(void* dst, const void* src)
     d->prev = s->prev;
     return 1;
 }
+#endif
 
 static void orders_enc_iter(void* f, const RecFrameAt* a)
 {
@@ -347,7 +349,10 @@ static int orders_dec_close(void* f, char* why, unsigned cap)
 
 const RecFrameOps recframe_orders = {
     "orders", RCS_ORDERS,
-    orders_make, orders_drop, orders_restart, orders_copy,
+    orders_make, orders_drop, orders_restart,
+#ifdef RECF_TEST_COPY
+    orders_copy,
+#endif
     orders_enc_iter, orders_enc_rec, orders_enc_iter_end, orders_enc_write,
     orders_dec_open, orders_dec_iter, orders_dec_rec, orders_dec_iter_end, orders_dec_close
 };

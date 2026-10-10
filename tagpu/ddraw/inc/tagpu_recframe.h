@@ -265,9 +265,13 @@ typedef struct RecFrameOps {
     void  (*drop)(void* f);
     /* every piece of state cleared, its latches with it: reccodec_restart */
     void  (*restart)(void* f);
-    /* dst takes src's state, both made with the same params (tests/codectest.c's fuzz): 0, no
-       memory */
+#ifdef RECF_TEST_COPY
+    /* dst takes src's state, both made with the same params: 0, no memory. Only the codec's
+       self-test copies a decoder (tests/codectest.c's fuzz), so only its builds define
+       RECF_TEST_COPY (the Makefile's tests/codectest.exe, codectest.py's --native): the DLL
+       carries no function that nothing in it calls. */
     int   (*copy)(void* dst, const void* src);
+#endif
     /* THE ENCODER, per iteration of a block: enc_iter (at `it` 0 the block's columns start
        empty), enc_rec for each record of its kinds in record order, enc_iter_end; then, after the
        block's last, enc_write: its section into `sec`, or 0 when it latched */

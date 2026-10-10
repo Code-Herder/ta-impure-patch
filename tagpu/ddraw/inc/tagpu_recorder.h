@@ -55,6 +55,12 @@ void tagpu_rec_level_end(void);
    explosion and the footprint writers' undo at them. tagpu_rec_hooks_in: all of them are in. */
 void tagpu_rec_init(void);
 int tagpu_rec_hooks_in(void);
+/* DllMain's attach, before tagpu_simreg_attach closes the lever list, so a recording's header
+   names it: THE TEST LEVER tagpu_rec.decline, honoured only in a test launch
+   (tagpu_regstore_active) and refused with a line otherwise. Present, every recording's codec
+   declines stream blocks 2, 7, 12, ... (RecStream.decline): the tareplay fixture codec-decline
+   records under it and checks that the recording reads back across each declined block. */
+void tagpu_rec_lever_init(void);
 
 /* Actual delivered span in this thread's owned primary receive frame. Zero
    means the pointer is not that frame's current packet. No engine buffer is
@@ -186,6 +192,8 @@ typedef struct RecRing {
                                           ordinary recording, which creates its own file       */
     RecMpFile*     mp;                 /* copied contribution context, set before writer start;
                                           producer end precedes the final ring publication     */
+    int            decline;            /* the test lever tagpu_rec.decline (tagpu_rec_lever_init):
+                                          the writer's codec declines blocks (RecStream.decline) */
 } RecRing;
 
 /* Starts the writer thread on a ring whose first record is RK_HEADER. From then on the writer

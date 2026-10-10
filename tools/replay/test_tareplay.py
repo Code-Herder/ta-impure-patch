@@ -517,14 +517,26 @@ class Parser(unittest.TestCase):
                          [["raised", "stock"], ["raised"], ["stock"], ["stock"],
                           ["raised", "stock"]])
 
+    def test_a_test_only_block_is_in_no_build(self):
+        text = ("a\n#ifdef RECF_TEST_COPY\nb\n#ifndef TAGPU_LIMITS_STOCK\nc\n#endif\n#else\nd\n"
+                "#endif\ne\n")
+        b = tafeat.builds(text)
+        self.assertEqual([sorted(b[i]) for i in (1, 3, 5, 8, 10)],
+                         [["raised", "stock"], [], [], ["raised", "stock"], ["raised", "stock"]])
+
     @unittest.skipUnless(all(m.exists() for m in MAPS), "no coverage build (make COVER=1)")
-    def test_every_parsed_function_is_in_a_map(self):
+    def test_the_maps_hold_every_dll_function_and_no_test_one(self):
         mapped = set()
         for m in MAPS:
             mapped |= set(tafeat.read_map(m))
         for rel in tareplay.covered_sources():
-            for name, _, _ in tafeat.functions((tafeat.DDRAW / rel).read_text()):
-                self.assertIn((rel, name), mapped, f"{rel}: {name} is in no map")
+            text = (tafeat.DDRAW / rel).read_text()
+            built = tafeat.builds(text)
+            for name, first, _ in tafeat.functions(text):
+                if built[first]:
+                    self.assertIn((rel, name), mapped, f"{rel}: {name} is in no map")
+                else:                   # a test program's function (tafeat.TEST_ONLY)
+                    self.assertNotIn((rel, name), mapped, f"{rel}: {name} is in a DLL's map")
 
 
 class Features(unittest.TestCase):
@@ -850,6 +862,15 @@ class CodecCheck(unittest.TestCase):
                               ("  ended: complete\n", tareplay.UNRUN)):
             with self.subTest(info=info):
                 self.assertEqual(tareplay.codec_check(info)[1], verdict)
+
+    def test_the_decline_lever_needs_a_declined_block(self):
+        # a fixture under tagpu_rec.decline whose recording declined nothing never ran the fallback
+        for info, verdict in ((self.info(declined="9"), tareplay.PASS),
+                              (self.info(declined="0"), tareplay.FAIL),
+                              (self.info(declined="absent"), tareplay.FAIL)):
+            with self.subTest(info=info):
+                self.assertEqual(tareplay.codec_check(info, decline=True)[1], verdict)
+        self.assertIn("declined no block", tareplay.codec_check(self.info(), decline=True)[2])
 
     def test_a_codec_that_never_ran_is_named(self):
         # a writer without memory for the frame: every block records, the end block counts 0 and 0

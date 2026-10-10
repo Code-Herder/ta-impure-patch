@@ -47,8 +47,10 @@ NATIVE = HERE / "codectest-asan.exe"
 
 def build_native():
     frames = sorted(str(p.relative_to(DDRAW)) for p in DDRAW.glob("src/tagpu_recframe_*.c"))
-    cmd = ["gcc", "-std=c99", "-Wall", "-Iinc", "-Isrc", "-O1", "-g", "-fsanitize=address,undefined",
-           "-fno-sanitize-recover=all", "-o", str(NATIVE), "tests/codectest.c", *frames, "src/zstd.c"]
+    # RECF_TEST_COPY: the frames' copies, which only this test calls (inc/tagpu_recframe.h)
+    cmd = ["gcc", "-std=c99", "-Wall", "-Iinc", "-Isrc", "-DRECF_TEST_COPY", "-O1", "-g",
+           "-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-o", str(NATIVE),
+           "tests/codectest.c", *frames, "src/zstd.c"]
     srcs = [DDRAW / "tests/codectest.c", DDRAW / "src/tagpu_reccodec.c", DDRAW / "inc/tagpu_reccodec.h",
             DDRAW / "inc/tagpu_recframe.h", DDRAW / "inc/tagpu_recfmt.h", DDRAW / "inc/tagpu_reclanes.h",
             DDRAW / "src/zstd.c", *(DDRAW / f for f in frames)]

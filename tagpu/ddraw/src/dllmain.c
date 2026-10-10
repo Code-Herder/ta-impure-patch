@@ -280,6 +280,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            was paced at and whether its launch was held. */
         tagpu_replay_pacing_init();
 
+        /* tagpu: the demo recorder's test lever tagpu_rec.decline (tagpu_recorder.h), read
+           before the registry closes its lever list for the same reason. */
+        tagpu_rec_lever_init();
+
         /* tagpu: the simulation-state registry (tagpu_simreg.h) -- after the last simulation
            module above has installed, so its line counts every declaration and every lever
            read, and closes the list: a lever or TLS index taken later is logged by name. */

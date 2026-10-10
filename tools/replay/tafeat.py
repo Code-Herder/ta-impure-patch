@@ -72,12 +72,16 @@ def blank_comments(text):
 
 STOCK = "TAGPU_LIMITS_STOCK"
 BOTH = frozenset(("raised", "stock"))
+# the macros only a test program's command line defines: what they guard is in no DLL build
+# (inc/tagpu_recframe.h, RECF_TEST_COPY)
+TEST_ONLY = ("RECF_TEST_COPY",)
 
 
 def builds(text):
     """For each line (1-based list, index 0 unused), the builds that compile it: `raised` (the
-    default build), `stock` (make LIMITS=stock) or both, from the #if/#ifdef/#ifndef/#else/#endif
-    lines that test TAGPU_LIMITS_STOCK; any other condition leaves both possible."""
+    default build), `stock` (make LIMITS=stock), both, or none, from the #if/#ifdef/#ifndef/#else/
+    #endif lines that test TAGPU_LIMITS_STOCK and the #ifdef lines of a TEST_ONLY macro; any other
+    condition leaves both possible."""
     out = [BOTH]
     stack = []                          # (the branch's builds, the other branch's)
     for line in text.split("\n"):
@@ -86,7 +90,9 @@ def builds(text):
             kind, rest = d.group(1), d.group(2)
             if kind in ("ifdef", "ifndef", "if"):
                 yes = None
-                if STOCK in rest and kind == "ifdef":
+                if kind == "ifdef" and (rest.split() or [""])[0] in TEST_ONLY:
+                    yes = frozenset()
+                elif STOCK in rest and kind == "ifdef":
                     yes = frozenset(("stock",))
                 elif STOCK in rest and kind == "ifndef":
                     yes = frozenset(("raised",))
@@ -96,7 +102,7 @@ def builds(text):
                 elif kind == "if" and re.fullmatch(
                         rf"\s*!\s*defined\s*\(?\s*{STOCK}\s*\)?\s*(/\*.*)?", rest):
                     yes = frozenset(("raised",))
-                stack.append((yes or BOTH, (BOTH - yes) if yes else BOTH))
+                stack.append((BOTH, BOTH) if yes is None else (yes, BOTH - yes))
             elif kind == "elif" and stack:
                 stack[-1] = (BOTH, BOTH)
             elif kind == "else" and stack:

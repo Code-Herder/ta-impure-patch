@@ -2725,6 +2725,13 @@ int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, 
         reccodec_restart(s->enc, &s->p, reccodec_units(s->enc), reccodec_live(s->enc), pool, count, hw);
         reccodec_restart(s->chk, &s->p, reccodec_units(s->enc), reccodec_live(s->enc), pool, count, hw);
     }
+    /* THE TEST LEVER (RecStream.decline): an invalid encoder is reccodec_encode's first decline,
+       so a block chosen here runs what a real decline runs -- plain_apply, the encoder left
+       invalid, RECC_DECLINED, the records block, the next block's restart -- and nothing else */
+    if (s->decline) {
+        unsigned b = s->sectioned + s->declined + s->mismatched;
+        if (b >= 2 && (b - 2) % 5 == 0) reccodec_invalidate(s->enc);
+    }
     k = reccodec_encode(s->enc, payload, n, &s->sec);
     if (k == RECC_SECTIONS) {
         const unsigned char* src = s->sec.p;

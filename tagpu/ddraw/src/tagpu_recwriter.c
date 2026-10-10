@@ -405,9 +405,10 @@ static int codec_begin(Writer* w, const unsigned char* const ent[3], const unsig
     }
     if (!p->usable)
         tagpu_logf("recorder: writer: %s: every stream block is written as records", why);
-    else if (reccodec_stream_begin(&w->codec, p))
+    else if (reccodec_stream_begin(&w->codec, p)) {
         w->codec_on = 1;
-    else
+        w->codec.decline = w->ring->decline;
+    } else
         tagpu_logf("recorder: writer: no memory for the codec of %u slots and %u projectiles: "
                    "every stream block is written as records", w->nslots, w->ncap);
     free(p);

@@ -168,6 +168,7 @@ static void events_restart(void* f)
     for (i = 0; i < EV_COLS; i++) rb_clear(&x->col[i]);
 }
 
+#ifdef RECF_TEST_COPY
 static void dict_copy(EvDict* d, const EvDict* s)
 {
     d->n = s->n;
@@ -190,6 +191,7 @@ static int events_copy(void* dst, const void* src)
     d->latched = s->latched;
     return 1;
 }
+#endif
 
 /* ---- what both sides derive ------------------------------------------------------------------- */
 
@@ -793,7 +795,10 @@ static int events_dec_close(void* f, char* why, unsigned cap)
 
 const RecFrameOps recframe_events = {
     "events", RCS_EVENTS,
-    events_make, events_drop, events_restart, events_copy,
+    events_make, events_drop, events_restart,
+#ifdef RECF_TEST_COPY
+    events_copy,
+#endif
     events_enc_iter, events_enc_rec, events_enc_iter_end, events_enc_write,
     events_dec_open, events_dec_iter, events_dec_rec, events_dec_iter_end, events_dec_close
 };

@@ -757,6 +757,12 @@ cannot see an address recorded as a value; the scan looks for one instead.
   of the fixtures it ran reached, on the coverage build; the broad tier fails it for a feature none
   of its fixtures reached, a root or sink site no run counted, and a recorded table no recording
   changed between T1 and Tlast. The owner decides each landing that cannot reach a change (OQ7).
+  A line that only a test program compiles is no game's to reach: a block under `#ifdef` of a
+  macro in `tafeat.py`'s `TEST_ONLY` — `RECF_TEST_COPY`, the record frames' `copy`, which only
+  the codec's self-test calls and only its command lines define — is in no DLL, and the landing
+  tier asks for none of its functions. A path the DLL does carry but no real game takes gets a
+  test lever and a fixture instead: the codec's decline (`tagpu_rec.decline`, `codec-decline`,
+  [the slice note](demo-recorder-skirmish-slice.md#the-file)).
 - **A feature root is made at its phase of the step.** The recorder stamps each feature root with
   where in the step it was made — the unit tick, the projectile tick, or from the explosion tick
   on — and a puppet host makes it at the same point of its own step, so the host's projectiles meet

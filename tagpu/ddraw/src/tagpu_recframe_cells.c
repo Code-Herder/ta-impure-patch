@@ -188,6 +188,7 @@ static void cells_restart(void* f)
     for (i = 0; i < CELLS_COLS; i++) rb_clear(&x->col[i]);
 }
 
+#ifdef RECF_TEST_COPY
 static int cells_copy(void* dst, const void* src)
 {
     Cells* d = (Cells*)dst;
@@ -214,6 +215,7 @@ static int cells_copy(void* dst, const void* src)
     d->bad = s->bad;
     return 1;
 }
+#endif
 
 static void iter_start(Cells* x)
 {
@@ -460,7 +462,10 @@ static int cells_dec_close(void* f, char* why, unsigned cap)
 
 const RecFrameOps recframe_cells = {
     "cells", RCS_CELLS,
-    cells_make, cells_drop, cells_restart, cells_copy,
+    cells_make, cells_drop, cells_restart,
+#ifdef RECF_TEST_COPY
+    cells_copy,
+#endif
     cells_enc_iter, cells_enc_rec, cells_enc_iter_end, cells_enc_write,
     cells_dec_open, cells_dec_iter, cells_dec_rec, cells_dec_iter_end, cells_dec_close
 };
