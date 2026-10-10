@@ -1584,17 +1584,70 @@ def _orders_close(st, cols, sec, err):
 
 # ---- THE EVENTS FRAME (tagpu_recframe_events.c) --------------------------------------------------
 #
-# Scheme 0, one column: for each record of its kinds, a varint length and the body verbatim.
-# Nothing crosses a block.
+# Scheme 1, _EV_COLS columns, each event's fields coded against the last unit ID, the unit copy and
+# the events since the reset: THE BYTES, THE STATE and THE BOUNDS are the C file's. The state:
+# misc (the last ID, the names, the texts and the open deaths held), the two dictionaries and
+# their lengths, per slot its four (script index, arguments) entries and their count and next
+# replaced, its last spray and whether it sprayed, per root its last site and whether it has one,
+# and the open deaths.
 
-E_EVENTS_BODY = 200
-_WHY[E_EVENTS_BODY] = "an event (kind {0}) cut short or past 0xFFFF bytes in the events frame"
-_EVENTS_SCHEME, _EVENTS_COLS = 0, 1
+E_EV_CUT, E_EV_SHOOTER, E_EV_TARGET, E_EV_ARGFLAG, E_EV_TEXT, E_EV_SPRAY, E_EV_NEST, E_EV_MASK, \
+    E_EV_NODEATH, E_EV_ROOT, E_EV_SAME, E_EV_KIND, E_EV_BODY = range(200, 213)
+_WHY[E_EV_CUT] = "an event (kind {0}) cut short in the events frame's column {1}"
+_WHY[E_EV_SHOOTER] = "a shot's shooter ID {0} is past 0xFFFF"
+_WHY[E_EV_TARGET] = "a shot's target ID {0} is past 0xFFFE"
+_WHY[E_EV_ARGFLAG] = "an argument flag (kind {0}) is not 0 or 1"
+_WHY[E_EV_TEXT] = "a name or text (kind {0}) is past its dictionary or its bound"
+_WHY[E_EV_SPRAY] = "spray mode {0} for unit ID {1}"
+_WHY[E_EV_NEST] = "deaths nested past {0}"
+_WHY[E_EV_MASK] = "a death's mask names dword {0}"
+_WHY[E_EV_NODEATH] = "an RK_EV_DEATH_END with no death open"
+_WHY[E_EV_ROOT] = "feature root {0}"
+_WHY[E_EV_SAME] = "a feature's same-site flag for root {0} with no site"
+_WHY[E_EV_KIND] = "record kind {0} in the events frame"
+_WHY[E_EV_BODY] = "a body of {0} bytes, under the longest event"
+_EVENTS_SCHEME = 1
+(_EV_ID, _EV_SH_TGT, _EV_SH_START, _EV_SH_TARGET, _EV_SH_RAW,
+ _EV_ST_IDX, _EV_ST_ARGC, _EV_ST_RZ, _EV_ST_ARGS,
+ _EV_NM_HEAD, _EV_NM_NAME, _EV_LIT,
+ _EV_RP_KIND, _EV_RP_HEAD, _EV_RP_TEXT,
+ _EV_SP_MODE, _EV_SP_POINT, _EV_SP_RAW,
+ _EV_DT_KILLER, _EV_DT_HEAD, _EV_DT_MASK, _EV_DT_DWORDS,
+ _EV_FT_HEAD, _EV_FT_SAME, _EV_FT_SITE, _EV_FT_ARGS,
+ _EV_FE_ROOT, _EV_FE_RESULT,
+ _EV_CREATE, _EV_DRAW, _EV_RAW, _EV_COLS) = range(32)
+_EV_DICT, _EV_STARTS, _EV_SPRAY_BYTES = 256, 4, 44
+NAME_MAX, TEXT_MAX = 32, 128               # REC_NAME_MAX, REC_TEXT_MAX
+DEATHS_MAX = tarec.REC_DEATHS_MAX
+UNIT_BITS = tarec.REC_UNIT_BITS            # 11
+_ROOT_ARGS = np.array(tarec.ROOT_ARGS, np.int64)
+FR_ROOTS = len(tarec.ROOT_ARGS)
+NET_CREATE = 32                            # sizeof(RecNetCreate)
+# EV_BODY_MAX, the longest event, a death: every write below lands in body[:_EV_BODY_MAX], which
+# _events_rec bounds against the body before its first write
+_EV_BODY_MAX = 12 + IMG
+assert 1 <= _EV_COLS <= FRAME_COLS_MAX
+assert max(24 + NAME_MAX, 12 + TEXT_MAX, 8 + int(_ROOT_ARGS.max()), NET_CREATE) <= _EV_BODY_MAX <= BODY_MAX
+(RK_EV_CREATE, RK_EV_DEATH, RK_EV_INTERCEPT, RK_EV_START, RK_EV_START_NAMED, RK_EV_BUILT,
+ RK_EV_STATE, RK_EV_REPLY, RK_EV_SPRAY, RK_EV_FEATURE, RK_EV_FEATURE_END, RK_EV_DRAW,
+ RK_EV_DEATH_END, RK_EV_NET_CREATE) = (
+    tarec.RK_EV_CREATE, tarec.RK_EV_DEATH, tarec.RK_EV_INTERCEPT, tarec.RK_EV_START,
+    tarec.RK_EV_START_NAMED, tarec.RK_EV_BUILT, tarec.RK_EV_STATE, tarec.RK_EV_REPLY,
+    tarec.RK_EV_SPRAY, tarec.RK_EV_FEATURE, tarec.RK_EV_FEATURE_END, tarec.RK_EV_DRAW,
+    tarec.RK_EV_DEATH_END, tarec.RK_EV_NET_CREATE)
+_M_LAST, _M_NAMES, _M_TEXTS, _M_DEATHS = range(4)
 
 
 def _events_new(prm):
     """The events frame's state for a usable segment's params."""
-    return (np.zeros(1, np.int64),)
+    n = prm.nslots
+    return (np.zeros(4, np.int64),
+            np.zeros((_EV_DICT, NAME_MAX), np.uint8), np.zeros(_EV_DICT, np.int64),
+            np.zeros((_EV_DICT, TEXT_MAX), np.uint8), np.zeros(_EV_DICT, np.int64),
+            np.zeros((n, _EV_STARTS, 5), np.int64), np.zeros((n, 2), np.int64),
+            np.zeros((n, _EV_SPRAY_BYTES), np.uint8), np.zeros(n, np.bool_),
+            np.zeros(FR_ROOTS, np.int64), np.zeros(FR_ROOTS, np.bool_),
+            np.zeros(DEATHS_MAX, np.int64))
 
 
 def _events_restart(st):
@@ -1608,7 +1661,7 @@ def _events_clone(st):
 
 @_jit
 def _events_open(st, cols, sec, at, end, iters, err):
-    return _frame_open(sec, at, end, _EVENTS_SCHEME, _EVENTS_COLS, cols, err, RCS_EVENTS)
+    return _frame_open(sec, at, end, _EVENTS_SCHEME, _EV_COLS, cols, err, RCS_EVENTS)
 
 
 @_jit
@@ -1617,11 +1670,317 @@ def _events_iter(st, cols, sec, it, gt, copy, live, err):
 
 
 @_jit
-def _events_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
-    n, ok = _col_varint(sec, cols, 0)
-    if not ok or n > BODY_MAX or not _col_bytes(sec, cols, 0, body, 0, n):
-        return -_fail(err, E_EVENTS_BODY, kind)
+def _le32(a, at):
+    return (np.int64(a[at]) | np.int64(a[at + 1]) << 8 | np.int64(a[at + 2]) << 16 |
+            np.int64(a[at + 3]) << 24)
+
+
+@_jit
+def _put_le32(a, at, v):
+    a[at], a[at + 1], a[at + 2], a[at + 3] = v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF
+
+
+@_jit
+def _ev_zz(sec, cols, k, pred, body, at):
+    """zz(value - pred) from column k into body[at:at + 4]: False cut short."""
+    v, ok = _col_varint(sec, cols, k)
+    if ok:
+        _put_le32(body, at, (pred + _unzz32(v)) & M32)
+    return ok
+
+
+@_jit
+def _ev_id(st, sec, cols):
+    """The next ID, which becomes the last: (ID, False) cut short."""
+    v, ok = _col_varint(sec, cols, _EV_ID)
+    if not ok:
+        return np.int64(0), False
+    i = (st[0][_M_LAST] + _unzz32(v)) & M32
+    st[0][_M_LAST] = i
+    return i, True
+
+
+@_jit
+def _ev_live(copy, live, i):
+    """The slot of a unit ID that is a live slot of the copy, else -1."""
+    if i < 1 or i - 1 >= len(live) or not live[i - 1]:
+        return -1
+    return i - 1
+
+
+@_jit
+def _ev_args(sec, cols, body, at, argc, starts, s, e):
+    """A start's arguments into body[at:at + 16], against slot s's entry e (-1: zero): 1, 0 cut
+    short, -1 a bad flag."""
+    na = argc if argc < 4 else 4
+    rz, ok = _col_u8(sec, cols, _EV_ST_RZ)
+    if not ok:
+        return 0
+    if rz > 1:
+        return -1
+    body[at:at + 16] = 0
+    for i in range(na if rz else 4):
+        pred = starts[s, e, 1 + i] if e >= 0 else 0
+        if not _ev_zz(sec, cols, _EV_ST_ARGS, pred, body, at + 4 * i):
+            return 0
+    return 1
+
+
+@_jit
+def _ev_text(sec, cols, k, dtext, dlen, misc, mi, body, at, mx):
+    """A name or text into body[at:] from the dictionary or a literal: its length, or -1 cut short,
+    -2 past the entries or the bound."""
+    v, ok = _col_varint(sec, cols, k)
+    if not ok:
+        return -1
+    if v:
+        if v > misc[mi]:
+            return -2
+        n = dlen[v - 1]
+        body[at:at + n] = dtext[v - 1, :n]
+        return n
+    n, ok = _col_varint(sec, cols, _EV_LIT)
+    if not ok:
+        return -1
+    if n > mx:
+        return -2
+    if not _col_bytes(sec, cols, _EV_LIT, body, at, n):
+        return -1
+    if misc[mi] < _EV_DICT:
+        dtext[misc[mi], :n] = body[at:at + n]
+        dlen[misc[mi]] = n
+        misc[mi] += 1
     return n
+
+
+@_jit
+def _events_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
+    misc, starts, snum, spray, sprayed, site, sited, deaths = st[0], st[5], st[6], st[7], st[8], \
+        st[9], st[10], st[11]
+    if body.shape[0] < _EV_BODY_MAX:
+        return -_fail(err, E_EV_BODY, body.shape[0])
+    if kind == RK_EV_SHOT:
+        i, ok = _ev_id(st, sec, cols)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_ID)
+        if i > 0xFFFF:
+            return -_fail(err, E_EV_SHOOTER, i)
+        v, ok = _col_varint(sec, cols, _EV_SH_TGT)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_SH_TGT)
+        tg = (i + _unzz32(v - 1)) & M32 if v else 0xFFFF
+        if v and tg >= 0xFFFF:
+            return -_fail(err, E_EV_TARGET, tg)
+        body[:SHOT] = 0
+        for w in range(2):
+            u, at, k = (i, 1, _EV_SH_START) if w == 0 else (tg, 0xD, _EV_SH_TARGET)
+            s = _ev_live(copy, live, u) if u != 0xFFFF else -1
+            for q in range(3):
+                pred = _le32(copy[s], 0x6A + 4 * q) if s >= 0 else 0
+                if not _ev_zz(sec, cols, k, pred, body, at + 4 * q):
+                    return -_fail(err, E_EV_CUT, kind, k)
+        if not (_col_bytes(sec, cols, _EV_SH_RAW, body, 0, 1) and
+                _col_bytes(sec, cols, _EV_SH_RAW, body, 0x19, 6) and
+                _col_bytes(sec, cols, _EV_SH_RAW, body, 0x23, 1)):
+            return -_fail(err, E_EV_CUT, kind, _EV_SH_RAW)
+        body[0x1F], body[0x20], body[0x21], body[0x22] = tg & 0xFF, tg >> 8, i & 0xFF, i >> 8
+        return SHOT
+    if kind == RK_EV_START:
+        i, ok = _ev_id(st, sec, cols)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_ID)
+        v, ok = _col_varint(sec, cols, _EV_ST_IDX)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_ST_IDX)
+        idx = _unzz32(v)
+        v, ok = _col_varint(sec, cols, _EV_ST_ARGC)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_ST_ARGC)
+        argc = _unzz32(v)
+        s = i - 1 if 1 <= i and i - 1 < len(snum) else -1
+        e = -1
+        if s >= 0:
+            for q in range(snum[s, 0]):
+                if starts[s, q, 0] == idx:
+                    e = q
+                    break
+        r = _ev_args(sec, cols, body, 12, argc, starts, s, e)
+        if r == 0:
+            return -_fail(err, E_EV_CUT, kind, _EV_ST_ARGS)
+        if r < 0:
+            return -_fail(err, E_EV_ARGFLAG, kind)
+        _put_le32(body, 0, i)
+        _put_le32(body, 4, idx)
+        _put_le32(body, 8, argc)
+        if s >= 0:
+            if e < 0:
+                e = snum[s, 1]
+                snum[s, 1] = (e + 1) % _EV_STARTS
+                if snum[s, 0] < _EV_STARTS:
+                    snum[s, 0] += 1
+                starts[s, e, 0] = idx
+            for q in range(4):
+                starts[s, e, 1 + q] = _le32(body, 12 + 4 * q)
+        return 28
+    if kind == RK_EV_START_NAMED:
+        i, ok = _ev_id(st, sec, cols)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_ID)
+        body[:24] = 0
+        _put_le32(body, 0, i)
+        if not _col_bytes(sec, cols, _EV_NM_HEAD, body, 4, 2):
+            return -_fail(err, E_EV_CUT, kind, _EV_NM_HEAD)
+        r = _ev_args(sec, cols, body, 8, np.int64(body[4]), starts, 0, -1)
+        if r == 0:
+            return -_fail(err, E_EV_CUT, kind, _EV_ST_ARGS)
+        if r < 0:
+            return -_fail(err, E_EV_ARGFLAG, kind)
+        n = _ev_text(sec, cols, _EV_NM_NAME, st[1], st[2], misc, _M_NAMES, body, 24, NAME_MAX)
+        if n == -1:
+            return -_fail(err, E_EV_CUT, kind, _EV_NM_NAME)
+        if n < 0:
+            return -_fail(err, E_EV_TEXT, kind)
+        return 24 + n
+    if kind == RK_EV_REPLY:
+        i, ok = _ev_id(st, sec, cols)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_ID)
+        body[:12] = 0
+        _put_le32(body, 0, i)
+        v, ok = _col_varint(sec, cols, _EV_RP_KIND)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_RP_KIND)
+        _put_le32(body, 4, v)
+        if not _col_bytes(sec, cols, _EV_RP_HEAD, body, 8, 2):
+            return -_fail(err, E_EV_CUT, kind, _EV_RP_HEAD)
+        n = _ev_text(sec, cols, _EV_RP_TEXT, st[3], st[4], misc, _M_TEXTS, body, 12, TEXT_MAX)
+        if n == -1:
+            return -_fail(err, E_EV_CUT, kind, _EV_RP_TEXT)
+        if n < 0:
+            return -_fail(err, E_EV_TEXT, kind)
+        return 12 + n
+    if kind == RK_EV_SPRAY:
+        i, ok = _ev_id(st, sec, cols)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_ID)
+        _put_le32(body, 0, i)
+        s = i - 1 if 1 <= i and i - 1 < len(sprayed) else -1
+        mode, ok = _col_u8(sec, cols, _EV_SP_MODE)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_SP_MODE)
+        if mode > 2 or (mode < 2 and not (s >= 0 and sprayed[s])):
+            return -_fail(err, E_EV_SPRAY, mode, i)
+        if mode == 2:
+            if not _col_bytes(sec, cols, _EV_SP_RAW, body, 4, _EV_SPRAY_BYTES):
+                return -_fail(err, E_EV_CUT, kind, _EV_SP_RAW)
+        else:
+            body[4:4 + _EV_SPRAY_BYTES] = spray[s]
+            if mode == 1:
+                for q in range(3):
+                    if not _ev_zz(sec, cols, _EV_SP_POINT, _le32(spray[s], 4 + 4 * q), body,
+                                  8 + 4 * q):
+                        return -_fail(err, E_EV_CUT, kind, _EV_SP_POINT)
+        if s >= 0:
+            spray[s, :] = body[4:4 + _EV_SPRAY_BYTES]
+            sprayed[s] = True
+        return 48
+    if kind == RK_EV_DEATH:
+        if misc[_M_DEATHS] >= DEATHS_MAX:
+            return -_fail(err, E_EV_NEST, DEATHS_MAX)
+        i, ok = _ev_id(st, sec, cols)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_ID)
+        deaths[misc[_M_DEATHS]] = i
+        misc[_M_DEATHS] += 1
+        _put_le32(body, 0, i)
+        if not _ev_zz(sec, cols, _EV_DT_KILLER, i, body, 4):
+            return -_fail(err, E_EV_CUT, kind, _EV_DT_KILLER)
+        if not _col_bytes(sec, cols, _EV_DT_HEAD, body, 8, 4):
+            return -_fail(err, E_EV_CUT, kind, _EV_DT_HEAD)
+        mask = np.zeros(UNIT_BITS, np.uint8)
+        if not _col_bytes(sec, cols, _EV_DT_MASK, mask, 0, UNIT_BITS):
+            return -_fail(err, E_EV_CUT, kind, _EV_DT_MASK)
+        for q in range(NDW, 8 * UNIT_BITS):
+            if mask[q >> 3] >> (q & 7) & 1:
+                return -_fail(err, E_EV_MASK, q)
+        s = _ev_live(copy, live, i)
+        if s >= 0:
+            body[12:12 + IMG] = copy[s]
+        else:
+            body[12:12 + IMG] = 0
+        for q in range(NDW):
+            if mask[q >> 3] >> (q & 7) & 1:
+                if not _col_bytes(sec, cols, _EV_DT_DWORDS, body, 12 + 4 * q, 4):
+                    return -_fail(err, E_EV_CUT, kind, _EV_DT_DWORDS)
+        return 12 + IMG
+    if kind == RK_EV_DEATH_END:
+        if misc[_M_DEATHS] == 0:
+            return -_fail(err, E_EV_NODEATH)
+        misc[_M_DEATHS] -= 1
+        _put_le32(body, 0, deaths[misc[_M_DEATHS]])
+        return 4
+    if kind == RK_EV_FEATURE:
+        if not _col_bytes(sec, cols, _EV_FT_HEAD, body, 0, 2):
+            return -_fail(err, E_EV_CUT, kind, _EV_FT_HEAD)
+        root = np.int64(body[0])
+        if root >= FR_ROOTS:
+            return -_fail(err, E_EV_ROOT, root)
+        body[2], body[3] = 0, 0
+        same, ok = _col_u8(sec, cols, _EV_FT_SAME)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_FT_SAME)
+        if same > 1 or (same and not sited[root]):
+            return -_fail(err, E_EV_SAME, root)
+        if same:
+            _put_le32(body, 4, site[root])
+        elif not _col_bytes(sec, cols, _EV_FT_SITE, body, 4, 4):
+            return -_fail(err, E_EV_CUT, kind, _EV_FT_SITE)
+        site[root] = _le32(body, 4)
+        sited[root] = True
+        n = _ROOT_ARGS[root]
+        if not _col_bytes(sec, cols, _EV_FT_ARGS, body, 8, n):
+            return -_fail(err, E_EV_CUT, kind, _EV_FT_ARGS)
+        return 8 + n
+    if kind == RK_EV_FEATURE_END:
+        body[:8] = 0
+        if not _col_bytes(sec, cols, _EV_FE_ROOT, body, 0, 1):
+            return -_fail(err, E_EV_CUT, kind, _EV_FE_ROOT)
+        v, ok = _col_varint(sec, cols, _EV_FE_RESULT)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_FE_RESULT)
+        _put_le32(body, 4, v)
+        return 8
+    if kind == RK_EV_CREATE or kind == RK_EV_NET_CREATE:
+        n, raw = (28, 21) if kind == RK_EV_CREATE else (NET_CREATE, 26)
+        i, ok = _ev_id(st, sec, cols)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_ID)
+        body[:n] = 0
+        _put_le32(body, 0, i)
+        if not _col_bytes(sec, cols, _EV_CREATE, body, 4, raw):
+            return -_fail(err, E_EV_CUT, kind, _EV_CREATE)
+        return n
+    if kind == RK_EV_DRAW:
+        body[:12] = 0
+        if not (_col_bytes(sec, cols, _EV_DRAW, body, 0, 1) and
+                _col_bytes(sec, cols, _EV_DRAW, body, 4, 8)):
+            return -_fail(err, E_EV_CUT, kind, _EV_DRAW)
+        return 12
+    if kind == RK_EV_BUILT or kind == RK_EV_STATE:
+        i, ok = _ev_id(st, sec, cols)
+        if not ok:
+            return -_fail(err, E_EV_CUT, kind, _EV_ID)
+        body[:8] = 0
+        _put_le32(body, 0, i)
+        if not _col_bytes(sec, cols, _EV_RAW, body, 4, 4 if kind == RK_EV_BUILT else 1):
+            return -_fail(err, E_EV_CUT, kind, _EV_RAW)
+        return 8
+    if kind == RK_EV_INTERCEPT:
+        body[:16] = 0
+        if not _col_bytes(sec, cols, _EV_RAW, body, 0, 14):
+            return -_fail(err, E_EV_CUT, kind, _EV_RAW)
+        return 16
+    return -_fail(err, E_EV_KIND, kind)
 
 
 @_jit
@@ -1631,7 +1990,7 @@ def _events_iter_end(st, cols, sec, it, gt, copy, live, err):
 
 @_jit
 def _events_close(st, cols, sec, err):
-    return _frame_close(cols, _EVENTS_COLS, err, RCS_EVENTS)
+    return _frame_close(cols, _EV_COLS, err, RCS_EVENTS)
 
 
 # ---- THE STATE FRAME (tagpu_recframe_state.c) ----------------------------------------------------

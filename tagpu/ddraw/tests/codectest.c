@@ -882,10 +882,258 @@ static int outcomes_orders(const RecCodecParams* p)
     return 1;
 }
 
+/* the events frame's outcomes: a payload of every event kind, two iterations of it, in blocks */
+static unsigned frame_regions(const unsigned char* sec, size_t a, size_t e, size_t* tab,
+                              size_t col[RECF_COLS_MAX + 1]);
+
+enum { EV_PLAIN, EV_PAD, EV_NO_DEATH, EV_NESTED, EV_ROOT };
+
+/* One iteration's events, every kind, the same each time it runs: the second run of an
+   iteration repeats the first's names, texts, sprays, script arguments and sites. */
+static void ev_events(RecBytes* b, const uint32_t units[][NDW], int variant)
+{
+    static const char longname[REC_NAME_MAX + 1] = "a_script_name_of_thirty_two_byte";
+    unsigned char e[12 + IMG];
+    unsigned i;
+    memset(e, 0, sizeof e);
+    put32(e, 4);                                         /* a create */
+    e[4] = 12; e[6] = 1; e[7] = 1; put32(e + 8, 0x10000); put32(e + 12, 0x500000); e[24] = 3;
+    rec_put(b, RK_EV_CREATE, e, 28);
+    memset(e, 0, 32);
+    put32(e, 5);                                         /* a network create */
+    e[4] = 13; put32(e + 8, 77); put32(e + 12, 0x600000);
+    rec_put(b, RK_EV_NET_CREATE, e, 32);
+    for (i = 0; i < 3; i++) {                            /* shots: a target, none, no shooter */
+        uint32_t sh = i == 2 ? 0xFFFF : 2, tg = i == 1 ? 0xFFFF : i == 2 ? 2 : 3, k;
+        const unsigned char* su = (const unsigned char*)units[1];
+        memset(e, 0, 36);
+        e[0] = 0x0D;
+        for (k = 0; k < 3; k++) put32(e + 1 + 4 * k, get32(su + 0x6A + 4 * k) + 9 * k + 5);
+        for (k = 0; k < 3; k++) put32(e + 0xD + 4 * k, 0x00300000u + k);
+        e[0x19] = 7; e[0x1A] = 1; e[0x1C] = 0x40;
+        e[0x1F] = (unsigned char)tg; e[0x20] = (unsigned char)(tg >> 8);
+        e[0x21] = (unsigned char)sh; e[0x22] = (unsigned char)(sh >> 8);
+        e[0x23] = 1;
+        rec_put(b, RK_EV_SHOT, e, 36);
+    }
+    for (i = 0; i < 4; i++) {                            /* starts: a script again, another, a
+                                                            nonzero tail, a unit past the slots */
+        memset(e, 0, 28);
+        put32(e, i == 3 ? 9999 : 2);
+        put32(e + 4, i == 2 ? 9 : 7);
+        put32(e + 8, i == 2 ? 6 : 2);
+        put32(e + 12, 5); put32(e + 16, 6 + i); put32(e + 20, i == 2 ? 3 : 0); put32(e + 24, i == 2 ? 0xFFFFFFFFu : 0);
+        rec_put(b, RK_EV_START, e, 28);
+    }
+    for (i = 0; i < 3; i++) {                            /* named starts: a name, it again, the
+                                                            longest name */
+        unsigned n = i == 2 ? REC_NAME_MAX : 8;
+        memset(e, 0, 24 + REC_NAME_MAX);
+        put32(e, 3);
+        e[4] = 1; e[5] = 1; put32(e + 8, 0xFFFFFFF0u);
+        memcpy(e + 24, i == 2 ? longname : "Activate", n);
+        rec_put(b, RK_EV_START_NAMED, e, 24 + n);
+    }
+    for (i = 0; i < 2; i++) {                            /* replies: a text, it again */
+        memset(e, 0, 17);
+        put32(e, 3); put32(e + 4, 2); e[8] = 1; e[9] = 1; memcpy(e + 12, "hello", 5);
+        rec_put(b, RK_EV_REPLY, e, 17);
+    }
+    for (i = 0; i < 4; i++) {                            /* sprays: raw, the same, a new point, a
+                                                            unit past the slots */
+        memset(e, 0, 48);
+        put32(e, i == 3 ? 9999 : 2);
+        put32(e + 4, 1); put32(e + 8, 0x100 + (i == 2) * 3); put32(e + 12, 0x200); put32(e + 16, 0x300);
+        put32(e + 20, 11); put32(e + 44, 2);
+        rec_put(b, RK_EV_SPRAY, e, 48);
+    }
+    /* a death whose explosion calls a feature function and draws, with a death nested in it */
+    memset(e, 0, sizeof e);
+    put32(e, 3); put32(e + 4, 2); e[8] = 1; e[9] = 0xFE; e[10] = 4;
+    memcpy(e + 12, units[2], IMG);
+    put32(e + 12 + 0x10, 0x1234); put32(e + 12 + 0x140, 9);
+    rec_put(b, RK_EV_DEATH, e, 12 + IMG);
+    memset(e, 0, 20);
+    e[0] = FR_DIE; e[1] = REC_PHASE_LATE; put32(e + 4, 0x401000); put32(e + 8, 0x300000); put32(e + 16, 1);
+    rec_put(b, RK_EV_FEATURE, e, 20);
+    memset(e, 0, 12);
+    e[0] = FS_BURN; put32(e + 4, 30); put32(e + 8, 17);
+    rec_put(b, RK_EV_DRAW, e, 12);
+    memset(e, 0, 8);
+    e[0] = FR_DIE; put32(e + 4, 1);
+    rec_put(b, RK_EV_FEATURE_END, e, 8);
+    for (i = 0; i < (variant == EV_NESTED ? REC_DEATHS_MAX : 1u); i++) {
+        memset(e, 0, sizeof e);
+        put32(e, 2);
+        e[8] = 10;
+        memcpy(e + 12, units[1], IMG);
+        rec_put(b, RK_EV_DEATH, e, 12 + IMG);
+    }
+    for (i = 0; i < (variant == EV_NESTED ? REC_DEATHS_MAX : 1u); i++) {
+        memset(e, 0, 4);
+        put32(e, 2);
+        rec_put(b, RK_EV_DEATH_END, e, 4);
+    }
+    put32(e, 3);
+    rec_put(b, RK_EV_DEATH_END, e, 4);
+    if (variant == EV_NO_DEATH) rec_put(b, RK_EV_DEATH_END, e, 4);
+    for (i = 0; i < 2; i++) {                            /* the feature tick, at its one site */
+        memset(e, 0, 8);
+        e[0] = variant == EV_ROOT ? FR_ROOTS : FR_TICK; put32(e + 4, 0x495580);
+        rec_put(b, RK_EV_FEATURE, e, 8);
+        memset(e, 0, 8);
+        rec_put(b, RK_EV_FEATURE_END, e, 8);
+    }
+    memset(e, 0, 16);
+    put32(e, 2); put32(e + 4, 4);
+    rec_put(b, RK_EV_BUILT, e, 8);
+    memset(e, 0, 8);
+    put32(e, 4); e[4] = 5; e[5] = variant == EV_PAD;
+    rec_put(b, RK_EV_STATE, e, 8);
+    memset(e, 0, 16);
+    put32(e, 0x100); put32(e + 4, 0x200); put32(e + 8, 0x300); e[12] = 44;
+    rec_put(b, RK_EV_INTERCEPT, e, 16);
+}
+
+/* two iterations: three units made, the events; the events again */
+static void ev_block(RecBytes* b, uint32_t units[][NDW], uint32_t* gt, int variant)
+{
+    unsigned s, it;
+    b->n = 0;
+    for (it = 0; it < 2; it++, (*gt)++) {
+        rec_put(b, RK_TICK, gt, 4);
+        if (!it)
+            for (s = 1; s <= 3; s++) {
+                memset(units[s], 0, IMG);
+                units[s][0] = 0x2000 + s;
+                lane_add(units[s], REC_LR_TYPE, 20 + s, 1);
+                lane_add(units[s], REC_LR_X, 0x80000u * s, 1);
+                lane_add(units[s], REC_LR_Z, 0x40000u * s, 1);
+                lane_add(units[s], REC_LR_LAYER, 1, 1);
+                rec_unit(b, s, units[s]);
+            }
+        ev_events(b, (const uint32_t(*)[NDW])units, variant);
+    }
+}
+
+/* section `s` of a sectioned container: its bounds */
+static void sec_bounds(const unsigned char* c, unsigned s, size_t* a, size_t* e)
+{
+    unsigned i;
+    *a = sizeof(RecSecHead);
+    for (i = 0; i < s; i++) *a += get32(c + 8 + 4 * i);
+    *e = *a + get32(c + 8 + 4 * s);
+}
+
 static int outcomes_events(const RecCodecParams* p)
 {
-    (void)p;
-    return 1;
+    /* the events frame's columns that the refusals below mutate (tagpu_recframe_events.c, C_*) */
+    enum { COL_ST_RZ = 7, COL_NM_NAME = 10, COL_SP_MODE = 15, COL_DT_MASK = 20, COL_FT_HEAD = 22,
+           COL_FT_SAME = 23 };
+    static const int variant[10] = { EV_PLAIN, EV_PLAIN, EV_PAD, EV_PLAIN, EV_NO_DEATH, EV_PLAIN,
+                                     EV_NESTED, EV_PLAIN, EV_ROOT, EV_PLAIN };
+    static const int want[10] = { RECC_SECTIONS, RECC_SECTIONS, RECC_DECLINED, RECC_SECTIONS,
+                                  RECC_DECLINED, RECC_SECTIONS, RECC_DECLINED, RECC_SECTIONS,
+                                  RECC_DECLINED, RECC_SECTIONS };
+    static const char* what[10] = {
+        "events: SECTIONS, every kind", "events: SECTIONS, continuing on the frame's state",
+        "events: DECLINED, a pad that is not zero", "events: SECTIONS, restarting after it",
+        "events: DECLINED, a death's end with no death open", "events: SECTIONS, restarting after it",
+        "events: DECLINED, deaths nested past REC_DEATHS_MAX", "events: SECTIONS, restarting after it",
+        "events: DECLINED, a feature root past FR_ROOTS", "events: SECTIONS, restarting after it" };
+    /* each sets (or ORs in) one byte of a column, at the column's first event of its kind */
+    static const struct { unsigned col, at, val, or_in; const char* refusal; } mut[] = {
+        { COL_ST_RZ, 0, 2, 0, "argument flag" },
+        { COL_NM_NAME, 0, 5, 0, "past the names" },
+        { COL_SP_MODE, 0, 0, 0, "spray mode" },
+        { COL_DT_MASK, REC_UNIT_BITS - 1, 0x80, 1, "mask names dword" },
+        { COL_FT_HEAD, 0, FR_ROOTS, 0, "feature root" },
+        { COL_FT_SAME, 0, 1, 0, "same-site" } };
+    static uint32_t units[4][NDW];
+    RecStream st;
+    RecCodec* rd;
+    World w, pre;
+    RecBytes y, first, keep, out;
+    uint32_t gt = 100;
+    unsigned block, flags, i, ok = 1;
+    const unsigned char* body;
+    size_t bn, a, e, tab, col[RECF_COLS_MAX + 1];
+    char why[256], line[128];
+    memset(&w, 0, sizeof w);
+    memset(&pre, 0, sizeof pre);
+    memset(&y, 0, sizeof y);
+    memset(&first, 0, sizeof first);
+    memset(&keep, 0, sizeof keep);
+    memset(&out, 0, sizeof out);
+    if (!reccodec_stream_begin(&st, p) || !(rd = reccodec_new(p))) return 0;
+    world_reset(&w, p->nslots, p->nproj);
+    world_reset(&pre, p->nslots, p->nproj);
+    for (block = 0; block < 10; block++) {
+        int o;
+        ev_block(&y, units, &gt, variant[block]);
+        memcpy(pre.unit, w.unit, (size_t)w.nslots * IMG);
+        memcpy(pre.live, w.live, w.nslots);
+        memcpy(pre.pool, w.pool, (size_t)(w.nproj ? w.nproj : 1) * PIMG);
+        pre.pcount = w.pcount;
+        pre.phw = w.phw;
+        o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+        snprintf(line, sizeof line, "block %u: %s", block, what[block]);
+        ok &= expect(line, o, want[block]);
+        if (o == RECC_SECTIONS) {
+            ok &= expect("  flagged RBF_FRAME_RESET exactly when it restarts", !!(flags & RBF_FRAME_RESET),
+                         block != 1);
+            sec_bounds(st.sec.p, RCS_EVENTS, &a, &e);
+            if (block == 0) {
+                rb_put(&first, st.sec.p + a, e - a);
+                ok &= expect("  the sprays code raw, the same, a new point, raw; then 1, 0, 1, 2",
+                             frame_regions(st.sec.p, a, e, &tab, col) > COL_FT_SAME &&
+                             col[COL_SP_MODE + 1] - col[COL_SP_MODE] == 8 &&
+                             !memcmp(st.sec.p + col[COL_SP_MODE], "\2\0\1\2\1\0\1\2", 8), 1);
+                ok &= expect("  the names code a literal, a hit, a literal; then three hits",
+                             col[COL_NM_NAME + 1] - col[COL_NM_NAME] == 6 &&
+                             !memcmp(st.sec.p + col[COL_NM_NAME], "\0\1\0\1\1\2", 6), 1);
+            } else if (block != 1) {
+                ok &= expect("  the frame starts empty: the events section is block 0's",
+                             e - a == first.n && !memcmp(st.sec.p + a, first.p, first.n), 1);
+            }
+            if (block == 9) {
+                keep.n = 0;
+                rb_put(&keep, st.sec.p, st.sec.n);
+            }
+        }
+        ok &= expect("  a reader decodes it back", reader_check(rd, &w, p, flags, body, bn,
+                                                                  o == RECC_SECTIONS ? st.sec.n : y.n,
+                                                                  y.p, y.n, st.dctx), 1);
+    }
+    /* the last block from its reset, each mutation refused by name */
+    sec_bounds(keep.p, RCS_EVENTS, &a, &e);
+    ok &= expect("events: the last block's columns read", frame_regions(keep.p, a, e, &tab, col) > COL_FT_SAME, 1);
+    for (i = 0; i < sizeof mut / sizeof mut[0]; i++) {
+        unsigned char* c;
+        int got;
+        y.n = 0;
+        rb_put(&y, keep.p, keep.n);
+        c = y.p + col[mut[i].col] + mut[i].at;
+        *c = (unsigned char)(mut[i].or_in ? *c | mut[i].val : mut[i].val);
+        reccodec_restart(rd, p, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw);
+        why[0] = 0;
+        got = reccodec_decode(rd, y.p, y.n, &out, why, sizeof why);
+        snprintf(line, sizeof line, "events: refused, %s", mut[i].refusal);
+        ok &= expect(line, !got && strstr(why, mut[i].refusal) != NULL, 1);
+        if (got || !strstr(why, mut[i].refusal)) printf("  decoder: %s\n", why);
+    }
+    reccodec_restart(rd, p, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw);
+    ok &= expect("events: the unmutated block from its reset decodes",
+                 reccodec_decode(rd, keep.p, keep.n, &out, why, sizeof why), 1);
+    reccodec_stream_end(&st);
+    reccodec_free(rd);
+    rb_free(&y);
+    rb_free(&first);
+    rb_free(&keep);
+    rb_free(&out);
+    world_free(&w);
+    world_free(&pre);
+    return ok;
 }
 
 static int outcomes_state(const RecCodecParams* p)
