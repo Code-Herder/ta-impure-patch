@@ -9489,8 +9489,9 @@ static void pause_at_bound(char* ta)
 /* THE LAUNCH'S HOLD's half of the bound: the level's first batch, and every batch until the hold
    is taken, is one tick, so the frame visit after the step that began it sees the level one tick
    on (hold_visit). Like the other bounds it only lowers the count: a frame that runs no step
-   (count 0) or keeps the lag scale's count (past 5) is left alone and the hold waits for the
-   next. */
+   (count 0) is left alone and the hold waits for the next. The scheduler leaves the count at
+   0..5 (0x4953EF..0x4953FE clamps it, DISASSEMBLED), so the test against 5 bounds a value read
+   from engine memory and no frame of the scheduler's fails it. */
 static void hold_bound(char* ta)
 {
     unsigned due;
@@ -9564,11 +9565,16 @@ static void pause_at_visit(void)
     s_pause_at = 0;
 }
 
-/* Clears only the pause THE PAUSE AT T took: a pause the player or a rewind set stays theirs. */
+/* Clears only the pause THE PAUSE AT T took: a pause the player or a rewind set stays theirs.
+   Refused while a live rewind is open: the rewind saved the pause bit when it opened (s_rw.pause)
+   and puts it back when it closes, so a pause taken before it would come back with no
+   s_pause_taken behind it, a pause no later `resume` could clear. */
 static void pause_resume(void)
 {
     char* ta = ta_main();
     const char* why = pacing_refusal(ta);
+    if (!why && s_rw.state)
+        why = "a live rewind is open; it restores the pause it found when it closes";
     if (why || !s_pause_taken) {
         tagpu_logf("resume: refused: %s", why ? why : "no pause at T was taken");
         return;
