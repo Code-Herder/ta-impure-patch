@@ -37,10 +37,12 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 9: every packed block is one zstd frame, and a stream block may be a sectioned container whose
-   unit frame carries the unit deltas and whose pool frame carries the projectile pool coded by
-   identity (THE SECTIONED CONTAINER below). A reader takes this format alone. */
-#define REC_FORMAT        9
+/* 10: every packed block is one zstd frame, and a stream block may be a sectioned container whose
+   unit frame carries the unit deltas, whose pool frame carries the projectile pool coded by
+   identity, and whose four record frames -- the cells, the orders, the events and the state --
+   carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). A reader takes this format
+   alone. */
+#define REC_FORMAT        10
 
 static __inline int rec_format_supported(unsigned format)
 {
@@ -439,13 +441,14 @@ enum RecEnd {
    a block cut short, or a header torn, is known by one of them. A block is written whole or not
    at all: a file ends at its last complete block.
    An RB_STREAM with RBF_SECTIONS holds a sectioned container (below) in place of its records:
-   `raw` is the container's bytes, which decode to the records. Its unit and pool frames carry
-   state from one sectioned block to the next, and restart -- RBF_FRAME_RESET -- at a segment's
-   first stream block, at the first after a snapshot and at the first after a stream block of
-   records (one the writer's codec declined, or whose check decode differed), from the units and
-   the projectile pool the reader holds at the end of the iteration before it. So a stream block inside a run of sectioned blocks decodes
-   only after its predecessors since the run's reset, and a reader starts at a snapshot or at a
-   segment's start, never inside a run (tagpu_reccodec.c, THREE INVARIANTS). Any other flag bit,
+   `raw` is the container's bytes, which decode to the records. Its frames carry state from one
+   sectioned block to the next, and restart -- RBF_FRAME_RESET -- at a segment's first stream
+   block, at the first after a snapshot and at the first after a stream block of records (one the
+   writer's codec declined, or whose check decode differed): the unit and pool frames from the
+   units and the projectile pool the reader holds at the end of the iteration before it, the four
+   record frames empty. So a stream block inside a run of sectioned blocks decodes only after its
+   predecessors since the run's reset, and a reader starts at a snapshot or at a segment's start,
+   never inside a run (tagpu_reccodec.c, THREE INVARIANTS). Any other flag bit,
    RBF_SECTIONS on another kind of block and RBF_FRAME_RESET without RBF_SECTIONS are refused. */
 #define REC_MAGIC        "IMPREC\r\n"          /* 8 bytes, no NUL                                 */
 #define REC_BLOCK_MAGIC  0x4B4C4249u           /* "IBLK"                                          */
@@ -496,19 +499,24 @@ enum RecBlockKind {
 #define REC_MINIMAP_MAX   (0xFF00u - REC_MINIMAP_HEAD)   /* the most indices: a ring record's */
 #define RBF_STORED      1u
 #define RBF_SECTIONS    2u     /* an RB_STREAM's only: its payload is a sectioned container    */
-#define RBF_FRAME_RESET 4u     /* with RBF_SECTIONS only: the unit and pool frames restart at its
-                                  first iteration, from the reader's own copies of the units
-                                  and the projectile pool                                     */
+#define RBF_FRAME_RESET 4u     /* with RBF_SECTIONS only: the frames restart at its first
+                                  iteration, the unit and pool frames from the reader's own
+                                  copies of the units and the projectile pool, the record frames
+                                  empty                                                       */
 #define RBF_ALL         (RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET)
 
 /* THE SECTIONED CONTAINER (tagpu_reccodec.c reads and writes it): the bytes of an RB_STREAM with
    RBF_SECTIONS, which decode to exactly the records they replace. A RecSecHead, then RCS_COUNT
    sections of len[] bytes each, in order. RCS_KINDS holds the record kinds in payload order as
-   runs, each a varint kind (1..65535) and a varint count (at least 1). A body section holds, for
-   each record of its kinds in payload order, a varint length (at most 0xFFFF) and that many bytes:
-   the record's body verbatim. Neither RK_UNIT_DELTA nor RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA
-   has a body anywhere: the unit frame (RCS_UNITS) and the pool frame (RCS_PROJ) make them. The
-   payload is the records in kind order, each a RecHdr, its body and zero padding to
+   runs, each a varint kind (1..65535) and a varint count (at least 1). RCS_OTHER holds, for each
+   record of its kinds in payload order, a varint length (at most 0xFFFF) and that many bytes: the
+   record's body verbatim. Neither RK_UNIT_DELTA nor RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA has a
+   body anywhere: the unit frame (RCS_UNITS) and the pool frame (RCS_PROJ) make them. The record
+   frames -- RCS_CELLS, RCS_ORDERS, RCS_EVENTS and RCS_STATE -- each make the bodies of their
+   kinds, in payload order, from a section of columns (tagpu_recframe.h, THE COLUMNS): a u8
+   scheme, a varint column count (1..32), each column's varint length, then the columns, which
+   fill the section; a reader takes only its own scheme and count, and consumes every column to
+   its end. The payload is the records in kind order, each a RecHdr, its body and zero padding to
    a dword, as the writer's stream holds them; its first record is an RK_TICK, and an iteration is
    an RK_TICK and the records up to the next one.
 
@@ -544,15 +552,18 @@ enum RecBlockKind {
    carries whenever the count or the extent changes. A block with no projectile costs 1 + 4 x iterations bytes.
    A varint is LEB128 of a value below 2^32, at most 5 bytes; zigzag maps r >= 0 to 2r and r < 0
    to -2r - 1 (a 32-bit residual r >= 2^31 to 2 (2^32 - r) - 1). tagpu_reccodec.c says what a
-   residual is the residual of, and what a reference row and its sections are. */
+   residual is the residual of, and what a reference row and its sections are; each record
+   frame's file (tagpu_recframe_*.c) says what its columns hold. */
 enum RecSection {
     RCS_KINDS = 0,     /* the record kinds, as runs                                              */
     RCS_UNITS,         /* the unit frame: every RK_UNIT_DELTA                                    */
     RCS_PROJ,          /* the pool frame: every RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA          */
-    RCS_CELLS,         /* the bodies of RK_CELLS                                                 */
-    RCS_ORDERS,        /* the bodies of RK_ORDERS                                                */
-    RCS_EVENTS,        /* the bodies of RK_EV_CREATE..RK_EV_DEATH_END and RK_EV_NET_CREATE        */
-    RCS_OTHER,         /* the bodies of every other kind                                         */
+    RCS_CELLS,         /* the cells frame: every RK_CELLS                                        */
+    RCS_ORDERS,        /* the orders frame: every RK_ORDERS                                      */
+    RCS_EVENTS,        /* the events frame: RK_EV_CREATE..RK_EV_DEATH_END and RK_EV_NET_CREATE    */
+    RCS_OTHER,         /* the bodies of every other kind, verbatim                               */
+    RCS_STATE,         /* the state frame: RK_GLOBALS, RK_GLOBALS_DELTA, RK_PLAYER,
+                          RK_PLAYER_DELTA, RK_WRECK and RK_FEATURES                              */
     RCS_COUNT
 };
 typedef struct RecSecHead {
@@ -561,9 +572,9 @@ typedef struct RecSecHead {
     uint16_t sections;         /* RCS_COUNT                                                      */
     uint32_t len[RCS_COUNT];   /* each section's bytes; the head and these fill the block        */
 } RecSecHead;
-_Static_assert(sizeof(RecSecHead) == 36, "a sectioned container's head is 36 bytes");
+_Static_assert(sizeof(RecSecHead) == 40, "a sectioned container's head is 40 bytes");
 
-/* A record kind's section: four rules and a default, so a kind added later falls into RCS_OTHER
+/* A record kind's section: five rules and a default, so a kind added later falls into RCS_OTHER
    on the writer's side and the reader's alike, with no table to update. */
 static __inline unsigned rec_section_of(unsigned kind)
 {
@@ -573,6 +584,9 @@ static __inline unsigned rec_section_of(unsigned kind)
     if (kind == RK_ORDERS) return RCS_ORDERS;
     if ((kind >= RK_EV_CREATE && kind <= RK_EV_DEATH_END) || kind == RK_EV_NET_CREATE)
         return RCS_EVENTS;
+    if (kind == RK_GLOBALS || kind == RK_GLOBALS_DELTA || kind == RK_PLAYER ||
+        kind == RK_PLAYER_DELTA || kind == RK_WRECK || kind == RK_FEATURES)
+        return RCS_STATE;
     return RCS_OTHER;
 }
 _Static_assert(RK_EV_CREATE == 19 && RK_EV_DEATH_END == 32, "the event kinds RCS_EVENTS holds");
@@ -687,7 +701,7 @@ enum RecTag {
                           game with none (its live count +0x144 at 0), 0 for none: a seat of the
                           recording                                                              */
     RT_MP_END,         /* RecMpRecordEnd: persisted source proofs cover these application cuts  */
-    RT_CODEC_DECLINED, /* u32: stream blocks the unit frame's encoder declined, written as records */
+    RT_CODEC_DECLINED, /* u32: stream blocks the codec's encoder declined, written as records     */
     RT_CODEC_MISMATCH  /* u32: stream blocks whose check decode differed, written as records: a
                           codec bug                                                              */
 };

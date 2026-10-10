@@ -1369,7 +1369,7 @@ def takeover_f(w, fx, out):
 def header_copy(rec, dst, tag, edit):
     """A copy of the recording `rec` at `dst` whose header entry `tag` holds edit(its bytes), of
     the same length, the header block stored again with both its CRCs: a file the reader opens,
-    which the replay's own checks then judge. A header block is always stored (format 9)."""
+    which the replay's own checks then judge. A header block is always stored (tagpu_recfmt.h)."""
     data = Path(rec).read_bytes()
     if data[:8] != tarec.REC_MAGIC:
         raise CouldNotRun(f"{rec}: not a recording")
@@ -2971,7 +2971,9 @@ def out_dir(args):
 
 # the recorder's own instrumented sources (the Makefile's COVERED beside the sim files)
 RECORDER_COVERED = {"src/tagpu_recorder.c", "src/tagpu_recwriter.c", "src/tagpu_recreader.c",
-                    "src/tagpu_replay.c", "src/tagpu_recfile.c", "src/tagpu_reccodec.c"}
+                    "src/tagpu_replay.c", "src/tagpu_recfile.c", "src/tagpu_reccodec.c",
+                    "src/tagpu_recframe_cells.c", "src/tagpu_recframe_orders.c",
+                    "src/tagpu_recframe_events.c", "src/tagpu_recframe_state.c"}
 
 
 def covered_sources():
@@ -3052,6 +3054,9 @@ RECORDER_OWN = {DD + "src/tagpu_recorder.c", DD + "src/tagpu_recwriter.c",
                 DD + "inc/tagpu_replay_layout.h", DD + "replay-globals.tsv",
                 DD + "replay-layout.tsv", DD + "replay-absent.tsv",
                 DD + "src/tagpu_reccodec.c", DD + "inc/tagpu_reccodec.h", DD + "inc/tagpu_reclanes.h",
+                DD + "inc/tagpu_recframe.h", DD + "src/tagpu_recframe_cells.c",
+                DD + "src/tagpu_recframe_orders.c", DD + "src/tagpu_recframe_events.c",
+                DD + "src/tagpu_recframe_state.c",
                 DD + "replay-lanes.tsv", DD + "src/zstd.c",
                 "tools/replay-globals-gen.py", "tools/replay-layout-gen.py", "tools/replay-lanes-gen.py",
                 "tools/replay-layout-check.sh", "tools/tacli"}

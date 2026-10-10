@@ -378,10 +378,11 @@ static void delta_apply(unsigned* img, const unsigned char* bits, unsigned dword
 
 /* ---- the header ----------------------------------------------------------------------------- */
 
-/* The codec from the header's RT_CODEC, RT_PHYSICS and RT_AIR, parsed from the bytes a reader will
-   parse, so the check decoder runs on the reader's constants. 1, or 0 when the reader would refuse
-   them. Without RT_CODEC and RT_PHYSICS, or without memory for the encoder's and check decoder's
-   states, every stream block is written as records. Without memory for the constants themselves
+/* The codec from the header's RT_FEATURES, RT_CODEC, RT_PHYSICS and RT_AIR, parsed from the bytes a
+   reader will parse, so the check decoder runs on the reader's constants. 1, or 0 when the reader
+   would refuse them. Without RT_CODEC and RT_PHYSICS, with a grid or a wreck pool past the
+   codec's bounds, or without memory for the encoder's and check decoder's states, every stream
+   block is written as records. Without memory for the constants themselves
    the recording ends before its file is opened (fail): the entries cannot be checked without
    them, and a header a reader might refuse is never written. */
 static int codec_begin(Writer* w, const unsigned char* const ent[3], const unsigned nent[3])
@@ -392,15 +393,14 @@ static int codec_begin(Writer* w, const unsigned char* const ent[3], const unsig
         fail(w, "no memory for the codec's constants");
         return 1;
     }
-    if (!reccodec_params(p, w->nslots, w->ncap, ent[0], nent[0], ent[1], nent[1], ent[2], nent[2],
-                         why, sizeof why)) {
+    if (!reccodec_params(p, w->nslots, w->ncap, w->gw, w->gh, w->npool, ent[0], nent[0], ent[1],
+                         nent[1], ent[2], nent[2], why, sizeof why)) {
         tagpu_logf("recorder: writer: the header's codec entries are malformed: %s", why);
         free(p);
         return 0;
     }
     if (!p->usable)
-        tagpu_logf("recorder: writer: the header has no RT_CODEC and RT_PHYSICS: every stream "
-                   "block is written as records");
+        tagpu_logf("recorder: writer: %s: every stream block is written as records", why);
     else if (reccodec_stream_begin(&w->codec, p))
         w->codec_on = 1;
     else

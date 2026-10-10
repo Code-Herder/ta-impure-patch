@@ -3,7 +3,7 @@
 
     recsize.py <file.imprec> [--json out.json] [--window 900]
 
-Reads a recording of format 9 with reccodec.py's block walk and reports:
+Reads a recording of format 10 with reccodec.py's block walk and reports:
 
   - the file by block kind, raw (as the block headers state it: a sectioned block's container)
     and on disk;
@@ -93,8 +93,8 @@ def field_names():
     return names
 
 
-SECTIONS = ("kinds", "unit frame", "projectiles", "cells", "orders", "events", "other")
-SEC_HEAD = struct.Struct("<IHH7I")      # RecSecHead: payload, iterations, sections, len[7]
+SECTIONS = ("kinds", "unit frame", "projectiles", "cells", "orders", "events", "other", "state")
+SEC_HEAD = struct.Struct("<IHH8I")      # RecSecHead: payload, iterations, sections, len[8]
 
 
 def zstd3(data):
@@ -104,7 +104,7 @@ def zstd3(data):
 
 
 def sections_of(flags, unpacked):
-    """A stream block's bytes by section: a sectioned container's head and its seven sections
+    """A stream block's bytes by section: a sectioned container's head and its eight sections
     as written, or a records block's records routed to the section their kind would take."""
     import reccodec
     if flags & T.RBF_SECTIONS:

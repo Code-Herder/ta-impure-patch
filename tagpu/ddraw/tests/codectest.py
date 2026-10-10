@@ -12,16 +12,19 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
     verify IN                each stream block's records from the C decoder against the Python
                              reader's, which decodes twice -- skipping the resting units and
                              evaluating every candidate -- and the C sine table against its formula
-    fuzz IN SEED N [CASES]   N mutated sectioned blocks decoded by C from the state each starts from
+    fuzz IN SEED N [CASES] [--section NAME]
+                             N mutated sectioned blocks decoded by C from the state each starts
+                             from; with --section, only section NAME's mutations (kinds, units,
+                             proj, cells, orders, events, other, state)
     fuzzdiff IN CASES        those cases decoded by the Python reader: the same accept or refuse
                              and the same records for every case C accepted
-    sizes IN                 the sectioned blocks' bytes by section: raw, each section packed alone
-                             with zstd 3 and with the format-7 writer's deflate (a 2 KB window), and
-                             the blocks as written
+    sizes IN...              each recording's sectioned blocks' bytes by section: raw, each section
+                             packed alone with zstd 3 and with the format-7 writer's deflate (a 2 KB
+                             window), and the blocks as written
 
 --native builds tests/codectest-asan.exe with the host's gcc and -fsanitize=address,undefined and
 runs that instead of tests/codectest.exe under Wine (WINEPREFIX: the main checkout's wineprefix/).
-IN is a recording of format 9. Exit 0 when every check holds, 1 when one fails, 2 when it cannot
+IN is a recording of format 10. Exit 0 when every check holds, 1 when one fails, 2 when it cannot
 run. Needs numpy, numba and zstandard (devpy.ensure() re-executes under the shared venv).
 """
 import os
@@ -43,10 +46,12 @@ NATIVE = HERE / "codectest-asan.exe"
 
 
 def build_native():
+    frames = sorted(str(p.relative_to(DDRAW)) for p in DDRAW.glob("src/tagpu_recframe_*.c"))
     cmd = ["gcc", "-std=c99", "-Wall", "-Iinc", "-Isrc", "-O1", "-g", "-fsanitize=address,undefined",
-           "-fno-sanitize-recover=all", "-o", str(NATIVE), "tests/codectest.c", "src/zstd.c"]
+           "-fno-sanitize-recover=all", "-o", str(NATIVE), "tests/codectest.c", *frames, "src/zstd.c"]
     srcs = [DDRAW / "tests/codectest.c", DDRAW / "src/tagpu_reccodec.c", DDRAW / "inc/tagpu_reccodec.h",
-            DDRAW / "inc/tagpu_recfmt.h", DDRAW / "inc/tagpu_reclanes.h", DDRAW / "src/zstd.c"]
+            DDRAW / "inc/tagpu_recframe.h", DDRAW / "inc/tagpu_recfmt.h", DDRAW / "inc/tagpu_reclanes.h",
+            DDRAW / "src/zstd.c", *(DDRAW / f for f in frames)]
     if NATIVE.exists() and all(NATIVE.stat().st_mtime >= s.stat().st_mtime for s in srcs):
         return
     print("codectest: building", NATIVE.name, flush=True)
@@ -159,7 +164,8 @@ def cmd_fuzzdiff(src, cases_path):
                 else:
                     es = [(t, e) for t, e in zip((reccodec.RT_CODEC, reccodec.RT_PHYSICS, reccodec.RT_AIR), ents)
                           if e is not None]
-                    prm = reccodec.params(es, frame.prm.nslots, frame.prm.nproj)
+                    q = frame.prm
+                    prm = reccodec.params(es, q.nslots, q.nproj, q.gw, q.gh, q.nwrecks)
                     if not prm.usable:
                         raise reccodec.Unreadable("not usable")
                     f.restart(prm)
@@ -188,10 +194,10 @@ def cmd_fuzzdiff(src, cases_path):
 def cmd_sizes(src):
     import reccodec
     import zstandard
-    names = ["kinds", "units", "proj", "cells", "orders", "events", "other"]
-    raw = [0] * 7
-    z3 = [0] * 7
-    defl = [0] * 7
+    names = ["kinds", "units", "proj", "cells", "orders", "events", "other", "state"]
+    raw = [0] * len(names)
+    z3 = [0] * len(names)
+    defl = [0] * len(names)
     written = records = blocks = 0
     zc = zstandard.ZstdCompressor(level=3)
 
@@ -203,8 +209,8 @@ def cmd_sizes(src):
         nonlocal written
         if not flags & reccodec.RBF_SECTIONS:
             return
-        lens = struct.unpack_from("<7I", sec, 8)
-        at = 36
+        lens = struct.unpack_from(f"<{reccodec.RCS_COUNT}I", sec, 8)
+        at = reccodec.SEC_HEAD
         for i, n in enumerate(lens):
             part = sec[at:at + n]
             raw[i] += n
@@ -241,8 +247,8 @@ def main(argv):
         return cmd_verify(native, args[0])
     if cmd == "fuzzdiff" and len(args) == 2:
         return cmd_fuzzdiff(*args)
-    if cmd == "sizes" and len(args) == 1:
-        return cmd_sizes(args[0])
+    if cmd == "sizes" and args:
+        return max(cmd_sizes(a) for a in args)
     print(__doc__)
     return 2
 

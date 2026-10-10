@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments): the C parser against the coverage build's map, the features' regions, the comment
-filter, `landing --check`, a recording's segments and chains and what format 9's block walk
+filter, `landing --check`, a recording's segments and chains and what format 10's block walk
 refuses, read from files built from the format alone, the fixtures' takeover entries and the W
 lane's edited header copies. No game runs. The files are read through reccodec.py, which needs
 numpy, numba and zstandard: devpy.ensure() re-executes this under the shared venv when they are
@@ -775,8 +775,8 @@ def zstd_frame(data, wlog):
             bytes([(1 | n << 3) & 0xFF, n >> 5 & 0xFF, n >> 13 & 0xFF]) + data)
 
 
-class Format8Blocks(unittest.TestCase):
-    """What format 9's block walk refuses by name before any payload is read, as
+class FormatBlocks(unittest.TestCase):
+    """What format 10's block walk refuses by name before any payload is read, as
     tagpu_recreader.c's block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
 
     def refused(self, *parts, why, decodes=(True, False)):
@@ -801,7 +801,7 @@ class Format8Blocks(unittest.TestCase):
     def test_a_sectioned_block_without_the_codec_entries(self):
         # refused where it is decoded: a walk that skips the stream (decode=False), like the
         # DLL's segment scan, does not read it
-        self.refused(header(), flagged(tarec.RB_STREAM, 1, 1, bytes(36), tarec.RBF_STORED |
+        self.refused(header(), flagged(tarec.RB_STREAM, 1, 1, bytes(40), tarec.RBF_STORED |
                                        tarec.RBF_SECTIONS | tarec.RBF_FRAME_RESET),
                      why="without RT_CODEC and RT_PHYSICS", decodes=(True,))
 

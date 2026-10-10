@@ -1,4 +1,5 @@
-/* codectest.c -- the stream codec's self-test (src/tagpu_reccodec.c), driven by codectest.py.
+/* codectest.c -- the stream codec's self-test (src/tagpu_reccodec.c and its record frames,
+   src/tagpu_recframe_*.c), driven by codectest.py.
 
      codectest transcode IN OUT     every stream block of a recording decoded to its records and
                                     written again through reccodec_stream_block, restarting where
@@ -13,19 +14,23 @@
                                     shrinks, a projectile delta naming an unchanged dword or with
                                     a pad that is not zero) and MISMATCH (the check decoder
                                     restarted from other units, from another pool), each followed
-                                    by a restarting SECTIONS block; and zstd frames past and at
-                                    the 2^27 window bound
-     codectest fuzz IN SEED N [CASES]
+                                    by a restarting SECTIONS block; each record frame's own
+                                    (outcomes_cells, _orders, _events, _state); and zstd frames
+                                    past and at the 2^27 window bound
+     codectest fuzz IN SEED N [CASES] [--section NAME]
                                     N mutations of the recording's sectioned blocks (flags, the
                                     head, section lengths, kinds, the unit frame's gaps, masks,
                                     ids and columns, the pool frame's control values, codes and
-                                    columns, bodies, the header's codec entries, truncations),
+                                    columns, the record frames' column tables and columns,
+                                    RCS_OTHER's bodies, the header's codec entries, truncations),
                                     each decoded from a copy of the state the block starts from;
                                     with CASES, every case and its result for codectest.py's
-                                    differential
+                                    differential; with --section, only the mutations of section
+                                    NAME (kinds, units, proj, cells, orders, events, other,
+                                    state)
      codectest sin                  the sine table, for codectest.py's check against its formula
 
-   IN is a recording of format 9. Exit 0 when every check holds, 1 when one fails, 2 when a file
+   IN is a recording of format 10. Exit 0 when every check holds, 1 when one fails, 2 when a file
    cannot be read. The codec is included rather than linked: the fuzz copies a decoder's state,
    which the codec's interface keeps opaque. */
 #include <stdint.h>
@@ -84,7 +89,7 @@ static unsigned char* read_file(const char* path, size_t* n)
     return d;
 }
 
-/* ---- a recording of format 9, block by block ------------------------------------------------- */
+/* ---- a recording of format 10, block by block ------------------------------------------------ */
 
 typedef struct Reader {
     const unsigned char* d;
@@ -152,7 +157,7 @@ static int next_block(Reader* r)
 }
 
 typedef struct Header {
-    unsigned format, slots, nproj;
+    unsigned format, slots, nproj, gw, gh, nwrecks;
     const unsigned char* e[3];      /* RT_CODEC, RT_PHYSICS, RT_AIR */
     unsigned ne[3];
 } Header;
@@ -168,6 +173,11 @@ static int header_of(const unsigned char* p, size_t n, Header* h, char* why, uns
         if (tag == RT_FORMAT && len == 4) h->format = get32(b);
         if (tag == RT_SLOTS && len == 4) h->slots = get32(b);
         if (tag == RT_PROJECTILES && len == 4) h->nproj = get32(b);
+        if (tag == RT_FEATURES && len == 20) {
+            h->gw = get32(b);
+            h->gh = get32(b + 4);
+            h->nwrecks = get32(b + 8);
+        }
         k = tag == RT_CODEC ? 0 : tag == RT_PHYSICS ? 1 : tag == RT_AIR ? 2 : 3;
         if (k < 3) {
             if (h->e[k]) REFUSE("header tag %u twice", tag);
@@ -339,21 +349,27 @@ static int reading_next(Reading* g, double* ms)
     if (k <= 0) return k;
     if (g->r.b.kind == RB_HEADER) {
         if (!header_of(g->r.bytes, g->r.b.raw, &g->h, g->r.why, sizeof g->r.why)) return -1;
-        if (!reccodec_params(&g->p, g->h.slots, g->h.nproj, g->h.e[0], g->h.ne[0], g->h.e[1], g->h.ne[1],
-                             g->h.e[2], g->h.ne[2], g->r.why, sizeof g->r.why))
+        if (!reccodec_params(&g->p, g->h.slots, g->h.nproj, g->h.gw, g->h.gh, g->h.nwrecks, g->h.e[0],
+                             g->h.ne[0], g->h.e[1], g->h.ne[1], g->h.e[2], g->h.ne[2], g->r.why,
+                             sizeof g->r.why))
             return -1;
-        if (g->dec && (g->w.nslots != g->h.slots || g->w.nproj != g->h.nproj)) {
-            snprintf(g->r.why, sizeof g->r.why, "a segment of %u slots and %u projectiles after %u and %u",
-                     g->h.slots, g->h.nproj, g->w.nslots, g->w.nproj);
+        if (g->dec && (g->dec->nslots != g->h.slots || g->dec->nproj != g->h.nproj ||
+                       g->dec->gw != g->h.gw || g->dec->gh != g->h.gh || g->dec->nwrecks != g->h.nwrecks)) {
+            snprintf(g->r.why, sizeof g->r.why, "a segment of another shape (%u slots, %u projectiles, a "
+                     "%u x %u grid, %u wrecks) after %u, %u, %u x %u and %u", g->h.slots, g->h.nproj,
+                     g->h.gw, g->h.gh, g->h.nwrecks, g->dec->nslots, g->dec->nproj, g->dec->gw,
+                     g->dec->gh, g->dec->nwrecks);
             return -1;
         }
         world_reset(&g->w, g->h.slots, g->h.nproj);
-        if (!g->dec) g->dec = reccodec_new(g->h.slots, g->h.nproj);
-        if (!g->dec || !g->w.unit || !g->w.live || !g->w.pool) {
+        /* made for the first segment with a codec, whose sizes every segment's equal (the DLL's
+           reader's shape_differs) */
+        if (!g->dec && g->p.usable) g->dec = reccodec_new(&g->p);
+        if ((g->p.usable && !g->dec) || !g->w.unit || !g->w.live || !g->w.pool) {
             snprintf(g->r.why, sizeof g->r.why, "no memory");
             return -1;
         }
-        reccodec_invalidate(g->dec);
+        if (g->dec) reccodec_invalidate(g->dec);
         g->in_segment = 1;
         return 1;
     }
@@ -369,7 +385,7 @@ static int reading_next(Reading* g, double* ms)
         if (!reccodec_decode(g->dec, g->r.bytes, g->r.b.raw, &g->pay, g->r.why, sizeof g->r.why)) return -1;
         *ms = ms_since(t0);
     } else {
-        reccodec_invalidate(g->dec);
+        if (g->dec) reccodec_invalidate(g->dec);
         g->pay.n = 0;
         g->pay.oom = 0;
         rb_put(&g->pay, g->r.bytes, g->r.b.raw);
@@ -849,6 +865,35 @@ static int zstd_window_check(void* cctx, void* dctx)
     return ok;
 }
 
+/* ---- each record frame's own outcomes ------------------------------------------------------------
+
+   Each takes the segment's params of cmd_outcomes and returns 1 when every check of its holds. A
+   frame of scheme 0 carries each body verbatim and has nothing of its own to decline. */
+
+static int outcomes_cells(const RecCodecParams* p)
+{
+    (void)p;
+    return 1;
+}
+
+static int outcomes_orders(const RecCodecParams* p)
+{
+    (void)p;
+    return 1;
+}
+
+static int outcomes_events(const RecCodecParams* p)
+{
+    (void)p;
+    return 1;
+}
+
+static int outcomes_state(const RecCodecParams* p)
+{
+    (void)p;
+    return 1;
+}
+
 static int cmd_outcomes(void)
 {
     static uint32_t units[6][NDW];
@@ -887,8 +932,8 @@ static int cmd_outcomes(void)
     put32(air + 16, 6 << 16);
     put32(air + 20, 22937);
     put32(air + 24, 1 << 16);
-    if (!reccodec_params(&p, 64, PJ_N, codec, sizeof codec, phys, 8, air, sizeof air, NULL, 0) ||
-        !reccodec_stream_begin(&st, &p) || !(rd = reccodec_new(64, PJ_N)))
+    if (!reccodec_params(&p, 64, PJ_N, 16, 16, 64, codec, sizeof codec, phys, 8, air, sizeof air, NULL, 0) ||
+        !reccodec_stream_begin(&st, &p) || !(rd = reccodec_new(&p)))
         return 2;
     world_reset(&w, 64, PJ_N);
     q.first = 1;
@@ -970,6 +1015,10 @@ static int cmd_outcomes(void)
            "stale slots and %u extent growths\n", seen[0], seen[1], seen[2], seen[3], seen[4]);
     ok &= expect("projectiles: births, deaths, guided survivors, a changed tail, a growing extent",
                  seen[0] && seen[1] && seen[2] && seen[3] && seen[4], 1);
+    ok &= outcomes_cells(&p);
+    ok &= outcomes_orders(&p);
+    ok &= outcomes_events(&p);
+    ok &= outcomes_state(&p);
     ok &= zstd_window_check(st.cctx, st.dctx);
     printf("outcomes: %u sectioned, %u declined, %u mismatched\n", st.sectioned, st.declined, st.mismatched);
     reccodec_stream_end(&st);
@@ -1026,6 +1075,11 @@ static void codec_copy(RecCodec* d, const RecCodec* s)
     memcpy(d->page, s->page, n);
     memcpy(d->lastnew, s->lastnew, (size_t)(RECC_WEAPON_IDS + 1) * PIMG);
     memcpy(d->shots, s->shots, (size_t)RECC_SHOTS_MAX * SHOT);
+    for (n = 0; n < RECC_FRAMES; n++)
+        if (!FRAMES[n]->copy(d->frame[n], s->frame[n])) {
+            fprintf(stderr, "codectest: no memory to copy the %s frame\n", FRAMES[n]->name);
+            exit(2);
+        }
 }
 
 /* the varint at `at` and its end; 0 when it does not read */
@@ -1099,6 +1153,31 @@ static void pool_regions(const unsigned char* sec, size_t a, size_t e, unsigned 
     r[4] = at;
 }
 
+/* A record frame's section [a, e): the end of its column table in *tab and its columns' bounds,
+   col[0] the first's start and col[k + 1] column k's end. The columns read, else 0 (and *tab = a). */
+static unsigned frame_regions(const unsigned char* sec, size_t a, size_t e, size_t* tab,
+                              size_t col[RECF_COLS_MAX + 1])
+{
+    size_t at = a + 1, len[RECF_COLS_MAX];
+    uint32_t v, ncols, i;
+    *tab = a;
+    if (a >= e || !varint_get(sec, e, &at, &ncols) || ncols < 1 || ncols > RECF_COLS_MAX) return 0;
+    for (i = 0; i < ncols; i++) {
+        if (!varint_get(sec, e, &at, &v)) return 0;
+        len[i] = v;
+    }
+    *tab = at;
+    col[0] = at;
+    for (i = 0; i < ncols; i++) {
+        if (len[i] > e - col[i]) return 0;
+        col[i + 1] = col[i] + len[i];
+    }
+    return ncols;
+}
+
+static const char* const SECTION_NAME[RCS_COUNT] = { "kinds", "units", "proj", "cells", "orders",
+                                                     "events", "other", "state" };
+
 typedef struct Case {
     unsigned type;                  /* 0 the block mutated, 1 the header's entries mutated */
     unsigned flags;
@@ -1117,23 +1196,40 @@ static void mutate_byte(unsigned char* p)
     }
 }
 
-static void mutate(Case* c, const unsigned char* sec, size_t n, unsigned flags, const Header* h, unsigned nlanes,
-                   unsigned pc0)
+/* The mutations each section takes (mutate's `what`), for --section: a byte inserted or removed
+   in the section (10) and the section's own */
+static unsigned what_of(int only)
 {
+    static const unsigned char unit[] = { 4, 5, 6, 7, 10 }, proj[] = { 11, 12, 13, 14, 15, 10 },
+                               frame[] = { 16, 17, 10 };
+    switch (only) {
+    case RCS_KINDS: return rnd() & 1 ? 3 : 10;
+    case RCS_UNITS: return unit[rndn(sizeof unit)];
+    case RCS_PROJ:  return proj[rndn(sizeof proj)];
+    case RCS_OTHER: return rnd() & 1 ? 8 : 10;
+    default:        return frame[rndn(sizeof frame)];
+    }
+}
+
+/* one mutation of the block; `only` >= 0 keeps it to that section */
+static void mutate(Case* c, const unsigned char* sec, size_t n, unsigned flags, const Header* h, unsigned nlanes,
+                   unsigned pc0, int only)
+{
+    static const unsigned char FRAME_SEC[4] = { RCS_CELLS, RCS_ORDERS, RCS_EVENTS, RCS_STATE };
     size_t off[RCS_COUNT + 1], i, at, r[6];
-    unsigned what = (unsigned)(rnd() % 17);
+    unsigned what = only >= 0 ? what_of(only) : (unsigned)(rnd() % 19);
     c->type = 0;
     c->flags = flags;
     c->body.n = 0;
     rb_put(&c->body, sec, n);
-    off[0] = 36;
+    off[0] = sizeof(RecSecHead);
     for (i = 0; i < RCS_COUNT; i++) off[i + 1] = off[i] + get32(sec + 8 + 4 * i);
     switch (what) {
     case 0:
         c->flags ^= 1u << (rnd() % 8);
         break;
     case 1:                                       /* a head field */
-        mutate_byte(c->body.p + rndn(36));
+        mutate_byte(c->body.p + rndn(sizeof(RecSecHead)));
         break;
     case 2: {                                     /* one section's bytes moved to another */
         size_t a = rndn(RCS_COUNT), b = rndn(RCS_COUNT);
@@ -1162,16 +1258,15 @@ static void mutate(Case* c, const unsigned char* sec, size_t n, unsigned flags, 
         else if (off[RCS_PROJ + 1] > off[RCS_PROJ]) mutate_byte(c->body.p + off[RCS_PROJ] + rndn(off[RCS_PROJ + 1] - off[RCS_PROJ]));
         break;
     }
-    case 8: {                                     /* a body section */
-        size_t s = RCS_CELLS + rndn(RCS_COUNT - RCS_CELLS);
-        if (off[s + 1] > off[s]) mutate_byte(c->body.p + off[s] + rndn(off[s + 1] - off[s]));
+    case 8:                                       /* RCS_OTHER's bodies */
+        if (off[RCS_OTHER + 1] > off[RCS_OTHER])
+            mutate_byte(c->body.p + off[RCS_OTHER] + rndn(off[RCS_OTHER + 1] - off[RCS_OTHER]));
         break;
-    }
     case 9:                                       /* a truncation */
         c->body.n = rndn(n);
         break;
     case 10: {                                    /* a byte inserted or removed in a section */
-        size_t s = rndn(RCS_COUNT), len = off[s + 1] - off[s];
+        size_t s = only >= 0 ? (size_t)only : rndn(RCS_COUNT), len = off[s + 1] - off[s];
         at = off[s] + rndn(len + 1);
         if (rnd() & 1 || !len) {
             rb_put(&c->body, "", 1);
@@ -1186,10 +1281,24 @@ static void mutate(Case* c, const unsigned char* sec, size_t n, unsigned flags, 
         }
         break;
     }
+    case 16: case 17: {                           /* a record frame: its column table, a column */
+        size_t s = only >= 0 ? (size_t)only : FRAME_SEC[rndn(4)], tab, col[RECF_COLS_MAX + 1];
+        unsigned nc = frame_regions(sec, off[s], off[s + 1], &tab, col), k;
+        if (what == 17 && nc) {
+            k = (unsigned)rndn(nc);
+            if (col[k + 1] > col[k]) {
+                mutate_byte(c->body.p + col[k] + rndn(col[k + 1] - col[k]));
+                break;
+            }
+        }
+        if (tab > off[s]) mutate_byte(c->body.p + off[s] + rndn(tab - off[s]));
+        else if (off[s + 1] > off[s]) mutate_byte(c->body.p + off[s] + rndn(off[s + 1] - off[s]));
+        break;
+    }
     default: {                                    /* the header's codec entries */
         unsigned e = (unsigned)rndn(3);
         if (!(flags & RBF_FRAME_RESET)) {         /* only a restart decodes from new params */
-            mutate_byte(c->body.p + 36 + rndn(n - 36));
+            mutate_byte(c->body.p + sizeof(RecSecHead) + rndn(n - sizeof(RecSecHead)));
             break;
         }
         c->type = 1;
@@ -1238,7 +1347,7 @@ static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecPa
     codec_copy(d, from);
     if (c->type == 1) {
         RecCodecParams q;
-        if (!reccodec_params(&q, p->nslots, p->nproj, c->has[0] ? c->ent[0] : NULL, c->nent[0],
+        if (!reccodec_params(&q, p->nslots, p->nproj, p->gw, p->gh, p->nwrecks, c->has[0] ? c->ent[0] : NULL, c->nent[0],
                              c->has[1] ? c->ent[1] : NULL, c->nent[1], c->has[2] ? c->ent[2] : NULL,
                              c->nent[2], why, sizeof why) || !q.usable)
             return 0;
@@ -1256,7 +1365,7 @@ static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecPa
     return reccodec_decode(d, c->body.p, c->body.n, out, why, sizeof why);
 }
 
-static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* casesp)
+static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* casesp, int only)
 {
     Reading g;
     RecCodec* d = NULL;
@@ -1285,12 +1394,15 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
         /* the cases of this block, from the state the block starts from */
         if (b->kind == RB_STREAM && (b->flags & RBF_SECTIONS) && g.dec) {
             unsigned want = (unsigned)(((uint64_t)ncases * (k2 + 1)) / nsect - ((uint64_t)ncases * k2) / nsect), i;
-            if (!d) d = reccodec_new(g.dec->nslots, g.dec->nproj);
+            if (!d && !(d = reccodec_new(&g.p))) {
+                fprintf(stderr, "codectest: no memory for the fuzz's decoder\n");
+                return 2;
+            }
             for (i = 0; i < want; i++) {
                 int ok;
                 uint64_t hsh = 0;
                 mutate(&c, g.r.bytes, b->raw, b->flags, &g.h, g.p.nlanes,
-                       (b->flags & RBF_FRAME_RESET) ? g.w.pcount : g.dec->pcount);
+                       (b->flags & RBF_FRAME_RESET) ? g.w.pcount : g.dec->pcount, only);
                 ok = case_run(&c, d, g.dec, &g.p, &g.w, g.r.bytes, b->raw, &out);
                 accepted += ok;
                 if (ok) hsh = fnv64(out.p, out.n);
@@ -1330,8 +1442,8 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
         }
     }
     if (cf) fclose(cf);
-    printf("fuzz: %u cases over %u sectioned blocks, %u accepted, %u refused\n", done, nsect, accepted,
-           done - accepted);
+    printf("fuzz: %u cases over %u sectioned blocks%s%s, %u accepted, %u refused\n", done, nsect,
+           only >= 0 ? ", section " : "", only >= 0 ? SECTION_NAME[only] : "", accepted, done - accepted);
     reccodec_free(d);
     rb_free(&out);
     rb_free(&c.body);
@@ -1344,14 +1456,34 @@ int main(int argc, char** argv)
     if (argc == 4 && !strcmp(argv[1], "transcode")) return cmd_transcode(argv[2], argv[3]);
     if (argc == 4 && !strcmp(argv[1], "decode")) return cmd_decode(argv[2], argv[3]);
     if (argc == 2 && !strcmp(argv[1], "outcomes")) return cmd_outcomes();
-    if ((argc == 5 || argc == 6) && !strcmp(argv[1], "fuzz"))
+    if (argc >= 5 && !strcmp(argv[1], "fuzz")) {
+        /* fuzz IN SEED N [CASES] [--section NAME], the option anywhere after N */
+        const char* cases = NULL;
+        int only = -1, i, k;
+        for (i = 5; i < argc; i++) {
+            if (!strcmp(argv[i], "--section") && i + 1 < argc) {
+                for (k = 0; k < RCS_COUNT && strcmp(argv[i + 1], SECTION_NAME[k]); k++) ;
+                if (k == RCS_COUNT) {
+                    fprintf(stderr, "codectest: no section %s\n", argv[i + 1]);
+                    return 2;
+                }
+                only = k;
+                i++;
+            } else if (!cases) {
+                cases = argv[i];
+            } else {
+                fprintf(stderr, "codectest: fuzz takes one CASES file\n");
+                return 2;
+            }
+        }
         return cmd_fuzz(argv[2], strtoull(argv[3], NULL, 10), (unsigned)strtoul(argv[4], NULL, 10),
-                        argc == 6 ? argv[5] : NULL);
+                        cases, only);
+    }
     if (argc == 2 && !strcmp(argv[1], "sin")) {
         int i;
         for (i = 0; i < 512; i++) printf("%d\n", SIN[i]);
         return 0;
     }
-    fprintf(stderr, "usage: codectest transcode IN OUT | decode IN OUT | outcomes | fuzz IN SEED N [CASES] | sin\n");
+    fprintf(stderr, "usage: codectest transcode IN OUT | decode IN OUT | outcomes | fuzz IN SEED N [CASES] [--section NAME] | sin\n");
     return 2;
 }

@@ -229,7 +229,8 @@ static int block_head(RecReader* r, RecBlock* b, char* why, unsigned cap)
 static const RecHeader* seg_header(const RecReader* r);
 
 /* A sectioned stream block's container, `sec` its `n` bytes, decoded into raw by the stream
-   codec's frames (tagpu_reccodec.c, THE UNIT FRAME and THE POOL FRAME). 1, or -1 (why). */
+   codec's frames (tagpu_reccodec.c, THE UNIT FRAME, THE POOL FRAME and THE RECORD FRAMES). 1, or
+   -1 (why). */
 static int sections_body(RecReader* r, const RecBlock* b, const unsigned char* sec, size_t n,
                          char* why, unsigned cap)
 {
@@ -237,19 +238,21 @@ static int sections_body(RecReader* r, const RecBlock* b, const unsigned char* s
     char w2[160];
     if (!h->has_codec) {
         snprintf(why, cap, "a sectioned stream block at byte %llu in a segment whose header has no "
-                 "RT_CODEC and RT_PHYSICS", r->off);
+                 "RT_CODEC and RT_PHYSICS, or a grid or wreck pool past the codec's bounds", r->off);
         return -1;
     }
-    if (!r->codec) r->codec = reccodec_new(r->w.slots, r->h.proj_cap);
+    if (!r->codec) r->codec = reccodec_new(&h->codec);
     if (!r->codec) {
-        snprintf(why, cap, "no memory for the codec of %u slots and %u projectiles, at byte %llu",
-                 r->w.slots, r->h.proj_cap, r->off);
+        snprintf(why, cap, "no memory for the codec of %u slots, %u projectiles and a %u x %u "
+                 "grid, at byte %llu", h->codec.nslots, h->codec.nproj, h->codec.gw, h->codec.gh,
+                 r->off);
         return -1;
     }
     /* ORDERING: the world's units and its pool are the copies at the end of the iteration before
        this block (tick_read loads a block only between iterations), which is what the writer's
-       encoder restarted from. The codec was made for w->slots and h.proj_cap, which every
-       segment's header equals (segs_scan); h->codec is this segment's own. */
+       encoder restarted from. The codec was made for the sizes of the first segment it met --
+       slots, projectile pool, grid and wreck pool -- which every segment's header equals
+       (segs_scan, shape_differs); h->codec is this segment's own. */
     if (b->flags & RBF_FRAME_RESET) {
         reccodec_restart(r->codec, &h->codec, r->w.unit, r->w.live, r->w.proj, r->w.nproj,
                          r->w.proj_hw);
@@ -585,10 +588,11 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         snprintf(why, cap, "a unit array of %u slots", h->slots);
         return 0;
     }
-    /* after the loop: the codec's constants are bounded by RT_SLOTS, which may follow them */
+    /* after the loop: the codec's constants are bounded by RT_SLOTS and RT_FEATURES, which may
+       follow them */
     if ((ent[0] || ent[1] || ent[2]) &&
-        !reccodec_params(&h->codec, h->slots, h->proj_cap, ent[0], nent[0], ent[1], nent[1],
-                         ent[2], nent[2], why, cap))
+        !reccodec_params(&h->codec, h->slots, h->proj_cap, h->grid_w, h->grid_h, h->wrecks,
+                         ent[0], nent[0], ent[1], nent[1], ent[2], nent[2], why, cap))
         return 0;
     h->has_codec = (unsigned)h->codec.usable;
     if (!h->grid_w || h->grid_w > 0xFFFF || !h->grid_h || h->grid_h > 0xFFFF || !h->wrecks ||
