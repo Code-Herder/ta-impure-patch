@@ -33,6 +33,7 @@ GAMETIME = "*0x511DE8+0x38a47"
 PAUSED = "*0x511DE8+0x38a51:2"   # bit 0: the pause the Pause key flips, and THE PAUSE AT T sets
 TRIGGER = "tagpu_replay.trigger"
 ACK_S = 60                       # a frame's answer: a trigger's line, the camera, a menu (tareplay)
+STALL_S = 120                    # a running level's GameTime standing still: a hung game (tareplay)
 
 
 def tacli_api():
@@ -70,16 +71,18 @@ class Check:
         self.log = []
         self.held = False
 
+    def _found(self, rx, start):
+        """The first log line from index `start` on matching `rx`, None while there is none."""
+        self.log += [ln.rstrip() for ln in self.reader()]
+        return next((ln for ln in self.log[start:] if re.search(rx, ln)), None)
+
     def _answer(self, rx, start, seconds=ACK_S):
-        """The first log line from index `start` on matching `rx`."""
+        """A frame's answer: the first log line from index `start` on matching `rx`."""
         end = time.monotonic() + seconds
-        while True:
-            self.log += [ln.rstrip() for ln in self.reader()]
-            for ln in self.log[start:]:
-                if re.search(rx, ln):
-                    return ln
+        while (got := self._found(rx, start)) is None:
             assert time.monotonic() < end, f"no line matching {rx!r} in {seconds} s"
             time.sleep(0.02)
+        return got
 
     def _write(self, line):
         """One line of the replay trigger, written whole and renamed into place as tareplay writes
@@ -104,7 +107,18 @@ class Check:
         return start
 
     def _taken(self, T, start):
-        got = self._answer(rf"pause: (paused at GameTime {T}$|at {T} not taken.*)", start)
+        """The pause at T taken. The level runs until then, as many ticks as the case advances, so
+        the wait is bounded by its progress: it gives up only when GameTime stands still for
+        STALL_S, a hung game, and a loaded machine makes it longer, never different."""
+        rx = rf"pause: (paused at GameTime {T}$|at {T} not taken.*)"
+        tick, since = None, time.monotonic()
+        while (got := self._found(rx, start)) is None:
+            now = self.values(GAMETIME)[0]
+            if now != tick:
+                tick, since = now, time.monotonic()
+            assert time.monotonic() - since < STALL_S, \
+                f"pause at {T}: GameTime stood at {tick} for {STALL_S} s"
+            time.sleep(0.05)
         assert "paused at" in got, got
         self.held, self.tick = True, T
 
