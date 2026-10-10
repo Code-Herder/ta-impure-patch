@@ -86,8 +86,9 @@ read to there. A dump (`dump <name>` in tagpu_replay.trigger) is REC_MAGIC, a st
 format, the build, the globals list's hash and the tables, and one stored snapshot, which carries
 every cell and, after the world, the players' sight counters (RK_SIGHT) and the main block and
 .data whole (RK_IMAGE). A recording's snapshot
-carries only the cells that differ from the first iteration's grid, the base, which a reader takes
-from the stream, and none of a table's spans that are all zero. A table is paired with the
+carries only the cells and the wreck records that differ from its segment's first iteration's grid
+and pool, the base and the wreck base, which a reader takes from the stream, and none of a table's
+spans that are all zero. A table is paired with the
 recording's by its name: each build numbers its tables in its own registry order, and a recording
 may be played by another build than the one that made it. The header gives each table's layout
 hash as well (`info` shows it), which the replay's seek compares with its own declaration's. The
@@ -563,6 +564,7 @@ class World:
         self.pool = bytearray(self.nrec * REC_WRECK_BYTES)             # every record's image
         self.heads = None               # the pool's three heads and the cursor, once sent
         self.base = None                # the grid at the end of the first iteration (stream_to)
+        self.wbase = None               # ... and the wreck pool, taken with it
         self.globals = None             # the globals image, once sent
         self.proj = bytearray(self.ncap * REC_PROJ_IMAGE)              # the projectile pool's
         self.phead = None               # (count, hw), once sent: records [hw, ncap) are zero
@@ -1048,15 +1050,18 @@ class World:
         return out, n
 
 
-def snapshot_world(payload, slots, tables, dims, base=None, header=None):
+def snapshot_world(payload, slots, tables, dims, base=None, header=None, wbase=None):
     """A snapshot or a dump builds the world from nothing, its seats and viewer included; a
-    snapshot's cells over the recording's base grid, a dump's over nothing (it carries them all).
-    With the recording's `header`, its perspective is checked against it as the stream's is."""
+    snapshot's cells over its segment's base grid and its wreck records over its wreck base, a
+    dump's over nothing (it carries every cell and every record that is not zero). With the
+    recording's `header`, its perspective is checked against it as the stream's is."""
     w = World(slots, tables, dims=dims)
     w.header = header
     w.snap = True
     if base is not None:
         w.grid[:] = base
+    if wbase is not None:
+        w.pool[:] = wbase
     for kind, b in records(payload):
         w.apply(kind, b)
     w.whole()
@@ -1262,8 +1267,11 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
     """The world the stream builds, to the end of iteration `want` (or of the blocks). Calls
     on_snapshot(world, snapshot payload) at each snapshot block on the way, and
     on_record(world, kind, body) after each record is applied -- and with kind None before a TICK
-    is, while the world is still the iteration's before it. The world's `base` is its grid at the
-    end of its segment's first iteration, which a snapshot's cells differ from.
+    is, while the world is still the iteration's before it. The world's `base` and `wbase` are its
+    grid and its wreck pool at the end of its segment's first iteration, which a snapshot's cells
+    and wreck records differ from: the DLL's writer and reader take theirs at that moment too
+    (tagpu_recwriter.c, iteration_done; tagpu_recreader.c, tick_take), each from the pool that
+    segment's first iteration built from zero.
     Across a chain (load's RB_BOUNDARY markers) each segment is read to the GameTime before the
     next fork_at, its snapshots past that unread, and at the marker a fresh world, the child's
     header's seats and viewer, takes the child's first iteration whole (the reader's invariant,
@@ -1297,6 +1305,7 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
                 if w.tick is not None and w.base is None:
                     w.whole(True)
                     w.base = bytes(w.grid)
+                    w.wbase = bytes(w.pool)
                 if want is not None and w.tick is not None and w.tick >= want:
                     w.whole(True)
                     return w
@@ -1628,7 +1637,8 @@ def cmd_check(path, timeline=0):
     def at_snapshot(w, payload):
         nonlocal bad, seen
         seen += 1
-        s = snapshot_world(payload, h["slots"], h["tables"], feature_dims(h), w.base, w.header)
+        s = snapshot_world(payload, h["slots"], h["tables"], feature_dims(h), w.base, w.header,
+                           w.wbase)
         lines, n = w.differences(s, h["tables"], gnames=gnames, pov=True)
         if s.tick != w.tick:
             lines.insert(0, f"the snapshot is at GameTime {s.tick}, the stream at {w.tick}")
@@ -1689,7 +1699,8 @@ def cmd_pov(path, check):
 
     def at_snapshot(w, payload):
         snaps[0] += 1
-        s = snapshot_world(payload, h["slots"], h["tables"], feature_dims(h), w.base, w.header)
+        s = snapshot_world(payload, h["slots"], h["tables"], feature_dims(h), w.base, w.header,
+                           w.wbase)
         bad.extend(f"the snapshot at GameTime {s.tick}: {line.replace('dump', 'snapshot')}"
                    for line in w.pov_differences(s))
 
