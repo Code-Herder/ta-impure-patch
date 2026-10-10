@@ -3996,6 +3996,21 @@ class PrefixLeftovers(unittest.TestCase):
         self.assertEqual(found[0]["comm"], "sleep")
         self.assertEqual(found[0]["threads"], 1)
 
+    def test_the_listing_knows_the_prefix_by_any_name_of_it(self):
+        base = Path(tempfile.mkdtemp(prefix="tacli-test-prefix-"))
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        prefix = base / "prefix"
+        prefix.mkdir()
+        (base / "link").symlink_to(prefix)
+        named = [(str(prefix) + "/", None), (str(base / "link"), None), ("prefix", base)]
+        pids = []
+        for value, cwd in named:
+            p = subprocess.Popen(["sleep", "30"], env=dict(os.environ, WINEPREFIX=value), cwd=cwd)
+            self.addCleanup(p.wait)
+            self.addCleanup(p.kill)
+            pids.append(p.pid)
+        self.assertEqual(sorted(p["pid"] for p in tacli.prefix_processes(prefix)), sorted(pids))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -287,9 +287,32 @@ def pointer_restore(display: str, pos):
     return True
 
 
+def prefix_key(path) -> str:
+    """A prefix's identity: its resolved path. Wine finds a prefix's server by the directory
+    itself, so a relative, symlinked or trailing-slash WINEPREFIX names the same prefix and has
+    to compare equal to it."""
+    return os.path.realpath(path)
+
+
+def proc_prefix(pid, environ: list):
+    """The resolved WINEPREFIX of process `pid` from its environment, a relative value read
+    against the process's working directory; None when it has none."""
+    for entry in environ:
+        if entry.startswith(b"WINEPREFIX="):
+            value = entry.decode(errors="replace").split("=", 1)[1]
+            if not os.path.isabs(value):
+                try:
+                    value = os.path.join(os.readlink(f"/proc/{pid}/cwd"), value)
+                except OSError:
+                    return None
+            return prefix_key(value)
+    return None
+
+
 def totala_by_prefix() -> dict:
-    """{WINEPREFIX: pid} of every local TotalA.exe, from one process listing: the first pid in
-    pgrep's order for each prefix. An instance's game is the one running from its prefix."""
+    """{resolved prefix: pid} of every local TotalA.exe, from one process listing: the first
+    pid in pgrep's order for each prefix. An instance's game is the one running from its
+    prefix (prefix_key)."""
     try:
         pids = subprocess.run(["pgrep", "-x", "TotalA.exe"],
                               capture_output=True, text=True).stdout.split()
@@ -297,13 +320,9 @@ def totala_by_prefix() -> dict:
         return {}
     out = {}
     for pid in pids:
-        try:
-            environ = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
-        except (OSError, PermissionError):
-            continue
-        for entry in environ:
-            if entry.startswith(b"WINEPREFIX="):
-                out.setdefault(entry.decode(errors="replace").split("=", 1)[1], int(pid))
+        prefix = proc_prefix(pid, _proc_environ(pid))
+        if prefix is not None:
+            out.setdefault(prefix, int(pid))
     return out
 
 
@@ -398,7 +417,7 @@ class Instance:
         remote instance, by the test folder it runs from."""
         if self.remote:
             return self.remote.pid()
-        return totala_by_prefix().get(str(self.prefix))
+        return totala_by_prefix().get(prefix_key(self.prefix))
 
     def running(self) -> bool:
         return self.pid() is not None
@@ -926,9 +945,9 @@ def _proc_environ(pid: str) -> list:
 
 
 def prefix_processes(prefix: Path) -> list:
-    """Every process whose environment holds exactly WINEPREFIX=`prefix`, as dicts of pid,
-    comm, ppid, start time (wall clock), its leader thread's state and its thread count."""
-    key = b"WINEPREFIX=" + str(prefix).encode()
+    """Every process whose WINEPREFIX names `prefix` (prefix_key), as dicts of pid, comm, ppid,
+    start time (wall clock), its leader thread's state and its thread count."""
+    key = prefix_key(prefix)
     try:
         btime = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines()
                      if line.startswith("btime "))
@@ -939,7 +958,7 @@ def prefix_processes(prefix: Path) -> list:
     for pid in os.listdir("/proc"):
         if not pid.isdigit() or int(pid) == os.getpid():
             continue
-        if key not in _proc_environ(pid):
+        if proc_prefix(pid, _proc_environ(pid)) != key:
             continue
         try:
             comm = Path(f"/proc/{pid}/comm").read_text().strip()
@@ -963,6 +982,9 @@ def stale_listing(procs: list) -> list:
 def describe_processes(procs: list) -> str:
     return "; ".join(f"{p['comm']} pid {p['pid']} ppid {p['ppid']} started {p['started']} "
                      f"leader {p['leader']} threads {p['threads']}" for p in procs) or "none"
+
+
+WINESERVER_HANG_S = 120
 
 
 def end_prefix_wineserver(inst: Instance) -> list:
@@ -995,8 +1017,17 @@ def end_prefix_wineserver(inst: Instance) -> list:
     hold the semaphore when it starts one."""
     found = prefix_processes(inst.prefix)
     env = inst.env()
-    run(["wineserver", "-k"], env=env)          # exit 1: no server was running
-    run(["wineserver", "-w"], env=env)
+    # A hang bound, deciding nothing: -k ends the server within its own SIGKILL fallback
+    # (about 10 s), and -w returns once no server of the prefix lives. One still waiting after
+    # WINESERVER_HANG_S has a Wine program in the prefix that is not ending.
+    try:
+        run(["wineserver", "-k"], env=env, timeout=WINESERVER_HANG_S)   # exit 1: none ran
+        run(["wineserver", "-w"], env=env, timeout=WINESERVER_HANG_S)
+    except FileNotFoundError:
+        die(f"{inst.name}: no wineserver on PATH: a launch ends the prefix's server first")
+    except subprocess.TimeoutExpired as e:
+        die(f"{inst.name}: `{' '.join(e.cmd)}` still waiting after {WINESERVER_HANG_S} s; the "
+            f"prefix's processes now: {describe_processes(prefix_processes(inst.prefix))}")
     return stale_listing(found)
 
 
@@ -1443,7 +1474,7 @@ def place_window(inst: "Instance", display: str):
         if other.unusable:
             warn(other.unusable)
             continue
-        if other.remote or other.name == inst.name or str(other.prefix) not in live:
+        if other.remote or other.name == inst.name or prefix_key(other.prefix) not in live:
             continue
         if (other.meta().get("display") or default_display()) != display:
             continue    # another X server's windows share no pixels with this one
@@ -1841,7 +1872,13 @@ def _launch(args) -> dict:
             # player's first run has none
             (inst.gamedir / "impure.cfg").unlink(missing_ok=True)
     meta = inst.meta()
+    # Held from here until the DLL's run says it has the store: no other tacli seeds, writes
+    # or launches in between (regstore_lock) -- and no second launch of this instance takes
+    # the check that no game runs, or ends the prefix's server, while this one starts its
+    # Wine processes.
+    store_lock = regstore_lock(inst)
     if inst.running():
+        store_lock.close()
         return dict(meta, already_running=True, pid=inst.pid())
     # Before this launch's first Wine process: once the prefix's wineserver has exited, no
     # leftover can hold the single-instance semaphore the game refuses to start beside
@@ -1957,9 +1994,6 @@ def _launch(args) -> dict:
         deploy_dll(inst)
         link_restorer_files(inst)
     apply_prefix_settings(inst)
-    # Held from the store's first write until the DLL's run says it has the store: no
-    # other tacli seeds, writes or launches in between (regstore_lock).
-    store_lock = regstore_lock(inst)
     # after deploy_dll: which DLL will run decides where TA's values are read
     registry = local_registry(inst, meta, regstore_values(meta.get("sound", False),
                                                           tuple(meta["res"]), args))
