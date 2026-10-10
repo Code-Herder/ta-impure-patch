@@ -577,6 +577,7 @@ class World:
         self.cnames = {}                # the scripts' names by their FNV-1a
         self.fbracket = 0               # an RK_EV_FEATURE's root + 1, until its end
         self.deaths = []                # the IDs of the deaths whose end is still to come
+        self.evented = False            # an event has come since the iteration's RK_TICK
         self.units = {}                                  # slot -> bytearray image, live only
         self.lists = {}                                  # (slot, list) -> bytearray, not empty
         self.players = [bytearray(REC_PLAYER_IMAGE) for _ in range(REC_PLAYERS)]
@@ -686,8 +687,11 @@ class World:
 
     def apply(self, kind, b):
         """One record; an event changes nothing here and is returned as (kind, body) -- the
-        cells inside the tick's feature call too, which are its input. An order list's records
-        come together and in order, as the DLL's reader has them (tagpu_recreader.c,
+        cells inside the tick's feature call too, which are its input. An RK_CELLS is an image
+        only before the iteration's first event and tick input after it, which only the tick's
+        feature call may hold: the readers' rule (tagpu_recreader.c, apply), which the writer's
+        copy and so every snapshot follow (tagpu_recwriter.c, feature_record). An order list's
+        records come together and in order, as the DLL's reader has them (tagpu_recreader.c,
         list_record)."""
         if kind == RK_UNIT_DELTA and self.pend is None and not self.fbracket and not self.deaths:
             # the stream's most common record: with no order list, feature call or death open,
@@ -697,6 +701,8 @@ class World:
             return None
         if self.pend is not None and kind != RK_ORDERS:
             raise Unreadable(f"slot {self.pend[0]}'s order list cut short by another record")
+        if kind in EVENTS:              # RCS_EVENTS's kinds (tagpu_recfmt.h, rec_section_of)
+            self.evented = True
         if kind == RK_EV_NET_CREATE:
             h = self.header
             if not h or h.get("mode") != 3 or len(b) != 32 or \
@@ -729,6 +735,7 @@ class World:
         elif kind == RK_TICK:
             self.tick = struct.unpack_from("<I", b)[0]
             self.clicks = []
+            self.evented = False
         elif kind == RK_UNIT:
             self.units[struct.unpack_from("<H", b)[0]] = bytearray(b[4:4 + REC_UNIT_IMAGE])
         elif kind == RK_UNIT_DELTA:
@@ -787,6 +794,9 @@ class World:
         elif kind == RK_CORRECT:
             self.corrections += 1
         elif kind == RK_CELLS:
+            if self.evented:
+                raise Unreadable("cells after an event of their iteration, outside the tick's "
+                                 "feature call")
             at = self.cells(b)
             self.grid[at:at + len(b) - 8] = b[8:]
         elif kind == RK_WRECK:
@@ -1322,10 +1332,13 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
 
 class EventCheck:
     """Each iteration's records are its images, then the events of the step that follows them
-    (tagpu_recfmt.h). Between the images of two iterations, a unit that appears must have its
-    create, one that disappears its death, one whose state byte +0x10E changed a state event with
-    the new byte, and one whose build fraction +0x104 reached 0.0 its build done -- unless the slot
-    died and was made again in the step, which the create and the death both name."""
+    (tagpu_recfmt.h): the images end at the iteration's first event, as the readers have them
+    (tagpu_recreader.c, apply), and World.apply refuses cells past it that are not the tick's
+    feature call's, so the world summarised here is every reader's. Between the images of two
+    iterations, a unit that appears must have its create, one that disappears its death, one whose
+    state byte +0x10E changed a state event with the new byte, and one whose build fraction +0x104
+    reached 0.0 its build done -- unless the slot died and was made again in the step, which the
+    create and the death both name."""
 
     def __init__(self, limit=20):
         self.open = False           # an iteration has begun

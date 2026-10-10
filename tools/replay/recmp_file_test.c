@@ -697,10 +697,11 @@ static int read_native(const char* path, unsigned text_only)
 
 /* A skirmish file's perspective through the real writer and reader: player 0's samples every
    third tick, a selection each 200 ticks and a click each 250, so the writer's snapshot after
-   PV_FIRST + 900 carries two dated samples and a selection. Forward reading keeps each tick's
-   state; seeks before and after the snapshot must rebuild exactly that state. */
+   PV_FIRST + 1800 (SNAPSHOT_TICKS, tagpu_recwriter.c) carries two dated samples and a selection.
+   Forward reading keeps each tick's state; seeks before and after the snapshot must rebuild
+   exactly that state. */
 #define PV_FIRST 100u
-#define PV_LAST  1100u
+#define PV_LAST  2200u
 typedef struct PvState {
     unsigned npov, tick[2], nsel, nclick;
     RecPov pov[2];
@@ -723,7 +724,7 @@ static int perspective_file(const char* path)
     unsigned globals[REC_GLOBALS_DWORDS]={0}, proj[2]={0}, mapped[2]={0};
     unsigned features[5]={2,2,1,0,0}, at=0, n=0, first=2, last=5, k, t, T;
     unsigned short grid[2]={2,2};
-    static const unsigned SEEKS[]={PV_FIRST+450,PV_FIRST+901,PV_FIRST+950,PV_LAST-1,PV_LAST};
+    static const unsigned SEEKS[]={PV_FIRST+900,PV_FIRST+1801,PV_FIRST+1850,PV_LAST-1,PV_LAST};
     PvState* fwd=calloc(PV_LAST-PV_FIRST+1,sizeof *fwd);
     PvState now;
     RecReader* r;

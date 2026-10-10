@@ -253,9 +253,9 @@ static int sections_body(RecReader* r, const RecBlock* b, const unsigned char* s
     /* ORDERING: the world's units and its pool are the copies at the end of the iteration before
        this block (tick_read loads a block only between iterations), which is what the writer's
        encoder restarted from, and its grid, which every image of the segment read so far built
-       (apply), or a snapshot over the base did. The codec was made for the sizes of the first segment it met --
-       slots, projectile pool, grid and wreck pool -- which every segment's header equals
-       (segs_scan, shape_differs); h->codec is this segment's own. */
+       (apply), or a snapshot over the base did. The codec was made for the sizes of the first
+       segment it met -- slots, projectile pool, grid and wreck pool -- which every segment's
+       header equals (segs_scan, shape_differs); h->codec is this segment's own. */
     if (b->flags & RBF_FRAME_RESET) {
         RecFrameWorld fw = { r->h.grid_w, r->h.grid_h, r->w.grid };
         reccodec_restart(r->codec, &h->codec, r->w.unit, r->w.live, r->w.proj, r->w.nproj,
@@ -1274,10 +1274,12 @@ static int tick_read(RecReader* r, char* why, unsigned cap)
    read: recr_open and recr_timeline start at the root's, a seek starts at a segment's first
    iteration or reads it before a snapshot of that segment, and a crossing starts at the child's,
    each over world_reset(r, 0). Its grid images are every cell (the feature tick's cells inside its
-   events are not applied to the grid), as the writer's base is (tagpu_recwriter.c, RK_GRID).
-   INVARIANT: the wreck base is the writer's (tagpu_recwriter.c, iteration_done) by construction --
-   both are the pool built from zero by the RK_WRECKs of the segment's first iteration alone, each
-   index bounded by the same h.wrecks, which every segment of the chain shares. */
+   events are not applied to the grid).
+   INVARIANT: both bases are the writer's (tagpu_recwriter.c, iteration_done) by construction --
+   each side's are the pool and the grid built from zero by the RK_WRECKs and the images of the
+   segment's first iteration alone, an image being an RK_CELLS before the iteration's first event
+   on both sides (apply; the writer's feature_record), each index bounded by the same h.wrecks and
+   grid size, which every segment of the chain shares. */
 static int tick_take(RecReader* r, char* why, unsigned cap)
 {
     int k = tick_read(r, why, cap);

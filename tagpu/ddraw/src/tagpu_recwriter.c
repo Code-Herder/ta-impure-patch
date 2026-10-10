@@ -28,12 +28,11 @@
    globals image whole once each rotation, a slice of the pool's records with its count and extent
    each iteration.
 
-   A SNAPSHOT is smaller than the copy: its cells are the ones that differ from the first
-   iteration's grid, the base, which the writer keeps from RK_GRID on and a reader takes from the
-   first iteration it reads; its wreck records the ones that differ from the pool at the end of
-   the first iteration, the wreck base (iteration_done), which a reader takes at the same moment;
-   and a table's spans that are all zero are left out, since a snapshot builds from nothing and
-   RK_TABLE_SIZE zeroes the table.
+   A SNAPSHOT is smaller than the copy: its cells are the ones that differ from the grid at the
+   end of the first iteration, the base, and its wreck records the ones that differ from the pool
+   then, the wreck base; the writer takes both there (iteration_done), and a reader at the end of
+   the first iteration it reads; and a table's spans that are all zero are left out, since a
+   snapshot builds from nothing and RK_TABLE_SIZE zeroes the table.
 
    A FORK (tagpu_recorder.h, RecFork) is written as a segment of the file it was played from, at
    the append point the takeover found, through the handle it opened (file_append). */
@@ -123,8 +122,10 @@ typedef struct Writer {
     unsigned       fbracket;    /* an RK_EV_FEATURE's root + 1, until its END             */
     unsigned       ndeaths;     /* the deaths whose RK_EV_DEATH_END is still to come      */
     unsigned       death[REC_DEATHS_MAX];   /* their units' IDs, innermost last          */
+    int            evented;     /* an RCS_EVENTS record has come since the iteration's RK_TICK */
 
-    unsigned char* base;        /* the grid at the first iteration (a snapshot's cells differ) */
+    unsigned char* base;        /* the grid at the end of the first iteration (a snapshot's
+                                   cells differ), once iteration_done has taken it        */
     unsigned char* wbase;       /* the pool at the end of the first iteration (a snapshot's
                                    wreck records differ), once iteration_done has taken it */
     unsigned       globals[REC_GLOBALS_DWORDS];   /* the globals image, once sent        */
@@ -989,12 +990,14 @@ static void snapshot(Writer* w)
 /* The iteration at `w->tick` is complete, the events of the step after it included: its stream
    block may end here, and a snapshot of the copy at `w->tick` may follow it. That snapshot comes
    after those events, so a reader that starts from it takes them from the block before.
-   THE WRECK BASE is taken at the first call, before any snapshot can be: the pool at the end of
-   the segment's first iteration. INVARIANT: it equals every reader's (tagpu_recreader.c,
-   tick_take), by construction -- one Writer is one segment, calloc'd per recording or fork, so its
-   pool starts zero and holds exactly the RK_WRECKs of that segment's first iteration, as the
-   reader's does after world_reset(r, 0) and that iteration's tick_read; neither side applies a
-   record of another segment, and both bound the index by the same pool size (the headers' shape
+   THE BASES are taken at the first call, before any snapshot can be: the wreck pool and the grid
+   at the end of the segment's first iteration. INVARIANT: they equal every reader's
+   (tagpu_recreader.c, tick_take), by construction -- one Writer is one segment, calloc'd per
+   recording or fork, so its pool starts zero and holds exactly the RK_WRECKs of that segment's
+   first iteration, and its grid exactly that iteration's images (feature_record refuses RK_GRID
+   in any later iteration, and takes no cells that a reader takes as events), as the reader's do
+   after world_reset(r, 0) and that iteration's tick_read; neither side applies a record of
+   another segment, and both bound the index by the same pool and grid sizes (the headers' shape
    agrees across a chain). */
 static void iteration_done(Writer* w)
 {
@@ -1002,6 +1005,11 @@ static void iteration_done(Writer* w)
         w->wbase = (unsigned char*)malloc((size_t)w->npool * REC_WRECK_BYTES);
         if (!w->wbase) { fail(w, "no memory for the snapshots' wreck base"); return; }
         memcpy(w->wbase, w->pool, (size_t)w->npool * REC_WRECK_BYTES);
+        if (w->grid) {
+            w->base = (unsigned char*)malloc((size_t)w->gw * w->gh * REC_CELL_BYTES);
+            if (!w->base) { fail(w, "no memory for the snapshots' base grid"); return; }
+            memcpy(w->base, w->grid, (size_t)w->gw * w->gh * REC_CELL_BYTES);
+        }
     }
     w->sticks++;
     if (w->tick - w->snap_tick >= SNAPSHOT_TICKS) {
@@ -1063,7 +1071,15 @@ static int list_record(Writer* w, unsigned kind, const unsigned char* b, unsigne
    cells only when it is the tick's, whose cells are its input and none of the copy, and which is
    inside no bracket; a death's, RK_EV_DEATH to its END, holds the feature calls its explosion
    made, in a multiplayer recording its corpse's (FR_CORPSE, inside a death only), and may hold
-   deaths. A draw is inside one, FS_SOURCE inside a multiplayer recording's tick only. */
+   deaths. A draw is inside one, FS_SOURCE inside a multiplayer recording's tick only.
+   INVARIANT, an ordering: the copy's grid takes exactly the cells every reader and the encoder
+   take as images. Their rule (tagpu_recreader.c, apply; reccodec's events flag; codectest's
+   world_apply) is that an RK_CELLS is an image when no RCS_EVENTS record came before it in its
+   iteration, and tick input otherwise, which event_take accepts only inside the tick's feature
+   call. So cells after an event are refused here unless that call is open, and the grid's first
+   image (RK_GRID, written as cells where it stands) comes before every event of the segment's
+   first iteration. A snapshot is this copy, and the cells frame restarts from the reader's grid
+   at it: a cell the copy took and the readers did not would misdecode a seek, silently. */
 static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
 {
     unsigned short h[4];
@@ -1071,13 +1087,10 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
     int open = w->fbracket || w->ndeaths;
     switch (kind) {
     case RK_GRID:
-        if (len != 4 || w->grid || !w->ticked || open) return 0;
+        if (len != 4 || w->grid || w->iterations != 1 || open || w->evented) return 0;
         memcpy(h, b, 4);
         if (h[0] != w->gw || h[1] != w->gh || !w->ring->grid) return 0;
         w->grid = w->ring->grid;
-        w->base = (unsigned char*)malloc((size_t)w->gw * w->gh * REC_CELL_BYTES);
-        if (!w->base) { fail(w, "no memory for the snapshots' base grid"); return 1; }
-        memcpy(w->base, w->grid, (size_t)w->gw * w->gh * REC_CELL_BYTES);
         grid_put(&w->stream, w);
         return 1;
     case RK_CELLS:
@@ -1086,7 +1099,7 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
         if (!h[2] || h[2] > REC_CELLS_MAX || h[3] || len != 8u + h[2] * REC_CELL_BYTES ||
             h[0] + h[2] > w->gw || h[1] >= w->gh)
             return 0;
-        if (open && w->fbracket != FR_TICK + 1) return 0;
+        if (open ? w->fbracket != FR_TICK + 1 : w->evented) return 0;
         if (!open)
             memcpy(w->grid + ((size_t)h[1] * w->gw + h[0]) * REC_CELL_BYTES, b + 8,
                    (size_t)h[2] * REC_CELL_BYTES);
@@ -1285,11 +1298,15 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     /* a list that has begun is followed by the rest of it and nothing else */
     if (w->pend.next < w->pend.total && kind != w->pend.kind) return 0;
     if (len >= 2) memcpy(&id, b, 2);
+    /* the readers' events flag, by the same predicate (feature_record's INVARIANT); a record that
+       sets it and is then refused abandons the file, so setting it first changes nothing */
+    if (rec_section_of(kind) == RCS_EVENTS) w->evented = 1;
     switch (kind) {
     case RK_TICK:
         if (len != 4 || w->fbracket || w->ndeaths) return 0;
         if (w->ticked) iteration_done(w);
         if (w->dead) return 1;
+        w->evented = 0;
         w->complete_bytes = w->stream.n;
         w->complete_tick = w->tick;
         memcpy(&w->tick, b, 4);
