@@ -1402,6 +1402,8 @@ BODY_MAX = 0xFFFF                          # RECF_BODY_MAX: a body RecHdr's u16 
 @_jit
 def _frame_open(sec, at, end, scheme, ncols, cols, err, s):
     """Section s, sec[at:end], as `ncols` columns of `scheme` into cols: 0, or the code."""
+    if ncols < 1 or ncols > FRAME_COLS_MAX:
+        return _fail(err, E_F_NCOLS, s, ncols)
     if at >= end:
         return _fail(err, E_F_SCHEME, s, -1, scheme)
     if sec[at] != scheme:
@@ -1456,8 +1458,9 @@ def _col_u8(sec, cols, k):
 
 @_jit
 def _col_bytes(sec, cols, k, dst, at, n):
-    """The next n bytes of column k into dst[at:]: False when they run past the column."""
-    if n > cols[k, 1] - cols[k, 0]:
+    """The next n bytes of column k into dst[at:]: False when they run past the column or past
+    dst, so a frame's body is bounded before the write (recf_body_put)."""
+    if n < 0 or n > cols[k, 1] - cols[k, 0] or at < 0 or n > dst.shape[0] - at:
         return False
     dst[at:at + n] = sec[cols[k, 0]:cols[k, 0] + n]
     cols[k, 0] += n

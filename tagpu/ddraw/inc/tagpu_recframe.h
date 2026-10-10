@@ -150,6 +150,23 @@ static __inline uint32_t unzz32(uint32_t z) { return (0u - (z & 1)) ^ (z >> 1); 
 #define RECF_COLS_MAX 32
 #define RECF_BODY_MAX 0xFFFF   /* a record body a frame makes: RecHdr's u16 length            */
 
+/* Each frame file states its column count through this, at file scope: a count past
+   RECF_COLS_MAX would index recf_open's len[] and the Python fcols past their ends, so it fails
+   the build instead (recf_open and recf_write also refuse one at run time). */
+#define RECF_COLS_CHECK(name, n) \
+    typedef char recf_cols_ok_##name[((n) >= 1 && (n) <= RECF_COLS_MAX) ? 1 : -1]
+
+/* n bytes onto a record body the decoder is building, at *len: 1, or 0 when the body would pass
+   RECF_BODY_MAX, the size of the buffer dec_rec writes into. Every byte a frame's dec_rec puts
+   in its body goes through this, so the bound holds before the write, not after it. */
+static __inline int recf_body_put(unsigned char* body, unsigned* len, const void* src, size_t n)
+{
+    if (n > (size_t)RECF_BODY_MAX - *len) return 0;
+    memcpy(body + *len, src, n);
+    *len += (unsigned)n;
+    return 1;
+}
+
 typedef struct RecCol { const unsigned char* p; size_t at, end; } RecCol;
 
 /* The section from `ncols` columns into `sec` (emptied first): 1, or 0 when a column or the
@@ -158,6 +175,7 @@ static __inline int recf_write(RecBytes* sec, unsigned scheme, const RecBytes* c
 {
     unsigned i;
     rb_clear(sec);
+    if (ncols < 1 || ncols > RECF_COLS_MAX) return 0;
     for (i = 0; i < ncols; i++)
         if (col[i].oom || col[i].n > RECC_FRAME_CAP) return 0;
     rb_u8(sec, scheme);
@@ -174,6 +192,8 @@ static __inline int recf_open(const unsigned char* p, size_t n, unsigned scheme,
     size_t at = 1, len[RECF_COLS_MAX];
     uint32_t v;
     unsigned i;
+    if (ncols < 1 || ncols > RECF_COLS_MAX)
+        RECF_REFUSE("the %s frame reads %u columns, past 1..%u", name, ncols, RECF_COLS_MAX);
     if (n < 1) RECF_REFUSE("the %s frame has no scheme byte", name);
     if (p[0] != scheme) RECF_REFUSE("the %s frame is scheme %u, this build reads %u", name, p[0], scheme);
     if (!varint_get(p, n, &at, &v) || v != ncols)
@@ -258,7 +278,9 @@ typedef struct RecFrameOps {
     int   (*enc_write)(void* f, RecBytes* sec);
     /* THE DECODER: dec_open takes the block's section and its iterations before the first; per
        iteration dec_iter, dec_rec for each record of its kinds -- its body into `body`, which
-       holds RECF_BODY_MAX bytes, and its length -- and dec_iter_end; dec_close after the last.
+       holds RECF_BODY_MAX bytes, through recf_body_put alone, and its length -- and
+       dec_iter_end; dec_close after the last. The caller's own test of the length after
+       dec_rec names a frame that broke this; it is not the bound.
        Each returns 1, or 0 with `why`, and the block is refused. */
     int   (*dec_open)(void* f, const unsigned char* sec, size_t n, unsigned iterations, char* why,
                       unsigned cap);
