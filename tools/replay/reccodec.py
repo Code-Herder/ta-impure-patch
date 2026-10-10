@@ -1636,21 +1636,56 @@ def _events_close(st, cols, sec, err):
 
 # ---- THE STATE FRAME (tagpu_recframe_state.c) ----------------------------------------------------
 #
-# Scheme 0, one column: for each record of its kinds, a varint length and the body verbatim.
-# Nothing crosses a block.
+# Scheme 1, nineteen columns: the globals, the players, the wreck records and RK_FEATURES each
+# against what the frame last saw of them (the C file says what each column holds). The state, a
+# tuple of arrays, is the C's: the globals with known bits, last deltas and the last delta's mask;
+# each player's image, known bits, last deltas and last mask; the wreck records with known bits;
+# RK_FEATURES' fields; the iteration's method-1 count and next wreck index. The last array, the
+# grid's cells, is the segment's and survives a restart.
 
-E_STATE_BODY = 250
-_WHY[E_STATE_BODY] = "a state record (kind {0}) cut short or past 0xFFFF bytes in the state frame"
-_STATE_SCHEME, _STATE_COLS = 0, 1
+(E_STATE_KIND, E_STATE_CUT, E_STATE_GCOUNT, E_STATE_GMASK, E_STATE_GSAME, E_STATE_METH,
+ E_STATE_UNKNOWN, E_STATE_STEPS, E_STATE_PM_EACH, E_STATE_PLAYER, E_STATE_PFLAG, E_STATE_PBITS,
+ E_STATE_WRECK, E_STATE_FMASK, E_STATE_BODY) = range(250, 265)
+_WHY.update({E_STATE_KIND: "kind {0} in the state frame",
+             E_STATE_CUT: "the state frame's column {0} cut short",
+             E_STATE_GCOUNT: "a globals image of {0} dwords, not 1..256",
+             E_STATE_GMASK: "a globals mask of {0} bytes",
+             E_STATE_GSAME: "a globals delta repeats a mask before the first",
+             E_STATE_METH: "global {0}'s method {1}",
+             E_STATE_UNKNOWN: "global {0} is unknown under method {1}",
+             E_STATE_STEPS: "global {0} takes {1} steps, not 1..16384",
+             E_STATE_PM_EACH: "more than 2 globals an iteration by steps",
+             E_STATE_PLAYER: "player {0} in the state frame",
+             E_STATE_PFLAG: "a player mask flag {0}",
+             E_STATE_PBITS: "player {0}'s mask names dword {1}",
+             E_STATE_WRECK: "wreck record {0} past the pool's {1}",
+             E_STATE_FMASK: "a feature mask {0}",
+             E_STATE_BODY: "a state record's body past 0xFFFF bytes"})
+_STATE_SCHEME, _STATE_COLS = 1, 19
+(_SC_GFULL, _SC_GM, _SC_GMASK, _SC_GMETH, _SC_GVAL, _SC_GSTEPS, _SC_GRAW, _SC_PL, _SC_PM, _SC_PMASK,
+ _SC_PIMG, _SC_PVAL, _SC_PRAW, _SC_WI, _SC_WM, _SC_WV, _SC_WRAW, _SC_FM, _SC_FV) = range(_STATE_COLS)
+assert 1 <= _STATE_COLS <= FRAME_COLS_MAX
+_GLOBALS_MAX, _PM_CAP, _PM_EACH, _PM_M = 256, 16384, 2, 0x7FFFFFFF
+_RK_GLOBALS, _RK_GLOBALS_DELTA = tarec.RK_GLOBALS, tarec.RK_GLOBALS_DELTA
+_RK_PLAYER, _RK_PLAYER_DELTA = tarec.RK_PLAYER, tarec.RK_PLAYER_DELTA
+_RK_WRECK, _RK_FEATURES = tarec.RK_WRECK, tarec.RK_FEATURES
+_PLAYERS, _P_IMG, _P_DW = tarec.REC_PLAYERS, tarec.REC_PLAYER_IMAGE, tarec.REC_PLAYER_DWORDS
+_P_BITS, _P_HEAD = tarec.REC_PLAYER_BITS, tarec.REC_PLAYER_DELTA_HEAD
+_WRECK = tarec.REC_WRECK_BYTES
 
 
 def _state_new(prm):
     """The state frame's state for a usable segment's params."""
-    return (np.zeros(1, np.int64),)
+    return (np.zeros(_GLOBALS_MAX, np.int64), np.zeros(_GLOBALS_MAX, np.int64),
+            np.zeros(_GLOBALS_MAX, np.uint8), np.zeros(_GLOBALS_MAX // 8, np.uint8),
+            np.zeros((_PLAYERS, _P_DW), np.int64), np.zeros((_PLAYERS, _P_DW), np.int64),
+            np.zeros((_PLAYERS, _P_DW), np.uint8), np.zeros((_PLAYERS, _P_BITS), np.uint8),
+            np.zeros((prm.nwrecks, _WRECK), np.uint8), np.zeros(prm.nwrecks, np.uint8),
+            np.zeros(4, np.int64), np.zeros(3, np.int64), np.array([prm.gw * prm.gh], np.int64))
 
 
 def _state_restart(st):
-    for a in st:
+    for a in st[:-1]:
         a[...] = 0
 
 
@@ -1665,15 +1700,234 @@ def _state_open(st, cols, sec, at, end, iters, err):
 
 @_jit
 def _state_iter(st, cols, sec, it, gt, copy, live, err):
+    meta = st[11]
+    meta[1] = 0
+    meta[2] = 0
     return 0
+
+
+@_inline
+def _st_get32(b, at):
+    return (np.int64(b[at]) | np.int64(b[at + 1]) << 8 | np.int64(b[at + 2]) << 16 |
+            np.int64(b[at + 3]) << 24)
+
+
+@_inline
+def _st_put32(b, at, v):
+    b[at], b[at + 1], b[at + 2], b[at + 3] = v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF
+
+
+@_jit
+def _st_u32(sec, cols, k):
+    """The next 4 bytes of column k as a u32: (value, True), or (0, False) past its end."""
+    at = cols[k, 0]
+    if cols[k, 1] - at < 4:
+        return np.int64(0), False
+    cols[k, 0] = at + 4
+    return _st_get32(sec, at), True
+
+
+@_inline
+def _st_pm(s):
+    t = (s % _PM_M) * 16807 % _PM_M
+    return t if t else np.int64(_PM_M)
+
+
+@_jit
+def _st_global(st, cols, sec, d, err):
+    """Changed global d's value from its method: the value, or -code."""
+    g, gd, gk, meta = st[0], st[1], st[2], st[11]
+    meth, ok = _col_u8(sec, cols, _SC_GMETH)
+    if not ok:
+        return -_fail(err, E_STATE_CUT, _SC_GMETH)
+    if meth > 2:
+        return -_fail(err, E_STATE_METH, d, meth)
+    if meth < 2 and not gk[d]:
+        return -_fail(err, E_STATE_UNKNOWN, d, meth)
+    if meth == 0:
+        z, ok = _col_varint(sec, cols, _SC_GVAL)
+        if not ok:
+            return -_fail(err, E_STATE_CUT, _SC_GVAL)
+        v = (g[d] + gd[d] + _unzz32(z)) & M32
+    elif meth == 1:
+        z, ok = _col_varint(sec, cols, _SC_GSTEPS)
+        if not ok:
+            return -_fail(err, E_STATE_CUT, _SC_GSTEPS)
+        if z < 1 or z > _PM_CAP:
+            return -_fail(err, E_STATE_STEPS, d, z)
+        if meta[1] >= _PM_EACH:
+            return -_fail(err, E_STATE_PM_EACH)
+        meta[1] += 1
+        v = g[d]
+        for _ in range(z):
+            v = _st_pm(v)
+    else:
+        v, ok = _st_u32(sec, cols, _SC_GRAW)
+        if not ok:
+            return -_fail(err, E_STATE_CUT, _SC_GRAW)
+    gd[d] = (v - g[d]) & M32 if gk[d] else 0
+    g[d] = v
+    gk[d] = 1
+    return v
 
 
 @_jit
 def _state_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
-    n, ok = _col_varint(sec, cols, 0)
-    if not ok or n > BODY_MAX or not _col_bytes(sec, cols, 0, body, 0, n):
-        return -_fail(err, E_STATE_BODY, kind)
-    return n
+    g, gk, gm, meta = st[0], st[2], st[3], st[11]
+    if kind == _RK_GLOBALS:
+        n, ok = _col_varint(sec, cols, _SC_GFULL)
+        if not ok:
+            return -_fail(err, E_STATE_CUT, _SC_GFULL)
+        if n < 1 or n > _GLOBALS_MAX:
+            return -_fail(err, E_STATE_GCOUNT, n)
+        if not _col_bytes(sec, cols, _SC_GFULL, body, 0, 4 * n):
+            return -_fail(err, E_STATE_CUT, _SC_GFULL)
+        for d in range(_GLOBALS_MAX):
+            g[d] = _st_get32(body, 4 * d) if d < n else 0
+            gk[d] = d < n
+        return 4 * n
+    if kind == _RK_GLOBALS_DELTA:
+        m, ok = _col_u8(sec, cols, _SC_GM)
+        if not ok:
+            return -_fail(err, E_STATE_CUT, _SC_GM)
+        if m > _GLOBALS_MAX // 8:
+            return -_fail(err, E_STATE_GMASK, m)
+        if m == 0:
+            if meta[0] == 0:
+                return -_fail(err, E_STATE_GSAME)
+        else:
+            if not _col_bytes(sec, cols, _SC_GMASK, gm, 0, m):
+                return -_fail(err, E_STATE_CUT, _SC_GMASK)
+            meta[0] = m
+        nb = meta[0]
+        head = (nb + 3) & ~3
+        if head > BODY_MAX:
+            return -_fail(err, E_STATE_BODY)
+        body[:nb] = gm[:nb]
+        body[nb:head] = 0
+        ln = head
+        for d in range(8 * nb):
+            if gm[d >> 3] >> (d & 7) & 1:
+                v = _st_global(st, cols, sec, d, err)
+                if v < 0:
+                    return v
+                if ln + 4 > BODY_MAX:
+                    return -_fail(err, E_STATE_BODY)
+                _st_put32(body, ln, v)
+                ln += 4
+        return ln
+    if kind == _RK_PLAYER:
+        pv, pk = st[4], st[6]
+        p, ok = _col_u8(sec, cols, _SC_PL)
+        if not ok:
+            return -_fail(err, E_STATE_CUT, _SC_PL)
+        if p >= _PLAYERS:
+            return -_fail(err, E_STATE_PLAYER, p)
+        if not _col_bytes(sec, cols, _SC_PIMG, body, 4, _P_IMG):
+            return -_fail(err, E_STATE_CUT, _SC_PIMG)
+        if 4 > BODY_MAX:
+            return -_fail(err, E_STATE_BODY)
+        body[0], body[1], body[2], body[3] = p, 0, 0, 0
+        for i in range(_P_DW):
+            pv[p, i] = _st_get32(body, 4 + 4 * i)
+            pk[p, i] = 1
+        return 4 + _P_IMG
+    if kind == _RK_PLAYER_DELTA:
+        pv, pd, pk, pmk = st[4], st[5], st[6], st[7]
+        p, ok = _col_u8(sec, cols, _SC_PL)
+        if not ok:
+            return -_fail(err, E_STATE_CUT, _SC_PL)
+        if p >= _PLAYERS:
+            return -_fail(err, E_STATE_PLAYER, p)
+        same, ok = _col_u8(sec, cols, _SC_PM)
+        if not ok:
+            return -_fail(err, E_STATE_CUT, _SC_PM)
+        if same > 1:
+            return -_fail(err, E_STATE_PFLAG, same)
+        mask = pmk[p]
+        if not same:
+            if not _col_bytes(sec, cols, _SC_PMASK, mask, 0, _P_BITS):
+                return -_fail(err, E_STATE_CUT, _SC_PMASK)
+            for i in range(_P_DW, 8 * _P_BITS):
+                if mask[i >> 3] >> (i & 7) & 1:
+                    return -_fail(err, E_STATE_PBITS, p, i)
+        if _P_HEAD > BODY_MAX:
+            return -_fail(err, E_STATE_BODY)
+        body[0], body[1] = p, 0
+        body[2:2 + _P_BITS] = mask
+        body[_P_HEAD - 1] = 0
+        ln = _P_HEAD
+        for i in range(_P_DW):
+            if mask[i >> 3] >> (i & 7) & 1:
+                if pk[p, i]:
+                    z, ok = _col_varint(sec, cols, _SC_PVAL)
+                    if not ok:
+                        return -_fail(err, E_STATE_CUT, _SC_PVAL)
+                    v = (pv[p, i] + pd[p, i] + _unzz32(z)) & M32
+                    pd[p, i] = (v - pv[p, i]) & M32
+                else:
+                    v, ok = _st_u32(sec, cols, _SC_PRAW)
+                    if not ok:
+                        return -_fail(err, E_STATE_CUT, _SC_PRAW)
+                    pd[p, i] = 0
+                pv[p, i] = v
+                pk[p, i] = 1
+                if ln + 4 > BODY_MAX:
+                    return -_fail(err, E_STATE_BODY)
+                _st_put32(body, ln, v)
+                ln += 4
+        return ln
+    if kind == _RK_WRECK:
+        w, wk = st[8], st[9]
+        z, ok = _col_varint(sec, cols, _SC_WI)
+        if not ok:
+            return -_fail(err, E_STATE_CUT, _SC_WI)
+        i = (meta[2] + _unzz32(z)) & M32
+        if i >= len(wk):
+            return -_fail(err, E_STATE_WRECK, i, len(wk))
+        meta[2] = i + 1
+        rec = w[i]
+        if wk[i]:
+            if cols[_SC_WM, 1] - cols[_SC_WM, 0] < 3:
+                return -_fail(err, E_STATE_CUT, _SC_WM)
+            a = cols[_SC_WM, 0]
+            m = np.int64(sec[a]) | np.int64(sec[a + 1]) << 8 | np.int64(sec[a + 2]) << 16
+            cols[_SC_WM, 0] = a + 3
+            for j in range(_WRECK // 2):
+                if m >> j & 1 and not _col_bytes(sec, cols, _SC_WV, rec, 2 * j, 2):
+                    return -_fail(err, E_STATE_CUT, _SC_WV)
+        else:
+            if not _col_bytes(sec, cols, _SC_WRAW, rec, 0, _WRECK):
+                return -_fail(err, E_STATE_CUT, _SC_WRAW)
+            wk[i] = 1
+        if 4 + _WRECK > BODY_MAX:
+            return -_fail(err, E_STATE_BODY)
+        body[0], body[1], body[2], body[3] = i & 0xFF, i >> 8, 0, 0
+        body[4:4 + _WRECK] = rec
+        return 4 + _WRECK
+    if kind == _RK_FEATURES:
+        fv, cells = st[10], st[12][0]
+        m, ok = _col_u8(sec, cols, _SC_FM)
+        if not ok:
+            return -_fail(err, E_STATE_CUT, _SC_FM)
+        if m > 15:
+            return -_fail(err, E_STATE_FMASK, m)
+        if 16 > BODY_MAX:
+            return -_fail(err, E_STATE_BODY)
+        for j in range(4):
+            if j < 3:
+                v = fv[j]
+            else:
+                v = fv[3] - 1 if fv[3] else cells - 1
+            if m >> j & 1:
+                z, ok = _col_varint(sec, cols, _SC_FV)
+                if not ok:
+                    return -_fail(err, E_STATE_CUT, _SC_FV)
+                v = (v + _unzz32(z)) & M32
+            fv[j] = v
+            _st_put32(body, 4 * j, v)
+        return 16
+    return -_fail(err, E_STATE_KIND, kind)
 
 
 @_jit

@@ -888,10 +888,351 @@ static int outcomes_events(const RecCodecParams* p)
     return 1;
 }
 
+/* The state frame's columns in tagpu_recframe_state.c's order, and its scheme. Every crafted
+   section below that must be refused has a twin that must be accepted, which differs from it in
+   the one value under test: that is what shows these indexes name the columns they mean. */
+enum { SC_GFULL, SC_GM, SC_GMASK, SC_GMETH, SC_GVAL, SC_GSTEPS, SC_GRAW, SC_PL, SC_PM, SC_PMASK,
+       SC_PIMG, SC_PVAL, SC_PRAW, SC_WI, SC_WM, SC_WV, SC_WRAW, SC_FM, SC_FV, SC_N };
+#define SC_SCHEME 1
+static const char* const SC_NAME[SC_N] = { "gfull", "gm", "gmask", "gmeth", "gval", "gsteps",
+                                           "graw", "pl", "pm", "pmask", "pimg", "pval", "praw",
+                                           "wi", "wm", "wv", "wraw", "fm", "fv" };
+
+enum { SF_NONE, SF_PPAD, SF_PLAYER, SF_WRECK, SF_FLEN, SF_GPAD, SF_PBIT };
+
+/* The state a capture would record: the globals, players 0 and 3, three wreck records and the
+   feature heads, changed each iteration so that every column is used -- a seed stepped by the
+   engine's RNG (once past RECC_PM_NEAR steps after a win, once past the cap), a second and a
+   third seed in the same iteration (the third past the method-1 bound), a counter, a dword that
+   jumps, a player the block never images whole, a wreck record met first by a delta, and the
+   cursor wrapping at the grid's last cell. */
+typedef struct SSim {
+    uint32_t g[REC_GLOBALS_DWORDS];
+    uint32_t pv[2][REC_PLAYER_DWORDS];
+    unsigned char wr[3][REC_WRECK_BYTES];
+    uint32_t feat[4];
+    unsigned n;
+} SSim;
+
+static uint32_t ss_pm(uint32_t s, unsigned k)
+{
+    while (k--) {
+        uint32_t t = (uint32_t)((uint64_t)(s % 0x7FFFFFFFu) * 16807u % 0x7FFFFFFFu);
+        s = t ? t : 0x7FFFFFFFu;
+    }
+    return s;
+}
+
+static void ss_globals_delta(RecBytes* b, const uint32_t* old, const uint32_t* now, int fault)
+{
+    unsigned char body[REC_GLOBALS_DELTA_HEAD + 4 * REC_GLOBALS_DWORDS];
+    unsigned d, nb = 0;
+    memset(body, 0, sizeof body);
+    for (d = 0; d < REC_GLOBALS_DWORDS; d++)
+        if (old[d] != now[d]) {
+            body[d >> 3] |= (unsigned char)(1u << (d & 7));
+            memcpy(body + REC_GLOBALS_DELTA_HEAD + 4 * nb++, &now[d], 4);
+        }
+    if (fault) body[REC_GLOBALS_DELTA_HEAD - 1] = 1;
+    rec_put(b, RK_GLOBALS_DELTA, body, REC_GLOBALS_DELTA_HEAD + 4 * nb);
+}
+
+static void ss_player_delta(RecBytes* b, unsigned p, const uint32_t* old, const uint32_t* now,
+                            int fault)
+{
+    unsigned char body[REC_PLAYER_DELTA_HEAD + 4 * (REC_PLAYER_DWORDS + 1)];
+    unsigned i, nb = 0;
+    memset(body, 0, sizeof body);
+    body[0] = (unsigned char)p;
+    for (i = 0; i < REC_PLAYER_DWORDS; i++)
+        if (old[i] != now[i]) {
+            body[2 + (i >> 3)] |= (unsigned char)(1u << (i & 7));
+            memcpy(body + REC_PLAYER_DELTA_HEAD + 4 * nb++, &now[i], 4);
+        }
+    if (fault == SF_PPAD) body[REC_PLAYER_DELTA_HEAD - 1] = 1;
+    if (fault == SF_PBIT) {
+        body[2 + (REC_PLAYER_DWORDS >> 3)] |= (unsigned char)(1u << (REC_PLAYER_DWORDS & 7));
+        nb++;
+    }
+    rec_put(b, RK_PLAYER_DELTA, body, REC_PLAYER_DELTA_HEAD + 4 * nb);
+}
+
+/* six iterations of the state, `fault` in the fourth; the first block's first iteration images
+   the globals and player 0 whole */
+static void ss_block(RecBytes* b, SSim* s, uint32_t* gt, int first, int fault)
+{
+    static const unsigned steps[6] = { 3, 40, 100, 9, 20000, 16 };
+    static const unsigned wrecks[3] = { 5, 6, 63 };
+    unsigned it, j;
+    b->n = 0;
+    for (it = 0; it < 6; it++, (*gt)++, s->n++) {
+        uint32_t og[REC_GLOBALS_DWORDS], op[2][REC_PLAYER_DWORDS];
+        unsigned char body[4 + REC_PLAYER_IMAGE];
+        rec_put(b, RK_TICK, gt, 4);
+        memcpy(og, s->g, sizeof og);
+        memcpy(op, s->pv, sizeof op);
+        s->g[0] = ss_pm(s->g[0], steps[s->n % 6]);
+        s->g[1]++;
+        s->g[2] = ss_pm(s->g[2], 5);
+        s->g[3] = ss_pm(s->g[3], 7);
+        s->g[4] += 0x9E3779B9u * (s->n + 1);
+        if (s->n & 1) s->g[REC_GLOBALS_DWORDS - 1] += 3;
+        s->pv[0][5] += 2;
+        s->pv[0][6] = *gt;
+        if (s->n % 3 == 0) s->pv[0][100] ^= 0x10001u;
+        s->pv[1][7] += 1000u * s->n + 1;
+        if (first && !it) {
+            rec_put(b, RK_GLOBALS, s->g, sizeof s->g);
+            memset(body, 0, 4);
+            memcpy(body + 4, s->pv[0], REC_PLAYER_IMAGE);
+            rec_put(b, RK_PLAYER, body, sizeof body);
+        } else {
+            ss_globals_delta(b, og, s->g, fault == SF_GPAD && it == 3);
+            ss_player_delta(b, 0, op[0], s->pv[0], it == 3 ? fault : SF_NONE);
+        }
+        ss_player_delta(b, 3, op[1], s->pv[1], SF_NONE);
+        for (j = 0; j < 3; j++)
+            if ((s->n + j) % 2 == 0) {
+                unsigned char* w = s->wr[j];
+                w[2 * (s->n % 24)] ^= (unsigned char)(s->n + 1);
+                w[47] = (unsigned char)j;
+                body[0] = (unsigned char)wrecks[j];
+                body[1] = body[2] = body[3] = 0;
+                memcpy(body + 4, w, REC_WRECK_BYTES);
+                rec_put(b, RK_WRECK, body, 4 + REC_WRECK_BYTES);
+            }
+        s->feat[3] = s->feat[3] ? s->feat[3] - 1 : 16 * 16 - 1;
+        if (s->n % 4 == 0) s->feat[0] = s->feat[0] * 7 + 1;
+        if (s->n % 5 == 0) s->feat[3] = 2;
+        rec_put(b, RK_FEATURES, s->feat, fault == SF_FLEN && it == 3 ? 12 : 16);
+        if (it == 3 && fault == SF_PLAYER) {
+            memset(body, 0, sizeof body);
+            body[0] = REC_PLAYERS;
+            rec_put(b, RK_PLAYER, body, sizeof body);
+        }
+        if (it == 3 && fault == SF_WRECK) {
+            memset(body, 0, 4 + REC_WRECK_BYTES);
+            body[0] = 64;
+            rec_put(b, RK_WRECK, body, 4 + REC_WRECK_BYTES);
+        }
+    }
+}
+
+/* A crafted state section, its columns and the kinds its records are read as (0: the next
+   iteration), decoded by the frame from a restart: 1 accepted, 0 refused. */
+typedef struct SCase {
+    RecBytes c[SC_N];
+    unsigned kind[16], nk;
+} SCase;
+
+static void sc_reset(SCase* s)
+{
+    unsigned i;
+    for (i = 0; i < SC_N; i++) rb_clear(&s->c[i]);
+    s->nk = 0;
+}
+
+static void sc_kind(SCase* s, unsigned kind) { s->kind[s->nk++] = kind; }
+
+static int sc_run(const RecCodecParams* p, SCase* s)
+{
+    const RecFrameOps* f = &recframe_state;
+    void* x = f->make(p);
+    unsigned char* body = (unsigned char*)malloc(RECF_BODY_MAX);
+    RecBytes sec;
+    RecFrameAt a;
+    char why[256];
+    unsigned i, len;
+    int ok;
+    if (!x || !body) {
+        fprintf(stderr, "codectest: no memory for the state frame\n");
+        exit(2);
+    }
+    memset(&sec, 0, sizeof sec);
+    memset(&a, 0, sizeof a);
+    a.nslots = p->nslots;
+    f->restart(x);
+    ok = recf_write(&sec, SC_SCHEME, s->c, SC_N) && f->dec_open(x, sec.p, sec.n, 1, why, sizeof why) &&
+         f->dec_iter(x, &a, why, sizeof why);
+    for (i = 0; ok && i < s->nk; i++)
+        if (!s->kind[i]) {
+            ok = f->dec_iter_end(x, &a, why, sizeof why);
+            a.it++;
+            ok = ok && f->dec_iter(x, &a, why, sizeof why);
+        } else {
+            ok = f->dec_rec(x, &a, s->kind[i], body, &len, why, sizeof why);
+        }
+    ok = ok && f->dec_iter_end(x, &a, why, sizeof why) && f->dec_close(x, why, sizeof why);
+    f->drop(x);
+    free(body);
+    rb_free(&sec);
+    return ok;
+}
+
+/* an RK_GLOBALS of n dwords, then a delta whose mask is bit d alone, by method `meth` with value
+   v (the steps, the residual or the raw dword) */
+static void sc_global(SCase* s, unsigned n, unsigned d, unsigned meth, uint32_t v)
+{
+    unsigned i;
+    rb_varint(&s->c[SC_GFULL], n);
+    for (i = 0; i < n; i++) rb_u32(&s->c[SC_GFULL], 1000 + i);
+    sc_kind(s, RK_GLOBALS);
+    rb_u8(&s->c[SC_GM], 1);
+    rb_u8(&s->c[SC_GMASK], 1u << d);
+    rb_u8(&s->c[SC_GMETH], meth);
+    if (meth == 0) rb_varint(&s->c[SC_GVAL], v);
+    else if (meth == 1) rb_varint(&s->c[SC_GSTEPS], v);
+    else rb_u32(&s->c[SC_GRAW], v);
+    sc_kind(s, RK_GLOBALS_DELTA);
+}
+
+/* `deltas` globals deltas of one changed dword by 1 step each, `per` to an iteration */
+static void sc_steps(SCase* s, unsigned deltas, unsigned per)
+{
+    unsigned i;
+    rb_varint(&s->c[SC_GFULL], 1);
+    rb_u32(&s->c[SC_GFULL], 12345);
+    sc_kind(s, RK_GLOBALS);
+    for (i = 0; i < deltas; i++) {
+        if (i && i % per == 0) sc_kind(s, 0);
+        rb_u8(&s->c[SC_GM], i ? 0 : 1);
+        if (!i) rb_u8(&s->c[SC_GMASK], 1);
+        rb_u8(&s->c[SC_GMETH], 1);
+        rb_varint(&s->c[SC_GSTEPS], 1);
+        sc_kind(s, RK_GLOBALS_DELTA);
+    }
+}
+
+/* a delta of player p, flag `flag`, whose mask is dword i alone, raw: the player is unknown */
+static void sc_player(SCase* s, unsigned p, unsigned flag, unsigned i)
+{
+    unsigned char m[REC_PLAYER_BITS];
+    memset(m, 0, sizeof m);
+    m[i >> 3] = (unsigned char)(1u << (i & 7));
+    rb_u8(&s->c[SC_PL], p);
+    rb_u8(&s->c[SC_PM], flag);
+    rb_put(&s->c[SC_PMASK], m, sizeof m);
+    rb_u32(&s->c[SC_PRAW], 77);
+    sc_kind(s, RK_PLAYER_DELTA);
+}
+
 static int outcomes_state(const RecCodecParams* p)
 {
-    (void)p;
-    return 1;
+    static const char* const what[6] = {
+        "DECLINED: a player delta whose pad is not zero",
+        "DECLINED: an RK_PLAYER of player 10",
+        "DECLINED: an RK_WRECK past the wreck pool",
+        "DECLINED: an RK_FEATURES of 12 bytes",
+        "DECLINED: a globals delta whose pad is not zero",
+        "DECLINED: a player delta naming dword 130" };
+    static const char* const cases[] = {
+        "a globals image of 78 dwords", "of 0", "of 257",
+        "a known global by method 1", "an unknown one", "method 3",
+        "16,384 steps", "16,385", "0",
+        "two globals an iteration by steps, then one", "three in one iteration",
+        "a globals delta that repeats a mask before the first", "a mask of 33 bytes",
+        "player 9", "player 10", "a player mask flag 2",
+        "a player mask naming dword 129", "naming dword 130",
+        "wreck record 63 of 64", "wreck record 64",
+        "a feature mask 15", "a feature mask 16" };
+    static const int want[] = { 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0 };
+    static SSim sim;
+    size_t used[SC_N];
+    RecStream st;
+    RecCodec* rd;
+    RecBytes y;
+    World w;
+    SCase s;
+    uint32_t gt = 1;
+    unsigned block, i, k, flags;
+    const unsigned char* body;
+    size_t bn;
+    int ok = 1;
+    memset(&sim, 0, sizeof sim);
+    memset(&y, 0, sizeof y);
+    memset(&w, 0, sizeof w);
+    memset(&s, 0, sizeof s);
+    memset(used, 0, sizeof used);
+    sim.g[0] = sim.g[2] = sim.g[3] = 16807;
+    if (!reccodec_stream_begin(&st, p) || !(rd = reccodec_new(p))) return 0;
+    world_reset(&w, p->nslots, p->nproj);
+    for (block = 0; block < 14; block++) {
+        int fault = block >= 2 && block % 2 == 0 ? 1 + (int)(block - 2) / 2 : SF_NONE, o;
+        char line[128];
+        ss_block(&y, &sim, &gt, block == 0, fault);
+        o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+        if (fault) snprintf(line, sizeof line, "state block %u: %s", block, what[fault - 1]);
+        else snprintf(line, sizeof line, "state block %u: SECTIONS%s", block,
+                      block == 0 ? ", the segment's first block" : block == 1 ? ", continuing" : ", restarting after it");
+        ok &= expect(line, o, fault ? RECC_DECLINED : RECC_SECTIONS);
+        if (o == RECC_SECTIONS) {
+            RecCol col[SC_N];
+            const RecBytes* sec = &st.enc->sec[RCS_STATE];
+            if (recf_open(sec->p, sec->n, SC_SCHEME, SC_N, col, "state", NULL, 0))
+                for (k = 0; k < SC_N; k++) used[k] += col[k].end - col[k].at;
+        }
+        ok &= expect("  a reader decodes it back", reader_check(rd, &w, p, flags, body, bn,
+                                                                  o == RECC_SECTIONS ? st.sec.n : y.n,
+                                                                  y.p, y.n, st.dctx), 1);
+    }
+    for (k = 0; k < SC_N; k++)
+        if (!used[k]) printf("  the state frame's column %s was never used\n", SC_NAME[k]);
+    for (k = 0; k < SC_N && used[k]; k++) {}
+    ok &= expect("state: the sectioned blocks used every column", k == SC_N, 1);
+    for (i = 0; i < sizeof want / sizeof want[0]; i++) {
+        char line[128];
+        sc_reset(&s);
+        switch (i) {
+        case 0: case 1: case 2:
+            rb_varint(&s.c[SC_GFULL], i == 0 ? 78 : i == 1 ? 0 : 257);
+            for (k = 0; k < (i == 0 ? 78u : i == 1 ? 0u : 257u); k++) rb_u32(&s.c[SC_GFULL], k);
+            sc_kind(&s, RK_GLOBALS);
+            break;
+        case 3: sc_global(&s, 2, 1, 1, 5); break;
+        case 4: sc_global(&s, 2, 5, 1, 5); break;
+        case 5: sc_global(&s, 2, 1, 3, 5); break;
+        case 6: sc_global(&s, 2, 1, 1, 16384); break;
+        case 7: sc_global(&s, 2, 1, 1, 16385); break;
+        case 8: sc_global(&s, 2, 1, 1, 0); break;
+        case 9: sc_steps(&s, 3, 2); break;
+        case 10: sc_steps(&s, 3, 3); break;
+        case 11:
+            rb_u8(&s.c[SC_GM], 0);
+            sc_kind(&s, RK_GLOBALS_DELTA);
+            break;
+        case 12:
+            rb_u8(&s.c[SC_GM], 33);
+            for (k = 0; k < 33; k++) rb_u8(&s.c[SC_GMASK], 0);
+            sc_kind(&s, RK_GLOBALS_DELTA);
+            break;
+        case 13: case 14:
+            rb_u8(&s.c[SC_PL], i == 13 ? 9 : 10);
+            for (k = 0; k < REC_PLAYER_IMAGE; k++) rb_u8(&s.c[SC_PIMG], k);
+            sc_kind(&s, RK_PLAYER);
+            break;
+        case 15: sc_player(&s, 2, 2, 4); break;
+        case 16: sc_player(&s, 2, 0, REC_PLAYER_DWORDS - 1); break;
+        case 17: sc_player(&s, 2, 0, REC_PLAYER_DWORDS); break;
+        case 18: case 19:
+            rb_varint(&s.c[SC_WI], zz32(i == 18 ? 63 : 64));
+            for (k = 0; k < REC_WRECK_BYTES; k++) rb_u8(&s.c[SC_WRAW], k);
+            sc_kind(&s, RK_WRECK);
+            break;
+        case 20: case 21:
+            rb_u8(&s.c[SC_FM], i == 20 ? 15 : 16);
+            for (k = 0; k < 4; k++) rb_varint(&s.c[SC_FV], k);
+            sc_kind(&s, RK_FEATURES);
+            break;
+        }
+        snprintf(line, sizeof line, "state frame: %s %s", cases[i], want[i] ? "reads" : "is refused");
+        ok &= expect(line, sc_run(p, &s), want[i]);
+    }
+    for (k = 0; k < SC_N; k++) rb_free(&s.c[k]);
+    reccodec_stream_end(&st);
+    reccodec_free(rd);
+    rb_free(&y);
+    world_free(&w);
+    return ok;
 }
 
 static int cmd_outcomes(void)
