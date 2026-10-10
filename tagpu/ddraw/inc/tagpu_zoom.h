@@ -333,12 +333,14 @@ enum {
    scroll target together, after every engine camera writer of the frame, and publishes E and
    the level in the packet, where the render thread's follow lever pins the wheel to it. Where
    no apply runs (the packet publisher count-only: GDI) the eye is written here, with what
-   tagpu_zoom_place_eye's own write owes the engine, and a Jump ends with its write.
+   tagpu_zoom_place_eye's own write owes the engine, and a Jump ends with its write; the
+   return is 1 when this call moved the eye, which the caller's visit answers with the
+   engine's cull (tagpu_replay.c, THE DRAW'S UNIT LIST), and 0 otherwise.
    The epoch ends -- tagpu_zoom_follow_state says why -- when the scroll target is not where
    the last write left it (a camera move of the engine's: an arrow key, an edge scroll, a
    minimap click), when the render thread reports a wheel notch for it, for a Jump once the
    render thread reports its level drawn, on tagpu_zoom_follow_stop, and at the level end. */
-void  tagpu_zoom_follow(char* ta, int eyeX, int eyeY, unsigned levelQ16, unsigned E, int once);
+int   tagpu_zoom_follow(char* ta, int eyeX, int eyeY, unsigned levelQ16, unsigned E, int once);
 
 /* GAME THREAD: end epoch E (Free cam), when it is the one in force. */
 void  tagpu_zoom_follow_stop(unsigned E);

@@ -32,7 +32,8 @@
    Two more sites serve a level that plays: B2's stub calls tagpu_replay_capture first at each
    capture point, and the frame visit before the in-play draw call 0x4969CD reads the trigger,
    runs a seek (THE SEEK) and writes what the draw after a step shows (THE GLOBALS AND THE
-   PROJECTILES).
+   PROJECTILES), then the engine's cull when it wrote anything the cull reads (THE DRAW'S UNIT
+   LIST).
    The teardown (S-e) ends the replay and gives V's record and PlayerInfo back once it has
    returned (THE VIEWER'S SEAT), and the recorder refuses a puppet level (S-f).
    The Replays browser starts a playback without the request file or the SKIRMISH screen: its
@@ -5315,6 +5316,32 @@ typedef void (__stdcall* PFN_ObjFree)(char* instance);
    owner, which a puppet host has none of. */
 typedef void (__cdecl* PFN_RadarPass)(void);
 #define E_RadarPass   ((PFN_RadarPass)0x00467440u)
+/* THE DRAW'S UNIT LIST. DrawGameScreen walks HotUnits -- the u16 slots at *(main+0x1435F), the
+   count at main+0x14367 -- without testing a slot's type +0xA6: its bar loop (0x469C09..0x469D1F)
+   calls DrawHealthBars 0x46A430, whose unsigned divide by the def's maxHP +0x1FA at 0x46A4BB has
+   no guard, and that faults on a slot the destructor 0x4866D0 emptied, which keeps HP +0x108 and
+   the owner while +0x92 becomes the type-0 def *(main+0x1439B), whose maxHP is 0 (MEASURED
+   2026-10-09: b7-word-outright's ARMMSTOR slot 2 after a seek past its death). The engine is
+   safe by order: its cull 0x48BAE0, which lists only slots with a nonzero +0xA6 (0x48BB3E), runs
+   at 0x49697B on every path to the draw call 0x4969CD (DISASSEMBLED). The frame visit runs
+   between the two, and is the only place this file destroys or makes units (seek_run), changes
+   the viewed record outside a level's start (seek_run's takeover and rewind, sight_change), or
+   moves the eye (Follow, tagpu_zoom_follow where no apply runs). Each of those writers bumps
+   s_cull_inputs, and a visit that saw it change ends with the same cull, so the draw reads a list
+   built after the visit's last write to anything the cull reads.
+   ORDERING: between that call and the draw's reads lie only the stub's jump to 0x468CF0 and its
+   entry observers, which write no unit; the zoom's apply there may move the eye, the one-draw
+   skew exe-reverse-engineering.md names for the engine's own cull, and every unit it lists is
+   live.
+   THE CALL: cdecl, no argument, on the game thread, with the inputs of the engine's own call
+   earlier in the same frame -- the unit array and the list buffer, made by 0x4854A0 and freed
+   only by the teardown 0x485980; the rect main+0x37E27 and the eye; the viewed record, which a
+   takeover or a return to now changes only to a seat or V, both with buffers from level init to
+   teardown. Its writes are bounded by its walk of the unit array (BOUNDED, exe-reverse-
+   engineering.md, *Who reads the eye, and what bounds each reader*). */
+typedef void (__cdecl* PFN_HotUnitsCull)(void);
+#define E_HotUnitsCull ((PFN_HotUnitsCull)0x0048BAE0u)
+static unsigned s_cull_inputs;      /* bumped at the visit's writes the cull reads; game thread */
 /* 0x466DC0(): the minimap's unit and projectile picture for the viewed record, no argument, plain
    `ret` (0x46743D), which the players phase runs every tick for the viewed record alone
    (0x465065..0x465072). Display state: its count main+0x1436B and main+0x142F1 bit 1 are the
@@ -6497,6 +6524,7 @@ static void sight_change(char* ta)
         goto refused;
     }
     ta[OFF_VIEWED] = (char)seat;
+    s_cull_inputs++;
     eye_put(&L, L.now + 1);
     minimap_fog(ta);
     E_RadarPass();
@@ -6963,6 +6991,9 @@ static int seek_run(char* ta)
     char why[200], dump[sizeof s_seek.dump];
     Lv L;
     int k;
+    /* first, before pend_finish plays a held step's creates and deaths: a refused seek re-culls
+       too, which the cull's idempotence makes harmless (THE DRAW'S UNIT LIST) */
+    s_cull_inputs++;
     s_seek.pending = 0;
     s_seek.mode = SK_SEEK;                  /* consumed: rt_due's seek_run is a SEEK */
     s_seek.boundary = 0;
@@ -8068,10 +8099,12 @@ static void frame_visit(void)
 }
 
 /* the frame visit, with the viewer's record's first fill before it and its viewed work and
-   Follow's camera after it, whichever way the visit returns */
+   Follow's camera after it, whichever way the visit returns, and last the engine's cull when the
+   visit wrote anything it reads (THE DRAW'S UNIT LIST) */
 static void __cdecl tagpu_replay_frame(void)
 {
     char* ta = ta_main();
+    const unsigned inputs = s_cull_inputs;
     if (ta) viewer_init(ta);
     frame_visit();
     hold_visit();
@@ -8079,6 +8112,7 @@ static void __cdecl tagpu_replay_frame(void)
     if (ta) {
         overlay_visit(ta);
         follow_visit(ta);
+        if (s_cull_inputs != inputs) E_HotUnitsCull();
     }
 }
 
@@ -8664,7 +8698,8 @@ static void follow_visit(char* ta)
                                    W->tick, &p);
         if (s_fl.at.how && persp_follow(&p, s_fl.at.vw, s_fl.at.vh, &s_fl.at.x, &s_fl.at.y,
                                         &s_fl.at.level)) {
-            tagpu_zoom_follow(ta, s_fl.at.x, s_fl.at.y, s_fl.at.level, s_fl.E, s_fl.once);
+            if (tagpu_zoom_follow(ta, s_fl.at.x, s_fl.at.y, s_fl.at.level, s_fl.E, s_fl.once))
+                s_cull_inputs++;
             s_fl.handed = 1;
         } else s_fl.at.how = PERSP_NONE;
     }

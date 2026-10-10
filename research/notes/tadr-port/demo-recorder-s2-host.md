@@ -207,13 +207,19 @@ In a game the engine never seats record 10; on a puppet level the replay seats t
 
 1. the pacing gate `0x495230` (`0x496928`);
 2. the sim step `0x495490(0)` (`0x49693C`);
-
-Unless `main+0x37EBE` bit 0 or the pause bit `+0x38A51` bit 0 is set, it then runs:
-
 3. the keys `0x495E90` and the mouse `0x41CE90`;
-4. the hot units `0x48BAE0`;
+4. the hot units `0x48BAE0` (`0x49697B`);
 5. `DrawGameScreen` `0x468CF0` (`0x4969CD`);
 6. the scenario tick site `0x4969D2`.
+
+The pause bit `+0x38A51` bit 0 skips steps 1 and 2 (`0x496926` → `0x496969`); `main+0x37EBE`
+bit 0, an in-game screen, skips 1 to 3 (`0x496918` → `0x49697B`). Steps 4 to 6 run on every path.
+The replay's frame visit, on `0x4969CD`, runs between 4 and 5: a seek, a takeover or a rewind
+there destroys and makes units after the cull, Sight changes the viewed record and Follow can move
+the eye, so a visit that did any of those ends with the cull `0x48BAE0` again, and the draw reads a
+list built after them. Without it the draw walked a slot the seek had emptied, whose maxHP is 0,
+and DrawHealthBars faulted at `0x46A4BB` (MEASURED 2026-10-09; the engine map's *The draw's unit
+list*; `tagpu_replay.c`, THE DRAW'S UNIT LIST).
 
 **Each iteration of the sim step** [DISASSEMBLED; engine map line ~720]:
 

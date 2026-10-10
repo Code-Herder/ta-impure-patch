@@ -8455,7 +8455,40 @@ byte), `0x486679`–`7D`, `0x486810`–`15`, `0x486F10`–`19` and `0x42B019`–
   from nowhere else**: of `0x489BB0`'s twelve callers the others pass 3, 4, 5, 9, 10, 11 or the
   weapon kind 1 or 2 (`0x499E37`).
 - `0x486D24..0x486D50`: the explosion, as above; `0x486DC7` clears the slot's type (`+0xA6`) and
-  `0x486DCE` its alive bit (the free, *Unit identity on the wire*).
+  `0x486DCE` its alive bit (the free, *Unit identity on the wire*); `0x486DE8` clears `+0x110` bits
+  4 and 5 (the selection), `0x486DF6` sets `+0x92` to `*(main+0x1439B)`, the type-0 def, and
+  `0x486DFC` decrements the owner's unit count `+0x144`. HP `+0x108` and the owner `+0x96` are
+  left as they were [DISASSEMBLED]. The type-0 def is named "None" and its maxHP `+0x1FA` is 0
+  (MEASURED 2026-10-09), so an emptied slot that keeps a positive HP is one a reader dividing by
+  maxHP must never be handed: *The draw's unit list*, below.
+
+### The draw's unit list — HotUnits, its cull `0x48BAE0` and its readers [DISASSEMBLED 2026-10-09]
+
+- **The list**: `u16` unit slots at `*(main+0x1435F)`, the count at `main+0x14367`. The cull
+  `0x48BAE0` (cdecl, no argument, plain `ret`) rebuilds it from the unit array, the rect
+  `+0x37E27`, the eye and the viewed record `main+0x2A43`, and lists only slots whose type
+  `+0xA6` is nonzero (`0x48BB3E`). Its callers are `0x48D5A5`, `0x495C6D`, `0x495E5D` and
+  `0x49697B`; the last is on every path of the frame callback `0x496790` to the draw call
+  `0x4969CD`, and nothing jumps into `0x496980..0x4969CD` from outside it, so the engine's draw
+  always reads a list culled after the frame's steps.
+- **The bar loop** `0x469C09..0x469D1F`, inside `DrawGameScreen 0x468CF0`, walks that list and
+  never tests a slot's type. It draws a bar only when option-word bit 0 is set (damagebars,
+  `0x469C97`) and the slot's owner record `+0x146` equals the viewed record (`0x46967D..0x469689`,
+  `0x469C9C..0x469CAC`), calling `DrawHealthBars 0x46A430` (stdcall `ctx, unit, x, y`, `ret 0x10`),
+  which tests HP `+0x108 > 0` and then divides by the def's maxHP `+0x1FA` unsigned at `0x46A4BB`
+  with no guard. A slot the destructor emptied after the cull keeps its HP and its owner and has
+  maxHP 0, so the divide faults: MEASURED 2026-10-09, b7-word-outright's ARMMSTOR slot 2 listed
+  at GameTime 5 and emptied by a seek to 301 at the frame visit, `Integer Divide by Zero` at
+  `0x46A4BB` on the draw.
+- **The list's other readers**: the row filing `0x4697B7`, the Under Attack test `0x48BCB0`, the
+  pickers `0x48C030`, `0x48C390`, `0x48CD80` and `0x48D4D0`. None of them faults on an emptied
+  slot: the unit pass tests `+0x9A` and selection bits 4 and 5, which the destructor clears
+  (`0x469B6A..0x469BAC`).
+- **Impure's call, the fifth caller**: the replay's frame visit (`tagpu_replay.c`, THE DRAW'S
+  UNIT LIST) runs between `0x49697B` and `0x4969CD`, and is the one place Impure destroys or makes
+  units outside a step (a seek, a takeover, a rewind), changes the viewed record (Sight), or moves
+  the eye (Follow where no zoom apply runs). A visit that did any of those ends with `0x48BAE0`
+  again, so the draw reads a list built after them.
 
 ### Kill-all for a player — `0x486F10(player)`, stdcall, `ret 4`
 
@@ -9203,7 +9236,7 @@ function from `objdump -d -M intel` of `pristine/TotalA.exe.pristine`.
 | `0x4843C0` | the screen fog-grid builder (caller `0x4848FA`; `terr_fogtick` calls it too) | `col0`/`row0` from the eye; every cell tested `cmp`/`jae` against the LOS block's w/h (`0x4844BC`, `0x4844C4`, unsigned) before the LOS read `0x4844D7` and the mapped read `0x4845A9..0x4845BD`; the LOS dims are `PLOT_C/2 x PLOT_R/2` (`0x46482B..0x46484F`); every grid write is bounded against the grid's own cols/rows | **BOUNDED.** The border completions misplace their content for an off-range eye (section below); the native pass takes `fogwide`'s grid then |
 | `0x4848E0` | the fog draw, one caller `0x469D8E`; terrown skips it with the terrain pass | the sub-cell offset `eye % 32` (projection) and a parity `& 3` into a four-entry table (`0x484A48`, `0x484AED`); the grid walk is `[0, cols) x [0, rows)`, unsigned | **BOUNDED** |
 | `0x468CF0` `DrawGameScreen`, the row sweep `0x469748..0x4697B3` | the feature/unit sweep over the feature grid `+0x14287` and the per-row HotUnits buckets | row start `eyeY/16 − 16`, column start `eyeX/16 − 10`; a negative start is set to 0 and the count cut to match (`0x469755`, `0x469796`, signed), the far end clipped to `PLOT − 1` (`0x46977B`, `0x4697AC`); the bucket index `(unitY − eyeY)/16 + 16` refused by `js` at `0x469800` and `cmp [edi+0x54]; jge` at `0x469802`/`0x469805` | **BOUNDED.** Its other eye reads (`0x468DD9`, `0x469C70`, `0x469E1F`) are projection only |
-| `0x48BAE0` | the HotUnits cull (callers `0x48D5A5`, `0x495C6D`, `0x495E5D`, `0x49697B`) | projects each unit's box and tests it against the rect `+0x37E27` with signed compares (`0x48BC25..0x48BC3B`); the list write `0x48BC6A` is bounded by the unit-array walk | **BOUNDED** |
+| `0x48BAE0` | the HotUnits cull (callers `0x48D5A5`, `0x495C6D`, `0x495E5D`, `0x49697B`, and the replay's frame visit, *The draw's unit list*) | projects each unit's box and tests it against the rect `+0x37E27` with signed compares (`0x48BC25..0x48BC3B`); the list write `0x48BC6A` is bounded by the unit-array walk | **BOUNDED** |
 | `0x498DA0` | pointer → world point, one caller `0x499221` | `eye + clamp(pos, L, R) − L` into `GetTPosition`, whose call `0x498EF9` `tagpu_zoom` redirects to clamp the point to the scroll extent, whose 128-px bottom margin is `GetTPosition`'s search window ("Engine defects we patch"); `GetTPosition` clamps too, to the map's own size (`0x484B5D..0x484B88`) | **BOUNDED** |
 | `0x466B70` | the minimap view box, called only inside `0x41C3C0` | arithmetic into a RECT at `+0x142CB`; `tagpu_zoom`'s replacement clamps the rect to the minimap at every zoom | **BOUNDED** |
 | `0x47F300` | positional sound (six callers) | the indexed reads use the sound's own position, unsigned against the LOS block (`0x47F42D`/`0x47F431`, `0x47F472`/`0x47F476`); the eye only in pan arithmetic and a signed on-view compare | **BOUNDED** |

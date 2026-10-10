@@ -1630,14 +1630,14 @@ int tagpu_zoom_place_eye(char* ta, int x, int y, int* outX, int* outY)
    the range in force, and, when the camera moved, what place_eye's own write
    owes the engine. Nothing draws a level here, so a Jump ends with its
    write. */
-static void follow_direct(char* ta)
+static int follow_direct(char* ta)
 {
     int* eye = (int*)(ta + OFF_EYEX);
     int* scr = (int*)(ta + OFF_SCRTX);
-    int  loX, hiX, loY, hiY, x = s_fol.x, y = s_fol.y;
+    int  loX, hiX, loY, hiY, x = s_fol.x, y = s_fol.y, moved = 0;
 
     follow_check(ta, NULL);
-    if (!s_fol.epoch) return;
+    if (!s_fol.epoch) return 0;
     if (!s_fol.wrote) release_follow(ta, "the replay's follow");
     clamp_range(ta, &loX, &hiX, &loY, &hiY);
     clamp_pair(&x, &y, loX, hiX, loY, hiY);
@@ -1647,17 +1647,19 @@ static void follow_direct(char* ta)
         zoom_minimap_rect((int*)(ta + OFF_MM_RECT));
         *(unsigned char*)(ta + OFF_MM_DIRTY) |= 2u;
         *(unsigned short*)(ta + OFF_LOSTYPE) &= (unsigned short)~8u;
+        moved = 1;
     }
     s_fol.tx = x; s_fol.ty = y;
     s_fol.wrote = 1;
     if (s_fol.once) follow_end(TAGPU_FOLLOW_DRAWN);
+    return moved;
 }
 
-void tagpu_zoom_follow(char* ta, int eyeX, int eyeY, unsigned levelQ16, unsigned E, int once)
+int tagpu_zoom_follow(char* ta, int eyeX, int eyeY, unsigned levelQ16, unsigned E, int once)
 {
-    if (!E || !ta_ok(ta)) return;
+    if (!E || !ta_ok(ta)) return 0;
     if (E != s_fol.epoch) {
-        if (E <= s_fol.last) return;           /* ended, or older than one that did */
+        if (E <= s_fol.last) return 0;         /* ended, or older than one that did */
         if (s_fol.epoch) follow_end(TAGPU_FOLLOW_STOPPED);
         s_fol.epoch = s_fol.last = E;
         s_fol.once = once;
@@ -1665,7 +1667,7 @@ void tagpu_zoom_follow(char* ta, int eyeX, int eyeY, unsigned levelQ16, unsigned
     }
     s_fol.x = eyeX; s_fol.y = eyeY;
     s_fol.level = levelQ16;
-    if (!s_applyLive) follow_direct(ta);
+    return s_applyLive ? 0 : follow_direct(ta);
 }
 
 void tagpu_zoom_follow_stop(unsigned E)
