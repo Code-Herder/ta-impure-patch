@@ -33,7 +33,7 @@ static struct {
     RecMpConfig config;
     RecMpStream source[2];
     RecMpPacket packet[PACKETS];
-    unsigned count, read, tail, bindings, final_sent, receipts_sent, aborted;
+    unsigned count, read, tail, bindings, final_sent, receipts_sent, aborted, flooded;
     int missing_receipt, missing_cut, bad_receipt, journal_full, relinquish, rx_full, no_consumer;
     DWORD game_thread;
     HANDLE opened, release, initial, tail_release;
@@ -68,6 +68,9 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
     *out=&f.net; return DP_OK;
 }
 
+static void flood(unsigned at, unsigned origin, unsigned tick);
+static void proof_tail(void);
+
 HRESULT tagpu_recmp_net_send(RecMpNet* net, const void* bytes, unsigned size)
 {
     const RecMpPacket* p=bytes;
@@ -82,6 +85,18 @@ HRESULT tagpu_recmp_net_send(RecMpNet* net, const void* bytes, unsigned size)
             CHECK(size==sizeof p->h+sizeof seal);
             memcpy(&seal,p->body,sizeof seal);
             if (!seal.final) goto sent;
+            if (f.no_consumer && !f.final_sent) {
+                /* The flood must reach the worker after consumption has ended and before the
+                   channel can finish. tail_release is set only after tagpu_recmp_end has
+                   returned, so the latch and stop precede it; and the worker finishes only
+                   once it has received the receipts appended below, behind the flood. The
+                   proof tail follows the flood here, not in receive, since a source's ledger
+                   takes no data at the tick it has already sealed. */
+                CHECK(WaitForSingleObject(f.tail_release,15000)==WAIT_OBJECT_0);
+                flood(1,66,9);
+                f.flooded=f.count;
+                f.tail=1; proof_tail();
+            }
             receipt.origin=p->h.origin; receipt.sequence=p->h.sequence;
             receipt.stream=p->h.stream; receipt.seal=seal;
             for (i=0;i<2;i++) {
@@ -118,7 +133,6 @@ static void proof_tail(void)
 #else
     RecMpSeal seal; RecMpPacket* p;
     unsigned i;
-    if (f.no_consumer) flood(1,66,9);
     for (i=0;i<2;i++) {
         if (f.missing_cut && i==1) continue;
         if (i==1) {
@@ -135,7 +149,7 @@ static void proof_tail(void)
 HRESULT tagpu_recmp_net_receive(RecMpNet* net, DWORD* from, void* bytes, unsigned* size)
 {
     CHECK(net==&f.net && GetCurrentThreadId()!=f.game_thread);
-    if (!f.tail && WaitForSingleObject(f.tail_release,0)==WAIT_OBJECT_0) {
+    if (!f.tail && !f.no_consumer && WaitForSingleObject(f.tail_release,0)==WAIT_OBJECT_0) {
         f.tail=1; proof_tail();
     }
     if (f.read==f.count) { SetEvent(f.initial); return DPERR_NOMESSAGES; }
@@ -270,6 +284,9 @@ int main(int argc, char** argv)
                                   RECMP_NO_CONSUMER));
         CHECK(stats.unread==(f.rx_full ? 256u : 0u) && stats.received==(f.rx_full ? 0u : 2u));
         if (f.relinquish) CHECK(stats.cuts==0);
+        /* the worker took in the whole flood, and the unread and received counts above show
+           none of it was published */
+        if (f.no_consumer) CHECK(f.flooded && f.read>=f.flooded);
         CHECK(tagpu_recmp_take_at(c,&got,9999)==-2 && !tagpu_recmp_cut(c,55,&cut));
         printf("PASS: %s ends consumption, not the channel: final seals, receipts and a clean close "
                "continue%s\n", f.relinquish ? "a relinquishing consumer" : f.rx_full ?
