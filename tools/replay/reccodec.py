@@ -17,7 +17,8 @@ in the doing.
 A stream block with RBF_SECTIONS decodes to the records it was made from; one without is the
 records themselves. The frames' state crosses blocks inside a run of sectioned blocks and
 restarts at RBF_FRAME_RESET -- the unit and pool frames from this reader's own copies of the units
-and the projectile pool, the record frames empty -- which is why the walk is in order and per
+and the projectile pool, the cells frame from this reading's own grid (every image it has read, a
+records block's too), the other record frames empty -- which is why the walk is in order and per
 segment: a block that continues a frame this reading did not start is refused.
 
 INTEGERS ONLY: int64 scalars in the compiled kernels and int64 arrays around them, `>>` a floor
@@ -1480,11 +1481,13 @@ def _unzz32(z):
 
 # ---- THE CELLS FRAME (tagpu_recframe_cells.c) ----------------------------------------------------
 #
-# Scheme 1, nine columns -- flag, rec, sym, f0..f5 -- coding each RK_CELLS against G, the grid's
-# copy with a known flag a cell, and an iteration's images against T, the last iteration's tick
-# input (the C says the bytes, the engine facts and the bounds). The state: (W and H, G, known,
-# T's and T''s records' first cells, cell counts and cells, the scalars _CM_*). Each of T and T' is
-# a row of the tables: row `cur` is T. All but W and H restart empty.
+# Scheme 2, nine columns -- flag, rec, sym, f0..f5 -- coding each RK_CELLS against G, the grid's
+# copy, and an iteration's images against T, the last iteration's tick input (the C says the bytes,
+# the engine facts and the bounds). The state: (W and H, G, T's and T''s records' first cells, cell
+# counts and cells, the scalars _CM_*). Each of T and T' is a row of the tables: row `cur` is T.
+# A restart empties T and T' and the scalars; G is this reading's own grid, every image it has
+# read (a sectioned block's through _cells_rec, a records block's through _cells_image), which is
+# the world every walk restarts the frame from (tagpu_reccodec.c, RESET POINTS).
 
 (E_CELLS_FLAG, E_CELLS_TPAST, E_CELLS_TLEFT, E_CELLS_RUNS, E_CELLS_AT, E_CELLS_N, E_CELLS_ROW,
  E_CELLS_SYMS, E_CELLS_SYM, E_CELLS_FIELD, E_CELLS_BIG) = range(100, 111)
@@ -1500,7 +1503,7 @@ _WHY.update({
     E_CELLS_SYM: "a cell's sym {0:#x}",
     E_CELLS_FIELD: "the cells frame's field {0} cut short",
     E_CELLS_BIG: "an RK_CELLS of {0} cells past 0xFFFF bytes"})
-_CELLS_SCHEME, _CELLS_COLS = 1, 9
+_CELLS_SCHEME, _CELLS_COLS = 2, 9
 _CC_FLAG, _CC_REC, _CC_SYM, _CC_F0 = 0, 1, 2, 3
 assert 1 <= _CELLS_COLS <= FRAME_COLS_MAX
 _CB = tarec.REC_CELL_BYTES
@@ -1518,15 +1521,27 @@ def _cells_new(prm):
     """The cells frame's state for a usable segment's params."""
     wh = prm.gw * prm.gh
     return (np.array([prm.gw, prm.gh], np.int64), np.zeros(wh * _CB, np.uint8),
-            np.zeros(wh, np.uint8), np.zeros((2, _CELLS_HELD), np.int64),
+            np.zeros((2, _CELLS_HELD), np.int64),
             np.zeros((2, _CELLS_HELD), np.int64), np.zeros((2, _CELLS_HELD * _CB), np.uint8),
             np.zeros(13, np.int64))
 
 
 def _cells_restart(st):
-    """Empty: no cell known, T and T' empty. G's bytes stay; a cell not known reads as zeros."""
-    st[2][:] = 0
-    st[6][:] = 0
+    """T and T' empty; G stays, this reading's grid: the world a reset restarts from."""
+    st[5][:] = 0
+
+
+def _cells_image(st, payload, b, ln):
+    """A records block's image, the body at payload[b:b + ln], onto G under the reader's bounds
+    (tagpu_recreader.c, cells_ok); one it refuses is skipped."""
+    if ln < 8:
+        return
+    x, z, n, pad = struct.unpack_from("<4H", payload, b)
+    W, H = int(st[0][0]), int(st[0][1])
+    if not 1 <= n <= _CELLS_MAX or pad or ln != 8 + n * _CB or x + n > W or z >= H:
+        return
+    p = (z * W + x) * _CB
+    st[1][p:p + n * _CB] = np.frombuffer(payload, np.uint8, n * _CB, b + 8)
 
 
 def _cells_clone(st):
@@ -1540,7 +1555,7 @@ def _cells_open(st, cols, sec, at, end, iters, err):
 
 @_jit
 def _cells_iter(st, cols, sec, it, gt, copy, live, err):
-    m = st[6]
+    m = st[5]
     m[_CM_IMAGED] = m[_CM_FLAG] = m[_CM_TNEXT] = m[_CM_TCELL] = 0
     m[_CM_E] = m[_CM_E + 1] = 0
     t = m[_CM_CUR] ^ 1
@@ -1558,7 +1573,7 @@ def _cells_head(body, x, z, n):
 def _cells_code(st, cols, sec, lst, body, err):
     """One coded record of list `lst` (0 the images, 1 the tick input) into body: (its first cell,
     its cells), or (-code, 0)."""
-    dims, G, known, m = st[0], st[1], st[2], st[6]
+    dims, G, m = st[0], st[1], st[5]
     W = dims[0]
     wh = dims[0] * dims[1]
     r, ok = _col_varint(sec, cols, _CC_REC)
@@ -1583,10 +1598,7 @@ def _cells_code(st, cols, sec, lst, body, err):
     for k in range(n):
         q = p + k
         o = 8 + k * _CB
-        if known[q]:
-            body[o:o + _CB] = G[q * _CB:(q + 1) * _CB]
-        else:
-            body[o:o + _CB] = 0
+        body[o:o + _CB] = G[q * _CB:(q + 1) * _CB]
         s, ok = _col_u8(sec, cols, _CC_SYM)
         if not ok:
             return -_fail(err, E_CELLS_SYMS), 0
@@ -1605,7 +1617,7 @@ def _cells_code(st, cols, sec, lst, body, err):
 
 @_jit
 def _cells_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
-    dims, G, known, tp, tn, tc, m = st
+    dims, G, tp, tn, tc, m = st
     W = dims[0]
     cur = m[_CM_CUR]
     if not events:
@@ -1632,7 +1644,6 @@ def _cells_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
             if p < 0:
                 return p
         G[p * _CB:(p + n) * _CB] = body[8:8 + n * _CB]
-        known[p:p + n] = 1
     else:
         p, n = _cells_code(st, cols, sec, 1, body, err)
         if p < 0:
@@ -1654,7 +1665,7 @@ def _cells_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
 
 @_jit
 def _cells_iter_end(st, cols, sec, it, gt, copy, live, err):
-    m = st[6]
+    m = st[5]
     cur = m[_CM_CUR]
     if m[_CM_FLAG] and m[_CM_TNEXT] != m[_CM_NREC + cur]:
         return _fail(err, E_CELLS_TLEFT, it, m[_CM_TNEXT], m[_CM_NREC + cur])
@@ -2626,7 +2637,8 @@ class Frame:
 
     def restart(self, prm=None):
         """Every frame restarts: the unit and pool frames from this reading's own copies of the
-        units and the pool, the record frames empty."""
+        units and the pool, the cells frame from this reading's own grid (every image it has read,
+        a records block's too), the other record frames empty."""
         _compile()
         if prm is not None:
             self.prm = prm
@@ -2661,15 +2673,24 @@ class Frame:
         self.valid = False
 
     def apply_records(self, payload):
-        """A records block's RK_UNIT, RK_UNIT_DELTA and RK_UNIT_GONE by the writer's rules, and its
-        RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA by the reader's."""
+        """A records block's RK_UNIT, RK_UNIT_DELTA and RK_UNIT_GONE by the writer's rules, its
+        RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA by the reader's, and its images onto the cells
+        frame's grid by the reader's rule: an RK_CELLS with no RCS_EVENTS record before it in its
+        iteration."""
         at, n = 0, len(payload)
+        events = False
         while n - at >= 4:
             kind, ln = struct.unpack_from("<HH", payload, at)
             rl = (4 + ln + 3) & ~3
             if rl > n - at:
                 break
             b = at + 4
+            if kind == RK_TICK:
+                events = False
+            elif kind == tarec.RK_CELLS and not events and self.fst is not None:
+                _cells_image(self.fst[0], payload, b, ln)
+            elif section_of(kind) == RCS_EVENTS:
+                events = True
             if kind in (RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA):
                 self._apply_proj(kind, payload, b, ln)
             s = struct.unpack_from("<H", payload, b)[0] if ln >= 2 else 0
