@@ -519,8 +519,9 @@ an outcome.
 the reader read and where it built from, the image's units live, made, refused, killed and left
 alive, and the game thread's CPU time (`GetThreadTimes`) beside the wall's. The harness checks
 against the file (`work_verdict`) every seek of R, Q and F, every takeover and seek of X's forks,
-K's takeover, and U's return to now and fork; U's conversion seek is reported, not checked: **W1**, exact, the reader
-started where the file's index says it must (`tarec.seek_start`, the reader's own choice: the
+K's takeover, and U's return to now and fork. Of U's seeks inside an open rewind (to T1, T1 + 300
+and T2) only the first one's CPU time is reported (`rewind_works`), and none is checked. **W1**,
+exact, the reader started where the file's index says it must (`tarec.seek_start`, the reader's own choice: the
 last snapshot of the chain's part more than 123 ticks before the target, else the first iteration
 of the chain's first segment whose part reaches 123 ticks before it) and read no more than from
 there to its target; **W2**, exact, every
@@ -531,8 +532,7 @@ games take turns on the core, but it does when they contend for the core itself:
 made fixed work cost ×1.5 (MEASURED 2026-10-09, `tagpu_replay.c`, THE SEEK'S WORK), and the
 all-core clock lowers it further. That is W3's residual and the gate's last timing-dependent
 check, accepted by the owner (2026-10-09). Wine 9.0's `GetThreadTimes` counts kernel time and
-not `Sleep`, in 10 ms steps (MEASURED 2026-10-09). The rewind's conversion seek reports its CPU
-time only.
+not `Sleep`, in 10 ms steps (MEASURED 2026-10-09).
 
 **The test render profile.** Every game the harness launches writes `style=custom`, `assets=0`,
 `light=0`, `shadowres=512` and `ss=1` into the worker's `impure.cfg`, and a 20 fps present cap

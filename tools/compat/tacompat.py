@@ -169,12 +169,15 @@ LINKED = {".ufo", ".gp3", ".hpi", ".ccx", ".ufo2"}
 # differently. A soak counts the game's own progress -- GameTime ticks in play, presented frames
 # at the menu, SECONDS x TICKS_PER_S of either -- and a wall bound only says when a game that
 # stopped making progress is given up on: STALL_S of GameTime (or of frames) standing still,
-# ACK_S for a one-frame answer, POLL_S for a screen of the menus or the battle room to come up.
+# ACK_S for a one-frame answer, POLL_S for a screen of the menus or the battle room to come up,
+# HANG_S for a start-up watch whose counter creeps without ever standing still for STALL_S. Each
+# gives up on a game and decides nothing: what the run ends as is read from the process and files.
 GAMETIME = "*0x511DE8+0x38a47"          # main+0x38A47, the simulation's tick count
 TICKS_PER_S = 30                        # GameTime at normal speed; the menu's frames are counted alike
 STALL_S = 120
 ACK_S = 60
 POLL_S = 300
+HANG_S = 1800
 
 
 def die(msg, code=2):
@@ -1625,8 +1628,8 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
     # its main window is up -- ddraw.dll is TotalA.exe's first static import and Impure's DllMain
     # opens its log (tagpu_log_init), so a log is there by then if Impure is -- it is watched for
     # `watch` s of its main thread's CPU time (`cpu_ticks`), which a loaded machine stretches and
-    # does not shorten, and a CPU time that stands still for STALL_S ends it too. POLL_S bounds a start that
-    # reaches none of these.
+    # does not shorten, and a CPU time that stands still for STALL_S ends it too. POLL_S bounds a
+    # start that reaches none of these, and HANG_S the whole watch.
     exe_real = str((gamedir / "TotalA.exe").resolve()).lower()
     soak, cpu, watch_end, window_at = None, None, None, None
     try:
@@ -1634,6 +1637,9 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
             time.sleep(1.0)
             if not soak and not cpu and time.time() - t0 > POLL_S:
                 watch_end = f"no menu in {POLL_S} s"
+                break
+            if time.time() - t0 > HANG_S:
+                watch_end = f"the watch gave up after {HANG_S} s"
                 break
             labelled = impure_log.exists() and impure_log.stat().st_mtime >= t0
             for title, w, h in x_windows(display):
@@ -1670,7 +1676,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
                 except Stalled as e:
                     watch_end = f"the menu's frames stood at {e}"
                     break
-            elif not labelled and window_at:
+            elif cpu or (not labelled and window_at):
                 if not cpu:
                     pid = game_pid(proc.pid, exe_real)
                     if pid is not None:

@@ -12,6 +12,7 @@
 #include "screenshot.h"
 
 static BOOL ss_screenshot_bmp(char* filename, IDirectDrawSurfaceImpl* src);
+static BOOL ss_write(char* filename, IDirectDrawSurfaceImpl* src);
 
 static BOOL ss_screenshot_8bit(char* filename, IDirectDrawSurfaceImpl* src)
 {
@@ -44,8 +45,9 @@ static BOOL ss_screenshot_8bit(char* filename, IDirectDrawSurfaceImpl* src)
             src->height,
             &state);
 
+    /* tagpu: a failed save is a failed shot, so the caller renames nothing into place */
     if (!error && dst_buf)
-        lodepng_save_file(dst_buf, dst_buf_size, filename);
+        error = lodepng_save_file(dst_buf, dst_buf_size, filename);
 
     lodepng_state_cleanup(&state);
 
@@ -217,6 +219,24 @@ BOOL ss_take_screenshot(IDirectDrawSurfaceImpl* src)
             return FALSE;
     }
 
+    /* tagpu: written whole under "<name>.tmp", then renamed into place: a reader that waits for
+       the newest *.png (`tacli shot`) never sees a file the encoder is still writing, since the
+       rename is the file's first appearance under its name (MoveFileExA, a rename(2) on Wine). */
+    char tmp[sizeof(filename) + 4];
+    _snprintf(tmp, sizeof(tmp), "%s.tmp", filename);
+    tmp[sizeof(tmp) - 1] = 0;
+
+    if (!ss_write(tmp, src) || !MoveFileExA(tmp, filename, MOVEFILE_REPLACE_EXISTING))
+    {
+        DeleteFileA(tmp);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static BOOL ss_write(char* filename, IDirectDrawSurfaceImpl* src)
+{
     if (src->bpp == 8 && src->palette)
     {
         if (!ss_screenshot_8bit(filename, src))

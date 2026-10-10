@@ -113,14 +113,27 @@ class Check:
         rx = rf"pause: (paused at GameTime {T}$|at {T} not taken.*)"
         tick, since = None, time.monotonic()
         while (got := self._found(rx, start)) is None:
-            now = self.values(GAMETIME)[0]
-            if now != tick:
+            now = self._gametime()
+            if now is not None and now != tick:
                 tick, since = now, time.monotonic()
             assert time.monotonic() - since < STALL_S, \
                 f"pause at {T}: GameTime stood at {tick} for {STALL_S} s"
             time.sleep(0.05)
         assert "paused at" in got, got
         self.held, self.tick = True, T
+
+    def _gametime(self):
+        """GameTime, a frame's answer bounded by ACK_S; None when the peek did not answer, which
+        _taken counts as standing still, so only its STALL_S decides."""
+        try:
+            r = subprocess.run([sys.executable, str(TACLI), "peek", self.name, GAMETIME, "--json",
+                                "--timeout", str(ACK_S)], capture_output=True, text=True,
+                               timeout=ACK_S + 30)
+        except subprocess.TimeoutExpired:
+            return None
+        if r.returncode:
+            return None
+        return int(json.loads(r.stdout)["peeks"][0]["value"].split()[0])
 
     def _still_held(self):
         """The hold's pause bit is still set: nothing let the world run under a case that holds it
