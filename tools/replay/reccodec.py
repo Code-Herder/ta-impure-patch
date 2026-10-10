@@ -1532,26 +1532,49 @@ def _cells_close(st, cols, sec, err):
 
 # ---- THE ORDERS FRAME (tagpu_recframe_orders.c) --------------------------------------------------
 #
-# Scheme 0, one column: for each record of its kinds, a varint length and the body verbatim.
-# Nothing crosses a block.
+# Scheme 1, 26 columns: slot, key, mask, d0..d21, whole (the C file's THE BYTES). The state, cleared
+# at every reset: per (slot, list) its place in the arena and its kept list -- `kept` rows of (off,
+# cap, nodes + 1, 0 for none) -- the arena of node images, and (held, the iteration's previous
+# slot). The arena is ORDERS_HELD nodes from the start, so nothing here can fail an allocation; the
+# places and what is kept follow the C's rule from the records alone.
 
-E_ORDERS_BODY = 150
-_WHY[E_ORDERS_BODY] = "an RK_ORDERS (kind {0}) cut short or past 0xFFFF bytes in the orders frame"
-_ORDERS_SCHEME, _ORDERS_COLS = 0, 1
+(E_ORDERS_CUT, E_ORDERS_SLOT, E_ORDERS_KEY, E_ORDERS_NODES, E_ORDERS_KEPT,
+ E_ORDERS_MASK) = range(150, 156)
+_WHY.update({E_ORDERS_CUT: "the orders frame's column {0} cut short",
+             E_ORDERS_SLOT: "an RK_ORDERS for slot {0}",
+             E_ORDERS_KEY: "an RK_ORDERS key {0}",
+             E_ORDERS_NODES: "an RK_ORDERS of nodes [{0}, +{1}) of a list of {2}",
+             E_ORDERS_KEPT: "slot {0} list {1}'s RK_ORDERS coded against no kept list",
+             E_ORDERS_MASK: "an order node mask {0} past 22 bits"})
+_ORDERS_SCHEME = 1
+_ORDERS_HELD = 65536                       # RECC_ORDERS_HELD
+_O_NODE = tarec.REC_ORDER_IMAGE            # 0x58
+_O_DW = _O_NODE // 4                       # 22
+_O_MAX, _O_CHUNK = 4096, 512               # REC_ORDERS_MAX, REC_ORDERS_CHUNK
+_O_SLOT, _O_KEY, _O_MASK, _O_D0 = 0, 1, 2, 3
+_O_WHOLE = _O_D0 + _O_DW
+_ORDERS_COLS = _O_WHOLE + 1
+assert 1 <= _ORDERS_COLS <= FRAME_COLS_MAX
+_K_LIST, _K_WHOLE, _K_CHUNK = 1, 2, 4
 
 
 def _orders_new(prm):
-    """The orders frame's state for a usable segment's params."""
-    return (np.zeros(1, np.int64),)
+    """The orders frame's state for a usable segment's params: (kept, arena, (held, prev))."""
+    return (np.zeros((prm.nslots * 2, 3), np.int64), np.zeros(_ORDERS_HELD * _O_NODE, np.uint8),
+            np.zeros(2, np.int64))
 
 
 def _orders_restart(st):
-    for a in st:
-        a[...] = 0
+    st[0][...] = 0
+    st[2][...] = 0
 
 
 def _orders_clone(st):
-    return tuple(a.copy() for a in st)
+    kept, arena, meta = st
+    a = np.zeros_like(arena)
+    n = int(meta[0]) * _O_NODE
+    a[:n] = arena[:n]
+    return kept.copy(), a, meta.copy()
 
 
 @_jit
@@ -1561,15 +1584,86 @@ def _orders_open(st, cols, sec, at, end, iters, err):
 
 @_jit
 def _orders_iter(st, cols, sec, it, gt, copy, live, err):
+    st[2][1] = 0
     return 0
 
 
 @_jit
 def _orders_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
-    n, ok = _col_varint(sec, cols, 0)
-    if not ok or n > BODY_MAX or not _col_bytes(sec, cols, 0, body, 0, n):
-        return -_fail(err, E_ORDERS_BODY, kind)
-    return n
+    kept, arena, meta = st
+    z, ok = _col_varint(sec, cols, _O_SLOT)
+    if not ok:
+        return -_fail(err, E_ORDERS_CUT, _O_SLOT)
+    slot = (meta[1] + _unzz32(z)) & M32
+    if not 1 <= slot < len(live):
+        return -_fail(err, E_ORDERS_SLOT, slot)
+    meta[1] = slot
+    key, ok = _col_u8(sec, cols, _O_KEY)
+    if not ok:
+        return -_fail(err, E_ORDERS_CUT, _O_KEY)
+    if key & ~(_K_LIST | _K_WHOLE | _K_CHUNK) or (key & _K_CHUNK and not key & _K_WHOLE):
+        return -_fail(err, E_ORDERS_KEY, key)
+    e = slot * 2 + (key & _K_LIST)
+    first = np.int64(0)
+    if key & _K_WHOLE:
+        total, ok = _col_varint(sec, cols, _O_KEY)
+        if not ok:
+            return -_fail(err, E_ORDERS_CUT, _O_KEY)
+        k = total
+        if key & _K_CHUNK:
+            first, ok = _col_varint(sec, cols, _O_KEY)
+            if ok:
+                k, ok = _col_varint(sec, cols, _O_KEY)
+            if not ok:
+                return -_fail(err, E_ORDERS_CUT, _O_KEY)
+        if total > _O_MAX or k > _O_CHUNK or first + k > total or (total and not k):
+            return -_fail(err, E_ORDERS_NODES, first, k, total)
+    else:
+        if kept[e, 2] == 0:
+            return -_fail(err, E_ORDERS_KEPT, slot, key & _K_LIST)
+        total = k = kept[e, 2] - 1
+    # every write into body is bounded first: _col_bytes by itself, the rest here
+    if 8 + k * _O_NODE > BODY_MAX:
+        return -_fail(err, E_F_BIG, RCS_ORDERS, 8 + k * _O_NODE)
+    body[0], body[1], body[2], body[3] = slot & 0xFF, slot >> 8, key & _K_LIST, 0
+    body[4], body[5], body[6], body[7] = total & 0xFF, total >> 8, first & 0xFF, first >> 8
+    if key & _K_WHOLE:
+        if not _col_bytes(sec, cols, _O_WHOLE, body, 8, k * _O_NODE):
+            return -_fail(err, E_ORDERS_CUT, _O_WHOLE)
+    else:
+        base = kept[e, 0] * _O_NODE
+        for i in range(k):
+            m, ok = _col_varint(sec, cols, _O_MASK)
+            if not ok:
+                return -_fail(err, E_ORDERS_CUT, _O_MASK)
+            if m >> _O_DW:
+                return -_fail(err, E_ORDERS_MASK, m)
+            now = 8 + i * _O_NODE
+            was = base + i * _O_NODE
+            for d in range(_O_DW):
+                if m >> d & 1:
+                    if not _col_bytes(sec, cols, _O_D0 + d, body, now + 4 * d, 4):
+                        return -_fail(err, E_ORDERS_CUT, _O_D0 + d)
+                else:
+                    body[now + 4 * d:now + 4 * d + 4] = arena[was + 4 * d:was + 4 * d + 4]
+    # what is kept (tagpu_recframe_orders.c keep)
+    if first or k != total:
+        kept[e, 2] = 0
+    else:
+        fits = True
+        if total > kept[e, 1]:
+            if total > _ORDERS_HELD - meta[0]:
+                fits = False
+            else:
+                kept[e, 0], kept[e, 1] = meta[0], total
+                meta[0] += total
+        if fits:
+            a = kept[e, 0] * _O_NODE
+            arena[a:a + total * _O_NODE] = body[8:8 + total * _O_NODE]
+            kept[e, 2] = total + 1
+        else:
+            kept[e, 2] = 0
+    return 8 + k * _O_NODE
 
 
 @_jit

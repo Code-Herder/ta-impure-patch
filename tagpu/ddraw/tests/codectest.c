@@ -876,10 +876,157 @@ static int outcomes_cells(const RecCodecParams* p)
     return 1;
 }
 
+/* An RK_ORDERS of nodes [first, first + k) of list `list` of `slot`, `total` nodes long: node j's
+   dwords a function of (id, j) alone, its timer +0x0A `tick` on the head node, `pad` its byte 3 */
+static void ord_rec(RecBytes* b, unsigned slot, unsigned list, unsigned total, unsigned first,
+                    unsigned k, uint32_t id, uint32_t tick, unsigned pad)
+{
+    static unsigned char body[8 + REC_ORDERS_CHUNK * REC_ORDER_IMAGE];
+    unsigned j, d;
+    body[0] = (unsigned char)slot;
+    body[1] = (unsigned char)(slot >> 8);
+    body[2] = (unsigned char)list;
+    body[3] = (unsigned char)pad;
+    body[4] = (unsigned char)total;
+    body[5] = (unsigned char)(total >> 8);
+    body[6] = (unsigned char)first;
+    body[7] = (unsigned char)(first >> 8);
+    for (j = 0; j < k; j++) {
+        unsigned char* n = body + 8 + (size_t)j * REC_ORDER_IMAGE;
+        for (d = 0; d < REC_ORDER_IMAGE / 4; d++)
+            put32(n + 4 * d, (id * 7919u + first + j) * 2654435761u ^ d * 40503u);
+        n[REC_ORDER_BYTES] = n[REC_ORDER_BYTES + 1] = 0;
+        if (!(first + j)) memcpy(n + 0x0A, &tick, 4);
+    }
+    rec_put(b, RK_ORDERS, body, 8 + k * REC_ORDER_IMAGE);
+}
+
+/* a list of `total` nodes in as many records as the capture makes (tagpu_recwriter.c list_put) */
+static void ord_list(RecBytes* b, unsigned slot, unsigned list, unsigned total, uint32_t id,
+                     uint32_t tick)
+{
+    unsigned first = 0;
+    do {
+        unsigned k = total - first < REC_ORDERS_CHUNK ? total - first : REC_ORDERS_CHUNK;
+        ord_rec(b, slot, list, total, first, k, id, tick, 0);
+        first += k;
+    } while (first < total);
+}
+
+/* Block `n` of outcomes_orders: what each block's records are is in its `what` below. */
+static void ord_block(RecBytes* b, unsigned n, uint32_t* gt)
+{
+    unsigned it, t;
+    b->n = 0;
+    for (it = 0; it < (n >= 7 ? 1u : 4u); it++, (*gt)++) {
+        rec_put(b, RK_TICK, gt, 4);
+        switch (n) {
+        case 0: case 1: case 3:
+            ord_list(b, 1, 0, 2, 1, *gt);
+            ord_list(b, 1, 1, 1, 2, *gt);
+            ord_list(b, 5, 0, n == 0 && it == 2 ? 2 : 3, 3, *gt);
+            ord_list(b, 3, 0, n == 0 && it == 0 ? 1 : 0, 4, *gt);
+            if (n == 0 && it == 3) ord_list(b, 2, 0, 1, 5, *gt);
+            if (n == 0 && it % 2 == 0) ord_list(b, 9, 0, 600, 6, *gt);
+            break;
+        case 2:
+            ord_list(b, 1, 0, 2, 1, *gt);
+            if (it == 2) ord_rec(b, 4, 0, 1, 0, 1, 7, *gt, 1);
+            break;
+        case 4:
+            ord_list(b, 1, 0, 2, 1, *gt);
+            if (it == 1) ord_rec(b, 4, 0, 2, 1, 2, 7, *gt, 0);
+            break;
+        case 5:
+            ord_list(b, 1, 0, 2, 1, *gt);
+            if (it == 3) ord_rec(b, 64, 0, 1, 0, 1, 7, *gt, 0);
+            break;
+        case 6:
+            /* no list: the arena starts empty at block 7 */
+            break;
+        case 7:
+            /* places of 1..361 nodes: 65,341 of the arena's 65,536; then 362 does not fit, and
+               361 fits its place again */
+            for (t = 1; t <= 362; t++) ord_list(b, 1, 0, t, 1, 0);
+            ord_list(b, 1, 0, 362, 1, 0);
+            ord_list(b, 1, 0, 361, 1, 0);
+            ord_list(b, 1, 0, 361, 1, 0);
+            break;
+        default:
+            /* 195 nodes fill the arena to exactly 65,536; 200 more do not fit */
+            ord_list(b, 1, 0, 361, 1, 0);
+            ord_list(b, 3, 0, 195, 8, 0);
+            ord_list(b, 2, 0, 200, 9, 0);
+            break;
+        }
+    }
+}
+
+/* The orders frame: its codings carry kept lists across blocks, lists that change length, an
+   emptied list and a list of more than REC_ORDERS_CHUNK nodes; a record it cannot carry declines
+   the block after its iterations; masks against a list the decoder does not hold are refused; and
+   the arena keeps a list exactly while it holds at most 65,536 nodes, alike on both sides. */
 static int outcomes_orders(const RecCodecParams* p)
 {
-    (void)p;
-    return 1;
+    static const int want[10] = { RECC_SECTIONS, RECC_SECTIONS, RECC_DECLINED, RECC_SECTIONS,
+                                  RECC_DECLINED, RECC_DECLINED, RECC_SECTIONS, RECC_SECTIONS,
+                                  RECC_SECTIONS, RECC_SECTIONS };
+    static const char* what[10] = {
+        "orders: SECTIONS, kept, resized, emptied and 600-node lists",
+        "orders: SECTIONS, the lists re-sent against the kept ones",
+        "orders: DECLINED, a list whose pad byte is not zero",
+        "orders: SECTIONS, restarting after it",
+        "orders: DECLINED, a record past its list's nodes",
+        "orders: DECLINED, a list of a slot past RT_SLOTS",
+        "orders: SECTIONS, restarting after it with no list",
+        "orders: SECTIONS, the arena filled to 65,341 nodes",
+        "orders: SECTIONS, the arena filled to exactly 65,536",
+        "orders: SECTIONS, a list past the arena carried whole" };
+    RecStream st;
+    RecCodec *rd, *fresh;
+    RecBytes y, out;
+    World w;
+    uint32_t gt = 1;
+    unsigned n, flags, ok = 1;
+    const unsigned char* body;
+    size_t bn;
+    char why[256];
+    memset(&w, 0, sizeof w);
+    memset(&y, 0, sizeof y);
+    memset(&out, 0, sizeof out);
+    if (!reccodec_stream_begin(&st, p) || !(rd = reccodec_new(p)) || !(fresh = reccodec_new(p)))
+        return 0;
+    world_reset(&w, p->nslots, p->nproj);
+    for (n = 0; n < 10; n++) {
+        RecSecHead h;
+        int o;
+        ord_block(&y, n, &gt);
+        o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+        ok &= expect(what[n], o, want[n]);
+        memset(&h, 0, sizeof h);
+        if (o == RECC_SECTIONS) memcpy(&h, st.sec.p, sizeof h);
+        if (n == 1) {
+            ok &= expect("  the re-sent lists take masks: under 256 bytes", h.len[RCS_ORDERS] < 256, 1);
+            reccodec_restart(fresh, p, w.unit, w.live, w.pool, w.pcount, w.phw);
+            ok &= expect("  a decoder that holds no kept lists refuses it",
+                         reccodec_decode(fresh, st.sec.p, st.sec.n, &out, why, sizeof why) == 0 &&
+                         strstr(why, "kept list") != NULL, 1);
+        }
+        if (n == 9)
+            ok &= expect("  the 200-node list whole, the 361 and 195 kept",
+                         h.len[RCS_ORDERS] >= 200 * REC_ORDER_IMAGE &&
+                         h.len[RCS_ORDERS] < 200 * REC_ORDER_IMAGE + 1024, 1);
+        ok &= expect("  a reader decodes it back",
+                     reader_check(rd, &w, p, flags, body, bn, o == RECC_SECTIONS ? st.sec.n : y.n,
+                                  y.p, y.n, st.dctx), 1);
+    }
+    reccodec_stream_end(&st);
+    reccodec_free(rd);
+    reccodec_free(fresh);
+    rb_free(&y);
+    rb_free(&out);
+    world_free(&w);
+    return ok;
 }
 
 static int outcomes_events(const RecCodecParams* p)
