@@ -1480,22 +1480,53 @@ def _unzz32(z):
 
 # ---- THE CELLS FRAME (tagpu_recframe_cells.c) ----------------------------------------------------
 #
-# Scheme 0, one column: for each record of its kinds, a varint length and the body verbatim.
-# Nothing crosses a block.
+# Scheme 1, nine columns -- flag, rec, sym, f0..f5 -- coding each RK_CELLS against G, the grid's
+# copy with a known flag a cell, and an iteration's images against T, the last iteration's tick
+# input (the C says the bytes, the engine facts and the bounds). The state: (W and H, G, known,
+# T's and T''s records' first cells, cell counts and cells, the scalars _CM_*). Each of T and T' is
+# a row of the tables: row `cur` is T. All but W and H restart empty.
 
-E_CELLS_BODY = 100
-_WHY[E_CELLS_BODY] = "an RK_CELLS (kind {0}) cut short or past 0xFFFF bytes in the cells frame"
-_CELLS_SCHEME, _CELLS_COLS = 0, 1
+(E_CELLS_FLAG, E_CELLS_TPAST, E_CELLS_TLEFT, E_CELLS_RUNS, E_CELLS_AT, E_CELLS_N, E_CELLS_ROW,
+ E_CELLS_SYMS, E_CELLS_SYM, E_CELLS_FIELD, E_CELLS_BIG) = range(100, 111)
+_WHY.update({
+    E_CELLS_FLAG: "iteration {0}: the cells frame's flag cut short or past 1",
+    E_CELLS_TPAST: "iteration {0}: an image past the last tick input's {1} records",
+    E_CELLS_TLEFT: "iteration {0}: its images are {1} of the last tick input's {2} records",
+    E_CELLS_RUNS: "the cells frame's runs cut short",
+    E_CELLS_AT: "an RK_CELLS at cell {0} of a {1}-cell grid",
+    E_CELLS_N: "an RK_CELLS of {0} cells",
+    E_CELLS_ROW: "an RK_CELLS of {0} cells from column {1} of {2}",
+    E_CELLS_SYMS: "the cells frame's syms cut short",
+    E_CELLS_SYM: "a cell's sym {0:#x}",
+    E_CELLS_FIELD: "the cells frame's field {0} cut short",
+    E_CELLS_BIG: "an RK_CELLS of {0} cells past 0xFFFF bytes"})
+_CELLS_SCHEME, _CELLS_COLS = 1, 9
+_CC_FLAG, _CC_REC, _CC_SYM, _CC_F0 = 0, 1, 2, 3
+assert 1 <= _CELLS_COLS <= FRAME_COLS_MAX
+_CB = tarec.REC_CELL_BYTES
+_CELLS_MAX = tarec.REC_CELLS_MAX
+_CELLS_HELD = 4 * tarec.REC_CELLS_MAX      # CELLS_HELD: T's cells at most, past it T is empty
+_CELLS_A_EMPTY = 0x40
+_CELL_FIELD = np.array([0, 2, 4, 8, 10, 12, _CB], np.int64)
+# the scalars: T's row; per row its records, cells and over-the-bound flag; the iteration's
+# image seen, flag, T's next record and its first cell, and each list's last end
+_CM_CUR, _CM_NREC, _CM_NCELL, _CM_OVER, _CM_IMAGED, _CM_FLAG, _CM_TNEXT, _CM_TCELL, _CM_E = (
+    0, 1, 3, 5, 7, 8, 9, 10, 11)
 
 
 def _cells_new(prm):
     """The cells frame's state for a usable segment's params."""
-    return (np.zeros(1, np.int64),)
+    wh = prm.gw * prm.gh
+    return (np.array([prm.gw, prm.gh], np.int64), np.zeros(wh * _CB, np.uint8),
+            np.zeros(wh, np.uint8), np.zeros((2, _CELLS_HELD), np.int64),
+            np.zeros((2, _CELLS_HELD), np.int64), np.zeros((2, _CELLS_HELD * _CB), np.uint8),
+            np.zeros(13, np.int64))
 
 
 def _cells_restart(st):
-    for a in st:
-        a[...] = 0
+    """Empty: no cell known, T and T' empty. G's bytes stay; a cell not known reads as zeros."""
+    st[2][:] = 0
+    st[6][:] = 0
 
 
 def _cells_clone(st):
@@ -1509,19 +1540,130 @@ def _cells_open(st, cols, sec, at, end, iters, err):
 
 @_jit
 def _cells_iter(st, cols, sec, it, gt, copy, live, err):
+    m = st[6]
+    m[_CM_IMAGED] = m[_CM_FLAG] = m[_CM_TNEXT] = m[_CM_TCELL] = 0
+    m[_CM_E] = m[_CM_E + 1] = 0
+    t = m[_CM_CUR] ^ 1
+    m[_CM_NREC + t] = m[_CM_NCELL + t] = m[_CM_OVER + t] = 0
     return 0
 
 
 @_jit
+def _cells_head(body, x, z, n):
+    body[0], body[1], body[2], body[3] = x & 0xFF, x >> 8, z & 0xFF, z >> 8
+    body[4], body[5], body[6], body[7] = n & 0xFF, n >> 8, 0, 0
+
+
+@_jit
+def _cells_code(st, cols, sec, lst, body, err):
+    """One coded record of list `lst` (0 the images, 1 the tick input) into body: (its first cell,
+    its cells), or (-code, 0)."""
+    dims, G, known, m = st[0], st[1], st[2], st[6]
+    W = dims[0]
+    wh = dims[0] * dims[1]
+    r, ok = _col_varint(sec, cols, _CC_REC)
+    if not ok:
+        return -_fail(err, E_CELLS_RUNS), 0
+    m1, ok = _col_varint(sec, cols, _CC_REC)
+    if not ok:
+        return -_fail(err, E_CELLS_RUNS), 0
+    p = (m[_CM_E + lst] + _unzz32(r)) & M32
+    if p >= wh:
+        return -_fail(err, E_CELLS_AT, p, wh), 0
+    if m1 >= _CELLS_MAX:
+        return -_fail(err, E_CELLS_N, m1 + 1), 0
+    n = m1 + 1
+    x = p % W
+    if x + n > W:
+        return -_fail(err, E_CELLS_ROW, n, x, W), 0
+    if 8 + n * _CB > BODY_MAX:
+        return -_fail(err, E_CELLS_BIG, n), 0
+    m[_CM_E + lst] = p + n
+    _cells_head(body, x, p // W, n)
+    for k in range(n):
+        q = p + k
+        o = 8 + k * _CB
+        if known[q]:
+            body[o:o + _CB] = G[q * _CB:(q + 1) * _CB]
+        else:
+            body[o:o + _CB] = 0
+        s, ok = _col_u8(sec, cols, _CC_SYM)
+        if not ok:
+            return -_fail(err, E_CELLS_SYMS), 0
+        if s == _CELLS_A_EMPTY:
+            body[o] = body[o + 1] = 0
+            continue
+        if s > 0x3F:
+            return -_fail(err, E_CELLS_SYM, s), 0
+        for f in range(6):
+            if s >> f & 1:
+                lo = _CELL_FIELD[f]
+                if not _col_bytes(sec, cols, _CC_F0 + f, body, o + lo, _CELL_FIELD[f + 1] - lo):
+                    return -_fail(err, E_CELLS_FIELD, f), 0
+    return p, n
+
+
+@_jit
 def _cells_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
-    n, ok = _col_varint(sec, cols, 0)
-    if not ok or n > BODY_MAX or not _col_bytes(sec, cols, 0, body, 0, n):
-        return -_fail(err, E_CELLS_BODY, kind)
-    return n
+    dims, G, known, tp, tn, tc, m = st
+    W = dims[0]
+    cur = m[_CM_CUR]
+    if not events:
+        if not m[_CM_IMAGED]:
+            m[_CM_IMAGED] = 1
+            v, ok = _col_u8(sec, cols, _CC_FLAG)
+            if not ok or v > 1:
+                return -_fail(err, E_CELLS_FLAG, it)
+            m[_CM_FLAG] = v
+        if m[_CM_FLAG]:
+            j = m[_CM_TNEXT]
+            if j >= m[_CM_NREC + cur]:
+                return -_fail(err, E_CELLS_TPAST, it, m[_CM_NREC + cur])
+            p, n = tp[cur, j], tn[cur, j]
+            if 8 + n * _CB > BODY_MAX:
+                return -_fail(err, E_CELLS_BIG, n)
+            _cells_head(body, p % W, p // W, n)
+            a = m[_CM_TCELL] * _CB
+            body[8:8 + n * _CB] = tc[cur, a:a + n * _CB]
+            m[_CM_TNEXT] += 1
+            m[_CM_TCELL] += n
+        else:
+            p, n = _cells_code(st, cols, sec, 0, body, err)
+            if p < 0:
+                return p
+        G[p * _CB:(p + n) * _CB] = body[8:8 + n * _CB]
+        known[p:p + n] = 1
+    else:
+        p, n = _cells_code(st, cols, sec, 1, body, err)
+        if p < 0:
+            return p
+        # into T', unless it passes CELLS_HELD
+        t = cur ^ 1
+        c = m[_CM_NCELL + t]
+        if not m[_CM_OVER + t]:
+            if n > _CELLS_HELD - c:
+                m[_CM_OVER + t] = 1
+            else:
+                r = m[_CM_NREC + t]
+                tp[t, r], tn[t, r] = p, n
+                tc[t, c * _CB:(c + n) * _CB] = body[8:8 + n * _CB]
+                m[_CM_NREC + t] = r + 1
+                m[_CM_NCELL + t] = c + n
+    return 8 + n * _CB
 
 
 @_jit
 def _cells_iter_end(st, cols, sec, it, gt, copy, live, err):
+    m = st[6]
+    cur = m[_CM_CUR]
+    if m[_CM_FLAG] and m[_CM_TNEXT] != m[_CM_NREC + cur]:
+        return _fail(err, E_CELLS_TLEFT, it, m[_CM_TNEXT], m[_CM_NREC + cur])
+    # T takes T', empty when it passed CELLS_HELD
+    t = cur ^ 1
+    if m[_CM_OVER + t]:
+        m[_CM_NREC + t] = m[_CM_NCELL + t] = 0
+    m[_CM_CUR] = t
+    m[_CM_NREC + cur] = m[_CM_NCELL + cur] = m[_CM_OVER + cur] = 0
     return 0
 
 

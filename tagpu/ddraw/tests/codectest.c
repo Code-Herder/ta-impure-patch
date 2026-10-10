@@ -870,10 +870,154 @@ static int zstd_window_check(void* cctx, void* dctx)
    Each takes the segment's params of cmd_outcomes and returns 1 when every check of its holds. A
    frame of scheme 0 carries each body verbatim and has nothing of its own to decline. */
 
+enum { CF_NONE, CF_PAD, CF_ROW, CF_Z, CF_EMPTY, CF_LEN };
+#define CF_W    16                      /* cmd_outcomes' grid: 16 x 16                           */
+#define CF_HELD (4 * REC_CELLS_MAX)     /* the frame's CELLS_HELD: T's cells at most              */
+
+/* an RK_CELLS of the run [x, x + n) of row z of `grid`, then made malformed by `fault` */
+static void cells_rec(RecBytes* b, const unsigned char* grid, unsigned x, unsigned z, unsigned n,
+                      int fault)
+{
+    unsigned char body[8 + REC_CELLS_MAX * REC_CELL_BYTES];
+    unsigned len = 8 + n * REC_CELL_BYTES;
+    memset(body, 0, 8);
+    memcpy(body + 8, grid + ((size_t)z * CF_W + x) * REC_CELL_BYTES, (size_t)n * REC_CELL_BYTES);
+    if (fault == CF_PAD) body[6] = 1;
+    if (fault == CF_ROW) x = CF_W - n + 1;
+    if (fault == CF_Z) z = CF_W;
+    if (fault == CF_EMPTY) n = 0, len = 8;
+    if (fault == CF_LEN) len--;
+    body[0] = (unsigned char)x;
+    body[2] = (unsigned char)z;
+    body[4] = (unsigned char)n;
+    body[5] = (unsigned char)(n >> 8);
+    rec_put(b, RK_CELLS, body, len);
+}
+
+/* the feature tick's bracket, its RK_EV_FEATURE or its RK_EV_FEATURE_END */
+static void cells_bracket(RecBytes* b, int end)
+{
+    unsigned char e[8] = { FR_TICK, REC_PHASE_LATE, 0, 0, 0x80, 0x55, 0x49, 0 };
+    if (end) memset(e + 1, 0, 7);
+    rec_put(b, end ? RK_EV_FEATURE_END : RK_EV_FEATURE, e, 8);
+}
+
+/* A sectioned container's cells frame as this build writes it: its flag column into flag[] (at
+   most 64), and whether a sym says slot A emptied. 0: it is not. */
+static int cells_flags(const RecBytes* sec, unsigned char* flag, unsigned* nflag, int* emptied)
+{
+    RecSecHead h;
+    const unsigned char* p;
+    size_t at = 1, len[9], n, i, off = sizeof h;
+    uint32_t v;
+    if (sec->n < sizeof h) return 0;
+    memcpy(&h, sec->p, sizeof h);
+    for (i = 0; i < RCS_CELLS; i++) off += h.len[i];
+    p = sec->p + off;
+    n = h.len[RCS_CELLS];
+    if (off + n > sec->n || n < 1 || p[0] != 1 || !varint_get(p, n, &at, &v) || v != 9) return 0;
+    for (i = 0; i < 9; i++) {
+        if (!varint_get(p, n, &at, &v)) return 0;
+        len[i] = v;
+    }
+    if (len[0] > 64 || at + len[0] + len[1] + len[2] > n) return 0;
+    memcpy(flag, p + at, len[0]);
+    *nflag = (unsigned)len[0];
+    at += len[0] + len[1];
+    *emptied = 0;
+    for (i = 0; i < len[2]; i++) *emptied |= p[at + i] == 0x40;
+    return 1;
+}
+
+/* A segment of the 16 x 16 grid. Its first iteration's images are every cell; each later one's
+   repeat the last iteration's tick input -- the flag carries them -- or add to it, and are coded;
+   each tick input changes three runs, in one of which a unit leaves slot A and comes back. Blocks
+   0-2 SECTIONS and read back; then each malformed RK_CELLS DECLINED, followed by a restarting
+   SECTIONS; then a tick input past CELLS_HELD, which T does not keep, so the next images are
+   coded: SECTIONS. */
 static int outcomes_cells(const RecCodecParams* p)
 {
-    (void)p;
-    return 1;
+    static unsigned char grid[CF_W * CF_W * REC_CELL_BYTES];
+    static const struct { unsigned x, z, n; } run[3] = { { 2, 3, 5 }, { 0, 9, 16 }, { 11, 14, 4 } };
+    static const char* what[13] = {
+        "SECTIONS, the first iteration's every cell", "SECTIONS, images flagged and coded",
+        "SECTIONS, continuing", "DECLINED: an RK_CELLS whose pad is not zero",
+        "SECTIONS, restarting after it", "DECLINED: an RK_CELLS past its row's end",
+        "SECTIONS, restarting after it", "DECLINED: an RK_CELLS past the grid's rows",
+        "SECTIONS, restarting after it", "DECLINED: an RK_CELLS of no cells",
+        "SECTIONS, restarting after it", "DECLINED: an RK_CELLS one byte short",
+        "SECTIONS, restarting: images after a tick input past CELLS_HELD" };
+    RecStream st;
+    RecCodec* rd;
+    World w;
+    RecBytes y;
+    uint32_t gt = 1, seed = 12345;
+    unsigned block, it, i, k, c, flags, nflag = 0, ok = 1;
+    unsigned char flag[64];
+    int emptied = 0, o;
+    const unsigned char* body;
+    size_t bn;
+    char line[128];
+    memset(&w, 0, sizeof w);
+    memset(&y, 0, sizeof y);
+    for (i = 0; i < sizeof grid; i++) grid[i] = (unsigned char)((seed = seed * 1103515245u + 12345u) >> 24);
+    if (!reccodec_stream_begin(&st, p) || !(rd = reccodec_new(p))) return 0;
+    world_reset(&w, p->nslots, p->nproj);
+    for (block = 0; block < 13; block++) {
+        int fault = block >= 3 && block % 2 ? (int)(block - 1) / 2 : CF_NONE;
+        y.n = 0;
+        for (it = 0; it < (block == 12 ? 2u : 6u); it++, gt++) {
+            rec_put(&y, RK_TICK, &gt, 4);
+            if (block == 12) {
+                /* 1,025 runs of a row: 16,400 cells of tick input, then the same as images */
+                if (!it) cells_bracket(&y, 0);
+                for (k = 0; k <= CF_HELD / CF_W; k++) cells_rec(&y, grid, 0, 0, CF_W, CF_NONE);
+                if (!it) cells_bracket(&y, 1);
+                continue;
+            }
+            if (block == 0 && !it) {
+                for (k = 0; k < CF_W; k++) cells_rec(&y, grid, 0, k, CF_W, CF_NONE);
+            } else {
+                for (k = 0; k < 3; k++) cells_rec(&y, grid, run[k].x, run[k].z, run[k].n, CF_NONE);
+                if (it == 3) cells_rec(&y, grid, 7, 7, 2, CF_NONE);
+                if (it == 4) cells_rec(&y, grid, 1, 12, 1, fault);
+            }
+            cells_bracket(&y, 0);
+            for (k = 0; k < 3; k++) {
+                for (c = 0; c < run[k].n; c++) {
+                    unsigned char* cell = grid + ((size_t)run[k].z * CF_W + run[k].x + c) * REC_CELL_BYTES;
+                    if (k == 2) {
+                        cell[0] = (unsigned char)(it & 1 ? c + 1 : 0);
+                        cell[1] = 0;
+                    } else {
+                        cell[(it + c) % REC_CELL_BYTES] ^= (unsigned char)(1u << (c & 7));
+                    }
+                }
+                cells_rec(&y, grid, run[k].x, run[k].z, run[k].n, CF_NONE);
+            }
+            cells_bracket(&y, 1);
+        }
+        o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+        snprintf(line, sizeof line, "cells block %u: %s", block, what[block]);
+        ok &= expect(line, o, fault ? RECC_DECLINED : RECC_SECTIONS);
+        ok &= expect("  a reader decodes it back", reader_check(rd, &w, p, flags, body, bn,
+                                                                  o == RECC_SECTIONS ? st.sec.n : y.n,
+                                                                  y.p, y.n, st.dctx), 1);
+        if (o == RECC_SECTIONS && block == 1) {
+            static const unsigned char want[6] = { 1, 1, 1, 0, 0, 1 };
+            int got = cells_flags(&st.sec, flag, &nflag, &emptied);
+            ok &= expect("  the tick input's repeats flagged, the rest coded, slot A emptied",
+                         got && nflag == 6 && !memcmp(flag, want, 6) && emptied, 1);
+        }
+        if (o == RECC_SECTIONS && block == 12)
+            ok &= expect("  the images after it coded",
+                         cells_flags(&st.sec, flag, &nflag, &emptied) && nflag == 1 && !flag[0], 1);
+    }
+    reccodec_stream_end(&st);
+    reccodec_free(rd);
+    rb_free(&y);
+    world_free(&w);
+    return ok;
 }
 
 static int outcomes_orders(const RecCodecParams* p)
