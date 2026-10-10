@@ -518,14 +518,15 @@ an outcome.
 **A seek's work, not its time.** Every seek logs its work line (`sk_work_log`): the iterations
 the reader read and where it built from, the image's units live, made, refused, killed and left
 alive, and the game thread's CPU time (`GetThreadTimes`) beside the wall's. The harness checks
-every one in R, Q, F, K, X and U against the file (`work_verdict`): **W1**, exact, the reader
+against the file (`work_verdict`) every seek of R, Q and F, every takeover and seek of X's forks,
+K's takeover, and U's return to now and fork; U's conversion seek is reported, not checked: **W1**, exact, the reader
 started where the file's index says it must (`tarec.seek_start`, the reader's own choice: the
 last snapshot of the chain's part more than 123 ticks before the target, else the first iteration
 of the chain's first segment whose part reaches 123 ticks before it) and read no more than from
 there to its target; **W2**, exact, every
 live unit made or refused, none left alive by the kills, and none refused by a takeover, a return
-to now or a fork; **W3**, the takeover's, the return to now's and the rewind fork's CPU time
-within the fixture's `cpu_ms` (4,000 ms, the battle's). CPU time does not stretch when other
+to now or a fork; **W3**, K's takeover's and U's return to now's and fork's CPU time within the
+fixture's `cpu_ms` (4,000 ms, the battle's). CPU time does not stretch when other
 games take turns on the core, but it does when they contend for the core itself: an SMT sibling
 made fixed work cost ×1.5 (MEASURED 2026-10-09, `tagpu_replay.c`, THE SEEK'S WORK), and the
 all-core clock lowers it further. That is W3's residual and the gate's last timing-dependent
