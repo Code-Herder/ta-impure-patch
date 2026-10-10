@@ -12,7 +12,8 @@
 #include "screenshot.h"
 
 static BOOL ss_screenshot_bmp(char* filename, IDirectDrawSurfaceImpl* src);
-static BOOL ss_write(char* filename, IDirectDrawSurfaceImpl* src);
+enum { SS_FAILED, SS_PNG, SS_BMP };
+static int ss_write(char* filename, IDirectDrawSurfaceImpl* src);
 
 static BOOL ss_screenshot_8bit(char* filename, IDirectDrawSurfaceImpl* src)
 {
@@ -226,7 +227,15 @@ BOOL ss_take_screenshot(IDirectDrawSurfaceImpl* src)
     _snprintf(tmp, sizeof(tmp), "%s.tmp", filename);
     tmp[sizeof(tmp) - 1] = 0;
 
-    if (!ss_write(tmp, src) || !MoveFileExA(tmp, filename, MOVEFILE_REPLACE_EXISTING))
+    /* the BMP fallback renames to "<stem>.bmp": the bytes under a name are always its format */
+    int kind = ss_write(tmp, src);
+    if (kind == SS_BMP)
+    {
+        char* ext = filename + strlen(filename) - 4;
+        if (_strcmpi(ext, ".png") == 0)
+            strncpy(ext, ".bmp", 5);
+    }
+    if (kind == SS_FAILED || !MoveFileExA(tmp, filename, MOVEFILE_REPLACE_EXISTING))
     {
         DeleteFileA(tmp);
         return FALSE;
@@ -235,7 +244,8 @@ BOOL ss_take_screenshot(IDirectDrawSurfaceImpl* src)
     return TRUE;
 }
 
-static BOOL ss_write(char* filename, IDirectDrawSurfaceImpl* src)
+/* tagpu: which format ss_write wrote, so its caller names the file by it */
+static int ss_write(char* filename, IDirectDrawSurfaceImpl* src)
 {
     if (src->bpp == 8 && src->palette)
     {
@@ -243,27 +253,27 @@ static BOOL ss_write(char* filename, IDirectDrawSurfaceImpl* src)
         {
             memcpy(&src->bmi->bmiColors[0], src->palette->data_rgb, 256 * sizeof(int));
 
-            return ss_screenshot_bmp(filename, src);
+            return ss_screenshot_bmp(filename, src) ? SS_BMP : SS_FAILED;
         }
 
-        return TRUE;
+        return SS_PNG;
     }
     else if (src->bpp == 16)
     {
         if (!ss_screenshot_16bit(filename, src))
-            return ss_screenshot_bmp(filename, src);
+            return ss_screenshot_bmp(filename, src) ? SS_BMP : SS_FAILED;
 
-        return TRUE;
+        return SS_PNG;
     }
     else if (src->bpp == 32)
     {
         if (!ss_screenshot_32bit(filename, src))
-            return ss_screenshot_bmp(filename, src);
+            return ss_screenshot_bmp(filename, src) ? SS_BMP : SS_FAILED;
 
-        return TRUE;
+        return SS_PNG;
     }
     
-    return FALSE;
+    return SS_FAILED;
 }
 
 static BOOL ss_screenshot_bmp(char* filename, IDirectDrawSurfaceImpl* src)

@@ -4614,6 +4614,9 @@ static void images_put(const Lv* L, const RecWorld* W, int defer)
 typedef void (__cdecl* PFN_MinimapFog)(void);
 #define E_MinimapFog  ((PFN_MinimapFog)0x00466C20u)
 
+/* bumped at the frame visit's writes the engine's cull reads; game thread (THE DRAW'S UNIT LIST) */
+static unsigned s_cull_inputs;
+
 /* FULL VISIBILITY (demo-recorder-s2-host.md §2.9), at the first frame visit or step
    (viewer_init), after the loader's sight rebuild 0x4816A0(1) (0x497AE5) has filled every seat's
    and reset the explored map: V's sight counters, record 10's, all 1, the value that rebuild
@@ -4640,6 +4643,7 @@ typedef void (__cdecl* PFN_MinimapFog)(void);
    value of 16 or more names no bit of it and nothing is set. */
 static void minimap_fog(char* ta)
 {
+    s_cull_inputs++;                    /* LosType (THE DRAW'S UNIT LIST) */
     *(uint16_t*)(ta + OFF_LOSTYPE) &= (uint16_t)~8u;
     *(unsigned char*)(ta + OFF_MMFLAGS) |= 4u;
     E_MinimapFog();
@@ -4650,6 +4654,7 @@ static void sight_fill(char* ta, unsigned v)
     char* rec = player_rec(ta, v);
     unsigned char* cnt;
     unsigned char* mapped;
+    s_cull_inputs++;                    /* the viewed record's sight map (THE DRAW'S UNIT LIST) */
     uint32_t len, w, h, n, i;
     unsigned b = (unsigned char)rec[PL_MAPBIT];
     memcpy(&cnt, rec + PL_SIGHT, 4);
@@ -5204,6 +5209,7 @@ static void recorded_put(const Lv* L, const RecWorld* W)
 {
     const RecWorld* C = mp_world(W);    /* each unit's books and the explored map, whichever
                                            stream drives them */
+    s_cull_inputs++;                    /* LosType and the units' bits (THE DRAW'S UNIT LIST) */
     masks_init();
     los_react(L->ta, W);
     books_put(L, C);
@@ -5324,11 +5330,15 @@ typedef void (__cdecl* PFN_RadarPass)(void);
    2026-10-09: b7-word-outright's ARMMSTOR slot 2 after a seek past its death). The engine is
    safe by order: its cull 0x48BAE0, which lists only slots with a nonzero +0xA6 (0x48BB3E), runs
    at 0x49697B on every path to the draw call 0x4969CD (DISASSEMBLED). The frame visit runs
-   between the two, and is the only place this file destroys or makes units (seek_run), changes
-   the viewed record outside a level's start (seek_run's takeover and rewind, sight_change), or
-   moves the eye (Follow, tagpu_zoom_follow where no apply runs). Each of those writers bumps
-   s_cull_inputs, and a visit that saw it change ends with the same cull, so the draw reads a list
-   built after the visit's last write to anything the cull reads.
+   between the two. Outside a step, it is where this file destroys or makes units (seek_run),
+   changes the viewed record outside a level's start (seek_run's takeover and rewind,
+   sight_change), moves the eye (Follow, tagpu_zoom_follow where no apply runs), and writes what
+   the cull's visibility test 0x465AC0 reads -- the viewed record's sight map +0x7C (bounded by
+   +0x80/+0x84), LosType main+0x14281 and the units' +0x110 bit 9 (0x465B38..0x465BA3) -- through
+   sight_fill, minimap_fog, recorded_put (its LosType reaction and the units' books) and the
+   viewed record's radar pass. Each of those writers bumps s_cull_inputs, and a visit that saw it change ends with
+   the same cull, so the draw reads a list built after the visit's last write to anything the cull
+   reads.
    ORDERING: between that call and the draw's reads lie only the stub's jump to 0x468CF0 and its
    entry observers, which write no unit; the zoom's apply there may move the eye, the one-draw
    skew exe-reverse-engineering.md names for the engine's own cull, and every unit it lists is
@@ -5341,7 +5351,6 @@ typedef void (__cdecl* PFN_RadarPass)(void);
    engineering.md, *Who reads the eye, and what bounds each reader*). */
 typedef void (__cdecl* PFN_HotUnitsCull)(void);
 #define E_HotUnitsCull ((PFN_HotUnitsCull)0x0048BAE0u)
-static unsigned s_cull_inputs;      /* bumped at the visit's writes the cull reads; game thread */
 /* 0x466DC0(): the minimap's unit and projectile picture for the viewed record, no argument, plain
    `ret` (0x46743D), which the players phase runs every tick for the viewed record alone
    (0x465065..0x465072). Display state: its count main+0x1436B and main+0x142F1 bit 1 are the
@@ -8044,6 +8053,7 @@ static void viewer_frame(void)
     if (pass > now) return;
     pass = PASS_TICKS * (now / PASS_TICKS + 1);
     memcpy(rec + PL_PASS, &pass, 4);
+    s_cull_inputs++;                    /* the units' contact bits (THE DRAW'S UNIT LIST) */
     E_RadarPass();
     E_MinimapFog();
 }
