@@ -16,7 +16,7 @@
    "end": 2400
   },
   "stock-codec-decline": {
-   "load": "resource-snapping.json",
+   "load": "replay-stock-decline.json",
    "decline": true,
    "dll": "stock",
    "end": 2400
@@ -38,7 +38,7 @@
    "steps": [[1, "apply", "replay-battle-units.json"],
              [120, "apply", "replay-rewind-builders.json"]],
    "end": 3810,
-   "takeover": {"player": "controlled", "order": ["ARMCK", 0], "cpu_ms": 4000,
+   "takeover": {"player": "controlled", "order": ["ARMCK", 0], "cpu_ms": 5000,
                 "checks": ["judge", "line", "orders", "ai", "fork"]}
   },
   "battle-los": {

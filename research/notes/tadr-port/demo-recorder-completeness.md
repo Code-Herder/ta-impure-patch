@@ -527,7 +527,7 @@ of the chain's first segment whose part reaches 123 ticks before it) and read no
 there to its target; **W2**, exact, every
 live unit made or refused, none left alive by the kills, and none refused by a takeover, a return
 to now or a fork; **W3**, K's takeover's and U's return to now's and fork's CPU time within the
-fixture's `cpu_ms` (4,000 ms, the battle's). CPU time does not stretch when other
+fixture's `cpu_ms` (5,000 ms, the battle's: the owner raised it from 4,000 on 2026-10-10, when snapshots moved to 1,800 ticks apart and the U lane's return to now at 1,501 reads 1,500 iterations of the battle from its first, 3.5–4.12 s of CPU under the gate's load). CPU time does not stretch when other
 games take turns on the core, but it does when they contend for the core itself: an SMT sibling
 made fixed work cost ×1.5 (MEASURED 2026-10-09, `tagpu_replay.c`, THE SEEK'S WORK), and the
 all-core clock lowers it further. That is W3's residual and the gate's last timing-dependent

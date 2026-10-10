@@ -306,21 +306,6 @@ static void enc_settle(Cells* x, int same)
     }
 }
 
-/* The images held back as T's, its first tnext records, into G uncoded: a latch ends the coding,
-   never the world. */
-static void world_settle(Cells* x)
-{
-    const Tick* t = &x->t[x->cur];
-    unsigned i;
-    size_t at = 0;
-    if (!x->pending) return;
-    x->pending = 0;
-    for (i = 0; i < x->tnext; i++) {
-        grid_put(x, t->p[i], t->n[i], t->cell + at * CB);
-        at += t->n[i];
-    }
-}
-
 static void cells_enc_iter(void* f, const RecFrameAt* a)
 {
     Cells* x = (Cells*)f;
@@ -342,7 +327,20 @@ static void cells_enc_rec(void* f, const RecFrameAt* a, unsigned kind, const uns
        writer refuses it before its copy, feature_record, and every reader refuses it), and every
        image before or after it still reaches G, so a declined block leaves G as a reader's grid. */
     if (!image_at(x, b, len, &p, &n)) {
-        world_settle(x);
+        /* The latch: the images held back as T's, its first tnext records, go into G uncoded, so
+           the latch ends the coding, never the world. No recording reaches this branch -- the
+           writer refuses such a record before its copy, by the same bounds -- and the codec's
+           self-test's fault blocks run it (codectest outcomes_cells). */
+        if (x->pending) {
+            const Tick* t = &x->t[x->cur];
+            unsigned i;
+            size_t at = 0;
+            x->pending = 0;
+            for (i = 0; i < x->tnext; i++) {
+                grid_put(x, t->p[i], t->n[i], t->cell + at * CB);
+                at += t->n[i];
+            }
+        }
         x->bad = 1;
         return;
     }
