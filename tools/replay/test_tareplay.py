@@ -211,7 +211,11 @@ class TurboLanes(unittest.TestCase):
                              "LPRKFXU")
             self.assertTrue(all(tareplay.turbo_lane(fx["battle"], p, k) in (0, k)
                                 for p in "LPRQKFWXU"))
-        self.assertFalse(tareplay.held_lane({"cost": True}, "L"))
+
+    def test_a_cost_game_is_held_and_keeps_its_own_pacing(self):
+        cost = {"load": "replay-four-ai.json", "cost": True, "end": 18000}
+        self.assertTrue(tareplay.held_lane(cost, "L"))
+        self.assertEqual(tareplay.turbo_lane(cost, "L", 1), 0)
 
 
 class RunTo(unittest.TestCase):

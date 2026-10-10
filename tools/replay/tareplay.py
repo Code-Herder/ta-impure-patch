@@ -92,7 +92,8 @@ the same on every run. It runs on L, P, R, F, K, X and U; not on Q, which plays 
 whose ticks pass only between its interface steps; never on a cost fixture, which measures the
 game's own pacing (turbo_lane).
 
-THE LAUNCH'S HOLD. The same lanes launch with the DLL's test hold (tagpu_hold.on; tagpu_replay.c,
+THE LAUNCH'S HOLD. The same lanes, a cost fixture's L among them, launch with the DLL's test hold
+(tagpu_hold.on; tagpu_replay.c,
 THE LAUNCH'S HOLD; held_lane): the level is held after its first step -- a skirmish at GameTime 1,
 its scenario applied on the held frames; a playing at its first step; a seek or a takeover at
 T-1 -- until the lane's `resume`, so nothing a lane arms can pass before its answer. From there a
@@ -329,14 +330,15 @@ def fixture_speed(fix, default):
 def held_lane(fix, proc):
     """Whether a lane launches held (THE LAUNCH'S HOLD): every lane that waits on ticks, each of
     its GameTimes held (run_to) or armed in the DLL; not Q, which plays one tick, nor W, whose ticks
-    pass only between its interface steps; never a cost fixture, which measures the game's own
-    pacing from its start."""
-    return not fix.get("cost") and proc in "LPRFKXU"
+    pass only between its interface steps. A cost fixture's L is held too: the hold stops the level
+    at its ticks and changes no step's size, and its pacing is the game's own (turbo_lane)."""
+    return proc in "LPRFKXU"
 
 
 def turbo_lane(fix, proc, k):
-    """A lane's turbo k, 0 for none: the held lanes'."""
-    return k if k and held_lane(fix, proc) else 0
+    """A lane's turbo k, 0 for none: the held lanes', except a cost fixture's, which measures the
+    game's own pacing."""
+    return k if k and not fix.get("cost") and held_lane(fix, proc) else 0
 
 
 class Worker:
@@ -387,7 +389,9 @@ class Worker:
         say(f"{self.name} on Xvfb {self.xvfb.display} (pid {self.xvfb.pid})")
 
     def close(self):
+        """The instance stopped and left unheld: a launch by hand between runs plays as usual."""
         tacli("stop", self.name, "--hard", timeout=120)
+        self.hold_lever(False)
         stop_xvfb(self.xvfb)
         self.lock.close()
 
@@ -469,11 +473,7 @@ class Worker:
             turbo.write_text(f"{self.turbo}\n")
         else:
             turbo.unlink(missing_ok=True)
-        hold = self.gamedir / "tagpu_hold.on"
-        if self.held:
-            hold.write_text("")
-        else:
-            hold.unlink(missing_ok=True)
+        self.hold_lever(self.held)
         self.test_render()
         shutil.copy2(dll, self.gamedir / "ddraw.dll")
         rd = self.gamedir / "replays"
@@ -493,6 +493,14 @@ class Worker:
             r = subprocess.run(argv, capture_output=True, text=True, timeout=300)
             if r.returncode:
                 raise CouldNotRun(f"content {' '.join(content['run'])}: {last(r.stdout + r.stderr)}")
+
+    def hold_lever(self, on):
+        """tagpu_hold.on, read at the next launch's attach (THE LAUNCH'S HOLD)."""
+        hold = self.gamedir / "tagpu_hold.on"
+        if on:
+            hold.write_text("")
+        else:
+            hold.unlink(missing_ok=True)
 
     def test_render(self):
         """The test render profile (TEST_RENDER) in the instance's store, every other line kept,
@@ -782,7 +790,7 @@ def wait_paused(w, log, T, poll=None):
 
 
 def resume(w, log):
-    arm(w, log, "resume", r"pause: resumed at GameTime \d+", r"pause: resume refused", "resume")
+    arm(w, log, "resume", r"pause: resumed at GameTime \d+", r"resume: refused: .*", "resume")
     log.held = False
 
 
@@ -1059,7 +1067,11 @@ def live(w, fx, Ts, out):
     fix = fx["fix"]
     w.place(fix, fx["dll"])
     if fix.get("preflight"):
+        # a native assertion with launches of its own, paced by the game and its own Pause key:
+        # they run unheld, and the recording's launch after them is held again
+        w.hold_lever(False)
         step(w, "run", fix["preflight"])
+        w.hold_lever(w.held)
     los = [] if fix.get("los") == "file" else ["--los", str(fix.get("los", 0))]
     log = Log(w)
     rc, o = tacli("scenario", "load", w.name, SCENARIOS / fix["load"], "--defaults", *los,
