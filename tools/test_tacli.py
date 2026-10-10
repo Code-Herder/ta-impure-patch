@@ -22,6 +22,7 @@ import ntpath
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import time
 import types
@@ -3958,6 +3959,42 @@ class LaunchHold(unittest.TestCase):
         self.assertTrue(got["arrived"])
         self.assertIn("dump_pending", got)
         self.assertNotIn("timeout", got)
+
+
+class PrefixLeftovers(unittest.TestCase):
+    """What end_prefix_wineserver reports: the prefix's processes by their exact WINEPREFIX,
+    without the server and Wine's own services."""
+
+    def proc(self, comm, pid=10):
+        return {"pid": pid, "comm": comm, "ppid": 1, "started": "20:47:31", "leader": "S",
+                "threads": 4}
+
+    def test_the_server_and_wines_services_are_not_leftovers(self):
+        procs = [self.proc(c, i) for i, c in enumerate(
+            ("wineserver", "wineserver64", "services.exe", "winedevice.exe", "plugplay.exe",
+             "explorer.exe", "svchost.exe", "rpcss.exe", "TotalA.exe", "dplaysvr.exe",
+             "semhold.exe"))]
+        self.assertEqual([p["comm"] for p in tacli.stale_listing(procs)],
+                         ["TotalA.exe", "dplaysvr.exe", "semhold.exe"])
+
+    def test_the_description_names_each_and_says_none_for_nothing(self):
+        self.assertEqual(tacli.describe_processes([]), "none")
+        self.assertEqual(tacli.describe_processes([self.proc("TotalA.exe", 7)]),
+                         "TotalA.exe pid 7 ppid 1 started 20:47:31 leader S threads 4")
+
+    def test_the_listing_matches_the_prefix_exactly(self):
+        prefix = Path(tempfile.mkdtemp(prefix="tacli-test-prefix-"))
+        self.addCleanup(shutil.rmtree, prefix, ignore_errors=True)
+        procs = []
+        for value in (str(prefix), str(prefix) + "x"):
+            p = subprocess.Popen(["sleep", "30"], env=dict(os.environ, WINEPREFIX=value))
+            self.addCleanup(p.wait)
+            self.addCleanup(p.kill)
+            procs.append(p)
+        found = tacli.prefix_processes(prefix)
+        self.assertEqual([p["pid"] for p in found], [procs[0].pid])
+        self.assertEqual(found[0]["comm"], "sleep")
+        self.assertEqual(found[0]["threads"], 1)
 
 
 if __name__ == "__main__":

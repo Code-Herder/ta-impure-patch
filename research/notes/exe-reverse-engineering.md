@@ -6440,6 +6440,12 @@ wait returns the semaphore is gone. MEASURED: on the reference setup the relaunc
 both that it waited and, on another run, that the old process had already ended, and came up
 each time; on the Windows test setup it came up.
 
+Under Wine the name lives in the prefix's wineserver, which can hold it after the process's
+leader thread is gone, so `tacli launch` ends that server (`wineserver -k`, then `-w`) before
+starting a game ([tacli-design](tacli-design.html), *A launch ends the prefix's wineserver
+first*). MEASURED 2026-10-09: with another process holding the semaphore, `wine TotalA.exe`
+exits with code 255, the −1 above.
+
 ### A large-address-aware exe's heap is above 2 GB — the range filters' top [MEASURED 2026-09-27]
 
 The DLL's passes range-test every pointer they take out of engine memory before reading through it

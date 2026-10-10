@@ -917,6 +917,106 @@ def end_prefix_dplaysvr(prefix: Path) -> int:
     return ended
 
 
+# Wine's own processes of a prefix, which every Wine program in it starts: never a
+# leftover worth naming. The wineserver is the server itself.
+WINE_SERVICES = frozenset({"wineserver", "wineserver64", "services.exe", "winedevice.exe",
+                           "plugplay.exe", "explorer.exe", "svchost.exe", "rpcss.exe"})
+
+
+def _proc_environ(pid: str) -> list:
+    """The environment of process `pid`, read through its leader thread or, when the leader
+    has exited and the process lives on in its other threads (whose leader's environ no
+    longer reads), through any of those."""
+    paths = [f"/proc/{pid}/environ"]
+    try:
+        paths += [f"/proc/{pid}/task/{tid}/environ" for tid in os.listdir(f"/proc/{pid}/task")]
+    except OSError:
+        pass
+    for path in paths:
+        try:
+            data = Path(path).read_bytes()
+        except OSError:
+            continue
+        if data:
+            return data.split(b"\0")
+    return []
+
+
+def prefix_processes(prefix: Path) -> list:
+    """Every process whose environment holds exactly WINEPREFIX=`prefix`, as dicts of pid,
+    comm, ppid, start time (wall clock), its leader thread's state and its thread count."""
+    key = b"WINEPREFIX=" + str(prefix).encode()
+    try:
+        btime = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines()
+                     if line.startswith("btime "))
+    except (OSError, StopIteration, ValueError):
+        btime = None
+    ticks = os.sysconf("SC_CLK_TCK")
+    found = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        if key not in _proc_environ(pid):
+            continue
+        try:
+            comm = Path(f"/proc/{pid}/comm").read_text().strip()
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            threads = len(os.listdir(f"/proc/{pid}/task"))
+        except OSError:
+            continue                    # it ended while being read
+        fields = stat[stat.rindex(")") + 2:].split()
+        started = (time.strftime("%H:%M:%S", time.localtime(btime + int(fields[19]) / ticks))
+                   if btime is not None else None)
+        found.append({"pid": int(pid), "comm": comm, "ppid": int(fields[1]), "started": started,
+                      "leader": fields[0], "threads": threads})
+    return found
+
+
+def stale_listing(procs: list) -> list:
+    """`procs` without the wineserver and Wine's own services: what was left running."""
+    return [p for p in procs if p["comm"] not in WINE_SERVICES]
+
+
+def describe_processes(procs: list) -> str:
+    return "; ".join(f"{p['comm']} pid {p['pid']} ppid {p['ppid']} started {p['started']} "
+                     f"leader {p['leader']} threads {p['threads']}" for p in procs) or "none"
+
+
+def end_prefix_wineserver(inst: Instance) -> list:
+    """End this prefix's wineserver and every process attached to it, and return what was
+    running there besides Wine's own services.
+
+    TotalA.exe will not start while the semaphore "Total Annihilation" exists: WinMain
+    0x49E830 calls OpenSemaphoreA(0x1F0003, 0, "Total Annihilation") at 0x49E885 and returns
+    -1 at 0x49E88F on a non-NULL handle, with no message (DISASSEMBLED). That name lives in
+    the prefix's wineserver. `running()` cannot order a launch after it: it reads the Linux
+    leader thread, not the wineserver, and MEASURED under load 40-100 the server released the
+    semaphore 0.1-8.6 ms after running() turned False in 4 of 11 graceful exits, 42 ms after
+    on `tacli stop` (a thread in D state outlived the leader), and never while a process whose
+    leader alone was killed lived on, invisible to running().
+
+    THE INVARIANT: a wineserver that has exited holds no object, and a process never changes
+    server. So once `wineserver -w` has returned, the server that could hold the name is gone,
+    and only a TotalA.exe this launch starts can create it again. Called only while the
+    instance's game is not running (an already-running instance returned before), so
+    everything left in the prefix is stale by construction, as for end_prefix_dplaysvr --
+    which includes any other Wine program someone runs in the instance's prefix.
+
+    Cost, MEASURED: 2 ms each for -k and -w with no server running (neither starts one);
+    0.77 s for both together with a live game, both gone at the return. A server left after
+    an exit ends by itself 1.07-1.12 s after running() turns False, so launches seconds apart
+    pay about 4 ms.
+
+    A remote instance needs no equivalent: Windows has no wineserver, and `_remote_launch`
+    refuses while any TotalA.exe runs on that machine, so no process of the game is left to
+    hold the semaphore when it starts one."""
+    found = prefix_processes(inst.prefix)
+    env = inst.env()
+    run(["wineserver", "-k"], env=env)          # exit 1: no server was running
+    run(["wineserver", "-w"], env=env)
+    return stale_listing(found)
+
+
 def free_dplay_port(port: int) -> int:
     """Kill the dplaysvr.exe holding THIS instance's DirectPlay port.
 
@@ -1760,6 +1860,13 @@ def _launch(args) -> dict:
     meta = inst.meta()
     if inst.running():
         return dict(meta, already_running=True, pid=inst.pid())
+    # Before this launch's first Wine process: once the prefix's wineserver has exited, no
+    # leftover can hold the single-instance semaphore the game refuses to start beside
+    # (end_prefix_wineserver says why running() is not enough).
+    ended = end_prefix_wineserver(inst)
+    if any(p["comm"] == "TotalA.exe" for p in ended):
+        warn(f"{inst.name}: ended a TotalA.exe that tacli did not see running in its prefix: "
+             f"{describe_processes(ended)}")
     # A build that still reads ddraw.ini finds none here and falls back to its own
     # defaults: borderless fullscreen, unplaced, on whatever monitor -- the owner's,
     # on the live display -- and it writes a template ddraw.ini beside itself.
@@ -1983,9 +2090,19 @@ def _launch(args) -> dict:
             refusal = _registry_refusal(_run_registry_lines(inst, old_log))
             if refusal:
                 die(f"{inst.name}: the DLL did not run the game: {refusal}")
-            die(crash_report(inst, crash_since) or
-                f"{inst.name} exited during launch before showing a window "
-                f"(no ErrorLog.txt)")
+            report = crash_report(inst, crash_since)
+            if report:
+                die(report)
+            # One line, because tareplay prints only a failure's last: the exit code says
+            # whether the single-instance test refused the start, and a TotalA.exe started
+            # after end_prefix_wineserver in this listing came from a second launcher.
+            die(f"{inst.name} exited during launch before showing a window (no ErrorLog.txt); "
+                f"exit code {proc.returncode}"
+                + (" (255 is WinMain's -1 at 0x49E88F: the semaphore 'Total Annihilation' "
+                   "existed)"
+                   if proc.returncode == 255 else "")
+                + f"; the prefix's processes now: "
+                f"{describe_processes(stale_listing(prefix_processes(inst.prefix)))}")
         report = crash_report(inst, crash_since)
         if report:
             die(report)
@@ -2005,6 +2122,7 @@ def _launch(args) -> dict:
             "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
             "map": args.map, "unit_limit": meta.get("unit_limit"),
             "args": argv, "shield": shield_state(inst), "pointer_restored": restored,
+            "ended": ended,
             "window_title": meta["window_title"],
             "dplay": bool(meta.get("dplay")), "dplay_note": dplay_note,
             "dplay_port": (meta.get("dplay_port") or dpport.STOCK) if meta.get("dplay") else None,
@@ -2029,6 +2147,8 @@ def cmd_launch(args):
              f"shield={'on' if res['shield'] else 'off'}"
              f"{' dplay=on' if res.get('dplay') else ''}"
              f"{' defaults=on' if res.get('defaults') else ''}")
+    if res.get("ended"):
+        human += f"\n  ended in its prefix: {describe_processes(res['ended'])}"
     if res.get("registry_seed_note"):
         human += f"\n  {res['registry_seed_note']}"
     human += ("\n  TA's key: " + (f"{taremote.STATE_DIR}/{taremote.STORE}, served -- "

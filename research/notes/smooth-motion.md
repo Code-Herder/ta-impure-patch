@@ -620,7 +620,9 @@ with `exited during launch before showing a window (no ErrorLog.txt)`, the DLL i
 in the log says why. Killing the wineserver **for that prefix alone** (match `WINEPREFIX` in
 `/proc/<pid>/environ`, never `pkill wineserver` — that would take every other instance and the
 human's own session with it) clears it and the next launch is normal. It looks exactly like a DLL that will not
-load, which is the wrong thing to go and debug.
+load, which is the wrong thing to go and debug. `tacli launch` ends that wineserver itself before
+every launch ([tacli-design](tacli-design.html), *A launch ends the prefix's wineserver first*);
+the cause was most likely a leftover holding TA's single-instance semaphore [INFERRED].
 
 The structural half of the gate is stronger than the measurement anyway: the module writes to its
 own statics and to nothing else, and the invariant-1 read-only rule is checkable by inspection —

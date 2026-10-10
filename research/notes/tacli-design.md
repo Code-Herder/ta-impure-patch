@@ -281,6 +281,53 @@ the game on a display with no monitor behind it. It now skips virtual X servers
 (Xvfb/Xephyr/Xnest, identified from `ps`) unless `TACLI_DISPLAY` names one
 explicitly.
 
+## A launch ends the prefix's wineserver first
+
+**TotalA.exe will not start while the semaphore `"Total Annihilation"` exists**: WinMain opens
+it at `0x49E885` and returns −1 at `0x49E88F` with no message ([engine map](exe-reverse-engineering.html),
+*TA's single-instance test*). The name lives in the prefix's wineserver, and `running()` cannot
+order a launch after it, because it reads the Linux leader thread (`pgrep -x TotalA.exe` and the
+leader's `/proc/<pid>/environ`), not the server. MEASURED under load 40–100: the server released
+the semaphore 0.1–8.6 ms after `running()` turned False in 4 of 11 graceful exits, 42 ms after
+on `tacli stop` (a thread in D state outlived the leader), and never while a process whose leader
+thread alone was killed lived on, invisible to `running()`. A launch in that window exits with
+code 255 and `exited during launch before showing a window (no ErrorLog.txt)`.
+
+So `launch`, once it knows no game of the instance runs and before its first Wine process
+(`end_prefix_wineserver`, ahead of the DirectPlay step and `apply_prefix_settings`):
+
+1. **Lists the prefix's processes**: every process whose environment holds exactly this
+   `WINEPREFIX`, read through the leader or, when the leader has exited, through any of its
+   threads (`/proc/<pid>/task/<tid>/environ`), with its name, parent, start time, the leader's
+   state and the thread count.
+2. **Ends the server**: `wineserver -k`, then `wineserver -w`. A wineserver that has exited holds
+   no object, and a process never changes server, so once `-w` has returned only a TotalA.exe this
+   launch starts can create the name. Everything left in the prefix is stale by construction,
+   because the instance's game is not running — **any other Wine program run in an instance's
+   prefix ends at its next launch too**.
+3. **Reports what it ended** as `ended` in the result (`--json`), without the server and Wine's
+   own services (`services.exe`, `winedevice.exe`, `plugplay.exe`, `explorer.exe`,
+   `svchost.exe`, `rpcss.exe`), and warns when that names a TotalA.exe.
+
+A launch that still exits before its window says its exit code on the same line (255 is
+the single-instance refusal) and the prefix's processes at that moment, so a TotalA.exe started
+after the end step names a second launcher rather than a timing case.
+
+Cost, MEASURED: 2 ms each for `-k` and `-w` with no server running (neither starts one); 0.77 s
+for both with a live game. A server left after an exit ends by itself 1.07–1.12 s after
+`running()` turns False, so launches seconds apart pay about 4 ms, and a relaunch the moment the
+game is gone about 80 ms (78–84 ms over 20 relaunches on 2026-10-09, ten after the menu's EXIT and
+ten after `tacli stop`, every one with a window).
+
+MEASURED 2026-10-09, on a scratch instance: with a helper holding the semaphore in the prefix,
+and with a TotalA.exe whose leader thread alone was killed (`tgkill`; leader `Z`, five threads
+left), a launch without this step exited as above (1.2 s, code 255 from the same refusal with the
+end step disabled), and with it opened a window in 2.6 s and 2.0 s and listed the helper and the
+TotalA.exe as `ended`.
+
+**A remote instance needs none**: Windows has no wineserver, and the remote `launch` refuses while
+any TotalA.exe runs on that machine (§"Launch and stop" below), so none is left to hold the name.
+
 ## The registry: a store per instance
 
 **TA's settings key is the instance's own file.** `HKCU\Software\Cavedog Entertainment` and every

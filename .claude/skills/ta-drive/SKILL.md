@@ -65,6 +65,13 @@ instance with `tacli create <n> --display <live>` — `instance.json` is shared 
 session may own. A hand-run `wine TotalA.exe` without `WINEDLLOVERRIDES=ddraw=n,b` loads wine's
 builtin ddraw and fails with the same dialog, so it proves nothing.
 
+**A launch ends everything in the instance's prefix first** (`wineserver -k`, then `-w`): a
+leftover the process list no longer shows as a game can hold TA's single-instance semaphore, and
+TotalA.exe then exits at start with code 255 and the same *"exited during launch"*. The result
+lists what was ended (`ended` in `--json`) and warns when that was a TotalA.exe; a launch that
+still fails says its exit code and the prefix's processes on the same line. A Wine program you
+run in an instance's prefix ends at its next launch.
+
 **TA's registry key is the instance's own file**, `gamedir/tacli-state/registry.txt`, seeded
 from the template's `user.reg` (`gamespeed` 10). **Tick-based replay tests use internal 20 (2x) as standard;
 timing measurements use 10.** The replay harness also runs its lanes at one tick a frame once armed
