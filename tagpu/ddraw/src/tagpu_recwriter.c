@@ -30,8 +30,10 @@
 
    A SNAPSHOT is smaller than the copy: its cells are the ones that differ from the first
    iteration's grid, the base, which the writer keeps from RK_GRID on and a reader takes from the
-   first iteration it reads; and a table's spans that are all zero are left out, since a snapshot
-   builds from nothing and RK_TABLE_SIZE zeroes the table.
+   first iteration it reads; its wreck records the ones that differ from the pool at the end of
+   the first iteration, the wreck base (iteration_done), which a reader takes at the same moment;
+   and a table's spans that are all zero are left out, since a snapshot builds from nothing and
+   RK_TABLE_SIZE zeroes the table.
 
    A FORK (tagpu_recorder.h, RecFork) is written as a segment of the file it was played from, at
    the append point the takeover found, through the handle it opened (file_append). */
@@ -122,6 +124,8 @@ typedef struct Writer {
     unsigned       death[REC_DEATHS_MAX];   /* their units' IDs, innermost last          */
 
     unsigned char* base;        /* the grid at the first iteration (a snapshot's cells differ) */
+    unsigned char* wbase;       /* the pool at the end of the first iteration (a snapshot's
+                                   wreck records differ), once iteration_done has taken it */
     unsigned       globals[REC_GLOBALS_DWORDS];   /* the globals image, once sent        */
     int            globals_in;
     unsigned       ncap;        /* the projectile pool's records (RT_PROJECTILES)          */
@@ -948,11 +952,13 @@ static void snapshot(Writer* w)
         }
     }
     if (w->grid) grid_diff_put(b, w);
+    /* the records that differ from the wreck base, a record now zero included: the reader starts
+       the pool from its own base (tagpu_recreader.c, world_reset), not from zero */
     for (i = 0; i < w->npool; i++) {
-        static const unsigned char zero[REC_WRECK_BYTES];
         unsigned short pre[2] = { (unsigned short)i, 0 };
         const unsigned char* rec = w->pool + (size_t)i * REC_WRECK_BYTES;
-        if (memcmp(rec, zero, REC_WRECK_BYTES)) buf_rec(b, RK_WRECK, pre, 4, rec, REC_WRECK_BYTES);
+        if (memcmp(rec, w->wbase + (size_t)i * REC_WRECK_BYTES, REC_WRECK_BYTES))
+            buf_rec(b, RK_WRECK, pre, 4, rec, REC_WRECK_BYTES);
     }
     if (w->heads_in) buf_rec(b, RK_FEATURES, w->heads, sizeof w->heads, NULL, 0);
     if (w->globals_in) buf_rec(b, RK_GLOBALS, w->globals, sizeof w->globals, NULL, 0);
@@ -979,9 +985,21 @@ static void snapshot(Writer* w)
 
 /* The iteration at `w->tick` is complete, the events of the step after it included: its stream
    block may end here, and a snapshot of the copy at `w->tick` may follow it. That snapshot comes
-   after those events, so a reader that starts from it takes them from the block before. */
+   after those events, so a reader that starts from it takes them from the block before.
+   THE WRECK BASE is taken at the first call, before any snapshot can be: the pool at the end of
+   the segment's first iteration. INVARIANT: it equals every reader's (tagpu_recreader.c,
+   tick_take), by construction -- one Writer is one segment, calloc'd per recording or fork, so its
+   pool starts zero and holds exactly the RK_WRECKs of that segment's first iteration, as the
+   reader's does after world_reset(r, 0) and that iteration's tick_read; neither side applies a
+   record of another segment, and both bound the index by the same pool size (the headers' shape
+   agrees across a chain). */
 static void iteration_done(Writer* w)
 {
+    if (!w->wbase) {
+        w->wbase = (unsigned char*)malloc((size_t)w->npool * REC_WRECK_BYTES);
+        if (!w->wbase) { fail(w, "no memory for the snapshots' wreck base"); return; }
+        memcpy(w->wbase, w->pool, (size_t)w->npool * REC_WRECK_BYTES);
+    }
     w->sticks++;
     if (w->tick - w->snap_tick >= SNAPSHOT_TICKS) {
         stream_flush(w);
@@ -1566,6 +1584,7 @@ static void finish(Writer* w)
     free(w->proj);
     free(w->mapped);
     free(w->base);
+    free(w->wbase);
 }
 
 /* ---- the thread ----------------------------------------------------------------------------- */

@@ -19,9 +19,10 @@
    SEQUENTIAL READING skips snapshot blocks unread -- not unpacked, their CRC not checked -- since
    a playing from the start never needs one. A SEEK reads them: the index (every block's header)
    finds the last snapshot before the target, whose payload is then checked like any block's, and
-   the stream is read on from the iteration after it. A snapshot carries only the cells that
-   differ from its segment's first iteration (tagpu_recfmt.h, RB_SNAPSHOT), so the reader keeps
-   that grid, the base, from the segment's first iteration it reads.
+   the stream is read on from the iteration after it. A snapshot carries only the cells and the
+   wreck records that differ from its segment's first iteration (tagpu_recfmt.h, RB_SNAPSHOT), so
+   the reader keeps that grid and that pool, the base and the wreck base, from the segment's first
+   iteration it reads (tick_take).
 
    THE SEGMENTS (tagpu_recfmt.h). The index is every block of every segment, each with its
    segment, found by segs_scan at the open and again by every call that needs it, since a fork
@@ -101,6 +102,7 @@ struct RecReader {
     struct { unsigned slot, list, total, next; } pend;   /* a list sent in several records   */
     unsigned long long first_off;   /* the file offset of the first block after the header    */
     unsigned char*     base;        /* the grid at the end of a segment's first iteration ...  */
+    unsigned char*     wbase;       /* ... and the wreck pool, h.wrecks records ...           */
     int                base_seg;    /* ... the chain's segment base_seg, -1 for none           */
     int                globals_in;  /* an RK_GLOBALS has come, so a delta has an image to change */
     int                proj_in;     /* an RK_PROJ_HEAD has come, so records below hw may come  */
@@ -656,9 +658,10 @@ static const RecHeader* seg_header(const RecReader* r)
 }
 
 /* The world as a segment's first record finds it -- the controllers and the viewer its header's,
-   the grid the base's when `from_base` (a snapshot's cells are the ones that differ from it) and
-   else zero (a first iteration carries every cell) -- and the reader at no iteration of it. What a
-   seek starts from, and what a fork is crossed over. */
+   the grid and the wreck pool the bases' when `from_base` (a snapshot's cells and wreck records
+   are the ones that differ from them) and else zero (a first iteration carries every cell, and
+   every wreck record that is not zero) -- and the reader at no iteration of it. What a seek
+   starts from, and what a fork is crossed over. */
 static void world_reset(RecReader* r, int from_base)
 {
     RecWorld* w = &r->w;
@@ -688,9 +691,13 @@ static void world_reset(RecReader* r, int from_base)
     w->nclick = 0;
     memset(w->npov, 0, sizeof w->npov);
     memset(w->nsel, 0, sizeof w->nsel);
-    if (from_base) memcpy(w->grid, r->base, grid_bytes(r));
-    else memset(w->grid, 0, grid_bytes(r));
-    memset(w->pool, 0, (size_t)r->h.wrecks * REC_WRECK_BYTES);
+    if (from_base) {
+        memcpy(w->grid, r->base, grid_bytes(r));
+        memcpy(w->pool, r->wbase, (size_t)r->h.wrecks * REC_WRECK_BYTES);
+    } else {
+        memset(w->grid, 0, grid_bytes(r));
+        memset(w->pool, 0, (size_t)r->h.wrecks * REC_WRECK_BYTES);
+    }
     memset(w->heads, 0, sizeof w->heads);
     memset(w->globals, 0, sizeof w->globals);
     memset(w->proj, 0, (size_t)r->h.proj_cap * REC_PROJ_IMAGE);
@@ -728,12 +735,13 @@ static int world_init(RecReader* r, char* why, unsigned cap)
     r->base = (unsigned char*)VirtualAlloc(NULL, grid_bytes(r), MEM_COMMIT | MEM_RESERVE,
                                            PAGE_READWRITE);
     w->pool = (unsigned char*)calloc(r->h.wrecks, REC_WRECK_BYTES);
+    r->wbase = (unsigned char*)calloc(r->h.wrecks, REC_WRECK_BYTES);
     w->proj = (unsigned char*)calloc(r->h.proj_cap, REC_PROJ_IMAGE);
     w->mapped_bytes = REC_MAPPED_BYTES(r->h.grid_w, r->h.grid_h);
     w->mapped = (unsigned char*)malloc(w->mapped_bytes ? w->mapped_bytes : 1);
     w->sel = (RecSelEntry*)calloc((size_t)REC_PLAYERS * REC_SEL_MAX, sizeof *w->sel);
     if (!w->live || !w->changed || !w->list || !w->unit || !r->touched || !w->tab || !w->grid ||
-        !r->base || !w->pool || !w->proj || !w->mapped || !w->sel) {
+        !r->base || !w->pool || !r->wbase || !w->proj || !w->mapped || !w->sel) {
         snprintf(why, cap, "no memory for the world of %u slots and %u x %u cells", w->slots,
                  r->h.grid_w, r->h.grid_h);
         return 0;
@@ -1260,11 +1268,14 @@ static int tick_read(RecReader* r, char* why, unsigned cap)
 }
 
 /* An iteration read, and what reading it makes true: the world holds an iteration of the chain's
-   segment `cur`, and the base is that segment's. The base is taken at a segment's first iteration
+   segment `cur`, and the bases are that segment's. They are taken at a segment's first iteration
    read: recr_open and recr_timeline start at the root's, a seek starts at a segment's first
-   iteration or reads it before a snapshot of that segment, and a crossing starts at the child's.
-   Its grid images are every cell (the feature tick's cells inside its events are not applied to
-   the grid), as the writer's base is (tagpu_recwriter.c, RK_GRID). */
+   iteration or reads it before a snapshot of that segment, and a crossing starts at the child's,
+   each over world_reset(r, 0). Its grid images are every cell (the feature tick's cells inside its
+   events are not applied to the grid), as the writer's base is (tagpu_recwriter.c, RK_GRID).
+   INVARIANT: the wreck base is the writer's (tagpu_recwriter.c, iteration_done) by construction --
+   both are the pool built from zero by the RK_WRECKs of the segment's first iteration alone, each
+   index bounded by the same h.wrecks, which every segment of the chain shares. */
 static int tick_take(RecReader* r, char* why, unsigned cap)
 {
     int k = tick_read(r, why, cap);
@@ -1273,6 +1284,7 @@ static int tick_take(RecReader* r, char* why, unsigned cap)
         r->read_any = 1;
         if (r->base_seg != (int)r->cur) {
             memcpy(r->base, r->w.grid, grid_bytes(r));
+            memcpy(r->wbase, r->w.pool, (size_t)r->h.wrecks * REC_WRECK_BYTES);
             r->base_seg = (int)r->cur;
         }
     }
@@ -2629,6 +2641,7 @@ void recr_close(RecReader* r)
     if (r->w.unit) VirtualFree(r->w.unit, 0, MEM_RELEASE);
     if (r->w.grid) VirtualFree(r->w.grid, 0, MEM_RELEASE);
     if (r->base) VirtualFree(r->base, 0, MEM_RELEASE);
+    free(r->wbase);
     free(r);
 }
 

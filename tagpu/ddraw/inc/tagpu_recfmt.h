@@ -475,14 +475,17 @@ enum RecBlockKind {
                           RK_TABLE_SIZE per declared table and an RK_TABLE_SPAN for each of its
                           spans that is not all zero (RK_TABLE_SIZE zeroes the table, which
                           starts empty), the RK_CELLS of every cell that differs from the
-                          recording's first iteration (the base: a reader takes it from the first
+                          segment's first iteration (the base: a reader takes it from the first
                           iteration it reads, which every playing reads first), an RK_WRECK per
-                          record that is not all zero, an RK_FEATURES, the RK_GLOBALS, the
-                          RK_PROJ_HEAD with an RK_PROJ per record below its hw, and the explored
-                          map whole (RK_MAPPED). A dump is one of
-                          these, stored, with every cell and no base, and the players' sight
-                          counters (RK_SIGHT) and the two images whole (RK_IMAGE) after the
-                          rest. A snapshot follows the stream block that ends
+                          record that differs from the pool at the end of that same iteration
+                          (the wreck base, taken beside the grid's; a record now zero included),
+                          an RK_FEATURES, the RK_GLOBALS, the RK_PROJ_HEAD with an RK_PROJ per
+                          record below its hw, and the explored map whole (RK_MAPPED). A
+                          snapshot that carries more wreck records than differ reads the same.
+                          A dump is one of these, stored, with every cell and no base -- its
+                          RK_WRECK per record that is not all zero, read over a zero pool -- and
+                          the players' sight counters (RK_SIGHT) and the two images whole
+                          (RK_IMAGE) after the rest. A snapshot follows the stream block that ends
                           with the events of the step after `last`, so a reader that starts from
                           it takes those from the block before                                  */
     RB_END,            /* entries (RecTag): how the recording ended                              */
