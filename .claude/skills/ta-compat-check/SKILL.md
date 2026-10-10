@@ -66,9 +66,11 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   menu, of presented frames, so a loaded machine makes a run longer, never its verdict different.
   A wall bound only gives up on a game that stopped: 120 s of GameTime (or of frames) standing
   still, 60 s for a one-frame answer, 300 s for a screen of the menus or the battle room to come
-  up. The start-up watch ends at the process gone, a box, or the menu watched for `--watch` × 30
-  presented frames; a game Impure is not in has no frames to count and is watched for `--watch` s
-  of its main thread's CPU time once its window is up (120 s of it standing still end it too).
+  up. The start-up watch ends at the process gone, the first box, or the menu watched for
+  `--watch` × 30 presented frames; a game Impure is not in has no frames to count and is watched
+  for `--watch` s of its main thread's CPU time once its window is up (120 s of it standing still
+  end it too), and every watch gives up after 30 min, deciding nothing. A run is classified on its
+  first box and the `ErrorLog.txt` file: a second box is not seen.
 - **The battle stage** (Wine only, on by default, 60 s of game time): every setup without a lever that
   reaches the main menu clicks through to a skirmish on Two Continents and applies `scenarios/200v200.json`.
   Collisions between two patchers show where the limits are *used*, not at start-up: Impure

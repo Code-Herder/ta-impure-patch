@@ -49,7 +49,12 @@ names the gap). The hives are private because the store `tacli` keeps
   thread (user and system, `/proc/<pid>/task/<pid>/stat`), which a loaded machine stretches and
   does not shorten, and a CPU time standing still for 120 s ends it too. The main thread's, not
   the process's: Wine's dozens of spinning threads made the process's grow 12.9 s a second
-  against the main thread's 0.67 (MEASURED 2026-10-09, gammata-ota at its menu).
+  against the main thread's 0.67 (MEASURED 2026-10-09, gammata-ota at its menu). The whole watch
+  gives up after 30 min, deciding nothing. **The watch ends at the first box**, and the run is
+  classified on that box and the `ErrorLog.txt` file: a box blocks the game (with Impure's
+  refusal up, no thread of it used any CPU for 45 s, MEASURED 2026-10-09 on
+  retail+tadr1-recorder), and no fact says that no other box will follow, so a second box is not
+  seen. A run whose process exits is read at once, with no wait for a box after it.
 - **The network stage** (`wine --mp SECONDS`, 30 by default, 0 for none): for each player's
   setup whose single-player run showed Impure running, a second instance of the same folder
   (`compat-<setup>-j`), both games on their own displays, hosted and joined through the game's

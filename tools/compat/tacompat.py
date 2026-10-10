@@ -1620,16 +1620,18 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                             start_new_session=True)
     boxes, seen, menu, shots = [], set(), None, {}
-    first_box_at = exited_at = None
     impure_log = gamedir / "log" / "tagpu.log"
-    # THE START-UP WATCH ends on a fact: the process gone, a box, or the menu watched for
+    # THE START-UP WATCH ends on a fact: the process gone, the first box, or the menu watched for
     # `watch` x TICKS_PER_S presented frames (`presents`) once it is up; frames that stop coming for
     # STALL_S end it too, and decide nothing. A game Impure is not in has no frames to count: once
     # its main window is up -- ddraw.dll is TotalA.exe's first static import and Impure's DllMain
     # opens its log (tagpu_log_init), so a log is there by then if Impure is -- it is watched for
     # `watch` s of its main thread's CPU time (`cpu_ticks`), which a loaded machine stretches and
     # does not shorten, and a CPU time that stands still for STALL_S ends it too. POLL_S bounds a
-    # start that reaches none of these, and HANG_S the whole watch.
+    # start that reaches none of these, and HANG_S the whole watch. A box blocks the game (with
+    # Impure's refusal up, no thread of it used any CPU for 45 s: MEASURED 2026-10-09,
+    # retail+tadr1-recorder), and no fact says that no other box will follow, so the run is
+    # classified on the first box and the ErrorLog file: a second box is not seen.
     exe_real = str((gamedir / "TotalA.exe").resolve()).lower()
     soak, cpu, watch_end, window_at = None, None, None, None
     try:
@@ -1647,20 +1649,14 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
                     if window_at is None:
                         window_at = time.time()
                     continue
-                if (title, w, h) not in seen:
-                    seen.add((title, w, h))
-                    boxes.append({"title": title, "size": f"{w}x{h}", "t": round(time.time() - t0, 1)})
-                    if first_box_at is None:
-                        first_box_at = time.time()
-                        shot = Path(log.name).with_suffix(".box.png")
-                        subprocess.run(["import", "-display", f":{display}", "-window", "root",
-                                        str(shot)], capture_output=True, timeout=20)
-                        shots["box.png"] = str(shot)
-            if proc.poll() is not None and exited_at is None:
-                exited_at = time.time()
-            if exited_at and time.time() - exited_at > 2:
+                seen.add((title, w, h))
+                boxes.append({"title": title, "size": f"{w}x{h}", "t": round(time.time() - t0, 1)})
+                shot = Path(log.name).with_suffix(".box.png")
+                subprocess.run(["import", "-display", f":{display}", "-window", "root",
+                                str(shot)], capture_output=True, timeout=20)
+                shots["box.png"] = str(shot)
                 break
-            if first_box_at and time.time() - first_box_at > 3:
+            if boxes or proc.poll() is not None:
                 break
             if menu is None and labelled and time.time() - t0 > 8 and not boxes:
                 r = tacli("ui", inst["name"], timeout=15)
