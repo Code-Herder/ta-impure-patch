@@ -16,7 +16,7 @@
    "end": 2400
   },
   "stock-codec-decline": {
-   "load": "s3a-forest-fire.json",
+   "load": "resource-snapping.json",
    "decline": true,
    "dll": "stock",
    "end": 2400

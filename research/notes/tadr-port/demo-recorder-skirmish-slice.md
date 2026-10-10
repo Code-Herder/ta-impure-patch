@@ -318,12 +318,17 @@ frame's `over`, a column's failed allocation, `units_write`, `pool_write`, `fram
 return with nothing left to apply. The recording's header names the lever like every lever, and
 names it whenever the file is present (`tagpu_sim_lever` notes it before the test-launch gate
 refuses it, as it does `tagpu_hold.on`): the header says the file was there, not that blocks were
-declined; the end block's declined count says whether any were. The fixtures `codec-decline` and
-its stock-limits twin `stock-codec-decline` (the `forest-fire` fixture's scenario,
-`s3a-forest-fire.json`, ended at GameTime 2400 instead of 4500, with `"decline": true`) record under
-it, play, round-trip and seek across the declined blocks like any fixture, and their stream codec
-check also fails when the recording declined none. Two, because the landing tier asks each build
-that compiles a changed function to reach it.
+declined; the end block's declined count says whether any were. The fixtures `codec-decline` (the `forest-fire`
+fixture's scenario, `s3a-forest-fire.json`, ended at GameTime 2400 instead of 4500) and its
+stock-limits twin `stock-codec-decline` (`resource-snapping.json`, ended at 2400), both with
+`"decline": true`, record under it, play, round-trip and seek across the declined blocks like any
+fixture, and their stream codec check also fails when the recording declined none. Two, because the
+landing tier asks each build that compiles a changed function to reach it. The stock twin plays a
+scenario where no weapon fires -- the human seat's builders and one idle combat unit, the AI seat a
+lone solar collector across the map -- because a seek on the stock-limits build leaves the engine's
+own explosion, debris and flying-piece pools empty (the owner-approved known gap in
+`demo-recorder-completeness.md`, scoped to `stock-secondary-orders`): a battle there fails the
+strict images gate whenever its T1 finds an explosion alive.
 
 **What a reader refuses**, the C reader and `reccodec.py` alike, each by name (the C reader with the
 block's file offset): a flag bit it does not know, `RBF_SECTIONS` on a block that is not a stream block,
