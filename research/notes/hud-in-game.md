@@ -318,7 +318,7 @@ The owner's decisions:
   decode**, and `walk_stop` waits for it with `INFINITE` on the game thread
   (`tagpu_hudmarks.c`, the LIFETIME comment and `walk_stop`): at the teardown's entry or on a
   timeline change, a stop that lands in a crossing's rebuild holds the game thread for one seek's
-  read, 261–265 ms on a light four-player hour and 538–550 ms on a heavy one at worst, about 2 s in
+  read, 261–265 ms on a light four-player hour and 538–550 ms on a heavy one at worst, about 2.5 s in
   a dense battle [INFERRED from the seek measurements in
   [making recordings smaller](tadr-port/demo-recorder-size.md#l4-the-measured-hours-the-snapshot-interval-and-r1)].
   The worker looks at its stop flag only between iterations and crossings. A marker outside the recording's span, or for a

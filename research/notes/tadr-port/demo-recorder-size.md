@@ -546,7 +546,7 @@ to 900 reads from the segment's first iteration, there being no snapshot before 
 
 **What L1 leaves open.**
 
-- **The seek in a large battle's first interval** (above): decided at L4, which accepts about 2 s
+- **The seek in a large battle's first interval** (above): decided at L4, which accepts about 2.5 s
   there (*L4*, below).
 - **Aircraft in the replay gate**: the fixtures fly aircraft only in `carry-links` (transports) and
   `battle` (a dozen AI-built ones); whether they reach the codec's air functions is the landing
@@ -961,7 +961,7 @@ At 1,800 the light hour's worst seek reads in 261–265 ms and the heavy hour's 
 battle's worst interval decodes in about 1.7 s, and a dense battle's opening, where every unit
 marches, reads in about 2.4–2.6 s [INFERRED: linear from 1.22–1.29 s at 900, *L3*]. **The owner
 chose 1,800 with the 1.7 s in hand (2026-10-10), relaxing the one-second target for dense battles:
-well under a second in ordinary games, about 2–2.5 s at worst in the densest.** The product page
+well under a second in ordinary games, about 2.5 s at worst in the densest (2.4–2.6 s inferred).** The product page
 says so in place of the target.
 
 **Against the budget.** The light hour misses 25 MB an hour even with no snapshots at all (24.4 MiB,
@@ -1130,7 +1130,7 @@ Taken by the owner on 2026-10-07:
 Taken by the owner on 2026-10-10, with L4's measurements in hand:
 
 12. **Snapshots every 1,800 ticks**, with the big battle's 1.7 s worst decode known: the one-second
-    seek target is relaxed for dense battles, about 2–2.5 s at worst there and well under a second
+    seek target is relaxed for dense battles, about 2.5 s at worst there (2.4–2.6 s inferred) and well under a second
     in ordinary games (the product page says so).
 13. **R1**, a frame restarting from the reader's world. L4 applies it to the cells frame; the
     orders, events and state frames keep restarting empty, at 148 KB an hour on the light hour
