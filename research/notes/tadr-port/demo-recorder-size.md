@@ -986,7 +986,7 @@ format-11 conversions with the constructed grid rule, 0 snapshots differing (360
 snapshot at 1,800 (701 samples, 8 clicks, 11 selections, 1 snapshot), alone and three at once.
 `codectest --snap-every` takes digits alone.
 
-> **PLACEHOLDER — the gate.** The landing's `tareplay.py landing` run: to be filled in.
+**The gate** (`tareplay.py landing`, MEASURED 2026-10-10 on the coverage builds at the landing's head, the reference setup, 42 fixtures, 12 at once): 1,901 checks pass, none fails, the 21 changed functions all reached; `codec-decline` and `stock-codec-decline` each decline 17 of 87 stream blocks, every other fixture none, and none mismatches. W3: the U lane's return to now at 1,501 read 1,500 iterations from the first in 4,040 ms of the game thread's CPU on `battle` and 3,900 on `stock-limits`, under the bound of 5,000; the forks from the snapshot at 3,601 in 1,450 and 1,250; `battle`'s takeover from the snapshot at 1,801 in 650. Two earlier runs at the bound of 4,000 failed W3 by 110–120 ms, which is what the owner's raise answers.
 
 **What L4 leaves open.**
 
