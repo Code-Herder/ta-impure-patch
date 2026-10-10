@@ -531,7 +531,7 @@ def run(output, read_file=None, skirmish_file=None, native_file=None,
             with contextlib.redirect_stdout(out):
                 code = tarec.cmd_pov(str(path), True)
             (output / "perspective-pov.txt").write_text(out.getvalue())
-            if code or "334 samples, 4 clicks, 5 selections; 1 snapshots" not in out.getvalue():
+            if code or "701 samples, 8 clicks, 11 selections; 1 snapshots" not in out.getvalue():
                 raise RuntimeError("perspective: tarec pov --check disagrees with the C writer and "
                                    "reader")
             print("perspective: real writer, C forward reading and seek, and tarec pov --check PASS",

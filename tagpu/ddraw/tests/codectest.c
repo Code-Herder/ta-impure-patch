@@ -2429,8 +2429,19 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
 int main(int argc, char** argv)
 {
     if (argc == 4 && !strcmp(argv[1], "transcode")) return cmd_transcode(argv[2], argv[3], -1);
-    if (argc == 6 && !strcmp(argv[1], "transcode") && !strcmp(argv[4], "--snap-every"))
-        return cmd_transcode(argv[2], argv[3], atoi(argv[5]));
+    if (argc == 6 && !strcmp(argv[1], "transcode") && !strcmp(argv[4], "--snap-every")) {
+        /* digits alone: a lenient parse would read a typo as 0, which keeps no snapshot at all */
+        const char* p = argv[5];
+        unsigned n = 0;
+        do {
+            if (*p < '0' || *p > '9' || (n = n * 10 + (unsigned)(*p - '0')) > 1000000) {
+                fprintf(stderr, "codectest: --snap-every takes a count from 0 to 1000000, in "
+                        "digits alone, not %s\n", argv[5]);
+                return 2;
+            }
+        } while (*++p);
+        return cmd_transcode(argv[2], argv[3], (int)n);
+    }
     if (argc == 4 && !strcmp(argv[1], "decode")) return cmd_decode(argv[2], argv[3]);
     if (argc == 2 && !strcmp(argv[1], "outcomes")) return cmd_outcomes();
     if (argc >= 5 && !strcmp(argv[1], "fuzz")) {

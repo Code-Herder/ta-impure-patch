@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
-segments): the C parser against the coverage build's map, the features' regions, the comment
-filter, `landing --check`, a recording's segments and chains and what format 11's block walk
-refuses, read from files built from the format alone, the fixtures' takeover entries and the W
-lane's edited header copies. No game runs. The files are read through reccodec.py, which needs
-numpy, numba and zstandard: devpy.ensure() re-executes this under the shared venv when they are
-missing.
+segments and world): the C parser against the coverage build's map, the features' regions, the
+comment filter, `landing --check`, a recording's segments and chains, what format 11's block walk
+refuses and which cells are images, read from files built from the format alone, the fixtures'
+takeover entries and the W lane's edited header copies. No game runs. The files are read through
+reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
+shared venv when they are missing.
 
     python3 tools/replay/test_tareplay.py
 """
@@ -1424,6 +1424,44 @@ class Perspective(unittest.TestCase):
         parts[0] = self.head(fmt=7)
         with self.assertRaisesRegex(tarec.Unreadable, f"format 7, not {tarec.REC_FORMAT}"):
             self.run_pov(*parts)
+
+
+class CellsAfterEvents(unittest.TestCase):
+    """tarec's World takes an RK_CELLS as an image only before its iteration's first event, as
+    the DLL's reader does (tagpu_recreader.c, apply): after it, only the tick's feature call may
+    hold cells, as its input, and a cell outside that call is a malformed file."""
+
+    @staticmethod
+    def cells(x, fill):
+        return struct.pack("<HHHH", x, 0, 1, 0) + bytes([fill]) * tarec.REC_CELL_BYTES
+
+    def world(self):
+        w = tarec.World(4, [], dims=(2, 2, 1, 1))
+        w.apply(tarec.RK_TICK, struct.pack("<I", 1))
+        return w
+
+    def test_image_before_the_first_event(self):
+        w = self.world()
+        self.assertIsNone(w.apply(tarec.RK_CELLS, self.cells(1, 7)))
+        self.assertEqual(w.grid[tarec.REC_CELL_BYTES:2 * tarec.REC_CELL_BYTES],
+                         bytes([7]) * tarec.REC_CELL_BYTES)
+
+    def test_tick_input_inside_the_tick_call(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_FEATURE, bytes([tarec.FR_TICK, 0, 0, 0]) + bytes(4))
+        self.assertEqual(w.apply(tarec.RK_CELLS, self.cells(0, 9))[0], tarec.RK_CELLS)
+        w.apply(tarec.RK_EV_FEATURE_END, bytes([tarec.FR_TICK, 0, 0, 0]) + bytes(4))
+        self.assertEqual(w.grid, bytearray(4 * tarec.REC_CELL_BYTES))
+        with self.assertRaisesRegex(tarec.Unreadable, "after an event"):
+            w.apply(tarec.RK_CELLS, self.cells(0, 9))
+
+    def test_refused_after_an_event_until_the_next_tick(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_STATE, struct.pack("<IB3x", 1, 2))
+        with self.assertRaisesRegex(tarec.Unreadable, "after an event"):
+            w.apply(tarec.RK_CELLS, self.cells(0, 5))
+        w.apply(tarec.RK_TICK, struct.pack("<I", 2))
+        self.assertIsNone(w.apply(tarec.RK_CELLS, self.cells(0, 5)))
 
 
 class TakeoverFixtures(unittest.TestCase):
