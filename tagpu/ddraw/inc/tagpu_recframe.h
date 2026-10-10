@@ -10,7 +10,8 @@
 
    THE ORDERING every frame rests on (tagpu_reccodec.c, THREE INVARIANTS). A frame's state is a
    function of the records since the last restart, of the world the restart handed it
-   (RecFrameWorld: the same bytes in every walk) and of the codec's unit copy alone. The restart
+   (RecFrameWorld: the same bytes in every walk, by construction -- tagpu_reccodec.c,
+   reccodec_stream_block's INVARIANT) and of the codec's unit copy alone. The restart
    (RBF_FRAME_RESET) sets it: the cells frame restarts from the world's grid, and every other
    frame empty, in the writer's encoder, its check decoder and every reader alike; and the unit
    copy at a record is the same in every walk: the unit frame's deltas of the iteration, then its

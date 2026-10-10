@@ -54,13 +54,13 @@
      and grid in the encoder, the check decoder and every reader alike. Every reset hands the
      frames the reader's grid there (RecFrameWorld). The encoder keeps that grid itself through
      every block, coded or declined (the cells frame's world, plain_apply), and the writer
-     restarts both its states from it. INVARIANT: the grid at a reset is the same bytes in every walk. Each is the images
-     of the segment's records so far over zeros, by one rule (an RK_CELLS with no event before it
-     in its iteration), each record bounded by the grid; a seeking reader's comes from a snapshot
-     of the writer's copy, built by the same rule (tagpu_recwriter.c, feature_record), which
-     tarec.py check compares with the stream's (reccodec_stream_block says what is constructed
-     and what is measured). So a record frame's state is a function of that world, the records
-     since the reset and the unit copy, and a decline or a refusal needs no rollback: the codec
+     restarts both its states from it. INVARIANT: the grid at a reset is the same bytes in every
+     walk. Each is the images of the segment's records so far over zeros, by one rule (an RK_CELLS
+     with no event before it in its iteration), each record bounded by the grid; a seeking reader's
+     comes from a snapshot of the writer's copy, built by the same rule by construction
+     (reccodec_stream_block's INVARIANT says how), which tarec.py check compares with the stream's.
+     So a record frame's state is a function of that world, the records since the reset and the
+     unit copy, and a decline or a refusal needs no rollback: the codec
      turns invalid and the next block restarts. A block that continues a frame this decoder did
      not start is refused, never misread. A record frame never declines mid-block: it latches,
      and its enc_write declines the block after its iterations (tagpu_recframe.h).
@@ -2765,13 +2765,17 @@ int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, 
            the payload's end state as the units and the pool are. D takes these bytes by copy
            (construction). A sequential reader builds its own by the same rule (construction;
            codectest's world_same checks E's against it on every transcoded block, and verify
-           decodes against the records). A seeking reader's is a snapshot of the writer's copy,
-           whose grid takes the images outside the feature tick's bracket (tagpu_recwriter.c,
-           feature_record): the same set on every file a reader accepts, which is MEASURED, not
-           constructed -- tarec.py check compares each snapshot's world with the stream's, grid
-           included. No reader checks a decoded block against a checksum, so a divergence there
-           would misdecode silently after a seek, as for the units, and only tarec.py check and
-           the gate would see it. E's restart keeps its own grid (the world aliases it). */
+           decodes against the records). A seeking reader's is a snapshot of the writer's copy
+           over the segment's base, built by the same rule (construction): the copy takes an
+           RK_CELLS only where every reader takes it as an image, since the writer refuses cells
+           after an RCS_EVENTS record of their iteration outside the feature tick's call, and
+           RK_GRID anywhere but before the first iteration's events (tagpu_recwriter.c,
+           feature_record), and its base is the grid at the end of the segment's first
+           iteration, as the reader's is (tagpu_recwriter.c, iteration_done; tagpu_recreader.c,
+           tick_take); tarec.py check compares each snapshot's world with the stream's, grid
+           included. No reader checks a decoded block against a checksum, so a fault in one of
+           these rules would misdecode silently after a seek, as for the units. E's restart keeps
+           its own grid (the world aliases it). */
         reccodec_world(s->enc, &fw);
         reccodec_restart(s->enc, &s->p, reccodec_units(s->enc), reccodec_live(s->enc), pool, count, hw, &fw);
         reccodec_restart(s->chk, &s->p, reccodec_units(s->enc), reccodec_live(s->enc), pool, count, hw, &fw);
