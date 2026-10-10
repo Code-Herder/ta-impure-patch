@@ -2,14 +2,19 @@
 
 ## Status
 
-**L1, L2 and L3 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*
-and *L3: the record frames, measured*, below). Recording format 10 packs every block with zstd,
-carries the unit deltas in a unit frame predicted from the engine's own rules, the projectiles in a
-pool frame coded by identity, and the cells, orders, events and state in four record frames, and
+**L1 to L4 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
+*L3: the record frames, measured* and *L4: the measured hours, the snapshot interval and R1*,
+below). Recording format 11 packs every block with zstd, carries the unit deltas in a unit frame
+predicted from the engine's own rules, the projectiles in a pool frame coded by identity, and the
+cells, orders, events and state in four record frames, of which the cells frame restarts from the
+reader's grid at every reset point; it writes a snapshot every 1,800 ticks (60 s of game time), and
 its snapshots store only the wreck records that differ from a base: the battle below, recorded
 anew, takes 12.00 MiB where the measured one took 99.6 (not like for like: another game of the same
 scenario), and on the very games L1 recorded the battle's file goes from 29.09 MiB (L1) to 16.40
-(L2) to 11.88 (L3), Town & Country's from 18.97 to 11.51 to 8.04. L4 to L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
+(L2) to 11.88 (L3), Town & Country's from 18.97 to 11.51 to 8.04. **L4 measured two four-player
+hours, and both miss the 25 MB budget even with no snapshots at all** (24.4 and 51.5 MiB an hour
+from the stream alone): whether to go lossy (L5) or to look for more lossless savings is the owner's
+decision. L5 and L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -257,8 +262,8 @@ sum):
 
 Against the budgets: ten players at about 400 units meet 100 MB an hour, barely, and only with the
 engine-rule predictors; ten players with 1,500 units fighting miss it under every design measured;
-a four-player game's 25 MB is not established (it holds only with about 100 moving units on
-average). Snapshots become about 21 % of the lossless tail, so they are a target after all.
+a four-player game's 25 MB held only with about 100 moving units on average, and L4's measured
+hours miss it (*L4*, below). Snapshots become about 21 % of the lossless tail, so they are a target after all.
 
 ### What the lossy options still buy
 
@@ -290,17 +295,18 @@ Every one is a loosening and the owner's decision.
   (below) re-ran every codec on three other recordings: lossless everywhere, and aircraft are the
   one class that costs far more than the battle suggested.
 - **Seek in C**: decode work grows with the units that move, since a unit at rest is skipped, and
-  in format 10 with the cells the record frames decode. Format 10's seeks read in under one second
-  except the battle's first snapshot interval, 1.22–1.29 s, where every unit marches, and Town &
-  Country's to GameTime 900 and 1,800, 1,105 and 1,124 ms (*L3*, below): open, for L4's snapshot
-  interval.
+  with the cells the record frames decode. A seek reads from the last snapshot, so its worst case
+  is one snapshot interval of decode: with snapshots 1,800 ticks apart that is 261–265 ms on L4's
+  light hour, 538–550 ms on its heavy one, and about 1.7 s of decode on the big battle, a cost the
+  owner accepted for dense battles (*L4*, below).
 - **The writer and the ring**: L1's unit frame cost at most 95 ms for one block of 30 iterations on
   the writer thread, and the 16 MiB ring held at most 2.1 MiB (*L1*, below).
 - **A codec bug's reach**: every codec decodes its block before writing and falls back to the
   records on a mismatch, so a bug costs size, never data.
-- **Predictor resets**: the unit frame restarts at a segment's first stream block, at the first
+- **Predictor resets**: every frame restarts at a segment's first stream block, at the first
   after a snapshot and at the first after a block written as records, a rule of the format, so a
-  seek can start at any snapshot.
+  seek can start at any snapshot. The unit, pool and cells frames restart from the world a reader
+  holds there; the orders, events and state frames restart empty (*L4*, below).
 
 ## L0: the codecs on other recordings
 
@@ -524,9 +530,8 @@ to 900 reads from the segment's first iteration, there being no snapshot before 
   check.
 - **The seek.** Every seek read in under one second except those in the first snapshot interval of
   the two big battles, **1.15–1.23 s**, over the one-second target: decode work scales with the
-  units that move, and in the opening every unit marches. This is **open**: the snapshot interval
-  (`SNAPSHOT_TICKS`, 900) is tuned at L4, which measures the hour it is chosen for (the owner's
-  decision).
+  units that move, and in the opening every unit marches. L4 chose the snapshot interval on two
+  measured hours and the owner relaxed the target for dense battles (*L4*, below).
 - **Python.** Decoding a recording in Python takes about 3 s for the large battles, as long as
   the C decoder under Wine: Town & Country 3.1 s (C 3.4 s), the size battle 3.4 s (3.6 s), the air
   war 1.6 s, the naval 0.5 s (`codectest.py verify`, MEASURED 2026-10-08 with numba's cache warm;
@@ -541,7 +546,8 @@ to 900 reads from the segment's first iteration, there being no snapshot before 
 
 **What L1 leaves open.**
 
-- **The seek in a large battle's first interval** (above), for L4.
+- **The seek in a large battle's first interval** (above): decided at L4, which accepts about 2 s
+  there (*L4*, below).
 - **Aircraft in the replay gate**: the fixtures fly aircraft only in `carry-links` (transports) and
   `battle` (a dozen AI-built ones); whether they reach the codec's air functions is the landing
   gate's answer. If the gate names them UNCOVERED, the owner's choice is a short `air-war` fixture
@@ -639,7 +645,7 @@ offline one.
   to 2,700 994 ms against 725 — that game's window is busier (its blocks decode in 795 ms there
   against 650 for L1's game). Every seek reads in under one second except in the first interval
   of the two large battles, 1.22–1.26 s, and Town & Country's seek to 1,800, 1.01 s: the seek in a
-  large battle stays open for L4 (*What L1 leaves open*).
+  large battle is L4's (*What L1 leaves open*).
 - **Memory.** The pool frame adds 613 bytes a projectile record and about 1.4 MB a codec (the
   last birth of each weapon, the shot events and their rows, the encoder's search tables): about
   3.3 MB a codec at 3,000 records; the writer holds two codecs, a reader one.
@@ -684,8 +690,8 @@ records coded against a **wreck base**:
 
 Every record frame restarts **empty** at every reset point, and its state is a function of the
 records since then and the unit copy alone; a frame never declines in mid-block, it latches and
-its section's write declines the block. The `RecSecHead` is 40 bytes. Both readers take format 10
-alone (decision 6); format 9 was never published. The bytes and the refusals are the skirmish
+its section's write declines the block. The `RecSecHead` is 40 bytes. L3's readers took format 10
+alone (decision 6), as L4's take format 11 alone; format 9 was never published. The bytes and the refusals are the skirmish
 slice's [*The file*](demo-recorder-skirmish-slice.md#the-file); the engine facts are the engine
 map's
 [*The demo recorder's record frames*](../exe-reverse-engineering.md#the-demo-recorders-record-frames-the-engine-facts-they-predict-from-disassembled-measured-2026-10-10).
@@ -792,15 +798,14 @@ agreeing. A review at `high` on the landing's diff found nothing of MEDIUM or ab
 
 **What L3 leaves open.**
 
-- **The seek over one second**: the battle's first interval, and Town & Country's first two (above),
-  for L4's snapshot interval.
+- **The seek over one second**: the battle's first interval, and Town & Country's first two
+  (above). L4 doubled the interval instead, with the owner's relaxed target (*L4*, below).
 - **The next landing's candidates**: the cells derived from the units' footprints (about −0.6 /
-  −1.0 / −1.4 MiB [INFERRED, research]) and R1, which wins back R2's +124 / +107 / +488 KiB of
-  cells.
+  −1.0 / −1.4 MiB [INFERRED, research]) stay open; R1 for the cells frame landed in L4.
 - **Memory per codec**: the record frames add about 12–13 MB a codec on the battle's 642 × 648
-  grid, most of it the cells' copy (13.125 bytes a cell, 5.5 MB) and the orders arena (up to
-  5.8 MB), and about 63–65 MB at `RECC_GRID_MAX` (4,194,304 cells, 55 MB of it the cells' copy), by
-  the files' own counts; the writer holds two codecs, a reader one. A grid past the bound turns the
+  grid, most of it the cells' copy (13 bytes a cell since L4 dropped the known bits, 5.4 MB) and
+  the orders arena (up to 5.8 MB), and about 62.5–64.5 MB at `RECC_GRID_MAX` (4,194,304 cells, 54.5 MB
+  of it the cells' copy), by the files' own counts; the writer holds two codecs, a reader one. A grid past the bound turns the
   codec off (records blocks), never the recording.
 - **The declines no fixture reaches**: the decline lever forces only the encoder's first branch; a
   decline in mid-block (`enc_iteration`) and the declines after the walk (`over`, a column's failed
@@ -810,6 +815,211 @@ agreeing. A review at `high` on the landing's diff found nothing of MEDIUM or ab
   the fuzz and decode-before-write; no multiplayer recording was transcoded.
 - L2's open items stand: the survivors' dword 23, births, the snapshots' projectiles, the
   stock-limits shot rows, and a crafted file's slow seek.
+
+## L4: the measured hours, the snapshot interval and R1
+
+**What L4 is** (landed). Recording format 11: format 10 with two changes, from the owner's
+decisions of 2026-10-10 (*Decisions* 12 and 13, below), taken with the measurements below in hand.
+
+- **A snapshot every 1,800 ticks** (`SNAPSHOT_TICKS`, `tagpu_recwriter.c`), 60 s of game time at
+  normal speed, where format 10 wrote one every 900. A seek reads at most one interval of stream
+  from the last snapshot, so the worst seek doubles; the owner accepted that for dense battles
+  (*The seek, against the target*, below).
+- **The cells frame restarts from the reader's grid (R1)** at every reset point (`RBF_FRAME_RESET`):
+  its copy G becomes the grid a reader holds at the end of the iteration before the reset block,
+  so a cell the reader already holds codes as no change instead of 13 new bytes. Its tick input T
+  still restarts empty, since no world holds one; the first iteration after a reset codes its
+  images instead of flagging them. The frame's known bits are gone (`CELLS_SCHEME` 2): a cell never
+  imaged is zero in every world, so a zero G gives the bytes "unknown, so zeros" gave. A reader
+  takes its own scheme alone, so a file of the scheme-1 cells frame is refused, never misread.
+- **The orders, events and state frames still restart empty (R2).** Together they cost 148 KB an
+  hour at 1,800 on the light hour below (orders 101, events 29, state 18). R1 for orders would need
+  the encoder to hold every unit's lists through every block, declines included, about as much
+  memory as a reader's world and with no small bound (up to `nslots` × 2 lists × `REC_ORDERS_CHUNK`,
+  512, nodes); the events'
+  state is history (IDs, dictionaries, script arguments, sprays) that no world holds; the state
+  frame's 18 KB did not justify a world of its own and a Python mirror.
+
+Readers take format 11 alone; format 10 is dropped under decision 6's rule (no published build
+wrote it), so the Replays browser shows a format-10 file as unreadable.
+
+**Where the restart's grid comes from, in each walk.** `reccodec_restart` takes a
+`RecFrameWorld` (`inc/tagpu_reccodec.h`): the grid's size and its `gw · gh` cells of
+`REC_CELL_BYTES`, row-major, owned by the caller. The writer's encoder keeps that world itself: the
+cells frame's G takes every image of every record the encoder is handed, after a latch too, and a
+declined iteration's images through the frame's `plain` op (`plain_apply`), and
+`reccodec_stream_block` hands it to both of the writer's restarts (the encoder's aliases its own
+G, the check decoder's copies it). The writer's own copy runs ahead of the block being encoded,
+which is why the encoder does not use it. The DLL reader passes its world's grid
+(`sections_body`), `codectest` a `World` that applies images by the reader's rule, and Python's
+`reccodec.Frame` its own cells state, onto which `apply_records` also lays a records block's
+images.
+
+**THE INVARIANT, constructed: the grid at a reset is the same bytes in every walk.** Each walk
+builds it from zero at the segment's start by one rule: an `RK_CELLS` is an image when no
+`RCS_EVENTS` record came before it in its iteration, and every record is bounded by the grid. A
+sequential reader and the check decoder follow by the same rule and by copy. A seeking reader's
+grid comes from a snapshot of the writer's copy over the segment's base, and the writer makes that
+copy take exactly the readers' images (`feature_record`, `tagpu_recwriter.c`): it keeps the
+readers' events flag (`rec_section_of`, cleared at `RK_TICK`), refuses cells after an event of
+their iteration unless the feature tick's call is open, and refuses `RK_GRID` anywhere but before
+the first iteration's events; and it takes the base where the reader does, at the end of the
+segment's first iteration (`iteration_done`; the reader's `tick_take`). A refusal abandons the file
+as a capture fault. Until this landing the copy took every `RK_CELLS` outside a bracket, events or
+not, and its base at `RK_GRID`; under R1 a cell the copy held and the readers did not would have
+misdecoded a seek silently. **BOUNDS**: a world is taken only when it is of the codec's own grid
+(`reccodec_restart`); any other, or none, leaves the codec invalid, so a reader refuses the block
+by name and the writer declines it. Cell bytes are reference bytes only, never an index.
+
+**The measured hours.** Two four-player games, each recorded for an hour of game time on the
+reference setup under Wine (MEASURED 2026-10-10), with a build writing a snapshot every 300 ticks,
+at turbo k = 1, an idle human seat in both:
+
+| | the light hour | the heavy hour |
+|---|---|---|
+| map, grid | Core Prime Industrial Area, 642 × 648 | Moon Quartet, 610 × 616, unit limit 500 |
+| seats | three stock AIs, difficulty 0 | four stock AIs, `SkirmishDifficulty` 2, 10,000 metal and energy each; each given 2 fusion plants, 4 moho mines, 4 metal makers, a kbot lab and a vehicle plant beside its commander at GameTime 1 |
+| line of sight | permanent (LosType 4) | true (LosType 6) |
+| iterations; wall time | 108,180; 108,000 ticks in 85 s | 108,090; 108,000 ticks in 120 s |
+| live units at most | 257 | 419 (about 220–400 from the twelfth minute on) |
+| shots / deaths / creates | 1,935 / 374 / 371 | 11,592 / 1,222 / 1,218 |
+| the file as recorded (300), MiB | 35.07 | 69.79 |
+| stream blocks sectioned / declined / mismatched | 3,607 / 0 / 0 | 3,604 / 0 / 0 |
+| the codec on the writer thread, ms in all / at most for one block; the ring's high water | 19,987 / 40; 2,004 KB | 42,935 / 34; 2,895 KB |
+| `tarec.py check`: snapshots, differing | 360, 0 | 360, 0 |
+
+The light hour is `scenarios/replay-four-ai.json` without its `los` line, so the launch kept the
+instance's own setting, which was permanent: it is a light game in every sense, units under 260
+and few shots. The heavy one disarms the level's objective with `+kill 9`, an empty seat (the
+objective's disarm `0x4904B0`, [the engine map](../exe-reverse-engineering.md)), so the idle human's
+defeat at GameTime 10,232 does not end the level; seat 4 was defeated at 35,734.
+
+**The interval, from one game each.** `codectest transcode --snap-every N` keeps every Nth
+snapshot of a recording and restarts the stream only after those, so one recording made at 300
+gives the file a writer at N × 300 would have written. Format 10 (R2), MiB an hour (the file scaled
+to 108,000 ticks), and the C decoder's longest run from a restart under Wine, the decode a seek
+faces at worst:
+
+| interval, ticks | 300 | 600 | 900 | 1,200 | **1,800** | 2,700 | 3,600 | 5,400 | 10,800 | none |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| light hour, MiB/h | 35.0 | 30.6 | 29.0 | 28.2 | **27.4** | 26.8 | 26.5 | 26.1 | 25.7 | 24.4 |
+| light hour, longest decode, ms | 47 | 95 | 136 | 178 | **263** | 378 | 495 | 728 | 1,412 | 8,846 |
+| heavy hour, MiB/h | 69.7 | 61.4 | 58.6 | 57.1 | **55.7** | 54.6 | 54.1 | 53.6 | 52.9 | 51.5 |
+| heavy hour, longest decode, ms | 85 | 168 | 247 | 327 | **474** | 691 | 952 | 1,387 | 2,573 | 20,304 |
+
+"None" decodes the whole file in one run, which is what a background pass over a file with no
+snapshots would cost. Fresh-process seeks in the game to the worst point of an interval (the
+replay's `sought … in X ms` line, two each): light 145–156 ms at 900, 261–265 at 1,800, 534–538 at
+3,600, 1,529–1,534 at 10,800, the rebuild 7 ms of it; heavy 279–289, 538–550, 1,055–1,057 and
+2,869–2,970 ms, the rebuild 14–18. The seek's read is within about 15 % of the decode above.
+
+**What a restart costs, by section.** Each section packed alone (`recsize.py`), KB:
+
+| | light, 900 against none | light, 1,800 against none | heavy, 900 against none |
+|---|---:|---:|---:|
+| cells | +1,628 | +1,404 | +1,408 |
+| orders | +204 | +101 | +427 |
+| events | +57 | +29 | +162 |
+| state | +32 | +18 | +47 |
+| snapshots, on disk | 2,548 | 1,268 | 4,935 |
+
+The cells' cost is not halved by the doubled interval (1,628 against 1,404 KB on the light hour): a
+reset forgets the whole grid, and each cell touched in the next interval then costs its 13 bytes
+once [INFERRED: more cells are touched in a longer interval]. Packed shares at 900: the unit frame
+48.2 % (light) and 51.1 % (heavy), cells 20.1 and 13.7 %, orders 15.8 and 18.0 %, events 6.5 %
+(light), state 3.7 % (light). Of the heavy hour's raw records, order lists are 64.7 % and unit
+deltas 22.0 %. On disk a minute grows with the game: on the light hour at 900 from 80 KB (minute 5)
+to 827 KB (minute 59); on the heavy one 0.2–0.3 MB in the first three minutes, about 0.7–1.36 MB
+from the thirteenth on.
+
+**R1, measured** (the same files converted to format 11 and transcoded natively with the landing's
+codec, every block sectioned, 0 declined, 0 mismatched). The stream at 1,800, bytes written:
+
+| | R2 (format 10's frames) | R1 | change | the file on disk, MiB |
+|---|---:|---:|---:|---:|
+| the light hour | 27,309,648 | 25,679,306 | −1,630,342 | 27.41 → 25.85 |
+| the battle (L3's) | 11,326,194 | 11,219,909 | −106,285 | 11.36 → 11.26 |
+| Town & Country | 8,671,586 | 8,591,702 | −79,884 | 8.48 → 8.40 |
+| naval | 1,202,158 | 1,197,058 | −5,100 | 1.21 → 1.20 |
+| the air war | 5,126,759 | 4,786,752 | −340,007 | 4.96 → 4.64 |
+
+On the light hour, restarts now cost 167,787 bytes in all against no snapshot at all (25,511,519
+bytes written): the orders, events and state frames' R2 and T's first iteration after each reset.
+With no snapshot the stream is within 91 bytes of format 10's. The heavy hour was not transcoded
+with R1: about −1.3 MiB an hour at 1,800 from its cells' restart cost, so about 54.4 MiB/h
+[INFERRED]. Decoding is 0–3 % slower (the landing's measurement): a reset now copies the grid whole,
+5.4 MB on a 642 × 648 grid, in a sequential reader and the check decoder at every reset and in a
+reader at every seek.
+
+**L3's battle at 900, 1,800 and none** (the format-10 file, transcoded): 12.00 / 11.36 / 10.69 MiB,
+the longest decode from a restart 1.12 / 1.73 / 3.72 s. Per tick it decodes 6 to 8 times slower
+than the light hour (whole file and worst interval), so the densest battles, not the hours, set the
+worst seek.
+
+**The seek, against the target.** The product page's target is under one second over any distance.
+At 1,800 the light hour's worst seek reads in 261–265 ms and the heavy hour's in 538–550 ms; the
+battle's worst interval decodes in about 1.7 s, and a dense battle's opening, where every unit
+marches, reads in about 2.4–2.6 s [INFERRED: linear from 1.22–1.29 s at 900, *L3*]. **The owner
+chose 1,800 with the 1.7 s in hand (2026-10-10), relaxing the one-second target for dense battles:
+well under a second in ordinary games, about 2–2.5 s at worst in the densest.** The product page
+says so in place of the target.
+
+**Against the budget.** The light hour misses 25 MB an hour even with no snapshots at all (24.4 MiB,
+25.6 MB) and comes to 25.85 MiB (27.1 MB) transcoded to format 11, snapshots at 1,800 and R1; the heavy hour misses it by more
+than twice at every interval. The unit frame and the orders are most of what is left (above). The
+question is now lossy (L5) or more lossless work on the unit frame and the orders, the owner's
+decision (decision 8).
+
+**Verified.** The core commit, format 11 with every frame still R2, wrote the light hour and the
+four L3 recordings byte-identical to format 10 in every stream block (27,309,648 at 1,800,
+25,511,428 with no snapshot). With R1: `codectest.py --native outcomes`, 259 outcomes, under Wine
+and natively (`-fsanitize=address,undefined`), among them a block that restarts as after a
+snapshot and re-images cells the reader holds (sym 0, no field bytes, flag 0), a check decoder
+restarted from a grid one byte off (MISMATCH, then sectioned again after the restart), a reader
+refusing a world of another grid or none, a block declining in mid-block and one restarting after
+it, and the encoder's grid compared with the reader's after every block; `fuzz` on the light hour
+at 1,800, 100,000 cases under the sanitizers; `codectest.py verify`, C and Python, 0 blocks
+differing on the light hour at 1,800 and the battle at 1,800; `tarec.py check` on the five
+format-11 conversions with the constructed grid rule, 0 snapshots differing (360, 8, 4, 4, 5);
+`test_tareplay.py`, 103 tests, among them `tarec`'s refusal of cells after an event;
+`recmp_file_test`, whose perspective file now runs to GameTime 2,200 so its seeks straddle the
+snapshot at 1,800 (701 samples, 8 clicks, 11 selections, 1 snapshot), alone and three at once.
+`codectest --snap-every` takes digits alone.
+
+> **PLACEHOLDER — the gate.** The landing's `tareplay.py landing` run: to be filled in.
+
+**What L4 leaves open.**
+
+- **The budget** (above): both hours miss 25 MB an hour. Lossy (L5) or more lossless work is the
+  owner's decision.
+- **The next candidate for the seek and the snapshots' bytes: dense seek points in memory, sparse
+  snapshots in the file** (the owner's next exploration). The file keeps a reset block every 900 to
+  1,800 ticks but writes a snapshot far less often, and the playback builds a world image at each
+  reset block in memory. The points must sit on reset blocks, since a block elsewhere decodes only
+  from the whole codec state; every reader already restarts at any flagged block, so no reader
+  change is needed for the resets. R1 is what makes dense resets cheap: about 2.5 KB a reset from
+  orders, events and state, where the cells' restart under R2 cost 14 KB a reset at 900 and 24 KB at
+  1,800 (the table above, divided by the resets). It would save the snapshots' bytes, about 1.1 MB an hour on the light hour
+  [INFERRED].
+- **A seek's decode rests on the grid's equality at the snapshot.** It is constructed now (above),
+  and `tarec.py check` compares every snapshot's world with the stream's, but no reader checks a
+  decoded block against a checksum: a fault in one of those rules would misdecode after a seek,
+  silently, as it would for the units.
+- **Fewer fixtures reach a snapshot.** At 1,800 the 14 fixtures that end at or before GameTime
+  1,800 record none, and those ending at 2,400 hold one at 1,801 that a seek uses only for a
+  target past 1,924 (the reader starts from the last snapshot more than 123 ticks before it). Only
+  the longer fixtures exercise a seek from a snapshot, and with it R1's restart from a
+  snapshot-built grid.
+- **The longest seek doubles in the gate too**: the battle's takeover seeks read up to about 1,923
+  iterations instead of 1,023. W3's bound, the battle's `cpu_ms` 4,000, is unchanged; if a run
+  exceeds it, raising it is a loosening and the owner's decision.
+- **The HUD markers' walker can hold the game thread for one rebuild**: its stop waits for one
+  fork crossing, which rebuilds from the last snapshot before the fork, now up to about 1,800
+  iterations ([the replay HUD](../hud-in-game.md)).
+- **The reset's grid copy**, 5.4 MB on a 642 × 648 grid and up to 54.5 MB at `RECC_GRID_MAX`, once
+  a reset in a sequential reader and in the check decoder, and once a seek.
+- L3's other open items stand: the cells derived from the units' footprints, the declines no
+  fixture reaches, the multiplayer-only kinds, and L2's.
 
 ## Multiplayer recordings
 
@@ -890,8 +1100,8 @@ the units: stage 6's traffic budget.
 | L1 | the sectioned container, decode-before-write with fallback, the unit frame with the aircraft and cell rules in integers: LANDED (*L1* above) | planned about −42 MiB on this battle; MEASURED 99.6 → 29.1 MiB on a new run of it, not like for like |
 | L2 | projectiles by identity (format 9's pool frame), the guided-velocity rule, the search capped at 4 candidates, shooter first: LANDED (*L2* above) | planned about −34 MiB against the pre-L1 file; MEASURED −12.7 MiB on L1's own battle file (29.09 → 16.40), because L1's zstd had already packed its projectiles from 36.5 to 15.0 MiB |
 | L3 | cells, orders, events and state as four record frames that restart empty at every reset point; the snapshot wreck base: LANDED (*L3* above) | planned about −7 MiB against the pre-L1 file; MEASURED −4.52 MiB on L2's own battle file (16.40 → 11.88), −3.47 on Town & Country's, −0.60 on naval's, −5.54 on the air war's |
-| L4 | the measured hour of a four-player game with AI and structures | the snapshot interval; whether lossy is needed |
-| L5 | lossy, only if L4 misses a budget | about −1 MiB per category |
+| L4 | two measured four-player hours, a light and a heavy one; format 11: snapshots every 1,800 ticks, the cells frame restarting from the reader's grid (R1): LANDED (*L4* above) | the snapshot interval, decided by the owner with the seek target relaxed for dense battles; MEASURED −1.63 MB an hour from R1 on the light hour at 1,800; both hours miss the 25 MB budget even with no snapshots |
+| L5 | lossy, only if the owner chooses it now that L4 missed the four-player budget | about −1 MiB per category |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
 ## Decisions
@@ -916,3 +1126,12 @@ Taken by the owner on 2026-10-07:
 11. **The measured hour runs accelerated**, within the ten-minute rule for a game run, with one
     ten-minute stretch at normal speed as a cross-check for anything paced in real time (cameras,
     cursors).
+
+Taken by the owner on 2026-10-10, with L4's measurements in hand:
+
+12. **Snapshots every 1,800 ticks**, with the big battle's 1.7 s worst decode known: the one-second
+    seek target is relaxed for dense battles, about 2–2.5 s at worst there and well under a second
+    in ordinary games (the product page says so).
+13. **R1**, a frame restarting from the reader's world. L4 applies it to the cells frame; the
+    orders, events and state frames keep restarting empty, at 148 KB an hour on the light hour
+    (*L4*).

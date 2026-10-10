@@ -3504,7 +3504,7 @@ fixture.
 
 ### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 10 carries a stream block's unit deltas as residuals against a prediction, the
+Recording format 11 carries a stream block's unit deltas as residuals against a prediction, the
 *unit frame* (`tagpu/ddraw/src/tagpu_reccodec.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the plan and its measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md)). Where a rule exists the prediction
@@ -3632,7 +3632,7 @@ non-zero pitch scale (none of the recordings had one); the steering term's hidde
 
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 10 carries a stream block's projectile records as the *pool frame*
+Recording format 11 carries a stream block's projectile records as the *pool frame*
 (`tagpu/ddraw/src/tagpu_reccodec.c`, THE POOL FRAME; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md#l2-the-pool-frame-measured)): the
@@ -3706,7 +3706,7 @@ largest residual column of the battle, 214 KiB of its 2.09 MiB.
 
 ### The demo recorder's record frames: the engine facts they predict from [DISASSEMBLED + MEASURED 2026-10-10]
 
-Recording format 10 makes the bodies of a stream block's cells, order lists, events and state
+Recording format 11 makes the bodies of a stream block's cells, order lists, events and state
 records from four *record frames* (`tagpu/ddraw/src/tagpu_recframe_cells.c`, `_orders.c`,
 `_events.c`, `_state.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
@@ -3739,7 +3739,7 @@ records back, so a wrong fact costs size, never data. Each address was re-read i
   `0x421F5F..0x421F7E` stores next `i + 1` at `+0x00` and prev `i − 1` at `+0x02` of every
   `0x30`-byte record, then −1 as record 0's prev (`0x421F8D`) and the last record's next
   (`0x421F94`, `+0x17FD0` in stock). So no record of a level is all zero, and a snapshot that
-  stored every record that is not zero stored the whole pool; format 10's snapshots store the
+  stored every record that is not zero stored the whole pool; the snapshots (since format 10) store the
   records that differ from the pool at the end of the segment's first iteration instead (MEASURED
   2026-10-10 on the size battle's recording rewritten as format 10: 5,524 records in its 8
   snapshots, against 65,536).

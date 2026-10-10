@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 10 and its readers take format 10 alone (*The file*, below).
+The recorder writes recording format 11 and its readers take format 11 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -140,7 +140,7 @@ One file per recording, `replays\<date> <time> <map>.imprec` in the game's folde
 stored sizes, a CRC-32 of the stored bytes and one of the header — and the payload: exactly one
 zstd frame of the raw bytes (level 3, the vendored zstd 1.5.7 in `src/zstd.c`) when that is
 smaller, else the bytes stored. The header, the end and the timelines blocks are always stored, so
-a header reads without zstd. `inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 10; a reader takes
+a header reads without zstd. `inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 11; a reader takes
 that format alone:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
@@ -153,19 +153,23 @@ that format alone:
 - **a minimap block** right after it, when the map has a picture;
 - **stream blocks** of whole iterations, each ending at the first iteration past 2 MiB or at 30
   iterations, and before every snapshot;
-- **a snapshot block** every 900 iterations (30 seconds at normal speed), built from the writer's
-  copy, with only the cells that differ from the segment's first iteration's grid (the base), only
-  the wreck records that differ from the pool at the end of that iteration (the wreck base, taken
-  beside the grid's by the writer's `iteration_done` and the reader's `tick_take`; a record now
-  zero included), and no table span that is all zero. The level load links every free wreck
+- **a snapshot block** every 1,800 iterations (`SNAPSHOT_TICKS`, 60 seconds at normal speed),
+  built from the writer's copy, with only the cells that differ from the grid at the end of the
+  segment's first iteration (the base), only the wreck records that differ from the pool then (the
+  wreck base; a record now zero included), both bases taken there by the writer's
+  `iteration_done` and the reader's `tick_take`, and no table span that is all zero. The copy's
+  grid takes exactly the cells every reader takes as images: the writer refuses cells after an
+  event of their iteration outside the feature tick's call, and `RK_GRID` anywhere but before the
+  first iteration's events (`feature_record`), so a seeking reader's grid is the stream's by
+  construction. The level load links every free wreck
   record to its neighbours, so none is zero and a snapshot that stored every record that is not
   zero stored the whole pool; against the base the battle's 8 snapshots carry 5,524 wreck records
   instead of 65,536. A snapshot that carries more records than differ reads the same; a dump
-  carries every record that is not zero, read over a zero pool. The interval is chosen at the
-  size plan's L4, against the one-second seek target (*Decided 2026-10-01* set the target):
-  format 10's seeks read in under a second except the battle's to GameTime 900 (1.22–1.29 s) and
-  Town & Country's to 900 and 1,800 (1,105 and 1,124 ms)
-  ([making recordings smaller](demo-recorder-size.md#l3-the-record-frames-measured));
+  carries every record that is not zero, read over a zero pool. The interval is the owner's
+  choice at the size plan's L4 (2026-10-10): a seek reads at most one interval from a snapshot,
+  261–265 ms at worst on a light four-player hour and 538–550 ms on a heavy one, and about 1.7 s
+  of decode in the big battle's opening, so the one-second target is relaxed for dense battles
+  ([making recordings smaller](demo-recorder-size.md#l4-the-measured-hours-the-snapshot-interval-and-r1));
 - **the end block**: why the recording ended, the last GameTime, the iterations, the corrections,
   the id rows found outside their tables, the most the ring held, the game's end flags, each
   seat's result, first commander death and elimination, and the stream blocks the codec
@@ -235,15 +239,15 @@ table — are the format's. The engine facts are the engine map's
 `_orders.c`, `_events.c` and `_state.c`, whose opening comments hold THE BYTES, THE STATE and THE
 BOUNDS) make the bodies of their kinds, in payload order, from a section of columns: a `u8` scheme,
 a varint column count (1..32), each column's varint length, then the columns, which fill the
-section. A reader takes only its own scheme (1 in every frame) and column count, and reads every
+section. A reader takes only its own scheme (2 in the cells frame, 1 in the others) and column count, and reads every
 column to its end, so a file of another build's coding is refused, never misread. The encoder walks
 each iteration's records in order after the unit and pool frames (`frames_walk`), giving each frame
 record to its frame and applying `RK_UNIT` and `RK_UNIT_GONE` to the unit copy as they come, so a
 frame sees at each record the same unit copy the decoder's walk has there (`RecFrameAt`). What each
 frame codes against:
 
-- **cells**, 9 columns: a copy of the grid with a known bit a cell, and the last iteration's tick
-  input. An `RK_CELLS` is an image when no event came earlier in its iteration, else tick input
+- **cells**, 9 columns: a copy of the grid, restarted at every reset point from the grid the
+  reader holds there, and the last iteration's tick input. An `RK_CELLS` is an image when no event came earlier in its iteration, else tick input
   (the reader's rule); an iteration's images that repeat the last tick input record for record are
   one flag byte (the recorder's `cells_tick` leaves its shadow as it was, so they usually do); other
   records are runs as position gaps, and each cell as the six fields that differ from the copy. The
@@ -263,8 +267,9 @@ frame codes against:
   as deltas of deltas; a wreck record as a mask of the u16s that changed; the feature heads as last
   time and the cursor by the feature tick's own rule.
 
-Each frame's state — and every latch — is cleared at every reset point and is a function of the
-records since the reset and the unit copy alone. A frame never declines mid-block: one record it
+Each frame's state — and every latch — is cleared at every reset point, except the cells frame's
+copy of the grid, which restarts from the reader's grid there; so a frame's state is a function of
+the records since the reset, of that grid and of the unit copy alone. A frame never declines mid-block: one record it
 cannot carry back byte for byte (a pad that is not zero, a length not its kind's, a value past its
 bounds) or a failed allocation latches inside it, and its section's write then declines the block
 after its iterations. The engine facts the codings rest on are the engine map's
@@ -274,8 +279,14 @@ each is a predictor's, so a wrong one costs size, never data.
 **Reset points.** The frames' state crosses block boundaries only inside a run of sectioned
 blocks. All restart — `RBF_FRAME_RESET` — at a segment's first stream block, at the first after a
 snapshot and at the first after a stream block of records: the unit and pool frames from the units
-and the projectile pool the reader holds at the end of the iteration before it, the four record
-frames empty. So a block inside a run decodes only after its predecessors since
+and the projectile pool the reader holds at the end of the iteration before it, the cells frame from
+the grid it holds there, and the orders, events and state frames empty. That grid is the same bytes
+in the writer's encoder, its check decoder and every reader by construction: each builds it from
+zero at the segment's start by one rule, an `RK_CELLS` being an image when no `RCS_EVENTS` record
+came before it in its iteration (the encoder keeps it through declined blocks too, `plain_apply`),
+and a seeking reader's comes from a snapshot built by the same rule (`tagpu_reccodec.c`,
+`reccodec_stream_block`'s INVARIANT). A restart from a grid of another size, or none, leaves the
+codec invalid: the reader refuses the block, the writer declines it. So a block inside a run decodes only after its predecessors since
 the run's reset: a reader starts at a snapshot or a segment's start (the seek already does), and a
 sectioned block met with no frame state is refused by name, never misread. The zstd frame itself is
 per block.
@@ -361,13 +372,13 @@ advanced image and the survivors' maps), plus a 128 KB air index, 1,425,528 byte
 frame's tables (the last birth of each of 4,096 weapon IDs, 4,096 shot events and their rows,
 and the encoder's search over at least 4,096 rows) and the scratch of the largest block it has
 met: before their scratch, 14,832,808 bytes, about 14.8 MB, at 5,001 slots and 3,000 records;
-30,912,808, about 30.9 MB, at 15,001. The record frames add, by their files' counts, 13.125 bytes
-a grid cell (the copy and its known bits: 5.5 MB on a 642 × 648 grid) and 0.6 MB of tick input
-(cells); 12 bytes a (slot, list) and an arena that doubles up to 65,536 nodes, 5.8 MB (orders);
+30,912,808, about 30.9 MB, at 15,001. The record frames add, by their files' counts, 13 bytes a
+grid cell (the copy: 5.4 MB on a 642 × 648 grid) and 0.6 MB of tick input (cells); 12 bytes a (slot, list) and an arena that doubles up to 65,536 nodes, 5.8 MB (orders);
 128 bytes a slot and 40 KB of dictionaries (events, 0.68 MB at 5,001 slots); and about 15 KB and
 49 bytes a wreck record (state, 0.4 MB at 8,192): up to about 13 MB a codec on that grid, and
-about 63 MB at `RECC_GRID_MAX`, 55 MB of it the grid's copy. The writer holds two codecs, a reader
-one, made at its first sectioned block.
+about 62.5 MB at `RECC_GRID_MAX`, 54.5 MB of it the grid's copy. The writer holds two codecs, a
+reader one, made at its first sectioned block. A reset copies the grid whole into the cells frame,
+once a reset in a sequential reader and in the check decoder and once a seek.
 
 ### The game never waits
 
@@ -1344,7 +1355,10 @@ The owner's answers to the plan's questions, as recommended unless said otherwis
 - **The capture's cost and the files' size grow past the budgets**, accepted, with the numbers
   (V7, V8) put to the owner before the landing.
 - **The snapshot interval stays 900 iterations**, and becomes 450 if the worst seek of the
-  seek-time series exceeds one second.
+  seek-time series exceeds one second. Replaced 2026-10-10 by the owner's choice of 1,800 at the
+  size plan's L4, which relaxes the one-second target for dense battles
+  ([making recordings smaller](demo-recorder-size.md#l4-the-measured-hours-the-snapshot-interval-and-r1),
+  *Decisions* 12).
 - **The explored map is recorded every iteration**, the first of three options: exact at every step
   and every seek, at the cost of one comparison of the map a capture.
 - **The temporary sight records are dropped** through the engine's expiry at a seek and at a recorded
@@ -2460,7 +2474,8 @@ remains to be built for S5's switches; live rewind operates on an existing recor
 
 - **Where recordings live and what they are called** (`replays\`, `.imprec`): chosen for S1, and
   shown by the browser in S5.
-- **The stream's quantization, the snapshot interval and the crash promise** are the product page's
-  open decisions 2, 3 and 5; the landings above measure what each needs.
+- **The stream's quantization and the crash promise** are the product page's open decisions 2 and
+  5; the landings above measure what each needs. The snapshot interval, its decision 3, is decided
+  (1,800 iterations, 2026-10-10).
 - **`s_ghost`, the build ghost's piece masks,** is declared `SIM_STATE`, so it is recorded, though
   it is derived from the unit types and their scripts and only the draw reads it.
