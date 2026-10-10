@@ -2497,7 +2497,7 @@ static int __cdecl wpn_model_reuse(unsigned int* regs)
    THE BUILD'S START. Three of the four unit senders copy into the packet's +1 the three dwords
    their build started the projectile from (0x49D7AD, 0x49DC71, 0x49DE32). 0x49D9C0 does not: it
    builds through 0x49C9C0 from the piece point 0x43E240 wrote to its esp+0x10 (0x49D9D9, passed
-   at 0x49DA76), and sends the shooter's centre, unit+0x6A (0x49DA9F..0x49DAB6). The receiver
+   at 0x49DA76), and sends the shooter's centre, unit+0x6A (0x49DA9F..0x49DAC7). The receiver
    0x49D270 builds from msg+1 (0x49D547..0x49D558), so a replay of the packet as sent starts the
    projectile 4-22 px off and its collision test 0x49B090 can hit another unit (DISASSEMBLED;
    MEASURED 2026-10-09 on battle-los, each shot's +1 against the spawn point +0x10 of its

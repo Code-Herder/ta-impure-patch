@@ -2370,7 +2370,7 @@ centre.** The builders copy the start they are given to the projectile's positio
 `0x43E240(unit, &out, slot, −1)` for the firing piece's point into its `esp+0x10` (`0x49D9D9`,
 the function's `esp` after its four saved registers), builds `0x49C9C0(slot, unit, &out, target,
 target unit)` from it (`0x49DA76..0x49DA7F`), and then fills the packet, at its `esp+0x1C`, with the
-unit's `+0x6A..+0x75` as the start (`0x49DA9F..0x49DAB6`) before sending it at `0x49DB4D` (`push
+unit's `+0x6A..+0x75` as the start (`0x49DA9F..0x49DAC7`: x and y by `0x49DAB6`, z read at `0x49DABD` and stored at `0x49DAC7`) before sending it at `0x49DB4D` (`push
 0x24`, `lea eax,[esp+0x20]`, `push eax`, `push edx`: at the call the packet is the call's
 `esp+0x28` and the piece point its `esp+0x1C`). The receiver `0x49D270` builds from `msg+1` and
 targets `msg+0xD` (`0x49D547..0x49D558`), so on every other peer, and on a replay that plays the

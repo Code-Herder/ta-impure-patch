@@ -7,7 +7,7 @@
    ENGINE FACTS the coding rests on, as sizes only -- a prediction that misses costs bytes, never
    a value:
    - A shot's start is the firing piece's point (tagpu_recfmt.h, RK_EV_SHOT), and 0x49D9C0 sends
-     the shooter's +0x6A..+0x75 in its place (0x49DA9F..0x49DAB6); the receiver 0x49D270 reads the
+     the shooter's +0x6A..+0x75 in its place (0x49DA9F..0x49DAC7); the receiver 0x49D270 reads the
      u16 shooter at +0x21 (0x49D329..0x49D34A) and the u16 target at +0x1F (0x49D388..0x49D3B7)
      (DISASSEMBLED, exe-reverse-engineering.md, what a shot's packet says of its start). MEASURED
      by the L3 research on format-9 recordings: the start lies within 63 world units of the
