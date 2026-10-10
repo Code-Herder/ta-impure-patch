@@ -4216,6 +4216,12 @@ is why a node rebuilt with `+0x06` = 0 waits for nothing but its next call.
 - `0x439E80` is the node's timer, `thiscall (node, ticks)`, `ret 4`: `+0x06 |= 1` and `+0x0A =
   GameTime + ticks` (`0x439E80..0x439E9A`). Four of the arming stores above follow a call of it
   (`0x4020FA`, `0x402121`, `0x4041F8`, `0x4142D5`).
+  It has 75 call sites, and GameTime is `[main+0x38A47]` (`0x439E8E`), so a re-armed list's image
+  changes every tick: MEASURED 2026-10-10 on format-9 recordings, 286,289 of the battle's 293,393
+  `RK_ORDERS` meet the last list of the same (slot, list) at the same length, and every one changed
+  its head node (node 2: 59 times, node 1: once); Town & Country 161,642 of 167,290, the air war
+  48,619 of 52,199; the longest list held 3 nodes. The recorder's orders frame codes a list
+  against that last image (`tagpu_recframe_orders.c`).
 
 **The sim step's head, `0x4954A0..0x4954ED`**, is read in
 [*the tick boundaries*](#the-demo-recorders-tick-boundaries-the-sim-step-0x495490-and-its-callers-disassembled-2026-10-01):
