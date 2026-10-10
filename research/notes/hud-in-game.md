@@ -313,8 +313,15 @@ The owner's decisions:
   while the recording it reads is still the level's. A stop waits for the reader's open, which
   reads every block header of the file, then for one iteration or one fork's crossing at most —
   a seek that scans the headers again and rebuilds from the last snapshot before the fork
-  (`SNAPSHOT_TICKS`, 900, apart as written) plus the child's first iteration. Bounded by the file
-  and the format, not a timeout. A marker outside the recording's span, or for a
+  (`SNAPSHOT_TICKS`, 1,800, apart as written) plus the child's first iteration. Bounded by the
+  file and the format, not a timeout. **Open (LOW): that bound is up to about 1,800 iterations of
+  decode**, and `walk_stop` waits for it with `INFINITE` on the game thread
+  (`tagpu_hudmarks.c`, the LIFETIME comment and `walk_stop`): at the teardown's entry or on a
+  timeline change, a stop that lands in a crossing's rebuild holds the game thread for one seek's
+  read, 261–265 ms on a light four-player hour and 538–550 ms on a heavy one at worst, about 2.5 s in
+  a dense battle [INFERRED from the seek measurements in
+  [making recordings smaller](tadr-port/demo-recorder-size.md#l4-the-measured-hours-the-snapshot-interval-and-r1)].
+  The worker looks at its stop flag only between iterations and crossings. A marker outside the recording's span, or for a
   seat the HUD does not show, is dropped.
 - **The teams are the mutual alliances**, joined transitively with union-find
   (`teams`, `tagpu_hudstate.c`): two seats are one team when each one's alliance row marks the

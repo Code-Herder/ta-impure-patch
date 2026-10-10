@@ -58,7 +58,7 @@ zstd 0.48x.
 
 ## Constraints every idea must respect
 
-- **Seek** starts from a snapshot (every 900 ticks today) and plays the stream forward; anything
+- **Seek** starts from a snapshot (every 900 ticks when this research ran, 1,800 since L4) and plays the stream forward; anything
   that needs the whole stream before a point breaks seek. **Takeover** needs the exact world at
   the takeover point: snapshots stay exact at full precision.
 - **The product contract** already decided the reduced stream's precision: moving units at 10 Hz,

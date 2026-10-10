@@ -241,7 +241,7 @@ other players; a multiplayer game is rewound from its finished recording.
 | Replay browser | One row per recording: map, players, date, duration, completion, compatibility and fork count, with storage usage, favorites and the cleanup controls above. Expanding a recording lists its timelines with fork point, player played, length, outcome and last played; a fork can be deleted by hand. Forks are named from their point and player, for example "Fork 1, from 25:00, as ARM player"; renaming is not in the first version. |
 | Timeline bar | The whole history of the current timeline, with fork points as markers and a selector to switch timelines. Switching is instant before the fork point, where history is shared, and an ordinary seek after it. |
 | Controls | Pause/resume and playback-speed controls. Exact speed choices remain open. |
-| Seeking | **Under one second in either direction, over any distance.** The current frame is held until the destination is complete; no intermediate frames are shown. Dragging the playhead shows the target time and the world rebuilds on release; continuous live scrubbing is not a target. |
+| Seeking | **Under one second in either direction, over any distance, in ordinary games; about 2.5 s at worst in the densest battles** (2.4–2.6 s [INFERRED]; the owner's relaxation of 2026-10-10, below). The current frame is held until the destination is complete; no intermediate frames are shown. Dragging the playhead shows the target time and the world rebuilds on release; continuous live scrubbing is not a target. |
 | Takeover | **Play from here** and **Back to now** complete **in under two seconds** with a brief "Resuming…" indicator, without a loading screen or a level reload. Play from here asks for confirmation only when it would delete a fork, and names that fork. |
 | Opening | Opening a replay loads the map and content as starting a game does; the normal loading screen is acceptable. |
 | Preparation | **None.** The recording carries its own snapshots, so opening needs no indexing pass. |
@@ -255,8 +255,14 @@ recording to its target, and reports both times. MEASURED 2026-10-01 in a battle
 in play: 27–33 ms to a target just after a snapshot and up to 605 ms to one just before the next,
 reading forward from the snapshot being most of it; every seek of S3b's verification took 5 to
 611 ms (the [slice note](demo-recorder-skirmish-slice.md#s3b-verified-and-measured)). If a rebuild at 1,500 units cannot meet
-them, the measurements come back for a decision; the targets are never relaxed silently. The
-snapshot interval is chosen by measurement to meet them.
+them, the measurements come back for a decision; the targets are never relaxed silently.
+**The seek target is relaxed for dense battles, by the owner's decision (2026-10-10).** A seek reads
+forward from the last snapshot, so its worst case is one snapshot interval, and the owner chose
+snapshots 1,800 ticks (60 s) apart for the file's size with the measurements in hand: on two
+four-player hours the worst seek read in 261–265 ms (a light game) and 538–550 ms (a heavy one),
+while the big battle's opening decodes in about 1.7 s, and the densest battles' worst seek is about
+2.4–2.6 s [INFERRED, linear from 1.22–1.29 s at 900]
+([making recordings smaller](demo-recorder-size.md#l4-the-measured-hours-the-snapshot-interval-and-r1)).
 
 ## Player perspectives and overlays
 
@@ -449,10 +455,14 @@ evidence, and keep remaining gaps visible.
    ([measured](demo-recorder-skirmish-slice.md#measured)). A ten-player battle of 2,010 units
    recorded exactly came to 99.6 MB for 4 min 21 s, about 560 MB an hour once 400 units remained;
    where those bytes go and the ideas for reducing them, ranked:
-   [making recordings smaller](demo-recorder-size.md); with its L1 to L3 landed (recording
-   format 10), the same battle recorded anew takes 12.0 MiB. Until the reduced stream lands, a
-   skirmish is recorded only on request.
-3. **Snapshot interval**, chosen by measurement against the seek target and the disk budget.
+   [making recordings smaller](demo-recorder-size.md); with its L1 to L3 landed, the same battle
+   recorded anew takes 12.0 MiB. L4 (recording format 11) measured two four-player hours: 24.4 and
+   51.5 MiB an hour with no snapshots at all, and the light one comes to 25.85 MiB in format 11, so the
+   four-player budget is missed and lossy or more lossless work is the owner's next decision. Until
+   the reduced stream lands, a skirmish is recorded only on request.
+3. **Snapshot interval: decided** (2026-10-10). A snapshot every 1,800 ticks, 60 s of game time,
+   chosen against the disk budget with the seek target relaxed for dense battles (*Playback and
+   seeking*).
 4. **Playback speed presets.**
 5. **Crash durability boundary**, and its wording for a process crash versus a power loss.
 6. **Contribution protocol**: the message envelope (versioned and length-bounded, but not
