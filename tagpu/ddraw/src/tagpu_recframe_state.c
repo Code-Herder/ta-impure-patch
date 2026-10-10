@@ -153,10 +153,11 @@ static void state_drop(void* f)
 }
 
 /* the wreck records' bytes need no clearing: a record is read only under its known bit */
-static void state_restart(void* f)
+static void state_restart(void* f, const RecFrameWorld* w)
 {
     State* x = (State*)f;
     unsigned i;
+    (void)w;
     memset(&x->k, 0, sizeof x->k);
     memset(x->wknown, 0, x->nwrecks);
     for (i = 0; i < STATE_COLS; i++) rb_clear(&x->col[i]);
@@ -653,7 +654,7 @@ static int state_dec_close(void* f, char* why, unsigned cap)
 
 const RecFrameOps recframe_state = {
     "state", RCS_STATE,
-    state_make, state_drop, state_restart,
+    state_make, state_drop, state_restart, NULL, NULL,
 #ifdef RECF_TEST_COPY
     state_copy,
 #endif

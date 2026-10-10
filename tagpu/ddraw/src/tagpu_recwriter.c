@@ -55,7 +55,8 @@
    RECC_TICKS_MAX iterations. */
 #define STREAM_BYTES   (2u << 20)
 #define STREAM_TICKS   30
-#define SNAPSHOT_TICKS 900           /* 30 s of game time: a placeholder S3 measures (the plan)     */
+#define SNAPSHOT_TICKS 1800          /* 60 s of game time; why, and what it costs a seek:
+                                        demo-recorder-size.md, L4                                   */
 #define SPAN_CHUNK     0x7000        /* the most bytes one of a snapshot's spans carries            */
 #define CORR_MAX       256           /* distinct (kind, table, offset) correction counters          */
 #define CORR_LOG       16            /* corrections logged, a recording                             */
@@ -824,7 +825,8 @@ static int all_zero(const unsigned char* p, unsigned n)
    starts, from the units alone, and a check that reused the encoder's state would share its
    arithmetic and so its faults.
    RESET POINTS: after a records block, and after every snapshot (snapshot), the next block
-   restarts the frame (RBF_FRAME_RESET), since a reader that starts at that snapshot holds no
+   restarts the frames (RBF_FRAME_RESET) from what such a reader holds there: the units, the pool
+   and the grid (tagpu_reccodec.c, RESET POINTS). A reader that starts at that snapshot holds no
    frame state from before it, and one that read the records block holds none either. */
 static void stream_block(Writer* w, unsigned first, unsigned last, const unsigned char* p, size_t n)
 {

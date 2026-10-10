@@ -252,12 +252,14 @@ static int sections_body(RecReader* r, const RecBlock* b, const unsigned char* s
     }
     /* ORDERING: the world's units and its pool are the copies at the end of the iteration before
        this block (tick_read loads a block only between iterations), which is what the writer's
-       encoder restarted from. The codec was made for the sizes of the first segment it met --
+       encoder restarted from, and its grid, which every image of the segment read so far built
+       (apply), or a snapshot over the base did. The codec was made for the sizes of the first segment it met --
        slots, projectile pool, grid and wreck pool -- which every segment's header equals
        (segs_scan, shape_differs); h->codec is this segment's own. */
     if (b->flags & RBF_FRAME_RESET) {
+        RecFrameWorld fw = { r->h.grid_w, r->h.grid_h, r->w.grid };
         reccodec_restart(r->codec, &h->codec, r->w.unit, r->w.live, r->w.proj, r->w.nproj,
-                         r->w.proj_hw);
+                         r->w.proj_hw, &fw);
     } else if (!reccodec_valid(r->codec)) {
         snprintf(why, cap, "a stream block that continues a frame this reading did not start, "
                  "at byte %llu", r->off);

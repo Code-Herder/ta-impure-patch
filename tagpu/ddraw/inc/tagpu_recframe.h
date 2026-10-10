@@ -9,7 +9,8 @@
    has no writable static; each frame's state belongs to one RecCodec, owned by one thread.
 
    THE ORDERING every frame rests on (tagpu_reccodec.c, THREE INVARIANTS). A frame's state is a
-   function of the records since the last restart and of the codec's unit copy alone. The restart
+   function of the records since the last restart, of the world the restart handed it
+   (RecFrameWorld: the same bytes in every walk) and of the codec's unit copy alone. The restart
    (RBF_FRAME_RESET) clears it -- every frame starts empty, in the writer's encoder, its check
    decoder and every reader alike -- and the unit copy at a record is the same in every walk: the
    unit frame's deltas of the iteration, then its RK_UNIT and RK_UNIT_GONE records up to that
@@ -263,8 +264,16 @@ typedef struct RecFrameOps {
     /* NULL: no memory. The params' sizes are the codec's for its life (reccodec_new). */
     void* (*make)(const RecCodecParams* p);
     void  (*drop)(void* f);
-    /* every piece of state cleared, its latches with it: reccodec_restart */
-    void  (*restart)(void* f);
+    /* every piece of state cleared or taken from `w`, its latches with it: reccodec_restart.
+       `w` is NULL when the restart leaves the codec invalid, else of the frame's grid size. */
+    void  (*restart)(void* f, const RecFrameWorld* w);
+    /* the encoder's: the frame's part of the world the codec keeps through every block; NULL for
+       a frame that keeps none */
+    void  (*world)(const void* f, RecFrameWorld* out);
+    /* the encoder's, for an iteration it declined: a record of the frame's kinds that no enc_rec
+       saw, onto the frame's part of the world; `events` as RecFrameAt's. NULL for a frame that
+       keeps none. */
+    void  (*plain)(void* f, unsigned kind, const unsigned char* b, unsigned len, int events);
 #ifdef RECF_TEST_COPY
     /* dst takes src's state, both made with the same params: 0, no memory. Only the codec's
        self-test copies a decoder (tests/codectest.c's fuzz), so only its builds define

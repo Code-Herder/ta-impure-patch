@@ -63,15 +63,28 @@ int  reccodec_params(RecCodecParams* p, unsigned nslots, unsigned nproj, unsigne
    must match. NULL: no memory, or a size past its bound. */
 RecCodec* reccodec_new(const RecCodecParams* p);
 void reccodec_free(RecCodec* c);
+/* The world the record frames restart from (reccodec_restart): the reader's grid at the end of
+   the iteration before a reset block -- gw * gh cells of REC_CELL_BYTES, row-major -- the same
+   bytes in the writer's encoder, its check decoder and every reader (tagpu_reccodec.c, RESET
+   POINTS). The caller owns it. */
+typedef struct RecFrameWorld {
+    unsigned gw, gh;
+    const unsigned char* grid;
+} RecFrameWorld;
+
 /* Every frame restarts: the unit and pool frames from one world -- units[nslots *
    REC_UNIT_DWORDS], live[nslots], and the projectile pool `pool` (nproj * REC_PROJ_IMAGE bytes,
    the records [hw, nproj) read as zero) with its count and extent, any of which may be the
    codec's own copy -- and the record frames empty, with its working buffers empty and their
    failures cleared. Params of other sizes than reccodec_new's, or a count past the extent or an
-   extent past the pool, leave it invalid. */
+   extent past the pool, leave it invalid; so does a world not of the codec's grid, or NULL. */
 void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* units,
                       const unsigned char* live, const unsigned char* pool, unsigned count,
-                      unsigned hw);
+                      unsigned hw, const RecFrameWorld* world);
+/* The encoder's world: the grid of every image it was handed since its segment began, coded or
+   declined. It is meaningful only for a codec that encoded every block of its segment (the
+   writer's E). It points into the codec and is valid until its next encode. */
+void reccodec_world(const RecCodec* c, RecFrameWorld* out);
 void reccodec_invalidate(RecCodec* c);
 int  reccodec_valid(const RecCodec* c);
 const uint32_t* reccodec_units(const RecCodec* c);   /* its copy, nslots * REC_UNIT_DWORDS    */

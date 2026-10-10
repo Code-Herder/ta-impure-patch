@@ -50,11 +50,14 @@
      iterations. Every piece of pool frame state that crosses a block is rebuilt from that pool or
      cleared, and every record frame's cleared (reccodec_restart); the only outside state a record
      frame reads is the unit copy, which the restart takes from the reader's units in the encoder,
-     the check decoder and every reader alike. So a record frame's state is a function of the
-     records since the reset, and a decline or a refusal needs no rollback: the codec turns
-     invalid and the next block restarts. A block that continues a frame this decoder did not
-     start is refused, never misread. A record frame never declines mid-block: it latches, and
-     its enc_write declines the block after its iterations (tagpu_recframe.h).
+     the check decoder and every reader alike. Every reset hands the frames the reader's grid
+     there (RecFrameWorld). The encoder keeps that grid itself through every block, coded or
+     declined (the cells frame's world, plain_apply), and the writer restarts both its states
+     from it. So a record frame's state is a function of the records since the reset, and a
+     decline or a refusal needs no rollback: the codec turns invalid and the next block restarts.
+     A block that continues a frame this decoder did not start is refused, never misread. A
+     record frame never declines mid-block: it latches, and its enc_write declines the block
+     after its iterations (tagpu_recframe.h).
    - BOUNDS. Every value read from a file is data. Each length, count, slot, varint, lane, role and
      flag is tested against its bound before it is used and a refusal names it; every operand of a
      rule is clamped before it is multiplied, so no int64 product can overflow; the constants a
@@ -583,6 +586,16 @@ const unsigned char* reccodec_pool(const RecCodec* c, unsigned* count, unsigned*
     return (const unsigned char*)c->pool;
 }
 
+void reccodec_world(const RecCodec* c, RecFrameWorld* out)
+{
+    unsigned i;
+    out->gw = c->gw;
+    out->gh = c->gh;
+    out->grid = NULL;
+    for (i = 0; i < RECC_FRAMES; i++)
+        if (FRAMES[i]->world) FRAMES[i]->world(c->frame[i], out);
+}
+
 static uint32_t lane_get(const unsigned char* img, const RecLaneRow* r)
 {
     const unsigned char* q = img + r->off;
@@ -633,9 +646,16 @@ static int pool_restart(RecCodec* c, const unsigned char* pool, unsigned count, 
 
 void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* units,
                       const unsigned char* live, const unsigned char* pool, unsigned count,
-                      unsigned hw)
+                      unsigned hw, const RecFrameWorld* world)
 {
     unsigned s, j, i;
+    /* BOUNDS: the world is the caller's, allocated at its header's grid size, and is taken only
+       when that is the grid this codec was made for, so a frame copies exactly gw * gh *
+       REC_CELL_BYTES bytes from it, the size both sides hold. Any other world leaves the codec
+       invalid: a reader refuses the block ("a sectioned block with no frame to continue") and the
+       writer declines it. A cell's bytes are data: a frame uses them as reference bytes, never as
+       an index. */
+    int wok = world && world->grid && world->gw == c->gw && world->gh == c->gh;
     c->valid = 0;
     /* A failed allocation latches its buffer's oom (rb_grow); some uses reset only its length, so
        a latch would decline every later block of a writer and refuse every later sectioned block
@@ -657,8 +677,8 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
     rb_clear(&c->ptail);
     rb_clear(&c->pb);
     for (i = 0; i < RCS_COUNT; i++) rb_clear(&c->sec[i]);
-    for (i = 0; i < RECC_FRAMES; i++) FRAMES[i]->restart(c->frame[i]);
-    if (!p->usable || p->nslots != c->nslots || p->nproj != c->nproj || p->gw != c->gw ||
+    for (i = 0; i < RECC_FRAMES; i++) FRAMES[i]->restart(c->frame[i], wok ? world : NULL);
+    if (!wok || !p->usable || p->nslots != c->nslots || p->nproj != c->nproj || p->gw != c->gw ||
         p->gh != c->gh || p->nwrecks != c->nwrecks || p->nlanes < 1 ||
         p->nlanes > RECC_LANES_MAX || p->nair > RECC_AIR_MAX)
         return;
@@ -1781,20 +1801,28 @@ static void plain_record(RecCodec* c, unsigned kind, const unsigned char* b, uns
 }
 
 /* On a decline, the copies take records [at, n): the units by plain_record, the projectile
-   records the pool frame did not carry by the reader's rules, so the copies always end as the
-   payload leaves the units and the pool. A delta the unit frame did carry is U already, which
-   applying it again leaves; an iteration the pool frame carried is committed already
-   (pool_encode). */
+   records the pool frame did not carry by the reader's rules, and each record frame's kinds onto
+   that frame's part of the world (RecFrameOps.plain), so the copies -- the units, the pool and
+   the frames' world -- always end as the payload leaves them. A delta the unit frame did carry is
+   U already, which applying it again leaves; an iteration the pool frame carried is committed
+   already (pool_encode). `at` is an iteration's start (reccodec_encode's two calls), so `events`
+   starts as the reader's rule has it there. */
 static void plain_apply(RecCodec* c, const unsigned char* pl, size_t at, size_t n)
 {
+    int events = 0;
     while (n - at >= 4) {
-        unsigned kind = get16(pl + at), len = get16(pl + at + 2);
+        unsigned kind = get16(pl + at), len = get16(pl + at + 2), sc;
         size_t rl = ((size_t)4 + len + 3) & ~(size_t)3;
         const unsigned char* b = pl + at + 4;
         if (rl > n - at) break;
+        if (kind == RK_TICK) events = 0;
         if (kind == RK_PROJ_HEAD || kind == RK_PROJ || kind == RK_PROJ_DELTA)
             pool_apply(c, c->pool, &c->pcount, &c->phw, kind, b, len);
         plain_record(c, kind, b, len);
+        sc = rec_section_of(kind);
+        if (c->fix[sc] >= 0 && FRAMES[c->fix[sc]]->plain)
+            FRAMES[c->fix[sc]]->plain(c->frame[c->fix[sc]], kind, b, len, events);
+        if (sc == RCS_EVENTS) events = 1;
         at += rl;
     }
 }
@@ -2713,8 +2741,8 @@ void reccodec_stream_end(RecStream* s)
    state a reader will have, gives back these records from the very bytes written. D is a second
    state, not the encoder's: the check has to start where a reader starts and must not share the
    encoder's arithmetic. A records block, and every snapshot (the writer's), make the next block
-   restart both frames of both from the encoder's copies of the units and the pool, which are
-   always the payload's end state. */
+   restart both frames of both from the encoder's copies of the units, the pool and the grid,
+   which are always the payload's end state. */
 int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, unsigned* flags,
                           const unsigned char** body, size_t* bn)
 {
@@ -2722,8 +2750,23 @@ int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, 
     if (reset) {
         unsigned count, hw;
         const unsigned char* pool = reccodec_pool(s->enc, &count, &hw);
-        reccodec_restart(s->enc, &s->p, reccodec_units(s->enc), reccodec_live(s->enc), pool, count, hw);
-        reccodec_restart(s->chk, &s->p, reccodec_units(s->enc), reccodec_live(s->enc), pool, count, hw);
+        RecFrameWorld fw;
+        /* INVARIANT (an ordering): the grid handed over is the same bytes as every reader's at
+           this reset. E's is the segment's images over zeros (E is made per segment, its grid
+           zeroed: cells_make), applied in record order by the reader's rule -- an RK_CELLS with
+           no RCS_EVENTS record before it in its iteration -- and each bounded as the reader's
+           cells_ok bounds it; it takes every block's, coded or declined (plain_apply), so it is
+           the payload's end state as the units and the pool are. D is handed these bytes
+           (construction). A sequential reader builds its own by the same rule (construction;
+           codectest's world_same checks E's against it on every transcoded block, and verify
+           decodes against the records). A seeking reader's is a snapshot of the writer's copy,
+           whose grid takes the images outside the feature tick's bracket (tagpu_recwriter.c,
+           feature_record): the same set on every file a reader accepts, which is MEASURED, not
+           constructed -- tarec.py check compares each snapshot's world with the stream's, grid
+           included. E's restart keeps its own grid (the world aliases it). */
+        reccodec_world(s->enc, &fw);
+        reccodec_restart(s->enc, &s->p, reccodec_units(s->enc), reccodec_live(s->enc), pool, count, hw, &fw);
+        reccodec_restart(s->chk, &s->p, reccodec_units(s->enc), reccodec_live(s->enc), pool, count, hw, &fw);
     }
     /* THE TEST LEVER (RecStream.decline): an invalid encoder takes reccodec_encode's first
        branch -- plain_apply of the whole block, the encoder left invalid, RECC_DECLINED -- and

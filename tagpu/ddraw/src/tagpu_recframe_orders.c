@@ -140,10 +140,11 @@ static void orders_drop(void* f)
     free(x);
 }
 
-static void orders_restart(void* f)
+static void orders_restart(void* f, const RecFrameWorld* w)
 {
     Orders* x = (Orders*)f;
     unsigned i;
+    (void)w;
     memset(x->kept, 0, (size_t)x->nslots * 2 * sizeof(Kept));
     x->held = 0;
     x->oom = x->unfit = 0;
@@ -349,7 +350,7 @@ static int orders_dec_close(void* f, char* why, unsigned cap)
 
 const RecFrameOps recframe_orders = {
     "orders", RCS_ORDERS,
-    orders_make, orders_drop, orders_restart,
+    orders_make, orders_drop, orders_restart, NULL, NULL,
 #ifdef RECF_TEST_COPY
     orders_copy,
 #endif

@@ -153,10 +153,11 @@ static void* events_make(const RecCodecParams* p)
     return x;
 }
 
-static void events_restart(void* f)
+static void events_restart(void* f, const RecFrameWorld* w)
 {
     Events* x = (Events*)f;
     unsigned i;
+    (void)w;
     x->last = 0;
     x->names.n = 0;
     x->texts.n = 0;
@@ -795,7 +796,7 @@ static int events_dec_close(void* f, char* why, unsigned cap)
 
 const RecFrameOps recframe_events = {
     "events", RCS_EVENTS,
-    events_make, events_drop, events_restart,
+    events_make, events_drop, events_restart, NULL, NULL,
 #ifdef RECF_TEST_COPY
     events_copy,
 #endif

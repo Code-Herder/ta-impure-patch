@@ -34,7 +34,7 @@
                                     state)
      codectest sin                  the sine table, for codectest.py's check against its formula
 
-   IN is a recording of format 10. Exit 0 when every check holds, 1 when one fails, 2 when a file
+   IN is a recording of format 11. Exit 0 when every check holds, 1 when one fails, 2 when a file
    cannot be read. The codec is included rather than linked: the fuzz copies a decoder's state,
    which the codec's interface keeps opaque. */
 #include <stdint.h>
@@ -93,7 +93,7 @@ static unsigned char* read_file(const char* path, size_t* n)
     return d;
 }
 
-/* ---- a recording of format 10, block by block ------------------------------------------------ */
+/* ---- a recording of format 11, block by block ------------------------------------------------ */
 
 typedef struct Reader {
     const unsigned char* d;
@@ -194,25 +194,33 @@ static int header_of(const unsigned char* p, size_t n, Header* h, char* why, uns
     return 1;
 }
 
-/* the reader's copies of the units and of the projectile pool */
+/* the reader's copies of the units, of the projectile pool and of the feature grid */
 typedef struct World {
     unsigned nslots, nproj, pcount, phw;
     uint32_t* unit;
     unsigned char* live;
     unsigned char* pool;          /* nproj images; zero from phw on */
+    unsigned gw, gh;
+    unsigned char* grid;          /* gw * gh cells; NULL for a grid past the codec's bounds,
+                                     which no sectioned block can follow */
 } World;
 
-static void world_reset(World* w, unsigned nslots, unsigned nproj)
+static void world_reset(World* w, unsigned nslots, unsigned nproj, unsigned gw, unsigned gh)
 {
     free(w->unit);
     free(w->live);
     free(w->pool);
+    free(w->grid);
     w->nslots = nslots;
     w->nproj = nproj;
     w->pcount = w->phw = 0;
     w->unit = (uint32_t*)calloc(nslots, IMG);
     w->live = (unsigned char*)calloc(nslots, 1);
     w->pool = (unsigned char*)calloc(nproj ? nproj : 1, PIMG);
+    w->gw = gw;
+    w->gh = gh;
+    w->grid = gw >= 1 && gh >= 1 && (uint64_t)gw * gh <= RECC_GRID_MAX
+                  ? (unsigned char*)calloc((size_t)gw * gh, REC_CELL_BYTES) : NULL;
 }
 
 static void world_free(World* w)
@@ -220,7 +228,33 @@ static void world_free(World* w)
     free(w->unit);
     free(w->live);
     free(w->pool);
+    free(w->grid);
     memset(w, 0, sizeof *w);
+}
+
+/* the world a reset hands the record frames (reccodec_restart) */
+static RecFrameWorld world_view(const World* w)
+{
+    RecFrameWorld v;
+    v.gw = w->gw;
+    v.gh = w->gh;
+    v.grid = w->grid;
+    return v;
+}
+
+/* an image onto the world's grid when it is within tagpu_recreader.c's cells_ok, which a reader
+   that refuses one would stop at: such a record is skipped here */
+static void world_cells(World* w, const unsigned char* b, unsigned len)
+{
+    unsigned x, z, n;
+    if (!w->grid || len < 8) return;
+    x = get16(b);
+    z = get16(b + 2);
+    n = get16(b + 4);
+    if (get16(b + 6) || n < 1 || n > REC_CELLS_MAX || len != 8 + n * REC_CELL_BYTES ||
+        x + n > w->gw || z >= w->gh)
+        return;
+    memcpy(w->grid + ((size_t)z * w->gw + x) * REC_CELL_BYTES, b + 8, (size_t)n * REC_CELL_BYTES);
 }
 
 /* a projectile record onto the world's pool by tagpu_recreader.c's rules, which a reader that
@@ -246,14 +280,20 @@ static void world_proj(World* w, unsigned kind, const unsigned char* b, unsigned
     }
 }
 
+/* the records onto the world; an RK_CELLS is an image, onto the grid, when no RCS_EVENTS record
+   came before it in its iteration (the reader's rule, tagpu_recreader.c `apply`) */
 static void world_apply(World* w, const unsigned char* pl, size_t n)
 {
     size_t at = 0;
+    int events = 0;
     while (n - at >= 4) {
         unsigned kind = get16(pl + at), len = get16(pl + at + 2), s, i, k, nb, ok;
         size_t rl = ((size_t)4 + len + 3) & ~(size_t)3;
         const unsigned char* b = pl + at + 4;
         if (rl > n - at) break;
+        if (kind == RK_TICK) events = 0;
+        if (kind == RK_CELLS && !events) world_cells(w, b, len);
+        if (rec_section_of(kind) == RCS_EVENTS) events = 1;
         if (kind == RK_PROJ_HEAD || kind == RK_PROJ || kind == RK_PROJ_DELTA) world_proj(w, kind, b, len);
         s = len >= 2 ? get16(b) : 0;
         if (s >= 1 && s < w->nslots) {
@@ -277,10 +317,15 @@ static void world_apply(World* w, const unsigned char* pl, size_t n)
     }
 }
 
-/* the live slots and the pool of the codec's copies against the world's */
+/* the live slots, the pool and the grid of the codec's copies against the world's */
 static int world_same(const World* w, const RecCodec* c)
 {
     unsigned s, i;
+    RecFrameWorld fw;
+    reccodec_world(c, &fw);
+    if (!fw.grid || !w->grid || fw.gw != w->gw || fw.gh != w->gh ||
+        memcmp(fw.grid, w->grid, (size_t)w->gw * w->gh * REC_CELL_BYTES))
+        return 0;
     for (s = 1; s < w->nslots; s++) {
         if (!w->live[s] != !c->live[s]) return 0;
         if (w->live[s] && memcmp(w->unit + (size_t)s * NDW, c->unit + (size_t)s * NDW, IMG)) return 0;
@@ -365,11 +410,11 @@ static int reading_next(Reading* g, double* ms)
                      g->dec->gh, g->dec->nwrecks);
             return -1;
         }
-        world_reset(&g->w, g->h.slots, g->h.nproj);
+        world_reset(&g->w, g->h.slots, g->h.nproj, g->h.gw, g->h.gh);
         /* made for the first segment with a codec, whose sizes every segment's equal (the DLL's
            reader's shape_differs) */
         if (!g->dec && g->p.usable) g->dec = reccodec_new(&g->p);
-        if ((g->p.usable && !g->dec) || !g->w.unit || !g->w.live || !g->w.pool) {
+        if ((g->p.usable && (!g->dec || !g->w.grid)) || !g->w.unit || !g->w.live || !g->w.pool) {
             snprintf(g->r.why, sizeof g->r.why, "no memory");
             return -1;
         }
@@ -384,8 +429,10 @@ static int reading_next(Reading* g, double* ms)
             snprintf(g->r.why, sizeof g->r.why, "a sectioned block in a segment without RT_CODEC and RT_PHYSICS");
             return -1;
         }
-        if (g->r.b.flags & RBF_FRAME_RESET)
-            reccodec_restart(g->dec, &g->p, g->w.unit, g->w.live, g->w.pool, g->w.pcount, g->w.phw);
+        if (g->r.b.flags & RBF_FRAME_RESET) {
+            RecFrameWorld v = world_view(&g->w);
+            reccodec_restart(g->dec, &g->p, g->w.unit, g->w.live, g->w.pool, g->w.pcount, g->w.phw, &v);
+        }
         if (!reccodec_decode(g->dec, g->r.bytes, g->r.b.raw, &g->pay, g->r.why, sizeof g->r.why)) return -1;
         *ms = ms_since(t0);
     } else {
@@ -450,7 +497,8 @@ static int cmd_transcode(const char* in, const char* outp, int every)
                    o == RECC_SECTIONS ? "sections" : o == RECC_DECLINED ? "DECLINED" : "MISMATCH", t);
             if (o != RECC_SECTIONS) bad = 1;
             if (!world_same(&g.w, st.enc)) {
-                printf("codectest: the encoder's copy is not the world's after block %u\n", g.r.ordinal);
+                printf("codectest: the encoder's copy is not the world's (units, pool or grid) after "
+                       "block %u\n", g.r.ordinal);
                 bad = 1;
             }
             nblk++;
@@ -821,7 +869,10 @@ static int reader_check(RecCodec* r, World* w, const RecCodecParams* p, unsigned
         bn = raw;
     }
     if (flags & RBF_SECTIONS) {
-        if (flags & RBF_FRAME_RESET) reccodec_restart(r, p, w->unit, w->live, w->pool, w->pcount, w->phw);
+        if (flags & RBF_FRAME_RESET) {
+            RecFrameWorld v = world_view(w);
+            reccodec_restart(r, p, w->unit, w->live, w->pool, w->pcount, w->phw, &v);
+        }
         ok = reccodec_decode(r, body, bn, &out, why, sizeof why) && out.n == n && !memcmp(out.p, pay, n);
         if (!ok) printf("  reader: %s\n", why);
     } else {
@@ -943,19 +994,25 @@ static int cells_flags(const RecBytes* sec, unsigned char* flag, unsigned* nflag
    each tick input changes three runs, in one of which a unit leaves slot A and comes back. Blocks
    0-2 SECTIONS and read back; then each malformed RK_CELLS DECLINED, followed by a restarting
    SECTIONS; then a tick input past CELLS_HELD, which T does not keep, so the next images are
-   coded: SECTIONS. */
+   coded: SECTIONS; then a block that declines in its fourth iteration, whose images from there on
+   reach the encoder's world through plain_apply alone, and a restarting SECTIONS. After every
+   block the encoder's grid is the reader's: through the latch of the malformed records and
+   through both declines. */
 static int outcomes_cells(const RecCodecParams* p)
 {
     static unsigned char grid[CF_W * CF_W * REC_CELL_BYTES];
     static const struct { unsigned x, z, n; } run[3] = { { 2, 3, 5 }, { 0, 9, 16 }, { 11, 14, 4 } };
-    static const char* what[13] = {
+    static uint32_t unit[NDW];
+    static const char* what[15] = {
         "SECTIONS, the first iteration's every cell", "SECTIONS, images flagged and coded",
         "SECTIONS, continuing", "DECLINED: an RK_CELLS whose pad is not zero",
         "SECTIONS, restarting after it", "DECLINED: an RK_CELLS past its row's end",
         "SECTIONS, restarting after it", "DECLINED: an RK_CELLS past the grid's rows",
         "SECTIONS, restarting after it", "DECLINED: an RK_CELLS of no cells",
         "SECTIONS, restarting after it", "DECLINED: an RK_CELLS one byte short",
-        "SECTIONS, restarting: images after a tick input past CELLS_HELD" };
+        "SECTIONS, restarting: images after a tick input past CELLS_HELD",
+        "DECLINED in mid-block: a delta naming an unchanged dword",
+        "SECTIONS, restarting after it" };
     RecStream st;
     RecCodec* rd;
     World w;
@@ -971,12 +1028,24 @@ static int outcomes_cells(const RecCodecParams* p)
     memset(&y, 0, sizeof y);
     for (i = 0; i < sizeof grid; i++) grid[i] = (unsigned char)((seed = seed * 1103515245u + 12345u) >> 24);
     if (!reccodec_stream_begin(&st, p) || !(rd = reccodec_new(p))) return 0;
-    world_reset(&w, p->nslots, p->nproj);
-    for (block = 0; block < 13; block++) {
-        int fault = block >= 3 && block % 2 ? (int)(block - 1) / 2 : CF_NONE;
+    world_reset(&w, p->nslots, p->nproj, p->gw, p->gh);
+    unit[0] = 0x1001;
+    lane_add(unit, REC_LR_TYPE, 11, 1);
+    lane_add(unit, REC_LR_X, 0x100000u, 1);
+    lane_add(unit, REC_LR_Z, 0x200000u, 1);
+    lane_add(unit, REC_LR_LAYER, 1, 1);
+    lane_add(unit, REC_LR_FW, 2, 1);
+    lane_add(unit, REC_LR_FH, 2, 1);
+    for (block = 0; block < 15; block++) {
+        int fault = block >= 3 && block <= 11 && block % 2 ? (int)(block - 1) / 2 : CF_NONE;
         y.n = 0;
-        for (it = 0; it < (block == 12 ? 2u : 6u); it++, gt++) {
+        for (it = 0; it < (block == 12 ? 2u : fault ? 5u : 6u); it++, gt++) {
             rec_put(&y, RK_TICK, &gt, 4);
+            /* block 13: a unit created in its first iteration, and in its fourth a delta naming a
+               dword that does not change, which the unit frame cannot carry (cmd_outcomes' block
+               2): the block declines there, and its last three iterations go through plain_apply */
+            if (block == 13 && it == 0) rec_unit(&y, 1, unit);
+            if (block == 13 && it == 3) rec_delta(&y, 1, unit, unit, 7);
             if (block == 12) {
                 /* 1,025 runs of a row: 16,400 cells of tick input, then the same as images */
                 if (!it) cells_bracket(&y, 0);
@@ -987,9 +1056,16 @@ static int outcomes_cells(const RecCodecParams* p)
             if (block == 0 && !it) {
                 for (k = 0; k < CF_W; k++) cells_rec(&y, grid, 0, k, CF_W, CF_NONE);
             } else {
-                for (k = 0; k < 3; k++) cells_rec(&y, grid, run[k].x, run[k].z, run[k].n, CF_NONE);
+                /* a malformed record stands in its block's last iteration between the repeats of
+                   T's second and third records: the two before it are held back as T's when it
+                   latches the frame, the one after it comes to a latched frame, and no later
+                   image covers either, so the encoder's world holds them only through the latch */
+                for (k = 0; k < 3; k++) {
+                    if (fault && it == 4 && k == 2) cells_rec(&y, grid, 1, 12, 1, fault);
+                    cells_rec(&y, grid, run[k].x, run[k].z, run[k].n, CF_NONE);
+                }
                 if (it == 3) cells_rec(&y, grid, 7, 7, 2, CF_NONE);
-                if (it == 4) cells_rec(&y, grid, 1, 12, 1, fault);
+                if (it == 4 && !fault) cells_rec(&y, grid, 1, 12, 1, CF_NONE);
             }
             cells_bracket(&y, 0);
             for (k = 0; k < 3; k++) {
@@ -1008,10 +1084,11 @@ static int outcomes_cells(const RecCodecParams* p)
         }
         o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
         snprintf(line, sizeof line, "cells block %u: %s", block, what[block]);
-        ok &= expect(line, o, fault ? RECC_DECLINED : RECC_SECTIONS);
+        ok &= expect(line, o, fault || block == 13 ? RECC_DECLINED : RECC_SECTIONS);
         ok &= expect("  a reader decodes it back", reader_check(rd, &w, p, flags, body, bn,
                                                                   o == RECC_SECTIONS ? st.sec.n : y.n,
                                                                   y.p, y.n, st.dctx), 1);
+        ok &= expect("  the encoder's grid is the reader's", world_same(&w, st.enc), 1);
         if (o == RECC_SECTIONS && block == 1) {
             static const unsigned char want[6] = { 1, 1, 1, 0, 0, 1 };
             int got = cells_flags(&st.sec, flag, &nflag, &emptied);
@@ -1149,7 +1226,7 @@ static int outcomes_orders(const RecCodecParams* p)
     memset(&out, 0, sizeof out);
     if (!reccodec_stream_begin(&st, p) || !(rd = reccodec_new(p)) || !(fresh = reccodec_new(p)))
         return 0;
-    world_reset(&w, p->nslots, p->nproj);
+    world_reset(&w, p->nslots, p->nproj, p->gw, p->gh);
     for (n = 0; n < 10; n++) {
         RecSecHead h;
         int o;
@@ -1160,7 +1237,8 @@ static int outcomes_orders(const RecCodecParams* p)
         if (o == RECC_SECTIONS) memcpy(&h, st.sec.p, sizeof h);
         if (n == 1) {
             ok &= expect("  the re-sent lists take masks: under 256 bytes", h.len[RCS_ORDERS] < 256, 1);
-            reccodec_restart(fresh, p, w.unit, w.live, w.pool, w.pcount, w.phw);
+            RecFrameWorld v = world_view(&w);
+            reccodec_restart(fresh, p, w.unit, w.live, w.pool, w.pcount, w.phw, &v);
             ok &= expect("  a decoder that holds no kept lists refuses it",
                          reccodec_decode(fresh, st.sec.p, st.sec.n, &out, why, sizeof why) == 0 &&
                          strstr(why, "kept list") != NULL, 1);
@@ -1353,6 +1431,7 @@ static int outcomes_events(const RecCodecParams* p)
     RecStream st;
     RecCodec* rd;
     World w, pre;
+    RecFrameWorld pv;
     RecBytes y, first, keep, out;
     uint32_t gt = 100;
     unsigned block, flags, i, ok = 1;
@@ -1366,8 +1445,8 @@ static int outcomes_events(const RecCodecParams* p)
     memset(&keep, 0, sizeof keep);
     memset(&out, 0, sizeof out);
     if (!reccodec_stream_begin(&st, p) || !(rd = reccodec_new(p))) return 0;
-    world_reset(&w, p->nslots, p->nproj);
-    world_reset(&pre, p->nslots, p->nproj);
+    world_reset(&w, p->nslots, p->nproj, p->gw, p->gh);
+    world_reset(&pre, p->nslots, p->nproj, p->gw, p->gh);
     for (block = 0; block < 10; block++) {
         int o;
         ev_block(&y, units, &gt, variant[block]);
@@ -1376,6 +1455,7 @@ static int outcomes_events(const RecCodecParams* p)
         memcpy(pre.pool, w.pool, (size_t)(w.nproj ? w.nproj : 1) * PIMG);
         pre.pcount = w.pcount;
         pre.phw = w.phw;
+        memcpy(pre.grid, w.grid, (size_t)w.gw * w.gh * REC_CELL_BYTES);
         o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
         snprintf(line, sizeof line, "block %u: %s", block, what[block]);
         ok &= expect(line, o, want[block]);
@@ -1406,6 +1486,7 @@ static int outcomes_events(const RecCodecParams* p)
                                                                   y.p, y.n, st.dctx), 1);
     }
     /* the last block from its reset, each mutation refused by name */
+    pv = world_view(&pre);
     sec_bounds(keep.p, RCS_EVENTS, &a, &e);
     ok &= expect("events: the last block's columns read", frame_regions(keep.p, a, e, &tab, col) > COL_FT_SAME, 1);
     for (i = 0; i < sizeof mut / sizeof mut[0]; i++) {
@@ -1415,14 +1496,14 @@ static int outcomes_events(const RecCodecParams* p)
         rb_put(&y, keep.p, keep.n);
         c = y.p + col[mut[i].col] + mut[i].at;
         *c = (unsigned char)(mut[i].or_in ? *c | mut[i].val : mut[i].val);
-        reccodec_restart(rd, p, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw);
+        reccodec_restart(rd, p, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw, &pv);
         why[0] = 0;
         got = reccodec_decode(rd, y.p, y.n, &out, why, sizeof why);
         snprintf(line, sizeof line, "events: refused, %s", mut[i].refusal);
         ok &= expect(line, !got && strstr(why, mut[i].refusal) != NULL, 1);
         if (got || !strstr(why, mut[i].refusal)) printf("  decoder: %s\n", why);
     }
-    reccodec_restart(rd, p, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw);
+    reccodec_restart(rd, p, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw, &pv);
     ok &= expect("events: the unmutated block from its reset decodes",
                  reccodec_decode(rd, keep.p, keep.n, &out, why, sizeof why), 1);
     reccodec_stream_end(&st);
@@ -1599,7 +1680,7 @@ static int sc_run(const RecCodecParams* p, SCase* s)
     memset(&sec, 0, sizeof sec);
     memset(&a, 0, sizeof a);
     a.nslots = p->nslots;
-    f->restart(x);
+    f->restart(x, NULL);
     ok = recf_write(&sec, SC_SCHEME, s->c, SC_N) && f->dec_open(x, sec.p, sec.n, 1, why, sizeof why) &&
          f->dec_iter(x, &a, why, sizeof why);
     for (i = 0; ok && i < s->nk; i++)
@@ -1703,7 +1784,7 @@ static int outcomes_state(const RecCodecParams* p)
     memset(used, 0, sizeof used);
     sim.g[0] = sim.g[2] = sim.g[3] = 16807;
     if (!reccodec_stream_begin(&st, p) || !(rd = reccodec_new(p))) return 0;
-    world_reset(&w, p->nslots, p->nproj);
+    world_reset(&w, p->nslots, p->nproj, p->gw, p->gh);
     for (block = 0; block < 14; block++) {
         int fault = block >= 2 && block % 2 == 0 ? 1 + (int)(block - 2) / 2 : SF_NONE, o;
         char line[128];
@@ -1824,7 +1905,7 @@ static int cmd_outcomes(void)
     if (!reccodec_params(&p, 64, PJ_N, 16, 16, 64, codec, sizeof codec, phys, 8, air, sizeof air, NULL, 0) ||
         !reccodec_stream_begin(&st, &p) || !(rd = reccodec_new(&p)))
         return 2;
-    world_reset(&w, 64, PJ_N);
+    world_reset(&w, 64, PJ_N, 16, 16);
     q.first = 1;
     for (block = 0; block < 22; block++) {
         static const int want[22] = { RECC_SECTIONS, RECC_SECTIONS, RECC_DECLINED, RECC_SECTIONS,
@@ -1868,8 +1949,10 @@ static int cmd_outcomes(void)
             {
                 unsigned count, hw;
                 const unsigned char* pool = reccodec_pool(st.enc, &count, &hw);
-                reccodec_restart(st.enc, &st.p, reccodec_units(st.enc), reccodec_live(st.enc), pool, count, hw);
-                reccodec_restart(st.chk, &st.p, &other[0][0], live, pool, count, hw);
+                RecFrameWorld fw;
+                reccodec_world(st.enc, &fw);
+                reccodec_restart(st.enc, &st.p, reccodec_units(st.enc), reccodec_live(st.enc), pool, count, hw, &fw);
+                reccodec_restart(st.chk, &st.p, &other[0][0], live, pool, count, hw, &fw);
             }
             st.reset = 0;
         }
@@ -1877,12 +1960,14 @@ static int cmd_outcomes(void)
             /* every live record's x one unit off: each survivor's prediction differs */
             static unsigned char other[PJ_N * PIMG];
             unsigned count, hw, i;
+            RecFrameWorld fw;
+            reccodec_world(st.enc, &fw);
             memcpy(other, reccodec_pool(st.enc, &count, &hw), sizeof other);
             for (i = 0; i < count; i++) other[(size_t)i * PIMG + 4] ^= 1;
             ok &= expect("  the pool has a live record to differ in", count > 0, 1);
             reccodec_restart(st.enc, &st.p, reccodec_units(st.enc), reccodec_live(st.enc),
-                             reccodec_pool(st.enc, &count, &hw), count, hw);
-            reccodec_restart(st.chk, &st.p, reccodec_units(st.enc), reccodec_live(st.enc), other, count, hw);
+                             reccodec_pool(st.enc, &count, &hw), count, hw, &fw);
+            reccodec_restart(st.chk, &st.p, reccodec_units(st.enc), reccodec_live(st.enc), other, count, hw, &fw);
             st.reset = 0;
         }
         o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
@@ -2233,6 +2318,7 @@ static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecPa
                     const unsigned char* sec, size_t n, RecBytes* out)
 {
     char why[256];
+    RecFrameWorld v = world_view(w);
     codec_copy(d, from);
     if (c->type == 1) {
         RecCodecParams q;
@@ -2240,7 +2326,7 @@ static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecPa
                              c->has[1] ? c->ent[1] : NULL, c->nent[1], c->has[2] ? c->ent[2] : NULL,
                              c->nent[2], why, sizeof why) || !q.usable)
             return 0;
-        reccodec_restart(d, &q, w->unit, w->live, w->pool, w->pcount, w->phw);
+        reccodec_restart(d, &q, w->unit, w->live, w->pool, w->pcount, w->phw, &v);
         return reccodec_decode(d, sec, n, out, why, sizeof why);
     }
     if (c->flags & ~(unsigned)(RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET)) return 0;
@@ -2250,7 +2336,7 @@ static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecPa
         rb_put(out, c->body.p, c->body.n);
         return 1;
     }
-    if (c->flags & RBF_FRAME_RESET) reccodec_restart(d, p, w->unit, w->live, w->pool, w->pcount, w->phw);
+    if (c->flags & RBF_FRAME_RESET) reccodec_restart(d, p, w->unit, w->live, w->pool, w->pcount, w->phw, &v);
     return reccodec_decode(d, c->body.p, c->body.n, out, why, sizeof why);
 }
 

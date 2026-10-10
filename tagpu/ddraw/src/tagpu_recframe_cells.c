@@ -30,8 +30,11 @@
      sym       per coded cell, against its copy in G when known, else 13 zero bytes: bits 0..5 the
                fields that differ; 0x40, only slot A differs and it is now 0
      f0..f5    the differing fields' bytes, a column per field, in cell order
-   THE STATE, all of it cleared at every reset (tagpu_recframe.h):
-     G         the grid's copy, W * H cells, each with a known bit; an image writes its cells
+   THE STATE, all of it cleared at every reset (tagpu_recframe.h) but G's bytes:
+     G         the grid's copy, W * H cells, each with a known bit, which a reset clears; an image
+               writes its cells. In the encoder G is the codec's world (reccodec_world): it takes
+               every image of every record it is handed, after a latch too, and those of a
+               declined iteration through cells_plain, so it is the grid of the segment's images
      T, T'     the last iteration's tick input and this one's: each record's first cell, its cell
                count and its cells. T takes T' at an iteration's end, empty when T' passed
                CELLS_HELD cells; the rule reads the records alone, so every walk keeps the same T.
@@ -156,7 +159,8 @@ static void* cells_make(const RecCodecParams* p)
     x->w = p->gw;
     x->h = p->gh;
     x->wh = (size_t)p->gw * p->gh;
-    x->g = (unsigned char*)malloc(x->wh * CB);
+    /* zero: the world a segment starts from (tagpu_reccodec.c, reccodec_stream_block) */
+    x->g = (unsigned char*)calloc(x->wh, CB);
     x->known = (unsigned char*)calloc((x->wh + 7) / 8, 1);
     ok = x->g && x->known;
     for (i = 0; i < 2; i++) {
@@ -172,10 +176,12 @@ static void* cells_make(const RecCodecParams* p)
     return x;
 }
 
-static void cells_restart(void* f)
+/* G's bytes stay: in the encoder they are the codec's world, which a reset hands on */
+static void cells_restart(void* f, const RecFrameWorld* w)
 {
     Cells* x = (Cells*)f;
     unsigned i;
+    (void)w;
     memset(x->known, 0, (x->wh + 7) / 8);
     tick_empty(&x->t[0]);
     tick_empty(&x->t[1]);
@@ -186,6 +192,39 @@ static void cells_restart(void* f)
     x->e[0] = x->e[1] = 0;
     x->bad = 0;
     for (i = 0; i < CELLS_COLS; i++) rb_clear(&x->col[i]);
+}
+
+static void cells_world(const void* f, RecFrameWorld* out)
+{
+    out->grid = ((const Cells*)f)->g;
+}
+
+/* An RK_CELLS's run, bounded as the reader bounds an image (tagpu_recreader.c, cells_ok):
+   1 <= n <= REC_CELLS_MAX, a zero pad, its length 8 + 13 n, x + n <= W and z < H. 1 with its
+   first cell's index p and n; 0 for a record no reader applies, which then touches nothing, so
+   the world every walk builds is bounded by the grid. */
+static int image_at(const Cells* x, const unsigned char* b, unsigned len, uint32_t* p, unsigned* n)
+{
+    unsigned cx, cz;
+    if (len < 8) return 0;
+    cx = get16(b);
+    cz = get16(b + 2);
+    *n = get16(b + 4);
+    if (get16(b + 6) || *n < 1 || *n > REC_CELLS_MAX || len != 8 + *n * CB || cx + *n > x->w ||
+        cz >= x->h)
+        return 0;
+    *p = (uint32_t)(cz * x->w + cx);
+    return 1;
+}
+
+static void cells_plain(void* f, unsigned kind, const unsigned char* b, unsigned len, int events)
+{
+    Cells* x = (Cells*)f;
+    uint32_t p;
+    unsigned n;
+    (void)kind;
+    if (events || !image_at(x, b, len, &p, &n)) return;
+    grid_put(x, p, n, b + 8);
 }
 
 #ifdef RECF_TEST_COPY
@@ -269,6 +308,21 @@ static void enc_settle(Cells* x, int same)
     }
 }
 
+/* The images held back as T's, its first tnext records, into G uncoded: a latch ends the coding,
+   never the world. */
+static void world_settle(Cells* x)
+{
+    const Tick* t = &x->t[x->cur];
+    unsigned i;
+    size_t at = 0;
+    if (!x->pending) return;
+    x->pending = 0;
+    for (i = 0; i < x->tnext; i++) {
+        grid_put(x, t->p[i], t->n[i], t->cell + at * CB);
+        at += t->n[i];
+    }
+}
+
 static void cells_enc_iter(void* f, const RecFrameAt* a)
 {
     Cells* x = (Cells*)f;
@@ -282,24 +336,22 @@ static void cells_enc_rec(void* f, const RecFrameAt* a, unsigned kind, const uns
                           unsigned len)
 {
     Cells* x = (Cells*)f;
-    unsigned cx, cz, n;
+    unsigned n;
     uint32_t p;
     const unsigned char* cells = b + 8;
     (void)kind;
-    if (x->bad) return;
-    if (len < 8) {
+    /* The world does not depend on the latch: a record past the bounds is applied nowhere (the
+       writer refuses it before its copy, feature_record, and every reader refuses it), and every
+       image before or after it still reaches G, so a declined block leaves G as a reader's grid. */
+    if (!image_at(x, b, len, &p, &n)) {
+        world_settle(x);
         x->bad = 1;
         return;
     }
-    cx = get16(b);
-    cz = get16(b + 2);
-    n = get16(b + 4);
-    if (get16(b + 6) || n < 1 || n > REC_CELLS_MAX || len != 8 + n * CB || cx + n > x->w ||
-        cz >= x->h) {
-        x->bad = 1;
+    if (x->bad) {
+        if (!a->events) grid_put(x, p, n, cells);
         return;
     }
-    p = (uint32_t)(cz * x->w + cx);
     if (!a->events) {
         if (!x->imaged) {
             x->imaged = 1;
@@ -462,7 +514,7 @@ static int cells_dec_close(void* f, char* why, unsigned cap)
 
 const RecFrameOps recframe_cells = {
     "cells", RCS_CELLS,
-    cells_make, cells_drop, cells_restart,
+    cells_make, cells_drop, cells_restart, cells_world, cells_plain,
 #ifdef RECF_TEST_COPY
     cells_copy,
 #endif

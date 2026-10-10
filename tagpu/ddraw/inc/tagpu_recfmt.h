@@ -37,12 +37,12 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 10: every packed block is one zstd frame, and a stream block may be a sectioned container whose
-   unit frame carries the unit deltas, whose pool frame carries the projectile pool coded by
-   identity, and whose four record frames -- the cells, the orders, the events and the state --
-   carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). A reader takes this format
-   alone. */
-#define REC_FORMAT        10
+/* 11: format 10's bytes, written by a build whose snapshots are 1,800 ticks apart. A reader
+   takes this format alone. The bytes: every packed block is one zstd frame, and a stream block
+   may be a sectioned container whose unit frame carries the unit deltas, whose pool frame carries
+   the projectile pool coded by identity, and whose four record frames -- the cells, the orders,
+   the events and the state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). */
+#define REC_FORMAT        11
 
 static __inline int rec_format_supported(unsigned format)
 {
