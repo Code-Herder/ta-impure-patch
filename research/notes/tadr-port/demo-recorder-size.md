@@ -932,6 +932,21 @@ deltas 22.0 %. On disk a minute grows with the game: on the light hour at 900 fr
 to 827 KB (minute 59); on the heavy one 0.2–0.3 MB in the first three minutes, about 0.7–1.36 MB
 from the thirteenth on.
 
+**The unit frame's unnamed columns are the resource ledger.** Of the heavy hour's unit deltas at
+900, the dwords changed most often are the turn `+0x64` (6.83 million changes), the mover `+0x140`
+(6.72 million), then `+0xC0` and `+0xD8` (6.19 and 6.16 million, 21 bits at the median, 25 at the
+90th percentile), with `+0xC4` and `+0xDC` (3.15 and 3.13 million, the same widths) further down.
+These four are the unit's energy and metal **requested** and **granted** since its owner's last
+economy pass, float accumulators that each build, repair or stockpile step and each weapon shot
+that costs a resource adds to, and that the 30-tick pass zeroes (the engine map's
+[ledger](../exe-reverse-engineering.md#the-nano-spray-two-emitters-fifteen-order-handlers-disassembled-2026-09-29), *The ledger* `unit+0xBC`: every writer and the settle,
+DISASSEMBLED 2026-10-10). Their packed cost alone was not measured: the size tool ranks the unit
+frame's dwords by raw change only. What the engine rules suggest for a codec [INFERRED, not
+measured]: the granted is bit for bit the requested from a pass on until the first refused request
+or the first payment made at once (a weapon shot, a cloak's cost), since both grow by the same
+float additions from the same 0; a unit's step usually asks the same amount as on its previous
+tick; and the reset to 0 falls on the owner's pass, which the player record times.
+
 **R1, measured** (the same files converted to format 11 and transcoded natively with the landing's
 codec, every block sectioned, 0 declined, 0 mismatched). The stream at 1,800, bytes written:
 

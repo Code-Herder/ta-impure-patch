@@ -67,6 +67,10 @@ UNIT_FIELDS = {     # unit record offsets (the U_ names of tagpu_replay.c and re
     0x78: "footprint z", 0x7A: "sight xz", 0x7E: "footprint w", 0x80: "footprint h",
     0x82: "sort bucket", 0x86: "carrier", 0x8A: "cargo", 0x8E: "next", 0x92: "type",
     0x96: "owner", 0x9A: "cob", 0x9E: "model", 0xA6: "type index", 0xAC: "group",
+    0xBC: "energy produced", 0xC0: "energy requested", 0xC4: "energy granted", 0xC8: "energy debt",
+    0xCC: "energy last produced", 0xD0: "energy last requested", 0xD4: "metal produced",
+    0xD8: "metal requested", 0xDC: "metal granted", 0xE0: "metal debt",
+    0xE4: "metal last produced", 0xE8: "metal last requested",
     0xF0: "attacker", 0xF8: "sight h", 0xF9: "piece", 0xFF: "owner byte", 0x104: "build fraction",
     0x108: "hp", 0x10A: "water", 0x10E: "state byte", 0x10F: "yard", 0x110: "state bits",
 }

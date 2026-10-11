@@ -1204,12 +1204,58 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   (`0x489960..0x48999E`). ReclaimUnit's progress is a kind-5 hit `0x489BB0` once `order+0x3A`
   reaches 15 (it grows by 2 a call), and it does not gate the spray.
 - **The ledger** `unit+0xBC` is 0x34 bytes: an energy group at `+0` and a metal group at `+0x18`,
-  each {produced, requested, granted, unpaid debt, last produced, last requested} [names
-  INFERRED], and the owner record at `+0x30` (`0x401070`). `0x4011C0(e, m)` (thiscall on the
-  ledger, `ret 8`) always adds the request to `+0x04`/`+0x1C`, returns 0 while either debt
-  `+0x0C`/`+0x24` is above 0.0, and otherwise adds it to the granted `+0x08`/`+0x20` and returns 1;
-  it never reads stored resources. The economy pass settles the debts (`0x401877..0x401B99`), for
-  type-1/2 records only, so a stalled owner's builders fail every request until a later pass pays.
+  each six floats {produced, requested, granted, debt, last produced, last requested}, and the
+  owner's slot in the player array at `+0x30` (`0x401070(owner index)`, which zeroes the 0x34
+  bytes and sets `+0x30`; called by the unit's creation `0x485D0A` and for the player's own
+  ledger, the `+0xEC` record, at `0x4647EA`) [DISASSEMBLED 2026-10-10]. In the unit record:
+
+  | unit | ledger | what it holds |
+  |---|---|---|
+  | `+0xBC` / `+0xD4` | `+0x00` / `+0x18` | energy / metal produced since the last economy pass |
+  | `+0xC0` / `+0xD8` | `+0x04` / `+0x1C` | energy / metal requested since the last pass, granted or not |
+  | `+0xC4` / `+0xDC` | `+0x08` / `+0x20` | energy / metal granted since the last pass, paid at the next |
+  | `+0xC8` / `+0xE0` | `+0x0C` / `+0x24` | energy / metal debt: granted at an earlier pass and not paid |
+  | `+0xCC` / `+0xE4` | `+0x10` / `+0x28` | energy / metal produced in the last pass's period |
+  | `+0xD0` / `+0xE8` | `+0x14` / `+0x2C` | energy / metal requested in the last pass's period |
+
+  **The writers.** `0x4011C0(e, m)` (thiscall on the ledger, `ret 8`) always adds the request to
+  `+0x04`/`+0x1C`, returns 0 while either debt `+0x0C`/`+0x24` is above 0.0, and otherwise adds it
+  to the granted `+0x08`/`+0x20` and returns 1; it never reads stored resources. Its callers are
+  the build step `0x41BA60` (`0x41BC60`) and BuildWeapon `0x402B70`, the stockpile
+  (`0x402C6B`). `0x401180(e)` is its energy-only twin, called by the repair step `0x41BD10`
+  (`0x41BDB7`). `0x4012A0(e, m)` pays at once from the owner's stored energy `+0x8C` and metal
+  `+0x98` when both suffice, adds to the requested `+0x04`/`+0x1C` only and returns 1, else 0
+  with nothing written: a weapon's shot, from its def's `+0xC0`/`+0xC4` (`0x49E533`, the fire
+  path, skipped when the shooter's `+0x111` bit 28 is set). `0x401220`/`0x401260` are the same
+  for one resource and only ever run on a player's `+0xEC` record (`0x464BC4`, `0x464CF4`). The
+  economy pass `0x401360` itself, once a pass and behind each unit's state bits, adds the def's
+  `+0x1C6` when positive to the energy requested `+0xC0` and, with no energy debt, to the granted
+  `+0xC4` (`0x4013ED..0x401421`, `0x401643..0x401668`), and when negative its negation to the
+  produced `+0xBC`; the metal a unit makes into `+0xD4`, only when that energy was granted
+  (`0x401480..0x401545`); two def factors times two `main` values into `+0xBC` (`+0x1D2` ×
+  `main+0x37EDE`, `+0x1D6` × `main+0x14267`, `0x401550..0x4016B5`) [INFERRED: tidal and wind];
+  a finished unit's def `+0x1C2` into `+0xBC` and `+0x1CA` into `+0xD4` (`0x4016DC..0x401795`);
+  and a cloaked unit's cost (def `+0x1DA`, or `+0x1DE` when `+0x110 & 0xC`) paid from storage
+  into `+0xC0` (`0x401806..0x40185E`). A type-2 player's production is scaled by the difficulty
+  in each of these. Nothing else in the exe stores to these unit offsets (every
+  float and dword store to `+0xC0`, `+0xC4`, `+0xD8`, `+0xDC` searched: the rest are weapon defs
+  `0x42E56D..0x42E5AE`, the player loader `0x4661BD` and other records).
+
+  **The settle.** The economy pass runs for each type-1/2 player on its 30-tick pass (`0x46555A`,
+  *The Deathmatch respawn*). It sums the six current floats of every unit with `+0x110` bit 28 and
+  of the `+0xEC` record (`0x401877..0x40193D`), pays the debts first and then the granted from
+  current plus production, keeping the fraction paid of each (`0x401A4D..0x401AB1`), and then
+  settles every such unit (`0x401B3D..0x401B99`): produced → last produced, requested → last
+  requested, the three zeroed, and debt := granted × (1 − the fraction of granted paid) + debt ×
+  (1 − the fraction of debts paid). So a stalled owner's builders fail every request until a
+  later pass pays. The player's expense `+0x94`/`+0xA0` is the summed **requested**, refused
+  requests included (`0x4019DD`, `0x401A05`).
+
+  **What it costs a recording.** `+0xC0`, `+0xC4`, `+0xD8` and `+0xDC` are float accumulators
+  that grow every tick a unit builds, repairs, stockpiles or fires a weapon that costs a resource,
+  and fall to 0 at its owner's pass. On the heavy four-AI hour they are four of the unit frame's
+  thirteen most changed dwords, about 18.6 million changes between them, each typically 21–25 bits
+  of the float's bits ([the size note](tadr-port/demo-recorder-size.md#l4-the-measured-hours-the-snapshot-interval-and-r1)).
   For the eight step-gated sites, "sprayed this tick" is therefore "the step returned 1 this
   tick"; VTOL_RepairUnit, capture, the reclaims and resurrect spray with no resource condition
   while their state gates hold.
