@@ -940,15 +940,14 @@ These four are the unit's energy and metal **requested** and **granted** since i
 economy pass, float accumulators that each build, repair or stockpile step and each weapon shot
 that costs a resource adds to, and that the 30-tick pass zeroes (the engine map's
 [ledger](../exe-reverse-engineering.md#the-nano-spray-two-emitters-fifteen-order-handlers-disassembled-2026-09-29), *The ledger* `unit+0xBC`: every writer and the settle,
-DISASSEMBLED 2026-10-10). Their packed cost alone was not measured: the size tool ranks the unit
-frame's dwords by raw change only. What the engine rules suggest for a codec [INFERRED, not
-measured]: the granted is bit for bit the requested from a pass on until the first refused request
+DISASSEMBLED 2026-10-10). Packed, they are half the unit frame (*The unit frame by lane*, below).
+What the engine rules suggest for a codec [INFERRED, not measured]: the granted is bit for bit the requested from a pass on until the first refused request
 or the first payment made at once (a weapon shot, a cloak's cost), since both grow by the same
 float additions from the same 0; a unit's step usually asks the same amount as on its previous
 tick; and the reset to 0 falls on the owner's pass, which the player record times.
 
-**A unit's image, and which units send it** (MEASURED 2026-10-11 on the heavy hour, re-encoded in
-format 11 at 1,800). A unit is recorded as one 328-byte image: its 0x118-byte record, pointers as
+**A unit's image, and which units send it** (MEASURED 2026-10-11 on the heavy hour's records, which
+the snapshot interval does not change). A unit is recorded as one 328-byte image: its 0x118-byte record, pointers as
 IDs, then the 0x30-byte mover only mobile units have. The recorder writes a unit only on an
 iteration when a byte of its record or mover changed (`cap_units`, `tagpu_recorder.c`), and then
 only the changed dwords. Of 32.7 million live unit-iterations, 16.2 million sent a record (49 %):
@@ -997,6 +996,41 @@ found, the economy pass's cloak cost (*The unit and player records* in the engin
 unit that never cloaks it is history no reader uses; the ledger's last-period values, which change
 rarely, are read by the unit panel (`0x46AC1E..0x46AC3C`). Keeping every byte is the recorder's
 contract ([completeness](demo-recorder-completeness.md)); leaving one out is the owner's decision.
+Freezing `+0xB0` at each unit's first value, which no unit's cloak needed in this game (none
+cloaked), saves 54,736 bytes of the hour's 56,986,121 (0.1 %, MEASURED 2026-10-11, the same file
+transcoded both ways at 1,800): the linear candidate already predicts a deadline restamped every
+iteration, and the units it lists are listed for their ledger anyway (only 4,517 records held
+nothing else). A rule for it would save at most that, so it is not worth a format change.
+
+**The unit frame by lane** (MEASURED 2026-10-11, the heavy hour at 1,800 with R1: each stream
+block's `RCS_UNITS` parsed into its parts as `units_write` lays them out -- the iteration counts and
+slot gaps, the mask dictionary and ids, then one column of residual varints per lane -- and each
+part packed alone with zstd 3, block by block). The parts packed alone sum to 34.3 MB against 28.2 MB
+for the sections packed whole, so a part's share is of the former:
+
+| part | values | packed alone | share |
+|---|---:|---:|---:|
+| `+0xC0` energy requested | 2,307,373 | 5,727,565 | 16.7 % |
+| the masks: which lanes each listed unit carries | | 5,576,296 | 16.3 % |
+| `+0xD8` metal requested | 2,300,682 | 5,493,913 | 16.0 % |
+| the listed slots | | 3,602,501 | 10.5 % |
+| `+0xC4` energy granted | 1,180,984 | 3,047,545 | 8.9 % |
+| `+0xDC` metal granted | 1,173,913 | 2,915,522 | 8.5 % |
+| the mover's turn rate | 1,387,058 | 1,088,008 | 3.2 % |
+| the velocity x, z | 1,841,519 | 1,588,985 | 4.6 % |
+| the speed | 357,073 | 647,023 | 1.9 % |
+| the ledger's debts `+0xC8`, `+0xE0` | 268,643 | 943,651 | 2.8 % |
+| the build fraction `+0x104` | 159,744 | 332,327 | 1.0 % |
+| the position x, z | 172,077 | 468,205 | 1.4 % |
+| every other lane | | 2,854,124 | 8.3 % |
+
+The four requested and granted lanes are 50.1 % of the unit frame, about 13.5 MiB of the hour's
+54.35 [INFERRED: their share of the parts applied to the sections' packed bytes], a quarter of the
+file; motion, which the engine rules predict, is now about an eighth of the frame. A column holds
+each lane's residual against its winning candidate, and no candidate fits a float accumulator: the
+linear one extrapolates the lane's bits as an integer, which a float's additions do not follow, and
+each candidate reads only its own lane, so the granted pays for its change even when it equals the
+requested.
 
 **R1, measured** (the same files converted to format 11 and transcoded natively with the landing's
 codec, every block sectioned, 0 declined, 0 mismatched). The stream at 1,800, bytes written:
@@ -1011,9 +1045,10 @@ codec, every block sectioned, 0 declined, 0 mismatched). The stream at 1,800, by
 
 On the light hour, restarts now cost 167,787 bytes in all against no snapshot at all (25,511,519
 bytes written): the orders, events and state frames' R2 and T's first iteration after each reset.
-With no snapshot the stream is within 91 bytes of format 10's. The heavy hour was not transcoded
-with R1: about −1.3 MiB an hour at 1,800 from its cells' restart cost, so about 54.4 MiB/h
-[INFERRED]. Decoding is 0–3 % slower (the landing's measurement): a reset now copies the grid whole,
+With no snapshot the stream is within 91 bytes of format 10's. The heavy hour transcoded to format
+11 at 1,800 with R1 is 56,986,121 bytes, 54.35 MiB (MEASURED 2026-10-11), of which the 60 snapshots
+are 2.4 MiB (4.4 %) and the stream's sections keep the shares of format 10 at 900 within a point:
+the unit frame 52.8 %, orders 18.2 %, cells 11.4 %, events 8.9 %, projectiles 3.1 %, state 2.4 %. Decoding is 0–3 % slower (the landing's measurement): a reset now copies the grid whole,
 5.4 MB on a 642 × 648 grid, in a sequential reader and the check decoder at every reset and in a
 reader at every seek.
 
