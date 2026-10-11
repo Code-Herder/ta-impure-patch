@@ -947,6 +947,57 @@ or the first payment made at once (a weapon shot, a cloak's cost), since both gr
 float additions from the same 0; a unit's step usually asks the same amount as on its previous
 tick; and the reset to 0 falls on the owner's pass, which the player record times.
 
+**A unit's image, and which units send it** (MEASURED 2026-10-11 on the heavy hour, re-encoded in
+format 11 at 1,800). A unit is recorded as one 328-byte image: its 0x118-byte record, pointers as
+IDs, then the 0x30-byte mover only mobile units have. The recorder writes a unit only on an
+iteration when a byte of its record or mover changed (`cap_units`, `tagpu_recorder.c`), and then
+only the changed dwords. Of 32.7 million live unit-iterations, 16.2 million sent a record (49 %):
+
+| | sent nothing | did not move, changed something | moved |
+|---|---:|---:|---:|
+| structures, 19.3 million unit-iterations | 81 % | 19 % | — |
+| mobile units, 13.4 million | 7 % | 26 % | 67 % |
+
+"Moved" is a change in the turn, the position, the altitude or any mover dword. The 7.1 million
+records of units that did not move (44 % of all) carry, most often: the ledger's requested and
+granted with the work deadline `+0xB0` (about 4.9 million: builders, factories and nano towers
+working in place, `+0xB0` restamped GameTime + 300 each iteration), the build fraction `+0x104`
+with the HP (1.2 million: the units being built), weapon slot 1's reload countdown `+0x18`
+(0.67 million) and the damage countdown in `+0xF8` (0.21 million). Changed dwords in the hour by
+region of the image, in millions:
+
+| image | bytes | what | changes |
+|---|---:|---|---:|
+| `+0x00` | 4 | the mover's link | 0 |
+| `+0x04` | 84 | three weapon slots: target, aim, weapon ID, reload countdown, aim heading and pitch, stockpile, flags | 1.0 |
+| `+0x58` | 12 | `+0x58` (the economy pass credits it as metal produced, `0x4014A7`); the two order lists' links | 0 |
+| `+0x64` | 4 | the bank and the heading | 6.8 |
+| `+0x68` | 14 | the pitch; the position x, altitude, z (16.16) | 15.0 |
+| `+0x76` | 12 | the footprint cell, the sight cell, the footprint's size | 4.4 |
+| `+0x82` | 46 | bucket, carrier, cargo, next, type, owner, COB, model, references; type index, slot, hover phase, control group | 0.06 |
+| `+0xB0` | 4 | the work deadline | 2.8 |
+| `+0xB4` | 8 | no writer; kills; the event bits `+0xBA` | 0.03 |
+| `+0xBC` | 48 | the resource ledger | 19.0 |
+| `+0xEC` | 8 | the ledger's owner; the last attacker | 0.01 |
+| `+0xF4` | 12 | the last hit's player and kind, HP % now and 30 iterations ago, the sight stamp, the attach piece, the damage countdown, the give lock, the owner's index | 0.5 |
+| `+0x100` | 4 | no reader | 0 |
+| `+0x104` | 4 | the build fraction | 2.3 |
+| `+0x108` | 4 | HP, the water state | 0.8 |
+| `+0x10C` | 12 | the activation, yard and state bits, the AI flag | 0.2 |
+| mover `+0x00` | 8 | the course (dropped), the movement class | 0 |
+| mover `+0x08` | 12 | the velocity | 7.5 |
+| mover `+0x14` | 12 | the smoothed acceleration | 5.6 |
+| mover `+0x20` | 4 | the speed | 3.2 |
+| mover `+0x24` | 12 | the turn rate, the claim stamp, the move stamp, the layer bits | 8.7 |
+
+The unit frame packs the hour's 16.2 million records into 26.8 MiB, about 1.7 bytes a record. A
+value that does not change costs nothing in the stream, whatever it is; snapshots and whole images
+carry all 328 bytes. Of the values that change often, the work deadline `+0xB0` has one reader
+found, the economy pass's cloak cost (*The unit and player records* in the engine map), so for a
+unit that never cloaks it is history no reader uses; the ledger's last-period values, which change
+rarely, are read by the unit panel (`0x46AC1E..0x46AC3C`). Keeping every byte is the recorder's
+contract ([completeness](demo-recorder-completeness.md)); leaving one out is the owner's decision.
+
 **R1, measured** (the same files converted to format 11 and transcoded natively with the landing's
 codec, every block sectioned, 0 declined, 0 mismatched). The stream at 1,800, bytes written:
 
