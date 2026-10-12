@@ -2590,8 +2590,12 @@ first slice a tick late, and a looping script stayed re-phased for the unit's li
   accepted as `absent` since 2026-10-01 (battle: live 841, puppet 0). The recording now carries
   both where the engine makes them and the playing makes each through the same `0x4B0BC0` at its
   place ([the engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)),
-  and the `QueryNanoPiece` row is gone. `QueryTransport` and `QueryLandingPad` are not recorded:
-  an open gap no fixture reaches.
+  and the `QueryNanoPiece` row is gone. MEASURED 2026-10-12 on `battle`, `slice-walkers`,
+  `codec-decline` and `tenseat` under `--cob-exact`, every lane passing: the recordings held
+  1,675, 15,665, 140 and 3,864 queries, every playing made all it reached (none refused), and
+  both keys' counts are equal live and puppet in every window (`slice-walkers` over [1171, 3121):
+  `QueryBuildInfo` 44 against 44, `QueryNanoPiece` 8,554 against 8,554). `QueryTransport` and
+  `QueryLandingPad` are not recorded: an open gap no fixture reaches.
 
 ## S5
 
