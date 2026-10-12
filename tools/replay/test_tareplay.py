@@ -1319,6 +1319,230 @@ class LossyStream(unittest.TestCase):
             tarec.header(header()[32:] + tlv(tarec.RT_HOLD, bytes(12)))
 
 
+class LossyCells(unittest.TestCase):
+    """lossy-check's cells clause (RT_HOLD's RECL_CELLS) on the 2 x 2 grid of header(): the
+    exact stream gives cell (0, 0) slot A 1 and byte 5 the value 9 at GameTime 3, and the tick's
+    input at 4 a slot of cell (1, 0) alone; the lossy stream carries cell (0, 0) with its slot
+    held until the refresh at 31 by default, and drops that input."""
+
+    CB = tarec.REC_CELL_BYTES
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_check(self, *parts):
+        p = Path(self.tmp.name) / "c.imprec"
+        p.write_bytes(tarec.REC_MAGIC + b"".join(parts))
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(out):
+            rc = tarec.main(["tarec", "lossy-check", str(p)])
+        return rc, out.getvalue()
+
+    def cell(self, x, z, slot=0, b5=0):
+        c = bytearray(self.CB)
+        struct.pack_into("<H", c, 0, slot)
+        c[5] = b5
+        return tlv(tarec.RK_CELLS, struct.pack("<HHHH", x, z, 1, 0) + bytes(c))
+
+    def tick_input(self, run):
+        call = bytes([tarec.FR_TICK, 0, 0, 0]) + bytes(4)
+        return (tlv(tarec.RK_EV_FEATURE, call) + run + tlv(tarec.RK_EV_FEATURE_END, call))
+
+    def parts(self, lossy3=None, lossy4=None, lossy31=None):
+        S, F = tarec.RBF_STORED, tarec.RBF_REFRESH
+        image = b"".join(tlv(tarec.RK_CELLS, struct.pack("<HHHH", 0, z, 2, 0) + bytes(2 * self.CB))
+                         for z in (0, 1))
+        first = LossyStream.ticks(1, 1, {1: image})
+        x = LossyStream.ticks(3, 31, {3: self.cell(0, 0, 1, 9),
+                                      4: self.tick_input(self.cell(1, 0, 2))})
+        lossy = LossyStream.ticks(3, 31, {
+            3: self.cell(0, 0, 0, 9) if lossy3 is None else lossy3,
+            4: self.tick_input(b"") if lossy4 is None else lossy4,
+            31: self.cell(0, 0, 1, 9) if lossy31 is None else lossy31})
+        return [held_header(flags=tarec.RECL_CELLS),
+                flagged(tarec.RB_STREAM, 1, 1, first, S | F),
+                flagged(tarec.RB_EXACT, 1, 1, first, S),
+                flagged(tarec.RB_STREAM, 2, 2, LossyStream.ticks(2, 2, {}), S | F),
+                flagged(tarec.RB_EXACT, 2, 2, LossyStream.ticks(2, 2, {}), S),
+                flagged(tarec.RB_STREAM, 3, 31, lossy, S | F),
+                flagged(tarec.RB_EXACT, 3, 31, x, S), end_block(31)]
+
+    def test_held_slots_written_at_the_refresh_pass(self):
+        rc, o = self.run_check(*self.parts())
+        self.assertEqual(rc, 0, o)
+        self.assertIn("31 iterations to GameTime 31, 3 refreshes", o)
+
+    def test_a_shown_byte_of_a_cell_held_fails(self):
+        rc, o = self.run_check(*self.parts(lossy3=self.cell(0, 0, 0, 0)))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 3: cell 0's shown bytes differ", o)
+
+    def test_a_slot_made_up_fails(self):
+        rc, o = self.run_check(*self.parts(lossy3=self.cell(0, 0, 3, 9)))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 3: cell 0's held bytes are neither", o)
+
+    def test_an_input_of_held_bytes_alone_written_fails(self):
+        rc, o = self.run_check(*self.parts(lossy4=self.tick_input(self.cell(1, 0, 2))))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 4: the tick's input runs are not the exact stream's", o)
+
+    def test_a_refresh_that_misses_a_held_slot_fails(self):
+        rc, o = self.run_check(*self.parts(lossy31=b""))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 31: the stream's world is not the exact copy at a refresh", o)
+
+    def test_held_cells_beside_spray_sessions_pass(self):
+        parts = self.parts()
+        parts[0] = held_header(flags=tarec.RECL_CELLS | tarec.RECL_SPRAYS)
+        rc, o = self.run_check(*parts)
+        self.assertEqual(rc, 0, o)
+
+
+class Occupancy(unittest.TestCase):
+    """tarec.occupancy on a 6 x 4 grid: the multiplayer rule as the owner decided it, and the
+    contest-aware one a skirmish recording that holds its cells takes after a seek."""
+
+    CB = tarec.REC_CELL_BYTES
+
+    @staticmethod
+    def unit(x, z, w=1, h=1, state=1):
+        u = bytearray(tarec.REC_UNIT_IMAGE)
+        struct.pack_into("<hh", u, 0x76, x, z)
+        struct.pack_into("<hh", u, 0x7E, w, h)
+        struct.pack_into("<I", u, tarec.U_STATE, state)
+        return u
+
+    def worlds(self, units, names):
+        """(expected, dump): `units` {slot: image} live in both, the dump's cells naming
+        {(x, z): (slot A, slot B)}"""
+        a = tarec.World(8, [], dims=(6, 4, 1, 1))
+        b = tarec.World(8, [], dims=(6, 4, 1, 1))
+        for slot, u in units.items():
+            a.units[slot] = bytearray(u)
+            b.units[slot] = bytearray(u)
+        for (x, z), pair in names.items():
+            struct.pack_into("<HH", b.grid, (z * 6 + x) * self.CB, *pair)
+        return a, b
+
+    def test_a_unit_named_passes_and_the_slots_are_taken(self):
+        a, b = self.worlds({1: self.unit(1, 1)}, {(1, 1): (1, 0)})
+        self.assertEqual(tarec.occupancy(a, b), [])
+        self.assertEqual(a.grid, b.grid)
+
+    def test_multiplayer_rule_is_unchanged(self):
+        # no stamp bound and no contest: a unit at the grid's last column must still be named
+        a, b = self.worlds({1: self.unit(5, 1)}, {})
+        self.assertEqual(len(tarec.occupancy(a, b)), 1)
+        a, b = self.worlds({1: self.unit(1, 1), 2: self.unit(1, 1, state=1 << 27 | 1)},
+                           {(1, 1): (1, 0)})
+        self.assertEqual(len(tarec.occupancy(a, b)), 1)
+
+    def test_contest_the_stamp_bound(self):
+        # parked: past the last column, past the last row, west of the first column
+        a, b = self.worlds({1: self.unit(5, 1, 2), 2: self.unit(1, 3, 1, 2),
+                            3: self.unit(-1, 0, 2)}, {})
+        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+        # the last column itself is stamped (fix_last_cell)
+        a, b = self.worlds({1: self.unit(5, 1)}, {})
+        self.assertEqual(len(tarec.occupancy(a, b, contest=True)), 1)
+        # a carried unit, layer 0, holds no cell
+        a, b = self.worlds({1: self.unit(1, 1, state=0)}, {})
+        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+
+    def test_contest_a_loser_under_the_holder(self):
+        units = {1: self.unit(1, 1, 2, 1, state=1 << 26 | 1), 2: self.unit(2, 1, state=1 << 27 | 1)}
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
+        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+
+    def test_contest_a_holder_without_its_mark_fails(self):
+        units = {1: self.unit(1, 1, 2, 1), 2: self.unit(2, 1, state=1 << 27 | 1)}
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertEqual(len(out), 1, out)
+        self.assertIn("without the holder's mark", out[0])
+
+    def test_contest_a_loser_s_empty_slot_under_another_layer_fails(self):
+        # ground unit 2 lost nothing in slot A; an aircraft overhead fills slot B
+        units = {1: self.unit(2, 1, state=1 << 26 | 2), 2: self.unit(2, 1, state=1 << 27 | 1)}
+        a, b = self.worlds(units, {(2, 1): (0, 1)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertEqual(len(out), 1, out)
+        self.assertIn("does not name it in slot A", out[0])
+
+    def test_contest_a_structure_holds_slot_a_whatever_its_layer(self):
+        structure = tarec.STRUCTURE | 1 << 26 | 2
+        units = {1: self.unit(1, 1, 2, 1, state=structure), 2: self.unit(2, 1, state=1 << 27 | 1)}
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
+        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+        # a layer-2 unit never contests slot A
+        units[2] = self.unit(2, 1, state=1 << 27 | 2)
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
+        self.assertEqual(len(tarec.occupancy(a, b, contest=True)), 1)
+
+    def test_contest_a_structure_named_in_slot_b_fails(self):
+        a, b = self.worlds({1: self.unit(1, 1, state=tarec.STRUCTURE | 1)}, {(1, 1): (0, 1)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertTrue(any("names structure 1 in slot B" in line for line in out), out)
+
+    def test_contest_the_layer_s_slot(self):
+        # layer 1 filed in slot B, and layer 2 in slot A
+        a, b = self.worlds({1: self.unit(1, 1)}, {(1, 1): (0, 1)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertTrue(any("does not name it in slot A" in line for line in out), out)
+        self.assertTrue(any("in slot B, a unit of layer 1" in line for line in out), out)
+        a, b = self.worlds({1: self.unit(1, 1, state=2)}, {(1, 1): (1, 0)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertTrue(any("does not name it in slot B" in line for line in out), out)
+        a, b = self.worlds({1: self.unit(1, 1, state=2)}, {(1, 1): (0, 1)})
+        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+
+    def test_contest_a_unit_not_marked_the_loser_fails(self):
+        units = {1: self.unit(1, 1, 2, 1), 2: self.unit(2, 1)}
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertEqual(len(out), 1, out)
+        self.assertIn("mobile unit 2's footprint does not name it in slot A", out[0])
+
+    def test_contest_a_cell_naming_a_unit_elsewhere_fails(self):
+        units = {1: self.unit(1, 1), 2: self.unit(3, 1, state=1 << 27 | 1)}
+        a, b = self.worlds(units, {(1, 1): (1, 0), (3, 1): (1, 0)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertTrue(any("names slot 1, outside its footprint" in line for line in out), out)
+        self.assertTrue(any("mobile unit 2's footprint" in line for line in out), out)
+
+    def test_contest_the_marks_are_the_dump_s(self):
+        a, b = self.worlds({1: self.unit(1, 1)}, {(1, 1): (1, 0)})
+        struct.pack_into("<I", b.units[1], tarec.U_STATE, 1 << 26 | 1)
+        struct.pack_into("<I", a.units[1], tarec.U_STATE, 1 << 27 | 1)
+        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+        self.assertEqual(a.units[1], b.units[1])
+
+
+class SourceTest(unittest.TestCase):
+    """FS_SOURCE inside the tick's feature call: a recording that keeps the engine's slots on its
+    playing records it -- a multiplayer one, or one that holds its cells (RECL_CELLS)."""
+
+    def world(self, flags):
+        h = tarec.header(held_header(flags=flags)[32:])
+        w = tarec.World(4, [], h)
+        w.apply(tarec.RK_TICK, struct.pack("<I", 1))
+        w.apply(tarec.RK_EV_FEATURE, bytes([tarec.FR_TICK, 0, 0, 0]) + bytes(4))
+        return w
+
+    def test_held_cells_take_it(self):
+        w = self.world(tarec.RECL_CELLS)
+        w.apply(tarec.RK_EV_DRAW, bytes([tarec.FS_SOURCE, 0, 0, 0]) + struct.pack("<II", 3, 0))
+
+    def test_without_them_it_is_malformed(self):
+        w = self.world(0)
+        with self.assertRaisesRegex(tarec.Unreadable, "source test outside"):
+            w.apply(tarec.RK_EV_DRAW, bytes([tarec.FS_SOURCE, 0, 0, 0]) + struct.pack("<II", 3, 0))
+
+
 def spray(uid, x, y, z):
     """An RK_EV_SPRAY of unit ID `uid` at the point (x, y, z), its box and layer fixed."""
     return tlv(tarec.RK_EV_SPRAY, struct.pack("<IIiii", uid, 0, x, y, z) +

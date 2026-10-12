@@ -1096,7 +1096,10 @@ it. The engine facts are [the engine map](../exe-reverse-engineering.md#the-demo
   (`0x47CDCA`); a sequence frame by the sequence's own count (as `0x4B8B30` bounds it), read
   through the def's field the recorded ID names and never through the record; the cursor by the
   grid's cells.
-- **The unit slots and the yard bit come from the images alone.** The stamp, the clear and the
+- **The unit slots and the yard bit come from the images alone** on a recording whose stream does
+  not hold them; one that holds them (format 16's `RECL_CELLS`, every skirmish recording of this
+  build) plays with the engine's own (*The cells held*, [making recordings smaller](demo-recorder-size.md)).
+  The stamp, the clear and the
   re-claim still run on the host — for S2b's placements through the set-position `0x48A9F0`, the
   creates and deaths, and the host's own unit tick — because the stamp also files the unit in its
   sort bucket, which no image writes. Each call's writes to the grid are undone at its return: the
@@ -1104,9 +1107,13 @@ it. The engine facts are [the engine map](../exe-reverse-engineering.md#the-demo
   a cell wider each way, and puts the slots and the yard bit back. The three write only inside the
   footprint; the clear nests re-claims through its bucket walk's callback, so the saved frames are
   a stack, two deep in play. A deeper call or a footprint wider than 64 cells either way is counted
-  and named. Without it the host's slots ran an iteration ahead of
-  the recording's: an aircraft's recorded slot follows its position by an iteration, and the
-  placement stamps it at the image's position. A recording plays only when the recorder's hooks
+  and named. Without it the host's slots differ from the recording's where two footprints
+  contest a cell: every puppet seat is type 3, so the host's contest gives the cell to the
+  newcomer where the recording machine's incumbent kept it
+  ([engine map](../exe-reverse-engineering.md), *The footprint contest's rule*).
+  Every recorded footprint cell is the set-position's rounding of the recorded position (MEASURED
+  2026-10-12, 3,640,526 of 3,640,526 unit-iterations of two recordings): the placement's stamp is
+  not ahead of the recording. A recording plays only when the recorder's hooks
   are in, since the draws, the explosions and this undo are taken there.
 
 **The comparison.** A dump carries the grid, the pool, its heads and the cursor, and
@@ -1161,8 +1168,9 @@ MEASURED 2026-09-30 under Wine, format 3, scripted runs on a private X server:
   carry links (3,090 iterations) and the four-AI game in the stock-limits build (2,010
   iterations, the 2,048-record pool). Every check is clean, no cell changed that no writer had
   marked, and every dump is equal on puppets, five, six and five. The battle's first playback
-  found one cell's slot B an iteration ahead of the recording, the cause of the footprint
-  writers' undo (*Playback*); its next found 1,200 of them called inside a clear. With the undo
+  found one cell's slot B naming another unit than the recording's, the cause of the footprint
+  writers' undo (*Playback*; a contest decided by the puppet's type-3 rule or the stamp's edge
+  bound, an aircraft at the map's last columns, not a lead of the stamp [INFERRED, 2026-10-12]); its next found 1,200 of them called inside a clear. With the undo
   stacked, the battle's playback undid 315,067 footprint writes and missed none.
 - **The cost in the battle**: 569 µs an iteration on average and 2.21 ms at worst (GameTime
   3,305, 111 KB into the ring), against S2a's 475 µs and 1.15 ms; in the carry-links game 123 and

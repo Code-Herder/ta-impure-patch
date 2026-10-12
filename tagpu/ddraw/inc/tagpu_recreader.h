@@ -83,6 +83,13 @@ typedef struct RecHeader {
     RecLossyHold hold;
 } RecHeader;
 
+/* 1 when the header's stream holds its cells' unit slots and yard bit (RT_HOLD's RECL_CELLS):
+   its playing keeps the engine's own */
+static __inline int recr_holds_cells(const RecHeader* h)
+{
+    return h->has_hold && (h->hold.flags & RECL_CELLS) != 0;
+}
+
 /* one node list of a live unit, its node images in list order */
 typedef struct RecList { unsigned n, cap; unsigned char* img; } RecList;
 
@@ -272,6 +279,9 @@ const RecTimeline* recr_selected(const RecReader* r);
 /* 1 when the segment the world was last read from carries a multiplayer roster: a multiplayer
    file's own segment, never a takeover's timeline, which a skirmish level records */
 int recr_segment_mp(const RecReader* r);
+/* 1 when that segment holds its cells (recr_holds_cells): every skirmish segment a writer of
+   this format makes (REC_SKIRMISH_HOLDS), a multiplayer file's takeover timeline among them */
+int recr_segment_cells(const RecReader* r);
 /* Where a fork at `at` is appended, found afresh: the caller holds the file open for writing
    first, so no other writer can change it until the fork's writer has used this (tagpu_replay.c,
    TK0). A torn last block is not kept, an unfinished last segment with no complete iteration is

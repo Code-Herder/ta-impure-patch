@@ -15,22 +15,26 @@ typedef struct RecLossyList { unsigned n, cap; unsigned char* img; } RecLossyLis
 
 typedef struct RecLossyParams {
     unsigned nslots;                    /* the header's RT_SLOTS, 2..65535                        */
-    unsigned flags;                     /* RT_HOLD's: RECL_SPRAYS writes the sprays as sessions   */
+    unsigned flags;                     /* RT_HOLD's: RECL_SPRAYS writes the sprays as sessions,
+                                           RECL_CELLS holds the cells' slots and yard bit         */
     const unsigned char* hold_unit;     /* REC_UNIT_IMAGE bytes, a set bit held (RT_HOLD)          */
     const unsigned char* hold_node;     /* REC_ORDER_IMAGE bytes: a main list node's              */
+    unsigned gw, gh;                    /* the header's RT_FEATURES grid, 0..65535 each           */
 } RecLossyParams;
 
 /* The writer's exact world at the end of the iteration handed over: nslots unit images and
-   liveness, nslots * 2 lists (the main, then the sub list of each slot). Read only. */
+   liveness, nslots * 2 lists (the main, then the sub list of each slot), and the grid's gw * gh
+   cells, NULL until its first image. Read only. */
 typedef struct RecLossyExact {
     const unsigned char* units;
     const unsigned char* live;
     const RecLossyList*  lists;
+    const unsigned char* grid;
 } RecLossyExact;
 
 typedef struct RecLossy RecLossy;
 
-/* NULL: no memory, or nslots out of its bounds. */
+/* NULL: no memory, nslots or the grid out of its bounds, or a flag the filter does not keep. */
 RecLossy* reclossy_begin(const RecLossyParams* p);
 void      reclossy_free(RecLossy* L);
 
@@ -43,8 +47,8 @@ void      reclossy_free(RecLossy* L);
 int reclossy_iteration(RecLossy* L, const unsigned char* recs, size_t n, int refresh,
                        int snapshot, const RecLossyExact* x, RecBytes* out);
 
-/* 1 when the lossy world equals `x` byte for byte: liveness, every live unit's image and every
-   slot's two lists. The writer asks it after every refresh. */
+/* 1 when the lossy world equals `x` byte for byte: liveness, every live unit's image, every
+   slot's two lists and, with RECL_CELLS, every cell. The writer asks it after every refresh. */
 int reclossy_equal(const RecLossy* L, const RecLossyExact* x);
 
 /* THE REFRESH GRID: 1 when a segment's iteration at GameTime `tick` is a refresh, `n` its ordinal
