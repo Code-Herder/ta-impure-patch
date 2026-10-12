@@ -90,14 +90,17 @@
    filter's positions in D are the copy's and every reader's.
    WHAT IS NOT KEPT, a loosening the owner approved on 2026-10-11 (OD5): the order of the sprays
    inside one iteration -- an implied spray comes after the iteration's events, slots ascending.
-   The particles drawn are the same sprays at the same points in the same iteration: the emitters
-   0x4720D0 and 0x472200 change no simulation state, their spawn 0x473D50 draws only the C
+   The emissions are the same sprays at the same points in the same iteration, and the emitters
+   0x4720D0 and 0x472200 change no simulation state: their spawn 0x473D50 draws only the C
    runtime's rand 0x4E4870, which a playing does not reproduce in any order (tagpu_replay.c, THE
-   TURBO), and the order is only the order of their particles in the layer's vector: the order
-   they are drawn in and, once the layer holds more than 0x190, the order they are destroyed in
-   (each emitter destroys the vector's front and shifts it down before it appends,
-   0x47219F..0x4721EA and 0x4722CF..0x47231A; DISASSEMBLED, the engine map's *The nano
-   spray*).
+   TURBO). What the order decides is, first, their particles' order in the layer's vector: the
+   order they are drawn in and, past the layer's cap (0x190 in stock), the order they are
+   destroyed in (each emitter destroys the vector's front and shifts it down before it appends,
+   the trim 0x47219F..0x4721DA and 0x4722CF..0x47230A); and second, when the particle pool
+   0x51E610 that every emitter shares runs out within the iteration, which emission makes no
+   particle (its alloc 0x470EB0 returns NULL at capacity, 0x470EB9..0x470EBB, and the emitter then
+   skips the particle, 0x47213E..0x472163). DISASSEMBLED, the engine map's *The nano spray*; the
+   owner confirmed on 2026-10-12 that OD5 covers the pool.
    BOUNDS: a spray or a session names a unit slot by its ID, 1 <= ID - 1 < nslots, as the
    playing's live_unit does; a spray that names none is written and enters no table, and a
    session that names none is malformed. A reader refuses, as malformed, a session that would

@@ -1207,9 +1207,9 @@ from the velocity and the heading from the turn, so a held velocity turns every 
 residual.
 
 **Not shown by these numbers.** No lossy recording was played: the sizes are of transformed streams.
-The offline spray step zeroed the spray's point, which is shown; the landed spray sessions keep it
-exact and end explicitly (*The spray sessions*, below), which the plan measured at 0.9 MB more
-(−2.97 MB against −3.9). Held cell slots are read by projectile collision, and dropped input cells feed the
+The offline spray step zeroed the spray's point, which is shown, and measured −3.9 MB on a stream
+whose cells were already held (27.87 → 23.97); the landed spray sessions keep the point exact and
+end explicitly (*The spray sessions*, below). Held cell slots are read by projectile collision, and dropped input cells feed the
 feature tick, so both need a playback check. A takeover between snapshots would resume from held
 internal values. The landing plan answers these.
 
@@ -1246,14 +1246,21 @@ before the snapshot. Every spray is exact, its point included; only the sprays' 
 tick is not kept, a loosening the owner approved (the completeness note's decisions, 2026-10-11).
 **MEASURED** 2026-10-12, `codectest lossy` over the heavy hour's exact records: 2,980,673 of
 3,160,252 sprays implied, 179,579 written, 71,417 sessions opened or changed (11,372 of them
-following their unit) and 66,448 closed -- the plan's transform's counts; the file 42,135,332 →
-39,498,890 bytes (−2.64 MB) with the empty hold table, and 30,512,816 → 27,792,787 (−2.72 MB) over
-the plan's unit and order rows (the parallel landing's table, built into a scratch copy); every
-block sectioned, none declined or mismatched. The plan's −2.97 MB coded the sessions as
-events-frame records: on the same stream, the session records cost 377,643 bytes verbatim and
-128,818 as events-frame records, so coding them in the events frame would save another 0.25 MB.
-`tarec lossy-check` over the whole hour and `tarec check` pass; `check` counts the hour's
-3,160,252 sprays.
+following their unit) and 66,448 closed; the file 42,135,332 → 39,498,890 bytes (−2.64 MB) with
+the empty hold table, and 30,512,816 → 27,792,787 (−2.72 MB) over the plan's unit and order rows
+(the parallel landing's table, built into a scratch copy); every block sectioned, none declined or
+mismatched. `tarec lossy-check` over the whole hour and `tarec check` pass; `check` counts the
+hour's 3,160,252 sprays. The DLL's reader makes the same sprays: `codectest.py sprays` over the
+replay gate's 41 fresh recordings with the exact stream (2026-10-12) compared 114,060 iterations
+read in order, with 23,143 sprays, and 42,588 iterations after 144 seeks from the snapshots, with
+9,277, every one equal. **The landing's gate missed by 0.05 MB**: the landing plan asked for
+−2.97 MB ± 0.2 over the unit and order rows, a figure that coded the session records in the
+events frame. Written verbatim, as format 14 writes them, they cost 377,643 bytes on this stream,
+against 128,818 in the events frame, so the events-frame coding planned with the explicit sprays'
+own (P7) recovers about 0.25 MB. The lossy plan's own figures for exact sessions are smaller,
+−1.05 MB (its §4.4) and −1.03 (its §8's attribution), because its transform had no FOLLOW
+sessions: it implied 2,546,320 sprays and wrote 613,932, with 59,528 sessions opened and 59,022
+closed.
 
 ## Multiplayer recordings
 

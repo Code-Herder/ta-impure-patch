@@ -80,9 +80,9 @@ void       recsprays_spray(RecSprays* t, unsigned T, const unsigned char* b, con
                            const unsigned char* live);
 /* At the end of iteration T, once its records are taken: the sprays the sessions imply, 48 bytes
    each (an RK_EV_SPRAY's body), slots ascending, into a buffer of the table's that stays as it
-   is until the next call; each taken into the table. 1, or 0 when a session would predict from a
+   is until the next call; each taken into the table. 1; 0 when a session would predict from a
    GameTime with no single spray of its unit, or follows a unit not live at T or then: malformed,
-   since the filter never implies such a spray. */
+   since the filter never implies such a spray; -1 when the buffer cannot grow (no memory). */
 int        recsprays_imply(RecSprays* t, unsigned T, const void* units, const unsigned char* live,
                            const unsigned char** out, unsigned* n);
 
