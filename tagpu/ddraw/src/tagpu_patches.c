@@ -4819,7 +4819,12 @@ typedef int (__thiscall* PFN_QueryName)(char* cob, const char* name, int* a0, in
                                         int* a3);
 #define E_QueryName ((PFN_QueryName)0x004B0BC0u)
 
-/* the running replayed death's: its Killed is the owner's query; clear outside that call */
+/* The running replayed death's: its Killed is the owner's query. THE INVARIANT, an ordering:
+   tagpu_tx_replay_death sets it just before its one destructor call and clears it as that call
+   returns, on the game thread, and no capture point and no frame visit runs inside a destructor
+   call (B2's stub and the frame visit call the replay, never the reverse), so the flag is 0 at
+   every capture point and every dump: TRANSIENT holds nothing a recording, a seek or a takeover
+   could need. */
 static unsigned char s_txKilledQuery;
 SIM_VAR(s_txKilledQuery, SIM_TRANSIENT);
 
