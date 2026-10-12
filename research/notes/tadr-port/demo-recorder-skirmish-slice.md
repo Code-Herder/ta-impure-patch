@@ -142,7 +142,9 @@ the vendored zstd 1.5.7 (`src/zstd.c`) in one of three ways (`inc/tagpu_recfmt.h
 THE CHAIN*):
 
 - **a sectioned stream block** is a chunk of its *run*'s zstd frame. A run is the sectioned blocks
-  from an `RBF_FRAME_RESET` block to the next reset, records block or snapshot: one frame at level
+  from an `RBF_FRAME_RESET` block to the next reset, stream block of plain records or snapshot
+  (blocks of other kinds between them, `RB_EXACT` and `RB_CONTRIBUTIONS`, neither end nor touch a
+  run): one frame at level
   19, with a window of at most 2^20, no content size and no checksum, begun at the reset block and
   never ended, each block's bytes flushed at its end. A block decodes only after every chunk of its
   run before it, as its codec frames do; it is never stored.
@@ -372,7 +374,8 @@ own explosion, debris and flying-piece pools empty (the owner-approved known gap
 strict images gate whenever its T1 finds an explosion alive.
 
 **What a reader refuses**, the C reader and `reccodec.py` alike, each by name (the C reader with the
-block's file offset): a flag bit it does not know, `RBF_SECTIONS` on a block that is not a stream block,
+block's file offset): a flag bit it does not know, `RBF_SECTIONS` or `RBF_REFRESH` on a block that
+is not a stream block,
 `RBF_FRAME_RESET` without it, a stored sectioned block, `RBF_CHAINED` on a stored block or on any
 block but a snapshot, a packed header, end or timelines block, a block whose header passed its CRC
 but whose raw or stored size passes 64 MiB (`RECR_BLOCK_MAX`), a packed body of no bytes, a body

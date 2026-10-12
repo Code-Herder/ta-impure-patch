@@ -465,8 +465,9 @@ enum RecEnd {
    RBF_CHAINED on a stored block or on any kind but RB_SNAPSHOT are refused.
 
    THE RUN AND THE CHAIN. A RUN is the sectioned stream blocks from an RBF_FRAME_RESET block to
-   the block before the segment's next reset, records block or snapshot: the blocks one state of
-   the frames carries across. Its packed bytes are one zstd frame, begun at the reset block --
+   the block before the segment's next reset, stream block of plain records or snapshot: the
+   blocks one state of the frames carries across. Blocks of other kinds between them (RB_EXACT,
+   RB_CONTRIBUTIONS) neither end nor touch a run. Its packed bytes are one zstd frame, begun at the reset block --
    magic, a window of at most 2^REC_RUN_WINDOW_LOG, no content size, no dictionary, no checksum --
    and never ended; each block's bytes are the frame's next chunk, flushed at the block's end, so a
    block decodes only after every chunk of its run before it, through one decoder, as its frames

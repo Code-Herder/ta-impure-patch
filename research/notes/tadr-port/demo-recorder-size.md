@@ -1237,7 +1237,8 @@ gap above; *S4b*). The test lever `tagpu_rec.exact` writes the exact records bes
 (`RB_EXACT`), against which `tarec lossy-check` checks it. **The table has no row**, so every
 record is the capture's: MEASURED 2026-10-12, `codectest lossy` over the heavy hour's exact
 records with the build's table: 108,090 iterations, none whose records differ from the input's,
-3,604 stream blocks (361 ending at a refresh, every one sectioned, none declined or mismatched),
+3,605 stream blocks (362 ending at a refresh -- a segment's first two iterations are refreshes --
+every one sectioned, none declined or mismatched),
 60 snapshots kept at the refreshes 1,800 apart; `tarec lossy-check --to 27001` and `tarec check`
 pass on the result. Adding a row is the owner's decision (CLAUDE.md, *Loosening*); the rows the
 plan measured, the spray sessions and the cells are the next landings.
@@ -1245,8 +1246,9 @@ plan measured, the spray sessions and the cells are the next landings.
 ## P1: the container, measured
 
 **What format 14 changes** (tagpu_recfmt.h, *THE RUN AND THE CHAIN*). A *run* -- the sectioned stream
-blocks from an `RBF_FRAME_RESET` block to the next reset, records block or snapshot, the blocks one
-state of the frames carries across -- is one zstd frame at level 19 (`windowLog` 20, `hashLog` 20,
+blocks from an `RBF_FRAME_RESET` block to the next reset, stream block of plain records or
+snapshot, the blocks one state of the frames carries across; blocks of other kinds between them
+(`RB_EXACT`, `RB_CONTRIBUTIONS`) neither end nor touch a run -- is one zstd frame at level 19 (`windowLog` 20, `hashLog` 20,
 `chainLog` 21, no content size, no checksum), begun at the reset block and never ended: each block's
 bytes are the frame's next chunk, flushed at the block's end (`ZSTD_e_flush`). A sectioned block is
 always packed. A records block (declined or mismatched) stays a level-3 frame of its own, and the
@@ -1337,10 +1339,12 @@ runs' chunks of the exact hour (`--section chunk`, the x86-64 ASan build) agree 
 accepted; every kind on the lossy hour (Wine, i686) in all 20,000, 2,369 accepted; every kind on the
 dense battle (Wine) in 19,998. The other two are chunks with one byte changed, which the vendored
 zstd 1.5.7 built for i686 refuses as corrupt (`ZSTD_error_corruption_detected`, before it consumes
-a byte) and the same source built for x86-64 -- the ASan build, and Python's `zstandard` -- unpacks
-to the chunk's raw size (MEASURED 2026-10-12: one unpack loop over the two files, built both ways
+a byte) and the same zstd version built for x86-64 -- the ASan build of the same source, and
+Python's `zstandard` (upstream libzstd 1.5.7) -- unpacks to the chunk's raw size (MEASURED 2026-10-12: one unpack loop over the two files, built both ways
 and run under Wine). Both answers are safe: a refused chunk ends its run, and an accepted one is
-bounded like any other. A writer's own chunks are not affected: its check unpacks each one with the
+bounded like any other. Outside the fuzz a chunk reaches neither decoder until its block's CRC-32
+has passed, so a one-byte change like these is refused before either decoder sees it. A writer's own
+chunks are not affected: its check unpacks each one with the
 DLL's decoder before writing it.
 
 ## Multiplayer recordings
@@ -1425,7 +1429,6 @@ the units: stage 6's traffic budget.
 | L4 | two measured four-player hours, a light and a heavy one; format 11: snapshots every 1,800 ticks, the cells frame restarting from the reader's grid (R1): LANDED (*L4* above) | the snapshot interval, decided by the owner with the seek target relaxed for dense battles; MEASURED −1.63 MB an hour from R1 on the light hour at 1,800; both hours miss the 25 MB budget even with no snapshots |
 | L5a | the unit frame predicts the resource ledger, format 12: LANDED (*L5a* below) | MEASURED heavy hour 56.99 → 42.15 MB, lossless |
 | L5 | lossy, chosen by the owner 2026-10-11: internal values held between refreshes, shown values exact (*L5: the lossy plan, measured offline*). The core LANDED as format 13: the filter, the refresh every 300 ticks, the takeover at a refresh, the exact stream for the harness, a hold table of no rows; the rows, the spray sessions and the cells follow | MEASURED offline heavy hour 42.15 → 19.32 MB with the plan's rows; format 13's empty table changes no record |
-| L5 | lossy, chosen by the owner 2026-10-11: internal values held between snapshots, shown values exact (*L5: the lossy plan, measured offline*); its landing plan is open | MEASURED offline heavy hour 42.15 → 19.32 MB |
 | P1 | the container, format 14: each run of sectioned blocks one zstd frame at level 19, the snapshots chained, a key every tenth: LANDED (*P1* above) | MEASURED lossy hour 20.73 → 15.65 MB, exact hour 42.15 → 29.90 MB |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
