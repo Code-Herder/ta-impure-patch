@@ -1304,8 +1304,7 @@ reads them. A takeover, at a refresh, writes the recording's slots, yard bits an
 refreshes the passability. MEASURED 2026-10-12, `codectest lossy` over the heavy hour's exact
 records, with format 13's empty hold table and no spray sessions (the cells alone, built before
 the rows and the sessions landed): **42,135,332 → 35,797,592 bytes of stream and snapshots
-(−6.34 MB)**; the figure over format 15's rows and sessions is not measured (the heavy hour's
-exact records were lost with a reboot); 108,090 iterations, 3,605 stream blocks (362 at a refresh, every one sectioned, none
+(−6.34 MB)**; the figure over format 15's rows and sessions is not measured yet; 108,090 iterations, 3,605 stream blocks (362 at a refresh, every one sectioned, none
 declined or mismatched), 60 snapshots kept; `tarec lossy-check --to 27001` (with the cells clause)
 and `tarec check` pass on the result. **The loosening the owner accepted with it**: after a seek
 the cells' slots, yard bits and contest marks are checked by the occupancy rule instead of
