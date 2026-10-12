@@ -228,19 +228,22 @@ tests/vklifetime.exe: tests/vklifetime.c src/tagpu_vk.c src/tagpu_vk.h
 # record frames transcode and decode recordings, the lossy filter (src/tagpu_reclossy.c) runs over
 # one, its outcomes and a fuzz, against tools/replay/reccodec.py. codectest.c includes the codec's
 # source, to copy a decoder's state the interface keeps opaque; the frames, whose states their own
-# `copy` copies, and the filter are linked. Only these
-# builds define RECF_TEST_COPY, which compiles the frames' copies (inc/tagpu_recframe.h).
-# Not part of `all` or of CI -- it needs Wine or a host compiler, and recordings. This build also
-# links the DLL's reader and what it calls (RECREADER), for the outcomes that seek through it; the
-# host build (codectest.py --native) leaves them out, the reader being Win32 file code.
+# `copy` copies, and the filter are linked; so is the DLL's reader and what it reads a file with
+# (RECREAD), for `codectest sprays` and the outcomes that seek through it, which this Windows
+# build alone has: the host build (codectest.py --native) leaves them out, the reader being Win32
+# file code. Only these builds define RECF_TEST_COPY, which compiles the frames' copies
+# (inc/tagpu_recframe.h). Not part of `all` or of CI -- it needs Wine or a host compiler, and
+# recordings.
 codectest: tests/codectest.exe
 
 RECFRAMES := $(wildcard src/tagpu_recframe_*.c)
-RECREADER := src/tagpu_recreader.c src/tagpu_recfile.c src/crc32.c \
-             $(addprefix src/tagpu_recmp_,$(addsuffix .c,explored file_state history named orders \
-                                                         players pov roots stream text units))
-tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREADER) inc/tagpu_reccodec.h inc/tagpu_recframe.h inc/tagpu_recfmt.h inc/tagpu_reclanes.h inc/tagpu_reclossy.h inc/tagpu_rechold.h inc/tagpu_recreader.h src/zstd.c
-	$(CC) -Iinc -Isrc -DRECF_TEST_COPY -O2 -Wall -std=c99 -static -o $@ tests/codectest.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREADER) src/zstd.c
+RECREAD   := src/tagpu_recreader.c src/tagpu_recfile.c src/tagpu_recmp_explored.c \
+             src/tagpu_recmp_file_state.c src/tagpu_recmp_history.c src/tagpu_recmp_named.c \
+             src/tagpu_recmp_orders.c src/tagpu_recmp_players.c src/tagpu_recmp_pov.c \
+             src/tagpu_recmp_roots.c src/tagpu_recmp_stream.c src/tagpu_recmp_text.c \
+             src/tagpu_recmp_units.c src/crc32.c
+tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) inc/tagpu_reccodec.h inc/tagpu_recframe.h inc/tagpu_recfmt.h inc/tagpu_reclanes.h inc/tagpu_reclossy.h inc/tagpu_rechold.h inc/tagpu_recreader.h src/zstd.c
+	$(CC) -Iinc -Isrc -DRECF_TEST_COPY -O2 -Wall -std=c99 -static -o $@ tests/codectest.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) src/zstd.c
 
 clean:
 	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe tests/arttest.exe tests/windowtest.exe tests/vklifetime.exe tests/codectest.exe tests/codectest-asan.exe inc/tagpu_art_gen.h || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))

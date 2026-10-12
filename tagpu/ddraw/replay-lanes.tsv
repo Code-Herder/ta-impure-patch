@@ -19,7 +19,7 @@
 0x008	4	PLAIN	w1_callback	DISASSEMBLED (map): weapon slot 1 +0x4, the Aim completion callback's vtable 0x4FD6F0, written only by the creates
 0x00C	4	PLAIN	w1_aimed	DISASSEMBLED (map): weapon slot 1 +0x8, aim complete: 0 when Aim starts and at fire, 1 through the callback 0x481490
 0x010	4	PLAIN	weapon1	DISASSEMBLED (map): weapon slot 1 +0xC, the weapon def, set once by 0x49E070; the image carries its ID (replay-layout.tsv, weapon1)
-0x014	4	PLAIN	w1_distance	DISASSEMBLED (map): weapon slot 1 +0x10, a distance taken at create (0x49E0EA..0x49E11B)
+0x014	4	PLAIN	w1_distance	DISASSEMBLED (map): weapon slot 1 +0x10, a distance taken at create (0x49E0EA..0x49E11B) and never written after; the ballistic shot builder 0x49CDE0 reads it at 0x49CE62 on a playback host too, through the shot receiver 0x49D270 (0x49D44E), so replay-hold.tsv does not hold it
 0x018	2	COUNT	w1_reload	DISASSEMBLED 0x49E1C8..0x49E1D2: weapon slot 1 +0x14, the reload countdown, which AutoAim decrements while it is above 0; MEASURED -1 in 1,089,621 of 1,116,370 changes (research/sizelab/units/README.md)
 0x01A	2	PLAIN	w1_aim_heading	DISASSEMBLED (map): weapon slot 1 +0x16, the aim heading
 0x01C	2	PLAIN	w1_aim_pitch	DISASSEMBLED (map): weapon slot 1 +0x18, the aim pitch
@@ -30,7 +30,7 @@
 0x024	4	PLAIN	w2_callback	DISASSEMBLED (map): weapon slot 2 +0x4, the Aim completion callback's vtable 0x4FD6F0, written only by the creates
 0x028	4	PLAIN	w2_aimed	DISASSEMBLED (map): weapon slot 2 +0x8, aim complete: 0 when Aim starts and at fire, 1 through the callback 0x481490
 0x02C	4	PLAIN	weapon2	DISASSEMBLED (map): weapon slot 2 +0xC, the weapon def, set once by 0x49E070; the image carries its ID (replay-layout.tsv, weapon2)
-0x030	4	PLAIN	w2_distance	DISASSEMBLED (map): weapon slot 2 +0x10, a distance taken at create (0x49E0EA..0x49E11B)
+0x030	4	PLAIN	w2_distance	DISASSEMBLED (map): weapon slot 2 +0x10, a distance taken at create (0x49E0EA..0x49E11B) and never written after; the ballistic shot builder 0x49CDE0 reads it at 0x49CE62 on a playback host too, through the shot receiver 0x49D270 (0x49D44E), so replay-hold.tsv does not hold it
 0x034	2	COUNT	w2_reload	DISASSEMBLED 0x49E1C8..0x49E1D2: weapon slot 2 +0x14, the reload countdown, which AutoAim decrements while it is above 0; MEASURED -1 in 1,089,621 of 1,116,370 changes (research/sizelab/units/README.md)
 0x036	2	PLAIN	w2_aim_heading	DISASSEMBLED (map): weapon slot 2 +0x16, the aim heading
 0x038	2	PLAIN	w2_aim_pitch	DISASSEMBLED (map): weapon slot 2 +0x18, the aim pitch
@@ -41,7 +41,7 @@
 0x040	4	PLAIN	w3_callback	DISASSEMBLED (map): weapon slot 3 +0x4, the Aim completion callback's vtable 0x4FD6F0, written only by the creates
 0x044	4	PLAIN	w3_aimed	DISASSEMBLED (map): weapon slot 3 +0x8, aim complete: 0 when Aim starts and at fire, 1 through the callback 0x481490
 0x048	4	PLAIN	weapon3	DISASSEMBLED (map): weapon slot 3 +0xC, the weapon def, set once by 0x49E070; the image carries its ID (replay-layout.tsv, weapon3)
-0x04C	4	PLAIN	w3_distance	DISASSEMBLED (map): weapon slot 3 +0x10, a distance taken at create (0x49E0EA..0x49E11B)
+0x04C	4	PLAIN	w3_distance	DISASSEMBLED (map): weapon slot 3 +0x10, a distance taken at create (0x49E0EA..0x49E11B) and never written after; the ballistic shot builder 0x49CDE0 reads it at 0x49CE62 on a playback host too, through the shot receiver 0x49D270 (0x49D44E), so replay-hold.tsv does not hold it
 0x050	2	COUNT	w3_reload	DISASSEMBLED 0x49E1C8..0x49E1D2: weapon slot 3 +0x14, the reload countdown, which AutoAim decrements while it is above 0; MEASURED -1 in 1,089,621 of 1,116,370 changes (research/sizelab/units/README.md)
 0x052	2	PLAIN	w3_aim_heading	DISASSEMBLED (map): weapon slot 3 +0x16, the aim heading
 0x054	2	PLAIN	w3_aim_pitch	DISASSEMBLED (map): weapon slot 3 +0x18, the aim pitch

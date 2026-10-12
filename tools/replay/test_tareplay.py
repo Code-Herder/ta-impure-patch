@@ -1190,17 +1190,21 @@ class LossyStream(unittest.TestCase):
                         for t in range(first, last + 1))
 
     def parts(self, lossy3=None, lossy31=None, refresh31=True, refresh2=True, exact=True,
-              header=None, last=31):
+              header=None, last=31, gone=None):
         """The file: iteration 1 makes unit 1, the exact stream changes its dword HELD and dword
         10 at 3; the lossy stream carries `lossy3` there (dword 10 alone by default) and `lossy31`
         at the refresh 31 (dword HELD's change by default). The second iteration ends a block of
-        its own, a refresh block unless `refresh2` is false; the stream runs to `last`."""
+        its own, a refresh block unless `refresh2` is false; the stream runs to `last`. With
+        `gone`, both streams end unit 1 at that GameTime."""
         S, F = tarec.RBF_STORED, tarec.RBF_REFRESH
         first = (tlv(tarec.RK_UNIT, struct.pack("<HH", 1, 0) + bytes(tarec.REC_UNIT_IMAGE)) +
                  tlv(tarec.RK_MAPPED, struct.pack("<I", 0) + bytes(2)))
-        x = self.ticks(3, last, {3: delta(1, {self.HELD: 7, 10: 9})})
-        lossy = self.ticks(3, last, {3: delta(1, {10: 9}) if lossy3 is None else lossy3,
-                                     31: delta(1, {self.HELD: 7}) if lossy31 is None else lossy31})
+        x = {3: delta(1, {self.HELD: 7, 10: 9})}
+        lossy = {3: delta(1, {10: 9}) if lossy3 is None else lossy3,
+                 31: delta(1, {self.HELD: 7}) if lossy31 is None else lossy31}
+        if gone is not None:
+            x[gone] = lossy[gone] = tlv(tarec.RK_UNIT_GONE, struct.pack("<HH", 1, 0))
+        x, lossy = self.ticks(3, last, x), self.ticks(3, last, lossy)
         out = [header or held_header(unit_held=(self.HELD,)),
                flagged(tarec.RB_STREAM, 1, 1, self.ticks(1, 1, {1: first}), S | F),
                flagged(tarec.RB_EXACT, 1, 1, self.ticks(1, 1, {1: first}), S),
@@ -1221,6 +1225,12 @@ class LossyStream(unittest.TestCase):
         rc, o = self.lossy_check(self.file(*self.parts()))
         self.assertEqual(rc, 0, o)
         self.assertIn("31 iterations to GameTime 31, 3 refreshes", o)
+
+    def test_an_iteration_whose_only_unit_record_ends_a_unit_passes(self):
+        """a held table and an iteration that touches no unit live in both streams afterwards"""
+        rc, o = self.lossy_check(self.file(*self.parts(last=5, gone=5, refresh31=False)))
+        self.assertEqual(rc, 0, o)
+        self.assertIn("5 iterations to GameTime 5", o)
 
     def test_to_stops_the_walk(self):
         rc, o = self.lossy_check(self.file(*self.parts()), "--to", "10")
@@ -1307,6 +1317,135 @@ class LossyStream(unittest.TestCase):
                     tarec.header(held_header(**hold)[32:])
         with self.assertRaisesRegex(tarec.Unreadable, "of 12 bytes"):
             tarec.header(header()[32:] + tlv(tarec.RT_HOLD, bytes(12)))
+
+
+def spray(uid, x, y, z):
+    """An RK_EV_SPRAY of unit ID `uid` at the point (x, y, z), its box and layer fixed."""
+    return tlv(tarec.RK_EV_SPRAY, struct.pack("<IIiii", uid, 0, x, y, z) +
+               struct.pack("<6i", *range(6)) + struct.pack("<I", 6))
+
+
+def session(uid, mode):
+    return tlv(tarec.RK_SPRAY_SESSION, struct.pack("<IBxxx", uid, mode))
+
+
+def unit_at(slot, x, y, z):
+    """An RK_UNIT of `slot` at the position (x, y, z), +0x6A"""
+    img = bytearray(tarec.REC_UNIT_IMAGE)
+    struct.pack_into("<iii", img, 0x6A, x, y, z)
+    return tlv(tarec.RK_UNIT, struct.pack("<HH", slot, 0) + img)
+
+
+class LossySprays(unittest.TestCase):
+    """tarec's spray sessions (Sprays) against a file whose stream writes its nano sprays as
+    sessions (RT_HOLD's RECL_SPRAYS) and whose exact stream (RB_EXACT) carries every spray: unit 1
+    (ID 2) sprays the same point at GameTime 3 to 6, and its session, opened at 4, implies 5 and
+    6 and closes at 7, where it makes none."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.n = 0
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def file(self, exact, lossy, flags=tarec.RECL_SPRAYS):
+        """Iterations 1 and 2 refresh blocks of their own, 3..31 one block whose last is a
+        refresh; `exact` and `lossy` {GameTime: records} after each RK_TICK of 3..31."""
+        S, F = tarec.RBF_STORED, tarec.RBF_REFRESH
+        first = (unit_at(1, 0, 0, 0) +
+                 tlv(tarec.RK_MAPPED, struct.pack("<I", 0) + bytes(2)))
+        one = LossyStream.ticks(1, 1, {1: first})
+        two = LossyStream.ticks(2, 2, {})
+        parts = [held_header(flags=flags),
+                 flagged(tarec.RB_STREAM, 1, 1, one, S | F), flagged(tarec.RB_EXACT, 1, 1, one, S),
+                 flagged(tarec.RB_STREAM, 2, 2, two, S | F), flagged(tarec.RB_EXACT, 2, 2, two, S),
+                 flagged(tarec.RB_STREAM, 3, 31, LossyStream.ticks(3, 31, lossy), S | F),
+                 flagged(tarec.RB_EXACT, 3, 31, LossyStream.ticks(3, 31, exact), S),
+                 end_block(31)]
+        self.n += 1
+        path = Path(self.tmp.name) / f"s{self.n}.imprec"
+        path.write_bytes(tarec.REC_MAGIC + b"".join(parts))
+        return str(path)
+
+    A = spray(2, 100, 200, 300)
+    EXACT = {3: A, 4: A, 5: A, 6: A}
+    LOSSY = {3: A, 4: A + session(2, 1), 7: session(2, 0)}
+
+    def lossy_check(self, path):
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(out):
+            rc = tarec.main(["tarec", "lossy-check", path])
+        return rc, out.getvalue()
+
+    def test_implied_sprays_pass(self):
+        rc, o = self.lossy_check(self.file(self.EXACT, self.LOSSY))
+        self.assertEqual(rc, 0, o)
+        self.assertIn("sprays 2 written and 2 implied", o)
+
+    def test_the_world_carries_the_implied_sprays(self):
+        h, bl, _ = tarec.load(self.file(self.EXACT, self.LOSSY))
+        got = []
+        tarec.stream_to(h, bl, on_record=lambda w, k, b: got.append(w.tick)
+                        if k == tarec.RK_EV_SPRAY else None)
+        self.assertEqual(got, [3, 4, 5, 6])
+
+    def test_following_its_unit(self):
+        exact = {3: spray(2, 100, 200, 300),
+                 4: unit_at(1, 10, 0, -20) + spray(2, 110, 200, 280),
+                 5: unit_at(1, 15, 1, -20) + spray(2, 115, 201, 280)}
+        lossy = {3: exact[3], 4: exact[4] + session(2, 1 | tarec.REC_SPRAY_FOLLOW),
+                 5: unit_at(1, 15, 1, -20), 6: session(2, 0)}
+        rc, o = self.lossy_check(self.file(exact, lossy))
+        self.assertEqual(rc, 0, o)
+        self.assertIn("sprays 2 written and 1 implied", o)
+
+    def test_a_spray_the_game_did_not_make_fails(self):
+        exact = dict(self.EXACT)
+        del exact[6]
+        rc, o = self.lossy_check(self.file(exact, self.LOSSY))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 6: the nano sprays, 1 with the implied ones, are not the exact "
+                      "stream's 0", o)
+
+    def test_a_session_from_no_spray_fails(self):
+        lossy = dict(self.LOSSY)
+        lossy[3] = self.A + session(3, 1)
+        rc, o = self.lossy_check(self.file(self.EXACT, lossy))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 3: the spray session of unit 3 at GameTime 3 predicts from no "
+                      "single spray", o)
+
+    def test_a_session_without_recl_sprays_fails(self):
+        rc, o = self.lossy_check(self.file(self.EXACT, self.LOSSY, flags=0))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("a spray session in a stream without RECL_SPRAYS", o)
+        h, bl, _ = tarec.load(self.file(self.EXACT, self.LOSSY, flags=0))
+        with self.assertRaisesRegex(tarec.Unreadable, "a spray session outside a stream"):
+            tarec.stream_to(h, bl)
+
+    AFTER = {**LOSSY, 4: A + session(2, 1) + spray(3, 1, 2, 3)}       # a record after the sessions
+    UNORDERED = {**LOSSY, 4: A + session(3, 0) + session(2, 1)}       # sessions out of slot order
+
+    def test_a_record_after_the_sessions_is_unreadable(self):
+        h, bl, _ = tarec.load(self.file(self.EXACT, self.AFTER))
+        with self.assertRaisesRegex(tarec.Unreadable, "record kind 28 after the iteration's spray "
+                                                      "sessions"):
+            tarec.stream_to(h, bl)
+
+    def test_sessions_out_of_slot_order_are_unreadable(self):
+        h, bl, _ = tarec.load(self.file(self.EXACT, self.UNORDERED))
+        with self.assertRaisesRegex(tarec.Unreadable, "the spray session of unit 2 after unit 3's"):
+            tarec.stream_to(h, bl)
+
+    def test_a_malformed_session_is_unreadable(self):
+        for mode in (3, tarec.REC_SPRAY_FOLLOW, 0x11):
+            with self.subTest(mode=mode):
+                lossy = dict(self.LOSSY)
+                lossy[4] = self.A + session(2, mode)
+                h, bl, _ = tarec.load(self.file(self.EXACT, lossy))
+                with self.assertRaisesRegex(tarec.Unreadable, "a malformed spray session"):
+                    tarec.stream_to(h, bl)
 
 
 class SeekStart(unittest.TestCase):

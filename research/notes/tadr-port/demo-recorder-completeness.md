@@ -73,6 +73,15 @@ ten-record runtime uses `0x158C` bytes. Several pools now live in the DLL. COB e
 history is still reconstructed, rather than recorded, under the existing contract;
 a larger native allocation does not change that replay limitation.
 
+**What a skirmish stream holds.** The exclusion file says which bytes are recorded at all; a
+second table, `tagpu/ddraw/replay-hold.tsv`, says which of the recorded unit and main-order-list
+bytes a skirmish recording's stream may carry at an earlier value between two refreshes (every 300
+ticks), each row a loosening with the readers it has on a playback host and its evidence. Every
+byte no row names is exact at every tick, and at a refresh every byte is: *The exact stream* below
+says how the harness proves it. `tools/replay-hold-gen.py` validates the table and generates
+`inc/tagpu_rechold.h`, checked at the link like the layout's header, and each recording carries the
+masks it was written with (`RT_HOLD`).
+
 **What restoring these records needs**, found while building the file; each is for the applier
 the skirmish slice brings:
 
@@ -438,8 +447,13 @@ lanes launch with the test lever `tagpu_rec.exact`, under which the writer follo
 block with the exact records it filtered (`RB_EXACT`). L's dumps are compared with that exact
 stream (`tarec compare --exact`), and `tarec lossy-check` walks the two streams side by side and
 fails by name unless, at every iteration, every byte the hold masks leave clear is equal, every
-held byte is the stream's previous value or the exact one, the two worlds are equal at every
-refresh and every refresh sits on its grid and ends its block. So lossy-check proves the lossy
+held byte is the stream's previous value or the exact one, the iteration's nano sprays -- the
+stream's and the ones its spray sessions imply -- are the exact stream's as a multiset and each
+unit's in order, the two worlds are equal at every refresh and every refresh sits on its grid and
+ends its block. That clause is Python's; the DLL's own reader meets the same check in
+`codectest.py sprays` (the Windows build links `tagpu_recreader.c`), which compares every
+iteration's sprays with the exact stream's, read in order and after a seek to each snapshot, and
+`codectest.py spraycases` runs it on built files, including the ones the reader must refuse. So lossy-check proves the lossy
 stream against the exact one at every iteration; the exact stream is proved against the live game
 only where something compares them, at L's dumps and by the writer's own verification
 ([self-verification](demo-recorder-skirmish-slice.md#self-verification)), not at every iteration. K's dump
@@ -447,8 +461,16 @@ is compared with the fork's exact stream, F's with its lossy stream, and timelin
 lossy-checked. The fixtures with a takeover launch every process with `tagpu_rec.refresh 30`
 (*Taking over*: a takeover starts at a refresh). **A hold row is a loosening**, the owner's
 decision like an exclusion: it names its readers on a playback host and its evidence, and a reader
-found there that shows the byte removes the row. Format 13's table has no row, so its stream
-carries every record as the capture made it.
+found there that shows the byte removes the row. The table's rows, the owner's (2026-10-11), hold
+the three weapon slots' aim and target state, the unit's resource ledger's accumulators (`+0xBC`
+to `+0xC8`, `+0xD4` to `+0xE0`) and the main order list's handler state (`+0x05`, `+0x06`, `+0x0A`,
+`+0x2E`, `+0x3E`, `+0x4E`, `+0x52` and most of `+0x42`); a slot's distance, read by the shot builder
+on a playback host, and the node flags a playback host reads stay exact. On the heavy hour they take
+the file from 42.15 to 30.53 MB (MEASURED offline, the writer's path at a refresh every 300 ticks;
+[size](demo-recorder-size.md#l5-the-lossy-plan-measured-offline)). The stream also leaves out the nano sprays its spray sessions imply,
+which every reader makes again with the same bytes after the iteration's events (format 15,
+`RK_SPRAY_SESSION`; the order of the sprays inside an iteration is the decision of 2026-10-11
+below).
 
 **One run at a time.** Every `tareplay.py` command that plays games -- `run`, `measure`,
 `landing` (not `--check`), `broad`, `takeover`, `forks`, `rewind` -- first takes the machine's run
@@ -928,6 +950,7 @@ region with whether its fixtures reach it.
 | 2026-10-02 | **A fork is always recorded**, whatever `tagpu_recorder.on` says (S4's D3); a takeover whose file cannot be appended is refused before the rebuild, with the reason. **B4's per-slot columns are recorded** (D4, landing S4a). **The fork rules' last-used times live in the recording** (D5), appended when a watching session ends and skipped with a log line when the file cannot be written. |
 | 2026-10-08 | **The harness runs a test-only turbo** (*Test speed*): k ticks a frame, k = 1 by default and 1..5 in the lever; a live lane acts at GameTimes by `pause at <T>` and the K and U judges are bound to ticks; every game gets the test render profile (a 20 fps present cap, `shadowres=512`). **The meteor shower's strike points after a takeover stay an open gap** (*Open items*). |
 | 2026-10-09 | **No check of the gate is decided by the wall clock** (*Ticks, not polls*): a test launch's hold starts its level held (its pause bit and one-tick first batch written from `tagpu_replay.c`, a `presentation` file, on test launches only: a loosening the owner approved); a seek's cost is its game thread's CPU time, bounded by 4,000 ms with SMT and clock contention named as the residual; the fixture worlds change once, deterministically, as scenarios now land at GameTime 1; the compat suite's soaks and `--watch` count game ticks or presented frames (SECONDS × 30) with a 120 s stall bound. |
+| 2026-10-11 | **A recording does not keep the order of the nano sprays inside one iteration** (OD5 of the lossy plan, a loosening the owner approved): a spray a unit's spray session implies is left out of the stream and made again by every reader after the iteration's events, units ascending. Every spray stays exact: the same ID, point, box and layer in the same iteration, the point the unit's own earlier spray's, moved by exactly the unit's position change when it follows the unit. Why the order can go: the emitters `0x4720D0`/`0x472200` change no simulation state and draw only the C runtime's rand, which a playing does not reproduce, and the order of a step's emissions decides only their particles' order in the layer -- the draw order and which one a full layer destroys first -- and, when the particle pool `0x51E610` that every emitter shares (1000 objects in stock) runs out within the step, which emission makes no particle (the engine map's *The nano spray*); the owner confirmed OD5 covers it, 2026-10-12. `tarec lossy-check` compares each iteration's sprays as a multiset and each unit's in order. Rejected: zeroing the point, which the game shows (the offline plan's step, −3.9 MB on a stream whose cells were already held, against −2.72 MB for the exact sessions over the unit and order rows). |
 | 2026-10-11 | **A takeover's AIs read the recording's contacts at T** (O14 for takeovers): when P is the recording's viewed record, the takeover restores `+0x110` bits 8–10 from the recording after its radar pass, as the seek does, so the fork's first acquisition scans read the contacts the recording held at T, as the recording's AIs read them until its next pass; a multiplayer recording's takeover keeps its own pass's bits (below). Rejected: masking bits 8–10 in `fork_view` for every fork, a loosening of D2 (d) that would leave the fork's AIs reading a picture the parent never held; and steering the harness off the ticks after a scripted step, which hides the gap. |
 | 2026-10-12 | **A failure only under load is a bug in the check** (the owner's rule): a peek the running game has not answered is no progress, so `STALL_S` is the one bound on a running level. **Approved by the owner (2026-10-12):** the seek's W3 is an exact count of the blocks the reader decoded against the file's own, with the game thread's CPU time reported only and the gap that leaves accepted (*A seek's work, not its time*); and bits 1 and 2 of the pause word `main+0x38A51`, the pacing gate's lag flag and its live speed below the chosen one, are left (`replay-globals.tsv`, `pacingbits`, a `leave` row: bit 2 has no reader, bit 1 only the corner icon and the turbo). |
 

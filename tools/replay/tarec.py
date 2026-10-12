@@ -96,8 +96,9 @@ A skirmish recording's stream is LOSSY (tagpu/ddraw/src/tagpu_reclossy.c): betwe
 it may hold the bytes its header's RT_HOLD names at a value the engine produced earlier, and at
 each refresh -- the segment's first two iterations and then every GameTime 1 modulo RT_HOLD's
 interval (is_refresh), the last iteration of a stream block flagged RBF_REFRESH -- its world is
-the writer's exact copy. A
-snapshot follows a refresh block only. A recording made under the test lever tagpu_rec.exact
+the writer's exact copy. With RT_HOLD's RECL_SPRAYS it leaves out the nano sprays its spray
+sessions (RK_SPRAY_SESSION) imply, which every reader makes again at the end of their iteration
+(Sprays; World.iteration_end). A snapshot follows a refresh block only. A recording made under the test lever tagpu_rec.exact
 carries each stream block's exact records after it, as an RB_EXACT block. A file ends at
 its last complete block: a block cut short or torn ends the reading, and the file is reported as
 read to there. A dump (`dump <name>` in tagpu_replay.trigger) is REC_MAGIC, a stored header with the
@@ -137,7 +138,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 14                           # zstd runs and chains, the lossy stream, its record frames
+REC_FORMAT = 15                           # zstd runs and chains, hold rows, sprays as sessions
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -248,6 +249,7 @@ REC_HOLD_BYTES = 8 + 32 + REC_UNIT_IMAGE + REC_ORDER_IMAGE
 REC_REFRESH_TICKS, REC_REFRESH_MIN = 300, 30
 RECL_CELLS, RECL_SPRAYS = 1, 2
 REC_HOLD_POS = range(0x6A, 0x76)          # the unit position, which a spray session reads
+REC_SPRAY_FOLLOW = 8                      # RK_SPRAY_SESSION's mode: the point follows the unit
 RESULTS = {0: "unknown", 1: "won", 2: "lost"}
 
 END_REASONS = {1: "complete: the level ended", 2: "INCOMPLETE: the ring was full",
@@ -601,6 +603,88 @@ def _delta_runs(bits, dwords):
     return got
 
 
+class Sprays:
+    """THE SPRAY SESSIONS' TABLE every reader of a stream with RT_HOLD's RECL_SPRAYS keeps, as
+    tagpu_reclossy.c's RecSprays: each unit slot's session (RK_SPRAY_SESSION: the period p, 1, 2
+    or 4, and FOLLOW) and its sprays of the last four GameTimes -- one spray, or a mark of several
+    -- with the unit's liveness and position +0x6A then. At the end of each iteration a slot with
+    a session and no spray of its own gets the one its session implies: its spray of T - p, with
+    FOLLOW its point moved by the unit's position change since, each axis modulo 2^32; one that
+    would predict from no single spray, or follow a unit not live then and now, is malformed (the
+    writer never leaves one open). `unit_of(slot)` gives (live, (x, y, z)) at the iteration."""
+    ONE, SEVERAL = 1, 2
+
+    def __init__(self, slots):
+        self.slots = slots
+        self.mode = {}                  # slot -> its session's mode, open sessions only
+        self.at = {}                    # (slot, T % 4) -> (T, mark, live, pos, body)
+
+    def empty(self):
+        self.mode.clear()
+        self.at.clear()
+
+    def slot(self, b):
+        """the unit slot a spray's or a session's ID names, or 0"""
+        s = struct.unpack_from("<I", b)[0] - 1
+        return s if 1 <= s < self.slots else 0
+
+    def session(self, b):
+        m = b[4] if len(b) == 8 else 0
+        p = m & 7
+        if len(b) != 8 or any(b[5:8]) or m & ~(7 | REC_SPRAY_FOLLOW) or \
+                (p not in (1, 2, 4) if p else m) or not self.slot(b):
+            raise Unreadable(f"a malformed spray session ({bytes(b).hex()})")
+        if m:
+            self.mode[self.slot(b)] = m
+        else:
+            self.mode.pop(self.slot(b), None)
+
+    def note(self, s, T, body, live, pos):
+        e = self.at.get((s, T % 4))
+        if e and e[0] == T:
+            self.at[(s, T % 4)] = (T, self.SEVERAL) + e[2:]
+        else:
+            self.at[(s, T % 4)] = (T, self.ONE, live, pos, bytes(body))
+
+    def spray(self, T, b, unit_of):
+        if len(b) != 48:
+            raise Unreadable(f"a nano spray of {len(b)} bytes")
+        s = self.slot(b)
+        if s:
+            self.note(s, T, b[4:], *unit_of(s))
+
+    def predict(self, s, T, m, unit_of):
+        p = m & 7
+        e = self.at.get((s, (T - p) % 4))
+        if not p or e is None or e[0] != T - p or e[1] != self.ONE:
+            return None
+        body = e[4]
+        if m & REC_SPRAY_FOLLOW:
+            live, now = unit_of(s)
+            if not e[2] or not live:
+                return None
+            pt = struct.unpack_from("<III", body, 4)
+            pt = [(v + n - o) & 0xFFFFFFFF for v, n, o in zip(pt, now, e[3])]
+            body = body[:4] + struct.pack("<III", *pt) + body[16:]
+        return body
+
+    def imply(self, T, unit_of):
+        """The sprays the sessions imply at the end of iteration T, 48 bytes each, slots
+        ascending, each taken into the table."""
+        out = []
+        for s in sorted(self.mode):
+            e = self.at.get((s, T % 4))
+            if e and e[0] == T:
+                continue                # a spray of its own in T
+            body = self.predict(s, T, self.mode[s], unit_of)
+            if body is None:
+                raise Unreadable(f"the spray session of unit {s + 1} at GameTime {T} predicts "
+                                 f"from no single spray of it, or follows it not live")
+            out.append(struct.pack("<I", s + 1) + body)
+            self.note(s, T, body, *unit_of(s))
+        return out
+
+
 class World:
     def __init__(self, slots, tables, header=None, dims=None):
         self.slots = slots
@@ -626,6 +710,7 @@ class World:
         self.fbracket = 0               # an RK_EV_FEATURE's root + 1, until its end
         self.deaths = []                # the IDs of the deaths whose end is still to come
         self.evented = False            # an event has come since the iteration's RK_TICK
+        self.session = None             # the unit ID of the iteration's last RK_SPRAY_SESSION
         self.units = {}                                  # slot -> bytearray image, live only
         self.lists = {}                                  # (slot, list) -> bytearray, not empty
         self.players = [bytearray(REC_PLAYER_IMAGE) for _ in range(REC_PLAYERS)]
@@ -646,6 +731,28 @@ class World:
                                                       # first: (GameTime, its RecPov's bytes)
         self.sel = [None] * REC_PLAYERS     # a seat's selection, [(slot, birth)], once it has one
         self.clicks = []                    # the iteration's RK_CLICK bodies, in order
+        self.sprays = Sprays(slots)         # the spray sessions' table (RECL_SPRAYS)
+        self.ended = True                   # the iteration's implied sprays have been made
+
+    def sprays_on(self):
+        """the stream writes its nano sprays as sessions (RT_HOLD's RECL_SPRAYS)"""
+        hold = self.header.get("hold") if self.header else None
+        return bool(hold and hold["flags"] & RECL_SPRAYS)
+
+    def unit_of(self, s):
+        img = self.units.get(s)
+        return (True, struct.unpack_from("<iii", img, 0x6A)) if img is not None else (False, (0, 0, 0))
+
+    def iteration_end(self):
+        """The sprays the iteration's spray sessions imply, (RK_EV_SPRAY, body) each, slots
+        ascending: what follows its events in every reader's world (tagpu_recreader.c, tick_end).
+        Once an iteration; a snapshot's world makes none."""
+        if self.ended or self.snap:
+            return []
+        self.ended = True
+        if not self.sprays_on():
+            return []
+        return [(RK_EV_SPRAY, b) for b in self.sprays.imply(self.tick, self.unit_of)]
 
     def bracket(self, kind, b):
         """The brackets' grammar, as the DLL's reader has it (tagpu_recreader.c, event_take): a
@@ -741,7 +848,8 @@ class World:
         copy and so every snapshot follow (tagpu_recwriter.c, feature_record). An order list's
         records come together and in order, as the DLL's reader has them (tagpu_recreader.c,
         list_record)."""
-        if kind == RK_UNIT_DELTA and self.pend is None and not self.fbracket and not self.deaths:
+        if kind == RK_UNIT_DELTA and self.pend is None and not self.fbracket and not self.deaths \
+                and self.session is None:
             # the stream's most common record: with no order list, feature call or death open,
             # nothing below refuses it
             self._delta(self.units[_U16(b)[0]], b[2:2 + REC_UNIT_BITS], REC_UNIT_DWORDS,
@@ -749,6 +857,8 @@ class World:
             return None
         if self.pend is not None and kind != RK_ORDERS:
             raise Unreadable(f"slot {self.pend[0]}'s order list cut short by another record")
+        if self.session is not None and kind not in (RK_SPRAY_SESSION, RK_TICK):
+            raise Unreadable(f"record kind {kind} after the iteration's spray sessions")
         if kind in EVENTS:              # RCS_EVENTS's kinds (tagpu_recfmt.h, rec_section_of)
             self.evented = True
         if kind == RK_EV_NET_CREATE:
@@ -784,6 +894,18 @@ class World:
             self.tick = struct.unpack_from("<I", b)[0]
             self.clicks = []
             self.evented = False
+            self.ended = False
+            self.session = None
+        elif kind == RK_SPRAY_SESSION:
+            # after the iteration's last other record, slots ascending (tagpu_recfmt.h)
+            if self.snap or not self.sprays_on():
+                raise Unreadable("a spray session outside a stream that writes its sprays as "
+                                 "sessions")
+            unit = struct.unpack_from("<I", b)[0] if len(b) >= 4 else 0
+            if self.session is not None and unit <= self.session:
+                raise Unreadable(f"the spray session of unit {unit} after unit {self.session}'s")
+            self.sprays.session(b)
+            self.session = unit
         elif kind == RK_UNIT:
             self.units[struct.unpack_from("<H", b)[0]] = bytearray(b[4:4 + REC_UNIT_IMAGE])
         elif kind == RK_UNIT_DELTA:
@@ -933,6 +1055,9 @@ class World:
             img = self.images.setdefault(which, bytearray(size))
             img[off:off + len(b) - 8] = b[8:]
         elif kind in EVENTS:
+            # the images come before the events: the units are this iteration's
+            if kind == RK_EV_SPRAY and self.sprays_on():
+                self.sprays.spray(self.tick, b, self.unit_of)
             return kind, b
         else:
             raise Unreadable(f"record kind {kind} in a block")
@@ -1363,11 +1488,19 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
     Across a chain (load's RB_BOUNDARY markers) each segment is read to the GameTime before the
     next fork_at, its snapshots past that unread, and at the marker a fresh world, the child's
     header's seats and viewer, takes the child's first iteration whole (the reader's invariant,
-    tagpu_recreader.c); on_record(world, RB_BOUNDARY, None) says so first, with the parent's."""
+    tagpu_recreader.c); on_record(world, RB_BOUNDARY, None) says so first, with the parent's.
+    An iteration's implied sprays (World.iteration_end) come to on_record as RK_EV_SPRAY after its
+    last record, and a snapshot block passed on the way empties the spray sessions' table, as the
+    DLL's sequential reader does."""
     w = World(h["slots"], h["tables"], h)
     marks = [blk[1] for blk in bl if blk[0] == RB_BOUNDARY]
     cut = marks.pop(0) - 1 if marks else None
     skip = False
+
+    def ended():
+        for rk, b in w.iteration_end():
+            if on_record:
+                on_record(w, rk, b)
     for kind, first, last, payload in bl[1:]:
         if kind == RB_BOUNDARY:
             w.whole(True)
@@ -1381,12 +1514,15 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
             continue
         if skip:
             continue
-        if kind == RB_SNAPSHOT and on_snapshot and (cut is None or last <= cut):
-            on_snapshot(w, payload)
+        if kind == RB_SNAPSHOT and (cut is None or last <= cut):
+            if on_snapshot:
+                on_snapshot(w, payload)
+            w.sprays.empty()
         if kind != RB_STREAM:
             continue
         for rk, b in records(payload):
             if rk == RK_TICK:
+                ended()
                 if cut is not None and struct.unpack_from("<I", b)[0] > cut:
                     skip = True
                     break
@@ -1402,6 +1538,7 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
             w.apply(rk, b)
             if on_record:
                 on_record(w, rk, b)
+        ended()
         w.whole(True)           # a stream block ends where an iteration does
     return w
 
@@ -1611,7 +1748,7 @@ def cmd_info(path):
             if rk in EVENTS or rk in (RK_ORDERS, RK_CONTROLLER, RK_VIEWER, RK_CELLS, RK_WRECK,
                                       RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ,
                                       RK_PROJ_DELTA, RK_MAPPED, RK_MAPPED_RUNS, RK_POV, RK_CLICK,
-                                      RK_SELECT):
+                                      RK_SELECT, RK_SPRAY_SESSION):
                 ev[rk] = ev.get(rk, 0) + 1
                 evb[rk] = evb.get(rk, 0) + 4 + ((len(b) + 3) & ~3)
     names = {**EVENTS, RK_ORDERS: "order list", RK_CONTROLLER: "controller", RK_VIEWER: "viewer",
@@ -1619,7 +1756,9 @@ def cmd_info(path):
              RK_GLOBALS_DELTA: "globals delta", RK_PROJ_HEAD: "projectile head",
              RK_PROJ: "projectile record", RK_PROJ_DELTA: "projectile delta",
              RK_MAPPED: "explored map record", RK_MAPPED_RUNS: "explored map runs",
-             RK_POV: "camera and cursor sample", RK_CLICK: "click", RK_SELECT: "selection"}
+             RK_POV: "camera and cursor sample", RK_CLICK: "click", RK_SELECT: "selection",
+             # the stream's own: the sprays its sessions imply are made by the readers, not counted
+             RK_EV_SPRAY: "nano spray written", RK_SPRAY_SESSION: "spray session"}
     print("  records: " + (", ".join(f"{ev[k]} {names[k]} ({evb[k] >> 10} KB)" for k in sorted(ev))
                            or "no order lists, seats or events"))
     ends = [b for b in bl if b[0] == RB_END]
@@ -1897,7 +2036,8 @@ def iterations(payload):
 class Held:
     """The units, their liveness and their order lists as one stream builds them -- the lossy
     stream's or the exact one's -- with the slots and lists each iteration touched, the bytes of
-    the iteration's other records in order, and each touched thing as it was before."""
+    the iteration's other records in order but its nano sprays and spray sessions, those bodies
+    in order apart, and each touched thing as it was before."""
 
     def __init__(self, slots):
         import numpy as np
@@ -1910,7 +2050,7 @@ class Held:
     def iteration(self, recs):
         np = self.np
         head = _REC_HEAD.unpack_from
-        prev, prev_lists, other = {}, {}, []
+        prev, prev_lists, other, sprays, sessions = {}, {}, [], [], []
         pend = None
         at, n = 0, len(recs)
         while at < n:
@@ -1969,11 +2109,20 @@ class Held:
             else:
                 if pend is not None:
                     raise Unreadable(f"slot {pend[0]}'s list unfinished")
-                other.append(recs[at:at + size])
+                if kind == RK_EV_SPRAY:
+                    sprays.append(bytes(recs[at + 4:at + 4 + ln]))
+                elif kind == RK_SPRAY_SESSION:
+                    sessions.append(bytes(recs[at + 4:at + 4 + ln]))
+                else:
+                    other.append(recs[at:at + size])
             at += size
         if pend is not None:
             raise Unreadable(f"slot {pend[0]}'s list unfinished")
-        return prev, prev_lists, b"".join(other)
+        return prev, prev_lists, b"".join(other), sprays, sessions
+
+    def unit_of(self, s):
+        """(live, position +0x6A) of slot s, as a spray session reads it"""
+        return bool(self.live[s]), struct.unpack_from("<iii", self.units[s].tobytes(), 0x6A)
 
 
 def is_refresh(n, t, prev, interval):
@@ -2009,14 +2158,19 @@ def cmd_lossy_check(path, timeline=0, to=None):
           snapshot after a refresh block, and a refresh block ending at each refresh of the
           writer's grid (is_refresh, on RT_HOLD's interval) and nowhere else, as the takeover's
           rounding reads them;
+      (d) with RT_HOLD's RECL_SPRAYS, each iteration's nano sprays -- the stream's and the ones
+          its spray sessions imply (Sprays, over the stream's units) -- the exact stream's as a
+          multiset of (ID, body), and each ID's in the exact stream's order: the order across
+          IDs inside one iteration is the one thing not kept, a loosening the owner approved
+          (tagpu_reclossy.c, THE SPRAY SESSIONS); every other event is in (a);
       (e) RT_HOLD in every skirmish segment's header, and the exact stream's blocks and
           iterations the stream's.
-    Held sprays and cells (RT_HOLD's RECL_SPRAYS, RECL_CELLS) are refused as unreadable: this
-    check does not know their rules."""
+    Held cells (RT_HOLD's RECL_CELLS) are refused as unreadable: this check does not know their
+    rule."""
     import numpy as np
     ch, fl, stop = lossy_chain(path, timeline)
     lines, bad = [], 0
-    n_iter = n_refresh = n_snap = 0
+    n_iter = n_refresh = n_snap = n_written = n_implied = 0
     last = None
 
     def fail(msg):
@@ -2037,14 +2191,16 @@ def cmd_lossy_check(path, timeline=0, to=None):
             fail(f"timeline {seg['id']}: a skirmish header without RT_HOLD")
             break
         else:
-            if hold["flags"]:
-                raise Unreadable(f"RT_HOLD's flags {hold['flags']:#x}: held cells and sprays "
-                                 f"are not checked here")
+            if hold["flags"] & RECL_CELLS:
+                raise Unreadable(f"RT_HOLD's flags {hold['flags']:#x}: held cells are not "
+                                 f"checked here")
             interval, hu, hn = hold["refresh"], hold["unit"], hold["node"]
+        sessions_on = bool(hold and hold["flags"] & RECL_SPRAYS)
         H = np.frombuffer(hu, "<u4")
         HN = np.frombuffer(hn, "<u4")
         node_held = HN.any()
         D, W = Held(h["slots"]), Held(h["slots"])
+        S = Sprays(h["slots"])
         bl = seg["blocks"]
         n_seg, prev_refresh = 0, 0
         k = 1
@@ -2055,6 +2211,7 @@ def cmd_lossy_check(path, timeline=0, to=None):
             if kind == RB_SNAPSHOT:
                 if cut is None or lastb <= cut:
                     n_snap += 1
+                    S.empty()               # every reader's, where the writer emptied its own
                     if prev_stream is None or prev_stream[1] != lastb or \
                             not fl[id(prev_stream[0])] & RBF_REFRESH:
                         fail(f"the snapshot at GameTime {lastb} does not follow a refresh block")
@@ -2097,10 +2254,36 @@ def cmd_lossy_check(path, timeline=0, to=None):
                     fail(f"GameTime {t}: " + ("a refresh iteration that does not end a refresh "
                                               "block" if refresh else
                                               "a refresh block ending off the grid"))
-                pd, pdl, od = D.iteration(recs)
-                pw, pwl, ow = W.iteration(xrecs)
+                pd, pdl, od, dspray, dsess = D.iteration(recs)
+                pw, pwl, ow, wspray, wsess = W.iteration(xrecs)
                 if od != ow:
-                    fail(f"GameTime {t}: the records other than units and order lists differ")
+                    fail(f"GameTime {t}: the records other than units, order lists and sprays "
+                         f"differ")
+                if wsess:
+                    fail(f"GameTime {t}: a spray session in the exact stream")
+                if dsess and not sessions_on:
+                    fail(f"GameTime {t}: a spray session in a stream without RECL_SPRAYS")
+                if sessions_on:
+                    try:
+                        for b in dspray:
+                            S.spray(t, b, D.unit_of)
+                        for b in dsess:
+                            S.session(b)
+                        implied = S.imply(t, D.unit_of)
+                        n_written += len(dspray)
+                        n_implied += len(implied)
+                        dspray = dspray + implied
+                    except Unreadable as e:
+                        fail(f"GameTime {t}: {e}")
+                if sorted(dspray) != sorted(wspray):
+                    fail(f"GameTime {t}: the nano sprays, {len(dspray)} with the implied ones, "
+                         f"are not the exact stream's {len(wspray)}")
+                else:
+                    ids = {b[:4] for b in wspray}
+                    for i in sorted(ids):
+                        if [b for b in dspray if b[:4] == i] != [b for b in wspray if b[:4] == i]:
+                            fail(f"GameTime {t}: unit ID {struct.unpack('<I', i)[0]}'s sprays "
+                                 f"are not in the exact stream's order")
                 slots = sorted(set(pd) | set(pw))
                 if slots:
                     sl = np.array(slots)
@@ -2112,7 +2295,7 @@ def cmd_lossy_check(path, timeline=0, to=None):
                     du, wu = D.units[lv], W.units[lv]
                     for r in np.nonzero(((du ^ wu) & ~H).any(axis=1))[0]:
                         fail(f"GameTime {t}: slot {lv[r]}'s shown bytes differ")
-                    if H.any():
+                    if H.any() and len(lv):
                         pv = np.array([pd[s][1] if s in pd else D.units[s] for s in lv])
                         pl = np.array([pd[s][0] if s in pd else True for s in lv])
                         ok = ((du & H) == (wu & H)) | (((du & H) == (pv & H)) & pl[:, None])
@@ -2141,9 +2324,11 @@ def cmd_lossy_check(path, timeline=0, to=None):
                              f"refresh")
             k += 2
     print(f"{path}: lossy-check of timeline {timeline}: {n_iter} iterations to GameTime {last}, "
-          f"{n_refresh} refreshes, {n_snap} snapshots; "
-          + ("every shown byte exact, every held byte the stream's last or the exact one, and "
-             "the stream's world the exact copy at every refresh" if not bad else
+          f"{n_refresh} refreshes, {n_snap} snapshots, sprays {n_written} written and "
+          f"{n_implied} implied; "
+          + ("every shown byte exact, every held byte the stream's last or the exact one, "
+             "every iteration's sprays the exact ones, and the stream's world the exact copy at "
+             "every refresh" if not bad else
              f"{bad} FAILURES") + (f"; stopped at {stop}" if stop else ""))
     for line in lines:
         print("  " + line)

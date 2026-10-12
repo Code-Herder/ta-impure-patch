@@ -1090,9 +1090,21 @@ nonzero (`0x472112..0x47211D`) or when the pool `0x470EB0(0x51E610, 0x4C)` is em
 two boxes to `obj+0x1C` and `obj+0x34`, sets its end tick to GameTime + 1 and spawns at once
 (`0x473D50`, called at `0x473D39`). The spawn draws the CRT `rand 0x4E4870`, never the sim RNG
 `0x4B6C30`, so an emission changes no simulation state. `0x4732E0` appends the object to the
-layer's vector at `[main+0x38D77] + layer·16`; a layer already holding more than 400 (`0x190`)
-entries destroys its oldest first. Neither entry has an absolute reference; the 17 callers, all
-passing layer 6, are the handlers below.
+layer's vector at `[main+0x38D77] + layer·16` (`0x4721EA`, reverse `0x47231A`); before it, an
+emitter whose layer already holds more than its cap (`0x190` = 400 in stock, the operand the raised
+limits rewrite: *The raised effect pools*) destroys the vector's front object through its vtable
+slot 0 and shifts the rest down by one (the trim `0x47219F..0x4721DA`, reverse
+`0x4722CF..0x47230A`, DISASSEMBLED 2026-10-12). The particle itself comes from the pool
+`0x51E610`, which every live particle emitter shares (1000 objects of `0x4C` in stock, built by
+`0x470A90(1000, 0x4C)` at `0x471C80..0x471C8C`; 204 800 under the raised limits): its alloc
+`0x470EB0` returns NULL once used reaches capacity (`0x470EB9..0x470EBB`), and on NULL the emitter
+makes no particle (`0x47213E..0x472163`, the skip to `0x4721EF`; DISASSEMBLED 2026-10-12). So the
+order of the emissions of one step decides their order in the layer -- the order they are drawn
+in, and which is destroyed first -- and, when the pool runs out within the step, which emission
+makes no particle; nothing else. Both are what a recording's spray sessions change when they put
+the sprays they imply after their step's other events ([the lossy stream](#the-demo-recorders-lossy-stream-what-a-held-byte-meets-on-a-puppet-and-at-a-takeover-disassembled-2026-10-11)).
+Neither entry has an absolute reference; the 17 callers, all passing layer 6, are the handlers
+below.
 
 **Copied multiplayer spray bounds [DISASSEMBLED 2026-10-05].** The forward
 emitter reads its point argument at `0x4720D3`, expands its three coordinates on
@@ -1766,8 +1778,9 @@ init `0x49E070` walk them with `esi` = unit + 0x1F + 0x1C·i, the slot's last by
   `&slot+0x4` to the `Aim` script as its completion callback (`0x49E30F`, `0x49E379` →
   `0x4B0A70`), and `vtable[0]` `0x481490` sets `+0x8` to 1, so a running COB thread holds a
   pointer into the unit array. MEASURED `0x004FD6F0` in every record.
-- **`+0x8`**, aim complete: 0 before `Aim` starts (`0x49E2FF`, `0x49E369`) and at fire (the fire
-  routine `0x49D580`, `0x49D78E`), 1 through the callback.
+- **`+0x8`**, aim complete: 0 before `Aim` starts (`0x49E2FF`, `0x49E369`), at fire (the fire
+  routine `0x49D580`, `0x49D78E`) and in the shot builder `0x49CC20` (`0x49CCA2`, reached from the
+  shot receiver at `0x49D479`, so on a puppet too), 1 through the callback.
 - **`+0xC`**, the weapon def `*(def + 0x1EE + 4i)`, written only by `0x49E0B0` in `0x49E070`, from
   the creates. **The restore writes the saved weapon ID into the shared weapon def**
   (`0x487628`, `[wdef]+0x10A`) instead of re-pointing the slot: a no-op when the IDs agree.
@@ -3569,7 +3582,7 @@ fixture.
 
 ### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 14 carries a stream block's unit deltas as residuals against a prediction, the
+Recording format 16 carries a stream block's unit deltas as residuals against a prediction, the
 *unit frame* (`tagpu/ddraw/src/tagpu_reccodec.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the plan and its measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md)). Where a rule exists the prediction
@@ -3712,7 +3725,7 @@ non-zero pitch scale (none of the recordings had one); the steering term's hidde
 
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 14 carries a stream block's projectile records as the *pool frame*
+Recording format 16 carries a stream block's projectile records as the *pool frame*
 (`tagpu/ddraw/src/tagpu_reccodec.c`, THE POOL FRAME; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md#l2-the-pool-frame-measured)): the
@@ -3786,7 +3799,7 @@ largest residual column of the battle, 214 KiB of its 2.09 MiB.
 
 ### The demo recorder's record frames: the engine facts they predict from [DISASSEMBLED + MEASURED 2026-10-10]
 
-Recording format 14 makes the bodies of a stream block's cells, order lists, events and state
+Recording format 16 makes the bodies of a stream block's cells, order lists, events and state
 records from four *record frames* (`tagpu/ddraw/src/tagpu_recframe_cells.c`, `_orders.c`,
 `_events.c`, `_state.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
@@ -3850,26 +3863,42 @@ records back, so a wrong fact costs size, never data. Each address was re-read i
 
 ### The demo recorder's lossy stream: what a held byte meets on a puppet and at a takeover [DISASSEMBLED 2026-10-11]
 
-Recording format 13 writes a skirmish recording's stream through a lossy filter
+A skirmish recording's stream goes through a lossy filter
 (`tagpu/ddraw/src/tagpu_reclossy.c`): the bytes `tagpu/ddraw/replay-hold.tsv` names may keep an
 earlier value between two refreshes, and at a refresh the stream's world is the writer's exact
 copy ([making recordings smaller](tadr-port/demo-recorder-size.md#l5-the-lossy-plan-measured-offline)).
-The filter's correctness rests on these engine facts, from a census of the readers and writers of
-every field the plan would hold (2026-10-11; rel32 and stored-pointer scans of `.text`, each hit
-disassembled):
+The table holds, in the unit record, the three weapon slots' target (`+0x0`, `+0x2`), callback
+(`+0x4`), aim complete (`+0x8`), aim heading and pitch (`+0x16`, `+0x18`) and flags but bit 1
+(`+0x1B` mask `0xFD`), and the ledger's produced, requested, granted and debt of both resources
+(`+0xBC`..`+0xC8`, `+0xD4`..`+0xE0`; *The ledger*); in a main list node (`+0x5C`), the state
+`+0x05`, the wanted events `+0x06`, the deadline `+0x0A`, the leash `+0x2E`, p3 `+0x3E`, the fired
+events `+0x4E`, the owned object `+0x52` and the flags `+0x42` but `0x8`, `0x100`, `0x10000`,
+`0x40000`, `0x80000`, `0x200000` and `0x400000`. Each row cites its readers below. From format 15 on, a nano
+spray its unit's spray session predicts is left out and every reader makes it again after its
+iteration's events (`RK_SPRAY_SESSION`). The filter's
+correctness rests on these engine facts, from a census of the readers and writers of every field
+the plan would hold (2026-10-11; rel32 and stored-pointer scans of `.text`, each hit disassembled):
 
-- **Two engine writes of held bytes run on a puppet between two image writes**, and the playing's
-  next iteration writes over both: the unit destructor `0x486760`, at a replayed death of kind 5
-  with a killer, read-modify-writes the killer's `+0xD4` with `(1.0 − victim +0x104) × def
-  +0x18A` (`0x486CAD..0x486D1E`, the credit above); the death walk `0x489740` ORs event 8 into
-  node `+0x4E` (*The pointer fields*, `+0xA2`). The playing writes every live unit's image and
-  both lists of every live unit at every iteration (`tagpu_replay.c`, `units_put` and
-  `orders_put`), and neither `+0xD4` nor node `+0x4E` is a `replay-layout.tsv` exclusion. No
-  reader of either runs on a puppet in between: the bottom panel reads `+0xCC`, `+0xD0`, `+0xE4`
-  and `+0xE8`, and `+0x4E` is read by the order controller and the handlers, which the unit tick
-  runs only for a type-1/2 owner (`0x48AEB5..0x48AECD`). The Deathmatch respawn's writes of
-  `+0xBC`/`+0xD4` (`0x465457..0x4654E7`) sit behind the defeat test the seat fill disarms on a
-  puppet [INFERRED that they do not run there].
+- **Every engine write of a held byte on a puppet is overwritten by the playing's next write.**
+  The playing writes every live unit's whole image -- each byte `replay-layout.tsv` leaves a
+  value, so every held byte -- and every node of both lists of every live unit at every iteration
+  (`tagpu_replay.c`, `units_put` through `unit_put`, and `orders_put`), so what a held byte needs
+  is that no reader shows it between two of those writes. The engine writes of held bytes known to
+  run on a puppet: the unit destructor `0x486760`, at a replayed death of kind 5 with a killer,
+  read-modify-writes the killer's `+0xD4` with `(1.0 − victim +0x104) × def +0x18A`
+  (`0x486CAD..0x486D1E`, the credit above); the death walk `0x489740` ORs event 8 into node
+  `+0x4E` (*The pointer fields*, `+0xA2`); the shot receiver `0x49D270` writes the named slot's
+  pitch `+0x18` (`0x49D37C`) and heading `+0x16` (`0x49D384`) from the message; the builder
+  `0x49CC20`, called from the receiver at `0x49D479`, zeroes the slot's aim complete `+0x8`
+  (`0x49CCA2`, `ebx` 0 from `0x49CC2F`, `edi` the slot from `0x49CC75`); and the create's
+  `0x489800` call (`0x485C58`, after `0x48A160` at `0x485C50`) writes a fresh unit's slot targets
+  and flags bit 4. No reader of them runs on a puppet in between: the bottom panel reads the
+  ledger's `+0xCC`, `+0xD0`, `+0xE4` and `+0xE8`, none held; the shot builders read the heading
+  and pitch the receiver has just written; and `+0x4E`, the aim and the targets are read by the
+  order controller, the handlers and AutoAim, which the unit tick runs only for a type-1/2 owner
+  (`0x48ADC9..0x48ADD7`, `0x48AEB5..0x48AECD`). The Deathmatch respawn's writes of `+0xBC`/`+0xD4`
+  (`0x465457..0x4654E7`) sit behind the defeat test the seat fill disarms on a puppet [INFERRED
+  that they do not run there]. All DISASSEMBLED.
 - **The node destructor's reads that the puppet rows neutralise.** `0x43A1F0` reads node `+0x06`
   (`0x43A1F5`), tests bit 1 (`0x43A1FE`) and, when it is set, calls the order's handler with event
   2 (`0x43A21A`), tests `+0x42` bit `0x10000`
@@ -3889,12 +3918,42 @@ disassembled):
   targets set to none, (0, `0x8000`), the words AutoAim writes when it drops a target
   (`0x48A2AF`, `0x48A2B4`, DIS) (`tk_orphans`).
 - **The shot builder reads slot `+0x10` on a puppet** (`0x49CE62`, *The weapon slots*): a field
-  constant after the create, so the plan's "read by owner code only" does not hold for it.
+  constant after the create, so the plan's "read by owner code only" does not hold for it, and the
+  table does not hold it.
+- **The shot builders read a slot's aim heading and pitch on a puppet only after the receiver
+  writes them.** `0x49CDE0` (`0x49CE4F..0x49CEBC`), `0x49C9C0` and `0x49CC20` run only inside the
+  shot receiver `0x49D270` (`0x49D44E`), which first writes `+0x18` (`0x49D37C`) and `+0x16`
+  (`0x49D384`) from the message on the slot `msg+0x23` names, so a puppet's shot reads the
+  message's values whatever the image held. The flags' bits 2–3, which the builders read at
+  `0x49CB7D`, `0x49CD38` and `0x49CF5C`, are written once at init (`0x49E094..0x49E09F`), and
+  Impure's splices there take the index from the slot's address.
+- **A spray session's implied sprays are exact, and only their order moves.** An implied spray is
+  the unit's own spray of 1, 2 or 4 GameTimes before, byte for byte, or with its point moved by
+  exactly the unit's position change since (`+0x6A..+0x75`, never held), and the filter leaves a
+  spray out only when that prediction equals it, so a puppet calls the emitter `0x4720D0` or
+  `0x472200` with the recorded point, box and layer in the recorded step. What moves is the
+  spray's place among its step's events, after them, units ascending: an emission changes no
+  simulation state, and the order of a step's emissions decides only the particles' order in the
+  layer (the draw order and the order of the front-destroy past the layer's cap) and, when the
+  shared pool `0x51E610` runs out within the step, which emission makes no particle (*The nano
+  spray*, above). An owner decision of 2026-10-11 (OD5 of the plan); the owner confirmed on
+  2026-10-12 that it covers the pool.
 - **`0x408198` is AI code, not a handler.** `0x408100`, which reads the head node's `+0x42` bit
   `0x8` there (`0x408191..0x40819C`), is method 0 of the two-entry vtable `0x4FC9A8` {`0x408100`,
   `0x408600`}, stored by the AI object's constructor `0x408CB0` (`0x408D3D`) in one of its ten
   sub-objects, which the AI tick `0x408C40` calls (`0x408C8E`); `0x408C40` runs only for a record
-  with `+0x74` set (`0x46502A..0x465031`), and a puppet seat holds none.
+  with `+0x74` set (`0x46502A..0x465031`), and a puppet seat holds none. The table does not hold
+  bit `0x8` all the same: with no reader on a puppet it could be, but that loosening is not taken.
+  Nor bit `0x80000`: its reader `0x439D20` reads only the sub list (`unit+0x60`, `0x439D25`),
+  which is never held, so on a main list node it could be held too.
+- **The local ground movement class reads a held flag of the head node, and never on a puppet.**
+  Slot 1 of vtable `0x4FD458`, `0x44F2A0`, the class `0x44F010` the mover's constructor makes at
+  `0x43DCF2`, tests the unit's main list head's `+0x42` bit `0x800000` (`0x44F3DF..0x44F3E9`). A
+  type-3 owner's mover holds the proxy class `0x44F570` instead (`replay-layout.tsv`'s mover row,
+  `0x43DC48..0x43DD08`). Slot 1 is called by the owned-object installs `0x4388D0`, `0x438930`,
+  `0x438A00` and `0x438AD0`, which only handlers call, and by the node destructor at `0x43A285`
+  with argument 0, which stores it and leaves at `0x44F2D8..0x44F2E3` (to `0x44F41D`) before the
+  read. DISASSEMBLED.
 - **Not established**: whether `0x406F50`'s callers (`0x499CBC`, `0x49A09B`, `0x49A837`), which set
   `+0xBB` bits, run on puppet impacts; whether the order entries `0x487BF0` (from `0x488514`) and
   `0x4881E0` can reach a puppet's units; callers of `0x439CF0`, `0x43AB90`, `0x43AD50`,

@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-#define TAGPU_RECLANES_SHA256 "c3be48a9305117c47ed4cbc31866420dea5cc3093258ad7731218a2105fca307"
+#define TAGPU_RECLANES_SHA256 "730fa4dcd2379ee4d34fda05fbbc287d1a71a985803199ed447c0d83cc4a5315"
 #define TAGPU_RECLANES_GEN_SHA256 "d27b06a10c68860b2aecbb9118b17b693025f67cfd8f4bc572473c606855815e"
 
 enum RecLaneRole {      /* a format constant: RT_CODEC's role byte */
