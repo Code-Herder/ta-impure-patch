@@ -19,9 +19,10 @@ what the tier never exercised.
 
 FIXTURE is a name in tools/replay/fixtures.json, or `all`. For each fixture four GameTimes are
 drawn (one more for each round trip a broad entry's `trips` asks for beyond three), each T = 1 (mod 30)
--- the radar pass's step, so a takeover's contact bits, which its own pass makes, agree at once
-unless something the pass read changed later in its step (O14); a seek in the recording's viewed
-player takes them from the recording and agrees at every T -- between 301 and 0.8 x its end, from
+-- the radar pass's step, where a seek's contact bits in any view but the recording's own, which
+its own pass makes, agree at once unless something the pass read changed later in its step (O14);
+a seek or a takeover in the recording's viewed player takes them from the recording and agrees at
+every T -- between 301 and 0.8 x its end, from
 a generator seeded by the fixture's name and HEAD, and
 printed: T1 the first, T2..T4 the round trips, Tlast = T4.
 An entry's `last_min` requires Tlast to reach a named completion checkpoint; it keeps late
@@ -57,7 +58,7 @@ holds none.
 
 A fixture fixtures.json gives a `takeover` runs two processes more, K after L and F after K:
 
-    K  takeover  `replay takeover` of L's recording at T = T2 as player P (the recording's
+    K  takeover  `replay takeover` of L's recording at T = T2, or the entry's `at`, as player P (the recording's
                  controlled player unless the entry names one) in a fresh process, which records
                  timeline 1 into the same file: the window, its boxes and ErrorLog.txt watched,
                  the entry's `order` and `type` given, a dump k<T+dump>, the level ended
@@ -1186,10 +1187,16 @@ def compat():
 
 
 def tk_point(fx, h, player=None, at=None):
-    """(T, P) of a fixture's takeover: T2, or `at`; the entry's player, the recording's
-    controlled player for "controlled", or `player`."""
-    tk = fx["fix"]["takeover"]
-    T = at if at is not None else fx["Ts"][1]
+    """(T, P) of a fixture's takeover: `at`, else the entry's `at`, else T2; the entry's player,
+    the recording's controlled player for "controlled", or `player`."""
+    fix = fx["fix"]
+    tk = fix["takeover"]
+    if "at" in tk:
+        a = tk["at"]
+        if not isinstance(a, int) or isinstance(a, bool) or not fix.get("first", 301) <= a < fix["end"]:
+            raise CouldNotRun(f"{fx['name']}: the takeover's `at` {a!r} is not a GameTime in "
+                              f"[{fix.get('first', 301)}, {fix['end']})")
+    T = at if at is not None else tk.get("at", fx["Ts"][1])
     P = player if player is not None else tk["player"]
     if P == "controlled":
         P = h["options"]["controlled"]

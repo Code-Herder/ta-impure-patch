@@ -1496,9 +1496,11 @@ class TakeoverFixtures(unittest.TestCase):
         took = {n: f["takeover"] for n, f in fixes.items() if "takeover" in f}
         self.assertIn("battle", took)
         self.assertIn("takeover-end", took)
-        known = {"player", "order", "switches", "type", "dump", "cpu_ms", "checks"}
+        known = {"player", "order", "switches", "type", "dump", "cpu_ms", "checks", "at"}
         for name, t in took.items():
             self.assertLessEqual(set(t), known, name)
+            if "at" in t:
+                self.assertEqual(t["at"] % 30, 1, name)
             self.assertTrue(t["player"] == "controlled" or isinstance(t["player"], int), name)
             self.assertTrue(t["checks"], name)
             self.assertLessEqual(set(t["checks"]), set(tareplay.TAKEOVER_CHECKS), name)
@@ -1510,6 +1512,16 @@ class TakeoverFixtures(unittest.TestCase):
             if "order" in t:
                 self.assertEqual(len(t["order"]), 2, name)
         self.assertEqual(tareplay.procs(fixes["forest-fire"]), ("L", "P", "R", "Q"))
+        # tenseat's takeover is pinned to the tick after its typed LOS command, where the
+        # takeover's contact bits must come from the recording (tagpu_replay.c, R14b)
+        self.assertEqual(took["tenseat"].get("at"), 901)
+        self.assertIn([900, "type", "+los"], fixes["tenseat"]["steps"])
+        fx = {"name": "tenseat", "fix": fixes["tenseat"], "Ts": [361, 541, 691, 841]}
+        self.assertEqual(tareplay.tk_point(fx, {"options": {"controlled": 0}}), (901, 0))
+        self.assertEqual(tareplay.tk_point(fx, {"options": {"controlled": 0}}, None, 931), (931, 0))
+        bad = dict(fx, fix=dict(fixes["tenseat"], takeover=dict(took["tenseat"], at=5000)))
+        with self.assertRaises(tareplay.CouldNotRun):
+            tareplay.tk_point(bad, {"options": {"controlled": 0}})
         end = json.loads((tareplay.SCENARIOS / fixes["takeover-end"]["load"]).read_text())
         self.assertFalse(end["setup"]["clear_existing"])     # the commanders keep the economy
         self.assertIn("victory", took["takeover-end"]["checks"])
