@@ -2749,8 +2749,9 @@ the explosions and the players phase, in this order:
    (`8B 4C 24 10 66 83 39 00 75 19`, the slot pointer's load, the compare at `0x424189` and its
    `jne 0x4241A8` at `0x42418D`)
    with a stub that asks `feat_source` (`tagpu_recorder.c`), which falls through to `0x42418F` or
-   jumps to `0x4241A8`: a multiplayer recording records the slot the recorder's tick read there,
-   and a multiplayer playing answers from it, since the host's slots follow the owners' units.
+   jumps to `0x4241A8`: a recording records the slot the recorder's tick read there, and a
+   playing whose host keeps its own slots answers from it -- a multiplayer one, whose slots follow
+   the owners' units, and a skirmish one whose stream holds its cells (format 14's `RECL_CELLS`).
    DISASSEMBLED.
    The keys: LoadFeature `0x4224B0` reads `reproduce` into the byte `+0xFC` (`0x422A13`,
    `0x422A1D`) and `reproducearea` into `+0xFD` (`0x422A27`, `0x422A31`), each with `atol`,
