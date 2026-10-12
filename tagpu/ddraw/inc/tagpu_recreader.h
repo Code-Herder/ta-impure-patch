@@ -118,8 +118,11 @@ typedef struct RecWorld {
     RecTable*      tab;         /* [ntab], the header's tables in its order                    */
     unsigned       nev;         /* the events of the step after the images, in engine order: a
                                    feature root's bracket, RK_EV_FEATURE to its END, holds the
-                                   draws it made, the tick's cells and what it nested         */
+                                   draws it made, the tick's cells and what it nested; then
+                                   the sprays the spray sessions imply, slots ascending       */
     RecEvent*      ev;
+    RecSprays*     sprays;      /* the spray sessions' table (tagpu_reclossy.h), read with
+                                   RT_HOLD's RECL_SPRAYS: what the implied sprays come from   */
     unsigned char* grid;        /* [grid_w * grid_h] cell images, row-major                   */
     unsigned char* pool;        /* [wrecks] record images                                     */
     int32_t        heads[4];    /* the pool's three heads and the reproduction cursor         */
