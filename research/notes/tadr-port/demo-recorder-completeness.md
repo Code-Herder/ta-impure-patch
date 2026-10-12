@@ -438,8 +438,10 @@ lanes launch with the test lever `tagpu_rec.exact`, under which the writer follo
 block with the exact records it filtered (`RB_EXACT`). L's dumps are compared with that exact
 stream (`tarec compare --exact`), and `tarec lossy-check` walks the two streams side by side and
 fails by name unless, at every iteration, every byte the hold masks leave clear is equal, every
-held byte is the stream's previous value or the exact one, the two worlds are equal at every
-refresh and every refresh sits on its grid and ends its block. So lossy-check proves the lossy
+held byte is the stream's previous value or the exact one, the iteration's nano sprays -- the
+stream's and the ones its spray sessions imply -- are the exact stream's as a multiset and each
+unit's in order, the two worlds are equal at every refresh and every refresh sits on its grid and
+ends its block. So lossy-check proves the lossy
 stream against the exact one at every iteration; the exact stream is proved against the live game
 only where something compares them, at L's dumps and by the writer's own verification
 ([self-verification](demo-recorder-skirmish-slice.md#self-verification)), not at every iteration. K's dump
@@ -447,8 +449,11 @@ is compared with the fork's exact stream, F's with its lossy stream, and timelin
 lossy-checked. The fixtures with a takeover launch every process with `tagpu_rec.refresh 30`
 (*Taking over*: a takeover starts at a refresh). **A hold row is a loosening**, the owner's
 decision like an exclusion: it names its readers on a playback host and its evidence, and a reader
-found there that shows the byte removes the row. Format 13's table has no row, so its stream
-carries every record as the capture made it.
+found there that shows the byte removes the row. The table has no row, so the stream carries
+every image as the capture made it; it leaves out only the nano sprays its spray sessions imply,
+which every reader makes again with the same bytes after the iteration's events (format 14,
+`RK_SPRAY_SESSION`; the order of the sprays inside an iteration is the decision of 2026-10-11
+below).
 
 **Test speed.** Tick-driven runs default to internal game speed 20 (2x normal),
 within the retail setter's range. `--game-speed 10` selects normal speed for
@@ -898,6 +903,7 @@ region with whether its fixtures reach it.
 | 2026-10-02 | **A fork is always recorded**, whatever `tagpu_recorder.on` says (S4's D3); a takeover whose file cannot be appended is refused before the rebuild, with the reason. **B4's per-slot columns are recorded** (D4, landing S4a). **The fork rules' last-used times live in the recording** (D5), appended when a watching session ends and skipped with a log line when the file cannot be written. |
 | 2026-10-08 | **The harness runs a test-only turbo** (*Test speed*): k ticks a frame, k = 1 by default and 1..5 in the lever; a live lane acts at GameTimes by `pause at <T>` and the K and U judges are bound to ticks; every game gets the test render profile (a 20 fps present cap, `shadowres=512`). **The meteor shower's strike points after a takeover stay an open gap** (*Open items*). |
 | 2026-10-09 | **No check of the gate is decided by the wall clock** (*Ticks, not polls*): a test launch's hold starts its level held (its pause bit and one-tick first batch written from `tagpu_replay.c`, a `presentation` file, on test launches only: a loosening the owner approved); a seek's cost is its game thread's CPU time, bounded by 4,000 ms with SMT and clock contention named as the residual; the fixture worlds change once, deterministically, as scenarios now land at GameTime 1; the compat suite's soaks and `--watch` count game ticks or presented frames (SECONDS × 30) with a 120 s stall bound. |
+| 2026-10-11 | **A recording does not keep the order of the nano sprays inside one iteration** (OD5 of the lossy plan, a loosening the owner approved): a spray a unit's spray session implies is left out of the stream and made again by every reader after the iteration's events, units ascending. Every spray stays exact: the same ID, point, box and layer in the same iteration, the point the unit's own earlier spray's, moved by exactly the unit's position change when it follows the unit. Why the order can go: the emitters `0x4720D0`/`0x472200` change no simulation state, draw only the C runtime's rand, which a playing does not reproduce, and the order of two emissions decides only their particles' order in the layer, the draw order and which one a full layer destroys first (the engine map's *The nano spray*). `tarec lossy-check` compares each iteration's sprays as a multiset and each unit's in order. Rejected: zeroing the point (the offline plan's step, 0.9 MB smaller), which the game shows. |
 | 2026-10-11 | **A takeover's AIs read the recording's contacts at T** (O14 for takeovers): when P is the recording's viewed record, the takeover restores `+0x110` bits 8–10 from the recording after its radar pass, as the seek does, so the fork's first acquisition scans read the contacts the recording held at T, as the recording's AIs read them until its next pass; a multiplayer recording's takeover keeps its own pass's bits (below). Rejected: masking bits 8–10 in `fork_view` for every fork, a loosening of D2 (d) that would leave the fork's AIs reading a picture the parent never held; and steering the harness off the ticks after a scripted step, which hides the gap. |
 
 The owner approved one additional UI-only count exception on 2026-10-05: the native

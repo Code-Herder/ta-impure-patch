@@ -1090,8 +1090,13 @@ nonzero (`0x472112..0x47211D`) or when the pool `0x470EB0(0x51E610, 0x4C)` is em
 two boxes to `obj+0x1C` and `obj+0x34`, sets its end tick to GameTime + 1 and spawns at once
 (`0x473D50`, called at `0x473D39`). The spawn draws the CRT `rand 0x4E4870`, never the sim RNG
 `0x4B6C30`, so an emission changes no simulation state. `0x4732E0` appends the object to the
-layer's vector at `[main+0x38D77] + layer·16`; a layer already holding more than 400 (`0x190`)
-entries destroys its oldest first. Neither entry has an absolute reference; the 17 callers, all
+layer's vector at `[main+0x38D77] + layer·16` (`0x4721EA`, reverse `0x47231A`); before it, an
+emitter whose layer already holds more than 400 (`0x190`) entries destroys the vector's front
+object through its vtable slot 0 and shifts the rest down by one (`0x47219F..0x4721DA`, reverse
+`0x4722CF..0x47230A`, DISASSEMBLED 2026-10-12). So the order of two emissions of one step decides
+only their order in the layer -- the order they are drawn in, and which is destroyed first -- which
+is what lets a recording's spray sessions put the sprays they imply after their step's other
+events ([the lossy stream](#the-demo-recorders-lossy-stream-what-a-held-byte-meets-on-a-puppet-and-at-a-takeover-disassembled-2026-10-11)). Neither entry has an absolute reference; the 17 callers, all
 passing layer 6, are the handlers below.
 
 **Copied multiplayer spray bounds [DISASSEMBLED 2026-10-05].** The forward
@@ -3848,10 +3853,12 @@ records back, so a wrong fact costs size, never data. Each address was re-read i
 
 ### The demo recorder's lossy stream: what a held byte meets on a puppet and at a takeover [DISASSEMBLED 2026-10-11]
 
-Recording format 13 writes a skirmish recording's stream through a lossy filter
+From recording format 13 on, a skirmish recording's stream is written through a lossy filter
 (`tagpu/ddraw/src/tagpu_reclossy.c`): the bytes `tagpu/ddraw/replay-hold.tsv` names may keep an
 earlier value between two refreshes, and at a refresh the stream's world is the writer's exact
-copy ([making recordings smaller](tadr-port/demo-recorder-size.md#l5-the-lossy-plan-measured-offline)).
+copy ([making recordings smaller](tadr-port/demo-recorder-size.md#l5-the-lossy-plan-measured-offline));
+from format 14 on, a nano spray its unit's spray session predicts is left out and every reader
+makes it again after its iteration's events (`RK_SPRAY_SESSION`).
 The filter's correctness rests on these engine facts, from a census of the readers and writers of
 every field the plan would hold (2026-10-11; rel32 and stored-pointer scans of `.text`, each hit
 disassembled):
@@ -3888,6 +3895,15 @@ disassembled):
   (`0x48A2AF`, `0x48A2B4`, DIS) (`tk_orphans`).
 - **The shot builder reads slot `+0x10` on a puppet** (`0x49CE62`, *The weapon slots*): a field
   constant after the create, so the plan's "read by owner code only" does not hold for it.
+- **A spray session's implied sprays are exact, and only their order moves.** An implied spray is
+  the unit's own spray of 1, 2 or 4 GameTimes before, byte for byte, or with its point moved by
+  exactly the unit's position change since (`+0x6A..+0x75`, never held), and the filter leaves a
+  spray out only when that prediction equals it, so a puppet calls the emitter `0x4720D0` or
+  `0x472200` with the recorded point, box and layer in the recorded step. What moves is the
+  spray's place among its step's events, after them, units ascending: an emission changes no
+  simulation state and its particles' order in the layer is the draw order and the order of the
+  front-destroy past `0x190` (*The nano spray*, above). An owner decision of 2026-10-11 (OD5 of
+  the plan).
 - **`0x408198` is AI code, not a handler.** `0x408100`, which reads the head node's `+0x42` bit
   `0x8` there (`0x408191..0x40819C`), is method 0 of the two-entry vtable `0x4FC9A8` {`0x408100`,
   `0x408600`}, stored by the AI object's constructor `0x408CB0` (`0x408D3D`) in one of its ten

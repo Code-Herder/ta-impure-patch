@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 13 and its readers take format 13 alone (*The file*, below).
+The recorder writes recording format 14 and its readers take format 14 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -151,7 +151,8 @@ that format alone:
   menu's version text, the mounted archives and the mod's fingerprint (*What the Replays browser
   asks of a recording*); the unit frame's constants (below): `RT_CODEC`, `RT_PHYSICS`, `RT_AIR`;
   and in a skirmish recording `RT_HOLD`: the refresh interval (300 ticks), the hold table's
-  masks and its SHA-256, what the stream may hold between two refreshes (the lossy filter,
+  masks and its SHA-256, what the stream may hold between two refreshes, and `RECL_SPRAYS`, its
+  nano sprays written as spray sessions (the lossy filter,
   [making recordings smaller](demo-recorder-size.md#l5-the-lossy-plan-measured-offline));
 - **a minimap block** right after it, when the map has a picture;
 - **stream blocks** of whole iterations, written by the lossy filter from the writer's exact
@@ -160,7 +161,12 @@ that format alone:
   iteration past one a gap skips; `reclossy_is_refresh`), where the stream's world
   equals the writer's copy, checked — which flags it `RBF_REFRESH`; under the test lever
   `tagpu_rec.exact` each is followed by an `RB_EXACT` block of its exact records, which a reader
-  of the stream skips;
+  of the stream skips. A skirmish stream leaves out each nano spray its unit's spray session
+  (`RK_SPRAY_SESSION`, written after the iteration's last record) predicts: the unit's spray of 1,
+  2 or 4 GameTimes before, its point moved with the unit's position change when the session
+  follows it; every reader makes it again after the iteration's events from a table of each
+  unit's sprays of the last four GameTimes, which a snapshot's iteration empties (it writes every
+  spray and closes every session) and every reader empties there too;
 - **a snapshot block** at the first refresh 1,800 iterations or more after the last
   (`SNAPSHOT_TICKS`, 60 seconds at normal speed), built from the writer's copy, with only the cells that differ from the grid at the end of the
   segment's first iteration (the base), only the wreck records that differ from the pool then (the
