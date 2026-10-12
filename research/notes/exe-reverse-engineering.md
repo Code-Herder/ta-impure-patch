@@ -6490,13 +6490,14 @@ function `0x496790` skips the scheduler `0x495230` and the tick `0x495490` (`0x4
 (`0x4960AA..0x4960E0`) [INFERRED: `0x451DF0` sends it to the peers]; the `0x19` receiver stores a
 peer's bit (`0x455967..0x45597A`). Bits 1 and 2 are the scheduler's: bit 1 its lag flag
 (`0x49535C`, `0x495367`), tested only by the corner icon `0x46A2A8`; bit 2 the live speed below the
-chosen one, stored on every call (`0x49527A..0x495299`) and **tested by no instruction**
+chosen one, stored on every call (`0x49527A..0x495299`); **bit 2 has no reader**
 [DISASSEMBLED 2026-10-12: every instruction carrying the displacement `0x38A51` but the
 scheduler's three stores tests only bit 0 or bit 1, or keeps bits 1 and 2 as they are; the saved
-game's `Players` block copies `+0x38A37..+0x38A52` out at `0x46633A` and back at `0x4660A9`, and
-the scheduler rewrites bit 2 before the next reader]. Both are pacing state, bit 2 following the
-wall clock through the trim and bit 1 the peers' lag, and the demo recorder leaves them
-(`replay-globals.tsv`, `pacingbits`): MEASURED 2026-10-12 under a load average of 63–87, a live
+game's `Players` block copies `+0x38A37..+0x38A52` out at `0x46633A` and back at `0x4660A9`]. The
+frame function calls the scheduler only past its bit-0 tests (`0x4968AA`, `0x496920`), so while
+the level is paused bits 1 and 2 keep the last call's value through the hold. Both are pacing
+state, bit 2 following the wall clock through the trim and bit 1 the peers' lag, and the demo
+recorder leaves them (`replay-globals.tsv`, `pacingbits`, the owner's decision 2026-10-12): MEASURED 2026-10-12 under a load average of 63–87, a live
 recording held bit 2 set at GameTime 721 where its playings held it clear. Every other store of the word: set bit 0 at `0x44BE61`, `0x45D0A1` (in `0x45CFC0`,
 outside mode 3), `0x460E00` (the in-game menu's open, outside mode 3), `0x49306D` and `0x493330`
 (the LOADGAME screens); clear it at `0x44B6F0` (in the battle room's code [INFERRED from its
