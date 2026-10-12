@@ -1056,12 +1056,21 @@ static int cmd_lossy(const char* in, const char* outp, int exact)
             /* a writer's snapshot follows a refresh, SNAPSHOT_TICKS or more after the last */
             if (b->last == last_tick && last_tick == last_refresh &&
                 b->last - snap_tick >= LOSSY_SNAPSHOT_TICKS) {
-                int packed = reccodec_pack(o.cctx, &o.pk, g.r.bytes, b->raw);
-                put_block(o.f, RB_SNAPSHOT, packed ? 0 : RBF_STORED, b->first, b->last, b->raw,
-                          packed ? o.pk.p : g.r.bytes, packed ? o.pk.n : b->raw);
-                o.written += 32 + (packed ? o.pk.n : b->raw);
+                /* as the writer packs it (tagpu_recwriter.c, snapshot): chained by the codec, a
+                   key at level 3 without it */
+                unsigned flags = RBF_STORED;
+                const unsigned char* body = g.r.bytes;
+                size_t bn = b->raw;
+                if (o.on) {
+                    reccodec_snapshot(&o.st, g.r.bytes, b->raw, &flags, &body, &bn);
+                } else if (reccodec_pack(o.cctx, &o.pk, g.r.bytes, b->raw)) {
+                    flags = 0;
+                    body = o.pk.p;
+                    bn = o.pk.n;
+                }
+                put_block(o.f, RB_SNAPSHOT, flags, b->first, b->last, b->raw, body, bn);
+                o.written += 32 + bn;
                 snap_tick = b->last;
-                o.st.reset = 1;
                 kept++;
             } else {
                 dropped++;
