@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 17 and its readers take format 17 alone (*The file*, below).
+The recorder writes recording format 18 and its readers take format 18 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -212,16 +212,29 @@ a file with no end block is incomplete.
 container that decodes to exactly those records, so everything that reads a block's payload — the
 C reader's `apply`, `tarec.py`, `recsize.py` — sees the records as before. It is a 40-byte
 `RecSecHead` (the payload's bytes, the iterations, the section count and each section's length),
-then eight sections, in this order: the record kinds in payload order as runs (`RCS_KINDS`); the
+then eight sections, in this order: the record kinds in payload order, each iteration's as a
+*pattern* of runs (`RCS_KINDS`, below); the
 **unit frame**, which makes every `RK_UNIT_DELTA` (`RCS_UNITS`); the **pool frame**, which makes
 every `RK_PROJ_HEAD`, `RK_PROJ` and `RK_PROJ_DELTA` (`RCS_PROJ`); the **cells frame**
 (`RCS_CELLS`, every `RK_CELLS`), the **orders frame** (`RCS_ORDERS`, every `RK_ORDERS`) and the
 **events frame** (`RCS_EVENTS`, `RK_EV_CREATE..RK_EV_DEATH_END` and `RK_EV_NET_CREATE`); the
-bodies of every other kind verbatim, each behind a varint length (`RCS_OTHER`: the ticks, the
-unit images and gones, the tables, the perspective kinds and the rest); and the **state frame**
+bodies of every other kind verbatim, each behind a varint length (`RCS_OTHER`: the block's first
+tick -- iteration i's GameTime is the first's + i, and a block whose GameTimes are not consecutive
+is written as records -- the unit images and gones, the tables, the perspective kinds and the
+rest); and the **state frame**
 (`RCS_STATE`, every `RK_GLOBALS`, `RK_GLOBALS_DELTA`, `RK_PLAYER`, `RK_PLAYER_DELTA`, `RK_WRECK`
 and `RK_FEATURES`). A kind added later falls into `RCS_OTHER` on both sides (`rec_section_of`),
 with no table to update.
+
+**The kinds** (`tagpu_recfmt.h`, *RCS_KINDS*). Each iteration's pattern is a reference into the
+run's last 16 patterns (a byte, 1..16, the entry moving to the front) or a new one (0, its length,
+its bytes). A pattern is the iteration's runs, a varint kind and a varint count each, with two
+markers that stand for records no frame codes -- 0 an empty feature tick, its root and end the
+bodies of the run's last explicit one, and 0xFFFF an `RK_FEATURES` that is the state frame's
+prediction -- and no count on the first run of three groups, whose totals the frames give: the
+iteration's `RK_TICK` (1), its `RK_UNIT_DELTA` (the unit frame's changed units) and its `RK_PROJ`
+and `RK_PROJ_DELTA` together (the pool frame's changed records). A reader fills a group's count
+once its frame has made the iteration and refuses a group whose other runs reach its total.
 
 **The unit frame** (`src/tagpu_reccodec.c`) keeps, per slot, the image at the end of the previous
 iteration, the one before it, five lanes of the one before that and which of four candidates last

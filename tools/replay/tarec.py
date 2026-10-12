@@ -145,7 +145,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 17                           # zstd runs and chains, hold rows, sprays as sessions, cells held
+REC_FORMAT = 18                           # kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
