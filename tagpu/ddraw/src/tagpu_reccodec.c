@@ -38,11 +38,14 @@
    from its frame in the same order.
 
    THREE INVARIANTS make this lossless whatever the codec gets wrong:
-   - DECODE BEFORE WRITE (an ordering). The writer encodes a block with its encoder, packs it,
-     unpacks those bytes and decodes them with a second state through this file's decoder, and
-     writes the sectioned block only when that gives back the records byte for byte; otherwise it
-     writes the records (reccodec_stream_block). A codec bug costs size, never data.
-   - RESET POINTS (an ordering). The frames' state crosses block boundaries only inside a run of
+   - DECODE BEFORE WRITE (an ordering). The writer encodes a block with its encoder, packs it as
+     its run's next chunk, unpacks those bytes with a decoder that has unpacked the run's chunks
+     before them and decodes them with a second state through this file's decoder, and writes the
+     sectioned block only when that gives back the records byte for byte; otherwise it writes the
+     records (reccodec_stream_block). A codec bug costs size, never data. A snapshot's pack is
+     checked the same way, against its prefix (reccodec_snapshot).
+   - RESET POINTS (an ordering). The frames' state, and the run's zstd frame with it
+     (tagpu_recfmt.h, THE RUN AND THE CHAIN), cross block boundaries only inside a run of
      sectioned blocks. All restart (RBF_FRAME_RESET) at a segment's first stream block, at the
      first after a snapshot and at the first after a records block: the unit and pool frames from
      the copy of the units and of the projectile pool a reader holds there, the cells frame from
@@ -2808,22 +2811,109 @@ int reccodec_pack(void* cctx, RecBytes* out, const unsigned char* src, size_t n)
    (ZSTD_WINDOWLOG_LIMIT_DEFAULT), which the Python reader's decompressor enforces and the one-shot
    ZSTD_decompressDCtx does not. Bounding it here by the frame's header makes both readers refuse
    the same frames. The writer's frames ask for far less: level 3's window is 2^21
-   (ZSTD_defaultCParameters), or the block's own size when that is smaller. */
+   (ZSTD_defaultCParameters), or the block's own size when that is smaller, and a snapshot's is the
+   least power of two that holds it and its prefix (reccodec_pack_chained). */
 #define RECC_WINDOW_MAX (1ull << 27)
+#define RECC_LEVEL_MAX  19            /* the run's and the snapshots' level                     */
+/* Their match finder's tables, fixed so that the context does not grow with a snapshot's size:
+   MEASURED 2026-10-11 on the heavy hour, the level-19 context is 14.5 MB at these and the run's
+   window, and 33.3 MB at level 19's own parameters for the snapshots. */
+#define RECC_HASH_LOG   20
+#define RECC_CHAIN_LOG  21
 
-int reccodec_unpack(void* dctx, unsigned char* dst, size_t raw, const unsigned char* src,
-                    size_t packed)
+/* one zstd frame of exactly `raw` bytes and no byte after it, whose window is bounded */
+static int frame_ok(const unsigned char* src, size_t packed, size_t raw)
 {
-    unsigned long long size;
     ZSTD_FrameHeader fh;
     if (!raw || !packed) return 0;
     if (ZSTD_findFrameCompressedSize(src, packed) != packed) return 0;
-    size = ZSTD_getFrameContentSize(src, packed);
-    if (size != (unsigned long long)raw) return 0;
-    if (ZSTD_getFrameHeader(&fh, src, packed) != 0 || fh.frameType != ZSTD_frame ||
-        fh.windowSize > RECC_WINDOW_MAX)
-        return 0;
+    if (ZSTD_getFrameContentSize(src, packed) != (unsigned long long)raw) return 0;
+    return ZSTD_getFrameHeader(&fh, src, packed) == 0 && fh.frameType == ZSTD_frame &&
+           fh.windowSize <= RECC_WINDOW_MAX;
+}
+
+/* The decoder is reset first, parameters and prefix included: a prefix a refused frame left
+   referenced would otherwise be used by the next frame unpacked here. */
+int reccodec_unpack(void* dctx, unsigned char* dst, size_t raw, const unsigned char* src,
+                    size_t packed)
+{
+    if (!frame_ok(src, packed, raw)) return 0;
+    ZSTD_DCtx_reset((ZSTD_DCtx*)dctx, ZSTD_reset_session_and_parameters);
     return ZSTD_decompressDCtx((ZSTD_DCtx*)dctx, dst, raw, src, packed) == raw;
+}
+
+int reccodec_unpack_chained(void* dctx, unsigned char* dst, size_t raw, const unsigned char* src,
+                            size_t packed, const unsigned char* prefix, size_t nprefix)
+{
+    ZSTD_DCtx* d = (ZSTD_DCtx*)dctx;
+    if (!prefix || !nprefix || nprefix > RECC_PAYLOAD_MAX || !frame_ok(src, packed, raw)) return 0;
+    ZSTD_DCtx_reset(d, ZSTD_reset_session_and_parameters);
+    if (ZSTD_isError(ZSTD_DCtx_refPrefix(d, prefix, nprefix))) return 0;
+    return ZSTD_decompressDCtx(d, dst, raw, src, packed) == raw;
+}
+
+/* A window of at least 2^20 holding the prefix and the records together, so every byte of the
+   prefix stays in reach of the last record (a match past the window is never made). */
+int reccodec_pack_chained(void* cctx, RecBytes* out, const unsigned char* src, size_t n,
+                          const unsigned char* prefix, size_t nprefix)
+{
+    ZSTD_CCtx* c = (ZSTD_CCtx*)cctx;
+    unsigned long long both = (unsigned long long)nprefix + n;
+    int wlog = REC_RUN_WINDOW_LOG;
+    size_t z;
+    out->n = 0;
+    out->oom = 0;
+    if (!n || both > RECC_WINDOW_MAX || !rb_grow(out, ZSTD_compressBound(n))) return 0;
+    while ((1ull << wlog) < both) wlog++;
+    if (ZSTD_isError(ZSTD_CCtx_reset(c, ZSTD_reset_session_and_parameters)) ||
+        ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_compressionLevel, RECC_LEVEL_MAX)) ||
+        ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_windowLog, wlog)) ||
+        ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_hashLog, RECC_HASH_LOG)) ||
+        ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_chainLog, RECC_CHAIN_LOG)) ||
+        (nprefix && ZSTD_isError(ZSTD_CCtx_refPrefix(c, prefix, nprefix))))
+        return 0;
+    z = ZSTD_compress2(c, out->p, out->cap, src, n);
+    if (ZSTD_isError(z)) return 0;
+    out->n = z;
+    return 1;
+}
+
+/* BOUNDS: a run's header is the writer's or refused -- a zstd frame, its window at most
+   2^REC_RUN_WINDOW_LOG, no content size, no dictionary, no checksum -- and the decoder's own
+   window limit is set to the same, so no chunk can make it allocate past it. The output buffer
+   is raw + 1 bytes: a chunk that gives more than raw stops there and is refused, as is one that
+   ends the frame (ZSTD_decompressStream's 0), which the writer never does. Every call either
+   consumes input or makes output, else the chunk is refused, so the loop ends. */
+int reccodec_run_unpack(void* dctx, unsigned char* dst, size_t raw, const unsigned char* src,
+                        size_t packed, int reset)
+{
+    ZSTD_DCtx* d = (ZSTD_DCtx*)dctx;
+    ZSTD_inBuffer in;
+    ZSTD_outBuffer out;
+    if (!raw || !packed) return 0;
+    if (reset) {
+        ZSTD_FrameHeader fh;
+        if (packed < 4 || get32(src) != ZSTD_MAGICNUMBER ||
+            ZSTD_getFrameHeader(&fh, src, packed) != 0 || fh.frameType != ZSTD_frame ||
+            fh.windowSize > (1ull << REC_RUN_WINDOW_LOG) ||
+            fh.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN || fh.dictID || fh.checksumFlag)
+            return 0;
+        if (ZSTD_isError(ZSTD_DCtx_reset(d, ZSTD_reset_session_and_parameters)) ||
+            ZSTD_isError(ZSTD_DCtx_setParameter(d, ZSTD_d_windowLogMax, REC_RUN_WINDOW_LOG)))
+            return 0;
+    }
+    in.src = src;
+    in.size = packed;
+    in.pos = 0;
+    out.dst = dst;
+    out.size = raw + 1;
+    out.pos = 0;
+    for (;;) {
+        size_t was_in = in.pos, was_out = out.pos, k = ZSTD_decompressStream(d, &out, &in);
+        if (ZSTD_isError(k) || !k || out.pos > raw) return 0;
+        if (in.pos == was_in && out.pos == was_out) break;
+    }
+    return in.pos == in.size && out.pos == raw;
 }
 
 /* ---- the writer's codec --------------------------------------------------------------------- */
@@ -2836,8 +2926,10 @@ int reccodec_stream_begin(RecStream* s, const RecCodecParams* p)
     s->chk = reccodec_new(p);
     s->cctx = ZSTD_createCCtx();
     s->dctx = ZSTD_createDCtx();
+    s->zrun = ZSTD_createCCtx();
+    s->drun = ZSTD_createDCtx();
     s->reset = 1;
-    if (!s->enc || !s->chk || !s->cctx || !s->dctx || !p->usable) {
+    if (!s->enc || !s->chk || !s->cctx || !s->dctx || !s->zrun || !s->drun || !p->usable) {
         reccodec_stream_end(s);
         return 0;
     }
@@ -2850,20 +2942,65 @@ void reccodec_stream_end(RecStream* s)
     reccodec_free(s->chk);
     ZSTD_freeCCtx((ZSTD_CCtx*)s->cctx);
     ZSTD_freeDCtx((ZSTD_DCtx*)s->dctx);
+    ZSTD_freeCCtx((ZSTD_CCtx*)s->zrun);
+    ZSTD_freeDCtx((ZSTD_DCtx*)s->drun);
     rb_free(&s->sec);
     rb_free(&s->pk);
     rb_free(&s->back);
     rb_free(&s->out);
+    rb_free(&s->prev);
     s->enc = s->chk = NULL;
-    s->cctx = s->dctx = NULL;
+    s->cctx = s->dctx = s->zrun = s->drun = NULL;
+    s->chain = 0;
+}
+
+/* The container `sec` as the run's next chunk in `pk`, flushed so it ends at a zstd block's end;
+   at a reset the run's context first restarts with the run's parameters (tagpu_recfmt.h, THE RUN
+   AND THE CHAIN). 1, or 0 when zstd failed. */
+static int run_pack(RecStream* s, int reset)
+{
+    ZSTD_CCtx* c = (ZSTD_CCtx*)s->zrun;
+    ZSTD_inBuffer in;
+    ZSTD_outBuffer out;
+    if (reset &&
+        (ZSTD_isError(ZSTD_CCtx_reset(c, ZSTD_reset_session_and_parameters)) ||
+         ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_compressionLevel, RECC_LEVEL_MAX)) ||
+         ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_windowLog, REC_RUN_WINDOW_LOG)) ||
+         ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_hashLog, RECC_HASH_LOG)) ||
+         ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_chainLog, RECC_CHAIN_LOG)) ||
+         ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_contentSizeFlag, 0)) ||
+         ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_checksumFlag, 0))))
+        return 0;
+    s->pk.n = 0;
+    s->pk.oom = 0;
+    if (!rb_grow(&s->pk, ZSTD_compressBound(s->sec.n))) return 0;
+    in.src = s->sec.p;
+    in.size = s->sec.n;
+    in.pos = 0;
+    for (;;) {
+        size_t left;
+        out.dst = s->pk.p;
+        out.size = s->pk.cap;
+        out.pos = s->pk.n;
+        left = ZSTD_compressStream2(c, &out, &in, ZSTD_e_flush);
+        s->pk.n = out.pos;
+        if (ZSTD_isError(left)) return 0;
+        if (!left) return 1;
+        if (!rb_grow(&s->pk, left)) return 0;
+    }
 }
 
 /* DECODE BEFORE WRITE: the block is written sectioned only when the check decoder D, from the
    state a reader will have, gives back these records from the very bytes written. D is a second
    state, not the encoder's: the check has to start where a reader starts and must not share the
-   encoder's arithmetic. A records block, and every snapshot (the writer's), make the next block
-   restart both frames of both from the encoder's copies of the units, the pool and the grid,
-   which are always the payload's end state. */
+   encoder's arithmetic. The bytes written are a chunk of the run's frame, so the check unpacks
+   them with a decoder of its own that has unpacked exactly the run's chunks before, as a reader's
+   has; the chunk must give back the container byte for byte, then D its records.
+   A records block, and every snapshot (reccodec_snapshot), make the next block restart both
+   frames of both from the encoder's copies of the units, the pool and the grid, which are always
+   the payload's end state, and begin a new run in both zstd contexts -- as does any failure here,
+   zstd's or the codec's, so a run's chunks are exactly the sectioned blocks written since its
+   reset block, in order. */
 int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, unsigned* flags,
                           const unsigned char** body, size_t* bn)
 {
@@ -2908,24 +3045,18 @@ int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, 
     }
     k = reccodec_encode(s->enc, payload, n, &s->sec);
     if (k == RECC_SECTIONS) {
-        const unsigned char* src = s->sec.p;
-        packed = reccodec_pack(s->cctx, &s->pk, s->sec.p, s->sec.n);
-        if (packed) {
-            s->back.n = 0;
-            s->back.oom = 0;
-            if (!rb_grow(&s->back, s->sec.n) ||
-                !reccodec_unpack(s->dctx, s->back.p, s->sec.n, s->pk.p, s->pk.n))
-                k = RECC_MISMATCH;
-            src = s->back.p;
-        }
-        if (k == RECC_SECTIONS &&
-            (!reccodec_decode(s->chk, src, s->sec.n, &s->out, NULL, 0) || s->out.n != n ||
-             memcmp(s->out.p, payload, n)))
+        s->back.n = 0;
+        s->back.oom = 0;
+        if (!run_pack(s, reset) || !rb_grow(&s->back, s->sec.n + 1) ||
+            !reccodec_run_unpack(s->drun, s->back.p, s->sec.n, s->pk.p, s->pk.n, reset) ||
+            memcmp(s->back.p, s->sec.p, s->sec.n) ||
+            !reccodec_decode(s->chk, s->back.p, s->sec.n, &s->out, NULL, 0) || s->out.n != n ||
+            memcmp(s->out.p, payload, n))
             k = RECC_MISMATCH;
         if (k == RECC_SECTIONS) {
-            *flags = RBF_SECTIONS | (reset ? RBF_FRAME_RESET : 0) | (packed ? 0 : RBF_STORED);
-            *body = packed ? s->pk.p : s->sec.p;
-            *bn = packed ? s->pk.n : s->sec.n;
+            *flags = RBF_SECTIONS | (reset ? RBF_FRAME_RESET : 0);
+            *body = s->pk.p;
+            *bn = s->pk.n;
             s->reset = 0;
             s->sectioned++;
             return k;
@@ -2941,4 +3072,52 @@ int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, 
     *body = packed ? s->pk.p : payload;
     *bn = packed ? s->pk.n : n;
     return k;
+}
+
+/* INVARIANTS (tagpu_recfmt.h, THE RUN AND THE CHAIN). DECODE BEFORE WRITE: a chained snapshot is
+   written only when its frame, unpacked with the very prefix a reader will use, gives back its
+   records byte for byte; a key, packed alone, only when it does too, else it is stored. THE
+   PREFIX is the previous RB_SNAPSHOT of the segment: `prev` holds the records of the last
+   snapshot this RecStream wrote, and one RecStream writes one segment (the writer's Writer and
+   codectest's transcode each begin one at a header), so no snapshot of another segment is ever
+   a prefix. THE CHAIN is bounded: after REC_CHAIN_MAX links the next snapshot is a key, as is the
+   segment's first and any whose prefix and records pass 2^27 together or whose chained pack
+   fails its check, so a reader never meets more than REC_CHAIN_MAX links. THE RUN: a snapshot
+   ends it (reset), so the level-19 context is free to pack the snapshot. */
+int reccodec_snapshot(RecStream* s, const unsigned char* raw, size_t n, unsigned* flags,
+                      const unsigned char** body, size_t* bn)
+{
+    s->reset = 1;
+    s->snapshots++;
+    *flags = RBF_STORED;
+    *body = raw;
+    *bn = n;
+    s->back.n = 0;
+    s->back.oom = 0;
+    if (s->chain && s->links < REC_CHAIN_MAX &&
+        reccodec_pack_chained(s->zrun, &s->pk, raw, n, s->prev.p, s->prev.n) &&
+        rb_grow(&s->back, n) &&
+        reccodec_unpack_chained(s->dctx, s->back.p, n, s->pk.p, s->pk.n, s->prev.p, s->prev.n) &&
+        !memcmp(s->back.p, raw, n)) {
+        *flags = RBF_CHAINED;
+        s->links++;
+    } else {
+        s->keys++;
+        s->links = 0;
+        s->back.n = 0;
+        s->back.oom = 0;
+        if (reccodec_pack_chained(s->zrun, &s->pk, raw, n, NULL, 0) && s->pk.n < n &&
+            rb_grow(&s->back, n) && reccodec_unpack(s->dctx, s->back.p, n, s->pk.p, s->pk.n) &&
+            !memcmp(s->back.p, raw, n))
+            *flags = 0;
+    }
+    if (!(*flags & RBF_STORED)) {
+        *body = s->pk.p;
+        *bn = s->pk.n;
+    }
+    s->prev.n = 0;
+    s->prev.oom = 0;
+    rb_put(&s->prev, raw, n);
+    s->chain = n && !s->prev.oom;
+    return s->chain;
 }

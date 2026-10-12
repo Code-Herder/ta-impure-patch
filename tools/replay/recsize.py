@@ -3,7 +3,7 @@
 
     recsize.py <file.imprec> [--json out.json] [--window 900]
 
-Reads a recording of format 12 with reccodec.py's block walk and reports:
+Reads a recording of REC_FORMAT with reccodec.py's block walk and reports:
 
   - the file by block kind, raw (as the block headers state it: a sectioned block's container)
     and on disk;
@@ -102,7 +102,8 @@ SEC_HEAD = struct.Struct("<IHH8I")      # RecSecHead: payload, iterations, secti
 
 
 def zstd3(data):
-    """The writer's packing: one zstd frame at level 3 (tagpu_reccodec.c, reccodec_pack)."""
+    """One zstd frame at level 3, as the writer packs a block alone (tagpu_reccodec.c,
+    reccodec_pack)."""
     import zstandard
     return len(zstandard.ZstdCompressor(level=3).compress(data)) if data else 0
 
@@ -131,7 +132,7 @@ def read(path):
     import reccodec
     sraw, salone = collections.Counter(), collections.Counter()
 
-    def count(ordinal, flags, unpacked, frame):
+    def count(ordinal, flags, unpacked, frame, run):
         for name, data in sections_of(flags, bytes(unpacked)).items():
             sraw[name] += len(data)
             salone[name] += zstd3(bytes(data))

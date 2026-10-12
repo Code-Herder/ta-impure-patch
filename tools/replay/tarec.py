@@ -80,9 +80,12 @@
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
-here, and REC_FORMAT says which; this tool reads format 13 alone. A recording is REC_MAGIC, then
+here, and REC_FORMAT says which; this tool reads REC_FORMAT alone. A recording is REC_MAGIC, then
 blocks; a block is a 32-byte header and its payload, one zstd frame unless the block is stored (the
-header, end and timelines blocks always are), each checked by a CRC-32. A stream block may be a
+header, end and timelines blocks always are), each checked by a CRC-32 -- but for a sectioned stream
+block, whose payload is a chunk of its run's frame, and a chained snapshot (RBF_CHAINED), whose
+frame takes the segment's snapshot before it as its prefix (tagpu_recfmt.h, THE RUN AND THE
+CHAIN). A stream block may be a
 sectioned container (RBF_SECTIONS) that decodes to exactly the records it was made from: its unit
 deltas are made by the unit frame from the header's RT_CODEC, RT_PHYSICS and RT_AIR, its
 projectile records by the pool frame from the pool of RT_PROJECTILES records, and the bodies of
@@ -134,7 +137,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 13                           # the lossy stream: RT_HOLD, refreshes, RB_EXACT
+REC_FORMAT = 14                           # zstd runs and chains, the lossy stream, its record frames
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -227,7 +230,7 @@ RECR_TIMELINES = 64         # the segments a file may hold (tagpu_recreader.h)
 RB_NAMES = {RB_HEADER: "header", RB_STREAM: "stream", RB_SNAPSHOT: "snapshot", RB_END: "end",
             RB_MINIMAP: "minimap", RB_TIMELINES: "timelines", RB_CONTRIBUTIONS: "contributions",
             RB_EXACT: "exact stream"}
-RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH = 1, 2, 4, 8
+RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH, RBF_CHAINED = 1, 2, 4, 8, 16
 
 (RT_FORMAT, RT_BUILD, RT_MODE, RT_MAP, RT_START, RT_WALLCLOCK, RT_SLOTS, RT_UNITS_EACH,
  RT_UNITDEFS, RT_PLAYER, RT_LEVER, RT_LAYOUT, RT_TABLE, RT_OPTIONS, RT_SETTINGS_MAP,
@@ -1596,9 +1599,10 @@ def cmd_info(path):
               f"(table {hold['sha'].hex()[:12]})")
     else:
         print("  the stream holds nothing: no RT_HOLD")
-    for k, first, last, r, pk in sizes:
+    for (k, first, last, r, pk), f in zip(sizes, flags):
         if k == RB_SNAPSHOT:
-            print(f"  snapshot at GameTime {last}: {r} bytes raw, {pk} packed")
+            print(f"  snapshot at GameTime {last}: {r} bytes raw, {pk} packed "
+                  f"({'chained' if f & RBF_CHAINED else 'a key'})")
     ev, evb = {}, {}
     for kind, first, last, payload in bl:
         if kind != RB_STREAM:

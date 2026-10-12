@@ -3,8 +3,9 @@
 /* tagpu_reccodec.h -- the demo recorder's stream codec: a stream block as a sectioned container
    whose unit frame replaces every RK_UNIT_DELTA, whose pool frame replaces every RK_PROJ_HEAD,
    RK_PROJ and RK_PROJ_DELTA, and whose record frames (tagpu_recframe.h) make the bodies of the
-   cells, the orders, the events and the state, and the zstd frame of a packed block
-   (tagpu_reccodec.c says how; tagpu_recfmt.h holds the bytes). Portable C99: no Windows, no engine
+   cells, the orders, the events and the state, and the zstd of a packed block: a frame of its
+   own, a run's chunk or a snapshot's chained frame (tagpu_reccodec.c says how; tagpu_recfmt.h
+   holds the bytes). Portable C99: no Windows, no engine
    address, no writable static; each RecCodec is one decoder's or encoder's state, owned by one
    thread. */
 #include <stddef.h>
@@ -110,18 +111,40 @@ int  reccodec_pack(void* cctx, RecBytes* out, const unsigned char* src, size_t n
    2^27: 1, else 0. */
 int  reccodec_unpack(void* dctx, unsigned char* dst, size_t raw, const unsigned char* src,
                      size_t packed);
+/* The same of a chained snapshot's frame, whose prefix is the `nprefix` bytes before it
+   (tagpu_recfmt.h, THE RUN AND THE CHAIN); a prefix past RECC_PAYLOAD_MAX is refused. */
+int  reccodec_unpack_chained(void* dctx, unsigned char* dst, size_t raw, const unsigned char* src,
+                             size_t packed, const unsigned char* prefix, size_t nprefix);
+/* A snapshot's records packed at level 19, against `prefix` (nprefix bytes; NULL for a key), with
+   a window that covers both: 1, or 0 when zstd failed or the two pass 2^27 together. */
+int  reccodec_pack_chained(void* cctx, RecBytes* out, const unsigned char* src, size_t n,
+                           const unsigned char* prefix, size_t nprefix);
+/* A sectioned stream block's packed bytes as the next chunk of its run's frame, `dctx` the run's
+   own streaming decoder: with `reset` the run begins here and its header is checked and the
+   decoder restarted, else the chunk continues what `dctx` decoded last. `dst` holds raw + 1
+   bytes. 1 when the chunk gives exactly `raw` bytes from all of its input, the frame not ended;
+   else 0, and the run is over: only a reset block decodes on `dctx` after it. */
+int  reccodec_run_unpack(void* dctx, unsigned char* dst, size_t raw, const unsigned char* src,
+                         size_t packed, int reset);
 
 /* The writer's codec: an encoder E, a check decoder D, the zstd contexts and the scratch they
-   share, kept between blocks. */
+   share, kept between blocks; one a segment. */
 typedef struct RecStream {
     RecCodecParams p;
     RecCodec*  enc;
     RecCodec*  chk;
-    int        reset;                 /* the next block restarts the frames                      */
-    void*      cctx;                  /* ZSTD_CCtx                                               */
-    void*      dctx;                  /* ZSTD_DCtx                                               */
+    int        reset;                 /* the next block restarts the frames and the run          */
+    void*      cctx;                  /* ZSTD_CCtx at level 3: a block packed alone              */
+    void*      dctx;                  /* ZSTD_DCtx: its check, and a chained snapshot's          */
+    void*      zrun;                  /* ZSTD_CCtx at level 19: the run, then a snapshot's pack  */
+    void*      drun;                  /* ZSTD_DCtx: the run's check, chunk by chunk              */
     RecBytes   sec, pk, back, out;
+    RecBytes   prev;                  /* the segment's last snapshot's records: the next one's
+                                         prefix, once `chain` is set                             */
+    int        chain;                 /* prev holds a snapshot of this segment                   */
+    unsigned   links;                 /* the chained snapshots since the last key                */
     unsigned   sectioned, declined, mismatched;
+    unsigned   snapshots, keys;
     /* A TEST LEVER, 0 from reccodec_stream_begin; the writer sets it from the recorder's
        tagpu_rec.decline (tagpu_recorder.h, tagpu_rec_lever_init). Nonzero, the stream's blocks
        2, 7, 12, ... are declined by the encoder's own decline, so the fallback and the restart
@@ -134,5 +157,11 @@ void reccodec_stream_end(RecStream* s);
    until the next call). Returns the outcome. */
 int  reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n,
                            unsigned* flags, const unsigned char** body, size_t* bn);
+/* One snapshot's body, its `n` bytes of records chained to the segment's last snapshot or packed
+   as a key: its flags and the bytes to write after its RecBlock, valid until the next call. The
+   next stream block restarts the frames and the run. 0: no memory to keep the records as the
+   next one's prefix -- the body is still whole, and the next snapshot is a key. */
+int  reccodec_snapshot(RecStream* s, const unsigned char* raw, size_t n, unsigned* flags,
+                       const unsigned char** body, size_t* bn);
 
 #endif

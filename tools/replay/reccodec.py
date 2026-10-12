@@ -1,5 +1,6 @@
-"""reccodec -- a recording's stream codec, read side: format 13's block walk, the sectioned
-container, the unit frame, the pool frame and the four record frames, in numpy and numba.
+"""reccodec -- a recording's stream codec, read side: the block walk of REC_FORMAT, its runs and
+snapshot chains, the sectioned container, the unit frame, the pool frame and the four record
+frames, in numpy and numba.
 
     import reccodec
     for blk in reccodec.iter_blocks(path):     # every complete block, stream payloads decoded
@@ -15,7 +16,10 @@ rules, their engine facts and their bounds are written down beside the C; here o
 in the doing.
 
 A stream block with RBF_SECTIONS decodes to the records it was made from; one without is the
-records themselves. RBF_REFRESH, on a stream block alone, says its last iteration is a refresh
+records themselves. Its packed bytes are a chunk of its run's zstd frame (tagpu_recfmt.h, THE RUN
+AND THE CHAIN), unpacked by one decompressor per run (Run), whose state is valid exactly while the
+frames' is; a chained snapshot unpacks with the segment's previous snapshot as its raw-content
+prefix. RBF_REFRESH, on a stream block alone, says its last iteration is a refresh
 (tagpu_recwriter.c, iteration_done) and changes nothing of the decoding. An RB_EXACT block, the
 exact records of the stream block before it (the test lever tagpu_rec.exact), is records, never
 sectioned, and no frame reads it. The frames' state crosses blocks inside a run of sectioned blocks and
@@ -77,8 +81,9 @@ NROLES = len(ROLES)
 
 Unreadable = tarec.Unreadable
 
-REC_FORMAT = 13
-RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH = 1, 2, 4, 8
+REC_FORMAT = 14
+RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH, RBF_CHAINED = 1, 2, 4, 8, 16
+RUN_WINDOW_LOG, CHAIN_MAX = 20, 9          # REC_RUN_WINDOW_LOG, REC_CHAIN_MAX
 RT_CODEC, RT_PHYSICS, RT_AIR = 29, 30, 31
 RT_CODEC_DECLINED, RT_CODEC_MISMATCH = 44, 45
 (RCS_KINDS, RCS_UNITS, RCS_PROJ, RCS_CELLS, RCS_ORDERS, RCS_EVENTS, RCS_OTHER, RCS_STATE) = range(8)
@@ -2831,6 +2836,8 @@ class Frame:
             raise Unreadable(f"block flags {flags:#x}")
         if flags & RBF_FRAME_RESET and not flags & RBF_SECTIONS:
             raise Unreadable("RBF_FRAME_RESET without RBF_SECTIONS")
+        if flags & RBF_SECTIONS and flags & RBF_STORED:
+            raise Unreadable("sections stored, not a chunk of their run")
         if not flags & RBF_SECTIONS:
             if self.prm.usable:             # the copy feeds only a restart, which needs the params
                 self.apply_records(body)
@@ -3004,31 +3011,102 @@ class Frame:
 WINDOW_MAX = 1 << 27                       # tagpu_reccodec.c's RECC_WINDOW_MAX
 
 
-def unpack(body, raw):
-    """One zstd frame of exactly `raw` bytes, no trailing byte, whose window is at most 2^27;
-    Unreadable otherwise. The window is bounded by name from the frame's header, as the C reader
-    bounds it: zstandard's decompressor would refuse a larger one by itself, the C one-shot
-    decompression would not."""
-    if not body or not raw:
-        raise Unreadable("an empty packed block")
+def _zstandard():
     try:
         import zstandard
     except ImportError:
         raise Unreadable("a packed block needs zstandard: the shared venv (CLAUDE.md, Python "
                          "tooling)") from None
+    return zstandard
+
+
+def unpack(body, raw, prefix=None):
+    """One zstd frame of exactly `raw` bytes, no trailing byte, whose window is at most 2^27;
+    Unreadable otherwise. The window is bounded by name from the frame's header, as the C reader
+    bounds it: zstandard's decompressor would refuse a larger one by itself, the C one-shot
+    decompression would not. With `prefix`, a chained snapshot's frame, the prefix its raw
+    content (tagpu_reccodec.c, reccodec_unpack_chained), at most PAYLOAD_MAX bytes."""
+    if not body or not raw:
+        raise Unreadable("an empty packed block")
+    if prefix is not None and (not prefix or len(prefix) > PAYLOAD_MAX):
+        raise Unreadable(f"a chained snapshot's prefix of {len(prefix)} bytes")
+    zstandard = _zstandard()
     try:
         if zstandard.frame_content_size(body) != raw:
             raise Unreadable(f"a zstd frame whose content is not {raw} bytes")
         window = zstandard.get_frame_parameters(body).window_size
         if window > WINDOW_MAX:
             raise Unreadable(f"a zstd frame asking for a {window}-byte window, past 2^27")
-        d = zstandard.ZstdDecompressor().decompressobj()
+        if prefix is None:
+            d = zstandard.ZstdDecompressor().decompressobj()
+        else:
+            dic = zstandard.ZstdCompressionDict(bytes(prefix), dict_type=zstandard.DICT_TYPE_RAWCONTENT)
+            d = zstandard.ZstdDecompressor(dict_data=dic).decompressobj()
         out = d.decompress(body)
     except zstandard.ZstdError as e:
         raise Unreadable(f"a block that is not one zstd frame: {e}")
     if not d.eof or d.unused_data or len(out) != raw:
         raise Unreadable(f"a block that is not one zstd frame of {raw} bytes")
     return out
+
+
+ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+CONTENTSIZE_UNKNOWN = (1 << 64) - 1
+RUN_SLICE = 256                            # the input a run's decompressor takes at once
+
+
+class Run:
+    """A run's zstd frame as a reader unpacks it, one chunk a block (tagpu_reccodec.c,
+    reccodec_run_unpack, whose checks these are): a run begins at a reset chunk whose header is
+    the writer's -- the magic, a window of at most 2^RUN_WINDOW_LOG, no content size, no
+    dictionary, no checksum -- and each chunk must give exactly its block's raw bytes from all of
+    its input without ending the frame. BOUNDS: the chunk is fed RUN_SLICE bytes at a time and
+    the output checked after each, so a chunk that expands past its raw size stops within a few
+    zstd blocks of it. After a refusal the run is over: only a reset chunk feeds it again."""
+
+    def __init__(self):
+        self.d = None
+        self.chunks = []
+
+    def feed(self, chunk, raw, reset):
+        zstandard = _zstandard()
+        if reset:
+            self.d, self.chunks = None, []
+            try:
+                fp = zstandard.get_frame_parameters(bytes(chunk)) if chunk[:4] == ZSTD_MAGIC else None
+            except zstandard.ZstdError:
+                fp = None
+            if (fp is None or fp.window_size > 1 << RUN_WINDOW_LOG or
+                    fp.content_size != CONTENTSIZE_UNKNOWN or fp.dict_id or fp.has_checksum):
+                raise Unreadable("a run's first chunk whose header is not the writer's: a zstd "
+                                 f"frame of a window of at most 2^{RUN_WINDOW_LOG}, no content size, "
+                                 "no dictionary, no checksum")
+            self.d = zstandard.ZstdDecompressor(max_window_size=1 << RUN_WINDOW_LOG).decompressobj()
+        elif self.d is None:
+            raise Unreadable("a chunk that continues a run this reading did not start")
+        d, self.d = self.d, None
+        if not raw or not chunk:
+            raise Unreadable("an empty chunk")
+        out = bytearray()
+        try:
+            for at in range(0, len(chunk), RUN_SLICE):
+                out += d.decompress(bytes(chunk[at:at + RUN_SLICE]))
+                if len(out) > raw or d.eof:
+                    break
+        except zstandard.ZstdError as e:
+            raise Unreadable(f"a chunk that does not unpack in its run: {e}")
+        if d.eof or d.unused_data or len(out) != raw:
+            raise Unreadable(f"a chunk that is not its run's next {raw} bytes")
+        self.d = d
+        self.chunks.append((bytes(chunk), raw))
+        return bytes(out)
+
+    def before(self):
+        """A run as this one stood before its last chunk, replayed from its first."""
+        r = Run()
+        for i, (c, n) in enumerate(self.chunks[:-1]):
+            r.feed(c, n, i == 0)
+        return r
 
 
 def entries(payload):
@@ -3065,12 +3143,13 @@ def header_proj(es):
 
 
 def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None, start=None):
-    """Every complete block of a recording of format 13, in order: Block(ordinal (from 1), offset,
+    """Every complete block of a recording of REC_FORMAT, in order: Block(ordinal (from 1), offset,
     kind, flags, first, last, raw, packed, payload) with a stream block's payload its records.
     With decode=False, stream, snapshot and minimap payloads are None. Returns (as a generator's
     value) why the reading stopped short, or None at a clean end; raises Unreadable at a block it
-    refuses. `before_stream(ordinal, flags, bytes, frame)` sees each stream block's unpacked bytes
-    and the frame it is about to be decoded with (the codec's differential test). `data` is the
+    refuses. `before_stream(ordinal, flags, bytes, frame, run)` sees each stream block's unpacked
+    bytes, the frame it is about to be decoded with and, for a sectioned block, its Run after its
+    chunk (the codec's differential test). `data` is the
     file's bytes when the caller has read them already (reccache.py hashes the very bytes it
     decodes); `path` then names them in the messages.
 
@@ -3084,6 +3163,7 @@ def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None, sta
     if data[:8] != tarec.REC_MAGIC:
         raise Unreadable(f"{path}: not a recording")
     at, ordinal, frame, root_slots = 8, 0, None, None
+    run, prev, links = Run(), None, 0          # a segment's run, last snapshot and its chain
     if start is not None:
         at, ordinal, root_slots = start
     while at < len(data):
@@ -3101,9 +3181,11 @@ def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None, sta
             return f"a block cut short at byte {at}"
         if zlib.crc32(body) != crc_body:
             return f"a block failing its CRC at byte {at}"
-        allowed = RBF_STORED | (RBF_SECTIONS | RBF_FRAME_RESET | RBF_REFRESH
-                                if kind == tarec.RB_STREAM else 0)
+        allowed = (RBF_STORED |
+                   (RBF_SECTIONS | RBF_FRAME_RESET | RBF_REFRESH if kind == tarec.RB_STREAM else 0) |
+                   (RBF_CHAINED if kind == tarec.RB_SNAPSHOT else 0))
         if (flags & ~allowed or (flags & RBF_FRAME_RESET and not flags & RBF_SECTIONS) or
+                (flags & RBF_STORED and flags & (RBF_SECTIONS | RBF_CHAINED)) or
                 (kind in (tarec.RB_HEADER, tarec.RB_END, tarec.RB_TIMELINES) and not flags & RBF_STORED)):
             raise Unreadable(f"block flags {flags:#x} on kind {kind} at byte {at}")
         if not flags & RBF_STORED and (not packed or not raw):
@@ -3113,7 +3195,21 @@ def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None, sta
         ordinal += 1
         lazy = not decode and kind in (tarec.RB_STREAM, tarec.RB_SNAPSHOT, tarec.RB_MINIMAP,
                                        tarec.RB_EXACT)
-        payload = None if lazy else body if flags & RBF_STORED else unpack(body, raw)
+        if lazy or flags & RBF_SECTIONS:
+            payload = None
+        elif flags & RBF_CHAINED:
+            # the chain's bound (tagpu_recreader.c, snapshot_chain): a chained snapshot follows a
+            # snapshot of its segment, at most CHAIN_MAX after a key
+            if prev is None:
+                raise Unreadable(f"a chained snapshot with no snapshot before it in its segment, at "
+                                 f"byte {at}")
+            if links >= CHAIN_MAX:
+                raise Unreadable(f"a chained snapshot past its key's {CHAIN_MAX} links, at byte {at}")
+            payload = unpack(body, raw, prev)
+        else:
+            payload = body if flags & RBF_STORED else unpack(body, raw)
+        if kind == tarec.RB_SNAPSHOT and payload is not None:
+            prev, links = bytes(payload), links + 1 if flags & RBF_CHAINED else 0
         try:
             if kind == tarec.RB_HEADER:
                 es = entries(payload)
@@ -3132,11 +3228,28 @@ def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None, sta
                     prm = Params(nslots, header_proj(es), *header_features(es), [], 0, 0, 0, [],
                                  False)
                 frame = Frame(prm, rest=rest)
-            elif kind == tarec.RB_STREAM and payload is not None:
+                run, prev, links = Run(), None, 0
+            elif kind == tarec.RB_STREAM and (payload is not None or (decode and flags & RBF_SECTIONS)):
                 if frame is None:
                     raise Unreadable("a stream block before any header")
+                if flags & RBF_SECTIONS:
+                    # ONE VALIDITY for the run and the frames, as the DLL's reader keeps it
+                    # (tagpu_recreader.c, block_body): a chunk is unpacked only at a reset or
+                    # right after its run's last, and a refusal of either ends both
+                    if not frame.prm.usable:
+                        raise Unreadable("a sectioned block in a segment without RT_CODEC and "
+                                         "RT_PHYSICS, or with a grid or a wreck pool past the "
+                                         "codec's bounds")
+                    if not flags & RBF_FRAME_RESET and not frame.valid:
+                        raise Unreadable("a stream block that continues a frame this reading did "
+                                         "not start")
+                    try:
+                        payload = run.feed(body, raw, flags & RBF_FRAME_RESET)
+                    except Unreadable:
+                        frame.invalidate()
+                        raise
                 if before_stream:
-                    before_stream(ordinal, flags, payload, frame)
+                    before_stream(ordinal, flags, payload, frame, run)
                 payload = frame.decode(flags, payload)
         except Unreadable as e:
             raise Unreadable(f"{e} (the block at byte {at})")
