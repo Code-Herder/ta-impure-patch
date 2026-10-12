@@ -1728,6 +1728,52 @@ def seek_start(path, timeline, T, lead):
     return ch[i]["first"], False
 
 
+def seek_blocks(path, timeline, T, lead, base):
+    """The blocks the DLL's reader decodes for a seek to T of `timeline`, as recr_seek
+    (tagpu_recreader.c) reads them, from the file's own blocks: (count, their bytes in the file,
+    their bytes unpacked), each a block header's. From the snapshot seek_start chooses -- after the
+    first stream block of that snapshot's segment when `base`, the reader not holding the
+    segment's base -- or from the first iteration seek_start chooses; then, in each segment of the
+    chain up to T, every stream block holding an iteration it reads: a block is decoded whole, and
+    one ends where an iteration does (tagpu_recwriter.c, iteration_done), so the reader opens no
+    block past the last iteration it reads. The snapshot, contribution and timeline blocks it
+    passes are skipped unread."""
+    sizes, offsets = [], []
+    bl, _ = blocks(path, sizes, offsets, decode=False)
+    size = {id(b): sz for b, sz in zip(bl, sizes)}
+    ch = chain(segments(bl, offsets), timeline)
+
+    def cover_end(i):
+        return ch[i + 1]["fork_at"] - 1 if i + 1 < len(ch) else ch[i]["last"]
+    hold = next((i for i, s in enumerate(ch) if s["first"] is not None and
+                 s["first"] <= T <= cover_end(i)), None)
+    if hold is None:
+        raise Unreadable(f"GameTime {T} is outside timeline {timeline}'s chain")
+    snap = frm = None
+    for i in range(hold + 1):
+        for b in ch[i]["blocks"]:
+            if b[0] == RB_SNAPSHOT and b[2] <= cover_end(i) and b[2] + lead < T:
+                snap, frm = b, i
+    read = []
+    if snap is not None:
+        if base:
+            read.append(next(b for b in ch[frm]["blocks"] if b[0] == RB_STREAM))
+        read.append(snap)
+        start = snap[2] + 1
+    else:
+        lo = T - lead if T > lead else 0
+        frm = 0
+        while frm < hold and cover_end(frm) < lo:
+            frm += 1
+        start = ch[frm]["first"]
+    for i in range(frm, hold + 1):
+        end = T if i == hold else cover_end(i)
+        read += [b for b in ch[i]["blocks"] if b[0] == RB_STREAM and b[1] <= end and b[2] >= start]
+        if i < hold:
+            start = ch[i + 1]["fork_at"]
+    return (len(read), sum(size[id(b)][4] for b in read), sum(size[id(b)][3] for b in read))
+
+
 def cmd_segments(path):
     """One line per segment, then the SHA-256 of the original's bytes: what a fork's writer must
     leave as it was."""

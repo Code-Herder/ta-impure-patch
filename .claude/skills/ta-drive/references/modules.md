@@ -913,7 +913,8 @@ block that reads to its last complete block.
   acts on the held level and resumes it; a `run` step's script is handed the level held at its
   tick with the turbo on, advances it by exact ticks and hands it back held. No check waits on the
   wall clock: a one-frame answer is bounded by 60 s, a running level by 120 s of GameTime
-  standing still, and a seek's cost is its work line's CPU time. Every game gets the test render
+  standing still (a peek the running game has not answered is no progress), and a seek's cost is
+  its work line's counts, checked against the file. Every game gets the test render
   profile: a 20 fps present cap, `ss=1`, `shadowres=512` and the Classic++ look keys off. Each fixture is
   recorded live, played on puppets, played again with three round trips and sought from a fresh
   process, each on its own Xvfb; the live game also takes the null twin (paused, the camera, the
@@ -1011,9 +1012,11 @@ block that reads to its last complete block.
   pause the DLL took is held, the Pause key and the in-game menu's OK do not release it (the hold
   keeper at `0x496920`).
 - **A seek's work**: every seek logs `replay: <name>: the seek to <T>'s work: <I> iterations read
-  to GameTime <R> from the snapshot|the first iteration at GameTime <S>; the image: <N> units
-  live, <M> made, <F> refused, <K> killed, <A> left alive; cpu <C> ms (user …, kernel …) of the
-  game thread, <W> ms wall` — the replay harness's W1–W3 (`tareplay.py`, `work_verdict`).
+  to GameTime <R> from the snapshot|the first iteration at GameTime <S>; the blocks: <B> decoded
+  (<b> for the base), <P> bytes read, <U> unpacked; the image: <N> units live, <M> made, <F>
+  refused, <K> killed, <A> left alive; cpu <C> ms (user …, kernel …) of the game thread, <W> ms
+  wall` — the replay harness's W1–W3 (`tareplay.py`, `work_verdict`), each against the file; the
+  CPU and wall times are reported only.
 - **Play one**: `tacli replay play <i> FILE [--perspective RECORD]` launches the instance on the
   recording's map and seats and starts the skirmish; it exits 0 on `replay: playing <name>`.
 - **Seek**: `tacli replay seek <i> T` moves the instance's running playback to GameTime T, forward

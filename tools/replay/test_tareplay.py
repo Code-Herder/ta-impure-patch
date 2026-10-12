@@ -1274,35 +1274,85 @@ class SeekStart(unittest.TestCase):
         self.assertEqual(tarec.seek_start(path, 1, 16, 2), (1, False))
 
 
+class SeekBlocks(unittest.TestCase):
+    """tarec.seek_blocks: the blocks the DLL's reader decodes for a seek (recr_seek), from the
+    file's blocks alone: a snapshot or a first iteration, every stream block holding an iteration
+    read, a chain's crossings, and a base read first."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def file(self, *parts):
+        p = Path(self.tmp.name) / "r.imprec"
+        p.write_bytes(tarec.REC_MAGIC + b"".join(parts))
+        return str(p)
+
+    @staticmethod
+    def of(*bs):
+        n = sum(len(b) - 32 for b in bs)                # stored: raw and packed alike
+        return len(bs), n, n
+
+    def test_from_a_snapshot_or_the_first_iteration(self):
+        s1, s2, s3 = stream(1, 10, unit=1), stream(11, 20, opens=False), stream(21, 30, opens=False)
+        k10, k20 = block(tarec.RB_SNAPSHOT, 10, 10, b"s"), block(tarec.RB_SNAPSHOT, 20, 20, b"ss")
+        path = self.file(header(), s1, k10, s2, k20, s3, end_block(30))
+        self.assertEqual(tarec.seek_blocks(path, 0, 25, 3, 0), self.of(k20, s3))
+        self.assertEqual(tarec.seek_blocks(path, 0, 25, 3, 1), self.of(s1, k20, s3))
+        self.assertEqual(tarec.seek_blocks(path, 0, 13, 3, 0), self.of(s1, s2))
+        self.assertEqual(tarec.seek_blocks(path, 0, 10, 3, 0), self.of(s1))
+        self.assertEqual(tarec.seek_blocks(path, 0, 20, 3, 0), self.of(k10, s2))
+
+    def test_a_chain_reads_each_segments_part(self):
+        s1, s2, s3 = stream(1, 10, unit=1), stream(11, 20, opens=False), stream(21, 30, opens=False)
+        k10 = block(tarec.RB_SNAPSHOT, 10, 10, b"s")
+        f1, k25, f2 = (stream(15, 24, unit=2), block(tarec.RB_SNAPSHOT, 24, 24, b"f"),
+                       stream(25, 30, opens=False))
+        path = self.file(header(), s1, k10, s2, block(tarec.RB_SNAPSHOT, 20, 20, b"s"), s3,
+                         end_block(30), header((1, 0, 15)), f1, k25, f2, end_block(30))
+        # from the parent's snapshot at 10 across the fork at 15; its 21..30 block is never read
+        self.assertEqual(tarec.seek_blocks(path, 1, 22, 3, 0), self.of(k10, s2, f1))
+        self.assertEqual(tarec.seek_blocks(path, 1, 29, 3, 0), self.of(k25, f2))
+        self.assertEqual(tarec.seek_blocks(path, 1, 29, 3, 1), self.of(f1, k25, f2))
+        with self.assertRaises(tarec.Unreadable):
+            tarec.seek_blocks(path, 1, 31, 3, 0)
+
+
 class SeekWork(unittest.TestCase):
     """The seek's work line (tagpu_replay.c, sk_work_log) parsed and judged: W1 against the file,
-    W2 by its counts, W3 against a CPU bound."""
+    W2 by its counts, W3 against the file's blocks."""
 
     LINE = ("replay: battle: the seek to 225's work: {I} iterations read to GameTime 225 from "
-            "the snapshot at GameTime {S}; the image: 10 units live, {M} made, {F} refused, 2 "
+            "the snapshot at GameTime {S}; the blocks: {B} decoded ({Bb} for the base), {Bp} "
+            "bytes read, {Bp} unpacked; the image: 10 units live, {M} made, {F} refused, 2 "
             "killed, {A} left alive; cpu {C} ms (user 1100, kernel 0) of the game thread, 1104 ms "
             "wall")
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name) / "r.imprec"
-        self.path.write_bytes(tarec.REC_MAGIC + header() + stream(1, 10, unit=1) +
-                              block(tarec.RB_SNAPSHOT, 10, 10, b"s") +
-                              stream(11, 300, opens=False) + end_block(300))
+        snap, rest = block(tarec.RB_SNAPSHOT, 10, 10, b"s"), stream(11, 300, opens=False)
+        self.read = len(snap) + len(rest) - 64          # the payloads past their 32-byte headers
+        self.path.write_bytes(tarec.REC_MAGIC + header() + stream(1, 10, unit=1) + snap + rest +
+                              end_block(300))
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def work(self, I=215, S=10, M=10, F=0, A=0, C=1100):
-        got = tareplay.work_lines("x\n" + self.LINE.format(I=I, S=S, M=M, F=F, A=A, C=C) + "\r\n")
+    def work(self, I=215, S=10, M=10, F=0, A=0, C=1100, B=2, Bb=0, Bp=None):
+        line = self.LINE.format(I=I, S=S, M=M, F=F, A=A, C=C, B=B, Bb=Bb,
+                                Bp=self.read if Bp is None else Bp)
+        got = tareplay.work_lines("x\n" + line + "\r\n")
         self.assertEqual(len(got), 1)
         return got[0]
 
     def test_a_good_line(self):
         w = self.work()
-        self.assertEqual((w["T"], w["R"], w["S"], w["kind"], w["C"], w["W"]),
-                         (225, 225, 10, "the snapshot", 1100, 1104))
-        self.assertEqual(tareplay.work_verdict(w, str(self.path), 0, True, 4000), [])
+        self.assertEqual((w["T"], w["R"], w["S"], w["kind"], w["B"], w["Bp"], w["C"], w["W"]),
+                         (225, 225, 10, "the snapshot", 2, self.read, 1100, 1104))
+        self.assertEqual(tareplay.work_verdict(w, str(self.path), 0, True), [])
 
     def test_each_rule(self):
         verdict = lambda w, **kw: tareplay.work_verdict(w, str(self.path), 0, **kw)
@@ -1312,14 +1362,18 @@ class SeekWork(unittest.TestCase):
         self.assertEqual(verdict(self.work(M=9, F=1)), [])
         self.assertRegex(verdict(self.work(M=9, F=1), takeover=True)[0], "W2: 1 creates refused")
         self.assertRegex(verdict(self.work(A=3))[0], "W2: 3 units left alive")
-        self.assertRegex(verdict(self.work(C=4001), cpu_ms=4000)[0], "W3: 4001 ms")
+        self.assertEqual(verdict(self.work(C=40001)), [])          # time is reported, not judged
+        self.assertRegex(verdict(self.work(B=3))[0], "W3: 3 blocks decoded")
+        self.assertRegex(verdict(self.work(Bp=self.read + 1))[0], "where the file holds 2, ")
+        self.assertRegex(verdict(self.work(Bb=1))[0], "where the file holds 3, ")
 
     def test_a_log_with_no_line_could_not_run(self):
         log = Path(self.tmp.name) / "tagpu.log"
         log.write_text("nothing\n")
         self.assertEqual(tareplay.work_check("R", log, str(self.path), 0, False)[0][1],
                          tareplay.UNRUN)
-        log.write_text(self.LINE.format(I=215, S=10, M=10, F=0, A=0, C=5) + "\n")
+        log.write_text(self.LINE.format(I=215, S=10, M=10, F=0, A=0, C=5, B=2, Bb=0,
+                                        Bp=self.read) + "\n")
         self.assertEqual(tareplay.work_check("R", log, str(self.path), 0, False)[0][1],
                          tareplay.PASS)
 
@@ -1675,7 +1729,7 @@ class TakeoverFixtures(unittest.TestCase):
         took = {n: f["takeover"] for n, f in fixes.items() if "takeover" in f}
         self.assertIn("battle", took)
         self.assertIn("takeover-end", took)
-        known = {"player", "order", "switches", "type", "dump", "cpu_ms", "checks", "at"}
+        known = {"player", "order", "switches", "type", "dump", "checks", "at"}
         for name, t in took.items():
             self.assertLessEqual(set(t), known, name)
             self.assertTrue(t["player"] == "controlled" or isinstance(t["player"], int), name)
