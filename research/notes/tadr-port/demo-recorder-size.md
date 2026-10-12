@@ -1230,7 +1230,37 @@ records with the build's table: 108,090 iterations, none whose records differ fr
 3,604 stream blocks (361 ending at a refresh, every one sectioned, none declined or mismatched),
 60 snapshots kept at the refreshes 1,800 apart; `tarec lossy-check --to 27001` and `tarec check`
 pass on the result. Adding a row is the owner's decision (CLAUDE.md, *Loosening*); the rows the
-plan measured, the spray sessions and the cells are the next landings.
+plan measured and the spray sessions are the next landings.
+
+**The cells held: recording format 14** (the owner's decision 2026-10-12, option a). Every skirmish
+recording's `RT_HOLD` carries `RECL_CELLS`: between refreshes the stream carries a cell's unit
+slots (`+0x00`, `+0x02`) and yard bit (`+0x0C` bit 1) at a value it wrote before, so a cell image
+whose other bytes did not change is not written, and the feature tick's input runs only where a
+byte other than those changed; the tick's one slot read, reproduction's source test, is recorded
+as `FS_SOURCE`, as a multiplayer recording's is. At a refresh the filter writes every cell that
+differs from the writer's copy. The playing does not write those bytes: its engine stamps them
+(`tagpu_puppet.c`, *The footprint writers*). That holds by two facts. Every recorded footprint cell is
+the set-position's rounding of the recorded position (MEASURED 3,640,526 of 3,640,526
+unit-iterations of an air war and a battle), so the playing stamps where the game did. A
+contested cell keeps its incumbent, as on the recording machine, whose seats are never type 3:
+the playing writes `90 90` over the six contest `je`s from its first step to its end
+([engine map](../exe-reverse-engineering.md), *The footprint contest's rule*). The contest marks,
+`+0x110` bits 26 and 27, are the engine's too on such a playing, since the clear's re-claim walk
+reads them. A takeover, at a refresh, writes the recording's slots, yard bits and marks and then
+refreshes the passability. MEASURED 2026-10-12, `codectest lossy` over the heavy hour's exact
+records: **42,135,332 → 35,797,592 bytes of stream and snapshots (−6.34 MB)** against format 13's
+empty table; 108,090 iterations, 3,605 stream blocks (362 at a refresh, every one sectioned, none
+declined or mismatched), 60 snapshots kept; `tarec lossy-check --to 27001` (with the cells clause)
+and `tarec check` pass on the result. **The loosening the owner accepted with it**: after a seek
+the cells' slots, yard bits and contest marks are checked by the occupancy rule instead of
+compared (*Decisions taken* in [completeness](demo-recorder-completeness.md)); a seek stamps in slot
+order and a contest there can end the other way until the contested units move. **What remains
+open**: where the playing makes two contesting footprint calls in another order than the game did
+(deaths, creates and placements in slot order against the game's interleaving in its unit tick),
+the holder can differ (MEASURED in emulation, 4 of an air war's 1,700 iterations; no slot-B impact
+differed in the game in an air war or a battle). A multiplayer recording is unchanged: its playing
+keeps the engine's slots already, its marks are still written from the recording, and its contest
+follows the puppet's type-3 rule (the owner has not decided the marks for it).
 
 ## Multiplayer recordings
 
@@ -1313,7 +1343,7 @@ the units: stage 6's traffic budget.
 | L3 | cells, orders, events and state as four record frames that restart empty at every reset point; the snapshot wreck base: LANDED (*L3* above) | planned about −7 MiB against the pre-L1 file; MEASURED −4.52 MiB on L2's own battle file (16.40 → 11.88), −3.47 on Town & Country's, −0.60 on naval's, −5.54 on the air war's |
 | L4 | two measured four-player hours, a light and a heavy one; format 11: snapshots every 1,800 ticks, the cells frame restarting from the reader's grid (R1): LANDED (*L4* above) | the snapshot interval, decided by the owner with the seek target relaxed for dense battles; MEASURED −1.63 MB an hour from R1 on the light hour at 1,800; both hours miss the 25 MB budget even with no snapshots |
 | L5a | the unit frame predicts the resource ledger, format 12: LANDED (*L5a* below) | MEASURED heavy hour 56.99 → 42.15 MB, lossless |
-| L5 | lossy, chosen by the owner 2026-10-11: internal values held between refreshes, shown values exact (*L5: the lossy plan, measured offline*). The core LANDED as format 13: the filter, the refresh every 300 ticks, the takeover at a refresh, the exact stream for the harness, a hold table of no rows; the rows, the spray sessions and the cells follow | MEASURED offline heavy hour 42.15 → 19.32 MB with the plan's rows; format 13's empty table changes no record |
+| L5 | lossy, chosen by the owner 2026-10-11: internal values held between refreshes, shown values exact (*L5: the lossy plan, measured offline*). The core LANDED as format 13: the filter, the refresh every 300 ticks, the takeover at a refresh, the exact stream for the harness, a hold table of no rows; format 14 holds the cells' slots and yard bit (*The cells held*); the rows and the spray sessions follow | MEASURED offline heavy hour 42.15 → 19.32 MB with the plan's rows; format 13's empty table changes no record; the cells held 42.14 → 35.80 MB |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
 ## Decisions
