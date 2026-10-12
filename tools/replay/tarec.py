@@ -2018,7 +2018,7 @@ def cmd_lossy_check(path, timeline=0, to=None):
                     du, wu = D.units[lv], W.units[lv]
                     for r in np.nonzero(((du ^ wu) & ~H).any(axis=1))[0]:
                         fail(f"GameTime {t}: slot {lv[r]}'s shown bytes differ")
-                    if H.any():
+                    if H.any() and len(lv):
                         pv = np.array([pd[s][1] if s in pd else D.units[s] for s in lv])
                         pl = np.array([pd[s][0] if s in pd else True for s in lv])
                         ok = ((du & H) == (wu & H)) | (((du & H) == (pv & H)) & pl[:, None])
