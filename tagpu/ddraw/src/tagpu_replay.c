@@ -6600,14 +6600,14 @@ static unsigned sk_ms(LONGLONG ticks, LONGLONG hz)
 }
 
 /* THE SEEK'S WORK: the game thread's own CPU time, user and kernel, in 100-ns units, from
-   GetThreadTimes. A seek's cost is checked on it rather than on the wall clock, which time-slicing
-   stretches when other games share the core. MEASURED 2026-10-09 under Wine 9.0 (a probe calling
-   it around fixed work): its resolution is 10 ms; kernel time is counted (file reads: 110 of 200
-   ms); a Sleep counts nothing; a call costs 15 us. QueryThreadCycleTime returned no usable count
-   there. THE RESIDUAL: CPU time still grows with contention for the core itself -- the same fixed
-   work took 2,510-2,730 ms quiet and 3,830-3,920 ms with its SMT sibling busy (x1.5, a 7950X), and
-   an all-core load lowers the clock further -- so the harness's bound (tools/replay/fixtures.json,
-   `cpu_ms`) is set with that factor in it. */
+   GetThreadTimes, reported beside the wall time and checked by nothing. A seek's cost is checked
+   on its work instead -- the iterations read, the units made and the blocks decoded
+   (recr_seek_work), each against the file (tools/replay/tareplay.py, work_verdict) -- because CPU
+   time grows with contention for the core: the same fixed work took 2,510-2,730 ms quiet and
+   3,830-3,920 ms with its SMT sibling busy (x1.5, a 7950X), and an all-core load lowers the clock
+   further. MEASURED 2026-10-09 under Wine 9.0 (a probe calling it around fixed work): its
+   resolution is 10 ms; kernel time is counted (file reads: 110 of 200 ms); a Sleep counts
+   nothing; a call costs 15 us. QueryThreadCycleTime returned no usable count there. */
 typedef struct { ULONGLONG user, kernel; } SkCpu;
 
 static SkCpu sk_cpu(void)
@@ -7040,8 +7040,8 @@ static void rw_contacts(const Lv* L, const RecWorld* W, uint32_t mask)
 
 /* The seek's work, the line after its `wrote` line: what the reader `rd` read to reach the world
    it made (recr_seek_work) -- a return to now reads the live recording to G-1, every other seek its
-   own reader to T -- what the image held and what became of it, and THE SEEK'S WORK's CPU time
-   beside the wall time. The image's units: V's live slots, and a multiplayer world's units created
+   own reader to T -- the blocks it decoded to get there, what the image held and what became of
+   it, and THE SEEK'S WORK's CPU time beside the wall time. The image's units: V's live slots, and a multiplayer world's units created
    and not yet described, each of which level_units or mp_make_held hands to one create, made or
    refused (make, whose three refusals each count); the kills leave none alive (sk_kills). */
 static void sk_work_log(const Lv* L, const RecWorld* V, unsigned T, const RecReader* rd, SkCpu c0,
@@ -7054,10 +7054,12 @@ static void sk_work_log(const Lv* L, const RecWorld* V, unsigned T, const RecRea
     if (s_mp.on)
         for (slot = 1; slot < s_mp.slots; slot++) live += s_mp.held[slot] != 0;
     tagpu_logf("replay: %s: the seek to %u's work: %u iterations read to GameTime %u from %s at "
-               "GameTime %u; the image: %u units live, %u made, %u refused, %u killed, %u left "
+               "GameTime %u; the blocks: %u decoded (%u for the base), %llu bytes read, %llu "
+               "unpacked; the image: %u units live, %u made, %u refused, %u killed, %u left "
                "alive; cpu %u ms (user %u, kernel %u) of the game thread, %u ms wall", s_name, T,
                w->iterations, w->target, w->from_snapshot ? "the snapshot" : "the first iteration",
-               w->from, live, s_sk.made, s_sk.refused, s_sk.killed, s_sk.left,
+               w->from, w->blocks, w->base, w->packed, w->raw, live, s_sk.made, s_sk.refused,
+               s_sk.killed, s_sk.left,
                (unsigned)((user + kernel) / 10000), (unsigned)(user / 10000),
                (unsigned)(kernel / 10000), wall);
 }

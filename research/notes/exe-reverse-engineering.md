@@ -1603,8 +1603,10 @@ and [*Rebuild, takeover and rewind, measured*](tadr-port/demo-recorder-state-evi
   (`0x4952CF..0x495303`) and stores that record at `main+0x511` and the lag at `main+0x515`
   (`0x49530D`). From a lag of `0x384` (900) ticks it clamps the lag at `0xE10` (3600), scales the
   due ticks by (3600 − lag) × 1/2700 (`0x4FDA30`), floored at 0.01 (`0x4FDA38`), and sets
-  `main+0x38A51` bit 1 (`0x49535C`); below 900 it clears that bit (`0x495367`). The due ticks go
-  to `main+0x38A3B`, at most 5 (`0x4953F5`). **A puppet host therefore stamps every active type-3
+  `main+0x38A51` bit 1 (`0x49535C`); below 900 it clears that bit (`0x495367`). Before that, on
+  every call, it stores bit 2 as the live speed `main+0x38A4D` below the chosen `main+0x38A4B`
+  (`0x49526F` `cmp`, `0x495281` `sbb`, `0x495283..0x495299`), so bit 2 is set while its own trim
+  holds the speed down. The due ticks go to `main+0x38A3B`, at most 5 (`0x4953F5`). **A puppet host therefore stamps every active type-3
   record's `+0x18` with GameTime each tick** [INFERRED: in a network game `+0x18` is the time last
   heard from that player]. MEASURED: seats flipped to 3 in a live skirmish with `+0x18` = 0 ran
   3 ticks in about 8 s (GameTime 9596 → 9599); with the stamp, 30.0 ticks/s.
@@ -4284,7 +4286,7 @@ is `jmp` to it, and `0x4B6340` is `GetTickCount · rate / 1000`), `QueryPerforma
 `0x4FC0BC`; `0x4E1730` in seconds), and the C runtime's `time` `0x4E6480`; there is no
 `timeGetTime`. Their stores into the two images: the GUI's clock `main+0x5AF..+0x5B6`, the ping
 deadline `main+0x1B5F`, the pacing gate's `main+0x38A37..+0x38A42`, `+0x38A43` and `+0x38A4F` (and
-`+0x38A4D`, which its trim steps), the profiler `main+0x38D85..+0x38DD4`, the palette fade and
+`+0x38A4D`, which its trim steps, with bit 2 of the pause word `+0x38A51` that follows it), the profiler `main+0x38D85..+0x38DD4`, the palette fade and
 briefing flow `main+0x3905B..+0x3906E`, the local network name `main+0x14` (from `time()`); in
 `.data` `0x5129A4`, `0x5129A8`, `0x5129C8`, `0x512C78`, `0x512C7C`, the network channels' deadlines,
 `0x51E544`, `0x51E674..0x51E67B`, `0x51E680`, the loading fade `0x51E6C8` and `0x51F308`, the
@@ -6517,8 +6519,17 @@ function `0x496790` skips the scheduler `0x495230` and the tick `0x495490` (`0x4
 `0x49693E`). The scheduler tests it as well (`0x4953D9`), the pause icon `igpaused` shows it (`0x46A107`;
 `0x46A2A8` beside it tests bit 1, not the pause), and the pause key flips it and puts the new bit into a message `0x19`
 (`0x4960AA..0x4960E0`) [INFERRED: `0x451DF0` sends it to the peers]; the `0x19` receiver stores a
-peer's bit (`0x455967..0x45597A`). Bits 1 and 2 are the scheduler's (`0x49535C`, `0x495367`,
-`0x49527A`). Every other store of the word: set bit 0 at `0x44BE61`, `0x45D0A1` (in `0x45CFC0`,
+peer's bit (`0x455967..0x45597A`). Bits 1 and 2 are the scheduler's: bit 1 its lag flag
+(`0x49535C`, `0x495367`), tested only by the corner icon `0x46A2A8`; bit 2 the live speed below the
+chosen one, stored on every call (`0x49527A..0x495299`); **bit 2 has no reader**
+[DISASSEMBLED 2026-10-12: every instruction carrying the displacement `0x38A51` but the
+scheduler's three stores tests only bit 0 or bit 1, or keeps bits 1 and 2 as they are; the saved
+game's `Players` block copies `+0x38A37..+0x38A52` out at `0x46633A` and back at `0x4660A9`]. The
+frame function calls the scheduler only past its bit-0 tests (`0x4968AA`, `0x496920`), so while
+the level is paused bits 1 and 2 keep the last call's value through the hold. Both are pacing
+state, bit 2 following the wall clock through the trim and bit 1 the peers' lag, and the demo
+recorder leaves them (`replay-globals.tsv`, `pacingbits`, the owner's decision 2026-10-12): MEASURED 2026-10-12 under a load average of 63–87, a live
+recording held bit 2 set at GameTime 721 where its playings held it clear. Every other store of the word: set bit 0 at `0x44BE61`, `0x45D0A1` (in `0x45CFC0`,
 outside mode 3), `0x460E00` (the in-game menu's open, outside mode 3), `0x49306D` and `0x493330`
 (the LOADGAME screens); clear it at `0x44B6F0` (in the battle room's code [INFERRED from its
 neighbours]), `0x460A33` (the in-game menu's close, outside mode 3), `0x49720A` (the loader's
@@ -16844,7 +16855,7 @@ wall clock on `scenarios/walk-lerp.json`.*
 | `main+0x38A4B` | i16 | the speed **CEILING** — the corpus calls it `GameSpeed`, and it is what `minus`/`plus` set, but it is *not* what scales time into ticks. `0x49546A` only lets the throttle raise the live value back **while `0x38A4D < 0x38A4B`** (`cmp cx,[eax+0x38a4b]; jae skip`) |
 | `main+0x38A4D` | i16 | the **LIVE effective speed** — the corpus calls it `GameSpeed_Init` and the name is misleading. `0x495260` loads `WORD [main+0x38A4D]`, `fild`s it and multiplies by the double `0.1` at `0x4FDA28`, and *that* product scales elapsed time into ticks. **This is the field to read.** `[VERIFIED 2026-09-09 by disassembly]` |
 | `main+0x38A4F` | i16 | the **lag counter** the throttle runs on: `inc` at `0x49540A`, `dec` at `0x495448`. At **+10** (`0x495415`) it is zeroed and the live speed `0x38A4D` is **decremented**, floored at 1 (`cmp ax,1; jbe`); at **−100** (`0xff9c`, `0x495454`) it is zeroed and the live speed is **incremented**, capped at the ceiling above `[VERIFIED 2026-09-09 by disassembly]` |
-| `main+0x38A51` | u8 | `IsGamePaused` (bit 0 is also read as `[main+0x38A51] & 1` by the HUD's pause icon) |
+| `main+0x38A51` | u16 | flags: bit 0 `IsGamePaused` (also read as `[main+0x38A51] & 1` by the HUD's pause icon), bit 1 the scheduler's lag flag (`0x49535C`), bit 2 the live speed below the ceiling (`0x495299`, read by nothing) `[DISASSEMBLED 2026-10-12]`; see *A level starts paused* |
 
 ### The tick rate is `3 × GameSpeed` a second, and a skirmish does not start at 30 `[MEASURED 2026-09-09]`
 
