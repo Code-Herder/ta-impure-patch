@@ -2452,13 +2452,15 @@ def footprints(dw):
 
 
 def stamped(u, gw, gh):
-    """Whether the stamp 0x47CC30 writes a unit's footprint at all: it parks one with x or z below
-    0, or x + w or z + h past the grid's columns or rows, in the off-map bucket and writes no cell
-    (DISASSEMBLED 0x47CC57..0x47CCA3, with Impure's `jg` at 0x47CC8B and 0x47CCA3:
-    tagpu_patches.c, fix_last_cell)."""
+    """Whether the stamp 0x47CC30 writes a mobile unit's footprint at all: it parks one with x or
+    z below 0, or x + w or z + h past the grid's columns or rows, in the off-map bucket and writes
+    no cell (DISASSEMBLED 0x47CC57..0x47CCA3, with Impure's `jg` at 0x47CC8B and 0x47CCA3:
+    tagpu_patches.c, fix_last_cell), and it files the rest by the layer, +0x110 & 3: 1 in slot A,
+    2 in slot B, any other value in no cell (0x47CEBC..0x47CEC2) -- a carried unit's, 0."""
     x, z = struct.unpack_from("<hh", u, 0x76)
     w, h = struct.unpack_from("<hh", u, 0x7E)
-    return x >= 0 and z >= 0 and x + w <= gw and z + h <= gh
+    layer = struct.unpack_from("<I", u, U_STATE)[0] & 3
+    return layer in (1, 2) and x >= 0 and z >= 0 and x + w <= gw and z + h <= gh
 
 
 def occupancy(w, dw, contest=False):

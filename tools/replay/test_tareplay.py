@@ -1323,7 +1323,7 @@ class Occupancy(unittest.TestCase):
     CB = tarec.REC_CELL_BYTES
 
     @staticmethod
-    def unit(x, z, w=1, h=1, state=0):
+    def unit(x, z, w=1, h=1, state=1):
         u = bytearray(tarec.REC_UNIT_IMAGE)
         struct.pack_into("<hh", u, 0x76, x, z)
         struct.pack_into("<hh", u, 0x7E, w, h)
@@ -1351,7 +1351,7 @@ class Occupancy(unittest.TestCase):
         # no stamp bound and no contest: a unit at the grid's last column must still be named
         a, b = self.worlds({1: self.unit(5, 1)}, {})
         self.assertEqual(len(tarec.occupancy(a, b)), 1)
-        a, b = self.worlds({1: self.unit(1, 1), 2: self.unit(1, 1, state=1 << 27)},
+        a, b = self.worlds({1: self.unit(1, 1), 2: self.unit(1, 1, state=1 << 27 | 1)},
                            {(1, 1): (1, 0)})
         self.assertEqual(len(tarec.occupancy(a, b)), 1)
 
@@ -1363,9 +1363,12 @@ class Occupancy(unittest.TestCase):
         # the last column itself is stamped (fix_last_cell)
         a, b = self.worlds({1: self.unit(5, 1)}, {})
         self.assertEqual(len(tarec.occupancy(a, b, contest=True)), 1)
+        # a carried unit, layer 0, holds no cell
+        a, b = self.worlds({1: self.unit(1, 1, state=0)}, {})
+        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
 
     def test_contest_a_loser_under_the_holder(self):
-        units = {1: self.unit(1, 1, 2, 1), 2: self.unit(2, 1, state=1 << 27)}
+        units = {1: self.unit(1, 1, 2, 1), 2: self.unit(2, 1, state=1 << 27 | 1)}
         a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
         self.assertEqual(tarec.occupancy(a, b, contest=True), [])
 
@@ -1377,7 +1380,7 @@ class Occupancy(unittest.TestCase):
         self.assertIn("mobile unit 2's footprint does not name it", out[0])
 
     def test_contest_a_cell_naming_a_unit_elsewhere_fails(self):
-        units = {1: self.unit(1, 1), 2: self.unit(3, 1, state=1 << 27)}
+        units = {1: self.unit(1, 1), 2: self.unit(3, 1, state=1 << 27 | 1)}
         a, b = self.worlds(units, {(1, 1): (1, 0), (3, 1): (1, 0)})
         out = tarec.occupancy(a, b, contest=True)
         self.assertTrue(any("names slot 1, outside its footprint" in line for line in out), out)
