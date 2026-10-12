@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments and world): the C parser against the coverage build's map, the features' regions, the
-comment filter, `landing --check`, a recording's segments and chains, what format 12's block walk
+comment filter, `landing --check`, a recording's segments and chains, what format 13's block walk
 refuses and which cells are images, read from files built from the format alone, the fixtures'
 takeover entries and the W lane's edited header copies. No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
@@ -788,7 +788,7 @@ def zstd_frame(data, wlog):
 
 
 class FormatBlocks(unittest.TestCase):
-    """What format 12's block walk refuses by name before any payload is read, as
+    """What format 13's block walk refuses by name before any payload is read, as
     tagpu_recreader.c's block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
 
     def refused(self, *parts, why, decodes=(True, False)):
@@ -803,7 +803,9 @@ class FormatBlocks(unittest.TestCase):
         snap = tlv(tarec.RK_TICK, struct.pack("<I", 1))
         S, P, R = tarec.RBF_STORED, tarec.RBF_SECTIONS, tarec.RBF_FRAME_RESET
         for kind, flags in ((tarec.RB_HEADER, 0), (tarec.RB_SNAPSHOT, S | P),
-                            (tarec.RB_STREAM, S | R), (tarec.RB_STREAM, S | 8)):
+                            (tarec.RB_STREAM, S | R), (tarec.RB_STREAM, S | 16),
+                            (tarec.RB_SNAPSHOT, S | tarec.RBF_REFRESH),
+                            (tarec.RB_EXACT, S | tarec.RBF_REFRESH)):
             with self.subTest(kind=kind, flags=flags):
                 self.refused(header(), flagged(kind, 1, 1, snap, flags), why="block flags")
 
@@ -1051,6 +1053,154 @@ class Segments(unittest.TestCase):
             path = self.file(*parts)
             with self.assertRaises(tarec.Unreadable):
                 self.segs(path)
+
+
+def hold_entry(refresh=30, flags=0, unit_held=(), node_held=()):
+    """RT_HOLD: the refresh interval, the flags, a zero SHA-256 and the two masks, with each
+    dword of `unit_held` and `node_held` held whole."""
+    unit, node = bytearray(tarec.REC_UNIT_IMAGE), bytearray(tarec.REC_ORDER_IMAGE)
+    for d in unit_held:
+        unit[4 * d:4 * d + 4] = b"\xff" * 4
+    for d in node_held:
+        node[4 * d:4 * d + 4] = b"\xff" * 4
+    return tlv(tarec.RT_HOLD, struct.pack("<II", refresh, flags) + bytes(32) + unit + node)
+
+
+def held_header(**hold):
+    """header(), RT_HOLD appended: its entries are read in any order."""
+    raw = header()
+    p = raw[32:] + hold_entry(**hold)
+    return block(tarec.RB_HEADER, 0, 0, p)
+
+
+def delta(slot, values):
+    """An RK_UNIT_DELTA of `slot` naming {dword: value}."""
+    bits = sum(1 << d for d in values)
+    head = struct.pack("<H", slot) + bits.to_bytes(tarec.REC_UNIT_BITS, "little")
+    head += bytes(tarec.REC_UNIT_DELTA_HEAD - len(head))
+    return tlv(tarec.RK_UNIT_DELTA, head + b"".join(struct.pack("<I", values[d])
+                                                      for d in sorted(values)))
+
+
+class LossyStream(unittest.TestCase):
+    """tarec's lossy-check, --exact and refresh_at against a file whose stream holds unit dword
+    HELD between the refreshes at GameTime 1 and 31 (RT_HOLD's interval 30), and whose exact
+    stream (RB_EXACT) does not."""
+
+    HELD = 50
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.n = 0
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def file(self, *parts):
+        self.n += 1
+        p = Path(self.tmp.name) / f"r{self.n}.imprec"
+        p.write_bytes(tarec.REC_MAGIC + b"".join(parts))
+        return str(p)
+
+    @staticmethod
+    def ticks(first, last, extra):
+        """Iterations first..last, `extra` {GameTime: records} after each one's RK_TICK."""
+        return b"".join(tlv(tarec.RK_TICK, struct.pack("<I", t)) + extra.get(t, b"")
+                        for t in range(first, last + 1))
+
+    def parts(self, lossy2=None, lossy31=None, refresh31=True, exact=True, header=None):
+        """The file: iteration 1 makes unit 1, the exact stream changes its dword HELD and dword
+        10 at 2; the lossy stream carries `lossy2` there (dword 10 alone by default) and `lossy31`
+        at the refresh 31 (dword HELD's change by default)."""
+        S, F = tarec.RBF_STORED, tarec.RBF_REFRESH
+        first = (tlv(tarec.RK_UNIT, struct.pack("<HH", 1, 0) + bytes(tarec.REC_UNIT_IMAGE)) +
+                 tlv(tarec.RK_MAPPED, struct.pack("<I", 0) + bytes(2)))
+        x = self.ticks(2, 31, {2: delta(1, {self.HELD: 7, 10: 9})})
+        lossy = self.ticks(2, 31, {2: delta(1, {10: 9}) if lossy2 is None else lossy2,
+                                   31: delta(1, {self.HELD: 7}) if lossy31 is None else lossy31})
+        out = [header or held_header(unit_held=(self.HELD,)),
+               flagged(tarec.RB_STREAM, 1, 1, self.ticks(1, 1, {1: first}), S | F),
+               flagged(tarec.RB_EXACT, 1, 1, self.ticks(1, 1, {1: first}), S),
+               flagged(tarec.RB_STREAM, 2, 31, lossy, S | (F if refresh31 else 0))]
+        if exact:
+            out.append(flagged(tarec.RB_EXACT, 2, 31, x, S))
+        return out + [end_block(31)]
+
+    def lossy_check(self, path, *args):
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(out):
+            rc = tarec.main(["tarec", "lossy-check", path, *args])
+        return rc, out.getvalue()
+
+    def test_a_held_dword_written_at_the_refresh_passes(self):
+        rc, o = self.lossy_check(self.file(*self.parts()))
+        self.assertEqual(rc, 0, o)
+        self.assertIn("31 iterations to GameTime 31, 2 refreshes", o)
+
+    def test_to_stops_the_walk(self):
+        rc, o = self.lossy_check(self.file(*self.parts()), "--to", "10")
+        self.assertEqual(rc, 0, o)
+        self.assertIn("10 iterations to GameTime 10", o)
+
+    def test_a_shown_dword_held_fails(self):
+        rc, o = self.lossy_check(self.file(*self.parts(lossy2=b"")))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 2: slot 1's shown bytes differ", o)
+
+    def test_a_held_value_made_up_fails(self):
+        rc, o = self.lossy_check(self.file(*self.parts(lossy2=delta(1, {10: 9, self.HELD: 3}))))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("held bytes are neither the stream's last nor the exact ones", o)
+
+    def test_a_refresh_that_misses_a_held_change_fails(self):
+        rc, o = self.lossy_check(self.file(*self.parts(lossy31=b"")))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 31: the stream's world is not the exact copy at a refresh", o)
+
+    def test_a_refresh_off_its_block_fails(self):
+        rc, o = self.lossy_check(self.file(*self.parts(refresh31=False)))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 31: a refresh iteration that does not end a refresh block", o)
+
+    def test_no_exact_stream_cannot_be_checked(self):
+        path = self.file(*self.parts(exact=False))
+        rc, o = self.lossy_check(path)
+        self.assertEqual(rc, 2, o)
+        self.assertIn("recorded without tagpu_rec.exact", o)
+        with self.assertRaisesRegex(tarec.Unreadable, "recorded without tagpu_rec.exact"):
+            tarec.load(path, exact=True)
+
+    def test_a_skirmish_without_rt_hold_fails(self):
+        rc, o = self.lossy_check(self.file(*self.parts(header=header())))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("a skirmish header without RT_HOLD", o)
+
+    def test_exact_reads_the_exact_records(self):
+        path = self.file(*self.parts())
+        for exact, held in ((False, 0), (True, 7)):
+            h, bl, _ = tarec.load(path, exact=exact)
+            w = tarec.stream_to(h, bl, want=2)
+            self.assertEqual(struct.unpack_from("<I", w.units[1], 4 * self.HELD)[0], held)
+        h, bl, _ = tarec.load(path)
+        w = tarec.stream_to(h, bl, want=31)
+        self.assertEqual(struct.unpack_from("<I", w.units[1], 4 * self.HELD)[0], 7)
+
+    def test_refresh_at(self):
+        path = self.file(*self.parts())
+        self.assertEqual([tarec.refresh_at(path, 0, T) for T in (1, 2, 30, 31)], [1, 1, 1, 31])
+        with self.assertRaisesRegex(tarec.Unreadable, "outside timeline 0's chain"):
+            tarec.refresh_at(path, 0, 32)
+
+    def test_rt_hold_bounds(self):
+        for hold, why in (({"refresh": 20}, "refresh interval 20"),
+                          ({"refresh": 301}, "refresh interval 301"),
+                          ({"flags": 4}, "flags 0x4"),
+                          ({"unit_held": (0x6C // 4,)}, "unit position")):
+            with self.subTest(**hold):
+                with self.assertRaisesRegex(tarec.Unreadable, why):
+                    tarec.header(held_header(**hold)[32:])
+        with self.assertRaisesRegex(tarec.Unreadable, "of 12 bytes"):
+            tarec.header(header()[32:] + tlv(tarec.RT_HOLD, bytes(12)))
 
 
 class SeekStart(unittest.TestCase):

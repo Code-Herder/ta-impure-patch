@@ -48,8 +48,9 @@ and a fifth where fixtures.json gives the fixture `"watch": true`:
                  back to the browser, and a second Watch -- every HUD control clicked in device
                  space where the game drew it (`tacli hud`)
 
-and every check fails by name: the recording's end block and `tarec check`; L's dumps `tarec
-compare`; P's, R's, Q's and W's capture dumps `tarec compare --puppet`; each round trip's line has
+and every check fails by name: the recording's end block, `tarec check` and `tarec lossy-check`
+(L records the exact stream beside the lossy one, EXACT_LEVER); L's dumps `tarec compare
+--exact`; P's, R's, Q's and W's capture dumps `tarec compare --puppet`; each round trip's line has
 residue 0 and `tarec compare-dumps rt<T>-a rt<T>-b` is EQUAL; W's steps each hold what they
 claim. Passing dumps are deleted unless --keep. A fixture with `"decline": true` launches every
 process with DECLINE_LEVER in its game folder, so its recording holds blocks the writer's codec
@@ -61,7 +62,8 @@ A fixture fixtures.json gives a `takeover` runs two processes more, K after L an
     K  takeover  `replay takeover` of L's recording at T = T2, or the entry's `at`, as player P
                  (the recording's controlled player unless the entry names one) in a fresh
                  process, which records
-                 timeline 1 into the same file: the window, its boxes and ErrorLog.txt watched,
+                 timeline 1 into the same file; T is the refresh at or before the point drawn,
+                 which REFRESH_LEVER's grid makes the point itself: the window, its boxes and ErrorLog.txt watched,
                  the entry's `order` and `type` given, a dump k<T+dump>, the level ended
     F  boundary  `replay seek T-300 --timeline 1` of K's file in a fresh process, which plays
                  across the fork at T, dump f<T+300> (or at T+dump when that comes first)
@@ -181,6 +183,15 @@ PRESENT_CAP = 20
 # writer's codec declines stream blocks 2, 7, 12, ... (tagpu_recorder.h, tagpu_rec_lever_init),
 # and the recording must count declined blocks (codec_check)
 DECLINE_LEVER = "tagpu_rec.decline"
+# L and K launch with EXACT_LEVER in their game folder: the writer follows each stream block with
+# the exact records it filtered (RB_EXACT), against which `tarec compare --exact` reads their dumps
+# and `tarec lossy-check` the lossy stream (tagpu_reclossy.c). A fixture with a `takeover` launches
+# every process with REFRESH_LEVER holding TAKEOVER_REFRESH: a takeover starts at the refresh at or
+# before the GameTime asked (tagpu_replay.c, tk_bound), and every point the harness draws is 1
+# (mod 30), so on that grid the takeover, the forks and the rewind's fork start where they ask
+EXACT_LEVER = "tagpu_rec.exact"
+REFRESH_LEVER = "tagpu_rec.refresh"
+TAKEOVER_REFRESH = 30
 GAMETIME = "*0x511DE8+0x38A47:4"
 COB_STOP = "A unit script cannot continue safely"
 TRIGGER = "tagpu_replay.trigger"
@@ -198,7 +209,8 @@ TAKEOVER_CHECKS = {
           "armed TAKEOVER_SPAN window, and at least 25 % of the AI seats' mobile units move more than "
           "8 wu; construction is reported only",
     "fork": "compare-fork EQUAL, the original's bytes untouched, both timelines check, "
-            "timeline 1 complete, and K's and F's dumps EQUAL",
+            "timeline 1 complete, K's dump EQUAL to timeline 1's exact stream, F's to its "
+            "stream, and timeline 1's lossy-check",
     "victory": "timeline 1 ends complete with P's seat won, within TAKEOVER_SPAN of T",
 }
 CONTINUE = 300                  # the dump after a round trip, this many ticks on
@@ -359,6 +371,7 @@ class Worker:
         self.game_speed = game_speed
         self.turbo = 0
         self.held = False               # the next launch holds its level (THE LAUNCH'S HOLD)
+        self.exact = False              # the next launch records the exact stream (EXACT_LEVER)
         self.lane = None                # (fixture, lane) while a job plays, for the journal
         self.lock = None
         self.last_collection = None
@@ -488,6 +501,16 @@ class Worker:
             decline.write_text("")
         else:
             decline.unlink(missing_ok=True)
+        exact = self.gamedir / EXACT_LEVER
+        if self.exact:
+            exact.write_text("")
+        else:
+            exact.unlink(missing_ok=True)
+        refresh = self.gamedir / REFRESH_LEVER
+        if fix.get("takeover"):
+            refresh.write_text(f"{TAKEOVER_REFRESH}\n")
+        else:
+            refresh.unlink(missing_ok=True)
         self.test_render()
         shutil.copy2(dll, self.gamedir / "ddraw.dll")
         rd = self.gamedir / "replays"
@@ -1812,7 +1835,14 @@ def forks_steps(w, fx, out, results):
             raise Failed(f"forks: timeline {tl}'s playing did not touch its last-used time")
 
     def fork(tid, T, parent=0):
-        say(f"forks: K{tid} from {parent} at {T}")
+        """Timeline `tid` taken over from `parent` at T, which starts at the refresh at or before
+        it (tk_bound): that GameTime, which the fork names as its fork_at."""
+        try:
+            R = tarec.refresh_at(str(source), parent, T)
+        except tarec.Unreadable as e:
+            raise CouldNotRun(f"forks: K{tid}: the refresh at or before {T}: {e}")
+        say(f"forks: K{tid} from {parent} at {T}" + (f", the refresh {R}" if R != T else ""))
+        T = R
         w.place(fx["fix"], fx["dll"])
         log = Log(w)
         read = copies(f"K{tid} read", source)[0]
@@ -1845,6 +1875,7 @@ def forks_steps(w, fx, out, results):
                       read, parent, True)
         shutil.copy2(fork_file(w, log), source)
         check_file(source, f"K{tid}")
+        return T
 
     def start_play(tl, T, label):
         """The file played from T in timeline tl, held at T-1 after its seek; its seeks' work is
@@ -1906,8 +1937,7 @@ def forks_steps(w, fx, out, results):
     fork(4, base + 900)
     if any(s["id"] == 1 for s in tarec.file_segments(source)[0]):
         raise Failed("forks: LRU 1 was not removed by compaction")
-    T5 = base + 451
-    fork(5, T5, 2)
+    T5 = fork(5, base + 451, 2)
     log = start_play(5, T5 + 1, "playing 5")
     # Timeline IDs are local to their file: a playing protects only that recording.
     other = w.gamedir / "replays" / "other.imprec"
@@ -2221,7 +2251,8 @@ def checks(fx):
 
     for n in (f"l{Ts[0]}", f"l{Ts[-1]}"):
         d = out / "L" / f"dump-{n}.bin"
-        compare(f"L {n}", "compare", rec, d, files=[d])
+        compare(f"L {n}", "compare", "--exact", rec, d, files=[d])
+    res.later(tarec_verdict, "tarec lossy-check", "lossy-check", rec)
     later = {T: [U for U in Ts[1:] if U > T and U <= T + CONTINUE] for T in Ts[1:]}
     for proc, names in (("P", [(f"p{Ts[0]}", ""), (f"p{Ts[-1]}", "")]),
                         ("R", [(f"r{Ts[0]}", "")] +
@@ -2514,10 +2545,12 @@ def tk_checks(fx):
         segments = res.start(tarec_run, "segments", path)
         timelines = [(t, res.start(tarec_run, "check", path, "--timeline", t)) for t in (0, tl)]
         dumps = []
-        for proc, d, puppet in (("K", out / "K" / f"dump-k{T + tk.get('dump', TAKEOVER_SPAN)}.bin", ()),
-                                ("F", out / "F" / f"dump-f{fx.get('tk_f', 0)}.bin", ("--puppet",))):
+        lossy = res.start(tarec_run, "lossy-check", path, "--timeline", tl)
+        for proc, d, how in (("K", out / "K" / f"dump-k{T + tk.get('dump', TAKEOVER_SPAN)}.bin",
+                              ("--exact",)),
+                             ("F", out / "F" / f"dump-f{fx.get('tk_f', 0)}.bin", ("--puppet",))):
             dumps.append((proc, d, d.exists() and
-                          res.start(tarec_run, "compare", *puppet, "--timeline", tl, path, d)))
+                          res.start(tarec_run, "compare", *how, "--timeline", tl, path, d)))
 
         def fork():
             parts, bad, unread = [], [], []
@@ -2536,6 +2569,9 @@ def tk_checks(fx):
                 rc, o = f.result()
                 (parts if rc == 0 else bad if rc == 1 else unread).append(
                     f"check --timeline {t}: {last(o) if rc == 0 else o.strip()}")
+            rc, o = lossy.result()
+            (parts if rc == 0 else bad if rc == 1 else unread).append(
+                f"lossy-check --timeline {tl}: {last(o) if rc == 0 else o.strip()}")
             try:
                 seg = [s for s in tarec.file_segments(path)[0] if s["id"] == tl][0]
                 ends = [b for b in seg["blocks"] if b[0] == tarec.RB_END]
@@ -2703,6 +2739,7 @@ class Run:
             w.game_speed = NORMAL_GAME_SPEED if proc == "W" else self.game_speed
             w.turbo = turbo_lane(fx["fix"], proc, self.turbo)
             w.held = held_lane(fx["fix"], proc)
+            w.exact = proc in ("L", "K")
             if proc == "L":
                 cost = bool(fx["fix"].get("cost"))
                 fx["rec"] = live(w, fx, None if fx["measure"] or cost else Ts, out)
@@ -2713,7 +2750,14 @@ class Run:
                     # check of the report, and the K and X lanes' files after L's, read it
                     fx["warm"] = offline().submit(tarec_run, "info", fx["rec"])
                 if "K" in fx["want"]:
-                    fx["tk_T"], fx["tk_P"] = tk_point(fx, h, *fx["tk_ask"])
+                    T, fx["tk_P"] = tk_point(fx, h, *fx["tk_ask"])
+                    try:
+                        fx["tk_T"] = tarec.refresh_at(str(fx["rec"]), 0, T)
+                    except tarec.Unreadable as e:
+                        raise CouldNotRun(f"the takeover's refresh at or before {T}: {e}")
+                    if fx["tk_T"] != T:
+                        say(f"{name}: the takeover asked for at {T} starts at {fx['tk_T']}, the "
+                            f"refresh at or before it")
                 for p in fx["want"][1:]:
                     if p != "F":                # F follows K, which it reads
                         self.put(name, p)
@@ -2998,6 +3042,7 @@ def out_dir(args):
 # the recorder's own instrumented sources (the Makefile's COVERED beside the sim files)
 RECORDER_COVERED = {"src/tagpu_recorder.c", "src/tagpu_recwriter.c", "src/tagpu_recreader.c",
                     "src/tagpu_replay.c", "src/tagpu_recfile.c", "src/tagpu_reccodec.c",
+                    "src/tagpu_reclossy.c",
                     "src/tagpu_recframe_cells.c", "src/tagpu_recframe_orders.c",
                     "src/tagpu_recframe_events.c", "src/tagpu_recframe_state.c"}
 
@@ -3083,8 +3128,11 @@ RECORDER_OWN = {DD + "src/tagpu_recorder.c", DD + "src/tagpu_recwriter.c",
                 DD + "inc/tagpu_recframe.h", DD + "src/tagpu_recframe_cells.c",
                 DD + "src/tagpu_recframe_orders.c", DD + "src/tagpu_recframe_events.c",
                 DD + "src/tagpu_recframe_state.c",
+                DD + "src/tagpu_reclossy.c", DD + "inc/tagpu_reclossy.h", DD + "inc/tagpu_rechold.h",
+                DD + "replay-hold.tsv",
                 DD + "replay-lanes.tsv", DD + "src/zstd.c",
                 "tools/replay-globals-gen.py", "tools/replay-layout-gen.py", "tools/replay-lanes-gen.py",
+                "tools/replay-hold-gen.py",
                 "tools/replay-layout-check.sh", "tools/tacli"}
 FIXTURES_JSON = "tools/replay/fixtures.json"
 NOTE = "replay-roundtrip:"

@@ -56,11 +56,16 @@ void tagpu_rec_level_end(void);
 void tagpu_rec_init(void);
 int tagpu_rec_hooks_in(void);
 /* DllMain's attach, before tagpu_simreg_attach closes the lever list, so a recording's header
-   names it: THE TEST LEVER tagpu_rec.decline, honoured only in a test launch
-   (tagpu_regstore_active) and refused with a line otherwise. Present, every recording's codec
-   declines stream blocks 2, 7, 12, ... (RecStream.decline): the tareplay fixtures codec-decline
-   and stock-codec-decline record under it and check that the recording reads back across each
-   declined block. */
+   names them: THE TEST LEVERS, honoured only in a test launch (tagpu_regstore_active) and refused
+   with a line otherwise.
+   - tagpu_rec.decline: every recording's codec declines stream blocks 2, 7, 12, ...
+     (RecStream.decline): the tareplay fixtures codec-decline and stock-codec-decline record under
+     it and check that the recording reads back across each declined block.
+   - tagpu_rec.exact: after each stream block the writer writes the exact records it was filtered
+     from (RB_EXACT), which `tarec compare --exact` and `tarec lossy-check` read.
+   - tagpu_rec.refresh, its text N: a refresh every N ticks instead of REC_REFRESH_TICKS, N a
+     multiple of REC_REFRESH_MIN up to REC_REFRESH_TICKS, so a takeover fixture's refresh lands
+     on its GameTime. */
 void tagpu_rec_lever_init(void);
 
 /* Actual delivered span in this thread's owned primary receive frame. Zero
@@ -195,6 +200,9 @@ typedef struct RecRing {
                                           producer end precedes the final ring publication     */
     int            decline;            /* the test lever tagpu_rec.decline (tagpu_rec_lever_init):
                                           the writer's codec declines blocks (RecStream.decline) */
+    int            exact;              /* the test lever tagpu_rec.exact: RB_EXACT blocks       */
+    unsigned       refresh;            /* the refresh interval in ticks: REC_REFRESH_TICKS, or
+                                          the test lever tagpu_rec.refresh's                    */
 } RecRing;
 
 /* Starts the writer thread on a ring whose first record is RK_HEADER. From then on the writer

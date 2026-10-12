@@ -75,6 +75,7 @@
    is recorded (*The events*). */
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "tagpu_recorder.h"
 #include "tagpu_regstore.h"
@@ -2429,6 +2430,8 @@ static HANDLE dup_event(HANDLE e)
 }
 
 static int s_decline;               /* tagpu_rec.decline, set at attach (tagpu_rec_lever_init) */
+static int s_exact;                 /* tagpu_rec.exact, set at attach                           */
+static unsigned s_refresh;          /* tagpu_rec.refresh's interval, 0 for REC_REFRESH_TICKS    */
 
 /* Everything a recording will need, taken now. After this the capture allocates only from its own
    heap, for the order lists' images, and for a heap table that grows (table_grow). */
@@ -2447,6 +2450,8 @@ static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
 
     if (!r || !g) goto fail;
     g->decline = s_decline;
+    g->exact = s_exact;
+    g->refresh = s_refresh ? s_refresh : REC_REFRESH_TICKS;
     if (s_fork.file) {                  /* THE FORK'S HANDLE moves to the ring */
         g->fork = s_fork;
         s_fork.file = NULL;
@@ -6563,13 +6568,38 @@ int tagpu_rec_hooks_in(void) { return s_sites; }
 
 void tagpu_rec_lever_init(void)
 {
-    if (!tagpu_sim_lever("tagpu_rec.decline")) return;
+    char text[16];
+    int decline = tagpu_sim_lever("tagpu_rec.decline"), exact = tagpu_sim_lever("tagpu_rec.exact");
+    int n = tagpu_sim_lever_read("tagpu_rec.refresh", text, sizeof text);
+    if (!decline && !exact && n < 0) return;
     if (!tagpu_regstore_active()) {
-        tagpu_logf("recorder: tagpu_rec.decline refused: not a test launch (tagpu_regstore.h)");
+        tagpu_logf("recorder: the levers tagpu_rec.decline, tagpu_rec.exact and tagpu_rec.refresh "
+                   "refused: not a test launch (tagpu_regstore.h)");
         return;
     }
-    s_decline = 1;
-    tagpu_logf("recorder: tagpu_rec.decline: the codec declines stream blocks 2, 7, 12, ...");
+    if (decline) {
+        s_decline = 1;
+        tagpu_logf("recorder: tagpu_rec.decline: the codec declines stream blocks 2, 7, 12, ...");
+    }
+    if (exact) {
+        s_exact = 1;
+        tagpu_logf("recorder: tagpu_rec.exact: every stream block is followed by the exact records "
+                   "it was filtered from (RB_EXACT)");
+    }
+    if (n >= 0) {
+        char* end;
+        unsigned long v = strtoul(text, &end, 10);
+        while (*end == ' ' || *end == '\r' || *end == '\n') end++;
+        /* a multiple of the radar pass's 30-tick step, so every refresh stays 1 modulo 30 */
+        if (end == text || *end || v < REC_REFRESH_MIN || v > REC_REFRESH_TICKS ||
+            v % REC_REFRESH_MIN) {
+            tagpu_logf("recorder: tagpu_rec.refresh refused: \"%s\" is not a multiple of %u from "
+                       "%u to %u", text, REC_REFRESH_MIN, REC_REFRESH_MIN, REC_REFRESH_TICKS);
+        } else {
+            s_refresh = (unsigned)v;
+            tagpu_logf("recorder: tagpu_rec.refresh: a refresh every %u ticks", s_refresh);
+        }
+    }
 }
 
 void tagpu_rec_init(void)

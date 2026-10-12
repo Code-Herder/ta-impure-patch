@@ -50,7 +50,7 @@ _Static_assert(RECC_PAYLOAD_MAX == RECR_BLOCK_MAX,
 
 /* one block of the file, by its header alone */
 typedef struct RecIndexEntry {
-    unsigned           kind, first, last, raw, packed;
+    unsigned           kind, flags, first, last, raw, packed;
     unsigned           seg;         /* its segment                                            */
     unsigned long long off;         /* its header's offset in the file                        */
 } RecIndexEntry;
@@ -178,6 +178,8 @@ static const char* block_flags_bad(const RecBlock* b)
     if (b->flags & ~RBF_ALL) return "flags it does not know";
     if ((b->flags & RBF_SECTIONS) && b->kind != RB_STREAM)
         return "sections, not being a stream block";
+    if ((b->flags & RBF_REFRESH) && b->kind != RB_STREAM)
+        return "a refresh, not being a stream block";
     if ((b->flags & RBF_FRAME_RESET) && !(b->flags & RBF_SECTIONS))
         return "a frame reset, not being sectioned";
     if (!(b->flags & RBF_STORED) &&
@@ -483,6 +485,14 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             nent[tag - RT_CODEC] = n;
             break;
         case RT_PROJECTILES:   if (n == 4) { h->proj_cap = u32(p); seen |= 16; } break;
+        case RT_HOLD:
+            if (h->has_hold) {
+                snprintf(why, cap, "header entry %u twice", tag);
+                return 0;
+            }
+            if (!reclossy_hold_parse(&h->hold, p, n, why, cap)) return 0;
+            h->has_hold = 1;
+            break;
         case RT_SETTINGS_MAP:
             text(h->settings_map, sizeof h->settings_map, p, n);
             h->has_settings_map = 1;
@@ -567,6 +577,10 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
     }
     if ((h->mode == 3) != !!h->has_mp || h->has_mp != h->has_mp_seats) {
         snprintf(why, cap, "network mode and contribution roster disagree"); return 0;
+    }
+    if (h->has_mp && h->has_hold) {
+        snprintf(why, cap, "a multiplayer header with RT_HOLD: its stream holds nothing");
+        return 0;
     }
     if (h->has_mp) {
         if (!tagpu_recmp_file_roster_valid(&h->mp,&h->mp_seats) ||
@@ -1675,6 +1689,7 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
             room = c;
         }
         ix[nix].kind = b.kind;
+        ix[nix].flags = b.flags;
         ix[nix].first = b.first;
         ix[nix].last = b.last;
         ix[nix].raw = b.raw;
@@ -1987,6 +2002,38 @@ int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsign
         a->open_last = last->t.last;
     }
     return 1;
+}
+
+unsigned recr_refresh_at(RecReader* r, unsigned T, char* why, unsigned cap)
+{
+    const RecSeg* s;
+    RecLossyBlock* b;
+    unsigned hold, j, n = 0, R;
+    if (segs_scan(r, 0, why, cap) < 0) return 0;
+    for (hold = 0; hold < r->nchain; hold++) {
+        s = chain_seg(r, hold);
+        if (s->nstream && T >= s->t.first && T <= cover_end(r, hold)) break;
+    }
+    if (hold == r->nchain) {
+        snprintf(why, cap, "GameTime %u is outside the timeline played", T);
+        return 0;
+    }
+    s = chain_seg(r, hold);
+    b = (RecLossyBlock*)malloc(s->nstream * sizeof *b);
+    if (!b) {
+        snprintf(why, cap, "no memory for the segment's %u stream blocks", s->nstream);
+        return 0;
+    }
+    for (j = s->i0; j < s->i0 + s->n; j++)
+        if (r->idx[j].kind == RB_STREAM && n < s->nstream) {
+            b[n].first = r->idx[j].first;
+            b[n].last = r->idx[j].last;
+            b[n].refresh = (r->idx[j].flags & RBF_REFRESH) != 0;
+            n++;
+        }
+    R = reclossy_refresh_at(b, n, s->t.first, T);
+    free(b);
+    return R;
 }
 
 int recr_same_file(const RecReader* r, void* f)

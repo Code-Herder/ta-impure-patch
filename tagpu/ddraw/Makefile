@@ -81,7 +81,7 @@ OBJEXT   := $(basename $(OBJEXT)).cover.o
 LDFLAGS  := -Wl,--enable-stdcall-fixup -static -shared -Wl,-Map=$(basename $(TARGET)).map
 COVERED  := $(shell awk '$$1 !~ /^\#/ && $$3 == "sim" {print $$1}' thread-split.allow) \
             src/tagpu_recorder.c src/tagpu_recwriter.c src/tagpu_recfile.c src/tagpu_recreader.c src/tagpu_replay.c \
-            src/tagpu_reccodec.c $(wildcard src/tagpu_recframe_*.c)
+            src/tagpu_reccodec.c src/tagpu_reclossy.c $(wildcard src/tagpu_recframe_*.c)
 $(addsuffix $(OBJEXT), $(basename $(COVERED))): CFLAGS += -finstrument-functions -finstrument-functions-once -ffunction-sections
 endif
 
@@ -143,13 +143,15 @@ spirv:
 log-check:
 	../../tools/log-check.sh .
 
-# THE REPLAY LAYOUT, GLOBALS AND LANES (tools/replay-layout-gen.py, tools/replay-globals-gen.py,
-# tools/replay-lanes-gen.py): replay-layout.tsv lists the bytes of the engine records the demo
-# recorder does not record as values, replay-globals.tsv the fields of the main block and .data it
-# records, replay-lanes.tsv how the unit codec cuts a unit image into lanes, and
-# inc/tagpu_replay_layout.h, inc/tagpu_replay_globals.h and inc/tagpu_reclanes.h are generated from
-# them and committed. The build re-derives each header and fails when it and its file disagree, so
-# a loosening is always a visible diff of a file. Same placement as the rules above.
+# THE REPLAY LAYOUT, GLOBALS, LANES AND HOLD TABLE (tools/replay-layout-gen.py,
+# tools/replay-globals-gen.py, tools/replay-lanes-gen.py, tools/replay-hold-gen.py):
+# replay-layout.tsv lists the bytes of the engine records the demo recorder does not record as
+# values, replay-globals.tsv the fields of the main block and .data it records, replay-lanes.tsv
+# how the unit codec cuts a unit image into lanes, replay-hold.tsv the bytes a skirmish stream
+# holds between refreshes, and inc/tagpu_replay_layout.h, inc/tagpu_replay_globals.h,
+# inc/tagpu_reclanes.h and inc/tagpu_rechold.h are generated from them and committed. The build
+# re-derives each header and fails when it and its file disagree, so a loosening is always a
+# visible diff of a file. Same placement as the rules above.
 replay-layout:
 	../../tools/replay-layout-check.sh .
 
@@ -223,16 +225,17 @@ tests/vklifetime.exe: tests/vklifetime.c src/tagpu_vk.c src/tagpu_vk.h
 
 # THE STREAM CODEC'S SELF-TEST (tests/codectest.c, driven by tests/codectest.py under Wine, or
 # built natively with the sanitizers by `codectest.py --native`): the real tagpu_reccodec.c and its
-# record frames transcode and decode recordings, its outcomes and a fuzz, against
-# tools/replay/reccodec.py. codectest.c includes the codec's source, to copy a decoder's state the
-# interface keeps opaque; the frames, whose states their own `copy` copies, are linked. Only these
+# record frames transcode and decode recordings, the lossy filter (src/tagpu_reclossy.c) runs over
+# one, its outcomes and a fuzz, against tools/replay/reccodec.py. codectest.c includes the codec's
+# source, to copy a decoder's state the interface keeps opaque; the frames, whose states their own
+# `copy` copies, and the filter are linked. Only these
 # builds define RECF_TEST_COPY, which compiles the frames' copies (inc/tagpu_recframe.h).
 # Not part of `all` or of CI -- it needs Wine or a host compiler, and recordings.
 codectest: tests/codectest.exe
 
 RECFRAMES := $(wildcard src/tagpu_recframe_*.c)
-tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) inc/tagpu_reccodec.h inc/tagpu_recframe.h inc/tagpu_recfmt.h inc/tagpu_reclanes.h src/zstd.c
-	$(CC) -Iinc -Isrc -DRECF_TEST_COPY -O2 -Wall -std=c99 -static -o $@ tests/codectest.c $(RECFRAMES) src/zstd.c
+tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) src/tagpu_reclossy.c inc/tagpu_reccodec.h inc/tagpu_recframe.h inc/tagpu_recfmt.h inc/tagpu_reclanes.h inc/tagpu_reclossy.h inc/tagpu_rechold.h src/zstd.c
+	$(CC) -Iinc -Isrc -DRECF_TEST_COPY -O2 -Wall -std=c99 -static -o $@ tests/codectest.c $(RECFRAMES) src/tagpu_reclossy.c src/zstd.c
 
 clean:
 	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe tests/arttest.exe tests/windowtest.exe tests/vklifetime.exe tests/codectest.exe tests/codectest-asan.exe inc/tagpu_art_gen.h || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))

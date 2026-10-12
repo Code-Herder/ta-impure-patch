@@ -37,15 +37,16 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 12: format 11 with the unit frame predicting the unit's resource ledger (RT_CODEC's OWNER,
-   EREQ, EGRANT, MREQ and MGRANT rows; tagpu_reccodec.c, ledger_steps); 11 was format 10 with the
-   cells frame restarting from the reader's grid at every reset point (RBF_FRAME_RESET), written
-   by a build whose snapshots are 1,800 ticks apart. A reader takes this format alone. The bytes:
-   every packed block is one zstd frame, and a stream block may be a sectioned container whose
-   unit frame carries the unit deltas, whose pool frame carries the projectile pool coded by
-   identity, and whose four record frames -- the cells, the orders, the events and the state --
-   carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). */
-#define REC_FORMAT        12
+/* 13: format 12 with the stream written by the lossy filter (tagpu_reclossy.c): a skirmish
+   header's RT_HOLD names the bytes the stream holds between refreshes, a refresh iteration ends
+   its stream block (RBF_REFRESH), and a test launch may write the exact records beside the stream
+   (RB_EXACT). 12 was format 11 with the unit frame predicting the unit's resource ledger. A
+   reader takes this format alone. The bytes: every packed block is one zstd frame, and a stream
+   block may be a sectioned container whose unit frame carries the unit deltas, whose pool frame
+   carries the projectile pool coded by identity, and whose four record frames -- the cells, the
+   orders, the events and the state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER
+   below). */
+#define REC_FORMAT        13
 
 static __inline int rec_format_supported(unsigned format)
 {
@@ -314,6 +315,10 @@ enum RecKind {
     RK_POV_AT,         /* u32 the GameTime it was taken, then a RecPov: a snapshot's copy of one of
                           a seat's two last samples, which a stream's RK_POV dates by its
                           iteration; a snapshot's only                                            */
+    RK_SPRAY_SESSION,  /* u32 unit ID, u8 mode (bits 0-2 the period: 0, 1, 2 or 4; bit 3 FOLLOW;
+                          every other value refused), u8 0, u16 0: a unit's spray session, a
+                          stream's only, in RCS_OTHER. Declared, and written by no writer of this
+                          format: a reader refuses it in a stream as malformed                    */
     RK_KINDS
 };
 
@@ -328,7 +333,7 @@ typedef struct RecNetCreate {
 } RecNetCreate;
 _Static_assert(sizeof(RecNetCreate) == 32, "network create event span");
 _Static_assert(RK_EV_NET_CREATE == 51 && RK_POV == 52 && RK_CLICK == 53 && RK_SELECT == 54 &&
-               RK_POV_AT == 55, "existing record kinds retain their values");
+               RK_POV_AT == 55 && RK_SPRAY_SESSION == 56, "existing record kinds retain their values");
 #define REC_POV_AT_BYTES (4u + (unsigned)sizeof(RecPov))
 
 /* A feature root, and its arguments after the site. A cell the engine names by address is its
@@ -452,8 +457,8 @@ enum RecEnd {
    frame from the grid it holds there, the orders, events and state frames empty. So a stream
    block inside a run of sectioned blocks decodes only after its predecessors since the run's
    reset, and a reader starts at a snapshot or at a segment's start, never inside a run
-   (tagpu_reccodec.c, THREE INVARIANTS). Any other flag bit, RBF_SECTIONS on another kind of block
-   and RBF_FRAME_RESET without RBF_SECTIONS are refused. */
+   (tagpu_reccodec.c, THREE INVARIANTS). Any other flag bit, RBF_SECTIONS or RBF_REFRESH on
+   another kind of block and RBF_FRAME_RESET without RBF_SECTIONS are refused. */
 #define REC_MAGIC        "IMPREC\r\n"          /* 8 bytes, no NUL                                 */
 #define REC_BLOCK_MAGIC  0x4B4C4249u           /* "IBLK"                                          */
 
@@ -499,9 +504,13 @@ enum RecBlockKind {
                           main+0x1426B, uncompressed), whose part [0, 2*columns) x [0, 2*rows)
                           the engine shows. A reader that does not know it skips it            */
     RB_TIMELINES,      /* RecTimelineState rows (tagpu_recfile.h); the latest complete table wins */
-    RB_CONTRIBUTIONS   /* RecMpRecord metadata followed by its exact source envelope/payload;
+    RB_CONTRIBUTIONS,  /* RecMpRecord metadata followed by its exact source envelope/payload;
                           packed consecutive spans, no ring padding (tagpu_recmp_file.h)        */
+    RB_EXACT           /* a test launch's only (tagpu_rec.exact): the records of the stream block
+                          before it as the capture made them, before the lossy filter, with its
+                          `first` and `last`; never sectioned. A reader of the stream skips it   */
 };
+_Static_assert(RB_CONTRIBUTIONS == 7 && RB_EXACT == 8, "the block kinds retain their values");
 #define REC_MINIMAP_HEAD  8u
 #define REC_MINIMAP_MAX   (0xFF00u - REC_MINIMAP_HEAD)   /* the most indices: a ring record's */
 #define RBF_STORED      1u
@@ -511,7 +520,10 @@ enum RecBlockKind {
                                   projectile pool the reader holds at the end of the iteration
                                   before it, the cells frame from the grid it holds there, the
                                   orders, events and state frames empty                       */
-#define RBF_ALL         (RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET)
+#define RBF_REFRESH     8u     /* an RB_STREAM's only, sectioned or not: its last iteration is a
+                                  refresh, where the stream's world equals the writer's exact
+                                  copy byte for byte (tagpu_recwriter.c, iteration_done)      */
+#define RBF_ALL         (RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET | RBF_REFRESH)
 
 /* THE SECTIONED CONTAINER (tagpu_reccodec.c reads and writes it): the bytes of an RB_STREAM with
    RBF_SECTIONS, which decode to exactly the records they replace. A RecSecHead, then RCS_COUNT
@@ -710,10 +722,35 @@ enum RecTag {
                           recording                                                              */
     RT_MP_END,         /* RecMpRecordEnd: persisted source proofs cover these application cuts  */
     RT_CODEC_DECLINED, /* u32: stream blocks the codec's encoder declined, written as records     */
-    RT_CODEC_MISMATCH  /* u32: stream blocks whose check decode differed, written as records: a
+    RT_CODEC_MISMATCH, /* u32: stream blocks whose check decode differed, written as records: a
                           codec bug                                                              */
+    RT_HOLD            /* a skirmish header's, written by the writer (tagpu_recwriter.c,
+                          header_apply); absent in a multiplayer one, whose stream holds nothing:
+                          u32 the refresh interval in ticks (REC_REFRESH_MIN..REC_REFRESH_TICKS),
+                          u32 flags (RECL_*), the SHA-256 of replay-hold.tsv (32 bytes), then the
+                          hold masks: REC_UNIT_IMAGE bytes for a unit image and REC_ORDER_IMAGE
+                          for a node of a main list (+0x5C), a set bit held. Every byte a mask
+                          leaves clear is exact at every iteration; a held byte is exact at every
+                          refresh and keeps, between two, a value the stream wrote for the same
+                          unit or list since the last (tagpu_reclossy.c, THE INVARIANTS)        */
 };
-_Static_assert(RT_AIR < RT_END_REASON, "a header's tags stay below the end block's");
-_Static_assert(RT_CODEC == 29 && RT_AIR == 31 && RT_CODEC_DECLINED == 44, "the codec's tags");
+/* The end block's tags are RT_END_REASON..RT_CODEC_MISMATCH; a header's are the others. */
+_Static_assert(RT_AIR < RT_END_REASON && RT_HOLD > RT_CODEC_MISMATCH,
+               "the end block's tags are one run");
+_Static_assert(RT_CODEC == 29 && RT_AIR == 31 && RT_CODEC_DECLINED == 44 && RT_HOLD == 46,
+               "the codec's and the filter's tags");
+
+/* RT_HOLD. A refresh iteration is one whose GameTime is 1 modulo the interval, a segment's first
+   and every snapshot's (tagpu_recwriter.c, iteration_done): on the grid, every refresh is also 1
+   modulo the radar pass's step of 30 ticks, and the grid is the same in every recording. */
+#define REC_REFRESH_TICKS 300   /* the interval a recording is written with                     */
+#define REC_REFRESH_MIN   30    /* the least a test launch may ask for (tagpu_rec.refresh)       */
+#define RECL_CELLS        1u    /* the cells' unit slots and yard bit are held                   */
+#define RECL_SPRAYS       2u    /* the nano sprays are written as sessions                       */
+#define REC_HOLD_BYTES    (8u + 32u + REC_UNIT_IMAGE + REC_ORDER_IMAGE)
+/* the position +0x6A..+0x75, which a spray session that follows its unit reads: never held */
+#define REC_HOLD_POS_AT   0x6A
+#define REC_HOLD_POS_END  0x76
+_Static_assert(REC_HOLD_BYTES == 456, "RT_HOLD's bytes");
 
 #endif

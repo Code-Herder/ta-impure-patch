@@ -1,14 +1,25 @@
 /* codectest.c -- the stream codec's self-test (src/tagpu_reccodec.c and its record frames,
    src/tagpu_recframe_*.c), driven by codectest.py.
 
-     codectest transcode IN OUT [--snap-every N]
+     codectest transcode IN OUT [--snap-every N] [--skirmish]
                                     every stream block of a recording decoded to its records and
                                     written again through reccodec_stream_block, restarting where
                                     the writer restarts; a line per block (raw, section and packed
                                     bytes, milliseconds) and the outcomes. With N, only every Nth
                                     snapshot of a segment is kept (0: none), and the stream
                                     restarts only after those: the file a writer whose snapshot
-                                    interval is N times IN's would have written
+                                    interval is N times IN's would have written. With --skirmish,
+                                    a skirmish header without RT_HOLD gains one that holds nothing,
+                                    refresh REC_REFRESH_TICKS: a label, the blocks are IN's
+     codectest lossy IN OUT [--exact]
+                                    the writer's path over a recording's exact records: each
+                                    iteration through the lossy filter (src/tagpu_reclossy.c) with
+                                    the build's hold table, refreshes where the writer makes them,
+                                    the stream blocks cut where it cuts them and coded by its codec,
+                                    IN's snapshots kept where a writer would take one (a refresh
+                                    SNAPSHOT_TICKS on) and the rest dropped; with --exact, each
+                                    stream block followed by its exact records (RB_EXACT). Prints
+                                    the iterations whose records differ from IN's
      codectest decode IN OUT        every stream block's records, C, framed for codectest.py; a
                                     line per block with its milliseconds
      codectest outcomes             synthetic payloads of units and projectiles that must be
@@ -21,7 +32,10 @@
                                     by a restarting SECTIONS block; each record frame's own
                                     (outcomes_cells, _orders, _events, _state); zstd frames
                                     past and at the 2^27 window bound; and the ledger rule's
-                                    single-precision sum
+                                    single-precision sum; the lossy filter's own (an empty table
+                                    copies, a refresh writes exactly the differences, the equality
+                                    check, malformed iterations refused, RT_HOLD's bounds and the
+                                    refresh before a GameTime)
      codectest fuzz IN SEED N [CASES] [--section NAME]
                                     N mutations of the recording's sectioned blocks (flags, the
                                     head, section lengths, kinds, the unit frame's gaps, masks,
@@ -35,15 +49,19 @@
                                     state)
      codectest sin                  the sine table, for codectest.py's check against its formula
 
-   IN is a recording of format 12. Exit 0 when every check holds, 1 when one fails, 2 when a file
-   cannot be read. The codec is included rather than linked: the fuzz copies a decoder's state,
-   which the codec's interface keeps opaque. */
+   IN is a recording of format 13, or, for transcode and lossy, one of format 12 or later with no
+   sectioned block, which they write as the current format, the header's other entries kept. Exit
+   0 when every check holds, 1 when one fails, 2 when a file cannot be read. The codec is included
+   rather than linked: the fuzz copies a decoder's state, which the codec's interface keeps opaque;
+   the filter is linked. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "../src/tagpu_reccodec.c"
+#include "tagpu_reclossy.h"
+#include "tagpu_rechold.h"
 
 #define BLOCK_MAX (64u << 20)
 
@@ -94,7 +112,7 @@ static unsigned char* read_file(const char* path, size_t* n)
     return d;
 }
 
-/* ---- a recording of format 11, block by block ------------------------------------------------ */
+/* ---- a recording, block by block ---------------------------------------------------------------- */
 
 typedef struct Reader {
     const unsigned char* d;
@@ -131,7 +149,7 @@ static int next_block(Reader* r)
         snprintf(r->why, sizeof r->why, "a block failing its CRC at byte %lu", (unsigned long)r->at);
         return -1;
     }
-    allowed = RBF_STORED | (r->b.kind == RB_STREAM ? RBF_SECTIONS | RBF_FRAME_RESET : 0);
+    allowed = RBF_STORED | (r->b.kind == RB_STREAM ? RBF_SECTIONS | RBF_FRAME_RESET | RBF_REFRESH : 0);
     if ((r->b.flags & ~allowed) || ((r->b.flags & RBF_FRAME_RESET) && !(r->b.flags & RBF_SECTIONS)) ||
         ((r->b.kind == RB_HEADER || r->b.kind == RB_END || r->b.kind == RB_TIMELINES) &&
          !(r->b.flags & RBF_STORED))) {
@@ -162,7 +180,7 @@ static int next_block(Reader* r)
 }
 
 typedef struct Header {
-    unsigned format, slots, nproj, gw, gh, nwrecks;
+    unsigned format, mode, slots, nproj, gw, gh, nwrecks, has_hold;
     const unsigned char* e[3];      /* RT_CODEC, RT_PHYSICS, RT_AIR */
     unsigned ne[3];
 } Header;
@@ -176,6 +194,8 @@ static int header_of(const unsigned char* p, size_t n, Header* h, char* why, uns
         const unsigned char* b = p + at + 4;
         if (len > n - at - 4) REFUSE("a header entry cut short");
         if (tag == RT_FORMAT && len == 4) h->format = get32(b);
+        if (tag == RT_MODE && len == 4) h->mode = get32(b);
+        if (tag == RT_HOLD) h->has_hold = 1;
         if (tag == RT_SLOTS && len == 4) h->slots = get32(b);
         if (tag == RT_PROJECTILES && len == 4) h->nproj = get32(b);
         if (tag == RT_FEATURES && len == 20) {
@@ -191,7 +211,9 @@ static int header_of(const unsigned char* p, size_t n, Header* h, char* why, uns
         }
         at += (4 + (size_t)len + 3) & ~(size_t)3;
     }
-    if (h->format != REC_FORMAT) REFUSE("format %u, not %u", h->format, REC_FORMAT);
+    /* an older format is read for its records alone (reading_next) */
+    if (h->format < 12 || h->format > REC_FORMAT)
+        REFUSE("format %u, not 12 to %u", h->format, REC_FORMAT);
     return 1;
 }
 
@@ -426,6 +448,12 @@ static int reading_next(Reading* g, double* ms)
     if (g->r.b.kind != RB_STREAM) return 1;
     if (g->r.b.flags & RBF_SECTIONS) {
         clock_t t0 = clock();
+        /* an older format's codec is not this one: its containers would decode to other records */
+        if (g->h.format != REC_FORMAT) {
+            snprintf(g->r.why, sizeof g->r.why, "a sectioned block of format %u: convert a "
+                     "records-only file", g->h.format);
+            return -1;
+        }
         if (!g->p.usable) {
             snprintf(g->r.why, sizeof g->r.why, "a sectioned block in a segment without RT_CODEC and RT_PHYSICS");
             return -1;
@@ -448,7 +476,56 @@ static int reading_next(Reading* g, double* ms)
 
 /* ---- transcode, decode ------------------------------------------------------------------------ */
 
-static int cmd_transcode(const char* in, const char* outp, int every)
+static void tlv_put(RecBytes* b, unsigned tag, const void* p, unsigned n)
+{
+    static const unsigned char zero[4];
+    unsigned char h[4] = { (unsigned char)tag, (unsigned char)(tag >> 8), (unsigned char)n,
+                           (unsigned char)(n >> 8) };
+    rb_put(b, h, 4);
+    rb_put(b, p, n);
+    rb_put(b, zero, ((n + 3) & ~3u) - n);
+}
+
+/* RT_HOLD's bytes: `masks` the build's hold table, else a table that holds nothing */
+static void hold_bytes(unsigned char* hold, int masks)
+{
+    unsigned i;
+    memset(hold, 0, REC_HOLD_BYTES);
+    put32(hold, REC_REFRESH_TICKS);
+    if (!masks) return;
+    for (i = 0; i < 32; i++) {
+        const char* x = TAGPU_REPLAY_HOLD_SHA256 + 2 * i;
+        unsigned hi = x[0] <= '9' ? (unsigned)(x[0] - '0') : (unsigned)(x[0] - 'a' + 10);
+        unsigned lo = x[1] <= '9' ? (unsigned)(x[1] - '0') : (unsigned)(x[1] - 'a' + 10);
+        hold[8 + i] = (unsigned char)(hi << 4 | lo);
+    }
+    memcpy(hold + 40, REC_HOLD_UNIT, REC_UNIT_IMAGE);
+    memcpy(hold + 40 + REC_UNIT_IMAGE, REC_HOLD_NODE, REC_ORDER_IMAGE);
+}
+
+/* A header's entries as the current format writes them: RT_FORMAT REC_FORMAT, every other entry
+   kept but RT_HOLD, and `hold`'s RT_HOLD after them when it is not NULL. */
+static void header_out(RecBytes* out, const unsigned char* p, size_t n, const unsigned char* hold)
+{
+    size_t at = 0;
+    out->n = 0;
+    while (n - at >= 4) {
+        unsigned tag = get16(p + at), len = get16(p + at + 2);
+        size_t step = (4 + (size_t)len + 3) & ~(size_t)3;
+        if (len > n - at - 4) break;
+        if (tag == RT_FORMAT && len == 4) {
+            unsigned char f[4];
+            put32(f, REC_FORMAT);
+            tlv_put(out, RT_FORMAT, f, 4);
+        } else if (tag != RT_HOLD) {
+            rb_put(out, p + at, step < n - at ? step : n - at);
+        }
+        at += step;
+    }
+    if (hold) tlv_put(out, RT_HOLD, hold, REC_HOLD_BYTES);
+}
+
+static int cmd_transcode(const char* in, const char* outp, int every, int skirmish)
 {
     Reading g;
     RecStream st;
@@ -467,10 +544,26 @@ static int cmd_transcode(const char* in, const char* outp, int every)
     while ((k = reading_next(&g, &ms)) > 0) {
         RecBlock* b = &g.r.b;
         if (b->kind == RB_HEADER) {
+            RecBytes hb;
+            unsigned char hold[REC_HOLD_BYTES];
+            memset(&hb, 0, sizeof hb);
             if (on) reccodec_stream_end(&st);
             on = g.p.usable && reccodec_stream_begin(&st, &g.p);
             nsnap = 0;
-            put_block(out, b->kind, RBF_STORED, b->first, b->last, b->raw, g.r.bytes, b->raw);
+            hold_bytes(hold, 0);
+            header_out(&hb, g.r.bytes, b->raw, skirmish && g.h.mode != 3 && !g.h.has_hold ? hold : NULL);
+            if (g.h.has_hold) {
+                /* the input's own, kept in its place at the end */
+                size_t at = 0;
+                while (b->raw - at >= 4) {
+                    unsigned tag = get16(g.r.bytes + at), len = get16(g.r.bytes + at + 2);
+                    if (tag == RT_HOLD && len <= b->raw - at - 4)
+                        tlv_put(&hb, RT_HOLD, g.r.bytes + at + 4, len);
+                    at += (4 + (size_t)len + 3) & ~(size_t)3;
+                }
+            }
+            put_block(out, b->kind, RBF_STORED, b->first, b->last, (uint32_t)hb.n, hb.p, hb.n);
+            rb_free(&hb);
         } else if (b->kind == RB_STREAM && on) {
             unsigned flags;
             const unsigned char* body;
@@ -488,7 +581,7 @@ static int cmd_transcode(const char* in, const char* outp, int every)
                 unitbytes += sh->len[RCS_UNITS];
                 poolbytes += sh->len[RCS_PROJ];
             }
-            put_block(out, b->kind, flags, b->first, b->last,
+            put_block(out, b->kind, flags | (b->flags & RBF_REFRESH), b->first, b->last,
                       (uint32_t)(o == RECC_SECTIONS ? st.sec.n : g.pay.n), body, bn);
             printf("%u stream %lu %lu %lu %lu %lu %lu %lu %#x %s %.2f\n", g.r.ordinal, (unsigned long)b->first,
                    (unsigned long)b->last, (unsigned long)g.pay.n,
@@ -517,7 +610,8 @@ static int cmd_transcode(const char* in, const char* outp, int every)
             put_block(out, b->kind, RBF_STORED, b->first, b->last, (uint32_t)e.n, e.p, e.n);
             rb_free(&e);
         } else if (b->kind == RB_TIMELINES || b->kind == RB_STREAM) {
-            put_block(out, b->kind, RBF_STORED, b->first, b->last, b->raw, g.r.bytes, b->raw);
+            put_block(out, b->kind, RBF_STORED | (b->flags & RBF_REFRESH), b->first, b->last, b->raw,
+                      g.r.bytes, b->raw);
         } else if (b->kind == RB_SNAPSHOT && every >= 0 && (every == 0 || ++nsnap % (unsigned)every)) {
             continue;
         } else {
@@ -588,6 +682,319 @@ static int cmd_decode(const char* in, const char* outp)
     printf("summary: %u stream blocks, %u sectioned; decode %.0f ms, at most %.2f ms a block, %.0f ms "
            "for the longest run from a restart\n", nblk, sect, tot, worst, worst_run);
     return 0;
+}
+
+/* ---- lossy: the writer's path offline ------------------------------------------------------------ */
+
+#define LOSSY_STREAM_BYTES   (2u << 20)   /* tagpu_recwriter.c's STREAM_BYTES, STREAM_TICKS and */
+#define LOSSY_STREAM_TICKS   30           /* SNAPSHOT_TICKS                                     */
+#define LOSSY_SNAPSHOT_TICKS 1800
+
+/* the writer's exact copy of the units and the lists, built from the exact records as its
+   apply builds it */
+typedef struct Exact {
+    unsigned nslots;
+    unsigned char* units;
+    unsigned char* live;
+    RecLossyList* lists;
+    unsigned pslot, plist, ptotal, pnext;     /* a list whose records have begun */
+} Exact;
+
+static void exact_free(Exact* e)
+{
+    unsigned i;
+    for (i = 0; e->lists && i < e->nslots * 2; i++) free(e->lists[i].img);
+    free(e->lists);
+    free(e->units);
+    free(e->live);
+    memset(e, 0, sizeof *e);
+}
+
+static int exact_reset(Exact* e, unsigned nslots)
+{
+    exact_free(e);
+    e->nslots = nslots;
+    e->units = (unsigned char*)calloc(nslots, IMG);
+    e->live = (unsigned char*)calloc(nslots, 1);
+    e->lists = (RecLossyList*)calloc((size_t)nslots * 2, sizeof *e->lists);
+    return e->units && e->live && e->lists;
+}
+
+/* one iteration's records onto the copy: 0 for a record the writer would have refused */
+static int exact_apply(Exact* e, const unsigned char* pl, size_t n)
+{
+    size_t at = 0;
+    while (n - at >= 4) {
+        unsigned kind = get16(pl + at), len = get16(pl + at + 2), s, i, k, nb;
+        const unsigned char* b = pl + at + 4;
+        at += ((size_t)4 + len + 3) & ~(size_t)3;
+        s = len >= 2 ? get16(b) : 0;
+        if (kind != RK_UNIT && kind != RK_UNIT_DELTA && kind != RK_UNIT_GONE && kind != RK_ORDERS)
+            continue;
+        if (s < 1 || s >= e->nslots) return 0;
+        if (kind == RK_UNIT) {
+            if (len != 4 + IMG) return 0;
+            memcpy(e->units + (size_t)s * IMG, b + 4, IMG);
+            e->live[s] = 1;
+        } else if (kind == RK_UNIT_GONE) {
+            e->live[s] = 0;
+            e->lists[s * 2].n = e->lists[s * 2 + 1].n = 0;
+        } else if (kind == RK_UNIT_DELTA) {
+            if (len < REC_UNIT_DELTA_HEAD || !e->live[s]) return 0;
+            for (i = 0, nb = 0; i < REC_UNIT_BITS * 8; i++)
+                if (bit_of(b + 2, i)) {
+                    if (i >= NDW) return 0;
+                    nb++;
+                }
+            if (len != REC_UNIT_DELTA_HEAD + 4 * nb) return 0;
+            for (i = 0, k = 0; i < NDW; i++)
+                if (bit_of(b + 2, i))
+                    memcpy(e->units + (size_t)s * IMG + 4 * i, b + REC_UNIT_DELTA_HEAD + 4 * k++, 4);
+        } else {
+            unsigned list = b[2], total, first, m;
+            RecLossyList* l;
+            if (len < 8 || (len - 8) % REC_ORDER_IMAGE || list > 1) return 0;
+            total = get16(b + 4);
+            first = get16(b + 6);
+            m = (len - 8) / REC_ORDER_IMAGE;
+            if (total > REC_ORDERS_MAX || first + m > total || (first && (e->pslot != s ||
+                e->plist != list || e->ptotal != total || e->pnext != first)))
+                return 0;
+            l = &e->lists[s * 2 + list];
+            if (!first) {
+                if (total > l->cap) {
+                    unsigned char* q = (unsigned char*)realloc(l->img, (size_t)total * REC_ORDER_IMAGE);
+                    if (!q) return 0;
+                    l->img = q;
+                    l->cap = total;
+                }
+                l->n = total;
+                e->pslot = s;
+                e->plist = list;
+                e->ptotal = total;
+            }
+            memcpy(l->img + (size_t)first * REC_ORDER_IMAGE, b + 8, (size_t)m * REC_ORDER_IMAGE);
+            e->pnext = first + m;
+        }
+    }
+    return 1;
+}
+
+/* The writer's stream state for one output file. */
+typedef struct LossyOut {
+    FILE* f;
+    RecStream st;
+    int on, exact;
+    void* cctx;
+    RecBytes stream, xs, pk;
+    unsigned first, last, ticks, blocks, refreshes, sectioned;
+    size_t written;
+} LossyOut;
+
+/* the stream block of the iterations [first, last], and its RB_EXACT */
+static void lossy_flush(LossyOut* o, unsigned refresh)
+{
+    unsigned flags = RBF_STORED;
+    const unsigned char* body = o->stream.p;
+    size_t bn = o->stream.n, raw;
+    if (!o->stream.n) return;
+    if (o->on) {
+        int k = reccodec_stream_block(&o->st, o->stream.p, o->stream.n, &flags, &body, &bn);
+        o->sectioned += k == RECC_SECTIONS;
+    } else if (reccodec_pack(o->cctx, &o->pk, o->stream.p, o->stream.n)) {
+        flags = 0;
+        body = o->pk.p;
+        bn = o->pk.n;
+    }
+    raw = (flags & RBF_STORED) ? bn : (flags & RBF_SECTIONS) ? o->st.sec.n : o->stream.n;
+    put_block(o->f, RB_STREAM, flags | refresh, o->first, o->last, (uint32_t)raw, body, bn);
+    o->written += 32 + bn;
+    o->blocks++;
+    o->refreshes += refresh != 0;
+    if (o->exact) {
+        int packed = reccodec_pack(o->cctx, &o->pk, o->xs.p, o->xs.n);
+        put_block(o->f, RB_EXACT, packed ? 0 : RBF_STORED, o->first, o->last, (uint32_t)o->xs.n,
+                  packed ? o->pk.p : o->xs.p, packed ? o->pk.n : o->xs.n);
+    }
+    o->stream.n = o->xs.n = 0;
+    o->ticks = 0;
+}
+
+static int cmd_lossy(const char* in, const char* outp, int exact)
+{
+    Reading g;
+    LossyOut o;
+    Exact e;
+    RecLossy* L = NULL;
+    RecBytes hb, one;
+    unsigned char hold[REC_HOLD_BYTES];
+    unsigned iters = 0, differ = 0, kept = 0, dropped = 0, snap_tick = 0, seg_iters = 0;
+    unsigned last_tick = 0, last_refresh = 0;
+    int k, bad = 0;
+    memset(&o, 0, sizeof o);
+    memset(&e, 0, sizeof e);
+    memset(&hb, 0, sizeof hb);
+    memset(&one, 0, sizeof one);
+    if (!reading_open(&g, in)) return 2;
+    o.f = fopen(outp, "wb");
+    o.cctx = ZSTD_createCCtx();
+    if (!o.f || !o.cctx) return 2;
+    o.exact = exact;
+    fwrite(REC_MAGIC, 1, 8, o.f);
+    hold_bytes(hold, 1);
+    while (!bad && (k = reading_next(&g, &(double){ 0 })) > 0) {
+        RecBlock* b = &g.r.b;
+        if (b->kind == RB_HEADER) {
+            RecLossyParams lp;
+            lossy_flush(&o, 0);
+            if (o.on) reccodec_stream_end(&o.st);
+            o.on = g.p.usable && reccodec_stream_begin(&o.st, &g.p);
+            reclossy_free(L);
+            L = NULL;
+            if (g.h.mode != 3) {
+                lp.nslots = g.h.slots;
+                lp.hold_unit = REC_HOLD_UNIT;
+                lp.hold_node = REC_HOLD_NODE;
+                L = reclossy_begin(&lp);
+                if (!L) {
+                    printf("codectest: no memory for the filter of %u slots\n", g.h.slots);
+                    bad = 2;
+                    break;
+                }
+            }
+            if (!exact_reset(&e, g.h.slots)) {
+                bad = 2;
+                break;
+            }
+            header_out(&hb, g.r.bytes, b->raw, L ? hold : NULL);
+            put_block(o.f, RB_HEADER, RBF_STORED, 0, 0, (uint32_t)hb.n, hb.p, hb.n);
+            seg_iters = 0;
+        } else if (b->kind == RB_STREAM) {
+            size_t at = 0, n = g.pay.n;
+            while (at < n) {
+                size_t end = at;
+                unsigned tick;
+                int refresh, ok;
+                RecLossyExact x;
+                /* the iteration: its RK_TICK and the records up to the next */
+                if (n - at < 8 || get16(g.pay.p + at) != RK_TICK || get16(g.pay.p + at + 2) != 4) {
+                    printf("codectest: a stream block that does not begin an iteration at its "
+                           "byte %lu\n", (unsigned long)at);
+                    bad = 1;
+                    break;
+                }
+                tick = get32(g.pay.p + at + 4);
+                do {
+                    end += ((size_t)4 + get16(g.pay.p + end + 2) + 3) & ~(size_t)3;
+                } while (end + 4 <= n && get16(g.pay.p + end) != RK_TICK);
+                if (end > n || (end < n && n - end < 4)) {
+                    printf("codectest: a record cut short at GameTime %u\n", tick);
+                    bad = 1;
+                    break;
+                }
+                if (!exact_apply(&e, g.pay.p + at, end - at)) {
+                    printf("codectest: an iteration the writer would refuse at GameTime %u\n", tick);
+                    bad = 1;
+                    break;
+                }
+                if (!seg_iters++) snap_tick = tick;
+                refresh = seg_iters == 1 || tick % REC_REFRESH_TICKS == 1;
+                if (!o.stream.n) o.first = tick;
+                o.last = tick;
+                x.units = e.units;
+                x.live = e.live;
+                x.lists = e.lists;
+                one.n = 0;
+                ok = L ? reclossy_iteration(L, g.pay.p + at, end - at, refresh, &x, &one)
+                       : (rb_put(&one, g.pay.p + at, end - at), !one.oom);
+                if (!ok) {
+                    printf("codectest: the filter refused the iteration at GameTime %u\n", tick);
+                    bad = 1;
+                    break;
+                }
+                differ += one.n != end - at || memcmp(one.p, g.pay.p + at, one.n);
+                rb_put(&o.stream, one.p, one.n);
+                if (exact) rb_put(&o.xs, g.pay.p + at, end - at);
+                iters++;
+                o.ticks++;
+                last_tick = tick;
+                if (refresh) {
+                    if (L && !reclossy_equal(L, &x)) {
+                        printf("codectest: the lossy world differs from the copy at the refresh at "
+                               "GameTime %u\n", tick);
+                        bad = 1;
+                        break;
+                    }
+                    last_refresh = tick;
+                    lossy_flush(&o, RBF_REFRESH);
+                } else if (o.stream.n >= LOSSY_STREAM_BYTES || o.ticks >= LOSSY_STREAM_TICKS) {
+                    lossy_flush(&o, 0);
+                }
+                at = end;
+            }
+        } else if (b->kind == RB_SNAPSHOT) {
+            /* a writer's snapshot follows a refresh, SNAPSHOT_TICKS or more after the last */
+            if (b->last == last_tick && last_tick == last_refresh &&
+                b->last - snap_tick >= LOSSY_SNAPSHOT_TICKS) {
+                int packed = reccodec_pack(o.cctx, &o.pk, g.r.bytes, b->raw);
+                put_block(o.f, RB_SNAPSHOT, packed ? 0 : RBF_STORED, b->first, b->last, b->raw,
+                          packed ? o.pk.p : g.r.bytes, packed ? o.pk.n : b->raw);
+                o.written += 32 + (packed ? o.pk.n : b->raw);
+                snap_tick = b->last;
+                o.st.reset = 1;
+                kept++;
+            } else {
+                dropped++;
+            }
+        } else if (b->kind == RB_END) {
+            RecBytes eb;
+            size_t at = 0;
+            memset(&eb, 0, sizeof eb);
+            lossy_flush(&o, 0);
+            while (b->raw - at >= 4) {
+                unsigned tag = get16(g.r.bytes + at), len = get16(g.r.bytes + at + 2);
+                size_t step = (4 + (size_t)len + 3) & ~(size_t)3;
+                if (len > b->raw - at - 4) break;
+                if (tag != RT_CODEC_DECLINED && tag != RT_CODEC_MISMATCH) rb_put(&eb, g.r.bytes + at, step);
+                at += step;
+            }
+            tlv_put(&eb, RT_CODEC_DECLINED, &o.st.declined, 4);
+            tlv_put(&eb, RT_CODEC_MISMATCH, &o.st.mismatched, 4);
+            put_block(o.f, RB_END, RBF_STORED, b->first, b->last, (uint32_t)eb.n, eb.p, eb.n);
+            rb_free(&eb);
+        } else if (b->kind == RB_EXACT) {
+            /* the exact stream is the input's records, written again with the blocks above */
+        } else {
+            int packed = !(b->kind == RB_TIMELINES) && reccodec_pack(o.cctx, &o.pk, g.r.bytes, b->raw);
+            put_block(o.f, b->kind, packed ? 0 : RBF_STORED, b->first, b->last, b->raw,
+                      packed ? o.pk.p : g.r.bytes, packed ? o.pk.n : b->raw);
+        }
+    }
+    if (!bad) lossy_flush(&o, 0);
+    fclose(o.f);
+    if (k < 0) {
+        printf("codectest: %s: %s\n", in, g.r.why);
+        bad = 2;
+    }
+    printf("lossy: %u iterations, %u whose records differ from the input's; %u stream blocks "
+           "(%u refreshes, %u sectioned, %u declined, %u mismatched), %lu bytes of stream and "
+           "snapshots; %u snapshots kept, %u dropped (not at a writer's refresh)\n", iters, differ,
+           o.blocks, o.refreshes, o.sectioned, o.st.declined, o.st.mismatched,
+           (unsigned long)o.written, kept, dropped);
+    if (o.on) {
+        if (!bad && (o.st.declined || o.st.mismatched)) bad = 1;
+        reccodec_stream_end(&o.st);
+    }
+    reclossy_free(L);
+    exact_free(&e);
+    ZSTD_freeCCtx((ZSTD_CCtx*)o.cctx);
+    rb_free(&o.stream);
+    rb_free(&o.xs);
+    rb_free(&o.pk);
+    rb_free(&hb);
+    rb_free(&one);
+    reading_close(&g);
+    return bad;
 }
 
 /* ---- outcomes --------------------------------------------------------------------------------- */
@@ -1991,6 +2398,286 @@ static int f32_check(void)
     return expect("ledger: single-precision sums round as IEEE does", bad, 0);
 }
 
+/* ---- outcomes: the lossy filter ---------------------------------------------------------------- */
+
+#define LO_SLOTS 8
+#define LO_HELD  50           /* a unit dword held whole                                         */
+#define LO_PART  51           /* a unit dword held in its bits 0x0000FF00                        */
+#define LO_NODE  3            /* a main list node's dword held whole                             */
+
+static void lo_tick(RecBytes* b, unsigned t)
+{
+    unsigned char v[4];
+    b->n = 0;
+    put32(v, t);
+    tlv_put(b, RK_TICK, v, 4);
+}
+
+static void lo_unit(RecBytes* b, unsigned s, const uint32_t* img)
+{
+    unsigned char r[4 + IMG];
+    memset(r, 0, 4);
+    r[0] = (unsigned char)s;
+    memcpy(r + 4, img, IMG);
+    tlv_put(b, RK_UNIT, r, sizeof r);
+}
+
+/* a delta of slot s naming the dwords d[0..n) with the values v[0..n) */
+static void lo_delta(RecBytes* b, unsigned s, const unsigned* d, const uint32_t* v, unsigned n)
+{
+    unsigned char r[REC_UNIT_DELTA_HEAD + 4 * NDW];
+    unsigned i;
+    memset(r, 0, sizeof r);
+    r[0] = (unsigned char)s;
+    for (i = 0; i < n; i++) {
+        r[2 + (d[i] >> 3)] |= (unsigned char)(1u << (d[i] & 7));
+        put32(r + REC_UNIT_DELTA_HEAD + 4 * i, v[i]);
+    }
+    tlv_put(b, RK_UNIT_DELTA, r, REC_UNIT_DELTA_HEAD + 4 * n);
+}
+
+/* an order list of nodes images, one record */
+static void lo_list(RecBytes* b, unsigned s, unsigned list, const unsigned char* img, unsigned n,
+                    unsigned first, unsigned total)
+{
+    unsigned char r[8 + 4 * REC_ORDER_IMAGE];
+    memset(r, 0, 8);
+    r[0] = (unsigned char)s;
+    r[2] = (unsigned char)list;
+    r[4] = (unsigned char)total;
+    r[6] = (unsigned char)first;
+    memcpy(r + 8, img, (size_t)n * REC_ORDER_IMAGE);
+    tlv_put(b, RK_ORDERS, r, 8 + n * REC_ORDER_IMAGE);
+}
+
+static void lo_event(RecBytes* b)
+{
+    unsigned char r[8] = { 1, 0, 0, 0, 7, 0, 0, 0 };
+    tlv_put(b, RK_EV_STATE, r, 8);
+}
+
+/* the records of `out` from its byte `at`, as (kind, slot) pairs, into k[] and s[]: their count */
+static unsigned lo_kinds(const RecBytes* out, unsigned* k, unsigned* s, unsigned cap)
+{
+    size_t at = 0;
+    unsigned n = 0;
+    while (at + 4 <= out->n && n < cap) {
+        k[n] = get16(out->p + at);
+        s[n] = get16(out->p + at + 4);
+        at += (4 + (size_t)get16(out->p + at + 2) + 3) & ~(size_t)3;
+        n++;
+    }
+    return n;
+}
+
+/* one iteration through the filter, the copy taking the exact records first, as the writer does */
+static int lo_step(RecLossy* L, Exact* e, const RecBytes* in, int refresh, RecBytes* out)
+{
+    RecLossyExact x;
+    out->n = 0;
+    if (!exact_apply(e, in->p, in->n)) return -1;
+    x.units = e->units;
+    x.live = e->live;
+    x.lists = e->lists;
+    return reclossy_iteration(L, in->p, in->n, refresh, &x, out);
+}
+
+static int outcomes_lossy(void)
+{
+    static uint32_t img[3][NDW];
+    static unsigned char hold_unit[IMG], hold_node[REC_ORDER_IMAGE], node[2][REC_ORDER_IMAGE];
+    unsigned char hold[REC_HOLD_BYTES];
+    RecLossyParams lp;
+    RecLossy* L;
+    RecLossyExact x;
+    RecLossyHold hh;
+    RecBytes in, out;
+    Exact e;
+    unsigned k[16], s[16], n, i, ok = 1;
+    char why[160];
+    memset(&in, 0, sizeof in);
+    memset(&out, 0, sizeof out);
+    memset(&e, 0, sizeof e);
+    for (i = 0; i < NDW; i++) {
+        img[1][i] = 0x1000 + i;
+        img[2][i] = 0x2000 + i;
+    }
+    memset(node, 0x11, sizeof node);
+
+    /* an empty table: every iteration's records come out as they went in */
+    lp.nslots = LO_SLOTS;
+    lp.hold_unit = hold_unit;
+    lp.hold_node = hold_node;
+    L = reclossy_begin(&lp);
+    if (!L || !exact_reset(&e, LO_SLOTS)) return 0;
+    lo_tick(&in, 1);
+    lo_unit(&in, 1, img[1]);
+    lo_unit(&in, 2, img[2]);
+    lo_list(&in, 1, 0, node[0], 1, 0, 1);
+    lo_event(&in);
+    ok &= expect("lossy: a table of no rows copies a refresh iteration",
+                 lo_step(L, &e, &in, 1, &out) == 1 && out.n == in.n && !memcmp(out.p, in.p, in.n), 1);
+    {
+        unsigned d[2] = { LO_HELD, 3 };
+        uint32_t v[2] = { 0xAAAA, 0xBBBB };
+        unsigned char moved[REC_ORDER_IMAGE];
+        memcpy(moved, node[0], sizeof moved);
+        moved[4 * LO_NODE] ^= 1;
+        lo_tick(&in, 2);
+        lo_delta(&in, 1, d, v, 2);
+        lo_list(&in, 1, 0, moved, 1, 0, 1);
+        lo_event(&in);
+        ok &= expect("lossy: ... and the next, between refreshes",
+                     lo_step(L, &e, &in, 0, &out) == 1 && out.n == in.n && !memcmp(out.p, in.p, in.n), 1);
+    }
+    reclossy_free(L);
+
+    /* a table that holds dword LO_HELD, LO_PART's bits 0xFF00 and a main node's dword LO_NODE */
+    memset(hold_unit + 4 * LO_HELD, 0xFF, 4);
+    hold_unit[4 * LO_PART + 1] = 0xFF;
+    memset(hold_node + 4 * LO_NODE, 0xFF, 4);
+    L = reclossy_begin(&lp);
+    if (!L || !exact_reset(&e, LO_SLOTS)) return 0;
+    lo_tick(&in, 1);
+    lo_unit(&in, 1, img[1]);
+    lo_unit(&in, 2, img[2]);
+    lo_list(&in, 1, 0, node[0], 1, 0, 1);
+    ok &= expect("lossy: held: the first iteration copied",
+                 lo_step(L, &e, &in, 1, &out) == 1 && out.n == in.n && !memcmp(out.p, in.p, in.n), 1);
+    {
+        unsigned d1[1] = { LO_HELD }, d2[2] = { 10, LO_PART };
+        uint32_t v1[1] = { 0xDEAD }, v2[2] = { 0x77, 0x00123456 };
+        unsigned char moved[REC_ORDER_IMAGE];
+        memcpy(moved, node[0], sizeof moved);
+        moved[4 * LO_NODE] ^= 1;
+        lo_tick(&in, 2);
+        lo_delta(&in, 1, d1, v1, 1);
+        lo_delta(&in, 2, d2, v2, 2);
+        lo_list(&in, 1, 0, moved, 1, 0, 1);
+        lo_event(&in);
+        ok &= expect("lossy: held: an iteration between refreshes", lo_step(L, &e, &in, 0, &out), 1);
+        n = lo_kinds(&out, k, s, 16);
+        ok &= expect("  a delta of held bits alone and a list of held bytes alone are dropped",
+                     n == 3 && k[0] == RK_TICK && k[1] == RK_UNIT_DELTA && s[1] == 2 &&
+                     k[2] == RK_EV_STATE, 1);
+        ok &= expect("  a dword of shown and held bits keeps the held ones",
+                     out.n >= 8 + 4 + REC_UNIT_DELTA_HEAD + 8 &&
+                     get32(out.p + 8 + 4 + REC_UNIT_DELTA_HEAD) == 0x77 &&
+                     get32(out.p + 8 + 4 + REC_UNIT_DELTA_HEAD + 4) ==
+                         ((img[2][LO_PART] & 0xFF00) | (0x00123456 & ~0xFF00u)), 1);
+        x.units = e.units;
+        x.live = e.live;
+        x.lists = e.lists;
+        ok &= expect("  the lossy world differs from the copy", reclossy_equal(L, &x), 0);
+    }
+    lo_tick(&in, 3);
+    lo_event(&in);
+    ok &= expect("lossy: held: the refresh after it", lo_step(L, &e, &in, 1, &out), 1);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("  writes exactly the differences, the images before the event",
+                 n == 5 && k[1] == RK_UNIT_DELTA && s[1] == 1 && k[2] == RK_UNIT_DELTA && s[2] == 2 &&
+                 k[3] == RK_ORDERS && s[3] == 1 && k[4] == RK_EV_STATE, 1);
+    {
+        /* each delta names its one dword, at the copy's value */
+        size_t a1 = 8, a2 = a1 + ((4 + get16(out.p + a1 + 2) + 3) & ~3u);
+        ok &= expect("  each delta one dword, the copy's",
+                     get16(out.p + a1 + 2) == REC_UNIT_DELTA_HEAD + 4 &&
+                     get32(out.p + a1 + 4 + REC_UNIT_DELTA_HEAD) == 0xDEAD &&
+                     get16(out.p + a2 + 2) == REC_UNIT_DELTA_HEAD + 4 &&
+                     get32(out.p + a2 + 4 + REC_UNIT_DELTA_HEAD) == 0x00123456, 1);
+    }
+    x.units = e.units;
+    x.live = e.live;
+    x.lists = e.lists;
+    ok &= expect("  the lossy world is the copy", reclossy_equal(L, &x), 1);
+    e.units[IMG + 0x40] ^= 1;
+    ok &= expect("lossy: the check fails on one byte of a unit", reclossy_equal(L, &x), 0);
+    e.units[IMG + 0x40] ^= 1;
+    e.lists[2].img[5] ^= 1;
+    ok &= expect("lossy: ... and on one byte of a list", reclossy_equal(L, &x), 0);
+    e.lists[2].img[5] ^= 1;
+    e.live[5] = 1;
+    ok &= expect("lossy: ... and on a slot's liveness", reclossy_equal(L, &x), 0);
+    e.live[5] = 0;
+
+    /* malformed iterations are refused */
+    {
+        unsigned d[1] = { NDW };
+        uint32_t v[1] = { 1 };
+        lo_tick(&in, 4);
+        lo_list(&in, 1, 2, node[0], 1, 0, 1);
+        ok &= expect("lossy: refused: a list that is neither main nor sub",
+                     reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+        lo_tick(&in, 4);
+        lo_list(&in, 1, 0, node[0], 1, 0, 2);
+        ok &= expect("lossy: refused: a list unfinished at the iteration's end",
+                     reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+        lo_tick(&in, 4);
+        lo_list(&in, 1, 0, node[0], 1, 1, 2);
+        ok &= expect("lossy: refused: a list's continuation with no beginning",
+                     reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+        lo_tick(&in, 4);
+        lo_list(&in, 3, 0, node[0], 1, 0, 1);
+        ok &= expect("lossy: refused: a list of a slot not live",
+                     reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+        lo_tick(&in, 4);
+        lo_delta(&in, 1, d, v, 1);
+        ok &= expect("lossy: refused: a delta naming a dword past the image",
+                     reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+        lo_tick(&in, 4);
+        lo_unit(&in, LO_SLOTS, img[1]);
+        ok &= expect("lossy: refused: a slot past the header's",
+                     reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+        in.n = 0;
+        lo_event(&in);
+        ok &= expect("lossy: refused: an iteration that does not begin with RK_TICK",
+                     reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+    }
+    reclossy_free(L);
+
+    /* RT_HOLD's bounds */
+    hold_bytes(hold, 0);
+    ok &= expect("RT_HOLD: a table of no rows reads", reclossy_hold_parse(&hh, hold, sizeof hold, why, sizeof why), 1);
+    ok &= expect("RT_HOLD: refused: another length", reclossy_hold_parse(&hh, hold, sizeof hold - 4, why, sizeof why), 0);
+    hold[40 + 0x70] = 1;
+    ok &= expect("RT_HOLD: refused: a held bit of the position +0x6A..+0x75",
+                 reclossy_hold_parse(&hh, hold, sizeof hold, why, sizeof why), 0);
+    hold[40 + 0x70] = 0;
+    hold[40 + 0x76] = 1;
+    ok &= expect("RT_HOLD: a held bit past the position reads", reclossy_hold_parse(&hh, hold, sizeof hold, why, sizeof why), 1);
+    hold[4] = 4;
+    ok &= expect("RT_HOLD: refused: a flag outside RECL_CELLS | RECL_SPRAYS",
+                 reclossy_hold_parse(&hh, hold, sizeof hold, why, sizeof why), 0);
+    hold[4] = RECL_CELLS | RECL_SPRAYS;
+    ok &= expect("RT_HOLD: both flags read", reclossy_hold_parse(&hh, hold, sizeof hold, why, sizeof why), 1);
+    put32(hold, REC_REFRESH_MIN - 1);
+    ok &= expect("RT_HOLD: refused: a refresh interval under REC_REFRESH_MIN",
+                 reclossy_hold_parse(&hh, hold, sizeof hold, why, sizeof why), 0);
+    put32(hold, REC_REFRESH_TICKS + 1);
+    ok &= expect("RT_HOLD: refused: a refresh interval over REC_REFRESH_TICKS",
+                 reclossy_hold_parse(&hh, hold, sizeof hold, why, sizeof why), 0);
+
+    /* the refresh at or before T, from a segment's stream blocks */
+    {
+        static const RecLossyBlock root[6] = { { 1, 1, 1 }, { 2, 31, 0 }, { 32, 300, 0 },
+                                               { 301, 301, 1 }, { 302, 331, 0 }, { 332, 601, 1 } };
+        static const RecLossyBlock fork[3] = { { 451, 451, 1 }, { 452, 481, 0 }, { 482, 601, 1 } };
+        ok &= expect("refresh_at: before the segment, none", reclossy_refresh_at(root, 6, 1, 0), 0);
+        ok &= expect("refresh_at: the first iteration", reclossy_refresh_at(root, 6, 1, 1), 1);
+        ok &= expect("refresh_at: between, the first", reclossy_refresh_at(root, 6, 1, 150), 1);
+        ok &= expect("refresh_at: a grid point", reclossy_refresh_at(root, 6, 1, 301), 301);
+        ok &= expect("refresh_at: the iteration before the next", reclossy_refresh_at(root, 6, 1, 600), 301);
+        ok &= expect("refresh_at: past the last block", reclossy_refresh_at(root, 6, 1, 10000), 601);
+        ok &= expect("refresh_at: a fork's, before it", reclossy_refresh_at(fork, 3, 451, 450), 0);
+        ok &= expect("refresh_at: a fork's first iteration", reclossy_refresh_at(fork, 3, 451, 500), 451);
+        ok &= expect("refresh_at: a fork's grid point", reclossy_refresh_at(fork, 3, 451, 601), 601);
+    }
+    exact_free(&e);
+    rb_free(&in);
+    rb_free(&out);
+    return ok;
+}
+
 static int cmd_outcomes(void)
 {
     static uint32_t units[6][NDW];
@@ -2120,6 +2807,7 @@ static int cmd_outcomes(void)
     ok &= outcomes_orders(&p);
     ok &= outcomes_events(&p);
     ok &= outcomes_state(&p);
+    ok &= outcomes_lossy();
     ok &= zstd_window_check(st.cctx, st.dctx);
     ok &= f32_check();
     printf("outcomes: %u sectioned, %u declined, %u mismatched\n", st.sectioned, st.declined, st.mismatched);
@@ -2556,20 +3244,32 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
 
 int main(int argc, char** argv)
 {
-    if (argc == 4 && !strcmp(argv[1], "transcode")) return cmd_transcode(argv[2], argv[3], -1);
-    if (argc == 6 && !strcmp(argv[1], "transcode") && !strcmp(argv[4], "--snap-every")) {
-        /* digits alone: a lenient parse would read a typo as 0, which keeps no snapshot at all */
-        const char* p = argv[5];
-        unsigned n = 0;
-        do {
-            if (*p < '0' || *p > '9' || (n = n * 10 + (unsigned)(*p - '0')) > 1000000) {
-                fprintf(stderr, "codectest: --snap-every takes a count from 0 to 1000000, in "
-                        "digits alone, not %s\n", argv[5]);
+    if (argc >= 4 && !strcmp(argv[1], "transcode")) {
+        int every = -1, skirmish = 0, i;
+        for (i = 4; i < argc; i++) {
+            if (!strcmp(argv[i], "--skirmish")) {
+                skirmish = 1;
+            } else if (!strcmp(argv[i], "--snap-every") && i + 1 < argc) {
+                /* digits alone: a lenient parse would read a typo as 0, which keeps no snapshot */
+                const char* p = argv[++i];
+                unsigned n = 0;
+                do {
+                    if (*p < '0' || *p > '9' || (n = n * 10 + (unsigned)(*p - '0')) > 1000000) {
+                        fprintf(stderr, "codectest: --snap-every takes a count from 0 to 1000000, "
+                                "in digits alone, not %s\n", argv[i]);
+                        return 2;
+                    }
+                } while (*++p);
+                every = (int)n;
+            } else {
+                fprintf(stderr, "codectest: transcode does not take %s\n", argv[i]);
                 return 2;
             }
-        } while (*++p);
-        return cmd_transcode(argv[2], argv[3], (int)n);
+        }
+        return cmd_transcode(argv[2], argv[3], every, skirmish);
     }
+    if ((argc == 4 || (argc == 5 && !strcmp(argv[4], "--exact"))) && !strcmp(argv[1], "lossy"))
+        return cmd_lossy(argv[2], argv[3], argc == 5);
     if (argc == 4 && !strcmp(argv[1], "decode")) return cmd_decode(argv[2], argv[3]);
     if (argc == 2 && !strcmp(argv[1], "outcomes")) return cmd_outcomes();
     if (argc >= 5 && !strcmp(argv[1], "fuzz")) {
@@ -2600,6 +3300,6 @@ int main(int argc, char** argv)
         for (i = 0; i < 512; i++) printf("%d\n", SIN[i]);
         return 0;
     }
-    fprintf(stderr, "usage: codectest transcode IN OUT [--snap-every N] | decode IN OUT | outcomes | fuzz IN SEED N [CASES] [--section NAME] | sin\n");
+    fprintf(stderr, "usage: codectest transcode IN OUT [--snap-every N] [--skirmish] | lossy IN OUT [--exact] | decode IN OUT | outcomes | fuzz IN SEED N [CASES] [--section NAME] | sin\n");
     return 2;
 }

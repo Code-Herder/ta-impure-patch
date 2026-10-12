@@ -1,4 +1,4 @@
-"""reccodec -- a recording's stream codec, read side: format 12's block walk, the sectioned
+"""reccodec -- a recording's stream codec, read side: format 13's block walk, the sectioned
 container, the unit frame, the pool frame and the four record frames, in numpy and numba.
 
     import reccodec
@@ -15,7 +15,10 @@ rules, their engine facts and their bounds are written down beside the C; here o
 in the doing.
 
 A stream block with RBF_SECTIONS decodes to the records it was made from; one without is the
-records themselves. The frames' state crosses blocks inside a run of sectioned blocks and
+records themselves. RBF_REFRESH, on a stream block alone, says its last iteration is a refresh
+(tagpu_recwriter.c, iteration_done) and changes nothing of the decoding. An RB_EXACT block, the
+exact records of the stream block before it (the test lever tagpu_rec.exact), is records, never
+sectioned, and no frame reads it. The frames' state crosses blocks inside a run of sectioned blocks and
 restarts at RBF_FRAME_RESET -- the unit and pool frames from this reader's own copies of the units
 and the projectile pool, the cells frame from this reading's own grid (every image it has read, a
 records block's too), the other record frames empty -- which is why the walk is in order and per
@@ -74,8 +77,8 @@ NROLES = len(ROLES)
 
 Unreadable = tarec.Unreadable
 
-REC_FORMAT = 12
-RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET = 1, 2, 4
+REC_FORMAT = 13
+RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH = 1, 2, 4, 8
 RT_CODEC, RT_PHYSICS, RT_AIR = 29, 30, 31
 RT_CODEC_DECLINED, RT_CODEC_MISMATCH = 44, 45
 (RCS_KINDS, RCS_UNITS, RCS_PROJ, RCS_CELLS, RCS_ORDERS, RCS_EVENTS, RCS_OTHER, RCS_STATE) = range(8)
@@ -2824,7 +2827,7 @@ class Frame:
 
     def decode(self, flags, body):
         """A stream block's bytes (unpacked) to its records."""
-        if flags & ~(RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET):
+        if flags & ~(RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET | RBF_REFRESH):
             raise Unreadable(f"block flags {flags:#x}")
         if flags & RBF_FRAME_RESET and not flags & RBF_SECTIONS:
             raise Unreadable("RBF_FRAME_RESET without RBF_SECTIONS")
@@ -3062,7 +3065,7 @@ def header_proj(es):
 
 
 def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None, start=None):
-    """Every complete block of a recording of format 12, in order: Block(ordinal (from 1), offset,
+    """Every complete block of a recording of format 13, in order: Block(ordinal (from 1), offset,
     kind, flags, first, last, raw, packed, payload) with a stream block's payload its records.
     With decode=False, stream, snapshot and minimap payloads are None. Returns (as a generator's
     value) why the reading stopped short, or None at a clean end; raises Unreadable at a block it
@@ -3098,7 +3101,8 @@ def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None, sta
             return f"a block cut short at byte {at}"
         if zlib.crc32(body) != crc_body:
             return f"a block failing its CRC at byte {at}"
-        allowed = RBF_STORED | (RBF_SECTIONS | RBF_FRAME_RESET if kind == tarec.RB_STREAM else 0)
+        allowed = RBF_STORED | (RBF_SECTIONS | RBF_FRAME_RESET | RBF_REFRESH
+                                if kind == tarec.RB_STREAM else 0)
         if (flags & ~allowed or (flags & RBF_FRAME_RESET and not flags & RBF_SECTIONS) or
                 (kind in (tarec.RB_HEADER, tarec.RB_END, tarec.RB_TIMELINES) and not flags & RBF_STORED)):
             raise Unreadable(f"block flags {flags:#x} on kind {kind} at byte {at}")
@@ -3107,7 +3111,8 @@ def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None, sta
         if flags & RBF_STORED and raw != packed:
             raise Unreadable(f"a stored block of {packed} bytes, not {raw}, at byte {at}")
         ordinal += 1
-        lazy = not decode and kind in (tarec.RB_STREAM, tarec.RB_SNAPSHOT, tarec.RB_MINIMAP)
+        lazy = not decode and kind in (tarec.RB_STREAM, tarec.RB_SNAPSHOT, tarec.RB_MINIMAP,
+                                       tarec.RB_EXACT)
         payload = None if lazy else body if flags & RBF_STORED else unpack(body, raw)
         try:
             if kind == tarec.RB_HEADER:

@@ -11,6 +11,13 @@
    goes through the stream's codec (tagpu_reccodec.c), which writes it as a sectioned container
    when that decodes back to its records, and as the records otherwise (stream_block).
 
+   THE STREAM IS LOSSY. Each completed iteration's records, exact as the capture made them and the
+   corrections added, go through the lossy filter (tagpu_reclossy.c) into the stream: a skirmish
+   recording's stream holds the bytes RT_HOLD names between refreshes, and the copy stays exact.
+   At a refresh the stream's world is checked equal to the copy, and a snapshot follows only a
+   refresh (iteration_done), so every snapshot is a world the stream itself reaches. A multiplayer
+   recording's stream holds nothing: its iterations are written as they came.
+
    A record is checked against the copy's bounds before it is applied: a slot, a player, a table
    index, an offset and a length, and an event's length. One that fails is a fault in the capture,
    not in the game: it abandons the file (the ring's `failed`, which ends the recording at the next
@@ -46,6 +53,8 @@
 #include "tagpu_log.h"
 #include "crc32.h"
 #include "tagpu_reccodec.h"
+#include "tagpu_reclossy.h"
+#include "tagpu_rechold.h"
 #include "zstd.h"
 
 /* A stream block ends at an iteration past STREAM_BYTES or after STREAM_TICKS iterations, and
@@ -61,10 +70,10 @@
 #define CORR_LOG       16            /* corrections logged, a recording                             */
 #define UNIT_LIVE_OFF  REC_UNIT_IMAGE /* a correction counter's offset for a unit's liveness        */
 
-typedef struct Buf { unsigned char* p; size_t n, cap; int oom; } Buf;
+typedef RecBytes Buf;
 
-/* an order list's images, in order */
-typedef struct WList { unsigned n, cap; unsigned char* img; } WList;
+/* an order list's images, in order: the filter reads the copy's lists as they are */
+typedef RecLossyList WList;
 
 /* A list whose RK_ORDERS (or RK_VERIFY_ORDERS) records have begun: the next ones must be its own,
    `first` ascending, until all `total` nodes have come. */
@@ -100,11 +109,15 @@ typedef struct Writer {
     Pending        pend;        /* pend.total > pend.next while a list is arriving  */
     unsigned char* vlist;       /* a verified list, as it arrives                   */
 
+    Buf            iter;        /* the open iteration's records, exact               */
     Buf            stream;      /* the stream block being built, whole iterations   */
     unsigned       sfirst;      /* its first GameTime                               */
+    unsigned       slast;       /* its last                                         */
     unsigned       sticks;      /* its iterations                                   */
-    size_t         complete_bytes; /* prefix ending before the current open iteration */
-    unsigned       complete_tick;
+    Buf            exact;       /* the test lever's RB_EXACT: the same iterations' records
+                                   as `iter` held them                              */
+    RecLossy*      lossy;       /* the filter; NULL for a multiplayer recording     */
+    unsigned       refresh;     /* the refresh interval (RT_HOLD)                    */
     Buf            snap;        /* reused for each snapshot                         */
     unsigned       tick;        /* the iteration being applied                      */
     int            ticked;      /* an iteration has begun                           */
@@ -422,6 +435,17 @@ static int codec_begin(Writer* w, const unsigned char* const ent[3], const unsig
     return 1;
 }
 
+/* `n` bytes from the 2n hex digits of `hex` */
+static void hex_bytes(unsigned char* out, const char* hex, unsigned n)
+{
+    unsigned i;
+    for (i = 0; i < 2 * n; i++) {
+        char c = hex[i];
+        unsigned v = c >= '0' && c <= '9' ? (unsigned)(c - '0') : (unsigned)((c | 0x20) - 'a' + 10);
+        out[i / 2] = (unsigned char)(i & 1 ? out[i / 2] | v : v << 4);
+    }
+}
+
 static int header_apply(Writer* w, const unsigned char* b, unsigned len)
 {
     unsigned at = 0, mode = 0, each = 0, mapped = 0, seats = 0;
@@ -521,6 +545,38 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         fail(w, "no memory for the copy");
         return 1;
     }
+    w->refresh = w->ring->refresh >= REC_REFRESH_MIN && w->ring->refresh <= REC_REFRESH_TICKS
+                     ? w->ring->refresh : REC_REFRESH_TICKS;
+    /* the file says what its stream holds: a skirmish's RT_HOLD, after the capture's entries */
+    if (!w->mp_in) {
+        RecLossyParams lp;
+        unsigned char hold[REC_HOLD_BYTES];
+        unsigned flags = 0;
+        _Static_assert(sizeof REC_HOLD_UNIT == REC_UNIT_IMAGE &&
+                       sizeof REC_HOLD_NODE == REC_ORDER_IMAGE, "the hold masks' sizes");
+        _Static_assert(sizeof TAGPU_REPLAY_HOLD_SHA256 == 65, "a SHA-256 in hex");
+        lp.nslots = w->nslots;
+        lp.hold_unit = REC_HOLD_UNIT;
+        lp.hold_node = REC_HOLD_NODE;
+        w->lossy = reclossy_begin(&lp);
+        if (!w->lossy) {
+            fail(w, "no memory for the lossy filter");
+            return 1;
+        }
+        memcpy(hold, &w->refresh, 4);
+        memcpy(hold + 4, &flags, 4);
+        hex_bytes(hold + 8, TAGPU_REPLAY_HOLD_SHA256, 32);
+        memcpy(hold + 40, REC_HOLD_UNIT, REC_UNIT_IMAGE);
+        memcpy(hold + 40 + REC_UNIT_IMAGE, REC_HOLD_NODE, REC_ORDER_IMAGE);
+        buf_put(&w->snap, b, len);
+        tlv(&w->snap, RT_HOLD, hold, sizeof hold);
+        if (w->snap.oom) {
+            fail(w, "no memory for the header block");
+            return 1;
+        }
+        b = w->snap.p;
+        len = (unsigned)w->snap.n;
+    }
     if (w->append) {
         if (!file_append(w)) return 1;
     } else {
@@ -528,6 +584,7 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         put(w, REC_MAGIC, 8);
     }
     block(w, RB_HEADER, 0, 0, b, len, 0);
+    w->snap.n = 0;
     if (w->append)
         block(w, RB_TIMELINES, 0, 0, (const unsigned char*)w->ring->fork.states,
               w->ring->fork.nstates * sizeof(RecTimelineState), 0);
@@ -622,12 +679,12 @@ static void verify_unit(Writer* w, unsigned slot, unsigned live, const unsigned 
     } else {
         return;
     }
-    buf_rec(&w->stream, RK_CORRECT, &corr0, 4, NULL, 0);
+    buf_rec(&w->iter, RK_CORRECT, &corr0, 4, NULL, 0);
     if (live) {
         memcpy(have, img, REC_UNIT_IMAGE);
-        buf_rec(&w->stream, RK_UNIT, pre, 4, img, REC_UNIT_IMAGE);
+        buf_rec(&w->iter, RK_UNIT, pre, 4, img, REC_UNIT_IMAGE);
     } else {
-        buf_rec(&w->stream, RK_UNIT_GONE, pre, 4, NULL, 0);
+        buf_rec(&w->iter, RK_UNIT_GONE, pre, 4, NULL, 0);
         list_clear(w, slot);
     }
     w->live[slot] = (unsigned char)live;
@@ -655,8 +712,8 @@ static void verify_list(Writer* w, unsigned slot, unsigned list, const unsigned 
     }
     if (!list_resize(l, n)) { fail(w, "no memory for an order list's copy"); return; }
     memcpy(l->img, img, (size_t)n * REC_ORDER_IMAGE);
-    buf_rec(&w->stream, RK_CORRECT, &corr0, 4, NULL, 0);
-    list_put(&w->stream, RK_ORDERS, slot, list, img, n);
+    buf_rec(&w->iter, RK_CORRECT, &corr0, 4, NULL, 0);
+    list_put(&w->iter, RK_ORDERS, slot, list, img, n);
 }
 
 static void verify_player(Writer* w, unsigned i, const unsigned char* img)
@@ -672,8 +729,8 @@ static void verify_player(Writer* w, unsigned i, const unsigned char* img)
         corr_log(w, "player", i, 4 * k, w->players[i][k], b);
     }
     memcpy(w->players[i], img, REC_PLAYER_DWORDS * 4);
-    buf_rec(&w->stream, RK_CORRECT, &corr0, 4, NULL, 0);
-    buf_rec(&w->stream, RK_PLAYER, pre, 4, img, REC_PLAYER_DWORDS * 4);
+    buf_rec(&w->iter, RK_CORRECT, &corr0, 4, NULL, 0);
+    buf_rec(&w->iter, RK_PLAYER, pre, 4, img, REC_PLAYER_DWORDS * 4);
 }
 
 static void verify_table(Writer* w, WTable* t, unsigned off, const unsigned char* img, unsigned n)
@@ -694,8 +751,8 @@ static void verify_table(Writer* w, WTable* t, unsigned off, const unsigned char
     memcpy(pre, &ix, 2);
     memcpy(pre + 2, &z, 2);
     memcpy(pre + 4, &off, 4);
-    buf_rec(&w->stream, RK_CORRECT, &corr0, 4, NULL, 0);
-    buf_rec(&w->stream, RK_TABLE_SPAN, pre, 8, img, n);
+    buf_rec(&w->iter, RK_CORRECT, &corr0, 4, NULL, 0);
+    buf_rec(&w->iter, RK_TABLE_SPAN, pre, 8, img, n);
 }
 
 static void verify_globals(Writer* w, const unsigned char* img)
@@ -710,8 +767,8 @@ static void verify_globals(Writer* w, const unsigned char* img)
         corr_log(w, "globals dword", i, 4 * i, w->globals[i], b);
     }
     memcpy(w->globals, img, sizeof w->globals);
-    buf_rec(&w->stream, RK_CORRECT, &corr0, 4, NULL, 0);
-    buf_rec(&w->stream, RK_GLOBALS, w->globals, sizeof w->globals, NULL, 0);
+    buf_rec(&w->iter, RK_CORRECT, &corr0, 4, NULL, 0);
+    buf_rec(&w->iter, RK_GLOBALS, w->globals, sizeof w->globals, NULL, 0);
 }
 
 /* the pool's count and extent; the records an extent gives up are zero again */
@@ -741,8 +798,8 @@ static void verify_proj(Writer* w, unsigned count, unsigned hw, unsigned first,
             corr_log(w, "projectile extent", 0, 4, w->phw, hw);
         }
         proj_head(w, count, hw);
-        buf_rec(&w->stream, RK_CORRECT, &corr0, 4, NULL, 0);
-        buf_rec(&w->stream, RK_PROJ_HEAD, head, sizeof head, NULL, 0);
+        buf_rec(&w->iter, RK_CORRECT, &corr0, 4, NULL, 0);
+        buf_rec(&w->iter, RK_PROJ_HEAD, head, sizeof head, NULL, 0);
     }
     for (k = 0; k < n; k++) {
         unsigned char* have = w->proj + (size_t)(first + k) * REC_PROJ_IMAGE;
@@ -758,8 +815,8 @@ static void verify_proj(Writer* w, unsigned count, unsigned hw, unsigned first,
             corr_log(w, "projectile", first + k, i, a, b);
         }
         memcpy(have, live, REC_PROJ_IMAGE);
-        buf_rec(&w->stream, RK_CORRECT, &corr0, 4, NULL, 0);
-        buf_rec(&w->stream, RK_PROJ, pre, 4, live, REC_PROJ_IMAGE);
+        buf_rec(&w->iter, RK_CORRECT, &corr0, 4, NULL, 0);
+        buf_rec(&w->iter, RK_PROJ, pre, 4, live, REC_PROJ_IMAGE);
     }
 }
 
@@ -829,7 +886,8 @@ static int all_zero(const unsigned char* p, unsigned n)
    restarts the frames (RBF_FRAME_RESET) from what such a reader holds there: the units, the pool
    and the grid (tagpu_reccodec.c, RESET POINTS). A reader that starts at that snapshot holds no
    frame state from before it, and one that read the records block holds none either. */
-static void stream_block(Writer* w, unsigned first, unsigned last, const unsigned char* p, size_t n)
+static void stream_block(Writer* w, unsigned first, unsigned last, const unsigned char* p, size_t n,
+                         unsigned refresh)
 {
     unsigned flags = RBF_STORED;
     const unsigned char* body = p;
@@ -857,36 +915,26 @@ static void stream_block(Writer* w, unsigned first, unsigned last, const unsigne
         bn = w->pk.n;
     }
     raw = (flags & RBF_STORED) ? bn : (flags & RBF_SECTIONS) ? w->codec.sec.n : n;
-    block_put(w, RB_STREAM, flags, first, last, raw, body, bn);
+    block_put(w, RB_STREAM, flags | refresh, first, last, raw, body, bn);
     w->raw += n;
     w->packed += bn;
     w->nstream++;
 }
 
-static void stream_flush(Writer* w)
+/* The stream block of the whole iterations [sfirst, slast], RBF_REFRESH when the last is a
+   refresh, and under the test lever its exact records as an RB_EXACT of the same GameTimes. The
+   open iteration stays in `iter`: a paused capture's flush (writer_main) writes only whole
+   iterations, and its acknowledgement follows WriteFile, so a reader cannot index a half-written
+   block. */
+static void stream_flush(Writer* w, unsigned refresh)
 {
     if (!w->stream.n) return;
-    if (w->stream.oom) { fail(w, "no memory for a stream block"); return; }
-    stream_block(w, w->sfirst, w->tick, w->stream.p, w->stream.n);
+    if (w->stream.oom || w->exact.oom) { fail(w, "no memory for a stream block"); return; }
+    stream_block(w, w->sfirst, w->slast, w->stream.p, w->stream.n, refresh);
+    if (w->ring->exact) block(w, RB_EXACT, w->sfirst, w->slast, w->exact.p, w->exact.n, 1);
     w->stream.n = 0;
+    w->exact.n = 0;
     w->sticks = 0;
-    w->complete_bytes = 0;
-}
-
-/* The capture has paused, but its current iteration's events remain unpublished. Only the
-   prefix closed by a later RK_TICK can reach the file. Keep that open iteration in memory;
-   the acknowledgement follows WriteFile, so a reader cannot index a half-written block. */
-static void stream_flush_complete(Writer* w)
-{
-    size_t n = w->complete_bytes;
-    if (!n) return;
-    if (w->stream.oom) { fail(w, "no memory for a stream block"); return; }
-    stream_block(w, w->sfirst, w->complete_tick, w->stream.p, n);
-    memmove(w->stream.p, w->stream.p + n, w->stream.n - n);
-    w->stream.n -= n;
-    w->sfirst = w->tick;
-    w->sticks = 0;
-    w->complete_bytes = 0;
 }
 
 /* The copy as records that build it, at the iteration just completed: from nothing but the base
@@ -987,9 +1035,19 @@ static void snapshot(Writer* w)
     w->codec.reset = 1;
 }
 
-/* The iteration at `w->tick` is complete, the events of the step after it included: its stream
-   block may end here, and a snapshot of the copy at `w->tick` may follow it. That snapshot comes
-   after those events, so a reader that starts from it takes them from the block before.
+/* The iteration at `w->tick` is complete, the events of the step after it included: the filter
+   writes it into the stream, its stream block may end here, and a snapshot of the copy at
+   `w->tick` may follow it. That snapshot comes after those events, so a reader that starts from
+   it takes them from the block before.
+   THE REFRESH: an iteration whose GameTime is 1 modulo the interval, the segment's first and
+   every snapshot's -- a snapshot is taken only at a refresh, SNAPSHOT_TICKS or more after the
+   last. The filter writes every difference there, so the stream's world equals the copy, and
+   that is checked before the block ends: INVARIANT, an ordering, every snapshot follows a refresh
+   at which the stream's world was found equal to the copy, so a reader that starts from a
+   snapshot holds what a reader of the whole stream holds there. A failed check is a fault of the
+   filter, and abandons the file rather than write a stream that does not reach its snapshots. The
+   first iteration is a refresh because the bases below are the copy's, and a reader takes its
+   own from the stream's first iteration: equal there, they are the same bytes.
    THE BASES are taken at the first call, before any snapshot can be: the wreck pool and the grid
    at the end of the segment's first iteration. INVARIANT: they equal every reader's
    (tagpu_recreader.c, tick_take), by construction -- one Writer is one segment, calloc'd per
@@ -1001,6 +1059,9 @@ static void snapshot(Writer* w)
    agrees across a chain). */
 static void iteration_done(Writer* w)
 {
+    int refresh = w->iterations == 1 || w->tick % w->refresh == 1;
+    int snap = refresh && w->tick - w->snap_tick >= SNAPSHOT_TICKS;
+    RecLossyExact x;
     if (!w->wbase) {
         w->wbase = (unsigned char*)malloc((size_t)w->npool * REC_WRECK_BYTES);
         if (!w->wbase) { fail(w, "no memory for the snapshots' wreck base"); return; }
@@ -1011,12 +1072,30 @@ static void iteration_done(Writer* w)
             memcpy(w->base, w->grid, (size_t)w->gw * w->gh * REC_CELL_BYTES);
         }
     }
+    if (w->iter.oom) { fail(w, "no memory for an iteration"); return; }
+    if (!w->stream.n) w->sfirst = w->tick;
+    w->slast = w->tick;
+    x.units = w->units;
+    x.live = w->live;
+    x.lists = w->lists;
+    if (w->lossy ? !reclossy_iteration(w->lossy, w->iter.p, w->iter.n, refresh, &x, &w->stream)
+                 : !buf_put(&w->stream, w->iter.p, w->iter.n)) {
+        fail(w, w->stream.oom ? "no memory for a stream block" : "the lossy filter refused an "
+             "iteration the writer took");
+        return;
+    }
+    if (w->ring->exact) buf_put(&w->exact, w->iter.p, w->iter.n);
+    w->iter.n = 0;
     w->sticks++;
-    if (w->tick - w->snap_tick >= SNAPSHOT_TICKS) {
-        stream_flush(w);
-        snapshot(w);
+    if (refresh) {
+        if (w->lossy && !reclossy_equal(w->lossy, &x)) {
+            fail(w, "the lossy world differs from the copy at a refresh");
+            return;
+        }
+        stream_flush(w, RBF_REFRESH);
+        if (snap) snapshot(w);
     } else if (w->stream.n >= STREAM_BYTES || w->sticks >= STREAM_TICKS) {
-        stream_flush(w);
+        stream_flush(w, 0);
     }
 }
 
@@ -1057,7 +1136,7 @@ static int list_record(Writer* w, unsigned kind, const unsigned char* b, unsigne
     if (kind == RK_ORDERS) {
         memcpy(w->lists[slot * 2 + list].img + (size_t)first * REC_ORDER_IMAGE, b + 8,
                (size_t)k * REC_ORDER_IMAGE);
-        buf_rec(&w->stream, kind, b, len, NULL, 0);
+        buf_rec(&w->iter, kind, b, len, NULL, 0);
     } else {
         memcpy(w->vlist + (size_t)first * REC_ORDER_IMAGE, b + 8, (size_t)k * REC_ORDER_IMAGE);
         if (w->pend.next == total) verify_list(w, slot, list, w->vlist, total);
@@ -1091,7 +1170,7 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
         memcpy(h, b, 4);
         if (h[0] != w->gw || h[1] != w->gh || !w->ring->grid) return 0;
         w->grid = w->ring->grid;
-        grid_put(&w->stream, w);
+        grid_put(&w->iter, w);
         return 1;
     case RK_CELLS:
         if (len < 8 || !w->grid) return 0;
@@ -1146,7 +1225,7 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
     default:
         return 0;
     }
-    buf_rec(&w->stream, kind, b, len, NULL, 0);
+    buf_rec(&w->iter, kind, b, len, NULL, 0);
     return 1;
 }
 
@@ -1231,7 +1310,7 @@ static int globals_proj_record(Writer* w, unsigned kind, const unsigned char* b,
     default:
         return 0;
     }
-    buf_rec(&w->stream, kind, b, len, NULL, 0);
+    buf_rec(&w->iter, kind, b, len, NULL, 0);
     return 1;
 }
 
@@ -1280,7 +1359,7 @@ static int pov_record(Writer* w, unsigned kind, const unsigned char* b, unsigned
         w->nsel[head.player] = head.count;
         w->sel_in[head.player] = 1;
     }
-    buf_rec(&w->stream, kind, b, len, NULL, 0);
+    buf_rec(&w->iter, kind, b, len, NULL, 0);
     return 1;
 }
 
@@ -1307,14 +1386,11 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
         if (w->ticked) iteration_done(w);
         if (w->dead) return 1;
         w->evented = 0;
-        w->complete_bytes = w->stream.n;
-        w->complete_tick = w->tick;
         memcpy(&w->tick, b, 4);
         if (!w->ticked) w->snap_tick = w->tick;
-        if (!w->stream.n) w->sfirst = w->tick;
         w->ticked = 1;
         w->iterations++;
-        buf_rec(&w->stream, RK_TICK, b, 4, NULL, 0);
+        buf_rec(&w->iter, RK_TICK, b, 4, NULL, 0);
         return 1;
     case RK_UNIT:
         if (len != 4 + REC_UNIT_IMAGE || !slot_ok(w, id)) return 0;
@@ -1440,7 +1516,7 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
         if (!w->ticked || !rec_event_len(kind, len)) return 0;
         break;
     }
-    buf_rec(&w->stream, kind, b, len, NULL, 0);
+    buf_rec(&w->iter, kind, b, len, NULL, 0);
     return 1;
 }
 
@@ -1533,7 +1609,7 @@ static void finish(Writer* w)
     Buf e = { 0 };
     unsigned i;
     if (!w->dead && w->header) {
-        stream_flush(w);
+        stream_flush(w, 0);
         tlv_u32(&e, RT_END_REASON, w->end_reason);
         tlv_u32(&e, RT_LAST, w->tick);
         tlv_u32(&e, RT_ITERATIONS, w->iterations);
@@ -1591,6 +1667,9 @@ static void finish(Writer* w)
     ZSTD_freeCCtx((ZSTD_CCtx*)w->cctx);
     free(w->pk.p);
     free(w->stream.p);
+    free(w->iter.p);
+    free(w->exact.p);
+    reclossy_free(w->lossy);
     free(w->snap.p);
     free(w->contributions.p);
     tagpu_recmp_history_end(w->mp_history);
@@ -1663,7 +1742,7 @@ static DWORD WINAPI writer_main(void* arg)
         if (!w || w->dead) r = wp;        /* parse nothing more: only the hand-over matters */
         if (w && !w->dead) {
             if (req != InterlockedCompareExchange(&g->flush_done, 0, 0)) {
-                stream_flush_complete(w);
+                stream_flush(w, 0);
                 if (!w->dead) InterlockedExchange(&g->flush_done, req);
             }
         }

@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include "tagpu_recfmt.h"
 #include "tagpu_reccodec.h"
+#include "tagpu_reclossy.h"
 #include "tagpu_recfile.h"
 #include "tagpu_recmp_file.h"
 #include "tagpu_recmp_units.h"
@@ -77,6 +78,9 @@ typedef struct RecHeader {
     unsigned     has_codec;                 /* RT_CODEC and RT_PHYSICS: a sectioned stream block
                                                may come; without them only records blocks    */
     RecCodecParams codec;                   /* their constants, and RT_AIR's (about 25 KB)    */
+    unsigned     has_hold;                  /* RT_HOLD: the stream holds the masks' bits between
+                                               refreshes; a header without it holds nothing  */
+    RecLossyHold hold;
 } RecHeader;
 
 /* one node list of a live unit, its node images in list order */
@@ -263,6 +267,13 @@ int recr_segment_mp(const RecReader* r);
 int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsigned cap);
 /* 1 when the file HANDLE `f` is the file the reader holds open: one volume, one file index */
 int recr_same_file(const RecReader* r, void* f);
+/* The last refresh iteration at or before T of the chosen chain, found afresh from the index: the
+   largest `last` <= T of a stream block with RBF_REFRESH in the chain's segment that covers T, or
+   that segment's first iteration (tagpu_reclossy.h, reclossy_refresh_at). At a refresh the
+   stream's world is the writer's exact copy, which is why a takeover starts only there
+   (tagpu_replay.c, tk_bound). The GameTime, or 0 (why) when T is outside the chain or the file
+   cannot be read. */
+unsigned recr_refresh_at(RecReader* r, unsigned T, char* why, unsigned cap);
 
 /* Authority at the currently read world tick. Rebuild after seek/segment/index
    changes; advancing queries consume only new application records. Unknown stays

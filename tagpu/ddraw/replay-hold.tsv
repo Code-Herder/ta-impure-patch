@@ -1,0 +1,22 @@
+# replay-hold.tsv -- the bytes a skirmish recording's stream holds between refreshes
+# (tagpu_reclossy.c). tools/replay-hold-gen.py says what the columns mean and generates
+# inc/tagpu_rechold.h from this file; the build fails when the two disagree. Each recording carries
+# the masks it was written with and this file's SHA-256 (RT_HOLD), so a change here never orphans
+# a recording.
+#
+# WHAT A ROW MEANS. A held byte is written into the stream only when its record is written for a
+# byte that is not held -- a unit's delta, an order list sent whole -- and at every refresh, where
+# the stream's world equals the writer's exact copy byte for byte; between two refreshes it keeps
+# a value the engine produced for the same unit or list since the last. Every byte no row names is
+# exact at every iteration. A takeover or a fork starts only at a refresh, so it never starts from
+# a held value (tagpu_replay.c, tk_bound).
+#
+# A ROW IS A LOOSENING, and adding one is the owner's decision (CLAUDE.md, *Loosening is the
+# owner's decision*). A row names the readers of its bytes that run on a playback host, `-` for
+# none, and its evidence: DISASSEMBLED with the addresses, or MEASURED with the numbers. A reader
+# found on a puppet that shows a held byte removes the row.
+#
+# NOT COVERED BY CONSTRUCTION: the extra weapons' side slots (weapons 4..N) live outside the unit
+# image, in declared tables, which the stream carries exact.
+#
+# record	offset	width	mask	name	readers	evidence

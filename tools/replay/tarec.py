@@ -9,6 +9,13 @@
                                              the events that explain it
   tools/replay/tarec.py compare FILE DUMP... rebuild the world to each dump's GameTime and require
                                              it to equal the dump, byte for byte
+  tools/replay/tarec.py lossy-check FILE [--to T]
+                                             the stream against its exact records (RB_EXACT, the
+                                             test lever tagpu_rec.exact), iteration by iteration:
+                                             every shown byte exact, every held byte the stream's
+                                             last value or the exact one, the two equal at every
+                                             refresh, and the refreshes on their grid
+                                             (cmd_lossy_check); to GameTime T when given
   tools/replay/tarec.py segments FILE        each timeline's segment of the file and its bytes,
                                              then the SHA-256 of the original's
   tools/replay/tarec.py compare-fork FILE N  timeline N's first iteration against its parent's
@@ -63,8 +70,9 @@
                                              clock takes, the eye before the range clamp and the
                                              level x 65536 (tagpu_persp.c, mirrored)
 
-  check, compare and compare --puppet take --timeline N: the chain of timeline N, read across
-  each fork it descends from.
+  check, compare, compare --puppet and lossy-check take --timeline N: the chain of timeline N,
+  read across each fork it descends from. check, compare and compare --puppet take --exact: the
+  world built from the exact records instead of the stream (exact_blocks).
 
   images-gate alone takes --stock-secondary-cosmetics: the owner-approved native cosmetic-pool
   known gap for stock-secondary-orders at the native 300-projectile cap. Other bytes stay strict.
@@ -72,7 +80,7 @@
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
-here, and REC_FORMAT says which; this tool reads format 12 alone. A recording is REC_MAGIC, then
+here, and REC_FORMAT says which; this tool reads format 13 alone. A recording is REC_MAGIC, then
 blocks; a block is a 32-byte header and its payload, one zstd frame unless the block is stored (the
 header, end and timelines blocks always are), each checked by a CRC-32. A stream block may be a
 sectioned container (RBF_SECTIONS) that decodes to exactly the records it was made from: its unit
@@ -80,7 +88,13 @@ deltas are made by the unit frame from the header's RT_CODEC, RT_PHYSICS and RT_
 projectile records by the pool frame from the pool of RT_PROJECTILES records, and the bodies of
 its cells, orders, events and state records by the four record frames. The walk over
 the blocks, their unpacking and that decoding are tools/replay/reccodec.py's (iter_blocks), which
-refuses what the DLL's reader refuses; every command here reads the decoded records. A file ends at
+refuses what the DLL's reader refuses; every command here reads the decoded records.
+A skirmish recording's stream is LOSSY (tagpu/ddraw/src/tagpu_reclossy.c): between two refreshes
+it may hold the bytes its header's RT_HOLD names at a value the engine produced earlier, and at
+each refresh -- the segment's first iteration and every GameTime 1 modulo RT_HOLD's interval, the
+last iteration of a stream block flagged RBF_REFRESH -- its world is the writer's exact copy. A
+snapshot follows a refresh block only. A recording made under the test lever tagpu_rec.exact
+carries each stream block's exact records after it, as an RB_EXACT block. A file ends at
 its last complete block: a block cut short or torn ends the reading, and the file is reported as
 read to there. A dump (`dump <name>` in tagpu_replay.trigger) is REC_MAGIC, a stored header with the
 format, the build, the globals list's hash and the tables, and one stored snapshot, which carries
@@ -119,7 +133,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 12                           # zstd blocks, the sectioned stream and its record frames
+REC_FORMAT = 13                           # the lossy stream: RT_HOLD, refreshes, RB_EXACT
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -170,7 +184,8 @@ def mapped_bytes(w, h):
  RK_EV_DEATH_END, RK_CELLS, RK_WRECK, RK_FEATURES, RK_GRID,
  RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
  RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT, RK_COUNTS,
- RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE, RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT) = range(56)
+ RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE, RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT,
+ RK_SPRAY_SESSION) = range(57)
 
 # THE PERSPECTIVE's payloads (tagpu_recpov.h)
 REC_POV = struct.Struct("<BBBBHHIiiiii")   # player, every, flags, zero, view_w, view_h, zoom,
@@ -205,11 +220,13 @@ FS_SITES = 7
 
 RB_HEADER, RB_STREAM, RB_SNAPSHOT, RB_END, RB_MINIMAP, RB_TIMELINES = 1, 2, 3, 4, 5, 6
 RB_CONTRIBUTIONS = 7
+RB_EXACT = 8                # the exact records of the stream block before it (tagpu_rec.exact)
 RB_BOUNDARY = -1            # load()'s marker of a fork in a chain's blocks: no block of the file
 RECR_TIMELINES = 64         # the segments a file may hold (tagpu_recreader.h)
 RB_NAMES = {RB_HEADER: "header", RB_STREAM: "stream", RB_SNAPSHOT: "snapshot", RB_END: "end",
-            RB_MINIMAP: "minimap", RB_TIMELINES: "timelines", RB_CONTRIBUTIONS: "contributions"}
-RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET = 1, 2, 4
+            RB_MINIMAP: "minimap", RB_TIMELINES: "timelines", RB_CONTRIBUTIONS: "contributions",
+            RB_EXACT: "exact stream"}
+RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH = 1, 2, 4, 8
 
 (RT_FORMAT, RT_BUILD, RT_MODE, RT_MAP, RT_START, RT_WALLCLOCK, RT_SLOTS, RT_UNITS_EACH,
  RT_UNITDEFS, RT_PLAYER, RT_LEVER, RT_LAYOUT, RT_TABLE, RT_OPTIONS, RT_SETTINGS_MAP,
@@ -222,6 +239,11 @@ RT_CODEC, RT_PHYSICS, RT_AIR = 29, 30, 31   # the unit frame's lanes, physics an
  RT_UNCREDITED, RT_UNOBSERVED, RT_GAME_END, RT_SEAT_END) = range(32, 43)
 RT_MP_END = 43
 RT_CODEC_DECLINED, RT_CODEC_MISMATCH = 44, 45   # the writer's stream blocks written as records
+RT_HOLD = 46                # what a skirmish stream holds between refreshes, and how often
+REC_HOLD_BYTES = 8 + 32 + REC_UNIT_IMAGE + REC_ORDER_IMAGE
+REC_REFRESH_TICKS, REC_REFRESH_MIN = 300, 30
+RECL_CELLS, RECL_SPRAYS = 1, 2
+REC_HOLD_POS = range(0x6A, 0x76)          # the unit position, which a spray session reads
 RESULTS = {0: "unknown", 1: "won", 2: "lost"}
 
 END_REASONS = {1: "complete: the level ended", 2: "INCOMPLETE: the ring was full",
@@ -392,6 +414,10 @@ def header(payload):
             ix, n = struct.unpack_from("<HH", b)
             h.setdefault("fields", {})[ix] = [struct.unpack_from("<HHHHBB", b, 4 + 12 * k)
                                               for k in range(n)]
+        elif tag == RT_HOLD:
+            if "hold" in h:
+                raise Unreadable(f"header tag {tag} twice")
+            h["hold"] = hold_parse(b)
         elif tag in (RT_CODEC, RT_PHYSICS, RT_AIR):
             # kept whole for reccodec.params, which bounds them (the block walk already has)
             if tag in h.setdefault("codec", {}):
@@ -401,6 +427,8 @@ def header(payload):
         raise Unreadable(f"format {h.get('format')}, this tool reads {REC_FORMAT}")
     if (h.get("mode") == 3) != ("multiplayer" in h) or ("multiplayer" in h) != ("mp_seats" in h):
         raise Unreadable("network mode and contribution roster disagree")
+    if "multiplayer" in h and "hold" in h:
+        raise Unreadable("a multiplayer header with RT_HOLD: its stream holds nothing")
     if "multiplayer" in h:
         try:
             Seats(h["mp_seats"], Contributions(h["multiplayer"]).actors,
@@ -408,6 +436,22 @@ def header(payload):
         except ValueError as error:
             raise Unreadable(str(error)) from error
     return h
+
+
+def hold_parse(b):
+    """RT_HOLD's bytes, bounded as tagpu_reclossy.c's reclossy_hold_parse bounds them."""
+    if len(b) != REC_HOLD_BYTES:
+        raise Unreadable(f"an RT_HOLD of {len(b)} bytes, not {REC_HOLD_BYTES}")
+    refresh, flags = struct.unpack_from("<II", b)
+    unit = bytes(b[40:40 + REC_UNIT_IMAGE])
+    node = bytes(b[40 + REC_UNIT_IMAGE:])
+    if flags & ~(RECL_CELLS | RECL_SPRAYS):
+        raise Unreadable(f"RT_HOLD's flags {flags:#x}")
+    if not REC_REFRESH_MIN <= refresh <= REC_REFRESH_TICKS:
+        raise Unreadable(f"RT_HOLD's refresh interval {refresh}")
+    if any(unit[i] for i in REC_HOLD_POS):
+        raise Unreadable("RT_HOLD holds a byte of the unit position +0x6A..+0x75")
+    return {"refresh": refresh, "flags": flags, "sha": bytes(b[8:40]), "unit": unit, "node": node}
 
 
 def feature_dims(h):
@@ -1244,14 +1288,41 @@ def chain(segs, n):
     return out
 
 
-def load(path, sizes=None, timeline=0):
+def exact_blocks(bl, offsets):
+    """The blocks with each stream block's records replaced by the exact records of the RB_EXACT
+    that follows it (the test lever tagpu_rec.exact), and the RB_EXACT blocks dropped; Unreadable
+    for a stream block with no exact block after it."""
+    out, offs, k = [], [], 0
+    while k < len(bl):
+        kind, first, last, payload = bl[k]
+        if kind == RB_EXACT:
+            raise Unreadable(f"an exact block of GameTime {first} to {last} after no stream block")
+        if kind == RB_STREAM:
+            ex = bl[k + 1] if k + 1 < len(bl) else None
+            if ex is None or ex[0] != RB_EXACT or ex[1:3] != (first, last):
+                raise Unreadable(f"the stream block of GameTime {first} to {last} has no exact "
+                                 f"stream after it: recorded without tagpu_rec.exact")
+            out.append((RB_STREAM, first, last, ex[3]))
+            offs.append((offsets[k][0], offsets[k + 1][1]))
+            k += 2
+            continue
+        out.append(bl[k])
+        offs.append(offsets[k])
+        k += 1
+    return out, offs
+
+
+def load(path, sizes=None, timeline=0, exact=False):
     """(the first header, the chain's blocks, why the reading stopped). The blocks of timeline 0
     are the first segment's alone, as they were written, whatever follows; timeline N's are each
     chain segment's to the GameTime before its child's fork_at, the child's header replaced by a
     marker (RB_BOUNDARY, fork_at, fork_at, the child's header), then the next. `stop` is the
-    file's when the chain's last segment is the file's last, else None."""
+    file's when the chain's last segment is the file's last, else None. With `exact`, the stream
+    is the exact one (exact_blocks), and `sizes` is not taken."""
     offsets = []
-    bl, stop = blocks(path, sizes, offsets)
+    bl, stop = blocks(path, None if exact else sizes, offsets)
+    if exact:
+        bl, offsets = exact_blocks(bl, offsets)
     if not bl or bl[0][0] != RB_HEADER:
         raise Unreadable(f"{path}: no header block" + (f" ({stop})" if stop else ""))
     segs = segments(bl, offsets)
@@ -1511,7 +1582,16 @@ def cmd_info(path):
     nsec = sum(1 for s, f in stream if f & RBF_SECTIONS)
     print(f"  stream blocks: {len(stream)}, {nsec} sectioned "
           f"({sum(1 for s, f in stream if f & RBF_FRAME_RESET)} restarting the frame), "
-          f"{len(stream) - nsec} records")
+          f"{len(stream) - nsec} records; {sum(1 for s, f in stream if f & RBF_REFRESH)} end at a "
+          f"refresh")
+    hold = h.get("hold")
+    if hold:
+        print(f"  the stream holds {sum(bin(b).count('1') for b in hold['unit'])} bits of a unit "
+              f"image and {sum(bin(b).count('1') for b in hold['node'])} of a main list node, "
+              f"flags {hold['flags']:#x}, between refreshes every {hold['refresh']} GameTimes "
+              f"(table {hold['sha'].hex()[:12]})")
+    else:
+        print("  the stream holds nothing: no RT_HOLD")
     for k, first, last, r, pk in sizes:
         if k == RB_SNAPSHOT:
             print(f"  snapshot at GameTime {last}: {r} bytes raw, {pk} packed")
@@ -1599,6 +1679,23 @@ def file_segments(path, decode=False):
     return segments(bl, offsets), stop
 
 
+def refresh_at(path, timeline, T):
+    """The GameTime a takeover of `timeline` asked for at T starts from, as tagpu_recreader.c's
+    recr_refresh_at finds it: in the chain's segment whose part holds T, the largest `last` <= T
+    of a stream block flagged RBF_REFRESH, or the segment's first iteration. Unreadable when T is
+    outside the chain."""
+    offsets, flags = [], []
+    bl, _ = blocks(path, None, offsets, flags=flags, decode=False)
+    fl = {id(b): f for b, f in zip(bl, flags)}
+    ch = chain(segments(bl, offsets), timeline)
+    for i, s in enumerate(ch):
+        end = ch[i + 1]["fork_at"] - 1 if i + 1 < len(ch) else s["last"]
+        if s["first"] is not None and s["first"] <= T <= end:
+            return max([s["first"]] + [b[2] for b in s["blocks"] if b[0] == RB_STREAM and
+                                       fl[id(b)] & RBF_REFRESH and b[2] <= T])
+    raise Unreadable(f"GameTime {T} is outside timeline {timeline}'s chain")
+
+
 def seek_start(path, timeline, T, lead):
     """Where the DLL's reader builds a seek to T of `timeline` from, as recr_seek
     (tagpu_recreader.c) chooses it from the file's index: (S, from_snapshot). The last snapshot of
@@ -1642,8 +1739,8 @@ def cmd_segments(path):
     return 0
 
 
-def cmd_check(path, timeline=0):
-    h, bl, stop = load(path, timeline=timeline)
+def cmd_check(path, timeline=0, exact=False):
+    h, bl, stop = load(path, timeline=timeline, exact=exact)
     bad, seen = 0, 0
     gnames = known_names(h)
 
@@ -1673,6 +1770,273 @@ def cmd_check(path, timeline=0):
     for line in ec.lines:
         print("  " + line)
     return 1 if bad or w.corrections or ec.n else 0
+
+
+# ---- the lossy stream against the exact one ---------------------------------------------------
+
+def iterations(payload):
+    """(GameTime, its records' bytes) for each iteration of a stream block's records: an
+    RK_TICK and the records up to the next. Unreadable for a block that begins otherwise."""
+    head = _REC_HEAD.unpack_from
+    at, n, start, tick = 0, len(payload), None, None
+    while at + 4 <= n:
+        kind, ln = head(payload, at)
+        if kind == RK_TICK:
+            if ln != 4:
+                raise Unreadable(f"an RK_TICK of {ln} bytes")
+            if start is not None:
+                yield tick, payload[start:at]
+            start, tick = at, struct.unpack_from("<I", payload, at + 4)[0]
+        elif start is None:
+            raise Unreadable("a stream block that does not begin with an RK_TICK")
+        at += (4 + ln + 3) & ~3
+    if at != n:
+        raise Unreadable("a record cut short at the end of a stream block")
+    if start is not None:
+        yield tick, payload[start:n]
+
+
+class Held:
+    """The units, their liveness and their order lists as one stream builds them -- the lossy
+    stream's or the exact one's -- with the slots and lists each iteration touched, the bytes of
+    the iteration's other records in order, and each touched thing as it was before."""
+
+    def __init__(self, slots):
+        import numpy as np
+        self.np = np
+        self.units = np.zeros((slots, REC_UNIT_DWORDS), np.uint32)
+        self.live = np.zeros(slots, bool)
+        self.lists = {}
+        self.slots = slots
+
+    def iteration(self, recs):
+        np = self.np
+        head = _REC_HEAD.unpack_from
+        prev, prev_lists, other = {}, {}, []
+        pend = None
+        at, n = 0, len(recs)
+        while at < n:
+            kind, ln = head(recs, at)
+            size = (4 + ln + 3) & ~3
+            if kind in (RK_UNIT, RK_UNIT_DELTA, RK_UNIT_GONE, RK_ORDERS):
+                if ln < 2:
+                    raise Unreadable(f"a {kind} record of {ln} bytes")
+                s = _U16(recs, at + 4)[0]
+                if not 1 <= s < self.slots:
+                    raise Unreadable(f"slot {s} of {self.slots}")
+                if s not in prev:
+                    prev[s] = (bool(self.live[s]), self.units[s].copy())
+                if kind == RK_UNIT:
+                    if ln != 4 + REC_UNIT_IMAGE:
+                        raise Unreadable(f"an RK_UNIT of {ln} bytes")
+                    self.units[s] = np.frombuffer(recs, "<u4", REC_UNIT_DWORDS, at + 8)
+                    self.live[s] = True
+                elif kind == RK_UNIT_GONE:
+                    self.live[s] = False
+                    for k in (0, 1):
+                        prev_lists.setdefault((s, k), self.lists.get((s, k), b""))
+                        self.lists.pop((s, k), None)
+                elif kind == RK_UNIT_DELTA:
+                    if not self.live[s] or ln < REC_UNIT_DELTA_HEAD:
+                        raise Unreadable(f"a delta of slot {s}, not live, or short")
+                    bits = int.from_bytes(recs[at + 6:at + 6 + REC_UNIT_BITS], "little")
+                    sel = [d for d in range(REC_UNIT_DWORDS) if bits >> d & 1]
+                    if bits >> REC_UNIT_DWORDS or ln != REC_UNIT_DELTA_HEAD + 4 * len(sel):
+                        raise Unreadable(f"a malformed delta of slot {s}")
+                    self.units[s, sel] = np.frombuffer(recs, "<u4", len(sel),
+                                                       at + 4 + REC_UNIT_DELTA_HEAD)
+                else:
+                    lst, zero, total, first = struct.unpack_from("<BBHH", recs, at + 6)
+                    body = bytes(recs[at + 12:at + 4 + ln])
+                    if lst > 1 or zero or (ln - 8) % REC_ORDER_IMAGE or not self.live[s]:
+                        raise Unreadable(f"a malformed order list of slot {s}")
+                    if first == 0:
+                        if pend is not None:
+                            raise Unreadable(f"slot {pend[0]}'s list unfinished")
+                        pend = [s, lst, total, 0, []]
+                    elif pend is None or pend[:4] != [s, lst, total, first]:
+                        raise Unreadable(f"an order list of slot {s} out of order")
+                    pend[4].append(body)
+                    pend[3] = first + len(body) // REC_ORDER_IMAGE
+                    if pend[3] > total:
+                        raise Unreadable(f"an order list of slot {s} past its length")
+                    if pend[3] == total:
+                        prev_lists.setdefault((s, lst), self.lists.get((s, lst), b""))
+                        img = b"".join(pend[4])
+                        if img:
+                            self.lists[(s, lst)] = img
+                        else:
+                            self.lists.pop((s, lst), None)
+                        pend = None
+            else:
+                if pend is not None:
+                    raise Unreadable(f"slot {pend[0]}'s list unfinished")
+                other.append(recs[at:at + size])
+            at += size
+        if pend is not None:
+            raise Unreadable(f"slot {pend[0]}'s list unfinished")
+        return prev, prev_lists, b"".join(other)
+
+
+def lossy_chain(path, timeline):
+    """(the chain's segments, each block's flags by the block, why the reading stopped)."""
+    offsets, flags = [], []
+    bl, stop = blocks(path, None, offsets, flags=flags)
+    fl = {id(b): f for b, f in zip(bl, flags)}
+    if not bl or bl[0][0] != RB_HEADER:
+        raise Unreadable(f"{path}: no header block" + (f" ({stop})" if stop else ""))
+    return chain(segments(bl, offsets), timeline), fl, stop
+
+
+def cmd_lossy_check(path, timeline=0, to=None):
+    """The lossy stream against the exact one (RB_EXACT, the test lever tagpu_rec.exact), an
+    iteration at a time, as tagpu_reclossy.c's invariants state them:
+      (a) every shown byte exact: each unit's liveness, each live unit's image outside RT_HOLD's
+          unit mask, each main order list outside the node mask and each sub list whole; every
+          other record -- the players, tables, globals, projectiles, wrecks, cells, explored map,
+          perspective, events and corrections -- byte for byte, in order;
+      (b) every held byte a value the engine produced: a unit dword's held bits the stream's
+          previous value or the exact one, an order list the stream's previous or the exact one;
+      (c) the two worlds equal byte for byte at the end of every RBF_REFRESH block, every
+          snapshot after a refresh block, and a refresh at the segment's first iteration and at
+          every GameTime 1 modulo RT_HOLD's interval, as the takeover's rounding reads them;
+      (e) RT_HOLD in every skirmish segment's header, and the exact stream's blocks and
+          iterations the stream's.
+    Held sprays and cells (RT_HOLD's RECL_SPRAYS, RECL_CELLS) are refused as unreadable: this
+    check does not know their rules."""
+    import numpy as np
+    ch, fl, stop = lossy_chain(path, timeline)
+    lines, bad = [], 0
+    n_iter = n_refresh = n_snap = 0
+    last = None
+
+    def fail(msg):
+        nonlocal bad
+        bad += 1
+        if len(lines) < 20:
+            lines.append(msg)
+
+    for i, seg in enumerate(ch):
+        h = seg["header"]
+        cut = ch[i + 1]["fork_at"] - 1 if i + 1 < len(ch) else None
+        if to is not None:
+            cut = to if cut is None else min(cut, to)
+        hold = h.get("hold")
+        if h.get("mode") == 3:
+            interval, hu, hn = REC_REFRESH_TICKS, bytes(REC_UNIT_IMAGE), bytes(REC_ORDER_IMAGE)
+        elif hold is None:
+            fail(f"timeline {seg['id']}: a skirmish header without RT_HOLD")
+            break
+        else:
+            if hold["flags"]:
+                raise Unreadable(f"RT_HOLD's flags {hold['flags']:#x}: held cells and sprays "
+                                 f"are not checked here")
+            interval, hu, hn = hold["refresh"], hold["unit"], hold["node"]
+        H = np.frombuffer(hu, "<u4")
+        HN = np.frombuffer(hn, "<u4")
+        node_held = HN.any()
+        D, W = Held(h["slots"]), Held(h["slots"])
+        bl = seg["blocks"]
+        first_iter = True
+        k = 1
+        done = False
+        prev_stream = None
+        while k < len(bl) and not done:
+            kind, first, lastb, payload = bl[k]
+            if kind == RB_SNAPSHOT:
+                if cut is None or lastb <= cut:
+                    n_snap += 1
+                    if prev_stream is None or prev_stream[1] != lastb or \
+                            not fl[id(prev_stream[0])] & RBF_REFRESH:
+                        fail(f"the snapshot at GameTime {lastb} does not follow a refresh block")
+                k += 1
+                continue
+            if kind == RB_EXACT:
+                fail(f"an exact block of GameTime {first} to {lastb} after no stream block")
+                k += 1
+                continue
+            if kind != RB_STREAM:
+                k += 1
+                continue
+            ex = bl[k + 1] if k + 1 < len(bl) else None
+            if ex is None or ex[0] != RB_EXACT or ex[1:3] != (first, lastb):
+                raise Unreadable(f"the stream block of GameTime {first} to {lastb} has no exact "
+                                 f"stream after it: recorded without tagpu_rec.exact")
+            refresh_block = fl[id(bl[k])] & RBF_REFRESH
+            prev_stream = (bl[k], lastb)
+            its, xits = list(iterations(payload)), list(iterations(ex[3]))
+            if len(its) != len(xits):
+                fail(f"the block of GameTime {first} to {lastb}: {len(its)} iterations, the "
+                     f"exact stream's {len(xits)}")
+            pairs = list(zip(its, xits))
+            for j, ((t, recs), (tx, xrecs)) in enumerate(pairs):
+                if t != tx:
+                    fail(f"iteration GameTime {t} against the exact stream's {tx}")
+                    done = True
+                    break
+                if cut is not None and t > cut:
+                    done = True
+                    break
+                n_iter += 1
+                last = t
+                is_refresh = first_iter or t % interval == 1
+                ends = j == len(pairs) - 1
+                if is_refresh != (ends and bool(refresh_block)):
+                    fail(f"GameTime {t}: " + ("a refresh iteration that does not end a refresh "
+                                              "block" if is_refresh else
+                                              "a refresh block ending off the grid"))
+                first_iter = False
+                pd, pdl, od = D.iteration(recs)
+                pw, pwl, ow = W.iteration(xrecs)
+                if od != ow:
+                    fail(f"GameTime {t}: the records other than units and order lists differ")
+                slots = sorted(set(pd) | set(pw))
+                if slots:
+                    sl = np.array(slots)
+                    dl, wl = D.live[sl], W.live[sl]
+                    for s in sl[dl != wl]:
+                        fail(f"GameTime {t}: slot {s} live {bool(D.live[s])} against "
+                             f"{bool(W.live[s])}")
+                    lv = sl[dl & wl]
+                    du, wu = D.units[lv], W.units[lv]
+                    for r in np.nonzero(((du ^ wu) & ~H).any(axis=1))[0]:
+                        fail(f"GameTime {t}: slot {lv[r]}'s shown bytes differ")
+                    if H.any():
+                        pv = np.array([pd[s][1] if s in pd else D.units[s] for s in lv])
+                        pl = np.array([pd[s][0] if s in pd else True for s in lv])
+                        ok = ((du & H) == (wu & H)) | (((du & H) == (pv & H)) & pl[:, None])
+                        for r in np.nonzero(~ok.all(axis=1))[0]:
+                            fail(f"GameTime {t}: slot {lv[r]}'s held bytes are neither the "
+                                 f"stream's last nor the exact ones")
+                for key in sorted(set(pdl) | set(pwl)):
+                    a, b = D.lists.get(key, b""), W.lists.get(key, b"")
+                    if a == b:
+                        continue
+                    shown = key[1] == 0 and node_held and len(a) == len(b) and not (
+                        (np.frombuffer(a, "<u4").reshape(-1, REC_ORDER_IMAGE // 4) ^
+                         np.frombuffer(b, "<u4").reshape(-1, REC_ORDER_IMAGE // 4)) & ~HN).any()
+                    if not shown:
+                        fail(f"GameTime {t}: slot {key[0]}'s {'sub' if key[1] else 'main'} "
+                             f"list's shown bytes differ")
+                    elif a != pdl.get(key, a):
+                        fail(f"GameTime {t}: slot {key[0]}'s main list is neither the stream's "
+                             f"last nor the exact one")
+                if is_refresh:
+                    n_refresh += 1
+                    if not (np.array_equal(D.live, W.live) and
+                            np.array_equal(D.units[D.live], W.units[W.live]) and
+                            D.lists == W.lists):
+                        fail(f"GameTime {t}: the stream's world is not the exact copy at a "
+                             f"refresh")
+            k += 2
+    print(f"{path}: lossy-check of timeline {timeline}: {n_iter} iterations to GameTime {last}, "
+          f"{n_refresh} refreshes, {n_snap} snapshots; "
+          + ("every shown byte exact, every held byte the stream's last or the exact one, and "
+             "the stream's world the exact copy at every refresh" if not bad else
+             f"{bad} FAILURES") + (f"; stopped at {stop}" if stop else ""))
+    for line in lines:
+        print("  " + line)
+    return 1 if bad or not n_iter else 0
 
 
 def cmd_pov(path, check):
@@ -1966,8 +2330,8 @@ def known_names(h):
         return None
 
 
-def cmd_compare(path, dumps, puppet=False, timeline=0):
-    h, bl, stop = load(path, timeline=timeline)
+def cmd_compare(path, dumps, puppet=False, timeline=0, exact=False):
+    h, bl, stop = load(path, timeline=timeline, exact=exact)
     status = 0
     held = puppet_rows() if puppet else None
     gslots = globals_list(h.get("globals"))[2] if puppet else None
@@ -2666,9 +3030,23 @@ def main(argv):
     takeover = argv[1:2] == ["compare-dumps"] and "--takeover" in argv
     if takeover:
         argv = [a for a in argv if a != "--takeover"]
+    exact = "--exact" in argv
+    if exact:
+        if argv[1:2] not in (["check"], ["compare"]):
+            print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
+            return 2
+        argv = [a for a in argv if a != "--exact"]
+    to = None
+    if "--to" in argv:
+        k = argv.index("--to")
+        if argv[1:2] != ["lossy-check"] or k + 1 >= len(argv) or not argv[k + 1].isdigit():
+            print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
+            return 2
+        to = int(argv[k + 1])
+        argv = argv[:k] + argv[k + 2:]
     if "--timeline" in argv:
         k = argv.index("--timeline")
-        if argv[1:2] not in (["check"], ["compare"]) or k + 1 >= len(argv) or \
+        if argv[1:2] not in (["check"], ["compare"], ["lossy-check"]) or k + 1 >= len(argv) or \
                 not argv[k + 1].isdigit():
             print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
             return 2
@@ -2704,8 +3082,8 @@ def main(argv):
         pov_eye, argv = (n, view, seat), argv[:k]
     if len(argv) < 3 or argv[1] not in ("info", "check", "compare", "compare-dumps", "counts",
                                         "compare-counts", "images-gate", "scan", "segments",
-                                        "compare-fork", "pov") or \
-            (argv[1] == "pov" and len(argv) != 3) or \
+                                        "compare-fork", "pov", "lossy-check") or \
+            (argv[1] in ("pov", "lossy-check") and len(argv) != 3) or \
             (argv[1] == "segments" and len(argv) != 3) or \
             (argv[1] == "compare-fork" and (len(argv) != 4 or not argv[3].isdigit())) or \
             (argv[1] == "compare" and len(argv) < 4) or (images and len(argv) != 4) or \
@@ -2719,7 +3097,9 @@ def main(argv):
         if argv[1] == "info":
             return cmd_info(argv[2])
         if argv[1] == "check":
-            return cmd_check(argv[2], timeline)
+            return cmd_check(argv[2], timeline, exact)
+        if argv[1] == "lossy-check":
+            return cmd_lossy_check(argv[2], timeline, to)
         if argv[1] == "segments":
             return cmd_segments(argv[2])
         if argv[1] == "pov" and pov_eye:
@@ -2746,7 +3126,7 @@ def main(argv):
         if argv[1] == "compare-counts":
             return cmd_compare_counts(argv[2], *argv[3:7], absent or str(
                 Path(__file__).resolve().parents[2] / "tagpu" / "ddraw" / "replay-absent.tsv"), rewind)
-        return cmd_compare(argv[2], argv[3:], puppet, timeline)
+        return cmd_compare(argv[2], argv[3:], puppet, timeline, exact)
     except (Unreadable, OSError, struct.error, KeyError) as e:
         print(f"tarec: {e}", file=sys.stderr)
         return 2

@@ -7,11 +7,18 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
 
     outcomes                 SECTIONS, DECLINED and MISMATCH from synthetic payloads of units and
                              projectiles, each followed by a block that restarts (codectest.c)
-    transcode IN OUT [--snap-every N]
+    transcode IN OUT [--snap-every N] [--skirmish]
                              every stream block decoded and written again through the writer's
                              codec: 0 declined and 0 mismatched expected; with N, every Nth
                              snapshot of a segment kept (0: none) and the stream restarting only
-                             after those, as a writer N times IN's snapshot interval would write
+                             after those, as a writer N times IN's snapshot interval would write;
+                             with --skirmish, a skirmish header without RT_HOLD labelled with one
+                             that holds nothing
+    lossy IN OUT [--exact]   the writer's path over IN's exact records: the lossy filter with the
+                             build's hold table, the refreshes, the blocks and the codec, IN's
+                             snapshots kept where a writer would take one; with --exact, each
+                             stream block's exact records after it (RB_EXACT). Prints the
+                             iterations whose records differ from IN's
     verify IN                each stream block's records from the C decoder against the Python
                              reader's, which decodes twice -- skipping the resting units and
                              evaluating every candidate -- and the C sine table against its formula
@@ -27,7 +34,8 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
 
 --native builds tests/codectest-asan.exe with the host's gcc and -fsanitize=address,undefined and
 runs that instead of tests/codectest.exe under Wine (WINEPREFIX: the main checkout's wineprefix/).
-IN is a recording of format 12. Exit 0 when every check holds, 1 when one fails, 2 when it cannot
+IN is a recording of format 13; transcode and lossy also read a records-only one (no sectioned
+block) of format 12 or later, and write format 13. Exit 0 when every check holds, 1 when one fails, 2 when it cannot
 run. Needs numpy, numba and zstandard (devpy.ensure() re-executes under the shared venv).
 """
 import os
@@ -53,8 +61,9 @@ def build_native():
     # RECF_TEST_COPY: the frames' copies, which only this test calls (inc/tagpu_recframe.h)
     cmd = ["gcc", "-std=c99", "-Wall", "-Iinc", "-Isrc", "-DRECF_TEST_COPY", "-O1", "-g",
            "-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-o", str(NATIVE),
-           "tests/codectest.c", *frames, "src/zstd.c"]
+           "tests/codectest.c", *frames, "src/tagpu_reclossy.c", "src/zstd.c"]
     srcs = [DDRAW / "tests/codectest.c", DDRAW / "src/tagpu_reccodec.c", DDRAW / "inc/tagpu_reccodec.h",
+            DDRAW / "src/tagpu_reclossy.c", DDRAW / "inc/tagpu_reclossy.h", DDRAW / "inc/tagpu_rechold.h",
             DDRAW / "inc/tagpu_recframe.h", DDRAW / "inc/tagpu_recfmt.h", DDRAW / "inc/tagpu_reclanes.h",
             DDRAW / "src/zstd.c", *(DDRAW / f for f in frames)]
     if NATIVE.exists() and all(NATIVE.stat().st_mtime >= s.stat().st_mtime for s in srcs):
@@ -245,7 +254,7 @@ def main(argv):
         print(__doc__)
         return 2
     cmd, args = argv[0], argv[1:]
-    if cmd in ("outcomes", "transcode", "fuzz", "decode"):
+    if cmd in ("outcomes", "transcode", "lossy", "fuzz", "decode"):
         return run(native, cmd, *args)[0]
     devpy.ensure()
     if cmd == "verify" and len(args) == 1:
