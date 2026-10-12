@@ -2126,6 +2126,12 @@ static void ev_events(RecBytes* b, const uint32_t units[][NDW], int variant)
     memset(e, 0, 4);
     put32(e, 4);                                         /* its script slice: the ID again */
     rec_put(b, RK_EV_SLICE, e, 4);
+    for (i = 0; i < REC_QUERIES; i++) {                  /* its queries, each of the two */
+        memset(e, 0, 8);
+        put32(e, 4);
+        e[4] = (unsigned char)i;
+        rec_put(b, RK_EV_QUERY, e, 8);
+    }
     memset(e, 0, 32);
     put32(e, 5);                                         /* a network create */
     e[4] = 13; put32(e + 8, 77); put32(e + 12, 0x600000);

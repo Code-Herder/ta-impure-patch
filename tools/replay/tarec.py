@@ -198,7 +198,8 @@ def mapped_bytes(w, h):
  RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
  RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT, RK_COUNTS,
  RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE, RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT,
- RK_SPRAY_SESSION, RK_EV_SLICE) = range(58)
+ RK_SPRAY_SESSION, RK_EV_SLICE, RK_EV_QUERY) = range(59)
+REC_QUERIES = 2                           # RK_EV_QUERY's queries: QueryBuildInfo, QueryNanoPiece
 
 # THE PERSPECTIVE's payloads (tagpu_recpov.h)
 REC_POV = struct.Struct("<BBBBHHIiiiii")   # player, every, flags, zero, view_w, view_h, zoom,
@@ -224,7 +225,7 @@ EVENTS = {RK_EV_CREATE: "create", RK_EV_NET_CREATE: "network create", RK_EV_DEAT
           RK_EV_START_NAMED: "owner's start", RK_EV_BUILT: "build done", RK_EV_STATE: "state byte",
           RK_EV_REPLY: "reply", RK_EV_SPRAY: "nano spray", RK_EV_FEATURE: "feature call",
           RK_EV_FEATURE_END: "feature call's end", RK_EV_DRAW: "feature draw",
-          RK_EV_DEATH_END: "death's end", RK_EV_SLICE: "script slice"}
+          RK_EV_DEATH_END: "death's end", RK_EV_SLICE: "script slice", RK_EV_QUERY: "owner's query"}
 FR_TICK, FR_SPAWN, FR_DESTROY, FR_DIE, FR_BURN, FR_DAMAGE, FR_SWAP, FR_CORPSE = range(8)
 REC_PHASE_LATE = 2                        # RK_EV_FEATURE's phase byte at most (tagpu_recfmt.h)
 ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12, 32)     # an RK_EV_FEATURE's arguments after its site
@@ -909,6 +910,17 @@ class World:
             if not 1 <= slot < self.slots:
                 raise Unreadable(f"a script slice of slot {slot}, outside the array")
             return kind, b
+        if kind == RK_EV_QUERY:
+            # an order handler's query, in the unit tick: inside no bracket, a slot of the level's
+            # (tagpu_recreader.c, event_take)
+            if self.fbracket or self.deaths:
+                raise Unreadable("an owner's query inside a feature call or a death")
+            if len(b) != 8 or b[4] >= REC_QUERIES or any(b[5:8]):
+                raise Unreadable(f"an owner's query of {len(b)} bytes, query {b[4] if len(b) > 4 else '-'}")
+            slot = struct.unpack_from("<I", b)[0] - 1
+            if not 1 <= slot < self.slots:
+                raise Unreadable(f"an owner's query of slot {slot}, outside the array")
+            return kind, b
         if kind == RK_CELLS and (self.fbracket or self.deaths):
             if self.fbracket != FR_TICK + 1:
                 raise Unreadable("cells inside a feature call that is not the tick's")
@@ -1581,9 +1593,10 @@ class EventCheck:
     iterations, a unit that appears must have its create, one that disappears its death, one whose
     state byte +0x10E changed a state event with the new byte, and one whose build fraction +0x104
     reached 0.0 its build done -- unless the slot died and was made again in the step, which the
-    create and the death both name. Within an iteration's events a script slice names a unit live
-    at its point -- in the iteration's images, or created earlier in its events and not dead since
-    -- and a slot at most once (tagpu_recfmt.h, RK_EV_SLICE)."""
+    create and the death both name. Within an iteration's events a script slice and an owner's
+    query name a unit live at its point -- in the iteration's images, or created earlier in its
+    events and not dead since -- and a script slice a slot at most once (tagpu_recfmt.h,
+    RK_EV_SLICE, RK_EV_QUERY)."""
 
     def __init__(self, limit=20):
         self.open = False           # an iteration has begun
@@ -1663,6 +1676,11 @@ class EventCheck:
                 if slot in sliced:
                     self.note(f"the events of GameTime {tick}: slot {slot}'s script slice twice")
                 sliced.add(slot)
+            elif kind == RK_EV_QUERY:
+                slot = struct.unpack_from("<I", b)[0] - 1
+                if slot not in live:
+                    self.note(f"the events of GameTime {tick}: an owner's query of slot {slot}, "
+                              f"which holds no live unit there")
 
     def transition(self, was, events, now, tick):
         self.checked += 1

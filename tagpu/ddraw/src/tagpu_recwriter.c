@@ -1171,7 +1171,10 @@ static int list_record(Writer* w, unsigned kind, const unsigned char* b, unsigne
    deaths. A draw is inside one, FS_SOURCE inside the tick only, of a recording whose playing
    keeps the engine's slots: a multiplayer one, or one that holds its cells (RECL_CELLS). A script
    slice is inside none: the unit tick that marks it runs inside no feature call and no death
-   (its only caller is the step's stub at 0x4954ED), and its ID is a slot of the level's.
+   (its only caller is the step's stub at 0x4954ED), and its ID is a slot of the level's. An
+   owner's query is inside none either: its order handlers make it only from the unit tick's order
+   runs 0x43B7C0 and 0x43BAD0, never from the destructor's event-2 call (tagpu_recorder.c, THE
+   OWNER'S QUERIES).
    INVARIANT, an ordering: the copy's grid takes exactly the cells every reader and the encoder
    take as images. Their rule (tagpu_recreader.c, apply; reccodec's events flag; codectest's
    world_apply) is that an RK_CELLS is an image when no RCS_EVENTS record came before it in its
@@ -1246,6 +1249,11 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
         break;
     case RK_EV_SLICE:
         if (len != 4) return 0;
+        memcpy(&id, b, 4);
+        if (!w->ticked || open || !slot_ok(w, id - 1u)) return 0;
+        break;
+    case RK_EV_QUERY:
+        if (len != 8 || b[4] >= REC_QUERIES || b[5] || b[6] || b[7]) return 0;
         memcpy(&id, b, 4);
         if (!w->ticked || open || !slot_ok(w, id - 1u)) return 0;
         break;
@@ -1527,6 +1535,7 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     case RK_EV_DEATH:
     case RK_EV_DEATH_END:
     case RK_EV_SLICE:
+    case RK_EV_QUERY:
         return feature_record(w, kind, b, len);
     case RK_GLOBALS:
     case RK_GLOBALS_DELTA:

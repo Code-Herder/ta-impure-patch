@@ -124,7 +124,7 @@ def section_of(kind):
     if kind == tarec.RK_ORDERS:
         return RCS_ORDERS
     if tarec.RK_EV_CREATE <= kind <= tarec.RK_EV_DEATH_END or kind == tarec.RK_EV_NET_CREATE or \
-            kind == tarec.RK_EV_SLICE:
+            kind == tarec.RK_EV_SLICE or kind == tarec.RK_EV_QUERY:
         return RCS_EVENTS
     if kind in (tarec.RK_GLOBALS, tarec.RK_GLOBALS_DELTA, tarec.RK_PLAYER, tarec.RK_PLAYER_DELTA,
                 tarec.RK_WRECK, tarec.RK_FEATURES):
@@ -1968,11 +1968,11 @@ assert 1 <= _EV_COLS <= FRAME_COLS_MAX
 assert max(24 + NAME_MAX, 12 + TEXT_MAX, 8 + int(_ROOT_ARGS.max()), NET_CREATE) <= _EV_BODY_MAX <= BODY_MAX
 (RK_EV_CREATE, RK_EV_DEATH, RK_EV_INTERCEPT, RK_EV_START, RK_EV_START_NAMED, RK_EV_BUILT,
  RK_EV_STATE, RK_EV_REPLY, RK_EV_SPRAY, RK_EV_FEATURE, RK_EV_FEATURE_END, RK_EV_DRAW,
- RK_EV_DEATH_END, RK_EV_NET_CREATE, RK_EV_SLICE) = (
+ RK_EV_DEATH_END, RK_EV_NET_CREATE, RK_EV_SLICE, RK_EV_QUERY) = (
     tarec.RK_EV_CREATE, tarec.RK_EV_DEATH, tarec.RK_EV_INTERCEPT, tarec.RK_EV_START,
     tarec.RK_EV_START_NAMED, tarec.RK_EV_BUILT, tarec.RK_EV_STATE, tarec.RK_EV_REPLY,
     tarec.RK_EV_SPRAY, tarec.RK_EV_FEATURE, tarec.RK_EV_FEATURE_END, tarec.RK_EV_DRAW,
-    tarec.RK_EV_DEATH_END, tarec.RK_EV_NET_CREATE, tarec.RK_EV_SLICE)
+    tarec.RK_EV_DEATH_END, tarec.RK_EV_NET_CREATE, tarec.RK_EV_SLICE, tarec.RK_EV_QUERY)
 _M_LAST, _M_NAMES, _M_TEXTS, _M_DEATHS = range(4)
 
 
@@ -2304,7 +2304,7 @@ def _events_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
                 _col_bytes(sec, cols, _EV_DRAW, body, 4, 8)):
             return -_fail(err, E_EV_CUT, kind, _EV_DRAW)
         return 12
-    if kind == RK_EV_BUILT or kind == RK_EV_STATE:
+    if kind == RK_EV_BUILT or kind == RK_EV_STATE or kind == RK_EV_QUERY:
         i, ok = _ev_id(st, sec, cols)
         if not ok:
             return -_fail(err, E_EV_CUT, kind, _EV_ID)

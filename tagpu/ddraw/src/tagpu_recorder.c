@@ -315,6 +315,7 @@ static unsigned s_bad;                   /* pointers outside their tables, this 
 static unsigned s_badlog;                /* of them, the ones logged                           */
 static unsigned s_smarks, s_sfulls;      /* script slices marked, and steps that marked every
                                             slice, this recording (THE SLICE MARKERS)          */
+static unsigned s_queries;               /* the owner's queries recorded (THE OWNER'S QUERIES) */
 
 static unsigned char s_mp_sites, s_mp_tried;
 static RecMpChatInbox* s_mp_chat_inbox;
@@ -2714,8 +2715,8 @@ static void rec_end(Rec* r, unsigned reason)
                                             "with" :
                                             "INCOMPLETE, the recorded mode or contribution authority ended", s_bad,
                off, r->uncredited, r->oodd);
-    tagpu_logf("recorder: %u script slices marked, %u steps marking every slice", s_smarks,
-               s_sfulls);
+    tagpu_logf("recorder: %u script slices marked, %u steps marking every slice, %u owner's queries",
+               s_smarks, s_sfulls, s_queries);
     feat_log(r);
     tagpu_logf("recorder: the projectiles: %u record images; the pool's written extent reached %u "
                "of its %u records", r->jimages, r->jhw, (unsigned)TAGPU_LIM_PROJ);
@@ -5045,6 +5046,56 @@ void tagpu_rec_slice_given(unsigned where)
     if (cnt_on()) cnt_add(0x0048ADEBu, 0, where);
 }
 
+/* THE OWNER'S QUERIES. A COB query, 0x4B0BC0(name, &a0, a1, a2, a3) thiscall on a unit's COB
+   object, runs one thread of that object to its end at once (0x4B0C40) and can change the object's
+   statics and pieces. Two of the engine's query sites run only in an order handler, which only the
+   unit's owner's machine runs: QueryBuildInfo, whose only call is BuildingBuild's state dispatch
+   at 0x4027FB, and QueryNanoPiece, whose only call is 0x4B0BC0 at 0x43E427 inside 0x43E400(unit,
+   out), which fifteen order handlers call (the engine map, *The owner's COB queries*). Each order
+   handler runs from the unit tick's order runs, 0x43B7C0 at 0x48AF98 and 0x43BAD0 at 0x48AF9E,
+   in the unit's turn after its slice (0x48ADEB), or with event 2 from the destructor's 0x43A1F0,
+   which BuildingBuild and the four other build handlers return on before either query (the
+   engine map, *The nano spray*); so a query is inside no death and no feature call. A playing runs
+   no order handler, so the recording carries each query as RK_EV_QUERY {ID, the query} at its
+   place, and the playing makes it there through the same 0x4B0BC0 with the same arguments
+   (tagpu_replay.c, THE OWNER'S QUERIES). The query's COB is noted in the slice set too, so a slice
+   of that object later in the step would be marked: every entry into a COB outside a slice that
+   the playing makes from the recording is noted (THE SLICE MARKERS, A SUPERSET IS EXACT). A
+   multiplayer recording carries the recording machine's own queries the same way; another
+   machine's are made on its own copy of the unit, which no recording of this one holds. */
+/* `ecx`, when the site has it, is the COB object the call is made on, which must be the unit's */
+static void rec_query(Rec* r, const char* unit, const unsigned* ecx, unsigned query)
+{
+    unsigned char b[8] = { 0 };
+    unsigned id = ev_unit(r, unit), cob;
+    if (!id) return;                                   /* not a slot: id_of counts it */
+    cob = *(const unsigned*)(unit + U_COB);
+    if (ecx && *ecx != cob) {
+        s_bad++;                                       /* not the unit the disassembly says */
+        return;
+    }
+    slice_note(PTR(cob));
+    memcpy(b, &id, 4);
+    b[4] = (unsigned char)query;
+    ev_put(r, RK_EV_QUERY, b, sizeof b);
+    s_queries++;
+}
+
+/* QueryBuildInfo's call 0x4027FB, a stub in front of 0x4B0BC0 built like the owner-only starts'
+   (THE OWNER-ONLY STARTS): `mov ecx,[edi+0x9A]` at 0x4027E5 loads the COB object from the unit
+   that `mov edi,[esp+0x44]` (0x4027D9) took, the handler's first argument, and edi holds it until
+   the call; the name is `push 0x501330` at 0x4027EE */
+#define QUERY_BUILD_CALL 0x004027FBu
+#define QUERY_BUILD_MOV  0x004027E5u
+#define QUERY_BUILD_NAME 0x004027EEu
+static int __cdecl ev_query_build(void* E)
+{
+    Rec* r = ev_rec();
+    unsigned ecx = REG_ECX(E);
+    if (r) rec_query(r, PTR(REG_EDI(E)), &ecx, REC_QUERY_BUILDINFO);
+    return 0;
+}
+
 /* The build-done 0x41B8D0(builder, built): its own tests make a call on a dead or absent unit
    inert, so every call is recorded as made. */
 static int __cdecl ev_built(void* E)
@@ -5364,8 +5415,10 @@ static int __cdecl ev_start_site(void* E, unsigned site)
    recorded with ID 0 and counted in skirmish; multiplayer refuses an uncredited spray. */
 static int __cdecl ev_nano_query(void* E)
 {
+    Rec* r = ev_rec();
     cnt(0x0043E400u, ARG(E, 0), 0);
-    if (ev_rec() || (s_mp_tid && GetCurrentThreadId()==s_mp_tid)) {
+    if (r) rec_query(r, PTR(ARG(E, 4)), NULL, REC_QUERY_NANOPIECE);   /* 0x43E40B: [esi+0x9A] */
+    if (r || (s_mp_tid && GetCurrentThreadId()==s_mp_tid)) {
         s_nano_unit = PTR(ARG(E, 4));
         s_nano_out = PTR(ARG(E, 8));
     }
@@ -6727,6 +6780,7 @@ void tagpu_rec_init(void)
 {
     unsigned char* net[5] = { 0 };
     unsigned char* calls[START_SITE_COUNT] = { 0 };
+    unsigned char* qbuild = NULL;
     unsigned char* draws[FS_RNG_SITES] = { 0 };
     unsigned char* blast = NULL;
     unsigned char* source = NULL;
@@ -6766,6 +6820,20 @@ void tagpu_rec_init(void)
         if (!pristine(st->call, c, 5) || !pristine(st->mov, m, 6)) {
             tagpu_logf("recorder: the %s start at 0x%06X holds other bytes: no event hooks, and "
                        "nothing will be recorded", st->what, st->call);
+            return;
+        }
+    }
+    {
+        static const unsigned char mov[6] = { 0x8B, 0x8F, 0x9A, 0x00, 0x00, 0x00 };
+        static const unsigned char name[5] = { 0x68, 0x30, 0x13, 0x50, 0x00 };
+        unsigned char c[5];
+        int32_t rel = (int32_t)(0x004B0BC0u - (QUERY_BUILD_CALL + 5));
+        c[0] = 0xE8;
+        memcpy(c + 1, &rel, 4);
+        if (!pristine(QUERY_BUILD_CALL, c, 5) || !pristine(QUERY_BUILD_MOV, mov, 6) ||
+            !pristine(QUERY_BUILD_NAME, name, 5)) {
+            tagpu_logf("recorder: the QueryBuildInfo query at 0x%06X holds other bytes: no event "
+                       "hooks, and nothing will be recorded", QUERY_BUILD_CALL);
             return;
         }
     }
@@ -6833,6 +6901,19 @@ void tagpu_rec_init(void)
         *p++ = 0x9D;                                    /* popfd                                */
         *p++ = 0xE9; tagpu_detour_rel(p, START_SITES[i].target);
     }
+    {
+        unsigned char* p = qbuild = tagpu_detour_stub();
+        if (!p) goto fail;
+        *p++ = 0x9C;                                    /* pushfd                               */
+        *p++ = 0x60;                                    /* pushad                               */
+        *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x24;   /* lea eax,[esp+0x24]: the call's esp */
+        *p++ = 0x50;                                    /* push eax                             */
+        *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)ev_query_build); p += 4;
+        *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;          /* add esp,4                            */
+        *p++ = 0x61;                                    /* popad                                */
+        *p++ = 0x9D;                                    /* popfd                                */
+        *p++ = 0xE9; tagpu_detour_rel(p, 0x004B0BC0u);
+    }
     for (i = 0; i < FS_RNG_SITES; i++) {
         unsigned char* p = draws[i] = tagpu_detour_stub();
         if (!p) goto fail;
@@ -6893,6 +6974,14 @@ void tagpu_rec_init(void)
         if (!tagpu_detour_write(START_SITES[k].call, c, 5)) goto landfail;
         calls[k] = NULL;
     }
+    {
+        unsigned char c[5];
+        int32_t rel = (int32_t)((unsigned)(size_t)qbuild - (QUERY_BUILD_CALL + 5));
+        c[0] = 0xE8;
+        memcpy(c + 1, &rel, 4);
+        if (!tagpu_detour_write(QUERY_BUILD_CALL, c, 5)) goto landfail;
+        qbuild = NULL;
+    }
     for (k = 0; k < FS_RNG_SITES; k++) {
         unsigned char c[5];
         int32_t rel = (int32_t)((unsigned)(size_t)draws[k] - (DRAW_SITES[k] + 5));
@@ -6921,7 +7010,7 @@ void tagpu_rec_init(void)
     }
     s_sites = 1;
     tagpu_logf("recorder: %u event sites in",
-               (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + FS_RNG_SITES + 2 + 2));
+               (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + 1 + FS_RNG_SITES + 2 + 2));
     cnt_sinks_init();
     ai_hooks_init();
     return;
@@ -6932,6 +7021,7 @@ landfail:
 fail:
     for (i = 0; i < 5; i++) tagpu_detour_stub_free(net[i]);
     for (i = 0; i < START_SITE_COUNT; i++) tagpu_detour_stub_free(calls[i]);
+    tagpu_detour_stub_free(qbuild);
     for (i = 0; i < FS_RNG_SITES; i++) tagpu_detour_stub_free(draws[i]);
     tagpu_detour_stub_free(blast);
     tagpu_detour_stub_free(source);
@@ -7014,7 +7104,7 @@ int tagpu_rec_fork_arm(RecFork* f)
 static void rec_begin(const Level* L, int tick, const RecMpConfig* mp)
 {
     s_bad = s_badlog = 0;
-    s_smarks = s_sfulls = 0;
+    s_smarks = s_sfulls = s_queries = 0;
     InterlockedExchange(&s_offthread, 0);
     s_nano_unit = NULL;
     s_nano_out = NULL;

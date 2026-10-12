@@ -2248,6 +2248,56 @@ class SliceEvents(unittest.TestCase):
         self.assertIn("slot 2's script slice twice", lines[0])
 
 
+class OwnerQuery(unittest.TestCase):
+    """RK_EV_QUERY in tarec's World, as the DLL's reader takes it (tagpu_recreader.c, event_take):
+    an event, outside every bracket, naming a slot of the level's and a query it knows, its pad
+    zero; and EventCheck notes one whose unit is not live at its point."""
+
+    @staticmethod
+    def query(unit, which=1, pad=b"\0\0\0"):
+        return struct.pack("<IB", unit, which) + pad
+
+    def world(self):
+        return ScriptSlice.world(self)
+
+    def test_an_event_at_the_top_level(self):
+        w = self.world()
+        for which in range(tarec.REC_QUERIES):
+            self.assertEqual(w.apply(tarec.RK_EV_QUERY, self.query(2, which))[0],
+                             tarec.RK_EV_QUERY)
+        with self.assertRaisesRegex(tarec.Unreadable, "after an event"):
+            w.apply(tarec.RK_CELLS, CellsAfterEvents.cells(0, 5))
+
+    def test_refused_inside_a_feature_call_or_a_death(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_FEATURE, bytes([tarec.FR_TICK, 0, 0, 0]) + bytes(4))
+        with self.assertRaisesRegex(tarec.Unreadable, "inside a feature call or a death"):
+            w.apply(tarec.RK_EV_QUERY, self.query(2))
+        w = self.world()
+        w.apply(tarec.RK_EV_DEATH, struct.pack("<II4x", 2, 0) + bytes(tarec.REC_UNIT_IMAGE))
+        with self.assertRaisesRegex(tarec.Unreadable, "inside a feature call or a death"):
+            w.apply(tarec.RK_EV_QUERY, self.query(3))
+
+    def test_refused_outside_the_slots_or_the_queries(self):
+        for unit in (0, 1, 5):
+            with self.subTest(unit=unit):
+                with self.assertRaisesRegex(tarec.Unreadable, "outside the array"):
+                    self.world().apply(tarec.RK_EV_QUERY, self.query(unit))
+        for body in (self.query(2, tarec.REC_QUERIES), self.query(2, 0, b"\0\1\0"),
+                     self.query(2)[:4]):
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(tarec.Unreadable, "an owner's query of"):
+                    self.world().apply(tarec.RK_EV_QUERY, body)
+
+    def test_its_unit_live_at_its_point(self):
+        ec = tarec.EventCheck()
+        ec.slices({2: None}, [(tarec.RK_EV_QUERY, self.query(3)),
+                              (tarec.RK_EV_QUERY, self.query(3)),
+                              (tarec.RK_EV_QUERY, self.query(4))], 10)
+        self.assertEqual(len(ec.lines), 1)
+        self.assertIn("an owner's query of slot 3, which holds no live unit", ec.lines[0])
+
+
 class TakeoverFixtures(unittest.TestCase):
     """fixtures.json's takeover entries, and the processes they make a fixture run."""
 

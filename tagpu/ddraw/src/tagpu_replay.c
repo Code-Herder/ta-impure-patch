@@ -462,6 +462,7 @@ static void ov_click_put(unsigned tick, const RecClick* c);
 static void first_step(char* ta);
 static void slice_disarm(void);
 static void slice_reset(void);
+static void query_reset(void);
 
 static void replay_close(void)
 {
@@ -495,6 +496,7 @@ static void replay_close(void)
     s_hold = 0;                         /* a boundary's hold ends with its playing */
     s_frame_tick = ~0u;
     slice_reset();
+    query_reset();
 }
 
 /* ---- S-a: the request and the seat fill ----------------------------------------------------- */
@@ -1571,6 +1573,12 @@ typedef int (__thiscall* PFN_StartName0)(void* cob, const char* name, void* cb, 
 #define E_StartIdx   ((PFN_StartIdx)0x004B0B00u)
 #define E_StartName  ((PFN_StartName)0x004B0A70u)
 #define E_StartName0 ((PFN_StartName0)0x004B0940u)
+/* 0x4B0BC0(name, a0, a1, a2, a3): a query, thiscall on the COB object, `ret 0x14`; each argument
+   a pointer the query reads in (0x4B0C5C..0x4B0CCA) and writes back (0x4B0CE6..0x4B0D11), NULL
+   for none */
+typedef int (__thiscall* PFN_Query)(void* cob, const char* name, int* a0, int* a1, int* a2,
+                                    int* a3);
+#define E_Query      ((PFN_Query)0x004B0BC0u)
 /* 0x49D270(from, msg): the 0x0D receiver, stdcall, `ret 8`; it writes the message's slot byte */
 typedef void (__stdcall* PFN_Shot)(void* from, unsigned char* msg);
 #define E_Shot    ((PFN_Shot)0x0049D270u)
@@ -3124,6 +3132,47 @@ static void ev_slice(const Lv* L, const unsigned char* b, unsigned len)
     }
 }
 
+/* THE OWNER'S QUERIES. The recording machine's order handlers made two COB queries a playing's
+   puppets never make, since a puppet runs no order handler: QueryBuildInfo and QueryNanoPiece
+   (tagpu_recorder.c, THE OWNER'S QUERIES). A query runs one thread of the unit's COB to its end at
+   once and can change its statics and pieces, so the recording carries each at its place in the
+   step (RK_EV_QUERY) and the playing makes it there, through the same 0x4B0BC0 with the
+   arguments the engine's call passes: the first a pointer to the value BuildingBuild (-1,
+   0x4027F3) or 0x43E400 (0, 0x43E41F) puts there first, the others NULL. 0x43E400's own work after
+   its query -- the piece's point, through 0x43DEF0 -- is not made: it writes only the caller's
+   buffer, and the spray that takes the point is recorded (RK_EV_SPRAY). The puppet gates are as
+   around the host's own slices: COB SET, ATTACH and DROP are inert.
+   THE BOUND and THE LIFETIME are the slices': the unit is named by ID, a slot below the level's
+   count holding a live unit (live_unit), and its +0x9A COB object, which only that unit's
+   destructor frees (0x486D8A), is used on the game thread inside the step. A unit with no COB
+   object (0x485DFF) made no query, since 0x4B0BC0 reads its object at once (0x4B0BC1); such an
+   event is not made, and counted. */
+static struct { unsigned made, unmade; } s_q;
+
+static void query_reset(void)
+{
+    memset(&s_q, 0, sizeof s_q);
+}
+
+static void ev_query(const Lv* L, const unsigned char* b, unsigned len)
+{
+    static const char* const NAME[REC_QUERIES] = { "QueryBuildInfo", "QueryNanoPiece" };
+    static const int FIRST[REC_QUERIES] = { -1, 0 };
+    uint32_t id;
+    char* u;
+    void* cob;
+    int a0;
+    if (len != 8 || b[4] >= REC_QUERIES) return;
+    memcpy(&id, b, 4);
+    if (!(u = live_unit(L, id)) || !(cob = cob_of(u))) {
+        s_q.unmade++;
+        return;
+    }
+    a0 = FIRST[b[4]];
+    E_Query(cob, NAME[b[4]], &a0, NULL, NULL, NULL);
+    s_q.made++;
+}
+
 /* THE SETTLE, after the step's events and before image T+1: a debt its marker did not pay */
 static void slice_settle(unsigned now)
 {
@@ -3953,6 +4002,10 @@ static void ev_play(const Lv* L, const RecEvent* e)
     int done;
     if (k == RK_EV_SLICE) {             /* s_st's counts are RK_EV_CREATE..RK_EV_SPRAY's */
         ev_slice(L, b, n);
+        return;
+    }
+    if (k == RK_EV_QUERY) {
+        ev_query(L, b, n);
         return;
     }
     switch (k) {
@@ -8716,6 +8769,8 @@ static void counts_log(const char* when, unsigned now)
                s_sl.c.settled, s_sl.c.notgiven + s_sl.c.unreached + s_sl.c.unmade + s_sl.c.lost +
                s_sl.c.twice, s_sl.c.unreached, s_sl.c.unmade, s_sl.c.lost, s_sl.c.twice,
                s_sl.c.late, s_sl.c.remote);
+    tagpu_logf("replay: %s: the owner's queries: %u made, %u not made (no live unit or no script)",
+               s_name, s_q.made, s_q.unmade);
     tagpu_puppet_refusals(gates, sizeof gates);
     tagpu_logf("replay: %s: refused on puppets: %s", s_name, gates);
     tagpu_puppet_footprints(gates, sizeof gates);

@@ -28,7 +28,6 @@
 0x4B08C0	0x4B0C4D	"AimFromSecondary"	absent	owner-only aim query, as AimFromPrimary	2026-10-01
 0x4B08C0	0x4B0C4D	"AimFromTertiary"	absent	owner-only aim query, as AimFromPrimary	2026-10-01
 0x4B08C0	0x4B0C4D	"SweetSpot"	absent	owner-only aim query, as AimFromPrimary	2026-10-01
-0x4B08C0	0x4B0C4D	"QueryNanoPiece"	absent	owner-only: the nano spray's piece query; the sprays (the root 0x4720D0) are recorded and compared	2026-10-01
 0x4B08C0	0x4B0C4D	"QueryPrimary"	absent	the aim path's queries (0x43E240 from 0x49D6AF, 0x49D9E0) are owner-only; the shot-time query (0x49C82E -> 0x43E1E0) is made once per shot on both sides and is checked through 0x49C740's count	2026-10-01
 0x4B08C0	0x4B0C4D	"QuerySecondary"	absent	as QueryPrimary	2026-10-01
 0x4B08C0	0x4B0C4D	"QueryTertiary"	absent	as QueryPrimary	2026-10-01
