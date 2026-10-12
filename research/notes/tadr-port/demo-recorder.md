@@ -174,11 +174,14 @@ other players; a multiplayer game is rewound from its finished recording.
   at the takeover point.
 - **An unfinished recording** (a crash, or leaving early) opens in the Replays browser like any
   other: fork from any point or play on from its end. There is no separate "Continue" feature.
-- **A fork starts at a refresh**, the last one at or before the moment chosen: a skirmish
-  recording refreshes every 300 ticks (10 s of game time at normal speed), and between two
-  refreshes its stream may hold internal values a viewer never sees at an earlier value, which a
-  live game must not inherit ([S4b](demo-recorder-s4-takeover.md#driving-it)). A live rewind's
-  fork rounds the same way.
+- **A fork starts at a refresh**, the last one at or before the moment chosen: a recording
+  refreshes at the second tick of each timeline and then every 300 ticks (10 s of game time at
+  normal speed), and between two refreshes a skirmish stream may hold internal values a viewer
+  never sees at an earlier value, which a live game must not inherit
+  ([S4b](demo-recorder-s4-takeover.md#driving-it)). Every moment after a timeline's first tick can
+  be forked; a request for the first tick itself is refused before anything changes, naming the
+  next. A live rewind's fork rounds the same way and is refused, if it must be, before the
+  original game's recording ends.
 - **More than four players.** A stock skirmish seats four players (measured: it refused every
   unit of seats 4–9, [scenario format](../scenario-format.md)); the four is its screen's seat
   count, and the first feasibility experiment seated ten puppet players in a skirmish level

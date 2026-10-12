@@ -1213,8 +1213,10 @@ internal values. The landing plan answers these.
 each completed iteration into the stream through the lossy filter (`tagpu_reclossy.c`), which
 holds the bytes `replay-hold.tsv` names; a skirmish header's `RT_HOLD` carries the table's masks,
 its SHA-256 and the refresh interval, so each recording says what its stream holds. **The refresh
-grid**: a refresh is the segment's first iteration and every GameTime 1 modulo 300 (the owner's
-choice; every refresh is then also 1 modulo the radar pass's 30-tick step), it ends its stream
+grid**: a refresh is the segment's first two iterations and every GameTime 1 modulo 300 (the
+owner's choice; every refresh is then also 1 modulo the radar pass's 30-tick step), the second so
+that a takeover inside the first interval has a start after the segment's first iteration, whose
+iteration before is the parent's or none; it ends its stream
 block (`RBF_REFRESH`), the filter writes every difference there and the writer checks the stream's
 world equal to its copy, abandoning the file otherwise; a snapshot, still at least 1,800 ticks
 from the last, is taken only at a refresh. A takeover starts only at a refresh (the plan's last

@@ -275,8 +275,9 @@ the worker for the playing and removes it after). The same script seeks:
 `--roundtrip T` (dump A, poison, seek, dump B; compare the pair with `tarec.py
 compare-dumps`), `--seek A:T` (at GameTime A seek to T in the same process,
 dumps s<T> and s<T+120>), `--fresh T` alone (a fresh process at T, dump
-q<T>), or `--takeover T:P` alone (a fresh process takes over at T as P, dump
-k<T+120>, then tareplay's AI-activity check; the file with its timeline is
+q<T>), or `--takeover T:P` alone (a fresh process takes over as P at R, the
+refresh at or before T, which the takeover's line names; dump k<R+120>, then tareplay's
+AI-activity check; the file with its timeline is
 kept as `fork-<name>`; `recmp_compare.py --fork 1 FILE` compares the fork's
 first iteration with the composed parent). `--timeline N` plays or seeks
 timeline N's chain; `--hide-chat` writes `chat hide` once the playing starts
@@ -1080,14 +1081,21 @@ block that reads to its last complete block.
   valued`). A defeat marker is a seat whose live units reach 0. A paused replay shows no
   `PAUSED` icon under the HUD; GDI shows it.
 - **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P
-  [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish at T as player P,
+  [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish as player P,
   every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2 when it had
-  no AI). With FILE it launches the instance on it, P viewed, and takes over once it plays;
+  no AI). It starts at R, the refresh at or before T, where the stream's world is the recorder's
+  exact copy: each segment's first two iterations, then every GameTime 1 modulo the interval
+  (300 ticks, or a skirmish recording's `tagpu_rec.refresh`); the DLL logs `a takeover asked for at
+  GameTime <T> takes over at <R>` when they differ. A timeline's first iteration is never a start
+  (the fork would follow its parent's iteration), so a request for it is refused naming the
+  next. With FILE it launches the instance on it, P viewed, and takes over once it plays;
   without, it takes over the running playback. It waits for `replay: <name>: taken over at
-  GameTime <T> as player <P>, …` and the recorder's `recording timeline <I> of …`, and exits 1 on
-  `… takeover at <T> refused: <why>`. A launch held by `tagpu_hold.on` returns at the hold's line
-  instead (the level held at T−1; `--json` gives the hold's line as `held`): the recorder's line,
-  and `--dump`, come once the level is resumed. The game after T is appended as timeline I to the file the
+  GameTime <R> as player <P>, …` (`--json` gives R as `at`) and the recorder's `recording
+  timeline <I> of …`, and exits 1 on `… takeover refused: <why>`. A launch held by
+  `tagpu_hold.on` returns at the hold's line instead (the level held at R−1; `--json` gives the
+  hold's line as `held`): the recorder's line, and `--dump`, come once the level is resumed. A
+  `--dump-at` G is a GameTime of the live game, so a dump meant to follow the start by k ticks
+  is armed at R + k, R from `tarec.refresh_at`. The game after R is appended as timeline I to the file the
   level plays: the instance's copy, `gamedir/replays/<name>.imprec`, whose path tacli prints (`the
   fork:`), never FILE itself. `--dump` arms a dump of the live game at G before the takeover, so it
   is never late. By hand: `takeover <P> at <T>[ difficulty <D>]` in the trigger. The file must be
@@ -1110,7 +1118,10 @@ block that reads to its last complete block.
 - **Live rewind**: `tacli rewind <i> open|seek T|now|fork|close [--dump NAME]`
   operates on a running recorded skirmish. `open` pauses and reports the complete
   seek interval; `seek T` inspects iteration T at frame T−1; `now` restores the
-  saved present; `fork` resumes from the inspected frame as a new timeline.
+  saved present; `fork` resumes as a new timeline from R, the refresh at or before the
+  inspected T (as a takeover does, *Take over* above), logging `a fork asked for at GameTime <T>
+  takes over at <R>` when they differ. The start is found and checked before the original's
+  recording ends, so a fork that cannot start is refused with the original still running.
   `close` without a seek leaves the world intact, otherwise it returns to now.
   Each exit restores the pause state held before opening. Pause input cannot
   advance an open rewind. `--dump` writes a frame dump before the operation's

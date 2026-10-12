@@ -439,8 +439,10 @@ block with the exact records it filtered (`RB_EXACT`). L's dumps are compared wi
 stream (`tarec compare --exact`), and `tarec lossy-check` walks the two streams side by side and
 fails by name unless, at every iteration, every byte the hold masks leave clear is equal, every
 held byte is the stream's previous value or the exact one, the two worlds are equal at every
-refresh and every refresh sits on its grid and ends its block. Together they prove every shown
-byte of the lossy file against the live game at every iteration, not only at L's dumps. K's dump
+refresh and every refresh sits on its grid and ends its block. So lossy-check proves the lossy
+stream against the exact one at every iteration; the exact stream is proved against the live game
+only where something compares them, at L's dumps and by the writer's own verification
+([self-verification](demo-recorder-skirmish-slice.md#self-verification)), not at every iteration. K's dump
 is compared with the fork's exact stream, F's with its lossy stream, and timeline 1 is
 lossy-checked. The fixtures with a takeover launch every process with `tagpu_rec.refresh 30`
 (*Taking over*: a takeover starts at a refresh). **A hold row is a loosening**, the owner's

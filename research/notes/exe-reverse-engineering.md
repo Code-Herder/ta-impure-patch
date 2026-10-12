@@ -1754,7 +1754,8 @@ init `0x49E070` walk them with `esi` = unit + 0x1F + 0x1C·i, the slot's last by
   cannot read as a unit (`0x48A0C6..0x48A0D0`); none is (0, `0x8000`) (`0x48A160`; `0x48A0F0` also
   starts COB `TargetCleared`). The resolver `0x48A190` takes word 1 = `0x8000` with word 0 ≠ 0 as
   `begin + movsx(word0)·0x118`, with no upper bound and no alive test (`0x48A19F..0x48A1D7`, DIS),
-  and AutoAim's per-tick target read `0x48A1E0` tests only the target's `+0xA6` (`0x48A295`, DIS):
+  and AutoAim's per-tick target read `0x48A1E0` tests only the target's `+0xA6` (`0x48A295`, DIS),
+  writing none, (0, `0x8000`), over a target whose `+0xA6` is 0 (`0x48A2AF`, `0x48A2B4`, DIS):
   *The demo recorder's lossy stream*, below, for why a takeover depends on it. Both setters clear `+0xBA` bits 10–14 (`and 0x83FF`). MEASURED: 3,448
   unit targets, each naming a live slot; every ground target is the point the probe scenario's
   attack order named.
@@ -3868,7 +3869,8 @@ disassembled):
   `+0xBC`/`+0xD4` (`0x465457..0x4654E7`) sit behind the defeat test the seat fill disarms on a
   puppet [INFERRED that they do not run there].
 - **The node destructor's reads that the puppet rows neutralise.** `0x43A1F0` reads node `+0x06`
-  bit 1 and then calls the order's handler with event 2 (`0x43A21A`), tests `+0x42` bit `0x10000`
+  (`0x43A1F5`), tests bit 1 (`0x43A1FE`) and, when it is set, calls the order's handler with event
+  2 (`0x43A21A`), tests `+0x42` bit `0x10000`
   before its `0x489800` call (`0x43A2AB`), and deletes the owned object when `+0x52` is set
   (`0x43A264..0x43A2A2`). It runs on a puppet (from `0x439EB0`, `0x439F80` and Impure's order
   teardown); the playing's `ord_values` forces `replay-layout.tsv`'s `puppet0`/`puppet1` rows on
@@ -3877,8 +3879,13 @@ disassembled):
   `0x48A1E0` (*The weapon slots*, above). Their callers are handlers, the AI, the retaliation
   (`0x407141`, behind the damage apply `0x489CE0` that a puppet refuses) and AutoAim, whose one
   caller `0x48ADDA` sits behind the owner's type-1/2 test (`0x48ADC9..0x48ADD7`), so none runs on a
-  puppet; all of them run after a takeover. So a takeover starts only at a refresh, where the
-  targets are the engine's own (`tagpu_replay.c`, `tk_bound`).
+  puppet; all of them run after a takeover. A held target is a value the engine produced for that
+  unit, so its index is a slot of the unit array: what the missing tests let through is a target
+  that has died or whose slot has been reused since, not an address outside the array. So a
+  takeover starts only at a refresh, where the targets are the engine's own (`tagpu_replay.c`,
+  `tk_bound`), and the units the refresh's image does not describe have their three slots'
+  targets set to none, (0, `0x8000`), the words AutoAim writes when it drops a target
+  (`0x48A2AF`, `0x48A2B4`, DIS) (`tk_orphans`).
 - **The shot builder reads slot `+0x10` on a puppet** (`0x49CE62`, *The weapon slots*): a field
   constant after the create, so the plan's "read by owner code only" does not hold for it.
 - **`0x408198` is AI code, not a handler.** `0x408100`, which reads the head node's `+0x42` bit

@@ -156,7 +156,8 @@ that format alone:
 - **a minimap block** right after it, when the map has a picture;
 - **stream blocks** of whole iterations, written by the lossy filter from the writer's exact
   records, each ending at the first iteration past 2 MiB, at 30 iterations, or at a refresh — the
-  segment's first iteration and every GameTime 1 modulo the interval, where the stream's world
+  segment's first two iterations and then every GameTime 1 modulo the interval (the first
+  iteration past one a gap skips; `reclossy_is_refresh`), where the stream's world
   equals the writer's copy, checked — which flags it `RBF_REFRESH`; under the test lever
   `tagpu_rec.exact` each is followed by an `RB_EXACT` block of its exact records, which a reader
   of the stream skips;
