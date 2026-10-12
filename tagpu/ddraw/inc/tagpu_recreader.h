@@ -197,9 +197,15 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
    (`iterations`), each read of an iteration counted, a snapshot's base segment's first included,
    so iterations <= T - from + 1. tools/replay/tarec.py's seek_start computes `from` from the file
    alone. The blocks it decoded (`blocks`: read, checked and unpacked, each decode counted), their
-   bytes in the file (`packed`) and unpacked (`raw`), and of them `base`, 1 when a snapshot's
-   segment's first iteration was read first because the reader did not hold its base: the work
-   tools/replay/tareplay.py's W3 checks against the file's own blocks, which no load changes. */
+   bytes in the file (`packed`) and unpacked (`raw`), each the block header's, and of them `base`,
+   1 when a snapshot's segment's first iteration was read first because the reader did not hold
+   its base: the work tools/replay/tareplay.py's W3 checks against the file's own blocks, which no
+   load changes. A chained snapshot counts every link from its key, each a block decoded. A run's
+   chunk counts as its block: its header's packed and raw, the chunk in the file and the
+   container it unpacks to, not the run's window. A seek decodes each run it reads from its
+   RBF_FRAME_RESET block on, since it starts only where one begins -- after a snapshot, at a
+   segment's first iteration -- so no chunk is unpacked twice or left out. tarec.py's seek_blocks
+   derives the same from the file. */
 typedef struct RecSeekWork {
     unsigned target, from, from_snapshot, iterations;
     unsigned blocks, base;

@@ -559,7 +559,12 @@ takeover, a return to now or a fork; **W3**, exact, the blocks the reader decode
 their bytes in the file and unpacked -- are the file's own from there to the target
 (`tarec.seek_blocks`): the snapshot, after its segment's first stream block when the reader did
 not hold that segment's base, then in each segment of the chain every stream block holding an
-iteration it read, each once. Q's and F's seeks run in a fresh process after its playing's first
+iteration it read, each once. A chained snapshot counts every snapshot of its chain from the key,
+each read and unpacked through `block_body` (`snapshot_chain`). A sectioned block counts as one
+block whatever its run: its header's packed and raw, the chunk and the container it unpacks to,
+not the run's window; a seek starts only where a run does (after a snapshot, at a segment's first
+iteration), so it decodes every run it reads from its `RBF_FRAME_RESET` block, and `seek_blocks`
+refuses a file where it would join one in its middle, as the reader does. Q's and F's seeks run in a fresh process after its playing's first
 step (a seek asked for earlier waits for it), which holds the root's base, so for them the file
 says whether a base is read: only for a snapshot in a later segment of the chain. No check reads a
 time. The game thread's CPU time is reported

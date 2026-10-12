@@ -1401,6 +1401,68 @@ class SeekBlocks(unittest.TestCase):
         with self.assertRaises(tarec.Unreadable):
             tarec.seek_blocks(path, 1, 31, 3, 0)
 
+    @staticmethod
+    def snap(last, chained):
+        """a packed snapshot, chained to the one before it or a key"""
+        return flagged(tarec.RB_SNAPSHOT, last, last, b"s" * last,
+                       tarec.RBF_CHAINED if chained else 0)
+
+    def test_a_chained_snapshot_decodes_its_chain_from_its_key(self):
+        s1, s2, s3, s4 = (stream(1, 10, unit=1), stream(11, 20, opens=False),
+                          stream(21, 30, opens=False), stream(31, 40, opens=False))
+        k10, c20, c30 = self.snap(10, False), self.snap(20, True), self.snap(30, True)
+        path = self.file(header(), s1, k10, s2, c20, s3, c30, s4, end_block(40))
+        # every link from the key is a block decoded, the key's included
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 3, 0), self.of(k10, c20, c30, s4))
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 3, 1),
+                         self.of(s1, k10, c20, c30, s4, base=1))
+        self.assertEqual(tarec.seek_blocks(path, 0, 25, 3, 0), self.of(k10, c20, s3))
+        self.assertEqual(tarec.seek_blocks(path, 0, 15, 3, 0), self.of(k10, s2))
+        # a chain with no key before it in its segment, as the reader refuses it
+        path = self.file(header(), s1, self.snap(10, True), s2, end_block(20))
+        with self.assertRaisesRegex(tarec.Unreadable, "no snapshot before it"):
+            tarec.seek_blocks(path, 0, 15, 3, 0)
+
+    def test_a_chain_longer_than_its_bound_is_refused(self):
+        n = tarec._codec().CHAIN_MAX
+        parts, links = [header(), stream(1, 10, unit=1)], []
+        for i in range(n + 2):
+            links.append(self.snap(10 * (i + 1), i > 0))
+            parts += [links[-1], stream(10 * (i + 1) + 1, 10 * (i + 2), opens=False)]
+        last = 10 * (n + 3)
+        path = self.file(*parts, end_block(last))
+        # the key and REC_CHAIN_MAX links read; one more is past the bound
+        T = 10 * (n + 1) + 5
+        self.assertEqual(tarec.seek_blocks(path, 0, T, 3, 0)[0], n + 2)
+        with self.assertRaisesRegex(tarec.Unreadable, "chains past"):
+            tarec.seek_blocks(path, 0, last, 3, 0)
+
+    @staticmethod
+    def chunk(first, last, reset):
+        """a sectioned stream block: a chunk of its run, the first when `reset`"""
+        flags = tarec.RBF_SECTIONS | (tarec.RBF_FRAME_RESET if reset else 0)
+        return flagged(tarec.RB_STREAM, first, last, b"c" * (last - first + 1), flags)
+
+    def test_a_run_is_decoded_from_its_start(self):
+        r1, r2 = self.chunk(1, 10, True), self.chunk(11, 20, False)
+        r3, r4 = self.chunk(21, 30, True), self.chunk(31, 40, False)
+        k20 = self.snap(20, False)
+        path = self.file(header(), r1, r2, k20, r3, r4, end_block(40))
+        # each chunk counts as its block; a seek starts where a run does
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 3, 0), self.of(k20, r3, r4))
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 3, 1), self.of(r1, k20, r3, r4, base=1))
+        self.assertEqual(tarec.seek_blocks(path, 0, 15, 3, 0), self.of(r1, r2))
+        # past a snapshot unread, the run goes on
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 40, 0), self.of(r1, r2, r3, r4))
+        # a run the seek would join in its middle, after a snapshot or a records block
+        path = self.file(header(), r1, r2, k20, self.chunk(21, 30, False), end_block(30))
+        with self.assertRaisesRegex(tarec.Unreadable, "continues a run"):
+            tarec.seek_blocks(path, 0, 25, 3, 0)
+        path = self.file(header(), r1, stream(11, 20, opens=False), self.chunk(21, 30, False),
+                         end_block(30))
+        with self.assertRaisesRegex(tarec.Unreadable, "continues a run"):
+            tarec.seek_blocks(path, 0, 25, 3, 0)
+
 
 class SeekWork(unittest.TestCase):
     """The seek's work line (tagpu_replay.c, sk_work_log) parsed and judged: W1 against the file,

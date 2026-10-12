@@ -1735,23 +1735,30 @@ def seek_start(path, timeline, T, lead):
 def seek_blocks(path, timeline, T, lead, base):
     """The blocks the DLL's reader decodes for a seek to T of `timeline`, as recr_seek
     (tagpu_recreader.c) reads them, from the file's own blocks: (count, their bytes in the file,
-    their bytes unpacked), each a block header's. From the snapshot seek_start chooses -- after the
-    first stream block of that snapshot's segment when `base`, the reader not holding the
-    segment's base -- or from the first iteration seek_start chooses; then, in each segment of the
-    chain up to T, every stream block holding an iteration it reads: a block is decoded whole, and
-    one ends where an iteration does (tagpu_recwriter.c, iteration_done), so the reader opens no
-    block past the last iteration it reads. The snapshot, contribution and timeline blocks it
-    passes are skipped unread. `base` None is a reader that has read its chain's first iteration
-    and nothing since, as a playing in a fresh process holds after its first step: it holds the
-    root's base, so it reads a base only for a snapshot in a later segment of the chain.
-    THE FORMAT THIS MODELS: one snapshot block decoded once, and stream blocks decoded each on its
-    own. A snapshot chain -- a key snapshot and up to nine prefix snapshots, each decoded through
-    block_body -- or stream blocks that share one zstd stream per run (the recording-size work's
-    P1) changes what a seek decodes, and is modelled here in the same change that brings it, or
-    W3 fails every seek that reads it."""
-    sizes, offsets = [], []
-    bl, _ = blocks(path, sizes, offsets, decode=False)
+    their bytes unpacked, base), each size a block header's. From the snapshot seek_start chooses
+    -- after the first stream block of that snapshot's segment when `base`, the reader not holding
+    the segment's base -- or from the first iteration seek_start chooses; then, in each segment of
+    the chain up to T, every stream block holding an iteration it reads: a block is decoded whole,
+    and one ends where an iteration does (tagpu_recwriter.c, iteration_done), so the reader opens
+    no block past the last iteration it reads. The contribution, exact-stream and timeline blocks
+    it passes, and the snapshots between its iterations, are skipped unread. `base` None is a
+    reader that has read its chain's first iteration and nothing since, as a playing in a fresh
+    process holds after its first step: it holds the root's base, so it reads a base only for a
+    snapshot in a later segment of the chain.
+    THE CHAIN: a chained snapshot (RBF_CHAINED) is decoded with every snapshot of its segment
+    before it back to its key, each a block of the count (snapshot_chain); more than CHAIN_MAX
+    links, or a chain with no key in its segment, is Unreadable, as the reader refuses it.
+    THE RUN: a sectioned block is a chunk of its run's one zstd frame and counts as its block, its
+    header's packed and raw -- the chunk and the container it unpacks to, not the run's window.
+    The reader decodes a chunk only after its run's chunks before it (sections_ready): its codec
+    is invalid where a seek starts, at a crossing and after a records block, and only an
+    RBF_FRAME_RESET block starts it again. A seek starts only where a run does -- the stream
+    after a snapshot, a segment's first iteration -- so it decodes each run it reads from its
+    start; a file where it would not is Unreadable, as the reader refuses it."""
+    sizes, offsets, flags = [], [], []
+    bl, _ = blocks(path, sizes, offsets, flags=flags, decode=False)
     size = {id(b): sz for b, sz in zip(bl, sizes)}
+    flag = {id(b): f for b, f in zip(bl, flags)}
     ch = chain(segments(bl, offsets), timeline)
 
     def cover_end(i):
@@ -1766,12 +1773,39 @@ def seek_blocks(path, timeline, T, lead, base):
             if b[0] == RB_SNAPSHOT and b[2] <= cover_end(i) and b[2] + lead < T:
                 snap, frm = b, i
     read = []
+
+    def runs(stream):
+        """`stream`, the blocks one span of the seek decodes in order, after the codec was made
+        invalid: each sectioned block must restart the frame or continue one it decoded"""
+        valid = False
+        for b in stream:
+            if not flag[id(b)] & RBF_SECTIONS:
+                valid = False
+            elif flag[id(b)] & RBF_FRAME_RESET:
+                valid = True
+            elif not valid:
+                raise Unreadable(f"the stream block of GameTime {b[1]} to {b[2]} continues a run "
+                                 f"the seek to {T} does not start")
+        read.extend(stream)
+
     if base is None:
         base = snap is not None and frm > 0
     if snap is not None:
         if base:
-            read.append(next(b for b in ch[frm]["blocks"] if b[0] == RB_STREAM))
-        read.append(snap)
+            runs([next(b for b in ch[frm]["blocks"] if b[0] == RB_STREAM)])
+        snaps = [b for b in ch[frm]["blocks"] if b[0] == RB_SNAPSHOT]
+        k = next(j for j, b in enumerate(snaps) if b is snap)
+        links = [snap]
+        while flag[id(links[0])] & RBF_CHAINED:
+            if k == 0:
+                raise Unreadable(f"the chained snapshot of GameTime {links[0][2]} has no snapshot "
+                                 f"before it in its segment")
+            if len(links) == _codec().CHAIN_MAX + 1:
+                raise Unreadable(f"the snapshot of GameTime {snap[2]} chains past "
+                                 f"{_codec().CHAIN_MAX} snapshots to its key")
+            k -= 1
+            links.insert(0, snaps[k])
+        read += links
         start = snap[2] + 1
     else:
         lo = T - lead if T > lead else 0
@@ -1781,7 +1815,7 @@ def seek_blocks(path, timeline, T, lead, base):
         start = ch[frm]["first"]
     for i in range(frm, hold + 1):
         end = T if i == hold else cover_end(i)
-        read += [b for b in ch[i]["blocks"] if b[0] == RB_STREAM and b[1] <= end and b[2] >= start]
+        runs([b for b in ch[i]["blocks"] if b[0] == RB_STREAM and b[1] <= end and b[2] >= start])
         if i < hold:
             start = ch[i + 1]["fork_at"]
     return (len(read), sum(size[id(b)][4] for b in read), sum(size[id(b)][3] for b in read),
