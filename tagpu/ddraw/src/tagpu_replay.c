@@ -8451,6 +8451,10 @@ static void play(const Lv* L)
    create, as at a seek, whose R7 creates also precede its globals. The units made here have their
    books written as made at this capture point (level_units' books_at), since the books are image
    T's and no step of the host's has derived them yet.
+   Fixture: randprobe (fixtures.json), whose commanders draw from the RNG in their first slice and
+   call a script chosen by the draw at a period chosen by it for the whole level. MEASURED
+   2026-10-12 over [361, 1111): with this write left out, RandTick0..3 counted 133/258/163/0 live
+   against 107/57/114/253 on the puppet; with it, every key equal.
    The rest of the first step stays in tagpu_replay_step, after the unit tick, as for every later
    step: step T's events, then image T+1. */
 static void first_step(char* ta)
