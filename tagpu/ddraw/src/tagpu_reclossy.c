@@ -18,9 +18,12 @@
      dropped when no cell of it differs from D's but in those bytes, which a playing that keeps
      the engine's slots never writes (tagpu_replay.c, cell_put), the tick's one slot read being
      recorded as FS_SOURCE instead;
+   - with RECL_SPRAYS, a nano spray its unit's session predicts is left out, and the sessions
+     are written (THE SPRAY SESSIONS, below);
    - every other record as it came.
-   With a table of no rows nothing is held, every delta and list is written as it came, and the
-   stream's records are the capture's; refreshes then only end blocks (tagpu_recwriter.c).
+   With a table of no rows and no flags nothing is held, every delta and list is written as
+   it came, and the stream's records are the capture's; refreshes then only end blocks
+   (tagpu_recwriter.c).
 
    THE INVARIANTS, each kept where the code below says:
    - EVERY VALUE WRITTEN IS EXACT (a lifetime). D's image of a slot is replaced whole by an
@@ -45,20 +48,29 @@
      nodes against REC_ORDERS_MAX and its records against the list they continue, and a run of
      cells against the grid, as every reader bounds it (tagpu_recreader.c, cells_ok).
 
-   WHY A HELD VALUE NEVER REACHES A PLAYBACK HOST'S WORLD. The playing writes D into the engine:
-   every live unit's image (tagpu_replay.c, units_put, each live slot through unit_put) and every
-   node of both lists of every live unit (orders_put), each iteration; neither +0xD4 of a unit nor
-   +0x4E of a node is an exclusion of replay-layout.tsv, so both are written from D. Two engine
-   paths write held bytes on a puppet between those writes, and the next iteration's writes go
-   over them: the unit destructor's reclaim credit read-modify-writes the killer's +0xD4
-   (0x486CAD..0x486D1E, DISASSEMBLED) at a replayed death, and the death walk 0x489740 (from
-   0x486D75) ORs event 8 into a node's +0x4E through vtable 0x4FD2C8 slot 0, 0x438870
-   (DISASSEMBLED). No reader of either runs on a puppet in between: the panel reads
-   +0xCC/+0xD0/+0xE4/+0xE8, and +0x4E is read by the order controller and its handlers, owner code
-   the unit tick skips for a type-3 owner (0x48AEB5..0x48AECD, DISASSEMBLED). The Deathmatch
-   respawn's writes of +0xBC and +0xD4 (0x465457..0x4654E7) run behind the defeat test, which the
-   seat fill disarms on a puppet [INFERRED that they do not run]; the same rewrite covers them if
-   they did.
+   WHY A HELD VALUE NEVER REACHES A PLAYBACK HOST'S WORLD. The playing writes D into the engine at
+   every iteration: every live unit's whole image, each byte replay-layout.tsv leaves a value and
+   so every held byte (tagpu_replay.c, units_put through unit_put), and every node of both lists of
+   every live unit (orders_put). So any engine write of a held byte on a puppet between two of
+   those writes is overwritten by the next one, and what matters is only that no reader shows it in
+   between. The engine writes of held bytes known to run on a puppet (DISASSEMBLED):
+   - the unit destructor's reclaim credit read-modify-writes the killer's +0xD4
+     (0x486CAD..0x486D1E) at a replayed death;
+   - the death walk 0x489740 (from 0x486D75) ORs event 8 into a node's +0x4E through vtable
+     0x4FD2C8 slot 0, 0x438870;
+   - the shot receiver 0x49D270 writes the named weapon slot's pitch +0x18 (0x49D37C) and heading
+     +0x16 (0x49D384) from the message, and the shot builders it calls read those values, the
+     message's, never the image's;
+   - the builder 0x49CC20, called from the receiver at 0x49D479, zeroes the slot's aim complete
+     +0x8 (0x49CCA2: ebx 0 from 0x49CC2F, edi the slot from 0x49CC75);
+   - the create's 0x489800 call (0x485C58, after 0x48A160 at 0x485C50) writes a fresh unit's slot
+     targets and flags bit 4.
+   No reader of any of them runs on a puppet in between: the panel reads only the ledger's last
+   period, +0xCC/+0xD0/+0xE4/+0xE8, none of them held, +0x4E is read by the order controller and its handlers, and the
+   slots' aim and target state by AutoAim and the handlers, owner code the unit tick skips for a
+   type-3 owner (0x48ADC9..0x48ADD7, 0x48AEB5..0x48AECD). The Deathmatch respawn's writes of +0xBC
+   and +0xD4 (0x465457..0x4654E7) run behind the defeat test, which the seat fill disarms on a
+   puppet [INFERRED that they do not run]; the same rewrite covers them if they did.
    The filter writes no engine memory; the playing's puppet rows apply after every list it writes,
    whatever the stream held: ord_values copies a node's image and then applies replay-layout.tsv's
    puppet0 and puppet1 rows (+0x06 bit 1, +0x42 bits 0x400000 and 0x10000, +0x52), which keep the
@@ -70,7 +82,54 @@
    deltas in the run of unit records the iteration begins with, in slot order among the input's
    (the unit frame lists an iteration's deltas by ascending slot), and the cells and the lists
    before the iteration's first event or click (an RK_CELLS after an RCS_EVENTS record is the
-   tick's input, not an image, to every reader). */
+   tick's input, not an image, to every reader).
+
+   THE SPRAY SESSIONS (RECL_SPRAYS). A nano spray's point is the piece position QueryNanoPiece
+   0x43E400 gave, which the game shows and a playback host cannot make (its COB pose is not the
+   recording machine's); but a unit's spray repeats its spray of 1, 2 or 4 GameTimes before, byte
+   for byte, or moved by exactly the unit's position change since, a builder that moves. So
+   RK_SPRAY_SESSION names a unit's period p and whether its point FOLLOWs the unit, and a spray
+   the session predicts is left out: every reader makes it again at the end of its iteration
+   (recsprays_imply) from the same table the filter decides by, RecSprays -- each slot's session
+   and its sprays of the last four GameTimes, one spray or a mark of several each, with the unit's
+   position +0x6A..+0x75 and liveness at it. The rule:
+   - a spray is left out only when it is its unit's one spray of the iteration, its unit's
+     session predicts its 48 bytes exactly, and no snapshot follows the iteration
+     (spray_written);
+   - a unit with a session that makes no spray in an iteration gets RK_SPRAY_SESSION 0 there, so
+     no reader implies a spray its unit did not make: every implied spray is one the engine made,
+     in the iteration it made it, its point its own;
+   - after a unit's one spray of an iteration, the first (p, FOLLOW) -- plain before FOLLOW, the
+     shortest period first -- that predicts it, with one spray of the unit at each of the p
+     GameTimes before, becomes its session, written when it is not the session it has
+     (sessions_put). A session chosen in the iteration of a spray it left out predicts that spray
+     too, so a reader, which takes the iteration's sessions before it implies, makes the same;
+   - at a snapshot's iteration every spray is written, every session closed and the table
+     emptied, and every reader empties its own there (tagpu_recreader.c: the world_reset a seek
+     runs before it applies a snapshot, and a sequential reading passing a snapshot block), so a
+     reader that starts at the snapshot and one that read up to it hold the same table.
+   Positions are never held (reclossy_hold_parse refuses a held bit of +0x6A..+0x75), so the
+   filter's positions in D are the copy's and every reader's.
+   WHAT IS NOT KEPT, a loosening the owner approved on 2026-10-11 (OD5): the order of the sprays
+   inside one iteration -- an implied spray comes after the iteration's events, slots ascending.
+   The emissions are the same sprays at the same points in the same iteration, and the emitters
+   0x4720D0 and 0x472200 change no simulation state: their spawn 0x473D50 draws only the C
+   runtime's rand 0x4E4870, which a playing does not reproduce in any order (tagpu_replay.c, THE
+   TURBO). What the order decides is, first, their particles' order in the layer's vector: the
+   order they are drawn in and, past the layer's cap (0x190 in stock), the order they are
+   destroyed in (each emitter destroys the vector's front and shifts it down before it appends,
+   the trim 0x47219F..0x4721DA and 0x4722CF..0x47230A); and second, when the particle pool
+   0x51E610 that every emitter shares runs out within the iteration, which emission makes no
+   particle (its alloc 0x470EB0 returns NULL at capacity, 0x470EB9..0x470EBB, and the emitter then
+   skips the particle, 0x47213E..0x472163). DISASSEMBLED, the engine map's *The nano spray*; the
+   owner confirmed on 2026-10-12 that OD5 covers the pool.
+   BOUNDS: a spray or a session names a unit slot by its ID, 1 <= ID - 1 < nslots, as the
+   playing's live_unit does; a spray that names none is written and enters no table, and a
+   session that names none is malformed. A reader refuses, as malformed, a session that would
+   predict from a GameTime with no single spray of its unit, or a FOLLOW session whose unit is not
+   live then and now: the filter implies neither. The table holds four GameTimes, the longest
+   period, at T modulo 4: the filter takes an iteration's sprays into it only after it has chosen
+   the iteration's sessions, so T - 4's entry is read before T's replaces it. */
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_reclossy.h"
@@ -80,6 +139,32 @@
 #define NODE_DW  (REC_ORDER_IMAGE / 4)
 #define CB       REC_CELL_BYTES
 #define CELL_YARD 0x02                  /* a cell's +0x0C bit 1, the yard's                      */
+
+/* ---- the spray sessions' table (THE SPRAY SESSIONS above) ---------------------------------- */
+
+#define SP_HIST   4u            /* the GameTimes a slot's sprays are kept: the longest period  */
+#define SP_BYTES  (4u + REC_SPRAY_BODY)
+enum { SP_NONE, SP_ONE, SP_SEVERAL };
+
+/* a slot's sprays of one GameTime */
+typedef struct SprayAt {
+    uint32_t      tick;
+    unsigned char mark;         /* SP_ONE: `body` is the one; SP_SEVERAL: there were more       */
+    unsigned char live;         /* the unit was live at `tick`, and `pos` was its position     */
+    unsigned char zero[2];
+    int32_t       pos[3];
+    unsigned char body[REC_SPRAY_BODY];
+} SprayAt;
+
+struct RecSprays {
+    unsigned       nslots;
+    unsigned char* mode;        /* [nslots] the session, 0 none                               */
+    SprayAt*       at;          /* [nslots * SP_HIST] GameTime T's at T % SP_HIST             */
+    unsigned*      open;        /* the slots with a session, ascending                        */
+    unsigned       nopen;
+    unsigned char* out;         /* recsprays_imply's sprays, SP_BYTES each                    */
+    unsigned       outcap;      /* in sprays                                                  */
+};
 
 struct RecLossy {
     unsigned       nslots;
@@ -93,6 +178,11 @@ struct RecLossy {
     unsigned       gw, gh;
     unsigned char* grid;                /* D's cells, gw * gh: with RECL_CELLS only            */
     unsigned char* run;                 /* scratch: one run of cells, REC_CELLS_MAX of them    */
+    RecSprays*     sp;                  /* with RECL_SPRAYS: the readers' table, else NULL     */
+    unsigned char* sprays;              /* scratch: the iteration's sprays of a slot, at most 2 */
+    const unsigned char** spray;        /* ... the first one's body after its ID               */
+    unsigned*      sprayed;             /* ... the slots that sprayed, to clear them           */
+    unsigned       nsprayed;
 };
 
 /* a set bit of a delta's bitmap is a dword of the image */
@@ -118,12 +208,169 @@ static void rec_put(RecBytes* out, unsigned kind, const void* pre, unsigned npre
     rb_put(out, zero, ((4 + len + 3) & ~3u) - 4 - len);
 }
 
+/* An RK_SPRAY_SESSION's mode: 0 closes; else a period of 1, 2 or 4, FOLLOW or not. */
+static int mode_ok(unsigned m)
+{
+    unsigned p = m & 7;
+    return !(m & ~(7u | REC_SPRAY_FOLLOW)) && (p ? p == 1 || p == 2 || p == 4 : !m);
+}
+
+/* the slot an RK_EV_SPRAY's or RK_SPRAY_SESSION's unit ID names, or 0 for none */
+static unsigned spray_slot(const unsigned char* b, unsigned nslots)
+{
+    uint32_t id;
+    memcpy(&id, b, 4);
+    return id - 1 >= 1 && id - 1 < nslots ? id - 1 : 0;
+}
+
+RecSprays* recsprays_begin(unsigned nslots)
+{
+    RecSprays* t;
+    if (nslots < 2 || nslots > 0xFFFF) return NULL;
+    t = (RecSprays*)calloc(1, sizeof *t);
+    if (!t) return NULL;
+    t->nslots = nslots;
+    t->mode = (unsigned char*)calloc(nslots, 1);
+    t->at = (SprayAt*)calloc((size_t)nslots * SP_HIST, sizeof *t->at);
+    t->open = (unsigned*)malloc(nslots * sizeof *t->open);
+    if (!t->mode || !t->at || !t->open) {
+        recsprays_free(t);
+        return NULL;
+    }
+    return t;
+}
+
+void recsprays_free(RecSprays* t)
+{
+    if (!t) return;
+    free(t->mode);
+    free(t->at);
+    free(t->open);
+    free(t->out);
+    free(t);
+}
+
+void recsprays_empty(RecSprays* t)
+{
+    memset(t->mode, 0, t->nslots);
+    memset(t->at, 0, (size_t)t->nslots * SP_HIST * sizeof *t->at);
+    t->nopen = 0;
+}
+
+/* slot s's session becomes m, the open list kept ascending */
+static void session_set(RecSprays* t, unsigned s, unsigned m)
+{
+    unsigned lo = 0, hi = t->nopen;
+    if (!t->mode[s] != !m) {
+        while (lo < hi) {
+            unsigned mid = (lo + hi) / 2;
+            if (t->open[mid] < s) lo = mid + 1;
+            else hi = mid;
+        }
+        if (m) {
+            memmove(t->open + lo + 1, t->open + lo, (t->nopen - lo) * sizeof *t->open);
+            t->open[lo] = s;
+            t->nopen++;
+        } else {
+            memmove(t->open + lo, t->open + lo + 1, (t->nopen - lo - 1) * sizeof *t->open);
+            t->nopen--;
+        }
+    }
+    t->mode[s] = (unsigned char)m;
+}
+
+/* The spray session m of slot s predicts at T into out (REC_SPRAY_BODY bytes): the slot's one
+   spray of T - p, its point moved with FOLLOW by the unit's position change since, each axis in
+   32-bit wrapping arithmetic. 0 when T - p holds no single spray of the slot, or with FOLLOW
+   when the unit is not live at both. `units` and `live` are the slots' at T. */
+static int predict(const RecSprays* t, unsigned s, unsigned T, unsigned m, const void* units,
+                   const unsigned char* live, unsigned char* out)
+{
+    unsigned p = m & 7, k;
+    const SprayAt* e;
+    if (!p || T < p) return 0;
+    e = &t->at[(size_t)s * SP_HIST + (T - p) % SP_HIST];
+    if (e->tick != T - p || e->mark != SP_ONE) return 0;
+    memcpy(out, e->body, REC_SPRAY_BODY);
+    if (m & REC_SPRAY_FOLLOW) {
+        int32_t now[3];
+        if (!e->live || !live[s]) return 0;
+        memcpy(now, (const unsigned char*)units + (size_t)s * REC_UNIT_IMAGE + REC_HOLD_POS_AT, 12);
+        for (k = 0; k < 3; k++) {
+            uint32_t v;
+            memcpy(&v, out + 4 + 4 * k, 4);
+            v += (uint32_t)now[k] - (uint32_t)e->pos[k];
+            memcpy(out + 4 + 4 * k, &v, 4);
+        }
+    }
+    return 1;
+}
+
+/* a spray of slot s at T, its body after the ID, into the table: a second one at T marks T */
+static void spray_note(RecSprays* t, unsigned s, unsigned T, const unsigned char* body,
+                       const void* units, const unsigned char* live)
+{
+    SprayAt* e = &t->at[(size_t)s * SP_HIST + T % SP_HIST];
+    if (e->tick == T && e->mark) {
+        e->mark = SP_SEVERAL;
+        return;
+    }
+    e->tick = T;
+    e->mark = SP_ONE;
+    e->live = live[s] != 0;
+    memcpy(e->pos, (const unsigned char*)units + (size_t)s * REC_UNIT_IMAGE + REC_HOLD_POS_AT, 12);
+    memcpy(e->body, body, REC_SPRAY_BODY);
+}
+
+int recsprays_session(RecSprays* t, const unsigned char* b, unsigned len)
+{
+    unsigned s;
+    if (len != 8 || b[5] || b[6] || b[7] || !mode_ok(b[4])) return 0;
+    s = spray_slot(b, t->nslots);
+    if (!s) return 0;
+    session_set(t, s, b[4]);
+    return 1;
+}
+
+void recsprays_spray(RecSprays* t, unsigned T, const unsigned char* b, const void* units,
+                     const unsigned char* live)
+{
+    unsigned s = spray_slot(b, t->nslots);
+    if (s) spray_note(t, s, T, b + 4, units, live);
+}
+
+int recsprays_imply(RecSprays* t, unsigned T, const void* units, const unsigned char* live,
+                    const unsigned char** out, unsigned* n)
+{
+    unsigned i;
+    *n = 0;
+    if (t->nopen > t->outcap) {
+        unsigned char* q = (unsigned char*)realloc(t->out, (size_t)t->nopen * SP_BYTES);
+        if (!q) return -1;
+        t->out = q;
+        t->outcap = t->nopen;
+    }
+    *out = t->out;
+    for (i = 0; i < t->nopen; i++) {
+        unsigned s = t->open[i];
+        const SprayAt* e = &t->at[(size_t)s * SP_HIST + T % SP_HIST];
+        unsigned char* r = t->out + (size_t)*n * SP_BYTES;
+        uint32_t id = s + 1;
+        if (e->tick == T && e->mark) continue;      /* a spray of its own in T */
+        if (!predict(t, s, T, t->mode[s], units, live, r + 4)) return 0;
+        memcpy(r, &id, 4);
+        spray_note(t, s, T, r + 4, units, live);
+        (*n)++;
+    }
+    return 1;
+}
+
 RecLossy* reclossy_begin(const RecLossyParams* p)
 {
     RecLossy* L;
     unsigned i;
-    if (p->nslots < 2 || p->nslots > 0xFFFF || (p->flags & ~RECL_CELLS) || p->gw > 0xFFFF ||
-        p->gh > 0xFFFF)
+    if (p->nslots < 2 || p->nslots > 0xFFFF || (p->flags & ~(RECL_CELLS | RECL_SPRAYS)) ||
+        p->gw > 0xFFFF || p->gh > 0xFFFF)
         return NULL;
     L = (RecLossy*)calloc(1, sizeof *L);
     if (!L) return NULL;
@@ -146,6 +393,16 @@ RecLossy* reclossy_begin(const RecLossyParams* p)
         reclossy_free(L);
         return NULL;
     }
+    if (p->flags & RECL_SPRAYS) {
+        L->sp = recsprays_begin(p->nslots);
+        L->sprays = (unsigned char*)calloc(p->nslots, 1);
+        L->spray = (const unsigned char**)calloc(p->nslots, sizeof *L->spray);
+        L->sprayed = (unsigned*)malloc(p->nslots * sizeof *L->sprayed);
+        if (!L->sp || !L->sprays || !L->spray || !L->sprayed) {
+            reclossy_free(L);
+            return NULL;
+        }
+    }
     return L;
 }
 
@@ -161,6 +418,10 @@ void reclossy_free(RecLossy* L)
     free(L->touched);
     free(L->grid);
     free(L->run);
+    recsprays_free(L->sp);
+    free(L->sprays);
+    free((void*)L->spray);
+    free(L->sprayed);
     free(L);
 }
 
@@ -436,18 +697,100 @@ static int list_part(RecLossy* L, Pend* p, int* open, const unsigned char* b, un
     return 1;
 }
 
+/* An RK_EV_SPRAY of iteration T, 48 bytes: 1 when the stream carries it, 0 when its unit's
+   session predicts it, the unit's one spray of T in an iteration no snapshot follows -- the
+   session as T began, which a session chosen in T keeps predicting (sessions_put). D's units are
+   T's here: the images come before the events. */
+static int spray_written(const RecLossy* L, unsigned T, const unsigned char* b, int snapshot)
+{
+    unsigned char want[REC_SPRAY_BODY];
+    unsigned s = spray_slot(b, L->nslots);
+    return !s || snapshot || L->sprays[s] != 1 || !L->sp->mode[s] ||
+           !predict(L->sp, s, T, L->sp->mode[s], L->units, L->live, want) ||
+           memcmp(want, b + 4, REC_SPRAY_BODY);
+}
+
+/* an RK_SPRAY_SESSION of slot s: its mode m from this iteration on */
+static void session_put(RecLossy* L, RecBytes* out, unsigned s, unsigned m)
+{
+    unsigned char b[8] = { 0 };
+    uint32_t id = s + 1;
+    memcpy(b, &id, 4);
+    b[4] = (unsigned char)m;
+    rec_put(out, RK_SPRAY_SESSION, b, 8, NULL, 0);
+    session_set(L->sp, s, m);
+}
+
+static int slot_order(const void* a, const void* b)
+{
+    unsigned x = *(const unsigned*)a, y = *(const unsigned*)b;
+    return (x > y) - (x < y);
+}
+
+/* At the end of iteration T, after its last record: the sessions of every slot that sprayed in
+   T or has one, slots ascending -- closed where the unit made no spray, chosen after its one
+   spray -- and then T's sprays into the table, which the choice reads T - 4 of before T's entry
+   replaces it. At a snapshot's iteration every session closes and the table empties instead. */
+static void sessions_put(RecLossy* L, RecBytes* out, unsigned T, int snapshot)
+{
+    static const unsigned period[3] = { 1, 2, 4 };
+    RecSprays* t = L->sp;
+    unsigned i = 0, j = 0, k;
+    qsort(L->sprayed, L->nsprayed, sizeof *L->sprayed, slot_order);
+    while (i < L->nsprayed || j < t->nopen) {
+        unsigned s, found = 0, f;
+        if (j == t->nopen || (i < L->nsprayed && L->sprayed[i] < t->open[j])) s = L->sprayed[i++];
+        else if (i == L->nsprayed || t->open[j] < L->sprayed[i]) s = t->open[j++];
+        else s = L->sprayed[i++], j++;
+        if (snapshot) {
+            if (t->mode[s]) {
+                session_put(L, out, s, 0);
+                j--;                        /* the open list lost s */
+            }
+            continue;
+        }
+        if (!L->sprays[s]) {
+            session_put(L, out, s, 0);
+            j--;
+            continue;
+        }
+        if (L->sprays[s] == 1) {
+            for (f = 0; f <= REC_SPRAY_FOLLOW && !found; f += REC_SPRAY_FOLLOW)
+                for (k = 0; k < 3 && !found; k++) {
+                    unsigned char want[REC_SPRAY_BODY];
+                    unsigned p = period[k], q;
+                    for (q = 1; q <= p; q++) {
+                        const SprayAt* e = &t->at[(size_t)s * SP_HIST + (T - q) % SP_HIST];
+                        if (T < q || e->tick != T - q || e->mark != SP_ONE) break;
+                    }
+                    if (q > p && predict(t, s, T, p | f, L->units, L->live, want) &&
+                        !memcmp(want, L->spray[s], REC_SPRAY_BODY))
+                        found = p | f;
+                }
+            if (found && found != t->mode[s]) {
+                int was = t->mode[s] != 0;
+                session_put(L, out, s, found);
+                j += !was;                  /* the open list gained s, before j */
+            }
+        }
+        spray_note(t, s, T, L->spray[s], L->units, L->live);
+        if (L->sprays[s] > 1) t->at[(size_t)s * SP_HIST + T % SP_HIST].mark = SP_SEVERAL;
+    }
+    if (snapshot) recsprays_empty(t);
+}
+
 int reclossy_iteration(RecLossy* L, const unsigned char* recs, size_t n, int refresh,
-                       const RecLossyExact* x, RecBytes* out)
+                       int snapshot, const RecLossyExact* x, RecBytes* out)
 {
     size_t at = 0, end;
-    unsigned ntouched = 0, ucur = 1, i;
+    unsigned ntouched = 0, ucur = 1, i, tick = 0;
     int units = 1, imaged = 1, evented = 0, open = 0, correct = 0, ok = 1;
     Pend p;
     memset(&p, 0, sizeof p);
-    /* the frame, and every slot a unit record names: a slot named by an RK_UNIT or RK_UNIT_GONE
-       gets its image from that record, and one that a delta names from the delta. A refusal
-       here still reaches the loop at the end that clears the marks, so the next iteration
-       starts from none. */
+    /* the frame, every slot a unit record names -- a slot named by an RK_UNIT or RK_UNIT_GONE
+       gets its image from that record, and one that a delta names from the delta -- and with
+       RECL_SPRAYS each slot's sprays. A refusal here still reaches the loops at the end that
+       clear the marks, so the next iteration starts from none. */
     for (end = 0; end < n; ) {
         unsigned short kind, len, s;
         if (n - end < 4) { ok = 0; break; }
@@ -460,10 +803,18 @@ int reclossy_iteration(RecLossy* L, const unsigned char* recs, size_t n, int ref
             if (s < 1 || s >= L->nslots) { ok = 0; break; }
             if (!L->named[s]) L->touched[ntouched++] = s;
             L->named[s] |= kind == RK_UNIT_DELTA ? 1 : 2;
+        } else if (kind == RK_EV_SPRAY && L->sp && len == 4 + REC_SPRAY_BODY &&
+                   (s = (unsigned short)spray_slot(recs + end + 4, L->nslots)) != 0) {
+            if (!L->sprays[s]) {
+                L->sprayed[L->nsprayed++] = s;
+                L->spray[s] = recs + end + 8;
+            }
+            if (L->sprays[s] < 2) L->sprays[s]++;
         }
         end += (4u + len + 3) & ~3u;
     }
     if (end != n) ok = 0;
+    if (ok) memcpy(&tick, recs + 4, 4);
     while (ok && at < n) {
         unsigned short kind, len, s = 0;
         const unsigned char* b = recs + at + 4;
@@ -523,6 +874,13 @@ int reclossy_iteration(RecLossy* L, const unsigned char* recs, size_t n, int ref
                 if (!list_done(L, out, &p, recs, at + size, refresh)) ok = 0;
             }
             break;
+        case RK_EV_SPRAY:
+            if (!L->sp || len != 4 + REC_SPRAY_BODY || spray_written(L, tick, b, snapshot))
+                rb_put(out, recs + at, size);
+            break;
+        case RK_SPRAY_SESSION:          /* the filter's own record: no capture makes one */
+            ok = 0;
+            break;
         default:
             rb_put(out, recs + at, size);
             break;
@@ -539,7 +897,10 @@ int reclossy_iteration(RecLossy* L, const unsigned char* recs, size_t n, int ref
         refresh_cells(L, out, refresh, x);
         if (!refresh_lists(L, out, refresh, x)) ok = 0;
     }
+    if (ok && L->sp) sessions_put(L, out, tick, snapshot);
     for (i = 0; i < ntouched; i++) L->named[L->touched[i]] = 0;
+    for (i = 0; i < L->nsprayed; i++) L->sprays[L->sprayed[i]] = 0;
+    L->nsprayed = 0;
     return ok && !out->oom;
 }
 

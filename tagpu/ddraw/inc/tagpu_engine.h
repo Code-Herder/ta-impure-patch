@@ -111,7 +111,7 @@
 /* ---- the header's fields, main + offset ---------------------------------- */
 #define OFF_GAMETIME       0x38A47      /* i32 GameTime, the sim tick                */
 #define OFF_GAMESPEED_LIVE 0x38A4D      /* i16 the LIVE speed, 3 x it = ticks/s      */
-#define OFF_GAMEPAUSED     0x38A51      /* u8, bit 0                                 */
+#define OFF_GAMEPAUSED     0x38A51      /* u16 flags, bit 0 the pause                */
 #define OFF_LOADFLAGS      0x38D75      /* u16: bit0 load started (0x49832A), bit1   */
                                         /* loader done (0x497C5F), bit2/bit3 the     */
                                         /* loader<->game handshake (0x4975C7,        */

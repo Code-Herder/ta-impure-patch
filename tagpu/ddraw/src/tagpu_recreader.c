@@ -98,6 +98,7 @@ struct RecReader {
     int                snap;        /* the records applied are a snapshot's (snapshot_apply)   */
     unsigned           fbracket;    /* an RK_EV_FEATURE's root + 1, until its END             */
     unsigned           ndeaths;     /* the deaths whose RK_EV_DEATH_END is still to come      */
+    uint32_t           session_id;  /* the unit ID of the iteration's last RK_SPRAY_SESSION   */
     unsigned           death[REC_DEATHS_MAX];
     struct { unsigned slot, list, total, next; } pend;   /* a list sent in several records   */
     unsigned long long first_off;   /* the file offset of the first block after the header    */
@@ -124,6 +125,9 @@ struct RecReader {
     int                in_seg;      /* the world holds an iteration of segment chain[cur]      */
     int                read_any;    /* an iteration has been read: the chain is fixed          */
     RecSeekWork        work;        /* the last recr_seek's (recr_seek_work)                   */
+    RecSeekWork        decoded;     /* every block_body since the reader opened: its blocks,
+                                       packed and raw, which recr_seek's work takes the
+                                       difference of                                            */
 };
 
 static const char* const END_REASONS[] = {
@@ -344,6 +348,9 @@ static int block_body(RecReader* r, const RecBlock* b, char* why, unsigned cap)
     if (b->kind == RB_STREAM && !(b->flags & RBF_SECTIONS) && r->codec)
         reccodec_invalidate(r->codec);
     r->off += sizeof *b + b->packed;
+    r->decoded.blocks++;
+    r->decoded.packed += b->packed;
+    r->decoded.raw += b->raw;
     return 1;
 }
 
@@ -702,6 +709,7 @@ static void world_reset(RecReader* r, int from_base)
         w->view[1] = (unsigned char)h->viewed;
     }
     for (i = 0; i < w->ntab; i++) w->tab[i].size = 0;
+    recsprays_empty(w->sprays);
     w->nev = 0;
     w->nfeat = 0;
     w->nclick = 0;
@@ -756,8 +764,9 @@ static int world_init(RecReader* r, char* why, unsigned cap)
     w->mapped_bytes = REC_MAPPED_BYTES(r->h.grid_w, r->h.grid_h);
     w->mapped = (unsigned char*)malloc(w->mapped_bytes ? w->mapped_bytes : 1);
     w->sel = (RecSelEntry*)calloc((size_t)REC_PLAYERS * REC_SEL_MAX, sizeof *w->sel);
+    w->sprays = recsprays_begin(w->slots);
     if (!w->live || !w->changed || !w->list || !w->unit || !r->touched || !w->tab || !w->grid ||
-        !r->base || !w->pool || !r->wbase || !w->proj || !w->mapped || !w->sel) {
+        !r->base || !w->pool || !r->wbase || !w->proj || !w->mapped || !w->sel || !w->sprays) {
         snprintf(why, cap, "no memory for the world of %u slots and %u x %u cells", w->slots,
                  r->h.grid_w, r->h.grid_h);
         return 0;
@@ -844,6 +853,12 @@ static int list_add(RecEvent** l, unsigned* n, unsigned* cap, unsigned kind, uns
     return 1;
 }
 
+/* a segment whose stream writes its nano sprays as sessions (RT_HOLD's RECL_SPRAYS) */
+static int sprays_on(const RecHeader* h)
+{
+    return h->has_hold && (h->hold.flags & RECL_SPRAYS);
+}
+
 /* An event of the step, by the brackets' grammar (tagpu_recwriter.c, feature_record): a feature
    call's holds no other and cells only when it is the tick's, which is inside none; a death's
    holds its explosion's feature calls, in a multiplayer recording its corpse's (FR_CORPSE, inside
@@ -907,6 +922,9 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
         break;
     default:
         if (kind < RK_EV_CREATE || kind > RK_EV_SPRAY || !rec_event_len(kind, len)) return 0;
+        /* the images come before the events: the units are this iteration's */
+        if (kind == RK_EV_SPRAY && sprays_on(h))
+            recsprays_spray(w->sprays, w->tick, b, w->unit, w->live);
         break;
     }
     return list_add(&w->ev, &w->nev, &r->evcap, kind, len, b);
@@ -1011,6 +1029,9 @@ static int pov_record(RecReader* r, unsigned kind, const unsigned char* b, unsig
     }
 }
 
+/* tick_read's `events` once the iteration's spray sessions have begun: they end it */
+#define IT_SESSIONS 2
+
 /* One record of an iteration after its tick. 1 applied, 0 malformed. */
 static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned len, int* events)
 {
@@ -1019,6 +1040,7 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
     unsigned n = 0, off = 0;
     RecTable* t;
     if (r->pend.next < r->pend.total && kind != RK_ORDERS) return 0;
+    if (*events == IT_SESSIONS && kind != RK_SPRAY_SESSION) return 0;
     if (len >= 2) memcpy(&id, b, 2);
     /* a click follows the step's events, and may follow the images directly */
     if (kind == RK_CLICK) return pov_record(r, kind, b, len);
@@ -1026,6 +1048,19 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
         (kind == RK_CELLS && *events)) {
         if (!event_take(r, kind, b, len)) return 0;
         *events = 1;
+        return 1;
+    }
+    /* the spray sessions follow the iteration's last other record, outside every bracket, slots
+       ascending (tagpu_recfmt.h, RK_SPRAY_SESSION); a stream's only */
+    if (kind == RK_SPRAY_SESSION) {
+        uint32_t unit;
+        if (!sprays_on(seg_header(r)) || r->snap || r->fbracket || r->ndeaths || len < 4) return 0;
+        memcpy(&unit, b, 4);
+        if ((*events == IT_SESSIONS && unit <= r->session_id) ||
+            !recsprays_session(w->sprays, b, len))
+            return 0;
+        r->session_id = unit;
+        *events = IT_SESSIONS;
         return 1;
     }
     /* the images come before the events of the step after them (tagpu_recfmt.h, RK_TICK) */
@@ -1212,6 +1247,33 @@ static int iteration_done(const RecReader* r, char* why, unsigned cap)
     return 1;
 }
 
+/* The iteration read is whole (iteration_done), and the sprays its spray sessions imply are put
+   after its events, slots ascending (tagpu_reclossy.c, THE SPRAY SESSIONS): 1, or -1 with `why`
+   for a session the filter would never have left open. */
+static int tick_end(RecReader* r, char* why, unsigned cap)
+{
+    RecWorld* w = &r->w;
+    const unsigned char* b;
+    unsigned n, i;
+    int k;
+    if (iteration_done(r, why, cap) < 0) return -1;
+    if (!sprays_on(seg_header(r))) return 1;
+    k = recsprays_imply(w->sprays, w->tick, w->unit, w->live, &b, &n);
+    if (k <= 0) {
+        snprintf(why, cap, !k ? "a spray session at GameTime %u predicts from no single spray "
+                 "of its unit, or follows a unit not live, in the block before byte %llu" :
+                 "no memory for the sprays of GameTime %u (before byte %llu)", w->tick, r->off);
+        return -1;
+    }
+    for (i = 0; i < n; i++)
+        if (!list_add(&w->ev, &w->nev, &r->evcap, RK_EV_SPRAY, 4 + REC_SPRAY_BODY,
+                      b + (size_t)i * (4 + REC_SPRAY_BODY))) {
+            snprintf(why, cap, "no memory for the events of GameTime %u", w->tick);
+            return -1;
+        }
+    return 1;
+}
+
 static int tick_read(RecReader* r, char* why, unsigned cap)
 {
     RecWorld* w = &r->w;
@@ -1230,7 +1292,7 @@ static int tick_read(RecReader* r, char* why, unsigned cap)
             RecBlock blk;
             int k;
             /* a stream block ends where an iteration does (tagpu_recwriter.c, iteration_done) */
-            if (began) return iteration_done(r, why, cap);
+            if (began) return tick_end(r, why, cap);
             if (r->ended) {
                 snprintf(why, cap, "%s", r->end);
                 return 0;
@@ -1245,6 +1307,9 @@ static int tick_read(RecReader* r, char* why, unsigned cap)
             }
             if (blk.kind != RB_STREAM && blk.kind != RB_END) {
                 if (block_skip(r, &blk, why, cap) < 0) return -1;   /* a snapshot: recr_seek's */
+                /* the writer closed every spray session at the snapshot's iteration and emptied
+                   its table: a reader that starts here holds none either */
+                if (blk.kind == RB_SNAPSHOT) recsprays_empty(w->sprays);
                 continue;
             }
             if (block_body(r, &blk, why, cap) < 0) return -1;
@@ -1269,7 +1334,7 @@ static int tick_read(RecReader* r, char* why, unsigned cap)
         b = r->raw + r->at + 4;
         if (hd.kind == RK_TICK) {
             /* the next iteration's: left for the next call */
-            if (began) return iteration_done(r, why, cap);
+            if (began) return tick_end(r, why, cap);
             if (hd.len != 4 || r->pend.next < r->pend.total) {
                 snprintf(why, cap, "a malformed tick in the block before byte %llu", r->off);
                 return -1;
@@ -2254,6 +2319,7 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
 {
     RecWorld* w = &r->w;
     const RecIndexEntry* snap = NULL;
+    const RecSeekWork d0 = r->decoded;
     unsigned i, j, hold, from = 0, prev;
     int read, k;
     memset(&r->work, 0, sizeof r->work);
@@ -2312,6 +2378,7 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
             }
             k = tick_take(r, why, cap);
             r->work.iterations++;
+            r->work.base = 1;
             if (k <= 0) {
                 if (!k) snprintf(why, cap, "timeline %u's first iteration cannot be read",
                                  s->t.id);
@@ -2380,7 +2447,12 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
             return -1;
         }
         if (visit && w->tick <= T) visit(ctx, w);
-        if (w->tick == T) return 1;
+        if (w->tick == T) {
+            r->work.blocks = r->decoded.blocks - d0.blocks;
+            r->work.packed = r->decoded.packed - d0.packed;
+            r->work.raw = r->decoded.raw - d0.raw;
+            return 1;
+        }
         if (w->tick > T) {
             snprintf(why, cap, "the stream has no iteration at GameTime %u: it goes from %u to %u",
                      T, prev, w->tick);
@@ -2692,6 +2764,7 @@ void recr_close(RecReader* r)
     free(r->w.feat);
     free(r->w.click);
     free(r->w.sel);
+    recsprays_free(r->w.sprays);
     free(r->w.pool);
     free(r->w.proj);
     free(r->w.mapped);

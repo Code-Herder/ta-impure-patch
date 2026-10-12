@@ -478,9 +478,10 @@ int tagpu_puppet_rebuilding(void) { return s_rebuild; }
    (tagpu_puppet_play) to the teardown, a takeover or a return to now (tagpu_puppet_end), and
    every contest keeps the incumbent, as the recording machine's did. THE ORDERING: the sites
    change only on the game thread and outside every footprint writer. At the replay's first step
-   that is inside the level's first iteration, at the apply stub after its unit tick (0x4954ED;
-   tagpu_replay.c, tagpu_replay_step), before level_units makes the level's first unit: no unit
-   exists yet, so no stamp, clear or re-claim has run under the other rule or has one open -- the
+   that is inside the level's first iteration, at the capture point B2's stub reaches before the
+   first unit tick 0x48AD30 (tagpu_replay.c, first_step), before play_first's level_units makes
+   the level's first unit: no unit exists yet, so no stamp, clear or re-claim has run under the
+   other rule or has one open, and the creates that follow stamp under the rule now in -- the
    loader, the one other thread that runs level code, makes none, since the start-unit sites skip
    every record on a puppet host (demo-recorder-s2-host.md §6.4), and the first step waits on its
    load word's bit 1 (0x497C5F, 0x498342). Everywhere else it is between two iterations: at a

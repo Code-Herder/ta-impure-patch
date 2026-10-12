@@ -13,10 +13,12 @@
 
    THE STREAM IS LOSSY. Each completed iteration's records, exact as the capture made them and the
    corrections added, go through the lossy filter (tagpu_reclossy.c) into the stream: a skirmish
-   recording's stream holds the bytes RT_HOLD names between refreshes, and the copy stays exact.
-   At a refresh the stream's world is checked equal to the copy, and a snapshot follows only a
-   refresh (iteration_done), so every snapshot is a world the stream itself reaches. A multiplayer
-   recording's stream holds nothing: its iterations are written as they came.
+   recording's stream holds the bytes RT_HOLD names between refreshes and leaves out the nano
+   sprays its spray sessions imply (RECL_SPRAYS), and the copy stays exact. At a refresh the
+   stream's world is checked equal to the copy, and a snapshot follows only a refresh
+   (iteration_done), at whose iteration the filter closes every spray session, so every snapshot
+   is a world the stream itself reaches and a reader starting there needs nothing from before it.
+   A multiplayer recording's stream holds nothing: its iterations are written as they came.
 
    A record is checked against the copy's bounds before it is applied: a slot, a player, a table
    index, an offset and a length, and an event's length. One that fails is a fault in the capture,
@@ -561,9 +563,9 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
                        sizeof REC_HOLD_NODE == REC_ORDER_IMAGE, "the hold masks' sizes");
         _Static_assert(sizeof TAGPU_REPLAY_HOLD_SHA256 == 65, "a SHA-256 in hex");
         lp.nslots = w->nslots;
+        lp.flags = flags;
         lp.hold_unit = REC_HOLD_UNIT;
         lp.hold_node = REC_HOLD_NODE;
-        lp.flags = flags;
         lp.gw = w->gw;
         lp.gh = w->gh;
         w->lossy = reclossy_begin(&lp);
@@ -1051,8 +1053,9 @@ static void snapshot(Writer* w)
    THE REFRESH: the segment's first two iterations and then one in each interval, the GameTimes
    1 modulo it on consecutive iterations (reclossy_is_refresh), and every snapshot's -- a
    snapshot is taken only at a refresh, SNAPSHOT_TICKS or more after the last. The filter writes
-   every difference there, so the stream's world equals the copy, and
-   that is checked before the block ends: INVARIANT, an ordering, every snapshot follows a refresh
+   every difference there, so the stream's world equals the copy, and -- told the snapshot
+   follows -- every spray, its sessions closed; the stream's world is checked equal to the copy
+   before the block ends: INVARIANT, an ordering, every snapshot follows a refresh
    at which the stream's world was found equal to the copy, so a reader that starts from a
    snapshot holds what a reader of the whole stream holds there. A failed check is a fault of the
    filter, and abandons the file rather than write a stream that does not reach its snapshots. The
@@ -1091,7 +1094,8 @@ static void iteration_done(Writer* w)
     x.live = w->live;
     x.lists = w->lists;
     x.grid = w->grid;
-    if (w->lossy ? !reclossy_iteration(w->lossy, w->iter.p, w->iter.n, refresh, &x, &w->stream)
+    if (w->lossy ? !reclossy_iteration(w->lossy, w->iter.p, w->iter.n, refresh, snap, &x,
+                                       &w->stream)
                  : !buf_put(&w->stream, w->iter.p, w->iter.n)) {
         fail(w, w->stream.oom ? "no memory for a stream block" : "the lossy filter refused an "
              "iteration the writer took");
