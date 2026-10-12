@@ -33,20 +33,29 @@
    - BOUNDS. Every slot is checked against nslots, a delta's bitmap against the image, a list's
      nodes against REC_ORDERS_MAX and its records against the list they continue.
 
-   WHY A HELD VALUE NEVER REACHES A PLAYBACK HOST'S WORLD. The playing writes D into the engine:
-   every live unit's image (tagpu_replay.c, units_put, each live slot through unit_put) and every
-   node of both lists of every live unit (orders_put), each iteration; neither +0xD4 of a unit nor
-   +0x4E of a node is an exclusion of replay-layout.tsv, so both are written from D. Two engine
-   paths write held bytes on a puppet between those writes, and the next iteration's writes go
-   over them: the unit destructor's reclaim credit read-modify-writes the killer's +0xD4
-   (0x486CAD..0x486D1E, DISASSEMBLED) at a replayed death, and the death walk 0x489740 (from
-   0x486D75) ORs event 8 into a node's +0x4E through vtable 0x4FD2C8 slot 0, 0x438870
-   (DISASSEMBLED). No reader of either runs on a puppet in between: the panel reads
-   +0xCC/+0xD0/+0xE4/+0xE8, and +0x4E is read by the order controller and its handlers, owner code
-   the unit tick skips for a type-3 owner (0x48AEB5..0x48AECD, DISASSEMBLED). The Deathmatch
-   respawn's writes of +0xBC and +0xD4 (0x465457..0x4654E7) run behind the defeat test, which the
-   seat fill disarms on a puppet [INFERRED that they do not run]; the same rewrite covers them if
-   they did.
+   WHY A HELD VALUE NEVER REACHES A PLAYBACK HOST'S WORLD. The playing writes D into the engine at
+   every iteration: every live unit's whole image, each byte replay-layout.tsv leaves a value and
+   so every held byte (tagpu_replay.c, units_put through unit_put), and every node of both lists of
+   every live unit (orders_put). So any engine write of a held byte on a puppet between two of
+   those writes is overwritten by the next one, and what matters is only that no reader shows it in
+   between. The engine writes of held bytes known to run on a puppet (DISASSEMBLED):
+   - the unit destructor's reclaim credit read-modify-writes the killer's +0xD4
+     (0x486CAD..0x486D1E) at a replayed death;
+   - the death walk 0x489740 (from 0x486D75) ORs event 8 into a node's +0x4E through vtable
+     0x4FD2C8 slot 0, 0x438870;
+   - the shot receiver 0x49D270 writes the named weapon slot's pitch +0x18 (0x49D37C) and heading
+     +0x16 (0x49D384) from the message, and the shot builders it calls read those values, the
+     message's, never the image's;
+   - the builder 0x49CC20, called from the receiver at 0x49D479, zeroes the slot's aim complete
+     +0x8 (0x49CCA2: ebx 0 from 0x49CC2F, edi the slot from 0x49CC75);
+   - the create's 0x489800 call (0x485C58, after 0x48A160 at 0x485C50) writes a fresh unit's slot
+     targets and flags bit 4.
+   No reader of any of them runs on a puppet in between: the panel reads only the ledger's last
+   period, +0xCC/+0xD0/+0xE4/+0xE8, none of them held, +0x4E is read by the order controller and its handlers, and the
+   slots' aim and target state by AutoAim and the handlers, owner code the unit tick skips for a
+   type-3 owner (0x48ADC9..0x48ADD7, 0x48AEB5..0x48AECD). The Deathmatch respawn's writes of +0xBC
+   and +0xD4 (0x465457..0x4654E7) run behind the defeat test, which the seat fill disarms on a
+   puppet [INFERRED that they do not run]; the same rewrite covers them if they did.
    The filter writes no engine memory; the playing's puppet rows apply after every list it writes,
    whatever the stream held: ord_values copies a node's image and then applies replay-layout.tsv's
    puppet0 and puppet1 rows (+0x06 bit 1, +0x42 bits 0x400000 and 0x10000, +0x52), which keep the
