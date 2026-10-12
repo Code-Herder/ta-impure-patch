@@ -1579,6 +1579,24 @@ calls the same fire functions (`0x49D44E` among others). The wind starts SetDire
 (`0x437910`, the names at `0x50500C` and `0x505000`, `0x43795E`, `0x43798A`) come earlier in the
 same turn, on a puppet too.
 
+**A death's Killed: the owner's query, a peer's run-now start.** `Send_UnitDeath 0x4864B0`, the
+death of a unit the machine itself destroys, runs Killed as a query, `0x4B0BC0(cob, "Killed"
+0x508BE8, &severity, &corpse, 0, 0)` at `0x4865C3` (`thiscall`, `ret 0x14`; it finds the index by
+name and calls the query `0x4B0C40` at `0x4B0C2F`), which allocates one thread (`0x4B0C48`) and
+runs that thread alone at `dt` 0 (`0x4B0CE1`); it skips the query for modes 4, 5, 7 and 9 and a
+unit whose `+0x108` is above 0 (`0x486525..0x48655C`), and writes the query's severity as the
+`0x0C`'s `+9` (`0x4865E9..0x4865F4`). The corpse slot it passes is a local written only on the
+mode-7 path, which skips the query (`0x48652C`, `0x486528`). The destructor `0x4866D0(rec, mode)`
+starts Killed itself only in mode 0 and when the record's severity `+9` is above 0
+(`0x48684A..0x48685A`): `0x4B0A70("Killed", 0, run-now 1, argc 1, severity, 0, 0, 0)` at
+`0x486877`, whose result nothing reads (`0x48687C` overwrites `eax`, `ecx`, `edx`). A run-now
+start runs every record of the object at `dt` 0, so a waiting thread of the dying unit -- an aim
+script whose turn the last slice finished -- runs on and starts what it starts before the object
+is deleted, which the owner's query does not. A playing applies a recorded death as a peer's,
+mode 0, so Impure takes the call at `0x486877` (`tagpu_patches.c`, THE KILLED SCRIPT OF A
+REPLAYED DEATH): inside a replayed death the recording machine made itself, the query with the
+record's severity; everywhere else the stock start.
+
 **The script slice in Impure.** The unit tick's script call (`0x48ADDF..0x48ADF0`, the unit tick's
 row) jumps to `pushad; push esi; call unit_slice; add esp,4; popad; jmp 0x48ADF0`, in the
 fail-closed table of both builds (`tagpu_patches.c`, THE SCRIPT SLICE). `unit_slice` reads `+0x9A`

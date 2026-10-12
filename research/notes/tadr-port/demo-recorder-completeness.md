@@ -821,8 +821,8 @@ cannot see an address recorded as a value; the scan looks for one instead.
 - **`--cob-exact`** (a fixture's `"cob": "exact"`): the COB thread allocation's VM children, the
   START (`0x4B18C0`) and CALL (`0x4B192D`) callers keyed by script name, compare exactly instead of
   within the band. It runs only on the playing's lane against the live one (not across a rewind,
-  whose VM children `--rewind` accepts). The fixtures that carry COB set it: `slice-walkers`,
-  `battle`, `tenseat`.
+  whose VM children `--rewind` accepts). The gate's fixtures that carry COB set it:
+  `slice-walkers`, `battle`, `tenseat` and `codec-decline`.
 - **No COB engine write on a puppet**: SET's ACTIVATION and ARMORED (`0x48B090`, returning to
   `0x480B57`, `0x480BF1`), SET's YARD_OPEN (`0x47DAC0`, `0x480BB3`), ATTACH and DROP (`0x48AAC0`,
   `0x4813AB`, `0x481427`), counted on a puppet's unit outside the replay's own calls; the first 16
@@ -1073,6 +1073,18 @@ playing's bookkeeping (`tagpu_replay.c`, THE SCRIPT SLICES) gives each owed slic
 marker, at a multiplayer own create's CREATE_END, or at the step's end, counted and noted; a create
 or a death in the slot voids the debt.
 
+**A replayed death's Killed** is the owner's query too. The recording machine runs a dying unit's
+Killed through `Send_UnitDeath`'s query (`0x4865C3` → `0x4B0BC0`), that one thread at `dt` 0; a
+playing applies every death as a peer's, and the destructor's peer path starts Killed with run-now
+set (`0x486877`), which runs every record of the dying unit -- an aim script whose turn had
+finished ran on and started RestoreAfterDelay, the puppet 1 to 12 ahead under `--cob-exact`
+(MEASURED 2026-10-12: battle 7833/7837, codec-decline 452/453, every engine start equal per
+script). Inside a replayed death the recording machine made itself, Impure makes the query
+instead (`tagpu_patches.c`, THE KILLED SCRIPT OF A REPLAYED DEATH), so both sides count Killed at
+`0x4B0C4D`. Its corpse argument is 0 on a puppet, where the recording machine passed an
+uninitialised local: a Killed that reads it before writing it can differ [INFERRED: no stock
+script seen to].
+
 Not closed by the marker:
 
 - **The walk class's run-now pass** can run a start the AI made after the unit tick a tick early,
@@ -1091,10 +1103,6 @@ Not closed by the marker:
 - **A start made inside a slice** by a COB SET a puppet replays as an event (`RK_EV_STATE` →
   Activate): live the new thread may run in the same slice when its record comes later
   [INFERRED: the runner's record order]; on a puppet it runs at the next slice.
-- **Killed's body.** Live, `Send_UnitDeath`'s query runs Killed at `dt` 0 (`0x4865C3` →
-  `0x4B0C4D`); on a puppet the destructor only starts it (`0x486877` → `0x4B0B0D`) and deletes the
-  object, so the body never runs: `replay-absent.tsv`'s `Killed same` row covers the start, and a
-  Killed with START or CALL children would differ under `--cob-exact`.
 - **Multiplayer**: markers cover the recording machine's own units (M1); starts the ledger orders
   keep their lag, and another owner's units are unchanged
   ([multiplayer slice](demo-recorder-multiplayer-slice.md)).

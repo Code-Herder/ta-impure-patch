@@ -2557,13 +2557,21 @@ first slice a tick late, and a looping script stayed re-phased for the unit's li
   step's end, and the anomalies).
 - **The check.** The count root compares per aux exactly, and `--cob-exact`
   ([completeness](demo-recorder-completeness.md#the-replay-test-harness)) compares the VM's START
-  and CALL children exactly on `slice-walkers`, `battle` and `tenseat`. The fixture
-  `slice-walkers` (`scenarios/replay-slice-walkers.json`: three AI seats on Core Prime Industrial
-  Area, each with a lab and two constructors beside it) makes kbots that walk out of a lab during
-  play.
+  and CALL children exactly on `slice-walkers`, `battle`, `tenseat` and `codec-decline`. The
+  fixture `slice-walkers` (`scenarios/replay-slice-walkers.json`: three AI seats on Core Prime
+  Industrial Area, each with a lab and two constructors beside it, and every 600 ticks a wave of
+  eight CORAK and eight ARMPW ordered at each other on seat 2's plateau,
+  `replay-slice-walkers-wave.json`) makes units in later slots during play and kbots that walk and
+  aim. MEASURED 2026-10-12: on Landing A's DLL its counts differed (RestoreAfterDelay 1077/1073,
+  walk 3271/3268, walklegs 1025/1028 live/puppet over [1141, 3481)); on this landing's, over
+  [631, 2881), its recording held 1,548 markers -- 17 after the unit's create in the same
+  iteration, 1,408 after a START or a SHOT, 103 after a named start, 20 after nothing recorded --
+  and the playing gave all 2,045 it planned at their markers, none at the step's end.
+- **A replayed death's Killed** runs as the recording machine ran it, as a query
+  ([completeness](demo-recorder-completeness.md), *COB slices a playing gives one tick late*).
 - **What it leaves**: the walk class's run-now pass, seeks and round trips (fresh COB from
   Create), A6, mid-tick reads, a unit dying before its turn, starts made inside a slice by a
-  replayed state change, Killed's body, and on a multiplayer recording the ledger's starts and
+  replayed state change, and on a multiplayer recording the ledger's starts and
   other owners' units (the [completeness note](demo-recorder-completeness.md), *COB slices a
   playing gives one tick late*).
 
