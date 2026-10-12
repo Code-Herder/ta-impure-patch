@@ -1235,15 +1235,19 @@ pass on the result. Adding a row is the owner's decision (CLAUDE.md, *Loosening*
 **The unit and order hold rows: recording format 14** (2026-10-12). `replay-hold.tsv` holds the
 three weapon slots' target, callback, aim complete, aim heading and pitch and flags but bit 1; the
 ledger's produced, requested, granted and debt of both resources; and a main list node's state,
-wanted and fired events, deadline, leash, p3, owned object and flags but seven bits (six a
-playback host reads, and `0x8`) -- the plan's U and O rows less one, each row with its readers on a playback host and
-its evidence (the owner's, 2026-10-11: *hold rows are loosenings*). Left out of the plan's rows: a
+wanted and fired events, deadline, leash, p3, owned object and flags but seven bits (five a
+playback host reads on a main list node, and `0x8` and `0x80000`, whose readers do not run there:
+loosenings not taken) -- the plan's U and O rows less one, each row with its readers on a
+playback host and its evidence (the owner's, 2026-10-11: *hold rows are loosenings*). Left out of the plan's rows: a
 weapon slot's distance (`+0x10`), which the shot builder reads on a puppet (`0x49CE62`) and which
 never changes after the create, so holding it saved nothing. MEASURED 2026-10-12, `codectest lossy`
 over the heavy hour's exact records (the writer's path, a refresh every 300 ticks): **30,530,997
 bytes against 42,153,513 with the empty table (−27.6 %)**, the plan's 30.26 MB at a refresh every
-1,800 ticks plus 0.9 % [INFERRED: the shorter interval's refreshes]; 107,868 of 108,090 iterations differ from the
-input's, 3,605 stream blocks (362 at a refresh), every one sectioned, none declined or mismatched,
+1,800 ticks plus 0.9 % [INFERRED: the shorter interval's refreshes]. The empty-table base is the
+same command built from main at `03d0b4c0`, on the same grid: 3,605 stream blocks, 362 at a
+refresh. The core's 3,604 and 361 above were measured before the segment's second iteration
+became a refresh (`d959778b`), which is the extra block; the rows add none. With the rows, 107,868
+of 108,090 iterations differ from the input's, 3,605 stream blocks (362 at a refresh), every one sectioned, none declined or mismatched,
 60 snapshots; `tarec lossy-check` over the whole hour (every shown byte exact, every held byte the
 stream's last or the exact one, the two worlds equal at all 362 refreshes), `tarec check`, and the
 C and Python decoders on every block (`codectest.py verify`) pass. The spray sessions and the cells

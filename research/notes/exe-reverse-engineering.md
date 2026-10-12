@@ -1764,8 +1764,9 @@ init `0x49E070` walk them with `esi` = unit + 0x1F + 0x1C·i, the slot's last by
   `&slot+0x4` to the `Aim` script as its completion callback (`0x49E30F`, `0x49E379` →
   `0x4B0A70`), and `vtable[0]` `0x481490` sets `+0x8` to 1, so a running COB thread holds a
   pointer into the unit array. MEASURED `0x004FD6F0` in every record.
-- **`+0x8`**, aim complete: 0 before `Aim` starts (`0x49E2FF`, `0x49E369`) and at fire (the fire
-  routine `0x49D580`, `0x49D78E`), 1 through the callback.
+- **`+0x8`**, aim complete: 0 before `Aim` starts (`0x49E2FF`, `0x49E369`), at fire (the fire
+  routine `0x49D580`, `0x49D78E`) and in the shot builder `0x49CC20` (`0x49CCA2`, reached from the
+  shot receiver at `0x49D479`, so on a puppet too), 1 through the callback.
 - **`+0xC`**, the weapon def `*(def + 0x1EE + 4i)`, written only by `0x49E0B0` in `0x49E070`, from
   the creates. **The restore writes the saved weapon ID into the shared weapon def**
   (`0x487628`, `[wdef]+0x10A`) instead of re-pointing the slot: a no-op when the IDs agree.
@@ -3862,18 +3863,26 @@ events `+0x4E`, the owned object `+0x52` and the flags `+0x42` but `0x8`, `0x100
 correctness rests on these engine facts, from a census of the readers and writers of every field
 the plan would hold (2026-10-11; rel32 and stored-pointer scans of `.text`, each hit disassembled):
 
-- **Two engine writes of held bytes run on a puppet between two image writes**, and the playing's
-  next iteration writes over both: the unit destructor `0x486760`, at a replayed death of kind 5
-  with a killer, read-modify-writes the killer's `+0xD4` with `(1.0 − victim +0x104) × def
-  +0x18A` (`0x486CAD..0x486D1E`, the credit above); the death walk `0x489740` ORs event 8 into
-  node `+0x4E` (*The pointer fields*, `+0xA2`). The playing writes every live unit's image and
-  both lists of every live unit at every iteration (`tagpu_replay.c`, `units_put` and
-  `orders_put`), and neither `+0xD4` nor node `+0x4E` is a `replay-layout.tsv` exclusion. No
-  reader of either runs on a puppet in between: the bottom panel reads `+0xCC`, `+0xD0`, `+0xE4`
-  and `+0xE8`, and `+0x4E` is read by the order controller and the handlers, which the unit tick
-  runs only for a type-1/2 owner (`0x48AEB5..0x48AECD`). The Deathmatch respawn's writes of
-  `+0xBC`/`+0xD4` (`0x465457..0x4654E7`) sit behind the defeat test the seat fill disarms on a
-  puppet [INFERRED that they do not run there].
+- **Every engine write of a held byte on a puppet is overwritten by the playing's next write.**
+  The playing writes every live unit's whole image -- each byte `replay-layout.tsv` leaves a
+  value, so every held byte -- and every node of both lists of every live unit at every iteration
+  (`tagpu_replay.c`, `units_put` through `unit_put`, and `orders_put`), so what a held byte needs
+  is that no reader shows it between two of those writes. The engine writes of held bytes known to
+  run on a puppet: the unit destructor `0x486760`, at a replayed death of kind 5 with a killer,
+  read-modify-writes the killer's `+0xD4` with `(1.0 − victim +0x104) × def +0x18A`
+  (`0x486CAD..0x486D1E`, the credit above); the death walk `0x489740` ORs event 8 into node
+  `+0x4E` (*The pointer fields*, `+0xA2`); the shot receiver `0x49D270` writes the named slot's
+  pitch `+0x18` (`0x49D37C`) and heading `+0x16` (`0x49D384`) from the message; the builder
+  `0x49CC20`, called from the receiver at `0x49D479`, zeroes the slot's aim complete `+0x8`
+  (`0x49CCA2`, `ebx` 0 from `0x49CC2F`, `edi` the slot from `0x49CC75`); and the create's
+  `0x489800` call (`0x485C58`, after `0x48A160` at `0x485C50`) writes a fresh unit's slot targets
+  and flags bit 4. No reader of them runs on a puppet in between: the bottom panel reads the
+  ledger's `+0xCC`, `+0xD0`, `+0xE4` and `+0xE8`, none held; the shot builders read the heading
+  and pitch the receiver has just written; and `+0x4E`, the aim and the targets are read by the
+  order controller, the handlers and AutoAim, which the unit tick runs only for a type-1/2 owner
+  (`0x48ADC9..0x48ADD7`, `0x48AEB5..0x48AECD`). The Deathmatch respawn's writes of `+0xBC`/`+0xD4`
+  (`0x465457..0x4654E7`) sit behind the defeat test the seat fill disarms on a puppet [INFERRED
+  that they do not run there]. All DISASSEMBLED.
 - **The node destructor's reads that the puppet rows neutralise.** `0x43A1F0` reads node `+0x06`
   (`0x43A1F5`), tests bit 1 (`0x43A1FE`) and, when it is set, calls the order's handler with event
   2 (`0x43A21A`), tests `+0x42` bit `0x10000`
@@ -3908,6 +3917,16 @@ the plan would hold (2026-10-11; rel32 and stored-pointer scans of `.text`, each
   sub-objects, which the AI tick `0x408C40` calls (`0x408C8E`); `0x408C40` runs only for a record
   with `+0x74` set (`0x46502A..0x465031`), and a puppet seat holds none. The table does not hold
   bit `0x8` all the same: with no reader on a puppet it could be, but that loosening is not taken.
+  Nor bit `0x80000`: its reader `0x439D20` reads only the sub list (`unit+0x60`, `0x439D25`),
+  which is never held, so on a main list node it could be held too.
+- **The local ground movement class reads a held flag of the head node, and never on a puppet.**
+  Slot 1 of vtable `0x4FD458`, `0x44F2A0`, the class `0x44F010` the mover's constructor makes at
+  `0x43DCF2`, tests the unit's main list head's `+0x42` bit `0x800000` (`0x44F3DF..0x44F3E9`). A
+  type-3 owner's mover holds the proxy class `0x44F570` instead (`replay-layout.tsv`'s mover row,
+  `0x43DC48..0x43DD08`). Slot 1 is called by the owned-object installs `0x4388D0`, `0x438930`,
+  `0x438A00` and `0x438AD0`, which only handlers call, and by the node destructor at `0x43A285`
+  with argument 0, which stores it and leaves at `0x44F2D8..0x44F2E3` (to `0x44F41D`) before the
+  read. DISASSEMBLED.
 - **Not established**: whether `0x406F50`'s callers (`0x499CBC`, `0x49A09B`, `0x49A837`), which set
   `+0xBB` bits, run on puppet impacts; whether the order entries `0x487BF0` (from `0x488514`) and
   `0x4881E0` can reach a puppet's units; callers of `0x439CF0`, `0x43AB90`, `0x43AD50`,
