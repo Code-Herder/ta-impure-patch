@@ -696,8 +696,8 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
         return 0;
     }
     if (h->mode != MODE_NETWORK && recr_holds_cells(h) && !tagpu_puppet_contest_in()) {
-        snprintf(why, cap, "it holds its cells, and the contest sites hold other bytes than the "
-                 "retail exe's (tagpu_puppet.c, THE CONTEST'S RULE)");
+        snprintf(why, cap, "it holds its cells, and a contest site holds another module's "
+                 "bytes (tagpu_puppet.c, THE CONTEST'S RULE)");
         return 0;
     }
     if (!tagpu_reclaim_level_tracked()) {
@@ -7456,7 +7456,8 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
        going in for a recording that holds its cells, or, for one that does not, a NOP a failed
        restore left being put back (tagpu_puppet.c, contest_write) */
     if (recr_holds_cells(h) && !tagpu_puppet_contest_in()) {
-        snprintf(why, cap, "the contest sites hold other bytes than the retail exe's");
+        snprintf(why, cap, "a contest site holds another module's bytes (tagpu_puppet.c, "
+                 "THE CONTEST'S RULE)");
         return 0;
     }
     snprintf(s_rw.dump, sizeof s_rw.dump, "rewind-%lu-%u", GetCurrentProcessId(), ++serial);

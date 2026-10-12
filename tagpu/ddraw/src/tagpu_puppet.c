@@ -4,6 +4,7 @@
 #include <string.h>
 #include "tagpu_puppet.h"
 #include "tagpu_cob_safe.h"
+#include "tagpu_contest.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
 #include "tagpu_simreg.h"
@@ -522,15 +523,19 @@ static struct { unsigned undone, nested, wide; } s_footDiag;
 SIM_VAR(s_footDiag, SIM_PRIVATE);
 
 /* THE CONTEST'S RULE's sites: each `je take`, 74 and its displacement, in the pristine exe */
-#define CONTEST_SITES 6
 static const struct { unsigned va; unsigned char je[2]; } CONTEST[CONTEST_SITES] = {
     { 0x0047C856u, { 0x74, 0x26 } }, { 0x0047C95Fu, { 0x74, 0x26 } },
     { 0x0047CA3Bu, { 0x74, 0x26 } }, { 0x0047CDD9u, { 0x74, 0x25 } },
     { 0x0047CF0Fu, { 0x74, 0x25 } }, { 0x0047CFE9u, { 0x74, 0x25 } },
 };
-static const unsigned char NOP2[2] = { 0x90, 0x90 };
 static int s_contestIn;             /* the six sites held the pristine bytes at attach */
 SIM_VAR(s_contestIn, SIM_INSTALL);
+/* The record of this module's writes to the sites: bit i set when its NOP NOP went into site i,
+   cleared when the retail `je` went back. Outside s_pup, which a playing's begin and end reset,
+   so nothing but contest_write changes it; it changes where s_pup does, at a playing's first
+   step and end, a seek's crossing and a rewind's start (THE ORDERING) */
+static unsigned s_contestOurs;
+SIM_VAR(s_contestOurs, SIM_CONTENT);
 
 static void contest_init(void)
 {
@@ -545,85 +550,95 @@ static void contest_init(void)
     s_contestIn = 1;
 }
 
-/* What a contest site holds now. The sites' bytes are the rule's only state: this module is the
-   one writer of them after attach, always on the game thread (THE ORDERING), and contest_init
-   found each holding the retail `je` with no detour of ours landed on it, so NOP NOP there is
-   this module's and anything else is another's. */
-enum { SITE_RETAIL, SITE_OURS, SITE_FOREIGN };
-static int contest_site(unsigned i)
+/* What each contest site holds now (tagpu_contest.h). The record of writes says which sites
+   this module NOPped and the bytes confirm it: a site's bytes change only by this module's
+   writes, on the game thread (THE ORDERING), or by another module's, which the record does not
+   claim. */
+static void contest_sites(int site[CONTEST_SITES])
 {
-    const void* at = (const void*)(size_t)CONTEST[i].va;
-    return !memcmp(at, CONTEST[i].je, 2) ? SITE_RETAIL : !memcmp(at, NOP2, 2) ? SITE_OURS
-                                                                              : SITE_FOREIGN;
+    unsigned i;
+    for (i = 0; i < CONTEST_SITES; i++)
+        site[i] = contest_classify((const unsigned char*)(size_t)CONTEST[i].va, CONTEST[i].je,
+                                   s_contestOurs >> i & 1);
 }
 
 int tagpu_puppet_contest_in(void)
 {
-    unsigned i;
+    int site[CONTEST_SITES];
     if (!s_contestIn) return 0;
-    for (i = 0; i < CONTEST_SITES; i++)
-        if (contest_site(i) == SITE_FOREIGN) return 0;
-    return 1;
+    contest_sites(site);
+    return !contest_any(site, SITE_FOREIGN);
 }
 
 int tagpu_puppet_contest_kept(void)
 {
-    unsigned i;
-    if (!s_contestIn) return 0;
-    for (i = 0; i < CONTEST_SITES; i++)
-        if (contest_site(i) != SITE_RETAIL) return 1;
-    return 0;
+    int site[CONTEST_SITES];
+    contest_sites(site);
+    return contest_any(site, SITE_OURS);
 }
 
 /* The six sites to the recording machine's rule (`keep`, NOP NOP) or back to the engine's (the
-   retail `je`), each written only from the retail bytes or this module's NOPs (THE CONTEST'S
-   RULE's BOUND). 1 when every site holds `keep`'s rule afterwards -- or, for the engine's, when
-   none holds a NOP of ours, since there is nothing of ours to put back and a site another
-   module patched is its own. 0, logged, when a site holds another's bytes (`keep`) or a page
-   write fails; the writes this call made are then undone where they can be, and whatever a
-   failed write leaves is read from the sites themselves: a later skirmish is unaffected by a NOP
-   (its seats are types 1 and 2, which keep a contested cell under either rule), a later playing
-   writes the rule it needs first or refuses (tagpu_puppet_play), and a network game, whose
-   remote seats are type 3, is refused at its first iteration while any site is not retail
-   (tagpu_puppet_contest_kept, tagpu_rec_capture). */
+   retail `je`), as contest_plan says (THE CONTEST'S RULE's BOUND): the NOPs go into the retail
+   sites, all six or none, and the `je` back into this module's NOPs alone. 1 when the rule is
+   in afterwards -- for the engine's, when no NOP of ours is left, a site another module patched
+   being its own. 0, logged, when a site holds another's bytes (`keep`) or a page write fails:
+   putting the NOPs in then undoes the ones this call wrote, so the playing stops on the engine's
+   rule; putting the `je` back goes on with the other sites, and a NOP of ours that stays is
+   known by the record: a later skirmish is unaffected by it (its seats are types 1 and 2, which
+   keep a contested cell under either rule), a later playing writes the rule it needs first or
+   refuses (tagpu_puppet_play), and a network game, whose remote seats are type 3, is refused at
+   its first iteration while it stays (tagpu_puppet_contest_kept, tagpu_rec_capture). */
 static int contest_write(int keep)
 {
-    const unsigned char* want;
-    unsigned i, ours = 0, moved[CONTEST_SITES], nmoved = 0;
+    int site[CONTEST_SITES], refuse, ok = 1;
+    unsigned i, plan, done = 0;
     if (!s_contestIn) {
         if (!keep) return 1;
-        tagpu_logf("puppet: the contest sites held other bytes at attach: the contest's rule is "
-                   "not changed");
+        tagpu_logf("puppet: the contest sites held other bytes at attach: the recording "
+                   "machine's contest rule is not put in");
         return 0;
     }
-    for (i = 0; i < CONTEST_SITES; i++)
-        ours += contest_site(i) == SITE_OURS;
-    if (!keep && !ours) return 1;
-    for (i = 0; i < CONTEST_SITES; i++)
-        if (keep && contest_site(i) == SITE_FOREIGN) {
-            tagpu_logf("puppet: the contest site 0x%06X holds other bytes: the contest's rule is "
-                       "not changed", CONTEST[i].va);
-            return 0;
-        }
-    for (i = 0; i < CONTEST_SITES; i++) {
-        if (contest_site(i) != (keep ? SITE_RETAIL : SITE_OURS)) continue;
-        want = keep ? NOP2 : CONTEST[i].je;
-        if (!tagpu_detour_write(CONTEST[i].va, want, 2)) {
-            tagpu_logf("puppet: the contest site 0x%06X could not be written: the contest's rule "
-                       "is not changed", CONTEST[i].va);
-            while (nmoved-- > 0) {
-                unsigned k = moved[nmoved];
-                if (!tagpu_detour_write(CONTEST[k].va, keep ? CONTEST[k].je : NOP2, 2))
-                    tagpu_logf("puppet: the contest site 0x%06X could not be put back",
-                               CONTEST[k].va);
-            }
-            return 0;
-        }
-        moved[nmoved++] = i;
+    contest_sites(site);
+    plan = contest_plan(keep, site, &refuse);
+    if (refuse) {
+        for (i = 0; site[i] != SITE_FOREIGN; i++) {}
+        tagpu_logf("puppet: the contest site 0x%06X holds another module's bytes: the recording "
+                   "machine's contest rule is not put in", CONTEST[i].va);
+        return 0;
     }
-    tagpu_logf("puppet: contests keep %s", keep ? "the incumbent, as the recording machine's did"
-                                                : "the engine's own rule");
-    return 1;
+    if (!plan) return 1;
+    for (i = 0; i < CONTEST_SITES; i++) {
+        if (!(plan >> i & 1)) continue;
+        if (!tagpu_detour_write(CONTEST[i].va, keep ? CONTEST_NOP2 : CONTEST[i].je, 2)) {
+            ok = 0;
+            if (keep) {
+                tagpu_logf("puppet: the contest site 0x%06X could not be written: the recording "
+                           "machine's contest rule is not put in", CONTEST[i].va);
+                break;
+            }
+            tagpu_logf("puppet: the contest site 0x%06X could not be written: this module's NOP "
+                       "stays there", CONTEST[i].va);
+            continue;
+        }
+        if (keep) s_contestOurs |= 1u << i;
+        else s_contestOurs &= ~(1u << i);
+        done |= 1u << i;
+    }
+    if (!ok && keep) {
+        for (i = 0; i < CONTEST_SITES; i++)
+            if (done >> i & 1) {
+                if (tagpu_detour_write(CONTEST[i].va, CONTEST[i].je, 2))
+                    s_contestOurs &= ~(1u << i);
+                else
+                    tagpu_logf("puppet: the contest site 0x%06X could not be put back: this "
+                               "module's NOP stays there", CONTEST[i].va);
+            }
+        return 0;
+    }
+    if (ok)
+        tagpu_logf("puppet: contests keep %s", keep ? "the incumbent, as the recording machine's "
+                                                      "did" : "the engine's own rule");
+    return ok;
 }
 
 /* the rule a level needs: the recording machine's on a skirmish segment that keeps the engine's
@@ -818,7 +833,7 @@ int tagpu_puppet_engine_cells(int engine_cells, int mp_state)
 void tagpu_puppet_end(void)
 {
     /* the engine's own rule again, or contest_write has logged why a NOP of ours stays, which
-       the sites themselves then say (tagpu_puppet_contest_kept) */
+       the record of writes then says (tagpu_puppet_contest_kept) */
     contest_write(0);
     s_pup.on = 0;
     s_pup.playing = 0;

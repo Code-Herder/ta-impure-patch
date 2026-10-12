@@ -63,6 +63,7 @@
 #include "../src/tagpu_reccodec.c"
 #include "tagpu_reclossy.h"
 #include "tagpu_rechold.h"
+#include "tagpu_contest.h"
 
 #define BLOCK_MAX (64u << 20)
 
@@ -2524,6 +2525,45 @@ static void lo_cells(RecBytes* b, unsigned x, unsigned z, const unsigned char* c
     tlv_put(b, RK_CELLS, r, 8 + n * REC_CELL_BYTES);
 }
 
+/* THE CONTEST'S RULE's bookkeeping (tagpu_contest.h) on sites of the test's own: what each
+   holds, what a change of rule writes, and when a network game is refused */
+static int outcomes_contest(void)
+{
+    static const unsigned char je[2] = { 0x74, 0x25 }, other[2] = { 0xEB, 0x25 };
+    int site[CONTEST_SITES], refuse, ok = 1;
+    unsigned i, plan;
+    ok &= expect("contest: the retail je", contest_classify(je, je, 0), SITE_RETAIL);
+    ok &= expect("contest: the retail je, the record stale", contest_classify(je, je, 1),
+                 SITE_RETAIL);
+    ok &= expect("contest: NOPs the record claims", contest_classify(CONTEST_NOP2, je, 1),
+                 SITE_OURS);
+    ok &= expect("contest: NOPs it does not claim are another's",
+                 contest_classify(CONTEST_NOP2, je, 0), SITE_FOREIGN);
+    ok &= expect("contest: other bytes are another's, claimed or not",
+                 contest_classify(other, je, 1), SITE_FOREIGN);
+    for (i = 0; i < CONTEST_SITES; i++) site[i] = SITE_RETAIL;
+    plan = contest_plan(1, site, &refuse);
+    ok &= expect("contest: the rule goes into six retail sites", (int)plan, 0x3F);
+    ok &= expect("  and is not refused", refuse, 0);
+    ok &= expect("contest: putting back with none of ours writes nothing",
+                 (int)contest_plan(0, site, &refuse), 0);
+    site[2] = SITE_FOREIGN;
+    ok &= expect("contest: another's bytes refuse the rule, writing nothing",
+                 (int)contest_plan(1, site, &refuse), 0);
+    ok &= expect("  refused", refuse, 1);
+    ok &= expect("  and are left by a restore", (int)contest_plan(0, site, &refuse), 0);
+    ok &= expect("  which is not refused", refuse, 0);
+    ok &= expect("  and do not refuse a network game", contest_any(site, SITE_OURS), 0);
+    site[0] = site[4] = SITE_OURS;
+    ok &= expect("contest: a restore writes ours alone", (int)contest_plan(0, site, &refuse),
+                 0x11);
+    ok &= expect("  and ours refuse a network game", contest_any(site, SITE_OURS), 1);
+    site[2] = SITE_RETAIL;
+    ok &= expect("contest: the rule completes from ours and retail sites",
+                 (int)contest_plan(1, site, &refuse), 0x2E);
+    return ok;
+}
+
 /* RECL_CELLS: the cells' unit slots (+0x00, +0x02) and yard bit (+0x0C bit 1) held */
 static int outcomes_lossy_cells(void)
 {
@@ -2812,6 +2852,7 @@ static int outcomes_lossy(void)
     }
     reclossy_free(L);
     ok &= outcomes_lossy_cells();
+    ok &= outcomes_contest();
 
     /* RT_HOLD's bounds */
     hold_bytes(hold, 0);
