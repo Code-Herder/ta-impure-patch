@@ -3567,7 +3567,7 @@ fixture.
 
 ### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 13 carries a stream block's unit deltas as residuals against a prediction, the
+Recording format 14 carries a stream block's unit deltas as residuals against a prediction, the
 *unit frame* (`tagpu/ddraw/src/tagpu_reccodec.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the plan and its measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md)). Where a rule exists the prediction
@@ -3710,7 +3710,7 @@ non-zero pitch scale (none of the recordings had one); the steering term's hidde
 
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 13 carries a stream block's projectile records as the *pool frame*
+Recording format 14 carries a stream block's projectile records as the *pool frame*
 (`tagpu/ddraw/src/tagpu_reccodec.c`, THE POOL FRAME; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md#l2-the-pool-frame-measured)): the
@@ -3784,7 +3784,7 @@ largest residual column of the battle, 214 KiB of its 2.09 MiB.
 
 ### The demo recorder's record frames: the engine facts they predict from [DISASSEMBLED + MEASURED 2026-10-10]
 
-Recording format 13 makes the bodies of a stream block's cells, order lists, events and state
+Recording format 14 makes the bodies of a stream block's cells, order lists, events and state
 records from four *record frames* (`tagpu/ddraw/src/tagpu_recframe_cells.c`, `_orders.c`,
 `_events.c`, `_state.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
@@ -3848,13 +3848,19 @@ records back, so a wrong fact costs size, never data. Each address was re-read i
 
 ### The demo recorder's lossy stream: what a held byte meets on a puppet and at a takeover [DISASSEMBLED 2026-10-11]
 
-Recording format 13 writes a skirmish recording's stream through a lossy filter
+A skirmish recording's stream goes through a lossy filter
 (`tagpu/ddraw/src/tagpu_reclossy.c`): the bytes `tagpu/ddraw/replay-hold.tsv` names may keep an
 earlier value between two refreshes, and at a refresh the stream's world is the writer's exact
 copy ([making recordings smaller](tadr-port/demo-recorder-size.md#l5-the-lossy-plan-measured-offline)).
-The filter's correctness rests on these engine facts, from a census of the readers and writers of
-every field the plan would hold (2026-10-11; rel32 and stored-pointer scans of `.text`, each hit
-disassembled):
+The table holds, in the unit record, the three weapon slots' target (`+0x0`, `+0x2`), callback
+(`+0x4`), aim complete (`+0x8`), aim heading and pitch (`+0x16`, `+0x18`) and flags but bit 1
+(`+0x1B` mask `0xFD`), and the ledger's produced, requested, granted and debt of both resources
+(`+0xBC`..`+0xC8`, `+0xD4`..`+0xE0`; *The ledger*); in a main list node (`+0x5C`), the state
+`+0x05`, the wanted events `+0x06`, the deadline `+0x0A`, the leash `+0x2E`, p3 `+0x3E`, the fired
+events `+0x4E`, the owned object `+0x52` and the flags `+0x42` but `0x8`, `0x100`, `0x10000`,
+`0x40000`, `0x80000`, `0x200000` and `0x400000`. Each row cites its readers below. The filter's
+correctness rests on these engine facts, from a census of the readers and writers of every field
+the plan would hold (2026-10-11; rel32 and stored-pointer scans of `.text`, each hit disassembled):
 
 - **Two engine writes of held bytes run on a puppet between two image writes**, and the playing's
   next iteration writes over both: the unit destructor `0x486760`, at a replayed death of kind 5
@@ -3887,12 +3893,21 @@ disassembled):
   targets set to none, (0, `0x8000`), the words AutoAim writes when it drops a target
   (`0x48A2AF`, `0x48A2B4`, DIS) (`tk_orphans`).
 - **The shot builder reads slot `+0x10` on a puppet** (`0x49CE62`, *The weapon slots*): a field
-  constant after the create, so the plan's "read by owner code only" does not hold for it.
+  constant after the create, so the plan's "read by owner code only" does not hold for it, and the
+  table does not hold it.
+- **The shot builders read a slot's aim heading and pitch on a puppet only after the receiver
+  writes them.** `0x49CDE0` (`0x49CE4F..0x49CEBC`), `0x49C9C0` and `0x49CC20` run only inside the
+  shot receiver `0x49D270` (`0x49D44E`), which first writes `+0x18` (`0x49D37C`) and `+0x16`
+  (`0x49D384`) from the message on the slot `msg+0x23` names, so a puppet's shot reads the
+  message's values whatever the image held. The flags' bits 2–3, which the builders read at
+  `0x49CB7D`, `0x49CD38` and `0x49CF5C`, are written once at init (`0x49E094..0x49E09F`), and
+  Impure's splices there take the index from the slot's address.
 - **`0x408198` is AI code, not a handler.** `0x408100`, which reads the head node's `+0x42` bit
   `0x8` there (`0x408191..0x40819C`), is method 0 of the two-entry vtable `0x4FC9A8` {`0x408100`,
   `0x408600`}, stored by the AI object's constructor `0x408CB0` (`0x408D3D`) in one of its ten
   sub-objects, which the AI tick `0x408C40` calls (`0x408C8E`); `0x408C40` runs only for a record
-  with `+0x74` set (`0x46502A..0x465031`), and a puppet seat holds none.
+  with `+0x74` set (`0x46502A..0x465031`), and a puppet seat holds none. The table does not hold
+  bit `0x8` all the same: with no reader on a puppet it could be, but that loosening is not taken.
 - **Not established**: whether `0x406F50`'s callers (`0x499CBC`, `0x49A09B`, `0x49A837`), which set
   `+0xBB` bits, run on puppet impacts; whether the order entries `0x487BF0` (from `0x488514`) and
   `0x4881E0` can reach a puppet's units; callers of `0x439CF0`, `0x43AB90`, `0x43AD50`,
