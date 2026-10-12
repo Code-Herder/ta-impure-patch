@@ -2029,7 +2029,12 @@ ten minutes or less.
   sinks' band hid it whenever the key was small enough. The playing now makes them at the first
   iteration's capture point, before the unit tick, and makes that capture point's write of the
   recorded globals after them, so their first slice also draws from the recording's simulation
-  RNG (`tagpu_replay.c`, THE FIRST STEP'S UNITS).
+  RNG (`tagpu_replay.c`, THE FIRST STEP'S UNITS). The `randprobe` fixture shows the RNG half: its
+  commanders' scripts (`tools/randprobe_fixture.py`, loose `scripts/*.cob` in the instance's game
+  folder, since a `.ufo` does not override a stock path) draw twice in their first slice and from
+  then on call one of four scripts at a period both draws chose. MEASURED 2026-10-12 over
+  [361, 1111): without the write, RandTick0..3 counted 133/258/163/0 live against 107/57/114/253
+  on the puppet and the counts check failed; with it, every START and CALL key is exactly equal.
 - **The in-game create lag, fixed by the slice marker.** A unit created during the unit tick in a
   later slot of a block not yet finished (a factory's product, a builder's nanoframe) gets its
   slice in that tick on the recording machine (the slot loop's per-slot re-read); a playing made it
