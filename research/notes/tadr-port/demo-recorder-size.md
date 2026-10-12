@@ -1260,7 +1260,15 @@ open**: where the playing makes two contesting footprint calls in another order 
 the holder can differ (MEASURED in emulation, 4 of an air war's 1,700 iterations; no slot-B impact
 differed in the game in an air war or a battle). A multiplayer recording is unchanged: its playing
 keeps the engine's slots already, its marks are still written from the recording, and its contest
-follows the puppet's type-3 rule (the owner has not decided the marks for it).
+follows the puppet's type-3 rule (the owner has not decided the marks for it). Its takeover
+timeline is a skirmish segment and holds its cells: the playing changes to the recording
+machine's rule where it crosses into one (`mp_follow`). MEASURED 2026-10-12 on a two-peer
+recording with reproducing trees taken over at 901 as player 1: timeline 1 played across its fork
+and sought within it changes the rule at the crossing and puts it back at the end; its dumps are
+EQUAL at the refresh 1201 and, by the occupancy rule, at 1501 and 1621 after a seek and 1801 from
+a fresh process, and the multiplayer segment's dump at 600 is EQUAL by `recmp_compare.py`. The
+fixtures `forest-reproduce` and `stock-forest-reproduce` record and play reproduction's source
+test in a skirmish (23 `FS_SOURCE` draws each, every one played as recorded).
 
 ## Multiplayer recordings
 
