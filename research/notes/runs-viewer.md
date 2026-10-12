@@ -150,18 +150,36 @@ The mod reads its session's folder every two seconds, re-reading a file only whe
 and the folders of the sessions written in the last 24 hours for their running runs. A run's
 liveness is read from `/proc`, as above. Nothing in it writes a file a tool reads or acts on a run.
 
-- **The pane** (`/runs`): this session's open runs and its last five ended ones, each with the runs
-  filed under it. A running run is open, an ended one folded unless it did not pass (fail, unrun,
-  stopped, died, abandoned, exited); a press on a run's line opens or folds it. Inside: the run's problems,
-  then each started item (a running item lists its steps — instance, GameTime against target, time
-  — and an ended one only what went wrong, each failed or unrun step with its reason and each
-  failed check), the planned items on one line, and the tool's report once it ended. Other
-  sessions' running runs sit under one folded line, `other sessions: N running`, labelled by
-  worktree. The pane opens by itself for a new run of this session only where it docks beside the
-  transcript (the fullscreen layout); a tacli game never opens it.
+- **The pane** (`/runs`): two sections, **IN PROGRESS** (this session's running runs) and **DONE**
+  (its last five ended ones, newest first), each run with the runs filed under it, then the other
+  sessions' running runs under one folded line, `OTHER SESSIONS (N running)`, labelled by
+  worktree. A running run is open, an ended one folded unless it did not pass (fail, unrun,
+  stopped, died, abandoned, exited); a press on a run's line opens or folds it. A section's titles
+  are padded alike, so a DONE row reads as a column: outcome, time taken, when it ended, then
+  how far it got when that was short of the plan, and its failures. Inside a running run: its
+  problems, a bar and the count of **items with every step ended** (a fixture counts once its
+  checks have a verdict; a run with no items of its own counts steps), the failures and the
+  estimate. Its items are grouped:
+    - **running** — an item playing a step on one of the run's worker pools, one row each (so no
+      more rows than workers): every ended lane as its id and glyph, a running lane with its
+      GameTime against its target, or its time;
+    - **checking** and **waiting** — an item whose only running steps wait for no worker (tareplay's
+      `checks` on `offline`), and one between lanes waiting for a worker: each one line of names;
+    - **done** — the count passed and failed, each item that did not pass by name with every failed
+      or unrun step and check, and the passed ones behind their own folded line (`▸ ✓ N passed`),
+      each with its checks and wall time when opened;
+    - **planned** — one line of names.
+
+    An ended run keeps the same groups, with what it stopped in as **cut short** and what it never
+    reached as **not started**, and adds the tool's report. A `checks` step that failed (or could not
+    run) with no reason of its own is the verdict of the checks its item lists by name, so it is
+    neither listed nor counted beside them. The pane opens by itself for a new run of this session
+    only where it docks beside the transcript (the fullscreen layout); a tacli game never opens it.
+
 - **The band** above the prompt, while anything runs: a row per running run of this session, with
   the progress of a child run that is running after it (`landing … › tareplay landing …`), and one
   row for the other sessions. It sits under whatever else draws there.
+
 - **Toasts**: a run of this session ended (its state, time and first failure), and its first
   failure while it runs. A tacli game stopped with `tacli stop` raises none; one that exited on its
   own does.
