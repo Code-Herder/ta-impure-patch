@@ -1163,7 +1163,9 @@ static int list_record(Writer* w, unsigned kind, const unsigned char* b, unsigne
    cells only when it is the tick's, whose cells are its input and none of the copy, and which is
    inside no bracket; a death's, RK_EV_DEATH to its END, holds the feature calls its explosion
    made, in a multiplayer recording its corpse's (FR_CORPSE, inside a death only), and may hold
-   deaths. A draw is inside one, FS_SOURCE inside a multiplayer recording's tick only.
+   deaths. A draw is inside one, FS_SOURCE inside a multiplayer recording's tick only. A script
+   slice is inside none: the unit tick that marks it runs inside no feature call and no death
+   (its only caller is the step's stub at 0x4954ED), and its ID is a slot of the level's.
    INVARIANT, an ordering: the copy's grid takes exactly the cells every reader and the encoder
    take as images. Their rule (tagpu_recreader.c, apply; reccodec's events flag; codectest's
    world_apply) is that an RK_CELLS is an image when no RCS_EVENTS record came before it in its
@@ -1234,6 +1236,11 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
         if (!open || len != 12 || b[0] >= FS_SITES || b[1] || b[2] || b[3] ||
             (b[0] == FS_SOURCE && (w->fbracket != FR_TICK + 1 || !w->mp_in)))
             return 0;
+        break;
+    case RK_EV_SLICE:
+        if (len != 4) return 0;
+        memcpy(&id, b, 4);
+        if (!w->ticked || open || !slot_ok(w, id - 1u)) return 0;
         break;
     default:
         return 0;
@@ -1512,6 +1519,7 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     case RK_EV_DRAW:
     case RK_EV_DEATH:
     case RK_EV_DEATH_END:
+    case RK_EV_SLICE:
         return feature_record(w, kind, b, len);
     case RK_GLOBALS:
     case RK_GLOBALS_DELTA:

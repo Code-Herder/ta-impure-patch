@@ -62,7 +62,7 @@
                                     state)
      codectest sin                  the sine table, for codectest.py's check against its formula
 
-   IN is a recording of format 15, or, for transcode and lossy, one of format 12 or later with no
+   IN is a recording of format 16, or, for transcode and lossy, one of format 12 or later with no
    sectioned block, which they write as the current format, the header's other entries kept. Exit
    0 when every check holds, 1 when one fails, 2 when a file cannot be read. The codec is included
    rather than linked: the fuzz copies a decoder's state, which the codec's interface keeps opaque;
@@ -2096,6 +2096,9 @@ static void ev_events(RecBytes* b, const uint32_t units[][NDW], int variant)
     put32(e, 4);                                         /* a create */
     e[4] = 12; e[6] = 1; e[7] = 1; put32(e + 8, 0x10000); put32(e + 12, 0x500000); e[24] = 3;
     rec_put(b, RK_EV_CREATE, e, 28);
+    memset(e, 0, 4);
+    put32(e, 4);                                         /* its script slice: the ID again */
+    rec_put(b, RK_EV_SLICE, e, 4);
     memset(e, 0, 32);
     put32(e, 5);                                         /* a network create */
     e[4] = 13; put32(e + 8, 77); put32(e + 12, 0x600000);
@@ -2121,6 +2124,13 @@ static void ev_events(RecBytes* b, const uint32_t units[][NDW], int variant)
         put32(e + 8, i == 2 ? 6 : 2);
         put32(e + 12, 5); put32(e + 16, 6 + i); put32(e + 20, i == 2 ? 3 : 0); put32(e + 24, i == 2 ? 0xFFFFFFFFu : 0);
         rec_put(b, RK_EV_START, e, 28);
+        if (i == 0 || i == 3) {                          /* a slice after unit 2's first start,
+                                                            and one past the slots: the codec
+                                                            carries the value, the reader bounds it */
+            memset(e, 0, 4);
+            put32(e, i == 3 ? 9999 : 2);
+            rec_put(b, RK_EV_SLICE, e, 4);
+        }
     }
     for (i = 0; i < 3; i++) {                            /* named starts: a name, it again, the
                                                             longest name */

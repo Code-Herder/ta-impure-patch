@@ -863,7 +863,8 @@ static int sprays_on(const RecHeader* h)
    call's holds no other and cells only when it is the tick's, which is inside none; a death's
    holds its explosion's feature calls, in a multiplayer recording its corpse's (FR_CORPSE, inside
    a death only), and may hold deaths; a draw is inside one, FS_SOURCE inside a multiplayer
-   recording's tick only. 1 taken, 0 malformed. */
+   recording's tick only; a script slice is inside none, and names a slot of the level's. 1 taken,
+   0 malformed. */
 static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsigned len)
 {
     RecWorld* w = &r->w;
@@ -917,6 +918,11 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
         break;
     case RK_CELLS:
         if (r->fbracket != FR_TICK + 1 || !cells_ok(r, b, len)) return 0;
+        break;
+    case RK_EV_SLICE:
+        if (r->fbracket || r->ndeaths || len != 4) return 0;
+        memcpy(&id, b, 4);
+        if (id - 1u < 1 || id - 1u >= w->slots) return 0;
         break;
     default:
         if (kind < RK_EV_CREATE || kind > RK_EV_SPRAY || !rec_event_len(kind, len)) return 0;
@@ -1042,8 +1048,8 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
     if (len >= 2) memcpy(&id, b, 2);
     /* a click follows the step's events, and may follow the images directly */
     if (kind == RK_CLICK) return pov_record(r, kind, b, len);
-    if ((kind >= RK_EV_CREATE && kind <= RK_EV_DEATH_END) || kind == RK_EV_NET_CREATE ||
-        (kind == RK_CELLS && *events)) {
+    /* an event by the writer's rule, rec_section_of: the same predicate sets its `evented` */
+    if (rec_section_of(kind) == RCS_EVENTS || (kind == RK_CELLS && *events)) {
         if (!event_take(r, kind, b, len)) return 0;
         *events = 1;
         return 1;

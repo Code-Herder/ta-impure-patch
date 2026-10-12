@@ -37,7 +37,8 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 15: format 14 with a skirmish stream's nano sprays written as sessions (RK_SPRAY_SESSION,
+/* 16: format 15 with the script slice's place in the event stream (RK_EV_SLICE). 15 was format
+   14 with a skirmish stream's nano sprays written as sessions (RK_SPRAY_SESSION,
    RT_HOLD's RECL_SPRAYS): a spray its unit's session predicts is left out, and every reader makes
    it again at the end of its iteration. 14 was format 13 with a hold table of rows: a skirmish
    stream holds the weapon slots' aim and target state, the resource ledger's accumulators and the
@@ -50,7 +51,7 @@
    container whose unit frame carries the unit deltas, whose pool frame carries the projectile pool
    coded by identity, and whose four record frames -- the cells, the orders, the events and the
    state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). */
-#define REC_FORMAT        15
+#define REC_FORMAT        16
 
 static __inline int rec_format_supported(unsigned format)
 {
@@ -328,6 +329,13 @@ enum RecKind {
                           position change since with FOLLOW (tagpu_reclossy.c, THE SPRAY
                           SESSIONS). After the iteration's last other record, slots ascending;
                           a skirmish stream's only, with RT_HOLD's RECL_SPRAYS; in RCS_OTHER     */
+    RK_EV_SLICE,       /* u32 unit ID: the unit tick's script slice of that unit, DoScriptsNow
+                          0x4B0D60 with dt 1 at 0x48ADEB, recorded just before it ran because the
+                          unit's COB object had an engine start (0x4B0B00, 0x4B0940) since the
+                          iteration's capture point. A top-level event of the step, never inside a
+                          feature call or a death; at most one per slot an iteration. A playing gives
+                          the slice here instead of in its own unit tick (tagpu_replay.c, THE SCRIPT
+                          SLICES)                                                                 */
     RK_KINDS
 };
 
@@ -343,6 +351,7 @@ typedef struct RecNetCreate {
 _Static_assert(sizeof(RecNetCreate) == 32, "network create event span");
 _Static_assert(RK_EV_NET_CREATE == 51 && RK_POV == 52 && RK_CLICK == 53 && RK_SELECT == 54 &&
                RK_POV_AT == 55 && RK_SPRAY_SESSION == 56, "existing record kinds retain their values");
+_Static_assert(RK_EV_SLICE == 57 && RK_KINDS == 58, "the script slice's kind");
 #define REC_POV_AT_BYTES (4u + (unsigned)sizeof(RecPov))
 
 /* A feature root, and its arguments after the site. A cell the engine names by address is its
@@ -384,6 +393,7 @@ static __inline int rec_event_len(unsigned kind, unsigned len)
     case RK_EV_REPLY:       return len >= 12 && len <= 12 + REC_TEXT_MAX;
     case RK_EV_SPRAY:       return len == 48;
     case RK_EV_DRAW:        return len == 12;
+    case RK_EV_SLICE:       return len == 4;
     default:                return 0;
     }
 }
@@ -589,7 +599,8 @@ enum RecSection {
     RCS_PROJ,          /* the pool frame: every RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA          */
     RCS_CELLS,         /* the cells frame: every RK_CELLS                                        */
     RCS_ORDERS,        /* the orders frame: every RK_ORDERS                                      */
-    RCS_EVENTS,        /* the events frame: RK_EV_CREATE..RK_EV_DEATH_END and RK_EV_NET_CREATE    */
+    RCS_EVENTS,        /* the events frame: RK_EV_CREATE..RK_EV_DEATH_END, RK_EV_NET_CREATE and
+                          RK_EV_SLICE                                                            */
     RCS_OTHER,         /* the bodies of every other kind, verbatim                               */
     RCS_STATE,         /* the state frame: RK_GLOBALS, RK_GLOBALS_DELTA, RK_PLAYER,
                           RK_PLAYER_DELTA, RK_WRECK and RK_FEATURES                              */
@@ -611,7 +622,8 @@ static __inline unsigned rec_section_of(unsigned kind)
     if (kind == RK_PROJ_HEAD || kind == RK_PROJ || kind == RK_PROJ_DELTA) return RCS_PROJ;
     if (kind == RK_CELLS) return RCS_CELLS;
     if (kind == RK_ORDERS) return RCS_ORDERS;
-    if ((kind >= RK_EV_CREATE && kind <= RK_EV_DEATH_END) || kind == RK_EV_NET_CREATE)
+    if ((kind >= RK_EV_CREATE && kind <= RK_EV_DEATH_END) || kind == RK_EV_NET_CREATE ||
+        kind == RK_EV_SLICE)
         return RCS_EVENTS;
     if (kind == RK_GLOBALS || kind == RK_GLOBALS_DELTA || kind == RK_PLAYER ||
         kind == RK_PLAYER_DELTA || kind == RK_WRECK || kind == RK_FEATURES)

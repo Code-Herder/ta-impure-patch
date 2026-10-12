@@ -84,7 +84,7 @@
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
-here, and REC_FORMAT says which; this tool reads format 15 alone. A recording is REC_MAGIC, then
+here, and REC_FORMAT says which; this tool reads format 16 alone. A recording is REC_MAGIC, then
 blocks; a block is a 32-byte header and its payload, one zstd frame unless the block is stored (the
 header, end and timelines blocks always are), each checked by a CRC-32. A stream block may be a
 sectioned container (RBF_SECTIONS) that decodes to exactly the records it was made from: its unit
@@ -139,7 +139,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 15                           # the lossy stream: hold rows, sprays as sessions
+REC_FORMAT = 16                           # the lossy stream, sprays as sessions, script slices
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -191,7 +191,7 @@ def mapped_bytes(w, h):
  RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
  RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT, RK_COUNTS,
  RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE, RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT,
- RK_SPRAY_SESSION) = range(57)
+ RK_SPRAY_SESSION, RK_EV_SLICE) = range(58)
 
 # THE PERSPECTIVE's payloads (tagpu_recpov.h)
 REC_POV = struct.Struct("<BBBBHHIiiiii")   # player, every, flags, zero, view_w, view_h, zoom,
@@ -217,7 +217,7 @@ EVENTS = {RK_EV_CREATE: "create", RK_EV_NET_CREATE: "network create", RK_EV_DEAT
           RK_EV_START_NAMED: "owner's start", RK_EV_BUILT: "build done", RK_EV_STATE: "state byte",
           RK_EV_REPLY: "reply", RK_EV_SPRAY: "nano spray", RK_EV_FEATURE: "feature call",
           RK_EV_FEATURE_END: "feature call's end", RK_EV_DRAW: "feature draw",
-          RK_EV_DEATH_END: "death's end"}
+          RK_EV_DEATH_END: "death's end", RK_EV_SLICE: "script slice"}
 FR_TICK, FR_SPAWN, FR_DESTROY, FR_DIE, FR_BURN, FR_DAMAGE, FR_SWAP, FR_CORPSE = range(8)
 REC_PHASE_LATE = 2                        # RK_EV_FEATURE's phase byte at most (tagpu_recfmt.h)
 ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12, 32)     # an RK_EV_FEATURE's arguments after its site
@@ -881,6 +881,17 @@ class World:
             return kind, b
         if kind in (RK_EV_FEATURE, RK_EV_FEATURE_END, RK_EV_DEATH, RK_EV_DEATH_END, RK_EV_DRAW):
             self.bracket(kind, b)
+            return kind, b
+        if kind == RK_EV_SLICE:
+            # the unit tick's marker: inside no bracket, a slot of the level's (tagpu_recreader.c,
+            # event_take)
+            if self.fbracket or self.deaths:
+                raise Unreadable("a script slice inside a feature call or a death")
+            if len(b) != 4:
+                raise Unreadable(f"a script slice of {len(b)} bytes")
+            slot = struct.unpack_from("<I", b)[0] - 1
+            if not 1 <= slot < self.slots:
+                raise Unreadable(f"a script slice of slot {slot}, outside the array")
             return kind, b
         if kind == RK_CELLS and (self.fbracket or self.deaths):
             if self.fbracket != FR_TICK + 1:
@@ -1554,7 +1565,9 @@ class EventCheck:
     iterations, a unit that appears must have its create, one that disappears its death, one whose
     state byte +0x10E changed a state event with the new byte, and one whose build fraction +0x104
     reached 0.0 its build done -- unless the slot died and was made again in the step, which the
-    create and the death both name."""
+    create and the death both name. Within an iteration's events a script slice names a unit live
+    at its point -- in the iteration's images, or created earlier in its events and not dead since
+    -- and a slot at most once (tagpu_recfmt.h, RK_EV_SLICE)."""
 
     def __init__(self, limit=20):
         self.open = False           # an iteration has begun
@@ -1615,9 +1628,29 @@ class EventCheck:
     def finish(self, w):
         if self.open and not self.in_events:
             self.images_done(w)
+        elif self.open:
+            # the last iteration's events lead to no images: its slices are checked here
+            self.slices(self.summary_now, self.events, w.tick)
+
+    def slices(self, was, events, tick):
+        live, sliced = set(was), set()
+        for kind, b in events:
+            if kind in (RK_EV_CREATE, RK_EV_NET_CREATE):
+                live.add(struct.unpack_from("<I", b)[0] - 1)
+            elif kind == RK_EV_DEATH:
+                live.discard(struct.unpack_from("<I", b)[0] - 1)
+            elif kind == RK_EV_SLICE:
+                slot = struct.unpack_from("<I", b)[0] - 1
+                if slot not in live:
+                    self.note(f"the events of GameTime {tick}: a script slice of slot {slot}, "
+                              f"which holds no live unit there")
+                if slot in sliced:
+                    self.note(f"the events of GameTime {tick}: slot {slot}'s script slice twice")
+                sliced.add(slot)
 
     def transition(self, was, events, now, tick):
         self.checked += 1
+        self.slices(was, events, tick - 1)
         made, died, state, built = set(), set(), {}, set()
         for kind, b in events:
             if kind in (RK_EV_CREATE, RK_EV_NET_CREATE):

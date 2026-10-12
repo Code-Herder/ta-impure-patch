@@ -4711,6 +4711,83 @@ static int fix_step_phases(void)
     return FIX_TABLE;
 }
 
+SIM_FEATURE(script_slice, SIM_PUPPET_RUNS, "slice-walkers battle tenseat");
+
+/* THE SCRIPT SLICE. The unit tick 0x48AD30 gives each unit it reaches one script slice:
+
+     0x48ADDF  8B 8E 9A 00 00 00   mov ecx,[esi+0x9A]      the unit's COB object
+     0x48ADE5  85 C9               test ecx,ecx
+     0x48ADE7  74 07               je 0x48ADF0             no script, no slice
+     0x48ADE9  6A 01               push 1
+     0x48ADEB  E8 70 5F 02 00      call 0x4B0D60           DoScriptsNow(cob, 1), thiscall, `ret 4`
+     0x48ADF0  8A 86 FA 00 00 00   mov al,[esi+0xFA]
+
+   The site's facts [DISASSEMBLED, rel8/rel32 and absolute-dword scans of the whole file]: the only
+   branches to 0x48ADDF are AutoAim's skips (0x48ADCC, 0x48ADD7); nothing branches into
+   0x48ADE0..0x48ADEF and no dword names an address there; at 0x48ADF0 the flags are dead (a mov,
+   then 0x48ADF6 test al,al sets them) and so are eax (reloaded at 0x48ADF0 and 0x48AE02), edx
+   (0x437910's call clobbered it on every path) and ecx (the COB or DoScriptsNow's leftovers),
+   while esi (the unit), edi (its player record), ebx and ebp are live. 0x48ADEB is DoScriptsNow's
+   only caller in the file, and dt is the only amount by which a sleep counts down (the runner
+   0x4B0DEF..0x4B0E01), so a unit's COB clock is the number of slices it has had.
+   The 17 bytes jump to a stub: pushad; push esi; call unit_slice; add esp,4; popad; jmp 0x48ADF0.
+   popad gives every register back and the flags it leaves are dead. C makes the call so that one
+   function, tagpu_slice_give, gives every slice on both machines, and the count and the call
+   cannot disagree.
+   THE ORDERING it rests on: the stub runs in the engine's own turn order, and on a recording level
+   the marker (tagpu_rec_slice) is written before the slice it names, so the events the slice makes
+   follow it in the stream and the marker's place there is the slice's place. On a level that plays
+   a recording, tagpu_replay_slice_defer skips the slices the iteration's markers name, and the
+   replay gives each at its marker (tagpu_replay.c, THE SCRIPT SLICES).
+   Deleting the stub deletes the recording's markers, the playing's deferral and the count root
+   (tools/replay/tarec.py, SLICE_ROOT) with it.
+   CLASS: in the fail-closed table, in both builds: a recording made without it would carry no
+   marker, and a playing without it would give every slice in its unit tick. */
+
+/* 0x4B0D60, DoScriptsNow: thiscall(cob, dt), `ret 4` */
+typedef void (__thiscall* PFN_DoScripts)(char* cob, int dt);
+#define E_DoScriptsNow ((PFN_DoScripts)0x004B0D60u)
+
+void tagpu_slice_give(char* cob, unsigned where)
+{
+    E_DoScriptsNow(cob, 1);
+    tagpu_rec_slice_given(where);
+}
+
+static void __cdecl unit_slice(char* unit)
+{
+    char* cob;
+    int placed;
+    memcpy(&cob, unit + 0x9A, 4);       /* 0x48ADDF's own read, of the unit 0x48AD30's loop is on */
+    if (!cob) return;                   /* 0x48ADE5..0x48ADE7: no script, no slice */
+    placed = tagpu_rec_slice(unit, cob);
+    if (tagpu_replay_slice_defer(unit)) return;
+    tagpu_slice_give(cob, placed ? 1u : 0u);
+}
+
+static int fix_script_slice(void)
+{
+    static const unsigned char call[17] = {          /* 0x48ADDF..0x48ADEF */
+        0x8B, 0x8E, 0x9A, 0x00, 0x00, 0x00,          /* mov ecx,[esi+0x9A]  */
+        0x85, 0xC9,                                  /* test ecx,ecx        */
+        0x74, 0x07,                                  /* je 0x48ADF0         */
+        0x6A, 0x01,                                  /* push 1              */
+        0xE8, 0x70, 0x5F, 0x02, 0x00,                /* call 0x4B0D60       */
+    };
+    unsigned char *k = fix_code(32), *p;
+    if (!k) { lim_no_stub(); return FIX_TABLE; }
+    p = k;
+    *p++ = 0x60;                                                     /* pushad       */
+    *p++ = 0x56;                                                     /* push esi     */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)unit_slice); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;                           /* add esp,4    */
+    *p++ = 0x61;                                                     /* popad        */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0048ADF0); p += 4;            /* jmp 0x48ADF0 */
+    lim_branch(0x0048ADDF, sizeof call, call, 0xE9, (unsigned int)(size_t)k,
+               "the script slice: the unit tick's DoScriptsNow(1), placed by the recording");
+    return FIX_TABLE;
+}
+
 SIM_FEATURE(flak_divides, SIM_PUPPET_RUNS, "battle");
 
 /* FLAK'S DIVIDES [DISASSEMBLED]. The ballistic fire 0x49CDE0 (callers 0x49D0F8 in the fire
@@ -9349,6 +9426,7 @@ static void patch_engine_defects(void)
     int caps = fix_victim_caps();
     int air  = fix_stacked_air();
     int phase = fix_step_phases();
+    int slice = fix_script_slice();
     int flak = fix_flak_divides();
     int edge = fix_last_cell();
     int los  = fix_los_shear();
@@ -9429,7 +9507,8 @@ static void patch_engine_defects(void)
     plog(b);
 
     _snprintf(b, sizeof b, "enginefix: the step's phases for the demo recorder and its replay "
-              "(0x495513 0x495539) %s", fix_state(phase));
+              "(0x495513 0x495539) %s; the script slice 0x48ADDF %s", fix_state(phase),
+              fix_state(slice));
     b[sizeof b - 1] = 0;
     plog(b);
 

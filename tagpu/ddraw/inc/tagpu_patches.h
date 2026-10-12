@@ -79,6 +79,12 @@ unsigned int tagpu_patches_restored(void);
    sets the state the recording's first image holds, on the game thread, at the capture point of
    the level's first iteration, before its unit tick and its wind draw (0x49558F): the draws are
    then the recording's (tagpu_patches.c, *The playback's seed*). */
+/* One script slice, as the unit tick's call 0x48ADEB gives it: DoScriptsNow 0x4B0D60 on `cob`
+   with dt 1, counted by `where` (tagpu_rec_slice_given). The unit tick's stub and a playing's
+   deferred slices (tagpu_replay.c, THE SCRIPT SLICES) both come here; the game thread, on the COB
+   object of a unit live in its slot. */
+void tagpu_slice_give(char* cob, unsigned where);
+
 const char* tagpu_wind_state_name(void);
 void tagpu_wind_state_set(unsigned long long state);
 #endif

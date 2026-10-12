@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments and world): the C parser against the coverage build's map, the features' regions, the
-comment filter, `landing --check`, a recording's segments and chains, what format 15's block walk
+comment filter, `landing --check`, a recording's segments and chains, what format 16's block walk
 refuses and which cells are images, read from files built from the format alone, the fixtures'
 takeover entries, the W lane's edited header copies, and compare-counts' script slice and exact
 COB children. No game runs. The files are read through
@@ -879,7 +879,7 @@ def zstd_frame(data, wlog):
 
 
 class FormatBlocks(unittest.TestCase):
-    """What format 15's block walk refuses by name before any payload is read, as
+    """What format 16's block walk refuses by name before any payload is read, as
     tagpu_recreader.c's block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
 
     def refused(self, *parts, why, decodes=(True, False)):
@@ -1958,6 +1958,70 @@ class CellsAfterEvents(unittest.TestCase):
             w.apply(tarec.RK_CELLS, self.cells(0, 5))
         w.apply(tarec.RK_TICK, struct.pack("<I", 2))
         self.assertIsNone(w.apply(tarec.RK_CELLS, self.cells(0, 5)))
+
+
+class ScriptSlice(unittest.TestCase):
+    """RK_EV_SLICE in tarec's World, as the DLL's reader takes it (tagpu_recreader.c, event_take):
+    an event, outside every bracket, naming a slot of the level's."""
+
+    def world(self):
+        w = tarec.World(4, [], dims=(2, 2, 1, 1))
+        w.apply(tarec.RK_TICK, struct.pack("<I", 1))
+        return w
+
+    def test_an_event_at_the_top_level(self):
+        w = self.world()
+        self.assertEqual(w.apply(tarec.RK_EV_SLICE, struct.pack("<I", 2))[0], tarec.RK_EV_SLICE)
+        with self.assertRaisesRegex(tarec.Unreadable, "after an event"):
+            w.apply(tarec.RK_CELLS, CellsAfterEvents.cells(0, 5))
+
+    def test_refused_inside_a_feature_call_or_a_death(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_FEATURE, bytes([tarec.FR_TICK, 0, 0, 0]) + bytes(4))
+        with self.assertRaisesRegex(tarec.Unreadable, "inside a feature call or a death"):
+            w.apply(tarec.RK_EV_SLICE, struct.pack("<I", 2))
+        w = self.world()
+        w.apply(tarec.RK_EV_DEATH, struct.pack("<II4x", 2, 0) + bytes(tarec.REC_UNIT_IMAGE))
+        with self.assertRaisesRegex(tarec.Unreadable, "inside a feature call or a death"):
+            w.apply(tarec.RK_EV_SLICE, struct.pack("<I", 3))
+
+    def test_refused_outside_the_slots(self):
+        for unit in (0, 1, 5):              # slot -1, slot 0 (NULL's), slot 4 = slots
+            with self.subTest(unit=unit):
+                with self.assertRaisesRegex(tarec.Unreadable, "outside the array"):
+                    self.world().apply(tarec.RK_EV_SLICE, struct.pack("<I", unit))
+
+
+class SliceEvents(unittest.TestCase):
+    """EventCheck: a script slice names a unit live at its point, and a slot once an iteration."""
+
+    @staticmethod
+    def ev(kind, unit):
+        return kind, struct.pack("<I", unit) + bytes(24 if kind == tarec.RK_EV_CREATE else 0)
+
+    def notes(self, was, events):
+        ec = tarec.EventCheck()
+        ec.slices({slot: None for slot in was}, events, 10)
+        return ec.lines
+
+    def test_a_unit_in_the_images(self):
+        self.assertEqual(self.notes([2], [self.ev(tarec.RK_EV_SLICE, 3)]), [])
+
+    def test_a_slot_with_no_unit(self):
+        lines = self.notes([2], [self.ev(tarec.RK_EV_SLICE, 4)])
+        self.assertEqual(len(lines), 1)
+        self.assertIn("slot 3, which holds no live unit", lines[0])
+
+    def test_a_unit_created_earlier_in_the_iteration(self):
+        self.assertEqual(self.notes([], [self.ev(tarec.RK_EV_CREATE, 4),
+                                         self.ev(tarec.RK_EV_SLICE, 4)]), [])
+        self.assertEqual(len(self.notes([], [self.ev(tarec.RK_EV_SLICE, 4),
+                                              self.ev(tarec.RK_EV_CREATE, 4)])), 1)
+
+    def test_a_slot_sliced_twice(self):
+        lines = self.notes([2], [self.ev(tarec.RK_EV_SLICE, 3), self.ev(tarec.RK_EV_SLICE, 3)])
+        self.assertEqual(len(lines), 1)
+        self.assertIn("slot 2's script slice twice", lines[0])
 
 
 class TakeoverFixtures(unittest.TestCase):

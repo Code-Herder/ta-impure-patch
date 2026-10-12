@@ -354,6 +354,9 @@ static struct {
                                                unfinished one (THE BUILD FINISH ON A MULTIPLAYER
                                                LEVEL)                                             */
     unsigned        said, shown;   /* text entries applied, and lines given to the message log  */
+    unsigned        nown;           /* the recording machine's own blocks: the seats of every
+                                       actor whose contributions it produced (mp_begin)          */
+    struct { unsigned first, last; } own[RECMP_ACTORS];
     char            why[200];
 } s_mp;
 static int s_chat_hidden;           /* 1 = the HUD's Chat toggle is off (`chat hide`,
@@ -451,6 +454,8 @@ static void ov_clicks_take(const RecWorld* W);
 static void ov_clicks_clear(void);
 static void ov_click_put(unsigned tick, const RecClick* c);
 static void first_step(char* ta);
+static void slice_disarm(void);
+static void slice_reset(void);
 
 static void replay_close(void)
 {
@@ -482,6 +487,7 @@ static void replay_close(void)
     memset(&s_seek, 0, sizeof s_seek);
     s_hold = 0;                         /* a boundary's hold ends with its playing */
     s_frame_tick = ~0u;
+    slice_reset();
 }
 
 /* ---- S-a: the request and the seat fill ----------------------------------------------------- */
@@ -2717,6 +2723,9 @@ static void orders_put(const Lv* L, const RecWorld* W)
    (0x43DB84..0x43DBC7). It is written whole, as 0x43DB50 reads and stores it, before the unit's
    first E_Water at the next images, so that call starts setSFXoccupy exactly where the recording
    machine's 0x43DB50 did. */
+static void slice_created(const Lv* L, unsigned slot);
+static void slice_died(unsigned slot);
+
 static int ev_create(const Lv* L, const unsigned char* b, unsigned len)
 {
     uint32_t id, finished, water;
@@ -2736,6 +2745,7 @@ static int ev_create(const Lv* L, const unsigned char* b, unsigned len)
         note("replay: GameTime %u: unit %u's create carries water state %u, past the 0..4 "
              "0x43DB50 stores: the host's stays", L->now, id - 1, water);
     }
+    slice_created(L, id - 1);
     return 1;
 }
 
@@ -2777,7 +2787,10 @@ static int ev_death(const Lv* L, const unsigned char* b, unsigned len, int corps
     rec[8] = (unsigned char)(ks >> 8);
     rec[9] = b[9];
     rec[10] = corpse ? b[10] : (unsigned char)(b[10] & 0xF0);
-    if (tagpu_tx_replay_death(rec, b[11])) return 1;
+    if (tagpu_tx_replay_death(rec, b[11])) {
+        slice_died(slot);
+        return 1;
+    }
     s_st.refused++;
     return 0;
 }
@@ -2842,6 +2855,281 @@ static void* cob_of(const char* u)
     void* cob;
     memcpy(&cob, u + U_COB, 4);
     return cob;
+}
+
+/* THE SCRIPT SLICES. The unit tick gives each unit it reaches one slice, DoScriptsNow 0x4B0D60 with
+   dt 1 (tagpu_patches.c, THE SCRIPT SLICE), and a COB clock is the number of slices it has had. The
+   recording machine's slice of a unit came after every event its unit tick made before that unit's
+   turn: AutoAim's TargetCleared, AimPrimary broadcast, FirePrimary and RockUnit (0x48A1E0,
+   0x49E31C, 0x49E3A6, 0x49CB94, 0x49CBEB, in the unit's own turn, before its script call), and the
+   create of a unit an earlier turn made in a later slot, which the loop reaches in the same tick
+   (it re-reads +0xA6 at each slot, 0x48ADB0). A host that gives every slice in its own unit tick
+   gives those starts' first slice a tick late, and a unit its step creates none in that step. So
+   the recording names the slices that follow such a start (RK_EV_SLICE: the unit's COB had an
+   engine start since the capture point; tagpu_recorder.c, THE SLICE MARKERS), and a playing gives
+   each of them at its marker instead:
+   - THE PLAN, at the capture point of the iteration the host's step is (slice_plan): each slot a
+     marker names is planned, SL_SKIP for a unit the iteration's images hold, SL_AFTER_CREATE for one
+     its events create before the marker. A late iteration plans nothing, and every host slice
+     stays in the host's tick.
+   - THE GATE, in the host's unit tick (tagpu_replay_slice_defer): an SL_SKIP unit's slice is
+     skipped and owed (SL_OWED).
+   - THE PAYMENT, at the marker in the replayed events (ev_slice), through the same function the
+     unit tick's stub calls (tagpu_slice_give): an owed slice, or a created unit's once its create
+     has been made (SL_MADE). On a multiplayer segment an own unit the step creates is made at its
+     owner's CREATE_BEGIN, after the primary events, so its marker waits (SL_WAITING) and its
+     CREATE_END pays it (slice_created).
+   - THE SETTLE, after the step's events (slice_settle): an owed slice its marker did not pay is
+     given there, counted and noted; and the step's end disarms the plan (slice_finish).
+   THE INVARIANT, an ordering: the plan is armed and spent inside one call of B2's stub at 0x4954ED
+   -- the capture point, the unit tick, the replay step -- where no frame visit, and so no seek,
+   falls. The gate turns only SL_SKIP into SL_OWED, and every SL_OWED is paid exactly once, at its
+   marker or at the settle, or voided by a create or a death in its slot (slice_created,
+   slice_died), so every unit the host's unit tick reaches gets exactly one DoScriptsNow(1) in the
+   step -- in the tick, at its recorded place, or at the step's end -- and a unit the step creates
+   gets one only when the recording says it had one. A voided debt is counted and never given to
+   another unit: the recording never orders a create or a death into a slot between its turn and
+   its marker, since B4 never puts two units in one slot in one tick (0x486036).
+   THE BOUND: the gate names a unit only by arithmetic against the level's array and its count, as
+   model_root does, and never reads it; every index below is a slot below nslots, at most 0xFFFF,
+   which the writer bounds (tagpu_recwriter.c) and the reader takes from the header.
+   THE LIFETIME: a COB object lives from its unit's setup (0x485D9F stores +0x9A) to its destructor
+   (0x486D8A deletes it, 0x486D8D nulls +0x9A), both on the game thread. A payment runs on that
+   thread, on the +0x9A of a unit live in its slot, whose incarnation is the one the host skipped
+   because a create or a death in the slot voids the debt.
+   The puppet gates stay shut around a payment, as around the host's own slices: COB SET, ATTACH
+   and DROP are inert, and the recorder stays the only writer of what the recording carries.
+   MULTIPLAYER: the primary stream carries every marker; only the recording machine's own blocks
+   are planned (s_mp.own), and a remote owner's unit keeps its slice in the host's tick. An own
+   unit's ledger-borne starts -- TargetCleared and the other owner-only named starts, applied after
+   the primary events (THE CLOCK) -- keep their one-tick lag. */
+enum { SL_SKIP = 1, SL_OWED, SL_CREATED, SL_AFTER_CREATE, SL_MADE, SL_WAITING, SL_PAID, SL_LOST };
+static struct {
+    int armed;                      /* between this step's capture point and its end            */
+    uint32_t stamp;                 /* this plan's: never 0, never reused (wraps by clearing at) */
+    char* begin;                    /* the level's unit array and its count, as level_of found  */
+    unsigned nslots;                /* them                                                     */
+    uint32_t at[0x10000];           /* a slot's entry belongs to the plan of this stamp         */
+    unsigned char st[0x10000];
+    uint16_t list[0x10000];         /* the slots the plan's markers name, each once             */
+    unsigned n;
+    struct { unsigned planned, made, deferred, given, atcreate, settled, notgiven, unreached,
+                      unmade, twice, lost, late, remote; } c;
+} s_sl;
+
+static void slice_disarm(void)
+{
+    s_sl.armed = 0;
+}
+
+/* the next playing's: disarmed, its counts zero */
+static void slice_reset(void)
+{
+    slice_disarm();
+    memset(&s_sl.c, 0, sizeof s_sl.c);
+}
+
+/* a slot of the recording machine's own blocks; every slot outside a multiplayer segment */
+static int slice_own(unsigned slot)
+{
+    unsigned i;
+    if (!s_mp.on) return 1;
+    for (i = 0; i < s_mp.nown; i++)
+        if (slot >= s_mp.own[i].first && slot <= s_mp.own[i].last) return 1;
+    return 0;
+}
+
+/* the unit live in a planned slot, by the plan's array, or NULL */
+static char* slice_unit(unsigned slot)
+{
+    char* u;
+    if (slot < 1 || slot >= s_sl.nslots) return NULL;
+    u = s_sl.begin + (size_t)slot * REC_UNIT_BYTES;
+    return (*(const uint32_t*)(u + U_STATE) & U_ALIVE) ? u : NULL;
+}
+
+/* THE PLAN of the iteration W, which is the host's step L->now: at its capture point */
+static void slice_plan(const Lv* L, const RecWorld* W)
+{
+    unsigned i;
+    slice_disarm();
+    if (++s_sl.stamp == 0) {
+        memset(s_sl.at, 0, sizeof s_sl.at);
+        s_sl.stamp = 1;
+    }
+    s_sl.n = 0;
+    s_sl.begin = L->begin;
+    s_sl.nslots = L->nslots;
+    for (i = 0; i < W->nev; i++) {
+        uint32_t id, slot;
+        unsigned k = W->ev[i].kind;
+        if ((k != RK_EV_CREATE && k != RK_EV_SLICE) || W->ev[i].len < 4) continue;
+        memcpy(&id, W->ev[i].b, 4);
+        slot = id - 1;
+        if (slot < 1 || slot >= s_sl.nslots) continue;
+        if (k == RK_EV_CREATE) {
+            if (s_sl.at[slot] != s_sl.stamp) {
+                s_sl.at[slot] = s_sl.stamp;
+                s_sl.st[slot] = SL_CREATED;
+            }
+            continue;
+        }
+        if (!slice_own(slot)) {
+            s_sl.c.remote++;
+            continue;
+        }
+        if (s_sl.at[slot] == s_sl.stamp) {
+            if (s_sl.st[slot] == SL_CREATED) {
+                s_sl.st[slot] = SL_AFTER_CREATE;
+                s_sl.list[s_sl.n++] = (uint16_t)slot;
+            } else {
+                s_sl.c.twice++;
+            }
+            continue;
+        }
+        s_sl.at[slot] = s_sl.stamp;
+        s_sl.st[slot] = SL_SKIP;
+        s_sl.list[s_sl.n++] = (uint16_t)slot;
+    }
+    s_sl.c.planned += s_sl.n;
+    s_sl.armed = 1;
+}
+
+/* THE GATE, in the host's unit tick: the unit pointer is the engine's loop variable, an index
+   only by arithmetic against the plan's array and count, never dereferenced here */
+int __cdecl tagpu_replay_slice_defer(const char* unit)
+{
+    size_t off;
+    unsigned slot;
+    if (!s_sl.armed || unit < s_sl.begin) return 0;
+    off = (size_t)(unit - s_sl.begin);
+    if (off % REC_UNIT_BYTES || (slot = (unsigned)(off / REC_UNIT_BYTES)) >= s_sl.nslots)
+        return 0;
+    if (s_sl.at[slot] != s_sl.stamp || s_sl.st[slot] != SL_SKIP) return 0;
+    s_sl.st[slot] = SL_OWED;
+    s_sl.c.deferred++;
+    return 1;
+}
+
+/* a create in the step made its unit in `slot` (ev_create, mp_created) */
+static void slice_created(const Lv* L, unsigned slot)
+{
+    char* u;
+    void* cob;
+    (void)L;
+    if (!s_sl.armed || slot >= s_sl.nslots || s_sl.at[slot] != s_sl.stamp) return;
+    switch (s_sl.st[slot]) {
+    case SL_AFTER_CREATE:
+        s_sl.st[slot] = SL_MADE;
+        s_sl.c.made++;
+        break;
+    case SL_WAITING:                    /* a multiplayer create: its marker has passed */
+        if ((u = slice_unit(slot)) && (cob = cob_of(u))) {
+            tagpu_slice_give(cob, 1);
+            s_sl.st[slot] = SL_PAID;
+            s_sl.c.atcreate++;
+        } else {
+            s_sl.st[slot] = SL_LOST;
+            s_sl.c.lost++;
+        }
+        break;
+    case SL_OWED:                       /* another incarnation: the debt is void */
+        s_sl.st[slot] = SL_LOST;
+        s_sl.c.lost++;
+        break;
+    }
+}
+
+/* a death in the step ended the unit in `slot` (ev_death) */
+static void slice_died(unsigned slot)
+{
+    if (!s_sl.armed || slot >= s_sl.nslots || s_sl.at[slot] != s_sl.stamp) return;
+    if (s_sl.st[slot] == SL_OWED) {
+        s_sl.st[slot] = SL_LOST;
+        s_sl.c.lost++;
+    }
+}
+
+/* THE PAYMENT, at an RK_EV_SLICE of the step's events */
+static void ev_slice(const Lv* L, const unsigned char* b, unsigned len)
+{
+    uint32_t id, slot;
+    char* u;
+    void* cob;
+    (void)L;
+    if (len != 4) return;
+    memcpy(&id, b, 4);
+    slot = id - 1;
+    if (!s_sl.armed || slot < 1 || slot >= s_sl.nslots || s_sl.at[slot] != s_sl.stamp ||
+        !slice_own(slot)) {
+        s_sl.c.notgiven++;              /* a late iteration's, or a remote unit's */
+        return;
+    }
+    switch (s_sl.st[slot]) {
+    case SL_OWED:
+    case SL_MADE:
+        if ((u = slice_unit(slot)) && (cob = cob_of(u))) {
+            tagpu_slice_give(cob, 1);
+            s_sl.st[slot] = SL_PAID;
+            s_sl.c.given++;
+        } else {
+            s_sl.st[slot] = SL_LOST;
+            s_sl.c.lost++;
+        }
+        return;
+    case SL_AFTER_CREATE:               /* its create is not made yet */
+        if (s_mp.on) {
+            s_sl.st[slot] = SL_WAITING; /* paid at its CREATE_END */
+            return;
+        }
+        s_sl.st[slot] = SL_LOST;        /* the create was refused */
+        s_sl.c.unmade++;
+        return;
+    case SL_SKIP:                       /* the host's tick never reached that unit */
+        s_sl.c.unreached++;
+        return;
+    default:
+        s_sl.c.twice++;
+        return;
+    }
+}
+
+/* THE SETTLE, after the step's events and before image T+1: a debt its marker did not pay */
+static void slice_settle(unsigned now)
+{
+    unsigned i;
+    for (i = 0; i < s_sl.n; i++) {
+        unsigned slot = s_sl.list[i];
+        char* u;
+        void* cob;
+        switch (s_sl.st[slot]) {
+        case SL_OWED:
+        case SL_MADE:
+            if ((u = slice_unit(slot)) && (cob = cob_of(u))) {
+                tagpu_slice_give(cob, 2);
+                s_sl.c.settled++;
+                note("replay: GameTime %u: unit %u's script slice given at the step's end: its "
+                     "marker did not give it", now, slot);
+                s_sl.st[slot] = SL_PAID;
+            } else {
+                s_sl.st[slot] = SL_LOST;
+                s_sl.c.lost++;
+            }
+            break;
+        case SL_WAITING:
+        case SL_AFTER_CREATE:           /* the unit was never made */
+            s_sl.st[slot] = SL_LOST;
+            s_sl.c.unmade++;
+            break;
+        }
+    }
+}
+
+/* the step's end, on every path out of tagpu_replay_step */
+static void slice_finish(unsigned now)
+{
+    if (s_sl.armed) slice_settle(now);
+    slice_disarm();
 }
 
 /* RK_EV_START: the 0x10 case's call (0x455528..0x455551), made here rather than through the case,
@@ -3625,6 +3913,10 @@ static void ev_play(const Lv* L, const RecEvent* e)
     const unsigned char* b = e->b;
     unsigned n = e->len, k = e->kind;
     int done;
+    if (k == RK_EV_SLICE) {             /* s_st's counts are RK_EV_CREATE..RK_EV_SPRAY's */
+        ev_slice(L, b, n);
+        return;
+    }
     switch (k) {
     case RK_EV_CREATE:      done = ev_create(L, b, n); break;
     case RK_EV_SHOT:        done = ev_shot(L, b, n); break;
@@ -3870,6 +4162,19 @@ static int mp_begin(const Lv* L, const RecWorld* W)
         unsigned seat = recr_header(s_rd)->mp_seats.actor[i].seat;
         if (seat < REC_PLAYERS) s_mp.actor[seat] = 1;
     }
+    /* the recording machine's own blocks: the seats of the actors whose contributions it
+       produced, the `local` the recorder copies into the header (tagpu_recmp_record.c), which
+       THE SCRIPT SLICES plans alone */
+    for (i = 0; i < h->mp_seats.count && i < RECMP_ACTORS; i++) {
+        unsigned j;
+        for (j = 0; j < h->mp.count && j < RECMP_ACTORS; j++)
+            if (h->mp.actor[j].origin == h->mp_seats.actor[i].origin && h->mp.actor[j].local) {
+                s_mp.own[s_mp.nown].first = h->mp_seats.actor[i].first;
+                s_mp.own[s_mp.nown].last = h->mp_seats.actor[i].last;
+                s_mp.nown++;
+                break;
+            }
+    }
     for (i = 0; i < W->slots * 2; i++)
         if (!mp_list_put(&s_mp.list[i], W->list[i].img, W->list[i].n) ||
             !mp_list_put(&s_mp.s_list[i], W->list[i].img, W->list[i].n)) {
@@ -3937,6 +4242,7 @@ static int mp_created(const Lv* L, const RecMpLifeAction* a)
     memcpy(unit_at(L, a->slot) + U_WATER, &water, 4);
     s_mp.create[(size_t)a->slot * MP_CREATE + 24] = (unsigned char)water;
     s_mp.create[(size_t)a->slot * MP_CREATE + 28] = 1;
+    slice_created(L, a->slot);
     return 1;
 }
 
@@ -5259,11 +5565,13 @@ static void capture_put(const Lv* L)
     const RecWorld* W = recr_world(s_rd);
     if (W->tick != L->now) {
         s_gst.late++;
+        s_sl.c.late++;                  /* no plan: every slice stays in the host's tick */
         note("replay: the capture point of GameTime %u holds iteration %u: its globals and "
              "projectiles not written", L->now, W->tick);
         return;
     }
     recorded_put(L, W);
+    slice_plan(L, W);                   /* THE SCRIPT SLICES: this step's markers */
 }
 
 void __cdecl tagpu_replay_capture(void)
@@ -7100,6 +7408,7 @@ static int seek_run(char* ta)
     /* first, before pend_finish plays a held step's creates and deaths: a refused seek re-culls
        too, which the cull's idempotence makes harmless (THE DRAW'S UNIT LIST) */
     s_cull_inputs++;
+    slice_disarm();                         /* THE SCRIPT SLICES: a plan is a step's alone */
     s_seek.pending = 0;
     s_seek.mode = SK_SEEK;                  /* consumed: rt_due's seek_run is a SEEK */
     s_seek.boundary = 0;
@@ -8310,6 +8619,14 @@ static void counts_log(const char* when, unsigned now)
                s_gst.books.refused, s_gst.bmade, s_gst.bother, s_gst.tab.changed,
                s_gst.tab.names[0] ? s_gst.tab.names : "none", s_gst.tab.kept, s_gst.tab.skipped,
                s_gst.tab.repaired);
+    tagpu_logf("replay: %s: script slices: %u planned (%u for units the step creates), %u "
+               "deferred by the unit tick, %u given at their marker, %u at a create's end, %u at "
+               "the step's end, %u not given (%u not reached, %u not made, %u voided, %u twice), "
+               "%u late iterations, %u remote markers left in the unit tick", s_name,
+               s_sl.c.planned, s_sl.c.made, s_sl.c.deferred, s_sl.c.given, s_sl.c.atcreate,
+               s_sl.c.settled, s_sl.c.notgiven + s_sl.c.unreached + s_sl.c.unmade + s_sl.c.lost +
+               s_sl.c.twice, s_sl.c.unreached, s_sl.c.unmade, s_sl.c.lost, s_sl.c.twice,
+               s_sl.c.late, s_sl.c.remote);
     tagpu_puppet_refusals(gates, sizeof gates);
     tagpu_logf("replay: %s: refused on puppets: %s", s_name, gates);
     tagpu_puppet_footprints(gates, sizeof gates);
@@ -8419,6 +8736,7 @@ static void play(const Lv* L)
         events_put(L, W, now);
         ov_clicks_take(W);
         mp_step_events(L, W->tick);
+        if (now && s_sl.armed) slice_settle(L->now);   /* before image T+1 */
         s_st.steps++;
         if (s_over || !iteration_read(L)) break;
         mp_step_image(L, W->tick - 1);
@@ -8478,7 +8796,7 @@ static void first_step(char* ta)
     if (!s_over) capture_put(&L);
 }
 
-void __cdecl tagpu_replay_step(void)
+static void replay_step(void)
 {
     char* ta;
     Lv L;
@@ -8497,12 +8815,21 @@ void __cdecl tagpu_replay_step(void)
     pace(ta, *(const unsigned*)(ta + OFF_GAMETIME));
 }
 
+/* the step, then the end of THE SCRIPT SLICES' plan on every path out of it */
+void __cdecl tagpu_replay_step(void)
+{
+    char* ta = ta_main();
+    replay_step();
+    slice_finish(ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0);
+}
+
 /* ---- S-e: the teardown ---------------------------------------------------------------------- */
 
 void tagpu_replay_level_end(void)
 {
     char* ta = ta_main();
     int stale = s_opt.stale;
+    slice_disarm();
     pace_level_end();
     rw_dispose();
     if (options_restore(ta) && stale) E_SaveSettings();     /* THE PLAYER'S SETTINGS */

@@ -25,6 +25,15 @@ void __cdecl tagpu_rec_capture(void);
    replay makes it at the same point of its own step (tagpu_replay_phase). */
 void __cdecl tagpu_rec_phase(unsigned phase);
 
+/* The unit tick's stub (tagpu_patches.c, THE SCRIPT SLICE), on the game thread, for each unit
+   whose script call is reached, with that unit and its COB object as 0x48ADDF reads them: on a
+   recording level, RK_EV_SLICE when the COB had an engine start since the capture point. 1 when
+   it wrote one. */
+int tagpu_rec_slice(const char* unit, const char* cob);
+/* A script slice was given (THE COUNTS): `where` 0 in the unit tick, 1 at the place the recording
+   gives it, 2 at the end of a playing's step. Game thread. */
+void tagpu_rec_slice_given(unsigned where);
+
 /* Arms the harness's dump `name` -- 1 to 39 letters, digits, '-' and '_' -- which tagpu_rec_capture
    takes at the capture point of GameTime `at`, or at its next call when `at` is 0, on any level in
    play, recorded or playing (the replay's frame visit arms it from the trigger's `dump <name>
