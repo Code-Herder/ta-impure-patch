@@ -155,6 +155,13 @@
   },
   "slice-walkers": {
    "load": "replay-slice-walkers.json",
+   "steps": [[1, "apply", "replay-slice-walkers-wave.json"],
+             [601, "apply", "replay-slice-walkers-wave.json"],
+             [1201, "apply", "replay-slice-walkers-wave.json"],
+             [1801, "apply", "replay-slice-walkers-wave.json"],
+             [2401, "apply", "replay-slice-walkers-wave.json"],
+             [3001, "apply", "replay-slice-walkers-wave.json"],
+             [3601, "apply", "replay-slice-walkers-wave.json"]],
    "end": 4500,
    "last_min": 2400,
    "cob": "exact"
