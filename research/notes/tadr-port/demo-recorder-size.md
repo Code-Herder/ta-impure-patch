@@ -1330,10 +1330,18 @@ because a seek starts from the last snapshot before its target and does not fall
 earlier one. The stream itself still reads from the segment's start.
 
 **Checked**: the C decoder and the Python reader give the same records on all 3,604 blocks of both
-outputs (`codectest.py verify`); `tarec check` passes on the exact hour, and on the lossy hour reports
-the same 13 unexplained state-byte steps it reports on that input, a property of the scratch
-transform; 20,000 mutations of the runs' chunks (`fuzz --section chunk`, ASan) and 20,000 of every
-kind (Wine) decode alike in C and Python, 679 and 2,248 of them accepted.
+transcoded hours and the 3,605 of the writer-path one (`codectest.py verify`); `tarec check` passes
+on the exact hour, and on the lossy hour reports the same 13 unexplained state-byte steps it reports
+on that input, a property of the scratch transform. Fuzzed with `fuzzdiff`, 20,000 cases each: the
+runs' chunks of the exact hour (`--section chunk`, the x86-64 ASan build) agree in all 20,000, 1,058
+accepted; every kind on the lossy hour (Wine, i686) in all 20,000, 2,369 accepted; every kind on the
+dense battle (Wine) in 19,998. The other two are chunks with one byte changed, which the vendored
+zstd 1.5.7 built for i686 refuses as corrupt (`ZSTD_error_corruption_detected`, before it consumes
+a byte) and the same source built for x86-64 -- the ASan build, and Python's `zstandard` -- unpacks
+to the chunk's raw size (MEASURED 2026-10-12: one unpack loop over the two files, built both ways
+and run under Wine). Both answers are safe: a refused chunk ends its run, and an accepted one is
+bounded like any other. A writer's own chunks are not affected: its check unpacks each one with the
+DLL's decoder before writing it.
 
 ## Multiplayer recordings
 
