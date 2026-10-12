@@ -237,6 +237,7 @@ enum { SK_SEEK, SK_TAKEOVER, SK_REWIND, SK_NOW };
 enum { RW_IDLE, RW_FLUSH, RW_OPEN, RW_PAST, RW_ENDING };
 static struct {
     unsigned state, G, P, viewed, viewer, timeline, T, objective_armed;
+    unsigned R;                     /* the fork's start, found before the original ends (rw_trigger) */
     unsigned short pause, message_at[2];
     unsigned char types[REC_PLAYERS], messages[2160];
     char path[MAX_PATH], dump[40], result_dump[40];
@@ -1424,6 +1425,8 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define H_PARALYZE        0x00402D10u
 #define H_ATTACKCHASE     0x004034A0u
 #define U_SLOTWEAPON   0x10         /* + p1 * 0x1C: a stock slot's weapon (0x402B7F..0x402B89)     */
+#define U_SLOTTARGET   0x04         /* + i * 0x1C: a stock slot's target, two words; none is
+                                       (0, 0x8000) (0x48A160, and AutoAim's 0x48A2AF, 0x48A2B4)    */
 #define ACQ_TABLE      0x005119C0u  /* ten acquisition records, by seat (0x40A10A..0x40A13A)       */
 #define OBJ_ARMED      0x88         /* the objective's test switch (0x48DF90, 0x4904B0)            */
 #define DESC_BEGIN     0x00512344u  /* the order descriptors, 0x19 bytes each, to *(0x512348)      */
@@ -2590,14 +2593,25 @@ static void ord_teardown(char* n)
    them only for an owner of type 1 or 2 (0x48AEB5..0x48AECD), so none has armed the destructor's
    handler call (+0x06 bit 1, which only the handlers set) or its StopBuilding (+0x42 bit 22,
    0x438590's). A block that is no order ends the walk, as in orders_put, and the list is cut
-   there. The units are counted on the takeover's line. */
+   there. The units are counted on the takeover's line.
+   Their three stock weapon slots' targets are set to none, (0, 0x8000), the words AutoAim writes
+   when it drops a target (0x48A2AF, 0x48A2B4, DISASSEMBLED): such a unit's image was last
+   written from the stream before T, where a target is a held value (tagpu_reclossy.c) that the
+   refresh at T corrects only for the units the image describes, and from T the owner code that
+   resolves a target runs on it (tk_bound, THE REFRESH). The side slots past the third are no
+   part of the unit image, so the stream holds none of them. */
 static unsigned tk_orphans(const Lv* L, const RecWorld* W)
 {
-    unsigned slot, list, n = 0;
+    unsigned slot, list, i, n = 0;
     for (slot = 1; slot < L->nslots; slot++) {
         if (!host_live(L, slot) ||
             (W->live[slot] && holds(L, slot, W->unit + (size_t)slot * REC_UNIT_DWORDS)))
             continue;
+        for (i = 0; i < 3; i++) {
+            uint16_t* target = (uint16_t*)(unit_at(L, slot) + U_SLOTTARGET + i * 0x1C);
+            target[0] = 0;
+            target[1] = 0x8000;
+        }
         for (list = 0; list < 2; list++) {
             char** head = (char**)(unit_at(L, slot) + (list ? U_SUBORDERS : U_ORDERS));
             char* o = *head;
@@ -6667,11 +6681,14 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
        and two owner readers would take a held target as it is: the target resolver 0x48A190
        forms begin + movsx(word 0) * 0x118 with no bound and no alive test (0x48A19F..0x48A1D7),
        and AutoAim's target read 0x48A1E0 tests only the target's +0xA6 (0x48A295) (DISASSEMBLED).
-       At a refresh the targets are the engine's own. The callers round a request down to the
-       refresh before it (recr_refresh_at); a return to the saved present (`back`) starts from the
-       live game's own frame, not from the file. */
+       A held value is one the engine produced for that unit (tagpu_reclossy.c, THE INVARIANTS),
+       so its index is a slot of the unit array: the hazard is a target that has died or whose
+       slot has been reused since, not an address outside the array. At a refresh the targets
+       are the engine's own. The callers round a request down to the refresh before it
+       (takeover_point); a return to the saved present (`back`) starts from the live game's own
+       frame, not from the file. */
     if (!back) {
-        unsigned R = recr_refresh_at(s_rd, W->tick, w2, sizeof w2);
+        unsigned R = recr_refresh_at(s_rd, W->tick, NULL, w2, sizeof w2);
         if (R != W->tick) {
             if (R) snprintf(why, cap, "GameTime %u is not a refresh iteration: the last at or "
                             "before it is %u", W->tick, R);
@@ -6745,6 +6762,36 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
         return 0;
     }
     return 1;
+}
+
+/* THE TAKEOVER'S START, found before anything is committed to it: R, the refresh at or before T
+   that tk_bound requires, and the append point after R - 1 that tk_open finds again under the
+   file's lock, so a request no takeover can serve is refused while the playing -- or a rewind's
+   live original -- still runs. A refresh that is its timeline's first iteration cannot start one:
+   the iteration before it is the parent's, or none for the original (recr_append_point). The
+   writer makes every segment's second iteration a refresh (tagpu_reclossy.h,
+   reclossy_is_refresh), so only a request for a first iteration meets that, and the refusal names
+   the second. R with `a` filled, or 0 (why). */
+static unsigned takeover_point(unsigned T, RecAppend* a, char* why, unsigned cap)
+{
+    RecTimeline seg;
+    char w2[160];
+    unsigned R = recr_refresh_at(s_rd, T, &seg, w2, sizeof w2);
+    if (!R) {
+        snprintf(why, cap, "%s", w2);
+        return 0;
+    }
+    if (R == seg.first) {
+        snprintf(why, cap, "GameTime %u rounds to the refresh %u, timeline %u's first iteration, "
+                 "which no takeover starts at; the first GameTime one can is %u", T, R, seg.id,
+                 R + 1);
+        return 0;
+    }
+    if (!recr_append_point(s_rd, R - 1, a, w2, sizeof w2)) {
+        snprintf(why, cap, "GameTime %u rounds to the refresh %u: %s", T, R, w2);
+        return 0;
+    }
+    return R;
 }
 
 /* TK0, the last act of R0. THE ORDERING: the handle is opened first and the append point found
@@ -7528,19 +7575,10 @@ static void rw_poll(void)
         tagpu_logf("rewind: opened at GameTime %u; the file holds %u to %u", s_rw.G,
                    s_span.first, s_span.last);
     } else if (s_rw.state == RW_ENDING && WaitForSingleObject(s_rw.done, 0) == WAIT_OBJECT_0) {
-        /* the fork starts at the refresh at or before the rewound GameTime (tk_bound), read from
-           the file its writer has just closed */
-        unsigned R = recr_refresh_at(s_rd, s_rw.T, why, sizeof why);
-        if (!R) {
-            tagpu_logf("rewind: fork refused: %s; playback remains paused", why);
-            s_rw.state = RW_PAST;
-            return;
-        }
-        if (R != s_rw.T)
-            tagpu_logf("rewind: a fork asked for at GameTime %u takes over at %u, the refresh at "
-                       "or before it", s_rw.T, R);
+        /* the fork starts at the refresh rw_trigger found and checked before it ended the
+           original: the writer only appends, so the blocks to that GameTime are the same */
         s_seek.mode = SK_TAKEOVER;
-        s_seek.T = R;
+        s_seek.T = s_rw.R;
         s_seek.P = s_rw.P;
         s_seek.D = *(unsigned*)(ta + OFF_DIFFICULTY);
         if (!seek_run(ta)) {
@@ -7623,9 +7661,21 @@ static int rw_trigger(const char* line)
         tagpu_logf("rewind: seek %u %s in %lu ms", T, k ? "complete" : "refused",
                    GetTickCount() - s_rw.started);
     } else if (!strcmp(line, "fork") && s_rw.state == RW_PAST) {
-        /* Ending publishes G's pending events. The done event transfers file access only after
+        /* Ending the original cannot be undone, so the fork's start is found and every refusal
+           of it taken first (takeover_point), while the original can still go on from now.
+           Ending publishes G's pending events. The done event transfers file access only after
            the old writer has closed both its file and S4c lock. Polling keeps the game thread
            responsive while the entire world remains paused. */
+        RecAppend a;
+        unsigned R = takeover_point(s_rw.T, &a, why, sizeof why);
+        if (!R) {
+            tagpu_logf("rewind: fork refused: %s", why);
+            return 1;
+        }
+        if (R != s_rw.T)
+            tagpu_logf("rewind: a fork asked for at GameTime %u takes over at %u, the refresh at "
+                       "or before it", s_rw.T, R);
+        s_rw.R = R;
         if (!s_rw.done) s_rw.done = tagpu_rec_rewind_end();
         if (s_rw.done) s_rw.state = RW_ENDING;
         else tagpu_logf("rewind: fork refused: the original recording cannot be ended");
@@ -7657,8 +7707,9 @@ static int rw_trigger(const char* line)
      exactly.
    - `takeover <P> at <T>` or `takeover <P> at <T> difficulty <D>`: on a level that plays a
      recording, the takeover waits for the next frame visit after the first step (THE TAKEOVER);
-     it takes over at the refresh at or before T, and says so when that is not T (tk_bound); the
-     checks that need the world there are R0's, so its refusals come from seek_run.
+     it takes over at the refresh at or before T, and says so when that is not T (tk_bound). A
+     start no fork can be appended after is refused at once (takeover_point); the checks that
+     need the world there are R0's, so their refusals come from seek_run.
    - `follow <seat>`, `jump <seat>`, `follow free`: the HUD's Follow, Jump and Free cam
      (FOLLOW, JUMP AND FREE CAM), for the next frame visit; a refusal is logged at once.
    - `pov`: the next frame visit logs its Follow's answer -- the epoch, the seat, the displayed
@@ -7900,14 +7951,16 @@ static void trigger_read(void)
         int dry = n >= 8 && !strcmp(line + n - 8, " dry-run");
         if (dry) line[n - 8] = 0;
         if (!strncmp(line, "takeover ", 9) && takeover_words(line + 9, &P, &T, &D)) {
-            char why[160];
+            char why[200];
             unsigned R;
+            RecAppend a;
             if (!tagpu_puppet_on() || !s_rd || s_dead) {
                 tagpu_logf("replay: takeover refused: this level plays no recording");
                 return;
             }
-            /* a takeover starts at the refresh at or before the GameTime asked (tk_bound) */
-            R = recr_refresh_at(s_rd, T, why, sizeof why);
+            /* a takeover starts at the refresh at or before the GameTime asked (tk_bound), and
+               one that cannot start there is refused before the seek (takeover_point) */
+            R = takeover_point(T, &a, why, sizeof why);
             if (!R) {
                 tagpu_logf("replay: %s: %s refused: %s", s_name,
                            dry ? "fork prediction" : "takeover", why);
@@ -7918,13 +7971,7 @@ static void trigger_read(void)
                            "the refresh at or before it", s_name, T, R);
             T = R;
             if (dry) {
-                RecAppend a;
-                if (!T || T > recr_selected(s_rd)->last)
-                    tagpu_logf("replay: %s: fork prediction refused: GameTime is outside the "
-                               "timeline", s_name);
-                else if (!recr_append_point(s_rd, T - 1, &a, why, sizeof why))
-                    tagpu_logf("replay: %s: fork prediction refused: %s", s_name, why);
-                else if (a.evict == UINT32_MAX)
+                if (a.evict == UINT32_MAX)
                     tagpu_logf("replay: %s: fork would delete no timeline", s_name);
                 else tagpu_logf("replay: %s: fork would delete timeline %u (least recently used)",
                                 s_name, a.evict);

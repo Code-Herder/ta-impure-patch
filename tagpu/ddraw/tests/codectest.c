@@ -34,8 +34,8 @@
                                     past and at the 2^27 window bound; and the ledger rule's
                                     single-precision sum; the lossy filter's own (an empty table
                                     copies, a refresh writes exactly the differences, the equality
-                                    check, malformed iterations refused, RT_HOLD's bounds and the
-                                    refresh before a GameTime)
+                                    check, malformed iterations refused, RT_HOLD's bounds, the
+                                    refresh grid and the refresh before a GameTime)
      codectest fuzz IN SEED N [CASES] [--section NAME]
                                     N mutations of the recording's sectioned blocks (flags, the
                                     head, section lengths, kinds, the unit frame's gaps, masks,
@@ -898,7 +898,7 @@ static int cmd_lossy(const char* in, const char* outp, int exact)
                     break;
                 }
                 if (!seg_iters++) snap_tick = tick;
-                refresh = seg_iters == 1 || tick % REC_REFRESH_TICKS == 1;
+                refresh = reclossy_is_refresh(seg_iters, tick, last_refresh, REC_REFRESH_TICKS);
                 if (!o.stream.n) o.first = tick;
                 o.last = tick;
                 x.units = e.units;
@@ -2628,6 +2628,27 @@ static int outcomes_lossy(void)
         lo_unit(&in, LO_SLOTS, img[1]);
         ok &= expect("lossy: refused: a slot past the header's",
                      reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+        {
+            /* a slot the first pass marked before it refused is not left marked: the refresh
+               after it still brings that slot's held dword to the copy */
+            unsigned dh[1] = { LO_HELD };
+            uint32_t vh[1] = { 0xBEEF };
+            lo_tick(&in, 4);
+            lo_delta(&in, 1, dh, vh, 1);
+            lo_unit(&in, LO_SLOTS, img[1]);
+            ok &= expect("lossy: refused: a slot past the header's after a valid one",
+                         reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+            lo_tick(&in, 5);
+            lo_delta(&in, 1, dh, vh, 1);
+            ok &= expect("  a held change after it", lo_step(L, &e, &in, 0, &out), 1);
+            lo_tick(&in, 6);
+            lo_event(&in);
+            ok &= expect("  the refresh after it", lo_step(L, &e, &in, 1, &out), 1);
+            x.units = e.units;
+            x.live = e.live;
+            x.lists = e.lists;
+            ok &= expect("  the lossy world is the copy", reclossy_equal(L, &x), 1);
+        }
         in.n = 0;
         lo_event(&in);
         ok &= expect("lossy: refused: an iteration that does not begin with RK_TICK",
@@ -2657,20 +2678,42 @@ static int outcomes_lossy(void)
     ok &= expect("RT_HOLD: refused: a refresh interval over REC_REFRESH_TICKS",
                  reclossy_hold_parse(&hh, hold, sizeof hold, why, sizeof why), 0);
 
-    /* the refresh at or before T, from a segment's stream blocks */
+    /* the writer's grid: the first two iterations, then 1 modulo the interval, or the first
+       iteration past one a gap skips */
     {
-        static const RecLossyBlock root[6] = { { 1, 1, 1 }, { 2, 31, 0 }, { 32, 300, 0 },
-                                               { 301, 301, 1 }, { 302, 331, 0 }, { 332, 601, 1 } };
-        static const RecLossyBlock fork[3] = { { 451, 451, 1 }, { 452, 481, 0 }, { 482, 601, 1 } };
-        ok &= expect("refresh_at: before the segment, none", reclossy_refresh_at(root, 6, 1, 0), 0);
-        ok &= expect("refresh_at: the first iteration", reclossy_refresh_at(root, 6, 1, 1), 1);
-        ok &= expect("refresh_at: between, the first", reclossy_refresh_at(root, 6, 1, 150), 1);
-        ok &= expect("refresh_at: a grid point", reclossy_refresh_at(root, 6, 1, 301), 301);
-        ok &= expect("refresh_at: the iteration before the next", reclossy_refresh_at(root, 6, 1, 600), 301);
-        ok &= expect("refresh_at: past the last block", reclossy_refresh_at(root, 6, 1, 10000), 601);
-        ok &= expect("refresh_at: a fork's, before it", reclossy_refresh_at(fork, 3, 451, 450), 0);
-        ok &= expect("refresh_at: a fork's first iteration", reclossy_refresh_at(fork, 3, 451, 500), 451);
-        ok &= expect("refresh_at: a fork's grid point", reclossy_refresh_at(fork, 3, 451, 601), 601);
+        static const unsigned run[9] = { 1, 2, 3, 30, 31, 32, 60, 62, 91 };
+        static const unsigned want[9] = { 1, 1, 0, 0, 1, 0, 0, 1, 1 };
+        unsigned i, prev = 0, same = 1;
+        for (i = 0; i < 9; i++) {
+            int r = reclossy_is_refresh(i + 1, run[i], prev, 30);
+            same &= (unsigned)r == want[i];
+            if (r) prev = run[i];
+        }
+        ok &= expect("is_refresh: the first two, 1 modulo 30, past a gap", same, 1);
+        ok &= expect("is_refresh: a segment's second iteration off the grid",
+                     reclossy_is_refresh(2, 501, 500, 30), 1);
+        ok &= expect("is_refresh: its third", reclossy_is_refresh(3, 502, 501, 30), 0);
+    }
+    /* the refresh at or before T, from a segment's stream blocks as the writer cuts them: its
+       first two iterations each a refresh block of its own */
+    {
+        static const RecLossyBlock root[7] = { { 1, 1, 1 }, { 2, 2, 1 }, { 3, 31, 0 },
+                                               { 32, 300, 0 }, { 301, 301, 1 }, { 302, 331, 0 },
+                                               { 332, 601, 1 } };
+        static const RecLossyBlock fork[4] = { { 451, 451, 1 }, { 452, 452, 1 }, { 453, 481, 0 },
+                                               { 482, 601, 1 } };
+        ok &= expect("refresh_at: before the segment, none", reclossy_refresh_at(root, 7, 1, 0), 0);
+        ok &= expect("refresh_at: the first iteration", reclossy_refresh_at(root, 7, 1, 1), 1);
+        ok &= expect("refresh_at: the first interval, the second iteration",
+                     reclossy_refresh_at(root, 7, 1, 150), 2);
+        ok &= expect("refresh_at: a grid point", reclossy_refresh_at(root, 7, 1, 301), 301);
+        ok &= expect("refresh_at: the iteration before the next", reclossy_refresh_at(root, 7, 1, 600), 301);
+        ok &= expect("refresh_at: past the last block", reclossy_refresh_at(root, 7, 1, 10000), 601);
+        ok &= expect("refresh_at: a fork's, before it", reclossy_refresh_at(fork, 4, 451, 450), 0);
+        ok &= expect("refresh_at: a fork's first iteration", reclossy_refresh_at(fork, 4, 451, 451), 451);
+        ok &= expect("refresh_at: a fork's first interval, its second iteration",
+                     reclossy_refresh_at(fork, 4, 451, 500), 452);
+        ok &= expect("refresh_at: a fork's grid point", reclossy_refresh_at(fork, 4, 451, 601), 601);
     }
     exact_free(&e);
     rb_free(&in);

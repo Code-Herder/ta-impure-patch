@@ -3923,12 +3923,13 @@ class LaunchHold(unittest.TestCase):
         clock = iter(range(0, 1000))
         with patch.object(tacli.time, "sleep"), \
              patch.object(tacli.time, "time", side_effect=lambda: next(clock)):
-            return tacli._replay_takeover_wait(inst, "rec", 1771, lambda: next(chunks, []),
+            return tacli._replay_takeover_wait(inst, "rec", lambda: next(chunks, []),
                                                list(first), timeout, held=held)
 
     def test_held_returns_at_the_takeover_once_the_hold_was_seen_before_it(self):
         got = self.wait([self.HOLD], [[self.TAKEN]])
         self.assertTrue(got["taken"])
+        self.assertEqual(got["at"], 1771)
         self.assertEqual(got["held"], self.HOLD)
         self.assertNotIn("recording", got)
         self.assertNotIn("timeout", got)

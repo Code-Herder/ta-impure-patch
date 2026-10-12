@@ -1751,7 +1751,9 @@ def watch_lane(w, fx, rec, out, T):
 
 def forks_lane(w, fx, out):
     """L's recording, four root forks, an LRU touch, a fork of a fork, parent deletion,
-    chain playback/export, and deletion of the highest ID followed by another fork. The tarec
+    chain playback/export, and deletion of the highest ID followed by another fork. The first root
+    fork and the fork of a fork are asked for inside their parent's first refresh interval, so
+    each starts at its parent's second iteration (tagpu_replay.c, takeover_point). The tarec
     checks of each step run on the offline pool while the lane plays its next steps (Ordered):
     the lane's results and its first failure are the ones it would have met in order."""
     results = Ordered()
@@ -1855,6 +1857,8 @@ def forks_steps(w, fx, out, results):
         got = json.loads(text[text.index("{"):])
         if got.get("timeline") != tid:
             raise Failed(f"forks: K{tid} allocated {got.get('timeline')}")
+        if got.get("at") != T:
+            raise Failed(f"forks: K{tid} taken over at {got.get('at')}, not at the refresh {T}")
         # held at T-1 by the takeover, then at the dump's GameTime, so the fork ends there
         held_start(w, log)
         run_to(w, log, T + 450, [])
@@ -1918,7 +1922,11 @@ def forks_steps(w, fx, out, results):
             raise Failed(f"forks {action} {tid}: refusal not named: {last(text)}")
         return text
 
-    for tid in (1, 2, 3):
+    # the original's first interval: the takeover starts at its second iteration
+    first = original[0]["first"]
+    if fork(1, first + 15) != first + 1:
+        raise Failed(f"forks: K1 asked for at {first + 15} did not start at {first + 1}")
+    for tid in (2, 3):
         fork(tid, base + (tid - 1) * 300)
     before = next(s["last_used"] for s in tarec.file_segments(source)[0] if s["id"] == 2)
     log = start_play(2, base + 310, "playing 2")
@@ -1937,7 +1945,11 @@ def forks_steps(w, fx, out, results):
     fork(4, base + 900)
     if any(s["id"] == 1 for s in tarec.file_segments(source)[0]):
         raise Failed("forks: LRU 1 was not removed by compaction")
-    T5 = fork(5, base + 451, 2)
+    # timeline 2's first interval: the fork of a fork starts at its parent's second iteration
+    fork2 = next(s["fork_at"] for s in tarec.file_segments(source)[0] if s["id"] == 2)
+    T5 = fork(5, fork2 + 10, 2)
+    if T5 != fork2 + 1:
+        raise Failed(f"forks: K5 asked for at {fork2 + 10} did not start at {fork2 + 1}")
     log = start_play(5, T5 + 1, "playing 5")
     # Timeline IDs are local to their file: a playing protects only that recording.
     other = w.gamedir / "replays" / "other.imprec"

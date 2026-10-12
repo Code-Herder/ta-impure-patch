@@ -1009,10 +1009,14 @@ class Segments(unittest.TestCase):
     def test_prediction_refuses_child_boundary_and_capacity(self):
         segs = self.segs(self.file(*self.ORIGINAL, header((1, 0, 4)),
                                    stream(4, 6), end_block(6)))
-        with self.assertRaisesRegex(tarec.Unreadable, "first iteration"):
+        with self.assertRaisesRegex(tarec.Unreadable, "timeline 1's first iteration.* can is 5"):
             tarec.fork_prediction(segs, 1, 4)
         self.assertIsNone(tarec.fork_prediction(segs, 1, 5))
         self.assertIsNone(tarec.fork_prediction(segs, 0, 4))
+        # the original's first iteration has none before it to append after
+        with self.assertRaisesRegex(tarec.Unreadable, "timeline 0's first iteration.* can is 2"):
+            tarec.fork_prediction(segs, 0, 1)
+        self.assertIsNone(tarec.fork_prediction(segs, 0, 2))
         rows = struct.pack("<IB3xQ", 0, 1, 1) + struct.pack("<IB3xQ", 0xFFFFFFFE, 2, 0)
         segs = self.segs(self.file(*self.ORIGINAL, block(tarec.RB_TIMELINES, 0, 0, rows)))
         with self.assertRaisesRegex(tarec.Unreadable, "exhausted"):
@@ -1084,8 +1088,8 @@ def delta(slot, values):
 
 class LossyStream(unittest.TestCase):
     """tarec's lossy-check, --exact and refresh_at against a file whose stream holds unit dword
-    HELD between the refreshes at GameTime 1 and 31 (RT_HOLD's interval 30), and whose exact
-    stream (RB_EXACT) does not."""
+    HELD between the refreshes at GameTime 2 and 31 (RT_HOLD's interval 30; 1 and 2 are the
+    segment's first two iterations), and whose exact stream (RB_EXACT) does not."""
 
     HELD = 50
 
@@ -1108,23 +1112,27 @@ class LossyStream(unittest.TestCase):
         return b"".join(tlv(tarec.RK_TICK, struct.pack("<I", t)) + extra.get(t, b"")
                         for t in range(first, last + 1))
 
-    def parts(self, lossy2=None, lossy31=None, refresh31=True, exact=True, header=None):
+    def parts(self, lossy3=None, lossy31=None, refresh31=True, refresh2=True, exact=True,
+              header=None, last=31):
         """The file: iteration 1 makes unit 1, the exact stream changes its dword HELD and dword
-        10 at 2; the lossy stream carries `lossy2` there (dword 10 alone by default) and `lossy31`
-        at the refresh 31 (dword HELD's change by default)."""
+        10 at 3; the lossy stream carries `lossy3` there (dword 10 alone by default) and `lossy31`
+        at the refresh 31 (dword HELD's change by default). The second iteration ends a block of
+        its own, a refresh block unless `refresh2` is false; the stream runs to `last`."""
         S, F = tarec.RBF_STORED, tarec.RBF_REFRESH
         first = (tlv(tarec.RK_UNIT, struct.pack("<HH", 1, 0) + bytes(tarec.REC_UNIT_IMAGE)) +
                  tlv(tarec.RK_MAPPED, struct.pack("<I", 0) + bytes(2)))
-        x = self.ticks(2, 31, {2: delta(1, {self.HELD: 7, 10: 9})})
-        lossy = self.ticks(2, 31, {2: delta(1, {10: 9}) if lossy2 is None else lossy2,
-                                   31: delta(1, {self.HELD: 7}) if lossy31 is None else lossy31})
+        x = self.ticks(3, last, {3: delta(1, {self.HELD: 7, 10: 9})})
+        lossy = self.ticks(3, last, {3: delta(1, {10: 9}) if lossy3 is None else lossy3,
+                                     31: delta(1, {self.HELD: 7}) if lossy31 is None else lossy31})
         out = [header or held_header(unit_held=(self.HELD,)),
                flagged(tarec.RB_STREAM, 1, 1, self.ticks(1, 1, {1: first}), S | F),
                flagged(tarec.RB_EXACT, 1, 1, self.ticks(1, 1, {1: first}), S),
-               flagged(tarec.RB_STREAM, 2, 31, lossy, S | (F if refresh31 else 0))]
+               flagged(tarec.RB_STREAM, 2, 2, self.ticks(2, 2, {}), S | (F if refresh2 else 0)),
+               flagged(tarec.RB_EXACT, 2, 2, self.ticks(2, 2, {}), S),
+               flagged(tarec.RB_STREAM, 3, last, lossy, S | (F if refresh31 else 0))]
         if exact:
-            out.append(flagged(tarec.RB_EXACT, 2, 31, x, S))
-        return out + [end_block(31)]
+            out.append(flagged(tarec.RB_EXACT, 3, last, x, S))
+        return out + [end_block(last)]
 
     def lossy_check(self, path, *args):
         out = io.StringIO()
@@ -1135,7 +1143,7 @@ class LossyStream(unittest.TestCase):
     def test_a_held_dword_written_at_the_refresh_passes(self):
         rc, o = self.lossy_check(self.file(*self.parts()))
         self.assertEqual(rc, 0, o)
-        self.assertIn("31 iterations to GameTime 31, 2 refreshes", o)
+        self.assertIn("31 iterations to GameTime 31, 3 refreshes", o)
 
     def test_to_stops_the_walk(self):
         rc, o = self.lossy_check(self.file(*self.parts()), "--to", "10")
@@ -1143,12 +1151,12 @@ class LossyStream(unittest.TestCase):
         self.assertIn("10 iterations to GameTime 10", o)
 
     def test_a_shown_dword_held_fails(self):
-        rc, o = self.lossy_check(self.file(*self.parts(lossy2=b"")))
+        rc, o = self.lossy_check(self.file(*self.parts(lossy3=b"")))
         self.assertEqual(rc, 1, o)
-        self.assertIn("GameTime 2: slot 1's shown bytes differ", o)
+        self.assertIn("GameTime 3: slot 1's shown bytes differ", o)
 
     def test_a_held_value_made_up_fails(self):
-        rc, o = self.lossy_check(self.file(*self.parts(lossy2=delta(1, {10: 9, self.HELD: 3}))))
+        rc, o = self.lossy_check(self.file(*self.parts(lossy3=delta(1, {10: 9, self.HELD: 3}))))
         self.assertEqual(rc, 1, o)
         self.assertIn("held bytes are neither the stream's last nor the exact ones", o)
 
@@ -1161,6 +1169,25 @@ class LossyStream(unittest.TestCase):
         rc, o = self.lossy_check(self.file(*self.parts(refresh31=False)))
         self.assertEqual(rc, 1, o)
         self.assertIn("GameTime 31: a refresh iteration that does not end a refresh block", o)
+
+    def test_the_second_iteration_is_a_refresh(self):
+        rc, o = self.lossy_check(self.file(*self.parts(refresh2=False)))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 2: a refresh iteration that does not end a refresh block", o)
+
+    def test_the_grid(self):
+        """the writer's rule (reclossy_is_refresh): the first two iterations, then 1 modulo the
+        interval, or the first iteration past one a gap skips"""
+        self.assertEqual([tarec.is_refresh(n, t, p, 30) for n, t, p in
+                          ((1, 500, 0), (2, 501, 500), (3, 502, 501), (3, 511, 501),
+                           (3, 512, 501), (5, 535, 511))], [True, True, False, True, True,
+                                                             False])
+        refresh, prev = [], 0
+        for n, t in enumerate([1, 2, 3, 30, 31, 32, 60, 62, 91], 1):
+            if tarec.is_refresh(n, t, prev, 30):
+                refresh.append(t)
+                prev = t
+        self.assertEqual(refresh, [1, 2, 31, 62, 91])
 
     def test_no_exact_stream_cannot_be_checked(self):
         path = self.file(*self.parts(exact=False))
@@ -1179,7 +1206,7 @@ class LossyStream(unittest.TestCase):
         path = self.file(*self.parts())
         for exact, held in ((False, 0), (True, 7)):
             h, bl, _ = tarec.load(path, exact=exact)
-            w = tarec.stream_to(h, bl, want=2)
+            w = tarec.stream_to(h, bl, want=3)
             self.assertEqual(struct.unpack_from("<I", w.units[1], 4 * self.HELD)[0], held)
         h, bl, _ = tarec.load(path)
         w = tarec.stream_to(h, bl, want=31)
@@ -1187,7 +1214,9 @@ class LossyStream(unittest.TestCase):
 
     def test_refresh_at(self):
         path = self.file(*self.parts())
-        self.assertEqual([tarec.refresh_at(path, 0, T) for T in (1, 2, 30, 31)], [1, 1, 1, 31])
+        # a request inside the first interval rounds to the second iteration
+        self.assertEqual([tarec.refresh_at(path, 0, T) for T in (1, 2, 3, 30, 31)],
+                         [1, 2, 2, 2, 31])
         with self.assertRaisesRegex(tarec.Unreadable, "outside timeline 0's chain"):
             tarec.refresh_at(path, 0, 32)
 

@@ -117,7 +117,9 @@ typedef struct Writer {
     Buf            exact;       /* the test lever's RB_EXACT: the same iterations' records
                                    as `iter` held them                              */
     RecLossy*      lossy;       /* the filter; NULL for a multiplayer recording     */
-    unsigned       refresh;     /* the refresh interval (RT_HOLD)                    */
+    unsigned       refresh;     /* the refresh interval (RT_HOLD); REC_REFRESH_TICKS
+                                   for a multiplayer recording, whose header has none */
+    unsigned       refresh_tick; /* the last refresh's GameTime                     */
     Buf            snap;        /* reused for each snapshot                         */
     unsigned       tick;        /* the iteration being applied                      */
     int            ticked;      /* an iteration has begun                           */
@@ -545,8 +547,10 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         fail(w, "no memory for the copy");
         return 1;
     }
-    w->refresh = w->ring->refresh >= REC_REFRESH_MIN && w->ring->refresh <= REC_REFRESH_TICKS
-                     ? w->ring->refresh : REC_REFRESH_TICKS;
+    /* a reader of a file without RT_HOLD takes REC_REFRESH_TICKS (tarec.py, lossy-check), so the
+       test lever's interval is a skirmish's alone */
+    w->refresh = !w->mp_in && w->ring->refresh >= REC_REFRESH_MIN &&
+                 w->ring->refresh <= REC_REFRESH_TICKS ? w->ring->refresh : REC_REFRESH_TICKS;
     /* the file says what its stream holds: a skirmish's RT_HOLD, after the capture's entries */
     if (!w->mp_in) {
         RecLossyParams lp;
@@ -1039,15 +1043,18 @@ static void snapshot(Writer* w)
    writes it into the stream, its stream block may end here, and a snapshot of the copy at
    `w->tick` may follow it. That snapshot comes after those events, so a reader that starts from
    it takes them from the block before.
-   THE REFRESH: an iteration whose GameTime is 1 modulo the interval, the segment's first and
-   every snapshot's -- a snapshot is taken only at a refresh, SNAPSHOT_TICKS or more after the
-   last. The filter writes every difference there, so the stream's world equals the copy, and
+   THE REFRESH: the segment's first two iterations and then one in each interval, the GameTimes
+   1 modulo it on consecutive iterations (reclossy_is_refresh), and every snapshot's -- a
+   snapshot is taken only at a refresh, SNAPSHOT_TICKS or more after the last. The filter writes
+   every difference there, so the stream's world equals the copy, and
    that is checked before the block ends: INVARIANT, an ordering, every snapshot follows a refresh
    at which the stream's world was found equal to the copy, so a reader that starts from a
    snapshot holds what a reader of the whole stream holds there. A failed check is a fault of the
    filter, and abandons the file rather than write a stream that does not reach its snapshots. The
    first iteration is a refresh because the bases below are the copy's, and a reader takes its
-   own from the stream's first iteration: equal there, they are the same bytes.
+   own from the stream's first iteration: equal there, they are the same bytes. The second is
+   one so that a takeover asked for inside the first interval has a refresh to start from after
+   the segment's first iteration (reclossy_is_refresh).
    THE BASES are taken at the first call, before any snapshot can be: the wreck pool and the grid
    at the end of the segment's first iteration. INVARIANT: they equal every reader's
    (tagpu_recreader.c, tick_take), by construction -- one Writer is one segment, calloc'd per
@@ -1059,7 +1066,7 @@ static void snapshot(Writer* w)
    agrees across a chain). */
 static void iteration_done(Writer* w)
 {
-    int refresh = w->iterations == 1 || w->tick % w->refresh == 1;
+    int refresh = reclossy_is_refresh(w->iterations, w->tick, w->refresh_tick, w->refresh);
     int snap = refresh && w->tick - w->snap_tick >= SNAPSHOT_TICKS;
     RecLossyExact x;
     if (!w->wbase) {
@@ -1092,6 +1099,7 @@ static void iteration_done(Writer* w)
             fail(w, "the lossy world differs from the copy at a refresh");
             return;
         }
+        w->refresh_tick = w->tick;
         stream_flush(w, RBF_REFRESH);
         if (snap) snapshot(w);
     } else if (w->stream.n >= STREAM_BYTES || w->sticks >= STREAM_TICKS) {

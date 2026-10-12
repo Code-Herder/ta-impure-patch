@@ -63,9 +63,10 @@ int tagpu_rec_hooks_in(void);
      it and check that the recording reads back across each declined block.
    - tagpu_rec.exact: after each stream block the writer writes the exact records it was filtered
      from (RB_EXACT), which `tarec compare --exact` and `tarec lossy-check` read.
-   - tagpu_rec.refresh, its text N: a refresh every N ticks instead of REC_REFRESH_TICKS, N a
-     multiple of REC_REFRESH_MIN up to REC_REFRESH_TICKS, so a takeover fixture's refresh lands
-     on its GameTime. */
+   - tagpu_rec.refresh, its text N: a skirmish recording's refresh every N ticks instead of
+     REC_REFRESH_TICKS, N a multiple of REC_REFRESH_MIN up to REC_REFRESH_TICKS, so a takeover
+     fixture's refresh lands on its GameTime; a multiplayer recording keeps REC_REFRESH_TICKS,
+     which its header, having no RT_HOLD, cannot name otherwise. */
 void tagpu_rec_lever_init(void);
 
 /* Actual delivered span in this thread's owned primary receive frame. Zero

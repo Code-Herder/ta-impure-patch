@@ -50,8 +50,9 @@
    The filter writes no engine memory; the playing's puppet rows apply after every list it writes,
    whatever the stream held: ord_values copies a node's image and then applies replay-layout.tsv's
    puppet0 and puppet1 rows (+0x06 bit 1, +0x42 bits 0x400000 and 0x10000, +0x52), which keep the
-   node destructor 0x43A1F0 from running owner code on a puppet (it reads +0x06 bit 1 at 0x43A21A,
-   +0x42 bit 0x10000 at 0x43A2AB and +0x52 at 0x43A264..0x43A2A2, DISASSEMBLED).
+   node destructor 0x43A1F0 from running owner code on a puppet (it reads +0x06 at 0x43A1F5 and
+   tests bit 1 at 0x43A1FE before the handler call at 0x43A21A, reads +0x42 bit 0x10000 at
+   0x43A2AB and +0x52 at 0x43A264..0x43A2A2, DISASSEMBLED).
 
    A REFRESH'S WRITES go where a reader takes them as images, before the iteration's events: the
    deltas in the run of unit records the iteration begins with, in slot order among the input's
@@ -336,23 +337,25 @@ int reclossy_iteration(RecLossy* L, const unsigned char* recs, size_t n, int ref
     Pend p;
     memset(&p, 0, sizeof p);
     /* the frame, and every slot a unit record names: a slot named by an RK_UNIT or RK_UNIT_GONE
-       gets its image from that record, and one that a delta names from the delta */
+       gets its image from that record, and one that a delta names from the delta. A refusal
+       here still reaches the loop at the end that clears the marks, so the next iteration
+       starts from none. */
     for (end = 0; end < n; ) {
         unsigned short kind, len, s;
-        if (n - end < 4) return 0;
+        if (n - end < 4) { ok = 0; break; }
         memcpy(&kind, recs + end, 2);
         memcpy(&len, recs + end + 2, 2);
-        if (n - end - 4 < len || (!end && (kind != RK_TICK || len != 4))) return 0;
+        if (n - end - 4 < len || (!end && (kind != RK_TICK || len != 4))) { ok = 0; break; }
         if (kind == RK_UNIT || kind == RK_UNIT_GONE || kind == RK_UNIT_DELTA) {
-            if (len < 2) return 0;
+            if (len < 2) { ok = 0; break; }
             memcpy(&s, recs + end + 4, 2);
-            if (s < 1 || s >= L->nslots) return 0;
+            if (s < 1 || s >= L->nslots) { ok = 0; break; }
             if (!L->named[s]) L->touched[ntouched++] = s;
             L->named[s] |= kind == RK_UNIT_DELTA ? 1 : 2;
         }
         end += (4u + len + 3) & ~3u;
     }
-    if (end != n) return 0;
+    if (end != n) ok = 0;
     while (ok && at < n) {
         unsigned short kind, len, s = 0;
         const unsigned char* b = recs + at + 4;
@@ -436,6 +439,17 @@ int reclossy_equal(const RecLossy* L, const RecLossyExact* x)
         }
     }
     return 1;
+}
+
+/* the interval of the refresh grid that holds GameTime t: 1 to interval is the first */
+static unsigned long long refresh_bin(unsigned t, unsigned interval)
+{
+    return ((unsigned long long)t + interval - 1) / interval;
+}
+
+int reclossy_is_refresh(unsigned n, unsigned tick, unsigned prev, unsigned interval)
+{
+    return n <= 2 || (interval && refresh_bin(tick, interval) != refresh_bin(prev, interval));
 }
 
 int reclossy_hold_parse(RecLossyHold* h, const void* p, unsigned n, char* why, unsigned cap)

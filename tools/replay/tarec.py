@@ -91,8 +91,9 @@ the blocks, their unpacking and that decoding are tools/replay/reccodec.py's (it
 refuses what the DLL's reader refuses; every command here reads the decoded records.
 A skirmish recording's stream is LOSSY (tagpu/ddraw/src/tagpu_reclossy.c): between two refreshes
 it may hold the bytes its header's RT_HOLD names at a value the engine produced earlier, and at
-each refresh -- the segment's first iteration and every GameTime 1 modulo RT_HOLD's interval, the
-last iteration of a stream block flagged RBF_REFRESH -- its world is the writer's exact copy. A
+each refresh -- the segment's first two iterations and then every GameTime 1 modulo RT_HOLD's
+interval (is_refresh), the last iteration of a stream block flagged RBF_REFRESH -- its world is
+the writer's exact copy. A
 snapshot follows a refresh block only. A recording made under the test lever tagpu_rec.exact
 carries each stream block's exact records after it, as an RB_EXACT block. A file ends at
 its last complete block: a block cut short or torn ends the reading, and the file is reported as
@@ -1147,12 +1148,15 @@ def fork_prediction(segs, selected=0, at=None):
     if segs[0]["max_id"] >= 0xFFFFFFFE:
         raise Unreadable("timeline ID exhausted")
     if at is not None:
-        if ch[0]["first"] is None or ch[-1]["last"] is None or not ch[0]["first"] < at <= ch[-1]["last"]:
+        if ch[0]["first"] is None or ch[-1]["last"] is None or not ch[0]["first"] <= at <= ch[-1]["last"]:
             raise Unreadable("takeover GameTime is outside the timeline")
-        for child in ch[1:]:
-            if at == child["fork_at"]:
-                raise Unreadable(f"GameTime {at} is timeline {child['id']}'s first iteration; "
-                                 "take over after it")
+        # a takeover at a timeline's first iteration would append after its parent's iteration,
+        # or after none (tagpu_replay.c, takeover_point)
+        for seg in ch:
+            if at == seg["first"]:
+                raise Unreadable(f"GameTime {at} is timeline {seg['id']}'s first iteration, "
+                                 f"which no takeover starts at; the first GameTime one can is "
+                                 f"{at + 1}")
     live = [s for s in keep if s["id"] and s["state"] == 1]
     if len(live) < 3:
         return None
@@ -1878,6 +1882,16 @@ class Held:
         return prev, prev_lists, b"".join(other)
 
 
+def is_refresh(n, t, prev, interval):
+    """Whether a segment's iteration at GameTime t is a refresh, n its ordinal in the segment from
+    1 and prev the GameTime of the segment's last refresh, as the writer decides it
+    (tagpu_reclossy.h, reclossy_is_refresh): the first two, and then the first in each interval
+    of `interval` GameTimes (1 to interval, interval + 1 to 2 * interval, ...) other than the last
+    refresh's -- on consecutive GameTimes those 1 modulo the interval."""
+    return n <= 2 or (interval > 0 and (t + interval - 1) // interval !=
+                      (prev + interval - 1) // interval)
+
+
 def lossy_chain(path, timeline):
     """(the chain's segments, each block's flags by the block, why the reading stopped)."""
     offsets, flags = [], []
@@ -1898,8 +1912,9 @@ def cmd_lossy_check(path, timeline=0, to=None):
       (b) every held byte a value the engine produced: a unit dword's held bits the stream's
           previous value or the exact one, an order list the stream's previous or the exact one;
       (c) the two worlds equal byte for byte at the end of every RBF_REFRESH block, every
-          snapshot after a refresh block, and a refresh at the segment's first iteration and at
-          every GameTime 1 modulo RT_HOLD's interval, as the takeover's rounding reads them;
+          snapshot after a refresh block, and a refresh block ending at each refresh of the
+          writer's grid (is_refresh, on RT_HOLD's interval) and nowhere else, as the takeover's
+          rounding reads them;
       (e) RT_HOLD in every skirmish segment's header, and the exact stream's blocks and
           iterations the stream's.
     Held sprays and cells (RT_HOLD's RECL_SPRAYS, RECL_CELLS) are refused as unreadable: this
@@ -1937,7 +1952,7 @@ def cmd_lossy_check(path, timeline=0, to=None):
         node_held = HN.any()
         D, W = Held(h["slots"]), Held(h["slots"])
         bl = seg["blocks"]
-        first_iter = True
+        n_seg, prev_refresh = 0, 0
         k = 1
         done = False
         prev_stream = None
@@ -1979,13 +1994,15 @@ def cmd_lossy_check(path, timeline=0, to=None):
                     break
                 n_iter += 1
                 last = t
-                is_refresh = first_iter or t % interval == 1
+                n_seg += 1
+                refresh = is_refresh(n_seg, t, prev_refresh, interval)
+                if refresh:
+                    prev_refresh = t
                 ends = j == len(pairs) - 1
-                if is_refresh != (ends and bool(refresh_block)):
+                if refresh != (ends and bool(refresh_block)):
                     fail(f"GameTime {t}: " + ("a refresh iteration that does not end a refresh "
-                                              "block" if is_refresh else
+                                              "block" if refresh else
                                               "a refresh block ending off the grid"))
-                first_iter = False
                 pd, pdl, od = D.iteration(recs)
                 pw, pwl, ow = W.iteration(xrecs)
                 if od != ow:
@@ -2021,7 +2038,7 @@ def cmd_lossy_check(path, timeline=0, to=None):
                     elif a != pdl.get(key, a):
                         fail(f"GameTime {t}: slot {key[0]}'s main list is neither the stream's "
                              f"last nor the exact one")
-                if is_refresh:
+                if refresh:
                     n_refresh += 1
                     if not (np.array_equal(D.live, W.live) and
                             np.array_equal(D.units[D.live], W.units[W.live]) and

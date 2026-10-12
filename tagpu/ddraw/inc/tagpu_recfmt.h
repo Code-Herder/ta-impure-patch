@@ -740,9 +740,11 @@ _Static_assert(RT_AIR < RT_END_REASON && RT_HOLD > RT_CODEC_MISMATCH,
 _Static_assert(RT_CODEC == 29 && RT_AIR == 31 && RT_CODEC_DECLINED == 44 && RT_HOLD == 46,
                "the codec's and the filter's tags");
 
-/* RT_HOLD. A refresh iteration is one whose GameTime is 1 modulo the interval, a segment's first
-   and every snapshot's (tagpu_recwriter.c, iteration_done): on the grid, every refresh is also 1
-   modulo the radar pass's step of 30 ticks, and the grid is the same in every recording. */
+/* RT_HOLD. A refresh iteration is a segment's first or second, one whose GameTime is 1 modulo
+   the interval (the first after it where an iteration skips that GameTime), and every snapshot's
+   (tagpu_reclossy.h, reclossy_is_refresh): on the grid, every refresh is also 1 modulo the
+   radar pass's step of 30 ticks, and the grid is the same in every recording. A file without
+   RT_HOLD, a multiplayer recording, is written on REC_REFRESH_TICKS's grid. */
 #define REC_REFRESH_TICKS 300   /* the interval a recording is written with                     */
 #define REC_REFRESH_MIN   30    /* the least a test launch may ask for (tagpu_rec.refresh)       */
 #define RECL_CELLS        1u    /* the cells' unit slots and yard bit are held                   */

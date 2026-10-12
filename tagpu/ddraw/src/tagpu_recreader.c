@@ -2004,7 +2004,7 @@ int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsign
     return 1;
 }
 
-unsigned recr_refresh_at(RecReader* r, unsigned T, char* why, unsigned cap)
+unsigned recr_refresh_at(RecReader* r, unsigned T, RecTimeline* seg, char* why, unsigned cap)
 {
     const RecSeg* s;
     RecLossyBlock* b;
@@ -2019,6 +2019,7 @@ unsigned recr_refresh_at(RecReader* r, unsigned T, char* why, unsigned cap)
         return 0;
     }
     s = chain_seg(r, hold);
+    if (seg) *seg = s->t;
     b = (RecLossyBlock*)malloc(s->nstream * sizeof *b);
     if (!b) {
         snprintf(why, cap, "no memory for the segment's %u stream blocks", s->nstream);

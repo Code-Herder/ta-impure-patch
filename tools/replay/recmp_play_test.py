@@ -18,8 +18,9 @@ compared separately: this only drives the game. --roundtrip T arms the playing's
 to T in the same process, dumping s<T> at T and s<T+120> 120 ticks on (when the recording
 reaches it; at speed 20 a nearer dump cannot be armed in time). --fresh T instead
 starts a fresh process at T (`tacli replay seek`), dump q<T>. --takeover T:P takes the recording
-over at T as player P in a fresh process (`tacli replay takeover`), dumps the live game at k<T+120>,
-then requires the AI seats to play: tareplay's takeover check, fresh AI orders reaching a handler
+over as player P in a fresh process (`tacli replay takeover`) at R, the refresh at or before T
+(tagpu_replay.c, tk_bound; the takeover's line names it, its `at`), dumps the live game at
+k<R+120>, then requires the AI seats to play: tareplay's takeover check, fresh AI orders reaching a handler
 for every AI seat and a quarter of their mobile units moving in the TAKEOVER_SPAN ticks after a
 pause; quits after it and keeps the file with its new timeline as DIR/fork-<RECORDING>. With
 --from A the recording is played first, and the running playback is taken over after its dump pA. --timeline N plays
@@ -85,6 +86,14 @@ def main():
         tl = ["--timeline", a.timeline] if a.timeline is not None else []
         if a.takeover is not None:
             T, P = map(int, a.takeover.split(":"))
+            # the takeover starts at the refresh at or before T, which its line names; the dump,
+            # armed before it, is named from that start
+            try:
+                R = tarec.refresh_at(str(rec), a.timeline or 0, T)
+            except tarec.Unreadable as e:
+                raise tareplay.CouldNotRun(f"the refresh at or before {T}: {e}")
+            if R != T:
+                print(f"the takeover asked for at {T} starts at {R}, the refresh at or before it")
             if a.from_ is None:
                 src = [rec, *tl, "--defaults", "--restart", "--keep-dll"]
             else:
@@ -99,7 +108,7 @@ def main():
                 wait_dumps(log, [f"p{a.from_}"], 900)
                 src = []
             rc, o = tacli("replay", "takeover", w.name, *src, "--at", T, "--player", P,
-                          "--dump", f"k{T + AFTER}", "--dump-at", T + AFTER, "--timeout", 300,
+                          "--dump", f"k{R + AFTER}", "--dump-at", R + AFTER, "--timeout", 300,
                           "--json", timeout=LAUNCH_TIMEOUT + 300)
             print(o.strip())
             try:
@@ -108,8 +117,11 @@ def main():
                 raise tareplay.CouldNotRun(f"replay takeover: {last(o)}")
             if rc or not got.get("taken") or "fork" not in got:
                 raise tareplay.CouldNotRun(f"replay takeover: {last(o)}")
+            if got.get("at") != R:
+                raise tareplay.CouldNotRun(f"replay takeover: taken over at {got.get('at')}, "
+                                           f"not at the refresh {R}")
             tk, got_fork = got, got["fork"]
-            wait_dumps(log, [f"k{T + AFTER}"], 600)
+            wait_dumps(log, [f"k{R + AFTER}"], 600)
             # the window opens after a pause the engine acknowledged, so it lies wholly ahead
             # (tareplay.takeover_k)
             rc, o = tacli("keys", w.name, "pause")
