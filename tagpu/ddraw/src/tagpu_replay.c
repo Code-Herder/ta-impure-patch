@@ -302,7 +302,10 @@ enum { LHOLD_OFF, LHOLD_ARMED, LHOLD_STEP, LHOLD_DONE };
 static struct { int state; unsigned g0; } s_lhold;
 static int s_mp_arena_in;           /* allocator's block-ownership boundary */
 static int s_engine_cells;          /* the grid's unit slots and yard bits are the engine's:
-                                       a multiplayer recording's level (tagpu_puppet_begin) */
+                                       a multiplayer segment, or s_cells_held (tagpu_puppet_begin) */
+static int s_cells_held;            /* a skirmish segment that holds its cells (recr_holds_cells):
+                                       the marks are the engine's too, and a takeover writes the
+                                       recording's cells (THE UNIT SLOTS AND THE YARD BIT) */
 enum { MP_ARENA_OFF, MP_ARENA_ARMED, MP_ARENA_WORKING, MP_ARENA_READY, MP_ARENA_FAILED };
 static struct { RecMpRoster roster; volatile LONG state; } s_mp_arena;
 #define MP_CREATE 29                /* a create's 28 argument bytes, then 1 once it returned     */
@@ -463,6 +466,7 @@ static void replay_close(void)
     memset(&s_span, 0, sizeof s_span);
     s_first = s_dead = s_over = 0;
     s_engine_cells = 0;
+    s_cells_held = 0;
     s_endlog = 0;
     s_notes = 0;
     memset(s_nsite, 0, sizeof s_nsite);
@@ -689,6 +693,11 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
     }
     if (!tagpu_puppet_gates_in()) {
         snprintf(why, cap, "the puppet gates are not in (tagpu_puppet.c)");
+        return 0;
+    }
+    if (h->mode != MODE_NETWORK && recr_holds_cells(h) && !tagpu_puppet_contest_in()) {
+        snprintf(why, cap, "it holds its cells, and the contest sites hold other bytes than the "
+                 "retail exe's (tagpu_puppet.c, THE CONTEST'S RULE)");
         return 0;
     }
     if (!tagpu_reclaim_level_tracked()) {
@@ -947,10 +956,11 @@ static void seat_level(char* ta, const RecHeader* h, unsigned view)
     *(unsigned short*)(ta + OFF_NPLAYERS) = (unsigned short)h->nplayers;
     objective = *(void**)(ta + OFF_OBJECTIVE);
     if (objective) E_Disarm(objective);
-    s_engine_cells = h->mode == MODE_NETWORK;
+    s_cells_held = h->mode != MODE_NETWORK && recr_holds_cells(h);
+    s_engine_cells = h->mode == MODE_NETWORK || s_cells_held;
     s_vlowest = lowest;
     InterlockedExchange(&s_vbuf, VB_ARMED);
-    tagpu_puppet_begin(seatv, localv, s_engine_cells);
+    tagpu_puppet_begin(seatv, localv, s_engine_cells, h->mode == MODE_NETWORK);
 }
 
 /* 0x464990(): the level init's players, no argument, plain `ret` (0x4649C6): 0x464700 for each of
@@ -1441,6 +1451,9 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    recording's viewed record, all four on return-to-now), the fix-up's bit (16, step 3), carried
    (17), and the create's 28-31 */
 #define U_ENGINE_BITS  0xF003170Fu
+/* +0x110 bits 26 and 27, the contest's marks: the holder's and the loser's (THE FOOTPRINT WRITERS,
+   tagpu_puppet.c). The footprint writers' alone where they write the cells (s_cells_held) */
+#define U_MARKS        0x0C000000u
 #define NOTES_MAX      32           /* the log lines a level's anomalies may take                 */
 #define NOTES_PER_SITE 3            /* ... and one call site's: an anomaly that repeats every step
                                        is counted in the level's counts, so its first lines stand
@@ -1570,6 +1583,7 @@ typedef struct Lv {
 
 static uint32_t s_raw1[REC_UNIT_DWORDS], s_raw2[REC_UNIT_DWORDS], s_praw[REC_PLAYER_DWORDS];
 static uint32_t s_state[REC_UNIT_DWORDS];         /* +0x110 as the last write takes it        */
+static uint32_t s_raw1h[REC_UNIT_DWORDS], s_stateh[REC_UNIT_DWORDS];  /* the two, less U_MARKS */
 static uint32_t s_oraw[REC_ORDER_IMAGE / 4];      /* an order node's values                   */
 static uint32_t s_oclr[REC_ORDER_IMAGE / 4], s_oset[REC_ORDER_IMAGE / 4];   /* its puppet rows */
 static uint32_t s_jval[REC_PROJ_DWORDS];          /* a projectile record's value bytes         */
@@ -1643,6 +1657,10 @@ static void masks_init(void)
     m_field(s_raw1, U_YARD, 1, 0x04, 0);    /* the yard, YARD_OPEN's                           */
     m_field(s_raw1, U_STATE, 4, U_ENGINE_BITS, 0);
     m_bytes(s_raw1, REC_MOVER_AT + 0x26, 8, 0);
+    memcpy(s_raw1h, s_raw1, sizeof s_raw1h);
+    memcpy(s_stateh, s_state, sizeof s_stateh);
+    m_field(s_raw1h, U_STATE, 4, U_MARKS, 0);
+    m_field(s_stateh, U_STATE, 4, U_MARKS, 0);
     m_bytes(s_raw2, 0x64, 6, 1);            /* the turn words                                  */
     m_bytes(s_raw2, U_ALT, 4, 1);
     m_field(s_raw2, U_STATE, 4, 0x10000u, 1);
@@ -1874,7 +1892,7 @@ static void unit_put(const Lv* L, unsigned slot, const uint32_t* img)
     char* mover = *(char**)u;           /* the create made it for a type with one (def +0x22F) */
     float was, now;
     memcpy(&was, u + U_BUILT, 4);
-    put_masked(u, img, s_raw1, 0, REC_UNIT_BYTES);
+    put_masked(u, img, s_cells_held ? s_raw1h : s_raw1, 0, REC_UNIT_BYTES);
     memcpy(&now, u + U_BUILT, 4);
     if (s_mp.on && build_finished(was) != build_finished(now)) {
         char* model;
@@ -2226,7 +2244,8 @@ static void units_put(const Lv* L, const RecWorld* W)
    footprint the yardmap is laid out for, and the footprint strictly inside the grid, as 0x47D970
    tests it (0x47D991..0x47D9D8, 16-bit sums compared signed). The re-claim has no bound of its own
    and walks those cells. The contest it runs marks this unit and the incumbents with +0x110 bits
-   26 and 27, which states_put then writes as recorded. */
+   26 and 27, which states_put then writes as recorded -- but on a segment that holds its cells,
+   where the marks are the footprint writers' (U_MARKS). */
 static void yards_put(const Lv* L, const RecWorld* W)
 {
     const char* defs = *(const char* const*)(L->ta + OFF_UDEFS);
@@ -2274,14 +2293,18 @@ static void yards_put(const Lv* L, const RecWorld* W)
 }
 
 /* +0x110 as recorded, less the bits the engine functions own, for every unit once the placement
-   and the yards are done: their contests mark bits 26 and 27 on incumbents too (0x47C828..0x47C89C) */
+   and the yards are done: their contests mark bits 26 and 27 on incumbents too (0x47C828..0x47C89C).
+   On a segment that holds its cells the marks are those contests' own (U_MARKS): the grid they
+   mark is the engine's there, and a recorded mark beside it would name a contest the host's grid
+   never held. */
 static void states_put(const Lv* L, const RecWorld* W)
 {
+    const uint32_t* m = s_cells_held ? s_stateh : s_state;
     unsigned slot;
     for (slot = 1; slot < L->nslots; slot++) {
         const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
         if (W->live[slot] && holds(L, slot, img))
-            put_masked(unit_at(L, slot), img, s_state, 0, REC_UNIT_BYTES);
+            put_masked(unit_at(L, slot), img, m, 0, REC_UNIT_BYTES);
     }
 }
 
@@ -3003,12 +3026,18 @@ static int ev_spray(const Lv* L, const unsigned char* b, unsigned len)
    value that indexes is bounded before it goes in: a cell's unit slots by the unit array's count,
    a sequence's frame by the sequence's own count, as 0x4B8B30 bounds it, and the reproduction
    cursor by the grid's cells, the range the tick keeps it in (0x4240A3..0x4240CC).
-   THE UNIT SLOTS AND THE YARD BIT come from the images alone on a skirmish recording's level: every
-   write the stamp, the clear and the re-claim make to them -- for the placements below, the
-   creates and deaths, and the host's own unit tick -- is undone at the writer's return
-   (tagpu_puppet.c, THE FOOTPRINT WRITERS), so the cells the recording did not change keep the
-   recording's values. On a multiplayer recording's level they are the host engine's own
-   (s_engine_cells): its units follow their owners, not the recorder's replicas. */
+   THE UNIT SLOTS AND THE YARD BIT are the host engine's own (s_engine_cells) on a multiplayer
+   recording's segment, whose units follow their owners, not the recorder's replicas, and on a
+   skirmish segment that holds its cells (s_cells_held, RECL_CELLS), whose stream carries them
+   exact only at a refresh (tagpu_reclossy.c): the stamp, the clear and the re-claim write them
+   for the placements, creates, deaths and yard changes the images make, at the recorded
+   positions, and decide a contest by the recording machine's rule (tagpu_puppet.c, THE
+   FOOTPRINT WRITERS, THE CONTEST'S RULE). A takeover of such a segment, at a refresh, writes the
+   recording's slots, yard bits and marks once and refreshes the passability over them, so the
+   engine plays on from the recording machine's grid (sk_features, tk_cells). On a skirmish
+   recording's segment that does not hold them they come from the images alone: every write the
+   three make is undone at the writer's return, so the cells the recording did not change keep
+   the recording's values. */
 
 #define OFF_FGRID      0x14287      /* the feature grid (tagpu_recorder.c, *The features*)          */
 #define OFF_FGRIDW     0x14233
@@ -3130,7 +3159,7 @@ static int cell_put(const Lv* L, char* c, const unsigned char* img, unsigned x, 
         return 0;
     }
     if (s_engine_cells) {
-        /* THE MULTIPLAYER MATERIALIZER: the slots and the yard bit are the engine's own */
+        /* THE UNIT SLOTS AND THE YARD BIT: the engine's own */
         for (k = 0; k < REC_CELL_BYTES; k++) {
             unsigned char m = k < 4 ? 0 : s_cval[k];
             if (k == CELL_FLAGS) m &= (unsigned char)~CELL_YARDBIT;
@@ -3244,8 +3273,10 @@ static void heads_put(const Lv* L, const unsigned char* b)
    it carries rows 492 and 493 only, and the host kept the slot to the level's end). So each run is
    noted here and written back from the world at the next images. With that, at every capture
    point the host's grid is the world's: the images carry every cell that changed between two
-   images, the footprint writers' writes are undone at their return (tagpu_puppet.c), the feature
-   calls are the recording machine's own with its inputs, and this write-back undoes the input.
+   images, the footprint writers' writes are undone at their return (tagpu_puppet.c) or, where the
+   cells are the engine's, made at the recorded positions by the recording machine's rule, the
+   feature calls are the recording machine's own with its inputs, and this write-back undoes the
+   input.
    It takes the NEXT iteration's world: there the grid names only units live in its image, which
    the step's creates and deaths have made the host's (the delta's own precondition), so
    cell_put's slot rule refuses nothing it would not refuse in the delta. The step's own world
@@ -3584,9 +3615,9 @@ void tagpu_replay_blast(const char* unit)
    source cell's unit slot, 0x424189), and the recording machine's tick saw the iteration's slots
    and its input, not the next image's. So each early slot's previous bytes are kept, and put back
    just before the tick root, whose input then goes in over them (THE TICK'S INPUT); features_put
-   writes the next image's afterwards. A cell past the store's room is not written early. On a
-   multiplayer recording's level no slot is written (s_engine_cells), and the tick's one read of
-   one, the source test, takes the recording's value (FS_SOURCE). */
+   writes the next image's afterwards. A cell past the store's room is not written early. Where
+   the cells are the engine's (s_engine_cells) no slot is written, and the tick's one read of one,
+   the source test, takes the recording's value (FS_SOURCE). */
 #define PEND_EVENTS 8192
 #define PEND_BYTES  (2u << 20)
 #define PEND_SLOTS  16384
@@ -4478,18 +4509,24 @@ static unsigned mp_make_held(const Lv* L)
 
 /* The materializer follows the segment the reader stands in. A multiplayer file's takeover timeline
    is a skirmish segment: a live skirmish recorded it, every unit its own seat's, so there the
-   replay plays it as a skirmish's -- the recorded world whole, the cells' slots and yard bits the
-   recording's -- and in the file's own segment it composes T's world (THE SEEK OF A MULTIPLAYER
-   RECORDING). Called after every reader seek, before the seek writes anything. 1, or 0 the
-   playing stopped. */
+   replay plays it as a skirmish's -- the recorded world whole, the cells as that segment holds
+   them (THE UNIT SLOTS AND THE YARD BIT) -- and in the file's own segment it composes T's world
+   (THE SEEK OF A MULTIPLAYER RECORDING). Called after every reader seek, before the seek writes
+   anything, so the contest's rule a crossing changes is in before the seek's creates stamp. 1,
+   or 0 the playing stopped. */
 static int mp_follow(const Lv* L, unsigned T)
 {
-    int here;
+    int here, held;
     if (!s_mp.level) return 1;
     here = recr_segment_mp(s_rd);
+    held = !here && recr_segment_cells(s_rd);
+    if (!tagpu_puppet_engine_cells(here || held, here)) {
+        mp_fail("the cells' rule could not follow the segment at GameTime %u (tagpu_puppet.c)", T);
+        return 0;
+    }
     s_mp.on = here;
-    s_engine_cells = here;
-    tagpu_puppet_engine_cells(here);
+    s_engine_cells = here || held;
+    s_cells_held = held;
     return here ? mp_rebuild(L, T) : !s_mp.failed;
 }
 
@@ -5672,9 +5709,9 @@ static void sk_kills(const Lv* L)
 
 /* R3b, on a level whose cells are the engine's (s_engine_cells): every cell as the engine's own
    would be with no unit alive. A unit's death clears the footprint it stands in, which on such a
-   level is where the engine put it; but the segment the reader stood in before this seek may be a
-   takeover timeline, whose cells were the recording's (mp_follow), and there a death leaves the
-   recorded cells that named the unit somewhere else. So a slot naming no live unit is dropped
+   level is where the engine put it; but the grid may hold recorded slots that name the unit
+   somewhere else -- a takeover's (tk_cells), or a segment's whose cells were the recording's
+   before the reader crossed (mp_follow) -- and there a death leaves them. So a slot naming no live unit is dropped
    (host_live), and with every unit gone (sk_kills' count) no yard bit stands. R7's creates and
    R8's moves then stamp the composed world on a grid that holds nothing else. */
 static void sk_cells_clear(const Lv* L)
@@ -5831,6 +5868,30 @@ static void sk_buckets(const Lv* L, const RecWorld* W, unsigned nheads)
     }
 }
 
+/* R10b, a takeover of a segment that holds its cells (THE UNIT SLOTS AND THE YARD BIT): the
+   contest's marks, +0x110 bits 26 and 27, from the images, after R10 wrote the recording's slots
+   and yard bits. The engine plays on from here, and its writers read both: the clear re-claims
+   around a bit-26 holder, the re-claim acts on bit 27 (tagpu_puppet.c, THE FOOTPRINT WRITERS). The
+   world is exact here: a takeover starts at a refresh (takeover_point), where the stream's held
+   bytes are the writer's own (tagpu_reclossy.c), and a return to now from the saved image of the
+   present, a dump, which holds every byte. TK4a's passability refresh then runs over the grid
+   whole (tk_live). The bound: a slot live in the image whose host slot holds a live unit of its
+   type (holds), as states_put's. */
+static void tk_cells(const Lv* L, const RecWorld* W)
+{
+    unsigned slot;
+    for (slot = 1; slot < L->nslots; slot++) {
+        const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
+        uint32_t st;
+        char* u;
+        if (!W->live[slot] || !holds(L, slot, img)) continue;
+        u = unit_at(L, slot);
+        memcpy(&st, u + U_STATE, 4);
+        st = (st & ~U_MARKS) | (img[U_STATE / 4] & U_MARKS);
+        memcpy(u + U_STATE, &st, 4);
+    }
+}
+
 /* R10: the features whole, from the image, after R0 bounded it.
    - The host's 3DO model instances freed, walking its active and settled lists as the teardown's
      purge 0x422170 walks them (0x42219A..0x4221D5, a 3DO def's +0xFE bit 0 clear), each bounded:
@@ -5843,8 +5904,10 @@ static void sk_buckets(const Lv* L, const RecWorld* W, unsigned nheads)
      (0x423EC2, 0x423ECB).
    - Every cell from its image less the draw's own bit, its unit slots only when 0 or naming a
      live unit, else 0 and counted: the stamp's contest dereferences an incumbent's +0x96 with no
-     NULL test (0x47CDCA). */
-static void sk_features(const Lv* L, const RecWorld* W)
+     NULL test (0x47CDCA). Where the cells are the engine's (s_engine_cells) the slots and the
+     yard bit stay the host's, but in a takeover of a segment that holds its cells (`tk` and
+     s_cells_held): there the recording's go in, as on any skirmish segment (tk_cells). */
+static void sk_features(const Lv* L, const RecWorld* W, int tk)
 {
     unsigned list, i, c, ncells = L->gw * L->gh;
     for (list = 0; list < 2; list++) {
@@ -5918,10 +5981,10 @@ static void sk_features(const Lv* L, const RecWorld* W)
         memcpy(host, cell, 4);
         memcpy(cell, img, REC_CELL_BYTES);
         cell[CELL_FLAGS] = (char)(((unsigned char)cell[CELL_FLAGS] & ~CELL_DRAWDEFER) | keep);
-        if (s_engine_cells) {
-            /* the slots and the yard bit are the engine's own (THE MULTIPLAYER MATERIALIZER):
+        if (s_engine_cells && !(tk && s_cells_held)) {
+            /* the slots and the yard bit are the engine's own (THE UNIT SLOTS AND THE YARD BIT):
                R3's kills and R3b's clear took every unit off the grid and R7's creates and R8's
-               moves put the composed world's units on it, so the host's are that world's */
+               moves put the world's units on it, so the host's are that world's */
             memcpy(cell, host, 4);
             cell[CELL_FLAGS] = (char)(((unsigned char)cell[CELL_FLAGS] & ~CELL_YARDBIT) | yard);
             s_sk.fcells++;
@@ -7169,7 +7232,8 @@ static int seek_run(char* ta)
     seek_unit_books(&L, V);
     /* R9, R10, R11, R12 */
     sk_buckets(&L, V, nheads);
-    sk_features(&L, V);
+    sk_features(&L, V, tk);
+    if (tk && s_cells_held) tk_cells(&L, V);
     s_sk.effects = tagpu_effects_clear();
     sk_tables(&L, V);
     /* R13: the globals, the pool and the explored map, after R7's draws of the simulation RNG and
@@ -7427,8 +7491,16 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
     s_viewer = v;
     s_view = s_rw.P;
     E_Disarm(*(void**)(ta + OFF_OBJECTIVE));
-    tagpu_puppet_begin(seats, locals, 0);
-    tagpu_puppet_play();
+    /* the live recording's cells as a playing of it keeps them (THE UNIT SLOTS AND THE YARD BIT):
+       its contests by its own rule from here, before R3's kills and R7's creates */
+    s_cells_held = recr_holds_cells(h);
+    s_engine_cells = s_cells_held;
+    tagpu_puppet_begin(seats, locals, s_engine_cells, 0);
+    if (!tagpu_puppet_play()) {
+        tagpu_refuse("Rewinding failed: the replay's contest rule could not be written into the "
+                     "game. The game has stopped.");
+        return 0;
+    }
     s_first = s_dead = s_over = 0;
     s_rw.state = RW_PAST;
     return 1;
@@ -8419,7 +8491,15 @@ void __cdecl tagpu_replay_step(void)
         else snprintf(shown, sizeof shown, "the view of record %u", s_view);
         tagpu_logf("replay: playing %s: %u seats, the viewer at record %u, from GameTime %u, %s",
                    s_name, recr_header(s_rd)->nseats, s_viewer, recr_header(s_rd)->start, shown);
-        tagpu_puppet_play();                /* the feature gates close (THE FEATURES) */
+        /* the feature gates close (THE FEATURES), and the contests follow the recording
+           machine's rule before level_units makes the first unit */
+        if (!tagpu_puppet_play()) {
+            s_dead = 1;
+            recfile_leave();
+            tagpu_logf("replay: not playing %s: the contest's rule could not be written "
+                       "(tagpu_puppet.c, THE CONTEST'S RULE); the level stays empty", s_name);
+            return;
+        }
         first = 1;
     } else if (!s_over && !level_of(ta, &L)) {
         s_over = 1;

@@ -36,15 +36,24 @@ const volatile unsigned char* tagpu_puppet_flag(void);
 /* The seat fill's (tagpu_replay.c): `seat` and `local` for the ten records, then the mode on.
    `engine_cells`: the grid's unit slots and yard bits are the engine's own on this level -- a
    multiplayer recording's, whose units are timed by their owners while the recorder's grid
-   follows its own replicas -- so the footprint writers' writes stand (THE FOOTPRINT WRITERS).
-   The teardown's: everything off. */
+   follows its own replicas, or a skirmish one that holds its cells (RECL_CELLS) -- so the
+   footprint writers' writes stand (THE FOOTPRINT WRITERS). `mp_state`: a multiplayer segment,
+   whose state bytes the state gate keeps to the replay's own write. A skirmish level that keeps
+   the engine's cells also decides their contests by its recording machine's rule from its first
+   step (THE CONTEST'S RULE, tagpu_puppet_play). The teardown's: everything off, the contest's
+   rule the engine's own again. */
 void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
-                        const unsigned char local[PUPPET_PLAYERS], int engine_cells);
+                        const unsigned char local[PUPPET_PLAYERS], int engine_cells,
+                        int mp_state);
 void tagpu_puppet_end(void);
-/* engine_cells for the segment the replay plays from here on: a multiplayer file's takeover
-   timeline is a skirmish segment. Only between steps (the replay's seek); refused, and logged,
-   inside a footprint writer. */
-void tagpu_puppet_engine_cells(int engine_cells);
+/* engine_cells and mp_state for the segment the replay plays from here on: a multiplayer file's
+   takeover timeline is a skirmish segment. Only between steps (the replay's seek); refused, and
+   logged, inside a footprint writer. 1, or 0 when the contest's rule could not follow it, and
+   then nothing changed. */
+int tagpu_puppet_engine_cells(int engine_cells, int mp_state);
+/* 1 when the six contest sites held the stock bytes at attach: a level that would need the
+   recording machine's rule (THE CONTEST'S RULE) plays only then */
+int tagpu_puppet_contest_in(void);
 
 /* THE GATES (tagpu_puppet.c): the engine functions that would write what a recording carries on
    a puppet level, or take the viewer's own input to it, refuse on one. DllMain's attach lands them
@@ -78,12 +87,15 @@ void tagpu_puppet_refusals(char* out, size_t cap);
    it, and a death, whose corpse the destructor makes. tagpu_puppet_features sets whether they are
    open and returns what it was, which the caller puts back: a death's explosion plays its roots
    inside the death. Before the first step they are open: the loader places the map's features
-   through the spawn. */
-void tagpu_puppet_play(void);
+   through the spawn. tagpu_puppet_play also writes THE CONTEST'S RULE when the level needs it:
+   1, or 0 when its sites hold other bytes or could not be written -- nothing is written or
+   marked then, and the playing must stop. */
+int tagpu_puppet_play(void);
 int tagpu_puppet_features(int open);
 
 /* THE DRAWS a replayed root makes at the feature code's six calls of the simulation RNG, and on
-   a multiplayer level at reproduction's source test (FS_SOURCE) (tagpu_recfmt.h, RecDrawSite):
+   a level that keeps the engine's cells at reproduction's source test (FS_SOURCE)
+   (tagpu_recfmt.h, RecDrawSite):
    the recording's, in order, armed by the replay around the call.
    tagpu_puppet_draw answers 1 with the next one while its site and argument are the call's;
    otherwise 0, and the call draws for itself, as do the rest of the root's calls. */
@@ -93,9 +105,9 @@ int tagpu_puppet_draw(unsigned site, unsigned n, unsigned* v);
 /* disarms; the draws the call did not take as recorded: left over, or after a disagreement */
 unsigned tagpu_puppet_draws_end(void);
 
-/* THE FOOTPRINT WRITERS (tagpu_puppet.c): on a puppet level each call of the stamp 0x47CC30, the
-   clear 0x47D0E0 or the re-claim 0x47C790 has its writes to the grid's unit slots and yard bit
-   undone at its return. The recorder's observer at each entry (tagpu_recorder.c, ob_foot) hands
+/* THE FOOTPRINT WRITERS (tagpu_puppet.c): on a puppet level whose cells are the recording's (not
+   engine_cells) each call of the stamp 0x47CC30, the clear 0x47D0E0 or the re-claim 0x47C790 has
+   its writes to the grid's unit slots and yard bit undone at its return. The recorder's observer at each entry (tagpu_recorder.c, ob_foot) hands
    over the unit and the call's return address: tagpu_puppet_foot_enter answers 1 when it saved the
    cells, and then the observer's `after` calls tagpu_puppet_foot_leave, which puts them back and
    gives the return address back. */

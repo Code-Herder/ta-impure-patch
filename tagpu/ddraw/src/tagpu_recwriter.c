@@ -117,6 +117,7 @@ typedef struct Writer {
     Buf            exact;       /* the test lever's RB_EXACT: the same iterations' records
                                    as `iter` held them                              */
     RecLossy*      lossy;       /* the filter; NULL for a multiplayer recording     */
+    unsigned       hold_flags;  /* RT_HOLD's flags (RECL_*); 0 for a multiplayer one */
     unsigned       refresh;     /* the refresh interval (RT_HOLD); REC_REFRESH_TICKS
                                    for a multiplayer recording, whose header has none */
     unsigned       refresh_tick; /* the last refresh's GameTime                     */
@@ -555,14 +556,18 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
     if (!w->mp_in) {
         RecLossyParams lp;
         unsigned char hold[REC_HOLD_BYTES];
-        unsigned flags = 0;
+        unsigned flags = REC_SKIRMISH_HOLDS;
         _Static_assert(sizeof REC_HOLD_UNIT == REC_UNIT_IMAGE &&
                        sizeof REC_HOLD_NODE == REC_ORDER_IMAGE, "the hold masks' sizes");
         _Static_assert(sizeof TAGPU_REPLAY_HOLD_SHA256 == 65, "a SHA-256 in hex");
         lp.nslots = w->nslots;
         lp.hold_unit = REC_HOLD_UNIT;
         lp.hold_node = REC_HOLD_NODE;
+        lp.flags = flags;
+        lp.gw = w->gw;
+        lp.gh = w->gh;
         w->lossy = reclossy_begin(&lp);
+        w->hold_flags = flags;
         if (!w->lossy) {
             fail(w, "no memory for the lossy filter");
             return 1;
@@ -1085,6 +1090,7 @@ static void iteration_done(Writer* w)
     x.units = w->units;
     x.live = w->live;
     x.lists = w->lists;
+    x.grid = w->grid;
     if (w->lossy ? !reclossy_iteration(w->lossy, w->iter.p, w->iter.n, refresh, &x, &w->stream)
                  : !buf_put(&w->stream, w->iter.p, w->iter.n)) {
         fail(w, w->stream.oom ? "no memory for a stream block" : "the lossy filter refused an "
@@ -1158,7 +1164,8 @@ static int list_record(Writer* w, unsigned kind, const unsigned char* b, unsigne
    cells only when it is the tick's, whose cells are its input and none of the copy, and which is
    inside no bracket; a death's, RK_EV_DEATH to its END, holds the feature calls its explosion
    made, in a multiplayer recording its corpse's (FR_CORPSE, inside a death only), and may hold
-   deaths. A draw is inside one, FS_SOURCE inside a multiplayer recording's tick only.
+   deaths. A draw is inside one, FS_SOURCE inside the tick only, of a recording whose playing
+   keeps the engine's slots: a multiplayer one, or one that holds its cells (RECL_CELLS).
    INVARIANT, an ordering: the copy's grid takes exactly the cells every reader and the encoder
    take as images. Their rule (tagpu_recreader.c, apply; reccodec's events flag; codectest's
    world_apply) is that an RK_CELLS is an image when no RCS_EVENTS record came before it in its
@@ -1227,7 +1234,8 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
         break;
     case RK_EV_DRAW:
         if (!open || len != 12 || b[0] >= FS_SITES || b[1] || b[2] || b[3] ||
-            (b[0] == FS_SOURCE && (w->fbracket != FR_TICK + 1 || !w->mp_in)))
+            (b[0] == FS_SOURCE && (w->fbracket != FR_TICK + 1 ||
+                                   !(w->mp_in || (w->hold_flags & RECL_CELLS)))))
             return 0;
         break;
     default:

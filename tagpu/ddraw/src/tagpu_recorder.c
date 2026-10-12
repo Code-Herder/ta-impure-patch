@@ -6192,11 +6192,12 @@ static const unsigned DRAW_SITES[FS_RNG_SITES] = { 0x004234C2u, 0x00423A38u, 0x0
    `cmp word [cell],0` at 0x424189, slot A of the cursor's cell [esp+0x10] (0x4240E5). It is the
    one value a feature call reads from outside the feature world: area damage's slot sums are
    never read by its feature branch (0x49A407, 0x49A40D), and the spawn, the destroy and the tick
-   read no other unit slot (DISASSEMBLED). A multiplayer playing's host keeps its own slots,
-   because its units follow their owners, so a multiplayer recording records the slot the tick
-   read (FS_SOURCE) and such a host answers from it (tagpu_replay_source). Everywhere else this is
-   the stock test on the engine's own pointer. n is a key compared with the recording's, never an
-   index. 1: a unit holds the source. */
+   read no other unit slot (DISASSEMBLED). A playing's host keeps its own slots on a multiplayer
+   recording, whose units follow their owners, and on a skirmish one, whose stream holds its
+   cells' slots (REC_SKIRMISH_HOLDS's RECL_CELLS, tagpu_reclossy.c): so every recording records the
+   slot the tick read (FS_SOURCE) and such a host answers from it (tagpu_replay_source). Everywhere
+   else this is the stock test on the engine's own pointer. n is a key compared with the
+   recording's, never an index. 1: a unit holds the source. */
 static int __cdecl feat_source(const unsigned char* cell)
 {
     const char* ta = *(const char* const*)(size_t)TA_MAINPP;
@@ -6206,7 +6207,8 @@ static int __cdecl feat_source(const unsigned char* cell)
     Rec* r;
     if (tagpu_replay_source(n, &v)) return v != 0;
     memcpy(&a, cell, 2);
-    if (s_fdepth && (r = ev_rec()) != NULL && r->feat && r->mode == MODE_NETWORK) {
+    if (s_fdepth && (r = ev_rec()) != NULL && r->feat &&
+        (r->mode == MODE_NETWORK || (REC_SKIRMISH_HOLDS & RECL_CELLS))) {
         unsigned char b[12];
         unsigned w = a;
         b[0] = FS_SOURCE;
