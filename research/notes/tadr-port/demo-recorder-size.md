@@ -4,7 +4,7 @@
 
 **L1 to L4, L5a and P1 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
 *L3: the record frames, measured*, *L4: the measured hours, the snapshot interval and R1*,
-*L5a: the ledger rule* and *P1: the container, measured*, below). Recording format 14 packs each
+*L5a: the ledger rule* and *P1: the container, measured*, below). Recording format 16 packs each
 run of sectioned stream blocks as one zstd frame at level 19 and each snapshot against the one before
 it, carries the unit deltas in a unit frame
 predicted from the engine's own rules, the projectiles in a pool frame coded by identity, and the
@@ -249,7 +249,7 @@ Once the codecs above are in, a stronger compressor packing each block alone shr
 little: on the unit frame zstd 3 is 4.63 MiB against the writer's 4.50, zstd 19 about 5 % better,
 snapshots excepted (1,629 KB writer, 1,164 zstd 19). Across blocks it is not so: the whole stream as
 one zstd 19 frame took 47.2 MB where zstd 19 block by block took 59.5 (*The measurement*), and
-format 14 takes that gain -- each run of sectioned blocks is one level-19 frame with a 2^20 window,
+format 16 takes that gain -- each run of sectioned blocks is one level-19 frame with a 2^20 window,
 flushed at every block, and each snapshot is packed against the one before it, a key every tenth --
 which takes the lossy hour from 20.73 to 15.65 MB (−24.5 %) and the exact hour from 42.15 to 29.90
 MB (−29.1 %), MEASURED (*P1* below). Removing 54 MiB of raw
@@ -1298,7 +1298,7 @@ closed.
 
 ## P1: the container, measured
 
-**What format 14 changes** (tagpu_recfmt.h, *THE RUN AND THE CHAIN*). A *run* -- the sectioned stream
+**What format 16 changes** (tagpu_recfmt.h, *THE RUN AND THE CHAIN*). A *run* -- the sectioned stream
 blocks from an `RBF_FRAME_RESET` block to the next reset, stream block of plain records or
 snapshot, the blocks one state of the frames carries across; blocks of other kinds between them
 (`RB_EXACT`, `RB_CONTRIBUTIONS`) neither end nor touch a run -- is one zstd frame at level 19 (`windowLog` 20, `hashLog` 20,
@@ -1321,7 +1321,7 @@ match finders that level 19 (btultra2) needs: 342,828 → 386,504 bytes of zstd 
 **Measured** (2026-10-12, `codectest transcode --snap-every 1` -- the writer's path, every block and
 snapshot check-decoded -- under Wine, 32-bit, on the reference setup; the inputs the records-only
 copies of the two heavy hours at 1,800-tick snapshots, the "before" column the level-3 container,
-block by block, that formats 12 and 13 write, on the same records). The lossy hour is the transform the lossy landings build on -- the units' and the
+block by block, that formats 12 to 15 write, on the same records). The lossy hour is the transform the lossy landings build on -- the units' and the
 order nodes' internal fields held, sprays as sessions and the cells held, each refreshed every
 1,800 ticks -- not *L5*'s table, whose last step measured 19.32 MB in format 12; and the exact
 hour's 29.90 MB here is lossless, not the 29.90 of *L5*'s orders step:
@@ -1339,7 +1339,7 @@ hour's 29.90 MB here is lossless, not the 29.90 of *L5*'s orders step:
 Through the writer's own path for format 13's stream (`codectest lossy` over the exact hour's
 records with the build's hold table of no rows: blocks cut at every refresh, 3,605 of them, 362
 ending at one, the 60 snapshots kept at refreshes), the file goes from 42,153,513 bytes (format 13)
-to 29,902,072 (format 14, −29.1 %), none declined or mismatched; `tarec check` passes on it, and
+to 29,902,072 in P1's container (−29.1 %), none declined or mismatched; `tarec check` passes on it, and
 `tarec lossy-check --to 27001` on the same run written with its exact stream (`--exact`)
 (MEASURED 2026-10-12).
 
