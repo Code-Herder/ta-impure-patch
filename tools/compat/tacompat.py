@@ -61,6 +61,7 @@ sys.path.insert(0, str(TREE / "tools"))
 import taremote  # noqa: E402  PowerShell over SSH, one checked statement a line
 import dpport  # noqa: E402  DirectPlay's port, per prefix (tools/dpport.py)
 import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
+import runlock  # noqa: E402  one game regression at a time (tools/runlock.py)
 
 TACLI = TREE / "tools" / "tacli"
 DPINSTALL = TREE / "tools" / "dpinstall.sh"
@@ -2925,6 +2926,10 @@ def main():
     sub.add_parser("selftest", help="check the hook decode against every shape it claims"
                    ).set_defaults(fn=cmd_selftest)
     args = ap.parse_args()
+    # the Wine suite plays its games here and waits for the machine's run lock; the Windows suite
+    # plays them on the remote desktop
+    if args.fn is cmd_wine:
+        runlock.hold(TREE, "tacompat " + " ".join(sys.argv[1:]))
     rc = 2                              # die() and anything unforeseen: it could not run
     try:
         rc = args.fn(args)

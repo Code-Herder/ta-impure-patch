@@ -159,6 +159,7 @@ STOCK_FIXTURE = "stock-limits"          # the fixture that plays the stock-limit
 sys.path.insert(0, str(TREE / "tools"))
 import talog  # noqa: E402
 import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
+import runlock  # noqa: E402  one game regression at a time (tools/runlock.py)
 sys.path.insert(0, str(HERE))
 import tarec  # noqa: E402
 import reccache  # noqa: E402
@@ -3665,6 +3666,9 @@ def main(argv=None):
     if a.cmd not in ("features", "list") and not (a.cmd == "landing" and a.check):
         import devpy
         devpy.ensure()
+    # every command that plays games waits for the machine's run lock (tools/runlock.py)
+    if a.cmd not in ("features", "list") and not (a.cmd == "landing" and a.check):
+        runlock.hold(TREE, "tareplay " + " ".join(sys.argv[1:] if argv is None else argv))
     rc = 2                              # a CouldNotRun or anything unforeseen: it could not run
     try:
         rc = a.func(a)

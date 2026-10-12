@@ -72,6 +72,7 @@ def main():
     ap.add_argument("--timeline", type=int, default=None)
     ap.add_argument("--hide-chat", action="store_true", help="`chat hide` once the playing starts")
     a = ap.parse_args()
+    tareplay.runlock.hold(TREE, "recmp_play_test " + " ".join(sys.argv[1:]))
     a.out.mkdir(parents=True, exist_ok=True)
     rec = a.out / a.recording.name
     if rec.resolve() != a.recording.resolve():
