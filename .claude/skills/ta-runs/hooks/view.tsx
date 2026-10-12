@@ -3,16 +3,13 @@
 import type { BoxProps, ButtonProps, ElementConstructor, RenderElement, TextProps } from 'claude-code'
 
 import type { Item, Run, Step } from '../types'
-import { failures } from './journal'
+import { echoesChecks, failures } from './journal'
 
 export type Els = {
   Box: ElementConstructor<BoxProps>
   Text: ElementConstructor<TextProps>
   Button: ElementConstructor<ButtonProps>
 }
-
-/** Expansion: what the person chose for a run, else open while it runs or after it failed. */
-export type Opened = (run: Run) => boolean
 
 const ENDED = new Set(['done', 'pass', 'fail', 'unrun', 'skipped'])
 
@@ -48,10 +45,6 @@ export function standing(run: Run): string {
   return run.live === 'ended' ? run.state : run.live
 }
 
-export function steps(run: Run): Step[] {
-  return run.items.flatMap(it => it.steps)
-}
-
 /** "~7 min · ≈11:42", "≥3 min" while some step has no history yet, "" with no estimate. */
 export function etaText(run: Run, now: number, utcOffset: number): string {
   if (!run.eta || run.live !== 'running') return ''
@@ -60,24 +53,65 @@ export function etaText(run: Run, now: number, utcOffset: number): string {
   return `~${duration(left)} · ≈${clockAt(now + left * 1000, utcOffset)}`
 }
 
-/** The run in one line after its title: progress, failures, time. */
+/** What a run counts its progress in: its items, or the steps of a run with none of its own. */
+const NOUN: Record<string, string> = { tareplay: 'fixtures', tacompat: 'setups' }
+
+/** Where an item stands by its steps: none started, every one ended, or in between. A failed
+ * step leaves the item in between while its other lanes still play. */
+export function phase(it: Item): 'planned' | 'running' | 'ended' {
+  if (it.steps.every(s => s.state === 'planned')) return 'planned'
+  return it.steps.every(s => ENDED.has(s.state)) ? 'ended' : 'running'
+}
+
+/** Where an item in between stands: `playing` a step on one of the run's worker pools (so at
+ * most the pools' worker count of items at once), `checking` with only steps that wait for no
+ * worker running, or `waiting` for a worker with nothing running. A run that names no pools
+ * plays every step. */
+export function stage(run: Run, it: Item): 'playing' | 'checking' | 'waiting' {
+  const pools = run.pools ?? {}
+  const workers = Object.keys(pools).length > 0
+  const going = it.steps.filter(s => s.state === 'running')
+  if (!going.length) return 'waiting'
+  return going.some(s => !workers || (pools[s.pool ?? 'main'] ?? 0) > 0) ? 'playing' : 'checking'
+}
+
+/** How far a run has got: its items with every step ended (a fixture counts once its checks have
+ * a verdict), or for a run with no items of its own, its ended steps. */
+export function progress(run: Run): { done: number; total: number; noun: string } {
+  if (run.items.length === 1 && run.items[0]!.id === '') {
+    const all = run.items[0]!.steps
+    return { done: all.filter(s => ENDED.has(s.state)).length, total: all.length, noun: 'steps' }
+  }
+  return { done: run.items.filter(it => phase(it) === 'ended').length, total: run.items.length,
+           noun: NOUN[run.tool] ?? 'items' }
+}
+
+/** A bar of `width` cells for `done` of `total`. */
+export function bar(done: number, total: number, width = 22): string {
+  const full = total ? Math.round((width * done) / total) : 0
+  return '█'.repeat(full) + '░'.repeat(width - full)
+}
+
+/** The run in one line after its title. Running: progress, failures, time left. Ended: how it
+ * stands, how long, when it ended (so a section's outcomes line up), then how far it got when
+ * that was not the whole plan, and failures. */
 export function summary(run: Run, now: number, utcOffset: number): string {
   const live = standing(run)
+  const took = duration((run.ended ?? now / 1000) - run.started)
+  const ended = run.live === 'running' ? []
+    : [live, took, ...(run.ended ? [clockAt(run.ended * 1000, utcOffset)] : [])]
   if (run.tool === 'tacli') {
-    const up = duration((run.ended ?? now / 1000) - run.started)
-    return [run.live === 'running' ? `up ${up}` : `${live} after ${up}`,
-            run.last ? `last: ${run.last}` : ''].filter(Boolean).join(' · ')
+    return [...(run.live === 'running' ? [`up ${took}`] : ended),
+            ...(run.last ? [`last: ${run.last}`] : [])].join(' · ')
   }
-  const all = steps(run)
-  const done = all.filter(s => ENDED.has(s.state)).length
+  const { done, total, noun } = progress(run)
   const fails = failures(run).length
-  const parts = [`${done}/${all.length}`]
+  const parts = [...ended]
+  if (run.live === 'running' || done < total) parts.push(`${done}/${total} ${noun}`)
   if (fails) parts.push(`${fails} FAIL`)
   if (run.live === 'running') {
     const eta = etaText(run, now, utcOffset)
     if (eta) parts.push(eta)
-  } else {
-    parts.push(`${live}, ${duration((run.ended ?? now / 1000) - run.started)}`)
   }
   return parts.join(' · ')
 }
@@ -111,8 +145,9 @@ function itemSummary(it: Item): string {
  * its failed and unrun checks. */
 function wrong(it: Item): [string, string][] {
   return [
-    ...it.steps.filter(s => s.state === 'fail' || s.state === 'unrun')
-      .map((s): [string, string] => [s.state, `${s.id}: ${s.detail ?? 'did not run'}`]),
+    ...it.steps.filter(s => (s.state === 'fail' || s.state === 'unrun') && !echoesChecks(it, s))
+      .map((s): [string, string] => [s.state, `${s.id}: ${s.detail ??
+        (s.state === 'fail' ? 'failed' : 'did not run')}`]),
     ...(it.checks?.fail ?? []).map((f): [string, string] => ['fail', f]),
     ...(it.checks?.unrun ?? []).map((f): [string, string] => ['unrun', f]),
   ]
@@ -128,13 +163,30 @@ export function endToast(run: Run, now: number): string {
 
 // ---- trees -----------------------------------------------------------------------------
 
+/** Open by default while it runs, and once ended only when it went wrong. */
+export function openByDefault(run: Run): boolean {
+  return run.live === 'running' || !['pass', 'done'].includes(standing(run))
+}
+
+/** The pane's expansions: what the person chose by key (a run's id, `pass:<run id>` for its
+ * passed items, `others`), and how to flip one from what it showed. */
+export type Expansion = {
+  chosen: Record<string, boolean>
+  flip: (key: string, wasOpen: boolean) => void
+}
+
 type Ctx = {
   els: Els
   runs: Run[]
   now: number
   utcOffset: number
-  opened: Opened
-  toggle: (run: Run) => void
+  ex: Expansion
+  /** Another session's runs open only when asked. */
+  isOther: boolean
+}
+
+function isOpen(c: Ctx, run: Run): boolean {
+  return c.ex.chosen[run.id] ?? (!c.isOther && openByDefault(run))
 }
 
 function Glyph(els: Els, state: string): RenderElement {
@@ -150,19 +202,27 @@ function line(els: Els, depth: number, ...parts: (RenderElement | string)[]): Re
   )
 }
 
-function header(c: Ctx, run: Run, depth: number, label: string): RenderElement {
+/** A run's header: its title padded to `pad` so a section's summaries line up, then its summary,
+ * which an open running run carries on its bar line instead. */
+function header(c: Ctx, run: Run, depth: number, label: string, pad = 0): RenderElement {
   const { els } = c
+  const open = isOpen(c, run)
+  const said = open && hasBar(run) ? '' : summary(run, c.now, c.utcOffset)
   return (
     <els.Box>
       <els.Text>{'  '.repeat(depth)}</els.Text>
-      <els.Button key={`run:${run.id}`} plain onPress={() => c.toggle(run)}>
-        <els.Text>{c.opened(run) ? '▾ ' : '▸ '}</els.Text>
+      <els.Button key={`run:${run.id}`} plain onPress={() => c.ex.flip(run.id, open)}>
+        <els.Text>{open ? '▾ ' : '▸ '}</els.Text>
         {Glyph(els, standing(run))}
-        <els.Text bold> {label}</els.Text>
-        <els.Text dimColor> {summary(run, c.now, c.utcOffset)}</els.Text>
+        <els.Text bold> {label.padEnd(pad)}</els.Text>
+        <els.Text dimColor> {said}</els.Text>
       </els.Button>
     </els.Box>
   )
+}
+
+function hasBar(run: Run): boolean {
+  return run.live === 'running' && run.tool !== 'tacli' && progress(run).total > 0
 }
 
 function children(c: Ctx, run: Run, step: string | null, depth: number): RenderElement[] {
@@ -178,31 +238,123 @@ function stepRows(c: Ctx, run: Run, it: Item, depth: number): RenderElement[] {
   ])
 }
 
+/** A running item's lanes in one line: each ended lane as its id and glyph, each running one
+ * with its progress. */
+function laneLine(c: Ctx, it: Item): RenderElement[] {
+  const { els } = c
+  const out: RenderElement[] = []
+  for (const s of it.steps.filter(s => s.state !== 'planned' && s.state !== 'skipped')) {
+    if (s.state !== 'running') {
+      out.push(<els.Text>{out.length ? ' ' : ''}{s.id}</els.Text>, Glyph(els, s.state))
+      continue
+    }
+    const said = s.gt != null ? `GT ${s.gt}${s.gt_target ? `/${s.gt_target}` : ''}`
+      : s.started ? duration(c.now / 1000 - s.started) : ''
+    out.push(<els.Text>{out.length ? '  ' : ''}{s.id} </els.Text>, Glyph(els, s.state),
+             <els.Text dimColor>{said ? ` ${said}` : ''}</els.Text>)
+  }
+  return out
+}
+
+/** An ended item's wall time: its first lane's start to its last lane's end. */
+function itemSeconds(it: Item): number | null {
+  const timed = it.steps.filter(s => s.started && s.seconds != null)
+  if (!timed.length) return null
+  return Math.max(...timed.map(s => s.started! + s.seconds!)) -
+    Math.min(...timed.map(s => s.started!))
+}
+
+const PASSED = new Set(['pass', 'done'])
+
+/** A run of items, grouped: those playing a game lane (one row each, bounded by the workers),
+ * those checking or waiting for a worker (one line each), those ended (what went wrong by name,
+ * the passes behind one toggle), those not started. */
+function itemRows(c: Ctx, run: Run, depth: number): RenderElement[] {
+  const { els } = c
+  const rows: RenderElement[] = []
+  const between = run.items.filter(it => phase(it) === 'running')
+  const ended = run.items.filter(it => phase(it) === 'ended')
+  const planned = run.items.filter(it => phase(it) === 'planned')
+  const isLive = run.live === 'running'
+  const group = (label: string, n: number, after: RenderElement | string = '') =>
+    line(els, depth, <els.Text bold>{`${label} (${n})`}</els.Text>, after)
+  const names = (items: Item[]) =>
+    <els.Text dimColor>{`  ${items.map(i => i.id).join(' ')}`}</els.Text>
+
+  // A run that ended mid-way shows what it cut short as one group, its lanes as they stopped.
+  const playing = isLive ? between.filter(it => stage(run, it) === 'playing') : between
+  if (playing.length) {
+    rows.push(group(isLive ? 'running' : 'cut short', playing.length))
+    const pad = Math.max(...playing.map(it => it.id.length))
+    for (const it of playing) {
+      const fails = it.steps.some(s => s.state === 'fail')
+      rows.push(line(els, depth + 1, Glyph(els, isLive ? (fails ? 'fail' : 'running') : 'unrun'),
+                     ` ${it.id.padEnd(pad)}  `, ...laneLine(c, it)))
+    }
+  }
+  if (isLive) {
+    for (const label of ['checking', 'waiting'] as const) {
+      const these = between.filter(it => stage(run, it) === label)
+      if (these.length) rows.push(group(label, these.length, names(these)))
+    }
+  }
+  if (ended.length) {
+    const passed = ended.filter(it => PASSED.has(it.state))
+    const other = ended.filter(it => !PASSED.has(it.state))
+    rows.push(group('done', ended.length,
+                    <els.Text dimColor>{`  ${passed.length} ✓${other.length
+                      ? ` · ${other.length} ✗` : ''}`}</els.Text>))
+    for (const it of other) {
+      rows.push(line(els, depth + 1, Glyph(els, it.state), <els.Text bold> {it.id}</els.Text>,
+                     <els.Text dimColor> {itemSummary(it)}</els.Text>))
+      for (const [state, why] of wrong(it)) {
+        rows.push(line(els, depth + 2, Glyph(els, state),
+                       <els.Text color={state === 'fail' ? 'error' : undefined}> {why}</els.Text>))
+      }
+    }
+    if (passed.length) {
+      const key = `pass:${run.id}`
+      const open = c.ex.chosen[key] ?? false
+      rows.push(
+        <els.Box>
+          <els.Text>{'  '.repeat(depth + 1)}</els.Text>
+          <els.Button key={key} plain onPress={() => c.ex.flip(key, open)}>
+            <els.Text>{open ? '▾ ' : '▸ '}</els.Text>
+            {Glyph(els, 'pass')}
+            <els.Text> {passed.length} passed</els.Text>
+          </els.Button>
+        </els.Box>,
+      )
+      if (open) {
+        const pad = Math.max(...passed.map(it => it.id.length))
+        for (const it of passed) {
+          const took = itemSeconds(it)
+          const said = [itemSummary(it), took != null ? duration(took) : ''].filter(Boolean)
+          rows.push(line(els, depth + 2, Glyph(els, it.state), ` ${it.id.padEnd(pad)}  `,
+                         <els.Text dimColor>{said.join(' · ')}</els.Text>))
+        }
+      }
+    }
+  }
+  if (planned.length) {
+    rows.push(group(isLive ? 'planned' : 'not started', planned.length, names(planned)))
+  }
+  return rows
+}
+
 function body(c: Ctx, run: Run, depth: number): RenderElement[] {
   const { els } = c
   const rows: RenderElement[] = (run.problems ?? []).map(p =>
     line(els, depth, <els.Text color="error">✗ {p}</els.Text>))
+  if (hasBar(run)) {
+    const { done, total } = progress(run)
+    rows.push(line(els, depth, <els.Text color="suggestion">{bar(done, total)}</els.Text>,
+                   <els.Text dimColor>  {summary(run, c.now, c.utcOffset)}</els.Text>))
+  }
   if (run.items.length === 1 && run.items[0]!.id === '') {
     rows.push(...stepRows(c, run, run.items[0]!, depth))
   } else {
-    const planned = run.items.filter(it => it.state === 'planned')
-    for (const it of run.items.filter(i => i.state !== 'planned')) {
-      rows.push(line(els, depth, Glyph(els, it.state), <els.Text bold> {it.id}</els.Text>,
-                     <els.Text dimColor> {itemSummary(it)}</els.Text>))
-      if (it.state === 'running') {
-        rows.push(...stepRows(c, run, it, depth + 1))
-      } else {
-        for (const [state, why] of wrong(it)) {
-          rows.push(line(els, depth + 1, Glyph(els, state),
-                         <els.Text color={state === 'fail' ? 'error' : undefined}> {why}</els.Text>))
-        }
-      }
-    }
-    if (planned.length) {
-      rows.push(line(els, depth, Glyph(els, 'planned'),
-                     <els.Text dimColor> {planned.length} planned: {planned.map(i => i.id)
-                       .join(' ')}</els.Text>))
-    }
+    rows.push(...itemRows(c, run, depth))
   }
   rows.push(...children(c, run, null, depth))
   if (run.live !== 'running' && run.summary) {
@@ -215,8 +367,8 @@ function worktreeName(run: Run): string {
   return run.worktree?.split('/').pop() ?? run.session.slice(0, 8)
 }
 
-function runTree(c: Ctx, run: Run, depth: number, label = run.title): RenderElement[] {
-  return [header(c, run, depth, label), ...(c.opened(run) ? body(c, run, depth + 1) : [])]
+function runTree(c: Ctx, run: Run, depth: number, label = run.title, pad = 0): RenderElement[] {
+  return [header(c, run, depth, label, pad), ...(isOpen(c, run) ? body(c, run, depth + 1) : [])]
 }
 
 function tops(runs: Run[]): Run[] {
@@ -224,32 +376,57 @@ function tops(runs: Run[]): Run[] {
   return runs.filter(r => !r.parent || !ids.has(r.parent.run))
 }
 
+/** Titles are padded to the longest in their section, up to this, so summaries line up. */
+const PAD_MAX = 44
+
+function heading(els: Els, label: string, gap = true): RenderElement {
+  return (
+    <els.Box marginTop={gap ? 1 : 0}>
+      <els.Text bold wrap="truncate-end">── {label} {'─'.repeat(200)}</els.Text>
+    </els.Box>
+  )
+}
+
+/** The pane: this session's runs in two sections, IN PROGRESS and DONE (newest first), then the
+ * other sessions' running runs behind one toggle. */
 export function paneTree(
   els: Els,
   state: { own: Run[]; others: Run[]; now: number; utcOffset: number },
-  opened: Opened,
-  othersOpen: boolean,
-  toggle: (run: Run) => void,
-  toggleOthers: () => void,
+  ex: Expansion,
 ): RenderElement {
   const { Box, Text, Button } = els
-  const own: Ctx = { els, runs: state.own, now: state.now, utcOffset: state.utcOffset, opened,
-                     toggle }
-  const rows = tops(state.own).flatMap(r => runTree(own, r, 0))
-  if (!rows.length) rows.push(<Text dimColor>No runs in this session yet.</Text>)
+  const own: Ctx = { els, runs: state.own, now: state.now, utcOffset: state.utcOffset, ex,
+                     isOther: false }
+  const mine = tops(state.own)
+  const rows: RenderElement[] = []
+  if (!mine.length) {
+    rows.push(<Text dimColor>No runs in this session yet.</Text>)
+  } else {
+    const section = (label: string, runs: Run[], gap: boolean) => {
+      rows.push(heading(els, `${label} (${runs.length})`, gap))
+      if (!runs.length) rows.push(<Text dimColor>  nothing running</Text>)
+      const pad = Math.min(PAD_MAX, Math.max(0, ...runs.map(r => r.title.length)))
+      rows.push(...runs.flatMap(r => runTree(own, r, 0, r.title, pad)))
+    }
+    section('IN PROGRESS', mine.filter(r => r.live === 'running'), false)
+    const done = mine.filter(r => r.live !== 'running')
+    if (done.length) section('DONE', done, true)
+  }
   const others = tops(state.others)
   if (others.length) {
+    const open = ex.chosen.others ?? false
     rows.push(
       <Box marginTop={1}>
-        <Button key="others" plain onPress={toggleOthers}>
-          <Text>{othersOpen ? '▾ ' : '▸ '}</Text>
-          <Text dimColor>other sessions: {others.length} running</Text>
+        <Button key="others" plain onPress={() => ex.flip('others', open)}>
+          <Text>{open ? '▾ ' : '▸ '}</Text>
+          <Text bold>OTHER SESSIONS</Text>
+          <Text dimColor> ({others.length} running)</Text>
         </Button>
       </Box>,
     )
-    if (othersOpen) {
-      rows.push(...others.flatMap(r => runTree({ ...own, runs: state.others }, r, 1,
-                                               `${worktreeName(r)} · ${r.title}`)))
+    if (open) {
+      const theirs: Ctx = { ...own, runs: state.others, isOther: true }
+      rows.push(...others.flatMap(r => runTree(theirs, r, 1, `${worktreeName(r)} · ${r.title}`)))
     }
   }
   return <Box flexDirection="column">{rows}</Box>
