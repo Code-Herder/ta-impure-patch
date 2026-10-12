@@ -879,7 +879,7 @@ region with whether its fixtures reach it.
 | 2026-10-02 | **A fork is always recorded**, whatever `tagpu_recorder.on` says (S4's D3); a takeover whose file cannot be appended is refused before the rebuild, with the reason. **B4's per-slot columns are recorded** (D4, landing S4a). **The fork rules' last-used times live in the recording** (D5), appended when a watching session ends and skipped with a log line when the file cannot be written. |
 | 2026-10-08 | **The harness runs a test-only turbo** (*Test speed*): k ticks a frame, k = 1 by default and 1..5 in the lever; a live lane acts at GameTimes by `pause at <T>` and the K and U judges are bound to ticks; every game gets the test render profile (a 20 fps present cap, `shadowres=512`). **The meteor shower's strike points after a takeover stay an open gap** (*Open items*). |
 | 2026-10-09 | **No check of the gate is decided by the wall clock** (*Ticks, not polls*): a test launch's hold starts its level held (its pause bit and one-tick first batch written from `tagpu_replay.c`, a `presentation` file, on test launches only: a loosening the owner approved); a seek's cost is its game thread's CPU time, bounded by 4,000 ms with SMT and clock contention named as the residual; the fixture worlds change once, deterministically, as scenarios now land at GameTime 1; the compat suite's soaks and `--watch` count game ticks or presented frames (SECONDS × 30) with a 120 s stall bound. |
-| 2026-10-11 | **A takeover's AIs read the recording's contacts at T** (O14 for takeovers): when P is the recording's viewed record, the takeover restores `+0x110` bits 8–10 from the recording after its radar pass, as the seek does, so the fork's first acquisition scans read what the recording's AIs read. Rejected: masking bits 8–10 in `fork_view` for every fork, a loosening of D2 (d) that would leave the fork's AIs reading a picture the parent never held; and steering the harness off the ticks after a scripted step, which hides the gap. |
+| 2026-10-11 | **A takeover's AIs read the recording's contacts at T** (O14 for takeovers): when P is the recording's viewed record, the takeover restores `+0x110` bits 8–10 from the recording after its radar pass, as the seek does, so the fork's first acquisition scans read the contacts the recording held at T, as the recording's AIs read them until its next pass; a multiplayer recording's takeover keeps its own pass's bits (below). Rejected: masking bits 8–10 in `fork_view` for every fork, a loosening of D2 (d) that would leave the fork's AIs reading a picture the parent never held; and steering the harness off the ticks after a scripted step, which hides the gap. |
 
 The owner approved one additional UI-only count exception on 2026-10-05: the native
 immediate-command click (`0x41A0F1` → `0x47F1A0("immediateorders", 0)`, return `0x41A0F6`),
@@ -931,7 +931,8 @@ k and at speed 20 alike. Closing it needs the stream's state recorded and restor
 or the shower's draws moved off the shared stream.
 
 **A takeover takes the viewed record's contact bits from the recording** (decided by the owner,
-2026-10-11: the fork's AIs read the recording's contacts at T). The seek and the takeover alike run
+2026-10-11: the fork's AIs read the recording's contacts at T). The seek and a skirmish recording's
+takeover alike run
 the viewed record's radar pass on T's world (R14b) and then, when P is the recording's viewed
 record (a takeover views P from TK1 on), put `+0x110` bits 8–10 back from the recording through
 `rw_contacts`, since the pass a playing holds read its step's globals mid-step and no image
@@ -950,13 +951,14 @@ live units). The harness takes tenseat over at 901, the tick after its typed LOS
 (`fixtures.json`'s `at`), so every run checks it. The residuals:
 
 - **P is not the recording's viewed record.** The recorded bits are another record's scan, so the
-  pass's bits stand, and the fork's AIs read P's picture as of T for up to 29 ticks where a playing
-  viewed as P holds its last pass's. D2 (d) masks bits 8–10 there.
-- **A multiplayer recording.** The bits come from the primary stream, and where its image of a slot
-  still describes an earlier unit of the same type than the one the composed world put there, the
-  new unit takes that unit's contacts until the next pass — the fork's AI input for up to 29 ticks,
-  not only display state. `recmp_compare.py --fork` expects the primary stream's bits (the rule the
-  owner approved for dumps, 2026-10-06).
+  pass's bits stand, and the radar lists the fork's AIs build from P's picture as of T stand until
+  their next scan at T+30, where a playing viewed as P holds its last pass's. D2 (d) masks bits 8–10
+  there.
+- **A multiplayer recording.** Its takeover does not restore: `rw_contacts`' bound is a live unit of
+  the image's type, not its identity, and the primary stream's image of a slot can lag a same-type
+  reuse the composed world already holds, which would hand the new unit an earlier one's contacts
+  as the fork's AI input. So the pass's bits stand, computed on the composed world at T, and the
+  O14 gap stays for multiplayer takeovers ([its takeover](demo-recorder-multiplayer-slice.md#the-takeover-of-a-multiplayer-recording)).
 - **Bit 12 and `+0xB0`** stay the takeover's own pass's: its fourth loop sets them through the fresh
   acquisition records (`0x4676A1..0x4676E8`), and D2 (d) masks bit 12 always.
 

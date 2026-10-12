@@ -1518,7 +1518,8 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
   minimap's fog composite*). The seek runs that pass once on T's world (R14b), where a playing
   still holds what its last pass, in step P = 30·⌊(T−1)/30⌋, computed. **When the host views the
   recording's viewed record the seek and the takeover then take bits 8–10 from the recording** (a
-  takeover views P from TK1 on), on every slot live
+  takeover views P from TK1 on; a multiplayer recording's takeover keeps the pass's, the
+  multiplayer slice's *The takeover of a multiplayer recording*), on every slot live
   in the image whose host slot holds a live unit of its type: in that view a playing computes the
   same pass from the same inputs at the same phase (D1), so what the recording holds at T is what a
   playing holds — every capture-point dump in that view compares the radar picture strictly and is

@@ -15,7 +15,7 @@ scenario), and on the very games L1 recorded the battle's file goes from 29.09 M
 hours, and both miss the 25 MB budget even with no snapshots at all** (24.4 and 51.5 MiB an hour
 from the stream alone). L5a, lossless, predicts the units' resource ledger and takes the heavy hour
 from 56.99 to 42.15 MB; the owner chose to go lossy after it, and a lossy plan measured offline
-brings the heavy hour to 19.32 MB, about 1.6–2.5 times the 7.6–12 MB TADR's recorder would take
+brings the heavy hour to 19.32 MB, about 1.6–2.6 times the 7.3–12.4 MB TADR's recorder would take
 for it (*L5: the lossy plan, measured offline*). L5's landing and L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
@@ -1176,7 +1176,8 @@ each one (every 1,800 ticks).
 | + nano sprays as sessions: a spray repeating the unit's previous tick's is dropped (99 % of the sprays continue one) | 23.97 |
 | + the feature tick's input cells dropped | 19.32 (18.4 MiB) |
 
-**TADR, for comparison** (MEASURED 2026-10-11: TADR 1.0's own recorder on the retail exe, a
+**TADR, for comparison** (MEASURED 2026-10-11: TADR's 2006 recorder, `Dplayx.dll` 1.0.0.545, the
+build that loads beside the retail exe -- the 3.9.02 exe's is 3.9.2.416 -- in a
 four-peer Wine network game on Metal Gridlock, one AI and an idle human per peer, 19.4 game-minutes,
 103 live units on average, its compression off). Its file is 87.7 % unit-sync packets (`0x2C`).
 The engine sends one per local player every tick (`0x48B003`, no rate gate), listing only the
@@ -1184,10 +1185,13 @@ units whose path changed -- for a ground unit up to three path points, no positi
 unit's full state in rotation, `GameTime mod` the unit limit (the writer `0x48B200`, about 29
 bytes); the receiver steers its copy toward the points by the ground step `0x43CD20` and snaps it
 to the full state when that comes round. So TADR's size grows with players and path changes, not
-with units: 13–18 bytes a tick plus 0.18–0.32 a live unit (fitted over 30 s windows), about 7.6–12
-MB for the heavy hour [INFERRED: the fit applied to the hour's unit counts]. A per-unit-tick
-scaling of the same game's packets gave 17–22 MiB, which overstates it. What TADR's playback shows
-between two full states is a network peer's picture: unbounded drift, and no seek.
+with units: 13–18 bytes a tick plus 0.18–0.32 a live unit (fitted over 30 s windows). The heavy
+hour holds 303 live units on average (32,741,856 unit-ticks over 108,090 ticks), so the fit's low
+ends together give 7.3 MB and its high ends 12.4 MB [INFERRED: the fit carried from a 103-unit game
+to a 303-unit one]. A per-unit-tick scaling of the same game's packets gave 17–22 MiB, which
+overstates it. What TADR's playback shows between two full states is a network peer's picture:
+a drift bounded only by the next full state, which comes round once per unit-limit ticks per
+player, and no seek.
 What is left of this plan is the unit frame (10.7 MB: masks and listed slots about half, motion about
 30 %), the snapshots (2.5), projectiles (1.6), orders (1.3), state (1.3) and events (1.1).
 

@@ -1617,18 +1617,24 @@ viewed seat's scan (R14b), and an owner's image carries its own machine's: a
 player's own units are in contact on its own machine. So when both worlds view
 the same player, a composed unit takes the recorder's bits from the primary
 stream. A unit that stream does not hold yet is compared without them and
-counted. Both measured forks counted 0. A seek or a takeover in that view, and
-a change of view to it, take bits 8–10 from the primary stream itself (R14b,
-`sight_change`), so a takeover as the recorder's viewed player writes the
-expected bits itself, on every slot live in the primary's image whose host slot holds
+counted. Both measured forks counted 0. A seek in that view, and a change of
+view to it, take bits 8–10 from the primary stream itself (R14b,
+`sight_change`), on every slot live in the primary's image whose host slot holds
 a live unit of its type: that is all `rw_contacts` checks, not the unit's
 identity. The host's unit comes from the composed world and the bits from the
 primary, so where the primary's image of a slot still describes an earlier unit
 of the same type than the one the composed world put there, the new unit shows
 that unit's contacts until the viewed record's next radar pass — display state
-on a puppet host, and in a takeover the fork's AIs' input for up to 29 ticks
-(the acquisition scan `0x40AA40` reads bit 8 at `0x40AB3F` in iteration T's
-players phase). A dump comparison takes the same rule
+on a puppet host. **A multiplayer recording's takeover does not take them**: it
+keeps its own radar pass's bits, computed on the composed world at T, because
+in a takeover the bits are the fork's AIs' input (the acquisition scan
+`0x40AA40` reads bit 8 at `0x40AB3F` in iteration T's players phase, and the
+radar lists it builds stand until its next scan at T+30), and the identity gap
+above would hand a new unit an earlier one's contacts. A skirmish recording's
+takeover takes them (its composed world is the stream itself). So in a
+multiplayer takeover the O14 gap stays: a change the pass read after the
+recording's last pass (a typed LOS command, say) shows as a difference in bits
+8–10 at the fork's first iteration. A dump comparison takes the same rule
 whenever the dump views the seat the recorder viewed (a playing with
 `--perspective` of the recorder's own record); in full view, or from another
 seat, the views differ and the contact bits are not compared. The count of

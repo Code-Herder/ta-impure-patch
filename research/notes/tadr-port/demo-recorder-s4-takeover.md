@@ -191,11 +191,11 @@ segment with no complete iteration with its header, and never a complete iterati
 - **VTOL_MobileBuild's orphaned frame**, above.
 - **A seat's control-group order inside its vectors** is the rebuild's, not the recording's.
 - **The contact bits as another player.** When P is not the recording's viewed record the recorded
-  bits are another record's scan, so R14b's pass stands, and the fork's AIs read P's picture as of
-  T for up to 29 ticks where a playing viewed as P holds its last pass's; D2 (d) masks bits 8–10
-  there. Bit 12 and `+0xB0` are the pass's in every view (its fourth loop, `0x4676A1..0x4676E8`,
-  through the fresh acquisition records), and D2 (d) masks bit 12 always. In a multiplayer
-  recording the restored bits are the primary stream's
+  bits are another record's scan, so R14b's pass stands, and the radar lists the fork's AIs build
+  from P's picture as of T stand until their next scan at T+30, where a playing viewed as P holds
+  its last pass's; D2 (d) masks bits 8–10 there. Bit 12 and `+0xB0` are the pass's in every view
+  (its fourth loop, `0x4676A1..0x4676E8`, through the fresh acquisition records), and D2 (d) masks
+  bit 12 always. A multiplayer recording's takeover keeps the pass's bits in every view
   ([its takeover](demo-recorder-multiplayer-slice.md#the-takeover-of-a-multiplayer-recording)).
 - **The CRT `rand`** (`0x4E4870`) keeps its state per thread, in neither image
   ([the engine map](../exe-reverse-engineering.md)), so the fork's draws from it — the meteor

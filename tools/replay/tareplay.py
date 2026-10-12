@@ -21,8 +21,8 @@ FIXTURE is a name in tools/replay/fixtures.json, or `all`. For each fixture four
 drawn (one more for each round trip a broad entry's `trips` asks for beyond three), each T = 1 (mod 30)
 -- the radar pass's step, where a seek's contact bits in any view but the recording's own, which
 its own pass makes, agree at once unless something the pass read changed later in its step (O14);
-a seek or a takeover in the recording's viewed player takes them from the recording and agrees at
-every T -- between 301 and 0.8 x its end, from
+a seek or a skirmish takeover in the recording's viewed player takes them from the recording and
+agrees at every T -- between 301 and 0.8 x its end, from
 a generator seeded by the fixture's name and HEAD, and
 printed: T1 the first, T2..T4 the round trips, Tlast = T4.
 An entry's `last_min` requires Tlast to reach a named completion checkpoint; it keeps late
@@ -58,8 +58,9 @@ holds none.
 
 A fixture fixtures.json gives a `takeover` runs two processes more, K after L and F after K:
 
-    K  takeover  `replay takeover` of L's recording at T = T2, or the entry's `at`, as player P (the recording's
-                 controlled player unless the entry names one) in a fresh process, which records
+    K  takeover  `replay takeover` of L's recording at T = T2, or the entry's `at`, as player P
+                 (the recording's controlled player unless the entry names one) in a fresh
+                 process, which records
                  timeline 1 into the same file: the window, its boxes and ErrorLog.txt watched,
                  the entry's `order` and `type` given, a dump k<T+dump>, the level ended
     F  boundary  `replay seek T-300 --timeline 1` of K's file in a fresh process, which plays
@@ -3560,7 +3561,8 @@ def main(argv=None):
                                          "its fork played across the boundary")
     tk.add_argument("fixture", help="a fixture with a `takeover` entry")
     tk.add_argument("--player", type=int, help="the player to take over (default the entry's)")
-    tk.add_argument("--at", type=int, help="the GameTime to take over at (default the entry's `at`, else T2)")
+    tk.add_argument("--at", type=int,
+                    help="the GameTime to take over at (default the entry's `at`, else T2)")
     tk.add_argument("-j", type=int, default=2, help="games at once (default 2)")
     tk.add_argument("--cover", action="store_true", help="the coverage builds")
     tk.add_argument("--keep", action="store_true", help="keep the passing dumps")

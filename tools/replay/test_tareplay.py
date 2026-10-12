@@ -1499,8 +1499,6 @@ class TakeoverFixtures(unittest.TestCase):
         known = {"player", "order", "switches", "type", "dump", "cpu_ms", "checks", "at"}
         for name, t in took.items():
             self.assertLessEqual(set(t), known, name)
-            if "at" in t:
-                self.assertEqual(t["at"] % 30, 1, name)
             self.assertTrue(t["player"] == "controlled" or isinstance(t["player"], int), name)
             self.assertTrue(t["checks"], name)
             self.assertLessEqual(set(t["checks"]), set(tareplay.TAKEOVER_CHECKS), name)

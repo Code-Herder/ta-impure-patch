@@ -1312,9 +1312,9 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    the slot, the owner); the carry links and the attach piece (0x48AB70's); the state byte
    (0x48B090's); the yard's bit, +0x10F bit 2 (YARD_OPEN's); the create's +0x110 bits 28-31; and
    the contact bits 8-10 and 12, which the host's radar pass computes for its own view (D1),
-   except that a seek, a takeover's included, puts the recorded ones back through rw_contacts: bits 8-10 when the host
-   shows the recording's own viewed player, as a change to that view does (sight_change), all
-   four on return-to-now (R14b). The harness
+   except that a seek, a skirmish recording's takeover included, puts the recorded ones back
+   through rw_contacts: bits 8-10 when the host shows the recording's own viewed player, as a
+   change to that view does (sight_change), all four on return-to-now (R14b). The harness
    compares them all but the contact bits (tools/replay/tarec.py compare --puppet), and bits 8-10
    too when the host shows the recording's own viewed player. +0x110 bit 14, dying, is
    a value like the rest: the reaper's Send_UnitDeath is refused for a puppet (tagpu_puppet.c),
@@ -1434,8 +1434,9 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define OFF_FXLAYERS   0x38D77      /* the particle layer table, FX_LAYERS of 16 bytes (0x471D90)  */
 #define FX_LAYERS      10
 /* +0x110 bits excluded from the general image writes: layer and walk class (0-3), contact bits
-   (8-10, 12; R14b's rw_contacts restores them in a seek and a takeover), the fix-up's bit (16, step 3),
-   carried (17), and the create's 28-31 */
+   (8-10 and 12; R14b's rw_contacts restores 8-10 in a seek and a skirmish takeover in the
+   recording's viewed record, all four on return-to-now), the fix-up's bit (16, step 3), carried
+   (17), and the create's 28-31 */
 #define U_ENGINE_BITS  0xF003170Fu
 #define NOTES_MAX      32           /* the log lines a level's anomalies may take                 */
 #define NOTES_PER_SITE 3            /* ... and one call site's: an anomaly that repeats every step
@@ -6932,8 +6933,8 @@ static void sk_refused(int tk, unsigned T, const char* why)
      on its 30-tick deadline (DISASSEMBLED 0x46507D..0x465092, call 0x46556D); running 0x467440
      between those deadlines would reveal newly created units early and rewrite +0xB0. The saved
      image holds both, and R15 restores the seated records' deadlines;
-   - a seek or a takeover, or a change of view (sight_change), in the recording's own viewed
-     record, CONTACT_VIEWED, after its radar pass.
+   - a seek, a skirmish recording's takeover, or a change of view (sight_change), in the
+     recording's own viewed record, CONTACT_VIEWED, after its radar pass.
    W is the primary stream: in a multiplayer recording it is the recording machine's own scan,
    where mp_world's owners' images carry their machines'. The bound, slot by slot: below the
    array's count, live in W's image, and on the host a live unit of the image's type (holds); a
@@ -6942,7 +6943,7 @@ static void sk_refused(int tk, unsigned T, const char* why)
    are written from; in a multiplayer one they are written from the composed world, so where W's
    image of a slot still describes an earlier unit of the same type than the one the composed
    world put there, the new unit takes that unit's contacts until the next scan: display state on
-   a puppet host, and in a takeover the fork's AIs' input until that scan. */
+   a puppet host. It is never a fork's AI input: a multiplayer takeover does not call this (R14b). */
 static void rw_contacts(const Lv* L, const RecWorld* W, uint32_t mask)
 {
     unsigned slot;
@@ -7131,8 +7132,8 @@ static int seek_run(char* ta)
        and the bit 8 a LosType-4 pass set on every enemy unit, which a playing holds until its
        pass at 930 and this pass, run on any image of 901..930, clears on every unit the viewed
        record's sight counters do not cover (19 at 901).
-       So in a seek or a takeover, when the host views the recording's viewed record (a takeover
-       views P from TK1 on), the recorded bits 8-10 replace the pass's. The invariant: in that
+       So in a seek, and in a skirmish recording's takeover, when the host views the recording's
+       viewed record (a takeover views P from TK1 on), the recorded bits 8-10 replace the pass's. The invariant: in that
        view a playing computes the same pass from the same inputs at the same phase (D1; R15 keeps
        the phase), so what the recording holds at T is what a playing holds at T -- every
        capture-point dump in that view compares the radar picture strictly and is EQUAL (tarec.py
@@ -7151,10 +7152,17 @@ static int seek_run(char* ta)
        (0x40918B, 0x4092DC), so each scans in iteration T's players phase (0x40B2D6..0x40B2E5)
        and reads the bits written here, as the recording's scans read them until its next pass.
        THE ORDERING: nothing after this writes bits 8-10 before the capture point of T -- R14c,
-       TK4a (0x48BD00 clears bits 4, 6 and 7 only; 0x466DC0 reads) and the tick loop to 0x4954ED
-       (MEASURED 2026-10-11, tenseat taken over at 901 and 915: compare-fork EQUAL, 23 and 25
-       live units). In a takeover as another player the pass's bits stand, and they are the AIs'
-       input until P's next pass.
+       TK4a (0x48BD00 clears bits 4, 6 and 7 only; 0x466DC0 reads) and the tick loop to 0x4954ED:
+       one level of callees DISASSEMBLED, the rest MEASURED (2026-10-11, tenseat taken over at
+       901 and 915: compare-fork EQUAL, 23 and 25 live units); every [reg+0x110]/[reg+0x111]
+       store in the exe that can reach bits 8-10 is the radar pass's visitors, the create
+       0x485C3E/0x485C48 or the restore 0x487080, a cross-check that does not see the pass's
+       stores through a field pointer. In a takeover as another player the pass's bits stand,
+       and the radar lists the fork's AIs build from them at T stand until their next scan at
+       T+30. A multiplayer recording's takeover keeps the pass's bits too: rw_contacts' bound
+       is a live unit of the image's type, not its identity, and the primary stream's image of
+       a slot can lag a same-type reuse the composed world already holds, which a seek shows
+       for a few ticks but which would be the fork's AI input.
        The pass's other call, the minimap fog 0x466C20, ran in R14 (sight_fill), and the radar
        pass asks for no other: neither it (0x467440..0x467836) nor its callees -- the unit walk
        0x47E890 with its visitors 0x467840, 0x467960 and 0x467980, 0x40B0D0, the math helpers
@@ -7167,7 +7175,7 @@ static int seek_run(char* ta)
         rw_contacts(&L, W, CONTACT_SCAN);
     } else {
         E_RadarPass();
-        if (W->view[1] == (unsigned char)ta[OFF_VIEWED])
+        if (W->view[1] == (unsigned char)ta[OFF_VIEWED] && !(tk && s_mp.on))
             rw_contacts(&L, W, CONTACT_VIEWED);
     }
     /* R14c: the records' expiry, as 0x495688 follows the players phase (THE SEEK'S SIGHT
