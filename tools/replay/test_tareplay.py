@@ -3,7 +3,8 @@
 segments and world): the C parser against the coverage build's map, the features' regions, the
 comment filter, `landing --check`, a recording's segments and chains, what format 15's block walk
 refuses and which cells are images, read from files built from the format alone, the fixtures'
-takeover entries and the W lane's edited header copies. No game runs. The files are read through
+takeover entries, the W lane's edited header copies, and compare-counts' script slice and exact
+COB children. No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
 shared venv when they are missing.
 
@@ -439,6 +440,96 @@ class RewindPolicy(unittest.TestCase):
         self.assertNotIn(4, a.sight)
         self.assertNotIn(4, b.sight)
         self.assertNotEqual(a.sight[0], b.sight[0])
+
+
+def counts_compare(live, puppet, rewind=False, cob_exact=False):
+    """compare-counts over a window whose first dumps count nothing: `live` and `puppet` are the
+    second dumps' counts. (exit code, report)"""
+    meta = (0, (1 << len(tarec.COUNT_SINKS)) - 1, 1)
+    samples = [(10, {}, meta, {}), (20, live, meta, {123: "walk"}),
+               (10, {}, meta, {}), (20, puppet, meta, {})]
+    out = io.StringIO()
+    with patch.object(tarec, "header_only", return_value={}), \
+         patch.object(tarec, "counts_of", side_effect=samples), \
+         patch.object(tarec, "absent_rows", return_value=((5, 2), [])), \
+         redirect_stdout(out):
+        result = tarec.cmd_compare_counts("rec", "a", "b", "c", "d", "rows", rewind, cob_exact)
+    return result, out.getvalue()
+
+
+class SliceRoot(unittest.TestCase):
+    """The script slice 0x48ADEB, compared per placement (aux) exactly."""
+
+    def counts(self, by_aux):
+        return {(tarec.SLICE_ROOT, 0, aux): n for aux, n in by_aux.items()}
+
+    def test_equal_per_aux(self):
+        c = {0: 100, 1: 7}
+        self.assertEqual(counts_compare(self.counts(c), self.counts(c))[0], 0)
+
+    def test_a_slice_moved_to_the_steps_end_fails_by_name(self):
+        for rewind in (False, True):
+            with self.subTest(rewind=rewind):
+                result, report = counts_compare(self.counts({0: 100, 1: 7}),
+                                                self.counts({0: 100, 1: 6, 2: 1}), rewind)
+                self.assertEqual(result, 1)
+                self.assertIn("the script slice 0x48ADEB at its recorded place: live 7, puppet 6",
+                              report)
+                self.assertIn("the script slice 0x48ADEB at the step's end: live 0, puppet 1",
+                              report)
+                self.assertNotIn("in the unit tick", report)
+
+
+class CobExact(unittest.TestCase):
+    """--cob-exact: the VM's START and CALL children by script name, with no band."""
+
+    def test_a_one_count_child_difference_fails_only_with_the_flag(self):
+        for caller, what in ((0x4B18C0, "START"), (0x4B192D, "CALL")):
+            with self.subTest(caller=what):
+                key = (0x4B08C0, caller, 123)
+                self.assertEqual(counts_compare({key: 100}, {key: 99})[0], 0)
+                result, report = counts_compare({key: 100}, {key: 99}, cob_exact=True)
+                self.assertEqual(result, 1)
+                self.assertIn(f'COB child {what} "walk": live 100, puppet 99', report)
+
+    def test_a_refused_index_stays_with_the_band(self):
+        key = (0x4B08C0, 0x4B18C0, 0)
+        self.assertEqual(counts_compare({key: 100}, {key: 99}, cob_exact=True)[0], 0)
+
+    def test_other_callers_keep_the_band(self):
+        key = (0x4B08C0, 0x4B0B0D, 123)
+        self.assertEqual(counts_compare({key: 100}, {key: 99}, cob_exact=True)[0], 0)
+
+    def test_rewind_and_cob_exact_exclude_each_other(self):
+        self.assertEqual(counts_compare({}, {}, rewind=True, cob_exact=True)[0], 2)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = tarec.main(["tarec.py", "compare-counts", "rec", "a", "b", "c", "d", "--rewind",
+                             "--cob-exact"])
+        self.assertEqual(rc, 2)
+
+    def test_the_fixture_key_reaches_the_live_against_playing_counts_alone(self):
+        self.assertEqual(tareplay.counts_options({"cob": "exact"}), ["--cob-exact"])
+        self.assertEqual(tareplay.counts_options({}), [])
+        with self.assertRaises(tareplay.CouldNotRun):
+            tareplay.counts_options({"cob": "banded"})
+        fx = {"rec": "rec.imprec", "Ts": [301, 2401], "out": Path("/nonexistent"),
+              "procs": {"P": "ran"}, "fix": {"cob": "exact"}, "name": "x"}
+        calls = []
+
+        class Res:
+            def add(self, *a): pass
+            def later(self, fn, *a):
+                calls.append(a)
+                return Mock()
+            def then(self, fn): pass
+        with patch.object(tareplay, "Ordered", Res), \
+             patch.object(Path, "exists", return_value=True):
+            tareplay.checks(fx)
+        compares = [a for a in calls if len(a) > 1 and a[1] == "compare-counts"]
+        self.assertEqual(len(compares), 1)
+        self.assertEqual(compares[0][-1], "--cob-exact")
+        self.assertFalse([a for a in calls if "--cob-exact" in a and a[1] != "compare-counts"])
 
 
 class CobFlarePolicy(unittest.TestCase):

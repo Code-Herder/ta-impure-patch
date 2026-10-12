@@ -41,12 +41,16 @@
                                              record, the players' sight counters included; --takeover
                                              applies the existing fork_view comparison policy
   tools/replay/tarec.py counts FILE DUMP     a dump's counts of roots, sinks and observed sites
-  tools/replay/tarec.py compare-counts FILE LIVE_A LIVE_B PUPPET_A PUPPET_B [--absent TSV] [--rewind]
+  tools/replay/tarec.py compare-counts FILE LIVE_A LIVE_B PUPPET_A PUPPET_B [--absent TSV]
+                                             [--rewind | --cob-exact]
                                              a live game's counts against a playing's, each the
                                              change between its two dumps: roots per site
-                                             exactly, sinks per (site, caller, aux) within
+                                             exactly, the script slice per placement exactly,
+                                             sinks per (site, caller, aux) within
                                              replay-absent.tsv's band less its rows, and no COB
-                                             engine write on the puppet
+                                             engine write on the puppet; --cob-exact compares
+                                             the VM's START and CALL children by script name
+                                             exactly, with no band and no row
   tools/replay/tarec.py images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1 [VIEW...]
                                              the null twin: every bit of the two images no row
                                              covers where the live game and a playing or the
@@ -2764,6 +2768,16 @@ COUNT_ROOTS = {
 COUNT_SINKS = [0x420A30, 0x4B08C0, 0x47F0C0, 0x47F1A0, 0x47F210, 0x47F300, 0x49C740, 0x49CDE0,
                0x49CC20, 0x49C9C0, 0x499EB0, 0x471FD0, 0x472330, 0x472430, 0x472530, 0x472630,
                0x472810, 0x4728F0, 0x4729D0, 0x472AB0, 0x472C50]
+# The script slice: the unit tick's DoScriptsNow(1), counted where it is given, by aux
+# (tagpu_patches.c, THE SCRIPT SLICE; tagpu_rec_slice_given). A live game gives every slice in its
+# unit tick or at the place the recording names for it; a playing gives a slice at the step's end
+# only when its marker did not.
+SLICE_ROOT = 0x48ADEB
+SLICE_WHERE = {0: "in the unit tick", 1: "at its recorded place", 2: "at the step's end"}
+# the COB thread allocation's callers inside a slice: the VM's START and CALL (the engine map,
+# *COB child allocation caller keys*), each key's aux the child script's name hashed
+COB_CHILD_ALLOC = 0x4B08C0
+COB_CHILDREN = {0x4B18C0: "START", 0x4B192D: "CALL"}
 COB_WRITES = {0x480B57: "SET ACTIVATION", 0x480BF1: "SET ARMORED", 0x480BB3: "SET YARD_OPEN",
               0x4813AB: "ATTACH", 0x481427: "DROP"}
 # the thirteen owner-only start calls (tagpu_recorder.c, START_SITES), counted at the call: on a
@@ -2866,15 +2880,21 @@ def bounded_cob_flare(key, live, puppet, sinks, band):
     return None
 
 
-def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
+def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False, cob_exact=False):
     """The counts of a live game (L, dumps la and lb) against a playing's (P, pa and pb), each as
-    the change between its two dumps: every root per site exactly; every sink per (site, caller,
-    aux), a `same` row's callers summed, within replay-absent.tsv's band, less its absent and
-    extra rows; the named COB flare can inherit an accepted parent shortfall,
-    reported with both counts; and no COB engine write or native owner-only start on the puppet.
-    Rewind permits only VM START/CALL child counts to differ and reports each pair.
+    the change between its two dumps: every root per site exactly; the script slice per placement
+    exactly (SLICE_WHERE); every sink per (site, caller, aux), a `same` row's callers summed,
+    within replay-absent.tsv's band, less its absent and extra rows; the named COB flare can
+    inherit an accepted parent shortfall, reported with both counts; and no COB engine write or
+    native owner-only start on the puppet.
+    Rewind permits only VM START/CALL child counts to differ and reports each pair. cob_exact
+    compares every VM START/CALL child key with a script name (aux not 0) exactly instead: no band,
+    no flare, no row; aux 0, a refused index, stays with the rows. The two exclude each other.
     Both dumps of a pair are taken at a capture point before that step's replay step, so both
     windows hold the steps [first GameTime, second GameTime)."""
+    if rewind and cob_exact:
+        print("compare-counts: --rewind and --cob-exact exclude each other")
+        return 2
     h = header_only(path)
     (ta, ca, ma, na), (tb, cb, mb, nb) = counts_of(la, h), counts_of(lb, h)
     (tpa, cpa, mpa, npa), (tpb, cpb, mpb, npb) = counts_of(pa, h), counts_of(pb, h)
@@ -2902,6 +2922,11 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
         b = sum(n for (s, _, _), n in pup.items() if s == va)
         if a != b:
             lines.append(f"root {what}: live {a}, puppet {b}")
+    for aux, where in SLICE_WHERE.items():
+        a = sum(n for (s, _, x), n in live.items() if s == SLICE_ROOT and x == aux)
+        b = sum(n for (s, _, x), n in pup.items() if s == SLICE_ROOT and x == aux)
+        if a != b:
+            lines.append(f"root the script slice 0x{SLICE_ROOT:06X} {where}: live {a}, puppet {b}")
     def grouped(counts):
         out = {}
         for (site, caller, aux), n in counts.items():
@@ -2918,9 +2943,14 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
             continue
         a, b = glive.get(key, 0), gpup.get(key, 0)
         nsink += 1
-        if rewind and site == 0x4B08C0 and caller in (0x4B18C0, 0x4B192D):
+        if rewind and site == COB_CHILD_ALLOC and caller in COB_CHILDREN:
             accepted.append(f'accepted rewind COB child {caller_text(caller)} '
                             f'"{names.get(aux, "")}": live {a}, puppet {b}')
+            continue
+        if cob_exact and site == COB_CHILD_ALLOC and caller in COB_CHILDREN and aux:
+            if a != b:
+                lines.append(f'COB child {COB_CHILDREN[caller]} "{names.get(aux, "")}": '
+                             f'live {a}, puppet {b}')
             continue
         if within_band(band, a, b):
             continue
@@ -2946,8 +2976,8 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
             lines.append(f"owner-only start on a puppet, {what} at 0x{va:06X}: {n} since the level "
                          f"began")
     print(f"counts, live {la}..{lb} against puppet {pa}..{pb}, GameTime [{ta}, {tb}): "
-          f"{len(COUNT_ROOTS)} roots, {nsink} sink keys, band {band[0]}% or {band[1]}, "
-          f"{len(rows)} rows: "
+          f"{len(COUNT_ROOTS)} roots, the script slice, {nsink} sink keys, band {band[0]}% or "
+          f"{band[1]}, {len(rows)} rows" + (", the COB children exact" if cob_exact else "") + ": "
           + ("EQUAL" if not lines else f"{len(lines)} DIFFERENCES"))
     for line in lines + unrun + accepted:
         print("  " + line)
@@ -2960,7 +2990,8 @@ def cmd_counts(path, dump):
     print(f"{dump}: GameTime {t}: {len(c)} keys, {m[0]} found no row, sinks counted "
           f"0x{m[1]:X}, counting {m[2]}")
     for (site, caller, aux), n in sorted(c.items()):
-        kind = ("root" if site in COUNT_ROOTS else "sink" if site in COUNT_SINKS else
+        kind = ("root" if site in COUNT_ROOTS else "script slice" if site == SLICE_ROOT else
+                "sink" if site in COUNT_SINKS else
                 "COB write" if site in COB_WRITES else
                 "owner-only start" if site in OWNER_STARTS else "site")
         name = names.get(aux)
@@ -3285,6 +3316,9 @@ def main(argv):
     rewind = argv[1:2] == ["compare-counts"] and "--rewind" in argv
     if rewind:
         argv = [a for a in argv if a != "--rewind"]
+    cob_exact = argv[1:2] == ["compare-counts"] and "--cob-exact" in argv
+    if cob_exact:
+        argv = [a for a in argv if a != "--cob-exact"]
     takeover = argv[1:2] == ["compare-dumps"] and "--takeover" in argv
     if takeover:
         argv = [a for a in argv if a != "--takeover"]
@@ -3383,7 +3417,8 @@ def main(argv):
             return cmd_counts(argv[2], argv[3])
         if argv[1] == "compare-counts":
             return cmd_compare_counts(argv[2], *argv[3:7], absent or str(
-                Path(__file__).resolve().parents[2] / "tagpu" / "ddraw" / "replay-absent.tsv"), rewind)
+                Path(__file__).resolve().parents[2] / "tagpu" / "ddraw" / "replay-absent.tsv"), rewind,
+                cob_exact)
         return cmd_compare(argv[2], argv[3:], puppet, timeline, exact)
     except (Unreadable, OSError, struct.error, KeyError) as e:
         print(f"tarec: {e}", file=sys.stderr)

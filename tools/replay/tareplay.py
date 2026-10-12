@@ -52,7 +52,8 @@ and every check fails by name: the recording's end block, `tarec check` and `tar
 (L records the exact stream beside the lossy one, EXACT_LEVER); L's dumps `tarec compare
 --exact`; P's, R's, Q's and W's capture dumps `tarec compare --puppet`; each round trip's line has
 residue 0 and `tarec compare-dumps rt<T>-a rt<T>-b` is EQUAL; W's steps each hold what they
-claim. Passing dumps are deleted unless --keep. A fixture with `"decline": true` launches every
+claim; L's counts against P's `tarec compare-counts`, with --cob-exact where fixtures.json gives
+the fixture `"cob": "exact"` (counts_options). Passing dumps are deleted unless --keep. A fixture with `"decline": true` launches every
 process with DECLINE_LEVER in its game folder, so its recording holds blocks the writer's codec
 declined on a schedule, each read back like any other, and the stream codec's check fails when it
 holds none.
@@ -2209,6 +2210,19 @@ def tarec_run(*args):
 PASS, FAIL, UNRUN = "pass", "FAIL", "could not run"
 
 
+def counts_options(fix):
+    """What the L-against-P counts comparison adds for a fixture: --cob-exact where it gives
+    `"cob": "exact"`, so the VM's START and CALL children by script name are compared exactly. No
+    other comparison takes it: R's round trips and Q's fresh seek start every COB from its Create
+    (tagpu_replay.c, THE SEEK), and are compared on their images."""
+    cob = fix.get("cob")
+    if cob is None:
+        return []
+    if cob != "exact":
+        raise CouldNotRun(f'"cob": {cob!r}: the one value is "exact"')
+    return ["--cob-exact"]
+
+
 def image_gate_options(fx):
     if fx["name"] == "stock-secondary-orders" and fx["fix"].get("dll") == "stock":
         return ["--stock-secondary-cosmetics"]
@@ -2300,7 +2314,7 @@ def checks(fx):
     r1, q1 = out / "R" / f"dump-r{Ts[0]}.bin", out / "Q" / f"dump-q{Ts[0]}.bin"
     if ran.get("P") == "ran":
         compare(f"counts, L against P over [{Ts[0]}, {Ts[-1]})", "compare-counts", rec, l1, lT,
-                p1, pT, files=[l1, lT, p1, pT])
+                p1, pT, *counts_options(fx["fix"]), files=[l1, lT, p1, pT])
     if all(ran.get(k) == "ran" for k in "PRQ"):
         views = [out / "L" / f"dump-{n}.bin" for n in null_views(fx["fix"])]
         for view in views + [n2]:
@@ -2710,6 +2724,7 @@ class Run:
         fixes = fixes or fixtures()
         for name in names:
             fix = fixes[name]
+            counts_options(fix)
             stock = fix.get("dll") == "stock"
             # a cost game measures the build a player runs, never the instrumented one
             cover = bool(getattr(args, "cover", False)) and not fix.get("cost")
