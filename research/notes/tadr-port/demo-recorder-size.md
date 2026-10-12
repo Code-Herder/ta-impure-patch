@@ -2,9 +2,9 @@
 
 ## Status
 
-**L1 to L4 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
-*L3: the record frames, measured* and *L4: the measured hours, the snapshot interval and R1*,
-below). Recording format 11 packs every block with zstd, carries the unit deltas in a unit frame
+**L1 to L4 and L5a are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
+*L3: the record frames, measured*, *L4: the measured hours, the snapshot interval and R1* and
+*L5a: the ledger rule*, below). Recording format 12 packs every block with zstd, carries the unit deltas in a unit frame
 predicted from the engine's own rules, the projectiles in a pool frame coded by identity, and the
 cells, orders, events and state in four record frames, of which the cells frame restarts from the
 reader's grid at every reset point; it writes a snapshot every 1,800 ticks (60 s of game time), and
@@ -13,8 +13,10 @@ anew, takes 12.00 MiB where the measured one took 99.6 (not like for like: anoth
 scenario), and on the very games L1 recorded the battle's file goes from 29.09 MiB (L1) to 16.40
 (L2) to 11.88 (L3), Town & Country's from 18.97 to 11.51 to 8.04. **L4 measured two four-player
 hours, and both miss the 25 MB budget even with no snapshots at all** (24.4 and 51.5 MiB an hour
-from the stream alone): whether to go lossy (L5) or to look for more lossless savings is the owner's
-decision. L5 and L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
+from the stream alone). L5a, lossless, predicts the units' resource ledger and takes the heavy hour
+from 56.99 to 42.15 MB; the owner chose to go lossy after it, and a lossy plan measured offline
+brings the heavy hour to 19.32 MB, inside the 17–22 MiB an hour TADR would take for it (*L5: the
+lossy plan, measured offline*). L5's landing and L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -941,10 +943,10 @@ economy pass, float accumulators that each build, repair or stockpile step and e
 that costs a resource adds to, and that the 30-tick pass zeroes (the engine map's
 [ledger](../exe-reverse-engineering.md#the-nano-spray-two-emitters-fifteen-order-handlers-disassembled-2026-09-29), *The ledger* `unit+0xBC`: every writer and the settle,
 DISASSEMBLED 2026-10-10). Packed, they are half the unit frame (*The unit frame by lane*, below).
-What the engine rules suggest for a codec [INFERRED, not measured]: the granted is bit for bit the requested from a pass on until the first refused request
-or the first payment made at once (a weapon shot, a cloak's cost), since both grow by the same
-float additions from the same 0; a unit's step usually asks the same amount as on its previous
-tick; and the reset to 0 falls on the owner's pass, which the player record times.
+Format 12 predicts them from those rules (*L5a*, below): the granted is bit for bit the requested
+from a pass on until the first refused request or the first payment made at once (a weapon shot, a
+cloak's cost), since both grow by the same float additions from the same 0; a unit's step asks the
+same amount as on its previous tick; and the reset to 0 falls on the owner's pass.
 
 **A unit's image, and which units send it** (MEASURED 2026-10-11 on the heavy hour's records, which
 the snapshot interval does not change). A unit is recorded as one 328-byte image: its 0x118-byte record, pointers as
@@ -1129,6 +1131,70 @@ snapshot at 1,800 (701 samples, 8 clicks, 11 selections, 1 snapshot), alone and 
 - L3's other open items stand: the cells derived from the units' footprints, the declines no
   fixture reaches, the multiplayer-only kinds, and L2's.
 
+## L5a: the ledger rule
+
+**What L5a is** (landed). Recording format 12: format 11 with the unit frame predicting the
+resource ledger. The lane table gains five roles, appended: `OWNER` (`+0xEC`, the owner's player
+ID), `EREQ`/`EGRANT` (`+0xC0`/`+0xC4`) and `MREQ`/`MGRANT` (`+0xD8`/`+0xDC`). `ledger_steps`
+(`tagpu_reccodec.c`) runs after the other rules: the requested is 0 at the owner's settle, the last
+value plus the slot's step while it grows, the last value when it held, the step itself after a zero
+that followed a value; the granted is this tick's requested when the two were equal, else the last
+value; the rule is always the winner. The settle is learned per owner ID (every slot of an owner
+settles on the same tick) from the last requested that fell to zero, the step per slot from the
+first value after a zero. A slot whose four ledger lanes are not all zero never rests, which keeps
+skipping a resting slot identical to evaluating it (the argument beside `slot_advance`). The sum is
+single precision done in integers, `reccodec_f32_add`, rounded to nearest even: the sum the FPU
+gives at any precision control, so no thread's control word reaches the format. The rules and
+their engine facts: the engine map's [unit frame](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
+
+**Measured** (2026-10-11, the heavy hour's records converted to format 12 and transcoded natively at
+1,800): 56,986,121 → 42,152,970 bytes (−26 %), the unit frame packed 28.16 → 13.73 MB, 3,604 blocks
+sectioned, none declined or mismatched, the same CPU. What the unit frame spends now, by lane packed
+alone: masks 25 %, listed slots 17 %, turn 7 %, vx 5.6 %, vz 4.6 %, speed 4.1 %.
+
+**Verified.** `reccodec_f32_add` against SSE on 398 million pairs (near exponents, cancellation,
+denormals), none differing, a known-answer table in `codectest outcomes`, and `LedgerSum` against
+numpy in `test_tareplay.py`; `outcomes` under Wine and natively with two building units, one of them
+refused from tick 40.
+
+## L5: the lossy plan, measured offline
+
+The owner's request (2026-10-11): about the size of a TADR recording, giving up losslessness where
+needed, but more reliable, closer to the simulation and with a seek that works. **Measured**
+(2026-10-11, scratch transforms of the heavy hour's records, each result then coded losslessly by the
+format-12 codec, snapshots at 1,800, none declined): every value a viewer sees stays exact; what no
+reader on a puppet shows is held at its last kept value between snapshots and refreshed exactly at
+each one (every 1,800 ticks).
+
+| step | heavy hour, MB |
+|---|---:|
+| format 11 | 56.99 |
+| format 12 (L5a) | 42.15 |
+| + the units' internal fields held (weapon slots, timers, deadlines, the ledger's other values, the last attacker) | 39.03 |
+| + the order nodes' internal fields held: a list is sent only when a field its walker, panel or build menu reads changes (99.5 % of the lists sent changed only internal fields, mostly the deadline `+0x0A`) | 29.90 |
+| + the cells' unit slots (bytes 0–3) and yard bit held: 99.4 % of the changed cells changed only those, which the footprint writers keep | 27.87 |
+| + nano sprays as sessions: a spray repeating the unit's previous tick's is dropped (99 % of the sprays continue one) | 23.97 |
+| + the feature tick's input cells dropped | 19.32 (18.4 MiB) |
+
+**TADR, for comparison** (MEASURED 2026-10-11 on a four-peer network game, one AI per peer,
+Metal Gridlock, packets captured by a research build and packed as TADR's recorder packs them, its
+compression off by default): 0.54–0.70 bytes per unit-tick, about 17–22 MiB an hour scaled to the
+heavy hour [INFERRED: scaled by unit-ticks]. The units alone are at TADR's rate after the steps
+above; what is left is the unit frame (10.7 MB: masks and listed slots about half, motion about
+30 %), the snapshots (2.5), projectiles (1.6), orders (1.3), state (1.3) and events (1.1).
+
+**The trap: motion must stay exact.** Holding the velocity, speed or turn, or giving the position a
+tolerance, made the file bigger (53.8–59.5 MB against 42.15): the unit frame predicts the position
+from the velocity and the heading from the turn, so a held velocity turns every position into a
+residual.
+
+**Not shown by these numbers.** No lossy recording was played: the sizes are of transformed streams.
+The spray sessions zeroed the spray's point, which is shown, so that step stands only if the puppet
+can recompute the point; a spray session needs an end the format does not carry (about 0.2 MB an
+hour [INFERRED]). Held cell slots are read by projectile collision, and dropped input cells feed the
+feature tick, so both need a playback check. A takeover between snapshots would resume from held
+internal values. The landing plan answers these.
+
 ## Multiplayer recordings
 
 A multiplayer file holds the recording machine's world (every unit, remote players' replicated
@@ -1209,7 +1275,8 @@ the units: stage 6's traffic budget.
 | L2 | projectiles by identity (format 9's pool frame), the guided-velocity rule, the search capped at 4 candidates, shooter first: LANDED (*L2* above) | planned about −34 MiB against the pre-L1 file; MEASURED −12.7 MiB on L1's own battle file (29.09 → 16.40), because L1's zstd had already packed its projectiles from 36.5 to 15.0 MiB |
 | L3 | cells, orders, events and state as four record frames that restart empty at every reset point; the snapshot wreck base: LANDED (*L3* above) | planned about −7 MiB against the pre-L1 file; MEASURED −4.52 MiB on L2's own battle file (16.40 → 11.88), −3.47 on Town & Country's, −0.60 on naval's, −5.54 on the air war's |
 | L4 | two measured four-player hours, a light and a heavy one; format 11: snapshots every 1,800 ticks, the cells frame restarting from the reader's grid (R1): LANDED (*L4* above) | the snapshot interval, decided by the owner with the seek target relaxed for dense battles; MEASURED −1.63 MB an hour from R1 on the light hour at 1,800; both hours miss the 25 MB budget even with no snapshots |
-| L5 | lossy, only if the owner chooses it now that L4 missed the four-player budget | about −1 MiB per category |
+| L5a | the unit frame predicts the resource ledger, format 12: LANDED (*L5a* below) | MEASURED heavy hour 56.99 → 42.15 MB, lossless |
+| L5 | lossy, chosen by the owner 2026-10-11: internal values held between snapshots, shown values exact (*L5: the lossy plan, measured offline*); its landing plan is open | MEASURED offline heavy hour 42.15 → 19.32 MB |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
 ## Decisions

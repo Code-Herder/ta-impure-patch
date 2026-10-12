@@ -3550,7 +3550,7 @@ fixture.
 
 ### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 11 carries a stream block's unit deltas as residuals against a prediction, the
+Recording format 12 carries a stream block's unit deltas as residuals against a prediction, the
 *unit frame* (`tagpu/ddraw/src/tagpu_reccodec.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the plan and its measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md)). Where a rule exists the prediction
@@ -3665,6 +3665,19 @@ mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
   generic lanes.
 - **The countdowns**: weapon slot reloads (AutoAim `0x49E1C8..0x49E1D2`) and `+0xFA`/`+0xFB`
   (`0x48ADF0..0x48AE0D`), −1 a tick down to 0.
+- **The ledger's requested and granted** `+0xC0`/`+0xC4` (energy) and `+0xD8`/`+0xDC` (metal), with
+  the owner's player ID at `+0xEC` ([*The ledger*](#the-nano-spray-two-emitters-fifteen-order-handlers-disassembled-2026-09-29)
+  `unit+0xBC`, DISASSEMBLED 2026-10-10). The
+  requests `0x4011C0`/`0x401180` add the same float to the requested and, while the owner has no
+  debt, to the granted; the settle `0x401B3D` zeroes both on the owner's 30-tick pass. The unit
+  frame predicts the requested as 0 at the owner's settle, the last value plus the slot's step
+  while it grows, the last value when it held; the granted as this tick's requested when the two
+  were equal, else the last value. It learns the settle per owner from the last requested that
+  fell to zero and the step from the first value after a zero, and adds singles in integers,
+  rounding to nearest even (`reccodec_f32_add`), the sum the FPU gives under any precision
+  control. MEASURED on the heavy hour (*L5a* of the size page): the unit frame packs from 28.16 to
+  13.73 MB. A weapon's shot paid at once (`0x4012A0`) and a cloak's cost (the economy pass) add to
+  the requested only: residuals.
 - **The water state `+0x10A`** is stored as one dword (`mov [esi+0x10A], edi` at `0x43DBED`); the
   lane table keeps it as two u16 lanes, as the size research measured them. A lane's width is a
   size hint only.
@@ -3678,7 +3691,7 @@ non-zero pitch scale (none of the recordings had one); the steering term's hidde
 
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 11 carries a stream block's projectile records as the *pool frame*
+Recording format 12 carries a stream block's projectile records as the *pool frame*
 (`tagpu/ddraw/src/tagpu_reccodec.c`, THE POOL FRAME; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md#l2-the-pool-frame-measured)): the
@@ -3752,7 +3765,7 @@ largest residual column of the battle, 214 KiB of its 2.09 MiB.
 
 ### The demo recorder's record frames: the engine facts they predict from [DISASSEMBLED + MEASURED 2026-10-10]
 
-Recording format 11 makes the bodies of a stream block's cells, order lists, events and state
+Recording format 12 makes the bodies of a stream block's cells, order lists, events and state
 records from four *record frames* (`tagpu/ddraw/src/tagpu_recframe_cells.c`, `_orders.c`,
 `_events.c`, `_state.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in

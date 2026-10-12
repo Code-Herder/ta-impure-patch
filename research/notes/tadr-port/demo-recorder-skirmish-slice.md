@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 11 and its readers take format 11 alone (*The file*, below).
+The recorder writes recording format 12 and its readers take format 12 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -203,13 +203,14 @@ find their lanes by role, never by offset; since each recording carries its own 
 TSV never orphans a file, and a wrong width costs size only. A unit is listed in an iteration only
 when a lane differs from its prediction, and then as residuals per lane. A unit *at rest* — its
 image equal to the two before it and to the third's lanes, and either not moving or with a move
-stamp older than the step before — is skipped without evaluating it, which is exact because it is a
+stamp older than the step before, and with its ledger's requested and granted zero — is skipped
+without evaluating it, which is exact because it is a
 fixed point of every rule (the argument beside `slot_advance`). The rules — heading by turn rate, ground
 velocity from the sine table, position by velocity, the footprint and sight cells, the claim and
-move stamps, the countdowns, and for aircraft the air step's velocity, speed, smoothed acceleration
-and bank — and the engine facts behind each are in the engine map's
+move stamps, the countdowns, the resource ledger's requested and granted, and for aircraft the air
+step's velocity, speed, smoothed acceleration and bank — and the engine facts behind each are in the engine map's
 [*The demo recorder's unit frame*](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
-They are integer arithmetic only, so the writer thread's x87 precision does not matter and the
+They are integer arithmetic only (the ledger's float sum included, `reccodec_f32_add`), so the writer thread's x87 precision does not matter and the
 Python reader (`tools/replay/reccodec.py`, an independent implementation in numpy and numba)
 agrees with the C one byte for byte. The capture writes the constants the rules need into the
 header at the recording's start, on the game thread: `RT_PHYSICS` (gravity `main+0x14263`, sea level

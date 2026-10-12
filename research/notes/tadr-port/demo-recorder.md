@@ -458,8 +458,9 @@ evidence, and keep remaining gaps visible.
    [making recordings smaller](demo-recorder-size.md); with its L1 to L3 landed, the same battle
    recorded anew takes 12.0 MiB. L4 (recording format 11) measured two four-player hours: 24.4 and
    51.5 MiB an hour with no snapshots at all, and the light one comes to 25.85 MiB in format 11, so the
-   four-player budget is missed and lossy or more lossless work is the owner's next decision. Until
-   the reduced stream lands, a skirmish is recorded only on request.
+   four-player budget is missed. Format 12 predicts the units' resource ledger and takes the heavy
+   hour from 56.99 to 42.15 MB (−26 %), lossless; a lossy plan measured offline brings it to 19.32 MB
+   (*L5* of the size page). Until the reduced stream lands, a skirmish is recorded only on request.
 3. **Snapshot interval: decided** (2026-10-10). A snapshot every 1,800 ticks, 60 s of game time,
    chosen against the disk budget with the seek target relaxed for dense battles (*Playback and
    seeking*).
