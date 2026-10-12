@@ -2855,12 +2855,14 @@ static int cmp48(const void* a, const void* b) { return memcmp(a, b, 4 + REC_SPR
 /* What a reader makes of the filter's iteration `out`, by the table tagpu_recreader.c keeps: its
    sprays taken as they come, its sessions as they come, and the implied ones made at its end,
    over the copy's units (the test's table holds no unit byte). 1 when those sprays are `in`'s as
-   a multiset, 0 when not, -1 when the reader refuses the iteration; `implied` the ones it made. */
+   a multiset, 0 when not, -1 when the reader refuses the iteration -- a session it refuses, or a
+   record after the sessions, which end an iteration (tagpu_recreader.c, apply); `implied` the
+   ones it made. */
 static int lo_read(RecSprays* t, const Exact* e, const RecBytes* in, const RecBytes* out,
                    unsigned* implied)
 {
     unsigned char a[LO_SPRAYS][4 + REC_SPRAY_BODY], b[LO_SPRAYS][4 + REC_SPRAY_BODY];
-    unsigned na = 0, nb = 0, i, n, T = get32(out->p + 4);
+    unsigned na = 0, nb = 0, i, n, T = get32(out->p + 4), sessions = 0;
     const unsigned char* im;
     size_t at;
     *implied = 0;
@@ -2868,7 +2870,9 @@ static int lo_read(RecSprays* t, const Exact* e, const RecBytes* in, const RecBy
         if (get16(in->p + at) == RK_EV_SPRAY && na < LO_SPRAYS) memcpy(a[na++], in->p + at + 4, 48);
     for (at = 0; at + 4 <= out->n; at += (4 + (size_t)get16(out->p + at + 2) + 3) & ~(size_t)3) {
         unsigned kind = get16(out->p + at), len = get16(out->p + at + 2);
+        if (sessions && kind != RK_SPRAY_SESSION) return -1;
         if (kind == RK_SPRAY_SESSION && !recsprays_session(t, out->p + at + 4, len)) return -1;
+        sessions |= kind == RK_SPRAY_SESSION;
         if (kind == RK_EV_SPRAY && nb < LO_SPRAYS) {
             memcpy(b[nb++], out->p + at + 4, 48);
             recsprays_spray(t, T, out->p + at + 4, e->units, e->live);
@@ -3237,6 +3241,188 @@ static int outcomes_lossy_cells(void)
     return ok;
 }
 
+#ifdef _WIN32
+/* The DLL's reader over a skirmish file of the filter's iterations `it[0..n)`, each its own stored
+   block, the ones `refresh` flags (bit i) marked RBF_REFRESH, under an RT_HOLD of `flags` and the
+   masks `unit` and `node`: the iterations it reads before it refuses one (`why` saying where),
+   or before the end; -1 when it reads them all and the last world's grid is not the bytes `grid`
+   of gw x gh cells. */
+static int lo_reader(const RecBytes* it, unsigned n, unsigned refresh, unsigned flags,
+                     const unsigned char* unit, const unsigned char* node, unsigned gw, unsigned gh,
+                     const unsigned char* grid, char* why, unsigned cap)
+{
+    unsigned char hold[REC_HOLD_BYTES], v[20];
+    char dir[MAX_PATH], path[MAX_PATH];
+    RecBytes h;
+    RecReader* r;
+    FILE* f;
+    unsigned i;
+    int k = 1, read;
+    memset(&h, 0, sizeof h);
+    memset(hold, 0, sizeof hold);
+    put32(hold, REC_REFRESH_TICKS);
+    put32(hold + 4, flags);
+    memcpy(hold + 40, unit, REC_UNIT_IMAGE);
+    memcpy(hold + 40 + REC_UNIT_IMAGE, node, REC_ORDER_IMAGE);
+    put32(v, REC_FORMAT);
+    tlv_put(&h, RT_FORMAT, v, 4);
+    put32(v, 2);
+    tlv_put(&h, RT_MODE, v, 4);
+    put32(v, LO_SLOTS);
+    tlv_put(&h, RT_SLOTS, v, 4);
+    put32(v, gw);
+    put32(v + 4, gh);
+    put32(v + 8, 8);
+    put32(v + 12, 0);
+    put32(v + 16, 0);
+    tlv_put(&h, RT_FEATURES, v, 20);
+    put32(v, 4);
+    tlv_put(&h, RT_PROJECTILES, v, 4);
+    tlv_put(&h, RT_HOLD, hold, sizeof hold);
+    if (!GetTempPathA(sizeof dir, dir) || !GetTempFileNameA(dir, "lor", 0, path) ||
+        !(f = fopen(path, "wb"))) {
+        snprintf(why, cap, "no temporary file");
+        rb_free(&h);
+        return 0;
+    }
+    fwrite(REC_MAGIC, 1, 8, f);
+    put_block(f, RB_HEADER, RBF_STORED, 0, 0, (uint32_t)h.n, h.p, h.n);
+    for (i = 0; i < n; i++)
+        put_block(f, RB_STREAM, RBF_STORED | (refresh >> i & 1 ? RBF_REFRESH : 0), i + 1, i + 1,
+                  (uint32_t)it[i].n, it[i].p, it[i].n);
+    put32(v, 1);
+    put32(v + 4, n);
+    h.n = 0;
+    tlv_put(&h, RT_END_REASON, v, 4);
+    tlv_put(&h, RT_LAST, v + 4, 4);
+    put_block(f, RB_END, RBF_STORED, n, n, (uint32_t)h.n, h.p, h.n);
+    fclose(f);
+    rb_free(&h);
+    r = recr_open(path, why, cap);
+    for (i = 0; r && i < n && (k = recr_tick(r, why, cap)) == 1; i++) ;
+    read = (int)i;
+    if (r && i == n && memcmp(recr_world(r)->grid, grid, (size_t)gw * gh * REC_CELL_BYTES)) {
+        snprintf(why, cap, "the grid read is not the copy's");
+        read = -1;
+    }
+    if (r) recr_close(r);
+    DeleteFileA(path);
+    return read;
+}
+#endif
+
+/* RECL_CELLS and RECL_SPRAYS in one filter: a refresh iteration whose only spray is implied
+   writes the cells that differ, then the order lists, then the spray sessions, and the readers
+   take it in that order and refuse a cell run after the sessions */
+static int outcomes_lossy_both(void)
+{
+    enum { GW = 4, GH = 2, CB = REC_CELL_BYTES, N = 4 };
+    static unsigned char hold_unit[IMG], hold_node[REC_ORDER_IMAGE], node[2][REC_ORDER_IMAGE];
+    unsigned char row[2][GW * CB], run[CB], mapped[4 + REC_MAPPED_BYTES(GW, GH)];
+    RecLossyParams lp;
+    RecLossy* L;
+    RecSprays* t;
+    RecBytes in, it[N];
+    Exact e;
+    unsigned k[16], s[16], n, i, im, id = 0, ok = 1;
+    memset(&in, 0, sizeof in);
+    memset(it, 0, sizeof it);
+    memset(&e, 0, sizeof e);
+    memset(mapped, 0, sizeof mapped);
+    for (i = 0; i < GW * CB; i++) {
+        row[0][i] = (unsigned char)(0x10 + i);
+        row[1][i] = (unsigned char)(0x80 + i);
+    }
+    memset(node, 0x11, sizeof node);
+    memset(hold_node + 4 * LO_NODE, 0xFF, 4);
+    node[1][4 * LO_NODE] ^= 1;
+    lp.nslots = LO_SLOTS;
+    lp.flags = RECL_CELLS | RECL_SPRAYS;
+    lp.hold_unit = hold_unit;
+    lp.hold_node = hold_node;
+    lp.gw = GW;
+    lp.gh = GH;
+    L = reclossy_begin(&lp);
+    t = recsprays_begin(LO_SLOTS);
+    if (!L || !t || !exact_reset(&e, LO_SLOTS, GW, GH)) return 0;
+
+    /* 1, a refresh: slots 1 and 2 (IDs 2 and 3), slot 1's main list, the grid, a spray each */
+    lo_tick(&in, 1);
+    lo_at(&in, 1, 0, 0, 0);
+    lo_at(&in, 2, 0, 0, 0);
+    lo_list(&in, 1, 0, node[0], 1, 0, 1);
+    lo_cells(&in, 0, 0, row[0], GW);
+    lo_cells(&in, 0, 1, row[1], GW);
+    tlv_put(&in, RK_MAPPED, mapped, sizeof mapped);
+    lo_spray(&in, 2, 100, 200, 300, 7);
+    lo_spray(&in, 3, 500, 0, 500, 9);
+    ok &= expect("lossy both: a refresh iteration", lo_snap(L, &e, &in, 1, 0, &it[0]) == 1 &&
+                 lo_read(t, &e, &in, &it[0], &im) == 1, 1);
+    /* 2: the same sprays, each opening a session of period 1 */
+    lo_tick(&in, 2);
+    lo_spray(&in, 2, 100, 200, 300, 7);
+    lo_spray(&in, 3, 500, 0, 500, 9);
+    ok &= expect("  the repeats", lo_snap(L, &e, &in, 0, 0, &it[1]) == 1 &&
+                 lo_read(t, &e, &in, &it[1], &im) == 1, 1);
+    /* 3: cell (1, 0)'s slot A and the list's held dword change, and both sprays are implied */
+    memcpy(run, row[0] + CB, CB);
+    run[0] ^= 1;
+    lo_tick(&in, 3);
+    lo_list(&in, 1, 0, node[1], 1, 0, 1);
+    lo_cells(&in, 1, 0, run, 1);
+    lo_spray(&in, 2, 100, 200, 300, 7);
+    lo_spray(&in, 3, 500, 0, 500, 9);
+    ok &= expect("lossy both: held cells, a held list and implied sprays",
+                 lo_snap(L, &e, &in, 0, 0, &it[2]) == 1 && it[2].n == 8 &&
+                 lo_read(t, &e, &in, &it[2], &im) == 1 && im == 2, 1);
+    /* 4, a refresh: slot 1's spray implied, slot 2 makes none */
+    lo_tick(&in, 4);
+    lo_spray(&in, 2, 100, 200, 300, 7);
+    ok &= expect("lossy both: the refresh after them", lo_snap(L, &e, &in, 1, 0, &it[3]), 1);
+    n = lo_kinds(&it[3], k, s, 16);
+    ok &= expect("  writes the cell, then the list, then the session that closes",
+                 n == 4 && k[0] == RK_TICK && k[1] == RK_CELLS && k[2] == RK_ORDERS && s[2] == 1 &&
+                 k[3] == RK_SPRAY_SESSION && lo_session_last(&it[3], &id) == 0 && id == 3, 1);
+    ok &= expect("  and lo_read makes the implied spray", lo_read(t, &e, &in, &it[3], &im) == 1 &&
+                 im == 1, 1);
+    {
+        RecLossyExact x = { e.units, e.live, e.lists, e.grid };
+        ok &= expect("  the lossy world is the copy's", reclossy_equal(L, &x), 1);
+    }
+    {
+        RecSprays* u = recsprays_begin(LO_SLOTS);
+        RecBytes bad;
+        memset(&bad, 0, sizeof bad);
+        rb_put(&bad, it[3].p, it[3].n);
+        lo_cells(&bad, 1, 0, run, 1);
+        ok &= expect("lossy both: refused by lo_read: a cell run after the sessions",
+                     u ? lo_read(u, &e, &in, &bad, &im) : 0, -1);
+        recsprays_free(u);
+        rb_free(&bad);
+    }
+#ifdef _WIN32
+    {
+        char why[256];
+        int r = lo_reader(it, N, 0x9, lp.flags, hold_unit, hold_node, GW, GH, e.grid, why,
+                          sizeof why);
+        if (r != N) printf("  the reader: %s\n", why);
+        ok &= expect("  the DLL's reader reads the four, the grid the copy's", r, N);
+        lo_cells(&it[3], 1, 0, run, 1);
+        r = lo_reader(it, N, 0x9, lp.flags, hold_unit, hold_node, GW, GH, e.grid, why,
+                      sizeof why);
+        if (r != N - 1) printf("  the reader read %d: %s\n", r, why);
+        ok &= expect("lossy both: refused by the DLL's reader: a cell run after the sessions", r,
+                     N - 1);
+    }
+#endif
+    recsprays_free(t);
+    reclossy_free(L);
+    exact_free(&e);
+    rb_free(&in);
+    for (i = 0; i < N; i++) rb_free(&it[i]);
+    return ok;
+}
+
 static int outcomes_lossy(void)
 {
     static uint32_t img[3][NDW];
@@ -3417,6 +3603,7 @@ static int outcomes_lossy(void)
     reclossy_free(L);
     ok &= outcomes_lossy_cells();
     ok &= outcomes_contest();
+    ok &= outcomes_lossy_both();
 
     /* RT_HOLD's bounds */
     hold_bytes(hold, 1);
