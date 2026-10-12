@@ -8,7 +8,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Live, Run } from '../types'
 import type { Doc } from './journal'
 import { cut, failures, family, shown, startTicks } from './journal'
-import { bandRows, endToast, paneTree, standing } from './view'
+import { bandRows, endToast, paneTree } from './view'
 
 const PANE = 'ta-runs'
 const POLL_MS = 2000
@@ -102,11 +102,6 @@ async function poll(
   return { all, own: shown(all), others }
 }
 
-/** Open by default while it runs, and once ended only when it went wrong. */
-function openByDefault(run: Run): boolean {
-  return run.live === 'running' || !['pass', 'done'].includes(standing(run))
-}
-
 // Whether this surface docks a pane beside the transcript, as its last drawing said: a pane
 // the person did not ask for opens only where it is a sidebar, never inline over the prompt.
 let isFullscreen: boolean | undefined
@@ -193,15 +188,10 @@ export const register: Register = on => {
     if (e.viewport?.isFullscreen !== undefined) isFullscreen = e.viewport.isFullscreen
     const els = $.ui.resolve(e)
     const [state, chosen] = await Promise.all([shared($), read($, open)])
-    const isOther = new Set(state.others.map(r => r.id))
-    return paneTree(
-      els,
-      state,
-      run => chosen[run.id] ?? (!isOther.has(run.id) && openByDefault(run)),
-      chosen.others ?? false,
-      run => void update($, open, m => ({ ...m, [run.id]: !(m[run.id] ?? openByDefault(run)) })),
-      () => void update($, open, m => ({ ...m, others: !(m.others ?? false) })),
-    )
+    return paneTree(els, state, {
+      chosen,
+      flip: (key, wasOpen) => void update($, open, m => ({ ...m, [key]: !wasOpen })),
+    })
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
