@@ -743,6 +743,9 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
 
 /* ---- the header's codec entries ------------------------------------------------------------- */
 
+/* reccodec_params marks the roles it has seen in one dword */
+typedef char rec_roles_fit_a_dword[REC_LR_N <= 32 ? 1 : -1];
+
 int reccodec_params(RecCodecParams* p, unsigned nslots, unsigned nproj, unsigned gw, unsigned gh,
                     unsigned nwrecks, const void* codec, unsigned ncodec, const void* physics,
                     unsigned nphysics, const void* air, unsigned nair, char* why, unsigned cap)
@@ -914,8 +917,9 @@ static int step(Eval* x, unsigned j, int rule, uint32_t c0, int has3, uint32_t c
 /* The ledger's requested and granted (exe-reverse-engineering.md, the ledger), energy then metal.
    The build, repair and stockpile steps add one request a tick as a float (0x4011C0, 0x401180):
    the requested grows by the same step e from the first nonzero value after a zero, and the
-   owner's settle (0x401B3D) zeroes it every 30 ticks. The granted adds the same e while the owner
-   has no debt, so it equals this tick's requested whenever it equalled the last tick's. The
+   owner's settle (0x401B3D) zeroes it every 30 ticks for a unit with +0x110 bit 28. The granted
+   adds the same e while the unit's own debts +0xC8 and +0xE0 are not above 0 (either refuses both
+   in 0x4011C0), so it equals this tick's requested whenever it equalled the last tick's. The
    candidates: requested is 0 at the owner's settle, L1 + e while it grows, L1 when it held and
    e itself after a zero that followed a value; granted is this tick's requested when the two
    were equal, else L1. The settle is learned per owner ID from the last requested that fell to

@@ -196,7 +196,7 @@ def params(entries, nslots, nproj, gw, gh, nwrecks):
             at += width
         if at != IMG:
             raise Unreadable(f"RT_CODEC's rows cover {at:#x} bytes, not {IMG:#x}")
-        missing = [ROLES[r][0] for r in range(1, ROLE["COUNT"]) if r not in seen]
+        missing = [ROLES[r][0] for r in range(1, NROLES) if r != ROLE["COUNT"] and r not in seen]
         if missing:
             raise Unreadable(f"RT_CODEC has no row for {', '.join(missing)}")
     b = got.get(RT_PHYSICS)

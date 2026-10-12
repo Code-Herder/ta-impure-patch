@@ -3668,8 +3668,10 @@ mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
 - **The ledger's requested and granted** `+0xC0`/`+0xC4` (energy) and `+0xD8`/`+0xDC` (metal), with
   the owner's player ID at `+0xEC` ([*The ledger*](#the-nano-spray-two-emitters-fifteen-order-handlers-disassembled-2026-09-29)
   `unit+0xBC`, DISASSEMBLED 2026-10-10). The
-  requests `0x4011C0`/`0x401180` add the same float to the requested and, while the owner has no
-  debt, to the granted; the settle `0x401B3D` zeroes both on the owner's 30-tick pass. The unit
+  requests `0x4011C0`/`0x401180` add the same float to the requested and, while the unit's own
+  debts `+0xC8`/`+0xE0` are not above 0 (either refuses both in `0x4011C0`; `0x401180` tests
+  `+0xC8` alone), to the granted; the settle `0x401B3D` zeroes both, for units with `+0x110` bit
+  28, on the owner's 30-tick pass. The unit
   frame predicts the requested as 0 at the owner's settle, the last value plus the slot's step
   while it grows, the last value when it held; the granted as this tick's requested when the two
   were equal, else the last value. It learns the settle per owner from the last requested that

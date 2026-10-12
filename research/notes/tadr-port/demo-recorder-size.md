@@ -945,7 +945,7 @@ that costs a resource adds to, and that the 30-tick pass zeroes (the engine map'
 DISASSEMBLED 2026-10-10). Packed, they are half the unit frame (*The unit frame by lane*, below).
 Format 12 predicts them from those rules (*L5a*, below): the granted is bit for bit the requested
 from a pass on until the first refused request or the first payment made at once (a weapon shot, a
-cloak's cost), since both grow by the same float additions from the same 0; a unit's step asks the
+cloak's cost), since both grow by the same float additions from the same 0; a unit's step usually asks the
 same amount as on its previous tick; and the reset to 0 falls on the owner's pass.
 
 **A unit's image, and which units send it** (MEASURED 2026-10-11 on the heavy hour's records, which

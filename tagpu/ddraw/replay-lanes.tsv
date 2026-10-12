@@ -81,7 +81,7 @@
 0x0BA	2	PLAIN	u0ba	DISASSEMBLED (map): both target setters clear its bits 10-14; the saver writes it raw
 0x0BC	4	PLAIN	res00	DISASSEMBLED (map): dword 0 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
 0x0C0	4	EREQ	e_requested	DISASSEMBLED (map, the ledger): the energy requested since the owner's last economy pass; 0x4011C0 adds each request as a float, the settle 0x401B3D zeroes it every 30 ticks
-0x0C4	4	EGRANT	e_granted	DISASSEMBLED (map, the ledger): the energy granted since the last pass; 0x4011C0 adds the same request while the owner has no debt, so it follows the requested bit for bit until a refusal
+0x0C4	4	EGRANT	e_granted	DISASSEMBLED (map, the ledger): the energy granted since the last pass; 0x4011C0 adds the same request while the unit's debts +0xC8 and +0xE0 are not above 0, so it follows the requested bit for bit until a refusal
 0x0C8	4	PLAIN	res03	DISASSEMBLED (map): dword 3 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
 0x0CC	4	PLAIN	res04	DISASSEMBLED (map): dword 4 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
 0x0D0	4	PLAIN	res05	DISASSEMBLED (map): dword 5 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
