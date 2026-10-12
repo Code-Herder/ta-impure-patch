@@ -8,6 +8,8 @@ export type Step = {
   /** planned, running, done, pass, fail, unrun or skipped */
   state: string
   after?: string[]
+  /** The workers it plays on: one of the run's `pools`, or work that waits for none. */
+  pool?: string
   instance?: string
   display?: string
   gt?: number
@@ -41,6 +43,8 @@ export type Run = {
   started: number
   ended: number | null
   eta: Eta | null
+  /** Each pool's worker count; a step on a pool not named here (or of 0) waits for no worker. */
+  pools?: Record<string, number>
   items: Item[]
   parent: { run: string; step: string | null } | null
   summary?: string
@@ -55,7 +59,8 @@ declare module 'claude-code' {
       own: Run[]
       /** Other sessions' runs that are running now. */
       others: Run[]
-      /** A run's (or 'others') expansion where the person chose one, by id. */
+      /** An expansion the person chose: a run's by its id, its passed items' by `pass:<id>`,
+       * the other sessions' by `others`. */
       open: Record<string, boolean>
       /** When the runs were last read, in epoch milliseconds, a multiple of five seconds. */
       now: number
