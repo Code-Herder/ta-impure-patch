@@ -7834,8 +7834,11 @@ footprint with x or z below 0, or x + w or z + h past the grid's columns or rows
 off-map bucket and writes no cell (`0x47CC57..0x47CCA3`; the right and bottom edges are this
 build's, with `fix_last_cell`'s `jg` at `0x47CC8B` and `0x47CCA3`). So every footprint cell of a
 live mobile unit the stamp files names it in its layer's slot, or, while it carries bit 27, a unit
-of the same layer whose footprint covers the cell and which carries bit 26: the bit-26 unit loses
-that bit only in its own clear, whose walk re-claims for the bit-27 units [DISASSEMBLED; MEASURED
+of the same layer -- or a structure, for a layer-1 unit, since the stamp files a structure in
+slot A whatever its layer (`0x47CD5A` → `0x47CDA5`) -- whose footprint covers the cell and which
+carries bit 26: the bit-26 unit loses that bit only in its own clear, whose walk re-claims for the
+bit-27 units, or when its record is made anew -- the create's init clears both marks (`0x485CC5`,
+`and eax,0xF3FFF7FF`) [DISASSEMBLED; MEASURED
 2026-10-12 with no exception in 776 dumps, 284 of them live, holding 2,042 stamped bit-27 units].
 Every clear ends with `0x440A70` (`0x47D2CA`).
 

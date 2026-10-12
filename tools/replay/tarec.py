@@ -2477,7 +2477,9 @@ def occupancy(w, dw, contest=False):
     the stamp's own, layer by layer: a mobile unit the stamp does not write (stamped) has no cell
     to name it; a stamped unit's footprint cell names it in its layer's slot (A for layer 1, B for
     layer 2), or, when it carries the loser's mark, bit 27, names there another live unit of the
-    same layer whose footprint holds the cell and which carries the holder's mark, bit 26 -- the
+    same layer -- or a structure, for a layer-1 unit: the stamp files a structure in slot A
+    whatever its layer (0x47CD5A -> 0x47CDA5) -- whose footprint holds the cell and which carries
+    the holder's mark, bit 26 -- the
     engine's contest kept the cell for that one (the stamp's contest, 0x47CDDB..0x47CE1D, sets 26
     on the unit that keeps the cell and 27 on the other; a unit's clear, 0x47D286..0x47D2C4, drops
     its 27 and, holding 26, drops that and re-claims for the bit-27 units: DISASSEMBLED); a slot
@@ -2509,8 +2511,9 @@ def occupancy(w, dw, contest=False):
             want = named[layer(u) - 1]
             if want == slot:
                 continue
-            if lost and want in dw.units and layer(dw.units[want]) == layer(u) and \
-                    (cx, cz) in rects[want]:
+            if lost and want in dw.units and (cx, cz) in rects[want] and \
+                    (layer(dw.units[want]) == layer(u) or
+                     structure(dw.units[want]) and layer(u) == 1):
                 if not state[want] & U_HOLDER:
                     out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
                                f"names unit {want}, which holds it without the holder's mark")
