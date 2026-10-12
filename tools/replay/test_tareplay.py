@@ -1452,10 +1452,14 @@ class SeekBlocks(unittest.TestCase):
         self.assertEqual(tarec.seek_blocks(path, 0, 35, 3, 0), self.of(k20, r3, r4))
         self.assertEqual(tarec.seek_blocks(path, 0, 35, 3, 1), self.of(r1, k20, r3, r4, base=1))
         self.assertEqual(tarec.seek_blocks(path, 0, 15, 3, 0), self.of(r1, r2))
-        # past a snapshot unread, the run goes on
+        # a seek from the first iteration reads every run from its start
         self.assertEqual(tarec.seek_blocks(path, 0, 35, 40, 0), self.of(r1, r2, r3, r4))
-        # a run the seek would join in its middle, after a snapshot or a records block
-        path = self.file(header(), r1, r2, k20, self.chunk(21, 30, False), end_block(30))
+        # a chunk that continues its run past a snapshot: a read through it steps over the
+        # snapshot unread with the run still valid (block_skip), a seek from the snapshot would
+        # join the run in its middle
+        c3 = self.chunk(21, 30, False)
+        path = self.file(header(), r1, r2, k20, c3, end_block(30))
+        self.assertEqual(tarec.seek_blocks(path, 0, 25, 30, 0), self.of(r1, r2, c3))
         with self.assertRaisesRegex(tarec.Unreadable, "continues a run"):
             tarec.seek_blocks(path, 0, 25, 3, 0)
         path = self.file(header(), r1, stream(11, 20, opens=False), self.chunk(21, 30, False),

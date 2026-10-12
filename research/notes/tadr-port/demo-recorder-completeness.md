@@ -579,8 +579,9 @@ that made the reader or the seek's visitor slower per record, with the same bloc
 gate. And it counts only the blocks `recr_seek` decodes through `block_body`, so two reads stay
 outside the count: the segment scan `segs_scan` at the top of every `recr_seek`, which reads the
 header and timeline blocks through `body_get` and grows with the file and its forks, and a
-multiplayer seek's contribution blocks, which `mp_read` decodes through `body_get` too. The seek and takeover times of the [state design](demo-recorder.md) (*Playback and
-seeking*) are targets the gate does not check.
+multiplayer seek's contribution blocks, which `mp_read` decodes through `body_get` too. The seek
+and takeover times of the [state design](demo-recorder.md) (*Playback and seeking*) are targets
+the gate does not check.
 
 **The test render profile.** Every game the harness launches writes `style=custom`, `assets=0`,
 `light=0`, `shadowres=512` and `ss=1` into the worker's `impure.cfg`, and a 20 fps present cap

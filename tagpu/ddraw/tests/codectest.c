@@ -2866,9 +2866,9 @@ static int rd_write(const char* path, const RecBytes* f)
    land on that snapshot with slot 1's image unit0 + i and read on from it, before the first that
    does not (*why its reason). At `fork` the iteration is the fork's first, which replaces the
    world whole (tagpu_recreader.c, THE CROSSING): slot 1 is empty there. Each seek's work counts
-   the base when it read one, every link of the snapshot's chain -- i % 10 + 1, the segments here
-   having a key at every tenth snapshot from their first, or only at the first -- and the one
-   stream block holding the iteration (recr_seek_work). */
+   the base when it read one, every link of the snapshot's chain -- i % (REC_CHAIN_MAX + 1) + 1,
+   the segments here having a key at every (REC_CHAIN_MAX + 1)th snapshot from their first, or
+   only at the first -- and the one stream block holding the iteration (recr_seek_work). */
 static unsigned rd_seeks(const char* path, unsigned tl, uint32_t t0, unsigned n, unsigned unit0,
                          uint32_t fork, char* why, unsigned cap)
 {
@@ -2886,9 +2886,9 @@ static unsigned rd_seeks(const char* path, unsigned tl, uint32_t t0, unsigned n,
         if (recr_seek(r, s + 1, 0, NULL, NULL, why, cap) != 1) break;
         w = recr_world(r);
         k = recr_seek_work(r);
-        if (k->blocks != k->base + i % 10 + 1 + 1) {
+        if (k->blocks != k->base + i % (REC_CHAIN_MAX + 1) + 2) {
             snprintf(why, cap, "the seek to GameTime %u decoded %u blocks, not %u", s + 1,
-                     k->blocks, k->base + i % 10 + 2);
+                     k->blocks, k->base + i % (REC_CHAIN_MAX + 1) + 2);
             break;
         }
         if (w->tick != s + 1 || !k->from_snapshot || k->from != s ||
