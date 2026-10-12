@@ -4,12 +4,13 @@
 #include <string.h>
 #include "tagpu_puppet.h"
 #include "tagpu_cob_safe.h"
-#include "tagpu_contest.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
 #include "tagpu_simreg.h"
 
 SIM_FEATURE(puppet_host, SIM_PUPPET_RUNS, "battle-los tenseat forest-reproduce stock-forest-reproduce");
+
+#include "tagpu_contest.h"     /* below SIM_FEATURE: the contest's rule is puppet_host's */
 
 typedef struct PuppetTable {
     volatile unsigned char on;              /* this level plays a recording                 */
