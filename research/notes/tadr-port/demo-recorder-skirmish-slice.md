@@ -2573,7 +2573,11 @@ first slice a tick late, and a looping script stayed re-phased for the unit's li
   Create), A6, mid-tick reads, a unit dying before its turn, starts made inside a slice by a
   replayed state change, and on a multiplayer recording the ledger's starts and
   other owners' units (the [completeness note](demo-recorder-completeness.md), *COB slices a
-  playing gives one tick late*).
+  playing gives one tick late*). And one count it does not touch, which `slice-walkers` is the
+  first fixture to reach: a lab's `QueryBuildInfo`, an owner-only query (`0x4B0C4D`) that the
+  factory's order handler makes and a puppet never does (MEASURED in the landing gate,
+  2026-10-12: live 9, puppet 0 over [1051, 2671); 8 against 0 on Landing A's DLL). It has no
+  `replay-absent.tsv` row, which would be the owner's decision.
 
 ## S5
 

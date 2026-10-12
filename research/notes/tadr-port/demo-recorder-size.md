@@ -1285,6 +1285,17 @@ own (P7) recovers about 0.25 MB. The lossy plan's own figures for exact sessions
 sessions: it implied 2,546,320 sprays and wrote 613,932, with 59,528 sessions opened and 59,022
 closed.
 
+**The script slice's markers: recording format 16** (2026-10-12). `RK_EV_SLICE`, a unit ID in the
+events frame's `C_ID` column, before the slice of every unit whose COB had an engine start since
+the capture point ([the skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-16)).
+**MEASURED** on the replay gate's `battle` recording (3,991 iterations, at most 1,444 live units,
+the file 72.9 MB with the test lever's exact stream, the stream itself 7.3 MB on disk): 33,464
+markers, 8.38 an iteration, 133,856 bytes of bodies raw; the events' kind stream and ID column
+packed per 30-iteration block with zstd 3 grow by 13,645 bytes, 0.41 B a marker, 0.37 MB an hour at
+this fixture's density (the cost model the plan used, which simulated 38,338 markers at 0.36 B,
++13,653 bytes, on a format-14 file of the same fixture). That is 0.19 % of the
+stream; a quieter hour costs less, since markers follow starts and creates.
+
 ## Multiplayer recordings
 
 A multiplayer file holds the recording machine's world (every unit, remote players' replicated

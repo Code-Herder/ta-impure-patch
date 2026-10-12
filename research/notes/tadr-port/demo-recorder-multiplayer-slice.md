@@ -1525,7 +1525,16 @@ before. An own unit the step creates is made at its owner's CREATE_BEGIN, after 
 events and so after its marker: the marker leaves it waiting and its CREATE_END gives the slice
 (`mp_created` → `slice_created`). What M1 leaves: an own unit's starts the ledger orders --
 TargetCleared and the other owner-only named starts, applied after the primary events (*THE
-CLOCK*) -- still reach their first slice a tick late, as does every start on another owner's unit.
+CLOCK*) -- still reach their first slice a tick late, as does every start on another owner's unit. A
+replayed death in the recording machine's own blocks runs its Killed as that machine's
+`Send_UnitDeath` did, as the query; another owner's, as the peer's destructor start
+([completeness](demo-recorder-completeness.md), *COB slices a playing gives one tick late*).
+MEASURED 2026-10-12, a two-peer recording made with `recmp_create_begin_test.py --reproduce
+--until 1400` and played from the start by `recmp_play_test.py`: the recording machine marked
+3,296 slices; the playing planned 2,885, gave 2,884 at their markers and 1 at a create's end, none
+at the step's end, and left 6 remote markers in the host's tick; `recmp_compare.py` EQUAL at 150,
+600 and 1201. The recorder counts only skirmish levels, so a multiplayer playing's counts are not
+compared: the log line shows where the slices went, and the dumps that nothing else moved.
 
 ### The seek of a multiplayer recording
 
