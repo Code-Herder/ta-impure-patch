@@ -40,6 +40,14 @@
                                     sessions' (a spray implied plain and following its unit,
                                     written after a miss and twice in one iteration, a session
                                     closed, a snapshot's iteration, and what a reader refuses)
+     codectest sprays IN            the Windows build's only: the DLL's own reader
+                                    (src/tagpu_recreader.c) over IN's first timeline, each
+                                    iteration's sprays -- the stream's and the ones its spray
+                                    sessions imply -- against IN's exact stream (RB_EXACT, the test
+                                    lever tagpu_rec.exact), the same bytes as a multiset and each
+                                    unit's in order: read in order from the start, and after a
+                                    seek to each snapshot's GameTime, to the one after it, read on
+                                    to the next snapshot, and to one 151 after it
      codectest fuzz IN SEED N [CASES] [--section NAME]
                                     N mutations of the recording's sectioned blocks (flags, the
                                     head, section lengths, kinds, the unit frame's gaps, masks,
@@ -58,7 +66,8 @@
    sectioned block, which they write as the current format, the header's other entries kept. Exit
    0 when every check holds, 1 when one fails, 2 when a file cannot be read. The codec is included
    rather than linked: the fuzz copies a decoder's state, which the codec's interface keeps opaque;
-   the filter is linked. */
+   the filter is linked, and in the Windows build the DLL's reader too, over the codec included
+   here. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -67,6 +76,10 @@
 #include "../src/tagpu_reccodec.c"
 #include "tagpu_reclossy.h"
 #include "tagpu_rechold.h"
+#ifdef _WIN32
+#include "tagpu_recreader.h"
+#include "tagpu_log.h"
+#endif
 
 #define BLOCK_MAX (64u << 20)
 
@@ -1046,6 +1059,244 @@ static int cmd_lossy(const char* in, const char* outp, int exact)
     reading_close(&g);
     return bad;
 }
+
+#ifdef _WIN32
+/* ---- the DLL's reader against the exact stream (sprays) ----------------------------------------- */
+
+/* The reader logs through the DLL's log sink, which this test has none of. */
+void tagpu_logf(const char* fmt, ...)
+{
+    (void)fmt;
+}
+
+/* The first segment's exact iterations (RB_EXACT): each one's GameTime and its sprays, 48 bytes
+   each in the order the capture made them, and the segment's snapshots. */
+typedef struct ExIter { uint32_t tick; size_t at; unsigned n; } ExIter;
+typedef struct ExactSprays {
+    ExIter*  it;
+    unsigned nit, itcap;
+    RecBytes body;
+    unsigned snap[4096], nsnap;
+} ExactSprays;
+
+static int exact_sprays(Reading* g, ExactSprays* x)
+{
+    unsigned segs = 0;
+    int k;
+    while ((k = next_block(&g->r)) > 0) {
+        const RecBlock* b = &g->r.b;
+        size_t at = 0;
+        if (b->kind == RB_HEADER && ++segs > 1) break;
+        if (b->kind == RB_SNAPSHOT && x->nsnap < sizeof x->snap / sizeof *x->snap)
+            x->snap[x->nsnap++] = b->last;
+        if (b->kind != RB_EXACT) continue;
+        while (b->raw - at >= 4) {
+            unsigned kind = get16(g->r.bytes + at), len = get16(g->r.bytes + at + 2);
+            const unsigned char* body = g->r.bytes + at + 4;
+            if (len > b->raw - at - 4) break;
+            if (kind == RK_TICK && len == 4) {
+                uint32_t t = get32(body);
+                if (x->nit && t <= x->it[x->nit - 1].tick) {
+                    snprintf(g->r.why, sizeof g->r.why, "an exact iteration of GameTime %u after %u",
+                             t, x->it[x->nit - 1].tick);
+                    return -1;
+                }
+                if (x->nit == x->itcap) {
+                    ExIter* q = (ExIter*)realloc(x->it, (x->itcap ? x->itcap * 2 : 4096) * sizeof *q);
+                    if (!q) return -1;
+                    x->it = q;
+                    x->itcap = x->itcap ? x->itcap * 2 : 4096;
+                }
+                x->it[x->nit].tick = t;
+                x->it[x->nit].at = x->body.n;
+                x->it[x->nit++].n = 0;
+            } else if (kind == RK_EV_SPRAY && len == 4 + REC_SPRAY_BODY && x->nit) {
+                rb_put(&x->body, body, len);
+                x->it[x->nit - 1].n++;
+            }
+            at += (4 + (size_t)len + 3) & ~(size_t)3;
+        }
+    }
+    return k < 0 || x->body.oom ? -1 : 1;
+}
+
+static const ExIter* exact_at(const ExactSprays* x, uint32_t t)
+{
+    unsigned lo = 0, hi = x->nit;
+    while (lo < hi) {
+        unsigned mid = (lo + hi) / 2;
+        if (x->it[mid].tick < t) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo < x->nit && x->it[lo].tick == t ? &x->it[lo] : NULL;
+}
+
+/* a spray and its place in its iteration, to order by unit ID and then by that place */
+typedef struct SprayRef { uint32_t id; unsigned i; const unsigned char* b; } SprayRef;
+
+static int spray_ref_order(const void* a, const void* b)
+{
+    const SprayRef *x = (const SprayRef*)a, *y = (const SprayRef*)b;
+    if (x->id != y->id) return x->id < y->id ? -1 : 1;
+    return (x->i > y->i) - (x->i < y->i);
+}
+
+/* The reader's sprays of the iteration its world holds against the exact ones: equal when, by
+   unit ID, each unit's sprays are the same 48 bytes in the same order -- the multiset of every
+   spray's bytes, and each unit's order. 1 equal, 0 not (printed), -1 no memory. */
+static int sprays_equal(const RecWorld* w, const ExactSprays* x, unsigned long* count)
+{
+    const ExIter* e = exact_at(x, w->tick);
+    SprayRef *a, *b;
+    unsigned n = 0, i, m = e ? e->n : 0;
+    int ok = 1;
+    for (i = 0; i < w->nev; i++) n += w->ev[i].kind == RK_EV_SPRAY;
+    if (!e) {
+        printf("sprays: the reader read GameTime %u, which the exact stream has no iteration of\n",
+               w->tick);
+        return 0;
+    }
+    a = (SprayRef*)malloc((n + 1) * sizeof *a);
+    b = (SprayRef*)malloc((m + 1) * sizeof *b);
+    if (!a || !b) {
+        free(a);
+        free(b);
+        return -1;
+    }
+    for (n = 0, i = 0; i < w->nev; i++) {
+        if (w->ev[i].kind != RK_EV_SPRAY) continue;
+        if (w->ev[i].len != 4 + REC_SPRAY_BODY) {
+            printf("sprays: GameTime %u: a spray of %u bytes\n", w->tick, w->ev[i].len);
+            ok = 0;
+            break;
+        }
+        a[n].id = get32(w->ev[i].b);
+        a[n].i = n;
+        a[n].b = w->ev[i].b;
+        n++;
+    }
+    for (i = 0; i < m; i++) {
+        b[i].b = x->body.p + e->at + (size_t)i * (4 + REC_SPRAY_BODY);
+        b[i].id = get32(b[i].b);
+        b[i].i = i;
+    }
+    if (ok && n != m) {
+        printf("sprays: GameTime %u: the reader has %u sprays, the exact stream %u\n", w->tick, n, m);
+        ok = 0;
+    }
+    if (ok) {
+        qsort(a, n, sizeof *a, spray_ref_order);
+        qsort(b, m, sizeof *b, spray_ref_order);
+        for (i = 0; i < n && ok; i++)
+            if (memcmp(a[i].b, b[i].b, 4 + REC_SPRAY_BODY)) {
+                printf("sprays: GameTime %u: unit ID %u's sprays differ from the exact stream's\n",
+                       w->tick, a[i].id);
+                ok = 0;
+            }
+    }
+    *count += n;
+    free(a);
+    free(b);
+    return ok;
+}
+
+/* codectest sprays IN: the DLL's own reader (tagpu_recreader.c) over IN's first timeline, its
+   sprays at every iteration against the exact stream's (RB_EXACT, the test lever
+   tagpu_rec.exact): read in order from the start, and after a seek to each snapshot's GameTime,
+   to the one after it -- read on to the next snapshot -- and to one 151 GameTimes after it. */
+static int cmd_sprays(const char* in)
+{
+    Reading g;
+    ExactSprays x;
+    RecReader* r;
+    char why[512];
+    unsigned long seq = 0, sprays = 0, seq_sprays, after = 0, seeks = 0;
+    unsigned i, last;
+    int k, bad = 0;
+    memset(&x, 0, sizeof x);
+    if (!reading_open(&g, in)) return 2;
+    if (exact_sprays(&g, &x) < 0) {
+        printf("codectest: %s: %s\n", in, g.r.why);
+        reading_close(&g);
+        return 2;
+    }
+    reading_close(&g);
+    if (!x.nit) {
+        printf("codectest: %s: no exact stream (RB_EXACT): record with tagpu_rec.exact\n", in);
+        free(x.it);
+        rb_free(&x.body);
+        return 2;
+    }
+    last = x.it[x.nit - 1].tick;
+    r = recr_open(in, why, sizeof why);
+    if (!r) {
+        printf("codectest: %s: %s\n", in, why);
+        free(x.it);
+        rb_free(&x.body);
+        return 2;
+    }
+    while (!bad && (k = recr_tick(r, why, sizeof why)) == 1) {
+        int e = sprays_equal(recr_world(r), &x, &sprays);
+        if (e <= 0) bad = e < 0 ? 2 : 1;
+        seq++;
+    }
+    if (!bad && k < 0) {
+        printf("sprays: the reader refused the stream in order: %s\n", why);
+        bad = 1;
+    }
+    seq_sprays = sprays;
+    if (!bad && seq != x.nit) {
+        printf("sprays: the reader read %lu iterations in order, the exact stream holds %u\n", seq,
+               x.nit);
+        bad = 1;
+    }
+    for (i = 0; !bad && i < x.nsnap; i++) {
+        unsigned s = x.snap[i], end = i + 1 < x.nsnap ? x.snap[i + 1] : last + 1, d;
+        static const unsigned delta[3] = { 0, 1, 151 };
+        for (d = 0; !bad && d < 3; d++) {
+            unsigned t = s + delta[d];
+            int e;
+            if (t > last) break;
+            if (recr_seek(r, t, 0, NULL, NULL, why, sizeof why) != 1) {
+                printf("sprays: the seek to GameTime %u: %s\n", t, why);
+                bad = 1;
+                break;
+            }
+            if (delta[d] && (!recr_seek_work(r)->from_snapshot || recr_seek_work(r)->from != s)) {
+                printf("sprays: the seek to GameTime %u built from %u, not from the snapshot at %u\n",
+                       t, recr_seek_work(r)->from, s);
+                bad = 1;
+                break;
+            }
+            seeks++;
+            e = sprays_equal(recr_world(r), &x, &sprays);
+            if (e <= 0) bad = e < 0 ? 2 : 1;
+            after++;
+            /* from the snapshot's next iteration, on to the next snapshot */
+            while (!bad && delta[d] == 1 && t + 1 < end && (k = recr_tick(r, why, sizeof why)) == 1) {
+                t = recr_world(r)->tick;
+                e = sprays_equal(recr_world(r), &x, &sprays);
+                if (e <= 0) bad = e < 0 ? 2 : 1;
+                after++;
+            }
+            if (!bad && delta[d] == 1 && t + 1 < end) {
+                printf("sprays: reading on from the snapshot at %u stopped at GameTime %u: %s\n", s,
+                       t, k < 0 ? why : "the end");
+                bad = 1;
+            }
+        }
+    }
+    printf("sprays: %s: timeline 0, %lu iterations read in order, %lu sprays; %lu seeks from %u "
+           "snapshots and %lu iterations compared after them, %lu sprays%s\n", in, seq, seq_sprays,
+           seeks, x.nsnap, after, sprays - seq_sprays,
+           bad ? "" : ": every iteration's sprays the exact stream's, as a multiset and each unit's "
+                      "in order");
+    recr_close(r);
+    free(x.it);
+    rb_free(&x.body);
+    return bad;
+}
+#endif
 
 /* ---- outcomes --------------------------------------------------------------------------------- */
 
@@ -3657,6 +3908,9 @@ int main(int argc, char** argv)
         return cmd_lossy(argv[2], argv[3], argc == 5);
     if (argc == 4 && !strcmp(argv[1], "decode")) return cmd_decode(argv[2], argv[3]);
     if (argc == 2 && !strcmp(argv[1], "outcomes")) return cmd_outcomes();
+#ifdef _WIN32
+    if (argc == 3 && !strcmp(argv[1], "sprays")) return cmd_sprays(argv[2]);
+#endif
     if (argc >= 5 && !strcmp(argv[1], "fuzz")) {
         /* fuzz IN SEED N [CASES] [--section NAME], the option anywhere after N */
         const char* cases = NULL;
@@ -3685,6 +3939,6 @@ int main(int argc, char** argv)
         for (i = 0; i < 512; i++) printf("%d\n", SIN[i]);
         return 0;
     }
-    fprintf(stderr, "usage: codectest transcode IN OUT [--snap-every N] [--skirmish] | lossy IN OUT [--exact] | decode IN OUT | outcomes | fuzz IN SEED N [CASES] [--section NAME] | sin\n");
+    fprintf(stderr, "usage: codectest transcode IN OUT [--snap-every N] [--skirmish] | lossy IN OUT [--exact] | decode IN OUT | outcomes | sprays IN | fuzz IN SEED N [CASES] [--section NAME] | sin\n");
     return 2;
 }

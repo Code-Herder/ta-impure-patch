@@ -22,6 +22,13 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
     verify IN                each stream block's records from the C decoder against the Python
                              reader's, which decodes twice -- skipping the resting units and
                              evaluating every candidate -- and the C sine table against its formula
+    sprays IN                without --native only: the DLL's own reader over IN's first
+                             timeline, every iteration's sprays (the stream's and the ones its
+                             spray sessions imply) against IN's exact stream (RB_EXACT), in order
+                             from the start and after a seek to each snapshot (codectest.c)
+    spraycases               without --native only: `sprays` on small files built as
+                             tools/replay/test_tareplay.py's LossySprays builds them, the ones
+                             the reader must match and the ones it must find or refuse
     fuzz IN SEED N [CASES] [--section NAME]
                              N mutated sectioned blocks decoded by C from the state each starts
                              from; each block itself decoded from the same copy must give the
@@ -207,6 +214,42 @@ def cmd_fuzzdiff(src, cases_path):
     return 0 if stats["agree"] == stats["cases"] and stats["cases"] else 1
 
 
+def cmd_spraycases():
+    """The DLL's reader on test_tareplay's LossySprays files (`codectest sprays`): the sessions'
+    sprays made and matching the exact stream, plain and following their unit; a spray the game
+    did not make found; and refused, a record after an iteration's spray sessions, sessions out of
+    slot order and a session that predicts from no spray."""
+    import test_tareplay as T
+    L, ses, spr, at = T.LossySprays, T.session, T.spray, T.unit_at
+    follow = {3: spr(2, 100, 200, 300),
+              4: at(1, 10, 0, -20) + spr(2, 110, 200, 280),
+              5: at(1, 15, 1, -20) + spr(2, 115, 201, 280)}
+    cases = [
+        ("a spray implied plain", L.EXACT, L.LOSSY, 0, "4 sprays; "),
+        ("a spray implied following its unit", follow,
+         {3: follow[3], 4: follow[4] + ses(2, 1 | 8), 5: at(1, 15, 1, -20), 6: ses(2, 0)}, 0,
+         "3 sprays; "),
+        ("a spray the game did not make", {k: v for k, v in L.EXACT.items() if k != 6}, L.LOSSY, 1,
+         "GameTime 6: the reader has 1 sprays, the exact stream 0"),
+        ("a record after the sessions", L.EXACT, L.AFTER, 1, "malformed record of kind 28"),
+        ("sessions out of slot order", L.EXACT, L.UNORDERED, 1, "malformed record of kind 56"),
+        ("a session from no spray", L.EXACT, {**L.LOSSY, 3: L.A + ses(3, 1)}, 1,
+         "predicts from no single spray"),
+    ]
+    t = L()
+    t.setUp()
+    bad = 0
+    try:
+        for name, exact, lossy, want, text in cases:
+            rc, out = run(False, "sprays", t.file(exact, lossy), capture=True)
+            ok = rc == want and text in out
+            bad |= not ok
+            print(f"spraycases: {name:<40} {'ok' if ok else 'FAILED: exit %d, %s' % (rc, out.strip())}")
+    finally:
+        t.tearDown()
+    return 1 if bad else 0
+
+
 def cmd_sizes(src):
     import reccodec
     import zstandard
@@ -258,7 +301,13 @@ def main(argv):
     cmd, args = argv[0], argv[1:]
     if cmd in ("outcomes", "transcode", "lossy", "fuzz", "decode"):
         return run(native, cmd, *args)[0]
+    if cmd in ("sprays", "spraycases") and native:
+        sys.exit(f"codectest: {cmd} runs the DLL's reader, which the Windows build alone links")
+    if cmd == "sprays" and len(args) == 1:
+        return run(False, cmd, *args)[0]
     devpy.ensure()
+    if cmd == "spraycases" and not args:
+        return cmd_spraycases()
     if cmd == "verify" and len(args) == 1:
         return cmd_verify(native, args[0])
     if cmd == "fuzzdiff" and len(args) == 2:
