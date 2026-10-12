@@ -278,6 +278,18 @@ targets share an intermediate. CI has been building this way since the workflow 
 same tree already differ (a timestamp reaches the PE header), so a differing md5 says nothing
 about `-j`. The assurances are the two above.
 
+## Game regressions run one at a time
+
+A landing gate alone already peaks at a load of about 24 on the reference setup's 32 threads, so
+two at once oversubscribe the machine: every run slows (four gates at once took 34 min each
+against 11 alone, measured 2026-10-12) and the checks bounded in time fail for the load alone.
+**Every tool that plays games for a regression holds the machine's run lock** (`tools/runlock.py`:
+`tareplay.py`'s game commands, `tacompat.py wine`, `recmp_play_test.py`), so a second run waits
+for the first. A chain of games scripted by hand queues the same way through `flock(1)` on the
+lock file, `$(git rev-parse --git-common-dir)/tareplay.lock`. Never work around it: while a run
+waits, do the offline work (builds, codectest, unit tests, docs). Builds and offline checks take
+no lock.
+
 ## Python tooling: install what you need, into the shared venv
 
 **`.venv-undither/` at the main checkout root is the project's Python environment**, and you may

@@ -455,6 +455,13 @@ which every reader makes again with the same bytes after the iteration's events 
 `RK_SPRAY_SESSION`; the order of the sprays inside an iteration is the decision of 2026-10-11
 below).
 
+**One run at a time.** Every `tareplay.py` command that plays games -- `run`, `measure`,
+`landing` (not `--check`), `broad`, `takeover`, `forks`, `rewind` -- first takes the machine's run
+lock (`tools/runlock.py`, flock(2) on `tareplay.lock` in the common git directory), so a second
+run on the machine waits for the first; the kernel drops the lock when its holder exits. One gate
+alone peaks at a load of about 24 of the reference setup's 32 threads; four at once took 34 min
+each against 11 alone and failed checks bounded in time for the load alone (MEASURED 2026-10-12).
+
 **Test speed.** Tick-driven runs default to internal game speed 20 (2x normal),
 within the retail setter's range. `--game-speed 10` selects normal speed for
 `run`, `measure`, `landing`, `broad`, `takeover`, `forks` and `rewind`. Every launch
