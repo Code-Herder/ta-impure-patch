@@ -28,9 +28,12 @@
    - S-d, the first step, at the capture point of the level's first iteration, before its unit
      tick: what needs the loaded level is checked -- its counts, its map, the unit and weapon
      data, its first GameTime. On a mismatch nothing is ever applied and the level stays empty,
-     which the viewer sees and the log explains. Otherwise the start units are made, the first
-     image goes in, the wind is seeded, V's sight is filled and the capture point's write follows
-     (THE APPLY, THE FIRST STEP'S UNITS).
+     which the viewer sees and the log explains. Otherwise the feature gates close and the
+     contest's rule the recording needs is written, before any create, so that every footprint
+     the creates stamp follows it (tagpu_puppet.c, THE CONTEST'S RULE); a rule that cannot be
+     written refuses the playing there, and the level stays empty too. Then the start units are
+     made, the first image goes in, the wind is seeded, V's sight is filled and the capture
+     point's write follows (THE APPLY, THE FIRST STEP'S UNITS).
    Two more sites serve a level that plays: B2's stub calls tagpu_replay_capture first at each
    capture point, and the frame visit before the in-play draw call 0x4969CD reads the trigger,
    runs a seek (THE SEEK) and writes what the draw after a step shows (THE GLOBALS AND THE
