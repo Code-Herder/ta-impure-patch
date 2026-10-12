@@ -2007,26 +2007,30 @@ ten minutes or less.
 - **S3c-3**: `SIM_FEATURE` regions and their fixtures, the coverage build, `tareplay.py landing`
   and `broad`, the `replay-roundtrip:` note, CLAUDE.md's replay gate and Step 4b. Until then nothing
   runs the harness at a landing.
-- **The COB one-tick lag (A5), accepted.** The live game's AutoAim starts AimPrimary inside the
+- **The COB one-tick lag (A5), open.** The live game's AutoAim starts AimPrimary inside the
   unit's turn and that turn's script slice runs it at T; the playing applies the recorded start at
   the replay step, after the whole unit tick, so its first slice runs at T+1, and the scripts it
-  starts (RestoreAfterDelay, walk, `EMIT_SFX`) a tick later. The acceptance reads "counts near a
-  window's ends move by a few"; that does not hold as stated. The level-start lag below shows that
-  a one-tick slice lag can re-phase a looping script for the rest of a unit's life, and A5 is the
-  same lag for one start [INFERRED: tenseat had no aiming]. Whether A5 stays accepted with that
-  rationale or is fixed by construction is the owner's question.
+  starts (RestoreAfterDelay, walk, `EMIT_SFX`) a tick later. Its 2026-10-01 acceptance rested on
+  "counts near a window's ends move by a few", which does not hold: the level-start lag below
+  shows that a one-tick slice lag can re-phase a looping script for the rest of a unit's life, and
+  A5 is the same lag for one start [INFERRED: tenseat had no aiming]. The owner decided on
+  2026-10-12 to fix it by construction, with the in-game create lag below, in a coming landing: a
+  recorded slice marker, a format bump. Not yet landed.
 - **The level-start lag, fixed.** The playing made the level's own units after the host's first
   unit tick, so every COB thread of a level-start unit ran one tick behind for the whole level:
   tenseat's commanders' `MotionControl` chose walk/walklegs/stand 103/3/394 on the puppet against
   102/6/393 live over [481, 1411), and 109/0/445 against 108/3/442 over [301, 1291) (MEASURED
   2026-10-12, and reproduced call for call by `tools/tacob`'s VM fed the recorded inputs). The
   sinks' band hid it whenever the key was small enough. The playing now makes them at the first
-  iteration's capture point, before the unit tick (`tagpu_replay.c`, THE FIRST STEP'S UNITS).
+  iteration's capture point, before the unit tick, and makes that capture point's write of the
+  recorded globals after them, so their first slice also draws from the recording's simulation
+  RNG (`tagpu_replay.c`, THE FIRST STEP'S UNITS).
 - **The in-game create lag, open.** A unit created during the unit tick in a later slot of a block
   not yet finished (a factory's product, a builder's nanoframe) gets its slice in that tick on the
   recording machine; the playing makes it after the tick, so its COB runs one tick behind for its
-  life [INFERRED from the slot loop's per-slot re-read; tenseat builds only structures]. Closing it
-  needs the slice recorded in order among the step's creates and starts: a format change.
+  life [INFERRED from the slot loop's per-slot re-read; tenseat builds only structures]. The owner
+  chose on 2026-10-12 to fix it by construction with A5 in a coming landing: the slice recorded in
+  order among the step's creates and starts, a format bump. Not yet landed.
 - **The walk class after an unload (A6), accepted.** The live game evaluates `0x43DA70` in a
   cargo's mover tick before its transport's later turn drops it; the playing's image-time walk
   sees the carrier already cleared and makes a StartMoving and a StopMoving the live game did not

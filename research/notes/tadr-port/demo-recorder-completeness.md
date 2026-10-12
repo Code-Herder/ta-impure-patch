@@ -923,6 +923,7 @@ region with whether its fixtures reach it.
 | 2026-10-08 | **The harness runs a test-only turbo** (*Test speed*): k ticks a frame, k = 1 by default and 1..5 in the lever; a live lane acts at GameTimes by `pause at <T>` and the K and U judges are bound to ticks; every game gets the test render profile (a 20 fps present cap, `shadowres=512`). **The meteor shower's strike points after a takeover stay an open gap** (*Open items*). |
 | 2026-10-09 | **No check of the gate is decided by the wall clock** (*Ticks, not polls*): a test launch's hold starts its level held (its pause bit and one-tick first batch written from `tagpu_replay.c`, a `presentation` file, on test launches only: a loosening the owner approved); a seek's cost is its game thread's CPU time, bounded by 4,000 ms with SMT and clock contention named as the residual; the fixture worlds change once, deterministically, as scenarios now land at GameTime 1; the compat suite's soaks and `--watch` count game ticks or presented frames (SECONDS × 30) with a 120 s stall bound. |
 | 2026-10-11 | **A takeover's AIs read the recording's contacts at T** (O14 for takeovers): when P is the recording's viewed record, the takeover restores `+0x110` bits 8–10 from the recording after its radar pass, as the seek does, so the fork's first acquisition scans read the contacts the recording held at T, as the recording's AIs read them until its next pass; a multiplayer recording's takeover keeps its own pass's bits (below). Rejected: masking bits 8–10 in `fork_view` for every fork, a loosening of D2 (d) that would leave the fork's AIs reading a picture the parent never held; and steering the harness off the ticks after a scripted step, which hides the gap. |
+| 2026-10-12 | **A5 and the in-game create lag are fixed by construction, not accepted** (the owner, after the level-start lag was traced to the same one-slice COB lag): a recorded slice marker, in order among the step's creates and starts, and the replay giving each marked unit its slice there, a format bump, in a coming landing. This supersedes A5's acceptance in the 2026-10-01 row, which stays as history. |
 | 2026-10-12 | **A failure only under load is a bug in the check** (the owner's rule): a peek the running game has not answered is no progress, so `STALL_S` is the one bound on a running level. **Approved by the owner (2026-10-12):** the seek's W3 is an exact count of the blocks the reader decoded against the file's own, with the game thread's CPU time reported only and the gap that leaves accepted (*A seek's work, not its time*); and bits 1 and 2 of the pause word `main+0x38A51`, the pacing gate's lag flag and its live speed below the chosen one, are left (`replay-globals.tsv`, `pacingbits`, a `leave` row: bit 2 has no reader, bit 1 only the corner icon and the turbo). |
 
 The owner approved one additional UI-only count exception on 2026-10-05: the native
@@ -1021,16 +1022,16 @@ the unit tick on a puppet runs its scripts one tick off, and a looping script su
 `MotionControl` stays re-phased for the rest of the unit's life. The level's own units are made
 before the host's first unit tick, which closes the level-start case (the
 [engine map](../exe-reverse-engineering.md), *COB on a puppet*: tenseat's walk/walklegs/stand
-counts reproduced call for call, MEASURED 2026-10-12). Open, of the same class:
+counts reproduced call for call, MEASURED 2026-10-12). Open, of the same class, the first two with
+their by-construction fix chosen (decision 2026-10-12) for a coming landing, not yet landed:
 
 - **A unit created during play** in a later slot of a block the unit tick has not finished gets
   its slice in that tick on the recording machine and not on a puppet [INFERRED].
-- **A5's rationale does not hold as stated.** Decision 2026-10-01 accepts the AutoAim start's lag
-  because "counts near a window's ends move by a few"; by the mechanism measured here one late
-  start can flip one `MotionControl` decision and re-phase the loop for the rest of the unit's
-  life [INFERRED: tenseat had no aiming]. Keeping A5 with that rationale corrected, or fixing it
-  by construction (a recorded slice marker and a puppet-only deferral of the unit tick's script
-  call: a format change), is the owner's decision.
+- **AutoAim's start (A5)** runs before the unit's slice on the recording machine and after the
+  host's unit tick on a puppet. The 2026-10-01 acceptance rested on "counts near a window's ends
+  move by a few"; by the mechanism measured here one late start can flip one `MotionControl`
+  decision and re-phase the loop for the rest of the unit's life [INFERRED: tenseat had no
+  aiming], so it does not hold.
 - **The walk class's run-now pass** can run a start the AI made after the unit tick a tick early,
   the COB side of *Events outside a deferred bracket carry no phase*
   ([skirmish slice](demo-recorder-skirmish-slice.md)).
