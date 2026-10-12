@@ -234,7 +234,9 @@ other players; a multiplayer game is rewound from its finished recording.
   ([S1, *Measured*](demo-recorder-skirmish-slice.md#measured)); with S2a's movers, lists and
   events, 0.48 and 0.53 ms on average in two battles of 1,200 to 1,412 units, and 1.15 and 1.57 ms
   at worst
-  ([S2a](demo-recorder-skirmish-slice.md#s2a-verified-and-measured)). Its memory is not measured yet.
+  ([S2a](demo-recorder-skirmish-slice.md#s2a-verified-and-measured)). Its memory is not measured
+  as a whole yet; of it, the writer's zstd -- the level-19 context and the run's check decoder --
+  is about 16 MB, and a reader's run decoder about 1.5 MB (MEASURED, [*P1*](demo-recorder-size.md)).
 - **Require matching installed map/mod content.** Record identities and fingerprints, check them
   before playback, and identify missing or mismatched content clearly. Do not bundle a copy of
   the map and mod into every replay.
@@ -469,8 +471,10 @@ evidence, and keep remaining gaps visible.
    recorded anew takes 12.0 MiB. L4 (recording format 11) measured two four-player hours: 24.4 and
    51.5 MiB an hour with no snapshots at all, and the light one comes to 25.85 MiB in format 11, so the
    four-player budget is missed. Format 12 predicts the units' resource ledger and takes the heavy
-   hour from 56.99 to 42.15 MB (−26 %), lossless; a lossy plan measured offline brings it to 19.32 MB
-   (*L5* of the size page). Until the reduced stream lands, a skirmish is recorded only on request.
+   hour from 56.99 to 42.15 MB (−26 %), lossless; format 13's container -- each run of blocks one
+   zstd frame at level 19, the snapshots chained -- takes it to 29.90 MB, lossless, at about 16 MB
+   more of the writer's memory and 1.5 MB more of a reader's; a lossy plan measured offline brings
+   it to 19.32 MB before that container, 15.65 with it (*L5* and *P1* of the size page). Until the reduced stream lands, a skirmish is recorded only on request.
 3. **Snapshot interval: decided** (2026-10-10). A snapshot every 1,800 ticks, 60 s of game time,
    chosen against the disk budget with the seek target relaxed for dense battles (*Playback and
    seeking*).
