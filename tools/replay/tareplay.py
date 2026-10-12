@@ -3560,7 +3560,7 @@ def main(argv=None):
                                          "its fork played across the boundary")
     tk.add_argument("fixture", help="a fixture with a `takeover` entry")
     tk.add_argument("--player", type=int, help="the player to take over (default the entry's)")
-    tk.add_argument("--at", type=int, help="the GameTime to take over at (default T2)")
+    tk.add_argument("--at", type=int, help="the GameTime to take over at (default the entry's `at`, else T2)")
     tk.add_argument("-j", type=int, default=2, help="games at once (default 2)")
     tk.add_argument("--cover", action="store_true", help="the coverage builds")
     tk.add_argument("--keep", action="store_true", help="keep the passing dumps")

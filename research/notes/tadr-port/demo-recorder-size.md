@@ -15,8 +15,8 @@ scenario), and on the very games L1 recorded the battle's file goes from 29.09 M
 hours, and both miss the 25 MB budget even with no snapshots at all** (24.4 and 51.5 MiB an hour
 from the stream alone). L5a, lossless, predicts the units' resource ledger and takes the heavy hour
 from 56.99 to 42.15 MB; the owner chose to go lossy after it, and a lossy plan measured offline
-brings the heavy hour to 19.32 MB, inside the 17–22 MiB an hour TADR would take for it (*L5: the
-lossy plan, measured offline*). L5's landing and L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
+brings the heavy hour to 19.32 MB, about 1.6–2.5 times the 7.6–12 MB TADR's recorder would take
+for it (*L5: the lossy plan, measured offline*). L5's landing and L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -1176,11 +1176,19 @@ each one (every 1,800 ticks).
 | + nano sprays as sessions: a spray repeating the unit's previous tick's is dropped (99 % of the sprays continue one) | 23.97 |
 | + the feature tick's input cells dropped | 19.32 (18.4 MiB) |
 
-**TADR, for comparison** (MEASURED 2026-10-11 on a four-peer network game, one AI per peer,
-Metal Gridlock, packets captured by a research build and packed as TADR's recorder packs them, its
-compression off by default): 0.54–0.70 bytes per unit-tick, about 17–22 MiB an hour scaled to the
-heavy hour [INFERRED: scaled by unit-ticks]. The units alone are at TADR's rate after the steps
-above; what is left is the unit frame (10.7 MB: masks and listed slots about half, motion about
+**TADR, for comparison** (MEASURED 2026-10-11: TADR 1.0's own recorder on the retail exe, a
+four-peer Wine network game on Metal Gridlock, one AI and an idle human per peer, 19.4 game-minutes,
+103 live units on average, its compression off). Its file is 87.7 % unit-sync packets (`0x2C`).
+The engine sends one per local player every tick (`0x48B003`, no rate gate), listing only the
+units whose path changed -- for a ground unit up to three path points, no position -- and one
+unit's full state in rotation, `GameTime mod` the unit limit (the writer `0x48B200`, about 29
+bytes); the receiver steers its copy toward the points by the ground step `0x43CD20` and snaps it
+to the full state when that comes round. So TADR's size grows with players and path changes, not
+with units: 13–18 bytes a tick plus 0.18–0.32 a live unit (fitted over 30 s windows), about 7.6–12
+MB for the heavy hour [INFERRED: the fit applied to the hour's unit counts]. A per-unit-tick
+scaling of the same game's packets gave 17–22 MiB, which overstates it. What TADR's playback shows
+between two full states is a network peer's picture: unbounded drift, and no seek.
+What is left of this plan is the unit frame (10.7 MB: masks and listed slots about half, motion about
 30 %), the snapshots (2.5), projectiles (1.6), orders (1.3), state (1.3) and events (1.1).
 
 **The trap: motion must stay exact.** Holding the velocity, speed or turn, or giving the position a
