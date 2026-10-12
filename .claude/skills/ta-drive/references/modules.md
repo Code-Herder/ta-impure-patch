@@ -954,6 +954,10 @@ block that reads to its last complete block.
   `pclick:512,384`, then send `ctrl+d` in a later GameTime step to exercise the
   secondary order dispatcher. The camera is pinned by the scenario; the shield
   stays on so the engine sees the polled Ctrl modifier.
+- **One game regression at a time.** `tareplay.py`'s game commands, `tacompat.py wine` and
+  `recmp_play_test.py` take the machine's run lock (`tools/runlock.py`) and wait while another run
+  holds it, saying who holds it (`runlock: waiting for the run lock ...`); a hand-made chain of
+  games queues with `flock "$(git rev-parse --git-common-dir)/tareplay.lock" <command>`.
 - **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
   it runs the fixtures that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
   `UNFEATURED` for a changed line outside every region and `UNCOVERED <file>:<function>` for a
