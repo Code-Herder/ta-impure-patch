@@ -4621,14 +4621,16 @@ static int fix_stacked_air(void)
        The replay's capture-point write comes first: on a level that plays a recording it writes
        the recording's globals and projectile pool for the iteration the host holds, so that it is
        their last writer before anything in the step reads them, the recorder's dump included
-       (tagpu_replay.c, THE GLOBALS AND THE PROJECTILES); elsewhere it returns at once. Then the
-       demo recorder's capture: it records the world between two iterations (tagpu_recorder.c),
-       and the pool it records is the one the last iteration left, which air_rebuild then derives
-       again from the units it records. On a level that plays a recording the capture records
-       nothing, and the replay's step runs after the unit tick: it writes the world the recording
-       machine's unit tick left, so the rest of the iteration -- the players phase's sight stamps
-       above all -- reads what it read there (tagpu_replay.c), and air_rebuild derives the next
-       pool from the units it wrote. */
+       (tagpu_replay.c, THE GLOBALS AND THE PROJECTILES); elsewhere it returns at once. At the
+       level's first iteration it makes the level's own units instead, so the host's first unit
+       tick gives each the script slice the recording machine's gave (tagpu_replay.c, THE FIRST
+       STEP'S UNITS). Then the demo recorder's capture: it records the world between two
+       iterations (tagpu_recorder.c), and the pool it records is the one the last iteration left,
+       which air_rebuild then derives again from the units it records. On a level that plays a
+       recording the capture records nothing, and the replay's step runs after the unit tick: it
+       writes the world the recording machine's unit tick left, so the rest of the iteration --
+       the players phase's sight stamps above all -- reads what it read there (tagpu_replay.c),
+       and air_rebuild derives the next pool from the units it wrote. */
     p = k;
     *p++ = 0x9C;
     *p++ = 0x60;
@@ -9696,11 +9698,11 @@ SIM_VAR(s_windSessionHr, SIM_TRANSIENT);
 
 /* THE PLAYBACK'S SEED. A level that plays a recording draws the recording's wind, as a peer draws
    its session's: the replay's first step sets the state the recording's first image holds, on the
-   game thread after that tick's unit tick and before its draw (0x49558F). The image is taken at
-   the start of the level's first tick (0x4954ED), after the load's seed and before any draw, the
-   load's call drawing nothing; the host's load leaves next = 0 as the recording machine's did. So
-   both draw from the same state at the same GameTimes, and THE INVARIANT makes every draw after it
-   the recording's. */
+   game thread at the capture point of the level's first iteration, before that tick's unit tick
+   and its draw (0x49558F). The image is taken at the start of the level's first tick (0x4954ED),
+   after the load's seed and before any draw, the load's call drawing nothing; the host's load
+   leaves next = 0 as the recording machine's did. So both draw from the same state at the same
+   GameTimes, and THE INVARIANT makes every draw after it the recording's. */
 const char* tagpu_wind_state_name(void) { return simdir_s_windState.name; }
 
 void tagpu_wind_state_set(unsigned long long state) { s_windState = state; }
