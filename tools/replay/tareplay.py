@@ -2322,8 +2322,10 @@ def checks(fx):
         res.later(puppet_counts, proc, rec, d)
     for proc in ("R", "Q"):
         if ran.get(proc) == "ran":
+            # Q's one seek is a fresh process's: a seek asked for before a playing's first step
+            # waits for it (tagpu_replay.c, seat), which reads the root's first iteration
             res.later(work_check, f"{proc}: the seeks' work", out / proc / "tagpu.log", rec, 0,
-                      False)
+                      False, proc == "Q")
     if ran.get("R") == "ran":
         for T in Ts[1:]:
             line = fx["rt"].get(f"rt{T}", "")
@@ -2364,7 +2366,7 @@ def work_lines(text):
             for m in WORK_RX.finditer(text)]
 
 
-def work_verdict(w, rec, timeline, takeover=False):
+def work_verdict(w, rec, timeline, takeover=False, fresh=False):
     """What one seek's work line `w` breaks, [] for nothing; tarec.Unreadable when the file says
     nothing of its target.
     W1, exact: the reader built from where the file says it must (tarec.seek_start, the reader's
@@ -2374,7 +2376,9 @@ def work_verdict(w, rec, timeline, takeover=False):
     alive by the kills (A == 0), and none refused by a takeover, a return to now or a fork.
     W3, exact: the reader decoded the blocks the file holds from there to its target, each once --
     their count, their bytes in the file and unpacked (tarec.seek_blocks) -- with its base's
-    block only from a snapshot. The seek's cost is its work: W1 to W3 bound every quantity of it
+    block only from a snapshot; with `fresh`, the first seek of a playing in a fresh process past
+    its first step, the base is the file's to say too, not the line's (tarec.seek_blocks, base
+    None). The seek's cost is its work: W1 to W3 bound every quantity of it
     that a change could multiply, and none is a time, so no load moves a verdict. The game
     thread's CPU time is reported only (tagpu_replay.c, THE SEEK'S WORK): it grows with
     contention for the core."""
@@ -2393,7 +2397,10 @@ def work_verdict(w, rec, timeline, takeover=False):
         bad.append(f"W2: {w['F']} creates refused")
     if w["Bb"] and not snap:
         bad.append("W3: a base read for a seek from the first iteration")
-    n, packed, raw = tarec.seek_blocks(rec, timeline, w["R"], SEEK_LEAD, w["Bb"])
+    n, packed, raw, base = tarec.seek_blocks(rec, timeline, w["R"], SEEK_LEAD,
+                                             None if fresh else w["Bb"])
+    if fresh and w["Bb"] != base:
+        bad.append(f"W3: {w['Bb']} blocks for the base where a fresh process reads {base}")
     if (w["B"], w["Bp"], w["Bu"]) != (n, packed, raw):
         bad.append(f"W3: {w['B']} blocks decoded, {w['Bp']} bytes read and {w['Bu']} unpacked "
                    f"from {w['S']} to {w['R']}, where the file holds {n}, {packed} and {raw}")
@@ -2406,13 +2413,14 @@ def work_summary(w):
             f"({w['W']} wall)")
 
 
-def work_check(label, log_path, rec, timeline, takeover):
-    """[(label, verdict, detail)]: W1 and W2 of every seek's work line in a lane's log, each
-    against the file and timeline it read; could not run when the log holds none."""
+def work_check(label, log_path, rec, timeline, takeover, fresh=False):
+    """[(label, verdict, detail)]: W1 to W3 of every seek's work line in a lane's log, each
+    against the file and timeline it read; with `fresh`, the log's first seek is a fresh
+    process's (work_verdict); could not run when the log holds none."""
     try:
         lines = work_lines(Path(log_path).read_text(errors="replace"))
-        bad = [f"the seek to {w['T']}: {b}" for w in lines
-               for b in work_verdict(w, rec, timeline, takeover)]
+        bad = [f"the seek to {w['T']}: {b}" for i, w in enumerate(lines)
+               for b in work_verdict(w, rec, timeline, takeover, fresh and not i)]
     except (OSError, tarec.Unreadable) as e:
         return [(label, UNRUN, str(e))]
     if not lines:
@@ -2575,7 +2583,7 @@ def tk_checks(fx):
                 return [("takeover ai", UNRUN, str(e))]
         res.later(ai_check)
     if ran.get("F") == "ran":
-        res.later(work_check, "F: the seeks' work", out / "F" / "tagpu.log", path, tl, False)
+        res.later(work_check, "F: the seeks' work", out / "F" / "tagpu.log", path, tl, False, True)
     if "fork" in want:
         compare_fork = res.start(tarec_run, "compare-fork", path, tl)
         segments = res.start(tarec_run, "segments", path)

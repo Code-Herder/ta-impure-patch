@@ -559,7 +559,10 @@ takeover, a return to now or a fork; **W3**, exact, the blocks the reader decode
 their bytes in the file and unpacked -- are the file's own from there to the target
 (`tarec.seek_blocks`): the snapshot, after its segment's first stream block when the reader did
 not hold that segment's base, then in each segment of the chain every stream block holding an
-iteration it read, each once. No check reads a time. The game thread's CPU time is reported
+iteration it read, each once. Q's and F's seeks run in a fresh process after its playing's first
+step (a seek asked for earlier waits for it), which holds the root's base, so for them the file
+says whether a base is read: only for a snapshot in a later segment of the chain. No check reads a
+time. The game thread's CPU time is reported
 only, because it grows with contention for the core: an SMT sibling made fixed work cost ×1.5
 (MEASURED 2026-10-09, `tagpu_replay.c`, THE SEEK'S WORK), the all-core clock lowers it further,
 and the battle's return to now at 1,501, the same 1,500 iterations and about 1,420 units each
@@ -568,7 +571,10 @@ time, took 3,990–5,250 ms of it across the lanes of one gate run (MEASURED 202
 
 **The gap W3 leaves.** It bounds what a seek reads, not what reading each record costs: a change
 that made the reader or the seek's visitor slower per record, with the same blocks, passes the
-gate. The seek and takeover times of the [state design](demo-recorder.md) (*Playback and
+gate. And it counts only the blocks `recr_seek` decodes through `block_body`, so two reads stay
+outside the count: the segment scan `segs_scan` at the top of every `recr_seek`, which reads the
+header and timeline blocks through `body_get` and grows with the file and its forks, and a
+multiplayer seek's contribution blocks, which `mp_read` decodes through `body_get` too. The seek and takeover times of the [state design](demo-recorder.md) (*Playback and
 seeking*) are targets the gate does not check.
 
 **The test render profile.** Every game the harness launches writes `style=custom`, `assets=0`,

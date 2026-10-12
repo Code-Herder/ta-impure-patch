@@ -1291,16 +1291,18 @@ class SeekBlocks(unittest.TestCase):
         return str(p)
 
     @staticmethod
-    def of(*bs):
+    def of(*bs, base=0):
         n = sum(len(b) - 32 for b in bs)                # stored: raw and packed alike
-        return len(bs), n, n
+        return len(bs), n, n, base
 
     def test_from_a_snapshot_or_the_first_iteration(self):
         s1, s2, s3 = stream(1, 10, unit=1), stream(11, 20, opens=False), stream(21, 30, opens=False)
         k10, k20 = block(tarec.RB_SNAPSHOT, 10, 10, b"s"), block(tarec.RB_SNAPSHOT, 20, 20, b"ss")
         path = self.file(header(), s1, k10, s2, k20, s3, end_block(30))
         self.assertEqual(tarec.seek_blocks(path, 0, 25, 3, 0), self.of(k20, s3))
-        self.assertEqual(tarec.seek_blocks(path, 0, 25, 3, 1), self.of(s1, k20, s3))
+        self.assertEqual(tarec.seek_blocks(path, 0, 25, 3, 1), self.of(s1, k20, s3, base=1))
+        # a fresh playing holds the root's base
+        self.assertEqual(tarec.seek_blocks(path, 0, 25, 3, None), self.of(k20, s3))
         self.assertEqual(tarec.seek_blocks(path, 0, 13, 3, 0), self.of(s1, s2))
         self.assertEqual(tarec.seek_blocks(path, 0, 10, 3, 0), self.of(s1))
         self.assertEqual(tarec.seek_blocks(path, 0, 20, 3, 0), self.of(k10, s2))
@@ -1315,7 +1317,10 @@ class SeekBlocks(unittest.TestCase):
         # from the parent's snapshot at 10 across the fork at 15; its 21..30 block is never read
         self.assertEqual(tarec.seek_blocks(path, 1, 22, 3, 0), self.of(k10, s2, f1))
         self.assertEqual(tarec.seek_blocks(path, 1, 29, 3, 0), self.of(k25, f2))
-        self.assertEqual(tarec.seek_blocks(path, 1, 29, 3, 1), self.of(f1, k25, f2))
+        self.assertEqual(tarec.seek_blocks(path, 1, 29, 3, 1), self.of(f1, k25, f2, base=1))
+        # a fresh playing of timeline 1 holds the root's base, not the fork's
+        self.assertEqual(tarec.seek_blocks(path, 1, 29, 3, None), self.of(f1, k25, f2, base=1))
+        self.assertEqual(tarec.seek_blocks(path, 1, 22, 3, None), self.of(k10, s2, f1))
         with self.assertRaises(tarec.Unreadable):
             tarec.seek_blocks(path, 1, 31, 3, 0)
 
@@ -1366,6 +1371,10 @@ class SeekWork(unittest.TestCase):
         self.assertRegex(verdict(self.work(B=3))[0], "W3: 3 blocks decoded")
         self.assertRegex(verdict(self.work(Bp=self.read + 1))[0], "where the file holds 2, ")
         self.assertRegex(verdict(self.work(Bb=1))[0], "where the file holds 3, ")
+        # a fresh process holds the root's base: the line's base is checked, not trusted
+        self.assertEqual(verdict(self.work(), fresh=True), [])
+        self.assertRegex(verdict(self.work(Bb=1), fresh=True)[0],
+                         "W3: 1 blocks for the base where a fresh process reads 0")
 
     def test_a_log_with_no_line_could_not_run(self):
         log = Path(self.tmp.name) / "tagpu.log"

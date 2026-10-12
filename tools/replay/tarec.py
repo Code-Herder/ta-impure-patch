@@ -1737,7 +1737,14 @@ def seek_blocks(path, timeline, T, lead, base):
     chain up to T, every stream block holding an iteration it reads: a block is decoded whole, and
     one ends where an iteration does (tagpu_recwriter.c, iteration_done), so the reader opens no
     block past the last iteration it reads. The snapshot, contribution and timeline blocks it
-    passes are skipped unread."""
+    passes are skipped unread. `base` None is a reader that has read its chain's first iteration
+    and nothing since, as a playing in a fresh process holds after its first step: it holds the
+    root's base, so it reads a base only for a snapshot in a later segment of the chain.
+    THE FORMAT THIS MODELS: one snapshot block decoded once, and stream blocks decoded each on its
+    own. A snapshot chain -- a key snapshot and up to nine prefix snapshots, each decoded through
+    block_body -- or stream blocks that share one zstd stream per run (the recording-size work's
+    P1) changes what a seek decodes, and is modelled here in the same change that brings it, or
+    W3 fails every seek that reads it."""
     sizes, offsets = [], []
     bl, _ = blocks(path, sizes, offsets, decode=False)
     size = {id(b): sz for b, sz in zip(bl, sizes)}
@@ -1755,6 +1762,8 @@ def seek_blocks(path, timeline, T, lead, base):
             if b[0] == RB_SNAPSHOT and b[2] <= cover_end(i) and b[2] + lead < T:
                 snap, frm = b, i
     read = []
+    if base is None:
+        base = snap is not None and frm > 0
     if snap is not None:
         if base:
             read.append(next(b for b in ch[frm]["blocks"] if b[0] == RB_STREAM))
@@ -1771,7 +1780,8 @@ def seek_blocks(path, timeline, T, lead, base):
         read += [b for b in ch[i]["blocks"] if b[0] == RB_STREAM and b[1] <= end and b[2] >= start]
         if i < hold:
             start = ch[i + 1]["fork_at"]
-    return (len(read), sum(size[id(b)][4] for b in read), sum(size[id(b)][3] for b in read))
+    return (len(read), sum(size[id(b)][4] for b in read), sum(size[id(b)][3] for b in read),
+            int(bool(base) and snap is not None))
 
 
 def cmd_segments(path):
