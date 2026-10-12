@@ -1430,6 +1430,31 @@ class PeekValues(unittest.TestCase):
         self.assertIsNone(tacli._peek_uint(None))
         self.assertIsNone(tacli._peek_str(None))
 
+    def test_a_stale_line_for_another_spec_is_not_the_answer(self):
+        log = ("peek: *0x511DE8+0x38A47:4 @0x0B1ECA71 = 906 (0x0000038A)\n"
+               "units: alive=1419 onscreen=0 eye=(-1,1) me=10\n"
+               "peek: *0x511DE8+0x38A51:2 @0x0B1ECA7B = 1 (0x0001)\n")
+        rows = tacli._peek_rows(log, ["*0x511DE8+0x38A51:2"])
+        self.assertEqual([r["spec"] for r in rows], ["*0x511DE8+0x38A51:2"])
+        self.assertEqual(tacli._peek_uint(rows[0]), 1)
+        self.assertEqual(tacli._peek_rows(log.splitlines()[0], ["*0x511DE8+0x38A51:2"]), [])
+
+    def test_a_spec_asked_twice_is_answered_twice(self):
+        log = ("peek: 0xa @0x0000000A = 18 (0x12)\npeek: 0xb @0x0000000B = 19 (0x13)\n"
+               "peek: 0xb @0x0000000B = 19 (0x13)\n")
+        self.assertEqual([r["spec"] for r in tacli._peek_rows(log, ["0xa", "0xb", "0xb"])],
+                         ["0xa", "0xb", "0xb"])
+        self.assertEqual(len(tacli._peek_rows(log.rsplit("peek", 1)[0], ["0xa", "0xb", "0xb"])), 2)
+
+    def test_rows_come_in_the_order_asked(self):
+        log = "peek: 0x2 @0x00000002 = 2 (0x02)\npeek: 0x1 @0x00000001 = 1 (0x01)\n"
+        with patch.object(tacli, "_log_cursor") as cur, \
+                patch.object(tacli, "put_trigger"):
+            cur.return_value.text.return_value = log
+            inst = Mock(running=Mock(return_value=True), gamedir=Path("/nonexistent"))
+            rows = tacli._peek(inst, ["0x1", "0x2"], 1)
+        self.assertEqual([r["spec"] for r in rows], ["0x1", "0x2"])
+
 
 class LiveSignal(unittest.TestCase):
     """A world in memory, told from the overlay's own count."""

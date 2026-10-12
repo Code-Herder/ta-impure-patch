@@ -116,8 +116,10 @@ past could not run, named.
 
 No check is decided by the wall clock. A wait on a fact is bounded by ACK_S for a one-frame answer
 and, while the level runs, by STALL_S of GameTime standing still (Stall): each catches a hung or
-dead game, never an outcome. A seek's cost is checked on the game thread's CPU time, against its
-fixture's `cpu_ms` (W3, work_verdict).
+dead game, never an outcome. A peek the running game has not answered is no progress, not a
+failure: a seek's rebuild, a fork crossing's among them, holds the game thread for one frame. A
+seek's cost is checked on its work, never its time: the iterations it read, the units it made and
+the blocks it decoded, each against the file (W1 to W3, work_verdict).
 
 Every game gets the test render profile (TEST_RENDER): a present cap,
 supersampling 1x and the Classic++ look keys off; the engine's own draw and its shadow switch
@@ -158,6 +160,7 @@ STOCK_FIXTURE = "stock-limits"          # the fixture that plays the stock-limit
 sys.path.insert(0, str(TREE / "tools"))
 import talog  # noqa: E402
 import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
+import runlock  # noqa: E402  one game regression at a time (tools/runlock.py)
 sys.path.insert(0, str(HERE))
 import tarec  # noqa: E402
 import reccache  # noqa: E402
@@ -202,8 +205,8 @@ TAKEOVER_CHECKS = {
     "judge": "the window alive with no box and no ErrorLog.txt, and at least 90 % of the units "
              "the takeover made seen JUDGE_TICKS after T",
     "line": "the takeover's line and its seek's work: no create refused, the reader started "
-            "where the file says (W1), every live unit made and none left (W2), and the game "
-            "thread's CPU time within the entry's `cpu_ms` (W3)",
+            "where the file says (W1), every live unit made and none left (W2), and the blocks "
+            "it decoded the file's own from there (W3)",
     "orders": "the entry's `order` unit of P's moves more than 64 wu when ordered",
     "ai": "every AI seat issues fresh planner orders that reach normal dispatch during an "
           "armed TAKEOVER_SPAN window, and at least 25 % of the AI seats' mobile units move more than "
@@ -216,6 +219,7 @@ TAKEOVER_CHECKS = {
 CONTINUE = 300                  # the dump after a round trip, this many ticks on
 TWIN_AFTER = 30                 # an L lane's twin, held this many ticks after Tlast
 ACK_S = 60                      # a one-frame answer: an arm, a dump's line, a peek, a screen
+PEEK_UNANSWERED = "no peek lines"   # tacli peek's words when the game did not answer in its wait
 STALL_S = 120                   # GameTime standing still this long while the level runs: a hung game
 SEEK_LEAD = 123                 # the reader's lead before a seek's target (tagpu_replay.c, EYE_LEAD)
 JUDGE_TICKS = 240               # the takeover judge's sample, this many ticks after T: its old 4 s
@@ -548,8 +552,17 @@ class Worker:
         store.write_text("\n".join(keep + [f"{k}={v}" for k, v in TEST_RENDER.items()]) + "\n")
         (self.gamedir / "tagpu_presentcap.on").write_text(f"{PRESENT_CAP}\n")
 
-    def gametime(self):
-        rc, o = tacli("peek", self.name, GAMETIME, "--json", timeout=ACK_S)
+    def gametime(self, wait=ACK_S, busy=False):
+        """GameTime, read on the game thread at its next frame visit, `wait` seconds at most. With
+        `busy`, None when the game is running and has not answered: a seek's or a fork crossing's
+        rebuild runs inside one frame (MEASURED 2026-10-12, battle's X lane at a load average of
+        63-87: two fork crossings' seeks of 6.5 s wall each, back to back, and a peek unanswered
+        through tacli's 10 s), so a running game that has not answered yet is a fact for the
+        caller's own bound (Stall), never an outcome."""
+        rc, o = tacli("peek", self.name, GAMETIME, "--json", "--timeout", wait,
+                      timeout=wait + ACK_S)
+        if rc and busy and PEEK_UNANSWERED in o and self.running():
+            return None
         if rc:
             raise CouldNotRun(f"tacli peek: {last(o)}")
         g = int(str(json.loads(o[o.index("{"):])["peeks"][0]["value"]).split()[0])
@@ -675,7 +688,10 @@ class Log:
 class Stall:
     """The bound of a wait on a running level: STALL_S of GameTime standing still. A loaded machine
     runs the level slower, never not at all, so this catches a hung or dead game and decides no
-    outcome. Read every EVERY seconds through a peek, which the game answers at its next flip."""
+    outcome. Read every EVERY seconds through a peek, which the game answers at its next flip. A
+    peek the running game has not answered within EVERY is no progress and nothing more: the game
+    thread is inside one long frame, a seek's rebuild, and STALL_S alone decides when that is a
+    hung game. No second, shorter bound stands in for it."""
 
     EVERY = 5.0
 
@@ -688,12 +704,14 @@ class Stall:
         now = time.monotonic()
         if now < self.next:
             return
+        g = self.w.gametime(self.EVERY, busy=True)
+        now = time.monotonic()
         self.next = now + self.EVERY
-        g = self.w.gametime()
-        if g != self.g:
+        if g is not None and g != self.g:
             self.g, self.since = g, now
         elif now - self.since > STALL_S:
-            raise CouldNotRun(f"the level stood at GameTime {g} for {STALL_S} s while it ran")
+            raise CouldNotRun(f"the level stood at GameTime {self.g} for {STALL_S} s while it ran"
+                              + ("" if g is not None else ", its last peek unanswered"))
 
 
 # ---- the fixtures and the GameTimes ---------------------------------------------------------
@@ -998,7 +1016,7 @@ def twin(w, log, fix):
             raise CouldNotRun("the twin: Impure options has no inert labels to sample")
         width, height = gui["surface"]
         rc, o = tacli("peek", w.name, "*0x511DE8+0x1422b", "*0x511DE8+0x1422f",
-                      "--json", timeout=ACK_S)
+                      "--json", "--timeout", ACK_S, timeout=2 * ACK_S)
         if rc:
             raise CouldNotRun(f"the twin: map dimensions: {last(o)}")
         map_width, map_height = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
@@ -1014,7 +1032,7 @@ def twin(w, log, fix):
             x, y = points[i % len(points)]
             keys(w, f"pmove:{x},{y}")
             rc, o = tacli("peek", w.name, "*0x511DE8+0x555", "*0x511DE8+0x559",
-                          "*0x511DE8+0x565", "--json", timeout=ACK_S)
+                          "*0x511DE8+0x565", "--json", "--timeout", ACK_S, timeout=2 * ACK_S)
             if rc:
                 raise CouldNotRun(f"the twin: native mouse echo: {last(o)}")
             event = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
@@ -1462,7 +1480,7 @@ TERRAIN = "The terrain for the selected map does not exist."    # the Start's ow
 
 
 def peek(w, spec):
-    rc, o = tacli("peek", w.name, spec, "--json", timeout=ACK_S)
+    rc, o = tacli("peek", w.name, spec, "--json", "--timeout", ACK_S, timeout=2 * ACK_S)
     if rc:
         raise CouldNotRun(f"tacli peek {spec}: {last(o)}")
     return int(str(json.loads(o[o.index("{"):])["peeks"][0]["value"]).split()[0])
@@ -2304,8 +2322,10 @@ def checks(fx):
         res.later(puppet_counts, proc, rec, d)
     for proc in ("R", "Q"):
         if ran.get(proc) == "ran":
+            # Q's one seek is a fresh process's: a seek asked for before a playing's first step
+            # waits for it (tagpu_replay.c, seat), which reads the root's first iteration
             res.later(work_check, f"{proc}: the seeks' work", out / proc / "tagpu.log", rec, 0,
-                      False)
+                      False, proc == "Q")
     if ran.get("R") == "ran":
         for T in Ts[1:]:
             line = fx["rt"].get(f"rt{T}", "")
@@ -2334,7 +2354,8 @@ def tarec_verdict(label, *args):
 WORK_RX = re.compile(
     r"replay: (?P<name>[^:]+): the seek to (?P<T>\d+)'s work: (?P<I>\d+) iterations read to "
     r"GameTime (?P<R>\d+) from (?P<kind>the snapshot|the first iteration) at GameTime "
-    r"(?P<S>\d+); the image: (?P<N>\d+) units live, (?P<M>\d+) made, (?P<F>\d+) refused, "
+    r"(?P<S>\d+); the blocks: (?P<B>\d+) decoded \((?P<Bb>\d+) for the base\), (?P<Bp>\d+) bytes "
+    r"read, (?P<Bu>\d+) unpacked; the image: (?P<N>\d+) units live, (?P<M>\d+) made, (?P<F>\d+) refused, "
     r"(?P<K>\d+) killed, (?P<A>\d+) left alive; cpu (?P<C>\d+) ms \(user (?P<U>\d+), kernel "
     r"(?P<Kt>\d+)\) of the game thread, (?P<W>\d+) ms wall")
 
@@ -2345,7 +2366,7 @@ def work_lines(text):
             for m in WORK_RX.finditer(text)]
 
 
-def work_verdict(w, rec, timeline, takeover=False, cpu_ms=None):
+def work_verdict(w, rec, timeline, takeover=False, fresh=False):
     """What one seek's work line `w` breaks, [] for nothing; tarec.Unreadable when the file says
     nothing of its target.
     W1, exact: the reader built from where the file says it must (tarec.seek_start, the reader's
@@ -2353,10 +2374,14 @@ def work_verdict(w, rec, timeline, takeover=False, cpu_ms=None):
     R - S + 1.
     W2, exact: every unit of the image made or refused (M + F == N: one create each), none left
     alive by the kills (A == 0), and none refused by a takeover, a return to now or a fork.
-    W3, with `cpu_ms`: the game thread's CPU time within it. CPU time is not stretched by other
-    games taking turns on the core, but it is by contention for the core itself: an SMT sibling
-    made fixed work cost x1.5 (tagpu_replay.c, THE SEEK'S WORK), and the all-core clock lowers it
-    further; the bound allows for both and is the gate's last timing-dependent check."""
+    W3, exact: the reader decoded the blocks the file holds from there to its target, each once --
+    their count, their bytes in the file and unpacked (tarec.seek_blocks) -- with its base's
+    block only from a snapshot; with `fresh`, the first seek of a playing in a fresh process past
+    its first step, the base is the file's to say too, not the line's (tarec.seek_blocks, base
+    None). The seek's cost is its work: W1 to W3 bound every quantity of it
+    that a change could multiply, and none is a time, so no load moves a verdict. The game
+    thread's CPU time is reported only (tagpu_replay.c, THE SEEK'S WORK): it grows with
+    contention for the core."""
     S, snap = tarec.seek_start(rec, timeline, w["R"], SEEK_LEAD)
     kind = "the snapshot" if snap else "the first iteration"
     bad = []
@@ -2370,23 +2395,32 @@ def work_verdict(w, rec, timeline, takeover=False, cpu_ms=None):
         bad.append(f"W2: {w['A']} units left alive by the kills")
     if takeover and w["F"]:
         bad.append(f"W2: {w['F']} creates refused")
-    if cpu_ms is not None and w["C"] > cpu_ms:
-        bad.append(f"W3: {w['C']} ms of the game thread's CPU, the bound {cpu_ms}")
+    if w["Bb"] and not snap:
+        bad.append("W3: a base read for a seek from the first iteration")
+    n, packed, raw, base = tarec.seek_blocks(rec, timeline, w["R"], SEEK_LEAD,
+                                             None if fresh else w["Bb"])
+    if fresh and w["Bb"] != base:
+        bad.append(f"W3: {w['Bb']} blocks for the base where a fresh process reads {base}")
+    if (w["B"], w["Bp"], w["Bu"]) != (n, packed, raw):
+        bad.append(f"W3: {w['B']} blocks decoded, {w['Bp']} bytes read and {w['Bu']} unpacked "
+                   f"from {w['S']} to {w['R']}, where the file holds {n}, {packed} and {raw}")
     return bad
 
 
 def work_summary(w):
     return (f"{w['T']} from {'snapshot' if w['kind'] == 'the snapshot' else 'iteration'} "
-            f"{w['S']}, {w['I']} read, {w['N']} units, cpu {w['C']} ms ({w['W']} wall)")
+            f"{w['S']}, {w['I']} read, {w['B']} blocks, {w['N']} units, cpu {w['C']} ms "
+            f"({w['W']} wall)")
 
 
-def work_check(label, log_path, rec, timeline, takeover):
-    """[(label, verdict, detail)]: W1 and W2 of every seek's work line in a lane's log, each
-    against the file and timeline it read; could not run when the log holds none."""
+def work_check(label, log_path, rec, timeline, takeover, fresh=False):
+    """[(label, verdict, detail)]: W1 to W3 of every seek's work line in a lane's log, each
+    against the file and timeline it read; with `fresh`, the log's first seek is a fresh
+    process's (work_verdict); could not run when the log holds none."""
     try:
         lines = work_lines(Path(log_path).read_text(errors="replace"))
-        bad = [f"the seek to {w['T']}: {b}" for w in lines
-               for b in work_verdict(w, rec, timeline, takeover)]
+        bad = [f"the seek to {w['T']}: {b}" for i, w in enumerate(lines)
+               for b in work_verdict(w, rec, timeline, takeover, fresh and not i)]
     except (OSError, tarec.Unreadable) as e:
         return [(label, UNRUN, str(e))]
     if not lines:
@@ -2505,16 +2539,14 @@ def tk_checks(fx):
             if work is None:
                 return [("takeover line", UNRUN, f"no work line for the seek to {T} in K's log")]
             try:
-                bad = work_verdict(work, fx["rec"], 0, True, tk.get("cpu_ms"))
+                bad = work_verdict(work, fx["rec"], 0, True)
             except tarec.Unreadable as e:
                 return [("takeover line", UNRUN, str(e))]
             if k["units_refused"]:
                 bad.append(f"{k['units_refused']} creates refused")
             return [("takeover line", FAIL if bad else PASS,
                      "; ".join(bad) or
-                     f"cpu {work['C']} ms of the game thread"
-                     + (f" (bound {tk['cpu_ms']})" if tk.get("cpu_ms") else "")
-                     + f", {k['ms']} ms wall (passability {k['passability_ms']}, AI "
+                     f"cpu {work['C']} ms of the game thread, {k['ms']} ms wall (passability {k['passability_ms']}, AI "
                      f"{k['ai_ms']}); {work_summary(work)}; the fork's first iteration "
                      f"{first.group(1) + ' us' if first else 'not in the log'}, its segment "
                      f"{int(size.group(2)) - int(size.group(1)) if size else '?'} bytes; "
@@ -2551,7 +2583,7 @@ def tk_checks(fx):
                 return [("takeover ai", UNRUN, str(e))]
         res.later(ai_check)
     if ran.get("F") == "ran":
-        res.later(work_check, "F: the seeks' work", out / "F" / "tagpu.log", path, tl, False)
+        res.later(work_check, "F: the seeks' work", out / "F" / "tagpu.log", path, tl, False, True)
     if "fork" in want:
         compare_fork = res.start(tarec_run, "compare-fork", path, tl)
         segments = res.start(tarec_run, "segments", path)
@@ -3660,6 +3692,9 @@ def main(argv=None):
     if a.cmd not in ("features", "list") and not (a.cmd == "landing" and a.check):
         import devpy
         devpy.ensure()
+    # every command that plays games waits for the machine's run lock (tools/runlock.py)
+    if a.cmd not in ("features", "list") and not (a.cmd == "landing" and a.check):
+        runlock.hold(TREE, "tareplay " + " ".join(sys.argv[1:] if argv is None else argv))
     rc = 2                              # a CouldNotRun or anything unforeseen: it could not run
     try:
         rc = a.func(a)
