@@ -2743,7 +2743,10 @@ def _peek_rows(text, specs):
     while the answer is incomplete: the n-th line for a spec answers its n-th asking, as the DLL
     evaluates a trigger's lines in order (tagpu_peek_frame). A peek the game had not answered
     when its caller gave up leaves its request behind, and its lines can land after the next
-    peek's cursor: a line for a spec not asked for is never this peek's answer."""
+    peek's cursor: a line for a spec not asked for is never this peek's answer. A late line for a
+    spec this peek also asks for IS taken: the one peek the harness leaves unanswered is Stall's
+    GameTime read (tools/replay/tareplay.py), where a stale GameTime counts as one more interval
+    without progress and cannot decide a result."""
     want = {}
     for s in specs:
         want[s] = want.get(s, 0) + 1
