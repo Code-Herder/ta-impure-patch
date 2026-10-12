@@ -471,10 +471,12 @@ enum RecEnd {
    and never ended; each block's bytes are the frame's next chunk, flushed at the block's end, so a
    block decodes only after every chunk of its run before it, through one decoder, as its frames
    do. A sectioned block is always packed: its bytes are part of the frame's history whatever
-   their size. A CHAIN is a key snapshot -- packed alone, no flag -- and the snapshots after it in
-   its segment, each RBF_CHAINED: one zstd frame whose prefix (raw content, no dictionary ID) is
-   the records of the RB_SNAPSHOT before it in the segment. At most REC_CHAIN_MAX snapshots follow
-   a key, so a seek unpacks at most REC_CHAIN_MAX + 1. */
+   their size. A CHAIN is a key snapshot -- packed alone or stored, without RBF_CHAINED -- and the
+   snapshots after it in its segment, each RBF_CHAINED: one zstd frame whose prefix (raw content,
+   no dictionary ID) is the records of the RB_SNAPSHOT before it in the segment. At most
+   REC_CHAIN_MAX snapshots follow a key, so a seek unpacks at most REC_CHAIN_MAX + 1. The cost: a
+   snapshot that cannot be read refuses every seek that starts from it or from a later link of
+   its chain, up to the next key, and a seek does not fall back to an earlier snapshot. */
 #define REC_MAGIC        "IMPREC\r\n"          /* 8 bytes, no NUL                                 */
 #define REC_BLOCK_MAGIC  0x4B4C4249u           /* "IBLK"                                          */
 

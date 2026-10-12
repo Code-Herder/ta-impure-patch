@@ -27,8 +27,9 @@
                                          reads as an engine address                             */
 #define RECC_WRECKS_MAX  65536u       /* the wreck pool's records at most: past it, records     */
 
-/* reccodec_stream_block's outcomes */
-enum { RECC_SECTIONS = 1, RECC_DECLINED, RECC_MISMATCH };
+/* reccodec_stream_block's outcomes: RECC_NOMEM, zstd out of memory for the run, is counted
+   among the declined blocks, being no fault of the codec's */
+enum { RECC_SECTIONS = 1, RECC_DECLINED, RECC_MISMATCH, RECC_NOMEM };
 
 /* A segment's codec constants, parsed from its header's RT_SLOTS, RT_PROJECTILES, RT_FEATURES,
    RT_CODEC, RT_PHYSICS and RT_AIR. `usable` is set when the header has both RT_CODEC and
@@ -144,6 +145,7 @@ typedef struct RecStream {
     int        chain;                 /* prev holds a snapshot of this segment                   */
     unsigned   links;                 /* the chained snapshots since the last key                */
     unsigned   sectioned, declined, mismatched;
+    unsigned   nomem;                 /* of the declined, those RECC_NOMEM wrote as records      */
     unsigned   snapshots, keys;
     /* A TEST LEVER, 0 from reccodec_stream_begin; the writer sets it from the recorder's
        tagpu_rec.decline (tagpu_recorder.h, tagpu_rec_lever_init). Nonzero, the stream's blocks

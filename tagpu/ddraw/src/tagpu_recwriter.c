@@ -913,9 +913,12 @@ static void stream_block(Writer* w, unsigned first, unsigned last, const unsigne
         if (k == RECC_MISMATCH && w->codec.mismatched <= 4)
             tagpu_logf("recorder: writer: the codec did not decode back at GameTime %u-%u: "
                        "the block is written as records (a codec bug)", first, last);
-        else if (k == RECC_DECLINED && w->codec.declined <= 4)
+        else if (k == RECC_DECLINED && w->codec.declined - w->codec.nomem <= 4)
             tagpu_logf("recorder: writer: the codec declined GameTime %u-%u: the block is "
                        "written as records", first, last);
+        else if (k == RECC_NOMEM && w->codec.nomem <= 4)
+            tagpu_logf("recorder: writer: no memory to pack GameTime %u-%u in its run: the "
+                       "block is written as records", first, last);
     } else if (w->cctx && reccodec_pack(w->cctx, &w->pk, p, n)) {
         flags = 0;
         body = w->pk.p;

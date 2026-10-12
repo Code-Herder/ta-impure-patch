@@ -2956,7 +2956,8 @@ void reccodec_stream_end(RecStream* s)
 
 /* The container `sec` as the run's next chunk in `pk`, flushed so it ends at a zstd block's end;
    at a reset the run's context first restarts with the run's parameters (tagpu_recfmt.h, THE RUN
-   AND THE CHAIN). 1, or 0 when zstd failed. */
+   AND THE CHAIN). RECC_SECTIONS; RECC_NOMEM when zstd or `pk` had no memory; RECC_MISMATCH when
+   zstd failed otherwise. */
 static int run_pack(RecStream* s, int reset)
 {
     ZSTD_CCtx* c = (ZSTD_CCtx*)s->zrun;
@@ -2970,10 +2971,10 @@ static int run_pack(RecStream* s, int reset)
          ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_chainLog, RECC_CHAIN_LOG)) ||
          ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_contentSizeFlag, 0)) ||
          ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_checksumFlag, 0))))
-        return 0;
+        return RECC_MISMATCH;
     s->pk.n = 0;
     s->pk.oom = 0;
-    if (!rb_grow(&s->pk, ZSTD_compressBound(s->sec.n))) return 0;
+    if (!rb_grow(&s->pk, ZSTD_compressBound(s->sec.n))) return RECC_NOMEM;
     in.src = s->sec.p;
     in.size = s->sec.n;
     in.pos = 0;
@@ -2984,9 +2985,11 @@ static int run_pack(RecStream* s, int reset)
         out.pos = s->pk.n;
         left = ZSTD_compressStream2(c, &out, &in, ZSTD_e_flush);
         s->pk.n = out.pos;
-        if (ZSTD_isError(left)) return 0;
-        if (!left) return 1;
-        if (!rb_grow(&s->pk, left)) return 0;
+        if (ZSTD_isError(left))
+            return ZSTD_getErrorCode(left) == ZSTD_error_memory_allocation ? RECC_NOMEM
+                                                                          : RECC_MISMATCH;
+        if (!left) return RECC_SECTIONS;
+        if (!rb_grow(&s->pk, left)) return RECC_NOMEM;
     }
 }
 
@@ -3047,11 +3050,13 @@ int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, 
     if (k == RECC_SECTIONS) {
         s->back.n = 0;
         s->back.oom = 0;
-        if (!run_pack(s, reset) || !rb_grow(&s->back, s->sec.n + 1) ||
-            !reccodec_run_unpack(s->drun, s->back.p, s->sec.n, s->pk.p, s->pk.n, reset) ||
+        k = run_pack(s, reset);
+        if (k == RECC_SECTIONS && !rb_grow(&s->back, s->sec.n + 1)) k = RECC_NOMEM;
+        if (k == RECC_SECTIONS &&
+            (!reccodec_run_unpack(s->drun, s->back.p, s->sec.n, s->pk.p, s->pk.n, reset) ||
             memcmp(s->back.p, s->sec.p, s->sec.n) ||
             !reccodec_decode(s->chk, s->back.p, s->sec.n, &s->out, NULL, 0) || s->out.n != n ||
-            memcmp(s->out.p, payload, n))
+            memcmp(s->out.p, payload, n)))
             k = RECC_MISMATCH;
         if (k == RECC_SECTIONS) {
             *flags = RBF_SECTIONS | (reset ? RBF_FRAME_RESET : 0);
@@ -3064,6 +3069,7 @@ int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, 
     }
     if (k == RECC_MISMATCH) s->mismatched++;
     else s->declined++;
+    if (k == RECC_NOMEM) s->nomem++;
     reccodec_invalidate(s->enc);
     reccodec_invalidate(s->chk);
     s->reset = 1;

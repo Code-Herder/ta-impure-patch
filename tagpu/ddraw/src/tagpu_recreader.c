@@ -301,7 +301,7 @@ static int sections_body(RecReader* r, const RecBlock* b, const unsigned char* s
 
 /* The payload of the block whose header block_head has just read: checked, unpacked and, when
    sectioned, decoded into raw. 1, or -1 (why). */
-static int block_body(RecReader* r, const RecBlock* b, char* why, unsigned cap)
+static int block_take(RecReader* r, const RecBlock* b, char* why, unsigned cap)
 {
     if (b->packed > r->pkcap) {
         unsigned char* n = (unsigned char*)realloc(r->pk, b->packed);
@@ -325,8 +325,9 @@ static int block_body(RecReader* r, const RecBlock* b, char* why, unsigned cap)
            run's decoder has unpacked exactly the chunks of the blocks the codec decoded since its
            restart, because both restart at the same RBF_FRAME_RESET block, both advance only on a
            block both decoded, and every failure of either invalidates the codec -- as a seek, a
-           crossing, a records block and a snapshot do. So sections_ready's test of the codec is
-           the run's too, and a chunk is unpacked only where its run's chunks before it were. */
+           crossing, a records block, a snapshot and every block block_body refuses do. So
+           sections_ready's test of the codec is the run's too, and a chunk is unpacked only where
+           its run's chunks before it were. */
         if (sections_ready(r, b, why, cap) < 0) return -1;
         if ((size_t)b->raw + 1 > r->seccap) {
             unsigned char* n = (unsigned char*)realloc(r->sec, (size_t)b->raw + 1);
@@ -343,7 +344,6 @@ static int block_body(RecReader* r, const RecBlock* b, char* why, unsigned cap)
         }
         if (!reccodec_run_unpack(r->rdctx, r->sec, b->raw, r->pk, b->packed,
                                  (b->flags & RBF_FRAME_RESET) != 0)) {
-            reccodec_invalidate(r->codec);
             snprintf(why, cap, "a block at byte %llu that is not its run's next chunk of %u bytes",
                      r->off, b->raw);
             return -1;
@@ -377,6 +377,16 @@ static int block_body(RecReader* r, const RecBlock* b, char* why, unsigned cap)
         reccodec_invalidate(r->codec);
     r->off += sizeof *b + b->packed;
     return 1;
+}
+
+/* block_take, and on a refusal the codec left invalid: the block was not decoded, whatever the
+   reason -- its bytes, its run, memory -- so neither the frames nor the run's decoder, which has
+   not unpacked its chunk, may be continued after it (ONE VALIDITY above). */
+static int block_body(RecReader* r, const RecBlock* b, char* why, unsigned cap)
+{
+    if (block_take(r, b, why, cap) > 0) return 1;
+    if (r->codec) reccodec_invalidate(r->codec);
+    return -1;
 }
 
 /* 1 a block, its payload in raw; 0 the file's end; -1 a block that cannot be read (why) */
