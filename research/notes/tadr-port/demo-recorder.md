@@ -216,7 +216,11 @@ other players; a multiplayer game is rewound from its finished recording.
   exact again at every refresh (every 300 ticks), which is where a takeover starts; each row of
   that table is a loosening and a decision of its own. Its rows hold the weapon slots' aim and
   target state, the unit's resource ledger's accumulators and the main order list's handler
-  state, none of which a viewer is shown. These targets rest on an estimate, not a measurement
+  state, none of which a viewer is shown. From format 15 a skirmish stream also leaves out the
+  nano sprays a unit's spray session predicts (its spray of 1, 2 or 4 ticks before, or that one
+  moved with the unit), which every reader makes again with the same bytes: a viewer sees every
+  spray at its point in its tick, only their order inside the tick differing (an owner decision
+  of 2026-10-11). These targets rest on an estimate, not a measurement
   ([open decisions](#open-decisions-and-evidence-needed)). So far an eight-minute four-AI game
   measured about 5–7 MB per hour, and a 1,432-unit battle would reach 160–640 MB if sustained for
   an hour ([evidence](demo-recorder-state-evidence.md#4-size-estimate)). A real hour-long four-player game with AI and structures is measured before

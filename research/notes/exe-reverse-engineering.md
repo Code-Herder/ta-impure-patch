@@ -1090,9 +1090,21 @@ nonzero (`0x472112..0x47211D`) or when the pool `0x470EB0(0x51E610, 0x4C)` is em
 two boxes to `obj+0x1C` and `obj+0x34`, sets its end tick to GameTime + 1 and spawns at once
 (`0x473D50`, called at `0x473D39`). The spawn draws the CRT `rand 0x4E4870`, never the sim RNG
 `0x4B6C30`, so an emission changes no simulation state. `0x4732E0` appends the object to the
-layer's vector at `[main+0x38D77] + layer·16`; a layer already holding more than 400 (`0x190`)
-entries destroys its oldest first. Neither entry has an absolute reference; the 17 callers, all
-passing layer 6, are the handlers below.
+layer's vector at `[main+0x38D77] + layer·16` (`0x4721EA`, reverse `0x47231A`); before it, an
+emitter whose layer already holds more than its cap (`0x190` = 400 in stock, the operand the raised
+limits rewrite: *The raised effect pools*) destroys the vector's front object through its vtable
+slot 0 and shifts the rest down by one (the trim `0x47219F..0x4721DA`, reverse
+`0x4722CF..0x47230A`, DISASSEMBLED 2026-10-12). The particle itself comes from the pool
+`0x51E610`, which every live particle emitter shares (1000 objects of `0x4C` in stock, built by
+`0x470A90(1000, 0x4C)` at `0x471C80..0x471C8C`; 204 800 under the raised limits): its alloc
+`0x470EB0` returns NULL once used reaches capacity (`0x470EB9..0x470EBB`), and on NULL the emitter
+makes no particle (`0x47213E..0x472163`, the skip to `0x4721EF`; DISASSEMBLED 2026-10-12). So the
+order of the emissions of one step decides their order in the layer -- the order they are drawn
+in, and which is destroyed first -- and, when the pool runs out within the step, which emission
+makes no particle; nothing else. Both are what a recording's spray sessions change when they put
+the sprays they imply after their step's other events ([the lossy stream](#the-demo-recorders-lossy-stream-what-a-held-byte-meets-on-a-puppet-and-at-a-takeover-disassembled-2026-10-11)).
+Neither entry has an absolute reference; the 17 callers, all passing layer 6, are the handlers
+below.
 
 **Copied multiplayer spray bounds [DISASSEMBLED 2026-10-05].** The forward
 emitter reads its point argument at `0x4720D3`, expands its three coordinates on
@@ -3604,7 +3616,7 @@ fixture.
 
 ### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 14 carries a stream block's unit deltas as residuals against a prediction, the
+Recording format 15 carries a stream block's unit deltas as residuals against a prediction, the
 *unit frame* (`tagpu/ddraw/src/tagpu_reccodec.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the plan and its measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md)). Where a rule exists the prediction
@@ -3747,7 +3759,7 @@ non-zero pitch scale (none of the recordings had one); the steering term's hidde
 
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 14 carries a stream block's projectile records as the *pool frame*
+Recording format 15 carries a stream block's projectile records as the *pool frame*
 (`tagpu/ddraw/src/tagpu_reccodec.c`, THE POOL FRAME; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md#l2-the-pool-frame-measured)): the
@@ -3821,7 +3833,7 @@ largest residual column of the battle, 214 KiB of its 2.09 MiB.
 
 ### The demo recorder's record frames: the engine facts they predict from [DISASSEMBLED + MEASURED 2026-10-10]
 
-Recording format 14 makes the bodies of a stream block's cells, order lists, events and state
+Recording format 15 makes the bodies of a stream block's cells, order lists, events and state
 records from four *record frames* (`tagpu/ddraw/src/tagpu_recframe_cells.c`, `_orders.c`,
 `_events.c`, `_state.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
@@ -3895,7 +3907,9 @@ The table holds, in the unit record, the three weapon slots' target (`+0x0`, `+0
 (`+0xBC`..`+0xC8`, `+0xD4`..`+0xE0`; *The ledger*); in a main list node (`+0x5C`), the state
 `+0x05`, the wanted events `+0x06`, the deadline `+0x0A`, the leash `+0x2E`, p3 `+0x3E`, the fired
 events `+0x4E`, the owned object `+0x52` and the flags `+0x42` but `0x8`, `0x100`, `0x10000`,
-`0x40000`, `0x80000`, `0x200000` and `0x400000`. Each row cites its readers below. The filter's
+`0x40000`, `0x80000`, `0x200000` and `0x400000`. Each row cites its readers below. From format 15 on, a nano
+spray its unit's spray session predicts is left out and every reader makes it again after its
+iteration's events (`RK_SPRAY_SESSION`). The filter's
 correctness rests on these engine facts, from a census of the readers and writers of every field
 the plan would hold (2026-10-11; rel32 and stored-pointer scans of `.text`, each hit disassembled):
 
@@ -3947,6 +3961,17 @@ the plan would hold (2026-10-11; rel32 and stored-pointer scans of `.text`, each
   message's values whatever the image held. The flags' bits 2–3, which the builders read at
   `0x49CB7D`, `0x49CD38` and `0x49CF5C`, are written once at init (`0x49E094..0x49E09F`), and
   Impure's splices there take the index from the slot's address.
+- **A spray session's implied sprays are exact, and only their order moves.** An implied spray is
+  the unit's own spray of 1, 2 or 4 GameTimes before, byte for byte, or with its point moved by
+  exactly the unit's position change since (`+0x6A..+0x75`, never held), and the filter leaves a
+  spray out only when that prediction equals it, so a puppet calls the emitter `0x4720D0` or
+  `0x472200` with the recorded point, box and layer in the recorded step. What moves is the
+  spray's place among its step's events, after them, units ascending: an emission changes no
+  simulation state, and the order of a step's emissions decides only the particles' order in the
+  layer (the draw order and the order of the front-destroy past the layer's cap) and, when the
+  shared pool `0x51E610` runs out within the step, which emission makes no particle (*The nano
+  spray*, above). An owner decision of 2026-10-11 (OD5 of the plan); the owner confirmed on
+  2026-10-12 that it covers the pool.
 - **`0x408198` is AI code, not a handler.** `0x408100`, which reads the head node's `+0x42` bit
   `0x8` there (`0x408191..0x40819C`), is method 0 of the two-entry vtable `0x4FC9A8` {`0x408100`,
   `0x408600`}, stored by the AI object's constructor `0x408CB0` (`0x408D3D`) in one of its ten
