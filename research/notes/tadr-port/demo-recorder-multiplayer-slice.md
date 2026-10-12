@@ -116,7 +116,7 @@ A separate producer/writer-thread control copies and validates 15,000 alternatin
 
 ### Contribution file container
 
-The recorder writes format 15 and the readers take format 15 alone; a multiplayer header carries
+The recorder writes format 16 and the readers take format 16 alone; a multiplayer header carries
 no `RT_HOLD`, so its stream holds nothing, and a reader refuses one that does. `RT_MULTIPLAYER` carries the copied 112-byte roster in a mode-3 header; both writer and readers refuse a network mode without that roster or a roster in another mode. `RB_CONTRIBUTIONS` carries consecutive 16-byte application metadata plus exact source packets, with no ring padding. Its block timestamps are zero: packet metadata retains application/source clocks, and these blocks are not world seek snapshots. After game hand-over, proof-tail records use phase 3, zero application ordinal and zero application tick. They enter the persisted source ledgers without entering the world copy or extending application cuts.
 
 `tagpu_recmp_file.c` owns the attached journal and a retained channel reference. It is created before channel publication/consumption and transferred into `RecRing` before writer start. The game ends that context before its final ring publication. Ending a local save detaches the journal and publishes a distinct local-stop state; the file writer cannot take the channel consumer or stop game contributions in that state. Ending the channel first permits the sole receive consumer to transfer after journal drain. Context end is the producer's final access; the writer acquires it before freeing either the journal or the retained reference. No engine allocation or interface is kept alive by this context.
@@ -1514,6 +1514,18 @@ played by `tools/replay/recmp_play_test.py`:
   each anomaly kind: three lines per call site, the rest counted. No
   native sample reads a nonzero source slot, so the branch where the
   recorder's slot differs from the host's runs only through the same stub.
+
+**The script slice (M1).** A multiplayer recording's primary stream carries the recording
+machine's slice markers (`RK_EV_SLICE`, the [skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-16)),
+one before the slice of every unit whose COB had an engine start since the capture point, the
+puppets it ran included. A playing plans only the markers in the recording machine's own blocks
+(`s_mp.own`: each `mp_seats` actor whose origin is a local actor of the recording's roster) and
+counts the rest as remote; a remote owner's unit keeps its slice in the host's unit tick, as
+before. An own unit the step creates is made at its owner's CREATE_BEGIN, after the primary
+events and so after its marker: the marker leaves it waiting and its CREATE_END gives the slice
+(`mp_created` → `slice_created`). What M1 leaves: an own unit's starts the ledger orders --
+TargetCleared and the other owner-only named starts, applied after the primary events (*THE
+CLOCK*) -- still reach their first slice a tick late, as does every start on another owner's unit.
 
 ### The seek of a multiplayer recording
 

@@ -373,6 +373,13 @@ one shared hook through the fail-closed table, so a clash with another feature's
 function (B5's on `0x4861D0`, B6's on `0x490C40`) is refused at install and names both. New effects
 start through an engine root, never a direct call to a sink.
 
+**A script slice is an event when a start precedes it.** The unit tick's `DoScriptsNow(1)` is
+the only clock a COB thread has, so where the slice falls among the step's events decides when a
+start takes its first slice. The recorder writes `RK_EV_SLICE {ID}` just before the slice of any
+unit whose COB object had an engine start (`0x4B0B00` or `0x4B0940`) since the capture point, and
+a playing gives the slice at that marker instead of in the host's unit tick (*COB slices a playing
+gives one tick late*, below).
+
 Each simulation feature declares its **puppet disposition** (runs on puppets, owner-only, or
 independent) and names a **fixture** that exercises it. Owner-only must be enforced in code, since
 puppets run COB (`0x48AD82..0x48ADEB`).
@@ -808,6 +815,14 @@ cannot see an address recorded as a value; the scan looks for one instead.
   cases report both pairs. This is a count tolerance based on at most one flare
   per parent, not proof identifying the individual missing calls; see
   [the measured case](demo-recorder-s4-rewind.html#the-naval-flare-count).
+- **The script slice's count root** `0x48ADEB`, counted by `tagpu_slice_give` with aux 0 in the
+  unit tick, 1 at the recorded marker, 2 at a playing's step's end: compared per aux, exactly, like
+  every root. A live game's aux 1 and 2 are 0; a playing's aux 2 is a debt its marker did not pay.
+- **`--cob-exact`** (a fixture's `"cob": "exact"`): the COB thread allocation's VM children, the
+  START (`0x4B18C0`) and CALL (`0x4B192D`) callers keyed by script name, compare exactly instead of
+  within the band. It runs only on the playing's lane against the live one (not across a rewind,
+  whose VM children `--rewind` accepts). The fixtures that carry COB set it: `slice-walkers`,
+  `battle`, `tenseat`.
 - **No COB engine write on a puppet**: SET's ACTIVATION and ARMORED (`0x48B090`, returning to
   `0x480B57`, `0x480BF1`), SET's YARD_OPEN (`0x47DAC0`, `0x480BB3`), ATTACH and DROP (`0x48AAC0`,
   `0x4813AB`, `0x481427`), counted on a puppet's unit outside the replay's own calls; the first 16
@@ -946,7 +961,8 @@ region with whether its fixtures reach it.
 | 2026-10-09 | **No check of the gate is decided by the wall clock** (*Ticks, not polls*): a test launch's hold starts its level held (its pause bit and one-tick first batch written from `tagpu_replay.c`, a `presentation` file, on test launches only: a loosening the owner approved); a seek's cost is its game thread's CPU time, bounded by 4,000 ms with SMT and clock contention named as the residual; the fixture worlds change once, deterministically, as scenarios now land at GameTime 1; the compat suite's soaks and `--watch` count game ticks or presented frames (SECONDS × 30) with a 120 s stall bound. |
 | 2026-10-11 | **A recording does not keep the order of the nano sprays inside one iteration** (OD5 of the lossy plan, a loosening the owner approved): a spray a unit's spray session implies is left out of the stream and made again by every reader after the iteration's events, units ascending. Every spray stays exact: the same ID, point, box and layer in the same iteration, the point the unit's own earlier spray's, moved by exactly the unit's position change when it follows the unit. Why the order can go: the emitters `0x4720D0`/`0x472200` change no simulation state and draw only the C runtime's rand, which a playing does not reproduce, and the order of a step's emissions decides only their particles' order in the layer -- the draw order and which one a full layer destroys first -- and, when the particle pool `0x51E610` that every emitter shares (1000 objects in stock) runs out within the step, which emission makes no particle (the engine map's *The nano spray*); the owner confirmed OD5 covers it, 2026-10-12. `tarec lossy-check` compares each iteration's sprays as a multiset and each unit's in order. Rejected: zeroing the point, which the game shows (the offline plan's step, −3.9 MB on a stream whose cells were already held, against −2.72 MB for the exact sessions over the unit and order rows). |
 | 2026-10-11 | **A takeover's AIs read the recording's contacts at T** (O14 for takeovers): when P is the recording's viewed record, the takeover restores `+0x110` bits 8–10 from the recording after its radar pass, as the seek does, so the fork's first acquisition scans read the contacts the recording held at T, as the recording's AIs read them until its next pass; a multiplayer recording's takeover keeps its own pass's bits (below). Rejected: masking bits 8–10 in `fork_view` for every fork, a loosening of D2 (d) that would leave the fork's AIs reading a picture the parent never held; and steering the harness off the ticks after a scripted step, which hides the gap. |
-| 2026-10-12 | **A5 and the in-game create lag are fixed by construction, not accepted** (the owner, after the level-start lag was traced to the same one-slice COB lag): a recorded slice marker, in order among the step's creates and starts, and the replay giving each marked unit its slice there, a format bump, in a coming landing. This supersedes A5's acceptance in the 2026-10-01 row, which stays as history. |
+| 2026-10-12 | **A5 and the in-game create lag are fixed by construction, not accepted** (the owner, after the level-start lag was traced to the same one-slice COB lag): a recorded slice marker, in order among the step's creates and starts, and the replay giving each marked unit its slice there, a format bump (format 16, *COB slices a playing gives one tick late*). This supersedes A5's acceptance in the 2026-10-01 row, which stays as history. |
+| 2026-10-12 | **The slice marker's scope and its check** (the owner): in a multiplayer recording the marker covers the recording machine's own units only (M1: the starts the ledger orders keep their lag, and other owners' units are unchanged); and **`--cob-exact`** -- the VM's START and CALL children of `0x4B08C0` compared exactly, with no band -- runs on every gate fixture that carries COB, `slice-walkers`, `battle` and `tenseat`. Anything it catches is a replay gap to close by construction, never a band, an exclusion or an expected-absent row. |
 | 2026-10-12 | **A failure only under load is a bug in the check** (the owner's rule): a peek the running game has not answered is no progress, so `STALL_S` is the one bound on a running level. **Approved by the owner (2026-10-12):** the seek's W3 is an exact count of the blocks the reader decoded against the file's own, with the game thread's CPU time reported only and the gap that leaves accepted (*A seek's work, not its time*); and bits 1 and 2 of the pause word `main+0x38A51`, the pacing gate's lag flag and its live speed below the chosen one, are left (`replay-globals.tsv`, `pacingbits`, a `leave` row: bit 2 has no reader, bit 1 only the corner icon and the turbo). |
 
 The owner approved one additional UI-only count exception on 2026-10-05: the native
@@ -1039,25 +1055,49 @@ phase the recording's feature roots go in after the host's whole projectile call
 projectile can still meet a tree an earlier impact felled on the recording machine
 ([skirmish slice](demo-recorder-skirmish-slice.html)).
 
-**COB slices a playing gives one tick late** (open). The unit tick's `DoScriptsNow(1)` at
-`0x48ADEB` is the only clock a COB thread has, so a unit whose slice falls on the other side of
-the unit tick on a puppet runs its scripts one tick off, and a looping script such as a walker's
-`MotionControl` stays re-phased for the rest of the unit's life. The level's own units are made
-before the host's first unit tick, which closes the level-start case (the
-[engine map](../exe-reverse-engineering.md), *COB on a puppet*: tenseat's walk/walklegs/stand
-counts reproduced call for call, MEASURED 2026-10-12). Open, of the same class, the first two with
-their by-construction fix chosen (decision 2026-10-12) for a coming landing, not yet landed:
+**COB slices a playing gives one tick late** (closed for A5 and in-game creates by the slice
+marker, format 16). The unit tick's `DoScriptsNow(1)` at `0x48ADEB` is the only clock a COB thread
+has, so a unit whose slice falls on the other side of the unit tick on a puppet runs its scripts
+one tick off, and a looping script such as a walker's `MotionControl` stays re-phased for the rest
+of the unit's life. The level's own units are made before the host's first unit tick, which closes
+the level-start case (the [engine map](../exe-reverse-engineering.md), *COB on a puppet*: tenseat's
+walk/walklegs/stand counts reproduced call for call, MEASURED 2026-10-12). **The slice marker**
+closes two more: the recorder writes `RK_EV_SLICE` before the slice of a unit whose COB had an
+engine start since the capture point, and a playing skips that unit's slice in the host's unit tick
+and gives it at the marker, after the recorded events that preceded it -- a unit created during
+play in a later slot of a block not yet finished (its Create start), and AutoAim's starts (A5:
+TargetCleared, the aim script, FirePrimary, RockUnit), all made in the unit's turn before its
+slice. Why every start a slice can depend on is seen: outside a slice a COB object's threads are
+made only through `0x4B0B00` and `0x4B0940` (the engine map, *The COB module's entries*). The
+playing's bookkeeping (`tagpu_replay.c`, THE SCRIPT SLICES) gives each owed slice once: at its
+marker, at a multiplayer own create's CREATE_END, or at the step's end, counted and noted; a create
+or a death in the slot voids the debt.
 
-- **A unit created during play** in a later slot of a block the unit tick has not finished gets
-  its slice in that tick on the recording machine and not on a puppet [INFERRED].
-- **AutoAim's start (A5)** runs before the unit's slice on the recording machine and after the
-  host's unit tick on a puppet. The 2026-10-01 acceptance rested on "counts near a window's ends
-  move by a few"; by the mechanism measured here one late start can flip one `MotionControl`
-  decision and re-phase the loop for the rest of the unit's life [INFERRED: tenseat had no
-  aiming], so it does not hold.
+Not closed by the marker:
+
 - **The walk class's run-now pass** can run a start the AI made after the unit tick a tick early,
   the COB side of *Events outside a deferred bracket carry no phase*
   ([skirmish slice](demo-recorder-skirmish-slice.md)).
+- **A seek or a round trip** starts COB from Create: a rebuilt unit's threads are not the ones it
+  had.
+- **The walk class after an unload (A6)**, unchanged.
+- **Mid-tick reads.** A slice reads unit and world fields (GET, the `+0xFA`/`+0xFB` countdowns).
+  The live slice read the tick as far as the unit's turn; a host-tick slice reads the capture
+  image plus the host's tick so far, a deferred one that plus the events before its marker
+  [INFERRED: not seen].
+- **A unit dying before its turn** in the same tick, only through an earlier turn's immediate
+  kill [INFERRED: a reclaim of a live unit]: live it gets no slice, a puppet gives it one in the
+  host's tick.
+- **A start made inside a slice** by a COB SET a puppet replays as an event (`RK_EV_STATE` →
+  Activate): live the new thread may run in the same slice when its record comes later
+  [INFERRED: the runner's record order]; on a puppet it runs at the next slice.
+- **Killed's body.** Live, `Send_UnitDeath`'s query runs Killed at `dt` 0 (`0x4865C3` →
+  `0x4B0C4D`); on a puppet the destructor only starts it (`0x486877` → `0x4B0B0D`) and deletes the
+  object, so the body never runs: `replay-absent.tsv`'s `Killed same` row covers the start, and a
+  Killed with START or CALL children would differ under `--cob-exact`.
+- **Multiplayer**: markers cover the recording machine's own units (M1); starts the ledger orders
+  keep their lag, and another owner's units are unchanged
+  ([multiplayer slice](demo-recorder-multiplayer-slice.md)).
 
 Gaps stated, not closed: in a multiplayer recording, getter 75 per seat reproduces the recording
 machine's view, so other players' owner-only indicators, which that machine never showed, are
