@@ -62,7 +62,7 @@
                                     state)
      codectest sin                  the sine table, for codectest.py's check against its formula
 
-   IN is a recording of format 16, or, for transcode and lossy, one of format 12 or later with no
+   IN is a recording of format 17, or, for transcode and lossy, one of format 12 or later with no
    sectioned block, which they write as the current format, the header's other entries kept. Exit
    0 when every check holds, 1 when one fails, 2 when a file cannot be read. The codec is included
    rather than linked: the fuzz copies a decoder's state, which the codec's interface keeps opaque;
@@ -76,6 +76,7 @@
 #include "../src/tagpu_reccodec.c"
 #include "tagpu_reclossy.h"
 #include "tagpu_rechold.h"
+#include "tagpu_contest.h"
 #ifdef _WIN32
 #include "tagpu_recreader.h"
 #include "tagpu_log.h"
@@ -504,7 +505,8 @@ static void tlv_put(RecBytes* b, unsigned tag, const void* p, unsigned n)
     rb_put(b, zero, ((n + 3) & ~3u) - n);
 }
 
-/* RT_HOLD's bytes: `masks` the build's writer's -- its hold table and its sprays as sessions --
+/* RT_HOLD's bytes: `masks` the build's writer's -- its hold table and the flags every skirmish
+   recording carries, its cells held and its sprays as sessions --
    else a table that holds nothing */
 static void hold_bytes(unsigned char* hold, int masks)
 {
@@ -512,7 +514,7 @@ static void hold_bytes(unsigned char* hold, int masks)
     memset(hold, 0, REC_HOLD_BYTES);
     put32(hold, REC_REFRESH_TICKS);
     if (!masks) return;
-    put32(hold + 4, RECL_SPRAYS);
+    put32(hold + 4, REC_SKIRMISH_HOLDS);
     for (i = 0; i < 32; i++) {
         const char* x = TAGPU_REPLAY_HOLD_SHA256 + 2 * i;
         unsigned hi = x[0] <= '9' ? (unsigned)(x[0] - '0') : (unsigned)(x[0] - 'a' + 10);
@@ -710,13 +712,16 @@ static int cmd_decode(const char* in, const char* outp)
 #define LOSSY_STREAM_TICKS   30           /* SNAPSHOT_TICKS                                     */
 #define LOSSY_SNAPSHOT_TICKS 1800
 
-/* the writer's exact copy of the units and the lists, built from the exact records as its
-   apply builds it */
+/* the writer's exact copy of the units, the lists and the grid, built from the exact records as
+   its apply builds it: the grid from the cells an iteration carries before its first event, the
+   images (tagpu_recwriter.c, feature_record) */
 typedef struct Exact {
     unsigned nslots;
     unsigned char* units;
     unsigned char* live;
     RecLossyList* lists;
+    unsigned gw, gh;
+    unsigned char* grid;
     unsigned pslot, plist, ptotal, pnext;     /* a list whose records have begun */
 } Exact;
 
@@ -727,28 +732,47 @@ static void exact_free(Exact* e)
     free(e->lists);
     free(e->units);
     free(e->live);
+    free(e->grid);
     memset(e, 0, sizeof *e);
 }
 
-static int exact_reset(Exact* e, unsigned nslots)
+static int exact_reset(Exact* e, unsigned nslots, unsigned gw, unsigned gh)
 {
     exact_free(e);
     e->nslots = nslots;
     e->units = (unsigned char*)calloc(nslots, IMG);
     e->live = (unsigned char*)calloc(nslots, 1);
     e->lists = (RecLossyList*)calloc((size_t)nslots * 2, sizeof *e->lists);
-    return e->units && e->live && e->lists;
+    e->gw = gw;
+    e->gh = gh;
+    if (gw && gh) e->grid = (unsigned char*)calloc((size_t)gw * gh, REC_CELL_BYTES);
+    return e->units && e->live && e->lists && (!gw || !gh || e->grid);
 }
 
 /* one iteration's records onto the copy: 0 for a record the writer would have refused */
 static int exact_apply(Exact* e, const unsigned char* pl, size_t n)
 {
     size_t at = 0;
+    int evented = 0;
     while (n - at >= 4) {
         unsigned kind = get16(pl + at), len = get16(pl + at + 2), s, i, k, nb;
         const unsigned char* b = pl + at + 4;
         at += ((size_t)4 + len + 3) & ~(size_t)3;
         s = len >= 2 ? get16(b) : 0;
+        if (rec_section_of(kind) == RCS_EVENTS) evented = 1;
+        if (kind == RK_CELLS && !evented && e->grid) {
+            unsigned x, z, c;
+            if (len < 8) return 0;
+            x = get16(b);
+            z = get16(b + 2);
+            c = get16(b + 4);
+            if (!c || c > REC_CELLS_MAX || get16(b + 6) || len != 8u + c * REC_CELL_BYTES ||
+                x + c > e->gw || z >= e->gh)
+                return 0;
+            memcpy(e->grid + ((size_t)z * e->gw + x) * REC_CELL_BYTES, b + 8,
+                   (size_t)c * REC_CELL_BYTES);
+            continue;
+        }
         if (kind != RK_UNIT && kind != RK_UNIT_DELTA && kind != RK_UNIT_GONE && kind != RK_ORDERS)
             continue;
         if (s < 1 || s >= e->nslots) return 0;
@@ -905,9 +929,11 @@ static int cmd_lossy(const char* in, const char* outp, int exact)
             L = NULL;
             if (g.h.mode != 3) {
                 lp.nslots = g.h.slots;
-                lp.flags = RECL_SPRAYS;
+                lp.flags = REC_SKIRMISH_HOLDS;
                 lp.hold_unit = REC_HOLD_UNIT;
                 lp.hold_node = REC_HOLD_NODE;
+                lp.gw = g.h.gw;
+                lp.gh = g.h.gh;
                 L = reclossy_begin(&lp);
                 if (!L) {
                     printf("codectest: no memory for the filter of %u slots\n", g.h.slots);
@@ -915,7 +941,7 @@ static int cmd_lossy(const char* in, const char* outp, int exact)
                     break;
                 }
             }
-            if (!exact_reset(&e, g.h.slots)) {
+            if (!exact_reset(&e, g.h.slots, g.h.gw, g.h.gh)) {
                 bad = 2;
                 break;
             }
@@ -966,6 +992,7 @@ static int cmd_lossy(const char* in, const char* outp, int exact)
                 x.units = e.units;
                 x.live = e.live;
                 x.lists = e.lists;
+                x.grid = e.grid;
                 one.n = 0;
                 ok = L ? reclossy_iteration(L, g.pay.p + at, end - at, refresh, snap, &x, &one)
                        : (rb_put(&one, g.pay.p + at, end - at), !one.oom);
@@ -2791,6 +2818,7 @@ static int lo_snap(RecLossy* L, Exact* e, const RecBytes* in, int refresh, int s
     x.units = e->units;
     x.live = e->live;
     x.lists = e->lists;
+    x.grid = e->grid;
     return reclossy_iteration(L, in->p, in->n, refresh, snapshot, &x, out);
 }
 
@@ -2837,12 +2865,14 @@ static int cmp48(const void* a, const void* b) { return memcmp(a, b, 4 + REC_SPR
 /* What a reader makes of the filter's iteration `out`, by the table tagpu_recreader.c keeps: its
    sprays taken as they come, its sessions as they come, and the implied ones made at its end,
    over the copy's units (the test's table holds no unit byte). 1 when those sprays are `in`'s as
-   a multiset, 0 when not, -1 when the reader refuses the iteration; `implied` the ones it made. */
+   a multiset, 0 when not, -1 when the reader refuses the iteration -- a session it refuses, or a
+   record after the sessions, which end an iteration (tagpu_recreader.c, apply); `implied` the
+   ones it made. */
 static int lo_read(RecSprays* t, const Exact* e, const RecBytes* in, const RecBytes* out,
                    unsigned* implied)
 {
     unsigned char a[LO_SPRAYS][4 + REC_SPRAY_BODY], b[LO_SPRAYS][4 + REC_SPRAY_BODY];
-    unsigned na = 0, nb = 0, i, n, T = get32(out->p + 4);
+    unsigned na = 0, nb = 0, i, n, T = get32(out->p + 4), sessions = 0;
     const unsigned char* im;
     size_t at;
     *implied = 0;
@@ -2850,7 +2880,9 @@ static int lo_read(RecSprays* t, const Exact* e, const RecBytes* in, const RecBy
         if (get16(in->p + at) == RK_EV_SPRAY && na < LO_SPRAYS) memcpy(a[na++], in->p + at + 4, 48);
     for (at = 0; at + 4 <= out->n; at += (4 + (size_t)get16(out->p + at + 2) + 3) & ~(size_t)3) {
         unsigned kind = get16(out->p + at), len = get16(out->p + at + 2);
+        if (sessions && kind != RK_SPRAY_SESSION) return -1;
         if (kind == RK_SPRAY_SESSION && !recsprays_session(t, out->p + at + 4, len)) return -1;
+        sessions |= kind == RK_SPRAY_SESSION;
         if (kind == RK_EV_SPRAY && nb < LO_SPRAYS) {
             memcpy(b[nb++], out->p + at + 4, 48);
             recsprays_spray(t, T, out->p + at + 4, e->units, e->live);
@@ -2903,9 +2935,10 @@ static int outcomes_sprays(void)
     lp.flags = RECL_SPRAYS;
     lp.hold_unit = hold_unit;
     lp.hold_node = hold_node;
+    lp.gw = lp.gh = 0;
     L = reclossy_begin(&lp);
     t = recsprays_begin(LO_SLOTS);
-    if (!L || !t || !exact_reset(&e, LO_SLOTS)) return 0;
+    if (!L || !t || !exact_reset(&e, LO_SLOTS, 0, 0)) return 0;
 
     /* slot 1 (unit ID 2) sprays the same point; slot 2 (ID 3) moves and sprays with it */
     lo_tick(&in, 1);
@@ -3058,6 +3091,348 @@ static int outcomes_sprays(void)
     return ok;
 }
 
+/* a run of n cell images of the grid's row z from column x, one record */
+static void lo_cells(RecBytes* b, unsigned x, unsigned z, const unsigned char* cells, unsigned n)
+{
+    unsigned char r[8 + 4 * REC_CELL_BYTES];
+    memset(r, 0, 8);
+    r[0] = (unsigned char)x;
+    r[2] = (unsigned char)z;
+    r[4] = (unsigned char)n;
+    memcpy(r + 8, cells, (size_t)n * REC_CELL_BYTES);
+    tlv_put(b, RK_CELLS, r, 8 + n * REC_CELL_BYTES);
+}
+
+/* THE CONTEST'S RULE's bookkeeping (tagpu_contest.h) on sites of the test's own: what each
+   holds, what a change of rule writes, and when a network game is refused */
+static int outcomes_contest(void)
+{
+    static const unsigned char je[2] = { 0x74, 0x25 }, other[2] = { 0xEB, 0x25 };
+    int site[CONTEST_SITES], refuse, ok = 1;
+    unsigned i, plan;
+    ok &= expect("contest: the retail je", contest_classify(je, je, 0), SITE_RETAIL);
+    ok &= expect("contest: the retail je, the record stale", contest_classify(je, je, 1),
+                 SITE_RETAIL);
+    ok &= expect("contest: NOPs the record claims", contest_classify(CONTEST_NOP2, je, 1),
+                 SITE_OURS);
+    ok &= expect("contest: NOPs it does not claim are another's",
+                 contest_classify(CONTEST_NOP2, je, 0), SITE_FOREIGN);
+    ok &= expect("contest: other bytes are another's, claimed or not",
+                 contest_classify(other, je, 1), SITE_FOREIGN);
+    for (i = 0; i < CONTEST_SITES; i++) site[i] = SITE_RETAIL;
+    plan = contest_plan(1, site, &refuse);
+    ok &= expect("contest: the rule goes into six retail sites", (int)plan, 0x3F);
+    ok &= expect("  and is not refused", refuse, 0);
+    ok &= expect("contest: putting back with none of ours writes nothing",
+                 (int)contest_plan(0, site, &refuse), 0);
+    site[2] = SITE_FOREIGN;
+    ok &= expect("contest: another's bytes refuse the rule, writing nothing",
+                 (int)contest_plan(1, site, &refuse), 0);
+    ok &= expect("  refused", refuse, 1);
+    ok &= expect("  and are left by a restore", (int)contest_plan(0, site, &refuse), 0);
+    ok &= expect("  which is not refused", refuse, 0);
+    ok &= expect("  and do not refuse a network game", contest_any(site, SITE_OURS), 0);
+    site[0] = site[4] = SITE_OURS;
+    ok &= expect("contest: a restore writes ours alone", (int)contest_plan(0, site, &refuse),
+                 0x11);
+    ok &= expect("  and ours refuse a network game", contest_any(site, SITE_OURS), 1);
+    site[2] = SITE_RETAIL;
+    ok &= expect("contest: the rule completes from ours and retail sites",
+                 (int)contest_plan(1, site, &refuse), 0x2E);
+    return ok;
+}
+
+/* RECL_CELLS: the cells' unit slots (+0x00, +0x02) and yard bit (+0x0C bit 1) held */
+static int outcomes_lossy_cells(void)
+{
+    enum { GW = 4, GH = 2, CB = REC_CELL_BYTES };
+    static const unsigned char none[REC_UNIT_IMAGE + REC_ORDER_IMAGE];
+    unsigned char row[2][GW * CB], run[2 * CB];
+    RecLossyParams lp;
+    RecLossy* L;
+    RecBytes in, out;
+    Exact e;
+    unsigned k[16], s[16], n, i, ok = 1;
+    memset(&in, 0, sizeof in);
+    memset(&out, 0, sizeof out);
+    memset(&e, 0, sizeof e);
+    for (i = 0; i < GW * CB; i++) {
+        row[0][i] = (unsigned char)(0x10 + i);
+        row[1][i] = (unsigned char)(0x80 + i);
+    }
+    lp.nslots = LO_SLOTS;
+    lp.hold_unit = none;
+    lp.hold_node = none + REC_UNIT_IMAGE;
+    lp.gw = GW;
+    lp.gh = GH;
+    lp.flags = 4;
+    ok &= expect("lossy cells: refused: a flag the filter does not keep", reclossy_begin(&lp) == NULL, 1);
+    lp.flags = RECL_CELLS;
+    L = reclossy_begin(&lp);
+    if (!L || !exact_reset(&e, LO_SLOTS, GW, GH)) return 0;
+    lo_tick(&in, 1);
+    lo_cells(&in, 0, 0, row[0], GW);
+    lo_cells(&in, 0, 1, row[1], GW);
+    lo_event(&in);
+    ok &= expect("lossy cells: the first iteration copied",
+                 lo_step(L, &e, &in, 1, &out) == 1 && out.n == in.n && !memcmp(out.p, in.p, in.n), 1);
+    {
+        RecLossyExact x = { e.units, e.live, e.lists, e.grid };
+        ok &= expect("  the lossy grid is the copy's", reclossy_equal(L, &x), 1);
+    }
+    /* cell (1, 0) changes its slots alone, cell (2, 0) its slot A and its byte 5 */
+    memcpy(run, row[0] + CB, 2 * CB);
+    run[0] ^= 1;
+    run[CB + 0] ^= 2;
+    run[CB + 5] ^= 4;
+    lo_tick(&in, 2);
+    lo_cells(&in, 1, 0, run, 2);
+    lo_event(&in);
+    ok &= expect("lossy cells: an image between refreshes", lo_step(L, &e, &in, 0, &out), 1);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("  the run is written, its slots D's and its other bytes the input's",
+                 n == 3 && k[1] == RK_CELLS && out.n >= 8 + 4 + 8 + 2 * CB &&
+                 !memcmp(out.p + 8 + 12, row[0] + CB, CB) &&
+                 !memcmp(out.p + 8 + 12 + CB, row[0] + 2 * CB, 5) &&
+                 out.p[8 + 12 + CB + 5] == (unsigned char)(row[0][2 * CB + 5] ^ 4) &&
+                 !memcmp(out.p + 8 + 12 + CB + 6, row[0] + 2 * CB + 6, CB - 6), 1);
+    {
+        RecLossyExact x = { e.units, e.live, e.lists, e.grid };
+        ok &= expect("  the lossy grid differs from the copy's", reclossy_equal(L, &x), 0);
+    }
+    /* cell (3, 0) changes its yard bit alone: nothing to write */
+    memcpy(run, row[0] + 3 * CB, CB);
+    run[CB - 1] ^= 0x02;
+    lo_tick(&in, 3);
+    lo_cells(&in, 3, 0, run, 1);
+    lo_event(&in);
+    ok &= expect("lossy cells: an image of a yard bit alone", lo_step(L, &e, &in, 0, &out), 1);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("  is dropped", n == 2 && k[0] == RK_TICK && k[1] == RK_EV_STATE, 1);
+    /* the tick's input, after an event: a run that differs from D's in the slots and the yard
+       bit is dropped, one that differs in another byte is written as it came */
+    memcpy(run, row[1], CB);
+    run[1] ^= 1;
+    run[CB - 1] ^= 0x02;
+    lo_tick(&in, 4);
+    lo_event(&in);
+    lo_cells(&in, 0, 1, run, 1);
+    run[4] ^= 1;
+    lo_cells(&in, 0, 1, run, 1);
+    ok &= expect("lossy cells: the tick's input", lo_step(L, &e, &in, 0, &out), 1);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("  a run of slots and a yard bit dropped, another kept whole",
+                 n == 3 && k[1] == RK_EV_STATE && k[2] == RK_CELLS &&
+                 out.n == 8 + 12 + ((4 + 8 + CB + 3) & ~3u) &&
+                 !memcmp(out.p + 8 + 12 + 12, run, CB), 1);
+    lo_tick(&in, 5);
+    lo_event(&in);
+    ok &= expect("lossy cells: the refresh after them", lo_step(L, &e, &in, 1, &out), 1);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("  writes the cells that differ, a run of a row, before the event",
+                 n == 3 && k[1] == RK_CELLS && get16(out.p + 12) == 1 && get16(out.p + 14) == 0 &&
+                 get16(out.p + 16) == 3 && k[2] == RK_EV_STATE, 1);
+    {
+        RecLossyExact x = { e.units, e.live, e.lists, e.grid };
+        ok &= expect("  the lossy grid is the copy's", reclossy_equal(L, &x), 1);
+        lo_tick(&in, 6);
+        lo_cells(&in, 3, 1, row[1], 2);
+        ok &= expect("lossy cells: refused: a run past the row",
+                     reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);
+        lo_tick(&in, 6);
+        lo_cells(&in, 0, GH, row[1], 1);
+        ok &= expect("lossy cells: refused: a row past the grid",
+                     reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);
+    }
+    reclossy_free(L);
+    exact_free(&e);
+    rb_free(&in);
+    rb_free(&out);
+    return ok;
+}
+
+#ifdef _WIN32
+/* The DLL's reader over a skirmish file of the filter's iterations `it[0..n)`, each its own stored
+   block, the ones `refresh` flags (bit i) marked RBF_REFRESH, under an RT_HOLD of `flags` and the
+   masks `unit` and `node`: the iterations it reads before it refuses one (`why` saying where),
+   or before the end; -1 when it reads them all and the last world's grid is not the bytes `grid`
+   of gw x gh cells. */
+static int lo_reader(const RecBytes* it, unsigned n, unsigned refresh, unsigned flags,
+                     const unsigned char* unit, const unsigned char* node, unsigned gw, unsigned gh,
+                     const unsigned char* grid, char* why, unsigned cap)
+{
+    unsigned char hold[REC_HOLD_BYTES], v[20];
+    char dir[MAX_PATH], path[MAX_PATH];
+    RecBytes h;
+    RecReader* r;
+    FILE* f;
+    unsigned i;
+    int k = 1, read;
+    memset(&h, 0, sizeof h);
+    memset(hold, 0, sizeof hold);
+    put32(hold, REC_REFRESH_TICKS);
+    put32(hold + 4, flags);
+    memcpy(hold + 40, unit, REC_UNIT_IMAGE);
+    memcpy(hold + 40 + REC_UNIT_IMAGE, node, REC_ORDER_IMAGE);
+    put32(v, REC_FORMAT);
+    tlv_put(&h, RT_FORMAT, v, 4);
+    put32(v, 2);
+    tlv_put(&h, RT_MODE, v, 4);
+    put32(v, LO_SLOTS);
+    tlv_put(&h, RT_SLOTS, v, 4);
+    put32(v, gw);
+    put32(v + 4, gh);
+    put32(v + 8, 8);
+    put32(v + 12, 0);
+    put32(v + 16, 0);
+    tlv_put(&h, RT_FEATURES, v, 20);
+    put32(v, 4);
+    tlv_put(&h, RT_PROJECTILES, v, 4);
+    tlv_put(&h, RT_HOLD, hold, sizeof hold);
+    if (!GetTempPathA(sizeof dir, dir) || !GetTempFileNameA(dir, "lor", 0, path) ||
+        !(f = fopen(path, "wb"))) {
+        snprintf(why, cap, "no temporary file");
+        rb_free(&h);
+        return 0;
+    }
+    fwrite(REC_MAGIC, 1, 8, f);
+    put_block(f, RB_HEADER, RBF_STORED, 0, 0, (uint32_t)h.n, h.p, h.n);
+    for (i = 0; i < n; i++)
+        put_block(f, RB_STREAM, RBF_STORED | (refresh >> i & 1 ? RBF_REFRESH : 0), i + 1, i + 1,
+                  (uint32_t)it[i].n, it[i].p, it[i].n);
+    put32(v, 1);
+    put32(v + 4, n);
+    h.n = 0;
+    tlv_put(&h, RT_END_REASON, v, 4);
+    tlv_put(&h, RT_LAST, v + 4, 4);
+    put_block(f, RB_END, RBF_STORED, n, n, (uint32_t)h.n, h.p, h.n);
+    fclose(f);
+    rb_free(&h);
+    r = recr_open(path, why, cap);
+    for (i = 0; r && i < n && (k = recr_tick(r, why, cap)) == 1; i++) ;
+    read = (int)i;
+    if (r && i == n && memcmp(recr_world(r)->grid, grid, (size_t)gw * gh * REC_CELL_BYTES)) {
+        snprintf(why, cap, "the grid read is not the copy's");
+        read = -1;
+    }
+    if (r) recr_close(r);
+    DeleteFileA(path);
+    return read;
+}
+#endif
+
+/* RECL_CELLS and RECL_SPRAYS in one filter: a refresh iteration whose only spray is implied
+   writes the cells that differ, then the order lists, then the spray sessions, and the readers
+   take it in that order and refuse a cell run after the sessions */
+static int outcomes_lossy_both(void)
+{
+    enum { GW = 4, GH = 2, CB = REC_CELL_BYTES, N = 4 };
+    static unsigned char hold_unit[IMG], hold_node[REC_ORDER_IMAGE], node[2][REC_ORDER_IMAGE];
+    unsigned char row[2][GW * CB], run[CB], mapped[4 + REC_MAPPED_BYTES(GW, GH)];
+    RecLossyParams lp;
+    RecLossy* L;
+    RecSprays* t;
+    RecBytes in, it[N];
+    Exact e;
+    unsigned k[16], s[16], n, i, im, id = 0, ok = 1;
+    memset(&in, 0, sizeof in);
+    memset(it, 0, sizeof it);
+    memset(&e, 0, sizeof e);
+    memset(mapped, 0, sizeof mapped);
+    for (i = 0; i < GW * CB; i++) {
+        row[0][i] = (unsigned char)(0x10 + i);
+        row[1][i] = (unsigned char)(0x80 + i);
+    }
+    memset(node, 0x11, sizeof node);
+    memset(hold_node + 4 * LO_NODE, 0xFF, 4);
+    node[1][4 * LO_NODE] ^= 1;
+    lp.nslots = LO_SLOTS;
+    lp.flags = RECL_CELLS | RECL_SPRAYS;
+    lp.hold_unit = hold_unit;
+    lp.hold_node = hold_node;
+    lp.gw = GW;
+    lp.gh = GH;
+    L = reclossy_begin(&lp);
+    t = recsprays_begin(LO_SLOTS);
+    if (!L || !t || !exact_reset(&e, LO_SLOTS, GW, GH)) return 0;
+
+    /* 1, a refresh: slots 1 and 2 (IDs 2 and 3), slot 1's main list, the grid, a spray each */
+    lo_tick(&in, 1);
+    lo_at(&in, 1, 0, 0, 0);
+    lo_at(&in, 2, 0, 0, 0);
+    lo_list(&in, 1, 0, node[0], 1, 0, 1);
+    lo_cells(&in, 0, 0, row[0], GW);
+    lo_cells(&in, 0, 1, row[1], GW);
+    tlv_put(&in, RK_MAPPED, mapped, sizeof mapped);
+    lo_spray(&in, 2, 100, 200, 300, 7);
+    lo_spray(&in, 3, 500, 0, 500, 9);
+    ok &= expect("lossy both: a refresh iteration", lo_snap(L, &e, &in, 1, 0, &it[0]) == 1 &&
+                 lo_read(t, &e, &in, &it[0], &im) == 1, 1);
+    /* 2: the same sprays, each opening a session of period 1 */
+    lo_tick(&in, 2);
+    lo_spray(&in, 2, 100, 200, 300, 7);
+    lo_spray(&in, 3, 500, 0, 500, 9);
+    ok &= expect("  the repeats", lo_snap(L, &e, &in, 0, 0, &it[1]) == 1 &&
+                 lo_read(t, &e, &in, &it[1], &im) == 1, 1);
+    /* 3: cell (1, 0)'s slot A and the list's held dword change, and both sprays are implied */
+    memcpy(run, row[0] + CB, CB);
+    run[0] ^= 1;
+    lo_tick(&in, 3);
+    lo_list(&in, 1, 0, node[1], 1, 0, 1);
+    lo_cells(&in, 1, 0, run, 1);
+    lo_spray(&in, 2, 100, 200, 300, 7);
+    lo_spray(&in, 3, 500, 0, 500, 9);
+    ok &= expect("lossy both: held cells, a held list and implied sprays",
+                 lo_snap(L, &e, &in, 0, 0, &it[2]) == 1 && it[2].n == 8 &&
+                 lo_read(t, &e, &in, &it[2], &im) == 1 && im == 2, 1);
+    /* 4, a refresh: slot 1's spray implied, slot 2 makes none */
+    lo_tick(&in, 4);
+    lo_spray(&in, 2, 100, 200, 300, 7);
+    ok &= expect("lossy both: the refresh after them", lo_snap(L, &e, &in, 1, 0, &it[3]), 1);
+    n = lo_kinds(&it[3], k, s, 16);
+    ok &= expect("  writes the cell, then the list, then the session that closes",
+                 n == 4 && k[0] == RK_TICK && k[1] == RK_CELLS && k[2] == RK_ORDERS && s[2] == 1 &&
+                 k[3] == RK_SPRAY_SESSION && lo_session_last(&it[3], &id) == 0 && id == 3, 1);
+    ok &= expect("  and lo_read makes the implied spray", lo_read(t, &e, &in, &it[3], &im) == 1 &&
+                 im == 1, 1);
+    {
+        RecLossyExact x = { e.units, e.live, e.lists, e.grid };
+        ok &= expect("  the lossy world is the copy's", reclossy_equal(L, &x), 1);
+    }
+    {
+        RecSprays* u = recsprays_begin(LO_SLOTS);
+        RecBytes bad;
+        memset(&bad, 0, sizeof bad);
+        rb_put(&bad, it[3].p, it[3].n);
+        lo_cells(&bad, 1, 0, run, 1);
+        ok &= expect("lossy both: refused by lo_read: a cell run after the sessions",
+                     u ? lo_read(u, &e, &in, &bad, &im) : 0, -1);
+        recsprays_free(u);
+        rb_free(&bad);
+    }
+#ifdef _WIN32
+    {
+        char why[256];
+        int r = lo_reader(it, N, 0x9, lp.flags, hold_unit, hold_node, GW, GH, e.grid, why,
+                          sizeof why);
+        if (r != N) printf("  the reader: %s\n", why);
+        ok &= expect("  the DLL's reader reads the four, the grid the copy's", r, N);
+        lo_cells(&it[3], 1, 0, run, 1);
+        r = lo_reader(it, N, 0x9, lp.flags, hold_unit, hold_node, GW, GH, e.grid, why,
+                      sizeof why);
+        if (r != N - 1) printf("  the reader read %d: %s\n", r, why);
+        ok &= expect("lossy both: refused by the DLL's reader: a cell run after the sessions", r,
+                     N - 1);
+    }
+#endif
+    recsprays_free(t);
+    reclossy_free(L);
+    exact_free(&e);
+    rb_free(&in);
+    for (i = 0; i < N; i++) rb_free(&it[i]);
+    return ok;
+}
+
 static int outcomes_lossy(void)
 {
     static uint32_t img[3][NDW];
@@ -3085,8 +3460,9 @@ static int outcomes_lossy(void)
     lp.flags = 0;
     lp.hold_unit = hold_unit;
     lp.hold_node = hold_node;
+    lp.gw = lp.gh = 0;
     L = reclossy_begin(&lp);
-    if (!L || !exact_reset(&e, LO_SLOTS)) return 0;
+    if (!L || !exact_reset(&e, LO_SLOTS, 0, 0)) return 0;
     lo_tick(&in, 1);
     lo_unit(&in, 1, img[1]);
     lo_unit(&in, 2, img[2]);
@@ -3114,7 +3490,7 @@ static int outcomes_lossy(void)
     hold_unit[4 * LO_PART + 1] = 0xFF;
     memset(hold_node + 4 * LO_NODE, 0xFF, 4);
     L = reclossy_begin(&lp);
-    if (!L || !exact_reset(&e, LO_SLOTS)) return 0;
+    if (!L || !exact_reset(&e, LO_SLOTS, 0, 0)) return 0;
     lo_tick(&in, 1);
     lo_unit(&in, 1, img[1]);
     lo_unit(&in, 2, img[2]);
@@ -3145,6 +3521,7 @@ static int outcomes_lossy(void)
         x.units = e.units;
         x.live = e.live;
         x.lists = e.lists;
+        x.grid = e.grid;
         ok &= expect("  the lossy world differs from the copy", reclossy_equal(L, &x), 0);
     }
     lo_tick(&in, 3);
@@ -3166,6 +3543,7 @@ static int outcomes_lossy(void)
     x.units = e.units;
     x.live = e.live;
     x.lists = e.lists;
+    x.grid = e.grid;
     ok &= expect("  the lossy world is the copy", reclossy_equal(L, &x), 1);
     e.units[IMG + 0x40] ^= 1;
     ok &= expect("lossy: the check fails on one byte of a unit", reclossy_equal(L, &x), 0);
@@ -3224,6 +3602,7 @@ static int outcomes_lossy(void)
             x.units = e.units;
             x.live = e.live;
             x.lists = e.lists;
+            x.grid = e.grid;
             ok &= expect("  the lossy world is the copy", reclossy_equal(L, &x), 1);
         }
         in.n = 0;
@@ -3232,6 +3611,9 @@ static int outcomes_lossy(void)
                      reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);
     }
     reclossy_free(L);
+    ok &= outcomes_lossy_cells();
+    ok &= outcomes_contest();
+    ok &= outcomes_lossy_both();
 
     /* RT_HOLD's bounds */
     hold_bytes(hold, 1);
@@ -3244,7 +3626,7 @@ static int outcomes_lossy(void)
         }
         ok &= expect("RT_HOLD: the build's table reads back as the build's masks and SHA-256",
                      reclossy_hold_parse(&hh, hold, sizeof hold, why, sizeof why) && same &&
-                         hh.refresh == REC_REFRESH_TICKS && hh.flags == RECL_SPRAYS &&
+                         hh.refresh == REC_REFRESH_TICKS && hh.flags == REC_SKIRMISH_HOLDS &&
                          !memcmp(hh.unit, REC_HOLD_UNIT, REC_UNIT_IMAGE) &&
                          !memcmp(hh.node, REC_HOLD_NODE, REC_ORDER_IMAGE) &&
                          !memcmp(hh.sha, sha, 32), 1);

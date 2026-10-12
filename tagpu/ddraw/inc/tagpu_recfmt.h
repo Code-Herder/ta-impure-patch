@@ -37,13 +37,16 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 16: format 15 with the script slice's place in the event stream (RK_EV_SLICE). 15 was format
-   14 with a skirmish stream's nano sprays written as sessions (RK_SPRAY_SESSION,
-   RT_HOLD's RECL_SPRAYS): a spray its unit's session predicts is left out, and every reader makes
-   it again at the end of its iteration. 14 was format 13 with a hold table of rows: a skirmish
-   stream holds the weapon slots' aim and target state, the resource ledger's accumulators and the
-   main order list's handler state between refreshes (replay-hold.tsv; RT_HOLD carries the masks).
-   13 was format 12 with the stream written
+/* 17: format 16 with the script slice's place in the event stream (RK_EV_SLICE). 16 was format
+   15 with a skirmish recording's cells held (RT_HOLD's RECL_CELLS): between refreshes
+   the stream carries the cells' unit slots and yard bit at a value it wrote before, a feature
+   tick's input cells only where a byte other than those changed, and the tick's source test as
+   FS_SOURCE, as a multiplayer recording does. 15 was format 14 with a skirmish stream's nano
+   sprays written as sessions (RK_SPRAY_SESSION, RT_HOLD's RECL_SPRAYS): a spray its unit's session
+   predicts is left out, and every reader makes it again at the end of its iteration. 14 was
+   format 13 with a hold table of rows: a skirmish stream holds the weapon slots' aim and target
+   state, the resource ledger's accumulators and the main order list's handler state between
+   refreshes (replay-hold.tsv; RT_HOLD carries the masks). 13 was format 12 with the stream written
    by the lossy filter (tagpu_reclossy.c): a skirmish header's RT_HOLD names the bytes the stream
    holds between refreshes, a refresh iteration ends its stream block (RBF_REFRESH), and a test
    launch may write the exact records beside the stream (RB_EXACT). A reader takes this format
@@ -51,7 +54,7 @@
    container whose unit frame carries the unit deltas, whose pool frame carries the projectile pool
    coded by identity, and whose four record frames -- the cells, the orders, the events and the
    state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). */
-#define REC_FORMAT        16
+#define REC_FORMAT        17
 
 static __inline int rec_format_supported(unsigned format)
 {
@@ -255,7 +258,10 @@ enum RecKind {
                           grid's row z from column x. The first iteration carries every cell,
                           the rest the cells that changed, a snapshot the cells that differ from
                           the first iteration's and a dump every cell. Inside the feature tick's
-                          RK_EV_FEATURE: the cells that changed since the iteration's images      */
+                          RK_EV_FEATURE: the cells that changed since the iteration's images. A
+                          stream that holds its cells (RECL_CELLS) carries their slots and yard
+                          bit at a value it wrote before, and a tick's input run only where a
+                          byte other than those changed (tagpu_reclossy.c)                       */
     RK_WRECK,          /* u16 index, u16 0, then the record's image: a record that changed        */
     RK_FEATURES,       /* i32 the active list's head (main+0x14213), i32 the settled list's
                           (+0x14217), i32 the free list's (+0x1421B), u32 the reproduction cursor
@@ -417,7 +423,9 @@ enum RecDrawSite {
     FS_REPRODUCE_X,    /* 0x424159, and its column                                                  */
     FS_REPRODUCE_Z,    /* 0x424167, and its row                                                     */
     FS_SOURCE,         /* 0x424189, reproduction's test of its source cell's slot A: an input, not
-                          a draw; a multiplayer recording's tick only                              */
+                          a draw; the tick's only, in a recording whose playing keeps the
+                          engine's slots: a multiplayer one, or a skirmish one that holds its
+                          cells (RECL_CELLS)                                                      */
     FS_SITES
 };
 #define FS_RNG_SITES 6 /* the RNG calls the recorder redirects                                      */
@@ -768,10 +776,14 @@ _Static_assert(RT_CODEC == 29 && RT_AIR == 31 && RT_CODEC_DECLINED == 44 && RT_H
    RT_HOLD, a multiplayer recording, is written on REC_REFRESH_TICKS's grid. */
 #define REC_REFRESH_TICKS 300   /* the interval a recording is written with                     */
 #define REC_REFRESH_MIN   30    /* the least a test launch may ask for (tagpu_rec.refresh)       */
-#define RECL_CELLS        1u    /* the cells' unit slots and yard bit are held                   */
+#define RECL_CELLS        1u    /* the cells' unit slots and yard bit are held: a playing keeps
+                                   the engine's own (tagpu_puppet.c, THE FOOTPRINT WRITERS)      */
 #define RECL_SPRAYS       2u    /* the nano sprays are written as sessions (RK_SPRAY_SESSION)    */
 #define REC_SPRAY_BODY    44u   /* an RK_EV_SPRAY after its unit ID                              */
 #define REC_SPRAY_FOLLOW  8u    /* RK_SPRAY_SESSION's mode: the point follows the unit           */
+/* the flags every skirmish recording's RT_HOLD carries: the writer's (tagpu_recwriter.c), and
+   the capture records FS_SOURCE by them (tagpu_recorder.c, feat_source) */
+#define REC_SKIRMISH_HOLDS (RECL_CELLS | RECL_SPRAYS)
 #define REC_HOLD_BYTES    (8u + 32u + REC_UNIT_IMAGE + REC_ORDER_IMAGE)
 /* the position +0x6A..+0x75, which a spray session that follows its unit reads: never held */
 #define REC_HOLD_POS_AT   0x6A

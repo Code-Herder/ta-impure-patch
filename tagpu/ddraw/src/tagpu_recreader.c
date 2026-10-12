@@ -862,9 +862,10 @@ static int sprays_on(const RecHeader* h)
 /* An event of the step, by the brackets' grammar (tagpu_recwriter.c, feature_record): a feature
    call's holds no other and cells only when it is the tick's, which is inside none; a death's
    holds its explosion's feature calls, in a multiplayer recording its corpse's (FR_CORPSE, inside
-   a death only), and may hold deaths; a draw is inside one, FS_SOURCE inside a multiplayer
-   recording's tick only; a script slice is inside none, and names a slot of the level's. 1 taken,
-   0 malformed. */
+   a death only), and may hold deaths; a draw is inside one, FS_SOURCE inside the tick only, of
+   a segment whose playing keeps the engine's slots: a multiplayer one, or one that holds its
+   cells (recr_holds_cells); a script slice is inside none, and names a slot of the level's. 1
+   taken, 0 malformed. */
 static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsigned len)
 {
     RecWorld* w = &r->w;
@@ -913,7 +914,8 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
     case RK_EV_DRAW:
         if ((!r->fbracket && !r->ndeaths) || !rec_event_len(kind, len) || b[0] >= FS_SITES ||
             b[1] || b[2] || b[3] ||
-            (b[0] == FS_SOURCE && (r->fbracket != FR_TICK + 1 || h->mode != 3)))
+            (b[0] == FS_SOURCE && (r->fbracket != FR_TICK + 1 ||
+                                   !(h->mode == 3 || recr_holds_cells(h)))))
             return 0;
         break;
     case RK_CELLS:
@@ -1916,6 +1918,10 @@ static const char* shape_differs(const RecHeader* a, const RecHeader* b)
     if (a->units_each != b->units_each) return "units a player";
     if (a->has_mp && b->has_mp && (memcmp(&a->mp,&b->mp,sizeof a->mp) ||
         memcmp(&a->mp_seats,&b->mp_seats,sizeof a->mp_seats))) return "multiplayer source/seat mapping";
+    /* a skirmish chain's segments all hold their cells or none do: the playing keeps the engine's
+       slots, or the recording's, from its first step (tagpu_replay.c, THE UNIT SLOTS AND THE YARD
+       BIT), and a skirmish chain has no crossing that changes it */
+    if (!a->has_mp && !b->has_mp && recr_holds_cells(a) != recr_holds_cells(b)) return "held cells";
     if (a->has_unitdefs != b->has_unitdefs || a->ndefs != b->ndefs || a->defs_hash != b->defs_hash)
         return "unit types";
     if (a->has_weapons != b->has_weapons || a->nweapons != b->nweapons ||
@@ -2615,6 +2621,8 @@ done:
 const RecHeader* recr_header(const RecReader* r) { return &r->h; }
 
 int recr_segment_mp(const RecReader* r) { return r->in_seg && seg_header(r)->has_mp; }
+
+int recr_segment_cells(const RecReader* r) { return r->in_seg && recr_holds_cells(seg_header(r)); }
 
 /* 1 the header is of this format */
 static int info_header(RecInfo* o, const unsigned char* b, size_t len)

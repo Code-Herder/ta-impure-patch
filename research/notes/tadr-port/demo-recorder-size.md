@@ -20,7 +20,8 @@ for it (*L5: the lossy plan, measured offline*). L5's core and its unit and orde
 landed as recording format 14 (*L5: the lossy plan, measured offline*, its last part): the filter,
 the refreshes, the takeover at a refresh and the table's 37 rows take the heavy hour to 30.53 MB
 (MEASURED offline); format 15 writes the nano sprays as spray sessions, which takes the
-heavy hour's stream 2.7 MB smaller again; the cells and L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
+heavy hour's stream 2.7 MB smaller again; format 16 holds the cells' unit slots and yard bit,
+which the playing's engine stamps (*The cells held*); L6 is a plan. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -1253,7 +1254,7 @@ became a refresh (`d959778b`), which is the extra block; the rows add none. With
 of 108,090 iterations differ from the input's, 3,605 stream blocks (362 at a refresh), every one sectioned, none declined or mismatched,
 60 snapshots; `tarec lossy-check` over the whole hour (every shown byte exact, every held byte the
 stream's last or the exact one, the two worlds equal at all 362 refreshes), `tarec check`, and the
-C and Python decoders on every block (`codectest.py verify`) pass. The cells are the next landing.
+C and Python decoders on every block (`codectest.py verify`) pass.
 
 **The spray sessions, landed: recording format 15** (2026-10-12). A nano spray repeats: its unit's
 spray of 1, 2 or 4 ticks before, byte for byte, or with its point moved by exactly the unit's
@@ -1285,9 +1286,53 @@ own (P7) recovers about 0.25 MB. The lossy plan's own figures for exact sessions
 sessions: it implied 2,546,320 sprays and wrote 613,932, with 59,528 sessions opened and 59,022
 closed.
 
-**The script slice's markers: recording format 16** (2026-10-12). `RK_EV_SLICE`, a unit ID in the
+**The cells held: recording format 16** (the owner's decision 2026-10-12, option a). Every skirmish
+recording's `RT_HOLD` carries `RECL_CELLS`: between refreshes the stream carries a cell's unit
+slots (`+0x00`, `+0x02`) and yard bit (`+0x0C` bit 1) at a value it wrote before, so a cell image
+whose other bytes did not change is not written, and the feature tick's input runs only where a
+byte other than those changed; the tick's one slot read, reproduction's source test, is recorded
+as `FS_SOURCE`, as a multiplayer recording's is. At a refresh the filter writes every cell that
+differs from the writer's copy. The playing does not write those bytes: its engine stamps them
+(`tagpu_puppet.c`, *The footprint writers*). That holds by two facts. Every recorded footprint cell is
+the set-position's rounding of the recorded position (MEASURED 3,640,526 of 3,640,526
+unit-iterations of an air war and a battle), so the playing stamps where the game did. A
+contested cell keeps its incumbent, as on the recording machine, whose seats are never type 3:
+the playing writes `90 90` over the six contest `je`s from its first step to its end
+([engine map](../exe-reverse-engineering.md), *The footprint contest's rule*). The contest marks,
+`+0x110` bits 26 and 27, are the engine's too on such a playing, since the clear's re-claim walk
+reads them. A takeover, at a refresh, writes the recording's slots, yard bits and marks and then
+refreshes the passability. MEASURED 2026-10-12, `codectest lossy` over the heavy hour's exact
+records, with format 13's empty hold table and no spray sessions (the cells alone, built before
+the rows and the sessions landed): **42,135,332 → 35,797,592 bytes of stream and snapshots
+(−6.34 MB)**; the figure over format 15's rows and sessions is not measured yet; 108,090 iterations, 3,605 stream blocks (362 at a refresh, every one sectioned, none
+declined or mismatched), 60 snapshots kept; `tarec lossy-check --to 27001` (with the cells clause)
+and `tarec check` pass on the result. **The loosening the owner accepted with it**: after a seek
+the cells' slots, yard bits and contest marks are checked by the occupancy rule instead of
+compared (*Decisions taken* in [completeness](demo-recorder-completeness.md)); a seek stamps in slot
+order and a contest there can end the other way until the contested units move. **What remains
+open**: where the playing makes two contesting footprint calls in another order than the game did
+(deaths, creates and placements in slot order against the game's interleaving in its unit tick),
+the holder can differ (MEASURED in emulation, 4 of an air war's 1,700 iterations; no slot-B impact
+differed in the game in an air war or a battle). A multiplayer recording is unchanged: its playing
+keeps the engine's slots already, its marks are still written from the recording, and its contest
+follows the puppet's type-3 rule (the owner has not decided the marks for it). Its takeover
+timeline is a skirmish segment and holds its cells: the playing changes to the recording
+machine's rule where it crosses into one (`mp_follow`). MEASURED 2026-10-12 on a two-peer
+recording with reproducing trees taken over at 901 as player 1: timeline 1 played across its fork
+and sought within it changes the rule at the crossing and puts it back at the end; its dumps are
+EQUAL at the refresh 1201 and, by the occupancy rule, at 1501 and 1621 after a seek and 1801 from
+a fresh process, and the multiplayer segment's dump at 600 is EQUAL by `recmp_compare.py`. No
+replay fixture is multiplayer, so the landing tier reaches neither function of that path
+(`tagpu_puppet_engine_cells`, `recr_segment_cells`): this chain is their evidence, which the owner
+accepted for C2 on 2026-10-12 (`tools/replay/recmp_create_begin_test.py --reproduce --until 1400`,
+then `recmp_play_test.py` with `--takeover 901:1`, with `--timeline 1 --at 600 --at 961 --at 1201
+--seek 1201:1501` and with `--timeline 1 --fresh 1801`; 5 min 19 s). The
+fixtures `forest-reproduce` and `stock-forest-reproduce` record and play reproduction's source
+test in a skirmish (23 `FS_SOURCE` draws each, every one played as recorded).
+
+**The script slice's markers: recording format 17** (2026-10-12). `RK_EV_SLICE`, a unit ID in the
 events frame's `C_ID` column, before the slice of every unit whose COB had an engine start since
-the capture point ([the skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-16)).
+the capture point ([the skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-17)).
 **MEASURED** on the replay gate's `battle` recording (3,991 iterations, at most 1,444 live units,
 the file 72.9 MB with the test lever's exact stream, the stream itself 7.3 MB on disk): 33,464
 markers, 8.38 an iteration, 133,856 bytes of bodies raw; the events' kind stream and ID column
@@ -1377,7 +1422,7 @@ the units: stage 6's traffic budget.
 | L3 | cells, orders, events and state as four record frames that restart empty at every reset point; the snapshot wreck base: LANDED (*L3* above) | planned about −7 MiB against the pre-L1 file; MEASURED −4.52 MiB on L2's own battle file (16.40 → 11.88), −3.47 on Town & Country's, −0.60 on naval's, −5.54 on the air war's |
 | L4 | two measured four-player hours, a light and a heavy one; format 11: snapshots every 1,800 ticks, the cells frame restarting from the reader's grid (R1): LANDED (*L4* above) | the snapshot interval, decided by the owner with the seek target relaxed for dense battles; MEASURED −1.63 MB an hour from R1 on the light hour at 1,800; both hours miss the 25 MB budget even with no snapshots |
 | L5a | the unit frame predicts the resource ledger, format 12: LANDED (*L5a* below) | MEASURED heavy hour 56.99 → 42.15 MB, lossless |
-| L5 | lossy, chosen by the owner 2026-10-11: internal values held between refreshes, shown values exact (*L5: the lossy plan, measured offline*). The core LANDED as format 13: the filter, the refresh every 300 ticks, the takeover at a refresh, the exact stream for the harness; the unit and order hold rows LANDED as format 14; the spray sessions LANDED as format 15; the cells follow | MEASURED offline heavy hour 42.15 → 19.32 MB with the plan's transforms; format 14's rows 42.15 → 30.53 MB on the writer's path; the spray sessions −2.72 MB over the rows |
+| L5 | lossy, chosen by the owner 2026-10-11: internal values held between refreshes, shown values exact (*L5: the lossy plan, measured offline*). The core LANDED as format 13: the filter, the refresh every 300 ticks, the takeover at a refresh, the exact stream for the harness; the unit and order hold rows LANDED as format 14; the spray sessions LANDED as format 15; the cells held LANDED as format 16 (*The cells held*) | MEASURED offline heavy hour 42.15 → 19.32 MB with the plan's transforms; format 14's rows 42.15 → 30.53 MB on the writer's path; the spray sessions −2.72 MB over the rows; the cells alone −6.34 MB over the empty table |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
 ## Decisions

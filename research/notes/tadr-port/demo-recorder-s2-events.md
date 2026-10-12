@@ -563,14 +563,14 @@ The step T tick, in order: the network pump 0x453D40 (network only), then these 
 - **Writes:** the queue `[0x51E68C]` and the table's next times. Both are UI; nothing in the
   simulation reads them (`data-keys-evidence.md:734`).
 
-### 1.8b The script slice — `RK_EV_SLICE` (format 16)
+### 1.8b The script slice — `RK_EV_SLICE` (format 17)
 
 Not a root: the unit tick's `DoScriptsNow(1)` (`0x48ADEB`) placed among the step's events. Written
 just before the slice of a unit whose COB had an engine start (`0x4B0B00`, `0x4B0940`) since the
 capture point, `{u32 ID}`, outside any bracket; a playing gives that unit's slice at the marker
 instead of in the host's unit tick, so a start made before the slice -- AutoAim's, a create's
 Create in a later slot -- takes its first slice where it did on the recording machine
-([skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-16)).
+([skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-17)).
 
 ### 1.9 The unit state a death must carry
 

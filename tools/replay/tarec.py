@@ -28,18 +28,25 @@
                                              (puppet_hold), the globals' `hold` rows and the
                                              viewer's bit of the explored map masked;
                                              the radar picture is compared too where the dump's
-                                             viewed player is the recording's
+                                             viewed player is the recording's. On a file that
+                                             holds its cells the unit slots and yard bit expected
+                                             are the exact stream's (cells_exact); with --seek,
+                                             the dumps a seek's, they are checked by THE
+                                             OCCUPANCY RULE instead, the contest marks with them
   tools/replay/tarec.py compare --images DUMP OTHERDUMP
                                              a report, not a check: the bytes of the main block
                                              and .data that differ between two dumps and that no
                                              row of replay-globals.tsv covers, in runs, grouped by
                                              what the notes map there (exit 0 whatever it finds)
-  tools/replay/tarec.py compare-dumps FILE DUMP OTHERDUMP [--takeover]
+  tools/replay/tarec.py compare-dumps FILE DUMP OTHERDUMP [--takeover] [--seek]
                                              two dumps of playings of FILE at one GameTime with
                                              the same player viewed (a seek in a fresh process
                                              and one in a running playback) equal in every
                                              record, the players' sight counters included; --takeover
-                                             applies the existing fork_view comparison policy
+                                             applies the existing fork_view comparison policy;
+                                             --seek, OTHERDUMP a seek's, checks its unit slots,
+                                             yard bits and contest marks by THE OCCUPANCY RULE on
+                                             a file that holds its cells
   tools/replay/tarec.py counts FILE DUMP     a dump's counts of roots, sinks and observed sites
   tools/replay/tarec.py compare-counts FILE LIVE_A LIVE_B PUPPET_A PUPPET_B [--absent TSV]
                                              [--rewind | --cob-exact]
@@ -84,7 +91,7 @@
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
-here, and REC_FORMAT says which; this tool reads format 16 alone. A recording is REC_MAGIC, then
+here, and REC_FORMAT says which; this tool reads format 17 alone. A recording is REC_MAGIC, then
 blocks; a block is a 32-byte header and its payload, one zstd frame unless the block is stored (the
 header, end and timelines blocks always are), each checked by a CRC-32. A stream block may be a
 sectioned container (RBF_SECTIONS) that decodes to exactly the records it was made from: its unit
@@ -139,7 +146,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 16                           # the lossy stream, sprays as sessions, script slices
+REC_FORMAT = 17                           # the lossy stream: hold rows, sprays as sessions, cells held, script slices
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -221,7 +228,7 @@ EVENTS = {RK_EV_CREATE: "create", RK_EV_NET_CREATE: "network create", RK_EV_DEAT
 FR_TICK, FR_SPAWN, FR_DESTROY, FR_DIE, FR_BURN, FR_DAMAGE, FR_SWAP, FR_CORPSE = range(8)
 REC_PHASE_LATE = 2                        # RK_EV_FEATURE's phase byte at most (tagpu_recfmt.h)
 ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12, 32)     # an RK_EV_FEATURE's arguments after its site
-FS_SOURCE = 6           # reproduction's source test, a multiplayer recording's tick input
+FS_SOURCE = 6           # reproduction's source test: the tick's input where the slots are the engine's
 FS_SITES = 7
 
 RB_HEADER, RB_STREAM, RB_SNAPSHOT, RB_END, RB_MINIMAP, RB_TIMELINES = 1, 2, 3, 4, 5, 6
@@ -459,6 +466,12 @@ def hold_parse(b):
     if any(unit[i] for i in REC_HOLD_POS):
         raise Unreadable("RT_HOLD holds a byte of the unit position +0x6A..+0x75")
     return {"refresh": refresh, "flags": flags, "sha": bytes(b[8:40]), "unit": unit, "node": node}
+
+
+def holds_cells(h):
+    """1 when a header's stream holds its cells' unit slots and yard bit (RT_HOLD's RECL_CELLS):
+    its playing keeps the engine's own (tagpu_recreader.h, recr_holds_cells)."""
+    return bool(h) and bool(h.get("hold", {}).get("flags", 0) & RECL_CELLS)
 
 
 def feature_dims(h):
@@ -760,7 +773,8 @@ class World:
         feature call's holds no other and cells only when it is the tick's, which is inside none;
         a death's holds its explosion's feature calls, in a multiplayer recording its corpse's
         (FR_CORPSE, inside a death only), and may hold deaths; a draw is inside one, FS_SOURCE inside
-        a multiplayer recording's tick only."""
+        the tick only, of a recording whose playing keeps the engine's slots: a multiplayer one, or
+        one that holds its cells (RECL_CELLS)."""
         network = bool(self.header) and self.header.get("mode") == 3
         if kind == RK_EV_FEATURE:
             if self.fbracket or (b[0] == FR_TICK and self.deaths) or b[0] >= len(ROOT_ARGS) or \
@@ -783,8 +797,10 @@ class World:
         elif kind == RK_EV_DRAW:
             if (not self.fbracket and not self.deaths) or len(b) != 12 or b[0] >= FS_SITES:
                 raise Unreadable("a draw outside a feature call or a death")
-            if b[0] == FS_SOURCE and (self.fbracket != FR_TICK + 1 or not network):
-                raise Unreadable("a source test outside a multiplayer recording's tick")
+            if b[0] == FS_SOURCE and (self.fbracket != FR_TICK + 1 or
+                                      not (network or holds_cells(self.header))):
+                raise Unreadable("a source test outside the tick of a recording that keeps the "
+                                 "engine's slots")
 
     def perspective(self, kind, b):
         """THE PERSPECTIVE, as the DLL's reader has it (tagpu_recreader.c, pov_record): a skirmish
@@ -2032,30 +2048,64 @@ def iterations(payload):
         yield tick, payload[start:n]
 
 
+# a cell's bytes a stream that holds its cells (RECL_CELLS) carries at a value it wrote before:
+# the unit slots +0x00 and +0x02 and the yard bit, +0x0C bit 1 (tagpu_reclossy.c)
+CELL_HELD = bytes([0xFF] * 4 + [0] * 8 + [0x02])
+
+
 class Held:
     """The units, their liveness and their order lists as one stream builds them -- the lossy
     stream's or the exact one's -- with the slots and lists each iteration touched, the bytes of
     the iteration's other records in order but its nano sprays and spray sessions, those bodies
-    in order apart, and each touched thing as it was before."""
+    in order apart, and each touched thing as it was before. With `grid`, (columns, rows) of a
+    segment that holds its cells, also the grid from the cells its images carry, the cells each
+    iteration's images touched as they were before (prev_cells), and the tick's input runs apart
+    from the other records (inputs, their bodies in order)."""
 
-    def __init__(self, slots):
+    def __init__(self, slots, grid=None):
         import numpy as np
         self.np = np
         self.units = np.zeros((slots, REC_UNIT_DWORDS), np.uint32)
         self.live = np.zeros(slots, bool)
         self.lists = {}
         self.slots = slots
+        self.gw, self.gh = grid or (0, 0)
+        self.grid = np.zeros((self.gw * self.gh, REC_CELL_BYTES), np.uint8) if grid else None
+        self.prev_cells, self.inputs = {}, []
+
+    def _cells(self, recs, at, ln, evented):
+        x, z, n, zero = struct.unpack_from("<HHHH", recs, at + 4)
+        if not n or n > REC_CELLS_MAX or zero or ln != 8 + n * REC_CELL_BYTES or \
+                x + n > self.gw or z >= self.gh:
+            raise Unreadable(f"a run of cells past the {self.gw} x {self.gh} grid")
+        if evented:
+            self.inputs.append(bytes(recs[at + 4:at + 4 + ln]))
+            return
+        i = z * self.gw + x
+        for c in range(i, i + n):
+            if c not in self.prev_cells:
+                self.prev_cells[c] = self.grid[c].copy()
+        self.grid[i:i + n] = self.np.frombuffer(recs, self.np.uint8, n * REC_CELL_BYTES,
+                                                at + 12).reshape(n, REC_CELL_BYTES)
 
     def iteration(self, recs):
         np = self.np
         head = _REC_HEAD.unpack_from
         prev, prev_lists, other, sprays, sessions = {}, {}, [], [], []
         pend = None
+        evented = False
+        self.prev_cells, self.inputs = {}, []
         at, n = 0, len(recs)
         while at < n:
             kind, ln = head(recs, at)
             size = (4 + ln + 3) & ~3
-            if kind in (RK_UNIT, RK_UNIT_DELTA, RK_UNIT_GONE, RK_ORDERS):
+            if kind in EVENTS:
+                evented = True
+            if kind == RK_CELLS and self.grid is not None:
+                if pend is not None:
+                    raise Unreadable(f"slot {pend[0]}'s list unfinished")
+                self._cells(recs, at, ln, evented)
+            elif kind in (RK_UNIT, RK_UNIT_DELTA, RK_UNIT_GONE, RK_ORDERS):
                 if ln < 2:
                     raise Unreadable(f"a {kind} record of {ln} bytes")
                 s = _U16(recs, at + 4)[0]
@@ -2150,13 +2200,16 @@ def cmd_lossy_check(path, timeline=0, to=None):
       (a) every shown byte exact: each unit's liveness, each live unit's image outside RT_HOLD's
           unit mask, each main order list outside the node mask and each sub list whole; every
           other record -- the players, tables, globals, projectiles, wrecks, cells, explored map,
-          perspective, events and corrections -- byte for byte, in order;
+          perspective, events and corrections -- byte for byte, in order; with RECL_CELLS, each
+          cell an image touched outside CELL_HELD, and the tick's input runs those of the exact
+          stream that differ from the stream's grid outside CELL_HELD, in order;
       (b) every held byte a value the engine produced: a unit dword's held bits the stream's
-          previous value or the exact one, an order list the stream's previous or the exact one;
+          previous value or the exact one, an order list the stream's previous or the exact one,
+          a cell's CELL_HELD bits the stream's previous value or the exact one;
       (c) the two worlds equal byte for byte at the end of every RBF_REFRESH block, every
           snapshot after a refresh block, and a refresh block ending at each refresh of the
           writer's grid (is_refresh, on RT_HOLD's interval) and nowhere else, as the takeover's
-          rounding reads them;
+          rounding reads them -- the grid with them, with RECL_CELLS;
       (d) with RT_HOLD's RECL_SPRAYS, each iteration's nano sprays -- the stream's and the ones
           its spray sessions imply (Sprays, over the stream's units) -- the exact stream's as a
           multiset of (ID, body), and each ID's in the exact stream's order: the order across
@@ -2164,8 +2217,7 @@ def cmd_lossy_check(path, timeline=0, to=None):
           (tagpu_reclossy.c, THE SPRAY SESSIONS); every other event is in (a);
       (e) RT_HOLD in every skirmish segment's header, and the exact stream's blocks and
           iterations the stream's.
-    Held cells (RT_HOLD's RECL_CELLS) are refused as unreadable: this check does not know their
-    rule."""
+    """
     import numpy as np
     ch, fl, stop = lossy_chain(path, timeline)
     lines, bad = [], 0
@@ -2190,15 +2242,17 @@ def cmd_lossy_check(path, timeline=0, to=None):
             fail(f"timeline {seg['id']}: a skirmish header without RT_HOLD")
             break
         else:
-            if hold["flags"] & RECL_CELLS:
-                raise Unreadable(f"RT_HOLD's flags {hold['flags']:#x}: held cells are not "
-                                 f"checked here")
+            if hold["flags"] & ~(RECL_CELLS | RECL_SPRAYS):
+                raise Unreadable(f"RT_HOLD's flags {hold['flags']:#x}: a flag this check does not "
+                                 f"know")
             interval, hu, hn = hold["refresh"], hold["unit"], hold["node"]
         sessions_on = bool(hold and hold["flags"] & RECL_SPRAYS)
         H = np.frombuffer(hu, "<u4")
         HN = np.frombuffer(hn, "<u4")
         node_held = HN.any()
-        D, W = Held(h["slots"]), Held(h["slots"])
+        grid = feature_dims(h)[:2] if holds_cells(h) else None
+        CH = np.frombuffer(CELL_HELD, np.uint8)
+        D, W = Held(h["slots"], grid), Held(h["slots"], grid)
         S = Sprays(h["slots"])
         bl = seg["blocks"]
         n_seg, prev_refresh = 0, 0
@@ -2258,6 +2312,27 @@ def cmd_lossy_check(path, timeline=0, to=None):
                 if od != ow:
                     fail(f"GameTime {t}: the records other than units, order lists and sprays "
                          f"differ")
+                if grid:
+                    cells = sorted(set(D.prev_cells) | set(W.prev_cells))
+                    if cells:
+                        dg, wg = D.grid[cells], W.grid[cells]
+                        pg = np.array([D.prev_cells.get(c, D.grid[c]) for c in cells])
+                        for r in np.nonzero(((dg ^ wg) & ~CH).any(axis=1))[0]:
+                            fail(f"GameTime {t}: cell {cells[r]}'s shown bytes differ")
+                        ok = ((dg & CH) == (wg & CH)) | ((dg & CH) == (pg & CH))
+                        for r in np.nonzero(~ok.all(axis=1))[0]:
+                            fail(f"GameTime {t}: cell {cells[r]}'s held bytes are neither the "
+                                 f"stream's last nor the exact ones")
+                    want = []
+                    for b in W.inputs:
+                        x, z, nc = struct.unpack_from("<HHH", b)
+                        i = z * W.gw + x
+                        run = np.frombuffer(b, np.uint8, nc * REC_CELL_BYTES, 8)
+                        if ((run.reshape(nc, REC_CELL_BYTES) ^ D.grid[i:i + nc]) & ~CH).any():
+                            want.append(b)
+                    if D.inputs != want:
+                        fail(f"GameTime {t}: the tick's input runs are not the exact stream's "
+                             f"that differ from the stream's grid in a shown byte")
                 if wsess:
                     fail(f"GameTime {t}: a spray session in the exact stream")
                 if dsess and not sessions_on:
@@ -2318,7 +2393,8 @@ def cmd_lossy_check(path, timeline=0, to=None):
                     n_refresh += 1
                     if not (np.array_equal(D.live, W.live) and
                             np.array_equal(D.units[D.live], W.units[W.live]) and
-                            D.lists == W.lists):
+                            D.lists == W.lists and
+                            (grid is None or np.array_equal(D.grid, W.grid))):
                         fail(f"GameTime {t}: the stream's world is not the exact copy at a "
                              f"refresh")
             k += 2
@@ -2625,9 +2701,161 @@ def known_names(h):
         return None
 
 
-def cmd_compare(path, dumps, puppet=False, timeline=0, exact=False):
+# THE OCCUPANCY RULE: where a playing's grid is the engine's, its unit slots and yard bit are not
+# compared but checked, and then taken from the dump. The owner's decision for a multiplayer
+# recording (its units follow their owners, tagpu_puppet.c, THE FOOTPRINT WRITERS), and on
+# 2026-10-12 for a skirmish recording that holds its cells after a seek (`contest`): a seek's
+# creates and moves stamp in slot order, and a contested cell goes to whichever came first there,
+# not to the unit that came first in the game (demo-recorder-completeness.md, Decisions taken).
+STRUCTURE = 1 << 29     # unit +0x110: a structure, whose yard bits a footprint writer sets
+U_LOSER = 1 << 27       # unit +0x110: the contest's loser, which a holder's clear re-claims
+U_HOLDER = 1 << 26      # unit +0x110: the holder of a cell a loser contests
+U_MARKS = U_LOSER | U_HOLDER    # the footprint writers' alone
+
+
+def rect(u):
+    """The cells a unit's footprint covers: +0x76/+0x78 by +0x7E/+0x80, i16 each."""
+    x, z = struct.unpack_from("<hh", u, 0x76)
+    w, h = struct.unpack_from("<hh", u, 0x7E)
+    return {(cx, cz) for cx in range(x, x + w) for cz in range(z, z + h)}
+
+
+def structure(u):
+    return struct.unpack_from("<I", u, U_STATE)[0] & STRUCTURE
+
+
+def footprints(dw):
+    """Every cell a live structure of the dump covers."""
+    return set().union(*(rect(u) for u in dw.units.values() if structure(u)))
+
+
+def stamped(u, gw, gh):
+    """Whether the stamp 0x47CC30 writes a mobile unit's footprint at all: it parks one with x or
+    z below 0, or x + w or z + h past the grid's columns or rows, in the off-map bucket and writes
+    no cell (DISASSEMBLED 0x47CC57..0x47CCA3, with Impure's `jg` at 0x47CC8B and 0x47CCA3:
+    tagpu_patches.c, fix_last_cell), and it files the rest by the layer, +0x110 & 3: 1 in slot A,
+    2 in slot B, any other value in no cell (0x47CEBC..0x47CEC2) -- a carried unit's, 0."""
+    x, z = struct.unpack_from("<hh", u, 0x76)
+    w, h = struct.unpack_from("<hh", u, 0x7E)
+    layer = struct.unpack_from("<I", u, U_STATE)[0] & 3
+    return layer in (1, 2) and x >= 0 and z >= 0 and x + w <= gw and z + h <= gh
+
+
+def layer(u):
+    """The layer the stamp files a unit by, +0x110 & 3: 1 slot A, 2 slot B (stamped)."""
+    return struct.unpack_from("<I", u, U_STATE)[0] & 3
+
+
+def occupancy(w, dw, contest=False):
+    """The dump's unit slots and yard bit checked by the engine's invariants instead of compared,
+    and then taken into the expected world `w`: each footprint cell of a live mobile unit names it;
+    each slot a cell names is a live unit whose footprint holds the cell; a yard bit lies inside a
+    live structure's footprint. With `contest`, a skirmish recording's after a seek, the checks are
+    the stamp's own, layer by layer: a mobile unit the stamp does not write (stamped) has no cell
+    to name it; a stamped unit's footprint cell names it in its layer's slot (A for layer 1, B for
+    layer 2), or, when it carries the loser's mark, bit 27, names there another live unit of the
+    same layer -- or a structure, for a layer-1 unit: the stamp files a structure in slot A
+    whatever its layer (0x47CD5A -> 0x47CDA5) -- whose footprint holds the cell and which carries
+    the holder's mark, bit 26 -- the engine's contest kept the cell for that one (the stamp's
+    contest, 0x47CDDB..0x47CE1D, sets 26 on the unit that keeps the cell and 27 on the other; a
+    unit's clear, 0x47D286..0x47D2C4, drops its 27 and, holding 26, drops that and re-claims for
+    the bit-27 units: DISASSEMBLED); a slot names a mobile unit of its own layer, or a structure
+    in slot A; and the contest's marks, +0x110 bits 26 and 27, are taken from the dump too. The
+    differences those checks find. Not checked: which cells of a structure's footprint name it --
+    the stamp files a structure only at the cells its yardmap sets under the current mask
+    (0x47CD82..0x47CD9F), which a dump does not carry -- nor, the marks being per unit, which
+    cell a mark was set for."""
+    out = []
+    cb = REC_CELL_BYTES
+    yards = footprints(dw)
+    rects = {slot: rect(u) for slot, u in dw.units.items()}
+    state = {slot: struct.unpack_from("<I", u, U_STATE)[0] for slot, u in dw.units.items()}
+    for slot, u in sorted(dw.units.items()):
+        if structure(u) or (contest and not stamped(u, w.gw, w.gh)):
+            continue
+        lost = contest and state[slot] & U_LOSER
+        for cx, cz in sorted(rects[slot]):
+            i = (cz * w.gw + cx) * cb
+            if not (0 <= cx < w.gw and 0 <= i < len(dw.grid)):
+                out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
+                           "does not name it")
+                continue
+            named = struct.unpack_from("<HH", dw.grid, i)
+            if not contest:
+                if slot in named:
+                    continue
+                out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
+                           "does not name it")
+                continue
+            want = named[layer(u) - 1]
+            if want == slot:
+                continue
+            if lost and want in dw.units and (cx, cz) in rects[want] and \
+                    (layer(dw.units[want]) == layer(u) or
+                     structure(dw.units[want]) and layer(u) == 1):
+                if not state[want] & U_HOLDER:
+                    out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
+                               f"names unit {want}, which holds it without the holder's mark")
+                continue
+            out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint does not "
+                       f"name it in slot {'AB'[layer(u) - 1]}, and no unit of its layer that "
+                       "holds it took it from this one")
+    for i in range(0, len(dw.grid), cb):
+        c = i // cb
+        xz = (c % w.gw, c // w.gw)
+        w.grid[i:i + 4] = dw.grid[i:i + 4]
+        w.grid[i + 0x0C] = (w.grid[i + 0x0C] & ~2) | (dw.grid[i + 0x0C] & 2)
+        for k, slot in enumerate(struct.unpack_from("<HH", dw.grid, i)):
+            if slot and slot not in dw.units:
+                out.append(f"occupancy: cell {xz} names slot {slot}, not live")
+            elif slot and xz not in rects[slot]:
+                out.append(f"occupancy: cell {xz} names slot {slot}, outside its footprint")
+            elif slot and contest and structure(dw.units[slot]) and k:
+                out.append(f"occupancy: cell {xz} names structure {slot} in slot B")
+            elif slot and contest and not structure(dw.units[slot]) and \
+                    layer(dw.units[slot]) != k + 1:
+                out.append(f"occupancy: cell {xz} names slot {slot} in slot {'AB'[k]}, "
+                           f"a unit of layer {layer(dw.units[slot])}")
+        if dw.grid[i + 0x0C] & 2 and xz not in yards:
+            out.append(f"occupancy: cell {xz} holds a yard bit outside every live structure")
+    if contest:
+        for slot, img in w.units.items():
+            if slot in dw.units:
+                v = struct.unpack_from("<I", img, U_STATE)[0] & ~U_MARKS
+                struct.pack_into("<I", img, U_STATE, v | state[slot] & U_MARKS)
+    return out
+
+
+def cells_exact(path, timeline, w, cache):
+    """The expected world's unit slots and yard bit where the stream holds them (holds_cells) and
+    the dump's grid is the engine's, the live game's or a playing's: the exact stream's at w's
+    GameTime (RB_EXACT, the test lever tagpu_rec.exact), which a playing's engine stamps from the
+    same positions; without one,
+    the stream's own at a refresh, where it is exact (tagpu_reclossy.c). `cache` keeps the exact
+    stream's blocks between dumps. Unreadable anywhere else."""
+    if "x" not in cache:
+        try:
+            cache["x"] = load(path, timeline=timeline, exact=True)
+        except Unreadable as e:
+            cache["x"] = e
+    if isinstance(cache["x"], Unreadable):
+        if refresh_at(path, timeline, w.tick) == w.tick:
+            return
+        raise Unreadable(f"GameTime {w.tick}: the stream holds the cells' slots there, and "
+                         f"{cache['x']}")
+    xh, xbl, _ = cache["x"]
+    x = stream_to(xh, xbl, want=w.tick)
+    if x.tick != w.tick:
+        raise Unreadable(f"the exact stream reads to GameTime {x.tick}, not {w.tick}")
+    for i in range(0, len(w.grid), REC_CELL_BYTES):
+        w.grid[i:i + 4] = x.grid[i:i + 4]
+        w.grid[i + 0x0C] = (w.grid[i + 0x0C] & ~2) | (x.grid[i + 0x0C] & 2)
+
+
+def cmd_compare(path, dumps, puppet=False, timeline=0, exact=False, seek=False):
     h, bl, stop = load(path, timeline=timeline, exact=exact)
     status = 0
+    cache = {}
     held = puppet_rows() if puppet else None
     gslots = globals_list(h.get("globals"))[2] if puppet else None
     gnames = globals_names(gslots) if puppet else known_names(h)
@@ -2644,6 +2872,7 @@ def cmd_compare(path, dumps, puppet=False, timeline=0, exact=False):
             status = 1
             continue
         radar = False
+        stale = []
         if puppet:
             radar = dw.view[1] == w.view[1]
             mapped_hold(w)
@@ -2653,7 +2882,14 @@ def cmd_compare(path, dumps, puppet=False, timeline=0, exact=False):
             puppet_hold(w, held)
             globals_hold(w, gslots)
             globals_hold(dw, gslots)
+            if holds_cells(w.header) and seek:
+                stale = occupancy(w, dw, contest=True)
+        # the live game's grid and a straight playing's are the exact slots: the stream's held
+        # ones are behind them between refreshes
+        if holds_cells(w.header) and not exact and not (puppet and seek):
+            cells_exact(path, timeline, w, cache)
         lines, n = w.differences(dw, h["tables"], dh["tables"], gnames=gnames)
+        lines, n = lines + stale, n + len(stale)
         print(f"{d}: GameTime {dw.tick}, {len(dw.units)} live units"
               + (", the radar picture too" if radar else "") + ": "
               + ("EQUAL" if not n else f"{n} DIFFERENCES"))
@@ -2762,10 +2998,13 @@ def dump_images(path):
     return tick, dh.get("globals"), images
 
 
-def cmd_compare_dumps(path, a_path, b_path, takeover=False):
+def cmd_compare_dumps(path, a_path, b_path, takeover=False, seek=False):
     """Two dumps of playings of FILE at the same GameTime, the same player viewed: every record
     they carry, the players' sight counters included, equal byte for byte. FILE gives the
-    dimensions and the globals' names; only its header is read."""
+    dimensions and the globals' names; only its header is read. With `seek`, B a seek's, on a
+    file that holds its cells: B's unit slots, yard bits and contest marks by THE OCCUPANCY
+    RULE, and A's, the straight playing's, by the same rule on their own, since B's then stand
+    in for them in the comparison."""
     h = header_only(path)
     ah, a = dump_world(a_path, h)
     bh, b = dump_world(b_path, h)
@@ -2776,7 +3015,13 @@ def cmd_compare_dumps(path, a_path, b_path, takeover=False):
         return 1
     if takeover:
         fork_view(a, b, h, h)
+    stale = []
+    if seek and holds_cells(h):
+        # occupancy(a, a) writes A's own cells and marks over themselves
+        stale = ["A's " + line for line in occupancy(a, a, contest=True)]
+        stale += occupancy(a, b, contest=True)
     lines, n = a.differences(b, ah["tables"], bh["tables"], gnames=known_names(h), sight=True)
+    lines, n = lines + stale, n + len(stale)
     when = (f"frame dump at GameTime {ah['frame']} (iteration {a.tick})" if "frame" in ah
             else f"GameTime {a.tick}")
     print(f"{a_path} against {b_path}: {when}: "
@@ -3355,6 +3600,12 @@ def main(argv):
     takeover = argv[1:2] == ["compare-dumps"] and "--takeover" in argv
     if takeover:
         argv = [a for a in argv if a != "--takeover"]
+    seek = "--seek" in argv
+    if seek:
+        if argv[1:2] != ["compare-dumps"] and argv[1:3] != ["compare", "--puppet"]:
+            print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
+            return 2
+        argv = [a for a in argv if a != "--seek"]
     exact = "--exact" in argv
     if exact:
         if argv[1:2] not in (["check"], ["compare"]):
@@ -3439,7 +3690,7 @@ def main(argv):
         if images:
             return cmd_images(argv[2], argv[3])
         if argv[1] == "compare-dumps":
-            return cmd_compare_dumps(argv[2], argv[3], argv[4], takeover)
+            return cmd_compare_dumps(argv[2], argv[3], argv[4], takeover, seek)
         if argv[1] == "images-gate":
             return cmd_images_gate(argv[2], (argv[3], argv[4]), (argv[5], argv[6]),
                                    (argv[7], argv[8]), argv[9], argv[10], argv[11:],
@@ -3452,7 +3703,7 @@ def main(argv):
             return cmd_compare_counts(argv[2], *argv[3:7], absent or str(
                 Path(__file__).resolve().parents[2] / "tagpu" / "ddraw" / "replay-absent.tsv"), rewind,
                 cob_exact)
-        return cmd_compare(argv[2], argv[3:], puppet, timeline, exact)
+        return cmd_compare(argv[2], argv[3:], puppet, timeline, exact, seek)
     except (Unreadable, OSError, struct.error, KeyError) as e:
         print(f"tarec: {e}", file=sys.stderr)
         return 2

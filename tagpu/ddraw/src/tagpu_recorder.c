@@ -103,6 +103,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_patches.h"
 #include "tagpu_puppet.h"
+#include "tagpu_refuse.h"
 #include "tagpu_replay.h"
 #include "tagpu_zoom.h"
 #include "crc32.h"
@@ -6306,11 +6307,12 @@ static const unsigned DRAW_SITES[FS_RNG_SITES] = { 0x004234C2u, 0x00423A38u, 0x0
    `cmp word [cell],0` at 0x424189, slot A of the cursor's cell [esp+0x10] (0x4240E5). It is the
    one value a feature call reads from outside the feature world: area damage's slot sums are
    never read by its feature branch (0x49A407, 0x49A40D), and the spawn, the destroy and the tick
-   read no other unit slot (DISASSEMBLED). A multiplayer playing's host keeps its own slots,
-   because its units follow their owners, so a multiplayer recording records the slot the tick
-   read (FS_SOURCE) and such a host answers from it (tagpu_replay_source). Everywhere else this is
-   the stock test on the engine's own pointer. n is a key compared with the recording's, never an
-   index. 1: a unit holds the source. */
+   read no other unit slot (DISASSEMBLED). A playing's host keeps its own slots on a multiplayer
+   recording, whose units follow their owners, and on a skirmish one, whose stream holds its
+   cells' slots (REC_SKIRMISH_HOLDS's RECL_CELLS, tagpu_reclossy.c): so every recording records the
+   slot the tick read (FS_SOURCE) and such a host answers from it (tagpu_replay_source). Everywhere
+   else this is the stock test on the engine's own pointer. n is a key compared with the
+   recording's, never an index. 1: a unit holds the source. */
 static int __cdecl feat_source(const unsigned char* cell)
 {
     const char* ta = *(const char* const*)(size_t)TA_MAINPP;
@@ -6320,7 +6322,8 @@ static int __cdecl feat_source(const unsigned char* cell)
     Rec* r;
     if (tagpu_replay_source(n, &v)) return v != 0;
     memcpy(&a, cell, 2);
-    if (s_fdepth && (r = ev_rec()) != NULL && r->feat && r->mode == MODE_NETWORK) {
+    if (s_fdepth && (r = ev_rec()) != NULL && r->feat &&
+        (r->mode == MODE_NETWORK || (REC_SKIRMISH_HOLDS & RECL_CELLS))) {
         unsigned char b[12];
         unsigned w = a;
         b[0] = FS_SOURCE;
@@ -7166,6 +7169,13 @@ void __cdecl tagpu_rec_capture(void)
     masks_init();
     tick = *(int*)(ta + OFF_GAMETIME);
     mode = game_mode(ta);
+    /* a NOP of ours that a failed restore left at a contest site hands a contested cell to the
+       incumbent where the engine hands it to a type-3 seat's unit, so this peer would stamp
+       otherwise than the others; another module's bytes there are its own business */
+    if (mode == MODE_NETWORK && tagpu_puppet_contest_kept())
+        tagpu_refuse("This network game cannot start: a replay played earlier in this session "
+                     "changed the game's rule for units sharing a cell and could not put it "
+                     "back. Restart the game.");
     if (mode == MODE_NETWORK && ((unsigned char)ta[OFF_NETWORK] & 1)) mp_capture(&L, (unsigned)tick);
     ai_finish((unsigned)tick);
 

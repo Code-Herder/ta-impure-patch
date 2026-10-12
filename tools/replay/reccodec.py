@@ -1,4 +1,4 @@
-"""reccodec -- a recording's stream codec, read side: format 16's block walk, the sectioned
+"""reccodec -- a recording's stream codec, read side: format 17's block walk, the sectioned
 container, the unit frame, the pool frame and the four record frames, in numpy and numba.
 
     import reccodec
@@ -77,7 +77,7 @@ NROLES = len(ROLES)
 
 Unreadable = tarec.Unreadable
 
-REC_FORMAT = 16
+REC_FORMAT = 17
 RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH = 1, 2, 4, 8
 RT_CODEC, RT_PHYSICS, RT_AIR = 29, 30, 31
 RT_CODEC_DECLINED, RT_CODEC_MISMATCH = 44, 45
@@ -3073,7 +3073,7 @@ def header_proj(es):
 
 
 def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None, start=None):
-    """Every complete block of a recording of format 16, in order: Block(ordinal (from 1), offset,
+    """Every complete block of a recording of format 17, in order: Block(ordinal (from 1), offset,
     kind, flags, first, last, raw, packed, payload) with a stream block's payload its records.
     With decode=False, stream, snapshot and minimap payloads are None. Returns (as a generator's
     value) why the reading stopped short, or None at a clean end; raises Unreadable at a block it

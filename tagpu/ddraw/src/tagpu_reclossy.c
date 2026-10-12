@@ -3,18 +3,25 @@
 
    WHAT IT HOLDS. replay-hold.tsv names the bytes no reader on a playback host shows (RT_HOLD
    carries its masks): a unit image's held bits and a main list node's (+0x5C; the sub list is
-   never held). The filter keeps D, the world a reader of the stream holds -- units, liveness and
-   both lists of every slot -- built from the records it writes by the reader's own rules, never
+   never held), and RT_HOLD's RECL_CELLS the cells' unit slots and yard bit. The filter keeps D,
+   the world a reader of the stream holds -- units, liveness and both lists of every slot, and the
+   grid with RECL_CELLS -- built from the records it writes by the reader's own rules, never
    computed beside them, and writes, for each iteration:
    - a unit delta whose dwords are its slot's changes in D: the input's dwords that hold no held
      bit, and the held bits only where they are exact at a refresh. A held byte that changed alone
      is not written; one that changed beside a shown byte of its dword is kept at D's value;
    - an order list whose shown bytes equal D's but whose held bytes differ is dropped; any other
      list is written as it came, and D's becomes it;
+   - with RECL_CELLS (a playing keeps the engine's own slots, tagpu_puppet.c, THE FOOTPRINT
+     WRITERS), a run of cell images with its unit slots (+0x00, +0x02) and yard bit (+0x0C bit 1)
+     at D's values, dropped when it then equals D's cells; and the feature tick's input run
+     dropped when no cell of it differs from D's but in those bytes, which a playing that keeps
+     the engine's slots never writes (tagpu_replay.c, cell_put), the tick's one slot read being
+     recorded as FS_SOURCE instead;
    - with RECL_SPRAYS, a nano spray its unit's session predicts is left out, and the sessions
      are written (THE SPRAY SESSIONS, below);
    - every other record as it came.
-   With a table of no rows and no RECL_SPRAYS nothing is held, every delta and list is written as
+   With a table of no rows and no flags nothing is held, every delta and list is written as
    it came, and the stream's records are the capture's; refreshes then only end blocks
    (tagpu_recwriter.c).
 
@@ -23,18 +30,23 @@
      RK_UNIT, a birth or a correction, and dropped at RK_UNIT_GONE with both its lists; a list is
      replaced whole whenever it is written. So a held byte in D is always a value the engine
      produced for that same unit, or that same list, since the last refresh: nothing is zeroed or
-     made up (delta_filter, list_done).
+     made up (delta_filter, list_done). A cell's held slots and yard bit are the ones a refresh,
+     or the segment's first image, wrote for that cell (cells_filter): a slot may name a unit
+     that has moved or died since, which a playing that holds cells never reads (cell_put).
    - EVERY SHOWN BYTE IS EXACT AT EVERY ITERATION. A delta's dwords with no held bit are the
-     input's, a list is written whenever a shown byte of it differs from D's, and every record of
-     another kind is copied (a correction among them: it is the writer's copy meeting the live
-     state, and it reaches the file whatever the table holds).
+     input's, a list is written whenever a shown byte of it differs from D's, a cell image's
+     other bytes are the input's, an input run is dropped only when its other bytes are D's, and
+     every record of another kind is copied (a correction among them: it is the writer's copy
+     meeting the live state, and it reaches the file whatever the table holds).
    - D EQUALS THE WRITER'S COPY AT A REFRESH (an ordering). At a refresh every delta carries its
-     held dwords too, each live slot no record named gets a delta to the copy's image, and each
-     list that differs is written whole; the writer then checks reclossy_equal and abandons the
+     held dwords too, each live slot no record named gets a delta to the copy's image, each list
+     that differs is written whole and so is each run of cells that differs; the writer then
+     checks reclossy_equal and abandons the
      file when it fails, so a snapshot, which always follows a refresh, is a world the stream
      reaches, and so is every takeover's start (tagpu_replay.c, tk_bound).
    - BOUNDS. Every slot is checked against nslots, a delta's bitmap against the image, a list's
-     nodes against REC_ORDERS_MAX and its records against the list they continue.
+     nodes against REC_ORDERS_MAX and its records against the list they continue, and a run of
+     cells against the grid, as every reader bounds it (tagpu_recreader.c, cells_ok).
 
    WHY A HELD VALUE NEVER REACHES A PLAYBACK HOST'S WORLD. The playing writes D into the engine at
    every iteration: every live unit's whole image, each byte replay-layout.tsv leaves a value and
@@ -68,8 +80,9 @@
 
    A REFRESH'S WRITES go where a reader takes them as images, before the iteration's events: the
    deltas in the run of unit records the iteration begins with, in slot order among the input's
-   (the unit frame lists an iteration's deltas by ascending slot), and the lists before the
-   iteration's first event or click.
+   (the unit frame lists an iteration's deltas by ascending slot), and the cells and the lists
+   before the iteration's first event or click (an RK_CELLS after an RCS_EVENTS record is the
+   tick's input, not an image, to every reader).
 
    THE SPRAY SESSIONS (RECL_SPRAYS). A nano spray's point is the piece position QueryNanoPiece
    0x43E400 gave, which the game shows and a playback host cannot make (its COB pose is not the
@@ -124,6 +137,8 @@
 
 #define UNIT_DW  REC_UNIT_DWORDS
 #define NODE_DW  (REC_ORDER_IMAGE / 4)
+#define CB       REC_CELL_BYTES
+#define CELL_YARD 0x02                  /* a cell's +0x0C bit 1, the yard's                      */
 
 /* ---- the spray sessions' table (THE SPRAY SESSIONS above) ---------------------------------- */
 
@@ -160,6 +175,9 @@ struct RecLossy {
     RecLossyList*  lists;               /* nslots * 2                                          */
     unsigned char* named;               /* scratch: a slot some unit record of the iteration names */
     unsigned*      touched;             /* ... the slots set, to clear them                    */
+    unsigned       gw, gh;
+    unsigned char* grid;                /* D's cells, gw * gh: with RECL_CELLS only            */
+    unsigned char* run;                 /* scratch: one run of cells, REC_CELLS_MAX of them    */
     RecSprays*     sp;                  /* with RECL_SPRAYS: the readers' table, else NULL     */
     unsigned char* sprays;              /* scratch: the iteration's sprays of a slot, at most 2 */
     const unsigned char** spray;        /* ... the first one's body after its ID               */
@@ -351,10 +369,14 @@ RecLossy* reclossy_begin(const RecLossyParams* p)
 {
     RecLossy* L;
     unsigned i;
-    if (p->nslots < 2 || p->nslots > 0xFFFF) return NULL;
+    if (p->nslots < 2 || p->nslots > 0xFFFF || (p->flags & ~(RECL_CELLS | RECL_SPRAYS)) ||
+        p->gw > 0xFFFF || p->gh > 0xFFFF)
+        return NULL;
     L = (RecLossy*)calloc(1, sizeof *L);
     if (!L) return NULL;
     L->nslots = p->nslots;
+    L->gw = p->gw;
+    L->gh = p->gh;
     for (i = 0; i < UNIT_DW; i++) L->hunit[i] = dw(p->hold_unit, i);
     for (i = 0; i < NODE_DW; i++) L->hnode[i] = dw(p->hold_node, i);
     L->units = (unsigned char*)calloc(p->nslots, REC_UNIT_IMAGE);
@@ -362,7 +384,12 @@ RecLossy* reclossy_begin(const RecLossyParams* p)
     L->lists = (RecLossyList*)calloc((size_t)p->nslots * 2, sizeof *L->lists);
     L->named = (unsigned char*)calloc(p->nslots, 1);
     L->touched = (unsigned*)malloc(p->nslots * sizeof *L->touched);
-    if (!L->units || !L->live || !L->lists || !L->named || !L->touched) {
+    if ((p->flags & RECL_CELLS) && p->gw && p->gh) {
+        L->grid = (unsigned char*)calloc((size_t)p->gw * p->gh, CB);
+        L->run = (unsigned char*)malloc((size_t)REC_CELLS_MAX * CB);
+    }
+    if (!L->units || !L->live || !L->lists || !L->named || !L->touched ||
+        ((p->flags & RECL_CELLS) && p->gw && p->gh && (!L->grid || !L->run))) {
         reclossy_free(L);
         return NULL;
     }
@@ -389,6 +416,8 @@ void reclossy_free(RecLossy* L)
     free(L->live);
     free(L->named);
     free(L->touched);
+    free(L->grid);
+    free(L->run);
     recsprays_free(L->sp);
     free(L->sprays);
     free((void*)L->spray);
@@ -510,6 +539,85 @@ static int refresh_lists(RecLossy* L, RecBytes* out, int refresh, const RecLossy
                     k * REC_ORDER_IMAGE);
             first += k;
         } while (first < e->n);
+    }
+    return 1;
+}
+
+/* At a refresh: each run of cells whose image in D differs from the copy's, the copy's, so D's
+   grid ends as the copy's. Called where the iteration's images end: every image cell of the
+   iteration has come, exact at a refresh, and the copy's grid takes no cell after them
+   (tagpu_recwriter.c, feature_record). */
+static void refresh_cells(RecLossy* L, RecBytes* out, int refresh, const RecLossyExact* x)
+{
+    size_t row = (size_t)L->gw * CB;
+    unsigned z, c;
+    if (!refresh || !L->grid || !x->grid) return;
+    for (z = 0; z < L->gh; z++) {
+        unsigned char* d = L->grid + z * row;
+        const unsigned char* e = x->grid + z * row;
+        if (!memcmp(d, e, row)) continue;
+        for (c = 0; c < L->gw; ) {
+            unsigned n = 0;
+            unsigned short pre[4];
+            while (c + n < L->gw && n < REC_CELLS_MAX &&
+                   memcmp(d + (size_t)(c + n) * CB, e + (size_t)(c + n) * CB, CB))
+                n++;
+            if (!n) { c++; continue; }
+            pre[0] = (unsigned short)c;
+            pre[1] = (unsigned short)z;
+            pre[2] = (unsigned short)n;
+            pre[3] = 0;
+            rec_put(out, RK_CELLS, pre, 8, e + (size_t)c * CB, n * CB);
+            memcpy(d + (size_t)c * CB, e + (size_t)c * CB, (size_t)n * CB);
+            c += n;
+        }
+    }
+}
+
+/* An RK_CELLS on a grid whose slots and yard bit are held (RECL_CELLS): u16 x, u16 z, u16 cells,
+   u16 0, then the cells. An image (`input` 0) with `exact` -- a refresh, or the record a
+   correction introduces -- is written as it came and D takes it; else its slots and yard bit
+   become D's, and it is dropped when it then equals D's cells or else written so and taken. The
+   feature tick's input (`input` 1) changes no image: it is dropped when each of its cells equals
+   D's but in the slots and the yard bit, and else written as it came. 1, or 0 for a run outside
+   the grid, which no writer makes. */
+static int cells_filter(RecLossy* L, RecBytes* out, const unsigned char* rec, size_t size,
+                        unsigned len, int input, int exact)
+{
+    const unsigned char* b = rec + 4;
+    unsigned short h[4];
+    unsigned char* d;
+    unsigned k;
+    if (len < 8) return 0;
+    memcpy(h, b, 8);
+    if (!h[2] || h[2] > REC_CELLS_MAX || h[3] || len != 8u + h[2] * CB ||
+        (unsigned)h[0] + h[2] > L->gw || h[1] >= L->gh)
+        return 0;
+    d = L->grid + ((size_t)h[1] * L->gw + h[0]) * CB;
+    if (input) {
+        for (k = 0; k < h[2]; k++) {
+            const unsigned char* c = b + 8 + (size_t)k * CB;
+            const unsigned char* o = d + (size_t)k * CB;
+            if (memcmp(c + 4, o + 4, CB - 5) || ((c[CB - 1] ^ o[CB - 1]) & ~CELL_YARD)) break;
+        }
+        if (k < h[2]) rb_put(out, rec, size);
+        return 1;
+    }
+    if (exact) {
+        rb_put(out, rec, size);
+        memcpy(d, b + 8, (size_t)h[2] * CB);
+        return 1;
+    }
+    memcpy(L->run, b + 8, (size_t)h[2] * CB);
+    for (k = 0; k < h[2]; k++) {
+        unsigned char* c = L->run + (size_t)k * CB;
+        const unsigned char* o = d + (size_t)k * CB;
+        memcpy(c, o, 4);
+        c[CB - 1] = (unsigned char)((c[CB - 1] & ~CELL_YARD) | (o[CB - 1] & CELL_YARD));
+    }
+    if (memcmp(L->run, d, (size_t)h[2] * CB)) {
+        rec_put(out, RK_CELLS, h, 8, L->run, h[2] * CB);
+        memcpy(d, L->run, (size_t)h[2] * CB);
     }
     return 1;
 }
@@ -676,7 +784,7 @@ int reclossy_iteration(RecLossy* L, const unsigned char* recs, size_t n, int ref
 {
     size_t at = 0, end;
     unsigned ntouched = 0, ucur = 1, i, tick = 0;
-    int units = 1, imaged = 1, open = 0, correct = 0, ok = 1;
+    int units = 1, imaged = 1, evented = 0, open = 0, correct = 0, ok = 1;
     Pend p;
     memset(&p, 0, sizeof p);
     /* the frame, every slot a unit record names -- a slot named by an RK_UNIT or RK_UNIT_GONE
@@ -722,6 +830,7 @@ int reclossy_iteration(RecLossy* L, const unsigned char* recs, size_t n, int ref
         }
         if (imaged && (rec_section_of(kind) == RCS_EVENTS || kind == RK_CLICK)) {
             imaged = 0;
+            refresh_cells(L, out, refresh, x);
             if (!refresh_lists(L, out, refresh, x)) { ok = 0; break; }
         }
         if (units && at) refresh_units(L, out, &ucur, s, refresh, x);
@@ -751,6 +860,13 @@ int reclossy_iteration(RecLossy* L, const unsigned char* recs, size_t n, int ref
                          x->units + (size_t)s * REC_UNIT_IMAGE, L->named[s] & 2);
             break;
         }
+        case RK_CELLS:
+            if (!L->grid) {
+                rb_put(out, recs + at, size);
+                break;
+            }
+            if (!cells_filter(L, out, recs + at, size, len, evented, refresh || correct)) ok = 0;
+            break;
         case RK_ORDERS:
             if (!list_part(L, &p, &open, b, len, at, correct)) { ok = 0; break; }
             if (p.next == p.total) {
@@ -772,11 +888,15 @@ int reclossy_iteration(RecLossy* L, const unsigned char* recs, size_t n, int ref
         /* RK_CORRECT introduces the next record, or the next list's records */
         if (kind == RK_CORRECT) correct = 1;
         else if (!open) correct = 0;
+        if (rec_section_of(kind) == RCS_EVENTS) evented = 1;
         at += size;
     }
     if (ok && open) ok = 0;
     if (ok && units) refresh_units(L, out, &ucur, L->nslots, refresh, x);
-    if (ok && imaged && !refresh_lists(L, out, refresh, x)) ok = 0;
+    if (ok && imaged) {
+        refresh_cells(L, out, refresh, x);
+        if (!refresh_lists(L, out, refresh, x)) ok = 0;
+    }
     if (ok && L->sp) sessions_put(L, out, tick, snapshot);
     for (i = 0; i < ntouched; i++) L->named[L->touched[i]] = 0;
     for (i = 0; i < L->nsprayed; i++) L->sprays[L->sprayed[i]] = 0;
@@ -787,6 +907,7 @@ int reclossy_iteration(RecLossy* L, const unsigned char* recs, size_t n, int ref
 int reclossy_equal(const RecLossy* L, const RecLossyExact* x)
 {
     unsigned s, k;
+    if (L->grid && x->grid && memcmp(L->grid, x->grid, (size_t)L->gw * L->gh * CB)) return 0;
     for (s = 1; s < L->nslots; s++) {
         if (!L->live[s] != !x->live[s]) return 0;
         if (L->live[s] && memcmp(L->units + (size_t)s * REC_UNIT_IMAGE,

@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 16 and its readers take format 16 alone (*The file*, below).
+The recorder writes recording format 17 and its readers take format 17 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -140,7 +140,7 @@ One file per recording, `replays\<date> <time> <map>.imprec` in the game's folde
 stored sizes, a CRC-32 of the stored bytes and one of the header — and the payload: exactly one
 zstd frame of the raw bytes (level 3, the vendored zstd 1.5.7 in `src/zstd.c`) when that is
 smaller, else the bytes stored. The header, the end and the timelines blocks are always stored, so
-a header reads without zstd. `inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 16; a reader takes
+a header reads without zstd. `inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 17; a reader takes
 that format alone:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
@@ -1068,7 +1068,10 @@ it. The engine facts are [the engine map](../exe-reverse-engineering.md#the-demo
   (`0x47CDCA`); a sequence frame by the sequence's own count (as `0x4B8B30` bounds it), read
   through the def's field the recorded ID names and never through the record; the cursor by the
   grid's cells.
-- **The unit slots and the yard bit come from the images alone.** The stamp, the clear and the
+- **The unit slots and the yard bit come from the images alone** on a recording whose stream does
+  not hold them; one that holds them (format 16's `RECL_CELLS`, every skirmish recording of this
+  build) plays with the engine's own (*The cells held*, [making recordings smaller](demo-recorder-size.md)).
+  The stamp, the clear and the
   re-claim still run on the host — for S2b's placements through the set-position `0x48A9F0`, the
   creates and deaths, and the host's own unit tick — because the stamp also files the unit in its
   sort bucket, which no image writes. Each call's writes to the grid are undone at its return: the
@@ -1076,9 +1079,13 @@ it. The engine facts are [the engine map](../exe-reverse-engineering.md#the-demo
   a cell wider each way, and puts the slots and the yard bit back. The three write only inside the
   footprint; the clear nests re-claims through its bucket walk's callback, so the saved frames are
   a stack, two deep in play. A deeper call or a footprint wider than 64 cells either way is counted
-  and named. Without it the host's slots ran an iteration ahead of
-  the recording's: an aircraft's recorded slot follows its position by an iteration, and the
-  placement stamps it at the image's position. A recording plays only when the recorder's hooks
+  and named. Without it the host's slots differ from the recording's where two footprints
+  contest a cell: every puppet seat is type 3, so the host's contest gives the cell to the
+  newcomer where the recording machine's incumbent kept it
+  ([engine map](../exe-reverse-engineering.md), *The footprint contest's rule*).
+  Every recorded footprint cell is the set-position's rounding of the recorded position (MEASURED
+  2026-10-12, 3,640,526 of 3,640,526 unit-iterations of two recordings): the placement's stamp is
+  not ahead of the recording. A recording plays only when the recorder's hooks
   are in, since the draws, the explosions and this undo are taken there.
 
 **The comparison.** A dump carries the grid, the pool, its heads and the cursor, and
@@ -1133,8 +1140,9 @@ MEASURED 2026-09-30 under Wine, format 3, scripted runs on a private X server:
   carry links (3,090 iterations) and the four-AI game in the stock-limits build (2,010
   iterations, the 2,048-record pool). Every check is clean, no cell changed that no writer had
   marked, and every dump is equal on puppets, five, six and five. The battle's first playback
-  found one cell's slot B an iteration ahead of the recording, the cause of the footprint
-  writers' undo (*Playback*); its next found 1,200 of them called inside a clear. With the undo
+  found one cell's slot B naming another unit than the recording's, the cause of the footprint
+  writers' undo (*Playback*; a contest decided by the puppet's type-3 rule or the stamp's edge
+  bound, an aircraft at the map's last columns, not a lead of the stamp [INFERRED, 2026-10-12]); its next found 1,200 of them called inside a clear. With the undo
   stacked, the battle's playback undid 315,067 footprint writes and missed none.
 - **The cost in the battle**: 569 µs an iteration on average and 2.21 ms at worst (GameTime
   3,305, 111 KB into the ring), against S2a's 475 µs and 1.15 ms; in the carry-links game 123 and
@@ -2018,7 +2026,7 @@ ten minutes or less.
   the recorded start at the replay step, after the whole unit tick, so its first slice ran at T+1,
   and the scripts it starts (RestoreAfterDelay, walk, `EMIT_SFX`) a tick later; a one-tick slice lag
   can re-phase a looping script for the rest of a unit's life (the level-start lag below). Since
-  format 16 the recorder writes `RK_EV_SLICE` just before the slice of any unit whose COB had an
+  format 17 the recorder writes `RK_EV_SLICE` just before the slice of any unit whose COB had an
   engine start since the capture point, and a playing skips that unit's slice in the host's unit
   tick and gives it at the marker, after the recorded start (*The script slice*, below).
 - **The level-start lag, fixed.** The playing made the level's own units after the host's first
@@ -2525,7 +2533,7 @@ outside S4. The naval COB stop and failed-worker cleanup are corrected. The
 full landing tier passes 570 checks across 20 fixtures, including 60 exact round
 trips, with all 62 changed functions reached on every required build.
 
-## The script slice (format 16)
+## The script slice (format 17)
 
 A COB thread's only clock is the unit tick's `DoScriptsNow(1)` (`0x48ADEB`, its only call), so a
 start reaches its first slice at the first slice of its unit after it. On the recording machine
