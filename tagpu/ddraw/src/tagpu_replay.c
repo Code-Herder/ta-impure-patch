@@ -2951,7 +2951,7 @@ static struct {
     unsigned char st[0x10000];
     uint16_t list[0x10000];         /* the slots the plan's markers name, each once             */
     unsigned n;
-    struct { unsigned planned, made, deferred, given, atcreate, settled, notgiven, unreached,
+    struct { unsigned planned, aftercreate, deferred, given, atcreate, settled, notgiven, unreached,
                       unmade, twice, lost, late, remote; } c;
 } s_sl;
 
@@ -3020,6 +3020,7 @@ static void slice_plan(const Lv* L, const RecWorld* W)
             if (s_sl.st[slot] == SL_CREATED) {
                 s_sl.st[slot] = SL_AFTER_CREATE;
                 s_sl.list[s_sl.n++] = (uint16_t)slot;
+                s_sl.c.aftercreate++;
             } else {
                 s_sl.c.twice++;
             }
@@ -3059,7 +3060,6 @@ static void slice_created(const Lv* L, unsigned slot)
     switch (s_sl.st[slot]) {
     case SL_AFTER_CREATE:
         s_sl.st[slot] = SL_MADE;
-        s_sl.c.made++;
         break;
     case SL_WAITING:                    /* a multiplayer create: its marker has passed */
         if ((u = slice_unit(slot)) && (cob = cob_of(u))) {
@@ -8765,7 +8765,7 @@ static void counts_log(const char* when, unsigned now)
                "deferred by the unit tick, %u given at their marker, %u at a create's end, %u at "
                "the step's end, %u not given (%u not reached, %u not made, %u voided, %u twice), "
                "%u late iterations, %u remote markers left in the unit tick", s_name,
-               s_sl.c.planned, s_sl.c.made, s_sl.c.deferred, s_sl.c.given, s_sl.c.atcreate,
+               s_sl.c.planned, s_sl.c.aftercreate, s_sl.c.deferred, s_sl.c.given, s_sl.c.atcreate,
                s_sl.c.settled, s_sl.c.notgiven + s_sl.c.unreached + s_sl.c.unmade + s_sl.c.lost +
                s_sl.c.twice, s_sl.c.unreached, s_sl.c.unmade, s_sl.c.lost, s_sl.c.twice,
                s_sl.c.late, s_sl.c.remote);

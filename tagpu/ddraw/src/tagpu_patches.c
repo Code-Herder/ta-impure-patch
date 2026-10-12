@@ -4804,12 +4804,18 @@ SIM_FEATURE(killed_query, SIM_PUPPET_RUNS, "battle slice-walkers codec-decline")
    the recording machine's own. So the destructor's one call of 0x4B0A70 goes through
    dtor_killed: inside a replayed death of a unit whose death the recording machine made
    (tagpu_tx_replay_death's `own`), the query 0x4B0BC0 the owner's Send_UnitDeath ran, with the
-   same severity, the one the death record carries (Send_UnitDeath writes the query's severity
-   as the 0x0C's +9, 0x4865E9..0x4865F4); everywhere else the start, unchanged. The corpse
+   severity the death record carries; everywhere else the start, unchanged. That severity is the
+   query's value after the call: Send_UnitDeath reads it back at 0x4865E9, after the query wrote
+   its arguments back (0x4B0CE6..0x4B0D11), and writes it as the 0x0C's +9 (0x4865F4). So the
+   playing's query starts from the recording machine's answer, which is the value it started from
+   unless the script assigns its first parameter, and an answer of 0 or below makes no Killed at
+   all on the playing (0x48685A's jle) [INFERRED: no stock Killed seen to assign it]. The corpse
    argument starts at 0: Send_UnitDeath passes a local it writes only in its mode-7 path
    (0x48652C), which the query then skips (0x486528), so a Killed that reads it before writing it
-   reads stack contents on the recording machine [DISASSEMBLED 0x4864B0..0x4865C8]. The result is
-   not read: 0x48687C overwrites eax, ecx and edx before any use, as after the stock call.
+   reads stack contents on the recording machine [DISASSEMBLED 0x4864B0..0x4865C8]. Nothing after
+   the call relies on what it leaves in eax, ecx or edx: the paths that skip it (0x486853,
+   0x48685A) join it at 0x48687C with unrelated values there, though the stock call returns with
+   ecx the COB object (its pop ecx).
    CLASS: in the fail-closed table: a playing without it would run every dying unit's waiting
    threads. */
 typedef int (__thiscall* PFN_StartArgs)(char* cob, const char* name, void* cb, int now, int argc,

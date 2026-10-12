@@ -5048,21 +5048,23 @@ void tagpu_rec_slice_given(unsigned where)
 
 /* THE OWNER'S QUERIES. A COB query, 0x4B0BC0(name, &a0, a1, a2, a3) thiscall on a unit's COB
    object, runs one thread of that object to its end at once (0x4B0C40) and can change the object's
-   statics and pieces. Two of the engine's query sites run only in an order handler, which only the
-   unit's owner's machine runs: QueryBuildInfo, whose only call is BuildingBuild's state dispatch
-   at 0x4027FB, and QueryNanoPiece, whose only call is 0x4B0BC0 at 0x43E427 inside 0x43E400(unit,
-   out), which fifteen order handlers call (the engine map, *The owner's COB queries*). Each order
-   handler runs from the unit tick's order runs, 0x43B7C0 at 0x48AF98 and 0x43BAD0 at 0x48AF9E,
-   in the unit's turn after its slice (0x48ADEB), or with event 2 from the destructor's 0x43A1F0,
-   which BuildingBuild and the four other build handlers return on before either query (the
-   engine map, *The nano spray*); so a query is inside no death and no feature call. A playing runs
-   no order handler, so the recording carries each query as RK_EV_QUERY {ID, the query} at its
-   place, and the playing makes it there through the same 0x4B0BC0 with the same arguments
-   (tagpu_replay.c, THE OWNER'S QUERIES). The query's COB is noted in the slice set too, so a slice
-   of that object later in the step would be marked: every entry into a COB outside a slice that
-   the playing makes from the recording is noted (THE SLICE MARKERS, A SUPERSET IS EXACT). A
-   multiplayer recording carries the recording machine's own queries the same way; another
-   machine's are made on its own copy of the unit, which no recording of this one holds. */
+   statics and pieces. Two of the engine's query sites run only in an order handler, which runs
+   only on the machine of the handler's unit's owner: QueryBuildInfo, whose only call is
+   BuildingBuild's state dispatch at 0x4027FB, on the handler's unit, and QueryNanoPiece, whose only
+   call is 0x4B0BC0 at 0x43E427 inside 0x43E400(unit, out), which fifteen order handlers call on
+   the spray's source -- the handler's unit (order+0xE), or in SelfRepair 0x402430 the repairing
+   pad, the order's target (order+0x16, 0x402525..0x40252E), which can be another player's (the
+   engine map, *The owner's COB queries*). Each order handler runs from the unit tick's order runs,
+   0x43B7C0 at 0x48AF98 and 0x43BAD0 at 0x48AF9E, in its own unit's turn after that unit's slice
+   (0x48ADEB), or with event 2 from the destructor's 0x43A1F0, which BuildingBuild and the four
+   other build handlers return on before either query (the engine map, *The nano spray*); so a
+   query is inside no death and no feature call, and the pad's query in an aircraft's turn can
+   come before the pad's own slice in the same tick. A playing runs no order handler, so the
+   recording carries each query as RK_EV_QUERY {ID, the query} at its place, and the playing makes
+   it there through the same 0x4B0BC0 with the same arguments (tagpu_replay.c, THE OWNER'S
+   QUERIES). A multiplayer recording carries the queries the recording machine's handlers made the
+   same way; another machine's are made on its own copy of the unit, which no recording of this
+   one holds. */
 /* `ecx`, when the site has it, is the COB object the call is made on, which must be the unit's */
 static void rec_query(Rec* r, const char* unit, const unsigned* ecx, unsigned query)
 {
@@ -5074,6 +5076,11 @@ static void rec_query(Rec* r, const char* unit, const unsigned* ecx, unsigned qu
         s_bad++;                                       /* not the unit the disassembly says */
         return;
     }
+    /* THE INVARIANT this keeps, an ordering: a slice of this COB later in the step is marked, so
+       a playing gives it after the query as the recording machine did. SelfRepair queries the
+       pad in an aircraft's turn, before the pad's own slice when the pad's slot comes later; and
+       every entry into a COB outside a slice that a playing makes from the recording is then
+       noted (THE SLICE MARKERS, A SUPERSET IS EXACT). */
     slice_note(PTR(cob));
     memcpy(b, &id, 4);
     b[4] = (unsigned char)query;

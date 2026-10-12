@@ -344,11 +344,13 @@ enum RecKind {
                           feature call or a death; at most one per slot an iteration. A playing gives
                           the slice here instead of in its own unit tick (tagpu_replay.c, THE SCRIPT
                           SLICES)                                                                 */
-    RK_EV_QUERY,       /* u32 unit ID, u8 the query (REC_QUERY_*), u8 0 x3: a COB query only the
-                          owner's machine makes, 0x4B0BC0 on the unit's COB object from an order
-                          handler in the unit's turn, after its slice. A top-level event of the
-                          step, like RK_EV_SLICE. A playing makes the same query at this place
-                          (tagpu_replay.c, THE OWNER'S QUERIES)                                    */
+    RK_EV_QUERY,       /* u32 unit ID, u8 the query (REC_QUERY_*), u8 0 x3: a COB query only an
+                          order handler makes, 0x4B0BC0 on that unit's COB object. The handler runs
+                          in its own unit's turn, after that unit's slice; the queried unit is the
+                          handler's, or for SelfRepair's QueryNanoPiece the repairing pad
+                          (0x402525..0x40252E), whose own slice can come later in the tick. A
+                          top-level event of the step, like RK_EV_SLICE. A playing makes the same
+                          query at this place (tagpu_replay.c, THE OWNER'S QUERIES)               */
     RK_KINDS
 };
 
