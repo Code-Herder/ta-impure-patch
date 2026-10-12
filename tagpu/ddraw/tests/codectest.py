@@ -43,8 +43,8 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
 
 --native builds tests/codectest-asan.exe with the host's gcc and -fsanitize=address,undefined and
 runs that instead of tests/codectest.exe under Wine (WINEPREFIX: the main checkout's wineprefix/).
-IN is a recording of format 14; transcode and lossy also read a records-only one (no sectioned
-block) of format 12 or later, and write format 14. Exit 0 when every check holds, 1 when one fails, 2 when it cannot
+IN is a recording of format 15; transcode and lossy also read a records-only one (no sectioned
+block) of format 12 or later, and write format 15. Exit 0 when every check holds, 1 when one fails, 2 when it cannot
 run. Needs numpy, numba and zstandard (devpy.ensure() re-executes under the shared venv).
 """
 import os

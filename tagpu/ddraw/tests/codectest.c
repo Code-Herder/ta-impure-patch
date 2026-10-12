@@ -62,7 +62,7 @@
                                     state)
      codectest sin                  the sine table, for codectest.py's check against its formula
 
-   IN is a recording of format 14, or, for transcode and lossy, one of format 12 or later with no
+   IN is a recording of format 15, or, for transcode and lossy, one of format 12 or later with no
    sectioned block, which they write as the current format, the header's other entries kept. Exit
    0 when every check holds, 1 when one fails, 2 when a file cannot be read. The codec is included
    rather than linked: the fuzz copies a decoder's state, which the codec's interface keeps opaque;

@@ -468,7 +468,7 @@ to `+0xC8`, `+0xD4` to `+0xE0`) and the main order list's handler state (`+0x05`
 on a playback host, and the node flags a playback host reads stay exact. On the heavy hour they take
 the file from 42.15 to 30.53 MB (MEASURED offline, the writer's path at a refresh every 300 ticks;
 [size](demo-recorder-size.md#l5-the-lossy-plan-measured-offline)). The stream also leaves out the nano sprays its spray sessions imply,
-which every reader makes again with the same bytes after the iteration's events (format 14,
+which every reader makes again with the same bytes after the iteration's events (format 15,
 `RK_SPRAY_SESSION`; the order of the sprays inside an iteration is the decision of 2026-10-11
 below).
 

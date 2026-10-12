@@ -80,7 +80,7 @@
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
-here, and REC_FORMAT says which; this tool reads format 14 alone. A recording is REC_MAGIC, then
+here, and REC_FORMAT says which; this tool reads format 15 alone. A recording is REC_MAGIC, then
 blocks; a block is a 32-byte header and its payload, one zstd frame unless the block is stored (the
 header, end and timelines blocks always are), each checked by a CRC-32. A stream block may be a
 sectioned container (RBF_SECTIONS) that decodes to exactly the records it was made from: its unit
@@ -135,7 +135,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 14                           # the lossy stream with a hold table of rows
+REC_FORMAT = 15                           # the lossy stream: hold rows, sprays as sessions
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
