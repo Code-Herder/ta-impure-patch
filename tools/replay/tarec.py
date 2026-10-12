@@ -2515,9 +2515,10 @@ def occupancy(w, dw, contest=False):
 
 
 def cells_exact(path, timeline, w, cache):
-    """The expected world's unit slots and yard bit where a playing's grid is the engine's and the
-    stream holds them (holds_cells): the exact stream's at w's GameTime (RB_EXACT, the test lever
-    tagpu_rec.exact), which the playing's engine stamps from the same positions; without one,
+    """The expected world's unit slots and yard bit where the stream holds them (holds_cells) and
+    the dump's grid is the engine's, the live game's or a playing's: the exact stream's at w's
+    GameTime (RB_EXACT, the test lever tagpu_rec.exact), which a playing's engine stamps from the
+    same positions; without one,
     the stream's own at a refresh, where it is exact (tagpu_reclossy.c). `cache` keeps the exact
     stream's blocks between dumps. Unreadable anywhere else."""
     if "x" not in cache:
@@ -2571,8 +2572,10 @@ def cmd_compare(path, dumps, puppet=False, timeline=0, exact=False, seek=False):
             globals_hold(dw, gslots)
             if holds_cells(w.header) and seek:
                 stale = occupancy(w, dw, contest=True)
-            elif holds_cells(w.header) and not exact:
-                cells_exact(path, timeline, w, cache)
+        # the live game's grid and a straight playing's are the exact slots: the stream's held
+        # ones are behind them between refreshes
+        if holds_cells(w.header) and not exact and not (puppet and seek):
+            cells_exact(path, timeline, w, cache)
         lines, n = w.differences(dw, h["tables"], dh["tables"], gnames=gnames)
         lines, n = lines + stale, n + len(stale)
         print(f"{d}: GameTime {dw.tick}, {len(dw.units)} live units"
