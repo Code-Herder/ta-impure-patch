@@ -2728,28 +2728,40 @@ def _peek(inst: Instance, specs, timeout: float):
     put_trigger(inst.gamedir / "tagpu_peek.trigger", "\n".join(specs) + "\n")
 
     deadline = time.time() + timeout
-    got = {}
-    while time.time() < deadline and len(got) < len(set(specs)):
+    rows = []
+    while time.time() < deadline and len(rows) < len(specs):
         chunk = cursor.text()
         if chunk:
-            got = _peek_rows(chunk, specs)
-        if len(got) < len(set(specs)):
+            rows = _peek_rows(chunk, specs)
+        if len(rows) < len(specs):
             time.sleep(0.2)
-    return [got[s] for s in dict.fromkeys(specs) if s in got]
+    return rows
 
 
 def _peek_rows(text, specs):
-    """{spec: row} of the log text's peek lines whose spec is one asked for, the first of each.
-    A peek the game had not answered when its caller gave up leaves its request behind, and its
-    lines can land after the next peek's cursor: a line for another spec is never this peek's
-    answer."""
-    want, rows = set(specs), {}
+    """The rows of the log text's peek lines answering `specs`, in the order asked, or fewer
+    while the answer is incomplete: the n-th line for a spec answers its n-th asking, as the DLL
+    evaluates a trigger's lines in order (tagpu_peek_frame). A peek the game had not answered
+    when its caller gave up leaves its request behind, and its lines can land after the next
+    peek's cursor: a line for a spec not asked for is never this peek's answer."""
+    want = {}
+    for s in specs:
+        want[s] = want.get(s, 0) + 1
+    seen = {}
     for line in text.splitlines():
         m = PEEK_RX.match(line)
-        if m and m.group("spec") in want and m.group("spec") not in rows:
-            rows[m.group("spec")] = {"spec": m.group("spec"),
-                                     "addr": int(m.group("addr"), 16) if m.group("addr") else None,
-                                     "value": m.group("value")}
+        if m and len(seen.setdefault(m.group("spec"), [])) < want.get(m.group("spec"), 0):
+            seen[m.group("spec")].append(
+                {"spec": m.group("spec"),
+                 "addr": int(m.group("addr"), 16) if m.group("addr") else None,
+                 "value": m.group("value")})
+    rows, used = [], {}
+    for s in specs:
+        k = used.get(s, 0)
+        if k >= len(seen.get(s, [])):
+            break
+        rows.append(seen[s][k])
+        used[s] = k + 1
     return rows
 
 
