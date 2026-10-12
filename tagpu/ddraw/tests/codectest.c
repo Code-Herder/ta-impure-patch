@@ -3145,7 +3145,7 @@ static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecPa
         reccodec_restart(d, &q, w->unit, w->live, w->pool, w->pcount, w->phw, &v);
         return reccodec_decode(d, sec, n, out, why, sizeof why);
     }
-    if (c->flags & ~(unsigned)(RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET)) return 0;
+    if (c->flags & ~(unsigned)(RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET | RBF_REFRESH)) return 0;
     if ((c->flags & RBF_FRAME_RESET) && !(c->flags & RBF_SECTIONS)) return 0;
     if (!(c->flags & RBF_SECTIONS)) {
         out->n = 0;
