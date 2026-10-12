@@ -2732,15 +2732,39 @@ def _peek(inst: Instance, specs, timeout: float):
     while time.time() < deadline and len(rows) < len(specs):
         chunk = cursor.text()
         if chunk:
-            rows = []
-            for line in chunk.splitlines():
-                m = PEEK_RX.match(line)
-                if m:
-                    rows.append({"spec": m.group("spec"),
-                                 "addr": int(m.group("addr"), 16) if m.group("addr") else None,
-                                 "value": m.group("value")})
+            rows = _peek_rows(chunk, specs)
         if len(rows) < len(specs):
             time.sleep(0.2)
+    return rows
+
+
+def _peek_rows(text, specs):
+    """The rows of the log text's peek lines answering `specs`, in the order asked, or fewer
+    while the answer is incomplete: the n-th line for a spec answers its n-th asking, as the DLL
+    evaluates a trigger's lines in order (tagpu_peek_frame). A peek the game had not answered
+    when its caller gave up leaves its request behind, and its lines can land after the next
+    peek's cursor: a line for a spec not asked for is never this peek's answer. A late line for a
+    spec this peek also asks for IS taken: the one peek the harness leaves unanswered is Stall's
+    GameTime read (tools/replay/tareplay.py), where a stale GameTime counts as one more interval
+    without progress and cannot decide a result."""
+    want = {}
+    for s in specs:
+        want[s] = want.get(s, 0) + 1
+    seen = {}
+    for line in text.splitlines():
+        m = PEEK_RX.match(line)
+        if m and len(seen.setdefault(m.group("spec"), [])) < want.get(m.group("spec"), 0):
+            seen[m.group("spec")].append(
+                {"spec": m.group("spec"),
+                 "addr": int(m.group("addr"), 16) if m.group("addr") else None,
+                 "value": m.group("value")})
+    rows, used = [], {}
+    for s in specs:
+        k = used.get(s, 0)
+        if k >= len(seen.get(s, [])):
+            break
+        rows.append(seen[s][k])
+        used[s] = k + 1
     return rows
 
 

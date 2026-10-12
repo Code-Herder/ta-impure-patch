@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments and world): the C parser against the coverage build's map, the features' regions, the
-comment filter, `landing --check`, a recording's segments and chains, what format 13's block walk
+comment filter, `landing --check`, a recording's segments and chains, what format 15's block walk
 refuses and which cells are images, read from files built from the format alone, the fixtures'
 takeover entries and the W lane's edited header copies. No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
@@ -788,7 +788,7 @@ def zstd_frame(data, wlog):
 
 
 class FormatBlocks(unittest.TestCase):
-    """What format 13's block walk refuses by name before any payload is read, as
+    """What format 15's block walk refuses by name before any payload is read, as
     tagpu_recreader.c's block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
 
     def refused(self, *parts, why, decodes=(True, False)):
@@ -1113,17 +1113,21 @@ class LossyStream(unittest.TestCase):
                         for t in range(first, last + 1))
 
     def parts(self, lossy3=None, lossy31=None, refresh31=True, refresh2=True, exact=True,
-              header=None, last=31):
+              header=None, last=31, gone=None):
         """The file: iteration 1 makes unit 1, the exact stream changes its dword HELD and dword
         10 at 3; the lossy stream carries `lossy3` there (dword 10 alone by default) and `lossy31`
         at the refresh 31 (dword HELD's change by default). The second iteration ends a block of
-        its own, a refresh block unless `refresh2` is false; the stream runs to `last`."""
+        its own, a refresh block unless `refresh2` is false; the stream runs to `last`. With
+        `gone`, both streams end unit 1 at that GameTime."""
         S, F = tarec.RBF_STORED, tarec.RBF_REFRESH
         first = (tlv(tarec.RK_UNIT, struct.pack("<HH", 1, 0) + bytes(tarec.REC_UNIT_IMAGE)) +
                  tlv(tarec.RK_MAPPED, struct.pack("<I", 0) + bytes(2)))
-        x = self.ticks(3, last, {3: delta(1, {self.HELD: 7, 10: 9})})
-        lossy = self.ticks(3, last, {3: delta(1, {10: 9}) if lossy3 is None else lossy3,
-                                     31: delta(1, {self.HELD: 7}) if lossy31 is None else lossy31})
+        x = {3: delta(1, {self.HELD: 7, 10: 9})}
+        lossy = {3: delta(1, {10: 9}) if lossy3 is None else lossy3,
+                 31: delta(1, {self.HELD: 7}) if lossy31 is None else lossy31}
+        if gone is not None:
+            x[gone] = lossy[gone] = tlv(tarec.RK_UNIT_GONE, struct.pack("<HH", 1, 0))
+        x, lossy = self.ticks(3, last, x), self.ticks(3, last, lossy)
         out = [header or held_header(unit_held=(self.HELD,)),
                flagged(tarec.RB_STREAM, 1, 1, self.ticks(1, 1, {1: first}), S | F),
                flagged(tarec.RB_EXACT, 1, 1, self.ticks(1, 1, {1: first}), S),
@@ -1144,6 +1148,12 @@ class LossyStream(unittest.TestCase):
         rc, o = self.lossy_check(self.file(*self.parts()))
         self.assertEqual(rc, 0, o)
         self.assertIn("31 iterations to GameTime 31, 3 refreshes", o)
+
+    def test_an_iteration_whose_only_unit_record_ends_a_unit_passes(self):
+        """a held table and an iteration that touches no unit live in both streams afterwards"""
+        rc, o = self.lossy_check(self.file(*self.parts(last=5, gone=5, refresh31=False)))
+        self.assertEqual(rc, 0, o)
+        self.assertIn("5 iterations to GameTime 5", o)
 
     def test_to_stops_the_walk(self):
         rc, o = self.lossy_check(self.file(*self.parts()), "--to", "10")
@@ -1232,6 +1242,135 @@ class LossyStream(unittest.TestCase):
             tarec.header(header()[32:] + tlv(tarec.RT_HOLD, bytes(12)))
 
 
+def spray(uid, x, y, z):
+    """An RK_EV_SPRAY of unit ID `uid` at the point (x, y, z), its box and layer fixed."""
+    return tlv(tarec.RK_EV_SPRAY, struct.pack("<IIiii", uid, 0, x, y, z) +
+               struct.pack("<6i", *range(6)) + struct.pack("<I", 6))
+
+
+def session(uid, mode):
+    return tlv(tarec.RK_SPRAY_SESSION, struct.pack("<IBxxx", uid, mode))
+
+
+def unit_at(slot, x, y, z):
+    """An RK_UNIT of `slot` at the position (x, y, z), +0x6A"""
+    img = bytearray(tarec.REC_UNIT_IMAGE)
+    struct.pack_into("<iii", img, 0x6A, x, y, z)
+    return tlv(tarec.RK_UNIT, struct.pack("<HH", slot, 0) + img)
+
+
+class LossySprays(unittest.TestCase):
+    """tarec's spray sessions (Sprays) against a file whose stream writes its nano sprays as
+    sessions (RT_HOLD's RECL_SPRAYS) and whose exact stream (RB_EXACT) carries every spray: unit 1
+    (ID 2) sprays the same point at GameTime 3 to 6, and its session, opened at 4, implies 5 and
+    6 and closes at 7, where it makes none."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.n = 0
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def file(self, exact, lossy, flags=tarec.RECL_SPRAYS):
+        """Iterations 1 and 2 refresh blocks of their own, 3..31 one block whose last is a
+        refresh; `exact` and `lossy` {GameTime: records} after each RK_TICK of 3..31."""
+        S, F = tarec.RBF_STORED, tarec.RBF_REFRESH
+        first = (unit_at(1, 0, 0, 0) +
+                 tlv(tarec.RK_MAPPED, struct.pack("<I", 0) + bytes(2)))
+        one = LossyStream.ticks(1, 1, {1: first})
+        two = LossyStream.ticks(2, 2, {})
+        parts = [held_header(flags=flags),
+                 flagged(tarec.RB_STREAM, 1, 1, one, S | F), flagged(tarec.RB_EXACT, 1, 1, one, S),
+                 flagged(tarec.RB_STREAM, 2, 2, two, S | F), flagged(tarec.RB_EXACT, 2, 2, two, S),
+                 flagged(tarec.RB_STREAM, 3, 31, LossyStream.ticks(3, 31, lossy), S | F),
+                 flagged(tarec.RB_EXACT, 3, 31, LossyStream.ticks(3, 31, exact), S),
+                 end_block(31)]
+        self.n += 1
+        path = Path(self.tmp.name) / f"s{self.n}.imprec"
+        path.write_bytes(tarec.REC_MAGIC + b"".join(parts))
+        return str(path)
+
+    A = spray(2, 100, 200, 300)
+    EXACT = {3: A, 4: A, 5: A, 6: A}
+    LOSSY = {3: A, 4: A + session(2, 1), 7: session(2, 0)}
+
+    def lossy_check(self, path):
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(out):
+            rc = tarec.main(["tarec", "lossy-check", path])
+        return rc, out.getvalue()
+
+    def test_implied_sprays_pass(self):
+        rc, o = self.lossy_check(self.file(self.EXACT, self.LOSSY))
+        self.assertEqual(rc, 0, o)
+        self.assertIn("sprays 2 written and 2 implied", o)
+
+    def test_the_world_carries_the_implied_sprays(self):
+        h, bl, _ = tarec.load(self.file(self.EXACT, self.LOSSY))
+        got = []
+        tarec.stream_to(h, bl, on_record=lambda w, k, b: got.append(w.tick)
+                        if k == tarec.RK_EV_SPRAY else None)
+        self.assertEqual(got, [3, 4, 5, 6])
+
+    def test_following_its_unit(self):
+        exact = {3: spray(2, 100, 200, 300),
+                 4: unit_at(1, 10, 0, -20) + spray(2, 110, 200, 280),
+                 5: unit_at(1, 15, 1, -20) + spray(2, 115, 201, 280)}
+        lossy = {3: exact[3], 4: exact[4] + session(2, 1 | tarec.REC_SPRAY_FOLLOW),
+                 5: unit_at(1, 15, 1, -20), 6: session(2, 0)}
+        rc, o = self.lossy_check(self.file(exact, lossy))
+        self.assertEqual(rc, 0, o)
+        self.assertIn("sprays 2 written and 1 implied", o)
+
+    def test_a_spray_the_game_did_not_make_fails(self):
+        exact = dict(self.EXACT)
+        del exact[6]
+        rc, o = self.lossy_check(self.file(exact, self.LOSSY))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 6: the nano sprays, 1 with the implied ones, are not the exact "
+                      "stream's 0", o)
+
+    def test_a_session_from_no_spray_fails(self):
+        lossy = dict(self.LOSSY)
+        lossy[3] = self.A + session(3, 1)
+        rc, o = self.lossy_check(self.file(self.EXACT, lossy))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 3: the spray session of unit 3 at GameTime 3 predicts from no "
+                      "single spray", o)
+
+    def test_a_session_without_recl_sprays_fails(self):
+        rc, o = self.lossy_check(self.file(self.EXACT, self.LOSSY, flags=0))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("a spray session in a stream without RECL_SPRAYS", o)
+        h, bl, _ = tarec.load(self.file(self.EXACT, self.LOSSY, flags=0))
+        with self.assertRaisesRegex(tarec.Unreadable, "a spray session outside a stream"):
+            tarec.stream_to(h, bl)
+
+    AFTER = {**LOSSY, 4: A + session(2, 1) + spray(3, 1, 2, 3)}       # a record after the sessions
+    UNORDERED = {**LOSSY, 4: A + session(3, 0) + session(2, 1)}       # sessions out of slot order
+
+    def test_a_record_after_the_sessions_is_unreadable(self):
+        h, bl, _ = tarec.load(self.file(self.EXACT, self.AFTER))
+        with self.assertRaisesRegex(tarec.Unreadable, "record kind 28 after the iteration's spray "
+                                                      "sessions"):
+            tarec.stream_to(h, bl)
+
+    def test_sessions_out_of_slot_order_are_unreadable(self):
+        h, bl, _ = tarec.load(self.file(self.EXACT, self.UNORDERED))
+        with self.assertRaisesRegex(tarec.Unreadable, "the spray session of unit 2 after unit 3's"):
+            tarec.stream_to(h, bl)
+
+    def test_a_malformed_session_is_unreadable(self):
+        for mode in (3, tarec.REC_SPRAY_FOLLOW, 0x11):
+            with self.subTest(mode=mode):
+                lossy = dict(self.LOSSY)
+                lossy[4] = self.A + session(2, mode)
+                h, bl, _ = tarec.load(self.file(self.EXACT, lossy))
+                with self.assertRaisesRegex(tarec.Unreadable, "a malformed spray session"):
+                    tarec.stream_to(h, bl)
+
+
 class SeekStart(unittest.TestCase):
     """tarec.seek_start: where the DLL's reader builds a seek from (recr_seek), from the file's
     index alone."""
@@ -1274,35 +1413,90 @@ class SeekStart(unittest.TestCase):
         self.assertEqual(tarec.seek_start(path, 1, 16, 2), (1, False))
 
 
+class SeekBlocks(unittest.TestCase):
+    """tarec.seek_blocks: the blocks the DLL's reader decodes for a seek (recr_seek), from the
+    file's blocks alone: a snapshot or a first iteration, every stream block holding an iteration
+    read, a chain's crossings, and a base read first."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def file(self, *parts):
+        p = Path(self.tmp.name) / "r.imprec"
+        p.write_bytes(tarec.REC_MAGIC + b"".join(parts))
+        return str(p)
+
+    @staticmethod
+    def of(*bs, base=0):
+        n = sum(len(b) - 32 for b in bs)                # stored: raw and packed alike
+        return len(bs), n, n, base
+
+    def test_from_a_snapshot_or_the_first_iteration(self):
+        s1, s2, s3 = stream(1, 10, unit=1), stream(11, 20, opens=False), stream(21, 30, opens=False)
+        k10, k20 = block(tarec.RB_SNAPSHOT, 10, 10, b"s"), block(tarec.RB_SNAPSHOT, 20, 20, b"ss")
+        path = self.file(header(), s1, k10, s2, k20, s3, end_block(30))
+        self.assertEqual(tarec.seek_blocks(path, 0, 25, 3, 0), self.of(k20, s3))
+        self.assertEqual(tarec.seek_blocks(path, 0, 25, 3, 1), self.of(s1, k20, s3, base=1))
+        # a fresh playing holds the root's base
+        self.assertEqual(tarec.seek_blocks(path, 0, 25, 3, None), self.of(k20, s3))
+        self.assertEqual(tarec.seek_blocks(path, 0, 13, 3, 0), self.of(s1, s2))
+        self.assertEqual(tarec.seek_blocks(path, 0, 10, 3, 0), self.of(s1))
+        self.assertEqual(tarec.seek_blocks(path, 0, 20, 3, 0), self.of(k10, s2))
+
+    def test_a_chain_reads_each_segments_part(self):
+        s1, s2, s3 = stream(1, 10, unit=1), stream(11, 20, opens=False), stream(21, 30, opens=False)
+        k10 = block(tarec.RB_SNAPSHOT, 10, 10, b"s")
+        f1, k25, f2 = (stream(15, 24, unit=2), block(tarec.RB_SNAPSHOT, 24, 24, b"f"),
+                       stream(25, 30, opens=False))
+        path = self.file(header(), s1, k10, s2, block(tarec.RB_SNAPSHOT, 20, 20, b"s"), s3,
+                         end_block(30), header((1, 0, 15)), f1, k25, f2, end_block(30))
+        # from the parent's snapshot at 10 across the fork at 15; its 21..30 block is never read
+        self.assertEqual(tarec.seek_blocks(path, 1, 22, 3, 0), self.of(k10, s2, f1))
+        self.assertEqual(tarec.seek_blocks(path, 1, 29, 3, 0), self.of(k25, f2))
+        self.assertEqual(tarec.seek_blocks(path, 1, 29, 3, 1), self.of(f1, k25, f2, base=1))
+        # a fresh playing of timeline 1 holds the root's base, not the fork's
+        self.assertEqual(tarec.seek_blocks(path, 1, 29, 3, None), self.of(f1, k25, f2, base=1))
+        self.assertEqual(tarec.seek_blocks(path, 1, 22, 3, None), self.of(k10, s2, f1))
+        with self.assertRaises(tarec.Unreadable):
+            tarec.seek_blocks(path, 1, 31, 3, 0)
+
+
 class SeekWork(unittest.TestCase):
     """The seek's work line (tagpu_replay.c, sk_work_log) parsed and judged: W1 against the file,
-    W2 by its counts, W3 against a CPU bound."""
+    W2 by its counts, W3 against the file's blocks."""
 
     LINE = ("replay: battle: the seek to 225's work: {I} iterations read to GameTime 225 from "
-            "the snapshot at GameTime {S}; the image: 10 units live, {M} made, {F} refused, 2 "
+            "the snapshot at GameTime {S}; the blocks: {B} decoded ({Bb} for the base), {Bp} "
+            "bytes read, {Bp} unpacked; the image: 10 units live, {M} made, {F} refused, 2 "
             "killed, {A} left alive; cpu {C} ms (user 1100, kernel 0) of the game thread, 1104 ms "
             "wall")
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name) / "r.imprec"
-        self.path.write_bytes(tarec.REC_MAGIC + header() + stream(1, 10, unit=1) +
-                              block(tarec.RB_SNAPSHOT, 10, 10, b"s") +
-                              stream(11, 300, opens=False) + end_block(300))
+        snap, rest = block(tarec.RB_SNAPSHOT, 10, 10, b"s"), stream(11, 300, opens=False)
+        self.read = len(snap) + len(rest) - 64          # the payloads past their 32-byte headers
+        self.path.write_bytes(tarec.REC_MAGIC + header() + stream(1, 10, unit=1) + snap + rest +
+                              end_block(300))
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def work(self, I=215, S=10, M=10, F=0, A=0, C=1100):
-        got = tareplay.work_lines("x\n" + self.LINE.format(I=I, S=S, M=M, F=F, A=A, C=C) + "\r\n")
+    def work(self, I=215, S=10, M=10, F=0, A=0, C=1100, B=2, Bb=0, Bp=None):
+        line = self.LINE.format(I=I, S=S, M=M, F=F, A=A, C=C, B=B, Bb=Bb,
+                                Bp=self.read if Bp is None else Bp)
+        got = tareplay.work_lines("x\n" + line + "\r\n")
         self.assertEqual(len(got), 1)
         return got[0]
 
     def test_a_good_line(self):
         w = self.work()
-        self.assertEqual((w["T"], w["R"], w["S"], w["kind"], w["C"], w["W"]),
-                         (225, 225, 10, "the snapshot", 1100, 1104))
-        self.assertEqual(tareplay.work_verdict(w, str(self.path), 0, True, 4000), [])
+        self.assertEqual((w["T"], w["R"], w["S"], w["kind"], w["B"], w["Bp"], w["C"], w["W"]),
+                         (225, 225, 10, "the snapshot", 2, self.read, 1100, 1104))
+        self.assertEqual(tareplay.work_verdict(w, str(self.path), 0, True), [])
 
     def test_each_rule(self):
         verdict = lambda w, **kw: tareplay.work_verdict(w, str(self.path), 0, **kw)
@@ -1312,14 +1506,22 @@ class SeekWork(unittest.TestCase):
         self.assertEqual(verdict(self.work(M=9, F=1)), [])
         self.assertRegex(verdict(self.work(M=9, F=1), takeover=True)[0], "W2: 1 creates refused")
         self.assertRegex(verdict(self.work(A=3))[0], "W2: 3 units left alive")
-        self.assertRegex(verdict(self.work(C=4001), cpu_ms=4000)[0], "W3: 4001 ms")
+        self.assertEqual(verdict(self.work(C=40001)), [])          # time is reported, not judged
+        self.assertRegex(verdict(self.work(B=3))[0], "W3: 3 blocks decoded")
+        self.assertRegex(verdict(self.work(Bp=self.read + 1))[0], "where the file holds 2, ")
+        self.assertRegex(verdict(self.work(Bb=1))[0], "where the file holds 3, ")
+        # a fresh process holds the root's base: the line's base is checked, not trusted
+        self.assertEqual(verdict(self.work(), fresh=True), [])
+        self.assertRegex(verdict(self.work(Bb=1), fresh=True)[0],
+                         "W3: 1 blocks for the base where a fresh process reads 0")
 
     def test_a_log_with_no_line_could_not_run(self):
         log = Path(self.tmp.name) / "tagpu.log"
         log.write_text("nothing\n")
         self.assertEqual(tareplay.work_check("R", log, str(self.path), 0, False)[0][1],
                          tareplay.UNRUN)
-        log.write_text(self.LINE.format(I=215, S=10, M=10, F=0, A=0, C=5) + "\n")
+        log.write_text(self.LINE.format(I=215, S=10, M=10, F=0, A=0, C=5, B=2, Bb=0,
+                                        Bp=self.read) + "\n")
         self.assertEqual(tareplay.work_check("R", log, str(self.path), 0, False)[0][1],
                          tareplay.PASS)
 
@@ -1675,7 +1877,7 @@ class TakeoverFixtures(unittest.TestCase):
         took = {n: f["takeover"] for n, f in fixes.items() if "takeover" in f}
         self.assertIn("battle", took)
         self.assertIn("takeover-end", took)
-        known = {"player", "order", "switches", "type", "dump", "cpu_ms", "checks", "at"}
+        known = {"player", "order", "switches", "type", "dump", "checks", "at"}
         for name, t in took.items():
             self.assertLessEqual(set(t), known, name)
             self.assertTrue(t["player"] == "controlled" or isinstance(t["player"], int), name)
@@ -1807,6 +2009,55 @@ class CrashEndsTheWait(unittest.TestCase):
     def test_a_process_not_yet_seen_running_does_not(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertIsNone(self.log(Path(d), [False]).wait(r"never", 1))
+
+
+class BusyGameIsNoStall(unittest.TestCase):
+    """A running game that has not answered a peek -- its game thread inside a seek's rebuild --
+    is no progress for Stall, and only STALL_S of it is a hung game; a game that is not running
+    still fails at once."""
+
+    class Worker:
+        def __init__(self, answers):
+            self.answers = list(answers)
+
+        def gametime(self, wait, busy=False):
+            self.busy = busy
+            return self.answers.pop(0)
+
+    def stall(self, answers):
+        """A Stall over `answers`, made under the patched clock its caller holds."""
+        st = tareplay.Stall(self.Worker(answers))
+        st.EVERY = 0
+        return st
+
+    def test_unanswered_peeks_within_the_bound_pass(self):
+        with patch("time.monotonic", side_effect=[0, 10, 20, 30, 40, 50, 60, 70, 80]):
+            st = self.stall([100, None, None, 101])
+            for _ in range(4):
+                st.check()
+        self.assertTrue(st.w.busy)
+        self.assertEqual(st.g, 101)
+
+    def test_unanswered_past_the_bound_is_a_hung_game(self):
+        late = tareplay.STALL_S + 1
+        with patch("time.monotonic", side_effect=[0, 0, 0, late, late]):
+            st = self.stall([100, None])
+            st.check()
+            with self.assertRaisesRegex(tareplay.CouldNotRun, "stood at GameTime 100.*unanswered"):
+                st.check()
+
+    def test_the_peek_names_a_busy_game_only_while_it_runs(self):
+        w = Mock(name="w", lane=None)
+        w.name = "tareplay-1"
+        busy = (1, "tacli: no peek lines \u2014 is the game past its first frame?")
+        with patch.object(tareplay, "tacli", return_value=busy):
+            w.running.return_value = True
+            self.assertIsNone(tareplay.Worker.gametime(w, 5, busy=True))
+            with self.assertRaisesRegex(tareplay.CouldNotRun, "no peek lines"):
+                tareplay.Worker.gametime(w, 5)
+            w.running.return_value = False
+            with self.assertRaisesRegex(tareplay.CouldNotRun, "no peek lines"):
+                tareplay.Worker.gametime(w, 5, busy=True)
 
 
 class RunLock(unittest.TestCase):

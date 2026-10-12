@@ -118,8 +118,11 @@ typedef struct RecWorld {
     RecTable*      tab;         /* [ntab], the header's tables in its order                    */
     unsigned       nev;         /* the events of the step after the images, in engine order: a
                                    feature root's bracket, RK_EV_FEATURE to its END, holds the
-                                   draws it made, the tick's cells and what it nested         */
+                                   draws it made, the tick's cells and what it nested; then
+                                   the sprays the spray sessions imply, slots ascending       */
     RecEvent*      ev;
+    RecSprays*     sprays;      /* the spray sessions' table (tagpu_reclossy.h), read with
+                                   RT_HOLD's RECL_SPRAYS: what the implied sprays come from   */
     unsigned char* grid;        /* [grid_w * grid_h] cell images, row-major                   */
     unsigned char* pool;        /* [wrecks] record images                                     */
     int32_t        heads[4];    /* the pool's three heads and the reproduction cursor         */
@@ -196,9 +199,14 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
    1) or the first iteration of the segment it read from (0); and the iterations it read
    (`iterations`), each read of an iteration counted, a snapshot's base segment's first included,
    so iterations <= T - from + 1. tools/replay/tarec.py's seek_start computes `from` from the file
-   alone. */
+   alone. The blocks it decoded (`blocks`: read, checked and unpacked, each decode counted), their
+   bytes in the file (`packed`) and unpacked (`raw`), and of them `base`, 1 when a snapshot's
+   segment's first iteration was read first because the reader did not hold its base: the work
+   tools/replay/tareplay.py's W3 checks against the file's own blocks, which no load changes. */
 typedef struct RecSeekWork {
     unsigned target, from, from_snapshot, iterations;
+    unsigned blocks, base;
+    unsigned long long packed, raw;
 } RecSeekWork;
 const RecSeekWork* recr_seek_work(const RecReader* r);
 

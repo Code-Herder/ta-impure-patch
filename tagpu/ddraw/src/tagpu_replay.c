@@ -25,10 +25,12 @@
    - S-c, the loader's two calls of the seat setup 0x496EE0 (0x497963, 0x497ACD), which create
      the start units: skipped on a puppet level. And the level init's call 0x4919C8, which on a
      puppet level also gives V's record its buffers (THE VIEWER'S SEAT).
-   - S-d, the first step: what needs the loaded level is checked -- its counts, its map, the unit
-     and weapon data, its first GameTime. On a mismatch nothing is ever applied and the level
-     stays empty, which the viewer sees and the log explains. Otherwise the start units are made,
-     the first image goes in, the wind is seeded and V's sight is filled (THE APPLY).
+   - S-d, the first step, at the capture point of the level's first iteration, before its unit
+     tick: what needs the loaded level is checked -- its counts, its map, the unit and weapon
+     data, its first GameTime. On a mismatch nothing is ever applied and the level stays empty,
+     which the viewer sees and the log explains. Otherwise the start units are made, the first
+     image goes in, the wind is seeded, V's sight is filled and the capture point's write follows
+     (THE APPLY, THE FIRST STEP'S UNITS).
    Two more sites serve a level that plays: B2's stub calls tagpu_replay_capture first at each
    capture point, and the frame visit before the in-play draw call 0x4969CD reads the trigger,
    runs a seek (THE SEEK) and writes what the draw after a step shows (THE GLOBALS AND THE
@@ -230,8 +232,10 @@ static struct {
     TabCounts tab;
     int      tnamed;                /* an unpaired table named once a playback                   */
 } s_gst;                            /* ... and its globals' and projectiles'                      */
-static uint32_t   s_made[0x10000];  /* a slot's GameTime after the step whose create made it: the
-                                       slot count is a u16 (THE UNITS' BOOKKEEPING)              */
+static uint32_t   s_made[0x10000];  /* the capture point at which a slot's books are the replay's:
+                                       the one after the step whose create made it, or the first
+                                       step's own; the slot count is a u16 (THE UNITS'
+                                       BOOKKEEPING)                                               */
 static unsigned   s_frame_tick;     /* the GameTime the frame visit last wrote at                 */
 enum { SK_SEEK, SK_TAKEOVER, SK_REWIND, SK_NOW };
 enum { RW_IDLE, RW_FLUSH, RW_OPEN, RW_PAST, RW_ENDING };
@@ -446,6 +450,7 @@ static int overlay_trigger(const char* line);
 static void ov_clicks_take(const RecWorld* W);
 static void ov_clicks_clear(void);
 static void ov_click_put(unsigned tick, const RecClick* c);
+static void first_step(char* ta);
 
 static void replay_close(void)
 {
@@ -475,6 +480,7 @@ static void replay_close(void)
     memset(&s_rt, 0, sizeof s_rt);
     memset(s_made, 0, sizeof s_made);
     memset(&s_seek, 0, sizeof s_seek);
+    s_hold = 0;                         /* a boundary's hold ends with its playing */
     s_frame_tick = ~0u;
 }
 
@@ -1288,9 +1294,13 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    seat's 30-tick pass runs at the GameTime it ran at there (A PLAYER'S IMAGE). At the next step's
    capture point the host holds image T+1, which is where a dump (`dump <name>` in
    tagpu_replay.trigger) is taken and compared.
-   The first step makes the units the level started with -- recorded as images, with no create
-   before them -- through the create, as the loader made them, writes image T before the events
-   of T, and seeds the wind from image T (wind_seed).
+   The first step comes in two parts. At the capture point of the level's first iteration T,
+   before the host's unit tick, it makes the units the level started with -- recorded as images,
+   with no create before them -- through the create, as the loader made them, writes image T and
+   seeds the wind from image T (wind_seed), and then makes the capture point's write (THE GLOBALS
+   AND THE PROJECTILES), so that the host's unit tick T runs on the units and the globals the
+   recording machine's ran on (THE FIRST STEP'S UNITS). After the unit tick it plays the events of
+   T and image T+1, as every later step does.
 
    AN IMAGE goes in in this order: the carry links (links_put), which the placement reads; each
    unit (units_put); the recorded yard changes (yards_put); +0x110 once more for every unit
@@ -1965,8 +1975,10 @@ static int make(const Lv* L, unsigned slot, unsigned owner, unsigned type, const
 }
 
 /* every unit of the world's image, made as the loader made it, at the first step and at a seek;
-   how many were made */
-static unsigned level_units(const Lv* L, const RecWorld* W)
+   how many were made. `books_at` is the capture point at which their books are the replay's to
+   write (THE UNITS' BOOKKEEPING, s_made): the next one after a seek, which runs between two
+   steps; this one at the first step, which runs at the capture point before its write. */
+static unsigned level_units(const Lv* L, const RecWorld* W, uint32_t books_at)
 {
     unsigned slot, made = 0;
     for (slot = 1; slot < L->nslots; slot++) {
@@ -1978,8 +1990,10 @@ static unsigned level_units(const Lv* L, const RecWorld* W)
         memcpy(pos, ib + 0x6A, 12);
         memcpy(&built, ib + U_BUILT, 4);
         if (make(L, slot, (unsigned char)ib[U_OWNERIX], img_type(img), pos, build_finished(built),
-                 img[U_STATE / 4] & 3u, 1))
+                 img[U_STATE / 4] & 3u, 1)) {
+            s_made[slot] = books_at;
             made++;
+        }
     }
     return made;
 }
@@ -4719,7 +4733,9 @@ static void wind_seed(const RecWorld* W)
      the world holds iteration T -- the step before read it -- whose globals and pool are the
      recording machine's at its own capture point of T, the same point of the step. Written here,
      before the recorder's capture and dump and before the unit tick, the replay is the last
-     writer of each before anything in step T reads it. After the step's unit tick the host's
+     writer of each before anything in step T reads it. At the level's first iteration the write
+     follows the first step's creates and image T in the same call (THE FIRST STEP'S UNITS), so
+     it is their last writer there too. After the step's unit tick the host's
      projectile tick moves the pool for the picture and the sounds; the frame visit's write and
      the next capture point's replace what it computed.
    - THE FRAME VISIT after a step (tagpu_replay_frame), once a GameTime, when the world holds the
@@ -5142,21 +5158,22 @@ static int book_stamp(const Lv* L, char* u, const unsigned char* ib, uint16_t lo
    recorder takes every create at the create's own exit, whoever called it, so each such unit is
    made here through make and counted as made. The replay makes every unit of step k in the
    unit tick's stub, after the host's unit tick and before the players phase of step k (0x49555F
-   follows 0x4954ED), and unit_put runs E_Water on it at the next images. So a unit the recording
-   machine made after its players phase meets two writers here one step early: the players phase
-   emits every live unit's sight every step (0x46503C..0x465063, the call at 0x465053), which
-   stores the stamp's fields, and 0x43DB50 can change the water state. MEASURED 2026-10-01 in the
-   naval fixture (LosType 4): the end scenario's unit, made in step 3643, held the stamp
-   (31,29,136) at the capture point of 3644, where the recording holds the create's (0,0,0); from
-   3645 on the two agreed.
+   follows 0x4954ED), but the level's own, which the first iteration's capture point makes before
+   the unit tick (THE FIRST STEP'S UNITS), and unit_put runs E_Water on it at the next images. So
+   a unit the recording machine made after its players phase meets two writers here one step
+   early: the players phase emits every live unit's sight every step (0x46503C..0x465063, the
+   call at 0x465053), which stores the stamp's fields, and 0x43DB50 can change the water state.
+   MEASURED 2026-10-01 in the naval fixture (LosType 4): the end scenario's unit, made in step
+   3643, held the stamp (31,29,136) at the capture point of 3644, where the recording holds the
+   create's (0,0,0); from 3645 on the two agreed.
    So both are written here as R8b writes them: the water state bounded by its enum, and the stamp
    through the engine's removal 0x482090 and stamp 0x482270, so that the counters keep describing
    the stamps the fields name. This runs after the step's last emit and before the recorder's
    capture and dump and the next unit tick, so the replay is their last writer at every capture
    point; the frame visit's call makes the draw after a step show them too. For any other unit the
    host holds the recording's values and nothing is written. Each write is counted, and one to a
-   unit the replay did not make in the step before is noted (s_made): the host's derivation then
-   differed elsewhere.
+   unit the replay did not make in the step before, or at this capture point's first step, is
+   noted (s_made): the host's derivation then differed elsewhere.
    THE INVARIANT is an ordering: at the capture point of k+1 the world holds iteration k+1, the
    host's last emit and its last 0x43DB50 of step k have run (the players phase, the images), the
    write puts the recording machine's values for that point, and nothing between the write and the
@@ -5236,22 +5253,32 @@ static void recorded_put(const Lv* L, const RecWorld* W)
     s_gst.puts++;
 }
 
+/* the capture point's write of the iteration the world holds, when it is the host's GameTime's */
+static void capture_put(const Lv* L)
+{
+    const RecWorld* W = recr_world(s_rd);
+    if (W->tick != L->now) {
+        s_gst.late++;
+        note("replay: the capture point of GameTime %u holds iteration %u: its globals and "
+             "projectiles not written", L->now, W->tick);
+        return;
+    }
+    recorded_put(L, W);
+}
+
 void __cdecl tagpu_replay_capture(void)
 {
     char* ta;
     Lv L;
-    const RecWorld* W;
-    if (!tagpu_puppet_on() || !s_rd || s_dead || s_first || s_over || s_hold) return;
+    if (!tagpu_puppet_on() || !s_rd || s_dead) return;
     ta = ta_main();
-    if (!ta || !level_of(ta, &L)) return;
-    W = recr_world(s_rd);
-    if (W->tick != L.now) {
-        s_gst.late++;
-        note("replay: the capture point of GameTime %u holds iteration %u: its globals and "
-             "projectiles not written", L.now, W->tick);
+    if (!ta) return;
+    if (s_first) {
+        first_step(ta);                 /* THE FIRST STEP'S UNITS, then this write */
         return;
     }
-    recorded_put(&L, W);
+    if (s_over || s_hold || !level_of(ta, &L)) return;
+    capture_put(&L);
 }
 
 /* ---- the seek ------------------------------------------------------------------------------- */
@@ -6588,14 +6615,14 @@ static unsigned sk_ms(LONGLONG ticks, LONGLONG hz)
 }
 
 /* THE SEEK'S WORK: the game thread's own CPU time, user and kernel, in 100-ns units, from
-   GetThreadTimes. A seek's cost is checked on it rather than on the wall clock, which time-slicing
-   stretches when other games share the core. MEASURED 2026-10-09 under Wine 9.0 (a probe calling
-   it around fixed work): its resolution is 10 ms; kernel time is counted (file reads: 110 of 200
-   ms); a Sleep counts nothing; a call costs 15 us. QueryThreadCycleTime returned no usable count
-   there. THE RESIDUAL: CPU time still grows with contention for the core itself -- the same fixed
-   work took 2,510-2,730 ms quiet and 3,830-3,920 ms with its SMT sibling busy (x1.5, a 7950X), and
-   an all-core load lowers the clock further -- so the harness's bound (tools/replay/fixtures.json,
-   `cpu_ms`) is set with that factor in it. */
+   GetThreadTimes, reported beside the wall time and checked by nothing. A seek's cost is checked
+   on its work instead -- the iterations read, the units made and the blocks decoded
+   (recr_seek_work), each against the file (tools/replay/tareplay.py, work_verdict) -- because CPU
+   time grows with contention for the core: the same fixed work took 2,510-2,730 ms quiet and
+   3,830-3,920 ms with its SMT sibling busy (x1.5, a 7950X), and an all-core load lowers the clock
+   further. MEASURED 2026-10-09 under Wine 9.0 (a probe calling it around fixed work): its
+   resolution is 10 ms; kernel time is counted (file reads: 110 of 200 ms); a Sleep counts
+   nothing; a call costs 15 us. QueryThreadCycleTime returned no usable count there. */
 typedef struct { ULONGLONG user, kernel; } SkCpu;
 
 static SkCpu sk_cpu(void)
@@ -7028,8 +7055,8 @@ static void rw_contacts(const Lv* L, const RecWorld* W, uint32_t mask)
 
 /* The seek's work, the line after its `wrote` line: what the reader `rd` read to reach the world
    it made (recr_seek_work) -- a return to now reads the live recording to G-1, every other seek its
-   own reader to T -- what the image held and what became of it, and THE SEEK'S WORK's CPU time
-   beside the wall time. The image's units: V's live slots, and a multiplayer world's units created
+   own reader to T -- the blocks it decoded to get there, what the image held and what became of
+   it, and THE SEEK'S WORK's CPU time beside the wall time. The image's units: V's live slots, and a multiplayer world's units created
    and not yet described, each of which level_units or mp_make_held hands to one create, made or
    refused (make, whose three refusals each count); the kills leave none alive (sk_kills). */
 static void sk_work_log(const Lv* L, const RecWorld* V, unsigned T, const RecReader* rd, SkCpu c0,
@@ -7042,10 +7069,12 @@ static void sk_work_log(const Lv* L, const RecWorld* V, unsigned T, const RecRea
     if (s_mp.on)
         for (slot = 1; slot < s_mp.slots; slot++) live += s_mp.held[slot] != 0;
     tagpu_logf("replay: %s: the seek to %u's work: %u iterations read to GameTime %u from %s at "
-               "GameTime %u; the image: %u units live, %u made, %u refused, %u killed, %u left "
+               "GameTime %u; the blocks: %u decoded (%u for the base), %llu bytes read, %llu "
+               "unpacked; the image: %u units live, %u made, %u refused, %u killed, %u left "
                "alive; cpu %u ms (user %u, kernel %u) of the game thread, %u ms wall", s_name, T,
                w->iterations, w->target, w->from_snapshot ? "the snapshot" : "the first iteration",
-               w->from, live, s_sk.made, s_sk.refused, s_sk.killed, s_sk.left,
+               w->from, w->blocks, w->base, w->packed, w->raw, live, s_sk.made, s_sk.refused,
+               s_sk.killed, s_sk.left,
                (unsigned)((user + kernel) / 10000), (unsigned)(user / 10000),
                (unsigned)(kernel / 10000), wall);
 }
@@ -7152,7 +7181,7 @@ static int seek_run(char* ta)
     if (tk) tk_seats(ta, P, (unsigned)D);
     /* R7: every unit of iteration T, made as the first step makes them; a refused create is a
        difference the comparison names, never a hazard (make bounds what it passes) */
-    s_sk.made = level_units(&L, V);
+    s_sk.made = level_units(&L, V, L.now + 1);
     if (s_mp.on) s_sk.made += mp_make_held(&L);
     /* R8: S2b's appliers, the features left to R10 */
     links_put(&L, V);
@@ -8118,11 +8147,12 @@ int tagpu_replay_held(void)
    its sight counters all 1 and its bit in every entry of the explored map, with the minimap's fog
    (sight_fill), and its pass due at the next multiple of 30 above GameTime, as the loader's
    players phase leaves a seat's (0x497C10). Called at the frame visit before its first-step
-   return and at the step, so a level's first draw, which can precede its first step (the frame
-   callback 0x496790 runs the steps 0x495490, possibly none, before the draw call 0x4969CD), shows
-   the whole map. ORDERING: both callers run inside 0x496790, the in-play callback, which runs only
-   once the loading loop has seen the loader's last write (bit 1 of main+0x38D75, set at
-   0x497C5F, tested at 0x498342), so the loader's READY is read after it was written. */
+   return, at the first iteration's capture point and at the step, so a level's first draw, which
+   can precede its first step (the frame callback 0x496790 runs the steps 0x495490, possibly none,
+   before the draw call 0x4969CD), shows the whole map. ORDERING: every caller runs inside
+   0x496790, the in-play callback, which runs only once the loading loop has seen the loader's
+   last write (bit 1 of main+0x38D75, set at 0x497C5F, tested at 0x498342), so the loader's READY
+   is read after it was written. */
 static void viewer_init(char* ta)
 {
     unsigned now, next;
@@ -8354,24 +8384,29 @@ static int first_iteration(char* ta, Lv* L, char* why, unsigned cap)
     return 1;
 }
 
-/* the step's events and the next image, by THE APPLY above */
-static void play(const Lv* L, int first)
+/* the level's own units, the first image, the wind and V's sight, by THE APPLY above */
+static void play_first(const Lv* L)
 {
     RecWorld* W = recr_world(s_rd);
     masks_init();
-    if (first) {
-        s_st.made += level_units(L, W);
-        if (recr_header(s_rd)->mode == MODE_NETWORK) {
-            if (mp_begin(L, W)) mp_step_image(L, W->tick - 1);
-            if (s_mp.failed) {
-                s_over = 1;
-                return;
-            }
+    s_st.made += level_units(L, W, L->now);
+    if (recr_header(s_rd)->mode == MODE_NETWORK) {
+        if (mp_begin(L, W)) mp_step_image(L, W->tick - 1);
+        if (s_mp.failed) {
+            s_over = 1;
+            return;
         }
-        images_put(L, mp_world(W), 0);
-        wind_seed(W);
-        sight_fill(L->ta, s_viewer);
     }
+    images_put(L, mp_world(W), 0);
+    wind_seed(W);
+    sight_fill(L->ta, s_viewer);
+}
+
+/* the step's events and the next image, by THE APPLY above */
+static void play(const Lv* L)
+{
+    RecWorld* W = recr_world(s_rd);
+    masks_init();
     /* The world holds iteration k: its images went in at the step before k, its events are
        step k's. An iteration of an earlier GameTime is played late rather than dropped, since its
        events are the only record of what they made and destroyed. */
@@ -8392,42 +8427,77 @@ static void play(const Lv* L, int first)
     }
 }
 
+/* THE FIRST STEP'S UNITS, at the capture point of the level's first iteration, which B2's stub
+   reaches before it calls the unit tick 0x48AD30. The recording machine's loader made the level's
+   own units before its first unit tick, and that tick gave each one a script slice: the unit tick
+   is the only caller of DoScriptsNow 0x4B0D60, with dt 1 (`push 1` at 0x48ADE9, the call at
+   0x48ADEB), and dt is the only amount by which the runner counts a sleep down
+   (0x4B0DEF..0x4B0E01; DISASSEMBLED). Made here, each unit gets that slice from the host's first
+   unit tick, at the same GameTime, and every COB thread of a level-start unit keeps the recording
+   machine's clock for the whole level. Made after the unit tick, each would run one slice late, and
+   a walker's MotionControl would sample its moving and aiming inputs a tick late and choose walk,
+   walklegs or stand differently from the first input change that falls inside the lag on.
+   MEASURED 2026-10-12 with tools/tacob's VM, fed each commander's recorded inputs, against two
+   tenseat recordings: made after the unit tick, the VM gives walk/walklegs/stand 103/3/394 over
+   [481, 1411) and 109/0/445 over [301, 1291), the puppets' measured counts; made before it,
+   102/6/393 and 108/3/442, the live machines' measured counts, call for call per commander.
+   After the creates and image T comes the capture point's write every later capture point makes
+   (capture_put, THE GLOBALS AND THE PROJECTILES), so that here too the replay is the last writer
+   of the recorded globals before the unit tick reads them. Among them is the simulation RNG
+   0x51FC88 (replay-globals.tsv's rngseed), which the loader seeded from QueryPerformanceCounter
+   (0x49718C, the seed's call at 0x49719D) and which a slice's COB RAND draws from (0x4B15C9..
+   0x4B15EE -> 0x4B6C30; DISASSEMBLED): without the write the first slice of a level-start unit
+   would draw from the host's seed. Create's own run-now draws come before the write, inside each
+   create, as at a seek, whose R7 creates also precede its globals. The units made here have their
+   books written as made at this capture point (level_units' books_at), since the books are image
+   T's and no step of the host's has derived them yet.
+   Fixture: randprobe (fixtures.json), whose commanders draw from the RNG in their first slice and
+   call a script chosen by the draw at a period chosen by it for the whole level. MEASURED
+   2026-10-12 over [361, 1111): with this write left out, RandTick0..3 counted 133/258/163/0 live
+   against 107/57/114/253 on the puppet; with it, every key equal.
+   The rest of the first step stays in tagpu_replay_step, after the unit tick, as for every later
+   step: step T's events, then image T+1. */
+static void first_step(char* ta)
+{
+    char why[200], shown[32];
+    Lv L;
+    Refusal r = { 0, 0, 0 };
+    viewer_init(ta);                    /* first_checks tests VB_READY */
+    s_first = 0;
+    s_opt.played = 1;                   /* THE PLAYER'S SETTINGS: the loader is done */
+    if (!first_checks(ta, recr_header(s_rd), why, sizeof why, &r, 1) ||
+        !first_iteration(ta, &L, why, sizeof why)) {
+        s_dead = 1;
+        recfile_leave();
+        tagpu_logf("replay: not playing %s: %s; the level stays empty", s_name, why);
+        refused(&r, s_path);
+        return;
+    }
+    if (s_view == s_viewer) snprintf(shown, sizeof shown, "full visibility");
+    else snprintf(shown, sizeof shown, "the view of record %u", s_view);
+    tagpu_logf("replay: playing %s: %u seats, the viewer at record %u, from GameTime %u, %s",
+               s_name, recr_header(s_rd)->nseats, s_viewer, recr_header(s_rd)->start, shown);
+    tagpu_puppet_play();                /* the feature gates close (THE FEATURES) */
+    play_first(&L);
+    if (!s_over) capture_put(&L);
+}
+
 void __cdecl tagpu_replay_step(void)
 {
     char* ta;
-    char why[200], shown[32];
     Lv L;
-    int first = 0;
-    Refusal r = { 0, 0, 0 };
-    if (!tagpu_puppet_on() || !s_rd || s_dead) return;
+    if (!tagpu_puppet_on() || !s_rd || s_dead || s_first) return;
     ta = ta_main();
     if (!ta) return;
     viewer_init(ta);
     pend_finish();
-    if (s_first) {
-        s_first = 0;
-        s_opt.played = 1;                   /* THE PLAYER'S SETTINGS: the loader is done */
-        if (!first_checks(ta, recr_header(s_rd), why, sizeof why, &r, 1) ||
-            !first_iteration(ta, &L, why, sizeof why)) {
-            s_dead = 1;
-            recfile_leave();
-            tagpu_logf("replay: not playing %s: %s; the level stays empty", s_name, why);
-            refused(&r, s_path);
-            return;
-        }
-        if (s_view == s_viewer) snprintf(shown, sizeof shown, "full visibility");
-        else snprintf(shown, sizeof shown, "the view of record %u", s_view);
-        tagpu_logf("replay: playing %s: %u seats, the viewer at record %u, from GameTime %u, %s",
-                   s_name, recr_header(s_rd)->nseats, s_viewer, recr_header(s_rd)->start, shown);
-        tagpu_puppet_play();                /* the feature gates close (THE FEATURES) */
-        first = 1;
-    } else if (!s_over && !level_of(ta, &L)) {
+    if (!s_over && !level_of(ta, &L)) {
         s_over = 1;
         tagpu_logf("replay: %s stops at GameTime %u: the unit array or the features are not the "
                    "ones the level began with", s_name, *(const unsigned*)(ta + OFF_GAMETIME));
         counts_log("the stop", *(const unsigned*)(ta + OFF_GAMETIME));
     }
-    if (!s_over && !s_hold) play(&L, first);       /* THE BOUNDARY: nothing until the seek */
+    if (!s_over && !s_hold) play(&L);       /* THE BOUNDARY: nothing until the seek */
     pace(ta, *(const unsigned*)(ta + OFF_GAMETIME));
 }
 

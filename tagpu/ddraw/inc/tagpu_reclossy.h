@@ -15,6 +15,7 @@ typedef struct RecLossyList { unsigned n, cap; unsigned char* img; } RecLossyLis
 
 typedef struct RecLossyParams {
     unsigned nslots;                    /* the header's RT_SLOTS, 2..65535                        */
+    unsigned flags;                     /* RT_HOLD's: RECL_SPRAYS writes the sprays as sessions   */
     const unsigned char* hold_unit;     /* REC_UNIT_IMAGE bytes, a set bit held (RT_HOLD)          */
     const unsigned char* hold_node;     /* REC_ORDER_IMAGE bytes: a main list node's              */
 } RecLossyParams;
@@ -35,11 +36,12 @@ void      reclossy_free(RecLossy* L);
 
 /* One completed iteration: `recs`, n bytes, the records as the capture made them, RK_TICK
    first, corrections included. Appends the iteration's stream records to `out`. With `refresh`,
-   the lossy world ends equal to `x`, the writer's world at the iteration's end. 1, or 0 for an
-   iteration that breaks a bound the filter keeps -- a writer would have refused it, so the
+   the lossy world ends equal to `x`, the writer's world at the iteration's end; `snapshot`, a
+   refresh a snapshot follows, also writes every spray and closes every spray session. 1, or 0
+   for an iteration that breaks a bound the filter keeps -- a writer would have refused it, so the
    writer abandons the file. */
 int reclossy_iteration(RecLossy* L, const unsigned char* recs, size_t n, int refresh,
-                       const RecLossyExact* x, RecBytes* out);
+                       int snapshot, const RecLossyExact* x, RecBytes* out);
 
 /* 1 when the lossy world equals `x` byte for byte: liveness, every live unit's image and every
    slot's two lists. The writer asks it after every refresh. */
@@ -57,6 +59,32 @@ int reclossy_equal(const RecLossy* L, const RecLossyExact* x);
    decides with this and every check of a file mirrors it (codectest lossy, tarec.py lossy-check).
    `interval` is REC_REFRESH_MIN..REC_REFRESH_TICKS; 0 makes only the first two refreshes. */
 int reclossy_is_refresh(unsigned n, unsigned tick, unsigned prev, unsigned interval);
+
+/* THE SPRAY SESSIONS' TABLE, which every reader of a stream with RECL_SPRAYS keeps and the filter
+   writes by (tagpu_reclossy.c, THE SPRAY SESSIONS): each unit slot's session and its sprays of
+   the last four GameTimes. One table per reader, owned by its thread. */
+typedef struct RecSprays RecSprays;
+
+/* NULL: no memory, or nslots out of 2..65535. */
+RecSprays* recsprays_begin(unsigned nslots);
+void       recsprays_free(RecSprays* t);
+/* no session and no spray: where a reader holds nothing from before (a reset, a snapshot) */
+void       recsprays_empty(RecSprays* t);
+/* An RK_SPRAY_SESSION's body: 1, the unit's session from this iteration on; 0 malformed (its
+   length, its zero bytes, a mode outside RK_SPRAY_SESSION's, an ID that names no unit slot). */
+int        recsprays_session(RecSprays* t, const unsigned char* b, unsigned len);
+/* An RK_EV_SPRAY of iteration T, 48 bytes, taken into the table: `units` the slots' images
+   (REC_UNIT_IMAGE each) and `live` their liveness at T. A spray whose ID names no unit slot
+   enters none. */
+void       recsprays_spray(RecSprays* t, unsigned T, const unsigned char* b, const void* units,
+                           const unsigned char* live);
+/* At the end of iteration T, once its records are taken: the sprays the sessions imply, 48 bytes
+   each (an RK_EV_SPRAY's body), slots ascending, into a buffer of the table's that stays as it
+   is until the next call; each taken into the table. 1; 0 when a session would predict from a
+   GameTime with no single spray of its unit, or follows a unit not live at T or then: malformed,
+   since the filter never implies such a spray; -1 when the buffer cannot grow (no memory). */
+int        recsprays_imply(RecSprays* t, unsigned T, const void* units, const unsigned char* live,
+                           const unsigned char** out, unsigned* n);
 
 /* RT_HOLD's bytes (tagpu_recfmt.h) */
 typedef struct RecLossyHold {

@@ -211,10 +211,16 @@ other players; a multiplayer game is rewound from its finished recording.
   typical four-player game, and 100 MB for ten players with 1,500 units.** Every value a viewer
   sees stays exact at every tick, made small by lossless coding
   ([making recordings smaller](demo-recorder-size.md)), so a replay shows exactly what the game
-  computed. The owner chose to go lossy after the measured hours (2026-10-11): from format 13 a
-  skirmish stream may hold the internal bytes `replay-hold.tsv` names at an earlier value between
-  two refreshes, exact again at every refresh, which is where a takeover starts; each row of that
-  table is a loosening and a decision of its own, and format 13's table has none yet. These targets rest on an estimate, not a measurement
+  computed. The owner chose to go lossy after the measured hours (2026-10-11): a skirmish stream
+  holds the internal bytes `replay-hold.tsv` names at an earlier value between two refreshes,
+  exact again at every refresh (every 300 ticks), which is where a takeover starts; each row of
+  that table is a loosening and a decision of its own. Its rows hold the weapon slots' aim and
+  target state, the unit's resource ledger's accumulators and the main order list's handler
+  state, none of which a viewer is shown. From format 15 a skirmish stream also leaves out the
+  nano sprays a unit's spray session predicts (its spray of 1, 2 or 4 ticks before, or that one
+  moved with the unit), which every reader makes again with the same bytes: a viewer sees every
+  spray at its point in its tick, only their order inside the tick differing (an owner decision
+  of 2026-10-11). These targets rest on an estimate, not a measurement
   ([open decisions](#open-decisions-and-evidence-needed)). So far an eight-minute four-AI game
   measured about 5–7 MB per hour, and a 1,432-unit battle would reach 160–640 MB if sustained for
   an hour ([evidence](demo-recorder-state-evidence.md#4-size-estimate)). A real hour-long four-player game with AI and structures is measured before
@@ -470,7 +476,8 @@ evidence, and keep remaining gaps visible.
    51.5 MiB an hour with no snapshots at all, and the light one comes to 25.85 MiB in format 11, so the
    four-player budget is missed. Format 12 predicts the units' resource ledger and takes the heavy
    hour from 56.99 to 42.15 MB (−26 %), lossless; a lossy plan measured offline brings it to 19.32 MB
-   (*L5* of the size page). Until the reduced stream lands, a skirmish is recorded only on request.
+   (*L5* of the size page), and format 14's hold rows, the plan's first step, take it to 30.53 MB on
+   the writer's path. Until the reduced stream lands, a skirmish is recorded only on request.
 3. **Snapshot interval: decided** (2026-10-10). A snapshot every 1,800 ticks, 60 s of game time,
    chosen against the disk budget with the seek target relaxed for dense battles (*Playback and
    seeking*).

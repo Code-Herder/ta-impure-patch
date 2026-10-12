@@ -76,8 +76,9 @@ unsigned int tagpu_patches_restored(void);
 
 /* The wind's generator state, for a level that plays a recording (tagpu_replay.c): the name its
    declaration has in a recording's header, and the state to draw from. The replay's first step
-   sets the state the recording's first image holds, on the game thread, before that tick's wind
-   draw (0x49558F): the draws are then the recording's (tagpu_patches.c, *The playback's seed*). */
+   sets the state the recording's first image holds, on the game thread, at the capture point of
+   the level's first iteration, before its unit tick and its wind draw (0x49558F): the draws are
+   then the recording's (tagpu_patches.c, *The playback's seed*). */
 const char* tagpu_wind_state_name(void);
 void tagpu_wind_state_set(unsigned long long state);
 #endif

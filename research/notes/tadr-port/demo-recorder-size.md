@@ -16,9 +16,11 @@ hours, and both miss the 25 MB budget even with no snapshots at all** (24.4 and 
 from the stream alone). L5a, lossless, predicts the units' resource ledger and takes the heavy hour
 from 56.99 to 42.15 MB; the owner chose to go lossy after it, and a lossy plan measured offline
 brings the heavy hour to 19.32 MB, about 1.6–2.6 times the 7.3–12.4 MB TADR's recorder would take
-for it (*L5: the lossy plan, measured offline*). L5's core is landed as recording format 13 (*L5:
-the lossy plan, measured offline*, its last part): the filter, the refreshes and the takeover at a
-refresh, with a hold table of no rows, so the size is format 12's; its hold rows and L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
+for it (*L5: the lossy plan, measured offline*). L5's core and its unit and order hold rows are
+landed as recording format 14 (*L5: the lossy plan, measured offline*, its last part): the filter,
+the refreshes, the takeover at a refresh and the table's 37 rows take the heavy hour to 30.53 MB
+(MEASURED offline); format 15 writes the nano sprays as spray sessions, which takes the
+heavy hour's stream 2.7 MB smaller again; the cells and L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -1118,8 +1120,10 @@ snapshot at 1,800 (701 samples, 8 clicks, 11 selections, 1 snapshot), alone and 
 - **The longest seek doubles in the gate too**: the battle's takeover seeks read up to about 1,923
   iterations instead of 1,023, and the U lane's return to now at 1,501 reads 1,500 from the
   first: 3.5–4.12 s of the game thread's CPU under the gate's load (MEASURED, two landing runs),
-  past W3's 4,000. The owner raised the battle's `cpu_ms` to 5,000 (2026-10-10), the loosening
-  this interval costs ([completeness](demo-recorder-completeness.md)).
+  past the CPU-time bound of 4,000 that W3 then was, which the owner raised to 5,000 (2026-10-10).
+  W3 now counts the blocks a seek decodes against the file's own and no check reads a time
+  (2026-10-12), so the interval costs the gate no bound; it costs the seek's time, which the gate
+  reports and does not check ([completeness](demo-recorder-completeness.md)).
 - **The HUD markers' walker can hold the game thread for one rebuild**: its stop waits for one
   fork crossing, which rebuilds from the last snapshot before the fork, now up to about 1,800
   iterations ([the replay HUD](../hud-in-game.md)).
@@ -1206,9 +1210,9 @@ from the velocity and the heading from the turn, so a held velocity turns every 
 residual.
 
 **Not shown by these numbers.** No lossy recording was played: the sizes are of transformed streams.
-The spray sessions zeroed the spray's point, which is shown, so that step stands only if the puppet
-can recompute the point; a spray session needs an end the format does not carry (about 0.2 MB an
-hour [INFERRED]). Held cell slots are read by projectile collision, and dropped input cells feed the
+The offline spray step zeroed the spray's point, which is shown, and measured −3.9 MB on a stream
+whose cells were already held (27.87 → 23.97); the landed spray sessions keep the point exact and
+end explicitly (*The spray sessions*, below). Held cell slots are read by projectile collision, and dropped input cells feed the
 feature tick, so both need a playback check. A takeover between snapshots would resume from held
 internal values. The landing plan answers these.
 
@@ -1229,8 +1233,57 @@ record is the capture's: MEASURED 2026-10-12, `codectest lossy` over the heavy h
 records with the build's table: 108,090 iterations, none whose records differ from the input's,
 3,604 stream blocks (361 ending at a refresh, every one sectioned, none declined or mismatched),
 60 snapshots kept at the refreshes 1,800 apart; `tarec lossy-check --to 27001` and `tarec check`
-pass on the result. Adding a row is the owner's decision (CLAUDE.md, *Loosening*); the rows the
-plan measured, the spray sessions and the cells are the next landings.
+pass on the result. Adding a row is the owner's decision (CLAUDE.md, *Loosening*).
+
+**The unit and order hold rows: recording format 14** (2026-10-12). `replay-hold.tsv` holds the
+three weapon slots' target, callback, aim complete, aim heading and pitch and flags but bit 1; the
+ledger's produced, requested, granted and debt of both resources; and a main list node's state,
+wanted and fired events, deadline, leash, p3, owned object and flags but seven bits (five a
+playback host reads on a main list node, and `0x8` and `0x80000`, whose readers do not run there:
+loosenings not taken) -- the plan's U and O rows less one, each row with its readers on a
+playback host and its evidence (the owner's, 2026-10-11: *hold rows are loosenings*). Left out of the plan's rows: a
+weapon slot's distance (`+0x10`), which the shot builder reads on a puppet (`0x49CE62`) and which
+never changes after the create, so holding it saved nothing. MEASURED 2026-10-12, `codectest lossy`
+over the heavy hour's exact records (the writer's path, a refresh every 300 ticks): **30,530,997
+bytes against 42,153,513 with the empty table (−27.6 %)**, the plan's 30.26 MB at a refresh every
+1,800 ticks plus 0.9 % [INFERRED: the shorter interval's refreshes]. The empty-table base is the
+same command built from main at `03d0b4c0`, on the same grid: 3,605 stream blocks, 362 at a
+refresh. The core's 3,604 and 361 above were measured before the segment's second iteration
+became a refresh (`d959778b`), which is the extra block; the rows add none. With the rows, 107,868
+of 108,090 iterations differ from the input's, 3,605 stream blocks (362 at a refresh), every one sectioned, none declined or mismatched,
+60 snapshots; `tarec lossy-check` over the whole hour (every shown byte exact, every held byte the
+stream's last or the exact one, the two worlds equal at all 362 refreshes), `tarec check`, and the
+C and Python decoders on every block (`codectest.py verify`) pass. The cells are the next landing.
+
+**The spray sessions, landed: recording format 15** (2026-10-12). A nano spray repeats: its unit's
+spray of 1, 2 or 4 ticks before, byte for byte, or with its point moved by exactly the unit's
+position change since. A skirmish stream (`RT_HOLD`'s `RECL_SPRAYS`) leaves out a spray its
+unit's session predicts exactly, the unit's one spray of its tick, and every reader makes it again
+after the tick's events from a table of each unit's sprays of the last four ticks; an
+`RK_SPRAY_SESSION` record (8 bytes, `RCS_OTHER`, verbatim) opens, changes or closes a unit's session
+after its tick's last record: after a spray the table predicts -- plain before following, the
+shortest period first -- and in a tick the unit makes none. A snapshot's tick writes every spray
+and closes every session, and every reader empties its table there, so a seek needs nothing from
+before the snapshot. Every spray is exact, its point included; only the sprays' order inside a
+tick is not kept, a loosening the owner approved (the completeness note's decisions, 2026-10-11).
+**MEASURED** 2026-10-12, `codectest lossy` over the heavy hour's exact records: 2,980,673 of
+3,160,252 sprays implied, 179,579 written, 71,417 sessions opened or changed (11,372 of them
+following their unit) and 66,448 closed; the file 42,135,332 → 39,498,890 bytes (−2.64 MB) with
+the empty hold table, and 30,512,816 → 27,792,787 (−2.72 MB) over the plan's unit and order rows
+(the hold rows' table as it stood before they landed, built into a scratch copy; the landed
+table's file is 30,530,997 bytes); every block sectioned, none declined or
+mismatched. `tarec lossy-check` over the whole hour and `tarec check` pass; `check` counts the
+hour's 3,160,252 sprays. The DLL's reader makes the same sprays: `codectest.py sprays` over the
+replay gate's 41 fresh recordings with the exact stream (2026-10-12) compared 114,060 iterations
+read in order, with 23,143 sprays, and 42,588 iterations after 144 seeks from the snapshots, with
+9,277, every one equal. **The landing's gate missed by 0.05 MB**: the landing plan asked for
+−2.97 MB ± 0.2 over the unit and order rows, a figure that coded the session records in the
+events frame. Written verbatim, as format 15 writes them, they cost 377,643 bytes on this stream,
+against 128,818 in the events frame, so the events-frame coding planned with the explicit sprays'
+own (P7) recovers about 0.25 MB. The lossy plan's own figures for exact sessions are smaller,
+−1.05 MB (its §4.4) and −1.03 (its §8's attribution), because its transform had no FOLLOW
+sessions: it implied 2,546,320 sprays and wrote 613,932, with 59,528 sessions opened and 59,022
+closed.
 
 ## Multiplayer recordings
 
@@ -1313,7 +1366,7 @@ the units: stage 6's traffic budget.
 | L3 | cells, orders, events and state as four record frames that restart empty at every reset point; the snapshot wreck base: LANDED (*L3* above) | planned about −7 MiB against the pre-L1 file; MEASURED −4.52 MiB on L2's own battle file (16.40 → 11.88), −3.47 on Town & Country's, −0.60 on naval's, −5.54 on the air war's |
 | L4 | two measured four-player hours, a light and a heavy one; format 11: snapshots every 1,800 ticks, the cells frame restarting from the reader's grid (R1): LANDED (*L4* above) | the snapshot interval, decided by the owner with the seek target relaxed for dense battles; MEASURED −1.63 MB an hour from R1 on the light hour at 1,800; both hours miss the 25 MB budget even with no snapshots |
 | L5a | the unit frame predicts the resource ledger, format 12: LANDED (*L5a* below) | MEASURED heavy hour 56.99 → 42.15 MB, lossless |
-| L5 | lossy, chosen by the owner 2026-10-11: internal values held between refreshes, shown values exact (*L5: the lossy plan, measured offline*). The core LANDED as format 13: the filter, the refresh every 300 ticks, the takeover at a refresh, the exact stream for the harness, a hold table of no rows; the rows, the spray sessions and the cells follow | MEASURED offline heavy hour 42.15 → 19.32 MB with the plan's rows; format 13's empty table changes no record |
+| L5 | lossy, chosen by the owner 2026-10-11: internal values held between refreshes, shown values exact (*L5: the lossy plan, measured offline*). The core LANDED as format 13: the filter, the refresh every 300 ticks, the takeover at a refresh, the exact stream for the harness; the unit and order hold rows LANDED as format 14; the spray sessions LANDED as format 15; the cells follow | MEASURED offline heavy hour 42.15 → 19.32 MB with the plan's transforms; format 14's rows 42.15 → 30.53 MB on the writer's path; the spray sessions −2.72 MB over the rows |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
 ## Decisions

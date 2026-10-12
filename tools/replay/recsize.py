@@ -3,7 +3,8 @@
 
     recsize.py <file.imprec> [--json out.json] [--window 900]
 
-Reads a recording of format 12 with reccodec.py's block walk and reports:
+Reads a recording of the current format (reccodec.REC_FORMAT) with reccodec.py's block walk and
+reports:
 
   - the file by block kind, raw (as the block headers state it: a sectioned block's container)
     and on disk;

@@ -227,7 +227,7 @@ def run(t, w, fx, out):
             for tl in (0, 1):
                 compare(f"check timeline {tl}", "check", rec, "--timeline", tl)
             compare("fork", "compare-fork", rec, 1)
-            results.later(work_checks, t, works, rec, fix["takeover"].get("cpu_ms"))
+            results.later(work_checks, t, works, rec)
             segs, stop = t.tarec.file_segments(rec)
             # the fork starts at the refresh at or before T2 (tagpu_replay.c, tk_bound)
             R2 = t.tarec.refresh_at(str(rec), 0, T2)
@@ -289,7 +289,7 @@ def rewind_works(t, lines):
     return works
 
 
-def work_checks(t, works, rec, cpu_ms):
+def work_checks(t, works, rec):
     """The return to now's and the fork's work, W1 to W3 (tareplay.work_verdict) against the
     recording's original timeline, which both read: the return to now to G-1 of the live file,
     the fork to its T. The conversion's CPU time is reported only."""
@@ -300,7 +300,7 @@ def work_checks(t, works, rec, cpu_ms):
             res.append(("rewind " + label + " work", t.UNRUN, "no work line"))
             continue
         try:
-            bad = t.work_verdict(w, rec, 0, True, cpu_ms)
+            bad = t.work_verdict(w, rec, 0, True)
         except t.tarec.Unreadable as e:
             res.append(("rewind " + label + " work", t.UNRUN, str(e)))
             continue

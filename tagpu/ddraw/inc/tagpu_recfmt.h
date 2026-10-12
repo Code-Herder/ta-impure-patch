@@ -37,16 +37,20 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 13: format 12 with the stream written by the lossy filter (tagpu_reclossy.c): a skirmish
-   header's RT_HOLD names the bytes the stream holds between refreshes, a refresh iteration ends
-   its stream block (RBF_REFRESH), and a test launch may write the exact records beside the stream
-   (RB_EXACT). 12 was format 11 with the unit frame predicting the unit's resource ledger. A
-   reader takes this format alone. The bytes: every packed block is one zstd frame, and a stream
-   block may be a sectioned container whose unit frame carries the unit deltas, whose pool frame
-   carries the projectile pool coded by identity, and whose four record frames -- the cells, the
-   orders, the events and the state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER
-   below). */
-#define REC_FORMAT        13
+/* 15: format 14 with a skirmish stream's nano sprays written as sessions (RK_SPRAY_SESSION,
+   RT_HOLD's RECL_SPRAYS): a spray its unit's session predicts is left out, and every reader makes
+   it again at the end of its iteration. 14 was format 13 with a hold table of rows: a skirmish
+   stream holds the weapon slots' aim and target state, the resource ledger's accumulators and the
+   main order list's handler state between refreshes (replay-hold.tsv; RT_HOLD carries the masks).
+   13 was format 12 with the stream written
+   by the lossy filter (tagpu_reclossy.c): a skirmish header's RT_HOLD names the bytes the stream
+   holds between refreshes, a refresh iteration ends its stream block (RBF_REFRESH), and a test
+   launch may write the exact records beside the stream (RB_EXACT). A reader takes this format
+   alone. The bytes: every packed block is one zstd frame, and a stream block may be a sectioned
+   container whose unit frame carries the unit deltas, whose pool frame carries the projectile pool
+   coded by identity, and whose four record frames -- the cells, the orders, the events and the
+   state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). */
+#define REC_FORMAT        15
 
 static __inline int rec_format_supported(unsigned format)
 {
@@ -315,10 +319,15 @@ enum RecKind {
     RK_POV_AT,         /* u32 the GameTime it was taken, then a RecPov: a snapshot's copy of one of
                           a seat's two last samples, which a stream's RK_POV dates by its
                           iteration; a snapshot's only                                            */
-    RK_SPRAY_SESSION,  /* u32 unit ID, u8 mode (bits 0-2 the period: 0, 1, 2 or 4; bit 3 FOLLOW;
-                          every other value refused), u8 0, u16 0: a unit's spray session, a
-                          stream's only, in RCS_OTHER. Declared, and written by no writer of this
-                          format: a reader refuses it in a stream as malformed                    */
+    RK_SPRAY_SESSION,  /* u32 unit ID, u8 mode (bits 0-2 the period p: 0, 1, 2 or 4; bit 3
+                          FOLLOW, with p > 0 only; every other value refused), u8 0, u16 0: the
+                          unit's spray session from this iteration on, p 0 closing it. At the end
+                          of each iteration in which a unit with a session has no RK_EV_SPRAY of
+                          its own, a reader makes the spray the session implies: the unit's spray
+                          of the iteration p GameTimes before, its point moved by the unit's
+                          position change since with FOLLOW (tagpu_reclossy.c, THE SPRAY
+                          SESSIONS). After the iteration's last other record, slots ascending;
+                          a skirmish stream's only, with RT_HOLD's RECL_SPRAYS; in RCS_OTHER     */
     RK_KINDS
 };
 
@@ -748,7 +757,9 @@ _Static_assert(RT_CODEC == 29 && RT_AIR == 31 && RT_CODEC_DECLINED == 44 && RT_H
 #define REC_REFRESH_TICKS 300   /* the interval a recording is written with                     */
 #define REC_REFRESH_MIN   30    /* the least a test launch may ask for (tagpu_rec.refresh)       */
 #define RECL_CELLS        1u    /* the cells' unit slots and yard bit are held                   */
-#define RECL_SPRAYS       2u    /* the nano sprays are written as sessions                       */
+#define RECL_SPRAYS       2u    /* the nano sprays are written as sessions (RK_SPRAY_SESSION)    */
+#define REC_SPRAY_BODY    44u   /* an RK_EV_SPRAY after its unit ID                              */
+#define REC_SPRAY_FOLLOW  8u    /* RK_SPRAY_SESSION's mode: the point follows the unit           */
 #define REC_HOLD_BYTES    (8u + 32u + REC_UNIT_IMAGE + REC_ORDER_IMAGE)
 /* the position +0x6A..+0x75, which a spray session that follows its unit reads: never held */
 #define REC_HOLD_POS_AT   0x6A
