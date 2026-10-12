@@ -2432,7 +2432,8 @@ def known_names(h):
 # not to the unit that came first in the game (demo-recorder-completeness.md, Decisions taken).
 STRUCTURE = 1 << 29     # unit +0x110: a structure, whose yard bits a footprint writer sets
 U_LOSER = 1 << 27       # unit +0x110: the contest's loser, which a holder's clear re-claims
-U_MARKS = 3 << 26       # ... and bit 26, its holder: the footprint writers' alone there
+U_HOLDER = 1 << 26      # unit +0x110: the holder of a cell a loser contests
+U_MARKS = U_LOSER | U_HOLDER    # the footprint writers' alone
 
 
 def rect(u):
@@ -2463,23 +2464,35 @@ def stamped(u, gw, gh):
     return layer in (1, 2) and x >= 0 and z >= 0 and x + w <= gw and z + h <= gh
 
 
+def layer(u):
+    """The layer the stamp files a unit by, +0x110 & 3: 1 slot A, 2 slot B (stamped)."""
+    return struct.unpack_from("<I", u, U_STATE)[0] & 3
+
+
 def occupancy(w, dw, contest=False):
     """The dump's unit slots and yard bit checked by the engine's invariants instead of compared,
     and then taken into the expected world `w`: each footprint cell of a live mobile unit names it;
     each slot a cell names is a live unit whose footprint holds the cell; a yard bit lies inside a
-    live structure's footprint. With `contest`, a skirmish recording's after a seek: a mobile unit
-    the stamp does not write (stamped) has no cell to name it, a footprint cell may name another
-    live unit whose footprint holds it when this one carries the loser's mark, bit 27 -- the
-    engine's contest kept the cell for the other -- and the contest's marks, +0x110 bits 26 and 27,
-    are taken from the dump too. The differences those checks find."""
+    live structure's footprint. With `contest`, a skirmish recording's after a seek, the checks are
+    the stamp's own, layer by layer: a mobile unit the stamp does not write (stamped) has no cell
+    to name it; a stamped unit's footprint cell names it in its layer's slot (A for layer 1, B for
+    layer 2), or, when it carries the loser's mark, bit 27, names there another live unit of the
+    same layer whose footprint holds the cell and which carries the holder's mark, bit 26 -- the
+    engine's contest kept the cell for that one (the stamp's contest, 0x47CDDB..0x47CE1D, sets 26
+    on the unit that keeps the cell and 27 on the other; a unit's clear, 0x47D286..0x47D2C4, drops
+    its 27 and, holding 26, drops that and re-claims for the bit-27 units: DISASSEMBLED); a slot
+    names a unit of its own layer; and the contest's
+    marks, +0x110 bits 26 and 27, are taken from the dump too. The differences those checks
+    find."""
     out = []
     cb = REC_CELL_BYTES
     yards = footprints(dw)
     rects = {slot: rect(u) for slot, u in dw.units.items()}
+    state = {slot: struct.unpack_from("<I", u, U_STATE)[0] for slot, u in dw.units.items()}
     for slot, u in sorted(dw.units.items()):
         if structure(u) or (contest and not stamped(u, w.gw, w.gh)):
             continue
-        lost = contest and struct.unpack_from("<I", u, U_STATE)[0] & U_LOSER
+        lost = contest and state[slot] & U_LOSER
         for cx, cz in sorted(rects[slot]):
             i = (cz * w.gw + cx) * cb
             if not (0 <= cx < w.gw and 0 <= i < len(dw.grid)):
@@ -2487,30 +2500,45 @@ def occupancy(w, dw, contest=False):
                            "does not name it")
                 continue
             named = struct.unpack_from("<HH", dw.grid, i)
-            if slot in named or (lost and any(o in rects and (cx, cz) in rects[o]
-                                              for o in named if o)):
+            if not contest:
+                if slot in named:
+                    continue
+                out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
+                           "does not name it")
                 continue
-            out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
-                       "does not name it" + (", and no unit that holds it took it from this one"
-                                             if contest else ""))
+            want = named[layer(u) - 1]
+            if want == slot:
+                continue
+            if lost and want in dw.units and layer(dw.units[want]) == layer(u) and \
+                    (cx, cz) in rects[want]:
+                if not state[want] & U_HOLDER:
+                    out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
+                               f"names unit {want}, which holds it without the holder's mark")
+                continue
+            out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint does not "
+                       f"name it in slot {'AB'[layer(u) - 1]}, and no unit of its layer that "
+                       "holds it took it from this one")
     for i in range(0, len(dw.grid), cb):
         c = i // cb
         xz = (c % w.gw, c // w.gw)
         w.grid[i:i + 4] = dw.grid[i:i + 4]
         w.grid[i + 0x0C] = (w.grid[i + 0x0C] & ~2) | (dw.grid[i + 0x0C] & 2)
-        for slot in struct.unpack_from("<HH", dw.grid, i):
+        for k, slot in enumerate(struct.unpack_from("<HH", dw.grid, i)):
             if slot and slot not in dw.units:
                 out.append(f"occupancy: cell {xz} names slot {slot}, not live")
             elif slot and xz not in rects[slot]:
                 out.append(f"occupancy: cell {xz} names slot {slot}, outside its footprint")
+            elif slot and contest and not structure(dw.units[slot]) and \
+                    layer(dw.units[slot]) != k + 1:
+                out.append(f"occupancy: cell {xz} names slot {slot} in slot {'AB'[k]}, "
+                           f"a unit of layer {layer(dw.units[slot])}")
         if dw.grid[i + 0x0C] & 2 and xz not in yards:
             out.append(f"occupancy: cell {xz} holds a yard bit outside every live structure")
     if contest:
         for slot, img in w.units.items():
             if slot in dw.units:
                 v = struct.unpack_from("<I", img, U_STATE)[0] & ~U_MARKS
-                struct.pack_into("<I", img, U_STATE,
-                                 v | struct.unpack_from("<I", dw.units[slot], U_STATE)[0] & U_MARKS)
+                struct.pack_into("<I", img, U_STATE, v | state[slot] & U_MARKS)
     return out
 
 

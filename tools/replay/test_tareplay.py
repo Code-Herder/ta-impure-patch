@@ -1368,8 +1368,35 @@ class Occupancy(unittest.TestCase):
         self.assertEqual(tarec.occupancy(a, b, contest=True), [])
 
     def test_contest_a_loser_under_the_holder(self):
+        units = {1: self.unit(1, 1, 2, 1, state=1 << 26 | 1), 2: self.unit(2, 1, state=1 << 27 | 1)}
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
+        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+
+    def test_contest_a_holder_without_its_mark_fails(self):
         units = {1: self.unit(1, 1, 2, 1), 2: self.unit(2, 1, state=1 << 27 | 1)}
         a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertEqual(len(out), 1, out)
+        self.assertIn("without the holder's mark", out[0])
+
+    def test_contest_a_loser_s_empty_slot_under_another_layer_fails(self):
+        # ground unit 2 lost nothing in slot A; an aircraft overhead fills slot B
+        units = {1: self.unit(2, 1, state=1 << 26 | 2), 2: self.unit(2, 1, state=1 << 27 | 1)}
+        a, b = self.worlds(units, {(2, 1): (0, 1)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertEqual(len(out), 1, out)
+        self.assertIn("does not name it in slot A", out[0])
+
+    def test_contest_the_layer_s_slot(self):
+        # layer 1 filed in slot B, and layer 2 in slot A
+        a, b = self.worlds({1: self.unit(1, 1)}, {(1, 1): (0, 1)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertTrue(any("does not name it in slot A" in line for line in out), out)
+        self.assertTrue(any("in slot B, a unit of layer 1" in line for line in out), out)
+        a, b = self.worlds({1: self.unit(1, 1, state=2)}, {(1, 1): (1, 0)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertTrue(any("does not name it in slot B" in line for line in out), out)
+        a, b = self.worlds({1: self.unit(1, 1, state=2)}, {(1, 1): (0, 1)})
         self.assertEqual(tarec.occupancy(a, b, contest=True), [])
 
     def test_contest_a_unit_not_marked_the_loser_fails(self):
@@ -1377,7 +1404,7 @@ class Occupancy(unittest.TestCase):
         a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
         out = tarec.occupancy(a, b, contest=True)
         self.assertEqual(len(out), 1, out)
-        self.assertIn("mobile unit 2's footprint does not name it", out[0])
+        self.assertIn("mobile unit 2's footprint does not name it in slot A", out[0])
 
     def test_contest_a_cell_naming_a_unit_elsewhere_fails(self):
         units = {1: self.unit(1, 1), 2: self.unit(3, 1, state=1 << 27 | 1)}
