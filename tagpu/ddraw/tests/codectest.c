@@ -17,7 +17,8 @@
                                     the build's hold table, refreshes where the writer makes them,
                                     the stream blocks cut where it cuts them and coded by its codec,
                                     IN's snapshots kept where a writer would take one (a refresh
-                                    SNAPSHOT_TICKS on) and the rest dropped; with --exact, each
+                                    SNAPSHOT_TICKS on), the filter told of each before it, and the
+                                    rest dropped; with --exact, each
                                     stream block followed by its exact records (RB_EXACT). Prints
                                     the iterations whose records differ from IN's
      codectest decode IN OUT        every stream block's records, C, framed for codectest.py; a
@@ -35,7 +36,10 @@
                                     single-precision sum; the lossy filter's own (an empty table
                                     copies, a refresh writes exactly the differences, the equality
                                     check, malformed iterations refused, RT_HOLD's bounds, the
-                                    refresh grid and the refresh before a GameTime)
+                                    refresh grid and the refresh before a GameTime); the spray
+                                    sessions' (a spray implied plain and following its unit,
+                                    written after a miss and twice in one iteration, a session
+                                    closed, a snapshot's iteration, and what a reader refuses)
      codectest fuzz IN SEED N [CASES] [--section NAME]
                                     N mutations of the recording's sectioned blocks (flags, the
                                     head, section lengths, kinds, the unit frame's gaps, masks,
@@ -50,7 +54,7 @@
                                     state)
      codectest sin                  the sine table, for codectest.py's check against its formula
 
-   IN is a recording of format 13, or, for transcode and lossy, one of format 12 or later with no
+   IN is a recording of format 14, or, for transcode and lossy, one of format 12 or later with no
    sectioned block, which they write as the current format, the header's other entries kept. Exit
    0 when every check holds, 1 when one fails, 2 when a file cannot be read. The codec is included
    rather than linked: the fuzz copies a decoder's state, which the codec's interface keeps opaque;
@@ -487,13 +491,15 @@ static void tlv_put(RecBytes* b, unsigned tag, const void* p, unsigned n)
     rb_put(b, zero, ((n + 3) & ~3u) - n);
 }
 
-/* RT_HOLD's bytes: `masks` the build's hold table, else a table that holds nothing */
+/* RT_HOLD's bytes: `masks` the build's writer's -- its hold table and its sprays as sessions --
+   else a table that holds nothing */
 static void hold_bytes(unsigned char* hold, int masks)
 {
     unsigned i;
     memset(hold, 0, REC_HOLD_BYTES);
     put32(hold, REC_REFRESH_TICKS);
     if (!masks) return;
+    put32(hold + 4, RECL_SPRAYS);
     for (i = 0; i < 32; i++) {
         const char* x = TAGPU_REPLAY_HOLD_SHA256 + 2 * i;
         unsigned hi = x[0] <= '9' ? (unsigned)(x[0] - '0') : (unsigned)(x[0] - 'a' + 10);
@@ -821,6 +827,36 @@ static void lossy_flush(LossyOut* o, unsigned refresh)
     o->ticks = 0;
 }
 
+/* IN's snapshots as (segment, GameTime), in file order, from its block heads alone: the filter
+   is told a snapshot follows an iteration before IN's snapshot block comes, as the writer tells
+   it before it takes one. NULL with *n 0 for none. */
+typedef struct SnapAt { unsigned seg, tick; } SnapAt;
+
+static SnapAt* snaps_of(const unsigned char* d, size_t n, unsigned* count)
+{
+    SnapAt* v = NULL;
+    size_t at = 8;
+    unsigned cap = 0, seg = 0;
+    *count = 0;
+    while (n - at >= 32) {
+        RecBlock b;
+        memcpy(&b, d + at, 32);
+        if (b.magic != REC_BLOCK_MAGIC || b.packed > n - at - 32) break;
+        seg += b.kind == RB_HEADER;
+        if (b.kind == RB_SNAPSHOT) {
+            if (*count == cap) {
+                SnapAt* q = (SnapAt*)realloc(v, (cap = cap ? 2 * cap : 64) * sizeof *v);
+                if (!q) break;
+                v = q;
+            }
+            v[*count].seg = seg;
+            v[(*count)++].tick = b.last;
+        }
+        at += 32 + b.packed;
+    }
+    return v;
+}
+
 static int cmd_lossy(const char* in, const char* outp, int exact)
 {
     Reading g;
@@ -830,13 +866,15 @@ static int cmd_lossy(const char* in, const char* outp, int exact)
     RecBytes hb, one;
     unsigned char hold[REC_HOLD_BYTES];
     unsigned iters = 0, differ = 0, kept = 0, dropped = 0, snap_tick = 0, seg_iters = 0;
-    unsigned last_tick = 0, last_refresh = 0;
+    unsigned last_tick = 0, last_refresh = 0, seg = 0, nsnaps, si = 0, snapped = 0;
+    SnapAt* snaps;
     int k, bad = 0;
     memset(&o, 0, sizeof o);
     memset(&e, 0, sizeof e);
     memset(&hb, 0, sizeof hb);
     memset(&one, 0, sizeof one);
     if (!reading_open(&g, in)) return 2;
+    snaps = snaps_of(g.r.d, g.r.n, &nsnaps);
     o.f = fopen(outp, "wb");
     o.cctx = ZSTD_createCCtx();
     if (!o.f || !o.cctx) return 2;
@@ -854,6 +892,7 @@ static int cmd_lossy(const char* in, const char* outp, int exact)
             L = NULL;
             if (g.h.mode != 3) {
                 lp.nslots = g.h.slots;
+                lp.flags = RECL_SPRAYS;
                 lp.hold_unit = REC_HOLD_UNIT;
                 lp.hold_node = REC_HOLD_NODE;
                 L = reclossy_begin(&lp);
@@ -870,12 +909,13 @@ static int cmd_lossy(const char* in, const char* outp, int exact)
             header_out(&hb, g.r.bytes, b->raw, L ? hold : NULL);
             put_block(o.f, RB_HEADER, RBF_STORED, 0, 0, (uint32_t)hb.n, hb.p, hb.n);
             seg_iters = 0;
+            seg++;
         } else if (b->kind == RB_STREAM) {
             size_t at = 0, n = g.pay.n;
             while (at < n) {
                 size_t end = at;
                 unsigned tick;
-                int refresh, ok;
+                int refresh, snap, ok;
                 RecLossyExact x;
                 /* the iteration: its RK_TICK and the records up to the next */
                 if (n - at < 8 || get16(g.pay.p + at) != RK_TICK || get16(g.pay.p + at + 2) != 4) {
@@ -900,13 +940,21 @@ static int cmd_lossy(const char* in, const char* outp, int exact)
                 }
                 if (!seg_iters++) snap_tick = tick;
                 refresh = reclossy_is_refresh(seg_iters, tick, last_refresh, REC_REFRESH_TICKS);
+                /* a writer's snapshot follows a refresh, SNAPSHOT_TICKS or more after the last;
+                   one is written where IN has one there */
+                while (si < nsnaps && (snaps[si].seg < seg ||
+                                       (snaps[si].seg == seg && snaps[si].tick < tick)))
+                    si++;
+                snap = refresh && tick - snap_tick >= LOSSY_SNAPSHOT_TICKS && si < nsnaps &&
+                       snaps[si].seg == seg && snaps[si].tick == tick;
+                if (snap) snapped = tick;
                 if (!o.stream.n) o.first = tick;
                 o.last = tick;
                 x.units = e.units;
                 x.live = e.live;
                 x.lists = e.lists;
                 one.n = 0;
-                ok = L ? reclossy_iteration(L, g.pay.p + at, end - at, refresh, &x, &one)
+                ok = L ? reclossy_iteration(L, g.pay.p + at, end - at, refresh, snap, &x, &one)
                        : (rb_put(&one, g.pay.p + at, end - at), !one.oom);
                 if (!ok) {
                     printf("codectest: the filter refused the iteration at GameTime %u\n", tick);
@@ -934,14 +982,14 @@ static int cmd_lossy(const char* in, const char* outp, int exact)
                 at = end;
             }
         } else if (b->kind == RB_SNAPSHOT) {
-            /* a writer's snapshot follows a refresh, SNAPSHOT_TICKS or more after the last */
-            if (b->last == last_tick && last_tick == last_refresh &&
-                b->last - snap_tick >= LOSSY_SNAPSHOT_TICKS) {
+            /* the snapshot the filter was told of */
+            if (snapped && b->last == snapped && b->last == last_tick) {
                 int packed = reccodec_pack(o.cctx, &o.pk, g.r.bytes, b->raw);
                 put_block(o.f, RB_SNAPSHOT, packed ? 0 : RBF_STORED, b->first, b->last, b->raw,
                           packed ? o.pk.p : g.r.bytes, packed ? o.pk.n : b->raw);
                 o.written += 32 + (packed ? o.pk.n : b->raw);
                 snap_tick = b->last;
+                snapped = 0;
                 o.st.reset = 1;
                 kept++;
             } else {
@@ -987,6 +1035,7 @@ static int cmd_lossy(const char* in, const char* outp, int exact)
         reccodec_stream_end(&o.st);
     }
     reclossy_free(L);
+    free(snaps);
     exact_free(&e);
     ZSTD_freeCCtx((ZSTD_CCtx*)o.cctx);
     rb_free(&o.stream);
@@ -2472,7 +2521,8 @@ static unsigned lo_kinds(const RecBytes* out, unsigned* k, unsigned* s, unsigned
 }
 
 /* one iteration through the filter, the copy taking the exact records first, as the writer does */
-static int lo_step(RecLossy* L, Exact* e, const RecBytes* in, int refresh, RecBytes* out)
+static int lo_snap(RecLossy* L, Exact* e, const RecBytes* in, int refresh, int snapshot,
+                   RecBytes* out)
 {
     RecLossyExact x;
     out->n = 0;
@@ -2480,7 +2530,271 @@ static int lo_step(RecLossy* L, Exact* e, const RecBytes* in, int refresh, RecBy
     x.units = e->units;
     x.live = e->live;
     x.lists = e->lists;
-    return reclossy_iteration(L, in->p, in->n, refresh, &x, out);
+    return reclossy_iteration(L, in->p, in->n, refresh, snapshot, &x, out);
+}
+
+static int lo_step(RecLossy* L, Exact* e, const RecBytes* in, int refresh, RecBytes* out)
+{
+    return lo_snap(L, e, in, refresh, 0, out);
+}
+
+/* ---- outcomes: the spray sessions ---------------------------------------------------------------- */
+
+#define LO_SPRAYS 8           /* the sprays one test iteration holds at most                      */
+
+/* an RK_EV_SPRAY of unit ID `id` at the point (x, y, z), its box `box` .. `box` + 5 */
+static void lo_spray(RecBytes* b, unsigned id, int32_t x, int32_t y, int32_t z, unsigned box)
+{
+    unsigned char r[4 + REC_SPRAY_BODY];
+    unsigned i;
+    memset(r, 0, sizeof r);
+    put32(r, id);
+    put32(r + 8, (uint32_t)x);
+    put32(r + 12, (uint32_t)y);
+    put32(r + 16, (uint32_t)z);
+    for (i = 0; i < 6; i++) put32(r + 20 + 4 * i, box + i);
+    put32(r + 44, 6);
+    tlv_put(b, RK_EV_SPRAY, r, sizeof r);
+}
+
+/* an RK_UNIT of slot s, its position (x, y, z) */
+static void lo_at(RecBytes* b, unsigned s, int32_t x, int32_t y, int32_t z)
+{
+    static uint32_t img[NDW];
+    int32_t v[3];
+    v[0] = x;
+    v[1] = y;
+    v[2] = z;
+    memset(img, 0, sizeof img);
+    img[0] = 0x100 + s;
+    memcpy((unsigned char*)img + REC_HOLD_POS_AT, v, 12);
+    lo_unit(b, s, img);
+}
+
+static int cmp48(const void* a, const void* b) { return memcmp(a, b, 4 + REC_SPRAY_BODY); }
+
+/* What a reader makes of the filter's iteration `out`, by the table tagpu_recreader.c keeps: its
+   sprays taken as they come, its sessions as they come, and the implied ones made at its end,
+   over the copy's units (the test's table holds no unit byte). 1 when those sprays are `in`'s as
+   a multiset, 0 when not, -1 when the reader refuses the iteration; `implied` the ones it made. */
+static int lo_read(RecSprays* t, const Exact* e, const RecBytes* in, const RecBytes* out,
+                   unsigned* implied)
+{
+    unsigned char a[LO_SPRAYS][4 + REC_SPRAY_BODY], b[LO_SPRAYS][4 + REC_SPRAY_BODY];
+    unsigned na = 0, nb = 0, i, n, T = get32(out->p + 4);
+    const unsigned char* im;
+    size_t at;
+    *implied = 0;
+    for (at = 0; at + 4 <= in->n; at += (4 + (size_t)get16(in->p + at + 2) + 3) & ~(size_t)3)
+        if (get16(in->p + at) == RK_EV_SPRAY && na < LO_SPRAYS) memcpy(a[na++], in->p + at + 4, 48);
+    for (at = 0; at + 4 <= out->n; at += (4 + (size_t)get16(out->p + at + 2) + 3) & ~(size_t)3) {
+        unsigned kind = get16(out->p + at), len = get16(out->p + at + 2);
+        if (kind == RK_SPRAY_SESSION && !recsprays_session(t, out->p + at + 4, len)) return -1;
+        if (kind == RK_EV_SPRAY && nb < LO_SPRAYS) {
+            memcpy(b[nb++], out->p + at + 4, 48);
+            recsprays_spray(t, T, out->p + at + 4, e->units, e->live);
+        }
+    }
+    if (recsprays_imply(t, T, e->units, e->live, &im, &n) != 1) return -1;
+    *implied = n;
+    for (i = 0; i < n && nb < LO_SPRAYS; i++) memcpy(b[nb++], im + 48 * i, 48);
+    if (na != nb) return 0;
+    qsort(a, na, sizeof a[0], cmp48);
+    qsort(b, nb, sizeof b[0], cmp48);
+    return !memcmp(a, b, (size_t)na * sizeof a[0]);
+}
+
+/* the session record `out` ends with, as its mode, or -1 for none */
+static int lo_session_last(const RecBytes* out, unsigned* id)
+{
+    size_t at, last = (size_t)-1;
+    for (at = 0; at + 4 <= out->n; at += (4 + (size_t)get16(out->p + at + 2) + 3) & ~(size_t)3)
+        last = at;
+    if (last == (size_t)-1 || get16(out->p + last) != RK_SPRAY_SESSION) return -1;
+    *id = get32(out->p + last + 4);
+    return out->p[last + 8];
+}
+
+/* an RK_SPRAY_SESSION's body */
+static void lo_session(unsigned char* b, unsigned id, unsigned mode)
+{
+    memset(b, 0, 8);
+    put32(b, id);
+    b[4] = (unsigned char)mode;
+}
+
+static int outcomes_sprays(void)
+{
+    static unsigned char hold_unit[IMG], hold_node[REC_ORDER_IMAGE];
+    unsigned char sb[8], live[LO_SLOTS];
+    RecLossyParams lp;
+    RecLossy* L;
+    RecSprays* t;
+    RecBytes in, out;
+    Exact e;
+    unsigned k[16], s[16], n, im, id = 0, ok = 1;
+    int r;
+    const unsigned char* imp;
+    memset(&in, 0, sizeof in);
+    memset(&out, 0, sizeof out);
+    memset(&e, 0, sizeof e);
+    lp.nslots = LO_SLOTS;
+    lp.flags = RECL_SPRAYS;
+    lp.hold_unit = hold_unit;
+    lp.hold_node = hold_node;
+    L = reclossy_begin(&lp);
+    t = recsprays_begin(LO_SLOTS);
+    if (!L || !t || !exact_reset(&e, LO_SLOTS)) return 0;
+
+    /* slot 1 (unit ID 2) sprays the same point; slot 2 (ID 3) moves and sprays with it */
+    lo_tick(&in, 1);
+    lo_at(&in, 1, 0, 0, 0);
+    lo_at(&in, 2, 0, 0, 0);
+    lo_spray(&in, 2, 100, 200, 300, 7);
+    r = lo_snap(L, &e, &in, 1, 0, &out);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("sprays: a unit's first spray is written",
+                 r == 1 && n == 4 && k[3] == RK_EV_SPRAY && lo_read(t, &e, &in, &out, &im) == 1, 1);
+    lo_tick(&in, 2);
+    lo_spray(&in, 2, 100, 200, 300, 7);
+    r = lo_snap(L, &e, &in, 0, 0, &out);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("sprays: a repeat is written, and opens a session of period 1",
+                 r == 1 && n == 3 && k[1] == RK_EV_SPRAY && lo_session_last(&out, &id) == 1 &&
+                 id == 2 && lo_read(t, &e, &in, &out, &im) == 1, 1);
+    lo_tick(&in, 3);
+    lo_spray(&in, 2, 100, 200, 300, 7);
+    r = lo_snap(L, &e, &in, 0, 0, &out);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("sprays: a spray implied plain: left out, and made by the reader",
+                 r == 1 && n == 1 && lo_read(t, &e, &in, &out, &im) == 1 && im == 1, 1);
+    lo_tick(&in, 4);
+    lo_spray(&in, 3, 500, 0, 500, 9);
+    r = lo_snap(L, &e, &in, 0, 0, &out);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("sprays: a session closed in the iteration its unit makes no spray",
+                 r == 1 && n == 3 && k[1] == RK_EV_SPRAY && lo_session_last(&out, &id) == 0 &&
+                 id == 2 && lo_read(t, &e, &in, &out, &im) == 1 && im == 0, 1);
+    lo_tick(&in, 5);
+    lo_at(&in, 2, 10, 0, -20);
+    lo_spray(&in, 3, 510, 0, 480, 9);
+    r = lo_snap(L, &e, &in, 0, 0, &out);
+    ok &= expect("sprays: a spray moved with its unit opens a FOLLOW session",
+                 r == 1 && lo_session_last(&out, &id) == (1 | REC_SPRAY_FOLLOW) && id == 3 &&
+                 lo_read(t, &e, &in, &out, &im) == 1, 1);
+    lo_tick(&in, 6);
+    lo_at(&in, 2, 25, 1, -30);
+    lo_spray(&in, 3, 525, 1, 470, 9);
+    r = lo_snap(L, &e, &in, 0, 0, &out);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("sprays: a spray implied FOLLOW: its point moved with its unit",
+                 r == 1 && n == 2 && k[1] == RK_UNIT && lo_read(t, &e, &in, &out, &im) == 1 &&
+                 im == 1, 1);
+    lo_tick(&in, 7);
+    lo_spray(&in, 3, 900, 0, 900, 9);
+    r = lo_snap(L, &e, &in, 0, 0, &out);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("sprays: explicit after a miss, its session kept",
+                 r == 1 && n == 2 && k[1] == RK_EV_SPRAY && lo_read(t, &e, &in, &out, &im) == 1 &&
+                 im == 0, 1);
+    lo_tick(&in, 8);
+    lo_spray(&in, 3, 900, 0, 900, 9);
+    lo_spray(&in, 3, 900, 0, 900, 9);
+    r = lo_snap(L, &e, &in, 0, 0, &out);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("sprays: a unit's two sprays of one iteration are both written",
+                 r == 1 && n == 3 && k[1] == RK_EV_SPRAY && k[2] == RK_EV_SPRAY &&
+                 lo_read(t, &e, &in, &out, &im) == 1 && im == 0, 1);
+    lo_tick(&in, 9);
+    lo_spray(&in, 3, 900, 0, 900, 9);
+    r = lo_snap(L, &e, &in, 0, 0, &out);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("  and no session predicts from that iteration",
+                 r == 1 && n == 2 && k[1] == RK_EV_SPRAY && lo_read(t, &e, &in, &out, &im) == 1, 1);
+    lo_tick(&in, 10);
+    lo_spray(&in, 3, 900, 0, 900, 9);
+    r = lo_snap(L, &e, &in, 1, 1, &out);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("sprays: a snapshot's iteration writes every spray and closes every session",
+                 r == 1 && n == 3 && k[1] == RK_EV_SPRAY && lo_session_last(&out, &id) == 0 &&
+                 id == 3 && lo_read(t, &e, &in, &out, &im) == 1 && im == 0, 1);
+    recsprays_empty(t);             /* the reader passes the snapshot's block */
+    lo_tick(&in, 11);
+    lo_spray(&in, 3, 900, 0, 900, 9);
+    r = lo_snap(L, &e, &in, 0, 0, &out);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("  and empties the table: no session predicts from before it",
+                 r == 1 && n == 2 && k[1] == RK_EV_SPRAY && lo_read(t, &e, &in, &out, &im) == 1, 1);
+    lo_tick(&in, 12);
+    lo_spray(&in, 0, 1, 2, 3, 4);
+    lo_spray(&in, 0, 1, 2, 3, 4);
+    r = lo_snap(L, &e, &in, 0, 0, &out);
+    lo_tick(&in, 13);
+    lo_spray(&in, 0, 1, 2, 3, 4);
+    r = r == 1 && lo_snap(L, &e, &in, 0, 0, &out) == 1;
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("sprays: a spray that names no unit is written and opens no session",
+                 r && n == 2 && k[1] == RK_EV_SPRAY, 1);
+    lo_tick(&in, 14);
+    lo_session(sb, 2, 1);
+    tlv_put(&in, RK_SPRAY_SESSION, sb, 8);
+    ok &= expect("sprays: refused: a session record among the capture's",
+                 lo_snap(L, &e, &in, 0, 0, &out), 0);
+
+    /* the readers' refusals: what the filter never writes */
+    recsprays_empty(t);
+    memcpy(live, e.live, LO_SLOTS);
+    lo_session(sb, 2, 1);
+    ok &= expect("sprays: refused: a session predicting from no spray",
+                 recsprays_session(t, sb, 8) && recsprays_imply(t, 20, e.units, live, &imp, &n) == 0, 1);
+    recsprays_empty(t);
+    in.n = 0;
+    lo_spray(&in, 3, 1, 2, 3, 4);
+    recsprays_spray(t, 20, in.p + 4, e.units, live);
+    recsprays_spray(t, 20, in.p + 4, e.units, live);
+    ok &= expect("sprays: refused: a session predicting from two sprays",
+                 recsprays_session(t, (lo_session(sb, 3, 1), sb), 8) &&
+                 recsprays_imply(t, 21, e.units, live, &imp, &n) == 0, 1);
+    recsprays_empty(t);
+    recsprays_spray(t, 20, in.p + 4, e.units, live);
+    live[2] = 0;
+    ok &= expect("sprays: refused: a FOLLOW session whose unit died",
+                 recsprays_session(t, (lo_session(sb, 3, 1 | REC_SPRAY_FOLLOW), sb), 8) &&
+                 recsprays_imply(t, 21, e.units, live, &imp, &n) == 0, 1);
+    live[2] = 1;
+    recsprays_empty(t);
+    recsprays_spray(t, 20, in.p + 4, e.units, live);
+    ok &= expect("sprays: a session of period 2 predicts from two GameTimes before",
+                 recsprays_session(t, (lo_session(sb, 3, 2), sb), 8) &&
+                 recsprays_imply(t, 21, e.units, live, &imp, &n) == 0, 1);
+    recsprays_empty(t);
+    recsprays_spray(t, 20, in.p + 4, e.units, live);
+    ok &= expect("  and makes its spray there",
+                 recsprays_session(t, (lo_session(sb, 3, 2), sb), 8) &&
+                 recsprays_imply(t, 22, e.units, live, &imp, &n) == 1 && n == 1 &&
+                 !memcmp(imp, in.p + 4, 48), 1);
+    {
+        static const unsigned bad[][2] = { { 1, 1 }, { LO_SLOTS + 1, 1 }, { 0, 1 }, { 2, 3 },
+                                           { 2, REC_SPRAY_FOLLOW }, { 2, 0x11 } };
+        unsigned i, refused = 1;
+        for (i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+            lo_session(sb, bad[i][0], bad[i][1]);
+            refused &= !recsprays_session(t, sb, 8);
+        }
+        lo_session(sb, 2, 1);
+        sb[6] = 1;
+        refused &= !recsprays_session(t, sb, 8);
+        sb[6] = 0;
+        refused &= !recsprays_session(t, sb, 4);
+        ok &= expect("sprays: refused: a session naming no unit slot, a mode outside 0 1 2 4 "
+                     "(+FOLLOW), a byte past it not zero, a length not 8", refused, 1);
+    }
+    recsprays_free(t);
+    reclossy_free(L);
+    exact_free(&e);
+    rb_free(&in);
+    rb_free(&out);
+    return ok;
 }
 
 static int outcomes_lossy(void)
@@ -2507,6 +2821,7 @@ static int outcomes_lossy(void)
 
     /* an empty table: every iteration's records come out as they went in */
     lp.nslots = LO_SLOTS;
+    lp.flags = 0;
     lp.hold_unit = hold_unit;
     lp.hold_node = hold_node;
     L = reclossy_begin(&lp);
@@ -2608,27 +2923,27 @@ static int outcomes_lossy(void)
         lo_tick(&in, 4);
         lo_list(&in, 1, 2, node[0], 1, 0, 1);
         ok &= expect("lossy: refused: a list that is neither main nor sub",
-                     reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+                     reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);
         lo_tick(&in, 4);
         lo_list(&in, 1, 0, node[0], 1, 0, 2);
         ok &= expect("lossy: refused: a list unfinished at the iteration's end",
-                     reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+                     reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);
         lo_tick(&in, 4);
         lo_list(&in, 1, 0, node[0], 1, 1, 2);
         ok &= expect("lossy: refused: a list's continuation with no beginning",
-                     reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+                     reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);
         lo_tick(&in, 4);
         lo_list(&in, 3, 0, node[0], 1, 0, 1);
         ok &= expect("lossy: refused: a list of a slot not live",
-                     reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+                     reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);
         lo_tick(&in, 4);
         lo_delta(&in, 1, d, v, 1);
         ok &= expect("lossy: refused: a delta naming a dword past the image",
-                     reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+                     reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);
         lo_tick(&in, 4);
         lo_unit(&in, LO_SLOTS, img[1]);
         ok &= expect("lossy: refused: a slot past the header's",
-                     reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+                     reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);
         {
             /* a slot the first pass marked before it refused is not left marked: the refresh
                after it still brings that slot's held dword to the copy */
@@ -2638,7 +2953,7 @@ static int outcomes_lossy(void)
             lo_delta(&in, 1, dh, vh, 1);
             lo_unit(&in, LO_SLOTS, img[1]);
             ok &= expect("lossy: refused: a slot past the header's after a valid one",
-                         reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+                         reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);
             lo_tick(&in, 5);
             lo_delta(&in, 1, dh, vh, 1);
             ok &= expect("  a held change after it", lo_step(L, &e, &in, 0, &out), 1);
@@ -2653,7 +2968,7 @@ static int outcomes_lossy(void)
         in.n = 0;
         lo_event(&in);
         ok &= expect("lossy: refused: an iteration that does not begin with RK_TICK",
-                     reclossy_iteration(L, in.p, in.n, 0, &x, &out), 0);
+                     reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);
     }
     reclossy_free(L);
 
@@ -2852,6 +3167,7 @@ static int cmd_outcomes(void)
     ok &= outcomes_events(&p);
     ok &= outcomes_state(&p);
     ok &= outcomes_lossy();
+    ok &= outcomes_sprays();
     ok &= zstd_window_check(st.cctx, st.dctx);
     ok &= f32_check();
     printf("outcomes: %u sectioned, %u declined, %u mismatched\n", st.sectioned, st.declined, st.mismatched);

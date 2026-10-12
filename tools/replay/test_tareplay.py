@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments and world): the C parser against the coverage build's map, the features' regions, the
-comment filter, `landing --check`, a recording's segments and chains, what format 13's block walk
+comment filter, `landing --check`, a recording's segments and chains, what format 14's block walk
 refuses and which cells are images, read from files built from the format alone, the fixtures'
 takeover entries and the W lane's edited header copies. No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
@@ -788,7 +788,7 @@ def zstd_frame(data, wlog):
 
 
 class FormatBlocks(unittest.TestCase):
-    """What format 13's block walk refuses by name before any payload is read, as
+    """What format 14's block walk refuses by name before any payload is read, as
     tagpu_recreader.c's block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
 
     def refused(self, *parts, why, decodes=(True, False)):
@@ -1230,6 +1230,121 @@ class LossyStream(unittest.TestCase):
                     tarec.header(held_header(**hold)[32:])
         with self.assertRaisesRegex(tarec.Unreadable, "of 12 bytes"):
             tarec.header(header()[32:] + tlv(tarec.RT_HOLD, bytes(12)))
+
+
+def spray(uid, x, y, z):
+    """An RK_EV_SPRAY of unit ID `uid` at the point (x, y, z), its box and layer fixed."""
+    return tlv(tarec.RK_EV_SPRAY, struct.pack("<IIiii", uid, 0, x, y, z) +
+               struct.pack("<6i", *range(6)) + struct.pack("<I", 6))
+
+
+def session(uid, mode):
+    return tlv(tarec.RK_SPRAY_SESSION, struct.pack("<IBxxx", uid, mode))
+
+
+def unit_at(slot, x, y, z):
+    """An RK_UNIT of `slot` at the position (x, y, z), +0x6A"""
+    img = bytearray(tarec.REC_UNIT_IMAGE)
+    struct.pack_into("<iii", img, 0x6A, x, y, z)
+    return tlv(tarec.RK_UNIT, struct.pack("<HH", slot, 0) + img)
+
+
+class LossySprays(unittest.TestCase):
+    """tarec's spray sessions (Sprays) against a file whose stream writes its nano sprays as
+    sessions (RT_HOLD's RECL_SPRAYS) and whose exact stream (RB_EXACT) carries every spray: unit 1
+    (ID 2) sprays the same point at GameTime 3 to 6, and its session, opened at 4, implies 5 and
+    6 and closes at 7, where it makes none."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.n = 0
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def file(self, exact, lossy, flags=tarec.RECL_SPRAYS):
+        """Iterations 1 and 2 refresh blocks of their own, 3..31 one block whose last is a
+        refresh; `exact` and `lossy` {GameTime: records} after each RK_TICK of 3..31."""
+        S, F = tarec.RBF_STORED, tarec.RBF_REFRESH
+        first = (unit_at(1, 0, 0, 0) +
+                 tlv(tarec.RK_MAPPED, struct.pack("<I", 0) + bytes(2)))
+        one = LossyStream.ticks(1, 1, {1: first})
+        two = LossyStream.ticks(2, 2, {})
+        parts = [held_header(flags=flags),
+                 flagged(tarec.RB_STREAM, 1, 1, one, S | F), flagged(tarec.RB_EXACT, 1, 1, one, S),
+                 flagged(tarec.RB_STREAM, 2, 2, two, S | F), flagged(tarec.RB_EXACT, 2, 2, two, S),
+                 flagged(tarec.RB_STREAM, 3, 31, LossyStream.ticks(3, 31, lossy), S | F),
+                 flagged(tarec.RB_EXACT, 3, 31, LossyStream.ticks(3, 31, exact), S),
+                 end_block(31)]
+        self.n += 1
+        path = Path(self.tmp.name) / f"s{self.n}.imprec"
+        path.write_bytes(tarec.REC_MAGIC + b"".join(parts))
+        return str(path)
+
+    A = spray(2, 100, 200, 300)
+    EXACT = {3: A, 4: A, 5: A, 6: A}
+    LOSSY = {3: A, 4: A + session(2, 1), 7: session(2, 0)}
+
+    def lossy_check(self, path):
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(out):
+            rc = tarec.main(["tarec", "lossy-check", path])
+        return rc, out.getvalue()
+
+    def test_implied_sprays_pass(self):
+        rc, o = self.lossy_check(self.file(self.EXACT, self.LOSSY))
+        self.assertEqual(rc, 0, o)
+        self.assertIn("sprays 2 written and 2 implied", o)
+
+    def test_the_world_carries_the_implied_sprays(self):
+        h, bl, _ = tarec.load(self.file(self.EXACT, self.LOSSY))
+        got = []
+        tarec.stream_to(h, bl, on_record=lambda w, k, b: got.append(w.tick)
+                        if k == tarec.RK_EV_SPRAY else None)
+        self.assertEqual(got, [3, 4, 5, 6])
+
+    def test_following_its_unit(self):
+        exact = {3: spray(2, 100, 200, 300),
+                 4: unit_at(1, 10, 0, -20) + spray(2, 110, 200, 280),
+                 5: unit_at(1, 15, 1, -20) + spray(2, 115, 201, 280)}
+        lossy = {3: exact[3], 4: exact[4] + session(2, 1 | tarec.REC_SPRAY_FOLLOW),
+                 5: unit_at(1, 15, 1, -20), 6: session(2, 0)}
+        rc, o = self.lossy_check(self.file(exact, lossy))
+        self.assertEqual(rc, 0, o)
+        self.assertIn("sprays 2 written and 1 implied", o)
+
+    def test_a_spray_the_game_did_not_make_fails(self):
+        exact = dict(self.EXACT)
+        del exact[6]
+        rc, o = self.lossy_check(self.file(exact, self.LOSSY))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 6: the nano sprays, 1 with the implied ones, are not the exact "
+                      "stream's 0", o)
+
+    def test_a_session_from_no_spray_fails(self):
+        lossy = dict(self.LOSSY)
+        lossy[3] = self.A + session(3, 1)
+        rc, o = self.lossy_check(self.file(self.EXACT, lossy))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 3: the spray session of unit 3 at GameTime 3 predicts from no "
+                      "single spray", o)
+
+    def test_a_session_without_recl_sprays_fails(self):
+        rc, o = self.lossy_check(self.file(self.EXACT, self.LOSSY, flags=0))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("a spray session in a stream without RECL_SPRAYS", o)
+        h, bl, _ = tarec.load(self.file(self.EXACT, self.LOSSY, flags=0))
+        with self.assertRaisesRegex(tarec.Unreadable, "a spray session outside a stream"):
+            tarec.stream_to(h, bl)
+
+    def test_a_malformed_session_is_unreadable(self):
+        for mode in (3, tarec.REC_SPRAY_FOLLOW, 0x11):
+            with self.subTest(mode=mode):
+                lossy = dict(self.LOSSY)
+                lossy[4] = self.A + session(2, mode)
+                h, bl, _ = tarec.load(self.file(self.EXACT, lossy))
+                with self.assertRaisesRegex(tarec.Unreadable, "a malformed spray session"):
+                    tarec.stream_to(h, bl)
 
 
 class SeekStart(unittest.TestCase):
