@@ -125,6 +125,9 @@ struct RecReader {
     int                in_seg;      /* the world holds an iteration of segment chain[cur]      */
     int                read_any;    /* an iteration has been read: the chain is fixed          */
     RecSeekWork        work;        /* the last recr_seek's (recr_seek_work)                   */
+    RecSeekWork        decoded;     /* every block_body since the reader opened: its blocks,
+                                       packed and raw, which recr_seek's work takes the
+                                       difference of                                            */
 };
 
 static const char* const END_REASONS[] = {
@@ -345,6 +348,9 @@ static int block_body(RecReader* r, const RecBlock* b, char* why, unsigned cap)
     if (b->kind == RB_STREAM && !(b->flags & RBF_SECTIONS) && r->codec)
         reccodec_invalidate(r->codec);
     r->off += sizeof *b + b->packed;
+    r->decoded.blocks++;
+    r->decoded.packed += b->packed;
+    r->decoded.raw += b->raw;
     return 1;
 }
 
@@ -2307,6 +2313,7 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
 {
     RecWorld* w = &r->w;
     const RecIndexEntry* snap = NULL;
+    const RecSeekWork d0 = r->decoded;
     unsigned i, j, hold, from = 0, prev;
     int read, k;
     memset(&r->work, 0, sizeof r->work);
@@ -2365,6 +2372,7 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
             }
             k = tick_take(r, why, cap);
             r->work.iterations++;
+            r->work.base = 1;
             if (k <= 0) {
                 if (!k) snprintf(why, cap, "timeline %u's first iteration cannot be read",
                                  s->t.id);
@@ -2433,7 +2441,12 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
             return -1;
         }
         if (visit && w->tick <= T) visit(ctx, w);
-        if (w->tick == T) return 1;
+        if (w->tick == T) {
+            r->work.blocks = r->decoded.blocks - d0.blocks;
+            r->work.packed = r->decoded.packed - d0.packed;
+            r->work.raw = r->decoded.raw - d0.raw;
+            return 1;
+        }
         if (w->tick > T) {
             snprintf(why, cap, "the stream has no iteration at GameTime %u: it goes from %u to %u",
                      T, prev, w->tick);
