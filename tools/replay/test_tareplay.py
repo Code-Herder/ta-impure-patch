@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments and world): the C parser against the coverage build's map, the features' regions, the
-comment filter, `landing --check`, a recording's segments and chains, what format 13's block walk
+comment filter, `landing --check`, a recording's segments and chains, what format 14's block walk
 refuses and which cells are images, read from files built from the format alone, the fixtures'
 takeover entries and the W lane's edited header copies. No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
@@ -788,7 +788,7 @@ def zstd_frame(data, wlog):
 
 
 class FormatBlocks(unittest.TestCase):
-    """What format 13's block walk refuses by name before any payload is read, as
+    """What format 14's block walk refuses by name before any payload is read, as
     tagpu_recreader.c's block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
 
     def refused(self, *parts, why, decodes=(True, False)):
@@ -1113,17 +1113,21 @@ class LossyStream(unittest.TestCase):
                         for t in range(first, last + 1))
 
     def parts(self, lossy3=None, lossy31=None, refresh31=True, refresh2=True, exact=True,
-              header=None, last=31):
+              header=None, last=31, gone=None):
         """The file: iteration 1 makes unit 1, the exact stream changes its dword HELD and dword
         10 at 3; the lossy stream carries `lossy3` there (dword 10 alone by default) and `lossy31`
         at the refresh 31 (dword HELD's change by default). The second iteration ends a block of
-        its own, a refresh block unless `refresh2` is false; the stream runs to `last`."""
+        its own, a refresh block unless `refresh2` is false; the stream runs to `last`. With
+        `gone`, both streams end unit 1 at that GameTime."""
         S, F = tarec.RBF_STORED, tarec.RBF_REFRESH
         first = (tlv(tarec.RK_UNIT, struct.pack("<HH", 1, 0) + bytes(tarec.REC_UNIT_IMAGE)) +
                  tlv(tarec.RK_MAPPED, struct.pack("<I", 0) + bytes(2)))
-        x = self.ticks(3, last, {3: delta(1, {self.HELD: 7, 10: 9})})
-        lossy = self.ticks(3, last, {3: delta(1, {10: 9}) if lossy3 is None else lossy3,
-                                     31: delta(1, {self.HELD: 7}) if lossy31 is None else lossy31})
+        x = {3: delta(1, {self.HELD: 7, 10: 9})}
+        lossy = {3: delta(1, {10: 9}) if lossy3 is None else lossy3,
+                 31: delta(1, {self.HELD: 7}) if lossy31 is None else lossy31}
+        if gone is not None:
+            x[gone] = lossy[gone] = tlv(tarec.RK_UNIT_GONE, struct.pack("<HH", 1, 0))
+        x, lossy = self.ticks(3, last, x), self.ticks(3, last, lossy)
         out = [header or held_header(unit_held=(self.HELD,)),
                flagged(tarec.RB_STREAM, 1, 1, self.ticks(1, 1, {1: first}), S | F),
                flagged(tarec.RB_EXACT, 1, 1, self.ticks(1, 1, {1: first}), S),
@@ -1144,6 +1148,12 @@ class LossyStream(unittest.TestCase):
         rc, o = self.lossy_check(self.file(*self.parts()))
         self.assertEqual(rc, 0, o)
         self.assertIn("31 iterations to GameTime 31, 3 refreshes", o)
+
+    def test_an_iteration_whose_only_unit_record_ends_a_unit_passes(self):
+        """a held table and an iteration that touches no unit live in both streams afterwards"""
+        rc, o = self.lossy_check(self.file(*self.parts(last=5, gone=5, refresh31=False)))
+        self.assertEqual(rc, 0, o)
+        self.assertIn("5 iterations to GameTime 5", o)
 
     def test_to_stops_the_walk(self):
         rc, o = self.lossy_check(self.file(*self.parts()), "--to", "10")
