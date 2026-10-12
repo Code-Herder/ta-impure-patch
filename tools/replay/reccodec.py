@@ -1,4 +1,4 @@
-"""reccodec -- a recording's stream codec, read side: format 11's block walk, the sectioned
+"""reccodec -- a recording's stream codec, read side: format 12's block walk, the sectioned
 container, the unit frame, the pool frame and the four record frames, in numpy and numba.
 
     import reccodec
@@ -74,7 +74,7 @@ NROLES = len(ROLES)
 
 Unreadable = tarec.Unreadable
 
-REC_FORMAT = 11
+REC_FORMAT = 12
 RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET = 1, 2, 4
 RT_CODEC, RT_PHYSICS, RT_AIR = 29, 30, 31
 RT_CODEC_DECLINED, RT_CODEC_MISMATCH = 44, 45
@@ -107,7 +107,7 @@ ATC = [74051160, -79536431, 85899346, -93368854, 102261126, -113025455, 12632256
        165191050, -195225786, 238609294, -306783378, 429496730, -715827883, 2147483648]
 
 # the steps' lane groups, by role (tagpu_reccodec.c frame_slot)
-_S1 = {ROLE[r] for r in ("PLAIN", "TURN", "FW", "FH", "LAYER", "TYPE")}
+_S1 = {ROLE[r] for r in ("PLAIN", "TURN", "FW", "FH", "LAYER", "TYPE", "OWNER")}
 _S2 = {ROLE[r] for r in ("VY", "SPEED", "AX", "AY", "AZ", "BANK", "ROLL", "Y", "SZ")}
 
 
@@ -598,6 +598,8 @@ _RULED = ("HEADING", "TURN", "SPEED", "VX", "VY", "VZ", "AX", "AY", "AZ", "X", "
 (R_HEADING, R_TURN, R_SPEED, R_VX, R_VY, R_VZ, R_AX, R_AY, R_AZ, R_X, R_Y, R_Z, R_BANK, R_ROLL,
  R_FX, R_FZ, R_FW, R_FH, R_SX, R_SZ, R_CLAIM, R_STAMP, R_LAYER, R_TYPE) = range(len(_RULED))
 _L3 = np.array([R_HEADING, R_LAYER, R_VX, R_VY, R_VZ], np.int64)   # L3's five, in its order
+_LEDGER = ("OWNER", "EREQ", "EGRANT", "MREQ", "MGRANT")      # Frame.tab's JL, in this order
+OWNERS = 16                             # RECC_OWNERS: the owner IDs the ledger keeps a settle for
 # an aircraft's row of Frame.tab's `air`: RT_AIR's constants, clamped where they are used
 A_MAXV, A_BRAKE, A_ACC, A_BANK, A_PITCH, A_SIGHT = range(6)
 
@@ -649,6 +651,87 @@ def _step(x, j, c0, c3, has3, rule):
 def _rule(x, r, c0, c3=0, has3=False, rule=True):
     """_step on the lane of rule position r (_RULED)."""
     return _step(x, x[6][r], c0, c3, has3, rule)
+
+
+@_jit
+def f32_add(a, b):
+    """a + b as IEEE singles, rounded to nearest even, in integers (tagpu_reccodec.c
+    reccodec_f32_add); an infinity or a NaN gives a."""
+    sa, sb, ea, eb = a >> 31, b >> 31, (a >> 23) & 0xFF, (b >> 23) & 0xFF
+    ma, mb = a & 0x7FFFFF, b & 0x7FFFFF
+    if ea == 0xFF or eb == 0xFF:
+        return a
+    if ea:
+        ma |= 0x800000
+    else:
+        ea = 1
+    if eb:
+        mb |= 0x800000
+    else:
+        eb = 1
+    ma <<= 3
+    mb <<= 3
+    if ea < eb or (ea == eb and ma < mb):
+        sa, sb, ea, eb, ma, mb = sb, sa, eb, ea, mb, ma
+    t = ea - eb
+    if t > 27:
+        mb = 1 if mb else 0
+    elif t:
+        mb = (mb >> t) | (1 if mb & ((1 << t) - 1) else 0)
+    if sa == sb:
+        m = ma + mb
+        if m >> 27:
+            m = (m >> 1) | (m & 1)
+            ea += 1
+    else:
+        m = ma - mb
+        if not m:
+            return 0
+        while m < (1 << 26) and ea > 1:
+            m <<= 1
+            ea -= 1
+    low = m & 7
+    m >>= 3
+    if low > 4 or (low == 4 and (m & 1)):
+        m += 1
+    if m >> 24:
+        m >>= 1
+        ea += 1
+    if ea >= 0xFF:
+        return (sa << 31) | 0x7F800000
+    return (sa << 31) | ((ea if m >> 23 else 0) << 23) | (m & 0x7FFFFF)
+
+
+@_jit
+def _ledger(x, JL, step, lset, gt):
+    """The ledger's requested and granted, energy then metal (tagpu_reccodec.c ledger_steps):
+    requested 0 at its owner's settle, L1 + the step while it grows, L1 when it held and the step
+    after a zero that followed a value; granted this tick's requested when the two were equal,
+    else L1; every winner the rule. step is the slot's two steps, lset (settle, seen) per owner."""
+    L1, L2, U, W = x[0], x[1], x[3], x[4]
+    own = U[JL[0]]
+    settle = own < OWNERS and lset[own, 1] != 0 and ((gt - lset[own, 0]) & 0xFFFFFFFF) % 30 == 0
+    for k in range(2):
+        jr, jg = JL[1 + 2 * k], JL[2 + 2 * k]
+        l1, l2, g1 = L1[jr], L2[jr], L1[jg]
+        if l1 and settle:
+            p = 0
+        elif not l1:
+            p = step[k] if l2 else 0
+        elif l1 == l2:
+            p = l1
+        else:
+            p = f32_add(l1, step[k])
+        W[jr] = 0
+        ur = _step(x, jr, p, 0, False, True)
+        W[jr] = 0
+        if not l1 and ur:
+            step[k] = ur
+        if l1 and not ur and own < OWNERS:
+            lset[own, 0], lset[own, 1] = gt, 1
+        W[jg] = 0
+        _step(x, jg, 0 if not ur else ur if g1 == l1 else g1, 0, False, True)
+        W[jg] = 0
 
 
 @_inline
@@ -765,11 +848,13 @@ def _advance(s, gt, tab, st, Rr, U, dirty, dbuf, at):
     when its image changed, its RK_UNIT_DELTA body written at dbuf[at:]; the body's length, 0
     for an unchanged image. The image's bytes are written where a lane's value changed, and a
     dword is in the delta when one of its bytes did: the same dwords as comparing the images."""
-    off, width, J = tab[0], tab[1], tab[3]
-    copy, l1, l2, l3, win, age, rest = st
+    off, width, J, JL = tab[0], tab[1], tab[3], tab[11]
+    copy, l1, l2, l3, win, age, rest, lstep, lset = st
     L1, L2, L3, img = l1[s], l2[s], l3[s], copy[s]
     a = np.int64(age[s])
-    _predict((L1, L2, Rr, U, win[s], tab[2], J, L3), tab, a, gt)
+    x = (L1, L2, Rr, U, win[s], tab[2], J, L3)
+    _predict(x, tab, a, gt)
+    _ledger(x, JL, lstep[s], lset, gt)
     resting = a == 3
     for i in range(5):
         resting &= L3[i] == U[J[_L3[i]]]
@@ -799,7 +884,8 @@ def _advance(s, gt, tab, st, Rr, U, dirty, dbuf, at):
                 dbuf[v:v + 4] = img[4 * d:4 * d + 4]
                 v += 4
     still = U[J[R_VX]] == 0 and U[J[R_VY]] == 0 and U[J[R_VZ]] == 0
-    rest[s] = resting and n == 0 and (still or U[J[R_STAMP]] + 1 < gt)
+    ledger = U[JL[1]] != 0 or U[JL[2]] != 0 or U[JL[3]] != 0 or U[JL[4]] != 0
+    rest[s] = resting and n == 0 and (still or U[J[R_STAMP]] + 1 < gt) and not ledger
     age[s] = min(a + 1, 3)
     return DELTA_HEAD + 4 * n if n else 0
 
@@ -826,7 +912,7 @@ def _iterations(sec, kinds, secs, rec_at, rec_ln, listed, slots, R, tab, live, s
     restart from their images. pl is the pool frame's parsed section and state (Frame._pool), fst
     the record frames' states and foff the sections' offsets. 0, or the refusal's code."""
     off, width, J, defwin = tab[0], tab[1], tab[3], tab[4]
-    copy, l1, l2, l3, win, age, rest = st
+    copy, l1, l2, l3, win, age, rest, lstep, lset = st
     ctl, codes, S, B, T, P, H, pwin, page, lastnew, shots, meta, payload = pl
     nslots, nl, nrec, iters = len(live), len(off), len(kinds), len(listed)
     # the record frames' sections, read and bounded before the first iteration
@@ -996,6 +1082,7 @@ def _iterations(sec, kinds, secs, rec_at, rec_ln, listed, slots, R, tab, live, s
                     l3[s, k] = l1[s, J[_L3[k]]]
                 win[s, :] = defwin
                 age[s] = 1
+                lstep[s, :] = 0
             else:
                 age[s] = 0
             rest[s] = False
@@ -2596,7 +2683,7 @@ class Frame:
     def clone(self):
         f = Frame.__new__(Frame)
         f.__dict__.update(self.__dict__)
-        for k in ("copy", "live", "l1", "l2", "l3", "win", "age", "rest", "P", "H", "pwin", "page",
+        for k in ("copy", "live", "l1", "l2", "l3", "win", "age", "rest", "lstep", "lset", "P", "H", "pwin", "page",
                   "lastnew", "shots", "meta"):
             if hasattr(self, k):
                 setattr(f, k, getattr(self, k).copy())
@@ -2607,8 +2694,8 @@ class Frame:
     def _derive(self):
         """The segment's lane table and constants as the kernels take them, `tab`: off, width,
         the lane masks (2^(8 width) - 1), J (the lane of each _RULED role), the default winners,
-        S1's and S2's lanes, the COUNT lanes, the aircraft index by type, the aircraft rows and
-        (q, sea, sight)."""
+        S1's and S2's lanes, the COUNT lanes, the aircraft index by type, the aircraft rows,
+        (q, sea, sight) and JL (the lane of each _LEDGER role)."""
         p = self.prm
         self.nl = len(p.lanes)
         if not self.nl:
@@ -2618,6 +2705,7 @@ class Frame:
         role = [r for _, _, r in p.lanes]
         lane = {r: j for j, r in enumerate(role) if r not in (ROLE["PLAIN"], ROLE["COUNT"])}
         J = np.array([lane[ROLE[name]] for name in _RULED], np.int64)
+        JL = np.array([lane[ROLE[name]] for name in _LEDGER], np.int64)
         lanes_of = lambda group: np.array([j for j, r in enumerate(role) if group(r)], np.int64)
         defwin = np.array([1 if r in _S1 else 0 for r in role], np.int8)
         q = (min(max(p.gravity, 0), 1 << 24) * 65536) // 0xCCD
@@ -2632,7 +2720,7 @@ class Frame:
         self.tab = (off, width, (np.int64(1) << (8 * width)) - 1, J, defwin,
                     lanes_of(lambda r: r in _S1), lanes_of(lambda r: r in _S2),
                     lanes_of(lambda r: r == ROLE["COUNT"]), airix, air,
-                    np.array([q, p.sea, p.sight], np.int64))
+                    np.array([q, p.sea, p.sight], np.int64), JL)
         self.l3_lanes = J[_L3]
 
     def restart(self, prm=None):
@@ -2667,6 +2755,8 @@ class Frame:
         self.win = np.tile(self.tab[4], (n, 1))
         self.age = self.live.astype(np.int8)
         self.rest = np.zeros(n, bool)
+        self.lstep = np.zeros((n, 2), np.int64)
+        self.lset = np.zeros((OWNERS, 2), np.int64)
         self.valid = True
 
     def invalidate(self):
@@ -2795,7 +2885,8 @@ class Frame:
         listed, slots, R = self._units_parse(sec, off[RCS_UNITS], off[RCS_UNITS + 1], iters)
         ctl, codes, S, B, T = self._pool(sec, off[RCS_PROJ], off[RCS_PROJ + 1], iters, err)
         out = np.zeros(payload, np.uint8)
-        st = (self.copy, self.l1, self.l2, self.l3, self.win, self.age, self.rest)
+        st = (self.copy, self.l1, self.l2, self.l3, self.win, self.age, self.rest, self.lstep,
+              self.lset)
         pl = (ctl, codes, S, B, T, self.P, self.H, self.pwin, self.page, self.lastnew, self.shots,
               self.meta, payload)
         if _iterations(sec, kinds, secs, rec_at, rec_ln, listed, slots, R, self.tab, self.live, st,
@@ -2971,7 +3062,7 @@ def header_proj(es):
 
 
 def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None, start=None):
-    """Every complete block of a recording of format 11, in order: Block(ordinal (from 1), offset,
+    """Every complete block of a recording of format 12, in order: Block(ordinal (from 1), offset,
     kind, flags, first, last, raw, packed, payload) with a stream block's payload its records.
     With decode=False, stream, snapshot and minimap payloads are None. Returns (as a generator's
     value) why the reading stopped short, or None at a clean end; raises Unreadable at a block it

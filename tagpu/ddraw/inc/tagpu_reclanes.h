@@ -6,8 +6,8 @@
 
 #include <stdint.h>
 
-#define TAGPU_RECLANES_SHA256 "2affd411d75b9e6de137bfc52b377718ce7113740a3a5209852d8d7979754978"
-#define TAGPU_RECLANES_GEN_SHA256 "bd54c50286296643b2565cee083460bd261d223d05a02bedb63ca41c595dcdbc"
+#define TAGPU_RECLANES_SHA256 "b49513a8ff5d93a5fed1de16316f646fd0a3cb0360ff69cca4e8296796e7632b"
+#define TAGPU_RECLANES_GEN_SHA256 "d27b06a10c68860b2aecbb9118b17b693025f67cfd8f4bc572473c606855815e"
 
 enum RecLaneRole {      /* a format constant: RT_CODEC's role byte */
     REC_LR_PLAIN,       /* any width */
@@ -36,11 +36,16 @@ enum RecLaneRole {      /* a format constant: RT_CODEC's role byte */
     REC_LR_LAYER,       /* 1 byte */
     REC_LR_TYPE,        /* 2 bytes */
     REC_LR_COUNT_,      /* any width */
+    REC_LR_OWNER,       /* 4 bytes */
+    REC_LR_EREQ,        /* 4 bytes */
+    REC_LR_EGRANT,      /* 4 bytes */
+    REC_LR_MREQ,        /* 4 bytes */
+    REC_LR_MGRANT,      /* 4 bytes */
     REC_LR_N
 };
 
 /* the width a role's rule computes, in bytes; 0 for any of 1, 2 and 4 */
-static const unsigned char rec_role_width[REC_LR_N] = { 0, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 1, 2, 0 };
+static const unsigned char rec_role_width[REC_LR_N] = { 0, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 1, 2, 0, 4, 4, 4, 4, 4 };
 
 typedef struct RecLaneRow { uint16_t off; uint8_t width, role; } RecLaneRow;
 
@@ -114,18 +119,18 @@ static const RecLaneRow rec_lanes[REC_LANES_N] = {
     { 0x0b8, 2, REC_LR_PLAIN },      /* kills */
     { 0x0ba, 2, REC_LR_PLAIN },      /* u0ba */
     { 0x0bc, 4, REC_LR_PLAIN },      /* res00 */
-    { 0x0c0, 4, REC_LR_PLAIN },      /* res01 */
-    { 0x0c4, 4, REC_LR_PLAIN },      /* res02 */
+    { 0x0c0, 4, REC_LR_EREQ },       /* e_requested */
+    { 0x0c4, 4, REC_LR_EGRANT },     /* e_granted */
     { 0x0c8, 4, REC_LR_PLAIN },      /* res03 */
     { 0x0cc, 4, REC_LR_PLAIN },      /* res04 */
     { 0x0d0, 4, REC_LR_PLAIN },      /* res05 */
     { 0x0d4, 4, REC_LR_PLAIN },      /* res06 */
-    { 0x0d8, 4, REC_LR_PLAIN },      /* res07 */
-    { 0x0dc, 4, REC_LR_PLAIN },      /* res08 */
+    { 0x0d8, 4, REC_LR_MREQ },       /* m_requested */
+    { 0x0dc, 4, REC_LR_MGRANT },     /* m_granted */
     { 0x0e0, 4, REC_LR_PLAIN },      /* res09 */
     { 0x0e4, 4, REC_LR_PLAIN },      /* res10 */
     { 0x0e8, 4, REC_LR_PLAIN },      /* res11 */
-    { 0x0ec, 4, REC_LR_PLAIN },      /* store */
+    { 0x0ec, 4, REC_LR_OWNER },      /* store */
     { 0x0f0, 4, REC_LR_PLAIN },      /* attacker */
     { 0x0f4, 1, REC_LR_PLAIN },      /* attacker_player */
     { 0x0f5, 1, REC_LR_PLAIN },      /* hit_kind */

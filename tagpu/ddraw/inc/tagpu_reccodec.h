@@ -89,6 +89,8 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
    reccodec_restart. */
 void reccodec_world(const RecCodec* c, RecFrameWorld* out);
 void reccodec_invalidate(RecCodec* c);
+/* a + b as IEEE singles, rounded to nearest even, in integers (the unit frame's ledger rule) */
+uint32_t reccodec_f32_add(uint32_t a, uint32_t b);
 int  reccodec_valid(const RecCodec* c);
 const uint32_t* reccodec_units(const RecCodec* c);   /* its copy, nslots * REC_UNIT_DWORDS    */
 const unsigned char* reccodec_live(const RecCodec* c);

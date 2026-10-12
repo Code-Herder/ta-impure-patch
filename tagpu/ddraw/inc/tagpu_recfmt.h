@@ -37,13 +37,14 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 11: format 10 with the cells frame restarting from the reader's grid at every reset point
-   (RBF_FRAME_RESET), written by a build whose snapshots are 1,800 ticks apart. A reader takes
-   this format alone. The bytes: every packed block is one zstd frame, and a stream block may be
+/* 12: format 11 with the unit frame predicting the unit's resource ledger (RT_CODEC's OWNER,
+   EREQ, EGRANT, MREQ and MGRANT rows; tagpu_reccodec.c, ledger_steps); 11 was format 10 with the
+   cells frame restarting from the reader's grid at every reset point (RBF_FRAME_RESET), written
+   by a build whose snapshots are 1,800 ticks apart. A reader takes this format alone. The bytes: every packed block is one zstd frame, and a stream block may be
    a sectioned container whose unit frame carries the unit deltas, whose pool frame carries the
    projectile pool coded by identity, and whose four record frames -- the cells, the orders, the
    events and the state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). */
-#define REC_FORMAT        11
+#define REC_FORMAT        12
 
 static __inline int rec_format_supported(unsigned format)
 {

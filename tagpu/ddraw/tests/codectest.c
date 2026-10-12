@@ -19,8 +19,9 @@
                                     a pad that is not zero) and MISMATCH (the check decoder
                                     restarted from other units, from another pool), each followed
                                     by a restarting SECTIONS block; each record frame's own
-                                    (outcomes_cells, _orders, _events, _state); and zstd frames
-                                    past and at the 2^27 window bound
+                                    (outcomes_cells, _orders, _events, _state); zstd frames
+                                    past and at the 2^27 window bound; and the ledger rule's
+                                    single-precision sum
      codectest fuzz IN SEED N [CASES] [--section NAME]
                                     N mutations of the recording's sectioned blocks (flags, the
                                     head, section lengths, kinds, the unit frame's gaps, masks,
@@ -34,7 +35,7 @@
                                     state)
      codectest sin                  the sine table, for codectest.py's check against its formula
 
-   IN is a recording of format 11. Exit 0 when every check holds, 1 when one fails, 2 when a file
+   IN is a recording of format 12. Exit 0 when every check holds, 1 when one fails, 2 when a file
    cannot be read. The codec is included rather than linked: the fuzz copies a decoder's state,
    which the codec's interface keeps opaque. */
 #include <stdint.h>
@@ -636,6 +637,29 @@ static void lane_add(uint32_t* img, unsigned role, uint32_t add, int set)
             lane_put((unsigned char*)img, &rec_lanes[j], (set ? 0 : lane_get((unsigned char*)img, &rec_lanes[j])) + add);
 }
 
+static uint32_t lane_val(const uint32_t* img, unsigned role)
+{
+    unsigned j;
+    for (j = 0; j < REC_LANES_N; j++)
+        if (rec_lanes[j].role == role) return lane_get((const unsigned char*)img, &rec_lanes[j]);
+    return 0;
+}
+
+/* a builder's ledger for one iteration: the requested grows by 1.5 energy and 0.25 metal a tick
+   from 0 after its owner's settle, every 30 ticks; the granted follows it, or for a refused
+   builder stays where it was */
+static void ledger_tick(uint32_t* img, uint32_t gt, int refused)
+{
+    static const unsigned req[2] = { REC_LR_EREQ, REC_LR_MREQ }, grant[2] = { REC_LR_EGRANT, REC_LR_MGRANT };
+    static const uint32_t step[2] = { 0x3FC00000u, 0x3E800000u };
+    unsigned k;
+    for (k = 0; k < 2; k++) {
+        uint32_t r = gt % 30 == 1 ? 0 : reccodec_f32_add(lane_val(img, req[k]), step[k]);
+        lane_add(img, req[k], r, 1);
+        lane_add(img, grant[k], !r ? 0 : refused ? lane_val(img, grant[k]) : r, 1);
+    }
+}
+
 /* ---- the outcomes' projectile pool: an engine in miniature and its capture ---------------------- */
 
 #define PJ_N 64                         /* RT_PROJECTILES of the outcomes' header */
@@ -800,7 +824,8 @@ static void psim_shots(PSim* q, RecBytes* b, uint32_t gt)
 }
 
 /* Six iterations of five units: two ground movers and an aircraft moving, a still unit, and one
-   whose plain dword changes unpredictably; and the projectile pool, `pfault` in the fourth
+   whose plain dword changes unpredictably; the first and the fourth building, the fourth refused
+   from tick 40 on (ledger_tick); and the projectile pool, `pfault` in the fourth
    iteration. `force`: in the fourth iteration a delta names a dword of the still unit it does not
    change; `correct`: a correction of a unit whose delta the same iteration carries. */
 static void synth_block(RecBytes* b, uint32_t units[][NDW], PSim* q, uint32_t* gt, int create,
@@ -825,6 +850,7 @@ static void synth_block(RecBytes* b, uint32_t units[][NDW], PSim* q, uint32_t* g
                 lane_add(units[s], REC_LR_LAYER, s == 3 ? 2 : 1, 1);
                 lane_add(units[s], REC_LR_FW, 2, 1);
                 lane_add(units[s], REC_LR_FH, 2, 1);
+                lane_add(units[s], REC_LR_OWNER, 1 + s % 2, 1);
                 rec_unit(b, s, units[s]);
             }
             continue;
@@ -837,6 +863,8 @@ static void synth_block(RecBytes* b, uint32_t units[][NDW], PSim* q, uint32_t* g
             lane_add(units[s], REC_LR_HEADING, 37 * s, 0);
         }
         units[5][NDW - 10] ^= *gt * 2654435761u;
+        ledger_tick(units[1], *gt, 0);
+        ledger_tick(units[4], *gt, *gt >= 40);
         for (s = 1; s <= 5; s++) rec_delta(b, s, prev[s], units[s], force && it == 3 && s == 4 ? 7 : -1);
         if (correct && it == 3) {
             rec_put(b, RK_CORRECT, &c, 4);
@@ -1938,6 +1966,31 @@ static int outcomes_state(const RecCodecParams* p)
     return ok;
 }
 
+/* the ledger rule's single-precision sum against known IEEE results: rounding to even, a carry
+   into the exponent, cancellation to zero and to a denormal, denormals, the overflow */
+static int f32_check(void)
+{
+    static const uint32_t t[][3] = {
+        { 0x3FC00000u, 0x3FC00000u, 0x40400000u },   /* 1.5 + 1.5 = 3 */
+        { 0x3F800000u, 0x33800000u, 0x3F800000u },   /* 1 + 2^-24: a tie, to even */
+        { 0x3F800001u, 0x33800000u, 0x3F800002u },   /* 1+ulp + 2^-24: a tie, to even, up */
+        { 0x3F7FFFFFu, 0x33800000u, 0x3F800000u },   /* a carry into the exponent */
+        { 0x40490FDBu, 0xC0490FDBu, 0x00000000u },   /* x - x = +0 */
+        { 0x00800000u, 0x80700000u, 0x00100000u },   /* a normal less a denormal: a denormal */
+        { 0x00000001u, 0x00000001u, 0x00000002u },   /* two denormals */
+        { 0x7F7FFFFFu, 0x7F7FFFFFu, 0x7F800000u },   /* the overflow: infinity */
+        { 0x80000000u, 0x80000000u, 0x80000000u },   /* -0 + -0 = -0 */
+        { 0x4B800000u, 0x3F800000u, 0x4B800000u },   /* 2^24 + 1: a tie, to even */
+    };
+    unsigned i, bad = 0;
+    for (i = 0; i < sizeof t / sizeof t[0]; i++)
+        if (reccodec_f32_add(t[i][0], t[i][1]) != t[i][2] || reccodec_f32_add(t[i][1], t[i][0]) != t[i][2]) {
+            printf("  f32: %08x + %08x = %08x, not %08x\n", t[i][0], t[i][1], reccodec_f32_add(t[i][0], t[i][1]), t[i][2]);
+            bad++;
+        }
+    return expect("ledger: single-precision sums round as IEEE does", bad, 0);
+}
+
 static int cmd_outcomes(void)
 {
     static uint32_t units[6][NDW];
@@ -2068,6 +2121,7 @@ static int cmd_outcomes(void)
     ok &= outcomes_events(&p);
     ok &= outcomes_state(&p);
     ok &= zstd_window_check(st.cctx, st.dctx);
+    ok &= f32_check();
     printf("outcomes: %u sectioned, %u declined, %u mismatched\n", st.sectioned, st.declined, st.mismatched);
     reccodec_stream_end(&st);
     reccodec_free(rd);

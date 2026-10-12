@@ -80,18 +80,18 @@
 0x0B8	2	PLAIN	kills	DISASSEMBLED (map): the destructor's kill credit increments the killer's word here (0x48699D..0x4869CA); the saver writes it raw
 0x0BA	2	PLAIN	u0ba	DISASSEMBLED (map): both target setters clear its bits 10-14; the saver writes it raw
 0x0BC	4	PLAIN	res00	DISASSEMBLED (map): dword 0 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
-0x0C0	4	PLAIN	res01	DISASSEMBLED (map): dword 1 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
-0x0C4	4	PLAIN	res02	DISASSEMBLED (map): dword 2 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
+0x0C0	4	EREQ	e_requested	DISASSEMBLED (map, the ledger): the energy requested since the owner's last economy pass; 0x4011C0 adds each request as a float, the settle 0x401B3D zeroes it every 30 ticks
+0x0C4	4	EGRANT	e_granted	DISASSEMBLED (map, the ledger): the energy granted since the last pass; 0x4011C0 adds the same request while the owner has no debt, so it follows the requested bit for bit until a refusal
 0x0C8	4	PLAIN	res03	DISASSEMBLED (map): dword 3 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
 0x0CC	4	PLAIN	res04	DISASSEMBLED (map): dword 4 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
 0x0D0	4	PLAIN	res05	DISASSEMBLED (map): dword 5 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
 0x0D4	4	PLAIN	res06	DISASSEMBLED (map): dword 6 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
-0x0D8	4	PLAIN	res07	DISASSEMBLED (map): dword 7 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
-0x0DC	4	PLAIN	res08	DISASSEMBLED (map): dword 8 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
+0x0D8	4	MREQ	m_requested	DISASSEMBLED (map, the ledger): the metal requested since the owner's last economy pass, as e_requested
+0x0DC	4	MGRANT	m_granted	DISASSEMBLED (map, the ledger): the metal granted since the last pass, as e_granted
 0x0E0	4	PLAIN	res09	DISASSEMBLED (map): dword 9 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
 0x0E4	4	PLAIN	res10	DISASSEMBLED (map): dword 10 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
 0x0E8	4	PLAIN	res11	DISASSEMBLED (map): dword 11 of the resource object at +0xBC, two 0x18-byte blocks the saver writes through 0x4010B0
-0x0EC	4	PLAIN	store	DISASSEMBLED (map): +0x30 of the resource object, the owner's record; the image carries it as replay-layout.tsv's store row says
+0x0EC	4	OWNER	store	DISASSEMBLED (map): +0x30 of the resource object, the owner's record; the image carries it as replay-layout.tsv's store row says, the owner's player ID
 0x0F0	4	PLAIN	attacker	DISASSEMBLED (map): the last attacker; the image carries it as replay-layout.tsv's attacker row says
 0x0F4	1	PLAIN	attacker_player	DISASSEMBLED (map): the last attacker's player index, 10 for none (0x485C83, 0x489DC0, 0x486787)
 0x0F5	1	PLAIN	hit_kind	DISASSEMBLED (map): the kind of the last hit (0x489DAC), handed to the death message

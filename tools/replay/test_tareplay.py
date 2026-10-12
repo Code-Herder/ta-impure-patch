@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments and world): the C parser against the coverage build's map, the features' regions, the
-comment filter, `landing --check`, a recording's segments and chains, what format 11's block walk
+comment filter, `landing --check`, a recording's segments and chains, what format 12's block walk
 refuses and which cells are images, read from files built from the format alone, the fixtures'
 takeover entries and the W lane's edited header copies. No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
@@ -788,7 +788,7 @@ def zstd_frame(data, wlog):
 
 
 class FormatBlocks(unittest.TestCase):
-    """What format 11's block walk refuses by name before any payload is read, as
+    """What format 12's block walk refuses by name before any payload is read, as
     tagpu_recreader.c's block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
 
     def refused(self, *parts, why, decodes=(True, False)):
@@ -877,6 +877,30 @@ class CodecCheck(unittest.TestCase):
         label, verdict, detail = tareplay.codec_check(self.info(sectioned=0))
         self.assertEqual(verdict, tareplay.FAIL)
         self.assertIn("never ran", detail)
+
+
+class LedgerSum(unittest.TestCase):
+    """The unit frame's ledger rule adds singles in integers (reccodec.f32_add, the C codec's
+    reccodec_f32_add): the sum numpy's float32 gives, for every finite result."""
+
+    def test_matches_float32(self):
+        import numpy as np
+        import reccodec
+        rng = np.random.default_rng(12)
+        a = rng.integers(0, 1 << 32, 20000, dtype=np.uint64).astype(np.uint32)
+        b = rng.integers(0, 1 << 32, 20000, dtype=np.uint64).astype(np.uint32)
+        # half the pairs near each other's exponent, a quarter near cancellation
+        b[::2] = (a[::2] & 0xFF800000) ^ (b[::2] & 0x807FFFFF) ^ ((b[::2] % 24) << 23).astype(np.uint32)
+        b[1::4] = (a[1::4] ^ 0x80000000) + (b[1::4] % 64) - 32
+        with np.errstate(over="ignore", invalid="ignore"):
+            want = (a.view(np.float32) + b.view(np.float32)).view(np.uint32)
+        finite = lambda v: (v >> 23 & 0xFF) != 0xFF
+        checked = 0
+        for x, y, w in zip(a.tolist(), b.tolist(), want.tolist()):
+            if finite(x) and finite(y) and finite(w):
+                checked += 1
+                self.assertEqual(reccodec.f32_add(x, y), w, f"{x:08x} + {y:08x}")
+        self.assertGreater(checked, 15000)
 
 
 class Segments(unittest.TestCase):

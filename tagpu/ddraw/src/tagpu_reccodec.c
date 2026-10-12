@@ -387,6 +387,8 @@ typedef struct Chains {
 
 /* the record frames, in the order the codec makes, restarts and calls them */
 #define RECC_FRAMES 4
+#define RECC_OWNERS 16          /* the ledger's owner IDs the codec keeps a settle for: a player's
+                                   ID is its index + 1, and an ID at or past this one has none */
 static const RecFrameOps* const FRAMES[RECC_FRAMES] = { &recframe_cells, &recframe_orders,
                                                         &recframe_events, &recframe_state };
 
@@ -404,6 +406,9 @@ struct RecCodec {
     uint32_t* unit;                       /* the copy: L1                                       */
     uint32_t* l2;
     unsigned char *l3, *win, *age, *rest, *live, *touched;
+    uint32_t* lstep;                      /* per slot: the ledger's energy and metal step        */
+    uint32_t lsettle[RECC_OWNERS];        /* per owner ID: the last settle the ledger lanes saw  */
+    unsigned char lsettled[RECC_OWNERS];  /* ... once one was seen since the restart            */
     RecBytes tl, dl, runs, lslot, lmask, lzz, ids, hash, cols;
     RecBytes sec[RCS_COUNT];              /* the encoder's sections                             */
     unsigned lcount[RECC_TICKS_MAX];
@@ -512,10 +517,11 @@ RecCodec* reccodec_new(const RecCodecParams* p)
     c->win = (unsigned char*)calloc(nslots, RECC_LANES_MAX);
     c->age = (unsigned char*)calloc(nslots, 1);
     c->rest = (unsigned char*)calloc(nslots, 1);
+    c->lstep = (uint32_t*)calloc(nslots, 2 * sizeof(uint32_t));
     c->live = (unsigned char*)calloc(nslots, 1);
     c->touched = (unsigned char*)calloc(nslots, 1);
     if (!c->airix || !c->unit || !c->l2 || !c->l3 || !c->win || !c->age || !c->rest || !c->live ||
-        !c->touched) {
+        !c->touched || !c->lstep) {
         reccodec_free(c);
         return NULL;
     }
@@ -533,6 +539,7 @@ void reccodec_free(RecCodec* c)
     free(c->win);
     free(c->age);
     free(c->rest);
+    free(c->lstep);
     free(c->live);
     free(c->touched);
     free(c->pool);
@@ -646,6 +653,7 @@ static void slot_fresh(RecCodec* c, unsigned s)
     l3_of(c, u, c->l3 + (size_t)s * L3B);
     memcpy(c->win + (size_t)s * RECC_LANES_MAX, c->defwin, RECC_LANES_MAX);
     c->age[s] = 1;
+    c->lstep[2 * s] = c->lstep[2 * s + 1] = 0;
 }
 
 static int pool_restart(RecCodec* c, const unsigned char* pool, unsigned count, unsigned hw);
@@ -696,7 +704,8 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
         if (role != REC_LR_PLAIN && role != REC_LR_COUNT_ && role < REC_LR_N) c->lane_of[role] = (int)j;
         /* the default winner: the rule where the role has one, else the previous value */
         c->defwin[j] = role == REC_LR_PLAIN || role == REC_LR_TURN || role == REC_LR_FW ||
-                       role == REC_LR_FH || role == REC_LR_LAYER || role == REC_LR_TYPE;
+                       role == REC_LR_FH || role == REC_LR_LAYER || role == REC_LR_TYPE ||
+                       role == REC_LR_OWNER;
         if (c->defwin[j]) c->s1[c->ns1++] = (unsigned char)j;
         else if (role == REC_LR_VY || role == REC_LR_SPEED || role == REC_LR_AX ||
                  role == REC_LR_AY || role == REC_LR_AZ || role == REC_LR_BANK ||
@@ -705,13 +714,15 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
         else if (role == REC_LR_COUNT_ && c->ncnt < RECC_COUNTS_MAX)
             c->cnt[c->ncnt++] = (unsigned char)j;
     }
-    for (i = 1; i < REC_LR_COUNT_; i++)
-        if (c->lane_of[i] < 0) return;          /* reccodec_params refuses such a table */
+    for (i = 1; i < REC_LR_N; i++)
+        if (i != REC_LR_COUNT_ && c->lane_of[i] < 0) return;   /* reccodec_params refuses such a table */
     memset(c->defwin + c->p.nlanes, 1, RECC_LANES_MAX - c->p.nlanes);
     {
         int64_t g = c->p.gravity < 0 ? 0 : c->p.gravity > (1 << 24) ? (1 << 24) : c->p.gravity;
         c->q = g * 65536 / 0xCCD;
     }
+    memset(c->lsettled, 0, sizeof c->lsettled);
+    memset(c->lstep, 0, (size_t)c->nslots * 2 * sizeof(uint32_t));
     for (i = 0; i < 65536; i++) c->airix[i] = NOAIR;
     for (i = 0; i < c->p.nair; i++) c->airix[c->p.air[i].type] = (uint16_t)i;
     if (units != c->unit) memmove(c->unit, units, (size_t)c->nslots * IMG);
@@ -774,8 +785,8 @@ int reccodec_params(RecCodecParams* p, unsigned nslots, unsigned nproj, unsigned
             at += width;
         }
         if (at != IMG) REFUSE("RT_CODEC's rows cover %#x bytes, not the image's %#x", at, IMG);
-        for (i = 1; i < REC_LR_COUNT_; i++)
-            if (!(seen >> i & 1)) REFUSE("RT_CODEC has no row for role %u", i);
+        for (i = 1; i < REC_LR_N; i++)
+            if (i != REC_LR_COUNT_ && !(seen >> i & 1)) REFUSE("RT_CODEC has no row for role %u", i);
         p->nlanes = n;
     }
     if (physics) {
@@ -837,7 +848,7 @@ typedef struct Eval {
     unsigned char* win;
     unsigned char u[IMG];               /* U: this iteration's image, built lane by lane       */
     uint32_t gt;
-    unsigned age;
+    unsigned age, s;
     int dec;
     /* the decoder's residuals: the listed unit's mask (NULL: not listed) and the columns */
     const unsigned char* mask;
@@ -900,6 +911,97 @@ static int step(Eval* x, unsigned j, int rule, uint32_t c0, int has3, uint32_t c
     return 1;
 }
 
+/* The ledger's requested and granted (exe-reverse-engineering.md, the ledger), energy then metal.
+   The build, repair and stockpile steps add one request a tick as a float (0x4011C0, 0x401180):
+   the requested grows by the same step e from the first nonzero value after a zero, and the
+   owner's settle (0x401B3D) zeroes it every 30 ticks. The granted adds the same e while the owner
+   has no debt, so it equals this tick's requested whenever it equalled the last tick's. The
+   candidates: requested is 0 at the owner's settle, L1 + e while it grows, L1 when it held and
+   e itself after a zero that followed a value; granted is this tick's requested when the two
+   were equal, else L1. The settle is learned per owner ID from the last requested that fell to
+   zero, every slot of an owner settling together; e per slot from the first value after a zero.
+   Each lane's winner is the rule, always. A prediction is only ever a size question: a wrong one
+   costs a residual. */
+
+/* a + b as IEEE single-precision values, rounded to nearest even, in integers: the sum the FPU
+   gives at any precision control (64 and 53 bits round a sum of two singles once more without a
+   difference, 2p + 2 <= 53), and the same in every thread whatever its control word. An infinity
+   or a NaN gives a: the prediction only has to be the same on both sides. */
+uint32_t reccodec_f32_add(uint32_t a, uint32_t b)
+{
+    uint32_t sa = a >> 31, sb = b >> 31, ea = a >> 23 & 0xFF, eb = b >> 23 & 0xFF;
+    uint32_t ma = a & 0x7FFFFF, mb = b & 0x7FFFFF, m, t, low;
+    if (ea == 0xFF || eb == 0xFF) return a;
+    if (ea) ma |= 0x800000; else ea = 1;
+    if (eb) mb |= 0x800000; else eb = 1;
+    ma <<= 3;                                   /* three bits below: guard, round, sticky */
+    mb <<= 3;
+    if (ea < eb || (ea == eb && ma < mb)) {
+        t = sa, sa = sb, sb = t;
+        t = ea, ea = eb, eb = t;
+        t = ma, ma = mb, mb = t;
+    }
+    t = ea - eb;
+    if (t > 27) mb = mb != 0;
+    else if (t) mb = mb >> t | ((mb & ((1u << t) - 1)) != 0);
+    if (sa == sb) {
+        m = ma + mb;
+        if (m >> 27) {
+            m = m >> 1 | (m & 1);
+            ea++;
+        }
+    } else {
+        m = ma - mb;
+        if (!m) return 0;
+        while (m < (1u << 26) && ea > 1) {
+            m <<= 1;
+            ea--;
+        }
+    }
+    low = m & 7;
+    m >>= 3;
+    if (low > 4 || (low == 4 && (m & 1))) m++;
+    if (m >> 24) {
+        m >>= 1;
+        ea++;
+    }
+    if (ea >= 0xFF) return sa << 31 | 0x7F800000u;
+    return sa << 31 | (m >> 23 ? ea : 0) << 23 | (m & 0x7FFFFF);
+}
+
+static int ledger_steps(Eval* x)
+{
+    RecCodec* c = x->c;
+    uint32_t own = lane_get(x->u, &c->p.lane[c->lane_of[REC_LR_OWNER]]);
+    int known = own < RECC_OWNERS && c->lsettled[own];
+    int settle = known && (x->gt - c->lsettle[own]) % 30u == 0;
+    static const int req[2] = { REC_LR_EREQ, REC_LR_MREQ }, grant[2] = { REC_LR_EGRANT, REC_LR_MGRANT };
+    unsigned k;
+    for (k = 0; k < 2; k++) {
+        unsigned jr = (unsigned)c->lane_of[req[k]], jg = (unsigned)c->lane_of[grant[k]];
+        const RecLaneRow* rr = &c->p.lane[jr];
+        uint32_t l1 = lane_get(x->l1, rr), l2 = lane_get(x->l2, rr), *e = &c->lstep[2 * x->s + k];
+        uint32_t p, ur, g1 = lane_get(x->l1, &c->p.lane[jg]);
+        if (l1 && settle) p = 0;
+        else if (!l1) p = l2 ? *e : 0;
+        else if (l1 == l2) p = l1;
+        else p = reccodec_f32_add(l1, *e);
+        x->win[jr] = 0;
+        if (!step(x, jr, 1, p, 0, 0)) return 0;
+        x->win[jr] = 0;
+        ur = lane_get(x->u, rr);
+        if (!l1 && ur) *e = ur;
+        if (l1 && !ur && own < RECC_OWNERS) {
+            c->lsettle[own] = x->gt;
+            c->lsettled[own] = 1;
+        }
+        x->win[jg] = 0;
+        if (!step(x, jg, 1, !ur ? 0 : g1 == l1 ? ur : g1, 0, 0)) return 0;
+        x->win[jg] = 0;
+    }
+    return 1;
+}
+
 #define LANE(role)  (&c->p.lane[c->lane_of[role]])
 #define U_(role)    lane_get(x->u, LANE(role))
 #define L1_(role)   lane_get(x->l1, LANE(role))
@@ -909,7 +1011,8 @@ static int step(Eval* x, unsigned j, int rule, uint32_t c0, int has3, uint32_t c
 /* The steps of one slot, in an order where each rule reads only lanes decoded before it:
    S1 every row's generic lanes; S2 a ground row's generic lanes that an aircraft predicts by
    rule; S3 the heading; S4 the velocity; S5 an aircraft's speed, acceleration and bank; S6 the
-   position; S7 the cells, the stamps and the countdowns. 1, or 0 when a residual cannot be read. */
+   position; S7 the cells, the stamps and the countdowns; S8 the ledger, which reads its owner
+   from S1. 1, or 0 when a residual cannot be read. */
 static int frame_slot(Eval* x)
 {
     RecCodec* c = x->c;
@@ -1067,17 +1170,20 @@ static int frame_slot(Eval* x)
         h = h < 0 ? 0 : h > 255 ? 255 : h;
         STEP(REC_LR_SZ, sight, (uint32_t)(uint64_t)asr(asr(s32(U_(REC_LR_Z)), 16) - (h >> 1), 5), 0, 0);
     }
-    return 1;
+    return ledger_steps(x);
 }
 
 /* After evaluating candidate s at gt, with U its image: the state advances, and the slot rests
    when it is a fixed point.
 
    THE FIXED POINT. If the history is full (age 3), U == L1 == L2, L3 equals U's lanes, and the
-   unit either has no velocity or a move stamp older than gt - 1, then at gt + 1 every input of
+   unit either has no velocity or a move stamp older than gt - 1, and the ledger's four lanes are
+   zero, then at gt + 1 every input of
    every candidate -- L1, L2, L3, age, and U for the lanes before each -- equals its value at gt.
    The only dependence on gt is the move stamp's gt - 1 when it moved, which the last clause
-   makes inexact at gt and at every later gt; the claim stamp does not move when U == L1. So
+   makes inexact at gt and at every later gt; the claim stamp does not move when U == L1, and the
+   ledger's candidates are all 0 for a slot whose lanes are 0, whatever its owner's settle, and
+   change neither its step nor the settle. So
    every candidate keeps its value, the winners chosen at gt (the first exact, candidate 0 or 1
    since L1 == U) predict U again, every residual is 0, and the state after evaluating equals the
    state before: skipping the slot is identical to evaluating it. A resting slot whose image
@@ -1099,6 +1205,9 @@ static void slot_advance(RecCodec* c, unsigned s, const unsigned char* u, uint32
             rest = still || (uint64_t)lane_get(u, &c->p.lane[c->lane_of[REC_LR_STAMP]]) + 1 < gt;
         }
     }
+    if (lane_get(u, &c->p.lane[c->lane_of[REC_LR_EREQ]]) || lane_get(u, &c->p.lane[c->lane_of[REC_LR_EGRANT]]) ||
+        lane_get(u, &c->p.lane[c->lane_of[REC_LR_MREQ]]) || lane_get(u, &c->p.lane[c->lane_of[REC_LR_MGRANT]]))
+        rest = 0;
     c->rest[s] = (unsigned char)rest;
     l3_of(c, l2, l3);
     memcpy(l2, l1, IMG);
@@ -1963,6 +2072,7 @@ static int enc_iteration(RecCodec* c, const unsigned char* pl, size_t at, size_t
         x.l3 = c->l3 + (size_t)s * L3B;
         x.win = c->win + (size_t)s * RECC_LANES_MAX;
         x.age = c->age[s];
+        x.s = s;
         memcpy(x.u, x.l1, IMG);
         if (d)
             for (i = 0, nb = 0; i < NDW; i++)
@@ -2584,6 +2694,7 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
             x.l3 = d->l3 + (size_t)s * L3B;
             x.win = d->win + (size_t)s * RECC_LANES_MAX;
             x.age = d->age[s];
+            x.s = s;
             x.mask = lst ? dict + (size_t)((const uint32_t*)d->ids.p)[li] * mb : NULL;
             li += lst;
             memset(x.u, 0, IMG);
