@@ -2949,7 +2949,7 @@ which the hook does not reach (`SC_CLOSE` in `wndproc.c`, `tagpu_refuse`, and th
 and unit-type refusals in `tagpu_patches.c`): the process's exit waits until the file of every
 recording that has ended is closed ([*Its lifetime*](tadr-port/demo-recorder-skirmish-slice.md#its-lifetime)).
 
-**Its events have 57 sites of their own** (the attach log's `recorder: N event sites in`),
+**Its events have 58 sites of their own** (the attach log's `recorder: N event sites in`),
 byte-matched and built at `DllMain` by `tagpu_rec_init`, all before any lands; no recording starts
 without them. Twenty-nine observers run a handler and then the stolen bytes: the COB start entries
 `0x4B0B00` and `0x4B0940` (the slice markers' start set, below), the constructor
@@ -2957,7 +2957,7 @@ reservation `0x486075` (the multiplayer begin root, below), the create's success
 the destructor `0x4866D0`, the corpse helper `0x486360` (`FR_CORPSE`), the build done
 `0x41B8D0`, the state setter `0x48B090`, the broadcast starts `0x456190`, `0x456290` and
 `0x456218` (inside `0x456200`), the replies `0x47F780` and `0x47F850` (the setter and the replies
-chained onto the puppet gates there, §2.6f, so a refused call is neither recorded nor counted), `QueryNanoPiece` `0x43E400`,
+chained onto the puppet gates there, §2.6f, so a refused call is neither recorded nor counted), `QueryNanoPiece` `0x43E400` (its query recorded as `RK_EV_QUERY`, below),
 the nano emitters `0x4720D0` and `0x472200`, and the order dispatch at `0x43A216`, `0x43B878` and
 `0x43BB1D`; and, for the features (S3a), the feature tick `0x424050`, the spawn `0x423C50`, the
 destroy `0x4246B0`, FeatureDie `0x423550`, the burn `0x4233A0`, the damage `0x4244B0` and the swap
@@ -2978,7 +2978,10 @@ test on the engine's own cell pointer, recorded as `FS_SOURCE` by a multiplayer 
 answered from the recording on a multiplayer playing's host, whose slots follow the owners'
 units; it jumps on to `0x42418F` or `0x4241A8` with `eax` and `ecx` as stock left them. Thirteen `call`s of the COB starts `0x4B0A70` and `0x4B0940` (HitByWeapon, TakeDamage,
 TransportPickup, TransportDrop, TargetCleared, EndTransport) go through a stub that records and
-then jumps to the function. The five fire functions' network tests (`0x49D7A0`, `0x49DA92`,
+then jumps to the function, and so does BuildingBuild's `QueryBuildInfo` call `0x4027FB` of the
+query `0x4B0BC0`: with `QueryNanoPiece`, the two COB queries only an order handler makes, each
+recorded at its place in the step as `RK_EV_QUERY` and its COB noted in the slice markers' start
+set ([the engine map](exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)). The five fire functions' network tests (`0x49D7A0`, `0x49DA92`,
 `0x49DC64`, `0x49DE25`, `0x49DFAF`) are released while a skirmish is recorded, so that each builds
 its `0x0D` on its own stack; the extra weapons' `wpn_tx_fired` hands it over at the send and skips
 the send when there is no network (§2.6b); four of the released blocks also run the extra weapons' slot-index splice, which writes no simulation state (`cb_slot_index` says why). That release is the only change to what the engine
@@ -3467,7 +3470,10 @@ at a multiplayer own create's CREATE_END, or, counted and noted, at the step's e
 (`tagpu_replay.c`, THE SCRIPT SLICES). **A replayed death's Killed** runs as the recording
 machine ran it: the destructor's run-now start at `0x486877` goes through `dtor_killed`, which
 inside a death the recording machine made itself makes `Send_UnitDeath`'s query `0x4B0BC0`
-instead (`tagpu_patches.c`, THE KILLED SCRIPT OF A REPLAYED DEATH).
+instead (`tagpu_patches.c`, THE KILLED SCRIPT OF A REPLAYED DEATH). **The owner's queries**
+(`RK_EV_QUERY`) are made at their place in the step's events through the same `0x4B0BC0`, on the
+`+0x9A` COB object of a unit live in its slot, with the engine call's arguments
+(`tagpu_replay.c`, THE OWNER'S QUERIES).
 
 **Fields we write**, on the game thread during playback, takeover or live rewind,
 and on the loader thread at the allocator ownership boundary and the level init's call:

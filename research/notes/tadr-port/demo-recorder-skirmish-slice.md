@@ -1920,11 +1920,12 @@ FILE DUMP`. `compare-counts` refuses unequal windows (both dumps of a pair are c
 so both windows hold the steps [T1, Tlast)), compares roots per site exactly and sinks per key
 within `tagpu/ddraw/replay-absent.tsv`'s band (5 % of the larger or 2 calls) less its rows, and
 fails on any COB write in the playing's last dump; a difference reads `sink 0x4B08C0 from
-0x4B0C4D "QueryNanoPiece": live 273, puppet 0`. The file holds 32 rows, each decided by the owner
+0x4B0C4D "QueryNanoPiece": live 273, puppet 0`. The file held 32 rows when the owner decided them
 on 2026-10-01: five `same` classes (the three shot builders, the meteor stone's init, Killed),
 eight owner-only queries `absent`, the refused script index both ways, the console key's click,
 the flying pieces' explosions, smoke and fire both ways, and COB `EMIT_SFX`'s five emitters both
-ways.
+ways. Killed's `same` class and `QueryNanoPiece`'s `absent` row have gone since, each made exact
+([the script slice](#the-script-slice-format-17)).
 
 **The step's phases** (the lost impacts, A7). The playing made every recorded feature root at the
 replay step, after the host's unit tick and before its projectile tick; a tree the recording
@@ -2581,11 +2582,16 @@ first slice a tick late, and a looping script stayed re-phased for the unit's li
   Create), A6, mid-tick reads, a unit dying before its turn, starts made inside a slice by a
   replayed state change, and on a multiplayer recording the ledger's starts and
   other owners' units (the [completeness note](demo-recorder-completeness.md), *COB slices a
-  playing gives one tick late*). And one count it does not touch, which `slice-walkers` is the
-  first fixture to reach: a lab's `QueryBuildInfo`, an owner-only query (`0x4B0C4D`) that the
-  factory's order handler makes and a puppet never does (MEASURED in the landing gate,
-  2026-10-12: live 9, puppet 0 over [1051, 2671); 8 against 0 on Landing A's DLL). It has no
-  `replay-absent.tsv` row, which would be the owner's decision.
+  playing gives one tick late*).
+- **The owner's queries** (`RK_EV_QUERY`, kind 58). `slice-walkers` was the first fixture to reach a
+  lab's `QueryBuildInfo`, a query only the factory's order handler makes, so a puppet never did
+  (MEASURED in the landing gate, 2026-10-12: live 9, puppet 0 over [1051, 2671); 8 against 0 on
+  Landing A's DLL). `QueryNanoPiece` was the same: an order handler's, owner-only, its count
+  accepted as `absent` since 2026-10-01 (battle: live 841, puppet 0). The recording now carries
+  both where the engine makes them and the playing makes each through the same `0x4B0BC0` at its
+  place ([the engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)),
+  and the `QueryNanoPiece` row is gone. `QueryTransport` and `QueryLandingPad` are not recorded:
+  an open gap no fixture reaches.
 
 ## S5
 

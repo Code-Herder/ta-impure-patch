@@ -1529,6 +1529,12 @@ CLOCK*) -- still reach their first slice a tick late, as does every start on ano
 replayed death in the recording machine's own blocks runs its Killed as that machine's
 `Send_UnitDeath` did, as the query; another owner's, as the peer's destructor start
 ([completeness](demo-recorder-completeness.md), *COB slices a playing gives one tick late*).
+The owner's COB queries (`RK_EV_QUERY`) ride the primary stream the same way: the recording machine
+makes them only for the units its own order handlers run, and the playing makes each at its place
+among the primary events; another machine's queries are made on its own copy of the unit, which
+this recording does not hold. A query of an own unit the same step creates comes before that
+unit's CREATE_BEGIN there, so it finds no live unit and is counted as not made (the playing's
+log line, *the owner's queries*). No multiplayer run has measured the queries yet.
 MEASURED 2026-10-12, a two-peer recording made with `recmp_create_begin_test.py --reproduce
 --until 1400` and played from the start by `recmp_play_test.py`: the recording machine marked
 3,296 slices; the playing planned 2,885, gave 2,884 at their markers and 1 at a create's end, none

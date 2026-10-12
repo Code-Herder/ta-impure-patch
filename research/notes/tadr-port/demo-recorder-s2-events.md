@@ -572,6 +572,15 @@ instead of in the host's unit tick, so a start made before the slice -- AutoAim'
 Create in a later slot -- takes its first slice where it did on the recording machine
 ([skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-17)).
 
+### 1.8c The owner's COB queries — `RK_EV_QUERY` (format 17)
+
+Not a root: a COB query `0x4B0BC0` only an order handler makes, so only the unit's owner's
+machine -- `QueryBuildInfo` at `0x4027FB` (BuildingBuild) and `QueryNanoPiece` at `0x43E427`
+(inside `0x43E400`, from fifteen handlers). `{u32 ID, u8 the query, u8 0 x3}`, outside any bracket,
+written where the engine makes the query, in the unit's turn after its slice; a playing makes the
+same query there with the engine's arguments
+([engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
+
 ### 1.9 The unit state a death must carry
 
 On the owner, the destructor runs inside the unit tick. The reaper (0x48AFB9..0x48AFD1) comes

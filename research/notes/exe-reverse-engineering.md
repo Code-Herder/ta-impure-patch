@@ -1281,8 +1281,8 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   model-space point with `0x43DEF0` (`0x43E437`) and adds the unit's `+0x6A/+0x6E/+0x72`. It writes
   only `out` (`0x43E458..0x43E45D`) and the query's own COB thread record. With no script, all
   eight thread records busy, a null `+0x9E` or a piece out of range, the point is the unit's
-  origin. The query runs where the handler runs, on the owner's machine [INFERRED: a script that
-  alternates pieces through a static answers differently on a puppet].
+  origin. The query runs where the handler runs, on the owner's machine; a recording carries it
+  and a playing makes it again (*The owner's COB queries*).
 
 ### COB on a puppet: getter 75, the writers COB reaches, fresh COB [DISASSEMBLED + SOURCE 2026-09-29]
 
@@ -1536,8 +1536,10 @@ no COB entry:
 | `0x4B2540` | `0x42D275`, `0x42DC3C` | the script file's release, in the unit-def loader |
 
 So, outside a slice, a COB object's threads change only through a start at `0x4B0940` or
-`0x4B0B00`, a query (which runs to completion at `dt` 0, and is owner-only on a puppet: the
-`0x4B0C4D` rows of `replay-absent.tsv`), its setup, its free, and the saved game. Impure's own
+`0x4B0B00`, a query (which runs to completion at `dt` 0; the two an order handler makes are
+recorded and made again by a playing, *The owner's COB queries* below, and AutoAim's aim queries
+are owner-only on a puppet: the `0x4B0C4D` rows of `replay-absent.tsv`), its setup, its free, and
+the saved game. Impure's own
 starts (`tagpu_weapons.c` through `0x4B0A70`) and a playing's (`tagpu_replay.c`, `E_StartIdx`,
 `E_StartName`, `E_StartName0`) enter the same two functions.
 
@@ -1606,6 +1608,56 @@ point), asks a playing whether it gives this slice at the recording's marker ins
 (`tagpu_replay_slice_defer`), and otherwise calls `0x4B0D60(cob, 1)` itself, counted at
 `0x48ADEB` with aux 0 (in the unit tick), 1 (at its recorded place) or 2 (at a playing's step's
 end).
+
+### The owner's COB queries [DISASSEMBLED 2026-10-12]
+
+What `RK_EV_QUERY` rests on (`tagpu_recorder.c` and `tagpu_replay.c`, THE OWNER'S QUERIES). Of the
+fourteen calls of the query `0x4B0BC0` (*The COB module's entries*, above), two are made only by
+an order handler, which a playing's puppets never run:
+
+- **`QueryBuildInfo`** (`0x501330`), whose one call is `0x4027FB`, in BuildingBuild `0x402640`'s
+  state dispatch (the case at `0x4027D9`, through the table `0x402B5C`): `mov edi,[esp+0x44]`
+  (`0x4027D9`) takes the handler's unit, `mov ecx,[edi+0x9A]` (`0x4027E5`) its COB object, `push
+  0x501330` (`0x4027EE`) the name, and the piece local is set to -1 (`0x4027F3`) before its
+  address is passed as the first argument, the other three 0. The answer feeds the build position
+  `0x43E060` at `0x40280B`.
+- **`QueryNanoPiece`** (`0x5052D4`), whose one call is `0x43E427` inside `0x43E400(unit, out)`,
+  with the piece local set to 0 (`0x43E41F`) and the other three arguments 0 (*The nano spray*,
+  above); `0x43E400` has fifteen callers, all order handlers.
+
+`0x4B0BC0` reads the object at once (`mov eax,[ecx+8]`, `0x4B0BC1`), so a unit with no script
+(`+0x9A` NULL, `0x485DFF`) never reaches either call in a running game. It finds the script by
+name (`0x4B0BDE..0x4B0C11`; a missing one gives -1) and calls the query `0x4B0C40` (`0x4B0C2F`),
+which allocates a thread (`0x4B0C48`, the count key `0x4B08C0` from `0x4B0C4D`), reads each
+non-NULL argument pointer in (`0x4B0C5C..0x4B0CCA`), runs that thread alone at `dt` 0
+(`0x4B0DA0` at `0x4B0CE1`) and writes the four values back to the non-NULL pointers
+(`0x4B0CE6..0x4B0D11`): the script can change the object's statics and pieces.
+
+**Where they run.** The handlers are entered only through the three dispatch calls `0x43A21A`,
+`0x43B87C` and `0x43BB21` (*The nano spray*). `0x43B87C` is in the order run `0x43B7C0` and
+`0x43BB21` in `0x43BAD0`, whose only callers are the unit tick's `0x48AF98` and `0x48AF9E`, in the
+unit's turn after its script slice (`0x48ADEB`) and behind the gate that its owner be a local
+seat of type 1 or 2 (`0x48AEB5..0x48AECD`); no dword in the file holds either address.
+`0x43A21A` is the destructor `0x43A1F0`'s call, with event 2, which BuildingBuild returns on
+before its state dispatch (`0x402647..0x40264D`) and which the ten handlers that do not set the
+order's bit `0x02` never receive. So each query is made in its unit's own turn, after its slice,
+inside no death and no feature call, on the unit's owner's machine only.
+
+**In Impure.** A recording carries each as `RK_EV_QUERY {ID, the query}` where the engine makes
+it: a stub on the call `0x4027FB`, built like the owner-only starts' (the `call`, the `mov` and the
+name's `push` compared first; `edi` the unit, its `+0x9A` checked against `ecx`), and the existing
+observer at `0x43E400`'s entry, whose unit is its first argument. The query's COB object is noted
+in the slice markers' start set as a start's is. A playing makes the same `0x4B0BC0` there, on the
+`+0x9A` of the unit live in the ID's slot, with -1 or 0 in the first argument and NULL for the
+rest; `0x43E400`'s own work after its query, the piece's point through `0x43DEF0`, is not made,
+since it writes only the handler's buffer and the spray that takes the point is recorded. The
+other twelve calls are not recorded: the Killed query `0x4865C3` (*A death's Killed*, above);
+AutoAim's aim and `SweetSpot` queries `0x43E227`..`0x43E3E4`, owner-only on a puppet and accepted
+as such by the owner (`replay-absent.tsv`); and `QueryTransport` `0x4113B1` and `QueryLandingPad`
+`0x41189C`, `0x411A35`, `0x411AA6`, `0x411BF5` and `0x411CF1`, which lie among the air transport
+and landing order handlers (VTOL_Pickup `0x4111B0`, VTOL_Landing `0x4118E0`) [INFERRED from their
+addresses, not traced one by one]. If those are order handlers' too, a playing does not make
+them: an open gap, which no replay fixture reaches (none carries an air transport or an air pad).
 
 ### Seating a level: the SKIRMISH Start, the seat fill, the start commanders and the two end tests [DISASSEMBLED + MEASURED 2026-09-29]
 
@@ -2301,7 +2353,7 @@ one did not fit.
 | `0x456190`, `0x456290` (5 bytes each) | the broadcast starts `(unit, idx)` and `(unit, idx, argc, a0..a3)` | the arguments as the `0x10` carries them |
 | `0x456218` (6 bytes) | inside the broadcast start by name `0x456200(unit, name, argc, a0..a3)`, after `0x4B07C0` has turned the name into the index (`0x456213`) | `esi` the unit (`0x456208`), `eax` the index, the arguments at `E+0x28` (the function's `sub esp,0x18; push esi`) |
 | `0x47F780` (6 bytes), `0x47F850` (5 bytes) | the unit replies `(unit, kind, text)`, before their viewer tests (`0x47F850` tests first that the unit is off screen, `0x48BCB0` at `0x47F856`) | every player's reply, the text copied only to its end. `0x47F7E0`, between them, is never called: no call, jump or stored address names it, and its address occurs nowhere in the image |
-| `0x43E400` (8 bytes) | `QueryNanoPiece` `(unit, out)` | the unit and the out pointer, for the spray's credit (below) |
+| `0x43E400` (8 bytes) | `QueryNanoPiece` `(unit, out)` | the unit and the out pointer, for the spray's credit (below); its query as `RK_EV_QUERY` (*The owner's COB queries*) |
 | `0x4720D0`, `0x472200` (7 bytes each) | the nano emitters `(point, box, layer)` and `(box, point, layer)` | the point, the box and the layer, credited to a unit |
 | `0x43A216`, `0x43B878`, `0x43BB1D` (8 bytes each) | the order dispatch: the order's `mov`, its `push`, and the `call [reg+4]` 4 bytes on (`0x43A21A`, `0x43B87C`, `0x43BB21`), the only ways into a handler ([*The nano spray*](#the-nano-spray-two-emitters-fifteen-order-handlers-disassembled-2026-09-29)) | nothing: they forget the last query |
 
