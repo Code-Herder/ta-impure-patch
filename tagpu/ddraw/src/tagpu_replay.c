@@ -2725,6 +2725,7 @@ static void orders_put(const Lv* L, const RecWorld* W)
    machine's 0x43DB50 did. */
 static void slice_created(const Lv* L, unsigned slot);
 static void slice_died(unsigned slot);
+static int slice_own(unsigned slot);
 
 static int ev_create(const Lv* L, const unsigned char* b, unsigned len)
 {
@@ -2752,7 +2753,8 @@ static int ev_create(const Lv* L, const unsigned char* b, unsigned len)
 /* RK_EV_DEATH: the victim's fields as the destructor found them (s2-events §1.9), then the
    destructor through C4's wrap, as a remote's death is applied: mode 0, the killer's player by
    the host's netid for it (every seat's is its index, 0x464290), and C4's carried decision armed
-   from the recording. `corpse` 0 clears the record's corpse level, +0xA's low nibble: the
+   from the recording; its Killed as the recording machine ran it (tagpu_patches.c, THE KILLED
+   SCRIPT OF A REPLAYED DEATH). `corpse` 0 clears the record's corpse level, +0xA's low nibble: the
    destructor reads it only at 0x486D55..0x486D69, to call the corpse helper 0x486360 at 0x486D6F
    (its only caller); its other reads of +0xA take the high nibble (0x4867DA, 0x486880, 0x486CA2,
    0x486D42), and the record reaches no callee (DISASSEMBLED 0x4866D0..0x486E60). So 0 removes
@@ -2787,7 +2789,9 @@ static int ev_death(const Lv* L, const unsigned char* b, unsigned len, int corps
     rec[8] = (unsigned char)(ks >> 8);
     rec[9] = b[9];
     rec[10] = corpse ? b[10] : (unsigned char)(b[10] & 0xF0);
-    if (tagpu_tx_replay_death(rec, b[11])) {
+    /* every death of a skirmish recording, and of its own blocks on a multiplayer one, was the
+       recording machine's own (THE KILLED SCRIPT OF A REPLAYED DEATH) */
+    if (tagpu_tx_replay_death(rec, b[11], slice_own(slot))) {
         slice_died(slot);
         return 1;
     }
@@ -5999,7 +6003,7 @@ static void sk_kills(const Lv* L)
             rec[1] = (unsigned char)slot;
             rec[2] = (unsigned char)(slot >> 8);
             memset(rec + 3, 0xFF, 4);
-            if (tagpu_tx_replay_death(rec, 0)) s_sk.killed++;
+            if (tagpu_tx_replay_death(rec, 0, 0)) s_sk.killed++;      /* +9 0: no Killed */
         }
     for (slot = 1; slot < L->nslots; slot++)
         if (host_live(L, slot)) s_sk.left++;

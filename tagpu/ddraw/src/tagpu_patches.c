@@ -4788,6 +4788,57 @@ static int fix_script_slice(void)
     return FIX_TABLE;
 }
 
+SIM_FEATURE(killed_query, SIM_PUPPET_RUNS, "battle slice-walkers codec-decline");
+
+/* THE KILLED SCRIPT OF A REPLAYED DEATH. Where a unit's death is the machine's own,
+   Send_UnitDeath 0x4864B0 runs Killed as a query: 0x4B0BC0("Killed" 0x508BE8, &severity, &corpse,
+   0, 0) at 0x4865C3, which allocates one thread and runs that thread alone at dt 0 (0x4B0C40: the
+   runner 0x4B0DA0 on its one record, 0x4B0CE1), before the destructor 0x4866D0. A death a peer
+   receives reaches the destructor with mode 0, and there Killed is a start with run-now set:
+   0x4B0A70("Killed", 0, 1, 1, severity, 0, 0, 0) at 0x486877, when the record's severity +9 is
+   above 0 (0x48684A..0x48685A), and a run-now start runs every record of the object at dt 0
+   (0x4B0940's and 0x4B0B00's run-now branch), so a thread of the dying unit that was only waiting
+   -- an aim script whose turn the last slice finished -- runs on, and starts what it starts
+   (RestoreAfterDelay), before the destructor deletes the object. A playing applies the recording's
+   deaths as a peer's, through C4's wrap with mode 0, and on a skirmish recording every death was
+   the recording machine's own. So the destructor's one call of 0x4B0A70 goes through
+   dtor_killed: inside a replayed death of a unit whose death the recording machine made
+   (tagpu_tx_replay_death's `own`), the query 0x4B0BC0 the owner's Send_UnitDeath ran, with the
+   same severity, the one the death record carries (Send_UnitDeath writes the query's severity
+   as the 0x0C's +9, 0x4865E9..0x4865F4); everywhere else the start, unchanged. The corpse
+   argument starts at 0: Send_UnitDeath passes a local it writes only in its mode-7 path
+   (0x48652C), which the query then skips (0x486528), so a Killed that reads it before writing it
+   reads stack contents on the recording machine [DISASSEMBLED 0x4864B0..0x4865C8]. The result is
+   not read: 0x48687C overwrites eax, ecx and edx before any use, as after the stock call.
+   CLASS: in the fail-closed table: a playing without it would run every dying unit's waiting
+   threads. */
+typedef int (__thiscall* PFN_StartArgs)(char* cob, const char* name, void* cb, int now, int argc,
+                                        int a0, int a1, int a2, int a3);
+#define E_StartArgs ((PFN_StartArgs)0x004B0A70u)
+typedef int (__thiscall* PFN_QueryName)(char* cob, const char* name, int* a0, int* a1, int* a2,
+                                        int* a3);
+#define E_QueryName ((PFN_QueryName)0x004B0BC0u)
+
+/* the running replayed death's: its Killed is the owner's query; clear outside that call */
+static unsigned char s_txKilledQuery;
+SIM_VAR(s_txKilledQuery, SIM_TRANSIENT);
+
+static int __thiscall dtor_killed(char* cob, const char* name, void* cb, int now, int argc, int a0,
+                                  int a1, int a2, int a3)
+{
+    int severity = a0, corpse = 0;
+    if (!s_txKilledQuery) return E_StartArgs(cob, name, cb, now, argc, a0, a1, a2, a3);
+    return E_QueryName(cob, name, &severity, &corpse, NULL, NULL);
+}
+
+static int fix_killed_query(void)
+{
+    static const unsigned char call[5] = { 0xE8, 0xF4, 0xA1, 0x02, 0x00 };   /* call 0x4B0A70 */
+    lim_branch(0x00486877, sizeof call, call, 0xE8, (unsigned int)(size_t)dtor_killed,
+               "a replayed death's Killed: the owner's query");
+    return FIX_TABLE;
+}
+
 SIM_FEATURE(flak_divides, SIM_PUPPET_RUNS, "battle");
 
 /* FLAK'S DIVIDES [DISASSEMBLED]. The ballistic fire 0x49CDE0 (callers 0x49D0F8 in the fire
@@ -8385,13 +8436,15 @@ static void tx_rx_death(const unsigned char* m)
     if (m[19] == 1) tx_event(&s_txDiag.received, "a carried death received", NULL, NULL);
 }
 
-int tagpu_tx_replay_death(const unsigned char* rec, int carried)
+int tagpu_tx_replay_death(const unsigned char* rec, int carried, int own)
 {
     typedef void (__stdcall *PFN_Wrap)(const unsigned char* rec, unsigned mode);
     unsigned char* wrap = tx_wrap_code();
     if (!wrap) return 0;
     s_txCarried[rec[1] | (unsigned int)rec[2] << 8] = (unsigned char)(carried == 1);
+    s_txKilledQuery = (unsigned char)(own != 0);        /* THE KILLED SCRIPT OF A REPLAYED DEATH */
     ((PFN_Wrap)(void*)wrap)(rec, 0);
+    s_txKilledQuery = 0;
     return 1;
 }
 
@@ -9427,6 +9480,7 @@ static void patch_engine_defects(void)
     int air  = fix_stacked_air();
     int phase = fix_step_phases();
     int slice = fix_script_slice();
+    int kq   = fix_killed_query();
     int flak = fix_flak_divides();
     int edge = fix_last_cell();
     int los  = fix_los_shear();
@@ -9507,8 +9561,8 @@ static void patch_engine_defects(void)
     plog(b);
 
     _snprintf(b, sizeof b, "enginefix: the step's phases for the demo recorder and its replay "
-              "(0x495513 0x495539) %s; the script slice 0x48ADDF %s", fix_state(phase),
-              fix_state(slice));
+              "(0x495513 0x495539) %s; the script slice 0x48ADDF %s; a replayed death's Killed "
+              "0x486877 %s", fix_state(phase), fix_state(slice), fix_state(kq));
     b[sizeof b - 1] = 0;
     plog(b);
 

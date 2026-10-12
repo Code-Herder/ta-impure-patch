@@ -24,7 +24,6 @@
 0x49CDE0	0x49D773,0x49D453	*	same	a shot of the second kind: live from 0x49D580 (0x49D773), on a puppet host from the receiver 0x49D270 (0x49D453)	2026-10-01
 0x49CC20	0x49DC57,0x49D47E	*	same	an interceptor's shot: live from 0x49DC57, on a puppet host from the receiver 0x49D270 (0x49D47E)	2026-10-01
 0x49C740	dll	*	same	a meteor's stone: live from Impure's meteor_spawned, on a puppet host from meteor_received, both inside the DLL	2026-10-01
-0x4B08C0	0x4B0C4D,0x4B0B0D	"Killed"	same	Killed: live started by Send_UnitDeath's query (0x4865C3 -> 0x4B0C4D), on a puppet host by the destructor's StartScript (0x486877 -> 0x4B0B0D); the destructor deletes the COB object, so no later slice runs on either (0x486DBF)	2026-10-01
 0x4B08C0	0x4B0C4D	"AimFromPrimary"	absent	owner-only aim query: AutoAim 0x49E1A0 runs for owner types 1 and 2 only (the unit tick, 0x48ADDA); what it decides (the AimPrimary starts, the shots, the sprays) is recorded and compared. Residual: a mod's query script that animates	2026-10-01
 0x4B08C0	0x4B0C4D	"AimFromSecondary"	absent	owner-only aim query, as AimFromPrimary	2026-10-01
 0x4B08C0	0x4B0C4D	"AimFromTertiary"	absent	owner-only aim query, as AimFromPrimary	2026-10-01
