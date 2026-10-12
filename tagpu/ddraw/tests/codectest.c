@@ -3224,6 +3224,21 @@ static int outcomes_lossy(void)
     reclossy_free(L);
 
     /* RT_HOLD's bounds */
+    hold_bytes(hold, 1);
+    {
+        unsigned char sha[32];
+        unsigned i, x, same = 1;
+        for (i = 0; i < 32; i++) {
+            same &= sscanf(TAGPU_REPLAY_HOLD_SHA256 + 2 * i, "%2x", &x) == 1;
+            sha[i] = (unsigned char)x;
+        }
+        ok &= expect("RT_HOLD: the build's table reads back as the build's masks and SHA-256",
+                     reclossy_hold_parse(&hh, hold, sizeof hold, why, sizeof why) && same &&
+                         hh.refresh == REC_REFRESH_TICKS && hh.flags == RECL_SPRAYS &&
+                         !memcmp(hh.unit, REC_HOLD_UNIT, REC_UNIT_IMAGE) &&
+                         !memcmp(hh.node, REC_HOLD_NODE, REC_ORDER_IMAGE) &&
+                         !memcmp(hh.sha, sha, 32), 1);
+    }
     hold_bytes(hold, 0);
     ok &= expect("RT_HOLD: a table of no rows reads", reclossy_hold_parse(&hh, hold, sizeof hold, why, sizeof why), 1);
     ok &= expect("RT_HOLD: refused: another length", reclossy_hold_parse(&hh, hold, sizeof hold - 4, why, sizeof why), 0);

@@ -73,6 +73,15 @@ ten-record runtime uses `0x158C` bytes. Several pools now live in the DLL. COB e
 history is still reconstructed, rather than recorded, under the existing contract;
 a larger native allocation does not change that replay limitation.
 
+**What a skirmish stream holds.** The exclusion file says which bytes are recorded at all; a
+second table, `tagpu/ddraw/replay-hold.tsv`, says which of the recorded unit and main-order-list
+bytes a skirmish recording's stream may carry at an earlier value between two refreshes (every 300
+ticks), each row a loosening with the readers it has on a playback host and its evidence. Every
+byte no row names is exact at every tick, and at a refresh every byte is: *The exact stream* below
+says how the harness proves it. `tools/replay-hold-gen.py` validates the table and generates
+`inc/tagpu_rechold.h`, checked at the link like the layout's header, and each recording carries the
+masks it was written with (`RT_HOLD`).
+
 **What restoring these records needs**, found while building the file; each is for the applier
 the skirmish slice brings:
 
@@ -452,8 +461,13 @@ is compared with the fork's exact stream, F's with its lossy stream, and timelin
 lossy-checked. The fixtures with a takeover launch every process with `tagpu_rec.refresh 30`
 (*Taking over*: a takeover starts at a refresh). **A hold row is a loosening**, the owner's
 decision like an exclusion: it names its readers on a playback host and its evidence, and a reader
-found there that shows the byte removes the row. The table has no row, so the stream carries
-every image as the capture made it; it leaves out only the nano sprays its spray sessions imply,
+found there that shows the byte removes the row. The table's rows, the owner's (2026-10-11), hold
+the three weapon slots' aim and target state, the unit's resource ledger's accumulators (`+0xBC`
+to `+0xC8`, `+0xD4` to `+0xE0`) and the main order list's handler state (`+0x05`, `+0x06`, `+0x0A`,
+`+0x2E`, `+0x3E`, `+0x4E`, `+0x52` and most of `+0x42`); a slot's distance, read by the shot builder
+on a playback host, and the node flags a playback host reads stay exact. On the heavy hour they take
+the file from 42.15 to 30.53 MB (MEASURED offline, the writer's path at a refresh every 300 ticks;
+[size](demo-recorder-size.md#l5-the-lossy-plan-measured-offline)). The stream also leaves out the nano sprays its spray sessions imply,
 which every reader makes again with the same bytes after the iteration's events (format 14,
 `RK_SPRAY_SESSION`; the order of the sprays inside an iteration is the decision of 2026-10-11
 below).

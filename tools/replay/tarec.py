@@ -135,7 +135,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 14                           # the lossy stream with its sprays as sessions
+REC_FORMAT = 14                           # the lossy stream with a hold table of rows
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -2257,7 +2257,7 @@ def cmd_lossy_check(path, timeline=0, to=None):
                     du, wu = D.units[lv], W.units[lv]
                     for r in np.nonzero(((du ^ wu) & ~H).any(axis=1))[0]:
                         fail(f"GameTime {t}: slot {lv[r]}'s shown bytes differ")
-                    if H.any():
+                    if H.any() and len(lv):
                         pv = np.array([pd[s][1] if s in pd else D.units[s] for s in lv])
                         pl = np.array([pd[s][0] if s in pd else True for s in lv])
                         ok = ((du & H) == (wu & H)) | (((du & H) == (pv & H)) & pl[:, None])
