@@ -1266,7 +1266,12 @@ machine's rule where it crosses into one (`mp_follow`). MEASURED 2026-10-12 on a
 recording with reproducing trees taken over at 901 as player 1: timeline 1 played across its fork
 and sought within it changes the rule at the crossing and puts it back at the end; its dumps are
 EQUAL at the refresh 1201 and, by the occupancy rule, at 1501 and 1621 after a seek and 1801 from
-a fresh process, and the multiplayer segment's dump at 600 is EQUAL by `recmp_compare.py`. The
+a fresh process, and the multiplayer segment's dump at 600 is EQUAL by `recmp_compare.py`. No
+replay fixture is multiplayer, so the landing tier reaches neither function of that path
+(`tagpu_puppet_engine_cells`, `recr_segment_cells`): this chain is their evidence, which the owner
+accepted for C2 on 2026-10-12 (`tools/replay/recmp_create_begin_test.py --reproduce --until 1400`,
+then `recmp_play_test.py` with `--takeover 901:1`, with `--timeline 1 --at 600 --at 961 --at 1201
+--seek 1201:1501` and with `--timeline 1 --fresh 1801`; 5 min 19 s). The
 fixtures `forest-reproduce` and `stock-forest-reproduce` record and play reproduction's source
 test in a skirmish (23 `FS_SOURCE` draws each, every one played as recorded).
 

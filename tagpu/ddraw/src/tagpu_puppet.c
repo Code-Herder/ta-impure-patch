@@ -446,8 +446,8 @@ int tagpu_puppet_rebuilding(void) { return s_rebuild; }
    THE FEATURES), and the writers' own would differ from them: every puppet seat is type 3, so a
    contest gives the cell to the newcomer where the recording machine's incumbent kept it
    (MEASURED 2026-09-30, the battle: at GameTime 1280 one cell's slot B held the host's unit 858
-   where the recording's held 854, an aircraft at the map's last columns, so a contest or the
-   stamp's edge bound [INFERRED]). So each call's grid writes are undone at its return. The
+   where the recording's held 854, an aircraft at the map's last columns, so a contest decided by
+   the puppet's type-3 rule or the stamp's edge bound [INFERRED]). So each call's grid writes are undone at its return. The
    recorder's observer at each entry hands the unit over (tagpu_puppet.h); this saves the unit's
    footprint -- +0x76, +0x78 by +0x7E, +0x80, i16 each, a cell wider each way, clipped to the grid
    -- and puts the slots and the yard bit back when the function returns. Each of the three writes
@@ -478,14 +478,15 @@ int tagpu_puppet_rebuilding(void) { return s_rebuild; }
    dumps. So on such a level the six `je take` become NOP NOP from the first step
    (tagpu_puppet_play) to the teardown, a takeover or a return to now (tagpu_puppet_end), and
    every contest keeps the incumbent, as the recording machine's did. THE ORDERING: the sites
-   change only on the game thread, between two iterations and outside every footprint writer --
-   at the replay's first step, before it makes the level's first unit (tagpu_replay.c,
-   tagpu_replay_step), at a seek's crossing or a rewind's start in the frame visit, before the
-   seek's creates (mp_follow, rw_prepare), and at the teardown's entry or a takeover's end -- and
-   no other thread runs a writer on a puppet level: the loader, the one other thread that runs
-   level code, makes no unit there for one to take -- the start-unit sites skip every record on
-   a puppet host (demo-recorder-s2-host.md §6.4) -- and the first step waits on its load word's
-   bit 1 (0x497C5F, 0x498342). THE BOUND: each site is written only while it holds the bytes the pristine exe holds there (or
+   change only on the game thread and outside every footprint writer. At the replay's first step
+   that is inside the level's first iteration, at the apply stub after its unit tick (0x4954ED;
+   tagpu_replay.c, tagpu_replay_step), before level_units makes the level's first unit: no unit
+   exists yet, so no stamp, clear or re-claim has run under the other rule or has one open -- the
+   loader, the one other thread that runs level code, makes none, since the start-unit sites skip
+   every record on a puppet host (demo-recorder-s2-host.md §6.4), and the first step waits on its
+   load word's bit 1 (0x497C5F, 0x498342). Everywhere else it is between two iterations: at a
+   seek's crossing or a rewind's start in the frame visit, before the seek's creates (mp_follow,
+   rw_prepare), and at the teardown's entry or a takeover's end. THE BOUND: each site is written only while it holds the bytes the pristine exe holds there (or
    the NOPs this put, to put them back), all six or none, so a patch of another module at one of
    them refuses the playing instead of being overwritten. What remains is the call order: a
    puppet makes its writer calls as deaths, creates, then placements in slot order, where the

@@ -1133,8 +1133,8 @@ MEASURED 2026-09-30 under Wine, format 3, scripted runs on a private X server:
   iterations, the 2,048-record pool). Every check is clean, no cell changed that no writer had
   marked, and every dump is equal on puppets, five, six and five. The battle's first playback
   found one cell's slot B naming another unit than the recording's, the cause of the footprint
-  writers' undo (*Playback*; a contest the puppet's type-3 rule decided the other way, not a lead
-  of the stamp [INFERRED, 2026-10-12]); its next found 1,200 of them called inside a clear. With the undo
+  writers' undo (*Playback*; a contest decided by the puppet's type-3 rule or the stamp's edge
+  bound, an aircraft at the map's last columns, not a lead of the stamp [INFERRED, 2026-10-12]); its next found 1,200 of them called inside a clear. With the undo
   stacked, the battle's playback undid 315,067 footprint writes and missed none.
 - **The cost in the battle**: 569 µs an iteration on average and 2.21 ms at worst (GameTime
   3,305, 111 KB into the ring), against S2a's 475 µs and 1.15 ms; in the carry-links game 123 and

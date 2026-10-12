@@ -2937,7 +2937,7 @@ set-position's rounding of the recorded position**: MEASURED 2026-10-12 in 3,640
 mobile unit-iterations of an air war and a battle, so a playing that places the image's units
 through the set-position stamps where the recording machine did. The battle's one differing slot
 B of 2026-09-30 (GameTime 1280: the recording's unit 854, the host's 858, aircraft at the map's last
-columns) is a contest decided by the puppet's rule or the stamp's edge bound, not a lead
+columns) is a contest decided by the puppet's type-3 rule or the stamp's edge bound, not a lead
 [INFERRED]. Which of the two maintains a playing's slots: `tagpu_puppet.c`, *The footprint
 writers*, and *The footprint contest's rule* below.
 
@@ -7827,9 +7827,17 @@ when bit 26 is set, clears it and walks the buckets around the footprint (`0x47D
 walk `0x47E5C0` hands every unit of an 8-cell bucket from `(x >> 3) − 1` to `((x + w) >> 3) + 1`, z
 alike, whose footprint overlaps, to `0x47ED30`, which re-claims it). The re-claim acts only on bit
 27 (`0x47C7A0..0x47C7A6`), clears it (`0x47C7AF`) and stamps again with the same contest. So a
-holder's clear gives its cells back to the losers it marked, and a live mobile unit's footprint
-cell names it or a unit whose footprint covers the cell. Every clear ends with `0x440A70`
-(`0x47D2CA`).
+holder's clear gives its cells back to the losers it marked. **What the stamp writes**: a mobile
+unit whose footprint lies on the grid, filed by its layer, `+0x110 & 3` -- slot A for 1, slot B
+for 2, no cell for 0 (a carried unit) or 3 (`0x47CEBC..0x47CEC2`, `0x47CF98..0x47CF9B`); a
+footprint with x or z below 0, or x + w or z + h past the grid's columns or rows, is parked in the
+off-map bucket and writes no cell (`0x47CC57..0x47CCA3`; the right and bottom edges are this
+build's, with `fix_last_cell`'s `jg` at `0x47CC8B` and `0x47CCA3`). So every footprint cell of a
+live mobile unit the stamp files names it in its layer's slot, or, while it carries bit 27, a unit
+of the same layer whose footprint covers the cell and which carries bit 26: the bit-26 unit loses
+that bit only in its own clear, whose walk re-claims for the bit-27 units [DISASSEMBLED; MEASURED
+2026-10-12 with no exception in 776 dumps, 284 of them live, holding 2,042 stamped bit-27 units].
+Every clear ends with `0x440A70` (`0x47D2CA`).
 
 **The rule on a skirmish recording machine.** Its seats are type 1 (local human) and 2 (local AI)
 (MEASURED, the controllers of both recordings the decision rests on), so the incumbent always keeps
