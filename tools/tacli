@@ -2728,19 +2728,28 @@ def _peek(inst: Instance, specs, timeout: float):
     put_trigger(inst.gamedir / "tagpu_peek.trigger", "\n".join(specs) + "\n")
 
     deadline = time.time() + timeout
-    rows = []
-    while time.time() < deadline and len(rows) < len(specs):
+    got = {}
+    while time.time() < deadline and len(got) < len(set(specs)):
         chunk = cursor.text()
         if chunk:
-            rows = []
-            for line in chunk.splitlines():
-                m = PEEK_RX.match(line)
-                if m:
-                    rows.append({"spec": m.group("spec"),
-                                 "addr": int(m.group("addr"), 16) if m.group("addr") else None,
-                                 "value": m.group("value")})
-        if len(rows) < len(specs):
+            got = _peek_rows(chunk, specs)
+        if len(got) < len(set(specs)):
             time.sleep(0.2)
+    return [got[s] for s in dict.fromkeys(specs) if s in got]
+
+
+def _peek_rows(text, specs):
+    """{spec: row} of the log text's peek lines whose spec is one asked for, the first of each.
+    A peek the game had not answered when its caller gave up leaves its request behind, and its
+    lines can land after the next peek's cursor: a line for another spec is never this peek's
+    answer."""
+    want, rows = set(specs), {}
+    for line in text.splitlines():
+        m = PEEK_RX.match(line)
+        if m and m.group("spec") in want and m.group("spec") not in rows:
+            rows[m.group("spec")] = {"spec": m.group("spec"),
+                                     "addr": int(m.group("addr"), 16) if m.group("addr") else None,
+                                     "value": m.group("value")}
     return rows
 
 

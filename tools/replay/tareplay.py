@@ -1016,7 +1016,7 @@ def twin(w, log, fix):
             raise CouldNotRun("the twin: Impure options has no inert labels to sample")
         width, height = gui["surface"]
         rc, o = tacli("peek", w.name, "*0x511DE8+0x1422b", "*0x511DE8+0x1422f",
-                      "--json", timeout=ACK_S)
+                      "--json", "--timeout", ACK_S, timeout=2 * ACK_S)
         if rc:
             raise CouldNotRun(f"the twin: map dimensions: {last(o)}")
         map_width, map_height = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
@@ -1032,7 +1032,7 @@ def twin(w, log, fix):
             x, y = points[i % len(points)]
             keys(w, f"pmove:{x},{y}")
             rc, o = tacli("peek", w.name, "*0x511DE8+0x555", "*0x511DE8+0x559",
-                          "*0x511DE8+0x565", "--json", timeout=ACK_S)
+                          "*0x511DE8+0x565", "--json", "--timeout", ACK_S, timeout=2 * ACK_S)
             if rc:
                 raise CouldNotRun(f"the twin: native mouse echo: {last(o)}")
             event = [int(p["value"].split()[0]) for p in json.loads(o)["peeks"]]
