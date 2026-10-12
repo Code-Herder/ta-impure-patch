@@ -137,11 +137,25 @@ check is not vacuous.
 One file per recording, `replays\<date> <time> <map>.imprec` in the game's folder, or its first free
 ` (2)`…` (9)` variant, written by the writer thread alone. It is `IMPREC\r\n` and then blocks: a
 32-byte header — the block's kind, its flags, the first and last GameTime it covers, its raw and
-stored sizes, a CRC-32 of the stored bytes and one of the header — and the payload: exactly one
-zstd frame of the raw bytes (level 3, the vendored zstd 1.5.7 in `src/zstd.c`) when that is
-smaller, else the bytes stored. The header, the end and the timelines blocks are always stored, so
-a header reads without zstd. `inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 13; a reader takes
-that format alone:
+stored sizes, a CRC-32 of the stored bytes and one of the header — and the payload, packed with
+the vendored zstd 1.5.7 (`src/zstd.c`) in one of three ways (`inc/tagpu_recfmt.h`, *THE RUN AND
+THE CHAIN*):
+
+- **a sectioned stream block** is a chunk of its *run*'s zstd frame. A run is the sectioned blocks
+  from an `RBF_FRAME_RESET` block to the next reset, records block or snapshot: one frame at level
+  19, with a window of at most 2^20, no content size and no checksum, begun at the reset block and
+  never ended, each block's bytes flushed at its end. A block decodes only after every chunk of its
+  run before it, as its codec frames do; it is never stored.
+- **a snapshot** is a *key*, one zstd frame of its own at level 19 or the bytes stored, or
+  `RBF_CHAINED`, one frame whose raw-content prefix is the records of the segment's snapshot before
+  it. The segment's first snapshot and every tenth after it are keys (`REC_CHAIN_MAX` 9 links), as
+  is any whose chained frame fails the writer's check; a writer without the codec writes every
+  snapshot as a key at level 3.
+- **every other block** is exactly one zstd frame of the raw bytes at level 3 when that is smaller,
+  else the bytes stored. The header, the end and the timelines blocks are always stored, so a
+  header reads without zstd.
+
+`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 14; a reader takes that format alone:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
   GameTime, the wall clock, the unit array's slots and the units each player may have, the unit
@@ -297,24 +311,29 @@ and a seeking reader's comes from a snapshot built by the same rule (`tagpu_recc
 `reccodec_stream_block`'s INVARIANT). A restart from a grid of another size, or none, leaves the
 codec invalid: the reader refuses the block, the writer declines it. So a block inside a run decodes only after its predecessors since
 the run's reset: a reader starts at a snapshot or a segment's start (the seek already does), and a
-sectioned block met with no frame state is refused by name, never misread. The zstd frame itself is
-per block.
+sectioned block met with no frame state is refused by name, never misread. The run's zstd frame
+restarts with the codec's frames and follows the same rule: the readers hold one validity for both,
+and any block they refuse leaves both to be restarted (*The file*).
 
-**Decode before write, and the fallback.** The writer encodes each stream block, packs it, unpacks
-those bytes and decodes them with a second codec state, started from the units alone as a reader's
-is, and writes the sectioned block only when that gives back the records byte for byte. Otherwise
+**Decode before write, and the fallback.** The writer encodes each stream block, packs it as its
+run's next chunk, unpacks that chunk with a decoder that has unpacked the run's chunks before it, as
+a reader's has, and decodes the container with a second codec state, started from the units alone
+as a reader's is, and writes the sectioned block only when that gives back the container and then
+the records byte for byte. Otherwise
 it writes the block as records — **declined** when the encoder met what the frame does not carry
 (a delta on a slot that is not live or that an `RK_UNIT` or `RK_UNIT_GONE` names in the same
 iteration, deltas whose slots do not ascend, a bitmap that is not exactly the dwords that differ
 from the copy; projectile records that are not exactly the changed slots below the extent,
 ascending, each once, after at most one head that does not lower the extent — a writer's
 correction names a slot twice; a record a record frame cannot carry back byte for byte; a block of
-more than 256 iterations, a frame past 16 MiB, no memory),
+more than 256 iterations, a frame past 16 MiB, no memory; zstd without memory for the run, which
+the writer logs apart as "no memory"),
 **MISMATCHED** when the check differed, which is a codec bug — and the next block restarts the
-frames. A codec bug therefore costs size, never data. The end
+frames and the run. A codec bug therefore costs size, never data. The end
 block counts both; the writer logs the first four of each with their GameTime range, and its
 closing line gives `stream N KB of records written as M KB; K blocks: S sectioned, D declined, X
-MISMATCHED; the codec cost T ms, at most U ms for one block`. `tareplay.py` fails a fixture
+MISMATCHED; the codec cost T ms, at most U ms for one block; the ring held R KB at most; N
+snapshots, K of them keys, packed in T ms, at most U ms for one`. `tareplay.py` fails a fixture
 whose recording's end block names any mismatch ("the stream codec did not decode back in N
 blocks") or which has no sectioned stream block at all ("the codec never ran": a writer without
 memory for the codec counts 0 declined and 0 mismatched), and reports the declined count. Without `RT_CODEC`
@@ -354,11 +373,17 @@ strict images gate whenever its T1 finds an explosion alive.
 
 **What a reader refuses**, the C reader and `reccodec.py` alike, each by name (the C reader with the
 block's file offset): a flag bit it does not know, `RBF_SECTIONS` on a block that is not a stream block,
-`RBF_FRAME_RESET` without it, a packed header, end or timelines block, a block whose header passed
-its CRC but whose raw or stored size passes 64 MiB (`RECR_BLOCK_MAX`), a packed body of no bytes, a
-body that is not exactly one zstd frame of its `raw` bytes with nothing after it or whose frame asks
-for a window past 2^27 (zstd's streaming default, bounded by name on both sides since the C one-shot
-decompression does not bound it); a malformed or
+`RBF_FRAME_RESET` without it, a stored sectioned block, `RBF_CHAINED` on a stored block or on any
+block but a snapshot, a packed header, end or timelines block, a block whose header passed its CRC
+but whose raw or stored size passes 64 MiB (`RECR_BLOCK_MAX`), a packed body of no bytes, a body
+that is not exactly one zstd frame of its `raw` bytes with nothing after it or whose frame asks for
+a window past 2^27 (zstd's streaming default, bounded by name on both sides since the C one-shot
+decompression does not bound it); a sectioned block's chunk read anywhere but at its run's reset
+block or right after its run's previous block, a run whose first chunk is not a zstd frame header
+asking for a window of at most 2^20 with no content size, no dictionary and no checksum, and a
+chunk that does not give exactly its `raw` bytes from all of its input or that ends its frame; a
+chained snapshot with no snapshot before it in its segment, more than nine links from its key, or
+whose frame does not give its `raw` bytes against that prefix; a malformed or
 repeated `RT_CODEC`, `RT_PHYSICS` or `RT_AIR` (lanes that do not tile the 0x148-byte image, a role
 missing, twice or of the wrong width, air types not ascending); a sectioned block in a segment
 whose header lacks `RT_CODEC` and `RT_PHYSICS`; a segment whose unit slots differ from the first

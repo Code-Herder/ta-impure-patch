@@ -236,9 +236,11 @@ As a drop-in on today's blocks, zstd level 3 makes the stream 66.8 MiB (−32 %)
 CPU from 38 to 3.6 ms per second of game (130 to 13 in the busiest 30 s) and decompresses about
 eight times faster (129 MB/s to about 1 GB/s; a seek through the busiest interval decodes in 0.06 s
 instead of 0.75) — MEASURED with a 32-bit
-MinGW build at the DLL's flags under Wine on the reference setup. Vendored without the greedy, lazy
-and binary-tree strategies (level 3 is dfast), the legacy formats and the error strings, it adds
-345,088 bytes to the DLL (MEASURED, L1).
+MinGW build at the DLL's flags under Wine on the reference setup. Vendored without the greedy and
+lazy strategies (level 3 is dfast, level 19 btultra2, whose btopt and btultra match finders are
+kept), the legacy formats and the error strings, its code is 386,504 bytes (MEASURED, *P1*); with
+the binary-tree strategies left out too, as L1 vendored it, it added 345,088 bytes to the DLL
+(MEASURED, L1).
 
 Once the codecs above are in, a stronger compressor packing each block alone shrinks the file
 little: on the unit frame zstd 3 is 4.63 MiB against the writer's 4.50, zstd 19 about 5 % better,
@@ -1263,9 +1265,12 @@ match finders that level 19 (btultra2) needs: 342,828 → 386,504 bytes of zstd 
 **Measured** (2026-10-12, `codectest transcode --snap-every 1` -- the writer's path, every block and
 snapshot check-decoded -- under Wine, 32-bit, on the reference setup; the inputs the records-only
 copies of the two heavy hours at 1,800-tick snapshots, the "before" column main's codectest on the
-same records):
+same records). The lossy hour is the transform the lossy landings build on -- the units' and the
+order nodes' internal fields held, sprays as sessions and the cells held, each refreshed every
+1,800 ticks -- not *L5*'s table, whose last step measured 19.32 MB in format 12; and the exact
+hour's 29.90 MB here is lossless, not the 29.90 of *L5*'s orders step:
 
-| | lossy hour (*L5*'s transform) | exact hour (format 12, L5a) |
+| | lossy hour (the stack's input) | exact hour (format 12, L5a) |
 |---|---:|---:|
 | the file before (level 3, block by block) | 20,725,479 | 42,152,986 |
 | the stream before / after | 18,070,847 / 14,708,157 | 39,498,338 / 28,960,535 |
@@ -1283,6 +1288,38 @@ parameters the snapshots would have needed 33.3 MB, MEASURED 2026-10-11), so the
 first block carries the context's allocation; later runs reuse it. The fixed tables cost the snapshots nothing measurable:
 806,045 bytes either way. Unpacking the worst chain, a key and nine links, takes about 0.5 ms in
 Python's zstandard (the same libzstd 1.5.7, x86-64; the DLL's 32-bit unpack is not measured).
+
+**The dense battle: the writer keeps up** (MEASURED 2026-10-12, the same method, on the ten-player
+battle on Core Prime Industrial Area of *L3*'s file, 7,441 ticks, 266 stream blocks: 226 of 30
+iterations, the rest cut short by the 2 MiB bound in the opening). The file goes from 12,348,045 to
+10,234,314 bytes (−17.1 %): the stream 11,178,552 → 9,805,310, its 8 snapshots 1,143,979 → 403,490.
+The codec's time per stream block, before → after:
+
+| | main (level 3, block by block) | P1 |
+|---|---:|---:|
+| median / p99 | 27 / 73 ms | 41 / 119 ms |
+| worst after the first | 86 ms | 289 ms (GameTime 92–98, the opening's births) |
+| the first block | 37 ms | 213 ms |
+| the worst snapshot | -- | 217 ms (a chained one; the key 213) |
+| all of it over the battle's 248 s | 8.7 s | 15.5 s |
+
+No block or snapshot reaches 500 ms, so a 30-iteration block -- 1,000 ms of game at normal speed,
+500 at double -- never takes longer than the game time it covers; one block of 7 iterations
+(233 ms of game) takes 289. Fed to a model of the ring [INFERRED: a block is packed once its last
+iteration is in and the writer is free, the ring holding every record captured and not yet through
+the writer; the writer's other work -- applying the records, comparing its copy, writing the file
+-- not counted], the writer is at most 289 ms behind and the ring holds at most 3.1 MiB at normal
+speed and 4.1 MiB at double (main: 2.6 and 2.9) of its 16 MiB (`REC_RING_BYTES`), around that
+block; the next block brings it back. The gaps: the times are Wine's 1 ms clock on the reference
+setup's processor, so a slower one scales them; the writer's other work is not in them; and these
+are transcodes, not a game recorded under P1.
+
+**A damaged snapshot** [INFERRED from the reader's walk]: a chained snapshot that fails its CRC or
+its frame refuses every seek that starts from it or from a later link of its chain, up to the
+next key -- up to ten minutes of game at a snapshot a minute, where a file of keys alone loses one
+minute --
+because a seek starts from the last snapshot before its target and does not fall back to an
+earlier one. The stream itself still reads from the segment's start.
 
 **Checked**: the C decoder and the Python reader give the same records on all 3,604 blocks of both
 outputs (`codectest.py verify`); `tarec check` passes on the exact hour, and on the lossy hour reports
