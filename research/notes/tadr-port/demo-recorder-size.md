@@ -4,7 +4,7 @@
 
 **L1 to L4, L5a and P1 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
 *L3: the record frames, measured*, *L4: the measured hours, the snapshot interval and R1*,
-*L5a: the ledger rule* and *P1: the container, measured*, below). Recording format 13 packs each
+*L5a: the ledger rule* and *P1: the container, measured*, below). Recording format 14 packs each
 run of sectioned stream blocks as one zstd frame at level 19 and each snapshot against the one before
 it, carries the unit deltas in a unit frame
 predicted from the engine's own rules, the projectiles in a pool frame coded by identity, and the
@@ -20,7 +20,8 @@ from 56.99 to 42.15 MB; the owner chose to go lossy after it, and a lossy plan m
 brings the heavy hour to 19.32 MB, about 1.6–2.6 times the 7.3–12.4 MB TADR's recorder would take
 for it (*L5: the lossy plan, measured offline*). L5's core is landed as recording format 13 (*L5:
 the lossy plan, measured offline*, its last part): the filter, the refreshes and the takeover at a
-refresh, with a hold table of no rows, so the size is format 12's; its hold rows and L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
+refresh, with a hold table of no rows, so it changes no record, and format 14 (*P1*) packs that
+stream in its container; the hold rows and L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -246,7 +247,7 @@ Once the codecs above are in, a stronger compressor packing each block alone shr
 little: on the unit frame zstd 3 is 4.63 MiB against the writer's 4.50, zstd 19 about 5 % better,
 snapshots excepted (1,629 KB writer, 1,164 zstd 19). Across blocks it is not so: the whole stream as
 one zstd 19 frame took 47.2 MB where zstd 19 block by block took 59.5 (*The measurement*), and
-format 13 takes that gain -- each run of sectioned blocks is one level-19 frame with a 2^20 window,
+format 14 takes that gain -- each run of sectioned blocks is one level-19 frame with a 2^20 window,
 flushed at every block, and each snapshot is packed against the one before it, a key every tenth --
 which takes the lossy hour from 20.73 to 15.65 MB (−24.5 %) and the exact hour from 42.15 to 29.90
 MB (−29.1 %), MEASURED (*P1* below). Removing 54 MiB of raw
@@ -1264,8 +1265,8 @@ match finders that level 19 (btultra2) needs: 342,828 → 386,504 bytes of zstd 
 
 **Measured** (2026-10-12, `codectest transcode --snap-every 1` -- the writer's path, every block and
 snapshot check-decoded -- under Wine, 32-bit, on the reference setup; the inputs the records-only
-copies of the two heavy hours at 1,800-tick snapshots, the "before" column main's codectest on the
-same records). The lossy hour is the transform the lossy landings build on -- the units' and the
+copies of the two heavy hours at 1,800-tick snapshots, the "before" column the level-3 container,
+block by block, that formats 12 and 13 write, on the same records). The lossy hour is the transform the lossy landings build on -- the units' and the
 order nodes' internal fields held, sprays as sessions and the cells held, each refreshed every
 1,800 ticks -- not *L5*'s table, whose last step measured 19.32 MB in format 12; and the exact
 hour's 29.90 MB here is lossless, not the 29.90 of *L5*'s orders step:
@@ -1279,6 +1280,13 @@ hour's 29.90 MB here is lossless, not the 29.90 of *L5*'s orders step:
 | the writer's codec over the hour, before / after | 34.5 s / 43.3 s | 42.6 s / 73.2 s |
 | its worst block after the first / the first | 26 ms / 274 ms | 55 ms / 266 ms |
 | the snapshots' packing and check, all / the worst | 3.6 s / 105 ms | 3.5 s / 103 ms |
+
+Through the writer's own path for format 13's stream (`codectest lossy` over the exact hour's
+records with the build's hold table of no rows: blocks cut at every refresh, 3,605 of them, 362
+ending at one, the 60 snapshots kept at refreshes), the file goes from 42,153,513 bytes (format 13)
+to 29,902,072 (format 14, −29.1 %), none declined or mismatched; `tarec check` passes on it, and
+`tarec lossy-check --to 27001` on the same run written with its exact stream (`--exact`)
+(MEASURED 2026-10-12).
 
 The block heads (117,344 bytes) and the header, minimap and end block are unchanged. The level-19
 context holds 14.5 MB at most over either hour (`ZSTD_sizeof_CCtx`, the run's parameters and the

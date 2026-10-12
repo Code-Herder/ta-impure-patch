@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 13 and its readers take format 13 alone (*The file*, below).
+The recorder writes recording format 14 and its readers take format 14 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
