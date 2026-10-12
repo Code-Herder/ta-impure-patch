@@ -4,7 +4,7 @@
 
 **L1 to L4, L5a and P1 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
 *L3: the record frames, measured*, *L4: the measured hours, the snapshot interval and R1*,
-*L5a: the ledger rule* and *P1: the container, measured*, below). Recording format 16 packs each
+*L5a: the ledger rule* and *P1: the container, measured*, below). Recording format 17 packs each
 run of sectioned stream blocks as one zstd frame at level 19 and each snapshot against the one before
 it, carries the unit deltas in a unit frame
 predicted from the engine's own rules, the projectiles in a pool frame coded by identity, and the
@@ -250,7 +250,7 @@ Once the codecs above are in, a stronger compressor packing each block alone shr
 little: on the unit frame zstd 3 is 4.63 MiB against the writer's 4.50, zstd 19 about 5 % better,
 snapshots excepted (1,629 KB writer, 1,164 zstd 19). Across blocks it is not so: the whole stream as
 one zstd 19 frame took 47.2 MB where zstd 19 block by block took 59.5 (*The measurement*), and
-format 16 takes that gain -- each run of sectioned blocks is one level-19 frame with a 2^20 window,
+format 17 takes that gain -- each run of sectioned blocks is one level-19 frame with a 2^20 window,
 flushed at every block, and each snapshot is packed against the one before it, a key every tenth --
 which takes the lossy hour from 20.73 to 15.65 MB (−24.5 %) and the exact hour from 42.15 to 29.90
 MB (−29.1 %), MEASURED (*P1* below). Removing 54 MiB of raw

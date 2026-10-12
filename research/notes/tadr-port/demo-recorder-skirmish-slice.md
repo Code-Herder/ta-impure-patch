@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 16 and its readers take format 16 alone (*The file*, below).
+The recorder writes recording format 17 and its readers take format 17 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -157,7 +157,7 @@ THE CHAIN*):
   else the bytes stored. The header, the end and the timelines blocks are always stored, so a
   header reads without zstd.
 
-`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 16; a reader takes that format alone:
+`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 17; a reader takes that format alone:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
   GameTime, the wall clock, the unit array's slots and the units each player may have, the unit

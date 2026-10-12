@@ -37,23 +37,25 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 16: format 15 with a skirmish recording's cells held (RT_HOLD's RECL_CELLS): between refreshes
-   the stream carries the cells' unit slots and yard bit at a value it wrote before, a feature
-   tick's input cells only where a byte other than those changed, and the tick's source test as
-   FS_SOURCE, as a multiplayer recording does. 15 was format 14 with a skirmish stream's nano
-   sprays written as sessions (RK_SPRAY_SESSION, RT_HOLD's RECL_SPRAYS): a spray its unit's session
-   predicts is left out, and every reader makes it again at the end of its iteration. 14 was
-   format 13 with a hold table of rows: a skirmish stream holds the weapon slots' aim and target
-   state, the resource ledger's accumulators and the main order list's handler state between
-   refreshes (replay-hold.tsv; RT_HOLD carries the masks). 13 was format 12 with the stream written
-   by the lossy filter (tagpu_reclossy.c): a skirmish header's RT_HOLD names the bytes the stream
-   holds between refreshes, a refresh iteration ends its stream block (RBF_REFRESH), and a test
-   launch may write the exact records beside the stream (RB_EXACT). A reader takes this format
-   alone. The bytes: every packed block is one zstd frame, and a stream block may be a sectioned
-   container whose unit frame carries the unit deltas, whose pool frame carries the projectile pool
-   coded by identity, and whose four record frames -- the cells, the orders, the events and the
-   state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). */
-#define REC_FORMAT        16
+/* 17: format 16 in another container -- a run of sectioned stream blocks is one zstd frame at
+   level 19, each block a flushed chunk of it, and a snapshot is packed against the one before it
+   (RBF_CHAINED, THE RUN AND THE CHAIN below). 16 was format 15 with a skirmish recording's cells
+   held (RT_HOLD's RECL_CELLS): between refreshes the stream carries the cells' unit slots and yard
+   bit at a value it wrote before, a feature tick's input cells only where a byte other than those
+   changed, and the tick's source test as FS_SOURCE, as a multiplayer recording does. 15 was format
+   14 with a skirmish stream's nano sprays written as sessions (RK_SPRAY_SESSION, RT_HOLD's
+   RECL_SPRAYS): a spray its unit's session predicts is left out, and every reader makes it again
+   at the end of its iteration. 14 was format 13 with a hold table of rows: a skirmish stream holds
+   the weapon slots' aim and target state, the resource ledger's accumulators and the main order
+   list's handler state between refreshes (replay-hold.tsv; RT_HOLD carries the masks). 13 was
+   format 12 with the stream written by the lossy filter (tagpu_reclossy.c): a skirmish header's
+   RT_HOLD names the bytes the stream holds between refreshes, a refresh iteration ends its stream
+   block (RBF_REFRESH), and a test launch may write the exact records beside the stream (RB_EXACT).
+   A reader takes this format alone. The bytes: a stream block may be a sectioned container whose
+   unit frame carries the unit deltas, whose pool frame carries the projectile pool coded by
+   identity, and whose four record frames -- the cells, the orders, the events and the state --
+   carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). */
+#define REC_FORMAT        17
 
 static __inline int rec_format_supported(unsigned format)
 {

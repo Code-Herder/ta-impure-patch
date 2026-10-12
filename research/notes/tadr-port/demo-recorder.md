@@ -481,11 +481,11 @@ evidence, and keep remaining gaps visible.
    four-player budget is missed. Format 12 predicts the units' resource ledger and takes the heavy
    hour from 56.99 to 42.15 MB (−26 %), lossless; a lossy plan measured offline brings it to 19.32 MB
    (*L5* of the size page), and format 14's hold rows, the plan's first step, take it to 30.53 MB on
-   the writer's path. Format 16's container -- each run of blocks one zstd frame at level 19, the
+   the writer's path. Format 17's container -- each run of blocks one zstd frame at level 19, the
    snapshots chained -- takes the exact hour to 29.90 MB, still lossless, at about 16 MB more of the
    writer's memory and 1.5 MB more of a reader's (*P1* of the size page); the stack's own lossy
    input -- the units' and order nodes' internal fields held, sprays as sessions and the cells held,
-   refreshed every 1,800 ticks -- is 20.73 MB in the level-3 container and 15.65 in format 16's
+   refreshed every 1,800 ticks -- is 20.73 MB in the level-3 container and 15.65 in format 17's
    (*P1*). Until the reduced stream lands, a skirmish is recorded only on request.
 3. **Snapshot interval: decided** (2026-10-10). A snapshot every 1,800 ticks, 60 s of game time,
    chosen against the disk budget with the seek target relaxed for dense battles (*Playback and
