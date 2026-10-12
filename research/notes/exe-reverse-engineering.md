@@ -1037,7 +1037,7 @@ and [the size estimate](tadr-port/demo-recorder-state-evidence.md#4-size-estimat
 |---|---|---|
 | `0x463C60` | the controller-type setter, `thiscall(type)`, `ret 4` | Stores `+0x73` and, for any type but 3, PlayerInfo `+0x94` too (`0x463C60..0x463C75`). Fifteen callers (E8 scan): the `AI` command (`0x4162F4`, `0x4162FE`), the type-4 reset `0x42844F` (above), the seat removal `0x452E62`, and `0x4453E6`, `0x44552E`, `0x447C79`, `0x447CC2`, `0x447CFA`, `0x44833D`, `0x44A8BF`, `0x45125E`, `0x451442`, `0x45401B`, `0x454054` [roles not traced]. DIS |
 | `0x416280` | `AI`, the chat command `{0x5018E0 "AI", 0x416280, 4}` at `0x501FD0` (run level 4) | Takes a seat below 10 (`0x4B73E0`, `0x416293..0x4162A0`) whose record is active (first dword ≠ 0) with `+0x73` 1–3 and `+0x146` ≠ 10; type 1 becomes 2 (`0x4162F4`), types 2 and 3 become 1 (`0x4162FE`). It touches no unit, mover or AI object. DIS |
-| `0x48AD30` | the unit tick, over each record's block `[+0x67, +0x6B]` | Ticks only active records with `+0x73` 1–3 and `+0x146` ≠ 10 (`0x48AD6C..0x48AD9C`): a type-4 record's units are never ticked. Every ticked unit runs `0x437910` (`0x48ADC4`), `DoScriptsNow(1)` when `+0x9A` is set (`0x48ADDF..0x48ADEB`), its countdowns `+0xFA`/`+0xFB` and 30-tick health percentage `+0xF6`/`+0xF7`, and the pending-death reaper (`+0x110` bit 14 → `0x4864B0(unit, +0xF5)`, `0x48AFB9..0x48AFD1`). `AutoAim 0x49E1A0` needs the block owner's record (`edi`, `0x48AD73`) active and of type 1 or 2 (`0x48ADC9..0x48ADDA`). Only a unit whose owner `+0x96` is of type 1 or 2 (`0x48AEB5..0x48AECD`) runs the kind-`0xB` hit every 30 ticks at or below the sea level `main+0x1427F` for a def without `+0x241` bit 12 (`0x48AED3..0x48AF32`) [INFERRED: water damage], `0x41BD10` every 8 ticks while HP is below def `+0x1FA` and def `+0x200` is set (`0x48AF37..0x48AF92`) [INFERRED: regeneration], `0x43B7C0`, `0x43BAD0` and the movement pass `0x43DD20` + `0x48A870` (`0x48AFA3..0x48AFB0`). After the block's units, the `0x2C` sender `0x48B710` runs for an active type-1/2 record in a network game (`0x48AFE4..0x48B003`). DIS |
+| `0x48AD30` | the unit tick, over each record's block `[+0x67, +0x6B]` | Ticks only active records with `+0x73` 1–3 and `+0x146` ≠ 10 (`0x48AD6C..0x48AD9C`): a type-4 record's units are never ticked. Every ticked unit runs `0x437910` (`0x48ADC4`), `DoScriptsNow(1)` when `+0x9A` is set (`0x48ADDF..0x48ADEB`), its countdowns `+0xFA`/`+0xFB` and 30-tick health percentage `+0xF6`/`+0xF7`, and the pending-death reaper (`+0x110` bit 14 → `0x4864B0(unit, +0xF5)`, `0x48AFB9..0x48AFD1`). `AutoAim 0x49E1A0` needs the block owner's record (`edi`, `0x48AD73`) active and of type 1 or 2 (`0x48ADC9..0x48ADDA`). Only a unit whose owner `+0x96` is of type 1 or 2 (`0x48AEB5..0x48AECD`) runs the kind-`0xB` hit every 30 ticks at or below the sea level `main+0x1427F` for a def without `+0x241` bit 12 (`0x48AED3..0x48AF32`) [INFERRED: water damage], `0x41BD10` every 8 ticks while HP is below def `+0x1FA` and def `+0x200` is set (`0x48AF37..0x48AF92`) [INFERRED: regeneration], `0x43B7C0`, `0x43BAD0` and the movement pass `0x43DD20` + `0x48A870` (`0x48AFA3..0x48AFB0`). After the block's units, the `0x2C` sender `0x48B710` runs for an active type-1/2 record in a network game (`0x48AFE4..0x48B003`). **The slot loop** reads the block's last slot once (`0x48ADA2`) and tests each slot's type index `+0xA6` only when it reaches it (`0x48ADB0..0x48ADB8`; the step `0x48AFD6..0x48AFDE`), so a unit created during an earlier turn of the same tick, in a later slot of a block not yet finished, gets its turn and its script slice in that same tick. **A unit's turn and its COB**: `DoScriptsNow(1)` (`push 1` at `0x48ADE9`, the call at `0x48ADEB`) is the only call of `0x4B0D60` in `.text` and the only `dt` a sleep counts down by (*The eight records*, below), and it runs before the unit's orders and movement pass. A run-later start made in those, StartBuilding at `0x4385C7` (in `0x438590`, called from the build orders) or StopBuilding at `0x43A251` (in the order destructor `0x43A1F0`), both `0x4B0B00` with run-now 0, takes its first slice at the unit's next turn, unless the same turn's walk class makes a run-now start (`0x43DAF2`/`0x43DB27`), whose pass (`0x4B0940`'s run-now branch `0x4B09C4..0x4B09E8`: the runner `0x4B0DA0` over records 0-7, then the stepper `0x4B1C00`, both with `dt = 0`) runs every record with `dt = 0`. The movement pass's one call of the walk class `0x43DA70` (`0x43DD5D`, the only call in `.text`) starts StopMoving or StartMoving (`push 1` at `0x43DAD5`/`0x43DAE3`, the call at `0x43DAF2`) and then MoveRate1..3 (`push 1` at `0x43DB02`/`0x43DB0D`/`0x43DB18`, the call at `0x43DB27`) through `0x4B0940` with run-now 1, which runs every record with `dt = 0` inside the start. So a level-start unit the loader makes before the first tick has had one slice by that tick's end, which is why a playing makes the level's units at the first iteration's capture point, before this call (*COB on a puppet*, below). DIS |
 | `0x464F80` | the players phase, once a tick (`0x49555F`) and once from the loader body `0x497180` on the loader thread (`0x497C10`) | The unit tick's record gate (`0x464FCE..0x465024`). Every tick, per record: `0x408C40` on `+0x74` when set (`0x46502A..0x465031`), `0x40B2C0(i)`, i the record's slot (the loop index, pushed at `0x465036`), and the sight emit `0x4827B0` for each alive unit (`0x465046..0x465063`); for the viewed player `main+0x2A43`, the minimap rebuild `0x466DC0` (`0x465065..0x465072`). On the record's 30-tick pass (`0x46507D..0x465092`) the viewed player's record also runs the radar pass `0x467440` (its one call, `0x46556D`) and `0x466C20` (`0x465572`), and in a network game every fourth such pass (counter `0x51E53C`) sends its `0x28` through `0x4573D0(rec, 0, 0)` (`0x4655A1`). The economy pass and the network defeat: *The Deathmatch respawn*, below. DIS |
 | `0x408C40` | the tick of the `+0x74` AI object (`0x3D` bytes; its constructor `0x408CB0` stores the record at `obj+0`, `0x408CBB`, and its `+0x146` at `obj+4`) | Plans only when that record is active with `+0x73` = 2 (`0x408C45..0x408C50`): `0x408830` every 30 calls (countdown `obj+5`), the ten slots at `obj+0x11` when due, then `0x4089A0(1)`; any other type runs only `0x4089A0(0)` (`0x408CA7`). A seat flipped 2 → 3 keeps its object, dormant, and a flip back to 2 revives it. DIS |
 | `0x40B320` / `0x40B2C0` / `0x40B390` | the second per-seat object, in the array `0x5119C0` | `0x40B320(idx)` allocates `0x10D` bytes, constructs them with `0x409160` and stores the pointer at `0x5119C0[idx]` (`0x40B340`); `0x40B390(idx)` frees it. `0x40B2C0(idx)` returns when `0x5119C0[idx]` is NULL (`0x40B2CC`); otherwise, once 30 ticks have passed since the GameTime it keeps at `obj+0xED` (`0x40B2D6..0x40B2E5`), it runs the acquisition `0x40AA40`, draws the sim RNG `0x4B6C30(0x1E)` (`0x40B301`) and calls `0x409730` when the draw is 0 (`0x40B30C`): a seat with this object draws the shared sim RNG once per 30 ticks. The player init `0x464700` builds it beside `+0x74` for every seat but an active type 3, and the teardown's `0x464A00` frees both (*The LOS counters and MAPPED both end in the teardown, the counters first*, below). The init and the teardown index `0x5119C0` by `+0x146` (`0x4648C6..0x4648CD`, `0x464A48..0x464A4F`) and the players phase by the slot (`0x465036`): the same object while `+0x146` equals the slot [INFERRED that it does for every ticked record: its writers store the slot or 10, *Which bytes are read back and which are not*, below]. **`+0xED` starts at 0**: the constructor `0x409160` zeroes `ebx` (`0x40918B`) and stores it there (`0x4092DC`), and the only other stores are the two scan paths' GameTime after their scan (`0x40AD51`, `0x40B2FB`), so a record made at GameTime 30 or later scans at its first players phase; the demo recorder's takeover relies on it (*The radar pass `0x467440` and the minimap's fog composite*, below). `0x40AD20` is a second copy of the gated scan (`0x40AD29..0x40AD3E`, the same 30-tick test, then `0x40AA40` and the RNG draw) with no direct call and no pointer to it anywhere in the file. DISASSEMBLED 2026-10-11 for `+0xED` and `0x40AD20`. DIS |
@@ -1453,6 +1453,35 @@ AutoAim and the local block (orders, movement, regeneration) run only for types 
   `(seed ^ 0x66E29572) | 1` at `0x4B6CAB`); `0x51FC88`'s only stores are `0x4B6C87` and
   `0x4B6CAB`. A type-3 seat has no `0x5119C0` object (the player init skips it,
   `0x46489D..0x4648A5`), so a puppet also draws less often than the live game did.
+- **A playing's level-start units keep the recording machine's COB clock.** The recording machine's
+  loader made them before its first unit tick, which gave each one slice (`0x48ADEB`). A playing
+  skips the loader's seat setup and makes them at the first iteration's capture point, the first
+  call of B2's stub, before the stub calls `0x48AD30` (`tagpu_replay.c`, THE FIRST STEP'S UNITS),
+  so the host's first unit tick gives each the same slice at the same GameTime. The capture
+  point's write of the recorded globals follows the creates there, so that slice's COB RAND
+  (`0x4B15C9..0x4B15EE` → `0x4B6C30`) draws from the recording's `0x51FC88`, not from the seed
+  the host's loader took from `QueryPerformanceCounter` (`0x49719D`). Made after the
+  unit tick, every COB thread of a level-start unit would run one tick behind for the whole level,
+  and a walker's `MotionControl`, a loop that never ends, would sample its moving and aiming inputs
+  a tick late and choose `walk`, `walklegs` or `stand` differently from the first input change
+  inside the lag on. MEASURED 2026-10-12 with `tools/tacob`'s VM fed each
+  tenseat commander's recorded inputs: made after the unit tick it gives walk/walklegs/stand
+  103/3/394 over [481, 1411) and 109/0/445 over [301, 1291), the puppets' measured counts; made
+  before it, 102/6/393 and 108/3/442, the live machines' measured counts, call for call.
+  Residuals of the same class, open:
+  - **A unit created during play** in a later slot of a block not yet finished (a factory's
+    product, a builder's nanoframe) gets its slice in the creating tick on the recording machine
+    (the slot loop's re-read, the unit tick's row above); the playing makes it at the replay step,
+    after the unit tick, so its COB runs one tick behind for its life [INFERRED; tenseat builds
+    only structures, so nothing measured shows it].
+  - **AutoAim's starts (A5)** run before the unit's slice on the recording machine and after the
+    host's unit tick on a puppet: the same one-slice lag, for one start. By the mechanism above it
+    can re-phase a looping script for the rest of the unit's life [INFERRED: tenseat had no aiming].
+  - **The walk class's run-now pass against starts made after the unit tick.** The AI changes
+    orders in the players phase, after the unit tick; a StopBuilding made there goes in with step
+    T's events, before image T+1's walk class, whose run-now start then runs every record with
+    `dt = 0`, that start's first slice included, a tick before the recording machine ran it. Not
+    seen in the three games simulated: their live sequences matched exactly.
 
 
 ### Seating a level: the SKIRMISH Start, the seat fill, the start commanders and the two end tests [DISASSEMBLED + MEASURED 2026-09-29]
@@ -2496,7 +2525,12 @@ it. Everything here runs on the game thread.
 (the stub's whole order is in [*tick boundaries*](#the-demo-recorders-tick-boundaries-the-sim-step-0x495490-and-its-callers-disassembled-2026-10-01)):
 the events of step T in recorded order, then the image of T+1
 ([the events note](tadr-port/demo-recorder-s2-events.md) §1.0). The rest of the iteration then runs
-on the recording's world.
+on the recording's world. The level's first step starts earlier, at the first iteration's capture
+point (the stub's first call, `tagpu_replay_capture`): the checks, the level's own units, image T,
+the wind's seed and V's sight go in there, and then the capture point's write every later capture
+point makes (`recorded_put`), before the unit tick, so the units get the slice the recording
+machine's first unit tick gave them, drawing COB RAND from the recording's simulation RNG
+`0x51FC88` (*COB on a puppet*).
 
 **Player `+0xF0`, the players phase's 30-tick deadline.** `0x464700` sets it, `+0xF4` and `+0xF8`
 to GameTime at the level load (`0x464715`, `0x464727`, `0x464765`), for each record with a nonzero
@@ -3992,7 +4026,9 @@ between two steps; this is the step those boundaries sit in. Read from `pristine
   call 0x48AD30; pushfd; pushad; call tagpu_replay_step; popad; popfd; ret`. The unit tick takes no
   argument and returns with a plain `ret` (`0x48B080`), so the stub's call is the site's own call.
   `tagpu_replay_capture` is the **capture point**'s write on a puppet host (the globals, the pool,
-  the explored map and the declared tables, through `recorded_put`), `tagpu_rec_capture` the
+  the explored map and the declared tables, through `recorded_put`), preceded at the level's
+  first iteration by the first step's units (the checks, the level's own units, image T, the
+  wind's seed), `tagpu_rec_capture` the
   recorder's capture (and the armed dumps), `air_rebuild` the airborne pool, and `tagpu_replay_step`
   the replay's step, which writes the next iteration's images after the unit tick — all but the
   features, which wait for the step's late phase (next bullet).

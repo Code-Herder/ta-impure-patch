@@ -151,6 +151,13 @@
    "forks": true,
    "takeover": {"player": "controlled", "at": 901, "checks": ["judge", "line", "fork"]}
   },
+  "randprobe": {
+   "load": "replay-tenseat-load.json",
+   "content": {"run": ["tools/randprobe_fixture.py", "{gamedir}"],
+               "files": ["scripts/armcom.cob", "scripts/corcom.cob"]},
+   "sources": ["tools/randprobe_fixture.py"],
+   "end": 1500
+  },
   "resource-mex": {
    "load": "resource-snapping.json",
    "sources": [

@@ -66,7 +66,8 @@ unsigned tagpu_replay_build_key(void);
 /* B2's stub at the sim step's unit-tick call (0x4954ED) calls this first, before the recorder's
    capture and the unit tick, on the game thread: on a level that plays a recording, the
    recording's globals and projectile pool at the capture point (tagpu_replay.c, THE GLOBALS AND
-   THE PROJECTILES). */
+   THE PROJECTILES). At the level's first iteration it first makes the level's own units and
+   writes image T (THE FIRST STEP'S UNITS), and then makes that write. */
 void __cdecl tagpu_replay_capture(void);
 
 /* B2's stub at the sim step's unit-tick call (0x4954ED), after the unit tick returns and before

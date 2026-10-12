@@ -806,9 +806,11 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
   - **The start units' calls `0x497963` and `0x497ACD`**, skipped.
   - **The level init's call `0x4919C8`**, retargeted: after `0x464990`, record 10's buffers through
     `0x464700`, on the loader thread ([the ten-seat note](demo-recorder-ten-seats.md) §4.2).
-  - **The first step**, at B2's stub `0x4954ED`: the level's counts, map, unit and weapon data and
-    first GameTime against the header; then the start units through the create, the first image,
-    the wind's seed and V's sight.
+  - **The first step**, at B2's stub `0x4954ED`, at its capture point before the unit tick: the
+    level's counts, map, unit and weapon data and first GameTime against the header; then the
+    start units through the create, the first image, the wind's seed and V's sight. Made there,
+    the start units get the script slice the recording machine's first unit tick gave them
+    (`tagpu_replay.c`, THE FIRST STEP'S UNITS).
 - **The viewer's seat** V is player record 10, the engine's no-player record, which no recording
   carries ([the ten-seat note](demo-recorder-ten-seats.md)): type 3, with the watcher bit and an
   empty block, holding `+0x2A42` for the whole level. The record and its PlayerInfo go back as the
@@ -2039,11 +2041,35 @@ ten minutes or less.
 - **S3c-3**: `SIM_FEATURE` regions and their fixtures, the coverage build, `tareplay.py landing`
   and `broad`, the `replay-roundtrip:` note, CLAUDE.md's replay gate and Step 4b. Until then nothing
   runs the harness at a landing.
-- **The COB one-tick lag (A5), accepted.** The live game's AutoAim starts AimPrimary inside the
+- **The COB one-tick lag (A5), open.** The live game's AutoAim starts AimPrimary inside the
   unit's turn and that turn's script slice runs it at T; the playing applies the recorded start at
   the replay step, after the whole unit tick, so its first slice runs at T+1, and the scripts it
-  starts (RestoreAfterDelay, walk, `EMIT_SFX`) a tick later. Counts near a window's ends move by a
-  few; the sinks' band and `EMIT_SFX`'s rows absorb it.
+  starts (RestoreAfterDelay, walk, `EMIT_SFX`) a tick later. Its 2026-10-01 acceptance rested on
+  "counts near a window's ends move by a few", which does not hold: the level-start lag below
+  shows that a one-tick slice lag can re-phase a looping script for the rest of a unit's life, and
+  A5 is the same lag for one start [INFERRED: tenseat had no aiming]. The owner decided on
+  2026-10-12 to fix it by construction, with the in-game create lag below, in a coming landing: a
+  recorded slice marker, a format bump. Not yet landed.
+- **The level-start lag, fixed.** The playing made the level's own units after the host's first
+  unit tick, so every COB thread of a level-start unit ran one tick behind for the whole level:
+  tenseat's commanders' `MotionControl` chose walk/walklegs/stand 103/3/394 on the puppet against
+  102/6/393 live over [481, 1411), and 109/0/445 against 108/3/442 over [301, 1291) (MEASURED
+  2026-10-12, and reproduced call for call by `tools/tacob`'s VM fed the recorded inputs). The
+  sinks' band hid it whenever the key was small enough. The playing now makes them at the first
+  iteration's capture point, before the unit tick, and makes that capture point's write of the
+  recorded globals after them, so their first slice also draws from the recording's simulation
+  RNG (`tagpu_replay.c`, THE FIRST STEP'S UNITS). The `randprobe` fixture shows the RNG half: its
+  commanders' scripts (`tools/randprobe_fixture.py`, loose `scripts/*.cob` in the instance's game
+  folder, since a `.ufo` does not override a stock path) draw twice in their first slice and from
+  then on call one of four scripts at a period both draws chose. MEASURED 2026-10-12 over
+  [361, 1111): without the write, RandTick0..3 counted 133/258/163/0 live against 107/57/114/253
+  on the puppet and the counts check failed; with it, every START and CALL key is exactly equal.
+- **The in-game create lag, open.** A unit created during the unit tick in a later slot of a block
+  not yet finished (a factory's product, a builder's nanoframe) gets its slice in that tick on the
+  recording machine; the playing makes it after the tick, so its COB runs one tick behind for its
+  life [INFERRED from the slot loop's per-slot re-read; tenseat builds only structures]. The owner
+  chose on 2026-10-12 to fix it by construction with A5 in a coming landing: the slice recorded in
+  order among the step's creates and starts, a format bump. Not yet landed.
 - **The walk class after an unload (A6), accepted.** The live game evaluates `0x43DA70` in a
   cargo's mover tick before its transport's later turn drops it; the playing's image-time walk
   sees the carrier already cleared and makes a StartMoving and a StopMoving the live game did not
@@ -2060,7 +2086,11 @@ ten minutes or less.
   the replay step, before the host's projectile tick, and a death's own feature roots go with it,
   so a tree such a death fells is gone before the host's projectiles meet it: the lost impacts'
   class, not seen in the fixtures. A death must go in before the next image's units, which go in at
-  the replay step; giving every event its phase is a format change.
+  the replay step; giving every event its phase is a format change. Its COB side: a StopBuilding
+  the AI makes in the players phase goes in with step T's events, before image T+1's walk class,
+  whose run-now start runs every record with `dt = 0` and so gives that start its first slice a
+  tick before the recording machine did, where the walk class ran first (not seen in the three
+  tenseat games simulated on 2026-10-12).
 - **Within one phase the recording's roots go in after the host's whole call**, so a projectile
   later in the same projectile tick still meets a tree an earlier impact felled on the recording
   machine [INFERRED: battle-los's 510 against 511, inside the band].
