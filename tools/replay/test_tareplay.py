@@ -1337,6 +1337,20 @@ class LossySprays(unittest.TestCase):
         with self.assertRaisesRegex(tarec.Unreadable, "a spray session outside a stream"):
             tarec.stream_to(h, bl)
 
+    AFTER = {**LOSSY, 4: A + session(2, 1) + spray(3, 1, 2, 3)}       # a record after the sessions
+    UNORDERED = {**LOSSY, 4: A + session(3, 0) + session(2, 1)}       # sessions out of slot order
+
+    def test_a_record_after_the_sessions_is_unreadable(self):
+        h, bl, _ = tarec.load(self.file(self.EXACT, self.AFTER))
+        with self.assertRaisesRegex(tarec.Unreadable, "record kind 28 after the iteration's spray "
+                                                      "sessions"):
+            tarec.stream_to(h, bl)
+
+    def test_sessions_out_of_slot_order_are_unreadable(self):
+        h, bl, _ = tarec.load(self.file(self.EXACT, self.UNORDERED))
+        with self.assertRaisesRegex(tarec.Unreadable, "the spray session of unit 2 after unit 3's"):
+            tarec.stream_to(h, bl)
+
     def test_a_malformed_session_is_unreadable(self):
         for mode in (3, tarec.REC_SPRAY_FOLLOW, 0x11):
             with self.subTest(mode=mode):

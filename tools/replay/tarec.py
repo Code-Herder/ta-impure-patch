@@ -707,6 +707,7 @@ class World:
         self.fbracket = 0               # an RK_EV_FEATURE's root + 1, until its end
         self.deaths = []                # the IDs of the deaths whose end is still to come
         self.evented = False            # an event has come since the iteration's RK_TICK
+        self.session = None             # the unit ID of the iteration's last RK_SPRAY_SESSION
         self.units = {}                                  # slot -> bytearray image, live only
         self.lists = {}                                  # (slot, list) -> bytearray, not empty
         self.players = [bytearray(REC_PLAYER_IMAGE) for _ in range(REC_PLAYERS)]
@@ -844,7 +845,8 @@ class World:
         copy and so every snapshot follow (tagpu_recwriter.c, feature_record). An order list's
         records come together and in order, as the DLL's reader has them (tagpu_recreader.c,
         list_record)."""
-        if kind == RK_UNIT_DELTA and self.pend is None and not self.fbracket and not self.deaths:
+        if kind == RK_UNIT_DELTA and self.pend is None and not self.fbracket and not self.deaths \
+                and self.session is None:
             # the stream's most common record: with no order list, feature call or death open,
             # nothing below refuses it
             self._delta(self.units[_U16(b)[0]], b[2:2 + REC_UNIT_BITS], REC_UNIT_DWORDS,
@@ -852,6 +854,8 @@ class World:
             return None
         if self.pend is not None and kind != RK_ORDERS:
             raise Unreadable(f"slot {self.pend[0]}'s order list cut short by another record")
+        if self.session is not None and kind not in (RK_SPRAY_SESSION, RK_TICK):
+            raise Unreadable(f"record kind {kind} after the iteration's spray sessions")
         if kind in EVENTS:              # RCS_EVENTS's kinds (tagpu_recfmt.h, rec_section_of)
             self.evented = True
         if kind == RK_EV_NET_CREATE:
@@ -888,11 +892,17 @@ class World:
             self.clicks = []
             self.evented = False
             self.ended = False
+            self.session = None
         elif kind == RK_SPRAY_SESSION:
+            # after the iteration's last other record, slots ascending (tagpu_recfmt.h)
             if self.snap or not self.sprays_on():
                 raise Unreadable("a spray session outside a stream that writes its sprays as "
                                  "sessions")
+            unit = struct.unpack_from("<I", b)[0] if len(b) >= 4 else 0
+            if self.session is not None and unit <= self.session:
+                raise Unreadable(f"the spray session of unit {unit} after unit {self.session}'s")
             self.sprays.session(b)
+            self.session = unit
         elif kind == RK_UNIT:
             self.units[struct.unpack_from("<H", b)[0]] = bytearray(b[4:4 + REC_UNIT_IMAGE])
         elif kind == RK_UNIT_DELTA:
@@ -1734,7 +1744,7 @@ def cmd_info(path):
             if rk in EVENTS or rk in (RK_ORDERS, RK_CONTROLLER, RK_VIEWER, RK_CELLS, RK_WRECK,
                                       RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ,
                                       RK_PROJ_DELTA, RK_MAPPED, RK_MAPPED_RUNS, RK_POV, RK_CLICK,
-                                      RK_SELECT):
+                                      RK_SELECT, RK_SPRAY_SESSION):
                 ev[rk] = ev.get(rk, 0) + 1
                 evb[rk] = evb.get(rk, 0) + 4 + ((len(b) + 3) & ~3)
     names = {**EVENTS, RK_ORDERS: "order list", RK_CONTROLLER: "controller", RK_VIEWER: "viewer",
@@ -1742,7 +1752,9 @@ def cmd_info(path):
              RK_GLOBALS_DELTA: "globals delta", RK_PROJ_HEAD: "projectile head",
              RK_PROJ: "projectile record", RK_PROJ_DELTA: "projectile delta",
              RK_MAPPED: "explored map record", RK_MAPPED_RUNS: "explored map runs",
-             RK_POV: "camera and cursor sample", RK_CLICK: "click", RK_SELECT: "selection"}
+             RK_POV: "camera and cursor sample", RK_CLICK: "click", RK_SELECT: "selection",
+             # the stream's own: the sprays its sessions imply are made by the readers, not counted
+             RK_EV_SPRAY: "nano spray written", RK_SPRAY_SESSION: "spray session"}
     print("  records: " + (", ".join(f"{ev[k]} {names[k]} ({evb[k] >> 10} KB)" for k in sorted(ev))
                            or "no order lists, seats or events"))
     ends = [b for b in bl if b[0] == RB_END]

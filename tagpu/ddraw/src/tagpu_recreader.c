@@ -98,6 +98,7 @@ struct RecReader {
     int                snap;        /* the records applied are a snapshot's (snapshot_apply)   */
     unsigned           fbracket;    /* an RK_EV_FEATURE's root + 1, until its END             */
     unsigned           ndeaths;     /* the deaths whose RK_EV_DEATH_END is still to come      */
+    uint32_t           session_id;  /* the unit ID of the iteration's last RK_SPRAY_SESSION   */
     unsigned           death[REC_DEATHS_MAX];
     struct { unsigned slot, list, total, next; } pend;   /* a list sent in several records   */
     unsigned long long first_off;   /* the file offset of the first block after the header    */
@@ -1020,6 +1021,9 @@ static int pov_record(RecReader* r, unsigned kind, const unsigned char* b, unsig
     }
 }
 
+/* tick_read's `events` once the iteration's spray sessions have begun: they end it */
+#define IT_SESSIONS 2
+
 /* One record of an iteration after its tick. 1 applied, 0 malformed. */
 static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned len, int* events)
 {
@@ -1028,6 +1032,7 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
     unsigned n = 0, off = 0;
     RecTable* t;
     if (r->pend.next < r->pend.total && kind != RK_ORDERS) return 0;
+    if (*events == IT_SESSIONS && kind != RK_SPRAY_SESSION) return 0;
     if (len >= 2) memcpy(&id, b, 2);
     /* a click follows the step's events, and may follow the images directly */
     if (kind == RK_CLICK) return pov_record(r, kind, b, len);
@@ -1037,10 +1042,19 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
         *events = 1;
         return 1;
     }
-    /* a spray session follows the iteration's events, outside every bracket; a stream's only */
-    if (kind == RK_SPRAY_SESSION)
-        return sprays_on(seg_header(r)) && !r->snap && !r->fbracket && !r->ndeaths &&
-               recsprays_session(w->sprays, b, len);
+    /* the spray sessions follow the iteration's last other record, outside every bracket, slots
+       ascending (tagpu_recfmt.h, RK_SPRAY_SESSION); a stream's only */
+    if (kind == RK_SPRAY_SESSION) {
+        uint32_t unit;
+        if (!sprays_on(seg_header(r)) || r->snap || r->fbracket || r->ndeaths || len < 4) return 0;
+        memcpy(&unit, b, 4);
+        if ((*events == IT_SESSIONS && unit <= r->session_id) ||
+            !recsprays_session(w->sprays, b, len))
+            return 0;
+        r->session_id = unit;
+        *events = IT_SESSIONS;
+        return 1;
+    }
     /* the images come before the events of the step after them (tagpu_recfmt.h, RK_TICK) */
     if (*events) return 0;
     switch (kind) {
