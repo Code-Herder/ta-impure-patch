@@ -24,8 +24,10 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
                              evaluating every candidate -- and the C sine table against its formula
     fuzz IN SEED N [CASES] [--section NAME]
                              N mutated sectioned blocks decoded by C from the state each starts
-                             from; with --section, only section NAME's mutations (kinds, units,
-                             proj, cells, orders, events, other, state)
+                             from; each block itself decoded from the same copy must give the
+                             reading's records (exit 1 naming the block when not); with
+                             --section, only section NAME's mutations (kinds, units, proj, cells,
+                             orders, events, other, state)
     fuzzdiff IN CASES        those cases decoded by the Python reader: the same accept or refuse
                              and the same records for every case C accepted
     sizes IN...              each recording's sectioned blocks' bytes by section: raw, each section

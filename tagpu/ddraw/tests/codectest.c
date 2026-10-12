@@ -43,7 +43,8 @@
                                     columns, the record frames' column tables and columns,
                                     RCS_OTHER's bodies, the header's codec entries, truncations),
                                     each decoded from a copy of the state the block starts from;
-                                    with CASES, every case and its result for codectest.py's
+                                    each block itself, decoded from the same copy, must give the
+                                    reading's records (exit 1 naming the block when not); with CASES, every case and its result for codectest.py's
                                     differential; with --section, only the mutations of section
                                     NAME (kinds, units, proj, cells, orders, events, other,
                                     state)
@@ -2873,7 +2874,10 @@ static uint64_t rnd(void)
 }
 static size_t rndn(size_t n) { return n ? (size_t)(rnd() % n) : 0; }
 
-/* a copy of a decoder's state: what the frames read and write */
+/* A copy of a decoder's state: every field reccodec_decode carries from one block to the next
+   (the units' copy and history, the ledger's steps and settles, the pool, the record frames).
+   Every case reuses one decoder, so a field missed here starts a case from the previous case's
+   leftovers; cmd_fuzz's control names the first block where that shows. */
 static void codec_copy(RecCodec* d, const RecCodec* s)
 {
     size_t n = s->nslots;
@@ -2897,6 +2901,9 @@ static void codec_copy(RecCodec* d, const RecCodec* s)
     memcpy(d->rest, s->rest, n);
     memcpy(d->live, s->live, n);
     memcpy(d->touched, s->touched, n);
+    memcpy(d->lstep, s->lstep, n * 2 * sizeof *d->lstep);
+    memcpy(d->lsettle, s->lsettle, sizeof d->lsettle);
+    memcpy(d->lsettled, s->lsettled, sizeof d->lsettled);
     n = s->nproj;
     d->pcount = s->pcount;
     d->phw = s->phw;
@@ -3207,7 +3214,7 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
     Case c;
     FILE* cf = NULL;
     unsigned nsect = 0, done = 0, accepted = 0, k2;
-    int k;
+    int k, control = -1;
     memset(&out, 0, sizeof out);
     memset(&c, 0, sizeof c);
     rng_state = seed * UINT64_C(0x9E3779B97F4A7C15) + 1;
@@ -3264,6 +3271,17 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
                 }
                 done++;
             }
+            /* The control: the block itself, unmutated, decoded from the copy after the cases
+               have left their own state in d. It must give the records the reading's decoder gives
+               below; otherwise codec_copy misses state the decoder keeps between blocks, and every
+               case above started from a state no reader holds. */
+            if (want) {
+                c.type = 0;
+                c.flags = b->flags;
+                c.body.n = 0;
+                rb_put(&c.body, g.r.bytes, b->raw);
+                control = case_run(&c, d, g.dec, &g.p, &g.w, g.r.bytes, b->raw, &out);
+            }
             k2++;
         }
         /* then the block itself, as a reading takes it */
@@ -3274,6 +3292,14 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
             k = -1;
             break;
         }
+        if (control >= 0 && (!control || out.n != g.pay.n || memcmp(out.p, g.pay.p, out.n))) {
+            fprintf(stderr, "codectest: %s: block %u from the fuzz's copy of the decoder %s: codec_copy "
+                    "misses state the decoder keeps between blocks\n", in, g.r.ordinal,
+                    control ? "gives other records than the reading's" : "is refused, the reading's is not");
+            k = -2;
+            break;
+        }
+        control = -1;
     }
     if (cf) fclose(cf);
     printf("fuzz: %u cases over %u sectioned blocks%s%s, %u accepted, %u refused\n", done, nsect,
@@ -3282,7 +3308,7 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
     rb_free(&out);
     rb_free(&c.body);
     reading_close(&g);
-    return k < 0 ? 2 : 0;
+    return k == -2 ? 1 : k < 0 ? 2 : 0;
 }
 
 int main(int argc, char** argv)

@@ -1157,7 +1157,10 @@ alone: masks 25 %, listed slots 17 %, turn 7 %, vx 5.6 %, vz 4.6 %, speed 4.1 %.
 **Verified.** `reccodec_f32_add` against SSE on 398 million pairs (near exponents, cancellation,
 denormals), none differing, a known-answer table in `codectest outcomes`, and `LedgerSum` against
 numpy in `test_tareplay.py`; `outcomes` under Wine and natively with two building units, one of them
-refused from tick 40.
+refused from tick 40. The fuzz differential (`codectest fuzz` and `codectest.py fuzzdiff`) checks the
+rule only on a recording that carries ledger state: the lossy hour carries none, so a differential
+on it does not exercise the ledger rule; on fresh format-13 recordings that do (stock-limits and
+tenseat, 2026-10-12) C and Python agree on 20,000 of 20,000 mutations each.
 
 ## L5: the lossy plan, measured offline
 
