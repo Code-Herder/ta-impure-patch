@@ -997,6 +997,26 @@ phase the recording's feature roots go in after the host's whole projectile call
 projectile can still meet a tree an earlier impact felled on the recording machine
 ([skirmish slice](demo-recorder-skirmish-slice.html)).
 
+**COB slices a playing gives one tick late** (open). The unit tick's `DoScriptsNow(1)` at
+`0x48ADEB` is the only clock a COB thread has, so a unit whose slice falls on the other side of
+the unit tick on a puppet runs its scripts one tick off, and a looping script such as a walker's
+`MotionControl` stays re-phased for the rest of the unit's life. The level's own units are made
+before the host's first unit tick, which closes the level-start case (the
+[engine map](../exe-reverse-engineering.md), *COB on a puppet*: tenseat's walk/walklegs/stand
+counts reproduced call for call, MEASURED 2026-10-12). Open, of the same class:
+
+- **A unit created during play** in a later slot of a block the unit tick has not finished gets
+  its slice in that tick on the recording machine and not on a puppet [INFERRED].
+- **A5's rationale does not hold as stated.** Decision 2026-10-01 accepts the AutoAim start's lag
+  because "counts near a window's ends move by a few"; by the mechanism measured here one late
+  start can flip one `MotionControl` decision and re-phase the loop for the rest of the unit's
+  life [INFERRED: tenseat had no aiming]. Keeping A5 with that rationale corrected, or fixing it
+  by construction (a recorded slice marker and a puppet-only deferral of the unit tick's script
+  call: a format change), is the owner's decision.
+- **The walk class's run-now pass** can run a start the AI made after the unit tick a tick early,
+  the COB side of *Events outside a deferred bracket carry no phase*
+  ([skirmish slice](demo-recorder-skirmish-slice.md)).
+
 Gaps stated, not closed: in a multiplayer recording, getter 75 per seat reproduces the recording
 machine's view, so other players' owner-only indicators, which that machine never showed, are
 absent. And a takeover's fresh COB resets what a mod keeps in COB statics and piece visibility
