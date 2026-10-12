@@ -51,10 +51,10 @@ void tagpu_puppet_end(void);
    logged, inside a footprint writer. 1, or 0 when the contest's rule could not follow it, and
    then nothing changed. */
 int tagpu_puppet_engine_cells(int engine_cells, int mp_state);
-/* 1 when the six contest sites held the stock bytes at attach and hold now what this module
-   left there (the stock bytes, or its NOPs): then contest_write changes them unless the page
-   write itself fails. A level that would need the recording machine's rule (THE CONTEST'S RULE)
-   plays, and a rewind of such a recording opens, only then */
+/* 1 when the six contest sites held the stock bytes at attach and each holds now the stock bytes
+   or this module's NOPs: then the recording machine's rule goes in unless a page write fails. A
+   level that would need that rule (THE CONTEST'S RULE) plays, and a rewind of such a recording
+   opens, only then */
 int tagpu_puppet_contest_in(void);
 
 /* THE GATES (tagpu_puppet.c): the engine functions that would write what a recording carries on
@@ -90,11 +90,13 @@ void tagpu_puppet_refusals(char* out, size_t cap);
    open and returns what it was, which the caller puts back: a death's explosion plays its roots
    inside the death. Before the first step they are open: the loader places the map's features
    through the spawn. tagpu_puppet_play also writes THE CONTEST'S RULE the level needs, the
-   recording machine's or the engine's own: 1, or 0 when its sites hold other bytes or could not
-   be written -- nothing is written or marked then, and the playing must stop. */
+   recording machine's or the engine's own: 1, or 0 when a site holds another's bytes where the
+   recording machine's rule must go, or a page write failed -- the call's own writes are undone
+   where they can be, and the playing must stop. */
 int tagpu_puppet_play(void);
-/* 1 while the contest sites hold this module's NOPs: in a playing that needs them, or after a
-   restore that failed. A network game does not start then (tagpu_rec_capture). */
+/* 1 while a contest site holds anything but its retail `je`, read from the site: this module's
+   NOPs, in a playing that needs them or after a restore that failed, or another's bytes. A
+   network game does not start then (tagpu_rec_capture). */
 int tagpu_puppet_contest_kept(void);
 int tagpu_puppet_features(int open);
 

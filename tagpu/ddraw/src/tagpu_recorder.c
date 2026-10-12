@@ -7049,11 +7049,13 @@ void __cdecl tagpu_rec_capture(void)
     masks_init();
     tick = *(int*)(ta + OFF_GAMETIME);
     mode = game_mode(ta);
-    /* the NOPs a failed restore left at the contest sites hand a contested cell to the incumbent
-       where the engine hands it to a type-3 seat's unit, so every peer would stamp otherwise */
+    /* a contest site that is not its retail `je` -- the NOPs a failed restore left, or another's
+       bytes -- can hand a contested cell to the incumbent where the engine hands it to a type-3
+       seat's unit, so this peer would stamp otherwise than the others */
     if (mode == MODE_NETWORK && tagpu_puppet_contest_kept())
-        tagpu_refuse("This network game cannot start: a replay played earlier in this session "
-                     "could not put the game's own footprint rule back. Restart the game.");
+        tagpu_refuse("This network game cannot start: the game's own rule for units sharing a "
+                     "cell is not in place (a replay played earlier in this session could not "
+                     "put it back). Restart the game.");
     if (mode == MODE_NETWORK && ((unsigned char)ta[OFF_NETWORK] & 1)) mp_capture(&L, (unsigned)tick);
     ai_finish((unsigned)tick);
 

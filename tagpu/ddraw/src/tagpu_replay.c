@@ -7452,7 +7452,9 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
     }
     /* the contest's rule is written below, after the live writer is suspended, where a failure
        stops the game; whether the sites can take it is decided here, before anything changes,
-       so a refusal leaves the live game as it was. Left below: the page write itself failing */
+       so a refusal leaves the live game as it was. Left below: a page write failing -- the NOPs
+       going in for a recording that holds its cells, or, for one that does not, a NOP a failed
+       restore left being put back (tagpu_puppet.c, contest_write) */
     if (recr_holds_cells(h) && !tagpu_puppet_contest_in()) {
         snprintf(why, cap, "the contest sites hold other bytes than the retail exe's");
         return 0;
