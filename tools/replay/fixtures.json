@@ -13,7 +13,8 @@
   "codec-decline": {
    "load": "s3a-forest-fire.json",
    "decline": true,
-   "end": 2400
+   "end": 2400,
+   "cob": "exact"
   },
   "stock-codec-decline": {
    "load": "replay-stock-decline.json",
