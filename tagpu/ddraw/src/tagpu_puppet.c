@@ -544,13 +544,24 @@ static void contest_init(void)
     s_contestIn = 1;
 }
 
-int tagpu_puppet_contest_in(void) { return s_contestIn; }
+int tagpu_puppet_contest_in(void)
+{
+    unsigned i;
+    if (!s_contestIn) return 0;
+    for (i = 0; i < CONTEST_SITES; i++)
+        if (memcmp((const void*)(size_t)CONTEST[i].va, s_pup.contest ? NOP2 : CONTEST[i].je, 2))
+            return 0;
+    return 1;
+}
 
 /* The six sites to the recording machine's rule (`keep`) or back to the engine's, all or none,
    each only from the bytes the other rule left there (THE CONTEST'S RULE's BOUND). 1 when the
    sites hold `keep`'s rule afterwards. s_pup.contest says which rule this module last wrote and
-   is never cleared but here, so sites a failed restore left as NOPs are known for what they are
-   and no later level takes them for the engine's rule. */
+   is never cleared but here, so the NOPs a failed restore leaves are known for what they are:
+   a later skirmish is unaffected by them (its seats are types 1 and 2, which keep a contested
+   cell under either rule); a later playing puts the rule it needs back first, or refuses
+   (tagpu_puppet_play); and a network game, whose remote seats are type 3, is refused at its
+   first iteration while they stand (tagpu_puppet_contest_kept, tagpu_rec_capture). */
 static int contest_write(int keep)
 {
     unsigned i, done;
@@ -681,9 +692,11 @@ void tagpu_puppet_footprints(char* out, size_t cap)
              FOOT_DEPTH, s_footDiag.wide, FOOT_SAVE);
 }
 
+int tagpu_puppet_contest_kept(void) { return s_pup.contest; }
+
 int tagpu_puppet_play(void)
 {
-    if (contest_needed() && !contest_write(1)) return 0;
+    if (!contest_write(contest_needed())) return 0;
     s_pup.playing = 1;
     return 1;
 }

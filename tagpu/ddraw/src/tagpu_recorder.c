@@ -103,6 +103,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_patches.h"
 #include "tagpu_puppet.h"
+#include "tagpu_refuse.h"
 #include "tagpu_replay.h"
 #include "tagpu_zoom.h"
 #include "crc32.h"
@@ -7048,6 +7049,11 @@ void __cdecl tagpu_rec_capture(void)
     masks_init();
     tick = *(int*)(ta + OFF_GAMETIME);
     mode = game_mode(ta);
+    /* the NOPs a failed restore left at the contest sites hand a contested cell to the incumbent
+       where the engine hands it to a type-3 seat's unit, so every peer would stamp otherwise */
+    if (mode == MODE_NETWORK && tagpu_puppet_contest_kept())
+        tagpu_refuse("This network game cannot start: a replay played earlier in this session "
+                     "could not put the game's own footprint rule back. Restart the game.");
     if (mode == MODE_NETWORK && ((unsigned char)ta[OFF_NETWORK] & 1)) mp_capture(&L, (unsigned)tick);
     ai_finish((unsigned)tick);
 

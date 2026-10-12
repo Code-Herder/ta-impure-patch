@@ -7450,6 +7450,13 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
         snprintf(why, cap, "the controlled seat is not a recorded local player");
         return 0;
     }
+    /* the contest's rule is written below, after the live writer is suspended, where a failure
+       stops the game; whether the sites can take it is decided here, before anything changes,
+       so a refusal leaves the live game as it was. Left below: the page write itself failing */
+    if (recr_holds_cells(h) && !tagpu_puppet_contest_in()) {
+        snprintf(why, cap, "the contest sites hold other bytes than the retail exe's");
+        return 0;
+    }
     snprintf(s_rw.dump, sizeof s_rw.dump, "rewind-%lu-%u", GetCurrentProcessId(), ++serial);
     if (!tagpu_rec_dump_now(s_rw.dump)) {
         snprintf(why, cap, "the present could not be saved");
