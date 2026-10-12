@@ -34,7 +34,8 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
                              from; each block itself decoded from the same copy must give the
                              reading's records (exit 1 naming the block when not); with
                              --section, only section NAME's mutations (kinds, units, proj, cells,
-                             orders, events, other, state)
+                             orders, events, other, state, or chunk: the block's packed chunk of
+                             its run)
     fuzzdiff IN CASES        those cases decoded by the Python reader: the same accept or refuse
                              and the same records for every case C accepted
     sizes IN...              each recording's sectioned blocks' bytes by section: raw, each section
@@ -43,8 +44,8 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
 
 --native builds tests/codectest-asan.exe with the host's gcc and -fsanitize=address,undefined and
 runs that instead of tests/codectest.exe under Wine (WINEPREFIX: the main checkout's wineprefix/).
-IN is a recording of format 17; transcode and lossy also read a records-only one (no sectioned
-block) of format 12 or later, and write format 17. Exit 0 when every check holds, 1 when one fails, 2 when it cannot
+IN is a recording of REC_FORMAT; transcode and lossy also read a records-only one (no sectioned
+block) of format 12 or later, and write REC_FORMAT. Exit 0 when every check holds, 1 when one fails, 2 when it cannot
 run. Needs numpy, numba and zstandard (devpy.ensure() re-executes under the shared venv).
 """
 import os
@@ -167,6 +168,10 @@ def cmd_fuzzdiff(src, cases_path):
             body = data[at:at + n]
             at += n
             ents = None
+        elif typ == 2:
+            body = (data[at:at + n], struct.unpack_from("<I", data, at + n)[0])
+            at += n + 4
+            ents = None
         else:
             ents = []
             for _ in range(3):
@@ -178,12 +183,17 @@ def cmd_fuzzdiff(src, cases_path):
     stats = {"cases": 0, "agree": 0, "accepted": 0}
     bad = []
 
-    def before(ordinal, flags, sec, frame):
+    def before(ordinal, flags, sec, frame, run):
         for typ, cflags, body, ents, ok, outn, h in cases.get(ordinal, ()):
             f = frame.clone()
             try:
                 if typ == 0:
                     got = f.decode(cflags, body)
+                elif typ == 2:
+                    # the run as it stood before this block's chunk: a decompressor cannot be
+                    # copied, so each case replays the run's chunks from its first
+                    chunk, raw = body
+                    got = f.decode(cflags, run.before().feed(chunk, raw, cflags & reccodec.RBF_FRAME_RESET))
                 else:
                     es = [(t, e) for t, e in zip((reccodec.RT_CODEC, reccodec.RT_PHYSICS, reccodec.RT_AIR), ents)
                           if e is not None]
@@ -264,7 +274,7 @@ def cmd_sizes(src):
         c = zlib.compressobj(6, zlib.DEFLATED, 11)
         return len(c.compress(b) + c.flush())
 
-    def seen(ordinal, flags, sec, frame):
+    def seen(ordinal, flags, sec, frame, run):
         nonlocal written
         if not flags & reccodec.RBF_SECTIONS:
             return

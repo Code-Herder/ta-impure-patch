@@ -2,9 +2,11 @@
 
 ## Status
 
-**L1 to L4 and L5a are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
-*L3: the record frames, measured*, *L4: the measured hours, the snapshot interval and R1* and
-*L5a: the ledger rule*, below). Recording format 12 packs every block with zstd, carries the unit deltas in a unit frame
+**L1 to L4, L5a and P1 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
+*L3: the record frames, measured*, *L4: the measured hours, the snapshot interval and R1*,
+*L5a: the ledger rule* and *P1: the container, measured*, below). Recording format 17 packs each
+run of sectioned stream blocks as one zstd frame at level 19 and each snapshot against the one before
+it, carries the unit deltas in a unit frame
 predicted from the engine's own rules, the projectiles in a pool frame coded by identity, and the
 cells, orders, events and state in four record frames, of which the cells frame restarts from the
 reader's grid at every reset point; it writes a snapshot every 1,800 ticks (60 s of game time), and
@@ -21,7 +23,8 @@ landed as recording format 14 (*L5: the lossy plan, measured offline*, its last 
 the refreshes, the takeover at a refresh and the table's 37 rows take the heavy hour to 30.53 MB
 (MEASURED offline); format 15 writes the nano sprays as spray sessions, which takes the
 heavy hour's stream 2.7 MB smaller again; format 16 holds the cells' unit slots and yard bit,
-which the playing's engine stamps (*The cells held*); L6 is a plan. The page gathers what has been measured about the size of a demo recording, the research
+which the playing's engine stamps (*The cells held*), and format 17 (*P1*) packs that stream in its
+container; L6 is a plan. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -237,20 +240,27 @@ As a drop-in on today's blocks, zstd level 3 makes the stream 66.8 MiB (−32 %)
 CPU from 38 to 3.6 ms per second of game (130 to 13 in the busiest 30 s) and decompresses about
 eight times faster (129 MB/s to about 1 GB/s; a seek through the busiest interval decodes in 0.06 s
 instead of 0.75) — MEASURED with a 32-bit
-MinGW build at the DLL's flags under Wine on the reference setup. Vendored without the greedy, lazy
-and binary-tree strategies (level 3 is dfast), the legacy formats and the error strings, it adds
-345,088 bytes to the DLL (MEASURED, L1).
+MinGW build at the DLL's flags under Wine on the reference setup. Vendored without the greedy and
+lazy strategies (level 3 is dfast, level 19 btultra2, whose btopt and btultra match finders are
+kept), the legacy formats and the error strings, its code is 386,504 bytes (MEASURED, *P1*); with
+the binary-tree strategies left out too, as L1 vendored it, it added 345,088 bytes to the DLL
+(MEASURED, L1).
 
-Once the codecs above are in, the compressor no longer shrinks the file: on the unit frame zstd 3
-is 4.63 MiB against the writer's 4.50, zstd 19 about 5 % better. Snapshots are the exception
-(1,629 KB writer, 1,164 zstd 19). So zstd buys CPU and seek speed, not size. Removing 54 MiB of raw
+Once the codecs above are in, a stronger compressor packing each block alone shrinks the file
+little: on the unit frame zstd 3 is 4.63 MiB against the writer's 4.50, zstd 19 about 5 % better,
+snapshots excepted (1,629 KB writer, 1,164 zstd 19). Across blocks it is not so: the whole stream as
+one zstd 19 frame took 47.2 MB where zstd 19 block by block took 59.5 (*The measurement*), and
+format 17 takes that gain -- each run of sectioned blocks is one level-19 frame with a 2^20 window,
+flushed at every block, and each snapshot is packed against the one before it, a key every tenth --
+which takes the lossy hour from 20.73 to 15.65 MB (−24.5 %) and the exact hour from 42.15 to 29.90
+MB (−29.1 %), MEASURED (*P1* below). Removing 54 MiB of raw
 framing alone saves only 6.1 MiB under zstd 3: implicit lengths (where the format fixes a record's
 size), runs and slot gaps pay; varint headers, dropping padding, trained dictionaries, sparse mask
 encodings, byte shuffles and order-0/1 rANS gain nothing on this data. The container that carries
 the codecs: blocks of at most 30 iterations, ending at each snapshot, holding a kind sequence and
-one section per category. As built in L1 each block's zstd frame is self-contained, but the unit
-frame's state runs on from block to block and restarts only at reset points (*L1*, below), since a
-restart costs every unit's first iterations of history.
+one section per category. The frames' state runs on from block to block and restarts only at
+reset points (*L1*, below), since a restart costs every unit's first iterations of history, and the
+run's zstd frame restarts with it.
 
 ### The plan, combined
 
@@ -1232,7 +1242,8 @@ gap above; *S4b*). The test lever `tagpu_rec.exact` writes the exact records bes
 (`RB_EXACT`), against which `tarec lossy-check` checks it. **The table has no row**, so every
 record is the capture's: MEASURED 2026-10-12, `codectest lossy` over the heavy hour's exact
 records with the build's table: 108,090 iterations, none whose records differ from the input's,
-3,604 stream blocks (361 ending at a refresh, every one sectioned, none declined or mismatched),
+3,605 stream blocks (362 ending at a refresh -- a segment's first two iterations are refreshes --
+every one sectioned, none declined or mismatched),
 60 snapshots kept at the refreshes 1,800 apart; `tarec lossy-check --to 27001` and `tarec check`
 pass on the result. Adding a row is the owner's decision (CLAUDE.md, *Loosening*).
 
@@ -1330,9 +1341,9 @@ then `recmp_play_test.py` with `--takeover 901:1`, with `--timeline 1 --at 600 -
 fixtures `forest-reproduce` and `stock-forest-reproduce` record and play reproduction's source
 test in a skirmish (23 `FS_SOURCE` draws each, every one played as recorded).
 
-**The script slice's markers: recording format 17** (2026-10-12). `RK_EV_SLICE`, a unit ID in the
+**The script slice's markers: recording format 18** (2026-10-12). `RK_EV_SLICE`, a unit ID in the
 events frame's `C_ID` column, before the slice of every unit whose COB had an engine start since
-the capture point ([the skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-17)).
+the capture point ([the skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-18)).
 **MEASURED** on the replay gate's `battle` recording (3,991 iterations, at most 1,444 live units,
 the file 72.9 MB with the test lever's exact stream, the stream itself 7.3 MB on disk): 33,464
 markers, 8.38 an iteration, 133,856 bytes of bodies raw; the events' kind stream and ID column
@@ -1340,6 +1351,110 @@ packed per 30-iteration block with zstd 3 grow by 13,645 bytes, 0.41 B a marker,
 this fixture's density (the cost model the plan used, which simulated 38,338 markers at 0.36 B,
 +13,653 bytes, on a format-14 file of the same fixture). That is 0.19 % of the
 stream; a quieter hour costs less, since markers follow starts and creates.
+
+## P1: the container, measured
+
+**What format 17 changes** (tagpu_recfmt.h, *THE RUN AND THE CHAIN*). A *run* -- the sectioned stream
+blocks from an `RBF_FRAME_RESET` block to the next reset, stream block of plain records or
+snapshot, the blocks one state of the frames carries across; blocks of other kinds between them
+(`RB_EXACT`, `RB_CONTRIBUTIONS`) neither end nor touch a run -- is one zstd frame at level 19 (`windowLog` 20, `hashLog` 20,
+`chainLog` 21, no content size, no checksum), begun at the reset block and never ended: each block's
+bytes are the frame's next chunk, flushed at the block's end (`ZSTD_e_flush`). A sectioned block is
+always packed. A records block (declined or mismatched) stays a level-3 frame of its own, and the
+next sectioned block begins a new run. A snapshot is packed against the previous snapshot of its
+segment (`RBF_CHAINED`, its records as a raw-content prefix, a window that holds both, at most 2^27);
+the segment's first snapshot, every tenth after it and any whose check fails is a *key*, packed
+alone. The writer checks both before it writes them (*DECODE BEFORE WRITE*: the chunk through a
+decoder that has unpacked the run's chunks before it, then the frames; the chained frame through its
+prefix), and anything that does not give the bytes back is written as records or as a key. The
+readers keep one validity for the run and the frames: a chunk is unpacked only at a reset block or
+right after its run's previous block, and a failure of either ends both. A seek to a chained
+snapshot unpacks its segment's snapshots from the key forward, at most ten, refusing a longer chain
+or a chained snapshot with no snapshot before it. The vendored zstd keeps the btopt and btultra
+match finders that level 19 (btultra2) needs: 342,828 → 386,504 bytes of zstd code (MEASURED,
+`zstd.c` compiled both ways at the DLL's flags).
+
+**Measured** (2026-10-12, `codectest transcode --snap-every 1` -- the writer's path, every block and
+snapshot check-decoded -- under Wine, 32-bit, on the reference setup; the inputs the records-only
+copies of the two heavy hours at 1,800-tick snapshots, the "before" column the level-3 container,
+block by block, that formats 12 to 16 write, on the same records). The lossy hour is the transform the lossy landings build on -- the units' and the
+order nodes' internal fields held, sprays as sessions and the cells held, each refreshed every
+1,800 ticks -- not *L5*'s table, whose last step measured 19.32 MB in format 12; and the exact
+hour's 29.90 MB here is lossless, not the 29.90 of *L5*'s orders step:
+
+| | lossy hour (the stack's input) | exact hour (format 12, L5a) |
+|---|---:|---:|
+| the file before (level 3, block by block) | 20,725,479 | 42,152,986 |
+| the stream before / after | 18,070,847 / 14,708,157 | 39,498,338 / 28,960,535 |
+| the snapshots before / after (60, 6 keys) | 2,519,647 / 806,045 | 2,519,647 / 806,045 |
+| the file after | **15,649,187 (−24.5 %)** | **29,901,581 (−29.1 %)** |
+| the writer's codec over the hour, before / after | 34.5 s / 43.3 s | 42.6 s / 73.2 s |
+| its worst block after the first / the first | 26 ms / 274 ms | 55 ms / 266 ms |
+| the snapshots' packing and check, all / the worst | 3.6 s / 105 ms | 3.5 s / 103 ms |
+
+Through the writer's own path for format 13's stream (`codectest lossy` over the exact hour's
+records with the build's hold table of no rows: blocks cut at every refresh, 3,605 of them, 362
+ending at one, the 60 snapshots kept at refreshes), the file goes from 42,153,513 bytes (format 13)
+to 29,902,072 in P1's container (−29.1 %), none declined or mismatched; `tarec check` passes on it, and
+`tarec lossy-check --to 27001` on the same run written with its exact stream (`--exact`)
+(MEASURED 2026-10-12).
+
+The block heads (117,344 bytes) and the header, minimap and end block are unchanged. The level-19
+context holds 14.5 MB at most over either hour (`ZSTD_sizeof_CCtx`, the run's parameters and the
+snapshots' alike: its tables are fixed, so a snapshot's size does not grow it; at level 19's own
+parameters the snapshots would have needed 33.3 MB, MEASURED 2026-10-11), so the writer gains about
+16 MB with its run decoder (1.47 MB), and a reader about 1.5 MB for its run decoder. The recording's
+first block carries the context's allocation; later runs reuse it. The fixed tables cost the snapshots nothing measurable:
+806,045 bytes either way. Unpacking the worst chain, a key and nine links, takes about 0.5 ms in
+Python's zstandard (the same libzstd 1.5.7, x86-64; the DLL's 32-bit unpack is not measured).
+
+**The dense battle: the writer keeps up** (MEASURED 2026-10-12, the same method, on the ten-player
+battle on Core Prime Industrial Area of *L3*'s file, 7,441 ticks, 266 stream blocks: 226 of 30
+iterations, the rest cut short by the 2 MiB bound in the opening). The file goes from 12,348,045 to
+10,234,314 bytes (−17.1 %): the stream 11,178,552 → 9,805,310, its 8 snapshots 1,143,979 → 403,490.
+The codec's time per stream block, before → after:
+
+| | main (level 3, block by block) | P1 |
+|---|---:|---:|
+| median / p99 | 27 / 73 ms | 41 / 119 ms |
+| worst after the first | 86 ms | 289 ms (GameTime 92–98, the opening's births) |
+| the first block | 37 ms | 213 ms |
+| the worst snapshot | -- | 217 ms (a chained one; the key 213) |
+| all of it over the battle's 248 s | 8.7 s | 15.5 s |
+
+No block or snapshot reaches 500 ms, so a 30-iteration block -- 1,000 ms of game at normal speed,
+500 at double -- never takes longer than the game time it covers; one block of 7 iterations
+(233 ms of game) takes 289. Fed to a model of the ring [INFERRED: a block is packed once its last
+iteration is in and the writer is free, the ring holding every record captured and not yet through
+the writer; the writer's other work -- applying the records, comparing its copy, writing the file
+-- not counted], the writer is at most 289 ms behind and the ring holds at most 3.1 MiB at normal
+speed and 4.1 MiB at double (main: 2.6 and 2.9) of its 16 MiB (`REC_RING_BYTES`), around that
+block; the next block brings it back. The gaps: the times are Wine's 1 ms clock on the reference
+setup's processor, so a slower one scales them; the writer's other work is not in them; and these
+are transcodes, not a game recorded under P1.
+
+**A damaged snapshot** [INFERRED from the reader's walk]: a chained snapshot that fails its CRC or
+its frame refuses every seek that starts from it or from a later link of its chain, up to the
+next key -- up to ten minutes of game at a snapshot a minute, where a file of keys alone loses one
+minute --
+because a seek starts from the last snapshot before its target and does not fall back to an
+earlier one. The stream itself still reads from the segment's start.
+
+**Checked**: the C decoder and the Python reader give the same records on all 3,604 blocks of both
+transcoded hours and the 3,605 of the writer-path one (`codectest.py verify`); `tarec check` passes
+on the exact hour, and on the lossy hour reports the same 13 unexplained state-byte steps it reports
+on that input, a property of the scratch transform. Fuzzed with `fuzzdiff`, 20,000 cases each: the
+runs' chunks of the exact hour (`--section chunk`, the x86-64 ASan build) agree in all 20,000, 1,058
+accepted; every kind on the lossy hour (Wine, i686) in all 20,000, 2,369 accepted; every kind on the
+dense battle (Wine) in 19,998. The other two are chunks with one byte changed, which the vendored
+zstd 1.5.7 built for i686 refuses as corrupt (`ZSTD_error_corruption_detected`, before it consumes
+a byte) and the same zstd version built for x86-64 -- the ASan build of the same source, and
+Python's `zstandard` (upstream libzstd 1.5.7) -- unpacks to the chunk's raw size (MEASURED 2026-10-12: one unpack loop over the two files, built both ways
+and run under Wine). Both answers are safe: a refused chunk ends its run, and an accepted one is
+bounded like any other. Outside the fuzz a chunk reaches neither decoder until its block's CRC-32
+has passed, so a one-byte change like these is refused before either decoder sees it. A writer's own
+chunks are not affected: its check unpacks each one with the
+DLL's decoder before writing it.
 
 ## Multiplayer recordings
 
@@ -1423,6 +1538,7 @@ the units: stage 6's traffic budget.
 | L4 | two measured four-player hours, a light and a heavy one; format 11: snapshots every 1,800 ticks, the cells frame restarting from the reader's grid (R1): LANDED (*L4* above) | the snapshot interval, decided by the owner with the seek target relaxed for dense battles; MEASURED −1.63 MB an hour from R1 on the light hour at 1,800; both hours miss the 25 MB budget even with no snapshots |
 | L5a | the unit frame predicts the resource ledger, format 12: LANDED (*L5a* below) | MEASURED heavy hour 56.99 → 42.15 MB, lossless |
 | L5 | lossy, chosen by the owner 2026-10-11: internal values held between refreshes, shown values exact (*L5: the lossy plan, measured offline*). The core LANDED as format 13: the filter, the refresh every 300 ticks, the takeover at a refresh, the exact stream for the harness; the unit and order hold rows LANDED as format 14; the spray sessions LANDED as format 15; the cells held LANDED as format 16 (*The cells held*) | MEASURED offline heavy hour 42.15 → 19.32 MB with the plan's transforms; format 14's rows 42.15 → 30.53 MB on the writer's path; the spray sessions −2.72 MB over the rows; the cells alone −6.34 MB over the empty table |
+| P1 | the container, format 17: each run of sectioned blocks one zstd frame at level 19, the snapshots chained, a key every tenth: LANDED (*P1* above) | MEASURED lossy hour 20.73 → 15.65 MB, exact hour 42.15 → 29.90 MB |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
 ## Decisions

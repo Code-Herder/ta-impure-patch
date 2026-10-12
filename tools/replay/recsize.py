@@ -103,7 +103,8 @@ SEC_HEAD = struct.Struct("<IHH8I")      # RecSecHead: payload, iterations, secti
 
 
 def zstd3(data):
-    """The writer's packing: one zstd frame at level 3 (tagpu_reccodec.c, reccodec_pack)."""
+    """One zstd frame at level 3, as the writer packs a block alone (tagpu_reccodec.c,
+    reccodec_pack)."""
     import zstandard
     return len(zstandard.ZstdCompressor(level=3).compress(data)) if data else 0
 
@@ -132,7 +133,7 @@ def read(path):
     import reccodec
     sraw, salone = collections.Counter(), collections.Counter()
 
-    def count(ordinal, flags, unpacked, frame):
+    def count(ordinal, flags, unpacked, frame, run):
         for name, data in sections_of(flags, bytes(unpacked)).items():
             sraw[name] += len(data)
             salone[name] += zstd3(bytes(data))

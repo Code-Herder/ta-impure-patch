@@ -229,9 +229,11 @@ tests/vklifetime.exe: tests/vklifetime.c src/tagpu_vk.c src/tagpu_vk.h
 # one, its outcomes and a fuzz, against tools/replay/reccodec.py. codectest.c includes the codec's
 # source, to copy a decoder's state the interface keeps opaque; the frames, whose states their own
 # `copy` copies, and the filter are linked; so is the DLL's reader and what it reads a file with
-# (RECREAD), for `codectest sprays`, which this Windows build alone has. Only these
-# builds define RECF_TEST_COPY, which compiles the frames' copies (inc/tagpu_recframe.h).
-# Not part of `all` or of CI -- it needs Wine or a host compiler, and recordings.
+# (RECREAD), for `codectest sprays` and the outcomes that seek through it, which this Windows
+# build alone has: the host build (codectest.py --native) leaves them out, the reader being Win32
+# file code. Only these builds define RECF_TEST_COPY, which compiles the frames' copies
+# (inc/tagpu_recframe.h). Not part of `all` or of CI -- it needs Wine or a host compiler, and
+# recordings.
 codectest: tests/codectest.exe
 
 RECFRAMES := $(wildcard src/tagpu_recframe_*.c)

@@ -598,7 +598,12 @@ takeover, a return to now or a fork; **W3**, exact, the blocks the reader decode
 their bytes in the file and unpacked -- are the file's own from there to the target
 (`tarec.seek_blocks`): the snapshot, after its segment's first stream block when the reader did
 not hold that segment's base, then in each segment of the chain every stream block holding an
-iteration it read, each once. Q's and F's seeks run in a fresh process after its playing's first
+iteration it read, each once. A chained snapshot counts every snapshot of its chain from the key,
+each read and unpacked through `block_body` (`snapshot_chain`). A sectioned block counts as one
+block whatever its run: its header's packed and raw, the chunk and the container it unpacks to,
+not the run's window; a seek starts only where a run does (after a snapshot, at a segment's first
+iteration), so it decodes every run it reads from its `RBF_FRAME_RESET` block, and `seek_blocks`
+refuses a file where it would join one in its middle, as the reader does. Q's and F's seeks run in a fresh process after its playing's first
 step (a seek asked for earlier waits for it), which holds the root's base, so for them the file
 says whether a base is read: only for a snapshot in a later segment of the chain. No check reads a
 time. The game thread's CPU time is reported
@@ -613,8 +618,9 @@ that made the reader or the seek's visitor slower per record, with the same bloc
 gate. And it counts only the blocks `recr_seek` decodes through `block_body`, so two reads stay
 outside the count: the segment scan `segs_scan` at the top of every `recr_seek`, which reads the
 header and timeline blocks through `body_get` and grows with the file and its forks, and a
-multiplayer seek's contribution blocks, which `mp_read` decodes through `body_get` too. The seek and takeover times of the [state design](demo-recorder.md) (*Playback and
-seeking*) are targets the gate does not check.
+multiplayer seek's contribution blocks, which `mp_read` decodes through `body_get` too. The seek
+and takeover times of the [state design](demo-recorder.md) (*Playback and seeking*) are targets
+the gate does not check.
 
 **The test render profile.** Every game the harness launches writes `style=custom`, `assets=0`,
 `light=0`, `shadowres=512` and `ss=1` into the worker's `impure.cfg`, and a 20 fps present cap
@@ -971,7 +977,7 @@ region with whether its fixtures reach it.
 | 2026-10-09 | **No check of the gate is decided by the wall clock** (*Ticks, not polls*): a test launch's hold starts its level held (its pause bit and one-tick first batch written from `tagpu_replay.c`, a `presentation` file, on test launches only: a loosening the owner approved); a seek's cost is its game thread's CPU time, bounded by 4,000 ms with SMT and clock contention named as the residual; the fixture worlds change once, deterministically, as scenarios now land at GameTime 1; the compat suite's soaks and `--watch` count game ticks or presented frames (SECONDS × 30) with a 120 s stall bound. |
 | 2026-10-11 | **A recording does not keep the order of the nano sprays inside one iteration** (OD5 of the lossy plan, a loosening the owner approved): a spray a unit's spray session implies is left out of the stream and made again by every reader after the iteration's events, units ascending. Every spray stays exact: the same ID, point, box and layer in the same iteration, the point the unit's own earlier spray's, moved by exactly the unit's position change when it follows the unit. Why the order can go: the emitters `0x4720D0`/`0x472200` change no simulation state and draw only the C runtime's rand, which a playing does not reproduce, and the order of a step's emissions decides only their particles' order in the layer -- the draw order and which one a full layer destroys first -- and, when the particle pool `0x51E610` that every emitter shares (1000 objects in stock) runs out within the step, which emission makes no particle (the engine map's *The nano spray*); the owner confirmed OD5 covers it, 2026-10-12. `tarec lossy-check` compares each iteration's sprays as a multiset and each unit's in order. Rejected: zeroing the point, which the game shows (the offline plan's step, −3.9 MB on a stream whose cells were already held, against −2.72 MB for the exact sessions over the unit and order rows). |
 | 2026-10-11 | **A takeover's AIs read the recording's contacts at T** (O14 for takeovers): when P is the recording's viewed record, the takeover restores `+0x110` bits 8–10 from the recording after its radar pass, as the seek does, so the fork's first acquisition scans read the contacts the recording held at T, as the recording's AIs read them until its next pass; a multiplayer recording's takeover keeps its own pass's bits (below). Rejected: masking bits 8–10 in `fork_view` for every fork, a loosening of D2 (d) that would leave the fork's AIs reading a picture the parent never held; and steering the harness off the ticks after a scripted step, which hides the gap. |
-| 2026-10-12 | **A5 and the in-game create lag are fixed by construction, not accepted** (the owner, after the level-start lag was traced to the same one-slice COB lag): a recorded slice marker, in order among the step's creates and starts, and the replay giving each marked unit its slice there, a format bump (format 17, *COB slices a playing gives one tick late*). This supersedes A5's acceptance in the 2026-10-01 row, which stays as history. |
+| 2026-10-12 | **A5 and the in-game create lag are fixed by construction, not accepted** (the owner, after the level-start lag was traced to the same one-slice COB lag): a recorded slice marker, in order among the step's creates and starts, and the replay giving each marked unit its slice there, a format bump (format 18, *COB slices a playing gives one tick late*). This supersedes A5's acceptance in the 2026-10-01 row, which stays as history. |
 | 2026-10-12 | **The slice marker's scope and its check** (the owner): in a multiplayer recording the marker covers the recording machine's own units only (M1: the starts the ledger orders keep their lag, and other owners' units are unchanged); and **`--cob-exact`** -- the VM's START and CALL children of `0x4B08C0` compared exactly, with no band -- runs on every gate fixture that carries COB, `slice-walkers`, `battle` and `tenseat`. Anything it catches is a replay gap to close by construction, never a band, an exclusion or an expected-absent row. |
 | 2026-10-12 | **An owner-only COB query `--cob-exact` names is recorded and made again, not accepted** (the owner's standing decision for the slice marker, applied to `slice-walkers`' `QueryBuildInfo`, live 9 against puppet 0): `RK_EV_QUERY` carries `QueryBuildInfo` and `QueryNanoPiece` where the engine makes them, a playing makes each through `0x4B0BC0` at its place, and `QueryNanoPiece`'s `absent` row of 2026-10-01 goes, a tightening. AutoAim's aim queries keep their `absent` rows of 2026-10-01. |
 | 2026-10-12 | **A failure only under load is a bug in the check** (the owner's rule): a peek the running game has not answered is no progress, so `STALL_S` is the one bound on a running level. **Approved by the owner (2026-10-12):** the seek's W3 is an exact count of the blocks the reader decoded against the file's own, with the game thread's CPU time reported only and the gap that leaves accepted (*A seek's work, not its time*); and bits 1 and 2 of the pause word `main+0x38A51`, the pacing gate's lag flag and its live speed below the chosen one, are left (`replay-globals.tsv`, `pacingbits`, a `leave` row: bit 2 has no reader, bit 1 only the corner icon and the turbo). |
@@ -1068,7 +1074,7 @@ projectile can still meet a tree an earlier impact felled on the recording machi
 ([skirmish slice](demo-recorder-skirmish-slice.html)).
 
 **COB slices a playing gives one tick late** (closed for A5 and in-game creates by the slice
-marker, format 17). The unit tick's `DoScriptsNow(1)` at `0x48ADEB` is the only clock a COB thread
+marker, format 18). The unit tick's `DoScriptsNow(1)` at `0x48ADEB` is the only clock a COB thread
 has, so a unit whose slice falls on the other side of the unit tick on a puppet runs its scripts
 one tick off, and a looping script such as a walker's `MotionControl` stays re-phased for the rest
 of the unit's life. The level's own units are made before the host's first unit tick, which closes

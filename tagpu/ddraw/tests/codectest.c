@@ -4,8 +4,11 @@
      codectest transcode IN OUT [--snap-every N] [--skirmish]
                                     every stream block of a recording decoded to its records and
                                     written again through reccodec_stream_block, restarting where
-                                    the writer restarts; a line per block (raw, section and packed
-                                    bytes, milliseconds) and the outcomes. With N, only every Nth
+                                    the writer restarts, and every snapshot kept chained as the
+                                    writer chains it (reccodec_snapshot); a line per block (raw,
+                                    section and packed bytes, milliseconds) and the outcomes, and
+                                    the snapshots', the level-19 context's and the file's sizes.
+                                    With N, only every Nth
                                     snapshot of a segment is kept (0: none), and the stream
                                     restarts only after those: the file a writer whose snapshot
                                     interval is N times IN's would have written. With --skirmish,
@@ -31,15 +34,23 @@
                                     a pad that is not zero) and MISMATCH (the check decoder
                                     restarted from other units, from another pool), each followed
                                     by a restarting SECTIONS block; each record frame's own
-                                    (outcomes_cells, _orders, _events, _state); zstd frames
-                                    past and at the 2^27 window bound; and the ledger rule's
-                                    single-precision sum; the lossy filter's own (an empty table
-                                    copies, a refresh writes exactly the differences, the equality
-                                    check, malformed iterations refused, RT_HOLD's bounds, the
-                                    refresh grid and the refresh before a GameTime); the spray
-                                    sessions' (a spray implied plain and following its unit,
-                                    written after a miss and twice in one iteration, a session
-                                    closed, a snapshot's iteration, and what a reader refuses)
+                                    (outcomes_cells, _orders, _events, _state); the container's
+                                    (outcomes_container: a run read in order, a chunk out of its
+                                    run refused, a run's header past its bounds refused, a
+                                    mismatch inside a run restarting the next block, the snapshot
+                                    chain read back and refused without its prefix or past its
+                                    bound); under Wine, the chain through the DLL's reader
+                                    (outcomes_reader: recr_seek to every snapshot of a file, of a
+                                    fork of it and of the fork exported, and a chain past its
+                                    bound refused); zstd frames past and at the 2^27 window
+                                    bound; and the ledger rule's single-precision sum; the lossy
+                                    filter's own (an empty table copies, a refresh writes exactly
+                                    the differences, the equality check, malformed iterations
+                                    refused, RT_HOLD's bounds, the refresh grid and the refresh
+                                    before a GameTime); the spray sessions' (a spray implied plain
+                                    and following its unit, written after a miss and twice in one
+                                    iteration, a session closed, a snapshot's iteration, and what
+                                    a reader refuses)
      codectest sprays IN            the Windows build's only: the DLL's own reader
                                     (src/tagpu_recreader.c) over IN's first timeline, each
                                     iteration's sprays -- the stream's and the ones its spray
@@ -53,16 +64,17 @@
                                     head, section lengths, kinds, the unit frame's gaps, masks,
                                     ids and columns, the pool frame's control values, codes and
                                     columns, the record frames' column tables and columns,
-                                    RCS_OTHER's bodies, the header's codec entries, truncations),
-                                    each decoded from a copy of the state the block starts from;
+                                    RCS_OTHER's bodies, the header's codec entries, truncations,
+                                    the packed chunk of its run), each decoded from a copy of the
+                                    state the block starts from, a chunk by its run replayed;
                                     each block itself, decoded from the same copy, must give the
                                     reading's records (exit 1 naming the block when not); with CASES, every case and its result for codectest.py's
                                     differential; with --section, only the mutations of section
                                     NAME (kinds, units, proj, cells, orders, events, other,
-                                    state)
+                                    state, or chunk: the packed bytes)
      codectest sin                  the sine table, for codectest.py's check against its formula
 
-   IN is a recording of format 17, or, for transcode and lossy, one of format 12 or later with no
+   IN is a recording of REC_FORMAT, or, for transcode and lossy, one of format 12 or later with no
    sectioned block, which they write as the current format, the header's other entries kept. Exit
    0 when every check holds, 1 when one fails, 2 when a file cannot be read. The codec is included
    rather than linked: the fuzz copies a decoder's state, which the codec's interface keeps opaque;
@@ -140,8 +152,12 @@ typedef struct Reader {
     RecBlock b;
     const unsigned char* body;
     unsigned char* raw;           /* the unpacked bytes, when packed */
-    const unsigned char* bytes;   /* the block's bytes: the body if stored, else raw */
+    const unsigned char* bytes;   /* the block's bytes: the body if stored, else raw; NULL for a
+                                     sectioned block, which only its run unpacks (reading_next) */
     void* dctx;
+    RecBytes prev;                /* the segment's last snapshot's records: a chained one's prefix */
+    int chain;                    /* prev holds one                                           */
+    unsigned links;               /* the chained snapshots since its key                      */
     char why[256];
 } Reader;
 
@@ -168,15 +184,39 @@ static int next_block(Reader* r)
         snprintf(r->why, sizeof r->why, "a block failing its CRC at byte %lu", (unsigned long)r->at);
         return -1;
     }
-    allowed = RBF_STORED | (r->b.kind == RB_STREAM ? RBF_SECTIONS | RBF_FRAME_RESET | RBF_REFRESH : 0);
+    allowed = RBF_STORED | (r->b.kind == RB_STREAM ? RBF_SECTIONS | RBF_FRAME_RESET | RBF_REFRESH : 0) |
+              (r->b.kind == RB_SNAPSHOT ? RBF_CHAINED : 0);
     if ((r->b.flags & ~allowed) || ((r->b.flags & RBF_FRAME_RESET) && !(r->b.flags & RBF_SECTIONS)) ||
+        ((r->b.flags & RBF_STORED) && (r->b.flags & (RBF_SECTIONS | RBF_CHAINED))) ||
         ((r->b.kind == RB_HEADER || r->b.kind == RB_END || r->b.kind == RB_TIMELINES) &&
          !(r->b.flags & RBF_STORED))) {
         snprintf(r->why, sizeof r->why, "block flags %#x on kind %u at byte %lu", r->b.flags, r->b.kind,
                  (unsigned long)r->at);
         return -1;
     }
-    if (r->b.flags & RBF_STORED) {
+    if (r->b.kind == RB_HEADER) r->chain = 0;
+    if (r->b.flags & RBF_SECTIONS) {
+        if (!r->b.raw || !r->b.packed) {
+            snprintf(r->why, sizeof r->why, "a sectioned block of no bytes at byte %lu", (unsigned long)r->at);
+            return -1;
+        }
+        r->bytes = NULL;
+    } else if (r->b.flags & RBF_CHAINED) {
+        free(r->raw);
+        r->raw = (unsigned char*)malloc(r->b.raw ? r->b.raw : 1);
+        if (!r->chain || r->links >= REC_CHAIN_MAX) {
+            snprintf(r->why, sizeof r->why, "a chained snapshot at byte %lu %s", (unsigned long)r->at,
+                     r->chain ? "past its chain's bound" : "with no snapshot before it in its segment");
+            return -1;
+        }
+        if (!r->raw || !reccodec_unpack_chained(r->dctx, r->raw, r->b.raw, r->body, r->b.packed, r->prev.p,
+                                                r->prev.n)) {
+            snprintf(r->why, sizeof r->why, "a chained snapshot that is not one zstd frame of %lu bytes "
+                     "at byte %lu", (unsigned long)r->b.raw, (unsigned long)r->at);
+            return -1;
+        }
+        r->bytes = r->raw;
+    } else if (r->b.flags & RBF_STORED) {
         if (r->b.raw != r->b.packed) {
             snprintf(r->why, sizeof r->why, "a stored block of %lu bytes, not %lu, at byte %lu",
                      (unsigned long)r->b.packed, (unsigned long)r->b.raw, (unsigned long)r->at);
@@ -192,6 +232,13 @@ static int next_block(Reader* r)
             return -1;
         }
         r->bytes = r->raw;
+    }
+    if (r->b.kind == RB_SNAPSHOT) {
+        r->links = (r->b.flags & RBF_CHAINED) ? r->links + 1 : 0;
+        r->prev.n = 0;
+        r->prev.oom = 0;
+        rb_put(&r->prev, r->bytes, r->b.raw);
+        r->chain = !r->prev.oom;
     }
     r->at += 32 + r->b.packed;
     r->ordinal++;
@@ -403,6 +450,8 @@ typedef struct Reading {
     RecCodecParams p;
     World w;
     RecCodec* dec;
+    void* rdctx;                  /* the run's decoder: valid exactly while dec is (reading_next) */
+    RecBytes sec;                 /* a sectioned block's container, unpacked from its run       */
     RecBytes pay;
     int in_segment;
 } Reading;
@@ -413,7 +462,8 @@ static int reading_open(Reading* g, const char* path)
     crc_init();
     g->r.d = read_file(path, &g->r.n);
     g->r.dctx = ZSTD_createDCtx();
-    if (!g->r.d || g->r.n < 8 || memcmp(g->r.d, REC_MAGIC, 8)) {
+    g->rdctx = ZSTD_createDCtx();
+    if (!g->r.d || g->r.n < 8 || memcmp(g->r.d, REC_MAGIC, 8) || !g->r.dctx || !g->rdctx) {
         fprintf(stderr, "codectest: %s: not a recording\n", path);
         return 0;
     }
@@ -425,9 +475,12 @@ static void reading_close(Reading* g)
 {
     free((void*)g->r.d);
     free(g->r.raw);
+    rb_free(&g->r.prev);
     ZSTD_freeDCtx((ZSTD_DCtx*)g->r.dctx);
+    ZSTD_freeDCtx((ZSTD_DCtx*)g->rdctx);
     world_free(&g->w);
     reccodec_free(g->dec);
+    rb_free(&g->sec);
     rb_free(&g->pay);
     memset(g, 0, sizeof *g);
 }
@@ -467,6 +520,7 @@ static int reading_next(Reading* g, double* ms)
     if (g->r.b.kind != RB_STREAM) return 1;
     if (g->r.b.flags & RBF_SECTIONS) {
         clock_t t0 = clock();
+        int reset = (g->r.b.flags & RBF_FRAME_RESET) != 0;
         /* an older format's codec is not this one: its containers would decode to other records */
         if (g->h.format != REC_FORMAT) {
             snprintf(g->r.why, sizeof g->r.why, "a sectioned block of format %u: convert a "
@@ -477,7 +531,25 @@ static int reading_next(Reading* g, double* ms)
             snprintf(g->r.why, sizeof g->r.why, "a sectioned block in a segment without RT_CODEC and RT_PHYSICS");
             return -1;
         }
-        if (g->r.b.flags & RBF_FRAME_RESET) {
+        /* the DLL's reader's one validity for the run and the frames (tagpu_recreader.c,
+           block_body): a chunk is unpacked only at a reset or after its run's last */
+        if (!reset && !reccodec_valid(g->dec)) {
+            snprintf(g->r.why, sizeof g->r.why, "a stream block that continues a frame this reading did not "
+                     "start, at byte %lu", (unsigned long)(g->r.at - 32 - g->r.b.packed));
+            return -1;
+        }
+        g->sec.n = 0;
+        g->sec.oom = 0;
+        if (!rb_grow(&g->sec, (size_t)g->r.b.raw + 1) ||
+            !reccodec_run_unpack(g->rdctx, g->sec.p, g->r.b.raw, g->r.body, g->r.b.packed, reset)) {
+            reccodec_invalidate(g->dec);
+            snprintf(g->r.why, sizeof g->r.why, "a block that is not its run's next chunk of %lu bytes at "
+                     "byte %lu", (unsigned long)g->r.b.raw, (unsigned long)(g->r.at - 32 - g->r.b.packed));
+            return -1;
+        }
+        g->sec.n = g->r.b.raw;
+        g->r.bytes = g->sec.p;
+        if (reset) {
             RecFrameWorld v = world_view(&g->w);
             reccodec_restart(g->dec, &g->p, g->w.unit, g->w.live, g->w.pool, g->w.pcount, g->w.phw, &v);
         }
@@ -553,9 +625,10 @@ static int cmd_transcode(const char* in, const char* outp, int every, int skirmi
     RecStream st;
     FILE* out;
     int k, on = 0, bad = 0;
-    unsigned nsnap = 0;
-    double ms, tot = 0, worst = 0;
-    size_t raw = 0, written = 0, secbytes = 0, unitbytes = 0, poolbytes = 0;
+    unsigned nsnap = 0, snaps = 0, keys = 0;
+    double ms, tot = 0, worst = 0, first = -1, stot = 0, sworst = 0;
+    size_t raw = 0, written = 0, secbytes = 0, unitbytes = 0, poolbytes = 0, snapraw = 0, snapbytes = 0;
+    size_t file = 8, cctx = 0;
     unsigned nblk = 0;
     memset(&st, 0, sizeof st);
     if (!reading_open(&g, in)) return 2;
@@ -569,7 +642,11 @@ static int cmd_transcode(const char* in, const char* outp, int every, int skirmi
             RecBytes hb;
             unsigned char hold[REC_HOLD_BYTES];
             memset(&hb, 0, sizeof hb);
-            if (on) reccodec_stream_end(&st);
+            if (on) {
+                keys += st.keys;
+                if (ZSTD_sizeof_CCtx((ZSTD_CCtx*)st.zrun) > cctx) cctx = ZSTD_sizeof_CCtx((ZSTD_CCtx*)st.zrun);
+                reccodec_stream_end(&st);
+            }
             on = g.p.usable && reccodec_stream_begin(&st, &g.p);
             nsnap = 0;
             hold_bytes(hold, 0);
@@ -585,6 +662,7 @@ static int cmd_transcode(const char* in, const char* outp, int every, int skirmi
                 }
             }
             put_block(out, b->kind, RBF_STORED, b->first, b->last, (uint32_t)hb.n, hb.p, hb.n);
+            file += 32 + hb.n;
             rb_free(&hb);
         } else if (b->kind == RB_STREAM && on) {
             unsigned flags;
@@ -595,9 +673,11 @@ static int cmd_transcode(const char* in, const char* outp, int every, int skirmi
             double t = ms_since(t0);
             const RecSecHead* sh = (const RecSecHead*)st.sec.p;
             tot += t;
-            if (t > worst) worst = t;
+            if (first < 0) first = t;
+            else if (t > worst) worst = t;
             raw += g.pay.n;
             written += bn;
+            file += 32 + bn;
             if (o == RECC_SECTIONS) {
                 secbytes += st.sec.n;
                 unitbytes += sh->len[RCS_UNITS];
@@ -630,12 +710,33 @@ static int cmd_transcode(const char* in, const char* outp, int every, int skirmi
             rb_put(&e, &v, 4);
             rb_put(&e, &st.mismatched, 4);
             put_block(out, b->kind, RBF_STORED, b->first, b->last, (uint32_t)e.n, e.p, e.n);
+            file += 32 + e.n;
             rb_free(&e);
         } else if (b->kind == RB_TIMELINES || b->kind == RB_STREAM) {
             put_block(out, b->kind, RBF_STORED | (b->flags & RBF_REFRESH), b->first, b->last, b->raw,
                       g.r.bytes, b->raw);
+            file += 32 + b->raw;
         } else if (b->kind == RB_SNAPSHOT && every >= 0 && (every == 0 || ++nsnap % (unsigned)every)) {
             continue;
+        } else if (b->kind == RB_SNAPSHOT && on) {
+            /* the writer's snapshot (tagpu_recwriter.c, snapshot): chained to the last one kept */
+            unsigned flags;
+            const unsigned char* body;
+            size_t bn;
+            clock_t t0 = clock();
+            double t;
+            reccodec_snapshot(&st, g.r.bytes, b->raw, &flags, &body, &bn);
+            t = ms_since(t0);
+            stot += t;
+            if (t > sworst) sworst = t;
+            snaps++;
+            snapraw += b->raw;
+            snapbytes += bn;
+            put_block(out, b->kind, flags, b->first, b->last, b->raw, body, bn);
+            file += 32 + bn;
+            printf("%u snapshot %lu %lu %lu - - - %lu %#x %s %.2f\n", g.r.ordinal, (unsigned long)b->first,
+                   (unsigned long)b->last, (unsigned long)b->raw, (unsigned long)bn, flags,
+                   (flags & RBF_CHAINED) ? "chained" : "key", t);
         } else {
             RecBytes pk;
             int packed;
@@ -643,8 +744,14 @@ static int cmd_transcode(const char* in, const char* outp, int every, int skirmi
             packed = on && reccodec_pack(st.cctx, &pk, g.r.bytes, b->raw);
             put_block(out, b->kind, packed ? 0 : RBF_STORED, b->first, b->last, b->raw,
                       packed ? pk.p : g.r.bytes, packed ? pk.n : b->raw);
+            file += 32 + (packed ? pk.n : b->raw);
+            if (b->kind == RB_SNAPSHOT) {
+                snaps++;
+                keys++;
+                snapraw += b->raw;
+                snapbytes += packed ? pk.n : b->raw;
+            }
             rb_free(&pk);
-            if (b->kind == RB_SNAPSHOT) st.reset = 1;
         }
     }
     fclose(out);
@@ -654,11 +761,20 @@ static int cmd_transcode(const char* in, const char* outp, int every, int skirmi
         return 2;
     }
     reading_close(&g);
+    if (on) {
+        keys += st.keys;
+        if (ZSTD_sizeof_CCtx((ZSTD_CCtx*)st.zrun) > cctx) cctx = ZSTD_sizeof_CCtx((ZSTD_CCtx*)st.zrun);
+    }
     printf("summary: %u stream blocks: %u sectioned, %u declined, %u mismatched; records %lu bytes, "
            "containers %lu (unit frames %lu, pool frames %lu), written %lu; encode+check %.0f ms, at most "
-           "%.2f ms a block\n",
+           "%.2f ms a block after the first (%.2f ms)\n",
            nblk, st.sectioned, st.declined, st.mismatched, (unsigned long)raw, (unsigned long)secbytes,
-           (unsigned long)unitbytes, (unsigned long)poolbytes, (unsigned long)written, tot, worst);
+           (unsigned long)unitbytes, (unsigned long)poolbytes, (unsigned long)written, tot, worst,
+           first < 0 ? 0 : first);
+    printf("summary: %u snapshots, %u of them keys: records %lu bytes, written %lu; packed and checked "
+           "in %.0f ms, at most %.2f ms one; the level-19 context %.1f MB at most; the file %lu bytes\n",
+           snaps, keys, (unsigned long)snapraw, (unsigned long)snapbytes, stot, sworst, cctx / 1048576.0,
+           (unsigned long)file);
     if (on) reccodec_stream_end(&st);
     return bad || st.declined || st.mismatched ? 1 : 0;
 }
@@ -1022,12 +1138,21 @@ static int cmd_lossy(const char* in, const char* outp, int exact)
                 at = end;
             }
         } else if (b->kind == RB_SNAPSHOT) {
-            /* the snapshot the filter was told of */
+            /* the snapshot the filter was told of, packed as the writer packs it
+               (tagpu_recwriter.c, snapshot): chained by the codec, a key at level 3 without it */
             if (snapped && b->last == snapped && b->last == last_tick) {
-                int packed = reccodec_pack(o.cctx, &o.pk, g.r.bytes, b->raw);
-                put_block(o.f, RB_SNAPSHOT, packed ? 0 : RBF_STORED, b->first, b->last, b->raw,
-                          packed ? o.pk.p : g.r.bytes, packed ? o.pk.n : b->raw);
-                o.written += 32 + (packed ? o.pk.n : b->raw);
+                unsigned flags = RBF_STORED;
+                const unsigned char* body = g.r.bytes;
+                size_t bn = b->raw;
+                if (o.on) {
+                    reccodec_snapshot(&o.st, g.r.bytes, b->raw, &flags, &body, &bn);
+                } else if (reccodec_pack(o.cctx, &o.pk, g.r.bytes, b->raw)) {
+                    flags = 0;
+                    body = o.pk.p;
+                    bn = o.pk.n;
+                }
+                put_block(o.f, RB_SNAPSHOT, flags, b->first, b->last, b->raw, body, bn);
+                o.written += 32 + bn;
                 snap_tick = b->last;
                 snapped = 0;
                 o.st.reset = 1;
@@ -1615,7 +1740,12 @@ static int expect(const char* what, int got, int want)
     return got == want;
 }
 
-/* decode a written block as a reader would: from the world at a reset, else continuing */
+/* The reader's decoder of the outcomes' runs: every sequence of blocks they write begins with a
+   reset block, which restarts it. */
+static void* outcomes_run;
+
+/* decode a written block as a reader would: from the world at a reset, else continuing, a
+   sectioned block's bytes as its run's next chunk */
 static int reader_check(RecCodec* r, World* w, const RecCodecParams* p, unsigned flags,
                         const unsigned char* body, size_t bn, size_t raw, const unsigned char* pay, size_t n,
                         void* dctx)
@@ -1625,7 +1755,20 @@ static int reader_check(RecCodec* r, World* w, const RecCodecParams* p, unsigned
     int ok;
     memset(&out, 0, sizeof out);
     memset(&un, 0, sizeof un);
-    if (!(flags & RBF_STORED)) {
+    if (!outcomes_run) outcomes_run = ZSTD_createDCtx();
+    if (flags & RBF_SECTIONS) {
+        if ((flags & RBF_STORED) || (!(flags & RBF_FRAME_RESET) && !reccodec_valid(r)) ||
+            !rb_grow(&un, raw + 1) ||
+            !reccodec_run_unpack(outcomes_run, un.p, raw, body, bn, (flags & RBF_FRAME_RESET) != 0)) {
+            reccodec_invalidate(r);
+            world_apply(w, pay, n);
+            rb_free(&un);
+            printf("  reader: not its run's next chunk\n");
+            return 0;
+        }
+        body = un.p;
+        bn = raw;
+    } else if (!(flags & RBF_STORED)) {
         rb_grow(&un, raw);
         if (!reccodec_unpack(dctx, un.p, raw, body, bn)) return 0;
         body = un.p;
@@ -2719,6 +2862,462 @@ static int outcomes_state(const RecCodecParams* p)
 
 /* the ledger rule's single-precision sum against known IEEE results: rounding to even, a carry
    into the exponent, cancellation to zero and to a denormal, denormals, the overflow */
+/* ---- the container: runs and snapshot chains --------------------------------------------------- */
+
+/* a block into an in-memory file, as put_block writes one */
+static void mem_block(RecBytes* f, unsigned kind, unsigned flags, uint32_t first, uint32_t last,
+                      uint32_t raw, const unsigned char* body, size_t bn)
+{
+    RecBlock b;
+    memset(&b, 0, sizeof b);
+    b.magic = REC_BLOCK_MAGIC;
+    b.kind = (uint16_t)kind;
+    b.flags = (uint16_t)flags;
+    b.first = first;
+    b.last = last;
+    b.raw = raw;
+    b.packed = (uint32_t)bn;
+    b.crc_body = crc32_of(body, bn);
+    b.crc_head = crc32_of((const unsigned char*)&b, 28);
+    rb_put(f, &b, sizeof b);
+    rb_put(f, body, bn);
+}
+
+/* every block of an in-memory file through next_block: the blocks read before the first refusal
+   (all of them: n), each snapshot's records checked against want[i] */
+static unsigned mem_read(const RecBytes* f, unsigned char want[][256], unsigned n, int* refused)
+{
+    Reader r;
+    unsigned got = 0, snap = 0;
+    int k;
+    memset(&r, 0, sizeof r);
+    r.d = f->p;
+    r.n = f->n;
+    r.at = 8;
+    r.dctx = ZSTD_createDCtx();
+    while ((k = next_block(&r)) > 0) {
+        if (r.b.kind == RB_SNAPSHOT) {
+            if (snap >= n || r.b.raw != 256 || memcmp(r.bytes, want[snap], 256)) break;
+            snap++;
+        }
+        got++;
+    }
+    *refused = k < 0;
+    free(r.raw);
+    rb_free(&r.prev);
+    ZSTD_freeDCtx((ZSTD_DCtx*)r.dctx);
+    return snap;
+}
+
+/* A run's first chunk written with other parameters than the writer's: level 19 at window
+   2^wlog, a content size or a checksum as asked, the frame ended when `end`. */
+static size_t odd_run_chunk(RecBytes* out, unsigned wlog, int csize, int csum, int end,
+                            const unsigned char* src, size_t n)
+{
+    ZSTD_CCtx* c = ZSTD_createCCtx();
+    ZSTD_inBuffer in = { src, n, 0 };
+    ZSTD_outBuffer o;
+    size_t left;
+    out->n = 0;
+    out->oom = 0;
+    rb_grow(out, ZSTD_compressBound(n) + 64);
+    o.dst = out->p;
+    o.size = out->cap;
+    o.pos = 0;
+    ZSTD_CCtx_setParameter(c, ZSTD_c_compressionLevel, 19);
+    ZSTD_CCtx_setParameter(c, ZSTD_c_windowLog, (int)wlog);
+    ZSTD_CCtx_setParameter(c, ZSTD_c_contentSizeFlag, csize);
+    ZSTD_CCtx_setParameter(c, ZSTD_c_checksumFlag, csum);
+    if (csize) ZSTD_CCtx_setPledgedSrcSize(c, n);
+    do left = ZSTD_compressStream2(c, &o, &in, end ? ZSTD_e_end : ZSTD_e_flush);
+    while (left && !ZSTD_isError(left));
+    ZSTD_freeCCtx(c);
+    out->n = o.pos;
+    return out->n;
+}
+
+/* The container's own outcomes (tagpu_recfmt.h, THE RUN AND THE CHAIN): a run read in order and
+   refused out of it, a run's header past its bounds refused, a mismatch inside a run restarting
+   the next block, and the snapshot chain written, read back, and refused without its prefix or
+   past its bound. */
+static int outcomes_container(const RecCodecParams* p)
+{
+    static uint32_t units[6][NDW];
+    static PSim q;
+    static unsigned char snaps[21][256];
+    RecStream st;
+    RecCodec* rd;
+    RecCodec* cold;
+    World w;
+    RecBytes y, chunk[3], f, x;
+    size_t raw[3];
+    unsigned i, flags, got;
+    uint32_t gt = 1;
+    const unsigned char* body;
+    size_t bn;
+    int ok = 1, o, refused;
+    void* fresh = ZSTD_createDCtx();
+    unsigned char* back;
+    memset(&w, 0, sizeof w);
+    memset(&y, 0, sizeof y);
+    memset(chunk, 0, sizeof chunk);
+    memset(&f, 0, sizeof f);
+    memset(&x, 0, sizeof x);
+    if (!fresh || !reccodec_stream_begin(&st, p) || !(rd = reccodec_new(p)) || !(cold = reccodec_new(p)))
+        return 0;
+    world_reset(&w, 64, PJ_N, 16, 16);
+    q.first = 1;
+    for (i = 0; i < 3; i++) {
+        synth_block(&y, units, &q, &gt, i == 0, 0, 0, PJ_NONE);
+        o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+        ok &= expect("run: a block written as its run's chunk", o == RECC_SECTIONS && !(flags & RBF_STORED), 1);
+        ok &= expect("  restarting the run at its first block alone", !!(flags & RBF_FRAME_RESET), i == 0);
+        rb_put(&chunk[i], body, bn);
+        raw[i] = st.sec.n;
+        ok &= expect("  read in order, as its run's next chunk",
+                     reader_check(rd, &w, p, flags, body, bn, st.sec.n, y.p, y.n, st.dctx), 1);
+    }
+    back = (unsigned char*)malloc(raw[2] + raw[1] + 2);
+    ok &= expect("run: the third block's chunk with no run before it is refused by zstd",
+                 reccodec_run_unpack(fresh, back, raw[2], chunk[2].p, chunk[2].n, 0), 0);
+    ok &= expect("run: the same chunk claiming to begin a run is refused (no frame header)",
+                 reccodec_run_unpack(fresh, back, raw[2], chunk[2].p, chunk[2].n, 1), 0);
+    ok &= expect("run: a reader whose frames did not decode the block before refuses it",
+                 reader_check(cold, &w, p, RBF_SECTIONS, chunk[2].p, chunk[2].n, raw[2], y.p, 0, st.dctx), 0);
+    ok &= expect("run: the first block's chunk begins it",
+                 reccodec_run_unpack(fresh, back, raw[0], chunk[0].p, chunk[0].n, 1), 1);
+    ok &= expect("run: the third after the first alone does not give the third's container",
+                 reccodec_run_unpack(fresh, back, raw[2], chunk[2].p, chunk[2].n, 0) &&
+                 !memcmp(back, st.sec.p, raw[2]), 0);
+    {
+        static unsigned char src[100000];
+        for (i = 0; i < sizeof src; i++) src[i] = (unsigned char)(i * 2654435761u >> 13);
+        free(back);
+        back = (unsigned char*)malloc(sizeof src + 1);
+        ok &= expect("run: a header asking for a 2^20 window begins a run",
+                     odd_run_chunk(&x, 20, 0, 0, 0, src, sizeof src) &&
+                     reccodec_run_unpack(fresh, back, sizeof src, x.p, x.n, 1), 1);
+        ok &= expect("run: a header asking for 2^21 is refused",
+                     odd_run_chunk(&x, 21, 0, 0, 0, src, sizeof src) &&
+                     reccodec_run_unpack(fresh, back, sizeof src, x.p, x.n, 1), 0);
+        ok &= expect("run: a header with a content size is refused",
+                     odd_run_chunk(&x, 20, 1, 0, 0, src, sizeof src) &&
+                     reccodec_run_unpack(fresh, back, sizeof src, x.p, x.n, 1), 0);
+        ok &= expect("run: a header with a checksum is refused",
+                     odd_run_chunk(&x, 20, 0, 1, 0, src, sizeof src) &&
+                     reccodec_run_unpack(fresh, back, sizeof src, x.p, x.n, 1), 0);
+        ok &= expect("run: a chunk that gives one byte more than its raw size is refused",
+                     odd_run_chunk(&x, 20, 0, 0, 0, src, sizeof src) &&
+                     reccodec_run_unpack(fresh, back, sizeof src - 1, x.p, x.n, 1), 0);
+        ok &= expect("run: a chunk that ends its frame is refused",
+                     odd_run_chunk(&x, 20, 0, 0, 1, src, sizeof src) &&
+                     reccodec_run_unpack(fresh, back, sizeof src, x.p, x.n, 1), 0);
+    }
+    free(back);
+    /* a mismatch in the run's middle: the check's decoder loses the run, as a zstd fault would */
+    synth_block(&y, units, &q, &gt, 0, 0, 0, PJ_NONE);
+    ZSTD_DCtx_reset((ZSTD_DCtx*)st.drun, ZSTD_reset_session_only);
+    o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+    ok &= expect("run: MISMATCH when the chunk does not unpack in its run", o, RECC_MISMATCH);
+    ok &= expect("  written as records in a frame of its own", !(flags & (RBF_SECTIONS | RBF_FRAME_RESET)), 1);
+    ok &= expect("  a reader decodes it back",
+                 reader_check(rd, &w, p, flags, body, bn, y.n, y.p, y.n, st.dctx), 1);
+    for (i = 0; i < 2; i++) {
+        synth_block(&y, units, &q, &gt, 0, 0, 0, PJ_NONE);
+        o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+        ok &= expect(i ? "  SECTIONS, continuing the new run" : "  SECTIONS, the next block beginning a new run",
+                     o == RECC_SECTIONS && !!(flags & RBF_FRAME_RESET) == !i, 1);
+        ok &= expect("  a reader decodes it back",
+                     reader_check(rd, &w, p, flags, body, bn, st.sec.n, y.p, y.n, st.dctx), 1);
+    }
+    /* the chain: 21 snapshots of a segment as the writer packs them, keys at 0, 10 and 20 */
+    rb_put(&f, REC_MAGIC, 8);
+    {
+        unsigned char head[8] = { RT_FORMAT, 0, 4, 0, REC_FORMAT, 0, 0, 0 };
+        mem_block(&f, RB_HEADER, RBF_STORED, 1, 1, 8, head, 8);
+    }
+    for (i = 0, got = 0; i < 21; i++) {
+        unsigned k;
+        for (k = 0; k < 256; k++) snaps[i][k] = (unsigned char)(k < 8 ? k * i : (k * 7 + i * (k % 13 == 0)) & 0xFF);
+        reccodec_snapshot(&st, snaps[i], 256, &flags, &body, &bn);
+        got += !!(flags & RBF_CHAINED) == (i % 10 != 0);
+        mem_block(&f, RB_SNAPSHOT, flags, i + 2, i + 2, 256, body, bn);
+    }
+    ok &= expect("chain: 21 snapshots, a key every tenth and the others chained", got, 21);
+    ok &= expect("  the next stream block begins a new run", st.reset, 1);
+    got = mem_read(&f, snaps, 21, &refused);
+    ok &= expect("chain: every snapshot reads back", got == 21 && !refused, 1);
+    /* a file of a key and ten links: the eleventh snapshot is past the bound */
+    f.n = 0;
+    rb_put(&f, REC_MAGIC, 8);
+    {
+        unsigned char head[8] = { RT_FORMAT, 0, 4, 0, REC_FORMAT, 0, 0, 0 };
+        mem_block(&f, RB_HEADER, RBF_STORED, 1, 1, 8, head, 8);
+    }
+    for (i = 0; i < 11; i++) {
+        reccodec_pack_chained(st.zrun, &x, snaps[i], 256, i ? snaps[i - 1] : NULL, i ? 256 : 0);
+        mem_block(&f, RB_SNAPSHOT, i ? RBF_CHAINED : 0, i + 2, i + 2, 256, x.p, x.n);
+    }
+    got = mem_read(&f, snaps, 11, &refused);
+    ok &= expect("chain: a key and nine links read, the tenth link is refused", got == 10 && refused, 1);
+    /* a chained snapshot first in its segment */
+    f.n = 0;
+    rb_put(&f, REC_MAGIC, 8);
+    {
+        unsigned char head[8] = { RT_FORMAT, 0, 4, 0, REC_FORMAT, 0, 0, 0 };
+        mem_block(&f, RB_HEADER, RBF_STORED, 1, 1, 8, head, 8);
+        reccodec_pack_chained(st.zrun, &x, snaps[1], 256, snaps[0], 256);
+        mem_block(&f, RB_SNAPSHOT, RBF_CHAINED, 2, 2, 256, x.p, x.n);
+    }
+    got = mem_read(&f, snaps + 1, 1, &refused);
+    ok &= expect("chain: a chained snapshot with no snapshot before it is refused", got == 0 && refused, 1);
+    /* ... and one whose prefix is another segment's: a header begins a segment's chain anew */
+    f.n = 0;
+    rb_put(&f, REC_MAGIC, 8);
+    {
+        unsigned char head[8] = { RT_FORMAT, 0, 4, 0, REC_FORMAT, 0, 0, 0 };
+        mem_block(&f, RB_HEADER, RBF_STORED, 1, 1, 8, head, 8);
+        reccodec_pack_chained(st.zrun, &x, snaps[0], 256, NULL, 0);
+        mem_block(&f, RB_SNAPSHOT, 0, 2, 2, 256, x.p, x.n);
+        mem_block(&f, RB_HEADER, RBF_STORED, 3, 3, 8, head, 8);
+        reccodec_pack_chained(st.zrun, &x, snaps[1], 256, snaps[0], 256);
+        mem_block(&f, RB_SNAPSHOT, RBF_CHAINED, 4, 4, 256, x.p, x.n);
+    }
+    got = mem_read(&f, snaps, 2, &refused);
+    ok &= expect("chain: a chained snapshot after a header, its prefix before it, is refused",
+                 got == 1 && refused, 1);
+    reccodec_stream_end(&st);
+    reccodec_free(rd);
+    reccodec_free(cold);
+    ZSTD_freeDCtx((ZSTD_DCtx*)fresh);
+    for (i = 0; i < 3; i++) rb_free(&chunk[i]);
+    rb_free(&y);
+    rb_free(&f);
+    rb_free(&x);
+    world_free(&w);
+    return ok;
+}
+
+#ifdef _WIN32
+/* ---- the container through the DLL's reader (tagpu_recreader.c): Wine only, the reader being
+   Win32 file code, logging to the sprays' tagpu_logf stub above -------------------------------- */
+
+/* a record, padded to a dword */
+static void rd_rec(RecBytes* b, unsigned kind, const void* body, unsigned len)
+{
+    static const unsigned char pad[4];
+    RecHdr h;
+    h.kind = (uint16_t)kind;
+    h.len = (uint16_t)len;
+    rb_put(b, &h, 4);
+    rb_put(b, body, len);
+    rb_put(b, pad, (4 - len % 4) % 4);
+}
+
+static void rd_u32(RecBytes* b, unsigned kind, uint32_t v) { rd_rec(b, kind, &v, 4); }
+
+#define RD_GRID 4                                            /* a 4 x 4 grid: 8 bytes explored */
+#define RD_SLOT_IMAGE(k) (rd_image[(k) % 64])
+
+static unsigned char rd_image[64][REC_UNIT_IMAGE];
+
+/* The records of a snapshot at GameTime t, or of a segment's first iteration (unit < 0: none):
+   its tick, the explored map whole, and slot 1's image `unit`. Every image is random bytes, so a
+   chained snapshot's frame unpacks only against its prefix. */
+static void rd_iteration(RecBytes* b, uint32_t t, int unit)
+{
+    unsigned char mapped[4 + REC_MAPPED_BYTES(RD_GRID, RD_GRID)];
+    rd_u32(b, RK_TICK, t);
+    memset(mapped, 0, sizeof mapped);
+    rd_rec(b, RK_MAPPED, mapped, sizeof mapped);
+    if (unit >= 0) {
+        unsigned char u[4 + REC_UNIT_IMAGE];
+        memset(u, 0, 4);
+        u[0] = 1;
+        memcpy(u + 4, rd_image[unit], REC_UNIT_IMAGE);
+        rd_rec(b, RK_UNIT, u, sizeof u);
+    }
+}
+
+/* A segment for recr_open: its header (a fork of timeline 0 at `fork` when `id`), then from
+   GameTime `t0` a stream block of two iterations before each of `n` snapshots and one after
+   them, and its end. Snapshot i holds image unit0 + i. With `writer` the snapshots are packed
+   as the writer packs them (reccodec_snapshot); without, as a key and links to the end, whatever
+   their number. */
+static void rd_segment(RecBytes* f, RecStream* st, int writer, RecBytes* x, unsigned id,
+                       uint32_t fork, uint32_t t0, unsigned n, unsigned unit0)
+{
+    RecBytes h, r, prev;
+    uint32_t feat[5] = { RD_GRID, RD_GRID, 1, 0, 0 }, tl[3] = { id, 0, fork }, t = t0, v;
+    unsigned i;
+    memset(&h, 0, sizeof h);
+    memset(&r, 0, sizeof r);
+    memset(&prev, 0, sizeof prev);
+    v = REC_FORMAT; rd_rec(&h, RT_FORMAT, &v, 4);
+    v = 2;          rd_rec(&h, RT_MODE, &v, 4);
+    v = t0;         rd_rec(&h, RT_START, &v, 4);
+    v = 4;          rd_rec(&h, RT_SLOTS, &v, 4);
+    rd_rec(&h, RT_FEATURES, feat, sizeof feat);
+    v = 1;          rd_rec(&h, RT_PROJECTILES, &v, 4);
+    if (id) rd_rec(&h, RT_TIMELINE, tl, sizeof tl);
+    mem_block(f, RB_HEADER, RBF_STORED, t0, t0, (uint32_t)h.n, h.p, h.n);
+    for (i = 0; i <= n; i++, t += 2) {
+        r.n = 0;
+        if (t == t0) rd_iteration(&r, t, -1);
+        else rd_u32(&r, RK_TICK, t);
+        rd_u32(&r, RK_TICK, t + 1);
+        mem_block(f, RB_STREAM, RBF_STORED, t, t + 1, (uint32_t)r.n, r.p, r.n);
+        if (i == n) break;
+        r.n = 0;
+        rd_iteration(&r, t + 1, (int)(unit0 + i));
+        if (writer) {
+            unsigned flags;
+            const unsigned char* body;
+            size_t bn;
+            reccodec_snapshot(st, r.p, r.n, &flags, &body, &bn);
+            mem_block(f, RB_SNAPSHOT, flags, t + 1, t + 1, (uint32_t)r.n, body, bn);
+        } else {
+            reccodec_pack_chained(st->zrun, x, r.p, r.n, i ? prev.p : NULL, i ? prev.n : 0);
+            mem_block(f, RB_SNAPSHOT, i ? RBF_CHAINED : 0, t + 1, t + 1, (uint32_t)r.n, x->p, x->n);
+            prev.n = 0;
+            rb_put(&prev, r.p, r.n);
+        }
+    }
+    v = 0;
+    h.n = 0;
+    rd_rec(&h, RT_GAME_END, &v, 4);
+    mem_block(f, RB_END, RBF_STORED, t + 1, t + 1, (uint32_t)h.n, h.p, h.n);
+    rb_free(&h);
+    rb_free(&r);
+    rb_free(&prev);
+}
+
+static int rd_write(const char* path, const RecBytes* f)
+{
+    FILE* o = fopen(path, "wb");
+    int ok = o && fwrite(f->p, 1, f->n, o) == f->n;
+    if (o) ok &= !fclose(o);
+    return ok;
+}
+
+/* recr_seek to the iteration after each snapshot `t0 + 1 + 2i`, i < n, of timeline `tl`: how many
+   land on that snapshot with slot 1's image unit0 + i and read on from it, before the first that
+   does not (*why its reason). At `fork` the iteration is the fork's first, which replaces the
+   world whole (tagpu_recreader.c, THE CROSSING): slot 1 is empty there. Each seek's work counts
+   the base when it read one, every link of the snapshot's chain -- i % (REC_CHAIN_MAX + 1) + 1,
+   the segments here having a key at every (REC_CHAIN_MAX + 1)th snapshot from their first, or
+   only at the first -- and the one stream block holding the iteration (recr_seek_work). */
+static unsigned rd_seeks(const char* path, unsigned tl, uint32_t t0, unsigned n, unsigned unit0,
+                         uint32_t fork, char* why, unsigned cap)
+{
+    RecReader* r = recr_open(path, why, cap);
+    unsigned i;
+    if (!r) return 0;
+    if (tl && recr_timeline(r, tl, why, cap) != 1) {
+        recr_close(r);
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        uint32_t s = t0 + 1 + 2 * i;
+        const RecWorld* w;
+        const RecSeekWork* k;
+        if (recr_seek(r, s + 1, 0, NULL, NULL, why, cap) != 1) break;
+        w = recr_world(r);
+        k = recr_seek_work(r);
+        if (k->blocks != k->base + i % (REC_CHAIN_MAX + 1) + 2) {
+            snprintf(why, cap, "the seek to GameTime %u decoded %u blocks, not %u", s + 1,
+                     k->blocks, k->base + i % (REC_CHAIN_MAX + 1) + 2);
+            break;
+        }
+        if (w->tick != s + 1 || !k->from_snapshot || k->from != s ||
+            (s + 1 == fork ? w->live[1] != 0 :
+             !w->live[1] || memcmp(w->unit + REC_UNIT_DWORDS, rd_image[unit0 + i], REC_UNIT_IMAGE))) {
+            snprintf(why, cap, "the seek to GameTime %u is not snapshot %u's world", s + 1, s);
+            break;
+        }
+    }
+    recr_close(r);
+    return i;
+}
+
+/* The chain as tagpu_recreader.c reads it (tagpu_recfmt.h, THE RUN AND THE CHAIN): a segment of 21
+   snapshots packed by the writer, keys at the 1st, 11th and 21st, so the seeks walk chains of 0 to
+   9 links; a fork of it at GameTime 25 with a chain of its own; the fork exported, which keeps the
+   original's blocks before 25 -- its chain's beginning among them (file_compact); and a key
+   followed by ten links, whose last is past the bound. */
+static int outcomes_reader(const RecCodecParams* p)
+{
+    char dir[MAX_PATH], path[MAX_PATH], out[MAX_PATH], why[256];
+    RecBytes f, x;
+    RecStream st;
+    unsigned i, k, got;
+    uint64_t seed = 0x9E3779B97F4A7C15ull;
+    int ok = 1;
+    memset(&f, 0, sizeof f);
+    memset(&x, 0, sizeof x);
+    for (i = 0; i < 64; i++)
+        for (k = 0; k < REC_UNIT_IMAGE; k++) {
+            seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+            rd_image[i][k] = (unsigned char)(seed >> 56);
+        }
+    /* each image a few bytes off the one before, as a unit's are from one snapshot to the next */
+    for (i = 1; i < 64; i++) {
+        memcpy(rd_image[i], rd_image[i - 1], REC_UNIT_IMAGE);
+        rd_image[i][(i * 37) % REC_UNIT_IMAGE] ^= (unsigned char)(i | 1);
+    }
+    if (!GetTempPathA(sizeof dir, dir)) return expect("reader: a temporary folder", 0, 1);
+    snprintf(path, sizeof path, "%scodectest-chain.imprec", dir);
+    snprintf(out, sizeof out, "%scodectest-fork.imprec", dir);
+    DeleteFileA(out);
+    if (!reccodec_stream_begin(&st, p)) return expect("reader: the codec's stream", 0, 1);
+    rb_put(&f, REC_MAGIC, 8);
+    rd_segment(&f, &st, 1, &x, 0, 0, 1, 21, 0);
+    ok &= expect("reader: the writer keyed snapshots 1, 11 and 21 of 21", st.keys, 3);
+    st.chain = 0;
+    rd_segment(&f, &st, 1, &x, 1, 25, 25, 3, 40);
+    ok &= expect("reader: the fork's first snapshot is a key", st.keys, 4);
+    ok &= expect("reader: the file is written", rd_write(path, &f), 1);
+    got = rd_seeks(path, 0, 1, 21, 0, 0, why, sizeof why);
+    if (got != 21) printf("  %s\n", why);
+    ok &= expect("reader: a seek to each of the 21 snapshots, chains of 0 to 9 links", got, 21);
+    got = rd_seeks(path, 1, 1, 12, 0, 25, why, sizeof why);
+    if (got != 12) printf("  %s\n", why);
+    ok &= expect("reader: the fork's chain: the original's 12 snapshots before 25, the last "
+                 "crossing", got, 12);
+    got = rd_seeks(path, 1, 25, 3, 40, 25, why, sizeof why);
+    if (got != 3) printf("  %s\n", why);
+    ok &= expect("  and its own 3", got, 3);
+    k = recr_manage(path, REC_FILE_EXPORT, 1, out, why, sizeof why);
+    if (!k) printf("  %s\n", why);
+    {
+        WIN32_FILE_ATTRIBUTE_DATA a;
+        k = k && GetFileAttributesExA(out, GetFileExInfoStandard, &a) && !a.nFileSizeHigh &&
+            a.nFileSizeLow < f.n;
+    }
+    ok &= expect("reader: the fork exported, the original pruned at 25", k, 1);
+    got = rd_seeks(out, 1, 1, 12, 0, 25, why, sizeof why);
+    if (got != 12) printf("  %s\n", why);
+    ok &= expect("  the export reads the original's 12 snapshots before 25", got, 12);
+    got = rd_seeks(out, 1, 25, 3, 40, 25, why, sizeof why);
+    if (got != 3) printf("  %s\n", why);
+    ok &= expect("  and the fork's 3", got, 3);
+    /* a key and ten links: seeks to the first ten read, the eleventh is refused */
+    f.n = 0;
+    rb_put(&f, REC_MAGIC, 8);
+    rd_segment(&f, &st, 0, &x, 0, 0, 1, 11, 0);
+    ok &= expect("reader: the key-and-ten-links file is written", rd_write(path, &f), 1);
+    got = rd_seeks(path, 0, 1, 11, 0, 0, why, sizeof why);
+    ok &= expect("reader: a key and ten links: the first ten seek, the eleventh is refused",
+                 got == 10 && strstr(why, "chains past") != NULL, 1);
+    DeleteFileA(path);
+    DeleteFileA(out);
+    reccodec_stream_end(&st);
+    rb_free(&f);
+    rb_free(&x);
+    return ok;
+}
+#endif
+
 static int f32_check(void)
 {
     static const uint32_t t[][3] = {
@@ -3831,6 +4430,10 @@ static int cmd_outcomes(void)
     ok &= outcomes_events(&p);
     ok &= outcomes_state(&p);
     ok &= outcomes_lossy();
+    ok &= outcomes_container(&p);
+#ifdef _WIN32
+    ok &= outcomes_reader(&p);
+#endif
     ok &= outcomes_sprays();
     ok &= zstd_window_check(st.cctx, st.dctx);
     ok &= f32_check();
@@ -3995,12 +4598,15 @@ static unsigned frame_regions(const unsigned char* sec, size_t a, size_t e, size
     return ncols;
 }
 
-static const char* const SECTION_NAME[RCS_COUNT] = { "kinds", "units", "proj", "cells", "orders",
-                                                     "events", "other", "state" };
+/* the sections, and "chunk": the block's packed bytes, its run's chunk (mutate's 19) */
+static const char* const SECTION_NAME[RCS_COUNT + 1] = { "kinds", "units", "proj", "cells", "orders",
+                                                         "events", "other", "state", "chunk" };
 
 typedef struct Case {
-    unsigned type;                  /* 0 the block mutated, 1 the header's entries mutated */
+    unsigned type;                  /* 0 the block mutated, 1 the header's entries mutated, 2 the
+                                       block's chunk of its run mutated                     */
     unsigned flags;
+    size_t raw;                     /* type 2: the size the block's head claims             */
     RecBytes body;
     unsigned char ent[3][8 + 24 * 8 + 4 * RECC_LANES_MAX];
     unsigned nent[3], has[3];
@@ -4027,17 +4633,67 @@ static unsigned what_of(int only)
     case RCS_UNITS: return unit[rndn(sizeof unit)];
     case RCS_PROJ:  return proj[rndn(sizeof proj)];
     case RCS_OTHER: return rnd() & 1 ? 8 : 10;
+    case RCS_COUNT: return 19;
     default:        return frame[rndn(sizeof frame)];
     }
 }
 
-/* one mutation of the block; `only` >= 0 keeps it to that section */
+/* One mutation of the block's chunk, `pk` its `pn` packed bytes: a byte changed, the chunk cut
+   short, a byte inserted or removed, the raw size its head claims one off, or a run's header
+   asking for twice the window. */
+static void mutate_chunk(Case* c, const unsigned char* pk, size_t pn, size_t raw, unsigned flags)
+{
+    size_t at;
+    c->type = 2;
+    c->flags = flags;
+    c->raw = raw;
+    c->body.n = 0;
+    rb_put(&c->body, pk, pn);
+    switch (rnd() % 6) {
+    case 0:
+        mutate_byte(c->body.p + rndn(pn));
+        break;
+    case 1:
+        c->body.n = 1 + rndn(pn - 1);
+        break;
+    case 2:
+        at = rndn(pn + 1);
+        rb_put(&c->body, "", 1);
+        memmove(c->body.p + at + 1, c->body.p + at, pn - at);
+        c->body.p[at] = (unsigned char)rnd();
+        break;
+    case 3:
+        if (pn > 1) {
+            at = rndn(pn);
+            memmove(c->body.p + at, c->body.p + at + 1, pn - at - 1);
+            c->body.n--;
+        }
+        break;
+    case 4:
+        c->raw = rnd() & 1 ? raw + 1 : raw - 1;
+        break;
+    default:
+        /* the window descriptor, which follows the frame header descriptor when the frame is not
+           single-segment (the writer's never is) */
+        if ((flags & RBF_FRAME_RESET) && pn > 5)
+            c->body.p[5] = (unsigned char)((REC_RUN_WINDOW_LOG + 1 - 10) << 3);
+        else
+            mutate_byte(c->body.p + rndn(pn));
+        break;
+    }
+}
+
+/* one mutation of the block; `only` >= 0 keeps it to that section, RCS_COUNT to its chunk */
 static void mutate(Case* c, const unsigned char* sec, size_t n, unsigned flags, const Header* h, unsigned nlanes,
-                   unsigned pc0, int only)
+                   unsigned pc0, int only, const unsigned char* pk, size_t pn)
 {
     static const unsigned char FRAME_SEC[4] = { RCS_CELLS, RCS_ORDERS, RCS_EVENTS, RCS_STATE };
     size_t off[RCS_COUNT + 1], i, at, r[6];
-    unsigned what = only >= 0 ? what_of(only) : (unsigned)(rnd() % 19);
+    unsigned what = only >= 0 ? what_of(only) : (unsigned)(rnd() % 20);
+    if (what == 19) {
+        mutate_chunk(c, pk, pn, n, flags);
+        return;
+    }
     c->type = 0;
     c->flags = flags;
     c->body.n = 0;
@@ -4159,13 +4815,61 @@ static void mutate(Case* c, const unsigned char* sec, size_t n, unsigned flags, 
     }
 }
 
+/* The chunks of the run a sectioned block continues, in order from its reset block: what a
+   reader's run decoder has unpacked when it meets the block. */
+typedef struct RunChunks {
+    const unsigned char** p;
+    size_t* n;
+    size_t* raw;
+    unsigned count, cap;
+} RunChunks;
+
+static void run_add(RunChunks* r, const unsigned char* p, size_t n, size_t raw)
+{
+    if (r->count == r->cap) {
+        r->cap = r->cap ? r->cap * 2 : 64;
+        r->p = (const unsigned char**)realloc((void*)r->p, r->cap * sizeof *r->p);
+        r->n = (size_t*)realloc(r->n, r->cap * sizeof *r->n);
+        r->raw = (size_t*)realloc(r->raw, r->cap * sizeof *r->raw);
+        if (!r->p || !r->n || !r->raw) {
+            fprintf(stderr, "codectest: no memory for a run's chunks\n");
+            exit(2);
+        }
+    }
+    r->p[r->count] = p;
+    r->n[r->count] = n;
+    r->raw[r->count] = raw;
+    r->count++;
+}
+
 /* the reader's handling of a block as the differential defines it: 1 with `out`, or 0 refused */
 static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecParams* p, const World* w,
-                    const unsigned char* sec, size_t n, RecBytes* out)
+                    const unsigned char* sec, size_t n, RecBytes* out, const RunChunks* run, void* zx,
+                    RecBytes* un)
 {
     char why[256];
     RecFrameWorld v = world_view(w);
     codec_copy(d, from);
+    if (c->type == 2) {
+        /* the run's decoder as the reader holds it, replayed from the run's reset block; every
+           chunk before this one unpacked when the reading read it */
+        int reset = (c->flags & RBF_FRAME_RESET) != 0;
+        unsigned i;
+        size_t most = c->raw + 1;
+        for (i = 0; i < run->count; i++)
+            if (run->raw[i] + 1 > most) most = run->raw[i] + 1;
+        un->n = 0;
+        un->oom = 0;
+        if (!rb_grow(un, most)) return 0;
+        for (i = 0; !reset && i < run->count; i++)
+            if (!reccodec_run_unpack(zx, un->p, run->raw[i], run->p[i], run->n[i], i == 0)) {
+                fprintf(stderr, "codectest: a run's chunk %u no longer unpacks\n", i);
+                exit(2);
+            }
+        if (!c->raw || !reccodec_run_unpack(zx, un->p, c->raw, c->body.p, c->body.n, reset)) return 0;
+        if (reset) reccodec_restart(d, p, w->unit, w->live, w->pool, w->pcount, w->phw, &v);
+        return reccodec_decode(d, un->p, c->raw, out, why, sizeof why);
+    }
     if (c->type == 1) {
         RecCodecParams q;
         if (!reccodec_params(&q, p->nslots, p->nproj, p->gw, p->gh, p->nwrecks, c->has[0] ? c->ent[0] : NULL, c->nent[0],
@@ -4177,6 +4881,7 @@ static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecPa
     }
     if (c->flags & ~(unsigned)(RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET | RBF_REFRESH)) return 0;
     if ((c->flags & RBF_FRAME_RESET) && !(c->flags & RBF_SECTIONS)) return 0;
+    if ((c->flags & RBF_SECTIONS) && (c->flags & RBF_STORED)) return 0;
     if (!(c->flags & RBF_SECTIONS)) {
         out->n = 0;
         rb_put(out, c->body.p, c->body.n);
@@ -4190,13 +4895,20 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
 {
     Reading g;
     RecCodec* d = NULL;
-    RecBytes out;
+    RecBytes out, sec, un;
+    RunChunks run;
     Case c;
     FILE* cf = NULL;
     unsigned nsect = 0, done = 0, accepted = 0, k2;
     int k, control = -1;
+    void* zf = ZSTD_createDCtx();         /* follows the reading's run: each block's container */
+    void* zx = ZSTD_createDCtx();         /* a case's run, replayed                            */
     memset(&out, 0, sizeof out);
+    memset(&sec, 0, sizeof sec);
+    memset(&un, 0, sizeof un);
+    memset(&run, 0, sizeof run);
     memset(&c, 0, sizeof c);
+    if (!zf || !zx) return 2;
     rng_state = seed * UINT64_C(0x9E3779B97F4A7C15) + 1;
     /* count the sectioned blocks first, to spread the cases over them */
     if (!reading_open(&g, in)) return 2;
@@ -4212,19 +4924,30 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
     while ((k = next_block(&g.r)) > 0) {
         RecBlock* b = &g.r.b;
         double t;
+        if (b->kind == RB_HEADER || (b->kind == RB_STREAM && !(b->flags & RBF_SECTIONS))) run.count = 0;
         /* the cases of this block, from the state the block starts from */
         if (b->kind == RB_STREAM && (b->flags & RBF_SECTIONS) && g.dec) {
             unsigned want = (unsigned)(((uint64_t)ncases * (k2 + 1)) / nsect - ((uint64_t)ncases * k2) / nsect), i;
+            int reset = (b->flags & RBF_FRAME_RESET) != 0;
             if (!d && !(d = reccodec_new(&g.p))) {
                 fprintf(stderr, "codectest: no memory for the fuzz's decoder\n");
+                return 2;
+            }
+            if (reset) run.count = 0;
+            sec.n = 0;
+            sec.oom = 0;
+            if (!rb_grow(&sec, (size_t)b->raw + 1) ||
+                !reccodec_run_unpack(zf, sec.p, b->raw, g.r.body, b->packed, reset)) {
+                fprintf(stderr, "codectest: %s: the block at ordinal %u does not unpack in its run\n", in,
+                        g.r.ordinal);
                 return 2;
             }
             for (i = 0; i < want; i++) {
                 int ok;
                 uint64_t hsh = 0;
-                mutate(&c, g.r.bytes, b->raw, b->flags, &g.h, g.p.nlanes,
-                       (b->flags & RBF_FRAME_RESET) ? g.w.pcount : g.dec->pcount, only);
-                ok = case_run(&c, d, g.dec, &g.p, &g.w, g.r.bytes, b->raw, &out);
+                mutate(&c, sec.p, b->raw, b->flags, &g.h, g.p.nlanes,
+                       reset ? g.w.pcount : g.dec->pcount, only, g.r.body, b->packed);
+                ok = case_run(&c, d, g.dec, &g.p, &g.w, sec.p, b->raw, &out, &run, zx, &un);
                 accepted += ok;
                 if (ok) hsh = fnv64(out.p, out.n);
                 if (cf) {
@@ -4241,6 +4964,10 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
                     fwrite(head, 1, sizeof head, cf);
                     if (c.type == 0) {
                         fwrite(c.body.p, 1, c.body.n, cf);
+                    } else if (c.type == 2) {
+                        uint32_t r32 = (uint32_t)c.raw;
+                        fwrite(c.body.p, 1, c.body.n, cf);
+                        fwrite(&r32, 1, 4, cf);
                     } else {
                         for (e = 0; e < 3; e++) {
                             uint32_t eh[2] = { c.has[e], c.nent[e] };
@@ -4259,12 +4986,16 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
                 c.type = 0;
                 c.flags = b->flags;
                 c.body.n = 0;
-                rb_put(&c.body, g.r.bytes, b->raw);
-                control = case_run(&c, d, g.dec, &g.p, &g.w, g.r.bytes, b->raw, &out);
+                rb_put(&c.body, sec.p, b->raw);
+                control = case_run(&c, d, g.dec, &g.p, &g.w, sec.p, b->raw, &out, &run, zx, &un);
             }
+            run_add(&run, g.r.body, b->packed, b->raw);
             k2++;
         }
-        /* then the block itself, as a reading takes it */
+        /* then the block itself, as a reading takes it: a header or a stream block, the only
+           blocks reading_next does more with than next_block (a snapshot read twice would be its
+           own chain's prefix) */
+        if (b->kind != RB_HEADER && b->kind != RB_STREAM) continue;
         g.r.at -= 32 + b->packed;
         g.r.ordinal--;
         if (reading_next(&g, &t) < 0) {
@@ -4286,7 +5017,14 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
            only >= 0 ? ", section " : "", only >= 0 ? SECTION_NAME[only] : "", accepted, done - accepted);
     reccodec_free(d);
     rb_free(&out);
+    rb_free(&sec);
+    rb_free(&un);
     rb_free(&c.body);
+    free((void*)run.p);
+    free(run.n);
+    free(run.raw);
+    ZSTD_freeDCtx((ZSTD_DCtx*)zf);
+    ZSTD_freeDCtx((ZSTD_DCtx*)zx);
     reading_close(&g);
     return k == -2 ? 1 : k < 0 ? 2 : 0;
 }
@@ -4330,8 +5068,8 @@ int main(int argc, char** argv)
         int only = -1, i, k;
         for (i = 5; i < argc; i++) {
             if (!strcmp(argv[i], "--section") && i + 1 < argc) {
-                for (k = 0; k < RCS_COUNT && strcmp(argv[i + 1], SECTION_NAME[k]); k++) ;
-                if (k == RCS_COUNT) {
+                for (k = 0; k <= RCS_COUNT && strcmp(argv[i + 1], SECTION_NAME[k]); k++) ;
+                if (k > RCS_COUNT) {
                     fprintf(stderr, "codectest: no section %s\n", argv[i + 1]);
                     return 2;
                 }

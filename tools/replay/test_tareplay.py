@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments and world): the C parser against the coverage build's map, the features' regions, the
-comment filter, `landing --check`, a recording's segments and chains, what format 17's block walk
-refuses and which cells are images, read from files built from the format alone, the fixtures'
+comment filter, `landing --check`, a recording's segments and chains, what the block walk refuses,
+its runs and snapshot chains, and which cells are images, read from files built from the format alone, the fixtures'
 takeover entries, the W lane's edited header copies, and compare-counts' script slice and exact
 COB children. No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
@@ -879,8 +879,8 @@ def zstd_frame(data, wlog):
 
 
 class FormatBlocks(unittest.TestCase):
-    """What format 17's block walk refuses by name before any payload is read, as
-    tagpu_recreader.c's block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
+    """What the block walk refuses by name before any payload is read, as tagpu_recreader.c's
+    block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
 
     def refused(self, *parts, why, decodes=(True, False)):
         with tempfile.TemporaryDirectory() as d:
@@ -892,11 +892,13 @@ class FormatBlocks(unittest.TestCase):
 
     def test_flags(self):
         snap = tlv(tarec.RK_TICK, struct.pack("<I", 1))
-        S, P, R = tarec.RBF_STORED, tarec.RBF_SECTIONS, tarec.RBF_FRAME_RESET
+        S, P, R, C = tarec.RBF_STORED, tarec.RBF_SECTIONS, tarec.RBF_FRAME_RESET, tarec.RBF_CHAINED
         for kind, flags in ((tarec.RB_HEADER, 0), (tarec.RB_SNAPSHOT, S | P),
-                            (tarec.RB_STREAM, S | R), (tarec.RB_STREAM, S | 16),
+                            (tarec.RB_STREAM, S | R), (tarec.RB_STREAM, S | 32),
                             (tarec.RB_SNAPSHOT, S | tarec.RBF_REFRESH),
-                            (tarec.RB_EXACT, S | tarec.RBF_REFRESH)):
+                            (tarec.RB_EXACT, S | tarec.RBF_REFRESH),
+                            (tarec.RB_STREAM, S | P), (tarec.RB_STREAM, S | P | R),
+                            (tarec.RB_STREAM, C), (tarec.RB_SNAPSHOT, S | C)):
             with self.subTest(kind=kind, flags=flags):
                 self.refused(header(), flagged(kind, 1, 1, snap, flags), why="block flags")
 
@@ -906,7 +908,7 @@ class FormatBlocks(unittest.TestCase):
     def test_a_sectioned_block_without_the_codec_entries(self):
         # refused where it is decoded: a walk that skips the stream (decode=False), like the
         # DLL's segment scan, does not read it
-        self.refused(header(), flagged(tarec.RB_STREAM, 1, 1, bytes(40), tarec.RBF_STORED |
+        self.refused(header(), flagged(tarec.RB_STREAM, 1, 1, bytes(40),
                                        tarec.RBF_SECTIONS | tarec.RBF_FRAME_RESET),
                      why="without RT_CODEC and RT_PHYSICS", decodes=(True,))
 
@@ -934,6 +936,81 @@ class FormatBlocks(unittest.TestCase):
         frame = zstd_frame(snap, 28)
         self.refused(header(), sized(tarec.RB_SNAPSHOT, frame, 0, len(snap), len(frame)),
                      why="past 2\\^27", decodes=(True,))
+
+    @staticmethod
+    def snapshots(n):
+        """n snapshot payloads, each a little different from the last"""
+        return [tlv(tarec.RK_TICK, struct.pack("<I", 1 + i)) + bytes(range(i, i + 200)) for i in range(n)]
+
+    @staticmethod
+    def chained(snaps, keys):
+        """the snapshots as blocks: those at `keys` packed alone, the rest against the one before"""
+        import zstandard
+        out = []
+        for i, p in enumerate(snaps):
+            if i in keys:
+                out.append(sized(tarec.RB_SNAPSHOT, zstandard.ZstdCompressor(level=19).compress(p), 0,
+                                 len(p), len(zstandard.ZstdCompressor(level=19).compress(p))))
+                continue
+            dic = zstandard.ZstdCompressionDict(snaps[i - 1], dict_type=zstandard.DICT_TYPE_RAWCONTENT)
+            z = zstandard.ZstdCompressor(level=19, dict_data=dic, write_dict_id=False).compress(p)
+            out.append(sized(tarec.RB_SNAPSHOT, z, tarec.RBF_CHAINED, len(p), len(z)))
+        return out
+
+    def test_a_snapshot_chain(self):
+        # tagpu_reccodec.c's reccodec_unpack_chained and tagpu_recreader.c's snapshot_chain: each
+        # link unpacks against the snapshot before it in its segment, at most 9 after a key
+        snaps = self.snapshots(11)
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "f.imprec"
+            path.write_bytes(tarec.REC_MAGIC + header() + b"".join(self.chained(snaps[:10], {0})))
+            got = [p for k, _, _, p in tarec.blocks(path)[0] if k == tarec.RB_SNAPSHOT]
+        self.assertEqual([bytes(p) for p in got], snaps[:10])
+        self.refused(header(), *self.chained(snaps, {0}), why="past its key's 9 links", decodes=(True,))
+        self.refused(header(), *self.chained(snaps[:2], set()), why="no snapshot before it",
+                     decodes=(True,))
+        # a header begins a segment: the snapshot before it is no prefix of the next one's
+        self.refused(header(), self.chained(snaps[:1], {0})[0], end_block(1),
+                     header(timeline=(1, 0, 1)), self.chained(snaps[:2], {0})[1],
+                     why="no snapshot before it", decodes=(True,))
+
+    def test_a_run(self):
+        # tagpu_reccodec.c's reccodec_run_unpack: a run begins at a chunk whose header is the
+        # writer's and goes on chunk by chunk; the C side is codectest.c's outcomes
+        import reccodec
+        import zstandard
+        data = [bytes((i * 7 + j * 13) & 0xFF for j in range(5000)) for i in range(3)]
+
+        def chunks(wlog=20, **kw):
+            prm = zstandard.ZstdCompressionParameters.from_level(
+                19, window_log=wlog, hash_log=20, chain_log=21, write_content_size=False,
+                write_checksum=False, **kw)
+            co = zstandard.ZstdCompressor(compression_params=prm).compressobj()
+            return [co.compress(p) + co.flush(zstandard.COMPRESSOBJ_FLUSH_BLOCK) for p in data]
+        c = chunks()
+        run = reccodec.Run()
+        self.assertEqual([run.feed(x, len(p), i == 0) for i, (x, p) in enumerate(zip(c, data))], data)
+        self.assertEqual(run.before().feed(c[2], len(data[2]), False), data[2])
+        with self.assertRaisesRegex(tarec.Unreadable, "did not start"):
+            reccodec.Run().feed(c[1], len(data[1]), False)
+        with self.assertRaisesRegex(tarec.Unreadable, "header is not the writer's"):
+            reccodec.Run().feed(c[1], len(data[1]), True)
+        with self.assertRaisesRegex(tarec.Unreadable, "header is not the writer's"):
+            reccodec.Run().feed(chunks(21)[0], len(data[0]), True)
+        with self.assertRaisesRegex(tarec.Unreadable, "next 4999 bytes"):
+            reccodec.Run().feed(c[0], len(data[0]) - 1, True)
+        run = reccodec.Run()
+        run.feed(c[0], len(data[0]), True)
+        try:
+            self.assertNotEqual(run.feed(c[2], len(data[2]), False), data[2])
+        except tarec.Unreadable:
+            pass                                    # a chunk out of its run: refused or wrong
+        run = reccodec.Run()
+        run.feed(c[0], len(data[0]), True)
+        with self.assertRaisesRegex(tarec.Unreadable, "not its run's next"):
+            run.feed(c[1][:len(c[1]) // 2], len(data[1]), False)
+        with self.assertRaisesRegex(tarec.Unreadable, "did not start"):
+            run.feed(c[1], len(data[1]), False)          # the run ended at the refusal
 
 
 class CodecCheck(unittest.TestCase):
@@ -1777,6 +1854,72 @@ class SeekBlocks(unittest.TestCase):
         self.assertEqual(tarec.seek_blocks(path, 1, 22, 3, None), self.of(k10, s2, f1))
         with self.assertRaises(tarec.Unreadable):
             tarec.seek_blocks(path, 1, 31, 3, 0)
+
+    @staticmethod
+    def snap(last, chained):
+        """a packed snapshot, chained to the one before it or a key"""
+        return flagged(tarec.RB_SNAPSHOT, last, last, b"s" * last,
+                       tarec.RBF_CHAINED if chained else 0)
+
+    def test_a_chained_snapshot_decodes_its_chain_from_its_key(self):
+        s1, s2, s3, s4 = (stream(1, 10, unit=1), stream(11, 20, opens=False),
+                          stream(21, 30, opens=False), stream(31, 40, opens=False))
+        k10, c20, c30 = self.snap(10, False), self.snap(20, True), self.snap(30, True)
+        path = self.file(header(), s1, k10, s2, c20, s3, c30, s4, end_block(40))
+        # every link from the key is a block decoded, the key's included
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 3, 0), self.of(k10, c20, c30, s4))
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 3, 1),
+                         self.of(s1, k10, c20, c30, s4, base=1))
+        self.assertEqual(tarec.seek_blocks(path, 0, 25, 3, 0), self.of(k10, c20, s3))
+        self.assertEqual(tarec.seek_blocks(path, 0, 15, 3, 0), self.of(k10, s2))
+        # a chain with no key before it in its segment, as the reader refuses it
+        path = self.file(header(), s1, self.snap(10, True), s2, end_block(20))
+        with self.assertRaisesRegex(tarec.Unreadable, "no snapshot before it"):
+            tarec.seek_blocks(path, 0, 15, 3, 0)
+
+    def test_a_chain_longer_than_its_bound_is_refused(self):
+        n = tarec._codec().CHAIN_MAX
+        parts, links = [header(), stream(1, 10, unit=1)], []
+        for i in range(n + 2):
+            links.append(self.snap(10 * (i + 1), i > 0))
+            parts += [links[-1], stream(10 * (i + 1) + 1, 10 * (i + 2), opens=False)]
+        last = 10 * (n + 3)
+        path = self.file(*parts, end_block(last))
+        # the key and REC_CHAIN_MAX links read; one more is past the bound
+        T = 10 * (n + 1) + 5
+        self.assertEqual(tarec.seek_blocks(path, 0, T, 3, 0)[0], n + 2)
+        with self.assertRaisesRegex(tarec.Unreadable, "chains past"):
+            tarec.seek_blocks(path, 0, last, 3, 0)
+
+    @staticmethod
+    def chunk(first, last, reset):
+        """a sectioned stream block: a chunk of its run, the first when `reset`"""
+        flags = tarec.RBF_SECTIONS | (tarec.RBF_FRAME_RESET if reset else 0)
+        return flagged(tarec.RB_STREAM, first, last, b"c" * (last - first + 1), flags)
+
+    def test_a_run_is_decoded_from_its_start(self):
+        r1, r2 = self.chunk(1, 10, True), self.chunk(11, 20, False)
+        r3, r4 = self.chunk(21, 30, True), self.chunk(31, 40, False)
+        k20 = self.snap(20, False)
+        path = self.file(header(), r1, r2, k20, r3, r4, end_block(40))
+        # each chunk counts as its block; a seek starts where a run does
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 3, 0), self.of(k20, r3, r4))
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 3, 1), self.of(r1, k20, r3, r4, base=1))
+        self.assertEqual(tarec.seek_blocks(path, 0, 15, 3, 0), self.of(r1, r2))
+        # a seek from the first iteration reads every run from its start
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 40, 0), self.of(r1, r2, r3, r4))
+        # a chunk that continues its run past a snapshot: a read through it steps over the
+        # snapshot unread with the run still valid (block_skip), a seek from the snapshot would
+        # join the run in its middle
+        c3 = self.chunk(21, 30, False)
+        path = self.file(header(), r1, r2, k20, c3, end_block(30))
+        self.assertEqual(tarec.seek_blocks(path, 0, 25, 30, 0), self.of(r1, r2, c3))
+        with self.assertRaisesRegex(tarec.Unreadable, "continues a run"):
+            tarec.seek_blocks(path, 0, 25, 3, 0)
+        path = self.file(header(), r1, stream(11, 20, opens=False), self.chunk(21, 30, False),
+                         end_block(30))
+        with self.assertRaisesRegex(tarec.Unreadable, "continues a run"):
+            tarec.seek_blocks(path, 0, 25, 3, 0)
 
 
 class SeekWork(unittest.TestCase):

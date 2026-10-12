@@ -7,9 +7,10 @@
    copy of the recorded world built from the records alone, compares it with the fresh images the
    capture sends each iteration, and writes a difference into the file as a correction, counted and
    logged. The file is blocks (RecBlock): the header, stream blocks of whole iterations, a snapshot
-   of the copy every SNAPSHOT_TICKS, and the end. A packed block is a zstd frame; a stream block
-   goes through the stream's codec (tagpu_reccodec.c), which writes it as a sectioned container
-   when that decodes back to its records, and as the records otherwise (stream_block).
+   of the copy every SNAPSHOT_TICKS, and the end. A stream block goes through the stream's codec
+   (tagpu_reccodec.c), which writes it as a sectioned container, a chunk of its run's zstd frame,
+   when that decodes back to its records, and as the records in a zstd frame of their own
+   otherwise (stream_block); a snapshot is packed against the one before it (snapshot).
 
    THE STREAM IS LOSSY. Each completed iteration's records, exact as the capture made them and the
    corrections added, go through the lossy filter (tagpu_reclossy.c) into the stream: a skirmish
@@ -60,9 +61,9 @@
 #include "zstd.h"
 
 /* A stream block ends at an iteration past STREAM_BYTES or after STREAM_TICKS iterations, and
-   before every snapshot. Thirty iterations keep each block's zstd frame self-contained while the
-   frames' state runs on across blocks; the codec declines a block of more than
-   RECC_TICKS_MAX iterations. */
+   before every snapshot. A block is what a reader takes at once and the writer checks at once;
+   the frames' state and the run's zstd frame run on across blocks, so a block boundary costs the
+   run only a flush; the codec declines a block of more than RECC_TICKS_MAX iterations. */
 #define STREAM_BYTES   (2u << 20)
 #define STREAM_TICKS   30
 #define SNAPSHOT_TICKS 1800          /* 60 s of game time; why, and what it costs a seek:
@@ -160,12 +161,14 @@ typedef struct Writer {
     unsigned char  seats[4 + 12 * REC_PLAYERS];   /* RK_END's game end and RT_SEAT_ENDs   */
     unsigned long long raw, packed;   /* the stream's records, and the bytes written for them */
     unsigned       nstream;     /* the stream blocks written                             */
+    unsigned       nsnap;       /* the snapshots written                                 */
     RecStream      codec;       /* the stream's codec (tagpu_reccodec.h), when codec_on    */
     int            codec_on;
     void*          cctx;        /* the ZSTD_CCtx when the codec is off; when it is on, the
                                    codec's packs every block (block_cctx)                 */
     RecBytes       pk;          /* the packed bytes of a block the codec does not write    */
     LONGLONG       codec_qpc, codec_max;   /* its time, in all and for the slowest block  */
+    LONGLONG       snap_qpc, snap_max;     /* the snapshots' packing, the same            */
     RecMpFileState mp;
     RecMpHistory* mp_history;
     RecMpRecordEnd mp_end;
@@ -917,9 +920,12 @@ static void stream_block(Writer* w, unsigned first, unsigned last, const unsigne
         if (k == RECC_MISMATCH && w->codec.mismatched <= 4)
             tagpu_logf("recorder: writer: the codec did not decode back at GameTime %u-%u: "
                        "the block is written as records (a codec bug)", first, last);
-        else if (k == RECC_DECLINED && w->codec.declined <= 4)
+        else if (k == RECC_DECLINED && w->codec.declined - w->codec.nomem <= 4)
             tagpu_logf("recorder: writer: the codec declined GameTime %u-%u: the block is "
                        "written as records", first, last);
+        else if (k == RECC_NOMEM && w->codec.nomem <= 4)
+            tagpu_logf("recorder: writer: no memory to pack GameTime %u-%u in its run: the "
+                       "block is written as records", first, last);
     } else if (w->cctx && reccodec_pack(w->cctx, &w->pk, p, n)) {
         flags = 0;
         body = w->pk.p;
@@ -1041,9 +1047,27 @@ static void snapshot(Writer* w)
         }
     }
     if (b->oom) { fail(w, "no memory for a snapshot"); return; }
-    block(w, RB_SNAPSHOT, w->tick, w->tick, b->p, b->n, 1);
+    /* The chain is the codec's (reccodec_snapshot's INVARIANTS: its prefix is this segment's
+       last snapshot, a key at most every REC_CHAIN_MAX + 1); without the codec every snapshot is
+       a key at level 3. Either way the next stream block restarts the frames and the run. */
+    if (w->codec_on) {
+        LARGE_INTEGER t0, t1;
+        LONGLONG dt;
+        unsigned flags;
+        const unsigned char* body;
+        size_t bn;
+        QueryPerformanceCounter(&t0);
+        reccodec_snapshot(&w->codec, b->p, b->n, &flags, &body, &bn);
+        QueryPerformanceCounter(&t1);
+        dt = t1.QuadPart - t0.QuadPart;
+        w->snap_qpc += dt;
+        if (dt > w->snap_max) w->snap_max = dt;
+        block_put(w, RB_SNAPSHOT, flags, w->tick, w->tick, b->n, body, bn);
+    } else {
+        block(w, RB_SNAPSHOT, w->tick, w->tick, b->p, b->n, 1);
+    }
     w->snap_tick = w->tick;
-    w->codec.reset = 1;
+    w->nsnap++;
 }
 
 /* The iteration at `w->tick` is complete, the events of the step after it included: the filter
@@ -1692,11 +1716,13 @@ static void finish(Writer* w)
         tagpu_logf("recorder: writer: %s closed: %u iterations to GameTime %u, %u corrections, "
                    "stream %u KB of records written as %u KB; %u blocks: %u sectioned, %u "
                    "declined, %u MISMATCHED; the codec cost %u ms, at most %u ms for one "
-                   "block; the ring held %u KB at most", w->path, w->iterations, w->tick, corr,
+                   "block; the ring held %u KB at most; %u snapshots, %u of them keys, packed "
+                   "in %u ms, at most %u ms for one", w->path, w->iterations, w->tick, corr,
                    (unsigned)(w->raw >> 10), (unsigned)(w->packed >> 10), w->nstream,
                    w->codec.sectioned, w->codec.declined, w->codec.mismatched,
                    (unsigned)(w->codec_qpc * 1000 / hz), (unsigned)(w->codec_max * 1000 / hz),
-                   w->ring_high >> 10);
+                   w->ring_high >> 10, w->nsnap, w->codec_on ? w->codec.keys : w->nsnap,
+                   (unsigned)(w->snap_qpc * 1000 / hz), (unsigned)(w->snap_max * 1000 / hz));
     }
     recfile_unlock(&w->lock);
     free(e.p);

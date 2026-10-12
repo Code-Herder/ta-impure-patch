@@ -91,9 +91,12 @@
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
-here, and REC_FORMAT says which; this tool reads format 17 alone. A recording is REC_MAGIC, then
+here, and REC_FORMAT says which; this tool reads REC_FORMAT alone. A recording is REC_MAGIC, then
 blocks; a block is a 32-byte header and its payload, one zstd frame unless the block is stored (the
-header, end and timelines blocks always are), each checked by a CRC-32. A stream block may be a
+header, end and timelines blocks always are), each checked by a CRC-32 -- but for a sectioned stream
+block, whose payload is a chunk of its run's frame, and a chained snapshot (RBF_CHAINED), whose
+frame takes the segment's snapshot before it as its prefix (tagpu_recfmt.h, THE RUN AND THE
+CHAIN). A stream block may be a
 sectioned container (RBF_SECTIONS) that decodes to exactly the records it was made from: its unit
 deltas are made by the unit frame from the header's RT_CODEC, RT_PHYSICS and RT_AIR, its
 projectile records by the pool frame from the pool of RT_PROJECTILES records, and the bodies of
@@ -146,7 +149,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 17                           # the lossy stream: hold rows, sprays as sessions, cells held, script slices
+REC_FORMAT = 18                           # format 17's container, script slices, owner's queries
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -240,7 +243,7 @@ RECR_TIMELINES = 64         # the segments a file may hold (tagpu_recreader.h)
 RB_NAMES = {RB_HEADER: "header", RB_STREAM: "stream", RB_SNAPSHOT: "snapshot", RB_END: "end",
             RB_MINIMAP: "minimap", RB_TIMELINES: "timelines", RB_CONTRIBUTIONS: "contributions",
             RB_EXACT: "exact stream"}
-RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH = 1, 2, 4, 8
+RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH, RBF_CHAINED = 1, 2, 4, 8, 16
 
 (RT_FORMAT, RT_BUILD, RT_MODE, RT_MAP, RT_START, RT_WALLCLOCK, RT_SLOTS, RT_UNITS_EACH,
  RT_UNITDEFS, RT_PLAYER, RT_LEVER, RT_LAYOUT, RT_TABLE, RT_OPTIONS, RT_SETTINGS_MAP,
@@ -1804,9 +1807,10 @@ def cmd_info(path):
               f"(table {hold['sha'].hex()[:12]})")
     else:
         print("  the stream holds nothing: no RT_HOLD")
-    for k, first, last, r, pk in sizes:
+    for (k, first, last, r, pk), f in zip(sizes, flags):
         if k == RB_SNAPSHOT:
-            print(f"  snapshot at GameTime {last}: {r} bytes raw, {pk} packed")
+            print(f"  snapshot at GameTime {last}: {r} bytes raw, {pk} packed "
+                  f"({'chained' if f & RBF_CHAINED else 'a key'})")
     ev, evb = {}, {}
     for kind, first, last, payload in bl:
         if kind != RB_STREAM:
@@ -1941,23 +1945,30 @@ def seek_start(path, timeline, T, lead):
 def seek_blocks(path, timeline, T, lead, base):
     """The blocks the DLL's reader decodes for a seek to T of `timeline`, as recr_seek
     (tagpu_recreader.c) reads them, from the file's own blocks: (count, their bytes in the file,
-    their bytes unpacked), each a block header's. From the snapshot seek_start chooses -- after the
-    first stream block of that snapshot's segment when `base`, the reader not holding the
-    segment's base -- or from the first iteration seek_start chooses; then, in each segment of the
-    chain up to T, every stream block holding an iteration it reads: a block is decoded whole, and
-    one ends where an iteration does (tagpu_recwriter.c, iteration_done), so the reader opens no
-    block past the last iteration it reads. The snapshot, contribution and timeline blocks it
-    passes are skipped unread. `base` None is a reader that has read its chain's first iteration
-    and nothing since, as a playing in a fresh process holds after its first step: it holds the
-    root's base, so it reads a base only for a snapshot in a later segment of the chain.
-    THE FORMAT THIS MODELS: one snapshot block decoded once, and stream blocks decoded each on its
-    own. A snapshot chain -- a key snapshot and up to nine prefix snapshots, each decoded through
-    block_body -- or stream blocks that share one zstd stream per run (the recording-size work's
-    P1) changes what a seek decodes, and is modelled here in the same change that brings it, or
-    W3 fails every seek that reads it."""
-    sizes, offsets = [], []
-    bl, _ = blocks(path, sizes, offsets, decode=False)
+    their bytes unpacked, base), each size a block header's. From the snapshot seek_start chooses
+    -- after the first stream block of that snapshot's segment when `base`, the reader not holding
+    the segment's base -- or from the first iteration seek_start chooses; then, in each segment of
+    the chain up to T, every stream block holding an iteration it reads: a block is decoded whole,
+    and one ends where an iteration does (tagpu_recwriter.c, iteration_done), so the reader opens
+    no block past the last iteration it reads. The contribution, exact-stream and timeline blocks
+    it passes, and the snapshots between its iterations, are skipped unread. `base` None is a
+    reader that has read its chain's first iteration and nothing since, as a playing in a fresh
+    process holds after its first step: it holds the root's base, so it reads a base only for a
+    snapshot in a later segment of the chain.
+    THE CHAIN: a chained snapshot (RBF_CHAINED) is decoded with every snapshot of its segment
+    before it back to its key, each a block of the count (snapshot_chain); more than CHAIN_MAX
+    links, or a chain with no key in its segment, is Unreadable, as the reader refuses it.
+    THE RUN: a sectioned block is a chunk of its run's one zstd frame and counts as its block, its
+    header's packed and raw -- the chunk and the container it unpacks to, not the run's window.
+    The reader decodes a chunk only after its run's chunks before it (sections_ready): its codec
+    is invalid where a seek starts, at a crossing and after a records block, and only an
+    RBF_FRAME_RESET block starts it again. A seek starts only where a run does -- the stream
+    after a snapshot, a segment's first iteration -- so it decodes each run it reads from its
+    start; a file where it would not is Unreadable, as the reader refuses it."""
+    sizes, offsets, flags = [], [], []
+    bl, _ = blocks(path, sizes, offsets, flags=flags, decode=False)
     size = {id(b): sz for b, sz in zip(bl, sizes)}
+    flag = {id(b): f for b, f in zip(bl, flags)}
     ch = chain(segments(bl, offsets), timeline)
 
     def cover_end(i):
@@ -1972,12 +1983,39 @@ def seek_blocks(path, timeline, T, lead, base):
             if b[0] == RB_SNAPSHOT and b[2] <= cover_end(i) and b[2] + lead < T:
                 snap, frm = b, i
     read = []
+
+    def runs(stream):
+        """`stream`, the blocks one span of the seek decodes in order, after the codec was made
+        invalid: each sectioned block must restart the frame or continue one it decoded"""
+        valid = False
+        for b in stream:
+            if not flag[id(b)] & RBF_SECTIONS:
+                valid = False
+            elif flag[id(b)] & RBF_FRAME_RESET:
+                valid = True
+            elif not valid:
+                raise Unreadable(f"the stream block of GameTime {b[1]} to {b[2]} continues a run "
+                                 f"the seek to {T} does not start")
+        read.extend(stream)
+
     if base is None:
         base = snap is not None and frm > 0
     if snap is not None:
         if base:
-            read.append(next(b for b in ch[frm]["blocks"] if b[0] == RB_STREAM))
-        read.append(snap)
+            runs([next(b for b in ch[frm]["blocks"] if b[0] == RB_STREAM)])
+        snaps = [b for b in ch[frm]["blocks"] if b[0] == RB_SNAPSHOT]
+        k = next(j for j, b in enumerate(snaps) if b is snap)
+        links = [snap]
+        while flag[id(links[0])] & RBF_CHAINED:
+            if k == 0:
+                raise Unreadable(f"the chained snapshot of GameTime {links[0][2]} has no snapshot "
+                                 f"before it in its segment")
+            if len(links) == _codec().CHAIN_MAX + 1:
+                raise Unreadable(f"the snapshot of GameTime {snap[2]} chains past "
+                                 f"{_codec().CHAIN_MAX} snapshots to its key")
+            k -= 1
+            links.insert(0, snaps[k])
+        read += links
         start = snap[2] + 1
     else:
         lo = T - lead if T > lead else 0
@@ -1987,7 +2025,7 @@ def seek_blocks(path, timeline, T, lead, base):
         start = ch[frm]["first"]
     for i in range(frm, hold + 1):
         end = T if i == hold else cover_end(i)
-        read += [b for b in ch[i]["blocks"] if b[0] == RB_STREAM and b[1] <= end and b[2] >= start]
+        runs([b for b in ch[i]["blocks"] if b[0] == RB_STREAM and b[1] <= end and b[2] >= start])
         if i < hold:
             start = ch[i + 1]["fork_at"]
     return (len(read), sum(size[id(b)][4] for b in read), sum(size[id(b)][3] for b in read),
