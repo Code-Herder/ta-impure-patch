@@ -1529,16 +1529,28 @@ CLOCK*) -- still reach their first slice a tick late, as does every start on ano
 replayed death in the recording machine's own blocks runs its Killed as that machine's
 `Send_UnitDeath` did, as the query; another owner's, as the peer's destructor start
 ([completeness](demo-recorder-completeness.md), *COB slices a playing gives one tick late*).
+The death record does not carry the destructor's mode, so the playing takes `slice_own(slot)` --
+the unit's slot in one of the recording machine's own blocks -- as the proxy for "the recording
+machine ran `Send_UnitDeath` for it" at the recorder's death hook. The case the proxy can miss is
+the kill-all `0x486F10`, which calls `Send_UnitDeath(unit, 3)` at `0x486FB4` for every unit of a
+player row, its callers `0x4164DF`, `0x416A00`, `0x416A58` and `0x452E17` (the player removal):
+run on the recording machine for another owner's units, that is the query there and the peer's
+start on the playing. Such a death normally carries severity 0 [INFERRED], which makes no Killed
+through the start (`0x48685A`'s `jle`) where the recording machine ran the query.
 The owner's COB queries (`RK_EV_QUERY`) ride the primary stream the same way: the recording machine
-makes them only for the units its own order handlers run, and the playing makes each at its place
+makes them only in the order handlers of its own units, and the playing makes each at its place
 among the primary events; another machine's queries are made on its own copy of the unit, which
-this recording does not hold. A query of an own unit the same step creates comes before that
+this recording does not hold. SelfRepair's query is on the repairing pad, which can be another
+owner's: its later slice is marked, but a playing plans only own units' markers, so such a pad's
+slice stays in the host's tick, before the query (M1). A query of an own unit the same step creates comes before that
 unit's CREATE_BEGIN there, so it finds no live unit and is counted as not made (the playing's
 log line, *the owner's queries*). No multiplayer run has measured the queries yet.
 MEASURED 2026-10-12, a two-peer recording made with `recmp_create_begin_test.py --reproduce
 --until 1400` and played from the start by `recmp_play_test.py`: the recording machine marked
-3,296 slices; the playing planned 2,885, gave 2,884 at their markers and 1 at a create's end, none
-at the step's end, and left 6 remote markers in the host's tick; `recmp_compare.py` EQUAL at 150,
+3,296 slices over its whole recording, GameTime 1 to 1474; the playing, from GameTime 1 to its
+level's end at 1233, planned 2,885, gave 2,884 at their markers and 1 at a create's end, none at
+the step's end, and left 6 remote markers in the host's tick -- so the two counts cover different
+windows and are not meant to sum; `recmp_compare.py` EQUAL at 150,
 600 and 1201. The recorder counts only skirmish levels, so a multiplayer playing's counts are not
 compared: the log line shows where the slices went, and the dumps that nothing else moved.
 

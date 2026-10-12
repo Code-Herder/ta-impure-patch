@@ -1587,17 +1587,22 @@ death of a unit the machine itself destroys, runs Killed as a query, `0x4B0BC0(c
 name and calls the query `0x4B0C40` at `0x4B0C2F`), which allocates one thread (`0x4B0C48`) and
 runs that thread alone at `dt` 0 (`0x4B0CE1`); it skips the query for modes 4, 5, 7 and 9 and a
 unit whose `+0x108` is above 0 (`0x486525..0x48655C`), and writes the query's severity as the
-`0x0C`'s `+9` (`0x4865E9..0x4865F4`). The corpse slot it passes is a local written only on the
+`0x0C`'s `+9` (`0x4865E9..0x4865F4`): the value after the call, which the query wrote back
+(`0x4B0CE6..0x4B0D11`), so it is the value that went in unless the script assigns its first
+parameter [INFERRED: no stock Killed seen to]. The corpse slot it passes is a local written only on the
 mode-7 path, which skips the query (`0x48652C`, `0x486528`). The destructor `0x4866D0(rec, mode)`
 starts Killed itself only in mode 0 and when the record's severity `+9` is above 0
 (`0x48684A..0x48685A`): `0x4B0A70("Killed", 0, run-now 1, argc 1, severity, 0, 0, 0)` at
-`0x486877`, whose result nothing reads (`0x48687C` overwrites `eax`, `ecx`, `edx`). A run-now
+`0x486877`, after which nothing relies on what the call leaves in `eax`, `ecx` or `edx`: the paths
+that skip it (`0x486853`, `0x48685A`) join it at `0x48687C` with unrelated values there (the stock
+call returns with `ecx` the COB object, its `pop ecx`). A run-now
 start runs every record of the object at `dt` 0, so a waiting thread of the dying unit -- an aim
 script whose turn the last slice finished -- runs on and starts what it starts before the object
 is deleted, which the owner's query does not. A playing applies a recorded death as a peer's,
 mode 0, so Impure takes the call at `0x486877` (`tagpu_patches.c`, THE KILLED SCRIPT OF A
 REPLAYED DEATH): inside a replayed death the recording machine made itself, the query with the
-record's severity; everywhere else the stock start.
+record's severity, the recording machine's answer -- so a severity of 0 or below there makes no
+Killed on the playing (`0x48685A`'s `jle`); everywhere else the stock start.
 
 **The script slice in Impure.** The unit tick's script call (`0x48ADDF..0x48ADF0`, the unit tick's
 row) jumps to `pushad; push esi; call unit_slice; add esp,4; popad; jmp 0x48ADF0`, in the
@@ -1623,7 +1628,10 @@ an order handler, which a playing's puppets never run:
   `0x43E060` at `0x40280B`.
 - **`QueryNanoPiece`** (`0x5052D4`), whose one call is `0x43E427` inside `0x43E400(unit, out)`,
   with the piece local set to 0 (`0x43E41F`) and the other three arguments 0 (*The nano spray*,
-  above); `0x43E400` has fifteen callers, all order handlers.
+  above); `0x43E400` has fifteen callers, all order handlers, each passing the spray's source: the
+  handler's unit (the order's `+0xE`, or the register holding it), except SelfRepair `0x402430`,
+  which passes the repairing pad, the order's target `+0x16` (`mov eax,[edi+0x16]` at `0x402525`,
+  the call at `0x40252E`), in the aircraft's turn; the pad can be another player's.
 
 `0x4B0BC0` reads the object at once (`mov eax,[ecx+8]`, `0x4B0BC1`), so a unit with no script
 (`+0x9A` NULL, `0x485DFF`) never reaches either call in a running game. It finds the script by
@@ -1640,8 +1648,11 @@ unit's turn after its script slice (`0x48ADEB`) and behind the gate that its own
 seat of type 1 or 2 (`0x48AEB5..0x48AECD`); no dword in the file holds either address.
 `0x43A21A` is the destructor `0x43A1F0`'s call, with event 2, which BuildingBuild returns on
 before its state dispatch (`0x402647..0x40264D`) and which the ten handlers that do not set the
-order's bit `0x02` never receive. So each query is made in its unit's own turn, after its slice,
-inside no death and no feature call, on the unit's owner's machine only.
+order's bit `0x02` never receive. So each query is made in the handler's unit's own turn, after
+that unit's slice, inside no death and no feature call, on the machine of that unit's owner. The
+queried unit is that unit, except SelfRepair's pad: its query can come before the pad's own slice
+in the same tick, and on a machine that does not own the pad. The slice markers' start set notes
+every query's COB, which is what puts the pad's later slice after the query on a playing.
 
 **In Impure.** A recording carries each as `RK_EV_QUERY {ID, the query}` where the engine makes
 it: a stub on the call `0x4027FB`, built like the owner-only starts' (the `call`, the `mov` and the

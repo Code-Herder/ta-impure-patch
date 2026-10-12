@@ -216,7 +216,7 @@ then eight sections, in this order: the record kinds in payload order as runs (`
 **unit frame**, which makes every `RK_UNIT_DELTA` (`RCS_UNITS`); the **pool frame**, which makes
 every `RK_PROJ_HEAD`, `RK_PROJ` and `RK_PROJ_DELTA` (`RCS_PROJ`); the **cells frame**
 (`RCS_CELLS`, every `RK_CELLS`), the **orders frame** (`RCS_ORDERS`, every `RK_ORDERS`) and the
-**events frame** (`RCS_EVENTS`, `RK_EV_CREATE..RK_EV_DEATH_END`, `RK_EV_NET_CREATE` and `RK_EV_SLICE`); the
+**events frame** (`RCS_EVENTS`, `RK_EV_CREATE..RK_EV_DEATH_END`, `RK_EV_NET_CREATE`, `RK_EV_SLICE` and `RK_EV_QUERY`); the
 bodies of every other kind verbatim, each behind a varint length (`RCS_OTHER`: the ticks, the
 unit images and gones, the tables, the perspective kinds and the rest); and the **state frame**
 (`RCS_STATE`, every `RK_GLOBALS`, `RK_GLOBALS_DELTA`, `RK_PLAYER`, `RK_PLAYER_DELTA`, `RK_WRECK`
@@ -2603,7 +2603,9 @@ first slice a tick late, and a looping script stayed re-phased for the unit's li
   walk 3271/3268, walklegs 1025/1028 live/puppet over [1141, 3481)); on this landing's, over
   [631, 2881), its recording held 1,548 markers -- 17 after the unit's create in the same
   iteration, 1,408 after a START or a SHOT, 103 after a named start, 20 after nothing recorded --
-  and the playing gave all 2,045 it planned at their markers, none at the step's end.
+  and the P lane's playing, over its whole run from GameTime 1 to its last dump at 2881, gave all
+  2,045 it planned at their markers, none at the step's end (the two windows differ: the
+  recording's markers before 631 are in the second count and not the first).
 - **A replayed death's Killed** runs as the recording machine ran it, as a query
   ([completeness](demo-recorder-completeness.md), *COB slices a playing gives one tick late*).
 - **What it leaves**: the walk class's run-now pass, seeks and round trips (fresh COB from

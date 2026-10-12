@@ -574,11 +574,14 @@ Create in a later slot -- takes its first slice where it did on the recording ma
 
 ### 1.8c The owner's COB queries — `RK_EV_QUERY` (format 18)
 
-Not a root: a COB query `0x4B0BC0` only an order handler makes, so only the unit's owner's
-machine -- `QueryBuildInfo` at `0x4027FB` (BuildingBuild) and `QueryNanoPiece` at `0x43E427`
-(inside `0x43E400`, from fifteen handlers). `{u32 ID, u8 the query, u8 0 x3}`, outside any bracket,
-written where the engine makes the query, in the unit's turn after its slice; a playing makes the
-same query there with the engine's arguments
+Not a root: a COB query `0x4B0BC0` only an order handler makes, so only the machine of the
+handler's unit's owner -- `QueryBuildInfo` at `0x4027FB` (BuildingBuild) and `QueryNanoPiece` at
+`0x43E427` (inside `0x43E400`, from fifteen handlers). `{u32 ID, u8 the query, u8 0 x3}`, outside
+any bracket, written where the engine makes the query, in the handler's unit's turn after that
+unit's slice. The queried unit is the spray's source: the handler's unit, or in SelfRepair
+(`0x402525..0x40252E`) the repairing pad, whose own slice can come later in the tick and which can
+be another player's; the query's COB is noted in the slice set so that slice is marked. A playing
+makes the same query there with the engine's arguments
 ([engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
 
 ### 1.9 The unit state a death must carry

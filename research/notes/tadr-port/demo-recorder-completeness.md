@@ -1115,6 +1115,24 @@ Not closed by the marker:
   The live slice read the tick as far as the unit's turn; a host-tick slice reads the capture
   image plus the host's tick so far, a deferred one that plus the events before its marker
   [INFERRED: not seen].
+- **The order of COB RAND draws against the shared simulation RNG.** A slice's RAND draws from
+  the simulation RNG `0x4B6C30` (the call at `0x4B15E0`), whose state `0x51FC88` every other draw
+  steps too. On the recording machine the order runs' controllers (`0x43B951` in `0x43B7C0`,
+  `0x43BB33` in `0x43BAD0`), the order handlers and the aim path (`0x49D727`, `0x49D733`) draw
+  between slices; a puppet makes none of those draws, and the slice marker moves a marked unit's
+  slice, with its draws, after the host-tick slices and the events before its marker. So a
+  script's RAND can read another value than the recording machine's [INFERRED: not measured]. Not
+  a regression of the marker: the capture point writes the RNG's state from the recording every
+  step (`replay-globals.tsv`, `rngseed`), so a difference lasts one step; open.
+- **`setSFXoccupy` on a puppet.** The start is `0x43DBE8`, in the water-state function `0x43DB50`,
+  made when `+0x10A` changes: on the recording machine in the owner-gated movement pass, after the
+  unit's slice, run-now; a puppet makes it where the playing writes the images' water state
+  ([the engine map](../exe-reverse-engineering.md), `0x43DB50`), so a type whose script has
+  `setSFXoccupy` runs it at another place than the recording machine did. No fixture carries such
+  a type: under `--cob-exact` the naval fixtures pass with no `setSFXoccupy` start on either side
+  (MEASURED 2026-10-12, `naval-push` and `naval-unmapped`), and hovercraft and amphibious units
+  are in none. The owner has decided the follow-up landing, right after this one, adds the
+  fixtures; open until then.
 - **A unit dying before its turn** in the same tick, only through an earlier turn's immediate
   kill [INFERRED: a reclaim of a live unit]: live it gets no slice, a puppet gives it one in the
   host's tick.
