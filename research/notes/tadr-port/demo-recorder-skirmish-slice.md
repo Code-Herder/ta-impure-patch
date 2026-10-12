@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 12 and its readers take format 12 alone (*The file*, below).
+The recorder writes recording format 13 and its readers take format 13 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -140,7 +140,7 @@ One file per recording, `replays\<date> <time> <map>.imprec` in the game's folde
 stored sizes, a CRC-32 of the stored bytes and one of the header — and the payload: exactly one
 zstd frame of the raw bytes (level 3, the vendored zstd 1.5.7 in `src/zstd.c`) when that is
 smaller, else the bytes stored. The header, the end and the timelines blocks are always stored, so
-a header reads without zstd. `inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 12; a reader takes
+a header reads without zstd. `inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 13; a reader takes
 that format alone:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
@@ -149,12 +149,19 @@ that format alone:
   registry's levers and their text, the exclusion file's SHA-256, and the recorded declarations
   (index, class, key, row size, flags and name), so a reader can walk their images; the main
   menu's version text, the mounted archives and the mod's fingerprint (*What the Replays browser
-  asks of a recording*); and the unit frame's constants (below): `RT_CODEC`, `RT_PHYSICS`, `RT_AIR`;
+  asks of a recording*); the unit frame's constants (below): `RT_CODEC`, `RT_PHYSICS`, `RT_AIR`;
+  and in a skirmish recording `RT_HOLD`: the refresh interval (300 ticks), the hold table's
+  masks and its SHA-256, what the stream may hold between two refreshes (the lossy filter,
+  [making recordings smaller](demo-recorder-size.md#l5-the-lossy-plan-measured-offline));
 - **a minimap block** right after it, when the map has a picture;
-- **stream blocks** of whole iterations, each ending at the first iteration past 2 MiB or at 30
-  iterations, and before every snapshot;
-- **a snapshot block** every 1,800 iterations (`SNAPSHOT_TICKS`, 60 seconds at normal speed),
-  built from the writer's copy, with only the cells that differ from the grid at the end of the
+- **stream blocks** of whole iterations, written by the lossy filter from the writer's exact
+  records, each ending at the first iteration past 2 MiB, at 30 iterations, or at a refresh — the
+  segment's first iteration and every GameTime 1 modulo the interval, where the stream's world
+  equals the writer's copy, checked — which flags it `RBF_REFRESH`; under the test lever
+  `tagpu_rec.exact` each is followed by an `RB_EXACT` block of its exact records, which a reader
+  of the stream skips;
+- **a snapshot block** at the first refresh 1,800 iterations or more after the last
+  (`SNAPSHOT_TICKS`, 60 seconds at normal speed), built from the writer's copy, with only the cells that differ from the grid at the end of the
   segment's first iteration (the base), only the wreck records that differ from the pool then (the
   wreck base; a record now zero included), both bases taken there by the writer's
   `iteration_done` and the reader's `tick_take`, and no table span that is all zero. The copy's

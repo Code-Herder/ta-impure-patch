@@ -1753,7 +1753,9 @@ init `0x49E070` walk them with `esi` = unit + 0x1F + 0x1C·i, the slot's last by
   point is (x, z) in whole world units (`0x48A0A0`), a z of `0x8000` stored as `0x8001` so that it
   cannot read as a unit (`0x48A0C6..0x48A0D0`); none is (0, `0x8000`) (`0x48A160`; `0x48A0F0` also
   starts COB `TargetCleared`). The resolver `0x48A190` takes word 1 = `0x8000` with word 0 ≠ 0 as
-  `begin + word0·0x118`. Both setters clear `+0xBA` bits 10–14 (`and 0x83FF`). MEASURED: 3,448
+  `begin + movsx(word0)·0x118`, with no upper bound and no alive test (`0x48A19F..0x48A1D7`, DIS),
+  and AutoAim's per-tick target read `0x48A1E0` tests only the target's `+0xA6` (`0x48A295`, DIS):
+  *The demo recorder's lossy stream*, below, for why a takeover depends on it. Both setters clear `+0xBA` bits 10–14 (`and 0x83FF`). MEASURED: 3,448
   unit targets, each naming a live slot; every ground target is the point the probe scenario's
   attack order named.
 - **`+0x4`** is the vtable `0x4FD6F0` of a two-dword callback {vtable, result} over `+0x4..+0xB`,
@@ -1767,7 +1769,12 @@ init `0x49E070` walk them with `esi` = unit + 0x1F + 0x1C·i, the slot's last by
   the creates. **The restore writes the saved weapon ID into the shared weapon def**
   (`0x487628`, `[wdef]+0x10A`) instead of re-pointing the slot: a no-op when the IDs agree.
 - **`+0x10`**, a create-time distance (the ftol of 1.25 × a coordinate difference between the
-  `QueryX` and `AimFromX` points, `0x49E0EA..0x49E11B`), no reader found; **`+0x14`**, the reload
+  `QueryX` and `AimFromX` points, `0x49E0EA..0x49E11B`), written only there (`0x49E11B`, in
+  `0x49E070`, which only the creates call: `0x485F04`, `0x4860AC`, `0x4862C4`), so constant after
+  the create. Its reader is the ballistic shot builder `0x49CDE0` at `0x49CE62`: distance / weapon
+  `+0x68` × gravity `main+0x14263`, subtracted from the projectile's vy `+0x20`
+  (`0x49CE85..0x49CE8A`), which runs on a puppet too, through the shot receiver `0x49D270`
+  (`0x49D44E`). DIS; **`+0x14`**, the reload
   countdown (set at fire `0x49E4EE`, decremented by AutoAim `0x49E1C8..0x49E1D2`, which runs for
   type-1/2 owners only); **`+0x16`/`+0x18`**, the aim heading and pitch; **`+0x1A`**, the stockpile
   count; **`+0x1B`**: bit 0 aimed, bit 1 a weapon present, bits 2–3 the slot's index, bit 4 set
@@ -1832,7 +1839,9 @@ index `+0xA6` holds.
   nodes (the reference at node `+0x12`, the node its owner: `0x43A137`, `0x43A44F`) and the air
   orders' payload objects (0x36 bytes, the reference at `+0x16`, owner 0: `0x44DE80`–`0x44E330`).
   The walkers call `owner->vtable[0](event)`, which is `node+0x4E |= event` (`0x438870`), so the
-  chain's order changes nothing. MEASURED: all 770 nonempty chains equal the set of captured nodes
+  chain's order changes nothing. The death walk `0x489740` (one caller, the destructor's `0x486D75`)
+  passes event 8, so on a puppet a replayed death ORs 8 into `+0x4E` of every node that targets the
+  dying unit (DIS). MEASURED: all 770 nonempty chains equal the set of captured nodes
   that target the unit; no payload reference was caught.
 - **`+0xEC`** is `+0x30` of the resource object at `+0xBC`, which `0x401070` sets from the create
   (`0x485D0A`): the owner's record again, MEASURED equal to `+0x96` in every record. The player
@@ -3557,7 +3566,7 @@ fixture.
 
 ### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 12 carries a stream block's unit deltas as residuals against a prediction, the
+Recording format 13 carries a stream block's unit deltas as residuals against a prediction, the
 *unit frame* (`tagpu/ddraw/src/tagpu_reccodec.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the plan and its measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md)). Where a rule exists the prediction
@@ -3700,7 +3709,7 @@ non-zero pitch scale (none of the recordings had one); the steering term's hidde
 
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 12 carries a stream block's projectile records as the *pool frame*
+Recording format 13 carries a stream block's projectile records as the *pool frame*
 (`tagpu/ddraw/src/tagpu_reccodec.c`, THE POOL FRAME; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md#l2-the-pool-frame-measured)): the
@@ -3774,7 +3783,7 @@ largest residual column of the battle, 214 KiB of its 2.09 MiB.
 
 ### The demo recorder's record frames: the engine facts they predict from [DISASSEMBLED + MEASURED 2026-10-10]
 
-Recording format 12 makes the bodies of a stream block's cells, order lists, events and state
+Recording format 13 makes the bodies of a stream block's cells, order lists, events and state
 records from four *record frames* (`tagpu/ddraw/src/tagpu_recframe_cells.c`, `_orders.c`,
 `_events.c`, `_state.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
@@ -3835,6 +3844,53 @@ records back, so a wrong fact costs size, never data. Each address was re-read i
   recordings, after each run's first iteration: the images equal the previous tick input record
   for record in 7,399 of 7,401 iterations of the battle, 3,956 of 3,985 of Town & Country and
   5,757 of 5,904 of the air war. The cell's fields are *The cell*, above.
+
+### The demo recorder's lossy stream: what a held byte meets on a puppet and at a takeover [DISASSEMBLED 2026-10-11]
+
+Recording format 13 writes a skirmish recording's stream through a lossy filter
+(`tagpu/ddraw/src/tagpu_reclossy.c`): the bytes `tagpu/ddraw/replay-hold.tsv` names may keep an
+earlier value between two refreshes, and at a refresh the stream's world is the writer's exact
+copy ([making recordings smaller](tadr-port/demo-recorder-size.md#l5-the-lossy-plan-measured-offline)).
+The filter's correctness rests on these engine facts, from a census of the readers and writers of
+every field the plan would hold (2026-10-11; rel32 and stored-pointer scans of `.text`, each hit
+disassembled):
+
+- **Two engine writes of held bytes run on a puppet between two image writes**, and the playing's
+  next iteration writes over both: the unit destructor `0x486760`, at a replayed death of kind 5
+  with a killer, read-modify-writes the killer's `+0xD4` with `(1.0 − victim +0x104) × def
+  +0x18A` (`0x486CAD..0x486D1E`, the credit above); the death walk `0x489740` ORs event 8 into
+  node `+0x4E` (*The pointer fields*, `+0xA2`). The playing writes every live unit's image and
+  both lists of every live unit at every iteration (`tagpu_replay.c`, `units_put` and
+  `orders_put`), and neither `+0xD4` nor node `+0x4E` is a `replay-layout.tsv` exclusion. No
+  reader of either runs on a puppet in between: the bottom panel reads `+0xCC`, `+0xD0`, `+0xE4`
+  and `+0xE8`, and `+0x4E` is read by the order controller and the handlers, which the unit tick
+  runs only for a type-1/2 owner (`0x48AEB5..0x48AECD`). The Deathmatch respawn's writes of
+  `+0xBC`/`+0xD4` (`0x465457..0x4654E7`) sit behind the defeat test the seat fill disarms on a
+  puppet [INFERRED that they do not run there].
+- **The node destructor's reads that the puppet rows neutralise.** `0x43A1F0` reads node `+0x06`
+  bit 1 and then calls the order's handler with event 2 (`0x43A21A`), tests `+0x42` bit `0x10000`
+  before its `0x489800` call (`0x43A2AB`), and deletes the owned object when `+0x52` is set
+  (`0x43A264..0x43A2A2`). It runs on a puppet (from `0x439EB0`, `0x439F80` and Impure's order
+  teardown); the playing's `ord_values` forces `replay-layout.tsv`'s `puppet0`/`puppet1` rows on
+  every node it writes, after the image, so a held value of these bytes never reaches it.
+- **Owner code dereferences a slot's target unbounded.** The resolver `0x48A190` and AutoAim's read
+  `0x48A1E0` (*The weapon slots*, above). Their callers are handlers, the AI, the retaliation
+  (`0x407141`, behind the damage apply `0x489CE0` that a puppet refuses) and AutoAim, whose one
+  caller `0x48ADDA` sits behind the owner's type-1/2 test (`0x48ADC9..0x48ADD7`), so none runs on a
+  puppet; all of them run after a takeover. So a takeover starts only at a refresh, where the
+  targets are the engine's own (`tagpu_replay.c`, `tk_bound`).
+- **The shot builder reads slot `+0x10` on a puppet** (`0x49CE62`, *The weapon slots*): a field
+  constant after the create, so the plan's "read by owner code only" does not hold for it.
+- **`0x408198` is AI code, not a handler.** `0x408100`, which reads the head node's `+0x42` bit
+  `0x8` there (`0x408191..0x40819C`), is method 0 of the two-entry vtable `0x4FC9A8` {`0x408100`,
+  `0x408600`}, stored by the AI object's constructor `0x408CB0` (`0x408D3D`) in one of its ten
+  sub-objects, which the AI tick `0x408C40` calls (`0x408C8E`); `0x408C40` runs only for a record
+  with `+0x74` set (`0x46502A..0x465031`), and a puppet seat holds none.
+- **Not established**: whether `0x406F50`'s callers (`0x499CBC`, `0x49A09B`, `0x49A837`), which set
+  `+0xBB` bits, run on puppet impacts; whether the order entries `0x487BF0` (from `0x488514`) and
+  `0x4881E0` can reach a puppet's units; callers of `0x439CF0`, `0x43AB90`, `0x43AD50`,
+  `0x43AF00`/`0x43AF10`, `0x43B350`, `0x43B3A0`, `0x43B730` and `0x43BBD0` through jump tables
+  (none by rel32 or stored pointer).
 
 ### The demo recorder's tick boundaries: the sim step `0x495490` and its callers [DISASSEMBLED 2026-10-01]
 

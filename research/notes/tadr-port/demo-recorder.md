@@ -174,6 +174,11 @@ other players; a multiplayer game is rewound from its finished recording.
   at the takeover point.
 - **An unfinished recording** (a crash, or leaving early) opens in the Replays browser like any
   other: fork from any point or play on from its end. There is no separate "Continue" feature.
+- **A fork starts at a refresh**, the last one at or before the moment chosen: a skirmish
+  recording refreshes every 300 ticks (10 s of game time at normal speed), and between two
+  refreshes its stream may hold internal values a viewer never sees at an earlier value, which a
+  live game must not inherit ([S4b](demo-recorder-s4-takeover.md#driving-it)). A live rewind's
+  fork rounds the same way.
 - **More than four players.** A stock skirmish seats four players (measured: it refused every
   unit of seats 4–9, [scenario format](../scenario-format.md)); the four is its screen's seat
   count, and the first feasibility experiment seated ten puppet players in a skirmish level
@@ -200,11 +205,13 @@ other players; a multiplayer game is rewound from its finished recording.
 - **Keep recordings by default.** Show total replay storage in the browser. Offer optional
   cleanup by age or total size; favorites are protected from automatic deletion.
 - **Disk budget.** Targets per match-hour: **at most 10 MB for a 1v1, 25 MB for a
-  typical four-player game, and 100 MB for ten players with 1,500 units.** The recording stays
-  exact: every value at every tick, made small by lossless coding
+  typical four-player game, and 100 MB for ten players with 1,500 units.** Every value a viewer
+  sees stays exact at every tick, made small by lossless coding
   ([making recordings smaller](demo-recorder-size.md)), so a replay shows exactly what the game
-  computed and takeover can start from any tick's state. Precision is cut only if the measured hour
-  misses a budget, and each such loosening is a decision of its own. These targets rest on an estimate, not a measurement
+  computed. The owner chose to go lossy after the measured hours (2026-10-11): from format 13 a
+  skirmish stream may hold the internal bytes `replay-hold.tsv` names at an earlier value between
+  two refreshes, exact again at every refresh, which is where a takeover starts; each row of that
+  table is a loosening and a decision of its own, and format 13's table has none yet. These targets rest on an estimate, not a measurement
   ([open decisions](#open-decisions-and-evidence-needed)). So far an eight-minute four-AI game
   measured about 5–7 MB per hour, and a 1,432-unit battle would reach 160–640 MB if sustained for
   an hour ([evidence](demo-recorder-state-evidence.md#4-size-estimate)). A real hour-long four-player game with AI and structures is measured before

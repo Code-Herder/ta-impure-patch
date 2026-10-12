@@ -93,7 +93,8 @@ change unless `make` or the replay harness names one. The classes, the wrappers 
 - **A replay shows what the game showed**: display state that follows from simulation
   events is `SIM_STATE`, not `SIM_PRIVATE`.
 - **Loosening is the owner's decision**: an exclusion, a `presentation` file, TRANSIENT or
-  PRIVATE on memory the simulation reads, an expected-absent event, a tolerance. A
+  PRIVATE on memory the simulation reads, an expected-absent event, a tolerance, a hold row
+  (`replay-hold.tsv`: bytes the stream keeps at an earlier value between refreshes). A
   difference the harness names is a bug in the change, never grounds for an exclusion.
 
 ## Land it yourself — what actually requires a human

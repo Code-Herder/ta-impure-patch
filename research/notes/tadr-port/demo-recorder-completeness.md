@@ -431,6 +431,23 @@ once), `seek <T> [dump <name>]`, `hud seek <T>` (the replay HUD's timeline's own
 `tagpu_replay_seek_request`, which takes no dump), `roundtrip <name> at <T>`, `turbo on` and `turbo
 off`, `pause at <T>` and `resume` (*Test speed* below).
 
+**The exact stream.** A skirmish recording's stream is lossy from format 13 on
+(`tagpu_reclossy.c`): the bytes `replay-hold.tsv` names may keep an earlier value between two
+refreshes, so a puppet's dump is compared with the lossy file and a live dump is not. The L and K
+lanes launch with the test lever `tagpu_rec.exact`, under which the writer follows every stream
+block with the exact records it filtered (`RB_EXACT`). L's dumps are compared with that exact
+stream (`tarec compare --exact`), and `tarec lossy-check` walks the two streams side by side and
+fails by name unless, at every iteration, every byte the hold masks leave clear is equal, every
+held byte is the stream's previous value or the exact one, the two worlds are equal at every
+refresh and every refresh sits on its grid and ends its block. Together they prove every shown
+byte of the lossy file against the live game at every iteration, not only at L's dumps. K's dump
+is compared with the fork's exact stream, F's with its lossy stream, and timeline 1 is
+lossy-checked. The fixtures with a takeover launch every process with `tagpu_rec.refresh 30`
+(*Taking over*: a takeover starts at a refresh). **A hold row is a loosening**, the owner's
+decision like an exclusion: it names its readers on a playback host and its evidence, and a reader
+found there that shows the byte removes the row. Format 13's table has no row, so its stream
+carries every record as the capture made it.
+
 **Test speed.** Tick-driven runs default to internal game speed 20 (2x normal),
 within the retail setter's range. `--game-speed 10` selects normal speed for
 `run`, `measure`, `landing`, `broad`, `takeover`, `forks` and `rewind`. Every launch
