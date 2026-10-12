@@ -1397,6 +1397,11 @@ class Occupancy(unittest.TestCase):
         a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
         self.assertEqual(len(tarec.occupancy(a, b, contest=True)), 1)
 
+    def test_contest_a_structure_named_in_slot_b_fails(self):
+        a, b = self.worlds({1: self.unit(1, 1, state=tarec.STRUCTURE | 1)}, {(1, 1): (0, 1)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertTrue(any("names structure 1 in slot B" in line for line in out), out)
+
     def test_contest_the_layer_s_slot(self):
         # layer 1 filed in slot B, and layer 2 in slot A
         a, b = self.worlds({1: self.unit(1, 1)}, {(1, 1): (0, 1)})

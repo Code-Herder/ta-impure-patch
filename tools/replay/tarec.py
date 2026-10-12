@@ -2479,13 +2479,15 @@ def occupancy(w, dw, contest=False):
     layer 2), or, when it carries the loser's mark, bit 27, names there another live unit of the
     same layer -- or a structure, for a layer-1 unit: the stamp files a structure in slot A
     whatever its layer (0x47CD5A -> 0x47CDA5) -- whose footprint holds the cell and which carries
-    the holder's mark, bit 26 -- the
-    engine's contest kept the cell for that one (the stamp's contest, 0x47CDDB..0x47CE1D, sets 26
-    on the unit that keeps the cell and 27 on the other; a unit's clear, 0x47D286..0x47D2C4, drops
-    its 27 and, holding 26, drops that and re-claims for the bit-27 units: DISASSEMBLED); a slot
-    names a unit of its own layer; and the contest's
-    marks, +0x110 bits 26 and 27, are taken from the dump too. The differences those checks
-    find."""
+    the holder's mark, bit 26 -- the engine's contest kept the cell for that one (the stamp's
+    contest, 0x47CDDB..0x47CE1D, sets 26 on the unit that keeps the cell and 27 on the other; a
+    unit's clear, 0x47D286..0x47D2C4, drops its 27 and, holding 26, drops that and re-claims for
+    the bit-27 units: DISASSEMBLED); a slot names a mobile unit of its own layer, or a structure
+    in slot A; and the contest's marks, +0x110 bits 26 and 27, are taken from the dump too. The
+    differences those checks find. Not checked: which cells of a structure's footprint name it --
+    the stamp files a structure only at the cells its yardmap sets under the current mask
+    (0x47CD82..0x47CD9F), which a dump does not carry -- nor, the marks being per unit, which
+    cell a mark was set for."""
     out = []
     cb = REC_CELL_BYTES
     yards = footprints(dw)
@@ -2531,6 +2533,8 @@ def occupancy(w, dw, contest=False):
                 out.append(f"occupancy: cell {xz} names slot {slot}, not live")
             elif slot and xz not in rects[slot]:
                 out.append(f"occupancy: cell {xz} names slot {slot}, outside its footprint")
+            elif slot and contest and structure(dw.units[slot]) and k:
+                out.append(f"occupancy: cell {xz} names structure {slot} in slot B")
             elif slot and contest and not structure(dw.units[slot]) and \
                     layer(dw.units[slot]) != k + 1:
                 out.append(f"occupancy: cell {xz} names slot {slot} in slot {'AB'[k]}, "
