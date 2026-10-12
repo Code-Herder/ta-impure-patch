@@ -4622,9 +4622,9 @@ static int fix_stacked_air(void)
        the recording's globals and projectile pool for the iteration the host holds, so that it is
        their last writer before anything in the step reads them, the recorder's dump included
        (tagpu_replay.c, THE GLOBALS AND THE PROJECTILES); elsewhere it returns at once. At the
-       level's first iteration it makes the level's own units instead, so the host's first unit
-       tick gives each the script slice the recording machine's gave (tagpu_replay.c, THE FIRST
-       STEP'S UNITS). Then the demo recorder's capture: it records the world between two
+       level's first iteration it makes the level's own units and writes image T before that
+       write, so the host's first unit tick gives each the script slice the recording machine's
+       gave (tagpu_replay.c, THE FIRST STEP'S UNITS). Then the demo recorder's capture: it records the world between two
        iterations (tagpu_recorder.c), and the pool it records is the one the last iteration left,
        which air_rebuild then derives again from the units it records. On a level that plays a
        recording the capture records nothing, and the replay's step runs after the unit tick: it
