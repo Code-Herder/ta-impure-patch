@@ -1809,6 +1809,55 @@ class CrashEndsTheWait(unittest.TestCase):
             self.assertIsNone(self.log(Path(d), [False]).wait(r"never", 1))
 
 
+class BusyGameIsNoStall(unittest.TestCase):
+    """A running game that has not answered a peek -- its game thread inside a seek's rebuild --
+    is no progress for Stall, and only STALL_S of it is a hung game; a game that is not running
+    still fails at once."""
+
+    class Worker:
+        def __init__(self, answers):
+            self.answers = list(answers)
+
+        def gametime(self, wait, busy=False):
+            self.busy = busy
+            return self.answers.pop(0)
+
+    def stall(self, answers):
+        """A Stall over `answers`, made under the patched clock its caller holds."""
+        st = tareplay.Stall(self.Worker(answers))
+        st.EVERY = 0
+        return st
+
+    def test_unanswered_peeks_within_the_bound_pass(self):
+        with patch("time.monotonic", side_effect=[0, 10, 20, 30, 40, 50, 60, 70, 80]):
+            st = self.stall([100, None, None, 101])
+            for _ in range(4):
+                st.check()
+        self.assertTrue(st.w.busy)
+        self.assertEqual(st.g, 101)
+
+    def test_unanswered_past_the_bound_is_a_hung_game(self):
+        late = tareplay.STALL_S + 1
+        with patch("time.monotonic", side_effect=[0, 0, 0, late, late]):
+            st = self.stall([100, None])
+            st.check()
+            with self.assertRaisesRegex(tareplay.CouldNotRun, "stood at GameTime 100.*unanswered"):
+                st.check()
+
+    def test_the_peek_names_a_busy_game_only_while_it_runs(self):
+        w = Mock(name="w", lane=None)
+        w.name = "tareplay-1"
+        busy = (1, "tacli: no peek lines \u2014 is the game past its first frame?")
+        with patch.object(tareplay, "tacli", return_value=busy):
+            w.running.return_value = True
+            self.assertIsNone(tareplay.Worker.gametime(w, 5, busy=True))
+            with self.assertRaisesRegex(tareplay.CouldNotRun, "no peek lines"):
+                tareplay.Worker.gametime(w, 5)
+            w.running.return_value = False
+            with self.assertRaisesRegex(tareplay.CouldNotRun, "no peek lines"):
+                tareplay.Worker.gametime(w, 5, busy=True)
+
+
 class RunLock(unittest.TestCase):
     """tools/runlock.py: one game regression at a time, on a throwaway repository's lock"""
 

@@ -116,7 +116,8 @@ past could not run, named.
 
 No check is decided by the wall clock. A wait on a fact is bounded by ACK_S for a one-frame answer
 and, while the level runs, by STALL_S of GameTime standing still (Stall): each catches a hung or
-dead game, never an outcome. A seek's cost is checked on the game thread's CPU time, against its
+dead game, never an outcome. A peek the running game has not answered is no progress, not a
+failure: a seek's rebuild, a fork crossing's among them, holds the game thread for one frame. A seek's cost is checked on the game thread's CPU time, against its
 fixture's `cpu_ms` (W3, work_verdict).
 
 Every game gets the test render profile (TEST_RENDER): a present cap,
@@ -217,6 +218,7 @@ TAKEOVER_CHECKS = {
 CONTINUE = 300                  # the dump after a round trip, this many ticks on
 TWIN_AFTER = 30                 # an L lane's twin, held this many ticks after Tlast
 ACK_S = 60                      # a one-frame answer: an arm, a dump's line, a peek, a screen
+PEEK_UNANSWERED = "no peek lines"   # tacli peek's words when the game did not answer in its wait
 STALL_S = 120                   # GameTime standing still this long while the level runs: a hung game
 SEEK_LEAD = 123                 # the reader's lead before a seek's target (tagpu_replay.c, EYE_LEAD)
 JUDGE_TICKS = 240               # the takeover judge's sample, this many ticks after T: its old 4 s
@@ -549,8 +551,17 @@ class Worker:
         store.write_text("\n".join(keep + [f"{k}={v}" for k, v in TEST_RENDER.items()]) + "\n")
         (self.gamedir / "tagpu_presentcap.on").write_text(f"{PRESENT_CAP}\n")
 
-    def gametime(self):
-        rc, o = tacli("peek", self.name, GAMETIME, "--json", timeout=ACK_S)
+    def gametime(self, wait=ACK_S, busy=False):
+        """GameTime, read on the game thread at its next frame visit, `wait` seconds at most. With
+        `busy`, None when the game is running and has not answered: a seek's or a fork crossing's
+        rebuild runs inside one frame (MEASURED 2026-10-12, battle's X lane at a load average of
+        63-87: two fork crossings' seeks of 6.5 s wall each, back to back, and a peek unanswered
+        through tacli's 10 s), so a running game that has not answered yet is a fact for the
+        caller's own bound (Stall), never an outcome."""
+        rc, o = tacli("peek", self.name, GAMETIME, "--json", "--timeout", wait,
+                      timeout=wait + ACK_S)
+        if rc and busy and PEEK_UNANSWERED in o and self.running():
+            return None
         if rc:
             raise CouldNotRun(f"tacli peek: {last(o)}")
         g = int(str(json.loads(o[o.index("{"):])["peeks"][0]["value"]).split()[0])
@@ -676,7 +687,10 @@ class Log:
 class Stall:
     """The bound of a wait on a running level: STALL_S of GameTime standing still. A loaded machine
     runs the level slower, never not at all, so this catches a hung or dead game and decides no
-    outcome. Read every EVERY seconds through a peek, which the game answers at its next flip."""
+    outcome. Read every EVERY seconds through a peek, which the game answers at its next flip. A
+    peek the running game has not answered within EVERY is no progress and nothing more: the game
+    thread is inside one long frame, a seek's rebuild, and STALL_S alone decides when that is a
+    hung game. No second, shorter bound stands in for it."""
 
     EVERY = 5.0
 
@@ -689,12 +703,14 @@ class Stall:
         now = time.monotonic()
         if now < self.next:
             return
+        g = self.w.gametime(self.EVERY, busy=True)
+        now = time.monotonic()
         self.next = now + self.EVERY
-        g = self.w.gametime()
-        if g != self.g:
+        if g is not None and g != self.g:
             self.g, self.since = g, now
         elif now - self.since > STALL_S:
-            raise CouldNotRun(f"the level stood at GameTime {g} for {STALL_S} s while it ran")
+            raise CouldNotRun(f"the level stood at GameTime {self.g} for {STALL_S} s while it ran"
+                              + ("" if g is not None else ", its last peek unanswered"))
 
 
 # ---- the fixtures and the GameTimes ---------------------------------------------------------
@@ -1463,7 +1479,7 @@ TERRAIN = "The terrain for the selected map does not exist."    # the Start's ow
 
 
 def peek(w, spec):
-    rc, o = tacli("peek", w.name, spec, "--json", timeout=ACK_S)
+    rc, o = tacli("peek", w.name, spec, "--json", "--timeout", ACK_S, timeout=2 * ACK_S)
     if rc:
         raise CouldNotRun(f"tacli peek {spec}: {last(o)}")
     return int(str(json.loads(o[o.index("{"):])["peeks"][0]["value"]).split()[0])

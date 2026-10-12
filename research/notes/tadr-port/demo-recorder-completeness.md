@@ -539,7 +539,10 @@ level at 601 and 1501, 1 (mod 30) as every dump of the harness is (the radar pas
 and its two judges watch 3,600 ticks each, the units read 240 ticks in, the window and its boxes
 throughout. A wait on a one-frame answer is bounded by 60 s (`ACK_S`); a wait on a running level
 by 120 s of GameTime standing still (`STALL_S`, `Stall`): each catches a hung or dead game, never
-an outcome.
+an outcome. A peek the running game has not answered counts as no progress and nothing more: a
+seek's rebuild holds the game thread for one frame, and two fork crossings' seeks in the battle's X
+lane held it past `tacli peek`'s own 10 s at a load average of 63–87 (MEASURED 2026-10-12), so no
+shorter bound stands in for `STALL_S`.
 
 **A seek's work, not its time.** Every seek logs its work line (`sk_work_log`): the iterations
 the reader read and where it built from, the image's units live, made, refused, killed and left
