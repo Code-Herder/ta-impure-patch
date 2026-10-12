@@ -1517,7 +1517,8 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
   globals mid-step, so no image reproduces it (the engine map's *The radar pass `0x467440` and the
   minimap's fog composite*). The seek runs that pass once on T's world (R14b), where a playing
   still holds what its last pass, in step P = 30·⌊(T−1)/30⌋, computed. **When the host views the
-  recording's viewed record the seek then takes bits 8–10 from the recording**, on every slot live
+  recording's viewed record the seek and the takeover then take bits 8–10 from the recording** (a
+  takeover views P from TK1 on), on every slot live
   in the image whose host slot holds a live unit of its type: in that view a playing computes the
   same pass from the same inputs at the same phase (D1), so what the recording holds at T is what a
   playing holds — every capture-point dump in that view compares the radar picture strictly and is
@@ -1537,11 +1538,29 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
   seat's radar since P+1, established by the disassembly, not measured. In a seat's view, the
   recording's viewed record included, the minimap's fog R14 composites from T's counters is T's
   where a playing shows its last pass's. From the next pass on, scheduled at the same GameTime on
-  both hosts, the two agree. **A takeover keeps the pass's bits** (open, the owner's question): the
-  fork's AI reads them, since the acquisition scan `0x40AA40` puts a non-allied unit with bit 8 on
-  every local seat's radar list (`0x40AB3F`), so where the pass on T's world differs from the bits
-  the recording holds at T the fork's AI acquires from other contacts than the recording machine's
-  would have [INFERRED from the disassembly, not measured].
+  both hosts, the two agree. **In a takeover the bits are also the fork's AI input** (the owner's
+  decision, 2026-10-11: the fork's AIs read the recording's contacts at T): the acquisition scan
+  `0x40AA40` puts a non-allied unit with bit 8 on every local seat's radar list
+  (`0x40AB3F..0x40AB5C`), and each acquisition record TK1 makes starts with `+0xED` 0 (`0x40918B`,
+  `0x4092DC`), so it scans in iteration T's players phase (`0x40B2D6..0x40B2E5`), before the next
+  radar pass, and reads the bits R14b left. Nothing after R14b writes bits 8–10 before the capture
+  point of T (R14c; TK4a's `0x48BD00` clears bits 4, 6 and 7 only and `0x466DC0` reads; the tick
+  loop to `0x4954ED`), so in the recording's viewed record the fork's first iteration holds the
+  recording's contacts. As another player the pass's bits stand, and they are the AIs' input until
+  P's next pass; D2 (d) masks bits 8–10 there, and bit 12 always. MEASURED 2026-10-11 on tenseat
+  (`tareplay.py takeover`, release build, game speed 20, turbo 1), compared by `tarec.py
+  compare-fork`, which compares bits 8–10 strictly because both worlds view player 0:
+
+    | T | the takeover | compare-fork |
+    |---|---|---|
+    | 901 | with the restore | EQUAL, 23 live units; F's dump f1201, timeline 1 played across its boundary, EQUAL, the radar picture too |
+    | 915 | with the restore | EQUAL, 25 live units |
+    | 915 | without it (the pass's bits) | 21 differences in 22 live units, every one `+0x110` bit 8 |
+    | 885 | either | EQUAL: nothing the pass reads changed in 871..885 |
+
+    `tarec.py` prints a field's bytes in memory order, so the difference `21212830` against
+    `21202830` is the dword `0x30282121` against `0x30282021`: bit 8, not bit 16.
+
 - **A unit the recording machine made after its players phase is drawn one frame early** on a puppet
   host, which makes it in the step's unit tick, before that step's draw; `books_put` makes its
   bookkeeping the recording's at the next capture point, and the picture of one frame stays. Its
@@ -1703,9 +1722,10 @@ not install. Explicit seeks can still move the reader past an armed target.
 
 **`tools/replay/tareplay.py`.** `run FIXTURE... [-j N] [--dll PATH] [--stock-dll PATH] [--keep]
 [--out DIR]` (`all` for every fixture) and `list`. For each fixture four GameTimes, each T ≡ 1 (mod
-30) so a takeover's contact bits, which its own radar pass makes, agree at once unless something
-the pass read changed later in its step (O14) — a seek in the recording's viewed player, which the
-R and Q processes play in, takes them from the recording and agrees at every T — in
+30), the radar pass's step, where a seek's contact bits in any view but the recording's own, which
+its own radar pass makes, agree at once unless something the pass read changed later in its step
+(O14) — a seek in the recording's viewed player, which the R and Q processes play in, and a
+takeover as that player take them from the recording and agree at every T — in
 [301, min(0.8·end, end−330)] — room for the
 continuation dump 300 ticks after the last round trip — drawn by a generator seeded with the
 fixture's name and HEAD and printed: T1 the smallest, T2..T4 the round trips, Tlast = T4. The lower
@@ -2406,7 +2426,10 @@ in 12 s. `takeover-end` (Show Down, slots 2 and 3 closed) is taken over as 0 and
 `+iwin`, the console's IWin: its kill-all for the AI and the game's won and stop bits. `+kill 1`
 cannot end it, since the console's Kill disarms the objective after its kill-all (`0x4164EF`; the
 [engine map](../exe-reverse-engineering.html)'s kill-all callers), so the fixture does not reach
-the objective's own victory test that the takeover re-arms. Each runs K (the takeover, its checks and a dump) and F (K's file played from T −
+the objective's own victory test that the takeover re-arms. `tenseat` is taken over as its
+controlled player at GameTime 901, the entry's `at` in place of T2: the tick after its typed LOS
+command, where the takeover's contact bits must come from the recording (O14, *What S3b leaves*).
+Each runs K (the takeover, its checks and a dump) and F (K's file played from T −
 300 across the fork) after the usual L, P, R and Q.
 
 **The layout's hash.** The `order 0x006 ondestroy` row now names all nine handler functions that arm

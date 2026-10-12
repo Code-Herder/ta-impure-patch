@@ -940,7 +940,8 @@ block that reads to its last complete block.
   tagpu/ddraw` (`LIMITS=stock` for the stock one) first. The run's folder is outside the
   repository (`--out`, `$TAREPLAY_OUT`); passing dumps are deleted unless `--keep`, and a dump
   any check failed on stays. `run --cover` runs the coverage builds instead. A fixture with a
-  `takeover` entry also runs K (its recording taken over at T2, ordered, dumped and ended) and F
+  `takeover` entry also runs K (its recording taken over at T2, or at the entry's `at`,
+  ordered, dumped and ended) and F
   (K's file played from T−300 across the fork); `tareplay.py takeover FIXTURE` runs the live game,
   K and F alone, with the checks `judge`, `line`, `orders`, `ai`, `fork` and `victory` its entry
   names. K judges the units drawn 240 ticks after T, and the `ai` check observes 1800 future

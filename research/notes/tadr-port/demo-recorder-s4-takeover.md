@@ -29,8 +29,10 @@ skirmish segment of the multiplayer file:
   first iteration with its parent's chain at its fork point (D2 below).
 - `tools/replay/tareplay.py takeover FIXTURE` runs a fixture's live game (L) and its takeover
   processes K and F alone; every tier runs K and F for a fixture with a `takeover` entry:
-  `battle` and `takeover-end` on the default build, and `stock-limits` on the stock-limits build,
-  which compiles the takeover too, so the landing tier's coverage needs a takeover on each.
+  `battle`, `takeover-end` and `tenseat` on the default build, and `stock-limits` on the
+  stock-limits build, which compiles the takeover too, so the landing tier's coverage needs a
+  takeover on each. K takes over at T2, or at the entry's `at` (tenseat's: 901, the tick after its
+  typed LOS command); `tareplay.py takeover --at T` overrides both.
 
 ## The takeover's steps
 
@@ -45,6 +47,7 @@ order, and the takeover's are inserted (`tagpu_replay.c`, *THE TAKEOVER*):
 | R8 | the orders | every node restarts (D1), the builders adopt their frames, Paralyze and BuildWeapon resume, and p1 is bounded (`tk_node`, `tk_node_bounded`); the lists of a host unit the kills left alive and the image does not describe are torn down (`tk_orphans`); the seat types again after `players_put`, which writes PlayerInfo `+0x94` from the image |
 | R13 | the globals | `holds_put` also writes the `hold` rows (the end countdown and the game end's flags bits 2 and 4), so a takeover inside a recorded countdown continues it; the explored map is written with no V bit |
 | R14 | sight | P's minimap fog only, from the counters R5 to R8b made |
+| R14b | contacts | the viewed record's radar pass `0x467440` on T's world, then, when P is the recording's viewed record, `+0x110` bits 8–10 from the recording (`rw_contacts`: a slot below the array's count, live in the image, whose host slot holds a live unit of the image's type; only the three bits written). The acquisition records TK1 made start with `+0xED` 0 (`0x40918B`, `0x4092DC`), so the AIs' first scans `0x40AA40` run in iteration T's players phase and read these bits, as the recording's AIs read them until its next pass; nothing after R14b writes bits 8–10 before the capture point of T. As another player the pass's bits stand (*Residuals*) |
 | TK4a | after R16 | `tk_live`: the passability refresh over every context whole, controlled = viewed = P, V deactivated, every unit deselected, the objective armed |
 | TK4b | last | `tk_end`: the puppet table off, the playing closed, the recorder armed with the fork's handle, the line |
 
@@ -187,6 +190,13 @@ segment with no complete iteration with its header, and never a complete iterati
 - **COB state** (O4, every seek's class), including the adopted builders' pose.
 - **VTOL_MobileBuild's orphaned frame**, above.
 - **A seat's control-group order inside its vectors** is the rebuild's, not the recording's.
+- **The contact bits as another player.** When P is not the recording's viewed record the recorded
+  bits are another record's scan, so R14b's pass stands, and the fork's AIs read P's picture as of
+  T for up to 29 ticks where a playing viewed as P holds its last pass's; D2 (d) masks bits 8–10
+  there. Bit 12 and `+0xB0` are the pass's in every view (its fourth loop, `0x4676A1..0x4676E8`,
+  through the fresh acquisition records), and D2 (d) masks bit 12 always. In a multiplayer
+  recording the restored bits are the primary stream's
+  ([its takeover](demo-recorder-multiplayer-slice.md#the-takeover-of-a-multiplayer-recording)).
 - **The CRT `rand`** (`0x4E4870`) keeps its state per thread, in neither image
   ([the engine map](../exe-reverse-engineering.md)), so the fork's draws from it — the meteor
   shower's among them, which a puppet level gates — start from the host's state, not the recording
@@ -243,6 +253,21 @@ The takeovers:
 - `victory`: timeline 1 of `takeover-end` ends complete at GameTime 537, player 0 won.
 
 The fork's first iteration costs 4.0 to 9.5 ms, against the original's 8.4 ms on the battle.
+
+**R14b's contact bits, verified and measured** (2026-10-11, `tareplay.py takeover` on the release
+build, game speed 20, turbo 1; P = the recording's viewed record, so `compare-fork` compares bits
+8–10 strictly):
+
+| fixture | T | R14b | result |
+|---|---|---|---|
+| `tenseat` | 901 | restores bits 8–10 | every check passed; `compare-fork` EQUAL, 23 live units; F's f1201 EQUAL, the radar picture too |
+| `tenseat` | 915 | restores bits 8–10 | every check passed; `compare-fork` EQUAL, 25 live units |
+| `tenseat` | 915 | the pass's bits | `compare-fork` 21 differences in 22 live units, every one `+0x110` bit 8 |
+| `tenseat` | 885 | either | `compare-fork` EQUAL: nothing the pass reads changed in 871..885 |
+| `battle` | 2101 | restores bits 8–10 | judge, line (cpu 340 ms), orders, ai, fork: `compare-fork` EQUAL, 1295 live units |
+
+`tareplay.py rewind battle` takes the live rewind's fork through the same R14b line: every check
+passed, its fork `compare-fork` EQUAL at 4501 with 932 live units.
 
 The reader's damaged-file paths were run in a scratch Wine build of `tagpu_recreader.c` on copies of
 `takeover-end`'s forked file:
