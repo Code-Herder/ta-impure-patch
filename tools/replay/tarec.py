@@ -2719,7 +2719,8 @@ def cmd_compare_dumps(path, a_path, b_path, takeover=False, seek=False):
     they carry, the players' sight counters included, equal byte for byte. FILE gives the
     dimensions and the globals' names; only its header is read. With `seek`, B a seek's, on a
     file that holds its cells: B's unit slots, yard bits and contest marks by THE OCCUPANCY
-    RULE."""
+    RULE, and A's, the straight playing's, by the same rule on their own, since B's then stand
+    in for them in the comparison."""
     h = header_only(path)
     ah, a = dump_world(a_path, h)
     bh, b = dump_world(b_path, h)
@@ -2730,7 +2731,11 @@ def cmd_compare_dumps(path, a_path, b_path, takeover=False, seek=False):
         return 1
     if takeover:
         fork_view(a, b, h, h)
-    stale = occupancy(a, b, contest=True) if seek and holds_cells(h) else []
+    stale = []
+    if seek and holds_cells(h):
+        # occupancy(a, a) writes A's own cells and marks over themselves
+        stale = ["A's " + line for line in occupancy(a, a, contest=True)]
+        stale += occupancy(a, b, contest=True)
     lines, n = a.differences(b, ah["tables"], bh["tables"], gnames=known_names(h), sight=True)
     lines, n = lines + stale, n + len(stale)
     when = (f"frame dump at GameTime {ah['frame']} (iteration {a.tick})" if "frame" in ah
