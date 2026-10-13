@@ -2283,6 +2283,27 @@ static void ord_block(RecBytes* b, unsigned n, uint32_t* gt)
     }
 }
 
+/* d takes s's kinds state (THE KINDS): the run's patterns, the last empty feature tick and the
+   explicit RK_FEATURES, which every block after a reset reads against */
+static void kinds_copy(RecCodec* d, const RecCodec* s)
+{
+    unsigned n;
+    for (n = 0; n < RECC_KINDS_MRU; n++) {
+        d->kmru[n].n = 0;
+        d->kmru[n].oom = 0;
+        rb_put(&d->kmru[n], s->kmru[n].p, s->kmru[n].n);
+        if (d->kmru[n].oom) {
+            fprintf(stderr, "codectest: no memory to copy the kinds' patterns\n");
+            exit(2);
+        }
+    }
+    d->nkmru = s->nkmru;
+    d->kbad = s->kbad;
+    memcpy(d->tpair, s->tpair, sizeof d->tpair);
+    d->tpaired = s->tpaired;
+    d->featseen = s->featseen;
+}
+
 /* The orders frame: its codings carry kept lists across blocks, lists that change length, an
    emptied list and a list of more than REC_ORDERS_CHUNK nodes; a record it cannot carry declines
    the block after its iterations; masks against a list the decoder does not hold are refused; and
@@ -2330,6 +2351,7 @@ static int outcomes_orders(const RecCodecParams* p)
             ok &= expect("  the re-sent lists take masks: under 256 bytes", h.len[RCS_ORDERS] < 256, 1);
             RecFrameWorld v = world_view(&w);
             reccodec_restart(fresh, p, w.unit, w.live, w.pool, w.pcount, w.phw, &v);
+            kinds_copy(fresh, rd);
             ok &= expect("  a decoder that holds no kept lists refuses it",
                          reccodec_decode(fresh, st.sec.p, st.sec.n, &out, why, sizeof why) == 0 &&
                          strstr(why, "kept list") != NULL, 1);
@@ -2590,6 +2612,229 @@ static int outcomes_events(const RecCodecParams* p)
     reccodec_free(rd);
     rb_free(&y);
     rb_free(&first);
+    rb_free(&keep);
+    rb_free(&out);
+    world_free(&w);
+    world_free(&pre);
+    return ok;
+}
+
+/* THE KINDS' outcomes (tagpu_reccodec.c, THE KINDS; tagpu_recfmt.h, RCS_KINDS). A block's
+   iterations: units 1..3 made (KD_FIRST), `viewers` RK_VIEWER records, which give each its own
+   pattern, units 1 and 3 changed around an RK_UNIT of slot 2 (KD_SPLIT: two RK_UNIT_DELTA runs),
+   an empty feature tick and the feature heads with the cursor stepped as the tick steps it. */
+enum { KD_FIRST = 1, KD_SPLIT = 2, KD_GAP = 4 };
+static void kd_iter(RecBytes* b, uint32_t units[][NDW], uint32_t* feat, uint32_t gt, unsigned viewers,
+                    unsigned how)
+{
+    static const unsigned char viewer[4], root[8] = { FR_TICK, 0, 0, 0, 0x80, 0x55, 0x49, 0 },
+                                          end[8] = { FR_TICK, 0, 0, 0, 0, 0, 0, 0 };
+    unsigned s, i;
+    rec_put(b, RK_TICK, &gt, 4);
+    if (how & KD_FIRST)
+        for (s = 1; s <= 3; s++) {
+            memset(units[s], 0, IMG);
+            units[s][0] = 0x2000 + s;
+            lane_add(units[s], REC_LR_TYPE, 20 + s, 1);
+            lane_add(units[s], REC_LR_X, 0x80000u * s, 1);
+            lane_add(units[s], REC_LR_Z, 0x40000u * s, 1);
+            lane_add(units[s], REC_LR_LAYER, 1, 1);
+            rec_unit(b, s, units[s]);
+        }
+    if (how & KD_SPLIT) {
+        uint32_t old[NDW];
+        memcpy(old, units[1], IMG);
+        units[1][0] += 0x100;
+        rec_delta(b, 1, old, units[1], -1);
+        rec_unit(b, 2, units[2]);
+        memcpy(old, units[3], IMG);
+        units[3][0] += 0x100;
+        rec_delta(b, 3, old, units[3], -1);
+    }
+    for (i = 0; i < viewers; i++) rec_put(b, RK_VIEWER, viewer, 4);
+    rec_put(b, RK_EV_FEATURE, root, 8);
+    rec_put(b, RK_EV_FEATURE_END, end, 8);
+    feat[3] = feat[3] ? feat[3] - 1 : 16 * 16 - 1;
+    rec_put(b, RK_FEATURES, feat, 16);
+}
+
+/* each iteration's reference into the list (m) of a block's kinds section, and the first
+   pattern's bytes at [*p0, *p1) and the next iteration's entry's offset at *rest: the count of
+   iterations read, or 0 when it does not read */
+static unsigned kd_refs(const unsigned char* c, unsigned* m, unsigned max, size_t* p0, size_t* p1,
+                        size_t* rest)
+{
+    size_t a, e;
+    unsigned n = 0;
+    uint32_t len;
+    sec_bounds(c, RCS_KINDS, &a, &e);
+    while (a < e && n < max) {
+        m[n] = c[a++];
+        if (!m[n]) {
+            if (!varint_get(c, e, &a, &len) || len > e - a) return 0;
+            if (!n) *p0 = a, *p1 = a + len;
+            a += len;
+        }
+        if (!n) *rest = a;
+        n++;
+    }
+    return n;
+}
+
+/* the container `c` of n bytes with its first iteration's pattern replaced by `pat` (a new one) */
+static void kd_mutate(RecBytes* y, const unsigned char* c, size_t n, const unsigned char* pat,
+                      size_t pn, size_t rest)
+{
+    size_t a, e;
+    unsigned char h[sizeof(RecSecHead)];
+    RecBytes k;
+    memset(&k, 0, sizeof k);
+    sec_bounds(c, RCS_KINDS, &a, &e);
+    rb_u8(&k, 0);
+    rb_varint(&k, (uint32_t)pn);
+    rb_put(&k, pat, pn);
+    rb_put(&k, c + rest, e - rest);
+    memcpy(h, c, sizeof h);
+    put32(h + 8 + 4 * RCS_KINDS, (uint32_t)k.n);
+    y->n = 0;
+    rb_put(y, h, sizeof h);
+    rb_put(y, k.p, k.n);
+    rb_put(y, c + e, n - e);
+    rb_free(&k);
+}
+
+/* The kinds: a pattern new, again by reference, from the block before, the list's 17th dropped
+   and new again; the two markers past their explicit kind's first, and no count where the frames
+   give it, an explicit one for a group's second run; a block of GameTimes that are not
+   consecutive declined; and, from a reset, each bound refused by name. */
+static int outcomes_kinds(const RecCodecParams* p)
+{
+    /* block 3's first iteration: TICK, RK_UNIT_DELTA (no count), RK_UNIT 1, RK_UNIT_DELTA 1, the
+       tick's root and end, RK_FEATURES, each explicit */
+    static const unsigned char want3[] = { 1, 3, 2, 1, 3, 1, 29, 1, 30, 1, 35, 1 };
+    static const struct { unsigned char pat[16]; unsigned n; int m1; const char* refusal; } mut[] = {
+        { { 1, 3, 2, 1, 3, 1, 0, 35, 1 }, 9, 0, "empty feature tick before any explicit" },
+        { { 1, 3, 2, 1, 3, 1, 29, 1, 30, 1, 0xFF, 0xFF, 3 }, 13, 0, "predicted RK_FEATURES before any explicit" },
+        { { 1, 3, 2, 1, 3, 2, 29, 1, 30, 1, 35, 1 }, 12, 0, "past the first" },
+        { { 1, 2, 1, 29, 1, 30, 1, 35, 1 }, 9, 0, "its pattern none" },
+        { { 1, 1, 1, 3, 2, 1, 3, 1, 29, 1, 30, 1, 35, 1 }, 14, 0, "second RK_TICK" },
+        { { 3, 1, 2, 1, 3, 1, 29, 1, 30, 1, 35, 1 }, 12, 0, "not RK_TICK" },
+        { { 0 }, 0, 1, "past the 0" } };
+    static uint32_t units[4][NDW];
+    uint32_t feat[4] = { 7, 8, 9, 3 }, gt = 500;
+    RecStream st;
+    RecCodec* rd;
+    World w, pre;
+    RecFrameWorld pv;
+    RecBytes y, keep, out;
+    unsigned m[64], n, i, flags, ok = 1;
+    const unsigned char* body;
+    size_t bn, p0 = 0, p1 = 0, rest = 0;
+    char why[256], line[128];
+    int o;
+    memset(&w, 0, sizeof w);
+    memset(&pre, 0, sizeof pre);
+    memset(&y, 0, sizeof y);
+    memset(&keep, 0, sizeof keep);
+    memset(&out, 0, sizeof out);
+    if (!reccodec_stream_begin(&st, p) || !(rd = reccodec_new(p))) return 0;
+    world_reset(&w, p->nslots, p->nproj, p->gw, p->gh);
+    world_reset(&pre, p->nslots, p->nproj, p->gw, p->gh);
+
+    /* block 0: patterns P0 (the units made) and P1..P17 new, P2 at the list's end, P1 dropped
+       and new again, then P1 by reference */
+    y.n = 0;
+    kd_iter(&y, units, feat, gt++, 0, KD_FIRST);
+    for (i = 1; i <= 17; i++) kd_iter(&y, units, feat, gt++, i, 0);
+    kd_iter(&y, units, feat, gt++, 2, 0);
+    kd_iter(&y, units, feat, gt++, 1, 0);
+    kd_iter(&y, units, feat, gt++, 1, 0);
+    o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+    ok &= expect("kinds: SECTIONS, 21 patterns", o, RECC_SECTIONS);
+    n = o == RECC_SECTIONS ? kd_refs(st.sec.p, m, 64, &p0, &p1, &rest) : 0;
+    {
+        unsigned refs = n == 21;
+        for (i = 0; i < 18 && refs; i++) refs = m[i] == 0;
+        ok &= expect("  18 new, P2 the 16th, P1 dropped and new, then the 1st", refs && m[18] == 16 &&
+                     m[19] == 0 && m[20] == 1, 1);
+    }
+    ok &= expect("  a reader decodes it back", reader_check(rd, &w, p, flags, body, bn,
+                 o == RECC_SECTIONS ? st.sec.n : y.n, y.p, y.n, st.dctx), 1);
+
+    /* block 1: a pattern of block 0's, by reference */
+    y.n = 0;
+    kd_iter(&y, units, feat, gt++, 5, 0);
+    kd_iter(&y, units, feat, gt++, 5, 0);
+    o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+    ok &= expect("kinds: SECTIONS, continuing", o, RECC_SECTIONS);
+    n = o == RECC_SECTIONS ? kd_refs(st.sec.p, m, 64, &p0, &p1, &rest) : 0;
+    ok &= expect("  its first pattern is block 0's, its second the same", n == 2 && m[0] > 1 && m[1] == 1, 1);
+    ok &= expect("  a reader decodes it back", reader_check(rd, &w, p, flags, body, bn,
+                 o == RECC_SECTIONS ? st.sec.n : y.n, y.p, y.n, st.dctx), 1);
+
+    /* block 2: GameTimes that are not consecutive */
+    y.n = 0;
+    kd_iter(&y, units, feat, gt, 0, 0);
+    gt += 2;
+    kd_iter(&y, units, feat, gt++, 0, 0);
+    o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+    ok &= expect("kinds: DECLINED, GameTimes that are not consecutive", o, RECC_DECLINED);
+    ok &= expect("  a reader decodes it back", reader_check(rd, &w, p, flags, body, bn,
+                 o == RECC_SECTIONS ? st.sec.n : y.n, y.p, y.n, st.dctx), 1);
+
+    /* block 3: from its reset, two RK_UNIT_DELTA runs, each marker after its explicit first */
+    memcpy(pre.unit, w.unit, (size_t)w.nslots * IMG);
+    memcpy(pre.live, w.live, w.nslots);
+    memcpy(pre.pool, w.pool, (size_t)(w.nproj ? w.nproj : 1) * PIMG);
+    pre.pcount = w.pcount;
+    pre.phw = w.phw;
+    memcpy(pre.grid, w.grid, (size_t)w.gw * w.gh * REC_CELL_BYTES);
+    y.n = 0;
+    kd_iter(&y, units, feat, gt++, 0, KD_SPLIT);
+    kd_iter(&y, units, feat, gt++, 0, KD_SPLIT);
+    o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+    ok &= expect("kinds: SECTIONS, restarting after it", o, RECC_SECTIONS);
+    n = o == RECC_SECTIONS ? kd_refs(st.sec.p, m, 64, &p0, &p1, &rest) : 0;
+    ok &= expect("  the first pattern: the deltas' first run with no count, the second with 1",
+                 n == 2 && p1 - p0 == sizeof want3 && !memcmp(st.sec.p + p0, want3, sizeof want3), 1);
+    if (n == 2) {
+        /* the second: the same runs, the tick a marker 0, the heads a marker 0xFFFF */
+        static const unsigned char want4[] = { 1, 3, 2, 1, 3, 1, 0, 0xFF, 0xFF, 3 };
+        size_t a = rest + 1;
+        uint32_t len = 0;
+        ok &= expect("  the second: the empty tick and the predicted heads as markers",
+                     m[1] == 0 && varint_get(st.sec.p, st.sec.n, &a, &len) && len == sizeof want4 &&
+                     !memcmp(st.sec.p + a, want4, sizeof want4), 1);
+    }
+    if (o == RECC_SECTIONS) rb_put(&keep, st.sec.p, st.sec.n);
+    ok &= expect("  a reader decodes it back", reader_check(rd, &w, p, flags, body, bn,
+                 o == RECC_SECTIONS ? st.sec.n : y.n, y.p, y.n, st.dctx), 1);
+
+    /* block 3 from its reset, each bound refused by name */
+    pv = world_view(&pre);
+    for (i = 0; keep.n && i < sizeof mut / sizeof mut[0]; i++) {
+        int got;
+        if (mut[i].m1) {
+            y.n = 0;
+            rb_put(&y, keep.p, keep.n);
+            sec_bounds(y.p, RCS_KINDS, &p0, &p1);
+            y.p[p0] = 1;
+        } else {
+            kd_mutate(&y, keep.p, keep.n, mut[i].pat, mut[i].n, rest);
+        }
+        reccodec_restart(rd, p, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw, &pv);
+        why[0] = 0;
+        got = reccodec_decode(rd, y.p, y.n, &out, why, sizeof why);
+        snprintf(line, sizeof line, "kinds: refused, %s", mut[i].refusal);
+        ok &= expect(line, !got && strstr(why, mut[i].refusal) != NULL, 1);
+        if (got || !strstr(why, mut[i].refusal)) printf("  decoder: %s\n", why);
+    }
+    reccodec_restart(rd, p, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw, &pv);
+    ok &= expect("kinds: the unmutated block from its reset decodes",
+                 keep.n && reccodec_decode(rd, keep.p, keep.n, &out, why, sizeof why), 1);
+    reccodec_stream_end(&st);
+    reccodec_free(rd);
+    rb_free(&y);
     rb_free(&keep);
     rb_free(&out);
     world_free(&w);
@@ -4796,6 +5041,7 @@ static int cmd_outcomes(void)
     ok &= outcomes_cells(&p);
     ok &= outcomes_orders(&p);
     ok &= outcomes_events(&p);
+    ok &= outcomes_kinds(&p);
     ok &= outcomes_state(&p);
     ok &= outcomes_lossy();
     ok &= outcomes_container(&p);
@@ -4827,7 +5073,8 @@ static uint64_t rnd(void)
 static size_t rndn(size_t n) { return n ? (size_t)(rnd() % n) : 0; }
 
 /* A copy of a decoder's state: every field reccodec_decode carries from one block to the next
-   (the units' copy and history, the ledger's steps and settles, the pool, the record frames).
+   (the units' copy and history, the ledger's steps and settles, the pool, the record frames,
+   the kinds).
    Every case reuses one decoder, so a field missed here starts a case from the previous case's
    leftovers; cmd_fuzz's control names the first block where that shows. */
 static void codec_copy(RecCodec* d, const RecCodec* s)
@@ -4873,6 +5120,7 @@ static void codec_copy(RecCodec* d, const RecCodec* s)
             fprintf(stderr, "codectest: no memory to copy the %s frame\n", FRAMES[n]->name);
             exit(2);
         }
+    kinds_copy(d, s);
 }
 
 /* the varint at `at` and its end; 0 when it does not read */
@@ -5087,7 +5335,7 @@ static void mutate(Case* c, const unsigned char* sec, size_t n, unsigned flags, 
         }
         break;
     }
-    case 3:                                       /* the kinds' runs */
+    case 3:                                       /* the kinds' patterns */
         if (off[1] > off[0]) mutate_byte(c->body.p + off[0] + rndn(off[1] - off[0]));
         break;
     case 4: case 5: case 6: case 7: {             /* the unit frame: prefix, masks, ids, columns */

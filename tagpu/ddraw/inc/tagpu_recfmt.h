@@ -37,12 +37,17 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 18: format 17 with more of the unit frame's rules -- a unit's hit points while it is built, its
+/* 19: format 18 with more of the unit frame's rules -- a unit's hit points while it is built, its
    HP percentage every 30 ticks, its sort bucket, a ground unit's speed and sight cell, the turn
    rate's one-tick blip -- and their constants in the header: RT_TYPES, each unit type's, and
-   RT_PHYSICS's bucket columns. 17 was format 16 in another container -- a run of sectioned stream blocks is one zstd frame at
-   level 19, each block a flushed chunk of it, and a snapshot is packed against the one before it
-   (RBF_CHAINED, THE RUN AND THE CHAIN below). 16 was format 15 with a skirmish recording's cells
+   RT_PHYSICS's bucket columns. 18 was format 17 with the sectioned container's kinds as
+   per-iteration patterns -- by reference to
+   the run's last 16, with markers for an empty feature tick and a predicted RK_FEATURES, and no
+   count for a run the frames fix -- and an RK_TICK body for a block's first iteration alone
+   (THE SECTIONED CONTAINER below). 17 was format 16 in another container -- a run of sectioned
+   stream blocks is one zstd frame at level 19, each block a flushed chunk of it, and a snapshot is
+   packed against the one before it (RBF_CHAINED, THE RUN AND THE CHAIN below). 16 was format 15
+   with a skirmish recording's cells
    held (RT_HOLD's RECL_CELLS): between refreshes the stream carries the cells' unit slots and yard
    bit at a value it wrote before, a feature tick's input cells only where a byte other than those
    changed, and the tick's source test as FS_SOURCE, as a multiplayer recording does. 15 was format
@@ -58,7 +63,7 @@
    unit frame carries the unit deltas, whose pool frame carries the projectile pool coded by
    identity, and whose four record frames -- the cells, the orders, the events and the state --
    carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). */
-#define REC_FORMAT        18
+#define REC_FORMAT        19
 
 static __inline int rec_format_supported(unsigned format)
 {
@@ -571,10 +576,12 @@ _Static_assert(RB_CONTRIBUTIONS == 7 && RB_EXACT == 8, "the block kinds retain t
 
 /* THE SECTIONED CONTAINER (tagpu_reccodec.c reads and writes it): the bytes of an RB_STREAM with
    RBF_SECTIONS, which decode to exactly the records they replace. A RecSecHead, then RCS_COUNT
-   sections of len[] bytes each, in order. RCS_KINDS holds the record kinds in payload order as
-   runs, each a varint kind (1..65535) and a varint count (at least 1). RCS_OTHER holds, for each
-   record of its kinds in payload order, a varint length (at most 0xFFFF) and that many bytes: the
-   record's body verbatim. Neither RK_UNIT_DELTA nor RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA has a
+   sections of len[] bytes each, in order. RCS_KINDS holds the record kinds (RCS_KINDS below).
+   RCS_OTHER holds, for each record of its kinds in payload order, a varint length (at most
+   0xFFFF) and that many bytes: the record's body verbatim -- but for the RK_TICK of every
+   iteration after the block's first, which has no entry: iteration i's GameTime is the first's
+   + i (mod 2^32), and a block whose iterations are not consecutive GameTimes is written as
+   records. Neither RK_UNIT_DELTA nor RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA has a
    body anywhere: the unit frame (RCS_UNITS) and the pool frame (RCS_PROJ) make them. The record
    frames -- RCS_CELLS, RCS_ORDERS, RCS_EVENTS and RCS_STATE -- each make the bodies of their
    kinds, in payload order, from a section of columns (tagpu_recframe.h, THE COLUMNS): a u8
@@ -583,6 +590,28 @@ _Static_assert(RB_CONTRIBUTIONS == 7 && RB_EXACT == 8, "the block kinds retain t
    its end. The payload is the records in kind order, each a RecHdr, its body and zero padding to
    a dword, as the writer's stream holds them; its first record is an RK_TICK, and an iteration is
    an RK_TICK and the records up to the next one.
+
+   RCS_KINDS, the kinds, is per iteration its PATTERN, by reference:
+       u8      m                          1..RECC_KINDS_MRU: the m-th of the run's last patterns,
+                                          front first, which moves to the front; 0: a new one,
+       varint  length, bytes              after m = 0 only: the pattern (1..RECC_KINDS_MAX bytes),
+                                          which goes to the front, the RECC_KINDS_MRU + 1-th
+                                          dropped
+   The list empties at every RBF_FRAME_RESET. A pattern is the iteration's records as tokens, in
+   payload order, which consume it exactly: a varint kind (1..0xFFFE) and a varint count (at
+   least 1) for a run of records of that kind, or one of two MARKERS, which have no count:
+       0       an empty feature tick: an RK_EV_FEATURE and its RK_EV_FEATURE_END whose bodies are
+               the run's last explicit empty pair's -- an FR_TICK root of 8 bytes directly followed
+               by an end whose root is FR_TICK; none before the first such pair since the reset
+       0xFFFF  an RK_FEATURES whose body is the state frame's prediction (tagpu_recframe_state.c);
+               none before the first explicit RK_FEATURES since the reset
+   and the first run of each of three GROUPS in the pattern has no count either, its count being
+   the group's total less the group's other runs': RK_TICK, total 1, the pattern's first token
+   (so no other RK_TICK run); RK_UNIT_DELTA, total the unit frame's changed units of the
+   iteration; RK_PROJ and RK_PROJ_DELTA together, total the pool frame's changed records of the
+   iteration. The first run carries no count, not the last, so a reader knows from what it has
+   read whether a count follows. A group with no run has a total of 0, and a reader refuses a
+   group whose other runs hold its total or more (the first run's count would be below 1).
 
    RCS_UNITS, the unit frame, is
        varint  iterations                 RecSecHead.iterations again
@@ -619,7 +648,7 @@ _Static_assert(RB_CONTRIBUTIONS == 7 && RB_EXACT == 8, "the block kinds retain t
    residual is the residual of, and what a reference row and its sections are; each record
    frame's file (tagpu_recframe_*.c) says what its columns hold. */
 enum RecSection {
-    RCS_KINDS = 0,     /* the record kinds, as runs                                              */
+    RCS_KINDS = 0,     /* the record kinds, as per-iteration patterns                             */
     RCS_UNITS,         /* the unit frame: every RK_UNIT_DELTA                                    */
     RCS_PROJ,          /* the pool frame: every RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA          */
     RCS_CELLS,         /* the cells frame: every RK_CELLS                                        */

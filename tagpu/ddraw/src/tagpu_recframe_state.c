@@ -21,7 +21,10 @@
    - RK_FEATURES: in fm, u8, bit j set when field j misses its prediction, then those fields'
      varint zz(v - prediction) in fv. The three heads are predicted as last time; the cursor as
      `last ? last - 1 : W * H - 1`.
-   The residuals are 32-bit, zigzagged (zz32).
+   The residuals are 32-bit, zigzagged (zz32). An RK_FEATURES that equals the prediction, after
+   an explicit one since the reset, is no record of this frame: the kinds section's marker
+   0xFFFF stands for it (tagpu_reccodec.c, THE KINDS), and the codec moves the fields on through
+   recframe_state_predicted and recframe_state_take, as an explicit one moves them.
 
    THE STATE, cleared at every reset: the globals (RECC_GLOBALS_MAX dwords) with known bits, each
    one's last delta and the last delta's mask; players 0..REC_PLAYERS - 1, their images with
@@ -355,6 +358,21 @@ static void feat_predict(const State* x, uint32_t pred[4])
     pred[1] = x->k.feat[1];
     pred[2] = x->k.feat[2];
     pred[3] = x->k.feat[3] ? x->k.feat[3] - 1 : x->cells - 1;
+}
+
+void recframe_state_predicted(const void* f, unsigned char out[16])
+{
+    uint32_t pred[4];
+    unsigned j;
+    feat_predict((const State*)f, pred);
+    for (j = 0; j < 4; j++) put32(out + 4 * j, pred[j]);
+}
+
+void recframe_state_take(void* f, const unsigned char b[16])
+{
+    State* x = (State*)f;
+    unsigned j;
+    for (j = 0; j < 4; j++) x->k.feat[j] = get32(b + 4 * j);
 }
 
 static void enc_features(State* x, const unsigned char* b, unsigned len)

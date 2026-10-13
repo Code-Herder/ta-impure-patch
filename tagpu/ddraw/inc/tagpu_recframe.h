@@ -307,4 +307,10 @@ typedef struct RecFrameOps {
 
 extern const RecFrameOps recframe_cells, recframe_orders, recframe_events, recframe_state;
 
+/* The state frame's RK_FEATURES prediction (tagpu_recframe_state.c), for the kinds section's
+   marker 0xFFFF: the body the next RK_FEATURES is predicted to have, and the fields taking a
+   body as an explicit RK_FEATURES's would. `f` is the state frame's state. */
+void recframe_state_predicted(const void* f, unsigned char out[16]);
+void recframe_state_take(void* f, const unsigned char b[16]);
+
 #endif
