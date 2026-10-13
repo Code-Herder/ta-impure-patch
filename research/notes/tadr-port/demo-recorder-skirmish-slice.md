@@ -889,10 +889,12 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
     structure. After the positions, the image's yard goes in where the host's still differs. A
     yard a structure's own Create opens is recorded before its create: the replayed create, with
     the puppet gates open, makes it again before its stamp, as the engine did, and the playing
-    compares the yard the create left with the recorded one (`yard_check`); the harness's *the
-    yards a create opened* fails a lane where one differs, or where the create was not made. Where
-    a yard event may stand is THE YARD RULE (`tagpu_recfmt.h`), which the writer and both readers
-    enforce ([engine map](../exe-reverse-engineering.md), *An open yard gives nothing back* and the
+    compares every create's yard with the recording's -- the last its Create opened, or closed
+    (`yard_check`); the harness's *the yards a create opened* fails a lane where one differs, or
+    where a create whose Create opened its yard was not made. Where a yard event may stand is THE
+    YARD RULE (`tagpu_recfmt.h`): the recorder keeps what it would refuse out of the file (*the
+    yard events THE YARD RULE kept out of the file*, which must be 0), and the writer and both
+    readers enforce it ([engine map](../exe-reverse-engineering.md), *An open yard gives nothing back* and the
     paragraphs after it).
   - **The wind** is seeded once, from the recording's first image, so every draw after it is the
     recording's.

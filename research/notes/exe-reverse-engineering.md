@@ -2361,7 +2361,7 @@ one did not fit.
 | `0x4866D0` (9 bytes) | the destructor `(rec, mode)`'s entry | the record: the victim's `u16` at `+1`, the killer's netid at `+3`, the killer's `u16` at `+7`, the severity at `+9`, the kind at `+0xA`. A call the destructor would make inert (B3's bound at `0x4866E5`, the alive test at `0x486706`) is not recorded; a killer of 0 is none (`0x48675A`). The killer's player by `0x44FE40`'s rule (below); C4's carried decision (`tagpu_tx_carried`); the victim's image as the destructor finds it |
 | `0x41B8D0` (6 bytes) | the build done `(builder, built)`, `ret 8` | both arguments. Its five callers are listed at the table's `0x41B8D0` row above; the build step `0x41BA60` calls it at `0x41BCBF` when the built unit's `+0x104` compares equal to 0.0 (`0x41BCAA..0x41BCBB`), so every build that finishes in play passes here |
 | `0x48B090` (5 bytes) | the state setter `(mask, value)`, `ecx` the unit, `ret 8` | the byte `+0x10E` as the setter will leave it (`0x48B09A..0x48B0D4`), recorded only when it changes, since the setter returns at once otherwise (`0x48B0DE`) |
-| `0x47DAF1` (6 bytes: `mov [esi+0x10F],bl`) | YARD_OPEN `0x47DAC0`'s write, past its refusal `0x47D970`; no branch targets `0x47DAF2..0x47DAF6` | `esi` the structure, `bl` the new `+0x10F`: its bit 2 as `RK_EV_YARD` (*An open yard gives nothing back*); skirmish recordings only |
+| `0x47DAF1` (6 bytes: `mov [esi+0x10F],bl`) | YARD_OPEN `0x47DAC0`'s write, past its refusal `0x47D970`; no branch targets `0x47DAF2..0x47DAF6` | `esi` the structure, `bl` the new `+0x10F`: its bit 2 as `RK_EV_YARD` (*An open yard gives nothing back*), held until its create when the structure is inside it, kept out where THE YARD RULE would refuse it; skirmish recordings only |
 | `0x456190`, `0x456290` (5 bytes each) | the broadcast starts `(unit, idx)` and `(unit, idx, argc, a0..a3)` | the arguments as the `0x10` carries them |
 | `0x456218` (6 bytes) | inside the broadcast start by name `0x456200(unit, name, argc, a0..a3)`, after `0x4B07C0` has turned the name into the index (`0x456213`) | `esi` the unit (`0x456208`), `eax` the index, the arguments at `E+0x28` (the function's `sub esp,0x18; push esi`) |
 | `0x47F780` (6 bytes), `0x47F850` (5 bytes) | the unit replies `(unit, kind, text)`, before their viewer tests (`0x47F850` tests first that the unit is off screen, `0x48BCB0` at `0x47F856`) | every player's reply, the text copied only to its end. `0x47F7E0`, between them, is never called: no call, jump or stored address names it, and its address occurs nowhere in the image |
@@ -8197,17 +8197,29 @@ receiver (`0x455423`, mode 0). Send_UnitDeath runs Killed as a query (`0x4B0BC0`
 before it calls the destructor, so on a skirmish recording machine -- every death its own --
 Killed's yard comes before the death's `RK_EV_DEATH`, on a unit still live. The destructor's own
 Killed start (`0x4B0A70` at `0x486877`, after the footprint clear `0x47CBD0` -> `0x47D0E0` at
-`0x48682D`) runs in mode 0 alone (`0x48684A..0x486853`), and its other script starts -- TargetCleared
-through `0x489800` from the order purge's teardown (`0x43A2B9`), StopBuilding at `0x43A251` -- pass
-run-now 0, so no script of the dying unit runs inside its own death's bracket.
+`0x48682D`) runs in mode 0 alone (`0x48684A..0x486853`), and its other script starts pass run-now
+0: the order purge's teardown `0x43A1F0` starts TargetCleared through `0x489800` (`0x43A2B9`) and
+StopBuilding at `0x43A251`, and its dispatch of event 2 to the order's handler (`0x43A21A`) reaches
+handlers whose own starts pass run-now 0 -- BuildingBuild (`0x402653..0x402717`), SelfDestruct,
+HelpBuild and VTOL_MobileBuild (returning at `0x41C110`), AirStrike and AirToGround, VTOL_Pickup's
+states 4 and 5 (EndTransport, `0x4B0940` at `0x41148D` after `0x411479`). So no script of the dying
+unit runs inside its own death's bracket. A yard inside another unit's death -- the Killed query of
+a unit that death's explosion kills, the explosion's own starts (HitByWeapon `0x489F43`, TakeDamage
+`0x489F8E`, RockUnit) passing run-now 0 -- is played after the whole destructor, just before that
+unit's own death, as every event nested in a skirmish death is.
 
 **THE YARD RULE** (`tagpu_recfmt.h`) follows from the two: a yard of a unit live at its place in
 the step's events is that unit's yard there, written at that place; a yard of a unit not live is
-its create's, and that create follows in the step; anything else -- a yard naming the unit of a
-death still open, or a unit not live whose create does not follow -- is malformed. The writer
-refuses it as the recorder hands it over, and both readers (`tagpu_recreader.c`, `tarec.py`)
-refuse the file; `tarec check` adds that a unit made in the step shows the yard of its last yard
-event, or the closed yard its create's init leaves.
+its create's, and that create follows in the step; anything else -- a yard inside a feature call,
+one naming the unit of a death still open, or one of a unit not live whose create does not follow
+-- is malformed. The recorder holds a create's own yards and puts them just before the create
+records itself, and keeps what the rule would refuse out of the file and counts it (the replay
+harness fails any); the writer refuses a malformed record, and both readers (`tagpu_recreader.c`,
+`tarec.py`) refuse the file. The playing compares every create's yard with the recording's: the
+last yard its Create opened, or closed, since the init clears `+0x10F`'s low nibble
+(`0x485B4A`, `0x485B52`) and nothing to the exit writes bit 2 but YARD_OPEN -- a Create refused
+its yard on the recording machine (`0x47D970`) included. `tarec check` asks the same of the
+recording: a unit made in the step shows the yard of its last yard event, or the closed one.
 
 **The rule on a skirmish recording machine.** Its seats are type 1 (local human) and 2 (local AI)
 (MEASURED, the controllers of both recordings the decision rests on), so the incumbent always keeps
