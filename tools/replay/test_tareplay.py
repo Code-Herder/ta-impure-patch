@@ -1687,12 +1687,13 @@ class SortChains(unittest.TestCase):
         out = recmp_compare.sort_chains(a, b)
         self.assertTrue(any("both name unit 3 next" in line for line in out), out)
 
-    def test_a_cycle_fails(self):
-        # 1 -> 2 -> 3 -> 2: one head, but its walk reaches 3 of the 4
-        a, b = self.worlds({}, {1: self.unit(7, 3), 2: self.unit(7, 4), 3: self.unit(7, 3),
-                                5: self.unit(7)})
+    def test_a_headless_cycle_fails(self):
+        # 2 -> 3 -> 2 beside the head 1: each unit named once and one head, but its walk
+        # reaches 1 of the 3
+        a, b = self.worlds({}, {1: self.unit(7), 2: self.unit(7, 4), 3: self.unit(7, 3)})
         out = recmp_compare.sort_chains(a, b)
-        self.assertTrue(out, out)
+        self.assertEqual(len(out), 1, out)
+        self.assertIn("reach 1 of the 3", out[0])
 
     def test_a_carried_unit_s_next_is_compared(self):
         # +0x8E of a carried unit is its carrier's chain: it is left for the comparison

@@ -1395,9 +1395,10 @@ another bucket, while the recorder's own stream formed chains at every
 iteration; two older recordings had 24 and 4 such iterations (MEASURED
 2026-10-13). No recorded order is the truth on such a level. Each unit's bucket
 `+0x82` is its owner's, and it is compared. The order is the host's: a playing
-writes neither `+0x82` nor `+0x8E` raw (id rows, outside its raw mask), so every
-link is an engine function's, and the seek moves a unit
-into its owner's bucket through `0x47CB60` only when the host's differs
+writes neither `+0x82` nor `+0x8E` raw (id rows, outside its raw mask), and the
+seek writes `+0x82` raw only for a carried unit, which is in no bucket's chain,
+so every link is an engine function's; the seek moves a unit into its owner's
+bucket through `0x47CB60` only when the host's differs
 (*THE SORT BUCKETS ON A MULTIPLAYER LEVEL* in `tagpu_replay.c`). Before that,
 the seek's bound demanded one chain per bucket of the composed images, so a seek
 into such an iteration, or a takeover whose refresh was one, was refused
@@ -1405,9 +1406,9 @@ into such an iteration, or a takeover whose refresh was one, was refused
 that recording every takeover asked for between 301 and 900 rounded to such a
 refresh. `recmp_compare.py` checks the dump's chains instead of comparing
 `+0x8E` of a unit that is not carried (`sort_chains`): every live unit that is
-not carried is in its bucket's one chain, a next is a unit of the same bucket,
-no unit is named twice, and each bucket has one head. The owner approved that
-check on 2026-10-13.
+not carried and has a bucket is in that bucket's one chain, a next is a unit of
+the same bucket, no unit is named twice, and each bucket has one head. The owner
+approved that check on 2026-10-13.
 
 **The deaths.** A unit's end is its owner's: `DEATH_END` runs the destructor
 through `ev_death` at the owner's time, with the feature gates shut and the
