@@ -51,6 +51,7 @@ export function cut(doc: Doc, live: Live): Run {
         state: s.state,
         ...(s.after ? { after: s.after.map(name) } : {}),
         ...(s.pool ? { pool: s.pool } : {}),
+        ...(s.order != null ? { order: s.order } : {}),
         ...(s.instance ? { instance: s.instance } : {}),
         ...(s.gt != null ? { gt: s.gt } : {}),
         ...(s.gt_target != null ? { gt_target: s.gt_target } : {}),

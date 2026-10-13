@@ -129,8 +129,8 @@ describe('the pane', () => {
                                   props: PANE_PROPS, requestId: 'ta-runs' })
     expect(await ui.find({ text: /tareplay landing a/ })).toBeDefined()
     expect(await ui.find({ text: /── IN PROGRESS \(1\)/ })).toBeDefined()
-    expect(await ui.find({ text: /░{22} {2}0\/1 test groups · ~7min left · end time ≈\d\d:\d\d$/ })).toBeDefined()
-    expect(await ui.find({ text: /running \(1\)/ })).toBeDefined()
+    expect(await ui.find({ text: /█{11}░{11} {2}1\/2 tests · 0\/1 test groups passed · ~7min left · end time ≈\d\d:\d\d$/ })).toBeDefined()
+    expect(await ui.find({ text: /in progress \(1\)/ })).toBeDefined()
     expect(await ui.find({ text: /▶ battle {2}record✓ {2}puppet ▶ GT 3120\/5300$/ })).toBeDefined()
     expect(await ui.find({ text: /── DONE/ })).toBeUndefined()
     await ui.unmount()
@@ -228,7 +228,7 @@ test('failures name the item, the step and the check', () => {
   expect([testName('tareplay', 'L'), testName('tareplay', 'checks'), testName('tacompat', 'run')])
     .toEqual(['record', 'checks', 'run'])
   expect(summary({ ...run, tool: 'tareplay', live: 'running', eta: null, started: 0,
-                   ended: null } as Run, 1000, 0)).toBe('1/1 test groups · 2 FAIL')
+                   ended: null } as Run, 1000, 0)).toBe('1/1 tests · 0/1 test groups passed · 2 FAIL')
 })
 
 describe('in progress and done', () => {
@@ -252,7 +252,7 @@ describe('in progress and done', () => {
     const at = clockAt(T0 - 10_000, -240)
     expect(await ui.find({ text: new RegExp(`▸ ✓ tareplay landing b pass · 6min · ${at}$`) }))
       .toBeDefined()
-    expect(await ui.find({ text: /passed/ })).toBeUndefined()
+    expect(await ui.find({ text: /\d passed$/ })).toBeUndefined()
     await ui.unmount()
   })
 
@@ -260,30 +260,35 @@ describe('in progress and done', () => {
        async ($, on) => {
     const ok = (id: string, t: number) => ({
       id, state: 'pass', checks: { pass: 4, fail: [], unrun: [] },
-      steps: [{ id: 'L', state: 'done', started: t, seconds: 200 },
-              { id: 'checks', state: 'pass', started: t + 200, seconds: 100 }],
+      steps: [{ id: 'L', state: 'done', pool: 'game', started: t, seconds: 200 },
+              { id: 'checks', state: 'pass', pool: 'offline', started: t + 200, seconds: 100 }],
     })
     const files: Files = new Map([[`${ROOT}/${SID}/a.json`, JSON.stringify(doc('a', { items: [
       (doc('a').items as unknown[])[0],
       ok('b7-flash', 1000), ok('c2-stack', 2000),
       { id: 'c2-airwar', state: 'fail', checks: { pass: 3, fail: ['R: unit 412 hp'], unrun: [] },
-        steps: [{ id: 'L', state: 'done', seconds: 100 },
-                { id: 'checks', state: 'fail', seconds: 10 }] },
-      { id: 'b7-radar', state: 'planned', steps: [{ id: 'L', state: 'planned' }] },
+        steps: [{ id: 'L', state: 'done', pool: 'game', seconds: 100 },
+                { id: 'checks', state: 'fail', pool: 'offline', seconds: 10 }] },
+      { id: 'b7-radar', state: 'planned', steps: [{ id: 'L', state: 'planned', pool: 'game' }] },
       { id: 'c3-vet', state: 'running',
         steps: [{ id: 'L', state: 'done', pool: 'game' },
                 { id: 'checks', state: 'running', pool: 'offline' }] },
       { id: 'c4-kill', state: 'running',
-        steps: [{ id: 'L', state: 'done', pool: 'game' }, { id: 'P', state: 'planned', pool: 'game' }] },
+        steps: [{ id: 'L', state: 'done', pool: 'game' },
+                { id: 'R', state: 'planned', pool: 'game', order: 2 },
+                { id: 'P', state: 'planned', pool: 'game', order: 1 },
+                { id: 'checks', state: 'planned', pool: 'offline' }] },
     ] }))]])
     const clock = world(on, files, new Map([[77, PROC_TICKS]]))
     await start($)
     await clock.advance(2000)
     const ui = await $.ui.mount({ plugin: 'ta-runs', surface: 'terminal', component: 'Pane',
                                   props: PANE_PROPS, requestId: 'ta-runs' })
-    expect(await ui.find({ text: /3\/7 test groups · 1 FAIL · ~7min/ })).toBeDefined()
+    expect(await ui.find({ text: /6\/10 tests · 2\/7 test groups passed · 1 FAIL · ~7min left/ })).toBeDefined()
     expect(await ui.find({ text: /checks: / })).toBeUndefined()
-    expect(await ui.find({ text: /^ *running \(1\)$/ })).toBeDefined()
+    expect(await ui.find({ text: /^ *in progress \(2\)$/ })).toBeDefined()
+    expect(await ui.find({ text: /▶ battle  {2}record✓ {2}puppet ▶ GT 3120\/5300$/ })).toBeDefined()
+    expect(await ui.find({ text: /· c4-kill {2}record✓ {2}next: puppet roundtrip$/ })).toBeDefined()
     expect(await ui.find({ text: /^ *done \(3\) {2}2 ✓ · 1 ✗$/ })).toBeDefined()
     expect(await ui.find({ text: /✗ c2-airwar 3 pass · 1 FAIL$/ })).toBeDefined()
     expect(await ui.find({ text: /✗ R: unit 412 hp$/ })).toBeDefined()
@@ -291,7 +296,7 @@ describe('in progress and done', () => {
     expect(await ui.find({ text: /b7-flash/ })).toBeUndefined()
     expect(await ui.find({ text: /^ *planned \(1\) {2}b7-radar$/ })).toBeDefined()
     expect(await ui.find({ text: /^ *checking \(1\) {2}c3-vet$/ })).toBeDefined()
-    expect(await ui.find({ text: /^ *waiting \(1\) {2}c4-kill$/ })).toBeDefined()
+    expect(await ui.find({ text: /waiting/ })).toBeUndefined()
     await ui.press({ key: 'pass:a' })
     expect(await ui.find({ text: /▾ ✓ 2 passed$/ })).toBeDefined()
     expect(await ui.find({ text: /✓ b7-flash {2}4 pass · 5min$/ })).toBeDefined()

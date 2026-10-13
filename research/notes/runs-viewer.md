@@ -160,14 +160,18 @@ liveness is read from `/proc`, as above. Nothing in it writes a file a tool read
   stopped, died, abandoned, exited); a press on a run's line opens or folds it. A section's titles
   are padded alike, so a DONE row reads as a column: outcome, time taken, when it ended, then
   how far it got when that was short of the plan, and its failures. Inside a running run: its
-  problems, a bar and the count of **items with every step ended** (a test group counts once its
-  checks have a verdict; a run with no items of its own counts steps), the failures and the
-  estimate. Its items are grouped:
-    - **running** — an item playing a step on one of the run's worker pools, one row each (so no
-      more rows than workers): every ended test as its name and glyph, a running test with its
-      GameTime against its target, or its time;
-    - **checking** and **waiting** — an item whose only running steps wait for no worker (tareplay's
-      `checks` on `offline`), and one between tests waiting for a worker: each one line of names;
+  problems, a bar of its **tests ended** — a test is a step on one of the run's worker pools, so a
+  test group's checks are not one — and beside it the tests ended, the **items passed** (a test
+  group counts once its checks have a verdict), the failures and the estimate; a run with no items
+  of its own (a landing) counts its steps instead. The bar moves with every test, where a count of
+  verdicts sits at zero until the first test group's checks end. Its items are grouped:
+    - **in progress** — one row each: first the items playing a test on a worker pool (every ended
+      test as its name and glyph, a running test with its GameTime against its target, or its
+      time), then, dimmed, the items waiting for a worker between tests, with their ended tests and
+      `next:` the ones queued in the order a worker takes them (the journal's `order`). An item
+      keeps its row from its first test to its last;
+    - **checking** — an item whose only running steps wait for no worker (tareplay's `checks` on
+      `offline`): one line of names;
     - **done** — the count passed and failed, each item that did not pass by name with every failed
       or unrun step and check, and the passed ones behind their own folded line (`▸ ✓ N passed`),
       each with its checks and wall time when opened;
