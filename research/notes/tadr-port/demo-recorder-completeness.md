@@ -438,11 +438,48 @@ thread. S1's capture, which includes this slice, costs about 80 µs a tick in a 
 
 ## The replay test harness
 
-`tools/replay/tareplay.py` runs scripted fixtures in parallel, as the compatibility suite runs
-games: one tacli instance and one private X server per job, nothing stopped by name, and exit 0
+### Terms
+
+The harness has four nouns. They are the words the notes, the instructions and the runs pane use:
+
+| term | what it is |
+|---|---|
+| **scenario** | a game setup in `scenarios/`: the map, the players, the units placed. A building block; several test groups can load the same one. |
+| **test group** | one scripted game and the tests run on it: a scenario to load, actions at given GameTimes (apply another scenario, type a chat line, press keys, order a unit), the GameTime it ends at, and which tests it wants. Each is an entry of `tools/replay/fixtures.json`. |
+| **test** | one way of playing a test group: one game, in a fresh process, on one worker. Every test group has **record**; the others play what record recorded. |
+| **checks** | the comparison, offline and on no worker, of what a test group's tests produced; it starts when the group's last test ends and gives the group its verdict. |
+
+A **worker** is one game instance with its private X server; `-j` sets how many tests play at once,
+from any mix of test groups. The tests:
+
+| test | id | starts from | plays |
+|---|---|---|---|
+| **record** | `L` | the test group's scenario | the script live, and records it |
+| **puppet** | `P` | record's recording | from the start, every unit driven only by the recording |
+| **roundtrip** | `R` | record's recording | as puppet, restoring the state in place from the recording at points on the way |
+| **seek** | `Q` | record's recording | from one point, in a fresh process that played nothing before it |
+| **takeover** | `K` | record's recording | to a point, then hands control back to live play, recording the new branch |
+| **follow** | `F` | takeover's recording | from just before the takeover, across it |
+| **forks** | `X` | record's recording | branches timelines off it, forks of forks, deletions, the chains played |
+| **rewind** | `U` | the `battle` test group's scenario | the script live with rewinds, as its own recording |
+| **watch** | `W` | record's recording | opened as a player opens it, through the Replays browser and the HUD |
+
+Record runs first because every other test but rewind plays its file; follow waits for takeover.
+In a gate a test group plays record, puppet, roundtrip and seek, with takeover and follow, forks,
+rewind or watch where its entry says so (`procs`); a `cost` test group plays record alone,
+`tareplay.py measure` record and puppet, and `tareplay.py takeover` record, takeover and follow. **The code and the older text still say fixture and lane**:
+`fixtures.json`, `fx`, `LANE_ORDER`, the tests by their one-letter id, `SIM_FEATURE`'s `fixtures_`,
+`tareplay.py run <fixture>`. A fixture is a test group and a lane a test; they are renamed in one
+pass with the code. "Lane" elsewhere, in the recording codec (`tagpu_reclanes.h`) and the
+renderer, is unrelated, and so is a "fixture" that means a synthetic test input (a C unit test's).
+
+### What it runs
+
+`tools/replay/tareplay.py` runs test groups in parallel, as the compatibility suite runs games:
+one tacli instance and one private X server per worker, nothing stopped by name, and exit 0
 (every check passed), 1 (a named failure) or 2 (something could not run). Its core is built
 ([S3c-1](demo-recorder-skirmish-slice.md#s3c-1-one-writer-for-the-tables-and-the-round-trip),
-which lists the processes, the checks and the fixtures): each fixture of
+which lists the processes, the checks and the test groups): each test group of
 `tools/replay/fixtures.json` is recorded live, played on puppets from the start, played again with
 three round trips, and sought from a fresh process, and every dump is compared with the recording
 or with its pair. The trigger `tagpu_replay.trigger` is read on the game thread by the replay's
@@ -977,7 +1014,7 @@ region with whether its fixtures reach it.
 | 2026-10-09 | **No check of the gate is decided by the wall clock** (*Ticks, not polls*): a test launch's hold starts its level held (its pause bit and one-tick first batch written from `tagpu_replay.c`, a `presentation` file, on test launches only: a loosening the owner approved); a seek's cost is its game thread's CPU time, bounded by 4,000 ms with SMT and clock contention named as the residual; the fixture worlds change once, deterministically, as scenarios now land at GameTime 1; the compat suite's soaks and `--watch` count game ticks or presented frames (SECONDS × 30) with a 120 s stall bound. |
 | 2026-10-11 | **A recording does not keep the order of the nano sprays inside one iteration** (OD5 of the lossy plan, a loosening the owner approved): a spray a unit's spray session implies is left out of the stream and made again by every reader after the iteration's events, units ascending. Every spray stays exact: the same ID, point, box and layer in the same iteration, the point the unit's own earlier spray's, moved by exactly the unit's position change when it follows the unit. Why the order can go: the emitters `0x4720D0`/`0x472200` change no simulation state and draw only the C runtime's rand, which a playing does not reproduce, and the order of a step's emissions decides only their particles' order in the layer -- the draw order and which one a full layer destroys first -- and, when the particle pool `0x51E610` that every emitter shares (1000 objects in stock) runs out within the step, which emission makes no particle (the engine map's *The nano spray*); the owner confirmed OD5 covers it, 2026-10-12. `tarec lossy-check` compares each iteration's sprays as a multiset and each unit's in order. Rejected: zeroing the point, which the game shows (the offline plan's step, −3.9 MB on a stream whose cells were already held, against −2.72 MB for the exact sessions over the unit and order rows). |
 | 2026-10-11 | **A takeover's AIs read the recording's contacts at T** (O14 for takeovers): when P is the recording's viewed record, the takeover restores `+0x110` bits 8–10 from the recording after its radar pass, as the seek does, so the fork's first acquisition scans read the contacts the recording held at T, as the recording's AIs read them until its next pass; a multiplayer recording's takeover keeps its own pass's bits (below). Rejected: masking bits 8–10 in `fork_view` for every fork, a loosening of D2 (d) that would leave the fork's AIs reading a picture the parent never held; and steering the harness off the ticks after a scripted step, which hides the gap. |
-| 2026-10-12 | **A5 and the in-game create lag are fixed by construction, not accepted** (the owner, after the level-start lag was traced to the same one-slice COB lag): a recorded slice marker, in order among the step's creates and starts, and the replay giving each marked unit its slice there, a format bump (format 19, *COB slices a playing gives one tick late*). This supersedes A5's acceptance in the 2026-10-01 row, which stays as history. |
+| 2026-10-12 | **A5 and the in-game create lag are fixed by construction, not accepted** (the owner, after the level-start lag was traced to the same one-slice COB lag): a recorded slice marker, in order among the step's creates and starts, and the replay giving each marked unit its slice there, a format bump (format 20, *COB slices a playing gives one tick late*). This supersedes A5's acceptance in the 2026-10-01 row, which stays as history. |
 | 2026-10-12 | **The slice marker's scope and its check** (the owner): in a multiplayer recording the marker covers the recording machine's own units only (M1: the starts the ledger orders keep their lag, and other owners' units are unchanged); and **`--cob-exact`** -- the VM's START and CALL children of `0x4B08C0` compared exactly, with no band -- runs on every gate fixture that carries COB, `slice-walkers`, `battle` and `tenseat`. Anything it catches is a replay gap to close by construction, never a band, an exclusion or an expected-absent row. |
 | 2026-10-12 | **An owner-only COB query `--cob-exact` names is recorded and made again, not accepted** (the owner's standing decision for the slice marker, applied to `slice-walkers`' `QueryBuildInfo`, live 9 against puppet 0): `RK_EV_QUERY` carries `QueryBuildInfo` and `QueryNanoPiece` where the engine makes them, a playing makes each through `0x4B0BC0` at its place, and `QueryNanoPiece`'s `absent` row of 2026-10-01 goes, a tightening. AutoAim's aim queries keep their `absent` rows of 2026-10-01. |
 | 2026-10-12 | **A failure only under load is a bug in the check** (the owner's rule): a peek the running game has not answered is no progress, so `STALL_S` is the one bound on a running level. **Approved by the owner (2026-10-12):** the seek's W3 is an exact count of the blocks the reader decoded against the file's own, with the game thread's CPU time reported only and the gap that leaves accepted (*A seek's work, not its time*); and bits 1 and 2 of the pause word `main+0x38A51`, the pacing gate's lag flag and its live speed below the chosen one, are left (`replay-globals.tsv`, `pacingbits`, a `leave` row: bit 2 has no reader, bit 1 only the corner icon and the turbo). |
@@ -1075,7 +1112,7 @@ projectile can still meet a tree an earlier impact felled on the recording machi
 ([skirmish slice](demo-recorder-skirmish-slice.html)).
 
 **COB slices a playing gives one tick late** (closed for A5 and in-game creates by the slice
-marker, format 19). The unit tick's `DoScriptsNow(1)` at `0x48ADEB` is the only clock a COB thread
+marker, format 20). The unit tick's `DoScriptsNow(1)` at `0x48ADEB` is the only clock a COB thread
 has, so a unit whose slice falls on the other side of the unit tick on a puppet runs its scripts
 one tick off, and a looping script such as a walker's `MotionControl` stays re-phased for the rest
 of the unit's life. The level's own units are made before the host's first unit tick, which closes

@@ -77,7 +77,7 @@ typedef struct RecHeader {
     RecMpRoster mp_seats;
     unsigned     has_codec;                 /* RT_CODEC and RT_PHYSICS: a sectioned stream block
                                                may come; without them only records blocks    */
-    RecCodecParams codec;                   /* their constants, and RT_AIR's (about 25 KB)    */
+    RecCodecParams codec;                   /* their constants, RT_AIR's and RT_TYPES' (66 KB) */
     unsigned     has_hold;                  /* RT_HOLD: the stream holds the masks' bits between
                                                refreshes; a header without it holds nothing  */
     RecLossyHold hold;

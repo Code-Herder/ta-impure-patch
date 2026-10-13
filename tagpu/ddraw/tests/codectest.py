@@ -7,14 +7,16 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
 
     outcomes                 SECTIONS, DECLINED and MISMATCH from synthetic payloads of units and
                              projectiles, each followed by a block that restarts (codectest.c)
-    transcode IN OUT [--snap-every N] [--skirmish]
+    transcode IN OUT [--snap-every N] [--skirmish] [--types-from REC] [--bucket-cols N]
                              every stream block decoded and written again through the writer's
                              codec: 0 declined and 0 mismatched expected; with N, every Nth
                              snapshot of a segment kept (0: none) and the stream restarting only
                              after those, as a writer N times IN's snapshot interval would write;
                              with --skirmish, a skirmish header without RT_HOLD labelled with one
-                             that holds nothing
-    lossy IN OUT [--exact]   the writer's path over IN's exact records: the lossy filter with the
+                             that holds nothing; --types-from and --bucket-cols give an older
+                             format's header the codec constants it lacks (codectest.c)
+    lossy IN OUT [--exact] [--types-from REC] [--bucket-cols N]
+                             the writer's path over IN's exact records: the lossy filter with the
                              build's hold table, the refreshes, the blocks and the codec, IN's
                              snapshots kept where a writer would take one; with --exact, each
                              stream block's exact records after it (RB_EXACT). Prints the
@@ -174,7 +176,7 @@ def cmd_fuzzdiff(src, cases_path):
             ents = None
         else:
             ents = []
-            for _ in range(3):
+            for _ in reccodec.CODEC_TAGS:
                 has, ne = struct.unpack_from("<II", data, at)
                 ents.append(data[at + 8:at + 8 + ne] if has else None)
                 at += 8 + ne
@@ -195,10 +197,9 @@ def cmd_fuzzdiff(src, cases_path):
                     chunk, raw = body
                     got = f.decode(cflags, run.before().feed(chunk, raw, cflags & reccodec.RBF_FRAME_RESET))
                 else:
-                    es = [(t, e) for t, e in zip((reccodec.RT_CODEC, reccodec.RT_PHYSICS, reccodec.RT_AIR), ents)
-                          if e is not None]
+                    es = [(t, e) for t, e in zip(reccodec.CODEC_TAGS, ents) if e is not None]
                     q = frame.prm
-                    prm = reccodec.params(es, q.nslots, q.nproj, q.gw, q.gh, q.nwrecks)
+                    prm = reccodec.params(es, q.nslots, q.nproj, q.gw, q.gh, q.nwrecks, q.ndefs)
                     if not prm.usable:
                         raise reccodec.Unreadable("not usable")
                     f.restart(prm)

@@ -37,15 +37,18 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 19: format 18 with the script slice's place in the event stream (RK_EV_SLICE), the owner's
-   COB queries the playing makes again (RK_EV_QUERY) and a yard's opening or closing at its place
-   (RK_EV_YARD). 18 was format 17 with the sectioned
-   container's kinds as per-iteration patterns -- by reference to the run's last 16, with markers
-   for an empty feature tick and a predicted RK_FEATURES, and no count for a run the frames fix --
-   and an RK_TICK body for a block's first iteration alone (THE SECTIONED CONTAINER below). 17 was
-   format 16 in another container -- a run of sectioned stream blocks is one zstd frame at level
-   19, each block a flushed chunk of it, and a snapshot is packed against the one before it
-   (RBF_CHAINED, THE RUN AND THE CHAIN below). 16 was format 15 with a skirmish recording's cells
+/* 20: format 19 with the script slice's place in the event stream (RK_EV_SLICE), the owner's COB
+   queries the playing makes again (RK_EV_QUERY) and a yard's opening or closing at its place
+   (RK_EV_YARD). 19 was format 18 with more of the unit frame's rules -- a unit's hit points while
+   it is built, its HP percentage every 30 ticks, its sort bucket, a ground unit's speed and sight
+   cell, the turn rate's one-tick blip -- and their constants in the header: RT_TYPES, each unit
+   type's, and RT_PHYSICS's bucket columns. 18 was format 17 with the sectioned container's kinds
+   as per-iteration patterns -- by reference to the run's last 16, with markers for an empty
+   feature tick and a predicted RK_FEATURES, and no count for a run the frames fix -- and an
+   RK_TICK body for a block's first iteration alone (THE SECTIONED CONTAINER below). 17 was format
+   16 in another container -- a run of sectioned stream blocks is one zstd frame at level 19, each
+   block a flushed chunk of it, and a snapshot is packed against the one before it (RBF_CHAINED,
+   THE RUN AND THE CHAIN below). 16 was format 15 with a skirmish recording's cells
    held (RT_HOLD's RECL_CELLS): between refreshes the stream carries the cells' unit slots and yard
    bit at a value it wrote before, a feature tick's input cells only where a byte other than those
    changed, and the tick's source test as FS_SOURCE, as a multiplayer recording does. 15 was format
@@ -61,7 +64,7 @@
    unit frame carries the unit deltas, whose pool frame carries the projectile pool coded by
    identity, and whose four record frames -- the cells, the orders, the events and the state --
    carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). */
-#define REC_FORMAT        19
+#define REC_FORMAT        20
 
 static __inline int rec_format_supported(unsigned format)
 {
@@ -815,6 +818,19 @@ typedef struct RecAirRow {
 } RecAirRow;
 _Static_assert(sizeof(RecAirRow) == 24, "an RT_AIR row is 24 bytes");
 
+/* RT_TYPES' row: a unit type's constants for the unit frame's per-type rules. `type` is the unit
+   image's +0xA6; the rest are the def's (+0x170 the sight emit's height term, a byte; +0x1FA the
+   hit points at most, u32; +0x192 maxvelocity, +0x19A brakerate, +0x19E acceleration, 16.16). */
+#define REC_SLOPES 11            /* the ground speed's slope table: 0x505200, read at 0x505205 + sl */
+typedef struct RecTypeRow {
+    uint16_t type;
+    uint8_t  sight_h, zero;
+    uint32_t maxhp;
+    int32_t  maxv, brake, acc;
+} RecTypeRow;
+_Static_assert(sizeof(RecTypeRow) == 20, "an RT_TYPES row is 20 bytes");
+#define REC_TYPES_HEAD 16        /* RT_TYPES' u32 n, its slope table and its pad                 */
+
 /* A header or end block's payload: entries of u16 tag, u16 length, then that many bytes, the next
    entry at the next multiple of 4. A string is its bytes, with no NUL. */
 enum RecTag {
@@ -883,8 +899,9 @@ enum RecTag {
     RT_CODEC,          /* u16 n, u16 0, then n rows of RecLaneRow (u16 offset, u8 width, u8 role):
                           the unit frame's lanes (replay-lanes.tsv), tiling the unit image        */
     RT_PHYSICS,        /* i32 gravity (main+0x14263), u8 sea level (main+0x1427F), u8 the sight
-                          rule (LosType main+0x14281 bit 2 at the segment's start, 0 or 1), u16 0:
-                          the unit frame's level constants                                       */
+                          rule (LosType main+0x14281 bit 2 at the segment's start, 0 or 1), u16 0,
+                          u32 the sort buckets' columns (main+0x142A3; 0 turns the bucket rule
+                          off): the unit frame's level constants                                 */
     RT_AIR,            /* u32 n, u32 0, then n RecAirRow, types strictly ascending: the aircraft
                           types (def +0x241 bit 11) the unit frame predicts with its air rules    */
     RT_END_REASON = 32,/* u32 RecEnd                                                            */
@@ -917,7 +934,7 @@ enum RecTag {
     RT_CODEC_DECLINED, /* u32: stream blocks the codec's encoder declined, written as records     */
     RT_CODEC_MISMATCH, /* u32: stream blocks whose check decode differed, written as records: a
                           codec bug                                                              */
-    RT_HOLD            /* a skirmish header's, written by the writer (tagpu_recwriter.c,
+    RT_HOLD,           /* a skirmish header's, written by the writer (tagpu_recwriter.c,
                           header_apply); absent in a multiplayer one, whose stream holds nothing:
                           u32 the refresh interval in ticks (REC_REFRESH_MIN..REC_REFRESH_TICKS),
                           u32 flags (RECL_*), the SHA-256 of replay-hold.tsv (32 bytes), then the
@@ -926,12 +943,16 @@ enum RecTag {
                           leaves clear is exact at every iteration; a held byte is exact at every
                           refresh and keeps, between two, a value the stream wrote for the same
                           unit or list since the last (tagpu_reclossy.c, THE INVARIANTS)        */
+    RT_TYPES           /* u32 n, u8 the ground speed's slope table (11 bytes, the executable's at
+                          0x505200), u8 0, then n RecTypeRow, types strictly ascending and below
+                          RT_UNITDEFS' count: the unit types the unit frame's per-type rules
+                          predict; a type without a row has those rules off                      */
 };
 /* The end block's tags are RT_END_REASON..RT_CODEC_MISMATCH; a header's are the others. */
 _Static_assert(RT_AIR < RT_END_REASON && RT_HOLD > RT_CODEC_MISMATCH,
                "the end block's tags are one run");
-_Static_assert(RT_CODEC == 29 && RT_AIR == 31 && RT_CODEC_DECLINED == 44 && RT_HOLD == 46,
-               "the codec's and the filter's tags");
+_Static_assert(RT_CODEC == 29 && RT_AIR == 31 && RT_CODEC_DECLINED == 44 && RT_HOLD == 46 &&
+               RT_TYPES == 47, "the codec's and the filter's tags");
 
 /* RT_HOLD. A refresh iteration is a segment's first or second, one whose GameTime is 1 modulo
    the interval (the first after it where an iteration skips that GameTime), and every snapshot's

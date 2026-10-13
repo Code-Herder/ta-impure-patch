@@ -563,16 +563,16 @@ The step T tick, in order: the network pump 0x453D40 (network only), then these 
 - **Writes:** the queue `[0x51E68C]` and the table's next times. Both are UI; nothing in the
   simulation reads them (`data-keys-evidence.md:734`).
 
-### 1.8b The script slice — `RK_EV_SLICE` (format 19)
+### 1.8b The script slice — `RK_EV_SLICE` (format 20)
 
 Not a root: the unit tick's `DoScriptsNow(1)` (`0x48ADEB`) placed among the step's events. Written
 just before the slice of a unit whose COB had an engine start (`0x4B0B00`, `0x4B0940`) since the
 capture point, `{u32 ID}`, outside any bracket; a playing gives that unit's slice at the marker
 instead of in the host's unit tick, so a start made before the slice -- AutoAim's, a create's
 Create in a later slot -- takes its first slice where it did on the recording machine
-([skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-19)).
+([skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-20)).
 
-### 1.8c The owner's COB queries — `RK_EV_QUERY` (format 19)
+### 1.8c The owner's COB queries — `RK_EV_QUERY` (format 20)
 
 Not a root: a COB query `0x4B0BC0` only an order handler makes, so only the machine of the
 handler's unit's owner -- `QueryBuildInfo` at `0x4027FB` (BuildingBuild) and `QueryNanoPiece` at
@@ -584,7 +584,7 @@ be another player's; the query's COB is noted in the slice set so that slice is 
 makes the same query there with the engine's arguments
 ([engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
 
-### 1.8d A yard's change — `RK_EV_YARD` (format 19)
+### 1.8d A yard's change — `RK_EV_YARD` (format 20)
 
 Not a root: YARD_OPEN `0x47DAC0`'s write of `+0x10F` at `0x47DAF1`, past its refusal `0x47D970`.
 `{u32 ID, u8 the yard (1 open, 0 closed), u8 0 x3}`, in a bracket or not, written wherever the COB

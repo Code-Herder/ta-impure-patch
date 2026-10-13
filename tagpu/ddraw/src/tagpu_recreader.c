@@ -475,9 +475,9 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
 {
     size_t at = 0;
     unsigned seen = 0, i;
-    const unsigned char* ent[3] = { NULL, NULL, NULL };     /* RT_CODEC, RT_PHYSICS, RT_AIR */
-    unsigned nent[3] = { 0, 0, 0 };
+    RecCodecEntries ent;
     memset(h, 0, sizeof *h);
+    memset(&ent, 0, sizeof ent);
     while (at + 4 <= len) {
         unsigned short tag, n;
         const unsigned char* p = b + at + 4;
@@ -553,12 +553,13 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         case RT_CODEC:
         case RT_PHYSICS:
         case RT_AIR:
-            if (ent[tag - RT_CODEC]) {
+        case RT_TYPES:
+            if (ent.p[reccodec_entry_of(tag)]) {
                 snprintf(why, cap, "header entry %u twice", tag);
                 return 0;
             }
-            ent[tag - RT_CODEC] = p;
-            nent[tag - RT_CODEC] = n;
+            ent.p[reccodec_entry_of(tag)] = p;
+            ent.n[reccodec_entry_of(tag)] = n;
             break;
         case RT_PROJECTILES:   if (n == 4) { h->proj_cap = u32(p); seen |= 16; } break;
         case RT_HOLD:
@@ -682,11 +683,11 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         snprintf(why, cap, "a unit array of %u slots", h->slots);
         return 0;
     }
-    /* after the loop: the codec's constants are bounded by RT_SLOTS and RT_FEATURES, which may
-       follow them */
-    if ((ent[0] || ent[1] || ent[2]) &&
+    /* after the loop: the codec's constants are bounded by RT_SLOTS, RT_FEATURES and
+       RT_UNITDEFS, which may follow them */
+    if ((ent.p[RECC_E_CODEC] || ent.p[RECC_E_PHYSICS] || ent.p[RECC_E_AIR] || ent.p[RECC_E_TYPES]) &&
         !reccodec_params(&h->codec, h->slots, h->proj_cap, h->grid_w, h->grid_h, h->wrecks,
-                         ent[0], nent[0], ent[1], nent[1], ent[2], nent[2], why, cap))
+                         h->has_unitdefs ? h->ndefs : 0, &ent, why, cap))
         return 0;
     h->has_codec = (unsigned)h->codec.usable;
     if (!h->grid_w || h->grid_w > 0xFFFF || !h->grid_h || h->grid_h > 0xFFFF || !h->wrecks ||

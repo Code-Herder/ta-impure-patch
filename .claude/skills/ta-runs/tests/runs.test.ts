@@ -4,7 +4,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { failures, shown, startTicks } from '../hooks/journal'
+import { failures, shown, startTicks, testName } from '../hooks/journal'
 import { bar, clockAt, duration, progress, summary } from '../hooks/view'
 import type { Run } from '../types'
 
@@ -101,9 +101,9 @@ describe('reading', () => {
   })
 
   test('durations and the host clock', () => {
-    expect(duration(59)).toBe('59 s')
-    expect(duration(420)).toBe('7 min')
-    expect(duration(7200)).toBe('2.0 h')
+    expect(duration(59)).toBe('59s')
+    expect(duration(420)).toBe('7min')
+    expect(duration(7200)).toBe('2.0h')
     expect(clockAt(Date.UTC(2026, 9, 9, 15, 42), -240)).toBe('11:42')
   })
 
@@ -120,7 +120,7 @@ describe('reading', () => {
 })
 
 describe('the pane', () => {
-  test('the plan, the lane on its instance, the time left', async ($, on) => {
+  test('the plan, the test on its worker, the time left', async ($, on) => {
     const files: Files = new Map([[`${ROOT}/${SID}/a.json`, JSON.stringify(doc('a'))]])
     const clock = world(on, files, new Map([[77, PROC_TICKS]]))
     await start($)
@@ -129,9 +129,9 @@ describe('the pane', () => {
                                   props: PANE_PROPS, requestId: 'ta-runs' })
     expect(await ui.find({ text: /tareplay landing a/ })).toBeDefined()
     expect(await ui.find({ text: /── IN PROGRESS \(1\)/ })).toBeDefined()
-    expect(await ui.find({ text: /░{22} {2}0\/1 fixtures · ~7 min · ≈/ })).toBeDefined()
-    expect(await ui.find({ text: /running \(1\)/ })).toBeDefined()
-    expect(await ui.find({ text: /▶ battle {2}L✓ {2}P ▶ GT 3120\/5300$/ })).toBeDefined()
+    expect(await ui.find({ text: /█{11}░{11} {2}1\/2 tests · 0\/1 test groups passed · ~7min left · end time ≈\d\d:\d\d$/ })).toBeDefined()
+    expect(await ui.find({ text: /in progress \(1\)/ })).toBeDefined()
+    expect(await ui.find({ text: /▶ battle {2}record✓ {2}puppet ▶ GT 3120\/5300$/ })).toBeDefined()
     expect(await ui.find({ text: /── DONE/ })).toBeUndefined()
     await ui.unmount()
   })
@@ -144,7 +144,7 @@ describe('the pane', () => {
     await clock.advance(2000)
     const ui = await $.ui.mount({ plugin: 'ta-runs', surface: 'terminal', component: 'Pane',
                                   props: PANE_PROPS, requestId: 'ta-runs' })
-    expect(await ui.find({ text: /✗ tareplay landing a died · 60 s · 0\/1 fixtures$/ })).toBeDefined()
+    expect(await ui.find({ text: /✗ tareplay landing a died · 60s · 0\/1 test groups$/ })).toBeDefined()
     await ui.unmount()
   })
 
@@ -190,7 +190,7 @@ describe('the band and the toasts', () => {
     files.set(`${ROOT}/${SID}/a.json`, JSON.stringify({ ...failed, state: 'fail',
                                                         ended: T0 / 1000 + 4 }))
     await clock.advance(2000)
-    expect(toasts.some(t => /tareplay landing a: fail after 64 s — 1 FAIL/.test(t))).toBe(true)
+    expect(toasts.some(t => /tareplay landing a: fail after 64s — 1 FAIL/.test(t))).toBe(true)
     const after = await $.ui.mount({ plugin: 'ta-runs', surface: 'terminal',
                                      component: 'AbovePrompt', props: BAND_PROPS })
     expect(await after.find({ text: /tareplay landing a/ })).toBeUndefined()
@@ -199,7 +199,7 @@ describe('the band and the toasts', () => {
 })
 
 describe('an ended run', () => {
-  test('names each lane that could not run, and why', async ($, on) => {
+  test('names each test that could not run, and why', async ($, on) => {
     const ended = doc('a', { state: 'unrun', ended: T0 / 1000 - 5, items: [{
       id: 'c2-weapon-keys', state: 'unrun', checks: { pass: 0, fail: [], unrun: [] },
       steps: [{ id: 'L', state: 'unrun', detail: 'the twin: mouse event [512, 384, 512]' },
@@ -212,8 +212,8 @@ describe('an ended run', () => {
     const ui = await $.ui.mount({ plugin: 'ta-runs', surface: 'terminal', component: 'Pane',
                                   props: PANE_PROPS, requestId: 'ta-runs' })
     expect(await ui.find({ text: /c2-weapon-keys unrun$/ })).toBeDefined()
-    expect(await ui.find({ text: /\? L: the twin: mouse event \[512, 384, 512\]/ })).toBeDefined()
-    expect(await ui.find({ text: /\? P: did not run/ })).toBeDefined()
+    expect(await ui.find({ text: /\? record: the twin: mouse event \[512, 384, 512\]/ })).toBeDefined()
+    expect(await ui.find({ text: /\? puppet: did not run/ })).toBeDefined()
     await ui.unmount()
   })
 })
@@ -225,8 +225,10 @@ test('failures name the item, the step and the check', () => {
   const verdict = { items: [{ id: 'c2', state: 'fail', checks: { pass: 3, fail: ['R: hp'], unrun: [] },
                               steps: [{ id: 'checks', state: 'fail' }] }] } as unknown as Run
   expect(failures(verdict)).toEqual(['c2 R: hp'])
+  expect([testName('tareplay', 'L'), testName('tareplay', 'checks'), testName('tacompat', 'run')])
+    .toEqual(['record', 'checks', 'run'])
   expect(summary({ ...run, tool: 'tareplay', live: 'running', eta: null, started: 0,
-                   ended: null } as Run, 1000, 0)).toBe('1/1 fixtures · 2 FAIL')
+                   ended: null } as Run, 1000, 0)).toBe('1/1 tests · 0/1 test groups passed · 2 FAIL')
 })
 
 describe('in progress and done', () => {
@@ -248,40 +250,45 @@ describe('in progress and done', () => {
     expect(await ui.find({ text: /── IN PROGRESS \(1\)/ })).toBeDefined()
     expect(await ui.find({ text: /── DONE \(1\)/ })).toBeDefined()
     const at = clockAt(T0 - 10_000, -240)
-    expect(await ui.find({ text: new RegExp(`▸ ✓ tareplay landing b pass · 6 min · ${at}$`) }))
+    expect(await ui.find({ text: new RegExp(`▸ ✓ tareplay landing b pass · 6min · ${at}$`) }))
       .toBeDefined()
-    expect(await ui.find({ text: /passed/ })).toBeUndefined()
+    expect(await ui.find({ text: /\d passed$/ })).toBeUndefined()
     await ui.unmount()
   })
 
-  test('a run\'s fixtures: running, done with the failures named and the passes folded, planned',
+  test('a run\'s test groups: running, done with the failures named and the passes folded, planned',
        async ($, on) => {
     const ok = (id: string, t: number) => ({
       id, state: 'pass', checks: { pass: 4, fail: [], unrun: [] },
-      steps: [{ id: 'L', state: 'done', started: t, seconds: 200 },
-              { id: 'checks', state: 'pass', started: t + 200, seconds: 100 }],
+      steps: [{ id: 'L', state: 'done', pool: 'game', started: t, seconds: 200 },
+              { id: 'checks', state: 'pass', pool: 'offline', started: t + 200, seconds: 100 }],
     })
     const files: Files = new Map([[`${ROOT}/${SID}/a.json`, JSON.stringify(doc('a', { items: [
       (doc('a').items as unknown[])[0],
       ok('b7-flash', 1000), ok('c2-stack', 2000),
       { id: 'c2-airwar', state: 'fail', checks: { pass: 3, fail: ['R: unit 412 hp'], unrun: [] },
-        steps: [{ id: 'L', state: 'done', seconds: 100 },
-                { id: 'checks', state: 'fail', seconds: 10 }] },
-      { id: 'b7-radar', state: 'planned', steps: [{ id: 'L', state: 'planned' }] },
+        steps: [{ id: 'L', state: 'done', pool: 'game', seconds: 100 },
+                { id: 'checks', state: 'fail', pool: 'offline', seconds: 10 }] },
+      { id: 'b7-radar', state: 'planned', steps: [{ id: 'L', state: 'planned', pool: 'game' }] },
       { id: 'c3-vet', state: 'running',
         steps: [{ id: 'L', state: 'done', pool: 'game' },
                 { id: 'checks', state: 'running', pool: 'offline' }] },
       { id: 'c4-kill', state: 'running',
-        steps: [{ id: 'L', state: 'done', pool: 'game' }, { id: 'P', state: 'planned', pool: 'game' }] },
+        steps: [{ id: 'L', state: 'done', pool: 'game' },
+                { id: 'R', state: 'planned', pool: 'game', order: 2 },
+                { id: 'P', state: 'planned', pool: 'game', order: 1 },
+                { id: 'checks', state: 'planned', pool: 'offline' }] },
     ] }))]])
     const clock = world(on, files, new Map([[77, PROC_TICKS]]))
     await start($)
     await clock.advance(2000)
     const ui = await $.ui.mount({ plugin: 'ta-runs', surface: 'terminal', component: 'Pane',
                                   props: PANE_PROPS, requestId: 'ta-runs' })
-    expect(await ui.find({ text: /3\/7 fixtures · 1 FAIL · ~7 min/ })).toBeDefined()
+    expect(await ui.find({ text: /6\/10 tests · 2\/7 test groups passed · 1 FAIL · ~7min left/ })).toBeDefined()
     expect(await ui.find({ text: /checks: / })).toBeUndefined()
-    expect(await ui.find({ text: /^ *running \(1\)$/ })).toBeDefined()
+    expect(await ui.find({ text: /^ *in progress \(2\)$/ })).toBeDefined()
+    expect(await ui.find({ text: /▶ battle  {2}record✓ {2}puppet ▶ GT 3120\/5300$/ })).toBeDefined()
+    expect(await ui.find({ text: /· c4-kill {2}record✓ {2}next: puppet roundtrip$/ })).toBeDefined()
     expect(await ui.find({ text: /^ *done \(3\) {2}2 ✓ · 1 ✗$/ })).toBeDefined()
     expect(await ui.find({ text: /✗ c2-airwar 3 pass · 1 FAIL$/ })).toBeDefined()
     expect(await ui.find({ text: /✗ R: unit 412 hp$/ })).toBeDefined()
@@ -289,21 +296,21 @@ describe('in progress and done', () => {
     expect(await ui.find({ text: /b7-flash/ })).toBeUndefined()
     expect(await ui.find({ text: /^ *planned \(1\) {2}b7-radar$/ })).toBeDefined()
     expect(await ui.find({ text: /^ *checking \(1\) {2}c3-vet$/ })).toBeDefined()
-    expect(await ui.find({ text: /^ *waiting \(1\) {2}c4-kill$/ })).toBeDefined()
+    expect(await ui.find({ text: /waiting/ })).toBeUndefined()
     await ui.press({ key: 'pass:a' })
     expect(await ui.find({ text: /▾ ✓ 2 passed$/ })).toBeDefined()
-    expect(await ui.find({ text: /✓ b7-flash {2}4 pass · 5 min$/ })).toBeDefined()
-    expect(await ui.find({ text: /✓ c2-stack {2}4 pass · 5 min$/ })).toBeDefined()
+    expect(await ui.find({ text: /✓ b7-flash {2}4 pass · 5min$/ })).toBeDefined()
+    expect(await ui.find({ text: /✓ c2-stack {2}4 pass · 5min$/ })).toBeDefined()
     await ui.unmount()
   })
 })
 
-test('progress counts fixtures with a verdict, the bar its share', () => {
+test('progress counts test groups with a verdict, the bar its share', () => {
   const run = { tool: 'tareplay', items: [
     { id: 'a', state: 'pass', steps: [{ id: 'L', state: 'done' }, { id: 'checks', state: 'pass' }] },
     { id: 'b', state: 'running', steps: [{ id: 'L', state: 'done' }, { id: 'checks', state: 'planned' }] },
   ] } as unknown as Run
-  expect(progress(run)).toEqual({ done: 1, total: 2, noun: 'fixtures' })
+  expect(progress(run)).toEqual({ done: 1, total: 2, noun: 'test groups' })
   expect(progress({ tool: 'landing', items: [{ id: '', state: 'running', steps: [
     { id: 'commit', state: 'pass' }, { id: 'build', state: 'running' }] }] } as unknown as Run))
     .toEqual({ done: 1, total: 2, noun: 'steps' })
