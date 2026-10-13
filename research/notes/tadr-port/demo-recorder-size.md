@@ -1834,9 +1834,9 @@ under a context the writer and every reader keep, all restarting at every reset 
   slot the iteration before listed: whether it is listed again, under its last mask and its streak
   of listings (1..3). Any other: whether it is listed, under the gap and its last mask.
 - **The mask**, under the slot's last mask: that mask's 8 next masks, most recent first, a
-  decision each; past them an escape, a 13-bit id among the run's kept masks -- its first 4,096,
-  in first-use order (`RECC_MASKS`) -- or a new mask lane by lane, each bit under the lane, the
-  bit before and whether any came yet.
+  decision each; past them an escape, a 13-bit id among the run's kept masks -- its new masks in
+  first-use order, up to 4,096 (`RECC_MASKS`) and 8 to a hash chain (`UC_CHAIN`) -- or a new
+  mask lane by lane, each bit under the lane, the bit before and whether any came yet.
 - **The residuals**, each lane of the mask in order: a hit among the 8 recent values of a cache
   keyed by the unit's type (`+0xA6`) and the lane (8,192 caches, hashed), its index a 3-bit tree;
   else a literal, its bit length under the lane and the slot's last length in it, the 4 bits below
@@ -1909,21 +1909,38 @@ place of the listing's 106 KB and 16-byte last mask. MEASURED in the 32-bit buil
 against 7,956,440 at format 23 (+1.45 MB), and 18,887,112 against 16,246,440 at 15,001 slots. The
 writer holds two codecs.
 
-**The work a section can ask.** A near-certain decision costs almost no input, so a section's
-bytes no longer bound its decode; the bound is the decisions, iterations × (slots − 1) ×
-(22 + 38 × lanes), from the head and the header alone (*THE UNIT CODER*'s BOUND). A listing that
-changes a unit makes a record, which the head's payload bounds; one that leaves the unit as it was
-must cancel a prediction that moves it, which only the rules' lanes have. `codectest.py worst
-5001` writes the block that asks the most for the least input -- 5,000 identical units, every
-dword of each changed by one step every iteration, so that every slot lists about 111 of its 112
-lanes and every residual after the first slot's is a cache hit -- for 38 iterations, as many as
-`RECC_PAYLOAD_MAX` holds of those records, in 65 KB of coder. MEASURED under Wine: it decodes in
-555–576 ms, 2.9–3.0 µs a slot-iteration, which comes to at most about 3.9 s at `RECC_TICKS_MAX`
-iterations [INFERRED: scaled]. Format 23 decodes the same kind of block at 2.3–2.6 µs a
-slot-iteration (its large residuals as varints), but writes it as records past 7 of those
-iterations, where the residuals it gathers for its columns pass `RECC_FRAME_CAP`. The slowest of 40,000 fuzzed blocks
-of the heavy hour (below) decodes in 14 ms under Wine, 43 ms on the x86-64 build with the
-sanitizers.
+**The work a block can ask.** A near-certain decision costs almost no input, so a section's bytes
+do not bound its decode, and every slot that does not rest is evaluated whatever the section
+holds. Both sides count a block's work -- each decision 1, each raw bit 1, each slot the frame
+evaluates 128 (`UC_EVAL`) -- and a reader refuses a block whose work passes `RECC_WORK`, 2^28,
+checked after each visited slot; the encoder counts the same work and declines such a block to
+records before a reader sees it. No hash chain of kept masks holds more than 8 (`UC_CHAIN`): the
+hash has no key, so a file can aim every mask at one chain, and the cap keeps a search to 8
+compares. `UC_EVAL` is an evaluation's cost in decisions: about 790 ns under Wine, against 3–7 ns
+a decision. Counted as one decision, the same evaluations would let a block of 65,534 units that
+never rest run 256 iterations, 13.2 s of decode (MEASURED).
+
+`codectest.py worst MODE` writes a block of as much work as `RECC_WORK` allows in one of four
+shapes, as many iterations as `RECC_TICKS_MAX` and `RECC_PAYLOAD_MAX` allow and the encoder writes
+within the budget, and decodes it from a copy of the state before it (MEASURED 2026-10-13 under
+Wine on the reference setup; the logs are in the archive's `rc/logs/fix`):
+
+| shape | units | iterations | work (of 2^28) | decode | a unit of work |
+|---|---:|---:|---:|---:|---:|
+| **visit**: units that never change but hold an energy request, so that none rests: a decision and an evaluation each | 65,534 | 31 | 262,070,466 (98 %) | 1.57–1.59 s | 6.0 ns |
+| **lit**: every dword of every unit changed by one step, every residual a literal although its cache holds it | 5,000 | 18 | 239,008,848 (89 %) | 0.67–0.69 s | 2.8–2.9 ns |
+| **full**: the same as cache hits | 5,000 | 38, all `RECC_PAYLOAD_MAX` holds | 108,881,582 (41 %) | 0.55–0.57 s | 5.1–5.3 ns |
+| **chain**: the same, each mask's hash chain filled first, so that no mask is kept and every listing escapes, spells its lanes and searches a full chain | 5,000 | 38 | 132,440,627 (49 %) | 0.63–0.66 s | 4.8–5.0 ns |
+
+So a block decodes in at most about 1.63 s, the slowest shape at `RECC_WORK` [INFERRED: scaled
+from 98 %]. Against real games: the two hours' heaviest block is 908,494 (heavy) and 464,184
+(light), 295 times under the budget; no mask went unkept for a full chain, and a run kept at most
+621. The heaviest block's work a visit, 130.0, makes a 15,001-slot game's 30-iteration block 58.5
+million, 4.6 times under it, and every one of its 15,000 units evaluated and listed in every
+iteration at the hours' heaviest listing, 41.7 decisions past its listed one, 76.8 million, 3.5
+times under it. A block past the budget is still written, as records.
+The slowest of 40,000 fuzzed blocks of the heavy hour (below) decodes in 17 ms under Wine, 48 ms
+on the x86-64 build with the sanitizers.
 
 **Checked** (format 24): the C decoder and the Python reader give the same records on every block
 of both hours (`codectest.py verify`, skipping resting units and evaluating every candidate);
@@ -1932,15 +1949,23 @@ of both hours (`codectest.py verify`, skipping resting units and evaluating ever
 and finds the same 1,124 and 310 unexplained changes as main's format-23 files: these inputs
 predate `RK_EV_YARD`. `codectest outcomes`, natively under ASan and under Wine, writes a block
 with a resting slot woken, a carried slot listed and one not, a mask from its context's list, an
-escape to a kept mask, a new mask, residuals from a cache and as literals, and reads it back; a run
-of 4,200 masks, of which the run keeps 4,096 and codes the rest whole, after which the first 60
-come back as kept masks; and refuses, each coded once by the self-test's build in place of the
-right value, an escape past the kept masks or into its context's list, an empty new mask, a new
-mask the run keeps, a cache index past the cache's values and a residual past its lane's width,
-and, as bytes, the coder's last byte cut, a byte after it, a coder of 3 bytes and iterations not
-the head's. Fuzzed on the heavy hour, 20,000 cases each, C and Python agreeing in every case: the
-unit section alone on the x86-64 build with the sanitizers (110 accepted) and under Wine (97),
-every section on both (2,331 accepted by each); the sanitizers fired on none. The multiplayer
+escape to a kept mask, a new mask, residuals from a cache and as literals, and reads it back,
+both sides counting the same work; reads it at a budget of its own work and refuses it at one
+less, and its encoder declines it at one less; a run of 4,200 masks, of which the run keeps
+4,096 and codes the rest whole, none for a full chain, after which the first 60 come back as kept
+masks; the same block with its first mask's hash chain filled first, which codes that mask whole
+every time and keeps every other; and refuses, each coded once by the self-test's build in place
+of the right value, an escape past the kept masks or into its context's list, an empty new mask,
+a new mask the run keeps, a cache index past the cache's values and a residual past its lane's
+width, and, as bytes, the coder's last byte cut, a byte after it, a coder of 3 bytes and
+iterations not the head's. Fuzzed on the heavy hour, 20,000 cases each, C and Python agreeing in
+every case: the unit section alone on the x86-64 build with the sanitizers (110 accepted) and
+under Wine (97), every section on both (2,331 accepted by each); the sanitizers fired on none.
+`codectest fuzz --faults` writes those six faults into three real blocks each, from the state
+the block starts from, and decodes three blocks at a budget of their own work and of one less:
+on the heavy hour under Wine and under the sanitizers and the light one under Wine, 24 cases
+each, C refusing the 18 faults and the 3 blocks under budget, and the Python reader agreeing in
+every case -- so both readers refuse alike and count the same work to the unit. The multiplayer
 file tests build the codec into the real writer and reader: `recmp_lifecycle_test.py` passes, and
 `recmp_file_test.py`'s complete file -- written, read by the C and Python readers, sought, and its
 perspective, network-create and contribution controls -- passes; its four incomplete-file modes

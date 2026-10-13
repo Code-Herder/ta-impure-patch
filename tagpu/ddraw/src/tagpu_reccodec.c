@@ -1662,7 +1662,7 @@ static int bit_of(const unsigned char* bits, unsigned i) { return bits[i >> 3] >
    passes RECC_WORK, checked after each visited slot, while the encoder declines it to records
    first: the work follows from the decisions, which both sides take alike, so a block the writer
    writes is one every reader accepts. UC_EVAL is an evaluation's cost in decisions: about 790 ns
-   under Wine against 5..7 ns a decision. No hash chain holds more than UC_CHAIN masks (uc_keep),
+   under Wine against 3..7 ns a decision. No hash chain holds more than UC_CHAIN masks (uc_keep),
    so a mask's search is at most UC_CHAIN compares. MEASURED 2026-10-13 under Wine on the reference setup
    (codectest.py worst): the slowest shape is slots evaluated for one decision each -- 65,534
    units that never rest, 31 iterations, 98 % of RECC_WORK -- which decodes in 1.57..1.59 s, 6.0

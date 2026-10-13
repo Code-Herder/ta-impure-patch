@@ -249,7 +249,10 @@ lists, each one's lane mask and its residuals are one range coder's decisions, e
 both sides keep (the codec's *THE UNIT CODER*): every visited unit whether it is listed (a resting
 one whether it is woken), under its last mask, its streak of listings and how long since its last
 one; a mask from the masks its last mask was followed by, or the run's kept masks, or new; a
-residual from a cache of recent values kept by unit type and lane, or its length and bits. A unit
+residual from a cache of recent values kept by unit type and lane, or its length and bits. A
+reader refuses a block whose unit coder work -- a decision 1, a raw bit 1 and 128 for each unit
+the frame evaluates -- passes 2^28 (`RECC_WORK`), which bounds any block's decode to about 1.6 s
+under Wine whatever its bytes hold, and the writer writes such a block as records. A unit
 *at rest* — its
 image equal to the two before it and to the third's lanes, and either not moving or with a move
 stamp older than the step before, with its ledger's requested and granted zero, and, for a type
