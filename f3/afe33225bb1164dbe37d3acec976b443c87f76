@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high reviewers=2 range=main..f3afe332 findings=5 acted=5 rejected=0 date=2026-10-13 (A: walk-count test, two note sentences; B: MP round trip compared +0x8E -> compare-dumps --seek checks chains on mode 3, measured; gate never reached MP lines -> MP runs recorded in the note; two wordings)
