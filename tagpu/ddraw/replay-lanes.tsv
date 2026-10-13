@@ -62,7 +62,7 @@
 0x07C	2	SZ	sight_z	DISASSEMBLED 0x4825D4..0x48261C (LosType bit 2 set): the sight cell's z, from z less half the sight height
 0x07E	2	FW	foot_w	DISASSEMBLED 0x43D86F..0x43D895 reads it: the footprint's width in cells; the saver writes it raw
 0x080	2	FH	foot_h	DISASSEMBLED 0x43D86F..0x43D895 reads it: the footprint's height in cells
-0x082	4	BUCKET	bucket	DISASSEMBLED 0x47CC57..0x47CCD8: the sort bucket, which the footprint stamp 0x47CC30 sets to main+0x1429F + 10 x ((z >> 23) x [main+0x142A3] + (x >> 23)) once 0 <= fx, 0 <= fz, fx + fw < main+0x14233 and fz + fh < main+0x14237; the image carries it as the bucket's index + 1 (replay-layout.tsv, bucket)
+0x082	4	BUCKET	bucket	DISASSEMBLED 0x47CC57..0x47CCD8: the sort bucket, which the footprint stamp 0x47CC30 sets to main+0x1429F + 10 x ((z >> 23) x [main+0x142A3] + (x >> 23)) once 0 <= fx, 0 <= fz, fx + fw <= main+0x14233 and fz + fh <= main+0x14237 (fix_last_cell's jg at 0x47CC8B and 0x47CCA3), and to the off-map bucket *(main+0x142B7) otherwise (0x47D073..0x47D0CF); the image carries it as the bucket's index + 1, the off-map one as its own ID (replay-layout.tsv, bucket)
 0x086	4	PLAIN	carrier	DISASSEMBLED (map): the carrier, a pointer; the image carries it as replay-layout.tsv's carrier row says
 0x08A	4	PLAIN	cargo	DISASSEMBLED (map): the first carried unit, a pointer; the image carries it as replay-layout.tsv's cargo row says
 0x08E	4	PLAIN	next	DISASSEMBLED (map): the next carried unit or the next unit in the bucket, a pointer; the image carries it as replay-layout.tsv's next row says

@@ -374,7 +374,7 @@ def header(payload):
         elif tag == RT_WALLCLOCK: h["wallclock"] = struct.unpack_from("<Q", b)[0]
         elif tag == RT_SLOTS: h["slots"] = u32
         elif tag == RT_UNITS_EACH: h["units_each"] = u32
-        elif tag == RT_UNITDEFS: h["unitdefs"] = struct.unpack_from("<II", b)
+        elif tag == RT_UNITDEFS and len(b) == 8: h["unitdefs"] = struct.unpack_from("<II", b)
         elif tag == RT_PLAYER:
             if len(b) < 16+0xB9 or b[0] >= 10 or any(p["index"] == b[0] for p in h["players"]):
                 raise Unreadable("malformed or duplicate seat in the header")

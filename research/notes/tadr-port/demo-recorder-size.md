@@ -1461,7 +1461,8 @@ gives the addresses and how each was read):
   GameTime is a multiple of 30; a unit rests only where the two equal its HP's percentage, the
   rule's fixed point;
 - the **sort bucket** `+0x82`, which the restamp `0x47CC30` forms from the position when the
-  footprint's cell or the layer moves and the footprint is inside the grid;
+  footprint's cell or the layer moves and the footprint is inside the grid (its last column and
+  row included, under Impure's `fix_last_cell`), and sets to the off-map bucket when it is not;
 - a **ground unit's speed**: the ground step `0x43CC20` adds the acceleration or subtracts the
   brake rate, floors at 0 and caps at the slope table's share of maxvelocity, the two steps two
   candidates;

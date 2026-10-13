@@ -3771,13 +3771,18 @@ mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
   multiple of 30) and their last values otherwise, the rule always the winner; a resting unit
   must hold `+0xF7` = `+0xF6` = the percentage of its HP, the fixed point of the phase.
 - **The sort bucket `+0x82`**: the restamp `0x47CC30` (*`+0x82`, the sort bucket*, above) stamps
-  the claim word (`0x47CC54`), refuses a cell below 0 (`0x47CC57..0x47CC6B`) or a footprint
-  reaching the grid's last column or row (`fx + fw` against `main+0x14233`, `fz + fh` against
-  `main+0x14237`, signed, `0x47CC77..0x47CCA3`), then forms the bucket
+  the claim word (`0x47CC54`), tests the cell against 0 (`jl` at `0x47CC5E`, `0x47CC6B`) and the
+  footprint against the grid's last column and row (`fx + fw` against `main+0x14233`, `fz + fh`
+  against `main+0x14237`, signed, `0x47CC77..0x47CCA3`; stock's `jge` at `0x47CC8B` and
+  `0x47CCA3` is `jg` under Impure's always-on `fix_last_cell`, *The grid stamp's last column and
+  row* below, so a footprint ending on the edge passes), then forms the bucket
   `*(main+0x1429F) + 10 · ((z >> 23) · [main+0x142A3] + (x >> 23))` (`0x47CCA9..0x47CCD8`) and
-  writes it when it differs (`0x47CCDB`, `0x47CD25`). The unit frame predicts the bucket's ID
-  (index + 1) when the footprint's cell or the layer moved and the footprint passes those tests,
-  and the last value otherwise; RT_PHYSICS's columns 0 makes the lane generic.
+  writes it when it differs (`0x47CCDB`, `0x47CD25`). A failed test jumps to `0x47D073`/`0x47D079`,
+  which loads the off-map bucket `*(main+0x142B7)` and, when `+0x82` differs, unlinks the unit and
+  stores it there (`0x47D0CF`). The unit frame predicts, when the footprint's cell or the layer
+  moved, the bucket's ID (index + 1) for a footprint that passes this build's tests and the
+  off-map ID otherwise, and the last value when neither moved; RT_PHYSICS's columns 0 makes the
+  lane generic.
 - **A ground unit's speed: the ground step `0x43CC20`** (thiscall on the move object (unit,
   step), `ret 8`; its callers the ground class step `0x43CD20`, which passes minus the def's brake
   rate `+0x19A` when the course has no target (`0x43CD40..0x43CD52`), and its end `0x43D0C0`, which
@@ -3792,7 +3797,7 @@ mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
   is capped by a signed compare (`0x43CCD3..0x43CCD8`), then the velocity follows it (*Ground
   velocity*, above). The unit frame offers the accelerating and the braking step as two candidates
   for a type with an RT_TYPES row that is not an aircraft, from the last iteration's `+0x68` (the
-  step runs before the placement, `0x43DD28` then `0x43DD55`; MEASURED 1.75 KB smaller on the heavy
+  step's call `0x43DD4D` comes before the placement's `0x43DD55`; MEASURED 1.75 KB smaller on the heavy
   hour than this iteration's); it does not model the halving in water.
 - **The turn rate's blip** (MEASURED, the size research's gap-units round, 2026-10-11; no engine
   writer traced): a turn rate one away from the iteration before's returns to it on the next, so
@@ -3822,7 +3827,8 @@ mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
 **Not predicted**, each costing size only: the circle's sight path (LosType bit 2 clear); a
 landing (`0x43D210` with layer 1: the rule is written, never met); air transports' cargo; a
 non-zero pitch scale (none of the recordings had one); the steering term's hidden target; the
-ground speed's halving in water; a type past the header's RT_TYPES rows (the header holds
+ground speed's halving in water; a sort bucket that `fix_last_cell`'s stub clamps into the grid
+(a linear index outside [0, rows · columns): RT_PHYSICS carries no row count); a type past the header's RT_TYPES rows (the header holds
 `RECC_TYPES_MAX` 2,048 at most, and as many as its room allows).
 
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]

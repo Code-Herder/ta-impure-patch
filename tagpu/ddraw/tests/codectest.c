@@ -3632,9 +3632,17 @@ static int outcomes_rules(void)
     ok &= expect("bucket: a footprint that moves takes (z >> 23) x 40 + (x >> 23) + 1",
                  ru_miss(c, a, a, u, 7, REC_LR_BUCKET, -1), 0);
     lane_add(u, REC_LR_FX, 14, 1);                     /* fx + fw = 16, the grid's width */
-    ok &= expect("  at the grid's east edge it keeps its bucket", ru_miss(c, a, a, u, 7, REC_LR_BUCKET, -1), 1);
+    ok &= expect("  ending on the grid's east edge it is stamped (fix_last_cell's jg)",
+                 ru_miss(c, a, a, u, 7, REC_LR_BUCKET, -1), 0);
+    lane_add(u, REC_LR_FX, 15, 1);                     /* fx + fw = 17: past the edge */
+    ok &= expect("  past the edge it is not the position's bucket", ru_miss(c, a, a, u, 7, REC_LR_BUCKET, -1), 1);
+    lane_add(u, REC_LR_BUCKET, REC_ID_OFFMAP, 1);
+    ok &= expect("  ... it is the off-map bucket", ru_miss(c, a, a, u, 7, REC_LR_BUCKET, -1), 0);
+    lane_add(u, REC_LR_FX, 0, 1);
+    lane_add(a, REC_LR_FX, 0, 1);
     lane_add(u, REC_LR_BUCKET, 5, 1);
-    ok &= expect("  ... the bucket it had", ru_miss(c, a, a, u, 7, REC_LR_BUCKET, -1), 0);
+    ok &= expect("  a footprint that did not move keeps the bucket it had",
+                 ru_miss(c, a, a, u, 7, REC_LR_BUCKET, -1), 0);
 
     /* the ground speed */
     ru_unit(a, RU_TYPE);

@@ -1059,8 +1059,8 @@ static int ledger_steps(Eval* x)
    [0, 1] -- a sign bit, past 1.0, an infinity or a NaN. f is mant * 2^(e - 150), the implicit bit
    set on a normal and e taken as 1 on a denormal; e <= 127 puts the shift at 23 or more, and
    mant * m < 2^24 * 2^32. The build step's truncation 0x4E43A0 (`fistp` under a chop control
-   word, DISASSEMBLED) of the product at the engine's 53-bit precision is this value whenever
-   m < 2^29; past it the product rounds first, which costs a residual. */
+   word, DISASSEMBLED) of the product at the FPU's precision [INFERRED: 53 bits, the MSVC
+   runtime's default _PC_53] is this value whenever m < 2^29; past it the product rounds first, which costs a residual. */
 static int ex_fm(uint32_t f, uint32_t m, uint64_t* out)
 {
     uint32_t e = f >> 23 & 0xFF, mant = f & 0x7FFFFF;
@@ -1134,7 +1134,7 @@ static int hp_steps(Eval* x, uint32_t m)
    clamp(movsx(+0x68) >> 11, -5, 5), SLOPE the signed bytes at 0x505205 + sl, maxv the def's
    +0x192, a 64-bit product shifted by 16 each way and a signed divide by 100 << 16
    (0x43CC42..0x43CC95, the cap 0x43CCD3..0x43CCD8), DISASSEMBLED. The movement pass runs the step
-   before the placement (0x43DD28, 0x43DD55), so sl comes from L1's +0x68, the value the tick
+   before the placement (the ground step's call 0x43DD4D, the placement's 0x43DD55), so sl comes from L1's +0x68, the value the tick
    found; MEASURED on the heavy hour, 2026-10-12, 1.75 KB smaller than U's. The two steps are
    candidates 0 and 3. Not modelled: the halving of mv in water (0x43CCA0..0x43CCCE: +0x70 below the sea level
    and def +0x241 & 0x81000 clear), which leaves a residual. A type with no speed (mv 0) is not
@@ -1319,17 +1319,24 @@ static int frame_slot(Eval* x)
     STEP(REC_LR_SX, sight, (uint32_t)(uint64_t)asr(s32(U_(REC_LR_X)), 21), 0, 0);
     /* the sort bucket: when the footprint's cell or the layer moved, the footprint stamp 0x47CC30
        (called where the cell moves, as the claim stamp below) takes the bucket at
-       ((z >> 23) * columns + (x >> 23)) once 0 <= fx, 0 <= fz, fx + fw < W and fz + fh < H, the
-       grid's columns and rows (0x47CC57..0x47CCD8, DISASSEMBLED); the image carries the bucket's
-       index + 1. Unmoved, or outside the grid, it keeps its bucket. RT_PHYSICS's columns 0 makes
-       the lane generic. |z >> 23| < 2^9 and the columns < 2^32, so the product < 2^41. */
+       ((z >> 23) * columns + (x >> 23)) once 0 <= fx, 0 <= fz, fx + fw <= W and fz + fh <= H, the
+       grid's columns and rows (0x47CC57..0x47CCD8, DISASSEMBLED; `<=` because Impure's always-on
+       fix_last_cell turns the two edge tests at 0x47CC8B and 0x47CCA3 into `jg`, tagpu_patches.c).
+       A footprint that fails a test goes to 0x47D073/0x47D079, which files the unit in the
+       off-map bucket *(main+0x142B7) (stored at 0x47D0CF, DISASSEMBLED), REC_ID_OFFMAP in the
+       image; the image carries any other bucket as its index + 1. Unmoved, it keeps its bucket.
+       Not predicted: fix_last_cell's stub clamps a linear index outside [0, rows * columns) into
+       the grid, and RT_PHYSICS carries no row count, so a clamped bucket is a residual.
+       RT_PHYSICS's columns 0 makes the lane generic. |z >> 23| < 2^9 and the columns < 2^32, so
+       the product < 2^41. */
     {
         int64_t fx = s16(U_(REC_LR_FX)), fz = s16(U_(REC_LR_FZ));
         int moved = fx != s16(L1_(REC_LR_FX)) || fz != s16(L1_(REC_LR_FZ)) || layer != layer1;
-        int in = fx >= 0 && fz >= 0 && fx + s16(U_(REC_LR_FW)) < (int64_t)c->p.gw &&
-                 fz + s16(U_(REC_LR_FH)) < (int64_t)c->p.gh;
+        int in = fx >= 0 && fz >= 0 && fx + s16(U_(REC_LR_FW)) <= (int64_t)c->p.gw &&
+                 fz + s16(U_(REC_LR_FH)) <= (int64_t)c->p.gh;
         int64_t b = asr(s32(U_(REC_LR_Z)), 23) * (int64_t)c->p.bcols + asr(s32(U_(REC_LR_X)), 23) + 1;
-        STEP(REC_LR_BUCKET, c->p.bcols != 0, moved && in ? (uint32_t)(uint64_t)b : L1_(REC_LR_BUCKET), 0, 0);
+        STEP(REC_LR_BUCKET, c->p.bcols != 0,
+             !moved ? L1_(REC_LR_BUCKET) : in ? (uint32_t)(uint64_t)b : REC_ID_OFFMAP, 0, 0);
     }
     /* the claim stamp: GameTime when the footprint or the layer moved (0x440A83..0x440A91 writes
        main+0x38A47 as a dword, DISASSEMBLED); the iteration labelled gt holds step gt - 1. Other

@@ -107,6 +107,7 @@ _POOL_BODY_MAX = tarec.REC_PROJ_DELTA_HEAD + PIMG  # a delta of all 27 dwords: 1
 SHOT = 36                                  # an RK_EV_SHOT's body
 SHOTS_MAX, WEAPON_IDS = 4096, 4096         # RECC_SHOTS_MAX, RECC_WEAPON_IDS
 M32 = 0xFFFFFFFF
+ID_OFFMAP = 0xFFFFFFFD                     # REC_ID_OFFMAP: the sort's off-map bucket in an image
 
 SIN = np.array([round(8192 * math.sin(2 * math.pi * i / 512)) for i in range(512)], np.int64)
 ONE = 1 << 31
@@ -938,9 +939,10 @@ def _predict(x, tab, age, gt):
     _rule(x, R_SX, s32(ux) >> 21, 0, False, sight)
     fx, fz = s16(ufx), s16(ufz)
     moved = fx != s16(L1[J[R_FX]]) or fz != s16(L1[J[R_FZ]]) or layer != layer1
-    inside = fx >= 0 and fz >= 0 and fx + s16(U[J[R_FW]]) < gw and fz + s16(U[J[R_FH]]) < gh
-    bk = (s32(uz) >> 23) * bcols + (s32(ux) >> 23) + 1
-    _rule(x, R_BUCKET, bk if moved and inside else L1[J[R_BUCKET]], 0, False, bcols != 0)
+    inside = fx >= 0 and fz >= 0 and fx + s16(U[J[R_FW]]) <= gw and fz + s16(U[J[R_FH]]) <= gh
+    bk = ((s32(uz) >> 23) * bcols + (s32(ux) >> 23) + 1) & M32
+    _rule(x, R_BUCKET, L1[J[R_BUCKET]] if not moved else bk if inside else ID_OFFMAP, 0, False,
+          bcols != 0)
     moved = ufx != L1[J[R_FX]] or ufz != L1[J[R_FZ]] or layer != layer1
     _rule(x, R_CLAIM, (gt - 1) % (1 << 32) if moved else L1[J[R_CLAIM]])
     moved = U[J[R_VX]] != 0 or U[J[R_VY]] != 0 or U[J[R_VZ]] != 0 or layer != layer1
