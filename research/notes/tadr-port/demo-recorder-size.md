@@ -2,10 +2,12 @@
 
 ## Status
 
-**L1 to L4, L5a, P1, P6 and P4 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
+**L1 to L4, L5a, P1, P6, P4 and P5 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
 *L3: the record frames, measured*, *L4: the measured hours, the snapshot interval and R1*,
-*L5a: the ledger rule*, *P1: the container, measured*, *P6: the kinds and the ticks, measured* and
-*P4: the unit frame's type rules, measured*, below). Recording format 19 predicts more of the unit
+*L5a: the ledger rule*, *P1: the container, measured*, *P6: the kinds and the ticks, measured*,
+*P4: the unit frame's type rules, measured* and *P5: the unit listing, measured*, below).
+Recording format 21 says which units an iteration lists and their lane masks against state both
+sides keep, predicts more of the unit
 frame from per-type engine constants, codes each iteration's record kinds as a pattern of the run's
 last 16 and writes a block's GameTime once, packs each
 run of sectioned stream blocks as one zstd frame at level 19 and each snapshot against the one before
@@ -28,7 +30,9 @@ the refreshes, the takeover at a refresh and the table's 37 rows take the heavy 
 heavy hour's stream 2.7 MB smaller again; format 16 holds the cells' unit slots and yard bit,
 which the playing's engine stamps (*The cells held*), format 17 (*P1*) packs that stream in its
 container, format 18 (*P6*) takes the heavy hour from 16.16 to 15.81 MB, and format 19 (*P4*)
-predicts more of the unit frame from per-type engine constants, to 14.06 MB; L6 is a plan. The page gathers what has been measured about the size of a demo recording, the research
+predicts more of the unit frame from per-type engine constants, to 14.06 MB, format 20 records
+the script slice's markers (*The script slice's markers*), and format 21 (*P5*) lists the units
+against the frame's own state, to 13.12 MB; L6 is a plan. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -1607,6 +1611,90 @@ generic lanes; an HP or a percentage written by anything but the build step and 
 hit, a repair, a self-repair) is a residual. The size research's fitted tables, which this
 landing's `RT_TYPES` replaces, are not kept, so its rows were not compared against them.
 
+## P5: the unit listing, measured
+
+**What format 21 changes** (tagpu_recfmt.h, *RCS_UNITS*; tagpu_reccodec.c, *THE LISTING*). The
+unit section said which units each iteration lists by a count and slot gaps, and each one's lane
+mask by an id into a dictionary of the block's masks. Format 21 says both against state the writer
+and every reader keep:
+
+- a unit the iteration before listed, and that is a candidate now (live, not named by an
+  `RK_UNIT` or `RK_UNIT_GONE`, not resting), is *carried* and takes a 2-bit symbol: 0 not listed,
+  1 listed with its own last mask, 2 listed with another;
+- the other listed candidates are ranks among the candidates not carried, and the *woken* units
+  -- resting ones with a delta, which a frame always lists -- are slots;
+- every listed unit but a symbol 1 takes an id: 0 its slot's last mask (not for a carried unit,
+  and only when that mask is not empty), k the k-th of the run's masks most recent first, the list's length + 1 the block's next new
+  mask; every listed mask goes to the front of the list, at most 4,096 masks (`RECC_J2_MTF`), the
+  least recent dropped, so the list never holds a mask twice;
+- the ids are a byte each when all are below 256, else varints.
+
+The previous listed set, the last masks and the list restart empty at every reset point, like the
+rest of the frame's state. Slot 0 is never a candidate nor woken, so an iteration carries and lists
+at most slots − 1 units: a block's symbol bytes and its ids are bounded by its iterations, not by
+the section's bytes alone, and the decoder refuses more of either before it reads one id.
+
+**Where it departs from the plan** (the spec's J2). The plan kept the columns "as today": each
+lane's residuals for the whole block, lane after lane, which a reader places before the first
+iteration from the block's masks. Under the listing a reader cannot know the masks then: a carried
+unit's symbol, a rank and an id 0 name slots that only the decode's state -- which units are live,
+named and resting at that iteration -- turns into units, so the masks are known iteration by
+iteration. Format 21 writes each lane's count before the columns instead, which the reader uses to
+place every column, and refuses a block whose listed masks do not consume every counted residual
+exactly. How to code the counts was measured on the heavy hour's own listing (the column bytes and
+the counts alone, packed as one zstd-19 stream flushed per block; an estimate of the run's
+packing, MEASURED 2026-10-12):
+
+| the counts | raw | packed |
+|---|---:|---:|
+| none (the plan's columns, which a reader cannot place) | 6,697,759 | 3,848,585 |
+| the columns per iteration instead, no counts | 6,697,759 | 4,066,337 |
+| a varint per lane | 7,111,538 | 3,992,230 |
+| **a bitmap of the lanes with a count, then those counts** | 6,844,771 | **3,951,368** |
+| a signed change from the block before's counts, per lane | 7,108,062 | 3,997,157 |
+| a bitmap of the lanes whose count changed, then those changes | 6,845,654 | 3,954,858 |
+
+The bitmap and the counts cost about 103 KB an hour against columns no reader could place.
+
+**Measured** (2026-10-12, `codectest lossy` -- the writer's path -- under Wine, 32-bit, on the
+reference setup; the inputs and header overrides of *P4*). The baseline is format 19 on the same
+path:
+
+| | heavy hour | light hour |
+|---|---:|---:|
+| the file, format 19 / 21 | 14,062,834 / **13,118,818 (−944,016, −6.7 %)** | 8,341,131 / **7,733,902 (−607,229, −7.3 %)** |
+| the stream | 13,231,084 / 12,287,068 | 7,917,934 / 7,310,705 |
+| the header, snapshots, minimap and end block | unchanged | unchanged |
+| the unit frame's section, raw / packed alone | 15.6 MB / 8,917 KB → 10.6 MB / 7,579 KB | |
+
+Every block sectioned, none declined or mismatched, 3,605 and 3,608 of them; the other sections
+keep their sizes (`recsize.py`, to the KB, raw and packed alone). Against format 17 (16,160,878 and 9,390,288) the three landings take
+the heavy hour down by 3,042,060 bytes (−18.8 %) and the light one by 1,656,386 (−17.6 %). The plan
+expected −1.09 MB on its own chain of steps; the counts' 103 KB is most of the difference. The
+writer's pass over the heavy hour took 56.9 s with three other transcodes running beside it; it
+was not timed alone.
+
+**Checked** (format 21): the C decoder and the Python reader give the same records on every block
+of both hours (`codectest.py verify`, skipping resting units and evaluating every candidate);
+`tarec check` passes on both, and `tarec lossy-check` over the whole hour on both written with their
+exact streams (`--exact`). `codectest outcomes`, natively under ASan and under Wine, writes a block
+with a carried unit listed with its last mask, one with another, one not listed and a woken unit
+and reads it back, its ids a byte each; a run of 4,200 masks, more than the list holds, whose ids
+are varints, after which the first 60 come back as new masks; and refuses one change each: a
+symbol byte too many, a symbol 3, a rank past the candidates not carried, a woken slot that does not
+rest, more ranks than slots, more symbol bytes or more ids than the iterations' slots carry and
+list, more new masks than ids, an id past the list, an id 0 for a carried
+unit's other mask, the ids' mode 2, a new mask the list already holds, a new mask no id takes, a
+lane's count of 0, a residual no listed mask takes and a listed mask's residual missing. Fuzzed on
+the heavy hour, 20,000 cases each: the unit section alone (the x86-64 ASan build), C and Python
+agree in all 20,000, 2,188 accepted; every kind on the ASan build in all 20,000, 2,822 accepted;
+every kind under Wine in 19,999 of the same seed's 20,000, the other a chunk with one byte changed
+that the i686 build of the vendored zstd refuses and the x86-64 build accepts (*P1*'s *Checked*;
+the ASan run, same seed, accepts exactly that one more).
+
+**What it does not do.** A slot's last mask survives a birth in its slot, which costs size only.
+The ids are a byte each only while every id of the block is below 256.
+
 ## Multiplayer recordings
 
 A multiplayer file holds the recording machine's world (every unit, remote players' replicated
@@ -1692,6 +1780,7 @@ the units: stage 6's traffic budget.
 | P1 | the container, format 17: each run of sectioned blocks one zstd frame at level 19, the snapshots chained, a key every tenth: LANDED (*P1* above) | MEASURED lossy hour 20.73 → 15.65 MB, exact hour 42.15 → 29.90 MB |
 | P6 | the kinds as patterns with two markers and the frames' group counts, the GameTime once a block, format 18: LANDED (*P6* above) | MEASURED heavy hour 16.16 → 15.81 MB, light hour 9.39 → 9.10 MB |
 | P4 | the unit frame's type rules and `RT_TYPES`, format 19 (*P4* above) | MEASURED heavy hour 15.81 → 14.06 MB, light hour 9.10 → 8.34 MB, on P6 |
+| P5 | the unit listing against the frame's state, each lane's count before its column, format 21 (*P5* above) | MEASURED heavy hour 14.06 → 13.12 MB, light hour 8.34 → 7.73 MB |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
 ## Decisions

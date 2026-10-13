@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 20 and its readers take format 20 alone (*The file*, below).
+The recorder writes recording format 21 and its readers take format 21 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -157,7 +157,7 @@ THE CHAIN*):
   else the bytes stored. The header, the end and the timelines blocks are always stored, so a
   header reads without zstd.
 
-`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 19; a reader takes that format alone:
+`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 20; a reader takes that format alone:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
   GameTime, the wall clock, the unit array's slots and the units each player may have, the unit
@@ -244,7 +244,12 @@ lanes by the header's `RT_CODEC`, the rows of `tagpu/ddraw/replay-lanes.tsv` (11
 `tools/replay-lanes-gen.py` checks the file and generates `inc/tagpu_reclanes.h`), and the rules
 find their lanes by role, never by offset; since each recording carries its own table, editing the
 TSV never orphans a file, and a wrong width costs size only. A unit is listed in an iteration only
-when a lane differs from its prediction, and then as residuals per lane. A unit *at rest* — its
+when a lane differs from its prediction, and then as residuals per lane. Which units an iteration
+lists, and each one's lane mask, the section says against state both sides keep (the codec's *THE
+LISTING*): a unit listed the iteration before takes a 2-bit symbol -- not listed, listed with its
+last mask, listed with another -- the other candidates are ranks among those not carried and the
+woken resting units are slots, and a mask is an id into the run's last 4,096 masks, most recent
+first. A unit *at rest* — its
 image equal to the two before it and to the third's lanes, and either not moving or with a move
 stamp older than the step before, with its ledger's requested and granted zero, and, for a type
 with an `RT_TYPES` row, with its two HP percentages equal to its HP's — is skipped
@@ -421,7 +426,13 @@ ascending; an `RT_TYPES` whose length is not 16 + 20 per row, with more rows tha
 count, a type at or past that count, types not ascending or a pad byte not zero); a sectioned block in a segment
 whose header lacks `RT_CODEC` and `RT_PHYSICS`; a segment whose unit slots differ from the first
 header's; a container whose head, kinds, lengths, slots, masks or columns exceed their bounds, which
-leaves bytes in a section, or which decodes to another payload length; a pool frame whose
+leaves bytes in a section, or which decodes to another payload length; a unit section whose
+symbols are not exactly the carried units' (a symbol 3 or a nonzero pad included), whose symbols
+or ids pass the block's iterations times its slots but slot 0, whose rank or
+woken slot names no unit that iteration can list, whose id names no mask (0 for a carried unit or
+an empty last mask, past the list and the next new mask, a new mask the list already holds),
+whose ids or new masks are not all taken, or whose listed masks do not consume each lane's
+counted residuals exactly; a pool frame whose
 iterations are not the head's, whose count or extent leaves `[0, RT_PROJECTILES]` or whose count
 passes its extent, which names more dead slots than the old count or a dead or stale slot out of
 its range, more survivors than the new count, a reference past its section, fewer bytes than its

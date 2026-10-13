@@ -20,6 +20,7 @@
 #define RECC_KINDS_MAX   65536u       /* an iteration's kinds pattern's bytes at most: past it,
                                          records                                                */
 #define RECC_KINDS_MRU   16           /* the patterns a run keeps to refer back to              */
+#define RECC_J2_MTF      4096         /* the lane masks a run keeps to refer back to (THE LISTING) */
 #define RECC_FRAME_CAP   (16u << 20)  /* a frame's bytes at most: past it, records               */
 #define RECC_PAYLOAD_MAX (64u << 20)  /* a sectioned block's payload at most: the reader's block
                                          bound, RECR_BLOCK_MAX                                   */

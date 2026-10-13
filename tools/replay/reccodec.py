@@ -81,7 +81,7 @@ NROLES = len(ROLES)
 
 Unreadable = tarec.Unreadable
 
-REC_FORMAT = 20
+REC_FORMAT = 21
 RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH, RBF_CHAINED = 1, 2, 4, 8, 16
 RUN_WINDOW_LOG, CHAIN_MAX = 20, 9          # REC_RUN_WINDOW_LOG, REC_CHAIN_MAX
 RT_CODEC, RT_PHYSICS, RT_AIR, RT_TYPES = 29, 30, 31, 47
@@ -112,6 +112,7 @@ _POOL_BODY_MAX = tarec.REC_PROJ_DELTA_HEAD + PIMG  # a delta of all 27 dwords: 1
 SHOT = 36                                  # an RK_EV_SHOT's body
 SHOTS_MAX, WEAPON_IDS = 4096, 4096         # RECC_SHOTS_MAX, RECC_WEAPON_IDS
 M32 = 0xFFFFFFFF
+J2_MTF, MBM = 4096, 16                     # RECC_J2_MTF; MB_MAX, the bytes a mask is kept in
 ID_OFFMAP = 0xFFFFFFFD                     # REC_ID_OFFMAP: the sort's off-map bucket in an image
 
 SIN = np.array([round(8192 * math.sin(2 * math.pi * i / 512)) for i in range(512)], np.int64)
@@ -538,14 +539,23 @@ def _varints(buf, at, end, n):
 # _refuse words it. The codes are this file's own: the core's below 100, then each record frame's
 # in its region -- the cells 100-149, the orders 150-199, the events 200-249, the state 250-299.
 
-(E_BODY, E_BODY_LEFT, E_TICK, E_UNIT_LEN, E_UNIT_SLOT, E_NOT_CAND, E_PAST_PAYLOAD, E_PAYLOAD,
+(E_BODY, E_BODY_LEFT, E_TICK, E_UNIT_LEN, E_UNIT_SLOT, E_PAST_PAYLOAD, E_PAYLOAD,
  E_P_ITERS, E_P_CUT, E_P_COUNT, E_P_EXTENT, E_P_OVER, E_P_DEADS, E_P_DEAD, E_P_SURV, E_P_TAILS,
  E_P_TAIL, E_P_REF, E_P_HEADS, E_P_NOHEAD, E_G_NONE, E_F_SCHEME, E_F_NCOLS, E_F_TABLE, E_F_PAST,
- E_F_FILL, E_F_LEFT, E_F_BIG, E_G_PAST, E_M_TICK, E_M_FEAT) = range(1, 33)
+ E_F_FILL, E_F_LEFT, E_F_BIG, E_G_PAST, E_M_TICK, E_M_FEAT, E_J_SYM, E_J_IDS, E_J_ID, E_J_LEFT,
+ E_J_SYMS, E_J_TAKEN, E_J_COL, E_J_LAST, E_J_RESID) = range(1, 41)
 _WHY = {E_BODY: "a body cut short or past 0xFFFF in section {0}",
         E_BODY_LEFT: "{1} bytes left in section {0}", E_TICK: "an RK_TICK of {0} bytes",
         E_UNIT_LEN: "a unit record of {0} bytes", E_UNIT_SLOT: "a unit record for slot {0}",
-        E_NOT_CAND: "a listed slot that is not a candidate",
+        E_J_SYM: "iteration {0}: the symbols end before carried slot {1}",
+        E_J_IDS: "iteration {0}: the mask ids end before slot {1}",
+        E_J_ID: "iteration {0}: mask id {1} for slot {2} names no mask",
+        E_J_LEFT: "iteration {0}: a rank or a woken slot names no slot it can list",
+        E_J_SYMS: "{0} symbol bytes for {1} carried slots",
+        E_J_TAKEN: "{0} of {1} mask ids and {2} new masks taken",
+        E_J_COL: "lane {0}'s column is not consumed by the listed masks",
+        E_J_LAST: "iteration {0}: slot {1} takes its last mask, which is empty",
+        E_J_RESID: "iteration {0}: lane {1}'s column ends before slot {2}'s residual",
         E_PAST_PAYLOAD: "the records pass the head's payload",
         E_PAYLOAD: "the records are {0} bytes, not the head's {1}",
         E_P_ITERS: "the pool frame's iterations are not the head's {0}",
@@ -1088,8 +1098,65 @@ def _put(out, pos, kind, src, at, ln, err):
 
 
 @_jit
-def _iterations(sec, rk, rc, rf, irun, secof, listed, slots, R, tab, live, st, rest_mode, pl, fst,
-                foff, kst, out, err):
+def _j2_find(jm, jord, njm, m):
+    """The position of mask m in the run's masks, most recent first, or -1."""
+    for p in range(njm):
+        k = jord[p]
+        same = True
+        for b in range(MBM):
+            if jm[k, b] != m[b]:
+                same = False
+                break
+        if same:
+            return p
+    return -1
+
+
+@_jit
+def _j2_touch(jm, jord, jn, m):
+    """m to the front of the run's masks, inserted when absent, the least recent dropped at
+    J2_MTF (tagpu_reccodec.c j2_touch)."""
+    njm = jn[0]
+    p = _j2_find(jm, jord, njm, m)
+    if p < 0:
+        if njm < J2_MTF:
+            p = njm
+            jord[p] = njm
+            jn[0] = njm + 1
+        else:
+            p = J2_MTF - 1
+        jm[jord[p]] = m
+    k = jord[p]
+    for q in range(p, 0, -1):
+        jord[q] = jord[q - 1]
+    jord[0] = k
+
+
+@_jit
+def _j2_mask(v, last, may0, dic, jcur, jm, jord, jn, out):
+    """The mask id v names, into out, the run's masks moved on; False when it names none
+    (tagpu_reccodec.c j2_mask)."""
+    njm = jn[0]
+    if v == 0:
+        if not may0 or not last.any():
+            return False
+        out[:] = last
+    elif v <= njm:
+        out[:] = jm[jord[v - 1]]
+    elif v == njm + 1 and jcur[2] < len(dic):
+        out[:] = dic[jcur[2]]
+        jcur[2] += 1
+        if _j2_find(jm, jord, njm, out) >= 0:
+            return False
+    else:
+        return False
+    _j2_touch(jm, jord, jn, out)
+    return True
+
+
+@_jit
+def _iterations(sec, rk, rc, rf, irun, secof, lsec, tab, live, st, rest_mode, pl, fst, foff, kst,
+                out, err):
     """The block's records into out, iteration by iteration, each walking its runs [irun[it],
     irun[it + 1]) (Frame._kinds): the pool frame's iteration (_pool_iter), which gives its
     projectile runs their count; pass A takes the iteration's RCS_OTHER bodies -- every run but
@@ -1102,12 +1169,16 @@ def _iterations(sec, rk, rc, rf, irun, secof, listed, slots, R, tab, live, st, r
     prediction -- and the named slots restart from their images. secof is each kind's section,
     pl the pool frame's parsed section and state (Frame._pool), fst the record frames' states,
     foff the sections' offsets and kst the kinds' state (the last explicit empty feature tick's 16 bytes; whether one came,
-    and an explicit RK_FEATURES). 0, or the refusal's code."""
+    and an explicit RK_FEATURES). lsec is the unit frame's section as Frame._units_parse reads it
+    and the listing's state (tagpu_reccodec.c, THE LISTING): the symbols, each iteration's ranks
+    and woken slots, the new masks, the ids, each lane's residuals, and the previous listed set,
+    the last masks and the run's masks. 0, or the refusal's code."""
     off, width, J, defwin = tab[0], tab[1], tab[3], tab[4]
+    syms, jri, jrk, jwi, jws, dic, ids, cvals, cst, cend, jprev, jlast, jm, jord, jn = lsec
     copy, l1, l2, l3, win, age, rest, lstep, lset = st
     ctl, codes, S, B, T, P, H, pwin, page, lastnew, shots, meta, payload = pl
     tpair, kfl = kst
-    nslots, nl, iters = len(live), len(off), len(listed)
+    nslots, nl, iters = len(live), len(off), len(jri) - 1
     # the record frames' sections, read and bounded before the first iteration
     fcols = np.zeros((4, FRAME_COLS_MAX, 2), np.int64)
     c = _cells_open(fst[0], fcols[0], sec, foff[RCS_CELLS], foff[RCS_CELLS + 1], iters, err)
@@ -1149,7 +1220,10 @@ def _iterations(sec, rk, rc, rf, irun, secof, listed, slots, R, tab, live, st, r
     Rr, U = np.empty(nl, np.int64), np.empty(nl, np.int64)
     dirty = np.zeros(NDW, np.bool_)
     oat, oend = foff[RCS_OTHER], foff[RCS_OTHER + 1]
-    pos = u0 = gt0 = 0
+    pos = gt0 = 0
+    jcur = np.zeros(3, np.int64)                # the symbols, the ids and the new masks taken
+    ccur = cst.copy()
+    mk = np.zeros(MBM, np.uint8)
     for it in range(iters):
         q0, q1 = irun[it], irun[it + 1]
         gt = (gt0 + it) & M32
@@ -1193,29 +1267,64 @@ def _iterations(sec, rk, rc, rf, irun, secof, listed, slots, R, tab, live, st, r
                     nt += 1
                     named[s] = it + 1
         # the unit frame: every candidate -- live, not slot 0, not named -- but a resting one
-        # unless listed, in slot order, the listed ones in theirs
-        c = listed[it]
-        for p in range(c):
-            s = slots[u0 + p]
-            if not live[s] or named[s] == it + 1:
-                return _fail(err, E_NOT_CAND)
-        nd, p = 0, 0
+        # unless woken, in slot order, the listed ones among them (tagpu_reccodec.c, THE LISTING)
+        ri, r1, wi, w1, nc = jri[it], jri[it + 1], jwi[it], jwi[it + 1], 0
+        nd = 0
         dend[0] = 0
         for s in range(1, nslots):
+            carried = jprev[s]
+            jprev[s] = False
             if not live[s] or named[s] == it + 1:
                 continue
-            if p < c and slots[u0 + p] == s:
-                Rr[:] = R[u0 + p]
-                p += 1
-            elif rest_mode and rest[s]:
-                continue
+            lst, sym, may0 = False, 0, True
+            if rest[s]:
+                lst = wi < w1 and jws[wi] == s
+                if lst:
+                    wi += 1
+                elif rest_mode:
+                    continue
+            elif carried:
+                if jcur[0] >= len(syms):
+                    return _fail(err, E_J_SYM, it, s)
+                sym = syms[jcur[0]]
+                jcur[0] += 1
+                lst, may0 = sym != 0, False
+            else:
+                lst = ri < r1 and jrk[ri] == nc
+                if lst:
+                    ri += 1
+                nc += 1
+            if lst:
+                if sym == 1:
+                    mk[:] = jlast[s]
+                    if not mk.any():
+                        return _fail(err, E_J_LAST, it, s)
+                    _j2_touch(jm, jord, jn, mk)
+                else:
+                    if jcur[1] >= len(ids):
+                        return _fail(err, E_J_IDS, it, s)
+                    v = ids[jcur[1]]
+                    jcur[1] += 1
+                    if not _j2_mask(v, jlast[s], may0, dic, jcur, jm, jord, jn, mk):
+                        return _fail(err, E_J_ID, it, v, s)
+                jlast[s] = mk
+                jprev[s] = True
+                for j in range(nl):
+                    if mk[j >> 3] >> (j & 7) & 1:
+                        if ccur[j] >= cend[j]:
+                            return _fail(err, E_J_RESID, it, j, s)
+                        Rr[j] = cvals[ccur[j]]
+                        ccur[j] += 1
+                    else:
+                        Rr[j] = 0
             else:
                 Rr[:] = 0
             n = _advance(s, gt, tab, st, Rr, U, dirty, dbuf, dend[nd])
             if n:
                 dend[nd + 1] = dend[nd] + n
                 nd += 1
-        u0 += c
+        if ri != r1 or wi != w1:
+            return _fail(err, E_J_LEFT, it)
         c = _group_fill(rk, rc, rf, q0, q1, 1, nd, it, err)
         if c:
             return c
@@ -1353,6 +1462,14 @@ def _iterations(sec, rk, rc, rf, irun, secof, listed, slots, R, tab, live, st, r
         return c
     if oat != oend:
         return _fail(err, E_BODY_LEFT, RCS_OTHER, oend - oat)
+    nsymb, jsi = len(syms) // 4, jcur[0]
+    if nsymb != (jsi + 3) // 4 or syms[jsi:].any():
+        return _fail(err, E_J_SYMS, nsymb, jsi)
+    if jcur[1] != len(ids) or jcur[2] != len(dic):
+        return _fail(err, E_J_TAKEN, jcur[1], len(ids), jcur[2])
+    for j in range(nl):
+        if ccur[j] != cend[j]:
+            return _fail(err, E_J_COL, j)
     if pos != len(out):
         return _fail(err, E_PAYLOAD, pos, len(out))
     return 0
@@ -2963,7 +3080,7 @@ class Frame:
         f = Frame.__new__(Frame)
         f.__dict__.update(self.__dict__)
         for k in ("copy", "live", "l1", "l2", "l3", "win", "age", "rest", "lstep", "lset", "P", "H", "pwin", "page",
-                  "lastnew", "shots", "meta", "tpair", "kfl"):
+                  "lastnew", "shots", "meta", "tpair", "kfl", "jprev", "jlast", "jm", "jord", "jn"):
             if hasattr(self, k):
                 setattr(f, k, getattr(self, k).copy())
         if self.fst is not None:
@@ -3023,6 +3140,13 @@ class Frame:
         self.kmru = []
         self.tpair[:] = 0
         self.kfl[:] = 0
+        # the listing (tagpu_reccodec.c, THE LISTING): the previous listed set, the last masks,
+        # the run's masks and their order, most recent first
+        self.jprev = np.zeros(self.prm.nslots, np.bool_)
+        self.jlast = np.zeros((self.prm.nslots, MBM), np.uint8)
+        self.jm = np.zeros((J2_MTF, MBM), np.uint8)
+        self.jord = np.zeros(J2_MTF, np.int64)
+        self.jn = np.zeros(1, np.int64)
         p = self.prm
         if not p.usable or not self.nl or (p.nslots, p.nproj, p.gw, p.gh, p.nwrecks) != self.sizes:
             return
@@ -3162,14 +3286,15 @@ class Frame:
         err = np.zeros(4, np.int64)
         rk, rc, rf, irun = self._kinds(sec, off[RCS_KINDS], off[RCS_KINDS + 1], iters, payload)
         foff = np.array(off, np.int64)
-        listed, slots, R = self._units_parse(sec, off[RCS_UNITS], off[RCS_UNITS + 1], iters)
+        lst = self._units_parse(sec, off[RCS_UNITS], off[RCS_UNITS + 1], iters) + (
+            self.jprev, self.jlast, self.jm, self.jord, self.jn)
         ctl, codes, S, B, T = self._pool(sec, off[RCS_PROJ], off[RCS_PROJ + 1], iters, err)
         out = np.zeros(payload, np.uint8)
         st = (self.copy, self.l1, self.l2, self.l3, self.win, self.age, self.rest, self.lstep,
               self.lset)
         pl = (ctl, codes, S, B, T, self.P, self.H, self.pwin, self.page, self.lastnew, self.shots,
               self.meta, payload)
-        if _iterations(sec, rk, rc, rf, irun, _SECTION_OF, listed, slots, R, self.tab, self.live, st,
+        if _iterations(sec, rk, rc, rf, irun, _SECTION_OF, lst, self.tab, self.live, st,
                        self.rest_mode, pl, self.fst, foff, (self.tpair, self.kfl), out, err):
             _refuse(err)
         return out.tobytes()
@@ -3243,59 +3368,90 @@ class Frame:
         return ctl, codes, S, B, T
 
     def _units_parse(self, sec, at, end, iters):
-        """The unit frame's section: how many slots each iteration lists, those slots in one array
-        and their residuals by lane."""
+        """The unit frame's section (tagpu_recfmt.h, RCS_UNITS) as far as it reads without the
+        decode's state: the symbols, one a carried slot (four a byte, low bits first); each
+        iteration's ranks and woken slots, flat with their offsets; the new masks (MBM bytes
+        each); the ids; each lane's residuals, flat with each lane's start and end. What needs
+        the state -- which slot a symbol or a rank is, which mask an id names, whether the masks
+        consume the columns -- _iterations bounds (tagpu_reccodec.c, THE LISTING)."""
         nl, nslots = self.nl, self.prm.nslots
         mb = (nl + 7) // 8
         v, at = _varint(sec, at, end)
         if at < 0 or v != iters:
             raise Unreadable("the unit frame's iterations are not the head's")
-        r = _varints(sec, at, end, iters)
-        if r is None:
-            raise Unreadable("the listed counts cut short")
-        listed, at = r
-        if (listed > nslots).any():
-            raise Unreadable("an iteration lists past the slots")
-        total = int(listed.sum())
-        r = _varints(sec, at, end, total)
-        if r is None:
-            raise Unreadable("the slot gaps cut short")
-        gaps, at = r
-        # each iteration's slots climb from 0 by gap + 1: an iteration's last is its greatest
-        steps = np.cumsum(gaps + 1)
-        first = np.cumsum(listed) - listed
-        slots = steps - np.repeat(np.concatenate(([0], steps))[first], listed)
-        if total and (slots >= nslots).any():
-            raise Unreadable("a listed slot past the slots")
+        ns, at = _varint(sec, at, end)
+        if at < 0 or ns > end - at:
+            raise Unreadable("the unit frame's symbols run past it")
+        # BOUND: an iteration carries and lists at most nslots - 1 units (the writer's slot loop
+        # runs 1..nslots-1, tagpu_reccodec.c reccodec_decode), so the symbols and the ids are
+        # bounded by the head's iterations, not by the section's bytes alone
+        if ns > (iters * (nslots - 1) + 3) // 4:
+            raise Unreadable(f"{ns} bytes of symbols, past {iters} iterations of {nslots - 1} slots")
+        b = sec[at:at + ns]
+        at += ns
+        syms = np.stack([(b >> (2 * k)) & 3 for k in range(4)], axis=1).reshape(-1).astype(np.int64)
+        if (syms == 3).any():
+            raise Unreadable("a symbol is 3")
+        nid = int((syms == 2).sum())
+        jri, jwi, jrk, jws = [0], [0], [], []
+        for it in range(iters):
+            for out, idx, prev in ((jrk, jri, -1), (jws, jwi, 0)):
+                n, at = _varint(sec, at, end)
+                if at < 0 or n > nslots:
+                    raise Unreadable(f"iteration {it} lists past the {nslots} slots")
+                r = _varints(sec, at, end, n)
+                if r is None:
+                    raise Unreadable("a gap cut short")
+                gaps, at = r
+                vals = prev + np.cumsum(gaps + 1)
+                if n and vals[-1] >= nslots:
+                    raise Unreadable(f"iteration {it} names a slot or rank past the {nslots} slots")
+                out.append(vals)
+                idx.append(idx[-1] + n)
+                nid += n
+        if nid > iters * (nslots - 1):
+            raise Unreadable(f"{nid} mask ids, past {iters} iterations of {nslots - 1} slots")
+        cat = lambda xs: np.concatenate(xs) if xs else np.zeros(0, np.int64)
+        jrk, jws = cat(jrk), cat(jws)
         nd, at = _varint(sec, at, end)
         if at < 0:
             raise Unreadable("the mask count cut short")
-        if (not 1 <= nd <= total) if total else nd != 0:
-            raise Unreadable(f"{nd} masks for {total} listed units")
+        if nd > nid:
+            raise Unreadable(f"{nd} new masks for {nid} ids")
         if nd * mb > end - at:
             raise Unreadable("the masks run past the unit frame")
-        dic = sec[at:at + nd * mb].reshape(nd, mb)
+        dic = np.zeros((nd, MBM), np.uint8)
+        dic[:, :mb] = sec[at:at + nd * mb].reshape(nd, mb)
         at += nd * mb
         if nd and (~dic.any(axis=1)).any():
             raise Unreadable("an empty mask")
         if nd and nl % 8 and (dic[:, mb - 1] >> (nl % 8)).any():
             raise Unreadable("a mask names a lane past the table")
-        if nd <= 256:
-            if total > end - at:
+        if at >= end or sec[at] > 1:
+            raise Unreadable("the ids' mode is not 0 or 1")
+        wide = sec[at]
+        at += 1
+        if not wide:
+            if nid > end - at:
                 raise Unreadable("the mask ids cut short")
-            ids = sec[at:at + total].astype(np.int64)
-            at += total
+            ids = sec[at:at + nid].astype(np.int64)
+            at += nid
         else:
-            r = _varints(sec, at, end, total)
+            r = _varints(sec, at, end, nid)
             if r is None:
                 raise Unreadable("the mask ids cut short")
             ids, at = r
-        if total and (ids >= nd).any():
-            raise Unreadable("a mask id past the masks")
-        M = (np.unpackbits(dic, axis=1, bitorder="little")[:, :nl].astype(bool)[ids] if total
-             else np.zeros((0, nl), bool))
-        R = np.zeros((total, nl), np.int64)
-        cnt = M.sum(axis=0)
+        if mb > end - at:
+            raise Unreadable("the lanes' counts cut short")
+        present = np.unpackbits(sec[at:at + mb], bitorder="little")
+        at += mb
+        if present[nl:].any():
+            raise Unreadable("a count for a lane past the table")
+        cnt = np.zeros(nl, np.int64)
+        for j in np.flatnonzero(present[:nl]):
+            cnt[j], at = _varint(sec, at, end)
+            if at < 0 or not cnt[j]:
+                raise Unreadable(f"lane {j}'s count cut short or 0")
         r = _varints(sec, at, end, int(cnt.sum()))
         if r is None:
             raise Unreadable("a column cut short")
@@ -3303,17 +3459,14 @@ class Frame:
         if at != end:
             raise Unreadable(f"{end - at} bytes left in the unit frame")
         width, lane_mask = self.tab[1], self.tab[2]
-        c0 = 0
-        for j in range(nl):
-            k = int(cnt[j])
-            if not k:
-                continue
-            z = vals[c0:c0 + k]
-            c0 += k
-            if width[j] < 4 and (z >> (8 * int(width[j]))).any():
-                raise Unreadable(f"lane {j}'s residual is past its width")
-            R[M[:, j], j] = ((z >> 1) ^ -(z & 1)) & lane_mask[j]
-        return listed, slots, R
+        cend = np.cumsum(cnt)
+        cst = cend - cnt
+        lane = np.repeat(np.arange(nl), cnt)
+        if (vals >> (8 * np.minimum(width[lane], 4)) != 0).any() if len(vals) else False:
+            raise Unreadable("a residual past its lane's width")
+        cvals = ((vals >> 1) ^ -(vals & 1)) & lane_mask[lane]
+        return (syms, np.array(jri, np.int64), jrk, np.array(jwi, np.int64), jws, dic, ids, cvals,
+                cst, cend)
 
 
 # ---- zstd and the block walk -------------------------------------------------------------------
