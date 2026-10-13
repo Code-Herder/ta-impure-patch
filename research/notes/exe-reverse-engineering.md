@@ -3612,8 +3612,8 @@ before writing anything (*The sight emitter*, below), and the seek counts a refu
   `0x47CBB9`; otherwise the unlink when `+0x82` is not NULL, a push at the front and `+0x82 = bucket`;
   **no caller and no stored address in the image**, so it cannot reorder a bucket by itself; Impure's
   seek calls it in R9, in a skirmish recording after taking each unit out of its bucket, so every
-  call pushes, and on a multiplayer level only for a unit whose bucket is not its owner's, which
-  leaves the order the host's); and
+  call pushes, and on a multiplayer level only for a unit the host does not carry whose `+0x82` is
+  not the bucket its owner's image names, which leaves the order the host's); and
   **`0x47CBD0(unit)`** (`ret 4`, one caller, the destructor `0x48682D`): the clear `0x47D0E0`, the
   unlink unless carried, `+0x82 = 0`.
 - **The features' model instances.** The spawn reads the def's template `FeatureDef+0x98`

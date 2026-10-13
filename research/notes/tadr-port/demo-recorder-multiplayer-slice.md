@@ -1408,7 +1408,26 @@ refresh. `recmp_compare.py` checks the dump's chains instead of comparing
 `+0x8E` of a unit that is not carried (`sort_chains`): every live unit that is
 not carried and has a bucket is in that bucket's one chain, a next is a unit of
 the same bucket, no unit is named twice, and each bucket has one head. The owner
-approved that check on 2026-10-13.
+approved that check on 2026-10-13. A seek's order is a function of T's composed
+world and a playing's of its history, so a round trip's two dumps can differ in
+it too: `tarec.py compare-dumps --seek` on a multiplayer file checks both dumps'
+chains the same way and leaves `+0x8E` of a unit not carried out.
+
+MEASURED 2026-10-13 on the reference setup, the four-seat recording, against
+main's build:
+
+- A fresh seek to 590 and a takeover asked for at 610 (its refresh 601): refused
+  on main's build, done on this one. The seek's dump and the takeover's first
+  iteration compare EQUAL.
+- An in-process seek from 200 to 590 (dumps at 590 and 710) and a fresh seek to
+  1000 compare EQUAL. That seek moved one unit; every other unit stood in its
+  owner's bucket after R7's creates and R8's moves.
+- Round trips at 590, 1000 and 1201 compare EQUAL by `compare-dumps --seek`,
+  but for one line at 1201 that main's build gives too: unit 2's contact bits
+  8 and 9 (`+0x110`) set after the seek and clear in the playing. Byte for
+  byte, the round trips at 590 and 1201 differ in `+0x8E` on 7 and 2 units.
+- A fresh two-peer pair, recorded and played to its end, compares EQUAL at 600
+  and 1201.
 
 **The deaths.** A unit's end is its owner's: `DEATH_END` runs the destructor
 through `ev_death` at the owner's time, with the feature gates shut and the

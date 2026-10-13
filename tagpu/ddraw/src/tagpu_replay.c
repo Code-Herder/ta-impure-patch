@@ -6060,9 +6060,9 @@ static int sk_bucket_cmp(const void* a, const void* b)
    of the 1476 iterations of a four-seat recording (MEASURED 2026-10-13), 97 had two units heading
    one bucket or a unit naming a next in another bucket, while the primary stream, one machine's,
    formed chains in every one. No recorded order is the truth on such a level. Each unit's bucket
-   +0x82 is its owner's, so R0 bounds the bucket and not the chains, and R9 puts every unit of U in
-   it through the move 0x47CB60 and leaves the order the host's own: it moves only a unit whose
-   host bucket differs, which the move pushes at the front. Every link is still an engine
+   +0x82 is its owner's, so R0 bounds the bucket and not the chains, and R9 puts every unit of U the
+   host does not carry in it through the move 0x47CB60 and leaves the order the host's own: it
+   moves only a unit whose host bucket differs, which the move pushes at the front. Every link is still an engine
    function's. tools/replay/recmp_compare.py checks the chains instead of comparing +0x8E. */
 
 /* R0's buckets: U, the units R9 moves -- live in the image, not carried there, with a recorded

@@ -5,7 +5,7 @@ comment filter, `landing --check`, a recording's segments and chains, what the b
 its runs and snapshot chains, and which cells are images, read from files built from the format alone, the fixtures'
 takeover entries, the W lane's edited header copies, compare-counts' script slice and exact
 COB children, the puppet's native owner's query check, and a multiplayer dump's sort chains
-(recmp_compare.sort_chains). No game runs. The files are read through
+(tarec.sort_chains). No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
 shared venv when they are missing.
 
@@ -33,7 +33,6 @@ import reccache  # noqa: E402
 import tarec  # noqa: E402
 import tareplay  # noqa: E402
 import tarewind  # noqa: E402
-import recmp_compare  # noqa: E402
 
 MAPS = [tafeat.DDRAW / "ddraw-cover.map", tafeat.DDRAW / "ddraw-stocklimits-cover.map"]
 
@@ -1646,7 +1645,7 @@ class Occupancy(unittest.TestCase):
 
 
 class SortChains(unittest.TestCase):
-    """recmp_compare.sort_chains: a multiplayer dump's sort buckets checked by the engine's
+    """tarec.sort_chains: a multiplayer dump's sort buckets checked by the engine's
     invariants instead of compared with the owners' images, whose +0x8E need not form chains."""
 
     @staticmethod
@@ -1668,37 +1667,37 @@ class SortChains(unittest.TestCase):
         # two owners' images each end bucket 7 at their own unit; the host chains 1 -> 3
         a, b = self.worlds({1: self.unit(7), 3: self.unit(7)},
                            {1: self.unit(7, 4), 3: self.unit(7)})
-        self.assertEqual(recmp_compare.sort_chains(a, b), [])
+        self.assertEqual(tarec.sort_chains(a, b), [])
         self.assertEqual(a.units, b.units)
 
     def test_two_heads_fail(self):
         a, b = self.worlds({}, {1: self.unit(7), 3: self.unit(7)})
-        out = recmp_compare.sort_chains(a, b)
+        out = tarec.sort_chains(a, b)
         self.assertEqual(len(out), 1, out)
         self.assertIn("both head bucket 7", out[0])
 
     def test_a_next_in_another_bucket_fails(self):
         a, b = self.worlds({}, {1: self.unit(7, 4), 3: self.unit(8)})
-        out = recmp_compare.sort_chains(a, b)
+        out = tarec.sort_chains(a, b)
         self.assertTrue(any("is no unit of its bucket 7" in line for line in out), out)
 
     def test_a_unit_named_twice_fails(self):
         a, b = self.worlds({}, {1: self.unit(7, 4), 2: self.unit(7, 4), 3: self.unit(7)})
-        out = recmp_compare.sort_chains(a, b)
+        out = tarec.sort_chains(a, b)
         self.assertTrue(any("both name unit 3 next" in line for line in out), out)
 
     def test_a_headless_cycle_fails(self):
         # 2 -> 3 -> 2 beside the head 1: each unit named once and one head, but its walk
         # reaches 1 of the 3
         a, b = self.worlds({}, {1: self.unit(7), 2: self.unit(7, 4), 3: self.unit(7, 3)})
-        out = recmp_compare.sort_chains(a, b)
+        out = tarec.sort_chains(a, b)
         self.assertEqual(len(out), 1, out)
         self.assertIn("reach 1 of the 3", out[0])
 
     def test_a_carried_unit_s_next_is_compared(self):
         # +0x8E of a carried unit is its carrier's chain: it is left for the comparison
         a, b = self.worlds({2: self.unit(7, 6, carrier=5)}, {2: self.unit(7, 7, carrier=5)})
-        self.assertEqual(recmp_compare.sort_chains(a, b), [])
+        self.assertEqual(tarec.sort_chains(a, b), [])
         self.assertNotEqual(a.units[2], b.units[2])
 
 class SourceTest(unittest.TestCase):

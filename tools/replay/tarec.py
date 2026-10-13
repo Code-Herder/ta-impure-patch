@@ -2874,6 +2874,68 @@ def layer(u):
     return struct.unpack_from("<I", u, U_STATE)[0] & 3
 
 
+U_BUCKET, U_CARRIER, U_NEXT = 0x82, 0x86, 0x8E    # a unit's sort bucket, carrier and next
+
+
+def chain_faults(w):
+    """What breaks the engine's invariants of world `w`'s sort buckets: every live unit that is
+    not carried and has a bucket is in that bucket's one chain -- a next is a unit of the same
+    bucket, no unit is named twice, each bucket has one head, and the walks from the heads reach
+    every unit."""
+    out, member, named, heads = [], {}, {}, {}
+
+    def nxt(slot):
+        return struct.unpack_from("<I", w.units[slot], U_NEXT)[0]
+    for slot, u in w.units.items():
+        bucket, carrier = struct.unpack_from("<II", u, U_BUCKET)
+        if bucket and not carrier:
+            member[slot] = bucket
+    for slot, bucket in sorted(member.items()):
+        n = nxt(slot)
+        if not n:
+            continue
+        if member.get(n - 1) != bucket:
+            out.append(f"sort chains: unit {slot}'s next, ID {n}, is no unit of its bucket {bucket}")
+        elif n - 1 in named:
+            out.append(f"sort chains: units {named[n - 1]} and {slot} both name unit {n - 1} next")
+        else:
+            named[n - 1] = slot
+    for slot, bucket in sorted(member.items()):
+        if slot in named:
+            continue
+        if bucket in heads:
+            out.append(f"sort chains: units {heads[bucket]} and {slot} both head bucket {bucket}")
+        else:
+            heads[bucket] = slot
+    walked = 0
+    for bucket, slot in heads.items():
+        seen = set()
+        while slot is not None and member.get(slot) == bucket and slot not in seen:
+            seen.add(slot)
+            slot = nxt(slot) - 1 if nxt(slot) else None
+        walked += len(seen)
+    if not out and walked != len(member):
+        out.append(f"sort chains: the walks from the heads reach {walked} of the {len(member)} "
+                   "units in a bucket")
+    return out
+
+
+def sort_chains(w, dw):
+    """A multiplayer level's sort buckets: `dw`'s checked by the engine's invariants
+    (chain_faults) instead of compared, and then taken into `w` (tagpu_replay.c, THE SORT
+    BUCKETS ON A MULTIPLAYER LEVEL). Each owner's image carries its own machine's +0x8E, so the
+    composed images need not form chains, and a host's order is its own -- a seek's is a
+    function of T's composed world, a playing's of its history. So +0x8E of every unit not
+    carried is cleared in both worlds; the bucket +0x82 and a carried unit's +0x8E, its
+    carrier's chain, are compared. The differences the check finds."""
+    out = chain_faults(dw)
+    for world in (w, dw):
+        for u in world.units.values():
+            if not struct.unpack_from("<I", u, U_CARRIER)[0]:
+                struct.pack_into("<I", u, U_NEXT, 0)
+    return out
+
+
 def occupancy(w, dw, contest=False):
     """The dump's unit slots and yard bit checked by the engine's invariants instead of compared,
     and then taken into the expected world `w`: each footprint cell of a live mobile unit names it;
@@ -3132,7 +3194,9 @@ def cmd_compare_dumps(path, a_path, b_path, takeover=False, seek=False):
     dimensions and the globals' names; only its header is read. With `seek`, B a seek's, on a
     file that holds its cells: B's unit slots, yard bits and contest marks by THE OCCUPANCY
     RULE, and A's, the straight playing's, by the same rule on their own, since B's then stand
-    in for them in the comparison."""
+    in for them in the comparison. With `seek` on a multiplayer file, both dumps' sort buckets
+    by the engine's invariants and +0x8E of a unit not carried left out (sort_chains): a seek's
+    order there is a function of T's composed world, a playing's of its history."""
     h = header_only(path)
     ah, a = dump_world(a_path, h)
     bh, b = dump_world(b_path, h)
@@ -3148,6 +3212,8 @@ def cmd_compare_dumps(path, a_path, b_path, takeover=False, seek=False):
         # occupancy(a, a) writes A's own cells and marks over themselves
         stale = ["A's " + line for line in occupancy(a, a, contest=True)]
         stale += occupancy(a, b, contest=True)
+    if seek and h.get("mode") == 3:
+        stale += ["A's " + line for line in chain_faults(a)] + sort_chains(a, b)
     lines, n = a.differences(b, ah["tables"], bh["tables"], gnames=known_names(h), sight=True)
     lines, n = lines + stale, n + len(stale)
     when = (f"frame dump at GameTime {ah['frame']} (iteration {a.tick})" if "frame" in ah
