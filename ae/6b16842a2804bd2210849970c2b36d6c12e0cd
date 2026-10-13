@@ -1,0 +1,11 @@
+landing-review: HIGH, two independent read-only reviews (correctness; hostile input and C/Python agreement) of main...ae6b1684 (0735fd7f..ae6b1684), 2026-10-13.
+
+No correctness defect, no out-of-bounds index, no C/Python disagreement found. Coder arithmetic, model symmetry, restart points, rest_mode independence, self-test-only code, memory figures and the size note's numbers against the logs all checked sound.
+
+Findings and what was done:
+1. MEDIUM-HIGH, CONFIRMED: the decoder's work was not bounded as claimed. uc_find walked an unbounded hash chain (an unkeyed FNV lets a file fill one bucket), a section could code literals for cached values and take the new-mask path every time, and RT_SLOTS reaches 65535. Fixed in a29a04b6: UC_CHAIN 8 (uc_keep keeps no mask into a full chain, same rule on every side; never triggers on the real hours), and a per-block work budget RECC_WORK 2^28 (a decision 1, a raw bit 1, UC_EVAL 128 per slot evaluated: not resting, or listed), refused by both readers past it and declined to records by the encoder. Measured worst at the budget about 1.6 s per block under Wine; the heaviest real block is 295 times under it.
+2. LOW: the "at most about 3.9 s" claim was not an upper bound. Replaced in the BOUND comment, the size note and the cmd_worst comment (a29a04b6, 7a067d7f).
+3. NIT: the encoder ignored uc_unit's return. It now declines the block.
+4. LOW, test gap: the fault blocks now go through fuzzdiff (Python's refusals equal C's: 72/72), and outcomes assert the masks-full path, the chain cap and the budget's accept/refuse/decline at the exact work.
+
+Coordinator check of the fix: the evaluation charge is counted on the same slot set in the encoder (both paths), the C reader and the Python reader, independent of the Python reader's decode mode; the check decoder backstops any mismatch. Sizes byte-identical before and after the fix.
