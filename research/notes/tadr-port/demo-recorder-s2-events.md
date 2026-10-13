@@ -584,6 +584,15 @@ be another player's; the query's COB is noted in the slice set so that slice is 
 makes the same query there with the engine's arguments
 ([engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
 
+### 1.8d A yard's change — `RK_EV_YARD` (format 19)
+
+Not a root: YARD_OPEN `0x47DAC0`'s write of `+0x10F` at `0x47DAF1`, past its refusal `0x47D970`.
+`{u32 ID, u8 the yard (1 open, 0 closed), u8 0 x3}`, in a bracket or not, written wherever the COB
+setter ran it, skirmish recordings only. A lab's script slice can open its yard and its build
+handler make the nanoframe in it later in the same unit tick, so a playing applies the yard at its
+place in the events, before the create that follows it
+([engine map](../exe-reverse-engineering.md), *An open yard gives nothing back*).
+
 ### 1.9 The unit state a death must carry
 
 On the owner, the destructor runs inside the unit tick. The reaper (0x48AFB9..0x48AFD1) comes

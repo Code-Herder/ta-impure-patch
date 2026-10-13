@@ -2949,13 +2949,14 @@ which the hook does not reach (`SC_CLOSE` in `wndproc.c`, `tagpu_refuse`, and th
 and unit-type refusals in `tagpu_patches.c`): the process's exit waits until the file of every
 recording that has ended is closed ([*Its lifetime*](tadr-port/demo-recorder-skirmish-slice.md#its-lifetime)).
 
-**Its events have 58 sites of their own** (the attach log's `recorder: N event sites in`),
+**Its events have 59 sites of their own** (the attach log's `recorder: N event sites in`),
 byte-matched and built at `DllMain` by `tagpu_rec_init`, all before any lands; no recording starts
-without them. Twenty-nine observers run a handler and then the stolen bytes: the COB start entries
+without them. Thirty observers run a handler and then the stolen bytes: the COB start entries
 `0x4B0B00` and `0x4B0940` (the slice markers' start set, below), the constructor
 reservation `0x486075` (the multiplayer begin root, below), the create's success exit `0x4861B3`,
 the destructor `0x4866D0`, the corpse helper `0x486360` (`FR_CORPSE`), the build done
-`0x41B8D0`, the state setter `0x48B090`, the broadcast starts `0x456190`, `0x456290` and
+`0x41B8D0`, the state setter `0x48B090`, YARD_OPEN's write `0x47DAF1` (mid-function, its
+yard recorded as `RK_EV_YARD`), the broadcast starts `0x456190`, `0x456290` and
 `0x456218` (inside `0x456200`), the replies `0x47F780` and `0x47F850` (the setter and the replies
 chained onto the puppet gates there, §2.6f, so a refused call is neither recorded nor counted), `QueryNanoPiece` `0x43E400` (its query recorded as `RK_EV_QUERY`, below),
 the nano emitters `0x4720D0` and `0x472200`, and the order dispatch at `0x43A216`, `0x43B878` and

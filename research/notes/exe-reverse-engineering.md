@@ -2361,6 +2361,7 @@ one did not fit.
 | `0x4866D0` (9 bytes) | the destructor `(rec, mode)`'s entry | the record: the victim's `u16` at `+1`, the killer's netid at `+3`, the killer's `u16` at `+7`, the severity at `+9`, the kind at `+0xA`. A call the destructor would make inert (B3's bound at `0x4866E5`, the alive test at `0x486706`) is not recorded; a killer of 0 is none (`0x48675A`). The killer's player by `0x44FE40`'s rule (below); C4's carried decision (`tagpu_tx_carried`); the victim's image as the destructor finds it |
 | `0x41B8D0` (6 bytes) | the build done `(builder, built)`, `ret 8` | both arguments. Its five callers are listed at the table's `0x41B8D0` row above; the build step `0x41BA60` calls it at `0x41BCBF` when the built unit's `+0x104` compares equal to 0.0 (`0x41BCAA..0x41BCBB`), so every build that finishes in play passes here |
 | `0x48B090` (5 bytes) | the state setter `(mask, value)`, `ecx` the unit, `ret 8` | the byte `+0x10E` as the setter will leave it (`0x48B09A..0x48B0D4`), recorded only when it changes, since the setter returns at once otherwise (`0x48B0DE`) |
+| `0x47DAF1` (6 bytes: `mov [esi+0x10F],bl`) | YARD_OPEN `0x47DAC0`'s write, past its refusal `0x47D970`; no branch targets `0x47DAF2..0x47DAF6` | `esi` the structure, `bl` the new `+0x10F`: its bit 2 as `RK_EV_YARD` (*An open yard gives nothing back*); skirmish recordings only |
 | `0x456190`, `0x456290` (5 bytes each) | the broadcast starts `(unit, idx)` and `(unit, idx, argc, a0..a3)` | the arguments as the `0x10` carries them |
 | `0x456218` (6 bytes) | inside the broadcast start by name `0x456200(unit, name, argc, a0..a3)`, after `0x4B07C0` has turned the name into the index (`0x456213`) | `esi` the unit (`0x456208`), `eax` the index, the arguments at `E+0x28` (the function's `sub esp,0x18; push esi`) |
 | `0x47F780` (6 bytes), `0x47F850` (5 bytes) | the unit replies `(unit, kind, text)`, before their viewer tests (`0x47F850` tests first that the unit is off screen, `0x48BCB0` at `0x47F856`) | every player's reply, the text copied only to its end. `0x47F7E0`, between them, is never called: no call, jump or stored address names it, and its address occurs nowhere in the image |
@@ -8144,13 +8145,37 @@ passability (`0x47DB0A`); it calls no clear. The structure's re-claim walks its 
 mask `+0x10F` bit 2 selects (`0x47C804..0x47C817`: 2 open, 4 closed): a cell its byte sets is taken
 or contested, and a cell it does not set is let go only if it names the structure
 (`0x47C8AE..0x47C8B7`). So a unit that lost a yard cell to the closed structure keeps bit 27 and
-gets no cell when the yard opens -- a holder's clear is the one walk that would re-claim for it. The
-game never makes that order: a lab opens its yard before it makes the nanoframe in it (MEASURED
-2026-10-12, slice-walkers: lab 502 opened at GameTime 2962 and nanoframe 527 was made at 2963 on
-the yard's four free cells). A replay that makes units in slot order therefore writes each made
-unit's yard as its create returns (`tagpu_replay.c`, `yard_put` in `level_units`), before the next
-create stamps [DISASSEMBLED; MEASURED: before it, a seek at 3001 left 527 with bit 27 and its four
-cells empty; with it, every round trip of slice-walkers, forest-circle and battle is EQUAL].
+gets no cell when the yard opens -- a holder's clear is the one walk that would re-claim for it.
+
+**A lab can open its yard and make the nanoframe in it in the same tick** [DISASSEMBLED 2026-10-12].
+YARD_OPEN's one caller is the COB setter (`0x480BAE`), so the yard opens in the lab's script slice:
+the unit tick `0x48AD30` runs `DoScriptsNow(1)` `0x4B0D60` at `0x48ADEB`, and only after it, for an
+owner of type 1 or 2, the order run `0x43B7C0` (`0x48AF98`). There the build handler BuildingBuild
+`0x402640` waits for INBUILDSTANCE (`0x438700` at `0x4027CA`) -- which a lab's script sets in the
+slice that opens the yard [INFERRED: the stock labs' order of the two] -- then asks
+`QueryBuildInfo` (`0x4027FB`), tests the placement `0x47DB70` at `0x402899` (on failure it sleeps
+15 ticks) and creates through `0x485F50` at `0x4028EA`. Nothing in the turn
+stands between the slice's yard and the handler's create, so both can fall in one tick, the yard
+first; slice-walkers measured them one tick apart (lab 502 opened at GameTime 2962, nanoframe 527
+was made at 2963 on the yard's four free cells). The placement test does not see the yard: for a
+mobile def (`+0x22F` ≠ 0, the path at `0x47DBF4`) it refuses only a footprint cell whose slot A
+names another unit (`0x47DCFD..0x47DD0A`), so the order the cells were freed in decides the
+create.
+
+**So the recording carries the yard at its place, and a playing applies it there.** The recorder
+observes YARD_OPEN's write `mov [esi+0x10F],bl` at `0x47DAF1` (6 bytes, `88 9E 0F 01 00 00`;
+no branch in the file targets `0x47DAF2..0x47DAF6`), after the refusal `0x47D970` has passed
+(`0x47DACC..0x47DAD3`) and with `bl` the new byte (`0x47DAD5..0x47DAEC`), and writes `RK_EV_YARD
+{ID, the yard}` among the step's events, wherever the setter ran. A playing makes the same yard
+through the re-claim `0x47C790` and `0x440A40` at that place in the events, so a create that
+follows it in the step finds the cells the game's create found (`tagpu_replay.c`, *A RECORDED
+YARD_OPEN*). A replay that makes units in slot order (the first step, a seek) writes each made
+unit's yard as its create returns (`yard_put` in `level_units`), before the next create stamps
+[MEASURED: before it, a seek at 3001 left 527 with bit 27 and its four cells empty; with it, every
+round trip of slice-walkers, forest-circle and battle is EQUAL]. The image's yard, applied after
+the positions where the host's differs, is the backstop for a yard event the playing could not
+apply: one a unit's own create runs at once, recorded before that create's `RK_EV_CREATE`, names
+a unit not yet live, and is refused, counted and applied by the next image.
 
 **The rule on a skirmish recording machine.** Its seats are type 1 (local human) and 2 (local AI)
 (MEASURED, the controllers of both recordings the decision rests on), so the incumbent always keeps

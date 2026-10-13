@@ -1324,7 +1324,9 @@ the cells' slots, yard bits and contest marks are checked by the occupancy rule 
 compared (*Decisions taken* in [completeness](demo-recorder-completeness.md)); a seek stamps in slot
 order and a contest there can end the other way until the contested units move. A seek writes each
 made unit's yard as its create returns, so a nanoframe in a lab of a lower slot finds the yard's
-cells free, as the game made it (the engine map's *An open yard gives nothing back*). **What remains
+cells free, as the game made it; a forward playing applies each yard change at its place in the
+step (`RK_EV_YARD`), so a nanoframe made in the tick its lab's yard opened finds them free too (the
+engine map's *An open yard gives nothing back*). **What remains
 open**: where the playing makes two contesting footprint calls in another order than the game did
 (deaths, creates and placements in slot order against the game's interleaving in its unit tick),
 the holder can differ (MEASURED in emulation, 4 of an air war's 1,700 iterations; no slot-B impact

@@ -449,7 +449,7 @@ evidence, and keep remaining gaps visible.
 1. **The completeness mechanism's open items.** Every decision is taken
    ([decisions taken](demo-recorder-completeness.md#decisions-taken)); two
    [open items](demo-recorder-completeness.md#open-items) remain for the skirmish slice: whether a
-   recorded activation plays a second sound, and applying a recorded yard change.
+   recorded activation plays a second sound, and a yard its own unit's create opens.
 2. **Measured size.** The disk budget rests on an estimate built from measured per-unit costs:
    about 2.4–3.3 compressed bytes per changed unit per sample, about 10–11 bytes per unit in a
    full-precision snapshot. Its largest unknown is the fraction of units that change per sample over a real

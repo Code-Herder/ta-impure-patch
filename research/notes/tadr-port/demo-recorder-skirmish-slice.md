@@ -217,8 +217,8 @@ then eight sections, in this order: the record kinds in payload order, each iter
 **unit frame**, which makes every `RK_UNIT_DELTA` (`RCS_UNITS`); the **pool frame**, which makes
 every `RK_PROJ_HEAD`, `RK_PROJ` and `RK_PROJ_DELTA` (`RCS_PROJ`); the **cells frame**
 (`RCS_CELLS`, every `RK_CELLS`), the **orders frame** (`RCS_ORDERS`, every `RK_ORDERS`) and the
-**events frame** (`RCS_EVENTS`, `RK_EV_CREATE..RK_EV_DEATH_END`, `RK_EV_NET_CREATE`, `RK_EV_SLICE`
-and `RK_EV_QUERY`); the bodies of every other kind verbatim, each behind a varint length (`RCS_OTHER`: the block's first
+**events frame** (`RCS_EVENTS`, `RK_EV_CREATE..RK_EV_DEATH_END`, `RK_EV_NET_CREATE`, `RK_EV_SLICE`,
+`RK_EV_QUERY` and `RK_EV_YARD`); the bodies of every other kind verbatim, each behind a varint length (`RCS_OTHER`: the block's first
 tick -- iteration i's GameTime is the first's + i, and a block whose GameTimes are not consecutive
 is written as records -- the unit images and gones, the tables, the perspective kinds and the
 rest); and the **state frame**
@@ -880,11 +880,16 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
     nano spray through `0x4720D0` or `0x472200`. What a create nests is recorded before the create
     and finds no unit; the replayed create makes it again. Each event is counted as played or not,
     and the log names the classes of those not played.
-  - **A recorded YARD_OPEN** is applied after the positions, through the re-claim `0x47C790` and
-    the passability refresh `0x440A40`. A unit the first step or a seek makes gets its recorded yard
-    as soon as its create returns, before the next slot's create stamps: an open yard gives no cell
-    back to a unit that lost it to the closed structure ([engine map](../exe-reverse-engineering.md),
-    *An open yard gives nothing back*).
+  - **A recorded YARD_OPEN** (`RK_EV_YARD`, written at YARD_OPEN's write `0x47DAF1`) is applied at
+    its place in the step's events, through the re-claim `0x47C790` and the passability refresh
+    `0x440A40`: a lab's script slice can open its yard and its build handler make the nanoframe in
+    it later in the same tick, and the create finds the cells free only after the yard. A unit the
+    first step or a seek makes gets its recorded yard as soon as its create returns, before the next
+    slot's create stamps: an open yard gives no cell back to a unit that lost it to the closed
+    structure. After the positions, the image's yard goes in where the host's differs; that is
+    how a yard event refused for naming a unit its own create had not yet made reaches the host
+    ([engine map](../exe-reverse-engineering.md), *An open yard gives nothing back* and the two
+    paragraphs after it).
   - **The wind** is seeded once, from the recording's first image, so every draw after it is the
     recording's.
 - **The recording is the only writer.** On a puppet host, twelve prologue gates
