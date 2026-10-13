@@ -6499,6 +6499,123 @@ static int override_arg(int argc, char** argv, int* i, HeaderOverride* o)
     return 0;
 }
 
+/* `worst`: the decoder's time on the most unit-coder work a block written by the encoder can carry.
+   SLOTS - 1 identical units are made, then each of ITERS iterations changes every dword of every
+   unit by the same step, so that every slot is listed with every lane and each residual after the
+   first slot's comes from its cache: per slot-iteration the most decisions that cost almost no
+   input. ITERS is what RECC_PAYLOAD_MAX holds of such deltas. The block is decoded REPEAT times
+   from a copy of the state before it, and the fastest and slowest decodes are printed with their
+   cost per slot-iteration, which scales to THE UNIT CODER's BOUND: a hostile section can ask the
+   same work of every slot of RECC_TICKS_MAX iterations, whose residuals need not change a unit,
+   so that no record bounds it. */
+static int cmd_worst(unsigned slots, unsigned repeat)
+{
+    unsigned char codec[4 + 4 * REC_LANES_N], phys[12], air[8 + 24];
+    RecCodecEntries ce;
+    RecCodecParams p;
+    RecCodec *e, *d, *t;
+    RecBytes pl, c, out;
+    World w;
+    uint32_t* units;
+    uint32_t gt = 1, prev[NDW];
+    char why[256];
+    unsigned j, s, it, iters, r;
+    double fast = 1e30, slow = 0;
+    memset(&w, 0, sizeof w);
+    memset(&pl, 0, sizeof pl);
+    memset(&c, 0, sizeof c);
+    memset(&out, 0, sizeof out);
+    codec[0] = REC_LANES_N;
+    codec[1] = codec[2] = codec[3] = 0;
+    for (j = 0; j < REC_LANES_N; j++) {
+        codec[4 + 4 * j] = (unsigned char)rec_lanes[j].off;
+        codec[5 + 4 * j] = (unsigned char)(rec_lanes[j].off >> 8);
+        codec[6 + 4 * j] = rec_lanes[j].width;
+        codec[7 + 4 * j] = rec_lanes[j].role;
+    }
+    put32(phys, 8155);
+    phys[4] = 75;
+    phys[5] = 1;
+    phys[6] = phys[7] = 0;
+    put32(phys + 8, 0);
+    memset(air, 0, sizeof air);
+    memset(&ce, 0, sizeof ce);
+    ce.p[RECC_E_CODEC] = codec;
+    ce.n[RECC_E_CODEC] = sizeof codec;
+    ce.p[RECC_E_PHYSICS] = phys;
+    ce.n[RECC_E_PHYSICS] = sizeof phys;
+    ce.p[RECC_E_AIR] = air;
+    ce.n[RECC_E_AIR] = 8;
+    units = (uint32_t*)calloc(slots, IMG);
+    if (!units || !reccodec_params(&p, slots, 16, 16, 16, 64, 0, &ce, why, sizeof why) || !p.usable ||
+        !(e = reccodec_new(&p)) || !(d = reccodec_new(&p)) || !(t = reccodec_new(&p))) {
+        fprintf(stderr, "codectest: worst: no codec of %u slots\n", slots);
+        return 2;
+    }
+    world_reset(&w, slots, 16, 16, 16);
+    {
+        RecFrameWorld v = world_view(&w);
+        reccodec_restart(e, &p, w.unit, w.live, w.pool, w.pcount, w.phw, &v);
+        reccodec_restart(d, &p, w.unit, w.live, w.pool, w.pcount, w.phw, &v);
+    }
+    /* the units, made */
+    rec_put(&pl, RK_TICK, &gt, 4);
+    for (s = 1; s < slots; s++) rec_unit(&pl, s, units + (size_t)s * NDW);
+    gt++;
+    if (reccodec_encode(e, pl.p, pl.n, &c) != RECC_SECTIONS ||
+        !reccodec_decode(d, c.p, c.n, &out, why, sizeof why)) {
+        fprintf(stderr, "codectest: worst: the units' block does not code: %s\n", why);
+        return 1;
+    }
+    /* every dword of every unit changed, the same step for all */
+    iters = (unsigned)(RECC_PAYLOAD_MAX / ((size_t)(slots - 1) * (4 + REC_UNIT_DELTA_HEAD + IMG) + 8));
+    if (iters > RECC_TICKS_MAX) iters = RECC_TICKS_MAX;
+    pl.n = 0;
+    for (it = 0; it < iters; it++, gt++) {
+        rec_put(&pl, RK_TICK, &gt, 4);
+        for (s = 1; s < slots; s++) {
+            uint32_t* u = units + (size_t)s * NDW;
+            memcpy(prev, u, IMG);
+            for (j = 0; j < NDW; j++) u[j] += 0x01010101u * (it + 1) + j;
+            rec_delta(&pl, s, prev, u, -1);
+        }
+    }
+    memset(e->useen, 0, sizeof e->useen);
+    if (reccodec_encode(e, pl.p, pl.n, &c) != RECC_SECTIONS) {
+        fprintf(stderr, "codectest: worst: the changes' block does not code\n");
+        return 1;
+    }
+    for (r = 0; r < repeat; r++) {
+        clock_t t0;
+        double ms;
+        codec_copy(t, d);
+        t0 = clock();
+        if (!reccodec_decode(t, c.p, c.n, &out, why, sizeof why) || out.n != pl.n || memcmp(out.p, pl.p, pl.n)) {
+            fprintf(stderr, "codectest: worst: the changes' block does not decode back: %s\n", why);
+            return 1;
+        }
+        ms = ms_since(t0);
+        if (ms < fast) fast = ms;
+        if (ms > slow) slow = ms;
+    }
+    printf("worst: %u slots, %u iterations, %lu payload bytes, the unit frame %lu bytes; %u cache hits, "
+           "%u literals; the decode %.1f .. %.1f ms over %u, %.3f .. %.3f us a slot-iteration; at "
+           "RECC_TICKS_MAX iterations of every slot %.0f .. %.0f ms\n",
+           slots, iters, (unsigned long)pl.n, (unsigned long)get32(c.p + 8 + 4 * RCS_UNITS),
+           e->useen[UCT_HIT], e->useen[UCT_LITERAL], fast, slow, repeat,
+           1000.0 * fast / ((double)iters * (slots - 1)), 1000.0 * slow / ((double)iters * (slots - 1)),
+           fast * RECC_TICKS_MAX / iters, slow * RECC_TICKS_MAX / iters);
+    rb_free(&pl);
+    rb_free(&c);
+    rb_free(&out);
+    reccodec_free(e);
+    reccodec_free(d);
+    reccodec_free(t);
+    world_free(&w);
+    free(units);
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     static HeaderOverride ovr;
@@ -6570,12 +6687,14 @@ int main(int argc, char** argv)
         return cmd_fuzz(argv[2], strtoull(argv[3], NULL, 10), (unsigned)strtoul(argv[4], NULL, 10),
                         cases, only);
     }
+    if (argc == 4 && !strcmp(argv[1], "worst"))
+        return cmd_worst((unsigned)strtoul(argv[2], NULL, 10), (unsigned)strtoul(argv[3], NULL, 10));
     if (argc == 2 && !strcmp(argv[1], "sin")) {
         int i;
         for (i = 0; i < 512; i++) printf("%d\n", SIN[i]);
         return 0;
     }
     fprintf(stderr, "usage: codectest transcode IN OUT [--snap-every N] [--skirmish] [--types-from REC] "
-            "[--bucket-cols N] | lossy IN OUT [--exact] [--types-from REC] [--bucket-cols N] | decode IN OUT | outcomes | sprays IN | fuzz IN SEED N [CASES] [--section NAME] | sin\n");
+            "[--bucket-cols N] | lossy IN OUT [--exact] [--types-from REC] [--bucket-cols N] | decode IN OUT | outcomes | sprays IN | fuzz IN SEED N [CASES] [--section NAME] | worst SLOTS REPEAT | sin\n");
     return 2;
 }

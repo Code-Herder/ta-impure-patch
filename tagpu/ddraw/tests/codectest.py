@@ -37,9 +37,14 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
                              reading's records (exit 1 naming the block when not); with
                              --section, only section NAME's mutations (kinds, units, proj, cells,
                              orders, events, other, state, or chunk: the block's packed chunk of
-                             its run)
+                             its run). Prints the slowest case's time from its copied state
     fuzzdiff IN CASES        those cases decoded by the Python reader: the same accept or refuse
                              and the same records for every case C accepted
+    worst SLOTS REPEAT       the decoder's time on the most unit-coder work a written block can
+                             carry: SLOTS - 1 identical units, every dword of each changed by the
+                             same step every iteration, so every slot lists every lane from its
+                             cache; decoded REPEAT times, the time scaled to the unit coder's
+                             bound, RECC_TICKS_MAX iterations of every slot (codectest.c)
     sizes IN...              each recording's sectioned blocks' bytes by section: raw, each section
                              packed alone with zstd 3 and with the format-7 writer's deflate (a 2 KB
                              window), and the blocks as written
@@ -310,7 +315,7 @@ def main(argv):
         print(__doc__)
         return 2
     cmd, args = argv[0], argv[1:]
-    if cmd in ("outcomes", "transcode", "lossy", "fuzz", "decode"):
+    if cmd in ("outcomes", "transcode", "lossy", "fuzz", "decode", "worst"):
         return run(native, cmd, *args)[0]
     if cmd in ("sprays", "spraycases") and native:
         sys.exit(f"codectest: {cmd} runs the DLL's reader, which the Windows build alone links")
