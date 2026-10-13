@@ -141,6 +141,7 @@ typedef struct Writer {
     unsigned       fbracket;    /* an RK_EV_FEATURE's root + 1, until its END             */
     unsigned       ndeaths;     /* the deaths whose RK_EV_DEATH_END is still to come      */
     unsigned       death[REC_DEATHS_MAX];   /* their units' IDs, innermost last          */
+    RecYardStep    yards;       /* the step's yards by THE YARD RULE (tagpu_recfmt.h)     */
     int            evented;     /* an RCS_EVENTS record has come since the iteration's RK_TICK */
 
     unsigned char* base;        /* the grid at the end of the first iteration (a snapshot's
@@ -545,13 +546,16 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
     w->units = (unsigned char*)VirtualAlloc(NULL, (size_t)w->nslots * REC_UNIT_IMAGE,
                                             MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     w->live = (unsigned char*)calloc(w->nslots, 1);
+    w->yards.st = (unsigned char*)calloc(w->nslots, 1);
+    w->yards.touched = (unsigned*)calloc(w->nslots, sizeof *w->yards.touched);
     w->lists = (WList*)calloc((size_t)w->nslots * 2, sizeof *w->lists);
     w->vlist = (unsigned char*)malloc((size_t)REC_ORDERS_MAX * REC_ORDER_IMAGE);
     w->pool = (unsigned char*)calloc(w->npool, REC_WRECK_BYTES);
     w->proj = (unsigned char*)calloc(w->ncap, REC_PROJ_IMAGE);
     w->mbytes = REC_MAPPED_BYTES(w->gw, w->gh);
     w->mapped = (unsigned char*)malloc(w->mbytes);
-    if (!w->units || !w->live || !w->lists || !w->vlist || !w->pool || !w->proj || !w->mapped) {
+    if (!w->units || !w->live || !w->yards.st || !w->yards.touched || !w->lists || !w->vlist ||
+        !w->pool || !w->proj || !w->mapped) {
         fail(w, "no memory for the copy");
         return 1;
     }
@@ -1195,7 +1199,12 @@ static int list_record(Writer* w, unsigned kind, const unsigned char* b, unsigne
    inside no bracket; a death's, RK_EV_DEATH to its END, holds the feature calls its explosion
    made, in a multiplayer recording its corpse's (FR_CORPSE, inside a death only), and may hold
    deaths. A draw is inside one, FS_SOURCE inside the tick only, of a recording whose playing
-   keeps the engine's slots: a multiplayer one, or one that holds its cells (RECL_CELLS).
+   keeps the engine's slots: a multiplayer one, or one that holds its cells (RECL_CELLS). A script
+   slice is inside none: the unit tick that marks it runs inside no feature call and no death
+   (its only caller is the step's stub at 0x4954ED), and its ID is a slot of the level's. An
+   owner's query is inside none either: its order handlers make it only from the unit tick's order
+   runs 0x43B7C0 and 0x43BAD0, never from the destructor's event-2 call (tagpu_recorder.c, THE
+   OWNER'S QUERIES).
    INVARIANT, an ordering: the copy's grid takes exactly the cells every reader and the encoder
    take as images. Their rule (tagpu_recreader.c, apply; reccodec's events flag; codectest's
    world_apply) is that an RK_CELLS is an image when no RCS_EVENTS record came before it in its
@@ -1252,7 +1261,8 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
         w->fbracket = 0;
         break;
     case RK_EV_DEATH:
-        if (!w->ticked || w->fbracket || w->ndeaths == REC_DEATHS_MAX || !rec_event_len(kind, len))
+        if (!w->ticked || w->fbracket || w->ndeaths == REC_DEATHS_MAX || !rec_event_len(kind, len) ||
+            !rec_yard_take(&w->yards, kind, b, w->live, w->nslots, w->death, w->ndeaths))
             return 0;
         memcpy(&w->death[w->ndeaths++], b, 4);
         break;
@@ -1267,6 +1277,16 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
             (b[0] == FS_SOURCE && (w->fbracket != FR_TICK + 1 ||
                                    !(w->mp_in || (w->hold_flags & RECL_CELLS)))))
             return 0;
+        break;
+    case RK_EV_SLICE:
+        if (len != 4) return 0;
+        memcpy(&id, b, 4);
+        if (!w->ticked || open || !slot_ok(w, id - 1u)) return 0;
+        break;
+    case RK_EV_QUERY:
+        if (len != 8 || b[4] >= REC_QUERIES || b[5] || b[6] || b[7]) return 0;
+        memcpy(&id, b, 4);
+        if (!w->ticked || open || !slot_ok(w, id - 1u)) return 0;
         break;
     default:
         return 0;
@@ -1428,7 +1448,7 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     if (rec_section_of(kind) == RCS_EVENTS) w->evented = 1;
     switch (kind) {
     case RK_TICK:
-        if (len != 4 || w->fbracket || w->ndeaths) return 0;
+        if (len != 4 || w->fbracket || w->ndeaths || !rec_yard_end(&w->yards)) return 0;
         if (w->ticked) iteration_done(w);
         if (w->dead) return 1;
         w->evented = 0;
@@ -1525,7 +1545,8 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
         return 1;
     }
     case RK_END:
-        if (len != REC_END_BYTES || w->fbracket || w->ndeaths) return 0;
+        if (len != REC_END_BYTES || w->fbracket || w->ndeaths || !rec_yard_end(&w->yards))
+            return 0;
         memcpy(w->seats, b + 24, sizeof w->seats);
         memcpy(&id, b, 2);
         w->end_reason = id;
@@ -1545,6 +1566,8 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     case RK_EV_DRAW:
     case RK_EV_DEATH:
     case RK_EV_DEATH_END:
+    case RK_EV_SLICE:
+    case RK_EV_QUERY:
         return feature_record(w, kind, b, len);
     case RK_GLOBALS:
     case RK_GLOBALS_DELTA:
@@ -1556,10 +1579,22 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     case RK_MAPPED:
     case RK_MAPPED_RUNS:
         return globals_proj_record(w, kind, b, len);
+    case RK_EV_YARD: {
+        /* where THE YARD RULE lets it stand (tagpu_recfmt.h): the recorder writes nothing else */
+        unsigned uid;
+        if (!w->ticked || w->fbracket || len != 8 || b[4] > 1 || b[5] || b[6] || b[7]) return 0;
+        memcpy(&uid, b, 4);
+        if (!slot_ok(w, uid - 1u) ||
+            !rec_yard_take(&w->yards, kind, b, w->live, w->nslots, w->death, w->ndeaths))
+            return 0;
+        break;
+    }
     default:
-        /* the events: nothing of the copy; RK_CORRECT and RK_HEADER are never in the ring after
-           the first record */
-        if (!w->ticked || !rec_event_len(kind, len)) return 0;
+        /* the events: nothing of the copy but a create's place in THE YARD RULE; RK_CORRECT and
+           RK_HEADER are never in the ring after the first record */
+        if (!w->ticked || !rec_event_len(kind, len) ||
+            !rec_yard_take(&w->yards, kind, b, w->live, w->nslots, w->death, w->ndeaths))
+            return 0;
         break;
     }
     buf_rec(&w->iter, kind, b, len, NULL, 0);
@@ -1727,6 +1762,8 @@ static void finish(Writer* w)
     free(w->lists);
     free(w->vlist);
     free(w->live);
+    free(w->yards.st);
+    free(w->yards.touched);
     free(w->pool);
     free(w->proj);
     free(w->mapped);

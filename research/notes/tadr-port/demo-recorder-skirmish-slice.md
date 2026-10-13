@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 20 and its readers take format 20 alone (*The file*, below).
+The recorder writes recording format 21 and its readers take format 21 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -217,8 +217,8 @@ then eight sections, in this order: the record kinds in payload order, each iter
 **unit frame**, which makes every `RK_UNIT_DELTA` (`RCS_UNITS`); the **pool frame**, which makes
 every `RK_PROJ_HEAD`, `RK_PROJ` and `RK_PROJ_DELTA` (`RCS_PROJ`); the **cells frame**
 (`RCS_CELLS`, every `RK_CELLS`), the **orders frame** (`RCS_ORDERS`, every `RK_ORDERS`) and the
-**events frame** (`RCS_EVENTS`, `RK_EV_CREATE..RK_EV_DEATH_END` and `RK_EV_NET_CREATE`); the
-bodies of every other kind verbatim, each behind a varint length (`RCS_OTHER`: the block's first
+**events frame** (`RCS_EVENTS`, `RK_EV_CREATE..RK_EV_DEATH_END`, `RK_EV_NET_CREATE`, `RK_EV_SLICE`,
+`RK_EV_QUERY` and `RK_EV_YARD`); the bodies of every other kind verbatim, each behind a varint length (`RCS_OTHER`: the block's first
 tick -- iteration i's GameTime is the first's + i, and a block whose GameTimes are not consecutive
 is written as records -- the unit images and gones, the tables, the perspective kinds and the
 rest); and the **state frame**
@@ -902,8 +902,24 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
     nano spray through `0x4720D0` or `0x472200`. What a create nests is recorded before the create
     and finds no unit; the replayed create makes it again. Each event is counted as played or not,
     and the log names the classes of those not played.
-  - **A recorded YARD_OPEN** is applied after the positions, through the re-claim `0x47C790` and
-    the passability refresh `0x440A40`.
+  - **A recorded YARD_OPEN** (`RK_EV_YARD`, written at YARD_OPEN's write `0x47DAF1`) is applied at
+    its place in the step's events, through the re-claim `0x47C790` and the passability refresh
+    `0x440A40`: a lab's script slice can open its yard and its build handler make the nanoframe in
+    it later in the same tick, and the create finds the cells free only after the yard. A unit the
+    first step or a seek makes gets its recorded yard as soon as its create returns, before the next
+    slot's create stamps: an open yard gives no cell back to a unit that lost it to the closed
+    structure. After the positions, the image's yard goes in where the host's still differs. A
+    yard a structure's own Create opens is recorded before its create: the replayed create, with
+    the puppet gates open, makes it again before its stamp, as the engine did, and the playing
+    compares every create's yard with the recording's -- the last its Create opened, or closed
+    (`yard_check`); the harness's *the yards a create opened* fails a lane where one differs, or
+    where a create whose Create opened its yard was not made. Where a yard event may stand is THE
+    YARD RULE (`tagpu_recfmt.h`): the recorder keeps what it would refuse out of the file (*the
+    yard events THE YARD RULE kept out of the file*, which must be 0), and the writer and both
+    readers enforce it ([engine map](../exe-reverse-engineering.md), *An open yard gives nothing back* and the
+    paragraphs after it). The test groups `yard-lab` and `stock-yard-lab` open a lab's yard, make
+    a Peewee inside it and close it again in every run, in both builds (the completeness note's
+    *Open items*).
   - **The wind** is seeded once, from the recording's first image, so every draw after it is the
     recording's.
 - **The recording is the only writer.** On a puppet host, twelve prologue gates
@@ -1983,11 +1999,12 @@ FILE DUMP`. `compare-counts` refuses unequal windows (both dumps of a pair are c
 so both windows hold the steps [T1, Tlast)), compares roots per site exactly and sinks per key
 within `tagpu/ddraw/replay-absent.tsv`'s band (5 % of the larger or 2 calls) less its rows, and
 fails on any COB write in the playing's last dump; a difference reads `sink 0x4B08C0 from
-0x4B0C4D "QueryNanoPiece": live 273, puppet 0`. The file holds 32 rows, each decided by the owner
+0x4B0C4D "QueryNanoPiece": live 273, puppet 0`. The file held 32 rows when the owner decided them
 on 2026-10-01: five `same` classes (the three shot builders, the meteor stone's init, Killed),
 eight owner-only queries `absent`, the refused script index both ways, the console key's click,
 the flying pieces' explosions, smoke and fire both ways, and COB `EMIT_SFX`'s five emitters both
-ways.
+ways. Killed's `same` class and `QueryNanoPiece`'s `absent` row have gone since, each made exact
+([the script slice](#the-script-slice-format-20)).
 
 **The step's phases** (the lost impacts, A7). The playing made every recorded feature root at the
 replay step, after the host's unit tick and before its projectile tick; a tree the recording
@@ -2084,15 +2101,14 @@ ten minutes or less.
 - **S3c-3**: `SIM_FEATURE` regions and their fixtures, the coverage build, `tareplay.py landing`
   and `broad`, the `replay-roundtrip:` note, CLAUDE.md's replay gate and Step 4b. Until then nothing
   runs the harness at a landing.
-- **The COB one-tick lag (A5), open.** The live game's AutoAim starts AimPrimary inside the
-  unit's turn and that turn's script slice runs it at T; the playing applies the recorded start at
-  the replay step, after the whole unit tick, so its first slice runs at T+1, and the scripts it
-  starts (RestoreAfterDelay, walk, `EMIT_SFX`) a tick later. Its 2026-10-01 acceptance rested on
-  "counts near a window's ends move by a few", which does not hold: the level-start lag below
-  shows that a one-tick slice lag can re-phase a looping script for the rest of a unit's life, and
-  A5 is the same lag for one start [INFERRED: tenseat had no aiming]. The owner decided on
-  2026-10-12 to fix it by construction, with the in-game create lag below, in a coming landing: a
-  recorded slice marker, a format bump. Not yet landed.
+- **The COB one-tick lag (A5), fixed by the slice marker.** The live game's AutoAim starts
+  AimPrimary inside the unit's turn and that turn's script slice runs it at T; a playing applied
+  the recorded start at the replay step, after the whole unit tick, so its first slice ran at T+1,
+  and the scripts it starts (RestoreAfterDelay, walk, `EMIT_SFX`) a tick later; a one-tick slice lag
+  can re-phase a looping script for the rest of a unit's life (the level-start lag below). Since
+  format 20 the recorder writes `RK_EV_SLICE` just before the slice of any unit whose COB had an
+  engine start since the capture point, and a playing skips that unit's slice in the host's unit
+  tick and gives it at the marker, after the recorded start (*The script slice*, below).
 - **The level-start lag, fixed.** The playing made the level's own units after the host's first
   unit tick, so every COB thread of a level-start unit ran one tick behind for the whole level:
   tenseat's commanders' `MotionControl` chose walk/walklegs/stand 103/3/394 on the puppet against
@@ -2107,12 +2123,12 @@ ten minutes or less.
   then on call one of four scripts at a period both draws chose. MEASURED 2026-10-12 over
   [361, 1111): without the write, RandTick0..3 counted 133/258/163/0 live against 107/57/114/253
   on the puppet and the counts check failed; with it, every START and CALL key is exactly equal.
-- **The in-game create lag, open.** A unit created during the unit tick in a later slot of a block
-  not yet finished (a factory's product, a builder's nanoframe) gets its slice in that tick on the
-  recording machine; the playing makes it after the tick, so its COB runs one tick behind for its
-  life [INFERRED from the slot loop's per-slot re-read; tenseat builds only structures]. The owner
-  chose on 2026-10-12 to fix it by construction with A5 in a coming landing: the slice recorded in
-  order among the step's creates and starts, a format bump. Not yet landed.
+- **The in-game create lag, fixed by the slice marker.** A unit created during the unit tick in a
+  later slot of a block not yet finished (a factory's product, a builder's nanoframe) gets its
+  slice in that tick on the recording machine (the slot loop's per-slot re-read); a playing made it
+  after the tick, so its COB ran one tick behind for its life. Its create's Create start is an
+  engine start on its new COB, so its slice is marked after the create's events, and a playing
+  gives it at the marker once it has made the unit (*The script slice*, below).
 - **The walk class after an unload (A6), accepted.** The live game evaluates `0x43DA70` in a
   cargo's mover tick before its transport's later turn drops it; the playing's image-time walk
   sees the carrier already cleared and makes a StartMoving and a StopMoving the live game did not
@@ -2596,6 +2612,71 @@ and bounded naval flare-count exceptions. Exact COB execution continuity is
 outside S4. The naval COB stop and failed-worker cleanup are corrected. The
 full landing tier passes 570 checks across 20 fixtures, including 60 exact round
 trips, with all 62 changed functions reached on every required build.
+
+## The script slice (format 20)
+
+A COB thread's only clock is the unit tick's `DoScriptsNow(1)` (`0x48ADEB`, its only call), so a
+start reaches its first slice at the first slice of its unit after it. On the recording machine
+that slice comes in the unit's turn, after everything earlier turns and the unit's own AutoAim
+made; a playing's host gave every slice in its own unit tick, before the step's replayed events,
+so a start made before the slice (A5's AutoAim starts, a create's Create in a later slot) got its
+first slice a tick late, and a looping script stayed re-phased for the unit's life.
+
+- **The stub.** The unit tick's 17-byte script call `0x48ADDF..0x48ADF0` jumps to a stub that gives
+  the slice from C (`tagpu_patches.c`, THE SCRIPT SLICE; site facts in the
+  [engine map](../exe-reverse-engineering.md#the-cob-modules-entries-every-start-outside-a-slice-and-the-script-slice-disassembled-2026-10-12)),
+  in the fail-closed table of both builds, on every level. It counts each slice at the root
+  `0x48ADEB` by where it was given: aux 0 in the unit tick, 1 at a recorded marker, 2 at a
+  playing's step's end.
+- **The record.** `RK_EV_SLICE` = 57, `{u32 unit ID}`, in `RCS_EVENTS`, its ID coded in `C_ID`.
+  The recorder writes it just before the slice of a unit whose COB object was the `ecx` of a call
+  to `0x4B0B00` or `0x4B0940` since the capture point: two observers on those entries key a set by
+  the COB's address, emptied by an epoch at every capture point (`tagpu_recorder.c`, THE SLICE
+  MARKERS). Outside a slice those two are the only ways a COB object gets a thread. A set past half
+  full marks every slice for the rest of the step: a superset is exact, since moving a slice whose
+  COB had no start changes no COB state. The writer and every reader refuse a marker inside a
+  feature or death bracket or outside the slots; at most one per slot per iteration.
+- **The playing.** At the capture point the iteration's markers are planned; the host's unit tick
+  skips a planned unit's slice; the marker in the replayed events gives it, after the recorded
+  events that preceded it; a unit the step creates gets its slice at its marker once its create is
+  made. A debt its marker did not pay is given at the step's end, counted and noted; a create or a
+  death in the slot voids it (`tagpu_replay.c`, THE SCRIPT SLICES). A playing's log ends with
+  `replay: script slices: ...` (planned, deferred, given at the marker, at a create's end, at the
+  step's end, and the anomalies).
+- **The check.** The count root compares per aux exactly, and `--cob-exact`
+  ([completeness](demo-recorder-completeness.md#the-replay-test-harness)) compares the VM's START
+  and CALL children exactly on `slice-walkers`, `battle`, `tenseat` and `codec-decline`. The
+  fixture `slice-walkers` (`scenarios/replay-slice-walkers.json`: three AI seats on Core Prime
+  Industrial Area, each with a lab and two constructors beside it, and every 600 ticks a wave of
+  eight CORAK and eight ARMPW ordered at each other on seat 2's plateau,
+  `replay-slice-walkers-wave.json`) makes units in later slots during play and kbots that walk and
+  aim. MEASURED 2026-10-12: on Landing A's DLL its counts differed (RestoreAfterDelay 1077/1073,
+  walk 3271/3268, walklegs 1025/1028 live/puppet over [1141, 3481)); on this landing's, over
+  [631, 2881), its recording held 1,548 markers -- 17 after the unit's create in the same
+  iteration, 1,408 after a START or a SHOT, 103 after a named start, 20 after nothing recorded --
+  and the P lane's playing, over its whole run from GameTime 1 to its last dump at 2881, gave all
+  2,045 it planned at their markers, none at the step's end (the two windows differ: the
+  recording's markers before 631 are in the second count and not the first).
+- **A replayed death's Killed** runs as the recording machine ran it, as a query
+  ([completeness](demo-recorder-completeness.md), *COB slices a playing gives one tick late*).
+- **What it leaves**: the walk class's run-now pass, seeks and round trips (fresh COB from
+  Create), A6, mid-tick reads, a unit dying before its turn, starts made inside a slice by a
+  replayed state change, and on a multiplayer recording the ledger's starts and
+  other owners' units (the [completeness note](demo-recorder-completeness.md), *COB slices a
+  playing gives one tick late*).
+- **The owner's queries** (`RK_EV_QUERY`, kind 58). `slice-walkers` was the first fixture to reach a
+  lab's `QueryBuildInfo`, a query only the factory's order handler makes, so a puppet never did
+  (MEASURED in the landing gate, 2026-10-12: live 9, puppet 0 over [1051, 2671); 8 against 0 on
+  Landing A's DLL). `QueryNanoPiece` was the same: an order handler's, owner-only, its count
+  accepted as `absent` since 2026-10-01 (battle: live 841, puppet 0). The recording now carries
+  both where the engine makes them and the playing makes each through the same `0x4B0BC0` at its
+  place ([the engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)),
+  and the `QueryNanoPiece` row is gone. MEASURED 2026-10-12 on `battle`, `slice-walkers`,
+  `codec-decline` and `tenseat` under `--cob-exact`, every lane passing: the recordings held
+  1,675, 15,665, 140 and 3,864 queries, every playing made all it reached (none refused), and
+  both keys' counts are equal live and puppet in every window (`slice-walkers` over [1171, 3121):
+  `QueryBuildInfo` 44 against 44, `QueryNanoPiece` 8,554 against 8,554). `QueryTransport` and
+  `QueryLandingPad` are not recorded: an open gap no fixture reaches.
 
 ## S5
 

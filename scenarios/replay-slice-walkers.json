@@ -1,0 +1,158 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's `slice-walkers` fixture: three stock AIs and an idle human seat on Core Prime Industrial Area, everything in sight, each AI with 10000 metal and energy, a finished KBot lab a few hundred wu from its start position as its first group -- so the lab takes the slot after its commander and every product a later one, reached by the unit tick in the tick that creates it -- and two kbot constructors. The products are walkers whose COB loops sample their inputs every slice; the fixture's waves (replay-slice-walkers-wave.json, every 600 ticks) bring the walking and aiming the AIs alone do not (tagpu_replay.c, THE SCRIPT SLICES).",
+ "setup": {
+  "map": "Core Prime Industrial Area",
+  "res": "1024x768",
+  "clear_existing": false,
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 2,
+    "controller": "ai",
+    "side": "arm",
+    "color": 2,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 3,
+    "controller": "ai",
+    "side": "core",
+    "color": 3,
+    "metal": 10000,
+    "energy": 10000
+   }
+  ],
+  "los": "permanent"
+ },
+ "groups": [
+  {
+   "id": "lab1",
+   "owner": 1,
+   "at": [
+    2400,
+    2200
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 90
+   },
+   "composition": [
+    {
+     "type": "CORLAB",
+     "count": 1
+    }
+   ],
+   "facing": 180
+  },
+  {
+   "id": "ck1",
+   "owner": 1,
+   "at": [
+    2560,
+    2200
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 60
+   },
+   "composition": [
+    {
+     "type": "CORCK",
+     "count": 2
+    }
+   ],
+   "facing": 180
+  },
+  {
+   "id": "lab2",
+   "owner": 2,
+   "at": [
+    2750,
+    8150
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 90
+   },
+   "composition": [
+    {
+     "type": "ARMLAB",
+     "count": 1
+    }
+   ],
+   "facing": 180
+  },
+  {
+   "id": "ck2",
+   "owner": 2,
+   "at": [
+    2910,
+    8150
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 60
+   },
+   "composition": [
+    {
+     "type": "ARMCK",
+     "count": 2
+    }
+   ],
+   "facing": 180
+  },
+  {
+   "id": "lab3",
+   "owner": 3,
+   "at": [
+    7700,
+    2250
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 90
+   },
+   "composition": [
+    {
+     "type": "CORLAB",
+     "count": 1
+    }
+   ],
+   "facing": 180
+  },
+  {
+   "id": "ck3",
+   "owner": 3,
+   "at": [
+    7540,
+    2250
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 60
+   },
+   "composition": [
+    {
+     "type": "CORCK",
+     "count": 2
+    }
+   ],
+   "facing": 180
+  }
+ ]
+}

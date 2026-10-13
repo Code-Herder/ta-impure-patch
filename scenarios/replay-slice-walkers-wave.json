@@ -1,0 +1,67 @@
+{
+ "format": "ta-scenario/1",
+ "description": "A wave of the demo recorder's `slice-walkers` fixture: eight CORAK of AI seat 1 and eight ARMPW of AI seat 2, 250 wu apart on seat 2's plateau north of its lab (Core Prime's middle is at altitude 0, where kbots placed there neither moved nor fired), each ordered to attack the other's ground, so the kbots walk and aim (AutoAim's starts, before each one's script slice) at every wave the fixture applies.",
+ "setup": {
+  "clear_existing": false
+ },
+ "groups": [
+  {
+   "id": "wave1",
+   "owner": 1,
+   "at": [
+    2500,
+    7650
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 4,
+    "spacing": 40
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 8
+    }
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      2500,
+      7900
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wave2",
+   "owner": 2,
+   "at": [
+    2500,
+    7900
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 4,
+    "spacing": 40
+   },
+   "composition": [
+    {
+     "type": "ARMPW",
+     "count": 8
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      2500,
+      7650
+     ]
+    }
+   ]
+  }
+ ]
+}

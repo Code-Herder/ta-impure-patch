@@ -116,7 +116,7 @@ A separate producer/writer-thread control copies and validates 15,000 alternatin
 
 ### Contribution file container
 
-The recorder writes format 20 and the readers take format 20 alone; a multiplayer header carries
+The recorder writes format 21 and the readers take format 21 alone; a multiplayer header carries
 no `RT_HOLD`, so its stream holds nothing, and a reader refuses one that does. `RT_MULTIPLAYER` carries the copied 112-byte roster in a mode-3 header; both writer and readers refuse a network mode without that roster or a roster in another mode. `RB_CONTRIBUTIONS` carries consecutive 16-byte application metadata plus exact source packets, with no ring padding. Its block timestamps are zero: packet metadata retains application/source clocks, and these blocks are not world seek snapshots. After game hand-over, proof-tail records use phase 3, zero application ordinal and zero application tick. They enter the persisted source ledgers without entering the world copy or extending application cuts.
 
 `tagpu_recmp_file.c` owns the attached journal and a retained channel reference. It is created before channel publication/consumption and transferred into `RecRing` before writer start. The game ends that context before its final ring publication. Ending a local save detaches the journal and publishes a distinct local-stop state; the file writer cannot take the channel consumer or stop game contributions in that state. Ending the channel first permits the sole receive consumer to transfer after journal drain. Context end is the producer's final access; the writer acquires it before freeing either the journal or the retained reference. No engine allocation or interface is kept alive by this context.
@@ -1514,6 +1514,45 @@ played by `tools/replay/recmp_play_test.py`:
   each anomaly kind: three lines per call site, the rest counted. No
   native sample reads a nonzero source slot, so the branch where the
   recorder's slot differs from the host's runs only through the same stub.
+
+**The script slice (M1).** A multiplayer recording's primary stream carries the recording
+machine's slice markers (`RK_EV_SLICE`, the [skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-20)),
+one before the slice of every unit whose COB had an engine start since the capture point, the
+puppets it ran included. A playing plans only the markers in the recording machine's own blocks
+(`s_mp.own`: each `mp_seats` actor whose origin is a local actor of the recording's roster) and
+counts the rest as remote; a remote owner's unit keeps its slice in the host's unit tick, as
+before. An own unit the step creates is made at its owner's CREATE_BEGIN, after the primary
+events and so after its marker: the marker leaves it waiting and its CREATE_END gives the slice
+(`mp_created` → `slice_created`). What M1 leaves: an own unit's starts the ledger orders --
+TargetCleared and the other owner-only named starts, applied after the primary events (*THE
+CLOCK*) -- still reach their first slice a tick late, as does every start on another owner's unit. A
+replayed death in the recording machine's own blocks runs its Killed as that machine's
+`Send_UnitDeath` did, as the query; another owner's, as the peer's destructor start
+([completeness](demo-recorder-completeness.md), *COB slices a playing gives one tick late*).
+The death record does not carry the destructor's mode, so the playing takes `slice_own(slot)` --
+the unit's slot in one of the recording machine's own blocks -- as the proxy for "the recording
+machine ran `Send_UnitDeath` for it" at the recorder's death hook. The case the proxy can miss is
+the kill-all `0x486F10`, which calls `Send_UnitDeath(unit, 3)` at `0x486FB4` for every unit of a
+player row, its callers `0x4164DF`, `0x416A00`, `0x416A58` and `0x452E17` (the player removal):
+run on the recording machine for another owner's units, that is the query there and the peer's
+start on the playing. Such a death normally carries severity 0 [INFERRED], which makes no Killed
+through the start (`0x48685A`'s `jle`) where the recording machine ran the query.
+The owner's COB queries (`RK_EV_QUERY`) ride the primary stream the same way: the recording machine
+makes them only in the order handlers of its own units, and the playing makes each at its place
+among the primary events; another machine's queries are made on its own copy of the unit, which
+this recording does not hold. SelfRepair's query is on the repairing pad, which can be another
+owner's: its later slice is marked, but a playing plans only own units' markers, so such a pad's
+slice stays in the host's tick, before the query (M1). A query of an own unit the same step creates comes before that
+unit's CREATE_BEGIN there, so it finds no live unit and is counted as not made (the playing's
+log line, *the owner's queries*). No multiplayer run has measured the queries yet.
+MEASURED 2026-10-12, a two-peer recording made with `recmp_create_begin_test.py --reproduce
+--until 1400` and played from the start by `recmp_play_test.py`: the recording machine marked
+3,296 slices over its whole recording, GameTime 1 to 1474; the playing, from GameTime 1 to its
+level's end at 1233, planned 2,885, gave 2,884 at their markers and 1 at a create's end, none at
+the step's end, and left 6 remote markers in the host's tick -- so the two counts cover different
+windows and are not meant to sum; `recmp_compare.py` EQUAL at 150,
+600 and 1201. The recorder counts only skirmish levels, so a multiplayer playing's counts are not
+compared: the log line shows where the slices went, and the dumps that nothing else moved.
 
 ### The seek of a multiplayer recording
 

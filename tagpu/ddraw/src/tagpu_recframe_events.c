@@ -1,6 +1,7 @@
 /* tagpu_recframe_events.c -- the events frame (tagpu_recfmt.h, RCS_EVENTS; tagpu_recframe.h says
-   what a frame is and what it shares): every event, RK_EV_CREATE..RK_EV_DEATH_END and
-   RK_EV_NET_CREATE, of a sectioned block, each field in a column of its own and coded against
+   what a frame is and what it shares): every event, RK_EV_CREATE..RK_EV_DEATH_END,
+   RK_EV_NET_CREATE, RK_EV_SLICE, RK_EV_QUERY and RK_EV_YARD, of a sectioned block, each field in
+   a column of its own and coded against
    what the frame knows at that record: the last unit ID, the codec's unit copy, and the events
    since the reset.
 
@@ -48,6 +49,9 @@
      RK_EV_BUILT       C_ID; C_RAW the built unit's ID
      RK_EV_STATE       C_ID; C_RAW +4
      RK_EV_INTERCEPT   C_RAW +0..+0xD
+     RK_EV_SLICE       C_ID
+     RK_EV_QUERY       C_ID; C_RAW +4
+     RK_EV_YARD        C_ID; C_RAW +4
    The bytes a kind's comment in tagpu_recfmt.h names 0 are not carried: the decoder writes zero
    there. The encoder latches, and its enc_write declines the block, on an event whose pad is not
    zero or whose length fails its kind's rule, a death past REC_DEATHS_MAX open ones, and a
@@ -294,6 +298,9 @@ static int well_formed(unsigned kind, const unsigned char* b, unsigned len)
     case RK_EV_FEATURE:     return len >= 8 && rec_root_len(b[0], len) && zero(b + 2, 2);
     case RK_EV_FEATURE_END: return len == 8 && zero(b + 1, 3);
     case RK_EV_DEATH_END:   return len == 4;
+    case RK_EV_SLICE:       return len == 4;
+    case RK_EV_QUERY:       return len == 8 && zero(b + 5, 3);
+    case RK_EV_YARD:        return len == 8 && zero(b + 5, 3);
     default:                return 0;
     }
 }
@@ -492,11 +499,16 @@ static void events_enc_rec(void* f, const RecFrameAt* a, unsigned kind, const un
         rb_put(&x->col[C_RAW], b + 4, 4);
         break;
     case RK_EV_STATE:
+    case RK_EV_QUERY:
+    case RK_EV_YARD:
         put_id(x, get32(b));
         rb_u8(&x->col[C_RAW], b[4]);
         break;
     case RK_EV_INTERCEPT:
         rb_put(&x->col[C_RAW], b, 14);
+        break;
+    case RK_EV_SLICE:
+        put_id(x, get32(b));
         break;
     }
 }
@@ -761,6 +773,8 @@ static int events_dec_rec(void* f, const RecFrameAt* a, unsigned kind, unsigned 
         break;
     case RK_EV_BUILT:
     case RK_EV_STATE:
+    case RK_EV_QUERY:
+    case RK_EV_YARD:
         if (!get_id(x, &id)) CUT(C_ID);
         memset(body, 0, 8);
         put32(body, id);
@@ -771,6 +785,11 @@ static int events_dec_rec(void* f, const RecFrameAt* a, unsigned kind, unsigned 
         memset(body, 0, 16);
         if (!recf_bytes(&x->rd[C_RAW], body, 14)) CUT(C_RAW);
         blen = 16;
+        break;
+    case RK_EV_SLICE:
+        if (!get_id(x, &id)) CUT(C_ID);
+        put32(body, id);
+        blen = 4;
         break;
     default:
         RECF_REFUSE("record kind %u in the events frame", kind);

@@ -74,6 +74,12 @@ void __cdecl tagpu_replay_capture(void);
    the rest of the iteration, on the game thread. */
 void __cdecl tagpu_replay_step(void);
 
+/* The unit tick's stub (tagpu_patches.c, THE SCRIPT SLICE), on the game thread, for each unit whose
+   script call is reached: 1 when a level that plays a recording gives this unit's slice where the
+   recording places it instead (tagpu_replay.c, THE SCRIPT SLICES), and the unit tick skips it. The
+   unit is named by arithmetic against the level's unit array, never read. */
+int __cdecl tagpu_replay_slice_defer(const char* unit);
+
 /* The stubs on the step's calls of the projectile tick (0x495513) and of the explosion tick
    (0x495539), each once its call has returned, on the game thread, with REC_PHASE_PROJ and
    REC_PHASE_LATE: the feature roots the recording machine made in that phase of its step are

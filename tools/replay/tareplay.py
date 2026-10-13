@@ -53,7 +53,8 @@ and every check fails by name: the recording's end block, `tarec check` and `tar
 --exact`; P's, R's, Q's and W's capture dumps `tarec compare --puppet`, with --seek for the dumps
 a seek precedes (q, rt<T>c, w); each round trip's line has residue 0 and `tarec compare-dumps
 --seek rt<T>-a rt<T>-b` is EQUAL; W's steps each hold what they
-claim. Passing dumps are deleted unless --keep. A fixture with `"decline": true` launches every
+claim; L's counts against P's `tarec compare-counts`, with --cob-exact where fixtures.json gives
+the fixture `"cob": "exact"` (counts_options). Passing dumps are deleted unless --keep. A fixture with `"decline": true` launches every
 process with DECLINE_LEVER in its game folder, so its recording holds blocks the writer's codec
 declined on a schedule, each read back like any other, and the stream codec's check fails when it
 holds none.
@@ -2210,6 +2211,19 @@ def tarec_run(*args):
 PASS, FAIL, UNRUN = "pass", "FAIL", "could not run"
 
 
+def counts_options(fix):
+    """What the L-against-P counts comparison adds for a fixture: --cob-exact where it gives
+    `"cob": "exact"`, so the VM's START and CALL children by script name are compared exactly. No
+    other comparison takes it: R's round trips and Q's fresh seek start every COB from its Create
+    (tagpu_replay.c, THE SEEK), and are compared on their images."""
+    cob = fix.get("cob")
+    if cob is None:
+        return []
+    if cob != "exact":
+        raise CouldNotRun(f'"cob": {cob!r}: the one value is "exact"')
+    return ["--cob-exact"]
+
+
 def image_gate_options(fx):
     if fx["name"] == "stock-secondary-orders" and fx["fix"].get("dll") == "stock":
         return ["--stock-secondary-cosmetics"]
@@ -2303,7 +2317,7 @@ def checks(fx):
     r1, q1 = out / "R" / f"dump-r{Ts[0]}.bin", out / "Q" / f"dump-q{Ts[0]}.bin"
     if ran.get("P") == "ran":
         compare(f"counts, L against P over [{Ts[0]}, {Ts[-1]})", "compare-counts", rec, l1, lT,
-                p1, pT, files=[l1, lT, p1, pT])
+                p1, pT, *counts_options(fx["fix"]), files=[l1, lT, p1, pT])
     if all(ran.get(k) == "ran" for k in "PRQ"):
         views = [out / "L" / f"dump-{n}.bin" for n in null_views(fx["fix"])]
         for view in views + [n2]:
@@ -2323,6 +2337,11 @@ def checks(fx):
                     (f"{proc}: native owner-only starts on a puppet", UNRUN, f"no {d.name}"))
             continue
         res.later(puppet_counts, proc, rec, d)
+    if ran.get("L") == "ran":
+        res.later(yard_dropped_check, out / "L" / "tagpu.log")
+    for proc in ("P", "R", "Q"):
+        if ran.get(proc) == "ran":
+            res.later(yard_check, proc, out / proc / "tagpu.log")
     for proc in ("R", "Q"):
         if ran.get(proc) == "ran":
             # Q's one seek is a fresh process's: a seek asked for before a playing's first step
@@ -2431,6 +2450,56 @@ def work_check(label, log_path, rec, timeline, takeover, fresh=False):
         return [(label, UNRUN, f"no seek's work line in {log_path}")]
     return [(label, FAIL if bad else PASS,
              "; ".join(bad) or f"{len(lines)} seeks: " + "; ".join(map(work_summary, lines)))]
+
+
+YARD_COUNTS = re.compile(r"(\d+) yards checked at their create, (\d+) differed, (\d+) not checked")
+
+
+def yard_verdict(label, text):
+    """[(label, verdict, detail)]: the yards a recorded create opened, against the ones the
+    playing's creates left (tagpu_replay.c, yard_check), from every counts line of a lane's log:
+    a difference, or a yard a create that was not made left unchecked, fails; could not run when
+    the log holds no counts line."""
+    rows = [tuple(map(int, m.groups())) for m in YARD_COUNTS.finditer(text)]
+    if not rows:
+        return [(label, UNRUN, "no counts line with the yards a create opened")]
+    checked, differed, unchecked = rows[-1]
+    bad = [f"{d} differed, {u} not checked" for _, d, u in rows if d or u]
+    return [(label, FAIL if bad else PASS,
+             "; ".join(bad) if bad else f"{checked} checked at their create, all as recorded")]
+
+
+YARD_DROPPED = re.compile(r"recorder: (\d+) yard events kept out of the file by THE YARD RULE")
+
+
+def yard_dropped_verdict(label, text):
+    """[(label, verdict, detail)]: the yard events the recorder kept out of the file because THE
+    YARD RULE would refuse them (tagpu_recorder.c, ev_yard), from every recording's end line of a
+    lane's log: any fails, since the engine makes none; could not run with no such line."""
+    counts = [int(m.group(1)) for m in YARD_DROPPED.finditer(text)]
+    if not counts:
+        return [(label, UNRUN, "no recording's end line with the yard events kept out")]
+    bad = [n for n in counts if n]
+    return [(label, FAIL if bad else PASS,
+             f"{sum(bad)} yard events kept out of {len(counts)} recordings" if bad
+             else f"none kept out of {len(counts)} recordings")]
+
+
+def yard_check(proc, log_path):
+    try:
+        text = Path(log_path).read_text(errors="replace")
+    except OSError as e:
+        return [(f"{proc}: the yards a create opened", UNRUN, str(e))]
+    return yard_verdict(f"{proc}: the yards a create opened", text)
+
+
+def yard_dropped_check(log_path):
+    label = "L: the yard events THE YARD RULE kept out of the file"
+    try:
+        text = Path(log_path).read_text(errors="replace")
+    except OSError as e:
+        return [(label, UNRUN, str(e))]
+    return yard_dropped_verdict(label, text)
 
 
 def puppet_counts(proc, rec, d):
@@ -2715,6 +2784,7 @@ class Run:
         fixes = fixes or fixtures()
         for name in names:
             fix = fixes[name]
+            counts_options(fix)
             stock = fix.get("dll") == "stock"
             # a cost game measures the build a player runs, never the instrumented one
             cover = bool(getattr(args, "cover", False)) and not fix.get("cost")

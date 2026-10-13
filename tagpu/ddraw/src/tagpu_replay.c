@@ -196,12 +196,13 @@ static int        s_over;           /* the recording has nothing more to apply  
 static int        s_endlog;         /* its counts wait for the last step's phases (THE PHASES)    */
 static unsigned   s_endat;          /* ... and the GameTime it ended at                           */
 static unsigned   s_notes;          /* the level's anomalies logged                               */
-#define NOTE_SITES     48           /* above the call sites of note(), so each has its own count  */
+#define NOTE_SITES     56           /* above the call sites of note(), so each has its own count  */
 static struct { const char* fmt; unsigned n; } s_nsite[NOTE_SITES]; /* per call site, by format */
 #define EV_KINDS (RK_EV_SPRAY - RK_EV_CREATE + 1)
 static struct {
     unsigned steps, late, made, refused, missing, lingering, other, bad_ids, links, unlinked;
     unsigned obuilt, ofreed, orefused, yards, yrefused, grefused;
+    unsigned ychecked, ydiffer, yunchecked;         /* the yards a create opened (yard_check)   */
     unsigned played[EV_KINDS], skipped[EV_KINDS];   /* each event kind's, from RK_EV_CREATE    */
 } s_st;                             /* the level's counts, logged at its end                      */
 static struct {
@@ -360,6 +361,9 @@ static struct {
                                                unfinished one (THE BUILD FINISH ON A MULTIPLAYER
                                                LEVEL)                                             */
     unsigned        said, shown;   /* text entries applied, and lines given to the message log  */
+    unsigned        nown;           /* the recording machine's own blocks: the seats of every
+                                       actor whose contributions it produced (mp_begin)          */
+    struct { unsigned first, last; } own[RECMP_ACTORS];
     char            why[200];
 } s_mp;
 static int s_chat_hidden;           /* 1 = the HUD's Chat toggle is off (`chat hide`,
@@ -457,6 +461,9 @@ static void ov_clicks_take(const RecWorld* W);
 static void ov_clicks_clear(void);
 static void ov_click_put(unsigned tick, const RecClick* c);
 static void first_step(char* ta);
+static void slice_disarm(void);
+static void slice_reset(void);
+static void query_reset(void);
 
 static void replay_close(void)
 {
@@ -489,6 +496,8 @@ static void replay_close(void)
     memset(&s_seek, 0, sizeof s_seek);
     s_hold = 0;                         /* a boundary's hold ends with its playing */
     s_frame_tick = ~0u;
+    slice_reset();
+    query_reset();
 }
 
 /* ---- S-a: the request and the seat fill ----------------------------------------------------- */
@@ -1316,7 +1325,8 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    T and image T+1, as every later step does.
 
    AN IMAGE goes in in this order: the carry links (links_put), which the placement reads; each
-   unit (units_put); the recorded yard changes (yards_put); +0x110 once more for every unit
+   unit (units_put); the yards the step's events left differing from the image (yards_put);
+   +0x110 once more for every unit
    (states_put), since the placement's and the yards' claims mark the incumbents of the cells they
    contest; the players (players_put); and the order lists (orders_put).
 
@@ -1565,6 +1575,12 @@ typedef int (__thiscall* PFN_StartName0)(void* cob, const char* name, void* cb, 
 #define E_StartIdx   ((PFN_StartIdx)0x004B0B00u)
 #define E_StartName  ((PFN_StartName)0x004B0A70u)
 #define E_StartName0 ((PFN_StartName0)0x004B0940u)
+/* 0x4B0BC0(name, a0, a1, a2, a3): a query, thiscall on the COB object, `ret 0x14`; each argument
+   a pointer the query reads in (0x4B0C5C..0x4B0CCA) and writes back (0x4B0CE6..0x4B0D11), NULL
+   for none */
+typedef int (__thiscall* PFN_Query)(void* cob, const char* name, int* a0, int* a1, int* a2,
+                                    int* a3);
+#define E_Query      ((PFN_Query)0x004B0BC0u)
 /* 0x49D270(from, msg): the 0x0D receiver, stdcall, `ret 8`; it writes the message's slot byte */
 typedef void (__stdcall* PFN_Shot)(void* from, unsigned char* msg);
 #define E_Shot    ((PFN_Shot)0x0049D270u)
@@ -1593,6 +1609,7 @@ typedef struct Lv {
     char*    fdefs;         /* the feature defs, nfdefs of them                                */
     unsigned nfdefs;
 } Lv;
+static void yard_put(const Lv* L, const RecWorld* W, unsigned slot);
 
 static uint32_t s_raw1[REC_UNIT_DWORDS], s_raw2[REC_UNIT_DWORDS], s_praw[REC_PLAYER_DWORDS];
 static uint32_t s_state[REC_UNIT_DWORDS];         /* +0x110 as the last write takes it        */
@@ -2014,6 +2031,7 @@ static unsigned level_units(const Lv* L, const RecWorld* W, uint32_t books_at)
                  img[U_STATE / 4] & 3u, 1)) {
             s_made[slot] = books_at;
             made++;
+            yard_put(L, W, slot);       /* before the next create stamps (A RECORDED YARD_OPEN) */
         }
     }
     return made;
@@ -2252,61 +2270,209 @@ static void units_put(const Lv* L, const RecWorld* W)
     }
 }
 
-/* A RECORDED YARD_OPEN (demo-recorder-s2-host.md §5.2), after the placement: for each unit whose
-   recorded +0x10F bit 2 is not its own, what 0x47DAC0 does once its refusal 0x47D970 has passed --
-   the bit, +0x110 bit 27, the re-claim 0x47C790 and the passability refresh 0x440A40 -- less the
-   refusal's occupancy half, which the owner's machine passed mid-step against a grid the host does
-   not hold at the boundary. The bounds are the refusal's and what its walk reads unbounded: a
-   structure (bit 29, the yardmap path), whose definition is its type's, with a yardmap and the
-   footprint the yardmap is laid out for, and the footprint strictly inside the grid, as 0x47D970
-   tests it (0x47D991..0x47D9D8, 16-bit sums compared signed). The re-claim has no bound of its own
-   and walks those cells. The contest it runs marks this unit and the incumbents with +0x110 bits
-   26 and 27, which states_put then writes as recorded -- but on a segment that holds its cells,
-   where the marks are the footprint writers' (U_MARKS). */
-static void yards_put(const Lv* L, const RecWorld* W)
+/* A RECORDED YARD_OPEN (demo-recorder-s2-host.md §5.2): what 0x47DAC0 does once its refusal
+   0x47D970 has passed -- the bit, +0x110 bit 27, the re-claim 0x47C790 and the passability refresh
+   0x440A40 -- less the refusal's occupancy half, which the owner's machine passed against its own
+   grid. The bounds are the refusal's and what its walk reads unbounded: a structure (bit 29, the
+   yardmap path), whose definition is its type's, with a yardmap and the footprint the yardmap is
+   laid out for, and the footprint strictly inside the grid, as 0x47D970 tests it
+   (0x47D991..0x47D9D8, 16-bit sums compared signed). The re-claim has no bound of its own and
+   walks those cells. The contest it runs marks this unit and the incumbents with +0x110 bits 26
+   and 27, which states_put then writes as recorded -- but on a segment that holds its cells, where
+   the marks are the footprint writers' (U_MARKS).
+   THE ORDER, the invariant this rests on: a yard goes in where the engine changed it, before the
+   creates that came after it and after those that came before. The structure's re-claim releases
+   a yard cell under the open mask (0x47C8AE..0x47C8B7), and YARD_OPEN re-claims for the structure
+   alone (0x47DAEC..0x47DAFD; DISASSEMBLED) -- a unit that lost a yard cell to it earlier gets the
+   cell back only from a holder's clear, which re-claims over the holder's footprint
+   (0x47D2A4..0x47D2C4), and an open yard is no clear. And a lab opens its yard and makes the
+   nanoframe in it in one turn: its slice (DoScriptsNow 0x4B0D60 at 0x48ADEB) runs the script that
+   sets YARD_OPEN and then INBUILDSTANCE, and its order run (0x43B7C0 at 0x48AF98) follows in the
+   same unit tick, where BuildingBuild's state 2 waits for INBUILDSTANCE (0x438700 at 0x4027CA) and
+   its placement test 0x47DB70 (0x402899), which a layer-1 builder passes only with every footprint
+   cell's slot A empty (0x47DD00..0x47DD0A), comes before the create 0x485F50 (0x4028EA)
+   [DISASSEMBLED]. So within one step the yard can change just before a create in it, which the
+   next image's yards_put would write only after the step's events: in a step the recording
+   carries each change as an event at its place (RK_EV_YARD, ev_yard), and the image puts in only
+   what no event did -- a seek's or the first step's made units (level_units), each as soon as its
+   create returns, before the next slot's create stamps (MEASURED 2026-10-12, slice-walkers: lab
+   502 opened at GameTime 2962 and nanoframe 527 was made at 2963 on the yard's four free cells;
+   made in slot order with the yards opened after them all, 527 lost them to the closed lab and
+   kept the loser's mark).
+   A YARD ITS CREATE OPENS is a check, not a write (THE YARD RULE, tagpu_recfmt.h): Create's first
+   slice runs inside the create 0x485F50 (0x485D40 at 0x4860A6, run-now), after its init 0x485A40
+   has written the footprint (0x485AAA, 0x485BD3) and cleared the yard (0x485B3E..0x485B52), and
+   before the placement 0x48A870 (0x486109) and the stamp 0x47CC30 (0x48610F), whose yardmap mask
+   reads the yard (0x47CD88..0x47CD9A); CreateFromNetwork 0x4861D0 the same (0x4862BE, 0x486306,
+   0x48630C) [DISASSEMBLED]. So such a yard is stamped open, and writing it once the create had
+   returned would stamp under the closed mask first and then re-claim under the open one, marking
+   bits 26 and 27 where the engine marks none. The replayed create runs with the puppet gates open
+   (make), so its own Create makes the SET at the engine's place; the recording's yard is held
+   until that create returns and compared with the yard the host's create left (yard_check), and a
+   difference is named -- every create is compared, the closed yard included. A yard of a live unit,
+   Killed's among them (Send_UnitDeath runs it as a query before the destructor), is written at
+   its place.
+   A yard inside ANOTHER unit's death bracket goes in after that whole destructor: a skirmish
+   death is played by death_play, and the bracket's events that are not its explosion's roots are
+   played after it returns, in recorded order (events_put). The one engine path to such a yard is
+   the Killed query of a unit that death's explosion kills (Send_UnitDeath 0x4864B0, the query at
+   0x4865C3, before that unit's own RK_EV_DEATH); the explosion's other starts on the units it hits
+   -- HitByWeapon 0x489F43, TakeDamage 0x489F8E, RockUnit -- pass run-now 0 and run no script
+   there [DISASSEMBLED]. That unit's death is itself played after the destructor (a puppet's damage
+   is refused at 0x489CE0), so the yard keeps its place just before it; what the outer destructor
+   does after its explosion -- the corpse 0x486360 at 0x486D6F, the COB object's delete -- comes
+   before the yard here and after it on the recording machine. 1 when the yard went in. */
+static int yard_set(const Lv* L, unsigned slot, unsigned char want)
 {
     const char* defs = *(const char* const*)(L->ta + OFF_UDEFS);
     int gw = *(const int*)(L->ta + OFF_GRIDW), gh = *(const int*)(L->ta + OFF_GRIDH);
-    unsigned slot;
-    for (slot = 1; slot < L->nslots; slot++) {
-        const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
-        unsigned char want = (unsigned char)img_at(W, slot)[U_YARD] & 4u;
-        char* u = unit_at(L, slot);
-        const char* def;
-        const void* yard;
-        uint32_t st, wh, dwh;
-        int16_t x, z, fw, fh;
-        unsigned ix;
-        if (!W->live[slot] || !holds(L, slot, img) || ((unsigned char)u[U_YARD] & 4u) == want)
-            continue;
-        ix = *(const unsigned short*)(u + U_TYPEIX);
-        memcpy(&def, u + U_DEF, 4);
-        memcpy(&st, u + U_STATE, 4);
-        memcpy(&wh, u + U_FOOTWH, 4);
-        memcpy(&x, u + U_FOOTXZ, 2);
-        memcpy(&z, u + U_FOOTXZ + 2, 2);
-        memcpy(&fw, u + U_FOOTWH, 2);
-        memcpy(&fh, u + U_FOOTWH + 2, 2);
-        yard = NULL;
-        dwh = ~wh;
-        if ((st & U_NOMOVER) && defs && ix < L->ndefs && def == defs + (size_t)ix * DEF_STRIDE) {
-            memcpy(&yard, def + DEF_YARDMAP, 4);
-            memcpy(&dwh, def + DEF_FOOTWH, 4);
-        }
-        if (!yard || dwh != wh || x < 1 || z < 1 || (int16_t)(x + fw) >= gw ||
-            (int16_t)(z + fh) >= gh) {
-            s_st.yrefused++;
-            note("replay: GameTime %u: unit %u's yard cannot be %s here", L->now, slot,
-                 want ? "opened" : "closed");
-            continue;
-        }
-        u[U_YARD] = (char)(((unsigned char)u[U_YARD] & ~4u) | want);
-        st |= U_RECLAIM;
-        memcpy(u + U_STATE, &st, 4);
-        E_Reclaim(u);
-        E_Passable(*(const uint32_t*)(u + U_FOOTXZ), *(const uint32_t*)(u + U_FOOTWH));
-        s_st.yards++;
+    char* u = unit_at(L, slot);
+    const char* def;
+    const void* yard;
+    uint32_t st, wh, dwh;
+    int16_t x, z, fw, fh;
+    unsigned ix = *(const unsigned short*)(u + U_TYPEIX);
+    memcpy(&def, u + U_DEF, 4);
+    memcpy(&st, u + U_STATE, 4);
+    memcpy(&wh, u + U_FOOTWH, 4);
+    memcpy(&x, u + U_FOOTXZ, 2);
+    memcpy(&z, u + U_FOOTXZ + 2, 2);
+    memcpy(&fw, u + U_FOOTWH, 2);
+    memcpy(&fh, u + U_FOOTWH + 2, 2);
+    yard = NULL;
+    dwh = ~wh;
+    if ((st & U_NOMOVER) && defs && ix < L->ndefs && def == defs + (size_t)ix * DEF_STRIDE) {
+        memcpy(&yard, def + DEF_YARDMAP, 4);
+        memcpy(&dwh, def + DEF_FOOTWH, 4);
     }
+    if (!yard || dwh != wh || x < 1 || z < 1 || (int16_t)(x + fw) >= gw ||
+        (int16_t)(z + fh) >= gh) {
+        s_st.yrefused++;
+        note("replay: GameTime %u: unit %u's yard cannot be %s here", L->now, slot,
+             want ? "opened" : "closed");
+        return 0;
+    }
+    u[U_YARD] = (char)(((unsigned char)u[U_YARD] & ~4u) | want);
+    st |= U_RECLAIM;
+    memcpy(u + U_STATE, &st, 4);
+    E_Reclaim(u);
+    E_Passable(*(const uint32_t*)(u + U_FOOTXZ), *(const uint32_t*)(u + U_FOOTWH));
+    s_st.yards++;
+    return 1;
+}
+
+/* an image's yard, where the host's differs: a unit live in the image and its slot (holds) */
+static void yard_put(const Lv* L, const RecWorld* W, unsigned slot)
+{
+    const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
+    unsigned char want = (unsigned char)img_at(W, slot)[U_YARD] & 4u;
+    if (W->live[slot] && holds(L, slot, img) &&
+        ((unsigned char)unit_at(L, slot)[U_YARD] & 4u) != want)
+        yard_set(L, slot, want);
+}
+
+static void yards_put(const Lv* L, const RecWorld* W)
+{
+    unsigned slot;
+    for (slot = 1; slot < L->nslots; slot++) yard_put(L, W, slot);
+}
+
+/* the recording's liveness of `slot` at event `i` of the step (THE YARD RULE): the images', changed
+   by the creates and deaths before it */
+static int ev_live_at(const RecWorld* W, unsigned i, unsigned slot)
+{
+    int live = W->live[slot] != 0;
+    unsigned j;
+    uint32_t id;
+    for (j = 0; j < i; j++) {
+        unsigned k = W->ev[j].kind;
+        if (k != RK_EV_CREATE && k != RK_EV_DEATH) continue;
+        memcpy(&id, W->ev[j].b, 4);
+        if (id - 1u == slot) live = k == RK_EV_CREATE;
+    }
+    return live;
+}
+
+/* an RK_EV_YARD at event `i` that its unit's create opened: one of a unit not live there, whose
+   RK_EV_CREATE follows in the step (the readers refuse a step where it does not) */
+static int yard_in_create(const RecWorld* W, unsigned i)
+{
+    uint32_t id;
+    memcpy(&id, W->ev[i].b, 4);
+    return !ev_live_at(W, i, id - 1u);
+}
+
+/* A YARD ITS CREATE OPENS, once RK_EV_CREATE `i` has been played (`made` when the host's create
+   made the unit): the yard the recording's create left against the one the host's create left,
+   for every create. The init 0x485A40 clears +0x10F's low nibble (0x485B4A, 0x485B52) and nothing
+   from Create's slice (0x4860A6) to the exit (0x4861B3) writes bit 2 but YARD_OPEN, so the yard at
+   the exit is the last RK_EV_YARD the create opened -- naming the unit, not live there, after the
+   slot's last create, death or live yard -- or closed [DISASSEMBLED]. A create whose recorded
+   Create was refused its yard (0x47D970: another unit in the yard's cells) left it closed, and is
+   compared too. */
+static void yard_check(const Lv* L, const RecWorld* W, unsigned i, int made)
+{
+    uint32_t id, jd;
+    unsigned j, want = 0, held = 0;
+    memcpy(&id, W->ev[i].b, 4);
+    for (j = i; j-- > 0;) {
+        unsigned k = W->ev[j].kind;
+        if (k != RK_EV_CREATE && k != RK_EV_DEATH && k != RK_EV_YARD) continue;
+        memcpy(&jd, W->ev[j].b, 4);
+        if (jd != id) continue;
+        if (k == RK_EV_YARD && yard_in_create(W, j)) {
+            want = W->ev[j].b[4];
+            held = 1;
+        }
+        break;
+    }
+    if (!made) {
+        if (!held) return;
+        s_st.yunchecked++;
+        note("replay: GameTime %u: the yard unit %u's create opened is not checked: the create "
+             "was not made here", L->now, (unsigned)id - 1u);
+        return;
+    }
+    if (((unsigned char)unit_at(L, id - 1u)[U_YARD] >> 2 & 1u) != want) {
+        s_st.ydiffer++;
+        note("replay: GameTime %u: unit %u's create left its yard %s here, %s in the recording",
+             L->now, (unsigned)id - 1u, want ? "closed" : "open", want ? "open" : "closed");
+        return;
+    }
+    s_st.ychecked++;
+}
+
+/* the recording's type of the unit in `slot` at event `i`: its create's in the step, or the
+   images' */
+static unsigned ev_type_at(const RecWorld* W, unsigned i, unsigned slot)
+{
+    unsigned j;
+    uint32_t id;
+    for (j = i; j-- > 0;) {
+        if (W->ev[j].kind != RK_EV_CREATE) continue;
+        memcpy(&id, W->ev[j].b, 4);
+        if (id - 1u == slot) return *(const unsigned short*)(W->ev[j].b + 4);
+    }
+    return img_type(W->unit + (size_t)slot * REC_UNIT_DWORDS);
+}
+
+/* RK_EV_YARD `i` of a unit live at its place: the yard there (A RECORDED YARD_OPEN), the body run
+   whether or not the bit changes, as YARD_OPEN's re-claim runs either way, on a unit live in its
+   slot and of the recording's type, as yard_put asks of an image's. 1 played. */
+static int ev_yard(const Lv* L, const RecWorld* W, unsigned i)
+{
+    uint32_t id;
+    unsigned slot;
+    memcpy(&id, W->ev[i].b, 4);
+    slot = id - 1u;
+    if (slot < 1 || slot >= L->nslots || !host_live(L, slot) ||
+        *(const unsigned short*)(unit_at(L, slot) + U_TYPEIX) != ev_type_at(W, i, slot)) {
+        s_st.yrefused++;
+        note("replay: GameTime %u: a yard of unit ID %u, not live here or of another type",
+             L->now, (unsigned)id);
+        return 0;
+    }
+    return yard_set(L, slot, (unsigned char)(W->ev[i].b[4] ? 4u : 0u));
 }
 
 /* +0x110 as recorded, less the bits the engine functions own, for every unit once the placement
@@ -2743,6 +2909,10 @@ static void orders_put(const Lv* L, const RecWorld* W)
    (0x43DB84..0x43DBC7). It is written whole, as 0x43DB50 reads and stores it, before the unit's
    first E_Water at the next images, so that call starts setSFXoccupy exactly where the recording
    machine's 0x43DB50 did. */
+static void slice_created(const Lv* L, unsigned slot);
+static void slice_died(unsigned slot);
+static int slice_own(unsigned slot);
+
 static int ev_create(const Lv* L, const unsigned char* b, unsigned len)
 {
     uint32_t id, finished, water;
@@ -2762,13 +2932,15 @@ static int ev_create(const Lv* L, const unsigned char* b, unsigned len)
         note("replay: GameTime %u: unit %u's create carries water state %u, past the 0..4 "
              "0x43DB50 stores: the host's stays", L->now, id - 1, water);
     }
+    slice_created(L, id - 1);
     return 1;
 }
 
 /* RK_EV_DEATH: the victim's fields as the destructor found them (s2-events §1.9), then the
    destructor through C4's wrap, as a remote's death is applied: mode 0, the killer's player by
    the host's netid for it (every seat's is its index, 0x464290), and C4's carried decision armed
-   from the recording. `corpse` 0 clears the record's corpse level, +0xA's low nibble: the
+   from the recording; its Killed as the recording machine ran it (tagpu_patches.c, THE KILLED
+   SCRIPT OF A REPLAYED DEATH). `corpse` 0 clears the record's corpse level, +0xA's low nibble: the
    destructor reads it only at 0x486D55..0x486D69, to call the corpse helper 0x486360 at 0x486D6F
    (its only caller); its other reads of +0xA take the high nibble (0x4867DA, 0x486880, 0x486CA2,
    0x486D42), and the record reaches no callee (DISASSEMBLED 0x4866D0..0x486E60). So 0 removes
@@ -2803,7 +2975,12 @@ static int ev_death(const Lv* L, const unsigned char* b, unsigned len, int corps
     rec[8] = (unsigned char)(ks >> 8);
     rec[9] = b[9];
     rec[10] = corpse ? b[10] : (unsigned char)(b[10] & 0xF0);
-    if (tagpu_tx_replay_death(rec, b[11])) return 1;
+    /* every death of a skirmish recording, and of its own blocks on a multiplayer one, was the
+       recording machine's own (THE KILLED SCRIPT OF A REPLAYED DEATH) */
+    if (tagpu_tx_replay_death(rec, b[11], slice_own(slot))) {
+        slice_died(slot);
+        return 1;
+    }
     s_st.refused++;
     return 0;
 }
@@ -2868,6 +3045,322 @@ static void* cob_of(const char* u)
     void* cob;
     memcpy(&cob, u + U_COB, 4);
     return cob;
+}
+
+/* THE SCRIPT SLICES. The unit tick gives each unit it reaches one slice, DoScriptsNow 0x4B0D60 with
+   dt 1 (tagpu_patches.c, THE SCRIPT SLICE), and a COB clock is the number of slices it has had. The
+   recording machine's slice of a unit came after every event its unit tick made before that unit's
+   turn: AutoAim's TargetCleared, AimPrimary broadcast, FirePrimary and RockUnit (0x48A1E0,
+   0x49E31C, 0x49E3A6, 0x49CB94, 0x49CBEB, in the unit's own turn, before its script call), and the
+   create of a unit an earlier turn made in a later slot, which the loop reaches in the same tick
+   (it re-reads +0xA6 at each slot, 0x48ADB0). A host that gives every slice in its own unit tick
+   gives those starts' first slice a tick late, and a unit its step creates none in that step. So
+   the recording names the slices that follow such a start (RK_EV_SLICE: the unit's COB had an
+   engine start since the capture point; tagpu_recorder.c, THE SLICE MARKERS), and a playing gives
+   each of them at its marker instead:
+   - THE PLAN, at the capture point of the iteration the host's step is (slice_plan): each slot a
+     marker names is planned, SL_SKIP for a unit the iteration's images hold, SL_AFTER_CREATE for one
+     its events create before the marker. A late iteration plans nothing, and every host slice
+     stays in the host's tick.
+   - THE GATE, in the host's unit tick (tagpu_replay_slice_defer): an SL_SKIP unit's slice is
+     skipped and owed (SL_OWED).
+   - THE PAYMENT, at the marker in the replayed events (ev_slice), through the same function the
+     unit tick's stub calls (tagpu_slice_give): an owed slice, or a created unit's once its create
+     has been made (SL_MADE). On a multiplayer segment an own unit the step creates is made at its
+     owner's CREATE_BEGIN, after the primary events, so its marker waits (SL_WAITING) and its
+     CREATE_END pays it (slice_created).
+   - THE SETTLE, after the step's events (slice_settle): an owed slice its marker did not pay is
+     given there, counted and noted; and the step's end disarms the plan (slice_finish).
+   THE INVARIANT, an ordering: the plan is armed and spent inside one call of B2's stub at 0x4954ED
+   -- the capture point, the unit tick, the replay step -- where no frame visit, and so no seek,
+   falls. The gate turns only SL_SKIP into SL_OWED, and every SL_OWED is paid exactly once, at its
+   marker or at the settle, or voided by a create or a death in its slot (slice_created,
+   slice_died), so every unit the host's unit tick reaches gets exactly one DoScriptsNow(1) in the
+   step -- in the tick, at its recorded place, or at the step's end -- and a unit the step creates
+   gets one only when the recording says it had one. A voided debt is counted and never given to
+   another unit: the recording never orders a create or a death into a slot between its turn and
+   its marker, since B4 never puts two units in one slot in one tick (0x486036).
+   THE BOUND: the gate names a unit only by arithmetic against the level's array and its count, as
+   model_root does, and never reads it; every index below is a slot below nslots, at most 0xFFFF,
+   which the writer bounds (tagpu_recwriter.c) and the reader takes from the header.
+   THE LIFETIME: a COB object lives from its unit's setup (0x485D9F stores +0x9A) to its destructor
+   (0x486D8A deletes it, 0x486D8D nulls +0x9A), both on the game thread. A payment runs on that
+   thread, on the +0x9A of a unit live in its slot, whose incarnation is the one the host skipped
+   because a create or a death in the slot voids the debt.
+   The puppet gates stay shut around a payment, as around the host's own slices: COB SET, ATTACH
+   and DROP are inert, and the recorder stays the only writer of what the recording carries.
+   MULTIPLAYER: the primary stream carries every marker; only the recording machine's own blocks
+   are planned (s_mp.own), and a remote owner's unit keeps its slice in the host's tick. An own
+   unit's ledger-borne starts -- TargetCleared and the other owner-only named starts, applied after
+   the primary events (THE CLOCK) -- keep their one-tick lag. */
+enum { SL_SKIP = 1, SL_OWED, SL_CREATED, SL_AFTER_CREATE, SL_MADE, SL_WAITING, SL_PAID, SL_LOST };
+static struct {
+    int armed;                      /* between this step's capture point and its end            */
+    uint32_t stamp;                 /* this plan's: never 0, never reused (wraps by clearing at) */
+    char* begin;                    /* the level's unit array and its count, as level_of found  */
+    unsigned nslots;                /* them                                                     */
+    uint32_t at[0x10000];           /* a slot's entry belongs to the plan of this stamp         */
+    unsigned char st[0x10000];
+    uint16_t list[0x10000];         /* the slots the plan's markers name, each once             */
+    unsigned n;
+    struct { unsigned planned, aftercreate, deferred, given, atcreate, settled, notgiven, unreached,
+                      unmade, twice, lost, late, remote; } c;
+} s_sl;
+
+static void slice_disarm(void)
+{
+    s_sl.armed = 0;
+}
+
+/* the next playing's: disarmed, its counts zero */
+static void slice_reset(void)
+{
+    slice_disarm();
+    memset(&s_sl.c, 0, sizeof s_sl.c);
+}
+
+/* a slot of the recording machine's own blocks; every slot outside a multiplayer segment */
+static int slice_own(unsigned slot)
+{
+    unsigned i;
+    if (!s_mp.on) return 1;
+    for (i = 0; i < s_mp.nown; i++)
+        if (slot >= s_mp.own[i].first && slot <= s_mp.own[i].last) return 1;
+    return 0;
+}
+
+/* the unit live in a planned slot, by the plan's array, or NULL */
+static char* slice_unit(unsigned slot)
+{
+    char* u;
+    if (slot < 1 || slot >= s_sl.nslots) return NULL;
+    u = s_sl.begin + (size_t)slot * REC_UNIT_BYTES;
+    return (*(const uint32_t*)(u + U_STATE) & U_ALIVE) ? u : NULL;
+}
+
+/* THE PLAN of the iteration W, which is the host's step L->now: at its capture point */
+static void slice_plan(const Lv* L, const RecWorld* W)
+{
+    unsigned i;
+    slice_disarm();
+    if (++s_sl.stamp == 0) {
+        memset(s_sl.at, 0, sizeof s_sl.at);
+        s_sl.stamp = 1;
+    }
+    s_sl.n = 0;
+    s_sl.begin = L->begin;
+    s_sl.nslots = L->nslots;
+    for (i = 0; i < W->nev; i++) {
+        uint32_t id, slot;
+        unsigned k = W->ev[i].kind;
+        if ((k != RK_EV_CREATE && k != RK_EV_SLICE) || W->ev[i].len < 4) continue;
+        memcpy(&id, W->ev[i].b, 4);
+        slot = id - 1;
+        if (slot < 1 || slot >= s_sl.nslots) continue;
+        if (k == RK_EV_CREATE) {
+            if (s_sl.at[slot] != s_sl.stamp) {
+                s_sl.at[slot] = s_sl.stamp;
+                s_sl.st[slot] = SL_CREATED;
+            }
+            continue;
+        }
+        if (!slice_own(slot)) {
+            s_sl.c.remote++;
+            continue;
+        }
+        if (s_sl.at[slot] == s_sl.stamp) {
+            if (s_sl.st[slot] == SL_CREATED) {
+                s_sl.st[slot] = SL_AFTER_CREATE;
+                s_sl.list[s_sl.n++] = (uint16_t)slot;
+                s_sl.c.aftercreate++;
+            } else {
+                s_sl.c.twice++;
+            }
+            continue;
+        }
+        s_sl.at[slot] = s_sl.stamp;
+        s_sl.st[slot] = SL_SKIP;
+        s_sl.list[s_sl.n++] = (uint16_t)slot;
+    }
+    s_sl.c.planned += s_sl.n;
+    s_sl.armed = 1;
+}
+
+/* THE GATE, in the host's unit tick: the unit pointer is the engine's loop variable, an index
+   only by arithmetic against the plan's array and count, never dereferenced here */
+int __cdecl tagpu_replay_slice_defer(const char* unit)
+{
+    size_t off;
+    unsigned slot;
+    if (!s_sl.armed || unit < s_sl.begin) return 0;
+    off = (size_t)(unit - s_sl.begin);
+    if (off % REC_UNIT_BYTES || (slot = (unsigned)(off / REC_UNIT_BYTES)) >= s_sl.nslots)
+        return 0;
+    if (s_sl.at[slot] != s_sl.stamp || s_sl.st[slot] != SL_SKIP) return 0;
+    s_sl.st[slot] = SL_OWED;
+    s_sl.c.deferred++;
+    return 1;
+}
+
+/* a create in the step made its unit in `slot` (ev_create, mp_created) */
+static void slice_created(const Lv* L, unsigned slot)
+{
+    char* u;
+    void* cob;
+    (void)L;
+    if (!s_sl.armed || slot >= s_sl.nslots || s_sl.at[slot] != s_sl.stamp) return;
+    switch (s_sl.st[slot]) {
+    case SL_AFTER_CREATE:
+        s_sl.st[slot] = SL_MADE;
+        break;
+    case SL_WAITING:                    /* a multiplayer create: its marker has passed */
+        if ((u = slice_unit(slot)) && (cob = cob_of(u))) {
+            tagpu_slice_give(cob, 1);
+            s_sl.st[slot] = SL_PAID;
+            s_sl.c.atcreate++;
+        } else {
+            s_sl.st[slot] = SL_LOST;
+            s_sl.c.lost++;
+        }
+        break;
+    case SL_OWED:                       /* another incarnation: the debt is void */
+        s_sl.st[slot] = SL_LOST;
+        s_sl.c.lost++;
+        break;
+    }
+}
+
+/* a death in the step ended the unit in `slot` (ev_death) */
+static void slice_died(unsigned slot)
+{
+    if (!s_sl.armed || slot >= s_sl.nslots || s_sl.at[slot] != s_sl.stamp) return;
+    if (s_sl.st[slot] == SL_OWED) {
+        s_sl.st[slot] = SL_LOST;
+        s_sl.c.lost++;
+    }
+}
+
+/* THE PAYMENT, at an RK_EV_SLICE of the step's events */
+static void ev_slice(const Lv* L, const unsigned char* b, unsigned len)
+{
+    uint32_t id, slot;
+    char* u;
+    void* cob;
+    (void)L;
+    if (len != 4) return;
+    memcpy(&id, b, 4);
+    slot = id - 1;
+    if (!s_sl.armed || slot < 1 || slot >= s_sl.nslots || s_sl.at[slot] != s_sl.stamp ||
+        !slice_own(slot)) {
+        s_sl.c.notgiven++;              /* a late iteration's, or a remote unit's */
+        return;
+    }
+    switch (s_sl.st[slot]) {
+    case SL_OWED:
+    case SL_MADE:
+        if ((u = slice_unit(slot)) && (cob = cob_of(u))) {
+            tagpu_slice_give(cob, 1);
+            s_sl.st[slot] = SL_PAID;
+            s_sl.c.given++;
+        } else {
+            s_sl.st[slot] = SL_LOST;
+            s_sl.c.lost++;
+        }
+        return;
+    case SL_AFTER_CREATE:               /* its create is not made yet */
+        if (s_mp.on) {
+            s_sl.st[slot] = SL_WAITING; /* paid at its CREATE_END */
+            return;
+        }
+        s_sl.st[slot] = SL_LOST;        /* the create was refused */
+        s_sl.c.unmade++;
+        return;
+    case SL_SKIP:                       /* the host's tick never reached that unit */
+        s_sl.c.unreached++;
+        return;
+    default:
+        s_sl.c.twice++;
+        return;
+    }
+}
+
+/* THE OWNER'S QUERIES. The recording machine's order handlers made two COB queries a playing's
+   puppets never make, since a puppet runs no order handler: QueryBuildInfo and QueryNanoPiece
+   (tagpu_recorder.c, THE OWNER'S QUERIES). A query runs one thread of the unit's COB to its end at
+   once and can change its statics and pieces, so the recording carries each at its place in the
+   step (RK_EV_QUERY) and the playing makes it there, through the same 0x4B0BC0 with the
+   arguments the engine's call passes: the first a pointer to the value BuildingBuild (-1,
+   0x4027F3) or 0x43E400 (0, 0x43E41F) puts there first, the others NULL. 0x43E400's own work after
+   its query -- the piece's point, through 0x43DEF0 -- is not made: it writes only the caller's
+   buffer, and the spray that takes the point is recorded (RK_EV_SPRAY). The puppet gates are as
+   around the host's own slices: COB SET, ATTACH and DROP are inert.
+   THE BOUND and THE LIFETIME are the slices': the unit is named by ID, a slot below the level's
+   count holding a live unit (live_unit), and its +0x9A COB object, which only that unit's
+   destructor frees (0x486D8A), is used on the game thread inside the step. A unit with no COB
+   object (0x485DFF) made no query, since 0x4B0BC0 reads its object at once (0x4B0BC1); such an
+   event is not made, and counted. */
+static struct { unsigned made, unmade; } s_q;
+
+static void query_reset(void)
+{
+    memset(&s_q, 0, sizeof s_q);
+}
+
+static void ev_query(const Lv* L, const unsigned char* b, unsigned len)
+{
+    static const char* const NAME[REC_QUERIES] = { "QueryBuildInfo", "QueryNanoPiece" };
+    static const int FIRST[REC_QUERIES] = { -1, 0 };
+    uint32_t id;
+    char* u;
+    void* cob;
+    int a0;
+    if (len != 8 || b[4] >= REC_QUERIES) return;
+    memcpy(&id, b, 4);
+    if (!(u = live_unit(L, id)) || !(cob = cob_of(u))) {
+        s_q.unmade++;
+        return;
+    }
+    a0 = FIRST[b[4]];
+    E_Query(cob, NAME[b[4]], &a0, NULL, NULL, NULL);
+    s_q.made++;
+}
+
+/* THE SETTLE, after the step's events and before image T+1: a debt its marker did not pay */
+static void slice_settle(unsigned now)
+{
+    unsigned i;
+    for (i = 0; i < s_sl.n; i++) {
+        unsigned slot = s_sl.list[i];
+        char* u;
+        void* cob;
+        switch (s_sl.st[slot]) {
+        case SL_OWED:
+        case SL_MADE:
+            if ((u = slice_unit(slot)) && (cob = cob_of(u))) {
+                tagpu_slice_give(cob, 2);
+                s_sl.c.settled++;
+                note("replay: GameTime %u: unit %u's script slice given at the step's end: its "
+                     "marker did not give it", now, slot);
+                s_sl.st[slot] = SL_PAID;
+            } else {
+                s_sl.st[slot] = SL_LOST;
+                s_sl.c.lost++;
+            }
+            break;
+        case SL_WAITING:
+        case SL_AFTER_CREATE:           /* the unit was never made */
+            s_sl.st[slot] = SL_LOST;
+            s_sl.c.unmade++;
+            break;
+        }
+    }
+}
+
+/* the step's end, on every path out of tagpu_replay_step */
+static void slice_finish(unsigned now)
+{
+    if (s_sl.armed) slice_settle(now);
+    slice_disarm();
 }
 
 /* RK_EV_START: the 0x10 case's call (0x455528..0x455551), made here rather than through the case,
@@ -3653,12 +4146,22 @@ static struct {
 } s_pend;
 static RecWorld s_pendW;            /* only ev and nev: what root_play reads of a world           */
 
-/* one event that is neither a root nor a death's, as the step plays it */
-static void ev_play(const Lv* L, const RecEvent* e)
+/* one event that is neither a root nor a death's, as the step plays it; 1 when a counted kind
+   was played (RK_EV_CREATE..RK_EV_SPRAY's). A yard is events_put's (ev_yard, yard_check): the
+   readers keep it out of every feature call, so the store holds none. */
+static int ev_play(const Lv* L, const RecEvent* e)
 {
     const unsigned char* b = e->b;
     unsigned n = e->len, k = e->kind;
     int done;
+    if (k == RK_EV_SLICE) {             /* s_st's counts are RK_EV_CREATE..RK_EV_SPRAY's */
+        ev_slice(L, b, n);
+        return 0;
+    }
+    if (k == RK_EV_QUERY) {
+        ev_query(L, b, n);
+        return 0;
+    }
     switch (k) {
     case RK_EV_CREATE:      done = ev_create(L, b, n); break;
     case RK_EV_SHOT:        done = ev_shot(L, b, n); break;
@@ -3669,10 +4172,11 @@ static void ev_play(const Lv* L, const RecEvent* e)
     case RK_EV_STATE:       done = ev_state(L, b, n); break;
     case RK_EV_REPLY:       done = ev_reply(L, b, n); break;
     case RK_EV_SPRAY:       done = ev_spray(L, b, n); break;
-    default:                return;     /* a bracket's draws, the tick's cells, a root's end */
+    default:                return 0;   /* a bracket's draws, the tick's cells, a root's end */
     }
     if (done) s_st.played[k - RK_EV_CREATE]++;
     else s_st.skipped[k - RK_EV_CREATE]++;
+    return done;
 }
 
 /* the bracket opening at `i` into the store; its RK_EV_FEATURE_END's index, 0 when it does not
@@ -3904,6 +4408,19 @@ static int mp_begin(const Lv* L, const RecWorld* W)
         unsigned seat = recr_header(s_rd)->mp_seats.actor[i].seat;
         if (seat < REC_PLAYERS) s_mp.actor[seat] = 1;
     }
+    /* the recording machine's own blocks: the seats of the actors whose contributions it
+       produced, the `local` the recorder copies into the header (tagpu_recmp_record.c), which
+       THE SCRIPT SLICES plans alone */
+    for (i = 0; i < h->mp_seats.count && i < RECMP_ACTORS; i++) {
+        unsigned j;
+        for (j = 0; j < h->mp.count && j < RECMP_ACTORS; j++)
+            if (h->mp.actor[j].origin == h->mp_seats.actor[i].origin && h->mp.actor[j].local) {
+                s_mp.own[s_mp.nown].first = h->mp_seats.actor[i].first;
+                s_mp.own[s_mp.nown].last = h->mp_seats.actor[i].last;
+                s_mp.nown++;
+                break;
+            }
+    }
     for (i = 0; i < W->slots * 2; i++)
         if (!mp_list_put(&s_mp.list[i], W->list[i].img, W->list[i].n) ||
             !mp_list_put(&s_mp.s_list[i], W->list[i].img, W->list[i].n)) {
@@ -3971,6 +4488,7 @@ static int mp_created(const Lv* L, const RecMpLifeAction* a)
     memcpy(unit_at(L, a->slot) + U_WATER, &water, 4);
     s_mp.create[(size_t)a->slot * MP_CREATE + 24] = (unsigned char)water;
     s_mp.create[(size_t)a->slot * MP_CREATE + 28] = 1;
+    slice_created(L, a->slot);
     return 1;
 }
 
@@ -4567,7 +5085,7 @@ static int mp_owned_event(unsigned kind)
 static void events_put(const Lv* L, const RecWorld* W, int defer)
 {
     unsigned i, end, deaths = 0, mdeaths = 0;
-    int inroot = 0;
+    int inroot = 0, done;
     if (defer) s_pend.L = *L;
     for (i = 0; i < W->nev; i++) {
         unsigned k = W->ev[i].kind;
@@ -4610,7 +5128,12 @@ static void events_put(const Lv* L, const RecWorld* W, int defer)
                 if (k == RK_EV_DRAW) s_fst.left++;  /* a draw no recorded call made */
                 break;
             }
-            ev_play(L, &W->ev[i]);
+            if (k == RK_EV_YARD) {
+                if (!yard_in_create(W, i)) ev_yard(L, W, i);        /* else yard_check's */
+                break;
+            }
+            done = ev_play(L, &W->ev[i]);
+            if (k == RK_EV_CREATE) yard_check(L, W, i, done);
             break;
         }
     }
@@ -5299,11 +5822,13 @@ static void capture_put(const Lv* L)
     const RecWorld* W = recr_world(s_rd);
     if (W->tick != L->now) {
         s_gst.late++;
+        s_sl.c.late++;                  /* no plan: every slice stays in the host's tick */
         note("replay: the capture point of GameTime %u holds iteration %u: its globals and "
              "projectiles not written", L->now, W->tick);
         return;
     }
     recorded_put(L, W);
+    slice_plan(L, W);                   /* THE SCRIPT SLICES: this step's markers */
 }
 
 void __cdecl tagpu_replay_capture(void)
@@ -5731,7 +6256,7 @@ static void sk_kills(const Lv* L)
             rec[1] = (unsigned char)slot;
             rec[2] = (unsigned char)(slot >> 8);
             memset(rec + 3, 0xFF, 4);
-            if (tagpu_tx_replay_death(rec, 0)) s_sk.killed++;
+            if (tagpu_tx_replay_death(rec, 0, 0)) s_sk.killed++;      /* +9 0: no Killed */
         }
     for (slot = 1; slot < L->nslots; slot++)
         if (host_live(L, slot)) s_sk.left++;
@@ -7166,6 +7691,7 @@ static int seek_run(char* ta)
     /* first, before pend_finish plays a held step's creates and deaths: a refused seek re-culls
        too, which the cull's idempotence makes harmless (THE DRAW'S UNIT LIST) */
     s_cull_inputs++;
+    slice_disarm();                         /* THE SCRIPT SLICES: a plan is a step's alone */
     s_seek.pending = 0;
     s_seek.mode = SK_SEEK;                  /* consumed: rt_due's seek_run is a SEEK */
     s_seek.boundary = 0;
@@ -8366,10 +8892,12 @@ static void counts_log(const char* when, unsigned now)
     tagpu_logf("replay: %s at %s, GameTime %u: %u iterations applied (%u late); units made %u at "
                "the start; %u refused, %u missing here, %u here only, %u of another type; %u IDs "
                "past their array; %u carry links made, %u refused; order nodes %u built, %u torn "
-               "down, %u refused; %u yards changed, %u refused; %u control groups not set", s_name,
+               "down, %u refused; %u YARD_OPEN passes made, %u refused; %u yards checked at their create, "
+               "%u differed, %u not checked; %u control groups not set", s_name,
                when, now, s_st.steps, s_st.late, s_st.made, s_st.refused, s_st.missing,
                s_st.lingering, s_st.other, s_st.bad_ids, s_st.links, s_st.unlinked, s_st.obuilt,
-               s_st.ofreed, s_st.orefused, s_st.yards, s_st.yrefused, s_st.grefused);
+               s_st.ofreed, s_st.orefused, s_st.yards, s_st.yrefused, s_st.ychecked,
+               s_st.ydiffer, s_st.yunchecked, s_st.grefused);
     tagpu_logf("replay: %s: events played/not played: %s", s_name, ev);
     tagpu_logf("replay: %s: features: %u calls made, %u out of bounds, %u returned otherwise; "
                "%u deaths, %u whose explosion's calls were not made; %u draws not taken as "
@@ -8395,6 +8923,16 @@ static void counts_log(const char* when, unsigned now)
                s_gst.books.refused, s_gst.bmade, s_gst.bother, s_gst.tab.changed,
                s_gst.tab.names[0] ? s_gst.tab.names : "none", s_gst.tab.kept, s_gst.tab.skipped,
                s_gst.tab.repaired);
+    tagpu_logf("replay: %s: script slices: %u planned (%u for units the step creates), %u "
+               "deferred by the unit tick, %u given at their marker, %u at a create's end, %u at "
+               "the step's end, %u not given (%u not reached, %u not made, %u voided, %u twice), "
+               "%u late iterations, %u remote markers left in the unit tick", s_name,
+               s_sl.c.planned, s_sl.c.aftercreate, s_sl.c.deferred, s_sl.c.given, s_sl.c.atcreate,
+               s_sl.c.settled, s_sl.c.notgiven + s_sl.c.unreached + s_sl.c.unmade + s_sl.c.lost +
+               s_sl.c.twice, s_sl.c.unreached, s_sl.c.unmade, s_sl.c.lost, s_sl.c.twice,
+               s_sl.c.late, s_sl.c.remote);
+    tagpu_logf("replay: %s: the owner's queries: %u made, %u not made (no live unit or no script)",
+               s_name, s_q.made, s_q.unmade);
     tagpu_puppet_refusals(gates, sizeof gates);
     tagpu_logf("replay: %s: refused on puppets: %s", s_name, gates);
     tagpu_puppet_footprints(gates, sizeof gates);
@@ -8504,6 +9042,7 @@ static void play(const Lv* L)
         events_put(L, W, now);
         ov_clicks_take(W);
         mp_step_events(L, W->tick);
+        if (now && s_sl.armed) slice_settle(L->now);   /* before image T+1 */
         s_st.steps++;
         if (s_over || !iteration_read(L)) break;
         mp_step_image(L, W->tick - 1);
@@ -8575,7 +9114,7 @@ static void first_step(char* ta)
     if (!s_over) capture_put(&L);
 }
 
-void __cdecl tagpu_replay_step(void)
+static void replay_step(void)
 {
     char* ta;
     Lv L;
@@ -8594,12 +9133,21 @@ void __cdecl tagpu_replay_step(void)
     pace(ta, *(const unsigned*)(ta + OFF_GAMETIME));
 }
 
+/* the step, then the end of THE SCRIPT SLICES' plan on every path out of it */
+void __cdecl tagpu_replay_step(void)
+{
+    char* ta = ta_main();
+    replay_step();
+    slice_finish(ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0);
+}
+
 /* ---- S-e: the teardown ---------------------------------------------------------------------- */
 
 void tagpu_replay_level_end(void)
 {
     char* ta = ta_main();
     int stale = s_opt.stale;
+    slice_disarm();
     pace_level_end();
     rw_dispose();
     if (options_restore(ta) && stale) E_SaveSettings();     /* THE PLAYER'S SETTINGS */

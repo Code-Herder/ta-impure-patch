@@ -318,6 +318,9 @@ static int level_read(char* ta, Level* L)
 
 static unsigned s_bad;                   /* pointers outside their tables, this recording      */
 static unsigned s_badlog;                /* of them, the ones logged                           */
+static unsigned s_smarks, s_sfulls;      /* script slices marked, and steps that marked every
+                                            slice, this recording (THE SLICE MARKERS)          */
+static unsigned s_queries;               /* the owner's queries recorded (THE OWNER'S QUERIES) */
 
 static unsigned char s_mp_sites, s_mp_tried;
 static RecMpChatInbox* s_mp_chat_inbox;
@@ -1729,6 +1732,7 @@ typedef struct Feat Feat;          /* *The features* */
 /* An order list's image as the ring last carried it: its nodes' images, in order. */
 typedef struct OList { unsigned n, cap; unsigned char img[]; } OList;
 
+#define YHOLD_MAX 16    /* the yards a create's Create may open before the create records itself */
 typedef struct Rec {
     RecRing*       ring;
     HANDLE         wake;        /* the capture's own duplicates of the ring's events     */
@@ -1747,6 +1751,10 @@ typedef struct Rec {
     unsigned char* ushadow;     /* nslots images                                        */
     unsigned char* uraw;        /* nslots records and movers as the last capture read them */
     unsigned char* ulive;       /* nslots flags                                         */
+    RecYardStep    ystep;       /* the step's creates and deaths, by THE YARD RULE      */
+    struct { unsigned id; unsigned char open; } yhold[YHOLD_MAX];  /* a create's own yards */
+    unsigned       nyhold;
+    unsigned       ydropped;    /* yard events THE YARD RULE kept out of the file       */
     unsigned       pshadow[REC_PLAYERS][REC_PLAYER_DWORDS];
     unsigned char  ctl[REC_PLAYERS];             /* the controllers and the two players */
     unsigned char  view[2];                      /* as the ring last carried them        */
@@ -2427,6 +2435,8 @@ static void rec_free(Rec* r)
     if (r->ushadow) VirtualFree(r->ushadow, 0, MEM_RELEASE);
     if (r->uraw) VirtualFree(r->uraw, 0, MEM_RELEASE);
     if (r->ulive) HeapFree(GetProcessHeap(), 0, r->ulive);
+    if (r->ystep.st) HeapFree(GetProcessHeap(), 0, r->ystep.st);
+    if (r->ystep.touched) HeapFree(GetProcessHeap(), 0, r->ystep.touched);
     if (r->oscratch) VirtualFree(r->oscratch, 0, MEM_RELEASE);
     if (r->oheap) HeapDestroy(r->oheap);             /* every list's image with it */
     feat_free(r->feat);
@@ -2524,6 +2534,9 @@ static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
     r->uraw = (unsigned char*)VirtualAlloc(NULL, (size_t)L->nslots * REC_UNIT_IMAGE,
                                            MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     r->ulive = (unsigned char*)HeapAlloc(heap, HEAP_ZERO_MEMORY, L->nslots);
+    r->ystep.st = (unsigned char*)HeapAlloc(heap, HEAP_ZERO_MEMORY, L->nslots);
+    r->ystep.touched = (unsigned*)HeapAlloc(heap, HEAP_ZERO_MEMORY,
+                                            (size_t)L->nslots * sizeof *r->ystep.touched);
     r->tab = (Table*)HeapAlloc(heap, HEAP_ZERO_MEMORY, (n ? n : 1) * sizeof *r->tab);
     /* the lists' images live in a heap of their own, which only this thread uses and which the
        recording's end destroys whole */
@@ -2533,7 +2546,7 @@ static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
     r->oscratch = (unsigned char*)VirtualAlloc(NULL, ORD_SCRATCH, MEM_COMMIT | MEM_RESERVE,
                                                PAGE_READWRITE);
     if (!g->buf || !g->wake || !r->wake || !g->done || !r->done || !r->ushadow || !r->uraw ||
-        !r->ulive || !r->tab || !r->olist || !r->oscratch)
+        !r->ulive || !r->ystep.st || !r->ystep.touched || !r->tab || !r->olist || !r->oscratch)
         goto fail;
     r->feat = feat_start(L->ta, g);
     if (!r->feat) goto fail;
@@ -2747,6 +2760,10 @@ static void rec_end(Rec* r, unsigned reason)
                                             "with" :
                                             "INCOMPLETE, the recorded mode or contribution authority ended", s_bad,
                off, r->uncredited, r->oodd);
+    tagpu_logf("recorder: %u script slices marked, %u steps marking every slice, %u owner's queries",
+               s_smarks, s_sfulls, s_queries);
+    tagpu_logf("recorder: %u yard events kept out of the file by THE YARD RULE (tagpu_recfmt.h)",
+               r->ydropped + r->nyhold);
     feat_log(r);
     tagpu_logf("recorder: the projectiles: %u record images; the pool's written extent reached %u "
                "of its %u records", r->jimages, r->jhw, (unsigned)TAGPU_LIM_PROJ);
@@ -4437,12 +4454,15 @@ static Rec* ev_rec(void)
     return s_rec;
 }
 
+static void yard_step(Rec* r, unsigned kind, const unsigned char* b);
+
 static void ev_put(Rec* r, unsigned kind, const void* b, unsigned n)
 {
     /* These owner-only roots have one ordered source in a native file: the
        contribution ledger, including this peer's publications. */
     if (r->mode==MODE_NETWORK &&
         (kind==RK_EV_START_NAMED || kind==RK_EV_REPLY || kind==RK_EV_SPRAY)) return;
+    if (kind == RK_EV_CREATE || kind == RK_EV_DEATH) yard_step(r, kind, (const unsigned char*)b);
     if (r->ev_full || ring_put(r, kind, b, n, NULL, 0)) return;
     r->ev_full = 1;
     tagpu_logf("recorder: an event did not fit in the ring after GameTime %d: the recording ends "
@@ -4459,6 +4479,7 @@ static unsigned ev_unit(const Rec* r, const char* p)
 /* the entry's registers, as the observer's pushad left them below the entry's esp */
 #define REG_EDI(E) (*(const unsigned*)((const unsigned char*)(E) - 0x24))
 #define REG_ESI(E) (*(const unsigned*)((const unsigned char*)(E) - 0x20))
+#define REG_EBX(E) (*(const unsigned*)((const unsigned char*)(E) - 0x14))
 #define REG_ECX(E) (*(const unsigned*)((const unsigned char*)(E) - 0x0C))
 #define REG_EAX(E) (*(const unsigned*)((const unsigned char*)(E) - 0x08))
 #define ARG(E, off) (*(const unsigned*)((const unsigned char*)(E) + (off)))
@@ -4966,6 +4987,173 @@ static int __cdecl ev_start_named_bc(void* E)
     return 0;
 }
 
+/* THE SLICE MARKERS. The unit tick gives each unit it reaches one script slice, DoScriptsNow
+   0x4B0D60 with dt 1 at 0x48ADEB (its only caller), and a playing's host gives that slice in its own
+   unit tick, before the step's replayed events: a start the recording machine made on a unit's COB
+   earlier in the same iteration -- AutoAim's AimPrimary in the unit's own turn, the Create of a
+   unit an earlier turn made in a later slot -- would reach its first slice one tick late there, or
+   never, for a unit the host makes after its tick. So the unit tick's stub calls tagpu_rec_slice
+   just before a slice, and it writes RK_EV_SLICE {ID} when the unit's COB object had an engine
+   start since this iteration's capture point; a playing gives that slice at the marker, after the
+   events that came before it (tagpu_replay.c, THE SCRIPT SLICES).
+   COMPLETENESS: outside a slice a COB object's threads are made only by the start by index 0x4B0B00
+   and the start by name 0x4B0940 -- 0x4B0A70 calls 0x4B0B00 (0x4B0AEE), and the thread allocator
+   0x4B08C0's other callers are a query, which runs to completion at dt 0, the VM's START and CALL,
+   which run inside a slice and belong to that COB's own clock, and two functions with no caller --
+   by a whole-file scan of every call into the COB module from outside it (exe-reverse-engineering.md,
+   *The COB module's entries*). The two observers below see every one, Impure's and the replay's
+   own starts included. A start by name of a script the COB lacks reaches the allocator with -1
+   and starts nothing, and is noted anyway: an unneeded marker, which is exact, below.
+   A SUPERSET IS EXACT: moving a slice whose COB had no start earlier in the window changes no COB
+   state, since the only replayed events between the host's tick and the marker that touch a COB
+   are starts, and a puppet's COB SET, ATTACH and DROP are inert (tagpu_puppet.c, THE GATES). So a
+   COB address that recurs inside one window is exact too: an object at an address the set holds
+   either had a start in the window or was made later in it at a freed object's address, and its
+   setup 0x485D40 started Create (0x485DE6) unconditionally. And a step past SLICE_SET/2 keys marks
+   every slice, counted (s_sfulls); more than 10 x TAGPU_LIM_UNITS + 1 COB objects in one step can
+   come only from deaths and creates churning within it.
+   The key is the COB object's address as the engine passes it in ecx, and it is never
+   dereferenced. The epoch advances at every capture point, recorded or not, before anything else
+   the capture does: that is what makes "since the capture point". Game thread only: the observers
+   take ev_rec's recording, and the epoch is the capture's. */
+#define SLICE_SET 32768u                /* a power of two; a step saturates at half */
+typedef struct { const char* cob; unsigned epoch; } SliceKey;
+static SliceKey s_skey[SLICE_SET];
+static unsigned s_sepoch = 1, s_sn, s_sfull;
+_Static_assert((SLICE_SET & (SLICE_SET - 1)) == 0 &&
+               SLICE_SET / 2 > 10u * TAGPU_LIM_UNITS + 1, "the slice set holds a step's COBs");
+
+/* the capture point's: every key of an older epoch is empty, so nothing is cleared a step */
+static void slice_epoch(void)
+{
+    if (++s_sepoch == 0) {
+        memset(s_skey, 0, sizeof s_skey);
+        s_sepoch = 1;
+    }
+    s_sn = 0;
+    s_sfull = 0;
+}
+
+static unsigned slice_hash(const char* cob)
+{
+    return ((unsigned)(size_t)cob >> 2) * 0x9E3779B1u >> 17;
+}
+
+/* The COB had a start this step. Below half full a probe always meets an empty key; a probe that
+   meets none marks the step saturated, which is exact (A SUPERSET IS EXACT). */
+static void slice_note(const char* cob)
+{
+    unsigned h = slice_hash(cob), k;
+    if (s_sfull) return;
+    for (k = 0; k < SLICE_SET; k++) {
+        SliceKey* e = &s_skey[(h + k) & (SLICE_SET - 1)];
+        if (e->epoch != s_sepoch) {
+            if (s_sn >= SLICE_SET / 2) break;
+            e->cob = cob;
+            e->epoch = s_sepoch;
+            s_sn++;
+            return;
+        }
+        if (e->cob == cob) return;
+    }
+    s_sfull = 1;
+    s_sfulls++;
+}
+
+/* 1: the COB had a start this step, or the step is saturated */
+static int slice_has(const char* cob)
+{
+    unsigned h = slice_hash(cob), k;
+    if (s_sfull) return 1;
+    for (k = 0; k < SLICE_SET; k++) {
+        const SliceKey* e = &s_skey[(h + k) & (SLICE_SET - 1)];
+        if (e->epoch != s_sepoch) return 0;
+        if (e->cob == cob) return 1;
+    }
+    return 1;
+}
+
+/* 0x4B0B00 and 0x4B0940's entries: their ecx is the COB object a start is made on, a key here,
+   never dereferenced */
+static int __cdecl ob_cob_start(void* E)
+{
+    if (ev_rec()) slice_note(PTR(REG_ECX(E)));
+    return 0;
+}
+
+int tagpu_rec_slice(const char* unit, const char* cob)
+{
+    Rec* r = ev_rec();
+    unsigned id;
+    if (!r || !cob || !slice_has(cob)) return 0;
+    if (!(id = ev_unit(r, unit))) return 0;            /* not a slot: id_of counts it */
+    ev_put(r, RK_EV_SLICE, &id, 4);
+    s_smarks++;
+    return 1;
+}
+
+void tagpu_rec_slice_given(unsigned where)
+{
+    if (cnt_on()) cnt_add(0x0048ADEBu, 0, where);
+}
+
+/* THE OWNER'S QUERIES. A COB query, 0x4B0BC0(name, &a0, a1, a2, a3) thiscall on a unit's COB
+   object, runs one thread of that object to its end at once (0x4B0C40) and can change the object's
+   statics and pieces. Two of the engine's query sites run only in an order handler, which runs
+   only on the machine of the handler's unit's owner: QueryBuildInfo, whose only call is
+   BuildingBuild's state dispatch at 0x4027FB, on the handler's unit, and QueryNanoPiece, whose only
+   call is 0x4B0BC0 at 0x43E427 inside 0x43E400(unit, out), which fifteen order handlers call on
+   the spray's source -- the handler's unit (order+0xE), or in SelfRepair 0x402430 the repairing
+   pad, the order's target (order+0x16, 0x402525..0x40252E), which can be another player's (the
+   engine map, *The owner's COB queries*). Each order handler runs from the unit tick's order runs,
+   0x43B7C0 at 0x48AF98 and 0x43BAD0 at 0x48AF9E, in its own unit's turn after that unit's slice
+   (0x48ADEB), or with event 2 from the destructor's 0x43A1F0, which BuildingBuild and the four
+   other build handlers return on before either query (the engine map, *The nano spray*); so a
+   query is inside no death and no feature call, and the pad's query in an aircraft's turn can
+   come before the pad's own slice in the same tick. A playing runs no order handler, so the
+   recording carries each query as RK_EV_QUERY {ID, the query} at its place, and the playing makes
+   it there through the same 0x4B0BC0 with the same arguments (tagpu_replay.c, THE OWNER'S
+   QUERIES). A multiplayer recording carries the queries the recording machine's handlers made the
+   same way; another machine's are made on its own copy of the unit, which no recording of this
+   one holds. */
+/* `ecx`, when the site has it, is the COB object the call is made on, which must be the unit's */
+static void rec_query(Rec* r, const char* unit, const unsigned* ecx, unsigned query)
+{
+    unsigned char b[8] = { 0 };
+    unsigned id = ev_unit(r, unit), cob;
+    if (!id) return;                                   /* not a slot: id_of counts it */
+    cob = *(const unsigned*)(unit + U_COB);
+    if (ecx && *ecx != cob) {
+        s_bad++;                                       /* not the unit the disassembly says */
+        return;
+    }
+    /* THE INVARIANT this keeps, an ordering: a slice of this COB later in the step is marked, so
+       a playing gives it after the query as the recording machine did. SelfRepair queries the
+       pad in an aircraft's turn, before the pad's own slice when the pad's slot comes later; and
+       every entry into a COB outside a slice that a playing makes from the recording is then
+       noted (THE SLICE MARKERS, A SUPERSET IS EXACT). */
+    slice_note(PTR(cob));
+    memcpy(b, &id, 4);
+    b[4] = (unsigned char)query;
+    ev_put(r, RK_EV_QUERY, b, sizeof b);
+    s_queries++;
+}
+
+/* QueryBuildInfo's call 0x4027FB, a stub in front of 0x4B0BC0 built like the owner-only starts'
+   (THE OWNER-ONLY STARTS): `mov ecx,[edi+0x9A]` at 0x4027E5 loads the COB object from the unit
+   that `mov edi,[esp+0x44]` (0x4027D9) took, the handler's first argument, and edi holds it until
+   the call; the name is `push 0x501330` at 0x4027EE */
+#define QUERY_BUILD_CALL 0x004027FBu
+#define QUERY_BUILD_MOV  0x004027E5u
+#define QUERY_BUILD_NAME 0x004027EEu
+static int __cdecl ev_query_build(void* E)
+{
+    Rec* r = ev_rec();
+    unsigned ecx = REG_ECX(E);
+    if (r) rec_query(r, PTR(REG_EDI(E)), &ecx, REC_QUERY_BUILDINFO);
+    return 0;
+}
+
 /* The build-done 0x41B8D0(builder, built): its own tests make a call on a dead or absent unit
    inert, so every call is recorded as made. */
 static int __cdecl ev_built(void* E)
@@ -5007,6 +5195,81 @@ static int __cdecl ev_state(void* E)
     b[5] = b[6] = b[7] = 0;
     ev_put(r, RK_EV_STATE, b, sizeof b);
     return 0;
+}
+
+/* YARD_OPEN 0x47DAC0(unit, open)'s write of the yard, `mov [esi+0x10F],bl` at 0x47DAF1: its
+   refusal 0x47D970 has passed (0x47DACC..0x47DAD3), esi is the structure and bl its new +0x10F,
+   bit 2 the yard (0x47DAD5..0x47DAE4), and the re-claim 0x47DAFD follows. Every pass is written,
+   one that leaves the yard as it was too, since the re-claim runs either way. YARD_OPEN's one
+   caller is the COB setter (0x480BAE), so this is wherever a script runs: a slice, a query, or a
+   script another root runs at once -- a create's Create among them, before the create's exit
+   records it; and the event goes in at that place, among the creates whose stamps it changes.
+   Where that place may be is THE YARD RULE (tagpu_recfmt.h); the playing writes or checks it
+   there (tagpu_replay.c, A RECORDED YARD_OPEN). A skirmish's: a multiplayer playing composes its
+   yards from the owners' images. */
+static int yard_framed(unsigned id);
+
+/* THE YARD RULE on the recording machine (tagpu_recfmt.h). A yard of a unit live at its place goes
+   in at once. One of a unit not live is its own create's Create slice: it is held until that
+   create records itself and goes in just before it (yard_step), which is the place the readers
+   ask of it -- before the create, after the slot's last death -- and the playing's check reads it
+   there (tagpu_replay.c, yard_check). Whatever the rule would refuse -- a yard inside a feature
+   call or inside its own unit's death, past YHOLD_MAX held, or held for a create that never came
+   in the step -- is kept out of the file and counted (`ydropped`, logged at the recording's end
+   and failed by the replay harness), so the writer, which refuses a malformed record by ending
+   the file, never meets one. */
+static int __cdecl ev_yard(void* E)
+{
+    Rec* r;
+    unsigned id, slot;
+    unsigned char st, b[8];
+    if (!(r = ev_rec()) || r->mode == MODE_NETWORK) return 0;
+    if (!(id = ev_unit(r, PTR(REG_ESI(E))))) return 0;
+    memcpy(b, &id, 4);
+    b[4] = (unsigned char)(REG_EBX(E) >> 2 & 1);
+    b[5] = b[6] = b[7] = 0;
+    slot = id - 1u;
+    if (slot < 1 || slot >= r->nslots || yard_framed(id)) {
+        r->ydropped++;
+        return 0;
+    }
+    st = r->ystep.st[slot];
+    if (st == RYS_MADE || (!st && r->ulive[slot])) {
+        ev_put(r, RK_EV_YARD, b, sizeof b);
+        return 0;
+    }
+    if (r->nyhold == YHOLD_MAX) {
+        r->ydropped++;
+        return 0;
+    }
+    r->yhold[r->nyhold].id = id;
+    r->yhold[r->nyhold++].open = b[4];
+    return 0;
+}
+
+/* A create or a death of the step (ev_put): a create first puts the yards its Create held, in
+   order; a death drops any held for its slot, whose create has not come. */
+static void yard_step(Rec* r, unsigned kind, const unsigned char* b)
+{
+    unsigned id, slot, i, k = 0;
+    memcpy(&id, b, 4);
+    slot = id - 1u;
+    if (slot < 1 || slot >= r->nslots) return;
+    for (i = 0; i < r->nyhold; i++) {
+        if (r->yhold[i].id != id) {
+            r->yhold[k++] = r->yhold[i];
+        } else if (kind == RK_EV_CREATE) {
+            unsigned char y[8];
+            memcpy(y, &id, 4);
+            y[4] = r->yhold[i].open;
+            y[5] = y[6] = y[7] = 0;
+            if (!r->ev_full && !ring_put(r, RK_EV_YARD, y, 8, NULL, 0)) r->ev_full = 1;
+        } else {
+            r->ydropped++;
+        }
+    }
+    r->nyhold = k;
+    rec_yard_mark(&r->ystep, slot, (unsigned char)(kind == RK_EV_CREATE ? RYS_MADE : RYS_GONE));
 }
 
 /* The two replies 0x47F780 and 0x47F850(unit, kind, text), before their viewer test: every
@@ -5285,8 +5548,10 @@ static int __cdecl ev_start_site(void* E, unsigned site)
    recorded with ID 0 and counted in skirmish; multiplayer refuses an uncredited spray. */
 static int __cdecl ev_nano_query(void* E)
 {
+    Rec* r = ev_rec();
     cnt(0x0043E400u, ARG(E, 0), 0);
-    if (ev_rec() || (s_mp_tid && GetCurrentThreadId()==s_mp_tid)) {
+    if (r) rec_query(r, PTR(ARG(E, 4)), NULL, REC_QUERY_NANOPIECE);   /* 0x43E40B: [esi+0x9A] */
+    if (r || (s_mp_tid && GetCurrentThreadId()==s_mp_tid)) {
         s_nano_unit = PTR(ARG(E, 4));
         s_nano_out = PTR(ARG(E, 8));
     }
@@ -5919,6 +6184,17 @@ static Feat* feat_start(const char* ta, RecRing* g)
 typedef struct FFrame { unsigned ret, id; unsigned char root, recorded, owner; MpRootRef mp; } FFrame;
 static FFrame   s_fstack[FDEPTH_MAX];
 static unsigned s_fdepth;           /* moved only by game-thread feature/death frames */
+
+/* inside a recorded feature call, or inside the recorded death of unit `id` (THE YARD RULE) */
+static int yard_framed(unsigned id)
+{
+    unsigned i;
+    for (i = 0; i < s_fdepth; i++)
+        if (s_fstack[i].recorded &&
+            (s_fstack[i].root < FR_ROOTS || (s_fstack[i].root == FR_DEATH && s_fstack[i].id == id)))
+            return 1;
+    return 0;
+}
 static unsigned char s_fphase;      /* the step's phase (tagpu_rec_phase), on the game thread    */
 
 void __cdecl tagpu_rec_phase(unsigned phase) { s_fphase = (unsigned char)phase; }
@@ -6320,6 +6596,8 @@ static const ObserveSite OBSERVE_SITES[] = {
       death_leave },
     { 0x0041B8D0u, 6, { 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x0C }, ev_built, NULL },
     { 0x0048B090u, 5, { 0x51, 0x8B, 0x44, 0x24, 0x0C }, ev_state, NULL },
+    /* mid-function: no rel8/rel32 in the file branches into 0x47DAF2..0x47DAF6 (DISASSEMBLED) */
+    { 0x0047DAF1u, 6, { 0x88, 0x9E, 0x0F, 0x01, 0x00, 0x00 }, ev_yard, NULL },
     { 0x00456190u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, ev_start_idx, NULL },
     { 0x00456290u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, ev_start_args, NULL },
     { 0x00456218u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, ev_start_named_bc, NULL },
@@ -6345,6 +6623,10 @@ static const ObserveSite OBSERVE_SITES[] = {
     { 0x0047D0E0u, 10, { 0x83, 0xEC, 0x08, 0x53, 0x8B, 0x1D, 0xE8, 0x1D, 0x51, 0x00 }, ob_clear,
       foot_leave },
     { 0x0047C790u, 7, { 0x53, 0x55, 0x56, 0x8B, 0x74, 0x24, 0x10 }, ob_reclaim, foot_leave },
+    /* the COB start entries (THE SLICE MARKERS): no relative instruction in either span, and no
+       branch into bytes 1-4 of either (DISASSEMBLED, a rel8/rel32 scan of the whole file) */
+    { 0x004B0B00u, 5, { 0x8B, 0x44, 0x24, 0x04, 0x57 }, ob_cob_start, NULL },
+    { 0x004B0940u, 5, { 0x51, 0x53, 0x55, 0x56, 0x57 }, ob_cob_start, NULL },
 };
 #define OBSERVE_SITE_COUNT (sizeof OBSERVE_SITES / sizeof OBSERVE_SITES[0])
 
@@ -6644,6 +6926,7 @@ void tagpu_rec_init(void)
 {
     unsigned char* net[5] = { 0 };
     unsigned char* calls[START_SITE_COUNT] = { 0 };
+    unsigned char* qbuild = NULL;
     unsigned char* draws[FS_RNG_SITES] = { 0 };
     unsigned char* blast = NULL;
     unsigned char* source = NULL;
@@ -6683,6 +6966,20 @@ void tagpu_rec_init(void)
         if (!pristine(st->call, c, 5) || !pristine(st->mov, m, 6)) {
             tagpu_logf("recorder: the %s start at 0x%06X holds other bytes: no event hooks, and "
                        "nothing will be recorded", st->what, st->call);
+            return;
+        }
+    }
+    {
+        static const unsigned char mov[6] = { 0x8B, 0x8F, 0x9A, 0x00, 0x00, 0x00 };
+        static const unsigned char name[5] = { 0x68, 0x30, 0x13, 0x50, 0x00 };
+        unsigned char c[5];
+        int32_t rel = (int32_t)(0x004B0BC0u - (QUERY_BUILD_CALL + 5));
+        c[0] = 0xE8;
+        memcpy(c + 1, &rel, 4);
+        if (!pristine(QUERY_BUILD_CALL, c, 5) || !pristine(QUERY_BUILD_MOV, mov, 6) ||
+            !pristine(QUERY_BUILD_NAME, name, 5)) {
+            tagpu_logf("recorder: the QueryBuildInfo query at 0x%06X holds other bytes: no event "
+                       "hooks, and nothing will be recorded", QUERY_BUILD_CALL);
             return;
         }
     }
@@ -6750,6 +7047,19 @@ void tagpu_rec_init(void)
         *p++ = 0x9D;                                    /* popfd                                */
         *p++ = 0xE9; tagpu_detour_rel(p, START_SITES[i].target);
     }
+    {
+        unsigned char* p = qbuild = tagpu_detour_stub();
+        if (!p) goto fail;
+        *p++ = 0x9C;                                    /* pushfd                               */
+        *p++ = 0x60;                                    /* pushad                               */
+        *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x24;   /* lea eax,[esp+0x24]: the call's esp */
+        *p++ = 0x50;                                    /* push eax                             */
+        *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)ev_query_build); p += 4;
+        *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;          /* add esp,4                            */
+        *p++ = 0x61;                                    /* popad                                */
+        *p++ = 0x9D;                                    /* popfd                                */
+        *p++ = 0xE9; tagpu_detour_rel(p, 0x004B0BC0u);
+    }
     for (i = 0; i < FS_RNG_SITES; i++) {
         unsigned char* p = draws[i] = tagpu_detour_stub();
         if (!p) goto fail;
@@ -6810,6 +7120,14 @@ void tagpu_rec_init(void)
         if (!tagpu_detour_write(START_SITES[k].call, c, 5)) goto landfail;
         calls[k] = NULL;
     }
+    {
+        unsigned char c[5];
+        int32_t rel = (int32_t)((unsigned)(size_t)qbuild - (QUERY_BUILD_CALL + 5));
+        c[0] = 0xE8;
+        memcpy(c + 1, &rel, 4);
+        if (!tagpu_detour_write(QUERY_BUILD_CALL, c, 5)) goto landfail;
+        qbuild = NULL;
+    }
     for (k = 0; k < FS_RNG_SITES; k++) {
         unsigned char c[5];
         int32_t rel = (int32_t)((unsigned)(size_t)draws[k] - (DRAW_SITES[k] + 5));
@@ -6838,7 +7156,7 @@ void tagpu_rec_init(void)
     }
     s_sites = 1;
     tagpu_logf("recorder: %u event sites in",
-               (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + FS_RNG_SITES + 2 + 2));
+               (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + 1 + FS_RNG_SITES + 2 + 2));
     cnt_sinks_init();
     ai_hooks_init();
     return;
@@ -6849,6 +7167,7 @@ landfail:
 fail:
     for (i = 0; i < 5; i++) tagpu_detour_stub_free(net[i]);
     for (i = 0; i < START_SITE_COUNT; i++) tagpu_detour_stub_free(calls[i]);
+    tagpu_detour_stub_free(qbuild);
     for (i = 0; i < FS_RNG_SITES; i++) tagpu_detour_stub_free(draws[i]);
     tagpu_detour_stub_free(blast);
     tagpu_detour_stub_free(source);
@@ -6931,6 +7250,7 @@ int tagpu_rec_fork_arm(RecFork* f)
 static void rec_begin(const Level* L, int tick, const RecMpConfig* mp)
 {
     s_bad = s_badlog = 0;
+    s_smarks = s_sfulls = s_queries = 0;
     InterlockedExchange(&s_offthread, 0);
     s_nano_unit = NULL;
     s_nano_out = NULL;
@@ -7078,6 +7398,7 @@ void __cdecl tagpu_rec_capture(void)
     LARGE_INTEGER t0, t1;
     Rec* r;
 
+    slice_epoch();                      /* every capture point's, recorded or not */
     if (s_suspended) return;
     s_fphase = 0;
     if (!ta || !level_read(ta, &L)) return;
@@ -7153,8 +7474,12 @@ void __cdecl tagpu_rec_capture(void)
         rec_stop(REC_END_LEVEL);
         return;
     }
-    /* the last step's events end its iteration: out they go, before this one starts */
+    /* the last step's events end its iteration: out they go, before this one starts; a yard
+       still held met no create in its step (ev_yard) */
     ring_publish(r, 0);
+    r->ydropped += r->nyhold;
+    r->nyhold = 0;
+    rec_yard_end(&r->ystep);
     r->L = L;
     QueryPerformanceCounter(&t0);
     w0 = r->w;

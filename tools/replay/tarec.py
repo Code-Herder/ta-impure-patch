@@ -48,12 +48,16 @@
                                              yard bits and contest marks by THE OCCUPANCY RULE on
                                              a file that holds its cells
   tools/replay/tarec.py counts FILE DUMP     a dump's counts of roots, sinks and observed sites
-  tools/replay/tarec.py compare-counts FILE LIVE_A LIVE_B PUPPET_A PUPPET_B [--absent TSV] [--rewind]
+  tools/replay/tarec.py compare-counts FILE LIVE_A LIVE_B PUPPET_A PUPPET_B [--absent TSV]
+                                             [--rewind | --cob-exact]
                                              a live game's counts against a playing's, each the
                                              change between its two dumps: roots per site
-                                             exactly, sinks per (site, caller, aux) within
+                                             exactly, the script slice per placement exactly,
+                                             sinks per (site, caller, aux) within
                                              replay-absent.tsv's band less its rows, and no COB
-                                             engine write on the puppet
+                                             engine write on the puppet; --cob-exact compares
+                                             the VM's START and CALL children by script name
+                                             exactly, with no band and no row
   tools/replay/tarec.py images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1 [VIEW...]
                                              the null twin: every bit of the two images no row
                                              covers where the live game and a playing or the
@@ -145,7 +149,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 20                           # the unit listing from state; the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
+REC_FORMAT = 21                           # the unit listing from state; script slices, owner's queries, yards; the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -167,7 +171,7 @@ REC_UNIT_BITS = (REC_UNIT_DWORDS + 7) // 8
 REC_PLAYER_BITS = (REC_PLAYER_DWORDS + 7) // 8
 REC_UNIT_DELTA_HEAD = (2 + REC_UNIT_BITS + 3) & ~3
 REC_PLAYER_DELTA_HEAD = (2 + REC_PLAYER_BITS + 3) & ~3
-U_TYPE, U_BUILT, U_STATEBYTE = 0x92, 0x104, 0x10E   # the image's type ID, build fraction, state
+U_TYPE, U_BUILT, U_STATEBYTE, U_YARD = 0x92, 0x104, 0x10E, 0x10F   # the image's type ID, build fraction, state
 U_STATE = 0x110
 REC_PROJ_IMAGE = 0x6C                     # a projectile record's 0x6B bytes, to a dword
 REC_PROJ_DWORDS = REC_PROJ_IMAGE // 4
@@ -197,7 +201,8 @@ def mapped_bytes(w, h):
  RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
  RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT, RK_COUNTS,
  RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE, RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT,
- RK_SPRAY_SESSION) = range(57)
+ RK_SPRAY_SESSION, RK_EV_SLICE, RK_EV_QUERY, RK_EV_YARD) = range(60)
+REC_QUERIES = 2                           # RK_EV_QUERY's queries: QueryBuildInfo, QueryNanoPiece
 
 # THE PERSPECTIVE's payloads (tagpu_recpov.h)
 REC_POV = struct.Struct("<BBBBHHIiiiii")   # player, every, flags, zero, view_w, view_h, zoom,
@@ -223,7 +228,8 @@ EVENTS = {RK_EV_CREATE: "create", RK_EV_NET_CREATE: "network create", RK_EV_DEAT
           RK_EV_START_NAMED: "owner's start", RK_EV_BUILT: "build done", RK_EV_STATE: "state byte",
           RK_EV_REPLY: "reply", RK_EV_SPRAY: "nano spray", RK_EV_FEATURE: "feature call",
           RK_EV_FEATURE_END: "feature call's end", RK_EV_DRAW: "feature draw",
-          RK_EV_DEATH_END: "death's end"}
+          RK_EV_DEATH_END: "death's end", RK_EV_SLICE: "script slice", RK_EV_QUERY: "owner's query",
+          RK_EV_YARD: "yard"}
 FR_TICK, FR_SPAWN, FR_DESTROY, FR_DIE, FR_BURN, FR_DAMAGE, FR_SWAP, FR_CORPSE = range(8)
 REC_PHASE_LATE = 2                        # RK_EV_FEATURE's phase byte at most (tagpu_recfmt.h)
 ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12, 32)     # an RK_EV_FEATURE's arguments after its site
@@ -723,6 +729,8 @@ class World:
         self.cnames = {}                # the scripts' names by their FNV-1a
         self.fbracket = 0               # an RK_EV_FEATURE's root + 1, until its end
         self.deaths = []                # the IDs of the deaths whose end is still to come
+        self.ystep = {}                 # the step's creates and deaths, slot -> "made"/"gone",
+        self.yheld = set()              # and the slots whose yard waits for their create
         self.evented = False            # an event has come since the iteration's RK_TICK
         self.session = None             # the unit ID of the iteration's last RK_SPRAY_SESSION
         self.units = {}                                  # slot -> bytearray image, live only
@@ -768,6 +776,36 @@ class World:
             return []
         return [(RK_EV_SPRAY, b) for b in self.sprays.imply(self.tick, self.unit_of)]
 
+    def yard_rule(self, kind, b):
+        """THE YARD RULE (tagpu_recfmt.h), as the writer and the DLL's reader have it: a unit is
+        live at an event when the images hold it and no death of it came since, or a create of it
+        came since; a yard of a unit live there is its yard at its place, one of a unit not live
+        is its create's (Create's first slice runs inside the create 0x485F50, which is recorded
+        at its exit) and waits for that create in the step, and a yard naming the unit of a death
+        still open is malformed, as is a death of a unit whose yard waits."""
+        slot = struct.unpack_from("<I", b)[0] - 1
+        if not 1 <= slot < self.slots:
+            return
+        if kind == RK_EV_CREATE:
+            self.yheld.discard(slot)
+            self.ystep[slot] = "made"
+        elif kind == RK_EV_DEATH:
+            if slot in self.yheld:
+                raise Unreadable(f"the death of slot {slot}, whose create's yard waits for it")
+            self.ystep[slot] = "gone"
+        elif slot + 1 in self.deaths:
+            raise Unreadable(f"a yard of slot {slot}, inside its own death")
+        elif not (self.ystep.get(slot) == "made" or
+                  (slot not in self.ystep and slot in self.units)):
+            self.yheld.add(slot)
+
+    def yard_end(self):
+        """The step's end: every yard that waited met its create."""
+        if self.yheld:
+            raise Unreadable(f"a yard of slot {min(self.yheld)}, not live, whose create does not "
+                             f"follow in its step")
+        self.ystep.clear()
+
     def bracket(self, kind, b):
         """The brackets' grammar, as the DLL's reader has it (tagpu_recreader.c, event_take): a
         feature call's holds no other and cells only when it is the tick's, which is inside none;
@@ -789,6 +827,7 @@ class World:
         elif kind == RK_EV_DEATH:
             if self.fbracket or len(self.deaths) == REC_DEATHS_MAX:
                 raise Unreadable("a death inside a feature call, or nested too deep")
+            self.yard_rule(kind, b)
             self.deaths.append(struct.unpack_from("<I", b)[0])
         elif kind == RK_EV_DEATH_END:
             if len(b) != 4 or not self.deaths or self.deaths[-1] != struct.unpack_from("<I", b)[0]:
@@ -898,6 +937,40 @@ class World:
         if kind in (RK_EV_FEATURE, RK_EV_FEATURE_END, RK_EV_DEATH, RK_EV_DEATH_END, RK_EV_DRAW):
             self.bracket(kind, b)
             return kind, b
+        if kind == RK_EV_SLICE:
+            # the unit tick's marker: inside no bracket, a slot of the level's (tagpu_recreader.c,
+            # event_take)
+            if self.fbracket or self.deaths:
+                raise Unreadable("a script slice inside a feature call or a death")
+            if len(b) != 4:
+                raise Unreadable(f"a script slice of {len(b)} bytes")
+            slot = struct.unpack_from("<I", b)[0] - 1
+            if not 1 <= slot < self.slots:
+                raise Unreadable(f"a script slice of slot {slot}, outside the array")
+            return kind, b
+        if kind == RK_EV_QUERY:
+            # an order handler's query, in the unit tick: inside no bracket, a slot of the level's
+            # (tagpu_recreader.c, event_take)
+            if self.fbracket or self.deaths:
+                raise Unreadable("an owner's query inside a feature call or a death")
+            if len(b) != 8 or b[4] >= REC_QUERIES or any(b[5:8]):
+                raise Unreadable(f"an owner's query of {len(b)} bytes, query {b[4] if len(b) > 4 else '-'}")
+            slot = struct.unpack_from("<I", b)[0] - 1
+            if not 1 <= slot < self.slots:
+                raise Unreadable(f"an owner's query of slot {slot}, outside the array")
+            return kind, b
+        if kind == RK_EV_YARD:
+            # YARD_OPEN's pass, outside every feature call, in a death or not, a slot of the
+            # level's, where THE YARD RULE lets it stand (tagpu_recreader.c, event_take)
+            if self.fbracket:
+                raise Unreadable("a yard inside a feature call")
+            if len(b) != 8 or b[4] > 1 or any(b[5:8]):
+                raise Unreadable(f"a yard of {len(b)} bytes, yard {b[4] if len(b) > 4 else '-'}")
+            slot = struct.unpack_from("<I", b)[0] - 1
+            if not 1 <= slot < self.slots:
+                raise Unreadable(f"a yard of slot {slot}, outside the array")
+            self.yard_rule(kind, b)
+            return kind, b
         if kind == RK_CELLS and (self.fbracket or self.deaths):
             if self.fbracket != FR_TICK + 1:
                 raise Unreadable("cells inside a feature call that is not the tick's")
@@ -908,6 +981,7 @@ class World:
         if kind in (RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT):
             self.perspective(kind, b)
         elif kind == RK_TICK:
+            self.yard_end()
             self.tick = struct.unpack_from("<I", b)[0]
             self.clicks = []
             self.evented = False
@@ -1073,6 +1147,8 @@ class World:
             img[off:off + len(b) - 8] = b[8:]
         elif kind in EVENTS:
             # the images come before the events: the units are this iteration's
+            if kind == RK_EV_CREATE:
+                self.yard_rule(kind, b)
             if kind == RK_EV_SPRAY and self.sprays_on():
                 self.sprays.spray(self.tick, b, self.unit_of)
             return kind, b
@@ -1092,6 +1168,9 @@ class World:
         if self.fbracket or self.deaths:
             raise Unreadable("a feature call's or a death's records cut short at the end of its "
                              "iteration")
+        if self.yheld:
+            raise Unreadable(f"a yard of slot {min(self.yheld)}, not live, whose create does not "
+                             f"follow in its iteration")
 
     def pov_differences(self, other):
         """Lines naming each seat whose last two samples, with their GameTimes, or whose selection
@@ -1568,11 +1647,19 @@ class EventCheck:
     (tagpu_recreader.c, apply), and World.apply refuses cells past it that are not the tick's
     feature call's, so the world summarised here is every reader's. Between the images of two
     iterations, a unit that appears must have its create, one that disappears its death, one whose
-    state byte +0x10E changed a state event with the new byte, and one whose build fraction +0x104
-    reached 0.0 its build done -- unless the slot died and was made again in the step, which the
-    create and the death both name."""
+    state byte +0x10E changed a state event with the new byte, one whose build fraction +0x104
+    reached 0.0 its build done, and, with `yards` (a skirmish's: its recorder writes them), one
+    whose yard, +0x10F bit 2, changed a yard event whose last one for it is the new yard, since
+    YARD_OPEN 0x47DAC0 is that bit's one writer (0x47DAF1) -- unless the slot died and was made
+    again in the step, which the create and the death both name; and a unit made in the step has
+    the yard of its last yard event, its create's or a later one, or with none the closed yard its
+    create's init leaves. Within an iteration's events a script slice and an owner's
+    query name a unit live at its point -- in the iteration's images, or created earlier in its
+    events and not dead since -- and a script slice a slot at most once (tagpu_recfmt.h,
+    RK_EV_SLICE, RK_EV_QUERY)."""
 
-    def __init__(self, limit=20):
+    def __init__(self, limit=20, yards=False):
+        self.yards = yards
         self.open = False           # an iteration has begun
         self.in_events = False      # ... and its images are behind us
         self.summary_now = None     # its world, once its images are applied
@@ -1587,8 +1674,8 @@ class EventCheck:
         if len(self.lines) < self.limit:
             self.lines.append(line)
 
-    # a unit's (type ID, build fraction, state byte), in the image's order
-    _FIELDS = struct.Struct(f"<{U_TYPE}x4s{U_BUILT - U_TYPE - 4}x4s{U_STATEBYTE - U_BUILT - 4}xB")
+    # a unit's (type ID, build fraction, state byte, +0x10F), in the image's order
+    _FIELDS = struct.Struct(f"<{U_TYPE}x4s{U_BUILT - U_TYPE - 4}x4s{U_STATEBYTE - U_BUILT - 4}xBB")
 
     @staticmethod
     def summary(w):
@@ -1631,10 +1718,35 @@ class EventCheck:
     def finish(self, w):
         if self.open and not self.in_events:
             self.images_done(w)
+        elif self.open:
+            # the last iteration's events lead to no images: its slices are checked here
+            self.slices(self.summary_now, self.events, w.tick)
+
+    def slices(self, was, events, tick):
+        live, sliced = set(was), set()
+        for kind, b in events:
+            if kind in (RK_EV_CREATE, RK_EV_NET_CREATE):
+                live.add(struct.unpack_from("<I", b)[0] - 1)
+            elif kind == RK_EV_DEATH:
+                live.discard(struct.unpack_from("<I", b)[0] - 1)
+            elif kind == RK_EV_SLICE:
+                slot = struct.unpack_from("<I", b)[0] - 1
+                if slot not in live:
+                    self.note(f"the events of GameTime {tick}: a script slice of slot {slot}, "
+                              f"which holds no live unit there")
+                if slot in sliced:
+                    self.note(f"the events of GameTime {tick}: slot {slot}'s script slice twice")
+                sliced.add(slot)
+            elif kind == RK_EV_QUERY:
+                slot = struct.unpack_from("<I", b)[0] - 1
+                if slot not in live:
+                    self.note(f"the events of GameTime {tick}: an owner's query of slot {slot}, "
+                              f"which holds no live unit there")
 
     def transition(self, was, events, now, tick):
         self.checked += 1
-        made, died, state, built = set(), set(), {}, set()
+        self.slices(was, events, tick - 1)
+        made, died, state, built, yard = set(), set(), {}, set(), {}
         for kind, b in events:
             if kind in (RK_EV_CREATE, RK_EV_NET_CREATE):
                 made.add(struct.unpack_from("<I", b)[0] - 1)
@@ -1644,6 +1756,8 @@ class EventCheck:
                 state[struct.unpack_from("<I", b)[0] - 1] = b[4]
             elif kind == RK_EV_BUILT:
                 built.add(struct.unpack_from("<I", b, 4)[0] - 1)
+            elif kind == RK_EV_YARD:
+                yard[struct.unpack_from("<I", b)[0] - 1] = b[4]
         at = f"the step to GameTime {tick}"
         # a slot whose fields stayed and that no create or death names has nothing to explain
         changed = {slot for slot, _ in was.items() ^ now.items()}
@@ -1652,6 +1766,12 @@ class EventCheck:
             if a is None:
                 if slot not in made:
                     self.note(f"{at}: unit {slot} appears with no create")
+                elif self.yards and slot not in died and (b[3] >> 2 & 1) != yard.get(slot, 0):
+                    # the create's init closes the yard (0x485B3E..0x485B52), and only YARD_OPEN
+                    # opens it: in the create's Create slice or after it, an event each
+                    self.note(f"{at}: unit {slot} appears with its yard {b[3] >> 2 & 1} and "
+                              + (f"its last yard event at {yard[slot]}" if slot in yard
+                                 else "no yard event"))
                 continue
             if b is None:
                 if slot not in died:
@@ -1668,6 +1788,11 @@ class EventCheck:
                              else "no state event"))
             if a[1] != bytes(4) and b[1] == bytes(4) and slot not in built:
                 self.note(f"{at}: unit {slot}'s +0x104 reached 0.0 with no build done")
+            ya, yb = a[3] >> 2 & 1, b[3] >> 2 & 1
+            if self.yards and ya != yb and yard.get(slot) != yb:
+                self.note(f"{at}: unit {slot}'s yard went {ya} -> {yb} with "
+                          + (f"its last yard event at {yard[slot]}" if slot in yard
+                             else "no yard event"))
 
 
 # ---- the commands ----------------------------------------------------------------------------
@@ -2014,7 +2139,7 @@ def cmd_check(path, timeline=0, exact=False):
             for line in lines:
                 print("  " + line.replace("dump", "snapshot"))
 
-    ec = EventCheck()
+    ec = EventCheck(yards=h.get("mode") != 3)
     w = stream_to(h, bl, on_snapshot=at_snapshot, on_record=ec.on_record)
     ec.finish(w)
     print(f"{path}: the stream reads to GameTime {w.tick} ({w.corrections} corrections in it); "
@@ -3049,6 +3174,16 @@ COUNT_ROOTS = {
 COUNT_SINKS = [0x420A30, 0x4B08C0, 0x47F0C0, 0x47F1A0, 0x47F210, 0x47F300, 0x49C740, 0x49CDE0,
                0x49CC20, 0x49C9C0, 0x499EB0, 0x471FD0, 0x472330, 0x472430, 0x472530, 0x472630,
                0x472810, 0x4728F0, 0x4729D0, 0x472AB0, 0x472C50]
+# The script slice: the unit tick's DoScriptsNow(1), counted where it is given, by aux
+# (tagpu_patches.c, THE SCRIPT SLICE; tagpu_rec_slice_given). A live game gives every slice in its
+# unit tick or at the place the recording names for it; a playing gives a slice at the step's end
+# only when its marker did not.
+SLICE_ROOT = 0x48ADEB
+SLICE_WHERE = {0: "in the unit tick", 1: "at its recorded place", 2: "at the step's end"}
+# the COB thread allocation's callers inside a slice: the VM's START and CALL (the engine map,
+# *COB child allocation caller keys*), each key's aux the child script's name hashed
+COB_CHILD_ALLOC = 0x4B08C0
+COB_CHILDREN = {0x4B18C0: "START", 0x4B192D: "CALL"}
 COB_WRITES = {0x480B57: "SET ACTIVATION", 0x480BF1: "SET ARMORED", 0x480BB3: "SET YARD_OPEN",
               0x4813AB: "ATTACH", 0x481427: "DROP"}
 # the thirteen owner-only start calls (tagpu_recorder.c, START_SITES), counted at the call: on a
@@ -3151,15 +3286,21 @@ def bounded_cob_flare(key, live, puppet, sinks, band):
     return None
 
 
-def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
+def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False, cob_exact=False):
     """The counts of a live game (L, dumps la and lb) against a playing's (P, pa and pb), each as
-    the change between its two dumps: every root per site exactly; every sink per (site, caller,
-    aux), a `same` row's callers summed, within replay-absent.tsv's band, less its absent and
-    extra rows; the named COB flare can inherit an accepted parent shortfall,
-    reported with both counts; and no COB engine write or native owner-only start on the puppet.
-    Rewind permits only VM START/CALL child counts to differ and reports each pair.
+    the change between its two dumps: every root per site exactly; the script slice per placement
+    exactly (SLICE_WHERE); every sink per (site, caller, aux), a `same` row's callers summed,
+    within replay-absent.tsv's band, less its absent and extra rows; the named COB flare can
+    inherit an accepted parent shortfall, reported with both counts; and no COB engine write or
+    native owner-only start on the puppet.
+    Rewind permits only VM START/CALL child counts to differ and reports each pair. cob_exact
+    compares every VM START/CALL child key with a script name (aux not 0) exactly instead: no band,
+    no flare, no row; aux 0, a refused index, stays with the rows. The two exclude each other.
     Both dumps of a pair are taken at a capture point before that step's replay step, so both
     windows hold the steps [first GameTime, second GameTime)."""
+    if rewind and cob_exact:
+        print("compare-counts: --rewind and --cob-exact exclude each other")
+        return 2
     h = header_only(path)
     (ta, ca, ma, na), (tb, cb, mb, nb) = counts_of(la, h), counts_of(lb, h)
     (tpa, cpa, mpa, npa), (tpb, cpb, mpb, npb) = counts_of(pa, h), counts_of(pb, h)
@@ -3187,6 +3328,11 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
         b = sum(n for (s, _, _), n in pup.items() if s == va)
         if a != b:
             lines.append(f"root {what}: live {a}, puppet {b}")
+    for aux, where in SLICE_WHERE.items():
+        a = sum(n for (s, _, x), n in live.items() if s == SLICE_ROOT and x == aux)
+        b = sum(n for (s, _, x), n in pup.items() if s == SLICE_ROOT and x == aux)
+        if a != b:
+            lines.append(f"root the script slice 0x{SLICE_ROOT:06X} {where}: live {a}, puppet {b}")
     def grouped(counts):
         out = {}
         for (site, caller, aux), n in counts.items():
@@ -3203,9 +3349,14 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
             continue
         a, b = glive.get(key, 0), gpup.get(key, 0)
         nsink += 1
-        if rewind and site == 0x4B08C0 and caller in (0x4B18C0, 0x4B192D):
+        if rewind and site == COB_CHILD_ALLOC and caller in COB_CHILDREN:
             accepted.append(f'accepted rewind COB child {caller_text(caller)} '
                             f'"{names.get(aux, "")}": live {a}, puppet {b}')
+            continue
+        if cob_exact and site == COB_CHILD_ALLOC and caller in COB_CHILDREN and aux:
+            if a != b:
+                lines.append(f'COB child {COB_CHILDREN[caller]} "{names.get(aux, "")}": '
+                             f'live {a}, puppet {b}')
             continue
         if within_band(band, a, b):
             continue
@@ -3231,8 +3382,8 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
             lines.append(f"owner-only start on a puppet, {what} at 0x{va:06X}: {n} since the level "
                          f"began")
     print(f"counts, live {la}..{lb} against puppet {pa}..{pb}, GameTime [{ta}, {tb}): "
-          f"{len(COUNT_ROOTS)} roots, {nsink} sink keys, band {band[0]}% or {band[1]}, "
-          f"{len(rows)} rows: "
+          f"{len(COUNT_ROOTS)} roots, the script slice, {nsink} sink keys, band {band[0]}% or "
+          f"{band[1]}, {len(rows)} rows" + (", the COB children exact" if cob_exact else "") + ": "
           + ("EQUAL" if not lines else f"{len(lines)} DIFFERENCES"))
     for line in lines + unrun + accepted:
         print("  " + line)
@@ -3245,7 +3396,8 @@ def cmd_counts(path, dump):
     print(f"{dump}: GameTime {t}: {len(c)} keys, {m[0]} found no row, sinks counted "
           f"0x{m[1]:X}, counting {m[2]}")
     for (site, caller, aux), n in sorted(c.items()):
-        kind = ("root" if site in COUNT_ROOTS else "sink" if site in COUNT_SINKS else
+        kind = ("root" if site in COUNT_ROOTS else "script slice" if site == SLICE_ROOT else
+                "sink" if site in COUNT_SINKS else
                 "COB write" if site in COB_WRITES else
                 "owner-only start" if site in OWNER_STARTS else "site")
         name = names.get(aux)
@@ -3570,6 +3722,9 @@ def main(argv):
     rewind = argv[1:2] == ["compare-counts"] and "--rewind" in argv
     if rewind:
         argv = [a for a in argv if a != "--rewind"]
+    cob_exact = argv[1:2] == ["compare-counts"] and "--cob-exact" in argv
+    if cob_exact:
+        argv = [a for a in argv if a != "--cob-exact"]
     takeover = argv[1:2] == ["compare-dumps"] and "--takeover" in argv
     if takeover:
         argv = [a for a in argv if a != "--takeover"]
@@ -3674,7 +3829,8 @@ def main(argv):
             return cmd_counts(argv[2], argv[3])
         if argv[1] == "compare-counts":
             return cmd_compare_counts(argv[2], *argv[3:7], absent or str(
-                Path(__file__).resolve().parents[2] / "tagpu" / "ddraw" / "replay-absent.tsv"), rewind)
+                Path(__file__).resolve().parents[2] / "tagpu" / "ddraw" / "replay-absent.tsv"), rewind,
+                cob_exact)
         return cmd_compare(argv[2], argv[3:], puppet, timeline, exact, seek)
     except (Unreadable, OSError, struct.error, KeyError) as e:
         print(f"tarec: {e}", file=sys.stderr)

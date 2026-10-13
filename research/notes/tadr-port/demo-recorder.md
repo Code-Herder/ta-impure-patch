@@ -447,9 +447,10 @@ evidence, and keep remaining gaps visible.
 ## Open decisions and evidence needed
 
 1. **The completeness mechanism's open items.** Every decision is taken
-   ([decisions taken](demo-recorder-completeness.md#decisions-taken)); two
-   [open items](demo-recorder-completeness.md#open-items) remain for the skirmish slice: whether a
-   recorded activation plays a second sound, and applying a recorded yard change.
+   ([decisions taken](demo-recorder-completeness.md#decisions-taken)), and no
+   [open item](demo-recorder-completeness.md#open-items) remains for the skirmish slice: a
+   recorded activation plays no second sound, and a yard its own unit's create opens is made again
+   by the replayed create and checked.
 2. **Measured size.** The disk budget rests on an estimate built from measured per-unit costs:
    about 2.4–3.3 compressed bytes per changed unit per sample, about 10–11 bytes per unit in a
    full-precision snapshot. Its largest unknown is the fraction of units that change per sample over a real
@@ -488,7 +489,7 @@ evidence, and keep remaining gaps visible.
    refreshed every 1,800 ticks -- is 20.73 MB in the level-3 container and 15.65 in format 17's
    (*P1*); with the cells held the heavy hour is 16.16 MB in format 17, 15.81 in format 18
    (*P6*), 14.06 in format 19, whose unit frame predicts more from per-type engine constants
-   (*P4*), and 13.12 in format 20, which lists the units against the frame's own state (*P5*). Until the reduced stream lands, a skirmish is recorded only on request.
+   (*P4*), and 13.12 in format 21, which lists the units against the frame's own state (*P5*). Until the reduced stream lands, a skirmish is recorded only on request.
 3. **Snapshot interval: decided** (2026-10-10). A snapshot every 1,800 ticks, 60 s of game time,
    chosen against the disk budget with the seek target relaxed for dense battles (*Playback and
    seeking*).

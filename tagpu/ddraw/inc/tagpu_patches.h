@@ -53,8 +53,11 @@ int tagpu_tx_carried(const char* unit);
    armed from the recording (`carried`), as the 0x4C's receiver arms it. `rec` is the destructor's
    record: +1 the unit's slot (u16), +3 the killer's netid, +7 the killer's slot (u16), +9 the
    severity, +0xA the corpse and death kind. The game thread, between two iterations. 0 when the
-   wrap could not be built, and nothing was called. */
-int tagpu_tx_replay_death(const unsigned char* rec, int carried);
+   wrap could not be built, and nothing was called. `own`: the recording machine made this death
+   itself, so its Killed runs as that machine's Send_UnitDeath ran it, the query 0x4B0BC0
+   (tagpu_patches.c, THE KILLED SCRIPT OF A REPLAYED DEATH); else as a peer's, the destructor's
+   run-now start. */
+int tagpu_tx_replay_death(const unsigned char* rec, int carried, int own);
 
 /* A recorded interception replayed on a puppet (tagpu_replay.c): the first projectile of the pool
    whose target point is `point` (three dwords) and whose weapon's index is `weapon` detonates
@@ -73,6 +76,12 @@ int tagpu_wpn_replay_intercept(const unsigned char* point, unsigned int weapon);
 int tagpu_effects_clear(void);
 void tagpu_patches_restore_begin(void);
 unsigned int tagpu_patches_restored(void);
+
+/* One script slice, as the unit tick's call 0x48ADEB gives it: DoScriptsNow 0x4B0D60 on `cob`
+   with dt 1, counted by `where` (tagpu_rec_slice_given). The unit tick's stub and a playing's
+   deferred slices (tagpu_replay.c, THE SCRIPT SLICES) both come here; the game thread, on the COB
+   object of a unit live in its slot. */
+void tagpu_slice_give(char* cob, unsigned where);
 
 /* The wind's generator state, for a level that plays a recording (tagpu_replay.c): the name its
    declaration has in a recording's header, and the state to draw from. The replay's first step

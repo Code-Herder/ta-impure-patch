@@ -1037,7 +1037,7 @@ and [the size estimate](tadr-port/demo-recorder-state-evidence.md#4-size-estimat
 |---|---|---|
 | `0x463C60` | the controller-type setter, `thiscall(type)`, `ret 4` | Stores `+0x73` and, for any type but 3, PlayerInfo `+0x94` too (`0x463C60..0x463C75`). Fifteen callers (E8 scan): the `AI` command (`0x4162F4`, `0x4162FE`), the type-4 reset `0x42844F` (above), the seat removal `0x452E62`, and `0x4453E6`, `0x44552E`, `0x447C79`, `0x447CC2`, `0x447CFA`, `0x44833D`, `0x44A8BF`, `0x45125E`, `0x451442`, `0x45401B`, `0x454054` [roles not traced]. DIS |
 | `0x416280` | `AI`, the chat command `{0x5018E0 "AI", 0x416280, 4}` at `0x501FD0` (run level 4) | Takes a seat below 10 (`0x4B73E0`, `0x416293..0x4162A0`) whose record is active (first dword ≠ 0) with `+0x73` 1–3 and `+0x146` ≠ 10; type 1 becomes 2 (`0x4162F4`), types 2 and 3 become 1 (`0x4162FE`). It touches no unit, mover or AI object. DIS |
-| `0x48AD30` | the unit tick, over each record's block `[+0x67, +0x6B]` | Ticks only active records with `+0x73` 1–3 and `+0x146` ≠ 10 (`0x48AD6C..0x48AD9C`): a type-4 record's units are never ticked. Every ticked unit runs `0x437910` (`0x48ADC4`), `DoScriptsNow(1)` when `+0x9A` is set (`0x48ADDF..0x48ADEB`), its countdowns `+0xFA`/`+0xFB` and 30-tick health percentage `+0xF6`/`+0xF7`, and the pending-death reaper (`+0x110` bit 14 → `0x4864B0(unit, +0xF5)`, `0x48AFB9..0x48AFD1`). `AutoAim 0x49E1A0` needs the block owner's record (`edi`, `0x48AD73`) active and of type 1 or 2 (`0x48ADC9..0x48ADDA`). Only a unit whose owner `+0x96` is of type 1 or 2 (`0x48AEB5..0x48AECD`) runs the kind-`0xB` hit every 30 ticks at or below the sea level `main+0x1427F` for a def without `+0x241` bit 12 (`0x48AED3..0x48AF32`) [INFERRED: water damage], `0x41BD10` every 8 ticks while HP is below def `+0x1FA` and def `+0x200` is set (`0x48AF37..0x48AF92`) [INFERRED: regeneration], `0x43B7C0`, `0x43BAD0` and the movement pass `0x43DD20` + `0x48A870` (`0x48AFA3..0x48AFB0`). After the block's units, the `0x2C` sender `0x48B710` runs for an active type-1/2 record in a network game (`0x48AFE4..0x48B003`). **The slot loop** reads the block's last slot once (`0x48ADA2`) and tests each slot's type index `+0xA6` only when it reaches it (`0x48ADB0..0x48ADB8`; the step `0x48AFD6..0x48AFDE`), so a unit created during an earlier turn of the same tick, in a later slot of a block not yet finished, gets its turn and its script slice in that same tick. **A unit's turn and its COB**: `DoScriptsNow(1)` (`push 1` at `0x48ADE9`, the call at `0x48ADEB`) is the only call of `0x4B0D60` in `.text` and the only `dt` a sleep counts down by (*The eight records*, below), and it runs before the unit's orders and movement pass. A run-later start made in those, StartBuilding at `0x4385C7` (in `0x438590`, called from the build orders) or StopBuilding at `0x43A251` (in the order destructor `0x43A1F0`), both `0x4B0B00` with run-now 0, takes its first slice at the unit's next turn, unless the same turn's walk class makes a run-now start (`0x43DAF2`/`0x43DB27`), whose pass (`0x4B0940`'s run-now branch `0x4B09C4..0x4B09E8`: the runner `0x4B0DA0` over records 0-7, then the stepper `0x4B1C00`, both with `dt = 0`) runs every record with `dt = 0`. The movement pass's one call of the walk class `0x43DA70` (`0x43DD5D`, the only call in `.text`) starts StopMoving or StartMoving (`push 1` at `0x43DAD5`/`0x43DAE3`, the call at `0x43DAF2`) and then MoveRate1..3 (`push 1` at `0x43DB02`/`0x43DB0D`/`0x43DB18`, the call at `0x43DB27`) through `0x4B0940` with run-now 1, which runs every record with `dt = 0` inside the start. So a level-start unit the loader makes before the first tick has had one slice by that tick's end, which is why a playing makes the level's units at the first iteration's capture point, before this call (*COB on a puppet*, below). DIS |
+| `0x48AD30` | the unit tick, over each record's block `[+0x67, +0x6B]` | Ticks only active records with `+0x73` 1–3 and `+0x146` ≠ 10 (`0x48AD6C..0x48AD9C`): a type-4 record's units are never ticked. Every ticked unit runs `0x437910` (`0x48ADC4`), `DoScriptsNow(1)` when `+0x9A` is set (`0x48ADDF..0x48ADEB`), its countdowns `+0xFA`/`+0xFB` and 30-tick health percentage `+0xF6`/`+0xF7`, and the pending-death reaper (`+0x110` bit 14 → `0x4864B0(unit, +0xF5)`, `0x48AFB9..0x48AFD1`). `AutoAim 0x49E1A0` needs the block owner's record (`edi`, `0x48AD73`) active and of type 1 or 2 (`0x48ADC9..0x48ADDA`). Only a unit whose owner `+0x96` is of type 1 or 2 (`0x48AEB5..0x48AECD`) runs the kind-`0xB` hit every 30 ticks at or below the sea level `main+0x1427F` for a def without `+0x241` bit 12 (`0x48AED3..0x48AF32`) [INFERRED: water damage], `0x41BD10` every 8 ticks while HP is below def `+0x1FA` and def `+0x200` is set (`0x48AF37..0x48AF92`) [INFERRED: regeneration], `0x43B7C0`, `0x43BAD0` and the movement pass `0x43DD20` + `0x48A870` (`0x48AFA3..0x48AFB0`). After the block's units, the `0x2C` sender `0x48B710` runs for an active type-1/2 record in a network game (`0x48AFE4..0x48B003`). **The slot loop** reads the block's last slot once (`0x48ADA2`) and tests each slot's type index `+0xA6` only when it reaches it (`0x48ADB0..0x48ADB8`; the step `0x48AFD6..0x48AFDE`), so a unit created during an earlier turn of the same tick, in a later slot of a block not yet finished, gets its turn and its script slice in that same tick. **A unit's turn and its COB**: `DoScriptsNow(1)` (`push 1` at `0x48ADE9`, the call at `0x48ADEB`) is the only call of `0x4B0D60` in `.text` and the only `dt` a sleep counts down by (*The eight records*, below), and it runs before the unit's orders and movement pass. A run-later start made in those, StartBuilding at `0x4385C7` (in `0x438590`, called from the build orders) or StopBuilding at `0x43A251` (in the order destructor `0x43A1F0`), both `0x4B0B00` with run-now 0, takes its first slice at the unit's next turn, unless the same turn's walk class makes a run-now start (`0x43DAF2`/`0x43DB27`), whose pass (`0x4B0940`'s run-now branch `0x4B09C4..0x4B09E8`: the runner `0x4B0DA0` over records 0-7, then the stepper `0x4B1C00`, both with `dt = 0`) runs every record with `dt = 0`. The movement pass's one call of the walk class `0x43DA70` (`0x43DD5D`, the only call in `.text`) starts StopMoving or StartMoving (`push 1` at `0x43DAD5`/`0x43DAE3`, the call at `0x43DAF2`) and then MoveRate1..3 (`push 1` at `0x43DB02`/`0x43DB0D`/`0x43DB18`, the call at `0x43DB27`) through `0x4B0940` with run-now 1, which runs every record with `dt = 0` inside the start. So a level-start unit the loader makes before the first tick has had one slice by that tick's end, which is why a playing makes the level's units at the first iteration's capture point, before this call (*COB on a puppet*, below). **The script call's site** (`0x48ADDF..0x48ADF0`: `mov ecx,[esi+0x9A]; test ecx,ecx; je 0x48ADF0; push 1; call 0x4B0D60`, 17 bytes): the only branches to `0x48ADDF` are AutoAim's skips `0x48ADCC` and `0x48ADD7`, nothing branches into `0x48ADE0..0x48ADEF` (a rel8/rel32 scan of the whole file) and no dword names an address there; at `0x48ADF0` the flags are dead (`mov al,[esi+0xFA]`, then `0x48ADF6 test al,al` sets them), and so are `eax` (reloaded at `0x48ADF0` and `0x48AE02`), `edx` (`0x437910`'s call clobbered it on every path) and `ecx` (the COB or DoScriptsNow's leftovers), while `esi` (the unit), `edi` (its record), `ebx` and `ebp` are live. Impure jumps the 17 bytes to a stub that gives the slice from C (`tagpu_patches.c`, THE SCRIPT SLICE; *The COB module's entries*, below). DIS |
 | `0x464F80` | the players phase, once a tick (`0x49555F`) and once from the loader body `0x497180` on the loader thread (`0x497C10`) | The unit tick's record gate (`0x464FCE..0x465024`). Every tick, per record: `0x408C40` on `+0x74` when set (`0x46502A..0x465031`), `0x40B2C0(i)`, i the record's slot (the loop index, pushed at `0x465036`), and the sight emit `0x4827B0` for each alive unit (`0x465046..0x465063`); for the viewed player `main+0x2A43`, the minimap rebuild `0x466DC0` (`0x465065..0x465072`). On the record's 30-tick pass (`0x46507D..0x465092`) the viewed player's record also runs the radar pass `0x467440` (its one call, `0x46556D`) and `0x466C20` (`0x465572`), and in a network game every fourth such pass (counter `0x51E53C`) sends its `0x28` through `0x4573D0(rec, 0, 0)` (`0x4655A1`). The economy pass and the network defeat: *The Deathmatch respawn*, below. DIS |
 | `0x408C40` | the tick of the `+0x74` AI object (`0x3D` bytes; its constructor `0x408CB0` stores the record at `obj+0`, `0x408CBB`, and its `+0x146` at `obj+4`) | Plans only when that record is active with `+0x73` = 2 (`0x408C45..0x408C50`): `0x408830` every 30 calls (countdown `obj+5`), the ten slots at `obj+0x11` when due, then `0x4089A0(1)`; any other type runs only `0x4089A0(0)` (`0x408CA7`). A seat flipped 2 → 3 keeps its object, dormant, and a flip back to 2 revives it. DIS |
 | `0x40B320` / `0x40B2C0` / `0x40B390` | the second per-seat object, in the array `0x5119C0` | `0x40B320(idx)` allocates `0x10D` bytes, constructs them with `0x409160` and stores the pointer at `0x5119C0[idx]` (`0x40B340`); `0x40B390(idx)` frees it. `0x40B2C0(idx)` returns when `0x5119C0[idx]` is NULL (`0x40B2CC`); otherwise, once 30 ticks have passed since the GameTime it keeps at `obj+0xED` (`0x40B2D6..0x40B2E5`), it runs the acquisition `0x40AA40`, draws the sim RNG `0x4B6C30(0x1E)` (`0x40B301`) and calls `0x409730` when the draw is 0 (`0x40B30C`): a seat with this object draws the shared sim RNG once per 30 ticks. The player init `0x464700` builds it beside `+0x74` for every seat but an active type 3, and the teardown's `0x464A00` frees both (*The LOS counters and MAPPED both end in the teardown, the counters first*, below). The init and the teardown index `0x5119C0` by `+0x146` (`0x4648C6..0x4648CD`, `0x464A48..0x464A4F`) and the players phase by the slot (`0x465036`): the same object while `+0x146` equals the slot [INFERRED that it does for every ticked record: its writers store the slot or 10, *Which bytes are read back and which are not*, below]. **`+0xED` starts at 0**: the constructor `0x409160` zeroes `ebx` (`0x40918B`) and stores it there (`0x4092DC`), and the only other stores are the two scan paths' GameTime after their scan (`0x40AD51`, `0x40B2FB`), so a record made at GameTime 30 or later scans at its first players phase; the demo recorder's takeover relies on it (*The radar pass `0x467440` and the minimap's fog composite*, below). `0x40AD20` is a second copy of the gated scan (`0x40AD29..0x40AD3E`, the same 30-tick test, then `0x40AA40` and the RNG draw) with no direct call and no pointer to it anywhere in the file. DISASSEMBLED 2026-10-11 for `+0xED` and `0x40AD20`. DIS |
@@ -1281,8 +1281,8 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   model-space point with `0x43DEF0` (`0x43E437`) and adds the unit's `+0x6A/+0x6E/+0x72`. It writes
   only `out` (`0x43E458..0x43E45D`) and the query's own COB thread record. With no script, all
   eight thread records busy, a null `+0x9E` or a piece out of range, the point is the unit's
-  origin. The query runs where the handler runs, on the owner's machine [INFERRED: a script that
-  alternates pieces through a static answers differently on a puppet].
+  origin. The query runs where the handler runs, on the owner's machine; a recording carries it
+  and a playing makes it again (*The owner's COB queries*).
 
 ### COB on a puppet: getter 75, the writers COB reaches, fresh COB [DISASSEMBLED + SOURCE 2026-09-29]
 
@@ -1468,21 +1468,207 @@ AutoAim and the local block (orders, movement, regeneration) run only for types 
   tenseat commander's recorded inputs: made after the unit tick it gives walk/walklegs/stand
   103/3/394 over [481, 1411) and 109/0/445 over [301, 1291), the puppets' measured counts; made
   before it, 102/6/393 and 108/3/442, the live machines' measured counts, call for call.
-  Residuals of the same class, open:
+  Residuals of the same class:
   - **A unit created during play** in a later slot of a block not yet finished (a factory's
     product, a builder's nanoframe) gets its slice in the creating tick on the recording machine
-    (the slot loop's re-read, the unit tick's row above); the playing makes it at the replay step,
-    after the unit tick, so its COB runs one tick behind for its life [INFERRED; tenseat builds
-    only structures, so nothing measured shows it].
-  - **AutoAim's starts (A5)** run before the unit's slice on the recording machine and after the
-    host's unit tick on a puppet: the same one-slice lag, for one start. By the mechanism above it
-    can re-phase a looping script for the rest of the unit's life [INFERRED: tenseat had no aiming].
+    (the slot loop's re-read, the unit tick's row above). Closed by the slice marker: its create's
+    Create start (`0x485DE6`) is an engine start on its COB since the capture point, so the
+    recorder writes `RK_EV_SLICE` just before its slice, after the create's own events, and a
+    playing gives the slice there once it has made the unit (*The COB module's entries*, below;
+    `tagpu_replay.c`, THE SCRIPT SLICES).
+  - **AutoAim's starts (A5)** -- TargetCleared (`0x48A1E0` at `0x49E1E1`, the start at `0x48A2E0`),
+    the aim script (`0x49E31C`, `0x49E386`) with its broadcast (`0x49E3A6`), FirePrimary and
+    RockUnit from the fire function (`0x49CB94`, `0x49CBEB`) -- run in the unit's own turn, before
+    its slice. Closed the same way: each is an engine start on the unit's COB, so its slice is
+    marked, and a playing replays the recorded start, broadcast and shot before the marker and
+    gives the slice at it.
   - **The walk class's run-now pass against starts made after the unit tick.** The AI changes
     orders in the players phase, after the unit tick; a StopBuilding made there goes in with step
     T's events, before image T+1's walk class, whose run-now start then runs every record with
     `dt = 0`, that start's first slice included, a tick before the recording machine ran it. Not
     seen in the three games simulated: their live sequences matched exactly.
 
+
+### The COB module's entries: every start outside a slice, and the script slice [DISASSEMBLED 2026-10-12]
+
+What the demo recorder's slice markers rest on (`tagpu_recorder.c`, THE SLICE MARKERS;
+`tagpu_replay.c`, THE SCRIPT SLICES): outside a slice, a COB object's threads are made only by two
+functions, both reached by every start the engine, Impure or a playing makes. Whole-file scans of
+`pristine/TotalA.exe.pristine` with `objdump -d`, every `call`/`jmp`/`jcc` by target, and a search of
+the file for each entry's address as a dword.
+
+**The thread allocator `0x4B08C0(cob, idx)`** (`thiscall`) has exactly eight callers:
+
+| caller | in | what it is |
+|---|---|---|
+| `0x4B0896`, `0x4B08AA` | `0x4B0830` | no caller anywhere |
+| `0x4B099F` | the start by name `0x4B0940` | `(name, cb, now)`, `ret 0xC` |
+| `0x4B0A18` | `0x4B0A10` | no caller anywhere |
+| `0x4B0B08` | the start by index `0x4B0B00` | `(idx, cb, now, argc, a0..a3)`, `ret 0x20` |
+| `0x4B0C48` | the query `0x4B0C40` | runs the thread at once through the runner at `dt` 0 (`0x4B0CE1`); its one caller is the query by name `0x4B0BC0` (`0x4B0C2F`) |
+| `0x4B18BB` | the VM's START | inside a slice (the caller key `0x4B18C0`) |
+| `0x4B1928` | the VM's CALL | inside a slice (the caller key `0x4B192D`) |
+
+The start by name with arguments `0x4B0A70` calls `0x4B0B00` (`0x4B0AEE`). A start by name of a
+script the COB lacks still reaches the allocator, with -1 (`0x4B0995..0x4B099F`), which refuses it
+(`0x4B08C5..0x4B08D0`). No dword in the file holds `0x4B0B00`, `0x4B0940`, `0x4B0A70`, `0x4B08C0`,
+`0x4B0BC0`, `0x4B0C40` or `0x4B0D60`.
+
+**Every call into the COB module from outside it** -- targets in `0x4B0610..0x4B2BFF` from
+sources outside that range; the constructor `0x4B0610` is the module's first function, and the
+functions at `0x4B0000..0x4B060F` are graphics helpers called from `0x4A1BE7..0x4AFF60` that call
+no COB entry:
+
+| target | callers | what it is |
+|---|---|---|
+| `0x4B0610` | `0x485D88` | the constructor |
+| `0x4B06F0` | `0x485E33` | the destructor body, in the deleting destructor `0x485E30` |
+| `0x4B0720` | `0x485DAC` | the script load onto the object |
+| `0x4B07C0` | 9 (`0x4385A2`, `0x43860F`, `0x43A235`, `0x456123`, `0x456213`, `0x48987B`, `0x48992B`, `0x48A12C`, `0x48A2C3`) | name to index |
+| `0x4B0940` | 15 (`0x40F433`, `0x41148D`, `0x411794`, `0x411DA1`, `0x411E2B`, `0x43DAF2`, `0x43DB27`, `0x485DE6`, `0x48B106`, `0x48B12B`, `0x48B14E`, `0x48B169`, `0x49CB94`, `0x49CD4F`, `0x49CF73`) | start by name |
+| `0x4B0A70` | 21 (`0x406834`, `0x4069BF`, `0x4113EF`, `0x437902`, `0x43795E`, `0x43798A`, `0x43DBE8`, `0x486877`, `0x489898`, `0x489948`, `0x489F43`, `0x489F8E`, `0x48A149`, `0x48A2E0`, `0x499C5C`, `0x49CBEB`, `0x49CDA6`, `0x49CFCA`, `0x49E186`, `0x49E31C`, `0x49E386`) | start by name with arguments |
+| `0x4B0B00` | 4 (`0x4385C7`, `0x43862B`, `0x43A251`, `0x455551`) | start by index |
+| `0x4B0BC0` | 14 (`0x4027FB`, `0x4113B1`, `0x41189C`, `0x411A35`, `0x411AA6`, `0x411BF5`, `0x411CF1`, `0x43E227`, `0x43E291`, `0x43E32C`, `0x43E370`, `0x43E3E4`, `0x43E427`, `0x4865C3`) | queries |
+| `0x4B0D60` | 1 (`0x48ADEB`) | DoScriptsNow |
+| `0x4B1EC0` | `0x48773D` | the saved game's save |
+| `0x4B2040` | `0x487600` | the saved game's load |
+| `0x4B2450` | `0x42D294`, `0x42D8EF` | the script file's load, in the unit-def loader |
+| `0x4B2540` | `0x42D275`, `0x42DC3C` | the script file's release, in the unit-def loader |
+
+So, outside a slice, a COB object's threads change only through a start at `0x4B0940` or
+`0x4B0B00`, a query (which runs to completion at `dt` 0; the two an order handler makes are
+recorded and made again by a playing, *The owner's COB queries* below, and AutoAim's aim queries
+are owner-only on a puppet: the `0x4B0C4D` rows of `replay-absent.tsv`), its setup, its free, and
+the saved game. Impure's own
+starts (`tagpu_weapons.c` through `0x4B0A70`) and a playing's (`tagpu_replay.c`, `E_StartIdx`,
+`E_StartName`, `E_StartName0`) enter the same two functions.
+
+**The two start entries' first bytes**, which Impure's observers take (`tagpu_recorder.c`,
+`OBSERVE_SITES`): `0x4B0B00` `8B 44 24 04 57` (`mov eax,[esp+4]; push edi`), `0x4B0940`
+`51 53 55 56 57` (`push ecx; push ebx; push ebp; push esi; push edi`). Neither span holds a relative
+instruction, and nothing branches into bytes 1-4 of either. The observer reads `ecx`, the COB
+object the start is made on, as a key, and never dereferences it.
+
+**DoScriptsNow `0x4B0D60(cob, dt)`** (`thiscall`, `ret 4`) runs the thread runner `0x4B0DA0(i, dt)`
+over the records when `[cob+0x53C]` is set (the count byte at `0x4B0D81` is the records' bound,
+which the raised build sets to `TAGPU_COB_THREADS`), then the piece stepper `0x4B1C00(dt)`. Its
+one caller is the unit tick's `0x48ADEB`, with `dt` 1, and `dt` is the only amount a sleep counts
+down by (`0x4B0DEF..0x4B0E01`): a unit's COB clock is the number of slices it has had.
+
+**The object's life.** The setup `0x485D40` allocates `0x544` bytes (`0x4B4F10` at `0x485D78`),
+constructs (`0x4B0610` at `0x485D88`), writes the vtable `0x4FD698` (`0x485D8D`, the vtable's one
+reference in the file), stores the object at `+0x9A` (`0x485D9F`), loads the script (`0x4B0720`
+at `0x485DAC`), makes the model (`0x45A950` at `0x485DC0`), binds it (`0x480D40` at `0x485DD2`),
+and then starts Create through `0x4B0940("Create" 0x508BE0, 0, run-now 1)` at `0x485DE6`
+unconditionally: every new COB object has a start. A type with no script takes `0x485DFE`, which
+stores NULL at `+0x9A` (`0x485DFF`). The vtable holds the VM's engine callbacks (`0x480770` ..
+`0x481470`) and, at `+0x50`, the deleting destructor `0x485E30`. The unit destructor `0x4866D0`
+deletes the object through `call [eax+0x50]` with flag 1 (`0x486D8A`) and stores NULL at `+0x9A`
+(`0x486D8D`), both on the game thread in play. `+0x9A` has two more stores in `.text`, `0x4A9FFE`
+and `0x4AA88D`, in GUI code beside `+0x96`, of elapsed times from `0x4B6340` [INFERRED: not a unit
+record]. So a COB object lives from its unit's setup to its unit's destructor.
+
+**AutoAim's starts**, all in the unit's own turn before its script call (*AutoAim's slot loop*,
+below): the target read `0x48A1E0` (`0x49E1E1`) starts TargetCleared through `0x4B0A70` at
+`0x48A2E0`; the aim script is started through `0x4B0A70` at `0x49E31C` and `0x49E386` with
+callback `&slot+8`, run-now 0 and argc 2, its name from the table at `0x509688` (AimPrimary,
+AimSecondary, AimTertiary), and broadcast at `0x456200` (`0x49E3A6`), which the recorder takes at
+its hook `0x456218`; the fire function `call [ebx+0x60]` (`0x49E43C`) is one of `0x49C9C0`,
+`0x49CDE0` and `0x49CC20`, which start FirePrimary through `0x4B0940` (`0x49CB94`, run-now 0, the
+names at `0x509678`: FirePrimary, FireSecondary, FireTertiary) and RockUnit through `0x4B0A70`
+(`0x49CBEB`, the name at `0x5096F8`), and record a shot. On a puppet the shot receiver `0x49D270`
+calls the same fire functions (`0x49D44E` among others). The wind starts SetDirection and SetSpeed
+(`0x437910`, the names at `0x50500C` and `0x505000`, `0x43795E`, `0x43798A`) come earlier in the
+same turn, on a puppet too.
+
+**A death's Killed: the owner's query, a peer's run-now start.** `Send_UnitDeath 0x4864B0`, the
+death of a unit the machine itself destroys, runs Killed as a query, `0x4B0BC0(cob, "Killed"
+0x508BE8, &severity, &corpse, 0, 0)` at `0x4865C3` (`thiscall`, `ret 0x14`; it finds the index by
+name and calls the query `0x4B0C40` at `0x4B0C2F`), which allocates one thread (`0x4B0C48`) and
+runs that thread alone at `dt` 0 (`0x4B0CE1`); it skips the query for modes 4, 5, 7 and 9 and a
+unit whose `+0x108` is above 0 (`0x486525..0x48655C`), and writes the query's severity as the
+`0x0C`'s `+9` (`0x4865E9..0x4865F4`): the value after the call, which the query wrote back
+(`0x4B0CE6..0x4B0D11`), so it is the value that went in unless the script assigns its first
+parameter [INFERRED: no stock Killed seen to]. The corpse slot it passes is a local written only on the
+mode-7 path, which skips the query (`0x48652C`, `0x486528`). The destructor `0x4866D0(rec, mode)`
+starts Killed itself only in mode 0 and when the record's severity `+9` is above 0
+(`0x48684A..0x48685A`): `0x4B0A70("Killed", 0, run-now 1, argc 1, severity, 0, 0, 0)` at
+`0x486877`, after which nothing relies on what the call leaves in `eax`, `ecx` or `edx`: the paths
+that skip it (`0x486853`, `0x48685A`) join it at `0x48687C` with unrelated values there (the stock
+call returns with `ecx` the COB object, its `pop ecx`). A run-now
+start runs every record of the object at `dt` 0, so a waiting thread of the dying unit -- an aim
+script whose turn the last slice finished -- runs on and starts what it starts before the object
+is deleted, which the owner's query does not. A playing applies a recorded death as a peer's,
+mode 0, so Impure takes the call at `0x486877` (`tagpu_patches.c`, THE KILLED SCRIPT OF A
+REPLAYED DEATH): inside a replayed death the recording machine made itself, the query with the
+record's severity, the recording machine's answer -- so a severity of 0 or below there makes no
+Killed on the playing (`0x48685A`'s `jle`); everywhere else the stock start.
+
+**The script slice in Impure.** The unit tick's script call (`0x48ADDF..0x48ADF0`, the unit tick's
+row) jumps to `pushad; push esi; call unit_slice; add esp,4; popad; jmp 0x48ADF0`, in the
+fail-closed table of both builds (`tagpu_patches.c`, THE SCRIPT SLICE). `unit_slice` reads `+0x9A`
+as `0x48ADDF` does, asks the recorder for a marker (`tagpu_rec_slice`: on a recording level,
+`RK_EV_SLICE` when the COB object had a start at `0x4B0B00` or `0x4B0940` since the capture
+point), asks a playing whether it gives this slice at the recording's marker instead
+(`tagpu_replay_slice_defer`), and otherwise calls `0x4B0D60(cob, 1)` itself, counted at
+`0x48ADEB` with aux 0 (in the unit tick), 1 (at its recorded place) or 2 (at a playing's step's
+end).
+
+### The owner's COB queries [DISASSEMBLED 2026-10-12]
+
+What `RK_EV_QUERY` rests on (`tagpu_recorder.c` and `tagpu_replay.c`, THE OWNER'S QUERIES). Of the
+fourteen calls of the query `0x4B0BC0` (*The COB module's entries*, above), two are made only by
+an order handler, which a playing's puppets never run:
+
+- **`QueryBuildInfo`** (`0x501330`), whose one call is `0x4027FB`, in BuildingBuild `0x402640`'s
+  state dispatch (the case at `0x4027D9`, through the table `0x402B5C`): `mov edi,[esp+0x44]`
+  (`0x4027D9`) takes the handler's unit, `mov ecx,[edi+0x9A]` (`0x4027E5`) its COB object, `push
+  0x501330` (`0x4027EE`) the name, and the piece local is set to -1 (`0x4027F3`) before its
+  address is passed as the first argument, the other three 0. The answer feeds the build position
+  `0x43E060` at `0x40280B`.
+- **`QueryNanoPiece`** (`0x5052D4`), whose one call is `0x43E427` inside `0x43E400(unit, out)`,
+  with the piece local set to 0 (`0x43E41F`) and the other three arguments 0 (*The nano spray*,
+  above); `0x43E400` has fifteen callers, all order handlers, each passing the spray's source: the
+  handler's unit (the order's `+0xE`, or the register holding it), except SelfRepair `0x402430`,
+  which passes the repairing pad, the order's target `+0x16` (`mov eax,[edi+0x16]` at `0x402525`,
+  the call at `0x40252E`), in the aircraft's turn; the pad can be another player's.
+
+`0x4B0BC0` reads the object at once (`mov eax,[ecx+8]`, `0x4B0BC1`), so a unit with no script
+(`+0x9A` NULL, `0x485DFF`) never reaches either call in a running game. It finds the script by
+name (`0x4B0BDE..0x4B0C11`; a missing one gives -1) and calls the query `0x4B0C40` (`0x4B0C2F`),
+which allocates a thread (`0x4B0C48`, the count key `0x4B08C0` from `0x4B0C4D`), reads each
+non-NULL argument pointer in (`0x4B0C5C..0x4B0CCA`), runs that thread alone at `dt` 0
+(`0x4B0DA0` at `0x4B0CE1`) and writes the four values back to the non-NULL pointers
+(`0x4B0CE6..0x4B0D11`): the script can change the object's statics and pieces.
+
+**Where they run.** The handlers are entered only through the three dispatch calls `0x43A21A`,
+`0x43B87C` and `0x43BB21` (*The nano spray*). `0x43B87C` is in the order run `0x43B7C0` and
+`0x43BB21` in `0x43BAD0`, whose only callers are the unit tick's `0x48AF98` and `0x48AF9E`, in the
+unit's turn after its script slice (`0x48ADEB`) and behind the gate that its owner be a local
+seat of type 1 or 2 (`0x48AEB5..0x48AECD`); no dword in the file holds either address.
+`0x43A21A` is the destructor `0x43A1F0`'s call, with event 2, which BuildingBuild returns on
+before its state dispatch (`0x402647..0x40264D`) and which the ten handlers that do not set the
+order's bit `0x02` never receive. So each query is made in the handler's unit's own turn, after
+that unit's slice, inside no death and no feature call, on the machine of that unit's owner. The
+queried unit is that unit, except SelfRepair's pad: its query can come before the pad's own slice
+in the same tick, and on a machine that does not own the pad. The slice markers' start set notes
+every query's COB, which is what puts the pad's later slice after the query on a playing.
+
+**In Impure.** A recording carries each as `RK_EV_QUERY {ID, the query}` where the engine makes
+it: a stub on the call `0x4027FB`, built like the owner-only starts' (the `call`, the `mov` and the
+name's `push` compared first; `edi` the unit, its `+0x9A` checked against `ecx`), and the existing
+observer at `0x43E400`'s entry, whose unit is its first argument. The query's COB object is noted
+in the slice markers' start set as a start's is. A playing makes the same `0x4B0BC0` there, on the
+`+0x9A` of the unit live in the ID's slot, with -1 or 0 in the first argument and NULL for the
+rest; `0x43E400`'s own work after its query, the piece's point through `0x43DEF0`, is not made,
+since it writes only the handler's buffer and the spray that takes the point is recorded. The
+other twelve calls are not recorded: the Killed query `0x4865C3` (*A death's Killed*, above);
+AutoAim's aim and `SweetSpot` queries `0x43E227`..`0x43E3E4`, owner-only on a puppet and accepted
+as such by the owner (`replay-absent.tsv`); and `QueryTransport` `0x4113B1` and `QueryLandingPad`
+`0x41189C`, `0x411A35`, `0x411AA6`, `0x411BF5` and `0x411CF1`, which lie among the air transport
+and landing order handlers (VTOL_Pickup `0x4111B0`, VTOL_Landing `0x4118E0`) [INFERRED from their
+addresses, not traced one by one]. If those are order handlers' too, a playing does not make
+them: an open gap, which no replay fixture reaches (none carries an air transport or an air pad).
 
 ### Seating a level: the SKIRMISH Start, the seat fill, the start commanders and the two end tests [DISASSEMBLED + MEASURED 2026-09-29]
 
@@ -2175,10 +2361,11 @@ one did not fit.
 | `0x4866D0` (9 bytes) | the destructor `(rec, mode)`'s entry | the record: the victim's `u16` at `+1`, the killer's netid at `+3`, the killer's `u16` at `+7`, the severity at `+9`, the kind at `+0xA`. A call the destructor would make inert (B3's bound at `0x4866E5`, the alive test at `0x486706`) is not recorded; a killer of 0 is none (`0x48675A`). The killer's player by `0x44FE40`'s rule (below); C4's carried decision (`tagpu_tx_carried`); the victim's image as the destructor finds it |
 | `0x41B8D0` (6 bytes) | the build done `(builder, built)`, `ret 8` | both arguments. Its five callers are listed at the table's `0x41B8D0` row above; the build step `0x41BA60` calls it at `0x41BCBF` when the built unit's `+0x104` compares equal to 0.0 (`0x41BCAA..0x41BCBB`), so every build that finishes in play passes here |
 | `0x48B090` (5 bytes) | the state setter `(mask, value)`, `ecx` the unit, `ret 8` | the byte `+0x10E` as the setter will leave it (`0x48B09A..0x48B0D4`), recorded only when it changes, since the setter returns at once otherwise (`0x48B0DE`) |
+| `0x47DAF1` (6 bytes: `mov [esi+0x10F],bl`) | YARD_OPEN `0x47DAC0`'s write, past its refusal `0x47D970`; no branch targets `0x47DAF2..0x47DAF6` | `esi` the structure, `bl` the new `+0x10F`: its bit 2 as `RK_EV_YARD` (*An open yard gives nothing back*), held until its create when the structure is inside it, kept out where THE YARD RULE would refuse it; skirmish recordings only |
 | `0x456190`, `0x456290` (5 bytes each) | the broadcast starts `(unit, idx)` and `(unit, idx, argc, a0..a3)` | the arguments as the `0x10` carries them |
 | `0x456218` (6 bytes) | inside the broadcast start by name `0x456200(unit, name, argc, a0..a3)`, after `0x4B07C0` has turned the name into the index (`0x456213`) | `esi` the unit (`0x456208`), `eax` the index, the arguments at `E+0x28` (the function's `sub esp,0x18; push esi`) |
 | `0x47F780` (6 bytes), `0x47F850` (5 bytes) | the unit replies `(unit, kind, text)`, before their viewer tests (`0x47F850` tests first that the unit is off screen, `0x48BCB0` at `0x47F856`) | every player's reply, the text copied only to its end. `0x47F7E0`, between them, is never called: no call, jump or stored address names it, and its address occurs nowhere in the image |
-| `0x43E400` (8 bytes) | `QueryNanoPiece` `(unit, out)` | the unit and the out pointer, for the spray's credit (below) |
+| `0x43E400` (8 bytes) | `QueryNanoPiece` `(unit, out)` | the unit and the out pointer, for the spray's credit (below); its query as `RK_EV_QUERY` (*The owner's COB queries*) |
 | `0x4720D0`, `0x472200` (7 bytes each) | the nano emitters `(point, box, layer)` and `(box, point, layer)` | the point, the box and the layer, credited to a unit |
 | `0x43A216`, `0x43B878`, `0x43BB1D` (8 bytes each) | the order dispatch: the order's `mov`, its `push`, and the `call [reg+4]` 4 bytes on (`0x43A21A`, `0x43B87C`, `0x43BB21`), the only ways into a handler ([*The nano spray*](#the-nano-spray-two-emitters-fifteen-order-handlers-disassembled-2026-09-29)) | nothing: they forget the last query |
 
@@ -3621,7 +3808,7 @@ fixture.
 
 ### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 20 carries a stream block's unit deltas as residuals against a prediction, the
+Recording format 21 carries a stream block's unit deltas as residuals against a prediction, the
 *unit frame* (`tagpu/ddraw/src/tagpu_reccodec.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the plan and its measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md)). Where a rule exists the prediction
@@ -3833,7 +4020,7 @@ ground speed's halving in water; a sort bucket that `fix_last_cell`'s stub clamp
 
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 20 carries a stream block's projectile records as the *pool frame*
+Recording format 21 carries a stream block's projectile records as the *pool frame*
 (`tagpu/ddraw/src/tagpu_reccodec.c`, THE POOL FRAME; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md#l2-the-pool-frame-measured)): the
@@ -3907,7 +4094,7 @@ largest residual column of the battle, 214 KiB of its 2.09 MiB.
 
 ### The demo recorder's record frames: the engine facts they predict from [DISASSEMBLED + MEASURED 2026-10-10]
 
-Recording format 20 makes the bodies of a stream block's cells, order lists, events and state
+Recording format 21 makes the bodies of a stream block's cells, order lists, events and state
 records from four *record frames* (`tagpu/ddraw/src/tagpu_recframe_cells.c`, `_orders.c`,
 `_events.c`, `_state.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
@@ -8020,6 +8207,88 @@ bit-27 units, or when its record is made anew -- the create's init clears both m
 `and eax,0xF3FFF7FF`) [DISASSEMBLED; MEASURED
 2026-10-12 with no exception in 776 dumps, 284 of them live, holding 2,042 stamped bit-27 units].
 Every clear ends with `0x440A70` (`0x47D2CA`).
+
+**An open yard gives nothing back.** YARD_OPEN `0x47DAC0` sets `+0x10F` bit 2 and the structure's
+own bit 27 (`0x47DAD5..0x47DAF7`), re-claims for the structure alone (`0x47DAFD`) and refreshes the
+passability (`0x47DB0A`); it calls no clear. The structure's re-claim walks its yardmap under the
+mask `+0x10F` bit 2 selects (`0x47C804..0x47C817`: 2 open, 4 closed): a cell its byte sets is taken
+or contested, and a cell it does not set is let go only if it names the structure
+(`0x47C8AE..0x47C8B7`). So a unit that lost a yard cell to the closed structure keeps bit 27 and
+gets no cell when the yard opens -- a holder's clear is the one walk that would re-claim for it.
+
+**A lab can open its yard and make the nanoframe in it in the same tick** [DISASSEMBLED 2026-10-12].
+YARD_OPEN's one caller is the COB setter (`0x480BAE`), so the yard opens in the lab's script slice:
+the unit tick `0x48AD30` runs `DoScriptsNow(1)` `0x4B0D60` at `0x48ADEB`, and only after it, for an
+owner of type 1 or 2, the order run `0x43B7C0` (`0x48AF98`). There the build handler BuildingBuild
+`0x402640` waits for INBUILDSTANCE (`0x438700` at `0x4027CA`) -- which a lab's script sets in the
+slice that opens the yard [INFERRED: the stock labs' order of the two] -- then asks
+`QueryBuildInfo` (`0x4027FB`), tests the placement `0x47DB70` at `0x402899` (on failure it sleeps
+15 ticks) and creates through `0x485F50` at `0x4028EA`. Nothing in the turn
+stands between the slice's yard and the handler's create, so both can fall in one tick, the yard
+first; slice-walkers measured them one tick apart (lab 502 opened at GameTime 2962, nanoframe 527
+was made at 2963 on the yard's four free cells). The placement test does not see the yard: for a
+mobile def (`+0x22F` ≠ 0, the path at `0x47DBF4`) it refuses only a footprint cell whose slot A
+names another unit (`0x47DCFD..0x47DD0A`), so the order the cells were freed in decides the
+create.
+
+**So the recording carries the yard at its place, and a playing applies it there.** The recorder
+observes YARD_OPEN's write `mov [esi+0x10F],bl` at `0x47DAF1` (6 bytes, `88 9E 0F 01 00 00`;
+no branch in the file targets `0x47DAF2..0x47DAF6`), after the refusal `0x47D970` has passed
+(`0x47DACC..0x47DAD3`) and with `bl` the new byte (`0x47DAD5..0x47DAEC`), and writes `RK_EV_YARD
+{ID, the yard}` among the step's events, wherever the setter ran. A playing makes the same yard
+through the re-claim `0x47C790` and `0x440A40` at that place in the events, so a create that
+follows it in the step finds the cells the game's create found (`tagpu_replay.c`, *A RECORDED
+YARD_OPEN*). A replay that makes units in slot order (the first step, a seek) writes each made
+unit's yard as its create returns (`yard_put` in `level_units`), before the next create stamps
+[MEASURED: before it, a seek at 3001 left 527 with bit 27 and its four cells empty; with it, every
+round trip of slice-walkers, forest-circle and battle is EQUAL]. The image's yard goes in after
+the positions wherever the host's still differs.
+
+**A yard can also open inside its structure's own create, before its stamp** [DISASSEMBLED
+2026-10-12]. The create `0x485F50` first runs the init `0x485A40` (`0x4860A0`), which writes the
+footprint's size (`+0x7E`, `0x485AAA`) and cell (`+0x76`, `0x485BD3`) and clears `+0x10F`'s low
+nibble, the yard among it (`0x485B3E..0x485B52`); then the COB setup `0x485D40` (`0x4860A6`),
+which starts Create with run-now set (`0x485DE6`), so Create's first slice -- and a SET YARD_OPEN
+in it, whose refusal now reads a valid footprint -- runs there; and only after it the placement
+`0x48A870` (`0x486109`) and the stamp `0x47CC30` (`0x48610F`), whose yardmap path takes its mask
+from `+0x10F` bit 2 (`0x47CD88..0x47CD9A`). CreateFromNetwork `0x4861D0` has the same order
+(`0x4862BE`, then `0x486306` and `0x48630C`). So such a yard is stamped open, and setting it after
+the create returned would stamp under the closed mask first. The recording carries the event
+before the create's `RK_EV_CREATE` (the create is recorded at its exit, `0x4861B3`). The replayed
+create runs with the puppet gates open (`tagpu_replay.c`, `make`), so its own Create makes the SET
+again at the engine's place, as it makes the create's state byte; the recorded yard is held until
+that create returns and compared with the yard the host's create left (`yard_check`), and a
+difference fails the replay harness's *the yards a create opened* for that lane.
+
+**A death's own Killed opens no yard inside its death** [DISASSEMBLED 2026-10-12]. The destructor
+`0x4866D0` has two callers: Send_UnitDeath `0x4864B0` (`0x486679`, mode 1) and the `0x0C` network
+receiver (`0x455423`, mode 0). Send_UnitDeath runs Killed as a query (`0x4B0BC0` at `0x4865C3`)
+before it calls the destructor, so on a skirmish recording machine -- every death its own --
+Killed's yard comes before the death's `RK_EV_DEATH`, on a unit still live. The destructor's own
+Killed start (`0x4B0A70` at `0x486877`, after the footprint clear `0x47CBD0` -> `0x47D0E0` at
+`0x48682D`) runs in mode 0 alone (`0x48684A..0x486853`), and its other script starts pass run-now
+0: the order purge's teardown `0x43A1F0` starts TargetCleared through `0x489800` (`0x43A2B9`) and
+StopBuilding at `0x43A251`, and its dispatch of event 2 to the order's handler (`0x43A21A`) reaches
+handlers whose own starts pass run-now 0 -- BuildingBuild (`0x402653..0x402717`), SelfDestruct,
+HelpBuild and VTOL_MobileBuild (returning at `0x41C110`), AirStrike and AirToGround, VTOL_Pickup's
+states 4 and 5 (EndTransport, `0x4B0940` at `0x41148D` after `0x411479`). So no script of the dying
+unit runs inside its own death's bracket. A yard inside another unit's death -- the Killed query of
+a unit that death's explosion kills, the explosion's own starts (HitByWeapon `0x489F43`, TakeDamage
+`0x489F8E`, RockUnit) passing run-now 0 -- is played after the whole destructor, just before that
+unit's own death, as every event nested in a skirmish death is.
+
+**THE YARD RULE** (`tagpu_recfmt.h`) follows from the two: a yard of a unit live at its place in
+the step's events is that unit's yard there, written at that place; a yard of a unit not live is
+its create's, and that create follows in the step; anything else -- a yard inside a feature call,
+one naming the unit of a death still open, or one of a unit not live whose create does not follow
+-- is malformed. The recorder holds a create's own yards and puts them just before the create
+records itself, and keeps what the rule would refuse out of the file and counts it (the replay
+harness fails any); the writer refuses a malformed record, and both readers (`tagpu_recreader.c`,
+`tarec.py`) refuse the file. The playing compares every create's yard with the recording's: the
+last yard its Create opened, or closed, since the init clears `+0x10F`'s low nibble
+(`0x485B4A`, `0x485B52`) and nothing to the exit writes bit 2 but YARD_OPEN -- a Create refused
+its yard on the recording machine (`0x47D970`) included. `tarec check` asks the same of the
+recording: a unit made in the step shows the yard of its last yard event, or the closed one.
 
 **The rule on a skirmish recording machine.** Its seats are type 1 (local human) and 2 (local AI)
 (MEASURED, the controllers of both recordings the decision rests on), so the incumbent always keeps

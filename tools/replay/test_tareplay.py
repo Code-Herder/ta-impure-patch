@@ -3,7 +3,8 @@
 segments and world): the C parser against the coverage build's map, the features' regions, the
 comment filter, `landing --check`, a recording's segments and chains, what the block walk refuses,
 its runs and snapshot chains, and which cells are images, read from files built from the format alone, the fixtures'
-takeover entries and the W lane's edited header copies. No game runs. The files are read through
+takeover entries, the W lane's edited header copies, and compare-counts' script slice and exact
+COB children. No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
 shared venv when they are missing.
 
@@ -439,6 +440,96 @@ class RewindPolicy(unittest.TestCase):
         self.assertNotIn(4, a.sight)
         self.assertNotIn(4, b.sight)
         self.assertNotEqual(a.sight[0], b.sight[0])
+
+
+def counts_compare(live, puppet, rewind=False, cob_exact=False):
+    """compare-counts over a window whose first dumps count nothing: `live` and `puppet` are the
+    second dumps' counts. (exit code, report)"""
+    meta = (0, (1 << len(tarec.COUNT_SINKS)) - 1, 1)
+    samples = [(10, {}, meta, {}), (20, live, meta, {123: "walk"}),
+               (10, {}, meta, {}), (20, puppet, meta, {})]
+    out = io.StringIO()
+    with patch.object(tarec, "header_only", return_value={}), \
+         patch.object(tarec, "counts_of", side_effect=samples), \
+         patch.object(tarec, "absent_rows", return_value=((5, 2), [])), \
+         redirect_stdout(out):
+        result = tarec.cmd_compare_counts("rec", "a", "b", "c", "d", "rows", rewind, cob_exact)
+    return result, out.getvalue()
+
+
+class SliceRoot(unittest.TestCase):
+    """The script slice 0x48ADEB, compared per placement (aux) exactly."""
+
+    def counts(self, by_aux):
+        return {(tarec.SLICE_ROOT, 0, aux): n for aux, n in by_aux.items()}
+
+    def test_equal_per_aux(self):
+        c = {0: 100, 1: 7}
+        self.assertEqual(counts_compare(self.counts(c), self.counts(c))[0], 0)
+
+    def test_a_slice_moved_to_the_steps_end_fails_by_name(self):
+        for rewind in (False, True):
+            with self.subTest(rewind=rewind):
+                result, report = counts_compare(self.counts({0: 100, 1: 7}),
+                                                self.counts({0: 100, 1: 6, 2: 1}), rewind)
+                self.assertEqual(result, 1)
+                self.assertIn("the script slice 0x48ADEB at its recorded place: live 7, puppet 6",
+                              report)
+                self.assertIn("the script slice 0x48ADEB at the step's end: live 0, puppet 1",
+                              report)
+                self.assertNotIn("in the unit tick", report)
+
+
+class CobExact(unittest.TestCase):
+    """--cob-exact: the VM's START and CALL children by script name, with no band."""
+
+    def test_a_one_count_child_difference_fails_only_with_the_flag(self):
+        for caller, what in ((0x4B18C0, "START"), (0x4B192D, "CALL")):
+            with self.subTest(caller=what):
+                key = (0x4B08C0, caller, 123)
+                self.assertEqual(counts_compare({key: 100}, {key: 99})[0], 0)
+                result, report = counts_compare({key: 100}, {key: 99}, cob_exact=True)
+                self.assertEqual(result, 1)
+                self.assertIn(f'COB child {what} "walk": live 100, puppet 99', report)
+
+    def test_a_refused_index_stays_with_the_band(self):
+        key = (0x4B08C0, 0x4B18C0, 0)
+        self.assertEqual(counts_compare({key: 100}, {key: 99}, cob_exact=True)[0], 0)
+
+    def test_other_callers_keep_the_band(self):
+        key = (0x4B08C0, 0x4B0B0D, 123)
+        self.assertEqual(counts_compare({key: 100}, {key: 99}, cob_exact=True)[0], 0)
+
+    def test_rewind_and_cob_exact_exclude_each_other(self):
+        self.assertEqual(counts_compare({}, {}, rewind=True, cob_exact=True)[0], 2)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = tarec.main(["tarec.py", "compare-counts", "rec", "a", "b", "c", "d", "--rewind",
+                             "--cob-exact"])
+        self.assertEqual(rc, 2)
+
+    def test_the_fixture_key_reaches_the_live_against_playing_counts_alone(self):
+        self.assertEqual(tareplay.counts_options({"cob": "exact"}), ["--cob-exact"])
+        self.assertEqual(tareplay.counts_options({}), [])
+        with self.assertRaises(tareplay.CouldNotRun):
+            tareplay.counts_options({"cob": "banded"})
+        fx = {"rec": "rec.imprec", "Ts": [301, 2401], "out": Path("/nonexistent"),
+              "procs": {"P": "ran"}, "fix": {"cob": "exact"}, "name": "x"}
+        calls = []
+
+        class Res:
+            def add(self, *a): pass
+            def later(self, fn, *a):
+                calls.append(a)
+                return Mock()
+            def then(self, fn): pass
+        with patch.object(tareplay, "Ordered", Res), \
+             patch.object(Path, "exists", return_value=True):
+            tareplay.checks(fx)
+        compares = [a for a in calls if len(a) > 1 and a[1] == "compare-counts"]
+        self.assertEqual(len(compares), 1)
+        self.assertEqual(compares[0][-1], "--cob-exact")
+        self.assertFalse([a for a in calls if "--cob-exact" in a and a[1] != "compare-counts"])
 
 
 class CobFlarePolicy(unittest.TestCase):
@@ -2234,6 +2325,301 @@ class CellsAfterEvents(unittest.TestCase):
             w.apply(tarec.RK_CELLS, self.cells(0, 5))
         w.apply(tarec.RK_TICK, struct.pack("<I", 2))
         self.assertIsNone(w.apply(tarec.RK_CELLS, self.cells(0, 5)))
+
+
+class ScriptSlice(unittest.TestCase):
+    """RK_EV_SLICE in tarec's World, as the DLL's reader takes it (tagpu_recreader.c, event_take):
+    an event, outside every bracket, naming a slot of the level's."""
+
+    def world(self):
+        w = tarec.World(4, [], dims=(2, 2, 1, 1))
+        w.apply(tarec.RK_TICK, struct.pack("<I", 1))
+        return w
+
+    def test_an_event_at_the_top_level(self):
+        w = self.world()
+        self.assertEqual(w.apply(tarec.RK_EV_SLICE, struct.pack("<I", 2))[0], tarec.RK_EV_SLICE)
+        with self.assertRaisesRegex(tarec.Unreadable, "after an event"):
+            w.apply(tarec.RK_CELLS, CellsAfterEvents.cells(0, 5))
+
+    def test_refused_inside_a_feature_call_or_a_death(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_FEATURE, bytes([tarec.FR_TICK, 0, 0, 0]) + bytes(4))
+        with self.assertRaisesRegex(tarec.Unreadable, "inside a feature call or a death"):
+            w.apply(tarec.RK_EV_SLICE, struct.pack("<I", 2))
+        w = self.world()
+        w.apply(tarec.RK_EV_DEATH, struct.pack("<II4x", 2, 0) + bytes(tarec.REC_UNIT_IMAGE))
+        with self.assertRaisesRegex(tarec.Unreadable, "inside a feature call or a death"):
+            w.apply(tarec.RK_EV_SLICE, struct.pack("<I", 3))
+
+    def test_refused_outside_the_slots(self):
+        for unit in (0, 1, 5):              # slot -1, slot 0 (NULL's), slot 4 = slots
+            with self.subTest(unit=unit):
+                with self.assertRaisesRegex(tarec.Unreadable, "outside the array"):
+                    self.world().apply(tarec.RK_EV_SLICE, struct.pack("<I", unit))
+
+
+class SliceEvents(unittest.TestCase):
+    """EventCheck: a script slice names a unit live at its point, and a slot once an iteration."""
+
+    @staticmethod
+    def ev(kind, unit):
+        return kind, struct.pack("<I", unit) + bytes(24 if kind == tarec.RK_EV_CREATE else 0)
+
+    def notes(self, was, events):
+        ec = tarec.EventCheck()
+        ec.slices({slot: None for slot in was}, events, 10)
+        return ec.lines
+
+    def test_a_unit_in_the_images(self):
+        self.assertEqual(self.notes([2], [self.ev(tarec.RK_EV_SLICE, 3)]), [])
+
+    def test_a_slot_with_no_unit(self):
+        lines = self.notes([2], [self.ev(tarec.RK_EV_SLICE, 4)])
+        self.assertEqual(len(lines), 1)
+        self.assertIn("slot 3, which holds no live unit", lines[0])
+
+    def test_a_unit_created_earlier_in_the_iteration(self):
+        self.assertEqual(self.notes([], [self.ev(tarec.RK_EV_CREATE, 4),
+                                         self.ev(tarec.RK_EV_SLICE, 4)]), [])
+        self.assertEqual(len(self.notes([], [self.ev(tarec.RK_EV_SLICE, 4),
+                                              self.ev(tarec.RK_EV_CREATE, 4)])), 1)
+
+    def test_a_slot_sliced_twice(self):
+        lines = self.notes([2], [self.ev(tarec.RK_EV_SLICE, 3), self.ev(tarec.RK_EV_SLICE, 3)])
+        self.assertEqual(len(lines), 1)
+        self.assertIn("slot 2's script slice twice", lines[0])
+
+
+class OwnerQuery(unittest.TestCase):
+    """RK_EV_QUERY in tarec's World, as the DLL's reader takes it (tagpu_recreader.c, event_take):
+    an event, outside every bracket, naming a slot of the level's and a query it knows, its pad
+    zero; and EventCheck notes one whose unit is not live at its point."""
+
+    @staticmethod
+    def query(unit, which=1, pad=b"\0\0\0"):
+        return struct.pack("<IB", unit, which) + pad
+
+    def world(self):
+        return ScriptSlice.world(self)
+
+    def test_an_event_at_the_top_level(self):
+        w = self.world()
+        for which in range(tarec.REC_QUERIES):
+            self.assertEqual(w.apply(tarec.RK_EV_QUERY, self.query(2, which))[0],
+                             tarec.RK_EV_QUERY)
+        with self.assertRaisesRegex(tarec.Unreadable, "after an event"):
+            w.apply(tarec.RK_CELLS, CellsAfterEvents.cells(0, 5))
+
+    def test_refused_inside_a_feature_call_or_a_death(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_FEATURE, bytes([tarec.FR_TICK, 0, 0, 0]) + bytes(4))
+        with self.assertRaisesRegex(tarec.Unreadable, "inside a feature call or a death"):
+            w.apply(tarec.RK_EV_QUERY, self.query(2))
+        w = self.world()
+        w.apply(tarec.RK_EV_DEATH, struct.pack("<II4x", 2, 0) + bytes(tarec.REC_UNIT_IMAGE))
+        with self.assertRaisesRegex(tarec.Unreadable, "inside a feature call or a death"):
+            w.apply(tarec.RK_EV_QUERY, self.query(3))
+
+    def test_refused_outside_the_slots_or_the_queries(self):
+        for unit in (0, 1, 5):
+            with self.subTest(unit=unit):
+                with self.assertRaisesRegex(tarec.Unreadable, "outside the array"):
+                    self.world().apply(tarec.RK_EV_QUERY, self.query(unit))
+        for body in (self.query(2, tarec.REC_QUERIES), self.query(2, 0, b"\0\1\0"),
+                     self.query(2)[:4]):
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(tarec.Unreadable, "an owner's query of"):
+                    self.world().apply(tarec.RK_EV_QUERY, body)
+
+    def test_its_unit_live_at_its_point(self):
+        ec = tarec.EventCheck()
+        ec.slices({2: None}, [(tarec.RK_EV_QUERY, self.query(3)),
+                              (tarec.RK_EV_QUERY, self.query(3)),
+                              (tarec.RK_EV_QUERY, self.query(4))], 10)
+        self.assertEqual(len(ec.lines), 1)
+        self.assertIn("an owner's query of slot 3, which holds no live unit", ec.lines[0])
+
+
+class YardEvent(unittest.TestCase):
+    """RK_EV_YARD in tarec's World, as the DLL's reader takes it (tagpu_recreader.c, event_take):
+    an event, in a bracket or not, naming a slot of the level's and a yard of 0 or 1, its pad
+    zero, where THE YARD RULE lets it stand (tagpu_recfmt.h); and EventCheck's yards: a unit's
+    +0x10F bit 2 changes between two images only with a yard event whose last one for it is the
+    new yard, and a unit made in the step has its last yard event's yard, or the closed one."""
+
+    @staticmethod
+    def yard(unit, open_=1, pad=b"\0\0\0"):
+        return struct.pack("<IB", unit, open_) + pad
+
+    @staticmethod
+    def death(unit):
+        return struct.pack("<II4x", unit, 0) + bytes(tarec.REC_UNIT_IMAGE)
+
+    @staticmethod
+    def create(unit):
+        return struct.pack("<I", unit) + bytes(24)
+
+    def world(self, live=(1, 2)):
+        """slots 1 and 2 live in the iteration's images (unit IDs 2 and 3)"""
+        w = ScriptSlice.world(self)
+        for slot in live:
+            w.apply(tarec.RK_UNIT, struct.pack("<H2x", slot) + bytes(tarec.REC_UNIT_IMAGE))
+        return w
+
+    def end(self, w):
+        w.apply(tarec.RK_TICK, struct.pack("<I", 2))
+
+    def test_a_live_unit_in_or_out_of_a_bracket(self):
+        w = self.world()
+        self.assertEqual(w.apply(tarec.RK_EV_YARD, self.yard(2))[0], tarec.RK_EV_YARD)
+        with self.assertRaisesRegex(tarec.Unreadable, "after an event"):
+            w.apply(tarec.RK_CELLS, CellsAfterEvents.cells(0, 5))
+        w = self.world()
+        w.apply(tarec.RK_EV_DEATH, self.death(2))
+        self.assertEqual(w.apply(tarec.RK_EV_YARD, self.yard(3, 0))[0], tarec.RK_EV_YARD)
+        w.apply(tarec.RK_EV_DEATH_END, struct.pack("<I", 2))
+        self.end(w)
+
+    def test_a_yard_its_create_opens(self):
+        w = self.world(live=())
+        w.apply(tarec.RK_EV_YARD, self.yard(3))
+        w.apply(tarec.RK_EV_YARD, self.yard(3, 0))
+        w.apply(tarec.RK_EV_CREATE, self.create(3))
+        w.apply(tarec.RK_EV_YARD, self.yard(3))         # live from its create on
+        self.end(w)
+        w.whole()
+
+    def test_a_yard_whose_create_does_not_follow(self):
+        w = self.world(live=())
+        w.apply(tarec.RK_EV_YARD, self.yard(3))
+        with self.assertRaisesRegex(tarec.Unreadable, "whose create does not follow"):
+            w.whole()
+        with self.assertRaisesRegex(tarec.Unreadable, "whose create does not follow"):
+            self.end(w)
+
+    def test_a_dead_unit_out_of_a_bracket(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_DEATH, self.death(2))
+        w.apply(tarec.RK_EV_DEATH_END, struct.pack("<I", 2))
+        w.apply(tarec.RK_EV_YARD, self.yard(2))
+        with self.assertRaisesRegex(tarec.Unreadable, "slot 1, not live, whose create"):
+            self.end(w)
+
+    def test_a_yard_inside_its_own_death(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_DEATH, self.death(2))
+        with self.assertRaisesRegex(tarec.Unreadable, "inside its own death"):
+            w.apply(tarec.RK_EV_YARD, self.yard(2))
+
+    def test_a_yard_inside_a_feature_call(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_FEATURE, bytes([tarec.FR_TICK, 0, 0, 0]) + bytes(4))
+        with self.assertRaisesRegex(tarec.Unreadable, "a yard inside a feature call"):
+            w.apply(tarec.RK_EV_YARD, self.yard(2))
+
+    def test_a_death_before_the_create_its_yard_waits_for(self):
+        w = self.world(live=())
+        w.apply(tarec.RK_EV_YARD, self.yard(3))
+        with self.assertRaisesRegex(tarec.Unreadable, "whose create's yard waits"):
+            w.apply(tarec.RK_EV_DEATH, self.death(3))
+
+    def test_refused_outside_the_slots_or_the_yards(self):
+        for unit in (0, 1, 5):
+            with self.subTest(unit=unit):
+                with self.assertRaisesRegex(tarec.Unreadable, "outside the array"):
+                    self.world().apply(tarec.RK_EV_YARD, self.yard(unit))
+        for body in (self.yard(2, 2), self.yard(2, 1, b"\0\1\0"), self.yard(2)[:4]):
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(tarec.Unreadable, "a yard of"):
+                    self.world().apply(tarec.RK_EV_YARD, body)
+
+    @staticmethod
+    def unit(yard):
+        return (bytes(4), bytes(4), 0, 0x05 if yard else 0x01)
+
+    def notes(self, a, b, events, yards=True):
+        ec = tarec.EventCheck(yards=yards)
+        ec.transition({1: self.unit(a)}, events, {1: self.unit(b)}, 10)
+        return ec.lines
+
+    def test_a_yard_explained_by_its_event(self):
+        self.assertEqual(self.notes(0, 1, [(tarec.RK_EV_YARD, self.yard(2, 1))]), [])
+        self.assertEqual(self.notes(1, 0, [(tarec.RK_EV_YARD, self.yard(2, 1)),
+                                           (tarec.RK_EV_YARD, self.yard(2, 0))]), [])
+        self.assertEqual(self.notes(1, 1, [(tarec.RK_EV_YARD, self.yard(2, 1))]), [])
+
+    def test_a_yard_changed_with_no_event_or_another(self):
+        lines = self.notes(0, 1, [])
+        self.assertEqual(len(lines), 1)
+        self.assertIn("unit 1's yard went 0 -> 1 with no yard event", lines[0])
+        lines = self.notes(0, 1, [(tarec.RK_EV_YARD, self.yard(2, 1)),
+                                  (tarec.RK_EV_YARD, self.yard(2, 0))])
+        self.assertIn("its last yard event at 0", lines[0])
+
+    def test_a_network_recording_is_not_asked(self):
+        self.assertEqual(self.notes(0, 1, [], yards=False), [])
+
+    def made(self, events, yard):
+        ec = tarec.EventCheck(yards=True)
+        ec.transition({}, [(tarec.RK_EV_CREATE, self.create(2))] + events, {1: self.unit(yard)},
+                      10)
+        return ec.lines
+
+    def test_a_made_unit_with_its_create_s_yard(self):
+        self.assertEqual(self.made([], 0), [])
+        self.assertEqual(self.made([(tarec.RK_EV_YARD, self.yard(2, 1))], 1), [])
+
+    def test_a_made_unit_whose_yard_is_not_its_events(self):
+        lines = self.made([], 1)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("unit 1 appears with its yard 1 and no yard event", lines[0])
+        lines = self.made([(tarec.RK_EV_YARD, self.yard(2, 1))], 0)
+        self.assertIn("unit 1 appears with its yard 0 and its last yard event at 1", lines[0])
+
+
+class YardChecks(unittest.TestCase):
+    """The harness's verdict on the yards a recorded create opened (tagpu_replay.c, yard_check),
+    from a lane's counts lines."""
+
+    @staticmethod
+    def line(checked, differed, unchecked):
+        return (f"replay: x at its level's end, GameTime 9: ... 3 yards changed, 0 refused; "
+                f"{checked} yards checked at their create, {differed} differed, {unchecked} not "
+                f"checked; 0 control groups not set\n")
+
+    def test_every_yard_as_recorded(self):
+        (label, verdict, detail), = tareplay.yard_verdict("P", self.line(2, 0, 0))
+        self.assertEqual(verdict, tareplay.PASS)
+        self.assertIn("2 checked", detail)
+
+    def test_a_difference_is_named(self):
+        for counts in ((2, 1, 0), (2, 0, 1)):
+            with self.subTest(counts=counts):
+                text = self.line(0, 0, 0) + self.line(*counts)
+                (label, verdict, detail), = tareplay.yard_verdict("P", text)
+                self.assertEqual(verdict, tareplay.FAIL)
+                self.assertIn(f"{counts[1]} differed, {counts[2]} not checked", detail)
+
+    def test_no_counts_line(self):
+        (label, verdict, detail), = tareplay.yard_verdict("P", "replay: nothing\n")
+        self.assertEqual(verdict, tareplay.UNRUN)
+
+    @staticmethod
+    def dropped(n):
+        return f"recorder: {n} yard events kept out of the file by THE YARD RULE (tagpu_recfmt.h)\n"
+
+    def test_none_kept_out_of_the_file(self):
+        (label, verdict, detail), = tareplay.yard_dropped_verdict("L", self.dropped(0))
+        self.assertEqual(verdict, tareplay.PASS)
+
+    def test_one_kept_out_fails(self):
+        (label, verdict, detail), = tareplay.yard_dropped_verdict(
+            "L", self.dropped(0) + self.dropped(2))
+        self.assertEqual(verdict, tareplay.FAIL)
+        self.assertIn("2 yard events kept out of 2 recordings", detail)
+        (label, verdict, detail), = tareplay.yard_dropped_verdict("L", "recorder: nothing\n")
+        self.assertEqual(verdict, tareplay.UNRUN)
 
 
 class TakeoverFixtures(unittest.TestCase):
