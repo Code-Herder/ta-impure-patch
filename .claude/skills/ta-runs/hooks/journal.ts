@@ -14,7 +14,20 @@ export function startTicks(stat: string): number | null {
   return Number.isFinite(ticks) ? ticks : null
 }
 
+/** tareplay's tests by the one-letter ids its code still writes (demo-recorder-completeness.md
+ * *Terms*). The table goes when tareplay writes the names itself. */
+const TAREPLAY_TESTS: Record<string, string> = {
+  L: 'record', P: 'puppet', R: 'roundtrip', Q: 'seek', K: 'takeover', F: 'follow', X: 'forks',
+  U: 'rewind', W: 'watch',
+}
+
+/** A step's name as the pane says it. */
+export function testName(tool: string, id: string): string {
+  return tool === 'tareplay' ? TAREPLAY_TESTS[id] ?? id : id
+}
+
 export function cut(doc: Doc, live: Live): Run {
+  const name = (id: string) => testName(doc.tool, id)
   return {
     id: doc.id,
     session: doc.session,
@@ -34,9 +47,9 @@ export function cut(doc: Doc, live: Live): Run {
       state: it.state,
       ...(it.checks ? { checks: it.checks } : {}),
       steps: it.steps.map(s => ({
-        id: s.id,
+        id: name(s.id),
         state: s.state,
-        ...(s.after ? { after: s.after } : {}),
+        ...(s.after ? { after: s.after.map(name) } : {}),
         ...(s.pool ? { pool: s.pool } : {}),
         ...(s.instance ? { instance: s.instance } : {}),
         ...(s.gt != null ? { gt: s.gt } : {}),
