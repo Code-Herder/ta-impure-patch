@@ -16,7 +16,9 @@ slots and yard bits are the engine's own on such a level, its units following th
 are checked instead of compared -- every slot a dump cell names is a live unit there whose
 footprint holds the cell, every cell of a live mobile unit's footprint names it (a structure's
 yardmap leaves some of its cells open), and every set yard bit lies inside a live structure's
-footprint. An order whose target its owner has
+footprint. The sort buckets' order is the engine's own too (tagpu_replay.c, THE SORT BUCKETS ON A
+MULTIPLAYER LEVEL): each unit's bucket +0x82 is compared, and its next +0x8E, when it is not
+carried, is checked instead (sort_chains). An order whose target its owner has
 already destroyed names no target: a unit's death keeps its owner's clock, so another owner's
 image can still name it, and the host cannot link a unit it no longer holds (ord_target); the
 owner approved that expectation on 2026-10-06. With the recorder's viewed seat
@@ -25,8 +27,8 @@ as --fork takes them (contacts). The puppet holds of `tarec compare --puppet` ap
 
 --fork N compares timeline N's first iteration, the world a takeover made, with the expected world
 at its fork_at as above, less what `tarec compare-fork` takes off (decision D2, tarec.fork_view);
-the grid's unit slots and yard bits are checked on the fork's iteration, which the host's engine
-made. Exit 0 EQUAL, 1 otherwise.
+the grid's unit slots and yard bits and the sort buckets' chains are checked on the fork's
+iteration, which the host's engine made. Exit 0 EQUAL, 1 otherwise.
 
 --chat checks each dump's message log (main+0x12EF, a leave row the comparison does not read)
 against the chat its viewer should see (tagpu_replay.c, THE CHAT OF A MULTIPLAYER RECORDING):
@@ -125,6 +127,60 @@ def compose(w, start, applied, seats):
     w.units, w.lists = units, lists
 
 
+U_BUCKET, U_CARRIER, U_NEXT = 0x82, 0x86, 0x8E    # a unit's sort bucket, carrier and next
+
+
+def sort_chains(w, dw):
+    """The dump's sort buckets checked by the engine's invariants instead of compared, and then
+    taken into the expected world `w` (tagpu_replay.c, THE SORT BUCKETS ON A MULTIPLAYER LEVEL):
+    each owner's image carries its own machine's +0x8E, so the composed images need not form
+    chains, and the host's order is its own. Every live unit that is not carried and has a bucket
+    is in that bucket's one chain: a next is a unit of the same bucket, no unit is named twice,
+    each bucket has one head, and the walks from the heads reach every unit. Then +0x8E of every
+    unit not carried is cleared in both worlds; the bucket +0x82 and a carried unit's +0x8E, its
+    carrier's chain, are compared. The differences those checks find."""
+    out, member, named, heads = [], {}, {}, {}
+
+    def nxt(slot):
+        return struct.unpack_from("<I", dw.units[slot], U_NEXT)[0]
+    for slot, u in dw.units.items():
+        bucket, carrier = struct.unpack_from("<II", u, U_BUCKET)
+        if bucket and not carrier:
+            member[slot] = bucket
+    for slot, bucket in sorted(member.items()):
+        n = nxt(slot)
+        if not n:
+            continue
+        if member.get(n - 1) != bucket:
+            out.append(f"sort chains: unit {slot}'s next, ID {n}, is no unit of its bucket {bucket}")
+        elif n - 1 in named:
+            out.append(f"sort chains: units {named[n - 1]} and {slot} both name unit {n - 1} next")
+        else:
+            named[n - 1] = slot
+    for slot, bucket in sorted(member.items()):
+        if slot in named:
+            continue
+        if bucket in heads:
+            out.append(f"sort chains: units {heads[bucket]} and {slot} both head bucket {bucket}")
+        else:
+            heads[bucket] = slot
+    walked = 0
+    for bucket, slot in heads.items():
+        seen = set()
+        while slot is not None and member.get(slot) == bucket and slot not in seen:
+            seen.add(slot)
+            slot = nxt(slot) - 1 if nxt(slot) else None
+        walked += len(seen)
+    if not out and walked != len(member):
+        out.append(f"sort chains: the walks from the heads reach {walked} of the {len(member)} "
+                   "units in a bucket")
+    for world in (w, dw):
+        for u in world.units.values():
+            if not struct.unpack_from("<I", u, U_CARRIER)[0]:
+                struct.pack_into("<I", u, U_NEXT, 0)
+    return out
+
+
 CONTACT = 0x1700        # unit +0x110 bits 8-10 and 12, the viewed seat's scan history (tarec.puppet_view)
 
 
@@ -177,7 +233,7 @@ def fork(path, n):
     unseen = contacts(a, b, scan)
     tarec.fork_view(a, b, h, c["header"])
     gnames = tarec.globals_names(tarec.globals_list(h.get("globals"))[2])
-    stale = tarec.occupancy(a, b)
+    stale = tarec.occupancy(a, b) + sort_chains(a, b)
     lines, _ = a.differences(b, h["tables"], c["header"]["tables"], gnames=gnames,
                              limit=1 << 30)
     lines += stale
@@ -329,7 +385,7 @@ def main(argv):
         tarec.puppet_hold(w, held)
         tarec.globals_hold(w, gslots)
         tarec.globals_hold(dw, gslots)
-        stale = tarec.occupancy(w, dw)
+        stale = tarec.occupancy(w, dw) + sort_chains(w, dw)
         lines, _ = w.differences(dw, h["tables"], dh["tables"], gnames=gnames, limit=1 << 30)
         lines += stale
         n = len(lines)

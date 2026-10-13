@@ -6054,11 +6054,23 @@ static int sk_bucket_cmp(const void* a, const void* b)
     return x < y ? -1 : x > y;
 }
 
+/* THE SORT BUCKETS ON A MULTIPLAYER LEVEL. A bucket's chain links units of every owner, and each
+   owner's image carries its own machine's +0x8E. Two machines that hold units of two owners in
+   one bucket order them by their own moves, so the composed images need not form a chain at all:
+   of the 1476 iterations of a four-seat recording (MEASURED 2026-10-13), 97 had two units heading
+   one bucket or a unit naming a next in another bucket, while the primary stream, one machine's,
+   formed chains in every one. No recorded order is the truth on such a level. Each unit's bucket
+   +0x82 is its owner's, so R0 bounds the bucket and not the chains, and R9 puts every unit of U in
+   it through the move 0x47CB60 and leaves the order the host's own: it moves only a unit whose
+   host bucket differs, which the move pushes at the front. Every link is still an engine
+   function's. tools/replay/recmp_compare.py checks the chains instead of comparing +0x8E. */
+
 /* R0's buckets: U, the units R9 moves -- live in the image, not carried there, with a recorded
    bucket that resolves (a NULL or unresolved one puts the unit outside U, counted) -- and, for
    each bucket, its members forming one chain through their recorded +0x8E: exactly one member no
    member names, the walk from it visiting every member once and ending at NULL or outside U.
-   Leaves the heads in s_uheads[0, *nheads), sorted by bucket. */
+   Leaves the heads in s_uheads[0, *nheads), sorted by bucket. In a composed world (s_mp.on) U
+   alone, and no heads (THE SORT BUCKETS ON A MULTIPLAYER LEVEL). */
 static int sk_units_bound(const Lv* L, const RecWorld* W, unsigned* nheads, char* why,
                           unsigned cap)
 {
@@ -6073,6 +6085,10 @@ static int sk_units_bound(const Lv* L, const RecWorld* W, unsigned* nheads, char
         if (!s_ubucket[slot]) { s_sk.outside++; continue; }
         s_inU[slot] = 1;
         nu++;
+    }
+    if (s_mp.on) {
+        *nheads = 0;
+        return 1;
     }
     for (slot = 1; slot < L->nslots; slot++) {
         unsigned nx;
@@ -6411,6 +6427,10 @@ static void seek_unit_books(const Lv* L, const RecWorld* W)
        through 0x47CB60(unit, bucket): with +0x82 NULL and +0x86 NULL it pushes at the front of
        the bucket's +6. Each bucket then starts with its recorded chain in order, its head the
        recorded head, whatever order the buckets are visited in; a unit outside U can only trail.
+   On a multiplayer level (s_mp.on) one pass instead: each unit of U the host does not carry goes
+   through 0x47CB60 into its recorded bucket when its +0x82 names another, which unlinks it from
+   that chain under the same invariant and pushes it at the front; the order is the host's own
+   (THE SORT BUCKETS ON A MULTIPLAYER LEVEL).
    A carried unit gets +0x82 from the image when it resolves (the move only sets +0x82 while a
    unit is carried, 0x47CB79); otherwise the host's stays. AFTERWARDS every live unit's +0x82 is
    non-NULL: the creates give every unit a bucket, the attach's unlink keeps +0x82 (0x48AC5E), and
@@ -6435,6 +6455,13 @@ static void sk_buckets(const Lv* L, const RecWorld* W, unsigned nheads)
         }
         if (!s_inU[slot] || carrier) continue;
         memcpy(&b, u + U_BUCKET, 4);
+        if (s_mp.on) {
+            if (b != s_ubucket[slot]) {
+                E_Move(u, s_ubucket[slot]);
+                s_sk.moved++;
+            }
+            continue;
+        }
         if (b) E_Unlink(b, u);
         memset(u + U_BUCKET, 0, 4);
         s_taken[slot] = 1;
