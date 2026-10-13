@@ -2297,6 +2297,12 @@ static void ev_events(RecBytes* b, const uint32_t units[][NDW], int variant)
         e[4] = (unsigned char)i;
         rec_put(b, RK_EV_QUERY, e, 8);
     }
+    for (i = 0; i < 2; i++) {                            /* a yard opened, then closed */
+        memset(e, 0, 8);
+        put32(e, 4);
+        e[4] = (unsigned char)(1 - i);
+        rec_put(b, RK_EV_YARD, e, 8);
+    }
     memset(e, 0, 32);
     put32(e, 5);                                         /* a network create */
     e[4] = 13; put32(e + 8, 77); put32(e + 12, 0x600000);

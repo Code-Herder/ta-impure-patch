@@ -171,7 +171,7 @@ REC_UNIT_BITS = (REC_UNIT_DWORDS + 7) // 8
 REC_PLAYER_BITS = (REC_PLAYER_DWORDS + 7) // 8
 REC_UNIT_DELTA_HEAD = (2 + REC_UNIT_BITS + 3) & ~3
 REC_PLAYER_DELTA_HEAD = (2 + REC_PLAYER_BITS + 3) & ~3
-U_TYPE, U_BUILT, U_STATEBYTE = 0x92, 0x104, 0x10E   # the image's type ID, build fraction, state
+U_TYPE, U_BUILT, U_STATEBYTE, U_YARD = 0x92, 0x104, 0x10E, 0x10F   # the image's type ID, build fraction, state
 U_STATE = 0x110
 REC_PROJ_IMAGE = 0x6C                     # a projectile record's 0x6B bytes, to a dword
 REC_PROJ_DWORDS = REC_PROJ_IMAGE // 4
@@ -201,7 +201,7 @@ def mapped_bytes(w, h):
  RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
  RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT, RK_COUNTS,
  RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE, RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT,
- RK_SPRAY_SESSION, RK_EV_SLICE, RK_EV_QUERY) = range(59)
+ RK_SPRAY_SESSION, RK_EV_SLICE, RK_EV_QUERY, RK_EV_YARD) = range(60)
 REC_QUERIES = 2                           # RK_EV_QUERY's queries: QueryBuildInfo, QueryNanoPiece
 
 # THE PERSPECTIVE's payloads (tagpu_recpov.h)
@@ -228,7 +228,8 @@ EVENTS = {RK_EV_CREATE: "create", RK_EV_NET_CREATE: "network create", RK_EV_DEAT
           RK_EV_START_NAMED: "owner's start", RK_EV_BUILT: "build done", RK_EV_STATE: "state byte",
           RK_EV_REPLY: "reply", RK_EV_SPRAY: "nano spray", RK_EV_FEATURE: "feature call",
           RK_EV_FEATURE_END: "feature call's end", RK_EV_DRAW: "feature draw",
-          RK_EV_DEATH_END: "death's end", RK_EV_SLICE: "script slice", RK_EV_QUERY: "owner's query"}
+          RK_EV_DEATH_END: "death's end", RK_EV_SLICE: "script slice", RK_EV_QUERY: "owner's query",
+          RK_EV_YARD: "yard"}
 FR_TICK, FR_SPAWN, FR_DESTROY, FR_DIE, FR_BURN, FR_DAMAGE, FR_SWAP, FR_CORPSE = range(8)
 REC_PHASE_LATE = 2                        # RK_EV_FEATURE's phase byte at most (tagpu_recfmt.h)
 ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12, 32)     # an RK_EV_FEATURE's arguments after its site
@@ -924,6 +925,15 @@ class World:
             if not 1 <= slot < self.slots:
                 raise Unreadable(f"an owner's query of slot {slot}, outside the array")
             return kind, b
+        if kind == RK_EV_YARD:
+            # YARD_OPEN's pass, in a bracket or not, a slot of the level's (tagpu_recreader.c,
+            # event_take)
+            if len(b) != 8 or b[4] > 1 or any(b[5:8]):
+                raise Unreadable(f"a yard of {len(b)} bytes, yard {b[4] if len(b) > 4 else '-'}")
+            slot = struct.unpack_from("<I", b)[0] - 1
+            if not 1 <= slot < self.slots:
+                raise Unreadable(f"a yard of slot {slot}, outside the array")
+            return kind, b
         if kind == RK_CELLS and (self.fbracket or self.deaths):
             if self.fbracket != FR_TICK + 1:
                 raise Unreadable("cells inside a feature call that is not the tick's")
@@ -1594,14 +1604,17 @@ class EventCheck:
     (tagpu_recreader.c, apply), and World.apply refuses cells past it that are not the tick's
     feature call's, so the world summarised here is every reader's. Between the images of two
     iterations, a unit that appears must have its create, one that disappears its death, one whose
-    state byte +0x10E changed a state event with the new byte, and one whose build fraction +0x104
-    reached 0.0 its build done -- unless the slot died and was made again in the step, which the
-    create and the death both name. Within an iteration's events a script slice and an owner's
+    state byte +0x10E changed a state event with the new byte, one whose build fraction +0x104
+    reached 0.0 its build done, and, with `yards` (a skirmish's: its recorder writes them), one
+    whose yard, +0x10F bit 2, changed a yard event whose last one for it is the new yard, since
+    YARD_OPEN 0x47DAC0 is that bit's one writer (0x47DAF1) -- unless the slot died and was made
+    again in the step, which the create and the death both name. Within an iteration's events a script slice and an owner's
     query name a unit live at its point -- in the iteration's images, or created earlier in its
     events and not dead since -- and a script slice a slot at most once (tagpu_recfmt.h,
     RK_EV_SLICE, RK_EV_QUERY)."""
 
-    def __init__(self, limit=20):
+    def __init__(self, limit=20, yards=False):
+        self.yards = yards
         self.open = False           # an iteration has begun
         self.in_events = False      # ... and its images are behind us
         self.summary_now = None     # its world, once its images are applied
@@ -1616,8 +1629,8 @@ class EventCheck:
         if len(self.lines) < self.limit:
             self.lines.append(line)
 
-    # a unit's (type ID, build fraction, state byte), in the image's order
-    _FIELDS = struct.Struct(f"<{U_TYPE}x4s{U_BUILT - U_TYPE - 4}x4s{U_STATEBYTE - U_BUILT - 4}xB")
+    # a unit's (type ID, build fraction, state byte, +0x10F), in the image's order
+    _FIELDS = struct.Struct(f"<{U_TYPE}x4s{U_BUILT - U_TYPE - 4}x4s{U_STATEBYTE - U_BUILT - 4}xBB")
 
     @staticmethod
     def summary(w):
@@ -1688,7 +1701,7 @@ class EventCheck:
     def transition(self, was, events, now, tick):
         self.checked += 1
         self.slices(was, events, tick - 1)
-        made, died, state, built = set(), set(), {}, set()
+        made, died, state, built, yard = set(), set(), {}, set(), {}
         for kind, b in events:
             if kind in (RK_EV_CREATE, RK_EV_NET_CREATE):
                 made.add(struct.unpack_from("<I", b)[0] - 1)
@@ -1698,6 +1711,8 @@ class EventCheck:
                 state[struct.unpack_from("<I", b)[0] - 1] = b[4]
             elif kind == RK_EV_BUILT:
                 built.add(struct.unpack_from("<I", b, 4)[0] - 1)
+            elif kind == RK_EV_YARD:
+                yard[struct.unpack_from("<I", b)[0] - 1] = b[4]
         at = f"the step to GameTime {tick}"
         # a slot whose fields stayed and that no create or death names has nothing to explain
         changed = {slot for slot, _ in was.items() ^ now.items()}
@@ -1722,6 +1737,11 @@ class EventCheck:
                              else "no state event"))
             if a[1] != bytes(4) and b[1] == bytes(4) and slot not in built:
                 self.note(f"{at}: unit {slot}'s +0x104 reached 0.0 with no build done")
+            ya, yb = a[3] >> 2 & 1, b[3] >> 2 & 1
+            if self.yards and ya != yb and yard.get(slot) != yb:
+                self.note(f"{at}: unit {slot}'s yard went {ya} -> {yb} with "
+                          + (f"its last yard event at {yard[slot]}" if slot in yard
+                             else "no yard event"))
 
 
 # ---- the commands ----------------------------------------------------------------------------
@@ -2067,7 +2087,7 @@ def cmd_check(path, timeline=0, exact=False):
             for line in lines:
                 print("  " + line.replace("dump", "snapshot"))
 
-    ec = EventCheck()
+    ec = EventCheck(yards=h.get("mode") != 3)
     w = stream_to(h, bl, on_snapshot=at_snapshot, on_record=ec.on_record)
     ec.finish(w)
     print(f"{path}: the stream reads to GameTime {w.tick} ({w.corrections} corrections in it); "

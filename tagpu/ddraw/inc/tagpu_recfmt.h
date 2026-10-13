@@ -37,8 +37,9 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 19: format 18 with the script slice's place in the event stream (RK_EV_SLICE) and the owner's
-   COB queries the playing makes again (RK_EV_QUERY). 18 was format 17 with the sectioned
+/* 19: format 18 with the script slice's place in the event stream (RK_EV_SLICE), the owner's
+   COB queries the playing makes again (RK_EV_QUERY) and a yard's opening or closing at its place
+   (RK_EV_YARD). 18 was format 17 with the sectioned
    container's kinds as per-iteration patterns -- by reference to the run's last 16, with markers
    for an empty feature tick and a predicted RK_FEATURES, and no count for a run the frames fix --
    and an RK_TICK body for a block's first iteration alone (THE SECTIONED CONTAINER below). 17 was
@@ -355,6 +356,12 @@ enum RecKind {
                           (0x402525..0x40252E), whose own slice can come later in the tick. A
                           top-level event of the step, like RK_EV_SLICE. A playing makes the same
                           query at this place (tagpu_replay.c, THE OWNER'S QUERIES)               */
+    RK_EV_YARD,        /* u32 unit ID, u8 the yard (1 open, 0 closed), u8 0 x3: YARD_OPEN 0x47DAC0
+                          passed its refusal 0x47D970 and wrote the structure's +0x10F bit 2
+                          (0x47DAF1), then re-claimed its footprint (0x47DAFD). Wherever the
+                          setter runs: in a COB slice, or a script a create, a death or a query
+                          ran at once. A playing writes the same yard at this place (tagpu_replay.c,
+                          A RECORDED YARD_OPEN)                                                    */
     RK_KINDS
 };
 
@@ -370,8 +377,8 @@ typedef struct RecNetCreate {
 _Static_assert(sizeof(RecNetCreate) == 32, "network create event span");
 _Static_assert(RK_EV_NET_CREATE == 51 && RK_POV == 52 && RK_CLICK == 53 && RK_SELECT == 54 &&
                RK_POV_AT == 55 && RK_SPRAY_SESSION == 56, "existing record kinds retain their values");
-_Static_assert(RK_EV_SLICE == 57 && RK_EV_QUERY == 58 && RK_KINDS == 59,
-               "the script slice's and the owner's query's kinds");
+_Static_assert(RK_EV_SLICE == 57 && RK_EV_QUERY == 58 && RK_EV_YARD == 59 && RK_KINDS == 60,
+               "the script slice's, the owner's query's and the yard's kinds");
 
 /* RK_EV_QUERY's query: the script's name and its first argument's value going in, as the engine's
    only call of each passes them, the other three arguments NULL (the engine map, *The owner's COB
@@ -424,6 +431,7 @@ static __inline int rec_event_len(unsigned kind, unsigned len)
     case RK_EV_DRAW:        return len == 12;
     case RK_EV_SLICE:       return len == 4;
     case RK_EV_QUERY:       return len == 8;
+    case RK_EV_YARD:        return len == 8;
     default:                return 0;
     }
 }
@@ -678,7 +686,7 @@ enum RecSection {
     RCS_CELLS,         /* the cells frame: every RK_CELLS                                        */
     RCS_ORDERS,        /* the orders frame: every RK_ORDERS                                      */
     RCS_EVENTS,        /* the events frame: RK_EV_CREATE..RK_EV_DEATH_END, RK_EV_NET_CREATE,
-                          RK_EV_SLICE and RK_EV_QUERY                                            */
+                          RK_EV_SLICE, RK_EV_QUERY and RK_EV_YARD                                */
     RCS_OTHER,         /* the bodies of every other kind, verbatim                               */
     RCS_STATE,         /* the state frame: RK_GLOBALS, RK_GLOBALS_DELTA, RK_PLAYER,
                           RK_PLAYER_DELTA, RK_WRECK and RK_FEATURES                              */
@@ -701,7 +709,7 @@ static __inline unsigned rec_section_of(unsigned kind)
     if (kind == RK_CELLS) return RCS_CELLS;
     if (kind == RK_ORDERS) return RCS_ORDERS;
     if ((kind >= RK_EV_CREATE && kind <= RK_EV_DEATH_END) || kind == RK_EV_NET_CREATE ||
-        kind == RK_EV_SLICE || kind == RK_EV_QUERY)
+        kind == RK_EV_SLICE || kind == RK_EV_QUERY || kind == RK_EV_YARD)
         return RCS_EVENTS;
     if (kind == RK_GLOBALS || kind == RK_GLOBALS_DELTA || kind == RK_PLAYER ||
         kind == RK_PLAYER_DELTA || kind == RK_WRECK || kind == RK_FEATURES)

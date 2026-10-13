@@ -2268,42 +2268,45 @@ static void units_put(const Lv* L, const RecWorld* W)
     }
 }
 
-/* A RECORDED YARD_OPEN (demo-recorder-s2-host.md §5.2), after the placement: for each unit whose
-   recorded +0x10F bit 2 is not its own, what 0x47DAC0 does once its refusal 0x47D970 has passed --
-   the bit, +0x110 bit 27, the re-claim 0x47C790 and the passability refresh 0x440A40 -- less the
-   refusal's occupancy half, which the owner's machine passed mid-step against a grid the host does
-   not hold at the boundary. The bounds are the refusal's and what its walk reads unbounded: a
-   structure (bit 29, the yardmap path), whose definition is its type's, with a yardmap and the
-   footprint the yardmap is laid out for, and the footprint strictly inside the grid, as 0x47D970
-   tests it (0x47D991..0x47D9D8, 16-bit sums compared signed). The re-claim has no bound of its own
-   and walks those cells. The contest it runs marks this unit and the incumbents with +0x110 bits
-   26 and 27, which states_put then writes as recorded -- but on a segment that holds its cells,
-   where the marks are the footprint writers' (U_MARKS).
-   A unit level_units makes gets its yard here as soon as its create returns (yard_put), before the
-   next slot's create, since a yard's cells are free only once it is open: the structure's re-claim
-   releases a yard cell under the open mask (0x47C8AE..0x47C8B7), and YARD_OPEN re-claims for the
-   structure alone (0x47DAEC..0x47DAFD; DISASSEMBLED) -- a unit that lost a yard cell to it earlier
-   gets the cell back only from a holder's clear, which re-claims over the holder's footprint
-   (0x47D2A4..0x47D2C4), and an open yard is no clear. Live, a lab opens its yard before it makes
-   the nanoframe that stands in it (MEASURED 2026-10-12, slice-walkers: lab 502 opens at GameTime
-   2962, nanoframe 527 is made at 2963 and takes the yard's four cells); made in slot order with
-   the yards opened after them all, the nanoframe would lose those cells to the closed lab, keep
-   the loser's mark, and be left without them when the yard opened. */
-static void yard_put(const Lv* L, const RecWorld* W, unsigned slot)
+/* A RECORDED YARD_OPEN (demo-recorder-s2-host.md §5.2): what 0x47DAC0 does once its refusal
+   0x47D970 has passed -- the bit, +0x110 bit 27, the re-claim 0x47C790 and the passability refresh
+   0x440A40 -- less the refusal's occupancy half, which the owner's machine passed against its own
+   grid. The bounds are the refusal's and what its walk reads unbounded: a structure (bit 29, the
+   yardmap path), whose definition is its type's, with a yardmap and the footprint the yardmap is
+   laid out for, and the footprint strictly inside the grid, as 0x47D970 tests it
+   (0x47D991..0x47D9D8, 16-bit sums compared signed). The re-claim has no bound of its own and
+   walks those cells. The contest it runs marks this unit and the incumbents with +0x110 bits 26
+   and 27, which states_put then writes as recorded -- but on a segment that holds its cells, where
+   the marks are the footprint writers' (U_MARKS).
+   THE ORDER, the invariant this rests on: a yard goes in where the engine changed it, before the
+   creates that came after it and after those that came before. The structure's re-claim releases
+   a yard cell under the open mask (0x47C8AE..0x47C8B7), and YARD_OPEN re-claims for the structure
+   alone (0x47DAEC..0x47DAFD; DISASSEMBLED) -- a unit that lost a yard cell to it earlier gets the
+   cell back only from a holder's clear, which re-claims over the holder's footprint
+   (0x47D2A4..0x47D2C4), and an open yard is no clear. And a lab opens its yard and makes the
+   nanoframe in it in one turn: its slice (DoScriptsNow 0x4B0D60 at 0x48ADEB) runs the script that
+   sets YARD_OPEN and then INBUILDSTANCE, and its order run (0x43B7C0 at 0x48AF98) follows in the
+   same unit tick, where BuildingBuild's state 2 waits for INBUILDSTANCE (0x438700 at 0x4027CA) and
+   its placement test 0x47DB70 (0x402899), which a layer-1 builder passes only with every footprint
+   cell's slot A empty (0x47DD00..0x47DD0A), comes before the create 0x485F50 (0x4028EA)
+   [DISASSEMBLED]. So within one step the yard can change just before a create in it, which the
+   next image's yards_put would write only after the step's events: in a step the recording
+   carries each change as an event at its place (RK_EV_YARD, ev_yard), and the image puts in only
+   what no event did -- a seek's or the first step's made units (level_units), each as soon as its
+   create returns, before the next slot's create stamps (MEASURED 2026-10-12, slice-walkers: lab
+   502 opened at GameTime 2962 and nanoframe 527 was made at 2963 on the yard's four free cells;
+   made in slot order with the yards opened after them all, 527 lost them to the closed lab and
+   kept the loser's mark). 1 when the yard went in. */
+static int yard_set(const Lv* L, unsigned slot, unsigned char want)
 {
     const char* defs = *(const char* const*)(L->ta + OFF_UDEFS);
     int gw = *(const int*)(L->ta + OFF_GRIDW), gh = *(const int*)(L->ta + OFF_GRIDH);
-    const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
-    unsigned char want = (unsigned char)img_at(W, slot)[U_YARD] & 4u;
     char* u = unit_at(L, slot);
     const char* def;
     const void* yard;
     uint32_t st, wh, dwh;
     int16_t x, z, fw, fh;
-    unsigned ix;
-    if (!W->live[slot] || !holds(L, slot, img) || ((unsigned char)u[U_YARD] & 4u) == want)
-        return;
-    ix = *(const unsigned short*)(u + U_TYPEIX);
+    unsigned ix = *(const unsigned short*)(u + U_TYPEIX);
     memcpy(&def, u + U_DEF, 4);
     memcpy(&st, u + U_STATE, 4);
     memcpy(&wh, u + U_FOOTWH, 4);
@@ -2322,7 +2325,7 @@ static void yard_put(const Lv* L, const RecWorld* W, unsigned slot)
         s_st.yrefused++;
         note("replay: GameTime %u: unit %u's yard cannot be %s here", L->now, slot,
              want ? "opened" : "closed");
-        return;
+        return 0;
     }
     u[U_YARD] = (char)(((unsigned char)u[U_YARD] & ~4u) | want);
     st |= U_RECLAIM;
@@ -2330,12 +2333,39 @@ static void yard_put(const Lv* L, const RecWorld* W, unsigned slot)
     E_Reclaim(u);
     E_Passable(*(const uint32_t*)(u + U_FOOTXZ), *(const uint32_t*)(u + U_FOOTWH));
     s_st.yards++;
+    return 1;
+}
+
+/* an image's yard, where the host's differs: a unit live in the image and its slot (holds) */
+static void yard_put(const Lv* L, const RecWorld* W, unsigned slot)
+{
+    const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
+    unsigned char want = (unsigned char)img_at(W, slot)[U_YARD] & 4u;
+    if (W->live[slot] && holds(L, slot, img) &&
+        ((unsigned char)unit_at(L, slot)[U_YARD] & 4u) != want)
+        yard_set(L, slot, want);
 }
 
 static void yards_put(const Lv* L, const RecWorld* W)
 {
     unsigned slot;
     for (slot = 1; slot < L->nslots; slot++) yard_put(L, W, slot);
+}
+
+/* RK_EV_YARD: the yard at its place in the step (A RECORDED YARD_OPEN), the body run whether or
+   not the bit changes, as YARD_OPEN's re-claim runs either way, on a unit live in its slot. 1
+   played. */
+static int ev_yard(const Lv* L, const unsigned char* b, unsigned n)
+{
+    uint32_t id;
+    if (n != 8) return 0;
+    memcpy(&id, b, 4);
+    if (id - 1u < 1 || id - 1u >= L->nslots || !host_live(L, id - 1u)) {
+        s_st.yrefused++;
+        note("replay: GameTime %u: a yard of unit ID %u, not live here", L->now, (unsigned)id);
+        return 0;
+    }
+    return yard_set(L, id - 1u, (unsigned char)(b[4] ? 4u : 0u));
 }
 
 /* +0x110 as recorded, less the bits the engine functions own, for every unit once the placement
@@ -4021,6 +4051,10 @@ static void ev_play(const Lv* L, const RecEvent* e)
     }
     if (k == RK_EV_QUERY) {
         ev_query(L, b, n);
+        return;
+    }
+    if (k == RK_EV_YARD) {
+        ev_yard(L, b, n);               /* counted in s_st.yards and yrefused */
         return;
     }
     switch (k) {

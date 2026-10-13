@@ -933,7 +933,7 @@ static int sprays_on(const RecHeader* h)
    a death only), and may hold deaths; a draw is inside one, FS_SOURCE inside the tick only, of
    a segment whose playing keeps the engine's slots: a multiplayer one, or one that holds its
    cells (recr_holds_cells); a script slice and an owner's query are inside none, and name a slot
-   of the level's. 1 taken, 0 malformed. */
+   of the level's; a yard names one too, in a bracket or not. 1 taken, 0 malformed. */
 static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsigned len)
 {
     RecWorld* w = &r->w;
@@ -997,6 +997,11 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
     case RK_EV_QUERY:
         if (r->fbracket || r->ndeaths || len != 8 || b[4] >= REC_QUERIES || b[5] || b[6] || b[7])
             return 0;
+        memcpy(&id, b, 4);
+        if (id - 1u < 1 || id - 1u >= w->slots) return 0;
+        break;
+    case RK_EV_YARD:
+        if (len != 8 || b[4] > 1 || b[5] || b[6] || b[7]) return 0;
         memcpy(&id, b, 4);
         if (id - 1u < 1 || id - 1u >= w->slots) return 0;
         break;

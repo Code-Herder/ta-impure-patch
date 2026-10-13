@@ -2441,6 +2441,65 @@ class OwnerQuery(unittest.TestCase):
         self.assertIn("an owner's query of slot 3, which holds no live unit", ec.lines[0])
 
 
+class YardEvent(unittest.TestCase):
+    """RK_EV_YARD in tarec's World, as the DLL's reader takes it (tagpu_recreader.c, event_take):
+    an event, in a bracket or not, naming a slot of the level's and a yard of 0 or 1, its pad
+    zero; and EventCheck's yards: a unit's +0x10F bit 2 changes between two images only with a
+    yard event whose last one for it is the new yard."""
+
+    @staticmethod
+    def yard(unit, open_=1, pad=b"\0\0\0"):
+        return struct.pack("<IB", unit, open_) + pad
+
+    def world(self):
+        return ScriptSlice.world(self)
+
+    def test_an_event_in_or_out_of_a_bracket(self):
+        w = self.world()
+        self.assertEqual(w.apply(tarec.RK_EV_YARD, self.yard(2))[0], tarec.RK_EV_YARD)
+        with self.assertRaisesRegex(tarec.Unreadable, "after an event"):
+            w.apply(tarec.RK_CELLS, CellsAfterEvents.cells(0, 5))
+        w = self.world()
+        w.apply(tarec.RK_EV_DEATH, struct.pack("<II4x", 2, 0) + bytes(tarec.REC_UNIT_IMAGE))
+        self.assertEqual(w.apply(tarec.RK_EV_YARD, self.yard(3, 0))[0], tarec.RK_EV_YARD)
+
+    def test_refused_outside_the_slots_or_the_yards(self):
+        for unit in (0, 1, 5):
+            with self.subTest(unit=unit):
+                with self.assertRaisesRegex(tarec.Unreadable, "outside the array"):
+                    self.world().apply(tarec.RK_EV_YARD, self.yard(unit))
+        for body in (self.yard(2, 2), self.yard(2, 1, b"\0\1\0"), self.yard(2)[:4]):
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(tarec.Unreadable, "a yard of"):
+                    self.world().apply(tarec.RK_EV_YARD, body)
+
+    @staticmethod
+    def unit(yard):
+        return (bytes(4), bytes(4), 0, 0x05 if yard else 0x01)
+
+    def notes(self, a, b, events, yards=True):
+        ec = tarec.EventCheck(yards=yards)
+        ec.transition({1: self.unit(a)}, events, {1: self.unit(b)}, 10)
+        return ec.lines
+
+    def test_a_yard_explained_by_its_event(self):
+        self.assertEqual(self.notes(0, 1, [(tarec.RK_EV_YARD, self.yard(2, 1))]), [])
+        self.assertEqual(self.notes(1, 0, [(tarec.RK_EV_YARD, self.yard(2, 1)),
+                                           (tarec.RK_EV_YARD, self.yard(2, 0))]), [])
+        self.assertEqual(self.notes(1, 1, [(tarec.RK_EV_YARD, self.yard(2, 1))]), [])
+
+    def test_a_yard_changed_with_no_event_or_another(self):
+        lines = self.notes(0, 1, [])
+        self.assertEqual(len(lines), 1)
+        self.assertIn("unit 1's yard went 0 -> 1 with no yard event", lines[0])
+        lines = self.notes(0, 1, [(tarec.RK_EV_YARD, self.yard(2, 1)),
+                                  (tarec.RK_EV_YARD, self.yard(2, 0))])
+        self.assertIn("its last yard event at 0", lines[0])
+
+    def test_a_network_recording_is_not_asked(self):
+        self.assertEqual(self.notes(0, 1, [], yards=False), [])
+
+
 class TakeoverFixtures(unittest.TestCase):
     """fixtures.json's takeover entries, and the processes they make a fixture run."""
 

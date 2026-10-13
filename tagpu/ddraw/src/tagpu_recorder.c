@@ -4429,6 +4429,7 @@ static unsigned ev_unit(const Rec* r, const char* p)
 /* the entry's registers, as the observer's pushad left them below the entry's esp */
 #define REG_EDI(E) (*(const unsigned*)((const unsigned char*)(E) - 0x24))
 #define REG_ESI(E) (*(const unsigned*)((const unsigned char*)(E) - 0x20))
+#define REG_EBX(E) (*(const unsigned*)((const unsigned char*)(E) - 0x14))
 #define REG_ECX(E) (*(const unsigned*)((const unsigned char*)(E) - 0x0C))
 #define REG_EAX(E) (*(const unsigned*)((const unsigned char*)(E) - 0x08))
 #define ARG(E, off) (*(const unsigned*)((const unsigned char*)(E) + (off)))
@@ -5143,6 +5144,28 @@ static int __cdecl ev_state(void* E)
     b[4] = now;
     b[5] = b[6] = b[7] = 0;
     ev_put(r, RK_EV_STATE, b, sizeof b);
+    return 0;
+}
+
+/* YARD_OPEN 0x47DAC0(unit, open)'s write of the yard, `mov [esi+0x10F],bl` at 0x47DAF1: its
+   refusal 0x47D970 has passed (0x47DACC..0x47DAD3), esi is the structure and bl its new +0x10F,
+   bit 2 the yard (0x47DAD5..0x47DAE4), and the re-claim 0x47DAFD follows. Every pass is written,
+   one that leaves the yard as it was too, since the re-claim runs either way. YARD_OPEN's one
+   caller is the COB setter (0x480BAE), so this is wherever a script runs: a slice, or a script a
+   create, a death or a query runs at once; and the event goes in at that place, among the creates
+   whose stamps it changes (tagpu_replay.c, A RECORDED YARD_OPEN). A skirmish's: a multiplayer
+   playing composes its yards from the owners' images. */
+static int __cdecl ev_yard(void* E)
+{
+    Rec* r;
+    unsigned id;
+    unsigned char b[8];
+    if (!(r = ev_rec()) || r->mode == MODE_NETWORK) return 0;
+    if (!(id = ev_unit(r, PTR(REG_ESI(E))))) return 0;
+    memcpy(b, &id, 4);
+    b[4] = (unsigned char)(REG_EBX(E) >> 2 & 1);
+    b[5] = b[6] = b[7] = 0;
+    ev_put(r, RK_EV_YARD, b, sizeof b);
     return 0;
 }
 
@@ -6459,6 +6482,8 @@ static const ObserveSite OBSERVE_SITES[] = {
       death_leave },
     { 0x0041B8D0u, 6, { 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x0C }, ev_built, NULL },
     { 0x0048B090u, 5, { 0x51, 0x8B, 0x44, 0x24, 0x0C }, ev_state, NULL },
+    /* mid-function: no rel8/rel32 in the file branches into 0x47DAF2..0x47DAF6 (DISASSEMBLED) */
+    { 0x0047DAF1u, 6, { 0x88, 0x9E, 0x0F, 0x01, 0x00, 0x00 }, ev_yard, NULL },
     { 0x00456190u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, ev_start_idx, NULL },
     { 0x00456290u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, ev_start_args, NULL },
     { 0x00456218u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, ev_start_named_bc, NULL },

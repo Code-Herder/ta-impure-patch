@@ -1571,6 +1571,14 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     case RK_MAPPED:
     case RK_MAPPED_RUNS:
         return globals_proj_record(w, kind, b, len);
+    case RK_EV_YARD: {
+        /* in or out of a bracket, as the setter runs (tagpu_recfmt.h, RK_EV_YARD) */
+        unsigned uid;
+        if (!w->ticked || len != 8 || b[4] > 1 || b[5] || b[6] || b[7]) return 0;
+        memcpy(&uid, b, 4);
+        if (!slot_ok(w, uid - 1u)) return 0;
+        break;
+    }
     default:
         /* the events: nothing of the copy; RK_CORRECT and RK_HEADER are never in the ring after
            the first record */
