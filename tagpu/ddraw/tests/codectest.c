@@ -3291,6 +3291,332 @@ static size_t odd_run_chunk(RecBytes* out, unsigned wlog, int csize, int csum, i
    refused out of it, a run's header past its bounds refused, a mismatch inside a run restarting
    the next block, and the snapshot chain written, read back, and refused without its prefix or
    past its bound. */
+/* ---- the listing (tagpu_reccodec.c, THE LISTING) ---------------------------------------- */
+
+/* RCS_UNITS taken apart: what the writer wrote, so a test can change one field and write it back */
+typedef struct LstSec {
+    uint32_t iters, nr[RECC_TICKS_MAX], nw[RECC_TICKS_MAX], ndict, mode;
+    RecBytes sym, rk, wk, dict, ids, col[RECC_LANES_MAX];   /* rk, wk, ids: u32 each */
+    uint32_t cnt[RECC_LANES_MAX];
+    unsigned char zero[RECC_LANES_MAX];   /* a lane's count written though it is 0 */
+} LstSec;
+
+static void lst_free(LstSec* m)
+{
+    unsigned j;
+    rb_free(&m->sym);
+    rb_free(&m->rk);
+    rb_free(&m->wk);
+    rb_free(&m->dict);
+    rb_free(&m->ids);
+    for (j = 0; j < RECC_LANES_MAX; j++) rb_free(&m->col[j]);
+}
+
+/* a well-formed section (the encoder's) into m */
+static void lst_parse(LstSec* m, const unsigned char* sec, size_t a, size_t e, unsigned nlanes)
+{
+    size_t at = a, nid = 0, i;
+    uint32_t v = 0, it = 0, k, pass;
+    unsigned mb = (nlanes + 7) / 8, j;
+    lst_free(m);
+    memset(m, 0, sizeof *m);
+    varint_get(sec, e, &at, &m->iters);
+    varint_get(sec, e, &at, &v);
+    rb_put(&m->sym, sec + at, v);
+    for (i = 0; i < 4 * (size_t)v; i++) nid += (sec[at + (i >> 2)] >> 2 * (i & 3) & 3) == 2;
+    at += v;
+    for (it = 0; it < m->iters; it++)
+        for (pass = 0; pass < 2; pass++) {
+            uint64_t prev = pass ? 0 : (uint64_t)-1;
+            uint32_t n = 0;
+            varint_get(sec, e, &at, &n);
+            (pass ? m->nw : m->nr)[it] = n;
+            nid += n;
+            for (k = 0; k < n; k++) {
+                varint_get(sec, e, &at, &v);
+                prev += (uint64_t)v + 1;
+                rb_u32(pass ? &m->wk : &m->rk, (uint32_t)prev);
+            }
+        }
+    varint_get(sec, e, &at, &m->ndict);
+    rb_put(&m->dict, sec + at, (size_t)m->ndict * mb);
+    at += (size_t)m->ndict * mb;
+    m->mode = sec[at++];
+    for (i = 0; i < nid; i++) {
+        if (m->mode) varint_get(sec, e, &at, &v);
+        else v = sec[at++];
+        rb_u32(&m->ids, v);
+    }
+    {
+        const unsigned char* present = sec + at;
+        at += mb;
+        for (j = 0; j < nlanes; j++)
+            if (bit_of(present, j)) varint_get(sec, e, &at, &m->cnt[j]);
+    }
+    for (j = 0; j < nlanes; j++)
+        for (k = 0; k < m->cnt[j]; k++) {
+            size_t b = at;
+            varint_get(sec, e, &at, &v);
+            rb_put(&m->col[j], sec + b, at - b);
+        }
+}
+
+/* m as RCS_UNITS, into o */
+static void lst_write(const LstSec* m, RecBytes* o, unsigned nlanes)
+{
+    unsigned mb = (nlanes + 7) / 8, j, it, k, pass;
+    unsigned char present[MB_MAX];
+    size_t ri = 0, wi = 0, i;
+    o->n = 0;
+    rb_varint(o, m->iters);
+    rb_varint(o, (uint32_t)m->sym.n);
+    rb_put(o, m->sym.p, m->sym.n);
+    for (it = 0; it < m->iters; it++)
+        for (pass = 0; pass < 2; pass++) {
+            const uint32_t* v = (const uint32_t*)(pass ? m->wk.p : m->rk.p);
+            size_t* x = pass ? &wi : &ri;
+            int64_t prev = pass ? 0 : -1;
+            uint32_t n = (pass ? m->nw : m->nr)[it];
+            rb_varint(o, n);
+            for (k = 0; k < n; k++, (*x)++) {
+                rb_varint(o, (uint32_t)(v[*x] - prev - 1));
+                prev = v[*x];
+            }
+        }
+    rb_varint(o, m->ndict);
+    rb_put(o, m->dict.p, m->dict.n);
+    {
+        unsigned char b = (unsigned char)m->mode;
+        rb_put(o, &b, 1);
+    }
+    for (i = 0; i < m->ids.n / 4; i++) {
+        uint32_t v = ((const uint32_t*)m->ids.p)[i];
+        if (m->mode) {
+            rb_varint(o, v);
+        } else {
+            unsigned char b = (unsigned char)v;
+            rb_put(o, &b, 1);
+        }
+    }
+    memset(present, 0, sizeof present);
+    for (j = 0; j < nlanes; j++)
+        if (m->cnt[j] || m->zero[j]) present[j >> 3] |= (unsigned char)(1u << (j & 7));
+    rb_put(o, present, mb);
+    for (j = 0; j < nlanes; j++)
+        if (bit_of(present, j)) rb_varint(o, m->cnt[j]);
+    for (j = 0; j < nlanes; j++) rb_put(o, m->col[j].p, m->col[j].n);
+}
+
+/* the container `c` with RCS_UNITS replaced by u, into o */
+static void lst_splice(const RecBytes* c, const RecBytes* u, RecBytes* o)
+{
+    size_t off = sizeof(RecSecHead), i, a, b;
+    for (i = 0; i < RCS_UNITS; i++) off += get32(c->p + 8 + 4 * i);
+    a = off;
+    b = off + get32(c->p + 8 + 4 * RCS_UNITS);
+    o->n = 0;
+    rb_put(o, c->p, a);
+    put32(o->p + 8 + 4 * RCS_UNITS, (uint32_t)u->n);
+    rb_put(o, u->p, u->n);
+    rb_put(o, c->p + b, c->n - b);
+}
+
+/* a decode of `c` by a reader restarted from the world: 1 when it gives back `pl`; why, else */
+static int lst_decode(RecCodec* t, const RecCodecParams* p, World* w, const RecBytes* c,
+                      const RecBytes* pl, char* why, size_t cap)
+{
+    RecFrameWorld v = world_view(w);
+    RecBytes out;
+    int ok;
+    memset(&out, 0, sizeof out);
+    why[0] = 0;
+    reccodec_restart(t, p, w->unit, w->live, w->pool, w->pcount, w->phw, &v);
+    ok = reccodec_decode(t, c->p, c->n, &out, why, (unsigned)cap) && out.n == pl->n &&
+         !memcmp(out.p, pl->p, pl->n);
+    rb_free(&out);
+    return ok;
+}
+
+/* one listed unit's plain dwords as the bits of k: 13 dwords that only generic lanes cover */
+static void lst_pattern(uint32_t* u, unsigned k, uint32_t salt)
+{
+    static const unsigned dw[13] = { 2, 3, 4, 5, 9, 10, 11, 12, 16, 17, 18, 19, 22 };
+    unsigned b;
+    for (b = 0; b < 13; b++)
+        if (k >> b & 1) u[dw[b]] ^= 0x01000193u * (salt * 13 + b + 1) | 1;
+}
+
+static int lst_refuses(const char* what, RecCodec* t, const RecCodecParams* p, World* w,
+                       const RecBytes* c, const LstSec* m, const RecBytes* pl, const char* because)
+{
+    RecBytes u, o;
+    char why[256];
+    int ok;
+    memset(&u, 0, sizeof u);
+    memset(&o, 0, sizeof o);
+    lst_write(m, &u, p->nlanes);
+    lst_splice(c, &u, &o);
+    ok = !lst_decode(t, p, w, &o, pl, why, sizeof why) && strstr(why, because);
+    if (!ok) printf("  (the decoder: \"%s\")\n", why);
+    rb_free(&u);
+    rb_free(&o);
+    return expect(what, ok, 1);
+}
+
+static int outcomes_listing(const RecCodecParams* p)
+{
+    static uint32_t units[64][NDW], prev[NDW];
+    static LstSec m, base;
+    World w;
+    RecCodec *e, *d, *t;
+    RecBytes pl, c, out;
+    char why[256];
+    unsigned it, s, k, i, n0 = 0, n1 = 0, n2 = 0, nw = 0, newm = 0, wide = 0, j;
+    uint32_t gt = 1;
+    size_t a, b;
+    int ok = 1;
+    memset(&w, 0, sizeof w);
+    memset(&pl, 0, sizeof pl);
+    memset(&c, 0, sizeof c);
+    memset(&out, 0, sizeof out);
+    if (p->nslots > 64 || !(e = reccodec_new(p)) || !(d = reccodec_new(p)) || !(t = reccodec_new(p))) return 0;
+    world_reset(&w, p->nslots, p->nproj, p->gw, p->gh);
+    {
+        RecFrameWorld v = world_view(&w);
+        reccodec_restart(e, p, w.unit, w.live, w.pool, w.pcount, w.phw, &v);
+        reccodec_restart(d, p, w.unit, w.live, w.pool, w.pcount, w.phw, &v);
+    }
+    /* block A: every slot made; three listed, then carried with their own mask, another and
+       none; a resting slot woken */
+    for (it = 0; it < 8; it++, gt++) {
+        rec_put(&pl, RK_TICK, &gt, 4);
+        for (s = 1; s < p->nslots; s++) {
+            memcpy(prev, units[s], IMG);
+            if (it == 0) {
+                rec_unit(&pl, s, units[s]);
+                continue;
+            }
+            if ((it == 1 && s <= 3) || (it == 2 && s == 1)) lst_pattern(units[s], 1, gt * 64 + s);
+            if (it == 2 && s == 2) lst_pattern(units[s], 2, gt * 64 + s);
+            if (it == 7 && s == 4) lst_pattern(units[s], 4, gt * 64 + s);
+            rec_delta(&pl, s, prev, units[s], -1);
+        }
+    }
+    ok &= expect("listing: block A writes as sections", reccodec_encode(e, pl.p, pl.n, &c), RECC_SECTIONS);
+    ok &= expect("  and decodes back", reccodec_decode(d, c.p, c.n, &out, why, sizeof why) && out.n == pl.n &&
+                                           !memcmp(out.p, pl.p, pl.n), 1);
+    {
+        size_t off = sizeof(RecSecHead);
+        for (i = 0; i < RCS_UNITS; i++) off += get32(c.p + 8 + 4 * i);
+        a = off;
+        b = off + get32(c.p + 8 + 4 * RCS_UNITS);
+    }
+    lst_parse(&base, c.p, a, b, p->nlanes);
+    for (i = 0; i < 4 * base.sym.n; i++) {
+        unsigned sym = base.sym.p[i >> 2] >> 2 * (i & 3) & 3;
+        n0 += sym == 0;
+        n1 += sym == 1;
+        n2 += sym == 2;
+    }
+    for (it = 0; it < base.iters; it++) nw += base.nw[it];
+    ok &= expect("  a carried slot listed with its last mask (symbol 1)", n1 >= 1, 1);
+    ok &= expect("  a carried slot listed with another (symbol 2)", n2 >= 1, 1);
+    ok &= expect("  a carried slot not listed (symbol 0)", n0 >= 1, 1);
+    ok &= expect("  a resting slot woken", nw >= 1, 1);
+    ok &= expect("  the ids one byte each (mode 0)", base.mode, 0);
+    {
+        RecBytes u, o;
+        memset(&u, 0, sizeof u);
+        memset(&o, 0, sizeof o);
+        lst_write(&base, &u, p->nlanes);
+        lst_splice(&c, &u, &o);
+        ok &= expect("  rewritten from its parts, it decodes back", lst_decode(t, p, &w, &o, &pl, why, sizeof why), 1);
+        rb_free(&u);
+        rb_free(&o);
+    }
+#define LST_MUT(what, because, ...) do { lst_parse(&m, c.p, a, b, p->nlanes); __VA_ARGS__; \
+        ok &= lst_refuses(what, t, p, &w, &c, &m, &pl, because); } while (0)
+    LST_MUT("refused: a symbol byte too many", "symbol bytes for", rb_put(&m.sym, "", 1));
+    LST_MUT("refused: a symbol 3", "is 3", m.sym.p[m.sym.n - 1] |= 0xC0);
+    LST_MUT("refused: a rank past the candidates not carried", "names no slot it can list",
+            { uint32_t r = p->nslots - 1, id = 1;
+              m.nr[1]++; rb_put(&m.rk, &r, 4); rb_put(&m.ids, &id, 4); });
+    LST_MUT("refused: a woken slot that does not rest", "names no slot it can list",
+            { uint32_t sl = p->nslots - 1, id = 1;
+              m.nw[1]++; rb_put(&m.wk, &sl, 4); rb_put(&m.ids, &id, 4); });
+    LST_MUT("refused: more ranks than slots", "lists past the",
+            { m.nr[1] = p->nslots + 1; });
+    LST_MUT("refused: more symbol bytes than the iterations' slots carry", "bytes of symbols, past",
+            { while (m.sym.n <= (m.iters * (p->nslots - 1) + 3) / 4) rb_put(&m.sym, "", 1); });
+    /* each iteration's ranks and woken slots in bounds alone, every rank and every slot but 0:
+       2 * nslots - 1 ids an iteration, past the nslots - 1 an iteration lists */
+    LST_MUT("refused: more ids than the iterations' slots list", "mask ids, past",
+            { m.rk.n = m.wk.n = 0;
+              for (it = 0; it < m.iters; it++) {
+                  m.nr[it] = p->nslots;
+                  m.nw[it] = p->nslots - 1;
+                  for (s = 0; s < p->nslots; s++) rb_u32(&m.rk, s);
+                  for (s = 1; s < p->nslots; s++) rb_u32(&m.wk, s);
+              } });
+    LST_MUT("refused: more new masks than ids", "new masks for", m.ndict = (uint32_t)(m.ids.n / 4) + 1);
+    LST_MUT("refused: an id past the list and the new masks", "names no mask", ((uint32_t*)m.ids.p)[0] = 200);
+    LST_MUT("refused: id 0 for a carried slot's other mask", "names no mask", ((uint32_t*)m.ids.p)[3] = 0);
+    LST_MUT("refused: the ids' mode 2", "mode is not", m.mode = 2);
+    LST_MUT("refused: a new mask the list already holds", "names no mask",
+            memcpy(m.dict.p + (p->nlanes + 7) / 8, m.dict.p, (p->nlanes + 7) / 8));
+    LST_MUT("refused: a new mask no id takes", "new masks taken",
+            { rb_put(&m.dict, m.dict.p, (p->nlanes + 7) / 8); m.ndict++; m.dict.p[m.dict.n - 1] ^= 0x80; });
+    for (j = 0; j < p->nlanes && !base.cnt[j]; j++) ;
+    LST_MUT("refused: a lane's count of 0", "count cut short or 0", { m.cnt[j] = 0; m.col[j].n = 0; m.zero[j] = 1; });
+    LST_MUT("refused: a residual no listed mask takes", "not consumed by the listed masks",
+            { m.cnt[j]++; rb_put(&m.col[j], "\2", 1); });
+    LST_MUT("refused: a listed mask's residual missing", "residual cut short",
+            { size_t q = 0, last = 0;
+              while (q < m.col[j].n) { last = q; while (m.col[j].p[q++] & 0x80) ; }
+              m.cnt[j]--; m.col[j].n = last; });
+#undef LST_MUT
+    /* blocks B and C: more masks than the list holds, then the first ones again. A slot changes
+       every other iteration, so each lane's last two values are equal when it changes, the
+       winner stays the previous value and a mask is exactly its pattern's lanes. */
+    for (k = 1, i = 0; i < 2; i++) {
+        pl.n = 0;
+        for (it = 0; it < (i ? 1u : 140u); it++, gt++) {
+            rec_put(&pl, RK_TICK, &gt, 4);
+            for (s = 1; s < p->nslots; s++) {
+                memcpy(prev, units[s], IMG);
+                if (s <= 60 && !(it & 1)) lst_pattern(units[s], i ? s : k++, gt * 64 + s);
+                rec_delta(&pl, s, prev, units[s], -1);
+            }
+        }
+        ok &= expect(i ? "listing: block C, the first masks again, writes as sections"
+                       : "listing: block B, 4,200 masks, writes as sections",
+                     reccodec_encode(e, pl.p, pl.n, &c), RECC_SECTIONS);
+        ok &= expect("  and decodes back", reccodec_decode(d, c.p, c.n, &out, why, sizeof why) && out.n == pl.n &&
+                                               !memcmp(out.p, pl.p, pl.n), 1);
+        {
+            size_t off = sizeof(RecSecHead);
+            unsigned q;
+            for (q = 0; q < RCS_UNITS; q++) off += get32(c.p + 8 + 4 * q);
+            lst_parse(&m, c.p, off, off + get32(c.p + 8 + 4 * RCS_UNITS), p->nlanes);
+        }
+        newm += m.ndict;
+        wide += m.mode;
+        if (i) ok &= expect("  the first masks come back as new ones, dropped from the list", m.ndict, 60);
+    }
+    ok &= expect("listing: more new masks in the run than the list holds", newm > RECC_J2_MTF, 1);
+    ok &= expect("  the ids varints (mode 1)", wide, 2);
+    lst_free(&m);
+    lst_free(&base);
+    rb_free(&pl);
+    rb_free(&c);
+    rb_free(&out);
+    reccodec_free(e);
+    reccodec_free(d);
+    reccodec_free(t);
+    world_free(&w);
+    return ok;
+}
+
 static int outcomes_container(const RecCodecParams* p)
 {
     static uint32_t units[6][NDW];
@@ -5113,7 +5439,7 @@ static int cmd_outcomes(void)
         if (block == 8) {
             /* a failed realloc, as rb_grow latches it: a restart must clear it on both sides */
             st.enc->dl.oom = 1;
-            st.enc->hash.oom = 1;
+            st.enc->jnew.oom = 1;
             rd->tl.oom = 1;
         }
         if (block == 6) {
@@ -5172,6 +5498,7 @@ static int cmd_outcomes(void)
     ok &= outcomes_state(&p);
     ok &= outcomes_lossy();
     ok &= outcomes_container(&p);
+    ok &= outcomes_listing(&p);
 #ifdef _WIN32
     ok &= outcomes_reader(&p);
     ok &= outcomes_yard_rule();
@@ -5230,6 +5557,16 @@ static void codec_copy(RecCodec* d, const RecCodec* s)
     memcpy(d->live, s->live, n);
     memcpy(d->touched, s->touched, n);
     memcpy(d->lstep, s->lstep, n * 2 * sizeof *d->lstep);
+    memcpy(d->jprev, s->jprev, n);
+    memcpy(d->jlast, s->jlast, n * MB_MAX);
+    memcpy(d->jm, s->jm, (size_t)RECC_J2_MTF * MB_MAX);
+    memcpy(d->jnx, s->jnx, RECC_J2_MTF * sizeof *d->jnx);
+    memcpy(d->jpv, s->jpv, RECC_J2_MTF * sizeof *d->jpv);
+    memcpy(d->jhnext, s->jhnext, RECC_J2_MTF * sizeof *d->jhnext);
+    memcpy(d->jhead, s->jhead, J2_HASH * sizeof *d->jhead);
+    d->jfront = s->jfront;
+    d->jtail = s->jtail;
+    d->njm = s->njm;
     memcpy(d->lsettle, s->lsettle, sizeof d->lsettle);
     memcpy(d->lsettled, s->lsettled, sizeof d->lsettled);
     n = s->nproj;
@@ -5258,28 +5595,35 @@ static size_t skip_varint(const unsigned char* p, size_t end, size_t at)
     return varint_get(p, end, &at, &v) ? at : 0;
 }
 
-/* RCS_UNITS's regions: [0] the prefix (iterations, listed, gaps, ndict), [1] the masks, [2] the
-   ids, [3] the columns, as offsets into the container */
+/* RCS_UNITS's regions: [0] the iterations and the symbols, [1] the ranks and woken slots, [2]
+   the new masks and the ids, [3] the lanes' counts and the columns, as offsets into the
+   container */
 static void unit_regions(const unsigned char* sec, size_t a, size_t e, unsigned nlanes, size_t r[5])
 {
-    uint32_t it, v, i, total = 0, nd = 0, k;
-    size_t at = a;
+    uint32_t it, v, i, k, n, pass, nd;
+    size_t at = a, nid = 0, sym;
     unsigned mb = (nlanes + 7) / 8;
     r[0] = r[1] = r[2] = r[3] = a;
     r[4] = e;
-    if (!varint_get(sec, e, &at, &it)) return;
-    for (i = 0; i < it && i < 256; i++) {
-        if (!varint_get(sec, e, &at, &v)) return;
-        total += v;
+    if (!varint_get(sec, e, &at, &it) || !varint_get(sec, e, &at, &v) || v > e - at) return;
+    for (sym = 0; sym < 4 * (size_t)v; sym++) nid += (sec[at + (sym >> 2)] >> 2 * (sym & 3) & 3) == 2;
+    r[1] = r[2] = r[3] = at += v;
+    for (i = 0; i < it && i < RECC_TICKS_MAX; i++)
+        for (pass = 0; pass < 2; pass++) {
+            if (!varint_get(sec, e, &at, &n)) return;
+            nid += n;
+            for (k = 0; k < n; k++)
+                if (!(at = skip_varint(sec, e, at))) return;
+        }
+    r[2] = r[3] = at;
+    if (!varint_get(sec, e, &at, &nd) || (size_t)nd * mb >= e - at) return;
+    at += (size_t)nd * mb;
+    if (sec[at++]) {
+        for (k = 0; k < nid; k++)
+            if (!(at = skip_varint(sec, e, at))) return;
+    } else {
+        at += nid;
     }
-    for (i = 0; i < total; i++)
-        if (!(at = skip_varint(sec, e, at))) return;
-    if (!varint_get(sec, e, &at, &nd)) return;
-    r[1] = at;
-    r[2] = at + (size_t)nd * mb;
-    if (r[2] > e) r[2] = e;
-    at = r[2];
-    for (k = 0; k < total && at < e; k++) at = nd <= 256 ? at + 1 : (skip_varint(sec, e, at) ? skip_varint(sec, e, at) : e);
     r[3] = at < e ? at : e;
 }
 
@@ -5466,7 +5810,7 @@ static void mutate(Case* c, const unsigned char* sec, size_t n, unsigned flags, 
     case 3:                                       /* the kinds' patterns */
         if (off[1] > off[0]) mutate_byte(c->body.p + off[0] + rndn(off[1] - off[0]));
         break;
-    case 4: case 5: case 6: case 7: {             /* the unit frame: prefix, masks, ids, columns */
+    case 4: case 5: case 6: case 7: {             /* the unit frame: symbols, lists, masks and ids, columns */
         unit_regions(sec, off[RCS_UNITS], off[RCS_UNITS + 1], nlanes, r);
         i = what - 4;
         if (r[i + 1] > r[i]) mutate_byte(c->body.p + r[i] + rndn(r[i + 1] - r[i]));

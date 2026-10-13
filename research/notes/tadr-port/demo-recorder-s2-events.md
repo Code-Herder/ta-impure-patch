@@ -572,11 +572,11 @@ instead of in the host's unit tick, so a start made before the slice -- AutoAim'
 Create in a later slot -- takes its first slice where it did on the recording machine
 ([skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-20)).
 
-### 1.8c The owner's COB queries — `RK_EV_QUERY` (format 20; transport and pad, format 21)
+### 1.8c The owner's COB queries — `RK_EV_QUERY` (format 20; transport and pad, format 22)
 
 Not a root: a COB query `0x4B0BC0` only an order handler makes, so only the machine of the
 handler's unit's owner -- `QueryBuildInfo` at `0x4027FB` (BuildingBuild), `QueryNanoPiece` at
-`0x43E427` (inside `0x43E400`, from fifteen handlers), and since format 21 `QueryTransport` at
+`0x43E427` (inside `0x43E400`, from fifteen handlers), and since format 22 `QueryTransport` at
 `0x4113B1` (VTOL_Pickup) and `QueryLandingPad` at `0x411A35`, `0x411AA6`, `0x411BF5` and
 `0x411CF1` (VTOL_Landing). `{u32 ID, u8 the query, u8 0 x3}`, outside any bracket, written where
 the engine makes the query, in the handler's unit's turn after that unit's slice. The queried unit

@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 21 and its readers take format 21 alone (*The file*, below).
+The recorder writes recording format 22 and its readers take format 22 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -157,7 +157,7 @@ THE CHAIN*):
   else the bytes stored. The header, the end and the timelines blocks are always stored, so a
   header reads without zstd.
 
-`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 19; a reader takes that format alone:
+`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 20; a reader takes that format alone:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
   GameTime, the wall clock, the unit array's slots and the units each player may have, the unit
@@ -244,7 +244,12 @@ lanes by the header's `RT_CODEC`, the rows of `tagpu/ddraw/replay-lanes.tsv` (11
 `tools/replay-lanes-gen.py` checks the file and generates `inc/tagpu_reclanes.h`), and the rules
 find their lanes by role, never by offset; since each recording carries its own table, editing the
 TSV never orphans a file, and a wrong width costs size only. A unit is listed in an iteration only
-when a lane differs from its prediction, and then as residuals per lane. A unit *at rest* — its
+when a lane differs from its prediction, and then as residuals per lane. Which units an iteration
+lists, and each one's lane mask, the section says against state both sides keep (the codec's *THE
+LISTING*): a unit listed the iteration before takes a 2-bit symbol -- not listed, listed with its
+last mask, listed with another -- the other candidates are ranks among those not carried and the
+woken resting units are slots, and a mask is an id into the run's last 4,096 masks, most recent
+first. A unit *at rest* — its
 image equal to the two before it and to the third's lanes, and either not moving or with a move
 stamp older than the step before, with its ledger's requested and granted zero, and, for a type
 with an `RT_TYPES` row, with its two HP percentages equal to its HP's — is skipped
@@ -421,7 +426,13 @@ ascending; an `RT_TYPES` whose length is not 16 + 20 per row, with more rows tha
 count, a type at or past that count, types not ascending or a pad byte not zero); a sectioned block in a segment
 whose header lacks `RT_CODEC` and `RT_PHYSICS`; a segment whose unit slots differ from the first
 header's; a container whose head, kinds, lengths, slots, masks or columns exceed their bounds, which
-leaves bytes in a section, or which decodes to another payload length; a pool frame whose
+leaves bytes in a section, or which decodes to another payload length; a unit section whose
+symbols are not exactly the carried units' (a symbol 3 or a nonzero pad included), whose symbols
+or ids pass the block's iterations times its slots but slot 0, whose rank or
+woken slot names no unit that iteration can list, whose id names no mask (0 for a carried unit or
+an empty last mask, past the list and the next new mask, a new mask the list already holds),
+whose ids or new masks are not all taken, or whose listed masks do not consume each lane's
+counted residuals exactly; a pool frame whose
 iterations are not the head's, whose count or extent leaves `[0, RT_PROJECTILES]` or whose count
 passes its extent, which names more dead slots than the old count or a dead or stale slot out of
 its range, more survivors than the new count, a reference past its section, fewer bytes than its
@@ -866,7 +877,7 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
   - **Units are placed with the engine's set-position `0x48A9F0`** at the recorded position and
     the altitude the movement pass had before its fix-up. Then the walk-class part `0x43DA70`
     runs, which starts the walk scripts, the water state `+0x10A` goes in from the image (its
-    script, `setSFXoccupy`, is a recorded start since format 21, so `0x43DB50` never runs on a
+    script, `setSFXoccupy`, is a recorded start since format 22, so `0x43DB50` never runs on a
     puppet), and the fix-up's values go in. `+0x110` bits 2–3 are written only by the walk class,
     and compared. The placement part `0x43D6D0` and the altitude fix-up `0x48A870` never run on a
     puppet.
@@ -1328,9 +1339,9 @@ The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
   scenario applier does at `0x4969D2` and the engine's SHARE give and console fallback do between
   steps (the engine map's *Who makes a unit*). The replay makes every unit of step k in the unit
   tick's stub, before the players phase of step k, whose every-step sight emit then meets that unit
-  one step early (and before format 21, the next images' `0x43DB50`). So at every capture point
+  one step early (and before format 22, the next images' `0x43DB50`). So at every capture point
   and frame visit the replay writes both from the recording where they differ: the water state
-  bounded by its enum, which the images' own write leaves equal since format 21,
+  bounded by its enum, which the images' own write leaves equal since format 22,
   the stamp through the engine's removal `0x482090` and stamp `0x482270` (a circle's radius index
   bounded by the frame table's count), so that the sight counters keep describing the stamps the
   fields name. The globals line counts the water states and stamps written and refused, and the
@@ -1661,7 +1672,7 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
 - **A unit the recording machine made after its players phase is drawn one frame early** on a puppet
   host, which makes it in the step's unit tick, before that step's draw; `books_put` makes its
   bookkeeping the recording's at the next capture point, and the picture of one frame stays: that is
-  presentation on a puppet host. Its `setSFXoccupy` is the recorded start alone (format 21), since a
+  presentation on a puppet host. Its `setSFXoccupy` is the recorded start alone (format 22), since a
   puppet never runs the water state `0x43DB50`. Whether a stock skirmish's SHARE
   dialog lists an AI ally, the one stock way to make such a unit without a cheat, is not established
   (the code accepts any active type-1–3 record without the watcher bit; not run); `books_put`
@@ -2668,10 +2679,10 @@ first slice a tick late, and a looping script stayed re-phased for the unit's li
   `codec-decline` and `tenseat` under `--cob-exact`, every lane passing: the recordings held
   1,675, 15,665, 140 and 3,864 queries, every playing made all it reached (none refused), and
   both keys' counts are equal live and puppet in every window (`slice-walkers` over [1171, 3121):
-  `QueryBuildInfo` 44 against 44, `QueryNanoPiece` 8,554 against 8,554). Since format 21 the recording
+  `QueryBuildInfo` 44 against 44, `QueryNanoPiece` 8,554 against 8,554). Since format 22 the recording
   carries `QueryTransport` and `QueryLandingPad` the same way, and `BeginTransport` and
   `setSFXoccupy` as owner-only starts (*The transports, the pads and the waterline*, below).
-- **The transports, the pads and the waterline** (format 21). An air transport's pickup asks its
+- **The transports, the pads and the waterline** (format 22). An air transport's pickup asks its
   script `QueryTransport` (`0x4113B1`) and starts `BeginTransport` (`0x4113EF`); a landing on an air
   base asks the pad `QueryLandingPad` (`0x411A35`, `0x411AA6`, `0x411BF5`, `0x411CF1`); a unit whose
   water state `+0x10A` changes starts `setSFXoccupy` (`0x43DBE8`). All four are order handlers' or
