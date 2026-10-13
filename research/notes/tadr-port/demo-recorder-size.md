@@ -1502,6 +1502,18 @@ ground speed reads the slope from the last image's `+0x68`, since the movement p
 it places: from this iteration's the hour is 1,752 bytes larger. The percentage reads this
 iteration's HP: from the last image's it is 9,839 bytes larger.
 
+**Checked**: the C decoder and the Python reader give the same records on every block of both
+transcoded hours (`codectest.py verify`, skipping resting units and evaluating every candidate);
+`tarec check` passes on both, and `tarec lossy-check` over the whole hour on both written with
+their exact streams (`--exact`). `codectest outcomes`, natively under ASan and under Wine, checks
+each rule's positive and negative cases, `ex_fm` at 0, 1.0, a denormal and past 1.0, and every
+refusal of the new header entries. Fuzzed on the heavy hour, 20,000 cases each: the unit section
+alone, its header constants included (the x86-64 ASan build), C and Python agree in all 20,000,
+2,017 accepted; every kind on the ASan build in all 20,000, 2,598 accepted; every kind under Wine
+in 19,996 of the same seed's 20,000, the other four chunks with one byte changed that the i686
+build of the vendored zstd refuses and the x86-64 build accepts (*P1*'s *Checked*; the ASan run,
+same seed, accepts exactly those four more).
+
 **What it does not do.** The ground speed's halving under water (`0x43CCA0..0x43CCCE`) is not
 modelled; a type past the header's rows (more than 2,048 types, or a header without room) keeps
 generic lanes; an HP or a percentage written by anything but the build step and the unit tick (a
