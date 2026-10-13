@@ -1901,6 +1901,18 @@ writer's whole block: the encode, the check decode and the packing) took 39.4 s 
 hour, at most 21 ms a block after the first, against 40.6 s and 22 ms at format 23, each run
 alone; the C decoder takes at most 15 ms a block of that hour (`codectest.py verify`).
 
+**A game recorded with this build** (MEASURED 2026-10-13 under Wine on the reference setup: a
+heavy hour on Moon Quartet -- five players, each AI's base placed beside its commander, 108,000
+ticks -- recorded twice the same day from one script, once with main's format-23 DLL and once with
+this one). Format 24 writes 12,715,914 bytes over
+39,229,416 unit-ticks, 0.324 bytes a unit-tick, against 14,326,468 over 37,251,931, 0.385, at
+format 23: −15.7 % a unit-tick, the two being separate plays of the scenario. The writer
+sectioned all 3,602 blocks, declining and mismatching none; `tarec check` reads the file to its
+end with every change explained and every snapshot equal, and the C and Python readers agree on
+every block (`codectest.py verify`). A two-peer multiplayer game recorded with it
+(`recmp_create_begin_test.py`) sections all 52 of its blocks and plays to its end on a puppet
+host (`recmp_play_test.py --to-end`).
+
 **Memory.** The unit coder's state is allocated by `reccodec_new`, none of it per block: its
 probabilities (520 KB), the run's kept masks with their hash chains (88 KB), each context's next
 masks (68 KB) and the residual caches (264 KB), and per slot a byte a lane and 7 bytes more, in
@@ -1974,8 +1986,7 @@ the abandoned file).
 
 **What it does not do.** The escape's id has no context but its own tree; a literal is coded
 whole even when it is near a cached value; a block's coder ends with five shifts, 4 bytes, about
-14 KB an hour. Each was left out as small next to the gain above. The size in a game recorded
-with this build is not measured yet.
+14 KB an hour. Each was left out as small next to the gain above.
 
 ## Multiplayer recordings
 
