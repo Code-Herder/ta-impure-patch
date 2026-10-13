@@ -279,7 +279,8 @@ q<T>), or `--takeover T:P` alone (a fresh process takes over as P at R, the
 refresh at or before T, which the takeover's line names; dump k<R+120>, then tareplay's
 AI-activity check; the file with its timeline is
 kept as `fork-<name>`; `recmp_compare.py --fork 1 FILE` compares the fork's
-first iteration with the composed parent). `--timeline N` plays or seeks
+first iteration with the composed parent; the grid's slots and the sort buckets' chains are
+checked there, not compared). `--timeline N` plays or seeks
 timeline N's chain; `--hide-chat` writes `chat hide` once the playing starts
 (`recmp_compare.py --chat VIEW[:SINCE] FILE DUMP...` checks a dump's chat lines
 for the viewed record, `full` for the full map); then

@@ -2083,6 +2083,10 @@ index `+0xA6` holds.
   unloads take the carrier's head (Ground_Unload `0x406960`, VTOL_Unload `0x4115C7`). MEASURED: of
   13,029 buckets holding two units or more, 1,150 are in ascending slot order, 6,072 descending
   and 5,807 neither. The order is history, so a restore of these lists must restore their order.
+  Each machine of a network game orders its own, its moves of a remote unit following that unit's
+  packets [INFERRED]. MEASURED 2026-10-13 on a four-seat recording: where two owners' units shared a bucket,
+  the owners' own images of them were two chains' tails, or one named a next the other's machine
+  had in another bucket, at 97 of 1,476 iterations; the recorder's own chains held at all of them.
 - **`+0x92`, the type**: `*(main+0x1439B) + 0x249·[+0xA6]` (`0x485A4B..0x485A75`); the level fill
   `0x4854A0` and the destructor (`0x486DF6`) store the table's base. `+0xA6` is the type's index
   (the creates `0x486086`, `0x4862A2`; 0 at death, `0x486DC7`).
@@ -3606,7 +3610,10 @@ before writing anything (*The sight emitter*, below), and the seek counts a refu
   carried unit's stale `+0x82`); the move **`0x47CB60(unit, bucket)`** (stdcall, `ret 8`: nothing when
   `+0x82` is already the bucket, `0x47CB6F`; for a carried unit only `+0x82`, `0x47CB79` →
   `0x47CBB9`; otherwise the unlink when `+0x82` is not NULL, a push at the front and `+0x82 = bucket`;
-  **no caller and no stored address in the image**, so it cannot reorder a bucket by itself); and
+  **no caller and no stored address in the image**, so it cannot reorder a bucket by itself; Impure's
+  seek calls it in R9, in a skirmish recording after taking each unit out of its bucket, so every
+  call pushes, and on a multiplayer level only for a unit whose bucket is not its owner's, which
+  leaves the order the host's); and
   **`0x47CBD0(unit)`** (`ret 4`, one caller, the destructor `0x48682D`): the clear `0x47D0E0`, the
   unlink unless carried, `+0x82 = 0`.
 - **The features' model instances.** The spawn reads the def's template `FeatureDef+0x98`

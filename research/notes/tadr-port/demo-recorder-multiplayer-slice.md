@@ -1385,6 +1385,30 @@ recording records the value the recorder's tick read there (`FS_SOURCE`, an
 `RK_EV_DRAW` inside the tick), and the host's stub at `0x424185` answers from it
 (`tagpu_replay_source`).
 
+**The sort buckets' order.** A unit that is not carried names the next unit of
+its sort bucket in `+0x8E`. A bucket's chain links units of every owner, and each
+machine orders it by its own moves, so each owner's image carries its own
+machine's order. Where two owners' units share a bucket, the composed images
+need not form a chain at all. In the four-seat format-24 recording of 1,476
+iterations, 97 had two units heading one bucket or a unit naming a next in
+another bucket, while the recorder's own stream formed chains at every
+iteration; two older recordings had 24 and 4 such iterations (MEASURED
+2026-10-13). No recorded order is the truth on such a level. Each unit's bucket
+`+0x82` is its owner's, and it is compared. The order is the host's: a playing
+writes neither `+0x82` nor `+0x8E` raw (id rows, outside its raw mask), so every
+link is an engine function's, and the seek moves a unit
+into its owner's bucket through `0x47CB60` only when the host's differs
+(*THE SORT BUCKETS ON A MULTIPLAYER LEVEL* in `tagpu_replay.c`). Before that,
+the seek's bound demanded one chain per bucket of the composed images, so a seek
+into such an iteration, or a takeover whose refresh was one, was refused
+(`seek to 590 refused: units 1511 and 3 both head one recorded bucket`); in
+that recording every takeover asked for between 301 and 900 rounded to such a
+refresh. `recmp_compare.py` checks the dump's chains instead of comparing
+`+0x8E` of a unit that is not carried (`sort_chains`): every live unit that is
+not carried is in its bucket's one chain, a next is a unit of the same bucket,
+no unit is named twice, and each bucket has one head. The owner approved that
+check on 2026-10-13.
+
 **The deaths.** A unit's end is its owner's: `DEATH_END` runs the destructor
 through `ev_death` at the owner's time, with the feature gates shut and the
 record's corpse level (`+0xA`'s low nibble) cleared, so it changes neither the
@@ -1578,12 +1602,15 @@ multiplayer game has no rewind, so the rewind's return to now refuses one. *THE 
   (`level_units` on `mp_world`), and a unit its owner created but has not yet
   described from its create's own arguments and return (`mp_make_held`). R8–R14
   write the composed units, lists and actor players, and the primary stream's
-  features, globals and tables. Two exceptions keep the host's own state. Each
+  features, globals and tables. Three exceptions keep the host's own state. Each
   seat's players-phase deadline comes from the recorder's image, because it is
   the host's clock and an owner's image carries its own machine's. The cells'
   unit slots and yard bit stay the host's (`sk_features` under
   `s_engine_cells`): R3's kills took every unit off the grid, and R7's creates
-  and R8's moves put the composed world's units on it.
+  and R8's moves put the composed world's units on it. The sort buckets' order
+  is the host's too: R0 bounds each unit's bucket and not the chains, and R9
+  moves a unit into its owner's bucket only when the host's differs (*The sort
+  buckets' order*).
 - **A refused seek** reads the stream back to where it was (`sk_back`), and the
   materializer is rebuilt there by the same rule. A composition that fails
   stops the playing (`mp_fail`), so nothing composed by half is applied.
@@ -1653,8 +1680,8 @@ no yard bit stands. R7 and R8 then stamp the composed world on an empty grid.
 
 **What the comparison expects.** `recmp_compare.py --fork N` compares the
 takeover's first iteration with the composed parent at `fork_at`, less D2's
-list (`tarec.fork_view`). The grid's slots and yard bits are checked on the
-fork's iteration, as on a dump. The contact bits `+0x110` 8–10 and 12 are the
+list (`tarec.fork_view`). The grid's slots and yard bits and the sort buckets'
+chains are checked on the fork's iteration, as on a dump. The contact bits `+0x110` 8–10 and 12 are the
 viewed seat's scan (R14b), and an owner's image carries its own machine's: a
 player's own units are in contact on its own machine. So when both worlds view
 the same player, a composed unit takes the recorder's bits from the primary

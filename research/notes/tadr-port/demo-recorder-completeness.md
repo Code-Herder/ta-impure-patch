@@ -95,7 +95,9 @@ the skirmish slice brings:
 - **The order of two lists is state.** `+0x8E` is the carrier's chain while `+0x86` is set and the
   sort bucket's list otherwise, and the simulation reads both in order (RepairPatrol's pick by the
   simulation RNG, the unloads' head). The applier rebuilds each bucket's head from `+0x82` and
-  `+0x8E`: the head is the member no other member points to.
+  `+0x8E`: the head is the member no other member points to. On a multiplayer level no recorded
+  order is the truth, since each owner's image carries its own machine's, and the order is the
+  host's (demo-recorder-multiplayer-slice.md, *The sort buckets' order*).
 - **Some values go through engine functions, never a raw write:** the sight stamp `+0xF8`,
   `+0x7A`, `+0x7C` through the unstamp `0x481D50` and the stamp `0x482270`, since the counters
   hold what the old values stamped; `+0x10E` through `0x48B090` (*Decisions taken*, getter 75).
