@@ -108,33 +108,33 @@
   "transport-pad": {
    "load": "replay-transport-pad.json",
    "steps": [[120, "keys", ["pclick:512,384"]], [150, "keys", ["prclick:704,384"]],
-             [900, "order", {"unit": ["ARMATLAS", 1], "args": ["unload", "pos", "2400", "1950"]}]],
+             [900, "run", ["tools/tacli", "order", "{instance}", "unload", "pos", "2400", "1950", "--unit", "3", "--expect", "ARMATLAS"]]],
    "end": 1800
   },
   "stock-transport-pad": {
    "load": "replay-transport-pad.json",
    "dll": "stock",
    "steps": [[120, "keys", ["pclick:512,384"]], [150, "keys", ["prclick:704,384"]],
-             [900, "order", {"unit": ["ARMATLAS", 1], "args": ["unload", "pos", "2400", "1950"]}]],
+             [900, "run", ["tools/tacli", "order", "{instance}", "unload", "pos", "2400", "1950", "--unit", "3", "--expect", "ARMATLAS"]]],
    "end": 1800
   },
   "waterline": {
    "load": "replay-waterline.json",
-   "steps": [[1050, "order", {"unit": ["ARMSH", 0], "args": ["move", "pos", "3400", "1450"]}],
-             [1050, "order", {"unit": ["ARMAMPH", 0], "args": ["move", "pos", "3550", "1450"]}],
-             [1050, "order", {"unit": ["ARMTHOVR", 0], "args": ["move", "pos", "3700", "2300"]}],
-             [1950, "order", {"unit": ["ARMTHOVR", 0], "args": ["move", "pos", "3700", "1350"]}],
-             [2550, "order", {"unit": ["ARMTHOVR", 0], "args": ["unload", "pos", "3800", "1250"]}]],
+   "steps": [[1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3400", "1450", "--unit", "2", "--expect", "ARMSH"]],
+             [1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3550", "1450", "--unit", "3", "--expect", "ARMAMPH"]],
+             [1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3700", "2300", "--unit", "4", "--expect", "ARMTHOVR"]],
+             [1950, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3700", "1350", "--unit", "4", "--expect", "ARMTHOVR"]],
+             [2550, "run", ["tools/tacli", "order", "{instance}", "unload", "pos", "3800", "1250", "--unit", "4", "--expect", "ARMTHOVR"]]],
    "end": 3150
   },
   "stock-waterline": {
    "load": "replay-waterline.json",
    "dll": "stock",
-   "steps": [[1050, "order", {"unit": ["ARMSH", 0], "args": ["move", "pos", "3400", "1450"]}],
-             [1050, "order", {"unit": ["ARMAMPH", 0], "args": ["move", "pos", "3550", "1450"]}],
-             [1050, "order", {"unit": ["ARMTHOVR", 0], "args": ["move", "pos", "3700", "2300"]}],
-             [1950, "order", {"unit": ["ARMTHOVR", 0], "args": ["move", "pos", "3700", "1350"]}],
-             [2550, "order", {"unit": ["ARMTHOVR", 0], "args": ["unload", "pos", "3800", "1250"]}]],
+   "steps": [[1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3400", "1450", "--unit", "2", "--expect", "ARMSH"]],
+             [1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3550", "1450", "--unit", "3", "--expect", "ARMAMPH"]],
+             [1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3700", "2300", "--unit", "4", "--expect", "ARMTHOVR"]],
+             [1950, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3700", "1350", "--unit", "4", "--expect", "ARMTHOVR"]],
+             [2550, "run", ["tools/tacli", "order", "{instance}", "unload", "pos", "3800", "1250", "--unit", "4", "--expect", "ARMTHOVR"]]],
    "end": 3150
   },
   "perspective": {
