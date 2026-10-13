@@ -8138,6 +8138,20 @@ bit-27 units, or when its record is made anew -- the create's init clears both m
 2026-10-12 with no exception in 776 dumps, 284 of them live, holding 2,042 stamped bit-27 units].
 Every clear ends with `0x440A70` (`0x47D2CA`).
 
+**An open yard gives nothing back.** YARD_OPEN `0x47DAC0` sets `+0x10F` bit 2 and the structure's
+own bit 27 (`0x47DAD5..0x47DAF7`), re-claims for the structure alone (`0x47DAFD`) and refreshes the
+passability (`0x47DB0A`); it calls no clear. The structure's re-claim walks its yardmap under the
+mask `+0x10F` bit 2 selects (`0x47C804..0x47C817`: 2 open, 4 closed): a cell its byte sets is taken
+or contested, and a cell it does not set is let go only if it names the structure
+(`0x47C8AE..0x47C8B7`). So a unit that lost a yard cell to the closed structure keeps bit 27 and
+gets no cell when the yard opens -- a holder's clear is the one walk that would re-claim for it. The
+game never makes that order: a lab opens its yard before it makes the nanoframe in it (MEASURED
+2026-10-12, slice-walkers: lab 502 opened at GameTime 2962 and nanoframe 527 was made at 2963 on
+the yard's four free cells). A replay that makes units in slot order therefore writes each made
+unit's yard as its create returns (`tagpu_replay.c`, `yard_put` in `level_units`), before the next
+create stamps [DISASSEMBLED; MEASURED: before it, a seek at 3001 left 527 with bit 27 and its four
+cells empty; with it, every round trip of slice-walkers, forest-circle and battle is EQUAL].
+
 **The rule on a skirmish recording machine.** Its seats are type 1 (local human) and 2 (local AI)
 (MEASURED, the controllers of both recordings the decision rests on), so the incumbent always keeps
 a contested cell there. Every seat of a puppet level is type 3, so the same engine decides every

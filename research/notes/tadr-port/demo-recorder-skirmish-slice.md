@@ -881,7 +881,10 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
     and finds no unit; the replayed create makes it again. Each event is counted as played or not,
     and the log names the classes of those not played.
   - **A recorded YARD_OPEN** is applied after the positions, through the re-claim `0x47C790` and
-    the passability refresh `0x440A40`.
+    the passability refresh `0x440A40`. A unit the first step or a seek makes gets its recorded yard
+    as soon as its create returns, before the next slot's create stamps: an open yard gives no cell
+    back to a unit that lost it to the closed structure ([engine map](../exe-reverse-engineering.md),
+    *An open yard gives nothing back*).
   - **The wind** is seeded once, from the recording's first image, so every draw after it is the
     recording's.
 - **The recording is the only writer.** On a puppet host, twelve prologue gates
