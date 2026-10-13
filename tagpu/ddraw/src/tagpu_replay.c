@@ -1607,6 +1607,7 @@ typedef struct Lv {
     char*    fdefs;         /* the feature defs, nfdefs of them                                */
     unsigned nfdefs;
 } Lv;
+static void yard_put(const Lv* L, const RecWorld* W, unsigned slot);
 
 static uint32_t s_raw1[REC_UNIT_DWORDS], s_raw2[REC_UNIT_DWORDS], s_praw[REC_PLAYER_DWORDS];
 static uint32_t s_state[REC_UNIT_DWORDS];         /* +0x110 as the last write takes it        */
@@ -2028,6 +2029,7 @@ static unsigned level_units(const Lv* L, const RecWorld* W, uint32_t books_at)
                  img[U_STATE / 4] & 3u, 1)) {
             s_made[slot] = books_at;
             made++;
+            yard_put(L, W, slot);       /* before the next create stamps (A RECORDED YARD_OPEN) */
         }
     }
     return made;
@@ -2276,51 +2278,64 @@ static void units_put(const Lv* L, const RecWorld* W)
    tests it (0x47D991..0x47D9D8, 16-bit sums compared signed). The re-claim has no bound of its own
    and walks those cells. The contest it runs marks this unit and the incumbents with +0x110 bits
    26 and 27, which states_put then writes as recorded -- but on a segment that holds its cells,
-   where the marks are the footprint writers' (U_MARKS). */
-static void yards_put(const Lv* L, const RecWorld* W)
+   where the marks are the footprint writers' (U_MARKS).
+   A unit level_units makes gets its yard here as soon as its create returns (yard_put), before the
+   next slot's create, since a yard's cells are free only once it is open: the structure's re-claim
+   releases a yard cell under the open mask (0x47C8AE..0x47C8B7), and YARD_OPEN re-claims for the
+   structure alone (0x47DAEC..0x47DAFD; DISASSEMBLED) -- a unit that lost a yard cell to it earlier
+   gets the cell back only from a holder's clear, which re-claims over the holder's footprint
+   (0x47D2A4..0x47D2C4), and an open yard is no clear. Live, a lab opens its yard before it makes
+   the nanoframe that stands in it (MEASURED 2026-10-12, slice-walkers: lab 502 opens at GameTime
+   2962, nanoframe 527 is made at 2963 and takes the yard's four cells); made in slot order with
+   the yards opened after them all, the nanoframe would lose those cells to the closed lab, keep
+   the loser's mark, and be left without them when the yard opened. */
+static void yard_put(const Lv* L, const RecWorld* W, unsigned slot)
 {
     const char* defs = *(const char* const*)(L->ta + OFF_UDEFS);
     int gw = *(const int*)(L->ta + OFF_GRIDW), gh = *(const int*)(L->ta + OFF_GRIDH);
-    unsigned slot;
-    for (slot = 1; slot < L->nslots; slot++) {
-        const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
-        unsigned char want = (unsigned char)img_at(W, slot)[U_YARD] & 4u;
-        char* u = unit_at(L, slot);
-        const char* def;
-        const void* yard;
-        uint32_t st, wh, dwh;
-        int16_t x, z, fw, fh;
-        unsigned ix;
-        if (!W->live[slot] || !holds(L, slot, img) || ((unsigned char)u[U_YARD] & 4u) == want)
-            continue;
-        ix = *(const unsigned short*)(u + U_TYPEIX);
-        memcpy(&def, u + U_DEF, 4);
-        memcpy(&st, u + U_STATE, 4);
-        memcpy(&wh, u + U_FOOTWH, 4);
-        memcpy(&x, u + U_FOOTXZ, 2);
-        memcpy(&z, u + U_FOOTXZ + 2, 2);
-        memcpy(&fw, u + U_FOOTWH, 2);
-        memcpy(&fh, u + U_FOOTWH + 2, 2);
-        yard = NULL;
-        dwh = ~wh;
-        if ((st & U_NOMOVER) && defs && ix < L->ndefs && def == defs + (size_t)ix * DEF_STRIDE) {
-            memcpy(&yard, def + DEF_YARDMAP, 4);
-            memcpy(&dwh, def + DEF_FOOTWH, 4);
-        }
-        if (!yard || dwh != wh || x < 1 || z < 1 || (int16_t)(x + fw) >= gw ||
-            (int16_t)(z + fh) >= gh) {
-            s_st.yrefused++;
-            note("replay: GameTime %u: unit %u's yard cannot be %s here", L->now, slot,
-                 want ? "opened" : "closed");
-            continue;
-        }
-        u[U_YARD] = (char)(((unsigned char)u[U_YARD] & ~4u) | want);
-        st |= U_RECLAIM;
-        memcpy(u + U_STATE, &st, 4);
-        E_Reclaim(u);
-        E_Passable(*(const uint32_t*)(u + U_FOOTXZ), *(const uint32_t*)(u + U_FOOTWH));
-        s_st.yards++;
+    const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
+    unsigned char want = (unsigned char)img_at(W, slot)[U_YARD] & 4u;
+    char* u = unit_at(L, slot);
+    const char* def;
+    const void* yard;
+    uint32_t st, wh, dwh;
+    int16_t x, z, fw, fh;
+    unsigned ix;
+    if (!W->live[slot] || !holds(L, slot, img) || ((unsigned char)u[U_YARD] & 4u) == want)
+        return;
+    ix = *(const unsigned short*)(u + U_TYPEIX);
+    memcpy(&def, u + U_DEF, 4);
+    memcpy(&st, u + U_STATE, 4);
+    memcpy(&wh, u + U_FOOTWH, 4);
+    memcpy(&x, u + U_FOOTXZ, 2);
+    memcpy(&z, u + U_FOOTXZ + 2, 2);
+    memcpy(&fw, u + U_FOOTWH, 2);
+    memcpy(&fh, u + U_FOOTWH + 2, 2);
+    yard = NULL;
+    dwh = ~wh;
+    if ((st & U_NOMOVER) && defs && ix < L->ndefs && def == defs + (size_t)ix * DEF_STRIDE) {
+        memcpy(&yard, def + DEF_YARDMAP, 4);
+        memcpy(&dwh, def + DEF_FOOTWH, 4);
     }
+    if (!yard || dwh != wh || x < 1 || z < 1 || (int16_t)(x + fw) >= gw ||
+        (int16_t)(z + fh) >= gh) {
+        s_st.yrefused++;
+        note("replay: GameTime %u: unit %u's yard cannot be %s here", L->now, slot,
+             want ? "opened" : "closed");
+        return;
+    }
+    u[U_YARD] = (char)(((unsigned char)u[U_YARD] & ~4u) | want);
+    st |= U_RECLAIM;
+    memcpy(u + U_STATE, &st, 4);
+    E_Reclaim(u);
+    E_Passable(*(const uint32_t*)(u + U_FOOTXZ), *(const uint32_t*)(u + U_FOOTWH));
+    s_st.yards++;
+}
+
+static void yards_put(const Lv* L, const RecWorld* W)
+{
+    unsigned slot;
+    for (slot = 1; slot < L->nslots; slot++) yard_put(L, W, slot);
 }
 
 /* +0x110 as recorded, less the bits the engine functions own, for every unit once the placement
