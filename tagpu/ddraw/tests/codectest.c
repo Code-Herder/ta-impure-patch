@@ -3567,6 +3567,97 @@ static int outcomes_reader(const RecCodecParams* p)
     rb_free(&x);
     return ok;
 }
+
+/* THE YARD RULE (tagpu_recfmt.h) through the DLL's reader: a file whose first iteration holds
+   slot 1 (unit ID 2) alive and then `nev` events, each {kind, unit ID, yard}, and a second
+   iteration with none. 1 when the reader reads both iterations to the end block, -1 when it
+   refuses the file (*why its reason). */
+static int yard_file(const char* path, const unsigned (*ev)[3], unsigned nev, char* why,
+                     unsigned cap)
+{
+    RecBytes f, h, r;
+    uint32_t feat[5] = { RD_GRID, RD_GRID, 1, 0, 0 }, v, t0 = 1;
+    unsigned char e[12 + REC_UNIT_IMAGE];
+    unsigned i;
+    RecReader* rd;
+    int k = 0;
+    memset(&f, 0, sizeof f);
+    memset(&h, 0, sizeof h);
+    memset(&r, 0, sizeof r);
+    rb_put(&f, REC_MAGIC, 8);
+    v = REC_FORMAT; rd_rec(&h, RT_FORMAT, &v, 4);
+    v = 2;          rd_rec(&h, RT_MODE, &v, 4);
+    v = t0;         rd_rec(&h, RT_START, &v, 4);
+    v = 4;          rd_rec(&h, RT_SLOTS, &v, 4);
+    rd_rec(&h, RT_FEATURES, feat, sizeof feat);
+    v = 1;          rd_rec(&h, RT_PROJECTILES, &v, 4);
+    mem_block(&f, RB_HEADER, RBF_STORED, t0, t0, (uint32_t)h.n, h.p, h.n);
+    rd_iteration(&r, t0, 0);
+    for (i = 0; i < nev; i++) {
+        unsigned kind = ev[i][0], len = kind == RK_EV_CREATE ? 28 : kind == RK_EV_DEATH ?
+                        12 + REC_UNIT_IMAGE : kind == RK_EV_YARD ? 8 : 4;
+        memset(e, 0, sizeof e);
+        put32(e, ev[i][1]);
+        if (kind == RK_EV_YARD) e[4] = (unsigned char)ev[i][2];
+        if (kind == RK_EV_DEATH) memcpy(e + 12, rd_image[0], REC_UNIT_IMAGE);
+        rd_rec(&r, kind, e, len);
+    }
+    rd_u32(&r, RK_TICK, t0 + 1);
+    mem_block(&f, RB_STREAM, RBF_STORED, t0, t0 + 1, (uint32_t)r.n, r.p, r.n);
+    h.n = 0;
+    v = 0;
+    rd_rec(&h, RT_GAME_END, &v, 4);
+    mem_block(&f, RB_END, RBF_STORED, t0 + 1, t0 + 1, (uint32_t)h.n, h.p, h.n);
+    if (rd_write(path, &f) && (rd = recr_open(path, why, cap)) != NULL) {
+        while ((k = recr_tick(rd, why, cap)) == 1) ;
+        recr_close(rd);
+        k = k == 0 ? 1 : -1;
+    } else {
+        k = -1;
+    }
+    DeleteFileA(path);
+    rb_free(&f);
+    rb_free(&h);
+    rb_free(&r);
+    return k;
+}
+
+static int outcomes_yard_rule(void)
+{
+    static const unsigned in_create[][3] = {      /* Create's yard, before its create */
+        { RK_EV_YARD, 3, 1 }, { RK_EV_YARD, 3, 0 }, { RK_EV_CREATE, 3, 0 }, { RK_EV_YARD, 3, 1 } };
+    static const unsigned live[][3] = {           /* a live unit's, in and out of a death */
+        { RK_EV_YARD, 2, 1 }, { RK_EV_DEATH, 3, 0 }, { RK_EV_YARD, 2, 0 },
+        { RK_EV_DEATH_END, 3, 0 } };
+    static const unsigned no_create[][3] = { { RK_EV_YARD, 3, 1 } };
+    static const unsigned own_death[][3] = {
+        { RK_EV_DEATH, 2, 0 }, { RK_EV_YARD, 2, 1 }, { RK_EV_DEATH_END, 2, 0 } };
+    static const unsigned dead[][3] = {
+        { RK_EV_DEATH, 2, 0 }, { RK_EV_DEATH_END, 2, 0 }, { RK_EV_YARD, 2, 1 } };
+    static const unsigned held_dies[][3] = {
+        { RK_EV_YARD, 3, 1 }, { RK_EV_DEATH, 3, 0 }, { RK_EV_DEATH_END, 3, 0 },
+        { RK_EV_CREATE, 3, 0 } };
+    char dir[MAX_PATH], path[MAX_PATH + 32], why[256];
+    int ok = 1;
+    if (!GetTempPathA(sizeof dir, dir)) return expect("yard rule: a temporary folder", 0, 1);
+    snprintf(path, sizeof path, "%scodectest-yard.imprec", dir);
+    why[0] = 0;
+    ok &= expect("yard rule: a yard its create opens, before the create",
+                 yard_file(path, in_create, 4, why, sizeof why), 1);
+    ok &= expect("yard rule: a live unit's yard, in and out of another's death",
+                 yard_file(path, live, 4, why, sizeof why), 1);
+    ok &= expect("yard rule: refused, a yard not live with no create after it",
+                 yard_file(path, no_create, 1, why, sizeof why) == -1 &&
+                 strstr(why, "THE YARD RULE") != NULL, 1);
+    ok &= expect("yard rule: refused, a yard inside its own unit's death",
+                 yard_file(path, own_death, 3, why, sizeof why), -1);
+    ok &= expect("yard rule: refused, a dead unit's yard out of a bracket",
+                 yard_file(path, dead, 3, why, sizeof why) == -1 &&
+                 strstr(why, "THE YARD RULE") != NULL, 1);
+    ok &= expect("yard rule: refused, a death before the create a yard waits for",
+                 yard_file(path, held_dies, 4, why, sizeof why), -1);
+    return ok;
+}
 #endif
 
 static int f32_check(void)
@@ -4685,6 +4776,7 @@ static int cmd_outcomes(void)
     ok &= outcomes_container(&p);
 #ifdef _WIN32
     ok &= outcomes_reader(&p);
+    ok &= outcomes_yard_rule();
 #endif
     ok &= outcomes_sprays();
     ok &= zstd_window_check(st.cctx, st.dctx);

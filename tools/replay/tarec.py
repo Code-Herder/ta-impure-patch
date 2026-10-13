@@ -728,6 +728,8 @@ class World:
         self.cnames = {}                # the scripts' names by their FNV-1a
         self.fbracket = 0               # an RK_EV_FEATURE's root + 1, until its end
         self.deaths = []                # the IDs of the deaths whose end is still to come
+        self.ystep = {}                 # the step's creates and deaths, slot -> "made"/"gone",
+        self.yheld = set()              # and the slots whose yard waits for their create
         self.evented = False            # an event has come since the iteration's RK_TICK
         self.session = None             # the unit ID of the iteration's last RK_SPRAY_SESSION
         self.units = {}                                  # slot -> bytearray image, live only
@@ -773,6 +775,36 @@ class World:
             return []
         return [(RK_EV_SPRAY, b) for b in self.sprays.imply(self.tick, self.unit_of)]
 
+    def yard_rule(self, kind, b):
+        """THE YARD RULE (tagpu_recfmt.h), as the writer and the DLL's reader have it: a unit is
+        live at an event when the images hold it and no death of it came since, or a create of it
+        came since; a yard of a unit live there is its yard at its place, one of a unit not live
+        is its create's (Create's first slice runs inside the create 0x485F50, which is recorded
+        at its exit) and waits for that create in the step, and a yard naming the unit of a death
+        still open is malformed, as is a death of a unit whose yard waits."""
+        slot = struct.unpack_from("<I", b)[0] - 1
+        if not 1 <= slot < self.slots:
+            return
+        if kind == RK_EV_CREATE:
+            self.yheld.discard(slot)
+            self.ystep[slot] = "made"
+        elif kind == RK_EV_DEATH:
+            if slot in self.yheld:
+                raise Unreadable(f"the death of slot {slot}, whose create's yard waits for it")
+            self.ystep[slot] = "gone"
+        elif slot + 1 in self.deaths:
+            raise Unreadable(f"a yard of slot {slot}, inside its own death")
+        elif not (self.ystep.get(slot) == "made" or
+                  (slot not in self.ystep and slot in self.units)):
+            self.yheld.add(slot)
+
+    def yard_end(self):
+        """The step's end: every yard that waited met its create."""
+        if self.yheld:
+            raise Unreadable(f"a yard of slot {min(self.yheld)}, not live, whose create does not "
+                             f"follow in its step")
+        self.ystep.clear()
+
     def bracket(self, kind, b):
         """The brackets' grammar, as the DLL's reader has it (tagpu_recreader.c, event_take): a
         feature call's holds no other and cells only when it is the tick's, which is inside none;
@@ -794,6 +826,7 @@ class World:
         elif kind == RK_EV_DEATH:
             if self.fbracket or len(self.deaths) == REC_DEATHS_MAX:
                 raise Unreadable("a death inside a feature call, or nested too deep")
+            self.yard_rule(kind, b)
             self.deaths.append(struct.unpack_from("<I", b)[0])
         elif kind == RK_EV_DEATH_END:
             if len(b) != 4 or not self.deaths or self.deaths[-1] != struct.unpack_from("<I", b)[0]:
@@ -926,13 +959,14 @@ class World:
                 raise Unreadable(f"an owner's query of slot {slot}, outside the array")
             return kind, b
         if kind == RK_EV_YARD:
-            # YARD_OPEN's pass, in a bracket or not, a slot of the level's (tagpu_recreader.c,
-            # event_take)
+            # YARD_OPEN's pass, in a bracket or not, a slot of the level's, where THE YARD RULE
+            # lets it stand (tagpu_recreader.c, event_take)
             if len(b) != 8 or b[4] > 1 or any(b[5:8]):
                 raise Unreadable(f"a yard of {len(b)} bytes, yard {b[4] if len(b) > 4 else '-'}")
             slot = struct.unpack_from("<I", b)[0] - 1
             if not 1 <= slot < self.slots:
                 raise Unreadable(f"a yard of slot {slot}, outside the array")
+            self.yard_rule(kind, b)
             return kind, b
         if kind == RK_CELLS and (self.fbracket or self.deaths):
             if self.fbracket != FR_TICK + 1:
@@ -944,6 +978,7 @@ class World:
         if kind in (RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT):
             self.perspective(kind, b)
         elif kind == RK_TICK:
+            self.yard_end()
             self.tick = struct.unpack_from("<I", b)[0]
             self.clicks = []
             self.evented = False
@@ -1109,6 +1144,8 @@ class World:
             img[off:off + len(b) - 8] = b[8:]
         elif kind in EVENTS:
             # the images come before the events: the units are this iteration's
+            if kind == RK_EV_CREATE:
+                self.yard_rule(kind, b)
             if kind == RK_EV_SPRAY and self.sprays_on():
                 self.sprays.spray(self.tick, b, self.unit_of)
             return kind, b
@@ -1128,6 +1165,9 @@ class World:
         if self.fbracket or self.deaths:
             raise Unreadable("a feature call's or a death's records cut short at the end of its "
                              "iteration")
+        if self.yheld:
+            raise Unreadable(f"a yard of slot {min(self.yheld)}, not live, whose create does not "
+                             f"follow in its iteration")
 
     def pov_differences(self, other):
         """Lines naming each seat whose last two samples, with their GameTimes, or whose selection
@@ -1608,7 +1648,9 @@ class EventCheck:
     reached 0.0 its build done, and, with `yards` (a skirmish's: its recorder writes them), one
     whose yard, +0x10F bit 2, changed a yard event whose last one for it is the new yard, since
     YARD_OPEN 0x47DAC0 is that bit's one writer (0x47DAF1) -- unless the slot died and was made
-    again in the step, which the create and the death both name. Within an iteration's events a script slice and an owner's
+    again in the step, which the create and the death both name; and a unit made in the step has
+    the yard of its last yard event, its create's or a later one, or with none the closed yard its
+    create's init leaves. Within an iteration's events a script slice and an owner's
     query name a unit live at its point -- in the iteration's images, or created earlier in its
     events and not dead since -- and a script slice a slot at most once (tagpu_recfmt.h,
     RK_EV_SLICE, RK_EV_QUERY)."""
@@ -1721,6 +1763,12 @@ class EventCheck:
             if a is None:
                 if slot not in made:
                     self.note(f"{at}: unit {slot} appears with no create")
+                elif self.yards and slot not in died and (b[3] >> 2 & 1) != yard.get(slot, 0):
+                    # the create's init closes the yard (0x485B3E..0x485B52), and only YARD_OPEN
+                    # opens it: in the create's Create slice or after it, an event each
+                    self.note(f"{at}: unit {slot} appears with its yard {b[3] >> 2 & 1} and "
+                              + (f"its last yard event at {yard[slot]}" if slot in yard
+                                 else "no yard event"))
                 continue
             if b is None:
                 if slot not in died:

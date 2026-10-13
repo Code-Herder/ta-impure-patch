@@ -359,9 +359,10 @@ enum RecKind {
     RK_EV_YARD,        /* u32 unit ID, u8 the yard (1 open, 0 closed), u8 0 x3: YARD_OPEN 0x47DAC0
                           passed its refusal 0x47D970 and wrote the structure's +0x10F bit 2
                           (0x47DAF1), then re-claimed its footprint (0x47DAFD). Wherever the
-                          setter runs: in a COB slice, or a script a create, a death or a query
-                          ran at once. A playing writes the same yard at this place (tagpu_replay.c,
-                          A RECORDED YARD_OPEN)                                                    */
+                          setter runs, and where it stands is THE YARD RULE (below): the yard of a
+                          live unit at its place, or of the create that follows it. A playing
+                          writes the first at this place and checks the second at its create
+                          (tagpu_replay.c, A RECORDED YARD_OPEN)                                   */
     RK_KINDS
 };
 
@@ -441,6 +442,84 @@ static __inline int rec_root_len(unsigned root, unsigned len)
 {
     static const unsigned char args[FR_ROOTS] = { 0, 28, 8, 12, 12, 16, 12, 32 };
     return root < FR_ROOTS && len == 8u + args[root];
+}
+
+/* THE YARD RULE: where an RK_EV_YARD may stand in its step, the same for the writer, both readers
+   and the playing. A unit is live at an event of the step when the iteration's images hold it (the
+   images come before the events, RK_TICK) and no RK_EV_DEATH of its ID since, or when an
+   RK_EV_CREATE of its ID came since [DISASSEMBLED 2026-10-12]:
+   - A yard of a unit live at its place is that unit's yard at that place: a COB slice's, a
+     query's, a script another root ran at once. Killed among them: on a skirmish recording machine
+     every death goes through Send_UnitDeath 0x4864B0, which runs Killed as a query at 0x4865C3
+     and only then calls the destructor (0x486679, mode 1), so Killed's yard comes before the
+     death's RK_EV_DEATH. The destructor's own Killed start (0x486877) runs in mode 0 alone
+     (0x48684A..0x486853), the network receiver's (0x455423), and its other starts -- TargetCleared
+     through 0x489800 from the order purge (0x43A2B9), StopBuilding at 0x43A251 -- are made with
+     run-now 0, so no script of the dying unit runs inside its own death's bracket.
+   - A yard of a unit not live at its place is the yard its create's Create script opened: the
+     create 0x485F50 runs Create's first slice at once (0x485D40 at 0x4860A6, run-now pushed at
+     0x485DDD), after its init has written the footprint (0x485AAA, 0x485BD3) and before its
+     placement 0x48A870 (0x486109) and stamp 0x47CC30 (0x48610F); CreateFromNetwork 0x4861D0 has
+     the same order (0x4862BE, 0x486306, 0x48630C). The create is recorded at its exit (0x4861B3),
+     so the yard comes before the unit's RK_EV_CREATE, which follows in the same step with no
+     death of the slot between.
+   - Anything else is malformed: a yard naming the unit of a death still open, and a yard of a
+     unit not live whose create does not follow in its step.
+   The callers keep the state: `st` and `touched` hold a byte and an index per unit slot. */
+enum { RYS_MADE = 1, RYS_GONE, RYS_HELD };
+typedef struct RecYardStep {
+    unsigned char* st;         /* a slot's change in the step: 0 none (the images'), RYS_*        */
+    unsigned*      touched;    /* the slots whose st is set, each once                             */
+    unsigned       ntouched;
+    unsigned       held;       /* the slots whose yard waits for their create                      */
+} RecYardStep;
+
+static __inline void rec_yard_mark(RecYardStep* y, unsigned slot, unsigned char v)
+{
+    if (!y->st[slot]) y->touched[y->ntouched++] = slot;
+    y->st[slot] = v;
+}
+
+/* One event of the step by THE YARD RULE: 1 well formed, 0 malformed. `live` is the images',
+   `deaths` the IDs of the deaths still open. A kind it does not name, and a create or death of an
+   ID outside the slots (the callers' own checks bound those), changes nothing. */
+static __inline int rec_yard_take(RecYardStep* y, unsigned kind, const unsigned char* b,
+                                  const unsigned char* live, unsigned slots,
+                                  const unsigned* deaths, unsigned ndeaths)
+{
+    uint32_t id;
+    unsigned slot, i;
+    if (kind != RK_EV_CREATE && kind != RK_EV_DEATH && kind != RK_EV_YARD) return 1;
+    id = (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
+    slot = id - 1u;
+    if (slot < 1 || slot >= slots) return kind != RK_EV_YARD;
+    if (kind == RK_EV_CREATE) {
+        if (y->st[slot] == RYS_HELD) y->held--;
+        rec_yard_mark(y, slot, RYS_MADE);
+        return 1;
+    }
+    if (kind == RK_EV_DEATH) {
+        if (y->st[slot] == RYS_HELD) return 0;
+        rec_yard_mark(y, slot, RYS_GONE);
+        return 1;
+    }
+    for (i = 0; i < ndeaths; i++)
+        if (deaths[i] == id) return 0;
+    if (y->st[slot] == RYS_MADE || (!y->st[slot] && live[slot])) return 1;
+    if (y->st[slot] != RYS_HELD) {
+        rec_yard_mark(y, slot, RYS_HELD);
+        y->held++;
+    }
+    return 1;
+}
+
+/* The step's end: 1 when every held yard met its create. The state goes back to the images'. */
+static __inline int rec_yard_end(RecYardStep* y)
+{
+    int ok = !y->held;
+    while (y->ntouched) y->st[y->touched[--y->ntouched]] = 0;
+    y->held = 0;
+    return ok;
 }
 
 /* The feature code's inputs from outside the feature world: its calls of the simulation RNG

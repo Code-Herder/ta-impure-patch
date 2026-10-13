@@ -5151,10 +5151,12 @@ static int __cdecl ev_state(void* E)
    refusal 0x47D970 has passed (0x47DACC..0x47DAD3), esi is the structure and bl its new +0x10F,
    bit 2 the yard (0x47DAD5..0x47DAE4), and the re-claim 0x47DAFD follows. Every pass is written,
    one that leaves the yard as it was too, since the re-claim runs either way. YARD_OPEN's one
-   caller is the COB setter (0x480BAE), so this is wherever a script runs: a slice, or a script a
-   create, a death or a query runs at once; and the event goes in at that place, among the creates
-   whose stamps it changes (tagpu_replay.c, A RECORDED YARD_OPEN). A skirmish's: a multiplayer
-   playing composes its yards from the owners' images. */
+   caller is the COB setter (0x480BAE), so this is wherever a script runs: a slice, a query, or a
+   script another root runs at once -- a create's Create among them, before the create's exit
+   records it; and the event goes in at that place, among the creates whose stamps it changes.
+   Where that place may be is THE YARD RULE (tagpu_recfmt.h); the playing writes or checks it
+   there (tagpu_replay.c, A RECORDED YARD_OPEN). A skirmish's: a multiplayer playing composes its
+   yards from the owners' images. */
 static int __cdecl ev_yard(void* E)
 {
     Rec* r;

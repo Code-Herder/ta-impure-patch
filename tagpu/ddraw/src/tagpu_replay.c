@@ -196,12 +196,13 @@ static int        s_over;           /* the recording has nothing more to apply  
 static int        s_endlog;         /* its counts wait for the last step's phases (THE PHASES)    */
 static unsigned   s_endat;          /* ... and the GameTime it ended at                           */
 static unsigned   s_notes;          /* the level's anomalies logged                               */
-#define NOTE_SITES     48           /* above the call sites of note(), so each has its own count  */
+#define NOTE_SITES     56           /* above the call sites of note(), so each has its own count  */
 static struct { const char* fmt; unsigned n; } s_nsite[NOTE_SITES]; /* per call site, by format */
 #define EV_KINDS (RK_EV_SPRAY - RK_EV_CREATE + 1)
 static struct {
     unsigned steps, late, made, refused, missing, lingering, other, bad_ids, links, unlinked;
     unsigned obuilt, ofreed, orefused, yards, yrefused, grefused;
+    unsigned ychecked, ydiffer, yunchecked;         /* the yards a create opened (yard_check)   */
     unsigned played[EV_KINDS], skipped[EV_KINDS];   /* each event kind's, from RK_EV_CREATE    */
 } s_st;                             /* the level's counts, logged at its end                      */
 static struct {
@@ -2296,7 +2297,19 @@ static void units_put(const Lv* L, const RecWorld* W)
    create returns, before the next slot's create stamps (MEASURED 2026-10-12, slice-walkers: lab
    502 opened at GameTime 2962 and nanoframe 527 was made at 2963 on the yard's four free cells;
    made in slot order with the yards opened after them all, 527 lost them to the closed lab and
-   kept the loser's mark). 1 when the yard went in. */
+   kept the loser's mark).
+   A YARD ITS CREATE OPENS is a check, not a write (THE YARD RULE, tagpu_recfmt.h): Create's first
+   slice runs inside the create 0x485F50 (0x485D40 at 0x4860A6, run-now), after its init 0x485A40
+   has written the footprint (0x485AAA, 0x485BD3) and cleared the yard (0x485B3E..0x485B52), and
+   before the placement 0x48A870 (0x486109) and the stamp 0x47CC30 (0x48610F), whose yardmap mask
+   reads the yard (0x47CD88..0x47CD9A); CreateFromNetwork 0x4861D0 the same (0x4862BE, 0x486306,
+   0x48630C) [DISASSEMBLED]. So such a yard is stamped open, and writing it once the create had
+   returned would stamp under the closed mask first and then re-claim under the open one, marking
+   bits 26 and 27 where the engine marks none. The replayed create runs with the puppet gates open
+   (make), so its own Create makes the SET at the engine's place; the recording's yard is held
+   until that create returns and compared with the yard the host's create left (yard_check), and a
+   difference is named. A yard of a live unit, Killed's among them (Send_UnitDeath runs it as a
+   query before the destructor), is written at its place. 1 when the yard went in. */
 static int yard_set(const Lv* L, unsigned slot, unsigned char want)
 {
     const char* defs = *(const char* const*)(L->ta + OFF_UDEFS);
@@ -2350,6 +2363,64 @@ static void yards_put(const Lv* L, const RecWorld* W)
 {
     unsigned slot;
     for (slot = 1; slot < L->nslots; slot++) yard_put(L, W, slot);
+}
+
+/* the recording's liveness of `slot` at event `i` of the step (THE YARD RULE): the images', changed
+   by the creates and deaths before it */
+static int ev_live_at(const RecWorld* W, unsigned i, unsigned slot)
+{
+    int live = W->live[slot] != 0;
+    unsigned j;
+    uint32_t id;
+    for (j = 0; j < i; j++) {
+        unsigned k = W->ev[j].kind;
+        if (k != RK_EV_CREATE && k != RK_EV_DEATH) continue;
+        memcpy(&id, W->ev[j].b, 4);
+        if (id - 1u == slot) live = k == RK_EV_CREATE;
+    }
+    return live;
+}
+
+/* an RK_EV_YARD at event `i` that its unit's create opened: one of a unit not live there, whose
+   RK_EV_CREATE follows in the step (the readers refuse a step where it does not) */
+static int yard_in_create(const RecWorld* W, unsigned i)
+{
+    uint32_t id;
+    memcpy(&id, W->ev[i].b, 4);
+    return !ev_live_at(W, i, id - 1u);
+}
+
+/* A YARD ITS CREATE OPENS, once RK_EV_CREATE `i` has been played (`made` when the host's create
+   made the unit): the last yard the recording's create opened -- an RK_EV_YARD naming the unit,
+   not live there, after the slot's last create or death -- against the yard the host's create
+   left. */
+static void yard_check(const Lv* L, const RecWorld* W, unsigned i, int made)
+{
+    uint32_t id, jd;
+    unsigned j, want = 2;
+    memcpy(&id, W->ev[i].b, 4);
+    for (j = i; j-- > 0;) {
+        unsigned k = W->ev[j].kind;
+        if (k != RK_EV_CREATE && k != RK_EV_DEATH && k != RK_EV_YARD) continue;
+        memcpy(&jd, W->ev[j].b, 4);
+        if (jd != id) continue;
+        if (k == RK_EV_YARD && yard_in_create(W, j)) want = W->ev[j].b[4];
+        break;
+    }
+    if (want > 1) return;
+    if (!made) {
+        s_st.yunchecked++;
+        note("replay: GameTime %u: the yard unit %u's create opened is not checked: the create "
+             "was not made here", L->now, (unsigned)id - 1u);
+        return;
+    }
+    if (((unsigned char)unit_at(L, id - 1u)[U_YARD] >> 2 & 1u) != want) {
+        s_st.ydiffer++;
+        note("replay: GameTime %u: unit %u's create left its yard %s here, %s in the recording",
+             L->now, (unsigned)id - 1u, want ? "closed" : "open", want ? "open" : "closed");
+        return;
+    }
+    s_st.ychecked++;
 }
 
 /* RK_EV_YARD: the yard at its place in the step (A RECORDED YARD_OPEN), the body run whether or
@@ -4039,24 +4110,23 @@ static struct {
 } s_pend;
 static RecWorld s_pendW;            /* only ev and nev: what root_play reads of a world           */
 
-/* one event that is neither a root nor a death's, as the step plays it */
-static void ev_play(const Lv* L, const RecEvent* e)
+/* one event that is neither a root nor a death's, as the step plays it; 1 when a counted kind
+   was played (RK_EV_CREATE..RK_EV_SPRAY's, and a yard) */
+static int ev_play(const Lv* L, const RecEvent* e)
 {
     const unsigned char* b = e->b;
     unsigned n = e->len, k = e->kind;
     int done;
     if (k == RK_EV_SLICE) {             /* s_st's counts are RK_EV_CREATE..RK_EV_SPRAY's */
         ev_slice(L, b, n);
-        return;
+        return 0;
     }
     if (k == RK_EV_QUERY) {
         ev_query(L, b, n);
-        return;
+        return 0;
     }
-    if (k == RK_EV_YARD) {
-        ev_yard(L, b, n);               /* counted in s_st.yards and yrefused */
-        return;
-    }
+    if (k == RK_EV_YARD)
+        return ev_yard(L, b, n);        /* counted in s_st.yards and yrefused */
     switch (k) {
     case RK_EV_CREATE:      done = ev_create(L, b, n); break;
     case RK_EV_SHOT:        done = ev_shot(L, b, n); break;
@@ -4067,10 +4137,11 @@ static void ev_play(const Lv* L, const RecEvent* e)
     case RK_EV_STATE:       done = ev_state(L, b, n); break;
     case RK_EV_REPLY:       done = ev_reply(L, b, n); break;
     case RK_EV_SPRAY:       done = ev_spray(L, b, n); break;
-    default:                return;     /* a bracket's draws, the tick's cells, a root's end */
+    default:                return 0;   /* a bracket's draws, the tick's cells, a root's end */
     }
     if (done) s_st.played[k - RK_EV_CREATE]++;
     else s_st.skipped[k - RK_EV_CREATE]++;
+    return done;
 }
 
 /* the bracket opening at `i` into the store; its RK_EV_FEATURE_END's index, 0 when it does not
@@ -4979,7 +5050,7 @@ static int mp_owned_event(unsigned kind)
 static void events_put(const Lv* L, const RecWorld* W, int defer)
 {
     unsigned i, end, deaths = 0, mdeaths = 0;
-    int inroot = 0;
+    int inroot = 0, done;
     if (defer) s_pend.L = *L;
     for (i = 0; i < W->nev; i++) {
         unsigned k = W->ev[i].kind;
@@ -5022,7 +5093,9 @@ static void events_put(const Lv* L, const RecWorld* W, int defer)
                 if (k == RK_EV_DRAW) s_fst.left++;  /* a draw no recorded call made */
                 break;
             }
-            ev_play(L, &W->ev[i]);
+            if (k == RK_EV_YARD && yard_in_create(W, i)) break;     /* yard_check's */
+            done = ev_play(L, &W->ev[i]);
+            if (k == RK_EV_CREATE) yard_check(L, W, i, done);
             break;
         }
     }
@@ -8781,10 +8854,12 @@ static void counts_log(const char* when, unsigned now)
     tagpu_logf("replay: %s at %s, GameTime %u: %u iterations applied (%u late); units made %u at "
                "the start; %u refused, %u missing here, %u here only, %u of another type; %u IDs "
                "past their array; %u carry links made, %u refused; order nodes %u built, %u torn "
-               "down, %u refused; %u yards changed, %u refused; %u control groups not set", s_name,
+               "down, %u refused; %u yards changed, %u refused; %u yards checked at their create, "
+               "%u differed, %u not checked; %u control groups not set", s_name,
                when, now, s_st.steps, s_st.late, s_st.made, s_st.refused, s_st.missing,
                s_st.lingering, s_st.other, s_st.bad_ids, s_st.links, s_st.unlinked, s_st.obuilt,
-               s_st.ofreed, s_st.orefused, s_st.yards, s_st.yrefused, s_st.grefused);
+               s_st.ofreed, s_st.orefused, s_st.yards, s_st.yrefused, s_st.ychecked,
+               s_st.ydiffer, s_st.yunchecked, s_st.grefused);
     tagpu_logf("replay: %s: events played/not played: %s", s_name, ev);
     tagpu_logf("replay: %s: features: %u calls made, %u out of bounds, %u returned otherwise; "
                "%u deaths, %u whose explosion's calls were not made; %u draws not taken as "

@@ -2337,6 +2337,9 @@ def checks(fx):
                     (f"{proc}: native owner-only starts on a puppet", UNRUN, f"no {d.name}"))
             continue
         res.later(puppet_counts, proc, rec, d)
+    for proc in ("P", "R", "Q"):
+        if ran.get(proc) == "ran":
+            res.later(yard_check, proc, out / proc / "tagpu.log")
     for proc in ("R", "Q"):
         if ran.get(proc) == "ran":
             # Q's one seek is a fresh process's: a seek asked for before a playing's first step
@@ -2445,6 +2448,31 @@ def work_check(label, log_path, rec, timeline, takeover, fresh=False):
         return [(label, UNRUN, f"no seek's work line in {log_path}")]
     return [(label, FAIL if bad else PASS,
              "; ".join(bad) or f"{len(lines)} seeks: " + "; ".join(map(work_summary, lines)))]
+
+
+YARD_COUNTS = re.compile(r"(\d+) yards checked at their create, (\d+) differed, (\d+) not checked")
+
+
+def yard_verdict(label, text):
+    """[(label, verdict, detail)]: the yards a recorded create opened, against the ones the
+    playing's creates left (tagpu_replay.c, yard_check), from every counts line of a lane's log:
+    a difference, or a yard a create that was not made left unchecked, fails; could not run when
+    the log holds no counts line."""
+    rows = [tuple(map(int, m.groups())) for m in YARD_COUNTS.finditer(text)]
+    if not rows:
+        return [(label, UNRUN, "no counts line with the yards a create opened")]
+    checked, differed, unchecked = rows[-1]
+    bad = [f"{d} differed, {u} not checked" for _, d, u in rows if d or u]
+    return [(label, FAIL if bad else PASS,
+             "; ".join(bad) if bad else f"{checked} checked at their create, all as recorded")]
+
+
+def yard_check(proc, log_path):
+    try:
+        text = Path(log_path).read_text(errors="replace")
+    except OSError as e:
+        return [(f"{proc}: the yards a create opened", UNRUN, str(e))]
+    return yard_verdict(f"{proc}: the yards a create opened", text)
 
 
 def puppet_counts(proc, rec, d):

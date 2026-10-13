@@ -2444,24 +2444,79 @@ class OwnerQuery(unittest.TestCase):
 class YardEvent(unittest.TestCase):
     """RK_EV_YARD in tarec's World, as the DLL's reader takes it (tagpu_recreader.c, event_take):
     an event, in a bracket or not, naming a slot of the level's and a yard of 0 or 1, its pad
-    zero; and EventCheck's yards: a unit's +0x10F bit 2 changes between two images only with a
-    yard event whose last one for it is the new yard."""
+    zero, where THE YARD RULE lets it stand (tagpu_recfmt.h); and EventCheck's yards: a unit's
+    +0x10F bit 2 changes between two images only with a yard event whose last one for it is the
+    new yard, and a unit made in the step has its last yard event's yard, or the closed one."""
 
     @staticmethod
     def yard(unit, open_=1, pad=b"\0\0\0"):
         return struct.pack("<IB", unit, open_) + pad
 
-    def world(self):
-        return ScriptSlice.world(self)
+    @staticmethod
+    def death(unit):
+        return struct.pack("<II4x", unit, 0) + bytes(tarec.REC_UNIT_IMAGE)
 
-    def test_an_event_in_or_out_of_a_bracket(self):
+    @staticmethod
+    def create(unit):
+        return struct.pack("<I", unit) + bytes(24)
+
+    def world(self, live=(1, 2)):
+        """slots 1 and 2 live in the iteration's images (unit IDs 2 and 3)"""
+        w = ScriptSlice.world(self)
+        for slot in live:
+            w.apply(tarec.RK_UNIT, struct.pack("<H2x", slot) + bytes(tarec.REC_UNIT_IMAGE))
+        return w
+
+    def end(self, w):
+        w.apply(tarec.RK_TICK, struct.pack("<I", 2))
+
+    def test_a_live_unit_in_or_out_of_a_bracket(self):
         w = self.world()
         self.assertEqual(w.apply(tarec.RK_EV_YARD, self.yard(2))[0], tarec.RK_EV_YARD)
         with self.assertRaisesRegex(tarec.Unreadable, "after an event"):
             w.apply(tarec.RK_CELLS, CellsAfterEvents.cells(0, 5))
         w = self.world()
-        w.apply(tarec.RK_EV_DEATH, struct.pack("<II4x", 2, 0) + bytes(tarec.REC_UNIT_IMAGE))
+        w.apply(tarec.RK_EV_DEATH, self.death(2))
         self.assertEqual(w.apply(tarec.RK_EV_YARD, self.yard(3, 0))[0], tarec.RK_EV_YARD)
+        w.apply(tarec.RK_EV_DEATH_END, struct.pack("<I", 2))
+        self.end(w)
+
+    def test_a_yard_its_create_opens(self):
+        w = self.world(live=())
+        w.apply(tarec.RK_EV_YARD, self.yard(3))
+        w.apply(tarec.RK_EV_YARD, self.yard(3, 0))
+        w.apply(tarec.RK_EV_CREATE, self.create(3))
+        w.apply(tarec.RK_EV_YARD, self.yard(3))         # live from its create on
+        self.end(w)
+        w.whole()
+
+    def test_a_yard_whose_create_does_not_follow(self):
+        w = self.world(live=())
+        w.apply(tarec.RK_EV_YARD, self.yard(3))
+        with self.assertRaisesRegex(tarec.Unreadable, "whose create does not follow"):
+            w.whole()
+        with self.assertRaisesRegex(tarec.Unreadable, "whose create does not follow"):
+            self.end(w)
+
+    def test_a_dead_unit_out_of_a_bracket(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_DEATH, self.death(2))
+        w.apply(tarec.RK_EV_DEATH_END, struct.pack("<I", 2))
+        w.apply(tarec.RK_EV_YARD, self.yard(2))
+        with self.assertRaisesRegex(tarec.Unreadable, "slot 1, not live, whose create"):
+            self.end(w)
+
+    def test_a_yard_inside_its_own_death(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_DEATH, self.death(2))
+        with self.assertRaisesRegex(tarec.Unreadable, "inside its own death"):
+            w.apply(tarec.RK_EV_YARD, self.yard(2))
+
+    def test_a_death_before_the_create_its_yard_waits_for(self):
+        w = self.world(live=())
+        w.apply(tarec.RK_EV_YARD, self.yard(3))
+        with self.assertRaisesRegex(tarec.Unreadable, "whose create's yard waits"):
+            w.apply(tarec.RK_EV_DEATH, self.death(3))
 
     def test_refused_outside_the_slots_or_the_yards(self):
         for unit in (0, 1, 5):
@@ -2498,6 +2553,51 @@ class YardEvent(unittest.TestCase):
 
     def test_a_network_recording_is_not_asked(self):
         self.assertEqual(self.notes(0, 1, [], yards=False), [])
+
+    def made(self, events, yard):
+        ec = tarec.EventCheck(yards=True)
+        ec.transition({}, [(tarec.RK_EV_CREATE, self.create(2))] + events, {1: self.unit(yard)},
+                      10)
+        return ec.lines
+
+    def test_a_made_unit_with_its_create_s_yard(self):
+        self.assertEqual(self.made([], 0), [])
+        self.assertEqual(self.made([(tarec.RK_EV_YARD, self.yard(2, 1))], 1), [])
+
+    def test_a_made_unit_whose_yard_is_not_its_events(self):
+        lines = self.made([], 1)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("unit 1 appears with its yard 1 and no yard event", lines[0])
+        lines = self.made([(tarec.RK_EV_YARD, self.yard(2, 1))], 0)
+        self.assertIn("unit 1 appears with its yard 0 and its last yard event at 1", lines[0])
+
+
+class YardChecks(unittest.TestCase):
+    """The harness's verdict on the yards a recorded create opened (tagpu_replay.c, yard_check),
+    from a lane's counts lines."""
+
+    @staticmethod
+    def line(checked, differed, unchecked):
+        return (f"replay: x at its level's end, GameTime 9: ... 3 yards changed, 0 refused; "
+                f"{checked} yards checked at their create, {differed} differed, {unchecked} not "
+                f"checked; 0 control groups not set\n")
+
+    def test_every_yard_as_recorded(self):
+        (label, verdict, detail), = tareplay.yard_verdict("P", self.line(2, 0, 0))
+        self.assertEqual(verdict, tareplay.PASS)
+        self.assertIn("2 checked", detail)
+
+    def test_a_difference_is_named(self):
+        for counts in ((2, 1, 0), (2, 0, 1)):
+            with self.subTest(counts=counts):
+                text = self.line(0, 0, 0) + self.line(*counts)
+                (label, verdict, detail), = tareplay.yard_verdict("P", text)
+                self.assertEqual(verdict, tareplay.FAIL)
+                self.assertIn(f"{counts[1]} differed, {counts[2]} not checked", detail)
+
+    def test_no_counts_line(self):
+        (label, verdict, detail), = tareplay.yard_verdict("P", "replay: nothing\n")
+        self.assertEqual(verdict, tareplay.UNRUN)
 
 
 class TakeoverFixtures(unittest.TestCase):

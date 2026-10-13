@@ -102,6 +102,7 @@ struct RecReader {
     unsigned           ndeaths;     /* the deaths whose RK_EV_DEATH_END is still to come      */
     uint32_t           session_id;  /* the unit ID of the iteration's last RK_SPRAY_SESSION   */
     unsigned           death[REC_DEATHS_MAX];
+    RecYardStep        yards;       /* the step's yards by THE YARD RULE (tagpu_recfmt.h)     */
     struct { unsigned slot, list, total, next; } pend;   /* a list sent in several records   */
     unsigned long long first_off;   /* the file offset of the first block after the header    */
     unsigned char*     base;        /* the grid at the end of a segment's first iteration ...  */
@@ -803,6 +804,7 @@ static void world_reset(RecReader* r, int from_base)
     r->ntouched = 0;
     r->fbracket = 0;
     r->ndeaths = 0;
+    rec_yard_end(&r->yards);
     memset(&r->pend, 0, sizeof r->pend);
     r->globals_in = 0;
     r->proj_in = 0;
@@ -820,6 +822,8 @@ static int world_init(RecReader* r, char* why, unsigned cap)
     w->unit = (uint32_t*)VirtualAlloc(NULL, (size_t)w->slots * REC_UNIT_IMAGE,
                                       MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     r->touched = (unsigned*)malloc((size_t)w->slots * sizeof *r->touched);
+    r->yards.st = (unsigned char*)calloc(w->slots, 1);
+    r->yards.touched = (unsigned*)calloc(w->slots, sizeof *r->yards.touched);
     w->ntab = r->h.ntab;
     w->tab = (RecTable*)calloc(w->ntab ? w->ntab : 1, sizeof *w->tab);
     w->grid = (unsigned char*)VirtualAlloc(NULL, grid_bytes(r), MEM_COMMIT | MEM_RESERVE,
@@ -833,7 +837,8 @@ static int world_init(RecReader* r, char* why, unsigned cap)
     w->mapped = (unsigned char*)malloc(w->mapped_bytes ? w->mapped_bytes : 1);
     w->sel = (RecSelEntry*)calloc((size_t)REC_PLAYERS * REC_SEL_MAX, sizeof *w->sel);
     w->sprays = recsprays_begin(w->slots);
-    if (!w->live || !w->changed || !w->list || !w->unit || !r->touched || !w->tab || !w->grid ||
+    if (!w->live || !w->changed || !w->list || !w->unit || !r->touched || !r->yards.st ||
+        !r->yards.touched || !w->tab || !w->grid ||
         !r->base || !w->pool || !r->wbase || !w->proj || !w->mapped || !w->sel || !w->sprays) {
         snprintf(why, cap, "no memory for the world of %u slots and %u x %u cells", w->slots,
                  r->h.grid_w, r->h.grid_h);
@@ -933,7 +938,8 @@ static int sprays_on(const RecHeader* h)
    a death only), and may hold deaths; a draw is inside one, FS_SOURCE inside the tick only, of
    a segment whose playing keeps the engine's slots: a multiplayer one, or one that holds its
    cells (recr_holds_cells); a script slice and an owner's query are inside none, and name a slot
-   of the level's; a yard names one too, in a bracket or not. 1 taken, 0 malformed. */
+   of the level's; a yard names one too, in a bracket or not, where THE YARD RULE lets it stand
+   (tagpu_recfmt.h), which the creates and deaths feed. 1 taken, 0 malformed. */
 static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsigned len)
 {
     RecWorld* w = &r->w;
@@ -970,7 +976,9 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
         r->fbracket = 0;
         break;
     case RK_EV_DEATH:
-        if (r->fbracket || r->ndeaths == REC_DEATHS_MAX || !rec_event_len(kind, len)) return 0;
+        if (r->fbracket || r->ndeaths == REC_DEATHS_MAX || !rec_event_len(kind, len) ||
+            !rec_yard_take(&r->yards, kind, b, w->live, w->slots, r->death, r->ndeaths))
+            return 0;
         memcpy(&r->death[r->ndeaths++], b, 4);
         break;
     case RK_EV_DEATH_END:
@@ -1003,10 +1011,14 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
     case RK_EV_YARD:
         if (len != 8 || b[4] > 1 || b[5] || b[6] || b[7]) return 0;
         memcpy(&id, b, 4);
-        if (id - 1u < 1 || id - 1u >= w->slots) return 0;
+        if (id - 1u < 1 || id - 1u >= w->slots ||
+            !rec_yard_take(&r->yards, kind, b, w->live, w->slots, r->death, r->ndeaths))
+            return 0;
         break;
     default:
-        if (kind < RK_EV_CREATE || kind > RK_EV_SPRAY || !rec_event_len(kind, len)) return 0;
+        if (kind < RK_EV_CREATE || kind > RK_EV_SPRAY || !rec_event_len(kind, len) ||
+            !rec_yard_take(&r->yards, kind, b, w->live, w->slots, r->death, r->ndeaths))
+            return 0;
         /* the images come before the events: the units are this iteration's */
         if (kind == RK_EV_SPRAY && sprays_on(h))
             recsprays_spray(w->sprays, w->tick, b, w->unit, w->live);
@@ -1329,6 +1341,11 @@ static int iteration_done(const RecReader* r, char* why, unsigned cap)
                  "byte %llu", r->off);
         return -1;
     }
+    if (r->yards.held) {
+        snprintf(why, cap, "a yard of a unit not live whose create does not follow in its step, "
+                 "in the block before byte %llu (tagpu_recfmt.h, THE YARD RULE)", r->off);
+        return -1;
+    }
     return 1;
 }
 
@@ -1370,6 +1387,7 @@ static int tick_read(RecReader* r, char* why, unsigned cap)
     w->nev = 0;
     w->nfeat = 0;
     w->nclick = 0;
+    rec_yard_end(&r->yards);            /* iteration_done has checked the last step's */
     for (;;) {
         RecHdr hd;
         const unsigned char* b;
@@ -2938,6 +2956,8 @@ void recr_close(RecReader* r)
     free(r->w.proj);
     free(r->w.mapped);
     free(r->touched);
+    free(r->yards.st);
+    free(r->yards.touched);
     free(r->idx);
     segs_free(r->seg, r->nseg);
     if (r->w.unit) VirtualFree(r->w.unit, 0, MEM_RELEASE);
