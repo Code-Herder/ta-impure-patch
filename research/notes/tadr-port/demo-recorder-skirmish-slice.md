@@ -887,10 +887,13 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
     first step or a seek makes gets its recorded yard as soon as its create returns, before the next
     slot's create stamps: an open yard gives no cell back to a unit that lost it to the closed
     structure. After the positions, the image's yard goes in where the host's still differs. A
-    yard a structure's own Create opens is recorded before its create and finds no unit; the
-    replayed create, with the puppet gates open, makes it again before its stamp, as the engine
-    did ([engine map](../exe-reverse-engineering.md), *An open yard gives nothing back* and the
-    three paragraphs after it).
+    yard a structure's own Create opens is recorded before its create: the replayed create, with
+    the puppet gates open, makes it again before its stamp, as the engine did, and the playing
+    compares the yard the create left with the recorded one (`yard_check`); the harness's *the
+    yards a create opened* fails a lane where one differs, or where the create was not made. Where
+    a yard event may stand is THE YARD RULE (`tagpu_recfmt.h`), which the writer and both readers
+    enforce ([engine map](../exe-reverse-engineering.md), *An open yard gives nothing back* and the
+    paragraphs after it).
   - **The wind** is seeded once, from the recording's first image, so every draw after it is the
     recording's.
 - **The recording is the only writer.** On a puppet host, twelve prologue gates

@@ -589,9 +589,12 @@ makes the same query there with the engine's arguments
 Not a root: YARD_OPEN `0x47DAC0`'s write of `+0x10F` at `0x47DAF1`, past its refusal `0x47D970`.
 `{u32 ID, u8 the yard (1 open, 0 closed), u8 0 x3}`, in a bracket or not, written wherever the COB
 setter ran it, skirmish recordings only. A lab's script slice can open its yard and its build
-handler make the nanoframe in it later in the same unit tick, so a playing applies the yard at its
-place in the events, before the create that follows it
-([engine map](../exe-reverse-engineering.md), *An open yard gives nothing back*).
+handler make the nanoframe in it later in the same unit tick, so a playing applies the yard of a
+live unit at its place in the events, before the create that follows it. A yard of a unit not live
+there is its own create's Create slice, recorded before the create's exit: the replayed create
+makes it again and the playing checks it. Anything else is malformed (THE YARD RULE,
+`tagpu_recfmt.h`; [engine map](../exe-reverse-engineering.md), *An open yard gives nothing
+back*).
 
 ### 1.9 The unit state a death must carry
 

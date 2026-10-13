@@ -8185,13 +8185,29 @@ in it, whose refusal now reads a valid footprint -- runs there; and only after i
 from `+0x10F` bit 2 (`0x47CD88..0x47CD9A`). CreateFromNetwork `0x4861D0` has the same order
 (`0x4862BE`, then `0x486306` and `0x48630C`). So such a yard is stamped open, and setting it after
 the create returned would stamp under the closed mask first. The recording carries the event
-before the create's `RK_EV_CREATE` (the create is recorded at its exit, `0x4861B3`), and it finds
-no unit when played; the replayed create runs with the puppet gates open (`tagpu_replay.c`,
-`make`), so its own Create makes the SET again at the engine's place, as it makes the create's
-state byte. That rests on the puppet's Create taking the recording machine's path, and the
-played-late event is not compared with the yard the create left (the completeness note's open
-items). In the destructor `0x4866D0` the footprint clear (`0x47CBD0` -> `0x47D0E0`, `0x48682D`)
-comes before Killed's start (`0x4B0A70` at `0x486877`).
+before the create's `RK_EV_CREATE` (the create is recorded at its exit, `0x4861B3`). The replayed
+create runs with the puppet gates open (`tagpu_replay.c`, `make`), so its own Create makes the SET
+again at the engine's place, as it makes the create's state byte; the recorded yard is held until
+that create returns and compared with the yard the host's create left (`yard_check`), and a
+difference fails the replay harness's *the yards a create opened* for that lane.
+
+**A death's own Killed opens no yard inside its death** [DISASSEMBLED 2026-10-12]. The destructor
+`0x4866D0` has two callers: Send_UnitDeath `0x4864B0` (`0x486679`, mode 1) and the `0x0C` network
+receiver (`0x455423`, mode 0). Send_UnitDeath runs Killed as a query (`0x4B0BC0` at `0x4865C3`)
+before it calls the destructor, so on a skirmish recording machine -- every death its own --
+Killed's yard comes before the death's `RK_EV_DEATH`, on a unit still live. The destructor's own
+Killed start (`0x4B0A70` at `0x486877`, after the footprint clear `0x47CBD0` -> `0x47D0E0` at
+`0x48682D`) runs in mode 0 alone (`0x48684A..0x486853`), and its other script starts -- TargetCleared
+through `0x489800` from the order purge's teardown (`0x43A2B9`), StopBuilding at `0x43A251` -- pass
+run-now 0, so no script of the dying unit runs inside its own death's bracket.
+
+**THE YARD RULE** (`tagpu_recfmt.h`) follows from the two: a yard of a unit live at its place in
+the step's events is that unit's yard there, written at that place; a yard of a unit not live is
+its create's, and that create follows in the step; anything else -- a yard naming the unit of a
+death still open, or a unit not live whose create does not follow -- is malformed. The writer
+refuses it as the recorder hands it over, and both readers (`tagpu_recreader.c`, `tarec.py`)
+refuse the file; `tarec check` adds that a unit made in the step shows the yard of its last yard
+event, or the closed yard its create's init leaves.
 
 **The rule on a skirmish recording machine.** Its seats are type 1 (local human) and 2 (local AI)
 (MEASURED, the controllers of both recordings the decision rests on), so the incumbent always keeps
