@@ -1767,10 +1767,13 @@ codectest) on the same path:
 Every block sectioned, none declined or mismatched, 3,605 and 3,608 of them; the other sections
 keep their sizes (`codectest.py sizes`, raw and packed alone at zstd 3). The orders and the pool
 grow raw -- an index a node; 21 lane residuals a survivor where 14 dwords were, each at least a
-byte -- and shrink packed. Each step alone, on format 20's file (MEASURED the same way): #9 −98,648 /
-−21,512, #6 then −202,787 / −72,047, #8 then −102,135 / −72,194, heavy / light; the plan's
-prototype measured −99,451, −198,620 and −119,291 on the heavy hour, and expected at least half
-of −417,000 together.
+byte -- and shrink packed. The steps were measured one after another before P5 landed, against
+format 20's file on the same path (14,062,834 / 8,341,131, main before P5): #9 −98,648 / −21,512,
+then #6 −202,787 / −72,047, then #8 −102,135 / −72,194, heavy / light, together −403,570 /
+−165,753. They do not add to the table's −406,338 / −161,540, which is against format 21: P5's
+listing changes the unit section, and each run of blocks is packed as one level-19 frame, so a
+section's bytes in the file depend on its neighbours. The plan's prototype measured −99,451,
+−198,620 and −119,291 on the heavy hour, and expected at least half of −417,000 together.
 
 **Checked** (format 22): the C decoder and the Python reader give the same records on every block
 of both hours (`codectest.py verify`, skipping resting units and evaluating every candidate);

@@ -4155,10 +4155,15 @@ records back, so a wrong fact costs size, never data. Each address was re-read i
   the events frame codes it as a mask against the copy.
 - **An order node's action and issue time** (`0x43A0C0`, the common order constructor, `ret
   0x18`): it stores the action byte at `+0x04` (`mov [esi+0x4],al` at `0x43A0E0`) and GameTime
-  `[main+0x38A47]` at `+0x46` (`0x43A11F..0x43A12E`); no other writer of `+0x46` was traced. The
-  orders frame's scheme 2 (format 22, a stream with `RT_HOLD`) matches each node of a re-sent list
-  to the kept node with the same `+0x04` byte and `+0x46` dword: under the lossy filter a list
-  loses its done head or gains a node in front, and node i no longer meets kept node i. Re-read
+  `[main+0x38A47]` at `+0x46` (`0x43A11F..0x43A12E`). The order loader `0x43A420` (*The walk*,
+  below; its one caller `0x487594`) writes both as well: the same vtables `0x4FD2CC` then
+  `0x4FD2C8` (`0x43A432`, `0x43A445`), the load's GameTime at `+0x46` (`0x43A464..0x43A471`,
+  `mov [ebp+0x46],ecx`) and the action at `+0x04` (`0x43A60A`), so every node of a list restored
+  from a save has the same `+0x46`. The orders frame's scheme 2 (format 22, a stream with
+  `RT_HOLD`) matches each node of a re-sent list to the kept node with the same `+0x04` byte and
+  `+0x46` dword: under the lossy filter a list loses its done head or gains a node in front, and
+  node i no longer meets kept node i. A restored list's nodes of one action match the first such
+  kept node after the last match, which costs size only: the decoder reads the index. Re-read
   2026-10-13.
 - **A unit's heading `+0x66`** (*the unit frame*, above: the mover adds its turn rate as a word):
   the events frame (format 22) predicts an explicit nano spray's point from the same unit's last

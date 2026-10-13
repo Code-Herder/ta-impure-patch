@@ -455,18 +455,21 @@ step count past 16,384, a wreck index past the pool, a flag that is not 0 or 1, 
 no frame state. Every operand of a rule is clamped before it is multiplied, so no value
 in a file can overflow the arithmetic.
 
-**Memory.** A codec state is 804 bytes a slot (the copy and L2, `0x148` bytes each, L3's 16, the
-winners' 128 and four flags, as `reccodec_new` allocates them) and 627 bytes a projectile record
-(the pool and the image it is making, both one iteration before, the winners, the ages, the
-advanced image and the survivors' maps), plus a 128 KB air index, 1,425,528 bytes of the pool
-frame's tables (the last birth of each of 4,096 weapon IDs, 4,096 shot events and their rows,
-and the encoder's search over at least 4,096 rows) and the scratch of the largest block it has
-met: before their scratch, 14,874,808 bytes, about 14.9 MB, at 5,001 slots and 3,000 records;
-30,954,808, about 31.0 MB, at 15,001. The record frames add, by their files' counts, 13 bytes a
-grid cell (the copy: 5.4 MB on a 642 × 648 grid) and 0.6 MB of tick input (cells); 12 bytes a (slot, list) and an arena that doubles up to 65,536 nodes, 5.8 MB (orders);
-324 bytes a slot and 40 KB of dictionaries (events, 1.66 MB at 5,001 slots); and about 15 KB and
-49 bytes a wreck record (state, 0.4 MB at 8,192): up to about 14 MB a codec on that grid, and
-about 63.5 MB at `RECC_GRID_MAX`, 54.5 MB of it the grid's copy. The writer holds two codecs, a
+**Memory**, MEASURED 2026-10-13 by counting what `reccodec_new` and the frames' makers allocate
+in the 32-bit build, at 5,001 slots, 3,000 projectile records, a 642 × 648 grid and 8,192 wrecks.
+A codec state is 829 bytes a slot (the copy and L2, `0x148` bytes each, L3's 16, the winners'
+128, the last step's 8, five flags and the last mask's 16) and 627 bytes a projectile record (the
+pool and the image it is making, both one iteration before, the winners, the ages, the advanced
+image and the survivors' maps), plus 1,929,611 bytes whatever the counts: the pool frame's tables
+(the last birth of each of 4,096 weapon IDs, 4,096 shot events and their rows, and the encoder's
+search over at least 4,096 rows), the air and type indexes (128 KB each), the listing's masks, a
+body buffer and the codec itself. Before the frames and the scratch of the largest block it has
+met, that is 7,956,440 bytes, about 8.0 MB, at 5,001 slots; 16,246,440, about 16.2 MB, at
+15,001. The record frames add 6,031,152 bytes (cells: 13 bytes a grid cell, the copy 5.4 MB on
+that grid, and 0.6 MB of tick input), 124,920 (orders: 24 bytes a slot, and an arena that doubles
+up to 65,536 nodes, 5.8 MB), 1,662,876 (events: 324 bytes a slot and 40 KB of dictionaries) and
+416,452 (state: about 15 KB and 49 bytes a wreck record): up to about 14 MB a codec on that grid
+with the arena full, and about 63 MB at `RECC_GRID_MAX`, 54.5 MB of it the grid's copy. The writer holds two codecs, a
 reader one, made at its first sectioned block. A reset copies the grid whole into the cells frame,
 once a reset in a sequential reader and in the check decoder and once a seek.
 

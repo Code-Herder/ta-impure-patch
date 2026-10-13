@@ -14,11 +14,14 @@
    (replay-hold.tsv), so a list keeps its nodes but loses one -- its head done -- or gains one
    in front of the others, and node i no longer meets kept node i. A node's action byte +0x04 and
    its issue time +0x46 stay with it -- the order constructor 0x43A0C0 stores the action at
-   0x43A0E0 and GameTime [main+0x38A47] at 0x43A12E, and no other writer of +0x46 was traced
+   0x43A0E0 and GameTime [main+0x38A47] at 0x43A12E; the order loader 0x43A420 (its one caller
+   0x487594, a game's load) stamps the load's GameTime at 0x43A471 and the action at 0x43A60A
    (DISASSEMBLED, exe-reverse-engineering.md, the record frames) -- so there each node is matched
-   to the kept node that has both. MEASURED on the size
-   research's lossy hour: −119,291 bytes; on the exact hour the match costs +295,783, so a stream
-   without RT_HOLD keeps scheme 1.
+   to the kept node that has both. A list restored from a save shares one +0x46, so its nodes of
+   one action match the first such kept node after the last match: size only, the decoder reads
+   the index. MEASURED on the size research's heavy lossy hour: −102,135 bytes (format 20's file
+   with the sprays' and the survivor lanes' codings already in); on the exact hour the plan's
+   prototype measured the match at +295,783, so a stream without RT_HOLD keeps scheme 1.
 
    THE BYTES. Scheme 1 in a segment whose header has no RT_HOLD (a multiplayer one), scheme 2 in
    one that has it (RecCodecParams' `hold`); a reader takes only its segment's. Scheme 1 is 26

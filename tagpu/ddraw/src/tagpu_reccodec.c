@@ -95,18 +95,20 @@
    shifts and named divisions.
 
    MEMORY: per slot the copy (0x148 bytes), L2 (0x148), L3 (16), the winners (one byte per lane,
-   128), the last step (8), five flags and the last mask (16), 829 bytes; per projectile record the pool and its next image, their
-   images one iteration before, the winners (34 bytes each), the ages, the advanced image and the
-   survivors' maps, 627 bytes; per codec the air index (128 KB), the last birth of each weapon
-   (442 KB), the shot events and their rows (590 KB), the search's three indexes over
-   max(nproj, 4,096) rows (12 bytes a row each, and a table of 8-byte slots at least twice the
-   rows: 393 KB up to 4,096 records), and the scratch of the largest block met so far
-   (reccodec_new). At 3,000 records the pool frame is about 3.3 MB a codec. The kinds keep the
-   run's RECC_KINDS_MRU patterns, each at most RECC_KINDS_MAX bytes (1 MB at the bound; MEASURED
-   2026-10-12 on the heavy four-player hour: a new pattern 17 bytes on average, 1,862 at most),
-   and a block's runs, 12 bytes each. The listing keeps the run's RECC_J2_MTF masks with their
-   links and hash chains, 22 bytes each and 16 KB of chains: 106 KB. Each record frame's memory
-   is its file's to state. */
+   128), the last step (8), five flags and the last mask (16), 829 bytes; per projectile record the
+   pool and its next image, their images one iteration before, the winners (34 bytes each), the
+   ages, the advanced image and the survivors' maps, 627 bytes; per codec the air and type indexes
+   (128 KB each), the last birth of each weapon (442 KB), the shot events and their rows (590 KB),
+   the search's three indexes over max(nproj, 4,096) rows (12 bytes a row each, and a table of
+   8-byte slots at least twice the rows: 393 KB up to 4,096 records), and the scratch of the
+   largest block met so far (reccodec_new). At 3,000 records the pool frame is about 3.3 MB a
+   codec. The kinds keep the run's RECC_KINDS_MRU patterns, each at most RECC_KINDS_MAX bytes (1 MB
+   at the bound; MEASURED 2026-10-12 on the heavy four-player hour: a new pattern 17 bytes on
+   average, 1,862 at most), and a block's runs, 12 bytes each. The listing keeps the run's
+   RECC_J2_MTF masks with their links and hash chains, 22 bytes each and 16 KB of chains: 106 KB.
+   Each record frame's memory is its file's to state. MEASURED 2026-10-13 in the 32-bit build by
+   counting its allocations: 7,956,440 bytes at 5,001 slots and 3,000 records before the record
+   frames and the scratch. */
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>

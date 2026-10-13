@@ -2262,19 +2262,20 @@ def _orders_gone(st, slot):
 
 @_jit
 def _orders_mask(sec, cols, body, now, arena, was):
-    """A node against kept node `was` (an arena offset) into body[now:]: 0, or the code."""
+    """A node against kept node `was` (an arena offset) into body[now:]: (0, 0), or the code and
+    its argument."""
     m, ok = _col_varint(sec, cols, _O_MASK)
     if not ok:
-        return E_ORDERS_CUT
+        return np.int64(E_ORDERS_CUT), np.int64(_O_MASK)
     if m >> _O_DW:
-        return E_ORDERS_MASK
+        return np.int64(E_ORDERS_MASK), np.int64(m)
     for d in range(_O_DW):
         if m >> d & 1:
             if not _col_bytes(sec, cols, _O_D0 + d, body, now + 4 * d, 4):
-                return E_ORDERS_CUT
+                return np.int64(E_ORDERS_CUT), np.int64(_O_D0 + d)
         else:
             body[now + 4 * d:now + 4 * d + 4] = arena[was + 4 * d:was + 4 * d + 4]
-    return 0
+    return np.int64(0), np.int64(0)
 
 
 @_jit
@@ -2338,17 +2339,17 @@ def _orders_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
             if j1 > kn or used[j1 - 1]:
                 return -_fail(err, E_ORDERS_MATCH, j1 - 1, kn)
             used[j1 - 1] = True
-            c = _orders_mask(sec, cols, body, now, arena, base + (j1 - 1) * _O_NODE)
+            c, arg = _orders_mask(sec, cols, body, now, arena, base + (j1 - 1) * _O_NODE)
             if c:
-                return -_fail(err, c, _O_MASK)
+                return -_fail(err, c, arg)
     elif key & _K_WHOLE:
         if not _col_bytes(sec, cols, _O_WHOLE, body, 8, k * _O_NODE):
             return -_fail(err, E_ORDERS_CUT, _O_WHOLE)
     else:
         for i in range(k):
-            c = _orders_mask(sec, cols, body, 8 + i * _O_NODE, arena, base + i * _O_NODE)
+            c, arg = _orders_mask(sec, cols, body, 8 + i * _O_NODE, arena, base + i * _O_NODE)
             if c:
-                return -_fail(err, c, _O_MASK)
+                return -_fail(err, c, arg)
     # what is kept (tagpu_recframe_orders.c keep)
     if first or k != total:
         kept[e, 2] = 0
