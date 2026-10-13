@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments and world): the C parser against the coverage build's map, the features' regions, the
-comment filter, `landing --check`, a recording's segments and chains, what format 15's block walk
-refuses and which cells are images, read from files built from the format alone, the fixtures'
+comment filter, `landing --check`, a recording's segments and chains, what the block walk refuses,
+its runs and snapshot chains, and which cells are images, read from files built from the format alone, the fixtures'
 takeover entries and the W lane's edited header copies. No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
 shared venv when they are missing.
@@ -788,8 +788,8 @@ def zstd_frame(data, wlog):
 
 
 class FormatBlocks(unittest.TestCase):
-    """What format 15's block walk refuses by name before any payload is read, as
-    tagpu_recreader.c's block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
+    """What the block walk refuses by name before any payload is read, as tagpu_recreader.c's
+    block_flags_bad and segs_scan refuse it (tagpu_recfmt.h, RecBlock)."""
 
     def refused(self, *parts, why, decodes=(True, False)):
         with tempfile.TemporaryDirectory() as d:
@@ -801,11 +801,13 @@ class FormatBlocks(unittest.TestCase):
 
     def test_flags(self):
         snap = tlv(tarec.RK_TICK, struct.pack("<I", 1))
-        S, P, R = tarec.RBF_STORED, tarec.RBF_SECTIONS, tarec.RBF_FRAME_RESET
+        S, P, R, C = tarec.RBF_STORED, tarec.RBF_SECTIONS, tarec.RBF_FRAME_RESET, tarec.RBF_CHAINED
         for kind, flags in ((tarec.RB_HEADER, 0), (tarec.RB_SNAPSHOT, S | P),
-                            (tarec.RB_STREAM, S | R), (tarec.RB_STREAM, S | 16),
+                            (tarec.RB_STREAM, S | R), (tarec.RB_STREAM, S | 32),
                             (tarec.RB_SNAPSHOT, S | tarec.RBF_REFRESH),
-                            (tarec.RB_EXACT, S | tarec.RBF_REFRESH)):
+                            (tarec.RB_EXACT, S | tarec.RBF_REFRESH),
+                            (tarec.RB_STREAM, S | P), (tarec.RB_STREAM, S | P | R),
+                            (tarec.RB_STREAM, C), (tarec.RB_SNAPSHOT, S | C)):
             with self.subTest(kind=kind, flags=flags):
                 self.refused(header(), flagged(kind, 1, 1, snap, flags), why="block flags")
 
@@ -815,7 +817,7 @@ class FormatBlocks(unittest.TestCase):
     def test_a_sectioned_block_without_the_codec_entries(self):
         # refused where it is decoded: a walk that skips the stream (decode=False), like the
         # DLL's segment scan, does not read it
-        self.refused(header(), flagged(tarec.RB_STREAM, 1, 1, bytes(40), tarec.RBF_STORED |
+        self.refused(header(), flagged(tarec.RB_STREAM, 1, 1, bytes(40),
                                        tarec.RBF_SECTIONS | tarec.RBF_FRAME_RESET),
                      why="without RT_CODEC and RT_PHYSICS", decodes=(True,))
 
@@ -843,6 +845,81 @@ class FormatBlocks(unittest.TestCase):
         frame = zstd_frame(snap, 28)
         self.refused(header(), sized(tarec.RB_SNAPSHOT, frame, 0, len(snap), len(frame)),
                      why="past 2\\^27", decodes=(True,))
+
+    @staticmethod
+    def snapshots(n):
+        """n snapshot payloads, each a little different from the last"""
+        return [tlv(tarec.RK_TICK, struct.pack("<I", 1 + i)) + bytes(range(i, i + 200)) for i in range(n)]
+
+    @staticmethod
+    def chained(snaps, keys):
+        """the snapshots as blocks: those at `keys` packed alone, the rest against the one before"""
+        import zstandard
+        out = []
+        for i, p in enumerate(snaps):
+            if i in keys:
+                out.append(sized(tarec.RB_SNAPSHOT, zstandard.ZstdCompressor(level=19).compress(p), 0,
+                                 len(p), len(zstandard.ZstdCompressor(level=19).compress(p))))
+                continue
+            dic = zstandard.ZstdCompressionDict(snaps[i - 1], dict_type=zstandard.DICT_TYPE_RAWCONTENT)
+            z = zstandard.ZstdCompressor(level=19, dict_data=dic, write_dict_id=False).compress(p)
+            out.append(sized(tarec.RB_SNAPSHOT, z, tarec.RBF_CHAINED, len(p), len(z)))
+        return out
+
+    def test_a_snapshot_chain(self):
+        # tagpu_reccodec.c's reccodec_unpack_chained and tagpu_recreader.c's snapshot_chain: each
+        # link unpacks against the snapshot before it in its segment, at most 9 after a key
+        snaps = self.snapshots(11)
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "f.imprec"
+            path.write_bytes(tarec.REC_MAGIC + header() + b"".join(self.chained(snaps[:10], {0})))
+            got = [p for k, _, _, p in tarec.blocks(path)[0] if k == tarec.RB_SNAPSHOT]
+        self.assertEqual([bytes(p) for p in got], snaps[:10])
+        self.refused(header(), *self.chained(snaps, {0}), why="past its key's 9 links", decodes=(True,))
+        self.refused(header(), *self.chained(snaps[:2], set()), why="no snapshot before it",
+                     decodes=(True,))
+        # a header begins a segment: the snapshot before it is no prefix of the next one's
+        self.refused(header(), self.chained(snaps[:1], {0})[0], end_block(1),
+                     header(timeline=(1, 0, 1)), self.chained(snaps[:2], {0})[1],
+                     why="no snapshot before it", decodes=(True,))
+
+    def test_a_run(self):
+        # tagpu_reccodec.c's reccodec_run_unpack: a run begins at a chunk whose header is the
+        # writer's and goes on chunk by chunk; the C side is codectest.c's outcomes
+        import reccodec
+        import zstandard
+        data = [bytes((i * 7 + j * 13) & 0xFF for j in range(5000)) for i in range(3)]
+
+        def chunks(wlog=20, **kw):
+            prm = zstandard.ZstdCompressionParameters.from_level(
+                19, window_log=wlog, hash_log=20, chain_log=21, write_content_size=False,
+                write_checksum=False, **kw)
+            co = zstandard.ZstdCompressor(compression_params=prm).compressobj()
+            return [co.compress(p) + co.flush(zstandard.COMPRESSOBJ_FLUSH_BLOCK) for p in data]
+        c = chunks()
+        run = reccodec.Run()
+        self.assertEqual([run.feed(x, len(p), i == 0) for i, (x, p) in enumerate(zip(c, data))], data)
+        self.assertEqual(run.before().feed(c[2], len(data[2]), False), data[2])
+        with self.assertRaisesRegex(tarec.Unreadable, "did not start"):
+            reccodec.Run().feed(c[1], len(data[1]), False)
+        with self.assertRaisesRegex(tarec.Unreadable, "header is not the writer's"):
+            reccodec.Run().feed(c[1], len(data[1]), True)
+        with self.assertRaisesRegex(tarec.Unreadable, "header is not the writer's"):
+            reccodec.Run().feed(chunks(21)[0], len(data[0]), True)
+        with self.assertRaisesRegex(tarec.Unreadable, "next 4999 bytes"):
+            reccodec.Run().feed(c[0], len(data[0]) - 1, True)
+        run = reccodec.Run()
+        run.feed(c[0], len(data[0]), True)
+        try:
+            self.assertNotEqual(run.feed(c[2], len(data[2]), False), data[2])
+        except tarec.Unreadable:
+            pass                                    # a chunk out of its run: refused or wrong
+        run = reccodec.Run()
+        run.feed(c[0], len(data[0]), True)
+        with self.assertRaisesRegex(tarec.Unreadable, "not its run's next"):
+            run.feed(c[1][:len(c[1]) // 2], len(data[1]), False)
+        with self.assertRaisesRegex(tarec.Unreadable, "did not start"):
+            run.feed(c[1], len(data[1]), False)          # the run ended at the refusal
 
 
 class CodecCheck(unittest.TestCase):
@@ -1242,6 +1319,230 @@ class LossyStream(unittest.TestCase):
             tarec.header(header()[32:] + tlv(tarec.RT_HOLD, bytes(12)))
 
 
+class LossyCells(unittest.TestCase):
+    """lossy-check's cells clause (RT_HOLD's RECL_CELLS) on the 2 x 2 grid of header(): the
+    exact stream gives cell (0, 0) slot A 1 and byte 5 the value 9 at GameTime 3, and the tick's
+    input at 4 a slot of cell (1, 0) alone; the lossy stream carries cell (0, 0) with its slot
+    held until the refresh at 31 by default, and drops that input."""
+
+    CB = tarec.REC_CELL_BYTES
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_check(self, *parts):
+        p = Path(self.tmp.name) / "c.imprec"
+        p.write_bytes(tarec.REC_MAGIC + b"".join(parts))
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(out):
+            rc = tarec.main(["tarec", "lossy-check", str(p)])
+        return rc, out.getvalue()
+
+    def cell(self, x, z, slot=0, b5=0):
+        c = bytearray(self.CB)
+        struct.pack_into("<H", c, 0, slot)
+        c[5] = b5
+        return tlv(tarec.RK_CELLS, struct.pack("<HHHH", x, z, 1, 0) + bytes(c))
+
+    def tick_input(self, run):
+        call = bytes([tarec.FR_TICK, 0, 0, 0]) + bytes(4)
+        return (tlv(tarec.RK_EV_FEATURE, call) + run + tlv(tarec.RK_EV_FEATURE_END, call))
+
+    def parts(self, lossy3=None, lossy4=None, lossy31=None):
+        S, F = tarec.RBF_STORED, tarec.RBF_REFRESH
+        image = b"".join(tlv(tarec.RK_CELLS, struct.pack("<HHHH", 0, z, 2, 0) + bytes(2 * self.CB))
+                         for z in (0, 1))
+        first = LossyStream.ticks(1, 1, {1: image})
+        x = LossyStream.ticks(3, 31, {3: self.cell(0, 0, 1, 9),
+                                      4: self.tick_input(self.cell(1, 0, 2))})
+        lossy = LossyStream.ticks(3, 31, {
+            3: self.cell(0, 0, 0, 9) if lossy3 is None else lossy3,
+            4: self.tick_input(b"") if lossy4 is None else lossy4,
+            31: self.cell(0, 0, 1, 9) if lossy31 is None else lossy31})
+        return [held_header(flags=tarec.RECL_CELLS),
+                flagged(tarec.RB_STREAM, 1, 1, first, S | F),
+                flagged(tarec.RB_EXACT, 1, 1, first, S),
+                flagged(tarec.RB_STREAM, 2, 2, LossyStream.ticks(2, 2, {}), S | F),
+                flagged(tarec.RB_EXACT, 2, 2, LossyStream.ticks(2, 2, {}), S),
+                flagged(tarec.RB_STREAM, 3, 31, lossy, S | F),
+                flagged(tarec.RB_EXACT, 3, 31, x, S), end_block(31)]
+
+    def test_held_slots_written_at_the_refresh_pass(self):
+        rc, o = self.run_check(*self.parts())
+        self.assertEqual(rc, 0, o)
+        self.assertIn("31 iterations to GameTime 31, 3 refreshes", o)
+
+    def test_a_shown_byte_of_a_cell_held_fails(self):
+        rc, o = self.run_check(*self.parts(lossy3=self.cell(0, 0, 0, 0)))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 3: cell 0's shown bytes differ", o)
+
+    def test_a_slot_made_up_fails(self):
+        rc, o = self.run_check(*self.parts(lossy3=self.cell(0, 0, 3, 9)))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 3: cell 0's held bytes are neither", o)
+
+    def test_an_input_of_held_bytes_alone_written_fails(self):
+        rc, o = self.run_check(*self.parts(lossy4=self.tick_input(self.cell(1, 0, 2))))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 4: the tick's input runs are not the exact stream's", o)
+
+    def test_a_refresh_that_misses_a_held_slot_fails(self):
+        rc, o = self.run_check(*self.parts(lossy31=b""))
+        self.assertEqual(rc, 1, o)
+        self.assertIn("GameTime 31: the stream's world is not the exact copy at a refresh", o)
+
+    def test_held_cells_beside_spray_sessions_pass(self):
+        parts = self.parts()
+        parts[0] = held_header(flags=tarec.RECL_CELLS | tarec.RECL_SPRAYS)
+        rc, o = self.run_check(*parts)
+        self.assertEqual(rc, 0, o)
+
+
+class Occupancy(unittest.TestCase):
+    """tarec.occupancy on a 6 x 4 grid: the multiplayer rule as the owner decided it, and the
+    contest-aware one a skirmish recording that holds its cells takes after a seek."""
+
+    CB = tarec.REC_CELL_BYTES
+
+    @staticmethod
+    def unit(x, z, w=1, h=1, state=1):
+        u = bytearray(tarec.REC_UNIT_IMAGE)
+        struct.pack_into("<hh", u, 0x76, x, z)
+        struct.pack_into("<hh", u, 0x7E, w, h)
+        struct.pack_into("<I", u, tarec.U_STATE, state)
+        return u
+
+    def worlds(self, units, names):
+        """(expected, dump): `units` {slot: image} live in both, the dump's cells naming
+        {(x, z): (slot A, slot B)}"""
+        a = tarec.World(8, [], dims=(6, 4, 1, 1))
+        b = tarec.World(8, [], dims=(6, 4, 1, 1))
+        for slot, u in units.items():
+            a.units[slot] = bytearray(u)
+            b.units[slot] = bytearray(u)
+        for (x, z), pair in names.items():
+            struct.pack_into("<HH", b.grid, (z * 6 + x) * self.CB, *pair)
+        return a, b
+
+    def test_a_unit_named_passes_and_the_slots_are_taken(self):
+        a, b = self.worlds({1: self.unit(1, 1)}, {(1, 1): (1, 0)})
+        self.assertEqual(tarec.occupancy(a, b), [])
+        self.assertEqual(a.grid, b.grid)
+
+    def test_multiplayer_rule_is_unchanged(self):
+        # no stamp bound and no contest: a unit at the grid's last column must still be named
+        a, b = self.worlds({1: self.unit(5, 1)}, {})
+        self.assertEqual(len(tarec.occupancy(a, b)), 1)
+        a, b = self.worlds({1: self.unit(1, 1), 2: self.unit(1, 1, state=1 << 27 | 1)},
+                           {(1, 1): (1, 0)})
+        self.assertEqual(len(tarec.occupancy(a, b)), 1)
+
+    def test_contest_the_stamp_bound(self):
+        # parked: past the last column, past the last row, west of the first column
+        a, b = self.worlds({1: self.unit(5, 1, 2), 2: self.unit(1, 3, 1, 2),
+                            3: self.unit(-1, 0, 2)}, {})
+        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+        # the last column itself is stamped (fix_last_cell)
+        a, b = self.worlds({1: self.unit(5, 1)}, {})
+        self.assertEqual(len(tarec.occupancy(a, b, contest=True)), 1)
+        # a carried unit, layer 0, holds no cell
+        a, b = self.worlds({1: self.unit(1, 1, state=0)}, {})
+        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+
+    def test_contest_a_loser_under_the_holder(self):
+        units = {1: self.unit(1, 1, 2, 1, state=1 << 26 | 1), 2: self.unit(2, 1, state=1 << 27 | 1)}
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
+        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+
+    def test_contest_a_holder_without_its_mark_fails(self):
+        units = {1: self.unit(1, 1, 2, 1), 2: self.unit(2, 1, state=1 << 27 | 1)}
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertEqual(len(out), 1, out)
+        self.assertIn("without the holder's mark", out[0])
+
+    def test_contest_a_loser_s_empty_slot_under_another_layer_fails(self):
+        # ground unit 2 lost nothing in slot A; an aircraft overhead fills slot B
+        units = {1: self.unit(2, 1, state=1 << 26 | 2), 2: self.unit(2, 1, state=1 << 27 | 1)}
+        a, b = self.worlds(units, {(2, 1): (0, 1)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertEqual(len(out), 1, out)
+        self.assertIn("does not name it in slot A", out[0])
+
+    def test_contest_a_structure_holds_slot_a_whatever_its_layer(self):
+        structure = tarec.STRUCTURE | 1 << 26 | 2
+        units = {1: self.unit(1, 1, 2, 1, state=structure), 2: self.unit(2, 1, state=1 << 27 | 1)}
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
+        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+        # a layer-2 unit never contests slot A
+        units[2] = self.unit(2, 1, state=1 << 27 | 2)
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
+        self.assertEqual(len(tarec.occupancy(a, b, contest=True)), 1)
+
+    def test_contest_a_structure_named_in_slot_b_fails(self):
+        a, b = self.worlds({1: self.unit(1, 1, state=tarec.STRUCTURE | 1)}, {(1, 1): (0, 1)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertTrue(any("names structure 1 in slot B" in line for line in out), out)
+
+    def test_contest_the_layer_s_slot(self):
+        # layer 1 filed in slot B, and layer 2 in slot A
+        a, b = self.worlds({1: self.unit(1, 1)}, {(1, 1): (0, 1)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertTrue(any("does not name it in slot A" in line for line in out), out)
+        self.assertTrue(any("in slot B, a unit of layer 1" in line for line in out), out)
+        a, b = self.worlds({1: self.unit(1, 1, state=2)}, {(1, 1): (1, 0)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertTrue(any("does not name it in slot B" in line for line in out), out)
+        a, b = self.worlds({1: self.unit(1, 1, state=2)}, {(1, 1): (0, 1)})
+        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+
+    def test_contest_a_unit_not_marked_the_loser_fails(self):
+        units = {1: self.unit(1, 1, 2, 1), 2: self.unit(2, 1)}
+        a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertEqual(len(out), 1, out)
+        self.assertIn("mobile unit 2's footprint does not name it in slot A", out[0])
+
+    def test_contest_a_cell_naming_a_unit_elsewhere_fails(self):
+        units = {1: self.unit(1, 1), 2: self.unit(3, 1, state=1 << 27 | 1)}
+        a, b = self.worlds(units, {(1, 1): (1, 0), (3, 1): (1, 0)})
+        out = tarec.occupancy(a, b, contest=True)
+        self.assertTrue(any("names slot 1, outside its footprint" in line for line in out), out)
+        self.assertTrue(any("mobile unit 2's footprint" in line for line in out), out)
+
+    def test_contest_the_marks_are_the_dump_s(self):
+        a, b = self.worlds({1: self.unit(1, 1)}, {(1, 1): (1, 0)})
+        struct.pack_into("<I", b.units[1], tarec.U_STATE, 1 << 26 | 1)
+        struct.pack_into("<I", a.units[1], tarec.U_STATE, 1 << 27 | 1)
+        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+        self.assertEqual(a.units[1], b.units[1])
+
+
+class SourceTest(unittest.TestCase):
+    """FS_SOURCE inside the tick's feature call: a recording that keeps the engine's slots on its
+    playing records it -- a multiplayer one, or one that holds its cells (RECL_CELLS)."""
+
+    def world(self, flags):
+        h = tarec.header(held_header(flags=flags)[32:])
+        w = tarec.World(4, [], h)
+        w.apply(tarec.RK_TICK, struct.pack("<I", 1))
+        w.apply(tarec.RK_EV_FEATURE, bytes([tarec.FR_TICK, 0, 0, 0]) + bytes(4))
+        return w
+
+    def test_held_cells_take_it(self):
+        w = self.world(tarec.RECL_CELLS)
+        w.apply(tarec.RK_EV_DRAW, bytes([tarec.FS_SOURCE, 0, 0, 0]) + struct.pack("<II", 3, 0))
+
+    def test_without_them_it_is_malformed(self):
+        w = self.world(0)
+        with self.assertRaisesRegex(tarec.Unreadable, "source test outside"):
+            w.apply(tarec.RK_EV_DRAW, bytes([tarec.FS_SOURCE, 0, 0, 0]) + struct.pack("<II", 3, 0))
+
+
 def spray(uid, x, y, z):
     """An RK_EV_SPRAY of unit ID `uid` at the point (x, y, z), its box and layer fixed."""
     return tlv(tarec.RK_EV_SPRAY, struct.pack("<IIiii", uid, 0, x, y, z) +
@@ -1462,6 +1763,72 @@ class SeekBlocks(unittest.TestCase):
         self.assertEqual(tarec.seek_blocks(path, 1, 22, 3, None), self.of(k10, s2, f1))
         with self.assertRaises(tarec.Unreadable):
             tarec.seek_blocks(path, 1, 31, 3, 0)
+
+    @staticmethod
+    def snap(last, chained):
+        """a packed snapshot, chained to the one before it or a key"""
+        return flagged(tarec.RB_SNAPSHOT, last, last, b"s" * last,
+                       tarec.RBF_CHAINED if chained else 0)
+
+    def test_a_chained_snapshot_decodes_its_chain_from_its_key(self):
+        s1, s2, s3, s4 = (stream(1, 10, unit=1), stream(11, 20, opens=False),
+                          stream(21, 30, opens=False), stream(31, 40, opens=False))
+        k10, c20, c30 = self.snap(10, False), self.snap(20, True), self.snap(30, True)
+        path = self.file(header(), s1, k10, s2, c20, s3, c30, s4, end_block(40))
+        # every link from the key is a block decoded, the key's included
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 3, 0), self.of(k10, c20, c30, s4))
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 3, 1),
+                         self.of(s1, k10, c20, c30, s4, base=1))
+        self.assertEqual(tarec.seek_blocks(path, 0, 25, 3, 0), self.of(k10, c20, s3))
+        self.assertEqual(tarec.seek_blocks(path, 0, 15, 3, 0), self.of(k10, s2))
+        # a chain with no key before it in its segment, as the reader refuses it
+        path = self.file(header(), s1, self.snap(10, True), s2, end_block(20))
+        with self.assertRaisesRegex(tarec.Unreadable, "no snapshot before it"):
+            tarec.seek_blocks(path, 0, 15, 3, 0)
+
+    def test_a_chain_longer_than_its_bound_is_refused(self):
+        n = tarec._codec().CHAIN_MAX
+        parts, links = [header(), stream(1, 10, unit=1)], []
+        for i in range(n + 2):
+            links.append(self.snap(10 * (i + 1), i > 0))
+            parts += [links[-1], stream(10 * (i + 1) + 1, 10 * (i + 2), opens=False)]
+        last = 10 * (n + 3)
+        path = self.file(*parts, end_block(last))
+        # the key and REC_CHAIN_MAX links read; one more is past the bound
+        T = 10 * (n + 1) + 5
+        self.assertEqual(tarec.seek_blocks(path, 0, T, 3, 0)[0], n + 2)
+        with self.assertRaisesRegex(tarec.Unreadable, "chains past"):
+            tarec.seek_blocks(path, 0, last, 3, 0)
+
+    @staticmethod
+    def chunk(first, last, reset):
+        """a sectioned stream block: a chunk of its run, the first when `reset`"""
+        flags = tarec.RBF_SECTIONS | (tarec.RBF_FRAME_RESET if reset else 0)
+        return flagged(tarec.RB_STREAM, first, last, b"c" * (last - first + 1), flags)
+
+    def test_a_run_is_decoded_from_its_start(self):
+        r1, r2 = self.chunk(1, 10, True), self.chunk(11, 20, False)
+        r3, r4 = self.chunk(21, 30, True), self.chunk(31, 40, False)
+        k20 = self.snap(20, False)
+        path = self.file(header(), r1, r2, k20, r3, r4, end_block(40))
+        # each chunk counts as its block; a seek starts where a run does
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 3, 0), self.of(k20, r3, r4))
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 3, 1), self.of(r1, k20, r3, r4, base=1))
+        self.assertEqual(tarec.seek_blocks(path, 0, 15, 3, 0), self.of(r1, r2))
+        # a seek from the first iteration reads every run from its start
+        self.assertEqual(tarec.seek_blocks(path, 0, 35, 40, 0), self.of(r1, r2, r3, r4))
+        # a chunk that continues its run past a snapshot: a read through it steps over the
+        # snapshot unread with the run still valid (block_skip), a seek from the snapshot would
+        # join the run in its middle
+        c3 = self.chunk(21, 30, False)
+        path = self.file(header(), r1, r2, k20, c3, end_block(30))
+        self.assertEqual(tarec.seek_blocks(path, 0, 25, 30, 0), self.of(r1, r2, c3))
+        with self.assertRaisesRegex(tarec.Unreadable, "continues a run"):
+            tarec.seek_blocks(path, 0, 25, 3, 0)
+        path = self.file(header(), r1, stream(11, 20, opens=False), self.chunk(21, 30, False),
+                         end_block(30))
+        with self.assertRaisesRegex(tarec.Unreadable, "continues a run"):
+            tarec.seek_blocks(path, 0, 25, 3, 0)
 
 
 class SeekWork(unittest.TestCase):

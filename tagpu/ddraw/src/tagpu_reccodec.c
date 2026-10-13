@@ -1,7 +1,7 @@
 /* tagpu_reccodec.c -- the demo recorder's stream codec.
 
    A stream block may be a SECTIONED CONTAINER (tagpu_recfmt.h, RecSecHead and RCS_*): the
-   record kinds as runs, the UNIT FRAME, which carries every RK_UNIT_DELTA as residuals against a
+   record kinds as patterns, the UNIT FRAME, which carries every RK_UNIT_DELTA as residuals against a
    prediction, the POOL FRAME, which carries every RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA, the
    four RECORD FRAMES, which make the bodies of the cells, the orders, the events and the state
    (tagpu_recframe.h; a file each), and the other kinds' bodies verbatim (RCS_OTHER). It decodes to
@@ -37,12 +37,29 @@
    has there (tagpu_recframe.h, RecFrameAt). The decoder's pass B makes each frame record's body
    from its frame in the same order.
 
+   THE KINDS (tagpu_recfmt.h, RCS_KINDS). The same walk writes each iteration's pattern
+   (kinds_write): its runs of kinds, the two markers standing for records no frame codes -- an
+   empty feature tick whose two bodies are the run's last explicit empty pair, and an RK_FEATURES
+   the state frame predicts -- and no count for each group's first run, which the decoder takes
+   from the frames: 1 for RK_TICK, the unit frame's changed units for RK_UNIT_DELTA, the pool
+   frame's changed records for RK_PROJ and RK_PROJ_DELTA together. The decoder reads the block's
+   patterns before its first iteration (kinds_parse) and fills a group's count when its frame has
+   made the iteration (group_fill): the pool frame's before pass A, the unit frame's after it, and
+   pass A walks no run whose count is open, it being RK_UNIT_DELTA's, whose records pass A skips.
+   The pattern list, the last pair and whether an RK_FEATURES was explicit are state of the run,
+   cleared at every reset: the encoder's walk keeps all three; on the decoder, kinds_parse moves
+   the pattern list and pass B keeps the last pair and the explicit RK_FEATURES, in the encoder's
+   record order.
+
    THREE INVARIANTS make this lossless whatever the codec gets wrong:
-   - DECODE BEFORE WRITE (an ordering). The writer encodes a block with its encoder, packs it,
-     unpacks those bytes and decodes them with a second state through this file's decoder, and
-     writes the sectioned block only when that gives back the records byte for byte; otherwise it
-     writes the records (reccodec_stream_block). A codec bug costs size, never data.
-   - RESET POINTS (an ordering). The frames' state crosses block boundaries only inside a run of
+   - DECODE BEFORE WRITE (an ordering). The writer encodes a block with its encoder, packs it as
+     its run's next chunk, unpacks those bytes with a decoder that has unpacked the run's chunks
+     before them and decodes them with a second state through this file's decoder, and writes the
+     sectioned block only when that gives back the records byte for byte; otherwise it writes the
+     records (reccodec_stream_block). A codec bug costs size, never data. A snapshot's pack is
+     checked the same way, against its prefix (reccodec_snapshot).
+   - RESET POINTS (an ordering). The frames' state, and the run's zstd frame with it
+     (tagpu_recfmt.h, THE RUN AND THE CHAIN), cross block boundaries only inside a run of
      sectioned blocks. All restart (RBF_FRAME_RESET) at a segment's first stream block, at the
      first after a snapshot and at the first after a records block: the unit and pool frames from
      the copy of the units and of the projectile pool a reader holds there, the cells frame from
@@ -84,8 +101,10 @@
    (442 KB), the shot events and their rows (590 KB), the search's three indexes over
    max(nproj, 4,096) rows (12 bytes a row each, and a table of 8-byte slots at least twice the
    rows: 393 KB up to 4,096 records), and the scratch of the largest block met so far
-   (reccodec_new). At 3,000 records the pool frame is about 3.3 MB a codec. Each record frame's
-   memory is its file's to state. */
+   (reccodec_new). At 3,000 records the pool frame is about 3.3 MB a codec. The kinds keep the
+   run's RECC_KINDS_MRU patterns, each at most RECC_KINDS_MAX bytes (1 MB at the bound; MEASURED
+   2026-10-12 on the heavy four-player hour: a new pattern 17 bytes on average, 1,862 at most),
+   and a block's runs, 12 bytes each. Each record frame's memory is its file's to state. */
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -435,6 +454,17 @@ struct RecCodec {
     void* frame[RECC_FRAMES];
     int fix[RCS_COUNT];
     unsigned char* fbody;                 /* the decoder's: a frame record's body, RECF_BODY_MAX */
+    /* the kinds (THE KINDS): the run's patterns, front first; the last explicit empty feature
+       tick, its root's body then its end's; whether an explicit RK_FEATURES came since the
+       reset. The encoder's iteration as runs (u32 kind, count) and its pattern; the decoder's
+       runs (u32 kind, count, RUN_* flags) and each iteration's first run. */
+    RecBytes kmru[RECC_KINDS_MRU];
+    unsigned nkmru;
+    int kbad;                             /* a pattern failed an allocation or its bound         */
+    unsigned char tpair[16];
+    int tpaired, featseen;
+    RecBytes ktok, kpat;
+    size_t irun[RECC_TICKS_MAX + 1];
 };
 
 /* the sizes a codec is made for, each within its bound (tagpu_reccodec.h, reccodec_params) */
@@ -581,6 +611,9 @@ void reccodec_free(RecCodec* c)
     rb_free(&c->ids);
     rb_free(&c->hash);
     rb_free(&c->cols);
+    rb_free(&c->ktok);
+    rb_free(&c->kpat);
+    for (i = 0; i < RECC_KINDS_MRU; i++) rb_free(&c->kmru[i]);
     for (i = 0; i < RCS_COUNT; i++) rb_free(&c->sec[i]);
     for (i = 0; i < RECC_FRAMES; i++)
         if (c->frame[i]) FRAMES[i]->drop(c->frame[i]);
@@ -690,6 +723,13 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
     rb_clear(&c->pbirth);
     rb_clear(&c->ptail);
     rb_clear(&c->pb);
+    rb_clear(&c->ktok);
+    rb_clear(&c->kpat);
+    for (i = 0; i < RECC_KINDS_MRU; i++) rb_clear(&c->kmru[i]);
+    c->nkmru = 0;
+    c->kbad = 0;
+    memset(c->tpair, 0, sizeof c->tpair);
+    c->tpaired = c->featseen = 0;
     for (i = 0; i < RCS_COUNT; i++) rb_clear(&c->sec[i]);
     for (i = 0; i < RECC_FRAMES; i++) FRAMES[i]->restart(c->frame[i], wok ? world : NULL);
     if (!wok || !p->usable || p->nslots != c->nslots || p->nproj != c->nproj || p->gw != c->gw ||
@@ -1946,30 +1986,156 @@ static void plain_apply(RecCodec* c, const unsigned char* pl, size_t at, size_t 
     }
 }
 
+/* ---- THE KINDS -------------------------------------------------------------------------------- */
+
+#define KM_TICKPAIR 0u          /* the kinds' marker of an empty feature tick (tagpu_recfmt.h)  */
+#define KM_FEATURES 0xFFFFu     /* the kinds' marker of a predicted RK_FEATURES                  */
+#define RUN_DERIVED  1u         /* a decoder's run: its count is its group's total less the rest */
+#define RUN_IMPLICIT 2u         /* a decoder's run: a marker's record, which no frame codes      */
+
+/* a kind's group, whose first run of an iteration's pattern has no count: 0 RK_TICK, 1
+   RK_UNIT_DELTA, 2 RK_PROJ and RK_PROJ_DELTA; -1 none */
+static int group_of(uint32_t kind)
+{
+    if (kind == RK_TICK) return 0;
+    if (kind == RK_UNIT_DELTA) return 1;
+    if (kind == RK_PROJ || kind == RK_PROJ_DELTA) return 2;
+    return -1;
+}
+
+/* The pattern list: entry i moves to the front */
+static void kmru_front(RecCodec* c, unsigned i)
+{
+    RecBytes t = c->kmru[i];
+    memmove(&c->kmru[1], &c->kmru[0], (size_t)i * sizeof t);
+    c->kmru[0] = t;
+}
+
+/* a new pattern at the front, the list's last dropped when full; kbad latched without memory */
+static void kmru_insert(RecCodec* c, const unsigned char* p, size_t n)
+{
+    unsigned i = c->nkmru < RECC_KINDS_MRU ? c->nkmru++ : RECC_KINDS_MRU - 1;
+    c->kmru[i].n = 0;
+    rb_put(&c->kmru[i], p, n);
+    if (c->kmru[i].oom) c->kbad = 1;
+    kmru_front(c, i);
+}
+
+/* the encoder's iteration gains a record of `kind`, or a marker: a run of the kind before it
+   grows, a marker stands alone */
+static void ktok_add(RecCodec* c, uint32_t kind)
+{
+    size_t n = c->ktok.n / 8;
+    uint32_t* t = (uint32_t*)c->ktok.p;
+    if (n && kind != KM_TICKPAIR && kind != KM_FEATURES && t[2 * (n - 1)] == kind) {
+        t[2 * (n - 1) + 1]++;
+        return;
+    }
+    rb_u32(&c->ktok, kind);
+    rb_u32(&c->ktok, 1);
+}
+
+/* The iteration's pattern (tagpu_recfmt.h, RCS_KINDS) from its runs, by reference when the list
+   holds it; a pattern past RECC_KINDS_MAX or an allocation that failed latches kbad, which
+   declines the block. */
+static void kinds_write(RecCodec* c)
+{
+    const uint32_t* t = (const uint32_t*)c->ktok.p;
+    size_t n = c->ktok.n / 8, i;
+    unsigned seen = 0, m;
+    RecBytes* o = &c->sec[RCS_KINDS];
+    c->kpat.n = 0;
+    c->kpat.oom = 0;
+    for (i = 0; i < n; i++) {
+        uint32_t kind = t[2 * i];
+        int g = group_of(kind);
+        rb_varint(&c->kpat, kind);
+        if (kind == KM_TICKPAIR || kind == KM_FEATURES) continue;
+        if (g >= 0 && !(seen >> g & 1)) {
+            seen |= 1u << g;
+            continue;
+        }
+        rb_varint(&c->kpat, t[2 * i + 1]);
+    }
+    if (c->ktok.oom || c->kpat.oom || c->kpat.n > RECC_KINDS_MAX) {
+        c->kbad = 1;
+        return;
+    }
+    for (m = 0; m < c->nkmru; m++)
+        if (c->kmru[m].n == c->kpat.n && !memcmp(c->kmru[m].p, c->kpat.p, c->kpat.n)) break;
+    if (m < c->nkmru) {
+        rb_u8(o, m + 1);
+        kmru_front(c, m);
+        return;
+    }
+    rb_u8(o, 0);
+    rb_varint(o, (uint32_t)c->kpat.n);
+    rb_put(o, c->kpat.p, c->kpat.n);
+    kmru_insert(c, c->kpat.p, c->kpat.n);
+}
+
+/* an RK_EV_FEATURE body of the feature tick's root with no arguments, `e` the record after it:
+   the pair is an empty feature tick when that record is the tick's end */
+static int tick_pair(unsigned kind, const unsigned char* b, unsigned len, const unsigned char* e,
+                     size_t left)
+{
+    return kind == RK_EV_FEATURE && len == 8 && b[0] == FR_TICK && left >= 12 &&
+           get16(e) == RK_EV_FEATURE_END && get16(e + 2) == 8 && e[4] == FR_TICK;
+}
+
 /* The record frames' walk of iteration `it` [at, end), after the unit and pool frames: each
    frame's enc_iter, then the records in order -- RK_UNIT and RK_UNIT_GONE onto the unit copy,
-   each frame kind to its frame, the events flag set past an event -- then each enc_iter_end. */
+   each frame kind to its frame, the events flag set past an event -- then each enc_iter_end, and
+   the iteration's pattern. An empty feature tick equal to the run's last explicit one and an
+   RK_FEATURES equal to the state frame's prediction after an explicit one are markers, which no
+   frame codes; the decoder's pass B keeps the same state in the same order. */
 static void frames_walk(RecCodec* c, const unsigned char* pl, size_t at, size_t end, unsigned it,
                         uint32_t gt)
 {
     RecFrameAt a;
-    size_t p;
+    size_t p, rl;
     unsigned i;
+    void* state = c->frame[c->fix[RCS_STATE]];
     a.it = it;
     a.gt = gt;
     a.events = 0;
     a.nslots = c->nslots;
     a.unit = c->unit;
     a.live = c->live;
+    c->ktok.n = 0;
+    c->ktok.oom = 0;
     for (i = 0; i < RECC_FRAMES; i++) FRAMES[i]->enc_iter(c->frame[i], &a);
-    for (p = at; p < end; p += ((size_t)4 + get16(pl + p + 2) + 3) & ~(size_t)3) {
+    for (p = at; p < end; p += rl) {
         unsigned kind = get16(pl + p), len = get16(pl + p + 2), sc = rec_section_of(kind);
         const unsigned char* b = pl + p + 4;
+        rl = ((size_t)4 + len + 3) & ~(size_t)3;
+        if (tick_pair(kind, b, len, pl + p + rl, end - p - rl)) {
+            if (c->tpaired && !memcmp(c->tpair, b, 8) && !memcmp(c->tpair + 8, pl + p + rl + 4, 8)) {
+                ktok_add(c, KM_TICKPAIR);
+                a.events = 1;
+                rl += 12;
+                continue;
+            }
+            memcpy(c->tpair, b, 8);
+            memcpy(c->tpair + 8, pl + p + rl + 4, 8);
+            c->tpaired = 1;
+        } else if (kind == RK_FEATURES && len == 16 && c->featseen) {
+            unsigned char pred[16];
+            recframe_state_predicted(state, pred);
+            if (!memcmp(pred, b, 16)) {
+                recframe_state_take(state, b);
+                ktok_add(c, KM_FEATURES);
+                continue;
+            }
+        }
+        if (kind == RK_FEATURES) c->featseen = 1;
+        ktok_add(c, kind);
         if (kind == RK_UNIT || kind == RK_UNIT_GONE) plain_record(c, kind, b, len);
         else if (c->fix[sc] >= 0) FRAMES[c->fix[sc]]->enc_rec(c->frame[c->fix[sc]], &a, kind, b, len);
         if (sc == RCS_EVENTS) a.events = 1;
     }
     for (i = 0; i < RECC_FRAMES; i++) FRAMES[i]->enc_iter_end(c->frame[i], &a);
+    kinds_write(c);
 }
 
 /* each record frame's section: 0 when one latched or passed its bounds */
@@ -1981,19 +2147,21 @@ static int frames_write(RecCodec* c)
     return 1;
 }
 
-/* Every record checked and routed: the kinds as runs, the bodies of RCS_OTHER's kinds into it
-   (the frames make the rest). 0: the frames do not carry this payload. */
+/* Every record checked, and the bodies of RCS_OTHER's kinds into it but for the RK_TICK of every
+   iteration after the first, whose GameTime must then be the first's + its index (the frames and
+   the kinds make the rest). 0: the codec does not carry this payload. */
 static int enc_prepass(RecCodec* c, const unsigned char* pl, size_t n, unsigned* ticks)
 {
     size_t at = 0;
-    unsigned i, last = 0, run = 0, nt = 0;
+    unsigned i, nt = 0;
+    uint32_t gt0 = 0;
     for (i = 0; i < RCS_COUNT; i++) c->sec[i].n = 0, c->sec[i].oom = 0;
     if (n < 4 || n % 4 || n > RECC_PAYLOAD_MAX) return 0;
     while (at < n) {
         unsigned kind = get16(pl + at), len = get16(pl + at + 2);
         size_t rl = ((size_t)4 + len + 3) & ~(size_t)3, k;
         const unsigned char* b = pl + at + 4;
-        if (!kind || rl > n - at) return 0;
+        if (!kind || kind == KM_FEATURES || rl > n - at) return 0;
         for (k = 4 + len; k < rl; k++)
             if (pl[at + k]) return 0;
         if (!at && kind != RK_TICK) return 0;
@@ -2001,21 +2169,17 @@ static int enc_prepass(RecCodec* c, const unsigned char* pl, size_t n, unsigned*
         if ((kind == RK_UNIT && len != 4 + IMG) || (kind == RK_UNIT_GONE && len != 4)) return 0;
         if ((kind == RK_UNIT || kind == RK_UNIT_GONE) && (get16(b) < 1 || get16(b) >= c->nslots)) return 0;
         if (kind == RK_UNIT_DELTA && len < REC_UNIT_DELTA_HEAD) return 0;
-        nt += kind == RK_TICK;
-        if (rec_section_of(kind) == RCS_OTHER) {
+        if (kind == RK_TICK) {
+            if (!nt) gt0 = get32(b);
+            else if (get32(b) != gt0 + nt) return 0;
+            nt++;
+        }
+        if (rec_section_of(kind) == RCS_OTHER && (kind != RK_TICK || nt == 1)) {
             rb_varint(&c->sec[RCS_OTHER], len);
             rb_put(&c->sec[RCS_OTHER], b, len);
         }
-        if (kind != last) {
-            if (run) rb_varint(&c->sec[RCS_KINDS], run);
-            rb_varint(&c->sec[RCS_KINDS], kind);
-            last = kind;
-            run = 0;
-        }
-        run++;
         at += rl;
     }
-    rb_varint(&c->sec[RCS_KINDS], run);
     for (i = 0; i < RCS_COUNT; i++)
         if (c->sec[i].oom) return 0;
     *ticks = nt;
@@ -2219,7 +2383,7 @@ int reccodec_encode(RecCodec* e, const unsigned char* pl, size_t n, RecBytes* ou
         at = end;
         it++;
     }
-    if (e->over || e->lslot.oom || e->lmask.oom || e->lzz.oom || e->pctl.oom || e->pref.oom ||
+    if (e->over || e->kbad || e->lslot.oom || e->lmask.oom || e->lzz.oom || e->pctl.oom || e->pref.oom ||
         e->psurv.oom || e->pbirth.oom || e->ptail.oom || !units_write(e, ticks) || !pool_write(e, ticks) ||
         !frames_write(e)) {
         e->valid = 0;
@@ -2243,23 +2407,132 @@ int reccodec_encode(RecCodec* e, const unsigned char* pl, size_t n, RecBytes* ou
 
 /* ---- the decoder ---------------------------------------------------------------------------- */
 
-/* A walk over one iteration's records in the kinds' runs */
-typedef struct RunAt { size_t run, left; } RunAt;
+/* A walk over one iteration's records in its runs (kinds_parse): a run whose count is still open
+   (group_fill) holds no record yet */
+typedef struct RunAt { size_t run, end, cur; uint32_t left; } RunAt;
 
-/* the next record's kind, or 0 at the iteration's end (`first`: the iteration's own RK_TICK) */
-static uint32_t run_next(const RecCodec* d, RunAt* a, int* first)
+static void run_at(const RecCodec* d, RunAt* a, unsigned it)
+{
+    a->run = d->irun[it];
+    a->end = d->irun[it + 1];
+    a->cur = a->run;
+    a->left = 0;
+}
+
+/* the next record's kind and its run's RUN_* flags, or 0 at the iteration's end */
+static uint32_t run_next(const RecCodec* d, RunAt* a, uint32_t* flags)
 {
     const uint32_t* runs = (const uint32_t*)d->runs.p;
-    uint32_t kind;
-    if (!a->left) {
-        if (++a->run >= d->runs.n / 8) return 0;
-        a->left = runs[2 * a->run + 1];
+    while (!a->left) {
+        if (a->run >= a->end) return 0;
+        a->cur = a->run++;
+        a->left = runs[3 * a->cur + 1];
     }
-    kind = runs[2 * a->run];
-    if (kind == RK_TICK && !*first) return 0;
-    *first = 0;
     a->left--;
-    return kind;
+    *flags = runs[3 * a->cur + 2];
+    return runs[3 * a->cur];
+}
+
+static void run_push(RecCodec* d, uint32_t kind, uint32_t count, uint32_t flags)
+{
+    rb_u32(&d->runs, kind);
+    rb_u32(&d->runs, count);
+    rb_u32(&d->runs, flags);
+}
+
+/* RCS_KINDS [at, end): every iteration's pattern into the decoder's runs, the pattern list moved
+   on as the encoder moved it. BOUNDS: a reference within the list, a new pattern's length within
+   1..RECC_KINDS_MAX and the section, each pattern's tokens within it and consuming it exactly,
+   a kind within 1..0xFFFE or a marker, an explicit count of at least 1 and the records so far
+   within the payload's dwords, the pattern's first token RK_TICK and no second RK_TICK run (its
+   group's total is 1), the section consumed exactly. A group's first run is left open (count 0,
+   RUN_DERIVED) for group_fill, but RK_TICK's, whose total is 1. */
+static int kinds_parse(RecCodec* d, const unsigned char* sec, size_t at, size_t end,
+                       unsigned iterations, uint32_t payload, char* why, unsigned cap)
+{
+    size_t records = 0;
+    unsigned it;
+    d->runs.n = 0;
+    d->runs.oom = 0;
+    for (it = 0; it < iterations; it++) {
+        const unsigned char* p;
+        size_t pat = 0, pn;
+        unsigned m, seen = 0, first = 1;
+        d->irun[it] = d->runs.n / 12;
+        if (at >= end) REFUSE("iteration %u's pattern cut short", it);
+        m = sec[at++];
+        if (m > d->nkmru) REFUSE("iteration %u's pattern %u is past the %u the run holds", it, m, d->nkmru);
+        if (m) {
+            kmru_front(d, m - 1);
+        } else {
+            uint32_t len;
+            if (!varint_get(sec, end, &at, &len) || len < 1 || len > RECC_KINDS_MAX || len > end - at)
+                REFUSE("iteration %u's new pattern of a length outside 1..%u or past the kinds", it, RECC_KINDS_MAX);
+            kmru_insert(d, sec + at, len);
+            at += len;
+            if (d->kbad) REFUSE("no memory for the kinds' patterns");
+        }
+        p = d->kmru[0].p;
+        pn = d->kmru[0].n;
+        while (pat < pn) {
+            uint32_t kind, count = 0;
+            int g;
+            if (!varint_get(p, pn, &pat, &kind)) REFUSE("iteration %u's pattern cut short", it);
+            if (first && kind != RK_TICK)
+                REFUSE("iteration %u's pattern starts with kind %lu, not RK_TICK", it, (unsigned long)kind);
+            if (kind == KM_TICKPAIR) {
+                run_push(d, RK_EV_FEATURE, 1, RUN_IMPLICIT);
+                run_push(d, RK_EV_FEATURE_END, 1, RUN_IMPLICIT);
+                count = 2;
+            } else if (kind == KM_FEATURES) {
+                run_push(d, RK_FEATURES, 1, RUN_IMPLICIT);
+                count = 1;
+            } else if (kind > 0xFFFF) {
+                REFUSE("record kind %lu in iteration %u's pattern", (unsigned long)kind, it);
+            } else if ((g = group_of(kind)) >= 0 && !(seen >> g & 1)) {
+                seen |= 1u << g;
+                count = g == 0 ? 1 : 0;
+                run_push(d, kind, count, RUN_DERIVED);
+            } else {
+                if (g == 0) REFUSE("iteration %u's pattern has a second RK_TICK run: the group's total is 1", it);
+                if (!varint_get(p, pn, &pat, &count) || count < 1)
+                    REFUSE("iteration %u's pattern has a run of kind %lu cut short or of no records", it, (unsigned long)kind);
+                run_push(d, kind, count, 0);
+            }
+            if (count > payload / 4 - records) REFUSE("more records than a %lu-byte payload holds", (unsigned long)payload);
+            records += count;
+            first = 0;
+        }
+    }
+    d->irun[iterations] = d->runs.n / 12;
+    if (at != end) REFUSE("%lu bytes left in the kinds", (unsigned long)(end - at));
+    if (d->runs.oom) REFUSE("no memory for the kinds");
+    return 1;
+}
+
+/* Group g's open run of iteration `it` takes its count: the group's `total` from its frame less
+   the group's other runs'. BOUND: a group with no run has a total of 0, and one whose other runs
+   hold its total or more is refused -- its open run would hold fewer than 1 record. */
+static int group_fill(RecCodec* d, unsigned it, int g, uint32_t total, const char* what, char* why,
+                      unsigned cap)
+{
+    uint32_t* runs = (uint32_t*)d->runs.p;
+    size_t i, open = (size_t)-1;
+    uint64_t rest = 0;
+    for (i = d->irun[it]; i < d->irun[it + 1]; i++) {
+        if (group_of(runs[3 * i]) != g || runs[3 * i + 2] & RUN_IMPLICIT) continue;
+        if (runs[3 * i + 2] & RUN_DERIVED) open = i;
+        else rest += runs[3 * i + 1];
+    }
+    if (open == (size_t)-1) {
+        if (total) REFUSE("iteration %u: the frame makes %lu %s, its pattern none", it, (unsigned long)total, what);
+        return 1;
+    }
+    if (rest >= total)
+        REFUSE("iteration %u: the pattern's runs hold %llu %s past the first, the frame makes %lu", it,
+               (unsigned long long)rest, what, (unsigned long)total);
+    runs[3 * open + 1] = (uint32_t)(total - rest);
+    return 1;
 }
 
 /* the 27 residuals of one row from its columns' cursors (read once already) */
@@ -2350,20 +2623,20 @@ static int pool_parse(RecCodec* d, const unsigned char* sec, size_t at, size_t e
     return 1;
 }
 
-/* Iteration `it` of the pool frame, `a0` the walk at its RK_TICK: its control values (bounded by
+/* Iteration `it` of the pool frame: its control values (bounded by
    pool_parse), the EV rows from the last iteration's shots -- d->shots, which that iteration's
    pass B took from the bodies the events frame made -- the new pool, and each projectile record's
-   body made from the pool before and after it into d->pb, in record order; then the state
-   committed. Runs before the iteration's pass B, which takes the bodies from d->pb. 1, or 0 with
-   `why`. */
-static int pool_iter(RecCodec* d, const unsigned char* sec, PoolAt* q, unsigned it, RunAt a0,
-                     size_t payload, char* why, unsigned cap)
+   body made from the pool before and after it into d->pb, in record order, the iteration's
+   projectile runs taking their count from the changed records (group_fill); then the state
+   committed. Runs before the iteration's pass A and pass B, which takes the bodies from d->pb. 1,
+   or 0 with `why`. */
+static int pool_iter(RecCodec* d, const unsigned char* sec, PoolAt* q, unsigned it, size_t payload,
+                     char* why, unsigned cap)
 {
     const unsigned N = d->nproj, pc0 = d->pcount, ph0 = d->phw, ne = d->nshots;
-    unsigned pc1, ph1, nd, nt, ns = 0, heads = 0, slots = 0, k, i, j;
-    int first = 1;
+    unsigned pc1, ph1, nd, nt, ns = 0, heads = 0, k, i, j;
     size_t cat = d->pat[it], end = q->end;
-    uint32_t kind, res[PDW], code = 0, v = 0;
+    uint32_t kind, fl, res[PDW], code = 0, v = 0;
     RunAt a;
     d->pb.n = 0;
     d->pb.oom = 0;
@@ -2396,12 +2669,9 @@ static int pool_iter(RecCodec* d, const unsigned char* sec, PoolAt* q, unsigned 
     }
     /* the EV rows, from the shots and the last births as they stand before this iteration */
     for (i = 0; i < ne; i++) ev_row(d, d->shots + (size_t)i * SHOT, d->ev + (size_t)i * PDW);
-    /* the iteration's projectile records, by kind */
-    a = a0;
-    while ((kind = run_next(d, &a, &first)) != 0) {
-        heads += kind == RK_PROJ_HEAD;
-        slots += kind == RK_PROJ || kind == RK_PROJ_DELTA;
-    }
+    /* the iteration's RK_PROJ_HEAD, which the pattern counts */
+    run_at(d, &a, it);
+    while ((kind = run_next(d, &a, &fl)) != 0) heads += kind == RK_PROJ_HEAD;
     if (heads > 1) REFUSE("iteration %u has %u RK_PROJ_HEAD", it, heads);
     if (!heads && (pc1 != pc0 || ph1 != ph0)) REFUSE("iteration %u changes the pool's count or extent with no RK_PROJ_HEAD", it);
     /* the new pool: the survivors, the births, the tail, the rest as they were */
@@ -2473,13 +2743,11 @@ static int pool_iter(RecCodec* d, const unsigned char* sec, PoolAt* q, unsigned 
     for (i = 0; i < nt; i++)
         if (memcmp(d->pool_n + (size_t)d->ptl[i] * PDW, d->pool + (size_t)d->ptl[i] * PDW, PIMG))
             d->pchg[d->nchg++] = d->ptl[i];
-    if (slots != d->nchg)
-        REFUSE("iteration %u: the pool frame changes %u records, its kinds hold %u", it, d->nchg, slots);
+    if (!group_fill(d, it, 2, d->nchg, "projectile records", why, cap)) return 0;
     /* their bodies, in record order */
-    a = a0;
-    first = 1;
+    run_at(d, &a, it);
     k = 0;
-    while ((kind = run_next(d, &a, &first)) != 0) {
+    while ((kind = run_next(d, &a, &fl)) != 0) {
         unsigned char body[POOL_BODY_MAX];
         unsigned len;
         if (kind == RK_PROJ_HEAD) {
@@ -2517,13 +2785,12 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
                     unsigned cap)
 {
     RecSecHead h;
-    size_t off[RCS_COUNT + 1], at, total = 0, records = 0, li, i, oat;
+    size_t off[RCS_COUNT + 1], at, total = 0, li, i, oat;
     size_t colat[RECC_LANES_MAX], coln[RECC_LANES_MAX];
-    unsigned it, ticks = 0, mb, j, ndict = 0;
-    uint32_t v, kind;
+    unsigned it, mb, j, ndict = 0;
+    uint32_t v, kind, fl, gt0 = 0;
     uint32_t listed[RECC_TICKS_MAX];
     const unsigned char* dict;
-    RunAt cur;
     PoolAt pq;
     if (!d->valid) REFUSE("a sectioned block with no frame to continue");
     d->valid = 0;
@@ -2546,25 +2813,9 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
     if (h.iterations < 1 || h.iterations > RECC_TICKS_MAX)
         REFUSE("%u iterations, not 1..%u", h.iterations, RECC_TICKS_MAX);
 
-    /* RCS_KINDS */
-    d->runs.n = 0;
-    d->runs.oom = 0;
-    for (at = off[RCS_KINDS]; at < off[RCS_KINDS + 1];) {
-        uint32_t count;
-        if (!varint_get(sec, off[RCS_KINDS + 1], &at, &kind) || !varint_get(sec, off[RCS_KINDS + 1], &at, &count))
-            REFUSE("a kind run cut short or past 2^32 at byte %lu", (unsigned long)at);
-        if (kind < 1 || kind > 0xFFFF) REFUSE("record kind %lu at byte %lu", (unsigned long)kind, (unsigned long)at);
-        if (count < 1) REFUSE("a run of no records at byte %lu", (unsigned long)at);
-        if (!records && kind != RK_TICK) REFUSE("the first record is kind %lu, not RK_TICK", (unsigned long)kind);
-        if (count > h.payload / 4 - records) REFUSE("more records than a %lu-byte payload holds", (unsigned long)h.payload);
-        records += count;
-        if (kind == RK_TICK) ticks += count;    /* records <= 2^24: no overflow */
-        rb_u32(&d->runs, kind);
-        rb_u32(&d->runs, count);
-    }
-    if (!records) REFUSE("no records");
-    if (ticks != h.iterations) REFUSE("%u RK_TICK records, not the head's %u iterations", ticks, h.iterations);
-    if (d->runs.oom) REFUSE("no memory for the kinds");
+    /* RCS_KINDS: one pattern an iteration, each starting with its RK_TICK */
+    if (!kinds_parse(d, sec, off[RCS_KINDS], off[RCS_KINDS + 1], h.iterations, h.payload, why, cap))
+        return 0;
 
     /* RCS_UNITS: everything read and bounded before the first iteration */
     at = off[RCS_UNITS];
@@ -2638,31 +2889,32 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
     out->oom = 0;
     if (!rb_grow(out, h.payload)) REFUSE("no memory for a %lu-byte payload", (unsigned long)h.payload);
 
-    /* the iterations: the pool frame's, pass A, the unit frame, pass B */
-    cur.run = 0;
-    cur.left = ((const uint32_t*)d->runs.p)[1];
+    /* the iterations: the pool frame's, pass A, the unit frame, pass B. The pool frame fills its
+       group's count before pass A; pass A walks every run but RK_UNIT_DELTA's, whose count the
+       unit frame fills after it (THE KINDS). */
     oat = off[RCS_OTHER];
     li = 0;
     for (it = 0; it < h.iterations; it++) {
-        RunAt a = cur;
+        RunAt a;
         size_t aoat = oat, li1 = li + listed[it], dat = 0, pbat = 0;
-        unsigned ndelta = 0, nchanged = 0, s, nshot = 0;
-        int first = 1;
-        uint32_t gt = 0;
+        unsigned nchanged = 0, s, nshot = 0;
+        uint32_t gt = gt0 + it;
+        unsigned char tick[4], root[8];
+        int rooted = 0;
         RecFrameAt fa;
         Eval x;
-        if (!pool_iter(d, sec, &pq, it, cur, h.payload, why, cap)) return 0;
+        if (!pool_iter(d, sec, &pq, it, h.payload, why, cap)) return 0;
         /* pass A: the iteration's RK_TICK and unit records, from copies of the cursors */
         d->dl.n = 0;
         d->dl.oom = 0;
-        while ((kind = run_next(d, &a, &first)) != 0) {
+        run_at(d, &a, it);
+        while ((kind = run_next(d, &a, &fl)) != 0) {
             uint32_t len;
             const unsigned char* b;
-            if (kind == RK_UNIT_DELTA) {
-                ndelta++;
+            /* a frame or a marker makes it in pass B; the block's first RK_TICK alone has a body */
+            if (kind == RK_UNIT_DELTA || fl & RUN_IMPLICIT || rec_section_of(kind) != RCS_OTHER ||
+                (kind == RK_TICK && it))
                 continue;
-            }
-            if (rec_section_of(kind) != RCS_OTHER) continue;    /* a frame makes it in pass B */
             if (!varint_get(sec, off[RCS_OTHER + 1], &aoat, &len) || len > 0xFFFF || len > off[RCS_OTHER + 1] - aoat)
                 REFUSE("a body of kind %lu cut short or past 0xFFFF in section %u at byte %lu",
                        (unsigned long)kind, RCS_OTHER, (unsigned long)aoat);
@@ -2670,7 +2922,7 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
             aoat += len;
             if (kind == RK_TICK) {
                 if (len != 4) REFUSE("an RK_TICK of %lu bytes", (unsigned long)len);
-                gt = get32(b);
+                gt = gt0 = get32(b);
             } else if (kind == RK_UNIT || kind == RK_UNIT_GONE) {
                 if (len != (kind == RK_UNIT ? 4u + IMG : 4u)) REFUSE("a unit record of kind %lu of %lu bytes", (unsigned long)kind, (unsigned long)len);
                 if (get16(b) < 1 || get16(b) >= d->nslots) REFUSE("a unit record for slot %u, outside 1..%u", get16(b), d->nslots - 1);
@@ -2723,7 +2975,7 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
             slot_advance(d, s, x.u, gt);
         }
         if (d->dl.oom) REFUSE("no memory for the deltas");
-        if (nchanged != ndelta) REFUSE("iteration %u: the frame changes %u units, its kinds hold %u deltas", it, nchanged, ndelta);
+        if (!group_fill(d, it, 1, nchanged, "unit deltas", why, cap)) return 0;
         /* pass B: the records, in order; a frame record's body from its frame, at the unit copy
            and the events flag the encoder's walk had there (frames_walk) */
         fa.it = it;
@@ -2734,14 +2986,33 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
         fa.live = d->live;
         for (j = 0; j < RECC_FRAMES; j++)
             if (!FRAMES[j]->dec_iter(d->frame[j], &fa, why, cap)) return 0;
-        first = 1;
-        while ((kind = run_next(d, &cur, &first)) != 0) {
+        run_at(d, &a, it);
+        while ((kind = run_next(d, &a, &fl)) != 0) {
             unsigned sc = rec_section_of(kind);
             uint32_t len;
             unsigned char hd[4];
             const unsigned char* b;
             size_t rl;
-            if (kind == RK_UNIT_DELTA) {
+            if (fl & RUN_IMPLICIT) {
+                /* a marker's records: no frame codes them. BOUND: each only after its explicit
+                   kind since the reset, as the encoder writes it (frames_walk). */
+                if (kind == RK_FEATURES) {
+                    void* st = d->frame[d->fix[RCS_STATE]];
+                    if (!d->featseen) REFUSE("iteration %u: a predicted RK_FEATURES before any explicit one", it);
+                    recframe_state_predicted(st, d->fbody);
+                    recframe_state_take(st, d->fbody);
+                    b = d->fbody;
+                    len = 16;
+                } else {
+                    if (!d->tpaired) REFUSE("iteration %u: an empty feature tick before any explicit one", it);
+                    b = d->tpair + (kind == RK_EV_FEATURE_END ? 8 : 0);
+                    len = 8;
+                }
+            } else if (kind == RK_TICK && it) {
+                put32(tick, gt);
+                b = tick;
+                len = 4;
+            } else if (kind == RK_UNIT_DELTA) {
                 memcpy(&len, d->dl.p + dat, 4);
                 b = d->dl.p + dat + 4;
                 dat += 4 + len;
@@ -2756,13 +3027,27 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
                 if (kind == RK_UNIT || kind == RK_UNIT_GONE) unit_record(d, kind, b);
             } else {
                 const RecFrameOps* f = FRAMES[d->fix[sc]];
-                unsigned fl = 0;
-                if (!f->dec_rec(d->frame[d->fix[sc]], &fa, kind, d->fbody, &fl, why, cap)) return 0;
-                if (fl > RECF_BODY_MAX) REFUSE("the %s frame made a body of %u bytes", f->name, fl);
-                len = fl;
+                unsigned bl = 0;
+                if (!f->dec_rec(d->frame[d->fix[sc]], &fa, kind, d->fbody, &bl, why, cap)) return 0;
+                if (bl > RECF_BODY_MAX) REFUSE("the %s frame made a body of %u bytes", f->name, bl);
+                len = bl;
                 b = d->fbody;
                 if (kind == RK_EV_SHOT && len == SHOT && nshot < RECC_SHOTS_MAX)
                     memcpy(d->shots + (size_t)nshot++ * SHOT, b, SHOT);
+            }
+            /* the run's last explicit empty feature tick (tick_pair), and the first explicit
+               RK_FEATURES, in the record order the encoder's walk kept them */
+            if (!(fl & RUN_IMPLICIT)) {
+                if (rooted && kind == RK_EV_FEATURE_END && len == 8 && b[0] == FR_TICK) {
+                    memcpy(d->tpair, root, 8);
+                    memcpy(d->tpair + 8, b, 8);
+                    d->tpaired = 1;
+                }
+                rooted = kind == RK_EV_FEATURE && len == 8 && b[0] == FR_TICK;
+                if (rooted) memcpy(root, b, 8);
+                if (kind == RK_FEATURES) d->featseen = 1;
+            } else {
+                rooted = 0;
             }
             rl = ((size_t)4 + len + 3) & ~(size_t)3;
             if (rl > h.payload - out->n) REFUSE("the records pass the head's %lu-byte payload", (unsigned long)h.payload);
@@ -2808,22 +3093,109 @@ int reccodec_pack(void* cctx, RecBytes* out, const unsigned char* src, size_t n)
    (ZSTD_WINDOWLOG_LIMIT_DEFAULT), which the Python reader's decompressor enforces and the one-shot
    ZSTD_decompressDCtx does not. Bounding it here by the frame's header makes both readers refuse
    the same frames. The writer's frames ask for far less: level 3's window is 2^21
-   (ZSTD_defaultCParameters), or the block's own size when that is smaller. */
+   (ZSTD_defaultCParameters), or the block's own size when that is smaller, and a snapshot's is the
+   least power of two that holds it and its prefix (reccodec_pack_chained). */
 #define RECC_WINDOW_MAX (1ull << 27)
+#define RECC_LEVEL_MAX  19            /* the run's and the snapshots' level                     */
+/* Their match finder's tables, fixed so that the context does not grow with a snapshot's size:
+   MEASURED 2026-10-11 on the heavy hour, the level-19 context is 14.5 MB at these and the run's
+   window, and 33.3 MB at level 19's own parameters for the snapshots. */
+#define RECC_HASH_LOG   20
+#define RECC_CHAIN_LOG  21
 
-int reccodec_unpack(void* dctx, unsigned char* dst, size_t raw, const unsigned char* src,
-                    size_t packed)
+/* one zstd frame of exactly `raw` bytes and no byte after it, whose window is bounded */
+static int frame_ok(const unsigned char* src, size_t packed, size_t raw)
 {
-    unsigned long long size;
     ZSTD_FrameHeader fh;
     if (!raw || !packed) return 0;
     if (ZSTD_findFrameCompressedSize(src, packed) != packed) return 0;
-    size = ZSTD_getFrameContentSize(src, packed);
-    if (size != (unsigned long long)raw) return 0;
-    if (ZSTD_getFrameHeader(&fh, src, packed) != 0 || fh.frameType != ZSTD_frame ||
-        fh.windowSize > RECC_WINDOW_MAX)
-        return 0;
+    if (ZSTD_getFrameContentSize(src, packed) != (unsigned long long)raw) return 0;
+    return ZSTD_getFrameHeader(&fh, src, packed) == 0 && fh.frameType == ZSTD_frame &&
+           fh.windowSize <= RECC_WINDOW_MAX;
+}
+
+/* The decoder is reset first, parameters and prefix included: a prefix a refused frame left
+   referenced would otherwise be used by the next frame unpacked here. */
+int reccodec_unpack(void* dctx, unsigned char* dst, size_t raw, const unsigned char* src,
+                    size_t packed)
+{
+    if (!frame_ok(src, packed, raw)) return 0;
+    ZSTD_DCtx_reset((ZSTD_DCtx*)dctx, ZSTD_reset_session_and_parameters);
     return ZSTD_decompressDCtx((ZSTD_DCtx*)dctx, dst, raw, src, packed) == raw;
+}
+
+int reccodec_unpack_chained(void* dctx, unsigned char* dst, size_t raw, const unsigned char* src,
+                            size_t packed, const unsigned char* prefix, size_t nprefix)
+{
+    ZSTD_DCtx* d = (ZSTD_DCtx*)dctx;
+    if (!prefix || !nprefix || nprefix > RECC_PAYLOAD_MAX || !frame_ok(src, packed, raw)) return 0;
+    ZSTD_DCtx_reset(d, ZSTD_reset_session_and_parameters);
+    if (ZSTD_isError(ZSTD_DCtx_refPrefix(d, prefix, nprefix))) return 0;
+    return ZSTD_decompressDCtx(d, dst, raw, src, packed) == raw;
+}
+
+/* A window of at least 2^20 holding the prefix and the records together, so every byte of the
+   prefix stays in reach of the last record (a match past the window is never made). */
+int reccodec_pack_chained(void* cctx, RecBytes* out, const unsigned char* src, size_t n,
+                          const unsigned char* prefix, size_t nprefix)
+{
+    ZSTD_CCtx* c = (ZSTD_CCtx*)cctx;
+    unsigned long long both = (unsigned long long)nprefix + n;
+    int wlog = REC_RUN_WINDOW_LOG;
+    size_t z;
+    out->n = 0;
+    out->oom = 0;
+    if (!n || both > RECC_WINDOW_MAX || !rb_grow(out, ZSTD_compressBound(n))) return 0;
+    while ((1ull << wlog) < both) wlog++;
+    if (ZSTD_isError(ZSTD_CCtx_reset(c, ZSTD_reset_session_and_parameters)) ||
+        ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_compressionLevel, RECC_LEVEL_MAX)) ||
+        ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_windowLog, wlog)) ||
+        ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_hashLog, RECC_HASH_LOG)) ||
+        ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_chainLog, RECC_CHAIN_LOG)) ||
+        (nprefix && ZSTD_isError(ZSTD_CCtx_refPrefix(c, prefix, nprefix))))
+        return 0;
+    z = ZSTD_compress2(c, out->p, out->cap, src, n);
+    if (ZSTD_isError(z)) return 0;
+    out->n = z;
+    return 1;
+}
+
+/* BOUNDS: a run's header is the writer's or refused -- a zstd frame, its window at most
+   2^REC_RUN_WINDOW_LOG, no content size, no dictionary, no checksum -- and the decoder's own
+   window limit is set to the same, so no chunk can make it allocate past it. The output buffer
+   is raw + 1 bytes: a chunk that gives more than raw stops there and is refused, as is one that
+   ends the frame (ZSTD_decompressStream's 0), which the writer never does. Every call either
+   consumes input or makes output, else the chunk is refused, so the loop ends. */
+int reccodec_run_unpack(void* dctx, unsigned char* dst, size_t raw, const unsigned char* src,
+                        size_t packed, int reset)
+{
+    ZSTD_DCtx* d = (ZSTD_DCtx*)dctx;
+    ZSTD_inBuffer in;
+    ZSTD_outBuffer out;
+    if (!raw || !packed) return 0;
+    if (reset) {
+        ZSTD_FrameHeader fh;
+        if (packed < 4 || get32(src) != ZSTD_MAGICNUMBER ||
+            ZSTD_getFrameHeader(&fh, src, packed) != 0 || fh.frameType != ZSTD_frame ||
+            fh.windowSize > (1ull << REC_RUN_WINDOW_LOG) ||
+            fh.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN || fh.dictID || fh.checksumFlag)
+            return 0;
+        if (ZSTD_isError(ZSTD_DCtx_reset(d, ZSTD_reset_session_and_parameters)) ||
+            ZSTD_isError(ZSTD_DCtx_setParameter(d, ZSTD_d_windowLogMax, REC_RUN_WINDOW_LOG)))
+            return 0;
+    }
+    in.src = src;
+    in.size = packed;
+    in.pos = 0;
+    out.dst = dst;
+    out.size = raw + 1;
+    out.pos = 0;
+    for (;;) {
+        size_t was_in = in.pos, was_out = out.pos, k = ZSTD_decompressStream(d, &out, &in);
+        if (ZSTD_isError(k) || !k || out.pos > raw) return 0;
+        if (in.pos == was_in && out.pos == was_out) break;
+    }
+    return in.pos == in.size && out.pos == raw;
 }
 
 /* ---- the writer's codec --------------------------------------------------------------------- */
@@ -2836,8 +3208,10 @@ int reccodec_stream_begin(RecStream* s, const RecCodecParams* p)
     s->chk = reccodec_new(p);
     s->cctx = ZSTD_createCCtx();
     s->dctx = ZSTD_createDCtx();
+    s->zrun = ZSTD_createCCtx();
+    s->drun = ZSTD_createDCtx();
     s->reset = 1;
-    if (!s->enc || !s->chk || !s->cctx || !s->dctx || !p->usable) {
+    if (!s->enc || !s->chk || !s->cctx || !s->dctx || !s->zrun || !s->drun || !p->usable) {
         reccodec_stream_end(s);
         return 0;
     }
@@ -2850,20 +3224,68 @@ void reccodec_stream_end(RecStream* s)
     reccodec_free(s->chk);
     ZSTD_freeCCtx((ZSTD_CCtx*)s->cctx);
     ZSTD_freeDCtx((ZSTD_DCtx*)s->dctx);
+    ZSTD_freeCCtx((ZSTD_CCtx*)s->zrun);
+    ZSTD_freeDCtx((ZSTD_DCtx*)s->drun);
     rb_free(&s->sec);
     rb_free(&s->pk);
     rb_free(&s->back);
     rb_free(&s->out);
+    rb_free(&s->prev);
     s->enc = s->chk = NULL;
-    s->cctx = s->dctx = NULL;
+    s->cctx = s->dctx = s->zrun = s->drun = NULL;
+    s->chain = 0;
+}
+
+/* The container `sec` as the run's next chunk in `pk`, flushed so it ends at a zstd block's end;
+   at a reset the run's context first restarts with the run's parameters (tagpu_recfmt.h, THE RUN
+   AND THE CHAIN). RECC_SECTIONS; RECC_NOMEM when zstd or `pk` had no memory; RECC_MISMATCH when
+   zstd failed otherwise. */
+static int run_pack(RecStream* s, int reset)
+{
+    ZSTD_CCtx* c = (ZSTD_CCtx*)s->zrun;
+    ZSTD_inBuffer in;
+    ZSTD_outBuffer out;
+    if (reset &&
+        (ZSTD_isError(ZSTD_CCtx_reset(c, ZSTD_reset_session_and_parameters)) ||
+         ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_compressionLevel, RECC_LEVEL_MAX)) ||
+         ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_windowLog, REC_RUN_WINDOW_LOG)) ||
+         ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_hashLog, RECC_HASH_LOG)) ||
+         ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_chainLog, RECC_CHAIN_LOG)) ||
+         ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_contentSizeFlag, 0)) ||
+         ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_checksumFlag, 0))))
+        return RECC_MISMATCH;
+    s->pk.n = 0;
+    s->pk.oom = 0;
+    if (!rb_grow(&s->pk, ZSTD_compressBound(s->sec.n))) return RECC_NOMEM;
+    in.src = s->sec.p;
+    in.size = s->sec.n;
+    in.pos = 0;
+    for (;;) {
+        size_t left;
+        out.dst = s->pk.p;
+        out.size = s->pk.cap;
+        out.pos = s->pk.n;
+        left = ZSTD_compressStream2(c, &out, &in, ZSTD_e_flush);
+        s->pk.n = out.pos;
+        if (ZSTD_isError(left))
+            return ZSTD_getErrorCode(left) == ZSTD_error_memory_allocation ? RECC_NOMEM
+                                                                          : RECC_MISMATCH;
+        if (!left) return RECC_SECTIONS;
+        if (!rb_grow(&s->pk, left)) return RECC_NOMEM;
+    }
 }
 
 /* DECODE BEFORE WRITE: the block is written sectioned only when the check decoder D, from the
    state a reader will have, gives back these records from the very bytes written. D is a second
    state, not the encoder's: the check has to start where a reader starts and must not share the
-   encoder's arithmetic. A records block, and every snapshot (the writer's), make the next block
-   restart both frames of both from the encoder's copies of the units, the pool and the grid,
-   which are always the payload's end state. */
+   encoder's arithmetic. The bytes written are a chunk of the run's frame, so the check unpacks
+   them with a decoder of its own that has unpacked exactly the run's chunks before, as a reader's
+   has; the chunk must give back the container byte for byte, then D its records.
+   A records block, and every snapshot (reccodec_snapshot), make the next block restart both
+   frames of both from the encoder's copies of the units, the pool and the grid, which are always
+   the payload's end state, and begin a new run in both zstd contexts -- as does any failure here,
+   zstd's or the codec's, so a run's chunks are exactly the sectioned blocks written since its
+   reset block, in order. */
 int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, unsigned* flags,
                           const unsigned char** body, size_t* bn)
 {
@@ -2908,24 +3330,20 @@ int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, 
     }
     k = reccodec_encode(s->enc, payload, n, &s->sec);
     if (k == RECC_SECTIONS) {
-        const unsigned char* src = s->sec.p;
-        packed = reccodec_pack(s->cctx, &s->pk, s->sec.p, s->sec.n);
-        if (packed) {
-            s->back.n = 0;
-            s->back.oom = 0;
-            if (!rb_grow(&s->back, s->sec.n) ||
-                !reccodec_unpack(s->dctx, s->back.p, s->sec.n, s->pk.p, s->pk.n))
-                k = RECC_MISMATCH;
-            src = s->back.p;
-        }
+        s->back.n = 0;
+        s->back.oom = 0;
+        k = run_pack(s, reset);
+        if (k == RECC_SECTIONS && !rb_grow(&s->back, s->sec.n + 1)) k = RECC_NOMEM;
         if (k == RECC_SECTIONS &&
-            (!reccodec_decode(s->chk, src, s->sec.n, &s->out, NULL, 0) || s->out.n != n ||
-             memcmp(s->out.p, payload, n)))
+            (!reccodec_run_unpack(s->drun, s->back.p, s->sec.n, s->pk.p, s->pk.n, reset) ||
+            memcmp(s->back.p, s->sec.p, s->sec.n) ||
+            !reccodec_decode(s->chk, s->back.p, s->sec.n, &s->out, NULL, 0) || s->out.n != n ||
+            memcmp(s->out.p, payload, n)))
             k = RECC_MISMATCH;
         if (k == RECC_SECTIONS) {
-            *flags = RBF_SECTIONS | (reset ? RBF_FRAME_RESET : 0) | (packed ? 0 : RBF_STORED);
-            *body = packed ? s->pk.p : s->sec.p;
-            *bn = packed ? s->pk.n : s->sec.n;
+            *flags = RBF_SECTIONS | (reset ? RBF_FRAME_RESET : 0);
+            *body = s->pk.p;
+            *bn = s->pk.n;
             s->reset = 0;
             s->sectioned++;
             return k;
@@ -2933,6 +3351,7 @@ int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, 
     }
     if (k == RECC_MISMATCH) s->mismatched++;
     else s->declined++;
+    if (k == RECC_NOMEM) s->nomem++;
     reccodec_invalidate(s->enc);
     reccodec_invalidate(s->chk);
     s->reset = 1;
@@ -2941,4 +3360,52 @@ int reccodec_stream_block(RecStream* s, const unsigned char* payload, size_t n, 
     *body = packed ? s->pk.p : payload;
     *bn = packed ? s->pk.n : n;
     return k;
+}
+
+/* INVARIANTS (tagpu_recfmt.h, THE RUN AND THE CHAIN). DECODE BEFORE WRITE: a chained snapshot is
+   written only when its frame, unpacked with the very prefix a reader will use, gives back its
+   records byte for byte; a key, packed alone, only when it does too, else it is stored. THE
+   PREFIX is the previous RB_SNAPSHOT of the segment: `prev` holds the records of the last
+   snapshot this RecStream wrote, and one RecStream writes one segment (the writer's Writer and
+   codectest's transcode each begin one at a header), so no snapshot of another segment is ever
+   a prefix. THE CHAIN is bounded: after REC_CHAIN_MAX links the next snapshot is a key, as is the
+   segment's first and any whose prefix and records pass 2^27 together or whose chained pack
+   fails its check, so a reader never meets more than REC_CHAIN_MAX links. THE RUN: a snapshot
+   ends it (reset), so the level-19 context is free to pack the snapshot. */
+int reccodec_snapshot(RecStream* s, const unsigned char* raw, size_t n, unsigned* flags,
+                      const unsigned char** body, size_t* bn)
+{
+    s->reset = 1;
+    s->snapshots++;
+    *flags = RBF_STORED;
+    *body = raw;
+    *bn = n;
+    s->back.n = 0;
+    s->back.oom = 0;
+    if (s->chain && s->links < REC_CHAIN_MAX &&
+        reccodec_pack_chained(s->zrun, &s->pk, raw, n, s->prev.p, s->prev.n) &&
+        rb_grow(&s->back, n) &&
+        reccodec_unpack_chained(s->dctx, s->back.p, n, s->pk.p, s->pk.n, s->prev.p, s->prev.n) &&
+        !memcmp(s->back.p, raw, n)) {
+        *flags = RBF_CHAINED;
+        s->links++;
+    } else {
+        s->keys++;
+        s->links = 0;
+        s->back.n = 0;
+        s->back.oom = 0;
+        if (reccodec_pack_chained(s->zrun, &s->pk, raw, n, NULL, 0) && s->pk.n < n &&
+            rb_grow(&s->back, n) && reccodec_unpack(s->dctx, s->back.p, n, s->pk.p, s->pk.n) &&
+            !memcmp(s->back.p, raw, n))
+            *flags = 0;
+    }
+    if (!(*flags & RBF_STORED)) {
+        *body = s->pk.p;
+        *bn = s->pk.n;
+    }
+    s->prev.n = 0;
+    s->prev.oom = 0;
+    rb_put(&s->prev, raw, n);
+    s->chain = n && !s->prev.oom;
+    return s->chain;
 }

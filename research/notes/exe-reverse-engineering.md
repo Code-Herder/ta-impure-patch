@@ -1955,7 +1955,7 @@ index `+0xA6` holds.
 | 17 | 0 | carried with no attach piece | attach `0x48ACA7` (piece `0xFF`), detach `0x48ACC6` | |
 | 18–19, 20–21 | 29 / 71, 0 / 100 % | the move and fire states | Standing_MoveOrder `0x4030EF`, Standing_FireOrder `0x403123`, BuildingBuild `0x40296D`/`0x40298C`, GetBuilt `0x402EA3`/`0x402EC2` (the builder's), the AI `0x40887E`/`0x40888E`, `0x487CFC`, the give `0x488721` (clears), create (def `+0x241` bits 0–3) | |
 | 22–25 | 2.6 / 2.6 / 0 / 0 % | the build menu's page: 22 has one, 23–25 which (`0x41B200`) | `0x41BDE0`, `0x41BF10`, `0x41C060`, `0x41C180`; create when def `+0x22E` > 1 (`0x485CF1`) | the menu code only |
-| 26–27 | 2.5 / 1.8 % | the footprint contest | the stamp `0x47CC30`, the re-claim `0x47C790`, the clear `0x47D0E0`, YARD_OPEN `0x47DAF7`, `0x47DB40`; cleared at create | `0x47C7A0` (27), `0x47D29C` and `0x49B720` (26) |
+| 26–27 | 2.5 / 1.8 % | the footprint contest | the stamp `0x47CC30`, the re-claim `0x47C790`, the clear `0x47D0E0`, YARD_OPEN `0x47DAEC`, `0x47DB3A`; cleared at create | `0x47C7A0` (27), `0x47D29C` (26); no other reader in `.text` (DISASSEMBLED 2026-10-12: every `test`/`and`/`or` with `0x4000000` or `0x8000000` and every `shr` by `0x1A` or `0x1B`; the rest read a weapon's `+0x111` or a def's `+0x241`) |
 | 28 | 100 % | alive | create `0x485A7B`; cleared by the destructor | |
 | 29 | 4.6 % | def `+0x22F` = 0: no mover | create `0x485A9E` | picks the re-claim's walk (`0x47C7B4`) |
 | 30 | 0 | def `+0x241` bit 9 | create `0x485B03` | as the carrier's bit in the usable gates (`0x43EB4A..`) |
@@ -2798,8 +2798,9 @@ the explosions and the players phase, in this order:
    (`8B 4C 24 10 66 83 39 00 75 19`, the slot pointer's load, the compare at `0x424189` and its
    `jne 0x4241A8` at `0x42418D`)
    with a stub that asks `feat_source` (`tagpu_recorder.c`), which falls through to `0x42418F` or
-   jumps to `0x4241A8`: a multiplayer recording records the slot the recorder's tick read there,
-   and a multiplayer playing answers from it, since the host's slots follow the owners' units.
+   jumps to `0x4241A8`: a recording records the slot the recorder's tick read there, and a
+   playing whose host keeps its own slots answers from it -- a multiplayer one, whose slots follow
+   the owners' units, and a skirmish one whose stream holds its cells (format 16's `RECL_CELLS`).
    DISASSEMBLED.
    The keys: LoadFeature `0x4224B0` reads `reproduce` into the byte `+0xFC` (`0x422A13`,
    `0x422A1D`) and `reproducearea` into `+0xFD` (`0x422A27`, `0x422A31`), each with `atol`,
@@ -2979,11 +2980,15 @@ battle's playback called a writer inside another 1,200 times, the first of them 
 stored as a pointer in the image), no direct path from one reaches another, and `0x4FD660` is passed
 only by the clear, the saved game's `0x47DB20` (`0x47DB4B`, one caller `0x487698`) and `0x47CAC0`,
 which nothing calls. The set-position `0x48A9F0` calls the clear and then the stamp (`0x48AA6B`,
-`0x48AA9A`). **An aircraft's slot B follows its position by an iteration** in
-play: on a puppet host that placed the image's units through the set-position, one cell's slot B
-held the unit the recording put there an iteration later (MEASURED 2026-09-30, the battle, GameTime
-1280: the recording's unit 854, the host's 858), so the puppet host undoes the three writers' grid
-writes (`tagpu_puppet.c`, *The footprint writers*).
+`0x48AA9A`), from the cell it rounds the position to (`0x48AA00..0x48AA32`); with the same cell
+and layer it writes the position alone (`0x48AA35..0x48AA68`). **A recorded footprint cell is the
+set-position's rounding of the recorded position**: MEASURED 2026-10-12 in 3,640,526 of 3,640,526
+mobile unit-iterations of an air war and a battle, so a playing that places the image's units
+through the set-position stamps where the recording machine did. The battle's one differing slot
+B of 2026-09-30 (GameTime 1280: the recording's unit 854, the host's 858, aircraft at the map's last
+columns) is a contest decided by the puppet's type-3 rule or the stamp's edge bound, not a lead
+[INFERRED]. Which of the two maintains a playing's slots: `tagpu_puppet.c`, *The footprint
+writers*, and *The footprint contest's rule* below.
 
 **A cell's slot names a live unit.** The destructor takes the unit off the grid at `0x48682D`
 (`0x47CBD0`: the clear, then the unlink from its bucket, one caller) before it clears the alive bit,
@@ -3616,7 +3621,7 @@ fixture.
 
 ### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 15 carries a stream block's unit deltas as residuals against a prediction, the
+Recording format 18 carries a stream block's unit deltas as residuals against a prediction, the
 *unit frame* (`tagpu/ddraw/src/tagpu_reccodec.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the plan and its measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md)). Where a rule exists the prediction
@@ -3759,7 +3764,7 @@ non-zero pitch scale (none of the recordings had one); the steering term's hidde
 
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 15 carries a stream block's projectile records as the *pool frame*
+Recording format 18 carries a stream block's projectile records as the *pool frame*
 (`tagpu/ddraw/src/tagpu_reccodec.c`, THE POOL FRAME; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md#l2-the-pool-frame-measured)): the
@@ -3833,7 +3838,7 @@ largest residual column of the battle, 214 KiB of its 2.09 MiB.
 
 ### The demo recorder's record frames: the engine facts they predict from [DISASSEMBLED + MEASURED 2026-10-10]
 
-Recording format 15 makes the bodies of a stream block's cells, order lists, events and state
+Recording format 18 makes the bodies of a stream block's cells, order lists, events and state
 records from four *record frames* (`tagpu/ddraw/src/tagpu_recframe_cells.c`, `_orders.c`,
 `_events.c`, `_state.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
@@ -3861,7 +3866,11 @@ records back, so a wrong fact costs size, never data. Each address was re-read i
   sign (the `mov`s between set no flags), and below 0 the cursor becomes `[main+0x14233] ·
   [main+0x14237] − 1`, W · H − 1 (`0x4240BE..0x4240CC`), and that tick skips reproduction (`jmp
   0x4241A8` at `0x4240D2`). The state frame predicts the cursor as `last ? last − 1 : W·H − 1` and
-  the pool's three heads as last time.
+  the pool's three heads as last time; an `RK_FEATURES` the prediction gives exactly, after an
+  explicit one since the reset, is a marker
+  in the kinds section, with no state-frame bytes (format 18; MEASURED 2026-10-12 on the heavy
+  four-player hour: 107,405 of 108,090 iterations, the cursor stepping as the tick steps it and
+  the heads unchanged).
 - **The wreck pool's links** (*The pool's start*, above): the level load's loop
   `0x421F5F..0x421F7E` stores next `i + 1` at `+0x00` and prev `i − 1` at `+0x02` of every
   `0x30`-byte record, then −1 as record 0's prev (`0x421F8D`) and the last record's next
@@ -7910,6 +7919,55 @@ stock's own whenever stock's is. (LoadMap allocates `(rows·cols + 7) & ~7` buck
 `0x482CAE..0x482CBA`, so the grid is never larger than the block.) MEASURED on the
 new build: the edge ARMATLAS was stamped (`+0x82` not the off-map bucket) and both were shot down
 within 2 s.
+
+### The footprint contest's rule — `0x47C856`, `0x47C95F`, `0x47CA3B`, `0x47CDD9`, `0x47CF0F`, `0x47CFE9` [DISASSEMBLED + MEASURED 2026-10-12]
+
+**The six contests.** The re-claim `0x47C790` and the stamp `0x47CC30` contest a held cell the same
+way at six sites, one per path (structure yardmap, slot A, slot B): `cmp dword [rec],0` / `je keep`,
+then `cmp byte [rec+0x73],3` / `je take`, `rec` the incumbent's owner record `+0x96`. The newcomer
+takes the cell only when the incumbent's record is active and of type 3 (remote): the re-claim at
+`0x47C84D..0x47C856`, `0x47C956..0x47C95F`, `0x47CA32..0x47CA3B` (`je` = `74 26`), the stamp at
+`0x47CDD0..0x47CDD9`, `0x47CF06..0x47CF0F`, `0x47CFE0..0x47CFE9` (`74 25`). Either way the unit
+left without the cell gets `+0x110` bit 27 and the holder bit 26 (twelve `or` sites,
+`0x47C85E..0x47D028`). The full list of `cmp byte [reg+0x73],3` in `.text` has 29 entries; these six
+are the only ones in the footprint writers.
+
+**The marks keep the grid consistent.** The clear `0x47D0E0` clears bit 27 always (`0x47D28C`) and,
+when bit 26 is set, clears it and walks the buckets around the footprint (`0x47D29C..0x47D2C4`; the
+walk `0x47E5C0` hands every unit of an 8-cell bucket from `(x >> 3) − 1` to `((x + w) >> 3) + 1`, z
+alike, whose footprint overlaps, to `0x47ED30`, which re-claims it). The re-claim acts only on bit
+27 (`0x47C7A0..0x47C7A6`), clears it (`0x47C7AF`) and stamps again with the same contest. So a
+holder's clear gives its cells back to the losers it marked. **What the stamp writes**: a mobile
+unit whose footprint lies on the grid, filed by its layer, `+0x110 & 3` -- slot A for 1, slot B
+for 2, no cell for 0 (a carried unit) or 3 (`0x47CEBC..0x47CEC2`, `0x47CF98..0x47CF9B`); a
+footprint with x or z below 0, or x + w or z + h past the grid's columns or rows, is parked in the
+off-map bucket and writes no cell (`0x47CC57..0x47CCA3`; the right and bottom edges are this
+build's, with `fix_last_cell`'s `jg` at `0x47CC8B` and `0x47CCA3`). So every footprint cell of a
+live mobile unit the stamp files names it in its layer's slot, or, while it carries bit 27, a unit
+of the same layer -- or a structure, for a layer-1 unit, since the stamp files a structure in
+slot A whatever its layer (`0x47CD5A` → `0x47CDA5`) -- whose footprint covers the cell and which
+carries bit 26: the bit-26 unit loses that bit only in its own clear, whose walk re-claims for the
+bit-27 units, or when its record is made anew -- the create's init clears both marks (`0x485CC5`,
+`and eax,0xF3FFF7FF`) [DISASSEMBLED; MEASURED
+2026-10-12 with no exception in 776 dumps, 284 of them live, holding 2,042 stamped bit-27 units].
+Every clear ends with `0x440A70` (`0x47D2CA`).
+
+**The rule on a skirmish recording machine.** Its seats are type 1 (local human) and 2 (local AI)
+(MEASURED, the controllers of both recordings the decision rests on), so the incumbent always keeps
+a contested cell there. Every seat of a puppet level is type 3, so the same engine decides every
+contest the other way. A playing that keeps the engine's cells (a skirmish recording that holds
+them, `RECL_CELLS`) writes `90 90` over the six `je take` from its first step to its teardown, a
+takeover or a return to now, each site only while it holds the retail bytes (`tagpu_puppet.c`,
+*The contest's rule*). MEASURED 2026-10-12 on an air war, each rule's live game against its own
+playing: under the type-3 rule 71 of 2,441 impacts differed (22 only live, 49 only played, 70 at
+slot B); under the recording machine's 1 of 2,221, not at slot B (the known feature-path impact at
+`0x49B3D2`), and every cell matched at both dumps; a battle 1 of 4,867, the same class.
+
+**What reads the slots after a takeover.** The passability refresh `0x440A40(xz, wh)` calls
+`0x440830` for each active context (`0x440A50..0x440A67`), which reaches the rect passability
+`0x47DFC0` through `0x47E1F0` (`0x4408D5`; five calls `0x47E214..0x47E2B5`), and that reads a
+cell's slot A at `0x47E10C`. A takeover writes the recording's slots, yard bits and marks and then
+runs it over every context whole (`tagpu_replay.c`, `tk_cells`, `tk_live`).
 
 ### Stacked aircraft in area damage — `0x49A664`, `0x49A415`, `0x47CF98`, `0x4954ED` [DISASSEMBLED + MEASURED 2026-09-25]
 

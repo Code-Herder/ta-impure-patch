@@ -220,7 +220,9 @@ other players; a multiplayer game is rewound from its finished recording.
   nano sprays a unit's spray session predicts (its spray of 1, 2 or 4 ticks before, or that one
   moved with the unit), which every reader makes again with the same bytes: a viewer sees every
   spray at its point in its tick, only their order inside the tick differing (an owner decision
-  of 2026-10-11). These targets rest on an estimate, not a measurement
+  of 2026-10-11). From format 16 it also holds the cells' unit slots and yard bit, which the
+  playing's engine stamps itself by the recording machine's contest rule (the owner's 2026-10-12,
+  *The cells held* in [making recordings smaller](demo-recorder-size.md)). These targets rest on an estimate, not a measurement
   ([open decisions](#open-decisions-and-evidence-needed)). So far an eight-minute four-AI game
   measured about 5–7 MB per hour, and a 1,432-unit battle would reach 160–640 MB if sustained for
   an hour ([evidence](demo-recorder-state-evidence.md#4-size-estimate)). A real hour-long four-player game with AI and structures is measured before
@@ -240,7 +242,9 @@ other players; a multiplayer game is rewound from its finished recording.
   ([S1, *Measured*](demo-recorder-skirmish-slice.md#measured)); with S2a's movers, lists and
   events, 0.48 and 0.53 ms on average in two battles of 1,200 to 1,412 units, and 1.15 and 1.57 ms
   at worst
-  ([S2a](demo-recorder-skirmish-slice.md#s2a-verified-and-measured)). Its memory is not measured yet.
+  ([S2a](demo-recorder-skirmish-slice.md#s2a-verified-and-measured)). Its memory is not measured
+  as a whole yet; of it, the writer's zstd -- the level-19 context and the run's check decoder --
+  is about 16 MB, and a reader's run decoder about 1.5 MB (MEASURED, [*P1*](demo-recorder-size.md)).
 - **Require matching installed map/mod content.** Record identities and fingerprints, check them
   before playback, and identify missing or mismatched content clearly. Do not bundle a copy of
   the map and mod into every replay.
@@ -477,7 +481,12 @@ evidence, and keep remaining gaps visible.
    four-player budget is missed. Format 12 predicts the units' resource ledger and takes the heavy
    hour from 56.99 to 42.15 MB (−26 %), lossless; a lossy plan measured offline brings it to 19.32 MB
    (*L5* of the size page), and format 14's hold rows, the plan's first step, take it to 30.53 MB on
-   the writer's path. Until the reduced stream lands, a skirmish is recorded only on request.
+   the writer's path. Format 17's container -- each run of blocks one zstd frame at level 19, the
+   snapshots chained -- takes the exact hour to 29.90 MB, still lossless, at about 16 MB more of the
+   writer's memory and 1.5 MB more of a reader's (*P1* of the size page); the stack's own lossy
+   input -- the units' and order nodes' internal fields held, sprays as sessions and the cells held,
+   refreshed every 1,800 ticks -- is 20.73 MB in the level-3 container and 15.65 in format 17's
+   (*P1*). Until the reduced stream lands, a skirmish is recorded only on request.
 3. **Snapshot interval: decided** (2026-10-10). A snapshot every 1,800 ticks, 60 s of game time,
    chosen against the disk budget with the seek target relaxed for dense battles (*Playback and
    seeking*).

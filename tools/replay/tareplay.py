@@ -50,8 +50,9 @@ and a fifth where fixtures.json gives the fixture `"watch": true`:
 
 and every check fails by name: the recording's end block, `tarec check` and `tarec lossy-check`
 (L records the exact stream beside the lossy one, EXACT_LEVER); L's dumps `tarec compare
---exact`; P's, R's, Q's and W's capture dumps `tarec compare --puppet`; each round trip's line has
-residue 0 and `tarec compare-dumps rt<T>-a rt<T>-b` is EQUAL; W's steps each hold what they
+--exact`; P's, R's, Q's and W's capture dumps `tarec compare --puppet`, with --seek for the dumps
+a seek precedes (q, rt<T>c, w); each round trip's line has residue 0 and `tarec compare-dumps
+--seek rt<T>-a rt<T>-b` is EQUAL; W's steps each hold what they
 claim. Passing dumps are deleted unless --keep. A fixture with `"decline": true` launches every
 process with DECLINE_LEVER in its game folder, so its recording holds blocks the writer's codec
 declined on a schedule, each read back like any other, and the stream codec's check fails when it
@@ -2002,7 +2003,7 @@ def forks_steps(w, fx, out, results):
     wait_dumps(log, ["chain5"], running=True)
     rec, dump = copies("chain5", source, w.gamedir / "replays" / "dump-chain5.bin")
     results.later(check_or_fail, "forks: descendant across two boundaries", "compare", "--puppet",
-                  rec, dump, "--timeline", 5)
+                  "--seek", rec, dump, "--timeline", 5)
     finish_play(log, 5)
     command("export", 5, "export5")
     command("export", 5, "export5", expect=False)     # an existing export is never overwritten
@@ -2023,7 +2024,7 @@ def forks_steps(w, fx, out, results):
     wait_dumps(log, ["export5"], running=True)
     dump, = copies("export5", w.gamedir / "replays" / "dump-export5.bin")
     results.later(check_or_fail, "forks: exported chain playback", "compare", "--puppet",
-                  exported, dump, "--timeline", 5)
+                  "--seek", exported, dump, "--timeline", 5)
     w.collect(out / "export-play")
     w.stop()
     plays_checked("export-play")
@@ -2293,7 +2294,9 @@ def checks(fx):
             continue
         for n, note in names:
             d = out / proc / f"dump-{n}.bin"
-            compare(f"{proc} {n}{note}", "compare", "--puppet", rec, d, files=[d])
+            # a seek's dump: THE OCCUPANCY RULE for the cells a seek stamps (tarec.occupancy)
+            seek = ("--seek",) if proc == "Q" or n.startswith("rt") else ()
+            compare(f"{proc} {n}{note}", "compare", "--puppet", *seek, rec, d, files=[d])
     l1, lT = out / "L" / f"dump-l{Ts[0]}.bin", out / "L" / f"dump-l{Ts[-1]}.bin"
     p1, pT = out / "P" / f"dump-p{Ts[0]}.bin", out / "P" / f"dump-p{Ts[-1]}.bin"
     n1, n2 = out / "L" / "dump-ln1.bin", out / "L" / "dump-ln2.bin"
@@ -2334,12 +2337,13 @@ def checks(fx):
             res.add((f"round trip {T}: the poison check", PASS if ok else FAIL if m else UNRUN,
                      line or "no line"))
             a, b = out / "R" / f"dump-rt{T}-a.bin", out / "R" / f"dump-rt{T}-b.bin"
-            compare(f"round trip {T}: A against B", "compare-dumps", rec, a, b, files=[a, b])
+            compare(f"round trip {T}: A against B", "compare-dumps", "--seek", rec, a, b,
+                    files=[a, b])
     if ran.get("W") == "ran":
         res.add(*fx["wres"])
         d = out / "W" / f"dump-w{Ts[0]}.bin"
         compare(f"W w{Ts[0]} (the HUD's seek, in a playing Watch started)", "compare",
-                "--puppet", rec, d, files=[d])
+                "--puppet", "--seek", rec, d, files=[d])
     return res
 
 
@@ -2592,7 +2596,8 @@ def tk_checks(fx):
         lossy = res.start(tarec_run, "lossy-check", path, "--timeline", tl)
         for proc, d, how in (("K", out / "K" / f"dump-k{T + tk.get('dump', TAKEOVER_SPAN)}.bin",
                               ("--exact",)),
-                             ("F", out / "F" / f"dump-f{fx.get('tk_f', 0)}.bin", ("--puppet",))):
+                             ("F", out / "F" / f"dump-f{fx.get('tk_f', 0)}.bin",
+                              ("--puppet", "--seek"))):
             dumps.append((proc, d, d.exists() and
                           res.start(tarec_run, "compare", *how, "--timeline", tl, path, d)))
 

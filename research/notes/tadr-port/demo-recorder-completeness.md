@@ -495,7 +495,11 @@ stream against the exact one at every iteration; the exact stream is proved agai
 only where something compares them, at L's dumps and by the writer's own verification
 ([self-verification](demo-recorder-skirmish-slice.md#self-verification)), not at every iteration. K's dump
 is compared with the fork's exact stream, F's with its lossy stream, and timeline 1 is
-lossy-checked. The fixtures with a takeover launch every process with `tagpu_rec.refresh 30`
+lossy-checked; with `RECL_CELLS` lossy-check also requires every cell's shown bytes exact, its
+held slots and yard bit the stream's last or the exact ones, and the tick's input runs dropped
+only where they differ in those alone. A puppet's straight dumps take their cells' slots and yard
+bits from the exact stream; a seek's are checked by the occupancy rule (*Decisions taken*,
+2026-10-12). The fixtures with a takeover launch every process with `tagpu_rec.refresh 30`
 (*Taking over*: a takeover starts at a refresh). **A hold row is a loosening**, the owner's
 decision like an exclusion: it names its readers on a playback host and its evidence, and a reader
 found there that shows the byte removes the row. The table's rows, the owner's (2026-10-11), hold
@@ -618,7 +622,12 @@ takeover, a return to now or a fork; **W3**, exact, the blocks the reader decode
 their bytes in the file and unpacked -- are the file's own from there to the target
 (`tarec.seek_blocks`): the snapshot, after its segment's first stream block when the reader did
 not hold that segment's base, then in each segment of the chain every stream block holding an
-iteration it read, each once. Q's and F's seeks run in a fresh process after its playing's first
+iteration it read, each once. A chained snapshot counts every snapshot of its chain from the key,
+each read and unpacked through `block_body` (`snapshot_chain`). A sectioned block counts as one
+block whatever its run: its header's packed and raw, the chunk and the container it unpacks to,
+not the run's window; a seek starts only where a run does (after a snapshot, at a segment's first
+iteration), so it decodes every run it reads from its `RBF_FRAME_RESET` block, and `seek_blocks`
+refuses a file where it would join one in its middle, as the reader does. Q's and F's seeks run in a fresh process after its playing's first
 step (a seek asked for earlier waits for it), which holds the root's base, so for them the file
 says whether a base is read: only for a snapshot in a later segment of the chain. No check reads a
 time. The game thread's CPU time is reported
@@ -633,8 +642,9 @@ that made the reader or the seek's visitor slower per record, with the same bloc
 gate. And it counts only the blocks `recr_seek` decodes through `block_body`, so two reads stay
 outside the count: the segment scan `segs_scan` at the top of every `recr_seek`, which reads the
 header and timeline blocks through `body_get` and grows with the file and its forks, and a
-multiplayer seek's contribution blocks, which `mp_read` decodes through `body_get` too. The seek and takeover times of the [state design](demo-recorder.md) (*Playback and
-seeking*) are targets the gate does not check.
+multiplayer seek's contribution blocks, which `mp_read` decodes through `body_get` too. The seek
+and takeover times of the [state design](demo-recorder.md) (*Playback and seeking*) are targets
+the gate does not check.
 
 **The test render profile.** Every game the harness launches writes `style=custom`, `assets=0`,
 `light=0`, `shadowres=512` and `ss=1` into the worker's `impure.cfg`, and a 20 fps present cap
@@ -985,6 +995,7 @@ region with whether its fixtures reach it.
 | 2026-10-11 | **A takeover's AIs read the recording's contacts at T** (O14 for takeovers): when P is the recording's viewed record, the takeover restores `+0x110` bits 8–10 from the recording after its radar pass, as the seek does, so the fork's first acquisition scans read the contacts the recording held at T, as the recording's AIs read them until its next pass; a multiplayer recording's takeover keeps its own pass's bits (below). Rejected: masking bits 8–10 in `fork_view` for every fork, a loosening of D2 (d) that would leave the fork's AIs reading a picture the parent never held; and steering the harness off the ticks after a scripted step, which hides the gap. |
 | 2026-10-12 | **A5 and the in-game create lag are fixed by construction, not accepted** (the owner, after the level-start lag was traced to the same one-slice COB lag): a recorded slice marker, in order among the step's creates and starts, and the replay giving each marked unit its slice there, a format bump, in a coming landing. This supersedes A5's acceptance in the 2026-10-01 row, which stays as history. |
 | 2026-10-12 | **A failure only under load is a bug in the check** (the owner's rule): a peek the running game has not answered is no progress, so `STALL_S` is the one bound on a running level. **Approved by the owner (2026-10-12):** the seek's W3 is an exact count of the blocks the reader decoded against the file's own, with the game thread's CPU time reported only and the gap that leaves accepted (*A seek's work, not its time*); and bits 1 and 2 of the pause word `main+0x38A51`, the pacing gate's lag flag and its live speed below the chosen one, are left (`replay-globals.tsv`, `pacingbits`, a `leave` row: bit 2 has no reader, bit 1 only the corner icon and the turbo). |
+| 2026-10-12 | **A skirmish recording holds its cells' unit slots and yard bit, and its playing's engine stamps them by the recording machine's contest rule** (OD4, option a; format 16's `RECL_CELLS`, *The cells held* in [making recordings smaller](demo-recorder-size.md)). On such a playing the grid and its contest marks, `+0x110` bits 26 and 27, have one writer, the three footprint writers: the playing writes neither, and the six contest `je`s are `90 90` from its first step to its end, so a contested cell keeps its incumbent as on the recording machine. A takeover writes the recording's slots, yard bits and marks at its refresh and refreshes the passability. **The loosening accepted with it**: after a seek -- the Q lane, a round trip's B dump, the dumps after one (`rt<T>c`), W, F and the forks lanes -- the slots, yard bits and marks are checked by the occupancy rule (`tarec.occupancy`, `--seek`): every footprint cell of a live mobile unit the stamp files (layer 1 or 2, the footprint on the grid by its bound with `fix_last_cell`) names it in its layer's slot, or, while this one carries the loser's mark, bit 27, names there a live unit of the same layer -- or a structure, which the stamp files in slot A whatever its layer, for a layer-1 unit -- whose footprint holds the cell and which carries the holder's mark, bit 26; every named slot is a live unit whose footprint holds the cell: a mobile unit of that slot's layer, or a structure in slot A (which cells of its footprint a structure holds follows its yardmap under the current mask, which a dump does not carry, so that is not checked); every yard bit lies in a live structure's footprint. A straight playing's slots are compared byte for byte with the exact stream's (`RB_EXACT`), or at a refresh. Nothing else is loosened. The residual: where the playing orders two contesting footprint calls otherwise than the game (deaths, creates and placements in slot order), the holder can differ. **Not decided**: the marks on a multiplayer playing, which still writes them from the recording beside the engine's slots, and its contests, which still follow the type-3 rule. |
 
 The owner approved one additional UI-only count exception on 2026-10-05: the native
 immediate-command click (`0x41A0F1` → `0x47F1A0("immediateorders", 0)`, return `0x41A0F6`),
