@@ -486,7 +486,9 @@ evidence, and keep remaining gaps visible.
    writer's memory and 1.5 MB more of a reader's (*P1* of the size page); the stack's own lossy
    input -- the units' and order nodes' internal fields held, sprays as sessions and the cells held,
    refreshed every 1,800 ticks -- is 20.73 MB in the level-3 container and 15.65 in format 17's
-   (*P1*). Until the reduced stream lands, a skirmish is recorded only on request.
+   (*P1*); with the cells held the heavy hour is 16.16 MB in format 17, 15.81 in format 18
+   (*P6*) and 14.06 in format 19, whose unit frame predicts more from per-type engine constants
+   (*P4*). Until the reduced stream lands, a skirmish is recorded only on request.
 3. **Snapshot interval: decided** (2026-10-10). A snapshot every 1,800 ticks, 60 s of game time,
    chosen against the disk budget with the seek target relaxed for dense battles (*Playback and
    seeking*).

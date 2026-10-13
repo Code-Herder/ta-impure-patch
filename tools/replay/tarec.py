@@ -94,7 +94,7 @@ block, whose payload is a chunk of its run's frame, and a chained snapshot (RBF_
 frame takes the segment's snapshot before it as its prefix (tagpu_recfmt.h, THE RUN AND THE
 CHAIN). A stream block may be a
 sectioned container (RBF_SECTIONS) that decodes to exactly the records it was made from: its unit
-deltas are made by the unit frame from the header's RT_CODEC, RT_PHYSICS and RT_AIR, its
+deltas are made by the unit frame from the header's RT_CODEC, RT_PHYSICS, RT_AIR and RT_TYPES, its
 projectile records by the pool frame from the pool of RT_PROJECTILES records, and the bodies of
 its cells, orders, events and state records by the four record frames. The walk over
 the blocks, their unpacking and that decoding are tools/replay/reccodec.py's (iter_blocks), which
@@ -145,7 +145,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 18                           # kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
+REC_FORMAT = 19                           # the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -252,6 +252,7 @@ RT_CODEC, RT_PHYSICS, RT_AIR = 29, 30, 31   # the unit frame's lanes, physics an
 RT_MP_END = 43
 RT_CODEC_DECLINED, RT_CODEC_MISMATCH = 44, 45   # the writer's stream blocks written as records
 RT_HOLD = 46                # what a skirmish stream holds between refreshes, and how often
+RT_TYPES = 47               # the unit frame's per-type constants
 REC_HOLD_BYTES = 8 + 32 + REC_UNIT_IMAGE + REC_ORDER_IMAGE
 REC_REFRESH_TICKS, REC_REFRESH_MIN = 300, 30
 RECL_CELLS, RECL_SPRAYS = 1, 2
@@ -373,7 +374,7 @@ def header(payload):
         elif tag == RT_WALLCLOCK: h["wallclock"] = struct.unpack_from("<Q", b)[0]
         elif tag == RT_SLOTS: h["slots"] = u32
         elif tag == RT_UNITS_EACH: h["units_each"] = u32
-        elif tag == RT_UNITDEFS: h["unitdefs"] = struct.unpack_from("<II", b)
+        elif tag == RT_UNITDEFS and len(b) == 8: h["unitdefs"] = struct.unpack_from("<II", b)
         elif tag == RT_PLAYER:
             if len(b) < 16+0xB9 or b[0] >= 10 or any(p["index"] == b[0] for p in h["players"]):
                 raise Unreadable("malformed or duplicate seat in the header")
@@ -431,7 +432,7 @@ def header(payload):
             if "hold" in h:
                 raise Unreadable(f"header tag {tag} twice")
             h["hold"] = hold_parse(b)
-        elif tag in (RT_CODEC, RT_PHYSICS, RT_AIR):
+        elif tag in (RT_CODEC, RT_PHYSICS, RT_AIR, RT_TYPES):
             # kept whole for reccodec.params, which bounds them (the block walk already has)
             if tag in h.setdefault("codec", {}):
                 raise Unreadable(f"header tag {tag} twice")
@@ -1678,12 +1679,13 @@ def codec_text(h):
         return "none (no RT_CODEC and RT_PHYSICS): every stream block is records"
     gw, gh, wrecks = (h.get("features") or (0, 0, 0))[:3]
     prm = _codec().params(list(c.items()), h.get("slots") or 0, h.get("projectiles") or 0, gw, gh,
-                          wrecks)
+                          wrecks, (h.get("unitdefs") or (0, 0))[0])
     if not prm.usable:
         return (f"off: the grid of {gw} x {gh} cells or the wreck pool of {wrecks} records is past "
                 f"the codec's bounds, so every stream block is records")
     return (f"{len(prm.lanes)} lanes, gravity {prm.gravity}, sea level {prm.sea}, sight rule "
-            f"{prm.sight}, {len(prm.air)} aircraft types")
+            f"{prm.sight}, bucket columns {prm.bcols}, {len(prm.air)} aircraft types, "
+            f"{len(prm.types)} unit types")
 
 
 def cmd_info(path):

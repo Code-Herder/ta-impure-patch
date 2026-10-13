@@ -7,7 +7,7 @@ frames, in numpy and numba.
         ...
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h (RBF_SECTIONS, RecSecHead, RCS_*, RT_CODEC, RT_PHYSICS,
-RT_AIR) and tagpu/ddraw/inc/tagpu_recframe.h, and the codec tagpu/ddraw/src/tagpu_reccodec.c with
+RT_AIR, RT_TYPES) and tagpu/ddraw/inc/tagpu_recframe.h, and the codec tagpu/ddraw/src/tagpu_reccodec.c with
 its record frames tagpu/ddraw/src/tagpu_recframe_*.c, which the writer and the DLL's reader run.
 This file is an INDEPENDENT implementation of its decoder, not a port to be kept in step line by
 line: tagpu/ddraw/tests/codectest.py decodes every block of a recording with both and requires the
@@ -81,15 +81,17 @@ NROLES = len(ROLES)
 
 Unreadable = tarec.Unreadable
 
-REC_FORMAT = 18
+REC_FORMAT = 19
 RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH, RBF_CHAINED = 1, 2, 4, 8, 16
 RUN_WINDOW_LOG, CHAIN_MAX = 20, 9          # REC_RUN_WINDOW_LOG, REC_CHAIN_MAX
-RT_CODEC, RT_PHYSICS, RT_AIR = 29, 30, 31
+RT_CODEC, RT_PHYSICS, RT_AIR, RT_TYPES = 29, 30, 31, 47
+CODEC_TAGS = (RT_CODEC, RT_PHYSICS, RT_AIR, RT_TYPES)    # the header's codec entries
 RT_CODEC_DECLINED, RT_CODEC_MISMATCH = 44, 45
 (RCS_KINDS, RCS_UNITS, RCS_PROJ, RCS_CELLS, RCS_ORDERS, RCS_EVENTS, RCS_OTHER, RCS_STATE) = range(8)
 RCS_COUNT = 8
 SEC_HEAD = 8 + 4 * RCS_COUNT               # RecSecHead: 40 bytes
 LANES_MAX, COUNTS_MAX, AIR_MAX, TICKS_MAX = 128, 8, 1024, 256
+TYPES_MAX, SLOPES, TYPES_HEAD = 2048, 11, 16    # RECC_TYPES_MAX, REC_SLOPES, REC_TYPES_HEAD
 KINDS_MAX, KINDS_MRU = 65536, 16           # RECC_KINDS_MAX, RECC_KINDS_MRU
 KM_TICKPAIR, KM_FEATURES = 0, 0xFFFF       # the kinds' markers (tagpu_recfmt.h, RCS_KINDS)
 RUN_DERIVED, RUN_IMPLICIT = 1, 2           # a run's count is its group's; a marker's record
@@ -110,6 +112,7 @@ _POOL_BODY_MAX = tarec.REC_PROJ_DELTA_HEAD + PIMG  # a delta of all 27 dwords: 1
 SHOT = 36                                  # an RK_EV_SHOT's body
 SHOTS_MAX, WEAPON_IDS = 4096, 4096         # RECC_SHOTS_MAX, RECC_WEAPON_IDS
 M32 = 0xFFFFFFFF
+ID_OFFMAP = 0xFFFFFFFD                     # REC_ID_OFFMAP: the sort's off-map bucket in an image
 
 SIN = np.array([round(8192 * math.sin(2 * math.pi * i / 512)) for i in range(512)], np.int64)
 ONE = 1 << 31
@@ -120,7 +123,7 @@ ATC = [74051160, -79536431, 85899346, -93368854, 102261126, -113025455, 12632256
        165191050, -195225786, 238609294, -306783378, 429496730, -715827883, 2147483648]
 
 # the steps' lane groups, by role (tagpu_reccodec.c frame_slot)
-_S1 = {ROLE[r] for r in ("PLAIN", "TURN", "FW", "FH", "LAYER", "TYPE", "OWNER")}
+_S1 = {ROLE[r] for r in ("PLAIN", "FW", "FH", "LAYER", "TYPE", "OWNER", "BUILD_LEFT")}
 _S2 = {ROLE[r] for r in ("VY", "SPEED", "AX", "AY", "AZ", "BANK", "ROLL", "Y", "SZ")}
 
 
@@ -146,8 +149,10 @@ _SECTION_OF = np.array([section_of(k) for k in range(1 << 16)], np.int64)
 
 # ---- the header's entries ---------------------------------------------------------------------
 
-Params = namedtuple("Params", "nslots nproj gw gh nwrecks lanes gravity sea sight air usable")
+Params = namedtuple("Params", "nslots nproj gw gh nwrecks lanes gravity sea sight air usable bcols "
+                               "slope types ndefs")
 AirRow = namedtuple("AirRow", "type sight_h maxv brake acc bank pitch")
+TypeRow = namedtuple("TypeRow", "type sight_h maxhp maxv brake acc")
 
 
 def sizes_ok(nslots, nproj, gw, gh, nwrecks):
@@ -156,15 +161,15 @@ def sizes_ok(nslots, nproj, gw, gh, nwrecks):
             1 <= gh <= 0xFFFF and gw * gh <= GRID_MAX and 1 <= nwrecks <= WRECKS_MAX)
 
 
-def params(entries, nslots, nproj, gw, gh, nwrecks):
+def params(entries, nslots, nproj, gw, gh, nwrecks, ndefs=0):
     """A segment's codec constants from its header's (tag, body) entries, RT_SLOTS,
-    RT_PROJECTILES and RT_FEATURES' grid and wreck pool; Unreadable when one is malformed, past a
-    bound or given twice. `usable`: RT_CODEC and RT_PHYSICS are both there and the grid and the
-    wreck pool are within the codec's bounds -- past them, the codec is off, not the header
-    unreadable."""
+    RT_PROJECTILES, RT_FEATURES' grid and wreck pool and RT_UNITDEFS' count (ndefs); Unreadable
+    when one is malformed, past a bound or given twice. `usable`: RT_CODEC and RT_PHYSICS are both
+    there and the grid and the wreck pool are within the codec's bounds -- past them, the codec is
+    off, not the header unreadable."""
     got = {}
     for tag, body in entries:
-        if tag in (RT_CODEC, RT_PHYSICS, RT_AIR):
+        if tag in CODEC_TAGS:
             if tag in got:
                 raise Unreadable(f"header tag {tag} twice")
             got[tag] = bytes(body)
@@ -172,7 +177,7 @@ def params(entries, nslots, nproj, gw, gh, nwrecks):
         raise Unreadable(f"RT_SLOTS {nslots} is outside 2..65535")
     if not 1 <= nproj <= 0xFFFF:
         raise Unreadable(f"RT_PROJECTILES {nproj} is outside 1..65535")
-    lanes, gravity, sea, sight, air = [], 0, 0, 0, []
+    lanes, gravity, sea, sight, air, bcols, slope, types = [], 0, 0, 0, [], 0, bytes(SLOPES), []
     b = got.get(RT_CODEC)
     if b is not None:
         if len(b) < 4:
@@ -214,9 +219,9 @@ def params(entries, nslots, nproj, gw, gh, nwrecks):
             raise Unreadable(f"RT_CODEC has no row for {', '.join(missing)}")
     b = got.get(RT_PHYSICS)
     if b is not None:
-        if len(b) != 8:
-            raise Unreadable(f"RT_PHYSICS is {len(b)} bytes, not 8")
-        gravity, sea, sight, pad = struct.unpack("<iBBH", b)
+        if len(b) != 12:
+            raise Unreadable(f"RT_PHYSICS is {len(b)} bytes, not 12")
+        gravity, sea, sight, pad, bcols = struct.unpack("<iBBHI", b)
         if sight > 1:
             raise Unreadable(f"RT_PHYSICS's sight rule is {sight}")
         if pad:
@@ -239,8 +244,31 @@ def params(entries, nslots, nproj, gw, gh, nwrecks):
             if air and row.type <= air[-1].type:
                 raise Unreadable(f"RT_AIR row {i}'s type {row.type} does not follow {air[-1].type}")
             air.append(row)
+    b = got.get(RT_TYPES)
+    if b is not None:
+        # rows and types below RT_UNITDEFS' count (tagpu_reccodec.c reccodec_params)
+        if len(b) < TYPES_HEAD:
+            raise Unreadable(f"RT_TYPES is {len(b)} bytes, under its {TYPES_HEAD}-byte head")
+        n = struct.unpack_from("<I", b)[0]
+        if b[4 + SLOPES]:
+            raise Unreadable("RT_TYPES' pad is not zero")
+        if n > TYPES_MAX or n > ndefs:
+            raise Unreadable(f"RT_TYPES has {n} rows, past {TYPES_MAX} or RT_UNITDEFS' {ndefs}")
+        if len(b) != TYPES_HEAD + 20 * n:
+            raise Unreadable(f"RT_TYPES is {len(b)} bytes, not {TYPES_HEAD + 20 * n}")
+        slope = bytes(b[4:4 + SLOPES])
+        for i in range(n):
+            row = TypeRow(*struct.unpack_from("<HBxIiii", b, TYPES_HEAD + 20 * i))
+            if b[TYPES_HEAD + 20 * i + 3]:
+                raise Unreadable(f"RT_TYPES row {i}'s pad is not zero")
+            if row.type >= ndefs:
+                raise Unreadable(f"RT_TYPES row {i}'s type {row.type} is past RT_UNITDEFS' {ndefs}")
+            if types and row.type <= types[-1].type:
+                raise Unreadable(f"RT_TYPES row {i}'s type {row.type} does not follow {types[-1].type}")
+            types.append(row)
     usable = RT_CODEC in got and RT_PHYSICS in got and sizes_ok(nslots, nproj, gw, gh, nwrecks)
-    return Params(nslots, nproj, gw, gh, nwrecks, lanes, gravity, sea, sight, air, usable)
+    return Params(nslots, nproj, gw, gh, nwrecks, lanes, gravity, sea, sight, air, usable, bcols,
+                  slope, types, ndefs)
 
 
 # ---- the kernels -------------------------------------------------------------------------------
@@ -652,14 +680,18 @@ def _group_fill(rk, rc, rf, q0, q1, g, total, it, err):
 
 # the lanes the rules name, by position in Frame.tab's J (Frame._derive)
 _RULED = ("HEADING", "TURN", "SPEED", "VX", "VY", "VZ", "AX", "AY", "AZ", "X", "Y", "Z", "BANK",
-          "ROLL", "FX", "FZ", "FW", "FH", "SX", "SZ", "CLAIM", "STAMP", "LAYER", "TYPE")
+          "ROLL", "FX", "FZ", "FW", "FH", "SX", "SZ", "CLAIM", "STAMP", "LAYER", "TYPE", "HP",
+          "BUILD_LEFT", "HPPCT", "HPPCT30", "BUCKET")
 (R_HEADING, R_TURN, R_SPEED, R_VX, R_VY, R_VZ, R_AX, R_AY, R_AZ, R_X, R_Y, R_Z, R_BANK, R_ROLL,
- R_FX, R_FZ, R_FW, R_FH, R_SX, R_SZ, R_CLAIM, R_STAMP, R_LAYER, R_TYPE) = range(len(_RULED))
+ R_FX, R_FZ, R_FW, R_FH, R_SX, R_SZ, R_CLAIM, R_STAMP, R_LAYER, R_TYPE, R_HP, R_BUILD_LEFT,
+ R_HPPCT, R_HPPCT30, R_BUCKET) = range(len(_RULED))
 _L3 = np.array([R_HEADING, R_LAYER, R_VX, R_VY, R_VZ], np.int64)   # L3's five, in its order
 _LEDGER = ("OWNER", "EREQ", "EGRANT", "MREQ", "MGRANT")      # Frame.tab's JL, in this order
 OWNERS = 16                             # RECC_OWNERS: the owner IDs the ledger keeps a settle for
 # an aircraft's row of Frame.tab's `air`: RT_AIR's constants, clamped where they are used
 A_MAXV, A_BRAKE, A_ACC, A_BANK, A_PITCH, A_SIGHT = range(6)
+# a type's row of Frame.tab's `types`: RT_TYPES' constants
+T_SIGHT, T_MAXHP, T_MAXV, T_BRAKE, T_ACC = range(5)
 
 
 @_jit
@@ -842,19 +874,104 @@ def _air_steps(x, row, age, layer, layer1, q):
 
 
 @_jit
+def ex_fm(f, m):
+    """trunc(f * m) for the single whose bits are f, exactly; -1 for an f outside [0, 1]
+    (tagpu_reccodec.c ex_fm)."""
+    if f > 0x3F800000:
+        return -1
+    e, mant = (f >> 23) & 0xFF, f & 0x7FFFFF
+    if e:
+        mant |= 0x800000
+    else:
+        e = 1
+    sh = 150 - e
+    return 0 if sh >= 64 else (mant * m) >> sh
+
+
+@_jit
+def hp_pct(hp, m):
+    """The unit tick's HP percentage: movsx(hp) * 100 in 32 bits, an unsigned divide by m, then
+    clamped as a signed value to 0..100 (tagpu_reccodec.c hp_pct)."""
+    q = ((s16(hp) * 100) & M32) // m
+    return 0 if q & 0x80000000 else min(q, 100)
+
+
+@_jit
+def _hp_steps(x, m, gt):
+    """The hit points while built and their percentages every 30 ticks (tagpu_reccodec.c
+    hp_steps): the percentages' winners the rule, always."""
+    L1, U, W, J = x[0], x[3], x[4], x[6]
+    fo, fn, hp = L1[J[R_BUILD_LEFT]], U[J[R_BUILD_LEFT]], L1[J[R_HP]]
+    if fo != fn:
+        a, b = ex_fm(fo, m), ex_fm(fn, m)
+        if a >= 0 and b >= 0:
+            v = s32(s16(hp) + a - b)
+            if fn < fo:
+                if (v & M32) >= m:
+                    v = m
+            elif v <= 0:
+                v = 0
+            hp = v
+    _rule(x, R_HP, hp)
+    phase = ((gt - 1) & M32) % 30 == 0
+    j6, j7 = J[R_HPPCT], J[R_HPPCT30]
+    W[j7] = 0
+    _rule(x, R_HPPCT30, L1[J[R_HPPCT]] if phase else L1[j7])
+    W[j7] = 0
+    W[j6] = 0
+    _rule(x, R_HPPCT, hp_pct(U[J[R_HP]], m) if phase else L1[j6])
+    W[j6] = 0
+
+
+@_jit
+def _ground_speed(x, row, slope):
+    """A ground unit's speed: the step by the acceleration and by the brake rate, floored at 0 and
+    capped by the slope's share of maxv, as candidates 0 and 3 (tagpu_reccodec.c ground_speed)."""
+    L1, J = x[0], x[6]
+    sl = clip(s16(L1[J[R_ROLL]]) >> 11, -5, 5)
+    v = s32(slope[sl + 5] * row[T_MAXV])
+    mv = v // 100 if v >= 0 else -((-v) // 100)        # C's division, toward zero
+    l1 = s32(L1[J[R_SPEED]])
+    if mv == 0:
+        a = b = l1
+    else:
+        a = min(max(s32(l1 + row[T_ACC]), 0), mv)      # floored, then capped: mv < 0 caps
+        b = min(max(s32(l1 - row[T_BRAKE]), 0), mv)
+    _rule(x, R_SPEED, a, b, True)
+
+
+@_jit
 def _predict(x, tab, age, gt):
     """One slot's lanes into U, in the order where each rule reads only lanes it follows
     (tagpu_reccodec.c frame_slot): the generic lanes, the heading, the velocity (an aircraft's with
     its speed, acceleration and bank), the position, the cells, the stamps and the countdowns."""
-    L1, U, J = x[0], x[3], x[6]
+    L1, L2, U, W, J = x[0], x[1], x[3], x[4], x[6]
     s1, s2, counts, airix, air, consts = tab[5], tab[6], tab[7], tab[8], tab[9], tab[10]
-    q, sea, sight = consts[0], consts[1], consts[2] != 0
+    typix, types, slope = tab[12], tab[13], tab[14]
+    q, sea, sight, bcols, gw, gh = consts[0], consts[1], consts[2] != 0, consts[3], consts[4], consts[5]
     for j in s1:
         _step(x, j, 0, 0, False, False)
     a = airix[U[J[R_TYPE]]]
+    ti = typix[U[J[R_TYPE]]]
+    ground = a < 0 and ti >= 0
     if a < 0:
         for j in s2:
+            if ground and (j == J[R_SPEED] or j == J[R_SZ]):
+                continue
             _step(x, j, 0, 0, False, False)
+    if ground:
+        _ground_speed(x, types[ti], slope)
+    t1, t2 = L1[J[R_TURN]], L2[J[R_TURN]]
+    d = s16(t1 - t2)
+    W[J[R_TURN]] = 0
+    _rule(x, R_TURN, t2 if -1 <= d <= 1 else t1)
+    W[J[R_TURN]] = 0
+    if ti >= 0 and types[ti, T_MAXHP] != 0:
+        _hp_steps(x, types[ti, T_MAXHP], gt)
+    else:
+        _rule(x, R_HP, 0, 0, False, False)
+        _rule(x, R_HPPCT30, 0, 0, False, False)
+        _rule(x, R_HPPCT, 0, 0, False, False)
     uh = _rule(x, R_HEADING, L1[J[R_HEADING]] + U[J[R_TURN]])
     layer, layer1 = U[J[R_LAYER]] & 3, L1[J[R_LAYER]] & 3
     if a >= 0:
@@ -870,15 +987,21 @@ def _predict(x, tab, age, gt):
     ufx = _rule(x, R_FX, (s32(ux) - s16(U[J[R_FW]]) * 524288 + 0x80000) >> 20)
     ufz = _rule(x, R_FZ, (s32(uz) - s16(U[J[R_FH]]) * 524288 + 0x80000) >> 20)
     _rule(x, R_SX, s32(ux) >> 21, 0, False, sight)
+    fx, fz = s16(ufx), s16(ufz)
+    moved = fx != s16(L1[J[R_FX]]) or fz != s16(L1[J[R_FZ]]) or layer != layer1
+    inside = fx >= 0 and fz >= 0 and fx + s16(U[J[R_FW]]) <= gw and fz + s16(U[J[R_FH]]) <= gh
+    bk = ((s32(uz) >> 23) * bcols + (s32(ux) >> 23) + 1) & M32
+    _rule(x, R_BUCKET, L1[J[R_BUCKET]] if not moved else bk if inside else ID_OFFMAP, 0, False,
+          bcols != 0)
     moved = ufx != L1[J[R_FX]] or ufz != L1[J[R_FZ]] or layer != layer1
     _rule(x, R_CLAIM, (gt - 1) % (1 << 32) if moved else L1[J[R_CLAIM]])
     moved = U[J[R_VX]] != 0 or U[J[R_VY]] != 0 or U[J[R_VZ]] != 0 or layer != layer1
     _rule(x, R_STAMP, (gt - 1) % (1 << 32) if moved else L1[J[R_STAMP]])
     for j in counts:
         _step(x, j, max(L1[j] - 1, 0), 0, False, True)
-    if a >= 0:
+    if a >= 0 or ground:
         y = max(s32(U[J[R_Y]]), (sea + 1) * 65536)
-        hgt = clip(s16(y >> 16) + air[a, A_SIGHT], 0, 255)
+        hgt = clip(s16(y >> 16) + (air[a, A_SIGHT] if a >= 0 else types[ti, T_SIGHT]), 0, 255)
         _rule(x, R_SZ, ((s32(uz) >> 16) - (hgt >> 1)) >> 5, 0, False, sight)
 
 
@@ -943,7 +1066,11 @@ def _advance(s, gt, tab, st, Rr, U, dirty, dbuf, at):
                 v += 4
     still = U[J[R_VX]] == 0 and U[J[R_VY]] == 0 and U[J[R_VZ]] == 0
     ledger = U[JL[1]] != 0 or U[JL[2]] != 0 or U[JL[3]] != 0 or U[JL[4]] != 0
-    rest[s] = resting and n == 0 and (still or U[J[R_STAMP]] + 1 < gt) and not ledger
+    # the 30-tick rules' fixed point: +0xF7 == +0xF6 == the HP's percentage
+    ti = tab[12][U[J[R_TYPE]]]
+    m = tab[13][ti, T_MAXHP] if ti >= 0 else 0
+    pct = m == 0 or (U[J[R_HPPCT30]] == U[J[R_HPPCT]] and hp_pct(U[J[R_HP]], m) == U[J[R_HPPCT]])
+    rest[s] = resting and n == 0 and (still or U[J[R_STAMP]] + 1 < gt) and not ledger and pct
     age[s] = min(a + 1, 3)
     return DELTA_HEAD + 4 * n if n else 0
 
@@ -2839,7 +2966,8 @@ class Frame:
         """The segment's lane table and constants as the kernels take them, `tab`: off, width,
         the lane masks (2^(8 width) - 1), J (the lane of each _RULED role), the default winners,
         S1's and S2's lanes, the COUNT lanes, the aircraft index by type, the aircraft rows,
-        (q, sea, sight) and JL (the lane of each _LEDGER role)."""
+        (q, sea, sight, the bucket columns, the grid's columns and rows), JL (the lane of each
+        _LEDGER role), the RT_TYPES index by type, its rows and the slope table."""
         p = self.prm
         self.nl = len(p.lanes)
         if not self.nl:
@@ -2861,10 +2989,17 @@ class Frame:
         air = np.array([(cl(a.maxv, 1, big), cl(a.brake, 0, big), cl(a.acc, 0, big),
                          cl(a.bank, -big, big), cl(a.pitch, -big, big), a.sight_h)
                         for a in p.air] or [(1, 0, 0, 0, 0, 0)], np.int64)
+        typix = np.full(65536, -1, np.int64)
+        for i, t in enumerate(p.types):
+            typix[t.type] = i
+        types = np.array([(t.sight_h, t.maxhp, t.maxv, t.brake, t.acc) for t in p.types]
+                         or [(0, 0, 0, 0, 0)], np.int64)
+        slope = np.array([v - 256 if v >= 128 else v for v in p.slope], np.int64)   # signed bytes
         self.tab = (off, width, (np.int64(1) << (8 * width)) - 1, J, defwin,
                     lanes_of(lambda r: r in _S1), lanes_of(lambda r: r in _S2),
                     lanes_of(lambda r: r == ROLE["COUNT"]), airix, air,
-                    np.array([q, p.sea, p.sight], np.int64), JL)
+                    np.array([q, p.sea, p.sight, p.bcols, p.gw, p.gh], np.int64), JL, typix, types,
+                    slope)
         self.l3_lanes = J[_L3]
 
     def restart(self, prm=None):
@@ -3302,6 +3437,12 @@ def header_features(es):
     return f[0] if f else (0, 0, 0)
 
 
+def header_defs(es):
+    """RT_UNITDEFS' count, 0 when the header has none; the last one counts, as in the C readers."""
+    n = [struct.unpack_from("<I", b)[0] for t, b in es if t == tarec.RT_UNITDEFS and len(b) == 8]
+    return n[-1] if n else 0
+
+
 def header_proj(es):
     """The projectile pool's records a header's entries name (RT_PROJECTILES), 0 when none."""
     n = [struct.unpack("<I", b)[0] for t, b in es if t == tarec.RT_PROJECTILES and len(b) == 4]
@@ -3386,13 +3527,13 @@ def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None, sta
                 if root_slots is not None and nslots != root_slots:
                     raise Unreadable(f"a segment of {nslots} slots after {root_slots}")
                 root_slots = nslots
-                # parsed only when one of the three is there, as tagpu_recreader.c's header_parse
+                # parsed only when one of the four is there, as tagpu_recreader.c's header_parse
                 # does: a dump's header carries none of them and may name no slots
-                if any(t in (RT_CODEC, RT_PHYSICS, RT_AIR) for t, _ in es):
-                    prm = params(es, nslots, header_proj(es), *header_features(es))
+                if any(t in CODEC_TAGS for t, _ in es):
+                    prm = params(es, nslots, header_proj(es), *header_features(es), header_defs(es))
                 else:
                     prm = Params(nslots, header_proj(es), *header_features(es), [], 0, 0, 0, [],
-                                 False)
+                                 False, 0, bytes(SLOPES), [], header_defs(es))
                 frame = Frame(prm, rest=rest)
                 run, prev, links = Run(), None, 0
             elif kind == tarec.RB_STREAM and (payload is not None or (decode and flags & RBF_SECTIONS)):

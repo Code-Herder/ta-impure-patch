@@ -118,7 +118,7 @@
 #define IMG     REC_UNIT_IMAGE
 #define NDW     REC_UNIT_DWORDS
 #define L3B     16                /* L3: heading u16, layer u8, 0, vx, vy, vz                       */
-#define NOAIR   0xFFFFu
+#define NOROW   0xFFFFu
 #define MB_MAX  ((RECC_LANES_MAX + 7) / 8)
 
 #define REFUSE RECF_REFUSE
@@ -263,7 +263,7 @@ static int64_t cosmul(uint32_t h, int64_t e)
 }
 
 /* an RT_AIR row's constants, clamped where they are used: they are data */
-typedef struct AirK { int64_t maxv, brake, acc, bank, pitch, sight_h; } AirK;
+typedef struct AirK { int64_t maxv, brake, acc, bank, pitch; } AirK;
 
 static void air_k(const RecAirRow* r, AirK* a)
 {
@@ -272,7 +272,6 @@ static void air_k(const RecAirRow* r, AirK* a)
     a->acc = r->acc < 0 ? 0 : r->acc > (1 << 24) ? (1 << 24) : r->acc;
     a->bank = clip(r->bank, 1 << 24);
     a->pitch = clip(r->pitch, 1 << 24);
-    a->sight_h = r->sight_h;
 }
 
 /* The air step's known part, its damping and drift limit (0x43D2F1..0x43D47D; acc def +0x19E and
@@ -421,7 +420,8 @@ struct RecCodec {
     unsigned ns1, ns2, ncnt;
     unsigned char defwin[RECC_LANES_MAX];
     int64_t q;                            /* (gravity << 16) / 0xCCD (0x43D186..0x43D1A4)       */
-    uint16_t* airix;                      /* type -> RT_AIR row, NOAIR for none                  */
+    uint16_t* airix;                      /* type -> RT_AIR row, NOROW for none                  */
+    uint16_t* typix;                      /* type -> RT_TYPES row, NOROW for none                */
     uint32_t* unit;                       /* the copy: L1                                       */
     uint32_t* l2;
     unsigned char *l3, *win, *age, *rest, *live, *touched;
@@ -541,6 +541,7 @@ RecCodec* reccodec_new(const RecCodecParams* p)
         return NULL;
     }
     c->airix = (uint16_t*)malloc(65536 * sizeof *c->airix);
+    c->typix = (uint16_t*)malloc(65536 * sizeof *c->typix);
     c->unit = (uint32_t*)calloc(nslots, IMG);
     c->l2 = (uint32_t*)calloc(nslots, IMG);
     c->l3 = (unsigned char*)calloc(nslots, L3B);
@@ -550,7 +551,7 @@ RecCodec* reccodec_new(const RecCodecParams* p)
     c->lstep = (uint32_t*)calloc(nslots, 2 * sizeof(uint32_t));
     c->live = (unsigned char*)calloc(nslots, 1);
     c->touched = (unsigned char*)calloc(nslots, 1);
-    if (!c->airix || !c->unit || !c->l2 || !c->l3 || !c->win || !c->age || !c->rest || !c->live ||
+    if (!c->airix || !c->typix || !c->unit || !c->l2 || !c->l3 || !c->win || !c->age || !c->rest || !c->live ||
         !c->touched || !c->lstep) {
         reccodec_free(c);
         return NULL;
@@ -563,6 +564,7 @@ void reccodec_free(RecCodec* c)
     unsigned i;
     if (!c) return;
     free(c->airix);
+    free(c->typix);
     free(c->unit);
     free(c->l2);
     free(c->l3);
@@ -734,7 +736,7 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
     for (i = 0; i < RECC_FRAMES; i++) FRAMES[i]->restart(c->frame[i], wok ? world : NULL);
     if (!wok || !p->usable || p->nslots != c->nslots || p->nproj != c->nproj || p->gw != c->gw ||
         p->gh != c->gh || p->nwrecks != c->nwrecks || p->nlanes < 1 ||
-        p->nlanes > RECC_LANES_MAX || p->nair > RECC_AIR_MAX)
+        p->nlanes > RECC_LANES_MAX || p->nair > RECC_AIR_MAX || p->ntypes > RECC_TYPES_MAX)
         return;
     if (p != &c->p) c->p = *p;
     for (i = 0; i < REC_LR_N; i++) c->lane_of[i] = -1;
@@ -743,9 +745,9 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
         unsigned role = c->p.lane[j].role;
         if (role != REC_LR_PLAIN && role != REC_LR_COUNT_ && role < REC_LR_N) c->lane_of[role] = (int)j;
         /* the default winner: the rule where the role has one, else the previous value */
-        c->defwin[j] = role == REC_LR_PLAIN || role == REC_LR_TURN || role == REC_LR_FW ||
-                       role == REC_LR_FH || role == REC_LR_LAYER || role == REC_LR_TYPE ||
-                       role == REC_LR_OWNER;
+        c->defwin[j] = role == REC_LR_PLAIN || role == REC_LR_FW || role == REC_LR_FH ||
+                       role == REC_LR_LAYER || role == REC_LR_TYPE || role == REC_LR_OWNER ||
+                       role == REC_LR_BUILD_LEFT;
         if (c->defwin[j]) c->s1[c->ns1++] = (unsigned char)j;
         else if (role == REC_LR_VY || role == REC_LR_SPEED || role == REC_LR_AX ||
                  role == REC_LR_AY || role == REC_LR_AZ || role == REC_LR_BANK ||
@@ -763,8 +765,9 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
     }
     memset(c->lsettled, 0, sizeof c->lsettled);
     memset(c->lstep, 0, (size_t)c->nslots * 2 * sizeof(uint32_t));
-    for (i = 0; i < 65536; i++) c->airix[i] = NOAIR;
+    for (i = 0; i < 65536; i++) c->airix[i] = c->typix[i] = NOROW;
     for (i = 0; i < c->p.nair; i++) c->airix[c->p.air[i].type] = (uint16_t)i;
+    for (i = 0; i < c->p.ntypes; i++) c->typix[c->p.types[i].type] = (uint16_t)i;
     if (units != c->unit) memmove(c->unit, units, (size_t)c->nslots * IMG);
     if (live != c->live) memmove(c->live, live, c->nslots);
     for (s = 0; s < c->nslots; s++) {
@@ -783,13 +786,19 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
 
 /* ---- the header's codec entries ------------------------------------------------------------- */
 
-/* reccodec_params marks the roles it has seen in one dword */
-typedef char rec_roles_fit_a_dword[REC_LR_N <= 32 ? 1 : -1];
+/* reccodec_params marks the roles it has seen in one qword */
+typedef char rec_roles_fit_a_qword[REC_LR_N <= 64 ? 1 : -1];
 
 int reccodec_params(RecCodecParams* p, unsigned nslots, unsigned nproj, unsigned gw, unsigned gh,
-                    unsigned nwrecks, const void* codec, unsigned ncodec, const void* physics,
-                    unsigned nphysics, const void* air, unsigned nair, char* why, unsigned cap)
+                    unsigned nwrecks, unsigned ndefs, const RecCodecEntries* e, char* why,
+                    unsigned cap)
 {
+    const void* codec = e->p[RECC_E_CODEC];
+    const void* physics = e->p[RECC_E_PHYSICS];
+    const void* air = e->p[RECC_E_AIR];
+    const void* types = e->p[RECC_E_TYPES];
+    unsigned ncodec = e->n[RECC_E_CODEC], nphysics = e->n[RECC_E_PHYSICS], nair = e->n[RECC_E_AIR];
+    unsigned ntypes = e->n[RECC_E_TYPES];
     memset(p, 0, sizeof *p);
     p->nslots = nslots;
     p->nproj = nproj;
@@ -801,7 +810,7 @@ int reccodec_params(RecCodecParams* p, unsigned nslots, unsigned nproj, unsigned
     if (codec) {
         const unsigned char* b = (const unsigned char*)codec;
         unsigned n, i, at = 0, counts = 0;
-        uint32_t seen = 0;
+        uint64_t seen = 0;
         if (ncodec < 4) REFUSE("RT_CODEC is %u bytes, under its 4-byte head", ncodec);
         n = get16(b);
         if (get16(b + 2)) REFUSE("RT_CODEC's pad is not zero");
@@ -820,7 +829,7 @@ int reccodec_params(RecCodecParams* p, unsigned nslots, unsigned nproj, unsigned
                 REFUSE("RT_CODEC row %u is COUNT row %u, at most %u", i, counts, RECC_COUNTS_MAX);
             if (role != REC_LR_PLAIN && role != REC_LR_COUNT_) {
                 if (seen >> role & 1) REFUSE("RT_CODEC row %u repeats role %u", i, role);
-                seen |= (uint32_t)1 << role;
+                seen |= (uint64_t)1 << role;
             }
             p->lane[i].off = (uint16_t)off;
             p->lane[i].width = (uint8_t)width;
@@ -834,12 +843,13 @@ int reccodec_params(RecCodecParams* p, unsigned nslots, unsigned nproj, unsigned
     }
     if (physics) {
         const unsigned char* b = (const unsigned char*)physics;
-        if (nphysics != 8) REFUSE("RT_PHYSICS is %u bytes, not 8", nphysics);
+        if (nphysics != 12) REFUSE("RT_PHYSICS is %u bytes, not 12", nphysics);
         if (b[5] > 1) REFUSE("RT_PHYSICS's sight rule is %u, not 0 or 1", b[5]);
         if (get16(b + 6)) REFUSE("RT_PHYSICS's pad is not zero");
         p->gravity = (int32_t)get32(b);
         p->sea = b[4];
         p->sight = b[5];
+        p->bcols = get32(b + 8);
     }
     if (air) {
         const unsigned char* b = (const unsigned char*)air;
@@ -867,6 +877,36 @@ int reccodec_params(RecCodecParams* p, unsigned nslots, unsigned nproj, unsigned
             a->pitch = (int32_t)get32(r + 20);
         }
         p->nair = n;
+    }
+    if (types) {
+        /* BOUND: rows and types below RT_UNITDEFS' count, the defs the capture read them from */
+        const unsigned char* b = (const unsigned char*)types;
+        uint32_t n;
+        unsigned i;
+        if (ntypes < REC_TYPES_HEAD) REFUSE("RT_TYPES is %u bytes, under its %u-byte head", ntypes, REC_TYPES_HEAD);
+        n = get32(b);
+        if (b[4 + REC_SLOPES]) REFUSE("RT_TYPES' pad is not zero");
+        if (n > RECC_TYPES_MAX || n > ndefs)
+            REFUSE("RT_TYPES has %lu rows, past %u or RT_UNITDEFS' %u", (unsigned long)n, RECC_TYPES_MAX, ndefs);
+        if (ntypes != REC_TYPES_HEAD + 20 * n) REFUSE("RT_TYPES is %u bytes, not %lu for %lu rows", ntypes,
+                                                    (unsigned long)(REC_TYPES_HEAD + 20 * n), (unsigned long)n);
+        memcpy(p->slope, b + 4, REC_SLOPES);
+        for (i = 0; i < n; i++) {
+            const unsigned char* r = b + REC_TYPES_HEAD + 20 * i;
+            RecTypeRow* t = &p->types[i];
+            t->type = (uint16_t)get16(r);
+            t->sight_h = r[2];
+            t->zero = r[3];
+            if (t->zero) REFUSE("RT_TYPES row %u's pad is not zero", i);
+            if (t->type >= ndefs) REFUSE("RT_TYPES row %u's type %u is past RT_UNITDEFS' %u", i, t->type, ndefs);
+            if (i && t->type <= p->types[i - 1].type)
+                REFUSE("RT_TYPES row %u's type %u does not follow %u", i, t->type, p->types[i - 1].type);
+            t->maxhp = get32(r + 4);
+            t->maxv = (int32_t)get32(r + 8);
+            t->brake = (int32_t)get32(r + 12);
+            t->acc = (int32_t)get32(r + 16);
+        }
+        p->ntypes = n;
     }
     /* a grid or a wreck pool past the record frames' bounds turns the codec off, never the
        header unreadable: such a segment's stream is records */
@@ -1052,25 +1092,157 @@ static int ledger_steps(Eval* x)
 #define L2_(role)   lane_get(x->l2, LANE(role))
 #define STEP(role, rl, c0, h3, c3) do { if (!step(x, (unsigned)c->lane_of[role], rl, c0, h3, c3)) return 0; } while (0)
 
+/* trunc(f * m) for the IEEE single whose bits are f, exactly: 1 and *out, or 0 for an f outside
+   [0, 1] -- a sign bit, past 1.0, an infinity or a NaN. f is mant * 2^(e - 150), the implicit bit
+   set on a normal and e taken as 1 on a denormal; e <= 127 puts the shift at 23 or more, and
+   mant * m < 2^24 * 2^32. The build step's truncation 0x4E43A0 (`fistp` under a chop control
+   word, DISASSEMBLED) of the product at the FPU's precision [INFERRED: 53 bits, the MSVC
+   runtime's default _PC_53] is this value whenever m < 2^29; past it the product rounds first, which costs a residual. */
+static int ex_fm(uint32_t f, uint32_t m, uint64_t* out)
+{
+    uint32_t e = f >> 23 & 0xFF, mant = f & 0x7FFFFF;
+    unsigned sh;
+    if (f > 0x3F800000u) return 0;
+    if (e) mant |= 0x800000;
+    else e = 1;
+    sh = 150 - e;
+    *out = sh >= 64 ? 0 : ((uint64_t)mant * m) >> sh;
+    return 1;
+}
+
+/* the RT_TYPES row of an image's type, NULL for a type without one */
+static const RecTypeRow* type_row(const RecCodec* c, const unsigned char* img)
+{
+    unsigned t = c->typix[lane_get(img, &c->p.lane[c->lane_of[REC_LR_TYPE]])];
+    return t < c->p.ntypes ? &c->p.types[t] : NULL;
+}
+
+/* The unit tick's HP percentage (0x48AE77..0x48AEA3, DISASSEMBLED): movsx(+0x108) * 100 in 32
+   bits, divided unsigned by def +0x1FA (m, not 0), clamped as a signed value to 0..100. */
+static uint32_t hp_pct(uint32_t hp, uint32_t m)
+{
+    uint32_t q = (uint32_t)(int32_t)s16(hp) * 100u / m;
+    return (int32_t)q < 0 ? 0 : (int32_t)q > 100 ? 100 : q;
+}
+
+/* The unit tick writes the HP percentage when GameTime is a multiple of 30 (0x48AE5F..0x48AE75,
+   DISASSEMBLED), and the iteration labelled gt holds step gt - 1 */
+static int hp_phase(uint32_t gt) { return (gt - 1u) % 30u == 0; }
+
+/* The hit points and their percentages, for a type whose row has a maximum M. The build step
+   0x41BA60 takes the fraction left from fo (+0x104, read at 0x41BA6D) to fn and adds
+   trunc(fo * M) - trunc(fn * M) to the HP (0x41BB26..0x41BB90, M the def's +0x1FA as a u32);
+   building (fn < fo) it caps the sum at M by an unsigned compare (0x41BC7F), unbuilding it floors
+   it at 0 (0x41BC14..0x41BC22), and it stores the HP only when it stores the fraction, so an
+   unchanged fraction predicts an unchanged HP. Every 30 ticks the unit tick moves +0xF6 to +0xF7
+   and writes the percentage of the HP to +0xF6 (0x48AEA3..0x48AEAF), its only writer in play
+   (the others are the creates 0x485B67 and the saved game's loader 0x487296, DISASSEMBLED), so
+   the two lanes' winner is the rule, always. DISASSEMBLED. */
+static int hp_steps(Eval* x, uint32_t m)
+{
+    RecCodec* c = x->c;
+    uint32_t fo = L1_(REC_LR_BUILD_LEFT), fn = U_(REC_LR_BUILD_LEFT), hp = L1_(REC_LR_HP);
+    uint64_t a, b;
+    unsigned j6 = (unsigned)c->lane_of[REC_LR_HPPCT], j7 = (unsigned)c->lane_of[REC_LR_HPPCT30];
+    int phase = hp_phase(x->gt);
+    if (fo != fn && ex_fm(fo, m, &a) && ex_fm(fn, m, &b)) {
+        /* the engine's sum is 32 bits: a and b are at most m < 2^32 */
+        int64_t v = s32(s16(hp) + (int64_t)a - (int64_t)b);
+        if (fn < fo) {                  /* both in [0, 1]: their bits order them */
+            if ((uint32_t)v >= m) v = m;
+        } else if (v <= 0) {
+            v = 0;
+        }
+        hp = (uint32_t)v;
+    }
+    STEP(REC_LR_HP, 1, hp, 0, 0);
+    x->win[j7] = 0;
+    STEP(REC_LR_HPPCT30, 1, phase ? L1_(REC_LR_HPPCT) : L1_(REC_LR_HPPCT30), 0, 0);
+    x->win[j7] = 0;
+    x->win[j6] = 0;
+    STEP(REC_LR_HPPCT, 1, phase ? hp_pct(U_(REC_LR_HP), m) : L1_(REC_LR_HPPCT), 0, 0);
+    x->win[j6] = 0;
+    return 1;
+}
+
+/* A ground unit's speed: the ground step 0x43CC20 adds the caller's step to it -- the def's
+   acceleration +0x19E or minus its brake rate +0x19A (0x43D0AC..0x43D0B8, 0x43CD46..0x43CD4C) --
+   floors it at 0 (0x43CC37..0x43CC3B), then caps it at mv = s32(SLOPE[sl] * maxv) / 100, sl =
+   clamp(movsx(+0x68) >> 11, -5, 5), SLOPE the signed bytes at 0x505205 + sl, maxv the def's
+   +0x192, a 64-bit product shifted by 16 each way and a signed divide by 100 << 16
+   (0x43CC42..0x43CC95, the cap 0x43CCD3..0x43CCD8), DISASSEMBLED. The movement pass runs the step
+   before the placement (the ground step's call 0x43DD4D, the placement's 0x43DD55), so sl comes from L1's +0x68, the value the tick
+   found; MEASURED on the heavy hour, 2026-10-12, 1.75 KB smaller than U's. The two steps are
+   candidates 0 and 3. Not modelled: the halving of mv in water (0x43CCA0..0x43CCCE: +0x70 below the sea level
+   and def +0x241 & 0x81000 clear), which leaves a residual. A type with no speed (mv 0) is not
+   stepped: both candidates are the last value. */
+static int ground_speed(Eval* x, const RecTypeRow* t)
+{
+    RecCodec* c = x->c;
+    int64_t sl = asr(s16(L1_(REC_LR_ROLL)), 11), mv, l1 = s32(L1_(REC_LR_SPEED)), a, b;
+    sl = sl < -5 ? -5 : sl > 5 ? 5 : sl;
+    mv = s32((int64_t)(int8_t)c->p.slope[sl + 5] * t->maxv) / 100;
+    if (!mv) {
+        a = b = l1;
+    } else {
+        a = s32(l1 + t->acc);
+        b = s32(l1 - (int64_t)t->brake);
+        a = a < 0 ? 0 : a;              /* floored, then capped: an mv below 0 caps too */
+        b = b < 0 ? 0 : b;
+        a = a > mv ? mv : a;
+        b = b > mv ? mv : b;
+    }
+    STEP(REC_LR_SPEED, 1, (uint32_t)(uint64_t)a, 1, (uint32_t)(uint64_t)b);
+    return 1;
+}
+
 /* The steps of one slot, in an order where each rule reads only lanes decoded before it:
    S1 every row's generic lanes; S2 a ground row's generic lanes that an aircraft predicts by
-   rule; S3 the heading; S4 the velocity; S5 an aircraft's speed, acceleration and bank; S6 the
-   position; S7 the cells, the stamps and the countdowns; S8 the ledger, which reads its owner
-   from S1. 1, or 0 when a residual cannot be read. */
+   rule, and a ground unit's speed; S3 the turn rate, the hit points and the heading; S4 the
+   velocity; S5 an aircraft's speed, acceleration and bank; S6 the position; S7 the cells, the
+   bucket, the stamps, the countdowns and the sight; S8 the ledger, which reads its owner from S1.
+   A rule of a type's row (RT_TYPES) is on only for a type with one. 1, or 0 when a residual
+   cannot be read. */
 static int frame_slot(Eval* x)
 {
     RecCodec* c = x->c;
     unsigned i, ai, layer, layer1;
-    int air, airborne, landing, sight = c->p.sight;
+    int air, ground, airborne, landing, sight = c->p.sight;
     int64_t vx, vy, vz;
+    const RecTypeRow* t;
     for (i = 0; i < c->ns1; i++)
         if (!step(x, c->s1[i], 0, 0, 0, 0)) return 0;
     ai = c->airix[U_(REC_LR_TYPE)];
-    air = ai != NOAIR && ai < c->p.nair;
+    air = ai != NOROW && ai < c->p.nair;
+    t = type_row(c, x->u);
+    ground = !air && t;
     if (!air)
-        for (i = 0; i < c->ns2; i++)
-            if (!step(x, c->s2[i], 0, 0, 0, 0)) return 0;
-    /* S3: heading += turn rate (0x43CFD1..0x43CFDB, DISASSEMBLED; research/sizelab/units) */
+        for (i = 0; i < c->ns2; i++) {
+            unsigned j = c->s2[i];
+            if (ground && (j == (unsigned)c->lane_of[REC_LR_SPEED] || j == (unsigned)c->lane_of[REC_LR_SZ]))
+                continue;
+            if (!step(x, j, 0, 0, 0, 0)) return 0;
+        }
+    if (ground && !ground_speed(x, t)) return 0;
+    /* S3: the turn rate's one-tick blip: a rate one away from the last returns to the one
+       before (MEASURED, no engine writer traced: research/notes/tadr-port/demo-recorder-size.md,
+       *P4*, 76 KB of the heavy hour); its winner is the rule, always */
+    {
+        uint32_t t1 = L1_(REC_LR_TURN), t2 = L2_(REC_LR_TURN);
+        int64_t d = s16(t1 - t2);
+        unsigned jt = (unsigned)c->lane_of[REC_LR_TURN];
+        x->win[jt] = 0;
+        STEP(REC_LR_TURN, 1, d >= -1 && d <= 1 ? t2 : t1, 0, 0);
+        x->win[jt] = 0;
+    }
+    if (t && t->maxhp) {
+        if (!hp_steps(x, t->maxhp)) return 0;
+    } else {
+        STEP(REC_LR_HP, 0, 0, 0, 0);
+        STEP(REC_LR_HPPCT30, 0, 0, 0, 0);
+        STEP(REC_LR_HPPCT, 0, 0, 0, 0);
+    }
+    /* heading += turn rate (0x43CFD1..0x43CFDB, DISASSEMBLED; research/sizelab/units) */
     STEP(REC_LR_HEADING, 1, L1_(REC_LR_HEADING) + U_(REC_LR_TURN), 0, 0);
     layer = U_(REC_LR_LAYER) & 3;
     layer1 = L1_(REC_LR_LAYER) & 3;
@@ -1182,6 +1354,27 @@ static int frame_slot(Eval* x)
        truncating division and table, which no rule predicts: RT_PHYSICS's sight 0 makes the two
        cells generic */
     STEP(REC_LR_SX, sight, (uint32_t)(uint64_t)asr(s32(U_(REC_LR_X)), 21), 0, 0);
+    /* the sort bucket: when the footprint's cell or the layer moved, the footprint stamp 0x47CC30
+       (called where the cell moves, as the claim stamp below) takes the bucket at
+       ((z >> 23) * columns + (x >> 23)) once 0 <= fx, 0 <= fz, fx + fw <= W and fz + fh <= H, the
+       grid's columns and rows (0x47CC57..0x47CCD8, DISASSEMBLED; `<=` because Impure's always-on
+       fix_last_cell turns the two edge tests at 0x47CC8B and 0x47CCA3 into `jg`, tagpu_patches.c).
+       A footprint that fails a test goes to 0x47D073/0x47D079, which files the unit in the
+       off-map bucket *(main+0x142B7) (stored at 0x47D0CF, DISASSEMBLED), REC_ID_OFFMAP in the
+       image; the image carries any other bucket as its index + 1. Unmoved, it keeps its bucket.
+       Not predicted: fix_last_cell's stub clamps a linear index outside [0, rows * columns) into
+       the grid, and RT_PHYSICS carries no row count, so a clamped bucket is a residual.
+       RT_PHYSICS's columns 0 makes the lane generic. |z >> 23| < 2^9 and the columns < 2^32, so
+       the product < 2^41. */
+    {
+        int64_t fx = s16(U_(REC_LR_FX)), fz = s16(U_(REC_LR_FZ));
+        int moved = fx != s16(L1_(REC_LR_FX)) || fz != s16(L1_(REC_LR_FZ)) || layer != layer1;
+        int in = fx >= 0 && fz >= 0 && fx + s16(U_(REC_LR_FW)) <= (int64_t)c->p.gw &&
+                 fz + s16(U_(REC_LR_FH)) <= (int64_t)c->p.gh;
+        int64_t b = asr(s32(U_(REC_LR_Z)), 23) * (int64_t)c->p.bcols + asr(s32(U_(REC_LR_X)), 23) + 1;
+        STEP(REC_LR_BUCKET, c->p.bcols != 0,
+             !moved ? L1_(REC_LR_BUCKET) : in ? (uint32_t)(uint64_t)b : REC_ID_OFFMAP, 0, 0);
+    }
     /* the claim stamp: GameTime when the footprint or the layer moved (0x440A83..0x440A91 writes
        main+0x38A47 as a dword, DISASSEMBLED); the iteration labelled gt holds step gt - 1. Other
        writers -- the footprint stamp 0x47CC54, the pathfinder 0x440B30 and its restore 0x440BC4,
@@ -1201,16 +1394,15 @@ static int frame_slot(Eval* x)
         uint32_t v = lane_get(x->l1, &c->p.lane[c->cnt[i]]);
         if (!step(x, c->cnt[i], 1, v ? v - 1 : 0, 0, 0)) return 0;
     }
-    if (air) {
-        /* an aircraft's sight z: ((z >> 16) - h / 2) >> 5 with h = clamp(altitude + def +0x170,
-           0, 255) (0x4825D8..0x48261C), the caller 0x4827B0 raising the altitude to
+    if (air || ground) {
+        /* the sight z: ((z >> 16) - h / 2) >> 5 with h = clamp(altitude + def +0x170, 0, 255)
+           (0x4825D8..0x48261C), the caller 0x4827B0 raising any unit's altitude to
            (sea + 1) << 16 (0x48280B..0x48281B) and reading the def's byte at 0x4827FB,
-           DISASSEMBLED */
-        AirK a;
+           DISASSEMBLED: an aircraft's byte from its RT_AIR row, a ground unit's from its
+           RT_TYPES row */
         int64_t y = s32(U_(REC_LR_Y)), floor_y = ((int64_t)c->p.sea + 1) * 65536, h;
-        air_k(&c->p.air[ai], &a);
         if (y < floor_y) y = floor_y;
-        h = s16(asr(y, 16)) + a.sight_h;
+        h = s16(asr(y, 16)) + (air ? c->p.air[ai].sight_h : t->sight_h);
         h = h < 0 ? 0 : h > 255 ? 255 : h;
         STEP(REC_LR_SZ, sight, (uint32_t)(uint64_t)asr(asr(s32(U_(REC_LR_Z)), 16) - (h >> 1), 5), 0, 0);
     }
@@ -1221,11 +1413,14 @@ static int frame_slot(Eval* x)
    when it is a fixed point.
 
    THE FIXED POINT. If the history is full (age 3), U == L1 == L2, L3 equals U's lanes, and the
-   unit either has no velocity or a move stamp older than gt - 1, and the ledger's four lanes are
-   zero, then at gt + 1 every input of
+   unit either has no velocity or a move stamp older than gt - 1, the ledger's four lanes are
+   zero, and -- for a type whose RT_TYPES row has a maximum -- +0xF7 == +0xF6 == the percentage
+   of its HP, then at gt + 1 every input of
    every candidate -- L1, L2, L3, age, and U for the lanes before each -- equals its value at gt.
-   The only dependence on gt is the move stamp's gt - 1 when it moved, which the last clause
-   makes inexact at gt and at every later gt; the claim stamp does not move when U == L1, and the
+   The dependences on gt are the move stamp's gt - 1 when it moved, which the second clause
+   makes inexact at gt and at every later gt, and the HP percentage's phase, whose two
+   predictions are then the lanes' own values at every gt; the claim stamp and the bucket do not
+   move when U == L1, and the
    ledger's candidates are all 0 for a slot whose lanes are 0, whatever its owner's settle, and
    change neither its step nor the settle. So
    every candidate keeps its value, the winners chosen at gt (the first exact, candidate 0 or 1
@@ -1252,6 +1447,13 @@ static void slot_advance(RecCodec* c, unsigned s, const unsigned char* u, uint32
     if (lane_get(u, &c->p.lane[c->lane_of[REC_LR_EREQ]]) || lane_get(u, &c->p.lane[c->lane_of[REC_LR_EGRANT]]) ||
         lane_get(u, &c->p.lane[c->lane_of[REC_LR_MREQ]]) || lane_get(u, &c->p.lane[c->lane_of[REC_LR_MGRANT]]))
         rest = 0;
+    if (rest) {
+        const RecTypeRow* t = type_row(c, u);
+        uint32_t f6 = lane_get(u, &c->p.lane[c->lane_of[REC_LR_HPPCT]]);
+        if (t && t->maxhp && (lane_get(u, &c->p.lane[c->lane_of[REC_LR_HPPCT30]]) != f6 ||
+                              hp_pct(lane_get(u, &c->p.lane[c->lane_of[REC_LR_HP]]), t->maxhp) != f6))
+            rest = 0;
+    }
     c->rest[s] = (unsigned char)rest;
     l3_of(c, l2, l3);
     memcpy(l2, l1, IMG);

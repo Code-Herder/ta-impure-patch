@@ -15,6 +15,7 @@
 #define RECC_LANES_MAX   128          /* RT_CODEC's rows at most                                 */
 #define RECC_COUNTS_MAX  8            /* its COUNT rows at most                                  */
 #define RECC_AIR_MAX     1024         /* RT_AIR's rows at most                                   */
+#define RECC_TYPES_MAX   2048         /* RT_TYPES' rows at most                                  */
 #define RECC_TICKS_MAX   256          /* a sectioned block's iterations at most                  */
 #define RECC_KINDS_MAX   65536u       /* an iteration's kinds pattern's bytes at most: past it,
                                          records                                                */
@@ -35,7 +36,7 @@
 enum { RECC_SECTIONS = 1, RECC_DECLINED, RECC_MISMATCH, RECC_NOMEM };
 
 /* A segment's codec constants, parsed from its header's RT_SLOTS, RT_PROJECTILES, RT_FEATURES,
-   RT_CODEC, RT_PHYSICS and RT_AIR. `usable` is set when the header has both RT_CODEC and
+   RT_CODEC, RT_PHYSICS, RT_AIR and RT_TYPES. `usable` is set when the header has both RT_CODEC and
    RT_PHYSICS and its grid and wreck pool are within the codec's bounds: a segment where it is not
    may hold only records stream blocks. */
 typedef struct RecCodecParams {
@@ -44,8 +45,12 @@ typedef struct RecCodecParams {
     RecLaneRow lane[RECC_LANES_MAX];
     int32_t    gravity;
     uint8_t    sea, sight;
+    uint32_t   bcols;                 /* RT_PHYSICS: the sort buckets' columns, 0 for none        */
     unsigned   nair;
     RecAirRow  air[RECC_AIR_MAX];
+    uint8_t    slope[REC_SLOPES];     /* RT_TYPES: the ground speed's slope table ...             */
+    unsigned   ntypes;                /* ... and its rows                                         */
+    RecTypeRow types[RECC_TYPES_MAX];
     int        usable;
 } RecCodecParams;
 
@@ -55,15 +60,29 @@ typedef struct RecBytes { unsigned char* p; size_t n, cap; int oom; } RecBytes;
 
 typedef struct RecCodec RecCodec;
 
-/* The header's entries (a NULL pointer: the entry is absent) as codec constants: 1, or 0 with
-   `why` naming what was malformed or past which bound. nslots is RT_SLOTS (2..65535), nproj
-   RT_PROJECTILES (1..65535); gw, gh and nwrecks are RT_FEATURES' first three, which leave the
-   codec unusable -- not the header unreadable -- unless 1 <= gw, gh <= 65535, gw * gh <=
-   RECC_GRID_MAX and 1 <= nwrecks <= RECC_WRECKS_MAX. When it returns 1 with `usable` 0, `why`
-   says why. */
+/* The header's codec entries: RT_CODEC, RT_PHYSICS, RT_AIR and RT_TYPES, each its bytes and their
+   count, a NULL pointer when the entry is absent. */
+enum { RECC_E_CODEC, RECC_E_PHYSICS, RECC_E_AIR, RECC_E_TYPES, RECC_E_N };
+typedef struct RecCodecEntries {
+    const void* p[RECC_E_N];
+    unsigned    n[RECC_E_N];
+} RecCodecEntries;
+/* The entry of header tag `tag` among them, or -1 when it is not one */
+static __inline int reccodec_entry_of(unsigned tag)
+{
+    return tag == RT_CODEC ? RECC_E_CODEC : tag == RT_PHYSICS ? RECC_E_PHYSICS
+         : tag == RT_AIR ? RECC_E_AIR : tag == RT_TYPES ? RECC_E_TYPES : -1;
+}
+
+/* The header's entries as codec constants: 1, or 0 with `why` naming what was malformed or past
+   which bound. nslots is RT_SLOTS (2..65535), nproj RT_PROJECTILES (1..65535); gw, gh and nwrecks
+   are RT_FEATURES' first three, which leave the codec unusable -- not the header unreadable --
+   unless 1 <= gw, gh <= 65535, gw * gh <= RECC_GRID_MAX and 1 <= nwrecks <= RECC_WRECKS_MAX;
+   ndefs is RT_UNITDEFS' count (0 without it), which bounds RT_TYPES' rows and types. When it
+   returns 1 with `usable` 0, `why` says why. */
 int  reccodec_params(RecCodecParams* p, unsigned nslots, unsigned nproj, unsigned gw, unsigned gh,
-                     unsigned nwrecks, const void* codec, unsigned ncodec, const void* physics,
-                     unsigned nphysics, const void* air, unsigned nair, char* why, unsigned cap);
+                     unsigned nwrecks, unsigned ndefs, const RecCodecEntries* e, char* why,
+                     unsigned cap);
 /* A codec sized for the params' slots, pool, grid and wreck pool, which every restart's params
    must match. NULL: no memory, or a size past its bound. */
 RecCodec* reccodec_new(const RecCodecParams* p);

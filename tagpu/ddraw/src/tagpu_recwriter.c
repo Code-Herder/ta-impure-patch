@@ -405,14 +405,15 @@ static void delta_apply(unsigned* img, const unsigned char* bits, unsigned dword
 
 /* ---- the header ----------------------------------------------------------------------------- */
 
-/* The codec from the header's RT_FEATURES, RT_CODEC, RT_PHYSICS and RT_AIR, parsed from the bytes a
+/* The codec from the header's RT_FEATURES, RT_UNITDEFS, RT_CODEC, RT_PHYSICS, RT_AIR and RT_TYPES,
+   parsed from the bytes a
    reader will parse, so the check decoder runs on the reader's constants. 1, or 0 when the reader
    would refuse them. Without RT_CODEC and RT_PHYSICS, with a grid or a wreck pool past the
    codec's bounds, or without memory for the encoder's and check decoder's states, every stream
    block is written as records. Without memory for the constants themselves
    the recording ends before its file is opened (fail): the entries cannot be checked without
    them, and a header a reader might refuse is never written. */
-static int codec_begin(Writer* w, const unsigned char* const ent[3], const unsigned nent[3])
+static int codec_begin(Writer* w, unsigned ndefs, const RecCodecEntries* ent)
 {
     RecCodecParams* p = (RecCodecParams*)malloc(sizeof *p);
     char why[160];
@@ -420,8 +421,7 @@ static int codec_begin(Writer* w, const unsigned char* const ent[3], const unsig
         fail(w, "no memory for the codec's constants");
         return 1;
     }
-    if (!reccodec_params(p, w->nslots, w->ncap, w->gw, w->gh, w->npool, ent[0], nent[0], ent[1],
-                         nent[1], ent[2], nent[2], why, sizeof why)) {
+    if (!reccodec_params(p, w->nslots, w->ncap, w->gw, w->gh, w->npool, ndefs, ent, why, sizeof why)) {
         tagpu_logf("recorder: writer: the header's codec entries are malformed: %s", why);
         free(p);
         return 0;
@@ -456,9 +456,9 @@ static void hex_bytes(unsigned char* out, const char* hex, unsigned n)
 
 static int header_apply(Writer* w, const unsigned char* b, unsigned len)
 {
-    unsigned at = 0, mode = 0, each = 0, mapped = 0, seats = 0;
-    const unsigned char* ent[3] = { NULL, NULL, NULL };     /* RT_CODEC, RT_PHYSICS, RT_AIR */
-    unsigned nent[3] = { 0, 0, 0 };
+    unsigned at = 0, mode = 0, each = 0, mapped = 0, seats = 0, ndefs = 0;
+    RecCodecEntries ent;
+    memset(&ent, 0, sizeof ent);
     while (at + 4 <= len) {
         unsigned short tag, n;
         memcpy(&tag, b + at, 2);
@@ -467,6 +467,7 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         if (tag == RT_SLOTS && n == 4) memcpy(&w->nslots, b + at + 4, 4);
         if (tag == RT_MODE && n == 4) memcpy(&mode, b + at + 4, 4);
         if (tag == RT_UNITS_EACH && n == 4) memcpy(&each, b + at + 4, 4);
+        if (tag == RT_UNITDEFS && n == 8) memcpy(&ndefs, b + at + 4, 4);
         if (tag == RT_MULTIPLAYER) {
             RecMpRecordHeader h;
             const RecMpRecordHeader* own = tagpu_recmp_file_header(w->ring->mp);
@@ -498,10 +499,11 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
             memcpy(&w->npool, b + at + 12, 4);
         }
         if (tag == RT_PROJECTILES && n == 4) memcpy(&w->ncap, b + at + 4, 4);
-        if (tag >= RT_CODEC && tag <= RT_AIR) {
-            if (ent[tag - RT_CODEC]) return 0;              /* each at most once */
-            ent[tag - RT_CODEC] = b + at + 4;
-            nent[tag - RT_CODEC] = n;
+        if (reccodec_entry_of(tag) >= 0) {
+            int k = reccodec_entry_of(tag);
+            if (ent.p[k]) return 0;                         /* each at most once */
+            ent.p[k] = b + at + 4;
+            ent.n[k] = n;
         }
         if (tag == RT_TABLE && n >= 16) {
             WTable* t;
@@ -537,7 +539,7 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         w->mp_history=tagpu_recmp_history_begin(&w->mp.header,roster,w->gw,w->gh);
         if (!w->mp_history) return 0;
     }
-    if (!codec_begin(w, ent, nent)) return 0;
+    if (!codec_begin(w, ndefs, &ent)) return 0;
     if (w->dead) return 1;
     w->each = each;
     w->units = (unsigned char*)VirtualAlloc(NULL, (size_t)w->nslots * REC_UNIT_IMAGE,
