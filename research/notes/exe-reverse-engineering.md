@@ -3808,7 +3808,7 @@ fixture.
 
 ### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 21 carries a stream block's unit deltas as residuals against a prediction, the
+Recording format 22 carries a stream block's unit deltas as residuals against a prediction, the
 *unit frame* (`tagpu/ddraw/src/tagpu_reccodec.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the plan and its measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md)). Where a rule exists the prediction
@@ -4020,7 +4020,7 @@ ground speed's halving in water; a sort bucket that `fix_last_cell`'s stub clamp
 
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 21 carries a stream block's projectile records as the *pool frame*
+Recording format 22 carries a stream block's projectile records as the *pool frame*
 (`tagpu/ddraw/src/tagpu_reccodec.c`, THE POOL FRAME; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md#l2-the-pool-frame-measured)): the
@@ -4038,7 +4038,12 @@ pool's layout and its appends are *The projectile pool* above.
 - **The stamp `+0x67` is the old slot.** The compaction stores each record's index before the move
   in the word at `+0x67` (`mov word [eax+0x11], si` at `0x49AE5F`, `eax` = the record + `0x56`, so
   `+0x13` from it is `+0x69` at `0x49AE5C`), the removed records included. The frame predicts a
-  survivor's stamp as its old slot and a birth's as `c0 + i`, the slot it was appended at.
+  survivor's stamp as its old slot and a birth's as `c0 + i`, the slot it was appended at. From
+  format 22 a survivor's bytes `0x34..0x6A` are coded as lanes at the record's field widths, the
+  stamp a 2-byte lane of its own (`+0x67..+0x68`): the fields from `+0x3A` on sit at 2 mod 4
+  (`+0x4E` the target, `+0x52` the attacker, `+0x56` the quarry; `replay-layout.tsv`'s `proj`
+  rows), so the dwords there each straddle two fields. The widths are a coding choice: a wrong
+  one costs size.
 - **The guided velocity** (the projectile tick, the branch for a weapon with `+0x111` bit 20,
   tested at `0x49B9C2..0x49B9D0`). A record whose death GameTime `+0x46` is still ahead of
   GameTime `main+0x38A47` (`cmp` at `0x49B9DF`, `jbe` to the expired path `0x49BAC3`, which for
@@ -4094,7 +4099,7 @@ largest residual column of the battle, 214 KiB of its 2.09 MiB.
 
 ### The demo recorder's record frames: the engine facts they predict from [DISASSEMBLED + MEASURED 2026-10-10]
 
-Recording format 21 makes the bodies of a stream block's cells, order lists, events and state
+Recording format 22 makes the bodies of a stream block's cells, order lists, events and state
 records from four *record frames* (`tagpu/ddraw/src/tagpu_recframe_cells.c`, `_orders.c`,
 `_events.c`, `_state.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
@@ -4148,6 +4153,17 @@ records back, so a wrong fact costs size, never data. Each address was re-read i
 - **A death's image** is the unit as the destructor `0x4866D0` found it (*The demo recorder's event
   sites*, above); MEASURED by the L3 research, it differs from the unit copy in 0 to 17 dwords, so
   the events frame codes it as a mask against the copy.
+- **An order node's action and issue time** (`0x43A0C0`, the common order constructor, `ret
+  0x18`): it stores the action byte at `+0x04` (`mov [esi+0x4],al` at `0x43A0E0`) and GameTime
+  `[main+0x38A47]` at `+0x46` (`0x43A11F..0x43A12E`); no other writer of `+0x46` was traced. The
+  orders frame's scheme 2 (format 22, a stream with `RT_HOLD`) matches each node of a re-sent list
+  to the kept node with the same `+0x04` byte and `+0x46` dword: under the lossy filter a list
+  loses its done head or gains a node in front, and node i no longer meets kept node i. Re-read
+  2026-10-13.
+- **A unit's heading `+0x66`** (*the unit frame*, above: the mover adds its turn rate as a word):
+  the events frame (format 22) predicts an explicit nano spray's point from the same unit's last
+  four, as it was, moved with the unit's `+0x6A/+0x6E/+0x72`, or turned about the unit by the
+  change of `+0x66` either way (a 16-bit angle, one turn 65,536), in integers.
 - **An order node's timer `0x439E80`** (the handler entry facts of
   [*the takeover from a recording*](#the-takeover-from-a-recording-seat-types-the-ais-objects-passability-and-the-order-nodes-disassembled-2026-10-02)):
   it rewrites a node's `+0x0A` to GameTime + ticks on every call, so a list the handlers re-arm

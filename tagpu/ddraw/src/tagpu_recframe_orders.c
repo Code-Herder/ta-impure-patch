@@ -13,8 +13,10 @@
    In a skirmish stream the lossy filter holds a main list's handler state between refreshes
    (replay-hold.tsv), so a list keeps its nodes but loses one -- its head done -- or gains one
    in front of the others, and node i no longer meets kept node i. A node's action byte +0x04 and
-   its issue time +0x46 [INFERRED: the GameTime the order was given; no writer traced] stay with
-   it, so there each node is matched to the kept node that has both. MEASURED on the size
+   its issue time +0x46 stay with it -- the order constructor 0x43A0C0 stores the action at
+   0x43A0E0 and GameTime [main+0x38A47] at 0x43A12E, and no other writer of +0x46 was traced
+   (DISASSEMBLED, exe-reverse-engineering.md, the record frames) -- so there each node is matched
+   to the kept node that has both. MEASURED on the size
    research's lossy hour: −119,291 bytes; on the exact hour the match costs +295,783, so a stream
    without RT_HOLD keeps scheme 1.
 
