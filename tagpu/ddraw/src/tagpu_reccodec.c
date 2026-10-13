@@ -142,6 +142,8 @@
 #define UC_MAN    4                   /* the bits below a literal's top that are modelled        */
 #define UC_LENS   33                  /* a lane's last bit length, 0 .. 32                       */
 #define UC_HASH   (2 * RECC_MASKS)    /* the kept masks' hash chains: a load of at most 1/2      */
+#define UC_CHAIN  8                   /* the kept masks one hash chain holds at most             */
+#define UC_EVAL   128                 /* a slot the unit frame evaluates, in RECC_WORK           */
 typedef char rec_uc_fits[RECC_MASKS < (1 << UC_IDB) && RECC_MASKS <= 0x7FFF &&
                          (UC_HASH & (UC_HASH - 1)) == 0 && UC_CVALS == 8 ? 1 : -1];
 /* the probabilities, one array: each model's first and its size */
@@ -161,10 +163,11 @@ enum {
 
 /* The coder's registers: the encoder's low (33 bits used), its pending byte, the 0xFF bytes behind
    it (LZMA's cache size) and whether its first byte -- never written -- is still to come; the
-   decoder's code, its section and whether it read past it */
+   decoder's code, its section and whether it read past it; both sides' work in the block
+   (RECC_WORK: a decision 1, a raw bit 1, a slot evaluated UC_EVAL) */
 typedef struct UcReg {
     uint64_t low;
-    uint32_t range, code;
+    uint32_t range, code, work;
     unsigned cache, first, bad;
     size_t csize;
     RecBytes* out;
@@ -177,14 +180,20 @@ typedef struct UcReg {
 /* The self-test's view of the coder (tests/codectest.c): what the encoder coded, by case, and a
    fault it codes once in place of the right value, at the first place the fault's case comes,
    so that the decoder's refusal of each can be shown. Only its builds define RECF_TEST_COPY. */
-enum { UCT_WOKEN, UCT_CARRIED, UCT_DROPPED, UCT_PLACE, UCT_KEPT, UCT_NEW, UCT_UNKEPT, UCT_HIT,
-       UCT_LITERAL, UCT_COUNT };
-enum { UCF_NONE, UCF_ID_PAST, UCF_ID_INLIST, UCF_EMPTY, UCF_DUP, UCF_CACHE, UCF_WIDE };
+enum { UCT_VISIT, UCT_EVAL, UCT_WOKEN, UCT_CARRIED, UCT_DROPPED, UCT_PLACE, UCT_KEPT, UCT_NEW, UCT_UNKEPT,
+       UCT_CHAINFULL, UCT_HIT, UCT_LITERAL, UCT_COUNT };
+enum { UCF_NONE, UCF_ID_PAST, UCF_ID_INLIST, UCF_EMPTY, UCF_DUP, UCF_CACHE, UCF_WIDE, UCF_COUNT };
 #define UC_SEEN(c, k) ((c)->useen[k] += !(c)->ur.dec)
-#define UC_FAULT(c, f) (!(c)->ur.dec && (c)->ufault == (f) && ((c)->ufault = UCF_NONE, 1))
+#define UC_FAULT(c, f) (!(c)->ur.dec && (c)->ufault == (f) && ((c)->ufault = UCF_NONE, (c)->ufired = 1))
+#define UC_FIRED(c) ((c)->ufired)               /* a fault coded: the decoder's to refuse     */
+#define UC_NOHIT(c) (!(c)->ur.dec && (c)->unohit)   /* every residual a literal, cached or not */
+#define UC_BUDGET(c) ((c)->ubudget)
 #else
 #define UC_SEEN(c, k) ((void)0)
 #define UC_FAULT(c, f) 0
+#define UC_FIRED(c) 0
+#define UC_NOHIT(c) 0
+#define UC_BUDGET(c) RECC_WORK
 #endif
 
 #define REFUSE RECF_REFUSE
@@ -515,7 +524,8 @@ struct RecCodec {
     uint32_t ujt;
     UcReg ur;
 #ifdef RECF_TEST_COPY
-    unsigned useen[UCT_COUNT], ufault;
+    unsigned useen[UCT_COUNT], ufault, ufired, unohit;
+    uint32_t ubudget;                     /* RECC_WORK, unless the self-test lowers it           */
 #endif
     int jbad;                             /* an encoder's woken slot was not listed             */
     int over;                             /* an encoder's frame passed RECC_FRAME_CAP, or met a
@@ -575,6 +585,9 @@ RecCodec* reccodec_new(const RecCodecParams* p)
     if (!c) return NULL;
     c->nslots = nslots;
     c->nproj = nproj;
+#ifdef RECF_TEST_COPY
+    c->ubudget = RECC_WORK;
+#endif
     c->gw = p->gw;
     c->gh = p->gh;
     c->nwrecks = p->nwrecks;
@@ -1625,8 +1638,9 @@ static int bit_of(const unsigned char* bits, unsigned i) { return bits[i >> 3] >
      next, most recent first, each a decision in turn; past them an escape, the mask's id among
      the run's kept masks as a UC_IDB-bit tree, the count of kept masks for a new one, whose lane
      bits follow, each under the lane, the bit before it and whether any bit came yet. The run
-     keeps its first RECC_MASKS masks in first-use order, found by their bytes through a hash of
-     chains; a slot whose mask is not kept takes the context UC_NONE.
+     keeps its new masks in first-use order, found by their bytes through a hash of chains, until
+     it keeps RECC_MASKS or the new mask's chain holds UC_CHAIN (uc_keep); a slot whose mask is not
+     kept takes the context UC_NONE.
    - THE RESIDUALS of a listed slot, each lane of its mask in RT_CODEC's order (uc_resid): a hit
      among the recent values of a cache keyed by the slot's type and the lane, its index a 3-bit
      tree; else the value's bit length less one as a 5-bit tree under the lane and the slot's
@@ -1641,18 +1655,24 @@ static int bit_of(const unsigned char* bits, unsigned i) { return bits[i >> 3] >
    note (demo-recorder-size.md, RC: the unit coder).
 
    BOUND, the work and not the bytes: a near-certain decision costs almost no input, so a short
-   section can make a decoder take every decision the frame's shape allows -- per visited slot one
-   listed decision, at most UC_K + UC_IDB + nlanes for its mask and 1 + 5 + UC_MAN + 27 for each
-   residual, raw bits costing a bit of input each -- which is iterations * (nslots - 1) *
-   (22 + 38 * nlanes) decisions a block, a function of the header's sizes and the head's
-   iterations alone; RECC_FRAME_CAP bounds the section's bytes, not this work. A listing that
-   changes a unit makes a record, which the head's payload bounds; one that leaves the unit as it
-   was must cancel a prediction that moves it, which only the rules' lanes have. MEASURED
-   2026-10-13 under Wine on the reference setup (codectest.py worst 5001): a written block in
-   which 5,000 units list about 111 of their 112 lanes from their caches for 38 iterations, as
-   many as RECC_PAYLOAD_MAX holds of their records, 65 KB of coder, decodes in 555..576 ms,
-   2.9..3.0 us a slot-iteration, which comes to at most about 3.9 s at RECC_TICKS_MAX iterations
-   [INFERRED: scaled]; the slowest of 40,000 fuzzed blocks of the heavy hour decodes in 14 ms.
+   section can make a decoder take nearly every decision the frame's shape allows, and every slot
+   that does not rest is evaluated whatever the section holds; RECC_FRAME_CAP bounds the
+   section's bytes, not this work. So both sides count a block's WORK -- each decision 1, each raw
+   bit 1, each slot the frame evaluates UC_EVAL -- and the decoder refuses a block whose work
+   passes RECC_WORK, checked after each visited slot, while the encoder declines it to records
+   first: the work follows from the decisions, which both sides take alike, so a block the writer
+   writes is one every reader accepts. UC_EVAL is an evaluation's cost in decisions: about 790 ns
+   under Wine against 5..7 ns a decision. No hash chain holds more than UC_CHAIN masks (uc_keep),
+   so a mask's search is at most UC_CHAIN compares. MEASURED 2026-10-13 under Wine on the reference setup
+   (codectest.py worst): the slowest shape is slots evaluated for one decision each -- 65,534
+   units that never rest, 31 iterations, 98 % of RECC_WORK -- which decodes in 1.57..1.59 s, 6.0
+   ns a unit of work, at most about 1.63 s at RECC_WORK [INFERRED: scaled]; 5,000 units listing
+   every lane as a literal although the caches hold it, 18 iterations, 89 % of it, 0.67..0.69 s;
+   every mask's chain full first, 38 iterations (all RECC_PAYLOAD_MAX holds), 0.63..0.66 s.
+   RECC_WORK is 2^28: both p4 hours' heaviest block is 908,494 (295 times under it), and their
+   heaviest block's work a visit, 130, makes a 15,001-slot game's block of 30 iterations 58.5
+   million, 4.6 times under it. The slowest of 40,000 fuzzed blocks of the heavy hour decodes in
+   17 ms.
    Every index a decode takes is bounded by its table: a context's place by its list's length, an
    escape by the kept masks (refused past them), a cache index by the cache's values (refused past
    them), a length by the lane's width (refused past it), a context by the arithmetic that makes
@@ -1707,6 +1727,7 @@ static unsigned uc_bit(RecCodec* c, size_t i, unsigned bit)
 {
     UcReg* r = &c->ur;
     uint32_t p = c->up[i], bound = (r->range >> UC_PB) * p;
+    r->work++;
     if (r->dec) bit = r->code >= bound;
     if (bit) {
         if (r->dec) r->code -= bound;
@@ -1726,6 +1747,7 @@ static uint32_t uc_raw(RecCodec* c, unsigned n, uint32_t v)
 {
     UcReg* r = &c->ur;
     uint32_t got = 0;
+    r->work += n;
     while (n--) {
         unsigned bit = v >> n & 1;
         r->range >>= 1;
@@ -1816,15 +1838,18 @@ static int uc_find(const RecCodec* c, const unsigned char* m)
     return k;
 }
 
-/* m kept as the run's next mask: its id, or -1 when the run keeps RECC_MASKS already */
+/* m kept as the run's next mask: its id, or -1 when the run keeps RECC_MASKS already or m's chain
+   holds UC_CHAIN. BOUND: so no chain is longer than UC_CHAIN, whatever masks a file spells -- the
+   hash has no key, and a file can choose masks that share one -- and a search costs at most
+   UC_CHAIN compares. */
 static int uc_keep(RecCodec* c, const unsigned char* m)
 {
-    unsigned h;
+    unsigned h = uc_hash(m), n = 0;
     int k;
-    if (c->nmask >= RECC_MASKS) return -1;
+    for (k = c->uhead[h]; k >= 0; k = c->uhnext[k]) n++;
+    if (c->nmask >= RECC_MASKS || n >= UC_CHAIN) return -1;
     k = (int)c->nmask++;
     memcpy(c->umask + (size_t)k * MB_MAX, m, MB_MAX);
-    h = uc_hash(m);
     c->uhnext[k] = c->uhead[h];
     c->uhead[h] = (int16_t)k;
     return k;
@@ -1845,6 +1870,7 @@ static unsigned uc_gap(const RecCodec* c, unsigned s)
 static unsigned uc_listed(RecCodec* c, unsigned s, unsigned kind, unsigned bit)
 {
     unsigned last = c->uslast[s];
+    UC_SEEN(c, UCT_VISIT);
     if (kind == 0) {
         bit = uc_bit(c, UC_P_R + uc_gap(c, s), bit);
         if (bit) UC_SEEN(c, UCT_WOKEN);
@@ -1903,7 +1929,7 @@ static int uc_mask(RecCodec* c, unsigned s, unsigned char* m, char* why, unsigne
             if (!any) REFUSE("slot %u's new mask is empty", s);
             if (dec && uc_find(c, m) >= 0) REFUSE("slot %u's new mask is one the run keeps", s);
             id = uc_keep(c, m);
-            UC_SEEN(c, id >= 0 ? UCT_NEW : UCT_UNKEPT);
+            UC_SEEN(c, id >= 0 ? UCT_NEW : c->nmask < RECC_MASKS ? UCT_CHAINFULL : UCT_UNKEPT);
         }
     }
     if (id >= 0) {
@@ -1934,6 +1960,7 @@ static int uc_resid(RecCodec* c, unsigned s, unsigned j, uint32_t type, uint32_t
     if (n) {
         if (!dec)
             while (k < n && cv[k] != v) k++;
+        if (UC_NOHIT(c)) k = n;
         if (n < UC_CVALS && UC_FAULT(c, UCF_CACHE)) k = n, hit = 1;
         hit = uc_bit(c, UC_P_LC + j * 2 + (*ls >> 6 & 1), hit || k < n);
         if (hit) {
@@ -3014,6 +3041,7 @@ static int enc_iteration(RecCodec* c, const unsigned char* pl, size_t at, size_t
         kind = c->rest[s] ? 0 : carried ? 1 : 2;
         if (!kind && !d) {
             if (!c->over) uc_listed(c, s, 0, 0);
+            if (c->ur.work > UC_BUDGET(c)) c->over = 1;
             continue;
         }
         x.l1 = (const unsigned char*)(c->unit + (size_t)s * NDW);
@@ -3032,8 +3060,10 @@ static int enc_iteration(RecCodec* c, const unsigned char* pl, size_t at, size_t
         if (!kind && !x.any) c->jbad = 1;     /* a woken slot always lists: the block declines */
         if (!c->over) {
             uc_listed(c, s, kind, kind ? (unsigned)x.any : 1);
-            if (x.any) uc_unit(c, s, x.l1, x.rmask, x.zz, kind == 1, NULL, 0);
-            if (c->sec[RCS_UNITS].n > RECC_FRAME_CAP) c->over = 1;
+            if (x.any && !uc_unit(c, s, x.l1, x.rmask, x.zz, kind == 1, NULL, 0) && !UC_FIRED(c)) c->over = 1;
+            c->ur.work += UC_EVAL;
+            UC_SEEN(c, UCT_EVAL);
+            if (c->sec[RCS_UNITS].n > RECC_FRAME_CAP || c->ur.work > UC_BUDGET(c)) c->over = 1;
         }
         slot_advance(c, s, x.u, gt);
     }
@@ -3595,9 +3625,12 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
             if (!d->live[s] || d->touched[s]) continue;
             kind = d->rest[s] ? 0 : carried ? 1 : 2;
             lst = uc_listed(d, s, kind, 0);
-            if (!kind && !lst) continue;
             l1 = (unsigned char*)(d->unit + (size_t)s * NDW);
             if (lst && !uc_unit(d, s, l1, mk, x.zin, kind == 1, why, cap)) return 0;
+            if (kind || lst) d->ur.work += UC_EVAL;
+            if (d->ur.work > UC_BUDGET(d))
+                REFUSE("iteration %u: the unit coder's work passes its %u at slot %u", it, UC_BUDGET(d), s);
+            if (!kind && !lst) continue;
             x.l1 = l1;
             x.l2 = (const unsigned char*)(d->l2 + (size_t)s * NDW);
             x.l3 = d->l3 + (size_t)s * L3B;

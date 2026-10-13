@@ -119,7 +119,8 @@ MASKS, MBM = 4096, 16                      # RECC_MASKS; MB_MAX, the bytes a mas
 UC_PB, UC_MOVE, UC_TOP = 12, 4, 1 << 24
 UC_NONE, UC_NEVER = MASKS, 0xFFFFFFFF
 UC_K, UC_IDB, UC_CBITS, UC_CVALS, UC_MAN, UC_LENS = 8, 13, 13, 8, 4, 33
-UC_CACHES, UC_HASH = 1 << UC_CBITS, 2 * MASKS
+UC_CACHES, UC_HASH, UC_CHAIN = 1 << UC_CBITS, 2 * MASKS, 8
+WORK, UC_EVAL = 1 << 28, 128              # RECC_WORK, a block's unit coder work at most; UC_EVAL
 UC_GOLD = 2654435761
 UC_P_R = 0
 UC_P_C = UC_P_R + 16
@@ -565,7 +566,7 @@ def _varints(buf, at, end, n):
  E_P_ITERS, E_P_CUT, E_P_COUNT, E_P_EXTENT, E_P_OVER, E_P_DEADS, E_P_DEAD, E_P_SURV, E_P_TAILS,
  E_P_TAIL, E_P_REF, E_P_HEADS, E_P_NOHEAD, E_G_NONE, E_F_SCHEME, E_F_NCOLS, E_F_TABLE, E_F_PAST,
  E_F_FILL, E_F_LEFT, E_F_BIG, E_G_PAST, E_M_TICK, E_M_FEAT, E_U_OVER, E_U_LEFT, E_U_ID, E_U_INLIST,
- E_U_EMPTY, E_U_DUP, E_U_CACHE, E_U_WIDE) = range(1, 40)
+ E_U_EMPTY, E_U_DUP, E_U_CACHE, E_U_WIDE, E_U_WORK) = range(1, 41)
 _WHY = {E_BODY: "a body cut short or past 0xFFFF in section {0}",
         E_BODY_LEFT: "{1} bytes left in section {0}", E_TICK: "an RK_TICK of {0} bytes",
         E_UNIT_LEN: "a unit record of {0} bytes", E_UNIT_SLOT: "a unit record for slot {0}",
@@ -577,6 +578,7 @@ _WHY = {E_BODY: "a body cut short or past 0xFFFF in section {0}",
         E_U_DUP: "iteration {0}: slot {1}'s new mask is the run's kept mask {2}",
         E_U_CACHE: "iteration {0}: slot {1}: a cache index {2} past its values",
         E_U_WIDE: "iteration {0}: slot {1}: a residual past lane {2}'s width",
+        E_U_WORK: "iteration {0}: the unit coder's work passes its {1} at slot {2}",
         E_PAST_PAYLOAD: "the records pass the head's payload",
         E_PAYLOAD: "the records are {0} bytes, not the head's {1}",
         E_P_ITERS: "the pool frame's iterations are not the head's {0}",
@@ -1120,9 +1122,10 @@ def _put(out, pos, kind, src, at, ln, err):
 
 # ---- the unit coder (tagpu_reccodec.c, THE UNIT CODER) -----------------------------------------
 #
-# The decoder's registers ur: the code, the range, the next byte and the section's end, and 1 once a
-# read passed it (a 0 byte then). Each function's bounds are the C's: every index below is made by
-# arithmetic that bounds it or is refused (-code).
+# The decoder's registers ur: the code, the range, the next byte and the section's end, 1 once a
+# read passed it (a 0 byte then), and the block's work (WORK: a decision 1, a raw bit 1, a slot
+# evaluated UC_EVAL). Each function's bounds are the C's: every index below is made by arithmetic
+# that bounds it or is refused (-code).
 
 @_inline
 def _uc_norm(ur, sec):
@@ -1141,6 +1144,7 @@ def _uc_norm(ur, sec):
 def _uc_bit(ur, sec, up, i):
     p = np.int64(up[i])
     bound = (ur[1] >> UC_PB) * p
+    ur[5] += 1
     if ur[0] >= bound:
         ur[0] -= bound
         ur[1] -= bound
@@ -1157,6 +1161,7 @@ def _uc_bit(ur, sec, up, i):
 @_inline
 def _uc_raw(ur, sec, n):
     v = 0
+    ur[5] += n
     for _ in range(n):
         ur[1] >>= 1
         bit = 0
@@ -1202,7 +1207,8 @@ def _uc_hash(m):
 def _uc_mask(ur, sec, up, s, uslast, umask, uhead, uhnext, ucnt, unext, unn, nl, mk, err, it):
     """Listed slot s's lane mask into mk, the kept masks and its context's list moved on: 0, or
     -code (an escape past the kept masks or into the list, an empty new mask, one already kept).
-    The run keeps its first MASKS masks, found by their bytes through a hash of chains."""
+    The run keeps its new masks until it keeps MASKS or a new mask's hash chain holds UC_CHAIN, and
+    finds them by their bytes through those chains."""
     ctx = uslast[s]
     n = unn[ctx]
     k = 0
@@ -1235,7 +1241,9 @@ def _uc_mask(ur, sec, up, s, uslast, umask, uhead, uhnext, ucnt, unext, unn, nl,
                 return -_fail(err, E_U_EMPTY, it, s)
             h = _uc_hash(mk)
             q = uhead[h]
+            chain = 0
             while q >= 0:
+                chain += 1
                 same = True
                 for bb in range(MBM):
                     if umask[q, bb] != mk[bb]:
@@ -1245,7 +1253,7 @@ def _uc_mask(ur, sec, up, s, uslast, umask, uhead, uhnext, ucnt, unext, unn, nl,
                     return -_fail(err, E_U_DUP, it, s, q)
                 q = uhnext[q]
             mid = -1
-            if nmask < MASKS:
+            if nmask < MASKS and chain < UC_CHAIN:
                 umask[nmask, :] = mk
                 uhnext[nmask] = uhead[h]
                 uhead[h] = nmask
@@ -1387,8 +1395,9 @@ def _iterations(sec, rk, rc, rf, irun, secof, lsec, tab, live, st, rest_mode, pl
     dirty = np.zeros(NDW, np.bool_)
     oat, oend = foff[RCS_OTHER], foff[RCS_OTHER + 1]
     pos = gt0 = 0
-    # the coder's registers: the code, the range, the next byte, the section's end, read past it
-    ur = np.array([0, M32, uat, uend, 0], np.int64)
+    # the coder's registers: the code, the range, the next byte, the section's end, read past it,
+    # the work
+    ur = np.array([0, M32, uat, uend, 0, 0], np.int64)
     for _ in range(4):
         ur[0] = (ur[0] << 8) | sec[ur[2]]
         ur[2] += 1
@@ -1451,8 +1460,6 @@ def _iterations(sec, rk, rc, rf, irun, secof, lsec, tab, live, st, rest_mode, pl
             last = uslast[s]
             if rest[s]:
                 lst = _uc_bit(ur, sec, up, UC_P_R + _uc_gap(uslt, jt, s))
-                if not lst and rest_mode:
-                    continue
             elif carried:
                 lst = _uc_bit(ur, sec, up, UC_P_C + last * 4 + ustreak[s])
             else:
@@ -1478,6 +1485,12 @@ def _iterations(sec, rk, rc, rf, irun, secof, lsec, tab, live, st, rest_mode, pl
                 jprev[s] = True
             else:
                 Rr[:] = 0
+            if lst or not rest[s]:
+                ur[5] += UC_EVAL
+            if ur[5] > ucnt[2]:
+                return _fail(err, E_U_WORK, it, ucnt[2], s)
+            if rest[s] and not lst and rest_mode:
+                continue
             n = _advance(s, gt, tab, st, Rr, U, dirty, dbuf, dend[nd])
             if n:
                 dend[nd + 1] = dend[nd] + n
@@ -3376,6 +3389,11 @@ class Frame:
         f.kmru = [list(e) for e in self.kmru]
         return f
 
+
+    def budget(self, n):
+        """THE UNIT CODER's work a block at most: WORK, until codectest's fuzzdiff lowers it"""
+        self.ucoder[9][2] = n
+
     def _derive(self):
         """The segment's lane table and constants as the kernels take them, `tab`: off, width,
         the lane masks (2^(8 width) - 1), J (the lane of each _RULED role), the default winners,
@@ -3431,13 +3449,14 @@ class Frame:
         # the unit coder (tagpu_reccodec.c, THE UNIT CODER): its probabilities; per slot whether
         # the iteration before listed it, its streak, a byte a lane, its last kept mask's id and
         # its last listing's run iteration; the run's kept masks with their hash of chains; the
-        # count of kept masks and the run's iterations; each context's next masks; the caches
+        # count of kept masks, the run's iterations and a block's work at most (WORK, which
+        # codectest's fuzzdiff lowers); each context's next masks; the caches
         ns = self.prm.nslots
         self.ucoder = (np.full(UC_NP, 1 << (UC_PB - 1), np.uint16), np.zeros(ns, np.bool_),
                        np.zeros(ns, np.int64), np.zeros((ns, LANES_MAX), np.int64),
                        np.full(ns, UC_NONE, np.int64), np.full(ns, UC_NEVER, np.int64),
                        np.zeros((MASKS, MBM), np.uint8), np.full(UC_HASH, -1, np.int64),
-                       np.zeros(MASKS, np.int64), np.zeros(2, np.int64),
+                       np.zeros(MASKS, np.int64), np.array([0, 0, WORK], np.int64),
                        np.zeros((MASKS + 1, UC_K), np.int64), np.zeros(MASKS + 1, np.int64),
                        np.zeros((UC_CACHES, UC_CVALS), np.int64), np.zeros(UC_CACHES, np.int64))
         p = self.prm

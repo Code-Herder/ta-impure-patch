@@ -761,12 +761,15 @@ _Static_assert(RB_CONTRIBUTIONS == 7 && RB_EXACT == 8, "the block kinds retain t
                  any other: whether it is listed
                and for each listed slot its lane mask, then for each lane of the mask in RT_CODEC's
                order its zigzag residual, 1 .. 2^(8 x the lane's width) - 1.
-   The coder, every model and its context are THE UNIT CODER's. The models, the run's kept masks
-   and their contexts' lists, the residual caches and every slot's coder state restart at every
-   RBF_FRAME_RESET, with the frames. A reader refuses a section the coder reads past or does not
-   consume exactly, a mask id past the run's kept masks or in its context's list, an empty new
-   mask or one the run keeps, a cache index past the cache's values, and a residual past its
-   lane's width.
+   The coder, every model and its context are THE UNIT CODER's. The run keeps a new mask as its
+   next id unless it keeps RECC_MASKS already or the mask's hash chain -- the kept masks whose 16
+   bytes have the same FNV-1a hash mod 8192 -- holds 8 (UC_CHAIN). The models, the run's kept
+   masks and their contexts' lists, the residual caches and every slot's coder state restart at
+   every RBF_FRAME_RESET, with the frames. A reader refuses a section the coder reads past or does
+   not consume exactly, a mask id past the run's kept masks or in its context's list, an empty new
+   mask or one the run keeps, a cache index past the cache's values, a residual past its lane's
+   width, and a block whose WORK passes RECC_WORK (2^28) at a visited slot: each decision 1, each
+   raw bit 1, and 128 (UC_EVAL) for each visited slot that does not rest or is listed.
    RCS_PROJ, the pool frame, is
        varint  iterations                 RecSecHead.iterations again
        per iteration, in order:

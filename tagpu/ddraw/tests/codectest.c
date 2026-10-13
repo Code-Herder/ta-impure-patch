@@ -6,8 +6,9 @@
                                     written again through reccodec_stream_block, restarting where
                                     the writer restarts, and every snapshot kept chained as the
                                     writer chains it (reccodec_snapshot); a line per block (raw,
-                                    section and packed bytes, milliseconds) and the outcomes, and
-                                    the snapshots', the level-19 context's and the file's sizes.
+                                    section and packed bytes, milliseconds) and the outcomes, the
+                                    unit coder's work (uc_stat), and the snapshots', the level-19
+                                    context's and the file's sizes.
                                     With N, only every Nth
                                     snapshot of a segment is kept (0: none), and the stream
                                     restarts only after those: the file a writer whose snapshot
@@ -23,7 +24,8 @@
                                     SNAPSHOT_TICKS on), the filter told of each before it, and the
                                     rest dropped; with --exact, each
                                     stream block followed by its exact records (RB_EXACT). Prints
-                                    the iterations whose records differ from IN's
+                                    the iterations whose records differ from IN's and the unit
+                                    coder's work (uc_stat)
      codectest decode IN OUT        every stream block's records, C, framed for codectest.py; a
                                     line per block with its milliseconds
      codectest outcomes             synthetic payloads of units and projectiles that must be
@@ -59,7 +61,7 @@
                                     unit's in order: read in order from the start, and after a
                                     seek to each snapshot's GameTime, to the one after it, read on
                                     to the next snapshot, and to one 151 after it
-     codectest fuzz IN SEED N [CASES] [--section NAME]
+     codectest fuzz IN SEED N [CASES] [--section NAME] [--faults]
                                     N mutations of the recording's sectioned blocks (flags, the
                                     head, section lengths, kinds, the unit frame's gaps, masks,
                                     ids and columns, the pool frame's control values, codes and
@@ -71,7 +73,14 @@
                                     reading's records (exit 1 naming the block when not); with CASES, every case and its result for codectest.py's
                                     differential; with --section, only the mutations of section
                                     NAME (kinds, units, proj, cells, orders, events, other,
-                                    state, or chunk: the packed bytes)
+                                    state, or chunk: the packed bytes); with --faults, also the
+                                    unit coder's six self-test faults written into blocks' records
+                                    and blocks decoded under a budget of their work and of
+                                    one less (cmd_fuzz)
+     codectest worst MODE SLOTS REPEAT
+                                    the decoder's time on a block of as much unit-coder work as
+                                    RECC_WORK allows, in shape MODE: full, lit, chain or visit
+                                    (cmd_worst)
      codectest sin                  the sine table, for codectest.py's check against its formula
 
    IN is a recording of REC_FORMAT, or, for transcode and lossy, one of format 12 or later with no
@@ -717,6 +726,56 @@ static void header_out(RecBytes* out, const unsigned char* p, size_t n, const un
     if (hold) tlv_put(out, RT_HOLD, hold, REC_HOLD_BYTES);
 }
 
+/* THE UNIT CODER's work over a transcode (RECC_WORK): the most in a block, with its visits (a slot an
+   iteration takes the listed decision of), evaluations and listings; the most work a visit, over
+   the blocks of at least 1,000 visits, and the most decisions a listing takes past its listed
+   one, over those of at least 100 listings; the masks the run did not keep because their hash
+   chain was full (UC_CHAIN) or the run was (RECC_MASKS) */
+static struct {
+    unsigned blocks, most, most_visits, most_evals, most_lists, most_iters;
+    double per_visit, per_list;
+    unsigned chainfull, unkept, kept;
+    uint64_t total;
+} ucs;
+
+/* after st's encoder took one block, whose iterations began at ujt u0 */
+static void uc_stat(const RecStream* st, unsigned flags, unsigned u0)
+{
+    RecCodec* e = st->enc;
+    unsigned it = (flags & RBF_FRAME_RESET) || e->ujt < u0 ? e->ujt : e->ujt - u0;
+    unsigned visits = e->useen[UCT_VISIT], evals = e->useen[UCT_EVAL],
+             lists = e->useen[UCT_PLACE] + e->useen[UCT_KEPT] + e->useen[UCT_NEW] + e->useen[UCT_UNKEPT] +
+                     e->useen[UCT_CHAINFULL];
+    double listing = lists ? ((double)e->ur.work - (double)evals * UC_EVAL - visits) / lists : 0;
+    ucs.blocks++;
+    ucs.total += e->ur.work;
+    ucs.chainfull += e->useen[UCT_CHAINFULL];
+    ucs.unkept += e->useen[UCT_UNKEPT];
+    memset(e->useen, 0, sizeof e->useen);
+    if (e->nmask > ucs.kept) ucs.kept = e->nmask;
+    if (e->ur.work > ucs.most) {
+        ucs.most = e->ur.work;
+        ucs.most_visits = visits;
+        ucs.most_evals = evals;
+        ucs.most_lists = lists;
+        ucs.most_iters = it;
+    }
+    if (visits >= 1000 && (double)e->ur.work / visits > ucs.per_visit)
+        ucs.per_visit = (double)e->ur.work / visits;
+    if (lists >= 100 && listing > ucs.per_list) ucs.per_list = listing;
+}
+
+static void uc_stat_print(void)
+{
+    if (!ucs.blocks) return;
+    printf("the unit coder: %u blocks, %.0f work a block on average; at most %u in a block (%u "
+           "iterations, %u visits, %u evaluations, %u listings); at most %.2f work a visit and %.2f "
+           "decisions a listing past its listed one; %u masks not kept for a full chain, %u for a full "
+           "run; at most %u kept\n",
+           ucs.blocks, (double)ucs.total / ucs.blocks, ucs.most, ucs.most_iters, ucs.most_visits,
+           ucs.most_evals, ucs.most_lists, ucs.per_visit, ucs.per_list, ucs.chainfull, ucs.unkept, ucs.kept);
+}
+
 /* The writer's codec for an output segment: the input's params, made for the RT_HOLD the output
    header carries, which picks the orders frame's scheme */
 static int stream_begin_out(RecStream* st, const RecCodecParams* in, int hold)
@@ -782,9 +841,11 @@ static int cmd_transcode(const char* in, const char* outp, int every, int skirmi
             unsigned flags;
             const unsigned char* body;
             size_t bn;
+            unsigned u0 = st.enc->ujt;
             clock_t t0 = clock();
             int o = reccodec_stream_block(&st, g.pay.p, g.pay.n, &flags, &body, &bn);
             double t = ms_since(t0);
+            uc_stat(&st, flags, u0);
             const RecSecHead* sh = (const RecSecHead*)st.sec.p;
             tot += t;
             if (first < 0) first = t;
@@ -885,6 +946,7 @@ static int cmd_transcode(const char* in, const char* outp, int every, int skirmi
            nblk, st.sectioned, st.declined, st.mismatched, (unsigned long)raw, (unsigned long)secbytes,
            (unsigned long)unitbytes, (unsigned long)poolbytes, (unsigned long)written, tot, worst,
            first < 0 ? 0 : first);
+    uc_stat_print();
     printf("summary: %u snapshots, %u of them keys: records %lu bytes, written %lu; packed and checked "
            "in %.0f ms, at most %.2f ms one; the level-19 context %.1f MB at most; the file %lu bytes\n",
            snaps, keys, (unsigned long)snapraw, (unsigned long)snapbytes, stot, sworst, cctx / 1048576.0,
@@ -1073,7 +1135,9 @@ static void lossy_flush(LossyOut* o, unsigned refresh)
     size_t bn = o->stream.n, raw;
     if (!o->stream.n) return;
     if (o->on) {
+        unsigned u0 = o->st.enc->ujt;
         int k = reccodec_stream_block(&o->st, o->stream.p, o->stream.n, &flags, &body, &bn);
+        uc_stat(&o->st, flags, u0);
         o->sectioned += k == RECC_SECTIONS;
     } else if (reccodec_pack(o->cctx, &o->pk, o->stream.p, o->stream.n)) {
         flags = 0;
@@ -1310,6 +1374,7 @@ static int cmd_lossy(const char* in, const char* outp, int exact, const HeaderOv
            "snapshots; %u snapshots kept, %u dropped (not at a writer's refresh)\n", iters, differ,
            o.blocks, o.refreshes, o.sectioned, o.st.declined, o.st.mismatched,
            (unsigned long)o.written, kept, dropped);
+    uc_stat_print();
     if (o.on) {
         if (!bad && (o.st.declined || o.st.mismatched)) bad = 1;
         reccodec_stream_end(&o.st);
@@ -3346,6 +3411,20 @@ static int uc_decode(RecCodec* t, const RecCodecParams* p, World* w, const RecBy
     return ok;
 }
 
+/* UC_CHAIN masks no block makes, kept in m's hash chain until it is full: the same masks in every
+   codec given the same state, so that an encoder and its decoder agree */
+static void uc_fill_chain(RecCodec* c, const unsigned char* m)
+{
+    unsigned char f[MB_MAX];
+    uint32_t r = 12345;
+    unsigned h = uc_hash(m), i;
+    for (;;) {
+        for (i = 0; i < MB_MAX; i++) f[i] = (unsigned char)((r = r * 1103515245u + 12345u) >> 24);
+        if (uc_hash(f) != h || uc_find(c, f) >= 0) continue;
+        if (uc_keep(c, f) < 0) return;
+    }
+}
+
 /* one listed unit's plain dwords as the bits of k: 13 dwords that only generic lanes cover */
 static void uc_pattern(uint32_t* u, unsigned k, uint32_t salt)
 {
@@ -3376,6 +3455,7 @@ static int uc_fault(const char* what, unsigned fault, RecCodec* f, RecCodec* t, 
     memset(&c, 0, sizeof c);
     reccodec_restart(f, p, w->unit, w->live, w->pool, w->pcount, w->phw, &v);
     f->ufault = fault;
+    f->ufired = 0;
     ok = expect(what, reccodec_encode(f, pl->p, pl->n, &c) == RECC_SECTIONS && f->ufault == UCF_NONE, 1);
     if (ok) ok = uc_refuses("  and the decoder refuses it", t, p, w, &c, pl, because);
     rb_free(&c);
@@ -3409,13 +3489,15 @@ static int outcomes_unit_coder(const RecCodecParams* p)
     static uint32_t units[64][NDW], prev[NDW];
     World w;
     RecCodec *e, *d, *t, *f;
-    RecBytes pl, c, o, out;
+    RecBytes pl, pa, c, o, out;
     char why[256];
-    unsigned it, s, i, k, iters;
-    uint32_t gt = 1;
+    unsigned char ma[MB_MAX];
+    unsigned it, s, i, k, iters, na, nb;
+    uint32_t gt = 1, nd;
     int ok = 1;
     memset(&w, 0, sizeof w);
     memset(&pl, 0, sizeof pl);
+    memset(&pa, 0, sizeof pa);
     memset(&c, 0, sizeof c);
     memset(&o, 0, sizeof o);
     memset(&out, 0, sizeof out);
@@ -3459,6 +3541,29 @@ static int outcomes_unit_coder(const RecCodecParams* p)
     ok &= expect("  a new mask", e->useen[UCT_NEW] >= 1, 1);
     ok &= expect("  a residual from its cache", e->useen[UCT_HIT] >= 1, 1);
     ok &= expect("  a residual's literal", e->useen[UCT_LITERAL] >= 1, 1);
+    /* RECC_WORK: both sides count alike, the decoder refuses a block past its budget and the
+       encoder declines one */
+    nd = e->ur.work;
+    na = e->nmask;
+    memcpy(ma, e->umask, MB_MAX);
+    rb_put(&pa, pl.p, pl.n);
+    ok &= expect("  the decoder's work is the encoder's", d->ur.work, nd);
+    t->ubudget = nd;
+    ok &= expect("  and it decodes at a budget of its work", uc_decode(t, p, &w, &c, &pl, why, sizeof why), 1);
+    t->ubudget = nd - 1;
+    ok &= uc_refuses("refused: a block one unit of work past its budget", t, p, &w, &c, &pl, "passes its");
+    t->ubudget = RECC_WORK;
+    {
+        RecFrameWorld v = world_view(&w);
+        reccodec_restart(f, p, w.unit, w.live, w.pool, w.pcount, w.phw, &v);
+        f->ubudget = nd - 1;
+        ok &= expect("declined: a block one unit of work past the encoder's budget",
+                     reccodec_encode(f, pl.p, pl.n, &o), RECC_DECLINED);
+        reccodec_restart(f, p, w.unit, w.live, w.pool, w.pcount, w.phw, &v);
+        f->ubudget = nd;
+        ok &= expect("  and written at its work", reccodec_encode(f, pl.p, pl.n, &o), RECC_SECTIONS);
+        f->ubudget = RECC_WORK;
+    }
     ok &= uc_fault("refused: an escape past the kept masks", UCF_ID_PAST, f, t, p, &w, &pl, "past the run's");
     ok &= uc_fault("refused: an escape into its context's list", UCF_ID_INLIST, f, t, p, &w, &pl,
                    "in its context's list");
@@ -3494,14 +3599,35 @@ static int outcomes_unit_coder(const RecCodecParams* p)
         ok &= expect("  and decodes back", reccodec_decode(d, c.p, c.n, &out, why, sizeof why) && out.n == pl.n &&
                                                !memcmp(out.p, pl.p, pl.n), 1);
         if (!i) {
+            nb = e->useen[UCT_NEW] + e->useen[UCT_UNKEPT];
             ok &= expect("  the run keeps RECC_MASKS masks", e->nmask, RECC_MASKS);
-            ok &= expect("  and codes the rest whole", e->useen[UCT_UNKEPT] >= 1, 1);
+            ok &= expect("  of more new ones than it keeps", nb > RECC_MASKS - na, 1);
+            ok &= expect("  and codes the rest whole", e->useen[UCT_UNKEPT], nb - (RECC_MASKS - na));
+            ok &= expect("  no chain full", e->useen[UCT_CHAINFULL], 0);
         } else {
             ok &= expect("  the first masks are the kept ones", e->useen[UCT_KEPT] + e->useen[UCT_PLACE], 60);
             ok &= expect("  and none is new", e->useen[UCT_NEW] + e->useen[UCT_UNKEPT], 0);
         }
     }
+    /* block D: block A again from the world, the hash chain of its first new mask filled first
+       with UC_CHAIN masks no block makes: that mask is coded whole each time, never kept, and
+       every other is */
+    {
+        RecFrameWorld v = world_view(&w);
+        reccodec_restart(f, p, w.unit, w.live, w.pool, w.pcount, w.phw, &v);
+        reccodec_restart(t, p, w.unit, w.live, w.pool, w.pcount, w.phw, &v);
+        uc_fill_chain(f, ma);
+        uc_fill_chain(t, ma);
+        ok &= expect("unit coder: block D, a mask's chain full, fills with UC_CHAIN masks", f->nmask, UC_CHAIN);
+        memset(f->useen, 0, sizeof f->useen);
+        ok &= expect("  writes as sections", reccodec_encode(f, pa.p, pa.n, &c), RECC_SECTIONS);
+        ok &= expect("  and decodes back", reccodec_decode(t, c.p, c.n, &out, why, sizeof why) && out.n == pa.n &&
+                                               !memcmp(out.p, pa.p, pa.n), 1);
+        ok &= expect("  the mask not kept", f->useen[UCT_CHAINFULL] >= 1, 1);
+        ok &= expect("  and every other kept", f->nmask, UC_CHAIN + na - 1);
+    }
     rb_free(&pl);
+    rb_free(&pa);
     rb_free(&c);
     rb_free(&o);
     rb_free(&out);
@@ -6015,9 +6141,11 @@ static const char* const SECTION_NAME[RCS_COUNT + 1] = { "kinds", "units", "proj
 
 typedef struct Case {
     unsigned type;                  /* 0 the block mutated, 1 the header's entries mutated, 2 the
-                                       block's chunk of its run mutated                     */
+                                       block's chunk of its run mutated, 3 the block decoded
+                                       under a lowered RECC_WORK (--faults)            */
     unsigned flags;
     size_t raw;                     /* type 2: the size the block's head claims             */
+    uint32_t budget;                /* type 3: the unit coder's work at most                */
     RecBytes body;
     unsigned char ent[RECC_E_N][0x10000];     /* the header's codec entries, each at most a u16 long */
     unsigned nent[RECC_E_N], has[RECC_E_N];
@@ -6273,6 +6401,7 @@ static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecPa
     char why[256];
     RecFrameWorld v = world_view(w);
     codec_copy(d, from);
+    d->ubudget = c->type == 3 ? c->budget : RECC_WORK;
     case_t0 = clock();
     if (c->type == 2) {
         /* the run's decoder as the reader holds it, replayed from the run's reset block; every
@@ -6321,7 +6450,45 @@ static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecPa
     return reccodec_decode(d, c->body.p, c->body.n, out, why, sizeof why);
 }
 
-static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* casesp, int only)
+/* a case and C's result, for codectest.py's fuzzdiff: a head of 8 u32 -- the block's ordinal, the
+   type, the flags, the body's bytes, 1 accepted, the records' bytes and their FNV-64 -- then the
+   body; type 2 and 3 add a u32, the size the head claims or the budget; type 1 is each codec
+   entry as (has, bytes) and its bytes */
+static void case_put(FILE* cf, unsigned ordinal, const Case* c, int ok, const RecBytes* out)
+{
+    uint32_t head[8];
+    uint64_t hsh = ok ? fnv64(out->p, out->n) : 0;
+    unsigned e;
+    head[0] = ordinal;
+    head[1] = c->type;
+    head[2] = c->flags;
+    head[3] = (uint32_t)c->body.n;
+    head[4] = (uint32_t)ok;
+    head[5] = ok ? (uint32_t)out->n : 0;
+    head[6] = (uint32_t)hsh;
+    head[7] = (uint32_t)(hsh >> 32);
+    fwrite(head, 1, sizeof head, cf);
+    if (c->type == 0 || c->type == 2 || c->type == 3) {
+        uint32_t x = c->type == 2 ? (uint32_t)c->raw : c->budget;
+        fwrite(c->body.p, 1, c->body.n, cf);
+        if (c->type) fwrite(&x, 1, 4, cf);
+    } else {
+        for (e = 0; e < RECC_E_N; e++) {
+            uint32_t eh[2] = { c->has[e], c->nent[e] };
+            fwrite(eh, 1, 8, cf);
+            fwrite(c->ent[e], 1, c->nent[e], cf);
+        }
+    }
+}
+
+/* --faults: THE UNIT CODER's six self-test faults (UCF_*), each coded into up to FAULT_EACH
+   blocks' records by an encoder from the state the block starts from, which C must refuse; and
+   as many blocks decoded under a budget of their own work, accepted, and of one less,
+   refused. A block whose records the copy's encoder does not write back exactly ends the run:
+   its cases would test a state no writer holds. */
+#define FAULT_EACH 3
+
+static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* casesp, int only, int faults)
 {
     Reading g;
     RecCodec* d = NULL;
@@ -6331,6 +6498,9 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
     FILE* cf = NULL;
     unsigned nsect = 0, done = 0, accepted = 0, k2, slowblk = 0;
     int k, control = -1;
+    RecCodec* fe = NULL;                  /* --faults: the encoder                             */
+    RecBytes recs, fb;
+    unsigned fdone[UCF_COUNT], nbudget = 0, frefused = 0, fcases = 0, ft;
     double slowest = 0;                   /* the slowest case's decode, ms, and its block      */
     void* zf = ZSTD_createDCtx();         /* follows the reading's run: each block's container */
     void* zx = ZSTD_createDCtx();         /* a case's run, replayed                            */
@@ -6339,6 +6509,9 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
     memset(&un, 0, sizeof un);
     memset(&run, 0, sizeof run);
     memset(&c, 0, sizeof c);
+    memset(&recs, 0, sizeof recs);
+    memset(&fb, 0, sizeof fb);
+    memset(fdone, 0, sizeof fdone);
     if (!zf || !zx) return 2;
     rng_state = seed * UINT64_C(0x9E3779B97F4A7C15) + 1;
     /* count the sectioned blocks first, to spread the cases over them */
@@ -6375,7 +6548,6 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
             }
             for (i = 0; i < want; i++) {
                 int ok;
-                uint64_t hsh = 0;
                 double ct;
                 mutate(&c, sec.p, b->raw, b->flags, &g.h, g.p.nlanes,
                        reset ? g.w.pcount : g.dec->pcount, only, g.r.body, b->packed);
@@ -6386,42 +6558,72 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
                     slowblk = g.r.ordinal;
                 }
                 accepted += ok;
-                if (ok) hsh = fnv64(out.p, out.n);
-                if (cf) {
-                    uint32_t head[8];
-                    unsigned e;
-                    head[0] = g.r.ordinal;
-                    head[1] = c.type;
-                    head[2] = c.flags;
-                    head[3] = (uint32_t)c.body.n;
-                    head[4] = (uint32_t)ok;
-                    head[5] = ok ? (uint32_t)out.n : 0;
-                    head[6] = (uint32_t)hsh;
-                    head[7] = (uint32_t)(hsh >> 32);
-                    fwrite(head, 1, sizeof head, cf);
-                    if (c.type == 0) {
-                        fwrite(c.body.p, 1, c.body.n, cf);
-                    } else if (c.type == 2) {
-                        uint32_t r32 = (uint32_t)c.raw;
-                        fwrite(c.body.p, 1, c.body.n, cf);
-                        fwrite(&r32, 1, 4, cf);
-                    } else {
-                        for (e = 0; e < RECC_E_N; e++) {
-                            uint32_t eh[2] = { c.has[e], c.nent[e] };
-                            fwrite(eh, 1, 8, cf);
-                            fwrite(c.ent[e], 1, c.nent[e], cf);
-                        }
-                    }
-                }
+                if (cf) case_put(cf, g.r.ordinal, &c, ok, &out);
                 done++;
             }
             /* The control: the block itself, unmutated, decoded from the copy after the cases
                have left their own state in d. It must give the records the reading's decoder gives
                below; otherwise codec_copy misses state the decoder keeps between blocks, and every
                case above started from a state no reader holds. */
-            if (want) {
+            if (want || faults) {
                 c.type = 0;
                 c.flags = b->flags;
+                c.body.n = 0;
+                rb_put(&c.body, sec.p, b->raw);
+                control = case_run(&c, d, g.dec, &g.p, g.h.ndefs, &g.w, sec.p, b->raw, &out, &run, zx, &un);
+            }
+            /* i: a fault or a budget case still wanted */
+            for (ft = UCF_NONE + 1, i = nbudget < FAULT_EACH * 2; ft < UCF_COUNT; ft++)
+                i |= fdone[ft] < FAULT_EACH;
+            if (faults && i && control == 1 && !reset) {
+                uint32_t nd = d->ur.work;
+                int ok;
+                recs.n = 0;
+                rb_put(&recs, out.p, out.n);
+                if (!fe && !(fe = reccodec_new(&g.p))) {
+                    fprintf(stderr, "codectest: no memory for the fuzz's encoder\n");
+                    return 2;
+                }
+                for (ft = UCF_NONE; ft < UCF_COUNT; ft++) {
+                    if (ft && fdone[ft] >= FAULT_EACH) continue;
+                    codec_copy(fe, g.dec);
+                    fe->ufault = ft;
+                    fe->ufired = 0;
+                    if (reccodec_encode(fe, recs.p, recs.n, &fb) != RECC_SECTIONS || (ft && !fe->ufired)) continue;
+                    c.type = 0;
+                    c.body.n = 0;
+                    rb_put(&c.body, fb.p, fb.n);
+                    ok = case_run(&c, d, g.dec, &g.p, g.h.ndefs, &g.w, sec.p, b->raw, &out, &run, zx, &un);
+                    if (!ft) {
+                        if (!ok || out.n != recs.n || memcmp(out.p, recs.p, recs.n)) {
+                            fprintf(stderr, "codectest: %s: block %u written again from the copy's state does not "
+                                    "decode back\n", in, g.r.ordinal);
+                            return 2;
+                        }
+                        continue;
+                    }
+                    fdone[ft]++;
+                    frefused += !ok;
+                    fcases++;
+                    if (cf) case_put(cf, g.r.ordinal, &c, ok, &out);
+                }
+                for (i = 0; i < 2 && nbudget < FAULT_EACH * 2; i++) {
+                    c.type = 3;
+                    c.budget = nd - 1 + i;
+                    c.body.n = 0;
+                    rb_put(&c.body, sec.p, b->raw);
+                    ok = case_run(&c, d, g.dec, &g.p, g.h.ndefs, &g.w, sec.p, b->raw, &out, &run, zx, &un);
+                    frefused += !ok;
+                    fcases++;
+                    nbudget++;
+                    if (ok != (int)i) {
+                        fprintf(stderr, "codectest: %s: block %u at a budget of %u work, its own %u: %s\n", in,
+                                g.r.ordinal, c.budget, nd, ok ? "accepted" : "refused");
+                        return 1;
+                    }
+                    if (cf) case_put(cf, g.r.ordinal, &c, ok, &out);
+                }
+                c.type = 0;
                 c.body.n = 0;
                 rb_put(&c.body, sec.p, b->raw);
                 control = case_run(&c, d, g.dec, &g.p, g.h.ndefs, &g.w, sec.p, b->raw, &out, &run, zx, &un);
@@ -6454,6 +6656,17 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
            "(block %u, from the copied state)\n", done, nsect,
            only >= 0 ? ", section " : "", only >= 0 ? SECTION_NAME[only] : "", accepted, done - accepted,
            slowest, slowblk);
+    if (faults) {
+        printf("faults: %u cases, %u refused:", fcases, frefused);
+        for (ft = UCF_NONE + 1; ft < UCF_COUNT; ft++) printf(" %u", fdone[ft]);
+        printf(" of the six faults, %u under a budget\n", nbudget);
+        if (frefused != fcases - nbudget / 2) k = -2;
+        for (ft = UCF_NONE + 1; ft < UCF_COUNT; ft++)
+            if (!fdone[ft]) k = -2;
+    }
+    reccodec_free(fe);
+    rb_free(&recs);
+    rb_free(&fb);
     reccodec_free(d);
     rb_free(&out);
     rb_free(&sec);
@@ -6499,18 +6712,25 @@ static int override_arg(int argc, char** argv, int* i, HeaderOverride* o)
     return 0;
 }
 
-/* `worst`: the decoder's time on the most unit-coder work a block written by the encoder can carry.
-   SLOTS - 1 identical units are made, then each of ITERS iterations changes every dword of every
-   unit by the same step, so that every slot is listed with every lane and each residual after the
-   first slot's comes from its cache: per slot-iteration the most decisions that cost almost no
-   input. ITERS is what RECC_PAYLOAD_MAX holds of such deltas. The block is decoded REPEAT times
-   from a copy of the state before it, and the fastest and slowest decodes are printed with their
-   cost per slot-iteration, which scales to THE UNIT CODER's BOUND: a hostile section can ask the
-   same work of every slot of RECC_TICKS_MAX iterations, whose residuals need not change a unit,
-   so that no record bounds it. */
-static int cmd_worst(unsigned slots, unsigned repeat)
+/* `worst MODE SLOTS REPEAT`: the decoder's time on a block of as much unit-coder work as
+   RECC_WORK lets a block ask, in one of four shapes:
+     full   every dword of SLOTS - 1 identical units changed by the same step each iteration:
+            every slot listed with every lane, each residual after the first slot's from its cache;
+     lit    the same, every residual a literal although its cache holds it, which the format
+            allows: each costs its length, mantissa and raw bits;
+     chain  the same, each mask the block makes first given a full hash chain (UC_CHAIN masks no
+            block makes): no mask is kept, so every listing escapes, spells its lanes and searches
+            a full chain;
+     visit  SLOTS - 1 units that never change but hold an energy request, so that no slot rests:
+            every slot evaluated every iteration for its one listed decision.
+   The iterations are the most, to RECC_TICKS_MAX and what RECC_PAYLOAD_MAX holds, whose block the
+   encoder writes within RECC_WORK. The block is decoded REPEAT times from a copy of the state
+   before it, and the fastest and slowest decodes are printed with their cost a unit of work and
+   scaled to RECC_WORK: THE UNIT CODER's BOUND is the slowest shape's. */
+static int cmd_worst(const char* mode, unsigned slots, unsigned repeat)
 {
     unsigned char codec[4 + 4 * REC_LANES_N], phys[12], air[8 + 24];
+    static const char* const MODES[4] = { "full", "lit", "chain", "visit" };
     RecCodecEntries ce;
     RecCodecParams p;
     RecCodec *e, *d, *t;
@@ -6518,9 +6738,15 @@ static int cmd_worst(unsigned slots, unsigned repeat)
     World w;
     uint32_t* units;
     uint32_t gt = 1, prev[NDW];
+    size_t* at;
     char why[256];
-    unsigned j, s, it, iters, r;
+    unsigned j, s, it, iters, r, lo, hi, m;
     double fast = 1e30, slow = 0;
+    for (m = 0; m < 4 && strcmp(mode, MODES[m]); m++) ;
+    if (m == 4) {
+        fprintf(stderr, "codectest: worst: no mode %s (full, lit, chain or visit)\n", mode);
+        return 2;
+    }
     memset(&w, 0, sizeof w);
     memset(&pl, 0, sizeof pl);
     memset(&c, 0, sizeof c);
@@ -6547,7 +6773,8 @@ static int cmd_worst(unsigned slots, unsigned repeat)
     ce.p[RECC_E_AIR] = air;
     ce.n[RECC_E_AIR] = 8;
     units = (uint32_t*)calloc(slots, IMG);
-    if (!units || !reccodec_params(&p, slots, 16, 16, 16, 64, 0, &ce, why, sizeof why) || !p.usable ||
+    at = (size_t*)calloc(RECC_TICKS_MAX + 1, sizeof *at);
+    if (!units || !at || !reccodec_params(&p, slots, 16, 16, 16, 64, 0, &ce, why, sizeof why) || !p.usable ||
         !(e = reccodec_new(&p)) || !(d = reccodec_new(&p)) || !(t = reccodec_new(&p))) {
         fprintf(stderr, "codectest: worst: no codec of %u slots\n", slots);
         return 2;
@@ -6559,6 +6786,9 @@ static int cmd_worst(unsigned slots, unsigned repeat)
         reccodec_restart(d, &p, w.unit, w.live, w.pool, w.pcount, w.phw, &v);
     }
     /* the units, made */
+    if (m == 3)
+        for (s = 1; s < slots; s++)
+            lane_put((unsigned char*)(units + (size_t)s * NDW), &e->p.lane[e->lane_of[REC_LR_EREQ]], 0x3F800000u);
     rec_put(&pl, RK_TICK, &gt, 4);
     for (s = 1; s < slots; s++) rec_unit(&pl, s, units + (size_t)s * NDW);
     gt++;
@@ -6567,21 +6797,46 @@ static int cmd_worst(unsigned slots, unsigned repeat)
         fprintf(stderr, "codectest: worst: the units' block does not code: %s\n", why);
         return 1;
     }
-    /* every dword of every unit changed, the same step for all */
-    iters = (unsigned)(RECC_PAYLOAD_MAX / ((size_t)(slots - 1) * (4 + REC_UNIT_DELTA_HEAD + IMG) + 8));
+    /* the iterations: every dword of every unit changed, the same step for all, or nothing */
+    iters = m == 3 ? RECC_TICKS_MAX
+                   : (unsigned)(RECC_PAYLOAD_MAX / ((size_t)(slots - 1) * (4 + REC_UNIT_DELTA_HEAD + IMG) + 8));
     if (iters > RECC_TICKS_MAX) iters = RECC_TICKS_MAX;
     pl.n = 0;
     for (it = 0; it < iters; it++, gt++) {
+        at[it] = pl.n;
         rec_put(&pl, RK_TICK, &gt, 4);
-        for (s = 1; s < slots; s++) {
+        for (s = 1; m != 3 && s < slots; s++) {
             uint32_t* u = units + (size_t)s * NDW;
             memcpy(prev, u, IMG);
             for (j = 0; j < NDW; j++) u[j] += 0x01010101u * (it + 1) + j;
             rec_delta(&pl, s, prev, u, -1);
         }
     }
+    at[iters] = pl.n;
+    e->unohit = t->unohit = m == 1;
+    if (m == 2) {
+        /* the masks the block makes, from a copy that may pass the budget, each given a full chain */
+        unsigned k, n0 = e->nmask;
+        codec_copy(t, e);
+        t->ubudget = UINT32_MAX;
+        reccodec_encode(t, pl.p, pl.n, &c);
+        t->ubudget = RECC_WORK;
+        for (k = n0; k < t->nmask && e->nmask + UC_CHAIN <= RECC_MASKS; k++) {
+            uc_fill_chain(e, t->umask + (size_t)k * MB_MAX);
+            uc_fill_chain(d, t->umask + (size_t)k * MB_MAX);
+        }
+    }
+    /* the most iterations the encoder writes within RECC_WORK */
+    for (lo = 0, hi = iters; lo < hi;) {
+        unsigned mid = (lo + hi + 1) / 2;
+        codec_copy(t, e);
+        if (reccodec_encode(t, pl.p, at[mid], &c) == RECC_SECTIONS) lo = mid;
+        else hi = mid - 1;
+    }
+    iters = lo;
+    pl.n = at[iters];
     memset(e->useen, 0, sizeof e->useen);
-    if (reccodec_encode(e, pl.p, pl.n, &c) != RECC_SECTIONS) {
+    if (!iters || reccodec_encode(e, pl.p, pl.n, &c) != RECC_SECTIONS) {
         fprintf(stderr, "codectest: worst: the changes' block does not code\n");
         return 1;
     }
@@ -6597,14 +6852,20 @@ static int cmd_worst(unsigned slots, unsigned repeat)
         ms = ms_since(t0);
         if (ms < fast) fast = ms;
         if (ms > slow) slow = ms;
+        if (t->ur.work != e->ur.work) {
+            fprintf(stderr, "codectest: worst: the decoder's work %u, the encoder's %u\n", t->ur.work,
+                    e->ur.work);
+            return 1;
+        }
     }
-    printf("worst: %u slots, %u iterations, %lu payload bytes, the unit frame %lu bytes; %u cache hits, "
-           "%u literals; the decode %.1f .. %.1f ms over %u, %.3f .. %.3f us a slot-iteration; at "
-           "RECC_TICKS_MAX iterations of every slot %.0f .. %.0f ms\n",
-           slots, iters, (unsigned long)pl.n, (unsigned long)get32(c.p + 8 + 4 * RCS_UNITS),
-           e->useen[UCT_HIT], e->useen[UCT_LITERAL], fast, slow, repeat,
-           1000.0 * fast / ((double)iters * (slots - 1)), 1000.0 * slow / ((double)iters * (slots - 1)),
-           fast * RECC_TICKS_MAX / iters, slow * RECC_TICKS_MAX / iters);
+    printf("worst %s: %u slots, %u iterations, %u work (RECC_WORK %u), %lu payload bytes, the unit "
+           "frame %lu bytes; %u visits, %u cache hits, %u literals, %u new masks, %u not kept for a full chain; "
+           "the decode %.1f .. %.1f ms over %u, %.2f .. %.2f ns a unit of work; at RECC_WORK %.0f .. %.0f ms\n",
+           mode, slots, iters, e->ur.work, RECC_WORK, (unsigned long)pl.n,
+           (unsigned long)get32(c.p + 8 + 4 * RCS_UNITS), e->useen[UCT_VISIT], e->useen[UCT_HIT],
+           e->useen[UCT_LITERAL], e->useen[UCT_NEW], e->useen[UCT_CHAINFULL], fast, slow, repeat,
+           1e6 * fast / e->ur.work, 1e6 * slow / e->ur.work, fast * RECC_WORK / e->ur.work,
+           slow * RECC_WORK / e->ur.work);
     rb_free(&pl);
     rb_free(&c);
     rb_free(&out);
@@ -6613,6 +6874,7 @@ static int cmd_worst(unsigned slots, unsigned repeat)
     reccodec_free(t);
     world_free(&w);
     free(units);
+    free(at);
     return 0;
 }
 
@@ -6665,11 +6927,13 @@ int main(int argc, char** argv)
     if (argc == 3 && !strcmp(argv[1], "sprays")) return cmd_sprays(argv[2]);
 #endif
     if (argc >= 5 && !strcmp(argv[1], "fuzz")) {
-        /* fuzz IN SEED N [CASES] [--section NAME], the option anywhere after N */
+        /* fuzz IN SEED N [CASES] [--section NAME] [--faults], the options anywhere after N */
         const char* cases = NULL;
-        int only = -1, i, k;
+        int only = -1, faults = 0, i, k;
         for (i = 5; i < argc; i++) {
-            if (!strcmp(argv[i], "--section") && i + 1 < argc) {
+            if (!strcmp(argv[i], "--faults")) {
+                faults = 1;
+            } else if (!strcmp(argv[i], "--section") && i + 1 < argc) {
                 for (k = 0; k <= RCS_COUNT && strcmp(argv[i + 1], SECTION_NAME[k]); k++) ;
                 if (k > RCS_COUNT) {
                     fprintf(stderr, "codectest: no section %s\n", argv[i + 1]);
@@ -6685,16 +6949,16 @@ int main(int argc, char** argv)
             }
         }
         return cmd_fuzz(argv[2], strtoull(argv[3], NULL, 10), (unsigned)strtoul(argv[4], NULL, 10),
-                        cases, only);
+                        cases, only, faults);
     }
-    if (argc == 4 && !strcmp(argv[1], "worst"))
-        return cmd_worst((unsigned)strtoul(argv[2], NULL, 10), (unsigned)strtoul(argv[3], NULL, 10));
+    if (argc == 5 && !strcmp(argv[1], "worst"))
+        return cmd_worst(argv[2], (unsigned)strtoul(argv[3], NULL, 10), (unsigned)strtoul(argv[4], NULL, 10));
     if (argc == 2 && !strcmp(argv[1], "sin")) {
         int i;
         for (i = 0; i < 512; i++) printf("%d\n", SIN[i]);
         return 0;
     }
     fprintf(stderr, "usage: codectest transcode IN OUT [--snap-every N] [--skirmish] [--types-from REC] "
-            "[--bucket-cols N] | lossy IN OUT [--exact] [--types-from REC] [--bucket-cols N] | decode IN OUT | outcomes | sprays IN | fuzz IN SEED N [CASES] [--section NAME] | worst SLOTS REPEAT | sin\n");
+            "[--bucket-cols N] | lossy IN OUT [--exact] [--types-from REC] [--bucket-cols N] | decode IN OUT | outcomes | sprays IN | fuzz IN SEED N [CASES] [--section NAME] [--faults] | worst MODE SLOTS REPEAT | sin\n");
     return 2;
 }

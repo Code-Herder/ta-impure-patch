@@ -31,20 +31,24 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
     spraycases               without --native only: `sprays` on small files built as
                              tools/replay/test_tareplay.py's LossySprays builds them, the ones
                              the reader must match and the ones it must find or refuse
-    fuzz IN SEED N [CASES] [--section NAME]
+    fuzz IN SEED N [CASES] [--section NAME] [--faults]
                              N mutated sectioned blocks decoded by C from the state each starts
                              from; each block itself decoded from the same copy must give the
                              reading's records (exit 1 naming the block when not); with
                              --section, only section NAME's mutations (kinds, units, proj, cells,
                              orders, events, other, state, or chunk: the block's packed chunk of
-                             its run). Prints the slowest case's time from its copied state
+                             its run); with --faults, also the unit coder's six self-test faults
+                             written into blocks' records, which C must refuse, and blocks under
+                             a budget of their own work and of one less. Prints the
+                             slowest case's time from its copied state
     fuzzdiff IN CASES        those cases decoded by the Python reader: the same accept or refuse
                              and the same records for every case C accepted
-    worst SLOTS REPEAT       the decoder's time on the most unit-coder work a written block can
-                             carry: SLOTS - 1 identical units, every dword of each changed by the
-                             same step every iteration, so every slot lists every lane from its
-                             cache; decoded REPEAT times, the time scaled to the unit coder's
-                             bound, RECC_TICKS_MAX iterations of every slot (codectest.c)
+    worst MODE SLOTS REPEAT  the decoder's time on a block of as much unit-coder work as
+                             RECC_WORK allows, SLOTS - 1 units in one of four shapes: full
+                             (every dword changed every iteration, residuals from the caches),
+                             lit (the same as literals), chain (the same, each mask's hash chain
+                             full first) and visit (units that never change and never rest);
+                             decoded REPEAT times, the time scaled to RECC_WORK (codectest.c)
     sizes IN...              each recording's sectioned blocks' bytes by section: raw, each section
                              packed alone with zstd 3 and with the format-7 writer's deflate (a 2 KB
                              window), and the blocks as written
@@ -175,7 +179,7 @@ def cmd_fuzzdiff(src, cases_path):
             body = data[at:at + n]
             at += n
             ents = None
-        elif typ == 2:
+        elif typ in (2, 3):
             body = (data[at:at + n], struct.unpack_from("<I", data, at + n)[0])
             at += n + 4
             ents = None
@@ -196,6 +200,10 @@ def cmd_fuzzdiff(src, cases_path):
             try:
                 if typ == 0:
                     got = f.decode(cflags, body)
+                elif typ == 3:
+                    # the block under a budget of work lowered to its own or one less
+                    f.budget(body[1])
+                    got = f.decode(cflags, body[0])
                 elif typ == 2:
                     # the run as it stood before this block's chunk: a decompressor cannot be
                     # copied, so each case replays the run's chunks from its first
