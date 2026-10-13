@@ -395,8 +395,8 @@ static void rot(int64_t x1, int64_t z1, int64_t x2, int64_t z2, int64_t* px, int
 
 #define PDW   REC_PROJ_DWORDS         /* a projectile image's dwords, 27                          */
 #define PIMG  REC_PROJ_IMAGE
-#define PLANES 21                     /* a survivor's lanes (THE SURVIVOR LANES)                  */
-#define PSURV  (PLANES + 13)          /* a survivor's residuals: the lanes, then 13 dwords        */
+#define PLANE_N 21                    /* a survivor's lanes (THE SURVIVOR LANES)                  */
+#define PSURV  (PLANE_N + 13)         /* a survivor's residuals: the lanes, then 13 dwords        */
 /* the longest body pool_body writes: a delta of all 27 dwords (116), past a whole record's 112 */
 #define POOL_BODY_MAX (REC_PROJ_DELTA_HEAD + PIMG)
 #define SHOT  36                      /* an RK_EV_SHOT's body                                     */
@@ -1693,7 +1693,7 @@ static int j2_mask(RecCodec* c, uint32_t v, const unsigned char* last, int may0,
    pool advanced one step, the rows made from the last iteration's shot events. */
 enum { PS_OUT, PS_OLD, PS_ADV, PS_EV };
 
-/* THE SURVIVOR LANES. A survivor's bytes 0x34..0x6A are coded as PLANES lanes at the record's
+/* THE SURVIVOR LANES. A survivor's bytes 0x34..0x6A are coded as PLANE_N lanes at the record's
    field boundaries -- its fields from 0x3A on sit at 2 mod 4, so a dword there straddles two
    (0x4E the target, 0x52 the attacker, 0x56 the quarry: replay-layout.tsv's proj rows) -- each a
    residual of its own width with a winner of its own; dwords 0..12 stay whole. The widths are a
@@ -1701,17 +1701,17 @@ enum { PS_OUT, PS_OLD, PS_ADV, PS_EV };
    size, never a value. Byte 0x6B, the image's padding past the record's 0x6B bytes, is its last
    image's: the capture writes it zero, and an encoder whose survivor changed it declines the
    block (pool_encode). */
-static const unsigned char PLOFF[PLANES] = { 0x34, 0x36, 0x38, 0x3A, 0x3E, 0x42, 0x46, 0x4A, 0x4E,
-                                             0x52, 0x56, 0x5A, 0x5C, 0x5E, 0x60, 0x62, 0x64, 0x66,
-                                             0x67, 0x69, 0x6A };
-static const unsigned char PLW[PLANES] = { 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 1, 2,
-                                           1, 1 };
+static const unsigned char PLOFF[PLANE_N] = { 0x34, 0x36, 0x38, 0x3A, 0x3E, 0x42, 0x46, 0x4A, 0x4E,
+                                              0x52, 0x56, 0x5A, 0x5C, 0x5E, 0x60, 0x62, 0x64, 0x66,
+                                              0x67, 0x69, 0x6A };
+static const unsigned char PLW[PLANE_N] = { 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 1, 2,
+                                            1, 1 };
 #define PL_STAMP 18                   /* the lane of +0x67, the compaction's stamp              */
 
 /* The survivor step's order, which the format fixes: each rule reads only values decoded before
    it -- the velocity (dwords 7..9) reads the heading, pitch and speed (lanes 0x36, 0x38, 0x3A),
    the position (1..3) the velocity. The lanes first, then these dwords. */
-static const unsigned char PORDER[PSURV - PLANES] = { 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 10, 11, 12 };
+static const unsigned char PORDER[PSURV - PLANE_N] = { 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 10, 11, 12 };
 
 /* The encoder's search, policy and not format: the decoder reads only the section and the row a
    code names, so another choice here costs size, never readability. */
@@ -1787,8 +1787,8 @@ static uint32_t unzzw(uint32_t z, unsigned bits)
 /* A survivor's fresh winners: the lanes the last value, the dwords the rule. */
 static void win_fresh(unsigned char* win)
 {
-    memset(win, 1, PLANES);
-    memset(win + PLANES, 0, PSURV - PLANES);
+    memset(win, 1, PLANE_N);
+    memset(win + PLANE_N, 0, PSURV - PLANE_N);
 }
 
 /* THE SURVIVOR STEP of old slot m (its last image L = P[m], the one before L2 = H[m], its age):
@@ -1815,7 +1815,7 @@ static void pool_step(const RecCodec* c, unsigned m, uint32_t* u, uint32_t* res,
     int hl = held(L);
     uint32_t g[3] = { 0, 0, 0 }, cand[3];
     if (dec) u[26] = (u[26] & 0x00FFFFFFu) | (L[26] & 0xFF000000u);
-    for (i = 0; i < PLANES; i++) {
+    for (i = 0; i < PLANE_N; i++) {
         unsigned off = PLOFF[i], w = PLW[i];
         uint32_t mk = plane_mask(w), l1 = plane_get(L, off, w), l2 = a >= 2 ? plane_get(L2, off, w) : l1, v;
         cand[0] = i == PL_STAMP ? m & mk : l1;
@@ -1833,8 +1833,8 @@ static void pool_step(const RecCodec* c, unsigned m, uint32_t* u, uint32_t* res,
             if (err_of(v, cand[k], mk) < err_of(v, cand[best], mk)) best = k;
         win[i] = (unsigned char)best;
     }
-    for (i = PLANES; i < PSURV; i++) {
-        unsigned d = PORDER[i - PLANES];
+    for (i = PLANE_N; i < PSURV; i++) {
+        unsigned d = PORDER[i - PLANE_N];
         uint32_t l1 = L[d], l2 = a >= 2 ? L2[d] : l1;
         cand[1] = l1;
         cand[2] = 2u * l1 - l2;
@@ -2252,7 +2252,7 @@ static void pool_put_surv(RecCodec* c, const uint32_t* res)
     unsigned i;
     uint32_t z[PSURV];
     if (c->over) return;
-    for (i = 0; i < PSURV; i++) z[i] = i < PLANES ? zzw(res[i], 8 * PLW[i]) : zz32(res[i]);
+    for (i = 0; i < PSURV; i++) z[i] = i < PLANE_N ? zzw(res[i], 8 * PLW[i]) : zz32(res[i]);
     rb_put(&c->psurv, z, sizeof z);
 }
 
@@ -3024,7 +3024,7 @@ static void cols_get(const unsigned char* sec, size_t* colat, const size_t* cole
     for (i = 0; i < n; i++) {
         unsigned col = first + i;
         varint_get(sec, colend[col], &colat[col], &z);
-        res[i] = col < PLANES ? unzzw(z, 8 * PLW[col]) : unzz32(z);
+        res[i] = col < PLANE_N ? unzzw(z, 8 * PLW[col]) : unzz32(z);
     }
 }
 
@@ -3096,7 +3096,7 @@ static int pool_parse(RecCodec* d, const unsigned char* sec, size_t at, size_t e
         q->colat[i] = at;
         for (k = 0; k < n; k++) {
             if (!varint_get(sec, end, &at, &v)) REFUSE("pool frame column %u cut short at byte %lu", i, (unsigned long)at);
-            if (i < PLANES && PLW[i] < 4 && v >> (8 * PLW[i]))
+            if (i < PLANE_N && PLW[i] < 4 && v >> (8 * PLW[i]))
                 REFUSE("survivor lane %u's residual %lu is past its %u bytes", i, (unsigned long)v, PLW[i]);
         }
         q->colend[i] = at;

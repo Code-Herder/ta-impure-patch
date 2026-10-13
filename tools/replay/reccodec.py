@@ -81,7 +81,7 @@ NROLES = len(ROLES)
 
 Unreadable = tarec.Unreadable
 
-REC_FORMAT = 21
+REC_FORMAT = 22
 RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH, RBF_CHAINED = 1, 2, 4, 8, 16
 RUN_WINDOW_LOG, CHAIN_MAX = 20, 9          # REC_RUN_WINDOW_LOG, REC_CHAIN_MAX
 RT_CODEC, RT_PHYSICS, RT_AIR, RT_TYPES = 29, 30, 31, 47
@@ -152,7 +152,7 @@ _SECTION_OF = np.array([section_of(k) for k in range(1 << 16)], np.int64)
 # ---- the header's entries ---------------------------------------------------------------------
 
 Params = namedtuple("Params", "nslots nproj gw gh nwrecks lanes gravity sea sight air usable bcols "
-                               "slope types ndefs")
+                               "slope types ndefs hold")
 AirRow = namedtuple("AirRow", "type sight_h maxv brake acc bank pitch")
 TypeRow = namedtuple("TypeRow", "type sight_h maxhp maxv brake acc")
 
@@ -163,12 +163,15 @@ def sizes_ok(nslots, nproj, gw, gh, nwrecks):
             1 <= gh <= 0xFFFF and gw * gh <= GRID_MAX and 1 <= nwrecks <= WRECKS_MAX)
 
 
-def params(entries, nslots, nproj, gw, gh, nwrecks, ndefs=0):
+def params(entries, nslots, nproj, gw, gh, nwrecks, ndefs=0, hold=None):
     """A segment's codec constants from its header's (tag, body) entries, RT_SLOTS,
     RT_PROJECTILES, RT_FEATURES' grid and wreck pool and RT_UNITDEFS' count (ndefs); Unreadable
     when one is malformed, past a bound or given twice. `usable`: RT_CODEC and RT_PHYSICS are both
     there and the grid and the wreck pool are within the codec's bounds -- past them, the codec is
-    off, not the header unreadable."""
+    off, not the header unreadable. `hold`: the header has RT_HOLD (None: whether the entries
+    hold one), which picks the orders frame's scheme."""
+    if hold is None:
+        hold = any(tag == tarec.RT_HOLD for tag, _ in entries)
     got = {}
     for tag, body in entries:
         if tag in CODEC_TAGS:
@@ -270,7 +273,7 @@ def params(entries, nslots, nproj, gw, gh, nwrecks, ndefs=0):
             types.append(row)
     usable = RT_CODEC in got and RT_PHYSICS in got and sizes_ok(nslots, nproj, gw, gh, nwrecks)
     return Params(nslots, nproj, gw, gh, nwrecks, lanes, gravity, sea, sight, air, usable, bcols,
-                  slope, types, ndefs)
+                  slope, types, ndefs, bool(hold))
 
 
 # ---- the kernels -------------------------------------------------------------------------------
@@ -1197,8 +1200,8 @@ def _iterations(sec, rk, rc, rf, irun, secof, lsec, tab, live, st, rest_mode, pl
     winn, agen = np.zeros_like(pwin), np.zeros_like(page)
     scr = (np.empty_like(P), np.zeros(n, np.bool_), np.empty((SHOTS_MAX, PDW), np.int64),
            np.empty(n, np.bool_), np.empty(n, np.int64), np.empty(n, np.int64),
-           np.empty(n, np.int64), np.empty(n, np.int64), np.zeros(PDW, np.int64),
-           np.empty(PDW, np.int64), np.empty(3, np.int64), np.empty(PDW, np.int8),
+           np.empty(n, np.int64), np.empty(n, np.int64), np.zeros(PSURV, np.int64),
+           np.empty(PDW, np.int64), np.empty(3, np.int64), np.empty(PSURV, np.int8),
            np.empty(4, np.int64), np.empty(4, np.int64))
     pcur = np.zeros(6, np.int64)
     # _pool_iter writes a body before it tests the payload's bound, with its end at most the
@@ -1378,6 +1381,8 @@ def _iterations(sec, rk, rc, rf, irun, secof, lsec, tab, live, st, rest_mode, pl
                         live[s] = kind == RK_UNIT
                         if kind == RK_UNIT:
                             copy[s, :] = sec[at + 4:at + 4 + IMG]
+                        else:
+                            _orders_gone(fst[1], s)
                     pos = _put(out, pos, kind, sec, at, ln, err)
                     ln = -1
                 else:
@@ -1482,10 +1487,19 @@ def _iterations(sec, rk, rc, rf, irun, secof, lsec, tab, live, st, rest_mode, pl
 # and the changed stale slots each against a reference row. Rows are int64 arrays of 27 dwords
 # held in [0, 2^32): `& M32` is the dword's arithmetic.
 
-# the survivor step's dword order: the heading, pitch and speed before the velocity, the velocity
-# before the position
-_PORDER = np.array([13, 14, 15, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 10, 11, 12] + list(range(16, PDW)),
-                   np.int64)
+# THE SURVIVOR LANES (tagpu_reccodec.c): a survivor's bytes 0x34..0x6A as lanes of these offsets and
+# widths, each a residual of its width with its own winner, the stamp +0x67's candidate 0 its old
+# slot; byte 0x6B its last image's. Then the dwords in the survivor step's order: the velocity
+# (after the lanes, which hold the heading, pitch and speed) before the position.
+_PLOFF = np.array([0x34, 0x36, 0x38, 0x3A, 0x3E, 0x42, 0x46, 0x4A, 0x4E, 0x52, 0x56, 0x5A, 0x5C,
+                   0x5E, 0x60, 0x62, 0x64, 0x66, 0x67, 0x69, 0x6A], np.int64)
+_PLW = np.array([2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 1, 2, 1, 1], np.int64)
+PLANES = len(_PLOFF)
+_PL_STAMP = 18
+_PORDER = np.array([7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 10, 11, 12], np.int64)
+PSURV = PLANES + len(_PORDER)
+assert (all(_PLOFF[i] + _PLW[i] == _PLOFF[i + 1] for i in range(PLANES - 1)) and
+        _PLOFF[-1] + _PLW[-1] == 0x6B)
 P_OUT, P_OLD, P_ADV, P_EV = range(4)        # a reference's sections
 
 
@@ -1515,12 +1529,52 @@ def _dist(a, b):
 
 
 @_jit
+def _plane_get(x, off, w):
+    """A survivor lane's value in row x (27 dwords)."""
+    v = np.int64(0)
+    for i in range(w):
+        o = off + i
+        v |= ((x[o >> 2] >> (8 * (o & 3))) & 0xFF) << (8 * i)
+    return v
+
+
+@_jit
+def _plane_set(x, off, w, v):
+    for i in range(w):
+        o = off + i
+        sh = 8 * (o & 3)
+        x[o >> 2] = (x[o >> 2] & ~(np.int64(0xFF) << sh) & M32) | (((v >> (8 * i)) & 0xFF) << sh)
+
+
+@_jit
+def _win_fresh(win):
+    """A survivor's fresh winners: the lanes the last value, the dwords the rule."""
+    win[:PLANES] = 1
+    win[PLANES:] = 0
+
+
+@_jit
 def _survive(L, L2, a, m, win, res, U, g):
     """Old record m's image this iteration into U: its last image L, the one before L2 (age a),
-    its winners `win` (updated) and the residuals by dword."""
+    its winners `win` (updated) and its residuals in the step's order, the lanes' in their
+    widths."""
     held = _held(L, g)
-    for i in range(PDW):
-        d = _PORDER[i]
+    U[26] = (U[26] & 0x00FFFFFF) | (L[26] & 0xFF000000)
+    for i in range(PLANES):
+        off, w = _PLOFF[i], _PLW[i]
+        mk = (np.int64(1) << (8 * w)) - 1
+        l1 = _plane_get(L, off, w)
+        l2 = _plane_get(L2, off, w) if a >= 2 else l1
+        lin = (2 * l1 - l2) & mk
+        r0 = (m & mk) if i == _PL_STAMP else l1
+        k = win[i]
+        u = ((r0 if k == 0 else l1 if k == 1 else lin) + res[i]) & mk
+        _plane_set(U, off, w, u)
+        e0, e1, e2 = min((u - r0) & mk, (r0 - u) & mk), min((u - l1) & mk, (l1 - u) & mk), \
+            min((u - lin) & mk, (lin - u) & mk)
+        win[i] = 0 if e0 <= e1 and e0 <= e2 else 1 if e1 <= e2 else 2
+    for i in range(PLANES, PSURV):
+        d = _PORDER[i - PLANES]
         l1 = L[d]
         l2 = L2[d] if a >= 2 else l1
         lin = (2 * l1 - l2) & M32
@@ -1530,17 +1584,13 @@ def _survive(L, L2, a, m, win, res, U, g):
             if d == 7 and held:
                 _gvel(U, g)
             r0 = g[d - 7] if held else l1
-        elif d == 25:
-            r0 = (lin & 0xFFFFFF) | ((m & 0xFF) << 24)
-        elif d == 26:
-            r0 = (l1 & 0xFFFFFF00) | ((m >> 8) & 0xFF)
         else:
             r0 = l1
-        w = win[d]
-        u = ((r0 if w == 0 else l1 if w == 1 else lin) + res[d]) & M32
+        k = win[i]
+        u = ((r0 if k == 0 else l1 if k == 1 else lin) + res[i]) & M32
         U[d] = u
         e0, e1, e2 = _dist(u, r0), _dist(u, l1), _dist(u, lin)
-        win[d] = 0 if e0 <= e1 and e0 <= e2 else 1 if e1 <= e2 else 2
+        win[i] = 0 if e0 <= e1 and e0 <= e2 else 1 if e1 <= e2 else 2
 
 
 @_jit
@@ -1752,7 +1802,7 @@ def _pool_iter(it, sec, ctl, codes, S, B, T, rk, rc, rf, q0, q1, P, H, win, age,
         if sc < -1:
             return err[0]
         if sc == -1:
-            R[:] = zero
+            R[:] = zero[:PDW]
         elif sc == P_OUT:
             R[:] = Pn[kk]
         elif sc == P_OLD:
@@ -1770,7 +1820,7 @@ def _pool_iter(it, sec, ctl, codes, S, B, T, rk, rc, rf, q0, q1, P, H, win, age,
         bp += 1
         if 1 <= Pn[j, 0] <= WEAPON_IDS:
             lastnew[Pn[j, 0]] = Pn[j]
-        winn[j] = 0
+        _win_fresh(winn[j])
         agen[j] = 1
     for i in range(nt):
         tj = tail[i]
@@ -1785,7 +1835,7 @@ def _pool_iter(it, sec, ctl, codes, S, B, T, rk, rc, rf, q0, q1, P, H, win, age,
         if sc < -1:
             return err[0]
         if sc == -1:
-            R[:] = zero
+            R[:] = zero[:PDW]
         elif sc == P_OUT:
             R[:] = Pn[kk]
         elif sc == P_OLD:
@@ -2156,40 +2206,75 @@ _WHY.update({E_ORDERS_CUT: "the orders frame's column {0} cut short",
              E_ORDERS_NODES: "an RK_ORDERS of nodes [{0}, +{1}) of a list of {2}",
              E_ORDERS_KEPT: "slot {0} list {1}'s RK_ORDERS coded against no kept list",
              E_ORDERS_MASK: "an order node mask {0} past 22 bits"})
-_ORDERS_SCHEME = 1
+E_ORDERS_MATCH = 156
+_WHY[E_ORDERS_MATCH] = "an order node matched to kept node {0} of {1}, or twice"
+_ORDERS_SCHEME, _ORDERS_MATCH = 1, 2       # a segment without RT_HOLD, and with it
 _ORDERS_HELD = 65536                       # RECC_ORDERS_HELD
 _O_NODE = tarec.REC_ORDER_IMAGE            # 0x58
 _O_DW = _O_NODE // 4                       # 22
 _O_MAX, _O_CHUNK = 4096, 512               # REC_ORDERS_MAX, REC_ORDERS_CHUNK
 _O_SLOT, _O_KEY, _O_MASK, _O_D0 = 0, 1, 2, 3
 _O_WHOLE = _O_D0 + _O_DW
-_ORDERS_COLS = _O_WHOLE + 1
+_O_IDX = _O_WHOLE + 1                      # scheme 2's
+_ORDERS_COLS = _O_IDX + 1                  # scheme 2's columns; scheme 1 has all but idx
 assert 1 <= _ORDERS_COLS <= FRAME_COLS_MAX
 _K_LIST, _K_WHOLE, _K_CHUNK = 1, 2, 4
 
 
 def _orders_new(prm):
-    """The orders frame's state for a usable segment's params: (kept, arena, (held, prev))."""
+    """The orders frame's state for a usable segment's params: (kept, arena, (held, prev,
+    scheme), the kept nodes a scheme-2 record matched)."""
     return (np.zeros((prm.nslots * 2, 3), np.int64), np.zeros(_ORDERS_HELD * _O_NODE, np.uint8),
-            np.zeros(2, np.int64))
+            np.array([0, 0, _ORDERS_MATCH if prm.hold else _ORDERS_SCHEME], np.int64),
+            np.zeros(_O_MAX, np.bool_))
 
 
 def _orders_restart(st):
     st[0][...] = 0
-    st[2][...] = 0
+    st[2][:2] = 0
 
 
 def _orders_clone(st):
-    kept, arena, meta = st
+    kept, arena, meta, used = st
     a = np.zeros_like(arena)
     n = int(meta[0]) * _O_NODE
     a[:n] = arena[:n]
-    return kept.copy(), a, meta.copy()
+    return kept.copy(), a, meta.copy(), used.copy()
+
+
+@_jit
+def _orders_ncols(st):
+    return _ORDERS_COLS if st[2][2] == _ORDERS_MATCH else _O_IDX
 
 
 @_jit
 def _orders_open(st, cols, sec, at, end, iters, err):
-    return _frame_open(sec, at, end, _ORDERS_SCHEME, _ORDERS_COLS, cols, err, RCS_ORDERS)
+    return _frame_open(sec, at, end, st[2][2], _orders_ncols(st), cols, err, RCS_ORDERS)
+
+
+@_jit
+def _orders_gone(st, slot):
+    """A scheme-2 unit's RK_UNIT_GONE drops its slot's kept lists."""
+    if st[2][2] == _ORDERS_MATCH:
+        st[0][slot * 2, 2] = 0
+        st[0][slot * 2 + 1, 2] = 0
+
+
+@_jit
+def _orders_mask(sec, cols, body, now, arena, was):
+    """A node against kept node `was` (an arena offset) into body[now:]: 0, or the code."""
+    m, ok = _col_varint(sec, cols, _O_MASK)
+    if not ok:
+        return E_ORDERS_CUT
+    if m >> _O_DW:
+        return E_ORDERS_MASK
+    for d in range(_O_DW):
+        if m >> d & 1:
+            if not _col_bytes(sec, cols, _O_D0 + d, body, now + 4 * d, 4):
+                return E_ORDERS_CUT
+        else:
+            body[now + 4 * d:now + 4 * d + 4] = arena[was + 4 * d:was + 4 * d + 4]
+    return 0
 
 
 @_jit
@@ -2200,7 +2285,7 @@ def _orders_iter(st, cols, sec, it, gt, copy, live, err):
 
 @_jit
 def _orders_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
-    kept, arena, meta = st
+    kept, arena, meta, used = st
     z, ok = _col_varint(sec, cols, _O_SLOT)
     if not ok:
         return -_fail(err, E_ORDERS_CUT, _O_SLOT)
@@ -2237,25 +2322,33 @@ def _orders_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
         return -_fail(err, E_F_BIG, RCS_ORDERS, 8 + k * _O_NODE)
     body[0], body[1], body[2], body[3] = slot & 0xFF, slot >> 8, key & _K_LIST, 0
     body[4], body[5], body[6], body[7] = total & 0xFF, total >> 8, first & 0xFF, first >> 8
-    if key & _K_WHOLE:
+    base = kept[e, 0] * _O_NODE
+    if meta[2] == _ORDERS_MATCH:
+        kn = kept[e, 2] - 1 if kept[e, 2] else 0
+        used[:kn] = False
+        for i in range(k):
+            j1, ok = _col_varint(sec, cols, _O_IDX)
+            if not ok:
+                return -_fail(err, E_ORDERS_CUT, _O_IDX)
+            now = 8 + i * _O_NODE
+            if j1 == 0:
+                if not _col_bytes(sec, cols, _O_WHOLE, body, now, _O_NODE):
+                    return -_fail(err, E_ORDERS_CUT, _O_WHOLE)
+                continue
+            if j1 > kn or used[j1 - 1]:
+                return -_fail(err, E_ORDERS_MATCH, j1 - 1, kn)
+            used[j1 - 1] = True
+            c = _orders_mask(sec, cols, body, now, arena, base + (j1 - 1) * _O_NODE)
+            if c:
+                return -_fail(err, c, _O_MASK)
+    elif key & _K_WHOLE:
         if not _col_bytes(sec, cols, _O_WHOLE, body, 8, k * _O_NODE):
             return -_fail(err, E_ORDERS_CUT, _O_WHOLE)
     else:
-        base = kept[e, 0] * _O_NODE
         for i in range(k):
-            m, ok = _col_varint(sec, cols, _O_MASK)
-            if not ok:
-                return -_fail(err, E_ORDERS_CUT, _O_MASK)
-            if m >> _O_DW:
-                return -_fail(err, E_ORDERS_MASK, m)
-            now = 8 + i * _O_NODE
-            was = base + i * _O_NODE
-            for d in range(_O_DW):
-                if m >> d & 1:
-                    if not _col_bytes(sec, cols, _O_D0 + d, body, now + 4 * d, 4):
-                        return -_fail(err, E_ORDERS_CUT, _O_D0 + d)
-                else:
-                    body[now + 4 * d:now + 4 * d + 4] = arena[was + 4 * d:was + 4 * d + 4]
+            c = _orders_mask(sec, cols, body, 8 + i * _O_NODE, arena, base + i * _O_NODE)
+            if c:
+                return -_fail(err, c, _O_MASK)
     # what is kept (tagpu_recframe_orders.c keep)
     if first or k != total:
         kept[e, 2] = 0
@@ -2283,17 +2376,17 @@ def _orders_iter_end(st, cols, sec, it, gt, copy, live, err):
 
 @_jit
 def _orders_close(st, cols, sec, err):
-    return _frame_close(cols, _ORDERS_COLS, err, RCS_ORDERS)
+    return _frame_close(cols, _orders_ncols(st), err, RCS_ORDERS)
 
 
 # ---- THE EVENTS FRAME (tagpu_recframe_events.c) --------------------------------------------------
 #
-# Scheme 1, _EV_COLS columns, each event's fields coded against the last unit ID, the unit copy and
+# Scheme 2, _EV_COLS columns, each event's fields coded against the last unit ID, the unit copy and
 # the events since the reset: THE BYTES, THE STATE and THE BOUNDS are the C file's. The state:
 # misc (the last ID, the names, the texts and the open deaths held), the two dictionaries and
 # their lengths, per slot its four (script index, arguments) entries and their count and next
-# replaced, its last spray and whether it sprayed, per root its last site and whether it has one,
-# and the open deaths.
+# replaced, its last four explicit sprays (their bodies, their unit's position and heading then,
+# and how many), per root its last site and whether it has one, and the open deaths.
 
 E_EV_CUT, E_EV_SHOOTER, E_EV_TARGET, E_EV_ARGFLAG, E_EV_TEXT, E_EV_SPRAY, E_EV_NEST, E_EV_MASK, \
     E_EV_NODEATH, E_EV_ROOT, E_EV_SAME, E_EV_KIND, E_EV_BODY = range(200, 213)
@@ -2302,7 +2395,7 @@ _WHY[E_EV_SHOOTER] = "a shot's shooter ID {0} is past 0xFFFF"
 _WHY[E_EV_TARGET] = "a shot's target ID {0} is past 0xFFFE"
 _WHY[E_EV_ARGFLAG] = "an argument flag (kind {0}) is not 0 or 1"
 _WHY[E_EV_TEXT] = "a name or text (kind {0}) is past its dictionary or its bound"
-_WHY[E_EV_SPRAY] = "spray mode {0} for unit ID {1}"
+_WHY[E_EV_SPRAY] = "spray selector {0} for unit ID {1}"
 _WHY[E_EV_NEST] = "deaths nested past {0}"
 _WHY[E_EV_MASK] = "a death's mask names dword {0}"
 _WHY[E_EV_NODEATH] = "an RK_EV_DEATH_END with no death open"
@@ -2310,17 +2403,20 @@ _WHY[E_EV_ROOT] = "feature root {0}"
 _WHY[E_EV_SAME] = "a feature's same-site flag for root {0} with no site"
 _WHY[E_EV_KIND] = "record kind {0} in the events frame"
 _WHY[E_EV_BODY] = "a body of {0} bytes, under the longest event"
-_EVENTS_SCHEME = 1
+E_EV_TURN = 213
+_WHY[E_EV_TURN] = "spray selector {0} turns a point 2^28 or more from its unit"
+_EVENTS_SCHEME = 2
 (_EV_ID, _EV_SH_TGT, _EV_SH_START, _EV_SH_TARGET, _EV_SH_RAW,
  _EV_ST_IDX, _EV_ST_ARGC, _EV_ST_RZ, _EV_ST_ARGS,
  _EV_NM_HEAD, _EV_NM_NAME, _EV_LIT,
  _EV_RP_KIND, _EV_RP_HEAD, _EV_RP_TEXT,
- _EV_SP_MODE, _EV_SP_POINT, _EV_SP_RAW,
+ _EV_SP_SEL, _EV_SP_POINT, _EV_SP_RAW,
  _EV_DT_KILLER, _EV_DT_HEAD, _EV_DT_MASK, _EV_DT_DWORDS,
  _EV_FT_HEAD, _EV_FT_SAME, _EV_FT_SITE, _EV_FT_ARGS,
  _EV_FE_ROOT, _EV_FE_RESULT,
  _EV_CREATE, _EV_DRAW, _EV_RAW, _EV_COLS) = range(32)
-_EV_DICT, _EV_STARTS, _EV_SPRAY_BYTES = 256, 4, 44
+_EV_DICT, _EV_STARTS, _EV_SPRAY_BYTES, _EV_SPRAYS = 256, 4, 44, 4
+_SP_RAW, _SP_RESID, _SP_TURN = 255, 0x80, 1 << 28
 NAME_MAX, TEXT_MAX = 32, 128               # REC_NAME_MAX, REC_TEXT_MAX
 DEATHS_MAX = tarec.REC_DEATHS_MAX
 UNIT_BITS = tarec.REC_UNIT_BITS            # 11
@@ -2350,9 +2446,9 @@ def _events_new(prm):
             np.zeros((_EV_DICT, NAME_MAX), np.uint8), np.zeros(_EV_DICT, np.int64),
             np.zeros((_EV_DICT, TEXT_MAX), np.uint8), np.zeros(_EV_DICT, np.int64),
             np.zeros((n, _EV_STARTS, 5), np.int64), np.zeros((n, 2), np.int64),
-            np.zeros((n, _EV_SPRAY_BYTES), np.uint8), np.zeros(n, np.bool_),
+            np.zeros((n, _EV_SPRAYS, _EV_SPRAY_BYTES), np.uint8), np.zeros(n, np.int64),
             np.zeros(FR_ROOTS, np.int64), np.zeros(FR_ROOTS, np.bool_),
-            np.zeros(DEATHS_MAX, np.int64))
+            np.zeros(DEATHS_MAX, np.int64), np.zeros((n, _EV_SPRAYS, 4), np.int64))
 
 
 def _events_restart(st):
@@ -2459,9 +2555,32 @@ def _ev_text(sec, cols, k, dtext, dlen, misc, mi, body, at, mx):
 
 
 @_jit
+def _spray_cand(hb, hp, px, py, pz, hd, c):
+    """Candidate c of a slot's kept spray (body hb, its unit's x, y, z and heading hp then) for a
+    spray whose unit stands at (px, py, pz) with heading hd now (tagpu_recframe_events.c
+    spray_cand): (False, ...) for a turn past the rotation bound."""
+    x0, y0, z0 = _le32(hb, 4), _le32(hb, 8), _le32(hb, 12)
+    if c == 0:
+        return True, x0, y0, z0
+    mx, my, mz = (x0 + px - hp[0]) & M32, (y0 + py - hp[1]) & M32, (z0 + pz - hp[2]) & M32
+    if c == 1:
+        return True, mx, my, mz
+    dx = s32(x0) - s32(hp[0])
+    dz = s32(z0) - s32(hp[2])
+    if dx <= -_SP_TURN or dx >= _SP_TURN or dz <= -_SP_TURN or dz >= _SP_TURN:
+        return False, 0, 0, 0
+    sn, cs = sin_cos_q31((hd - hp[3]) & 0xFFFF)
+    if c == 3:
+        sn = -sn
+    rx = (dx * cs - dz * sn + (1 << 30)) >> 31
+    rz = (dx * sn + dz * cs + (1 << 30)) >> 31
+    return True, (px + rx) & M32, my, (pz + rz) & M32
+
+
+@_jit
 def _events_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
-    misc, starts, snum, spray, sprayed, site, sited, deaths = st[0], st[5], st[6], st[7], st[8], \
-        st[9], st[10], st[11]
+    misc, starts, snum, sph, spn, site, sited, deaths, spp = st[0], st[5], st[6], st[7], st[8], \
+        st[9], st[10], st[11], st[12]
     if body.shape[0] < _EV_BODY_MAX:
         return -_fail(err, E_EV_BODY, body.shape[0])
     if kind == RK_EV_SHOT:
@@ -2569,25 +2688,40 @@ def _events_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
         if not ok:
             return -_fail(err, E_EV_CUT, kind, _EV_ID)
         _put_le32(body, 0, i)
-        s = i - 1 if 1 <= i and i - 1 < len(sprayed) else -1
-        mode, ok = _col_u8(sec, cols, _EV_SP_MODE)
+        s = i - 1 if 1 <= i and i - 1 < len(spn) else -1
+        sel, ok = _col_u8(sec, cols, _EV_SP_SEL)
         if not ok:
-            return -_fail(err, E_EV_CUT, kind, _EV_SP_MODE)
-        if mode > 2 or (mode < 2 and not (s >= 0 and sprayed[s])):
-            return -_fail(err, E_EV_SPRAY, mode, i)
-        if mode == 2:
+            return -_fail(err, E_EV_CUT, kind, _EV_SP_SEL)
+        px = py = pz = hd = np.int64(0)
+        j = _ev_live(copy, live, i)
+        if j >= 0:
+            px, py, pz = _le32(copy[j], 0x6A), _le32(copy[j], 0x6E), _le32(copy[j], 0x72)
+            hd = np.int64(copy[j, 0x66]) | np.int64(copy[j, 0x67]) << 8
+        if sel == _SP_RAW:
             if not _col_bytes(sec, cols, _EV_SP_RAW, body, 4, _EV_SPRAY_BYTES):
                 return -_fail(err, E_EV_CUT, kind, _EV_SP_RAW)
         else:
-            body[4:4 + _EV_SPRAY_BYTES] = spray[s]
-            if mode == 1:
+            h = (sel & ~_SP_RESID) >> 2
+            if s < 0 or sel & 0x70 or h >= spn[s]:
+                return -_fail(err, E_EV_SPRAY, sel, i)
+            ok, qx, qy, qz = _spray_cand(sph[s, h], spp[s, h], px, py, pz, hd, sel & 3)
+            if not ok:
+                return -_fail(err, E_EV_TURN, sel)
+            body[4:4 + _EV_SPRAY_BYTES] = sph[s, h]
+            _put_le32(body, 8, qx)
+            _put_le32(body, 12, qy)
+            _put_le32(body, 16, qz)
+            if sel & _SP_RESID:
                 for q in range(3):
-                    if not _ev_zz(sec, cols, _EV_SP_POINT, _le32(spray[s], 4 + 4 * q), body,
-                                  8 + 4 * q):
+                    if not _ev_zz(sec, cols, _EV_SP_POINT, _le32(body, 8 + 4 * q), body, 8 + 4 * q):
                         return -_fail(err, E_EV_CUT, kind, _EV_SP_POINT)
         if s >= 0:
-            spray[s, :] = body[4:4 + _EV_SPRAY_BYTES]
-            sprayed[s] = True
+            for q in range(_EV_SPRAYS - 1, 0, -1):
+                sph[s, q, :] = sph[s, q - 1, :]
+                spp[s, q, :] = spp[s, q - 1, :]
+            sph[s, 0, :] = body[4:4 + _EV_SPRAY_BYTES]
+            spp[s, 0, 0], spp[s, 0, 1], spp[s, 0, 2], spp[s, 0, 3] = px, py, pz, hd
+            spn[s] = min(spn[s] + 1, _EV_SPRAYS)
         return 48
     if kind == RK_EV_DEATH:
         if misc[_M_DEATHS] >= DEATHS_MAX:
@@ -3054,7 +3188,7 @@ class Frame:
     def __init__(self, prm, rest=True):
         self.prm = prm
         self.rest_mode = rest
-        self.sizes = (prm.nslots, prm.nproj, prm.gw, prm.gh, prm.nwrecks)
+        self.sizes = (prm.nslots, prm.nproj, prm.gw, prm.gh, prm.nwrecks, prm.hold)
         self.fst = _frames_new(prm) if prm.usable else None
         n = prm.nslots
         self.copy = np.zeros((n, IMG), np.uint8)
@@ -3062,7 +3196,7 @@ class Frame:
         n = prm.nproj
         self.P = np.zeros((n, PDW), np.int64)
         self.H = np.zeros((n, PDW), np.int64)
-        self.pwin = np.zeros((n, PDW), np.int8)
+        self.pwin = np.zeros((n, PSURV), np.int8)
         self.page = np.zeros(n, np.int8)
         self.lastnew = np.zeros((WEAPON_IDS + 1, PDW), np.int64)
         self.shots = np.zeros((SHOTS_MAX, SHOT), np.uint8)
@@ -3148,7 +3282,8 @@ class Frame:
         self.jord = np.zeros(J2_MTF, np.int64)
         self.jn = np.zeros(1, np.int64)
         p = self.prm
-        if not p.usable or not self.nl or (p.nslots, p.nproj, p.gw, p.gh, p.nwrecks) != self.sizes:
+        if (not p.usable or not self.nl or
+                (p.nslots, p.nproj, p.gw, p.gh, p.nwrecks, p.hold) != self.sizes):
             return
         if self.fst is None:
             self.fst = _frames_new(p)
@@ -3157,7 +3292,8 @@ class Frame:
         if c > h or h > len(self.P):
             return
         self.P[h:] = 0
-        self.pwin[:] = 0
+        self.pwin[:, :PLANES] = 1
+        self.pwin[:, PLANES:] = 0
         self.page[:] = 0
         self.page[:c] = 1
         self.lastnew[:] = 0
@@ -3348,7 +3484,7 @@ class Frame:
                                    ctl, err)
         if at < 0:
             _refuse(err)
-        need = nb + nt + PDW * (ns + nb + nt)
+        need = nb + nt + PSURV * ns + PDW * (nb + nt)
         if need > end - at:
             raise Unreadable(f"the pool frame's codes and columns need {need} bytes, {end - at} are left")
         r = _varints(sec, at, end, need)
@@ -3358,10 +3494,14 @@ class Frame:
         if at != end:
             raise Unreadable(f"{end - at} bytes left in the pool frame")
         codes, k = vals[:nb + nt], nb + nt
+        lanes = vals[k:k + PLANES * ns].reshape(PLANES, ns)
+        wide = np.repeat(_PLW, ns).reshape(PLANES, ns)
+        if (lanes >> (8 * wide)).any():
+            raise Unreadable("a survivor lane's residual is past its bytes")
         res = ((vals >> 1) ^ -(vals & 1)) & M32
-        S = np.empty((ns, PDW), np.int64)
-        S[:, _PORDER] = res[k:k + PDW * ns].reshape(PDW, ns).T
-        k += PDW * ns
+        S = np.ascontiguousarray(res[k:k + PSURV * ns].reshape(PSURV, ns).T)
+        S[:, :PLANES] &= (np.int64(1) << (8 * _PLW)) - 1
+        k += PSURV * ns
         B = np.ascontiguousarray(res[k:k + PDW * nb].reshape(PDW, nb).T)
         k += PDW * nb
         T = np.ascontiguousarray(res[k:].reshape(PDW, nt).T)
@@ -3695,7 +3835,8 @@ def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None, sta
                     prm = params(es, nslots, header_proj(es), *header_features(es), header_defs(es))
                 else:
                     prm = Params(nslots, header_proj(es), *header_features(es), [], 0, 0, 0, [],
-                                 False, 0, bytes(SLOPES), [], header_defs(es))
+                                 False, 0, bytes(SLOPES), [], header_defs(es),
+                                 any(t == tarec.RT_HOLD for t, _ in es))
                 frame = Frame(prm, rest=rest)
                 run, prev, links = Run(), None, 0
             elif kind == tarec.RB_STREAM and (payload is not None or (decode and flags & RBF_SECTIONS)):

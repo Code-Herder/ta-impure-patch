@@ -16,7 +16,7 @@
    - A death's image is the unit as the destructor 0x4866D0 found it (RK_EV_DEATH); MEASURED by
      the same research, it differs from the unit copy in 0 to 17 dwords.
 
-   THE BYTES. Scheme 1, EV_COLS columns (C_* below), every record's fields in record order. An ID
+   THE BYTES. Scheme 2, EV_COLS columns (C_* below), every record's fields in record order. An ID
    is coded as zz(ID - the last ID coded), and the last ID becomes it.
      RK_EV_SHOT        C_ID the shooter (+0x21, at most 0xFFFF); C_SH_TGT 0 for a target of
                        0xFFFF, else 1 + zz(target - shooter); C_SH_START the start's x, y, z and
@@ -32,9 +32,12 @@
                        and bytes
      RK_EV_REPLY       C_ID; C_RP_KIND the kind; C_RP_HEAD root and text given; C_RP_TEXT and
                        C_LIT the text as a name's, in the texts
-     RK_EV_SPRAY       C_ID; C_SP_MODE 0: the slot's last spray again; 1: its reverse and its
-                       tail from +0x14 on again, C_SP_POINT zz(x, y, z - its last); 2: C_SP_RAW
-                       the 44 bytes after the ID
+     RK_EV_SPRAY       C_ID; C_SP_SEL 255 (SP_RAW) and C_SP_RAW the 44 bytes after the ID,
+                       always for an ID that names no slot; else 4i + c, entry i of the slot's
+                       kept sprays whose bytes but the point are the spray's and candidate c of
+                       its point (spray_cand: as it was, moved with the unit, turned by the
+                       heading change one way or the other), plus 0x80 (SP_RESID) when
+                       C_SP_POINT follows with zz(x, y, z - the candidate's)
      RK_EV_DEATH       C_ID; C_DT_KILLER zz(killer - ID); C_DT_HEAD +8..+0xB; C_DT_MASK the
                        REC_UNIT_BITS bytes of the image's dwords that differ from the unit copy's
                        (zero where the unit is no live slot); C_DT_DWORDS those dwords
@@ -58,21 +61,24 @@
    death's end that is not the innermost open death's.
 
    THE STATE, cleared at every reset (events_restart): the last unit ID; the names and the texts,
-   each the first 256 literals since the reset; per slot (ID - 1 < nslots) its last spray and four
-   (script index, arguments) entries, the oldest replaced by a script none of them holds; per
-   feature root its last site; the open deaths, innermost last; the encoder's latch. MEMORY: 128
-   bytes a slot (640 KB at 5,001 slots) and 40 KB of dictionaries, besides the columns.
+   each the first 256 literals since the reset; per slot (ID - 1 < nslots) its last four explicit
+   sprays, newest first, each with its unit's +0x6A..+0x75 and heading +0x66 at its record (zero
+   where the slot was not live), and four (script index, arguments) entries, the oldest replaced
+   by a script none of them holds; per feature root its last site; the open deaths, innermost
+   last; the encoder's latch. MEMORY: 324 bytes a slot (1.6 MB at 5,001 slots) and 40 KB of
+   dictionaries, besides the columns.
 
    THE BOUNDS. Every value read is bounded before it is used: a shot's IDs at 0xFFFF and its
    target below it, a slot by nslots, a dictionary index by the entries held, a literal by
    REC_NAME_MAX or REC_TEXT_MAX, a root by FR_ROOTS, the open deaths by REC_DEATHS_MAX, a death's
-   mask by REC_UNIT_DWORDS, a spray's mode by 2 and its modes 0 and 1 by a slot that sprayed, a
+   mask by REC_UNIT_DWORDS, a spray's selector by a slot, its entry by the sprays the slot
+   keeps and its bits 4..6 at zero, a turned spray's offset from its unit below 2^28 (SP_TURN), a
    flag by 1; every column is read to its end. The decoder builds an event in a buffer of the
    longest event's EV_BODY_MAX bytes, at offsets each kind's fixed layout bounds, and puts it in
    the body through recf_body_put. */
 #include "tagpu_recframe.h"
 
-#define EVENTS_SCHEME 1
+#define EVENTS_SCHEME 2
 
 enum {
     C_ID, C_SH_TGT, C_SH_START, C_SH_TARGET, C_SH_RAW,

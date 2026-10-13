@@ -149,7 +149,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 21                           # the unit listing from state; script slices, owner's queries, yards; the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
+REC_FORMAT = 22                           # sprays against the last four, order nodes matched, projectile lanes; the unit listing from state; script slices, owner's queries, yards; the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)

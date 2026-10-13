@@ -42,18 +42,19 @@
    after the last one matched, within ORDERS_SCAN of it, with the same +0x04 byte and +0x46 dword;
    that is a policy, the decoder reads the choice.
 
-   THE STATE, cleared at every reset. Per (slot, list) its place in the arena (offset and
-   capacity, in nodes) and its kept list: the node images of the last record of that (slot, list)
-   when that record was the whole list, or none. A record that is not the whole list drops the
-   kept one, and in scheme 2 a unit's RK_UNIT_GONE drops both of its slot's. A whole list fits in its place when its total is at most the place's capacity, else
-   it takes a new place of exactly its total at the arena's end, if the arena then holds at most
-   ORDERS_HELD nodes; else it is not kept and the old place stays for a later, shorter list. The
-   places are a function of the records since the reset alone, so the encoder and every decoder
-   keep the same lists. The arena's memory doubles up to ORDERS_HELD nodes as places are taken; a
-   failed allocation latches `oom` -- the encoder declines the block, the decoder refuses it --
-   and never changes what is kept. A record the frame cannot carry latches `unfit` in the encoder:
-   the frame never declines mid-block, its enc_write does. MEMORY: 12 bytes a (slot, list), and
-   the arena up to ORDERS_HELD x REC_ORDER_IMAGE bytes (5.8 MB).
+   THE STATE, cleared at every reset. Per (slot, list) its place in the arena (offset and capacity,
+   in nodes) and its kept list: the node images of the last record of that (slot, list) when that
+   record was the whole list, or none. A record that is not the whole list drops the kept one, and
+   in scheme 2 a unit's RK_UNIT_GONE drops both of its slot's. A whole list fits in its place when
+   its total is at most the place's capacity, else it takes a new place of exactly its total at the
+   arena's end, if the arena then holds at most ORDERS_HELD nodes; else it is not kept and the old
+   place stays for a later, shorter list. The places are a function of the records since the reset
+   alone, so the encoder and every decoder keep the same lists. The arena's memory doubles up to
+   ORDERS_HELD nodes as places are taken; a failed allocation latches `oom` -- the encoder declines
+   the block, the decoder refuses it -- and never changes what is kept. A record the frame cannot
+   carry latches `unfit` in the encoder: the frame never declines mid-block, its enc_write does.
+   MEMORY: 12 bytes a (slot, list), and the arena up to ORDERS_HELD x REC_ORDER_IMAGE bytes (5.8
+   MB).
 
    THE BOUNDS. 1 <= slot < nslots; a key of bits 0..2 with CHUNK only beside WHOLE; total <=
    REC_ORDERS_MAX; k <= REC_ORDERS_CHUNK, first + k <= total, and k >= 1 unless the total is 0 (an
