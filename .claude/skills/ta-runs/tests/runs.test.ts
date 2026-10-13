@@ -101,9 +101,9 @@ describe('reading', () => {
   })
 
   test('durations and the host clock', () => {
-    expect(duration(59)).toBe('59 s')
-    expect(duration(420)).toBe('7 min')
-    expect(duration(7200)).toBe('2.0 h')
+    expect(duration(59)).toBe('59s')
+    expect(duration(420)).toBe('7min')
+    expect(duration(7200)).toBe('2.0h')
     expect(clockAt(Date.UTC(2026, 9, 9, 15, 42), -240)).toBe('11:42')
   })
 
@@ -129,7 +129,7 @@ describe('the pane', () => {
                                   props: PANE_PROPS, requestId: 'ta-runs' })
     expect(await ui.find({ text: /tareplay landing a/ })).toBeDefined()
     expect(await ui.find({ text: /── IN PROGRESS \(1\)/ })).toBeDefined()
-    expect(await ui.find({ text: /░{22} {2}0\/1 test groups · ~7 min left · end time ≈\d\d:\d\d$/ })).toBeDefined()
+    expect(await ui.find({ text: /░{22} {2}0\/1 test groups · ~7min left · end time ≈\d\d:\d\d$/ })).toBeDefined()
     expect(await ui.find({ text: /running \(1\)/ })).toBeDefined()
     expect(await ui.find({ text: /▶ battle {2}record✓ {2}puppet ▶ GT 3120\/5300$/ })).toBeDefined()
     expect(await ui.find({ text: /── DONE/ })).toBeUndefined()
@@ -144,7 +144,7 @@ describe('the pane', () => {
     await clock.advance(2000)
     const ui = await $.ui.mount({ plugin: 'ta-runs', surface: 'terminal', component: 'Pane',
                                   props: PANE_PROPS, requestId: 'ta-runs' })
-    expect(await ui.find({ text: /✗ tareplay landing a died · 60 s · 0\/1 test groups$/ })).toBeDefined()
+    expect(await ui.find({ text: /✗ tareplay landing a died · 60s · 0\/1 test groups$/ })).toBeDefined()
     await ui.unmount()
   })
 
@@ -190,7 +190,7 @@ describe('the band and the toasts', () => {
     files.set(`${ROOT}/${SID}/a.json`, JSON.stringify({ ...failed, state: 'fail',
                                                         ended: T0 / 1000 + 4 }))
     await clock.advance(2000)
-    expect(toasts.some(t => /tareplay landing a: fail after 64 s — 1 FAIL/.test(t))).toBe(true)
+    expect(toasts.some(t => /tareplay landing a: fail after 64s — 1 FAIL/.test(t))).toBe(true)
     const after = await $.ui.mount({ plugin: 'ta-runs', surface: 'terminal',
                                      component: 'AbovePrompt', props: BAND_PROPS })
     expect(await after.find({ text: /tareplay landing a/ })).toBeUndefined()
@@ -250,7 +250,7 @@ describe('in progress and done', () => {
     expect(await ui.find({ text: /── IN PROGRESS \(1\)/ })).toBeDefined()
     expect(await ui.find({ text: /── DONE \(1\)/ })).toBeDefined()
     const at = clockAt(T0 - 10_000, -240)
-    expect(await ui.find({ text: new RegExp(`▸ ✓ tareplay landing b pass · 6 min · ${at}$`) }))
+    expect(await ui.find({ text: new RegExp(`▸ ✓ tareplay landing b pass · 6min · ${at}$`) }))
       .toBeDefined()
     expect(await ui.find({ text: /passed/ })).toBeUndefined()
     await ui.unmount()
@@ -281,7 +281,7 @@ describe('in progress and done', () => {
     await clock.advance(2000)
     const ui = await $.ui.mount({ plugin: 'ta-runs', surface: 'terminal', component: 'Pane',
                                   props: PANE_PROPS, requestId: 'ta-runs' })
-    expect(await ui.find({ text: /3\/7 test groups · 1 FAIL · ~7 min/ })).toBeDefined()
+    expect(await ui.find({ text: /3\/7 test groups · 1 FAIL · ~7min/ })).toBeDefined()
     expect(await ui.find({ text: /checks: / })).toBeUndefined()
     expect(await ui.find({ text: /^ *running \(1\)$/ })).toBeDefined()
     expect(await ui.find({ text: /^ *done \(3\) {2}2 ✓ · 1 ✗$/ })).toBeDefined()
@@ -294,8 +294,8 @@ describe('in progress and done', () => {
     expect(await ui.find({ text: /^ *waiting \(1\) {2}c4-kill$/ })).toBeDefined()
     await ui.press({ key: 'pass:a' })
     expect(await ui.find({ text: /▾ ✓ 2 passed$/ })).toBeDefined()
-    expect(await ui.find({ text: /✓ b7-flash {2}4 pass · 5 min$/ })).toBeDefined()
-    expect(await ui.find({ text: /✓ c2-stack {2}4 pass · 5 min$/ })).toBeDefined()
+    expect(await ui.find({ text: /✓ b7-flash {2}4 pass · 5min$/ })).toBeDefined()
+    expect(await ui.find({ text: /✓ c2-stack {2}4 pass · 5min$/ })).toBeDefined()
     await ui.unmount()
   })
 })

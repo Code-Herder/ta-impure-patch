@@ -29,9 +29,9 @@ const GLYPH: Record<string, [string, string | undefined]> = {
 
 export function duration(seconds: number): string {
   const s = Math.max(0, seconds)
-  if (s < 90) return `${Math.round(s)} s`
-  if (s < 90 * 60) return `${Math.round(s / 60)} min`
-  return `${(s / 3600).toFixed(1)} h`
+  if (s < 90) return `${Math.round(s)}s`
+  if (s < 90 * 60) return `${Math.round(s / 60)}min`
+  return `${(s / 3600).toFixed(1)}h`
 }
 
 /** hh:mm of an epoch time on the host's clock, `utcOffset` minutes east of UTC. */
@@ -45,7 +45,7 @@ export function standing(run: Run): string {
   return run.live === 'ended' ? run.state : run.live
 }
 
-/** "~7 min left · end time ≈11:42", "≥3 min left" while some step has no history yet, "" with
+/** "~7min left · end time ≈11:42", "≥3min left" while some step has no history yet, "" with
  * no estimate. */
 export function etaText(run: Run, now: number, utcOffset: number): string {
   if (!run.eta || run.live !== 'running') return ''
