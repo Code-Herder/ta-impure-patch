@@ -47,7 +47,9 @@
    made the iteration (group_fill): the pool frame's before pass A, the unit frame's after it, and
    pass A walks no run whose count is open, it being RK_UNIT_DELTA's, whose records pass A skips.
    The pattern list, the last pair and whether an RK_FEATURES was explicit are state of the run,
-   kept by the encoder's walk and by pass B in the same record order and cleared at every reset.
+   cleared at every reset: the encoder's walk keeps all three; on the decoder, kinds_parse moves
+   the pattern list and pass B keeps the last pair and the explicit RK_FEATURES, in the encoder's
+   record order.
 
    THREE INVARIANTS make this lossless whatever the codec gets wrong:
    - DECODE BEFORE WRITE (an ordering). The writer encodes a block with its encoder, packs it as
@@ -3025,10 +3027,10 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
                 if (kind == RK_UNIT || kind == RK_UNIT_GONE) unit_record(d, kind, b);
             } else {
                 const RecFrameOps* f = FRAMES[d->fix[sc]];
-                unsigned fl = 0;
-                if (!f->dec_rec(d->frame[d->fix[sc]], &fa, kind, d->fbody, &fl, why, cap)) return 0;
-                if (fl > RECF_BODY_MAX) REFUSE("the %s frame made a body of %u bytes", f->name, fl);
-                len = fl;
+                unsigned bl = 0;
+                if (!f->dec_rec(d->frame[d->fix[sc]], &fa, kind, d->fbody, &bl, why, cap)) return 0;
+                if (bl > RECF_BODY_MAX) REFUSE("the %s frame made a body of %u bytes", f->name, bl);
+                len = bl;
                 b = d->fbody;
                 if (kind == RK_EV_SHOT && len == SHOT && nshot < RECC_SHOTS_MAX)
                     memcpy(d->shots + (size_t)nshot++ * SHOT, b, SHOT);

@@ -3866,7 +3866,8 @@ records back, so a wrong fact costs size, never data. Each address was re-read i
   sign (the `mov`s between set no flags), and below 0 the cursor becomes `[main+0x14233] ·
   [main+0x14237] − 1`, W · H − 1 (`0x4240BE..0x4240CC`), and that tick skips reproduction (`jmp
   0x4241A8` at `0x4240D2`). The state frame predicts the cursor as `last ? last − 1 : W·H − 1` and
-  the pool's three heads as last time; an `RK_FEATURES` the prediction gives exactly is a marker
+  the pool's three heads as last time; an `RK_FEATURES` the prediction gives exactly, after an
+  explicit one since the reset, is a marker
   in the kinds section, with no state-frame bytes (format 18; MEASURED 2026-10-12 on the heavy
   four-player hour: 107,405 of 108,090 iterations, the cursor stepping as the tick steps it and
   the heads unchanged).

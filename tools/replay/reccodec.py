@@ -2832,7 +2832,7 @@ class Frame:
                 setattr(f, k, getattr(self, k).copy())
         if self.fst is not None:
             f.fst = _frames_clone(self.fst)
-        f.kmru = list(self.kmru)
+        f.kmru = [list(e) for e in self.kmru]
         return f
 
     def _derive(self):

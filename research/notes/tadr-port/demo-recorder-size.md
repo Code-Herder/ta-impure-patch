@@ -1483,8 +1483,9 @@ format 17's sections, one level-19 frame a run, gives the file's stream to the b
 
 **Measured** (2026-10-12, `codectest lossy` -- the writer's path: the lossy filter with the build's
 hold table, a refresh every 300 ticks, every block check-decoded -- under Wine, 32-bit, on the
-reference setup, over the records-only copies of the two L4 hours, as the format-17 figures were
-measured):
+reference setup, over the records-only copies of the two L4 hours). The format-17 baseline here,
+16,160,878 bytes, is format 17 on this path; P1's 15,649,187 above is `codectest transcode
+--snap-every 1` over a lossy input refreshed every 1,800 ticks, another path:
 
 | | heavy hour | light hour |
 |---|---:|---:|
