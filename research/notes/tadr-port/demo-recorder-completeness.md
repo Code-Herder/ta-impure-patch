@@ -889,10 +889,14 @@ cannot see an address recorded as a value; the scan looks for one instead.
   `0x4813AB`, `0x481427`), counted on a puppet's unit outside the replay's own calls; the first 16
   logged by unit, owner and GameTime. The playing's, the round trips' and the fresh seek's dumps
   must hold 0.
-- **No native owner-only start on a puppet**: the thirteen calls `tagpu_recorder.c`'s
+- **No native owner-only start on a puppet**: the fifteen calls `tagpu_recorder.c`'s
   `START_SITES` observes, counted at each call. On a puppet level only the replay starts those
   scripts, through `0x4B0A70` itself; the playing's, the round trips' and the fresh seek's dumps
   must hold 0 at every site ([why](demo-recorder-multiplayer-slice.md#exactly-once-private-children)).
+- **No native owner's query on a puppet**: the six calls `QUERY_SITES` observes (`0x4027FB`,
+  `0x4113B1`, `0x411A35`, `0x411AA6`, `0x411BF5`, `0x411CF1`; `tarec.py`'s `OWNER_QUERIES`), counted
+  at each call. Only the replay asks those queries on a puppet, through `0x4B0BC0` itself, so the
+  same dumps must hold 0 at every site.
 - No emission without its `QueryNanoPiece`; zero self-verification corrections (`tarec.py check`).
 - **UNCOVERED.** The landing tier fails `UNCOVERED <file>:<function>` for a changed function none
   of the fixtures it ran reached, on the coverage build; the broad tier fails it for a feature none

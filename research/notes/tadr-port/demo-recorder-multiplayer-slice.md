@@ -1233,7 +1233,7 @@ Nothing native can produce a second copy:
   write must come from the owner's images.
 - **Owner-only starts.** Direct-call reachability from the constructor
   `0x485F50` and the destructor `0x4866D0` over the retail executable reaches
-  three of the thirteen sites (engine map, *Lifecycle children and the engine
+  three of the fifteen sites (engine map, *Lifecycle children and the engine
   consumer*). The constructor's `0x489800` calls cannot start a script: each
   follows `0x48A160`, which resets that slot's target words just before.
   The destructor's cargo hit reaches `0x489CE0`, which the hit gate refuses for
@@ -1242,7 +1242,7 @@ Nothing native can produce a second copy:
   set. The order handlers and AutoAim never run for a type-3 owner.
   The enumeration does not follow the 118 and 131 indirect calls reachable from the
   two functions. The counts close that gap: `tarec compare-counts` and
-  `tareplay`'s R/Q check now fail on any count at one of the thirteen sites
+  `tareplay`'s R/Q check now fail on any count at one of the fifteen sites
   in a puppet process.
 
 A skirmish death is recorded at its entry, so the children it nests are replayed

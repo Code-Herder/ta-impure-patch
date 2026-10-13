@@ -966,7 +966,7 @@ Other sites considered and rejected:
 
 Taken 2026-09-30 (the slice note's *Decided 2026-09-30* and *S2a*): D1 as recommended; D2 wider than recommended, every owner-only start the game showed is recorded, TargetCleared included, and BeginTransport is not among them, because 0x411403 broadcasts it (0x456200) and the broadcasters record it; D3 and D5 as recommended, implemented by S2a; D4, D6 and D7 are S2b's.
 
-Format 21 (2026-10-13) records BeginTransport at its start `0x4113EF` after all, and leaves its broadcast out: the start runs at once on the recording machine, while the broadcast is started with run-now 0 by a remote copy and by a playing, one slice later (the engine map, *BeginTransport is recorded at its start*). `setSFXoccupy` (`0x43DBE8`) joins the owner-only starts in the same format.
+Format 23 (2026-10-13) records BeginTransport at its start `0x4113EF` after all, and leaves its broadcast out: the start runs at once on the recording machine, while the broadcast is started with run-now 0 by a remote copy and by a playing, one slice later (the engine map, *BeginTransport is recorded at its start*). `setSFXoccupy` (`0x43DBE8`) joins the owner-only starts in the same format.
 
 
 - **D1 — Unit replies on a replay.** A live remote never plays another player's; the watched

@@ -299,10 +299,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         tagpu_reclaim_init();
 
         /* tagpu: the demo recorder's event hooks (tagpu_recorder.c, *The events* and *The
-           features*): twenty-five observers, the five fire functions' network tests, thirteen
-           calls of the COB starts by name, the feature code's six calls of the simulation RNG and
-           the destructor's explosion call, byte-matched, installed only whole, and disjoint from
-           every detour above but the puppet gates on the two replies, the seven feature entries
+           features*): thirty observers, the five fire functions' network tests, fifteen
+           calls of the COB starts by name, the six owner's query calls (QUERY_SITES: 0x4027FB,
+           0x4113B1, 0x411A35, 0x411AA6, 0x411BF5, 0x411CF1), the feature code's six calls of the
+           simulation RNG and the destructor's explosion call, byte-matched, installed only whole,
+           and disjoint from every detour above but the puppet gates on the two replies, the seven feature entries
            and the state setter 0x48B090, and the puppet's COB-write observer there, onto which
            those observers chain. Then the counts' 21 sink observers, each on its own: a sink
            whose bytes differ is left out of the counts and logged -- 0x4B08C0 when

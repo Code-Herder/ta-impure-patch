@@ -3091,7 +3091,7 @@ The copied-image player-row mapper validates source/destination origin sets and 
 
 Owner constructor begins/creates, deaths/returns, script starts, replies and nano sprays share one copied kind-10
 carrier and 4,096-call game-thread queue (`tagpu_recmp_roots.c`), independently
-of the recording switch. The existing thirteen start observers, extra-weapons
+of the recording switch. The existing fifteen start observers, extra-weapons
 helper, constructor reservation and successful exit, destructor entry/return, two reply observers, nano query/dispatch credit and two spray observers
 supply unchanged root payloads. Mixed kinds and contiguous actor switches retain
 call order, source clock, incarnation and pre/post-B2 phase. Old calls drain before

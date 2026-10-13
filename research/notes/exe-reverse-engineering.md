@@ -1679,7 +1679,8 @@ seat of type 1 or 2 (`0x48AEB5..0x48AECD`); no dword in the file holds either ad
 bit `0x02`: BuildingBuild returns on it before its state dispatch (`0x402647..0x40264D`);
 VTOL_Pickup sets the bit only at the end of state 3 (`0x411464`), so event 2 finds it in state 4,
 where it starts `EndTransport` (`0x41148D`) and never reaches its query; VTOL_Landing never sets
-it (its stores of `+6` are `0xE8` and `|= 0xE0`). So each query is made in the handler's unit's
+it (its stores of `+6` are `= 0xE8` at `0x411B75` and `0x411C80`, `|= 0xE0` at `0x4119E2` and
+`|= 0xE8` at `0x411DBE`, none with bit `0x02`). So each query is made in the handler's unit's
 own turn, after that unit's slice, inside no death and no feature call, on the machine of that
 unit's owner. The queried unit is that unit, except a pad — SelfRepair's `QueryNanoPiece` and
 VTOL_Landing's `QueryLandingPad`: their query can come before the pad's own slice in the same
@@ -2377,7 +2378,9 @@ S2a of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s2a-what-w
 cannot say, where the engine does it and in the order it does it; the research is
 [the events note](tadr-port/demo-recorder-s2-events.md). `tagpu_rec_init`, at DllMain's attach,
 byte-matches every site and builds every stub before any lands; no recording starts without all of
-them (`recorder: 33 event sites in`: fifteen observers, five network tests, thirteen call sites).
+them (`recorder: 66 event sites in`: thirty observers, five network tests, fifteen named-start
+calls, six query calls, six feature draws, the destructor's explosion call, reproduction's source
+test and the two click calls; MEASURED in a battle recording's log, 2026-10-13).
 Each hook reads only a recording's game thread; a call from another thread is refused and counted
 (`RK_END`'s off-thread count). An observer's handler sees the site's `esp` as `E` and the
 registers `pushad` saved under it (EDI at `E−0x24` up to EAX at `E−0x08`), so at a function's
@@ -2499,7 +2502,7 @@ gates around `0x485F50`; `tagpu_puppet.c`'s `s_open` is tested by both predicate
 That reproduces children which precede the skirmish's exit-only create and have
 no live target when replayed. Multiplayer's begin/child/success sequence cannot
 reuse that rule while also dispatching the recorded children: it needs an
-explicit sole producer for those effects. The observer stubs for the thirteen
+explicit sole producer for those effects. The observer stubs for the fifteen
 owner-only named starts restore registers/flags and jump unconditionally to
 `0x4B0A70` or `0x4B0940`; their C observer's return value suppresses nothing.
 
