@@ -12,6 +12,7 @@ export type Els = {
 }
 
 const ENDED = new Set(['done', 'pass', 'fail', 'unrun', 'skipped'])
+const PASSED = new Set(['pass', 'done'])
 
 const GLYPH: Record<string, [string, string | undefined]> = {
   planned: ['·', 'inactive'],
@@ -69,11 +70,16 @@ export function phase(it: Item): 'planned' | 'running' | 'ended' {
  * worker running, or `waiting` for a worker with nothing running. A run that names no pools
  * plays every step. */
 export function stage(run: Run, it: Item): 'playing' | 'checking' | 'waiting' {
-  const pools = run.pools ?? {}
-  const workers = Object.keys(pools).length > 0
   const going = it.steps.filter(s => s.state === 'running')
   if (!going.length) return 'waiting'
-  return going.some(s => !workers || (pools[s.pool ?? 'main'] ?? 0) > 0) ? 'playing' : 'checking'
+  return going.some(s => onWorker(run, s)) ? 'playing' : 'checking'
+}
+
+/** Whether a step plays on one of the run's worker pools: a test, as against work like checks
+ * that waits for no worker. A run that names no pools plays every step. */
+export function onWorker(run: Run, s: Step): boolean {
+  const pools = run.pools ?? {}
+  return !Object.keys(pools).length || (pools[s.pool ?? 'main'] ?? 0) > 0
 }
 
 /** How far a run has got: its items with every step ended (a test group counts once its checks
@@ -87,13 +93,29 @@ export function progress(run: Run): { done: number; total: number; noun: string 
            noun: NOUN[run.tool] ?? 'items' }
 }
 
+/** What a run calls the steps its workers play. */
+const STEP_NOUN: Record<string, string> = { tareplay: 'tests', tacompat: 'stages' }
+
+/** How far a run's workers have got: its steps on a worker pool that have ended. */
+export function testProgress(run: Run): { done: number; total: number; noun: string } {
+  const played = run.items.flatMap(it => it.steps.filter(s => onWorker(run, s)))
+  return { done: played.filter(s => ENDED.has(s.state)).length, total: played.length,
+           noun: STEP_NOUN[run.tool] ?? 'steps' }
+}
+
+/** Whether a run is items of its own, as against one item of steps (a landing, a tacli game). */
+function hasItems(run: Run): boolean {
+  return !(run.items.length === 1 && run.items[0]!.id === '')
+}
+
 /** A bar of `width` cells for `done` of `total`. */
 export function bar(done: number, total: number, width = 22): string {
   const full = total ? Math.round((width * done) / total) : 0
   return '█'.repeat(full) + '░'.repeat(width - full)
 }
 
-/** The run in one line after its title. Running: progress, failures, time left. Ended: how it
+/** The run in one line after its title. Running: progress (a run of items: its tests ended and
+ * its items passed), failures, time left. Ended: how it
  * stands, how long, when it ended (so a section's outcomes line up), then how far it got when
  * that was not the whole plan, and failures. */
 export function summary(run: Run, now: number, utcOffset: number): string {
@@ -108,7 +130,13 @@ export function summary(run: Run, now: number, utcOffset: number): string {
   const { done, total, noun } = progress(run)
   const fails = failures(run).length
   const parts = [...ended]
-  if (run.live === 'running' || done < total) parts.push(`${done}/${total} ${noun}`)
+  if (run.live === 'running' && hasItems(run)) {
+    const t = testProgress(run)
+    const passed = run.items.filter(it => phase(it) === 'ended' && PASSED.has(it.state)).length
+    parts.push(`${t.done}/${t.total} ${t.noun}`, `${passed}/${total} ${noun} passed`)
+  } else if (run.live === 'running' || done < total) {
+    parts.push(`${done}/${total} ${noun}`)
+  }
   if (fails) parts.push(`${fails} FAIL`)
   if (run.live === 'running') {
     const eta = etaText(run, now, utcOffset)
@@ -257,6 +285,16 @@ function testLine(c: Ctx, it: Item): RenderElement[] {
   return out
 }
 
+/** A waiting item's row: its ended tests, then the ones queued, in the order a worker takes
+ * them. */
+function waitLine(c: Ctx, run: Run, it: Item): RenderElement[] {
+  const { els } = c
+  const next = it.steps.filter(s => s.state === 'planned' && onWorker(run, s))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map(s => s.id)
+  return [...testLine(c, it),
+          <els.Text dimColor>{next.length ? `  next: ${next.join(' ')}` : ''}</els.Text>]
+}
+
 /** An ended item's wall time: its first test's start to its last test's end. */
 function itemSeconds(it: Item): number | null {
   const timed = it.steps.filter(s => s.started && s.seconds != null)
@@ -265,11 +303,9 @@ function itemSeconds(it: Item): number | null {
     Math.min(...timed.map(s => s.started!))
 }
 
-const PASSED = new Set(['pass', 'done'])
-
-/** A run of items, grouped: those playing a game (one row each, bounded by the workers),
- * those checking or waiting for a worker (one line each), those ended (what went wrong by name,
- * the passes behind one toggle), those not started. */
+/** A run of items, grouped: those in progress (one row each, playing first, then waiting for a
+ * worker), those checking (one line), those ended (what went wrong by name, the passes behind
+ * one toggle), those not started. */
 function itemRows(c: Ctx, run: Run, depth: number): RenderElement[] {
   const { els } = c
   const rows: RenderElement[] = []
@@ -282,22 +318,28 @@ function itemRows(c: Ctx, run: Run, depth: number): RenderElement[] {
   const names = (items: Item[]) =>
     <els.Text dimColor>{`  ${items.map(i => i.id).join(' ')}`}</els.Text>
 
-  // A run that ended mid-way shows what it cut short as one group, its tests as they stopped.
+  // In progress: the items playing, then those waiting for a worker, each its own row so an
+  // item stays in view between its tests. A run that ended mid-way shows what it cut short as
+  // one group, its tests as they stopped.
   const playing = isLive ? between.filter(it => stage(run, it) === 'playing') : between
-  if (playing.length) {
-    rows.push(group(isLive ? 'running' : 'cut short', playing.length))
-    const pad = Math.max(...playing.map(it => it.id.length))
+  const waiting = isLive ? between.filter(it => stage(run, it) === 'waiting') : []
+  if (playing.length || waiting.length) {
+    rows.push(group(isLive ? 'in progress' : 'cut short', playing.length + waiting.length))
+    const pad = Math.max(...[...playing, ...waiting].map(it => it.id.length))
     for (const it of playing) {
       const fails = it.steps.some(s => s.state === 'fail')
       rows.push(line(els, depth + 1, Glyph(els, isLive ? (fails ? 'fail' : 'running') : 'unrun'),
                      ` ${it.id.padEnd(pad)}  `, ...testLine(c, it)))
     }
+    for (const it of waiting) {
+      const fails = it.steps.some(s => s.state === 'fail')
+      rows.push(line(els, depth + 1, Glyph(els, fails ? 'fail' : 'planned'),
+                     <els.Text dimColor> {it.id.padEnd(pad)}  </els.Text>, ...waitLine(c, run, it)))
+    }
   }
   if (isLive) {
-    for (const label of ['checking', 'waiting'] as const) {
-      const these = between.filter(it => stage(run, it) === label)
-      if (these.length) rows.push(group(label, these.length, names(these)))
-    }
+    const checking = between.filter(it => stage(run, it) === 'checking')
+    if (checking.length) rows.push(group('checking', checking.length, names(checking)))
   }
   if (ended.length) {
     const passed = ended.filter(it => PASSED.has(it.state))
@@ -348,7 +390,7 @@ function body(c: Ctx, run: Run, depth: number): RenderElement[] {
   const rows: RenderElement[] = (run.problems ?? []).map(p =>
     line(els, depth, <els.Text color="error">✗ {p}</els.Text>))
   if (hasBar(run)) {
-    const { done, total } = progress(run)
+    const { done, total } = hasItems(run) ? testProgress(run) : progress(run)
     rows.push(line(els, depth, <els.Text color="suggestion">{bar(done, total)}</els.Text>,
                    <els.Text dimColor>  {summary(run, c.now, c.utcOffset)}</els.Text>))
   }

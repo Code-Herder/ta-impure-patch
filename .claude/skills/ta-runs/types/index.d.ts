@@ -8,6 +8,8 @@ export type Step = {
   /** planned, running, done, pass, fail, unrun or skipped */
   state: string
   after?: string[]
+  /** Where it stands in the queue: a free worker takes the lowest ready one. */
+  order?: number
   /** The workers it plays on: one of the run's `pools`, or work that waits for none. */
   pool?: string
   instance?: string
