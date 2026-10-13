@@ -3,8 +3,8 @@
 segments and world): the C parser against the coverage build's map, the features' regions, the
 comment filter, `landing --check`, a recording's segments and chains, what the block walk refuses,
 its runs and snapshot chains, and which cells are images, read from files built from the format alone, the fixtures'
-takeover entries, the W lane's edited header copies, and compare-counts' script slice and exact
-COB children. No game runs. The files are read through
+takeover entries, the W lane's edited header copies, compare-counts' script slice and exact
+COB children, and the puppet's native owner's query check. No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
 shared venv when they are missing.
 
@@ -174,6 +174,36 @@ class OpaqueGlobals(unittest.TestCase):
         self.assertIn("globals plain holds 0x00001800", output.getvalue())
         self.assertNotIn("seed", output.getvalue())
         self.assertIn("1 VALUES THAT ARE ADDRESSES", output.getvalue())
+
+
+class PuppetEngineChecks(unittest.TestCase):
+    """A puppet's dump holds no native owner-only start and no native owner's query: `tarec counts`
+    names each query call site's count as an owner's query, and the R/Q check fails on one."""
+
+    def test_counts_names_a_query_site(self):
+        counts = {(0x4113B1, 0, 0): 1, (0x4113EF, 0, 0): 0, (0x12345, 0, 0): 2}
+        with patch.object(tarec, "header_only", return_value={}), \
+                patch.object(tarec, "counts_of", return_value=(900, counts, (0, 0, 1), {})):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                tarec.cmd_counts("rec", "dump")
+        text = out.getvalue()
+        self.assertIn("owner's query 0x4113B1 from 0x000000: 1", text)
+        self.assertIn("owner-only start 0x4113EF from 0x000000: 0", text)
+        self.assertIn("site 0x012345 from 0x000000: 2", text)
+
+    def test_a_native_query_fails_the_puppet(self):
+        def run(lines):
+            with patch.object(tareplay, "tarec_run", return_value=(0, "\n".join(lines))):
+                return {label: verdict for label, verdict, _ in
+                        tareplay.puppet_counts("R", "rec", Path("dump-rt1c.bin"))}
+        clean = run(["dump: GameTime 900", "  owner's query 0x411A35 from 0x000000: 0"])
+        self.assertEqual(clean["R: native owner's queries on a puppet"], tareplay.PASS)
+        hit = run(["dump: GameTime 900", "  owner's query 0x411A35 from 0x000000: 1"])
+        self.assertEqual(hit["R: native owner's queries on a puppet"], tareplay.FAIL)
+        self.assertEqual(hit["R: native owner-only starts on a puppet"], tareplay.PASS)
+        self.assertEqual(set(tarec.OWNER_QUERIES), {0x4027FB, 0x4113B1, 0x411A35, 0x411AA6,
+                                                    0x411BF5, 0x411CF1})
 
 
 class CompletionCheckpoints(unittest.TestCase):

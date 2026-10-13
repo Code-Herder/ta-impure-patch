@@ -2334,7 +2334,8 @@ def checks(fx):
             continue
         if not d.exists():
             res.add((f"{proc}: COB engine writes on a puppet", UNRUN, f"no {d.name}"),
-                    (f"{proc}: native owner-only starts on a puppet", UNRUN, f"no {d.name}"))
+                    (f"{proc}: native owner-only starts on a puppet", UNRUN, f"no {d.name}"),
+                    (f"{proc}: native owner's queries on a puppet", UNRUN, f"no {d.name}"))
             continue
         res.later(puppet_counts, proc, rec, d)
     if ran.get("L") == "ran":
@@ -2503,11 +2504,13 @@ def yard_dropped_check(log_path):
 
 
 def puppet_counts(proc, rec, d):
-    """The two engine-write checks of a puppet's dump, from `tarec counts`."""
+    """The three engine checks of a puppet's dump, from `tarec counts`: no COB write, no owner-only
+    start and no owner's query the puppet's engine made itself."""
     rc, o = tarec_run("counts", rec, d)
     res = []
     for what, label in (("COB engine writes", "COB write"),
-                        ("native owner-only starts", "owner-only start")):
+                        ("native owner-only starts", "owner-only start"),
+                        ("native owner's queries", "owner's query")):
         hits = [ln.strip() for ln in o.splitlines() if label in ln and not ln.endswith(": 0")]
         res.append((f"{proc}: {what} on a puppet", UNRUN if rc else FAIL if hits else PASS,
                     o.strip() if rc else "; ".join(hits) if hits else f"none ({d.name})"))

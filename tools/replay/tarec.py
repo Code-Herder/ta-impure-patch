@@ -3195,6 +3195,12 @@ OWNER_STARTS = {0x489F43: "HitByWeapon", 0x489F8E: "TakeDamage", 0x406834: "Tran
                 0x48A2E0: "TargetCleared (0x48A1E0)", 0x40F433: "EndTransport", 0x41148D: "EndTransport",
                 0x411794: "EndTransport", 0x411DA1: "EndTransport", 0x411E2B: "EndTransport",
                 0x4113EF: "BeginTransport", 0x43DBE8: "setSFXoccupy"}
+# the six owner's query calls (tagpu_recorder.c, QUERY_SITES), counted at the call: on a puppet
+# level only the replay asks these, through 0x4B0BC0 itself, so a count here is the engine's
+# order handler asking one natively
+OWNER_QUERIES = {0x4027FB: "QueryBuildInfo", 0x4113B1: "QueryTransport",
+                 0x411A35: "QueryLandingPad", 0x411AA6: "QueryLandingPad",
+                 0x411BF5: "QueryLandingPad", 0x411CF1: "QueryLandingPad"}
 
 
 def counts_of(path, h):
@@ -3292,8 +3298,8 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False, cob_exact=Fal
     the change between its two dumps: every root per site exactly; the script slice per placement
     exactly (SLICE_WHERE); every sink per (site, caller, aux), a `same` row's callers summed,
     within replay-absent.tsv's band, less its absent and extra rows; the named COB flare can
-    inherit an accepted parent shortfall, reported with both counts; and no COB engine write or
-    native owner-only start on the puppet.
+    inherit an accepted parent shortfall, reported with both counts; and no COB engine write,
+    native owner-only start or native owner's query on the puppet.
     Rewind permits only VM START/CALL child counts to differ and reports each pair. cob_exact
     compares every VM START/CALL child key with a script name (aux not 0) exactly instead: no band,
     no flare, no row; aux 0, a refused index, stays with the rows. The two exclude each other.
@@ -3382,6 +3388,11 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False, cob_exact=Fal
         if n:
             lines.append(f"owner-only start on a puppet, {what} at 0x{va:06X}: {n} since the level "
                          f"began")
+    for va, what in OWNER_QUERIES.items():
+        n = sum(c for (s, _, _), c in cpb.items() if s == va)
+        if n:
+            lines.append(f"owner's query on a puppet, {what} at 0x{va:06X}: {n} since the level "
+                         f"began")
     print(f"counts, live {la}..{lb} against puppet {pa}..{pb}, GameTime [{ta}, {tb}): "
           f"{len(COUNT_ROOTS)} roots, the script slice, {nsink} sink keys, band {band[0]}% or "
           f"{band[1]}, {len(rows)} rows" + (", the COB children exact" if cob_exact else "") + ": "
@@ -3400,7 +3411,8 @@ def cmd_counts(path, dump):
         kind = ("root" if site in COUNT_ROOTS else "script slice" if site == SLICE_ROOT else
                 "sink" if site in COUNT_SINKS else
                 "COB write" if site in COB_WRITES else
-                "owner-only start" if site in OWNER_STARTS else "site")
+                "owner-only start" if site in OWNER_STARTS else
+                "owner's query" if site in OWNER_QUERIES else "site")
         name = names.get(aux)
         print(f"  {kind} 0x{site:06X} from {caller_text(caller)}"
               + (f' "{name}"' if name else f" aux 0x{aux:X}" if aux else "") + f": {n}")
