@@ -1607,14 +1607,16 @@ and every reader keep:
   1 listed with its own last mask, 2 listed with another;
 - the other listed candidates are ranks among the candidates not carried, and the *woken* units
   -- resting ones with a delta, which a frame always lists -- are slots;
-- every listed unit but a symbol 1 takes an id: 0 its slot's last mask (not for a carried unit),
-  k the k-th of the run's masks most recent first, the list's length + 1 the block's next new
+- every listed unit but a symbol 1 takes an id: 0 its slot's last mask (not for a carried unit,
+  and only when that mask is not empty), k the k-th of the run's masks most recent first, the list's length + 1 the block's next new
   mask; every listed mask goes to the front of the list, at most 4,096 masks (`RECC_J2_MTF`), the
   least recent dropped, so the list never holds a mask twice;
 - the ids are a byte each when all are below 256, else varints.
 
 The previous listed set, the last masks and the list restart empty at every reset point, like the
-rest of the frame's state.
+rest of the frame's state. Slot 0 is never a candidate nor woken, so an iteration carries and lists
+at most slots − 1 units: a block's symbol bytes and its ids are bounded by its iterations, not by
+the section's bytes alone, and the decoder refuses more of either before it reads one id.
 
 **Where it departs from the plan** (the spec's J2). The plan kept the columns "as today": each
 lane's residuals for the whole block, lane after lane, which a reader places before the first
@@ -1664,7 +1666,8 @@ with a carried unit listed with its last mask, one with another, one not listed 
 and reads it back, its ids a byte each; a run of 4,200 masks, more than the list holds, whose ids
 are varints, after which the first 60 come back as new masks; and refuses one change each: a
 symbol byte too many, a symbol 3, a rank past the candidates not carried, a woken slot that does not
-rest, more ranks than slots, more new masks than ids, an id past the list, an id 0 for a carried
+rest, more ranks than slots, more symbol bytes or more ids than the iterations' slots carry and
+list, more new masks than ids, an id past the list, an id 0 for a carried
 unit's other mask, the ids' mode 2, a new mask the list already holds, a new mask no id takes, a
 lane's count of 0, a residual no listed mask takes and a listed mask's residual missing. Fuzzed on
 the heavy hour, 20,000 cases each: the unit section alone (the x86-64 ASan build), C and Python

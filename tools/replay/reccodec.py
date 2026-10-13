@@ -3373,6 +3373,11 @@ class Frame:
         ns, at = _varint(sec, at, end)
         if at < 0 or ns > end - at:
             raise Unreadable("the unit frame's symbols run past it")
+        # BOUND: an iteration carries and lists at most nslots - 1 units (the writer's slot loop
+        # runs 1..nslots-1, tagpu_reccodec.c reccodec_decode), so the symbols and the ids are
+        # bounded by the head's iterations, not by the section's bytes alone
+        if ns > (iters * (nslots - 1) + 3) // 4:
+            raise Unreadable(f"{ns} bytes of symbols, past {iters} iterations of {nslots - 1} slots")
         b = sec[at:at + ns]
         at += ns
         syms = np.stack([(b >> (2 * k)) & 3 for k in range(4)], axis=1).reshape(-1).astype(np.int64)
@@ -3395,6 +3400,8 @@ class Frame:
                 out.append(vals)
                 idx.append(idx[-1] + n)
                 nid += n
+        if nid > iters * (nslots - 1):
+            raise Unreadable(f"{nid} mask ids, past {iters} iterations of {nslots - 1} slots")
         cat = lambda xs: np.concatenate(xs) if xs else np.zeros(0, np.int64)
         jrk, jws = cat(jrk), cat(jws)
         nd, at = _varint(sec, at, end)

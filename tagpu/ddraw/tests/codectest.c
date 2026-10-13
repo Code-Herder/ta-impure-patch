@@ -3524,6 +3524,18 @@ static int outcomes_listing(const RecCodecParams* p)
               m.nw[1]++; rb_put(&m.wk, &sl, 4); rb_put(&m.ids, &id, 4); });
     LST_MUT("refused: more ranks than slots", "lists past the",
             { m.nr[1] = p->nslots + 1; });
+    LST_MUT("refused: more symbol bytes than the iterations' slots carry", "bytes of symbols, past",
+            { while (m.sym.n <= (m.iters * (p->nslots - 1) + 3) / 4) rb_put(&m.sym, "", 1); });
+    /* each iteration's ranks and woken slots in bounds alone, every rank and every slot but 0:
+       2 * nslots - 1 ids an iteration, past the nslots - 1 an iteration lists */
+    LST_MUT("refused: more ids than the iterations' slots list", "mask ids, past",
+            { m.rk.n = m.wk.n = 0;
+              for (it = 0; it < m.iters; it++) {
+                  m.nr[it] = p->nslots;
+                  m.nw[it] = p->nslots - 1;
+                  for (s = 0; s < p->nslots; s++) rb_u32(&m.rk, s);
+                  for (s = 1; s < p->nslots; s++) rb_u32(&m.wk, s);
+              } });
     LST_MUT("refused: more new masks than ids", "new masks for", m.ndict = (uint32_t)(m.ids.n / 4) + 1);
     LST_MUT("refused: an id past the list and the new masks", "names no mask", ((uint32_t*)m.ids.p)[0] = 200);
     LST_MUT("refused: id 0 for a carried slot's other mask", "names no mask", ((uint32_t*)m.ids.p)[3] = 0);

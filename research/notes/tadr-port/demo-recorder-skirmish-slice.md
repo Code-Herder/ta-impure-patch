@@ -427,7 +427,8 @@ count, a type at or past that count, types not ascending or a pad byte not zero)
 whose header lacks `RT_CODEC` and `RT_PHYSICS`; a segment whose unit slots differ from the first
 header's; a container whose head, kinds, lengths, slots, masks or columns exceed their bounds, which
 leaves bytes in a section, or which decodes to another payload length; a unit section whose
-symbols are not exactly the carried units' (a symbol 3 or a nonzero pad included), whose rank or
+symbols are not exactly the carried units' (a symbol 3 or a nonzero pad included), whose symbols
+or ids pass the block's iterations times its slots but slot 0, whose rank or
 woken slot names no unit that iteration can list, whose id names no mask (0 for a carried unit or
 an empty last mask, past the list and the next new mask, a new mask the list already holds),
 whose ids or new masks are not all taken, or whose listed masks do not consume each lane's

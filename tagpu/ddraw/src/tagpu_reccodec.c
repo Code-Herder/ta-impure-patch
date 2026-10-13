@@ -95,7 +95,7 @@
    shifts and named divisions.
 
    MEMORY: per slot the copy (0x148 bytes), L2 (0x148), L3 (16), the winners (one byte per lane,
-   128), five flags and the last mask (16), 821 bytes; per projectile record the pool and its next image, their
+   128), the last step (8), five flags and the last mask (16), 829 bytes; per projectile record the pool and its next image, their
    images one iteration before, the winners (27 bytes each), the ages, the advanced image and the
    survivors' maps, 613 bytes; per codec the air index (128 KB), the last birth of each weapon
    (442 KB), the shot events and their rows (590 KB), the search's three indexes over
@@ -1549,7 +1549,8 @@ static int bit_of(const unsigned char* bits, unsigned i) { return bits[i >> 3] >
    The previous listed set, the last masks and the list are state of the run, cleared at every
    reset (listing_restart); the slot's last mask survives a birth in its slot, which costs size
    only. The finds go through a hash of chains and a move to the front costs the mask's rank, so
-   the work is a function of the ranks the file names, each bounded by RECC_J2_MTF. */
+   the work is a function of the ranks the file names, each bounded by RECC_J2_MTF, and of the
+   ids a block holds, at most its iterations times nslots - 1 (reccodec_decode). */
 
 static void listing_restart(RecCodec* c)
 {
@@ -3214,6 +3215,13 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
     if (!varint_get(sec, uend, &at, &v) || v != h.iterations)
         REFUSE("the unit frame's iterations are not the head's %u", h.iterations);
     if (!varint_get(sec, uend, &at, &v) || v > uend - at) REFUSE("the unit frame's symbols run past it");
+    /* BOUND: an iteration carries and lists at most nslots - 1 units, since the writer's slot
+       loop (enc_iteration) runs 1..nslots-1 and gives each slot at most one symbol and one id;
+       so the symbols fill at most a quarter byte each of iterations * (nslots - 1), and the ids
+       (the symbols 2, the ranks and the woken slots) are at most that many. Without it the ids,
+       and the MTF walks they cost, would be bounded by the section's bytes alone. */
+    if (v > ((size_t)h.iterations * (d->nslots - 1) + 3) / 4)
+        REFUSE("%lu bytes of symbols, past %u iterations of %u slots", (unsigned long)v, h.iterations, d->nslots - 1);
     symat = at;
     nsymb = v;
     at += nsymb;
@@ -3238,6 +3246,8 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
             }
         }
     }
+    if (nid > (size_t)h.iterations * (d->nslots - 1))
+        REFUSE("%lu mask ids, past %u iterations of %u slots", (unsigned long)nid, h.iterations, d->nslots - 1);
     if (!varint_get(sec, uend, &at, &v)) REFUSE("the mask count cut short at byte %lu", (unsigned long)at);
     if (v > nid) REFUSE("%lu new masks for %lu ids", (unsigned long)v, (unsigned long)nid);
     ndict = v;

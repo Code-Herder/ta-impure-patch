@@ -632,8 +632,9 @@ _Static_assert(RB_CONTRIBUTIONS == 7 && RB_EXACT == 8, "the block kinds retain t
        bytes   dict[ndict][mb]            mb = ceil(lanes / 8); bit j says lane j has a residual
        u8      mode                       0: each id a u8, 1: each a varint
        ids     one per listed unit whose symbol is not 1, in slot order within each iteration:
-               0 the slot's last mask (not for a carried slot), k the k-th of the run's masks
-               most recent first, the list's length + 1 the next new mask
+               0 the slot's last mask (not for a carried slot, and only when that mask is not
+               empty), k the k-th of the run's masks most recent first, the list's length + 1 the
+               next new mask
        bytes   present[mb]                bit j: lane j has a count
        varint  count for each lane with its bit, in RT_CODEC's order, at least 1
        columns for each lane in RT_CODEC's order: its count of zigzag varint residuals, of the
@@ -641,7 +642,8 @@ _Static_assert(RB_CONTRIBUTIONS == 7 && RB_EXACT == 8, "the block kinds retain t
                every column exactly
    An iteration's candidates are the slots live at its start that no RK_UNIT or RK_UNIT_GONE of
    it names and that do not rest; its woken slots rest and change. A candidate the iteration
-   before listed is carried. The previous listed set, each slot's last mask and the run's masks
+   before listed is carried. Slot 0 is never a candidate nor woken, so a block's symbols and ids
+   are each at most iterations * (slots - 1). The previous listed set, each slot's last mask and the run's masks
    (at most RECC_J2_MTF, the least recent dropped) restart empty at every RBF_FRAME_RESET; the
    lanes' counts come first so a reader places every column before the first iteration, whose
    listing it learns only by decoding (tagpu_reccodec.c, THE LISTING).
