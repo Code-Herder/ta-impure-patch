@@ -37,7 +37,9 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 23: format 22 with QueryTransport and QueryLandingPad among the owner's queries, and
+/* 24: format 23 with the unit frame's listing, lane masks and residuals as one binary range
+   coder's bytes a block, each decision under a context both sides keep (RCS_UNITS below). 23 was
+   format 22 with QueryTransport and QueryLandingPad among the owner's queries, and
    BeginTransport and setSFXoccupy as the owner's starts (RK_EV_START_NAMED) where the broadcast and
    the playing's own water-state call made them before. 22 was format 21 with three record
    codings: an explicit nano spray as its unit's last four explicit sprays' -- the point as it was, moved with the unit or turned about it by its heading change --
@@ -46,8 +48,8 @@
    scheme 2); and a surviving projectile's bytes 0x34..0x6A as lanes of the record's field widths
    (RCS_PROJ below). 21 was format 20 with the unit frame's listing from state both sides keep --
    each carried slot a 2-bit symbol, the others ranks among the candidates or woken slots, the lane
-   masks ids into the run's masks most recent first -- and each lane's count before its column
-   (RCS_UNITS below). 20 was format 19 with the script slice's place in the event stream
+   masks ids into the run's masks most recent first -- and each lane's count before its column.
+   20 was format 19 with the script slice's place in the event stream
    (RK_EV_SLICE), the owner's COB queries the playing makes again (RK_EV_QUERY) and a yard's
    opening or closing at its place (RK_EV_YARD). 19 was format 18 with more of the unit frame's
    rules -- a unit's hit points while it is built, its HP percentage every 30 ticks, its sort
@@ -75,7 +77,7 @@
    frame carries the projectile pool coded by identity, and whose four record frames -- the cells,
    the orders, the events and the state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER
    below). */
-#define REC_FORMAT        23
+#define REC_FORMAT        24
 
 static __inline int rec_format_supported(unsigned format)
 {
@@ -751,35 +753,20 @@ _Static_assert(RB_CONTRIBUTIONS == 7 && RB_EXACT == 8, "the block kinds retain t
 
    RCS_UNITS, the unit frame, is
        varint  iterations                 RecSecHead.iterations again
-       varint  S, then S bytes            the symbols, one per carried slot of every iteration in
-                                          order, 2 bits each, four a byte from the low bits, the
-                                          last byte's unused bits 0: 0 not listed, 1 listed with
-                                          its last mask, 2 listed with another; 3 is refused
-       per iteration:
-         varint  r, then r gaps           the other listed candidates, as ranks among the
-                                          candidates not carried in slot order: rank = previous
-                                          + 1 + gap, previous starting at -1
-         varint  w, then w gaps           the woken slots: slot = previous + 1 + gap, previous
-                                          starting at 0
-       varint  ndict                      the block's new lane masks, at most the ids
-       bytes   dict[ndict][mb]            mb = ceil(lanes / 8); bit j says lane j has a residual
-       u8      mode                       0: each id a u8, 1: each a varint
-       ids     one per listed unit whose symbol is not 1, in slot order within each iteration:
-               0 the slot's last mask (not for a carried slot, and only when that mask is not
-               empty), k the k-th of the run's masks most recent first, the list's length + 1 the
-               next new mask
-       bytes   present[mb]                bit j: lane j has a count
-       varint  count for each lane with its bit, in RT_CODEC's order, at least 1
-       columns for each lane in RT_CODEC's order: its count of zigzag varint residuals, of the
-               listed units whose mask has its bit, in listed order; the listed masks consume
-               every column exactly
-   An iteration's candidates are the slots live at its start that no RK_UNIT or RK_UNIT_GONE of
-   it names and that do not rest; its woken slots rest and change. A candidate the iteration
-   before listed is carried. Slot 0 is never a candidate nor woken, so a block's symbols and ids
-   are each at most iterations * (slots - 1). The previous listed set, each slot's last mask and the run's masks
-   (at most RECC_J2_MTF, the least recent dropped) restart empty at every RBF_FRAME_RESET; the
-   lanes' counts come first so a reader places every column before the first iteration, whose
-   listing it learns only by decoding (tagpu_reccodec.c, THE LISTING).
+       bytes   the unit coder's output to the section's end, at least 4 (tagpu_reccodec.c, THE
+               UNIT CODER): for every iteration, every slot 1 .. slots - 1 that is live at the
+               iteration's start and that no RK_UNIT or RK_UNIT_GONE of it names, in slot order --
+                 a resting slot: whether it is woken (a woken slot always lists)
+                 a slot the iteration before listed (CARRIED): whether it is listed
+                 any other: whether it is listed
+               and for each listed slot its lane mask, then for each lane of the mask in RT_CODEC's
+               order its zigzag residual, 1 .. 2^(8 x the lane's width) - 1.
+   The coder, every model and its context are THE UNIT CODER's. The models, the run's kept masks
+   and their contexts' lists, the residual caches and every slot's coder state restart at every
+   RBF_FRAME_RESET, with the frames. A reader refuses a section the coder reads past or does not
+   consume exactly, a mask id past the run's kept masks or in its context's list, an empty new
+   mask or one the run keeps, a cache index past the cache's values, and a residual past its
+   lane's width.
    RCS_PROJ, the pool frame, is
        varint  iterations                 RecSecHead.iterations again
        per iteration, in order:

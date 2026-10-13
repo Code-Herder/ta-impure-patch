@@ -95,7 +95,8 @@
    shifts and named divisions.
 
    MEMORY: per slot the copy (0x148 bytes), L2 (0x148), L3 (16), the winners (one byte per lane,
-   128), the last step (8), five flags and the last mask (16), 829 bytes; per projectile record the
+   128), the last step (8), five flags and the unit coder's (a byte per lane, 128, its streak, its
+   last mask's id and its last listing, 7), 948 bytes; per projectile record the
    pool and its next image, their images one iteration before, the winners (34 bytes each), the
    ages, the advanced image and the survivors' maps, 627 bytes; per codec the air and type indexes
    (128 KB each), the last birth of each weapon (442 KB), the shot events and their rows (590 KB),
@@ -104,11 +105,13 @@
    largest block met so far (reccodec_new). At 3,000 records the pool frame is about 3.3 MB a
    codec. The kinds keep the run's RECC_KINDS_MRU patterns, each at most RECC_KINDS_MAX bytes (1 MB
    at the bound; MEASURED 2026-10-12 on the heavy four-player hour: a new pattern 17 bytes on
-   average, 1,862 at most), and a block's runs, 12 bytes each. The listing keeps the run's
-   RECC_J2_MTF masks with their links and hash chains, 22 bytes each and 16 KB of chains: 106 KB.
-   Each record frame's memory is its file's to state. MEASURED 2026-10-13 in the 32-bit build by
-   counting its allocations: 7,956,440 bytes at 5,001 slots and 3,000 records before the record
-   frames and the scratch. */
+   average, 1,862 at most), and a block's runs, 12 bytes each. The unit coder keeps its
+   probabilities (UC_NP of 2 bytes, 520 KB), the run's RECC_MASKS masks with their hash chains
+   (88 KB), each context's next masks (68 KB) and the residual caches (264 KB): 940 KB a codec, all
+   allocated by reccodec_new, none per block. Each record frame's memory is its file's to state.
+   MEASURED 2026-10-13 in the 32-bit build by counting reccodec_new's allocations: 9,407,112 bytes
+   at 5,001 slots and 3,000 records before the record frames and the scratch, 1,450,672 more than
+   the format before the unit coder (581 KB by slot, 835 KB by codec). */
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -124,8 +127,65 @@
 #define L3B     16                /* L3: heading u16, layer u8, 0, vx, vy, vz                       */
 #define NOROW   0xFFFFu
 #define MB_MAX  ((RECC_LANES_MAX + 7) / 8)
-#define J2_HASH (2 * RECC_J2_MTF)     /* the listing's hash chains: a load of at most 1/2        */
-typedef char rec_j2_fits_int16[RECC_J2_MTF <= 0x7FFF && (J2_HASH & (J2_HASH - 1)) == 0 ? 1 : -1];
+
+/* THE UNIT CODER's constants (its section below) */
+#define UC_PB     12                  /* a probability's bits: p / 4096 that the bit is 0        */
+#define UC_MOVE   4                   /* each decision moves p 1/16 of the way to its bit        */
+#define UC_TOP    (1u << 24)          /* the range is renormalised a byte at a time below it     */
+#define UC_NONE   RECC_MASKS          /* the context of a slot with no kept mask                 */
+#define UC_NEVER  0xFFFFFFFFu         /* a slot's last listing when it has none in the run       */
+#define UC_K      8                   /* a context's next masks                                  */
+#define UC_IDB    13                  /* an escape's mask id, 0 .. RECC_MASKS, in a tree of 13 bits */
+#define UC_CBITS  13
+#define UC_CACHES (1u << UC_CBITS)    /* the residual caches                                     */
+#define UC_CVALS  8                   /* a cache's values, an index in a tree of 3 bits          */
+#define UC_MAN    4                   /* the bits below a literal's top that are modelled        */
+#define UC_LENS   33                  /* a lane's last bit length, 0 .. 32                       */
+#define UC_HASH   (2 * RECC_MASKS)    /* the kept masks' hash chains: a load of at most 1/2      */
+typedef char rec_uc_fits[RECC_MASKS < (1 << UC_IDB) && RECC_MASKS <= 0x7FFF &&
+                         (UC_HASH & (UC_HASH - 1)) == 0 && UC_CVALS == 8 ? 1 : -1];
+/* the probabilities, one array: each model's first and its size */
+enum {
+    UC_P_R   = 0,                                         /* woken?: the gap's bucket, 16       */
+    UC_P_C   = UC_P_R + 16,                               /* carried, listed?: mask x streak    */
+    UC_P_N   = UC_P_C + (RECC_MASKS + 1) * 4,             /* other, listed?: bucket x mask      */
+    UC_P_U   = UC_P_N + 16 * 256,                         /* the context list's places          */
+    UC_P_ID  = UC_P_U + (RECC_MASKS + 1) * UC_K,          /* the escape's id tree               */
+    UC_P_MB  = UC_P_ID + (1 << UC_IDB),                   /* a new mask's lane bits             */
+    UC_P_LC  = UC_P_MB + RECC_LANES_MAX * 4,              /* a residual's cache hit?            */
+    UC_P_LI  = UC_P_LC + RECC_LANES_MAX * 2,              /* the hit's index tree               */
+    UC_P_LEN = UC_P_LI + RECC_LANES_MAX * UC_CVALS,       /* a literal's length tree            */
+    UC_P_MAN = UC_P_LEN + RECC_LANES_MAX * UC_LENS * 32,  /* the bits below its top             */
+    UC_NP    = UC_P_MAN + RECC_LANES_MAX * UC_LENS * 16
+};
+
+/* The coder's registers: the encoder's low (33 bits used), its pending byte, the 0xFF bytes behind
+   it (LZMA's cache size) and whether its first byte -- never written -- is still to come; the
+   decoder's code, its section and whether it read past it */
+typedef struct UcReg {
+    uint64_t low;
+    uint32_t range, code;
+    unsigned cache, first, bad;
+    size_t csize;
+    RecBytes* out;
+    const unsigned char* in;
+    size_t at, end;
+    int dec, over;
+} UcReg;
+
+#ifdef RECF_TEST_COPY
+/* The self-test's view of the coder (tests/codectest.c): what the encoder coded, by case, and a
+   fault it codes once in place of the right value, at the first place the fault's case comes,
+   so that the decoder's refusal of each can be shown. Only its builds define RECF_TEST_COPY. */
+enum { UCT_WOKEN, UCT_CARRIED, UCT_DROPPED, UCT_PLACE, UCT_KEPT, UCT_NEW, UCT_UNKEPT, UCT_HIT,
+       UCT_LITERAL, UCT_COUNT };
+enum { UCF_NONE, UCF_ID_PAST, UCF_ID_INLIST, UCF_EMPTY, UCF_DUP, UCF_CACHE, UCF_WIDE };
+#define UC_SEEN(c, k) ((c)->useen[k] += !(c)->ur.dec)
+#define UC_FAULT(c, f) (!(c)->ur.dec && (c)->ufault == (f) && ((c)->ufault = UCF_NONE, 1))
+#else
+#define UC_SEEN(c, k) ((void)0)
+#define UC_FAULT(c, f) 0
+#endif
 
 #define REFUSE RECF_REFUSE
 
@@ -439,19 +499,25 @@ struct RecCodec {
     uint32_t* lstep;                      /* per slot: the ledger's energy and metal step        */
     uint32_t lsettle[RECC_OWNERS];        /* per owner ID: the last settle the ledger lanes saw  */
     unsigned char lsettled[RECC_OWNERS];  /* ... once one was seen since the restart            */
-    RecBytes tl, dl, runs, lmask, lzz, ids, cols;
+    RecBytes tl, dl, runs;
     RecBytes sec[RCS_COUNT];              /* the encoder's sections                             */
-    /* the listing (THE LISTING): per slot whether the iteration before listed it and its last
-       mask (MB_MAX bytes, zero before any); the run's masks most recent first, a doubly linked
-       list over RECC_J2_MTF stored masks with a hash of chains to find one by its bytes. The
-       encoder's block: the symbols, each iteration's ranks and woken slots, the new masks and
-       the ids; the decoder's iteration: its ranks and woken slots. */
-    unsigned char *jprev, *jlast, *jm;
-    int16_t *jnx, *jpv, *jhead, *jhnext;
-    int jfront, jtail;
-    unsigned njm, jnsym;
+    /* the unit coder (THE UNIT CODER): its probabilities; per slot whether the iteration before
+       listed it, its last kept mask's id, the run iteration of its last listing, its streak of
+       listings and a byte a lane (bits 0..5 the last residual's length, bit 6 a cache hit); the
+       run's kept masks, MB_MAX bytes each, with a hash of chains; each context's next masks, most
+       recent first; the residual caches, most recent first; the run's iterations; the registers */
+    uint16_t* up;
+    unsigned char *jprev, *ustreak, *ulane, *umask, *unn, *ucn;
+    uint16_t *uslast, *unext;
+    uint32_t *uslt, *ucache;
+    int16_t *uhead, *uhnext;
+    unsigned nmask;
+    uint32_t ujt;
+    UcReg ur;
+#ifdef RECF_TEST_COPY
+    unsigned useen[UCT_COUNT], ufault;
+#endif
     int jbad;                             /* an encoder's woken slot was not listed             */
-    RecBytes jsym, jrw, jnew, jr, jw;
     int over;                             /* an encoder's frame passed RECC_FRAME_CAP, or met a
                                              survivor whose byte 0x6B changed (pool_encode)      */
     /* the pool frame (THE POOL FRAME, pool_restart): nproj records of PDW dwords each */
@@ -574,16 +640,23 @@ RecCodec* reccodec_new(const RecCodecParams* p)
     c->lstep = (uint32_t*)calloc(nslots, 2 * sizeof(uint32_t));
     c->live = (unsigned char*)calloc(nslots, 1);
     c->touched = (unsigned char*)calloc(nslots, 1);
+    c->up = (uint16_t*)malloc(UC_NP * sizeof *c->up);
     c->jprev = (unsigned char*)calloc(nslots, 1);
-    c->jlast = (unsigned char*)calloc(nslots, MB_MAX);
-    c->jm = (unsigned char*)calloc(RECC_J2_MTF, MB_MAX);
-    c->jnx = (int16_t*)calloc(RECC_J2_MTF, sizeof *c->jnx);
-    c->jpv = (int16_t*)calloc(RECC_J2_MTF, sizeof *c->jpv);
-    c->jhnext = (int16_t*)calloc(RECC_J2_MTF, sizeof *c->jhnext);
-    c->jhead = (int16_t*)calloc(J2_HASH, sizeof *c->jhead);
+    c->ustreak = (unsigned char*)calloc(nslots, 1);
+    c->ulane = (unsigned char*)calloc(nslots, RECC_LANES_MAX);
+    c->uslast = (uint16_t*)calloc(nslots, sizeof *c->uslast);
+    c->uslt = (uint32_t*)calloc(nslots, sizeof *c->uslt);
+    c->umask = (unsigned char*)calloc(RECC_MASKS, MB_MAX);
+    c->uhead = (int16_t*)calloc(UC_HASH, sizeof *c->uhead);
+    c->uhnext = (int16_t*)calloc(RECC_MASKS, sizeof *c->uhnext);
+    c->unext = (uint16_t*)calloc((size_t)(RECC_MASKS + 1) * UC_K, sizeof *c->unext);
+    c->unn = (unsigned char*)calloc(RECC_MASKS + 1, 1);
+    c->ucache = (uint32_t*)calloc((size_t)UC_CACHES * UC_CVALS, sizeof *c->ucache);
+    c->ucn = (unsigned char*)calloc(UC_CACHES, 1);
     if (!c->airix || !c->typix || !c->unit || !c->l2 || !c->l3 || !c->win || !c->age || !c->rest || !c->live ||
-        !c->touched || !c->lstep || !c->jprev || !c->jlast || !c->jm || !c->jnx || !c->jpv || !c->jhnext ||
-        !c->jhead) {
+        !c->touched || !c->lstep || !c->up || !c->jprev || !c->ustreak || !c->ulane || !c->uslast ||
+        !c->uslt || !c->umask || !c->uhead || !c->uhnext || !c->unext || !c->unn || !c->ucache ||
+        !c->ucn) {
         reccodec_free(c);
         return NULL;
     }
@@ -605,13 +678,19 @@ void reccodec_free(RecCodec* c)
     free(c->lstep);
     free(c->live);
     free(c->touched);
+    free(c->up);
     free(c->jprev);
-    free(c->jlast);
-    free(c->jm);
-    free(c->jnx);
-    free(c->jpv);
-    free(c->jhnext);
-    free(c->jhead);
+    free(c->ustreak);
+    free(c->ulane);
+    free(c->uslast);
+    free(c->uslt);
+    free(c->umask);
+    free(c->uhead);
+    free(c->uhnext);
+    free(c->unext);
+    free(c->unn);
+    free(c->ucache);
+    free(c->ucn);
     free(c->pool);
     free(c->pool_n);
     free(c->pool_l2);
@@ -645,15 +724,6 @@ void reccodec_free(RecCodec* c)
     rb_free(&c->tl);
     rb_free(&c->dl);
     rb_free(&c->runs);
-    rb_free(&c->lmask);
-    rb_free(&c->lzz);
-    rb_free(&c->ids);
-    rb_free(&c->cols);
-    rb_free(&c->jsym);
-    rb_free(&c->jrw);
-    rb_free(&c->jnew);
-    rb_free(&c->jr);
-    rb_free(&c->jw);
     rb_free(&c->ktok);
     rb_free(&c->kpat);
     for (i = 0; i < RECC_KINDS_MRU; i++) rb_free(&c->kmru[i]);
@@ -733,7 +803,7 @@ static void slot_fresh(RecCodec* c, unsigned s)
 }
 
 static int pool_restart(RecCodec* c, const unsigned char* pool, unsigned count, unsigned hw);
-static void listing_restart(RecCodec* c);
+static void uc_restart(RecCodec* c);
 
 void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* units,
                       const unsigned char* live, const unsigned char* pool, unsigned count,
@@ -755,16 +825,7 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
     rb_clear(&c->tl);
     rb_clear(&c->dl);
     rb_clear(&c->runs);
-    rb_clear(&c->lmask);
-    rb_clear(&c->lzz);
-    rb_clear(&c->ids);
-    rb_clear(&c->cols);
-    rb_clear(&c->jsym);
-    rb_clear(&c->jrw);
-    rb_clear(&c->jnew);
-    rb_clear(&c->jr);
-    rb_clear(&c->jw);
-    listing_restart(c);
+    uc_restart(c);
     rb_clear(&c->pctl);
     rb_clear(&c->pref);
     rb_clear(&c->psurv);
@@ -980,11 +1041,10 @@ typedef struct Eval {
     uint32_t gt;
     unsigned age, s;
     int dec;
-    /* the decoder's residuals: the listed unit's mask (NULL: not listed) and the columns */
+    /* the decoder's residuals: the listed unit's mask (NULL: not listed) and its zigzag residuals
+       by lane, decoded before the slot (THE UNIT CODER) */
     const unsigned char* mask;
-    const unsigned char* sec;
-    size_t* colat;
-    const size_t* colend;                 /* each lane's column ends there                       */
+    uint32_t zin[RECC_LANES_MAX];
     /* the encoder's: zigzag residuals by lane and their mask */
     unsigned char rmask[MB_MAX];
     uint32_t zz[RECC_LANES_MAX];
@@ -1000,7 +1060,7 @@ static uint32_t err_of(uint32_t a, uint32_t c, uint32_t m)
 /* One lane: predict it by its winner among the candidates, take the residual (encoder) or apply
    it (decoder), and choose the next winner -- the first candidate closest to the value. `rule`
    0 is a generic step: candidate 0 is then the previous value and never chosen. */
-static int step(Eval* x, unsigned j, int rule, uint32_t c0, int has3, uint32_t c3)
+static void step(Eval* x, unsigned j, int rule, uint32_t c0, int has3, uint32_t c3)
 {
     const RecLaneRow* r = &x->c->p.lane[j];
     uint32_t m = r->width == 4 ? 0xFFFFFFFFu : ((1u << (8 * r->width)) - 1);
@@ -1013,10 +1073,8 @@ static int step(Eval* x, unsigned j, int rule, uint32_t c0, int has3, uint32_t c
     if (x->dec) {
         rr = 0;
         if (x->mask && (x->mask[j >> 3] >> (j & 7) & 1)) {
-            uint32_t z;
-            int64_t sr;
-            if (!varint_get(x->sec, x->colend[j], &x->colat[j], &z)) return 0;
-            sr = (int64_t)(z >> 1) ^ -(int64_t)(z & 1);
+            uint32_t z = x->zin[j];
+            int64_t sr = (int64_t)(z >> 1) ^ -(int64_t)(z & 1);
             rr = (uint32_t)(uint64_t)sr & m;
         }
         act = (cand[w] + rr) & m;
@@ -1033,12 +1091,11 @@ static int step(Eval* x, unsigned j, int rule, uint32_t c0, int has3, uint32_t c
     }
     /* Generic early-out, exact: with the previous value the winner, L1 == L2 and no residual,
        every candidate equals the value and the first of them, the previous value, stays. */
-    if (!rule && w == 1 && l1 == l2 && act == l1) return 1;
+    if (!rule && w == 1 && l1 == l2 && act == l1) return;
     best = rule ? 0 : 1;
     for (i = best + 1; i < 4; i++)
         if (err_of(act, cand[i], m) < err_of(act, cand[best], m)) best = i;
     x->win[j] = (unsigned char)best;
-    return 1;
 }
 
 /* The ledger's requested and granted (exe-reverse-engineering.md, the ledger), energy then metal.
@@ -1100,7 +1157,7 @@ uint32_t reccodec_f32_add(uint32_t a, uint32_t b)
     return sa << 31 | (m >> 23 ? ea : 0) << 23 | (m & 0x7FFFFF);
 }
 
-static int ledger_steps(Eval* x)
+static void ledger_steps(Eval* x)
 {
     RecCodec* c = x->c;
     uint32_t own = lane_get(x->u, &c->p.lane[c->lane_of[REC_LR_OWNER]]);
@@ -1118,7 +1175,7 @@ static int ledger_steps(Eval* x)
         else if (l1 == l2) p = l1;
         else p = reccodec_f32_add(l1, *e);
         x->win[jr] = 0;
-        if (!step(x, jr, 1, p, 0, 0)) return 0;
+        step(x, jr, 1, p, 0, 0);
         x->win[jr] = 0;
         ur = lane_get(x->u, rr);
         if (!l1 && ur) *e = ur;
@@ -1127,17 +1184,16 @@ static int ledger_steps(Eval* x)
             c->lsettled[own] = 1;
         }
         x->win[jg] = 0;
-        if (!step(x, jg, 1, !ur ? 0 : g1 == l1 ? ur : g1, 0, 0)) return 0;
+        step(x, jg, 1, !ur ? 0 : g1 == l1 ? ur : g1, 0, 0);
         x->win[jg] = 0;
     }
-    return 1;
 }
 
 #define LANE(role)  (&c->p.lane[c->lane_of[role]])
 #define U_(role)    lane_get(x->u, LANE(role))
 #define L1_(role)   lane_get(x->l1, LANE(role))
 #define L2_(role)   lane_get(x->l2, LANE(role))
-#define STEP(role, rl, c0, h3, c3) do { if (!step(x, (unsigned)c->lane_of[role], rl, c0, h3, c3)) return 0; } while (0)
+#define STEP(role, rl, c0, h3, c3) do { step(x, (unsigned)c->lane_of[role], rl, c0, h3, c3); } while (0)
 
 /* trunc(f * m) for the IEEE single whose bits are f, exactly: 1 and *out, or 0 for an f outside
    [0, 1] -- a sign bit, past 1.0, an infinity or a NaN. f is mant * 2^(e - 150), the implicit bit
@@ -1185,7 +1241,7 @@ static int hp_phase(uint32_t gt) { return (gt - 1u) % 30u == 0; }
    and writes the percentage of the HP to +0xF6 (0x48AEA3..0x48AEAF), its only writer in play
    (the others are the creates 0x485B67 and the saved game's loader 0x487296, DISASSEMBLED), so
    the two lanes' winner is the rule, always. DISASSEMBLED. */
-static int hp_steps(Eval* x, uint32_t m)
+static void hp_steps(Eval* x, uint32_t m)
 {
     RecCodec* c = x->c;
     uint32_t fo = L1_(REC_LR_BUILD_LEFT), fn = U_(REC_LR_BUILD_LEFT), hp = L1_(REC_LR_HP);
@@ -1209,7 +1265,6 @@ static int hp_steps(Eval* x, uint32_t m)
     x->win[j6] = 0;
     STEP(REC_LR_HPPCT, 1, phase ? hp_pct(U_(REC_LR_HP), m) : L1_(REC_LR_HPPCT), 0, 0);
     x->win[j6] = 0;
-    return 1;
 }
 
 /* A ground unit's speed: the ground step 0x43CC20 adds the caller's step to it -- the def's
@@ -1223,7 +1278,7 @@ static int hp_steps(Eval* x, uint32_t m)
    candidates 0 and 3. Not modelled: the halving of mv in water (0x43CCA0..0x43CCCE: +0x70 below the sea level
    and def +0x241 & 0x81000 clear), which leaves a residual. A type with no speed (mv 0) is not
    stepped: both candidates are the last value. */
-static int ground_speed(Eval* x, const RecTypeRow* t)
+static void ground_speed(Eval* x, const RecTypeRow* t)
 {
     RecCodec* c = x->c;
     int64_t sl = asr(s16(L1_(REC_LR_ROLL)), 11), mv, l1 = s32(L1_(REC_LR_SPEED)), a, b;
@@ -1240,7 +1295,6 @@ static int ground_speed(Eval* x, const RecTypeRow* t)
         b = b > mv ? mv : b;
     }
     STEP(REC_LR_SPEED, 1, (uint32_t)(uint64_t)a, 1, (uint32_t)(uint64_t)b);
-    return 1;
 }
 
 /* The steps of one slot, in an order where each rule reads only lanes decoded before it:
@@ -1248,9 +1302,8 @@ static int ground_speed(Eval* x, const RecTypeRow* t)
    rule, and a ground unit's speed; S3 the turn rate, the hit points and the heading; S4 the
    velocity; S5 an aircraft's speed, acceleration and bank; S6 the position; S7 the cells, the
    bucket, the stamps, the countdowns and the sight; S8 the ledger, which reads its owner from S1.
-   A rule of a type's row (RT_TYPES) is on only for a type with one. 1, or 0 when a residual
-   cannot be read. */
-static int frame_slot(Eval* x)
+   A rule of a type's row (RT_TYPES) is on only for a type with one. */
+static void frame_slot(Eval* x)
 {
     RecCodec* c = x->c;
     unsigned i, ai, layer, layer1;
@@ -1258,7 +1311,7 @@ static int frame_slot(Eval* x)
     int64_t vx, vy, vz;
     const RecTypeRow* t;
     for (i = 0; i < c->ns1; i++)
-        if (!step(x, c->s1[i], 0, 0, 0, 0)) return 0;
+        step(x, c->s1[i], 0, 0, 0, 0);
     ai = c->airix[U_(REC_LR_TYPE)];
     air = ai != NOROW && ai < c->p.nair;
     t = type_row(c, x->u);
@@ -1268,9 +1321,9 @@ static int frame_slot(Eval* x)
             unsigned j = c->s2[i];
             if (ground && (j == (unsigned)c->lane_of[REC_LR_SPEED] || j == (unsigned)c->lane_of[REC_LR_SZ]))
                 continue;
-            if (!step(x, j, 0, 0, 0, 0)) return 0;
+            step(x, j, 0, 0, 0, 0);
         }
-    if (ground && !ground_speed(x, t)) return 0;
+    if (ground) ground_speed(x, t);
     /* S3: the turn rate's one-tick blip: a rate one away from the last returns to the one
        before (MEASURED, no engine writer traced: research/notes/tadr-port/demo-recorder-size.md,
        *P4*, 76 KB of the heavy hour); its winner is the rule, always */
@@ -1283,7 +1336,7 @@ static int frame_slot(Eval* x)
         x->win[jt] = 0;
     }
     if (t && t->maxhp) {
-        if (!hp_steps(x, t->maxhp)) return 0;
+        hp_steps(x, t->maxhp);
     } else {
         STEP(REC_LR_HP, 0, 0, 0, 0);
         STEP(REC_LR_HPPCT30, 0, 0, 0, 0);
@@ -1439,7 +1492,7 @@ static int frame_slot(Eval* x)
     /* the countdowns max(v - 1, 0) (the reload 0x49E1C8, +0xFA and +0xFB 0x48ADF0, DISASSEMBLED) */
     for (i = 0; i < c->ncnt; i++) {
         uint32_t v = lane_get(x->l1, &c->p.lane[c->cnt[i]]);
-        if (!step(x, c->cnt[i], 1, v ? v - 1 : 0, 0, 0)) return 0;
+        step(x, c->cnt[i], 1, v ? v - 1 : 0, 0, 0);
     }
     if (air || ground) {
         /* the sight z: ((z >> 16) - h / 2) >> 5 with h = clamp(altitude + def +0x170, 0, 255)
@@ -1453,7 +1506,7 @@ static int frame_slot(Eval* x)
         h = h < 0 ? 0 : h > 255 ? 255 : h;
         STEP(REC_LR_SZ, sight, (uint32_t)(uint64_t)asr(asr(s32(U_(REC_LR_Z)), 16) - (h >> 1), 5), 0, 0);
     }
-    return ledger_steps(x);
+    ledger_steps(x);
 }
 
 /* After evaluating candidate s at gt, with U its image: the state advances, and the slot rests
@@ -1542,34 +1595,200 @@ static void touched_end(RecCodec* c)
 
 static int bit_of(const unsigned char* bits, unsigned i) { return bits[i >> 3] >> (i & 7) & 1; }
 
-/* ---- the listing ---------------------------------------------------------------------------
+/* ---- the unit coder ------------------------------------------------------------------------
 
-   THE LISTING (tagpu_recfmt.h, RCS_UNITS): which units an iteration lists and each one's lane
-   mask, from state both sides keep. An iteration's CANDIDATES are the slots live at its start
-   that no RK_UNIT or RK_UNIT_GONE names and that do not rest; its WOKEN slots are resting ones
-   with a delta, which the frame evaluates too and always lists (a resting slot's prediction is
-   its copy, so a delta leaves a residual). A candidate the iteration before listed is CARRIED and
-   takes a symbol: 0 not listed, 1 listed with its own last mask, 2 listed with another; the
-   other listed candidates are ranks among the candidates not carried, and the woken slots are
-   slots. Every listed unit but a symbol 1 takes an id: 0 its slot's last mask (not for a carried
-   one, and only when that mask is not empty), k the k-th of the run's masks most recent first,
-   the list's length + 1 the block's next new mask. Every listed mask then goes to the front of
-   the list -- inserted when absent, the least recent dropped when the list holds RECC_J2_MTF --
-   so the list never holds a mask twice: the decoder refuses a new mask the list already has.
-   The previous listed set, the last masks and the list are state of the run, cleared at every
-   reset (listing_restart); the slot's last mask survives a birth in its slot, which costs size
-   only. The finds go through a hash of chains and a move to the front costs the mask's rank, so
-   the work is a function of the ranks the file names, each bounded by RECC_J2_MTF, and of the
-   ids a block holds, at most its iterations times nslots - 1 (reccodec_decode). */
+   THE UNIT CODER (tagpu_recfmt.h, RCS_UNITS): the unit frame's listing, lane masks and residuals
+   as one binary range coder's bytes a block, each decision under an adaptive probability whose
+   context is state both sides keep. The encoder codes and the decoder decodes the same decisions
+   in the same order through the functions below: each takes the encoder's value and returns the
+   one coded, which on the decoder is the one read (uc_bit).
 
-static void listing_restart(RecCodec* c)
+   THE CODER is LZMA's binary range coder: 12-bit probabilities each moved 1/16 of the way to the
+   bit coded (UC_MOVE), a 32-bit range renormalised a byte at a time below 2^24, a 33-bit low whose
+   carry a pending byte and the 0xFF bytes behind it take (uc_shift). A block's coder starts afresh
+   and ends with five shifts. Its first byte is the pending byte's initial 0, which no carry
+   reaches since the coded number lies in [0, 1): it is not written, and the encoder declines the
+   block if it is not 0 (uc_enc_end). CONSUMED EXACTLY, by construction: the encoder writes N + 4
+   bytes for its N renormalising shifts (N + 5 shifts, less the first byte) and the decoder reads 4
+   at its start and one at each of the same N shifts, so a reader refuses a section the decode
+   reads past and one it leaves bytes of. NO EMPTY INTERVAL: the move keeps every probability in
+   15..4081, so with the range at 2^24 or more a decision's bound is above 0 and below the range.
+
+   THE MODELS, all restarting with the frames at every reset (uc_restart):
+   - LISTED: each slot an iteration visits -- live at its start and named by no RK_UNIT or
+     RK_UNIT_GONE -- takes one decision, in slot order: a resting slot whether it is woken (a
+     resting slot with a delta, which the frame evaluates and always lists); a CARRIED slot, one
+     the iteration before listed, whether it is listed, under its last mask and its streak of
+     listings; any other slot whether it is listed, under how long since its last listing in the
+     run and its last mask. The gap's context is 0 for none, else 1 + its bit length up to 14.
+   - THE MASK of a listed slot, under its last mask (uc_mask): that context's UC_K masks seen
+     next, most recent first, each a decision in turn; past them an escape, the mask's id among
+     the run's kept masks as a UC_IDB-bit tree, the count of kept masks for a new one, whose lane
+     bits follow, each under the lane, the bit before it and whether any bit came yet. The run
+     keeps its first RECC_MASKS masks in first-use order, found by their bytes through a hash of
+     chains; a slot whose mask is not kept takes the context UC_NONE.
+   - THE RESIDUALS of a listed slot, each lane of its mask in RT_CODEC's order (uc_resid): a hit
+     among the recent values of a cache keyed by the slot's type and the lane, its index a 3-bit
+     tree; else the value's bit length less one as a 5-bit tree under the lane and the slot's
+     last length in the lane, the UC_MAN bits below its top under the lane and the length, the
+     rest raw. A byte per slot and lane keeps that last length -- 0 also once the slot was listed
+     without the lane -- and whether the last value was a hit.
+   Every context is a listing decision, a mask, the TYPE lane of the slot's copy or the coder's
+   own state: nothing a reader's rest mode changes (codectest.py verify decodes in both).
+   MEASURED 2026-10-13 against format 23, the same blocks repacked as the writer packs them: the
+   heavy four-player hour 14,326,468 bytes -> 11,922,688 (-16.8 %), the light one 6,220,813 ->
+   4,883,781 (-21.5 %); each model's choice against its alternatives is in the size note
+   (demo-recorder-size.md, the unit coder).
+
+   BOUND, the work and not the bytes: a near-certain decision costs almost no input, so a short
+   section can make a decoder take every decision the frame's shape allows -- per visited slot one
+   listed decision, at most UC_K + UC_IDB + nlanes for its mask and 1 + 5 + UC_MAN + 27 for each
+   residual, raw bits costing a bit of input each -- which is iterations * (nslots - 1) *
+   (22 + 38 * nlanes) decisions a block, a function of the header's sizes and the head's
+   iterations alone. Every index a decode takes is bounded by its table: a context's place by its
+   list's length, an escape by the kept masks (refused past them), a cache index by the cache's
+   values (refused past them), a length by the lane's width (refused past it), a context by the
+   arithmetic that makes it. A refused block's records are discarded, so values decoded past the
+   section's end (zeros) never reach a reader. */
+
+static unsigned bitlen32(uint32_t v)
 {
-    unsigned i;
+    unsigned n = 0;
+    for (; v; v >>= 1) n++;
+    return n;
+}
+
+static void uc_shift(UcReg* r)
+{
+    if (r->low < 0xFF000000u || r->low >> 32) {
+        unsigned carry = (unsigned)(r->low >> 32), b = r->cache;
+        do {
+            if (r->first) {
+                r->bad |= (b + carry) & 0xFF;
+                r->first = 0;
+            } else {
+                rb_u8(r->out, b + carry);
+            }
+            b = 0xFF;
+        } while (--r->csize);
+        r->cache = (unsigned)(r->low >> 24) & 0xFF;
+    }
+    r->csize++;
+    r->low = (r->low & 0x00FFFFFFu) << 8;
+}
+
+/* the decoder's next byte: 0, the overrun latched, past the section */
+static unsigned uc_in(UcReg* r)
+{
+    if (r->at < r->end) return r->in[r->at++];
+    r->over = 1;
+    return 0;
+}
+
+static void uc_norm(UcReg* r)
+{
+    while (r->range < UC_TOP) {
+        r->range <<= 8;
+        if (r->dec) r->code = r->code << 8 | uc_in(r);
+        else uc_shift(r);
+    }
+}
+
+/* one decision under probability up[i]: the encoder codes `bit`, the decoder returns its own */
+static unsigned uc_bit(RecCodec* c, size_t i, unsigned bit)
+{
+    UcReg* r = &c->ur;
+    uint32_t p = c->up[i], bound = (r->range >> UC_PB) * p;
+    if (r->dec) bit = r->code >= bound;
+    if (bit) {
+        if (r->dec) r->code -= bound;
+        else r->low += bound;
+        r->range -= bound;
+        c->up[i] = (uint16_t)(p - (p >> UC_MOVE));
+    } else {
+        r->range = bound;
+        c->up[i] = (uint16_t)(p + (((1u << UC_PB) - p) >> UC_MOVE));
+    }
+    uc_norm(r);
+    return bit;
+}
+
+/* n raw bits of v, most significant first, each half the range */
+static uint32_t uc_raw(RecCodec* c, unsigned n, uint32_t v)
+{
+    UcReg* r = &c->ur;
+    uint32_t got = 0;
+    while (n--) {
+        unsigned bit = v >> n & 1;
+        r->range >>= 1;
+        if (r->dec) {
+            bit = r->code >= r->range;
+            if (bit) r->code -= r->range;
+        } else if (bit) {
+            r->low += r->range;
+        }
+        got = got << 1 | bit;
+        uc_norm(r);
+    }
+    return got;
+}
+
+/* an n-bit value as a tree of decisions, most significant first, node 1 its root */
+static unsigned uc_tree(RecCodec* c, size_t base, unsigned n, unsigned v)
+{
+    unsigned m = 1, k = n;
+    while (k--) m = m << 1 | uc_bit(c, base + m, v >> k & 1);
+    return m - (1u << n);
+}
+
+static void uc_enc_start(RecCodec* c, RecBytes* out)
+{
+    UcReg* r = &c->ur;
+    memset(r, 0, sizeof *r);
+    r->range = 0xFFFFFFFFu;
+    r->csize = 1;
+    r->first = 1;
+    r->out = out;
+}
+
+/* the block's last bytes: 1, or 0 when its first byte was not the 0 every coded number starts
+   with (never, by the coder's arithmetic; the block then declines) */
+static int uc_enc_end(RecCodec* c)
+{
+    unsigned k;
+    for (k = 0; k < 5; k++) uc_shift(&c->ur);
+    return !c->ur.bad;
+}
+
+static void uc_dec_start(RecCodec* d, const unsigned char* sec, size_t at, size_t end)
+{
+    UcReg* r = &d->ur;
+    unsigned k;
+    memset(r, 0, sizeof *r);
+    r->dec = 1;
+    r->range = 0xFFFFFFFFu;
+    r->in = sec;
+    r->at = at;
+    r->end = end;
+    for (k = 0; k < 4; k++) r->code = r->code << 8 | uc_in(r);
+}
+
+static void uc_restart(RecCodec* c)
+{
+    size_t i;
+    for (i = 0; i < UC_NP; i++) c->up[i] = 1u << (UC_PB - 1);
     memset(c->jprev, 0, c->nslots);
-    memset(c->jlast, 0, (size_t)c->nslots * MB_MAX);
-    for (i = 0; i < J2_HASH; i++) c->jhead[i] = -1;
-    c->jfront = c->jtail = -1;
-    c->njm = 0;
+    memset(c->ustreak, 0, c->nslots);
+    memset(c->ulane, 0, (size_t)c->nslots * RECC_LANES_MAX);
+    for (i = 0; i < c->nslots; i++) {
+        c->uslast[i] = UC_NONE;
+        c->uslt[i] = UC_NEVER;
+    }
+    for (i = 0; i < UC_HASH; i++) c->uhead[i] = -1;
+    c->nmask = 0;
+    memset(c->unn, 0, RECC_MASKS + 1);
+    memset(c->ucn, 0, UC_CACHES);
+    c->ujt = 0;
 }
 
 static uint32_t fnv(const unsigned char* p, unsigned n)
@@ -1579,113 +1798,183 @@ static uint32_t fnv(const unsigned char* p, unsigned n)
     return h;
 }
 
-static unsigned j2_hash(const unsigned char* m) { return fnv(m, MB_MAX) & (J2_HASH - 1); }
+static unsigned uc_hash(const unsigned char* m) { return fnv(m, MB_MAX) & (UC_HASH - 1); }
 
-/* the stored mask equal to m, or -1 */
-static int j2_find(const RecCodec* c, const unsigned char* m)
+/* the id of the kept mask equal to m, or -1 */
+static int uc_find(const RecCodec* c, const unsigned char* m)
 {
-    int k = c->jhead[j2_hash(m)];
-    while (k >= 0 && memcmp(c->jm + (size_t)k * MB_MAX, m, MB_MAX)) k = c->jhnext[k];
+    int k = c->uhead[uc_hash(m)];
+    while (k >= 0 && memcmp(c->umask + (size_t)k * MB_MAX, m, MB_MAX)) k = c->uhnext[k];
     return k;
 }
 
-static void j2_unlink(RecCodec* c, int k)
+/* m kept as the run's next mask: its id, or -1 when the run keeps RECC_MASKS already */
+static int uc_keep(RecCodec* c, const unsigned char* m)
 {
-    if (c->jpv[k] >= 0) c->jnx[c->jpv[k]] = c->jnx[k];
-    else c->jfront = c->jnx[k];
-    if (c->jnx[k] >= 0) c->jpv[c->jnx[k]] = c->jpv[k];
-    else c->jtail = c->jpv[k];
-}
-
-static void j2_push(RecCodec* c, int k)
-{
-    c->jpv[k] = -1;
-    c->jnx[k] = (int16_t)c->jfront;
-    if (c->jfront >= 0) c->jpv[c->jfront] = (int16_t)k;
-    else c->jtail = k;
-    c->jfront = k;
-}
-
-/* m to the front of the list, inserted when absent: the least recent dropped at RECC_J2_MTF */
-static void j2_touch(RecCodec* c, const unsigned char* m)
-{
-    int k = j2_find(c, m);
     unsigned h;
-    if (k >= 0) {
-        j2_unlink(c, k);
-        j2_push(c, k);
-        return;
+    int k;
+    if (c->nmask >= RECC_MASKS) return -1;
+    k = (int)c->nmask++;
+    memcpy(c->umask + (size_t)k * MB_MAX, m, MB_MAX);
+    h = uc_hash(m);
+    c->uhnext[k] = c->uhead[h];
+    c->uhead[h] = (int16_t)k;
+    return k;
+}
+
+/* slot s's gap context: 0 when it has no listing in the run, else 1 + the bit length of the
+   iterations since, at most 14 */
+static unsigned uc_gap(const RecCodec* c, unsigned s)
+{
+    uint32_t g;
+    unsigned b = 0;
+    if (c->uslt[s] == UC_NEVER) return 0;
+    for (g = c->ujt - c->uslt[s]; g && b < 14; g >>= 1) b++;
+    return 1 + b;
+}
+
+/* slot s's listed decision: `kind` 0 resting (woken?), 1 carried, 2 any other */
+static unsigned uc_listed(RecCodec* c, unsigned s, unsigned kind, unsigned bit)
+{
+    unsigned last = c->uslast[s];
+    if (kind == 0) {
+        bit = uc_bit(c, UC_P_R + uc_gap(c, s), bit);
+        if (bit) UC_SEEN(c, UCT_WOKEN);
+        return bit;
     }
-    if (c->njm < RECC_J2_MTF) {
-        k = (int)c->njm++;
+    if (kind == 1) {
+        bit = uc_bit(c, UC_P_C + (size_t)last * 4 + c->ustreak[s], bit);
+        UC_SEEN(c, bit ? UCT_CARRIED : UCT_DROPPED);
+        return bit;
+    }
+    return uc_bit(c, UC_P_N + (size_t)uc_gap(c, s) * 256 + (last < 255 ? last : 255), bit);
+}
+
+/* after slot s's listing, carried or not */
+static void uc_took(RecCodec* c, unsigned s, int carried)
+{
+    c->ustreak[s] = (unsigned char)(!carried ? 1 : c->ustreak[s] < 3 ? c->ustreak[s] + 1 : 3);
+    c->uslt[s] = c->ujt;
+    c->jprev[s] = 1;
+}
+
+/* Listed slot s's lane mask m, MB_MAX bytes: the encoder's, or the decoder's out. 1, or 0 with
+   the refusal in why: an escape past the kept masks or into its context's list, an empty new
+   mask or one the run keeps already -- each a bound and the format's one spelling of a mask. */
+static int uc_mask(RecCodec* c, unsigned s, unsigned char* m, char* why, unsigned cap)
+{
+    unsigned ctx = c->uslast[s], n = c->unn[ctx], k, j, v, prev = 0, any = 0, dec = c->ur.dec;
+    uint16_t* list = c->unext + (size_t)ctx * UC_K;
+    int id = dec ? -1 : uc_find(c, m);
+    for (k = 0; k < n; k++)
+        if (uc_bit(c, UC_P_U + (size_t)ctx * UC_K + k, (int)list[k] == id)) break;
+    if (k < n) {
+        id = list[k];
+        UC_SEEN(c, UCT_PLACE);
     } else {
-        int16_t* at;
-        k = c->jtail;
-        j2_unlink(c, k);
-        at = &c->jhead[j2_hash(c->jm + (size_t)k * MB_MAX)];
-        while (*at != k) at = &c->jhnext[*at];        /* k is on its chain: it was stored there */
-        *at = c->jhnext[k];
+        v = id >= 0 ? (unsigned)id : c->nmask;
+        if (UC_FAULT(c, UCF_ID_PAST)) v = c->nmask + 1;
+        if (n && UC_FAULT(c, UCF_ID_INLIST)) v = list[0];
+        v = uc_tree(c, UC_P_ID, UC_IDB, v);
+        if (v > c->nmask) REFUSE("slot %u's mask id %u, past the run's %u kept masks", s, v, c->nmask);
+        if (v < c->nmask) {
+            for (k = 0; k < n; k++)
+                if (list[k] == v) REFUSE("slot %u's escape names mask %u, in its context's list", s, v);
+            id = (int)v;
+            UC_SEEN(c, UCT_KEPT);
+        } else {
+            const unsigned char* src = c->nmask && UC_FAULT(c, UCF_DUP) ? c->umask : m;
+            int empty = UC_FAULT(c, UCF_EMPTY);
+            if (dec) memset(m, 0, MB_MAX);
+            for (j = 0; j < c->p.nlanes; j++) {
+                unsigned b = uc_bit(c, UC_P_MB + j * 4 + prev * 2 + any, !empty && bit_of(src, j));
+                if (dec && b) m[j >> 3] |= (unsigned char)(1u << (j & 7));
+                prev = b;
+                any |= b;
+            }
+            if (!any) REFUSE("slot %u's new mask is empty", s);
+            if (dec && uc_find(c, m) >= 0) REFUSE("slot %u's new mask is one the run keeps", s);
+            id = uc_keep(c, m);
+            UC_SEEN(c, id >= 0 ? UCT_NEW : UCT_UNKEPT);
+        }
     }
-    memcpy(c->jm + (size_t)k * MB_MAX, m, MB_MAX);
-    h = j2_hash(m);
-    c->jhnext[k] = c->jhead[h];
-    c->jhead[h] = (int16_t)k;
-    j2_push(c, k);
+    if (id >= 0) {
+        if (dec) memcpy(m, c->umask + (size_t)id * MB_MAX, MB_MAX);
+        for (k = 0; k < n && list[k] != (unsigned)id; k++) ;
+        if (k == n) {
+            if (n < UC_K) c->unn[ctx] = (unsigned char)(n + 1);
+            else k = UC_K - 1;
+        }
+        memmove(list + 1, list, k * sizeof *list);
+        list[0] = (uint16_t)id;
+    }
+    c->uslast[s] = (uint16_t)(id >= 0 ? (unsigned)id : UC_NONE);
+    return 1;
 }
 
-static int mask_any(const unsigned char* m)
+/* Listed slot s's zigzag residual *z in lane j, its cache keyed by `type`: the encoder's, or the
+   decoder's out. 1, or 0 with the refusal in why: a cache index past the cache's values, or a
+   value past the lane's width. */
+static int uc_resid(RecCodec* c, unsigned s, unsigned j, uint32_t type, uint32_t* z, char* why,
+                    unsigned cap)
 {
-    unsigned i, any = 0;
-    for (i = 0; i < MB_MAX; i++) any |= m[i];
-    return any != 0;
+    unsigned char* ls = c->ulane + (size_t)s * RECC_LANES_MAX + j;
+    uint32_t ci = (uint32_t)((type * c->p.nlanes + j) * 2654435761u) >> (32 - UC_CBITS);
+    uint32_t* cv = c->ucache + (size_t)ci * UC_CVALS;
+    uint32_t v = *z;
+    unsigned n = c->ucn[ci], k = 0, hit = 0, w = c->p.lane[j].width, dec = c->ur.dec;
+    if (n) {
+        if (!dec)
+            while (k < n && cv[k] != v) k++;
+        if (n < UC_CVALS && UC_FAULT(c, UCF_CACHE)) k = n, hit = 1;
+        hit = uc_bit(c, UC_P_LC + j * 2 + (*ls >> 6 & 1), hit || k < n);
+        if (hit) {
+            k = uc_tree(c, UC_P_LI + j * UC_CVALS, 3, k);
+            if (k >= n) REFUSE("slot %u lane %u: cache index %u past its %u values", s, j, k, n);
+            v = cv[k];
+            UC_SEEN(c, UCT_HIT);
+        }
+    }
+    if (!hit && w < 4 && UC_FAULT(c, UCF_WIDE)) v = 1u << 8 * w;
+    if (!hit) {
+        unsigned len = uc_tree(c, UC_P_LEN + ((size_t)j * UC_LENS + (*ls & 63)) * 32, 5,
+                               dec ? 0 : bitlen32(v) - 1);
+        unsigned mm = len < UC_MAN ? len : UC_MAN, top;
+        uint32_t low;
+        top = uc_tree(c, UC_P_MAN + ((size_t)j * UC_LENS + len + 1) * 16, mm, v >> (len - mm) & ((1u << mm) - 1));
+        low = uc_raw(c, len - mm, v & ((1u << (len - mm)) - 1));
+        if (dec) v = ((1u << mm | top) << (len - mm)) | low;
+        UC_SEEN(c, UCT_LITERAL);
+    }
+    if (w < 4 && v >> 8 * w) REFUSE("slot %u lane %u: a residual of %u bits in %u bytes", s, j, bitlen32(v), w);
+    k = 0;
+    while (k < n && cv[k] != v) k++;
+    if (k == n) {
+        if (n < UC_CVALS) c->ucn[ci] = (unsigned char)(n + 1);
+        else k = UC_CVALS - 1;
+    }
+    memmove(cv + 1, cv, k * sizeof *cv);
+    cv[0] = v;
+    *ls = (unsigned char)(bitlen32(v) | hit << 6);
+    *z = v;
+    return 1;
 }
 
-/* The encoder's id of a listed mask m (THE LISTING), the list moved on: 0 for the slot's last
-   mask `last` when `may0`, else 1 + its rank, else a new mask (the list's length + 1), which goes
-   to the block's new masks */
-static uint32_t j2_id(RecCodec* c, const unsigned char* m, const unsigned char* last, int may0)
+/* Listed slot s's mask and residuals into or out of the coder (the encoder's x->rmask and x->zz,
+   the decoder's mk and x->zin): 1, or 0 with the refusal in why */
+static int uc_unit(RecCodec* c, unsigned s, const unsigned char* l1, unsigned char* m, uint32_t* zz,
+                   int carried, char* why, unsigned cap)
 {
-    unsigned mb = (c->p.nlanes + 7) / 8;
-    uint32_t r = 0;
-    int k, q;
-    if (may0 && mask_any(last) && !memcmp(m, last, MB_MAX)) {
-        j2_touch(c, m);
-        return 0;
-    }
-    k = j2_find(c, m);
-    if (k < 0) {
-        r = c->njm + 1;
-        rb_put(&c->jnew, m, mb);
-        j2_touch(c, m);
-        return r;
-    }
-    for (q = c->jfront; q != k; q = c->jnx[q]) r++;
-    j2_unlink(c, k);
-    j2_push(c, k);
-    return r + 1;
-}
-
-/* The decoder's mask for id v (THE LISTING) into out, the list moved on; the block's new masks
-   `fresh` of which *next are taken. 0: v names no mask. */
-static int j2_mask(RecCodec* c, uint32_t v, const unsigned char* last, int may0,
-                   const unsigned char* fresh, unsigned nfresh, unsigned* next, unsigned char* out)
-{
-    unsigned mb = (c->p.nlanes + 7) / 8;
-    if (v == 0) {
-        if (!may0 || !mask_any(last)) return 0;
-        memcpy(out, last, MB_MAX);
-    } else if (v <= c->njm) {
-        int k = c->jfront;
-        while (--v) k = c->jnx[k];
-        memcpy(out, c->jm + (size_t)k * MB_MAX, MB_MAX);
-    } else if (v == c->njm + 1 && *next < nfresh) {
-        memset(out, 0, MB_MAX);
-        memcpy(out, fresh + (size_t)(*next)++ * mb, mb);
-        if (j2_find(c, out) >= 0) return 0;      /* BOUND: the list never holds a mask twice */
-    } else {
-        return 0;
-    }
-    j2_touch(c, out);
+    uint32_t type = lane_get(l1, &c->p.lane[c->lane_of[REC_LR_TYPE]]);
+    unsigned j;
+    if (!uc_mask(c, s, m, why, cap)) return 0;
+    for (j = 0; j < c->p.nlanes; j++)
+        if (bit_of(m, j)) {
+            if (!uc_resid(c, s, j, type, &zz[j], why, cap)) return 0;
+        } else {
+            c->ulane[(size_t)s * RECC_LANES_MAX + j] &= 0x40;
+        }
+    uc_took(c, s, carried);
     return 1;
 }
 
@@ -2668,8 +2957,7 @@ static int enc_iteration(RecCodec* c, const unsigned char* pl, size_t at, size_t
 {
     size_t p, nd, k;
     uint32_t gt = get32(pl + at + 4);
-    unsigned prev = 0, s, i, nc, wprev, nr = 0, nw = 0;
-    int64_t rprev;
+    unsigned prev = 0, s, i;
     Eval x;
     c->tl.n = 0;
     c->dl.n = 0;
@@ -2705,17 +2993,21 @@ static int enc_iteration(RecCodec* c, const unsigned char* pl, size_t at, size_t
     x.c = c;
     x.gt = gt;
     k = 0;
-    c->jr.n = c->jw.n = 0;
-    for (s = 1, nc = 0, rprev = -1, wprev = 0; s < c->nslots; s++) {
+    /* every slot the iteration visits takes its listed decision, a listed one its mask and
+       residuals (THE UNIT CODER); a resting slot without a delta is not evaluated */
+    for (s = 1; s < c->nslots; s++) {
         const unsigned char* d = NULL;
-        unsigned j, nb;
-        int carried = c->jprev[s], cand;
+        unsigned nb, kind;
+        int carried = c->jprev[s];
         c->jprev[s] = 0;
         if (!c->live[s] || c->touched[s]) continue;
         if (k < nd && get16(pl + ((const uint32_t*)c->dl.p)[k] + 4) == s)
             d = pl + ((const uint32_t*)c->dl.p)[k++] + 4;
-        cand = !c->rest[s];
-        if (!d && !cand) continue;
+        kind = c->rest[s] ? 0 : carried ? 1 : 2;
+        if (!kind && !d) {
+            if (!c->over) uc_listed(c, s, 0, 0);
+            continue;
+        }
         x.l1 = (const unsigned char*)(c->unit + (size_t)s * NDW);
         x.l2 = (const unsigned char*)(c->l2 + (size_t)s * NDW);
         x.l3 = c->l3 + (size_t)s * L3B;
@@ -2729,46 +3021,15 @@ static int enc_iteration(RecCodec* c, const unsigned char* pl, size_t at, size_t
         memset(x.rmask, 0, sizeof x.rmask);
         x.any = 0;
         frame_slot(&x);
-        if (!cand && !x.any) c->jbad = 1;     /* a woken slot always lists: the block declines */
+        if (!kind && !x.any) c->jbad = 1;     /* a woken slot always lists: the block declines */
         if (!c->over) {
-            unsigned char* last = c->jlast + (size_t)s * MB_MAX;
-            if (cand && carried) {
-                unsigned sym = !x.any ? 0 : !memcmp(x.rmask, last, MB_MAX) ? 1 : 2;
-                if (!(c->jnsym & 3)) rb_put(&c->jsym, "", 1);
-                if (!c->jsym.oom) c->jsym.p[c->jsym.n - 1] |= (unsigned char)(sym << 2 * (c->jnsym & 3));
-                c->jnsym++;
-                if (sym == 1) j2_touch(c, last);
-                else if (sym == 2) rb_u32(&c->ids, j2_id(c, x.rmask, last, 0));
-            } else if (x.any) {
-                if (cand) {
-                    rb_varint(&c->jr, (uint32_t)((int64_t)nc - rprev - 1));
-                    rprev = nc;
-                    nr++;
-                } else {
-                    rb_varint(&c->jw, s - wprev - 1);
-                    wprev = s;
-                    nw++;
-                }
-                rb_u32(&c->ids, j2_id(c, x.rmask, last, 1));
-            }
-            if (cand && !carried) nc++;
-            if (x.any) {
-                unsigned mb = (c->p.nlanes + 7) / 8;
-                memcpy(last, x.rmask, MB_MAX);
-                c->jprev[s] = 1;
-                rb_put(&c->lmask, x.rmask, mb);
-                for (j = 0; j < c->p.nlanes; j++)
-                    if (bit_of(x.rmask, j)) rb_u32(&c->lzz, x.zz[j]);
-                if (c->lmask.n + c->lzz.n + c->ids.n + c->jrw.n > RECC_FRAME_CAP) c->over = 1;
-            }
+            uc_listed(c, s, kind, kind ? (unsigned)x.any : 1);
+            if (x.any) uc_unit(c, s, x.l1, x.rmask, x.zz, kind == 1, NULL, 0);
+            if (c->sec[RCS_UNITS].n > RECC_FRAME_CAP) c->over = 1;
         }
         slot_advance(c, s, x.u, gt);
     }
-    /* the iteration's ranks, then its woken slots, each a count and its gaps */
-    rb_varint(&c->jrw, nr);
-    rb_put(&c->jrw, c->jr.p, c->jr.n);
-    rb_varint(&c->jrw, nw);
-    rb_put(&c->jrw, c->jw.p, c->jw.n);
+    c->ujt++;
     pool_encode(c, pl, at, end);
     frames_walk(c, pl, at, end, it, gt);
     touched_end(c);
@@ -2779,59 +3040,12 @@ decline:
     return 0;
 }
 
-/* RCS_UNITS from the block's listing and residuals (tagpu_recfmt.h): 0 when it passes
-   RECC_FRAME_CAP or memory */
-static int units_write(RecCodec* c, unsigned iterations)
+/* RCS_UNITS's end: the coder's last bytes after the iterations' decisions (THE UNIT CODER). 0
+   when the section passes RECC_FRAME_CAP or memory, or the coder's first byte was not 0. */
+static int units_write(RecCodec* c)
 {
     RecBytes* o = &c->sec[RCS_UNITS];
-    unsigned mb = (c->p.nlanes + 7) / 8, j;
-    size_t total = c->lmask.n / mb, nid = c->ids.n / 4, i, li, z;
-    const uint32_t* ids = (const uint32_t*)c->ids.p;
-    uint32_t* colv;
-    unsigned char present[MB_MAX];
-    size_t colat[RECC_LANES_MAX], coln[RECC_LANES_MAX];
-    int wide = 0;
-    o->n = 0;
-    o->oom = 0;
-    rb_varint(o, iterations);
-    rb_varint(o, (uint32_t)c->jsym.n);
-    rb_put(o, c->jsym.p, c->jsym.n);
-    rb_put(o, c->jrw.p, c->jrw.n);
-    rb_varint(o, (uint32_t)(c->jnew.n / mb));
-    rb_put(o, c->jnew.p, c->jnew.n);
-    for (i = 0; i < nid; i++) wide |= ids[i] > 0xFF;
-    rb_put(o, wide ? "\1" : "", 1);
-    for (i = 0; i < nid; i++) {
-        if (wide) {
-            rb_varint(o, ids[i]);
-        } else {
-            unsigned char b = (unsigned char)ids[i];
-            rb_put(o, &b, 1);
-        }
-    }
-    /* each lane's count: a bitmap of the lanes that have one, then those counts */
-    memset(coln, 0, sizeof coln);
-    for (i = 0; i < total; i++)
-        for (j = 0; j < c->p.nlanes; j++) coln[j] += bit_of(c->lmask.p + i * mb, j);
-    memset(present, 0, sizeof present);
-    for (j = 0; j < c->p.nlanes; j++)
-        if (coln[j]) present[j >> 3] |= (unsigned char)(1u << (j & 7));
-    rb_put(o, present, mb);
-    for (j = 0; j < c->p.nlanes; j++)
-        if (coln[j]) rb_varint(o, (uint32_t)coln[j]);
-    /* the columns: each lane's residuals in listed order */
-    for (j = 0, z = 0; j < c->p.nlanes; j++) {
-        colat[j] = z;
-        z += coln[j];
-    }
-    c->cols.n = 0;
-    if (!rb_grow(&c->cols, z * 4 + 4)) return 0;
-    colv = (uint32_t*)c->cols.p;
-    for (i = 0, li = 0; i < total; i++)
-        for (j = 0; j < c->p.nlanes; j++)
-            if (bit_of(c->lmask.p + i * mb, j)) colv[colat[j]++] = ((const uint32_t*)c->lzz.p)[li++];
-    for (i = 0; i < z; i++) rb_varint(o, colv[i]);
-    return !o->oom && o->n <= RECC_FRAME_CAP;
+    return uc_enc_end(c) && !o->oom && o->n <= RECC_FRAME_CAP;
 }
 
 int reccodec_encode(RecCodec* e, const unsigned char* pl, size_t n, RecBytes* out)
@@ -2844,10 +3058,9 @@ int reccodec_encode(RecCodec* e, const unsigned char* pl, size_t n, RecBytes* ou
         e->valid = 0;
         return RECC_DECLINED;
     }
-    e->lmask.n = e->lzz.n = e->ids.n = e->jsym.n = e->jrw.n = e->jnew.n = 0;
-    e->lmask.oom = e->lzz.oom = e->ids.oom = e->jsym.oom = e->jrw.oom = e->jnew.oom = 0;
-    e->jr.oom = e->jw.oom = 0;
-    e->jnsym = 0;
+    /* RCS_UNITS: the iterations, then the coder's bytes, which the iterations make */
+    rb_varint(&e->sec[RCS_UNITS], ticks);
+    uc_enc_start(e, &e->sec[RCS_UNITS]);
     e->jbad = 0;
     e->pctl.n = e->pref.n = e->psurv.n = e->pbirth.n = e->ptail.n = 0;
     e->pctl.oom = e->pref.oom = e->psurv.oom = e->pbirth.oom = e->ptail.oom = 0;
@@ -2863,10 +3076,8 @@ int reccodec_encode(RecCodec* e, const unsigned char* pl, size_t n, RecBytes* ou
         at = end;
         it++;
     }
-    if (e->over || e->kbad || e->jbad || e->lmask.oom || e->lzz.oom || e->ids.oom || e->jsym.oom ||
-        e->jrw.oom || e->jnew.oom || e->jr.oom || e->jw.oom || e->pctl.oom || e->pref.oom ||
-        e->psurv.oom || e->pbirth.oom || e->ptail.oom || !units_write(e, ticks) || !pool_write(e, ticks) ||
-        !frames_write(e)) {
+    if (e->over || e->kbad || e->jbad || e->pctl.oom || e->pref.oom || e->psurv.oom || e->pbirth.oom ||
+        e->ptail.oom || !units_write(e) || !pool_write(e, ticks) || !frames_write(e)) {
         e->valid = 0;
         return RECC_DECLINED;
     }
@@ -3271,12 +3482,9 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
                     unsigned cap)
 {
     RecSecHead h;
-    size_t off[RCS_COUNT + 1], at, i, oat, uend, symat, nsymb, nid, inext = 0, jsi = 0;
-    size_t colat[RECC_LANES_MAX], colend[RECC_LANES_MAX], rwat[RECC_TICKS_MAX];
-    unsigned it, mb, j, ndict = 0, dnext = 0;
+    size_t off[RCS_COUNT + 1], at, i, oat, uend;
+    unsigned it, j;
     uint32_t v, kind, fl, gt0 = 0;
-    const unsigned char* dict;
-    const unsigned char* present;
     PoolAt pq;
     if (!d->valid) REFUSE("a sectioned block with no frame to continue");
     d->valid = 0;
@@ -3303,97 +3511,14 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
     if (!kinds_parse(d, sec, off[RCS_KINDS], off[RCS_KINDS + 1], h.iterations, h.payload, why, cap))
         return 0;
 
-    /* RCS_UNITS: everything read and bounded before the first iteration but what the listing
-       needs the decode's state for, which each iteration bounds (THE LISTING) */
+    /* RCS_UNITS: the iterations, then the coder's bytes to the section's end, which the
+       iterations read (THE UNIT CODER) */
     at = off[RCS_UNITS];
     uend = off[RCS_UNITS + 1];
-    mb = (d->p.nlanes + 7) / 8;
     if (!varint_get(sec, uend, &at, &v) || v != h.iterations)
         REFUSE("the unit frame's iterations are not the head's %u", h.iterations);
-    if (!varint_get(sec, uend, &at, &v) || v > uend - at) REFUSE("the unit frame's symbols run past it");
-    /* BOUND: an iteration carries and lists at most nslots - 1 units, since the writer's slot
-       loop (enc_iteration) runs 1..nslots-1 and gives each slot at most one symbol and one id;
-       so the symbols fill at most a quarter byte each of iterations * (nslots - 1), and the ids
-       (the symbols 2, the ranks and the woken slots) are at most that many. Without it the ids,
-       and the MTF walks they cost, would be bounded by the section's bytes alone. */
-    if (v > ((size_t)h.iterations * (d->nslots - 1) + 3) / 4)
-        REFUSE("%lu bytes of symbols, past %u iterations of %u slots", (unsigned long)v, h.iterations, d->nslots - 1);
-    symat = at;
-    nsymb = v;
-    at += nsymb;
-    nid = 0;
-    for (i = 0; i < 4 * nsymb; i++) {
-        unsigned sym = sec[symat + (i >> 2)] >> 2 * (i & 3) & 3;
-        if (sym == 3) REFUSE("symbol %lu is 3", (unsigned long)i);
-        nid += sym == 2;
-    }
-    for (it = 0; it < h.iterations; it++) {
-        unsigned k, pass;
-        rwat[it] = at;
-        for (pass = 0; pass < 2; pass++) {               /* the ranks, then the woken slots */
-            uint64_t prev = pass ? 0 : (uint64_t)-1;
-            if (!varint_get(sec, uend, &at, &v) || v > d->nslots)
-                REFUSE("iteration %u lists past the %u slots, at byte %lu", it, d->nslots, (unsigned long)at);
-            nid += v;
-            for (k = 0, i = v; k < i; k++) {
-                if (!varint_get(sec, uend, &at, &v)) REFUSE("a gap cut short at byte %lu", (unsigned long)at);
-                prev += (uint64_t)v + 1;
-                if (prev >= d->nslots) REFUSE("iteration %u names %llu, past the %u slots", it, (unsigned long long)prev, d->nslots);
-            }
-        }
-    }
-    if (nid > (size_t)h.iterations * (d->nslots - 1))
-        REFUSE("%lu mask ids, past %u iterations of %u slots", (unsigned long)nid, h.iterations, d->nslots - 1);
-    if (!varint_get(sec, uend, &at, &v)) REFUSE("the mask count cut short at byte %lu", (unsigned long)at);
-    if (v > nid) REFUSE("%lu new masks for %lu ids", (unsigned long)v, (unsigned long)nid);
-    ndict = v;
-    if ((size_t)ndict * mb > uend - at) REFUSE("the masks run past the unit frame");
-    dict = sec + at;
-    for (i = 0; i < ndict; i++) {
-        const unsigned char* m = dict + i * mb;
-        unsigned any = 0;
-        for (j = 0; j < mb; j++) any |= m[j];
-        if (!any) REFUSE("mask %lu is empty", (unsigned long)i);
-        if (d->p.nlanes % 8 && m[mb - 1] >> (d->p.nlanes % 8)) REFUSE("mask %lu names a lane past %u", (unsigned long)i, d->p.nlanes);
-    }
-    at += (size_t)ndict * mb;
-    if (at >= uend || sec[at] > 1) REFUSE("the ids' mode is not 0 or 1");
-    d->ids.n = 0;
-    d->ids.oom = 0;
-    for (i = 0, j = sec[at++]; i < nid; i++) {
-        if (!j) {
-            if (at >= uend) REFUSE("the mask ids cut short");
-            v = sec[at++];
-        } else if (!varint_get(sec, uend, &at, &v)) {
-            REFUSE("a mask id cut short at byte %lu", (unsigned long)at);
-        }
-        rb_u32(&d->ids, v);
-    }
-    if (d->ids.oom) REFUSE("no memory for the mask ids");
-    /* each lane's count, then its column: every residual read and bounded here, each lane's
-       consumed by the listed masks to exactly its end (after the last iteration) */
-    if (mb > uend - at) REFUSE("the lanes' counts cut short");
-    present = sec + at;
-    at += mb;
-    if (d->p.nlanes % 8 && present[mb - 1] >> (d->p.nlanes % 8)) REFUSE("a count for a lane past %u", d->p.nlanes);
-    {
-        uint32_t cnt[RECC_LANES_MAX];
-        for (j = 0; j < d->p.nlanes; j++) {
-            cnt[j] = 0;
-            if (bit_of(present, j) && (!varint_get(sec, uend, &at, &cnt[j]) || !cnt[j]))
-                REFUSE("lane %u's count cut short or 0", j);
-        }
-        for (j = 0; j < d->p.nlanes; j++) {
-            unsigned w = d->p.lane[j].width;
-            colat[j] = at;
-            for (i = 0; i < cnt[j]; i++) {
-                if (!varint_get(sec, uend, &at, &v)) REFUSE("lane %u's column cut short at byte %lu", j, (unsigned long)at);
-                if (w < 4 && v >> (8 * w)) REFUSE("lane %u's residual %lu is past its %u bytes", j, (unsigned long)v, w);
-            }
-            colend[j] = at;
-        }
-    }
-    if (at != uend) REFUSE("%lu bytes left in the unit frame", (unsigned long)(uend - at));
+    if (uend - at < 4) REFUSE("the unit coder's %lu bytes, under its 4", (unsigned long)(uend - at));
+    uc_dec_start(d, sec, at, uend);
 
     /* RCS_PROJ and the record frames' sections, read and bounded before the first iteration */
     if (!pool_parse(d, sec, off[RCS_PROJ], off[RCS_PROJ + 1], h.iterations, &pq, why, cap)) return 0;
@@ -3413,7 +3538,7 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
     oat = off[RCS_OTHER];
     for (it = 0; it < h.iterations; it++) {
         RunAt a;
-        size_t aoat = oat, dat = 0, pbat = 0, rat = rwat[it], nr, nw, ri = 0, wi = 0, nc = 0;
+        size_t aoat = oat, dat = 0, pbat = 0;
         unsigned nchanged = 0, s, nshot = 0;
         unsigned char mk[MB_MAX];
         uint32_t gt = gt0 + it;
@@ -3448,70 +3573,23 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
             }
         }
         if (d->tl.oom) REFUSE("no memory for the touched slots");
-        /* the iteration's ranks and woken slots, read and bounded above */
-        d->jr.n = d->jw.n = 0;
-        {
-            uint64_t prev = (uint64_t)-1;
-            varint_get(sec, uend, &rat, &v);
-            for (nr = v, i = 0; i < nr; i++) {
-                varint_get(sec, uend, &rat, &v);
-                prev += (uint64_t)v + 1;
-                rb_u32(&d->jr, (uint32_t)prev);
-            }
-            varint_get(sec, uend, &rat, &v);
-            for (nw = v, i = 0, prev = 0; i < nw; i++) {
-                varint_get(sec, uend, &rat, &v);
-                prev += (uint64_t)v + 1;
-                rb_u32(&d->jw, (uint32_t)prev);
-            }
-        }
-        if (d->jr.oom || d->jw.oom) REFUSE("no memory for the listing");
-        /* the frame: the candidates in ascending order and the woken slots, the listed ones
-           among them (THE LISTING) */
+        /* the frame: every slot the iteration visits, its listed decision and a listed one's mask
+           and residuals before it is evaluated (THE UNIT CODER) */
         memset(&x, 0, sizeof x);
         x.c = d;
         x.gt = gt;
         x.dec = 1;
-        x.sec = sec;
-        x.colend = colend;
-        x.colat = colat;
         for (s = 1; s < d->nslots; s++) {
-            int carried = d->jprev[s], lst = 0, may0 = 1;
-            unsigned sym = 0;
-            unsigned char* last = d->jlast + (size_t)s * MB_MAX;
+            int carried = d->jprev[s];
+            unsigned kind, lst;
             unsigned char* l1;
             d->jprev[s] = 0;
             if (!d->live[s] || d->touched[s]) continue;
-            if (d->rest[s]) {
-                lst = wi < nw && ((const uint32_t*)d->jw.p)[wi] == s;
-                wi += lst;
-                if (!lst) continue;
-            } else if (carried) {
-                if (jsi >= 4 * nsymb) REFUSE("iteration %u: the symbols end before carried slot %u", it, s);
-                sym = sec[symat + (jsi >> 2)] >> 2 * (jsi & 3) & 3;
-                jsi++;
-                lst = sym != 0;
-                may0 = 0;
-            } else {
-                lst = ri < nr && ((const uint32_t*)d->jr.p)[ri] == nc;
-                ri += lst;
-                nc++;
-            }
-            if (lst) {
-                if (sym == 1) {
-                    memcpy(mk, last, MB_MAX);
-                    if (!mask_any(mk)) REFUSE("iteration %u: slot %u takes its last mask, which is empty", it, s);
-                    j2_touch(d, mk);
-                } else {
-                    if (inext >= nid) REFUSE("iteration %u: the mask ids end before slot %u", it, s);
-                    v = ((const uint32_t*)d->ids.p)[inext++];
-                    if (!j2_mask(d, v, last, may0, dict, ndict, &dnext, mk))
-                        REFUSE("iteration %u: mask id %lu for slot %u names no mask", it, (unsigned long)v, s);
-                }
-                memcpy(last, mk, MB_MAX);
-                d->jprev[s] = 1;
-            }
+            kind = d->rest[s] ? 0 : carried ? 1 : 2;
+            lst = uc_listed(d, s, kind, 0);
+            if (!kind && !lst) continue;
             l1 = (unsigned char*)(d->unit + (size_t)s * NDW);
+            if (lst && !uc_unit(d, s, l1, mk, x.zin, kind == 1, why, cap)) return 0;
             x.l1 = l1;
             x.l2 = (const unsigned char*)(d->l2 + (size_t)s * NDW);
             x.l3 = d->l3 + (size_t)s * L3B;
@@ -3520,7 +3598,7 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
             x.s = s;
             x.mask = lst ? mk : NULL;
             memset(x.u, 0, IMG);
-            if (!frame_slot(&x)) REFUSE("a residual cut short");
+            frame_slot(&x);
             if (memcmp(x.u, l1, IMG)) {
                 unsigned char head[REC_UNIT_DELTA_HEAD];
                 unsigned q, nb = 0;
@@ -3540,8 +3618,8 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
             }
             slot_advance(d, s, x.u, gt);
         }
-        if (ri != nr || wi != nw)
-            REFUSE("iteration %u: a rank or a woken slot names no slot it can list", it);
+        if (d->ur.over) REFUSE("iteration %u: the unit coder reads past its section", it);
+        d->ujt++;
         if (d->dl.oom) REFUSE("no memory for the deltas");
         if (!group_fill(d, it, 1, nchanged, "unit deltas", why, cap)) return 0;
         /* pass B: the records, in order; a frame record's body from its frame, at the unit copy
@@ -3557,7 +3635,7 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
         run_at(d, &a, it);
         while ((kind = run_next(d, &a, &fl)) != 0) {
             unsigned sc = rec_section_of(kind);
-            uint32_t len;
+            uint32_t len = 0;
             unsigned char hd[4];
             const unsigned char* b;
             size_t rl;
@@ -3639,12 +3717,7 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
         touched_end(d);
     }
     if (oat != off[RCS_OTHER + 1]) REFUSE("%lu bytes left in section %u", (unsigned long)(off[RCS_OTHER + 1] - oat), RCS_OTHER);
-    if (nsymb != (jsi + 3) / 4 || (jsi & 3 && sec[symat + nsymb - 1] >> 2 * (jsi & 3)))
-        REFUSE("%lu symbol bytes for %lu carried slots", (unsigned long)nsymb, (unsigned long)jsi);
-    if (inext != nid || dnext != ndict)
-        REFUSE("%lu of %lu mask ids and %u of %u new masks taken", (unsigned long)inext, (unsigned long)nid, dnext, ndict);
-    for (j = 0; j < d->p.nlanes; j++)
-        if (colat[j] != colend[j]) REFUSE("lane %u's column is not consumed by the listed masks", j);
+    if (d->ur.at != uend) REFUSE("%lu bytes left after the unit coder's last", (unsigned long)(uend - d->ur.at));
     for (j = 0; j < RECC_FRAMES; j++)
         if (!FRAMES[j]->dec_close(d->frame[j], why, cap)) return 0;
     if (out->n != h.payload) REFUSE("the records are %lu bytes, not the head's %lu", (unsigned long)out->n, (unsigned long)h.payload);
