@@ -129,7 +129,7 @@ describe('the pane', () => {
                                   props: PANE_PROPS, requestId: 'ta-runs' })
     expect(await ui.find({ text: /tareplay landing a/ })).toBeDefined()
     expect(await ui.find({ text: /── IN PROGRESS \(1\)/ })).toBeDefined()
-    expect(await ui.find({ text: /░{22} {2}0\/1 test groups · ~7 min · ≈/ })).toBeDefined()
+    expect(await ui.find({ text: /░{22} {2}0\/1 test groups · ~7 min left · end time ≈\d\d:\d\d$/ })).toBeDefined()
     expect(await ui.find({ text: /running \(1\)/ })).toBeDefined()
     expect(await ui.find({ text: /▶ battle {2}record✓ {2}puppet ▶ GT 3120\/5300$/ })).toBeDefined()
     expect(await ui.find({ text: /── DONE/ })).toBeUndefined()

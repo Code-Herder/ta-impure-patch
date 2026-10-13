@@ -45,12 +45,13 @@ export function standing(run: Run): string {
   return run.live === 'ended' ? run.state : run.live
 }
 
-/** "~7 min · ≈11:42", "≥3 min" while some step has no history yet, "" with no estimate. */
+/** "~7 min left · end time ≈11:42", "≥3 min left" while some step has no history yet, "" with
+ * no estimate. */
 export function etaText(run: Run, now: number, utcOffset: number): string {
   if (!run.eta || run.live !== 'running') return ''
   const left = Math.max(0, run.eta.seconds - (now / 1000 - run.eta.at))
-  if (run.eta.lower_bound) return `≥${duration(left)}`
-  return `~${duration(left)} · ≈${clockAt(now + left * 1000, utcOffset)}`
+  if (run.eta.lower_bound) return `≥${duration(left)} left`
+  return `~${duration(left)} left · end time ≈${clockAt(now + left * 1000, utcOffset)}`
 }
 
 /** What a run counts its progress in: its items, or the steps of a run with none of its own. */
