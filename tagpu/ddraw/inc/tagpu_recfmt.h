@@ -37,9 +37,11 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 20: format 19 with the script slice's place in the event stream (RK_EV_SLICE), the owner's COB
-   queries the playing makes again (RK_EV_QUERY) and a yard's opening or closing at its place
-   (RK_EV_YARD). 19 was format 18 with more of the unit frame's rules -- a unit's hit points while
+/* 21: format 20 with QueryTransport and QueryLandingPad among the owner's queries, and
+   BeginTransport and setSFXoccupy as the owner's starts (RK_EV_START_NAMED) where the broadcast and
+   the playing's own water-state call made them before. 20 was format 19 with the script slice's
+   place in the event stream (RK_EV_SLICE), the owner's COB queries the playing makes again
+   (RK_EV_QUERY) and a yard's opening or closing at its place (RK_EV_YARD). 19 was format 18 with more of the unit frame's rules -- a unit's hit points while
    it is built, its HP percentage every 30 ticks, its sort bucket, a ground unit's speed and sight
    cell, the turn rate's one-tick blip -- and their constants in the header: RT_TYPES, each unit
    type's, and RT_PHYSICS's bucket columns. 18 was format 17 with the sectioned container's kinds
@@ -64,7 +66,7 @@
    unit frame carries the unit deltas, whose pool frame carries the projectile pool coded by
    identity, and whose four record frames -- the cells, the orders, the events and the state --
    carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). */
-#define REC_FORMAT        20
+#define REC_FORMAT        21
 
 static __inline int rec_format_supported(unsigned format)
 {
@@ -355,8 +357,8 @@ enum RecKind {
     RK_EV_QUERY,       /* u32 unit ID, u8 the query (REC_QUERY_*), u8 0 x3: a COB query only an
                           order handler makes, 0x4B0BC0 on that unit's COB object. The handler runs
                           in its own unit's turn, after that unit's slice; the queried unit is the
-                          handler's, or for SelfRepair's QueryNanoPiece the repairing pad
-                          (0x402525..0x40252E), whose own slice can come later in the tick. A
+                          handler's, or a pad -- SelfRepair's QueryNanoPiece (0x402525..0x40252E),
+                          VTOL_Landing's QueryLandingPad -- whose own slice can come later. A
                           top-level event of the step, like RK_EV_SLICE. A playing makes the same
                           query at this place (tagpu_replay.c, THE OWNER'S QUERIES)               */
     RK_EV_YARD,        /* u32 unit ID, u8 the yard (1 open, 0 closed), u8 0 x3: YARD_OPEN 0x47DAC0
@@ -384,12 +386,16 @@ _Static_assert(RK_EV_NET_CREATE == 51 && RK_POV == 52 && RK_CLICK == 53 && RK_SE
 _Static_assert(RK_EV_SLICE == 57 && RK_EV_QUERY == 58 && RK_EV_YARD == 59 && RK_KINDS == 60,
                "the script slice's, the owner's query's and the yard's kinds");
 
-/* RK_EV_QUERY's query: the script's name and its first argument's value going in, as the engine's
-   only call of each passes them, the other three arguments NULL (the engine map, *The owner's COB
+/* RK_EV_QUERY's query: the script's name and the values its arguments point to going in, as the
+   engine's calls pass them, an argument it passes NULL marked - (the engine map, *The owner's COB
    queries*) */
 enum RecQuery {
-    REC_QUERY_BUILDINFO,   /* "QueryBuildInfo", -1: BuildingBuild's state dispatch, 0x4027FB     */
-    REC_QUERY_NANOPIECE,   /* "QueryNanoPiece", 0: 0x43E400 at 0x43E427, from fifteen handlers  */
+    REC_QUERY_BUILDINFO,   /* "QueryBuildInfo" {-1, -, -, -}: BuildingBuild's state 2, 0x4027FB  */
+    REC_QUERY_NANOPIECE,   /* "QueryNanoPiece" {0, -, -, -}: 0x43E400 at 0x43E427, from fifteen
+                              handlers                                                        */
+    REC_QUERY_TRANSPORT,   /* "QueryTransport" {-1, -, -, -}: VTOL_Pickup's state 2, 0x4113B1    */
+    REC_QUERY_LANDINGPAD,  /* "QueryLandingPad" {-1, -1, -1, -1}: VTOL_Landing's states 1, 3 and 5
+                              (0x411A35, 0x411AA6, 0x411BF5, 0x411CF1), on the pad             */
     REC_QUERIES
 };
 #define REC_POV_AT_BYTES (4u + (unsigned)sizeof(RecPov))

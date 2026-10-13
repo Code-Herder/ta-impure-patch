@@ -4978,11 +4978,17 @@ static int __cdecl ev_start_args(void* E)
 }
 
 /* 0x456218, inside 0x456200(unit, name, argc, a0..a3) once 0x4B07C0 has turned the name into
-   the index, which it broadcasts: esi the unit, eax the index, and the arguments 0x1C further up
-   (`sub esp,0x18; push esi`) */
+   the index, which it broadcasts: esi the unit, eax the index, and the return address and the
+   arguments 0x1C further up (`sub esp,0x18; push esi`). The broadcast from 0x411403 (returning to
+   0x411408) is not recorded: it always follows BeginTransport's start at 0x4113EF on the same
+   unit with the same name and argument -- the two calls are one straight-line block that no
+   branch enters after 0x4113CB -- and that start is recorded as the owner made it (THE
+   OWNER-ONLY STARTS). */
+#define BEGIN_TRANSPORT_BC_RET 0x00411408u
 static int __cdecl ev_start_named_bc(void* E)
 {
     cnt(0x00456218u, 0, 0);
+    if (ARG(E, 0x1C) == BEGIN_TRANSPORT_BC_RET) return 0;
     ev_start(PTR(REG_ESI(E)), REG_EAX(E), ARG(E, 0x28), (const unsigned char*)E + 0x2C);
     return 0;
 }
@@ -5099,18 +5105,28 @@ void tagpu_rec_slice_given(unsigned where)
 
 /* THE OWNER'S QUERIES. A COB query, 0x4B0BC0(name, &a0, a1, a2, a3) thiscall on a unit's COB
    object, runs one thread of that object to its end at once (0x4B0C40) and can change the object's
-   statics and pieces. Two of the engine's query sites run only in an order handler, which runs
-   only on the machine of the handler's unit's owner: QueryBuildInfo, whose only call is
-   BuildingBuild's state dispatch at 0x4027FB, on the handler's unit, and QueryNanoPiece, whose only
-   call is 0x4B0BC0 at 0x43E427 inside 0x43E400(unit, out), which fifteen order handlers call on
-   the spray's source -- the handler's unit (order+0xE), or in SelfRepair 0x402430 the repairing
-   pad, the order's target (order+0x16, 0x402525..0x40252E), which can be another player's (the
-   engine map, *The owner's COB queries*). Each order handler runs from the unit tick's order runs,
-   0x43B7C0 at 0x48AF98 and 0x43BAD0 at 0x48AF9E, in its own unit's turn after that unit's slice
-   (0x48ADEB), or with event 2 from the destructor's 0x43A1F0, which BuildingBuild and the four
-   other build handlers return on before either query (the engine map, *The nano spray*); so a
-   query is inside no death and no feature call, and the pad's query in an aircraft's turn can
-   come before the pad's own slice in the same tick. A playing runs no order handler, so the
+   statics and pieces. Four of the engine's queries are made only in an order handler, which runs
+   only on the machine of the handler's unit's owner:
+   - QueryBuildInfo, whose only call is BuildingBuild's state dispatch at 0x4027FB, on the
+     handler's unit;
+   - QueryNanoPiece, whose only call is 0x4B0BC0 at 0x43E427 inside 0x43E400(unit, out), which
+     fifteen order handlers call on the spray's source -- the handler's unit (order+0xE), or in
+     SelfRepair 0x402430 the repairing pad, the order's target (order+0x16, 0x402525..0x40252E),
+     which can be another player's;
+   - QueryTransport, whose only call is VTOL_Pickup's state 2 at 0x4113B1, on the transport;
+   - QueryLandingPad, called by VTOL_Landing's states 1 (0x411A35, and 0x411AA6 when the first
+     answer has no free piece), 3 (0x411BF5) and 5 (0x411CF1) on the pad, the order's target
+     (order+0x16), which can be an ally's; its fifth call, 0x41189C, is in 0x411840, which has no
+     caller.
+   (the engine map, *The owner's COB queries*). Each order handler runs from the unit tick's order
+   runs, 0x43B7C0 at 0x48AF98 and 0x43BAD0 at 0x48AF9E, in its own unit's turn after that unit's
+   slice (0x48ADEB), or with event 2 from the destructor's 0x43A1F0, which BuildingBuild and the
+   four other build handlers return on before either of their queries (the engine map, *The nano
+   spray*), and which never reaches VTOL_Pickup's states 2 and 3 or VTOL_Landing: the destructor
+   calls a handler only when the order's +6 has bit 1, which VTOL_Pickup sets only at the end of
+   state 3 (0x411464) and VTOL_Landing never. So a query is inside no death and no feature call,
+   and a pad's query in an aircraft's turn can come before the pad's own slice in the same tick.
+   A playing runs no order handler, so the
    recording carries each query as RK_EV_QUERY {ID, the query} at its place, and the playing makes
    it there through the same 0x4B0BC0 with the same arguments (tagpu_replay.c, THE OWNER'S
    QUERIES). A multiplayer recording carries the queries the recording machine's handlers made the
@@ -5139,18 +5155,39 @@ static void rec_query(Rec* r, const char* unit, const unsigned* ecx, unsigned qu
     s_queries++;
 }
 
-/* QueryBuildInfo's call 0x4027FB, a stub in front of 0x4B0BC0 built like the owner-only starts'
-   (THE OWNER-ONLY STARTS): `mov ecx,[edi+0x9A]` at 0x4027E5 loads the COB object from the unit
-   that `mov edi,[esp+0x44]` (0x4027D9) took, the handler's first argument, and edi holds it until
-   the call; the name is `push 0x501330` at 0x4027EE */
-#define QUERY_BUILD_CALL 0x004027FBu
-#define QUERY_BUILD_MOV  0x004027E5u
-#define QUERY_BUILD_NAME 0x004027EEu
-static int __cdecl ev_query_build(void* E)
+/* The query calls but QueryNanoPiece's, each a stub in front of 0x4B0BC0 built like the owner-only
+   starts' (THE OWNER-ONLY STARTS): `mov ecx,[reg+0x9A]` at `mov` loads the COB object from the unit
+   that `reg` holds until the call, and `push name` at `push` names the query (DISASSEMBLED):
+   QueryBuildInfo's edi is BuildingBuild's first argument (0x4027D9), QueryTransport's esi
+   VTOL_Pickup's (0x41121A), and QueryLandingPad's ebx VTOL_Landing's order+0x16 (0x4118F2,
+   reloaded at 0x411A62 and not written again before the four calls). */
+/* a pushad frame's registers, in the order it pushes them */
+enum { R_EDI, R_ESI, R_EBP, R_ESP, R_EBX, R_EDX, R_ECX, R_EAX };
+typedef struct QuerySite {
+    unsigned call, mov;       /* the call, and the mov that loads its ecx                         */
+    unsigned push, name;      /* the `push imm32` of the query's name, and that name's address    */
+    unsigned char reg;        /* the unit's register: pushad's order, EDI 0 .. EAX 7             */
+    unsigned char query;      /* REC_QUERY_*                                                      */
+} QuerySite;
+static const QuerySite QUERY_SITES[] = {
+    { 0x004027FBu, 0x004027E5u, 0x004027EEu, 0x00501330u, R_EDI, REC_QUERY_BUILDINFO },
+    { 0x004113B1u, 0x004113A5u, 0x004113ACu, 0x00501BB4u, R_ESI, REC_QUERY_TRANSPORT },
+    { 0x00411A35u, 0x00411A24u, 0x00411A30u, 0x00501C14u, R_EBX, REC_QUERY_LANDINGPAD },
+    { 0x00411AA6u, 0x00411A8Bu, 0x00411A91u, 0x00501C14u, R_EBX, REC_QUERY_LANDINGPAD },
+    { 0x00411BF5u, 0x00411BE9u, 0x00411BF0u, 0x00501C14u, R_EBX, REC_QUERY_LANDINGPAD },
+    { 0x00411CF1u, 0x00411CE0u, 0x00411CECu, 0x00501C14u, R_EBX, REC_QUERY_LANDINGPAD },
+};
+#define QUERY_SITE_COUNT (sizeof QUERY_SITES / sizeof QUERY_SITES[0])
+
+static int __cdecl ev_query_site(void* E, unsigned site)
 {
-    Rec* r = ev_rec();
+    const QuerySite* q = &QUERY_SITES[site];
+    Rec* r;
     unsigned ecx = REG_ECX(E);
-    if (r) rec_query(r, PTR(REG_EDI(E)), &ecx, REC_QUERY_BUILDINFO);
+    cnt(q->call, 0, 0);
+    r = ev_rec();
+    if (r) rec_query(r, PTR(((const unsigned*)((const unsigned char*)E - 0x24))[q->reg]), &ecx,
+                     q->query);
     return 0;
 }
 
@@ -5494,14 +5531,23 @@ void tagpu_rec_start_named(const char* unit, const char* name, int now, int argc
    0x4B0940(name, 0, now), both thiscall on the unit's COB object, and each loads that ecx from the
    unit's +0x9A just before, `mov ecx,[reg+0x9A]` at `mov`, with `reg` holding the unit until the
    call (DISASSEMBLED). The stub runs ev_start_site with the call's esp -- the return address, then
-   the arguments -- and the registers under it, then jumps to the function as the call would. */
+   the arguments -- and the registers under it, then jumps to the function as the call would.
+   Two of them are made in a function a puppet never runs and also have a remote form:
+   - BeginTransport 0x4113EF, VTOL_Pickup's state 3 on the transport (esi from 0x41121A), with
+     run-now set, so its first part runs before the engine reads the link piece (0x411412). The
+     broadcast that follows at 0x411403 starts it on a remote copy with run-now clear (the 0x10
+     receiver, 0x455551), which is why the recording carries this start and not the broadcast
+     (ev_start_named_bc).
+   - setSFXoccupy 0x43DBE8, the water state 0x43DB50 on a change, run-now set. 0x43DB50 is called
+     only by the movement pass 0x43DD20, from the owner-gated unit tick (0x48AFAA) and the 0x2C
+     receiver (0x48BA46), neither of which runs on a puppet level; a playing writes +0x10A from the
+     image instead (tagpu_replay.c, unit_put). */
 typedef struct StartSite {
     unsigned call, mov;       /* the call, and the mov that loads its ecx                         */
     unsigned target;          /* 0x4B0A70, whose arguments are recorded, or 0x4B0940              */
     unsigned char reg;        /* the unit's register: pushad's order, EDI 0 .. EAX 7             */
     const char* what;
 } StartSite;
-enum { R_EDI, R_ESI, R_EBP, R_ESP, R_EBX, R_EDX, R_ECX, R_EAX };
 static const StartSite START_SITES[] = {
     { 0x00489F43u, 0x00489F2Cu, 0x004B0A70u, R_ESI, "HitByWeapon" },
     { 0x00489F8Eu, 0x00489F76u, 0x004B0A70u, R_ESI, "TakeDamage" },
@@ -5516,6 +5562,8 @@ static const StartSite START_SITES[] = {
     { 0x00411794u, 0x00411785u, 0x004B0940u, R_EBX, "EndTransport" },
     { 0x00411DA1u, 0x00411D92u, 0x004B0940u, R_EBX, "EndTransport" },
     { 0x00411E2Bu, 0x00411E1Eu, 0x004B0940u, R_EBP, "EndTransport" },
+    { 0x004113EFu, 0x004113DDu, 0x004B0A70u, R_ESI, "BeginTransport" },
+    { 0x0043DBE8u, 0x0043DBD0u, 0x004B0A70u, R_ESI, "setSFXoccupy" },
 };
 #define START_SITE_COUNT (sizeof START_SITES / sizeof START_SITES[0])
 
@@ -6926,7 +6974,7 @@ void tagpu_rec_init(void)
 {
     unsigned char* net[5] = { 0 };
     unsigned char* calls[START_SITE_COUNT] = { 0 };
-    unsigned char* qbuild = NULL;
+    unsigned char* queries[QUERY_SITE_COUNT] = { 0 };
     unsigned char* draws[FS_RNG_SITES] = { 0 };
     unsigned char* blast = NULL;
     unsigned char* source = NULL;
@@ -6969,17 +7017,17 @@ void tagpu_rec_init(void)
             return;
         }
     }
-    {
-        static const unsigned char mov[6] = { 0x8B, 0x8F, 0x9A, 0x00, 0x00, 0x00 };
-        static const unsigned char name[5] = { 0x68, 0x30, 0x13, 0x50, 0x00 };
-        unsigned char c[5];
-        int32_t rel = (int32_t)(0x004B0BC0u - (QUERY_BUILD_CALL + 5));
+    for (i = 0; i < QUERY_SITE_COUNT; i++) {
+        const QuerySite* q = &QUERY_SITES[i];
+        unsigned char c[5], m[6] = { 0x8B, 0, 0x9A, 0x00, 0x00, 0x00 }, n[5] = { 0x68 };
+        int32_t rel = (int32_t)(0x004B0BC0u - (q->call + 5));
         c[0] = 0xE8;
         memcpy(c + 1, &rel, 4);
-        if (!pristine(QUERY_BUILD_CALL, c, 5) || !pristine(QUERY_BUILD_MOV, mov, 6) ||
-            !pristine(QUERY_BUILD_NAME, name, 5)) {
-            tagpu_logf("recorder: the QueryBuildInfo query at 0x%06X holds other bytes: no event "
-                       "hooks, and nothing will be recorded", QUERY_BUILD_CALL);
+        m[1] = regs[q->reg];
+        memcpy(n + 1, &q->name, 4);
+        if (!pristine(q->call, c, 5) || !pristine(q->mov, m, 6) || !pristine(q->push, n, 5)) {
+            tagpu_logf("recorder: the query at 0x%06X holds other bytes: no event hooks, and "
+                       "nothing will be recorded", q->call);
             return;
         }
     }
@@ -7047,15 +7095,16 @@ void tagpu_rec_init(void)
         *p++ = 0x9D;                                    /* popfd                                */
         *p++ = 0xE9; tagpu_detour_rel(p, START_SITES[i].target);
     }
-    {
-        unsigned char* p = qbuild = tagpu_detour_stub();
+    for (i = 0; i < QUERY_SITE_COUNT; i++) {
+        unsigned char* p = queries[i] = tagpu_detour_stub();
         if (!p) goto fail;
         *p++ = 0x9C;                                    /* pushfd                               */
         *p++ = 0x60;                                    /* pushad                               */
         *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x24;   /* lea eax,[esp+0x24]: the call's esp */
+        *p++ = 0x68; memcpy(p, &i, 4); p += 4;          /* push the site                        */
         *p++ = 0x50;                                    /* push eax                             */
-        *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)ev_query_build); p += 4;
-        *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;          /* add esp,4                            */
+        *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)ev_query_site); p += 4;
+        *p++ = 0x83; *p++ = 0xC4; *p++ = 0x08;          /* add esp,8                            */
         *p++ = 0x61;                                    /* popad                                */
         *p++ = 0x9D;                                    /* popfd                                */
         *p++ = 0xE9; tagpu_detour_rel(p, 0x004B0BC0u);
@@ -7120,13 +7169,13 @@ void tagpu_rec_init(void)
         if (!tagpu_detour_write(START_SITES[k].call, c, 5)) goto landfail;
         calls[k] = NULL;
     }
-    {
+    for (k = 0; k < QUERY_SITE_COUNT; k++) {
         unsigned char c[5];
-        int32_t rel = (int32_t)((unsigned)(size_t)qbuild - (QUERY_BUILD_CALL + 5));
+        int32_t rel = (int32_t)((unsigned)(size_t)queries[k] - (QUERY_SITES[k].call + 5));
         c[0] = 0xE8;
         memcpy(c + 1, &rel, 4);
-        if (!tagpu_detour_write(QUERY_BUILD_CALL, c, 5)) goto landfail;
-        qbuild = NULL;
+        if (!tagpu_detour_write(QUERY_SITES[k].call, c, 5)) goto landfail;
+        queries[k] = NULL;
     }
     for (k = 0; k < FS_RNG_SITES; k++) {
         unsigned char c[5];
@@ -7156,7 +7205,8 @@ void tagpu_rec_init(void)
     }
     s_sites = 1;
     tagpu_logf("recorder: %u event sites in",
-               (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + 1 + FS_RNG_SITES + 2 + 2));
+               (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + QUERY_SITE_COUNT +
+                          FS_RNG_SITES + 2 + 2));
     cnt_sinks_init();
     ai_hooks_init();
     return;
@@ -7167,7 +7217,7 @@ landfail:
 fail:
     for (i = 0; i < 5; i++) tagpu_detour_stub_free(net[i]);
     for (i = 0; i < START_SITE_COUNT; i++) tagpu_detour_stub_free(calls[i]);
-    tagpu_detour_stub_free(qbuild);
+    for (i = 0; i < QUERY_SITE_COUNT; i++) tagpu_detour_stub_free(queries[i]);
     for (i = 0; i < FS_RNG_SITES; i++) tagpu_detour_stub_free(draws[i]);
     tagpu_detour_stub_free(blast);
     tagpu_detour_stub_free(source);

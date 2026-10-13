@@ -1,0 +1,26 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's `waterline` and `stock-waterline` test groups: on Anteer Strait's central island (x 3000-4000, y 800-1700, open water south of 1800, naval-push's survey), a Skimmer hovercraft, a Pelican amphibious kbot and a Bear hover transport, which loads a Peewee from the level's start (Ground_Pickup: TransportPickup). The test group moves the three into the water and back to land by tacli order, and has the Bear unload on land (Ground_Unload: TransportDrop): each crossing changes the unit's water state, which starts setSFXoccupy in its script. Nothing is left to chance; a solar at the island's far end keeps the AI seat alive.",
+ "setup": {
+  "map": "Anteer Strait",
+  "res": "1024x768",
+  "unit_limit": 500,
+  "clear_existing": true,
+  "los": "permanent",
+  "mapping": true,
+  "switches": {"noshake": true},
+  "players": [
+   {"slot": 0, "controller": "human", "side": "arm", "color": 0},
+   {"slot": 1, "controller": "ai", "side": "core", "color": 1}
+  ]
+ },
+ "units": [
+  {"id": "hover", "type": "ARMSH", "owner": 0, "pos": [3400, 1450], "facing": 180},
+  {"id": "amphib", "type": "ARMAMPH", "owner": 0, "pos": [3550, 1450], "facing": 180},
+  {"id": "bear", "type": "ARMTHOVR", "owner": 0, "pos": [3700, 1400], "facing": 180,
+   "orders": [{"cmd": "load", "target": "cargo"}]},
+  {"id": "cargo", "type": "ARMPW", "owner": 0, "pos": [3700, 1560], "facing": 180},
+  {"id": "keep_ai", "type": "CORSOLAR", "owner": 1, "pos": [3900, 1000]}
+ ],
+ "camera": {"at": [3550, 1700]}
+}

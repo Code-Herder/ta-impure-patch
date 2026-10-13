@@ -1336,13 +1336,15 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
       the mover's inputs and the turn words included;
    2. for a unit with a mover, the placement: the set-position 0x48A9F0 with the recorded x, z and
       layer and the altitude the movement pass had before its fix-up (a_pre), then the walk class
-      0x43DA70 and the water state 0x43DB50, which start the scripts a change starts;
+      0x43DA70, which starts the scripts a change starts, and the water state +0x10A, written from
+      the image: its one script, setSFXoccupy, is the owner's start the recording carries at its
+      place (tagpu_recorder.c, THE OWNER-ONLY STARTS), so the playing never runs 0x43DB50;
    3. what the fix-up and the relink leave, raw (s_raw2): the altitude and turn words, +0x110 bit
       16, the mover's claim stamp +0x26 and moved-at +0x2A;
    4. the ID rows that name a weapon or the last attacker, each turned back into its pointer;
    5. the control group +0xAC, through the engine's setter (group_put).
-   Never written: the position, cell, layer, sight stamp, walk class and water state, which the
-   engine functions above write; what the create and the level init wrote (the type and its index,
+   Never written raw: the position, cell, layer, sight stamp and walk class, which the engine
+   functions above write; what the create and the level init wrote (the type and its index,
    the slot, the owner); the carry links and the attach piece (0x48AB70's); the state byte
    (0x48B090's); the yard's bit, +0x10F bit 2 (YARD_OPEN's); the create's +0x110 bits 28-31; and
    the contact bits 8-10 and 12, which the host's radar pass computes for its own view (D1),
@@ -1555,10 +1557,9 @@ typedef void (__stdcall* PFN_SetGroup)(char* unit, int g);
 typedef void (__stdcall* PFN_SetPos)(char* unit, int32_t x, int32_t alt, int32_t z,
                                      unsigned layer);
 #define E_SetPos  ((PFN_SetPos)0x0048A9F0u)
-/* 0x43DA70 the walk class, 0x43DB50 the water state: thiscall on the mover (unit), `ret 4` */
+/* 0x43DA70 the walk class: thiscall on the mover (unit), `ret 4` */
 typedef void (__thiscall* PFN_Part)(char* mover, char* unit);
 #define E_Walk    ((PFN_Part)0x0043DA70u)
-#define E_Water   ((PFN_Part)0x0043DB50u)
 /* 0x48B090(mask, on): the state byte's setter, thiscall on the unit, `ret 8` */
 typedef void (__thiscall* PFN_SetState)(char* unit, unsigned mask, unsigned on);
 #define E_SetState ((PFN_SetState)0x0048B090u)
@@ -1916,6 +1917,21 @@ static int build_finished(float f)
    The finish's GUI refresh is made for the built unit when the viewer has it selected (+0x110
    bit 4, the viewer's own). The builder's half -- its refresh bit and its menu counts 0x4199B0 --
    has no unit here to name and is not made. */
+/* The water state of a unit with a mover, from the image: the dword 0x43DB50 stores and reads
+   (0x43DB6B, 0x43DBED), bounded by the 0..4 it stores (0x43DB84..0x43DBC7); past it the host's
+   stays, counted. THE INVARIANT is an ordering: 0x43DB50 is the field's one writer and reader, and
+   its callers, the movement pass from the owner-gated unit tick (0x48AFAA) and the 0x2C receiver
+   (0x48BA46), never run on a puppet level, so this write and the recorded setSFXoccupy start are
+   the field's and the script's only sources, and the field holds the recording machine's value at
+   every capture point. */
+static void water_put(char* u, const char* ib)
+{
+    uint32_t water;
+    memcpy(&water, ib + U_WATER, 4);
+    if (water <= WATER_MAX) memcpy(u + U_WATER, &water, 4);
+    else s_st.bad_ids++;
+}
+
 static void unit_put(const Lv* L, unsigned slot, const uint32_t* img)
 {
     char* u = unit_at(L, slot);
@@ -1957,7 +1973,7 @@ static void unit_put(const Lv* L, unsigned slot, const uint32_t* img)
         }
         E_SetPos(u, x, a_pre, z, img[U_STATE / 4] & 3u);
         E_Walk(mover, u);
-        E_Water(mover, u);
+        water_put(u, ib);
         put_masked(u, img, s_raw2, 0, REC_UNIT_BYTES);
         put_masked(mover, img, s_raw2, REC_MOVER_AT, REC_MOVER_BYTES);
     }
@@ -2902,13 +2918,11 @@ static void orders_put(const Lv* L, const RecWorld* W)
 
 /* RK_EV_CREATE: the create with the recorded arguments, into the recorded slot, then the water
    state the recording machine's unit took from its slot. A create leaves the water state as its
-   slot held it, and 0x43DB50 keeps a value while the unit stays in the band where no test fires
-   (0x43DB78..0x43DBCC). A unit's water states are therefore the recording machine's only if it
-   starts from the same value. Without this, a create played after a seek, in a slot dead at T,
-   starts from the seek host's history. The value is bounded by the 0..4 that 0x43DB50 stores
-   (0x43DB84..0x43DBC7). It is written whole, as 0x43DB50 reads and stores it, before the unit's
-   first E_Water at the next images, so that call starts setSFXoccupy exactly where the recording
-   machine's 0x43DB50 did. */
+   slot held it (no create code stores +0x10A, 0x485A40..0x4861BA). Without this, a create played
+   after a seek, in a slot dead at T, keeps the seek host's history. The value is bounded by the 0..4 that 0x43DB50 stores
+   (0x43DB84..0x43DBC7). It is written whole, as 0x43DB50 reads and stores it: a unit with no mover
+   keeps it, since only the movement pass runs 0x43DB50 (0x48AFA3), and a unit with one has it
+   from each image after this (unit_put). */
 static void slice_created(const Lv* L, unsigned slot);
 static void slice_died(unsigned slot);
 static int slice_own(unsigned slot);
@@ -3284,16 +3298,18 @@ static void ev_slice(const Lv* L, const unsigned char* b, unsigned len)
     }
 }
 
-/* THE OWNER'S QUERIES. The recording machine's order handlers made two COB queries a playing's
-   puppets never make, since a puppet runs no order handler: QueryBuildInfo and QueryNanoPiece
-   (tagpu_recorder.c, THE OWNER'S QUERIES). A query runs one thread of the unit's COB to its end at
-   once and can change its statics and pieces, so the recording carries each at its place in the
-   step (RK_EV_QUERY) and the playing makes it there, through the same 0x4B0BC0 with the
-   arguments the engine's call passes: the first a pointer to the value BuildingBuild (-1,
-   0x4027F3) or 0x43E400 (0, 0x43E41F) puts there first, the others NULL. 0x43E400's own work after
-   its query -- the piece's point, through 0x43DEF0 -- is not made: it writes only the caller's
-   buffer, and the spray that takes the point is recorded (RK_EV_SPRAY). The puppet gates are as
-   around the host's own slices: COB SET, ATTACH and DROP are inert.
+/* THE OWNER'S QUERIES. The recording machine's order handlers made four COB queries a playing's
+   puppets never make, since a puppet runs no order handler: QueryBuildInfo, QueryNanoPiece,
+   QueryTransport and QueryLandingPad (tagpu_recorder.c, THE OWNER'S QUERIES). A query runs one
+   thread of the unit's COB to its end at once and can change its statics and pieces, so the
+   recording carries each at its place in the step (RK_EV_QUERY) and the playing makes it there,
+   through the same 0x4B0BC0 with the arguments the engine's call passes: pointers to the values
+   the caller puts there first -- BuildingBuild -1 (0x4027F3), 0x43E400 0 (0x43E41F), VTOL_Pickup
+   -1 (0x41139F), each with the other three NULL, and VTOL_Landing four -1 (0x411A03, 0x411A96,
+   0x411BC3, 0x411CBF). What the callers do with the answers is not made: they write only the
+   caller's buffer or the order, which a puppet does not run, and what follows from them on the
+   recording machine -- the spray at the piece's point, the attach, the landing -- is recorded.
+   The puppet gates are as around the host's own slices: COB SET, ATTACH and DROP are inert.
    THE BOUND and THE LIFETIME are the slices': the unit is named by ID, a slot below the level's
    count holding a live unit (live_unit), and its +0x9A COB object, which only that unit's
    destructor frees (0x486D8A), is used on the game thread inside the step. A unit with no COB
@@ -3308,20 +3324,24 @@ static void query_reset(void)
 
 static void ev_query(const Lv* L, const unsigned char* b, unsigned len)
 {
-    static const char* const NAME[REC_QUERIES] = { "QueryBuildInfo", "QueryNanoPiece" };
-    static const int FIRST[REC_QUERIES] = { -1, 0 };
+    static const struct { const char* name; unsigned args; int value; } Q[REC_QUERIES] = {
+        { "QueryBuildInfo", 1, -1 }, { "QueryNanoPiece", 1, 0 },
+        { "QueryTransport", 1, -1 }, { "QueryLandingPad", 4, -1 },
+    };
     uint32_t id;
     char* u;
     void* cob;
-    int a0;
-    if (len != 8 || b[4] >= REC_QUERIES) return;
+    int a[4];
+    unsigned q;
+    if (len != 8 || (q = b[4]) >= REC_QUERIES) return;
     memcpy(&id, b, 4);
     if (!(u = live_unit(L, id)) || !(cob = cob_of(u))) {
         s_q.unmade++;
         return;
     }
-    a0 = FIRST[b[4]];
-    E_Query(cob, NAME[b[4]], &a0, NULL, NULL, NULL);
+    a[0] = a[1] = a[2] = a[3] = Q[q].value;
+    E_Query(cob, Q[q].name, &a[0], Q[q].args > 1 ? &a[1] : NULL, Q[q].args > 1 ? &a[2] : NULL,
+            Q[q].args > 1 ? &a[3] : NULL);
     s_q.made++;
 }
 
@@ -5711,8 +5731,10 @@ static int book_stamp(const Lv* L, char* u, const unsigned char* ib, uint16_t lo
 }
 
 /* THE UNITS' BOOKKEEPING. masks_init leaves a unit's water state +0x10A and its sight stamp's
-   fields +0x7A, +0x7C and +0xF8 to the host's engine, which derives them from the same history as
-   the recording machine, except in the step that makes the unit. The recording machine makes a
+   fields +0x7A, +0x7C and +0xF8 out of the image's raw write. The stamp is the host's engine's,
+   which derives it from the same history as the recording machine, except in the step that makes
+   the unit; the water state is the create's (ev_create) and, for a unit with a mover, each
+   image's (unit_put), since a puppet never runs 0x43DB50. The recording machine makes a
    unit where its own code does: in the unit tick, or after the players phase, as the scenario
    applier does at 0x4969D2, after the in-play draw, and as the SHARE dialog's give does in a stock
    skirmish (its handler 0x4934B0 -> 0x4933E0 -> GiveUnit 0x488570, whose local create is the
@@ -5722,25 +5744,25 @@ static int book_stamp(const Lv* L, char* u, const unsigned char* ib, uint16_t lo
    made here through make and counted as made. The replay makes every unit of step k in the
    unit tick's stub, after the host's unit tick and before the players phase of step k (0x49555F
    follows 0x4954ED), but the level's own, which the first iteration's capture point makes before
-   the unit tick (THE FIRST STEP'S UNITS), and unit_put runs E_Water on it at the next images. So
-   a unit the recording machine made after its players phase meets two writers here one step
-   early: the players phase emits every live unit's sight every step (0x46503C..0x465063, the
-   call at 0x465053), which stores the stamp's fields, and 0x43DB50 can change the water state.
+   the unit tick (THE FIRST STEP'S UNITS). So a unit the recording machine made after its players
+   phase meets a writer here one step early: the players phase emits every live unit's sight every
+   step (0x46503C..0x465063, the call at 0x465053), which stores the stamp's fields.
    MEASURED 2026-10-01 in the naval fixture (LosType 4): the end scenario's unit, made in step
    3643, held the stamp (31,29,136) at the capture point of 3644, where the recording holds the
    create's (0,0,0); from 3645 on the two agreed.
-   So both are written here as R8b writes them: the water state bounded by its enum, and the stamp
-   through the engine's removal 0x482090 and stamp 0x482270, so that the counters keep describing
-   the stamps the fields name. This runs after the step's last emit and before the recorder's
+   So the stamp is written here as R8b writes it, through the engine's removal 0x482090 and stamp
+   0x482270, so that the counters keep describing the stamps the fields name; and the water state
+   as R8b writes it, bounded by its enum, which finds the image's value already there unless the
+   create's differed. This runs after the step's last emit and before the recorder's
    capture and dump and the next unit tick, so the replay is their last writer at every capture
    point; the frame visit's call makes the draw after a step show them too. For any other unit the
    host holds the recording's values and nothing is written. Each write is counted, and one to a
    unit the replay did not make in the step before, or at this capture point's first step, is
    noted (s_made): the host's derivation then differed elsewhere.
    THE INVARIANT is an ordering: at the capture point of k+1 the world holds iteration k+1, the
-   host's last emit and its last 0x43DB50 of step k have run (the players phase, the images), the
-   write puts the recording machine's values for that point, and nothing between the write and the
-   recorder's capture, or the next unit tick, emits or runs 0x43DB50. The counters stay exact by
+   host's last emit of step k and the images' water states have been written (the players phase,
+   the images), the write puts the recording machine's values for that point, and nothing between
+   the write and the recorder's capture, or the next unit tick, emits or writes +0x10A. The counters stay exact by
    R8b's own argument: the host's fields describe the host's stamps, so the removal takes back
    exactly what was stamped.
    ON A MULTIPLAYER SEGMENT the state byte +0x10E is written here too, from W, the composed world:
@@ -6316,7 +6338,8 @@ static void sk_sight_reset(char* ta, const RecWorld* W)
    T emits (R9-R16).
    - The water state: 0x43DB50 stores only 0..4 and only compares the value before overwriting
      it, so the bound is its enum's; a value past it keeps the host's and is counted. Setting it
-     starts no script: COB restarts at a seek, and the unit's next change starts setSFXoccupy.
+     starts no script: COB restarts at a seek, and the recording's next setSFXoccupy start is the
+     unit's next change.
    - The state byte through the setter, as ev_state sets it; its scripts and its send run as in
      R7's creates, which call it from the frame visit already (0x486148). On a multiplayer
      segment the state gate refuses the creates' call, and this write, book_state's, is the

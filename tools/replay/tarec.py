@@ -149,7 +149,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 20                           # script slices, owner's queries, yards; the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
+REC_FORMAT = 21                           # transport and pad queries, BeginTransport and setSFXoccupy as owner starts; script slices, owner's queries, yards; the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -202,7 +202,7 @@ def mapped_bytes(w, h):
  RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT, RK_COUNTS,
  RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE, RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT,
  RK_SPRAY_SESSION, RK_EV_SLICE, RK_EV_QUERY, RK_EV_YARD) = range(60)
-REC_QUERIES = 2                           # RK_EV_QUERY's queries: QueryBuildInfo, QueryNanoPiece
+REC_QUERIES = 4                           # RK_EV_QUERY's queries: QueryBuildInfo, QueryNanoPiece, QueryTransport, QueryLandingPad
 
 # THE PERSPECTIVE's payloads (tagpu_recpov.h)
 REC_POV = struct.Struct("<BBBBHHIiiiii")   # player, every, flags, zero, view_w, view_h, zoom,
@@ -3186,14 +3186,15 @@ COB_CHILD_ALLOC = 0x4B08C0
 COB_CHILDREN = {0x4B18C0: "START", 0x4B192D: "CALL"}
 COB_WRITES = {0x480B57: "SET ACTIVATION", 0x480BF1: "SET ARMORED", 0x480BB3: "SET YARD_OPEN",
               0x4813AB: "ATTACH", 0x481427: "DROP"}
-# the thirteen owner-only start calls (tagpu_recorder.c, START_SITES), counted at the call: on a
+# the fifteen owner-only start calls (tagpu_recorder.c, START_SITES), counted at the call: on a
 # puppet level only the replay starts these scripts, through 0x4B0A70 itself, so a count here is
 # the engine starting one natively (the slice note, *Exactly-once private children*)
 OWNER_STARTS = {0x489F43: "HitByWeapon", 0x489F8E: "TakeDamage", 0x406834: "TransportPickup",
                 0x4069BF: "TransportDrop", 0x489898: "TargetCleared (0x489800)",
                 0x489948: "TargetCleared (0x4898B0)", 0x48A149: "TargetCleared (0x48A0F0)",
                 0x48A2E0: "TargetCleared (0x48A1E0)", 0x40F433: "EndTransport", 0x41148D: "EndTransport",
-                0x411794: "EndTransport", 0x411DA1: "EndTransport", 0x411E2B: "EndTransport"}
+                0x411794: "EndTransport", 0x411DA1: "EndTransport", 0x411E2B: "EndTransport",
+                0x4113EF: "BeginTransport", 0x43DBE8: "setSFXoccupy"}
 
 
 def counts_of(path, h):

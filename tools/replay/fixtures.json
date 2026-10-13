@@ -105,6 +105,42 @@
              [120, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMPW"]]],
    "end": 900
   },
+  "transport-pad": {
+   "load": "replay-transport-pad.json",
+   "steps": [[120, "keys", ["pclick:512,384"]], [150, "keys", ["prclick:704,384"]],
+             [900, "order", {"unit": ["ARMATLAS", 1], "args": ["unload", "pos", "2700", "1300"]}]],
+   "end": 1800
+  },
+  "stock-transport-pad": {
+   "load": "replay-transport-pad.json",
+   "dll": "stock",
+   "steps": [[120, "keys", ["pclick:512,384"]], [150, "keys", ["prclick:704,384"]],
+             [900, "order", {"unit": ["ARMATLAS", 1], "args": ["unload", "pos", "2700", "1300"]}]],
+   "end": 1800
+  },
+  "waterline": {
+   "load": "replay-waterline.json",
+   "steps": [[450, "order", {"unit": ["ARMSH", 0], "args": ["move", "pos", "3400", "2300"]}],
+             [450, "order", {"unit": ["ARMAMPH", 0], "args": ["move", "pos", "3550", "2300"]}],
+             [450, "order", {"unit": ["ARMTHOVR", 0], "args": ["move", "pos", "3700", "2300"]}],
+             [1350, "order", {"unit": ["ARMSH", 0], "args": ["move", "pos", "3400", "1450"]}],
+             [1350, "order", {"unit": ["ARMAMPH", 0], "args": ["move", "pos", "3550", "1450"]}],
+             [1350, "order", {"unit": ["ARMTHOVR", 0], "args": ["move", "pos", "3700", "1350"]}],
+             [2250, "order", {"unit": ["ARMTHOVR", 0], "args": ["unload", "pos", "3800", "1250"]}]],
+   "end": 2850
+  },
+  "stock-waterline": {
+   "load": "replay-waterline.json",
+   "dll": "stock",
+   "steps": [[450, "order", {"unit": ["ARMSH", 0], "args": ["move", "pos", "3400", "2300"]}],
+             [450, "order", {"unit": ["ARMAMPH", 0], "args": ["move", "pos", "3550", "2300"]}],
+             [450, "order", {"unit": ["ARMTHOVR", 0], "args": ["move", "pos", "3700", "2300"]}],
+             [1350, "order", {"unit": ["ARMSH", 0], "args": ["move", "pos", "3400", "1450"]}],
+             [1350, "order", {"unit": ["ARMAMPH", 0], "args": ["move", "pos", "3550", "1450"]}],
+             [1350, "order", {"unit": ["ARMTHOVR", 0], "args": ["move", "pos", "3700", "1350"]}],
+             [2250, "order", {"unit": ["ARMTHOVR", 0], "args": ["unload", "pos", "3800", "1250"]}]],
+   "end": 2850
+  },
   "perspective": {
    "load": "replay-perspective.json",
    "steps": [[180, "keys", ["pmove:600,400", "pclick:512,384"]],
