@@ -906,7 +906,9 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
     YARD RULE (`tagpu_recfmt.h`): the recorder keeps what it would refuse out of the file (*the
     yard events THE YARD RULE kept out of the file*, which must be 0), and the writer and both
     readers enforce it ([engine map](../exe-reverse-engineering.md), *An open yard gives nothing back* and the
-    paragraphs after it).
+    paragraphs after it). The test groups `yard-lab` and `stock-yard-lab` open a lab's yard, make
+    a Peewee inside it and close it again in every run, in both builds (the completeness note's
+    *Open items*).
   - **The wind** is seeded once, from the recording's first image, so every draw after it is the
     recording's.
 - **The recording is the only writer.** On a puppet host, twelve prologue gates

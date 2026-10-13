@@ -1048,8 +1048,14 @@ For the skirmish slice: none. A recorded YARD_OPEN (`RK_EV_YARD`, written at `0x
 does (`0x47C790`, `0x440A40`); one a structure's own Create opens, before the create's stamp
 (`0x485D40` at `0x4860A6`, the stamp at `0x48610F`), is made again by the replayed create and
 checked against the recording, a difference failing the harness (the engine map's *An open yard
-gives nothing back* and *THE YARD RULE*). No fixture yet reaches a Create that opens its yard: a
-stock lab opens its yard from its build scripts [INFERRED].
+gives nothing back* and *THE YARD RULE*). The test groups `yard-lab` and `stock-yard-lab`
+(`scenarios/replay-yard-lab.json`, to GameTime 900, the raised and the stock-limits build) reach
+the live yard in every run, so the yard code's coverage rests on no AI's choice: the human seat's
+ARMLAB is selected with a native click at GameTime 120 and its ARMPW build button pressed through
+the build panel (`tacli ui click ARMPW`, the engine's own button path), and the lab's build scripts
+open its yard at 184, the Peewee is made inside the open yard at 185, is built at 668, and the yard
+closes at 820 (MEASURED 2026-10-13, both builds, the same ticks). No test group reaches a Create
+that opens its own yard: a stock lab opens it from its build scripts, after its create.
 
 Answered while planning S2 (2026-09-30): **`0x48B090` plays unit replies, never a network sound.**
 A change of `+0x10E` bit 0 queues reply kind 3 or 4 and of bit 2 kind 14 or 15 through `0x47F780`

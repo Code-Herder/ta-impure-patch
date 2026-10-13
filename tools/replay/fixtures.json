@@ -92,6 +92,19 @@
    "steps": [[120, "keys", ["pclick:512,384"]], [180, "keys", ["ctrl+d"]]],
    "end": 900
   },
+  "yard-lab": {
+   "load": "replay-yard-lab.json",
+   "steps": [[120, "keys", ["pclick:512,384"]],
+             [120, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMPW"]]],
+   "end": 900
+  },
+  "stock-yard-lab": {
+   "load": "replay-yard-lab.json",
+   "dll": "stock",
+   "steps": [[120, "keys", ["pclick:512,384"]],
+             [120, "run", ["tools/tacli", "ui", "{instance}", "click", "ARMPW"]]],
+   "end": 900
+  },
   "perspective": {
    "load": "replay-perspective.json",
    "steps": [[180, "keys", ["pmove:600,400", "pclick:512,384"]],
