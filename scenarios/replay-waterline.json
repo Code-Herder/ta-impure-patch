@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The demo recorder's `waterline` and `stock-waterline` test groups: on Anteer Strait's central island (x 3000-4000, y 800-1700, open water south of 1800, naval-push's survey), a Skimmer hovercraft, a Pelican amphibious kbot and a Bear hover transport, which loads a Peewee from the level's start (Ground_Pickup: TransportPickup). The test group moves the three into the water and back to land by tacli order, and has the Bear unload on land (Ground_Unload: TransportDrop): each crossing changes the unit's water state, which starts setSFXoccupy in its script. Nothing is left to chance; a solar at the island's far end keeps the AI seat alive.",
+ "description": "The demo recorder's `waterline` and `stock-waterline` test groups: on Anteer Strait's central island (x 3000-4000, y 800-1700, open water south of 1800, naval-push's survey), a Skimmer hovercraft, a Pelican amphibious kbot and a Bear hover transport. From the level's start the hovercraft and the kbot move into the water and the Bear loads a Peewee (Ground_Pickup: TransportPickup); the test group then moves the two back to land and the Bear into the water and back by tacli order, and has the Bear unload on land (Ground_Unload: TransportDrop): each crossing changes the unit's water state, which starts setSFXoccupy in its script. Nothing is left to chance; a solar at the island's far end keeps the AI seat alive.",
  "setup": {
   "map": "Anteer Strait",
   "res": "1024x768",
@@ -15,8 +15,10 @@
   ]
  },
  "units": [
-  {"id": "hover", "type": "ARMSH", "owner": 0, "pos": [3400, 1450], "facing": 180},
-  {"id": "amphib", "type": "ARMAMPH", "owner": 0, "pos": [3550, 1450], "facing": 180},
+  {"id": "hover", "type": "ARMSH", "owner": 0, "pos": [3400, 1450], "facing": 180,
+   "orders": [{"cmd": "move", "to": [3400, 2300]}]},
+  {"id": "amphib", "type": "ARMAMPH", "owner": 0, "pos": [3550, 1450], "facing": 180,
+   "orders": [{"cmd": "move", "to": [3550, 2300]}]},
   {"id": "bear", "type": "ARMTHOVR", "owner": 0, "pos": [3700, 1400], "facing": 180,
    "orders": [{"cmd": "load", "target": "cargo"}]},
   {"id": "cargo", "type": "ARMPW", "owner": 0, "pos": [3700, 1560], "facing": 180},
