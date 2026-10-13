@@ -959,8 +959,10 @@ class World:
                 raise Unreadable(f"an owner's query of slot {slot}, outside the array")
             return kind, b
         if kind == RK_EV_YARD:
-            # YARD_OPEN's pass, in a bracket or not, a slot of the level's, where THE YARD RULE
-            # lets it stand (tagpu_recreader.c, event_take)
+            # YARD_OPEN's pass, outside every feature call, in a death or not, a slot of the
+            # level's, where THE YARD RULE lets it stand (tagpu_recreader.c, event_take)
+            if self.fbracket:
+                raise Unreadable("a yard inside a feature call")
             if len(b) != 8 or b[4] > 1 or any(b[5:8]):
                 raise Unreadable(f"a yard of {len(b)} bytes, yard {b[4] if len(b) > 4 else '-'}")
             slot = struct.unpack_from("<I", b)[0] - 1

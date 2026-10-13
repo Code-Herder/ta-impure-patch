@@ -2512,6 +2512,12 @@ class YardEvent(unittest.TestCase):
         with self.assertRaisesRegex(tarec.Unreadable, "inside its own death"):
             w.apply(tarec.RK_EV_YARD, self.yard(2))
 
+    def test_a_yard_inside_a_feature_call(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_FEATURE, bytes([tarec.FR_TICK, 0, 0, 0]) + bytes(4))
+        with self.assertRaisesRegex(tarec.Unreadable, "a yard inside a feature call"):
+            w.apply(tarec.RK_EV_YARD, self.yard(2))
+
     def test_a_death_before_the_create_its_yard_waits_for(self):
         w = self.world(live=())
         w.apply(tarec.RK_EV_YARD, self.yard(3))
@@ -2597,6 +2603,22 @@ class YardChecks(unittest.TestCase):
 
     def test_no_counts_line(self):
         (label, verdict, detail), = tareplay.yard_verdict("P", "replay: nothing\n")
+        self.assertEqual(verdict, tareplay.UNRUN)
+
+    @staticmethod
+    def dropped(n):
+        return f"recorder: {n} yard events kept out of the file by THE YARD RULE (tagpu_recfmt.h)\n"
+
+    def test_none_kept_out_of_the_file(self):
+        (label, verdict, detail), = tareplay.yard_dropped_verdict("L", self.dropped(0))
+        self.assertEqual(verdict, tareplay.PASS)
+
+    def test_one_kept_out_fails(self):
+        (label, verdict, detail), = tareplay.yard_dropped_verdict(
+            "L", self.dropped(0) + self.dropped(2))
+        self.assertEqual(verdict, tareplay.FAIL)
+        self.assertIn("2 yard events kept out of 2 recordings", detail)
+        (label, verdict, detail), = tareplay.yard_dropped_verdict("L", "recorder: nothing\n")
         self.assertEqual(verdict, tareplay.UNRUN)
 
 

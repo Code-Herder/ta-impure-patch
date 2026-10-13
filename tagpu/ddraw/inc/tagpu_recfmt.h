@@ -453,9 +453,13 @@ static __inline int rec_root_len(unsigned root, unsigned len)
      every death goes through Send_UnitDeath 0x4864B0, which runs Killed as a query at 0x4865C3
      and only then calls the destructor (0x486679, mode 1), so Killed's yard comes before the
      death's RK_EV_DEATH. The destructor's own Killed start (0x486877) runs in mode 0 alone
-     (0x48684A..0x486853), the network receiver's (0x455423), and its other starts -- TargetCleared
-     through 0x489800 from the order purge (0x43A2B9), StopBuilding at 0x43A251 -- are made with
-     run-now 0, so no script of the dying unit runs inside its own death's bracket.
+     (0x48684A..0x486853), the network receiver's (0x455423), and its other starts are made with
+     run-now 0: the order purge's teardown 0x43A1F0 starts TargetCleared through 0x489800
+     (0x43A2B9) and StopBuilding at 0x43A251, and its dispatch of event 2 to the order's handler
+     (0x43A21A) reaches handlers whose own starts pass run-now 0 -- BuildingBuild
+     (0x402653..0x402717), SelfDestruct, HelpBuild and VTOL_MobileBuild (returning at 0x41C110),
+     AirStrike and AirToGround, VTOL_Pickup's states 4 and 5 (EndTransport, 0x4B0940 at 0x41148D
+     after 0x411479). So no script of the dying unit runs inside its own death's bracket.
    - A yard of a unit not live at its place is the yard its create's Create script opened: the
      create 0x485F50 runs Create's first slice at once (0x485D40 at 0x4860A6, run-now pushed at
      0x485DDD), after its init has written the footprint (0x485AAA, 0x485BD3) and before its
@@ -463,8 +467,11 @@ static __inline int rec_root_len(unsigned root, unsigned len)
      the same order (0x4862BE, 0x486306, 0x48630C). The create is recorded at its exit (0x4861B3),
      so the yard comes before the unit's RK_EV_CREATE, which follows in the same step with no
      death of the slot between.
-   - Anything else is malformed: a yard naming the unit of a death still open, and a yard of a
-     unit not live whose create does not follow in its step.
+   - Anything else is malformed: a yard inside a feature call, which holds no event but its draws
+     and the tick's cells; a yard naming the unit of a death still open; and a yard of a unit not
+     live whose create does not follow in its step. The recorder keeps such an event out of the file and counts it
+     (tagpu_recorder.c, ev_yard), so the writer never meets one; the readers refuse a file that
+     holds one.
    The callers keep the state: `st` and `touched` hold a byte and an index per unit slot. */
 enum { RYS_MADE = 1, RYS_GONE, RYS_HELD };
 typedef struct RecYardStep {

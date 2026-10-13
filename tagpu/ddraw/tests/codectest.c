@@ -3569,7 +3569,8 @@ static int outcomes_reader(const RecCodecParams* p)
 }
 
 /* THE YARD RULE (tagpu_recfmt.h) through the DLL's reader: a file whose first iteration holds
-   slot 1 (unit ID 2) alive and then `nev` events, each {kind, unit ID, yard}, and a second
+   slot 1 (unit ID 2) alive and then `nev` events, each {kind, unit ID, yard} (a feature call and
+   its end are the feature tick's), and a second
    iteration with none. 1 when the reader reads both iterations to the end block, -1 when it
    refuses the file (*why its reason). */
 static int yard_file(const char* path, const unsigned (*ev)[3], unsigned nev, char* why,
@@ -3595,9 +3596,14 @@ static int yard_file(const char* path, const unsigned (*ev)[3], unsigned nev, ch
     rd_iteration(&r, t0, 0);
     for (i = 0; i < nev; i++) {
         unsigned kind = ev[i][0], len = kind == RK_EV_CREATE ? 28 : kind == RK_EV_DEATH ?
-                        12 + REC_UNIT_IMAGE : kind == RK_EV_YARD ? 8 : 4;
+                        12 + REC_UNIT_IMAGE : kind == RK_EV_YARD || kind == RK_EV_FEATURE ||
+                        kind == RK_EV_FEATURE_END ? 8 : 4;
         memset(e, 0, sizeof e);
         put32(e, ev[i][1]);
+        if (kind == RK_EV_FEATURE || kind == RK_EV_FEATURE_END) {   /* the feature tick's */
+            e[0] = FR_TICK;
+            put32(e + 4, kind == RK_EV_FEATURE ? 0x495580u : 0);
+        }
         if (kind == RK_EV_YARD) e[4] = (unsigned char)ev[i][2];
         if (kind == RK_EV_DEATH) memcpy(e + 12, rd_image[0], REC_UNIT_IMAGE);
         rd_rec(&r, kind, e, len);
@@ -3637,6 +3643,10 @@ static int outcomes_yard_rule(void)
     static const unsigned held_dies[][3] = {
         { RK_EV_YARD, 3, 1 }, { RK_EV_DEATH, 3, 0 }, { RK_EV_DEATH_END, 3, 0 },
         { RK_EV_CREATE, 3, 0 } };
+    static const unsigned in_feature[][3] = {
+        { RK_EV_FEATURE, 0, 0 }, { RK_EV_YARD, 2, 1 }, { RK_EV_FEATURE_END, 0, 0 } };
+    static const unsigned after_feature[][3] = {
+        { RK_EV_FEATURE, 0, 0 }, { RK_EV_FEATURE_END, 0, 0 }, { RK_EV_YARD, 2, 1 } };
     char dir[MAX_PATH], path[MAX_PATH + 32], why[256];
     int ok = 1;
     if (!GetTempPathA(sizeof dir, dir)) return expect("yard rule: a temporary folder", 0, 1);
@@ -3656,6 +3666,10 @@ static int outcomes_yard_rule(void)
                  strstr(why, "THE YARD RULE") != NULL, 1);
     ok &= expect("yard rule: refused, a death before the create a yard waits for",
                  yard_file(path, held_dies, 4, why, sizeof why), -1);
+    ok &= expect("yard rule: a live unit's yard after the feature tick",
+                 yard_file(path, after_feature, 3, why, sizeof why), 1);
+    ok &= expect("yard rule: refused, a live unit's yard inside a feature call",
+                 yard_file(path, in_feature, 3, why, sizeof why), -1);
     return ok;
 }
 #endif

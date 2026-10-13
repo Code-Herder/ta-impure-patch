@@ -73,8 +73,9 @@ const volatile unsigned char* tagpu_puppet_flag(void) { return &s_pup.on; }
      its second instruction 0x480B26, where this is still in ECX and nothing is pushed: the raised
      limits rewrite the first one's displacement (0x480B22) and check it stays theirs; ATTACH
      0x481340(cargo, piece, flags), `ret 0xC`, and DROP 0x4813B0(cargo), `ret 4`, through
-     0x48AAC0. The recording carries each: the state byte as events, +0x10F, +0xBA and the carry
-     links as images (exe-reverse-engineering.md, the COB-to-engine writers).
+     0x48AAC0. The recording carries each: the state byte and the yard (+0x10F bit 2) as events,
+     the rest of +0x10F, +0xBA and the carry links as images (exe-reverse-engineering.md, the
+     COB-to-engine writers).
    - The two replies 0x47F780 and 0x47F850(unit, kind, text), `ret 0xC`, on a puppet's unit:
      a replayed state change through 0x48B090 would otherwise reply twice, its own and the
      recorded one after it.
@@ -421,8 +422,8 @@ int tagpu_puppet_rebuilding(void) { return s_rebuild; }
    1) have one writer. Three engine functions write them, each (unit) `ret 4`: the stamp 0x47CC30,
    the clear 0x47D0E0 and the re-claim 0x47C790. On a puppet host they run for the replay's
    placements (the set-position 0x48A9F0 calls the clear and the stamp, 0x48AA6B and 0x48AA9A),
-   its creates and deaths, its yard changes (tagpu_replay.c, yards_put) and the host's own unit
-   tick, and none can be refused: the stamp also files the unit in its sort bucket (+0x82, +0x8E
+   its creates and deaths, its yard changes (tagpu_replay.c, ev_yard and yards_put) and the host's
+   own unit tick, and none can be refused: the stamp also files the unit in its sort bucket (+0x82, +0x8E
    and the bucket's head, 0x47CCA9..0x47CD25), which the image does not write, and the stamp and
    the clear recompute the cells' height extremes (0x483210, the same on both machines). Each
    marks the units of a contested cell in +0x110: the holder bit 26, the loser bit 27; a holder's

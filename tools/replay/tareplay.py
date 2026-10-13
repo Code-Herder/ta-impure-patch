@@ -2337,6 +2337,8 @@ def checks(fx):
                     (f"{proc}: native owner-only starts on a puppet", UNRUN, f"no {d.name}"))
             continue
         res.later(puppet_counts, proc, rec, d)
+    if ran.get("L") == "ran":
+        res.later(yard_dropped_check, out / "L" / "tagpu.log")
     for proc in ("P", "R", "Q"):
         if ran.get(proc) == "ran":
             res.later(yard_check, proc, out / proc / "tagpu.log")
@@ -2467,12 +2469,37 @@ def yard_verdict(label, text):
              "; ".join(bad) if bad else f"{checked} checked at their create, all as recorded")]
 
 
+YARD_DROPPED = re.compile(r"recorder: (\d+) yard events kept out of the file by THE YARD RULE")
+
+
+def yard_dropped_verdict(label, text):
+    """[(label, verdict, detail)]: the yard events the recorder kept out of the file because THE
+    YARD RULE would refuse them (tagpu_recorder.c, ev_yard), from every recording's end line of a
+    lane's log: any fails, since the engine makes none; could not run with no such line."""
+    counts = [int(m.group(1)) for m in YARD_DROPPED.finditer(text)]
+    if not counts:
+        return [(label, UNRUN, "no recording's end line with the yard events kept out")]
+    bad = [n for n in counts if n]
+    return [(label, FAIL if bad else PASS,
+             f"{sum(bad)} yard events kept out of {len(counts)} recordings" if bad
+             else f"none kept out of {len(counts)} recordings")]
+
+
 def yard_check(proc, log_path):
     try:
         text = Path(log_path).read_text(errors="replace")
     except OSError as e:
         return [(f"{proc}: the yards a create opened", UNRUN, str(e))]
     return yard_verdict(f"{proc}: the yards a create opened", text)
+
+
+def yard_dropped_check(log_path):
+    label = "L: the yard events THE YARD RULE kept out of the file"
+    try:
+        text = Path(log_path).read_text(errors="replace")
+    except OSError as e:
+        return [(label, UNRUN, str(e))]
+    return yard_dropped_verdict(label, text)
 
 
 def puppet_counts(proc, rec, d):

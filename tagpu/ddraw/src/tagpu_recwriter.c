@@ -1580,7 +1580,7 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     case RK_EV_YARD: {
         /* where THE YARD RULE lets it stand (tagpu_recfmt.h): the recorder writes nothing else */
         unsigned uid;
-        if (!w->ticked || len != 8 || b[4] > 1 || b[5] || b[6] || b[7]) return 0;
+        if (!w->ticked || w->fbracket || len != 8 || b[4] > 1 || b[5] || b[6] || b[7]) return 0;
         memcpy(&uid, b, 4);
         if (!slot_ok(w, uid - 1u) ||
             !rec_yard_take(&w->yards, kind, b, w->live, w->nslots, w->death, w->ndeaths))

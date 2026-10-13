@@ -1325,7 +1325,8 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    T and image T+1, as every later step does.
 
    AN IMAGE goes in in this order: the carry links (links_put), which the placement reads; each
-   unit (units_put); the recorded yard changes (yards_put); +0x110 once more for every unit
+   unit (units_put); the yards the step's events left differing from the image (yards_put);
+   +0x110 once more for every unit
    (states_put), since the placement's and the yards' claims mark the incumbents of the cells they
    contest; the players (players_put); and the order lists (orders_put).
 
@@ -2308,8 +2309,19 @@ static void units_put(const Lv* L, const RecWorld* W)
    bits 26 and 27 where the engine marks none. The replayed create runs with the puppet gates open
    (make), so its own Create makes the SET at the engine's place; the recording's yard is held
    until that create returns and compared with the yard the host's create left (yard_check), and a
-   difference is named. A yard of a live unit, Killed's among them (Send_UnitDeath runs it as a
-   query before the destructor), is written at its place. 1 when the yard went in. */
+   difference is named -- every create is compared, the closed yard included. A yard of a live unit,
+   Killed's among them (Send_UnitDeath runs it as a query before the destructor), is written at
+   its place.
+   A yard inside ANOTHER unit's death bracket goes in after that whole destructor: a skirmish
+   death is played by death_play, and the bracket's events that are not its explosion's roots are
+   played after it returns, in recorded order (events_put). The one engine path to such a yard is
+   the Killed query of a unit that death's explosion kills (Send_UnitDeath 0x4864B0, the query at
+   0x4865C3, before that unit's own RK_EV_DEATH); the explosion's other starts on the units it hits
+   -- HitByWeapon 0x489F43, TakeDamage 0x489F8E, RockUnit -- pass run-now 0 and run no script
+   there [DISASSEMBLED]. That unit's death is itself played after the destructor (a puppet's damage
+   is refused at 0x489CE0), so the yard keeps its place just before it; what the outer destructor
+   does after its explosion -- the corpse 0x486360 at 0x486D6F, the COB object's delete -- comes
+   before the yard here and after it on the recording machine. 1 when the yard went in. */
 static int yard_set(const Lv* L, unsigned slot, unsigned char want)
 {
     const char* defs = *(const char* const*)(L->ta + OFF_UDEFS);
@@ -2391,24 +2403,31 @@ static int yard_in_create(const RecWorld* W, unsigned i)
 }
 
 /* A YARD ITS CREATE OPENS, once RK_EV_CREATE `i` has been played (`made` when the host's create
-   made the unit): the last yard the recording's create opened -- an RK_EV_YARD naming the unit,
-   not live there, after the slot's last create or death -- against the yard the host's create
-   left. */
+   made the unit): the yard the recording's create left against the one the host's create left,
+   for every create. The init 0x485A40 clears +0x10F's low nibble (0x485B4A, 0x485B52) and nothing
+   from Create's slice (0x4860A6) to the exit (0x4861B3) writes bit 2 but YARD_OPEN, so the yard at
+   the exit is the last RK_EV_YARD the create opened -- naming the unit, not live there, after the
+   slot's last create, death or live yard -- or closed [DISASSEMBLED]. A create whose recorded
+   Create was refused its yard (0x47D970: another unit in the yard's cells) left it closed, and is
+   compared too. */
 static void yard_check(const Lv* L, const RecWorld* W, unsigned i, int made)
 {
     uint32_t id, jd;
-    unsigned j, want = 2;
+    unsigned j, want = 0, held = 0;
     memcpy(&id, W->ev[i].b, 4);
     for (j = i; j-- > 0;) {
         unsigned k = W->ev[j].kind;
         if (k != RK_EV_CREATE && k != RK_EV_DEATH && k != RK_EV_YARD) continue;
         memcpy(&jd, W->ev[j].b, 4);
         if (jd != id) continue;
-        if (k == RK_EV_YARD && yard_in_create(W, j)) want = W->ev[j].b[4];
+        if (k == RK_EV_YARD && yard_in_create(W, j)) {
+            want = W->ev[j].b[4];
+            held = 1;
+        }
         break;
     }
-    if (want > 1) return;
     if (!made) {
+        if (!held) return;
         s_st.yunchecked++;
         note("replay: GameTime %u: the yard unit %u's create opened is not checked: the create "
              "was not made here", L->now, (unsigned)id - 1u);
@@ -2423,20 +2442,37 @@ static void yard_check(const Lv* L, const RecWorld* W, unsigned i, int made)
     s_st.ychecked++;
 }
 
-/* RK_EV_YARD: the yard at its place in the step (A RECORDED YARD_OPEN), the body run whether or
-   not the bit changes, as YARD_OPEN's re-claim runs either way, on a unit live in its slot. 1
-   played. */
-static int ev_yard(const Lv* L, const unsigned char* b, unsigned n)
+/* the recording's type of the unit in `slot` at event `i`: its create's in the step, or the
+   images' */
+static unsigned ev_type_at(const RecWorld* W, unsigned i, unsigned slot)
+{
+    unsigned j;
+    uint32_t id;
+    for (j = i; j-- > 0;) {
+        if (W->ev[j].kind != RK_EV_CREATE) continue;
+        memcpy(&id, W->ev[j].b, 4);
+        if (id - 1u == slot) return *(const unsigned short*)(W->ev[j].b + 4);
+    }
+    return img_type(W->unit + (size_t)slot * REC_UNIT_DWORDS);
+}
+
+/* RK_EV_YARD `i` of a unit live at its place: the yard there (A RECORDED YARD_OPEN), the body run
+   whether or not the bit changes, as YARD_OPEN's re-claim runs either way, on a unit live in its
+   slot and of the recording's type, as yard_put asks of an image's. 1 played. */
+static int ev_yard(const Lv* L, const RecWorld* W, unsigned i)
 {
     uint32_t id;
-    if (n != 8) return 0;
-    memcpy(&id, b, 4);
-    if (id - 1u < 1 || id - 1u >= L->nslots || !host_live(L, id - 1u)) {
+    unsigned slot;
+    memcpy(&id, W->ev[i].b, 4);
+    slot = id - 1u;
+    if (slot < 1 || slot >= L->nslots || !host_live(L, slot) ||
+        *(const unsigned short*)(unit_at(L, slot) + U_TYPEIX) != ev_type_at(W, i, slot)) {
         s_st.yrefused++;
-        note("replay: GameTime %u: a yard of unit ID %u, not live here", L->now, (unsigned)id);
+        note("replay: GameTime %u: a yard of unit ID %u, not live here or of another type",
+             L->now, (unsigned)id);
         return 0;
     }
-    return yard_set(L, id - 1u, (unsigned char)(b[4] ? 4u : 0u));
+    return yard_set(L, slot, (unsigned char)(W->ev[i].b[4] ? 4u : 0u));
 }
 
 /* +0x110 as recorded, less the bits the engine functions own, for every unit once the placement
@@ -4111,7 +4147,8 @@ static struct {
 static RecWorld s_pendW;            /* only ev and nev: what root_play reads of a world           */
 
 /* one event that is neither a root nor a death's, as the step plays it; 1 when a counted kind
-   was played (RK_EV_CREATE..RK_EV_SPRAY's, and a yard) */
+   was played (RK_EV_CREATE..RK_EV_SPRAY's). A yard is events_put's (ev_yard, yard_check): the
+   readers keep it out of every feature call, so the store holds none. */
 static int ev_play(const Lv* L, const RecEvent* e)
 {
     const unsigned char* b = e->b;
@@ -4125,8 +4162,6 @@ static int ev_play(const Lv* L, const RecEvent* e)
         ev_query(L, b, n);
         return 0;
     }
-    if (k == RK_EV_YARD)
-        return ev_yard(L, b, n);        /* counted in s_st.yards and yrefused */
     switch (k) {
     case RK_EV_CREATE:      done = ev_create(L, b, n); break;
     case RK_EV_SHOT:        done = ev_shot(L, b, n); break;
@@ -5093,7 +5128,10 @@ static void events_put(const Lv* L, const RecWorld* W, int defer)
                 if (k == RK_EV_DRAW) s_fst.left++;  /* a draw no recorded call made */
                 break;
             }
-            if (k == RK_EV_YARD && yard_in_create(W, i)) break;     /* yard_check's */
+            if (k == RK_EV_YARD) {
+                if (!yard_in_create(W, i)) ev_yard(L, W, i);        /* else yard_check's */
+                break;
+            }
             done = ev_play(L, &W->ev[i]);
             if (k == RK_EV_CREATE) yard_check(L, W, i, done);
             break;
@@ -8854,7 +8892,7 @@ static void counts_log(const char* when, unsigned now)
     tagpu_logf("replay: %s at %s, GameTime %u: %u iterations applied (%u late); units made %u at "
                "the start; %u refused, %u missing here, %u here only, %u of another type; %u IDs "
                "past their array; %u carry links made, %u refused; order nodes %u built, %u torn "
-               "down, %u refused; %u yards changed, %u refused; %u yards checked at their create, "
+               "down, %u refused; %u YARD_OPEN passes made, %u refused; %u yards checked at their create, "
                "%u differed, %u not checked; %u control groups not set", s_name,
                when, now, s_st.steps, s_st.late, s_st.made, s_st.refused, s_st.missing,
                s_st.lingering, s_st.other, s_st.bad_ids, s_st.links, s_st.unlinked, s_st.obuilt,

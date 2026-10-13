@@ -1727,6 +1727,7 @@ typedef struct Feat Feat;          /* *The features* */
 /* An order list's image as the ring last carried it: its nodes' images, in order. */
 typedef struct OList { unsigned n, cap; unsigned char img[]; } OList;
 
+#define YHOLD_MAX 16    /* the yards a create's Create may open before the create records itself */
 typedef struct Rec {
     RecRing*       ring;
     HANDLE         wake;        /* the capture's own duplicates of the ring's events     */
@@ -1745,6 +1746,10 @@ typedef struct Rec {
     unsigned char* ushadow;     /* nslots images                                        */
     unsigned char* uraw;        /* nslots records and movers as the last capture read them */
     unsigned char* ulive;       /* nslots flags                                         */
+    RecYardStep    ystep;       /* the step's creates and deaths, by THE YARD RULE      */
+    struct { unsigned id; unsigned char open; } yhold[YHOLD_MAX];  /* a create's own yards */
+    unsigned       nyhold;
+    unsigned       ydropped;    /* yard events THE YARD RULE kept out of the file       */
     unsigned       pshadow[REC_PLAYERS][REC_PLAYER_DWORDS];
     unsigned char  ctl[REC_PLAYERS];             /* the controllers and the two players */
     unsigned char  view[2];                      /* as the ring last carried them        */
@@ -2395,6 +2400,8 @@ static void rec_free(Rec* r)
     if (r->ushadow) VirtualFree(r->ushadow, 0, MEM_RELEASE);
     if (r->uraw) VirtualFree(r->uraw, 0, MEM_RELEASE);
     if (r->ulive) HeapFree(GetProcessHeap(), 0, r->ulive);
+    if (r->ystep.st) HeapFree(GetProcessHeap(), 0, r->ystep.st);
+    if (r->ystep.touched) HeapFree(GetProcessHeap(), 0, r->ystep.touched);
     if (r->oscratch) VirtualFree(r->oscratch, 0, MEM_RELEASE);
     if (r->oheap) HeapDestroy(r->oheap);             /* every list's image with it */
     feat_free(r->feat);
@@ -2492,6 +2499,9 @@ static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
     r->uraw = (unsigned char*)VirtualAlloc(NULL, (size_t)L->nslots * REC_UNIT_IMAGE,
                                            MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     r->ulive = (unsigned char*)HeapAlloc(heap, HEAP_ZERO_MEMORY, L->nslots);
+    r->ystep.st = (unsigned char*)HeapAlloc(heap, HEAP_ZERO_MEMORY, L->nslots);
+    r->ystep.touched = (unsigned*)HeapAlloc(heap, HEAP_ZERO_MEMORY,
+                                            (size_t)L->nslots * sizeof *r->ystep.touched);
     r->tab = (Table*)HeapAlloc(heap, HEAP_ZERO_MEMORY, (n ? n : 1) * sizeof *r->tab);
     /* the lists' images live in a heap of their own, which only this thread uses and which the
        recording's end destroys whole */
@@ -2501,7 +2511,7 @@ static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
     r->oscratch = (unsigned char*)VirtualAlloc(NULL, ORD_SCRATCH, MEM_COMMIT | MEM_RESERVE,
                                                PAGE_READWRITE);
     if (!g->buf || !g->wake || !r->wake || !g->done || !r->done || !r->ushadow || !r->uraw ||
-        !r->ulive || !r->tab || !r->olist || !r->oscratch)
+        !r->ulive || !r->ystep.st || !r->ystep.touched || !r->tab || !r->olist || !r->oscratch)
         goto fail;
     r->feat = feat_start(L->ta, g);
     if (!r->feat) goto fail;
@@ -2717,6 +2727,8 @@ static void rec_end(Rec* r, unsigned reason)
                off, r->uncredited, r->oodd);
     tagpu_logf("recorder: %u script slices marked, %u steps marking every slice, %u owner's queries",
                s_smarks, s_sfulls, s_queries);
+    tagpu_logf("recorder: %u yard events kept out of the file by THE YARD RULE (tagpu_recfmt.h)",
+               r->ydropped + r->nyhold);
     feat_log(r);
     tagpu_logf("recorder: the projectiles: %u record images; the pool's written extent reached %u "
                "of its %u records", r->jimages, r->jhw, (unsigned)TAGPU_LIM_PROJ);
@@ -4407,12 +4419,15 @@ static Rec* ev_rec(void)
     return s_rec;
 }
 
+static void yard_step(Rec* r, unsigned kind, const unsigned char* b);
+
 static void ev_put(Rec* r, unsigned kind, const void* b, unsigned n)
 {
     /* These owner-only roots have one ordered source in a native file: the
        contribution ledger, including this peer's publications. */
     if (r->mode==MODE_NETWORK &&
         (kind==RK_EV_START_NAMED || kind==RK_EV_REPLY || kind==RK_EV_SPRAY)) return;
+    if (kind == RK_EV_CREATE || kind == RK_EV_DEATH) yard_step(r, kind, (const unsigned char*)b);
     if (r->ev_full || ring_put(r, kind, b, n, NULL, 0)) return;
     r->ev_full = 1;
     tagpu_logf("recorder: an event did not fit in the ring after GameTime %d: the recording ends "
@@ -5157,18 +5172,69 @@ static int __cdecl ev_state(void* E)
    Where that place may be is THE YARD RULE (tagpu_recfmt.h); the playing writes or checks it
    there (tagpu_replay.c, A RECORDED YARD_OPEN). A skirmish's: a multiplayer playing composes its
    yards from the owners' images. */
+static int yard_framed(unsigned id);
+
+/* THE YARD RULE on the recording machine (tagpu_recfmt.h). A yard of a unit live at its place goes
+   in at once. One of a unit not live is its own create's Create slice: it is held until that
+   create records itself and goes in just before it (yard_step), which is the place the readers
+   ask of it -- before the create, after the slot's last death -- and the playing's check reads it
+   there (tagpu_replay.c, yard_check). Whatever the rule would refuse -- a yard inside a feature
+   call or inside its own unit's death, past YHOLD_MAX held, or held for a create that never came
+   in the step -- is kept out of the file and counted (`ydropped`, logged at the recording's end
+   and failed by the replay harness), so the writer, which refuses a malformed record by ending
+   the file, never meets one. */
 static int __cdecl ev_yard(void* E)
 {
     Rec* r;
-    unsigned id;
-    unsigned char b[8];
+    unsigned id, slot;
+    unsigned char st, b[8];
     if (!(r = ev_rec()) || r->mode == MODE_NETWORK) return 0;
     if (!(id = ev_unit(r, PTR(REG_ESI(E))))) return 0;
     memcpy(b, &id, 4);
     b[4] = (unsigned char)(REG_EBX(E) >> 2 & 1);
     b[5] = b[6] = b[7] = 0;
-    ev_put(r, RK_EV_YARD, b, sizeof b);
+    slot = id - 1u;
+    if (slot < 1 || slot >= r->nslots || yard_framed(id)) {
+        r->ydropped++;
+        return 0;
+    }
+    st = r->ystep.st[slot];
+    if (st == RYS_MADE || (!st && r->ulive[slot])) {
+        ev_put(r, RK_EV_YARD, b, sizeof b);
+        return 0;
+    }
+    if (r->nyhold == YHOLD_MAX) {
+        r->ydropped++;
+        return 0;
+    }
+    r->yhold[r->nyhold].id = id;
+    r->yhold[r->nyhold++].open = b[4];
     return 0;
+}
+
+/* A create or a death of the step (ev_put): a create first puts the yards its Create held, in
+   order; a death drops any held for its slot, whose create has not come. */
+static void yard_step(Rec* r, unsigned kind, const unsigned char* b)
+{
+    unsigned id, slot, i, k = 0;
+    memcpy(&id, b, 4);
+    slot = id - 1u;
+    if (slot < 1 || slot >= r->nslots) return;
+    for (i = 0; i < r->nyhold; i++) {
+        if (r->yhold[i].id != id) {
+            r->yhold[k++] = r->yhold[i];
+        } else if (kind == RK_EV_CREATE) {
+            unsigned char y[8];
+            memcpy(y, &id, 4);
+            y[4] = r->yhold[i].open;
+            y[5] = y[6] = y[7] = 0;
+            if (!r->ev_full && !ring_put(r, RK_EV_YARD, y, 8, NULL, 0)) r->ev_full = 1;
+        } else {
+            r->ydropped++;
+        }
+    }
+    r->nyhold = k;
+    rec_yard_mark(&r->ystep, slot, (unsigned char)(kind == RK_EV_CREATE ? RYS_MADE : RYS_GONE));
 }
 
 /* The two replies 0x47F780 and 0x47F850(unit, kind, text), before their viewer test: every
@@ -6083,6 +6149,17 @@ static Feat* feat_start(const char* ta, RecRing* g)
 typedef struct FFrame { unsigned ret, id; unsigned char root, recorded, owner; MpRootRef mp; } FFrame;
 static FFrame   s_fstack[FDEPTH_MAX];
 static unsigned s_fdepth;           /* moved only by game-thread feature/death frames */
+
+/* inside a recorded feature call, or inside the recorded death of unit `id` (THE YARD RULE) */
+static int yard_framed(unsigned id)
+{
+    unsigned i;
+    for (i = 0; i < s_fdepth; i++)
+        if (s_fstack[i].recorded &&
+            (s_fstack[i].root < FR_ROOTS || (s_fstack[i].root == FR_DEATH && s_fstack[i].id == id)))
+            return 1;
+    return 0;
+}
 static unsigned char s_fphase;      /* the step's phase (tagpu_rec_phase), on the game thread    */
 
 void __cdecl tagpu_rec_phase(unsigned phase) { s_fphase = (unsigned char)phase; }
@@ -7362,8 +7439,12 @@ void __cdecl tagpu_rec_capture(void)
         rec_stop(REC_END_LEVEL);
         return;
     }
-    /* the last step's events end its iteration: out they go, before this one starts */
+    /* the last step's events end its iteration: out they go, before this one starts; a yard
+       still held met no create in its step (ev_yard) */
     ring_publish(r, 0);
+    r->ydropped += r->nyhold;
+    r->nyhold = 0;
+    rec_yard_end(&r->ystep);
     r->L = L;
     QueryPerformanceCounter(&t0);
     w0 = r->w;
