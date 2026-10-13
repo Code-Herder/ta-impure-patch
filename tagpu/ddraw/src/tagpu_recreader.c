@@ -685,6 +685,7 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
     }
     /* after the loop: the codec's constants are bounded by RT_SLOTS, RT_FEATURES and
        RT_UNITDEFS, which may follow them */
+    ent.hold = h->has_hold != 0;
     if ((ent.p[RECC_E_CODEC] || ent.p[RECC_E_PHYSICS] || ent.p[RECC_E_AIR] || ent.p[RECC_E_TYPES]) &&
         !reccodec_params(&h->codec, h->slots, h->proj_cap, h->grid_w, h->grid_h, h->wrecks,
                          h->has_unitdefs ? h->ndefs : 0, &ent, why, cap))
@@ -2023,6 +2024,8 @@ static const char* shape_differs(const RecHeader* a, const RecHeader* b)
        slots, or the recording's, from its first step (tagpu_replay.c, THE UNIT SLOTS AND THE YARD
        BIT), and a skirmish chain has no crossing that changes it */
     if (!a->has_mp && !b->has_mp && recr_holds_cells(a) != recr_holds_cells(b)) return "held cells";
+    /* the codec is made for the first segment's RT_HOLD, which picks its orders frame's scheme */
+    if (a->has_hold != b->has_hold) return "RT_HOLD";
     if (a->has_unitdefs != b->has_unitdefs || a->ndefs != b->ndefs || a->defs_hash != b->defs_hash)
         return "unit types";
     if (a->has_weapons != b->has_weapons || a->nweapons != b->nweapons ||

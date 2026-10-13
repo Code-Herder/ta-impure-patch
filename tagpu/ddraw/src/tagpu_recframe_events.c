@@ -79,7 +79,7 @@ enum {
     C_ST_IDX, C_ST_ARGC, C_ST_RZ, C_ST_ARGS,
     C_NM_HEAD, C_NM_NAME, C_LIT,
     C_RP_KIND, C_RP_HEAD, C_RP_TEXT,
-    C_SP_MODE, C_SP_POINT, C_SP_RAW,
+    C_SP_SEL, C_SP_POINT, C_SP_RAW,
     C_DT_KILLER, C_DT_HEAD, C_DT_MASK, C_DT_DWORDS,
     C_FT_HEAD, C_FT_SAME, C_FT_SITE, C_FT_ARGS,
     C_FE_ROOT, C_FE_RESULT,
@@ -91,6 +91,11 @@ RECF_COLS_CHECK(events, EV_COLS);
 #define EV_DICT    256         /* the literals a dictionary keeps                              */
 #define EV_STARTS  4           /* the (script, arguments) entries a slot keeps                 */
 #define EV_SPRAY   44          /* an RK_EV_SPRAY after its ID                                  */
+#define EV_SPRAYS  4           /* the explicit sprays a slot keeps, newest first               */
+#define SP_RAW     255u        /* a spray's selector: its 44 bytes after the ID follow         */
+#define SP_RESID   0x80u       /* a selector's flag: the point's three residuals follow        */
+#define SP_TURN    (INT64_C(1) << 28)   /* a turned candidate's x and z offsets from its unit are
+                                           below this, so each Q31 product is below 2^59       */
 #define SHOT_LEN   36
 #define SH_NONE    0xFFFFu     /* a shot's unit past the array                                 */
 #define EV_BODY_MAX (12 + REC_UNIT_IMAGE)   /* the longest event, a death: the decoder builds each
@@ -99,10 +104,18 @@ _Static_assert(EV_BODY_MAX >= 24 + REC_NAME_MAX && EV_BODY_MAX >= 12 + REC_TEXT_
                EV_BODY_MAX >= 8 + REC_ROOT_ARGS_MAX && EV_BODY_MAX >= sizeof(RecNetCreate),
                "every event fits the decoder's buffer");
 
+/* an explicit spray as the slot's history keeps it: its body after the ID, and its unit's
+   +0x6A, +0x6E, +0x72 and heading +0x66 at its record (zero where the ID is no live slot) */
+typedef struct EvSpray {
+    unsigned char body[EV_SPRAY];
+    uint32_t pos[3];
+    uint32_t heading;
+} EvSpray;
+
 typedef struct EvSlot {
     uint32_t start[EV_STARTS][5];       /* script index, arguments x4                          */
-    unsigned char spray[EV_SPRAY];
-    unsigned char sprayed, nstart, next;
+    EvSpray spray[EV_SPRAYS];           /* the last explicit sprays, newest first             */
+    unsigned char nspray, nstart, next;
 } EvSlot;
 
 typedef struct EvDict {
@@ -219,6 +232,67 @@ static void pos_of(const RecFrameAt* a, uint32_t id, uint32_t p[3])
     const unsigned char* u = id == SH_NONE ? NULL : unit_of(a, id);
     unsigned k;
     for (k = 0; k < 3; k++) p[k] = u ? get32(u + 0x6A + 4 * k) : 0;
+}
+
+/* A floor shift by 31 of a value below 2^61 in magnitude: the rounding of a Q31 product. */
+static int64_t q31_round(int64_t v)
+{
+    v += INT64_C(1) << 30;
+    return v >= 0 ? v >> 31 : -1 - ((-1 - v) >> 31);
+}
+
+/* THE SPRAY CANDIDATE c of history entry h for a spray whose unit stands at pos with heading
+   `heading` now, into p[3]: 0 the point as it was, 1 moved with the unit's position, 2 and 3
+   turned about the unit by its heading change (2 the change's sine as it is, 3 negated), each
+   axis in 32-bit wrapping arithmetic, the turn in integers (reccodec_sin_cos_q31). 0 when c is a
+   turn and the point's x or z offset from its unit then is 2^28 or more (the rotation bound). */
+static int spray_cand(const EvSpray* h, const uint32_t pos[3], uint32_t heading, unsigned c,
+                      uint32_t p[3])
+{
+    int64_t dx, dz, sn, cs, rx, rz;
+    unsigned k;
+    for (k = 0; k < 3; k++) {
+        p[k] = get32(h->body + 4 + 4 * k);
+        if (c) p[k] += pos[k] - h->pos[k];
+    }
+    if (c < 2) return 1;
+    dx = (int64_t)(int32_t)get32(h->body + 4) - (int32_t)h->pos[0];
+    dz = (int64_t)(int32_t)get32(h->body + 12) - (int32_t)h->pos[2];
+    if (dx <= -SP_TURN || dx >= SP_TURN || dz <= -SP_TURN || dz >= SP_TURN) return 0;
+    reccodec_sin_cos_q31((heading - h->heading) & 0xFFFF, &sn, &cs);
+    if (c == 3) sn = -sn;
+    rx = q31_round(dx * cs - dz * sn);
+    rz = q31_round(dx * sn + dz * cs);
+    p[0] = pos[0] + (uint32_t)rx;
+    p[2] = pos[2] + (uint32_t)rz;
+    return 1;
+}
+
+/* the unit's position and heading for a spray's history, zero where the ID is no live slot */
+static void spray_at(const RecFrameAt* a, uint32_t id, uint32_t pos[3], uint32_t* heading)
+{
+    const unsigned char* u = unit_of(a, id);
+    unsigned k;
+    for (k = 0; k < 3; k++) pos[k] = u ? get32(u + 0x6A + 4 * k) : 0;
+    *heading = u ? get16(u + 0x66) : 0;
+}
+
+/* a spray into its slot's history, at the front, the oldest of EV_SPRAYS dropped */
+static void spray_keep(EvSlot* s, const unsigned char* t, const uint32_t pos[3], uint32_t heading)
+{
+    EvSpray* e;
+    memmove(&s->spray[1], &s->spray[0], (EV_SPRAYS - 1) * sizeof(EvSpray));
+    e = &s->spray[0];
+    memcpy(e->body, t, EV_SPRAY);
+    memcpy(e->pos, pos, sizeof e->pos);
+    e->heading = heading;
+    if (s->nspray < EV_SPRAYS) s->nspray++;
+}
+
+/* a spray's bytes but its point: the reverse flag, then the box and the layer */
+static int spray_same(const unsigned char* t, const unsigned char* h)
+{
+    return !memcmp(t, h, 4) && !memcmp(t + 16, h + 16, EV_SPRAY - 16);
 }
 
 /* the entry of a slot's starts that holds this script, or -1 */
@@ -368,26 +442,47 @@ static void enc_start(Events* x, const unsigned char* b)
     if (s) start_keep(s, idx, args);
 }
 
-static void enc_spray(Events* x, const unsigned char* b)
+/* A spray against its slot's history: the candidate of the least summed residual, the first of
+   them in (entry, candidate) order -- a policy: the decoder reads the choice */
+static void enc_spray(Events* x, const RecFrameAt* a, const unsigned char* b)
 {
-    uint32_t id = get32(b);
+    uint32_t id = get32(b), pos[3], heading, p[3], r[3];
     EvSlot* s = slot_of(x, id);
     const unsigned char* t = b + 4;
-    unsigned k;
+    unsigned i, c, k, sel = SP_RAW;
+    uint64_t best = 0;
     put_id(x, id);
-    if (s && s->sprayed && !memcmp(s->spray, t, EV_SPRAY)) {
-        rb_u8(&x->col[C_SP_MODE], 0);
-    } else if (s && s->sprayed && !memcmp(s->spray, t, 4) && !memcmp(s->spray + 16, t + 16, EV_SPRAY - 16)) {
-        rb_u8(&x->col[C_SP_MODE], 1);
-        for (k = 0; k < 3; k++) put_zz(x, C_SP_POINT, get32(t + 4 + 4 * k), get32(s->spray + 4 + 4 * k));
-    } else {
-        rb_u8(&x->col[C_SP_MODE], 2);
+    if (!s) {
+        rb_u8(&x->col[C_SP_SEL], SP_RAW);
         rb_put(&x->col[C_SP_RAW], t, EV_SPRAY);
+        return;
     }
-    if (s) {
-        memcpy(s->spray, t, EV_SPRAY);
-        s->sprayed = 1;
+    spray_at(a, id, pos, &heading);
+    for (i = 0; i < s->nspray; i++) {
+        if (!spray_same(t, s->spray[i].body)) continue;
+        for (c = 0; c < 4; c++) {
+            uint64_t cost = 0;
+            if (!spray_cand(&s->spray[i], pos, heading, c, p)) continue;
+            for (k = 0; k < 3; k++) {
+                uint32_t d = get32(t + 4 + 4 * k) - p[k];
+                cost += d < 0x80000000u ? d : 0u - d;
+            }
+            if (sel == SP_RAW || cost < best) {
+                sel = 4 * i + c;
+                best = cost;
+                for (k = 0; k < 3; k++) r[k] = get32(t + 4 + 4 * k) - p[k];
+            }
+        }
     }
+    if (sel == SP_RAW) {
+        rb_u8(&x->col[C_SP_SEL], SP_RAW);
+        rb_put(&x->col[C_SP_RAW], t, EV_SPRAY);
+    } else {
+        rb_u8(&x->col[C_SP_SEL], sel | (best ? SP_RESID : 0));
+        if (best)
+            for (k = 0; k < 3; k++) rb_varint(&x->col[C_SP_POINT], zz32(r[k]));
+    }
+    spray_keep(s, t, pos, heading);
 }
 
 static void enc_death(Events* x, const RecFrameAt* a, const unsigned char* b)
@@ -466,7 +561,7 @@ static void events_enc_rec(void* f, const RecFrameAt* a, unsigned kind, const un
         put_text(x, &x->texts, C_RP_TEXT, b + 12, len - 12);
         break;
     case RK_EV_SPRAY:
-        enc_spray(x, b);
+        enc_spray(x, a, b);
         break;
     case RK_EV_DEATH:
         enc_death(x, a, b);
@@ -682,26 +777,31 @@ static int events_dec_rec(void* f, const RecFrameAt* a, unsigned kind, unsigned 
         break;
     case RK_EV_SPRAY: {
         EvSlot* s;
-        unsigned mode;
+        unsigned sel, i;
+        uint32_t heading = 0;
         unsigned char* t = body + 4;
         if (!get_id(x, &id)) CUT(C_ID);
         put32(body, id);
         s = slot_of(x, id);
-        if (!recf_u8(&x->rd[C_SP_MODE], &mode)) CUT(C_SP_MODE);
-        if (mode > 2 || (mode < 2 && !(s && s->sprayed)))
-            RECF_REFUSE("spray mode %u for unit ID %lu", mode, (unsigned long)id);
-        if (mode == 2) {
+        if (!recf_u8(&x->rd[C_SP_SEL], &sel)) CUT(C_SP_SEL);
+        if (s) spray_at(a, id, p, &heading);
+        if (sel == SP_RAW) {
             if (!recf_bytes(&x->rd[C_SP_RAW], t, EV_SPRAY)) CUT(C_SP_RAW);
         } else {
-            memcpy(t, s->spray, EV_SPRAY);
-            if (mode == 1)
-                for (k = 0; k < 3; k++)
-                    if (!get_zz(x, C_SP_POINT, get32(s->spray + 4 + 4 * k), t + 4 + 4 * k)) CUT(C_SP_POINT);
+            uint32_t q[3];
+            i = (sel & ~SP_RESID) >> 2;
+            if (!s || sel & 0x70 || i >= s->nspray)
+                RECF_REFUSE("spray selector %u for unit ID %lu, %u sprays kept", sel, (unsigned long)id,
+                            s ? s->nspray : 0);
+            if (!spray_cand(&s->spray[i], p, heading, sel & 3, q))
+                RECF_REFUSE("spray selector %u turns a point 2^28 or more from its unit", sel);
+            memcpy(t, s->spray[i].body, EV_SPRAY);
+            for (k = 0; k < 3; k++) {
+                put32(t + 4 + 4 * k, q[k]);
+                if (sel & SP_RESID && !get_zz(x, C_SP_POINT, q[k], t + 4 + 4 * k)) CUT(C_SP_POINT);
+            }
         }
-        if (s) {
-            memcpy(s->spray, t, EV_SPRAY);
-            s->sprayed = 1;
-        }
+        if (s) spray_keep(s, t, p, heading);
         blen = 48;
         break;
     }
@@ -815,7 +915,7 @@ static int events_dec_close(void* f, char* why, unsigned cap)
 
 const RecFrameOps recframe_events = {
     "events", RCS_EVENTS,
-    events_make, events_drop, events_restart, NULL, NULL,
+    events_make, events_drop, events_restart, NULL, NULL, NULL,
 #ifdef RECF_TEST_COPY
     events_copy,
 #endif

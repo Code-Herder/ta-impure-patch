@@ -36,9 +36,9 @@
 enum { RECC_SECTIONS = 1, RECC_DECLINED, RECC_MISMATCH, RECC_NOMEM };
 
 /* A segment's codec constants, parsed from its header's RT_SLOTS, RT_PROJECTILES, RT_FEATURES,
-   RT_CODEC, RT_PHYSICS, RT_AIR and RT_TYPES. `usable` is set when the header has both RT_CODEC and
-   RT_PHYSICS and its grid and wreck pool are within the codec's bounds: a segment where it is not
-   may hold only records stream blocks. */
+   RT_CODEC, RT_PHYSICS, RT_AIR and RT_TYPES, and whether it has RT_HOLD. `usable` is set when the
+   header has both RT_CODEC and RT_PHYSICS and its grid and wreck pool are within the codec's
+   bounds: a segment where it is not may hold only records stream blocks. */
 typedef struct RecCodecParams {
     unsigned   nslots, nproj, nlanes;
     unsigned   gw, gh, nwrecks;       /* RT_FEATURES: the grid's columns and rows, the wreck pool */
@@ -51,6 +51,8 @@ typedef struct RecCodecParams {
     uint8_t    slope[REC_SLOPES];     /* RT_TYPES: the ground speed's slope table ...             */
     unsigned   ntypes;                /* ... and its rows                                         */
     RecTypeRow types[RECC_TYPES_MAX];
+    int        hold;                  /* RT_HOLD is in the header: a skirmish stream, whose orders
+                                         frame matches nodes (tagpu_recframe_orders.c, scheme 2) */
     int        usable;
 } RecCodecParams;
 
@@ -61,11 +63,13 @@ typedef struct RecBytes { unsigned char* p; size_t n, cap; int oom; } RecBytes;
 typedef struct RecCodec RecCodec;
 
 /* The header's codec entries: RT_CODEC, RT_PHYSICS, RT_AIR and RT_TYPES, each its bytes and their
-   count, a NULL pointer when the entry is absent. */
+   count, a NULL pointer when the entry is absent; and `hold`, 1 when the header has RT_HOLD (whose
+   bytes are the lossy filter's, tagpu_reclossy.h, and not the codec's). */
 enum { RECC_E_CODEC, RECC_E_PHYSICS, RECC_E_AIR, RECC_E_TYPES, RECC_E_N };
 typedef struct RecCodecEntries {
     const void* p[RECC_E_N];
     unsigned    n[RECC_E_N];
+    int         hold;
 } RecCodecEntries;
 /* The entry of header tag `tag` among them, or -1 when it is not one */
 static __inline int reccodec_entry_of(unsigned tag)
@@ -83,8 +87,8 @@ static __inline int reccodec_entry_of(unsigned tag)
 int  reccodec_params(RecCodecParams* p, unsigned nslots, unsigned nproj, unsigned gw, unsigned gh,
                      unsigned nwrecks, unsigned ndefs, const RecCodecEntries* e, char* why,
                      unsigned cap);
-/* A codec sized for the params' slots, pool, grid and wreck pool, which every restart's params
-   must match. NULL: no memory, or a size past its bound. */
+/* A codec sized for the params' slots, pool, grid and wreck pool, and made for its `hold`, which
+   every restart's params must match. NULL: no memory, or a size past its bound. */
 RecCodec* reccodec_new(const RecCodecParams* p);
 void reccodec_free(RecCodec* c);
 /* The world the record frames restart from (reccodec_restart): the reader's grid at the end of
@@ -100,9 +104,9 @@ typedef struct RecFrameWorld {
    REC_UNIT_DWORDS], live[nslots], and the projectile pool `pool` (nproj * REC_PROJ_IMAGE bytes,
    the records [hw, nproj) read as zero) with its count and extent, any of which may be the
    codec's own copy -- the cells frame from the world's grid, the other record frames empty, and
-   its working buffers empty with their failures cleared. Params of other sizes than
-   reccodec_new's, or a count past the extent or an extent past the pool, leave it invalid; so
-   does a world not of the codec's grid, or NULL. */
+   its working buffers empty with their failures cleared. Params of other sizes or another `hold`
+   than reccodec_new's, or a count past the extent or an extent past the pool, leave it invalid;
+   so does a world not of the codec's grid, or NULL. */
 void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* units,
                       const unsigned char* live, const unsigned char* pool, unsigned count,
                       unsigned hw, const RecFrameWorld* world);

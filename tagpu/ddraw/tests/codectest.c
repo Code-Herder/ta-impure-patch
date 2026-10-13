@@ -263,7 +263,7 @@ static int header_of(const unsigned char* p, size_t n, Header* h, char* why, uns
         if (len > n - at - 4) REFUSE("a header entry cut short");
         if (tag == RT_FORMAT && len == 4) h->format = get32(b);
         if (tag == RT_MODE && len == 4) h->mode = get32(b);
-        if (tag == RT_HOLD) h->has_hold = 1;
+        if (tag == RT_HOLD) h->has_hold = h->e.hold = 1;
         if (tag == RT_SLOTS && len == 4) h->slots = get32(b);
         if (tag == RT_PROJECTILES && len == 4) h->nproj = get32(b);
         if (tag == RT_FEATURES && len == 20) {
@@ -595,7 +595,8 @@ static int reading_next(Reading* g, double* ms)
                              sizeof g->r.why))
             return -1;
         if (g->dec && (g->dec->nslots != g->h.slots || g->dec->nproj != g->h.nproj ||
-                       g->dec->gw != g->h.gw || g->dec->gh != g->h.gh || g->dec->nwrecks != g->h.nwrecks)) {
+                       g->dec->gw != g->h.gw || g->dec->gh != g->h.gh || g->dec->nwrecks != g->h.nwrecks ||
+                       g->dec->hold != g->p.hold)) {
             snprintf(g->r.why, sizeof g->r.why, "a segment of another shape (%u slots, %u projectiles, a "
                      "%u x %u grid, %u wrecks) after %u, %u, %u x %u and %u", g->h.slots, g->h.nproj,
                      g->h.gw, g->h.gh, g->h.nwrecks, g->dec->nslots, g->dec->nproj, g->dec->gw,
@@ -716,6 +717,20 @@ static void header_out(RecBytes* out, const unsigned char* p, size_t n, const un
     if (hold) tlv_put(out, RT_HOLD, hold, REC_HOLD_BYTES);
 }
 
+/* The writer's codec for an output segment: the input's params, made for the RT_HOLD the output
+   header carries, which picks the orders frame's scheme */
+static int stream_begin_out(RecStream* st, const RecCodecParams* in, int hold)
+{
+    RecCodecParams* p = (RecCodecParams*)malloc(sizeof *p);
+    int ok;
+    if (!p) return 0;
+    *p = *in;
+    p->hold = hold != 0;
+    ok = reccodec_stream_begin(st, p);
+    free(p);
+    return ok;
+}
+
 static int cmd_transcode(const char* in, const char* outp, int every, int skirmish,
                          const HeaderOverride* ovr)
 {
@@ -746,7 +761,7 @@ static int cmd_transcode(const char* in, const char* outp, int every, int skirmi
                 if (ZSTD_sizeof_CCtx((ZSTD_CCtx*)st.zrun) > cctx) cctx = ZSTD_sizeof_CCtx((ZSTD_CCtx*)st.zrun);
                 reccodec_stream_end(&st);
             }
-            on = g.p.usable && reccodec_stream_begin(&st, &g.p);
+            on = g.p.usable && stream_begin_out(&st, &g.p, g.h.has_hold || (skirmish && g.h.mode != 3));
             nsnap = 0;
             hold_bytes(hold, 0);
             header_out(&hb, g.r.bytes, b->raw, skirmish && g.h.mode != 3 && !g.h.has_hold ? hold : NULL);
@@ -1140,7 +1155,7 @@ static int cmd_lossy(const char* in, const char* outp, int exact, const HeaderOv
             RecLossyParams lp;
             lossy_flush(&o, 0);
             if (o.on) reccodec_stream_end(&o.st);
-            o.on = g.p.usable && reccodec_stream_begin(&o.st, &g.p);
+            o.on = g.p.usable && stream_begin_out(&o.st, &g.p, g.h.mode != 3);
             reclossy_free(L);
             L = NULL;
             if (g.h.mode != 3) {

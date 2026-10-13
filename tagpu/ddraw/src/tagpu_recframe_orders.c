@@ -10,7 +10,17 @@
    So a list is coded against the last image of the same (slot, list), node by node, as the
    dwords that changed.
 
-   THE BYTES. Scheme 1, 26 columns, for each record in record order:
+   In a skirmish stream the lossy filter holds a main list's handler state between refreshes
+   (replay-hold.tsv), so a list keeps its nodes but loses one -- its head done -- or gains one
+   in front of the others, and node i no longer meets kept node i. A node's action byte +0x04 and
+   its issue time +0x46 [INFERRED: the GameTime the order was given; no writer traced] stay with
+   it, so there each node is matched to the kept node that has both. MEASURED on the size
+   research's lossy hour: −119,291 bytes; on the exact hour the match costs +295,783, so a stream
+   without RT_HOLD keeps scheme 1.
+
+   THE BYTES. Scheme 1 in a segment whose header has no RT_HOLD (a multiplayer one), scheme 2 in
+   one that has it (RecCodecParams' `hold`); a reader takes only its segment's. Scheme 1 is 26
+   columns, for each record in record order:
        slot     varint zz32(slot - the previous record's slot in this iteration, 0 at its start)
        key      u8: bit 0 the list (0 the main list, 1 the sub list), bit 1 WHOLE, bit 2 CHUNK
                 (only with WHOLE); with WHOLE a varint total follows, with CHUNK a varint first
@@ -23,11 +33,19 @@
    WHOLE alone is a list in one record (first 0, k the total); WHOLE | CHUNK a record of a list
    longer than REC_ORDERS_CHUNK, or of any other range. The encoder takes the masks whenever the
    (slot, list) holds a kept list of the record's total and the record is the whole list.
+   Scheme 2 is 27 columns, scheme 1's and
+       idx      per node of the record, in order: a varint, 0 for a node whose image follows raw
+                in `whole`, else 1 + j for the kept list's node j, which a mask and its dwords
+                then follow as scheme 1's do against node j
+   the key as scheme 1's, but every record's nodes coded by idx: without WHOLE the record is the
+   whole list at the kept list's length. The encoder matches each node to the first kept node
+   after the last one matched, within ORDERS_SCAN of it, with the same +0x04 byte and +0x46 dword;
+   that is a policy, the decoder reads the choice.
 
    THE STATE, cleared at every reset. Per (slot, list) its place in the arena (offset and
    capacity, in nodes) and its kept list: the node images of the last record of that (slot, list)
    when that record was the whole list, or none. A record that is not the whole list drops the
-   kept one. A whole list fits in its place when its total is at most the place's capacity, else
+   kept one, and in scheme 2 a unit's RK_UNIT_GONE drops both of its slot's. A whole list fits in its place when its total is at most the place's capacity, else
    it takes a new place of exactly its total at the arena's end, if the arena then holds at most
    ORDERS_HELD nodes; else it is not kept and the old place stays for a later, shorter list. The
    places are a function of the records since the reset alone, so the encoder and every decoder
@@ -40,21 +58,25 @@
    THE BOUNDS. 1 <= slot < nslots; a key of bits 0..2 with CHUNK only beside WHOLE; total <=
    REC_ORDERS_MAX; k <= REC_ORDERS_CHUNK, first + k <= total, and k >= 1 unless the total is 0 (an
    emptied list is one record with no nodes, tagpu_recfmt.h RK_ORDERS); masks only against a kept
-   list, each below 2^22; every column read to its end. The encoder latches on anything else:
+   list, each below 2^22; a scheme-2 index j below the kept list's length and used once in its
+   record; every column read to its end. The encoder latches on anything else:
    a pad byte that is not zero, a length that is not 8 plus whole images. A body is at most
    8 + REC_ORDERS_CHUNK x REC_ORDER_IMAGE bytes, and the decoder writes every byte of it through
    recf_body_put, which bounds it by RECF_BODY_MAX before the write. */
 #include "tagpu_recframe.h"
 
-#define ORDERS_SCHEME 1
+#define ORDERS_SCHEME 1                          /* a segment without RT_HOLD                  */
+#define ORDERS_MATCH  2                          /* a segment with RT_HOLD                     */
 #define ORDERS_HELD   65536u                     /* RECC_ORDERS_HELD: the arena's nodes at most */
+#define ORDERS_SCAN   32u                        /* the kept nodes a node's match tries          */
 #define NODE          REC_ORDER_IMAGE
 #define NODE_DW       (REC_ORDER_IMAGE / 4)      /* 22: a mask's bits                          */
 #define K_LIST        1u
 #define K_WHOLE       2u
 #define K_CHUNK       4u
 
-enum { C_SLOT, C_KEY, C_MASK, C_D0, C_WHOLE = C_D0 + NODE_DW, ORDERS_COLS };
+enum { C_SLOT, C_KEY, C_MASK, C_D0, C_WHOLE = C_D0 + NODE_DW, C_IDX, ORDERS_COLS };
+#define ORDERS_COLS1 C_IDX                       /* scheme 1's columns: all but idx            */
 RECF_COLS_CHECK(orders, ORDERS_COLS);
 _Static_assert(8 + REC_ORDERS_CHUNK * NODE <= RECF_BODY_MAX, "an RK_ORDERS the frame makes");
 
@@ -65,7 +87,9 @@ typedef struct Kept {
 
 typedef struct Orders {
     unsigned nslots;
+    unsigned scheme, ncols;     /* the segment's: ORDERS_SCHEME or ORDERS_MATCH, its columns */
     Kept* kept;                 /* nslots * 2, (slot, list) at slot * 2 + list              */
+    unsigned char* used;        /* REC_ORDERS_MAX: the kept nodes a scheme-2 record matched  */
     unsigned char* arena;       /* acap nodes, the first `held` of them placed              */
     uint32_t held, acap;
     int oom, unfit;
@@ -121,8 +145,13 @@ static void* orders_make(const RecCodecParams* p)
     Orders* x = (Orders*)calloc(1, sizeof(Orders));
     if (!x) return NULL;
     x->nslots = p->nslots;
+    x->scheme = p->hold ? ORDERS_MATCH : ORDERS_SCHEME;
+    x->ncols = p->hold ? ORDERS_COLS : ORDERS_COLS1;
     x->kept = (Kept*)calloc((size_t)p->nslots * 2, sizeof(Kept));
-    if (!x->kept) {
+    x->used = (unsigned char*)malloc(REC_ORDERS_MAX);
+    if (!x->kept || !x->used) {
+        free(x->kept);
+        free(x->used);
         free(x);
         return NULL;
     }
@@ -136,6 +165,7 @@ static void orders_drop(void* f)
     if (!x) return;
     for (i = 0; i < ORDERS_COLS; i++) rb_free(&x->col[i]);
     free(x->kept);
+    free(x->used);
     free(x->arena);
     free(x);
 }
@@ -177,6 +207,52 @@ static void orders_enc_iter(void* f, const RecFrameAt* a)
     x->prev = 0;
 }
 
+/* node `now` against kept node `was`: its mask, and the dwords it names */
+static void enc_mask(Orders* x, const unsigned char* now, const unsigned char* was)
+{
+    uint32_t m = 0;
+    unsigned d;
+    for (d = 0; d < NODE_DW; d++)
+        if (memcmp(now + 4 * d, was + 4 * d, 4)) m |= 1u << d;
+    rb_varint(&x->col[C_MASK], m);
+    for (d = 0; d < NODE_DW; d++)
+        if (m >> d & 1) rb_put(&x->col[C_D0 + d], now + 4 * d, 4);
+}
+
+/* A record in scheme 2: its key, then each node matched to a kept node or raw (THE BYTES). */
+static void enc_matched(Orders* x, const Kept* l, unsigned list, unsigned total, unsigned first,
+                        unsigned k, const unsigned char* nodes)
+{
+    unsigned kn = l->n1 ? l->n1 - 1 : 0, i, j, next = 0;
+    if (!first && k == total && l->n1 == total + 1) {
+        rb_u8(&x->col[C_KEY], list);
+    } else {
+        int chunk = first || k != total;
+        rb_u8(&x->col[C_KEY], list | K_WHOLE | (chunk ? K_CHUNK : 0));
+        rb_varint(&x->col[C_KEY], total);
+        if (chunk) {
+            rb_varint(&x->col[C_KEY], first);
+            rb_varint(&x->col[C_KEY], k);
+        }
+    }
+    for (i = 0; i < k; i++) {
+        const unsigned char* now = nodes + (size_t)i * NODE;
+        const unsigned char* was = NULL;
+        for (j = next; j < kn && j < next + ORDERS_SCAN; j++) {
+            was = x->arena + ((size_t)l->off + j) * NODE;
+            if (was[4] == now[4] && !memcmp(was + 0x46, now + 0x46, 4)) break;
+        }
+        if (j < kn && j < next + ORDERS_SCAN) {
+            rb_varint(&x->col[C_IDX], 1 + j);
+            enc_mask(x, now, was);
+            next = j + 1;
+        } else {
+            rb_varint(&x->col[C_IDX], 0);
+            rb_put(&x->col[C_WHOLE], now, NODE);
+        }
+    }
+}
+
 static void orders_enc_rec(void* f, const RecFrameAt* a, unsigned kind, const unsigned char* b,
                            unsigned len)
 {
@@ -204,7 +280,9 @@ static void orders_enc_rec(void* f, const RecFrameAt* a, unsigned kind, const un
     rb_varint(&x->col[C_SLOT], zz32(slot - x->prev));
     x->prev = slot;
     l = &x->kept[slot * 2 + list];
-    if (!first && k == total && l->n1 == total + 1) {
+    if (x->scheme == ORDERS_MATCH) {
+        enc_matched(x, l, list, total, first, k, nodes);
+    } else if (!first && k == total && l->n1 == total + 1) {
         rb_u8(&x->col[C_KEY], list);
         for (i = 0; i < k; i++) {
             const unsigned char* now = nodes + (size_t)i * NODE;
@@ -229,6 +307,15 @@ static void orders_enc_rec(void* f, const RecFrameAt* a, unsigned kind, const un
     keep(x, l, total, first, k, nodes);
 }
 
+/* a scheme-2 unit's death drops its slot's kept lists (THE STATE) */
+static void orders_gone(void* f, unsigned slot)
+{
+    Orders* x = (Orders*)f;
+    if (x->scheme != ORDERS_MATCH || slot >= x->nslots) return;
+    x->kept[slot * 2].n1 = 0;
+    x->kept[slot * 2 + 1].n1 = 0;
+}
+
 static void orders_enc_iter_end(void* f, const RecFrameAt* a)
 {
     (void)f;
@@ -239,14 +326,15 @@ static int orders_enc_write(void* f, RecBytes* sec)
 {
     Orders* x = (Orders*)f;
     if (x->unfit || x->oom) return 0;
-    return recf_write(sec, ORDERS_SCHEME, x->col, ORDERS_COLS);
+    return recf_write(sec, x->scheme, x->col, x->ncols);
 }
 
 static int orders_dec_open(void* f, const unsigned char* sec, size_t n, unsigned iterations,
                            char* why, unsigned cap)
 {
     (void)iterations;
-    return recf_open(sec, n, ORDERS_SCHEME, ORDERS_COLS, ((Orders*)f)->rd, "orders", why, cap);
+    Orders* x = (Orders*)f;
+    return recf_open(sec, n, x->scheme, x->ncols, x->rd, "orders", why, cap);
 }
 
 static int orders_dec_iter(void* f, const RecFrameAt* a, char* why, unsigned cap)
@@ -258,12 +346,34 @@ static int orders_dec_iter(void* f, const RecFrameAt* a, char* why, unsigned cap
     return 1;
 }
 
+/* a node against kept node `was` onto the body: its mask, bounded, and the dwords it names */
+static int dec_mask(Orders* x, const unsigned char* was, unsigned char* body, unsigned* len,
+                    char* why, unsigned cap)
+{
+    RecCol* c = x->rd;
+    uint32_t m, d;
+    if (!recf_varint(&c[C_MASK], &m)) RECF_REFUSE("the orders frame's mask column cut short");
+    if (m >> NODE_DW) RECF_REFUSE("an order node mask %lu past %u bits", (unsigned long)m, NODE_DW);
+    for (d = 0; d < NODE_DW; d++) {
+        RecCol* dc = &c[C_D0 + d];
+        const unsigned char* src = was + 4 * d;
+        if (m >> d & 1) {
+            if (dc->end - dc->at < 4)
+                RECF_REFUSE("the orders frame's dword column %lu cut short", (unsigned long)d);
+            src = dc->p + dc->at;
+            dc->at += 4;
+        }
+        if (!recf_body_put(body, len, src, 4)) RECF_REFUSE("an RK_ORDERS past %u bytes", RECF_BODY_MAX);
+    }
+    return 1;
+}
+
 static int orders_dec_rec(void* f, const RecFrameAt* a, unsigned kind, unsigned char* body,
                           unsigned* len, char* why, unsigned cap)
 {
     Orders* x = (Orders*)f;
     RecCol* c = x->rd;
-    uint32_t z, slot, total, first, k, m, i, d;
+    uint32_t z, slot, total, first, k, kn, i;
     unsigned key;
     unsigned char head[8];
     Kept* l;
@@ -294,6 +404,7 @@ static int orders_dec_rec(void* f, const RecFrameAt* a, unsigned kind, unsigned 
                         (unsigned long)slot, key & K_LIST);
         total = k = l->n1 - 1;
     }
+    kn = l->n1 ? l->n1 - 1 : 0;
     head[0] = (unsigned char)slot;
     head[1] = (unsigned char)(slot >> 8);
     head[2] = (unsigned char)(key & K_LIST);
@@ -303,7 +414,26 @@ static int orders_dec_rec(void* f, const RecFrameAt* a, unsigned kind, unsigned 
     head[6] = (unsigned char)first;
     head[7] = (unsigned char)(first >> 8);
     if (!recf_body_put(body, len, head, 8)) RECF_REFUSE("an RK_ORDERS past %u bytes", RECF_BODY_MAX);
-    if (key & K_WHOLE) {
+    if (x->scheme == ORDERS_MATCH) {
+        memset(x->used, 0, kn);
+        for (i = 0; i < k; i++) {
+            RecCol* w = &c[C_WHOLE];
+            uint32_t j1;
+            if (!recf_varint(&c[C_IDX], &j1)) RECF_REFUSE("the orders frame's index column cut short");
+            if (!j1) {
+                if (NODE > w->end - w->at) RECF_REFUSE("the orders frame's node column cut short");
+                if (!recf_body_put(body, len, w->p + w->at, NODE))
+                    RECF_REFUSE("an RK_ORDERS past %u bytes", RECF_BODY_MAX);
+                w->at += NODE;
+                continue;
+            }
+            if (j1 > kn || x->used[j1 - 1])
+                RECF_REFUSE("an order node matched to kept node %lu of %lu, or twice", (unsigned long)(j1 - 1),
+                            (unsigned long)kn);
+            x->used[j1 - 1] = 1;
+            if (!dec_mask(x, x->arena + ((size_t)l->off + j1 - 1) * NODE, body, len, why, cap)) return 0;
+        }
+    } else if (key & K_WHOLE) {
         RecCol* w = &c[C_WHOLE];
         size_t n = (size_t)k * NODE;
         if (n > w->end - w->at) RECF_REFUSE("the orders frame's node column cut short");
@@ -311,23 +441,8 @@ static int orders_dec_rec(void* f, const RecFrameAt* a, unsigned kind, unsigned 
             RECF_REFUSE("an RK_ORDERS past %u bytes", RECF_BODY_MAX);
         w->at += n;
     } else {
-        for (i = 0; i < k; i++) {
-            const unsigned char* was = x->arena + ((size_t)l->off + i) * NODE;
-            if (!recf_varint(&c[C_MASK], &m)) RECF_REFUSE("the orders frame's mask column cut short");
-            if (m >> NODE_DW) RECF_REFUSE("an order node mask %lu past %u bits", (unsigned long)m, NODE_DW);
-            for (d = 0; d < NODE_DW; d++) {
-                RecCol* dc = &c[C_D0 + d];
-                const unsigned char* src = was + 4 * d;
-                if (m >> d & 1) {
-                    if (dc->end - dc->at < 4)
-                        RECF_REFUSE("the orders frame's dword column %lu cut short", (unsigned long)d);
-                    src = dc->p + dc->at;
-                    dc->at += 4;
-                }
-                if (!recf_body_put(body, len, src, 4))
-                    RECF_REFUSE("an RK_ORDERS past %u bytes", RECF_BODY_MAX);
-            }
-        }
+        for (i = 0; i < k; i++)
+            if (!dec_mask(x, x->arena + ((size_t)l->off + i) * NODE, body, len, why, cap)) return 0;
     }
     keep(x, l, total, first, k, body + 8);
     if (x->oom) RECF_REFUSE("no memory for the orders frame's kept lists");
@@ -345,12 +460,13 @@ static int orders_dec_iter_end(void* f, const RecFrameAt* a, char* why, unsigned
 
 static int orders_dec_close(void* f, char* why, unsigned cap)
 {
-    return recf_close(((Orders*)f)->rd, ORDERS_COLS, "orders", why, cap);
+    Orders* x = (Orders*)f;
+    return recf_close(x->rd, x->ncols, "orders", why, cap);
 }
 
 const RecFrameOps recframe_orders = {
     "orders", RCS_ORDERS,
-    orders_make, orders_drop, orders_restart, NULL, NULL,
+    orders_make, orders_drop, orders_restart, NULL, NULL, orders_gone,
 #ifdef RECF_TEST_COPY
     orders_copy,
 #endif
