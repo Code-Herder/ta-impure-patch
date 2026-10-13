@@ -37,40 +37,45 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 22: format 21 with QueryTransport and QueryLandingPad among the owner's queries, and
+/* 23: format 22 with QueryTransport and QueryLandingPad among the owner's queries, and
    BeginTransport and setSFXoccupy as the owner's starts (RK_EV_START_NAMED) where the broadcast and
-   the playing's own water-state call made them before. 21 was format 20 with the unit frame's
-   listing from state both sides keep -- each carried slot a 2-bit symbol, the others ranks among
-   the candidates or woken slots, the lane masks ids into the run's masks most recent first -- and
-   each lane's count before its column (RCS_UNITS below). 20 was format 19 with the script slice's
-   place in the event stream (RK_EV_SLICE), the owner's COB queries the playing makes again
-   (RK_EV_QUERY) and a yard's opening or closing at its place (RK_EV_YARD). 19 was format 18 with
-   more of the unit frame's rules -- a unit's hit points while it is built, its HP percentage every
-   30 ticks, its sort bucket, a ground unit's speed and sight cell, the turn rate's one-tick blip --
-   and their constants in the header: RT_TYPES, each unit type's, and RT_PHYSICS's bucket columns.
-   18 was format 17 with the sectioned container's kinds
-   as per-iteration patterns -- by reference to the run's last 16, with markers for an empty
-   feature tick and a predicted RK_FEATURES, and no count for a run the frames fix -- and an
-   RK_TICK body for a block's first iteration alone (THE SECTIONED CONTAINER below). 17 was format
-   16 in another container -- a run of sectioned stream blocks is one zstd frame at level 19, each
-   block a flushed chunk of it, and a snapshot is packed against the one before it (RBF_CHAINED,
-   THE RUN AND THE CHAIN below). 16 was format 15 with a skirmish recording's cells
-   held (RT_HOLD's RECL_CELLS): between refreshes the stream carries the cells' unit slots and yard
-   bit at a value it wrote before, a feature tick's input cells only where a byte other than those
-   changed, and the tick's source test as FS_SOURCE, as a multiplayer recording does. 15 was format
-   14 with a skirmish stream's nano sprays written as sessions (RK_SPRAY_SESSION, RT_HOLD's
-   RECL_SPRAYS): a spray its unit's session predicts is left out, and every reader makes it again
-   at the end of its iteration. 14 was format 13 with a hold table of rows: a skirmish stream holds
-   the weapon slots' aim and target state, the resource ledger's accumulators and the main order
-   list's handler state between refreshes (replay-hold.tsv; RT_HOLD carries the masks). 13 was
-   format 12 with the stream written by the lossy filter (tagpu_reclossy.c): a skirmish header's
-   RT_HOLD names the bytes the stream holds between refreshes, a refresh iteration ends its stream
-   block (RBF_REFRESH), and a test launch may write the exact records beside the stream (RB_EXACT).
-   A reader takes this format alone. The bytes: a stream block may be a sectioned container whose
-   unit frame carries the unit deltas, whose pool frame carries the projectile pool coded by
-   identity, and whose four record frames -- the cells, the orders, the events and the state --
-   carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER below). */
-#define REC_FORMAT        22
+   the playing's own water-state call made them before. 22 was format 21 with three record
+   codings: an explicit nano spray as its unit's last four explicit sprays' -- the point as it was, moved with the unit or turned about it by its heading change --
+   and a residual (the events frame's scheme 2); in a stream whose header has RT_HOLD, each order
+   node matched to the kept list's node of the same action and issue time (the orders frame's
+   scheme 2); and a surviving projectile's bytes 0x34..0x6A as lanes of the record's field widths
+   (RCS_PROJ below). 21 was format 20 with the unit frame's listing from state both sides keep --
+   each carried slot a 2-bit symbol, the others ranks among the candidates or woken slots, the lane
+   masks ids into the run's masks most recent first -- and each lane's count before its column
+   (RCS_UNITS below). 20 was format 19 with the script slice's place in the event stream
+   (RK_EV_SLICE), the owner's COB queries the playing makes again (RK_EV_QUERY) and a yard's
+   opening or closing at its place (RK_EV_YARD). 19 was format 18 with more of the unit frame's
+   rules -- a unit's hit points while it is built, its HP percentage every 30 ticks, its sort
+   bucket, a ground unit's speed and sight cell, the turn rate's one-tick blip -- and their
+   constants in the header: RT_TYPES, each unit type's, and RT_PHYSICS's bucket columns. 18 was
+   format 17 with the sectioned container's kinds as per-iteration patterns -- by reference to the
+   run's last 16, with markers for an empty feature tick and a predicted RK_FEATURES, and no count
+   for a run the frames fix -- and an RK_TICK body for a block's first iteration alone (THE
+   SECTIONED CONTAINER below). 17 was format 16 in another container -- a run of sectioned stream
+   blocks is one zstd frame at level 19, each block a flushed chunk of it, and a snapshot is packed
+   against the one before it (RBF_CHAINED, THE RUN AND THE CHAIN below). 16 was format 15 with a
+   skirmish recording's cells held (RT_HOLD's RECL_CELLS): between refreshes the stream carries the
+   cells' unit slots and yard bit at a value it wrote before, a feature tick's input cells only
+   where a byte other than those changed, and the tick's source test as FS_SOURCE, as a multiplayer
+   recording does. 15 was format 14 with a skirmish stream's nano sprays written as sessions
+   (RK_SPRAY_SESSION, RT_HOLD's RECL_SPRAYS): a spray its unit's session predicts is left out, and
+   every reader makes it again at the end of its iteration. 14 was format 13 with a hold table of
+   rows: a skirmish stream holds the weapon slots' aim and target state, the resource ledger's
+   accumulators and the main order list's handler state between refreshes (replay-hold.tsv; RT_HOLD
+   carries the masks). 13 was format 12 with the stream written by the lossy filter
+   (tagpu_reclossy.c): a skirmish header's RT_HOLD names the bytes the stream holds between
+   refreshes, a refresh iteration ends its stream block (RBF_REFRESH), and a test launch may write
+   the exact records beside the stream (RB_EXACT). A reader takes this format alone. The bytes: a
+   stream block may be a sectioned container whose unit frame carries the unit deltas, whose pool
+   frame carries the projectile pool coded by identity, and whose four record frames -- the cells,
+   the orders, the events and the state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER
+   below). */
+#define REC_FORMAT        23
 
 static __inline int rec_format_supported(unsigned format)
 {
@@ -787,9 +792,11 @@ _Static_assert(RB_CONTRIBUTIONS == 7 && RB_EXACT == 8, "the block kinds retain t
        varint  codes                      per iteration, a reference code for each birth, then
                                           for each tail slot: 0 the zero row, else 1 +
                                           (zigzag(row - anchor) << 2 | section)
-       columns the 32-bit zigzag residuals: the survivors' in the survivor step's dword order
-               (13, 14, 15, 7, 8, 9, 0 .. 6, 10, 11, 12, 16 .. 26), a column a dword with every
-               iteration's survivors in order; then the births' and the tail's, dwords 0 .. 26
+       columns the zigzag residuals, a column each with every iteration's survivors in order:
+               the survivors' 21 lanes of bytes 0x34..0x6A, each zigzagged at its field's width
+               (tagpu_reccodec.c, THE SURVIVOR LANES), then their dwords 7, 8, 9, 0 .. 6, 10, 11,
+               12, 32-bit; then the births' and the tail's, dwords 0 .. 26, 32-bit. Byte 0x6B of a
+               survivor is its last record's.
    The survivors are the records of [0, c0) that did not die, in order, and become [0, c0 - nd);
    the births follow them up to c1. Every count, slot and reference is bounded by RT_PROJECTILES,
    the iterations and the section's bytes; an iteration's projectile records are exactly its

@@ -540,6 +540,8 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         w->mp_history=tagpu_recmp_history_begin(&w->mp.header,roster,w->gw,w->gh);
         if (!w->mp_history) return 0;
     }
+    /* the writer adds RT_HOLD to every skirmish header below, and the codec codes for it */
+    ent.hold = !w->mp_in;
     if (!codec_begin(w, ndefs, &ent)) return 0;
     if (w->dead) return 1;
     w->each = each;

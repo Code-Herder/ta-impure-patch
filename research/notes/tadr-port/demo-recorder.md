@@ -489,7 +489,9 @@ evidence, and keep remaining gaps visible.
    refreshed every 1,800 ticks -- is 20.73 MB in the level-3 container and 15.65 in format 17's
    (*P1*); with the cells held the heavy hour is 16.16 MB in format 17, 15.81 in format 18
    (*P6*), 14.06 in format 19, whose unit frame predicts more from per-type engine constants
-   (*P4*), and 13.12 in format 21, which lists the units against the frame's own state (*P5*). Until the reduced stream lands, a skirmish is recorded only on request.
+   (*P4*), 13.12 in format 21, which lists the units against the frame's own state (*P5*), and
+   12.71 in format 22, which codes the explicit sprays, the order nodes and the surviving
+   projectiles against more of what both sides keep (*P7*). Until the reduced stream lands, a skirmish is recorded only on request.
 3. **Snapshot interval: decided** (2026-10-10). A snapshot every 1,800 ticks, 60 s of game time,
    chosen against the disk budget with the seek target relaxed for dense battles (*Playback and
    seeking*).

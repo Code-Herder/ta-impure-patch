@@ -510,7 +510,7 @@ static int cells_dec_close(void* f, char* why, unsigned cap)
 
 const RecFrameOps recframe_cells = {
     "cells", RCS_CELLS,
-    cells_make, cells_drop, cells_restart, cells_world, cells_plain,
+    cells_make, cells_drop, cells_restart, cells_world, cells_plain, NULL,
 #ifdef RECF_TEST_COPY
     cells_copy,
 #endif

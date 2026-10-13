@@ -2,12 +2,14 @@
 
 ## Status
 
-**L1 to L4, L5a, P1, P6, P4 and P5 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
+**L1 to L4, L5a, P1, P6, P4, P5 and P7 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
 *L3: the record frames, measured*, *L4: the measured hours, the snapshot interval and R1*,
 *L5a: the ledger rule*, *P1: the container, measured*, *P6: the kinds and the ticks, measured*,
-*P4: the unit frame's type rules, measured* and *P5: the unit listing, measured*, below).
-Recording format 21 says which units an iteration lists and their lane masks against state both
-sides keep, predicts more of the unit
+*P4: the unit frame's type rules, measured*, *P5: the unit listing, measured* and *P7: the sprays,
+the order nodes and the projectile lanes, measured*, below). Recording format 22 codes an explicit
+nano spray against the unit's last four, matches order nodes to the kept list in a skirmish
+stream and codes a surviving projectile's fields as lanes of their own widths, says which units an
+iteration lists and their lane masks against state both sides keep, predicts more of the unit
 frame from per-type engine constants, codes each iteration's record kinds as a pattern of the run's
 last 16 and writes a block's GameTime once, packs each
 run of sectioned stream blocks as one zstd frame at level 19 and each snapshot against the one before
@@ -31,8 +33,9 @@ heavy hour's stream 2.7 MB smaller again; format 16 holds the cells' unit slots 
 which the playing's engine stamps (*The cells held*), format 17 (*P1*) packs that stream in its
 container, format 18 (*P6*) takes the heavy hour from 16.16 to 15.81 MB, and format 19 (*P4*)
 predicts more of the unit frame from per-type engine constants, to 14.06 MB, format 20 records
-the script slice's markers (*The script slice's markers*), and format 21 (*P5*) lists the units
-against the frame's own state, to 13.12 MB; L6 is a plan. The page gathers what has been measured about the size of a demo recording, the research
+the script slice's markers (*The script slice's markers*), format 21 (*P5*) lists the units
+against the frame's own state, to 13.12 MB, and format 22 (*P7*) codes the sprays, the order nodes
+and the surviving projectiles against more of the frames' state, to 12.71 MB; L6 is a plan. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -1299,8 +1302,9 @@ read in order, with 23,143 sprays, and 42,588 iterations after 144 seeks from th
 9,277, every one equal. **The landing's gate missed by 0.05 MB**: the landing plan asked for
 −2.97 MB ± 0.2 over the unit and order rows, a figure that coded the session records in the
 events frame. Written verbatim, as format 15 writes them, they cost 377,643 bytes on this stream,
-against 128,818 in the events frame, so the events-frame coding planned with the explicit sprays'
-own (P7) recovers about 0.25 MB. The lossy plan's own figures for exact sessions are smaller,
+against 128,818 in the events frame. Measured in format 22's container, each run one level-19
+frame, that coding saves 20,183 bytes of the heavy hour, not 0.25 MB, and format 22 does not carry
+it (*P7*, its fifth departure). The lossy plan's own figures for exact sessions are smaller,
 −1.05 MB (its §4.4) and −1.03 (its §8's attribution), because its transform had no FOLLOW
 sessions: it implied 2,546,320 sprays and wrote 613,932, with 59,528 sessions opened and 59,022
 closed.
@@ -1364,7 +1368,7 @@ this fixture's density (the cost model the plan used, which simulated 38,338 mar
 +13,653 bytes, on a format-14 file of the same fixture). That is 0.19 % of the
 stream; a quieter hour costs less, since markers follow starts and creates.
 
-**The transports', the pads' and the waterline's COB entries: recording format 22** (2026-10-13).
+**The transports', the pads' and the waterline's COB entries: recording format 23** (2026-10-13).
 Two more owner's queries (`QueryTransport`, `QueryLandingPad`) and two more owner-only starts
 (`BeginTransport`, `setSFXoccupy`) in the existing kinds 58 and the named start; no new column.
 They follow transports, landings and water crossings. MEASURED on the `waterline` test group's
@@ -1703,6 +1707,109 @@ the ASan run, same seed, accepts exactly that one more).
 **What it does not do.** A slot's last mask survives a birth in its slot, which costs size only.
 The ids are a byte each only while every id of the block is below 256.
 
+## P7: the sprays, the order nodes and the projectile lanes, measured
+
+**What format 22 changes.** Three codings of the lossless stack's plan (#6, #8 and #9), each
+against state the writer and every reader keep, restarted at every reset point:
+
+- **#6, an explicit nano spray against the unit's last four** (tagpu_recframe_events.c, scheme
+  2). A spray no session implies is a selector byte: 255 and its 44 bytes raw, or `4i + c` for
+  entry i of its slot's last four explicit sprays whose bytes but the point are the same, and
+  candidate c of the point -- 0 as it was, 1 moved with the unit's `+0x6A/+0x6E/+0x72`, 2 and 3
+  turned about the unit by the change of its heading `+0x66`, one sign each -- with bit 7 set when
+  the point's three residuals follow. The turn is in integers (`sin_cos_q31` in Q31, products in
+  64 bits, rounded by a floor shift) and is no candidate when the point's x or z offset from its
+  unit is 2^28 or more, which bounds every product below 2^59. An ID that names no slot is raw and
+  enters no history.
+- **#8, order nodes matched to the kept list** (tagpu_recframe_orders.c, scheme 2, only in a
+  segment whose header has `RT_HOLD`). Each node of a list re-sent whole takes an index: 0 and its
+  image raw, or 1 + j for the kept list's node j of the same action byte `+0x04` and issue time
+  `+0x46` (the order constructor `0x43A0C0` writes both: the engine map's *record frames*), then
+  the mask and dwords against that node as scheme 1 codes them. A multiplayer segment keeps
+  scheme 1: the match costs size on an exact stream (the plan's prototype: +295,783 bytes on the
+  exact hour).
+- **#9, the surviving projectiles' lanes** (tagpu_reccodec.c, THE SURVIVOR LANES). A survivor's
+  bytes `0x34..0x6A` are 21 lanes at the record's field widths -- its fields from `+0x3A` on sit
+  at 2 mod 4, so a dword there straddles two -- each zigzagged at its width against the
+  candidate that was nearest last time: the old slot (the `+0x67` stamp alone), the last value,
+  or the line through the last two. Dwords 0..12 keep their coding, after the lanes.
+
+**Where it departs from the plan** (the spec's §9), each the cheapest decodable fix:
+
+1. *The kept lists drop at a death "as today's state does".* Format 21's orders frame did not drop
+   them at `RK_UNIT_GONE`. Scheme 2 drops both of the slot's lists there, through a new frame
+   operation (`gone`, called by the walk where the unit copy takes the death on both sides);
+   scheme 1 is unchanged.
+2. *A survivor is "its stamp unchanged and at least its index, its first dword the same".* That is
+   the prototype's guess at which records survive, and the prototype coded every record of
+   `[0, count)` this way, births included, which a decoder cannot follow: a birth has no last
+   image. The pool frame already knows its survivors from the dead list, so the lanes apply to
+   exactly those, and births and the tail keep their dword coding. Byte `0x6B`, past the
+   record's 0x6B bytes and in no lane, is the survivor's last image's: the capture writes it
+   zero, and a block whose survivor changed it is written as records.
+3. *The lanes replace dwords 13..26 in the step's order.* The guided rule reads the heading, pitch
+   and speed (lanes `0x36`, `0x38`, `0x3A`), so the lanes come first and the dwords follow as 7,
+   8, 9, 0..6, 10..12.
+4. *A node matches "the first unused" kept node.* The encoder tries the 32 kept nodes after the
+   last match (`ORDERS_SCAN`), which bounds its work; the decoder reads the index, so this is a
+   policy, and the bound is an index below the kept list's length used once in its record.
+5. *The spray sessions in the events frame* were estimated at about 0.25 MB a heavy hour. A C
+   prototype -- `RK_SPRAY_SESSION` coded as events-frame columns instead of `RCS_OTHER` records --
+   measured −20,183 bytes on the heavy hour and −11,228 on the light one (0.16 %, MEASURED
+   2026-10-13 on format 21 with #6, #8 and #9), about a twelfth of the estimate: the sessions
+   cost about 44 KB packed in the run, not more. It needs the session kind moved between
+   sections and the events frame past `RECF_COLS_MAX`, so it is not in format 22.
+
+**Measured** (2026-10-13, `codectest lossy` -- the writer's path -- under Wine, 32-bit, on the
+reference setup; the inputs and header overrides of *P4*). The baseline is format 21 (main's
+codectest) on the same path:
+
+| | heavy hour | light hour |
+|---|---:|---:|
+| the file, format 21 / 22 | 13,118,818 / **12,712,480 (−406,338, −3.1 %)** | 7,733,902 / **7,572,362 (−161,540, −2.1 %)** |
+| the stream and snapshots | 13,095,033 / 12,688,695 | 7,712,444 / 7,550,904 |
+| the events frame, raw / packed alone (MiB) | 2.460 / 1.759 → 1.816 / 1.240 | 0.722 / 0.555 → 0.533 / 0.402 |
+| the orders frame | 5.089 / 1.460 → 6.833 / 1.374 | 2.437 / 0.867 → 3.074 / 0.818 |
+| the pool frame | 14.663 / 1.571 → 17.360 / 1.402 | 2.358 / 0.339 → 2.680 / 0.302 |
+
+Every block sectioned, none declined or mismatched, 3,605 and 3,608 of them; the other sections
+keep their sizes (`codectest.py sizes`, raw and packed alone at zstd 3). The orders and the pool
+grow raw -- an index a node; 21 lane residuals a survivor where 14 dwords were, each at least a
+byte -- and shrink packed. The steps were measured one after another before P5 landed, against
+format 20's file on the same path (14,062,834 / 8,341,131, main before P5): #9 −98,648 / −21,512,
+then #6 −202,787 / −72,047, then #8 −102,135 / −72,194, heavy / light, together −403,570 /
+−165,753. They do not add to the table's −406,338 / −161,540, which is against format 21: P5's
+listing changes the unit section, and each run of blocks is packed as one level-19 frame, so a
+section's bytes in the file depend on its neighbours. The plan's prototype measured −99,451,
+−198,620 and −119,291 on the heavy hour, and expected at least half of −417,000 together.
+
+**Checked** (format 22): the C decoder and the Python reader give the same records on every block
+of both hours (`codectest.py verify`, skipping resting units and evaluating every candidate);
+`tarec lossy-check` passes over the whole of both hours written with their exact streams
+(`--exact`); `tarec check` reads both to their end with no correction and every snapshot equal, and
+finds the same 1,124 and 310 unexplained changes as on format 21's files: these inputs predate
+`RK_EV_YARD`, so a yard's change has no event.
+`codectest outcomes`, natively under ASan and under Wine, writes a block with a spray in each
+selector form -- raw with no history, as it was, moved, turned each way, with a residual, a body
+raw beside another, an older entry, raw for a unit past the slots, and a point 2^29 from its unit
+whose turns the bound leaves out -- and refuses a selector with no spray kept, one for a unit past
+the slots, bits 4..6 set, an entry past the kept ones, and a turn of a point past the bound; a
+list re-sent short, longer and after its unit's death, its nodes matched, raw and matched again,
+and refuses a node matched past the kept list, twice, or after the death dropped it; the orders
+frame's own outcomes again under `RT_HOLD`; scheme 1 written without `RT_HOLD`, each decoder
+refusing the other's scheme and a restart under the other `RT_HOLD` leaving the codec invalid; the
+survivors' lanes won by the line, the stamp and the last value, a lane's residual past its width
+refused, and a survivor's byte `0x6B` that changed declining its block. Fuzzed on
+the heavy hour, 20,000 cases each, C and Python agreeing in every case: the events frame alone
+(1,939 accepted), the orders frame alone (2,094) and the pool frame alone (2,406) on the x86-64
+build with the sanitizers, none firing; every section on that build and under Wine, 2,754 accepted
+by each, all 20,000 alike (the i686 zstd's refusal of a chunk the x86-64 build accepts, *P5*'s one
+case in 20,000, did not come up with this seed).
+
+**What it does not do.** A slot's spray history outlives its unit, so a new unit in the slot
+predicts from the old one's sprays until it has its own: size only.
+The match does not follow a node that moved more than 32 places after the last match.
+
 ## Multiplayer recordings
 
 A multiplayer file holds the recording machine's world (every unit, remote players' replicated
@@ -1789,6 +1896,7 @@ the units: stage 6's traffic budget.
 | P6 | the kinds as patterns with two markers and the frames' group counts, the GameTime once a block, format 18: LANDED (*P6* above) | MEASURED heavy hour 16.16 → 15.81 MB, light hour 9.39 → 9.10 MB |
 | P4 | the unit frame's type rules and `RT_TYPES`, format 19 (*P4* above) | MEASURED heavy hour 15.81 → 14.06 MB, light hour 9.10 → 8.34 MB, on P6 |
 | P5 | the unit listing against the frame's state, each lane's count before its column, format 21 (*P5* above) | MEASURED heavy hour 14.06 → 13.12 MB, light hour 8.34 → 7.73 MB |
+| P7 | explicit sprays against the unit's last four, order nodes matched in a skirmish stream, the survivors' lanes, format 22 (*P7* above) | MEASURED heavy hour 13.12 → 12.71 MB, light hour 7.73 → 7.57 MB |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
 ## Decisions

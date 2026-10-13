@@ -263,7 +263,7 @@ static int header_of(const unsigned char* p, size_t n, Header* h, char* why, uns
         if (len > n - at - 4) REFUSE("a header entry cut short");
         if (tag == RT_FORMAT && len == 4) h->format = get32(b);
         if (tag == RT_MODE && len == 4) h->mode = get32(b);
-        if (tag == RT_HOLD) h->has_hold = 1;
+        if (tag == RT_HOLD) h->has_hold = h->e.hold = 1;
         if (tag == RT_SLOTS && len == 4) h->slots = get32(b);
         if (tag == RT_PROJECTILES && len == 4) h->nproj = get32(b);
         if (tag == RT_FEATURES && len == 20) {
@@ -595,7 +595,8 @@ static int reading_next(Reading* g, double* ms)
                              sizeof g->r.why))
             return -1;
         if (g->dec && (g->dec->nslots != g->h.slots || g->dec->nproj != g->h.nproj ||
-                       g->dec->gw != g->h.gw || g->dec->gh != g->h.gh || g->dec->nwrecks != g->h.nwrecks)) {
+                       g->dec->gw != g->h.gw || g->dec->gh != g->h.gh || g->dec->nwrecks != g->h.nwrecks ||
+                       g->dec->hold != g->p.hold)) {
             snprintf(g->r.why, sizeof g->r.why, "a segment of another shape (%u slots, %u projectiles, a "
                      "%u x %u grid, %u wrecks) after %u, %u, %u x %u and %u", g->h.slots, g->h.nproj,
                      g->h.gw, g->h.gh, g->h.nwrecks, g->dec->nslots, g->dec->nproj, g->dec->gw,
@@ -716,6 +717,20 @@ static void header_out(RecBytes* out, const unsigned char* p, size_t n, const un
     if (hold) tlv_put(out, RT_HOLD, hold, REC_HOLD_BYTES);
 }
 
+/* The writer's codec for an output segment: the input's params, made for the RT_HOLD the output
+   header carries, which picks the orders frame's scheme */
+static int stream_begin_out(RecStream* st, const RecCodecParams* in, int hold)
+{
+    RecCodecParams* p = (RecCodecParams*)malloc(sizeof *p);
+    int ok;
+    if (!p) return 0;
+    *p = *in;
+    p->hold = hold != 0;
+    ok = reccodec_stream_begin(st, p);
+    free(p);
+    return ok;
+}
+
 static int cmd_transcode(const char* in, const char* outp, int every, int skirmish,
                          const HeaderOverride* ovr)
 {
@@ -746,7 +761,7 @@ static int cmd_transcode(const char* in, const char* outp, int every, int skirmi
                 if (ZSTD_sizeof_CCtx((ZSTD_CCtx*)st.zrun) > cctx) cctx = ZSTD_sizeof_CCtx((ZSTD_CCtx*)st.zrun);
                 reccodec_stream_end(&st);
             }
-            on = g.p.usable && reccodec_stream_begin(&st, &g.p);
+            on = g.p.usable && stream_begin_out(&st, &g.p, g.h.has_hold || (skirmish && g.h.mode != 3));
             nsnap = 0;
             hold_bytes(hold, 0);
             header_out(&hb, g.r.bytes, b->raw, skirmish && g.h.mode != 3 && !g.h.has_hold ? hold : NULL);
@@ -1140,7 +1155,7 @@ static int cmd_lossy(const char* in, const char* outp, int exact, const HeaderOv
             RecLossyParams lp;
             lossy_flush(&o, 0);
             if (o.on) reccodec_stream_end(&o.st);
-            o.on = g.p.usable && reccodec_stream_begin(&o.st, &g.p);
+            o.on = g.p.usable && stream_begin_out(&o.st, &g.p, g.h.mode != 3);
             reclossy_free(L);
             L = NULL;
             if (g.h.mode != 3) {
@@ -2356,10 +2371,11 @@ static int outcomes_orders(const RecCodecParams* p)
                          reccodec_decode(fresh, st.sec.p, st.sec.n, &out, why, sizeof why) == 0 &&
                          strstr(why, "kept list") != NULL, 1);
         }
+        /* scheme 2 adds an index and a mask a kept node: 556 of each here */
         if (n == 9)
             ok &= expect("  the 200-node list whole, the 361 and 195 kept",
                          h.len[RCS_ORDERS] >= 200 * REC_ORDER_IMAGE &&
-                         h.len[RCS_ORDERS] < 200 * REC_ORDER_IMAGE + 1024, 1);
+                         h.len[RCS_ORDERS] < 200 * REC_ORDER_IMAGE + (p->hold ? 2048 : 1024), 1);
         ok &= expect("  a reader decodes it back",
                      reader_check(rd, &w, p, flags, body, bn, o == RECC_SECTIONS ? st.sec.n : y.n,
                                   y.p, y.n, st.dctx), 1);
@@ -2530,7 +2546,7 @@ static void ev_block(RecBytes* b, uint32_t units[][NDW], uint32_t* gt, int varia
 static int outcomes_events(const RecCodecParams* p)
 {
     /* the events frame's columns that the refusals below mutate (tagpu_recframe_events.c, C_*) */
-    enum { COL_ST_RZ = 7, COL_NM_NAME = 10, COL_SP_MODE = 15, COL_DT_MASK = 20, COL_FT_HEAD = 22,
+    enum { COL_ST_RZ = 7, COL_NM_NAME = 10, COL_SP_SEL = 15, COL_DT_MASK = 20, COL_FT_HEAD = 22,
            COL_FT_SAME = 23 };
     static const int variant[10] = { EV_PLAIN, EV_PLAIN, EV_PAD, EV_PLAIN, EV_NO_DEATH, EV_PLAIN,
                                      EV_NESTED, EV_PLAIN, EV_ROOT, EV_PLAIN };
@@ -2547,7 +2563,7 @@ static int outcomes_events(const RecCodecParams* p)
     static const struct { unsigned col, at, val, or_in; const char* refusal; } mut[] = {
         { COL_ST_RZ, 0, 2, 0, "argument flag" },
         { COL_NM_NAME, 0, 5, 0, "past the names" },
-        { COL_SP_MODE, 0, 0, 0, "spray mode" },
+        { COL_SP_SEL, 0, 0, 0, "spray selector" },
         { COL_DT_MASK, REC_UNIT_BITS - 1, 0x80, 1, "mask names dword" },
         { COL_FT_HEAD, 0, FR_ROOTS, 0, "feature root" },
         { COL_FT_SAME, 0, 1, 0, "same-site" } };
@@ -2589,10 +2605,10 @@ static int outcomes_events(const RecCodecParams* p)
             sec_bounds(st.sec.p, RCS_EVENTS, &a, &e);
             if (block == 0) {
                 rb_put(&first, st.sec.p + a, e - a);
-                ok &= expect("  the sprays code raw, the same, a new point, raw; then 1, 0, 1, 2",
+                ok &= expect("  the sprays code raw, as it was, a residual, raw; then entries 1, 0, 2, raw",
                              frame_regions(st.sec.p, a, e, &tab, col) > COL_FT_SAME &&
-                             col[COL_SP_MODE + 1] - col[COL_SP_MODE] == 8 &&
-                             !memcmp(st.sec.p + col[COL_SP_MODE], "\2\0\1\2\1\0\1\2", 8), 1);
+                             col[COL_SP_SEL + 1] - col[COL_SP_SEL] == 8 &&
+                             !memcmp(st.sec.p + col[COL_SP_SEL], "\xFF\x00\x80\xFF\x04\x00\x08\xFF", 8), 1);
                 ok &= expect("  the names code a literal, a hit, a literal; then three hits",
                              col[COL_NM_NAME + 1] - col[COL_NM_NAME] == 6 &&
                              !memcmp(st.sec.p + col[COL_NM_NAME], "\0\1\0\1\1\2", 6), 1);
@@ -4170,6 +4186,7 @@ static int ru_params(RecCodecParams* p, const unsigned char* codec, const unsign
 {
     RecCodecEntries e;
     char why[160];
+    memset(&e, 0, sizeof e);
     e.p[RECC_E_CODEC] = codec;
     e.n[RECC_E_CODEC] = 4 + 4 * REC_LANES_N;
     e.p[RECC_E_PHYSICS] = phys;
@@ -5357,6 +5374,423 @@ static int outcomes_lossy(void)
     return ok;
 }
 
+/* ---- the explicit sprays, the matched order nodes and the survivor lanes ------------------------ */
+
+static size_t skip_varint(const unsigned char* p, size_t end, size_t at);
+static void pool_regions(const unsigned char* sec, size_t a, size_t e, unsigned c0, size_t r[6]);
+
+/* A mutated reset block `y`, decoded from its reset's world `pre`: 1 when it is refused with
+   `refusal` in the reason */
+static int refused_as(RecCodec* rd, const RecCodecParams* p, const World* pre, RecBytes* y,
+                      RecBytes* out, const char* refusal)
+{
+    RecFrameWorld pv = world_view(pre);
+    char why[256];
+    int got;
+    reccodec_restart(rd, p, pre->unit, pre->live, pre->pool, pre->pcount, pre->phw, &pv);
+    why[0] = 0;
+    got = reccodec_decode(rd, y->p, y->n, out, why, sizeof why);
+    if (got || !strstr(why, refusal)) printf("  decoder: %s\n", why);
+    return !got && strstr(why, refusal) != NULL;
+}
+
+/* the container `c` with section s's bytes [at, at + del) replaced by `ins`, its head's length
+   of section s and payload kept in step */
+static void sec_splice(RecBytes* y, const RecBytes* c, unsigned s, size_t at, size_t del,
+                       const unsigned char* ins, size_t n)
+{
+    uint32_t len = get32(c->p + 8 + 4 * s);
+    y->n = 0;
+    rb_put(y, c->p, at);
+    rb_put(y, ins, n);
+    rb_put(y, c->p + at + del, c->n - at - del);
+    put32(y->p + 8 + 4 * s, (uint32_t)(len - del + n));
+}
+
+/* a unit image for the sprays: the type, the layer, its position and heading */
+static void sp_unit(uint32_t* u, uint32_t x, uint32_t y, uint32_t z, unsigned heading)
+{
+    unsigned char* b = (unsigned char*)u;
+    memset(u, 0, IMG);
+    u[0] = 0x2001;
+    lane_add(u, REC_LR_TYPE, 21, 1);
+    lane_add(u, REC_LR_LAYER, 1, 1);
+    put32(b + 0x6A, x);
+    put32(b + 0x6E, y);
+    put32(b + 0x72, z);
+    b[0x66] = (unsigned char)heading;
+    b[0x67] = (unsigned char)(heading >> 8);
+}
+
+/* an RK_EV_SPRAY of unit ID `id` at point (x, y, z), body A (reverse 0) or B (reverse 1) */
+static void sp_spray(RecBytes* b, uint32_t id, int other, uint32_t x, uint32_t y, uint32_t z)
+{
+    unsigned char e[48];
+    memset(e, 0, sizeof e);
+    put32(e, id);
+    put32(e + 4, other ? 1 : 0);
+    put32(e + 8, x);
+    put32(e + 12, y);
+    put32(e + 16, z);
+    put32(e + 20, other ? 0x77 : 11);
+    put32(e + 44, 2);
+    rec_put(b, RK_EV_SPRAY, e, 48);
+}
+
+/* THE SPRAYS' SELECTORS (tagpu_recframe_events.c): one reset block of eleven iterations, unit ID 2
+   (slot 1) moving and turning; each its one spray. What each codes as is `sel` below, in order:
+   raw (no history), the point as it was, moved with the unit, turned with the heading change's
+   sine, turned with it negated, the point as it was plus a residual, body B raw, body A against
+   the second entry, a unit past the slots raw, a point 2^29 from its unit with a residual, and
+   that point again after a turn, which the rotation bound leaves to candidate 0. Then each
+   selector the decoder must refuse. */
+static int outcomes_spray_selectors(const RecCodecParams* p)
+{
+    enum { COL_SP_SEL = 15 };
+    static const unsigned char sel[11] = { 0xFF, 0x00, 0x01, 0x02, 0x03, 0x80, 0xFF, 0x04, 0xFF,
+                                           0x80, 0x00 };
+    static const struct { unsigned at, val; const char* what; const char* refusal; } mut[] = {
+        { 0, 0x00, "a selector with no spray kept", "spray selector" },
+        { 8, 0x00, "a selector for a unit past the slots", "spray selector" },
+        { 1, 0x10, "a selector with bits 4..6 set", "spray selector" },
+        { 2, 0x0D, "a selector of the fourth entry, two kept", "spray selector" },
+        { 10, 0x02, "a turn of a point 2^28 or more from its unit", "turns a point" } };
+    static uint32_t u[NDW];
+    RecStream st;
+    RecCodec* rd;
+    World w, pre;
+    RecBytes y, keep, out;
+    uint32_t gt = 500, x = 0x100000, yy = 0x50000, z = 0x200000, px, py, pz;
+    unsigned it, h = 0x1000, flags, i, ok = 1;
+    const unsigned char* body;
+    size_t bn, a, e, tab, col[RECF_COLS_MAX + 1];
+    int o;
+    char line[128];
+    memset(&w, 0, sizeof w);
+    memset(&pre, 0, sizeof pre);
+    memset(&y, 0, sizeof y);
+    memset(&keep, 0, sizeof keep);
+    memset(&out, 0, sizeof out);
+    if (!reccodec_stream_begin(&st, p) || !(rd = reccodec_new(p))) return 0;
+    world_reset(&w, p->nslots, p->nproj, p->gw, p->gh);
+    world_reset(&pre, p->nslots, p->nproj, p->gw, p->gh);
+    px = x + 0x30000;
+    py = yy + 0x8000;
+    pz = z + 0x10000;
+    for (it = 0; it < 11; it++, gt++) {
+        rec_put(&y, RK_TICK, &gt, 4);
+        if (it == 2) {                                   /* moved: the point with it */
+            x += 0x3000; yy += 0x100; z += 0x1000;
+            px += 0x3000; py += 0x100; pz += 0x1000;
+        } else if (it == 3) {                            /* turned a quarter: (dx, dz) to (-dz, dx) */
+            h += 0x4000;
+            px = x - 0x10000;
+            pz = z + 0x30000;
+        } else if (it == 4) {                            /* again, the point the other way */
+            h += 0x4000;
+            px = x + 0x30000;
+            pz = z + 0x10000;
+        } else if (it == 5) {
+            px += 1; py -= 2; pz += 3;
+        } else if (it == 9) {
+            px = x + 0x20000000u;
+        } else if (it == 10) {
+            h += 0x100;
+        }
+        sp_unit(u, x, yy, z, h);
+        rec_unit(&y, 1, u);
+        if (it == 6) sp_spray(&y, 2, 1, px + 5, py, pz);
+        else if (it == 8) sp_spray(&y, 9999, 0, px, py, pz);
+        else sp_spray(&y, 2, 0, px, py, pz);
+    }
+    o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+    ok &= expect("sprays: SECTIONS, every selector form", o, RECC_SECTIONS);
+    if (o != RECC_SECTIONS) return 0;
+    rb_put(&keep, st.sec.p, st.sec.n);
+    sec_bounds(keep.p, RCS_EVENTS, &a, &e);
+    ok &= expect("  raw, as it was, moved, turned +, turned -, a residual, raw, the second entry, "
+                 "raw, a residual, as it was",
+                 frame_regions(keep.p, a, e, &tab, col) > COL_SP_SEL &&
+                 col[COL_SP_SEL + 1] - col[COL_SP_SEL] == sizeof sel &&
+                 !memcmp(keep.p + col[COL_SP_SEL], sel, sizeof sel), 1);
+    ok &= expect("  a reader decodes it back", reader_check(rd, &w, p, flags, body, bn, st.sec.n, y.p, y.n,
+                                                            st.dctx), 1);
+    for (i = 0; i < sizeof mut / sizeof mut[0]; i++) {
+        y.n = 0;
+        rb_put(&y, keep.p, keep.n);
+        y.p[col[COL_SP_SEL] + mut[i].at] = (unsigned char)mut[i].val;
+        snprintf(line, sizeof line, "sprays: refused, %s", mut[i].what);
+        ok &= expect(line, refused_as(rd, p, &pre, &y, &out, mut[i].refusal), 1);
+    }
+    reccodec_stream_end(&st);
+    reccodec_free(rd);
+    rb_free(&y);
+    rb_free(&keep);
+    rb_free(&out);
+    world_free(&w);
+    world_free(&pre);
+    return ok;
+}
+
+/* an order node: its action byte +0x04 and issue time +0x46 name it, `v` its other dwords */
+static void mo_node(unsigned char* n, unsigned action, uint32_t issued, uint32_t v)
+{
+    unsigned d;
+    for (d = 0; d < REC_ORDER_IMAGE / 4; d++) put32(n + 4 * d, v * 2654435761u ^ d * 40503u);
+    n[4] = (unsigned char)action;
+    put32(n + 0x46, issued);
+    n[REC_ORDER_BYTES] = n[REC_ORDER_BYTES + 1] = 0;
+}
+
+/* slot 1's main list of the nodes named by `acts` (each node's issue time 100 + its action) */
+static void mo_list(RecBytes* b, const char* acts, uint32_t tick)
+{
+    unsigned char body[8 + 8 * REC_ORDER_IMAGE];
+    unsigned k = (unsigned)strlen(acts), j;
+    memset(body, 0, 8);
+    body[0] = 1;
+    body[4] = (unsigned char)k;
+    for (j = 0; j < k; j++) {
+        unsigned char* n = body + 8 + (size_t)j * REC_ORDER_IMAGE;
+        mo_node(n, (unsigned char)acts[j], 100u + (unsigned char)acts[j], (unsigned char)acts[j]);
+        if (!j) put32(n + 0x0A, tick);
+    }
+    rec_put(b, RK_ORDERS, body, 8 + k * REC_ORDER_IMAGE);
+}
+
+/* THE MATCHED NODES (tagpu_recframe_orders.c, scheme 2): the orders frame's outcomes again in a
+   segment with RT_HOLD, then one reset block of slot 1's main list -- A B C; B C, its head done
+   (B and C matched to the kept list's second and third); X B C, a node in front; the unit's death;
+   a new unit's B C, raw, the kept list dropped at the death -- and each index the decoder must
+   refuse; a segment without RT_HOLD writes scheme 1, and each decoder refuses the other's. */
+static int outcomes_orders_matched(const RecCodecParams* p0)
+{
+    enum { COL_IDX = 26 };
+    static const unsigned char idx[10] = { 0, 0, 0, 2, 3, 0, 1, 2, 0, 0 };
+    static const struct { unsigned at, val; const char* what; const char* refusal; } mut[] = {
+        { 8, 1, "a node matched after its unit's death dropped the kept list",
+          "matched to kept node" },
+        { 4, 2, "a kept node matched twice", "or twice" },
+        { 3, 9, "a node matched past the kept list", "matched to kept node" } };
+    static const char* lists[5] = { "ABC", "BC", "XBC", NULL, "BC" };
+    static uint32_t u[NDW];
+    RecCodecParams* p = (RecCodecParams*)malloc(sizeof *p);
+    RecStream st, st1;
+    RecCodec *rd, *rd1;
+    World w, pre;
+    RecBytes y, keep, out;
+    uint32_t gt = 700;
+    unsigned it, flags, i, ok = 1;
+    const unsigned char* body;
+    size_t bn, a, e, tab, col[RECF_COLS_MAX + 1];
+    int o;
+    char line[160], why[256];
+    if (!p) return 0;
+    *p = *p0;
+    p->hold = 1;
+    ok &= outcomes_orders(p);
+    memset(&w, 0, sizeof w);
+    memset(&pre, 0, sizeof pre);
+    memset(&y, 0, sizeof y);
+    memset(&keep, 0, sizeof keep);
+    memset(&out, 0, sizeof out);
+    if (!reccodec_stream_begin(&st, p) || !(rd = reccodec_new(p))) return 0;
+    if (!reccodec_stream_begin(&st1, p0) || !(rd1 = reccodec_new(p0))) return 0;
+    world_reset(&w, p->nslots, p->nproj, p->gw, p->gh);
+    world_reset(&pre, p->nslots, p->nproj, p->gw, p->gh);
+    memset(u, 0, IMG);
+    u[0] = 0x2001;
+    lane_add(u, REC_LR_TYPE, 21, 1);
+    for (it = 0; it < 5; it++, gt++) {
+        unsigned char gone[4] = { 1, 0, 0, 0 };
+        rec_put(&y, RK_TICK, &gt, 4);
+        if (it == 3) {
+            rec_put(&y, RK_UNIT_GONE, gone, 4);
+            continue;
+        }
+        if (it == 0 || it == 4) rec_unit(&y, 1, u);
+        mo_list(&y, lists[it], gt);
+    }
+    o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+    ok &= expect("orders matched: SECTIONS, a list re-sent short, longer, and after a death", o,
+                 RECC_SECTIONS);
+    if (o != RECC_SECTIONS) return 0;
+    rb_put(&keep, st.sec.p, st.sec.n);
+    sec_bounds(keep.p, RCS_ORDERS, &a, &e);
+    ok &= expect("  scheme 2 in a segment with RT_HOLD", keep.p[a], 2);
+    ok &= expect("  raw A B C; B C matched 2, 3; raw X, B C matched 1, 2; after the death raw B C",
+                 frame_regions(keep.p, a, e, &tab, col) > COL_IDX &&
+                 col[COL_IDX + 1] - col[COL_IDX] == sizeof idx &&
+                 !memcmp(keep.p + col[COL_IDX], idx, sizeof idx), 1);
+    ok &= expect("  a reader decodes it back", reader_check(rd, &w, p, flags, body, bn, st.sec.n, y.p, y.n,
+                                                            st.dctx), 1);
+    {
+        RecBytes m;
+        memset(&m, 0, sizeof m);
+        for (i = 0; i < sizeof mut / sizeof mut[0]; i++) {
+            m.n = 0;
+            rb_put(&m, keep.p, keep.n);
+            m.p[col[COL_IDX] + mut[i].at] = (unsigned char)mut[i].val;
+            snprintf(line, sizeof line, "orders matched: refused, %s", mut[i].what);
+            ok &= expect(line, refused_as(rd, p, &pre, &m, &out, mut[i].refusal), 1);
+        }
+        rb_free(&m);
+    }
+    {
+        RecFrameWorld pv = world_view(&pre);
+        reccodec_restart(rd1, p0, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw, &pv);
+        ok &= expect("orders: a decoder of a segment without RT_HOLD refuses scheme 2",
+                     !reccodec_decode(rd1, keep.p, keep.n, &out, why, sizeof why) &&
+                         strstr(why, "scheme 2") != NULL, 1);
+        o = reccodec_stream_block(&st1, y.p, y.n, &flags, &body, &bn);
+        sec_bounds(st1.sec.p, RCS_ORDERS, &a, &e);
+        ok &= expect("orders: a segment without RT_HOLD writes scheme 1",
+                     o == RECC_SECTIONS && st1.sec.p[a] == 1, 1);
+        reccodec_restart(rd, p, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw, &pv);
+        ok &= expect("orders: a decoder of a segment with RT_HOLD refuses scheme 1",
+                     !reccodec_decode(rd, st1.sec.p, st1.sec.n, &out, why, sizeof why) &&
+                         strstr(why, "scheme 1") != NULL, 1);
+        reccodec_restart(rd, p0, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw, &pv);
+        ok &= expect("orders: a restart with another RT_HOLD than the codec's leaves it invalid",
+                     reccodec_valid(rd), 0);
+    }
+    reccodec_stream_end(&st);
+    reccodec_stream_end(&st1);
+    reccodec_free(rd);
+    reccodec_free(rd1);
+    rb_free(&y);
+    rb_free(&keep);
+    rb_free(&out);
+    world_free(&w);
+    world_free(&pre);
+    free(p);
+    return ok;
+}
+
+/* a projectile of weapon 5: its stamp lane +0x67, lane +0x3E and its byte 0x6B */
+static void ln_proj(uint32_t* r, unsigned stamp, uint32_t moving, unsigned pad)
+{
+    unsigned d;
+    for (d = 0; d < PDW; d++) r[d] = 0x01010101u * (d + 1);
+    r[0] = 5;
+    for (d = 7; d <= 9; d++) r[d] = 0;
+    plane_set(r, 0x34, 2, 0);                   /* heading, pitch and speed: none, so no guided */
+    plane_set(r, 0x36, 2, 0);
+    plane_set(r, 0x38, 2, 0);
+    plane_set(r, 0x3A, 4, 0);
+    plane_set(r, 0x3E, 4, moving);
+    plane_set(r, 0x67, 2, stamp);
+    plane_set(r, 0x6B, 1, pad);
+}
+
+static void ln_put(RecBytes* b, unsigned slot, const uint32_t* r)
+{
+    unsigned char body[4 + PIMG];
+    unsigned d;
+    memset(body, 0, 4);
+    body[0] = (unsigned char)slot;
+    body[1] = (unsigned char)(slot >> 8);
+    for (d = 0; d < PDW; d++) put32(body + 4 + 4 * d, r[d]);
+    rec_put(b, RK_PROJ, body, sizeof body);
+}
+
+static void ln_head(RecBytes* b, uint32_t count, uint32_t hw)
+{
+    uint32_t h[2] = { count, hw };
+    rec_put(b, RK_PROJ_HEAD, h, 8);
+}
+
+/* THE SURVIVOR LANES (tagpu_reccodec.c): four projectiles born, then a block in which they move
+   lane +0x3E by a step and two die, so each candidate wins a lane: the line through the last two
+   (+0x3E), the stamp the compaction writes (R2's +0x67 after it slides twice) and the last value
+   (R3's +0x67, a value no compaction wrote); a lane residual past its width refused; a survivor
+   whose byte 0x6B changed declines its block, and the next restarts. */
+static int outcomes_lanes(const RecCodecParams* p)
+{
+    static uint32_t r[PDW];
+    RecStream st;
+    RecCodec* rd;
+    World w, pre;
+    RecBytes y, keep, out, m;
+    uint32_t gt = 900, mv = 0x10000;
+    unsigned it, flags, ok = 1, s;
+    const unsigned char* body;
+    size_t bn, a, e, reg[6], end;
+    int o;
+    static const unsigned char big[3] = { 0x80, 0x80, 0x04 };   /* the varint 0x10000 */
+    memset(&w, 0, sizeof w);
+    memset(&pre, 0, sizeof pre);
+    memset(&y, 0, sizeof y);
+    memset(&keep, 0, sizeof keep);
+    memset(&out, 0, sizeof out);
+    memset(&m, 0, sizeof m);
+    if (!reccodec_stream_begin(&st, p) || !(rd = reccodec_new(p))) return 0;
+    world_reset(&w, p->nslots, p->nproj, p->gw, p->gh);
+    world_reset(&pre, p->nslots, p->nproj, p->gw, p->gh);
+    /* it 0: R0..R3 born, R3's stamp 0x1234; it 1, 2: each moves; it 3: R0 dies, the rest slide
+       one down; it 4: R1 dies, R2 and R3 slide again */
+    for (it = 0; it < 5; it++, gt++, mv += 0x10001) {
+        rec_put(&y, RK_TICK, &gt, 4);
+        if (it == 0) ln_head(&y, 4, 4);
+        if (it == 3) ln_head(&y, 3, 4);
+        if (it == 4) ln_head(&y, 2, 4);
+        for (s = 0; s < 4; s++) {
+            unsigned id = s + (it >= 3) + (it >= 4);     /* the record now in slot s */
+            if (id > 3) break;
+            ln_proj(r, id == 3 ? 0x1234 : it >= 4 && id == 2 ? 1 : id, mv * (id + 1), 0);
+            ln_put(&y, s, r);
+        }
+    }
+    o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+    ok &= expect("lanes: SECTIONS, survivors that move, die and slide", o, RECC_SECTIONS);
+    if (o != RECC_SECTIONS) return 0;
+    ok &= expect("  the line wins a moving lane, the stamp a rewritten stamp, the last value a kept one",
+                 st.enc->pwin[0 * PSURV + 4] == 2 && st.enc->pwin[0 * PSURV + PL_STAMP] == 0 &&
+                 st.enc->pwin[1 * PSURV + PL_STAMP] == 1, 1);
+    rb_put(&keep, st.sec.p, st.sec.n);
+    ok &= expect("  a reader decodes it back", reader_check(rd, &w, p, flags, body, bn, st.sec.n, y.p, y.n,
+                                                            st.dctx), 1);
+    /* the first survivor's lane +0x34 residual made 0x10000, past its two bytes */
+    sec_bounds(keep.p, RCS_PROJ, &a, &e);
+    pool_regions(keep.p, a, e, 0, reg);
+    end = skip_varint(keep.p, e, reg[2]);
+    sec_splice(&m, &keep, RCS_PROJ, reg[2], end ? end - reg[2] : 0, big, sizeof big);
+    ok &= expect("lanes: refused, a survivor's lane residual past its width",
+                 end && refused_as(rd, p, &pre, &m, &out, "past its"), 1);
+    /* a survivor's byte 0x6B changed: declined; the next block restarts */
+    y.n = 0;
+    for (it = 0; it < 2; it++, gt++, mv += 0x10001) {
+        rec_put(&y, RK_TICK, &gt, 4);
+        ln_proj(r, 0, mv * 3, it);
+        ln_put(&y, 0, r);
+        ln_proj(r, 0x1234, mv * 4, 0);
+        ln_put(&y, 1, r);
+    }
+    o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+    ok &= expect("lanes: DECLINED, a survivor's byte 0x6B changed", o, RECC_DECLINED);
+    ok &= expect("  a reader takes its records", reader_check(rd, &w, p, flags, body, bn, y.n, y.p, y.n,
+                                                              st.dctx), 1);
+    y.n = 0;
+    rec_put(&y, RK_TICK, &gt, 4);
+    gt++;
+    ln_proj(r, 0, mv * 3, 1);
+    ln_put(&y, 0, r);
+    o = reccodec_stream_block(&st, y.p, y.n, &flags, &body, &bn);
+    ok &= expect("lanes: SECTIONS, restarting after it",
+                 o == RECC_SECTIONS && (flags & RBF_FRAME_RESET) != 0, 1);
+    ok &= expect("  a reader decodes it back", reader_check(rd, &w, p, flags, body, bn, st.sec.n, y.p, y.n,
+                                                            st.dctx), 1);
+    reccodec_stream_end(&st);
+    reccodec_free(rd);
+    rb_free(&y);
+    rb_free(&keep);
+    rb_free(&out);
+    rb_free(&m);
+    world_free(&w);
+    world_free(&pre);
+    return ok;
+}
+
 static int cmd_outcomes(void)
 {
     static uint32_t units[6][NDW];
@@ -5493,7 +5927,10 @@ static int cmd_outcomes(void)
                  seen[0] && seen[1] && seen[2] && seen[3] && seen[4], 1);
     ok &= outcomes_cells(&p);
     ok &= outcomes_orders(&p);
+    ok &= outcomes_orders_matched(&p);
     ok &= outcomes_events(&p);
+    ok &= outcomes_spray_selectors(&p);
+    ok &= outcomes_lanes(&p);
     ok &= outcomes_kinds(&p);
     ok &= outcomes_state(&p);
     ok &= outcomes_lossy();
@@ -5576,7 +6013,7 @@ static void codec_copy(RecCodec* d, const RecCodec* s)
     memcpy(d->pool, s->pool, n * PIMG);
     memcpy(d->pool_n, s->pool_n, n * PIMG);
     memcpy(d->pool_l2, s->pool_l2, n * PIMG);
-    memcpy(d->pwin, s->pwin, n * PDW);
+    memcpy(d->pwin, s->pwin, n * PSURV);
     memcpy(d->page, s->page, n);
     memcpy(d->lastnew, s->lastnew, (size_t)(RECC_WEAPON_IDS + 1) * PIMG);
     memcpy(d->shots, s->shots, (size_t)RECC_SHOTS_MAX * SHOT);
@@ -5658,7 +6095,7 @@ static void pool_regions(const unsigned char* sec, size_t a, size_t e, unsigned 
     for (n = 0; n < nb + nt; n++)
         if (!(at = skip_varint(sec, e, at))) return;
     r[2] = at;
-    for (n = 0; n < PDW * ns; n++)
+    for (n = 0; n < PSURV * ns; n++)
         if (!(at = skip_varint(sec, e, at))) return;
     r[3] = at;
     for (n = 0; n < PDW * nb; n++)
@@ -5978,6 +6415,7 @@ static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecPa
             e.p[i] = c->has[i] ? c->ent[i] : NULL;
             e.n[i] = c->nent[i];
         }
+        e.hold = p->hold;
         if (!reccodec_params(&q, p->nslots, p->nproj, p->gw, p->gh, p->nwrecks, ndefs, &e, why, sizeof why) ||
             !q.usable)
             return 0;

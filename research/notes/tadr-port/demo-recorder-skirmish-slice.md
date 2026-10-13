@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 22 and its readers take format 22 alone (*The file*, below).
+The recorder writes recording format 23 and its readers take format 23 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -279,10 +279,13 @@ hit points, the percentages, the speed and the sight row, which costs size only.
 The engine's compaction keeps the survivors in order at the front of the pool and appends at the
 count, so each iteration is written as its new count and extent, the old records that died (as
 gaps), the births (the count's growth) and the stale slots past the count that changed. A survivor
-is predicted dword by dword from its own last image and the one before it: position by velocity
-with the last step's drift, a guided weapon's velocity from its heading, pitch and speed (when its
-last image already follows that rule), the `+0x67` stamp as its old slot, otherwise the previous
-value or the linear extrapolation, whichever was closest last. A birth or a changed stale slot is
+is predicted from its own last image and the one before it: its bytes `0x34..0x6A` as 21 lanes at
+the record's field widths, each the previous value, the linear extrapolation or (the `+0x67`
+stamp) its old slot, whichever was closest last; then dwords 0..12, position by velocity with the
+last step's drift, a guided weapon's velocity from its heading, pitch and speed (when its last
+image already follows that rule), otherwise the previous value or the linear extrapolation.
+Byte `0x6B`, past the record, is its last image's; a block whose survivor changed it is written as
+records. A birth or a changed stale slot is
 a reference — the zero row, or a row of the new pool so far, of the old pool, of the old pool
 advanced a step, or one made from the last iteration's `RK_EV_SHOT` events and the last birth of
 that weapon — and residuals against it; a birth also takes the stamp of the slot it was appended
@@ -297,7 +300,8 @@ table — are the format's. The engine facts are the engine map's
 `_orders.c`, `_events.c` and `_state.c`, whose opening comments hold THE BYTES, THE STATE and THE
 BOUNDS) make the bodies of their kinds, in payload order, from a section of columns: a `u8` scheme,
 a varint column count (1..32), each column's varint length, then the columns, which fill the
-section. A reader takes only its own scheme (2 in the cells frame, 1 in the others) and column count, and reads every
+section. A reader takes only its own scheme (2 in the cells and events frames, 1 in the state frame, and in
+the orders frame 2 in a segment whose header has `RT_HOLD`, else 1) and column count, and reads every
 column to its end, so a file of another build's coding is refused, never misread. The encoder walks
 each iteration's records in order after the unit and pool frames (`frames_walk`), giving each frame
 record to its frame and applying `RK_UNIT` and `RK_UNIT_GONE` to the unit copy as they come, so a
@@ -310,14 +314,20 @@ frame codes against:
   one flag byte (the recorder's `cells_tick` leaves its shadow as it was, so they usually do); other
   records are runs as position gaps, and each cell as the six fields that differ from the copy. The
   tick input is kept up to `CELLS_HELD`, 16,384 cells; past it the next iteration has none to repeat.
-- **orders**, 26 columns: the last whole image of each (slot, list), in an arena of at most 65,536
-  nodes. A list re-sent at the length it had is a 22-bit mask a node of the dwords that changed, and
-  those dwords; any other list is its nodes raw. A list that does not fit the arena is not kept,
-  decided from the records alone.
+- **orders**, 26 columns (27 with `RT_HOLD`): the last whole image of each (slot, list), in an
+  arena of at most 65,536 nodes. Without `RT_HOLD` a list re-sent at the length it had is a 22-bit
+  mask a node of the dwords that changed, and those dwords; any other list is its nodes raw. With
+  it, each node of a list re-sent whole is matched to the kept node of the same action byte
+  `+0x04` and issue time `+0x46` -- an index, then the mask and dwords against that node -- or
+  raw, since the lossy filter's held handler state lets a list lose its done head or gain a node
+  in front; a unit's `RK_UNIT_GONE` drops its slot's kept lists there. A list that does not fit
+  the arena is not kept, decided from the records alone.
 - **events**, 31 columns, one a field: IDs against the last ID; a shot's start and target point
   against its units' positions in the unit copy; a start's arguments against the slot's last
   arguments for that script; script names and reply texts by a dictionary of the first 256 since the
-  reset; a spray as the slot's last again, its reverse and tail with point deltas, or raw; a death's
+  reset; an explicit spray against one of the slot's last four with the same bytes but the point,
+  the point as it was, moved with the unit or turned about it by its heading change, plus a
+  residual, or raw; a death's
   image as a mask of the dwords that differ from the unit copy and those dwords.
 - **state**, 19 columns: each changed global as a delta of deltas, or as a count of Park–Miller
   steps from its last value when the step reaches it within the search (1..16,384 steps, at most two
@@ -445,18 +455,21 @@ step count past 16,384, a wreck index past the pool, a flag that is not 0 or 1, 
 no frame state. Every operand of a rule is clamped before it is multiplied, so no value
 in a file can overflow the arithmetic.
 
-**Memory.** A codec state is 804 bytes a slot (the copy and L2, `0x148` bytes each, L3's 16, the
-winners' 128 and four flags, as `reccodec_new` allocates them) and 613 bytes a projectile record
-(the pool and the image it is making, both one iteration before, the winners, the ages, the
-advanced image and the survivors' maps), plus a 128 KB air index, 1,425,528 bytes of the pool
-frame's tables (the last birth of each of 4,096 weapon IDs, 4,096 shot events and their rows,
-and the encoder's search over at least 4,096 rows) and the scratch of the largest block it has
-met: before their scratch, 14,832,808 bytes, about 14.8 MB, at 5,001 slots and 3,000 records;
-30,912,808, about 30.9 MB, at 15,001. The record frames add, by their files' counts, 13 bytes a
-grid cell (the copy: 5.4 MB on a 642 × 648 grid) and 0.6 MB of tick input (cells); 12 bytes a (slot, list) and an arena that doubles up to 65,536 nodes, 5.8 MB (orders);
-128 bytes a slot and 40 KB of dictionaries (events, 0.68 MB at 5,001 slots); and about 15 KB and
-49 bytes a wreck record (state, 0.4 MB at 8,192): up to about 13 MB a codec on that grid, and
-about 62.5 MB at `RECC_GRID_MAX`, 54.5 MB of it the grid's copy. The writer holds two codecs, a
+**Memory**, MEASURED 2026-10-13 by counting what `reccodec_new` and the frames' makers allocate
+in the 32-bit build, at 5,001 slots, 3,000 projectile records, a 642 × 648 grid and 8,192 wrecks.
+A codec state is 829 bytes a slot (the copy and L2, `0x148` bytes each, L3's 16, the winners'
+128, the last step's 8, five flags and the last mask's 16) and 627 bytes a projectile record (the
+pool and the image it is making, both one iteration before, the winners, the ages, the advanced
+image and the survivors' maps), plus 1,929,611 bytes whatever the counts: the pool frame's tables
+(the last birth of each of 4,096 weapon IDs, 4,096 shot events and their rows, and the encoder's
+search over at least 4,096 rows), the air and type indexes (128 KB each), the listing's masks, a
+body buffer and the codec itself. Before the frames and the scratch of the largest block it has
+met, that is 7,956,440 bytes, about 8.0 MB, at 5,001 slots; 16,246,440, about 16.2 MB, at
+15,001. The record frames add 6,031,152 bytes (cells: 13 bytes a grid cell, the copy 5.4 MB on
+that grid, and 0.6 MB of tick input), 124,920 (orders: 24 bytes a slot, and an arena that doubles
+up to 65,536 nodes, 5.8 MB), 1,662,876 (events: 324 bytes a slot and 40 KB of dictionaries) and
+416,452 (state: about 15 KB and 49 bytes a wreck record): up to about 14 MB a codec on that grid
+with the arena full, and about 63 MB at `RECC_GRID_MAX`, 54.5 MB of it the grid's copy. The writer holds two codecs, a
 reader one, made at its first sectioned block. A reset copies the grid whole into the cells frame,
 once a reset in a sequential reader and in the check decoder and once a seek.
 
@@ -877,7 +890,7 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
   - **Units are placed with the engine's set-position `0x48A9F0`** at the recorded position and
     the altitude the movement pass had before its fix-up. Then the walk-class part `0x43DA70`
     runs, which starts the walk scripts, the water state `+0x10A` goes in from the image (its
-    script, `setSFXoccupy`, is a recorded start since format 22, so `0x43DB50` never runs on a
+    script, `setSFXoccupy`, is a recorded start since format 23, so `0x43DB50` never runs on a
     puppet), and the fix-up's values go in. `+0x110` bits 2–3 are written only by the walk class,
     and compared. The placement part `0x43D6D0` and the altitude fix-up `0x48A870` never run on a
     puppet.
@@ -1339,9 +1352,9 @@ The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
   scenario applier does at `0x4969D2` and the engine's SHARE give and console fallback do between
   steps (the engine map's *Who makes a unit*). The replay makes every unit of step k in the unit
   tick's stub, before the players phase of step k, whose every-step sight emit then meets that unit
-  one step early (and before format 22, the next images' `0x43DB50`). So at every capture point
+  one step early (and before format 23, the next images' `0x43DB50`). So at every capture point
   and frame visit the replay writes both from the recording where they differ: the water state
-  bounded by its enum, which the images' own write leaves equal since format 22,
+  bounded by its enum, which the images' own write leaves equal since format 23,
   the stamp through the engine's removal `0x482090` and stamp `0x482270` (a circle's radius index
   bounded by the frame table's count), so that the sight counters keep describing the stamps the
   fields name. The globals line counts the water states and stamps written and refused, and the
@@ -1672,7 +1685,7 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
 - **A unit the recording machine made after its players phase is drawn one frame early** on a puppet
   host, which makes it in the step's unit tick, before that step's draw; `books_put` makes its
   bookkeeping the recording's at the next capture point, and the picture of one frame stays: that is
-  presentation on a puppet host. Its `setSFXoccupy` is the recorded start alone (format 22), since a
+  presentation on a puppet host. Its `setSFXoccupy` is the recorded start alone (format 23), since a
   puppet never runs the water state `0x43DB50`. Whether a stock skirmish's SHARE
   dialog lists an AI ally, the one stock way to make such a unit without a cheat, is not established
   (the code accepts any active type-1–3 record without the watcher bit; not run); `books_put`
@@ -2679,10 +2692,10 @@ first slice a tick late, and a looping script stayed re-phased for the unit's li
   `codec-decline` and `tenseat` under `--cob-exact`, every lane passing: the recordings held
   1,675, 15,665, 140 and 3,864 queries, every playing made all it reached (none refused), and
   both keys' counts are equal live and puppet in every window (`slice-walkers` over [1171, 3121):
-  `QueryBuildInfo` 44 against 44, `QueryNanoPiece` 8,554 against 8,554). Since format 22 the recording
+  `QueryBuildInfo` 44 against 44, `QueryNanoPiece` 8,554 against 8,554). Since format 23 the recording
   carries `QueryTransport` and `QueryLandingPad` the same way, and `BeginTransport` and
   `setSFXoccupy` as owner-only starts (*The transports, the pads and the waterline*, below).
-- **The transports, the pads and the waterline** (format 22). An air transport's pickup asks its
+- **The transports, the pads and the waterline** (format 23). An air transport's pickup asks its
   script `QueryTransport` (`0x4113B1`) and starts `BeginTransport` (`0x4113EF`); a landing on an air
   base asks the pad `QueryLandingPad` (`0x411A35`, `0x411AA6`, `0x411BF5`, `0x411CF1`); a unit whose
   water state `+0x10A` changes starts `setSFXoccupy` (`0x43DBE8`). All four are order handlers' or

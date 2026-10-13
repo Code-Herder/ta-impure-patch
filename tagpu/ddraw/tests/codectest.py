@@ -199,7 +199,7 @@ def cmd_fuzzdiff(src, cases_path):
                 else:
                     es = [(t, e) for t, e in zip(reccodec.CODEC_TAGS, ents) if e is not None]
                     q = frame.prm
-                    prm = reccodec.params(es, q.nslots, q.nproj, q.gw, q.gh, q.nwrecks, q.ndefs)
+                    prm = reccodec.params(es, q.nslots, q.nproj, q.gw, q.gh, q.nwrecks, q.ndefs, q.hold)
                     if not prm.usable:
                         raise reccodec.Unreadable("not usable")
                     f.restart(prm)

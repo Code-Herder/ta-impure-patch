@@ -275,6 +275,10 @@ typedef struct RecFrameOps {
        saw, onto the frame's part of the world; `events` as RecFrameAt's. NULL for a frame that
        keeps none. */
     void  (*plain)(void* f, unsigned kind, const unsigned char* b, unsigned len, int events);
+    /* an RK_UNIT_GONE of `slot` (1 <= slot < nslots) at its place in the records: the encoder's
+       walk and the decoder's pass B call it in the same order, the encoder only for an iteration
+       it codes. NULL for a frame that keeps nothing by unit. */
+    void  (*gone)(void* f, unsigned slot);
 #ifdef RECF_TEST_COPY
     /* dst takes src's state, both made with the same params: 0, no memory. Only the codec's
        self-test copies a decoder (tests/codectest.c's fuzz), so only its builds define
@@ -306,6 +310,11 @@ typedef struct RecFrameOps {
 } RecFrameOps;
 
 extern const RecFrameOps recframe_cells, recframe_orders, recframe_events, recframe_state;
+
+/* The codec's sine and cosine of a heading (h & 0xFFFF of a full turn) in Q31, each of magnitude
+   at most 2^31: integers alone, the same bits in every build (tagpu_reccodec.c, NO FLOATING
+   POINT), for the events frame's turned spray points. */
+void reccodec_sin_cos_q31(uint32_t h, int64_t* sn, int64_t* cs);
 
 /* The state frame's RK_FEATURES prediction (tagpu_recframe_state.c), for the kinds section's
    marker 0xFFFF: the body the next RK_FEATURES is predicted to have, and the fields taking a

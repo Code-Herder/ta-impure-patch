@@ -95,18 +95,20 @@
    shifts and named divisions.
 
    MEMORY: per slot the copy (0x148 bytes), L2 (0x148), L3 (16), the winners (one byte per lane,
-   128), the last step (8), five flags and the last mask (16), 829 bytes; per projectile record the pool and its next image, their
-   images one iteration before, the winners (27 bytes each), the ages, the advanced image and the
-   survivors' maps, 613 bytes; per codec the air index (128 KB), the last birth of each weapon
-   (442 KB), the shot events and their rows (590 KB), the search's three indexes over
-   max(nproj, 4,096) rows (12 bytes a row each, and a table of 8-byte slots at least twice the
-   rows: 393 KB up to 4,096 records), and the scratch of the largest block met so far
-   (reccodec_new). At 3,000 records the pool frame is about 3.3 MB a codec. The kinds keep the
-   run's RECC_KINDS_MRU patterns, each at most RECC_KINDS_MAX bytes (1 MB at the bound; MEASURED
-   2026-10-12 on the heavy four-player hour: a new pattern 17 bytes on average, 1,862 at most),
-   and a block's runs, 12 bytes each. The listing keeps the run's RECC_J2_MTF masks with their
-   links and hash chains, 22 bytes each and 16 KB of chains: 106 KB. Each record frame's memory
-   is its file's to state. */
+   128), the last step (8), five flags and the last mask (16), 829 bytes; per projectile record the
+   pool and its next image, their images one iteration before, the winners (34 bytes each), the
+   ages, the advanced image and the survivors' maps, 627 bytes; per codec the air and type indexes
+   (128 KB each), the last birth of each weapon (442 KB), the shot events and their rows (590 KB),
+   the search's three indexes over max(nproj, 4,096) rows (12 bytes a row each, and a table of
+   8-byte slots at least twice the rows: 393 KB up to 4,096 records), and the scratch of the
+   largest block met so far (reccodec_new). At 3,000 records the pool frame is about 3.3 MB a
+   codec. The kinds keep the run's RECC_KINDS_MRU patterns, each at most RECC_KINDS_MAX bytes (1 MB
+   at the bound; MEASURED 2026-10-12 on the heavy four-player hour: a new pattern 17 bytes on
+   average, 1,862 at most), and a block's runs, 12 bytes each. The listing keeps the run's
+   RECC_J2_MTF masks with their links and hash chains, 22 bytes each and 16 KB of chains: 106 KB.
+   Each record frame's memory is its file's to state. MEASURED 2026-10-13 in the 32-bit build by
+   counting its allocations: 7,956,440 bytes at 5,001 slots and 3,000 records before the record
+   frames and the scratch. */
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -330,6 +332,8 @@ static void sin_cos_q31(uint32_t h, int64_t* sn, int64_t* cs)
     }
 }
 
+void reccodec_sin_cos_q31(uint32_t h, int64_t* sn, int64_t* cs) { sin_cos_q31(h, sn, cs); }
+
 /* atan(u / 2^31) in Q31 for 0 <= u <= 2^31; (u - 2^31) * 2^31 >= -2^62 is a multiplication,
    never a shift of a negative. */
 static int64_t atan_q31(int64_t u)
@@ -393,6 +397,8 @@ static void rot(int64_t x1, int64_t z1, int64_t x2, int64_t z2, int64_t* px, int
 
 #define PDW   REC_PROJ_DWORDS         /* a projectile image's dwords, 27                          */
 #define PIMG  REC_PROJ_IMAGE
+#define PLANE_N 21                    /* a survivor's lanes (THE SURVIVOR LANES)                  */
+#define PSURV  (PLANE_N + 13)         /* a survivor's residuals: the lanes, then 13 dwords        */
 /* the longest body pool_body writes: a delta of all 27 dwords (116), past a whole record's 112 */
 #define POOL_BODY_MAX (REC_PROJ_DELTA_HEAD + PIMG)
 #define SHOT  36                      /* an RK_EV_SHOT's body                                     */
@@ -417,6 +423,7 @@ static const RecFrameOps* const FRAMES[RECC_FRAMES] = { &recframe_cells, &recfra
 struct RecCodec {
     unsigned nslots;
     unsigned gw, gh, nwrecks;             /* the sizes the record frames were made for          */
+    int hold;                             /* ... and the orders frame's scheme (params' `hold`)  */
     int valid;
     RecCodecParams p;                     /* the restart's, copied: the codec owns what it reads */
     int lane_of[REC_LR_N];                /* the lane of each role but PLAIN and COUNT           */
@@ -445,13 +452,14 @@ struct RecCodec {
     unsigned njm, jnsym;
     int jbad;                             /* an encoder's woken slot was not listed             */
     RecBytes jsym, jrw, jnew, jr, jw;
-    int over;                             /* an encoder's frame passed RECC_FRAME_CAP           */
+    int over;                             /* an encoder's frame passed RECC_FRAME_CAP, or met a
+                                             survivor whose byte 0x6B changed (pool_encode)      */
     /* the pool frame (THE POOL FRAME, pool_restart): nproj records of PDW dwords each */
     unsigned nproj, pcount, phw;          /* the pool's count and extent: pcount <= phw <= nproj */
     unsigned ncount, nhw, nchg, nshots, evnext;
     uint32_t *pool, *pool_n;              /* P, and Pn: the image the iteration makes          */
     uint32_t *pool_l2, *pool_l2n;         /* each live record's image one iteration before     */
-    unsigned char *pwin, *pwin_n;         /* each live record's winner per dword, 0..2          */
+    unsigned char *pwin, *pwin_n;         /* each live record's winner per lane and dword, 0..2 */
     unsigned char *page, *page_n;         /* 0 past the count, 1 no history yet, 2               */
     uint32_t* lastnew;                    /* per weapon ID, the last birth with that +0x00      */
     unsigned char* shots;                 /* the last iteration's RK_EV_SHOT bodies             */
@@ -504,6 +512,7 @@ RecCodec* reccodec_new(const RecCodecParams* p)
     c->gw = p->gw;
     c->gh = p->gh;
     c->nwrecks = p->nwrecks;
+    c->hold = p->hold;
     for (i = 0; i < RCS_COUNT; i++) c->fix[i] = -1;
     for (i = 0; i < RECC_FRAMES; i++) {
         c->frame[i] = FRAMES[i]->make(p);
@@ -519,8 +528,8 @@ RecCodec* reccodec_new(const RecCodecParams* p)
     c->pool_n = (uint32_t*)calloc(nproj, PIMG);
     c->pool_l2 = (uint32_t*)calloc(nproj, PIMG);
     c->pool_l2n = (uint32_t*)calloc(nproj, PIMG);
-    c->pwin = (unsigned char*)calloc(nproj, PDW);
-    c->pwin_n = (unsigned char*)calloc(nproj, PDW);
+    c->pwin = (unsigned char*)calloc(nproj, PSURV);
+    c->pwin_n = (unsigned char*)calloc(nproj, PSURV);
     c->page = (unsigned char*)calloc(nproj, 1);
     c->page_n = (unsigned char*)calloc(nproj, 1);
     c->lastnew = (uint32_t*)calloc(RECC_WEAPON_IDS + 1, PIMG);
@@ -772,7 +781,7 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
     for (i = 0; i < RCS_COUNT; i++) rb_clear(&c->sec[i]);
     for (i = 0; i < RECC_FRAMES; i++) FRAMES[i]->restart(c->frame[i], wok ? world : NULL);
     if (!wok || !p->usable || p->nslots != c->nslots || p->nproj != c->nproj || p->gw != c->gw ||
-        p->gh != c->gh || p->nwrecks != c->nwrecks || p->nlanes < 1 ||
+        p->gh != c->gh || p->nwrecks != c->nwrecks || p->hold != c->hold || p->nlanes < 1 ||
         p->nlanes > RECC_LANES_MAX || p->nair > RECC_AIR_MAX || p->ntypes > RECC_TYPES_MAX)
         return;
     if (p != &c->p) c->p = *p;
@@ -837,6 +846,7 @@ int reccodec_params(RecCodecParams* p, unsigned nslots, unsigned nproj, unsigned
     unsigned ncodec = e->n[RECC_E_CODEC], nphysics = e->n[RECC_E_PHYSICS], nair = e->n[RECC_E_AIR];
     unsigned ntypes = e->n[RECC_E_TYPES];
     memset(p, 0, sizeof *p);
+    p->hold = e->hold != 0;
     p->nslots = nslots;
     p->nproj = nproj;
     p->gw = gw;
@@ -1685,11 +1695,25 @@ static int j2_mask(RecCodec* c, uint32_t v, const unsigned char* last, int may0,
    pool advanced one step, the rows made from the last iteration's shot events. */
 enum { PS_OUT, PS_OLD, PS_ADV, PS_EV };
 
-/* The survivor step's dword order, which the format fixes: each rule reads only dwords decoded
-   before it -- the velocity (7..9) reads the heading, pitch and speed (13..15), the position
-   (1..3) the velocity. */
-static const unsigned char PORDER[PDW] = { 13, 14, 15, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 10, 11, 12,
-                                           16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26 };
+/* THE SURVIVOR LANES. A survivor's bytes 0x34..0x6A are coded as PLANE_N lanes at the record's
+   field boundaries -- its fields from 0x3A on sit at 2 mod 4, so a dword there straddles two
+   (0x4E the target, 0x52 the attacker, 0x56 the quarry: replay-layout.tsv's proj rows) -- each a
+   residual of its own width with a winner of its own; dwords 0..12 stay whole. The widths are a
+   coding choice, measured on the size research's lossy hour: a field of another width costs
+   size, never a value. Byte 0x6B, the image's padding past the record's 0x6B bytes, is its last
+   image's: the capture writes it zero, and an encoder whose survivor changed it declines the
+   block (pool_encode). */
+static const unsigned char PLOFF[PLANE_N] = { 0x34, 0x36, 0x38, 0x3A, 0x3E, 0x42, 0x46, 0x4A, 0x4E,
+                                              0x52, 0x56, 0x5A, 0x5C, 0x5E, 0x60, 0x62, 0x64, 0x66,
+                                              0x67, 0x69, 0x6A };
+static const unsigned char PLW[PLANE_N] = { 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 1, 2,
+                                            1, 1 };
+#define PL_STAMP 18                   /* the lane of +0x67, the compaction's stamp              */
+
+/* The survivor step's order, which the format fixes: each rule reads only values decoded before
+   it -- the velocity (dwords 7..9) reads the heading, pitch and speed (lanes 0x36, 0x38, 0x3A),
+   the position (1..3) the velocity. The lanes first, then these dwords. */
+static const unsigned char PORDER[PSURV - PLANE_N] = { 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 10, 11, 12 };
 
 /* The encoder's search, policy and not format: the decoder reads only the section and the row a
    code names, so another choice here costs size, never readability. */
@@ -1732,20 +1756,58 @@ static int held(const uint32_t* x)
     return v[0] == x[7] && v[1] == x[8] && v[2] == x[9];
 }
 
+/* a survivor lane's value in a projectile image, and one written into it */
+static uint32_t plane_get(const uint32_t* x, unsigned off, unsigned w)
+{
+    uint32_t v = 0;
+    unsigned i;
+    for (i = 0; i < w; i++) v |= (x[(off + i) >> 2] >> (8 * ((off + i) & 3)) & 0xFF) << (8 * i);
+    return v;
+}
+static void plane_set(uint32_t* x, unsigned off, unsigned w, uint32_t v)
+{
+    unsigned i;
+    for (i = 0; i < w; i++) {
+        unsigned sh = 8 * ((off + i) & 3);
+        x[(off + i) >> 2] = (x[(off + i) >> 2] & ~(0xFFu << sh)) | (v >> (8 * i) & 0xFF) << sh;
+    }
+}
+static uint32_t plane_mask(unsigned w) { return w == 4 ? 0xFFFFFFFFu : (1u << (8 * w)) - 1; }
+
+/* a residual of `bits` bits held in [0, 2^bits), zigzagged into [0, 2^bits), and back: the 32-bit
+   zigzag of its sign extension */
+static uint32_t zzw(uint32_t r, unsigned bits)
+{
+    uint32_t m = bits == 32 ? 0xFFFFFFFFu : (1u << bits) - 1;
+    return r <= m >> 1 ? 2u * r : 2u * (m - r) + 1;
+}
+static uint32_t unzzw(uint32_t z, unsigned bits)
+{
+    return unzz32(z) & (bits == 32 ? 0xFFFFFFFFu : (1u << bits) - 1);
+}
+
+/* A survivor's fresh winners: the lanes the last value, the dwords the rule. */
+static void win_fresh(unsigned char* win)
+{
+    memset(win, 1, PLANE_N);
+    memset(win + PLANE_N, 0, PSURV - PLANE_N);
+}
+
 /* THE SURVIVOR STEP of old slot m (its last image L = P[m], the one before L2 = H[m], its age):
-   dword by dword in PORDER, the prediction is candidate win[d] of the rule k0, the last value k1
-   and the line through the last two k2; the residual is applied (dec) or made (enc), and the
-   next winner is the first candidate closest to the value. k0 is
+   the lanes, then the dwords of PORDER, each predicted by candidate win[i] of the rule k0, the
+   last value k1 and the line through the last two k2; the residual res[i] (the lane's width, a
+   lane's held in [0, 2^bits)) is applied (dec) or made (enc), and the next winner is the first
+   candidate closest to the value, in the lane's width. k0 is
+   - for the stamp lane +0x67, the compaction's stamp: 0x49AE20 writes each record's index there
+     before it slides the survivors down (0x49AE5F, DISASSEMBLED), so a survivor's stamp is the
+     slot it held in the last image, m;
    - for the position, the last value plus this iteration's velocity, with the last step's drift
      carried: every record that survives the tick moved by its velocity, each branch with its own
      add (the guided one 0x49BB3A..0x49BB58; 0x49BB82, 0x49BC37, 0x49BCE3, 0x49BD12, 0x49BD50), and
      the paths without one mark the record done (0x499EB0 sets +0x69 bit 1), DISASSEMBLED;
    - for the velocity, the guided rule when the last image followed it, else the last value;
-   - for +0x67 (dword 25's top byte, dword 26's low byte), the compaction's stamp: 0x49AE20
-     writes each record's index there before it slides the survivors down (0x49AE5F,
-     DISASSEMBLED), so a survivor's stamp is the slot it held in the last image, m;
    - else the last value.
-   Each is a predictor: a wrong one costs size. */
+   Each is a predictor: a wrong one costs size. Byte 0x6B is L's (THE SURVIVOR LANES). */
 static void pool_step(const RecCodec* c, unsigned m, uint32_t* u, uint32_t* res, unsigned char* win,
                       int dec)
 {
@@ -1754,8 +1816,27 @@ static void pool_step(const RecCodec* c, unsigned m, uint32_t* u, uint32_t* res,
     unsigned a = c->page[m], i, k, best;
     int hl = held(L);
     uint32_t g[3] = { 0, 0, 0 }, cand[3];
-    for (i = 0; i < PDW; i++) {
-        unsigned d = PORDER[i];
+    if (dec) u[26] = (u[26] & 0x00FFFFFFu) | (L[26] & 0xFF000000u);
+    for (i = 0; i < PLANE_N; i++) {
+        unsigned off = PLOFF[i], w = PLW[i];
+        uint32_t mk = plane_mask(w), l1 = plane_get(L, off, w), l2 = a >= 2 ? plane_get(L2, off, w) : l1, v;
+        cand[0] = i == PL_STAMP ? m & mk : l1;
+        cand[1] = l1;
+        cand[2] = (2u * l1 - l2) & mk;
+        if (dec) {
+            v = (cand[win[i]] + res[i]) & mk;
+            plane_set(u, off, w, v);
+        } else {
+            v = plane_get(u, off, w);
+            res[i] = (v - cand[win[i]]) & mk;
+        }
+        best = 0;
+        for (k = 1; k < 3; k++)
+            if (err_of(v, cand[k], mk) < err_of(v, cand[best], mk)) best = k;
+        win[i] = (unsigned char)best;
+    }
+    for (i = PLANE_N; i < PSURV; i++) {
+        unsigned d = PORDER[i - PLANE_N];
         uint32_t l1 = L[d], l2 = a >= 2 ? L2[d] : l1;
         cand[1] = l1;
         cand[2] = 2u * l1 - l2;
@@ -1764,19 +1845,15 @@ static void pool_step(const RecCodec* c, unsigned m, uint32_t* u, uint32_t* res,
         } else if (d >= 7 && d <= 9) {
             if (d == 7 && hl) guided(u, g);
             cand[0] = hl ? g[d - 7] : l1;
-        } else if (d == 25) {
-            cand[0] = (cand[2] & 0x00FFFFFFu) | (uint32_t)(m & 0xFF) << 24;
-        } else if (d == 26) {
-            cand[0] = (l1 & 0xFFFFFF00u) | (m >> 8 & 0xFF);
         } else {
             cand[0] = l1;
         }
-        if (dec) u[d] = cand[win[d]] + res[d];
-        else res[d] = u[d] - cand[win[d]];
+        if (dec) u[d] = cand[win[i]] + res[i];
+        else res[i] = u[d] - cand[win[i]];
         best = 0;
         for (k = 1; k < 3; k++)
             if (err_of(u[d], cand[k], 0xFFFFFFFFu) < err_of(u[d], cand[best], 0xFFFFFFFFu)) best = k;
-        win[d] = (unsigned char)best;
+        win[i] = (unsigned char)best;
     }
 }
 
@@ -1786,10 +1863,10 @@ static const uint32_t* adv_row(RecCodec* c, unsigned kk)
 {
     uint32_t* u = c->adv + (size_t)kk * PDW;
     if (!c->adv_done[kk]) {
-        uint32_t zero[PDW];
-        unsigned char w[PDW];
+        uint32_t zero[PSURV];
+        unsigned char w[PSURV];
         memset(zero, 0, sizeof zero);
-        memcpy(w, c->pwin + (size_t)kk * PDW, PDW);
+        memcpy(w, c->pwin + (size_t)kk * PSURV, PSURV);
         pool_step(c, kk, u, zero, w, 1);
         c->adv_done[kk] = 1;
     }
@@ -1931,7 +2008,7 @@ static int pool_restart(RecCodec* c, const unsigned char* pool, unsigned count, 
         for (i = 0; i < hw * PDW; i++) c->pool[i] = get32(pool + 4 * (size_t)i);
     memset(c->pool + (size_t)hw * PDW, 0, (size_t)(n - hw) * PIMG);
     memset(c->pool_n, 0, (size_t)n * PIMG);
-    memset(c->pwin, 0, (size_t)n * PDW);
+    for (i = 0; i < n; i++) win_fresh(c->pwin + (size_t)i * PSURV);
     memset(c->page, 0, n);
     memset(c->page, 1, count);
     memset(c->lastnew, 0, (size_t)(RECC_WEAPON_IDS + 1) * PIMG);
@@ -2171,6 +2248,16 @@ static void pool_put(RecCodec* c, RecBytes* b, const uint32_t* res)
     rb_put(b, z, sizeof z);
 }
 
+/* a survivor's residuals, each zigzagged in its width */
+static void pool_put_surv(RecCodec* c, const uint32_t* res)
+{
+    unsigned i;
+    uint32_t z[PSURV];
+    if (c->over) return;
+    for (i = 0; i < PSURV; i++) z[i] = i < PLANE_N ? zzw(res[i], 8 * PLW[i]) : zz32(res[i]);
+    rb_put(&c->psurv, z, sizeof z);
+}
+
 /* One iteration that passed pool_check, coded into the block's buffers, then committed: the
    state takes it whatever the buffers do (past RECC_FRAME_CAP the block is declined after its
    iterations, so the state always ends as the payload leaves the pool).
@@ -2189,7 +2276,7 @@ static void pool_encode(RecCodec* c, const unsigned char* pl, size_t at, size_t 
     const unsigned N = c->nproj, c0 = c->pcount, h0 = c->phw, c1 = c->ncount, h1 = c->nhw;
     unsigned ns, nt = 0, j, i, prev, d;
     int64_t last = -1;
-    uint32_t res[PDW];
+    uint32_t res[PDW], sres[PSURV];
     size_t p;
     /* the matcher */
     for (j = 0; j < c1; j++) {
@@ -2236,9 +2323,10 @@ static void pool_encode(RecCodec* c, const unsigned char* pl, size_t at, size_t 
     /* the survivors */
     for (j = 0; j < ns; j++) {
         unsigned m = (unsigned)c->pm[j];
-        memcpy(c->pwin_n + (size_t)j * PDW, c->pwin + (size_t)m * PDW, PDW);
-        pool_step(c, m, c->pool_n + (size_t)j * PDW, res, c->pwin_n + (size_t)j * PDW, 0);
-        pool_put(c, &c->psurv, res);
+        if ((c->pool_n[(size_t)j * PDW + 26] ^ c->pool[(size_t)m * PDW + 26]) >> 24) c->over = 1;
+        memcpy(c->pwin_n + (size_t)j * PSURV, c->pwin + (size_t)m * PSURV, PSURV);
+        pool_step(c, m, c->pool_n + (size_t)j * PDW, sres, c->pwin_n + (size_t)j * PSURV, 0);
+        pool_put_surv(c, sres);
         memcpy(c->pool_l2n + (size_t)j * PDW, c->pool + (size_t)m * PDW, PIMG);
         c->page_n[j] = (unsigned char)(c->page[m] >= 2 ? 2 : c->page[m] + 1);
     }
@@ -2259,7 +2347,7 @@ static void pool_encode(RecCodec* c, const unsigned char* pl, size_t at, size_t 
         pool_put(c, &c->pbirth, res);
         if (row[0] >= 1 && row[0] <= RECC_WEAPON_IDS) memcpy(c->lastnew + (size_t)row[0] * PDW, row, PIMG);
         chains_add(&c->ch[0], j, row);
-        memset(c->pwin_n + (size_t)j * PDW, 0, PDW);
+        win_fresh(c->pwin_n + (size_t)j * PSURV);
         c->page_n[j] = 1;
     }
     /* the tail */
@@ -2301,7 +2389,7 @@ static int pool_write(RecCodec* c, unsigned iterations)
 {
     RecBytes* o = &c->sec[RCS_PROJ];
     const RecBytes* part[3] = { &c->psurv, &c->pbirth, &c->ptail };
-    unsigned i, d;
+    unsigned i, d, w;
     size_t r, rows;
     o->n = 0;
     o->oom = 0;
@@ -2310,11 +2398,10 @@ static int pool_write(RecCodec* c, unsigned iterations)
     rb_put(o, c->pref.p, c->pref.n);
     for (i = 0; i < 3; i++) {
         const uint32_t* z = (const uint32_t*)part[i]->p;
-        rows = part[i]->n / PIMG;
-        for (d = 0; d < PDW; d++) {
-            unsigned dw = i ? d : PORDER[d];
-            for (r = 0; r < rows; r++) rb_varint(o, z[r * PDW + dw]);
-        }
+        w = i ? PDW : PSURV;
+        rows = part[i]->n / (4 * w);
+        for (d = 0; d < w; d++)
+            for (r = 0; r < rows; r++) rb_varint(o, z[r * w + d]);
     }
     return !o->oom && o->n <= RECC_FRAME_CAP;
 }
@@ -2516,8 +2603,12 @@ static void frames_walk(RecCodec* c, const unsigned char* pl, size_t at, size_t 
         }
         if (kind == RK_FEATURES) c->featseen = 1;
         ktok_add(c, kind);
-        if (kind == RK_UNIT || kind == RK_UNIT_GONE) plain_record(c, kind, b, len);
-        else if (c->fix[sc] >= 0) FRAMES[c->fix[sc]]->enc_rec(c->frame[c->fix[sc]], &a, kind, b, len);
+        if (kind == RK_UNIT || kind == RK_UNIT_GONE) {
+            plain_record(c, kind, b, len);
+            if (kind == RK_UNIT_GONE)
+                for (i = 0; i < RECC_FRAMES; i++)
+                    if (FRAMES[i]->gone) FRAMES[i]->gone(c->frame[i], get16(b));
+        } else if (c->fix[sc] >= 0) FRAMES[c->fix[sc]]->enc_rec(c->frame[c->fix[sc]], &a, kind, b, len);
         if (sc == RCS_EVENTS) a.events = 1;
     }
     for (i = 0; i < RECC_FRAMES; i++) FRAMES[i]->enc_iter_end(c->frame[i], &a);
@@ -2925,15 +3016,17 @@ static int group_fill(RecCodec* d, unsigned it, int g, uint32_t total, const cha
     return 1;
 }
 
-/* the 27 residuals of one row from its columns' cursors (read once already) */
+/* The n residuals of one row from its columns' cursors, [first, first + n) (read and bounded
+   once already): a survivor's PSURV in its step's order, a birth's or a tail slot's PDW by dword. */
 static void cols_get(const unsigned char* sec, size_t* colat, const size_t* colend, unsigned first,
-                     int order, uint32_t* res)
+                     unsigned n, uint32_t* res)
 {
     unsigned i;
     uint32_t z = 0;
-    for (i = 0; i < PDW; i++) {
-        varint_get(sec, colend[first + i], &colat[first + i], &z);
-        res[order ? PORDER[i] : i] = unzz32(z);
+    for (i = 0; i < n; i++) {
+        unsigned col = first + i;
+        varint_get(sec, colend[col], &colat[col], &z);
+        res[i] = col < PLANE_N ? unzzw(z, 8 * PLW[col]) : unzz32(z);
     }
 }
 
@@ -2942,7 +3035,7 @@ static void cols_get(const unsigned char* sec, size_t* colat, const size_t* cole
 typedef struct PoolAt {
     size_t end;                         /* RCS_PROJ's end                                      */
     size_t refat;                       /* the next reference code                             */
-    size_t colat[3 * PDW], colend[3 * PDW];
+    size_t colat[PSURV + 2 * PDW], colend[PSURV + 2 * PDW];
     size_t total;                       /* the projectile records' bytes so far, padded        */
 } PoolAt;
 
@@ -2994,17 +3087,20 @@ static int pool_parse(RecCodec* d, const unsigned char* sec, size_t at, size_t e
         h0 = h1;
     }
     /* one byte at least a varint: checked before the walk the counts size */
-    need = nball + ntall + (uint64_t)PDW * (nsall + nball + ntall);
+    need = nball + ntall + (uint64_t)PSURV * nsall + (uint64_t)PDW * (nball + ntall);
     if (need > end - at)
         REFUSE("the pool frame's codes and columns need %llu bytes, %lu are left", (unsigned long long)need, (unsigned long)(end - at));
     q->refat = at;
     for (k = 0; k < nball + ntall; k++)
         if (!varint_get(sec, end, &at, &v)) REFUSE("a reference code cut short at byte %lu", (unsigned long)at);
-    for (i = 0; i < 3 * PDW; i++) {
-        uint64_t n = i < PDW ? nsall : i < 2 * PDW ? nball : ntall;
+    for (i = 0; i < PSURV + 2 * PDW; i++) {
+        uint64_t n = i < PSURV ? nsall : i < PSURV + PDW ? nball : ntall;
         q->colat[i] = at;
-        for (k = 0; k < n; k++)
+        for (k = 0; k < n; k++) {
             if (!varint_get(sec, end, &at, &v)) REFUSE("pool frame column %u cut short at byte %lu", i, (unsigned long)at);
+            if (i < PLANE_N && PLW[i] < 4 && v >> (8 * PLW[i]))
+                REFUSE("survivor lane %u's residual %lu is past its %u bytes", i, (unsigned long)v, PLW[i]);
+        }
         q->colend[i] = at;
     }
     if (at != end) REFUSE("%lu bytes left in the pool frame", (unsigned long)(end - at));
@@ -3026,7 +3122,7 @@ static int pool_iter(RecCodec* d, const unsigned char* sec, PoolAt* q, unsigned 
     const unsigned N = d->nproj, pc0 = d->pcount, ph0 = d->phw, ne = d->nshots;
     unsigned pc1, ph1, nd, nt, ns = 0, heads = 0, k, i, j;
     size_t cat = d->pat[it], end = q->end;
-    uint32_t kind, fl, res[PDW], code = 0, v = 0;
+    uint32_t kind, fl, res[PDW], sres[PSURV], code = 0, v = 0;
     RunAt a;
     d->pb.n = 0;
     d->pb.oom = 0;
@@ -3068,9 +3164,9 @@ static int pool_iter(RecCodec* d, const unsigned char* sec, PoolAt* q, unsigned 
     memcpy(d->pool_n, d->pool, (size_t)ph0 * PIMG);
     for (j = 0; j < ns; j++) {
         unsigned m = (unsigned)d->pm[j];
-        memcpy(d->pwin_n + (size_t)j * PDW, d->pwin + (size_t)m * PDW, PDW);
-        cols_get(sec, q->colat, q->colend, 0, 1, res);
-        pool_step(d, m, d->pool_n + (size_t)j * PDW, res, d->pwin_n + (size_t)j * PDW, 1);
+        memcpy(d->pwin_n + (size_t)j * PSURV, d->pwin + (size_t)m * PSURV, PSURV);
+        cols_get(sec, q->colat, q->colend, 0, PSURV, sres);
+        pool_step(d, m, d->pool_n + (size_t)j * PDW, sres, d->pwin_n + (size_t)j * PSURV, 1);
         memcpy(d->pool_l2n + (size_t)j * PDW, d->pool + (size_t)m * PDW, PIMG);
         d->page_n[j] = (unsigned char)(d->page[m] >= 2 ? 2 : d->page[m] + 1);
     }
@@ -3096,10 +3192,10 @@ static int pool_iter(RecCodec* d, const unsigned char* sec, PoolAt* q, unsigned 
             R = sec_row(d, sc, (unsigned)kk);
             if (sc == PS_EV) d->evnext = (unsigned)kk + 1;
         }
-        cols_get(sec, q->colat, q->colend, PDW, 0, res);
+        cols_get(sec, q->colat, q->colend, PSURV, PDW, res);
         ref_row(R, 1, (pc0 + j - ns) & 0xFFFF, res, row, 1);
         if (row[0] >= 1 && row[0] <= RECC_WEAPON_IDS) memcpy(d->lastnew + (size_t)row[0] * PDW, row, PIMG);
-        memset(d->pwin_n + (size_t)j * PDW, 0, PDW);
+        win_fresh(d->pwin_n + (size_t)j * PSURV);
         d->page_n[j] = 1;
     }
     for (i = 0; i < nt; i++) {
@@ -3123,7 +3219,7 @@ static int pool_iter(RecCodec* d, const unsigned char* sec, PoolAt* q, unsigned 
                 REFUSE("iteration %u: tail slot %u's reference %lld is past section %u's %u rows", it, tj, (long long)kk, sc, len[sc]);
             R = sec_row(d, sc, (unsigned)kk);
         }
-        cols_get(sec, q->colat, q->colend, 2 * PDW, 0, res);
+        cols_get(sec, q->colat, q->colend, PSURV + PDW, PDW, res);
         ref_row(R, 0, 0, res, d->pool_n + (size_t)tj * PDW, 1);
     }
     /* the changed slots: below the count, then the tail (the pool is zero from ph0 on) */
@@ -3497,6 +3593,9 @@ int reccodec_decode(RecCodec* d, const unsigned char* sec, size_t n, RecBytes* o
                 b = sec + oat;
                 oat += len;
                 if (kind == RK_UNIT || kind == RK_UNIT_GONE) unit_record(d, kind, b);
+                if (kind == RK_UNIT_GONE)
+                    for (j = 0; j < RECC_FRAMES; j++)
+                        if (FRAMES[j]->gone) FRAMES[j]->gone(d->frame[j], get16(b));
             } else {
                 const RecFrameOps* f = FRAMES[d->fix[sc]];
                 unsigned bl = 0;

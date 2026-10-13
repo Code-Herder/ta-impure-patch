@@ -672,7 +672,7 @@ static int state_dec_close(void* f, char* why, unsigned cap)
 
 const RecFrameOps recframe_state = {
     "state", RCS_STATE,
-    state_make, state_drop, state_restart, NULL, NULL,
+    state_make, state_drop, state_restart, NULL, NULL, NULL,
 #ifdef RECF_TEST_COPY
     state_copy,
 #endif
