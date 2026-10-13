@@ -122,9 +122,9 @@
    "load": "replay-waterline.json",
    "steps": [[1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3400", "1450", "--unit", "2", "--expect", "ARMSH"]],
              [1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3550", "1450", "--unit", "3", "--expect", "ARMAMPH"]],
-             [1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3700", "2300", "--unit", "4", "--expect", "ARMTHOVR"]],
-             [1950, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3700", "1350", "--unit", "4", "--expect", "ARMTHOVR"]],
-             [2550, "run", ["tools/tacli", "order", "{instance}", "unload", "pos", "3800", "1250", "--unit", "4", "--expect", "ARMTHOVR"]]],
+             [1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3475", "2300", "--unit", "4", "--expect", "ARMTHOVR"]],
+             [1950, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3475", "1450", "--unit", "4", "--expect", "ARMTHOVR"]],
+             [2550, "run", ["tools/tacli", "order", "{instance}", "unload", "pos", "3475", "1600", "--unit", "4", "--expect", "ARMTHOVR"]]],
    "end": 3150
   },
   "stock-waterline": {
@@ -132,9 +132,9 @@
    "dll": "stock",
    "steps": [[1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3400", "1450", "--unit", "2", "--expect", "ARMSH"]],
              [1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3550", "1450", "--unit", "3", "--expect", "ARMAMPH"]],
-             [1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3700", "2300", "--unit", "4", "--expect", "ARMTHOVR"]],
-             [1950, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3700", "1350", "--unit", "4", "--expect", "ARMTHOVR"]],
-             [2550, "run", ["tools/tacli", "order", "{instance}", "unload", "pos", "3800", "1250", "--unit", "4", "--expect", "ARMTHOVR"]]],
+             [1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3475", "2300", "--unit", "4", "--expect", "ARMTHOVR"]],
+             [1950, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3475", "1450", "--unit", "4", "--expect", "ARMTHOVR"]],
+             [2550, "run", ["tools/tacli", "order", "{instance}", "unload", "pos", "3475", "1600", "--unit", "4", "--expect", "ARMTHOVR"]]],
    "end": 3150
   },
   "perspective": {

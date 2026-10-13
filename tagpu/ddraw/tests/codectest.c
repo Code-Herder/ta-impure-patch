@@ -2391,7 +2391,7 @@ static void ev_events(RecBytes* b, const uint32_t units[][NDW], int variant)
     memset(e, 0, 4);
     put32(e, 4);                                         /* its script slice: the ID again */
     rec_put(b, RK_EV_SLICE, e, 4);
-    for (i = 0; i < REC_QUERIES; i++) {                  /* its queries, each of the two */
+    for (i = 0; i < REC_QUERIES; i++) {                  /* its queries, each of them   */
         memset(e, 0, 8);
         put32(e, 4);
         e[4] = (unsigned char)i;
