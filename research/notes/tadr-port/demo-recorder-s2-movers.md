@@ -244,22 +244,27 @@ First the carry changes (§3.8). Then, for each unit:
 3. **Call `0x43DA70(mover, unit)`** (thiscall on the mover, `ret 4`). Its inputs are now the
    tick's final values, as on the recording machine. On a change it writes `+0x110` bits 2–3
    and starts the walk scripts.
-4. **Call `0x43DB50(mover, unit)`.** It writes `+0x10A` and starts `setSFXoccupy` on a change.
+4. **Write `+0x10A` from the image** (format 21; the recipe called `0x43DB50(mover, unit)` here
+   before): `0x43DB50` writes nothing else, and its `setSFXoccupy` start is recorded where the
+   recording machine made it, in the unit's movement pass, so calling it here would start the
+   script a second time, at the step's end (the engine map, *setSFXoccupy is recorded at its
+   start*).
 5. **Write the rest raw:** the recorded altitude `+0x6E..+0x71` (the fix-up's result), the tilts,
    `+0x110` bit 16 (the fix-up cleared it on the recording machine), mover `+0x26` and `+0x2A`.
 6. **Compare, never write:**
-   - `+0x110` bits 2–3 and `+0x10A`, which the parts own;
+   - `+0x110` bits 2–3, which the walk class owns;
    - the cell `+0x76`/`+0x78`, the layer bits, the bucket `+0x82`/`+0x8E` and the sight stamp
      `+0x7A`/`+0x7C`/`+0xF8`, which the engine functions own.
 
    A difference the harness names is a bug in the playback, as for any other field.
 
-Of the values the parts transition, **`+0x110` bits 2–3 and `+0x10A` are written only by the
-parts on a puppet, never raw**. Written first, the parts would see no change and start no script
-(`0x43DACD`, `0x43DBCC`). The same holds for a rebuild (S3): a fresh unit has 0 in both, and the
-first stepped tick starts what is running. These two fields join the completeness note's list of
-"values that go through engine functions, never a raw write". No `cache` row is needed, since the
-values stay recorded and compared.
+**`+0x110` bits 2–3 are written only by the walk class on a puppet, never raw**. Written first,
+the part would see no change and start no script (`0x43DACD`). The same holds for a rebuild (S3):
+a fresh unit has 0 there, and the first stepped tick starts what is running. The field joins the
+completeness note's list of "values that go through engine functions, never a raw write". No
+`cache` row is needed, since the value stays recorded and compared. **`+0x10A` is written raw**
+from each image since format 21, its script being the recording's own event; a seek writes it
+the same way and starts nothing.
 
 ### 2.4 Order against the tick's events
 
@@ -276,9 +281,10 @@ values stay recorded and compared.
     checks that the shooter has a mover.
 - **Deaths and creates before the carry diff** (§3.8). The death path detaches a carried unit and
   its cargo itself (`0x4867CB`, `0x48681D`).
-- **A walk-script start is not an event.** `0x43DA70` and `0x43DB50` start their scripts through
-  the COB call (`0x4B0940`, `0x4B0A70`), not through the five broadcasters the recorder hooks. So
-  the puppet produces them itself by calling the parts, and recording them would double them.
+- **A walk-script start is not an event.** `0x43DA70` starts its scripts through the COB call
+  (`0x4B0940`), not through the five broadcasters the recorder hooks. So the puppet produces them
+  itself by calling the part, and recording them would double them. `setSFXoccupy`, `0x43DB50`'s
+  one script, is recorded since format 21, and the puppet no longer calls `0x43DB50`.
 
 ---
 

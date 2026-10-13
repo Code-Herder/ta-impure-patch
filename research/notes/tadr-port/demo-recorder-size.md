@@ -1360,6 +1360,14 @@ this fixture's density (the cost model the plan used, which simulated 38,338 mar
 +13,653 bytes, on a format-14 file of the same fixture). That is 0.19 % of the
 stream; a quieter hour costs less, since markers follow starts and creates.
 
+**The transports', the pads' and the waterline's COB entries: recording format 21** (2026-10-13).
+Two more owner's queries (`QueryTransport`, `QueryLandingPad`) and two more owner-only starts
+(`BeginTransport`, `setSFXoccupy`) in the existing kinds 58 and the named start; no new column.
+They follow transports, landings and water crossings. MEASURED on the `waterline` test group's
+recording (raised build, 3,150 GameTimes, three units crossing and a Peewee carried): 32 named starts, 26 of them
+`setSFXoccupy`; on `transport-pad`'s, 3 queries and 1 `BeginTransport` in 1,980 GameTimes. No
+battle measurement was taken for this format.
+
 ## P1: the container, measured
 
 **What format 17 changes** (tagpu_recfmt.h, *THE RUN AND THE CHAIN*). A *run* -- the sectioned stream

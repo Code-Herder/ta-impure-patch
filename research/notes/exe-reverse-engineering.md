@@ -1617,8 +1617,9 @@ end).
 ### The owner's COB queries [DISASSEMBLED 2026-10-12]
 
 What `RK_EV_QUERY` rests on (`tagpu_recorder.c` and `tagpu_replay.c`, THE OWNER'S QUERIES). Of the
-fourteen calls of the query `0x4B0BC0` (*The COB module's entries*, above), two are made only by
-an order handler, which a playing's puppets never run:
+fourteen calls of the query `0x4B0BC0` (*The COB module's entries*, above), seven are made only
+by an order handler, which a playing's puppets never run, and an eighth is dead (the transport and
+pad calls DISASSEMBLED 2026-10-13):
 
 - **`QueryBuildInfo`** (`0x501330`), whose one call is `0x4027FB`, in BuildingBuild `0x402640`'s
   state dispatch (the case at `0x4027D9`, through the table `0x402B5C`): `mov edi,[esp+0x44]`
@@ -1632,6 +1633,34 @@ an order handler, which a playing's puppets never run:
   handler's unit (the order's `+0xE`, or the register holding it), except SelfRepair `0x402430`,
   which passes the repairing pad, the order's target `+0x16` (`mov eax,[edi+0x16]` at `0x402525`,
   the call at `0x40252E`), in the aircraft's turn; the pad can be another player's.
+- **`QueryTransport`** (`0x501BB4`), whose one call is `0x4113B1`, in VTOL_Pickup `0x4111B0`'s
+  state 2 (`0x41138A`, through the table `0x41153C`): esi is the transport, the handler's first
+  argument (`mov esi,[esp+0x28]`, `0x41121A`), `mov ecx,[esi+0x9A]` (`0x4113A5`) its COB object,
+  `push 0x501BB4` (`0x4113AC`) the name; the order's `+0x36` is set to -1 (`0x41139F`) and its
+  address passed as the first argument, the other three 0. The script writes the link piece into
+  the order, which state 4 attaches the passenger at (`0x48AAC0`, `0x4114A6`).
+- **`QueryLandingPad`** (`0x501C14`), four calls in VTOL_Landing `0x4118E0` (table `0x411F28`), on
+  the pad, the order's target (`mov ebx,[esi+0x16]` at `0x4118F2`, again at `0x411A62`; ebx is not
+  written between each `mov ecx,[ebx+0x9A]` and its call), each with four argument pointers to
+  values set to -1 first: state 1 `0x411A35` (`0x411A24`, `0x411A30`), and when none of the four
+  answers is a free piece (`0x47E570`) again at `0x411AA6` (`0x411A8B`, `0x411A91`); state 3
+  `0x411BF5` (`0x411BE9`, `0x411BF0`); state 5 `0x411CF1` (`0x411CE0`, `0x411CEC`), unless the
+  order's stored piece `+0x36` is still free. The pad can be an ally's (the default command below
+  takes an own or allied target).
+- **`0x41189C` is dead.** It is in `0x411840(pad, piece)`, `ret 8`, the same answer-then-test as
+  VTOL_Landing's state 1, which has no `call` or `jmp` in the listing and no absolute dword in the
+  file.
+
+A player's order reaches VTOL_Landing through the default command: the command-to-action mapper
+`0x43F0E0` (`ScriptAction_Type2Index`), command 1 (`0x43F9E9`, the first entry of the table
+`0x4401EC`), names `VTOL_LANDING` (`push 0x501B94` at `0x43FB1F`, looked up by name through
+`0x438760`) for a flying type (`def+0x241` bit 11) on an own or allied target whose def has bit 9,
+an air base, once the reclaim, help-build and repair tests before it have not matched. MEASURED
+2026-10-13 by the `transport-pad` and `stock-transport-pad` test groups, two runs each: an Atlas
+selected with a left click and a right click on an ARMASP at Interface Type 1 lands on it
+through VTOL_Landing, which queries the pad once at `0x411A35` (state 1) and once at `0x411BF5`
+(state 3), the Atlas ending at the pad's position; a first answer with a free piece and a piece
+still free in state 5 leave `0x411AA6` and `0x411CF1` unreached there.
 
 `0x4B0BC0` reads the object at once (`mov eax,[ecx+8]`, `0x4B0BC1`), so a unit with no script
 (`+0x9A` NULL, `0x485DFF`) never reaches either call in a running game. It finds the script by
@@ -1646,29 +1675,31 @@ non-NULL argument pointer in (`0x4B0C5C..0x4B0CCA`), runs that thread alone at `
 `0x43BB21` in `0x43BAD0`, whose only callers are the unit tick's `0x48AF98` and `0x48AF9E`, in the
 unit's turn after its script slice (`0x48ADEB`) and behind the gate that its owner be a local
 seat of type 1 or 2 (`0x48AEB5..0x48AECD`); no dword in the file holds either address.
-`0x43A21A` is the destructor `0x43A1F0`'s call, with event 2, which BuildingBuild returns on
-before its state dispatch (`0x402647..0x40264D`) and which the ten handlers that do not set the
-order's bit `0x02` never receive. So each query is made in the handler's unit's own turn, after
-that unit's slice, inside no death and no feature call, on the machine of that unit's owner. The
-queried unit is that unit, except SelfRepair's pad: its query can come before the pad's own slice
-in the same tick, and on a machine that does not own the pad. The slice markers' start set notes
-every query's COB, which is what puts the pad's later slice after the query on a playing.
+`0x43A21A` is the destructor `0x43A1F0`'s call, with event 2, made only when the order's `+6` has
+bit `0x02`: BuildingBuild returns on it before its state dispatch (`0x402647..0x40264D`);
+VTOL_Pickup sets the bit only at the end of state 3 (`0x411464`), so event 2 finds it in state 4,
+where it starts `EndTransport` (`0x41148D`) and never reaches its query; VTOL_Landing never sets
+it (its stores of `+6` are `0xE8` and `|= 0xE0`). So each query is made in the handler's unit's
+own turn, after that unit's slice, inside no death and no feature call, on the machine of that
+unit's owner. The queried unit is that unit, except a pad — SelfRepair's `QueryNanoPiece` and
+VTOL_Landing's `QueryLandingPad`: their query can come before the pad's own slice in the same
+tick, and on a machine that does not own the pad. The slice markers' start set notes every
+query's COB, which is what puts the pad's later slice after the query on a playing.
 
 **In Impure.** A recording carries each as `RK_EV_QUERY {ID, the query}` where the engine makes
-it: a stub on the call `0x4027FB`, built like the owner-only starts' (the `call`, the `mov` and the
-name's `push` compared first; `edi` the unit, its `+0x9A` checked against `ecx`), and the existing
-observer at `0x43E400`'s entry, whose unit is its first argument. The query's COB object is noted
-in the slice markers' start set as a start's is. A playing makes the same `0x4B0BC0` there, on the
-`+0x9A` of the unit live in the ID's slot, with -1 or 0 in the first argument and NULL for the
-rest; `0x43E400`'s own work after its query, the piece's point through `0x43DEF0`, is not made,
-since it writes only the handler's buffer and the spray that takes the point is recorded. The
-other twelve calls are not recorded: the Killed query `0x4865C3` (*A death's Killed*, above);
-AutoAim's aim and `SweetSpot` queries `0x43E227`..`0x43E3E4`, owner-only on a puppet and accepted
-as such by the owner (`replay-absent.tsv`); and `QueryTransport` `0x4113B1` and `QueryLandingPad`
-`0x41189C`, `0x411A35`, `0x411AA6`, `0x411BF5` and `0x411CF1`, which lie among the air transport
-and landing order handlers (VTOL_Pickup `0x4111B0`, VTOL_Landing `0x4118E0`) [INFERRED from their
-addresses, not traced one by one]. If those are order handlers' too, a playing does not make
-them: an open gap, which no replay fixture reaches (none carries an air transport or an air pad).
+it: a stub on each of the six calls `0x4027FB`, `0x4113B1`, `0x411A35`, `0x411AA6`, `0x411BF5` and
+`0x411CF1` (`QUERY_SITES`), built like the owner-only starts' (the `call`, the `mov` and the
+name's `push` compared first; the unit's register read under the stub's `pushad`, its `+0x9A`
+checked against `ecx`), and the existing observer at `0x43E400`'s entry, whose unit is its first
+argument. The query's COB object is noted in the slice markers' start set as a start's is. A
+playing makes the same `0x4B0BC0` there, on the `+0x9A` of the unit live in the ID's slot, with
+the values the engine's call puts there first — -1, 0 or -1 in the first argument and NULL for the
+rest, or four -1 for `QueryLandingPad`; what the caller does with the answers is not made, since
+it writes only the handler's buffer or the order, and what follows on the recording machine (the
+spray, the attach, the landing) is recorded. The other seven calls are not recorded: the Killed
+query `0x4865C3` (*A death's Killed*, above); AutoAim's aim and `SweetSpot` queries
+`0x43E227`..`0x43E3E4`, owner-only on a puppet and accepted as such by the owner
+(`replay-absent.tsv`); and the dead `0x41189C`.
 
 ### Seating a level: the SKIRMISH Start, the seat fill, the start commanders and the two end tests [DISASSEMBLED + MEASURED 2026-09-29]
 
@@ -2574,6 +2605,8 @@ then jumps to the function as the call would:
 | TransportPickup, TransportDrop | `0x406834` (`0x406823`) `edi`; `0x4069BF` (`0x4069A6`) `edi` |
 | TargetCleared, in `0x489800`, `0x4898B0`, `0x48A0F0` and `0x48A1E0` | `0x489898` (`0x489880`), `0x489948` (`0x489930`), `0x48A149` (`0x48A131`), `0x48A2E0` (`0x48A2C8`), all `edi` |
 | EndTransport, through `0x4B0940` | `0x40F433` (`0x40F424`) `ebp`; `0x41148D` (`0x411480`) `esi`; `0x411794` (`0x411785`) `ebx`; `0x411DA1` (`0x411D92`) `ebx`; `0x411E2B` (`0x411E1E`) `ebp` |
+| BeginTransport (VTOL_Pickup's state 3) | `0x4113EF` (`0x4113DD`) `esi` |
+| setSFXoccupy (the water state `0x43DB50`) | `0x43DBE8` (`0x43DBD0`) `esi` |
 
 DISASSEMBLED 2026-10-05 against `pristine/TotalA.exe.pristine`: the pickup argument at
 `0x406815` is the zero-extended `u16` unit slot at `[eax+0xA8]`, pushed at `0x406822`;
@@ -2595,14 +2628,19 @@ eight words to `0x4B0B00` at `0x4B0AEE`; `0x4B0AF3..0x4B0AF8` restores them
 and uses `ret 0x20`. Suppressing a call therefore requires the entry's actual
 callee stack cleanup, not merely declining to record it.
 
-All thirteen owner-only sites pass a null callback. The four `TargetCleared`
+All fifteen owner-only sites pass a null callback. The four `TargetCleared`
 sites pass `argc=1`, with the selected weapon index as argument 0, and `now=0`.
 `EndTransport` runs now at `0x40F433` and `0x411DA1`; the other three sites pass
-0. Pickup and drop run now and pass `argc=1`. These values are carried by the
-named-root payload; they are not interchangeable scheduling choices.
+0. Pickup and drop run now and pass `argc=1`. BeginTransport runs now with
+`argc=1` and the passenger def's `+0x16E` (`0x4113D7`) as argument 0;
+setSFXoccupy runs now with `argc=1` and the new water state (edi) as argument 0.
+These values are carried by the named-root payload; they are not
+interchangeable scheduling choices. [DISASSEMBLED 2026-10-13: BeginTransport
+and setSFXoccupy.]
 
 After the call, `0x489F48`, `0x411492` and `0x411799` overwrite EAX before
-using it; `0x48A2E5` explicitly zeroes it. Pickup calls reply at `0x40683E`,
+using it, `0x4113F4` pushes constants and ebx for the broadcast, and `0x43DBED`
+stores edi; `0x48A2E5` explicitly zeroes it. Pickup calls reply at `0x40683E`,
 drop calls the order helper at `0x4069CF`, `0x40F43A` allocates an order,
 `0x411DA9` calls an order helper and `0x411E33` loads another value before any
 local use of the script result. The tails at `0x489F93`, `0x48989D`,
@@ -2611,7 +2649,7 @@ their outer callers' use is not established by this continuation audit.
 No continuation read here branches on the start's flags before another
 instruction establishes flags. Native child suppression is not implemented.
 
-The multiplayer adapter reuses these thirteen call observers and the extra-weapons
+The multiplayer adapter reuses these fifteen call observers and the extra-weapons
 helper without adding a byte patch. On the game thread it bounds the observed unit
 against the level's fixed array before reading `+0x96` or `+0x9A`, confirms the
 COB equals the intercepted `ecx`, and contributes only frozen locally controlled
@@ -2626,8 +2664,27 @@ token past GameTime after repeated same-tick creates, so the token's high bit an
 exact identity are checked without treating it as an upper-bounded timestamp.
 
 The extra weapons' TargetCleared, for the slots from 3 up, is started by `tagpu_weapons.c`, which
-records it itself (`tagpu_rec_start_named`). BeginTransport is broadcast (`0x411403` calls
-`0x456200`), so the broadcasters record it.
+records it itself (`tagpu_rec_start_named`).
+
+**BeginTransport is recorded at its start, not at its broadcast** [DISASSEMBLED 2026-10-13]. The
+start at `0x4113EF` runs at once (`push 1` at `0x4113E6`): `0x4B0B00` then runs all eight thread
+records at `dt` 0 and the piece stepper (`0x4B0B86..0x4B0BA6`), so the script's first part — the
+link piece the engine reads right after through `0x43DEF0` (`0x411412`) — happens inside the
+order run. The broadcast that follows at `0x411403` makes the remote copies start it through the
+`0x10` receiver, whose call `0x455551` passes run-now 0, as the replay's `RK_EV_START` does; a
+puppet playing the broadcast ran the script's first part one slice late. The two calls are one
+straight-line block (no branch lands in `0x4113D1..0x411402`), so the recorder records the start
+and leaves out the broadcast whose return address is `0x411408` (`ev_start_named_bc`). Of the five
+broadcast sites this is the only one whose local start runs at once: StartBuilding `0x4385C7`,
+StopBuilding `0x43862B` and `0x43A251`, and AutoAim's aim start pass run-now 0, as the receiver
+does.
+
+**setSFXoccupy is recorded at its start** [DISASSEMBLED 2026-10-13]. `0x43DB50` has one caller,
+`0x43DD65` in the movement pass `0x43DD20`, and that has two: the unit tick's `0x48AFAA`, for a
+unit with a mover (`0x48AFA3`) behind the owner gate, and the `0x2C` receiver's sweep `0x48BA46`
+over a network peer's units. Neither runs on a puppet level, so a playing writes `+0x10A` from
+each image (`tagpu_replay.c`, `water_put`) and never runs `0x43DB50`: the recorded start is the
+script's one source, at the place in the step where the recording machine made it.
 
 **Shots: the five network tests.** A fire function builds its `0x0D` only under the network bit:
 `test byte [reg+0x2A44],1` then a `je` past the build and the send, at `0x49D7A0` (`ecx`, to

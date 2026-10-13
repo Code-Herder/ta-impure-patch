@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 20 and its readers take format 20 alone (*The file*, below).
+The recorder writes recording format 21 and its readers take format 21 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -710,9 +710,10 @@ puppet host and verifies it against the recording.
   - **The state byte** `+0x10E`, as its new value, from `0x48B090`.
   - **Unit replies**, at `0x47F780` and `0x47F850` before their viewer test, for every player.
   - **The script starts only the owner's machine makes**: `HitByWeapon` and `TakeDamage` in the hit
-    `0x489CE0`, `TransportPickup`, `TransportDrop` and `EndTransport` in the transport orders, and
-    `TargetCleared`. A replay host applies no damage and runs no order handler, so it never makes
-    these itself. `BeginTransport` is broadcast, so the broadcasters record it.
+    `0x489CE0`, `TransportPickup`, `TransportDrop`, `BeginTransport` and `EndTransport` in the
+    transport orders, `setSFXoccupy` in the water state `0x43DB50`, and `TargetCleared`. A replay
+    host applies no damage, runs no order handler and no movement pass, so it never makes these
+    itself. `BeginTransport`'s broadcast, which a remote copy starts a slice later, is left out.
   - **The nano spray**, at its emitters (the completeness note's *Decisions taken*).
   - **A controller change.**
 - **The header** gains:
@@ -863,10 +864,12 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
   index or a pointer. The completeness note's *What restoring these records needs* is its
   checklist.
   - **Units are placed with the engine's set-position `0x48A9F0`** at the recorded position and
-    the altitude the movement pass had before its fix-up. Then the walk-class and occupancy parts
-    `0x43DA70` and `0x43DB50` run, which start the walk and occupy scripts, and the fix-up's values
-    go in. `+0x110` bits 2–3 and `+0x10A` are written only by those parts, and compared. The
-    placement part `0x43D6D0` and the altitude fix-up `0x48A870` never run on a puppet.
+    the altitude the movement pass had before its fix-up. Then the walk-class part `0x43DA70`
+    runs, which starts the walk scripts, the water state `+0x10A` goes in from the image (its
+    script, `setSFXoccupy`, is a recorded start since format 21, so `0x43DB50` never runs on a
+    puppet), and the fix-up's values go in. `+0x110` bits 2–3 are written only by the walk class,
+    and compared. The placement part `0x43D6D0` and the altitude fix-up `0x48A870` never run on a
+    puppet.
   - **Players**: every record but V's, raw under the exclusion file, but the players phase's
     30-tick deadline `+0xF0`, which the host keeps (*as built*: written, it arrived already
     advanced, and the host never ran the viewed player's radar pass; the host note §2.3). An image
@@ -1324,9 +1327,10 @@ The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
   makes a unit where its own code does: in the unit tick, or after the players phase, as Impure's
   scenario applier does at `0x4969D2` and the engine's SHARE give and console fallback do between
   steps (the engine map's *Who makes a unit*). The replay makes every unit of step k in the unit
-  tick's stub, before the players phase of step k, whose every-step sight emit and the next
-  images' `0x43DB50` then meet that unit one step early. So at every capture point and frame visit
-  the replay writes both from the recording where they differ: the water state bounded by its enum,
+  tick's stub, before the players phase of step k, whose every-step sight emit then meets that unit
+  one step early (and before format 21, the next images' `0x43DB50`). So at every capture point
+  and frame visit the replay writes both from the recording where they differ: the water state
+  bounded by its enum, which the images' own write leaves equal since format 21,
   the stamp through the engine's removal `0x482090` and stamp `0x482270` (a circle's radius index
   bounded by the frame table's count), so that the sight counters keep describing the stamps the
   fields name. The globals line counts the water states and stamps written and refused, and the
@@ -1593,7 +1597,7 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
 - **COB script state is not restored at a seek**: every unit is made again, so every script
   restarts (the owner accepted it for S3b; recording it can be a landing of its own). Two
   consequences inside that: the seek sets a unit's water state without starting its
-  `setSFXoccupy`, so until the unit's next change its script does not know its water state (in
+  `setSFXoccupy`, so until the recording's next start of it its script does not know its water state (in
   stock scripts it picks the kind of `emit-sfx`, a wake or not [INFERRED from the scripts'
   convention]); and the threads alive on a unit after a seek are not the recording machine's.
 - **The COB guard can stop a playback after a seek** where a playing from the start passes (*S3b,
@@ -1656,9 +1660,9 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
 
 - **A unit the recording machine made after its players phase is drawn one frame early** on a puppet
   host, which makes it in the step's unit tick, before that step's draw; `books_put` makes its
-  bookkeeping the recording's at the next capture point, and the picture of one frame stays. Its
-  first `setSFXoccupy` also starts twice there, at the step's images and again at the next, once the
-  water state is put back. Both are presentation on a puppet host. Whether a stock skirmish's SHARE
+  bookkeeping the recording's at the next capture point, and the picture of one frame stays: that is
+  presentation on a puppet host. Its `setSFXoccupy` is the recorded start alone (format 21), since a
+  puppet never runs the water state `0x43DB50`. Whether a stock skirmish's SHARE
   dialog lists an AI ally, the one stock way to make such a unit without a cheat, is not established
   (the code accepts any active type-1–3 record without the watcher bit; not run); `books_put`
   covers it either way, since it keys on the replay's create, not on its cause.
@@ -2664,8 +2668,32 @@ first slice a tick late, and a looping script stayed re-phased for the unit's li
   `codec-decline` and `tenseat` under `--cob-exact`, every lane passing: the recordings held
   1,675, 15,665, 140 and 3,864 queries, every playing made all it reached (none refused), and
   both keys' counts are equal live and puppet in every window (`slice-walkers` over [1171, 3121):
-  `QueryBuildInfo` 44 against 44, `QueryNanoPiece` 8,554 against 8,554). `QueryTransport` and
-  `QueryLandingPad` are not recorded: an open gap no fixture reaches.
+  `QueryBuildInfo` 44 against 44, `QueryNanoPiece` 8,554 against 8,554). Since format 21 the recording
+  carries `QueryTransport` and `QueryLandingPad` the same way, and `BeginTransport` and
+  `setSFXoccupy` as owner-only starts (*The transports, the pads and the waterline*, below).
+- **The transports, the pads and the waterline** (format 21). An air transport's pickup asks its
+  script `QueryTransport` (`0x4113B1`) and starts `BeginTransport` (`0x4113EF`); a landing on an air
+  base asks the pad `QueryLandingPad` (`0x411A35`, `0x411AA6`, `0x411BF5`, `0x411CF1`); a unit whose
+  water state `+0x10A` changes starts `setSFXoccupy` (`0x43DBE8`). All four are order handlers' or
+  the movement pass's, which a puppet never runs, so the recording carries them where the engine
+  makes them and the playing makes each through the same entry at its place (the
+  [engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
+  `BeginTransport`'s broadcast (`0x456218` from `0x411408`) is no longer recorded, and the playing
+  writes `+0x10A` from each image instead of calling `0x43DB50`. The test groups
+  `transport-pad` and `waterline`, each in both builds, reach them in every run. MEASURED
+  2026-10-13: in `transport-pad` (`scenarios/replay-transport-pad.json`, Core Prime Industrial
+  Area) an Atlas picks up a Peewee from the level's start and drops it at GameTime 900's order,
+  and a second Atlas lands on an ARMASP after a native click: 1 `QueryTransport`, 2
+  `QueryLandingPad` (`0x411A35`, `0x411BF5`), 1 `BeginTransport` and 8 to 10 `EndTransport` a
+  run. In `waterline` (`scenarios/replay-waterline.json`, Anteer Strait) a hovercraft, an
+  amphibious kbot and a Bear hover transport carrying a Peewee cross into the water and back,
+  and the Bear unloads on the shore: 26 recorded `setSFXoccupy` in the raised build and 22 in the
+  stock-limits one, one `TransportPickup` and five `TransportDrop`. Every lane of the four passes
+  with the live and puppet counts equal and no native owner-only start on a puppet.
+- **What B2 leaves**: the walk class `0x43DA70`'s starts (`StartMoving`, `StopMoving`,
+  `MoveRate1..3`) still run in the playing's images, a slice late against the owner's machine;
+  recording them is the size decision the [completeness note](demo-recorder-completeness.md)
+  names (*COB slices a playing gives one tick late*).
 
 ## S5
 

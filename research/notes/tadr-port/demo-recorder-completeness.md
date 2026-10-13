@@ -297,9 +297,11 @@ recording where that writer is gated on a puppet host (`s_quiet`); S3c sorts eac
 
 **What playback leaves to the host's engine, and where that stops holding.** Playback's own masks
 (`masks_init`, `tagpu_replay.c`; the recording carries the bytes) leave a few engine bytes the host
-derives from the same history as the recording machine — a unit's water state `+0x10A` and its sight
-stamp's fields `+0x7A`, `+0x7C`, `+0xF8`, and the state byte `+0x10E`, which the state events carry
-— to the host, which writes them itself. Three things cut that history, and in each the replay sets
+derives from the same history as the recording machine — a unit's sight stamp's fields `+0x7A`,
+`+0x7C`, `+0xF8`, and the state byte `+0x10E`, which the state events carry — to the host, which
+writes them itself. The water state `+0x10A` is out of the raw write too, and since format 21 the
+playing writes it from each image of a unit with a mover (its one script, `setSFXoccupy`, is a
+recorded start) and from the create event; the bookkeeping below then finds it equal. Three things cut that history, and in each the replay sets
 them from the recording rather than masking more: a seek (R8b: all three, the stamp through the
 engine's removal and stamp so the sight counters stay exact); a create in a slot dead at T (the
 create event carries the water state its unit took from its slot); and a unit the recording machine
@@ -395,12 +397,12 @@ player's recording logs and counts it. Playback calls the same emitter for the p
 recorded point, box and layer, the layer bounded by the ten particle layers first. The
 engine facts are in the engine map's *The nano spray*
 ([engine map](../exe-reverse-engineering.md)). **The owner's COB queries** are the second case:
-`QueryBuildInfo` and `QueryNanoPiece` are made only by order handlers, and a query runs a thread
-of the unit's COB to its end at once, so the recorder writes `RK_EV_QUERY {ID, the query}` where
-the engine makes each, and a playing makes the same `0x4B0BC0` at that place with the engine's
-arguments ([the engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
-`QueryTransport` and `QueryLandingPad`, among the air transport and landing handlers, are not
-recorded: an open gap no fixture reaches.
+`QueryBuildInfo`, `QueryNanoPiece`, `QueryTransport` and `QueryLandingPad` are made only by order
+handlers, and a query runs a thread of the unit's COB to its end at once, so the recorder writes
+`RK_EV_QUERY {ID, the query}` where the engine makes each, and a playing makes the same `0x4B0BC0`
+at that place with the engine's arguments
+([the engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
+The fifth `QueryLandingPad` call, `0x41189C`, is in a function nothing calls.
 
 **COB on a puppet has one writer.** In puppet mode COB's SET, ATTACH and DROP change no engine
 state, and the recorder alone writes `+0x10E`, `+0x10F` and the carry links; it applies `+0x10E`
@@ -408,8 +410,14 @@ through `0x48B090`, which returns early on an unchanged byte, so each recorded c
 scripts once. Script starts are recorded at the five broadcaster call sites, and where the engine
 starts a script that only the owner's machine does: `HitByWeapon` (`0x489F43`) and `TakeDamage`
 (`0x489F8E`) in the hit, which a replay host never applies, `TransportPickup` (`0x406834`),
-`TransportDrop` (`0x4069BF`) and `EndTransport` in the transport orders, and `TargetCleared`. A start a script issues reaches neither and runs again on the puppet
-from its parent, so recording it would double it. For the same reason a puppet's order nodes are
+`TransportDrop` (`0x4069BF`), `BeginTransport` (`0x4113EF`) and `EndTransport` in the transport
+orders, `setSFXoccupy` (`0x43DBE8`) in the water state `0x43DB50`, and `TargetCleared`.
+`BeginTransport` runs at once on the recording machine while its broadcast, which a remote copy
+starts later, is not recorded; and a puppet never runs `0x43DB50`, whose callers run only on the
+owner's machine or a network peer: the playing writes `+0x10A` from each image (the
+[engine map](../exe-reverse-engineering.md), *BeginTransport is recorded at its start*). A start a
+script issues reaches neither and runs again on the puppet from its parent, so recording it would
+double it. For the same reason a puppet's order nodes are
 held disarmed, so that destroying one runs no owner code: `+0x06` bit 1 clear (the handler's own
 call), `+0x42` bit `0x400000` clear (a second `StopBuilding`, `0x43A21E..0x43A25D`), `+0x52` NULL
 (the handler's owned object), and `+0x42` bit `0x10000` set, without which the destructor resets the
@@ -1019,6 +1027,7 @@ region with whether its fixtures reach it.
 | 2026-10-12 | **An owner-only COB query `--cob-exact` names is recorded and made again, not accepted** (the owner's standing decision for the slice marker, applied to `slice-walkers`' `QueryBuildInfo`, live 9 against puppet 0): `RK_EV_QUERY` carries `QueryBuildInfo` and `QueryNanoPiece` where the engine makes them, a playing makes each through `0x4B0BC0` at its place, and `QueryNanoPiece`'s `absent` row of 2026-10-01 goes, a tightening. AutoAim's aim queries keep their `absent` rows of 2026-10-01. |
 | 2026-10-12 | **A failure only under load is a bug in the check** (the owner's rule): a peek the running game has not answered is no progress, so `STALL_S` is the one bound on a running level. **Approved by the owner (2026-10-12):** the seek's W3 is an exact count of the blocks the reader decoded against the file's own, with the game thread's CPU time reported only and the gap that leaves accepted (*A seek's work, not its time*); and bits 1 and 2 of the pause word `main+0x38A51`, the pacing gate's lag flag and its live speed below the chosen one, are left (`replay-globals.tsv`, `pacingbits`, a `leave` row: bit 2 has no reader, bit 1 only the corner icon and the turbo). |
 | 2026-10-12 | **A skirmish recording holds its cells' unit slots and yard bit, and its playing's engine stamps them by the recording machine's contest rule** (OD4, option a; format 16's `RECL_CELLS`, *The cells held* in [making recordings smaller](demo-recorder-size.md)). On such a playing the grid and its contest marks, `+0x110` bits 26 and 27, have one writer, the three footprint writers: the playing writes neither, and the six contest `je`s are `90 90` from its first step to its end, so a contested cell keeps its incumbent as on the recording machine. A takeover writes the recording's slots, yard bits and marks at its refresh and refreshes the passability. **The loosening accepted with it**: after a seek -- the Q lane, a round trip's B dump, the dumps after one (`rt<T>c`), W, F and the forks lanes -- the slots, yard bits and marks are checked by the occupancy rule (`tarec.occupancy`, `--seek`): every footprint cell of a live mobile unit the stamp files (layer 1 or 2, the footprint on the grid by its bound with `fix_last_cell`) names it in its layer's slot, or, while this one carries the loser's mark, bit 27, names there a live unit of the same layer -- or a structure, which the stamp files in slot A whatever its layer, for a layer-1 unit -- whose footprint holds the cell and which carries the holder's mark, bit 26; every named slot is a live unit whose footprint holds the cell: a mobile unit of that slot's layer, or a structure in slot A (which cells of its footprint a structure holds follows its yardmap under the current mask, which a dump does not carry, so that is not checked); every yard bit lies in a live structure's footprint. A straight playing's slots are compared byte for byte with the exact stream's (`RB_EXACT`), or at a refresh. Nothing else is loosened. The residual: where the playing orders two contesting footprint calls otherwise than the game (deaths, creates and placements in slot order), the holder can differ. **Not decided**: the marks on a multiplayer playing, which still writes them from the recording beside the engine's slots, and its contests, which still follow the type-3 rule. |
+| 2026-10-13 | **The transport, pad and waterline COB entries follow the owner's machine** (the follow-up to the slice marker the owner asked for): `QueryTransport` and `QueryLandingPad` join the recorded queries, `BeginTransport` and `setSFXoccupy` the recorded owner starts (format 21); the `transport-pad` and `waterline` test groups drive them in both builds. A tightening of the 2026-09-30 D2 (`BeginTransport` left to its broadcast, which a playing starts one slice late). The walk class's starts are not recorded (*Not closed by the marker*: the size). |
 
 The owner approved one additional UI-only count exception on 2026-10-05: the native
 immediate-command click (`0x41A0F1` → `0x47F1A0("immediateorders", 0)`, return `0x41A0F6`),
@@ -1168,15 +1177,14 @@ Not closed by the marker:
   script's RAND can read another value than the recording machine's [INFERRED: not measured]. Not
   a regression of the marker: the capture point writes the RNG's state from the recording every
   step (`replay-globals.tsv`, `rngseed`), so a difference lasts one step; open.
-- **`setSFXoccupy` on a puppet.** The start is `0x43DBE8`, in the water-state function `0x43DB50`,
-  made when `+0x10A` changes: on the recording machine in the owner-gated movement pass, after the
-  unit's slice, run-now; a puppet makes it where the playing writes the images' water state
-  ([the engine map](../exe-reverse-engineering.md), `0x43DB50`), so a type whose script has
-  `setSFXoccupy` runs it at another place than the recording machine did. No fixture carries such
-  a type: under `--cob-exact` the naval fixtures pass with no `setSFXoccupy` start on either side
-  (MEASURED 2026-10-12, `naval-push` and `naval-unmapped`), and hovercraft and amphibious units
-  are in none. The owner has decided the follow-up landing, right after this one, adds the
-  fixtures; open until then.
+- **The walk class's starts stay the playing's own** (`0x43DA70` at the images: `StartMoving`,
+  `StopMoving`, `MoveRate1..3`), which is where *the walk class's run-now pass* and A6 come from.
+  Recording them where the recording machine makes them, as `setSFXoccupy` is (format 21), would
+  close both, at a cost the owner has not taken: MEASURED on `battle` at format 20, 36,752
+  `StartMoving`, 36,538 `StopMoving` and 84 `MoveRate2` starts in 2,851 ticks, about 26 events a
+  tick. A step in which a unit changes both its walk class and its water state runs the
+  `setSFXoccupy` thread at its place and again at `dt` 0 in the image's walk start, the same
+  run-now class.
 - **A unit dying before its turn** in the same tick, only through an earlier turn's immediate
   kill [INFERRED: a reclaim of a live unit]: live it gets no slice, a puppet gives it one in the
   host's tick.

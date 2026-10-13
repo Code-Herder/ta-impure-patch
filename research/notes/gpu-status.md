@@ -2977,12 +2977,16 @@ Reproduction's **source test** `0x424185..0x42418E` (`mov ecx,[esp+0x10]; cmp wo
 0x4241A8`) is redirected whole to a stub that makes the test through `feat_source`: the stock
 test on the engine's own cell pointer, recorded as `FS_SOURCE` by a multiplayer recording, and
 answered from the recording on a multiplayer playing's host, whose slots follow the owners'
-units; it jumps on to `0x42418F` or `0x4241A8` with `eax` and `ecx` as stock left them. Thirteen `call`s of the COB starts `0x4B0A70` and `0x4B0940` (HitByWeapon, TakeDamage,
-TransportPickup, TransportDrop, TargetCleared, EndTransport) go through a stub that records and
-then jumps to the function, and so does BuildingBuild's `QueryBuildInfo` call `0x4027FB` of the
-query `0x4B0BC0`: with `QueryNanoPiece`, the two COB queries only an order handler makes, each
-recorded at its place in the step as `RK_EV_QUERY` and its COB noted in the slice markers' start
-set ([the engine map](exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)). The five fire functions' network tests (`0x49D7A0`, `0x49DA92`,
+units; it jumps on to `0x42418F` or `0x4241A8` with `eax` and `ecx` as stock left them. Fifteen `call`s of the COB starts `0x4B0A70` and `0x4B0940` (HitByWeapon, TakeDamage,
+TransportPickup, TransportDrop, BeginTransport, setSFXoccupy, TargetCleared, EndTransport) go
+through a stub that records and then jumps to the function, and so do six calls of the query
+`0x4B0BC0` (BuildingBuild's `QueryBuildInfo` `0x4027FB`, VTOL_Pickup's `QueryTransport`
+`0x4113B1`, VTOL_Landing's four `QueryLandingPad` `0x411A35`, `0x411AA6`, `0x411BF5`,
+`0x411CF1`): with `QueryNanoPiece`, the COB queries only an order handler makes, each recorded at
+its place in the step as `RK_EV_QUERY` and its COB noted in the slice markers' start set
+([the engine map](exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
+The broadcast observer `0x456218` leaves out the broadcast from `0x411403`, which follows
+BeginTransport's recorded start. The five fire functions' network tests (`0x49D7A0`, `0x49DA92`,
 `0x49DC64`, `0x49DE25`, `0x49DFAF`) are released while a skirmish is recorded, so that each builds
 its `0x0D` on its own stack; the extra weapons' `wpn_tx_fired` hands it over at the send and skips
 the send when there is no network (§2.6b); four of the released blocks also run the extra weapons' slot-index splice, which writes no simulation state (`cb_slot_index` says why). That release is the only change to what the engine

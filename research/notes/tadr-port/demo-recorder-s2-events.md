@@ -572,15 +572,17 @@ instead of in the host's unit tick, so a start made before the slice -- AutoAim'
 Create in a later slot -- takes its first slice where it did on the recording machine
 ([skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-20)).
 
-### 1.8c The owner's COB queries — `RK_EV_QUERY` (format 20)
+### 1.8c The owner's COB queries — `RK_EV_QUERY` (format 20; transport and pad, format 21)
 
 Not a root: a COB query `0x4B0BC0` only an order handler makes, so only the machine of the
-handler's unit's owner -- `QueryBuildInfo` at `0x4027FB` (BuildingBuild) and `QueryNanoPiece` at
-`0x43E427` (inside `0x43E400`, from fifteen handlers). `{u32 ID, u8 the query, u8 0 x3}`, outside
-any bracket, written where the engine makes the query, in the handler's unit's turn after that
-unit's slice. The queried unit is the spray's source: the handler's unit, or in SelfRepair
-(`0x402525..0x40252E`) the repairing pad, whose own slice can come later in the tick and which can
-be another player's; the query's COB is noted in the slice set so that slice is marked. A playing
+handler's unit's owner -- `QueryBuildInfo` at `0x4027FB` (BuildingBuild), `QueryNanoPiece` at
+`0x43E427` (inside `0x43E400`, from fifteen handlers), and since format 21 `QueryTransport` at
+`0x4113B1` (VTOL_Pickup) and `QueryLandingPad` at `0x411A35`, `0x411AA6`, `0x411BF5` and
+`0x411CF1` (VTOL_Landing). `{u32 ID, u8 the query, u8 0 x3}`, outside any bracket, written where
+the engine makes the query, in the handler's unit's turn after that unit's slice. The queried unit
+is the handler's, or a pad -- SelfRepair's repairing pad (`0x402525..0x40252E`), VTOL_Landing's
+landing pad (the order's `+0x16`) -- whose own slice can come later in the tick and which can be
+another player's; the query's COB is noted in the slice set so that slice is marked. A playing
 makes the same query there with the engine's arguments
 ([engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
 
@@ -963,6 +965,8 @@ Other sites considered and rejected:
 ## 6. The decisions
 
 Taken 2026-09-30 (the slice note's *Decided 2026-09-30* and *S2a*): D1 as recommended; D2 wider than recommended, every owner-only start the game showed is recorded, TargetCleared included, and BeginTransport is not among them, because 0x411403 broadcasts it (0x456200) and the broadcasters record it; D3 and D5 as recommended, implemented by S2a; D4, D6 and D7 are S2b's.
+
+Format 21 (2026-10-13) records BeginTransport at its start `0x4113EF` after all, and leaves its broadcast out: the start runs at once on the recording machine, while the broadcast is started with run-now 0 by a remote copy and by a playing, one slice later (the engine map, *BeginTransport is recorded at its start*). `setSFXoccupy` (`0x43DBE8`) joins the owner-only starts in the same format.
 
 
 - **D1 — Unit replies on a replay.** A live remote never plays another player's; the watched
