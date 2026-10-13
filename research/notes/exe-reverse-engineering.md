@@ -2687,7 +2687,14 @@ does.
 unit with a mover (`0x48AFA3`) behind the owner gate, and the `0x2C` receiver's sweep `0x48BA46`
 over a network peer's units. Neither runs on a puppet level, so a playing writes `+0x10A` from
 each image (`tagpu_replay.c`, `water_put`) and never runs `0x43DB50`: the recorded start is the
-script's one source, at the place in the step where the recording machine made it.
+script's one source. A puppet plays it among the step's replayed events, which come before the
+images that place the unit (`0x48A9F0`) and start its walk class (`0x43DA70`); the recording
+machine made it last of the three, in `0x43DD20`'s order (placement `0x43DD55`, walk `0x43DD5D`,
+water `0x43DD65`). So when one step changes both the walk class and the water state, a puppet
+starts `setSFXoccupy` before the walk script, and the start's run-now pass (its third argument 1 at
+`0x43DBDD`; `0x4B0B86..0x4B0BA6`) runs the unit's threads at `dt` 0 at the previous step's
+position. The owner accepted that order on 2026-10-13 with the walk class's residual (the
+completeness note, *Not closed by the marker*).
 
 **Shots: the five network tests.** A fire function builds its `0x0D` only under the network bit:
 `test byte [reg+0x2A44],1` then a `je` past the build and the send, at `0x49D7A0` (`ecx`, to

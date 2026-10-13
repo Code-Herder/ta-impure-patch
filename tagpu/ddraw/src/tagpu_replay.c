@@ -1923,7 +1923,13 @@ static int build_finished(float f)
    its callers, the movement pass from the owner-gated unit tick (0x48AFAA) and the 0x2C receiver
    (0x48BA46), never run on a puppet level, so this write and the recorded setSFXoccupy start are
    the field's and the script's only sources, and the field holds the recording machine's value at
-   every capture point. */
+   every capture point.
+   The residual, owner-accepted with the walk class's (completeness note, *Not closed by the
+   marker*): the engine's movement pass 0x43DD20 places the unit (0x43DD55), runs the walk class
+   (0x43DD5D) and then the water state (0x43DD65), but a puppet plays the recorded setSFXoccupy
+   among the step's events, before unit_put places the unit and calls E_Walk. A step that changes
+   both starts setSFXoccupy before the walk script, and that start's run-now pass (0x4B0B86..
+   0x4B0BA6) runs the unit's threads at the previous step's position. */
 static void water_put(char* u, const char* ib)
 {
     uint32_t water;
