@@ -67,7 +67,8 @@ teams. The same switches, and more, go in the URL, for captures:
   pressed), `toast=<text>` (a toast shown);
 - `state=<url>`: draw the state the game dumped (`tagpu_replayhud.json`) — its screen, its
   engine frame, its players and its stats window with the game's samples — instead of the
-  synthetic game. The synthetic game's chart is 67 made-up samples over its 132 seconds.
+  synthetic game. The synthetic game's chart is 67 made-up samples over its 132 seconds;
+- `prop=0` or `prop=1`, `nf=2`, `tl=1`, `pick`, `mode=live`, `rw`: the proposed features, below.
 
 `tools/hudart/capture.sh "<url>?paused&res=3840x2160&game=150&hud=150" out.png` captures the stage at
 native 4K. It lays the page out at device scale factor 1, one CSS pixel to a screen pixel, as the
@@ -95,6 +96,44 @@ mockup its query carries `stat=1`, so that the chips it captures are on screen.
 
 - **After any change,** capture at 3840×2160 with both scales at 150, the owner's setting, and
   look at it. Check `game=auto` too, where the engine's frame is largest and the list scrolls.
+
+## Proposed: forks, take over and live rewind
+
+**A proposal, not the game.** The owner chose variation B of the replay UI's missing features
+on 2026-10-12, from a canvas of four whitebox variations: forks drawn as lanes on the timeline.
+The mockup draws it from `layout.json`'s `proposed` section behind its **Proposed** switch (on
+by default, `prop=0` turns it off). The DLL does not read that section, and `laycheck.py` runs
+with `prop=0`. A part the kit has no art for yet is drawn as whitebox: a mid-grey plate with a
+dark edge, and an icon it lacks as a stand-in glyph.
+
+- **Lanes.** Each fork the replay keeps (at most `forks.max`, 3) is a lane on a plate above the
+  timeline housing, as wide as the housing. The oldest branch is on top. A lane runs from where
+  the fork branched to where it ends, on the track's own time axis. A lane narrower than
+  `lane.min_w` widens to the right first. A line drops from the branch to the track, and the
+  playhead's line runs up through every lane. The lane's label names the player taken over and
+  the branch time. Its right end carries Export and Delete; a first click on Delete arms it,
+  and a second deletes the fork.
+- **The axis.** A fork can run longer than the replay. The track's axis is therefore the longest
+  timeline kept, and the groove past the replay's end is shaded (`forks.after`).
+- **Watching a fork.** Clicking a lane watches that timeline and presses the lane in. Its played
+  part fills to the playhead, the main track stays filled only to the branch, and the clock shows
+  the fork's length. Clicking the pressed lane goes back to the replay.
+- **The column.** The column stands on the lane plate, because the lanes run under it, so fewer
+  rows fit while forks are kept.
+- **Take over.** A button as wide as the transport plate sits on top of it, level with the lanes,
+  and names the playhead's time. It opens the **player picker**, which lists every player with
+  their colour. A player defeated by the playhead is dimmed and cannot be taken. With 3 forks
+  kept, the picker says which fork a take-over replaces, the one watched least recently, and
+  outlines that fork's lane.
+- **Live rewind.** With `mode=live` the page shows a live game. A rewind button sits in the top
+  bar beside the Impure Config sprocket; the sprocket is drawn as a dark stand-in, since the
+  game draws it outside the HUD. The button opens a strip under the top bar over the paused game:
+  the transport, a track up to NOW, the time, **Play from here** and **Back to now**. The strip
+  reuses the bay buttons, the timeline fill and the playhead.
+
+The shell screens of variation B (fork rows in the Replays browser, Delete and Play on there,
+Rewind on the end screen, and the Record games and Keep replays rows in Impure Config) are
+engine GUI. They are drawn with the game's own widgets, so the mockup does not draw them.
 
 ## Units and the screen
 

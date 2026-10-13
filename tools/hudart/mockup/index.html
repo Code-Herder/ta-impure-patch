@@ -35,11 +35,16 @@ p.note { color: var(--muted); max-width: 80ch; }
   <label>Replay HUD <select id="hud"><option value="0.75">75%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select></label>
   <label>Players <select id="np"></select></label>
   <label>Teams <select id="nt"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+  <label>Proposed <select id="prop"><option value="1">B: forks as lanes</option><option value="0">off, as the game</option></select></label>
+  <label>Forks <select id="nf"><option>0</option><option>1</option><option>2</option><option>3</option></select></label>
+  <label>Showing <select id="mode"><option value="replay">a replay</option><option value="live">a live game</option></select></label>
 </header>
 <div class="wrap" id="wrap"><div class="stage" id="stage"><canvas class="bg" id="bg"></canvas><div class="hud" id="hud-layer"></div></div></div>
 <p class="note">Every size, position and style here comes from <code>art/hud/layout.json</code> and the parts in <code>art/hud/</code>;
 this page only supplies a game to show. Hover a player row for its actions; drag the timeline to seek and the window by its title.
-The numbers are synthetic.</p>
+The numbers are synthetic. <b>Proposed</b> draws variation B of the replay UI's missing features over it, as whitebox where the kit has
+no art yet: forks as lanes over the timeline, Take over and its player picker, and, showing a live game, the rewind button beside the
+Impure Config sprocket and the strip it opens. The game draws none of it yet.</p>
 <script src="hud.js"></script>
 <script>
 const $ = s => document.querySelector(s);
@@ -55,15 +60,22 @@ const SEAT_COL = ['#233bcb', '#d32b00', '#fbfbfb', '#2f771b', '#7a3fb0', '#e8d20
 // the four overlay switches are on whenever a replay starts, and never saved; the stats window is closed whenever a
 // replay starts, and keeps its measure, its split and its place
 const S = { t: 70, playing: true, speed: 1, hud: 1, game: 150, res: 'fit', np: 10, nt: 2, fold: [], bm: [40], stat: false, sm: 'units', ss: 'player', sw: null,
-  ov: { cursors: true, clicks: true, selections: true, chat: true }, sight: -1, follow: -1, scroll: 0, toast: '' };
+  ov: { cursors: true, clicks: true, selections: true, chat: true }, sight: -1, follow: -1, scroll: 0, toast: '',
+  // proposed, variation B: the forks kept (S.forks, from FORK_SEED), the one watched (S.tl, -1 the replay), the picker,
+  // a fork's Delete armed by a first click, and the live game with its rewind strip open (S.rw)
+  prop: 1, nf: 2, forks: null, tl: -1, pick: false, armed: -1, mode: 'replay', rw: false };
 try { const o = JSON.parse(localStorage.getItem('hud-mockup') || '{}'); delete o.stat; Object.assign(S, o); } catch (e) {}
-const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ hud: S.hud, game: S.game, res: S.res, np: S.np, nt: S.nt, sm: S.sm, ss: S.ss, sw: S.sw })); } catch (e) {} };
+const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ hud: S.hud, game: S.game, res: S.res, np: S.np, nt: S.nt, sm: S.sm, ss: S.ss, sw: S.sw,
+  prop: S.prop, nf: S.nf, mode: S.mode })); } catch (e) {} };
 { const q = new URLSearchParams(location.search);   // screenshot switches: res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&paused,
   // and scroll=<first item>, sight=<seat>, follow=<seat>, toast=<text>, stat=1, sm=<measure>, ss=<player|team>, sx=<x>&sy=<y> (the window's place)
   if (q.has('paused')) S.playing = false; if (q.get('res')) S.res = q.get('res'); if (q.get('hud')) S.hud = +q.get('hud') / 100;
   if (q.get('game')) S.game = { off: -1, auto: 0 }[q.get('game')] ?? +q.get('game');
   for (const k of ['np', 'nt', 't', 'scroll', 'sight', 'follow']) if (q.get(k)) S[k] = +q.get(k); for (const k of ['sm', 'ss', 'toast']) if (q.get(k)) S[k] = q.get(k);
   if (q.has('stat')) S.stat = q.get('stat') !== '0';
+  // proposed: prop=0|1, nf=<forks kept>, tl=<fork watched>, pick (the picker open), mode=live, rw (the rewind strip open)
+  for (const k of ['prop', 'nf', 'tl']) if (q.get(k)) S[k] = +q.get(k);
+  if (q.has('pick')) S.pick = true; if (q.get('mode')) S.mode = q.get('mode'); if (q.has('rw')) S.rw = true;
   if (q.has('sx')) S.sw = { x: +q.get('sx'), y: +(q.get('sy') || 0) }; }
 
 /* ---- the game's own state: state=<url> loads what the game dumped (tagpu_replayhud.dump, tagpu_hudstate.c) -- the screen,
@@ -82,6 +94,16 @@ function seats() {
              mi: Math.round(40 + mf * 90), mo: Math.round(20 + mf * 60), ei: Math.round(300 + ef * 600), eo: Math.round(150 + ef * 500) } };
   });
 }
+/* the forks a replay keeps: at most FORK_MAX, the least recently watched replaced by a new one. Each branched off the
+   replay where a player was taken over, and ran on as long as that game was played */
+const FORK_MAX = 3, FORK_SEED = [{ seat: 0, from: 30, len: 160 }, { seat: 3, from: 100, len: 70 }, { seat: 2, from: 60, len: 95 }];
+let seen = 0;
+const seedForks = () => { S.forks = FORK_SEED.slice(0, S.nf).map((f, k) => ({ ...f, id: k + 1, seen: ++seen })); S.tl = Math.min(S.tl, S.forks.length - 1); };
+const forkList = () => S.forks.slice().sort((a, b) => a.from - b.from);
+const watched = () => S.prop && S.mode === 'replay' && S.tl >= 0 ? forkList()[S.tl] : null;
+const clock = t => { t = Math.max(0, Math.round(t)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+const axis = () => S.prop && S.mode === 'replay' ? Math.max(T, ...S.forks.map(f => f.from + f.len)) : T;
+const tlEnd = () => { const f = watched(); return f ? f.from + f.len : T; };
 const teams = () => { const N = S.np, k = Math.max(1, Math.min(S.nt, N)); return [...Array(k)].map((_, t) => [...Array(N).keys()].filter(i => Math.floor(i * k / N) === t)); };
 
 // the stats window's series: 67 samples per player over the game
@@ -143,11 +165,16 @@ function state() {
     return { W: g.W, H: g.H, frame: g.frame, t: g.t, T: g.T, playing: g.playing, speed: g.speed, hud: g.hud, seats: g.seats, teams: g.teams,
       folded: g.folded, markers: g.markers, toggles: g.toggles, sight: g.sight, follow: g.follow, scroll: g.scroll, toast: g.toast,
       stats: g.stats }; }
-  return { W: w / u, H: h / u, frame: { panel: ef.panel / ud, top: ef.bar / ud, bottom: ef.bar / ud },
+  const base = { W: w / u, H: h / u, frame: { panel: ef.panel / ud, top: ef.bar / ud, bottom: ef.bar / ud } };
+  if (S.prop && S.mode === 'live') return { ...base, t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, live: { open: S.rw }, toast: S.toast, stats: { open: false } };
+  const fl = S.prop ? forkList() : null, lru = fl && fl.length >= FORK_MAX ? fl.indexOf(fl.reduce((a, f) => f.seen < a.seen ? f : a)) : -1;
+  const prop = !S.prop ? {} : { T: axis(), ends: T, len: tlEnd(), fillTo: watched() ? watched().from : T, timeline: S.tl, picker: S.pick, armed: S.armed,
+    replace: S.pick ? lru : -1, forks: fl.map(f => ({ id: f.id, name: ps[f.seat] ? ps[f.seat].name : NAMES[f.seat], from: f.from, end: f.from + f.len })) };
+  return { ...base,
     t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, seats: ps, teams: tm, folded: S.fold, markers,
     sight: S.sight, follow: S.follow, scroll: S.scroll, toast: S.toast,
     toggles: { ...S.ov, stats: S.stat },
-    stats: { open: S.stat, x: sw.x, y: sw.y, measure: m.k, split: byTeam ? 'team' : 'player', groups, dt: DT, t0: 0 } };
+    stats: { open: S.stat, x: sw.x, y: sw.y, measure: m.k, split: byTeam ? 'team' : 'player', groups, dt: DT, t0: 0 }, ...prop };
 }
 const px = () => unit() * (window.devicePixelRatio || 1);
 function build() { HUD.draw(layer, state(), px()); }
@@ -187,7 +214,8 @@ function resize() {
 /* ---- input ---- */
 function toast(msg) { S.toast = msg; clearTimeout(toast.h); toast.h = setTimeout(() => { S.toast = ''; build(); }, HUD.layout.toast.ms); }
 let seek = null, drag = null;
-function seekTo(tr, x) { const r = tr.getBoundingClientRect(), e = +tr.dataset.ends * unit(); S.t = Math.min(T, Math.max(0, (x - r.left - e) / (r.width - 2 * e) * T)); HUD.tick(layer, state()); }
+// the track's axis is the longest timeline kept; a seek stops at the end of the one watched
+function seekTo(tr, x) { const r = tr.getBoundingClientRect(), e = +tr.dataset.ends * unit(); S.t = Math.min(tlEnd(), Math.max(0, (x - r.left - e) / (r.width - 2 * e) * axis())); HUD.tick(layer, state()); }
 layer.addEventListener('pointerdown', e => {
   const b = e.target.closest('.art.hot[data-down]');
   if (b && !b.dataset.on) { HUD.press(b, true); const up = () => { HUD.press(b, false); window.removeEventListener('pointerup', up); }; window.addEventListener('pointerup', up); }
@@ -214,9 +242,24 @@ layer.addEventListener('wheel', e => {
 layer.addEventListener('click', e => {
   const a = e.target.closest('[data-act]'); if (!a) return;
   switch (a.dataset.act) {
-    case 'play': if (S.t >= T) S.t = 0; S.playing = !S.playing; break;
+    case 'play': if (S.t >= tlEnd()) S.t = 0; S.playing = !S.playing; break;
     case 'rew': S.t = Math.max(0, S.t - 10); break;
-    case 'fwd': S.t = Math.min(T, S.t + 10); break;
+    case 'fwd': S.t = Math.min(tlEnd(), S.t + 10); break;
+    case 'takeover': S.pick = !S.pick; if (S.pick) S.playing = false; break;
+    case 'takeas': { const p = state().seats[+a.dataset.seat], fl = forkList();
+      if (fl.length >= FORK_MAX) S.forks = S.forks.filter(f => f !== fl.reduce((x, f) => f.seen < x.seen ? f : x));
+      const f = { seat: p.i, from: Math.round(S.t), len: 45, id: Math.max(0, ...S.forks.map(f => f.id)) + 1, seen: ++seen };
+      S.forks.push(f); S.pick = false; S.tl = forkList().indexOf(f);
+      toast(`Taking over ${p.name} at ${clock(f.from)}`); break; }
+    case 'lane': { const k = +a.dataset.fork; S.tl = S.tl === k ? -1 : k; if (S.tl >= 0) watched().seen = ++seen; S.t = Math.min(S.t, tlEnd()); S.armed = -1; break; }
+    case 'export': toast(`F${forkList()[+a.dataset.fork].id} saved as a replay of its own`); break;
+    case 'delete': { const k = +a.dataset.fork, f = forkList()[k];
+      if (S.armed !== k) { S.armed = k; toast(`Click again to delete F${f.id}`); break; }
+      S.forks = S.forks.filter(x => x !== f); S.armed = -1; if (S.tl === k) S.tl = -1; else if (S.tl > k) S.tl--; S.t = Math.min(S.t, tlEnd());
+      toast(`F${f.id} deleted`); break; }
+    case 'rewind': S.rw = !S.rw; S.playing = false; S.t = T; break;   // the strip opens, and closes, at now
+    case 'live_play': S.rw = false; toast(`Playing on from ${clock(S.t)}`); S.t = T; break;
+    case 'live_now': S.rw = false; S.t = T; break;
     case 'speed': S.speed = SPEEDS[(SPEEDS.indexOf(S.speed) + 1) % SPEEDS.length]; break;
     case 'bookmark': { const near = S.bm.findIndex(t => Math.abs(t - S.t) < 3); if (near >= 0) S.bm.splice(near, 1); else S.bm.push(Math.round(S.t));
       toast(near >= 0 ? 'Bookmark removed' : `Bookmark at ${Math.floor(S.t / 60)}:${String(Math.round(S.t) % 60).padStart(2, '0')}`); break; }
@@ -242,13 +285,16 @@ layer.addEventListener('click', e => {
 let last = performance.now(), lastTick = 0;
 function frame(now) {
   const dt = Math.min(.1, (now - last) / 1000); last = now;
-  if (S.playing) { S.t += dt * S.speed; if (S.t >= T) { S.t = T; S.playing = false; build(); } else if (now - lastTick > 100) { lastTick = now; HUD.tick(layer, state()); } }
+  if (S.playing) { S.t += dt * S.speed; if (S.t >= tlEnd()) { S.t = tlEnd(); S.playing = false; build(); } else if (now - lastTick > 100) { lastTick = now; HUD.tick(layer, state()); } }
   requestAnimationFrame(frame);
 }
 
 /* ---- the toolbar ---- */
 $('#np').innerHTML = [...Array(15)].map((_, i) => `<option>${i + 2}</option>`).join('');
 for (const k of ['res', 'np', 'nt']) { $('#' + k).value = S[k]; $('#' + k).onchange = e => { S[k] = k === 'res' ? e.target.value : +e.target.value; if (k !== 'res') S.fold = []; save(); resize(); }; }
+for (const k of ['prop', 'nf', 'mode']) { $('#' + k).value = S[k]; $('#' + k).onchange = e => { S[k] = k === 'mode' ? e.target.value : +e.target.value;
+  if (k === 'nf') { S.tl = -1; seedForks(); } S.pick = S.rw = false; S.armed = -1; S.t = Math.min(S.t, tlEnd()); save(); resize(); }; }
+seedForks();
 $('#hud').value = S.hud; $('#hud').onchange = e => { S.hud = +e.target.value; save(); resize(); };
 $('#game').value = S.game; $('#game').onchange = e => { S.game = +e.target.value; save(); resize(); };
 window.addEventListener('resize', resize);

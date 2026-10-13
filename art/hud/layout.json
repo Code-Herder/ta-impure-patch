@@ -130,5 +130,46 @@
   "now": {"colour": "#f0c850", "width": 0.9, "over": 2},
   "line": {"width": 1.1, "faint": 0.28, "dark": 60, "halo": "#9aa2b4", "halo_opacity": 0.6, "cross": 2.5, "cross_w": 1},
   "legend": {"pad": 2, "x": 8, "r": 10, "row": 10, "swatch": 4, "swatch_y": 0.18, "swatch_h": 0.64, "swatch_edge": "#888888", "swatch_edge_w": 0.4, "text_x": 7, "text_y": 0.72, "text_h": 0.8, "size": 7, "name": "#d8d8d8", "value": "#e8e8e8"}
+ },
+
+ "proposed": {
+  "about": "Variation B of the replay UI's missing features, whitebox: forks as lanes over the timeline, Take over and its player picker, live rewind. The mockup draws it behind its Proposed switch; the DLL does not read it yet. A part the kit lacks is drawn as whitebox.",
+  "forks": {
+   "max": 3,
+   "plate": {"part": "lanes_plate", "gap": 3, "pad": [0, 4, 0, 4]},
+   "lane": {"part": "lane", "pressed": "lane_down", "h": 14, "gap": 3, "min_w": 110,
+            "label": {"pad": [4, 0, 0, 0], "style": "face_xs"},
+            "fill": {"part": "track_fill", "pad": [1.5, 1.5, 1.5, 1.5]},
+            "buttons": {"part": "lane_button", "pressed": "lane_button_down", "w": 13, "gap": 1.5, "pad": 1,
+                        "icon": {"padf": 0.18},
+                        "items": [{"act": "export", "icon": "export"}, {"act": "delete", "icon": "delete"}]}},
+   "branch": {"w": 1, "colour": "#0c0c0a"},
+   "playhead": {"w": 0.8, "colour": "#f0c850"},
+   "replace": {"colour": "#ff6a1a", "width": 1.2},
+   "after": {"colour": "#000000", "alpha": 0.55},
+   "takeover": {"part": "takeover_button", "pressed": "takeover_button_down", "h": 20, "gap": 3,
+                "text": {"style": "face_big", "align": "c"}}
+  },
+  "picker": {"part": "picker_one", "w": 160, "gap": 3, "pad": 4,
+             "title": {"h": 16, "pad": [4, 0, 4, 0], "style": "header"},
+             "row": {"part": "pick_row", "pressed": "pick_row_down", "h": 15, "gap": 1.5,
+                     "stripe": {"w": 5, "pad": 2.5}, "name": {"pad": [12, 0, 3, 0], "style": "name"},
+                     "note": {"pad": [0, 0, 4, 0], "style": "label"}, "off": 0.45},
+             "warn": {"line": 10, "pad": [4, 3, 4, 2], "style": "window_foot", "colour": "#ffb070"}},
+  "live": {
+   "entry": {"bar": 32, "sprocket": {"r": 16, "t": 2, "s": 28}, "r": 47, "t": 2, "s": 28,
+             "part": "rewind_button", "pressed": "rewind_button_down", "icon": {"name": "rewind", "padf": 0.16}},
+   "strip": {"part": "live_one", "l": 12, "r": 12, "t": 6, "h": 34, "pad": 5, "gap": 3,
+             "button": {"part": "bay_button", "pressed": "bay_button_down"},
+             "transport": [{"act": "rew", "icon": {"name": "rew", "w": 14, "h": 14}, "w": 24},
+                           {"act": "play", "icon": {"name": "play", "playing": "pause", "w": 14, "h": 14}, "w": 24},
+                           {"act": "fwd", "icon": {"name": "fwd", "w": 14, "h": 14}, "w": 24}],
+             "track": {"part": "live_groove", "h": 14, "ends": 2, "fill": {"part": "track_fill", "pad": [2, 2, 2, 2]},
+                       "playhead": {"part": "playhead", "w": 4, "pad": [0, -1, 0, -1]}},
+             "now": {"w": 20, "style": "label", "align": "c"},
+             "time": {"w": 60, "style": "num", "align": "c"},
+             "actions": [{"act": "live_play", "text": "play from here", "w": 80}, {"act": "live_now", "text": "back to now", "w": 66}],
+             "text": {"style": "face_xs", "align": "c"}}
+  }
  }
 }
