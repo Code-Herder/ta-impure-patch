@@ -1940,7 +1940,12 @@ mask the run keeps, a cache index past the cache's values and a residual past it
 and, as bytes, the coder's last byte cut, a byte after it, a coder of 3 bytes and iterations not
 the head's. Fuzzed on the heavy hour, 20,000 cases each, C and Python agreeing in every case: the
 unit section alone on the x86-64 build with the sanitizers (110 accepted) and under Wine (97),
-every section on both (2,331 accepted by each); the sanitizers fired on none.
+every section on both (2,331 accepted by each); the sanitizers fired on none. The multiplayer
+file tests build the codec into the real writer and reader: `recmp_lifecycle_test.py` passes, and
+`recmp_file_test.py`'s complete file -- written, read by the C and Python readers, sought, and its
+perspective, network-create and contribution controls -- passes; its four incomplete-file modes
+fail at the same check with format 23's codec as with this one (the reader finds a second tick in
+the abandoned file).
 
 **What it does not do.** The escape's id has no context but its own tree; a literal is coded
 whole even when it is near a cached value; a block's coder ends with five shifts, 4 bytes, about
