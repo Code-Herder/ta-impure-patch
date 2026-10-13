@@ -3807,7 +3807,7 @@ fixture.
 
 ### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 18 carries a stream block's unit deltas as residuals against a prediction, the
+Recording format 19 carries a stream block's unit deltas as residuals against a prediction, the
 *unit frame* (`tagpu/ddraw/src/tagpu_reccodec.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the plan and its measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md)). Where a rule exists the prediction
@@ -3950,7 +3950,7 @@ non-zero pitch scale (none of the recordings had one); the steering term's hidde
 
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 18 carries a stream block's projectile records as the *pool frame*
+Recording format 19 carries a stream block's projectile records as the *pool frame*
 (`tagpu/ddraw/src/tagpu_reccodec.c`, THE POOL FRAME; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md#l2-the-pool-frame-measured)): the
@@ -4024,7 +4024,7 @@ largest residual column of the battle, 214 KiB of its 2.09 MiB.
 
 ### The demo recorder's record frames: the engine facts they predict from [DISASSEMBLED + MEASURED 2026-10-10]
 
-Recording format 18 makes the bodies of a stream block's cells, order lists, events and state
+Recording format 19 makes the bodies of a stream block's cells, order lists, events and state
 records from four *record frames* (`tagpu/ddraw/src/tagpu_recframe_cells.c`, `_orders.c`,
 `_events.c`, `_state.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
@@ -4052,7 +4052,11 @@ records back, so a wrong fact costs size, never data. Each address was re-read i
   sign (the `mov`s between set no flags), and below 0 the cursor becomes `[main+0x14233] ·
   [main+0x14237] − 1`, W · H − 1 (`0x4240BE..0x4240CC`), and that tick skips reproduction (`jmp
   0x4241A8` at `0x4240D2`). The state frame predicts the cursor as `last ? last − 1 : W·H − 1` and
-  the pool's three heads as last time.
+  the pool's three heads as last time; an `RK_FEATURES` the prediction gives exactly, after an
+  explicit one since the reset, is a marker
+  in the kinds section, with no state-frame bytes (format 18; MEASURED 2026-10-12 on the heavy
+  four-player hour: 107,405 of 108,090 iterations, the cursor stepping as the tick steps it and
+  the heads unchanged).
 - **The wreck pool's links** (*The pool's start*, above): the level load's loop
   `0x421F5F..0x421F7E` stores next `i + 1` at `+0x00` and prev `i − 1` at `+0x02` of every
   `0x30`-byte record, then −1 as record 0's prev (`0x421F8D`) and the last record's next

@@ -149,7 +149,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 18                           # format 17's container, script slices, owner's queries
+REC_FORMAT = 19                           # format 18's kinds and container, script slices, owner's queries
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)

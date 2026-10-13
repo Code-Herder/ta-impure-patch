@@ -81,7 +81,7 @@ NROLES = len(ROLES)
 
 Unreadable = tarec.Unreadable
 
-REC_FORMAT = 18
+REC_FORMAT = 19
 RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH, RBF_CHAINED = 1, 2, 4, 8, 16
 RUN_WINDOW_LOG, CHAIN_MAX = 20, 9          # REC_RUN_WINDOW_LOG, REC_CHAIN_MAX
 RT_CODEC, RT_PHYSICS, RT_AIR = 29, 30, 31
@@ -90,6 +90,9 @@ RT_CODEC_DECLINED, RT_CODEC_MISMATCH = 44, 45
 RCS_COUNT = 8
 SEC_HEAD = 8 + 4 * RCS_COUNT               # RecSecHead: 40 bytes
 LANES_MAX, COUNTS_MAX, AIR_MAX, TICKS_MAX = 128, 8, 1024, 256
+KINDS_MAX, KINDS_MRU = 65536, 16           # RECC_KINDS_MAX, RECC_KINDS_MRU
+KM_TICKPAIR, KM_FEATURES = 0, 0xFFFF       # the kinds' markers (tagpu_recfmt.h, RCS_KINDS)
+RUN_DERIVED, RUN_IMPLICIT = 1, 2           # a run's count is its group's; a marker's record
 GRID_MAX, WRECKS_MAX = 1 << 22, 65536      # RECC_GRID_MAX, RECC_WRECKS_MAX
 FRAME_CAP = 16 << 20
 PAYLOAD_MAX = 64 << 20                     # RECR_BLOCK_MAX
@@ -99,6 +102,8 @@ DELTA_HEAD = tarec.REC_UNIT_DELTA_HEAD     # 16
 RK_TICK, RK_UNIT, RK_UNIT_DELTA, RK_UNIT_GONE = tarec.RK_TICK, tarec.RK_UNIT, tarec.RK_UNIT_DELTA, tarec.RK_UNIT_GONE
 RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA = tarec.RK_PROJ_HEAD, tarec.RK_PROJ, tarec.RK_PROJ_DELTA
 RK_EV_SHOT = tarec.RK_EV_SHOT
+RK_EV_FEATURE, RK_EV_FEATURE_END, RK_FEATURES = tarec.RK_EV_FEATURE, tarec.RK_EV_FEATURE_END, tarec.RK_FEATURES
+FR_TICK = tarec.FR_TICK
 PDW = 27                                   # a projectile image's dwords (REC_PROJ_DWORDS)
 PIMG = 4 * PDW
 _POOL_BODY_MAX = tarec.REC_PROJ_DELTA_HEAD + PIMG  # a delta of all 27 dwords: 116 bytes
@@ -505,19 +510,14 @@ def _varints(buf, at, end, n):
 # _refuse words it. The codes are this file's own: the core's below 100, then each record frame's
 # in its region -- the cells 100-149, the orders 150-199, the events 200-249, the state 250-299.
 
-(E_RUN_SHORT, E_KIND, E_RUN_EMPTY, E_FIRST, E_RUN_PAST, E_BODY, E_BODY_LEFT, E_TICK, E_UNIT_LEN,
- E_UNIT_SLOT, E_NOT_CAND, E_DELTAS, E_PAST_PAYLOAD, E_PAYLOAD, E_P_ITERS, E_P_CUT, E_P_COUNT,
- E_P_EXTENT, E_P_OVER, E_P_DEADS, E_P_DEAD, E_P_SURV, E_P_TAILS, E_P_TAIL, E_P_REF, E_P_HEADS,
- E_P_NOHEAD, E_P_SLOTS, E_F_SCHEME, E_F_NCOLS, E_F_TABLE, E_F_PAST, E_F_FILL, E_F_LEFT,
- E_F_BIG) = range(1, 36)
-_WHY = {E_RUN_SHORT: "a kind run cut short", E_KIND: "record kind {0}",
-        E_RUN_EMPTY: "a run of no records", E_FIRST: "the first record is not RK_TICK",
-        E_RUN_PAST: "more records than the payload holds",
-        E_BODY: "a body cut short or past 0xFFFF in section {0}",
+(E_BODY, E_BODY_LEFT, E_TICK, E_UNIT_LEN, E_UNIT_SLOT, E_NOT_CAND, E_PAST_PAYLOAD, E_PAYLOAD,
+ E_P_ITERS, E_P_CUT, E_P_COUNT, E_P_EXTENT, E_P_OVER, E_P_DEADS, E_P_DEAD, E_P_SURV, E_P_TAILS,
+ E_P_TAIL, E_P_REF, E_P_HEADS, E_P_NOHEAD, E_G_NONE, E_F_SCHEME, E_F_NCOLS, E_F_TABLE, E_F_PAST,
+ E_F_FILL, E_F_LEFT, E_F_BIG, E_G_PAST, E_M_TICK, E_M_FEAT) = range(1, 33)
+_WHY = {E_BODY: "a body cut short or past 0xFFFF in section {0}",
         E_BODY_LEFT: "{1} bytes left in section {0}", E_TICK: "an RK_TICK of {0} bytes",
         E_UNIT_LEN: "a unit record of {0} bytes", E_UNIT_SLOT: "a unit record for slot {0}",
         E_NOT_CAND: "a listed slot that is not a candidate",
-        E_DELTAS: "iteration {0}: the frame changes {1} units, its kinds hold {2} deltas",
         E_PAST_PAYLOAD: "the records pass the head's payload",
         E_PAYLOAD: "the records are {0} bytes, not the head's {1}",
         E_P_ITERS: "the pool frame's iterations are not the head's {0}",
@@ -533,7 +533,10 @@ _WHY = {E_RUN_SHORT: "a kind run cut short", E_KIND: "record kind {0}",
         E_P_REF: "iteration {0}: a reference {1} past section {2}",
         E_P_HEADS: "iteration {0} has {1} RK_PROJ_HEAD",
         E_P_NOHEAD: "iteration {0} changes the pool's count or extent with no RK_PROJ_HEAD",
-        E_P_SLOTS: "iteration {0}: the pool frame changes {1} records, its kinds hold {2}",
+        E_G_NONE: "iteration {0}: a frame makes {1} records of group {2}, its pattern none",
+        E_G_PAST: "iteration {0}: the pattern's runs of group {1} past the first hold {2}, the frame's total or more",
+        E_M_TICK: "iteration {0}: an empty feature tick before any explicit one",
+        E_M_FEAT: "iteration {0}: a predicted RK_FEATURES before any explicit one",
         E_F_SCHEME: "section {0}'s scheme {1}, this reader takes {2}",
         E_F_NCOLS: "section {0}'s column count is not its {1}",
         E_F_TABLE: "section {0}'s column table cut short",
@@ -553,49 +556,96 @@ def _refuse(err):
     raise Unreadable(_WHY[int(err[0])].format(*(int(v) for v in err[1:])))
 
 
-@_jit
-def _kind_runs(sec, at, end, payload, kinds, counts, err):
-    """The kinds section's (kind, count) runs into kinds[] and counts[]: the number of runs and of
-    RK_TICK records, or (-code, 0) refused."""
-    n = records = ticks = 0
+# ---- the kinds (tagpu_recfmt.h, RCS_KINDS; tagpu_reccodec.c, THE KINDS) ------------------------
+
+def _vget(p, at, end):
+    """One varint of p[at:end] as varint_get reads it: (value, new at), the new at -1 when it is
+    malformed or runs past `end`."""
+    x = 0
+    for i in range(5):
+        if at >= end:
+            return 0, -1
+        b = int(p[at])
+        at += 1
+        if i == 4 and b > 0x0F:
+            return 0, -1
+        x |= (b & 0x7F) << (7 * i)
+        if b < 0x80:
+            return x, at
+    return 0, -1
+
+
+def _group_of(kind):
+    """A kind's group, whose first run of a pattern has no count: 0 RK_TICK, 1 RK_UNIT_DELTA,
+    2 RK_PROJ and RK_PROJ_DELTA; -1 none."""
+    return {RK_TICK: 0, RK_UNIT_DELTA: 1, RK_PROJ: 2, RK_PROJ_DELTA: 2}.get(kind, -1)
+
+
+def _pattern(p):
+    """A pattern's runs, (kind, count, RUN_* flags), as kinds_parse reads them: its first token
+    RK_TICK, each group's first run open (count 0, RUN_DERIVED) but RK_TICK's (1), no second
+    RK_TICK run, a kind within 1..0xFFFE or a marker, an explicit count of at least 1, the pattern
+    consumed exactly."""
+    runs, seen, at, end = [], 0, 0, len(p)
     while at < end:
-        kind, at = _varint(sec, at, end)
+        kind, at = _vget(p, at, end)
         if at < 0:
-            return -_fail(err, E_RUN_SHORT), 0
-        count, at = _varint(sec, at, end)
-        if at < 0:
-            return -_fail(err, E_RUN_SHORT), 0
-        if not 1 <= kind <= 0xFFFF:
-            return -_fail(err, E_KIND, kind), 0
-        if count < 1:
-            return -_fail(err, E_RUN_EMPTY), 0
-        if not records and kind != RK_TICK:
-            return -_fail(err, E_FIRST), 0
-        if count > payload // 4 - records:
-            return -_fail(err, E_RUN_PAST), 0
-        records += count
-        if kind == RK_TICK:
-            ticks += count
-        kinds[n], counts[n] = kind, count
-        n += 1
-    return n, ticks
+            raise Unreadable("a pattern cut short")
+        if not runs and kind != RK_TICK:
+            raise Unreadable(f"a pattern starts with kind {kind}, not RK_TICK")
+        if kind == KM_TICKPAIR:
+            runs += [(RK_EV_FEATURE, 1, RUN_IMPLICIT), (RK_EV_FEATURE_END, 1, RUN_IMPLICIT)]
+            continue
+        if kind == KM_FEATURES:
+            runs.append((RK_FEATURES, 1, RUN_IMPLICIT))
+            continue
+        if kind > 0xFFFF:
+            raise Unreadable(f"record kind {kind} in a pattern")
+        g = _group_of(kind)
+        if g >= 0 and not seen >> g & 1:
+            seen |= 1 << g
+            runs.append((kind, 1 if g == 0 else 0, RUN_DERIVED))
+            continue
+        if g == 0:
+            raise Unreadable("a pattern has a second RK_TICK run: the group's total is 1")
+        count, at = _vget(p, at, end)
+        if at < 0 or count < 1:
+            raise Unreadable(f"a pattern's run of kind {kind} cut short or of no records")
+        runs.append((kind, count, 0))
+    return runs
+
+
+@_inline
+def _group_of_k(kind):
+    if kind == RK_TICK:
+        return 0
+    if kind == RK_UNIT_DELTA:
+        return 1
+    if kind == RK_PROJ or kind == RK_PROJ_DELTA:
+        return 2
+    return -1
 
 
 @_jit
-def _bodies(sec, off, secs, rec_at, rec_ln, err):
-    """RCS_OTHER's (length, bytes) entries, as many as its records: the record's body at rec_at[]
-    and its length at rec_ln[]. The frames make the rest."""
-    at, end = off[RCS_OTHER], off[RCS_OTHER + 1]
-    for i in range(len(secs)):
-        if secs[i] != RCS_OTHER:
+def _group_fill(rk, rc, rf, q0, q1, g, total, it, err):
+    """Group g's open run of runs [q0, q1) takes its count: the frame's `total` less the group's
+    other runs' (tagpu_reccodec.c group_fill). BOUND: a group with no run has a total of 0, and
+    one whose other runs hold its total or more is refused. 0, or the refusal's code."""
+    open_, rest = -1, 0
+    for q in range(q0, q1):
+        if _group_of_k(rk[q]) != g or rf[q] & RUN_IMPLICIT:
             continue
-        ln, at = _varint(sec, at, end)
-        if at < 0 or ln > 0xFFFF or ln > end - at:
-            return _fail(err, E_BODY, RCS_OTHER)
-        rec_at[i], rec_ln[i] = at, ln
-        at += ln
-    if at != end:
-        return _fail(err, E_BODY_LEFT, RCS_OTHER, end - at)
+        if rf[q] & RUN_DERIVED:
+            open_ = q
+        else:
+            rest += rc[q]
+    if open_ < 0:
+        if total:
+            return _fail(err, E_G_NONE, it, total, g)
+        return 0
+    if rest >= total:
+        return _fail(err, E_G_PAST, it, g, rest)
+    rc[open_] = total - rest
     return 0
 
 
@@ -911,19 +961,26 @@ def _put(out, pos, kind, src, at, ln, err):
 
 
 @_jit
-def _iterations(sec, kinds, secs, rec_at, rec_ln, listed, slots, R, tab, live, st, rest_mode, pl,
-                fst, foff, out, err):
-    """The block's records into out, iteration by iteration: the pool frame's iteration
-    (_pool_iter), pass A takes the iteration's records and the slots its RK_UNIT and RK_UNIT_GONE
-    name, the unit frame makes its deltas, pass B writes the records in order -- a projectile
-    record's body from the pool frame's, a record frame's from its frame at the unit copy and the
-    events flag the encoder's walk had there (tagpu_reccodec.c frames_walk) -- and the named slots
-    restart from their images. pl is the pool frame's parsed section and state (Frame._pool), fst
-    the record frames' states and foff the sections' offsets. 0, or the refusal's code."""
+def _iterations(sec, rk, rc, rf, irun, secof, listed, slots, R, tab, live, st, rest_mode, pl, fst,
+                foff, kst, out, err):
+    """The block's records into out, iteration by iteration, each walking its runs [irun[it],
+    irun[it + 1]) (Frame._kinds): the pool frame's iteration (_pool_iter), which gives its
+    projectile runs their count; pass A takes the iteration's RCS_OTHER bodies -- every run but
+    RK_UNIT_DELTA's, whose count is still open, and but a marker's and the RK_TICK after the
+    block's first, which have none -- and the slots its RK_UNIT and RK_UNIT_GONE name; the unit
+    frame makes its deltas and gives RK_UNIT_DELTA's open run its count; pass B writes the records
+    in order -- a projectile record's body from the pool frame's, a record frame's from its frame
+    at the unit copy and the events flag the encoder's walk had there (tagpu_reccodec.c
+    frames_walk), a marker's from the run's last explicit empty feature tick or the state frame's
+    prediction -- and the named slots restart from their images. secof is each kind's section,
+    pl the pool frame's parsed section and state (Frame._pool), fst the record frames' states,
+    foff the sections' offsets and kst the kinds' state (the last explicit empty feature tick's 16 bytes; whether one came,
+    and an explicit RK_FEATURES). 0, or the refusal's code."""
     off, width, J, defwin = tab[0], tab[1], tab[3], tab[4]
     copy, l1, l2, l3, win, age, rest, lstep, lset = st
     ctl, codes, S, B, T, P, H, pwin, page, lastnew, shots, meta, payload = pl
-    nslots, nl, nrec, iters = len(live), len(off), len(kinds), len(listed)
+    tpair, kfl = kst
+    nslots, nl, iters = len(live), len(off), len(listed)
     # the record frames' sections, read and bounded before the first iteration
     fcols = np.zeros((4, FRAME_COLS_MAX, 2), np.int64)
     c = _cells_open(fst[0], fcols[0], sec, foff[RCS_CELLS], foff[RCS_CELLS + 1], iters, err)
@@ -948,43 +1005,30 @@ def _iterations(sec, kinds, secs, rec_at, rec_ln, listed, slots, R, tab, live, s
     pcur = np.zeros(6, np.int64)
     # _pool_iter writes a body before it tests the payload's bound, with its end at most the
     # payload: the slack holds the longest body, a delta of all 27 dwords (8 + 108 bytes), so
-    # numba's unchecked stores stay in the array whatever the file says
+    # numba's unchecked stores stay in the array whatever the file says. An iteration's
+    # projectile records are its changed slots and at most one RK_PROJ_HEAD: at most n + 1.
     pbuf = np.zeros(payload + _POOL_BODY_MAX, np.uint8)
-    p_at, p_ln = np.zeros(nrec, np.int64), np.zeros(nrec, np.int64)
+    p_at, p_ln = np.zeros(n + 1, np.int64), np.zeros(n + 1, np.int64)
+    # an iteration's RCS_OTHER bodies: at most a record a payload dword
+    o_at, o_ln = np.zeros(payload // 4 + 1, np.int64), np.zeros(payload // 4 + 1, np.int64)
     flip = False
     body = np.empty(BODY_MAX, np.uint8)
+    tick = np.zeros(4, np.uint8)
+    root = np.zeros(8, np.uint8)
     named = np.zeros(nslots, np.int64)          # it + 1 for the slots iteration `it` names
-    touched = np.empty(nrec, np.int64)
+    touched = np.empty(payload // 4 + 1, np.int64)
     dbuf = np.empty(nslots * (DELTA_HEAD + IMG), np.uint8)
     dend = np.empty(nslots + 1, np.int64)
     Rr, U = np.empty(nl, np.int64), np.empty(nl, np.int64)
     dirty = np.zeros(NDW, np.bool_)
-    pos = r = u0 = 0
+    oat, oend = foff[RCS_OTHER], foff[RCS_OTHER + 1]
+    pos = u0 = gt0 = 0
     for it in range(iters):
-        # pass A
-        k0, nt, ndelta, gt = r, 0, 0, 0
-        while r < nrec and (r == k0 or kinds[r] != RK_TICK):
-            kind, at, ln = kinds[r], rec_at[r], rec_ln[r]
-            r += 1
-            if kind == RK_UNIT_DELTA:
-                ndelta += 1
-            elif kind == RK_TICK:
-                if ln != 4:
-                    return _fail(err, E_TICK, ln)
-                gt = (np.int64(sec[at]) | np.int64(sec[at + 1]) << 8 | np.int64(sec[at + 2]) << 16 |
-                      np.int64(sec[at + 3]) << 24)
-            elif kind == RK_UNIT or kind == RK_UNIT_GONE:
-                if ln != (4 + IMG if kind == RK_UNIT else 4):
-                    return _fail(err, E_UNIT_LEN, ln)
-                s = np.int64(sec[at]) | np.int64(sec[at + 1]) << 8
-                if not 1 <= s < nslots:
-                    return _fail(err, E_UNIT_SLOT, s)
-                touched[nt] = s
-                nt += 1
-                named[s] = it + 1
-        # the pool frame's iteration
-        c = _pool_iter(it, sec, ctl, codes, S, B, T, kinds, k0, r, P, H, pwin, page, Pn, Hn, winn,
-                       agen, lastnew, shots, meta, scr, pcur, payload, pbuf, p_at, p_ln, err)
+        q0, q1 = irun[it], irun[it + 1]
+        gt = (gt0 + it) & M32
+        # the pool frame's iteration, which fills its group's open run
+        c = _pool_iter(it, sec, ctl, codes, S, B, T, rk, rc, rf, q0, q1, P, H, pwin, page, Pn, Hn,
+                       winn, agen, lastnew, shots, meta, scr, pcur, payload, pbuf, p_at, p_ln, err)
         if c:
             return c
         P, Pn = Pn, P
@@ -992,6 +1036,35 @@ def _iterations(sec, kinds, secs, rec_at, rec_ln, listed, slots, R, tab, live, s
         pwin, winn = winn, pwin
         page, agen = agen, page
         flip = not flip
+        # pass A
+        nt = no = 0
+        for q in range(q0, q1):
+            kind = rk[q]
+            if (kind == RK_UNIT_DELTA or rf[q] & RUN_IMPLICIT or secof[kind] != RCS_OTHER or
+                    (kind == RK_TICK and it)):
+                continue
+            for _ in range(rc[q]):
+                ln, oat = _varint(sec, oat, oend)
+                if oat < 0 or ln > 0xFFFF or ln > oend - oat:
+                    return _fail(err, E_BODY, RCS_OTHER)
+                at = oat
+                oat += ln
+                o_at[no], o_ln[no] = at, ln
+                no += 1
+                if kind == RK_TICK:
+                    if ln != 4:
+                        return _fail(err, E_TICK, ln)
+                    gt = gt0 = (np.int64(sec[at]) | np.int64(sec[at + 1]) << 8 |
+                                np.int64(sec[at + 2]) << 16 | np.int64(sec[at + 3]) << 24)
+                elif kind == RK_UNIT or kind == RK_UNIT_GONE:
+                    if ln != (4 + IMG if kind == RK_UNIT else 4):
+                        return _fail(err, E_UNIT_LEN, ln)
+                    s = np.int64(sec[at]) | np.int64(sec[at + 1]) << 8
+                    if not 1 <= s < nslots:
+                        return _fail(err, E_UNIT_SLOT, s)
+                    touched[nt] = s
+                    nt += 1
+                    named[s] = it + 1
         # the unit frame: every candidate -- live, not slot 0, not named -- but a resting one
         # unless listed, in slot order, the listed ones in theirs
         c = listed[it]
@@ -1016,8 +1089,9 @@ def _iterations(sec, kinds, secs, rec_at, rec_ln, listed, slots, R, tab, live, s
                 dend[nd + 1] = dend[nd] + n
                 nd += 1
         u0 += c
-        if nd != ndelta:
-            return _fail(err, E_DELTAS, it, nd, ndelta)
+        c = _group_fill(rk, rc, rf, q0, q1, 1, nd, it, err)
+        if c:
+            return c
         # pass B
         c = _cells_iter(fst[0], fcols[0], sec, it, gt, copy, live, err)
         if c == 0:
@@ -1028,49 +1102,89 @@ def _iterations(sec, kinds, secs, rec_at, rec_ln, listed, slots, R, tab, live, s
             c = _state_iter(fst[3], fcols[3], sec, it, gt, copy, live, err)
         if c:
             return c
-        d = nsh = 0
-        events = False
-        for q in range(k0, r):
-            kind, sc = kinds[q], secs[q]
-            if kind == RK_UNIT_DELTA:
-                pos = _put(out, pos, kind, dbuf, dend[d], dend[d + 1] - dend[d], err)
-                d += 1
-            elif sc == RCS_PROJ:
-                pos = _put(out, pos, kind, pbuf, p_at[q], p_ln[q], err)
-            elif sc == RCS_OTHER:
-                at, ln = rec_at[q], rec_ln[q]
-                if kind == RK_UNIT or kind == RK_UNIT_GONE:
-                    s = np.int64(sec[at]) | np.int64(sec[at + 1]) << 8
-                    live[s] = kind == RK_UNIT
-                    if kind == RK_UNIT:
-                        copy[s, :] = sec[at + 4:at + 4 + IMG]
-                pos = _put(out, pos, kind, sec, at, ln, err)
-            else:
-                if sc == RCS_CELLS:
-                    ln = _cells_rec(fst[0], fcols[0], sec, it, gt, events, copy, live, kind, body,
-                                    err)
-                elif sc == RCS_ORDERS:
-                    ln = _orders_rec(fst[1], fcols[1], sec, it, gt, events, copy, live, kind, body,
-                                     err)
-                elif sc == RCS_EVENTS:
-                    ln = _events_rec(fst[2], fcols[2], sec, it, gt, events, copy, live, kind, body,
-                                     err)
+        d = nsh = po = oo = 0
+        events = rooted = False
+        for q in range(q0, q1):
+            kind, imp = rk[q], rf[q] & RUN_IMPLICIT
+            sc = secof[kind]
+            for _ in range(rc[q]):
+                if imp:
+                    # a marker's records: each only after its explicit kind since the reset
+                    if kind == RK_FEATURES:
+                        if not kfl[1]:
+                            return _fail(err, E_M_FEAT, it)
+                        ln = _state_predicted(fst[3], body)
+                        pos = _put(out, pos, kind, body, 0, ln, err)
+                    else:
+                        if not kfl[0]:
+                            return _fail(err, E_M_TICK, it)
+                        pos = _put(out, pos, kind, tpair, 8 if kind == RK_EV_FEATURE_END else 0, 8,
+                                   err)
+                    rooted = False
+                    ln = 0
+                elif kind == RK_TICK and it:
+                    tick[0], tick[1], tick[2], tick[3] = gt & 0xFF, (gt >> 8) & 0xFF, (gt >> 16) & 0xFF, gt >> 24
+                    pos = _put(out, pos, kind, tick, 0, 4, err)
+                    ln = -1
+                elif kind == RK_UNIT_DELTA:
+                    pos = _put(out, pos, kind, dbuf, dend[d], dend[d + 1] - dend[d], err)
+                    d += 1
+                    ln = -1
+                elif sc == RCS_PROJ:
+                    pos = _put(out, pos, kind, pbuf, p_at[po], p_ln[po], err)
+                    po += 1
+                    ln = -1
+                elif sc == RCS_OTHER:
+                    at, ln = o_at[oo], o_ln[oo]
+                    oo += 1
+                    if kind == RK_UNIT or kind == RK_UNIT_GONE:
+                        s = np.int64(sec[at]) | np.int64(sec[at + 1]) << 8
+                        live[s] = kind == RK_UNIT
+                        if kind == RK_UNIT:
+                            copy[s, :] = sec[at + 4:at + 4 + IMG]
+                    pos = _put(out, pos, kind, sec, at, ln, err)
+                    ln = -1
                 else:
-                    ln = _state_rec(fst[3], fcols[3], sec, it, gt, events, copy, live, kind, body,
-                                    err)
-                if ln < 0:
-                    return -ln
-                if ln > BODY_MAX:
-                    return _fail(err, E_F_BIG, sc, ln)
-                pos = _put(out, pos, kind, body, 0, ln, err)
-                # the next iteration's pool takes these shots (_pool_iter)
-                if kind == RK_EV_SHOT and ln == SHOT and nsh < SHOTS_MAX:
-                    shots[nsh, :] = body[:SHOT]
-                    nsh += 1
-            if pos < 0:
-                return err[0]
-            if sc == RCS_EVENTS:
-                events = True
+                    if sc == RCS_CELLS:
+                        ln = _cells_rec(fst[0], fcols[0], sec, it, gt, events, copy, live, kind,
+                                        body, err)
+                    elif sc == RCS_ORDERS:
+                        ln = _orders_rec(fst[1], fcols[1], sec, it, gt, events, copy, live, kind,
+                                         body, err)
+                    elif sc == RCS_EVENTS:
+                        ln = _events_rec(fst[2], fcols[2], sec, it, gt, events, copy, live, kind,
+                                         body, err)
+                    else:
+                        ln = _state_rec(fst[3], fcols[3], sec, it, gt, events, copy, live, kind,
+                                        body, err)
+                    if ln < 0:
+                        return -ln
+                    if ln > BODY_MAX:
+                        return _fail(err, E_F_BIG, sc, ln)
+                    pos = _put(out, pos, kind, body, 0, ln, err)
+                    # the next iteration's pool takes these shots (_pool_iter)
+                    if kind == RK_EV_SHOT and ln == SHOT and nsh < SHOTS_MAX:
+                        shots[nsh, :] = body[:SHOT]
+                        nsh += 1
+                if pos < 0:
+                    return err[0]
+                if not imp:
+                    # the run's last explicit empty feature tick, and an explicit RK_FEATURES, in
+                    # the record order the encoder's walk kept them (tagpu_reccodec.c tick_pair)
+                    if ln >= 0:
+                        if rooted and kind == RK_EV_FEATURE_END and ln == 8 and body[0] == FR_TICK:
+                            tpair[:8] = root
+                            tpair[8:] = body[:8]
+                            kfl[0] = 1
+                        rooted = kind == RK_EV_FEATURE and ln == 8 and body[0] == FR_TICK
+                        if rooted:
+                            root[:] = body[:8]
+                        if kind == RK_FEATURES:
+                            kfl[1] = 1
+                    else:
+                        rooted = False
+                if sc == RCS_EVENTS:
+                    events = True
         meta[2] = nsh
         c = _cells_iter_end(fst[0], fcols[0], sec, it, gt, copy, live, err)
         if c == 0:
@@ -1110,6 +1224,8 @@ def _iterations(sec, kinds, secs, rec_at, rec_ln, listed, slots, R, tab, live, s
         c = _state_close(fst[3], fcols[3], sec, err)
     if c:
         return c
+    if oat != oend:
+        return _fail(err, E_BODY_LEFT, RCS_OTHER, oend - oat)
     if pos != len(out):
         return _fail(err, E_PAYLOAD, pos, len(out))
     return 0
@@ -1326,13 +1442,14 @@ def _pool_body(kind, j, old, new, out_buf, pos):
 
 
 @_jit
-def _pool_iter(it, sec, ctl, codes, S, B, T, kinds, r0, r1, P, H, win, age, Pn, Hn, winn, agen,
-               lastnew, shots, meta, scr, cur, payload, out_buf, out_at, out_ln, err):
-    """Iteration `it` of the pool frame, its records kinds[r0:r1]: the pool after it into Pn,
-    Hn, winn and agen from the pool before it (P, H, win, age; meta: its count and extent, and
-    the last iteration's shots, which `shots` holds), the body of each of its projectile records
-    into out_buf at out_at[r], out_ln[r] (r the record's index), meta's count and extent moved
-    on. scr is the block's scratch, cur its cursors: the survivors', births' and tail slots' rows
+def _pool_iter(it, sec, ctl, codes, S, B, T, rk, rc, rf, q0, q1, P, H, win, age, Pn, Hn, winn,
+               agen, lastnew, shots, meta, scr, cur, payload, out_buf, out_at, out_ln, err):
+    """Iteration `it` of the pool frame, its runs [q0, q1): the pool after it into Pn, Hn, winn
+    and agen from the pool before it (P, H, win, age; meta: its count and extent, and the last
+    iteration's shots, which `shots` holds), its projectile runs' open count from the changed
+    records (_group_fill), the body of each of its projectile records into out_buf at out_at[k],
+    out_ln[k] (k the record's place among the iteration's projectile records), meta's count and
+    extent moved on. scr is the block's scratch, cur its cursors: the survivors', births' and tail slots' rows
     so far, the codes, out_buf's end and the records' bytes. 0, or the refusal's code."""
     adv, advd, ev, alive, newix, m, tail, chg, zero, R, g, wsc, anchor, length = scr
     sp, bp, tp, cp, pos, total = cur[0], cur[1], cur[2], cur[3], cur[4], cur[5]
@@ -1363,14 +1480,11 @@ def _pool_iter(it, sec, ctl, codes, S, B, T, kinds, r0, r1, P, H, win, age, Pn, 
             ns += 1
     for k in range(ne):
         _ev_row(shots[k], lastnew, ev[k])
-    # this iteration's heads and slot records
-    heads = slots = 0
-    for q in range(r0, r1):
-        kind = kinds[q]
-        if kind == RK_PROJ_HEAD:
-            heads += 1
-        elif kind == RK_PROJ or kind == RK_PROJ_DELTA:
-            slots += 1
+    # this iteration's heads, which its pattern counts
+    heads = 0
+    for q in range(q0, q1):
+        if rk[q] == RK_PROJ_HEAD:
+            heads += rc[q]
     if heads > 1:
         return _fail(err, E_P_HEADS, it, heads)
     if heads == 0 and (c1 != c0 or h1 != h0):
@@ -1452,27 +1566,30 @@ def _pool_iter(it, sec, ctl, codes, S, B, T, kinds, r0, r1, P, H, win, age, Pn, 
         if (Pn[tail[i]] != P[tail[i]]).any():
             chg[nc] = tail[i]
             nc += 1
-    if slots != nc:
-        return _fail(err, E_P_SLOTS, it, nc, slots)
-    q2 = 0
-    for q in range(r0, r1):
-        kind = kinds[q]
-        if kind == RK_PROJ_HEAD:
-            for k in range(4):
-                out_buf[pos + k] = (c1 >> (8 * k)) & 0xFF
-                out_buf[pos + 4 + k] = (h1 >> (8 * k)) & 0xFF
-            ln = 8
-        elif kind == RK_PROJ or kind == RK_PROJ_DELTA:
-            j = chg[q2]
-            q2 += 1
-            ln = _pool_body(kind, j, P[j], Pn[j], out_buf, pos)
-        else:
+    c = _group_fill(rk, rc, rf, q0, q1, 2, nc, it, err)
+    if c:
+        return c
+    q2 = po = 0
+    for q in range(q0, q1):
+        kind = rk[q]
+        if kind != RK_PROJ_HEAD and kind != RK_PROJ and kind != RK_PROJ_DELTA:
             continue
-        total += (4 + ln + 3) & ~3
-        if total > payload:
-            return _fail(err, E_PAST_PAYLOAD)
-        out_at[q], out_ln[q] = pos, ln
-        pos += ln
+        for _ in range(rc[q]):
+            if kind == RK_PROJ_HEAD:
+                for k in range(4):
+                    out_buf[pos + k] = (c1 >> (8 * k)) & 0xFF
+                    out_buf[pos + 4 + k] = (h1 >> (8 * k)) & 0xFF
+                ln = 8
+            else:
+                j = chg[q2]
+                q2 += 1
+                ln = _pool_body(kind, j, P[j], Pn[j], out_buf, pos)
+            total += (4 + ln + 3) & ~3
+            if total > payload:
+                return _fail(err, E_PAST_PAYLOAD)
+            out_at[po], out_ln[po] = pos, ln
+            po += 1
+            pos += ln
     agen[c1:] = 0
     meta[0], meta[1] = c1, h1
     cur[0], cur[1], cur[2], cur[3], cur[4], cur[5] = sp, bp, tp, cp, pos, total
@@ -2640,6 +2757,18 @@ def _state_rec(st, cols, sec, it, gt, events, copy, live, kind, body, err):
 
 
 @_jit
+def _state_predicted(st, body):
+    """The RK_FEATURES the state frame predicts into body, and its fields taking it, as an
+    explicit one's do (tagpu_recframe_state.c recframe_state_predicted, recframe_state_take):
+    the kinds' marker 0xFFFF. Its length, 16."""
+    fv, cells = st[10], st[12][0]
+    fv[3] = fv[3] - 1 if fv[3] else cells - 1
+    for j in range(4):
+        _st_put32(body, 4 * j, fv[j])
+    return 16
+
+
+@_jit
 def _state_iter_end(st, cols, sec, it, gt, copy, live, err):
     return 0
 
@@ -2693,6 +2822,12 @@ class Frame:
         self.lastnew = np.zeros((WEAPON_IDS + 1, PDW), np.int64)
         self.shots = np.zeros((SHOTS_MAX, SHOT), np.uint8)
         self.meta = np.zeros(3, np.int64)
+        # the kinds (tagpu_reccodec.c, THE KINDS): the run's patterns, front first, each with its
+        # runs once read; the last explicit empty feature tick; whether one came, and an explicit
+        # RK_FEATURES
+        self.kmru = []
+        self.tpair = np.zeros(16, np.uint8)
+        self.kfl = np.zeros(2, np.int64)
         self.valid = False
         self._derive()
 
@@ -2700,11 +2835,12 @@ class Frame:
         f = Frame.__new__(Frame)
         f.__dict__.update(self.__dict__)
         for k in ("copy", "live", "l1", "l2", "l3", "win", "age", "rest", "lstep", "lset", "P", "H", "pwin", "page",
-                  "lastnew", "shots", "meta"):
+                  "lastnew", "shots", "meta", "tpair", "kfl"):
             if hasattr(self, k):
                 setattr(f, k, getattr(self, k).copy())
         if self.fst is not None:
             f.fst = _frames_clone(self.fst)
+        f.kmru = [list(e) for e in self.kmru]
         return f
 
     def _derive(self):
@@ -2748,6 +2884,9 @@ class Frame:
             self.prm = prm
             self._derive()
         self.valid = False
+        self.kmru = []
+        self.tpair[:] = 0
+        self.kfl[:] = 0
         p = self.prm
         if not p.usable or not self.nl or (p.nslots, p.nproj, p.gw, p.gh, p.nwrecks) != self.sizes:
             return
@@ -2885,21 +3024,8 @@ class Frame:
         if not 1 <= iters <= TICKS_MAX:
             raise Unreadable(f"{iters} iterations")
         err = np.zeros(4, np.int64)
-        # the kinds
-        at, end = off[RCS_KINDS], off[RCS_KINDS + 1]
-        run_kind, run_count = np.empty((2, (end - at) // 2), np.int64)
-        runs, ticks = _kind_runs(sec, at, end, payload, run_kind, run_count, err)
-        if runs < 0:
-            _refuse(err)
-        if ticks != iters:
-            raise Unreadable(f"{ticks} RK_TICK records, not {iters} iterations")
-        kinds = np.repeat(run_kind[:runs], run_count[:runs])
-        # RCS_OTHER's bodies: its (length, bytes) entries in order, as many as its kinds hold
-        secs = _SECTION_OF[kinds]
+        rk, rc, rf, irun = self._kinds(sec, off[RCS_KINDS], off[RCS_KINDS + 1], iters, payload)
         foff = np.array(off, np.int64)
-        rec_at, rec_ln = np.zeros((2, len(kinds)), np.int64)
-        if _bodies(sec, foff, secs, rec_at, rec_ln, err):
-            _refuse(err)
         listed, slots, R = self._units_parse(sec, off[RCS_UNITS], off[RCS_UNITS + 1], iters)
         ctl, codes, S, B, T = self._pool(sec, off[RCS_PROJ], off[RCS_PROJ + 1], iters, err)
         out = np.zeros(payload, np.uint8)
@@ -2907,10 +3033,50 @@ class Frame:
               self.lset)
         pl = (ctl, codes, S, B, T, self.P, self.H, self.pwin, self.page, self.lastnew, self.shots,
               self.meta, payload)
-        if _iterations(sec, kinds, secs, rec_at, rec_ln, listed, slots, R, self.tab, self.live, st,
-                       self.rest_mode, pl, self.fst, foff, out, err):
+        if _iterations(sec, rk, rc, rf, irun, _SECTION_OF, listed, slots, R, self.tab, self.live, st,
+                       self.rest_mode, pl, self.fst, foff, (self.tpair, self.kfl), out, err):
             _refuse(err)
         return out.tobytes()
+
+    def _kinds(self, sec, at, end, iters, payload):
+        """RCS_KINDS: every iteration's pattern as runs (kind, count, RUN_* flags) and each
+        iteration's first run, the pattern list moved on as the encoder moved it
+        (tagpu_reccodec.c kinds_parse, whose bounds these are: a reference within the list, a new
+        pattern's length within 1..KINDS_MAX and the section, the records within the payload's
+        dwords, the section consumed exactly)."""
+        mru, runs, irun, records = self.kmru, [], [], 0
+        for it in range(iters):
+            irun.append(len(runs))
+            if at >= end:
+                raise Unreadable(f"iteration {it}'s pattern cut short")
+            m = int(sec[at])
+            at += 1
+            if m > len(mru):
+                raise Unreadable(f"iteration {it}'s pattern {m} is past the {len(mru)} the run holds")
+            if m:
+                mru.insert(0, mru.pop(m - 1))
+            else:
+                ln, at = _vget(sec, at, end)
+                if at < 0 or not 1 <= ln <= KINDS_MAX or ln > end - at:
+                    raise Unreadable(f"iteration {it}'s new pattern of a length outside 1..{KINDS_MAX} "
+                                     f"or past the kinds")
+                mru.insert(0, [bytes(sec[at:at + ln]), None])
+                del mru[KINDS_MRU:]
+                at += ln
+            if mru[0][1] is None:
+                mru[0][1] = _pattern(mru[0][0])
+            for r in mru[0][1]:
+                if r[1] > payload // 4 - records:
+                    raise Unreadable(f"more records than a {payload}-byte payload holds")
+                records += r[1]
+                runs.append(r)
+        irun.append(len(runs))
+        if at != end:
+            raise Unreadable(f"{end - at} bytes left in the kinds")
+        if not runs:
+            return (np.zeros(0, np.int64),) * 3 + (np.array(irun, np.int64),)
+        a = np.array(runs, np.int64)
+        return a[:, 0].copy(), a[:, 1].copy(), a[:, 2].copy(), np.array(irun, np.int64)
 
     def _pool(self, sec, at, end, iters, err):
         """The pool frame's section, bounded: its control values per iteration (ctl), its codes

@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 18 and its readers take format 18 alone (*The file*, below).
+The recorder writes recording format 19 and its readers take format 19 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -157,7 +157,7 @@ THE CHAIN*):
   else the bytes stored. The header, the end and the timelines blocks are always stored, so a
   header reads without zstd.
 
-`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 18; a reader takes that format alone:
+`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 19; a reader takes that format alone:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
   GameTime, the wall clock, the unit array's slots and the units each player may have, the unit
@@ -212,16 +212,29 @@ a file with no end block is incomplete.
 container that decodes to exactly those records, so everything that reads a block's payload — the
 C reader's `apply`, `tarec.py`, `recsize.py` — sees the records as before. It is a 40-byte
 `RecSecHead` (the payload's bytes, the iterations, the section count and each section's length),
-then eight sections, in this order: the record kinds in payload order as runs (`RCS_KINDS`); the
+then eight sections, in this order: the record kinds in payload order, each iteration's as a
+*pattern* of runs (`RCS_KINDS`, below); the
 **unit frame**, which makes every `RK_UNIT_DELTA` (`RCS_UNITS`); the **pool frame**, which makes
 every `RK_PROJ_HEAD`, `RK_PROJ` and `RK_PROJ_DELTA` (`RCS_PROJ`); the **cells frame**
 (`RCS_CELLS`, every `RK_CELLS`), the **orders frame** (`RCS_ORDERS`, every `RK_ORDERS`) and the
-**events frame** (`RCS_EVENTS`, `RK_EV_CREATE..RK_EV_DEATH_END`, `RK_EV_NET_CREATE`, `RK_EV_SLICE` and `RK_EV_QUERY`); the
-bodies of every other kind verbatim, each behind a varint length (`RCS_OTHER`: the ticks, the
-unit images and gones, the tables, the perspective kinds and the rest); and the **state frame**
+**events frame** (`RCS_EVENTS`, `RK_EV_CREATE..RK_EV_DEATH_END`, `RK_EV_NET_CREATE`, `RK_EV_SLICE`
+and `RK_EV_QUERY`); the bodies of every other kind verbatim, each behind a varint length (`RCS_OTHER`: the block's first
+tick -- iteration i's GameTime is the first's + i, and a block whose GameTimes are not consecutive
+is written as records -- the unit images and gones, the tables, the perspective kinds and the
+rest); and the **state frame**
 (`RCS_STATE`, every `RK_GLOBALS`, `RK_GLOBALS_DELTA`, `RK_PLAYER`, `RK_PLAYER_DELTA`, `RK_WRECK`
 and `RK_FEATURES`). A kind added later falls into `RCS_OTHER` on both sides (`rec_section_of`),
 with no table to update.
+
+**The kinds** (`tagpu_recfmt.h`, *RCS_KINDS*). Each iteration's pattern is a reference into the
+run's last 16 patterns (a byte, 1..16, the entry moving to the front) or a new one (0, its length,
+its bytes). A pattern is the iteration's runs, a varint kind and a varint count each, with two
+markers that stand for records no frame codes -- 0 an empty feature tick, its root and end the
+bodies of the run's last explicit one, and 0xFFFF an `RK_FEATURES` that is the state frame's
+prediction -- and no count on the first run of three groups, whose totals the frames give: the
+iteration's `RK_TICK` (1), its `RK_UNIT_DELTA` (the unit frame's changed units) and its `RK_PROJ`
+and `RK_PROJ_DELTA` together (the pool frame's changed records). A reader fills a group's count
+once its frame has made the iteration and refuses a group whose other runs reach its total.
 
 **The unit frame** (`src/tagpu_reccodec.c`) keeps, per slot, the image at the end of the previous
 iteration, the one before it, five lanes of the one before that and which of four candidates last
@@ -1953,7 +1966,7 @@ on 2026-10-01: five `same` classes (the three shot builders, the meteor stone's 
 eight owner-only queries `absent`, the refused script index both ways, the console key's click,
 the flying pieces' explosions, smoke and fire both ways, and COB `EMIT_SFX`'s five emitters both
 ways. Killed's `same` class and `QueryNanoPiece`'s `absent` row have gone since, each made exact
-([the script slice](#the-script-slice-format-18)).
+([the script slice](#the-script-slice-format-19)).
 
 **The step's phases** (the lost impacts, A7). The playing made every recorded feature root at the
 replay step, after the host's unit tick and before its projectile tick; a tree the recording
@@ -2055,7 +2068,7 @@ ten minutes or less.
   the recorded start at the replay step, after the whole unit tick, so its first slice ran at T+1,
   and the scripts it starts (RestoreAfterDelay, walk, `EMIT_SFX`) a tick later; a one-tick slice lag
   can re-phase a looping script for the rest of a unit's life (the level-start lag below). Since
-  format 18 the recorder writes `RK_EV_SLICE` just before the slice of any unit whose COB had an
+  format 19 the recorder writes `RK_EV_SLICE` just before the slice of any unit whose COB had an
   engine start since the capture point, and a playing skips that unit's slice in the host's unit
   tick and gives it at the marker, after the recorded start (*The script slice*, below).
 - **The level-start lag, fixed.** The playing made the level's own units after the host's first
@@ -2562,7 +2575,7 @@ outside S4. The naval COB stop and failed-worker cleanup are corrected. The
 full landing tier passes 570 checks across 20 fixtures, including 60 exact round
 trips, with all 62 changed functions reached on every required build.
 
-## The script slice (format 18)
+## The script slice (format 19)
 
 A COB thread's only clock is the unit tick's `DoScriptsNow(1)` (`0x48ADEB`, its only call), so a
 start reaches its first slice at the first slice of its unit after it. On the recording machine

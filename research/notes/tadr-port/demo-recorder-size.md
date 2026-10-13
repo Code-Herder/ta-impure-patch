@@ -2,9 +2,11 @@
 
 ## Status
 
-**L1 to L4, L5a and P1 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
+**L1 to L4, L5a, P1 and P6 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
 *L3: the record frames, measured*, *L4: the measured hours, the snapshot interval and R1*,
-*L5a: the ledger rule* and *P1: the container, measured*, below). Recording format 17 packs each
+*L5a: the ledger rule*, *P1: the container, measured* and *P6: the kinds and the ticks, measured*,
+below). Recording format 18 codes each iteration's record kinds as a pattern of the run's last 16
+and writes a block's GameTime once, packs each
 run of sectioned stream blocks as one zstd frame at level 19 and each snapshot against the one before
 it, carries the unit deltas in a unit frame
 predicted from the engine's own rules, the projectiles in a pool frame coded by identity, and the
@@ -23,8 +25,8 @@ landed as recording format 14 (*L5: the lossy plan, measured offline*, its last 
 the refreshes, the takeover at a refresh and the table's 37 rows take the heavy hour to 30.53 MB
 (MEASURED offline); format 15 writes the nano sprays as spray sessions, which takes the
 heavy hour's stream 2.7 MB smaller again; format 16 holds the cells' unit slots and yard bit,
-which the playing's engine stamps (*The cells held*), and format 17 (*P1*) packs that stream in its
-container; L6 is a plan. The page gathers what has been measured about the size of a demo recording, the research
+which the playing's engine stamps (*The cells held*), format 17 (*P1*) packs that stream in its
+container, and format 18 (*P6*) takes the heavy hour from 16.16 to 15.81 MB; L6 is a plan. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -1341,9 +1343,9 @@ then `recmp_play_test.py` with `--takeover 901:1`, with `--timeline 1 --at 600 -
 fixtures `forest-reproduce` and `stock-forest-reproduce` record and play reproduction's source
 test in a skirmish (23 `FS_SOURCE` draws each, every one played as recorded).
 
-**The script slice's markers: recording format 18** (2026-10-12). `RK_EV_SLICE`, a unit ID in the
+**The script slice's markers: recording format 19** (2026-10-12). `RK_EV_SLICE`, a unit ID in the
 events frame's `C_ID` column, before the slice of every unit whose COB had an engine start since
-the capture point ([the skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-18)).
+the capture point ([the skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-19)).
 **MEASURED** on the replay gate's `battle` recording (3,991 iterations, at most 1,444 live units,
 the file 72.9 MB with the test lever's exact stream, the stream itself 7.3 MB on disk): 33,464
 markers, 8.38 an iteration, 133,856 bytes of bodies raw; the events' kind stream and ID column
@@ -1456,6 +1458,72 @@ has passed, so a one-byte change like these is refused before either decoder see
 chunks are not affected: its check unpacks each one with the
 DLL's decoder before writing it.
 
+## P6: the kinds and the ticks, measured
+
+**What format 18 changes** (tagpu_recfmt.h, *THE SECTIONED CONTAINER* and *RCS_KINDS*;
+tagpu_reccodec.c, *THE KINDS*). Three codings of the lossless stack's plan, on the sections the
+frames leave:
+
+- **#5, the ticks.** `RCS_OTHER` carries the block's first `RK_TICK` alone: iteration i's GameTime
+  is the first's + i, and a block whose GameTimes are not consecutive is written as records (none
+  in either hour).
+- **#12, the kinds as patterns.** Each iteration's kinds are a *pattern* -- its runs, a varint kind
+  and a varint count each -- written as a reference into the run's last 16 patterns (a byte; the
+  entry moves to the front) or as a new one (0, its length, its bytes; the 17th dropped). The list
+  empties at every reset. The first run of three *groups* has no count, its frame giving the
+  group's total: `RK_TICK` (1), `RK_UNIT_DELTA` (the unit frame's changed units) and `RK_PROJ` with
+  `RK_PROJ_DELTA` (the pool frame's changed records); the group's other runs carry theirs, and a
+  reader refuses a group whose other runs reach its total. The decoder fills the pool frame's
+  group before pass A and the unit frame's after it, and pass A walks no run of an open count.
+- **#10, two markers.** In a pattern, 0 stands for an empty feature tick -- an `FR_TICK` root of 8
+  bytes directly followed by its end -- whose two bodies are the run's last explicit one's, and
+  0xFFFF for an `RK_FEATURES` that is the state frame's prediction (the heads as last time, the
+  cursor stepped as the tick steps it: *The feature tick's cursor* in the engine map); neither
+  appears before its explicit kind's first since the reset. No frame codes a marker's records.
+
+**The groups are not the plan's rule.** The plan left the four kinds' counts out and declined an
+iteration where one formed two runs. On format 17's heavy hour `RK_UNIT_DELTA` forms two runs in
+1,450 of 108,090 iterations -- the writer emits the unit records in slot order, so a birth's
+`RK_UNIT` (710 iterations) or a death's `RK_UNIT_GONE` (740) between two delta slots splits them --
+which would have written 1,122 of the 3,605 blocks as records; `RK_PROJ_DELTA` forms two runs in 81
+iterations, `RK_PROJ` in 1; and where both projectile kinds appear (124 iterations) the pool
+frame's changed records do not say how many are which. The groups decline nothing. The count-less
+run is a group's first, not its last, because a reader must know from what it has read whether a
+count follows (MEASURED 2026-10-12, a prototype over format 17's stream; the prototype's packing of
+format 17's sections, one level-19 frame a run, gives the file's stream to the byte).
+
+**Measured** (2026-10-12, `codectest lossy` -- the writer's path: the lossy filter with the build's
+hold table, a refresh every 300 ticks, every block check-decoded -- under Wine, 32-bit, on the
+reference setup, over the records-only copies of the two L4 hours). The format-17 baseline here,
+16,160,878 bytes, is format 17 on this path; P1's 15,649,187 above is `codectest transcode
+--snap-every 1` over a lossy input refreshed every 1,800 ticks, another path:
+
+| | heavy hour | light hour |
+|---|---:|---:|
+| the file, format 17 / 18 | 16,160,878 / **15,808,980 (−351,898, −2.2 %)** | 9,390,288 / **9,103,447 (−286,841, −3.1 %)** |
+| the stream | 15,334,732 / 14,982,834 | 8,972,695 / 8,685,854 |
+| the snapshots, header, minimap and end block | unchanged | unchanged |
+| blocks sectioned / declined / mismatched | 3,605 / 0 / 0 | 3,608 / 0 / 0 |
+
+The heavy hour's sections, raw and each packed alone (`recsize.py`), format 17 → 18: the kinds
+1,856 → 798 KB raw (570 → 471 KB packed alone), `RCS_OTHER` 2,523 → 2,013 (792 → 564), the events
+frame 3,043 → 2,519 (1,864 → 1,801), the state frame 3,520 → 3,416 (1,231 → 1,212); the others
+unchanged. In the run's packing, each step alone on format 17's sections (the prototype): #5
+−231,074 bytes, #12 −83,714, #10 on top of #12 −36,753 -- the plan's −224,121, −74,080 and −52,817
+measured before the spray sessions and P1's container, whose patterns now absorb most of what the
+markers save in the kinds. The counters on the heavy hour (format 18's file): 39,843 patterns new,
+68,247 by reference; a group run with an explicit count: `RK_UNIT_DELTA` 1,616, `RK_PROJ` 116,
+`RK_PROJ_DELTA` 91; markers: 107,352 empty feature ticks of 108,090 iterations (61 explicit),
+107,405 predicted `RK_FEATURES` (685 explicit). The writer's whole pass over the heavy hour took
+54.0 s against format 17's 55.6 (one run each, the machine shared).
+
+**Checked**: the C decoder and the Python reader give the same records on all 3,605 blocks of the
+heavy hour (`codectest.py verify`); `tarec check` passes on both hours, and `tarec lossy-check` over
+the whole of each hour written with its exact stream (`--exact`). Fuzzed with `fuzzdiff`, 20,000
+cases each over the first 161 blocks of the heavy hour: every section, the kinds alone and
+`RCS_OTHER` alone (Wine, i686), C and Python agreeing in every case; and every section and the kinds
+alone in the x86-64 build with the sanitizers, none firing.
+
 ## Multiplayer recordings
 
 A multiplayer file holds the recording machine's world (every unit, remote players' replicated
@@ -1539,6 +1607,7 @@ the units: stage 6's traffic budget.
 | L5a | the unit frame predicts the resource ledger, format 12: LANDED (*L5a* below) | MEASURED heavy hour 56.99 → 42.15 MB, lossless |
 | L5 | lossy, chosen by the owner 2026-10-11: internal values held between refreshes, shown values exact (*L5: the lossy plan, measured offline*). The core LANDED as format 13: the filter, the refresh every 300 ticks, the takeover at a refresh, the exact stream for the harness; the unit and order hold rows LANDED as format 14; the spray sessions LANDED as format 15; the cells held LANDED as format 16 (*The cells held*) | MEASURED offline heavy hour 42.15 → 19.32 MB with the plan's transforms; format 14's rows 42.15 → 30.53 MB on the writer's path; the spray sessions −2.72 MB over the rows; the cells alone −6.34 MB over the empty table |
 | P1 | the container, format 17: each run of sectioned blocks one zstd frame at level 19, the snapshots chained, a key every tenth: LANDED (*P1* above) | MEASURED lossy hour 20.73 → 15.65 MB, exact hour 42.15 → 29.90 MB |
+| P6 | the kinds as patterns with two markers and the frames' group counts, the GameTime once a block, format 18: LANDED (*P6* above) | MEASURED heavy hour 16.16 → 15.81 MB, light hour 9.39 → 9.10 MB |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
 ## Decisions
