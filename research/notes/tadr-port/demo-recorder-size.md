@@ -1371,10 +1371,18 @@ stream; a quieter hour costs less, since markers follow starts and creates.
 **The transports', the pads' and the waterline's COB entries: recording format 23** (2026-10-13).
 Two more owner's queries (`QueryTransport`, `QueryLandingPad`) and two more owner-only starts
 (`BeginTransport`, `setSFXoccupy`) in the existing kinds 58 and the named start; no new column.
-They follow transports, landings and water crossings. MEASURED on the `waterline` test group's
-recording (raised build, 3,150 GameTimes, three units crossing and a Peewee carried): 32 named starts, 26 of them
-`setSFXoccupy`; on `transport-pad`'s, 3 queries and 1 `BeginTransport` in 1,980 GameTimes. No
-battle measurement was taken for this format.
+They follow transports, landings and changes of the water state, which `0x43DB50` tests for
+every unit with a mover, on land as on water. MEASURED 2026-10-13: the `waterline` test group's
+recordings (3,150 GameTimes, three units crossing and a Peewee carried) hold 20 to 26
+`setSFXoccupy` a run, `transport-pad`'s (1,980 GameTimes) 3 queries, 1 `BeginTransport` and 7 to
+8 `setSFXoccupy`. On `battle` (3,990 GameTimes) the format-23 recording holds 1,416
+`setSFXoccupy` (0.35 an iteration) and no other new event; their bodies are 50,976 bytes raw.
+Modelled as for the slice markers (per 30-iteration block, zstd 3): the events' kind stream and ID
+column grow by 35 bytes and the named starts' bodies by 1,854, about 0.05 MB an hour at this
+density. The stream of that recording packs to 5,221,632 bytes against 5,255,593 for a format-22
+recording of the same test group at main, but the two are different games -- the simulation RNG
+is seeded per level, and main's run made 3,128 more broadcast starts -- so that difference
+measures the games, not the format.
 
 ## P1: the container, measured
 

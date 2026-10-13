@@ -2703,17 +2703,29 @@ first slice a tick late, and a looping script stayed re-phased for the unit's li
   makes them and the playing makes each through the same entry at its place (the
   [engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
   `BeginTransport`'s broadcast (`0x456218` from `0x411408`) is no longer recorded, and the playing
-  writes `+0x10A` from each image instead of calling `0x43DB50`. The test groups
-  `transport-pad` and `waterline`, each in both builds, reach them in every run. MEASURED
-  2026-10-13: in `transport-pad` (`scenarios/replay-transport-pad.json`, Core Prime Industrial
-  Area) an Atlas picks up a Peewee from the level's start and drops it at GameTime 900's order,
-  and a second Atlas lands on an ARMASP after a native click: 1 `QueryTransport`, 2
-  `QueryLandingPad` (`0x411A35`, `0x411BF5`), 1 `BeginTransport` and 8 to 10 `EndTransport` a
-  run. In `waterline` (`scenarios/replay-waterline.json`, Anteer Strait) a hovercraft, an
-  amphibious kbot and a Bear hover transport carrying a Peewee cross into the water and back,
-  and the Bear unloads on the shore: 26 recorded `setSFXoccupy` in the raised build and 22 in the
-  stock-limits one, one `TransportPickup` and five `TransportDrop`. Every lane of the four passes
-  with the live and puppet counts equal and no native owner-only start on a puppet.
+  writes `+0x10A` from each image instead of calling `0x43DB50`.
+- **The test groups** `transport-pad` and `waterline`, each in the raised and the stock-limits
+  build, make every one of those but the pad queries at `0x411AA6` and `0x411CF1` in every run,
+  because each is the consequence of an order the scenario or the test group gives: in
+  `transport-pad` (`scenarios/replay-transport-pad.json`, Core Prime Industrial Area) an Atlas
+  picks up a Peewee on the scenario's own order (VTOL_Pickup asks `QueryTransport` in its state 2
+  before every pickup and then starts `BeginTransport`) and drops it at GameTime 900's order, and
+  a second Atlas lands on an ARMASP after a native click and right click; in `waterline`
+  (`scenarios/replay-waterline.json`, Anteer Strait) a hovercraft and an amphibious kbot move
+  into the water on the scenario's orders and back on the test group's, and a Bear hover
+  transport loads a Peewee, crosses into the water and back and unloads it on the shore. The
+  pad's answer leaves `0x411AA6` (a first answer with no free piece) and `0x411CF1` (a piece no
+  longer free in state 5) unreached; no test group reaches them. MEASURED 2026-10-13 over seven
+  runs of `transport-pad`, six of `stock-transport-pad`, five of `waterline` and four of
+  `stock-waterline` (the latest three of each at format 23): every `transport-pad` recording holds 1 `QueryTransport`, 2
+  `QueryLandingPad` (`0x411A35`, `0x411BF5`) and 1 `BeginTransport`, with 8 to 10 `EndTransport`
+  and 7 to 8 `setSFXoccupy`; every `waterline` recording 1 `TransportPickup`, 5 `TransportDrop`
+  and 20 to 26 `setSFXoccupy`. The counts of repeated states vary because the simulation RNG is
+  seeded from the performance counter each level (the engine map, *The two random streams*)
+  [INFERRED as the cause]. The gate's changed functions are reached by `transport-pad` in both
+  builds in each of the three format-23 runs whose coverage was read: the recorder's query stub, broadcast filter and init on the L
+  lane, the replay's query, `unit_put` and `water_put` on P and R. Every lane passes with the live
+  and puppet counts equal and no native owner-only start or owner's query on a puppet.
 - **What B2 leaves**: the walk class `0x43DA70`'s starts (`StartMoving`, `StopMoving`,
   `MoveRate1..3`) still run in the playing's images, a slice late against the owner's machine;
   recording them is the size decision the [completeness note](demo-recorder-completeness.md)
