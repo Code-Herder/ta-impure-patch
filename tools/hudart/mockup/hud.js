@@ -13,15 +13,17 @@ const HUD = (() => {
   let L, K, root;
   const IMG = {}, cache = {};
 
-  async function load(base) {
+  // over: another kit's folder whose parts replace or add to art/hud's, each drawn from its own folder
+  async function load(base, over) {
     root = base;
     [L, K] = await Promise.all([fetch(base + 'layout.json').then(r => r.json()), fetch(base + 'kit.json').then(r => r.json()).then(j => j.parts)]);
+    if (over) { const O = (await fetch(over + 'kit.json').then(r => r.json())).parts; for (const n in O) K[n] = { ...O[n], root: over }; }
     await Promise.all(Object.keys(K).filter(n => K[n].kind === 'grid' || K[n].kind === 'tile').map(n => {
       const im = new Image(); im.src = url(n); IMG[n] = im; return im.decode();
     }));
     return { layout: L, kit: K };
   }
-  const url = n => `${root}parts/${n}.png`;
+  const url = n => `${K[n] && K[n].root || root}parts/${n}.png`;
 
   /* ---- the band map: a grid-sliced part drawn at T for design length D. The fixed bands keep their size and the
      stretch bands share the difference; drawn smaller than its fixed bands, the whole part scales. ---- */
@@ -167,16 +169,22 @@ const HUD = (() => {
      A lane runs from its branch to its end on the track's own time axis, widened to its minimum to the right first; a
      line drops from its branch to the track, and the playhead's line runs up through every lane. Clicking a lane watches
      that timeline, clicking the watched one goes back to the replay. At the fork limit, while the picker is open, the
-     lane a take-over would replace is outlined (st.replace). g: the housing's box and its track's span, in units ---- */
+     lane a take-over would replace is outlined (st.replace). The lanes show only while the Forks tab is open (st.lanesOpen);
+     the tab sits above the housing at the track's left end, in the plate's bottom row when it is open, so opening the
+     lanes never moves it. g: the housing's box and its track's span, in units ---- */
   // the lane plate's height with its gap above the dock: the column stands on it, since the lanes run under the column
   function lanesH(st) {
     const P = L.proposed && L.proposed.forks, n = st.forks ? st.forks.length : 0;
-    return n ? P.plate.gap + P.plate.pad[1] + n * P.lane.h + (n - 1) * P.lane.gap + P.plate.pad[3] : 0;
+    return n && st.lanesOpen ? P.plate.gap + P.plate.pad[1] + n * (P.lane.h + P.lane.gap) + P.toggle.h + P.plate.pad[3] : 0;
   }
   function lanes(st, g) {
-    const P = L.proposed.forks, Ln = P.lane, Bt = Ln.buttons, n = st.forks.length;
-    if (!n) return '';
-    const pad = P.plate.pad, py = g.y - lanesH(st), ph = lanesH(st) - P.plate.gap;
+    const P = L.proposed.forks, Ln = P.lane, Bt = Ln.buttons, n = st.forks.length, T = P.toggle, pad = P.plate.pad;
+    const tb = { x: g.tx + T.l, y: g.y - P.plate.gap - pad[3] - T.h, w: T.w, h: T.h }, F0 = frame(tb.w, tb.h);
+    const label = st.timeline >= 0 && !st.lanesOpen ? `Watching F${st.forks[st.timeline].id}` : `Forks · ${n}`;
+    const tab = button({ act: 'lanes', icon: { ...T.icon, name: st.lanesOpen ? T.icon.open : T.icon.closed }, text: { ...T.text, html: label },
+      off: n ? 0 : T.off }, T, tb, st, st.lanesOpen && n > 0);
+    if (!n || !st.lanesOpen) return tab;
+    const py = g.y - lanesH(st), ph = lanesH(st) - P.plate.gap;
     const X = t => g.tx + g.ends + (g.tw - 2 * g.ends) * t / st.T, lo = g.tx + g.ends, hi = g.tx + g.tw - g.ends;
     let h = art(P.plate.part, { x: g.x, y: py, w: g.w, h: ph }, '', '', { act: 'dock' }), lines = '';
     st.forks.forEach((f, k) => {
@@ -198,7 +206,8 @@ const HUD = (() => {
       lines += `<div class="box" style="${rect({ x: bx - B.w / 2, y: ly + Ln.h, w: B.w, h: g.ty - ly - Ln.h })};background:${B.colour};pointer-events:none"></div>`;
     });
     const Hd = P.playhead;
-    return h + lines + `<div class="box" data-lanehead="${g.tx + g.ends} ${g.tw - 2 * g.ends} ${Hd.w}" style="${rect({ x: X(st.t) - Hd.w / 2, y: py, w: Hd.w, h: g.ty - py })};background:${Hd.colour};pointer-events:none"></div>`;
+    return h + lines + `<div class="box" data-lanehead="${g.tx + g.ends} ${g.tw - 2 * g.ends} ${Hd.w}" style="${rect({ x: X(st.t) - Hd.w / 2, y: py, w: Hd.w, h: g.ty - py })};background:${Hd.colour};pointer-events:none"></div>`
+      + tab;
   }
 
   // Take over at the playhead: a button on the transport plate, as wide as it, level with the lanes; it opens the picker

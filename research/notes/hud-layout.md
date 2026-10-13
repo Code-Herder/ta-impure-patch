@@ -68,7 +68,8 @@ teams. The same switches, and more, go in the URL, for captures:
 - `state=<url>`: draw the state the game dumped (`tagpu_replayhud.json`) — its screen, its
   engine frame, its players and its stats window with the game's samples — instead of the
   synthetic game. The synthetic game's chart is 67 made-up samples over its 132 seconds;
-- `prop=0` or `prop=1`, `nf=2`, `tl=1`, `pick`, `mode=live`, `rw`: the proposed features, below.
+- `prop=0` or `prop=1`, `nf=2`, `lo` (the lanes open), `tl=1`, `pick`, `mode=live`, `rw`: the proposed
+  features, below; `style=v1` to `v4`: the prototype's painted styles of them, while it lasts.
 
 `tools/hudart/capture.sh "<url>?paused&res=3840x2160&game=150&hud=150" out.png` captures the stage at
 native 4K. It lays the page out at device scale factor 1, one CSS pixel to a screen pixel, as the
@@ -106,6 +107,10 @@ by default, `prop=0` turns it off). The DLL does not read that section, and `lay
 with `prop=0`. A part the kit has no art for yet is drawn as whitebox: a mid-grey plate with a
 dark edge, and an icon it lacks as a stand-in glyph.
 
+- **The Forks tab.** A tab above the timeline housing, at the track's left end, shows and hides the
+  lanes; they are hidden whenever a replay starts. It names the forks kept ("Forks · 3"), or the
+  fork being watched while the lanes are hidden ("Watching F3"), and is dimmed when there are none.
+  Open, the lane plate grows upward around it, so the tab never moves.
 - **Lanes.** Each fork the replay keeps (at most `forks.max`, 3) is a lane on a plate above the
   timeline housing, as wide as the housing. The oldest branch is on top. A lane runs from where
   the fork branched to where it ends, on the track's own time axis. A lane narrower than
@@ -113,8 +118,9 @@ dark edge, and an icon it lacks as a stand-in glyph.
   playhead's line runs up through every lane. The lane's label names the player taken over and
   the branch time. Its right end carries Export and Delete; a first click on Delete arms it,
   and a second deletes the fork.
-- **The axis.** A fork can run longer than the replay. The track's axis is therefore the longest
-  timeline kept, and the groove past the replay's end is shaded (`forks.after`).
+- **The axis.** A fork can run longer than the replay. While the lanes are open or a fork is
+  watched, the track's axis is therefore the longest timeline kept, and the groove past the
+  replay's end is shaded (`forks.after`). Closed, the timeline is the replay's own, as today.
 - **Watching a fork.** Clicking a lane watches that timeline and presses the lane in. Its played
   part fills to the playhead, the main track stays filled only to the branch, and the clock shows
   the fork's length. Clicking the pressed lane goes back to the replay.

@@ -63,7 +63,7 @@ const S = { t: 70, playing: true, speed: 1, hud: 1, game: 150, res: 'fit', np: 1
   ov: { cursors: true, clicks: true, selections: true, chat: true }, sight: -1, follow: -1, scroll: 0, toast: '',
   // proposed, variation B: the forks kept (S.forks, from FORK_SEED), the one watched (S.tl, -1 the replay), the picker,
   // a fork's Delete armed by a first click, and the live game with its rewind strip open (S.rw)
-  prop: 1, nf: 2, forks: null, tl: -1, pick: false, armed: -1, mode: 'replay', rw: false };
+  prop: 1, nf: 2, forks: null, tl: -1, pick: false, armed: -1, mode: 'replay', rw: false, lo: false };
 try { const o = JSON.parse(localStorage.getItem('hud-mockup') || '{}'); delete o.stat; Object.assign(S, o); } catch (e) {}
 const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ hud: S.hud, game: S.game, res: S.res, np: S.np, nt: S.nt, sm: S.sm, ss: S.ss, sw: S.sw,
   prop: S.prop, nf: S.nf, mode: S.mode })); } catch (e) {} };
@@ -73,9 +73,9 @@ const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ h
   if (q.get('game')) S.game = { off: -1, auto: 0 }[q.get('game')] ?? +q.get('game');
   for (const k of ['np', 'nt', 't', 'scroll', 'sight', 'follow']) if (q.get(k)) S[k] = +q.get(k); for (const k of ['sm', 'ss', 'toast']) if (q.get(k)) S[k] = q.get(k);
   if (q.has('stat')) S.stat = q.get('stat') !== '0';
-  // proposed: prop=0|1, nf=<forks kept>, tl=<fork watched>, pick (the picker open), mode=live, rw (the rewind strip open)
+  // proposed: prop=0|1, nf=<forks kept>, tl=<fork watched>, pick (the picker open), mode=live, rw (the rewind strip open), lo (the forks' lanes open)
   for (const k of ['prop', 'nf', 'tl']) if (q.get(k)) S[k] = +q.get(k);
-  if (q.has('pick')) S.pick = true; if (q.get('mode')) S.mode = q.get('mode'); if (q.has('rw')) S.rw = true;
+  if (q.has('pick')) S.pick = true; if (q.has('lo')) S.lo = true; if (q.get('mode')) S.mode = q.get('mode'); if (q.has('rw')) S.rw = true;
   if (q.has('sx')) S.sw = { x: +q.get('sx'), y: +(q.get('sy') || 0) }; }
 
 /* ---- the game's own state: state=<url> loads what the game dumped (tagpu_replayhud.dump, tagpu_hudstate.c) -- the screen,
@@ -102,7 +102,8 @@ const seedForks = () => { S.forks = FORK_SEED.slice(0, S.nf).map((f, k) => ({ ..
 const forkList = () => S.forks.slice().sort((a, b) => a.from - b.from);
 const watched = () => S.prop && S.mode === 'replay' && S.tl >= 0 ? forkList()[S.tl] : null;
 const clock = t => { t = Math.max(0, Math.round(t)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
-const axis = () => S.prop && S.mode === 'replay' ? Math.max(T, ...S.forks.map(f => f.from + f.len)) : T;
+// the axis takes in the forks only while they are shown or one is watched: closed, the timeline is the replay's own
+const axis = () => S.prop && S.mode === 'replay' && (S.lo || watched()) ? Math.max(T, ...S.forks.map(f => f.from + f.len)) : T;
 const tlEnd = () => { const f = watched(); return f ? f.from + f.len : T; };
 const teams = () => { const N = S.np, k = Math.max(1, Math.min(S.nt, N)); return [...Array(k)].map((_, t) => [...Array(N).keys()].filter(i => Math.floor(i * k / N) === t)); };
 
@@ -168,7 +169,7 @@ function state() {
   const base = { W: w / u, H: h / u, frame: { panel: ef.panel / ud, top: ef.bar / ud, bottom: ef.bar / ud } };
   if (S.prop && S.mode === 'live') return { ...base, t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, live: { open: S.rw }, toast: S.toast, stats: { open: false } };
   const fl = S.prop ? forkList() : null, lru = fl && fl.length >= FORK_MAX ? fl.indexOf(fl.reduce((a, f) => f.seen < a.seen ? f : a)) : -1;
-  const prop = !S.prop ? {} : { T: axis(), ends: T, len: tlEnd(), fillTo: watched() ? watched().from : T, timeline: S.tl, picker: S.pick, armed: S.armed,
+  const prop = !S.prop ? {} : { T: axis(), ends: T, len: tlEnd(), fillTo: watched() ? watched().from : T, timeline: S.tl, lanesOpen: S.lo, picker: S.pick, armed: S.armed,
     replace: S.pick ? lru : -1, forks: fl.map(f => ({ id: f.id, name: ps[f.seat] ? ps[f.seat].name : NAMES[f.seat], from: f.from, end: f.from + f.len })) };
   return { ...base,
     t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, seats: ps, teams: tm, folded: S.fold, markers,
@@ -245,6 +246,7 @@ layer.addEventListener('click', e => {
     case 'play': if (S.t >= tlEnd()) S.t = 0; S.playing = !S.playing; break;
     case 'rew': S.t = Math.max(0, S.t - 10); break;
     case 'fwd': S.t = Math.min(tlEnd(), S.t + 10); break;
+    case 'lanes': if (S.forks.length) S.lo = !S.lo; break;
     case 'takeover': S.pick = !S.pick; if (S.pick) S.playing = false; break;
     case 'takeas': { const p = state().seats[+a.dataset.seat], fl = forkList();
       if (fl.length >= FORK_MAX) S.forks = S.forks.filter(f => f !== fl.reduce((x, f) => f.seen < x.seen ? f : x));
@@ -301,7 +303,18 @@ window.addEventListener('resize', resize);
 document.addEventListener('keydown', e => { if (e.key === ' ' && e.target === document.body) { e.preventDefault(); S.playing = !S.playing; build(); } });
 // the faces are loaded before the first layout, so no text is measured in a fallback
 const FACES = ['500 10px Oswald', '700 10px Oswald', '600 10px "Barlow Condensed"'].map(f => document.fonts.load(f));
-Promise.all([HUD.load('../../../art/hud/'), GAME_URL ? fetch(GAME_URL).then(r => r.json()) : null, ...FACES]).then(([, g]) => {
+/* ---- PROTOTYPE (delete once a style is picked): variation B's four Codex styles, each a kit of the new parts in
+   prototype-b/<style>/ laid over art/hud/; ?style= picks one, the bar at the bottom and the arrow keys cycle ---- */
+const STYLES = [['wb', 'Whitebox'], ['v1', 'V1 · Same family'], ['v2', 'V2 · Raised tabs'], ['v3', 'V3 · Stencil console'], ['v4', 'V4 · One taller housing']];
+const STYLE = Math.max(0, STYLES.findIndex(([k]) => k === new URLSearchParams(location.search).get('style')));
+{ const bar = document.createElement('div'), go = d => { const q = new URLSearchParams(location.search); q.set('style', STYLES[(STYLE + d + STYLES.length) % STYLES.length][0]); location.search = q; };
+  bar.style.cssText = 'position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:9;display:flex;gap:10px;align-items:center;'
+    + 'background:#ff6a1a;color:#111;font:700 14px system-ui,sans-serif;padding:6px 10px;border-radius:999px;box-shadow:0 4px 18px rgba(0,0,0,.6)';
+  bar.innerHTML = `<button aria-label="Previous style">←</button><span>${STYLE} / ${STYLES.length - 1} — ${STYLES[STYLE][1]}</span><button aria-label="Next style">→</button>`;
+  bar.querySelectorAll('button').forEach((b, i) => { b.style.cssText = 'border:0;background:#111;color:#ff6a1a;font:700 14px system-ui;border-radius:999px;padding:3px 10px;cursor:pointer'; b.onclick = () => go(i ? 1 : -1); });
+  document.body.appendChild(bar);
+  document.addEventListener('keydown', e => { if (e.target.closest('input,textarea,select,[contenteditable]')) return; if (e.key === 'ArrowLeft') go(-1); if (e.key === 'ArrowRight') go(1); }); }
+Promise.all([HUD.load('../../../art/hud/', STYLE ? `prototype-b/${STYLES[STYLE][0]}/` : null), GAME_URL ? fetch(GAME_URL).then(r => r.json()) : null, ...FACES]).then(([, g]) => {
   if (g) { GAME = g; S.res = `${g.device.W}x${g.device.H}`; S.hud = g.state.hud; S.playing = false; }
   resize(); requestAnimationFrame(frame); })
   .catch(err => { layer.innerHTML = `<p class="err" style="padding:16px">Could not load art/hud/: ${err}. Serve the repository root over HTTP and open /tools/hudart/mockup/.</p>`; });
