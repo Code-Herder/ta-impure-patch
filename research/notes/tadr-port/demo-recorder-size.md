@@ -2,14 +2,15 @@
 
 ## Status
 
-**L1 to L4, L5a, P1, P6, P4, P5 and P7 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
+**L1 to L4, L5a, P1, P6, P4, P5, P7 and RC are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
 *L3: the record frames, measured*, *L4: the measured hours, the snapshot interval and R1*,
 *L5a: the ledger rule*, *P1: the container, measured*, *P6: the kinds and the ticks, measured*,
-*P4: the unit frame's type rules, measured*, *P5: the unit listing, measured* and *P7: the sprays,
-the order nodes and the projectile lanes, measured*, below). Recording format 22 codes an explicit
+*P4: the unit frame's type rules, measured*, *P5: the unit listing, measured*, *P7: the sprays,
+the order nodes and the projectile lanes, measured* and *RC: the unit coder, measured*, below).
+Recording format 24 codes the unit frame's listing, lane masks and residuals as one range coder's
+bytes a block, each decision under a context both sides keep, codes an explicit
 nano spray against the unit's last four, matches order nodes to the kept list in a skirmish
-stream and codes a surviving projectile's fields as lanes of their own widths, says which units an
-iteration lists and their lane masks against state both sides keep, predicts more of the unit
+stream and codes a surviving projectile's fields as lanes of their own widths, predicts more of the unit
 frame from per-type engine constants, codes each iteration's record kinds as a pattern of the run's
 last 16 and writes a block's GameTime once, packs each
 run of sectioned stream blocks as one zstd frame at level 19 and each snapshot against the one before
@@ -34,8 +35,9 @@ which the playing's engine stamps (*The cells held*), format 17 (*P1*) packs tha
 container, format 18 (*P6*) takes the heavy hour from 16.16 to 15.81 MB, and format 19 (*P4*)
 predicts more of the unit frame from per-type engine constants, to 14.06 MB, format 20 records
 the script slice's markers (*The script slice's markers*), format 21 (*P5*) lists the units
-against the frame's own state, to 13.12 MB, and format 22 (*P7*) codes the sprays, the order nodes
-and the surviving projectiles against more of the frames' state, to 12.71 MB; L6 is a plan. The page gathers what has been measured about the size of a demo recording, the research
+against the frame's own state, to 13.12 MB, format 22 (*P7*) codes the sprays, the order nodes
+and the surviving projectiles against more of the frames' state, to 12.71 MB, and format 24 (*RC*)
+range-codes the unit frame, to 10.54 MB; L6 is a plan. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -1633,7 +1635,7 @@ landing's `RT_TYPES` replaces, are not kept, so its rows were not compared again
 
 ## P5: the unit listing, measured
 
-**What format 21 changes** (tagpu_recfmt.h, *RCS_UNITS*; tagpu_reccodec.c, *THE LISTING*). The
+**What format 21 changes** (format 24 codes the listing otherwise: *RC*, below). The
 unit section said which units each iteration lists by a count and slot gaps, and each one's lane
 mask by an id into a dictionary of the block's masks. Format 21 says both against state the writer
 and every reader keep:
@@ -1645,7 +1647,7 @@ and every reader keep:
   -- resting ones with a delta, which a frame always lists -- are slots;
 - every listed unit but a symbol 1 takes an id: 0 its slot's last mask (not for a carried unit,
   and only when that mask is not empty), k the k-th of the run's masks most recent first, the list's length + 1 the block's next new
-  mask; every listed mask goes to the front of the list, at most 4,096 masks (`RECC_J2_MTF`), the
+  mask; every listed mask goes to the front of the list, at most 4,096 masks, the
   least recent dropped, so the list never holds a mask twice;
 - the ids are a byte each when all are below 256, else varints.
 
@@ -1818,6 +1820,133 @@ case in 20,000, did not come up with this seed).
 predicts from the old one's sprays until it has its own: size only.
 The match does not follow a node that moved more than 32 places after the last match.
 
+## RC: the unit coder, measured
+
+**What format 24 changes** (tagpu_recfmt.h, *RCS_UNITS*; tagpu_reccodec.c, *THE UNIT CODER*). The
+unit frame's listing, lane masks and residuals were byte columns -- symbols, ranks, mask ids,
+varints -- that the run's zstd packed. Format 24 codes them as one binary range coder's bytes a
+block (LZMA's: 12-bit probabilities each moved 1/16 of the way to the bit coded), every decision
+under a context the writer and every reader keep, all restarting at every reset point:
+
+- **The listing**: one decision for every slot an iteration visits -- live, not slot 0, named by
+  no `RK_UNIT` or `RK_UNIT_GONE` -- in slot order. A resting slot: whether it is woken, under how
+  long since its last listing in the run (none, or 1 + the bit length of the gap, at most 15). A
+  slot the iteration before listed: whether it is listed again, under its last mask and its streak
+  of listings (1..3). Any other: whether it is listed, under the gap and its last mask.
+- **The mask**, under the slot's last mask: that mask's 8 next masks, most recent first, a
+  decision each; past them an escape, a 13-bit id among the run's kept masks -- its first 4,096,
+  in first-use order (`RECC_MASKS`) -- or a new mask lane by lane, each bit under the lane, the
+  bit before and whether any came yet.
+- **The residuals**, each lane of the mask in order: a hit among the 8 recent values of a cache
+  keyed by the unit's type (`+0xA6`) and the lane (8,192 caches, hashed), its index a 3-bit tree;
+  else a literal, its bit length under the lane and the slot's last length in it, the 4 bits below
+  its top modelled, the rest raw.
+
+The decoder decodes a listed slot's mask and residuals before it evaluates the slot, so the
+frame's rules read them from the slot rather than from columns. A section is consumed exactly by
+construction: the encoder writes N + 4 bytes for its N renormalisations, and the decoder reads 4
+at its start and one at each of the same N, so a reader refuses a section the decode reads past
+and one it leaves bytes of.
+
+**What decided each model** (MEASURED 2026-10-13 offline, on the two fresh format-23 hours: a
+prototype of the coder replacing RCS_UNITS, every block decoded back and consumed exactly, and the
+blocks repacked as the writer packs them -- one zstd-19 frame a run, windowLog 20, flushed per
+block -- which reproduces the format-23 files' stream blocks byte for byte; the heavy hour
+14,326,468 → 11,922,688 bytes, −16.8 %, the light one 6,220,813 → 4,883,781, −21.5 %; each
+change below is the heavy hour's real file against the step before):
+
+- A first cut -- listed decisions, a list per last mask, residuals as a length and their bits
+  raw -- gave −5.4 %. zstd had been taking repeated residual values, which the raw bits lost:
+  18–22 % of TURN, VX and VZ residuals equal the lane's last value and another 47–52 % are among
+  its 8 before. A recent-value cache per lane took the file to 11.60 MB.
+- Caches keyed by the unit's type and the lane hit 77.5 % against 74.3 %, at smaller indices:
+  −446 K. With them a "the slot's last value again" decision costs bytes (−54 K without it).
+- A listed decision per visited slot beats the gaps of the format before by 604 K on the heavy
+  hour and 294 K on the light one.
+- One adaptive rate, moving 1/16, beats 1/32 by 86 K; mixing two rates is worse in every pair
+  tried (4+7, 4+6, 5+7, 3+6).
+- The mask's context is the last mask alone: a per-type list behind it saves only 21 K, and a
+  type context on the listed decision costs 77 K. 8 next masks a context.
+- A literal's length under the slot's last length in the lane saves 42 K; the hit decision under
+  whether the slot's last value there was a hit, 66 K. Both live in one byte a slot and lane.
+- 8 values a cache beat 16 by 12 K and 4 by 92 K; 8,192 caches beat 2,048 by 14 K. 4 modelled
+  bits below a literal's top beat 3 by 7 K; 5 would save 6 K for twice the table.
+
+The prototype's coded unit frame by part (bytes):
+
+| part | heavy | light |
+|---|---:|---:|
+| listed: resting (woken?) / carried / other | 59,389 / 303,193 / 415,915 | 30,068 / 139,626 / 184,290 |
+| masks: the context's list / escape id / new masks' bits | 734,715 / 338,859 / 65,752 | 421,606 / 225,778 / 44,918 |
+| residuals: cache hit decision / cache index | 339,512 / 908,521 | 148,562 / 427,669 |
+| residuals: length / modelled bits / raw bits | 532,372 / 553,148 / 789,058 | 229,782 / 227,687 / 307,759 |
+| **the unit frame**, with 4 flush bytes and the iterations a block | **5,062,192** | **2,406,597** |
+
+**Measured** (2026-10-13, `codectest lossy` -- the writer's path -- under Wine, 32-bit, on the
+reference setup; the inputs and header overrides of *P4*). The baseline is format 23 (main's
+codectest) on the same path:
+
+| | heavy hour | light hour |
+|---|---:|---:|
+| the file, format 23 / 24 | 12,712,480 / **10,542,083 (−2,170,397, −17.1 %)** | 7,572,362 / **5,959,925 (−1,612,437, −21.3 %)** |
+| the stream and snapshots | 12,688,695 / 10,518,298 | 7,550,904 / 5,938,467 |
+| the unit frame, raw / packed alone | 10.6 MB / 7,579 KB → 4,615 KB / 4,650 KB | 7,993 KB / 5,379 KB → 3,244 KB / 3,279 KB |
+
+Every block sectioned, none declined or mismatched, 3,605 and 3,608 of them; the other sections
+keep their sizes (`recsize.py`). The coder's bytes do not pack: zstd keeps them as they are. On
+the heavy hour's 32,741,856 unit-ticks the file is 0.322 bytes a unit-tick, against 0.388 at
+format 23; its 10.54 MB sits inside the 7.3–12.4 MB estimated for TADR's recorder on the same
+hour (*L5*). The writer's pass (`codectest transcode`, which times `reccodec_stream_block`, the
+writer's whole block: the encode, the check decode and the packing) took 39.4 s over the heavy
+hour, at most 21 ms a block after the first, against 40.6 s and 22 ms at format 23, each run
+alone; the C decoder takes at most 15 ms a block of that hour (`codectest.py verify`).
+
+**Memory.** The unit coder's state is allocated by `reccodec_new`, none of it per block: its
+probabilities (520 KB), the run's kept masks with their hash chains (88 KB), each context's next
+masks (68 KB) and the residual caches (264 KB), and per slot a byte a lane and 7 bytes more, in
+place of the listing's 106 KB and 16-byte last mask. MEASURED in the 32-bit build by counting
+`reccodec_new`'s allocations: 9,407,112 bytes a codec at 5,001 slots and 3,000 projectile records
+against 7,956,440 at format 23 (+1.45 MB), and 18,887,112 against 16,246,440 at 15,001 slots. The
+writer holds two codecs.
+
+**The work a section can ask.** A near-certain decision costs almost no input, so a section's
+bytes no longer bound its decode; the bound is the decisions, iterations × (slots − 1) ×
+(22 + 38 × lanes), from the head and the header alone (*THE UNIT CODER*'s BOUND). A listing that
+changes a unit makes a record, which the head's payload bounds; one that leaves the unit as it was
+must cancel a prediction that moves it, which only the rules' lanes have. `codectest.py worst
+5001` writes the block that asks the most for the least input -- 5,000 identical units, every
+dword of each changed by one step every iteration, so that every slot lists about 111 of its 112
+lanes and every residual after the first slot's is a cache hit -- for 38 iterations, as many as
+`RECC_PAYLOAD_MAX` holds of those records, in 65 KB of coder. MEASURED under Wine: it decodes in
+555–576 ms, 2.9–3.0 µs a slot-iteration, which comes to at most about 3.9 s at `RECC_TICKS_MAX`
+iterations [INFERRED: scaled]. Format 23 decodes the same kind of block at 2.3–2.6 µs a
+slot-iteration (its large residuals as varints), but writes it as records past 7 of those
+iterations, where the residuals it gathers for its columns pass `RECC_FRAME_CAP`. The slowest of 40,000 fuzzed blocks
+of the heavy hour (below) decodes in 14 ms under Wine, 43 ms on the x86-64 build with the
+sanitizers.
+
+**Checked** (format 24): the C decoder and the Python reader give the same records on every block
+of both hours (`codectest.py verify`, skipping resting units and evaluating every candidate);
+`tarec lossy-check` passes over the whole of both hours written with their exact streams
+(`--exact`); `tarec check` reads both to their end with no correction and every snapshot equal,
+and finds the same 1,124 and 310 unexplained changes as main's format-23 files: these inputs
+predate `RK_EV_YARD`. `codectest outcomes`, natively under ASan and under Wine, writes a block
+with a resting slot woken, a carried slot listed and one not, a mask from its context's list, an
+escape to a kept mask, a new mask, residuals from a cache and as literals, and reads it back; a run
+of 4,200 masks, of which the run keeps 4,096 and codes the rest whole, after which the first 60
+come back as kept masks; and refuses, each coded once by the self-test's build in place of the
+right value, an escape past the kept masks or into its context's list, an empty new mask, a new
+mask the run keeps, a cache index past the cache's values and a residual past its lane's width,
+and, as bytes, the coder's last byte cut, a byte after it, a coder of 3 bytes and iterations not
+the head's. Fuzzed on the heavy hour, 20,000 cases each, C and Python agreeing in every case: the
+unit section alone on the x86-64 build with the sanitizers (110 accepted) and under Wine (97),
+every section on both (2,331 accepted by each); the sanitizers fired on none.
+
+**What it does not do.** The escape's id has no context but its own tree; a literal is coded
+whole even when it is near a cached value; a block's coder ends with five shifts, 4 bytes, about
+14 KB an hour. Each was left out as small next to the gain above. The size in a game recorded
+with this build is not measured yet.
+
 ## Multiplayer recordings
 
 A multiplayer file holds the recording machine's world (every unit, remote players' replicated
@@ -1905,6 +2034,7 @@ the units: stage 6's traffic budget.
 | P4 | the unit frame's type rules and `RT_TYPES`, format 19 (*P4* above) | MEASURED heavy hour 15.81 → 14.06 MB, light hour 9.10 → 8.34 MB, on P6 |
 | P5 | the unit listing against the frame's state, each lane's count before its column, format 21 (*P5* above) | MEASURED heavy hour 14.06 → 13.12 MB, light hour 8.34 → 7.73 MB |
 | P7 | explicit sprays against the unit's last four, order nodes matched in a skirmish stream, the survivors' lanes, format 22 (*P7* above) | MEASURED heavy hour 13.12 → 12.71 MB, light hour 7.73 → 7.57 MB |
+| RC | the unit frame's listing, masks and residuals range-coded under contexts both sides keep, format 24 (*RC* above) | MEASURED heavy hour 12.71 → 10.54 MB, light hour 7.57 → 5.96 MB, against format 23 |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
 ## Decisions

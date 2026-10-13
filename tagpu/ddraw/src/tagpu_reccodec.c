@@ -1635,26 +1635,29 @@ static int bit_of(const unsigned char* bits, unsigned i) { return bits[i >> 3] >
      without the lane -- and whether the last value was a hit.
    Every context is a listing decision, a mask, the TYPE lane of the slot's copy or the coder's
    own state: nothing a reader's rest mode changes (codectest.py verify decodes in both).
-   MEASURED 2026-10-13 against format 23, the same blocks repacked as the writer packs them: the
-   heavy four-player hour 14,326,468 bytes -> 11,922,688 (-16.8 %), the light one 6,220,813 ->
-   4,883,781 (-21.5 %); each model's choice against its alternatives is in the size note
-   (demo-recorder-size.md, the unit coder).
+   MEASURED 2026-10-13 through the writer's path (codectest lossy) against format 23: the size
+   note's heavy four-player hour 12,712,480 bytes -> 10,542,083 (-17.1 %), its light one
+   7,572,362 -> 5,959,925 (-21.3 %); each model's choice against its alternatives is in the size
+   note (demo-recorder-size.md, RC: the unit coder).
 
    BOUND, the work and not the bytes: a near-certain decision costs almost no input, so a short
    section can make a decoder take every decision the frame's shape allows -- per visited slot one
    listed decision, at most UC_K + UC_IDB + nlanes for its mask and 1 + 5 + UC_MAN + 27 for each
    residual, raw bits costing a bit of input each -- which is iterations * (nslots - 1) *
    (22 + 38 * nlanes) decisions a block, a function of the header's sizes and the head's
-   iterations alone; RECC_FRAME_CAP bounds the section's bytes, not this work, and residuals that
-   leave a unit as it was make no record that the payload would bound. MEASURED 2026-10-13 under
-   Wine on the reference setup (codectest.py worst 5001): a written block in which 5,000 units
-   list all 112 lanes from their caches for 38 iterations, 65 KB of coder, decodes in 555..576 ms,
-   2.9..3.0 us a slot-iteration, about 3.9 s at RECC_TICKS_MAX iterations; the slowest of 40,000
-   fuzzed blocks of the heavy hour decodes in 14 ms. Every index a decode takes is bounded by its
-   table: a context's place by its list's length, an escape by the kept masks (refused past them),
-   a cache index by the cache's values (refused past them), a length by the lane's width (refused
-   past it), a context by the arithmetic that makes it. A refused block's records are discarded,
-   so values decoded past the section's end (zeros) never reach a reader. */
+   iterations alone; RECC_FRAME_CAP bounds the section's bytes, not this work. A listing that
+   changes a unit makes a record, which the head's payload bounds; one that leaves the unit as it
+   was must cancel a prediction that moves it, which only the rules' lanes have. MEASURED
+   2026-10-13 under Wine on the reference setup (codectest.py worst 5001): a written block in
+   which 5,000 units list about 111 of their 112 lanes from their caches for 38 iterations, as
+   many as RECC_PAYLOAD_MAX holds of their records, 65 KB of coder, decodes in 555..576 ms,
+   2.9..3.0 us a slot-iteration, which comes to at most about 3.9 s at RECC_TICKS_MAX iterations
+   [INFERRED: scaled]; the slowest of 40,000 fuzzed blocks of the heavy hour decodes in 14 ms.
+   Every index a decode takes is bounded by its table: a context's place by its list's length, an
+   escape by the kept masks (refused past them), a cache index by the cache's values (refused past
+   them), a length by the lane's width (refused past it), a context by the arithmetic that makes
+   it. A refused block's records are discarded, so values decoded past the section's end (zeros)
+   never reach a reader. */
 
 static unsigned bitlen32(uint32_t v)
 {

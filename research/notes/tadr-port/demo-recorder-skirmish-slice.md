@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 23 and its readers take format 23 alone (*The file*, below).
+The recorder writes recording format 24 and its readers take format 24 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -245,11 +245,12 @@ lanes by the header's `RT_CODEC`, the rows of `tagpu/ddraw/replay-lanes.tsv` (11
 find their lanes by role, never by offset; since each recording carries its own table, editing the
 TSV never orphans a file, and a wrong width costs size only. A unit is listed in an iteration only
 when a lane differs from its prediction, and then as residuals per lane. Which units an iteration
-lists, and each one's lane mask, the section says against state both sides keep (the codec's *THE
-LISTING*): a unit listed the iteration before takes a 2-bit symbol -- not listed, listed with its
-last mask, listed with another -- the other candidates are ranks among those not carried and the
-woken resting units are slots, and a mask is an id into the run's last 4,096 masks, most recent
-first. A unit *at rest* — its
+lists, each one's lane mask and its residuals are one range coder's decisions, each under a context
+both sides keep (the codec's *THE UNIT CODER*): every visited unit whether it is listed (a resting
+one whether it is woken), under its last mask, its streak of listings and how long since its last
+one; a mask from the masks its last mask was followed by, or the run's kept masks, or new; a
+residual from a cache of recent values kept by unit type and lane, or its length and bits. A unit
+*at rest* — its
 image equal to the two before it and to the third's lanes, and either not moving or with a move
 stamp older than the step before, with its ledger's requested and granted zero, and, for a type
 with an `RT_TYPES` row, with its two HP percentages equal to its HP's — is skipped
@@ -457,14 +458,16 @@ in a file can overflow the arithmetic.
 
 **Memory**, MEASURED 2026-10-13 by counting what `reccodec_new` and the frames' makers allocate
 in the 32-bit build, at 5,001 slots, 3,000 projectile records, a 642 × 648 grid and 8,192 wrecks.
-A codec state is 829 bytes a slot (the copy and L2, `0x148` bytes each, L3's 16, the winners'
-128, the last step's 8, five flags and the last mask's 16) and 627 bytes a projectile record (the
+A codec state is 948 bytes a slot (the copy and L2, `0x148` bytes each, L3's 16, the winners'
+128, the last step's 8, five flags and the unit coder's 135: a byte a lane, its streak, its last
+mask's id and its last listing) and 627 bytes a projectile record (the
 pool and the image it is making, both one iteration before, the winners, the ages, the advanced
-image and the survivors' maps), plus 1,929,611 bytes whatever the counts: the pool frame's tables
+image and the survivors' maps), plus 2,785,164 bytes whatever the counts: the pool frame's tables
 (the last birth of each of 4,096 weapon IDs, 4,096 shot events and their rows, and the encoder's
-search over at least 4,096 rows), the air and type indexes (128 KB each), the listing's masks, a
+search over at least 4,096 rows), the air and type indexes (128 KB each), the unit coder's
+probabilities, kept masks, contexts' lists and residual caches (940 KB), a
 body buffer and the codec itself. Before the frames and the scratch of the largest block it has
-met, that is 7,956,440 bytes, about 8.0 MB, at 5,001 slots; 16,246,440, about 16.2 MB, at
+met, that is 9,407,112 bytes, about 9.4 MB, at 5,001 slots; 18,887,112, about 18.9 MB, at
 15,001. The record frames add 6,031,152 bytes (cells: 13 bytes a grid cell, the copy 5.4 MB on
 that grid, and 0.6 MB of tick input), 124,920 (orders: 24 bytes a slot, and an arena that doubles
 up to 65,536 nodes, 5.8 MB), 1,662,876 (events: 324 bytes a slot and 40 KB of dictionaries) and
