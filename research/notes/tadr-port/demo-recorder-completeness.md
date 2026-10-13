@@ -1011,11 +1011,12 @@ For the skirmish slice:
 1. **A yard its own unit's create opens.** A recorded YARD_OPEN (`RK_EV_YARD`, written at
    `0x47DAF1` past `0x47D970`'s refusal) is applied at its place in the step, restamped as
    `0x47DAC0` does (`0x47C790`, `0x440A40`; the engine map's *An open yard gives nothing back*).
-   One a structure's own create runs at once is recorded before that create's `RK_EV_CREATE`,
-   names a unit not yet live, and is refused and counted; the image after the step puts the yard
-   in. A create later in the same step inside that yard would find its cells as the closed yard
-   left them. No fixture reaches it: a stock lab opens its yard from its build scripts, not from
-   Create [INFERRED].
+   One a structure's own Create runs opens the yard before the create's stamp (`0x485D40` at
+   `0x4860A6`, the stamp at `0x48610F`), is recorded before that create's `RK_EV_CREATE`, and
+   finds no unit when played. The replayed create, with the puppet gates open, makes it again at
+   the engine's place, but only while the puppet's Create takes the recording machine's path, and
+   nothing compares the recorded yard with the one the create left. No fixture reaches it: a stock
+   lab opens its yard from its build scripts, not from Create [INFERRED].
 
 Answered while planning S2 (2026-09-30): **`0x48B090` plays unit replies, never a network sound.**
 A change of `+0x10E` bit 0 queues reply kind 3 or 4 and of bit 2 kind 14 or 15 through `0x47F780`

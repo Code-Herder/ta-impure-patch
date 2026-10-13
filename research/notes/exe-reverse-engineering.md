@@ -8172,10 +8172,26 @@ follows it in the step finds the cells the game's create found (`tagpu_replay.c`
 YARD_OPEN*). A replay that makes units in slot order (the first step, a seek) writes each made
 unit's yard as its create returns (`yard_put` in `level_units`), before the next create stamps
 [MEASURED: before it, a seek at 3001 left 527 with bit 27 and its four cells empty; with it, every
-round trip of slice-walkers, forest-circle and battle is EQUAL]. The image's yard, applied after
-the positions where the host's differs, is the backstop for a yard event the playing could not
-apply: one a unit's own create runs at once, recorded before that create's `RK_EV_CREATE`, names
-a unit not yet live, and is refused, counted and applied by the next image.
+round trip of slice-walkers, forest-circle and battle is EQUAL]. The image's yard goes in after
+the positions wherever the host's still differs.
+
+**A yard can also open inside its structure's own create, before its stamp** [DISASSEMBLED
+2026-10-12]. The create `0x485F50` first runs the init `0x485A40` (`0x4860A0`), which writes the
+footprint's size (`+0x7E`, `0x485AAA`) and cell (`+0x76`, `0x485BD3`) and clears `+0x10F`'s low
+nibble, the yard among it (`0x485B3E..0x485B52`); then the COB setup `0x485D40` (`0x4860A6`),
+which starts Create with run-now set (`0x485DE6`), so Create's first slice -- and a SET YARD_OPEN
+in it, whose refusal now reads a valid footprint -- runs there; and only after it the placement
+`0x48A870` (`0x486109`) and the stamp `0x47CC30` (`0x48610F`), whose yardmap path takes its mask
+from `+0x10F` bit 2 (`0x47CD88..0x47CD9A`). CreateFromNetwork `0x4861D0` has the same order
+(`0x4862BE`, then `0x486306` and `0x48630C`). So such a yard is stamped open, and setting it after
+the create returned would stamp under the closed mask first. The recording carries the event
+before the create's `RK_EV_CREATE` (the create is recorded at its exit, `0x4861B3`), and it finds
+no unit when played; the replayed create runs with the puppet gates open (`tagpu_replay.c`,
+`make`), so its own Create makes the SET again at the engine's place, as it makes the create's
+state byte. That rests on the puppet's Create taking the recording machine's path, and the
+played-late event is not compared with the yard the create left (the completeness note's open
+items). In the destructor `0x4866D0` the footprint clear (`0x47CBD0` -> `0x47D0E0`, `0x48682D`)
+comes before Killed's start (`0x4B0A70` at `0x486877`).
 
 **The rule on a skirmish recording machine.** Its seats are type 1 (local human) and 2 (local AI)
 (MEASURED, the controllers of both recordings the decision rests on), so the incumbent always keeps
