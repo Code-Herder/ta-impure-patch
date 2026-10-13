@@ -176,7 +176,7 @@ const HUD = (() => {
      the tab sits above the housing at the track's left end, in the plate's bottom row when it is open, so opening the
      lanes never moves it. g: the housing's box and its track's span, in units ---- */
   /* the Forks button, one of five places (st.forkTab): 'a' a tab above the housing (drawn by lanes()); 'b' the lower part
-     of the time recess, the time above it; 'c' a bay at the housing's left end, taking that width from the marker lane and
+     of the time recess, the time above it; 'f' its upper part, the time below it; 'c' a bay at the housing's left end, taking that width from the marker lane and
      the track; 'd' the right end of the marker lane, which it shortens; 'e' no button, a fork badge in the marker lane at
      each branch, any of which opens and closes the lanes. lane, tr and tm are the housing's marker lane, track and time
      recess, changed in place where the button takes room; returns its html, the time's new box and the badges */
@@ -188,6 +188,8 @@ const HUD = (() => {
     switch (st.forkTab) {
       case 'b': { const C = T.clock, th = tm.h * C.split;
         return { time: { ...tm, h: th }, html: btn({ x: tm.x + C.pad, y: tm.y + th, w: tm.w - 2 * C.pad, h: tm.h - th - C.pad }, label) }; }
+      case 'f': { const C = T.clock, bh = tm.h * (1 - C.split);
+        return { time: { ...tm, y: tm.y + bh, h: tm.h - bh }, html: btn({ x: tm.x + C.pad, y: tm.y + C.pad, w: tm.w - 2 * C.pad, h: bh - C.pad }, label) }; }
       case 'c': { const Bc = T.bay, k = Bc.w + Bc.gap, b = { x: tr.x, y: lane.y, w: Bc.w, h: tr.y + tr.h - lane.y };
         lane.x += k; lane.w -= k; tr.x += k; tr.w -= k;
         return { html: btn(b, null, { ...ico, ...Bc.icon }) + text(String(n), { x: b.x, y: b.y + b.h * Bc.num_y, w: b.w, h: b.h * (1 - Bc.num_y) }, T.text.style, { align: 'c' }) }; }

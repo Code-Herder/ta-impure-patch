@@ -37,7 +37,7 @@ p.note { color: var(--muted); max-width: 80ch; }
   <label>Teams <select id="nt"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
   <label>Proposed <select id="prop"><option value="1">B: forks as lanes</option><option value="0">off, as the game</option></select></label>
   <label>Forks <select id="nf"><option>0</option><option>1</option><option>2</option><option>3</option></select></label>
-  <label>Forks button <select id="ft"><option value="a">A: tab above</option><option value="b">B: under the clock</option><option value="c">C: bay at the left end</option><option value="d">D: end of the marker lane</option><option value="e">E: fork markers</option></select></label>
+  <label>Forks button <select id="ft"><option value="a">A: tab above</option><option value="b">B: under the clock</option><option value="f">F: over the clock</option><option value="c">C: bay at the left end</option><option value="d">D: end of the marker lane</option><option value="e">E: fork markers</option></select></label>
   <label>Showing <select id="mode"><option value="replay">a replay</option><option value="live">a live game</option></select></label>
 </header>
 <div class="wrap" id="wrap"><div class="stage" id="stage"><canvas class="bg" id="bg"></canvas><div class="hud" id="hud-layer"></div></div></div>
@@ -75,7 +75,7 @@ const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ h
   for (const k of ['np', 'nt', 't', 'scroll', 'sight', 'follow']) if (q.get(k)) S[k] = +q.get(k); for (const k of ['sm', 'ss', 'toast']) if (q.get(k)) S[k] = q.get(k);
   if (q.has('stat')) S.stat = q.get('stat') !== '0';
   // proposed: prop=0|1, nf=<forks kept>, tl=<fork watched>, pick (the picker open), mode=live, rw (the rewind strip open), lo (the forks' lanes open),
-  // ft=a..e (where the Forks button sits)
+  // ft=a..f (where the Forks button sits)
   for (const k of ['prop', 'nf', 'tl']) if (q.get(k)) S[k] = +q.get(k);
   if (q.has('pick')) S.pick = true; if (q.has('lo')) S.lo = true; if (q.get('ft')) S.ft = q.get('ft'); if (q.get('mode')) S.mode = q.get('mode'); if (q.has('rw')) S.rw = true;
   if (q.has('sx')) S.sw = { x: +q.get('sx'), y: +(q.get('sy') || 0) }; }
