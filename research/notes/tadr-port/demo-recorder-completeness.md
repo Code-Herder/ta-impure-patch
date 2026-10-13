@@ -425,11 +425,48 @@ thread. S1's capture, which includes this slice, costs about 80 µs a tick in a 
 
 ## The replay test harness
 
-`tools/replay/tareplay.py` runs scripted fixtures in parallel, as the compatibility suite runs
-games: one tacli instance and one private X server per job, nothing stopped by name, and exit 0
+### Terms
+
+The harness has four nouns. They are the words the notes, the instructions and the runs pane use:
+
+| term | what it is |
+|---|---|
+| **scenario** | a game setup in `scenarios/`: the map, the players, the units placed. A building block; several test groups can load the same one. |
+| **test group** | one scripted game and the tests run on it: a scenario to load, actions at given GameTimes (apply another scenario, type a chat line, press keys, order a unit), the GameTime it ends at, and which tests it wants. Each is an entry of `tools/replay/fixtures.json`. |
+| **test** | one way of playing a test group: one game, in a fresh process, on one worker. Every test group has **record**; the others play what record recorded. |
+| **checks** | the comparison, offline and on no worker, of what a test group's tests produced; it starts when the group's last test ends and gives the group its verdict. |
+
+A **worker** is one game instance with its private X server; `-j` sets how many tests play at once,
+from any mix of test groups. The tests:
+
+| test | id | starts from | plays |
+|---|---|---|---|
+| **record** | `L` | the test group's scenario | the script live, and records it |
+| **puppet** | `P` | record's recording | from the start, every unit driven only by the recording |
+| **roundtrip** | `R` | record's recording | as puppet, restoring the state in place from the recording at points on the way |
+| **seek** | `Q` | record's recording | from one point, in a fresh process that played nothing before it |
+| **takeover** | `K` | record's recording | to a point, then hands control back to live play, recording the new branch |
+| **follow** | `F` | takeover's recording | from just before the takeover, across it |
+| **forks** | `X` | record's recording | branches timelines off it, forks of forks, deletions, the chains played |
+| **rewind** | `U` | the `battle` test group's scenario | the script live with rewinds, as its own recording |
+| **watch** | `W` | record's recording | opened as a player opens it, through the Replays browser and the HUD |
+
+Record runs first because every other test but rewind plays its file; follow waits for takeover.
+In a gate a test group plays record, puppet, roundtrip and seek, with takeover and follow, forks,
+rewind or watch where its entry says so (`procs`); a `cost` test group plays record alone,
+`tareplay.py measure` record and puppet, and `tareplay.py takeover` record, takeover and follow. **The code and the older text still say fixture and lane**:
+`fixtures.json`, `fx`, `LANE_ORDER`, the tests by their one-letter id, `SIM_FEATURE`'s `fixtures_`,
+`tareplay.py run <fixture>`. A fixture is a test group and a lane a test; they are renamed in one
+pass with the code. "Lane" elsewhere, in the recording codec (`tagpu_reclanes.h`) and the
+renderer, is unrelated, and so is a "fixture" that means a synthetic test input (a C unit test's).
+
+### What it runs
+
+`tools/replay/tareplay.py` runs test groups in parallel, as the compatibility suite runs games:
+one tacli instance and one private X server per worker, nothing stopped by name, and exit 0
 (every check passed), 1 (a named failure) or 2 (something could not run). Its core is built
 ([S3c-1](demo-recorder-skirmish-slice.md#s3c-1-one-writer-for-the-tables-and-the-round-trip),
-which lists the processes, the checks and the fixtures): each fixture of
+which lists the processes, the checks and the test groups): each test group of
 `tools/replay/fixtures.json` is recorded live, played on puppets from the start, played again with
 three round trips, and sought from a fresh process, and every dump is compared with the recording
 or with its pair. The trigger `tagpu_replay.trigger` is read on the game thread by the replay's

@@ -75,18 +75,22 @@ wrappers and what the build check cannot prove:
   wrappers. When unsure, use `SIM_STATE`. The link refuses what `tools/sim-state-check.sh` can
   see — an undeclared static, a stale declaration, a listed allocator, TLS or page call, a lever
   named outside the wrappers — and names each; its header lists what it cannot see.
-- **A landing that changes simulation code runs its replay fixtures.** `tools/replay/tareplay.py
-  landing` runs the fixtures that the changed features name in their `SIM_FEATURE` declarations —
-  recorded, played on puppets, restored in place by the round trip and sought from a fresh process,
-  on the coverage build — checks that they reached every changed function, and records a
-  `replay-roundtrip:` note. A changed line no declaration covers, or a changed function no fixture
-  reached, fails by name; landing it anyway is the owner's decision. The broad tier,
+- **A landing that changes simulation code runs its replay test groups.** A **test group** is one
+  scripted game and the **tests** played on it (record, puppet, roundtrip, seek, takeover, follow,
+  forks, rewind, watch), each test one game on one worker; a **scenario** is the game setup in
+  `scenarios/` a test group loads. The code still says *fixture* for a test group and *lane* for a
+  test — the terms and what each test plays: `demo-recorder-completeness.md` *Terms*.
+  `tools/replay/tareplay.py landing` runs the test groups that the changed features name in their
+  `SIM_FEATURE` declarations — recorded, played on puppets, restored in place by the round trip and
+  sought from a fresh process, on the coverage build — checks that they reached every changed
+  function, and records a `replay-roundtrip:` note. A changed line no declaration covers, or a
+  changed function no test group reached, fails by name; landing it anyway is the owner's decision. The broad tier,
   `tareplay.py broad`, is a command, not a schedule: it runs before every `v*` tag beside the
   compatibility suite (`--release` on the release DLL) and on demand after a run of simulation
   landings.
 - **Store IDs, not addresses**, or declare the table's layout.
 - **Start effects through an engine root**, never a direct sink call. Each simulation
-  feature states its puppet behaviour and names its fixture beside its code.
+  feature states its puppet behaviour and names its test groups beside its code.
 - **An effect only the owner's machine produces** is recorded where the engine produces it,
   credited to its unit by an engine invariant, and replayed through the same function —
   never imitated.
