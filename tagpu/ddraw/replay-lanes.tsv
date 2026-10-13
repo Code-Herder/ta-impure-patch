@@ -62,7 +62,7 @@
 0x07C	2	SZ	sight_z	DISASSEMBLED 0x4825D4..0x48261C (LosType bit 2 set): the sight cell's z, from z less half the sight height
 0x07E	2	FW	foot_w	DISASSEMBLED 0x43D86F..0x43D895 reads it: the footprint's width in cells; the saver writes it raw
 0x080	2	FH	foot_h	DISASSEMBLED 0x43D86F..0x43D895 reads it: the footprint's height in cells
-0x082	4	PLAIN	bucket	DISASSEMBLED (map): the sort bucket, a pointer; the image carries it as replay-layout.tsv's bucket row says
+0x082	4	BUCKET	bucket	DISASSEMBLED 0x47CC57..0x47CCD8: the sort bucket, which the footprint stamp 0x47CC30 sets to main+0x1429F + 10 x ((z >> 23) x [main+0x142A3] + (x >> 23)) once 0 <= fx, 0 <= fz, fx + fw < main+0x14233 and fz + fh < main+0x14237; the image carries it as the bucket's index + 1 (replay-layout.tsv, bucket)
 0x086	4	PLAIN	carrier	DISASSEMBLED (map): the carrier, a pointer; the image carries it as replay-layout.tsv's carrier row says
 0x08A	4	PLAIN	cargo	DISASSEMBLED (map): the first carried unit, a pointer; the image carries it as replay-layout.tsv's cargo row says
 0x08E	4	PLAIN	next	DISASSEMBLED (map): the next carried unit or the next unit in the bucket, a pointer; the image carries it as replay-layout.tsv's next row says
@@ -95,16 +95,16 @@
 0x0F0	4	PLAIN	attacker	DISASSEMBLED (map): the last attacker; the image carries it as replay-layout.tsv's attacker row says
 0x0F4	1	PLAIN	attacker_player	DISASSEMBLED (map): the last attacker's player index, 10 for none (0x485C83, 0x489DC0, 0x486787)
 0x0F5	1	PLAIN	hit_kind	DISASSEMBLED (map): the kind of the last hit (0x489DAC), handed to the death message
-0x0F6	1	PLAIN	hp_pct	DISASSEMBLED (map): the HP percentage now (0x48AEA9)
-0x0F7	1	PLAIN	hp_pct_30	DISASSEMBLED (map): the HP percentage 30 ticks ago (0x48AEAF)
+0x0F6	1	HPPCT	hp_pct	DISASSEMBLED 0x48AE5F..0x48AEB5: the HP percentage, which the unit tick writes when GameTime (main+0x38A47) is a multiple of 30: clamp(movsx(+0x108) x 100 / def +0x1FA, 0, 100), an unsigned divide and a signed clamp (the store 0x48AEA9)
+0x0F7	1	HPPCT30	hp_pct_30	DISASSEMBLED 0x48AEA3..0x48AEAF: the HP percentage 30 ticks ago: the same tick moves +0xF6 here before it writes +0xF6
 0x0F8	1	PLAIN	sight_h	DISASSEMBLED (map): where the sight is stamped, with +0x7A/+0x7C: the height in ray-fan mode, else the radius
 0x0F9	1	PLAIN	attach_piece	DISASSEMBLED (map): the attach piece on the carrier, 0xFF for none (0x48AC68)
 0x0FA	1	COUNT	damage_timer	DISASSEMBLED 0x48ADF0..0x48AE0D: a recent-damage countdown, 240 at each hit (0x467954), -1 a tick while nonzero (0x48ADFC)
 0x0FB	4	COUNT	give_lock	DISASSEMBLED 0x48ADF0..0x48AE0D: the give lock, an unaligned dword, 150 at a give (0x4885F3), -1 a tick while nonzero (0x48AE0D)
 0x0FF	1	PLAIN	player	DISASSEMBLED (map): the owner's player index, written by the array init 0x4854A0 (0x485887, 0x48590E)
 0x100	4	PLAIN	u100	DISASSEMBLED (map): the saver skips it; what it holds is not established
-0x104	4	PLAIN	u104	DISASSEMBLED (map): the saver writes it raw as a dword; what it holds is not established
-0x108	2	PLAIN	u108	DISASSEMBLED (map): the saver writes it raw as a word; what it holds is not established
+0x104	4	BUILD_LEFT	build_left	DISASSEMBLED 0x41BA60: the build fraction left, a float, 1.0 when the build starts and 0.0 built: the build step reads it (0x41BA6D) and stores the new fraction after a granted request (0x41BC96) or on an unbuild (0x41BC16); the destructor's reclaim credit is (1 - +0x104) x def +0x18A (0x486CAD..0x486D1E)
+0x108	2	HP	hp	DISASSEMBLED 0x41BB26..0x41BC89: the hit points, a signed word: the build step adds trunc(fo x M) - trunc(fn x M) as the fraction left goes from fo to fn, M the def's +0x1FA (both truncations 0x4E43A0), capped at M on a build (an unsigned compare, 0x41BC7F) and floored at 0 on an unbuild (0x41BC14..0x41BC22); the unit tick's percentage reads it (0x48AE77)
 0x10A	2	PLAIN	water	DISASSEMBLED (map): the water state 0-4, with hysteresis, written only by 0x43DB50; its store at 0x43DBED is a dword over +0x10A..+0x10D, kept as two word lanes as the size round measured them
 0x10C	2	PLAIN	u10c	DISASSEMBLED 0x43DBED: the high word of the water state's dword store; the saver skips it
 0x10E	1	PLAIN	activation	DISASSEMBLED (map): the activation bits, written through 0x48B090; a change of bit 0 starts COB Activate or Deactivate

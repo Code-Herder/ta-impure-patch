@@ -149,8 +149,13 @@
 #define UD_PITCH       0x1A6        /* i32 16.16 pitchscale; these three as the def loader writes
                                        them (0x42C129..0x42C243, DISASSEMBLED by the size
                                        research: research/sizelab/air-challenge/lib_int/airdefs.py) */
-_Static_assert(UD_PITCH + 4 <= UD_STRIDE && UD_AIRBITS + 4 <= UD_STRIDE,
-               "the air fields lie inside a def");
+#define UD_MAXHP       0x1FA        /* u32 the hit points at most (read at 0x41BB26 and 0x48AE8D,
+                                       DISASSEMBLED): the unit frame's HP rules (RT_TYPES)      */
+_Static_assert(UD_PITCH + 4 <= UD_STRIDE && UD_AIRBITS + 4 <= UD_STRIDE && UD_MAXHP + 4 <= UD_STRIDE,
+               "the air and type fields lie inside a def");
+#define SLOPE_TABLE    0x00505200u  /* the ground step's slope bytes, read at 0x505205 + sl with sl
+                                       in -5..5 (0x43CC61, DISASSEMBLED): REC_SLOPES of them in
+                                       the executable's .data, which nothing writes            */
 #define OFF_GRAVITY    0x14263      /* i32: gravity (replay-globals.tsv, a `leave` field)         */
 #define OFF_SEALEVEL   0x1427F      /* u8: sea level; the sight emit raises an altitude to
                                        (it + 1) << 16 (0x48280B..0x482813: the byte read by
@@ -2243,14 +2248,17 @@ static int def_air(const char* d)
     return (bits & UD_AIRBIT) != 0;
 }
 
-/* The unit frame's constants (tagpu_reccodec.c; tagpu_recfmt.h, RT_CODEC, RT_PHYSICS and RT_AIR):
-   the lane table this build carries, the level's gravity, sea level and sight rule, and each
-   aircraft type's flight fields. They are a predictor's constants: a wrong one costs size, never
-   data, since the writer writes a sectioned block only when it decodes back to its records.
+/* The unit frame's constants (tagpu_reccodec.c; tagpu_recfmt.h, RT_CODEC, RT_PHYSICS, RT_AIR and
+   RT_TYPES): the lane table this build carries, the level's gravity, sea level, sight rule and
+   sort bucket columns, each aircraft type's flight fields, the ground step's slope table and each
+   type's hit points, speeds and sight height. They are a predictor's constants: a wrong one costs
+   size, never data, since the writer writes a sectioned block only when it decodes back to its
+   records.
    BOUND: a def's index runs below UNITINFOCount (main+0x1438F), the count the engine's own loops
    over the defs run to, and below 65536, the type lane's range, and every field read lies inside
-   the def's UD_STRIDE bytes. LIFETIME: the defs table lives for the level, whose teardown ends the
-   recording first. ORDERING: read once, here, on the game thread, which owns them. */
+   the def's UD_STRIDE bytes; the slope table is REC_SLOPES bytes of the executable's image.
+   LIFETIME: the defs table lives for the level, whose teardown ends the recording first.
+   ORDERING: read once, here, on the game thread, which owns them. */
 static void header_codec(const Level* L, Tlv* t)
 {
     const char* ta = L->ta;
@@ -2268,11 +2276,12 @@ static void header_codec(const Level* L, Tlv* t)
             row[3] = rec_lanes[i].role;
         }
     }
-    b = tlv_room(t, RT_PHYSICS, 8);
+    b = tlv_room(t, RT_PHYSICS, 12);
     if (b) {
         memcpy(b, ta + OFF_GRAVITY, 4);
         b[4] = (unsigned char)ta[OFF_SEALEVEL];
         b[5] = (unsigned char)(*(const unsigned short*)(ta + OFF_LOSTYPE) >> 2 & 1);
+        memcpy(b + 8, ta + OFF_BCOLS, 4);
     }
     /* RT_AIR: the aircraft types, the rows the header has room for and RECC_AIR_MAX at most; a
        type without a row is predicted as a ground unit */
@@ -2305,6 +2314,32 @@ static void header_codec(const Level* L, Tlv* t)
     if (rows < all)
         tagpu_logf("recorder: the header holds %u aircraft types' rows, not the other %u: those "
                    "are predicted as ground units, which costs size only", rows, all - rows);
+    /* RT_TYPES: every type from index 0, the rows the header has room for and RECC_TYPES_MAX at
+       most; a type without a row has the per-type rules off */
+    if (t->full || t->cap - t->n < 4 + REC_TYPES_HEAD + 64) return;
+    max = (t->cap - t->n - 4 - REC_TYPES_HEAD - 64) / sizeof(RecTypeRow);
+    if (max > RECC_TYPES_MAX) max = RECC_TYPES_MAX;
+    rows = n < max ? n : max;
+    b = tlv_room(t, RT_TYPES, REC_TYPES_HEAD + rows * (unsigned)sizeof(RecTypeRow));
+    if (!b) return;
+    memcpy(b, &rows, 4);
+    memcpy(b + 4, (const void*)(size_t)SLOPE_TABLE, REC_SLOPES);
+    b[4 + REC_SLOPES] = 0;
+    for (i = 0; i < rows; i++) {
+        const char* d = L->defs + (size_t)i * UD_STRIDE;
+        RecTypeRow r;
+        r.type = (uint16_t)i;
+        r.sight_h = (uint8_t)d[UD_SIGHT_H];
+        r.zero = 0;
+        memcpy(&r.maxhp, d + UD_MAXHP, 4);
+        memcpy(&r.maxv, d + UD_MAXV, 4);
+        memcpy(&r.brake, d + UD_BRAKE, 4);
+        memcpy(&r.acc, d + UD_ACC, 4);
+        memcpy(b + REC_TYPES_HEAD + i * sizeof r, &r, sizeof r);
+    }
+    if (rows < n)
+        tagpu_logf("recorder: the header holds %u unit types' rows, not the other %u: those have "
+                   "the per-type rules off, which costs size only", rows, n - rows);
 }
 
 /* ---- the files still being finished --------------------------------------------------------- */

@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 17 and its readers take format 17 alone (*The file*, below).
+The recorder writes recording format 18 and its readers take format 18 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -157,7 +157,7 @@ THE CHAIN*):
   else the bytes stored. The header, the end and the timelines blocks are always stored, so a
   header reads without zstd.
 
-`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 17; a reader takes that format alone:
+`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 18; a reader takes that format alone:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
   GameTime, the wall clock, the unit array's slots and the units each player may have, the unit
@@ -165,7 +165,7 @@ THE CHAIN*):
   registry's levers and their text, the exclusion file's SHA-256, and the recorded declarations
   (index, class, key, row size, flags and name), so a reader can walk their images; the main
   menu's version text, the mounted archives and the mod's fingerprint (*What the Replays browser
-  asks of a recording*); the unit frame's constants (below): `RT_CODEC`, `RT_PHYSICS`, `RT_AIR`;
+  asks of a recording*); the unit frame's constants (below): `RT_CODEC`, `RT_PHYSICS`, `RT_AIR`, `RT_TYPES`;
   and in a skirmish recording `RT_HOLD`: the refresh interval (300 ticks), the hold table's
   masks and its SHA-256, what the stream may hold between two refreshes, and `RECL_SPRAYS`, its
   nano sprays written as spray sessions (the lossy filter,
@@ -233,20 +233,29 @@ find their lanes by role, never by offset; since each recording carries its own 
 TSV never orphans a file, and a wrong width costs size only. A unit is listed in an iteration only
 when a lane differs from its prediction, and then as residuals per lane. A unit *at rest* — its
 image equal to the two before it and to the third's lanes, and either not moving or with a move
-stamp older than the step before, and with its ledger's requested and granted zero — is skipped
+stamp older than the step before, with its ledger's requested and granted zero, and, for a type
+with an `RT_TYPES` row, with its two HP percentages equal to its HP's — is skipped
 without evaluating it, which is exact because it is a
-fixed point of every rule (the argument beside `slot_advance`). The rules — heading by turn rate, ground
-velocity from the sine table, position by velocity, the footprint and sight cells, the claim and
-move stamps, the countdowns, the resource ledger's requested and granted, and for aircraft the air
+fixed point of every rule (the argument beside `slot_advance`). The rules — heading by turn rate
+and the turn rate's one-step blip, ground
+velocity from the sine table, position by velocity, the footprint and sight cells, the sort bucket,
+the claim and move stamps, the countdowns, the resource ledger's requested and granted, the hit
+points while built and the HP percentages every 30 ticks, a ground unit's speed against the
+slope, and for aircraft the air
 step's velocity, speed, smoothed acceleration and bank — and the engine facts behind each are in the engine map's
 [*The demo recorder's unit frame*](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
 They are integer arithmetic only (the ledger's float sum included, `reccodec_f32_add`), so the writer thread's x87 precision does not matter and the
 Python reader (`tools/replay/reccodec.py`, an independent implementation in numpy and numba)
 agrees with the C one byte for byte. The capture writes the constants the rules need into the
 header at the recording's start, on the game thread: `RT_PHYSICS` (gravity `main+0x14263`, sea level
-`main+0x1427F`, LosType bit 2 at the segment's start) and one `RT_AIR` row per aircraft type (def
-`+0x241` bit 11; its sight height `+0x170` and the five flight fields), at most 1,024 rows; a type
-without one is predicted as a ground unit, which costs size only.
+`main+0x1427F`, LosType bit 2 at the segment's start, the sort buckets' columns `main+0x142A3`),
+one `RT_AIR` row per aircraft type (def
+`+0x241` bit 11; its sight height `+0x170` and the five flight fields), at most 1,024 rows, and
+`RT_TYPES`: the ground step's slope table (the 11 bytes at `0x505200`) and one row per unit type
+from index 0 (its sight height, maximum HP `+0x1FA`, maxvelocity, brake rate and acceleration),
+at most 2,048 rows and as many as the header has room for. A type without an `RT_AIR` row is
+predicted as a ground unit, and one without an `RT_TYPES` row keeps generic lanes for the
+hit points, the percentages, the speed and the sight row, which costs size only.
 
 **The pool frame** (`src/tagpu_reccodec.c`, THE POOL FRAME) codes the projectile pool by identity.
 The engine's compaction keeps the survivors in order at the front of the pool and appends at the
@@ -393,8 +402,10 @@ asking for a window of at most 2^20 with no content size, no dictionary and no c
 chunk that does not give exactly its `raw` bytes from all of its input or that ends its frame; a
 chained snapshot with no snapshot before it in its segment, more than nine links from its key, or
 whose frame does not give its `raw` bytes against that prefix; a malformed or
-repeated `RT_CODEC`, `RT_PHYSICS` or `RT_AIR` (lanes that do not tile the 0x148-byte image, a role
-missing, twice or of the wrong width, air types not ascending); a sectioned block in a segment
+repeated `RT_CODEC`, `RT_PHYSICS`, `RT_AIR` or `RT_TYPES` (lanes that do not tile the 0x148-byte
+image, a role missing, twice or of the wrong width, an `RT_PHYSICS` not of 12 bytes, air types not
+ascending; an `RT_TYPES` whose length is not 16 + 20 per row, with more rows than `RT_UNITDEFS`'
+count, a type at or past that count, types not ascending or a pad byte not zero); a sectioned block in a segment
 whose header lacks `RT_CODEC` and `RT_PHYSICS`; a segment whose unit slots differ from the first
 header's; a container whose head, kinds, lengths, slots, masks or columns exceed their bounds, which
 leaves bytes in a section, or which decodes to another payload length; a pool frame whose

@@ -3621,17 +3621,20 @@ fixture.
 
 ### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 17 carries a stream block's unit deltas as residuals against a prediction, the
+Recording format 18 carries a stream block's unit deltas as residuals against a prediction, the
 *unit frame* (`tagpu/ddraw/src/tagpu_reccodec.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the plan and its measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md)). Where a rule exists the prediction
 is the engine's own, and the capture writes the constants the rules need into the recording's
 header once, on the game thread at the recording's start (`header_codec`, `tagpu_recorder.c`):
-RT_PHYSICS (gravity, sea level, the sight rule) and one RT_AIR row per aircraft type. Every rule
+RT_PHYSICS (gravity, sea level, the sight rule, the sort buckets' columns), one RT_AIR row per
+aircraft type, and RT_TYPES -- the ground step's slope table and one row per unit type (its
+maximum HP, sight height, maxvelocity, brake rate and acceleration). Every rule
 and constant is a predictor's: a wrong one costs size, never data, because the writer writes a
 block in the unit frame only when a second decoder gives its records back. Everything below was
-re-read in `pristine/TotalA.exe.pristine` on 2026-10-08 unless it is marked as the size research's
-(`research/sizelab/`), which MEASURED each rule's exactness on its recordings.
+re-read in `pristine/TotalA.exe.pristine` on 2026-10-08 (the hit points, the percentage, the
+bucket, the ground speed and the slope table on 2026-10-12) unless it is marked as the size
+research's (`research/sizelab/`), which MEASURED each rule's exactness on its recordings.
 
 **What the capture reads.** The defs are `*(main+0x1439B)`, `0x249` bytes each, and the loop over
 them runs below UNITINFOCount `main+0x1438F`, the count the engine's own loops over the defs run to.
@@ -3648,6 +3651,9 @@ them runs below UNITINFOCount `main+0x1438F`, the count the engine's own loops o
 | def `+0x19E`, i32 | `acceleration` | stored at `0x42C180` (`0x503E20`); the air step `0x43D2FB`; the ground step `0x43D0AC` |
 | def `+0x1A2`, i32 | `bankscale` | stored at `0x42C1AE` (`0x503E14`); the bank `0x43D1AF` |
 | def `+0x1A6`, i32 | `pitchscale` | stored at `0x42C1C5` (`0x503E08`); the bank's twin `0x43D1DB` |
+| def `+0x1FA`, u32 | the hit points at most | the build step loads it as a dword (`0x41BB26`) and widens it with a zero high dword to a qword `fild` (`0x41BB2C`, `0x41BB46`), so unsigned; its cap compares unsigned (`0x41BC79..0x41BC81`); the unit tick divides by it unsigned (`div` at `0x48AE8D`) |
+| `0x505200`, 11 signed bytes | the ground step's slope table, `25 55 70 85 100 100 75 50 25 20 15` in the pristine exe | its only reference in `.text` is `movsx eax, byte [eax+0x505205]` at `0x43CC61`, the index clamped to −5..5 first; RT_TYPES copies the eleven bytes from the running image, so a patched executable's table is the one a recording carries |
+| `main+0x142A3`, u32 | the sort buckets' columns | LoadMap sets it to `((main+0x14223 << 16) + 0x7FFFFF) >> 23` and the rows `main+0x142A7` the same from `main+0x14227` (`0x482C6C..0x482CA6`), the buckets' count rounded up to a multiple of 8 (`0x482CAE..0x482CBA`): the map's size in 128-unit cells, rounded up. Moon Quartet's 610-cell width gives 77, MEASURED by reproduction |
 
 The loader takes each of the five through `0x4C4800` (the key pushed at `0x42C129`, `0x42C14B`,
 `0x42C16F`, `0x42C18C`, `0x42C1A8`; `damagemodifier` follows at `0x42C1CF`); the values are 16.16
@@ -3727,8 +3733,10 @@ mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
   height byte is within 5 of `h` (`0x48261F..0x48262E`); otherwise it stores the cells
   (`0x48264C`, `0x482652`), bounds them unsigned against `main+0x14293` and `main+0x14297`
   (`0x48265B`, `0x482663`) and stores `h` at `unit+0xF8` inside (`0x48266E`), 0 outside
-  (`0x4826AC`). The unit frame predicts sx as `x >> 21` for every unit and sz this way for an
-  aircraft (a ground unit's sz is a generic lane). **Clear** (the circle, `0x4826B7..0x48271A`):
+  (`0x4826AC`). The unit frame predicts sx as `x >> 21` for every unit, and sz this way for an
+  aircraft from its RT_AIR row's height byte and for a ground unit from its RT_TYPES row's: the
+  sight emit raises every unit's altitude to the sea's, not an aircraft's alone (there is no
+  air test in `0x4827B3..0x48281B`); a type with neither row keeps a generic sz. **Clear** (the circle, `0x4826B7..0x48271A`):
   the radius index `trunc(+8 / 32) − 5` clamped to `[0, count − 1]` of the table
   `*(main+0x1485B)`, and the corner from `trunc(x / 2^21)` and `trunc(z / 2^21) −
   trunc(altitude_hi / 64)`, less the circle's offset from `0x4B7F30` — truncating divisions and a
@@ -3736,6 +3744,59 @@ mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
   generic lanes.
 - **The countdowns**: weapon slot reloads (AutoAim `0x49E1C8..0x49E1D2`) and `+0xFA`/`+0xFB`
   (`0x48ADF0..0x48AE0D`), −1 a tick down to 0.
+- **The hit points `+0x108` while built: the build step `0x41BA60`** (stdcall (builder, unit,
+  amount), `ret 0xC`). It returns 0 at once when the fraction left `+0x104` is 0.0 (`0x41BA6D`,
+  compared with `0x4FCC88` = 0.0) or the amount is 0; otherwise fn = fo − amount / def `+0x1EA`
+  (`0x41BAC7..0x41BAD7`), clamped to [0, 1] (`0x41BAD9..0x41BB24`; `0x4FCC8C` = 1.0) and kept as
+  a single at `[esp+0x24]`. With M the def's `+0x1FA` it takes `trunc(fn · M)` and `trunc(fo · M)`
+  through `0x4E43A0` (`0x41BB72`, `0x41BB7D`) -- `fistp qword` under a control word with RC set to
+  chop, so a truncation, of each single times M at the FPU's precision -- and their difference d
+  (`0x41BB8E..0x41BB90`). For an amount below 0 (an unbuild; the reclaim `0x41BCD0` passes
+  `−(def +0x1EA · n) / def +0x186`) it stores fn (`0x41BC16`) and the HP `max(movsx(+0x108) + d,
+  0)` (`0x41BBFA..0x41BC22`, `setle`/`dec`/`and`). For an amount of 0 or more it asks the builder's
+  ledger (`0x4011C0`, `0x41BC60`) and only when that grants it stores the HP `movsx(+0x108) + d`
+  capped at M by an unsigned compare (`cmp eax, ecx; jb` at `0x41BC7F`) and fn (`0x41BC96`); both
+  paths set `+0x110` bit 13. At fn = 0.0 it calls the build done `0x41B8D0` (`0x41BCBF`). The unit
+  frame predicts the HP, for a type with an RT_TYPES row and a nonzero M, from L1's and U's
+  fractions whenever they differ: the cap when fn < fo, the floor otherwise; the product is exact
+  in integers (`ex_fm`) for M < 2^29.
+- **The HP percentage `+0xF6` and its copy `+0xF7`: the unit tick** (`0x48AE5F..0x48AEB5`). When
+  GameTime `main+0x38A47` is a multiple of 30 (`div ecx` by 30, `0x48AE71`) it moves `+0xF6` to
+  `+0xF7` and writes `movsx(+0x108) · 100` (`lea`, `lea`, `shl 2`: 32 bits) divided unsigned by def
+  `+0x1FA` (`div` at `0x48AE8D`, `edx` still the remainder's 0), clamped as a signed value to 0..100
+  (`0x48AE93..0x48AEA1`) -- so a negative HP divides to a large quotient and clamps to 100 unless M
+  is 1. The only other writers of either byte are the creates (`0x485B67`, `0x485B79`) and the saved
+  game's unit loader (`0x487296`, `0x4872A3`), a text scan of `.text` for byte stores at those
+  displacements. The unit frame predicts both at the phase (the iteration labelled gt with gt − 1 a
+  multiple of 30) and their last values otherwise, the rule always the winner; a resting unit
+  must hold `+0xF7` = `+0xF6` = the percentage of its HP, the fixed point of the phase.
+- **The sort bucket `+0x82`**: the restamp `0x47CC30` (*`+0x82`, the sort bucket*, above) stamps
+  the claim word (`0x47CC54`), refuses a cell below 0 (`0x47CC57..0x47CC6B`) or a footprint
+  reaching the grid's last column or row (`fx + fw` against `main+0x14233`, `fz + fh` against
+  `main+0x14237`, signed, `0x47CC77..0x47CCA3`), then forms the bucket
+  `*(main+0x1429F) + 10 · ((z >> 23) · [main+0x142A3] + (x >> 23))` (`0x47CCA9..0x47CCD8`) and
+  writes it when it differs (`0x47CCDB`, `0x47CD25`). The unit frame predicts the bucket's ID
+  (index + 1) when the footprint's cell or the layer moved and the footprint passes those tests,
+  and the last value otherwise; RT_PHYSICS's columns 0 makes the lane generic.
+- **A ground unit's speed: the ground step `0x43CC20`** (thiscall on the move object (unit,
+  step), `ret 8`; its callers the ground class step `0x43CD20`, which passes minus the def's brake
+  rate `+0x19A` when the course has no target (`0x43CD40..0x43CD52`), and its end `0x43D0C0`, which
+  passes the acceleration `+0x19E` when the unit is far enough from the target and slower than the
+  course wants, else minus the brake rate (`0x43D0A2..0x43D0BA`)). It adds the step to the mover's
+  speed `+0x20` and floors it at 0 (`0x43CC2D..0x43CC3B`); then sl = `movsx(unit +0x68) >> 11`
+  clamped to −5..5 (`0x43CC46..0x43CC5F`), the slope byte `[0x505205 + sl]`, and the cap
+  `((slope << 16) · maxv >> 16) << 16 / (100 << 16)` -- an `imul` with def `+0x192`
+  (`0x43CC76`), `_allshr 0x4E43D0`, `cdq` (the low dword), `_allshl 0x4E44F0`, `_alldiv 0x4E4440`
+  (`0x43CC7C..0x43CC95`): `s32(slope · maxv) / 100`, truncated. Below the sea (`movsx(+0x70)` <
+  `main+0x1427F`) a def without `+0x241 & 0x81000` halves the cap (`0x43CCA0..0x43CCCE`). The speed
+  is capped by a signed compare (`0x43CCD3..0x43CCD8`), then the velocity follows it (*Ground
+  velocity*, above). The unit frame offers the accelerating and the braking step as two candidates
+  for a type with an RT_TYPES row that is not an aircraft, from the last iteration's `+0x68` (the
+  step runs before the placement, `0x43DD28` then `0x43DD55`; MEASURED 1.75 KB smaller on the heavy
+  hour than this iteration's); it does not model the halving in water.
+- **The turn rate's blip** (MEASURED, the size research's gap-units round, 2026-10-11; no engine
+  writer traced): a turn rate one away from the iteration before's returns to it on the next, so
+  the unit frame predicts the rate before last when the last two differ by one, else the last.
 - **The ledger's requested and granted** `+0xC0`/`+0xC4` (energy) and `+0xD8`/`+0xDC` (metal), with
   the owner's player ID at `+0xEC` ([*The ledger*](#the-nano-spray-two-emitters-fifteen-order-handlers-disassembled-2026-09-29)
   `unit+0xBC`, DISASSEMBLED 2026-10-10). The
@@ -3760,11 +3821,13 @@ mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
 
 **Not predicted**, each costing size only: the circle's sight path (LosType bit 2 clear); a
 landing (`0x43D210` with layer 1: the rule is written, never met); air transports' cargo; a
-non-zero pitch scale (none of the recordings had one); the steering term's hidden target.
+non-zero pitch scale (none of the recordings had one); the steering term's hidden target; the
+ground speed's halving in water; a type past the header's RT_TYPES rows (the header holds
+`RECC_TYPES_MAX` 2,048 at most, and as many as its room allows).
 
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
-Recording format 17 carries a stream block's projectile records as the *pool frame*
+Recording format 18 carries a stream block's projectile records as the *pool frame*
 (`tagpu/ddraw/src/tagpu_reccodec.c`, THE POOL FRAME; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in
 [making recordings smaller](tadr-port/demo-recorder-size.md#l2-the-pool-frame-measured)): the
@@ -3838,7 +3901,7 @@ largest residual column of the battle, 214 KiB of its 2.09 MiB.
 
 ### The demo recorder's record frames: the engine facts they predict from [DISASSEMBLED + MEASURED 2026-10-10]
 
-Recording format 17 makes the bodies of a stream block's cells, order lists, events and state
+Recording format 18 makes the bodies of a stream block's cells, order lists, events and state
 records from four *record frames* (`tagpu/ddraw/src/tagpu_recframe_cells.c`, `_orders.c`,
 `_events.c`, `_state.c`; the bytes in the skirmish slice's
 [*The file*](tadr-port/demo-recorder-skirmish-slice.md#the-file), the measurements in

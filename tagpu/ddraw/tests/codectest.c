@@ -1,7 +1,7 @@
 /* codectest.c -- the stream codec's self-test (src/tagpu_reccodec.c and its record frames,
    src/tagpu_recframe_*.c), driven by codectest.py.
 
-     codectest transcode IN OUT [--snap-every N] [--skirmish]
+     codectest transcode IN OUT [--snap-every N] [--skirmish] [--types-from REC] [--bucket-cols N]
                                     every stream block of a recording decoded to its records and
                                     written again through reccodec_stream_block, restarting where
                                     the writer restarts, and every snapshot kept chained as the
@@ -14,7 +14,7 @@
                                     interval is N times IN's would have written. With --skirmish,
                                     a skirmish header without RT_HOLD gains one that holds nothing,
                                     refresh REC_REFRESH_TICKS: a label, the blocks are IN's
-     codectest lossy IN OUT [--exact]
+     codectest lossy IN OUT [--exact] [--types-from REC] [--bucket-cols N]
                                     the writer's path over a recording's exact records: each
                                     iteration through the lossy filter (src/tagpu_reclossy.c) with
                                     the build's hold table, refreshes where the writer makes them,
@@ -75,7 +75,10 @@
      codectest sin                  the sine table, for codectest.py's check against its formula
 
    IN is a recording of REC_FORMAT, or, for transcode and lossy, one of format 12 or later with no
-   sectioned block, which they write as the current format, the header's other entries kept. Exit
+   sectioned block, which they write as the current format, the header's other entries kept: an
+   RT_PHYSICS of 8 bytes gains the sort buckets' columns, 0 (the bucket rule off) or
+   --bucket-cols' N, and --types-from REC gives the header REC's RT_TYPES, refused unless REC's
+   RT_UNITDEFS is IN's. Exit
    0 when every check holds, 1 when one fails, 2 when a file cannot be read. The codec is included
    rather than linked: the fuzz copies a decoder's state, which the codec's interface keeps opaque;
    the filter is linked, and in the Windows build the DLL's reader too, over the codec included
@@ -246,9 +249,8 @@ static int next_block(Reader* r)
 }
 
 typedef struct Header {
-    unsigned format, mode, slots, nproj, gw, gh, nwrecks, has_hold;
-    const unsigned char* e[3];      /* RT_CODEC, RT_PHYSICS, RT_AIR */
-    unsigned ne[3];
+    unsigned format, mode, slots, nproj, gw, gh, nwrecks, has_hold, ndefs;
+    RecCodecEntries e;              /* RT_CODEC, RT_PHYSICS, RT_AIR, RT_TYPES */
 } Header;
 
 static int header_of(const unsigned char* p, size_t n, Header* h, char* why, unsigned cap)
@@ -269,11 +271,12 @@ static int header_of(const unsigned char* p, size_t n, Header* h, char* why, uns
             h->gh = get32(b + 4);
             h->nwrecks = get32(b + 8);
         }
-        k = tag == RT_CODEC ? 0 : tag == RT_PHYSICS ? 1 : tag == RT_AIR ? 2 : 3;
-        if (k < 3) {
-            if (h->e[k]) REFUSE("header tag %u twice", tag);
-            h->e[k] = b;
-            h->ne[k] = len;
+        if (tag == RT_UNITDEFS && len == 8) h->ndefs = get32(b);
+        if (reccodec_entry_of(tag) >= 0) {
+            k = (unsigned)reccodec_entry_of(tag);
+            if (h->e.p[k]) REFUSE("header tag %u twice", tag);
+            h->e.p[k] = b;
+            h->e.n[k] = len;
         }
         at += (4 + (size_t)len + 3) & ~(size_t)3;
     }
@@ -443,9 +446,20 @@ static void put_block(FILE* f, unsigned kind, unsigned flags, uint32_t first, ui
     fwrite(body, 1, bn, f);
 }
 
+/* What transcode and lossy give an input's header (--types-from, --bucket-cols): the codec
+   constants of the current format that a recording of an older one lacks. */
+typedef struct HeaderOverride {
+    RecBytes types;               /* RT_TYPES' bytes, with has_types                            */
+    uint32_t defs[2];             /* the RT_UNITDEFS read beside them                           */
+    int has_types, has_cols;
+    uint32_t cols;
+} HeaderOverride;
+
 /* The state a reading carries from block to block: the segment's params, the world, the decoder. */
 typedef struct Reading {
     Reader r;
+    const HeaderOverride* ovr;    /* NULL: every header as it is but an older RT_PHYSICS        */
+    RecBytes hdr;                 /* the header as header_rewrite gives it                      */
     Header h;
     RecCodecParams p;
     World w;
@@ -482,7 +496,89 @@ static void reading_close(Reading* g)
     reccodec_free(g->dec);
     rb_free(&g->sec);
     rb_free(&g->pay);
+    rb_free(&g->hdr);
     memset(g, 0, sizeof *g);
+}
+
+static void tlv_put(RecBytes* b, unsigned tag, const void* p, unsigned n);
+
+/* The header block's entries as the current format writes them, into g->hdr, which the reading's
+   block then points at: an 8-byte RT_PHYSICS, an older format's, gains the bucket columns as 0
+   (the bucket rule off) or --bucket-cols' value, which also replaces a 12-byte one's; with
+   --types-from, RT_TYPES is that recording's, which requires its RT_UNITDEFS to equal this
+   header's, since a row names a type by the index of its def. 1, or -1 refused (why). */
+static int header_rewrite(Reading* g)
+{
+    const unsigned char* p = g->r.bytes;
+    size_t n = g->r.b.raw, at = 0;
+    const HeaderOverride* o = g->ovr;
+    int types = o && o->has_types, defs_same = 0;
+    g->hdr.n = 0;
+    g->hdr.oom = 0;
+    while (n - at >= 4) {
+        unsigned tag = get16(p + at), len = get16(p + at + 2);
+        size_t step = (4 + (size_t)len + 3) & ~(size_t)3;
+        if (len > n - at - 4) break;
+        if (tag == RT_PHYSICS && (len == 8 || len == 12)) {
+            unsigned char ph[12];
+            memset(ph, 0, sizeof ph);
+            memcpy(ph, p + at + 4, len);
+            if (o && o->has_cols) put32(ph + 8, o->cols);
+            tlv_put(&g->hdr, RT_PHYSICS, ph, 12);
+        } else if (!(tag == RT_TYPES && types)) {
+            if (tag == RT_UNITDEFS && len == 8 && types)
+                defs_same = get32(p + at + 4) == o->defs[0] && get32(p + at + 8) == o->defs[1];
+            rb_put(&g->hdr, p + at, step < n - at ? step : n - at);
+        }
+        at += step;
+    }
+    if (types) {
+        if (!defs_same) {
+            snprintf(g->r.why, sizeof g->r.why, "RT_UNITDEFS differs from --types-from's: its rows "
+                     "would name other defs");
+            return -1;
+        }
+        tlv_put(&g->hdr, RT_TYPES, o->types.p, (unsigned)o->types.n);
+    }
+    if (g->hdr.oom) {
+        snprintf(g->r.why, sizeof g->r.why, "no memory for the header");
+        return -1;
+    }
+    g->r.bytes = g->hdr.p;
+    g->r.b.raw = (uint32_t)g->hdr.n;
+    return 1;
+}
+
+/* --types-from REC: the first header's RT_TYPES and RT_UNITDEFS. 1, or 0 when it has none. */
+static int types_load(HeaderOverride* o, const char* path)
+{
+    Reading t;
+    int k, found = 0;
+    size_t at = 0;
+    if (!reading_open(&t, path)) return 0;
+    while ((k = next_block(&t.r)) > 0 && t.r.b.kind != RB_HEADER) ;
+    o->types.n = 0;
+    while (k > 0 && t.r.b.raw - at >= 4) {
+        unsigned tag = get16(t.r.bytes + at), len = get16(t.r.bytes + at + 2);
+        if (len > t.r.b.raw - at - 4) break;
+        if (tag == RT_TYPES) {
+            rb_put(&o->types, t.r.bytes + at + 4, len);
+            found |= 1;
+        }
+        if (tag == RT_UNITDEFS && len == 8) {
+            o->defs[0] = get32(t.r.bytes + at + 4);
+            o->defs[1] = get32(t.r.bytes + at + 8);
+            found |= 2;
+        }
+        at += (4 + (size_t)len + 3) & ~(size_t)3;
+    }
+    reading_close(&t);
+    if (found != 3 || o->types.oom) {
+        fprintf(stderr, "codectest: %s: no header with RT_TYPES and RT_UNITDEFS\n", path);
+        return 0;
+    }
+    o->has_types = 1;
+    return 1;
 }
 
 /* One block: 1 and, for a stream block, its records in g->pay; 0 at the end; -1 refused. */
@@ -492,9 +588,10 @@ static int reading_next(Reading* g, double* ms)
     *ms = 0;
     if (k <= 0) return k;
     if (g->r.b.kind == RB_HEADER) {
+        if (header_rewrite(g) < 0) return -1;
         if (!header_of(g->r.bytes, g->r.b.raw, &g->h, g->r.why, sizeof g->r.why)) return -1;
-        if (!reccodec_params(&g->p, g->h.slots, g->h.nproj, g->h.gw, g->h.gh, g->h.nwrecks, g->h.e[0],
-                             g->h.ne[0], g->h.e[1], g->h.ne[1], g->h.e[2], g->h.ne[2], g->r.why,
+        if (!reccodec_params(&g->p, g->h.slots, g->h.nproj, g->h.gw, g->h.gh, g->h.nwrecks, g->h.ndefs,
+                             &g->h.e, g->r.why,
                              sizeof g->r.why))
             return -1;
         if (g->dec && (g->dec->nslots != g->h.slots || g->dec->nproj != g->h.nproj ||
@@ -619,7 +716,8 @@ static void header_out(RecBytes* out, const unsigned char* p, size_t n, const un
     if (hold) tlv_put(out, RT_HOLD, hold, REC_HOLD_BYTES);
 }
 
-static int cmd_transcode(const char* in, const char* outp, int every, int skirmish)
+static int cmd_transcode(const char* in, const char* outp, int every, int skirmish,
+                         const HeaderOverride* ovr)
 {
     Reading g;
     RecStream st;
@@ -632,6 +730,7 @@ static int cmd_transcode(const char* in, const char* outp, int every, int skirmi
     unsigned nblk = 0;
     memset(&st, 0, sizeof st);
     if (!reading_open(&g, in)) return 2;
+    g.ovr = ovr;
     out = fopen(outp, "wb");
     if (!out) return 2;
     fwrite(REC_MAGIC, 1, 8, out);
@@ -1010,7 +1109,7 @@ static SnapAt* snaps_of(const unsigned char* d, size_t n, unsigned* count)
     return v;
 }
 
-static int cmd_lossy(const char* in, const char* outp, int exact)
+static int cmd_lossy(const char* in, const char* outp, int exact, const HeaderOverride* ovr)
 {
     Reading g;
     LossyOut o;
@@ -1027,6 +1126,7 @@ static int cmd_lossy(const char* in, const char* outp, int exact)
     memset(&hb, 0, sizeof hb);
     memset(&one, 0, sizeof one);
     if (!reading_open(&g, in)) return 2;
+    g.ovr = ovr;
     snaps = snaps_of(g.r.d, g.r.n, &nsnaps);
     o.f = fopen(outp, "wb");
     o.cctx = ZSTD_createCCtx();
@@ -3325,6 +3425,273 @@ static int f32_check(void)
     return expect("ledger: single-precision sums round as IEEE does", bad, 0);
 }
 
+/* ---- outcomes: the unit frame's per-type and level rules ---------------------------------------- */
+
+#define RU_TYPE   7            /* a ground type with an RT_TYPES row                                */
+#define RU_BARE   8            /* a type without one                                                */
+#define RU_MAXHP  1000
+#define RU_DEFS   64           /* RT_UNITDEFS' count of the rules' header                           */
+
+/* The rules' header entries: the build's lanes, a level whose sort buckets are 40 columns wide and
+   whose sight rule is on, one aircraft type and RU_TYPE's row, the slope table the executable's */
+static void ru_entries(unsigned char* codec, unsigned char* phys, unsigned char* air, unsigned char* types)
+{
+    static const unsigned char slope[REC_SLOPES] = { 25, 55, 70, 85, 100, 100, 75, 50, 25, 20, 15 };
+    unsigned j;
+    codec[0] = REC_LANES_N;
+    codec[1] = codec[2] = codec[3] = 0;
+    for (j = 0; j < REC_LANES_N; j++) {
+        codec[4 + 4 * j] = (unsigned char)rec_lanes[j].off;
+        codec[5 + 4 * j] = (unsigned char)(rec_lanes[j].off >> 8);
+        codec[6 + 4 * j] = rec_lanes[j].width;
+        codec[7 + 4 * j] = rec_lanes[j].role;
+    }
+    memset(phys, 0, 12);
+    put32(phys, 8155);
+    phys[4] = 75;
+    phys[5] = 1;
+    put32(phys + 8, 40);
+    memset(air, 0, 8 + 24);
+    put32(air, 1);
+    air[8] = 51;
+    put32(air + 12, 10 << 16);
+    memset(types, 0, REC_TYPES_HEAD + 20);
+    put32(types, 1);
+    memcpy(types + 4, slope, REC_SLOPES);
+    types[REC_TYPES_HEAD] = RU_TYPE;
+    types[REC_TYPES_HEAD + 2] = 30;                     /* sight_h */
+    put32(types + REC_TYPES_HEAD + 4, RU_MAXHP);
+    put32(types + REC_TYPES_HEAD + 8, 2 << 16);         /* maxv */
+    put32(types + REC_TYPES_HEAD + 12, 0x3000);         /* brake */
+    put32(types + REC_TYPES_HEAD + 16, 0x2000);         /* acc */
+}
+
+/* params from the entries, `phys` and `types` of nphys and ntypes bytes: 1 accepted */
+static int ru_params(RecCodecParams* p, const unsigned char* codec, const unsigned char* phys, unsigned nphys,
+                     const unsigned char* air, const unsigned char* types, unsigned ntypes, unsigned ndefs)
+{
+    RecCodecEntries e;
+    char why[160];
+    e.p[RECC_E_CODEC] = codec;
+    e.n[RECC_E_CODEC] = 4 + 4 * REC_LANES_N;
+    e.p[RECC_E_PHYSICS] = phys;
+    e.n[RECC_E_PHYSICS] = nphys;
+    e.p[RECC_E_AIR] = air;
+    e.n[RECC_E_AIR] = 8 + 24;
+    e.p[RECC_E_TYPES] = types;
+    e.n[RECC_E_TYPES] = ntypes;
+    return reccodec_params(p, 64, PJ_N, 16, 16, 64, ndefs, &e, why, sizeof why);
+}
+
+/* a ground unit of type `type` at rest in the middle of the grid */
+static void ru_unit(uint32_t* img, unsigned type)
+{
+    memset(img, 0, IMG);
+    lane_add(img, REC_LR_TYPE, type, 1);
+    lane_add(img, REC_LR_LAYER, 1, 1);
+    lane_add(img, REC_LR_X, 10u << 20, 1);
+    lane_add(img, REC_LR_Z, 12u << 20, 1);
+    lane_add(img, REC_LR_Y, 20u << 16, 1);
+    lane_add(img, REC_LR_FW, 2, 1);
+    lane_add(img, REC_LR_FH, 2, 1);
+    lane_add(img, REC_LR_FX, 9, 1);
+    lane_add(img, REC_LR_FZ, 11, 1);
+    lane_add(img, REC_LR_OWNER, 1, 1);
+}
+
+/* Slot 1 evaluated by the encoder at gt from L1 = l1, L2 = l2 and U = u, every winner the default
+   but `win` for lane `role` when win >= 0: 1 when lane `role` is left with a residual */
+static int ru_miss(RecCodec* c, const uint32_t* l1, const uint32_t* l2, const uint32_t* u, uint32_t gt,
+                   unsigned role, int win)
+{
+    Eval x;
+    unsigned char w[RECC_LANES_MAX];
+    memcpy(w, c->defwin, sizeof w);
+    if (win >= 0) w[c->lane_of[role]] = (unsigned char)win;
+    memset(&x, 0, sizeof x);
+    x.c = c;
+    x.gt = gt;
+    x.l1 = (const unsigned char*)l1;
+    x.l2 = (const unsigned char*)l2;
+    x.l3 = c->l3 + L3B;
+    x.win = w;
+    x.age = 3;
+    x.s = 1;
+    memcpy(x.u, u, IMG);
+    frame_slot(&x);
+    return bit_of(x.rmask, (unsigned)c->lane_of[role]);
+}
+
+static int outcomes_rules(void)
+{
+    static unsigned char codec[4 + 4 * REC_LANES_N], phys[12], air[8 + 24], types[REC_TYPES_HEAD + 40];
+    static uint32_t units[64][NDW], a[NDW], b[NDW], u[NDW];
+    static unsigned char live[64];
+    static RecCodecParams p, q;
+    RecCodec* c;
+    World w;
+    RecFrameWorld v;
+    uint64_t t;
+    int ok = 1, r;
+    memset(&w, 0, sizeof w);
+    ru_entries(codec, phys, air, types);
+    ok &= expect("rules: the header's entries parse", ru_params(&p, codec, phys, 12, air, types,
+                                                                 REC_TYPES_HEAD + 20, RU_DEFS), 1);
+    ok &= expect("rules: refused: an RT_PHYSICS of 8 bytes",
+                 ru_params(&q, codec, phys, 8, air, types, REC_TYPES_HEAD + 20, RU_DEFS), 0);
+    ok &= expect("rules: refused: an RT_TYPES whose length is not 16 + 20 n",
+                 ru_params(&q, codec, phys, 12, air, types, REC_TYPES_HEAD + 19, RU_DEFS), 0);
+    ok &= expect("rules: refused: more RT_TYPES rows than RT_UNITDEFS' count",
+                 ru_params(&q, codec, phys, 12, air, types, REC_TYPES_HEAD + 20, 0), 0);
+    ok &= expect("rules: refused: a type past RT_UNITDEFS' count",
+                 ru_params(&q, codec, phys, 12, air, types, REC_TYPES_HEAD + 20, RU_TYPE), 0);
+    memcpy(types + REC_TYPES_HEAD + 20, types + REC_TYPES_HEAD, 20);
+    put32(types, 2);
+    ok &= expect("rules: refused: RT_TYPES rows not ascending",
+                 ru_params(&q, codec, phys, 12, air, types, REC_TYPES_HEAD + 40, RU_DEFS), 0);
+    types[REC_TYPES_HEAD + 20] = RU_TYPE + 1;
+    ok &= expect("rules: two rows ascending parse",
+                 ru_params(&q, codec, phys, 12, air, types, REC_TYPES_HEAD + 40, RU_DEFS), 1);
+    types[REC_TYPES_HEAD + 23] = 1;
+    ok &= expect("rules: refused: a row's pad not zero",
+                 ru_params(&q, codec, phys, 12, air, types, REC_TYPES_HEAD + 40, RU_DEFS), 0);
+    types[4 + REC_SLOPES] = 1;
+    types[REC_TYPES_HEAD + 23] = 0;
+    ok &= expect("rules: refused: the slope table's pad not zero",
+                 ru_params(&q, codec, phys, 12, air, types, REC_TYPES_HEAD + 40, RU_DEFS), 0);
+
+    ok &= expect("ex_fm: 0.0 x 1000 = 0", ex_fm(0, 1000, &t) && t == 0, 1);
+    ok &= expect("ex_fm: 1.0 x 1000 = 1000", ex_fm(0x3F800000u, 1000, &t) && t == 1000, 1);
+    ok &= expect("ex_fm: 0.5 x 101 = 50", ex_fm(0x3F000000u, 101, &t) && t == 50, 1);
+    ok &= expect("ex_fm: the least denormal x 2^32 - 1 = 0", ex_fm(1, 0xFFFFFFFFu, &t) && t == 0, 1);
+    ok &= expect("ex_fm: 1.0 x 2^32 - 1, exact", ex_fm(0x3F800000u, 0xFFFFFFFFu, &t) && t == 0xFFFFFFFFu, 1);
+    ok &= expect("ex_fm: refused: -0.5, -0.0, past 1.0, a NaN",
+                 ex_fm(0xBF000000u, 9, &t) + ex_fm(0x80000000u, 9, &t) + ex_fm(0x3F800001u, 9, &t) +
+                 ex_fm(0x7FC00000u, 9, &t), 0);
+    ok &= expect("hp_pct: 500 of 1000 is 50, 2000 clamps to 100, -1 divides unsigned to 100",
+                 hp_pct(500, 1000) == 50 && hp_pct(2000, 1000) == 100 && hp_pct(0xFFFF, 1000) == 100, 1);
+    ok &= expect("hp_pct: -1 of 1 is 0xFFFFFF9C, negative as a signed value: 0", hp_pct(0xFFFF, 1), 0);
+
+    world_reset(&w, 64, PJ_N, 16, 16);
+    v = world_view(&w);
+    live[1] = 1;
+    ru_unit(units[1], RU_TYPE);
+    c = reccodec_new(&p);
+    if (!c) return 0;
+    reccodec_restart(c, &p, &units[0][0], live, w.pool, 0, 0, &v);
+    ok &= expect("rules: the codec restarts on them", reccodec_valid(c), 1);
+
+    /* the build step */
+    ru_unit(a, RU_TYPE);
+    lane_add(a, REC_LR_BUILD_LEFT, 0x3F800000u, 1);
+    memcpy(u, a, IMG);
+    lane_add(u, REC_LR_BUILD_LEFT, 0x3F400000u, 1);    /* 0.75 */
+    lane_add(u, REC_LR_HP, 250, 1);
+    ok &= expect("hp: a build step from 1.0 to 0.75 of 1000 adds 250", ru_miss(c, a, a, u, 7, REC_LR_HP, -1), 0);
+    lane_add(u, REC_LR_HP, 251, 1);
+    ok &= expect("  251 is a residual", ru_miss(c, a, a, u, 7, REC_LR_HP, -1), 1);
+    lane_add(a, REC_LR_BUILD_LEFT, 0x3F000000u, 1);    /* 0.5 */
+    lane_add(a, REC_LR_HP, 100, 1);
+    lane_add(u, REC_LR_HP, 0, 1);
+    ok &= expect("hp: an unbuild from 0.5 to 0.75 floors 100 - 250 at 0", ru_miss(c, a, a, u, 7, REC_LR_HP, -1), 0);
+    lane_add(a, REC_LR_BUILD_LEFT, 0x3E800000u, 1);    /* 0.25 */
+    lane_add(a, REC_LR_HP, 990, 1);
+    lane_add(u, REC_LR_BUILD_LEFT, 0, 1);
+    lane_add(u, REC_LR_HP, RU_MAXHP, 1);
+    ok &= expect("hp: the build's last step caps 990 + 250 at the maximum", ru_miss(c, a, a, u, 7, REC_LR_HP, -1), 0);
+    lane_add(u, REC_LR_BUILD_LEFT, 0x3E800000u, 1);
+    lane_add(u, REC_LR_HP, 400, 1);
+    ok &= expect("hp: with the fraction unchanged, a change is a residual", ru_miss(c, a, a, u, 7, REC_LR_HP, -1), 1);
+    ru_unit(a, RU_BARE);
+    memcpy(u, a, IMG);
+    lane_add(a, REC_LR_BUILD_LEFT, 0x3F800000u, 1);
+    lane_add(u, REC_LR_BUILD_LEFT, 0x3F400000u, 1);
+    lane_add(u, REC_LR_HP, 250, 1);
+    ok &= expect("hp: a type without a row has no build rule", ru_miss(c, a, a, u, 7, REC_LR_HP, -1), 1);
+
+    /* the HP percentage */
+    ru_unit(a, RU_TYPE);
+    lane_add(a, REC_LR_HP, 500, 1);
+    lane_add(a, REC_LR_HPPCT, 40, 1);
+    lane_add(a, REC_LR_HPPCT30, 30, 1);
+    memcpy(u, a, IMG);
+    lane_add(u, REC_LR_HPPCT, 50, 1);
+    lane_add(u, REC_LR_HPPCT30, 40, 1);
+    r = ru_miss(c, a, a, u, 31, REC_LR_HPPCT, -1) + ru_miss(c, a, a, u, 31, REC_LR_HPPCT30, -1);
+    ok &= expect("hp_pct: at a phase tick (GameTime 30, labelled 31) both move", r, 0);
+    r = ru_miss(c, a, a, u, 32, REC_LR_HPPCT, -1) + ru_miss(c, a, a, u, 32, REC_LR_HPPCT30, -1);
+    ok &= expect("  off the phase both are residuals", r, 2);
+
+    /* the sort bucket */
+    ru_unit(a, RU_TYPE);
+    lane_add(a, REC_LR_BUCKET, 5, 1);
+    memcpy(u, a, IMG);
+    lane_add(u, REC_LR_X, 11u << 20, 1);
+    lane_add(u, REC_LR_FX, 10, 1);
+    lane_add(u, REC_LR_BUCKET, (12u >> 3) * 40 + (11u >> 3) + 1, 1);
+    ok &= expect("bucket: a footprint that moves takes (z >> 23) x 40 + (x >> 23) + 1",
+                 ru_miss(c, a, a, u, 7, REC_LR_BUCKET, -1), 0);
+    lane_add(u, REC_LR_FX, 14, 1);                     /* fx + fw = 16, the grid's width */
+    ok &= expect("  at the grid's east edge it keeps its bucket", ru_miss(c, a, a, u, 7, REC_LR_BUCKET, -1), 1);
+    lane_add(u, REC_LR_BUCKET, 5, 1);
+    ok &= expect("  ... the bucket it had", ru_miss(c, a, a, u, 7, REC_LR_BUCKET, -1), 0);
+
+    /* the ground speed */
+    ru_unit(a, RU_TYPE);
+    lane_add(a, REC_LR_SPEED, 0xF000, 1);
+    lane_add(a, REC_LR_ROLL, 0x1000, 1);               /* sl 2: 50 %, read from the last image */
+    memcpy(u, a, IMG);
+    lane_add(u, REC_LR_SPEED, 0x10000, 1);
+    ok &= expect("speed: accelerating on a slope of 50 % caps at half maxv",
+                 ru_miss(c, a, a, u, 7, REC_LR_SPEED, 0), 0);
+    lane_add(u, REC_LR_SPEED, 0xC000, 1);
+    ok &= expect("speed: braking takes the brake rate", ru_miss(c, a, a, u, 7, REC_LR_SPEED, 3), 0);
+    lane_add(a, REC_LR_ROLL, 0, 1);
+    lane_add(u, REC_LR_ROLL, 0, 1);
+    lane_add(u, REC_LR_SPEED, 0x11000, 1);
+    ok &= expect("speed: on the flat the same step is not capped", ru_miss(c, a, a, u, 7, REC_LR_SPEED, 0), 0);
+    lane_add(u, REC_LR_SPEED, 0x10000, 1);
+    ok &= expect("  the slope's cap is a residual there", ru_miss(c, a, a, u, 7, REC_LR_SPEED, 0), 1);
+
+    /* the turn rate's blip */
+    ru_unit(a, RU_BARE);
+    memcpy(b, a, IMG);
+    lane_add(a, REC_LR_TURN, 101, 1);
+    lane_add(b, REC_LR_TURN, 100, 1);
+    memcpy(u, a, IMG);
+    lane_add(u, REC_LR_TURN, 100, 1);
+    ok &= expect("turn: a rate one off returns to the one before", ru_miss(c, a, b, u, 7, REC_LR_TURN, -1), 0);
+    lane_add(a, REC_LR_TURN, 105, 1);
+    ok &= expect("  five off it holds, so a return is a residual", ru_miss(c, a, b, u, 7, REC_LR_TURN, -1), 1);
+
+    /* a ground unit's sight z: altitude 20 raised to the sea's 76, + 30, so ((12 << 4) - 53) >> 5 */
+    ru_unit(a, RU_TYPE);
+    memcpy(u, a, IMG);
+    lane_add(u, REC_LR_SZ, (192 - 53) >> 5, 1);
+    ok &= expect("sight: a ground unit's sight z from its row's height", ru_miss(c, a, a, u, 7, REC_LR_SZ, -1), 0);
+
+    /* the fixed point: a unit rests only where the 30-tick rules predict its own percentages */
+    ru_unit(a, RU_TYPE);
+    lane_add(a, REC_LR_HP, 500, 1);
+    lane_add(a, REC_LR_HPPCT, 50, 1);
+    lane_add(a, REC_LR_HPPCT30, 50, 1);
+    memcpy(c->unit + NDW, a, IMG);
+    memcpy(c->l2 + NDW, a, IMG);
+    l3_of(c, (const unsigned char*)a, c->l3 + L3B);
+    c->age[1] = 3;
+    slot_advance(c, 1, (const unsigned char*)a, 7);
+    ok &= expect("rest: a unit at its percentages' fixed point rests", c->rest[1], 1);
+    lane_add(a, REC_LR_HPPCT30, 40, 1);
+    memcpy(c->unit + NDW, a, IMG);
+    memcpy(c->l2 + NDW, a, IMG);
+    l3_of(c, (const unsigned char*)a, c->l3 + L3B);
+    slot_advance(c, 1, (const unsigned char*)a, 7);
+    ok &= expect("  with +0xF7 not +0xF6 it does not", c->rest[1], 0);
+    reccodec_free(c);
+    world_free(&w);
+    return ok;
+}
+
 /* ---- outcomes: the lossy filter ---------------------------------------------------------------- */
 
 #define LO_SLOTS 8
@@ -4294,7 +4661,8 @@ static int cmd_outcomes(void)
     RecStream st;
     RecCodec* rd;
     World w;
-    unsigned char codec[4 + 4 * REC_LANES_N], phys[8], air[8 + 24];
+    unsigned char codec[4 + 4 * REC_LANES_N], phys[12], air[8 + 24];
+    RecCodecEntries ce;
     unsigned j, flags, block, ok = 1;
     uint32_t gt = 1;
     const unsigned char* body;
@@ -4314,6 +4682,7 @@ static int cmd_outcomes(void)
     phys[4] = 75;
     phys[5] = 1;
     phys[6] = phys[7] = 0;
+    put32(phys + 8, 0);
     memset(air, 0, sizeof air);
     put32(air, 1);
     air[8] = 51;
@@ -4322,7 +4691,14 @@ static int cmd_outcomes(void)
     put32(air + 16, 6 << 16);
     put32(air + 20, 22937);
     put32(air + 24, 1 << 16);
-    if (!reccodec_params(&p, 64, PJ_N, 16, 16, 64, codec, sizeof codec, phys, 8, air, sizeof air, NULL, 0) ||
+    memset(&ce, 0, sizeof ce);
+    ce.p[RECC_E_CODEC] = codec;
+    ce.n[RECC_E_CODEC] = sizeof codec;
+    ce.p[RECC_E_PHYSICS] = phys;
+    ce.n[RECC_E_PHYSICS] = sizeof phys;
+    ce.p[RECC_E_AIR] = air;
+    ce.n[RECC_E_AIR] = sizeof air;
+    if (!reccodec_params(&p, 64, PJ_N, 16, 16, 64, 0, &ce, NULL, 0) ||
         !reccodec_stream_begin(&st, &p) || !(rd = reccodec_new(&p)))
         return 2;
     world_reset(&w, 64, PJ_N, 16, 16);
@@ -4421,6 +4797,7 @@ static int cmd_outcomes(void)
     ok &= outcomes_sprays();
     ok &= zstd_window_check(st.cctx, st.dctx);
     ok &= f32_check();
+    ok &= outcomes_rules();
     printf("outcomes: %u sectioned, %u declined, %u mismatched\n", st.sectioned, st.declined, st.mismatched);
     reccodec_stream_end(&st);
     reccodec_free(rd);
@@ -4460,6 +4837,7 @@ static void codec_copy(RecCodec* d, const RecCodec* s)
     memcpy(d->defwin, s->defwin, sizeof d->defwin);
     d->q = s->q;
     memcpy(d->airix, s->airix, 65536 * sizeof *d->airix);
+    memcpy(d->typix, s->typix, 65536 * sizeof *d->typix);
     memcpy(d->unit, s->unit, n * IMG);
     memcpy(d->l2, s->l2, n * IMG);
     memcpy(d->l3, s->l3, n * L3B);
@@ -4592,8 +4970,8 @@ typedef struct Case {
     unsigned flags;
     size_t raw;                     /* type 2: the size the block's head claims             */
     RecBytes body;
-    unsigned char ent[3][8 + 24 * 8 + 4 * RECC_LANES_MAX];
-    unsigned nent[3], has[3];
+    unsigned char ent[RECC_E_N][0x10000];     /* the header's codec entries, each at most a u16 long */
+    unsigned nent[RECC_E_N], has[RECC_E_N];
 } Case;
 
 static void mutate_byte(unsigned char* p)
@@ -4756,27 +5134,37 @@ static void mutate(Case* c, const unsigned char* sec, size_t n, unsigned flags, 
         break;
     }
     default: {                                    /* the header's codec entries */
-        unsigned e = (unsigned)rndn(3);
+        unsigned e = (unsigned)rndn(RECC_E_N);
         if (!(flags & RBF_FRAME_RESET)) {         /* only a restart decodes from new params */
             mutate_byte(c->body.p + sizeof(RecSecHead) + rndn(n - sizeof(RecSecHead)));
             break;
         }
         c->type = 1;
-        for (i = 0; i < 3; i++) {
-            c->has[i] = h->e[i] != NULL;
-            c->nent[i] = h->ne[i] <= sizeof c->ent[i] ? h->ne[i] : 0;
-            if (h->e[i]) memcpy(c->ent[i], h->e[i], c->nent[i]);
+        for (i = 0; i < RECC_E_N; i++) {
+            c->has[i] = h->e.p[i] != NULL;
+            c->nent[i] = h->e.n[i];
+            if (h->e.p[i]) memcpy(c->ent[i], h->e.p[i], c->nent[i]);
         }
         switch (rnd() % 5) {
         case 0:
             if (c->nent[e]) mutate_byte(c->ent[e] + rndn(c->nent[e]));
             break;
-        case 4:                                   /* a constant: gravity, sea level, a def value */
-            if (c->nent[1] == 8) mutate_byte(c->ent[1] + rndn(5));
-            if (c->nent[2] >= 32) {
-                size_t row = rndn((c->nent[2] - 8) / 24);
-                mutate_byte(c->ent[2] + 8 + 24 * row + 4 + rndn(20));
-                if (rnd() & 1) c->ent[2][8 + 24 * row + 2] = (unsigned char)rnd();
+        case 4:   /* a constant: gravity, sea level, the bucket columns, a def value, a slope */
+            if (c->nent[RECC_E_PHYSICS] == 12) {
+                size_t k = rndn(9);
+                mutate_byte(c->ent[RECC_E_PHYSICS] + (k < 5 ? k : 3 + k));
+            }
+            if (c->nent[RECC_E_AIR] >= 32) {
+                size_t row = rndn((c->nent[RECC_E_AIR] - 8) / 24);
+                mutate_byte(c->ent[RECC_E_AIR] + 8 + 24 * row + 4 + rndn(20));
+                if (rnd() & 1) c->ent[RECC_E_AIR][8 + 24 * row + 2] = (unsigned char)rnd();
+            }
+            if (c->nent[RECC_E_TYPES] >= REC_TYPES_HEAD + 20) {
+                size_t row = rndn((c->nent[RECC_E_TYPES] - REC_TYPES_HEAD) / 20);
+                unsigned char* r = c->ent[RECC_E_TYPES] + REC_TYPES_HEAD + 20 * row;
+                mutate_byte(r + 4 + rndn(16));
+                if (rnd() & 1) r[2] = (unsigned char)rnd();
+                if (rnd() & 1) mutate_byte(c->ent[RECC_E_TYPES] + 4 + rndn(REC_SLOPES));
             }
             break;
         case 1:
@@ -4827,9 +5215,9 @@ static void run_add(RunChunks* r, const unsigned char* p, size_t n, size_t raw)
 }
 
 /* the reader's handling of a block as the differential defines it: 1 with `out`, or 0 refused */
-static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecParams* p, const World* w,
-                    const unsigned char* sec, size_t n, RecBytes* out, const RunChunks* run, void* zx,
-                    RecBytes* un)
+static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecParams* p, unsigned ndefs,
+                    const World* w, const unsigned char* sec, size_t n, RecBytes* out,
+                    const RunChunks* run, void* zx, RecBytes* un)
 {
     char why[256];
     RecFrameWorld v = world_view(w);
@@ -4856,9 +5244,14 @@ static int case_run(Case* c, RecCodec* d, const RecCodec* from, const RecCodecPa
     }
     if (c->type == 1) {
         RecCodecParams q;
-        if (!reccodec_params(&q, p->nslots, p->nproj, p->gw, p->gh, p->nwrecks, c->has[0] ? c->ent[0] : NULL, c->nent[0],
-                             c->has[1] ? c->ent[1] : NULL, c->nent[1], c->has[2] ? c->ent[2] : NULL,
-                             c->nent[2], why, sizeof why) || !q.usable)
+        RecCodecEntries e;
+        unsigned i;
+        for (i = 0; i < RECC_E_N; i++) {
+            e.p[i] = c->has[i] ? c->ent[i] : NULL;
+            e.n[i] = c->nent[i];
+        }
+        if (!reccodec_params(&q, p->nslots, p->nproj, p->gw, p->gh, p->nwrecks, ndefs, &e, why, sizeof why) ||
+            !q.usable)
             return 0;
         reccodec_restart(d, &q, w->unit, w->live, w->pool, w->pcount, w->phw, &v);
         return reccodec_decode(d, sec, n, out, why, sizeof why);
@@ -4881,7 +5274,7 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
     RecCodec* d = NULL;
     RecBytes out, sec, un;
     RunChunks run;
-    Case c;
+    static Case c;                /* its entries' buffers are 256 KB: not the stack's */
     FILE* cf = NULL;
     unsigned nsect = 0, done = 0, accepted = 0, k2;
     int k, control = -1;
@@ -4931,7 +5324,7 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
                 uint64_t hsh = 0;
                 mutate(&c, sec.p, b->raw, b->flags, &g.h, g.p.nlanes,
                        reset ? g.w.pcount : g.dec->pcount, only, g.r.body, b->packed);
-                ok = case_run(&c, d, g.dec, &g.p, &g.w, sec.p, b->raw, &out, &run, zx, &un);
+                ok = case_run(&c, d, g.dec, &g.p, g.h.ndefs, &g.w, sec.p, b->raw, &out, &run, zx, &un);
                 accepted += ok;
                 if (ok) hsh = fnv64(out.p, out.n);
                 if (cf) {
@@ -4953,7 +5346,7 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
                         fwrite(c.body.p, 1, c.body.n, cf);
                         fwrite(&r32, 1, 4, cf);
                     } else {
-                        for (e = 0; e < 3; e++) {
+                        for (e = 0; e < RECC_E_N; e++) {
                             uint32_t eh[2] = { c.has[e], c.nent[e] };
                             fwrite(eh, 1, 8, cf);
                             fwrite(c.ent[e], 1, c.nent[e], cf);
@@ -4971,7 +5364,7 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
                 c.flags = b->flags;
                 c.body.n = 0;
                 rb_put(&c.body, sec.p, b->raw);
-                control = case_run(&c, d, g.dec, &g.p, &g.w, sec.p, b->raw, &out, &run, zx, &un);
+                control = case_run(&c, d, g.dec, &g.p, g.h.ndefs, &g.w, sec.p, b->raw, &out, &run, zx, &un);
             }
             run_add(&run, g.r.body, b->packed, b->raw);
             k2++;
@@ -5013,12 +5406,46 @@ static int cmd_fuzz(const char* in, uint64_t seed, unsigned ncases, const char* 
     return k == -2 ? 1 : k < 0 ? 2 : 0;
 }
 
+/* a count in digits alone, at most `max`: a lenient parse would read a typo as 0 */
+static int count_arg(const char* p, unsigned max, unsigned* out)
+{
+    unsigned n = 0;
+    do {
+        if (*p < '0' || *p > '9' || (n = n * 10 + (unsigned)(*p - '0')) > max) return 0;
+    } while (*++p);
+    *out = n;
+    return 1;
+}
+
+/* transcode's and lossy's --types-from REC and --bucket-cols N at argv[*i]: 1 taken, 0 not one
+   of them, -1 malformed */
+static int override_arg(int argc, char** argv, int* i, HeaderOverride* o)
+{
+    if (!strcmp(argv[*i], "--types-from") && *i + 1 < argc) {
+        if (!types_load(o, argv[++*i])) return -1;
+        return 1;
+    }
+    if (!strcmp(argv[*i], "--bucket-cols") && *i + 1 < argc) {
+        if (!count_arg(argv[++*i], 65535, &o->cols)) {
+            fprintf(stderr, "codectest: --bucket-cols takes a count from 0 to 65535, in digits alone, "
+                    "not %s\n", argv[*i]);
+            return -1;
+        }
+        o->has_cols = 1;
+        return 1;
+    }
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
+    static HeaderOverride ovr;
     if (argc >= 4 && !strcmp(argv[1], "transcode")) {
-        int every = -1, skirmish = 0, i;
+        int every = -1, skirmish = 0, i, k;
         for (i = 4; i < argc; i++) {
-            if (!strcmp(argv[i], "--skirmish")) {
+            if ((k = override_arg(argc, argv, &i, &ovr)) != 0) {
+                if (k < 0) return 2;
+            } else if (!strcmp(argv[i], "--skirmish")) {
                 skirmish = 1;
             } else if (!strcmp(argv[i], "--snap-every") && i + 1 < argc) {
                 /* digits alone: a lenient parse would read a typo as 0, which keeps no snapshot */
@@ -5037,10 +5464,22 @@ int main(int argc, char** argv)
                 return 2;
             }
         }
-        return cmd_transcode(argv[2], argv[3], every, skirmish);
+        return cmd_transcode(argv[2], argv[3], every, skirmish, &ovr);
     }
-    if ((argc == 4 || (argc == 5 && !strcmp(argv[4], "--exact"))) && !strcmp(argv[1], "lossy"))
-        return cmd_lossy(argv[2], argv[3], argc == 5);
+    if (argc >= 4 && !strcmp(argv[1], "lossy")) {
+        int exact = 0, i, k;
+        for (i = 4; i < argc; i++) {
+            if ((k = override_arg(argc, argv, &i, &ovr)) != 0) {
+                if (k < 0) return 2;
+            } else if (!strcmp(argv[i], "--exact")) {
+                exact = 1;
+            } else {
+                fprintf(stderr, "codectest: lossy does not take %s\n", argv[i]);
+                return 2;
+            }
+        }
+        return cmd_lossy(argv[2], argv[3], exact, &ovr);
+    }
     if (argc == 4 && !strcmp(argv[1], "decode")) return cmd_decode(argv[2], argv[3]);
     if (argc == 2 && !strcmp(argv[1], "outcomes")) return cmd_outcomes();
 #ifdef _WIN32
@@ -5074,6 +5513,7 @@ int main(int argc, char** argv)
         for (i = 0; i < 512; i++) printf("%d\n", SIN[i]);
         return 0;
     }
-    fprintf(stderr, "usage: codectest transcode IN OUT [--snap-every N] [--skirmish] | lossy IN OUT [--exact] | decode IN OUT | outcomes | sprays IN | fuzz IN SEED N [CASES] [--section NAME] | sin\n");
+    fprintf(stderr, "usage: codectest transcode IN OUT [--snap-every N] [--skirmish] [--types-from REC] "
+            "[--bucket-cols N] | lossy IN OUT [--exact] [--types-from REC] [--bucket-cols N] | decode IN OUT | outcomes | sprays IN | fuzz IN SEED N [CASES] [--section NAME] | sin\n");
     return 2;
 }

@@ -2,9 +2,10 @@
 
 ## Status
 
-**L1 to L4, L5a and P1 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
+**L1 to L4, L5a, P1 and P4 are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
 *L3: the record frames, measured*, *L4: the measured hours, the snapshot interval and R1*,
-*L5a: the ledger rule* and *P1: the container, measured*, below). Recording format 17 packs each
+*L5a: the ledger rule*, *P1: the container, measured* and *P4: the unit frame's type rules,
+measured*, below). Recording format 18 packs each
 run of sectioned stream blocks as one zstd frame at level 19 and each snapshot against the one before
 it, carries the unit deltas in a unit frame
 predicted from the engine's own rules, the projectiles in a pool frame coded by identity, and the
@@ -23,8 +24,9 @@ landed as recording format 14 (*L5: the lossy plan, measured offline*, its last 
 the refreshes, the takeover at a refresh and the table's 37 rows take the heavy hour to 30.53 MB
 (MEASURED offline); format 15 writes the nano sprays as spray sessions, which takes the
 heavy hour's stream 2.7 MB smaller again; format 16 holds the cells' unit slots and yard bit,
-which the playing's engine stamps (*The cells held*), and format 17 (*P1*) packs that stream in its
-container; L6 is a plan. The page gathers what has been measured about the size of a demo recording, the research
+which the playing's engine stamps (*The cells held*), format 17 (*P1*) packs that stream in its
+container, and format 18 (*P4*) predicts more of the unit frame from per-type engine constants,
+the heavy hour 16.16 → 14.41 MB; L6 is a plan. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -1445,6 +1447,67 @@ has passed, so a one-byte change like these is refused before either decoder see
 chunks are not affected: its check unpacks each one with the
 DLL's decoder before writing it.
 
+## P4: the unit frame's type rules, measured
+
+**What format 18 changes.** The unit frame gains six rules, each the engine's (the engine map's
+[*The demo recorder's unit frame*](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08)
+gives the addresses and how each was read):
+
+- the **hit points while built** (`+0x108`): the build step `0x41BA60` adds `trunc(fo·M) −
+  trunc(fn·M)` when the fraction left `+0x104` moves from fo to fn, capped at M (def `+0x1FA`)
+  building and floored at 0 unbuilding, the product taken exactly in integers from the single's
+  bits (`ex_fm`);
+- the **HP percentage** `+0xF6` and its 30-tick copy `+0xF7`, which the unit tick writes only when
+  GameTime is a multiple of 30; a unit rests only where the two equal its HP's percentage, the
+  rule's fixed point;
+- the **sort bucket** `+0x82`, which the restamp `0x47CC30` forms from the position when the
+  footprint's cell or the layer moves and the footprint is inside the grid;
+- a **ground unit's speed**: the ground step `0x43CC20` adds the acceleration or subtracts the
+  brake rate, floors at 0 and caps at the slope table's share of maxvelocity, the two steps two
+  candidates;
+- the **turn rate's blip**: a rate one away from the iteration before's returns to it (the size
+  research's gap-units round MEASURED it; no engine writer traced);
+- a **ground unit's sight row**, the sight emit's rule the aircraft already had, from the type's
+  sight height: the emit `0x4827B0` raises every unit's altitude to the sea's, so a ground unit
+  takes the same row.
+
+Their constants come from the engine at the recording's start: `RT_PHYSICS` grows by the sort
+buckets' columns `main+0x142A3`, and a new header entry, `RT_TYPES`, carries the slope table at
+`0x505200` and one 20-byte row per unit type (sight height, maximum HP, maxvelocity, brake rate,
+acceleration), as many as the header has room for. The lane table names five more roles, appended
+(`HP`, `BUILD_LEFT`, `HPPCT`, `HPPCT30`, `BUCKET`), and `+0x104` and `+0x108` are named
+`build_left` and `hp`. A type with no `RT_TYPES` row, or a recording whose bucket columns are 0,
+keeps generic lanes for those rules.
+
+**Measured** (2026-10-12, `codectest lossy` -- the writer's path -- under Wine, 32-bit, on the
+reference setup; the records-only copies of the two L4 hours, their `RT_CODEC` given this build's
+roles; the types and the slope table from a `secondary-orders` recording of this build on the
+reference install, whose `RT_UNITDEFS` hash both hours share, given with `--types-from`; the bucket
+columns by LoadMap's own formula from the hours' grids, 77 for Moon Quartet's 610 cells and 81 for
+Core Prime's 642, with `--bucket-cols`):
+
+| | heavy hour | light hour |
+|---|---:|---:|
+| the file, format 17 / 18 | 16,160,878 / **14,413,509 (−10.8 %)** | 9,390,288 / **8,629,319 (−8.1 %)** |
+| the stream | 15,334,732 / 13,581,759 | 8,972,695 / 8,206,122 |
+| the header | 5,712 / 11,316 | 5,536 / 11,140 |
+| the snapshots, the minimap, the end block | unchanged | unchanged |
+| the unit frame's section, raw / packed alone | 19.9 / 10.6 MB → 15.6 / 8.9 MB | |
+
+Every block sectioned, none declined or mismatched, 3,605 and 3,608 of them; the other sections
+are byte-identical. `RT_TYPES` costs 5,604 bytes a recording (279 types). Each rule's share, from
+the heavy hour with that rule alone turned off: the hit points 841 KB, the bucket 207 KB, the
+ground speed 187 KB, the ground sight row 183 KB, the percentages 163 KB, the turn blip 76 KB. The
+ground speed reads the slope from the last image's `+0x68`, since the movement pass steps before
+it places: from this iteration's the hour is 1,752 bytes larger. The percentage reads this
+iteration's HP: from the last image's it is 9,839 bytes larger.
+
+**What it does not do.** The ground speed's halving under water (`0x43CCA0..0x43CCCE`) is not
+modelled; a type past the header's rows (more than 2,048 types, or a header without room) keeps
+generic lanes; an HP or a percentage written by anything but the build step and the unit tick (a
+hit, a repair, a self-repair) is a residual. The size research's fitted tables, which this
+landing's `RT_TYPES` replaces, are not kept, so its rows were not compared against them.
+
 ## Multiplayer recordings
 
 A multiplayer file holds the recording machine's world (every unit, remote players' replicated
@@ -1528,6 +1591,7 @@ the units: stage 6's traffic budget.
 | L5a | the unit frame predicts the resource ledger, format 12: LANDED (*L5a* below) | MEASURED heavy hour 56.99 → 42.15 MB, lossless |
 | L5 | lossy, chosen by the owner 2026-10-11: internal values held between refreshes, shown values exact (*L5: the lossy plan, measured offline*). The core LANDED as format 13: the filter, the refresh every 300 ticks, the takeover at a refresh, the exact stream for the harness; the unit and order hold rows LANDED as format 14; the spray sessions LANDED as format 15; the cells held LANDED as format 16 (*The cells held*) | MEASURED offline heavy hour 42.15 → 19.32 MB with the plan's transforms; format 14's rows 42.15 → 30.53 MB on the writer's path; the spray sessions −2.72 MB over the rows; the cells alone −6.34 MB over the empty table |
 | P1 | the container, format 17: each run of sectioned blocks one zstd frame at level 19, the snapshots chained, a key every tenth: LANDED (*P1* above) | MEASURED lossy hour 20.73 → 15.65 MB, exact hour 42.15 → 29.90 MB |
+| P4 | the unit frame's type rules and `RT_TYPES`, format 18 (*P4* above) | MEASURED heavy hour 16.16 → 14.41 MB, light hour 9.39 → 8.63 MB |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
 ## Decisions

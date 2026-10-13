@@ -6,8 +6,8 @@
 
 #include <stdint.h>
 
-#define TAGPU_RECLANES_SHA256 "730fa4dcd2379ee4d34fda05fbbc287d1a71a985803199ed447c0d83cc4a5315"
-#define TAGPU_RECLANES_GEN_SHA256 "d27b06a10c68860b2aecbb9118b17b693025f67cfd8f4bc572473c606855815e"
+#define TAGPU_RECLANES_SHA256 "19cb7888b7d1fd47bc5cdc24832c471eb2e4107544ed00ff72320f9d54e1b840"
+#define TAGPU_RECLANES_GEN_SHA256 "759e037d327c0e235ad68e97af0ef7d2fa342f5c207235e59279243142e6c65e"
 
 enum RecLaneRole {      /* a format constant: RT_CODEC's role byte */
     REC_LR_PLAIN,       /* any width */
@@ -41,11 +41,16 @@ enum RecLaneRole {      /* a format constant: RT_CODEC's role byte */
     REC_LR_EGRANT,      /* 4 bytes */
     REC_LR_MREQ,        /* 4 bytes */
     REC_LR_MGRANT,      /* 4 bytes */
+    REC_LR_HP,          /* 2 bytes */
+    REC_LR_BUILD_LEFT,  /* 4 bytes */
+    REC_LR_HPPCT,       /* 1 byte */
+    REC_LR_HPPCT30,     /* 1 byte */
+    REC_LR_BUCKET,      /* 4 bytes */
     REC_LR_N
 };
 
 /* the width a role's rule computes, in bytes; 0 for any of 1, 2 and 4 */
-static const unsigned char rec_role_width[REC_LR_N] = { 0, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 1, 2, 0, 4, 4, 4, 4, 4 };
+static const unsigned char rec_role_width[REC_LR_N] = { 0, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 1, 2, 0, 4, 4, 4, 4, 4, 2, 4, 1, 1, 4 };
 
 typedef struct RecLaneRow { uint16_t off; uint8_t width, role; } RecLaneRow;
 
@@ -101,7 +106,7 @@ static const RecLaneRow rec_lanes[REC_LANES_N] = {
     { 0x07c, 2, REC_LR_SZ },         /* sight_z */
     { 0x07e, 2, REC_LR_FW },         /* foot_w */
     { 0x080, 2, REC_LR_FH },         /* foot_h */
-    { 0x082, 4, REC_LR_PLAIN },      /* bucket */
+    { 0x082, 4, REC_LR_BUCKET },     /* bucket */
     { 0x086, 4, REC_LR_PLAIN },      /* carrier */
     { 0x08a, 4, REC_LR_PLAIN },      /* cargo */
     { 0x08e, 4, REC_LR_PLAIN },      /* next */
@@ -134,16 +139,16 @@ static const RecLaneRow rec_lanes[REC_LANES_N] = {
     { 0x0f0, 4, REC_LR_PLAIN },      /* attacker */
     { 0x0f4, 1, REC_LR_PLAIN },      /* attacker_player */
     { 0x0f5, 1, REC_LR_PLAIN },      /* hit_kind */
-    { 0x0f6, 1, REC_LR_PLAIN },      /* hp_pct */
-    { 0x0f7, 1, REC_LR_PLAIN },      /* hp_pct_30 */
+    { 0x0f6, 1, REC_LR_HPPCT },      /* hp_pct */
+    { 0x0f7, 1, REC_LR_HPPCT30 },    /* hp_pct_30 */
     { 0x0f8, 1, REC_LR_PLAIN },      /* sight_h */
     { 0x0f9, 1, REC_LR_PLAIN },      /* attach_piece */
     { 0x0fa, 1, REC_LR_COUNT_ },     /* damage_timer */
     { 0x0fb, 4, REC_LR_COUNT_ },     /* give_lock */
     { 0x0ff, 1, REC_LR_PLAIN },      /* player */
     { 0x100, 4, REC_LR_PLAIN },      /* u100 */
-    { 0x104, 4, REC_LR_PLAIN },      /* u104 */
-    { 0x108, 2, REC_LR_PLAIN },      /* u108 */
+    { 0x104, 4, REC_LR_BUILD_LEFT }, /* build_left */
+    { 0x108, 2, REC_LR_HP },         /* hp */
     { 0x10a, 2, REC_LR_PLAIN },      /* water */
     { 0x10c, 2, REC_LR_PLAIN },      /* u10c */
     { 0x10e, 1, REC_LR_PLAIN },      /* activation */
