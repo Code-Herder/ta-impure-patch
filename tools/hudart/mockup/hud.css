@@ -21,6 +21,7 @@
   justify-content: center; font: 700 calc(var(--wbs, 12) * var(--u))/1 'DejaVu Sans', sans-serif; color: #1d1d1b; }
 .hud .ex { background: rgba(24, 24, 22, .9); box-shadow: inset 0 0 0 calc(.4 * var(--u)) #9a9a92; }
 .hud .ex::after { color: #e6e6e0; }
+.hud .noicon.on_dark::after { color: #e2dcb0; }
 /* text: one line, centred vertically in its box */
 .hud .t { position: absolute; display: flex; align-items: center; line-height: 1; white-space: nowrap; overflow: hidden; }
 .hud .t.c { justify-content: center; }

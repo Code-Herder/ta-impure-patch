@@ -111,6 +111,10 @@ dark edge, and an icon it lacks as a stand-in glyph.
   lanes; they are hidden whenever a replay starts. It names the forks kept ("Forks · 3"), or the
   fork being watched while the lanes are hidden ("Watching F3"), and is dimmed when there are none.
   Open, the lane plate grows upward around it, so the tab never moves.
+  Where the button sits is still open; `ft=` shows five placements: `a` the tab above the housing,
+  `b` under the clock in the time recess, `c` a bay at the housing's left end (taking that width
+  from the marker lane and the track), `d` the right end of the marker lane, and `e` no button but
+  a fork badge in the marker lane at each branch, any of which opens and closes the lanes.
 - **Lanes.** Each fork the replay keeps (at most `forks.max`, 3) is a lane on a plate above the
   timeline housing, as wide as the housing. The oldest branch is on top. A lane runs from where
   the fork branched to where it ends, on the track's own time axis. A lane narrower than
