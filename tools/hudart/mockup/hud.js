@@ -133,11 +133,12 @@ const HUD = (() => {
     // the transport plate and the timeline housing are the HUD's whole: a click between their buttons is taken too
     let h = `<div class="box" data-act="${D.act}" style="${rect(tb)}">` + art(T.part, zero(T.w, D.h)) + T.buttons.map(s => button(
       { ...s, text: s.text && { ...s.text, html: bound[s.text.bind] } }, T.button, place(F, { in: s.in, pad: T.button.pad }), st)).join('') + `</div>`;
-    const rx = tb.x + T.w + R.gap, rw = st.W - R.r - rx, FR = frame(rw, D.h, R.part);
+    // proposed: with forks the housing is the one painted with the Forks bay's pocket at its left end
+    const part = st.forks ? L.proposed.forks.rail : R.part;
+    const rx = tb.x + T.w + R.gap, rw = st.W - R.r - rx, FR = frame(rw, D.h, part);
     const lane = place(FR, R.markers), tr = place(FR, R.track), p = st.t / st.T, pf = filled(st), M = R.markers, B = M.badge;
     const along = (w, e, f) => e + (w - 2 * e) * f;
-    // proposed: the Forks bay takes its room from the marker lane and the track
-    const bay = st.forks ? forksBay(st, lane, tr) : '';
+    const bay = st.forks ? forksBay(st, FR) : '';
     let marks = st.markers.map(m => {
       const cx = along(lane.w, M.ends, m.t / st.T), s = lane.h, bb = { x: cx - s / 2, y: 0, w: s, h: s };
       const col = m.dot || (m.seat < 0 ? M.bookmark_dot : st.seats[m.seat].colour);
@@ -146,7 +147,7 @@ const HUD = (() => {
     }).join('');
     const fp = R.track.fill.pad, fb = { x: fp[0], y: fp[1], w: tr.w - fp[0] - fp[2], h: tr.h - fp[1] - fp[3] };
     const ph = R.track.playhead, phb = place(frame(tr.w, tr.h), { pad: ph.pad }), phx = along(tr.w, R.track.ends, p);
-    h += `<div class="box" data-act="${D.act}" style="${rect({ x: rx, y, w: rw, h: D.h })}">` + art(R.part, zero(rw, D.h))
+    h += `<div class="box" data-act="${D.act}" style="${rect({ x: rx, y, w: rw, h: D.h })}">` + art(part, zero(rw, D.h))
       + `<div class="box" style="${rect(lane)}">${marks}</div>`
       + `<div class="box" data-track data-ends="${R.track.ends}" style="${rect(tr)}">`
       + `<div class="clip" data-fill="${fb.w}" style="${rect({ ...fb, w: fb.w * pf })}">${art(R.track.fill.part, zero(fb.w, fb.h))}</div>`
@@ -172,12 +173,10 @@ const HUD = (() => {
      that timeline, clicking the watched one goes back to the replay. At the fork limit, while the picker is open, the
      lane a take-over would replace is outlined (st.replace). The lanes show only while the Forks bay is open (st.lanesOpen).
      g: the housing's box and its track's span, in units ---- */
-  /* the Forks bay at the housing's left end opens and closes the lanes and counts the forks; it spans the marker lane and
-     the track and takes its width from both. lane and tr are the housing's marker lane and track, narrowed in place */
-  function forksBay(st, lane, tr) {
-    const B = L.proposed.forks.bay, n = st.forks.length, open = st.lanesOpen && n > 0, k = B.w + B.gap;
-    const b = { x: tr.x, y: lane.y, w: B.w, h: tr.y + tr.h - lane.y };
-    lane.x += k; lane.w -= k; tr.x += k; tr.w -= k;
+  /* the Forks bay at the housing's left end opens and closes the lanes and counts the forks; it sits in the pocket
+     painted for it in the housing (FR, the housing's frame), which spans the marker lane and the track */
+  function forksBay(st, FR) {
+    const B = L.proposed.forks.bay, n = st.forks.length, open = st.lanesOpen && n > 0, b = place(FR, B);
     return button({ act: 'lanes', icon: { ...B.icon, name: open ? B.icon.open : B.icon.closed }, off: n ? 0 : B.off }, B, b, st, open)
       + text(String(n), { x: b.x, y: b.y + b.h * B.count.y, w: b.w, h: b.h * (1 - B.count.y) }, B.count.style, { align: 'c' });
   }

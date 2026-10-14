@@ -111,8 +111,9 @@ dark edge, and an icon it lacks as a stand-in glyph.
 
 - **The Forks bay.** A bay at the timeline housing's left end, spanning the marker lane and the
   track, shows and hides the lanes; they are hidden whenever a replay starts. It shows the fold
-  arrow over the number of forks kept and is dimmed when there are none. The marker lane and the
-  track give up its width (`forks.bay.w` plus its gap).
+  arrow over the number of forks kept and is dimmed when there are none. With forks, the housing
+  is `forks.rail` (`rail_forks`), painted with a pocket for the bay at its left end, and the bay
+  sits in that measured well (`forks.bay.in`).
 - **Lanes.** Each fork the replay keeps (at most `forks.max`, 3) is a lane on a plate above the
   timeline housing, as wide as the housing. The oldest branch is on top. A lane runs from where
   the fork branched to where it ends, on the track's own time axis. A lane narrower than

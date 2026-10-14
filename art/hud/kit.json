@@ -151,22 +151,22 @@
   },
   "forks_bay": {
    "kind": "nine",
-   "scale": 5.889,
+   "scale": 12.571,
    "slice": [
-    10,
-    9,
-    9,
-    9
+    19,
+    20,
+    19,
+    19
    ]
   },
   "forks_bay_down": {
    "kind": "nine",
-   "scale": 5.889,
+   "scale": 12.686,
    "slice": [
-    15,
-    9,
-    15,
-    9
+    25,
+    21,
+    25,
+    19
    ]
   },
   "head_one": {
@@ -274,11 +274,11 @@
   },
   "i_delete": {
    "kind": "icon",
-   "scale": 10.375
+   "scale": 6.562
   },
   "i_export": {
    "kind": "icon",
-   "scale": 10.875
+   "scale": 6.562
   },
   "i_flag": {
    "kind": "icon",
@@ -350,52 +350,52 @@
   },
   "lane": {
    "kind": "nine",
-   "scale": 3.929,
+   "scale": 6.286,
    "slice": [
-    6,
-    6,
-    5,
-    6
+    8,
+    12,
+    10,
+    12
    ]
   },
   "lane_button": {
    "kind": "nine",
-   "scale": 5.833,
+   "scale": 7.333,
    "slice": [
-    10,
-    9,
-    6,
-    9
+    7,
+    7,
+    7,
+    7
    ]
   },
   "lane_button_down": {
    "kind": "nine",
-   "scale": 5.833,
+   "scale": 7.333,
    "slice": [
-    11,
+    7,
     9,
     9,
-    11
+    7
    ]
   },
   "lane_down": {
    "kind": "nine",
-   "scale": 3.857,
+   "scale": 6.286,
    "slice": [
-    5,
-    9,
-    5,
-    9
+    8,
+    12,
+    11,
+    12
    ]
   },
   "lanes_plate": {
    "kind": "nine",
-   "scale": 3.5,
+   "scale": 6.152,
    "slice": [
-    9,
-    9,
-    9,
-    9
+    15,
+    15,
+    15,
+    15
    ]
   },
   "live_groove": {
@@ -455,6 +455,56 @@
   "playhead": {
    "kind": "whole",
    "scale": 4.167
+  },
+  "rail_forks": {
+   "kind": "grid",
+   "scale": 4.531,
+   "design": [
+    456,
+    44.36
+   ],
+   "xs": [
+    [
+     130.05,
+     268.13
+    ]
+   ],
+   "ys": [
+    [
+     9.25,
+     13.93
+    ],
+    [
+     25.08,
+     31.43
+    ]
+   ],
+   "wells": {
+    "bay": [
+     8.39,
+     5.52,
+     17.22,
+     30.68
+    ],
+    "markers": [
+     26.49,
+     5.74,
+     345.2,
+     11.7
+    ],
+    "track": [
+     26.49,
+     20.31,
+     345.2,
+     15.89
+    ],
+    "time": [
+     378.31,
+     5.52,
+     68.2,
+     30.68
+    ]
+   }
   },
   "rail_one": {
    "kind": "grid",
