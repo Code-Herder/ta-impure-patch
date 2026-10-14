@@ -42,8 +42,7 @@ p.note { color: var(--muted); max-width: 80ch; }
 <div class="wrap" id="wrap"><div class="stage" id="stage"><canvas class="bg" id="bg"></canvas><div class="hud" id="hud-layer"></div></div></div>
 <p class="note">Every size, position and style here comes from <code>art/hud/layout.json</code> and the parts in <code>art/hud/</code>;
 this page only supplies a game to show. Hover a player row for its actions; drag the timeline to seek and the window by its title.
-The numbers are synthetic. <b>Proposed</b> draws variation B of the replay UI's missing features over it, as whitebox where the kit has
-no art yet: forks as lanes over the timeline, Take over and its player picker, and, showing a live game, the rewind button beside the
+The numbers are synthetic. <b>Proposed</b> draws variation B of the replay UI's missing features over it: forks as lanes over the timeline, Take over and its player picker, and, showing a live game, the rewind button beside the
 Impure Config sprocket and the strip it opens. The game draws none of it yet.</p>
 <script src="hud.js"></script>
 <script>
@@ -303,18 +302,7 @@ window.addEventListener('resize', resize);
 document.addEventListener('keydown', e => { if (e.key === ' ' && e.target === document.body) { e.preventDefault(); S.playing = !S.playing; build(); } });
 // the faces are loaded before the first layout, so no text is measured in a fallback
 const FACES = ['500 10px Oswald', '700 10px Oswald', '600 10px "Barlow Condensed"'].map(f => document.fonts.load(f));
-/* ---- PROTOTYPE (delete once a style is picked): variation B's four Codex styles, each a kit of the new parts in
-   prototype-b/<style>/ laid over art/hud/; ?style= picks one, the bar at the bottom and the arrow keys cycle ---- */
-const STYLES = [['wb', 'Whitebox'], ['v1', 'V1 · Same family'], ['v2', 'V2 · Raised tabs'], ['v3', 'V3 · Stencil console'], ['v4', 'V4 · One taller housing']];
-const STYLE = Math.max(0, STYLES.findIndex(([k]) => k === new URLSearchParams(location.search).get('style')));
-{ const bar = document.createElement('div'), go = d => { const q = new URLSearchParams(location.search); q.set('style', STYLES[(STYLE + d + STYLES.length) % STYLES.length][0]); location.search = q; };
-  bar.style.cssText = 'position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:9;display:flex;gap:10px;align-items:center;'
-    + 'background:#ff6a1a;color:#111;font:700 14px system-ui,sans-serif;padding:6px 10px;border-radius:999px;box-shadow:0 4px 18px rgba(0,0,0,.6)';
-  bar.innerHTML = `<button aria-label="Previous style">←</button><span>${STYLE} / ${STYLES.length - 1} — ${STYLES[STYLE][1]}</span><button aria-label="Next style">→</button>`;
-  bar.querySelectorAll('button').forEach((b, i) => { b.style.cssText = 'border:0;background:#111;color:#ff6a1a;font:700 14px system-ui;border-radius:999px;padding:3px 10px;cursor:pointer'; b.onclick = () => go(i ? 1 : -1); });
-  document.body.appendChild(bar);
-  document.addEventListener('keydown', e => { if (e.target.closest('input,textarea,select,[contenteditable]')) return; if (e.key === 'ArrowLeft') go(-1); if (e.key === 'ArrowRight') go(1); }); }
-Promise.all([HUD.load('../../../art/hud/', STYLE ? `prototype-b/${STYLES[STYLE][0]}/` : null), GAME_URL ? fetch(GAME_URL).then(r => r.json()) : null, ...FACES]).then(([, g]) => {
+Promise.all([HUD.load('../../../art/hud/'), GAME_URL ? fetch(GAME_URL).then(r => r.json()) : null, ...FACES]).then(([, g]) => {
   if (g) { GAME = g; S.res = `${g.device.W}x${g.device.H}`; S.hud = g.state.hud; S.playing = false; }
   resize(); requestAnimationFrame(frame); })
   .catch(err => { layer.innerHTML = `<p class="err" style="padding:16px">Could not load art/hud/: ${err}. Serve the repository root over HTTP and open /tools/hudart/mockup/.</p>`; });

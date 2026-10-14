@@ -69,7 +69,7 @@ teams. The same switches, and more, go in the URL, for captures:
   engine frame, its players and its stats window with the game's samples — instead of the
   synthetic game. The synthetic game's chart is 67 made-up samples over its 132 seconds;
 - `prop=0` or `prop=1`, `nf=2`, `lo` (the lanes open), `tl=1`, `pick`, `mode=live`, `rw`: the proposed
-  features, below; `style=v1` to `v4`: the prototype's painted styles of them, while it lasts.
+  features, below.
 
 `tools/hudart/capture.sh "<url>?paused&res=3840x2160&game=150&hud=150" out.png` captures the stage at
 native 4K. It lays the page out at device scale factor 1, one CSS pixel to a screen pixel, as the
@@ -102,6 +102,8 @@ mockup its query carries `stat=1`, so that the chips it captures are on screen.
 
 **A proposal, not the game.** The owner chose variation B of the replay UI's missing features
 on 2026-10-12, from a canvas of four whitebox variations: forks drawn as lanes on the timeline.
+Its art is the "stencil console" style (V3 of four painted by Codex, picked 2026-10-13): dark
+plates and near-black wells with khaki stencil text, warm-steel buttons.
 The mockup draws it from `layout.json`'s `proposed` section behind its **Proposed** switch (on
 by default, `prop=0` turns it off). The DLL does not read that section, and `laycheck.py` runs
 with `prop=0`. A part the kit has no art for yet is drawn as whitebox: a mid-grey plate with a

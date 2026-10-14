@@ -13,17 +13,15 @@ const HUD = (() => {
   let L, K, root;
   const IMG = {}, cache = {};
 
-  // over: another kit's folder whose parts replace or add to art/hud's, each drawn from its own folder
-  async function load(base, over) {
+  async function load(base) {
     root = base;
     [L, K] = await Promise.all([fetch(base + 'layout.json').then(r => r.json()), fetch(base + 'kit.json').then(r => r.json()).then(j => j.parts)]);
-    if (over) { const O = (await fetch(over + 'kit.json').then(r => r.json())).parts; for (const n in O) K[n] = { ...O[n], root: over }; }
     await Promise.all(Object.keys(K).filter(n => K[n].kind === 'grid' || K[n].kind === 'tile').map(n => {
       const im = new Image(); im.src = url(n); IMG[n] = im; return im.decode();
     }));
     return { layout: L, kit: K };
   }
-  const url = n => `${K[n] && K[n].root || root}parts/${n}.png`;
+  const url = n => `${root}parts/${n}.png`;
 
   /* ---- the band map: a grid-sliced part drawn at T for design length D. The fixed bands keep their size and the
      stretch bands share the difference; drawn smaller than its fixed bands, the whole part scales. ---- */

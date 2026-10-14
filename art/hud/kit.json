@@ -149,6 +149,26 @@
     ]
    }
   },
+  "forks_bay": {
+   "kind": "nine",
+   "scale": 5.889,
+   "slice": [
+    10,
+    9,
+    9,
+    9
+   ]
+  },
+  "forks_bay_down": {
+   "kind": "nine",
+   "scale": 5.889,
+   "slice": [
+    15,
+    9,
+    15,
+    9
+   ]
+  },
   "head_one": {
    "kind": "grid",
    "scale": 7.916,
@@ -252,6 +272,14 @@
    "kind": "icon",
    "scale": 8.688
   },
+  "i_delete": {
+   "kind": "icon",
+   "scale": 10.375
+  },
+  "i_export": {
+   "kind": "icon",
+   "scale": 10.875
+  },
   "i_flag": {
    "kind": "icon",
    "scale": 9.125
@@ -296,6 +324,10 @@
    "kind": "icon",
    "scale": 8.75
   },
+  "i_rewind": {
+   "kind": "icon",
+   "scale": 12.0
+  },
   "i_selections": {
    "kind": "icon",
    "scale": 12.5
@@ -316,9 +348,109 @@
    "kind": "icon",
    "scale": 8.812
   },
+  "lane": {
+   "kind": "nine",
+   "scale": 3.929,
+   "slice": [
+    6,
+    6,
+    5,
+    6
+   ]
+  },
+  "lane_button": {
+   "kind": "nine",
+   "scale": 5.833,
+   "slice": [
+    10,
+    9,
+    6,
+    9
+   ]
+  },
+  "lane_button_down": {
+   "kind": "nine",
+   "scale": 5.833,
+   "slice": [
+    11,
+    9,
+    9,
+    11
+   ]
+  },
+  "lane_down": {
+   "kind": "nine",
+   "scale": 3.857,
+   "slice": [
+    5,
+    9,
+    5,
+    9
+   ]
+  },
+  "lanes_plate": {
+   "kind": "nine",
+   "scale": 3.5,
+   "slice": [
+    9,
+    9,
+    9,
+    9
+   ]
+  },
+  "live_groove": {
+   "kind": "nine",
+   "scale": 5.0,
+   "slice": [
+    8,
+    13,
+    12,
+    13
+   ]
+  },
+  "live_one": {
+   "kind": "nine",
+   "scale": 3.353,
+   "slice": [
+    8,
+    8,
+    8,
+    8
+   ]
+  },
   "marker_badge": {
    "kind": "whole",
    "scale": 5.917
+  },
+  "pick_row": {
+   "kind": "nine",
+   "scale": 4.067,
+   "slice": [
+    5,
+    7,
+    6,
+    6
+   ]
+  },
+  "pick_row_down": {
+   "kind": "nine",
+   "scale": 4.133,
+   "slice": [
+    5,
+    7,
+    6,
+    6
+   ]
+  },
+  "picker_one": {
+   "kind": "nine",
+   "scale": 3.456,
+   "slice": [
+    47,
+    12,
+    10,
+    12
+   ]
   },
   "playhead": {
    "kind": "whole",
@@ -367,6 +499,26 @@
      37.76
     ]
    }
+  },
+  "rewind_button": {
+   "kind": "nine",
+   "scale": 3.857,
+   "slice": [
+    15,
+    14,
+    13,
+    16
+   ]
+  },
+  "rewind_button_down": {
+   "kind": "nine",
+   "scale": 3.714,
+   "slice": [
+    10,
+    11,
+    10,
+    11
+   ]
   },
   "row_one": {
    "kind": "grid",
@@ -472,6 +624,26 @@
     60,
     110,
     59
+   ]
+  },
+  "takeover_button": {
+   "kind": "nine",
+   "scale": 6.0,
+   "slice": [
+    12,
+    12,
+    12,
+    12
+   ]
+  },
+  "takeover_button_down": {
+   "kind": "nine",
+   "scale": 5.9,
+   "slice": [
+    12,
+    12,
+    12,
+    13
    ]
   },
   "tp_one": {

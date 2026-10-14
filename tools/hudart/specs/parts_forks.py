@@ -1,4 +1,4 @@
-"""Variation B's new parts (forks as lanes, take over, live rewind): every 9-slice face, its pressed version, and the icons."""
+"""Variation B's new parts (forks as lanes, the Forks bay, take over, live rewind): every 9-slice face, its pressed version, and the icons."""
 DOCK = []
 COL = [
     ('lanes_plate', 150, 46, 5, 'lane plate (lanes sit on it)', ''),
@@ -6,6 +6,8 @@ COL = [
     ('lane_down', 110, 14, 2.5, 'fork lane PRESSED: watched', ''),
     ('lane_button', 13, 12, 2, 'small button', ''),
     ('lane_button_down', 13, 12, 2, 'small PRESSED', ''),
+    ('forks_bay', 18, 31, 3, 'FORKS bay', ''),
+    ('forks_bay_down', 18, 31, 3, 'FORKS bay PRESSED', ''),
     ('takeover_button', 140, 20, 4, 'TAKE OVER button', ''),
     ('takeover_button_down', 140, 20, 4, 'TAKE OVER PRESSED', ''),
     ('picker_one', 110, 90, 6, 'picker window', ''),
