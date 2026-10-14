@@ -37,7 +37,6 @@ p.note { color: var(--muted); max-width: 80ch; }
   <label>Teams <select id="nt"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
   <label>Proposed <select id="prop"><option value="1">B: forks as lanes</option><option value="0">off, as the game</option></select></label>
   <label>Forks <select id="nf"><option>0</option><option>1</option><option>2</option><option>3</option></select></label>
-  <label>Forks button <select id="ft"><option value="a">A: tab above</option><option value="b">B: under the clock</option><option value="f">F: over the clock</option><option value="c">C: bay at the left end</option><option value="d">D: end of the marker lane</option><option value="e">E: fork markers</option></select></label>
   <label>Showing <select id="mode"><option value="replay">a replay</option><option value="live">a live game</option></select></label>
 </header>
 <div class="wrap" id="wrap"><div class="stage" id="stage"><canvas class="bg" id="bg"></canvas><div class="hud" id="hud-layer"></div></div></div>
@@ -64,20 +63,19 @@ const S = { t: 70, playing: true, speed: 1, hud: 1, game: 150, res: 'fit', np: 1
   ov: { cursors: true, clicks: true, selections: true, chat: true }, sight: -1, follow: -1, scroll: 0, toast: '',
   // proposed, variation B: the forks kept (S.forks, from FORK_SEED), the one watched (S.tl, -1 the replay), the picker,
   // a fork's Delete armed by a first click, and the live game with its rewind strip open (S.rw)
-  prop: 1, nf: 2, forks: null, tl: -1, pick: false, armed: -1, mode: 'replay', rw: false, lo: false, ft: 'a' };
+  prop: 1, nf: 2, forks: null, tl: -1, pick: false, armed: -1, mode: 'replay', rw: false, lo: false };
 try { const o = JSON.parse(localStorage.getItem('hud-mockup') || '{}'); delete o.stat; Object.assign(S, o); } catch (e) {}
 const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ hud: S.hud, game: S.game, res: S.res, np: S.np, nt: S.nt, sm: S.sm, ss: S.ss, sw: S.sw,
-  prop: S.prop, nf: S.nf, mode: S.mode, ft: S.ft })); } catch (e) {} };
+  prop: S.prop, nf: S.nf, mode: S.mode })); } catch (e) {} };
 { const q = new URLSearchParams(location.search);   // screenshot switches: res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&paused,
   // and scroll=<first item>, sight=<seat>, follow=<seat>, toast=<text>, stat=1, sm=<measure>, ss=<player|team>, sx=<x>&sy=<y> (the window's place)
   if (q.has('paused')) S.playing = false; if (q.get('res')) S.res = q.get('res'); if (q.get('hud')) S.hud = +q.get('hud') / 100;
   if (q.get('game')) S.game = { off: -1, auto: 0 }[q.get('game')] ?? +q.get('game');
   for (const k of ['np', 'nt', 't', 'scroll', 'sight', 'follow']) if (q.get(k)) S[k] = +q.get(k); for (const k of ['sm', 'ss', 'toast']) if (q.get(k)) S[k] = q.get(k);
   if (q.has('stat')) S.stat = q.get('stat') !== '0';
-  // proposed: prop=0|1, nf=<forks kept>, tl=<fork watched>, pick (the picker open), mode=live, rw (the rewind strip open), lo (the forks' lanes open),
-  // ft=a..f (where the Forks button sits)
+  // proposed: prop=0|1, nf=<forks kept>, tl=<fork watched>, pick (the picker open), mode=live, rw (the rewind strip open), lo (the forks' lanes open)
   for (const k of ['prop', 'nf', 'tl']) if (q.get(k)) S[k] = +q.get(k);
-  if (q.has('pick')) S.pick = true; if (q.has('lo')) S.lo = true; if (q.get('ft')) S.ft = q.get('ft'); if (q.get('mode')) S.mode = q.get('mode'); if (q.has('rw')) S.rw = true;
+  if (q.has('pick')) S.pick = true; if (q.has('lo')) S.lo = true; if (q.get('mode')) S.mode = q.get('mode'); if (q.has('rw')) S.rw = true;
   if (q.has('sx')) S.sw = { x: +q.get('sx'), y: +(q.get('sy') || 0) }; }
 
 /* ---- the game's own state: state=<url> loads what the game dumped (tagpu_replayhud.dump, tagpu_hudstate.c) -- the screen,
@@ -171,7 +169,7 @@ function state() {
   const base = { W: w / u, H: h / u, frame: { panel: ef.panel / ud, top: ef.bar / ud, bottom: ef.bar / ud } };
   if (S.prop && S.mode === 'live') return { ...base, t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, live: { open: S.rw }, toast: S.toast, stats: { open: false } };
   const fl = S.prop ? forkList() : null, lru = fl && fl.length >= FORK_MAX ? fl.indexOf(fl.reduce((a, f) => f.seen < a.seen ? f : a)) : -1;
-  const prop = !S.prop ? {} : { T: axis(), ends: T, len: tlEnd(), fillTo: watched() ? watched().from : T, timeline: S.tl, lanesOpen: S.lo, forkTab: S.ft, picker: S.pick, armed: S.armed,
+  const prop = !S.prop ? {} : { T: axis(), ends: T, len: tlEnd(), fillTo: watched() ? watched().from : T, timeline: S.tl, lanesOpen: S.lo, picker: S.pick, armed: S.armed,
     replace: S.pick ? lru : -1, forks: fl.map(f => ({ id: f.id, name: ps[f.seat] ? ps[f.seat].name : NAMES[f.seat], from: f.from, end: f.from + f.len })) };
   return { ...base,
     t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, seats: ps, teams: tm, folded: S.fold, markers,
@@ -296,7 +294,7 @@ function frame(now) {
 /* ---- the toolbar ---- */
 $('#np').innerHTML = [...Array(15)].map((_, i) => `<option>${i + 2}</option>`).join('');
 for (const k of ['res', 'np', 'nt']) { $('#' + k).value = S[k]; $('#' + k).onchange = e => { S[k] = k === 'res' ? e.target.value : +e.target.value; if (k !== 'res') S.fold = []; save(); resize(); }; }
-for (const k of ['prop', 'nf', 'mode', 'ft']) { $('#' + k).value = S[k]; $('#' + k).onchange = e => { S[k] = k === 'mode' || k === 'ft' ? e.target.value : +e.target.value;
+for (const k of ['prop', 'nf', 'mode']) { $('#' + k).value = S[k]; $('#' + k).onchange = e => { S[k] = k === 'mode' ? e.target.value : +e.target.value;
   if (k === 'nf') { S.tl = -1; seedForks(); } S.pick = S.rw = false; S.armed = -1; S.t = Math.min(S.t, tlEnd()); save(); resize(); }; }
 seedForks();
 $('#hud').value = S.hud; $('#hud').onchange = e => { S.hud = +e.target.value; save(); resize(); };

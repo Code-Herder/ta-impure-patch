@@ -72,7 +72,7 @@ const HUD = (() => {
   const U = n => `calc(${+n.toFixed(4)} * var(--u))`;
   const rect = b => `left:${U(b.x)};top:${U(b.y)};width:${U(b.w)};height:${U(b.h)}`;
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
-  const WB_GLYPH = { export: '⇩', delete: '✕', rewind: '⟲', fork: 'Y' };
+  const WB_GLYPH = { export: '⇩', delete: '✕', rewind: '⟲' };
   const attrs = a => Object.entries(a || {}).map(([k, v]) => ` data-${k}="${esc(v)}"`).join('');
   // a part at box b; `cls` adds classes (hot, pressed, off, face), `data` adds data- attributes
   function art(part, b, inner = '', cls = '', data, style = '') {
@@ -138,9 +138,9 @@ const HUD = (() => {
     const rx = tb.x + T.w + R.gap, rw = st.W - R.r - rx, FR = frame(rw, D.h, R.part);
     const lane = place(FR, R.markers), tr = place(FR, R.track), p = st.t / st.T, pf = filled(st), M = R.markers, B = M.badge;
     const along = (w, e, f) => e + (w - 2 * e) * f;
-    // proposed: the Forks button's place in the housing (forkButton); it may take room from the marker lane and the track
-    const FB = st.forks ? forkButton(st, lane, tr, place(FR, R.time)) : null;
-    let marks = st.markers.concat(FB && FB.badges || []).map(m => {
+    // proposed: the Forks bay takes its room from the marker lane and the track
+    const bay = st.forks ? forksBay(st, lane, tr) : '';
+    let marks = st.markers.map(m => {
       const cx = along(lane.w, M.ends, m.t / st.T), s = lane.h, bb = { x: cx - s / 2, y: 0, w: s, h: s };
       const col = m.dot || (m.seat < 0 ? M.bookmark_dot : st.seats[m.seat].colour);
       return `<div class="box${m.act ? ' hot' : ''}"${m.act ? ` data-act="${m.act}"` : ''} style="${rect(bb)}"><div class="box" style="${rect({ x: B.dot, y: B.dot, w: s - 2 * B.dot, h: s - 2 * B.dot })};border-radius:50%;background:${col}"></div>`
@@ -154,8 +154,8 @@ const HUD = (() => {
       + `<div class="clip" data-fill="${fb.w}" style="${rect({ ...fb, w: fb.w * pf })}">${art(R.track.fill.part, zero(fb.w, fb.h))}</div>`
       + (st.ends < st.T ? after(fb, along(tr.w, R.track.ends, st.ends / st.T) - fb.x) : '')
       + art(ph.part, { x: phx - ph.w / 2, y: phb.y, w: ph.w, h: phb.h }, '', '', { playhead: `${tr.w} ${R.track.ends} ${ph.w}` }) + `</div>`
-      + text(`${clock(st.t)} / ${clock(st.len ?? st.T)}`, FB && FB.time || place(FR, R.time), R.time.style, R.time, null, { time: 1 })
-      + (FB ? FB.html : '') + `</div>`;
+      + text(`${clock(st.t)} / ${clock(st.len ?? st.T)}`, place(FR, R.time), R.time.style, R.time, null, { time: 1 })
+      + bay + `</div>`;
     if (st.forks) h += lanes(st, { x: rx, y, w: rw, tx: rx + tr.x, ty: y + tr.y, tw: tr.w, ends: R.track.ends }) + takeover(st, tb);
     return h;
   }
@@ -172,49 +172,26 @@ const HUD = (() => {
      A lane runs from its branch to its end on the track's own time axis, widened to its minimum to the right first; a
      line drops from its branch to the track, and the playhead's line runs up through every lane. Clicking a lane watches
      that timeline, clicking the watched one goes back to the replay. At the fork limit, while the picker is open, the
-     lane a take-over would replace is outlined (st.replace). The lanes show only while the Forks tab is open (st.lanesOpen);
-     the tab sits above the housing at the track's left end, in the plate's bottom row when it is open, so opening the
-     lanes never moves it. g: the housing's box and its track's span, in units ---- */
-  /* the Forks button, one of five places (st.forkTab): 'a' a tab above the housing (drawn by lanes()); 'b' the lower part
-     of the time recess, the time above it; 'f' its upper part, the time below it; 'c' a bay at the housing's left end, taking that width from the marker lane and
-     the track; 'd' the right end of the marker lane, which it shortens; 'e' no button, a fork badge in the marker lane at
-     each branch, any of which opens and closes the lanes. lane, tr and tm are the housing's marker lane, track and time
-     recess, changed in place where the button takes room; returns its html, the time's new box and the badges */
-  function forkButton(st, lane, tr, tm) {
-    const T = L.proposed.forks.toggle, n = st.forks.length, open = st.lanesOpen && n > 0;
-    const label = st.timeline >= 0 && !st.lanesOpen ? `Watching F${st.forks[st.timeline].id}` : `Forks · ${n}`;
-    const ico = { ...T.icon, name: open ? T.icon.open : T.icon.closed };
-    const btn = (b, html, icon = ico) => button({ act: 'lanes', icon, text: html != null && { ...T.text, html }, off: n ? 0 : T.off }, T, b, st, open);
-    switch (st.forkTab) {
-      case 'b': { const C = T.clock, th = tm.h * C.split;
-        return { time: { ...tm, h: th }, html: btn({ x: tm.x + C.pad, y: tm.y + th, w: tm.w - 2 * C.pad, h: tm.h - th - C.pad }, label) }; }
-      case 'f': { const C = T.clock, bh = tm.h * (1 - C.split);
-        return { time: { ...tm, y: tm.y + bh, h: tm.h - bh }, html: btn({ x: tm.x + C.pad, y: tm.y + C.pad, w: tm.w - 2 * C.pad, h: bh - C.pad }, label) }; }
-      case 'c': { const Bc = T.bay, k = Bc.w + Bc.gap, b = { x: tr.x, y: lane.y, w: Bc.w, h: tr.y + tr.h - lane.y };
-        lane.x += k; lane.w -= k; tr.x += k; tr.w -= k;
-        return { html: btn(b, null, { ...ico, ...Bc.icon }) + text(String(n), { x: b.x, y: b.y + b.h * Bc.num_y, w: b.w, h: b.h * (1 - Bc.num_y) }, T.text.style, { align: 'c' }) }; }
-      case 'd': { const D = T.lane_end, b = { x: lane.x + lane.w - D.w, y: lane.y, w: D.w, h: lane.h };
-        lane.w -= D.w + D.gap;
-        return { html: btn(b, label) }; }
-      case 'e': { const E = T.badge;
-        return { html: '', badges: st.forks.map(f => ({ t: f.from, kind: E.icon, dot: open ? E.dot_open : E.dot, act: 'lanes' })) }; }
-    }
-    return null;
+     lane a take-over would replace is outlined (st.replace). The lanes show only while the Forks bay is open (st.lanesOpen).
+     g: the housing's box and its track's span, in units ---- */
+  /* the Forks bay at the housing's left end opens and closes the lanes and counts the forks; it spans the marker lane and
+     the track and takes its width from both. lane and tr are the housing's marker lane and track, narrowed in place */
+  function forksBay(st, lane, tr) {
+    const B = L.proposed.forks.bay, n = st.forks.length, open = st.lanesOpen && n > 0, k = B.w + B.gap;
+    const b = { x: tr.x, y: lane.y, w: B.w, h: tr.y + tr.h - lane.y };
+    lane.x += k; lane.w -= k; tr.x += k; tr.w -= k;
+    return button({ act: 'lanes', icon: { ...B.icon, name: open ? B.icon.open : B.icon.closed }, off: n ? 0 : B.off }, B, b, st, open)
+      + text(String(n), { x: b.x, y: b.y + b.h * B.count.y, w: b.w, h: b.h * (1 - B.count.y) }, B.count.style, { align: 'c' });
   }
 
   // the lane plate's height with its gap above the dock: the column stands on it, since the lanes run under the column
   function lanesH(st) {
     const P = L.proposed && L.proposed.forks, n = st.forks ? st.forks.length : 0;
-    const tab = st.forkTab === 'a' ? P.lane.gap + P.toggle.h : 0;
-    return n && st.lanesOpen ? P.plate.gap + P.plate.pad[1] + n * P.lane.h + (n - 1) * P.lane.gap + tab + P.plate.pad[3] : 0;
+    return n && st.lanesOpen ? P.plate.gap + P.plate.pad[1] + n * P.lane.h + (n - 1) * P.lane.gap + P.plate.pad[3] : 0;
   }
   function lanes(st, g) {
-    const P = L.proposed.forks, Ln = P.lane, Bt = Ln.buttons, n = st.forks.length, T = P.toggle, pad = P.plate.pad;
-    const tb = { x: g.tx + T.l, y: g.y - P.plate.gap - pad[3] - T.h, w: T.w, h: T.h }, F0 = frame(tb.w, tb.h);
-    const label = st.timeline >= 0 && !st.lanesOpen ? `Watching F${st.forks[st.timeline].id}` : `Forks · ${n}`;
-    const tab = st.forkTab !== 'a' ? '' : button({ act: 'lanes', icon: { ...T.icon, name: st.lanesOpen ? T.icon.open : T.icon.closed }, text: { ...T.text, html: label },
-      off: n ? 0 : T.off }, T, tb, st, st.lanesOpen && n > 0);
-    if (!n || !st.lanesOpen) return tab;
+    const P = L.proposed.forks, Ln = P.lane, Bt = Ln.buttons, n = st.forks.length, pad = P.plate.pad;
+    if (!n || !st.lanesOpen) return '';
     const py = g.y - lanesH(st), ph = lanesH(st) - P.plate.gap;
     const X = t => g.tx + g.ends + (g.tw - 2 * g.ends) * t / st.T, lo = g.tx + g.ends, hi = g.tx + g.tw - g.ends;
     let h = art(P.plate.part, { x: g.x, y: py, w: g.w, h: ph }, '', '', { act: 'dock' }), lines = '';
@@ -237,14 +214,13 @@ const HUD = (() => {
       lines += `<div class="box" style="${rect({ x: bx - B.w / 2, y: ly + Ln.h, w: B.w, h: g.ty - ly - Ln.h })};background:${B.colour};pointer-events:none"></div>`;
     });
     const Hd = P.playhead;
-    return h + lines + `<div class="box" data-lanehead="${g.tx + g.ends} ${g.tw - 2 * g.ends} ${Hd.w}" style="${rect({ x: X(st.t) - Hd.w / 2, y: py, w: Hd.w, h: g.ty - py })};background:${Hd.colour};pointer-events:none"></div>`
-      + tab;
+    return h + lines + `<div class="box" data-lanehead="${g.tx + g.ends} ${g.tw - 2 * g.ends} ${Hd.w}" style="${rect({ x: X(st.t) - Hd.w / 2, y: py, w: Hd.w, h: g.ty - py })};background:${Hd.colour};pointer-events:none"></div>`;
   }
 
   // Take over at the playhead: a button on the transport plate, as wide as it, level with the lanes; it opens the picker
   function takeover(st, tb) {
     const T = L.proposed.forks.takeover, b = { x: tb.x, y: tb.y - T.gap - T.h, w: tb.w, h: T.h };
-    return button({ act: 'takeover', text: { ...T.text, html: `<span data-tot>Take over at ${clock(st.t)}</span>` } }, T, b, st, st.picker);
+    return button({ act: 'takeover', text: { ...T.text, html: T.label } }, T, b, st, st.picker);
   }
 
   /* the player picker, opened by Take over: every player, the one taken over is played by you from the playhead and the
@@ -515,7 +491,7 @@ const HUD = (() => {
     if (hd) { const [a, w] = hd.dataset.lanehead.split(' ').map(Number), x = a + w * p;
       el.querySelectorAll('[data-lanefill]').forEach(e => { const [b0, b1] = e.dataset.lanefill.split(' ').map(Number); e.style.width = U(Math.max(0, Math.min(x, b1) - b0)); }); }
     el.querySelectorAll('[data-lanehead]').forEach(e => { const [a, w, hw] = e.dataset.lanehead.split(' ').map(Number); e.style.left = U(a + w * p - hw / 2); });
-    el.querySelectorAll('[data-tot]').forEach(e => { const s = e.textContent.startsWith('Take') ? `Take over at ${clock(st.t)}` : clock(st.t); if (e.textContent !== s) e.textContent = s; });
+    el.querySelectorAll('[data-tot]').forEach(e => { const s = clock(st.t); if (e.textContent !== s) e.textContent = s; });
     el.querySelectorAll('[data-playhead]').forEach(e => { const [w, ends, pw] = e.dataset.playhead.split(' ').map(Number); e.style.left = U(ends + (w - 2 * ends) * p - pw / 2); });
     el.querySelectorAll('[data-time]').forEach(e => { if (e.textContent !== now) e.textContent = now; });
     el.querySelectorAll('[data-chart]').forEach(e => { const [w, h, R] = e.dataset.chart.split(' ').map(Number); e.innerHTML = chart(st, w, h, R); });

@@ -107,14 +107,10 @@ by default, `prop=0` turns it off). The DLL does not read that section, and `lay
 with `prop=0`. A part the kit has no art for yet is drawn as whitebox: a mid-grey plate with a
 dark edge, and an icon it lacks as a stand-in glyph.
 
-- **The Forks tab.** A tab above the timeline housing, at the track's left end, shows and hides the
-  lanes; they are hidden whenever a replay starts. It names the forks kept ("Forks · 3"), or the
-  fork being watched while the lanes are hidden ("Watching F3"), and is dimmed when there are none.
-  Open, the lane plate grows upward around it, so the tab never moves.
-  Where the button sits is still open; `ft=` shows six placements: `a` the tab above the housing,
-  `b` under the clock in the time recess, `f` over it, `c` a bay at the housing's left end (taking that width
-  from the marker lane and the track), `d` the right end of the marker lane, and `e` no button but
-  a fork badge in the marker lane at each branch, any of which opens and closes the lanes.
+- **The Forks bay.** A bay at the timeline housing's left end, spanning the marker lane and the
+  track, shows and hides the lanes; they are hidden whenever a replay starts. It shows the fold
+  arrow over the number of forks kept and is dimmed when there are none. The marker lane and the
+  track give up its width (`forks.bay.w` plus its gap).
 - **Lanes.** Each fork the replay keeps (at most `forks.max`, 3) is a lane on a plate above the
   timeline housing, as wide as the housing. The oldest branch is on top. A lane runs from where
   the fork branched to where it ends, on the track's own time axis. A lane narrower than
@@ -131,7 +127,7 @@ dark edge, and an icon it lacks as a stand-in glyph.
 - **The column.** The column stands on the lane plate, because the lanes run under it, so fewer
   rows fit while forks are kept.
 - **Take over.** A button as wide as the transport plate sits on top of it, level with the lanes,
-  and names the playhead's time. It opens the **player picker**, which lists every player with
+  and reads "Take over replay". It opens the **player picker**, which lists every player with
   their colour. A player defeated by the playhead is dimmed and cannot be taken. With 3 forks
   kept, the picker says which fork a take-over replaces, the one watched least recently, and
   outlines that fork's lane.
