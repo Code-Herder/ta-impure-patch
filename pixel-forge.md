@@ -1,5 +1,6 @@
 ---
 store: .data/pixel-forge
+model: gemini-3-pro-image
 size: 4K
 budget_usd: 5
 cutout: "key #FF00FF"
@@ -24,9 +25,13 @@ render**: it holds the style guide, the method, the tools and what each one meas
 3. **Render each layout with its crops**: `pixel-forge gen --ref <layout>.png:layout --ref
    <crop>.png:style`. Pixel-forge stretches a long layout to an aspect the model accepts and back,
    so the result is the layout's full canvas, ready for the cutters. Crop the layout to the part
-   first, and measure the cut: the model evens out recesses of different widths, which
-   `.data/hud-art/work/m3kit/regrid.py` sets right by stretching the flat recess interiors.
-4. **Cut and file** with the repository's tools: `gridslice.py` for one-piece parts,
+   first. The model is **Nano Banana Pro**: it keeps a layout's recess widths (Nano Banana 2 and 2.1
+   paint them all equal), at the cost of 21:9 as its widest aspect. Test at `--size 1K`; render the
+   kit at 4K.
+4. **Before cutting**: key out a sheet's labels (everything outside its cells: `.data/hud-art/work/m3kit/unlabel.py`), and scale each painting
+   to 10 px per HUD unit, or the one-piece parts outgrow the 8 MB commit limit. A flat recess painted
+   with uneven tone is levelled by column (`.data/hud-art/work/m3kit/level.py`).
+5. **Cut and file** with the repository's tools: `gridslice.py` for one-piece parts,
    `PRESSED_DARK=1.5 cut.py` for sheets, `iconcut.py` for icons, then `file.py <kit dir> <parts>`.
    Check `tools/hudart/laycheck.py` still ends "laycheck: the two agree" and capture the mockup.
 
