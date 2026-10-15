@@ -191,7 +191,14 @@ middle column) is one period of a seamless tile, painted to join its fixed neigh
 along x instead of stretching: drawn n = max(1, round(drawn length / painted length)) times, each copy
 taking an equal share of the drawn band (CSS `border-image-repeat: round stretch` for a 9-slice). Along y it
 still stretches. A part drawn much wider than it was painted keeps its wear in proportion this way;
-`tools/hudart/seamband.py` makes the band and sets the flag.
+`tools/hudart/seamband.py` makes the band and sets the flag. The mockup and the game
+(`tagpu_hudlay_expand`) draw it alike.
+
+A grid part's fixed cells keep their painted length, so the room its band has to repeat in is the drawn
+length less everything outside the band. `seamband.py` therefore widens a grid part's band to the wells it
+crosses and shortens the part to its two ends and one period: the timeline housing, painted 420 units with a
+58-unit band, became 339 units with a 195-unit period, which repeats twice at 0.92 × on a 501-unit housing
+(4K, HUD 150) where the short period showed as a rhythm of identical scratches at HUD 75 and 100.
 
 ## The rules
 

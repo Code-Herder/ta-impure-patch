@@ -10,9 +10,12 @@ tile.py's quilting, so it wraps continuously by construction. Its two joins to t
 seams through an overlap of `ov` pixels taken from the middle's own paint, so the ends keep their bevels:
   - a 9-slice's middle [l, W - r) gives up `ov` pixels at each side to the joins, and is replaced by the tile;
     the slice grows by `ov` on each side and the PNG becomes l + ov + L + ov + r pixels wide;
-  - a grid part keeps its length, so its wells stay where they were measured: one period of the tile is
-    joined into its x stretch band, `ov` pixels in from the band's start, and `xs` becomes that period; the
-    rest of the painting is left as painted.
+  - a grid part's band is first widened to the wells it crosses, `GRID_INSET` units in from their ends, and
+    the part becomes its two ends and one period: the PNG and the design shorten by what the band gave up,
+    `xs` becomes the period and every well edge right of the band moves left with the paint. Everything
+    outside the band keeps its painted length when drawn, so a grid part painted long with a short band
+    (the timeline housing: 420 units, drawn 501 at HUD 150) gives the repeat too little room: its few
+    copies stretch by up to half, or its period must be short enough to show as a rhythm.
 fill() is the operation both use, and a job script may call it to join separately painted pieces."""
 import json, os, sys
 import numpy as np
@@ -65,13 +68,23 @@ def nine(a, sl):
     return fill(body, l + ov, l + ov + L, t, ov), [t_, r + ov, b_, l + ov], L, ov
 
 
+GRID_INSET = 5    # units: clear of a recess's end wall and its shadow, so the joins take plate and recess paint only
+
+
 def grid(a, e):
     (p, q), = e['xs']                                               # one x stretch band, in design units
     s = a.shape[1] / e['design'][0]
-    x0, x1 = round(p * s), round(q * s); ov = max(8, (x1 - x0) // 12)
+    crossed = [w for w in e['wells'].values() if w[0] < q and w[0] + w[2] > p]
+    lo, hi = max(w[0] for w in crossed) + GRID_INSET, min(w[0] + w[2] for w in crossed) - GRID_INSET
+    x0, x1 = round(lo * s), round(hi * s); ov = max(8, (x1 - x0) // 12)
     t, _ = tile(a[:, x0 + ov:x1 - ov])
     L = t.shape[1]
-    out = fill(a, x0 + ov, x0 + ov + L, t, ov)
+    body = np.concatenate([a[:, :x0 + ov], np.zeros_like(t), a[:, x1 - ov:]], 1)
+    out = fill(body, x0 + ov, x0 + ov + L, t, ov)
+    cut = (x1 - ov - (x0 + ov + L)) / s                            # the units the band gave up
+    at = lambda x: round(x - cut, 2) if x >= (x1 - ov) / s else x
+    e['wells'] = {k: [at(x), y, round(at(x + w) - at(x), 2), h] for k, (x, y, w, h) in e['wells'].items()}
+    e['design'][0] = round(e['design'][0] - cut, 2)
     return out, [[round((x0 + ov) / s, 2), round((x0 + ov + L) / s, 2)]], L, ov
 
 

@@ -126,7 +126,8 @@ The owner's decisions:
 - **One HUD unit is the viewport height / 720 × the replay HUD's scale**
   (`tagpu_hudstate_present`), whatever the game's HUD scale. The engine's frame — the side
   panel's width and the bars' height at the game's HUD scale, from `tagpu_hud_live` — gives the
-  anchors, and the 9-slice and grid-sliced parts stretch to fill what is left.
+  anchors, and the 9-slice and grid-sliced parts stretch to fill what is left, except an `xtile`
+  part's x band, which repeats (*How it is built*).
 
 ## How it is built
 
@@ -256,6 +257,19 @@ The owner's decisions:
   most `HUD_MAXQUAD` = (2·`HUD_MAXBAND` + 1)² quads (`tagpu_hudlay.h`), the bound the loader
   enforces on each part's bands. The mockup composes a grid part into one image instead; at a
   cell's edge the two can differ by a pixel's filtering, and nowhere else.
+- **An `xtile` part's x band repeats** ([The replay HUD's layout](hud-layout.md), *Parts*): each
+  copy is one more quad with the band's own texture coordinates, the count rounded from the drawn
+  band's length over the painted one exactly as `hud.js` rounds it. The copies are fitted to what
+  `HUD_MAXQUAD` leaves once every cell has its quad, so a band drawn longer than that holds fewer,
+  longer copies and no cell is dropped.
+- **Verified on 2026-10-15** (MEASURED, the reference setup: a private 3840 × 2160 Xvfb, a
+  four-seat 2v2 and a ten-seat five-team recording on Town & Country and Core Prime): the game's
+  capture against the mockup fed the game's own dump at shift 0, 0, as the share of pixels
+  differing by more than 48 levels — at HUD 150 the timeline 1.50 % and the transport 2.24 % (the
+  world above them and the clock's text edges), the stats window 0.35 %; the column differs only
+  where the world shows between its rows and where the game shows a hover the dump does not
+  carry. At 125 and 75 the timeline's copies fall at the same pixels in both; the scroll bar of
+  the ten-seat column matches, thumb included.
 - **`tools/hudart/laycheck.py`** compares this file's rectangles and baselines with the mockup's
   ([The replay HUD's layout](hud-layout.md), *Text*).
 
