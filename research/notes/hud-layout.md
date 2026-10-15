@@ -181,6 +181,13 @@ HUD unit. The kinds:
 | `whole` | Stretched to its box | |
 | `icon` | Whole inside its box, keeping its aspect, centred | |
 
+A `grid` or `nine` part may carry **`xtile`**: its x stretch band (a grid's one `xs` band, a 9-slice's
+middle column) is one period of a seamless tile, painted to join its fixed neighbours, and it **repeats**
+along x instead of stretching: drawn n = max(1, round(drawn length / painted length)) times, each copy
+taking an equal share of the drawn band (CSS `border-image-repeat: round stretch` for a 9-slice). Along y it
+still stretches. A part drawn much wider than it was painted keeps its wear in proportion this way;
+`tools/hudart/seamband.py` makes the band and sets the flag.
+
 ## The rules
 
 ### Frames and the placement rule
@@ -206,7 +213,8 @@ A **placement** names a box in its frame:
 ### Parts
 
 - **Grid-sliced parts** are composed into one image per drawn size, cell by cell. The cells share
-  rounded pixel edges, so no seam can show.
+  rounded pixel edges, so no seam can show. An `xtile` part's x band cells are drawn as n copies of the band's
+  source cell, their edges rounded the same way.
 - **A tiled fill** is scaled to its drawn height inside a strip of three copies, so its edges
   resample against their neighbours. It is then copied at whole-pixel steps.
 

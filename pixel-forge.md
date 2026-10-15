@@ -28,11 +28,18 @@ render**: it holds the style guide, the method, the tools and what each one meas
    first. The model is **Nano Banana Pro**: it keeps a layout's recess widths (Nano Banana 2 and 2.1
    paint them all equal), at the cost of 21:9 as its widest aspect. Test at `--size 1K`; render the
    kit at 4K.
+   **A part longer than 21:9 is never stretched to fit**: squashing the painting back leaves its wear
+   several times wider than tall. Paint it as windows of its whitebox, each cut at exactly 21:9 and
+   stacked on one sheet (its left end, a stretch of its middle, its right end), with the open sides
+   running off the sheet's edge; then assemble the windows on the whitebox's edges and cover the gap
+   with the middle window and its mirror image, joined by `seamband.py`'s seams
+   (`.data/hud-art/work/m3kit/compose_housing.py` does this for the timeline housing).
 4. **Before cutting**: key out a sheet's labels (everything outside its cells: `.data/hud-art/work/m3kit/unlabel.py`), and scale each painting
    to 10 px per HUD unit, or the one-piece parts outgrow the 8 MB commit limit. A flat recess painted
    with uneven tone is levelled by column (`.data/hud-art/work/m3kit/level.py`).
 5. **Cut and file** with the repository's tools: `gridslice.py` for one-piece parts,
-   `PRESSED_DARK=1.5 cut.py` for sheets, `iconcut.py` for icons, then `file.py <kit dir> <parts>`.
+   `PRESSED_DARK=1.5 cut.py` for sheets, `iconcut.py` for icons, then, for every part drawn wider than it was painted, `seamband.py <kit dir> <parts>`
+   so its middle repeats instead of stretching, then `file.py <kit dir> <parts>`.
    Check `tools/hudart/laycheck.py` still ends "laycheck: the two agree" and capture the mockup.
 
 ## Prompts

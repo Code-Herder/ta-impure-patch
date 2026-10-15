@@ -4,9 +4,10 @@
 /* a part: its art is painted behind its children */
 .hud .art { position: absolute; isolation: isolate; }
 .hud .art::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; }
-/* 9-slice: the slice's edges keep their painted size in units, the middle stretches */
+/* 9-slice: the slice's edges keep their painted size in units, the middle stretches; an xtile part's middle is
+   one period of a seamless tile and repeats along x a whole number of times instead */
 .hud .art.nine::before { border-style: solid; border-color: transparent; border-width: var(--bw);
-  border-image: var(--bi) var(--bsl) fill / var(--bw) stretch; }
+  border-image: var(--bi) var(--bsl) fill / var(--bw) var(--bir); }
 .hud .art.whole::before { background: var(--bi) center / 100% 100% no-repeat; }
 .hud .art.icon::before { background: var(--bi) center / contain no-repeat; }
 /* grid-sliced parts and tiled fills are composed into one image at the drawn size */

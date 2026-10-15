@@ -86,7 +86,7 @@ const HUD = (() => {
   function vars(part) {
     const k = K[part];
     let v = `--bi:url('${url(part)}')`;
-    if (k.kind === 'nine') { const [t, r, b, l] = k.slice; v += `;--bsl:${t} ${r} ${b} ${l};--bw:${[t, r, b, l].map(x => U(x / k.scale)).join(' ')}`; }
+    if (k.kind === 'nine') { const [t, r, b, l] = k.slice; v += `;--bsl:${t} ${r} ${b} ${l};--bw:${[t, r, b, l].map(x => U(x / k.scale)).join(' ')}`; v += `;--bir:${k.xtile ? 'round' : 'stretch'} stretch`; }
     return v;
   }
   // a held button shows its pressed part, and its face sinks; released, it shows its own part again
@@ -441,7 +441,14 @@ const HUD = (() => {
     const g = c.getContext('2d'); g.imageSmoothingQuality = 'high';
     for (let i = 0; i + 1 < bx.length; i++) for (let j = 0; j + 1 < by.length; j++) {
       const dx0 = Math.round(fx(bx[i]) * px), dx1 = Math.round(fx(bx[i + 1]) * px), dy0 = Math.round(fy(by[j]) * px), dy1 = Math.round(fy(by[j + 1]) * px);
-      if (dx1 > dx0 && dy1 > dy0) g.drawImage(img, bx[i] * sx, by[j] * sy, (bx[i + 1] - bx[i]) * sx, (by[j + 1] - by[j]) * sy, dx0, dy0, dx1 - dx0, dy1 - dy0);
+      if (!(dx1 > dx0 && dy1 > dy0)) continue;
+      // an xtile part's x band (the odd cells) is one period of a seamless tile: repeated a whole number of times
+      // at its painted length in units, each copy taking an equal share of the drawn band
+      const n = k.xtile && i % 2 ? Math.max(1, Math.round((dx1 - dx0) / ((bx[i + 1] - bx[i]) * px))) : 1;
+      for (let c = 0; c < n; c++) {
+        const cx0 = dx0 + Math.round((dx1 - dx0) * c / n), cx1 = dx0 + Math.round((dx1 - dx0) * (c + 1) / n);
+        g.drawImage(img, bx[i] * sx, by[j] * sy, (bx[i + 1] - bx[i]) * sx, (by[j + 1] - by[j]) * sy, cx0, dy0, cx1 - cx0, dy1 - dy0);
+      }
     }
     return cache[key] = c.toDataURL();
   }

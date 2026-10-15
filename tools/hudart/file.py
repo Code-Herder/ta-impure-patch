@@ -10,6 +10,8 @@ Each entry carries what drawing the part needs and nothing about how it was made
   grid   a one-piece part: `design` size in HUD units, stretch bands `xs` / `ys`, measured `wells`, and
          `text`, the wells that are text zones on the plate rather than recesses;
   nine   a 9-slice: `slice` [top, right, bottom, left] in the PNG's pixels;
+  xtile  on a grid or a 9-slice: its x stretch band (a grid's one `xs` band, a 9-slice's middle) is one
+         period of a seamless tile (seamband.py) and repeats along x instead of stretching;
   tile   a strip that repeats along x;
   whole  drawn stretched to its box;
   icon   drawn whole inside its box, keeping its aspect, centred.
@@ -27,11 +29,12 @@ def entry(e, name):
     if e.get('grid'):
         d = {'kind': 'grid', 'scale': e['scale'], 'design': e['design'], 'xs': e['xs'], 'ys': e['ys'], 'wells': e['wells']}
         if e.get('text'): d['text'] = e['text']
+        if e.get('xtile'): d['xtile'] = True
         return d
     if e.get('tile'): return {'kind': 'tile', 'scale': e['scale']}
     if e.get('fixed'): return {'kind': 'icon' if name.startswith('i_') else 'whole', 'scale': e['scale']}
     if e.get('core'): sys.exit(f'{name}: a core-only fill; nothing in the chosen HUD draws one, so file.py has no kind for it')
-    return {'kind': 'nine', 'scale': e['scale'], 'slice': e['slice']}
+    return {'kind': 'nine', 'scale': e['scale'], 'slice': e['slice'], **({'xtile': True} if e.get('xtile') else {})}
 
 
 def main(a):
