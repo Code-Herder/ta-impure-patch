@@ -20,26 +20,40 @@ render**: it holds the style guide, the method, the tools and what each one meas
    - a sheet of 9-slice parts from `PLAIN=1 tools/hudart/sheets.py <spec> <out dir>`, which writes
      `parts_<sheet>.png` and `sheets.json`.
    The specs are in `tools/hudart/specs/`; a one-off spec may live beside the job's inputs.
-2. **The look is a crop of the chosen painting**, passed as a style reference: the part being made,
-   cut out of the full-dock painting the owner picked, upscaled 2x. Use `pixel-forge crop`.
-3. **Render each layout with its crops**: `pixel-forge gen --ref <layout>.png:layout --ref
-   <crop>.png:style`. Pixel-forge stretches a long layout to an aspect the model accepts and back,
-   so the result is the layout's full canvas, ready for the cutters. Crop the layout to the part
-   first. The model is **Nano Banana Pro**: it keeps a layout's recess widths (Nano Banana 2 and 2.1
-   paint them all equal), at the cost of 21:9 as its widest aspect. Test at `--size 1K`; render the
-   kit at 4K.
+2. **The look is a piece of a finished part, placed on the layout itself** beside the whiteboxes and
+   named as the reference in the prompt ("keep it exactly as it is"): a crop of the dock from
+   `art/hud/parts/`. Passed as a separate style reference instead, its content is copied into the
+   painting (an extra dock plate appeared above the parts) and the old paint is kept.
+3. **Every layout is drawn at an aspect the model takes exactly** (21:9, 16:9, 3:2, ...), so
+   nothing is stretched to fit and back: a sheet holds several parts at their true aspect, each
+   whitebox at one scale, and is laid out to fill that aspect. Render with `pixel-forge gen --ref
+   <layout>.png:layout`. The model is **Nano Banana Pro**: it keeps a layout's recess widths (Nano
+   Banana 2 and 2.1 paint them all equal), at the cost of 21:9 as its widest aspect. Test at
+   `--size 1K`; render the kit at 4K, and look at each 4K render before cutting it: one in four
+   reframed its sheet (the parts painted several times taller, the reference dropped), and a reroll
+   kept the layout.
    **A part longer than 21:9 is never stretched to fit**: squashing the painting back leaves its wear
-   several times wider than tall. Paint it as windows of its whitebox, each cut at exactly 21:9 and
+   several times wider than tall. Up to about 420 units it fits whole on a 21:9 sheet. Longer, paint
+   it as windows of its whitebox, each cut at exactly 21:9 and
    stacked on one sheet (its left end, a stretch of its middle, its right end), with the open sides
    running off the sheet's edge; then assemble the windows on the whitebox's edges and cover the gap
    with the middle window and its mirror image, joined by `seamband.py`'s seams
    (`.data/hud-art/work/m3kit/compose_housing.py` does this for the timeline housing).
+   **Paint a part at about the length it is drawn.** A 9-slice drawn far longer than any sheet cell
+   (the live strip, 787 units at HUD 150) is painted 420 units long, so the period `seamband.py`
+   learns from its middle is long enough that its wear does not read as a rhythm; one drawn at a
+   fixed size (the hover strip, 137 units) is painted at that size and does not repeat.
+   `.data/hud-art/work/m3all/` is the whole job: `make_sheets.py` draws the layouts, `cut_all.py`
+   cuts, repeats and pins slices.
 4. **Before cutting**: key out a sheet's labels (everything outside its cells: `.data/hud-art/work/m3kit/unlabel.py`), and scale each painting
-   to 10 px per HUD unit, or the one-piece parts outgrow the 8 MB commit limit. A flat recess painted
+   to 10 px per HUD unit, or the one-piece parts outgrow the 8 MB commit limit (the stats window goes in
+   at 7: at 10 it is 13 MB). A flat recess painted
    with uneven tone is levelled by column (`.data/hud-art/work/m3kit/level.py`).
 5. **Cut and file** with the repository's tools: `gridslice.py` for one-piece parts,
    `PRESSED_DARK=1.5 cut.py` for sheets, `iconcut.py` for icons, then, for every part drawn wider than it was painted, `seamband.py <kit dir> <parts>`
    so its middle repeats instead of stretching, then `file.py <kit dir> <parts>`.
+   A 9-slice's fixed ends must fit the shortest size it is drawn at: `cut.py` measures them off the
+   wear, so pin them where they do not (the scroll thumb is drawn as short as 10 units).
    Check `tools/hudart/laycheck.py` still ends "laycheck: the two agree" and capture the mockup.
 
 ## Prompts
