@@ -16,7 +16,9 @@ slots and yard bits are the engine's own on such a level, its units following th
 are checked instead of compared -- every slot a dump cell names is a live unit there whose
 footprint holds the cell, every cell of a live mobile unit's footprint names it (a structure's
 yardmap leaves some of its cells open), and every set yard bit lies inside a live structure's
-footprint. An order whose target its owner has
+footprint. The sort buckets' order is the engine's own too (tagpu_replay.c, THE SORT BUCKETS ON A
+MULTIPLAYER LEVEL): each unit's bucket +0x82 is compared, and its next +0x8E, when it is not
+carried, is checked instead (tarec.sort_chains). An order whose target its owner has
 already destroyed names no target: a unit's death keeps its owner's clock, so another owner's
 image can still name it, and the host cannot link a unit it no longer holds (ord_target); the
 owner approved that expectation on 2026-10-06. With the recorder's viewed seat
@@ -25,8 +27,8 @@ as --fork takes them (contacts). The puppet holds of `tarec compare --puppet` ap
 
 --fork N compares timeline N's first iteration, the world a takeover made, with the expected world
 at its fork_at as above, less what `tarec compare-fork` takes off (decision D2, tarec.fork_view);
-the grid's unit slots and yard bits are checked on the fork's iteration, which the host's engine
-made. Exit 0 EQUAL, 1 otherwise.
+the grid's unit slots and yard bits and the sort buckets' chains are checked on the fork's
+iteration, which the host's engine made. Exit 0 EQUAL, 1 otherwise.
 
 --chat checks each dump's message log (main+0x12EF, a leave row the comparison does not read)
 against the chat its viewer should see (tagpu_replay.c, THE CHAT OF A MULTIPLAYER RECORDING):
@@ -125,57 +127,6 @@ def compose(w, start, applied, seats):
     w.units, w.lists = units, lists
 
 
-STRUCTURE = 1 << 29     # unit +0x110: a structure, whose yard bits a footprint writer sets
-
-
-def rect(u):
-    """The cells a unit's footprint covers: +0x76/+0x78 by +0x7E/+0x80, i16 each."""
-    x, z = struct.unpack_from("<hh", u, 0x76)
-    w, h = struct.unpack_from("<hh", u, 0x7E)
-    return {(cx, cz) for cx in range(x, x + w) for cz in range(z, z + h)}
-
-
-def structure(u):
-    return struct.unpack_from("<I", u, 0x110)[0] & STRUCTURE
-
-
-def footprints(dw):
-    """Every cell a live structure of the dump covers."""
-    return set().union(*(rect(u) for u in dw.units.values() if structure(u)))
-
-
-def occupancy(w, dw):
-    """The grid's unit slots and yard bit are the engine's on a mode-3 level (tagpu_puppet_begin,
-    engine_cells): the expected cells take the dump's, and the module's checks stand in for the
-    comparison. The differences those checks find."""
-    out = []
-    cb = tarec.REC_CELL_BYTES
-    yards = footprints(dw)
-    rects = {slot: rect(u) for slot, u in dw.units.items()}
-    for slot, u in sorted(dw.units.items()):
-        if structure(u):
-            continue
-        for cx, cz in sorted(rects[slot]):
-            i = (cz * w.gw + cx) * cb
-            if not (0 <= cx < w.gw and 0 <= i < len(dw.grid)) or \
-                    slot not in struct.unpack_from("<HH", dw.grid, i):
-                out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
-                           "does not name it")
-    for i in range(0, len(dw.grid), cb):
-        c = i // cb
-        xz = (c % w.gw, c // w.gw)
-        w.grid[i:i + 4] = dw.grid[i:i + 4]
-        w.grid[i + 0x0C] = (w.grid[i + 0x0C] & ~2) | (dw.grid[i + 0x0C] & 2)
-        for slot in struct.unpack_from("<HH", dw.grid, i):
-            if slot and slot not in dw.units:
-                out.append(f"occupancy: cell {xz} names slot {slot}, not live")
-            elif slot and xz not in rects[slot]:
-                out.append(f"occupancy: cell {xz} names slot {slot}, outside its footprint")
-        if dw.grid[i + 0x0C] & 2 and xz not in yards:
-            out.append(f"occupancy: cell {xz} holds a yard bit outside every live structure")
-    return out
-
-
 CONTACT = 0x1700        # unit +0x110 bits 8-10 and 12, the viewed seat's scan history (tarec.puppet_view)
 
 
@@ -228,7 +179,7 @@ def fork(path, n):
     unseen = contacts(a, b, scan)
     tarec.fork_view(a, b, h, c["header"])
     gnames = tarec.globals_names(tarec.globals_list(h.get("globals"))[2])
-    stale = occupancy(a, b)
+    stale = tarec.occupancy(a, b) + tarec.sort_chains(a, b)
     lines, _ = a.differences(b, h["tables"], c["header"]["tables"], gnames=gnames,
                              limit=1 << 30)
     lines += stale
@@ -380,7 +331,7 @@ def main(argv):
         tarec.puppet_hold(w, held)
         tarec.globals_hold(w, gslots)
         tarec.globals_hold(dw, gslots)
-        stale = occupancy(w, dw)
+        stale = tarec.occupancy(w, dw) + tarec.sort_chains(w, dw)
         lines, _ = w.differences(dw, h["tables"], dh["tables"], gnames=gnames, limit=1 << 30)
         lines += stale
         n = len(lines)

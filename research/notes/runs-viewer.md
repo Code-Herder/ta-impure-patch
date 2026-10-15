@@ -18,14 +18,14 @@ it once it carries the folder.
 
 ## A run
 
-A run is planned up front as **items** (fixtures, setups) of **steps** (lanes, stages). A run with
+A run is planned up front as **items** (test groups, setups) of **steps** (tests, stages). A run with
 no items of its own (a landing, a tacli game) has one item named `""`.
 
 | step state | meaning |
 |---|---|
 | `planned` | not started; `after` names the steps of its item it waits for |
-| `running` | started; carries `instance`, `display`, and a lane's `gt` / `gt_target` |
-| `done` | ended with no verdict of its own: a lane whose checks run later |
+| `running` | started; carries `instance`, `display`, and a game test's `gt` / `gt_target` |
+| `done` | ended with no verdict of its own: a test whose checks run later |
 | `pass` / `fail` | ended with a verdict |
 | `unrun` | could not run, or never started because the run stopped |
 | `skipped` | not needed, with the reason in `detail` |
@@ -73,12 +73,15 @@ null object whose calls do nothing. No file a tool reads is written by it.
 ## What each producer reports
 
 **tareplay** (`run`, `landing`, `broad`, `measure`, `takeover`; `forks` and `rewind` write none).
-Items are the fixtures; steps are each fixture's lanes (`L` first, every other lane after `L`, `F`
-after `K`) on the `game` pool of `-j` workers, ordered as a free worker takes them (`LANE_ORDER`,
-then the fixtures' `L` order), and a `checks` step after all of them on the `offline` pool, which
-never waits for a game (`measure` has no checks). A lane ends `done`, or `fail` (a `Failed`) or
-`unrun` (`CouldNotRun`, or anything else) with the first line of its reason; the lanes it would
-have queued then end `unrun` too (`L` queues all the others, `K` its `F`). A fixture's checks
+Items are the test groups; steps are each test group's tests
+([*Terms*](tadr-port/demo-recorder-completeness.md#terms)) under the one-letter ids tareplay's code
+still writes, which the pane shows as the tests' names: record (`L`) first, every other test after
+it, follow (`F`) after takeover (`K`), on the `game` pool of `-j` workers, ordered as a free worker
+takes them (`LANE_ORDER`, then the test groups' record order), and a `checks` step after all of
+them on the `offline` pool, which never waits for a game (`measure` has no checks). A test ends
+`done`, or `fail` (a `Failed`) or `unrun` (`CouldNotRun`, or anything else) with the first line of
+its reason; the tests it would have queued then end `unrun` too (record queues all the others,
+takeover its follow). A test group's checks
 end `fail` with every failing check's label and first line, `unrun` when none ran, else `pass`.
 `landing`'s `UNCOVERED` lines and `broad`'s unexercised features, sites and tables are the run's
 `problems`. The run ends `pass`, `fail` or `unrun` by the exit status, `stopped` after SIGTERM or
@@ -86,7 +89,7 @@ Ctrl-C.
 
 GameTime is reported **only where the harness already learns it**: each pause it takes
 (`wait_paused`) and each `Worker.gametime()` peek it makes. No peek is added for the viewer, so the
-gate's pacing is what it was. A lane's `gt_target` is the fixture's end for `L` (and for `P` under
+gate's pacing is what it was. A test's `gt_target` is the test group's end for `L` (and for `P` under
 `measure`), `Tlast` for `P`, `Tlast + CONTINUE` for `R`, `T1` for `Q`; `K`, `F`, `X`, `U` and `W`
 have none.
 
@@ -125,24 +128,24 @@ Each step's expected seconds are the **median of its last five** finished times 
 tool, item, step and **variant** (tareplay: `gs<speed>-turbo<k>`, `-cover` on the coverage build;
 tacompat: its watch, battle and network seconds). A running step is left the longer of its
 expected time less its elapsed time and, where it has two GameTime readings, the time their rate
-takes to its target: history knows a lane's tail after its last GameTime (dumps, collection, the
-exit), the rate knows a lane running slower than it ever has. The steps left are then laid onto
+takes to its target: history knows a test's tail after its last GameTime (dumps, collection, the
+exit), the rate knows a test running slower than it ever has. The steps left are then laid onto
 the run's pools in the tool's queue order, each after the steps it waits for; the estimate is when
-the last one ends. A step with no history of its own (a new fixture, the first run of a variant)
+the last one ends. A step with no history of its own (a new test group, the first run of a variant)
 borrows the median of the same step over the tool's other items in that variant, each item
 counted once; a step with none at all counts as zero and the estimate becomes a lower bound (`≥`);
 with nothing known there is none.
 
 MEASURED 2026-10-09, three runs of `tareplay.py run secondary-orders c2-weapon-keys -j 2` (two
-lanes at once, about two minutes): with the second and third run's history, the estimate read at
+tests at once, about two minutes): with the second and third run's history, the estimate read at
 15, 30, 45, 61, 76 and 91 s into the third was 76, 86, 71, 56, 54 and 32 s against 114, 99, 84,
 68, 53 and 38 s actually left. It reads low early by the workers' start-up (each worker creates
-its instance and starts its Xvfb before its first lane, about 20 s here), which is no step, and
-converges as the lanes end.
+its instance and starts its Xvfb before its first test, about 20 s here), which is no step, and
+converges as the tests end.
 
-MEASURED 2026-10-09, the 39-fixture `tareplay.py landing` at `-j 8` on the coverage build: planned
+MEASURED 2026-10-09, the 39-test-group `tareplay.py landing` at `-j 8` on the coverage build: planned
 from scratch with the history its own run left, the estimate is 832 s against the 842 s it took.
-With one fixture's history removed (`battle-los`), its lanes borrow 154 s against its own 199 s.
+With one test group's history removed (`battle-los`), its tests borrow 154 s against its own 199 s.
 
 ## The viewer
 
@@ -150,18 +153,40 @@ The mod reads its session's folder every two seconds, re-reading a file only whe
 and the folders of the sessions written in the last 24 hours for their running runs. A run's
 liveness is read from `/proc`, as above. Nothing in it writes a file a tool reads or acts on a run.
 
-- **The pane** (`/runs`): this session's open runs and its last five ended ones, each with the runs
-  filed under it. A running run is open, an ended one folded unless it did not pass (fail, unrun,
-  stopped, died, abandoned, exited); a press on a run's line opens or folds it. Inside: the run's problems,
-  then each started item (a running item lists its steps — instance, GameTime against target, time
-  — and an ended one only what went wrong, each failed or unrun step with its reason and each
-  failed check), the planned items on one line, and the tool's report once it ended. Other
-  sessions' running runs sit under one folded line, `other sessions: N running`, labelled by
-  worktree. The pane opens by itself for a new run of this session only where it docks beside the
-  transcript (the fullscreen layout); a tacli game never opens it.
+- **The pane** (`/runs`): two sections, **IN PROGRESS** (this session's running runs) and **DONE**
+  (its last five ended ones, newest first), each run with the runs filed under it, then the other
+  sessions' running runs under one folded line, `OTHER SESSIONS (N running)`, labelled by
+  worktree. A running run is open, an ended one folded unless it did not pass (fail, unrun,
+  stopped, died, abandoned, exited); a press on a run's line opens or folds it. A section's titles
+  are padded alike, so a DONE row reads as a column: outcome, time taken, when it ended, then
+  how far it got when that was short of the plan, and its failures. Inside a running run: its
+  problems, a bar of its **tests ended** — a test is a step on one of the run's worker pools, so a
+  test group's checks are not one — and beside it the tests ended, the **items passed** (a test
+  group counts once its checks have a verdict), the failures and the estimate; a run with no items
+  of its own (a landing) counts its steps instead. The bar moves with every test, where a count of
+  verdicts sits at zero until the first test group's checks end. Its items are grouped:
+    - **in progress** — one row each: first the items playing a test on a worker pool (every ended
+      test as its name and glyph, a running test with its GameTime against its target, or its
+      time), then, dimmed, the items waiting for a worker between tests, with their ended tests and
+      `next:` the ones queued in the order a worker takes them (the journal's `order`). An item
+      keeps its row from its first test to its last;
+    - **checking** — an item whose only running steps wait for no worker (tareplay's `checks` on
+      `offline`): one line of names;
+    - **done** — the count passed and failed, each item that did not pass by name with every failed
+      or unrun step and check, and the passed ones behind their own folded line (`▸ ✓ N passed`),
+      each with its checks and wall time when opened;
+    - **planned** — one line of names.
+
+    An ended run keeps the same groups, with what it stopped in as **cut short** and what it never
+    reached as **not started**, and adds the tool's report. A `checks` step that failed (or could not
+    run) with no reason of its own is the verdict of the checks its item lists by name, so it is
+    neither listed nor counted beside them. The pane opens by itself for a new run of this session
+    only where it docks beside the transcript (the fullscreen layout); a tacli game never opens it.
+
 - **The band** above the prompt, while anything runs: a row per running run of this session, with
   the progress of a child run that is running after it (`landing … › tareplay landing …`), and one
   row for the other sessions. It sits under whatever else draws there.
+
 - **Toasts**: a run of this session ended (its state, time and first failure), and its first
   failure while it runs. A tacli game stopped with `tacli stop` raises none; one that exited on its
   own does.
@@ -171,9 +196,9 @@ liveness is read from `/proc`, as above. Nothing in it writes a file a tool read
 - **No GameTime for an ad-hoc tacli game.** Nothing polls it, and the viewer must not: `tacli
   peek` has one trigger file per instance, so a poll would race the session's own peeks and add a
   log line each time. A DLL heartbeat file is what would close it.
-- A lane's GameTime moves only at its pauses and the harness's own peeks; between them the
+- A test's GameTime moves only at its pauses and the harness's own peeks; between them the
   estimate counts down.
 - The estimate leaves out the workers' start-up, and `-j` is not part of the variant: a run at
-  another `-j` uses the same history. A borrowed lane time is the median over fixtures whose
-  lanes differ in length (an `L` lane ran 58 to 141 s on the coverage build).
+  another `-j` uses the same history. A borrowed test time is the median over test groups whose
+  tests differ in length (a record test ran 58 to 141 s on the coverage build).
 - Another session's run is shown only while it runs.

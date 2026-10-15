@@ -59,6 +59,13 @@ ROLES = [
     ("LAYER", 1),                                       # the mover's +0x2E: the layer in bits 0-1
     ("TYPE", 2),                                        # the engine's type index
     ("COUNT", 0),                                       # a countdown: one less each iteration, down to 0
+    ("OWNER", 4),                                       # the ledger's owner +0xEC, a player's ID
+    ("EREQ", 4), ("EGRANT", 4),                         # the ledger's energy requested and granted
+    ("MREQ", 4), ("MGRANT", 4),                         # its metal requested and granted
+    ("HP", 2),                                          # the hit points +0x108
+    ("BUILD_LEFT", 4),                                  # the build fraction left +0x104, a float
+    ("HPPCT", 1), ("HPPCT30", 1),                       # the HP percentage now, 30 ticks ago
+    ("BUCKET", 4),                                      # the sort bucket +0x82, as its ID
 ]
 ROLE_NUMBER = {name: i for i, (name, _) in enumerate(ROLES)}
 MULTI = ("PLAIN", "COUNT")      # the roles more than one row may take

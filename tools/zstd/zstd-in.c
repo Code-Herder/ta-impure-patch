@@ -20,20 +20,20 @@
  */
 /*
  * The demo recorder's configuration of upstream's build/single_file_libs/zstd-in.c (zstd 1.5.7).
- * The recorder compresses at level 3 and decompresses, nothing else, so the amalgamation keeps
- * only what those two need; each line below that differs from upstream's says what it removes.
+ * The recorder compresses at two levels and decompresses, nothing else, so the amalgamation keeps
+ * only what those need; each line below that differs from upstream's says what it removes.
  *
- * The strategies: level 3 is ZSTD_dfast in every source size class (lib/compress/clevels.h), and
- * fast and dfast stay in, so these remove the greedy, lazy and binary-tree match finders and
- * change no byte the recorder writes. A level that would need an excluded strategy cascades down
- * to dfast (ZSTD_adjustCParams_internal), so a wrong level costs ratio, never a failure.
+ * The strategies: level 3 (ZSTD_dfast in every source size class, lib/compress/clevels.h) for
+ * the blocks packed one at a time, level 19 (ZSTD_btultra2, which needs the btopt and btultra
+ * match finders that stay in) for the stream's runs and the snapshot chain. Greedy and the lazy
+ * strategies are never selected, so they are left out. A level that would need an excluded
+ * strategy cascades down to dfast (ZSTD_adjustCParams_internal), so a wrong level costs ratio,
+ * never a failure.
  */
 #define ZSTD_EXCLUDE_GREEDY_BLOCK_COMPRESSOR
 #define ZSTD_EXCLUDE_LAZY_BLOCK_COMPRESSOR
 #define ZSTD_EXCLUDE_LAZY2_BLOCK_COMPRESSOR
 #define ZSTD_EXCLUDE_BTLAZY2_BLOCK_COMPRESSOR
-#define ZSTD_EXCLUDE_BTOPT_BLOCK_COMPRESSOR
-#define ZSTD_EXCLUDE_BTULTRA_BLOCK_COMPRESSOR
 /* ZSTD_getErrorName returns one fixed string: the recorder names each refusal itself. */
 #define ZSTD_STRIP_ERROR_STRINGS
 /*

@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 9 and its readers take format 9 alone (*The file*, below).
+The recorder writes recording format 24 and its readers take format 24 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -137,11 +137,27 @@ check is not vacuous.
 One file per recording, `replays\<date> <time> <map>.imprec` in the game's folder, or its first free
 ` (2)`…` (9)` variant, written by the writer thread alone. It is `IMPREC\r\n` and then blocks: a
 32-byte header — the block's kind, its flags, the first and last GameTime it covers, its raw and
-stored sizes, a CRC-32 of the stored bytes and one of the header — and the payload: exactly one
-zstd frame of the raw bytes (level 3, the vendored zstd 1.5.7 in `src/zstd.c`) when that is
-smaller, else the bytes stored. The header, the end and the timelines blocks are always stored, so
-a header reads without zstd. `inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 9; a reader takes
-that format alone:
+stored sizes, a CRC-32 of the stored bytes and one of the header — and the payload, packed with
+the vendored zstd 1.5.7 (`src/zstd.c`) in one of three ways (`inc/tagpu_recfmt.h`, *THE RUN AND
+THE CHAIN*):
+
+- **a sectioned stream block** is a chunk of its *run*'s zstd frame. A run is the sectioned blocks
+  from an `RBF_FRAME_RESET` block to the next reset, stream block of plain records or snapshot
+  (blocks of other kinds between them, `RB_EXACT` and `RB_CONTRIBUTIONS`, neither end nor touch a
+  run): one frame at level
+  19, with a window of at most 2^20, no content size and no checksum, begun at the reset block and
+  never ended, each block's bytes flushed at its end. A block decodes only after every chunk of its
+  run before it, as its codec frames do; it is never stored.
+- **a snapshot** is a *key*, one zstd frame of its own at level 19 or the bytes stored, or
+  `RBF_CHAINED`, one frame whose raw-content prefix is the records of the segment's snapshot before
+  it. The segment's first snapshot and every tenth after it are keys (`REC_CHAIN_MAX` 9 links), as
+  is any whose chained frame fails the writer's check; a writer without the codec writes every
+  snapshot as a key at level 3.
+- **every other block** is exactly one zstd frame of the raw bytes at level 3 when that is smaller,
+  else the bytes stored. The header, the end and the timelines blocks are always stored, so a
+  header reads without zstd.
+
+`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 20; a reader takes that format alone:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
   GameTime, the wall clock, the unit array's slots and the units each player may have, the unit
@@ -149,16 +165,41 @@ that format alone:
   registry's levers and their text, the exclusion file's SHA-256, and the recorded declarations
   (index, class, key, row size, flags and name), so a reader can walk their images; the main
   menu's version text, the mounted archives and the mod's fingerprint (*What the Replays browser
-  asks of a recording*); and the unit frame's constants (below): `RT_CODEC`, `RT_PHYSICS`, `RT_AIR`;
+  asks of a recording*); the unit frame's constants (below): `RT_CODEC`, `RT_PHYSICS`, `RT_AIR`, `RT_TYPES`;
+  and in a skirmish recording `RT_HOLD`: the refresh interval (300 ticks), the hold table's
+  masks and its SHA-256, what the stream may hold between two refreshes, and `RECL_SPRAYS`, its
+  nano sprays written as spray sessions (the lossy filter,
+  [making recordings smaller](demo-recorder-size.md#l5-the-lossy-plan-measured-offline));
 - **a minimap block** right after it, when the map has a picture;
-- **stream blocks** of whole iterations, each ending at the first iteration past 2 MiB or at 30
-  iterations, and before every snapshot;
-- **a snapshot block** every 900 iterations (30 seconds at normal speed), built from the writer's
-  copy: since format 4 (S3b) with only the cells that differ from the first iteration's grid and
-  no table span that is all zero. The interval is chosen at the size plan's L4, against the
-  one-second seek target (*Decided 2026-10-01* set the target): format 9's seeks read in under a
-  second except in the first interval of the two largest battles measured, 1.22–1.26 s, and one
-  of 1.01 s in the second ([making recordings smaller](demo-recorder-size.md#l2-the-pool-frame-measured));
+- **stream blocks** of whole iterations, written by the lossy filter from the writer's exact
+  records, each ending at the first iteration past 2 MiB, at 30 iterations, or at a refresh — the
+  segment's first two iterations and then every GameTime 1 modulo the interval (the first
+  iteration past one a gap skips; `reclossy_is_refresh`), where the stream's world
+  equals the writer's copy, checked — which flags it `RBF_REFRESH`; under the test lever
+  `tagpu_rec.exact` each is followed by an `RB_EXACT` block of its exact records, which a reader
+  of the stream skips. A skirmish stream leaves out each nano spray its unit's spray session
+  (`RK_SPRAY_SESSION`, written after the iteration's last record) predicts: the unit's spray of 1,
+  2 or 4 GameTimes before, its point moved with the unit's position change when the session
+  follows it; every reader makes it again after the iteration's events from a table of each
+  unit's sprays of the last four GameTimes, which a snapshot's iteration empties (it writes every
+  spray and closes every session) and every reader empties there too;
+- **a snapshot block** at the first refresh 1,800 iterations or more after the last
+  (`SNAPSHOT_TICKS`, 60 seconds at normal speed), built from the writer's copy, with only the cells that differ from the grid at the end of the
+  segment's first iteration (the base), only the wreck records that differ from the pool then (the
+  wreck base; a record now zero included), both bases taken there by the writer's
+  `iteration_done` and the reader's `tick_take`, and no table span that is all zero. The copy's
+  grid takes exactly the cells every reader takes as images: the writer refuses cells after an
+  event of their iteration outside the feature tick's call, and `RK_GRID` anywhere but before the
+  first iteration's events (`feature_record`), so a seeking reader's grid is the stream's by
+  construction. The level load links every free wreck
+  record to its neighbours, so none is zero and a snapshot that stored every record that is not
+  zero stored the whole pool; against the base the battle's 8 snapshots carry 5,524 wreck records
+  instead of 65,536. A snapshot that carries more records than differ reads the same; a dump
+  carries every record that is not zero, read over a zero pool. The interval is the owner's
+  choice at the size plan's L4 (2026-10-10): a seek reads at most one interval from a snapshot,
+  261–265 ms at worst on a light four-player hour and 538–550 ms on a heavy one, and about 1.7 s
+  of decode in the big battle's opening, so the one-second target is relaxed for dense battles
+  ([making recordings smaller](demo-recorder-size.md#l4-the-measured-hours-the-snapshot-interval-and-r1));
 - **the end block**: why the recording ended, the last GameTime, the iterations, the corrections,
   the id rows found outside their tables, the most the ring held, the game's end flags, each
   seat's result, first commander death and elimination, and the stream blocks the codec
@@ -169,13 +210,31 @@ a file with no end block is incomplete.
 
 **The sectioned container.** A stream block with `RBF_SECTIONS` holds, in place of its records, a
 container that decodes to exactly those records, so everything that reads a block's payload — the
-C reader's `apply`, `tarec.py`, `recsize.py` — sees the records as before. It is a 36-byte
+C reader's `apply`, `tarec.py`, `recsize.py` — sees the records as before. It is a 40-byte
 `RecSecHead` (the payload's bytes, the iterations, the section count and each section's length),
-then seven sections: the record kinds in payload order as runs; the **unit frame**, which makes
-every `RK_UNIT_DELTA`; the **pool frame**, which makes every `RK_PROJ_HEAD`, `RK_PROJ` and
-`RK_PROJ_DELTA`; and the bodies of the cell, order, event and every other kind, each verbatim
-behind a varint length. A kind added later falls into the last section on both sides
-(`rec_section_of`), with no table to update.
+then eight sections, in this order: the record kinds in payload order, each iteration's as a
+*pattern* of runs (`RCS_KINDS`, below); the
+**unit frame**, which makes every `RK_UNIT_DELTA` (`RCS_UNITS`); the **pool frame**, which makes
+every `RK_PROJ_HEAD`, `RK_PROJ` and `RK_PROJ_DELTA` (`RCS_PROJ`); the **cells frame**
+(`RCS_CELLS`, every `RK_CELLS`), the **orders frame** (`RCS_ORDERS`, every `RK_ORDERS`) and the
+**events frame** (`RCS_EVENTS`, `RK_EV_CREATE..RK_EV_DEATH_END`, `RK_EV_NET_CREATE`, `RK_EV_SLICE`,
+`RK_EV_QUERY` and `RK_EV_YARD`); the bodies of every other kind verbatim, each behind a varint length (`RCS_OTHER`: the block's first
+tick -- iteration i's GameTime is the first's + i, and a block whose GameTimes are not consecutive
+is written as records -- the unit images and gones, the tables, the perspective kinds and the
+rest); and the **state frame**
+(`RCS_STATE`, every `RK_GLOBALS`, `RK_GLOBALS_DELTA`, `RK_PLAYER`, `RK_PLAYER_DELTA`, `RK_WRECK`
+and `RK_FEATURES`). A kind added later falls into `RCS_OTHER` on both sides (`rec_section_of`),
+with no table to update.
+
+**The kinds** (`tagpu_recfmt.h`, *RCS_KINDS*). Each iteration's pattern is a reference into the
+run's last 16 patterns (a byte, 1..16, the entry moving to the front) or a new one (0, its length,
+its bytes). A pattern is the iteration's runs, a varint kind and a varint count each, with two
+markers that stand for records no frame codes -- 0 an empty feature tick, its root and end the
+bodies of the run's last explicit one, and 0xFFFF an `RK_FEATURES` that is the state frame's
+prediction -- and no count on the first run of three groups, whose totals the frames give: the
+iteration's `RK_TICK` (1), its `RK_UNIT_DELTA` (the unit frame's changed units) and its `RK_PROJ`
+and `RK_PROJ_DELTA` together (the pool frame's changed records). A reader fills a group's count
+once its frame has made the iteration and refuses a group whose other runs reach its total.
 
 **The unit frame** (`src/tagpu_reccodec.c`) keeps, per slot, the image at the end of the previous
 iteration, the one before it, five lanes of the one before that and which of four candidates last
@@ -185,30 +244,52 @@ lanes by the header's `RT_CODEC`, the rows of `tagpu/ddraw/replay-lanes.tsv` (11
 `tools/replay-lanes-gen.py` checks the file and generates `inc/tagpu_reclanes.h`), and the rules
 find their lanes by role, never by offset; since each recording carries its own table, editing the
 TSV never orphans a file, and a wrong width costs size only. A unit is listed in an iteration only
-when a lane differs from its prediction, and then as residuals per lane. A unit *at rest* — its
+when a lane differs from its prediction, and then as residuals per lane. Which units an iteration
+lists, each one's lane mask and its residuals are one range coder's decisions, each under a context
+both sides keep (the codec's *THE UNIT CODER*): every visited unit whether it is listed (a resting
+one whether it is woken), under its last mask, its streak of listings and how long since its last
+one; a mask from the masks its last mask was followed by, or the run's kept masks, or new; a
+residual from a cache of recent values kept by unit type and lane, or its length and bits. A
+reader refuses a block whose unit coder work -- a decision 1, a raw bit 1 and 128 for each unit
+the frame evaluates -- passes 2^28 (`RECC_WORK`), which bounds any block's decode to about 1.6 s
+under Wine whatever its bytes hold, and the writer writes such a block as records. A unit
+*at rest* — its
 image equal to the two before it and to the third's lanes, and either not moving or with a move
-stamp older than the step before — is skipped without evaluating it, which is exact because it is a
-fixed point of every rule (the argument beside `slot_advance`). The rules — heading by turn rate, ground
-velocity from the sine table, position by velocity, the footprint and sight cells, the claim and
-move stamps, the countdowns, and for aircraft the air step's velocity, speed, smoothed acceleration
-and bank — and the engine facts behind each are in the engine map's
+stamp older than the step before, with its ledger's requested and granted zero, and, for a type
+with an `RT_TYPES` row, with its two HP percentages equal to its HP's — is skipped
+without evaluating it, which is exact because it is a
+fixed point of every rule (the argument beside `slot_advance`). The rules — heading by turn rate
+and the turn rate's one-step blip, ground
+velocity from the sine table, position by velocity, the footprint and sight cells, the sort bucket,
+the claim and move stamps, the countdowns, the resource ledger's requested and granted, the hit
+points while built and the HP percentages every 30 ticks, a ground unit's speed against the
+slope, and for aircraft the air
+step's velocity, speed, smoothed acceleration and bank — and the engine facts behind each are in the engine map's
 [*The demo recorder's unit frame*](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
-They are integer arithmetic only, so the writer thread's x87 precision does not matter and the
+They are integer arithmetic only (the ledger's float sum included, `reccodec_f32_add`), so the writer thread's x87 precision does not matter and the
 Python reader (`tools/replay/reccodec.py`, an independent implementation in numpy and numba)
 agrees with the C one byte for byte. The capture writes the constants the rules need into the
 header at the recording's start, on the game thread: `RT_PHYSICS` (gravity `main+0x14263`, sea level
-`main+0x1427F`, LosType bit 2 at the segment's start) and one `RT_AIR` row per aircraft type (def
-`+0x241` bit 11; its sight height `+0x170` and the five flight fields), at most 1,024 rows; a type
-without one is predicted as a ground unit, which costs size only.
+`main+0x1427F`, LosType bit 2 at the segment's start, the sort buckets' columns `main+0x142A3`),
+one `RT_AIR` row per aircraft type (def
+`+0x241` bit 11; its sight height `+0x170` and the five flight fields), at most 1,024 rows, and
+`RT_TYPES`: the ground step's slope table (the 11 bytes at `0x505200`) and one row per unit type
+from index 0 (its sight height, maximum HP `+0x1FA`, maxvelocity, brake rate and acceleration),
+at most 2,048 rows and as many as the header has room for. A type without an `RT_AIR` row is
+predicted as a ground unit, and one without an `RT_TYPES` row keeps generic lanes for the
+hit points, the percentages, the speed and the sight row, which costs size only.
 
 **The pool frame** (`src/tagpu_reccodec.c`, THE POOL FRAME) codes the projectile pool by identity.
 The engine's compaction keeps the survivors in order at the front of the pool and appends at the
 count, so each iteration is written as its new count and extent, the old records that died (as
 gaps), the births (the count's growth) and the stale slots past the count that changed. A survivor
-is predicted dword by dword from its own last image and the one before it: position by velocity
-with the last step's drift, a guided weapon's velocity from its heading, pitch and speed (when its
-last image already follows that rule), the `+0x67` stamp as its old slot, otherwise the previous
-value or the linear extrapolation, whichever was closest last. A birth or a changed stale slot is
+is predicted from its own last image and the one before it: its bytes `0x34..0x6A` as 21 lanes at
+the record's field widths, each the previous value, the linear extrapolation or (the `+0x67`
+stamp) its old slot, whichever was closest last; then dwords 0..12, position by velocity with the
+last step's drift, a guided weapon's velocity from its heading, pitch and speed (when its last
+image already follows that rule), otherwise the previous value or the linear extrapolation.
+Byte `0x6B`, past the record, is its last image's; a block whose survivor changed it is written as
+records. A birth or a changed stale slot is
 a reference — the zero row, or a row of the new pool so far, of the old pool, of the old pool
 advanced a step, or one made from the last iteration's `RK_EV_SHOT` events and the last birth of
 that weapon — and residuals against it; a birth also takes the stamp of the slot it was appended
@@ -219,65 +300,184 @@ carries whenever the count or the extent changes. The frame's one parameter is t
 table — are the format's. The engine facts are the engine map's
 [*The demo recorder's pool frame*](../exe-reverse-engineering.md#the-demo-recorders-pool-frame-the-engine-facts-it-predicts-from-disassembled-measured-2026-10-08).
 
-**Reset points.** The frames' state crosses block boundaries only inside a run of sectioned
-blocks. Both restart — `RBF_FRAME_RESET` — at a segment's first stream block, at the first after a
-snapshot and at the first after a stream block of records, from the units and the projectile pool
-the reader holds at the end of the iteration before it. So a block inside a run decodes only after its predecessors since
-the run's reset: a reader starts at a snapshot or a segment's start (the seek already does), and a
-sectioned block met with no frame state is refused by name, never misread. The zstd frame itself is
-per block.
+**The record frames** (`inc/tagpu_recframe.h`, and one file each, `src/tagpu_recframe_cells.c`,
+`_orders.c`, `_events.c` and `_state.c`, whose opening comments hold THE BYTES, THE STATE and THE
+BOUNDS) make the bodies of their kinds, in payload order, from a section of columns: a `u8` scheme,
+a varint column count (1..32), each column's varint length, then the columns, which fill the
+section. A reader takes only its own scheme (2 in the cells and events frames, 1 in the state frame, and in
+the orders frame 2 in a segment whose header has `RT_HOLD`, else 1) and column count, and reads every
+column to its end, so a file of another build's coding is refused, never misread. The encoder walks
+each iteration's records in order after the unit and pool frames (`frames_walk`), giving each frame
+record to its frame and applying `RK_UNIT` and `RK_UNIT_GONE` to the unit copy as they come, so a
+frame sees at each record the same unit copy the decoder's walk has there (`RecFrameAt`). What each
+frame codes against:
 
-**Decode before write, and the fallback.** The writer encodes each stream block, packs it, unpacks
-those bytes and decodes them with a second codec state, started from the units alone as a reader's
-is, and writes the sectioned block only when that gives back the records byte for byte. Otherwise
+- **cells**, 9 columns: a copy of the grid, restarted at every reset point from the grid the
+  reader holds there, and the last iteration's tick input. An `RK_CELLS` is an image when no event came earlier in its iteration, else tick input
+  (the reader's rule); an iteration's images that repeat the last tick input record for record are
+  one flag byte (the recorder's `cells_tick` leaves its shadow as it was, so they usually do); other
+  records are runs as position gaps, and each cell as the six fields that differ from the copy. The
+  tick input is kept up to `CELLS_HELD`, 16,384 cells; past it the next iteration has none to repeat.
+- **orders**, 26 columns (27 with `RT_HOLD`): the last whole image of each (slot, list), in an
+  arena of at most 65,536 nodes. Without `RT_HOLD` a list re-sent at the length it had is a 22-bit
+  mask a node of the dwords that changed, and those dwords; any other list is its nodes raw. With
+  it, each node of a list re-sent whole is matched to the kept node of the same action byte
+  `+0x04` and issue time `+0x46` -- an index, then the mask and dwords against that node -- or
+  raw, since the lossy filter's held handler state lets a list lose its done head or gain a node
+  in front; a unit's `RK_UNIT_GONE` drops its slot's kept lists there. A list that does not fit
+  the arena is not kept, decided from the records alone.
+- **events**, 31 columns, one a field: IDs against the last ID; a shot's start and target point
+  against its units' positions in the unit copy; a start's arguments against the slot's last
+  arguments for that script; script names and reply texts by a dictionary of the first 256 since the
+  reset; an explicit spray against one of the slot's last four with the same bytes but the point,
+  the point as it was, moved with the unit or turned about it by its heading change, plus a
+  residual, or raw; a death's
+  image as a mask of the dwords that differ from the unit copy and those dwords.
+- **state**, 19 columns: each changed global as a delta of deltas, or as a count of Park–Miller
+  steps from its last value when the step reaches it within the search (1..16,384 steps, at most two
+  dwords an iteration: it is how the simulation RNG's seed moves), or raw; a player's changed dwords
+  as deltas of deltas; a wreck record as a mask of the u16s that changed; the feature heads as last
+  time and the cursor by the feature tick's own rule.
+
+Each frame's state — and every latch — is cleared at every reset point, except the cells frame's
+copy of the grid, which restarts from the reader's grid there; so a frame's state is a function of
+the records since the reset, of that grid and of the unit copy alone. A frame never declines mid-block: one record it
+cannot carry back byte for byte (a pad that is not zero, a length not its kind's, a value past its
+bounds) or a failed allocation latches inside it, and its section's write then declines the block
+after its iterations. The engine facts the codings rest on are the engine map's
+[*The demo recorder's record frames*](../exe-reverse-engineering.md#the-demo-recorders-record-frames-the-engine-facts-they-predict-from-disassembled-measured-2026-10-10);
+each is a predictor's, so a wrong one costs size, never data.
+
+**Reset points.** The frames' state crosses block boundaries only inside a run of sectioned
+blocks. All restart — `RBF_FRAME_RESET` — at a segment's first stream block, at the first after a
+snapshot and at the first after a stream block of records: the unit and pool frames from the units
+and the projectile pool the reader holds at the end of the iteration before it, the cells frame from
+the grid it holds there, and the orders, events and state frames empty. That grid is the same bytes
+in the writer's encoder, its check decoder and every reader by construction: each builds it from
+zero at the segment's start by one rule, an `RK_CELLS` being an image when no `RCS_EVENTS` record
+came before it in its iteration (the encoder keeps it through declined blocks too, `plain_apply`),
+and a seeking reader's comes from a snapshot built by the same rule (`tagpu_reccodec.c`,
+`reccodec_stream_block`'s INVARIANT). A restart from a grid of another size, or none, leaves the
+codec invalid: the reader refuses the block, the writer declines it. So a block inside a run decodes only after its predecessors since
+the run's reset: a reader starts at a snapshot or a segment's start (the seek already does), and a
+sectioned block met with no frame state is refused by name, never misread. The run's zstd frame
+restarts with the codec's frames and follows the same rule: the readers hold one validity for both,
+and any block they refuse leaves both to be restarted (*The file*).
+
+**Decode before write, and the fallback.** The writer encodes each stream block, packs it as its
+run's next chunk, unpacks that chunk with a decoder that has unpacked the run's chunks before it, as
+a reader's has, and decodes the container with a second codec state, started from the units alone
+as a reader's is, and writes the sectioned block only when that gives back the container and then
+the records byte for byte. Otherwise
 it writes the block as records — **declined** when the encoder met what the frame does not carry
 (a delta on a slot that is not live or that an `RK_UNIT` or `RK_UNIT_GONE` names in the same
 iteration, deltas whose slots do not ascend, a bitmap that is not exactly the dwords that differ
 from the copy; projectile records that are not exactly the changed slots below the extent,
 ascending, each once, after at most one head that does not lower the extent — a writer's
-correction names a slot twice; a block of more than 256 iterations, a frame past 16 MiB, no
-memory),
+correction names a slot twice; a record a record frame cannot carry back byte for byte; a block of
+more than 256 iterations, a frame past 16 MiB, no memory; zstd without memory for the run, which
+the writer logs apart as "no memory"),
 **MISMATCHED** when the check differed, which is a codec bug — and the next block restarts the
-frames. A codec bug therefore costs size, never data. The end
+frames and the run. A codec bug therefore costs size, never data. The end
 block counts both; the writer logs the first four of each with their GameTime range, and its
 closing line gives `stream N KB of records written as M KB; K blocks: S sectioned, D declined, X
-MISMATCHED; the codec cost T ms, at most U ms for one block`. `tareplay.py` fails a fixture
+MISMATCHED; the codec cost T ms, at most U ms for one block; the ring held R KB at most; N
+snapshots, K of them keys, packed in T ms, at most U ms for one`. `tareplay.py` fails a fixture
 whose recording's end block names any mismatch ("the stream codec did not decode back in N
 blocks") or which has no sectioned stream block at all ("the codec never ran": a writer without
 memory for the codec counts 0 declined and 0 mismatched), and reports the declined count. Without `RT_CODEC`
-and `RT_PHYSICS` (a dump, a synthetic test file), or without memory for the encoder's and check
-decoder's states, every stream block is written as records; without memory for the header's codec
+and `RT_PHYSICS` (a dump, a synthetic test file), with a grid of more than `RECC_GRID_MAX`
+(4,194,304) cells or a side past 65,535, with a wreck pool of more than 65,536 records (the bounds
+`reccodec_params` sizes the record frames by, from `RT_FEATURES`), or without memory for the
+encoder's and check decoder's states, every stream block is written as records; without memory for the header's codec
 constants the recording ends before its file is opened.
 
+**The decline on demand.** No fixture's recording declines a block of itself (a real game still
+can, for one: a frame's section past 16 MiB declines its block), so the fallback and the restart
+after it would run in no fixture. The test lever `tagpu_rec.decline` — read at attach, honoured in a test launch
+only (`tagpu_rec_lever_init`) — makes the writer's codec decline stream blocks 2, 7, 12, …:
+`reccodec_stream_block` invalidates the encoder before `reccodec_encode`, whose first branch then
+runs (`plain_apply` of the whole block, the encoder left invalid, `RECC_DECLINED`, the branch a
+block the prepass refuses takes too), and then the records block and `RBF_FRAME_RESET` on the next.
+That is one of the encoder's three decline paths.
+**No fixture reaches the other two**: the decline in mid-block, where `enc_iteration` refuses an
+iteration and `plain_apply` takes the records from it on, and the declines after the walk (the unit
+frame's `over`, a column's failed allocation, `units_write`, `pool_write`, `frames_write`), which
+return with nothing left to apply. The recording's header names the lever like every lever, and
+names it whenever the file is present (`tagpu_sim_lever` notes it before the test-launch gate
+refuses it, as it does `tagpu_hold.on`): the header says the file was there, not that blocks were
+declined; the end block's declined count says whether any were. The fixtures `codec-decline` (the `forest-fire`
+fixture's scenario, `s3a-forest-fire.json`, ended at GameTime 2400 instead of 4500) and its
+stock-limits twin `stock-codec-decline` (`replay-stock-decline.json`, ended at 2400), both with
+`"decline": true`, record under it, play, round-trip and seek across the declined blocks like any
+fixture, and their stream codec check also fails when the recording declined none. Two, because the
+landing tier asks each build that compiles a changed function to reach it. The stock twin plays a
+scenario where no weapon fires -- `resource-snapping.json`'s setup, the human seat's builders and
+one idle combat unit, the AI seat a lone solar collector across the map, with the advanced
+constructor patrolling to the map's corner and back all level so that the declined blocks carry
+images and the stock build reaches the frames' plain path -- because a seek on the stock-limits build leaves the engine's
+own explosion, debris and flying-piece pools empty (the owner-approved known gap in
+`demo-recorder-completeness.md`, scoped to `stock-secondary-orders`): a battle there fails the
+strict images gate whenever its T1 finds an explosion alive.
+
 **What a reader refuses**, the C reader and `reccodec.py` alike, each by name (the C reader with the
-block's file offset): a flag bit it does not know, `RBF_SECTIONS` on a block that is not a stream block,
-`RBF_FRAME_RESET` without it, a packed header, end or timelines block, a block whose header passed
-its CRC but whose raw or stored size passes 64 MiB (`RECR_BLOCK_MAX`), a packed body of no bytes, a
-body that is not exactly one zstd frame of its `raw` bytes with nothing after it or whose frame asks
-for a window past 2^27 (zstd's streaming default, bounded by name on both sides since the C one-shot
-decompression does not bound it); a malformed or
-repeated `RT_CODEC`, `RT_PHYSICS` or `RT_AIR` (lanes that do not tile the 0x148-byte image, a role
-missing, twice or of the wrong width, air types not ascending); a sectioned block in a segment
+block's file offset): a flag bit it does not know, `RBF_SECTIONS` or `RBF_REFRESH` on a block that
+is not a stream block,
+`RBF_FRAME_RESET` without it, a stored sectioned block, `RBF_CHAINED` on a stored block or on any
+block but a snapshot, a packed header, end or timelines block, a block whose header passed its CRC
+but whose raw or stored size passes 64 MiB (`RECR_BLOCK_MAX`), a packed body of no bytes, a body
+that is not exactly one zstd frame of its `raw` bytes with nothing after it or whose frame asks for
+a window past 2^27 (zstd's streaming default, bounded by name on both sides since the C one-shot
+decompression does not bound it); a sectioned block's chunk read anywhere but at its run's reset
+block or right after its run's previous block, a run whose first chunk is not a zstd frame header
+asking for a window of at most 2^20 with no content size, no dictionary and no checksum, and a
+chunk that does not give exactly its `raw` bytes from all of its input or that ends its frame; a
+chained snapshot with no snapshot before it in its segment, more than nine links from its key, or
+whose frame does not give its `raw` bytes against that prefix; a malformed or
+repeated `RT_CODEC`, `RT_PHYSICS`, `RT_AIR` or `RT_TYPES` (lanes that do not tile the 0x148-byte
+image, a role missing, twice or of the wrong width, an `RT_PHYSICS` not of 12 bytes, air types not
+ascending; an `RT_TYPES` whose length is not 16 + 20 per row, with more rows than `RT_UNITDEFS`'
+count, a type at or past that count, types not ascending or a pad byte not zero); a sectioned block in a segment
 whose header lacks `RT_CODEC` and `RT_PHYSICS`; a segment whose unit slots differ from the first
 header's; a container whose head, kinds, lengths, slots, masks or columns exceed their bounds, which
-leaves bytes in a section, or which decodes to another payload length; a pool frame whose
+leaves bytes in a section, or which decodes to another payload length; a unit section whose
+symbols are not exactly the carried units' (a symbol 3 or a nonzero pad included), whose symbols
+or ids pass the block's iterations times its slots but slot 0, whose rank or
+woken slot names no unit that iteration can list, whose id names no mask (0 for a carried unit or
+an empty last mask, past the list and the next new mask, a new mask the list already holds),
+whose ids or new masks are not all taken, or whose listed masks do not consume each lane's
+counted residuals exactly; a pool frame whose
 iterations are not the head's, whose count or extent leaves `[0, RT_PROJECTILES]` or whose count
 passes its extent, which names more dead slots than the old count or a dead or stale slot out of
 its range, more survivors than the new count, a reference past its section, fewer bytes than its
 codes and columns need, or bytes after them, or whose iteration's projectile records are not its
-changed slots or carry no head (or two) where the count or the extent changed; and an unflagged
-sectioned block with no frame state. Every operand of a rule is clamped before it is multiplied, so no value
+changed slots or carry no head (or two) where the count or the extent changed; a record frame's
+section with another scheme or column count, a column table cut short, a column past its section,
+bytes after the columns or left in a column, or a value past that frame's bounds (each file's THE
+BOUNDS: a run off the grid, a slot past the array, a dictionary index past the entries held, a
+step count past 16,384, a wreck index past the pool, a flag that is not 0 or 1, …), and a body a frame would make past 65,535 bytes; and an unflagged sectioned block with
+no frame state. Every operand of a rule is clamped before it is multiplied, so no value
 in a file can overflow the arithmetic.
 
-**Memory.** A codec state is 804 bytes a slot (the copy and L2, `0x148` bytes each, L3's 16, the
-winners' 128 and four flags, as `reccodec_new` allocates them) and 613 bytes a projectile record
-(the pool and the image it is making, both one iteration before, the winners, the ages, the
-advanced image and the survivors' maps), plus a 128 KB air index, 1,425,528 bytes of the pool
-frame's tables (the last birth of each of 4,096 weapon IDs, 4,096 shot events and their rows,
-and the encoder's search over at least 4,096 rows) and the scratch of the largest block it has
-met: the writer holds two (before their scratch, 14,832,808 bytes, about 14.8 MB, at 5,001 slots
-and 3,000 records; 30,912,808, about 30.9 MB, at 15,001), a reader one, made at its first
-sectioned block.
+**Memory**, MEASURED 2026-10-13 by counting what `reccodec_new` and the frames' makers allocate
+in the 32-bit build, at 5,001 slots, 3,000 projectile records, a 642 × 648 grid and 8,192 wrecks.
+A codec state is 948 bytes a slot (the copy and L2, `0x148` bytes each, L3's 16, the winners'
+128, the last step's 8, five flags and the unit coder's 135: a byte a lane, its streak, its last
+mask's id and its last listing) and 627 bytes a projectile record (the
+pool and the image it is making, both one iteration before, the winners, the ages, the advanced
+image and the survivors' maps), plus 2,785,164 bytes whatever the counts: the pool frame's tables
+(the last birth of each of 4,096 weapon IDs, 4,096 shot events and their rows, and the encoder's
+search over at least 4,096 rows), the air and type indexes (128 KB each), the unit coder's
+probabilities, kept masks, contexts' lists and residual caches (940 KB), a
+body buffer and the codec itself. Before the frames and the scratch of the largest block it has
+met, that is 9,407,112 bytes, about 9.4 MB, at 5,001 slots; 18,887,112, about 18.9 MB, at
+15,001. The record frames add 6,031,152 bytes (cells: 13 bytes a grid cell, the copy 5.4 MB on
+that grid, and 0.6 MB of tick input), 124,920 (orders: 24 bytes a slot, and an arena that doubles
+up to 65,536 nodes, 5.8 MB), 1,662,876 (events: 324 bytes a slot and 40 KB of dictionaries) and
+416,452 (state: about 15 KB and 49 bytes a wreck record): up to about 14 MB a codec on that grid
+with the arena full, and about 63 MB at `RECC_GRID_MAX`, 54.5 MB of it the grid's copy. The writer holds two codecs, a
+reader one, made at its first sectioned block. A reset copies the grid whole into the cells frame,
+once a reset in a sequential reader and in the check decoder and once a seek.
 
 ### The game never waits
 
@@ -353,8 +553,10 @@ iterations to record.
 - `tagpu_simreg`: a walk of the declarations and of the levers for the recorder, and
   `MEM_WRITE_WATCH` on every heap table `SIM_ALLOC` takes.
 - `src/tagpu_reccodec.c`, `inc/tagpu_reccodec.h`: the stream codec — the sectioned container, the
-  unit frame and the zstd packing — portable C99 with no Windows call, no engine address and no
-  writable static, used by the writer, the reader and `tests/codectest.c` (`make codectest`;
+  unit and pool frames and the zstd packing — and `inc/tagpu_recframe.h` with
+  `src/tagpu_recframe_cells.c`, `_orders.c`, `_events.c` and `_state.c`, the record frames: portable
+  C99 with no Windows call, no engine address in code and no writable static, used by the writer,
+  the reader and `tests/codectest.c` (`make codectest`;
   `tests/codectest.py` transcodes, decodes, fuzzes and compares C with Python, natively under ASan
   and UBSan with `--native`). `src/zstd.c`, `inc/zstd.h`, `inc/zstd_errors.h`: zstd 1.5.7, vendored
   (`tools/zstd/amalgamate.sh` rebuilds them from the release tarball). `replay-lanes.tsv` and
@@ -538,9 +740,10 @@ puppet host and verifies it against the recording.
   - **The state byte** `+0x10E`, as its new value, from `0x48B090`.
   - **Unit replies**, at `0x47F780` and `0x47F850` before their viewer test, for every player.
   - **The script starts only the owner's machine makes**: `HitByWeapon` and `TakeDamage` in the hit
-    `0x489CE0`, `TransportPickup`, `TransportDrop` and `EndTransport` in the transport orders, and
-    `TargetCleared`. A replay host applies no damage and runs no order handler, so it never makes
-    these itself. `BeginTransport` is broadcast, so the broadcasters record it.
+    `0x489CE0`, `TransportPickup`, `TransportDrop`, `BeginTransport` and `EndTransport` in the
+    transport orders, `setSFXoccupy` in the water state `0x43DB50`, and `TargetCleared`. A replay
+    host applies no damage, runs no order handler and no movement pass, so it never makes these
+    itself. `BeginTransport`'s broadcast, which a remote copy starts a slice later, is left out.
   - **The nano spray**, at its emitters (the completeness note's *Decisions taken*).
   - **A controller change.**
 - **The header** gains:
@@ -658,9 +861,11 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
   - **The start units' calls `0x497963` and `0x497ACD`**, skipped.
   - **The level init's call `0x4919C8`**, retargeted: after `0x464990`, record 10's buffers through
     `0x464700`, on the loader thread ([the ten-seat note](demo-recorder-ten-seats.md) §4.2).
-  - **The first step**, at B2's stub `0x4954ED`: the level's counts, map, unit and weapon data and
-    first GameTime against the header; then the start units through the create, the first image,
-    the wind's seed and V's sight.
+  - **The first step**, at B2's stub `0x4954ED`, at its capture point before the unit tick: the
+    level's counts, map, unit and weapon data and first GameTime against the header; then the
+    start units through the create, the first image, the wind's seed and V's sight. Made there,
+    the start units get the script slice the recording machine's first unit tick gave them
+    (`tagpu_replay.c`, THE FIRST STEP'S UNITS).
 - **The viewer's seat** V is player record 10, the engine's no-player record, which no recording
   carries ([the ten-seat note](demo-recorder-ten-seats.md)): type 3, with the watcher bit and an
   empty block, holding `+0x2A42` for the whole level. The record and its PlayerInfo go back as the
@@ -689,10 +894,12 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
   index or a pointer. The completeness note's *What restoring these records needs* is its
   checklist.
   - **Units are placed with the engine's set-position `0x48A9F0`** at the recorded position and
-    the altitude the movement pass had before its fix-up. Then the walk-class and occupancy parts
-    `0x43DA70` and `0x43DB50` run, which start the walk and occupy scripts, and the fix-up's values
-    go in. `+0x110` bits 2–3 and `+0x10A` are written only by those parts, and compared. The
-    placement part `0x43D6D0` and the altitude fix-up `0x48A870` never run on a puppet.
+    the altitude the movement pass had before its fix-up. Then the walk-class part `0x43DA70`
+    runs, which starts the walk scripts, the water state `+0x10A` goes in from the image (its
+    script, `setSFXoccupy`, is a recorded start since format 23, so `0x43DB50` never runs on a
+    puppet), and the fix-up's values go in. `+0x110` bits 2–3 are written only by the walk class,
+    and compared. The placement part `0x43D6D0` and the altitude fix-up `0x48A870` never run on a
+    puppet.
   - **Players**: every record but V's, raw under the exclusion file, but the players phase's
     30-tick deadline `+0xF0`, which the host keeps (*as built*: written, it arrived already
     advanced, and the host never ran the viewed player's radar pass; the host note §2.3). An image
@@ -717,8 +924,24 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
     nano spray through `0x4720D0` or `0x472200`. What a create nests is recorded before the create
     and finds no unit; the replayed create makes it again. Each event is counted as played or not,
     and the log names the classes of those not played.
-  - **A recorded YARD_OPEN** is applied after the positions, through the re-claim `0x47C790` and
-    the passability refresh `0x440A40`.
+  - **A recorded YARD_OPEN** (`RK_EV_YARD`, written at YARD_OPEN's write `0x47DAF1`) is applied at
+    its place in the step's events, through the re-claim `0x47C790` and the passability refresh
+    `0x440A40`: a lab's script slice can open its yard and its build handler make the nanoframe in
+    it later in the same tick, and the create finds the cells free only after the yard. A unit the
+    first step or a seek makes gets its recorded yard as soon as its create returns, before the next
+    slot's create stamps: an open yard gives no cell back to a unit that lost it to the closed
+    structure. After the positions, the image's yard goes in where the host's still differs. A
+    yard a structure's own Create opens is recorded before its create: the replayed create, with
+    the puppet gates open, makes it again before its stamp, as the engine did, and the playing
+    compares every create's yard with the recording's -- the last its Create opened, or closed
+    (`yard_check`); the harness's *the yards a create opened* fails a lane where one differs, or
+    where a create whose Create opened its yard was not made. Where a yard event may stand is THE
+    YARD RULE (`tagpu_recfmt.h`): the recorder keeps what it would refuse out of the file (*the
+    yard events THE YARD RULE kept out of the file*, which must be 0), and the writer and both
+    readers enforce it ([engine map](../exe-reverse-engineering.md), *An open yard gives nothing back* and the
+    paragraphs after it). The test groups `yard-lab` and `stock-yard-lab` open a lab's yard, make
+    a Peewee inside it and close it again in every run, in both builds (the completeness note's
+    *Open items*).
   - **The wind** is seeded once, from the recording's first image, so every draw after it is the
     recording's.
 - **The recording is the only writer.** On a puppet host, twelve prologue gates
@@ -946,7 +1169,10 @@ it. The engine facts are [the engine map](../exe-reverse-engineering.md#the-demo
   (`0x47CDCA`); a sequence frame by the sequence's own count (as `0x4B8B30` bounds it), read
   through the def's field the recorded ID names and never through the record; the cursor by the
   grid's cells.
-- **The unit slots and the yard bit come from the images alone.** The stamp, the clear and the
+- **The unit slots and the yard bit come from the images alone** on a recording whose stream does
+  not hold them; one that holds them (format 16's `RECL_CELLS`, every skirmish recording of this
+  build) plays with the engine's own (*The cells held*, [making recordings smaller](demo-recorder-size.md)).
+  The stamp, the clear and the
   re-claim still run on the host — for S2b's placements through the set-position `0x48A9F0`, the
   creates and deaths, and the host's own unit tick — because the stamp also files the unit in its
   sort bucket, which no image writes. Each call's writes to the grid are undone at its return: the
@@ -954,9 +1180,13 @@ it. The engine facts are [the engine map](../exe-reverse-engineering.md#the-demo
   a cell wider each way, and puts the slots and the yard bit back. The three write only inside the
   footprint; the clear nests re-claims through its bucket walk's callback, so the saved frames are
   a stack, two deep in play. A deeper call or a footprint wider than 64 cells either way is counted
-  and named. Without it the host's slots ran an iteration ahead of
-  the recording's: an aircraft's recorded slot follows its position by an iteration, and the
-  placement stamps it at the image's position. A recording plays only when the recorder's hooks
+  and named. Without it the host's slots differ from the recording's where two footprints
+  contest a cell: every puppet seat is type 3, so the host's contest gives the cell to the
+  newcomer where the recording machine's incumbent kept it
+  ([engine map](../exe-reverse-engineering.md), *The footprint contest's rule*).
+  Every recorded footprint cell is the set-position's rounding of the recorded position (MEASURED
+  2026-10-12, 3,640,526 of 3,640,526 unit-iterations of two recordings): the placement's stamp is
+  not ahead of the recording. A recording plays only when the recorder's hooks
   are in, since the draws, the explosions and this undo are taken there.
 
 **The comparison.** A dump carries the grid, the pool, its heads and the cursor, and
@@ -1011,8 +1241,9 @@ MEASURED 2026-09-30 under Wine, format 3, scripted runs on a private X server:
   carry links (3,090 iterations) and the four-AI game in the stock-limits build (2,010
   iterations, the 2,048-record pool). Every check is clean, no cell changed that no writer had
   marked, and every dump is equal on puppets, five, six and five. The battle's first playback
-  found one cell's slot B an iteration ahead of the recording, the cause of the footprint
-  writers' undo (*Playback*); its next found 1,200 of them called inside a clear. With the undo
+  found one cell's slot B naming another unit than the recording's, the cause of the footprint
+  writers' undo (*Playback*; a contest decided by the puppet's type-3 rule or the stamp's edge
+  bound, an aircraft at the map's last columns, not a lead of the stamp [INFERRED, 2026-10-12]); its next found 1,200 of them called inside a clear. With the undo
   stacked, the battle's playback undid 315,067 footprint writes and missed none.
 - **The cost in the battle**: 569 µs an iteration on average and 2.21 ms at worst (GameTime
   3,305, 111 KB into the ring), against S2a's 475 µs and 1.15 ms; in the carry-links game 123 and
@@ -1126,9 +1357,10 @@ The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
   makes a unit where its own code does: in the unit tick, or after the players phase, as Impure's
   scenario applier does at `0x4969D2` and the engine's SHARE give and console fallback do between
   steps (the engine map's *Who makes a unit*). The replay makes every unit of step k in the unit
-  tick's stub, before the players phase of step k, whose every-step sight emit and the next
-  images' `0x43DB50` then meet that unit one step early. So at every capture point and frame visit
-  the replay writes both from the recording where they differ: the water state bounded by its enum,
+  tick's stub, before the players phase of step k, whose every-step sight emit then meets that unit
+  one step early (and before format 23, the next images' `0x43DB50`). So at every capture point
+  and frame visit the replay writes both from the recording where they differ: the water state
+  bounded by its enum, which the images' own write leaves equal since format 23,
   the stamp through the engine's removal `0x482090` and stamp `0x482270` (a circle's radius index
   bounded by the frame table's count), so that the sight counters keep describing the stamps the
   fields name. The globals line counts the water states and stamps written and refused, and the
@@ -1252,7 +1484,10 @@ The owner's answers to the plan's questions, as recommended unless said otherwis
 - **The capture's cost and the files' size grow past the budgets**, accepted, with the numbers
   (V7, V8) put to the owner before the landing.
 - **The snapshot interval stays 900 iterations**, and becomes 450 if the worst seek of the
-  seek-time series exceeds one second.
+  seek-time series exceeds one second. Replaced 2026-10-10 by the owner's choice of 1,800 at the
+  size plan's L4, which relaxes the one-second target for dense battles
+  ([making recordings smaller](demo-recorder-size.md#l4-the-measured-hours-the-snapshot-interval-and-r1),
+  *Decisions* 12).
 - **The explored map is recorded every iteration**, the first of three options: exact at every step
   and every seek, at the cost of one comparison of the map a capture.
 - **The temporary sight records are dropped** through the engine's expiry at a seek and at a recorded
@@ -1392,7 +1627,7 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
 - **COB script state is not restored at a seek**: every unit is made again, so every script
   restarts (the owner accepted it for S3b; recording it can be a landing of its own). Two
   consequences inside that: the seek sets a unit's water state without starting its
-  `setSFXoccupy`, so until the unit's next change its script does not know its water state (in
+  `setSFXoccupy`, so until the recording's next start of it its script does not know its water state (in
   stock scripts it picks the kind of `emit-sfx`, a wake or not [INFERRED from the scripts'
   convention]); and the threads alive on a unit after a seek are not the recording machine's.
 - **The COB guard can stop a playback after a seek** where a playing from the start passes (*S3b,
@@ -1408,7 +1643,9 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
   globals mid-step, so no image reproduces it (the engine map's *The radar pass `0x467440` and the
   minimap's fog composite*). The seek runs that pass once on T's world (R14b), where a playing
   still holds what its last pass, in step P = 30·⌊(T−1)/30⌋, computed. **When the host views the
-  recording's viewed record the seek then takes bits 8–10 from the recording**, on every slot live
+  recording's viewed record the seek and the takeover then take bits 8–10 from the recording** (a
+  takeover views P from TK1 on; a multiplayer recording's takeover keeps the pass's, the
+  multiplayer slice's *The takeover of a multiplayer recording*), on every slot live
   in the image whose host slot holds a live unit of its type: in that view a playing computes the
   same pass from the same inputs at the same phase (D1), so what the recording holds at T is what a
   playing holds — every capture-point dump in that view compares the radar picture strictly and is
@@ -1428,16 +1665,34 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
   seat's radar since P+1, established by the disassembly, not measured. In a seat's view, the
   recording's viewed record included, the minimap's fog R14 composites from T's counters is T's
   where a playing shows its last pass's. From the next pass on, scheduled at the same GameTime on
-  both hosts, the two agree. **A takeover keeps the pass's bits** (open, the owner's question): the
-  fork's AI reads them, since the acquisition scan `0x40AA40` puts a non-allied unit with bit 8 on
-  every local seat's radar list (`0x40AB3F`), so where the pass on T's world differs from the bits
-  the recording holds at T the fork's AI acquires from other contacts than the recording machine's
-  would have [INFERRED from the disassembly, not measured].
+  both hosts, the two agree. **In a takeover the bits are also the fork's AI input** (the owner's
+  decision, 2026-10-11: the fork's AIs read the recording's contacts at T): the acquisition scan
+  `0x40AA40` puts a non-allied unit with bit 8 on every local seat's radar list
+  (`0x40AB3F..0x40AB5C`), and each acquisition record TK1 makes starts with `+0xED` 0 (`0x40918B`,
+  `0x4092DC`), so it scans in iteration T's players phase (`0x40B2D6..0x40B2E5`), before the next
+  radar pass, and reads the bits R14b left. Nothing after R14b writes bits 8–10 before the capture
+  point of T (R14c; TK4a's `0x48BD00` clears bits 4, 6 and 7 only and `0x466DC0` reads; the tick
+  loop to `0x4954ED`), so in the recording's viewed record the fork's first iteration holds the
+  recording's contacts. As another player the pass's bits stand, and they are the AIs' input until
+  P's next pass; D2 (d) masks bits 8–10 there, and bit 12 always. MEASURED 2026-10-11 on tenseat
+  (`tareplay.py takeover`, release build, game speed 20, turbo 1), compared by `tarec.py
+  compare-fork`, which compares bits 8–10 strictly because both worlds view player 0:
+
+    | T | the takeover | compare-fork |
+    |---|---|---|
+    | 901 | with the restore | EQUAL, 23 live units; F's dump f1201, timeline 1 played across its boundary, EQUAL, the radar picture too |
+    | 915 | with the restore | EQUAL, 25 live units |
+    | 915 | without it (the pass's bits) | 21 differences in 22 live units, every one `+0x110` bit 8 |
+    | 885 | either | EQUAL: nothing the pass reads changed in 871..885 |
+
+    `tarec.py` prints a field's bytes in memory order, so the difference `21212830` against
+    `21202830` is the dword `0x30282121` against `0x30282021`: bit 8, not bit 16.
+
 - **A unit the recording machine made after its players phase is drawn one frame early** on a puppet
   host, which makes it in the step's unit tick, before that step's draw; `books_put` makes its
-  bookkeeping the recording's at the next capture point, and the picture of one frame stays. Its
-  first `setSFXoccupy` also starts twice there, at the step's images and again at the next, once the
-  water state is put back. Both are presentation on a puppet host. Whether a stock skirmish's SHARE
+  bookkeeping the recording's at the next capture point, and the picture of one frame stays: that is
+  presentation on a puppet host. Its `setSFXoccupy` is the recorded start alone (format 23), since a
+  puppet never runs the water state `0x43DB50`. Whether a stock skirmish's SHARE
   dialog lists an AI ally, the one stock way to make such a unit without a cheat, is not established
   (the code accepts any active type-1–3 record without the watcher bit; not run); `books_put`
   covers it either way, since it keys on the replay's create, not on its cause.
@@ -1594,9 +1849,10 @@ not install. Explicit seeks can still move the reader past an armed target.
 
 **`tools/replay/tareplay.py`.** `run FIXTURE... [-j N] [--dll PATH] [--stock-dll PATH] [--keep]
 [--out DIR]` (`all` for every fixture) and `list`. For each fixture four GameTimes, each T ≡ 1 (mod
-30) so a takeover's contact bits, which its own radar pass makes, agree at once unless something
-the pass read changed later in its step (O14) — a seek in the recording's viewed player, which the
-R and Q processes play in, takes them from the recording and agrees at every T — in
+30), the radar pass's step, where a seek's contact bits in any view but the recording's own, which
+its own radar pass makes, agree at once unless something the pass read changed later in its step
+(O14) — a seek in the recording's viewed player, which the R and Q processes play in, and a
+takeover as that player take them from the recording and agree at every T — in
 [301, min(0.8·end, end−330)] — room for the
 continuation dump 300 ticks after the last round trip — drawn by a generator seeded with the
 fixture's name and HEAD and printed: T1 the smallest, T2..T4 the round trips, Tlast = T4. The lower
@@ -1766,11 +2022,12 @@ FILE DUMP`. `compare-counts` refuses unequal windows (both dumps of a pair are c
 so both windows hold the steps [T1, Tlast)), compares roots per site exactly and sinks per key
 within `tagpu/ddraw/replay-absent.tsv`'s band (5 % of the larger or 2 calls) less its rows, and
 fails on any COB write in the playing's last dump; a difference reads `sink 0x4B08C0 from
-0x4B0C4D "QueryNanoPiece": live 273, puppet 0`. The file holds 32 rows, each decided by the owner
+0x4B0C4D "QueryNanoPiece": live 273, puppet 0`. The file held 32 rows when the owner decided them
 on 2026-10-01: five `same` classes (the three shot builders, the meteor stone's init, Killed),
 eight owner-only queries `absent`, the refused script index both ways, the console key's click,
 the flying pieces' explosions, smoke and fire both ways, and COB `EMIT_SFX`'s five emitters both
-ways.
+ways. Killed's `same` class and `QueryNanoPiece`'s `absent` row have gone since, each made exact
+([the script slice](#the-script-slice-format-20)).
 
 **The step's phases** (the lost impacts, A7). The playing made every recorded feature root at the
 replay step, after the host's unit tick and before its projectile tick; a tree the recording
@@ -1867,11 +2124,34 @@ ten minutes or less.
 - **S3c-3**: `SIM_FEATURE` regions and their fixtures, the coverage build, `tareplay.py landing`
   and `broad`, the `replay-roundtrip:` note, CLAUDE.md's replay gate and Step 4b. Until then nothing
   runs the harness at a landing.
-- **The COB one-tick lag (A5), accepted.** The live game's AutoAim starts AimPrimary inside the
-  unit's turn and that turn's script slice runs it at T; the playing applies the recorded start at
-  the replay step, after the whole unit tick, so its first slice runs at T+1, and the scripts it
-  starts (RestoreAfterDelay, walk, `EMIT_SFX`) a tick later. Counts near a window's ends move by a
-  few; the sinks' band and `EMIT_SFX`'s rows absorb it.
+- **The COB one-tick lag (A5), fixed by the slice marker.** The live game's AutoAim starts
+  AimPrimary inside the unit's turn and that turn's script slice runs it at T; a playing applied
+  the recorded start at the replay step, after the whole unit tick, so its first slice ran at T+1,
+  and the scripts it starts (RestoreAfterDelay, walk, `EMIT_SFX`) a tick later; a one-tick slice lag
+  can re-phase a looping script for the rest of a unit's life (the level-start lag below). Since
+  format 20 the recorder writes `RK_EV_SLICE` just before the slice of any unit whose COB had an
+  engine start since the capture point, and a playing skips that unit's slice in the host's unit
+  tick and gives it at the marker, after the recorded start (*The script slice*, below).
+- **The level-start lag, fixed.** The playing made the level's own units after the host's first
+  unit tick, so every COB thread of a level-start unit ran one tick behind for the whole level:
+  tenseat's commanders' `MotionControl` chose walk/walklegs/stand 103/3/394 on the puppet against
+  102/6/393 live over [481, 1411), and 109/0/445 against 108/3/442 over [301, 1291) (MEASURED
+  2026-10-12, and reproduced call for call by `tools/tacob`'s VM fed the recorded inputs). The
+  sinks' band hid it whenever the key was small enough. The playing now makes them at the first
+  iteration's capture point, before the unit tick, and makes that capture point's write of the
+  recorded globals after them, so their first slice also draws from the recording's simulation
+  RNG (`tagpu_replay.c`, THE FIRST STEP'S UNITS). The `randprobe` fixture shows the RNG half: its
+  commanders' scripts (`tools/randprobe_fixture.py`, loose `scripts/*.cob` in the instance's game
+  folder, since a `.ufo` does not override a stock path) draw twice in their first slice and from
+  then on call one of four scripts at a period both draws chose. MEASURED 2026-10-12 over
+  [361, 1111): without the write, RandTick0..3 counted 133/258/163/0 live against 107/57/114/253
+  on the puppet and the counts check failed; with it, every START and CALL key is exactly equal.
+- **The in-game create lag, fixed by the slice marker.** A unit created during the unit tick in a
+  later slot of a block not yet finished (a factory's product, a builder's nanoframe) gets its
+  slice in that tick on the recording machine (the slot loop's per-slot re-read); a playing made it
+  after the tick, so its COB ran one tick behind for its life. Its create's Create start is an
+  engine start on its new COB, so its slice is marked after the create's events, and a playing
+  gives it at the marker once it has made the unit (*The script slice*, below).
 - **The walk class after an unload (A6), accepted.** The live game evaluates `0x43DA70` in a
   cargo's mover tick before its transport's later turn drops it; the playing's image-time walk
   sees the carrier already cleared and makes a StartMoving and a StopMoving the live game did not
@@ -1888,7 +2168,11 @@ ten minutes or less.
   the replay step, before the host's projectile tick, and a death's own feature roots go with it,
   so a tree such a death fells is gone before the host's projectiles meet it: the lost impacts'
   class, not seen in the fixtures. A death must go in before the next image's units, which go in at
-  the replay step; giving every event its phase is a format change.
+  the replay step; giving every event its phase is a format change. Its COB side: a StopBuilding
+  the AI makes in the players phase goes in with step T's events, before image T+1's walk class,
+  whose run-now start runs every record with `dt = 0` and so gives that start its first slice a
+  tick before the recording machine did, where the walk class ran first (not seen in the three
+  tenseat games simulated on 2026-10-12).
 - **Within one phase the recording's roots go in after the host's whole call**, so a projectile
   later in the same projectile tick still meets a tree an earlier impact felled on the recording
   machine [INFERRED: battle-los's 510 against 511, inside the band].
@@ -2297,7 +2581,10 @@ in 12 s. `takeover-end` (Show Down, slots 2 and 3 closed) is taken over as 0 and
 `+iwin`, the console's IWin: its kill-all for the AI and the game's won and stop bits. `+kill 1`
 cannot end it, since the console's Kill disarms the objective after its kill-all (`0x4164EF`; the
 [engine map](../exe-reverse-engineering.html)'s kill-all callers), so the fixture does not reach
-the objective's own victory test that the takeover re-arms. Each runs K (the takeover, its checks and a dump) and F (K's file played from T −
+the objective's own victory test that the takeover re-arms. `tenseat` is taken over as its
+controlled player at GameTime 901, the entry's `at` in place of T2: the tick after its typed LOS
+command, where the takeover's contact bits must come from the recording (O14, *What S3b leaves*).
+Each runs K (the takeover, its checks and a dump) and F (K's file played from T −
 300 across the fork) after the usual L, P, R and Q.
 
 **The layout's hash.** The `order 0x006 ondestroy` row now names all nine handler functions that arm
@@ -2349,6 +2636,107 @@ outside S4. The naval COB stop and failed-worker cleanup are corrected. The
 full landing tier passes 570 checks across 20 fixtures, including 60 exact round
 trips, with all 62 changed functions reached on every required build.
 
+## The script slice (format 20)
+
+A COB thread's only clock is the unit tick's `DoScriptsNow(1)` (`0x48ADEB`, its only call), so a
+start reaches its first slice at the first slice of its unit after it. On the recording machine
+that slice comes in the unit's turn, after everything earlier turns and the unit's own AutoAim
+made; a playing's host gave every slice in its own unit tick, before the step's replayed events,
+so a start made before the slice (A5's AutoAim starts, a create's Create in a later slot) got its
+first slice a tick late, and a looping script stayed re-phased for the unit's life.
+
+- **The stub.** The unit tick's 17-byte script call `0x48ADDF..0x48ADF0` jumps to a stub that gives
+  the slice from C (`tagpu_patches.c`, THE SCRIPT SLICE; site facts in the
+  [engine map](../exe-reverse-engineering.md#the-cob-modules-entries-every-start-outside-a-slice-and-the-script-slice-disassembled-2026-10-12)),
+  in the fail-closed table of both builds, on every level. It counts each slice at the root
+  `0x48ADEB` by where it was given: aux 0 in the unit tick, 1 at a recorded marker, 2 at a
+  playing's step's end.
+- **The record.** `RK_EV_SLICE` = 57, `{u32 unit ID}`, in `RCS_EVENTS`, its ID coded in `C_ID`.
+  The recorder writes it just before the slice of a unit whose COB object was the `ecx` of a call
+  to `0x4B0B00` or `0x4B0940` since the capture point: two observers on those entries key a set by
+  the COB's address, emptied by an epoch at every capture point (`tagpu_recorder.c`, THE SLICE
+  MARKERS). Outside a slice those two are the only ways a COB object gets a thread. A set past half
+  full marks every slice for the rest of the step: a superset is exact, since moving a slice whose
+  COB had no start changes no COB state. The writer and every reader refuse a marker inside a
+  feature or death bracket or outside the slots; at most one per slot per iteration.
+- **The playing.** At the capture point the iteration's markers are planned; the host's unit tick
+  skips a planned unit's slice; the marker in the replayed events gives it, after the recorded
+  events that preceded it; a unit the step creates gets its slice at its marker once its create is
+  made. A debt its marker did not pay is given at the step's end, counted and noted; a create or a
+  death in the slot voids it (`tagpu_replay.c`, THE SCRIPT SLICES). A playing's log ends with
+  `replay: script slices: ...` (planned, deferred, given at the marker, at a create's end, at the
+  step's end, and the anomalies).
+- **The check.** The count root compares per aux exactly, and `--cob-exact`
+  ([completeness](demo-recorder-completeness.md#the-replay-test-harness)) compares the VM's START
+  and CALL children exactly on `slice-walkers`, `battle`, `tenseat` and `codec-decline`. The
+  fixture `slice-walkers` (`scenarios/replay-slice-walkers.json`: three AI seats on Core Prime
+  Industrial Area, each with a lab and two constructors beside it, and every 600 ticks a wave of
+  eight CORAK and eight ARMPW ordered at each other on seat 2's plateau,
+  `replay-slice-walkers-wave.json`) makes units in later slots during play and kbots that walk and
+  aim. MEASURED 2026-10-12: on Landing A's DLL its counts differed (RestoreAfterDelay 1077/1073,
+  walk 3271/3268, walklegs 1025/1028 live/puppet over [1141, 3481)); on this landing's, over
+  [631, 2881), its recording held 1,548 markers -- 17 after the unit's create in the same
+  iteration, 1,408 after a START or a SHOT, 103 after a named start, 20 after nothing recorded --
+  and the P lane's playing, over its whole run from GameTime 1 to its last dump at 2881, gave all
+  2,045 it planned at their markers, none at the step's end (the two windows differ: the
+  recording's markers before 631 are in the second count and not the first).
+- **A replayed death's Killed** runs as the recording machine ran it, as a query
+  ([completeness](demo-recorder-completeness.md), *COB slices a playing gives one tick late*).
+- **What it leaves**: the walk class's run-now pass, seeks and round trips (fresh COB from
+  Create), A6, mid-tick reads, a unit dying before its turn, starts made inside a slice by a
+  replayed state change, and on a multiplayer recording the ledger's starts and
+  other owners' units (the [completeness note](demo-recorder-completeness.md), *COB slices a
+  playing gives one tick late*).
+- **The owner's queries** (`RK_EV_QUERY`, kind 58). `slice-walkers` was the first fixture to reach a
+  lab's `QueryBuildInfo`, a query only the factory's order handler makes, so a puppet never did
+  (MEASURED in the landing gate, 2026-10-12: live 9, puppet 0 over [1051, 2671); 8 against 0 on
+  Landing A's DLL). `QueryNanoPiece` was the same: an order handler's, owner-only, its count
+  accepted as `absent` since 2026-10-01 (battle: live 841, puppet 0). The recording now carries
+  both where the engine makes them and the playing makes each through the same `0x4B0BC0` at its
+  place ([the engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)),
+  and the `QueryNanoPiece` row is gone. MEASURED 2026-10-12 on `battle`, `slice-walkers`,
+  `codec-decline` and `tenseat` under `--cob-exact`, every lane passing: the recordings held
+  1,675, 15,665, 140 and 3,864 queries, every playing made all it reached (none refused), and
+  both keys' counts are equal live and puppet in every window (`slice-walkers` over [1171, 3121):
+  `QueryBuildInfo` 44 against 44, `QueryNanoPiece` 8,554 against 8,554). Since format 23 the recording
+  carries `QueryTransport` and `QueryLandingPad` the same way, and `BeginTransport` and
+  `setSFXoccupy` as owner-only starts (*The transports, the pads and the waterline*, below).
+- **The transports, the pads and the waterline** (format 23). An air transport's pickup asks its
+  script `QueryTransport` (`0x4113B1`) and starts `BeginTransport` (`0x4113EF`); a landing on an air
+  base asks the pad `QueryLandingPad` (`0x411A35`, `0x411AA6`, `0x411BF5`, `0x411CF1`); a unit whose
+  water state `+0x10A` changes starts `setSFXoccupy` (`0x43DBE8`). All four are order handlers' or
+  the movement pass's, which a puppet never runs, so the recording carries them where the engine
+  makes them and the playing makes each through the same entry at its place (the
+  [engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
+  `BeginTransport`'s broadcast (`0x456218` from `0x411408`) is no longer recorded, and the playing
+  writes `+0x10A` from each image instead of calling `0x43DB50`.
+- **The test groups** `transport-pad` and `waterline`, each in the raised and the stock-limits
+  build, make every one of those but the pad queries at `0x411AA6` and `0x411CF1` in every run,
+  because each is the consequence of an order the scenario or the test group gives: in
+  `transport-pad` (`scenarios/replay-transport-pad.json`, Core Prime Industrial Area) an Atlas
+  picks up a Peewee on the scenario's own order (VTOL_Pickup asks `QueryTransport` in its state 2
+  before every pickup and then starts `BeginTransport`) and drops it at GameTime 900's order, and
+  a second Atlas lands on an ARMASP after a native click and right click; in `waterline`
+  (`scenarios/replay-waterline.json`, Anteer Strait) a hovercraft and an amphibious kbot move
+  into the water on the scenario's orders and back on the test group's, and a Bear hover
+  transport loads a Peewee, crosses into the water and back and unloads it on the shore. The
+  pad's answer leaves `0x411AA6` (a first answer with no free piece) and `0x411CF1` (a piece no
+  longer free in state 5) unreached; no test group reaches them. MEASURED 2026-10-13 over seven
+  runs of `transport-pad`, six of `stock-transport-pad`, five of `waterline` and four of
+  `stock-waterline` (the latest three of each at format 23): every `transport-pad` recording holds 1 `QueryTransport`, 2
+  `QueryLandingPad` (`0x411A35`, `0x411BF5`) and 1 `BeginTransport`, with 8 to 10 `EndTransport`
+  and 7 to 8 `setSFXoccupy`; every `waterline` recording 1 `TransportPickup`, 5 `TransportDrop`
+  and 20 to 26 `setSFXoccupy`. The counts of repeated states vary because the simulation RNG is
+  seeded from the performance counter each level (the engine map, *The two random streams*)
+  [INFERRED as the cause]. The gate's changed functions are reached by `transport-pad` in both
+  builds in each of the three format-23 runs whose coverage was read: the recorder's query stub, broadcast filter and init on the L
+  lane, the replay's query, `unit_put` and `water_put` on P and R. Every lane passes with the live
+  and puppet counts equal and no native owner-only start or owner's query on a puppet.
+- **What B2 leaves**: the walk class `0x43DA70`'s starts (`StartMoving`, `StopMoving`,
+  `MoveRate1..3`) still run in the playing's images, a slice late against the owner's machine;
+  recording them is the size decision the [completeness note](demo-recorder-completeness.md)
+  names (*COB slices a playing gives one tick late*).
+
 ## S5
 
 **S5 is planned in [its own note](demo-recorder-s5-ui.md)** (2026-10-01): six landings, the screens
@@ -2368,7 +2756,8 @@ remains to be built for S5's switches; live rewind operates on an existing recor
 
 - **Where recordings live and what they are called** (`replays\`, `.imprec`): chosen for S1, and
   shown by the browser in S5.
-- **The stream's quantization, the snapshot interval and the crash promise** are the product page's
-  open decisions 2, 3 and 5; the landings above measure what each needs.
+- **The stream's quantization and the crash promise** are the product page's open decisions 2 and
+  5; the landings above measure what each needs. The snapshot interval, its decision 3, is decided
+  (1,800 iterations, 2026-10-10).
 - **`s_ghost`, the build ghost's piece masks,** is declared `SIM_STATE`, so it is recorded, though
   it is derived from the unit types and their scripts and only the draw reads it.

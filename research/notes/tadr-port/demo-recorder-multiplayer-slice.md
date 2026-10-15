@@ -32,7 +32,7 @@ Each local human and hosted AI signs its primary origin and private identity aga
 
 Teardown releases the game reference and publishes stop without joining. A reference keeps the wake handle and copied channel storage alive through a concurrent worker finish. There is at most one channel worker per process, including one still finishing. The worker drains queued local work and native completions before closing its own session on the normal path; abort never claims delivery. When native membership has no private peers left, queued transmissions can retire only after every expected source has supplied its final prefix. A departed unsealed source cannot authorize that retirement. A 15-second stopped-worker drain deadline aborts incomplete; elapsed time proves no receipt, prefix or delivery fact. Normal teardown publishes a final prefix seal for each local actor before stop. A validated seal proves that received source prefix; it does not establish a complete recording. The consumption cut, final-seal receipts and retained-consumer API below now govern normal close. Game capture attaches the file context before the first source publication; native authority application remains open.
 
-Locally controlled human and hosted-AI players contribute their full normalized 520-byte player image and subsequent changed-word deltas with recording off. The recipient maps records by primary ID, independently of their private SDK sender. Source sequences are separate for up to ten origins. The game keeps authoritative caches separately from its observed world. Enabled local recording persists both namespaces without altering engine resources. The recording format is 9 (`REC_FORMAT`), the only one the readers take.
+Locally controlled human and hosted-AI players contribute their full normalized 520-byte player image and subsequent changed-word deltas with recording off. The recipient maps records by primary ID, independently of their private SDK sender. Source sequences are separate for up to ten origins. The game keeps authoritative caches separately from its observed world. Enabled local recording persists both namespaces without altering engine resources. The recording format is 12 (`REC_FORMAT`), the only one the readers take.
 
 The primary descriptor refuses `DPSESSION_NOMESSAGEID`, which removes native source identity. The private backend requires the native protocol, ordered guaranteed async sends and completion notifications on its own session. Its [Send contract](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpref_6dvd.content.htm) and bounded contexts establish requested transport support, not terminal recording completeness or a measured bandwidth budget.
 
@@ -116,7 +116,10 @@ A separate producer/writer-thread control copies and validates 15,000 alternatin
 
 ### Contribution file container
 
-The recorder writes format 9 and the readers take format 9 alone. `RT_MULTIPLAYER` carries the copied 112-byte roster in a mode-3 header; both writer and readers refuse a network mode without that roster or a roster in another mode. `RB_CONTRIBUTIONS` carries consecutive 16-byte application metadata plus exact source packets, with no ring padding. Its block timestamps are zero: packet metadata retains application/source clocks, and these blocks are not world seek snapshots. After game hand-over, proof-tail records use phase 3, zero application ordinal and zero application tick. They enter the persisted source ledgers without entering the world copy or extending application cuts.
+The recorder writes format 24 and the readers take format 24 alone; a multiplayer header carries
+no `RT_HOLD`, so its stream holds nothing, and a reader refuses one that does. Without `RT_HOLD`
+the orders frame writes scheme 1, each list against the same list's last image node by node:
+scheme 2's nodes matched by action and issue time cost size on an exact stream. `RT_MULTIPLAYER` carries the copied 112-byte roster in a mode-3 header; both writer and readers refuse a network mode without that roster or a roster in another mode. `RB_CONTRIBUTIONS` carries consecutive 16-byte application metadata plus exact source packets, with no ring padding. Its block timestamps are zero: packet metadata retains application/source clocks, and these blocks are not world seek snapshots. After game hand-over, proof-tail records use phase 3, zero application ordinal and zero application tick. They enter the persisted source ledgers without entering the world copy or extending application cuts.
 
 `tagpu_recmp_file.c` owns the attached journal and a retained channel reference. It is created before channel publication/consumption and transferred into `RecRing` before writer start. The game ends that context before its final ring publication. Ending a local save detaches the journal and publishes a distinct local-stop state; the file writer cannot take the channel consumer or stop game contributions in that state. Ending the channel first permits the sole receive consumer to transfer after journal drain. Context end is the producer's final access; the writer acquires it before freeing either the journal or the retained reference. No engine allocation or interface is kept alive by this context.
 
@@ -588,7 +591,7 @@ MEASURED 2026-10-06 on the reference setup under Wine, five Impure peers each se
 
 **Owner ruling, 2026-10-06: not a loosening.** No completeness check accepts anything it refused before. A recording whose consumption ended is refused by the cut, by file completion and by the writer, where the failed channel used to refuse it; the only change is that the other recorders no longer lose this peer's contributions with it.
 
-`recmp_cut_test.c` covers this at the production channel with a controlled backend. In `relinquish` the consumer stops after two packets and the remote source that is still active never seals. In `rx_full` 300 packets arrive before the game takes any. In `no_consumer` the journal detaches before stop and 300 packets follow. `journal_full`'s failed journal now behaves as `no_consumer`. In each, the channel finishes without failure: both local final seals go out, all four receipts return, nothing is published after consumption ends, and the cut is refused. The five-peer game under the new rules has not been run yet.
+`recmp_cut_test.c` covers this at the production channel with a controlled backend. In `relinquish` the consumer stops after two packets and the channel finishes before any remote source seals, so it holds no cut: the finish does not wait for one. In `rx_full` 300 packets arrive before the game takes any. In `no_consumer` the journal detaches before stop and 300 packets follow. `journal_full`'s failed journal now behaves as `no_consumer`. In each, the channel finishes without failure: both local final seals go out, all four receipts return, nothing is published after consumption ends, and the cut is refused. The five-peer game under the new rules has not been run yet.
 
 ### Gaps before the first code landing
 
@@ -1230,7 +1233,7 @@ Nothing native can produce a second copy:
   write must come from the owner's images.
 - **Owner-only starts.** Direct-call reachability from the constructor
   `0x485F50` and the destructor `0x4866D0` over the retail executable reaches
-  three of the thirteen sites (engine map, *Lifecycle children and the engine
+  three of the fifteen sites (engine map, *Lifecycle children and the engine
   consumer*). The constructor's `0x489800` calls cannot start a script: each
   follows `0x48A160`, which resets that slot's target words just before.
   The destructor's cargo hit reaches `0x489CE0`, which the hit gate refuses for
@@ -1239,7 +1242,7 @@ Nothing native can produce a second copy:
   set. The order handlers and AutoAim never run for a type-3 owner.
   The enumeration does not follow the 118 and 131 indirect calls reachable from the
   two functions. The counts close that gap: `tarec compare-counts` and
-  `tareplay`'s R/Q check now fail on any count at one of the thirteen sites
+  `tareplay`'s R/Q check now fail on any count at one of the fifteen sites
   in a puppet process.
 
 A skirmish death is recorded at its entry, so the children it nests are replayed
@@ -1382,6 +1385,50 @@ recording records the value the recorder's tick read there (`FS_SOURCE`, an
 `RK_EV_DRAW` inside the tick), and the host's stub at `0x424185` answers from it
 (`tagpu_replay_source`).
 
+**The sort buckets' order.** A unit that is not carried names the next unit of
+its sort bucket in `+0x8E`. A bucket's chain links units of every owner, and each
+machine orders it by its own moves, so each owner's image carries its own
+machine's order. Where two owners' units share a bucket, the composed images
+need not form a chain at all. In the four-seat format-24 recording of 1,476
+iterations, 97 had two units heading one bucket or a unit naming a next in
+another bucket, while the recorder's own stream formed chains at every
+iteration; two older recordings had 24 and 4 such iterations (MEASURED
+2026-10-13). No recorded order is the truth on such a level. Each unit's bucket
+`+0x82` is its owner's, and it is compared. The order is the host's: a playing
+writes neither `+0x82` nor `+0x8E` raw (id rows, outside its raw mask), and the
+seek writes `+0x82` raw only for a carried unit, which is in no bucket's chain,
+so every link is an engine function's; the seek moves a unit into its owner's
+bucket through `0x47CB60` only when the host's differs
+(*THE SORT BUCKETS ON A MULTIPLAYER LEVEL* in `tagpu_replay.c`). Before that,
+the seek's bound demanded one chain per bucket of the composed images, so a seek
+into such an iteration, or a takeover whose refresh was one, was refused
+(`seek to 590 refused: units 1511 and 3 both head one recorded bucket`); in
+that recording every takeover asked for between 301 and 900 rounded to such a
+refresh. `recmp_compare.py` checks the dump's chains instead of comparing
+`+0x8E` of a unit that is not carried (`sort_chains`): every live unit that is
+not carried and has a bucket is in that bucket's one chain, a next is a unit of
+the same bucket, no unit is named twice, and each bucket has one head. The owner
+approved that check on 2026-10-13. A seek's order is a function of T's composed
+world and a playing's of its history, so a round trip's two dumps can differ in
+it too: `tarec.py compare-dumps --seek` on a multiplayer file checks both dumps'
+chains the same way and leaves `+0x8E` of a unit not carried out.
+
+MEASURED 2026-10-13 on the reference setup, the four-seat recording, against
+main's build:
+
+- A fresh seek to 590 and a takeover asked for at 610 (its refresh 601): refused
+  on main's build, done on this one. The seek's dump and the takeover's first
+  iteration compare EQUAL.
+- An in-process seek from 200 to 590 (dumps at 590 and 710) and a fresh seek to
+  1000 compare EQUAL. That seek moved one unit; every other unit stood in its
+  owner's bucket after R7's creates and R8's moves.
+- Round trips at 590, 1000 and 1201 compare EQUAL by `compare-dumps --seek`,
+  but for one line at 1201 that main's build gives too: unit 2's contact bits
+  8 and 9 (`+0x110`) set after the seek and clear in the playing. Byte for
+  byte, the round trips at 590 and 1201 differ in `+0x8E` on 7 and 2 units.
+- A fresh two-peer pair, recorded and played to its end, compares EQUAL at 600
+  and 1201.
+
 **The deaths.** A unit's end is its owner's: `DEATH_END` runs the destructor
 through `ev_death` at the owner's time, with the feature gates shut and the
 record's corpse level (`+0xA`'s low nibble) cleared, so it changes neither the
@@ -1514,6 +1561,45 @@ played by `tools/replay/recmp_play_test.py`:
   native sample reads a nonzero source slot, so the branch where the
   recorder's slot differs from the host's runs only through the same stub.
 
+**The script slice (M1).** A multiplayer recording's primary stream carries the recording
+machine's slice markers (`RK_EV_SLICE`, the [skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-20)),
+one before the slice of every unit whose COB had an engine start since the capture point, the
+puppets it ran included. A playing plans only the markers in the recording machine's own blocks
+(`s_mp.own`: each `mp_seats` actor whose origin is a local actor of the recording's roster) and
+counts the rest as remote; a remote owner's unit keeps its slice in the host's unit tick, as
+before. An own unit the step creates is made at its owner's CREATE_BEGIN, after the primary
+events and so after its marker: the marker leaves it waiting and its CREATE_END gives the slice
+(`mp_created` → `slice_created`). What M1 leaves: an own unit's starts the ledger orders --
+TargetCleared and the other owner-only named starts, applied after the primary events (*THE
+CLOCK*) -- still reach their first slice a tick late, as does every start on another owner's unit. A
+replayed death in the recording machine's own blocks runs its Killed as that machine's
+`Send_UnitDeath` did, as the query; another owner's, as the peer's destructor start
+([completeness](demo-recorder-completeness.md), *COB slices a playing gives one tick late*).
+The death record does not carry the destructor's mode, so the playing takes `slice_own(slot)` --
+the unit's slot in one of the recording machine's own blocks -- as the proxy for "the recording
+machine ran `Send_UnitDeath` for it" at the recorder's death hook. The case the proxy can miss is
+the kill-all `0x486F10`, which calls `Send_UnitDeath(unit, 3)` at `0x486FB4` for every unit of a
+player row, its callers `0x4164DF`, `0x416A00`, `0x416A58` and `0x452E17` (the player removal):
+run on the recording machine for another owner's units, that is the query there and the peer's
+start on the playing. Such a death normally carries severity 0 [INFERRED], which makes no Killed
+through the start (`0x48685A`'s `jle`) where the recording machine ran the query.
+The owner's COB queries (`RK_EV_QUERY`) ride the primary stream the same way: the recording machine
+makes them only in the order handlers of its own units, and the playing makes each at its place
+among the primary events; another machine's queries are made on its own copy of the unit, which
+this recording does not hold. SelfRepair's query is on the repairing pad, which can be another
+owner's: its later slice is marked, but a playing plans only own units' markers, so such a pad's
+slice stays in the host's tick, before the query (M1). A query of an own unit the same step creates comes before that
+unit's CREATE_BEGIN there, so it finds no live unit and is counted as not made (the playing's
+log line, *the owner's queries*). No multiplayer run has measured the queries yet.
+MEASURED 2026-10-12, a two-peer recording made with `recmp_create_begin_test.py --reproduce
+--until 1400` and played from the start by `recmp_play_test.py`: the recording machine marked
+3,296 slices over its whole recording, GameTime 1 to 1474; the playing, from GameTime 1 to its
+level's end at 1233, planned 2,885, gave 2,884 at their markers and 1 at a create's end, none at
+the step's end, and left 6 remote markers in the host's tick -- so the two counts cover different
+windows and are not meant to sum; `recmp_compare.py` EQUAL at 150,
+600 and 1201. The recorder counts only skirmish levels, so a multiplayer playing's counts are not
+compared: the log line shows where the slices went, and the dumps that nothing else moved.
+
 ### The seek of a multiplayer recording
 
 `seek_run` seeks a mode-3 recording within a playing (the `seek` trigger, the
@@ -1536,12 +1622,15 @@ multiplayer game has no rewind, so the rewind's return to now refuses one. *THE 
   (`level_units` on `mp_world`), and a unit its owner created but has not yet
   described from its create's own arguments and return (`mp_make_held`). R8–R14
   write the composed units, lists and actor players, and the primary stream's
-  features, globals and tables. Two exceptions keep the host's own state. Each
+  features, globals and tables. Three exceptions keep the host's own state. Each
   seat's players-phase deadline comes from the recorder's image, because it is
   the host's clock and an owner's image carries its own machine's. The cells'
   unit slots and yard bit stay the host's (`sk_features` under
   `s_engine_cells`): R3's kills took every unit off the grid, and R7's creates
-  and R8's moves put the composed world's units on it.
+  and R8's moves put the composed world's units on it. The sort buckets' order
+  is the host's too: R0 bounds each unit's bucket and not the chains, and R9
+  moves a unit into its owner's bucket only when the host's differs (*The sort
+  buckets' order*).
 - **A refused seek** reads the stream back to where it was (`sk_back`), and the
   materializer is rebuilt there by the same rule. A composition that fails
   stops the playing (`mp_fail`), so nothing composed by half is applied.
@@ -1611,8 +1700,8 @@ no yard bit stands. R7 and R8 then stamp the composed world on an empty grid.
 
 **What the comparison expects.** `recmp_compare.py --fork N` compares the
 takeover's first iteration with the composed parent at `fork_at`, less D2's
-list (`tarec.fork_view`). The grid's slots and yard bits are checked on the
-fork's iteration, as on a dump. The contact bits `+0x110` 8–10 and 12 are the
+list (`tarec.fork_view`). The grid's slots and yard bits and the sort buckets'
+chains are checked on the fork's iteration, as on a dump. The contact bits `+0x110` 8–10 and 12 are the
 viewed seat's scan (R14b), and an owner's image carries its own machine's: a
 player's own units are in contact on its own machine. So when both worlds view
 the same player, a composed unit takes the recorder's bits from the primary
@@ -1625,7 +1714,16 @@ identity. The host's unit comes from the composed world and the bits from the
 primary, so where the primary's image of a slot still describes an earlier unit
 of the same type than the one the composed world put there, the new unit shows
 that unit's contacts until the viewed record's next radar pass — display state
-on a puppet host. A dump comparison takes the same rule
+on a puppet host. **A multiplayer recording's takeover does not take them**: it
+keeps its own radar pass's bits, computed on the composed world at T, because
+in a takeover the bits are the fork's AIs' input (the acquisition scan
+`0x40AA40` reads bit 8 at `0x40AB3F` in iteration T's players phase, and the
+radar lists it builds stand until its next scan at T+30), and the identity gap
+above would hand a new unit an earlier one's contacts. A skirmish recording's
+takeover takes them (its composed world is the stream itself). So in a
+multiplayer takeover the O14 gap stays: a change the pass read after the
+recording's last pass (a typed LOS command, say) shows as a difference in bits
+8–10 at the fork's first iteration. A dump comparison takes the same rule
 whenever the dump views the seat the recorder viewed (a playing with
 `--perspective` of the recorder's own record); in full view, or from another
 seat, the views differ and the contact bits are not compared. The count of

@@ -2502,6 +2502,8 @@ engine defects we patch".
 | `0x49CF18`, `0x42F314`, `0x42F32E` | the ballistic fire `0x49CDE0`'s burnblow flight time, `idiv` by `v·cos(pitch)`, 0 within 0.35° of vertical; and its `div` by `w+0x68`, 0 for a ballistic weapon with `weaponvelocity` 0 | a `jmp` over the 9-byte `cdq; idiv ebp; mov edx,[main]` to a stub that divides as stock unless `ebp` is 0 and then takes `weapontimer` through `0x49CF29`, counted and logged; the loader's two calls of `0x49E010` routed through a stub that first gives such a weapon a `w+0x68` of 1, logged. Local |
 | `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | the grid stamp `0x47CC30`'s `X + fw ≥ W` and `Z + fh ≥ H`, which park a unit whose footprint ends on the last column or row | the two `jge` become `jg`; the 50-byte bucket block becomes a `jmp` to a stub that keeps stock's bucket index whenever its linear index is inside the `rows·cols` grid — stock's column −1 at the west edge is the previous row's last bucket, which simulation code reads — and clamps the column and row into the grid only for an index outside it; it rejoins at `0x47CCDB` |
 | `0x49A664`, `0x49A415`, `0x47CF98`, `0x4954ED` | area damage `0x49A120` reads victims only from each cell's two unit slots, and the stamp `0x47CC30` gives a contested slot B to one aircraft, so an aircraft no in-rect slot names is never found | the walk's end (11 bytes) and the selector step (18) become `jmp`s to stubs that, after stock's walk, hand the aircraft stock missed to its own per-victim code at `0x49A24E` one at a time with the selector at 2, then run the displaced tail; candidates come from a pool of airborne slots rebuilt by a stub on the step's call of the unit tick (`0x4954ED`, which first runs the replay's capture-point write and the demo recorder's capture, §2.6e) and added to from the stamp's airborne path (`0x47CF98`), under a lock, each re-tested at hand-over (alive and airborne by slot B's rule, bit 29 in the mask so a bit-29 unit is excluded; in the grid, a real bucket; not dying, bit 14; uncarried; model present; in the blast's rect; not yet seen) with every index bounded; a failed grow of the list is the engine's out-of-memory exit (`eng_alloc_or_exit`) |
+| `0x48ADDF..0x48ADF0` | the unit tick's script call `DoScriptsNow 0x4B0D60(+0x9A, 1)`, made in the unit's turn after every event earlier turns and its own AutoAim made: a playing's host gives it before the step's replayed events, so a start made before the slice on the recording machine reaches its first slice a tick late on a puppet, and a unit the step creates in a later slot gets none in that step | the 17 bytes become a `jmp` to `pushad; push esi; call unit_slice; add esp,4; popad; jmp 0x48ADF0`: the recorder's marker (`RK_EV_SLICE`, when the COB had a start at `0x4B0B00` or `0x4B0940` since the capture point), the replay's deferral to that marker, then the slice from C, counted at `0x48ADEB`; in the fail-closed table of both builds; flags and `eax`/`ecx`/`edx` dead at `0x48ADF0`, every register kept (§2.6e, *The script slice*) |
+| `0x486877` | the destructor `0x4866D0`'s Killed for a death received from a peer (mode 0, severity `+9` above 0): `0x4B0A70` with run-now set, which runs every record of the dying unit's COB at `dt` 0, where the owner's `Send_UnitDeath` ran Killed as the query `0x4B0BC0` (`0x4865C3`), that one thread alone; a playing applies every recorded death as a peer's | the `call` retargeted to `dtor_killed` (`thiscall`, `ret 0x20` like `0x4B0A70`): inside a replayed death the recording machine made itself, the query with the record's severity; otherwise the stock start; in the fail-closed table of both builds (§2.6f) |
 | `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46`; `0x465DA9`, `0x408095`; `0x407F74`; `0x43F5D1`, `0x43F631`, `0x43FC05`, `0x43FD1A`, `0x43FF85`, `0x4400AA`; `0x46778A`, `0x4677D0`; `0x482615` | the altitude-sheared row `(z − y/2) >> 5` under an unsigned bound, off the grid for a point high up near the north edge: `UnitInPlayerLOS 0x465AC0`'s four points under True line of sight, and under Permanent or Circular `PositionInPlayerMapped 0x408090` (the first three) and its inline copy (the fourth); the copy inlined in the AI caller `0x407E90`, whose probe it decides; the order resolver `0x43F0E0`'s six; the view player's map build `0x467440`'s two, which mark the units that player sees for the acquisition; and the sight emitter `0x4825B0`, the observer's side: a unit whose sheared row is off the grid stamps no sight at all. The census — by the data, every compare that reads a grid's height in memory: 57, 46 of them this read; what it does not enumerate, and the sight grid's builder found apart, are stated there — is the engine map's *Line of sight at the map's edge* | table rows. The first eight blocks (43, 43, 49, 34, 34, 44, 40 bytes, and the order resolver's 36 at `0x43F631`, whose point register stock overwrites before its row test) become a `jmp` to a hand stub; the other seven lone row tests (`cmp r,[g+0x84]` and its `jae`/`jb`, 8 or 12 bytes) to a generic stub built from the site's stock bytes, with a compare-only row over the span from its z load to its test, which the stub relies on; the emitter's row computation `0x482615..0x48261E` to a hand stub that fixes the row before stock compares it with the stored one and stores it — so the stamp and its later removal use one row by construction — with compare-only rows over the point `0x4825D4..0x482614` and from the landing point through the bound, `0x48261F..0x48266A`. Each uses the point's own row `z >> 5` when the sheared row is off the grid and the own row is on it, otherwise keeps stock's answer, and counts the own row per function |
 | `0x43E69D`, `0x43E904`, `0x43EBC6`, `0x43ECDB`, `0x43EE94`, `0x43EFA9`; `0x47D3B8`; `0x465942`, `0x46598A`, `0x465A17`, `0x465A63`; `0x46725F`, `0x467294`, `0x467340`, `0x467375`; `0x47360C`, `0x473657`, `0x473A94`, `0x473AD3`, `0x4741EC`, `0x474237`, `0x474674`, `0x4746BB`, `0x47551E`, `0x47556C`; `0x47F431`, `0x47F476` | the same read in local code: the cursor picker `0x43E490`, the build cursor's site test `0x47D2E0`, the feature helper `0x4658E0` (both corners), the radar rebuild `0x466DC0`'s projectile dots, the particle leaves `0x473590`, `0x473A00`, `0x474170`, `0x4745E0`, `0x475470`, positional sound `0x47F300` | each lone row test becomes a `jmp` to a generic stub with the same rule and count; the 27 are compared together, each from its z load through its test (the radar's whole loop `0x4671C0..0x46742E` for its dots), and written together or not at all (`fix_los_local`) |
 | `0x49BEE8` | the projectile draw pass `0x49BE60`'s inline copy of the same read, the local player's view of a projectile | the 40-byte block becomes a `jmp` to a stub with the same own-row rule and count, compared and written alone. Local: a draw of the engine's frame, which still runs as the golden source (`fxown` is not a play default) |
@@ -2947,14 +2949,16 @@ which the hook does not reach (`SC_CLOSE` in `wndproc.c`, `tagpu_refuse`, and th
 and unit-type refusals in `tagpu_patches.c`): the process's exit waits until the file of every
 recording that has ended is closed ([*Its lifetime*](tadr-port/demo-recorder-skirmish-slice.md#its-lifetime)).
 
-**Its events have 55 sites of their own** (the attach log's `recorder: N event sites in`),
+**Its events have 59 sites of their own** (the attach log's `recorder: N event sites in`),
 byte-matched and built at `DllMain` by `tagpu_rec_init`, all before any lands; no recording starts
-without them. Twenty-seven observers run a handler and then the stolen bytes: the constructor
+without them. Thirty observers run a handler and then the stolen bytes: the COB start entries
+`0x4B0B00` and `0x4B0940` (the slice markers' start set, below), the constructor
 reservation `0x486075` (the multiplayer begin root, below), the create's success exit `0x4861B3`,
 the destructor `0x4866D0`, the corpse helper `0x486360` (`FR_CORPSE`), the build done
-`0x41B8D0`, the state setter `0x48B090`, the broadcast starts `0x456190`, `0x456290` and
+`0x41B8D0`, the state setter `0x48B090`, YARD_OPEN's write `0x47DAF1` (mid-function, its
+yard recorded as `RK_EV_YARD`), the broadcast starts `0x456190`, `0x456290` and
 `0x456218` (inside `0x456200`), the replies `0x47F780` and `0x47F850` (the setter and the replies
-chained onto the puppet gates there, §2.6f, so a refused call is neither recorded nor counted), `QueryNanoPiece` `0x43E400`,
+chained onto the puppet gates there, §2.6f, so a refused call is neither recorded nor counted), `QueryNanoPiece` `0x43E400` (its query recorded as `RK_EV_QUERY`, below),
 the nano emitters `0x4720D0` and `0x472200`, and the order dispatch at `0x43A216`, `0x43B878` and
 `0x43BB1D`; and, for the features (S3a), the feature tick `0x424050`, the spawn `0x423C50`, the
 destroy `0x4246B0`, FeatureDie `0x423550`, the burn `0x4233A0`, the damage `0x4244B0` and the swap
@@ -2973,9 +2977,16 @@ Reproduction's **source test** `0x424185..0x42418E` (`mov ecx,[esp+0x10]; cmp wo
 0x4241A8`) is redirected whole to a stub that makes the test through `feat_source`: the stock
 test on the engine's own cell pointer, recorded as `FS_SOURCE` by a multiplayer recording, and
 answered from the recording on a multiplayer playing's host, whose slots follow the owners'
-units; it jumps on to `0x42418F` or `0x4241A8` with `eax` and `ecx` as stock left them. Thirteen `call`s of the COB starts `0x4B0A70` and `0x4B0940` (HitByWeapon, TakeDamage,
-TransportPickup, TransportDrop, TargetCleared, EndTransport) go through a stub that records and
-then jumps to the function. The five fire functions' network tests (`0x49D7A0`, `0x49DA92`,
+units; it jumps on to `0x42418F` or `0x4241A8` with `eax` and `ecx` as stock left them. Fifteen `call`s of the COB starts `0x4B0A70` and `0x4B0940` (HitByWeapon, TakeDamage,
+TransportPickup, TransportDrop, BeginTransport, setSFXoccupy, TargetCleared, EndTransport) go
+through a stub that records and then jumps to the function, and so do six calls of the query
+`0x4B0BC0` (BuildingBuild's `QueryBuildInfo` `0x4027FB`, VTOL_Pickup's `QueryTransport`
+`0x4113B1`, VTOL_Landing's four `QueryLandingPad` `0x411A35`, `0x411AA6`, `0x411BF5`,
+`0x411CF1`): with `QueryNanoPiece`, the COB queries only an order handler makes, each recorded at
+its place in the step as `RK_EV_QUERY` and its COB noted in the slice markers' start set
+([the engine map](exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
+The broadcast observer `0x456218` leaves out the broadcast from `0x411403`, which follows
+BeginTransport's recorded start. The five fire functions' network tests (`0x49D7A0`, `0x49DA92`,
 `0x49DC64`, `0x49DE25`, `0x49DFAF`) are released while a skirmish is recorded, so that each builds
 its `0x0D` on its own stack; the extra weapons' `wpn_tx_fired` hands it over at the send and skips
 the send when there is no network (§2.6b); four of the released blocks also run the extra weapons' slot-index splice, which writes no simulation state (`cb_slot_index` says why). That release is the only change to what the engine
@@ -3004,6 +3015,17 @@ explosion tick `0x420F30` at `0x495539` call stubs that call `tagpu_rec_phase` (
 engine's function, then `tagpu_replay_phase`, keeping every register and the flags. The recorder
 stamps each feature root with the phase it was made in; `tagpu_rec_capture` sets the phase back to 0.
 Off a puppet level `tagpu_replay_phase` returns at once.
+
+**The script slice**, a call-site redirect in the fail-closed table of both builds
+(`fix_script_slice`, `tagpu_patches.c`; the same log line, `the script slice 0x48ADDF`): the unit
+tick's 17-byte script call `0x48ADDF..0x48ADF0` jumps to `pushad; push esi; call unit_slice; add
+esp,4; popad; jmp 0x48ADF0`, which gives the unit's slice from C (`tagpu_slice_give`,
+`DoScriptsNow 0x4B0D60` with `dt` 1, counted at `0x48ADEB` by where it was given). On a recording
+level it first writes `RK_EV_SLICE` when the unit's COB object had an engine start since the
+capture point -- the start set the two observers on `0x4B0B00` and `0x4B0940` fill, keyed by the
+COB's address and emptied by an epoch at every capture point -- and on a level that plays a
+recording the replay may defer the slice to its marker (§2.6f). Site facts:
+[the engine map](exe-reverse-engineering.md#the-cob-modules-entries-every-start-outside-a-slice-and-the-script-slice-disassembled-2026-10-12).
 
 **Fields we write:** native protocol initialization writes extended start length
 `0x512AF8`, identified-text length `0x512B84`, callback `0x512ACC` and mask
@@ -3057,7 +3079,7 @@ The native fixture delivers sixteen DATA packets per peer through the production
 
 Source-prefix seals (`tagpu_recmp_stream.c`) validate contiguous sequences, closed source ticks, cumulative DATA bytes and CRC before publication. B2 closes the previous capture tick only when its clock advances; a final seal freezes a local producer, while capture failure aborts without success. The game consumer refuses a seal with a partial order transaction, and relinquishes consumption. Native fixture peers receive exact final human/AI prefixes after primary Close; a withheld last DATA fails at its valid final seal. Both live TA workers also finish after ordinary peer exits. The earlier exit test leaves two markers unread on the joiner after its game consumer stops. A vanished unsealed peer prevents transmission retirement; the drain deadline fails incomplete. Frozen per-source consumption cuts now require covering seals, and authenticated 48-byte final receipts validate against the worker's accepted marker. A retained sole consumer can drain late packets after end without moving those cuts. Active-source, withheld receipt/cut and altered receipt controls pass; the native fixture validates four receipts per peer. Actual TA verifies the departing host closes with cuts 2/2 and four receipts while the joiner remains in play, then the joiner exits cleanly with cuts 2/2. Game capture now attaches a file context before the first publication; engine authority application remains open.
 
-An optional engine-free source/application journal now copies local publications and remote consumptions into one bounded 16 MiB SPSC stream. It preserves source envelopes, assigns a global consumption/production ordinal and retains application ticks separately. A failed local journal detaches while mandatory contributions continue. `RecRing` can transfer its copied context to the actual writer, which writes contribution blocks and a validated cut footer; the readers read recording format 9 only. The synthetic `.imprec` fixture passes normal closure, C/Python reading, world seeking, missing-proof/local-save failure and semantic corruption controls. Game capture attaches that context on local recording opt-in, before the first publication/consumption and writer start. Full owner authority, engine authority application and network playback remain open. No new engine address, patch or engine write is added by the container.
+An optional engine-free source/application journal now copies local publications and remote consumptions into one bounded 16 MiB SPSC stream. It preserves source envelopes, assigns a global consumption/production ordinal and retains application ticks separately. A failed local journal detaches while mandatory contributions continue. `RecRing` can transfer its copied context to the actual writer, which writes contribution blocks and a validated cut footer; the readers read recording format 24 only. The synthetic `.imprec` fixture passes normal closure, C/Python reading, world seeking, missing-proof/local-save failure and semantic corruption controls. Game capture attaches that context on local recording opt-in, before the first publication/consumption and writer start. Full owner authority, engine authority application and network playback remain open. No new engine address, patch or engine write is added by the container.
 
 The production adapter's resource-only samples are now full normalized 520-byte human/hosted-AI player images and changed-word deltas (`tagpu_recmp_players.c`). A copied roster freezes each primary origin's recorder-local seat and bounded fixed unit block; remote queues use it for authorization. Complete player updates preserve source stream/tick/sequence and actual application tick, while unknown or malformed input cannot publish a replacement. The player-cache/journal fixture reconstructs all four exact source images in C and Python and passes roster/provenance/guard-page controls. Actual TA with two humans and one AI hosted by each verifies all four first full-image CRCs/source stamps, nonempty queues through frozen blocks and successful cuts/receipts at ordinary exit. The optional file context now copies the roster into `RT_MP_SEATS`; writer and C/Python readers require exact source/world/seat ownership agreement. The synthetic container passes 23 malformed-mapping refusals, including file-info validation when mode is falsified. This does not close remaining owner-only effects, declared Impure state, takeover or game network playback integration. The adapter reuses existing B2/player-image reads and writes only its owned caches; no new patch or engine field write.
 
@@ -3069,7 +3091,7 @@ The copied-image player-row mapper validates source/destination origin sets and 
 
 Owner constructor begins/creates, deaths/returns, script starts, replies and nano sprays share one copied kind-10
 carrier and 4,096-call game-thread queue (`tagpu_recmp_roots.c`), independently
-of the recording switch. The existing thirteen start observers, extra-weapons
+of the recording switch. The existing fifteen start observers, extra-weapons
 helper, constructor reservation and successful exit, destructor entry/return, two reply observers, nano query/dispatch credit and two spray observers
 supply unchanged root payloads. Mixed kinds and contiguous actor switches retain
 call order, source clock, incarnation and pre/post-B2 phase. Old calls drain before
@@ -3446,7 +3468,17 @@ after the gates; without them the dumps carry no COB-write counts) on the state 
 returning to one of COB's five write sites (`0x480B57`, `0x480BF1`, `0x480BB3`, `0x4813AB`,
 `0x481427`) on a puppet's unit, the unit bounded as a slot of the array first; the first 16 are
 logged. The gates make them zero; the observers prove it. **The step's phases** (§2.6e) call
-`tagpu_replay_phase` after the host's projectile tick and after its explosion tick.
+`tagpu_replay_phase` after the host's projectile tick and after its explosion tick. **The script
+slice** (§2.6e) asks `tagpu_replay_slice_defer` in the host's unit tick: a unit the iteration's
+markers name is skipped there, and the replay gives its slice at the marker in the step's events,
+at a multiplayer own create's CREATE_END, or, counted and noted, at the step's end
+(`tagpu_replay.c`, THE SCRIPT SLICES). **A replayed death's Killed** runs as the recording
+machine ran it: the destructor's run-now start at `0x486877` goes through `dtor_killed`, which
+inside a death the recording machine made itself makes `Send_UnitDeath`'s query `0x4B0BC0`
+instead (`tagpu_patches.c`, THE KILLED SCRIPT OF A REPLAYED DEATH). **The owner's queries**
+(`RK_EV_QUERY`) are made at their place in the step's events through the same `0x4B0BC0`, on the
+`+0x9A` COB object of a unit live in its slot, with the engine call's arguments
+(`tagpu_replay.c`, THE OWNER'S QUERIES).
 
 **Fields we write**, on the game thread during playback, takeover or live rewind,
 and on the loader thread at the allocator ownership boundary and the level init's call:
@@ -3505,7 +3537,9 @@ and on the loader thread at the allocator ownership boundary and the level init'
   (`tagpu_replay.c`, *THE BUILD FINISH ON A MULTIPLAYER LEVEL*);
 - the events, through `0x485F50`, C4's death wrap, `0x49D270`, `0x4B0B00`, `0x4B0A70`,
   `0x4B0940`, `0x41B8D0` (not on a multiplayer segment), `0x48B090`, `0x47F780`, `0x47F850`,
-  `0x4720D0` and `0x472200`;
+  `0x4720D0` and `0x472200`; and a marked unit's script slice, `DoScriptsNow 0x4B0D60` with `dt`
+  1 on its `+0x9A` COB object, at its marker instead of in the host's unit tick (the one slice the
+  unit tick would have given it, moved, never one more);
 - the features' changes, through the feature tick and the six feature functions with the
   recorded arguments, bounded by the level's grid, defs and weapons, each at the phase of the step
   the recording machine made it in: a unit-tick root at the replay step, a projectile-tick root

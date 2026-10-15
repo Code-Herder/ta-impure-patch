@@ -1,5 +1,5 @@
 // tools/tarun.py's run files as the viewer holds them, and what it works out from them.
-import type { Live, Run } from '../types'
+import type { Item, Live, Run, Step } from '../types'
 
 /** Finished top-level runs of this session kept in view, newest first. */
 export const KEEP_ENDED = 5
@@ -14,7 +14,20 @@ export function startTicks(stat: string): number | null {
   return Number.isFinite(ticks) ? ticks : null
 }
 
+/** tareplay's tests by the one-letter ids its code still writes (demo-recorder-completeness.md
+ * *Terms*). The table goes when tareplay writes the names itself. */
+const TAREPLAY_TESTS: Record<string, string> = {
+  L: 'record', P: 'puppet', R: 'roundtrip', Q: 'seek', K: 'takeover', F: 'follow', X: 'forks',
+  U: 'rewind', W: 'watch',
+}
+
+/** A step's name as the pane says it. */
+export function testName(tool: string, id: string): string {
+  return tool === 'tareplay' ? TAREPLAY_TESTS[id] ?? id : id
+}
+
 export function cut(doc: Doc, live: Live): Run {
+  const name = (id: string) => testName(doc.tool, id)
   return {
     id: doc.id,
     session: doc.session,
@@ -28,14 +41,17 @@ export function cut(doc: Doc, live: Live): Run {
     started: doc.started,
     ended: doc.ended,
     eta: doc.eta,
+    ...(doc.pools ? { pools: doc.pools } : {}),
     items: doc.items.map(it => ({
       id: it.id,
       state: it.state,
       ...(it.checks ? { checks: it.checks } : {}),
       steps: it.steps.map(s => ({
-        id: s.id,
+        id: name(s.id),
         state: s.state,
-        ...(s.after ? { after: s.after } : {}),
+        ...(s.after ? { after: s.after.map(name) } : {}),
+        ...(s.pool ? { pool: s.pool } : {}),
+        ...(s.order != null ? { order: s.order } : {}),
         ...(s.instance ? { instance: s.instance } : {}),
         ...(s.gt != null ? { gt: s.gt } : {}),
         ...(s.gt_target != null ? { gt_target: s.gt_target } : {}),
@@ -51,11 +67,19 @@ export function cut(doc: Doc, live: Live): Run {
   }
 }
 
+/** Whether a step's end only repeats its item's checks: the checks step ends `fail` (`unrun`)
+ * with no detail of its own when the checks it ran are listed failed (unrun) by name. */
+export function echoesChecks(it: Item, s: Step): boolean {
+  const named = s.state === 'fail' ? it.checks?.fail : s.state === 'unrun' ? it.checks?.unrun
+    : undefined
+  return !s.detail && (named?.length ?? 0) > 0
+}
+
 /** A run's failures so far: failed steps and failed checks. */
 export function failures(run: Run): string[] {
   return run.items.flatMap(it => [
     ...it.steps
-      .filter(s => s.state === 'fail')
+      .filter(s => s.state === 'fail' && !echoesChecks(it, s))
       .map(s => `${it.id ? `${it.id} ` : ''}${s.id}: ${s.detail ?? 'failed'}`),
     ...(it.checks?.fail ?? []).map(f => `${it.id ? `${it.id} ` : ''}${f}`),
   ])

@@ -6,8 +6,8 @@
 
 #include <stdint.h>
 
-#define TAGPU_RECLANES_SHA256 "2affd411d75b9e6de137bfc52b377718ce7113740a3a5209852d8d7979754978"
-#define TAGPU_RECLANES_GEN_SHA256 "bd54c50286296643b2565cee083460bd261d223d05a02bedb63ca41c595dcdbc"
+#define TAGPU_RECLANES_SHA256 "8d3821f38a3f1501b5f8c7fbd7c4caa1590c9178457c5979dea0a7703e2819c0"
+#define TAGPU_RECLANES_GEN_SHA256 "759e037d327c0e235ad68e97af0ef7d2fa342f5c207235e59279243142e6c65e"
 
 enum RecLaneRole {      /* a format constant: RT_CODEC's role byte */
     REC_LR_PLAIN,       /* any width */
@@ -36,11 +36,21 @@ enum RecLaneRole {      /* a format constant: RT_CODEC's role byte */
     REC_LR_LAYER,       /* 1 byte */
     REC_LR_TYPE,        /* 2 bytes */
     REC_LR_COUNT_,      /* any width */
+    REC_LR_OWNER,       /* 4 bytes */
+    REC_LR_EREQ,        /* 4 bytes */
+    REC_LR_EGRANT,      /* 4 bytes */
+    REC_LR_MREQ,        /* 4 bytes */
+    REC_LR_MGRANT,      /* 4 bytes */
+    REC_LR_HP,          /* 2 bytes */
+    REC_LR_BUILD_LEFT,  /* 4 bytes */
+    REC_LR_HPPCT,       /* 1 byte */
+    REC_LR_HPPCT30,     /* 1 byte */
+    REC_LR_BUCKET,      /* 4 bytes */
     REC_LR_N
 };
 
 /* the width a role's rule computes, in bytes; 0 for any of 1, 2 and 4 */
-static const unsigned char rec_role_width[REC_LR_N] = { 0, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 1, 2, 0 };
+static const unsigned char rec_role_width[REC_LR_N] = { 0, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 1, 2, 0, 4, 4, 4, 4, 4, 2, 4, 1, 1, 4 };
 
 typedef struct RecLaneRow { uint16_t off; uint8_t width, role; } RecLaneRow;
 
@@ -96,7 +106,7 @@ static const RecLaneRow rec_lanes[REC_LANES_N] = {
     { 0x07c, 2, REC_LR_SZ },         /* sight_z */
     { 0x07e, 2, REC_LR_FW },         /* foot_w */
     { 0x080, 2, REC_LR_FH },         /* foot_h */
-    { 0x082, 4, REC_LR_PLAIN },      /* bucket */
+    { 0x082, 4, REC_LR_BUCKET },     /* bucket */
     { 0x086, 4, REC_LR_PLAIN },      /* carrier */
     { 0x08a, 4, REC_LR_PLAIN },      /* cargo */
     { 0x08e, 4, REC_LR_PLAIN },      /* next */
@@ -114,31 +124,31 @@ static const RecLaneRow rec_lanes[REC_LANES_N] = {
     { 0x0b8, 2, REC_LR_PLAIN },      /* kills */
     { 0x0ba, 2, REC_LR_PLAIN },      /* u0ba */
     { 0x0bc, 4, REC_LR_PLAIN },      /* res00 */
-    { 0x0c0, 4, REC_LR_PLAIN },      /* res01 */
-    { 0x0c4, 4, REC_LR_PLAIN },      /* res02 */
+    { 0x0c0, 4, REC_LR_EREQ },       /* e_requested */
+    { 0x0c4, 4, REC_LR_EGRANT },     /* e_granted */
     { 0x0c8, 4, REC_LR_PLAIN },      /* res03 */
     { 0x0cc, 4, REC_LR_PLAIN },      /* res04 */
     { 0x0d0, 4, REC_LR_PLAIN },      /* res05 */
     { 0x0d4, 4, REC_LR_PLAIN },      /* res06 */
-    { 0x0d8, 4, REC_LR_PLAIN },      /* res07 */
-    { 0x0dc, 4, REC_LR_PLAIN },      /* res08 */
+    { 0x0d8, 4, REC_LR_MREQ },       /* m_requested */
+    { 0x0dc, 4, REC_LR_MGRANT },     /* m_granted */
     { 0x0e0, 4, REC_LR_PLAIN },      /* res09 */
     { 0x0e4, 4, REC_LR_PLAIN },      /* res10 */
     { 0x0e8, 4, REC_LR_PLAIN },      /* res11 */
-    { 0x0ec, 4, REC_LR_PLAIN },      /* store */
+    { 0x0ec, 4, REC_LR_OWNER },      /* store */
     { 0x0f0, 4, REC_LR_PLAIN },      /* attacker */
     { 0x0f4, 1, REC_LR_PLAIN },      /* attacker_player */
     { 0x0f5, 1, REC_LR_PLAIN },      /* hit_kind */
-    { 0x0f6, 1, REC_LR_PLAIN },      /* hp_pct */
-    { 0x0f7, 1, REC_LR_PLAIN },      /* hp_pct_30 */
+    { 0x0f6, 1, REC_LR_HPPCT },      /* hp_pct */
+    { 0x0f7, 1, REC_LR_HPPCT30 },    /* hp_pct_30 */
     { 0x0f8, 1, REC_LR_PLAIN },      /* sight_h */
     { 0x0f9, 1, REC_LR_PLAIN },      /* attach_piece */
     { 0x0fa, 1, REC_LR_COUNT_ },     /* damage_timer */
     { 0x0fb, 4, REC_LR_COUNT_ },     /* give_lock */
     { 0x0ff, 1, REC_LR_PLAIN },      /* player */
     { 0x100, 4, REC_LR_PLAIN },      /* u100 */
-    { 0x104, 4, REC_LR_PLAIN },      /* u104 */
-    { 0x108, 2, REC_LR_PLAIN },      /* u108 */
+    { 0x104, 4, REC_LR_BUILD_LEFT }, /* build_left */
+    { 0x108, 2, REC_LR_HP },         /* hp */
     { 0x10a, 2, REC_LR_PLAIN },      /* water */
     { 0x10c, 2, REC_LR_PLAIN },      /* u10c */
     { 0x10e, 1, REC_LR_PLAIN },      /* activation */

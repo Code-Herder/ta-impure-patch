@@ -1,0 +1,26 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's `transport-pad` and `stock-transport-pad` test groups: on flat ground, an Atlas loads a Peewee from the level's start (VTOL_Pickup: QueryTransport, BeginTransport, the attach) and the test group unloads it by tacli order (VTOL_Unload: EndTransport); a second Atlas at the pinned camera centre is selected with a native click and ordered onto an air repair pad with a native right click, which the engine's default command makes VTOL_Landing (QueryLandingPad on the pad). Every order is the scenario's or the test group's, so each run makes the pickup, the drop and the landing; how many times the landing's states repeat varies from run to run (8 to 10 EndTransport), with the simulation RNG the loader seeds from the performance counter each level [INFERRED]. A remote solar keeps the AI seat alive.",
+ "setup": {
+  "map": "Core Prime Industrial Area",
+  "res": "1024x768",
+  "unit_limit": 500,
+  "clear_existing": true,
+  "los": "permanent",
+  "mapping": true,
+  "switches": {"noshake": true},
+  "players": [
+   {"slot": 0, "controller": "human", "side": "arm", "color": 0},
+   {"slot": 1, "controller": "ai", "side": "core", "color": 1}
+  ]
+ },
+ "units": [
+  {"id": "atlas_pad", "type": "ARMATLAS", "owner": 0, "pos": [1600, 1600]},
+  {"id": "atlas_load", "type": "ARMATLAS", "owner": 0, "pos": [2400, 1600],
+   "orders": [{"cmd": "load", "target": "cargo"}]},
+  {"id": "pad", "type": "ARMASP", "owner": 0, "pos": [1792, 1600]},
+  {"id": "cargo", "type": "ARMPW", "owner": 0, "pos": [2400, 1900]},
+  {"id": "keep_ai", "type": "CORSOLAR", "owner": 1, "pos": [7500, 7000]}
+ ],
+ "camera": {"at": [1600, 1600]}
+}

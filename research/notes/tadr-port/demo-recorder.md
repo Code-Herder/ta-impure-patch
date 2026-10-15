@@ -174,6 +174,14 @@ other players; a multiplayer game is rewound from its finished recording.
   at the takeover point.
 - **An unfinished recording** (a crash, or leaving early) opens in the Replays browser like any
   other: fork from any point or play on from its end. There is no separate "Continue" feature.
+- **A fork starts at a refresh**, the last one at or before the moment chosen: a recording
+  refreshes at the second tick of each timeline and then every 300 ticks (10 s of game time at
+  normal speed), and between two refreshes a skirmish stream may hold internal values a viewer
+  never sees at an earlier value, which a live game must not inherit
+  ([S4b](demo-recorder-s4-takeover.md#driving-it)). Every moment after a timeline's first tick can
+  be forked; a request for the first tick itself is refused before anything changes, naming the
+  next. A live rewind's fork rounds the same way and is refused, if it must be, before the
+  original game's recording ends.
 - **More than four players.** A stock skirmish seats four players (measured: it refused every
   unit of seats 4–9, [scenario format](../scenario-format.md)); the four is its screen's seat
   count, and the first feasibility experiment seated ten puppet players in a skirmish level
@@ -200,11 +208,21 @@ other players; a multiplayer game is rewound from its finished recording.
 - **Keep recordings by default.** Show total replay storage in the browser. Offer optional
   cleanup by age or total size; favorites are protected from automatic deletion.
 - **Disk budget.** Targets per match-hour: **at most 10 MB for a 1v1, 25 MB for a
-  typical four-player game, and 100 MB for ten players with 1,500 units.** The recording stays
-  exact: every value at every tick, made small by lossless coding
+  typical four-player game, and 100 MB for ten players with 1,500 units.** Every value a viewer
+  sees stays exact at every tick, made small by lossless coding
   ([making recordings smaller](demo-recorder-size.md)), so a replay shows exactly what the game
-  computed and takeover can start from any tick's state. Precision is cut only if the measured hour
-  misses a budget, and each such loosening is a decision of its own. These targets rest on an estimate, not a measurement
+  computed. The owner chose to go lossy after the measured hours (2026-10-11): a skirmish stream
+  holds the internal bytes `replay-hold.tsv` names at an earlier value between two refreshes,
+  exact again at every refresh (every 300 ticks), which is where a takeover starts; each row of
+  that table is a loosening and a decision of its own. Its rows hold the weapon slots' aim and
+  target state, the unit's resource ledger's accumulators and the main order list's handler
+  state, none of which a viewer is shown. From format 15 a skirmish stream also leaves out the
+  nano sprays a unit's spray session predicts (its spray of 1, 2 or 4 ticks before, or that one
+  moved with the unit), which every reader makes again with the same bytes: a viewer sees every
+  spray at its point in its tick, only their order inside the tick differing (an owner decision
+  of 2026-10-11). From format 16 it also holds the cells' unit slots and yard bit, which the
+  playing's engine stamps itself by the recording machine's contest rule (the owner's 2026-10-12,
+  *The cells held* in [making recordings smaller](demo-recorder-size.md)). These targets rest on an estimate, not a measurement
   ([open decisions](#open-decisions-and-evidence-needed)). So far an eight-minute four-AI game
   measured about 5–7 MB per hour, and a 1,432-unit battle would reach 160–640 MB if sustained for
   an hour ([evidence](demo-recorder-state-evidence.md#4-size-estimate)). A real hour-long four-player game with AI and structures is measured before
@@ -224,7 +242,9 @@ other players; a multiplayer game is rewound from its finished recording.
   ([S1, *Measured*](demo-recorder-skirmish-slice.md#measured)); with S2a's movers, lists and
   events, 0.48 and 0.53 ms on average in two battles of 1,200 to 1,412 units, and 1.15 and 1.57 ms
   at worst
-  ([S2a](demo-recorder-skirmish-slice.md#s2a-verified-and-measured)). Its memory is not measured yet.
+  ([S2a](demo-recorder-skirmish-slice.md#s2a-verified-and-measured)). Its memory is not measured
+  as a whole yet; of it, the writer's zstd -- the level-19 context and the run's check decoder --
+  is about 16 MB, and a reader's run decoder about 1.5 MB (MEASURED, [*P1*](demo-recorder-size.md)).
 - **Require matching installed map/mod content.** Record identities and fingerprints, check them
   before playback, and identify missing or mismatched content clearly. Do not bundle a copy of
   the map and mod into every replay.
@@ -241,7 +261,7 @@ other players; a multiplayer game is rewound from its finished recording.
 | Replay browser | One row per recording: map, players, date, duration, completion, compatibility and fork count, with storage usage, favorites and the cleanup controls above. Expanding a recording lists its timelines with fork point, player played, length, outcome and last played; a fork can be deleted by hand. Forks are named from their point and player, for example "Fork 1, from 25:00, as ARM player"; renaming is not in the first version. |
 | Timeline bar | The whole history of the current timeline, with fork points as markers and a selector to switch timelines. Switching is instant before the fork point, where history is shared, and an ordinary seek after it. |
 | Controls | Pause/resume and playback-speed controls. Exact speed choices remain open. |
-| Seeking | **Under one second in either direction, over any distance.** The current frame is held until the destination is complete; no intermediate frames are shown. Dragging the playhead shows the target time and the world rebuilds on release; continuous live scrubbing is not a target. |
+| Seeking | **Under one second in either direction, over any distance, in ordinary games; about 2.5 s at worst in the densest battles** (2.4–2.6 s [INFERRED]; the owner's relaxation of 2026-10-10, below). The current frame is held until the destination is complete; no intermediate frames are shown. Dragging the playhead shows the target time and the world rebuilds on release; continuous live scrubbing is not a target. |
 | Takeover | **Play from here** and **Back to now** complete **in under two seconds** with a brief "Resuming…" indicator, without a loading screen or a level reload. Play from here asks for confirmation only when it would delete a fork, and names that fork. |
 | Opening | Opening a replay loads the map and content as starting a game does; the normal loading screen is acceptable. |
 | Preparation | **None.** The recording carries its own snapshots, so opening needs no indexing pass. |
@@ -255,8 +275,14 @@ recording to its target, and reports both times. MEASURED 2026-10-01 in a battle
 in play: 27–33 ms to a target just after a snapshot and up to 605 ms to one just before the next,
 reading forward from the snapshot being most of it; every seek of S3b's verification took 5 to
 611 ms (the [slice note](demo-recorder-skirmish-slice.md#s3b-verified-and-measured)). If a rebuild at 1,500 units cannot meet
-them, the measurements come back for a decision; the targets are never relaxed silently. The
-snapshot interval is chosen by measurement to meet them.
+them, the measurements come back for a decision; the targets are never relaxed silently.
+**The seek target is relaxed for dense battles, by the owner's decision (2026-10-10).** A seek reads
+forward from the last snapshot, so its worst case is one snapshot interval, and the owner chose
+snapshots 1,800 ticks (60 s) apart for the file's size with the measurements in hand: on two
+four-player hours the worst seek read in 261–265 ms (a light game) and 538–550 ms (a heavy one),
+while the big battle's opening decodes in about 1.7 s, and the densest battles' worst seek is about
+2.4–2.6 s [INFERRED, linear from 1.22–1.29 s at 900]
+([making recordings smaller](demo-recorder-size.md#l4-the-measured-hours-the-snapshot-interval-and-r1)).
 
 ## Player perspectives and overlays
 
@@ -421,9 +447,10 @@ evidence, and keep remaining gaps visible.
 ## Open decisions and evidence needed
 
 1. **The completeness mechanism's open items.** Every decision is taken
-   ([decisions taken](demo-recorder-completeness.md#decisions-taken)); two
-   [open items](demo-recorder-completeness.md#open-items) remain for the skirmish slice: whether a
-   recorded activation plays a second sound, and applying a recorded yard change.
+   ([decisions taken](demo-recorder-completeness.md#decisions-taken)), and no
+   [open item](demo-recorder-completeness.md#open-items) remains for the skirmish slice: a
+   recorded activation plays no second sound, and a yard its own unit's create opens is made again
+   by the replayed create and checked.
 2. **Measured size.** The disk budget rests on an estimate built from measured per-unit costs:
    about 2.4–3.3 compressed bytes per changed unit per sample, about 10–11 bytes per unit in a
    full-precision snapshot. Its largest unknown is the fraction of units that change per sample over a real
@@ -449,10 +476,25 @@ evidence, and keep remaining gaps visible.
    ([measured](demo-recorder-skirmish-slice.md#measured)). A ten-player battle of 2,010 units
    recorded exactly came to 99.6 MB for 4 min 21 s, about 560 MB an hour once 400 units remained;
    where those bytes go and the ideas for reducing them, ranked:
-   [making recordings smaller](demo-recorder-size.md); with its L1 and L2 landed (recording
-   format 9), the same battle recorded anew takes 15.3 MiB. Until the reduced stream lands, a
-   skirmish is recorded only on request.
-3. **Snapshot interval**, chosen by measurement against the seek target and the disk budget.
+   [making recordings smaller](demo-recorder-size.md); with its L1 to L3 landed, the same battle
+   recorded anew takes 12.0 MiB. L4 (recording format 11) measured two four-player hours: 24.4 and
+   51.5 MiB an hour with no snapshots at all, and the light one comes to 25.85 MiB in format 11, so the
+   four-player budget is missed. Format 12 predicts the units' resource ledger and takes the heavy
+   hour from 56.99 to 42.15 MB (−26 %), lossless; a lossy plan measured offline brings it to 19.32 MB
+   (*L5* of the size page), and format 14's hold rows, the plan's first step, take it to 30.53 MB on
+   the writer's path. Format 17's container -- each run of blocks one zstd frame at level 19, the
+   snapshots chained -- takes the exact hour to 29.90 MB, still lossless, at about 16 MB more of the
+   writer's memory and 1.5 MB more of a reader's (*P1* of the size page); the stack's own lossy
+   input -- the units' and order nodes' internal fields held, sprays as sessions and the cells held,
+   refreshed every 1,800 ticks -- is 20.73 MB in the level-3 container and 15.65 in format 17's
+   (*P1*); with the cells held the heavy hour is 16.16 MB in format 17, 15.81 in format 18
+   (*P6*), 14.06 in format 19, whose unit frame predicts more from per-type engine constants
+   (*P4*), 13.12 in format 21, which lists the units against the frame's own state (*P5*), and
+   12.71 in format 22, which codes the explicit sprays, the order nodes and the surviving
+   projectiles against more of what both sides keep (*P7*). Until the reduced stream lands, a skirmish is recorded only on request.
+3. **Snapshot interval: decided** (2026-10-10). A snapshot every 1,800 ticks, 60 s of game time,
+   chosen against the disk budget with the seek target relaxed for dense battles (*Playback and
+   seeking*).
 4. **Playback speed presets.**
 5. **Crash durability boundary**, and its wording for a process crash versus a power loss.
 6. **Contribution protocol**: the message envelope (versioned and length-bounded, but not

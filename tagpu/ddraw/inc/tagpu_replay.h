@@ -66,12 +66,19 @@ unsigned tagpu_replay_build_key(void);
 /* B2's stub at the sim step's unit-tick call (0x4954ED) calls this first, before the recorder's
    capture and the unit tick, on the game thread: on a level that plays a recording, the
    recording's globals and projectile pool at the capture point (tagpu_replay.c, THE GLOBALS AND
-   THE PROJECTILES). */
+   THE PROJECTILES). At the level's first iteration it first makes the level's own units and
+   writes image T (THE FIRST STEP'S UNITS), and then makes that write. */
 void __cdecl tagpu_replay_capture(void);
 
 /* B2's stub at the sim step's unit-tick call (0x4954ED), after the unit tick returns and before
    the rest of the iteration, on the game thread. */
 void __cdecl tagpu_replay_step(void);
+
+/* The unit tick's stub (tagpu_patches.c, THE SCRIPT SLICE), on the game thread, for each unit whose
+   script call is reached: 1 when a level that plays a recording gives this unit's slice where the
+   recording places it instead (tagpu_replay.c, THE SCRIPT SLICES), and the unit tick skips it. The
+   unit is named by arithmetic against the level's unit array, never read. */
+int __cdecl tagpu_replay_slice_defer(const char* unit);
 
 /* The stubs on the step's calls of the projectile tick (0x495513) and of the explosion tick
    (0x495539), each once its call has returned, on the game thread, with REC_PHASE_PROJ and

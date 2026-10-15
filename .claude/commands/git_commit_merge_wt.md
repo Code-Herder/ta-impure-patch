@@ -19,7 +19,7 @@ The gates, in order:
 2. Merge `main` into this branch (fast-forward, or a merge commit if diverged).
 3. Build gate — the DLL compiles on the post-merge tree.
 4. Documentation gate — the pass CLAUDE.md requires, checked against the diff.
-4b. Replay gate — the changed simulation features' fixtures, checked against a
+4b. Replay gate — the changed simulation features' test groups, checked against a
    `replay-roundtrip:` note.
 5. Review gate — `medium` (or `high`) dedicated review, checked against a record of what was
    reviewed; findings verified and fixed as new commits; build re-run if anything changed.
@@ -352,13 +352,13 @@ stepper `0x41CA10`, the scroll poll `0x41CE90`, the dead clamp `0x41C450`.
 ## Step 4b — Replay gate
 
 Applies when `git diff --name-only main...HEAD` touches a gated file (a `sim` file of
-`thread-split.allow`, the recorder's own files, a replay TSV, a fixture or a scenario a fixture
+`thread-split.allow`, the recorder's own files, a replay TSV, a test group or a scenario a test group
 names; `tools/replay/tareplay.py landing --check` lists them). It passes when that command exits
 0: a passing `replay-roundtrip:` note on a commit R, and nothing gated changed in `R..HEAD`.
 Otherwise run `tools/replay/tareplay.py landing` on HEAD. A failure is the change's own: fix it in
 a new commit and re-run, three attempts. A game that cannot start at all (no X server, Wine, an
 instance) is escalation reason 3. An `UNFEATURED` line or an `UNCOVERED` function is fixed with a
-declaration or a fixture that reaches it; landing without one is the owner's decision. Run it
+declaration or a test group that reaches it; landing without one is the owner's decision. Run it
 before Step 5; a review fix that touches a gated file runs it again.
 
 ## Step 5 — Review gate: check it, then run it if it is missing
@@ -453,7 +453,7 @@ The brief must contain, in the agent's own prompt (it starts with no context):
    TRANSIENT, PRIVATE or INSTALL is the silent kind; **new direct calls to an effect sink and new
    engine writes on a puppet**; and **every loosening** (an exclusion, a `presentation` mark,
    TRANSIENT or PRIVATE on memory the simulation reads), and **each new or moved `SIM_FEATURE`
-   region, and whether its fixtures reach it** (the Step 4b note's `reached=`).
+   region, and whether its test groups reach it** (the Step 4b note's `reached=`).
 6. **The report format**: a ranked list, most severe first; per finding the file and line, a
    one-sentence defect, the concrete failure scenario (inputs/state → wrong output), and
    `CONFIRMED` (verified in code or disassembly) or `PLAUSIBLE`; an explicit "nothing survived

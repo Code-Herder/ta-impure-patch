@@ -8,7 +8,9 @@
 #include "tagpu_log.h"
 #include "tagpu_simreg.h"
 
-SIM_FEATURE(puppet_host, SIM_PUPPET_RUNS, "battle-los tenseat");
+SIM_FEATURE(puppet_host, SIM_PUPPET_RUNS, "battle-los tenseat forest-reproduce stock-forest-reproduce");
+
+#include "tagpu_contest.h"     /* below SIM_FEATURE: the contest's rule is puppet_host's */
 
 typedef struct PuppetTable {
     volatile unsigned char on;              /* this level plays a recording                 */
@@ -21,6 +23,7 @@ typedef struct PuppetTable {
     unsigned char seat[PUPPET_PLAYERS];     /* the record is a puppet seat                  */
     unsigned char local[PUPPET_PLAYERS];    /* getter 75's answer for its units             */
     unsigned char engine_cells;             /* the footprint writers' writes stand          */
+    unsigned char mp_state;                 /* a multiplayer segment: the state gate's      */
 } PuppetTable;
 static PuppetTable s_pup;
 SIM_VAR(s_pup, SIM_CONTENT);
@@ -70,8 +73,9 @@ const volatile unsigned char* tagpu_puppet_flag(void) { return &s_pup.on; }
      its second instruction 0x480B26, where this is still in ECX and nothing is pushed: the raised
      limits rewrite the first one's displacement (0x480B22) and check it stays theirs; ATTACH
      0x481340(cargo, piece, flags), `ret 0xC`, and DROP 0x4813B0(cargo), `ret 4`, through
-     0x48AAC0. The recording carries each: the state byte as events, +0x10F, +0xBA and the carry
-     links as images (exe-reverse-engineering.md, the COB-to-engine writers).
+     0x48AAC0. The recording carries each: the state byte and the yard (+0x10F bit 2) as events,
+     the rest of +0x10F, +0xBA and the carry links as images (exe-reverse-engineering.md, the
+     COB-to-engine writers).
    - The two replies 0x47F780 and 0x47F850(unit, kind, text), `ret 0xC`, on a puppet's unit:
      a replayed state change through 0x48B090 would otherwise reply twice, its own and the
      recorded one after it.
@@ -99,7 +103,7 @@ const volatile unsigned char* tagpu_puppet_flag(void) { return &s_pup.on; }
      (0x486E54), and the rebuild kills every unit; it writes the message ring, draws the C
      runtime's rand and plays "MessageArrived". A recorded elimination is the recording's own.
    - The state setter 0x48B090(mask, on), `ret 8`, ecx the unit, on a multiplayer recording's
-     segment (engine_cells): a call on a puppet's unit that would change its state byte +0x10E,
+     segment (mp_state): a call on a puppet's unit that would change its state byte +0x10E,
      outside the replay's own write (tagpu_puppet_state_open). There the owner's composed image
      is the byte's one source, written through this setter at every capture point
      (tagpu_replay.c, THE UNITS' BOOKKEEPING), and a change starts Activate or Deactivate (bit 0)
@@ -270,7 +274,7 @@ static int __cdecl gate_state(void* E)
 {
     const char* u = (const char*)(size_t)E_ECX(E);
     unsigned char was, now;
-    if (!s_pup.on || !s_pup.engine_cells || s_state_open || !puppet_unit(u)) return 0;
+    if (!s_pup.on || !s_pup.mp_state || s_state_open || !puppet_unit(u)) return 0;
     was = (unsigned char)u[U_STATEBYTE];
     now = E_ARG(E, 2) ? (unsigned char)(was | E_ARG(E, 1)) : (unsigned char)(was & ~E_ARG(E, 1));
     return now != was && refuse(G_STATE);
@@ -377,6 +381,8 @@ static void cob_writes_init(void)
     s_cobIn = 1;
 }
 
+static void contest_init(void);
+
 void tagpu_puppet_init(void)
 {
     unsigned i;
@@ -397,6 +403,7 @@ void tagpu_puppet_init(void)
     s_gatesIn = 1;
     tagpu_logf("puppet: %u gates in", (unsigned)G_COUNT);
     cob_writes_init();
+    contest_init();
 }
 
 int tagpu_puppet_gates_in(void) { return s_gatesIn; }
@@ -411,38 +418,85 @@ int tagpu_puppet_rebuilding(void) { return s_rebuild; }
 
 /* ---- THE FOOTPRINT WRITERS ------------------------------------------------------------------
 
-   On a puppet level the recording is the only writer of the grid's unit slots and yard bit too
-   (a cell's +0x00 and +0x02, and +0x0C bit 1): the cell images carry them (tagpu_replay.c, THE
-   FEATURES). Three engine functions write them, each (unit) `ret 4`: the stamp 0x47CC30, the clear
-   0x47D0E0 and the re-claim 0x47C790. On a puppet host they run for the replay's placements (the
-   set-position 0x48A9F0 calls the clear and the stamp, 0x48AA6B and 0x48AA9A), its creates and
-   deaths, and the host's own unit tick, and none can be refused: the stamp also files the unit in
-   its sort bucket (+0x82, +0x8E and the bucket's head, 0x47CCA9..0x47CD25), which the image does
-   not write, and the stamp and the clear recompute the cells' height extremes (0x483210, the same
-   on both machines). Left alone they write the host's timing into the grid: in play an aircraft's
-   slot follows its position by an iteration, while the replay's placement stamps it at the
-   image's position, an iteration early (MEASURED 2026-09-30, the battle: at GameTime 1280 one
-   cell's slot B held the host's unit 858 where the recording's held 854).
+   On a puppet level the grid's unit slots and yard bit (a cell's +0x00 and +0x02, and +0x0C bit
+   1) have one writer. Three engine functions write them, each (unit) `ret 4`: the stamp 0x47CC30,
+   the clear 0x47D0E0 and the re-claim 0x47C790. On a puppet host they run for the replay's
+   placements (the set-position 0x48A9F0 calls the clear and the stamp, 0x48AA6B and 0x48AA9A),
+   its creates and deaths, its yard changes (tagpu_replay.c, ev_yard and yards_put) and the host's
+   own unit tick, and none can be refused: the stamp also files the unit in its sort bucket (+0x82, +0x8E
+   and the bucket's head, 0x47CCA9..0x47CD25), which the image does not write, and the stamp and
+   the clear recompute the cells' height extremes (0x483210, the same on both machines). Each
+   marks the units of a contested cell in +0x110: the holder bit 26, the loser bit 27; a holder's
+   clear with bit 26 walks the buckets around it (0x47D2C4, the walk 0x47E5C0) with the callback
+   0x47ED30 stored at 0x4FD660, which re-claims each unit it is handed (0x47ED35), and the re-claim
+   acts only on bit 27 (0x47C7A0..0x47C7A6). The marks have no other reader in .text
+   (DISASSEMBLED: every test, and, or and shift of bit 26 or 27).
 
-   A multiplayer recording's level is the exception (engine_cells, tagpu_puppet_begin): its
-   units are timed by their owners, while the recorder's grid names its own replicas at its own
-   times, so no recorded slot is the truth there and the engine's writes stand.
+   ON A LEVEL WHOSE CELLS ARE THE ENGINE'S (engine_cells, tagpu_puppet_begin) these three are that
+   writer, and the marks are theirs too: a multiplayer recording's level, whose units are timed by
+   their owners while the recorder's grid names its own replicas at its own times, and a skirmish
+   recording's that holds its cells (RECL_CELLS), whose stream carries a cell's slots and yard bit
+   exact only at a refresh (tagpu_reclossy.c). There the grid follows the units the images place:
+   every recorded mobile unit's footprint cell is the set-position's rounding of its recorded
+   position (0x48AA00..0x48AA32; MEASURED 2026-10-12, 3,640,526 of 3,640,526 unit-iterations of
+   two recordings), so the playing's stamp at the image's position is the recording machine's.
+   On a skirmish one the replay leaves the marks to them (tagpu_replay.c, unit_put), and the
+   contests are decided by the recording machine's rule (THE CONTEST'S RULE, below).
 
-   So each call's grid writes are undone at its return. The recorder's observer at each entry hands
-   the unit over (tagpu_puppet.h); this saves the unit's footprint -- +0x76, +0x78 by +0x7E, +0x80,
-   i16 each, a cell wider each way, clipped to the grid -- and puts the slots and the yard bit back
-   when the function returns. Each of the three writes only inside that footprint (0x47CD31..
-   0x47D03A, 0x47D105..0x47D23B, 0x47C7C9..0x47CA8E). The clear nests the re-claim: for a unit
-   with +0x110 bit 26 it walks the buckets around (0x47D2C4, the walk 0x47E5C0) with the callback
-   0x47ED30 stored at 0x4FD660, which re-claims each unit it is handed (0x47ED35). Nothing else
-   nests: no other code path from the three reaches one of them, none of the three is stored as a
-   pointer, and the callback is passed only by the clear and the saved game's 0x47DB20 (and by
-   0x47CAC0, which nothing calls). So the frames are a LIFO, two deep in play; an entry past
-   FOOT_DEPTH is counted, the first named, and not undone. A frame's undo puts back the cells it
-   saved, so an outer frame also undoes what the calls it nests wrote inside its rectangle. A
-   footprint wider than FOOT_SAVE either way is data the save cannot hold: counted, the first
-   named, its writes stay -- and the harness names the cells. The passability refresh 0x440A40
-   sees the call's own writes; the recording does not carry passability (the slice note's S3a). */
+   On any other puppet level the cell images carry the slots and the yard bit (tagpu_replay.c,
+   THE FEATURES), and the writers' own would differ from them: every puppet seat is type 3, so a
+   contest gives the cell to the newcomer where the recording machine's incumbent kept it
+   (MEASURED 2026-09-30, the battle: at GameTime 1280 one cell's slot B held the host's unit 858
+   where the recording's held 854, an aircraft at the map's last columns, so a contest decided by
+   the puppet's type-3 rule or the stamp's edge bound [INFERRED]). So each call's grid writes are undone at its return. The
+   recorder's observer at each entry hands the unit over (tagpu_puppet.h); this saves the unit's
+   footprint -- +0x76, +0x78 by +0x7E, +0x80, i16 each, a cell wider each way, clipped to the grid
+   -- and puts the slots and the yard bit back when the function returns. Each of the three writes
+   only inside that footprint (0x47CD31..0x47D03A, 0x47D105..0x47D23B, 0x47C7C9..0x47CA8E). The
+   clear nests the re-claim through the walk above. Nothing else nests: no other code path from
+   the three reaches one of them, none of the three is stored as a pointer, and the callback is
+   passed only by the clear and the saved game's 0x47DB20 (and by 0x47CAC0, which nothing calls).
+   So the frames are a LIFO, two deep in play; an entry past FOOT_DEPTH is counted, the first
+   named, and not undone. A frame's undo puts back the cells it saved, so an outer frame also
+   undoes what the calls it nests wrote inside its rectangle. A footprint wider than FOOT_SAVE
+   either way is data the save cannot hold: counted, the first named, its writes stay -- and the
+   harness names the cells. The passability refresh 0x440A40 sees the call's own writes; the
+   recording does not carry passability (the slice note's S3a).
+
+   THE CONTEST'S RULE. The stamp and the re-claim give a held cell to the newcomer only when the
+   incumbent's owner record is active and of type 3: `cmp dword [rec],0` / `je keep`, then
+   `cmp byte [rec+0x73],3` / `je take`, the incumbent marked the loser and the newcomer the holder
+   (the re-claim's three, 0x47C84D..0x47C856, 0x47C956..0x47C95F, 0x47CA32..0x47CA3B, `74 26`;
+   the stamp's three, 0x47CDD0..0x47CDD9, 0x47CF06..0x47CF0F, 0x47CFE0..0x47CFE9, `74 25`;
+   DISASSEMBLED, and every test of +0x73 against 3 in .text outside these is in other code). A
+   skirmish recording machine has no type-3 record -- its seats are 1, the local human, and 2,
+   the local AI (MEASURED in both recordings the decision rests on; replay-layout.tsv's
+   `controller` row) -- so its incumbent always keeps the cell. A puppet's seats are all type 3,
+   and a playing that keeps the engine's cells there would decide every contest the other way:
+   MEASURED 2026-10-12 on an air war, each rule's live game against its own playing: under the
+   type-3 rule 71 of 2,441 impacts differed (22 only live, 49 only played, 70 of them at slot B);
+   under the recording machine's 1 of 2,221, not at slot B, and every cell matched at both
+   dumps. So on such a level the six `je take` become NOP NOP from the first step
+   (tagpu_puppet_play) to the teardown, a takeover or a return to now (tagpu_puppet_end), and
+   every contest keeps the incumbent, as the recording machine's did. THE ORDERING: the sites
+   change only on the game thread and outside every footprint writer. At the replay's first step
+   that is inside the level's first iteration, at the capture point B2's stub reaches before the
+   first unit tick 0x48AD30 (tagpu_replay.c, first_step), before play_first's level_units makes
+   the level's first unit: no unit exists yet, so no stamp, clear or re-claim has run under the
+   other rule or has one open, and the creates that follow stamp under the rule now in -- the
+   loader, the one other thread that runs level code, makes none, since the start-unit sites skip
+   every record on a puppet host (demo-recorder-s2-host.md §6.4), and the first step waits on its
+   load word's bit 1 (0x497C5F, 0x498342). Everywhere else it is between two iterations: at a
+   seek's crossing or a rewind's start in the frame visit, before the seek's creates (mp_follow,
+   rw_prepare), and at the teardown's entry or a takeover's end. THE BOUND: each site is written
+   only while it holds the bytes the pristine exe holds there or this module's NOPs, so a patch of
+   another module at one of them refuses the playing that needs the NOPs instead of being
+   overwritten, and a write that fails midway undoes the call's others (contest_write). What
+   remains is the call order: a
+   puppet makes its writer calls as deaths, creates, then placements in slot order, where the
+   recording machine interleaved them in its unit tick, so where two contesting calls swap the
+   holder differs (MEASURED in emulation of the engine: 4 of an air war's 1,700 iterations, 3 of
+   them with deaths; in the game no slot-B impact differed in the air war or in a battle). */
 
 #define OFF_GRID     0x14287        /* the cells, 13 bytes each, row-major ... */
 #define OFF_GRID_W   0x14233        /* ... W columns ...                       */
@@ -470,6 +524,129 @@ static struct { unsigned depth; FootFrame f[FOOT_DEPTH]; } s_foot;
 SIM_VAR(s_foot, SIM_TRANSIENT);
 static struct { unsigned undone, nested, wide; } s_footDiag;
 SIM_VAR(s_footDiag, SIM_PRIVATE);
+
+/* THE CONTEST'S RULE's sites: each `je take`, 74 and its displacement, in the pristine exe */
+static const struct { unsigned va; unsigned char je[2]; } CONTEST[CONTEST_SITES] = {
+    { 0x0047C856u, { 0x74, 0x26 } }, { 0x0047C95Fu, { 0x74, 0x26 } },
+    { 0x0047CA3Bu, { 0x74, 0x26 } }, { 0x0047CDD9u, { 0x74, 0x25 } },
+    { 0x0047CF0Fu, { 0x74, 0x25 } }, { 0x0047CFE9u, { 0x74, 0x25 } },
+};
+static int s_contestIn;             /* the six sites held the pristine bytes at attach */
+SIM_VAR(s_contestIn, SIM_INSTALL);
+/* The record of this module's writes to the sites: bit i set when its NOP NOP went into site i,
+   cleared when the retail `je` went back. Outside s_pup, which a playing's begin and end reset,
+   so nothing but contest_write changes it; it changes where s_pup does, at a playing's first
+   step and end, a seek's crossing and a rewind's start (THE ORDERING) */
+static unsigned s_contestOurs;
+SIM_VAR(s_contestOurs, SIM_CONTENT);
+
+static void contest_init(void)
+{
+    unsigned i;
+    for (i = 0; i < CONTEST_SITES; i++)
+        if (tagpu_detour_landed(CONTEST[i].va, NULL, NULL) ||
+            memcmp((const void*)(size_t)CONTEST[i].va, CONTEST[i].je, 2)) {
+            tagpu_logf("puppet: the contest site 0x%06X holds other bytes: a skirmish recording "
+                       "that holds its cells will not play", CONTEST[i].va);
+            return;
+        }
+    s_contestIn = 1;
+}
+
+/* What each contest site holds now (tagpu_contest.h). The record of writes says which sites
+   this module NOPped and the bytes confirm it: a site's bytes change only by this module's
+   writes, on the game thread (THE ORDERING), or by another module's, which the record does not
+   claim. */
+static void contest_sites(int site[CONTEST_SITES])
+{
+    unsigned i;
+    for (i = 0; i < CONTEST_SITES; i++)
+        site[i] = contest_classify((const unsigned char*)(size_t)CONTEST[i].va, CONTEST[i].je,
+                                   s_contestOurs >> i & 1);
+}
+
+int tagpu_puppet_contest_in(void)
+{
+    int site[CONTEST_SITES];
+    if (!s_contestIn) return 0;
+    contest_sites(site);
+    return !contest_any(site, SITE_FOREIGN);
+}
+
+int tagpu_puppet_contest_kept(void)
+{
+    int site[CONTEST_SITES];
+    contest_sites(site);
+    return contest_any(site, SITE_OURS);
+}
+
+/* The six sites to the recording machine's rule (`keep`, NOP NOP) or back to the engine's (the
+   retail `je`), as contest_plan says (THE CONTEST'S RULE's BOUND): the NOPs go into the retail
+   sites, all six or none, and the `je` back into this module's NOPs alone. 1 when the rule is
+   in afterwards -- for the engine's, when no NOP of ours is left, a site another module patched
+   being its own. 0, logged, when a site holds another's bytes (`keep`) or a page write fails:
+   putting the NOPs in then undoes the ones this call wrote, so the playing stops on the engine's
+   rule; putting the `je` back goes on with the other sites, and a NOP of ours that stays is
+   known by the record: a later skirmish is unaffected by it (its seats are types 1 and 2, which
+   keep a contested cell under either rule), a later playing writes the rule it needs first or
+   refuses (tagpu_puppet_play), and a network game, whose remote seats are type 3, is refused at
+   its first iteration while it stays (tagpu_puppet_contest_kept, tagpu_rec_capture). */
+static int contest_write(int keep)
+{
+    int site[CONTEST_SITES], refuse, ok = 1;
+    unsigned i, plan, done = 0;
+    if (!s_contestIn) {
+        if (!keep) return 1;
+        tagpu_logf("puppet: the contest sites held other bytes at attach: the recording "
+                   "machine's contest rule is not put in");
+        return 0;
+    }
+    contest_sites(site);
+    plan = contest_plan(keep, site, &refuse);
+    if (refuse) {
+        for (i = 0; site[i] != SITE_FOREIGN; i++) {}
+        tagpu_logf("puppet: the contest site 0x%06X holds another module's bytes: the recording "
+                   "machine's contest rule is not put in", CONTEST[i].va);
+        return 0;
+    }
+    if (!plan) return 1;
+    for (i = 0; i < CONTEST_SITES; i++) {
+        if (!(plan >> i & 1)) continue;
+        if (!tagpu_detour_write(CONTEST[i].va, keep ? CONTEST_NOP2 : CONTEST[i].je, 2)) {
+            ok = 0;
+            if (keep) {
+                tagpu_logf("puppet: the contest site 0x%06X could not be written: the recording "
+                           "machine's contest rule is not put in", CONTEST[i].va);
+                break;
+            }
+            tagpu_logf("puppet: the contest site 0x%06X could not be written: this module's NOP "
+                       "stays there", CONTEST[i].va);
+            continue;
+        }
+        if (keep) s_contestOurs |= 1u << i;
+        else s_contestOurs &= ~(1u << i);
+        done |= 1u << i;
+    }
+    if (!ok && keep) {
+        for (i = 0; i < CONTEST_SITES; i++)
+            if (done >> i & 1) {
+                if (tagpu_detour_write(CONTEST[i].va, CONTEST[i].je, 2))
+                    s_contestOurs &= ~(1u << i);
+                else
+                    tagpu_logf("puppet: the contest site 0x%06X could not be put back: this "
+                               "module's NOP stays there", CONTEST[i].va);
+            }
+        return 0;
+    }
+    if (ok)
+        tagpu_logf("puppet: contests keep %s", keep ? "the incumbent, as the recording machine's "
+                                                      "did" : "the engine's own rule");
+    return ok;
+}
+
+/* the rule a level needs: the recording machine's on a skirmish segment that keeps the engine's
+   cells, the engine's own on every other */
+static int contest_needed(void) { return s_pup.on && s_pup.engine_cells && !s_pup.mp_state; }
 
 int tagpu_puppet_foot_enter(const char* unit, unsigned ret)
 {
@@ -564,7 +741,12 @@ void tagpu_puppet_footprints(char* out, size_t cap)
              FOOT_DEPTH, s_footDiag.wide, FOOT_SAVE);
 }
 
-void tagpu_puppet_play(void) { s_pup.playing = 1; }
+int tagpu_puppet_play(void)
+{
+    if (!contest_write(contest_needed())) return 0;
+    s_pup.playing = 1;
+    return 1;
+}
 
 int tagpu_puppet_features(int open)
 {
@@ -608,7 +790,8 @@ unsigned tagpu_puppet_draws_end(void)
 }
 
 void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
-                        const unsigned char local[PUPPET_PLAYERS], int engine_cells)
+                        const unsigned char local[PUPPET_PLAYERS], int engine_cells,
+                        int mp_state)
 {
     unsigned i;
     for (i = 0; i < PUPPET_PLAYERS; i++) {
@@ -624,25 +807,41 @@ void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
     s_state_open = 0;
     s_pup.playing = 0;
     s_pup.engine_cells = engine_cells ? 1 : 0;
+    s_pup.mp_state = mp_state ? 1 : 0;
     s_pup.on = 1;
 }
 
-void tagpu_puppet_engine_cells(int engine_cells)
+int tagpu_puppet_engine_cells(int engine_cells, int mp_state)
 {
+    unsigned char was[2];
     /* a writer's frame saved under one rule is put back under it (foot_enter, foot_leave) */
     if (s_foot.depth) {
         tagpu_logf("puppet: the cells' rule not changed inside %u open footprint writers",
                    s_foot.depth);
-        return;
+        return 0;
     }
+    was[0] = s_pup.engine_cells;
+    was[1] = s_pup.mp_state;
     s_pup.engine_cells = engine_cells ? 1 : 0;
+    s_pup.mp_state = mp_state ? 1 : 0;
+    /* before the first step the sites are written by tagpu_puppet_play */
+    if (s_pup.playing && !contest_write(contest_needed())) {
+        s_pup.engine_cells = was[0];
+        s_pup.mp_state = was[1];
+        return 0;
+    }
+    return 1;
 }
 
 void tagpu_puppet_end(void)
 {
+    /* the engine's own rule again, or contest_write has logged why a NOP of ours stays, which
+       the record of writes then says (tagpu_puppet_contest_kept) */
+    contest_write(0);
     s_pup.on = 0;
     s_pup.playing = 0;
     s_pup.engine_cells = 0;
+    s_pup.mp_state = 0;
     s_open = 0;
     s_fopen = 0;
     s_rebuild = 0;

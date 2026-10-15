@@ -697,10 +697,11 @@ static int read_native(const char* path, unsigned text_only)
 
 /* A skirmish file's perspective through the real writer and reader: player 0's samples every
    third tick, a selection each 200 ticks and a click each 250, so the writer's snapshot after
-   PV_FIRST + 900 carries two dated samples and a selection. Forward reading keeps each tick's
-   state; seeks before and after the snapshot must rebuild exactly that state. */
+   PV_FIRST + 1800 (SNAPSHOT_TICKS, tagpu_recwriter.c) carries two dated samples and a selection.
+   Forward reading keeps each tick's state; seeks before and after the snapshot must rebuild
+   exactly that state. */
 #define PV_FIRST 100u
-#define PV_LAST  1100u
+#define PV_LAST  2200u
 typedef struct PvState {
     unsigned npov, tick[2], nsel, nclick;
     RecPov pov[2];
@@ -723,7 +724,7 @@ static int perspective_file(const char* path)
     unsigned globals[REC_GLOBALS_DWORDS]={0}, proj[2]={0}, mapped[2]={0};
     unsigned features[5]={2,2,1,0,0}, at=0, n=0, first=2, last=5, k, t, T;
     unsigned short grid[2]={2,2};
-    static const unsigned SEEKS[]={PV_FIRST+450,PV_FIRST+901,PV_FIRST+950,PV_LAST-1,PV_LAST};
+    static const unsigned SEEKS[]={PV_FIRST+900,PV_FIRST+1801,PV_FIRST+1850,PV_LAST-1,PV_LAST};
     PvState* fwd=calloc(PV_LAST-PV_FIRST+1,sizeof *fwd);
     PvState now;
     RecReader* r;
@@ -831,7 +832,7 @@ int RECMP_FILE_TEST_MAIN(int argc, char** argv)
     GUID stream={.Data1=2};
     RecMpPacket got;
     RecMpStats stats;
-    int local_stop;
+    int local_stop, consumption_ends;
     CHECK(argc==3);
     proof_only_roster();
     if (!strcmp(argv[1],"native")) return read_native(argv[2],0);
@@ -969,21 +970,30 @@ int RECMP_FILE_TEST_MAIN(int argc, char** argv)
     if (!local_stop) tagpu_recmp_end(c);
     tagpu_recmp_file_end(mp,!local_stop); /* final game access, before ring hand-over */
     world_end(ring,write);
-    if (!local_stop) SetEvent(f.tail_release);
-    CHECK(WaitForSingleObject(done,30000)==WAIT_OBJECT_0); CloseHandle(done);
     if (local_stop) {
+        CHECK(WaitForSingleObject(done,30000)==WAIT_OBJECT_0);
         CHECK(tagpu_recmp_send(c,RECMP_RESOURCES,101,"still playing",13));
-        tagpu_recmp_end(c); SetEvent(f.tail_release);
+        tagpu_recmp_end(c);
     }
-    tagpu_recmp_stats(c,&stats);
-    if (f.missing_cut || f.missing_receipt) CHECK(stats.failed && stats.finished);
-    else {
-        DWORD deadline=GetTickCount()+30000;
-        while (!stats.finished) {
-            CHECK((LONG)(deadline-GetTickCount())>0); Sleep(1); tagpu_recmp_stats(c,&stats);
-        }
-        CHECK(!stats.failed && stats.cuts==2 && stats.receipts==4);
-    }
+    /* A failed journal (journal_full) and a file ended before the channel (local_stop) leave
+       tagpu_recmp_end nothing to hand consumption to, so it ends consumption, and from then on
+       the remote seals no longer gate the channel's finish (tagpu_recmp.c terminal_ready).
+       Releasing the proof tail only after that finish makes the outcome an ordering rather than
+       a race against the worker: no remote seal has arrived, so the channel holds no cut, and
+       the test shows that the finish does not wait for one. */
+    consumption_ends=f.journal_full || local_stop;
+    if (consumption_ends) channel_finished(c,&stats);
+    SetEvent(f.tail_release);
+    if (!local_stop) CHECK(WaitForSingleObject(done,30000)==WAIT_OBJECT_0);
+    CloseHandle(done);
+    /* The writer can see a failed channel and finish before the worker stores finished, its
+       last store, so a failed channel is waited for as well. */
+    channel_finished(c,&stats);
+    if (f.missing_cut || f.missing_receipt) CHECK(stats.failed);
+    else if (consumption_ends)
+        CHECK(!stats.failed && stats.consumption==RECMP_NO_CONSUMER && stats.cuts==0 &&
+              stats.receipts==4);
+    else CHECK(!stats.failed && !stats.consumption && stats.cuts==2 && stats.receipts==4);
     tagpu_recmp_release(c);
     CloseHandle(f.opened); CloseHandle(f.release); CloseHandle(f.initial);
     CloseHandle(f.tail_release); CloseHandle(f.net.event);

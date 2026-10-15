@@ -37,10 +37,47 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 9: every packed block is one zstd frame, and a stream block may be a sectioned container whose
-   unit frame carries the unit deltas and whose pool frame carries the projectile pool coded by
-   identity (THE SECTIONED CONTAINER below). A reader takes this format alone. */
-#define REC_FORMAT        9
+/* 24: format 23 with the unit frame's listing, lane masks and residuals as one binary range
+   coder's bytes a block, each decision under a context both sides keep (RCS_UNITS below). 23 was
+   format 22 with QueryTransport and QueryLandingPad among the owner's queries, and
+   BeginTransport and setSFXoccupy as the owner's starts (RK_EV_START_NAMED) where the broadcast and
+   the playing's own water-state call made them before. 22 was format 21 with three record
+   codings: an explicit nano spray as its unit's last four explicit sprays' -- the point as it was, moved with the unit or turned about it by its heading change --
+   and a residual (the events frame's scheme 2); in a stream whose header has RT_HOLD, each order
+   node matched to the kept list's node of the same action and issue time (the orders frame's
+   scheme 2); and a surviving projectile's bytes 0x34..0x6A as lanes of the record's field widths
+   (RCS_PROJ below). 21 was format 20 with the unit frame's listing from state both sides keep --
+   each carried slot a 2-bit symbol, the others ranks among the candidates or woken slots, the lane
+   masks ids into the run's masks most recent first -- and each lane's count before its column.
+   20 was format 19 with the script slice's place in the event stream
+   (RK_EV_SLICE), the owner's COB queries the playing makes again (RK_EV_QUERY) and a yard's
+   opening or closing at its place (RK_EV_YARD). 19 was format 18 with more of the unit frame's
+   rules -- a unit's hit points while it is built, its HP percentage every 30 ticks, its sort
+   bucket, a ground unit's speed and sight cell, the turn rate's one-tick blip -- and their
+   constants in the header: RT_TYPES, each unit type's, and RT_PHYSICS's bucket columns. 18 was
+   format 17 with the sectioned container's kinds as per-iteration patterns -- by reference to the
+   run's last 16, with markers for an empty feature tick and a predicted RK_FEATURES, and no count
+   for a run the frames fix -- and an RK_TICK body for a block's first iteration alone (THE
+   SECTIONED CONTAINER below). 17 was format 16 in another container -- a run of sectioned stream
+   blocks is one zstd frame at level 19, each block a flushed chunk of it, and a snapshot is packed
+   against the one before it (RBF_CHAINED, THE RUN AND THE CHAIN below). 16 was format 15 with a
+   skirmish recording's cells held (RT_HOLD's RECL_CELLS): between refreshes the stream carries the
+   cells' unit slots and yard bit at a value it wrote before, a feature tick's input cells only
+   where a byte other than those changed, and the tick's source test as FS_SOURCE, as a multiplayer
+   recording does. 15 was format 14 with a skirmish stream's nano sprays written as sessions
+   (RK_SPRAY_SESSION, RT_HOLD's RECL_SPRAYS): a spray its unit's session predicts is left out, and
+   every reader makes it again at the end of its iteration. 14 was format 13 with a hold table of
+   rows: a skirmish stream holds the weapon slots' aim and target state, the resource ledger's
+   accumulators and the main order list's handler state between refreshes (replay-hold.tsv; RT_HOLD
+   carries the masks). 13 was format 12 with the stream written by the lossy filter
+   (tagpu_reclossy.c): a skirmish header's RT_HOLD names the bytes the stream holds between
+   refreshes, a refresh iteration ends its stream block (RBF_REFRESH), and a test launch may write
+   the exact records beside the stream (RB_EXACT). A reader takes this format alone. The bytes: a
+   stream block may be a sectioned container whose unit frame carries the unit deltas, whose pool
+   frame carries the projectile pool coded by identity, and whose four record frames -- the cells,
+   the orders, the events and the state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER
+   below). */
+#define REC_FORMAT        24
 
 static __inline int rec_format_supported(unsigned format)
 {
@@ -244,7 +281,10 @@ enum RecKind {
                           grid's row z from column x. The first iteration carries every cell,
                           the rest the cells that changed, a snapshot the cells that differ from
                           the first iteration's and a dump every cell. Inside the feature tick's
-                          RK_EV_FEATURE: the cells that changed since the iteration's images      */
+                          RK_EV_FEATURE: the cells that changed since the iteration's images. A
+                          stream that holds its cells (RECL_CELLS) carries their slots and yard
+                          bit at a value it wrote before, and a tick's input run only where a
+                          byte other than those changed (tagpu_reclossy.c)                       */
     RK_WRECK,          /* u16 index, u16 0, then the record's image: a record that changed        */
     RK_FEATURES,       /* i32 the active list's head (main+0x14213), i32 the settled list's
                           (+0x14217), i32 the free list's (+0x1421B), u32 the reproduction cursor
@@ -309,6 +349,36 @@ enum RecKind {
     RK_POV_AT,         /* u32 the GameTime it was taken, then a RecPov: a snapshot's copy of one of
                           a seat's two last samples, which a stream's RK_POV dates by its
                           iteration; a snapshot's only                                            */
+    RK_SPRAY_SESSION,  /* u32 unit ID, u8 mode (bits 0-2 the period p: 0, 1, 2 or 4; bit 3
+                          FOLLOW, with p > 0 only; every other value refused), u8 0, u16 0: the
+                          unit's spray session from this iteration on, p 0 closing it. At the end
+                          of each iteration in which a unit with a session has no RK_EV_SPRAY of
+                          its own, a reader makes the spray the session implies: the unit's spray
+                          of the iteration p GameTimes before, its point moved by the unit's
+                          position change since with FOLLOW (tagpu_reclossy.c, THE SPRAY
+                          SESSIONS). After the iteration's last other record, slots ascending;
+                          a skirmish stream's only, with RT_HOLD's RECL_SPRAYS; in RCS_OTHER     */
+    RK_EV_SLICE,       /* u32 unit ID: the unit tick's script slice of that unit, DoScriptsNow
+                          0x4B0D60 with dt 1 at 0x48ADEB, recorded just before it ran because the
+                          unit's COB object had an engine start (0x4B0B00, 0x4B0940) since the
+                          iteration's capture point. A top-level event of the step, never inside a
+                          feature call or a death; at most one per slot an iteration. A playing gives
+                          the slice here instead of in its own unit tick (tagpu_replay.c, THE SCRIPT
+                          SLICES)                                                                 */
+    RK_EV_QUERY,       /* u32 unit ID, u8 the query (REC_QUERY_*), u8 0 x3: a COB query only an
+                          order handler makes, 0x4B0BC0 on that unit's COB object. The handler runs
+                          in its own unit's turn, after that unit's slice; the queried unit is the
+                          handler's, or a pad -- SelfRepair's QueryNanoPiece (0x402525..0x40252E),
+                          VTOL_Landing's QueryLandingPad -- whose own slice can come later. A
+                          top-level event of the step, like RK_EV_SLICE. A playing makes the same
+                          query at this place (tagpu_replay.c, THE OWNER'S QUERIES)               */
+    RK_EV_YARD,        /* u32 unit ID, u8 the yard (1 open, 0 closed), u8 0 x3: YARD_OPEN 0x47DAC0
+                          passed its refusal 0x47D970 and wrote the structure's +0x10F bit 2
+                          (0x47DAF1), then re-claimed its footprint (0x47DAFD). Wherever the
+                          setter runs, and where it stands is THE YARD RULE (below): the yard of a
+                          live unit at its place, or of the create that follows it. A playing
+                          writes the first at this place and checks the second at its create
+                          (tagpu_replay.c, A RECORDED YARD_OPEN)                                   */
     RK_KINDS
 };
 
@@ -323,7 +393,22 @@ typedef struct RecNetCreate {
 } RecNetCreate;
 _Static_assert(sizeof(RecNetCreate) == 32, "network create event span");
 _Static_assert(RK_EV_NET_CREATE == 51 && RK_POV == 52 && RK_CLICK == 53 && RK_SELECT == 54 &&
-               RK_POV_AT == 55, "existing record kinds retain their values");
+               RK_POV_AT == 55 && RK_SPRAY_SESSION == 56, "existing record kinds retain their values");
+_Static_assert(RK_EV_SLICE == 57 && RK_EV_QUERY == 58 && RK_EV_YARD == 59 && RK_KINDS == 60,
+               "the script slice's, the owner's query's and the yard's kinds");
+
+/* RK_EV_QUERY's query: the script's name and the values its arguments point to going in, as the
+   engine's calls pass them, an argument it passes NULL marked - (the engine map, *The owner's COB
+   queries*) */
+enum RecQuery {
+    REC_QUERY_BUILDINFO,   /* "QueryBuildInfo" {-1, -, -, -}: BuildingBuild's state 2, 0x4027FB  */
+    REC_QUERY_NANOPIECE,   /* "QueryNanoPiece" {0, -, -, -}: 0x43E400 at 0x43E427, from fifteen
+                              handlers                                                        */
+    REC_QUERY_TRANSPORT,   /* "QueryTransport" {-1, -, -, -}: VTOL_Pickup's state 2, 0x4113B1    */
+    REC_QUERY_LANDINGPAD,  /* "QueryLandingPad" {-1, -1, -1, -1}: VTOL_Landing's states 1, 3 and 5
+                              (0x411A35, 0x411AA6, 0x411BF5, 0x411CF1), on the pad             */
+    REC_QUERIES
+};
 #define REC_POV_AT_BYTES (4u + (unsigned)sizeof(RecPov))
 
 /* A feature root, and its arguments after the site. A cell the engine names by address is its
@@ -365,6 +450,9 @@ static __inline int rec_event_len(unsigned kind, unsigned len)
     case RK_EV_REPLY:       return len >= 12 && len <= 12 + REC_TEXT_MAX;
     case RK_EV_SPRAY:       return len == 48;
     case RK_EV_DRAW:        return len == 12;
+    case RK_EV_SLICE:       return len == 4;
+    case RK_EV_QUERY:       return len == 8;
+    case RK_EV_YARD:        return len == 8;
     default:                return 0;
     }
 }
@@ -374,6 +462,91 @@ static __inline int rec_root_len(unsigned root, unsigned len)
 {
     static const unsigned char args[FR_ROOTS] = { 0, 28, 8, 12, 12, 16, 12, 32 };
     return root < FR_ROOTS && len == 8u + args[root];
+}
+
+/* THE YARD RULE: where an RK_EV_YARD may stand in its step, the same for the writer, both readers
+   and the playing. A unit is live at an event of the step when the iteration's images hold it (the
+   images come before the events, RK_TICK) and no RK_EV_DEATH of its ID since, or when an
+   RK_EV_CREATE of its ID came since [DISASSEMBLED 2026-10-12]:
+   - A yard of a unit live at its place is that unit's yard at that place: a COB slice's, a
+     query's, a script another root ran at once. Killed among them: on a skirmish recording machine
+     every death goes through Send_UnitDeath 0x4864B0, which runs Killed as a query at 0x4865C3
+     and only then calls the destructor (0x486679, mode 1), so Killed's yard comes before the
+     death's RK_EV_DEATH. The destructor's own Killed start (0x486877) runs in mode 0 alone
+     (0x48684A..0x486853), the network receiver's (0x455423), and its other starts are made with
+     run-now 0: the order purge's teardown 0x43A1F0 starts TargetCleared through 0x489800
+     (0x43A2B9) and StopBuilding at 0x43A251, and its dispatch of event 2 to the order's handler
+     (0x43A21A) reaches handlers whose own starts pass run-now 0 -- BuildingBuild
+     (0x402653..0x402717), SelfDestruct, HelpBuild and VTOL_MobileBuild (returning at 0x41C110),
+     AirStrike and AirToGround, VTOL_Pickup's states 4 and 5 (EndTransport, 0x4B0940 at 0x41148D
+     after 0x411479). So no script of the dying unit runs inside its own death's bracket.
+   - A yard of a unit not live at its place is the yard its create's Create script opened: the
+     create 0x485F50 runs Create's first slice at once (0x485D40 at 0x4860A6, run-now pushed at
+     0x485DDD), after its init has written the footprint (0x485AAA, 0x485BD3) and before its
+     placement 0x48A870 (0x486109) and stamp 0x47CC30 (0x48610F); CreateFromNetwork 0x4861D0 has
+     the same order (0x4862BE, 0x486306, 0x48630C). The create is recorded at its exit (0x4861B3),
+     so the yard comes before the unit's RK_EV_CREATE, which follows in the same step with no
+     death of the slot between.
+   - Anything else is malformed: a yard inside a feature call, which holds no event but its draws
+     and the tick's cells; a yard naming the unit of a death still open; and a yard of a unit not
+     live whose create does not follow in its step. The recorder keeps such an event out of the file and counts it
+     (tagpu_recorder.c, ev_yard), so the writer never meets one; the readers refuse a file that
+     holds one.
+   The callers keep the state: `st` and `touched` hold a byte and an index per unit slot. */
+enum { RYS_MADE = 1, RYS_GONE, RYS_HELD };
+typedef struct RecYardStep {
+    unsigned char* st;         /* a slot's change in the step: 0 none (the images'), RYS_*        */
+    unsigned*      touched;    /* the slots whose st is set, each once                             */
+    unsigned       ntouched;
+    unsigned       held;       /* the slots whose yard waits for their create                      */
+} RecYardStep;
+
+static __inline void rec_yard_mark(RecYardStep* y, unsigned slot, unsigned char v)
+{
+    if (!y->st[slot]) y->touched[y->ntouched++] = slot;
+    y->st[slot] = v;
+}
+
+/* One event of the step by THE YARD RULE: 1 well formed, 0 malformed. `live` is the images',
+   `deaths` the IDs of the deaths still open. A kind it does not name, and a create or death of an
+   ID outside the slots (the callers' own checks bound those), changes nothing. */
+static __inline int rec_yard_take(RecYardStep* y, unsigned kind, const unsigned char* b,
+                                  const unsigned char* live, unsigned slots,
+                                  const unsigned* deaths, unsigned ndeaths)
+{
+    uint32_t id;
+    unsigned slot, i;
+    if (kind != RK_EV_CREATE && kind != RK_EV_DEATH && kind != RK_EV_YARD) return 1;
+    id = (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
+    slot = id - 1u;
+    if (slot < 1 || slot >= slots) return kind != RK_EV_YARD;
+    if (kind == RK_EV_CREATE) {
+        if (y->st[slot] == RYS_HELD) y->held--;
+        rec_yard_mark(y, slot, RYS_MADE);
+        return 1;
+    }
+    if (kind == RK_EV_DEATH) {
+        if (y->st[slot] == RYS_HELD) return 0;
+        rec_yard_mark(y, slot, RYS_GONE);
+        return 1;
+    }
+    for (i = 0; i < ndeaths; i++)
+        if (deaths[i] == id) return 0;
+    if (y->st[slot] == RYS_MADE || (!y->st[slot] && live[slot])) return 1;
+    if (y->st[slot] != RYS_HELD) {
+        rec_yard_mark(y, slot, RYS_HELD);
+        y->held++;
+    }
+    return 1;
+}
+
+/* The step's end: 1 when every held yard met its create. The state goes back to the images'. */
+static __inline int rec_yard_end(RecYardStep* y)
+{
+    int ok = !y->held;
+    while (y->ntouched) y->st[y->touched[--y->ntouched]] = 0;
+    y->held = 0;
+    return ok;
 }
 
 /* The feature code's inputs from outside the feature world: its calls of the simulation RNG
@@ -388,7 +561,9 @@ enum RecDrawSite {
     FS_REPRODUCE_X,    /* 0x424159, and its column                                                  */
     FS_REPRODUCE_Z,    /* 0x424167, and its row                                                     */
     FS_SOURCE,         /* 0x424189, reproduction's test of its source cell's slot A: an input, not
-                          a draw; a multiplayer recording's tick only                              */
+                          a draw; the tick's only, in a recording whose playing keeps the
+                          engine's slots: a multiplayer one, or a skirmish one that holds its
+                          cells (RECL_CELLS)                                                      */
     FS_SITES
 };
 #define FS_RNG_SITES 6 /* the RNG calls the recorder redirects                                      */
@@ -432,21 +607,41 @@ enum RecEnd {
    whatever follows: a takeover's fork is a segment appended to the file it was played from
    (research/notes/tadr-port/demo-recorder-s4-takeover.md).
    A block is a RecBlock, then `packed` bytes: exactly one zstd frame whose content is its `raw`
-   bytes, with no byte after it, or the raw bytes themselves when RBF_STORED is set. A packed
-   block has at least one byte each way; an RB_HEADER, an RB_END and an RB_TIMELINES are always
-   stored, so a header reads without zstd. `crc_body` is the CRC-32 (zlib's crc32, crc32.c's
+   bytes, with no byte after it, or the raw bytes themselves when RBF_STORED is set -- except a
+   packed sectioned stream block, which is a chunk of its run's frame, and a chained snapshot,
+   whose frame needs the snapshot before it (THE RUN AND THE CHAIN below). A packed block has at
+   least one byte each way; an RB_HEADER, an RB_END and an RB_TIMELINES are always stored, so a
+   header reads without zstd. `crc_body` is the CRC-32 (zlib's crc32, crc32.c's
    Crc32_ComputeBuf) of those `packed` bytes and `crc_head` that of the block's first 28 bytes, so
    a block cut short, or a header torn, is known by one of them. A block is written whole or not
    at all: a file ends at its last complete block.
    An RB_STREAM with RBF_SECTIONS holds a sectioned container (below) in place of its records:
-   `raw` is the container's bytes, which decode to the records. Its unit and pool frames carry
-   state from one sectioned block to the next, and restart -- RBF_FRAME_RESET -- at a segment's
-   first stream block, at the first after a snapshot and at the first after a stream block of
-   records (one the writer's codec declined, or whose check decode differed), from the units and
-   the projectile pool the reader holds at the end of the iteration before it. So a stream block inside a run of sectioned blocks decodes
-   only after its predecessors since the run's reset, and a reader starts at a snapshot or at a
-   segment's start, never inside a run (tagpu_reccodec.c, THREE INVARIANTS). Any other flag bit,
-   RBF_SECTIONS on another kind of block and RBF_FRAME_RESET without RBF_SECTIONS are refused. */
+   `raw` is the container's bytes, which decode to the records. Its frames carry state from one
+   sectioned block to the next, and restart -- RBF_FRAME_RESET -- at a segment's first stream
+   block, at the first after a snapshot and at the first after a stream block of records (one the
+   writer's codec declined, or whose check decode differed): the unit and pool frames from the
+   units and the projectile pool the reader holds at the end of the iteration before it, the cells
+   frame from the grid it holds there, the orders, events and state frames empty. So a stream
+   block inside a run of sectioned blocks decodes only after its predecessors since the run's
+   reset, and a reader starts at a snapshot or at a segment's start, never inside a run
+   (tagpu_reccodec.c, THREE INVARIANTS). Any other flag bit, RBF_SECTIONS or RBF_REFRESH on
+   another kind of block, RBF_FRAME_RESET without RBF_SECTIONS, a stored sectioned block, and
+   RBF_CHAINED on a stored block or on any kind but RB_SNAPSHOT are refused.
+
+   THE RUN AND THE CHAIN. A RUN is the sectioned stream blocks from an RBF_FRAME_RESET block to
+   the block before the segment's next reset, stream block of plain records or snapshot: the
+   blocks one state of the frames carries across. Blocks of other kinds between them (RB_EXACT,
+   RB_CONTRIBUTIONS) neither end nor touch a run. Its packed bytes are one zstd frame, begun at the reset block --
+   magic, a window of at most 2^REC_RUN_WINDOW_LOG, no content size, no dictionary, no checksum --
+   and never ended; each block's bytes are the frame's next chunk, flushed at the block's end, so a
+   block decodes only after every chunk of its run before it, through one decoder, as its frames
+   do. A sectioned block is always packed: its bytes are part of the frame's history whatever
+   their size. A CHAIN is a key snapshot -- packed alone or stored, without RBF_CHAINED -- and the
+   snapshots after it in its segment, each RBF_CHAINED: one zstd frame whose prefix (raw content,
+   no dictionary ID) is the records of the RB_SNAPSHOT before it in the segment. At most
+   REC_CHAIN_MAX snapshots follow a key, so a seek unpacks at most REC_CHAIN_MAX + 1. The cost: a
+   snapshot that cannot be read refuses every seek that starts from it or from a later link of
+   its chain, up to the next key, and a seek does not fall back to an earlier snapshot. */
 #define REC_MAGIC        "IMPREC\r\n"          /* 8 bytes, no NUL                                 */
 #define REC_BLOCK_MAGIC  0x4B4C4249u           /* "IBLK"                                          */
 
@@ -472,14 +667,17 @@ enum RecBlockKind {
                           RK_TABLE_SIZE per declared table and an RK_TABLE_SPAN for each of its
                           spans that is not all zero (RK_TABLE_SIZE zeroes the table, which
                           starts empty), the RK_CELLS of every cell that differs from the
-                          recording's first iteration (the base: a reader takes it from the first
+                          segment's first iteration (the base: a reader takes it from the first
                           iteration it reads, which every playing reads first), an RK_WRECK per
-                          record that is not all zero, an RK_FEATURES, the RK_GLOBALS, the
-                          RK_PROJ_HEAD with an RK_PROJ per record below its hw, and the explored
-                          map whole (RK_MAPPED). A dump is one of
-                          these, stored, with every cell and no base, and the players' sight
-                          counters (RK_SIGHT) and the two images whole (RK_IMAGE) after the
-                          rest. A snapshot follows the stream block that ends
+                          record that differs from the pool at the end of that same iteration
+                          (the wreck base, taken beside the grid's; a record now zero included),
+                          an RK_FEATURES, the RK_GLOBALS, the RK_PROJ_HEAD with an RK_PROJ per
+                          record below its hw, and the explored map whole (RK_MAPPED). A
+                          snapshot that carries more wreck records than differ reads the same.
+                          A dump is one of these, stored, with every cell and no base -- its
+                          RK_WRECK per record that is not all zero, read over a zero pool -- and
+                          the players' sight counters (RK_SIGHT) and the two images whole
+                          (RK_IMAGE) after the rest. A snapshot follows the stream block that ends
                           with the events of the step after `last`, so a reader that starts from
                           it takes those from the block before                                  */
     RB_END,            /* entries (RecTag): how the recording ended                              */
@@ -489,39 +687,89 @@ enum RecBlockKind {
                           main+0x1426B, uncompressed), whose part [0, 2*columns) x [0, 2*rows)
                           the engine shows. A reader that does not know it skips it            */
     RB_TIMELINES,      /* RecTimelineState rows (tagpu_recfile.h); the latest complete table wins */
-    RB_CONTRIBUTIONS   /* RecMpRecord metadata followed by its exact source envelope/payload;
+    RB_CONTRIBUTIONS,  /* RecMpRecord metadata followed by its exact source envelope/payload;
                           packed consecutive spans, no ring padding (tagpu_recmp_file.h)        */
+    RB_EXACT           /* a test launch's only (tagpu_rec.exact): the records of the stream block
+                          before it as the capture made them, before the lossy filter, with its
+                          `first` and `last`; never sectioned. A reader of the stream skips it   */
 };
+_Static_assert(RB_CONTRIBUTIONS == 7 && RB_EXACT == 8, "the block kinds retain their values");
 #define REC_MINIMAP_HEAD  8u
 #define REC_MINIMAP_MAX   (0xFF00u - REC_MINIMAP_HEAD)   /* the most indices: a ring record's */
 #define RBF_STORED      1u
 #define RBF_SECTIONS    2u     /* an RB_STREAM's only: its payload is a sectioned container    */
-#define RBF_FRAME_RESET 4u     /* with RBF_SECTIONS only: the unit and pool frames restart at its
-                                  first iteration, from the reader's own copies of the units
-                                  and the projectile pool                                     */
-#define RBF_ALL         (RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET)
+#define RBF_FRAME_RESET 4u     /* with RBF_SECTIONS only: the frames restart at its first
+                                  iteration, the unit and pool frames from the units and the
+                                  projectile pool the reader holds at the end of the iteration
+                                  before it, the cells frame from the grid it holds there, the
+                                  orders, events and state frames empty                       */
+#define RBF_REFRESH     8u     /* an RB_STREAM's only, sectioned or not: its last iteration is a
+                                  refresh, where the stream's world equals the writer's exact
+                                  copy byte for byte (tagpu_recwriter.c, iteration_done)      */
+#define RBF_CHAINED     16u    /* an RB_SNAPSHOT's only: packed against the RB_SNAPSHOT before it
+                                  in its segment (THE RUN AND THE CHAIN)                       */
+#define RBF_ALL         (RBF_STORED | RBF_SECTIONS | RBF_FRAME_RESET | RBF_REFRESH | RBF_CHAINED)
+#define REC_RUN_WINDOW_LOG 20  /* a run's zstd window, 2^20 bytes at most                        */
+#define REC_CHAIN_MAX      9   /* the chained snapshots a key may have after it                  */
 
 /* THE SECTIONED CONTAINER (tagpu_reccodec.c reads and writes it): the bytes of an RB_STREAM with
    RBF_SECTIONS, which decode to exactly the records they replace. A RecSecHead, then RCS_COUNT
-   sections of len[] bytes each, in order. RCS_KINDS holds the record kinds in payload order as
-   runs, each a varint kind (1..65535) and a varint count (at least 1). A body section holds, for
-   each record of its kinds in payload order, a varint length (at most 0xFFFF) and that many bytes:
-   the record's body verbatim. Neither RK_UNIT_DELTA nor RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA
-   has a body anywhere: the unit frame (RCS_UNITS) and the pool frame (RCS_PROJ) make them. The
-   payload is the records in kind order, each a RecHdr, its body and zero padding to
+   sections of len[] bytes each, in order. RCS_KINDS holds the record kinds (RCS_KINDS below).
+   RCS_OTHER holds, for each record of its kinds in payload order, a varint length (at most
+   0xFFFF) and that many bytes: the record's body verbatim -- but for the RK_TICK of every
+   iteration after the block's first, which has no entry: iteration i's GameTime is the first's
+   + i (mod 2^32), and a block whose iterations are not consecutive GameTimes is written as
+   records. Neither RK_UNIT_DELTA nor RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA has a
+   body anywhere: the unit frame (RCS_UNITS) and the pool frame (RCS_PROJ) make them. The record
+   frames -- RCS_CELLS, RCS_ORDERS, RCS_EVENTS and RCS_STATE -- each make the bodies of their
+   kinds, in payload order, from a section of columns (tagpu_recframe.h, THE COLUMNS): a u8
+   scheme, a varint column count (1..32), each column's varint length, then the columns, which
+   fill the section; a reader takes only its own scheme and count, and consumes every column to
+   its end. The payload is the records in kind order, each a RecHdr, its body and zero padding to
    a dword, as the writer's stream holds them; its first record is an RK_TICK, and an iteration is
    an RK_TICK and the records up to the next one.
 
+   RCS_KINDS, the kinds, is per iteration its PATTERN, by reference:
+       u8      m                          1..RECC_KINDS_MRU: the m-th of the run's last patterns,
+                                          front first, which moves to the front; 0: a new one,
+       varint  length, bytes              after m = 0 only: the pattern (1..RECC_KINDS_MAX bytes),
+                                          which goes to the front, the RECC_KINDS_MRU + 1-th
+                                          dropped
+   The list empties at every RBF_FRAME_RESET. A pattern is the iteration's records as tokens, in
+   payload order, which consume it exactly: a varint kind (1..0xFFFE) and a varint count (at
+   least 1) for a run of records of that kind, or one of two MARKERS, which have no count:
+       0       an empty feature tick: an RK_EV_FEATURE and its RK_EV_FEATURE_END whose bodies are
+               the run's last explicit empty pair's -- an FR_TICK root of 8 bytes directly followed
+               by an end whose root is FR_TICK; none before the first such pair since the reset
+       0xFFFF  an RK_FEATURES whose body is the state frame's prediction (tagpu_recframe_state.c);
+               none before the first explicit RK_FEATURES since the reset
+   and the first run of each of three GROUPS in the pattern has no count either, its count being
+   the group's total less the group's other runs': RK_TICK, total 1, the pattern's first token
+   (so no other RK_TICK run); RK_UNIT_DELTA, total the unit frame's changed units of the
+   iteration; RK_PROJ and RK_PROJ_DELTA together, total the pool frame's changed records of the
+   iteration. The first run carries no count, not the last, so a reader knows from what it has
+   read whether a count follows. A group with no run has a total of 0, and a reader refuses a
+   group whose other runs hold its total or more (the first run's count would be below 1).
+
    RCS_UNITS, the unit frame, is
        varint  iterations                 RecSecHead.iterations again
-       varint  listed[iterations]         the units listed in each iteration
-       varint  gap[sum of listed]         per iteration, slot = previous + 1 + gap, previous
-                                          starting at 0
-       varint  ndict                      the distinct lane masks: 0 when nothing is listed
-       bytes   dict[ndict][mb]            mb = ceil(lanes / 8); bit j says lane j has a residual
-       ids     one per listed unit: a u8 when ndict <= 256, else a varint
-       columns for each lane in RT_CODEC's order: the zigzag varint residuals of the listed units
-               whose mask has its bit, in listed order
+       bytes   the unit coder's output to the section's end, at least 4 (tagpu_reccodec.c, THE
+               UNIT CODER): for every iteration, every slot 1 .. slots - 1 that is live at the
+               iteration's start and that no RK_UNIT or RK_UNIT_GONE of it names, in slot order --
+                 a resting slot: whether it is woken (a woken slot always lists)
+                 a slot the iteration before listed (CARRIED): whether it is listed
+                 any other: whether it is listed
+               and for each listed slot its lane mask, then for each lane of the mask in RT_CODEC's
+               order its zigzag residual, 1 .. 2^(8 x the lane's width) - 1.
+   The coder, every model and its context are THE UNIT CODER's. The run keeps a new mask as its
+   next id unless it keeps RECC_MASKS already or the mask's hash chain -- the kept masks whose 16
+   bytes have the same FNV-1a hash mod 8192 -- holds 8 (UC_CHAIN). The models, the run's kept
+   masks and their contexts' lists, the residual caches and every slot's coder state restart at
+   every RBF_FRAME_RESET, with the frames. A reader refuses a section the coder reads past or does
+   not consume exactly, a mask id past the run's kept masks or in its context's list, an empty new
+   mask or one the run keeps, a cache index past the cache's values, a residual past its lane's
+   width, and a block whose WORK passes RECC_WORK (2^28) at a visited slot: each decision 1, each
+   raw bit 1, and 128 (UC_EVAL) for each visited slot that does not rest or is listed.
    RCS_PROJ, the pool frame, is
        varint  iterations                 RecSecHead.iterations again
        per iteration, in order:
@@ -534,9 +782,11 @@ enum RecBlockKind {
        varint  codes                      per iteration, a reference code for each birth, then
                                           for each tail slot: 0 the zero row, else 1 +
                                           (zigzag(row - anchor) << 2 | section)
-       columns the 32-bit zigzag residuals: the survivors' in the survivor step's dword order
-               (13, 14, 15, 7, 8, 9, 0 .. 6, 10, 11, 12, 16 .. 26), a column a dword with every
-               iteration's survivors in order; then the births' and the tail's, dwords 0 .. 26
+       columns the zigzag residuals, a column each with every iteration's survivors in order:
+               the survivors' 21 lanes of bytes 0x34..0x6A, each zigzagged at its field's width
+               (tagpu_reccodec.c, THE SURVIVOR LANES), then their dwords 7, 8, 9, 0 .. 6, 10, 11,
+               12, 32-bit; then the births' and the tail's, dwords 0 .. 26, 32-bit. Byte 0x6B of a
+               survivor is its last record's.
    The survivors are the records of [0, c0) that did not die, in order, and become [0, c0 - nd);
    the births follow them up to c1. Every count, slot and reference is bounded by RT_PROJECTILES,
    the iterations and the section's bytes; an iteration's projectile records are exactly its
@@ -544,15 +794,19 @@ enum RecBlockKind {
    carries whenever the count or the extent changes. A block with no projectile costs 1 + 4 x iterations bytes.
    A varint is LEB128 of a value below 2^32, at most 5 bytes; zigzag maps r >= 0 to 2r and r < 0
    to -2r - 1 (a 32-bit residual r >= 2^31 to 2 (2^32 - r) - 1). tagpu_reccodec.c says what a
-   residual is the residual of, and what a reference row and its sections are. */
+   residual is the residual of, and what a reference row and its sections are; each record
+   frame's file (tagpu_recframe_*.c) says what its columns hold. */
 enum RecSection {
-    RCS_KINDS = 0,     /* the record kinds, as runs                                              */
+    RCS_KINDS = 0,     /* the record kinds, as per-iteration patterns                             */
     RCS_UNITS,         /* the unit frame: every RK_UNIT_DELTA                                    */
     RCS_PROJ,          /* the pool frame: every RK_PROJ_HEAD, RK_PROJ and RK_PROJ_DELTA          */
-    RCS_CELLS,         /* the bodies of RK_CELLS                                                 */
-    RCS_ORDERS,        /* the bodies of RK_ORDERS                                                */
-    RCS_EVENTS,        /* the bodies of RK_EV_CREATE..RK_EV_DEATH_END and RK_EV_NET_CREATE        */
-    RCS_OTHER,         /* the bodies of every other kind                                         */
+    RCS_CELLS,         /* the cells frame: every RK_CELLS                                        */
+    RCS_ORDERS,        /* the orders frame: every RK_ORDERS                                      */
+    RCS_EVENTS,        /* the events frame: RK_EV_CREATE..RK_EV_DEATH_END, RK_EV_NET_CREATE,
+                          RK_EV_SLICE, RK_EV_QUERY and RK_EV_YARD                                */
+    RCS_OTHER,         /* the bodies of every other kind, verbatim                               */
+    RCS_STATE,         /* the state frame: RK_GLOBALS, RK_GLOBALS_DELTA, RK_PLAYER,
+                          RK_PLAYER_DELTA, RK_WRECK and RK_FEATURES                              */
     RCS_COUNT
 };
 typedef struct RecSecHead {
@@ -561,9 +815,9 @@ typedef struct RecSecHead {
     uint16_t sections;         /* RCS_COUNT                                                      */
     uint32_t len[RCS_COUNT];   /* each section's bytes; the head and these fill the block        */
 } RecSecHead;
-_Static_assert(sizeof(RecSecHead) == 36, "a sectioned container's head is 36 bytes");
+_Static_assert(sizeof(RecSecHead) == 40, "a sectioned container's head is 40 bytes");
 
-/* A record kind's section: four rules and a default, so a kind added later falls into RCS_OTHER
+/* A record kind's section: five rules and a default, so a kind added later falls into RCS_OTHER
    on the writer's side and the reader's alike, with no table to update. */
 static __inline unsigned rec_section_of(unsigned kind)
 {
@@ -571,8 +825,12 @@ static __inline unsigned rec_section_of(unsigned kind)
     if (kind == RK_PROJ_HEAD || kind == RK_PROJ || kind == RK_PROJ_DELTA) return RCS_PROJ;
     if (kind == RK_CELLS) return RCS_CELLS;
     if (kind == RK_ORDERS) return RCS_ORDERS;
-    if ((kind >= RK_EV_CREATE && kind <= RK_EV_DEATH_END) || kind == RK_EV_NET_CREATE)
+    if ((kind >= RK_EV_CREATE && kind <= RK_EV_DEATH_END) || kind == RK_EV_NET_CREATE ||
+        kind == RK_EV_SLICE || kind == RK_EV_QUERY || kind == RK_EV_YARD)
         return RCS_EVENTS;
+    if (kind == RK_GLOBALS || kind == RK_GLOBALS_DELTA || kind == RK_PLAYER ||
+        kind == RK_PLAYER_DELTA || kind == RK_WRECK || kind == RK_FEATURES)
+        return RCS_STATE;
     return RCS_OTHER;
 }
 _Static_assert(RK_EV_CREATE == 19 && RK_EV_DEATH_END == 32, "the event kinds RCS_EVENTS holds");
@@ -587,6 +845,19 @@ typedef struct RecAirRow {
     int32_t  maxv, brake, acc, bank, pitch;
 } RecAirRow;
 _Static_assert(sizeof(RecAirRow) == 24, "an RT_AIR row is 24 bytes");
+
+/* RT_TYPES' row: a unit type's constants for the unit frame's per-type rules. `type` is the unit
+   image's +0xA6; the rest are the def's (+0x170 the sight emit's height term, a byte; +0x1FA the
+   hit points at most, u32; +0x192 maxvelocity, +0x19A brakerate, +0x19E acceleration, 16.16). */
+#define REC_SLOPES 11            /* the ground speed's slope table: 0x505200, read at 0x505205 + sl */
+typedef struct RecTypeRow {
+    uint16_t type;
+    uint8_t  sight_h, zero;
+    uint32_t maxhp;
+    int32_t  maxv, brake, acc;
+} RecTypeRow;
+_Static_assert(sizeof(RecTypeRow) == 20, "an RT_TYPES row is 20 bytes");
+#define REC_TYPES_HEAD 16        /* RT_TYPES' u32 n, its slope table and its pad                 */
 
 /* A header or end block's payload: entries of u16 tag, u16 length, then that many bytes, the next
    entry at the next multiple of 4. A string is its bytes, with no NUL. */
@@ -656,8 +927,9 @@ enum RecTag {
     RT_CODEC,          /* u16 n, u16 0, then n rows of RecLaneRow (u16 offset, u8 width, u8 role):
                           the unit frame's lanes (replay-lanes.tsv), tiling the unit image        */
     RT_PHYSICS,        /* i32 gravity (main+0x14263), u8 sea level (main+0x1427F), u8 the sight
-                          rule (LosType main+0x14281 bit 2 at the segment's start, 0 or 1), u16 0:
-                          the unit frame's level constants                                       */
+                          rule (LosType main+0x14281 bit 2 at the segment's start, 0 or 1), u16 0,
+                          u32 the sort buckets' columns (main+0x142A3; 0 turns the bucket rule
+                          off): the unit frame's level constants                                 */
     RT_AIR,            /* u32 n, u32 0, then n RecAirRow, types strictly ascending: the aircraft
                           types (def +0x241 bit 11) the unit frame predicts with its air rules    */
     RT_END_REASON = 32,/* u32 RecEnd                                                            */
@@ -687,11 +959,48 @@ enum RecTag {
                           game with none (its live count +0x144 at 0), 0 for none: a seat of the
                           recording                                                              */
     RT_MP_END,         /* RecMpRecordEnd: persisted source proofs cover these application cuts  */
-    RT_CODEC_DECLINED, /* u32: stream blocks the unit frame's encoder declined, written as records */
-    RT_CODEC_MISMATCH  /* u32: stream blocks whose check decode differed, written as records: a
+    RT_CODEC_DECLINED, /* u32: stream blocks the codec's encoder declined, written as records     */
+    RT_CODEC_MISMATCH, /* u32: stream blocks whose check decode differed, written as records: a
                           codec bug                                                              */
+    RT_HOLD,           /* a skirmish header's, written by the writer (tagpu_recwriter.c,
+                          header_apply); absent in a multiplayer one, whose stream holds nothing:
+                          u32 the refresh interval in ticks (REC_REFRESH_MIN..REC_REFRESH_TICKS),
+                          u32 flags (RECL_*), the SHA-256 of replay-hold.tsv (32 bytes), then the
+                          hold masks: REC_UNIT_IMAGE bytes for a unit image and REC_ORDER_IMAGE
+                          for a node of a main list (+0x5C), a set bit held. Every byte a mask
+                          leaves clear is exact at every iteration; a held byte is exact at every
+                          refresh and keeps, between two, a value the stream wrote for the same
+                          unit or list since the last (tagpu_reclossy.c, THE INVARIANTS)        */
+    RT_TYPES           /* u32 n, u8 the ground speed's slope table (11 bytes, the executable's at
+                          0x505200), u8 0, then n RecTypeRow, types strictly ascending and below
+                          RT_UNITDEFS' count: the unit types the unit frame's per-type rules
+                          predict; a type without a row has those rules off                      */
 };
-_Static_assert(RT_AIR < RT_END_REASON, "a header's tags stay below the end block's");
-_Static_assert(RT_CODEC == 29 && RT_AIR == 31 && RT_CODEC_DECLINED == 44, "the codec's tags");
+/* The end block's tags are RT_END_REASON..RT_CODEC_MISMATCH; a header's are the others. */
+_Static_assert(RT_AIR < RT_END_REASON && RT_HOLD > RT_CODEC_MISMATCH,
+               "the end block's tags are one run");
+_Static_assert(RT_CODEC == 29 && RT_AIR == 31 && RT_CODEC_DECLINED == 44 && RT_HOLD == 46 &&
+               RT_TYPES == 47, "the codec's and the filter's tags");
+
+/* RT_HOLD. A refresh iteration is a segment's first or second, one whose GameTime is 1 modulo
+   the interval (the first after it where an iteration skips that GameTime), and every snapshot's
+   (tagpu_reclossy.h, reclossy_is_refresh): on the grid, every refresh is also 1 modulo the
+   radar pass's step of 30 ticks, and the grid is the same in every recording. A file without
+   RT_HOLD, a multiplayer recording, is written on REC_REFRESH_TICKS's grid. */
+#define REC_REFRESH_TICKS 300   /* the interval a recording is written with                     */
+#define REC_REFRESH_MIN   30    /* the least a test launch may ask for (tagpu_rec.refresh)       */
+#define RECL_CELLS        1u    /* the cells' unit slots and yard bit are held: a playing keeps
+                                   the engine's own (tagpu_puppet.c, THE FOOTPRINT WRITERS)      */
+#define RECL_SPRAYS       2u    /* the nano sprays are written as sessions (RK_SPRAY_SESSION)    */
+#define REC_SPRAY_BODY    44u   /* an RK_EV_SPRAY after its unit ID                              */
+#define REC_SPRAY_FOLLOW  8u    /* RK_SPRAY_SESSION's mode: the point follows the unit           */
+/* the flags every skirmish recording's RT_HOLD carries: the writer's (tagpu_recwriter.c), and
+   the capture records FS_SOURCE by them (tagpu_recorder.c, feat_source) */
+#define REC_SKIRMISH_HOLDS (RECL_CELLS | RECL_SPRAYS)
+#define REC_HOLD_BYTES    (8u + 32u + REC_UNIT_IMAGE + REC_ORDER_IMAGE)
+/* the position +0x6A..+0x75, which a spray session that follows its unit reads: never held */
+#define REC_HOLD_POS_AT   0x6A
+#define REC_HOLD_POS_END  0x76
+_Static_assert(REC_HOLD_BYTES == 456, "RT_HOLD's bytes");
 
 #endif

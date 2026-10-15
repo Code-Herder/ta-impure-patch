@@ -563,6 +563,41 @@ The step T tick, in order: the network pump 0x453D40 (network only), then these 
 - **Writes:** the queue `[0x51E68C]` and the table's next times. Both are UI; nothing in the
   simulation reads them (`data-keys-evidence.md:734`).
 
+### 1.8b The script slice — `RK_EV_SLICE` (format 20)
+
+Not a root: the unit tick's `DoScriptsNow(1)` (`0x48ADEB`) placed among the step's events. Written
+just before the slice of a unit whose COB had an engine start (`0x4B0B00`, `0x4B0940`) since the
+capture point, `{u32 ID}`, outside any bracket; a playing gives that unit's slice at the marker
+instead of in the host's unit tick, so a start made before the slice -- AutoAim's, a create's
+Create in a later slot -- takes its first slice where it did on the recording machine
+([skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-20)).
+
+### 1.8c The owner's COB queries — `RK_EV_QUERY` (format 20; transport and pad, format 23)
+
+Not a root: a COB query `0x4B0BC0` only an order handler makes, so only the machine of the
+handler's unit's owner -- `QueryBuildInfo` at `0x4027FB` (BuildingBuild), `QueryNanoPiece` at
+`0x43E427` (inside `0x43E400`, from fifteen handlers), and since format 23 `QueryTransport` at
+`0x4113B1` (VTOL_Pickup) and `QueryLandingPad` at `0x411A35`, `0x411AA6`, `0x411BF5` and
+`0x411CF1` (VTOL_Landing). `{u32 ID, u8 the query, u8 0 x3}`, outside any bracket, written where
+the engine makes the query, in the handler's unit's turn after that unit's slice. The queried unit
+is the handler's, or a pad -- SelfRepair's repairing pad (`0x402525..0x40252E`), VTOL_Landing's
+landing pad (the order's `+0x16`) -- whose own slice can come later in the tick and which can be
+another player's; the query's COB is noted in the slice set so that slice is marked. A playing
+makes the same query there with the engine's arguments
+([engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
+
+### 1.8d A yard's change — `RK_EV_YARD` (format 20)
+
+Not a root: YARD_OPEN `0x47DAC0`'s write of `+0x10F` at `0x47DAF1`, past its refusal `0x47D970`.
+`{u32 ID, u8 the yard (1 open, 0 closed), u8 0 x3}`, in a bracket or not, written wherever the COB
+setter ran it, skirmish recordings only. A lab's script slice can open its yard and its build
+handler make the nanoframe in it later in the same unit tick, so a playing applies the yard of a
+live unit at its place in the events, before the create that follows it. A yard of a unit not live
+there is its own create's Create slice, recorded before the create's exit: the replayed create
+makes it again and the playing checks it. Anything else is malformed (THE YARD RULE,
+`tagpu_recfmt.h`; [engine map](../exe-reverse-engineering.md), *An open yard gives nothing
+back*).
+
 ### 1.9 The unit state a death must carry
 
 On the owner, the destructor runs inside the unit tick. The reaper (0x48AFB9..0x48AFD1) comes
@@ -930,6 +965,8 @@ Other sites considered and rejected:
 ## 6. The decisions
 
 Taken 2026-09-30 (the slice note's *Decided 2026-09-30* and *S2a*): D1 as recommended; D2 wider than recommended, every owner-only start the game showed is recorded, TargetCleared included, and BeginTransport is not among them, because 0x411403 broadcasts it (0x456200) and the broadcasters record it; D3 and D5 as recommended, implemented by S2a; D4, D6 and D7 are S2b's.
+
+Format 23 (2026-10-13) records BeginTransport at its start `0x4113EF` after all, and leaves its broadcast out: the start runs at once on the recording machine, while the broadcast is started with run-now 0 by a remote copy and by a playing, one slice later (the engine map, *BeginTransport is recorded at its start*). `setSFXoccupy` (`0x43DBE8`) joins the owner-only starts in the same format.
 
 
 - **D1 — Unit replies on a replay.** A live remote never plays another player's; the watched

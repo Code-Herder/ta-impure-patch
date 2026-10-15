@@ -52,7 +52,7 @@ tools/tacli log w1 -g "weapons: (unit-data|loader|reload|VIOL|MISM)"   # each lo
   gives a COB per-weapon script copies, `tools/extra_weapons_fixture.py` rebuilds the shipped test
   pack from the game. After adding or removing archives, delete the instance's `catalogue.json` or
   `scenario load` refuses the new type at validation.
-- Fixtures: `wpn-llt10`, `wpn-peewee4`, `wpn-badtgt`.
+- Test groups: `wpn-llt10`, `wpn-peewee4`, `wpn-badtgt`.
 
 ## The COB script trace
 
@@ -275,10 +275,12 @@ the worker for the playing and removes it after). The same script seeks:
 `--roundtrip T` (dump A, poison, seek, dump B; compare the pair with `tarec.py
 compare-dumps`), `--seek A:T` (at GameTime A seek to T in the same process,
 dumps s<T> and s<T+120>), `--fresh T` alone (a fresh process at T, dump
-q<T>), or `--takeover T:P` alone (a fresh process takes over at T as P, dump
-k<T+120>, then tareplay's AI-activity check; the file with its timeline is
+q<T>), or `--takeover T:P` alone (a fresh process takes over as P at R, the
+refresh at or before T, which the takeover's line names; dump k<R+120>, then tareplay's
+AI-activity check; the file with its timeline is
 kept as `fork-<name>`; `recmp_compare.py --fork 1 FILE` compares the fork's
-first iteration with the composed parent). `--timeline N` plays or seeks
+first iteration with the composed parent; the grid's slots and the sort buckets' chains are
+checked there, not compared). `--timeline N` plays or seeks
 timeline N's chain; `--hide-chat` writes `chat hide` once the playing starts
 (`recmp_compare.py --chat VIEW[:SINCE] FILE DUMP...` checks a dump's chat lines
 for the viewed record, `full` for the full map); then
@@ -895,25 +897,26 @@ block that reads to its last complete block.
   one piece per segment keyed by the file's bytes up to that segment's end and the decoder's
   sources, so a file a takeover appended to decodes only its new segment (`tareplay.py` does this
   for its own runs).
-- **Check playback end to end** with `tools/replay/tareplay.py run FIXTURE… | all [-j N] [--keep]
-  [--game-speed 10|20] [--out DIR]` (`list` names the fixtures of `tools/replay/fixtures.json`):
+- **Check playback end to end** with `tools/replay/tareplay.py run TEST_GROUP… | all [-j N] [--keep]
+  [--game-speed 10|20] [--out DIR]` (`list` names the test groups of `tools/replay/fixtures.json`):
   tick-driven runs default to internal speed 20 (2x normal); `--game-speed 10` selects normal.
   Each stopped owned instance's private registry store is configured before launch.
-  Cost fixtures and W's speed/settings UI test use normal speed. Tick endpoints,
+  Cost test groups and W's speed/settings UI test use normal speed. Tick endpoints,
   round-trip windows and comparison rules keep their existing units; wall-clock
   deadlines are not shortened. Armed round trips bound the tick batch at T−1,
   so their frame checks cannot be skipped by faster simulation progression.
   Use normal speed for timing, network latency and bandwidth measurements.
   The same option applies to `measure`, `landing`,
   `broad`, `takeover`, `forks` and `rewind`, and so does `--turbo K` (default 1, 0 for none): once
-  a lane's dumps are armed, L, P, R, F, K, X and U run K ticks a frame (`tagpu_turbo.on`, below),
-  never Q, W or a cost fixture. Those lanes launch held (`tagpu_hold.on`, below) and act at
+  a test's dumps are armed, L, P, R, F, K, X and U run K ticks a frame (`tagpu_turbo.on`, below),
+  never Q, W or a cost test group. Those tests launch held (`tagpu_hold.on`, below) and act at
   GameTimes: each holds the level at each step's, the twin's and the end's tick (`pause at <T>`),
   acts on the held level and resumes it; a `run` step's script is handed the level held at its
   tick with the turbo on, advances it by exact ticks and hands it back held. No check waits on the
   wall clock: a one-frame answer is bounded by 60 s, a running level by 120 s of GameTime
-  standing still, and a seek's cost is its work line's CPU time. Every game gets the test render
-  profile: a 20 fps present cap, `ss=1`, `shadowres=512` and the Classic++ look keys off. Each fixture is
+  standing still (a peek the running game has not answered is no progress), and a seek's cost is
+  its work line's counts, checked against the file. Every game gets the test render
+  profile: a 20 fps present cap, `ss=1`, `shadowres=512` and the Classic++ look keys off. Each test group is
   recorded live, played on puppets, played again with three round trips and sought from a fresh
   process, each on its own Xvfb; the live game also takes the null twin (paused, the camera, the
   wheel, the cursor and the in-game menu moved, two endpoints and intermediate paused
@@ -923,10 +926,10 @@ block that reads to its last complete block.
   clamping at the far edge; resource-refusals samples ARMACK and then RSNRACK selection,
   each with its native displayed-type acknowledgement and exact paused comparison.
   Every owned worker removes its cached `catalogue.json` when it
-  replaces fixture content, so scenario validation never uses a previous fixture's units.
+  replaces test group content, so scenario validation never uses a previous test group's units.
   `scenario load` with explicit players replaces the saved seat extent as well as
-  controller keys; a prior playback's smaller roster cannot truncate the next fixture.
-  A fixture with `"watch": true`
+  controller keys; a prior playback's smaller roster cannot truncate the next test group.
+  A test group with `"watch": true`
   runs a fifth process, W: the playing started from REPLAYS and Watch as a player starts it, two
   edited copies refused, then, through `tacli hud`, the HUD's speed, the Options' OK, pause, the
   HUD's seek (`hud seek <T>`), Sight on the first row and again (clock and camera unchanged),
@@ -934,39 +937,44 @@ block that reads to its last complete block.
   (`w<T1>` compared like the others), resume and Leave. It runs every check above and
   reports each by name: exit 0 all passed, 1 a named failure, 2 something could not run. `-j N`
   is the games at once (default 8, at most 16); the checks run beside them on a pool of their own
-  at lower priority, a fixture's as soon as its last lane ends, and the summary lists them in the
+  at lower priority, a test group's as soon as its last test ends, and the summary lists them in the
   same order whatever finished first. It
   refuses a `ddraw.dll` (or `--stock-dll`) older than its sources — rebuild with `make -C
   tagpu/ddraw` (`LIMITS=stock` for the stock one) first. The run's folder is outside the
   repository (`--out`, `$TAREPLAY_OUT`); passing dumps are deleted unless `--keep`, and a dump
-  any check failed on stays. `run --cover` runs the coverage builds instead. A fixture with a
-  `takeover` entry also runs K (its recording taken over at T2, ordered, dumped and ended) and F
-  (K's file played from T−300 across the fork); `tareplay.py takeover FIXTURE` runs the live game,
+  any check failed on stays. `run --cover` runs the coverage builds instead. A test group with a
+  `takeover` entry also runs K (its recording taken over at T2, or at the entry's `at`,
+  ordered, dumped and ended) and F
+  (K's file played from T−300 across the fork); `tareplay.py takeover TEST_GROUP` runs the live game,
   K and F alone, with the checks `judge`, `line`, `orders`, `ai`, `fork` and `victory` its entry
   names. K judges the units drawn 240 ticks after T, and the `ai` check observes 1800 future
   ticks, armed on the level held after the takeover. Every AI seat must issue fresh planner orders that reach normal
   dispatch, and at least 25% of AI mobile units must move more than 8 wu. Construction
   is reported only; K waits for the observation to complete before ending the game.
-- **Native fixture input** uses a `keys` step with a list of `tacli keys` tokens.
+- **Native input in a test group** uses a `keys` step with a list of `tacli keys` tokens.
   `secondary-orders` and `stock-secondary-orders` select the isolated solar with
   `pclick:512,384`, then send `ctrl+d` in a later GameTime step to exercise the
   secondary order dispatcher. The camera is pinned by the scenario; the shield
   stays on so the engine sees the polled Ctrl modifier.
+- **One game regression at a time.** `tareplay.py`'s game commands, `tacompat.py wine` and
+  `recmp_play_test.py` take the machine's run lock (`tools/runlock.py`) and wait while another run
+  holds it, saying who holds it (`runlock: waiting for the run lock ...`); a hand-made chain of
+  games queues with `flock "$(git rev-parse --git-common-dir)/tareplay.lock" <command>`.
 - **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
-  it runs the fixtures that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
+  it runs the test groups that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
   `UNFEATURED` for a changed line outside every region and `UNCOVERED <file>:<function>` for a
-  changed function no fixture reached (in each build that compiles the changed line: the
+  changed function no test group reached (in each build that compiles the changed line: the
   stock-limits build's lines need `stock-limits`), and on a pass writes a `replay-roundtrip:` git
   note on the commit it graded. Commit first: it refuses uncommitted changes under
   `tagpu/ddraw`, `tools` or `scenarios`. `landing --check` says whether a passing note already
   covers HEAD.
-  Changes to `tools/tacli` select every fixture, as changes to the replay harness do.
-  `tareplay.py broad` runs every fixture and `fixtures.json`'s `broad` entries (`limits-tier1`
+  Changes to `tools/tacli` select every test group, as changes to the replay harness do.
+  `tareplay.py broad` runs every test group and `fixtures.json`'s `broad` entries (`limits-tier1`
   with 20 round trips; `cost-four-ai`, ten minutes of four AIs reported for the recorder's cost
   and the file's size) and names what none exercised (a feature, a root or sink site, a recorded
   table); `broad --release DLL` runs a release DLL without reach, before a `v*`
   tag. `measure SCENARIO… [--end T]` records and plays any scenario on the coverage builds and
-  lists the functions it reached, for choosing a feature's fixtures; `features` lists the regions
+  lists the functions it reached, for choosing a feature's test groups; `features` lists the regions
   and `features --check tagpu/ddraw` is the link's check.
 - **The coverage builds** are `make -C tagpu/ddraw COVER=1` (`ddraw-cover.dll` and its map
   `ddraw-cover.map`) and `make -C tagpu/ddraw LIMITS=stock COVER=1`; `landing`, `broad`, `measure`
@@ -1005,9 +1013,11 @@ block that reads to its last complete block.
   pause the DLL took is held, the Pause key and the in-game menu's OK do not release it (the hold
   keeper at `0x496920`).
 - **A seek's work**: every seek logs `replay: <name>: the seek to <T>'s work: <I> iterations read
-  to GameTime <R> from the snapshot|the first iteration at GameTime <S>; the image: <N> units
-  live, <M> made, <F> refused, <K> killed, <A> left alive; cpu <C> ms (user …, kernel …) of the
-  game thread, <W> ms wall` — the replay harness's W1–W3 (`tareplay.py`, `work_verdict`).
+  to GameTime <R> from the snapshot|the first iteration at GameTime <S>; the blocks: <B> decoded
+  (<b> for the base), <P> bytes read, <U> unpacked; the image: <N> units live, <M> made, <F>
+  refused, <K> killed, <A> left alive; cpu <C> ms (user …, kernel …) of the game thread, <W> ms
+  wall` — the replay harness's W1–W3 (`tareplay.py`, `work_verdict`), each against the file; the
+  CPU and wall times are reported only.
 - **Play one**: `tacli replay play <i> FILE [--perspective RECORD]` launches the instance on the
   recording's map and seats and starts the skirmish; it exits 0 on `replay: playing <name>`.
 - **Seek**: `tacli replay seek <i> T` moves the instance's running playback to GameTime T, forward
@@ -1079,14 +1089,21 @@ block that reads to its last complete block.
   valued`). A defeat marker is a seat whose live units reach 0. A paused replay shows no
   `PAUSED` icon under the HUD; GDI shows it.
 - **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P
-  [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish at T as player P,
+  [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish as player P,
   every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2 when it had
-  no AI). With FILE it launches the instance on it, P viewed, and takes over once it plays;
+  no AI). It starts at R, the refresh at or before T, where the stream's world is the recorder's
+  exact copy: each segment's first two iterations, then every GameTime 1 modulo the interval
+  (300 ticks, or a skirmish recording's `tagpu_rec.refresh`); the DLL logs `a takeover asked for at
+  GameTime <T> takes over at <R>` when they differ. A timeline's first iteration is never a start
+  (the fork would follow its parent's iteration), so a request for it is refused naming the
+  next. With FILE it launches the instance on it, P viewed, and takes over once it plays;
   without, it takes over the running playback. It waits for `replay: <name>: taken over at
-  GameTime <T> as player <P>, …` and the recorder's `recording timeline <I> of …`, and exits 1 on
-  `… takeover at <T> refused: <why>`. A launch held by `tagpu_hold.on` returns at the hold's line
-  instead (the level held at T−1; `--json` gives the hold's line as `held`): the recorder's line,
-  and `--dump`, come once the level is resumed. The game after T is appended as timeline I to the file the
+  GameTime <R> as player <P>, …` (`--json` gives R as `at`) and the recorder's `recording
+  timeline <I> of …`, and exits 1 on `… takeover refused: <why>`. A launch held by
+  `tagpu_hold.on` returns at the hold's line instead (the level held at R−1; `--json` gives the
+  hold's line as `held`): the recorder's line, and `--dump`, come once the level is resumed. A
+  `--dump-at` G is a GameTime of the live game, so a dump meant to follow the start by k ticks
+  is armed at R + k, R from `tarec.refresh_at`. The game after R is appended as timeline I to the file the
   level plays: the instance's copy, `gamedir/replays/<name>.imprec`, whose path tacli prints (`the
   fork:`), never FILE itself. `--dump` arms a dump of the live game at G before the takeover, so it
   is never late. By hand: `takeover <P> at <T>[ difficulty <D>]` in the trigger. The file must be
@@ -1104,12 +1121,15 @@ block that reads to its last complete block.
   manual triggers need none. Every writer holds a persistent `.lock` file; never
   unlink one to bypass a busy file. Compaction is atomic on a worker and can be deferred
   while another reader holds the file; process exit waits for maintenance.
-  `tareplay.py forks battle [--cover]` runs the dedicated checks. A fixture with `forks`
-  also runs X after its existing lanes; battle and stock-limits exercise this on both builds.
+  `tareplay.py forks battle [--cover]` runs the dedicated checks. A test group with `forks`
+  also runs X after its existing tests; battle and stock-limits exercise this on both builds.
 - **Live rewind**: `tacli rewind <i> open|seek T|now|fork|close [--dump NAME]`
   operates on a running recorded skirmish. `open` pauses and reports the complete
   seek interval; `seek T` inspects iteration T at frame T−1; `now` restores the
-  saved present; `fork` resumes from the inspected frame as a new timeline.
+  saved present; `fork` resumes as a new timeline from R, the refresh at or before the
+  inspected T (as a takeover does, *Take over* above), logging `a fork asked for at GameTime <T>
+  takes over at <R>` when they differ. The start is found and checked before the original's
+  recording ends, so a fork that cannot start is refused with the original still running.
   `close` without a seek leaves the world intact, otherwise it returns to now.
   Each exit restores the pause state held before opening. Pause input cannot
   advance an open rewind. `--dump` writes a frame dump before the operation's
@@ -1117,7 +1137,7 @@ block that reads to its last complete block.
   sending another command. Once a fork ends the original, an append failure
   permits retrying `fork`, but cannot return to now.
   `tareplay.py rewind battle [--stock] [--cover]` runs the live rewind L/P/Q
-  checks. Fixtures with `rewind` run the same checks in U; stock-limits uses
+  checks. Test groups with `rewind` run the same checks in U; stock-limits uses
   the battle with the stock DLL. The `rewind_paused` scenario creates a human
   unit while paused before the saved-present dump, checking that return-to-now
   preserves the previous radar scan. Return-to-now reconstructs COB threads; the U
@@ -1160,10 +1180,10 @@ move under the clicks, launch it held (`tagpu_hold.on`) and advance it by exact 
 `pause at <T>` / `resume` in `tagpu_replay.trigger`, as `tools/resource_regression.py` does; its
 cases refuse a world that runs and hand it back held.
 
-`tools/resource_fixture.py` prepares the resource fixtures' generated terrain and profiles in
+`tools/resource_fixture.py` prepares the resource test groups' generated terrain and profiles in
 an isolated stopped game folder. The `RS` maps are deliberately flat green. Stock geothermal
 `CORGEO` is in `CORCK`'s menu; `ARMACK` does not build it. `tools/resource_regression.py` drives
-live assertions through native input. The fixtures in `tools/replay/fixtures.json` run them
+live assertions through native input. The test groups in `tools/replay/fixtures.json` run them
 before replay comparisons; use `tools/replay/tareplay.py run resource-mex resource-upgrade` for
 a focused run and `tools/replay/tareplay.py landing` for the landing gate. The mex assertion
 compares manual and Quick placement at the same pointer and rejects a partial target at the
@@ -1172,9 +1192,9 @@ Omit `--keep` for normal regression runs: the report removes passing frame dumps
 checks, retaining failing dumps, logs, recordings and coverage. Peak space still includes the
 whole run before reporting. Use `--keep` when passing dumps are needed for diagnosis, and clean
 redundant artifacts only from completed runs; an active report still reads its collected dumps.
-The classic fixture selects `LEFTCLICK` stage 0 in native Interface options after launch and
+The classic test group selects `LEFTCLICK` stage 0 in native Interface options after launch and
 requires `main+0x37EFA == 0` before clicking. Setting the stopped instance's registry is
-insufficient: every launch restores right-button orders. Other mex fixtures verify value 1.
+insufficient: every launch restores right-button orders. Other mex test groups verify value 1.
 
 For reclaim-to-Moho failures on Comet Catcher, use `tools/resource_upgrade_stress.py` in
 an owned isolated instance. While stopped, `prepare <gamedir> /tmp/comet-upgrades.json
@@ -1192,7 +1212,7 @@ from accepted upgrades that later stall or finish.
 `resource-core-upgrade` is the completion replay regression on installed Comet Catcher.
 Its private supply leaves CORACK, CORMEX and CORMOHO definitions intact. `check-core`
 issues real contextual input and requires native reclaim/build, INBUILDSTANCE and progress;
-`finish-core` requires a completed Moho and the old mex absent. The fixture's `last_min`
+`finish-core` requires a completed Moho and the old mex absent. The test group's `last_min`
 keeps its final comparison after that completion checkpoint on every commit seed.
 Its `cob_legacy_save_probe.py --preflight <name> --gamedir <gamedir>` first exercises
 native save/load with all ten records active on human and AI probes, using the
@@ -1200,11 +1220,11 @@ worker's held DLL. Paused game-thread peeks compare active records; the engine
 writes `cover-resource-save.bin` on coverage builds. The recorder is disabled
 through the preflight and restored before L starts.
 Run `tools/replay/tareplay.py run resource-core-upgrade --cover` for the focused check.
-That fixture's preflight enables native COB trace while recording is disabled, then restores
+That test group's preflight enables native COB trace while recording is disabled, then restores
 the lever before L starts. `stock-resource-mex` runs the same save/load preflight with
 `--native-stock --trace` on eight 32-word records. Their coverage bitmaps exercise the allocator
 observer in both builds; stack-peak observation belongs only to the guarded interpreter.
-The trace and recorder counter both detour the allocator's pristine entry, so recorded lanes
+The trace and recorder counter both detour the allocator's pristine entry, so recorded tests
 keep tracing disabled and retain every ordinary sink counter.
 
 The guarded COB runtime has ten 128-word slots; the stock-limits build has eight native
@@ -1213,12 +1233,12 @@ on human and local-AI units. `cob_legacy_save_probe.py --out /tmp/cob-import` im
 native save with all eight records active; `--expanded` saves/restores all ten guarded
 records. Their archives and saved games stay private in the owned instance/output folder.
 
-Resource preflights run native frontend checks before the L lane records a match.
+Resource preflights run native frontend checks before the L test records a match.
 `resource-frontend` tests raw radius preservation through Visuals Undo and profile cap reload.
 `resource-refusals` refreshes `tacli units` before scenario validation so its cached catalogue
 contains the private constructors; capability refusals must not issue action zero.
 `resource-nozoom` uses `tagpu_zoom.off` and exercises stock-limits manual/Quick input with
-pristine conversion. The fixture cleanup removes that lever before other launches.
+pristine conversion. The test group cleanup removes that lever before other launches.
 
 The `resource-frontend` preflight disables packets while exercising Undo and cap reload, then
 restores the lever before match recording. Profile polling follows the engine flip on every

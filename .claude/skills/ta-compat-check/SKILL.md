@@ -26,6 +26,7 @@ make -C tagpu/ddraw -j$(nproc)                       # the DLL under test (the d
 tools/compat/tacompat.py list                        # setups, fixtures, what is missing
 tools/compat/tacompat.py fetch                       # every fixture with a plain URL
 tools/compat/tacompat.py wine                        # every setup at once, battles and network games
+                                                     # (waits for the machine's run lock, tools/runlock.py)
 tools/compat/tacompat.py wine mayhem-11.3.0 prota-4.8   # a few, by name
 tools/compat/tacompat.py wine --battle 0 --mp 0      # start-up only
 tools/compat/tacompat.py wine mayhem-11.3.0 --mp 60  # a longer network game

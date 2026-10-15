@@ -1,0 +1,24 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's `yard-lab` and `stock-yard-lab` test groups: the human seat's finished ARMLAB at the pinned camera centre, with metal and energy to spare and the storage to hold them (clear_existing removes the commander's); a remote solar keeps the AI seat alive. The test group selects the lab with a native click and presses its ARMPW build button through the build panel, so the lab's own scripts open its yard, its Peewee is made inside the open yard, and the yard closes once the Peewee has left it -- the same in every run (tagpu_replay.c, A RECORDED YARD_OPEN).",
+ "setup": {
+  "map": "Core Prime Industrial Area",
+  "res": "1024x768",
+  "unit_limit": 500,
+  "clear_existing": true,
+  "los": "permanent",
+  "mapping": true,
+  "switches": {"noshake": true},
+  "players": [
+   {"slot": 0, "controller": "human", "side": "arm", "color": 0, "metal": 10000, "energy": 10000},
+   {"slot": 1, "controller": "ai", "side": "core", "color": 1}
+  ]
+ },
+ "units": [
+  {"id": "lab", "type": "ARMLAB", "owner": 0, "pos": [1600, 1600]},
+  {"id": "estor", "type": "ARMESTOR", "owner": 0, "pos": [2500, 1400]},
+  {"id": "mstor", "type": "ARMMSTOR", "owner": 0, "pos": [2500, 1800]},
+  {"id": "keep_ai", "type": "CORSOLAR", "owner": 1, "pos": [7500, 7000]}
+ ],
+ "camera": {"at": [1600, 1600]}
+}

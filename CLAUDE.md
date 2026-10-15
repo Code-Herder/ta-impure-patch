@@ -61,8 +61,11 @@ it cannot.
 The demo recorder keeps every byte of the engine's unit and player records and of its projectile
 pool except what one exclusion file, `tagpu/ddraw/replay-layout.tsv`, excludes; every field of the
 main block and `.data` that one positive list, `tagpu/ddraw/replay-globals.tsv`, names; the
-explored map; and all simulation state Impure declares. A simulation change needs no recorder
-change unless `make` or the replay harness names one. The classes, the wrappers and what the build check cannot prove:
+explored map; and all simulation state Impure declares. In a skirmish recording the bytes one hold
+table, `tagpu/ddraw/replay-hold.tsv`, names may keep an earlier value of the engine's between two
+refreshes and are exact at each refresh; every other kept byte is exact at every tick. A simulation
+change needs no recorder change unless `make` or the replay harness names one. The classes, the
+wrappers and what the build check cannot prove:
 `research/notes/tadr-port/demo-recorder-completeness.md`.
 
 - **Declare state where you define it.** In a file marked `sim` in `thread-split.allow`, every
@@ -72,18 +75,22 @@ change unless `make` or the replay harness names one. The classes, the wrappers 
   wrappers. When unsure, use `SIM_STATE`. The link refuses what `tools/sim-state-check.sh` can
   see — an undeclared static, a stale declaration, a listed allocator, TLS or page call, a lever
   named outside the wrappers — and names each; its header lists what it cannot see.
-- **A landing that changes simulation code runs its replay fixtures.** `tools/replay/tareplay.py
-  landing` runs the fixtures that the changed features name in their `SIM_FEATURE` declarations —
-  recorded, played on puppets, restored in place by the round trip and sought from a fresh process,
-  on the coverage build — checks that they reached every changed function, and records a
-  `replay-roundtrip:` note. A changed line no declaration covers, or a changed function no fixture
-  reached, fails by name; landing it anyway is the owner's decision. The broad tier,
+- **A landing that changes simulation code runs its replay test groups.** A **test group** is one
+  scripted game and the **tests** played on it (record, puppet, roundtrip, seek, takeover, follow,
+  forks, rewind, watch), each test one game on one worker; a **scenario** is the game setup in
+  `scenarios/` a test group loads. The code still says *fixture* for a test group and *lane* for a
+  test — the terms and what each test plays: `demo-recorder-completeness.md` *Terms*.
+  `tools/replay/tareplay.py landing` runs the test groups that the changed features name in their
+  `SIM_FEATURE` declarations — recorded, played on puppets, restored in place by the round trip and
+  sought from a fresh process, on the coverage build — checks that they reached every changed
+  function, and records a `replay-roundtrip:` note. A changed line no declaration covers, or a
+  changed function no test group reached, fails by name; landing it anyway is the owner's decision. The broad tier,
   `tareplay.py broad`, is a command, not a schedule: it runs before every `v*` tag beside the
   compatibility suite (`--release` on the release DLL) and on demand after a run of simulation
   landings.
 - **Store IDs, not addresses**, or declare the table's layout.
 - **Start effects through an engine root**, never a direct sink call. Each simulation
-  feature states its puppet behaviour and names its fixture beside its code.
+  feature states its puppet behaviour and names its test groups beside its code.
 - **An effect only the owner's machine produces** is recorded where the engine produces it,
   credited to its unit by an engine invariant, and replayed through the same function —
   never imitated.
@@ -93,7 +100,8 @@ change unless `make` or the replay harness names one. The classes, the wrappers 
 - **A replay shows what the game showed**: display state that follows from simulation
   events is `SIM_STATE`, not `SIM_PRIVATE`.
 - **Loosening is the owner's decision**: an exclusion, a `presentation` file, TRANSIENT or
-  PRIVATE on memory the simulation reads, an expected-absent event, a tolerance. A
+  PRIVATE on memory the simulation reads, an expected-absent event, a tolerance, a hold row
+  (`replay-hold.tsv`: bytes the stream keeps at an earlier value between refreshes). A
   difference the harness names is a bug in the change, never grounds for an exclusion.
 
 ## Land it yourself — what actually requires a human
@@ -276,6 +284,18 @@ targets share an intermediate. CI has been building this way since the workflow 
 **Byte-identity is not the test, and do not reach for it as one.** Two *serial* builds of the
 same tree already differ (a timestamp reaches the PE header), so a differing md5 says nothing
 about `-j`. The assurances are the two above.
+
+## Game regressions run one at a time
+
+A landing gate alone already peaks at a load of about 24 on the reference setup's 32 threads, so
+two at once oversubscribe the machine: every run slows (four gates at once took 34 min each
+against 11 alone, measured 2026-10-12) and the checks bounded in time fail for the load alone.
+**Every tool that plays games for a regression holds the machine's run lock** (`tools/runlock.py`:
+`tareplay.py`'s game commands, `tacompat.py wine`, `recmp_play_test.py`), so a second run waits
+for the first. A chain of games scripted by hand queues the same way through `flock(1)` on the
+lock file, `$(git rev-parse --git-common-dir)/tareplay.lock`. Never work around it: while a run
+waits, do the offline work (builds, codectest, unit tests, docs). Builds and offline checks take
+no lock.
 
 ## Python tooling: install what you need, into the shared venv
 

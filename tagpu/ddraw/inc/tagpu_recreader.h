@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include "tagpu_recfmt.h"
 #include "tagpu_reccodec.h"
+#include "tagpu_reclossy.h"
 #include "tagpu_recfile.h"
 #include "tagpu_recmp_file.h"
 #include "tagpu_recmp_units.h"
@@ -76,8 +77,18 @@ typedef struct RecHeader {
     RecMpRoster mp_seats;
     unsigned     has_codec;                 /* RT_CODEC and RT_PHYSICS: a sectioned stream block
                                                may come; without them only records blocks    */
-    RecCodecParams codec;                   /* their constants, and RT_AIR's (about 25 KB)    */
+    RecCodecParams codec;                   /* their constants, RT_AIR's and RT_TYPES' (66 KB) */
+    unsigned     has_hold;                  /* RT_HOLD: the stream holds the masks' bits between
+                                               refreshes; a header without it holds nothing  */
+    RecLossyHold hold;
 } RecHeader;
+
+/* 1 when the header's stream holds its cells' unit slots and yard bit (RT_HOLD's RECL_CELLS):
+   its playing keeps the engine's own */
+static __inline int recr_holds_cells(const RecHeader* h)
+{
+    return h->has_hold && (h->hold.flags & RECL_CELLS) != 0;
+}
 
 /* one node list of a live unit, its node images in list order */
 typedef struct RecList { unsigned n, cap; unsigned char* img; } RecList;
@@ -114,8 +125,11 @@ typedef struct RecWorld {
     RecTable*      tab;         /* [ntab], the header's tables in its order                    */
     unsigned       nev;         /* the events of the step after the images, in engine order: a
                                    feature root's bracket, RK_EV_FEATURE to its END, holds the
-                                   draws it made, the tick's cells and what it nested         */
+                                   draws it made, the tick's cells and what it nested; then
+                                   the sprays the spray sessions imply, slots ascending       */
     RecEvent*      ev;
+    RecSprays*     sprays;      /* the spray sessions' table (tagpu_reclossy.h), read with
+                                   RT_HOLD's RECL_SPRAYS: what the implied sprays come from   */
     unsigned char* grid;        /* [grid_w * grid_h] cell images, row-major                   */
     unsigned char* pool;        /* [wrecks] record images                                     */
     int32_t        heads[4];    /* the pool's three heads and the reproduction cursor         */
@@ -192,9 +206,20 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
    1) or the first iteration of the segment it read from (0); and the iterations it read
    (`iterations`), each read of an iteration counted, a snapshot's base segment's first included,
    so iterations <= T - from + 1. tools/replay/tarec.py's seek_start computes `from` from the file
-   alone. */
+   alone. The blocks it decoded (`blocks`: read, checked and unpacked, each decode counted), their
+   bytes in the file (`packed`) and unpacked (`raw`), each the block header's, and of them `base`,
+   1 when a snapshot's segment's first iteration was read first because the reader did not hold
+   its base: the work tools/replay/tareplay.py's W3 checks against the file's own blocks, which no
+   load changes. A chained snapshot counts every link from its key, each a block decoded. A run's
+   chunk counts as its block: its header's packed and raw, the chunk in the file and the
+   container it unpacks to, not the run's window. A seek decodes each run it reads from its
+   RBF_FRAME_RESET block on, since it starts only where one begins -- after a snapshot, at a
+   segment's first iteration -- so no chunk is unpacked twice or left out. tarec.py's seek_blocks
+   derives the same from the file. */
 typedef struct RecSeekWork {
     unsigned target, from, from_snapshot, iterations;
+    unsigned blocks, base;
+    unsigned long long packed, raw;
 } RecSeekWork;
 const RecSeekWork* recr_seek_work(const RecReader* r);
 
@@ -254,6 +279,9 @@ const RecTimeline* recr_selected(const RecReader* r);
 /* 1 when the segment the world was last read from carries a multiplayer roster: a multiplayer
    file's own segment, never a takeover's timeline, which a skirmish level records */
 int recr_segment_mp(const RecReader* r);
+/* 1 when that segment holds its cells (recr_holds_cells): every skirmish segment a writer of
+   this format makes (REC_SKIRMISH_HOLDS), a multiplayer file's takeover timeline among them */
+int recr_segment_cells(const RecReader* r);
 /* Where a fork at `at` is appended, found afresh: the caller holds the file open for writing
    first, so no other writer can change it until the fork's writer has used this (tagpu_replay.c,
    TK0). A torn last block is not kept, an unfinished last segment with no complete iteration is
@@ -263,6 +291,13 @@ int recr_segment_mp(const RecReader* r);
 int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsigned cap);
 /* 1 when the file HANDLE `f` is the file the reader holds open: one volume, one file index */
 int recr_same_file(const RecReader* r, void* f);
+/* The last refresh iteration at or before T of the chosen chain, found afresh from the index: the
+   largest `last` <= T of a stream block with RBF_REFRESH in the chain's segment that covers T, or
+   that segment's first iteration (tagpu_reclossy.h, reclossy_refresh_at), and with `seg` that
+   segment's RecTimeline. At a refresh the stream's world is the writer's exact copy, which is why
+   a takeover starts only there (tagpu_replay.c, tk_bound). The GameTime, or 0 (why) when T is
+   outside the chain or the file cannot be read. */
+unsigned recr_refresh_at(RecReader* r, unsigned T, RecTimeline* seg, char* why, unsigned cap);
 
 /* Authority at the currently read world tick. Rebuild after seek/segment/index
    changes; advancing queries consume only new application records. Unknown stays

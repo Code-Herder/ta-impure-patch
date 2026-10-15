@@ -7,21 +7,56 @@ natively with the sanitizers) against tools/replay/reccodec.py (the Python reade
 
     outcomes                 SECTIONS, DECLINED and MISMATCH from synthetic payloads of units and
                              projectiles, each followed by a block that restarts (codectest.c)
-    transcode IN OUT         every stream block decoded and written again through the writer's
-                             codec: 0 declined and 0 mismatched expected
+    transcode IN OUT [--snap-every N] [--skirmish] [--types-from REC] [--bucket-cols N]
+                             every stream block decoded and written again through the writer's
+                             codec: 0 declined and 0 mismatched expected; with N, every Nth
+                             snapshot of a segment kept (0: none) and the stream restarting only
+                             after those, as a writer N times IN's snapshot interval would write;
+                             with --skirmish, a skirmish header without RT_HOLD labelled with one
+                             that holds nothing; --types-from and --bucket-cols give an older
+                             format's header the codec constants it lacks (codectest.c)
+    lossy IN OUT [--exact] [--types-from REC] [--bucket-cols N]
+                             the writer's path over IN's exact records: the lossy filter with the
+                             build's hold table, the refreshes, the blocks and the codec, IN's
+                             snapshots kept where a writer would take one; with --exact, each
+                             stream block's exact records after it (RB_EXACT). Prints the
+                             iterations whose records differ from IN's
     verify IN                each stream block's records from the C decoder against the Python
                              reader's, which decodes twice -- skipping the resting units and
                              evaluating every candidate -- and the C sine table against its formula
-    fuzz IN SEED N [CASES]   N mutated sectioned blocks decoded by C from the state each starts from
+    sprays IN                without --native only: the DLL's own reader over IN's first
+                             timeline, every iteration's sprays (the stream's and the ones its
+                             spray sessions imply) against IN's exact stream (RB_EXACT), in order
+                             from the start and after a seek to each snapshot (codectest.c)
+    spraycases               without --native only: `sprays` on small files built as
+                             tools/replay/test_tareplay.py's LossySprays builds them, the ones
+                             the reader must match and the ones it must find or refuse
+    fuzz IN SEED N [CASES] [--section NAME] [--faults]
+                             N mutated sectioned blocks decoded by C from the state each starts
+                             from; each block itself decoded from the same copy must give the
+                             reading's records (exit 1 naming the block when not); with
+                             --section, only section NAME's mutations (kinds, units, proj, cells,
+                             orders, events, other, state, or chunk: the block's packed chunk of
+                             its run); with --faults, also the unit coder's six self-test faults
+                             written into blocks' records, which C must refuse, and blocks under
+                             a budget of their own work and of one less. Prints the
+                             slowest case's time from its copied state
     fuzzdiff IN CASES        those cases decoded by the Python reader: the same accept or refuse
                              and the same records for every case C accepted
-    sizes IN                 the sectioned blocks' bytes by section: raw, each section packed alone
-                             with zstd 3 and with the format-7 writer's deflate (a 2 KB window), and
-                             the blocks as written
+    worst MODE SLOTS REPEAT  the decoder's time on a block of as much unit-coder work as
+                             RECC_WORK allows, SLOTS - 1 units in one of four shapes: full
+                             (every dword changed every iteration, residuals from the caches),
+                             lit (the same as literals), chain (the same, each mask's hash chain
+                             full first) and visit (units that never change and never rest);
+                             decoded REPEAT times, the time scaled to RECC_WORK (codectest.c)
+    sizes IN...              each recording's sectioned blocks' bytes by section: raw, each section
+                             packed alone with zstd 3 and with the format-7 writer's deflate (a 2 KB
+                             window), and the blocks as written
 
 --native builds tests/codectest-asan.exe with the host's gcc and -fsanitize=address,undefined and
 runs that instead of tests/codectest.exe under Wine (WINEPREFIX: the main checkout's wineprefix/).
-IN is a recording of format 9. Exit 0 when every check holds, 1 when one fails, 2 when it cannot
+IN is a recording of REC_FORMAT; transcode and lossy also read a records-only one (no sectioned
+block) of format 12 or later, and write REC_FORMAT. Exit 0 when every check holds, 1 when one fails, 2 when it cannot
 run. Needs numpy, numba and zstandard (devpy.ensure() re-executes under the shared venv).
 """
 import os
@@ -43,10 +78,15 @@ NATIVE = HERE / "codectest-asan.exe"
 
 
 def build_native():
-    cmd = ["gcc", "-std=c99", "-Wall", "-Iinc", "-Isrc", "-O1", "-g", "-fsanitize=address,undefined",
-           "-fno-sanitize-recover=all", "-o", str(NATIVE), "tests/codectest.c", "src/zstd.c"]
+    frames = sorted(str(p.relative_to(DDRAW)) for p in DDRAW.glob("src/tagpu_recframe_*.c"))
+    # RECF_TEST_COPY: the frames' copies, which only this test calls (inc/tagpu_recframe.h)
+    cmd = ["gcc", "-std=c99", "-Wall", "-Iinc", "-Isrc", "-DRECF_TEST_COPY", "-O1", "-g",
+           "-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-o", str(NATIVE),
+           "tests/codectest.c", *frames, "src/tagpu_reclossy.c", "src/zstd.c"]
     srcs = [DDRAW / "tests/codectest.c", DDRAW / "src/tagpu_reccodec.c", DDRAW / "inc/tagpu_reccodec.h",
-            DDRAW / "inc/tagpu_recfmt.h", DDRAW / "inc/tagpu_reclanes.h", DDRAW / "src/zstd.c"]
+            DDRAW / "src/tagpu_reclossy.c", DDRAW / "inc/tagpu_reclossy.h", DDRAW / "inc/tagpu_rechold.h",
+            DDRAW / "inc/tagpu_recframe.h", DDRAW / "inc/tagpu_recfmt.h", DDRAW / "inc/tagpu_reclanes.h",
+            DDRAW / "src/zstd.c", *(DDRAW / f for f in frames)]
     if NATIVE.exists() and all(NATIVE.stat().st_mtime >= s.stat().st_mtime for s in srcs):
         return
     print("codectest: building", NATIVE.name, flush=True)
@@ -139,9 +179,13 @@ def cmd_fuzzdiff(src, cases_path):
             body = data[at:at + n]
             at += n
             ents = None
+        elif typ in (2, 3):
+            body = (data[at:at + n], struct.unpack_from("<I", data, at + n)[0])
+            at += n + 4
+            ents = None
         else:
             ents = []
-            for _ in range(3):
+            for _ in reccodec.CODEC_TAGS:
                 has, ne = struct.unpack_from("<II", data, at)
                 ents.append(data[at + 8:at + 8 + ne] if has else None)
                 at += 8 + ne
@@ -150,16 +194,25 @@ def cmd_fuzzdiff(src, cases_path):
     stats = {"cases": 0, "agree": 0, "accepted": 0}
     bad = []
 
-    def before(ordinal, flags, sec, frame):
+    def before(ordinal, flags, sec, frame, run):
         for typ, cflags, body, ents, ok, outn, h in cases.get(ordinal, ()):
             f = frame.clone()
             try:
                 if typ == 0:
                     got = f.decode(cflags, body)
+                elif typ == 3:
+                    # the block under a budget of work lowered to its own or one less
+                    f.budget(body[1])
+                    got = f.decode(cflags, body[0])
+                elif typ == 2:
+                    # the run as it stood before this block's chunk: a decompressor cannot be
+                    # copied, so each case replays the run's chunks from its first
+                    chunk, raw = body
+                    got = f.decode(cflags, run.before().feed(chunk, raw, cflags & reccodec.RBF_FRAME_RESET))
                 else:
-                    es = [(t, e) for t, e in zip((reccodec.RT_CODEC, reccodec.RT_PHYSICS, reccodec.RT_AIR), ents)
-                          if e is not None]
-                    prm = reccodec.params(es, frame.prm.nslots, frame.prm.nproj)
+                    es = [(t, e) for t, e in zip(reccodec.CODEC_TAGS, ents) if e is not None]
+                    q = frame.prm
+                    prm = reccodec.params(es, q.nslots, q.nproj, q.gw, q.gh, q.nwrecks, q.ndefs, q.hold)
                     if not prm.usable:
                         raise reccodec.Unreadable("not usable")
                     f.restart(prm)
@@ -185,13 +238,49 @@ def cmd_fuzzdiff(src, cases_path):
     return 0 if stats["agree"] == stats["cases"] and stats["cases"] else 1
 
 
+def cmd_spraycases():
+    """The DLL's reader on test_tareplay's LossySprays files (`codectest sprays`): the sessions'
+    sprays made and matching the exact stream, plain and following their unit; a spray the game
+    did not make found; and refused, a record after an iteration's spray sessions, sessions out of
+    slot order and a session that predicts from no spray."""
+    import test_tareplay as T
+    L, ses, spr, at = T.LossySprays, T.session, T.spray, T.unit_at
+    follow = {3: spr(2, 100, 200, 300),
+              4: at(1, 10, 0, -20) + spr(2, 110, 200, 280),
+              5: at(1, 15, 1, -20) + spr(2, 115, 201, 280)}
+    cases = [
+        ("a spray implied plain", L.EXACT, L.LOSSY, 0, "4 sprays; "),
+        ("a spray implied following its unit", follow,
+         {3: follow[3], 4: follow[4] + ses(2, 1 | 8), 5: at(1, 15, 1, -20), 6: ses(2, 0)}, 0,
+         "3 sprays; "),
+        ("a spray the game did not make", {k: v for k, v in L.EXACT.items() if k != 6}, L.LOSSY, 1,
+         "GameTime 6: the reader has 1 sprays, the exact stream 0"),
+        ("a record after the sessions", L.EXACT, L.AFTER, 1, "malformed record of kind 28"),
+        ("sessions out of slot order", L.EXACT, L.UNORDERED, 1, "malformed record of kind 56"),
+        ("a session from no spray", L.EXACT, {**L.LOSSY, 3: L.A + ses(3, 1)}, 1,
+         "predicts from no single spray"),
+    ]
+    t = L()
+    t.setUp()
+    bad = 0
+    try:
+        for name, exact, lossy, want, text in cases:
+            rc, out = run(False, "sprays", t.file(exact, lossy), capture=True)
+            ok = rc == want and text in out
+            bad |= not ok
+            print(f"spraycases: {name:<40} {'ok' if ok else 'FAILED: exit %d, %s' % (rc, out.strip())}")
+    finally:
+        t.tearDown()
+    return 1 if bad else 0
+
+
 def cmd_sizes(src):
     import reccodec
     import zstandard
-    names = ["kinds", "units", "proj", "cells", "orders", "events", "other"]
-    raw = [0] * 7
-    z3 = [0] * 7
-    defl = [0] * 7
+    names = ["kinds", "units", "proj", "cells", "orders", "events", "other", "state"]
+    raw = [0] * len(names)
+    z3 = [0] * len(names)
+    defl = [0] * len(names)
     written = records = blocks = 0
     zc = zstandard.ZstdCompressor(level=3)
 
@@ -199,12 +288,12 @@ def cmd_sizes(src):
         c = zlib.compressobj(6, zlib.DEFLATED, 11)
         return len(c.compress(b) + c.flush())
 
-    def seen(ordinal, flags, sec, frame):
+    def seen(ordinal, flags, sec, frame, run):
         nonlocal written
         if not flags & reccodec.RBF_SECTIONS:
             return
-        lens = struct.unpack_from("<7I", sec, 8)
-        at = 36
+        lens = struct.unpack_from(f"<{reccodec.RCS_COUNT}I", sec, 8)
+        at = reccodec.SEC_HEAD
         for i, n in enumerate(lens):
             part = sec[at:at + n]
             raw[i] += n
@@ -234,15 +323,21 @@ def main(argv):
         print(__doc__)
         return 2
     cmd, args = argv[0], argv[1:]
-    if cmd in ("outcomes", "transcode", "fuzz", "decode"):
+    if cmd in ("outcomes", "transcode", "lossy", "fuzz", "decode", "worst"):
         return run(native, cmd, *args)[0]
+    if cmd in ("sprays", "spraycases") and native:
+        sys.exit(f"codectest: {cmd} runs the DLL's reader, which the Windows build alone links")
+    if cmd == "sprays" and len(args) == 1:
+        return run(False, cmd, *args)[0]
     devpy.ensure()
+    if cmd == "spraycases" and not args:
+        return cmd_spraycases()
     if cmd == "verify" and len(args) == 1:
         return cmd_verify(native, args[0])
     if cmd == "fuzzdiff" and len(args) == 2:
         return cmd_fuzzdiff(*args)
-    if cmd == "sizes" and len(args) == 1:
-        return cmd_sizes(args[0])
+    if cmd == "sizes" and args:
+        return max(cmd_sizes(a) for a in args)
     print(__doc__)
     return 2
 

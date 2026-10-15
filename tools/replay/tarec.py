@@ -9,6 +9,13 @@
                                              the events that explain it
   tools/replay/tarec.py compare FILE DUMP... rebuild the world to each dump's GameTime and require
                                              it to equal the dump, byte for byte
+  tools/replay/tarec.py lossy-check FILE [--to T]
+                                             the stream against its exact records (RB_EXACT, the
+                                             test lever tagpu_rec.exact), iteration by iteration:
+                                             every shown byte exact, every held byte the stream's
+                                             last value or the exact one, the two equal at every
+                                             refresh, and the refreshes on their grid
+                                             (cmd_lossy_check); to GameTime T when given
   tools/replay/tarec.py segments FILE        each timeline's segment of the file and its bytes,
                                              then the SHA-256 of the original's
   tools/replay/tarec.py compare-fork FILE N  timeline N's first iteration against its parent's
@@ -21,25 +28,36 @@
                                              (puppet_hold), the globals' `hold` rows and the
                                              viewer's bit of the explored map masked;
                                              the radar picture is compared too where the dump's
-                                             viewed player is the recording's
+                                             viewed player is the recording's. On a file that
+                                             holds its cells the unit slots and yard bit expected
+                                             are the exact stream's (cells_exact); with --seek,
+                                             the dumps a seek's, they are checked by THE
+                                             OCCUPANCY RULE instead, the contest marks with them
   tools/replay/tarec.py compare --images DUMP OTHERDUMP
                                              a report, not a check: the bytes of the main block
                                              and .data that differ between two dumps and that no
                                              row of replay-globals.tsv covers, in runs, grouped by
                                              what the notes map there (exit 0 whatever it finds)
-  tools/replay/tarec.py compare-dumps FILE DUMP OTHERDUMP [--takeover]
+  tools/replay/tarec.py compare-dumps FILE DUMP OTHERDUMP [--takeover] [--seek]
                                              two dumps of playings of FILE at one GameTime with
                                              the same player viewed (a seek in a fresh process
                                              and one in a running playback) equal in every
                                              record, the players' sight counters included; --takeover
-                                             applies the existing fork_view comparison policy
+                                             applies the existing fork_view comparison policy;
+                                             --seek, OTHERDUMP a seek's, checks its unit slots,
+                                             yard bits and contest marks by THE OCCUPANCY RULE on
+                                             a file that holds its cells
   tools/replay/tarec.py counts FILE DUMP     a dump's counts of roots, sinks and observed sites
-  tools/replay/tarec.py compare-counts FILE LIVE_A LIVE_B PUPPET_A PUPPET_B [--absent TSV] [--rewind]
+  tools/replay/tarec.py compare-counts FILE LIVE_A LIVE_B PUPPET_A PUPPET_B [--absent TSV]
+                                             [--rewind | --cob-exact]
                                              a live game's counts against a playing's, each the
                                              change between its two dumps: roots per site
-                                             exactly, sinks per (site, caller, aux) within
+                                             exactly, the script slice per placement exactly,
+                                             sinks per (site, caller, aux) within
                                              replay-absent.tsv's band less its rows, and no COB
-                                             engine write on the puppet
+                                             engine write on the puppet; --cob-exact compares
+                                             the VM's START and CALL children by script name
+                                             exactly, with no band and no row
   tools/replay/tarec.py images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1 [VIEW...]
                                              the null twin: every bit of the two images no row
                                              covers where the live game and a playing or the
@@ -63,8 +81,9 @@
                                              clock takes, the eye before the range clamp and the
                                              level x 65536 (tagpu_persp.c, mirrored)
 
-  check, compare and compare --puppet take --timeline N: the chain of timeline N, read across
-  each fork it descends from.
+  check, compare, compare --puppet and lossy-check take --timeline N: the chain of timeline N,
+  read across each fork it descends from. check, compare and compare --puppet take --exact: the
+  world built from the exact records instead of the stream (exact_blocks).
 
   images-gate alone takes --stock-secondary-cosmetics: the owner-approved native cosmetic-pool
   known gap for stock-secondary-orders at the native 300-projectile cap. Other bytes stay strict.
@@ -72,21 +91,34 @@
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
-here, and REC_FORMAT says which; this tool reads format 9 alone. A recording is REC_MAGIC, then
+here, and REC_FORMAT says which; this tool reads REC_FORMAT alone. A recording is REC_MAGIC, then
 blocks; a block is a 32-byte header and its payload, one zstd frame unless the block is stored (the
-header, end and timelines blocks always are), each checked by a CRC-32. A stream block may be a
+header, end and timelines blocks always are), each checked by a CRC-32 -- but for a sectioned stream
+block, whose payload is a chunk of its run's frame, and a chained snapshot (RBF_CHAINED), whose
+frame takes the segment's snapshot before it as its prefix (tagpu_recfmt.h, THE RUN AND THE
+CHAIN). A stream block may be a
 sectioned container (RBF_SECTIONS) that decodes to exactly the records it was made from: its unit
-deltas are made by the unit frame from the header's RT_CODEC, RT_PHYSICS and RT_AIR, and its
-projectile records by the pool frame from the pool of RT_PROJECTILES records. The walk over
+deltas are made by the unit frame from the header's RT_CODEC, RT_PHYSICS, RT_AIR and RT_TYPES, its
+projectile records by the pool frame from the pool of RT_PROJECTILES records, and the bodies of
+its cells, orders, events and state records by the four record frames. The walk over
 the blocks, their unpacking and that decoding are tools/replay/reccodec.py's (iter_blocks), which
-refuses what the DLL's reader refuses; every command here reads the decoded records. A file ends at
+refuses what the DLL's reader refuses; every command here reads the decoded records.
+A skirmish recording's stream is LOSSY (tagpu/ddraw/src/tagpu_reclossy.c): between two refreshes
+it may hold the bytes its header's RT_HOLD names at a value the engine produced earlier, and at
+each refresh -- the segment's first two iterations and then every GameTime 1 modulo RT_HOLD's
+interval (is_refresh), the last iteration of a stream block flagged RBF_REFRESH -- its world is
+the writer's exact copy. With RT_HOLD's RECL_SPRAYS it leaves out the nano sprays its spray
+sessions (RK_SPRAY_SESSION) imply, which every reader makes again at the end of their iteration
+(Sprays; World.iteration_end). A snapshot follows a refresh block only. A recording made under the test lever tagpu_rec.exact
+carries each stream block's exact records after it, as an RB_EXACT block. A file ends at
 its last complete block: a block cut short or torn ends the reading, and the file is reported as
 read to there. A dump (`dump <name>` in tagpu_replay.trigger) is REC_MAGIC, a stored header with the
 format, the build, the globals list's hash and the tables, and one stored snapshot, which carries
 every cell and, after the world, the players' sight counters (RK_SIGHT) and the main block and
 .data whole (RK_IMAGE). A recording's snapshot
-carries only the cells that differ from the first iteration's grid, the base, which a reader takes
-from the stream, and none of a table's spans that are all zero. A table is paired with the
+carries only the cells and the wreck records that differ from its segment's first iteration's grid
+and pool, the base and the wreck base, which a reader takes from the stream, and none of a table's
+spans that are all zero. A table is paired with the
 recording's by its name: each build numbers its tables in its own registry order, and a recording
 may be played by another build than the one that made it. The header gives each table's layout
 hash as well (`info` shows it), which the replay's seek compares with its own declaration's. The
@@ -117,7 +149,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 9                            # zstd blocks, the sectioned stream and its pool frame
+REC_FORMAT = 24                           # the unit frame range-coded; transport and pad queries, BeginTransport and setSFXoccupy as owner starts; sprays against the last four, order nodes matched, projectile lanes; the unit listing from state; script slices, owner's queries, yards; the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -139,7 +171,7 @@ REC_UNIT_BITS = (REC_UNIT_DWORDS + 7) // 8
 REC_PLAYER_BITS = (REC_PLAYER_DWORDS + 7) // 8
 REC_UNIT_DELTA_HEAD = (2 + REC_UNIT_BITS + 3) & ~3
 REC_PLAYER_DELTA_HEAD = (2 + REC_PLAYER_BITS + 3) & ~3
-U_TYPE, U_BUILT, U_STATEBYTE = 0x92, 0x104, 0x10E   # the image's type ID, build fraction, state
+U_TYPE, U_BUILT, U_STATEBYTE, U_YARD = 0x92, 0x104, 0x10E, 0x10F   # the image's type ID, build fraction, state
 U_STATE = 0x110
 REC_PROJ_IMAGE = 0x6C                     # a projectile record's 0x6B bytes, to a dword
 REC_PROJ_DWORDS = REC_PROJ_IMAGE // 4
@@ -168,7 +200,9 @@ def mapped_bytes(w, h):
  RK_EV_DEATH_END, RK_CELLS, RK_WRECK, RK_FEATURES, RK_GRID,
  RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
  RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT, RK_COUNTS,
- RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE, RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT) = range(56)
+ RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE, RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT,
+ RK_SPRAY_SESSION, RK_EV_SLICE, RK_EV_QUERY, RK_EV_YARD) = range(60)
+REC_QUERIES = 4                           # RK_EV_QUERY's queries: QueryBuildInfo, QueryNanoPiece, QueryTransport, QueryLandingPad
 
 # THE PERSPECTIVE's payloads (tagpu_recpov.h)
 REC_POV = struct.Struct("<BBBBHHIiiiii")   # player, every, flags, zero, view_w, view_h, zoom,
@@ -194,20 +228,23 @@ EVENTS = {RK_EV_CREATE: "create", RK_EV_NET_CREATE: "network create", RK_EV_DEAT
           RK_EV_START_NAMED: "owner's start", RK_EV_BUILT: "build done", RK_EV_STATE: "state byte",
           RK_EV_REPLY: "reply", RK_EV_SPRAY: "nano spray", RK_EV_FEATURE: "feature call",
           RK_EV_FEATURE_END: "feature call's end", RK_EV_DRAW: "feature draw",
-          RK_EV_DEATH_END: "death's end"}
+          RK_EV_DEATH_END: "death's end", RK_EV_SLICE: "script slice", RK_EV_QUERY: "owner's query",
+          RK_EV_YARD: "yard"}
 FR_TICK, FR_SPAWN, FR_DESTROY, FR_DIE, FR_BURN, FR_DAMAGE, FR_SWAP, FR_CORPSE = range(8)
 REC_PHASE_LATE = 2                        # RK_EV_FEATURE's phase byte at most (tagpu_recfmt.h)
 ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12, 32)     # an RK_EV_FEATURE's arguments after its site
-FS_SOURCE = 6           # reproduction's source test, a multiplayer recording's tick input
+FS_SOURCE = 6           # reproduction's source test: the tick's input where the slots are the engine's
 FS_SITES = 7
 
 RB_HEADER, RB_STREAM, RB_SNAPSHOT, RB_END, RB_MINIMAP, RB_TIMELINES = 1, 2, 3, 4, 5, 6
 RB_CONTRIBUTIONS = 7
+RB_EXACT = 8                # the exact records of the stream block before it (tagpu_rec.exact)
 RB_BOUNDARY = -1            # load()'s marker of a fork in a chain's blocks: no block of the file
 RECR_TIMELINES = 64         # the segments a file may hold (tagpu_recreader.h)
 RB_NAMES = {RB_HEADER: "header", RB_STREAM: "stream", RB_SNAPSHOT: "snapshot", RB_END: "end",
-            RB_MINIMAP: "minimap", RB_TIMELINES: "timelines", RB_CONTRIBUTIONS: "contributions"}
-RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET = 1, 2, 4
+            RB_MINIMAP: "minimap", RB_TIMELINES: "timelines", RB_CONTRIBUTIONS: "contributions",
+            RB_EXACT: "exact stream"}
+RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH, RBF_CHAINED = 1, 2, 4, 8, 16
 
 (RT_FORMAT, RT_BUILD, RT_MODE, RT_MAP, RT_START, RT_WALLCLOCK, RT_SLOTS, RT_UNITS_EACH,
  RT_UNITDEFS, RT_PLAYER, RT_LEVER, RT_LAYOUT, RT_TABLE, RT_OPTIONS, RT_SETTINGS_MAP,
@@ -220,6 +257,13 @@ RT_CODEC, RT_PHYSICS, RT_AIR = 29, 30, 31   # the unit frame's lanes, physics an
  RT_UNCREDITED, RT_UNOBSERVED, RT_GAME_END, RT_SEAT_END) = range(32, 43)
 RT_MP_END = 43
 RT_CODEC_DECLINED, RT_CODEC_MISMATCH = 44, 45   # the writer's stream blocks written as records
+RT_HOLD = 46                # what a skirmish stream holds between refreshes, and how often
+RT_TYPES = 47               # the unit frame's per-type constants
+REC_HOLD_BYTES = 8 + 32 + REC_UNIT_IMAGE + REC_ORDER_IMAGE
+REC_REFRESH_TICKS, REC_REFRESH_MIN = 300, 30
+RECL_CELLS, RECL_SPRAYS = 1, 2
+REC_HOLD_POS = range(0x6A, 0x76)          # the unit position, which a spray session reads
+REC_SPRAY_FOLLOW = 8                      # RK_SPRAY_SESSION's mode: the point follows the unit
 RESULTS = {0: "unknown", 1: "won", 2: "lost"}
 
 END_REASONS = {1: "complete: the level ended", 2: "INCOMPLETE: the ring was full",
@@ -336,7 +380,7 @@ def header(payload):
         elif tag == RT_WALLCLOCK: h["wallclock"] = struct.unpack_from("<Q", b)[0]
         elif tag == RT_SLOTS: h["slots"] = u32
         elif tag == RT_UNITS_EACH: h["units_each"] = u32
-        elif tag == RT_UNITDEFS: h["unitdefs"] = struct.unpack_from("<II", b)
+        elif tag == RT_UNITDEFS and len(b) == 8: h["unitdefs"] = struct.unpack_from("<II", b)
         elif tag == RT_PLAYER:
             if len(b) < 16+0xB9 or b[0] >= 10 or any(p["index"] == b[0] for p in h["players"]):
                 raise Unreadable("malformed or duplicate seat in the header")
@@ -390,7 +434,11 @@ def header(payload):
             ix, n = struct.unpack_from("<HH", b)
             h.setdefault("fields", {})[ix] = [struct.unpack_from("<HHHHBB", b, 4 + 12 * k)
                                               for k in range(n)]
-        elif tag in (RT_CODEC, RT_PHYSICS, RT_AIR):
+        elif tag == RT_HOLD:
+            if "hold" in h:
+                raise Unreadable(f"header tag {tag} twice")
+            h["hold"] = hold_parse(b)
+        elif tag in (RT_CODEC, RT_PHYSICS, RT_AIR, RT_TYPES):
             # kept whole for reccodec.params, which bounds them (the block walk already has)
             if tag in h.setdefault("codec", {}):
                 raise Unreadable(f"header tag {tag} twice")
@@ -399,6 +447,8 @@ def header(payload):
         raise Unreadable(f"format {h.get('format')}, this tool reads {REC_FORMAT}")
     if (h.get("mode") == 3) != ("multiplayer" in h) or ("multiplayer" in h) != ("mp_seats" in h):
         raise Unreadable("network mode and contribution roster disagree")
+    if "multiplayer" in h and "hold" in h:
+        raise Unreadable("a multiplayer header with RT_HOLD: its stream holds nothing")
     if "multiplayer" in h:
         try:
             Seats(h["mp_seats"], Contributions(h["multiplayer"]).actors,
@@ -406,6 +456,28 @@ def header(payload):
         except ValueError as error:
             raise Unreadable(str(error)) from error
     return h
+
+
+def hold_parse(b):
+    """RT_HOLD's bytes, bounded as tagpu_reclossy.c's reclossy_hold_parse bounds them."""
+    if len(b) != REC_HOLD_BYTES:
+        raise Unreadable(f"an RT_HOLD of {len(b)} bytes, not {REC_HOLD_BYTES}")
+    refresh, flags = struct.unpack_from("<II", b)
+    unit = bytes(b[40:40 + REC_UNIT_IMAGE])
+    node = bytes(b[40 + REC_UNIT_IMAGE:])
+    if flags & ~(RECL_CELLS | RECL_SPRAYS):
+        raise Unreadable(f"RT_HOLD's flags {flags:#x}")
+    if not REC_REFRESH_MIN <= refresh <= REC_REFRESH_TICKS:
+        raise Unreadable(f"RT_HOLD's refresh interval {refresh}")
+    if any(unit[i] for i in REC_HOLD_POS):
+        raise Unreadable("RT_HOLD holds a byte of the unit position +0x6A..+0x75")
+    return {"refresh": refresh, "flags": flags, "sha": bytes(b[8:40]), "unit": unit, "node": node}
+
+
+def holds_cells(h):
+    """1 when a header's stream holds its cells' unit slots and yard bit (RT_HOLD's RECL_CELLS):
+    its playing keeps the engine's own (tagpu_recreader.h, recr_holds_cells)."""
+    return bool(h) and bool(h.get("hold", {}).get("flags", 0) & RECL_CELLS)
 
 
 def feature_dims(h):
@@ -551,6 +623,88 @@ def _delta_runs(bits, dwords):
     return got
 
 
+class Sprays:
+    """THE SPRAY SESSIONS' TABLE every reader of a stream with RT_HOLD's RECL_SPRAYS keeps, as
+    tagpu_reclossy.c's RecSprays: each unit slot's session (RK_SPRAY_SESSION: the period p, 1, 2
+    or 4, and FOLLOW) and its sprays of the last four GameTimes -- one spray, or a mark of several
+    -- with the unit's liveness and position +0x6A then. At the end of each iteration a slot with
+    a session and no spray of its own gets the one its session implies: its spray of T - p, with
+    FOLLOW its point moved by the unit's position change since, each axis modulo 2^32; one that
+    would predict from no single spray, or follow a unit not live then and now, is malformed (the
+    writer never leaves one open). `unit_of(slot)` gives (live, (x, y, z)) at the iteration."""
+    ONE, SEVERAL = 1, 2
+
+    def __init__(self, slots):
+        self.slots = slots
+        self.mode = {}                  # slot -> its session's mode, open sessions only
+        self.at = {}                    # (slot, T % 4) -> (T, mark, live, pos, body)
+
+    def empty(self):
+        self.mode.clear()
+        self.at.clear()
+
+    def slot(self, b):
+        """the unit slot a spray's or a session's ID names, or 0"""
+        s = struct.unpack_from("<I", b)[0] - 1
+        return s if 1 <= s < self.slots else 0
+
+    def session(self, b):
+        m = b[4] if len(b) == 8 else 0
+        p = m & 7
+        if len(b) != 8 or any(b[5:8]) or m & ~(7 | REC_SPRAY_FOLLOW) or \
+                (p not in (1, 2, 4) if p else m) or not self.slot(b):
+            raise Unreadable(f"a malformed spray session ({bytes(b).hex()})")
+        if m:
+            self.mode[self.slot(b)] = m
+        else:
+            self.mode.pop(self.slot(b), None)
+
+    def note(self, s, T, body, live, pos):
+        e = self.at.get((s, T % 4))
+        if e and e[0] == T:
+            self.at[(s, T % 4)] = (T, self.SEVERAL) + e[2:]
+        else:
+            self.at[(s, T % 4)] = (T, self.ONE, live, pos, bytes(body))
+
+    def spray(self, T, b, unit_of):
+        if len(b) != 48:
+            raise Unreadable(f"a nano spray of {len(b)} bytes")
+        s = self.slot(b)
+        if s:
+            self.note(s, T, b[4:], *unit_of(s))
+
+    def predict(self, s, T, m, unit_of):
+        p = m & 7
+        e = self.at.get((s, (T - p) % 4))
+        if not p or e is None or e[0] != T - p or e[1] != self.ONE:
+            return None
+        body = e[4]
+        if m & REC_SPRAY_FOLLOW:
+            live, now = unit_of(s)
+            if not e[2] or not live:
+                return None
+            pt = struct.unpack_from("<III", body, 4)
+            pt = [(v + n - o) & 0xFFFFFFFF for v, n, o in zip(pt, now, e[3])]
+            body = body[:4] + struct.pack("<III", *pt) + body[16:]
+        return body
+
+    def imply(self, T, unit_of):
+        """The sprays the sessions imply at the end of iteration T, 48 bytes each, slots
+        ascending, each taken into the table."""
+        out = []
+        for s in sorted(self.mode):
+            e = self.at.get((s, T % 4))
+            if e and e[0] == T:
+                continue                # a spray of its own in T
+            body = self.predict(s, T, self.mode[s], unit_of)
+            if body is None:
+                raise Unreadable(f"the spray session of unit {s + 1} at GameTime {T} predicts "
+                                 f"from no single spray of it, or follows it not live")
+            out.append(struct.pack("<I", s + 1) + body)
+            self.note(s, T, body, *unit_of(s))
+        return out
+
+
 class World:
     def __init__(self, slots, tables, header=None, dims=None):
         self.slots = slots
@@ -562,6 +716,7 @@ class World:
         self.pool = bytearray(self.nrec * REC_WRECK_BYTES)             # every record's image
         self.heads = None               # the pool's three heads and the cursor, once sent
         self.base = None                # the grid at the end of the first iteration (stream_to)
+        self.wbase = None               # ... and the wreck pool, taken with it
         self.globals = None             # the globals image, once sent
         self.proj = bytearray(self.ncap * REC_PROJ_IMAGE)              # the projectile pool's
         self.phead = None               # (count, hw), once sent: records [hw, ncap) are zero
@@ -574,6 +729,10 @@ class World:
         self.cnames = {}                # the scripts' names by their FNV-1a
         self.fbracket = 0               # an RK_EV_FEATURE's root + 1, until its end
         self.deaths = []                # the IDs of the deaths whose end is still to come
+        self.ystep = {}                 # the step's creates and deaths, slot -> "made"/"gone",
+        self.yheld = set()              # and the slots whose yard waits for their create
+        self.evented = False            # an event has come since the iteration's RK_TICK
+        self.session = None             # the unit ID of the iteration's last RK_SPRAY_SESSION
         self.units = {}                                  # slot -> bytearray image, live only
         self.lists = {}                                  # (slot, list) -> bytearray, not empty
         self.players = [bytearray(REC_PLAYER_IMAGE) for _ in range(REC_PLAYERS)]
@@ -594,13 +753,66 @@ class World:
                                                       # first: (GameTime, its RecPov's bytes)
         self.sel = [None] * REC_PLAYERS     # a seat's selection, [(slot, birth)], once it has one
         self.clicks = []                    # the iteration's RK_CLICK bodies, in order
+        self.sprays = Sprays(slots)         # the spray sessions' table (RECL_SPRAYS)
+        self.ended = True                   # the iteration's implied sprays have been made
+
+    def sprays_on(self):
+        """the stream writes its nano sprays as sessions (RT_HOLD's RECL_SPRAYS)"""
+        hold = self.header.get("hold") if self.header else None
+        return bool(hold and hold["flags"] & RECL_SPRAYS)
+
+    def unit_of(self, s):
+        img = self.units.get(s)
+        return (True, struct.unpack_from("<iii", img, 0x6A)) if img is not None else (False, (0, 0, 0))
+
+    def iteration_end(self):
+        """The sprays the iteration's spray sessions imply, (RK_EV_SPRAY, body) each, slots
+        ascending: what follows its events in every reader's world (tagpu_recreader.c, tick_end).
+        Once an iteration; a snapshot's world makes none."""
+        if self.ended or self.snap:
+            return []
+        self.ended = True
+        if not self.sprays_on():
+            return []
+        return [(RK_EV_SPRAY, b) for b in self.sprays.imply(self.tick, self.unit_of)]
+
+    def yard_rule(self, kind, b):
+        """THE YARD RULE (tagpu_recfmt.h), as the writer and the DLL's reader have it: a unit is
+        live at an event when the images hold it and no death of it came since, or a create of it
+        came since; a yard of a unit live there is its yard at its place, one of a unit not live
+        is its create's (Create's first slice runs inside the create 0x485F50, which is recorded
+        at its exit) and waits for that create in the step, and a yard naming the unit of a death
+        still open is malformed, as is a death of a unit whose yard waits."""
+        slot = struct.unpack_from("<I", b)[0] - 1
+        if not 1 <= slot < self.slots:
+            return
+        if kind == RK_EV_CREATE:
+            self.yheld.discard(slot)
+            self.ystep[slot] = "made"
+        elif kind == RK_EV_DEATH:
+            if slot in self.yheld:
+                raise Unreadable(f"the death of slot {slot}, whose create's yard waits for it")
+            self.ystep[slot] = "gone"
+        elif slot + 1 in self.deaths:
+            raise Unreadable(f"a yard of slot {slot}, inside its own death")
+        elif not (self.ystep.get(slot) == "made" or
+                  (slot not in self.ystep and slot in self.units)):
+            self.yheld.add(slot)
+
+    def yard_end(self):
+        """The step's end: every yard that waited met its create."""
+        if self.yheld:
+            raise Unreadable(f"a yard of slot {min(self.yheld)}, not live, whose create does not "
+                             f"follow in its step")
+        self.ystep.clear()
 
     def bracket(self, kind, b):
         """The brackets' grammar, as the DLL's reader has it (tagpu_recreader.c, event_take): a
         feature call's holds no other and cells only when it is the tick's, which is inside none;
         a death's holds its explosion's feature calls, in a multiplayer recording its corpse's
         (FR_CORPSE, inside a death only), and may hold deaths; a draw is inside one, FS_SOURCE inside
-        a multiplayer recording's tick only."""
+        the tick only, of a recording whose playing keeps the engine's slots: a multiplayer one, or
+        one that holds its cells (RECL_CELLS)."""
         network = bool(self.header) and self.header.get("mode") == 3
         if kind == RK_EV_FEATURE:
             if self.fbracket or (b[0] == FR_TICK and self.deaths) or b[0] >= len(ROOT_ARGS) or \
@@ -615,6 +827,7 @@ class World:
         elif kind == RK_EV_DEATH:
             if self.fbracket or len(self.deaths) == REC_DEATHS_MAX:
                 raise Unreadable("a death inside a feature call, or nested too deep")
+            self.yard_rule(kind, b)
             self.deaths.append(struct.unpack_from("<I", b)[0])
         elif kind == RK_EV_DEATH_END:
             if len(b) != 4 or not self.deaths or self.deaths[-1] != struct.unpack_from("<I", b)[0]:
@@ -623,8 +836,10 @@ class World:
         elif kind == RK_EV_DRAW:
             if (not self.fbracket and not self.deaths) or len(b) != 12 or b[0] >= FS_SITES:
                 raise Unreadable("a draw outside a feature call or a death")
-            if b[0] == FS_SOURCE and (self.fbracket != FR_TICK + 1 or not network):
-                raise Unreadable("a source test outside a multiplayer recording's tick")
+            if b[0] == FS_SOURCE and (self.fbracket != FR_TICK + 1 or
+                                      not (network or holds_cells(self.header))):
+                raise Unreadable("a source test outside the tick of a recording that keeps the "
+                                 "engine's slots")
 
     def perspective(self, kind, b):
         """THE PERSPECTIVE, as the DLL's reader has it (tagpu_recreader.c, pov_record): a skirmish
@@ -683,10 +898,14 @@ class World:
 
     def apply(self, kind, b):
         """One record; an event changes nothing here and is returned as (kind, body) -- the
-        cells inside the tick's feature call too, which are its input. An order list's records
-        come together and in order, as the DLL's reader has them (tagpu_recreader.c,
+        cells inside the tick's feature call too, which are its input. An RK_CELLS is an image
+        only before the iteration's first event and tick input after it, which only the tick's
+        feature call may hold: the readers' rule (tagpu_recreader.c, apply), which the writer's
+        copy and so every snapshot follow (tagpu_recwriter.c, feature_record). An order list's
+        records come together and in order, as the DLL's reader has them (tagpu_recreader.c,
         list_record)."""
-        if kind == RK_UNIT_DELTA and self.pend is None and not self.fbracket and not self.deaths:
+        if kind == RK_UNIT_DELTA and self.pend is None and not self.fbracket and not self.deaths \
+                and self.session is None:
             # the stream's most common record: with no order list, feature call or death open,
             # nothing below refuses it
             self._delta(self.units[_U16(b)[0]], b[2:2 + REC_UNIT_BITS], REC_UNIT_DWORDS,
@@ -694,6 +913,10 @@ class World:
             return None
         if self.pend is not None and kind != RK_ORDERS:
             raise Unreadable(f"slot {self.pend[0]}'s order list cut short by another record")
+        if self.session is not None and kind not in (RK_SPRAY_SESSION, RK_TICK):
+            raise Unreadable(f"record kind {kind} after the iteration's spray sessions")
+        if kind in EVENTS:              # RCS_EVENTS's kinds (tagpu_recfmt.h, rec_section_of)
+            self.evented = True
         if kind == RK_EV_NET_CREATE:
             h = self.header
             if not h or h.get("mode") != 3 or len(b) != 32 or \
@@ -714,6 +937,40 @@ class World:
         if kind in (RK_EV_FEATURE, RK_EV_FEATURE_END, RK_EV_DEATH, RK_EV_DEATH_END, RK_EV_DRAW):
             self.bracket(kind, b)
             return kind, b
+        if kind == RK_EV_SLICE:
+            # the unit tick's marker: inside no bracket, a slot of the level's (tagpu_recreader.c,
+            # event_take)
+            if self.fbracket or self.deaths:
+                raise Unreadable("a script slice inside a feature call or a death")
+            if len(b) != 4:
+                raise Unreadable(f"a script slice of {len(b)} bytes")
+            slot = struct.unpack_from("<I", b)[0] - 1
+            if not 1 <= slot < self.slots:
+                raise Unreadable(f"a script slice of slot {slot}, outside the array")
+            return kind, b
+        if kind == RK_EV_QUERY:
+            # an order handler's query, in the unit tick: inside no bracket, a slot of the level's
+            # (tagpu_recreader.c, event_take)
+            if self.fbracket or self.deaths:
+                raise Unreadable("an owner's query inside a feature call or a death")
+            if len(b) != 8 or b[4] >= REC_QUERIES or any(b[5:8]):
+                raise Unreadable(f"an owner's query of {len(b)} bytes, query {b[4] if len(b) > 4 else '-'}")
+            slot = struct.unpack_from("<I", b)[0] - 1
+            if not 1 <= slot < self.slots:
+                raise Unreadable(f"an owner's query of slot {slot}, outside the array")
+            return kind, b
+        if kind == RK_EV_YARD:
+            # YARD_OPEN's pass, outside every feature call, in a death or not, a slot of the
+            # level's, where THE YARD RULE lets it stand (tagpu_recreader.c, event_take)
+            if self.fbracket:
+                raise Unreadable("a yard inside a feature call")
+            if len(b) != 8 or b[4] > 1 or any(b[5:8]):
+                raise Unreadable(f"a yard of {len(b)} bytes, yard {b[4] if len(b) > 4 else '-'}")
+            slot = struct.unpack_from("<I", b)[0] - 1
+            if not 1 <= slot < self.slots:
+                raise Unreadable(f"a yard of slot {slot}, outside the array")
+            self.yard_rule(kind, b)
+            return kind, b
         if kind == RK_CELLS and (self.fbracket or self.deaths):
             if self.fbracket != FR_TICK + 1:
                 raise Unreadable("cells inside a feature call that is not the tick's")
@@ -724,8 +981,22 @@ class World:
         if kind in (RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT):
             self.perspective(kind, b)
         elif kind == RK_TICK:
+            self.yard_end()
             self.tick = struct.unpack_from("<I", b)[0]
             self.clicks = []
+            self.evented = False
+            self.ended = False
+            self.session = None
+        elif kind == RK_SPRAY_SESSION:
+            # after the iteration's last other record, slots ascending (tagpu_recfmt.h)
+            if self.snap or not self.sprays_on():
+                raise Unreadable("a spray session outside a stream that writes its sprays as "
+                                 "sessions")
+            unit = struct.unpack_from("<I", b)[0] if len(b) >= 4 else 0
+            if self.session is not None and unit <= self.session:
+                raise Unreadable(f"the spray session of unit {unit} after unit {self.session}'s")
+            self.sprays.session(b)
+            self.session = unit
         elif kind == RK_UNIT:
             self.units[struct.unpack_from("<H", b)[0]] = bytearray(b[4:4 + REC_UNIT_IMAGE])
         elif kind == RK_UNIT_DELTA:
@@ -784,6 +1055,9 @@ class World:
         elif kind == RK_CORRECT:
             self.corrections += 1
         elif kind == RK_CELLS:
+            if self.evented:
+                raise Unreadable("cells after an event of their iteration, outside the tick's "
+                                 "feature call")
             at = self.cells(b)
             self.grid[at:at + len(b) - 8] = b[8:]
         elif kind == RK_WRECK:
@@ -872,6 +1146,11 @@ class World:
             img = self.images.setdefault(which, bytearray(size))
             img[off:off + len(b) - 8] = b[8:]
         elif kind in EVENTS:
+            # the images come before the events: the units are this iteration's
+            if kind == RK_EV_CREATE:
+                self.yard_rule(kind, b)
+            if kind == RK_EV_SPRAY and self.sprays_on():
+                self.sprays.spray(self.tick, b, self.unit_of)
             return kind, b
         else:
             raise Unreadable(f"record kind {kind} in a block")
@@ -889,6 +1168,9 @@ class World:
         if self.fbracket or self.deaths:
             raise Unreadable("a feature call's or a death's records cut short at the end of its "
                              "iteration")
+        if self.yheld:
+            raise Unreadable(f"a yard of slot {min(self.yheld)}, not live, whose create does not "
+                             f"follow in its iteration")
 
     def pov_differences(self, other):
         """Lines naming each seat whose last two samples, with their GameTimes, or whose selection
@@ -1047,15 +1329,18 @@ class World:
         return out, n
 
 
-def snapshot_world(payload, slots, tables, dims, base=None, header=None):
+def snapshot_world(payload, slots, tables, dims, base=None, header=None, wbase=None):
     """A snapshot or a dump builds the world from nothing, its seats and viewer included; a
-    snapshot's cells over the recording's base grid, a dump's over nothing (it carries them all).
-    With the recording's `header`, its perspective is checked against it as the stream's is."""
+    snapshot's cells over its segment's base grid and its wreck records over its wreck base, a
+    dump's over nothing (it carries every cell and every record that is not zero). With the
+    recording's `header`, its perspective is checked against it as the stream's is."""
     w = World(slots, tables, dims=dims)
     w.header = header
     w.snap = True
     if base is not None:
         w.grid[:] = base
+    if wbase is not None:
+        w.pool[:] = wbase
     for kind, b in records(payload):
         w.apply(kind, b)
     w.whole()
@@ -1087,12 +1372,15 @@ def fork_prediction(segs, selected=0, at=None):
     if segs[0]["max_id"] >= 0xFFFFFFFE:
         raise Unreadable("timeline ID exhausted")
     if at is not None:
-        if ch[0]["first"] is None or ch[-1]["last"] is None or not ch[0]["first"] < at <= ch[-1]["last"]:
+        if ch[0]["first"] is None or ch[-1]["last"] is None or not ch[0]["first"] <= at <= ch[-1]["last"]:
             raise Unreadable("takeover GameTime is outside the timeline")
-        for child in ch[1:]:
-            if at == child["fork_at"]:
-                raise Unreadable(f"GameTime {at} is timeline {child['id']}'s first iteration; "
-                                 "take over after it")
+        # a takeover at a timeline's first iteration would append after its parent's iteration,
+        # or after none (tagpu_replay.c, takeover_point)
+        for seg in ch:
+            if at == seg["first"]:
+                raise Unreadable(f"GameTime {at} is timeline {seg['id']}'s first iteration, "
+                                 f"which no takeover starts at; the first GameTime one can is "
+                                 f"{at + 1}")
     live = [s for s in keep if s["id"] and s["state"] == 1]
     if len(live) < 3:
         return None
@@ -1228,14 +1516,41 @@ def chain(segs, n):
     return out
 
 
-def load(path, sizes=None, timeline=0):
+def exact_blocks(bl, offsets):
+    """The blocks with each stream block's records replaced by the exact records of the RB_EXACT
+    that follows it (the test lever tagpu_rec.exact), and the RB_EXACT blocks dropped; Unreadable
+    for a stream block with no exact block after it."""
+    out, offs, k = [], [], 0
+    while k < len(bl):
+        kind, first, last, payload = bl[k]
+        if kind == RB_EXACT:
+            raise Unreadable(f"an exact block of GameTime {first} to {last} after no stream block")
+        if kind == RB_STREAM:
+            ex = bl[k + 1] if k + 1 < len(bl) else None
+            if ex is None or ex[0] != RB_EXACT or ex[1:3] != (first, last):
+                raise Unreadable(f"the stream block of GameTime {first} to {last} has no exact "
+                                 f"stream after it: recorded without tagpu_rec.exact")
+            out.append((RB_STREAM, first, last, ex[3]))
+            offs.append((offsets[k][0], offsets[k + 1][1]))
+            k += 2
+            continue
+        out.append(bl[k])
+        offs.append(offsets[k])
+        k += 1
+    return out, offs
+
+
+def load(path, sizes=None, timeline=0, exact=False):
     """(the first header, the chain's blocks, why the reading stopped). The blocks of timeline 0
     are the first segment's alone, as they were written, whatever follows; timeline N's are each
     chain segment's to the GameTime before its child's fork_at, the child's header replaced by a
     marker (RB_BOUNDARY, fork_at, fork_at, the child's header), then the next. `stop` is the
-    file's when the chain's last segment is the file's last, else None."""
+    file's when the chain's last segment is the file's last, else None. With `exact`, the stream
+    is the exact one (exact_blocks), and `sizes` is not taken."""
     offsets = []
-    bl, stop = blocks(path, sizes, offsets)
+    bl, stop = blocks(path, None if exact else sizes, offsets)
+    if exact:
+        bl, offsets = exact_blocks(bl, offsets)
     if not bl or bl[0][0] != RB_HEADER:
         raise Unreadable(f"{path}: no header block" + (f" ({stop})" if stop else ""))
     segs = segments(bl, offsets)
@@ -1261,16 +1576,27 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
     """The world the stream builds, to the end of iteration `want` (or of the blocks). Calls
     on_snapshot(world, snapshot payload) at each snapshot block on the way, and
     on_record(world, kind, body) after each record is applied -- and with kind None before a TICK
-    is, while the world is still the iteration's before it. The world's `base` is its grid at the
-    end of its segment's first iteration, which a snapshot's cells differ from.
+    is, while the world is still the iteration's before it. The world's `base` and `wbase` are its
+    grid and its wreck pool at the end of its segment's first iteration, which a snapshot's cells
+    and wreck records differ from: the DLL's writer and reader take theirs at that moment too
+    (tagpu_recwriter.c, iteration_done; tagpu_recreader.c, tick_take), each from the pool that
+    segment's first iteration built from zero.
     Across a chain (load's RB_BOUNDARY markers) each segment is read to the GameTime before the
     next fork_at, its snapshots past that unread, and at the marker a fresh world, the child's
     header's seats and viewer, takes the child's first iteration whole (the reader's invariant,
-    tagpu_recreader.c); on_record(world, RB_BOUNDARY, None) says so first, with the parent's."""
+    tagpu_recreader.c); on_record(world, RB_BOUNDARY, None) says so first, with the parent's.
+    An iteration's implied sprays (World.iteration_end) come to on_record as RK_EV_SPRAY after its
+    last record, and a snapshot block passed on the way empties the spray sessions' table, as the
+    DLL's sequential reader does."""
     w = World(h["slots"], h["tables"], h)
     marks = [blk[1] for blk in bl if blk[0] == RB_BOUNDARY]
     cut = marks.pop(0) - 1 if marks else None
     skip = False
+
+    def ended():
+        for rk, b in w.iteration_end():
+            if on_record:
+                on_record(w, rk, b)
     for kind, first, last, payload in bl[1:]:
         if kind == RB_BOUNDARY:
             w.whole(True)
@@ -1284,18 +1610,22 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
             continue
         if skip:
             continue
-        if kind == RB_SNAPSHOT and on_snapshot and (cut is None or last <= cut):
-            on_snapshot(w, payload)
+        if kind == RB_SNAPSHOT and (cut is None or last <= cut):
+            if on_snapshot:
+                on_snapshot(w, payload)
+            w.sprays.empty()
         if kind != RB_STREAM:
             continue
         for rk, b in records(payload):
             if rk == RK_TICK:
+                ended()
                 if cut is not None and struct.unpack_from("<I", b)[0] > cut:
                     skip = True
                     break
                 if w.tick is not None and w.base is None:
                     w.whole(True)
                     w.base = bytes(w.grid)
+                    w.wbase = bytes(w.pool)
                 if want is not None and w.tick is not None and w.tick >= want:
                     w.whole(True)
                     return w
@@ -1304,6 +1634,7 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
             w.apply(rk, b)
             if on_record:
                 on_record(w, rk, b)
+        ended()
         w.whole(True)           # a stream block ends where an iteration does
     return w
 
@@ -1312,12 +1643,23 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
 
 class EventCheck:
     """Each iteration's records are its images, then the events of the step that follows them
-    (tagpu_recfmt.h). Between the images of two iterations, a unit that appears must have its
-    create, one that disappears its death, one whose state byte +0x10E changed a state event with
-    the new byte, and one whose build fraction +0x104 reached 0.0 its build done -- unless the slot
-    died and was made again in the step, which the create and the death both name."""
+    (tagpu_recfmt.h): the images end at the iteration's first event, as the readers have them
+    (tagpu_recreader.c, apply), and World.apply refuses cells past it that are not the tick's
+    feature call's, so the world summarised here is every reader's. Between the images of two
+    iterations, a unit that appears must have its create, one that disappears its death, one whose
+    state byte +0x10E changed a state event with the new byte, one whose build fraction +0x104
+    reached 0.0 its build done, and, with `yards` (a skirmish's: its recorder writes them), one
+    whose yard, +0x10F bit 2, changed a yard event whose last one for it is the new yard, since
+    YARD_OPEN 0x47DAC0 is that bit's one writer (0x47DAF1) -- unless the slot died and was made
+    again in the step, which the create and the death both name; and a unit made in the step has
+    the yard of its last yard event, its create's or a later one, or with none the closed yard its
+    create's init leaves. Within an iteration's events a script slice and an owner's
+    query name a unit live at its point -- in the iteration's images, or created earlier in its
+    events and not dead since -- and a script slice a slot at most once (tagpu_recfmt.h,
+    RK_EV_SLICE, RK_EV_QUERY)."""
 
-    def __init__(self, limit=20):
+    def __init__(self, limit=20, yards=False):
+        self.yards = yards
         self.open = False           # an iteration has begun
         self.in_events = False      # ... and its images are behind us
         self.summary_now = None     # its world, once its images are applied
@@ -1332,8 +1674,8 @@ class EventCheck:
         if len(self.lines) < self.limit:
             self.lines.append(line)
 
-    # a unit's (type ID, build fraction, state byte), in the image's order
-    _FIELDS = struct.Struct(f"<{U_TYPE}x4s{U_BUILT - U_TYPE - 4}x4s{U_STATEBYTE - U_BUILT - 4}xB")
+    # a unit's (type ID, build fraction, state byte, +0x10F), in the image's order
+    _FIELDS = struct.Struct(f"<{U_TYPE}x4s{U_BUILT - U_TYPE - 4}x4s{U_STATEBYTE - U_BUILT - 4}xBB")
 
     @staticmethod
     def summary(w):
@@ -1376,10 +1718,35 @@ class EventCheck:
     def finish(self, w):
         if self.open and not self.in_events:
             self.images_done(w)
+        elif self.open:
+            # the last iteration's events lead to no images: its slices are checked here
+            self.slices(self.summary_now, self.events, w.tick)
+
+    def slices(self, was, events, tick):
+        live, sliced = set(was), set()
+        for kind, b in events:
+            if kind in (RK_EV_CREATE, RK_EV_NET_CREATE):
+                live.add(struct.unpack_from("<I", b)[0] - 1)
+            elif kind == RK_EV_DEATH:
+                live.discard(struct.unpack_from("<I", b)[0] - 1)
+            elif kind == RK_EV_SLICE:
+                slot = struct.unpack_from("<I", b)[0] - 1
+                if slot not in live:
+                    self.note(f"the events of GameTime {tick}: a script slice of slot {slot}, "
+                              f"which holds no live unit there")
+                if slot in sliced:
+                    self.note(f"the events of GameTime {tick}: slot {slot}'s script slice twice")
+                sliced.add(slot)
+            elif kind == RK_EV_QUERY:
+                slot = struct.unpack_from("<I", b)[0] - 1
+                if slot not in live:
+                    self.note(f"the events of GameTime {tick}: an owner's query of slot {slot}, "
+                              f"which holds no live unit there")
 
     def transition(self, was, events, now, tick):
         self.checked += 1
-        made, died, state, built = set(), set(), {}, set()
+        self.slices(was, events, tick - 1)
+        made, died, state, built, yard = set(), set(), {}, set(), {}
         for kind, b in events:
             if kind in (RK_EV_CREATE, RK_EV_NET_CREATE):
                 made.add(struct.unpack_from("<I", b)[0] - 1)
@@ -1389,6 +1756,8 @@ class EventCheck:
                 state[struct.unpack_from("<I", b)[0] - 1] = b[4]
             elif kind == RK_EV_BUILT:
                 built.add(struct.unpack_from("<I", b, 4)[0] - 1)
+            elif kind == RK_EV_YARD:
+                yard[struct.unpack_from("<I", b)[0] - 1] = b[4]
         at = f"the step to GameTime {tick}"
         # a slot whose fields stayed and that no create or death names has nothing to explain
         changed = {slot for slot, _ in was.items() ^ now.items()}
@@ -1397,6 +1766,12 @@ class EventCheck:
             if a is None:
                 if slot not in made:
                     self.note(f"{at}: unit {slot} appears with no create")
+                elif self.yards and slot not in died and (b[3] >> 2 & 1) != yard.get(slot, 0):
+                    # the create's init closes the yard (0x485B3E..0x485B52), and only YARD_OPEN
+                    # opens it: in the create's Create slice or after it, an event each
+                    self.note(f"{at}: unit {slot} appears with its yard {b[3] >> 2 & 1} and "
+                              + (f"its last yard event at {yard[slot]}" if slot in yard
+                                 else "no yard event"))
                 continue
             if b is None:
                 if slot not in died:
@@ -1413,6 +1788,11 @@ class EventCheck:
                              else "no state event"))
             if a[1] != bytes(4) and b[1] == bytes(4) and slot not in built:
                 self.note(f"{at}: unit {slot}'s +0x104 reached 0.0 with no build done")
+            ya, yb = a[3] >> 2 & 1, b[3] >> 2 & 1
+            if self.yards and ya != yb and yard.get(slot) != yb:
+                self.note(f"{at}: unit {slot}'s yard went {ya} -> {yb} with "
+                          + (f"its last yard event at {yard[slot]}" if slot in yard
+                             else "no yard event"))
 
 
 # ---- the commands ----------------------------------------------------------------------------
@@ -1422,9 +1802,15 @@ def codec_text(h):
     c = h.get("codec", {})
     if RT_CODEC not in c or RT_PHYSICS not in c:
         return "none (no RT_CODEC and RT_PHYSICS): every stream block is records"
-    prm = _codec().params(list(c.items()), h.get("slots") or 0, h.get("projectiles") or 0)
+    gw, gh, wrecks = (h.get("features") or (0, 0, 0))[:3]
+    prm = _codec().params(list(c.items()), h.get("slots") or 0, h.get("projectiles") or 0, gw, gh,
+                          wrecks, (h.get("unitdefs") or (0, 0))[0])
+    if not prm.usable:
+        return (f"off: the grid of {gw} x {gh} cells or the wreck pool of {wrecks} records is past "
+                f"the codec's bounds, so every stream block is records")
     return (f"{len(prm.lanes)} lanes, gravity {prm.gravity}, sea level {prm.sea}, sight rule "
-            f"{prm.sight}, {len(prm.air)} aircraft types")
+            f"{prm.sight}, bucket columns {prm.bcols}, {len(prm.air)} aircraft types, "
+            f"{len(prm.types)} unit types")
 
 
 def cmd_info(path):
@@ -1483,10 +1869,20 @@ def cmd_info(path):
     nsec = sum(1 for s, f in stream if f & RBF_SECTIONS)
     print(f"  stream blocks: {len(stream)}, {nsec} sectioned "
           f"({sum(1 for s, f in stream if f & RBF_FRAME_RESET)} restarting the frame), "
-          f"{len(stream) - nsec} records")
-    for k, first, last, r, pk in sizes:
+          f"{len(stream) - nsec} records; {sum(1 for s, f in stream if f & RBF_REFRESH)} end at a "
+          f"refresh")
+    hold = h.get("hold")
+    if hold:
+        print(f"  the stream holds {sum(bin(b).count('1') for b in hold['unit'])} bits of a unit "
+              f"image and {sum(bin(b).count('1') for b in hold['node'])} of a main list node, "
+              f"flags {hold['flags']:#x}, between refreshes every {hold['refresh']} GameTimes "
+              f"(table {hold['sha'].hex()[:12]})")
+    else:
+        print("  the stream holds nothing: no RT_HOLD")
+    for (k, first, last, r, pk), f in zip(sizes, flags):
         if k == RB_SNAPSHOT:
-            print(f"  snapshot at GameTime {last}: {r} bytes raw, {pk} packed")
+            print(f"  snapshot at GameTime {last}: {r} bytes raw, {pk} packed "
+                  f"({'chained' if f & RBF_CHAINED else 'a key'})")
     ev, evb = {}, {}
     for kind, first, last, payload in bl:
         if kind != RB_STREAM:
@@ -1495,7 +1891,7 @@ def cmd_info(path):
             if rk in EVENTS or rk in (RK_ORDERS, RK_CONTROLLER, RK_VIEWER, RK_CELLS, RK_WRECK,
                                       RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ,
                                       RK_PROJ_DELTA, RK_MAPPED, RK_MAPPED_RUNS, RK_POV, RK_CLICK,
-                                      RK_SELECT):
+                                      RK_SELECT, RK_SPRAY_SESSION):
                 ev[rk] = ev.get(rk, 0) + 1
                 evb[rk] = evb.get(rk, 0) + 4 + ((len(b) + 3) & ~3)
     names = {**EVENTS, RK_ORDERS: "order list", RK_CONTROLLER: "controller", RK_VIEWER: "viewer",
@@ -1503,7 +1899,9 @@ def cmd_info(path):
              RK_GLOBALS_DELTA: "globals delta", RK_PROJ_HEAD: "projectile head",
              RK_PROJ: "projectile record", RK_PROJ_DELTA: "projectile delta",
              RK_MAPPED: "explored map record", RK_MAPPED_RUNS: "explored map runs",
-             RK_POV: "camera and cursor sample", RK_CLICK: "click", RK_SELECT: "selection"}
+             RK_POV: "camera and cursor sample", RK_CLICK: "click", RK_SELECT: "selection",
+             # the stream's own: the sprays its sessions imply are made by the readers, not counted
+             RK_EV_SPRAY: "nano spray written", RK_SPRAY_SESSION: "spray session"}
     print("  records: " + (", ".join(f"{ev[k]} {names[k]} ({evb[k] >> 10} KB)" for k in sorted(ev))
                            or "no order lists, seats or events"))
     ends = [b for b in bl if b[0] == RB_END]
@@ -1571,6 +1969,23 @@ def file_segments(path, decode=False):
     return segments(bl, offsets), stop
 
 
+def refresh_at(path, timeline, T):
+    """The GameTime a takeover of `timeline` asked for at T starts from, as tagpu_recreader.c's
+    recr_refresh_at finds it: in the chain's segment whose part holds T, the largest `last` <= T
+    of a stream block flagged RBF_REFRESH, or the segment's first iteration. Unreadable when T is
+    outside the chain."""
+    offsets, flags = [], []
+    bl, _ = blocks(path, None, offsets, flags=flags, decode=False)
+    fl = {id(b): f for b, f in zip(bl, flags)}
+    ch = chain(segments(bl, offsets), timeline)
+    for i, s in enumerate(ch):
+        end = ch[i + 1]["fork_at"] - 1 if i + 1 < len(ch) else s["last"]
+        if s["first"] is not None and s["first"] <= T <= end:
+            return max([s["first"]] + [b[2] for b in s["blocks"] if b[0] == RB_STREAM and
+                                       fl[id(b)] & RBF_REFRESH and b[2] <= T])
+    raise Unreadable(f"GameTime {T} is outside timeline {timeline}'s chain")
+
+
 def seek_start(path, timeline, T, lead):
     """Where the DLL's reader builds a seek to T of `timeline` from, as recr_seek
     (tagpu_recreader.c) chooses it from the file's index: (S, from_snapshot). The last snapshot of
@@ -1599,6 +2014,96 @@ def seek_start(path, timeline, T, lead):
     return ch[i]["first"], False
 
 
+def seek_blocks(path, timeline, T, lead, base):
+    """The blocks the DLL's reader decodes for a seek to T of `timeline`, as recr_seek
+    (tagpu_recreader.c) reads them, from the file's own blocks: (count, their bytes in the file,
+    their bytes unpacked, base), each size a block header's. From the snapshot seek_start chooses
+    -- after the first stream block of that snapshot's segment when `base`, the reader not holding
+    the segment's base -- or from the first iteration seek_start chooses; then, in each segment of
+    the chain up to T, every stream block holding an iteration it reads: a block is decoded whole,
+    and one ends where an iteration does (tagpu_recwriter.c, iteration_done), so the reader opens
+    no block past the last iteration it reads. The contribution, exact-stream and timeline blocks
+    it passes, and the snapshots between its iterations, are skipped unread. `base` None is a
+    reader that has read its chain's first iteration and nothing since, as a playing in a fresh
+    process holds after its first step: it holds the root's base, so it reads a base only for a
+    snapshot in a later segment of the chain.
+    THE CHAIN: a chained snapshot (RBF_CHAINED) is decoded with every snapshot of its segment
+    before it back to its key, each a block of the count (snapshot_chain); more than CHAIN_MAX
+    links, or a chain with no key in its segment, is Unreadable, as the reader refuses it.
+    THE RUN: a sectioned block is a chunk of its run's one zstd frame and counts as its block, its
+    header's packed and raw -- the chunk and the container it unpacks to, not the run's window.
+    The reader decodes a chunk only after its run's chunks before it (sections_ready): its codec
+    is invalid where a seek starts, at a crossing and after a records block, and only an
+    RBF_FRAME_RESET block starts it again. A seek starts only where a run does -- the stream
+    after a snapshot, a segment's first iteration -- so it decodes each run it reads from its
+    start; a file where it would not is Unreadable, as the reader refuses it."""
+    sizes, offsets, flags = [], [], []
+    bl, _ = blocks(path, sizes, offsets, flags=flags, decode=False)
+    size = {id(b): sz for b, sz in zip(bl, sizes)}
+    flag = {id(b): f for b, f in zip(bl, flags)}
+    ch = chain(segments(bl, offsets), timeline)
+
+    def cover_end(i):
+        return ch[i + 1]["fork_at"] - 1 if i + 1 < len(ch) else ch[i]["last"]
+    hold = next((i for i, s in enumerate(ch) if s["first"] is not None and
+                 s["first"] <= T <= cover_end(i)), None)
+    if hold is None:
+        raise Unreadable(f"GameTime {T} is outside timeline {timeline}'s chain")
+    snap = frm = None
+    for i in range(hold + 1):
+        for b in ch[i]["blocks"]:
+            if b[0] == RB_SNAPSHOT and b[2] <= cover_end(i) and b[2] + lead < T:
+                snap, frm = b, i
+    read = []
+
+    def runs(stream):
+        """`stream`, the blocks one span of the seek decodes in order, after the codec was made
+        invalid: each sectioned block must restart the frame or continue one it decoded"""
+        valid = False
+        for b in stream:
+            if not flag[id(b)] & RBF_SECTIONS:
+                valid = False
+            elif flag[id(b)] & RBF_FRAME_RESET:
+                valid = True
+            elif not valid:
+                raise Unreadable(f"the stream block of GameTime {b[1]} to {b[2]} continues a run "
+                                 f"the seek to {T} does not start")
+        read.extend(stream)
+
+    if base is None:
+        base = snap is not None and frm > 0
+    if snap is not None:
+        if base:
+            runs([next(b for b in ch[frm]["blocks"] if b[0] == RB_STREAM)])
+        snaps = [b for b in ch[frm]["blocks"] if b[0] == RB_SNAPSHOT]
+        k = next(j for j, b in enumerate(snaps) if b is snap)
+        links = [snap]
+        while flag[id(links[0])] & RBF_CHAINED:
+            if k == 0:
+                raise Unreadable(f"the chained snapshot of GameTime {links[0][2]} has no snapshot "
+                                 f"before it in its segment")
+            if len(links) == _codec().CHAIN_MAX + 1:
+                raise Unreadable(f"the snapshot of GameTime {snap[2]} chains past "
+                                 f"{_codec().CHAIN_MAX} snapshots to its key")
+            k -= 1
+            links.insert(0, snaps[k])
+        read += links
+        start = snap[2] + 1
+    else:
+        lo = T - lead if T > lead else 0
+        frm = 0
+        while frm < hold and cover_end(frm) < lo:
+            frm += 1
+        start = ch[frm]["first"]
+    for i in range(frm, hold + 1):
+        end = T if i == hold else cover_end(i)
+        runs([b for b in ch[i]["blocks"] if b[0] == RB_STREAM and b[1] <= end and b[2] >= start])
+        if i < hold:
+            start = ch[i + 1]["fork_at"]
+    return (len(read), sum(size[id(b)][4] for b in read), sum(size[id(b)][3] for b in read),
+            int(bool(base) and snap is not None))
+
+
 def cmd_segments(path):
     """One line per segment, then the SHA-256 of the original's bytes: what a fork's writer must
     leave as it was."""
@@ -1614,15 +2119,16 @@ def cmd_segments(path):
     return 0
 
 
-def cmd_check(path, timeline=0):
-    h, bl, stop = load(path, timeline=timeline)
+def cmd_check(path, timeline=0, exact=False):
+    h, bl, stop = load(path, timeline=timeline, exact=exact)
     bad, seen = 0, 0
     gnames = known_names(h)
 
     def at_snapshot(w, payload):
         nonlocal bad, seen
         seen += 1
-        s = snapshot_world(payload, h["slots"], h["tables"], feature_dims(h), w.base, w.header)
+        s = snapshot_world(payload, h["slots"], h["tables"], feature_dims(h), w.base, w.header,
+                           w.wbase)
         lines, n = w.differences(s, h["tables"], gnames=gnames, pov=True)
         if s.tick != w.tick:
             lines.insert(0, f"the snapshot is at GameTime {s.tick}, the stream at {w.tick}")
@@ -1633,7 +2139,7 @@ def cmd_check(path, timeline=0):
             for line in lines:
                 print("  " + line.replace("dump", "snapshot"))
 
-    ec = EventCheck()
+    ec = EventCheck(yards=h.get("mode") != 3)
     w = stream_to(h, bl, on_snapshot=at_snapshot, on_record=ec.on_record)
     ec.finish(w)
     print(f"{path}: the stream reads to GameTime {w.tick} ({w.corrections} corrections in it); "
@@ -1644,6 +2150,392 @@ def cmd_check(path, timeline=0):
     for line in ec.lines:
         print("  " + line)
     return 1 if bad or w.corrections or ec.n else 0
+
+
+# ---- the lossy stream against the exact one ---------------------------------------------------
+
+def iterations(payload):
+    """(GameTime, its records' bytes) for each iteration of a stream block's records: an
+    RK_TICK and the records up to the next. Unreadable for a block that begins otherwise."""
+    head = _REC_HEAD.unpack_from
+    at, n, start, tick = 0, len(payload), None, None
+    while at + 4 <= n:
+        kind, ln = head(payload, at)
+        if kind == RK_TICK:
+            if ln != 4:
+                raise Unreadable(f"an RK_TICK of {ln} bytes")
+            if start is not None:
+                yield tick, payload[start:at]
+            start, tick = at, struct.unpack_from("<I", payload, at + 4)[0]
+        elif start is None:
+            raise Unreadable("a stream block that does not begin with an RK_TICK")
+        at += (4 + ln + 3) & ~3
+    if at != n:
+        raise Unreadable("a record cut short at the end of a stream block")
+    if start is not None:
+        yield tick, payload[start:n]
+
+
+# a cell's bytes a stream that holds its cells (RECL_CELLS) carries at a value it wrote before:
+# the unit slots +0x00 and +0x02 and the yard bit, +0x0C bit 1 (tagpu_reclossy.c)
+CELL_HELD = bytes([0xFF] * 4 + [0] * 8 + [0x02])
+
+
+class Held:
+    """The units, their liveness and their order lists as one stream builds them -- the lossy
+    stream's or the exact one's -- with the slots and lists each iteration touched, the bytes of
+    the iteration's other records in order but its nano sprays and spray sessions, those bodies
+    in order apart, and each touched thing as it was before. With `grid`, (columns, rows) of a
+    segment that holds its cells, also the grid from the cells its images carry, the cells each
+    iteration's images touched as they were before (prev_cells), and the tick's input runs apart
+    from the other records (inputs, their bodies in order)."""
+
+    def __init__(self, slots, grid=None):
+        import numpy as np
+        self.np = np
+        self.units = np.zeros((slots, REC_UNIT_DWORDS), np.uint32)
+        self.live = np.zeros(slots, bool)
+        self.lists = {}
+        self.slots = slots
+        self.gw, self.gh = grid or (0, 0)
+        self.grid = np.zeros((self.gw * self.gh, REC_CELL_BYTES), np.uint8) if grid else None
+        self.prev_cells, self.inputs = {}, []
+
+    def _cells(self, recs, at, ln, evented):
+        x, z, n, zero = struct.unpack_from("<HHHH", recs, at + 4)
+        if not n or n > REC_CELLS_MAX or zero or ln != 8 + n * REC_CELL_BYTES or \
+                x + n > self.gw or z >= self.gh:
+            raise Unreadable(f"a run of cells past the {self.gw} x {self.gh} grid")
+        if evented:
+            self.inputs.append(bytes(recs[at + 4:at + 4 + ln]))
+            return
+        i = z * self.gw + x
+        for c in range(i, i + n):
+            if c not in self.prev_cells:
+                self.prev_cells[c] = self.grid[c].copy()
+        self.grid[i:i + n] = self.np.frombuffer(recs, self.np.uint8, n * REC_CELL_BYTES,
+                                                at + 12).reshape(n, REC_CELL_BYTES)
+
+    def iteration(self, recs):
+        np = self.np
+        head = _REC_HEAD.unpack_from
+        prev, prev_lists, other, sprays, sessions = {}, {}, [], [], []
+        pend = None
+        evented = False
+        self.prev_cells, self.inputs = {}, []
+        at, n = 0, len(recs)
+        while at < n:
+            kind, ln = head(recs, at)
+            size = (4 + ln + 3) & ~3
+            if kind in EVENTS:
+                evented = True
+            if kind == RK_CELLS and self.grid is not None:
+                if pend is not None:
+                    raise Unreadable(f"slot {pend[0]}'s list unfinished")
+                self._cells(recs, at, ln, evented)
+            elif kind in (RK_UNIT, RK_UNIT_DELTA, RK_UNIT_GONE, RK_ORDERS):
+                if ln < 2:
+                    raise Unreadable(f"a {kind} record of {ln} bytes")
+                s = _U16(recs, at + 4)[0]
+                if not 1 <= s < self.slots:
+                    raise Unreadable(f"slot {s} of {self.slots}")
+                if s not in prev:
+                    prev[s] = (bool(self.live[s]), self.units[s].copy())
+                if kind == RK_UNIT:
+                    if ln != 4 + REC_UNIT_IMAGE:
+                        raise Unreadable(f"an RK_UNIT of {ln} bytes")
+                    self.units[s] = np.frombuffer(recs, "<u4", REC_UNIT_DWORDS, at + 8)
+                    self.live[s] = True
+                elif kind == RK_UNIT_GONE:
+                    self.live[s] = False
+                    for k in (0, 1):
+                        prev_lists.setdefault((s, k), self.lists.get((s, k), b""))
+                        self.lists.pop((s, k), None)
+                elif kind == RK_UNIT_DELTA:
+                    if not self.live[s] or ln < REC_UNIT_DELTA_HEAD:
+                        raise Unreadable(f"a delta of slot {s}, not live, or short")
+                    bits = int.from_bytes(recs[at + 6:at + 6 + REC_UNIT_BITS], "little")
+                    sel = [d for d in range(REC_UNIT_DWORDS) if bits >> d & 1]
+                    if bits >> REC_UNIT_DWORDS or ln != REC_UNIT_DELTA_HEAD + 4 * len(sel):
+                        raise Unreadable(f"a malformed delta of slot {s}")
+                    self.units[s, sel] = np.frombuffer(recs, "<u4", len(sel),
+                                                       at + 4 + REC_UNIT_DELTA_HEAD)
+                else:
+                    lst, zero, total, first = struct.unpack_from("<BBHH", recs, at + 6)
+                    body = bytes(recs[at + 12:at + 4 + ln])
+                    if lst > 1 or zero or (ln - 8) % REC_ORDER_IMAGE or not self.live[s]:
+                        raise Unreadable(f"a malformed order list of slot {s}")
+                    if first == 0:
+                        if pend is not None:
+                            raise Unreadable(f"slot {pend[0]}'s list unfinished")
+                        pend = [s, lst, total, 0, []]
+                    elif pend is None or pend[:4] != [s, lst, total, first]:
+                        raise Unreadable(f"an order list of slot {s} out of order")
+                    pend[4].append(body)
+                    pend[3] = first + len(body) // REC_ORDER_IMAGE
+                    if pend[3] > total:
+                        raise Unreadable(f"an order list of slot {s} past its length")
+                    if pend[3] == total:
+                        prev_lists.setdefault((s, lst), self.lists.get((s, lst), b""))
+                        img = b"".join(pend[4])
+                        if img:
+                            self.lists[(s, lst)] = img
+                        else:
+                            self.lists.pop((s, lst), None)
+                        pend = None
+            else:
+                if pend is not None:
+                    raise Unreadable(f"slot {pend[0]}'s list unfinished")
+                if kind == RK_EV_SPRAY:
+                    sprays.append(bytes(recs[at + 4:at + 4 + ln]))
+                elif kind == RK_SPRAY_SESSION:
+                    sessions.append(bytes(recs[at + 4:at + 4 + ln]))
+                else:
+                    other.append(recs[at:at + size])
+            at += size
+        if pend is not None:
+            raise Unreadable(f"slot {pend[0]}'s list unfinished")
+        return prev, prev_lists, b"".join(other), sprays, sessions
+
+    def unit_of(self, s):
+        """(live, position +0x6A) of slot s, as a spray session reads it"""
+        return bool(self.live[s]), struct.unpack_from("<iii", self.units[s].tobytes(), 0x6A)
+
+
+def is_refresh(n, t, prev, interval):
+    """Whether a segment's iteration at GameTime t is a refresh, n its ordinal in the segment from
+    1 and prev the GameTime of the segment's last refresh, as the writer decides it
+    (tagpu_reclossy.h, reclossy_is_refresh): the first two, and then the first in each interval
+    of `interval` GameTimes (1 to interval, interval + 1 to 2 * interval, ...) other than the last
+    refresh's -- on consecutive GameTimes those 1 modulo the interval."""
+    return n <= 2 or (interval > 0 and (t + interval - 1) // interval !=
+                      (prev + interval - 1) // interval)
+
+
+def lossy_chain(path, timeline):
+    """(the chain's segments, each block's flags by the block, why the reading stopped)."""
+    offsets, flags = [], []
+    bl, stop = blocks(path, None, offsets, flags=flags)
+    fl = {id(b): f for b, f in zip(bl, flags)}
+    if not bl or bl[0][0] != RB_HEADER:
+        raise Unreadable(f"{path}: no header block" + (f" ({stop})" if stop else ""))
+    return chain(segments(bl, offsets), timeline), fl, stop
+
+
+def cmd_lossy_check(path, timeline=0, to=None):
+    """The lossy stream against the exact one (RB_EXACT, the test lever tagpu_rec.exact), an
+    iteration at a time, as tagpu_reclossy.c's invariants state them:
+      (a) every shown byte exact: each unit's liveness, each live unit's image outside RT_HOLD's
+          unit mask, each main order list outside the node mask and each sub list whole; every
+          other record -- the players, tables, globals, projectiles, wrecks, cells, explored map,
+          perspective, events and corrections -- byte for byte, in order; with RECL_CELLS, each
+          cell an image touched outside CELL_HELD, and the tick's input runs those of the exact
+          stream that differ from the stream's grid outside CELL_HELD, in order;
+      (b) every held byte a value the engine produced: a unit dword's held bits the stream's
+          previous value or the exact one, an order list the stream's previous or the exact one,
+          a cell's CELL_HELD bits the stream's previous value or the exact one;
+      (c) the two worlds equal byte for byte at the end of every RBF_REFRESH block, every
+          snapshot after a refresh block, and a refresh block ending at each refresh of the
+          writer's grid (is_refresh, on RT_HOLD's interval) and nowhere else, as the takeover's
+          rounding reads them -- the grid with them, with RECL_CELLS;
+      (d) with RT_HOLD's RECL_SPRAYS, each iteration's nano sprays -- the stream's and the ones
+          its spray sessions imply (Sprays, over the stream's units) -- the exact stream's as a
+          multiset of (ID, body), and each ID's in the exact stream's order: the order across
+          IDs inside one iteration is the one thing not kept, a loosening the owner approved
+          (tagpu_reclossy.c, THE SPRAY SESSIONS); every other event is in (a);
+      (e) RT_HOLD in every skirmish segment's header, and the exact stream's blocks and
+          iterations the stream's.
+    """
+    import numpy as np
+    ch, fl, stop = lossy_chain(path, timeline)
+    lines, bad = [], 0
+    n_iter = n_refresh = n_snap = n_written = n_implied = 0
+    last = None
+
+    def fail(msg):
+        nonlocal bad
+        bad += 1
+        if len(lines) < 20:
+            lines.append(msg)
+
+    for i, seg in enumerate(ch):
+        h = seg["header"]
+        cut = ch[i + 1]["fork_at"] - 1 if i + 1 < len(ch) else None
+        if to is not None:
+            cut = to if cut is None else min(cut, to)
+        hold = h.get("hold")
+        if h.get("mode") == 3:
+            interval, hu, hn = REC_REFRESH_TICKS, bytes(REC_UNIT_IMAGE), bytes(REC_ORDER_IMAGE)
+        elif hold is None:
+            fail(f"timeline {seg['id']}: a skirmish header without RT_HOLD")
+            break
+        else:
+            if hold["flags"] & ~(RECL_CELLS | RECL_SPRAYS):
+                raise Unreadable(f"RT_HOLD's flags {hold['flags']:#x}: a flag this check does not "
+                                 f"know")
+            interval, hu, hn = hold["refresh"], hold["unit"], hold["node"]
+        sessions_on = bool(hold and hold["flags"] & RECL_SPRAYS)
+        H = np.frombuffer(hu, "<u4")
+        HN = np.frombuffer(hn, "<u4")
+        node_held = HN.any()
+        grid = feature_dims(h)[:2] if holds_cells(h) else None
+        CH = np.frombuffer(CELL_HELD, np.uint8)
+        D, W = Held(h["slots"], grid), Held(h["slots"], grid)
+        S = Sprays(h["slots"])
+        bl = seg["blocks"]
+        n_seg, prev_refresh = 0, 0
+        k = 1
+        done = False
+        prev_stream = None
+        while k < len(bl) and not done:
+            kind, first, lastb, payload = bl[k]
+            if kind == RB_SNAPSHOT:
+                if cut is None or lastb <= cut:
+                    n_snap += 1
+                    S.empty()               # every reader's, where the writer emptied its own
+                    if prev_stream is None or prev_stream[1] != lastb or \
+                            not fl[id(prev_stream[0])] & RBF_REFRESH:
+                        fail(f"the snapshot at GameTime {lastb} does not follow a refresh block")
+                k += 1
+                continue
+            if kind == RB_EXACT:
+                fail(f"an exact block of GameTime {first} to {lastb} after no stream block")
+                k += 1
+                continue
+            if kind != RB_STREAM:
+                k += 1
+                continue
+            ex = bl[k + 1] if k + 1 < len(bl) else None
+            if ex is None or ex[0] != RB_EXACT or ex[1:3] != (first, lastb):
+                raise Unreadable(f"the stream block of GameTime {first} to {lastb} has no exact "
+                                 f"stream after it: recorded without tagpu_rec.exact")
+            refresh_block = fl[id(bl[k])] & RBF_REFRESH
+            prev_stream = (bl[k], lastb)
+            its, xits = list(iterations(payload)), list(iterations(ex[3]))
+            if len(its) != len(xits):
+                fail(f"the block of GameTime {first} to {lastb}: {len(its)} iterations, the "
+                     f"exact stream's {len(xits)}")
+            pairs = list(zip(its, xits))
+            for j, ((t, recs), (tx, xrecs)) in enumerate(pairs):
+                if t != tx:
+                    fail(f"iteration GameTime {t} against the exact stream's {tx}")
+                    done = True
+                    break
+                if cut is not None and t > cut:
+                    done = True
+                    break
+                n_iter += 1
+                last = t
+                n_seg += 1
+                refresh = is_refresh(n_seg, t, prev_refresh, interval)
+                if refresh:
+                    prev_refresh = t
+                ends = j == len(pairs) - 1
+                if refresh != (ends and bool(refresh_block)):
+                    fail(f"GameTime {t}: " + ("a refresh iteration that does not end a refresh "
+                                              "block" if refresh else
+                                              "a refresh block ending off the grid"))
+                pd, pdl, od, dspray, dsess = D.iteration(recs)
+                pw, pwl, ow, wspray, wsess = W.iteration(xrecs)
+                if od != ow:
+                    fail(f"GameTime {t}: the records other than units, order lists and sprays "
+                         f"differ")
+                if grid:
+                    cells = sorted(set(D.prev_cells) | set(W.prev_cells))
+                    if cells:
+                        dg, wg = D.grid[cells], W.grid[cells]
+                        pg = np.array([D.prev_cells.get(c, D.grid[c]) for c in cells])
+                        for r in np.nonzero(((dg ^ wg) & ~CH).any(axis=1))[0]:
+                            fail(f"GameTime {t}: cell {cells[r]}'s shown bytes differ")
+                        ok = ((dg & CH) == (wg & CH)) | ((dg & CH) == (pg & CH))
+                        for r in np.nonzero(~ok.all(axis=1))[0]:
+                            fail(f"GameTime {t}: cell {cells[r]}'s held bytes are neither the "
+                                 f"stream's last nor the exact ones")
+                    want = []
+                    for b in W.inputs:
+                        x, z, nc = struct.unpack_from("<HHH", b)
+                        i = z * W.gw + x
+                        run = np.frombuffer(b, np.uint8, nc * REC_CELL_BYTES, 8)
+                        if ((run.reshape(nc, REC_CELL_BYTES) ^ D.grid[i:i + nc]) & ~CH).any():
+                            want.append(b)
+                    if D.inputs != want:
+                        fail(f"GameTime {t}: the tick's input runs are not the exact stream's "
+                             f"that differ from the stream's grid in a shown byte")
+                if wsess:
+                    fail(f"GameTime {t}: a spray session in the exact stream")
+                if dsess and not sessions_on:
+                    fail(f"GameTime {t}: a spray session in a stream without RECL_SPRAYS")
+                if sessions_on:
+                    try:
+                        for b in dspray:
+                            S.spray(t, b, D.unit_of)
+                        for b in dsess:
+                            S.session(b)
+                        implied = S.imply(t, D.unit_of)
+                        n_written += len(dspray)
+                        n_implied += len(implied)
+                        dspray = dspray + implied
+                    except Unreadable as e:
+                        fail(f"GameTime {t}: {e}")
+                if sorted(dspray) != sorted(wspray):
+                    fail(f"GameTime {t}: the nano sprays, {len(dspray)} with the implied ones, "
+                         f"are not the exact stream's {len(wspray)}")
+                else:
+                    ids = {b[:4] for b in wspray}
+                    for i in sorted(ids):
+                        if [b for b in dspray if b[:4] == i] != [b for b in wspray if b[:4] == i]:
+                            fail(f"GameTime {t}: unit ID {struct.unpack('<I', i)[0]}'s sprays "
+                                 f"are not in the exact stream's order")
+                slots = sorted(set(pd) | set(pw))
+                if slots:
+                    sl = np.array(slots)
+                    dl, wl = D.live[sl], W.live[sl]
+                    for s in sl[dl != wl]:
+                        fail(f"GameTime {t}: slot {s} live {bool(D.live[s])} against "
+                             f"{bool(W.live[s])}")
+                    lv = sl[dl & wl]
+                    du, wu = D.units[lv], W.units[lv]
+                    for r in np.nonzero(((du ^ wu) & ~H).any(axis=1))[0]:
+                        fail(f"GameTime {t}: slot {lv[r]}'s shown bytes differ")
+                    if H.any() and len(lv):
+                        pv = np.array([pd[s][1] if s in pd else D.units[s] for s in lv])
+                        pl = np.array([pd[s][0] if s in pd else True for s in lv])
+                        ok = ((du & H) == (wu & H)) | (((du & H) == (pv & H)) & pl[:, None])
+                        for r in np.nonzero(~ok.all(axis=1))[0]:
+                            fail(f"GameTime {t}: slot {lv[r]}'s held bytes are neither the "
+                                 f"stream's last nor the exact ones")
+                for key in sorted(set(pdl) | set(pwl)):
+                    a, b = D.lists.get(key, b""), W.lists.get(key, b"")
+                    if a == b:
+                        continue
+                    shown = key[1] == 0 and node_held and len(a) == len(b) and not (
+                        (np.frombuffer(a, "<u4").reshape(-1, REC_ORDER_IMAGE // 4) ^
+                         np.frombuffer(b, "<u4").reshape(-1, REC_ORDER_IMAGE // 4)) & ~HN).any()
+                    if not shown:
+                        fail(f"GameTime {t}: slot {key[0]}'s {'sub' if key[1] else 'main'} "
+                             f"list's shown bytes differ")
+                    elif a != pdl.get(key, a):
+                        fail(f"GameTime {t}: slot {key[0]}'s main list is neither the stream's "
+                             f"last nor the exact one")
+                if refresh:
+                    n_refresh += 1
+                    if not (np.array_equal(D.live, W.live) and
+                            np.array_equal(D.units[D.live], W.units[W.live]) and
+                            D.lists == W.lists and
+                            (grid is None or np.array_equal(D.grid, W.grid))):
+                        fail(f"GameTime {t}: the stream's world is not the exact copy at a "
+                             f"refresh")
+            k += 2
+    print(f"{path}: lossy-check of timeline {timeline}: {n_iter} iterations to GameTime {last}, "
+          f"{n_refresh} refreshes, {n_snap} snapshots, sprays {n_written} written and "
+          f"{n_implied} implied; "
+          + ("every shown byte exact, every held byte the stream's last or the exact one, "
+             "every iteration's sprays the exact ones, and the stream's world the exact copy at "
+             "every refresh" if not bad else
+             f"{bad} FAILURES") + (f"; stopped at {stop}" if stop else ""))
+    for line in lines:
+        print("  " + line)
+    return 1 if bad or not n_iter else 0
 
 
 def cmd_pov(path, check):
@@ -1683,7 +2575,8 @@ def cmd_pov(path, check):
 
     def at_snapshot(w, payload):
         snaps[0] += 1
-        s = snapshot_world(payload, h["slots"], h["tables"], feature_dims(h), w.base, w.header)
+        s = snapshot_world(payload, h["slots"], h["tables"], feature_dims(h), w.base, w.header,
+                           w.wbase)
         bad.extend(f"the snapshot at GameTime {s.tick}: {line.replace('dump', 'snapshot')}"
                    for line in w.pov_differences(s))
 
@@ -1936,9 +2829,223 @@ def known_names(h):
         return None
 
 
-def cmd_compare(path, dumps, puppet=False, timeline=0):
-    h, bl, stop = load(path, timeline=timeline)
+# THE OCCUPANCY RULE: where a playing's grid is the engine's, its unit slots and yard bit are not
+# compared but checked, and then taken from the dump. The owner's decision for a multiplayer
+# recording (its units follow their owners, tagpu_puppet.c, THE FOOTPRINT WRITERS), and on
+# 2026-10-12 for a skirmish recording that holds its cells after a seek (`contest`): a seek's
+# creates and moves stamp in slot order, and a contested cell goes to whichever came first there,
+# not to the unit that came first in the game (demo-recorder-completeness.md, Decisions taken).
+STRUCTURE = 1 << 29     # unit +0x110: a structure, whose yard bits a footprint writer sets
+U_LOSER = 1 << 27       # unit +0x110: the contest's loser, which a holder's clear re-claims
+U_HOLDER = 1 << 26      # unit +0x110: the holder of a cell a loser contests
+U_MARKS = U_LOSER | U_HOLDER    # the footprint writers' alone
+
+
+def rect(u):
+    """The cells a unit's footprint covers: +0x76/+0x78 by +0x7E/+0x80, i16 each."""
+    x, z = struct.unpack_from("<hh", u, 0x76)
+    w, h = struct.unpack_from("<hh", u, 0x7E)
+    return {(cx, cz) for cx in range(x, x + w) for cz in range(z, z + h)}
+
+
+def structure(u):
+    return struct.unpack_from("<I", u, U_STATE)[0] & STRUCTURE
+
+
+def footprints(dw):
+    """Every cell a live structure of the dump covers."""
+    return set().union(*(rect(u) for u in dw.units.values() if structure(u)))
+
+
+def stamped(u, gw, gh):
+    """Whether the stamp 0x47CC30 writes a mobile unit's footprint at all: it parks one with x or
+    z below 0, or x + w or z + h past the grid's columns or rows, in the off-map bucket and writes
+    no cell (DISASSEMBLED 0x47CC57..0x47CCA3, with Impure's `jg` at 0x47CC8B and 0x47CCA3:
+    tagpu_patches.c, fix_last_cell), and it files the rest by the layer, +0x110 & 3: 1 in slot A,
+    2 in slot B, any other value in no cell (0x47CEBC..0x47CEC2) -- a carried unit's, 0."""
+    x, z = struct.unpack_from("<hh", u, 0x76)
+    w, h = struct.unpack_from("<hh", u, 0x7E)
+    layer = struct.unpack_from("<I", u, U_STATE)[0] & 3
+    return layer in (1, 2) and x >= 0 and z >= 0 and x + w <= gw and z + h <= gh
+
+
+def layer(u):
+    """The layer the stamp files a unit by, +0x110 & 3: 1 slot A, 2 slot B (stamped)."""
+    return struct.unpack_from("<I", u, U_STATE)[0] & 3
+
+
+U_BUCKET, U_CARRIER, U_NEXT = 0x82, 0x86, 0x8E    # a unit's sort bucket, carrier and next
+
+
+def chain_faults(w):
+    """What breaks the engine's invariants of world `w`'s sort buckets: every live unit that is
+    not carried and has a bucket is in that bucket's one chain -- a next is a unit of the same
+    bucket, no unit is named twice, each bucket has one head, and the walks from the heads reach
+    every unit."""
+    out, member, named, heads = [], {}, {}, {}
+
+    def nxt(slot):
+        return struct.unpack_from("<I", w.units[slot], U_NEXT)[0]
+    for slot, u in w.units.items():
+        bucket, carrier = struct.unpack_from("<II", u, U_BUCKET)
+        if bucket and not carrier:
+            member[slot] = bucket
+    for slot, bucket in sorted(member.items()):
+        n = nxt(slot)
+        if not n:
+            continue
+        if member.get(n - 1) != bucket:
+            out.append(f"sort chains: unit {slot}'s next, ID {n}, is no unit of its bucket {bucket}")
+        elif n - 1 in named:
+            out.append(f"sort chains: units {named[n - 1]} and {slot} both name unit {n - 1} next")
+        else:
+            named[n - 1] = slot
+    for slot, bucket in sorted(member.items()):
+        if slot in named:
+            continue
+        if bucket in heads:
+            out.append(f"sort chains: units {heads[bucket]} and {slot} both head bucket {bucket}")
+        else:
+            heads[bucket] = slot
+    walked = 0
+    for bucket, slot in heads.items():
+        seen = set()
+        while slot is not None and member.get(slot) == bucket and slot not in seen:
+            seen.add(slot)
+            slot = nxt(slot) - 1 if nxt(slot) else None
+        walked += len(seen)
+    if not out and walked != len(member):
+        out.append(f"sort chains: the walks from the heads reach {walked} of the {len(member)} "
+                   "units in a bucket")
+    return out
+
+
+def sort_chains(w, dw):
+    """A multiplayer level's sort buckets: `dw`'s checked by the engine's invariants
+    (chain_faults) instead of compared, and then taken into `w` (tagpu_replay.c, THE SORT
+    BUCKETS ON A MULTIPLAYER LEVEL). Each owner's image carries its own machine's +0x8E, so the
+    composed images need not form chains, and a host's order is its own -- a seek's is a
+    function of T's composed world, a playing's of its history. So +0x8E of every unit not
+    carried is cleared in both worlds; the bucket +0x82 and a carried unit's +0x8E, its
+    carrier's chain, are compared. The differences the check finds."""
+    out = chain_faults(dw)
+    for world in (w, dw):
+        for u in world.units.values():
+            if not struct.unpack_from("<I", u, U_CARRIER)[0]:
+                struct.pack_into("<I", u, U_NEXT, 0)
+    return out
+
+
+def occupancy(w, dw, contest=False):
+    """The dump's unit slots and yard bit checked by the engine's invariants instead of compared,
+    and then taken into the expected world `w`: each footprint cell of a live mobile unit names it;
+    each slot a cell names is a live unit whose footprint holds the cell; a yard bit lies inside a
+    live structure's footprint. With `contest`, a skirmish recording's after a seek, the checks are
+    the stamp's own, layer by layer: a mobile unit the stamp does not write (stamped) has no cell
+    to name it; a stamped unit's footprint cell names it in its layer's slot (A for layer 1, B for
+    layer 2), or, when it carries the loser's mark, bit 27, names there another live unit of the
+    same layer -- or a structure, for a layer-1 unit: the stamp files a structure in slot A
+    whatever its layer (0x47CD5A -> 0x47CDA5) -- whose footprint holds the cell and which carries
+    the holder's mark, bit 26 -- the engine's contest kept the cell for that one (the stamp's
+    contest, 0x47CDDB..0x47CE1D, sets 26 on the unit that keeps the cell and 27 on the other; a
+    unit's clear, 0x47D286..0x47D2C4, drops its 27 and, holding 26, drops that and re-claims for
+    the bit-27 units: DISASSEMBLED); a slot names a mobile unit of its own layer, or a structure
+    in slot A; and the contest's marks, +0x110 bits 26 and 27, are taken from the dump too. The
+    differences those checks find. Not checked: which cells of a structure's footprint name it --
+    the stamp files a structure only at the cells its yardmap sets under the current mask
+    (0x47CD82..0x47CD9F), which a dump does not carry -- nor, the marks being per unit, which
+    cell a mark was set for."""
+    out = []
+    cb = REC_CELL_BYTES
+    yards = footprints(dw)
+    rects = {slot: rect(u) for slot, u in dw.units.items()}
+    state = {slot: struct.unpack_from("<I", u, U_STATE)[0] for slot, u in dw.units.items()}
+    for slot, u in sorted(dw.units.items()):
+        if structure(u) or (contest and not stamped(u, w.gw, w.gh)):
+            continue
+        lost = contest and state[slot] & U_LOSER
+        for cx, cz in sorted(rects[slot]):
+            i = (cz * w.gw + cx) * cb
+            if not (0 <= cx < w.gw and 0 <= i < len(dw.grid)):
+                out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
+                           "does not name it")
+                continue
+            named = struct.unpack_from("<HH", dw.grid, i)
+            if not contest:
+                if slot in named:
+                    continue
+                out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
+                           "does not name it")
+                continue
+            want = named[layer(u) - 1]
+            if want == slot:
+                continue
+            if lost and want in dw.units and (cx, cz) in rects[want] and \
+                    (layer(dw.units[want]) == layer(u) or
+                     structure(dw.units[want]) and layer(u) == 1):
+                if not state[want] & U_HOLDER:
+                    out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
+                               f"names unit {want}, which holds it without the holder's mark")
+                continue
+            out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint does not "
+                       f"name it in slot {'AB'[layer(u) - 1]}, and no unit of its layer that "
+                       "holds it took it from this one")
+    for i in range(0, len(dw.grid), cb):
+        c = i // cb
+        xz = (c % w.gw, c // w.gw)
+        w.grid[i:i + 4] = dw.grid[i:i + 4]
+        w.grid[i + 0x0C] = (w.grid[i + 0x0C] & ~2) | (dw.grid[i + 0x0C] & 2)
+        for k, slot in enumerate(struct.unpack_from("<HH", dw.grid, i)):
+            if slot and slot not in dw.units:
+                out.append(f"occupancy: cell {xz} names slot {slot}, not live")
+            elif slot and xz not in rects[slot]:
+                out.append(f"occupancy: cell {xz} names slot {slot}, outside its footprint")
+            elif slot and contest and structure(dw.units[slot]) and k:
+                out.append(f"occupancy: cell {xz} names structure {slot} in slot B")
+            elif slot and contest and not structure(dw.units[slot]) and \
+                    layer(dw.units[slot]) != k + 1:
+                out.append(f"occupancy: cell {xz} names slot {slot} in slot {'AB'[k]}, "
+                           f"a unit of layer {layer(dw.units[slot])}")
+        if dw.grid[i + 0x0C] & 2 and xz not in yards:
+            out.append(f"occupancy: cell {xz} holds a yard bit outside every live structure")
+    if contest:
+        for slot, img in w.units.items():
+            if slot in dw.units:
+                v = struct.unpack_from("<I", img, U_STATE)[0] & ~U_MARKS
+                struct.pack_into("<I", img, U_STATE, v | state[slot] & U_MARKS)
+    return out
+
+
+def cells_exact(path, timeline, w, cache):
+    """The expected world's unit slots and yard bit where the stream holds them (holds_cells) and
+    the dump's grid is the engine's, the live game's or a playing's: the exact stream's at w's
+    GameTime (RB_EXACT, the test lever tagpu_rec.exact), which a playing's engine stamps from the
+    same positions; without one,
+    the stream's own at a refresh, where it is exact (tagpu_reclossy.c). `cache` keeps the exact
+    stream's blocks between dumps. Unreadable anywhere else."""
+    if "x" not in cache:
+        try:
+            cache["x"] = load(path, timeline=timeline, exact=True)
+        except Unreadable as e:
+            cache["x"] = e
+    if isinstance(cache["x"], Unreadable):
+        if refresh_at(path, timeline, w.tick) == w.tick:
+            return
+        raise Unreadable(f"GameTime {w.tick}: the stream holds the cells' slots there, and "
+                         f"{cache['x']}")
+    xh, xbl, _ = cache["x"]
+    x = stream_to(xh, xbl, want=w.tick)
+    if x.tick != w.tick:
+        raise Unreadable(f"the exact stream reads to GameTime {x.tick}, not {w.tick}")
+    for i in range(0, len(w.grid), REC_CELL_BYTES):
+        w.grid[i:i + 4] = x.grid[i:i + 4]
+        w.grid[i + 0x0C] = (w.grid[i + 0x0C] & ~2) | (x.grid[i + 0x0C] & 2)
+
+
+def cmd_compare(path, dumps, puppet=False, timeline=0, exact=False, seek=False):
+    h, bl, stop = load(path, timeline=timeline, exact=exact)
     status = 0
+    cache = {}
     held = puppet_rows() if puppet else None
     gslots = globals_list(h.get("globals"))[2] if puppet else None
     gnames = globals_names(gslots) if puppet else known_names(h)
@@ -1955,6 +3062,7 @@ def cmd_compare(path, dumps, puppet=False, timeline=0):
             status = 1
             continue
         radar = False
+        stale = []
         if puppet:
             radar = dw.view[1] == w.view[1]
             mapped_hold(w)
@@ -1964,7 +3072,14 @@ def cmd_compare(path, dumps, puppet=False, timeline=0):
             puppet_hold(w, held)
             globals_hold(w, gslots)
             globals_hold(dw, gslots)
+            if holds_cells(w.header) and seek:
+                stale = occupancy(w, dw, contest=True)
+        # the live game's grid and a straight playing's are the exact slots: the stream's held
+        # ones are behind them between refreshes
+        if holds_cells(w.header) and not exact and not (puppet and seek):
+            cells_exact(path, timeline, w, cache)
         lines, n = w.differences(dw, h["tables"], dh["tables"], gnames=gnames)
+        lines, n = lines + stale, n + len(stale)
         print(f"{d}: GameTime {dw.tick}, {len(dw.units)} live units"
               + (", the radar picture too" if radar else "") + ": "
               + ("EQUAL" if not n else f"{n} DIFFERENCES"))
@@ -2073,10 +3188,15 @@ def dump_images(path):
     return tick, dh.get("globals"), images
 
 
-def cmd_compare_dumps(path, a_path, b_path, takeover=False):
+def cmd_compare_dumps(path, a_path, b_path, takeover=False, seek=False):
     """Two dumps of playings of FILE at the same GameTime, the same player viewed: every record
     they carry, the players' sight counters included, equal byte for byte. FILE gives the
-    dimensions and the globals' names; only its header is read."""
+    dimensions and the globals' names; only its header is read. With `seek`, B a seek's, on a
+    file that holds its cells: B's unit slots, yard bits and contest marks by THE OCCUPANCY
+    RULE, and A's, the straight playing's, by the same rule on their own, since B's then stand
+    in for them in the comparison. With `seek` on a multiplayer file, both dumps' sort buckets
+    by the engine's invariants and +0x8E of a unit not carried left out (sort_chains): a seek's
+    order there is a function of T's composed world, a playing's of its history."""
     h = header_only(path)
     ah, a = dump_world(a_path, h)
     bh, b = dump_world(b_path, h)
@@ -2087,7 +3207,15 @@ def cmd_compare_dumps(path, a_path, b_path, takeover=False):
         return 1
     if takeover:
         fork_view(a, b, h, h)
+    stale = []
+    if seek and holds_cells(h):
+        # occupancy(a, a) writes A's own cells and marks over themselves
+        stale = ["A's " + line for line in occupancy(a, a, contest=True)]
+        stale += occupancy(a, b, contest=True)
+    if seek and h.get("mode") == 3:
+        stale += ["A's " + line for line in chain_faults(a)] + sort_chains(a, b)
     lines, n = a.differences(b, ah["tables"], bh["tables"], gnames=known_names(h), sight=True)
+    lines, n = lines + stale, n + len(stale)
     when = (f"frame dump at GameTime {ah['frame']} (iteration {a.tick})" if "frame" in ah
             else f"GameTime {a.tick}")
     print(f"{a_path} against {b_path}: {when}: "
@@ -2112,16 +3240,33 @@ COUNT_ROOTS = {
 COUNT_SINKS = [0x420A30, 0x4B08C0, 0x47F0C0, 0x47F1A0, 0x47F210, 0x47F300, 0x49C740, 0x49CDE0,
                0x49CC20, 0x49C9C0, 0x499EB0, 0x471FD0, 0x472330, 0x472430, 0x472530, 0x472630,
                0x472810, 0x4728F0, 0x4729D0, 0x472AB0, 0x472C50]
+# The script slice: the unit tick's DoScriptsNow(1), counted where it is given, by aux
+# (tagpu_patches.c, THE SCRIPT SLICE; tagpu_rec_slice_given). A live game gives every slice in its
+# unit tick or at the place the recording names for it; a playing gives a slice at the step's end
+# only when its marker did not.
+SLICE_ROOT = 0x48ADEB
+SLICE_WHERE = {0: "in the unit tick", 1: "at its recorded place", 2: "at the step's end"}
+# the COB thread allocation's callers inside a slice: the VM's START and CALL (the engine map,
+# *COB child allocation caller keys*), each key's aux the child script's name hashed
+COB_CHILD_ALLOC = 0x4B08C0
+COB_CHILDREN = {0x4B18C0: "START", 0x4B192D: "CALL"}
 COB_WRITES = {0x480B57: "SET ACTIVATION", 0x480BF1: "SET ARMORED", 0x480BB3: "SET YARD_OPEN",
               0x4813AB: "ATTACH", 0x481427: "DROP"}
-# the thirteen owner-only start calls (tagpu_recorder.c, START_SITES), counted at the call: on a
+# the fifteen owner-only start calls (tagpu_recorder.c, START_SITES), counted at the call: on a
 # puppet level only the replay starts these scripts, through 0x4B0A70 itself, so a count here is
 # the engine starting one natively (the slice note, *Exactly-once private children*)
 OWNER_STARTS = {0x489F43: "HitByWeapon", 0x489F8E: "TakeDamage", 0x406834: "TransportPickup",
                 0x4069BF: "TransportDrop", 0x489898: "TargetCleared (0x489800)",
                 0x489948: "TargetCleared (0x4898B0)", 0x48A149: "TargetCleared (0x48A0F0)",
                 0x48A2E0: "TargetCleared (0x48A1E0)", 0x40F433: "EndTransport", 0x41148D: "EndTransport",
-                0x411794: "EndTransport", 0x411DA1: "EndTransport", 0x411E2B: "EndTransport"}
+                0x411794: "EndTransport", 0x411DA1: "EndTransport", 0x411E2B: "EndTransport",
+                0x4113EF: "BeginTransport", 0x43DBE8: "setSFXoccupy"}
+# the six owner's query calls (tagpu_recorder.c, QUERY_SITES), counted at the call: on a puppet
+# level only the replay asks these, through 0x4B0BC0 itself, so a count here is the engine's
+# order handler asking one natively
+OWNER_QUERIES = {0x4027FB: "QueryBuildInfo", 0x4113B1: "QueryTransport",
+                 0x411A35: "QueryLandingPad", 0x411AA6: "QueryLandingPad",
+                 0x411BF5: "QueryLandingPad", 0x411CF1: "QueryLandingPad"}
 
 
 def counts_of(path, h):
@@ -2214,15 +3359,21 @@ def bounded_cob_flare(key, live, puppet, sinks, band):
     return None
 
 
-def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
+def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False, cob_exact=False):
     """The counts of a live game (L, dumps la and lb) against a playing's (P, pa and pb), each as
-    the change between its two dumps: every root per site exactly; every sink per (site, caller,
-    aux), a `same` row's callers summed, within replay-absent.tsv's band, less its absent and
-    extra rows; the named COB flare can inherit an accepted parent shortfall,
-    reported with both counts; and no COB engine write or native owner-only start on the puppet.
-    Rewind permits only VM START/CALL child counts to differ and reports each pair.
+    the change between its two dumps: every root per site exactly; the script slice per placement
+    exactly (SLICE_WHERE); every sink per (site, caller, aux), a `same` row's callers summed,
+    within replay-absent.tsv's band, less its absent and extra rows; the named COB flare can
+    inherit an accepted parent shortfall, reported with both counts; and no COB engine write,
+    native owner-only start or native owner's query on the puppet.
+    Rewind permits only VM START/CALL child counts to differ and reports each pair. cob_exact
+    compares every VM START/CALL child key with a script name (aux not 0) exactly instead: no band,
+    no flare, no row; aux 0, a refused index, stays with the rows. The two exclude each other.
     Both dumps of a pair are taken at a capture point before that step's replay step, so both
     windows hold the steps [first GameTime, second GameTime)."""
+    if rewind and cob_exact:
+        print("compare-counts: --rewind and --cob-exact exclude each other")
+        return 2
     h = header_only(path)
     (ta, ca, ma, na), (tb, cb, mb, nb) = counts_of(la, h), counts_of(lb, h)
     (tpa, cpa, mpa, npa), (tpb, cpb, mpb, npb) = counts_of(pa, h), counts_of(pb, h)
@@ -2250,6 +3401,11 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
         b = sum(n for (s, _, _), n in pup.items() if s == va)
         if a != b:
             lines.append(f"root {what}: live {a}, puppet {b}")
+    for aux, where in SLICE_WHERE.items():
+        a = sum(n for (s, _, x), n in live.items() if s == SLICE_ROOT and x == aux)
+        b = sum(n for (s, _, x), n in pup.items() if s == SLICE_ROOT and x == aux)
+        if a != b:
+            lines.append(f"root the script slice 0x{SLICE_ROOT:06X} {where}: live {a}, puppet {b}")
     def grouped(counts):
         out = {}
         for (site, caller, aux), n in counts.items():
@@ -2266,9 +3422,14 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
             continue
         a, b = glive.get(key, 0), gpup.get(key, 0)
         nsink += 1
-        if rewind and site == 0x4B08C0 and caller in (0x4B18C0, 0x4B192D):
+        if rewind and site == COB_CHILD_ALLOC and caller in COB_CHILDREN:
             accepted.append(f'accepted rewind COB child {caller_text(caller)} '
                             f'"{names.get(aux, "")}": live {a}, puppet {b}')
+            continue
+        if cob_exact and site == COB_CHILD_ALLOC and caller in COB_CHILDREN and aux:
+            if a != b:
+                lines.append(f'COB child {COB_CHILDREN[caller]} "{names.get(aux, "")}": '
+                             f'live {a}, puppet {b}')
             continue
         if within_band(band, a, b):
             continue
@@ -2293,9 +3454,14 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
         if n:
             lines.append(f"owner-only start on a puppet, {what} at 0x{va:06X}: {n} since the level "
                          f"began")
+    for va, what in OWNER_QUERIES.items():
+        n = sum(c for (s, _, _), c in cpb.items() if s == va)
+        if n:
+            lines.append(f"owner's query on a puppet, {what} at 0x{va:06X}: {n} since the level "
+                         f"began")
     print(f"counts, live {la}..{lb} against puppet {pa}..{pb}, GameTime [{ta}, {tb}): "
-          f"{len(COUNT_ROOTS)} roots, {nsink} sink keys, band {band[0]}% or {band[1]}, "
-          f"{len(rows)} rows: "
+          f"{len(COUNT_ROOTS)} roots, the script slice, {nsink} sink keys, band {band[0]}% or "
+          f"{band[1]}, {len(rows)} rows" + (", the COB children exact" if cob_exact else "") + ": "
           + ("EQUAL" if not lines else f"{len(lines)} DIFFERENCES"))
     for line in lines + unrun + accepted:
         print("  " + line)
@@ -2308,9 +3474,11 @@ def cmd_counts(path, dump):
     print(f"{dump}: GameTime {t}: {len(c)} keys, {m[0]} found no row, sinks counted "
           f"0x{m[1]:X}, counting {m[2]}")
     for (site, caller, aux), n in sorted(c.items()):
-        kind = ("root" if site in COUNT_ROOTS else "sink" if site in COUNT_SINKS else
+        kind = ("root" if site in COUNT_ROOTS else "script slice" if site == SLICE_ROOT else
+                "sink" if site in COUNT_SINKS else
                 "COB write" if site in COB_WRITES else
-                "owner-only start" if site in OWNER_STARTS else "site")
+                "owner-only start" if site in OWNER_STARTS else
+                "owner's query" if site in OWNER_QUERIES else "site")
         name = names.get(aux)
         print(f"  {kind} 0x{site:06X} from {caller_text(caller)}"
               + (f' "{name}"' if name else f" aux 0x{aux:X}" if aux else "") + f": {n}")
@@ -2633,12 +3801,35 @@ def main(argv):
     rewind = argv[1:2] == ["compare-counts"] and "--rewind" in argv
     if rewind:
         argv = [a for a in argv if a != "--rewind"]
+    cob_exact = argv[1:2] == ["compare-counts"] and "--cob-exact" in argv
+    if cob_exact:
+        argv = [a for a in argv if a != "--cob-exact"]
     takeover = argv[1:2] == ["compare-dumps"] and "--takeover" in argv
     if takeover:
         argv = [a for a in argv if a != "--takeover"]
+    seek = "--seek" in argv
+    if seek:
+        if argv[1:2] != ["compare-dumps"] and argv[1:3] != ["compare", "--puppet"]:
+            print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
+            return 2
+        argv = [a for a in argv if a != "--seek"]
+    exact = "--exact" in argv
+    if exact:
+        if argv[1:2] not in (["check"], ["compare"]):
+            print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
+            return 2
+        argv = [a for a in argv if a != "--exact"]
+    to = None
+    if "--to" in argv:
+        k = argv.index("--to")
+        if argv[1:2] != ["lossy-check"] or k + 1 >= len(argv) or not argv[k + 1].isdigit():
+            print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
+            return 2
+        to = int(argv[k + 1])
+        argv = argv[:k] + argv[k + 2:]
     if "--timeline" in argv:
         k = argv.index("--timeline")
-        if argv[1:2] not in (["check"], ["compare"]) or k + 1 >= len(argv) or \
+        if argv[1:2] not in (["check"], ["compare"], ["lossy-check"]) or k + 1 >= len(argv) or \
                 not argv[k + 1].isdigit():
             print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
             return 2
@@ -2674,8 +3865,8 @@ def main(argv):
         pov_eye, argv = (n, view, seat), argv[:k]
     if len(argv) < 3 or argv[1] not in ("info", "check", "compare", "compare-dumps", "counts",
                                         "compare-counts", "images-gate", "scan", "segments",
-                                        "compare-fork", "pov") or \
-            (argv[1] == "pov" and len(argv) != 3) or \
+                                        "compare-fork", "pov", "lossy-check") or \
+            (argv[1] in ("pov", "lossy-check") and len(argv) != 3) or \
             (argv[1] == "segments" and len(argv) != 3) or \
             (argv[1] == "compare-fork" and (len(argv) != 4 or not argv[3].isdigit())) or \
             (argv[1] == "compare" and len(argv) < 4) or (images and len(argv) != 4) or \
@@ -2689,7 +3880,9 @@ def main(argv):
         if argv[1] == "info":
             return cmd_info(argv[2])
         if argv[1] == "check":
-            return cmd_check(argv[2], timeline)
+            return cmd_check(argv[2], timeline, exact)
+        if argv[1] == "lossy-check":
+            return cmd_lossy_check(argv[2], timeline, to)
         if argv[1] == "segments":
             return cmd_segments(argv[2])
         if argv[1] == "pov" and pov_eye:
@@ -2704,7 +3897,7 @@ def main(argv):
         if images:
             return cmd_images(argv[2], argv[3])
         if argv[1] == "compare-dumps":
-            return cmd_compare_dumps(argv[2], argv[3], argv[4], takeover)
+            return cmd_compare_dumps(argv[2], argv[3], argv[4], takeover, seek)
         if argv[1] == "images-gate":
             return cmd_images_gate(argv[2], (argv[3], argv[4]), (argv[5], argv[6]),
                                    (argv[7], argv[8]), argv[9], argv[10], argv[11:],
@@ -2715,8 +3908,9 @@ def main(argv):
             return cmd_counts(argv[2], argv[3])
         if argv[1] == "compare-counts":
             return cmd_compare_counts(argv[2], *argv[3:7], absent or str(
-                Path(__file__).resolve().parents[2] / "tagpu" / "ddraw" / "replay-absent.tsv"), rewind)
-        return cmd_compare(argv[2], argv[3:], puppet, timeline)
+                Path(__file__).resolve().parents[2] / "tagpu" / "ddraw" / "replay-absent.tsv"), rewind,
+                cob_exact)
+        return cmd_compare(argv[2], argv[3:], puppet, timeline, exact, seek)
     except (Unreadable, OSError, struct.error, KeyError) as e:
         print(f"tarec: {e}", file=sys.stderr)
         return 2

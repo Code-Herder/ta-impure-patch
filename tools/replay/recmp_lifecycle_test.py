@@ -163,8 +163,9 @@ def run(output, native_file):
                        "tagpu_recmp_players", "tagpu_recmp_file", "tagpu_recmp_file_state",
                        "tagpu_recmp_history", "tagpu_recmp_units", "tagpu_recmp_named", "tagpu_recmp_roots",
                        "tagpu_recmp_explored", "tagpu_recmp_text", "tagpu_recmp_pov", "tagpu_recmp_orders", "tagpu_recmp_lifecycle",
-                       "tagpu_recwriter", "tagpu_recreader", "tagpu_recfile", "tagpu_reccodec", "zstd",
-                       "crc32")
+                       "tagpu_recwriter", "tagpu_recreader", "tagpu_recfile", "tagpu_reccodec", "tagpu_reclossy",
+                       "tagpu_recframe_cells", "tagpu_recframe_orders", "tagpu_recframe_events",
+                       "tagpu_recframe_state", "zstd", "crc32")
             exe = output / "recmp-lifecycle-test.exe"
             command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc", "-O2", "-Wall",
                      "-Wextra", "-Werror", "-std=c99", "-o", exe, HERE / "recmp_lifecycle_test.c",

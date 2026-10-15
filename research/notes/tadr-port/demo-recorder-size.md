@@ -2,12 +2,42 @@
 
 ## Status
 
-**L1 and L2 are landed** (*L1: recording format 8, measured* and *L2: the pool frame, measured*,
-below). Recording format 9 packs every block with zstd, carries the unit deltas in a unit frame
-predicted from the engine's own rules and the projectiles in a pool frame coded by identity: the
-battle below, recorded anew, takes 15.3 MiB where the measured one took 99.6 (not like for like:
-another game of the same scenario), and on the very games L1 recorded L2 takes the battle's file
-from 29.09 to 16.40 MiB, Town & Country's from 18.97 to 11.51. L3 to L6 are plans. The page gathers what has been measured about the size of a demo recording, the research
+**L1 to L4, L5a, P1, P6, P4, P5, P7 and RC are landed** (*L1: recording format 8, measured*, *L2: the pool frame, measured*,
+*L3: the record frames, measured*, *L4: the measured hours, the snapshot interval and R1*,
+*L5a: the ledger rule*, *P1: the container, measured*, *P6: the kinds and the ticks, measured*,
+*P4: the unit frame's type rules, measured*, *P5: the unit listing, measured*, *P7: the sprays,
+the order nodes and the projectile lanes, measured* and *RC: the unit coder, measured*, below).
+Recording format 24 codes the unit frame's listing, lane masks and residuals as one range coder's
+bytes a block, each decision under a context both sides keep, codes an explicit
+nano spray against the unit's last four, matches order nodes to the kept list in a skirmish
+stream and codes a surviving projectile's fields as lanes of their own widths, predicts more of the unit
+frame from per-type engine constants, codes each iteration's record kinds as a pattern of the run's
+last 16 and writes a block's GameTime once, packs each
+run of sectioned stream blocks as one zstd frame at level 19 and each snapshot against the one before
+it, carries the unit deltas in a unit frame
+predicted from the engine's own rules, the projectiles in a pool frame coded by identity, and the
+cells, orders, events and state in four record frames, of which the cells frame restarts from the
+reader's grid at every reset point; it writes a snapshot every 1,800 ticks (60 s of game time), and
+its snapshots store only the wreck records that differ from a base: the battle below, recorded
+anew, takes 12.00 MiB where the measured one took 99.6 (not like for like: another game of the same
+scenario), and on the very games L1 recorded the battle's file goes from 29.09 MiB (L1) to 16.40
+(L2) to 11.88 (L3), Town & Country's from 18.97 to 11.51 to 8.04. **L4 measured two four-player
+hours, and both miss the 25 MB budget even with no snapshots at all** (24.4 and 51.5 MiB an hour
+from the stream alone). L5a, lossless, predicts the units' resource ledger and takes the heavy hour
+from 56.99 to 42.15 MB; the owner chose to go lossy after it, and a lossy plan measured offline
+brings the heavy hour to 19.32 MB, about 1.6–2.6 times the 7.3–12.4 MB TADR's recorder would take
+for it (*L5: the lossy plan, measured offline*). L5's core and its unit and order hold rows are
+landed as recording format 14 (*L5: the lossy plan, measured offline*, its last part): the filter,
+the refreshes, the takeover at a refresh and the table's 37 rows take the heavy hour to 30.53 MB
+(MEASURED offline); format 15 writes the nano sprays as spray sessions, which takes the
+heavy hour's stream 2.7 MB smaller again; format 16 holds the cells' unit slots and yard bit,
+which the playing's engine stamps (*The cells held*), format 17 (*P1*) packs that stream in its
+container, format 18 (*P6*) takes the heavy hour from 16.16 to 15.81 MB, and format 19 (*P4*)
+predicts more of the unit frame from per-type engine constants, to 14.06 MB, format 20 records
+the script slice's markers (*The script slice's markers*), format 21 (*P5*) lists the units
+against the frame's own state, to 13.12 MB, format 22 (*P7*) codes the sprays, the order nodes
+and the surviving projectiles against more of the frames' state, to 12.71 MB, and format 24 (*RC*)
+range-codes the unit frame, to 10.54 MB; L6 is a plan. The page gathers what has been measured about the size of a demo recording, the research
 round that prototyped each way of reducing it on one battle recording, and the plan that came out
 of it: **lossless, the battle's 99.6 MiB file becomes about 12 MiB**, and lossy options add about
 1 MiB per category on top. It feeds the [product page](demo-recorder.md)'s open decision 2 (measured size) and the
@@ -199,12 +229,23 @@ MEASURED, each re-encoding decoded back equal to the records it replaces (writer
 | Events | 2,986 KB | 1,530 KB | shot points within 63 wu of the shooter, script names as strings, a death's image ~5 dwords from the unit's, repeated sprays |
 | Wrecks, globals, players, feature heads | 946 KB | 401 KB | `rngseed` as a Park-Miller step count (median 16 a tick); the pathfinder counters by delta of deltas |
 
-Two more: **every snapshot carries all 8,192 wreck records**, because the level load links each free
-record to its neighbours so none is zero; storing only those that differ from the first iteration
+Two more: **the snapshots' wreck records**. The level load links each free record to its
+neighbours, so none is zero, and a snapshot that stores every record that is not zero stores all
+8,192; storing only those that differ from the pool at the end of the segment's first iteration
 saves 0.37 MiB here and, in a small game, most of each snapshot (51 of 58 KB in the ten-seat
-fixture, about 6 MiB an hour). And the cells could be derived from the units' footprint moves
-(99.6 % predicted, about 0.6 MiB more [INFERRED]). Lower rates or priority sampling are not worth
-it here: after coding, sprays and replies cost under 24 KB.
+fixture, about 6 MiB an hour). Format 10's snapshots store only those (*L3*, below: on the battle,
+5,524 wreck records in its 8 snapshots instead of 65,536). And the cells could be derived from the
+units' footprint moves (99.6 % predicted, about 0.6 MiB more [INFERRED]; not in L3). Lower rates or
+priority sampling are not worth it here: after coding, sprays and replies cost under 24 KB.
+
+**As built** (format 10's record frames, *L3* below). Each category is a frame of columns that
+restarts empty at every reset point, coded against what it saw since: the cells against a copy of
+the grid and the last iteration's tick input, the order lists node by node against the last whole
+image of the same (slot, list), the events field by field against the last ID, the unit copy and
+dictionaries, and the globals as deltas of deltas or as Park–Miller step counts, the players by
+delta, the wreck records by a mask of changed u16s and the feature heads and cursor against their
+rule. In a new recording of the battle the four take 991 / 825 / 1,407 / 337 KiB (cells, orders,
+events, state, each packed alone with zstd 3).
 
 ### The container and the compressor
 
@@ -212,20 +253,27 @@ As a drop-in on today's blocks, zstd level 3 makes the stream 66.8 MiB (−32 %)
 CPU from 38 to 3.6 ms per second of game (130 to 13 in the busiest 30 s) and decompresses about
 eight times faster (129 MB/s to about 1 GB/s; a seek through the busiest interval decodes in 0.06 s
 instead of 0.75) — MEASURED with a 32-bit
-MinGW build at the DLL's flags under Wine on the reference setup. Vendored without the greedy, lazy
-and binary-tree strategies (level 3 is dfast), the legacy formats and the error strings, it adds
-345,088 bytes to the DLL (MEASURED, L1).
+MinGW build at the DLL's flags under Wine on the reference setup. Vendored without the greedy and
+lazy strategies (level 3 is dfast, level 19 btultra2, whose btopt and btultra match finders are
+kept), the legacy formats and the error strings, its code is 386,504 bytes (MEASURED, *P1*); with
+the binary-tree strategies left out too, as L1 vendored it, it added 345,088 bytes to the DLL
+(MEASURED, L1).
 
-Once the codecs above are in, the compressor no longer shrinks the file: on the unit frame zstd 3
-is 4.63 MiB against the writer's 4.50, zstd 19 about 5 % better. Snapshots are the exception
-(1,629 KB writer, 1,164 zstd 19). So zstd buys CPU and seek speed, not size. Removing 54 MiB of raw
+Once the codecs above are in, a stronger compressor packing each block alone shrinks the file
+little: on the unit frame zstd 3 is 4.63 MiB against the writer's 4.50, zstd 19 about 5 % better,
+snapshots excepted (1,629 KB writer, 1,164 zstd 19). Across blocks it is not so: the whole stream as
+one zstd 19 frame took 47.2 MB where zstd 19 block by block took 59.5 (*The measurement*), and
+format 17 takes that gain -- each run of sectioned blocks is one level-19 frame with a 2^20 window,
+flushed at every block, and each snapshot is packed against the one before it, a key every tenth --
+which takes the lossy hour from 20.73 to 15.65 MB (−24.5 %) and the exact hour from 42.15 to 29.90
+MB (−29.1 %), MEASURED (*P1* below). Removing 54 MiB of raw
 framing alone saves only 6.1 MiB under zstd 3: implicit lengths (where the format fixes a record's
 size), runs and slot gaps pay; varint headers, dropping padding, trained dictionaries, sparse mask
 encodings, byte shuffles and order-0/1 rANS gain nothing on this data. The container that carries
 the codecs: blocks of at most 30 iterations, ending at each snapshot, holding a kind sequence and
-one section per category. As built in L1 each block's zstd frame is self-contained, but the unit
-frame's state runs on from block to block and restarts only at reset points (*L1*, below), since a
-restart costs every unit's first iterations of history.
+one section per category. The frames' state runs on from block to block and restarts only at
+reset points (*L1*, below), since a restart costs every unit's first iterations of history, and the
+run's zstd frame restarts with it.
 
 ### The plan, combined
 
@@ -244,8 +292,8 @@ sum):
 
 Against the budgets: ten players at about 400 units meet 100 MB an hour, barely, and only with the
 engine-rule predictors; ten players with 1,500 units fighting miss it under every design measured;
-a four-player game's 25 MB is not established (it holds only with about 100 moving units on
-average). Snapshots become about 21 % of the lossless tail, so they are a target after all.
+a four-player game's 25 MB held only with about 100 moving units on average, and L4's measured
+hours miss it (*L4*, below). Snapshots become about 21 % of the lossless tail, so they are a target after all.
 
 ### What the lossy options still buy
 
@@ -276,16 +324,19 @@ Every one is a loosening and the owner's decision.
 - **One flat battle**: no aircraft or hills (pitch, roll and vertical velocity never changed). L0
   (below) re-ran every codec on three other recordings: lossless everywhere, and aircraft are the
   one class that costs far more than the battle suggested.
-- **Seek in C**: decode work grows with the units that move, since a unit at rest is skipped. L1
-  MEASURED a seek under one second everywhere except the first snapshot interval of the two largest
-  battles, 1.15–1.23 s, where every unit marches (*L1*, below): open, for L4's snapshot interval.
+- **Seek in C**: decode work grows with the units that move, since a unit at rest is skipped, and
+  with the cells the record frames decode. A seek reads from the last snapshot, so its worst case
+  is one snapshot interval of decode: with snapshots 1,800 ticks apart that is 261–265 ms on L4's
+  light hour, 538–550 ms on its heavy one, and about 1.7 s of decode on the big battle, a cost the
+  owner accepted for dense battles (*L4*, below).
 - **The writer and the ring**: L1's unit frame cost at most 95 ms for one block of 30 iterations on
   the writer thread, and the 16 MiB ring held at most 2.1 MiB (*L1*, below).
 - **A codec bug's reach**: every codec decodes its block before writing and falls back to the
   records on a mismatch, so a bug costs size, never data.
-- **Predictor resets**: the unit frame restarts at a segment's first stream block, at the first
+- **Predictor resets**: every frame restarts at a segment's first stream block, at the first
   after a snapshot and at the first after a block written as records, a rule of the format, so a
-  seek can start at any snapshot.
+  seek can start at any snapshot. The unit, pool and cells frames restart from the world a reader
+  holds there; the orders, events and state frames restart empty (*L4*, below).
 
 ## L0: the codecs on other recordings
 
@@ -509,9 +560,8 @@ to 900 reads from the segment's first iteration, there being no snapshot before 
   check.
 - **The seek.** Every seek read in under one second except those in the first snapshot interval of
   the two big battles, **1.15–1.23 s**, over the one-second target: decode work scales with the
-  units that move, and in the opening every unit marches. This is **open**: the snapshot interval
-  (`SNAPSHOT_TICKS`, 900) is tuned at L4, which measures the hour it is chosen for (the owner's
-  decision).
+  units that move, and in the opening every unit marches. L4 chose the snapshot interval on two
+  measured hours and the owner relaxed the target for dense battles (*L4*, below).
 - **Python.** Decoding a recording in Python takes about 3 s for the large battles, as long as
   the C decoder under Wine: Town & Country 3.1 s (C 3.4 s), the size battle 3.4 s (3.6 s), the air
   war 1.6 s, the naval 0.5 s (`codectest.py verify`, MEASURED 2026-10-08 with numba's cache warm;
@@ -526,7 +576,8 @@ to 900 reads from the segment's first iteration, there being no snapshot before 
 
 **What L1 leaves open.**
 
-- **The seek in a large battle's first interval** (above), for L4.
+- **The seek in a large battle's first interval** (above): decided at L4, which accepts about 2.5 s
+  there (*L4*, below).
 - **Aircraft in the replay gate**: the fixtures fly aircraft only in `carry-links` (transports) and
   `battle` (a dozen AI-built ones); whether they reach the codec's air functions is the landing
   gate's answer. If the gate names them UNCOVERED, the owner's choice is a short `air-war` fixture
@@ -624,7 +675,7 @@ offline one.
   to 2,700 994 ms against 725 — that game's window is busier (its blocks decode in 795 ms there
   against 650 for L1's game). Every seek reads in under one second except in the first interval
   of the two large battles, 1.22–1.26 s, and Town & Country's seek to 1,800, 1.01 s: the seek in a
-  large battle stays open for L4 (*What L1 leaves open*).
+  large battle is L4's (*What L1 leaves open*).
 - **Memory.** The pool frame adds 613 bytes a projectile record and about 1.4 MB a codec (the
   last birth of each weapon, the shot events and their rows, the encoder's search tables): about
   3.3 MB a codec at 3,000 records; the writer holds two codecs, a reader one.
@@ -645,6 +696,1297 @@ offline one.
   on the game thread during a seek. Every bound holds; only the time does not. Our writer's
   pools stay at their engine's 3,000 records (about 324 KB an iteration). Closing it needs the
   extent's growth bounded by the section's bytes, or a copy of only the changed slots.
+
+## L3: the record frames, measured
+
+**What L3 is** (landed). Recording format 10: format 9 with the verbatim bodies of the cells, the
+orders and the events, and a new eighth section for the state, each replaced by a **record frame**
+— a section of columns, at most 32, that makes its kinds' bodies — and with the snapshots' wreck
+records coded against a **wreck base**:
+
+- **the state frame** (`RCS_STATE = 7`, 19 columns): `RK_GLOBALS`, `RK_GLOBALS_DELTA`,
+  `RK_PLAYER`, `RK_PLAYER_DELTA`, `RK_WRECK` and `RK_FEATURES`, which until format 9 rode in the
+  verbatim section; a global by delta of deltas, by a count of Park–Miller steps or raw;
+- **the events frame** (31 columns): one column a field, a shot's points against its units, a
+  death's image against the unit copy, names and texts by dictionary;
+- **the cells frame** (9 columns): against a copy of the grid and the last tick input, which the
+  next iteration's images usually repeat; the tick input kept up to `CELLS_HELD`, 16,384 cells;
+- **the orders frame** (26 columns): a re-sent list as the dwords that changed against its last
+  whole image, in an arena of at most 65,536 nodes;
+- **the wreck base**: a snapshot's `RK_WRECK`s are only the records that differ from the pool at
+  the end of the segment's first iteration, which the writer (`iteration_done`), the C reader
+  (`tick_take`) and `tarec.py` (`stream_to`) each take at that moment from the pool that iteration
+  built from zero, so the bases are equal by construction.
+
+Every record frame restarts **empty** at every reset point, and its state is a function of the
+records since then and the unit copy alone; a frame never declines in mid-block, it latches and
+its section's write declines the block. The `RecSecHead` is 40 bytes. L3's readers took format 10
+alone (decision 6), as L4's take format 11 alone; format 9 was never published. The bytes and the refusals are the skirmish
+slice's [*The file*](demo-recorder-skirmish-slice.md#the-file); the engine facts are the engine
+map's
+[*The demo recorder's record frames*](../exe-reverse-engineering.md#the-demo-recorders-record-frames-the-engine-facts-they-predict-from-disassembled-measured-2026-10-10).
+
+**Where it departs from the plan above**, each decided in the building:
+
+- **Restart empty (R2), not from the reader's world (R1).** The only outside state a record frame
+  reads is the unit copy, which every reset already restarts from the reader's units in the
+  encoder, the check decoder and every reader alike; so a frame's state is a function of the
+  records since the reset, and a decline or a refusal needs no rollback. It costs the cells their
+  history at each reset: +124 / +107 / +488 KiB on the battle, the replay gate's Town & Country
+  battle and the air war (MEASURED by L3's encode-only prototypes on format-9 files).
+- **The state is a section of its own**, so `RCS_OTHER` keeps only what no frame codes: the ticks,
+  `RK_UNIT` and `RK_UNIT_GONE` (which the decoder's first pass reads) and every other kind.
+- **The Park–Miller step is a size rule**, not a claim on the engine: a global it does not reach
+  within the search goes by delta or raw. The encoder searches up to 16,384 steps only for a
+  global the step carried last time, else 64, and at most two dwords an iteration take it.
+- **Not in L3**: the cells derived from the units' footprints (−0.6 / −1.0 / −1.4 MiB on the battle,
+  Town & Country and the air war [INFERRED by the research]), and R1, which would win back R2's
+  cost.
+- **The frames' copy of a decoder is test-only**: only the codec's self-test copies one
+  (`RECF_TEST_COPY`, defined by its builds alone and listed in `tafeat.py`'s `TEST_ONLY`), so the
+  DLL carries no function nothing in it calls.
+- **A test lever forces a decline**: `tagpu_rec.decline` and the `codec-decline` and
+  `stock-codec-decline` fixtures exercise the records block and the restart after it, through the
+  encoder's first decline branch only (the skirmish slice's
+  [*The file*](demo-recorder-skirmish-slice.md#the-file)).
+
+**Offline, like for like**: L2's four recordings rewritten as format 10, the same games, with the
+wreck base's saving on their snapshots counted in (MEASURED 2026-10-10 on HEAD's DLL):
+
+| | L2, MiB | L3, MiB | change |
+|---|---:|---:|---:|
+| the battle | 16.40 | 11.88 | −27.6 % |
+| Town & Country | 11.51 | 8.04 | −30.1 % |
+| naval | 1.92 | 1.32 | −31.5 % |
+| the air war | 11.18 | 5.64 | −49.5 % |
+
+The C decoder under Wine, ms in all / the longest run from a reset point, format 10 (format 9):
+the battle 3,690 / 1,122 (3,765 / 1,142), the air war 1,722 / 339 (1,671 / 316). On the battle's
+file the 8 snapshots carry 5,524 wreck records instead of 65,536.
+
+**In the game** (MEASURED 2026-10-10 on the reference setup: HEAD's DLL, recorder armed, game
+speed 20, each scenario played anew under Wine, so **not like for like** with L2's runs). Each
+scenario was recorded twice: once with the machine at a load average of about 30 (the files the
+size, the sections, the seeks and the checks below are measured on) and once at about 3, for the
+writer's cost; each recording is its own game.
+
+| | the battle | Town & Country | naval | air war |
+|---|---:|---:|---:|---:|
+| ticks | 7,441 | 4,260 | 3,811 | 5,041 |
+| **the file, MiB** | **12.00** | **8.74** | **1.26** | **5.26** |
+| stream blocks sectioned / declined / mismatched | 266 / 0 / 0 | 149 / 0 / 0 | 128 / 0 / 0 | 169 / 0 / 0 |
+| a seek from a fresh process, ms, to GameTime 900 / 1800 / 2700 / 3600 (load about 3) | 1,263 / 684 / 539 / 398 | 1,105 / 1,124 / 827 / 705 | 155 / 71 / 34 / 24 | 361 / 390 / 332 / 255 |
+| `codectest.py verify`: blocks where C and Python differ | 0 | 0 | 0 | 0 |
+| `tarec.py check`: snapshots, differing | 8, 0 | 4, 0 | 4, 0 | 5, 0 |
+| the codec on the writer thread at load 30, ms in all / at most for one block | 12,924 / 134 | 11,094 / 127 | 850 / 64 | 3,644 / 55 |
+| the ring's high water at load 30, KiB of 16 MiB | 2,569 | 1,975 | 999 | 1,061 |
+| **at load 3**: the file, MiB; ticks | 11.56; 7,441 | 8.07; 4,230 | 1.29; 3,811 | 6.82; 5,220 |
+| at load 3: stream blocks sectioned / declined / mismatched | 264 / 0 / 0 | 148 / 0 / 0 | 128 / 0 / 0 | 175 / 0 / 0 |
+| at load 3: the codec on the writer thread, ms in all / at most for one block (L2) | 8,034 / 78 (8,169 / 75) | 7,261 / 89 (8,168 / 97) | 634 / 34 (642 / 23) | 4,720 / 54 (2,937 / 36) |
+| at load 3: the ring's high water, KiB of 16 MiB (L2) | 2,104 (2,022) | 1,480 (1,718) | 963 (981) | 1,079 (1,043) |
+
+The seek is the replay's own log line's total (`sought … in X ms`), the read nearly all of it.
+The battle's seek to 900 took 1,216–1,288 ms over five seeks, fresh and running; a seek from a
+running playback reads within about ±30 ms of the fresh process's. In the first air war the level
+ended at GameTime 5,041, shorter than L2's 5,940.
+
+The sections, each packed alone with zstd 3 (`recsize.py`), KiB:
+
+| section | the battle | Town & Country | naval | air war |
+|---|---:|---:|---:|---:|
+| unit frame | 4,809 | 4,692 | 236 | 1,498 |
+| projectiles | 2,308 | 1,060 | 361 | 378 |
+| events | 1,407 | 461 | 136 | 131 |
+| cells | 991 | 1,617 | 193 | 2,739 |
+| orders | 825 | 401 | 63 | 164 |
+| state | 337 | 135 | 140 | 126 |
+| kinds | 212 | 86 | 37 | 62 |
+| other | 97 | 62 | 28 | 59 |
+| snapshots, on disk | 1,117 | 385 | 91 | 138 |
+
+**Verified.** Each package (the state, events, cells and orders frames and the wreck base), on
+merging: five format-9 recordings (the four above and the replay gate's Town & Country battle)
+rewritten as format 10 with every stream block sectioned, 0 declined and 0 mismatched;
+`codectest.py verify` with 0 differences between the C and Python decoders and the records;
+100,000 fuzzed cases per section under ASan and UBSan with no report; `fuzzdiff`'s C and Python
+agreeing. A review at `high` on the landing's diff found nothing of MEDIUM or above.
+
+**Against the plan.**
+
+- **Size.** L3's spec estimated the battle at about 12.1 MiB from format 9's 16.40, from each
+  section packed alone; the transcode gives 11.88. The air war gains most (−49.5 %): its cells, the
+  re-filed second slot of every airborne unit, were 30.7 % of its format-7 file, and the frame
+  codes each cell's changed fields against the copy.
+- **The writer.** At a load average of about 3 the most for one block was 89 ms (Town & Country),
+  as L2's 97; at about 30, 134 ms. The ring never held more than 2.5 MiB of its 16. The air war's
+  codec cost 4,720 ms in all at load 3 against L2's game's 2,937 (5,220 ticks against 5,940); why is
+  not measured.
+- **The seek.** Like for like, the battle's decode in all is 2 % faster and its longest run from a
+  reset point 20 ms shorter; the air war's are 3 % and 23 ms slower. The battle's first interval
+  reads in 1.22–1.29 s over repeated seeks (L2: 1.22–1.26), and Town & Country's seeks to 900 and
+  1,800 in 1,105 and 1,124 ms (L2's game: 1,219 and 1,013).
+
+**What L3 leaves open.**
+
+- **The seek over one second**: the battle's first interval, and Town & Country's first two
+  (above). L4 doubled the interval instead, with the owner's relaxed target (*L4*, below).
+- **The next landing's candidates**: the cells derived from the units' footprints (about −0.6 /
+  −1.0 / −1.4 MiB [INFERRED, research]) stay open; R1 for the cells frame landed in L4.
+- **Memory per codec**: the record frames add about 12–13 MB a codec on the battle's 642 × 648
+  grid, most of it the cells' copy (13 bytes a cell since L4 dropped the known bits, 5.4 MB) and
+  the orders arena (up to 5.8 MB), and about 62.5–64.5 MB at `RECC_GRID_MAX` (4,194,304 cells, 54.5 MB
+  of it the cells' copy), by the files' own counts; the writer holds two codecs, a reader one. A grid past the bound turns the
+  codec off (records blocks), never the recording.
+- **The declines no fixture reaches**: the decline lever forces only the encoder's first branch; a
+  decline in mid-block (`enc_iteration`) and the declines after the walk (`over`, a column's failed
+  allocation, `units_write`, `pool_write`, `frames_write`) run in no fixture. A real game still can
+  decline a block, for one by a frame's section past 16 MiB.
+- **Multiplayer-only kinds**: `RK_EV_NET_CREATE`, the `FR_CORPSE` root and the `FS_SOURCE` site meet only
+  the fuzz and decode-before-write; no multiplayer recording was transcoded.
+- L2's open items stand: the survivors' dword 23, births, the snapshots' projectiles, the
+  stock-limits shot rows, and a crafted file's slow seek.
+
+## L4: the measured hours, the snapshot interval and R1
+
+**What L4 is** (landed). Recording format 11: format 10 with two changes, from the owner's
+decisions of 2026-10-10 (*Decisions* 12 and 13, below), taken with the measurements below in hand.
+
+- **A snapshot every 1,800 ticks** (`SNAPSHOT_TICKS`, `tagpu_recwriter.c`), 60 s of game time at
+  normal speed, where format 10 wrote one every 900. A seek reads at most one interval of stream
+  from the last snapshot, so the worst seek doubles; the owner accepted that for dense battles
+  (*The seek, against the target*, below).
+- **The cells frame restarts from the reader's grid (R1)** at every reset point (`RBF_FRAME_RESET`):
+  its copy G becomes the grid a reader holds at the end of the iteration before the reset block,
+  so a cell the reader already holds codes as no change instead of 13 new bytes. Its tick input T
+  still restarts empty, since no world holds one; the first iteration after a reset codes its
+  images instead of flagging them. The frame's known bits are gone (`CELLS_SCHEME` 2): a cell never
+  imaged is zero in every world, so a zero G gives the bytes "unknown, so zeros" gave. A reader
+  takes its own scheme alone, so a file of the scheme-1 cells frame is refused, never misread.
+- **The orders, events and state frames still restart empty (R2).** Together they cost 148 KB an
+  hour at 1,800 on the light hour below (orders 101, events 29, state 18). R1 for orders would need
+  the encoder to hold every unit's lists through every block, declines included, about as much
+  memory as a reader's world and with no small bound (up to `nslots` × 2 lists × `REC_ORDERS_CHUNK`,
+  512, nodes); the events'
+  state is history (IDs, dictionaries, script arguments, sprays) that no world holds; the state
+  frame's 18 KB did not justify a world of its own and a Python mirror.
+
+Readers take format 11 alone; format 10 is dropped under decision 6's rule (no published build
+wrote it), so the Replays browser shows a format-10 file as unreadable.
+
+**Where the restart's grid comes from, in each walk.** `reccodec_restart` takes a
+`RecFrameWorld` (`inc/tagpu_reccodec.h`): the grid's size and its `gw · gh` cells of
+`REC_CELL_BYTES`, row-major, owned by the caller. The writer's encoder keeps that world itself: the
+cells frame's G takes every image of every record the encoder is handed, after a latch too, and a
+declined iteration's images through the frame's `plain` op (`plain_apply`), and
+`reccodec_stream_block` hands it to both of the writer's restarts (the encoder's aliases its own
+G, the check decoder's copies it). The writer's own copy runs ahead of the block being encoded,
+which is why the encoder does not use it. The DLL reader passes its world's grid
+(`sections_body`), `codectest` a `World` that applies images by the reader's rule, and Python's
+`reccodec.Frame` its own cells state, onto which `apply_records` also lays a records block's
+images.
+
+**THE INVARIANT, constructed: the grid at a reset is the same bytes in every walk.** Each walk
+builds it from zero at the segment's start by one rule: an `RK_CELLS` is an image when no
+`RCS_EVENTS` record came before it in its iteration, and every record is bounded by the grid. A
+sequential reader and the check decoder follow by the same rule and by copy. A seeking reader's
+grid comes from a snapshot of the writer's copy over the segment's base, and the writer makes that
+copy take exactly the readers' images (`feature_record`, `tagpu_recwriter.c`): it keeps the
+readers' events flag (`rec_section_of`, cleared at `RK_TICK`), refuses cells after an event of
+their iteration unless the feature tick's call is open, and refuses `RK_GRID` anywhere but before
+the first iteration's events; and it takes the base where the reader does, at the end of the
+segment's first iteration (`iteration_done`; the reader's `tick_take`). A refusal abandons the file
+as a capture fault. Until this landing the copy took every `RK_CELLS` outside a bracket, events or
+not, and its base at `RK_GRID`; under R1 a cell the copy held and the readers did not would have
+misdecoded a seek silently. **BOUNDS**: a world is taken only when it is of the codec's own grid
+(`reccodec_restart`); any other, or none, leaves the codec invalid, so a reader refuses the block
+by name and the writer declines it. Cell bytes are reference bytes only, never an index.
+
+**The measured hours.** Two four-player games, each recorded for an hour of game time on the
+reference setup under Wine (MEASURED 2026-10-10), with a build writing a snapshot every 300 ticks,
+at turbo k = 1, an idle human seat in both:
+
+| | the light hour | the heavy hour |
+|---|---|---|
+| map, grid | Core Prime Industrial Area, 642 × 648 | Moon Quartet, 610 × 616, unit limit 500 |
+| seats | three stock AIs, difficulty 0 | four stock AIs, `SkirmishDifficulty` 2, 10,000 metal and energy each; each given 2 fusion plants, 4 moho mines, 4 metal makers, a kbot lab and a vehicle plant beside its commander at GameTime 1 |
+| line of sight | permanent (LosType 4) | true (LosType 6) |
+| iterations; wall time | 108,180; 108,000 ticks in 85 s | 108,090; 108,000 ticks in 120 s |
+| live units at most | 257 | 419 (about 220–400 from the twelfth minute on) |
+| shots / deaths / creates | 1,935 / 374 / 371 | 11,592 / 1,222 / 1,218 |
+| the file as recorded (300), MiB | 35.07 | 69.79 |
+| stream blocks sectioned / declined / mismatched | 3,607 / 0 / 0 | 3,604 / 0 / 0 |
+| the codec on the writer thread, ms in all / at most for one block; the ring's high water | 19,987 / 40; 2,004 KB | 42,935 / 34; 2,895 KB |
+| `tarec.py check`: snapshots, differing | 360, 0 | 360, 0 |
+
+The light hour is `scenarios/replay-four-ai.json` without its `los` line, so the launch kept the
+instance's own setting, which was permanent: it is a light game in every sense, units under 260
+and few shots. The heavy one disarms the level's objective with `+kill 9`, an empty seat (the
+objective's disarm `0x4904B0`, [the engine map](../exe-reverse-engineering.md)), so the idle human's
+defeat at GameTime 10,232 does not end the level; seat 4 was defeated at 35,734.
+
+**The interval, from one game each.** `codectest transcode --snap-every N` keeps every Nth
+snapshot of a recording and restarts the stream only after those, so one recording made at 300
+gives the file a writer at N × 300 would have written. Format 10 (R2), MiB an hour (the file scaled
+to 108,000 ticks), and the C decoder's longest run from a restart under Wine, the decode a seek
+faces at worst:
+
+| interval, ticks | 300 | 600 | 900 | 1,200 | **1,800** | 2,700 | 3,600 | 5,400 | 10,800 | none |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| light hour, MiB/h | 35.0 | 30.6 | 29.0 | 28.2 | **27.4** | 26.8 | 26.5 | 26.1 | 25.7 | 24.4 |
+| light hour, longest decode, ms | 47 | 95 | 136 | 178 | **263** | 378 | 495 | 728 | 1,412 | 8,846 |
+| heavy hour, MiB/h | 69.7 | 61.4 | 58.6 | 57.1 | **55.7** | 54.6 | 54.1 | 53.6 | 52.9 | 51.5 |
+| heavy hour, longest decode, ms | 85 | 168 | 247 | 327 | **474** | 691 | 952 | 1,387 | 2,573 | 20,304 |
+
+"None" decodes the whole file in one run, which is what a background pass over a file with no
+snapshots would cost. Fresh-process seeks in the game to the worst point of an interval (the
+replay's `sought … in X ms` line, two each): light 145–156 ms at 900, 261–265 at 1,800, 534–538 at
+3,600, 1,529–1,534 at 10,800, the rebuild 7 ms of it; heavy 279–289, 538–550, 1,055–1,057 and
+2,869–2,970 ms, the rebuild 14–18. The seek's read is within about 15 % of the decode above.
+
+**What a restart costs, by section.** Each section packed alone (`recsize.py`), KB:
+
+| | light, 900 against none | light, 1,800 against none | heavy, 900 against none |
+|---|---:|---:|---:|
+| cells | +1,628 | +1,404 | +1,408 |
+| orders | +204 | +101 | +427 |
+| events | +57 | +29 | +162 |
+| state | +32 | +18 | +47 |
+| snapshots, on disk | 2,548 | 1,268 | 4,935 |
+
+The cells' cost is not halved by the doubled interval (1,628 against 1,404 KB on the light hour): a
+reset forgets the whole grid, and each cell touched in the next interval then costs its 13 bytes
+once [INFERRED: more cells are touched in a longer interval]. Packed shares at 900: the unit frame
+48.2 % (light) and 51.1 % (heavy), cells 20.1 and 13.7 %, orders 15.8 and 18.0 %, events 6.5 %
+(light), state 3.7 % (light). Of the heavy hour's raw records, order lists are 64.7 % and unit
+deltas 22.0 %. On disk a minute grows with the game: on the light hour at 900 from 80 KB (minute 5)
+to 827 KB (minute 59); on the heavy one 0.2–0.3 MB in the first three minutes, about 0.7–1.36 MB
+from the thirteenth on.
+
+**The unit frame's unnamed columns are the resource ledger.** Of the heavy hour's unit deltas at
+900, the dwords changed most often are the turn `+0x64` (6.83 million changes), the mover `+0x140`
+(6.72 million), then `+0xC0` and `+0xD8` (6.19 and 6.16 million, 21 bits at the median, 25 at the
+90th percentile), with `+0xC4` and `+0xDC` (3.15 and 3.13 million, the same widths) further down.
+These four are the unit's energy and metal **requested** and **granted** since its owner's last
+economy pass, float accumulators that each build, repair or stockpile step and each weapon shot
+that costs a resource adds to, and that the 30-tick pass zeroes (the engine map's
+[ledger](../exe-reverse-engineering.md#the-nano-spray-two-emitters-fifteen-order-handlers-disassembled-2026-09-29), *The ledger* `unit+0xBC`: every writer and the settle,
+DISASSEMBLED 2026-10-10). Packed, they are half the unit frame (*The unit frame by lane*, below).
+Format 12 predicts them from those rules (*L5a*, below): the granted is bit for bit the requested
+from a pass on until the first refused request or the first payment made at once (a weapon shot, a
+cloak's cost), since both grow by the same float additions from the same 0; a unit's step usually asks the
+same amount as on its previous tick; and the reset to 0 falls on the owner's pass.
+
+**A unit's image, and which units send it** (MEASURED 2026-10-11 on the heavy hour's records, which
+the snapshot interval does not change). A unit is recorded as one 328-byte image: its 0x118-byte record, pointers as
+IDs, then the 0x30-byte mover only mobile units have. The recorder writes a unit only on an
+iteration when a byte of its record or mover changed (`cap_units`, `tagpu_recorder.c`), and then
+only the changed dwords. Of 32.7 million live unit-iterations, 16.2 million sent a record (49 %):
+
+| | sent nothing | did not move, changed something | moved |
+|---|---:|---:|---:|
+| structures, 19.3 million unit-iterations | 81 % | 19 % | — |
+| mobile units, 13.4 million | 7 % | 26 % | 67 % |
+
+"Moved" is a change in the turn, the position, the altitude or any mover dword. The 7.1 million
+records of units that did not move (44 % of all) carry, most often: the ledger's requested and
+granted with the work deadline `+0xB0` (about 4.9 million: builders, factories and nano towers
+working in place, `+0xB0` restamped GameTime + 300 each iteration), the build fraction `+0x104`
+with the HP (1.2 million: the units being built), weapon slot 1's reload countdown `+0x18`
+(0.67 million) and the damage countdown in `+0xF8` (0.21 million). Changed dwords in the hour by
+region of the image, in millions:
+
+| image | bytes | what | changes |
+|---|---:|---|---:|
+| `+0x00` | 4 | the mover's link | 0 |
+| `+0x04` | 84 | three weapon slots: target, aim, weapon ID, reload countdown, aim heading and pitch, stockpile, flags | 1.0 |
+| `+0x58` | 12 | `+0x58` (the economy pass credits it as metal produced, `0x4014A7`); the two order lists' links | 0 |
+| `+0x64` | 4 | the bank and the heading | 6.8 |
+| `+0x68` | 14 | the pitch; the position x, altitude, z (16.16) | 15.0 |
+| `+0x76` | 12 | the footprint cell, the sight cell, the footprint's size | 4.4 |
+| `+0x82` | 46 | bucket, carrier, cargo, next, type, owner, COB, model, references; type index, slot, hover phase, control group | 0.06 |
+| `+0xB0` | 4 | the work deadline | 2.8 |
+| `+0xB4` | 8 | no writer; kills; the event bits `+0xBA` | 0.03 |
+| `+0xBC` | 48 | the resource ledger | 19.0 |
+| `+0xEC` | 8 | the ledger's owner; the last attacker | 0.01 |
+| `+0xF4` | 12 | the last hit's player and kind, HP % now and 30 iterations ago, the sight stamp, the attach piece, the damage countdown, the give lock, the owner's index | 0.5 |
+| `+0x100` | 4 | no reader | 0 |
+| `+0x104` | 4 | the build fraction | 2.3 |
+| `+0x108` | 4 | HP, the water state | 0.8 |
+| `+0x10C` | 12 | the activation, yard and state bits, the AI flag | 0.2 |
+| mover `+0x00` | 8 | the course (dropped), the movement class | 0 |
+| mover `+0x08` | 12 | the velocity | 7.5 |
+| mover `+0x14` | 12 | the smoothed acceleration | 5.6 |
+| mover `+0x20` | 4 | the speed | 3.2 |
+| mover `+0x24` | 12 | the turn rate, the claim stamp, the move stamp, the layer bits | 8.7 |
+
+The unit frame packs the hour's 16.2 million records into 26.8 MiB, about 1.7 bytes a record. A
+value that does not change costs nothing in the stream, whatever it is; snapshots and whole images
+carry all 328 bytes. Of the values that change often, the work deadline `+0xB0` has one reader
+found, the economy pass's cloak cost (*The unit and player records* in the engine map), so for a
+unit that never cloaks it is history no reader uses; the ledger's last-period values, which change
+rarely, are read by the unit panel (`0x46AC1E..0x46AC3C`). Keeping every byte is the recorder's
+contract ([completeness](demo-recorder-completeness.md)); leaving one out is the owner's decision.
+Freezing `+0xB0` at each unit's first value, which no unit's cloak needed in this game (none
+cloaked), saves 54,736 bytes of the hour's 56,986,121 (0.1 %, MEASURED 2026-10-11, the same file
+transcoded both ways at 1,800): the linear candidate already predicts a deadline restamped every
+iteration, and the units it lists are listed for their ledger anyway (only 4,517 records held
+nothing else). A rule for it would save at most that, so it is not worth a format change.
+
+**The unit frame by lane** (MEASURED 2026-10-11, the heavy hour at 1,800 with R1: each stream
+block's `RCS_UNITS` parsed into its parts as `units_write` lays them out -- the iteration counts and
+slot gaps, the mask dictionary and ids, then one column of residual varints per lane -- and each
+part packed alone with zstd 3, block by block). The parts packed alone sum to 34.3 MB against 28.2 MB
+for the sections packed whole, so a part's share is of the former:
+
+| part | values | packed alone | share |
+|---|---:|---:|---:|
+| `+0xC0` energy requested | 2,307,373 | 5,727,565 | 16.7 % |
+| the masks: which lanes each listed unit carries | | 5,576,296 | 16.3 % |
+| `+0xD8` metal requested | 2,300,682 | 5,493,913 | 16.0 % |
+| the listed slots | | 3,602,501 | 10.5 % |
+| `+0xC4` energy granted | 1,180,984 | 3,047,545 | 8.9 % |
+| `+0xDC` metal granted | 1,173,913 | 2,915,522 | 8.5 % |
+| the mover's turn rate | 1,387,058 | 1,088,008 | 3.2 % |
+| the velocity x, z | 1,841,519 | 1,588,985 | 4.6 % |
+| the speed | 357,073 | 647,023 | 1.9 % |
+| the ledger's debts `+0xC8`, `+0xE0` | 268,643 | 943,651 | 2.8 % |
+| the build fraction `+0x104` | 159,744 | 332,327 | 1.0 % |
+| the position x, z | 172,077 | 468,205 | 1.4 % |
+| every other lane | | 2,854,124 | 8.3 % |
+
+The four requested and granted lanes are 50.1 % of the unit frame, about 13.5 MiB of the hour's
+54.35 [INFERRED: their share of the parts applied to the sections' packed bytes], a quarter of the
+file; motion, which the engine rules predict, is now about an eighth of the frame. A column holds
+each lane's residual against its winning candidate, and no candidate fits a float accumulator: the
+linear one extrapolates the lane's bits as an integer, which a float's additions do not follow, and
+each candidate reads only its own lane, so the granted pays for its change even when it equals the
+requested.
+
+**R1, measured** (the same files converted to format 11 and transcoded natively with the landing's
+codec, every block sectioned, 0 declined, 0 mismatched). The stream at 1,800, bytes written:
+
+| | R2 (format 10's frames) | R1 | change | the file on disk, MiB |
+|---|---:|---:|---:|---:|
+| the light hour | 27,309,648 | 25,679,306 | −1,630,342 | 27.41 → 25.85 |
+| the battle (L3's) | 11,326,194 | 11,219,909 | −106,285 | 11.36 → 11.26 |
+| Town & Country | 8,671,586 | 8,591,702 | −79,884 | 8.48 → 8.40 |
+| naval | 1,202,158 | 1,197,058 | −5,100 | 1.21 → 1.20 |
+| the air war | 5,126,759 | 4,786,752 | −340,007 | 4.96 → 4.64 |
+
+On the light hour, restarts now cost 167,787 bytes in all against no snapshot at all (25,511,519
+bytes written): the orders, events and state frames' R2 and T's first iteration after each reset.
+With no snapshot the stream is within 91 bytes of format 10's. The heavy hour transcoded to format
+11 at 1,800 with R1 is 56,986,121 bytes, 54.35 MiB (MEASURED 2026-10-11), of which the 60 snapshots
+are 2.4 MiB (4.4 %) and the stream's sections keep the shares of format 10 at 900 within a point:
+the unit frame 52.8 %, orders 18.2 %, cells 11.4 %, events 8.9 %, projectiles 3.1 %, state 2.4 %. Decoding is 0–3 % slower (the landing's measurement): a reset now copies the grid whole,
+5.4 MB on a 642 × 648 grid, in a sequential reader and the check decoder at every reset and in a
+reader at every seek.
+
+**L3's battle at 900, 1,800 and none** (the format-10 file, transcoded): 12.00 / 11.36 / 10.69 MiB,
+the longest decode from a restart 1.12 / 1.73 / 3.72 s. Per tick it decodes 6 to 8 times slower
+than the light hour (whole file and worst interval), so the densest battles, not the hours, set the
+worst seek.
+
+**The seek, against the target.** The product page's target is under one second over any distance.
+At 1,800 the light hour's worst seek reads in 261–265 ms and the heavy hour's in 538–550 ms; the
+battle's worst interval decodes in about 1.7 s, and a dense battle's opening, where every unit
+marches, reads in about 2.4–2.6 s [INFERRED: linear from 1.22–1.29 s at 900, *L3*]. **The owner
+chose 1,800 with the 1.7 s in hand (2026-10-10), relaxing the one-second target for dense battles:
+well under a second in ordinary games, about 2.5 s at worst in the densest (2.4–2.6 s inferred).** The product page
+says so in place of the target.
+
+**Against the budget.** The light hour misses 25 MB an hour even with no snapshots at all (24.4 MiB,
+25.6 MB) and comes to 25.85 MiB (27.1 MB) transcoded to format 11, snapshots at 1,800 and R1; the heavy hour misses it by more
+than twice at every interval. The unit frame and the orders are most of what is left (above). The
+question is now lossy (L5) or more lossless work on the unit frame and the orders, the owner's
+decision (decision 8).
+
+**Verified.** The core commit, format 11 with every frame still R2, wrote the light hour and the
+four L3 recordings byte-identical to format 10 in every stream block (27,309,648 at 1,800,
+25,511,428 with no snapshot). With R1: `codectest.py --native outcomes`, 259 outcomes, under Wine
+and natively (`-fsanitize=address,undefined`), among them a block that restarts as after a
+snapshot and re-images cells the reader holds (sym 0, no field bytes, flag 0), a check decoder
+restarted from a grid one byte off (MISMATCH, then sectioned again after the restart), a reader
+refusing a world of another grid or none, a block declining in mid-block and one restarting after
+it, and the encoder's grid compared with the reader's after every block; `fuzz` on the light hour
+at 1,800, 100,000 cases under the sanitizers; `codectest.py verify`, C and Python, 0 blocks
+differing on the light hour at 1,800 and the battle at 1,800; `tarec.py check` on the five
+format-11 conversions with the constructed grid rule, 0 snapshots differing (360, 8, 4, 4, 5);
+`test_tareplay.py`, 103 tests, among them `tarec`'s refusal of cells after an event;
+`recmp_file_test`, whose perspective file now runs to GameTime 2,200 so its seeks straddle the
+snapshot at 1,800 (701 samples, 8 clicks, 11 selections, 1 snapshot), alone and three at once.
+`codectest --snap-every` takes digits alone.
+
+**The gate** (`tareplay.py landing`, MEASURED 2026-10-10 on the coverage builds at the landing's head, the reference setup, 42 fixtures, 12 at once): 1,901 checks pass, none fails, the 21 changed functions all reached; `codec-decline` and `stock-codec-decline` each decline 17 of 87 stream blocks, every other fixture none, and none mismatches. W3: the U lane's return to now at 1,501 read 1,500 iterations from the first in 4,040 ms of the game thread's CPU on `battle` and 3,900 on `stock-limits`, under the bound of 5,000; the forks from the snapshot at 3,601 in 1,450 and 1,250; `battle`'s takeover from the snapshot at 1,801 in 650. Two earlier runs at the bound of 4,000 failed W3 by 110–120 ms, which is what the owner's raise answers.
+
+**What L4 leaves open.**
+
+- **The budget** (above): both hours miss 25 MB an hour. Lossy (L5) or more lossless work is the
+  owner's decision.
+- **The next candidate for the seek and the snapshots' bytes: dense seek points in memory, sparse
+  snapshots in the file** (the owner's next exploration). The file keeps a reset block every 900 to
+  1,800 ticks but writes a snapshot far less often, and the playback builds a world image at each
+  reset block in memory. The points must sit on reset blocks, since a block elsewhere decodes only
+  from the whole codec state; every reader already restarts at any flagged block, so no reader
+  change is needed for the resets. R1 is what makes dense resets cheap: about 2.5 KB a reset from
+  orders, events and state, where the cells' restart under R2 cost 14 KB a reset at 900 and 24 KB at
+  1,800 (the table above, divided by the resets). It would save the snapshots' bytes, about 1.1 MB an hour on the light hour
+  [INFERRED].
+- **A seek's decode rests on the grid's equality at the snapshot.** It is constructed now (above),
+  and `tarec.py check` compares every snapshot's world with the stream's, but no reader checks a
+  decoded block against a checksum: a fault in one of those rules would misdecode after a seek,
+  silently, as it would for the units.
+- **Fewer fixtures reach a snapshot.** At 1,800 the 14 fixtures that end at or before GameTime
+  1,800 record none, and those ending at 2,400 hold one at 1,801 that a seek uses only for a
+  target past 1,924 (the reader starts from the last snapshot more than 123 ticks before it). Only
+  the longer fixtures exercise a seek from a snapshot, and with it R1's restart from a
+  snapshot-built grid.
+- **The longest seek doubles in the gate too**: the battle's takeover seeks read up to about 1,923
+  iterations instead of 1,023, and the U lane's return to now at 1,501 reads 1,500 from the
+  first: 3.5–4.12 s of the game thread's CPU under the gate's load (MEASURED, two landing runs),
+  past the CPU-time bound of 4,000 that W3 then was, which the owner raised to 5,000 (2026-10-10).
+  W3 now counts the blocks a seek decodes against the file's own and no check reads a time
+  (2026-10-12), so the interval costs the gate no bound; it costs the seek's time, which the gate
+  reports and does not check ([completeness](demo-recorder-completeness.md)).
+- **The HUD markers' walker can hold the game thread for one rebuild**: its stop waits for one
+  fork crossing, which rebuilds from the last snapshot before the fork, now up to about 1,800
+  iterations ([the replay HUD](../hud-in-game.md)).
+- **The cells encoder's latch runs in no fixture**: it settles the images it held back when a
+  record fails its bounds, which no recording can carry (the writer refuses such a record first,
+  by the same bounds); the codec's self-test runs it (`outcomes_cells`' fault blocks), and the
+  owner chose to keep it inside `cells_enc_rec` rather than land a function no fixture reaches
+  (2026-10-10), as L3's mid-block declines are.
+- **The reset's grid copy**, 5.4 MB on a 642 × 648 grid and up to 54.5 MB at `RECC_GRID_MAX`, once
+  a reset in a sequential reader and in the check decoder, and once a seek.
+- L3's other open items stand: the cells derived from the units' footprints, the declines no
+  fixture reaches, the multiplayer-only kinds, and L2's.
+
+## L5a: the ledger rule
+
+**What L5a is** (landed). Recording format 12: format 11 with the unit frame predicting the
+resource ledger. The lane table gains five roles, appended: `OWNER` (`+0xEC`, the owner's player
+ID), `EREQ`/`EGRANT` (`+0xC0`/`+0xC4`) and `MREQ`/`MGRANT` (`+0xD8`/`+0xDC`). `ledger_steps`
+(`tagpu_reccodec.c`) runs after the other rules: the requested is 0 at the owner's settle, the last
+value plus the slot's step while it grows, the last value when it held, the step itself after a zero
+that followed a value; the granted is this tick's requested when the two were equal, else the last
+value; the rule is always the winner. The settle is learned per owner ID (every slot of an owner
+settles on the same tick) from the last requested that fell to zero, the step per slot from the
+first value after a zero. A slot whose four ledger lanes are not all zero never rests, which keeps
+skipping a resting slot identical to evaluating it (the argument beside `slot_advance`). The sum is
+single precision done in integers, `reccodec_f32_add`, rounded to nearest even: the sum the FPU
+gives at any precision control, so no thread's control word reaches the format. The rules and
+their engine facts: the engine map's [unit frame](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
+
+**Measured** (2026-10-11, the heavy hour's records converted to format 12 and transcoded natively at
+1,800): 56,986,121 → 42,152,970 bytes (−26 %), the unit frame packed 28.16 → 13.73 MB, 3,604 blocks
+sectioned, none declined or mismatched, the same CPU. What the unit frame spends now, by lane packed
+alone: masks 25 %, listed slots 17 %, turn 7 %, vx 5.6 %, vz 4.6 %, speed 4.1 %.
+
+**Verified.** `reccodec_f32_add` against SSE on 398 million pairs (near exponents, cancellation,
+denormals), none differing, a known-answer table in `codectest outcomes`, and `LedgerSum` against
+numpy in `test_tareplay.py`; `outcomes` under Wine and natively with two building units, one of them
+refused from tick 40. The fuzz differential (`codectest fuzz` and `codectest.py fuzzdiff`) checks the
+rule only on a recording that carries ledger state: the lossy hour carries none, so a differential
+on it does not exercise the ledger rule; on fresh format-13 recordings that do (stock-limits and
+tenseat, 2026-10-12) C and Python agree on 20,000 of 20,000 mutations each.
+
+## L5: the lossy plan, measured offline
+
+The owner's request (2026-10-11): about the size of a TADR recording, giving up losslessness where
+needed, but more reliable, closer to the simulation and with a seek that works. **Measured**
+(2026-10-11, scratch transforms of the heavy hour's records, each result then coded losslessly by the
+format-12 codec, snapshots at 1,800, none declined): every value a viewer sees stays exact; what no
+reader on a puppet shows is held at its last kept value between snapshots and refreshed exactly at
+each one (every 1,800 ticks).
+
+| step | heavy hour, MB |
+|---|---:|
+| format 11 | 56.99 |
+| format 12 (L5a) | 42.15 |
+| + the units' internal fields held (weapon slots, timers, deadlines, the ledger's other values, the last attacker) | 39.03 |
+| + the order nodes' internal fields held: a list is sent only when a field its walker, panel or build menu reads changes (99.5 % of the lists sent changed only internal fields, mostly the deadline `+0x0A`) | 29.90 |
+| + the cells' unit slots (bytes 0–3) and yard bit held: 99.4 % of the changed cells changed only those, which the footprint writers keep | 27.87 |
+| + nano sprays as sessions: a spray repeating the unit's previous tick's is dropped (99 % of the sprays continue one) | 23.97 |
+| + the feature tick's input cells dropped | 19.32 (18.4 MiB) |
+
+**TADR, for comparison** (MEASURED 2026-10-11: TADR's 2006 recorder, `Dplayx.dll` 1.0.0.545, the
+build that loads beside the retail exe -- the 3.9.02 exe's is 3.9.2.416 -- in a
+four-peer Wine network game on Metal Gridlock, one AI and an idle human per peer, 19.4 game-minutes,
+103 live units on average, its compression off). Its file is 87.7 % unit-sync packets (`0x2C`).
+The engine sends one per local player every tick (`0x48B003`, no rate gate), listing only the
+units whose path changed -- for a ground unit up to three path points, no position -- and one
+unit's full state in rotation, `GameTime mod` the unit limit (the writer `0x48B200`, about 29
+bytes); the receiver steers its copy toward the points by the ground step `0x43CD20` and snaps it
+to the full state when that comes round. So TADR's size grows with players and path changes, not
+with units: 13–18 bytes a tick plus 0.18–0.32 a live unit (fitted over 30 s windows). The heavy
+hour holds 303 live units on average (32,741,856 unit-ticks over 108,090 ticks), so the fit's low
+ends together give 7.3 MB and its high ends 12.4 MB [INFERRED: the fit carried from a 103-unit game
+to a 303-unit one]. A per-unit-tick scaling of the same game's packets gave 17–22 MiB, which
+overstates it. What TADR's playback shows between two full states is a network peer's picture:
+a drift bounded only by the next full state, which comes round once per unit-limit ticks per
+player, and no seek.
+What is left of this plan is the unit frame (10.7 MB: masks and listed slots about half, motion about
+30 %), the snapshots (2.5), projectiles (1.6), orders (1.3), state (1.3) and events (1.1).
+
+**The trap: motion must stay exact.** Holding the velocity, speed or turn, or giving the position a
+tolerance, made the file bigger (53.8–59.5 MB against 42.15): the unit frame predicts the position
+from the velocity and the heading from the turn, so a held velocity turns every position into a
+residual.
+
+**Not shown by these numbers.** No lossy recording was played: the sizes are of transformed streams.
+The offline spray step zeroed the spray's point, which is shown, and measured −3.9 MB on a stream
+whose cells were already held (27.87 → 23.97); the landed spray sessions keep the point exact and
+end explicitly (*The spray sessions*, below). Held cell slots are read by projectile collision, and dropped input cells feed the
+feature tick, so both need a playback check. A takeover between snapshots would resume from held
+internal values. The landing plan answers these.
+
+**The core, landed: recording format 13** (2026-10-12). The writer keeps its exact copy and writes
+each completed iteration into the stream through the lossy filter (`tagpu_reclossy.c`), which
+holds the bytes `replay-hold.tsv` names; a skirmish header's `RT_HOLD` carries the table's masks,
+its SHA-256 and the refresh interval, so each recording says what its stream holds. **The refresh
+grid**: a refresh is the segment's first two iterations and every GameTime 1 modulo 300 (the
+owner's choice; every refresh is then also 1 modulo the radar pass's 30-tick step), the second so
+that a takeover inside the first interval has a start after the segment's first iteration, whose
+iteration before is the parent's or none; it ends its stream
+block (`RBF_REFRESH`), the filter writes every difference there and the writer checks the stream's
+world equal to its copy, abandoning the file otherwise; a snapshot, still at least 1,800 ticks
+from the last, is taken only at a refresh. A takeover starts only at a refresh (the plan's last
+gap above; *S4b*). The test lever `tagpu_rec.exact` writes the exact records beside the stream
+(`RB_EXACT`), against which `tarec lossy-check` checks it. **The table has no row**, so every
+record is the capture's: MEASURED 2026-10-12, `codectest lossy` over the heavy hour's exact
+records with the build's table: 108,090 iterations, none whose records differ from the input's,
+3,605 stream blocks (362 ending at a refresh -- a segment's first two iterations are refreshes --
+every one sectioned, none declined or mismatched),
+60 snapshots kept at the refreshes 1,800 apart; `tarec lossy-check --to 27001` and `tarec check`
+pass on the result. Adding a row is the owner's decision (CLAUDE.md, *Loosening*).
+
+**The unit and order hold rows: recording format 14** (2026-10-12). `replay-hold.tsv` holds the
+three weapon slots' target, callback, aim complete, aim heading and pitch and flags but bit 1; the
+ledger's produced, requested, granted and debt of both resources; and a main list node's state,
+wanted and fired events, deadline, leash, p3, owned object and flags but seven bits (five a
+playback host reads on a main list node, and `0x8` and `0x80000`, whose readers do not run there:
+loosenings not taken) -- the plan's U and O rows less one, each row with its readers on a
+playback host and its evidence (the owner's, 2026-10-11: *hold rows are loosenings*). Left out of the plan's rows: a
+weapon slot's distance (`+0x10`), which the shot builder reads on a puppet (`0x49CE62`) and which
+never changes after the create, so holding it saved nothing. MEASURED 2026-10-12, `codectest lossy`
+over the heavy hour's exact records (the writer's path, a refresh every 300 ticks): **30,530,997
+bytes against 42,153,513 with the empty table (−27.6 %)**, the plan's 30.26 MB at a refresh every
+1,800 ticks plus 0.9 % [INFERRED: the shorter interval's refreshes]. The empty-table base is the
+same command built from main at `03d0b4c0`, on the same grid: 3,605 stream blocks, 362 at a
+refresh. The core's 3,604 and 361 above were measured before the segment's second iteration
+became a refresh (`d959778b`), which is the extra block; the rows add none. With the rows, 107,868
+of 108,090 iterations differ from the input's, 3,605 stream blocks (362 at a refresh), every one sectioned, none declined or mismatched,
+60 snapshots; `tarec lossy-check` over the whole hour (every shown byte exact, every held byte the
+stream's last or the exact one, the two worlds equal at all 362 refreshes), `tarec check`, and the
+C and Python decoders on every block (`codectest.py verify`) pass.
+
+**The spray sessions, landed: recording format 15** (2026-10-12). A nano spray repeats: its unit's
+spray of 1, 2 or 4 ticks before, byte for byte, or with its point moved by exactly the unit's
+position change since. A skirmish stream (`RT_HOLD`'s `RECL_SPRAYS`) leaves out a spray its
+unit's session predicts exactly, the unit's one spray of its tick, and every reader makes it again
+after the tick's events from a table of each unit's sprays of the last four ticks; an
+`RK_SPRAY_SESSION` record (8 bytes, `RCS_OTHER`, verbatim) opens, changes or closes a unit's session
+after its tick's last record: after a spray the table predicts -- plain before following, the
+shortest period first -- and in a tick the unit makes none. A snapshot's tick writes every spray
+and closes every session, and every reader empties its table there, so a seek needs nothing from
+before the snapshot. Every spray is exact, its point included; only the sprays' order inside a
+tick is not kept, a loosening the owner approved (the completeness note's decisions, 2026-10-11).
+**MEASURED** 2026-10-12, `codectest lossy` over the heavy hour's exact records: 2,980,673 of
+3,160,252 sprays implied, 179,579 written, 71,417 sessions opened or changed (11,372 of them
+following their unit) and 66,448 closed; the file 42,135,332 → 39,498,890 bytes (−2.64 MB) with
+the empty hold table, and 30,512,816 → 27,792,787 (−2.72 MB) over the plan's unit and order rows
+(the hold rows' table as it stood before they landed, built into a scratch copy; the landed
+table's file is 30,530,997 bytes); every block sectioned, none declined or
+mismatched. `tarec lossy-check` over the whole hour and `tarec check` pass; `check` counts the
+hour's 3,160,252 sprays. The DLL's reader makes the same sprays: `codectest.py sprays` over the
+replay gate's 41 fresh recordings with the exact stream (2026-10-12) compared 114,060 iterations
+read in order, with 23,143 sprays, and 42,588 iterations after 144 seeks from the snapshots, with
+9,277, every one equal. **The landing's gate missed by 0.05 MB**: the landing plan asked for
+−2.97 MB ± 0.2 over the unit and order rows, a figure that coded the session records in the
+events frame. Written verbatim, as format 15 writes them, they cost 377,643 bytes on this stream,
+against 128,818 in the events frame. Measured in format 22's container, each run one level-19
+frame, that coding saves 20,183 bytes of the heavy hour, not 0.25 MB, and format 22 does not carry
+it (*P7*, its fifth departure). The lossy plan's own figures for exact sessions are smaller,
+−1.05 MB (its §4.4) and −1.03 (its §8's attribution), because its transform had no FOLLOW
+sessions: it implied 2,546,320 sprays and wrote 613,932, with 59,528 sessions opened and 59,022
+closed.
+
+**The cells held: recording format 16** (the owner's decision 2026-10-12, option a). Every skirmish
+recording's `RT_HOLD` carries `RECL_CELLS`: between refreshes the stream carries a cell's unit
+slots (`+0x00`, `+0x02`) and yard bit (`+0x0C` bit 1) at a value it wrote before, so a cell image
+whose other bytes did not change is not written, and the feature tick's input runs only where a
+byte other than those changed; the tick's one slot read, reproduction's source test, is recorded
+as `FS_SOURCE`, as a multiplayer recording's is. At a refresh the filter writes every cell that
+differs from the writer's copy. The playing does not write those bytes: its engine stamps them
+(`tagpu_puppet.c`, *The footprint writers*). That holds by two facts. Every recorded footprint cell is
+the set-position's rounding of the recorded position (MEASURED 3,640,526 of 3,640,526
+unit-iterations of an air war and a battle), so the playing stamps where the game did. A
+contested cell keeps its incumbent, as on the recording machine, whose seats are never type 3:
+the playing writes `90 90` over the six contest `je`s from its first step to its end
+([engine map](../exe-reverse-engineering.md), *The footprint contest's rule*). The contest marks,
+`+0x110` bits 26 and 27, are the engine's too on such a playing, since the clear's re-claim walk
+reads them. A takeover, at a refresh, writes the recording's slots, yard bits and marks and then
+refreshes the passability. MEASURED 2026-10-12, `codectest lossy` over the heavy hour's exact
+records, with format 13's empty hold table and no spray sessions (the cells alone, built before
+the rows and the sessions landed): **42,135,332 → 35,797,592 bytes of stream and snapshots
+(−6.34 MB)**; the figure over format 15's rows and sessions is not measured yet; 108,090 iterations, 3,605 stream blocks (362 at a refresh, every one sectioned, none
+declined or mismatched), 60 snapshots kept; `tarec lossy-check --to 27001` (with the cells clause)
+and `tarec check` pass on the result. **The loosening the owner accepted with it**: after a seek
+the cells' slots, yard bits and contest marks are checked by the occupancy rule instead of
+compared (*Decisions taken* in [completeness](demo-recorder-completeness.md)); a seek stamps in slot
+order and a contest there can end the other way until the contested units move. A seek writes each
+made unit's yard as its create returns, so a nanoframe in a lab of a lower slot finds the yard's
+cells free, as the game made it; a forward playing applies each yard change at its place in the
+step (`RK_EV_YARD`), so a nanoframe made in the tick its lab's yard opened finds them free too (the
+engine map's *An open yard gives nothing back*). **What remains
+open**: where the playing makes two contesting footprint calls in another order than the game did
+(deaths, creates and placements in slot order against the game's interleaving in its unit tick),
+the holder can differ (MEASURED in emulation, 4 of an air war's 1,700 iterations; no slot-B impact
+differed in the game in an air war or a battle). A multiplayer recording is unchanged: its playing
+keeps the engine's slots already, its marks are still written from the recording, and its contest
+follows the puppet's type-3 rule (the owner has not decided the marks for it). Its takeover
+timeline is a skirmish segment and holds its cells: the playing changes to the recording
+machine's rule where it crosses into one (`mp_follow`). MEASURED 2026-10-12 on a two-peer
+recording with reproducing trees taken over at 901 as player 1: timeline 1 played across its fork
+and sought within it changes the rule at the crossing and puts it back at the end; its dumps are
+EQUAL at the refresh 1201 and, by the occupancy rule, at 1501 and 1621 after a seek and 1801 from
+a fresh process, and the multiplayer segment's dump at 600 is EQUAL by `recmp_compare.py`. No
+replay fixture is multiplayer, so the landing tier reaches neither function of that path
+(`tagpu_puppet_engine_cells`, `recr_segment_cells`): this chain is their evidence, which the owner
+accepted for C2 on 2026-10-12 (`tools/replay/recmp_create_begin_test.py --reproduce --until 1400`,
+then `recmp_play_test.py` with `--takeover 901:1`, with `--timeline 1 --at 600 --at 961 --at 1201
+--seek 1201:1501` and with `--timeline 1 --fresh 1801`; 5 min 19 s). The
+fixtures `forest-reproduce` and `stock-forest-reproduce` record and play reproduction's source
+test in a skirmish (23 `FS_SOURCE` draws each, every one played as recorded).
+
+**The script slice's markers: recording format 20** (2026-10-12). `RK_EV_SLICE`, a unit ID in the
+events frame's `C_ID` column, before the slice of every unit whose COB had an engine start since
+the capture point ([the skirmish slice](demo-recorder-skirmish-slice.md#the-script-slice-format-20)).
+**MEASURED** on the replay gate's `battle` recording (3,991 iterations, at most 1,444 live units,
+the file 72.9 MB with the test lever's exact stream, the stream itself 7.3 MB on disk): 33,464
+markers, 8.38 an iteration, 133,856 bytes of bodies raw; the events' kind stream and ID column
+packed per 30-iteration block with zstd 3 grow by 13,645 bytes, 0.41 B a marker, 0.37 MB an hour at
+this fixture's density (the cost model the plan used, which simulated 38,338 markers at 0.36 B,
++13,653 bytes, on a format-14 file of the same fixture). That is 0.19 % of the
+stream; a quieter hour costs less, since markers follow starts and creates.
+
+**The transports', the pads' and the waterline's COB entries: recording format 23** (2026-10-13).
+Two more owner's queries (`QueryTransport`, `QueryLandingPad`) and two more owner-only starts
+(`BeginTransport`, `setSFXoccupy`) in the existing kinds 58 and the named start; no new column.
+They follow transports, landings and changes of the water state, which `0x43DB50` tests for
+every unit with a mover, on land as on water. MEASURED 2026-10-13: the `waterline` test group's
+recordings (3,150 GameTimes, three units crossing and a Peewee carried) hold 20 to 26
+`setSFXoccupy` a run, `transport-pad`'s (1,980 GameTimes) 3 queries, 1 `BeginTransport` and 7 to
+8 `setSFXoccupy`. On `battle` (3,990 GameTimes) the format-23 recording holds 1,416
+`setSFXoccupy` (0.35 an iteration) and no other new event; their bodies are 50,976 bytes raw.
+Modelled as for the slice markers (per 30-iteration block, zstd 3): the events' kind stream and ID
+column grow by 35 bytes and the named starts' bodies by 1,854, about 0.05 MB an hour at this
+density. The stream of that recording packs to 5,221,632 bytes against 5,255,593 for a format-22
+recording of the same test group at main, but the two are different games -- the simulation RNG
+is seeded per level, and main's run made 3,128 more broadcast starts -- so that difference
+measures the games, not the format.
+
+## P1: the container, measured
+
+**What format 17 changes** (tagpu_recfmt.h, *THE RUN AND THE CHAIN*). A *run* -- the sectioned stream
+blocks from an `RBF_FRAME_RESET` block to the next reset, stream block of plain records or
+snapshot, the blocks one state of the frames carries across; blocks of other kinds between them
+(`RB_EXACT`, `RB_CONTRIBUTIONS`) neither end nor touch a run -- is one zstd frame at level 19 (`windowLog` 20, `hashLog` 20,
+`chainLog` 21, no content size, no checksum), begun at the reset block and never ended: each block's
+bytes are the frame's next chunk, flushed at the block's end (`ZSTD_e_flush`). A sectioned block is
+always packed. A records block (declined or mismatched) stays a level-3 frame of its own, and the
+next sectioned block begins a new run. A snapshot is packed against the previous snapshot of its
+segment (`RBF_CHAINED`, its records as a raw-content prefix, a window that holds both, at most 2^27);
+the segment's first snapshot, every tenth after it and any whose check fails is a *key*, packed
+alone. The writer checks both before it writes them (*DECODE BEFORE WRITE*: the chunk through a
+decoder that has unpacked the run's chunks before it, then the frames; the chained frame through its
+prefix), and anything that does not give the bytes back is written as records or as a key. The
+readers keep one validity for the run and the frames: a chunk is unpacked only at a reset block or
+right after its run's previous block, and a failure of either ends both. A seek to a chained
+snapshot unpacks its segment's snapshots from the key forward, at most ten, refusing a longer chain
+or a chained snapshot with no snapshot before it. The vendored zstd keeps the btopt and btultra
+match finders that level 19 (btultra2) needs: 342,828 → 386,504 bytes of zstd code (MEASURED,
+`zstd.c` compiled both ways at the DLL's flags).
+
+**Measured** (2026-10-12, `codectest transcode --snap-every 1` -- the writer's path, every block and
+snapshot check-decoded -- under Wine, 32-bit, on the reference setup; the inputs the records-only
+copies of the two heavy hours at 1,800-tick snapshots, the "before" column the level-3 container,
+block by block, that formats 12 to 16 write, on the same records). The lossy hour is the transform the lossy landings build on -- the units' and the
+order nodes' internal fields held, sprays as sessions and the cells held, each refreshed every
+1,800 ticks -- not *L5*'s table, whose last step measured 19.32 MB in format 12; and the exact
+hour's 29.90 MB here is lossless, not the 29.90 of *L5*'s orders step:
+
+| | lossy hour (the stack's input) | exact hour (format 12, L5a) |
+|---|---:|---:|
+| the file before (level 3, block by block) | 20,725,479 | 42,152,986 |
+| the stream before / after | 18,070,847 / 14,708,157 | 39,498,338 / 28,960,535 |
+| the snapshots before / after (60, 6 keys) | 2,519,647 / 806,045 | 2,519,647 / 806,045 |
+| the file after | **15,649,187 (−24.5 %)** | **29,901,581 (−29.1 %)** |
+| the writer's codec over the hour, before / after | 34.5 s / 43.3 s | 42.6 s / 73.2 s |
+| its worst block after the first / the first | 26 ms / 274 ms | 55 ms / 266 ms |
+| the snapshots' packing and check, all / the worst | 3.6 s / 105 ms | 3.5 s / 103 ms |
+
+Through the writer's own path for format 13's stream (`codectest lossy` over the exact hour's
+records with the build's hold table of no rows: blocks cut at every refresh, 3,605 of them, 362
+ending at one, the 60 snapshots kept at refreshes), the file goes from 42,153,513 bytes (format 13)
+to 29,902,072 in P1's container (−29.1 %), none declined or mismatched; `tarec check` passes on it, and
+`tarec lossy-check --to 27001` on the same run written with its exact stream (`--exact`)
+(MEASURED 2026-10-12).
+
+The block heads (117,344 bytes) and the header, minimap and end block are unchanged. The level-19
+context holds 14.5 MB at most over either hour (`ZSTD_sizeof_CCtx`, the run's parameters and the
+snapshots' alike: its tables are fixed, so a snapshot's size does not grow it; at level 19's own
+parameters the snapshots would have needed 33.3 MB, MEASURED 2026-10-11), so the writer gains about
+16 MB with its run decoder (1.47 MB), and a reader about 1.5 MB for its run decoder. The recording's
+first block carries the context's allocation; later runs reuse it. The fixed tables cost the snapshots nothing measurable:
+806,045 bytes either way. Unpacking the worst chain, a key and nine links, takes about 0.5 ms in
+Python's zstandard (the same libzstd 1.5.7, x86-64; the DLL's 32-bit unpack is not measured).
+
+**The dense battle: the writer keeps up** (MEASURED 2026-10-12, the same method, on the ten-player
+battle on Core Prime Industrial Area of *L3*'s file, 7,441 ticks, 266 stream blocks: 226 of 30
+iterations, the rest cut short by the 2 MiB bound in the opening). The file goes from 12,348,045 to
+10,234,314 bytes (−17.1 %): the stream 11,178,552 → 9,805,310, its 8 snapshots 1,143,979 → 403,490.
+The codec's time per stream block, before → after:
+
+| | main (level 3, block by block) | P1 |
+|---|---:|---:|
+| median / p99 | 27 / 73 ms | 41 / 119 ms |
+| worst after the first | 86 ms | 289 ms (GameTime 92–98, the opening's births) |
+| the first block | 37 ms | 213 ms |
+| the worst snapshot | -- | 217 ms (a chained one; the key 213) |
+| all of it over the battle's 248 s | 8.7 s | 15.5 s |
+
+No block or snapshot reaches 500 ms, so a 30-iteration block -- 1,000 ms of game at normal speed,
+500 at double -- never takes longer than the game time it covers; one block of 7 iterations
+(233 ms of game) takes 289. Fed to a model of the ring [INFERRED: a block is packed once its last
+iteration is in and the writer is free, the ring holding every record captured and not yet through
+the writer; the writer's other work -- applying the records, comparing its copy, writing the file
+-- not counted], the writer is at most 289 ms behind and the ring holds at most 3.1 MiB at normal
+speed and 4.1 MiB at double (main: 2.6 and 2.9) of its 16 MiB (`REC_RING_BYTES`), around that
+block; the next block brings it back. The gaps: the times are Wine's 1 ms clock on the reference
+setup's processor, so a slower one scales them; the writer's other work is not in them; and these
+are transcodes, not a game recorded under P1.
+
+**A damaged snapshot** [INFERRED from the reader's walk]: a chained snapshot that fails its CRC or
+its frame refuses every seek that starts from it or from a later link of its chain, up to the
+next key -- up to ten minutes of game at a snapshot a minute, where a file of keys alone loses one
+minute --
+because a seek starts from the last snapshot before its target and does not fall back to an
+earlier one. The stream itself still reads from the segment's start.
+
+**Checked**: the C decoder and the Python reader give the same records on all 3,604 blocks of both
+transcoded hours and the 3,605 of the writer-path one (`codectest.py verify`); `tarec check` passes
+on the exact hour, and on the lossy hour reports the same 13 unexplained state-byte steps it reports
+on that input, a property of the scratch transform. Fuzzed with `fuzzdiff`, 20,000 cases each: the
+runs' chunks of the exact hour (`--section chunk`, the x86-64 ASan build) agree in all 20,000, 1,058
+accepted; every kind on the lossy hour (Wine, i686) in all 20,000, 2,369 accepted; every kind on the
+dense battle (Wine) in 19,998. The other two are chunks with one byte changed, which the vendored
+zstd 1.5.7 built for i686 refuses as corrupt (`ZSTD_error_corruption_detected`, before it consumes
+a byte) and the same zstd version built for x86-64 -- the ASan build of the same source, and
+Python's `zstandard` (upstream libzstd 1.5.7) -- unpacks to the chunk's raw size (MEASURED 2026-10-12: one unpack loop over the two files, built both ways
+and run under Wine). Both answers are safe: a refused chunk ends its run, and an accepted one is
+bounded like any other. Outside the fuzz a chunk reaches neither decoder until its block's CRC-32
+has passed, so a one-byte change like these is refused before either decoder sees it. A writer's own
+chunks are not affected: its check unpacks each one with the
+DLL's decoder before writing it.
+
+## P6: the kinds and the ticks, measured
+
+**What format 18 changes** (tagpu_recfmt.h, *THE SECTIONED CONTAINER* and *RCS_KINDS*;
+tagpu_reccodec.c, *THE KINDS*). Three codings of the lossless stack's plan, on the sections the
+frames leave:
+
+- **#5, the ticks.** `RCS_OTHER` carries the block's first `RK_TICK` alone: iteration i's GameTime
+  is the first's + i, and a block whose GameTimes are not consecutive is written as records (none
+  in either hour).
+- **#12, the kinds as patterns.** Each iteration's kinds are a *pattern* -- its runs, a varint kind
+  and a varint count each -- written as a reference into the run's last 16 patterns (a byte; the
+  entry moves to the front) or as a new one (0, its length, its bytes; the 17th dropped). The list
+  empties at every reset. The first run of three *groups* has no count, its frame giving the
+  group's total: `RK_TICK` (1), `RK_UNIT_DELTA` (the unit frame's changed units) and `RK_PROJ` with
+  `RK_PROJ_DELTA` (the pool frame's changed records); the group's other runs carry theirs, and a
+  reader refuses a group whose other runs reach its total. The decoder fills the pool frame's
+  group before pass A and the unit frame's after it, and pass A walks no run of an open count.
+- **#10, two markers.** In a pattern, 0 stands for an empty feature tick -- an `FR_TICK` root of 8
+  bytes directly followed by its end -- whose two bodies are the run's last explicit one's, and
+  0xFFFF for an `RK_FEATURES` that is the state frame's prediction (the heads as last time, the
+  cursor stepped as the tick steps it: *The feature tick's cursor* in the engine map); neither
+  appears before its explicit kind's first since the reset. No frame codes a marker's records.
+
+**The groups are not the plan's rule.** The plan left the four kinds' counts out and declined an
+iteration where one formed two runs. On format 17's heavy hour `RK_UNIT_DELTA` forms two runs in
+1,450 of 108,090 iterations -- the writer emits the unit records in slot order, so a birth's
+`RK_UNIT` (710 iterations) or a death's `RK_UNIT_GONE` (740) between two delta slots splits them --
+which would have written 1,122 of the 3,605 blocks as records; `RK_PROJ_DELTA` forms two runs in 81
+iterations, `RK_PROJ` in 1; and where both projectile kinds appear (124 iterations) the pool
+frame's changed records do not say how many are which. The groups decline nothing. The count-less
+run is a group's first, not its last, because a reader must know from what it has read whether a
+count follows (MEASURED 2026-10-12, a prototype over format 17's stream; the prototype's packing of
+format 17's sections, one level-19 frame a run, gives the file's stream to the byte).
+
+**Measured** (2026-10-12, `codectest lossy` -- the writer's path: the lossy filter with the build's
+hold table, a refresh every 300 ticks, every block check-decoded -- under Wine, 32-bit, on the
+reference setup, over the records-only copies of the two L4 hours). The format-17 baseline here,
+16,160,878 bytes, is format 17 on this path; P1's 15,649,187 above is `codectest transcode
+--snap-every 1` over a lossy input refreshed every 1,800 ticks, another path:
+
+| | heavy hour | light hour |
+|---|---:|---:|
+| the file, format 17 / 18 | 16,160,878 / **15,808,980 (−351,898, −2.2 %)** | 9,390,288 / **9,103,447 (−286,841, −3.1 %)** |
+| the stream | 15,334,732 / 14,982,834 | 8,972,695 / 8,685,854 |
+| the snapshots, header, minimap and end block | unchanged | unchanged |
+| blocks sectioned / declined / mismatched | 3,605 / 0 / 0 | 3,608 / 0 / 0 |
+
+The heavy hour's sections, raw and each packed alone (`recsize.py`), format 17 → 18: the kinds
+1,856 → 798 KB raw (570 → 471 KB packed alone), `RCS_OTHER` 2,523 → 2,013 (792 → 564), the events
+frame 3,043 → 2,519 (1,864 → 1,801), the state frame 3,520 → 3,416 (1,231 → 1,212); the others
+unchanged. In the run's packing, each step alone on format 17's sections (the prototype): #5
+−231,074 bytes, #12 −83,714, #10 on top of #12 −36,753 -- the plan's −224,121, −74,080 and −52,817
+measured before the spray sessions and P1's container, whose patterns now absorb most of what the
+markers save in the kinds. The counters on the heavy hour (format 18's file): 39,843 patterns new,
+68,247 by reference; a group run with an explicit count: `RK_UNIT_DELTA` 1,616, `RK_PROJ` 116,
+`RK_PROJ_DELTA` 91; markers: 107,352 empty feature ticks of 108,090 iterations (61 explicit),
+107,405 predicted `RK_FEATURES` (685 explicit). The writer's whole pass over the heavy hour took
+54.0 s against format 17's 55.6 (one run each, the machine shared).
+
+**Checked**: the C decoder and the Python reader give the same records on all 3,605 blocks of the
+heavy hour (`codectest.py verify`); `tarec check` passes on both hours, and `tarec lossy-check` over
+the whole of each hour written with its exact stream (`--exact`). Fuzzed with `fuzzdiff`, 20,000
+cases each over the first 161 blocks of the heavy hour: every section, the kinds alone and
+`RCS_OTHER` alone (Wine, i686), C and Python agreeing in every case; and every section and the kinds
+alone in the x86-64 build with the sanitizers, none firing.
+
+## P4: the unit frame's type rules, measured
+
+**What format 19 changes.** The unit frame gains six rules, each the engine's (the engine map's
+[*The demo recorder's unit frame*](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08)
+gives the addresses and how each was read):
+
+- the **hit points while built** (`+0x108`): the build step `0x41BA60` adds `trunc(fo·M) −
+  trunc(fn·M)` when the fraction left `+0x104` moves from fo to fn, capped at M (def `+0x1FA`)
+  building and floored at 0 unbuilding, the product taken exactly in integers from the single's
+  bits (`ex_fm`);
+- the **HP percentage** `+0xF6` and its 30-tick copy `+0xF7`, which the unit tick writes only when
+  GameTime is a multiple of 30; a unit rests only where the two equal its HP's percentage, the
+  rule's fixed point;
+- the **sort bucket** `+0x82`, which the restamp `0x47CC30` forms from the position when the
+  footprint's cell or the layer moves and the footprint is inside the grid (its last column and
+  row included, under Impure's `fix_last_cell`), and sets to the off-map bucket when it is not;
+- a **ground unit's speed**: the ground step `0x43CC20` adds the acceleration or subtracts the
+  brake rate, floors at 0 and caps at the slope table's share of maxvelocity, the two steps two
+  candidates;
+- the **turn rate's blip**: a rate one away from the iteration before's returns to it (the size
+  research's gap-units round MEASURED it; no engine writer traced);
+- a **ground unit's sight row**, the sight emit's rule the aircraft already had, from the type's
+  sight height: the emit `0x4827B0` raises every unit's altitude to the sea's, so a ground unit
+  takes the same row.
+
+Their constants come from the engine at the recording's start: `RT_PHYSICS` grows by the sort
+buckets' columns `main+0x142A3`, and a new header entry, `RT_TYPES`, carries the slope table at
+`0x505200` and one 20-byte row per unit type (sight height, maximum HP, maxvelocity, brake rate,
+acceleration), as many as the header has room for. The lane table names five more roles, appended
+(`HP`, `BUILD_LEFT`, `HPPCT`, `HPPCT30`, `BUCKET`), and `+0x104` and `+0x108` are named
+`build_left` and `hp`. A type with no `RT_TYPES` row, or a recording whose bucket columns are 0,
+keeps generic lanes for those rules.
+
+**Measured** (2026-10-12, `codectest lossy` -- the writer's path -- under Wine, 32-bit, on the
+reference setup; the records-only copies of the two L4 hours, their `RT_CODEC` given this build's
+roles; the types and the slope table from a `secondary-orders` recording of this build on the
+reference install, whose `RT_UNITDEFS` hash both hours share, given with `--types-from`; the bucket
+columns by LoadMap's own formula from the hours' grids, 77 for Moon Quartet's 610 cells and 81 for
+Core Prime's 642, with `--bucket-cols`). The baseline is format 18, *P6* above, on the same path:
+
+| | heavy hour | light hour |
+|---|---:|---:|
+| the file, format 18 / 19 | 15,808,980 / **14,062,834 (−1,746,146, −11.0 %)** | 9,103,447 / **8,341,131 (−762,316, −8.4 %)** |
+| the stream | 14,982,834 / 13,231,084 | 8,685,854 / 7,917,934 |
+| the header | 5,712 / 11,316 | 5,536 / 11,140 |
+| the snapshots, the minimap, the end block | unchanged | unchanged |
+| the unit frame's section, raw / packed alone | 19.9 / 10.6 MB → 15.6 / 8.9 MB | |
+
+Against format 17 (16,160,878 and 9,390,288) the two landings together take the heavy hour down
+by 2,098,044 bytes (−13.0 %) and the light one by 1,049,157 (−11.2 %). Every block sectioned, none
+declined or mismatched, 3,605 and 3,608 of them; the other sections are byte-identical to format
+18's. `RT_TYPES` costs 5,604 bytes a recording (279 types). Each rule's share, from
+the heavy hour on format 17's container with that rule alone turned off (measured before the
+bucket rule took this build's edge tests and the off-map bucket): the hit points 841 KB, the bucket 207 KB, the
+ground speed 187 KB, the ground sight row 183 KB, the percentages 163 KB, the turn blip 76 KB. The
+ground speed reads the slope from the last image's `+0x68`, since the movement pass steps before
+it places: from this iteration's the hour is 1,752 bytes larger. The percentage reads this
+iteration's HP: from the last image's it is 9,839 bytes larger.
+
+**Checked** (format 19): the C decoder and the Python reader give the same records on every block
+of both transcoded hours (`codectest.py verify`, skipping resting units and evaluating every
+candidate); `tarec check` passes on both, and `tarec lossy-check` over the whole hour on both
+written with their exact streams (`--exact`). `codectest outcomes`, natively under ASan and under
+Wine, checks each rule's positive and negative cases, `ex_fm` at 0, 1.0, a denormal and past 1.0,
+and every refusal of the new header entries. Fuzzed on the heavy hour, 20,000 cases each:
+the unit section alone, its header constants included (the x86-64 ASan build), C and Python agree
+in all 20,000, 2,020 accepted; every kind on the ASan build in all 20,000, 2,770 accepted; every
+kind under Wine in 19,999 of the same seed's 20,000, the other a chunk with one byte changed that
+the i686 build of the vendored zstd refuses and the x86-64 build accepts (*P1*'s *Checked*; the
+ASan run, same seed, accepts exactly that one more).
+
+**What it does not do.** The ground speed's halving under water (`0x43CCA0..0x43CCCE`) is not
+modelled; a type past the header's rows (more than 2,048 types, or a header without room) keeps
+generic lanes; an HP or a percentage written by anything but the build step and the unit tick (a
+hit, a repair, a self-repair) is a residual. The size research's fitted tables, which this
+landing's `RT_TYPES` replaces, are not kept, so its rows were not compared against them.
+
+## P5: the unit listing, measured
+
+**What format 21 changes** (format 24 codes the listing otherwise: *RC*, below). The
+unit section said which units each iteration lists by a count and slot gaps, and each one's lane
+mask by an id into a dictionary of the block's masks. Format 21 says both against state the writer
+and every reader keep:
+
+- a unit the iteration before listed, and that is a candidate now (live, not named by an
+  `RK_UNIT` or `RK_UNIT_GONE`, not resting), is *carried* and takes a 2-bit symbol: 0 not listed,
+  1 listed with its own last mask, 2 listed with another;
+- the other listed candidates are ranks among the candidates not carried, and the *woken* units
+  -- resting ones with a delta, which a frame always lists -- are slots;
+- every listed unit but a symbol 1 takes an id: 0 its slot's last mask (not for a carried unit,
+  and only when that mask is not empty), k the k-th of the run's masks most recent first, the list's length + 1 the block's next new
+  mask; every listed mask goes to the front of the list, at most 4,096 masks, the
+  least recent dropped, so the list never holds a mask twice;
+- the ids are a byte each when all are below 256, else varints.
+
+The previous listed set, the last masks and the list restart empty at every reset point, like the
+rest of the frame's state. Slot 0 is never a candidate nor woken, so an iteration carries and lists
+at most slots − 1 units: a block's symbol bytes and its ids are bounded by its iterations, not by
+the section's bytes alone, and the decoder refuses more of either before it reads one id.
+
+**Where it departs from the plan** (the spec's J2). The plan kept the columns "as today": each
+lane's residuals for the whole block, lane after lane, which a reader places before the first
+iteration from the block's masks. Under the listing a reader cannot know the masks then: a carried
+unit's symbol, a rank and an id 0 name slots that only the decode's state -- which units are live,
+named and resting at that iteration -- turns into units, so the masks are known iteration by
+iteration. Format 21 writes each lane's count before the columns instead, which the reader uses to
+place every column, and refuses a block whose listed masks do not consume every counted residual
+exactly. How to code the counts was measured on the heavy hour's own listing (the column bytes and
+the counts alone, packed as one zstd-19 stream flushed per block; an estimate of the run's
+packing, MEASURED 2026-10-12):
+
+| the counts | raw | packed |
+|---|---:|---:|
+| none (the plan's columns, which a reader cannot place) | 6,697,759 | 3,848,585 |
+| the columns per iteration instead, no counts | 6,697,759 | 4,066,337 |
+| a varint per lane | 7,111,538 | 3,992,230 |
+| **a bitmap of the lanes with a count, then those counts** | 6,844,771 | **3,951,368** |
+| a signed change from the block before's counts, per lane | 7,108,062 | 3,997,157 |
+| a bitmap of the lanes whose count changed, then those changes | 6,845,654 | 3,954,858 |
+
+The bitmap and the counts cost about 103 KB an hour against columns no reader could place.
+
+**Measured** (2026-10-12, `codectest lossy` -- the writer's path -- under Wine, 32-bit, on the
+reference setup; the inputs and header overrides of *P4*). The baseline is format 19 on the same
+path:
+
+| | heavy hour | light hour |
+|---|---:|---:|
+| the file, format 19 / 21 | 14,062,834 / **13,118,818 (−944,016, −6.7 %)** | 8,341,131 / **7,733,902 (−607,229, −7.3 %)** |
+| the stream | 13,231,084 / 12,287,068 | 7,917,934 / 7,310,705 |
+| the header, snapshots, minimap and end block | unchanged | unchanged |
+| the unit frame's section, raw / packed alone | 15.6 MB / 8,917 KB → 10.6 MB / 7,579 KB | |
+
+Every block sectioned, none declined or mismatched, 3,605 and 3,608 of them; the other sections
+keep their sizes (`recsize.py`, to the KB, raw and packed alone). Against format 17 (16,160,878 and 9,390,288) the three landings take
+the heavy hour down by 3,042,060 bytes (−18.8 %) and the light one by 1,656,386 (−17.6 %). The plan
+expected −1.09 MB on its own chain of steps; the counts' 103 KB is most of the difference. The
+writer's pass over the heavy hour took 56.9 s with three other transcodes running beside it; it
+was not timed alone.
+
+**Checked** (format 21): the C decoder and the Python reader give the same records on every block
+of both hours (`codectest.py verify`, skipping resting units and evaluating every candidate);
+`tarec check` passes on both, and `tarec lossy-check` over the whole hour on both written with their
+exact streams (`--exact`). `codectest outcomes`, natively under ASan and under Wine, writes a block
+with a carried unit listed with its last mask, one with another, one not listed and a woken unit
+and reads it back, its ids a byte each; a run of 4,200 masks, more than the list holds, whose ids
+are varints, after which the first 60 come back as new masks; and refuses one change each: a
+symbol byte too many, a symbol 3, a rank past the candidates not carried, a woken slot that does not
+rest, more ranks than slots, more symbol bytes or more ids than the iterations' slots carry and
+list, more new masks than ids, an id past the list, an id 0 for a carried
+unit's other mask, the ids' mode 2, a new mask the list already holds, a new mask no id takes, a
+lane's count of 0, a residual no listed mask takes and a listed mask's residual missing. Fuzzed on
+the heavy hour, 20,000 cases each: the unit section alone (the x86-64 ASan build), C and Python
+agree in all 20,000, 2,188 accepted; every kind on the ASan build in all 20,000, 2,822 accepted;
+every kind under Wine in 19,999 of the same seed's 20,000, the other a chunk with one byte changed
+that the i686 build of the vendored zstd refuses and the x86-64 build accepts (*P1*'s *Checked*;
+the ASan run, same seed, accepts exactly that one more).
+
+**What it does not do.** A slot's last mask survives a birth in its slot, which costs size only.
+The ids are a byte each only while every id of the block is below 256.
+
+## P7: the sprays, the order nodes and the projectile lanes, measured
+
+**What format 22 changes.** Three codings of the lossless stack's plan (#6, #8 and #9), each
+against state the writer and every reader keep, restarted at every reset point:
+
+- **#6, an explicit nano spray against the unit's last four** (tagpu_recframe_events.c, scheme
+  2). A spray no session implies is a selector byte: 255 and its 44 bytes raw, or `4i + c` for
+  entry i of its slot's last four explicit sprays whose bytes but the point are the same, and
+  candidate c of the point -- 0 as it was, 1 moved with the unit's `+0x6A/+0x6E/+0x72`, 2 and 3
+  turned about the unit by the change of its heading `+0x66`, one sign each -- with bit 7 set when
+  the point's three residuals follow. The turn is in integers (`sin_cos_q31` in Q31, products in
+  64 bits, rounded by a floor shift) and is no candidate when the point's x or z offset from its
+  unit is 2^28 or more, which bounds every product below 2^59. An ID that names no slot is raw and
+  enters no history.
+- **#8, order nodes matched to the kept list** (tagpu_recframe_orders.c, scheme 2, only in a
+  segment whose header has `RT_HOLD`). Each node of a list re-sent whole takes an index: 0 and its
+  image raw, or 1 + j for the kept list's node j of the same action byte `+0x04` and issue time
+  `+0x46` (the order constructor `0x43A0C0` writes both: the engine map's *record frames*), then
+  the mask and dwords against that node as scheme 1 codes them. A multiplayer segment keeps
+  scheme 1: the match costs size on an exact stream (the plan's prototype: +295,783 bytes on the
+  exact hour).
+- **#9, the surviving projectiles' lanes** (tagpu_reccodec.c, THE SURVIVOR LANES). A survivor's
+  bytes `0x34..0x6A` are 21 lanes at the record's field widths -- its fields from `+0x3A` on sit
+  at 2 mod 4, so a dword there straddles two -- each zigzagged at its width against the
+  candidate that was nearest last time: the old slot (the `+0x67` stamp alone), the last value,
+  or the line through the last two. Dwords 0..12 keep their coding, after the lanes.
+
+**Where it departs from the plan** (the spec's §9), each the cheapest decodable fix:
+
+1. *The kept lists drop at a death "as today's state does".* Format 21's orders frame did not drop
+   them at `RK_UNIT_GONE`. Scheme 2 drops both of the slot's lists there, through a new frame
+   operation (`gone`, called by the walk where the unit copy takes the death on both sides);
+   scheme 1 is unchanged.
+2. *A survivor is "its stamp unchanged and at least its index, its first dword the same".* That is
+   the prototype's guess at which records survive, and the prototype coded every record of
+   `[0, count)` this way, births included, which a decoder cannot follow: a birth has no last
+   image. The pool frame already knows its survivors from the dead list, so the lanes apply to
+   exactly those, and births and the tail keep their dword coding. Byte `0x6B`, past the
+   record's 0x6B bytes and in no lane, is the survivor's last image's: the capture writes it
+   zero, and a block whose survivor changed it is written as records.
+3. *The lanes replace dwords 13..26 in the step's order.* The guided rule reads the heading, pitch
+   and speed (lanes `0x36`, `0x38`, `0x3A`), so the lanes come first and the dwords follow as 7,
+   8, 9, 0..6, 10..12.
+4. *A node matches "the first unused" kept node.* The encoder tries the 32 kept nodes after the
+   last match (`ORDERS_SCAN`), which bounds its work; the decoder reads the index, so this is a
+   policy, and the bound is an index below the kept list's length used once in its record.
+5. *The spray sessions in the events frame* were estimated at about 0.25 MB a heavy hour. A C
+   prototype -- `RK_SPRAY_SESSION` coded as events-frame columns instead of `RCS_OTHER` records --
+   measured −20,183 bytes on the heavy hour and −11,228 on the light one (0.16 %, MEASURED
+   2026-10-13 on format 21 with #6, #8 and #9), about a twelfth of the estimate: the sessions
+   cost about 44 KB packed in the run, not more. It needs the session kind moved between
+   sections and the events frame past `RECF_COLS_MAX`, so it is not in format 22.
+
+**Measured** (2026-10-13, `codectest lossy` -- the writer's path -- under Wine, 32-bit, on the
+reference setup; the inputs and header overrides of *P4*). The baseline is format 21 (main's
+codectest) on the same path:
+
+| | heavy hour | light hour |
+|---|---:|---:|
+| the file, format 21 / 22 | 13,118,818 / **12,712,480 (−406,338, −3.1 %)** | 7,733,902 / **7,572,362 (−161,540, −2.1 %)** |
+| the stream and snapshots | 13,095,033 / 12,688,695 | 7,712,444 / 7,550,904 |
+| the events frame, raw / packed alone (MiB) | 2.460 / 1.759 → 1.816 / 1.240 | 0.722 / 0.555 → 0.533 / 0.402 |
+| the orders frame | 5.089 / 1.460 → 6.833 / 1.374 | 2.437 / 0.867 → 3.074 / 0.818 |
+| the pool frame | 14.663 / 1.571 → 17.360 / 1.402 | 2.358 / 0.339 → 2.680 / 0.302 |
+
+Every block sectioned, none declined or mismatched, 3,605 and 3,608 of them; the other sections
+keep their sizes (`codectest.py sizes`, raw and packed alone at zstd 3). The orders and the pool
+grow raw -- an index a node; 21 lane residuals a survivor where 14 dwords were, each at least a
+byte -- and shrink packed. The steps were measured one after another before P5 landed, against
+format 20's file on the same path (14,062,834 / 8,341,131, main before P5): #9 −98,648 / −21,512,
+then #6 −202,787 / −72,047, then #8 −102,135 / −72,194, heavy / light, together −403,570 /
+−165,753. They do not add to the table's −406,338 / −161,540, which is against format 21: P5's
+listing changes the unit section, and each run of blocks is packed as one level-19 frame, so a
+section's bytes in the file depend on its neighbours. The plan's prototype measured −99,451,
+−198,620 and −119,291 on the heavy hour, and expected at least half of −417,000 together.
+
+**Checked** (format 22): the C decoder and the Python reader give the same records on every block
+of both hours (`codectest.py verify`, skipping resting units and evaluating every candidate);
+`tarec lossy-check` passes over the whole of both hours written with their exact streams
+(`--exact`); `tarec check` reads both to their end with no correction and every snapshot equal, and
+finds the same 1,124 and 310 unexplained changes as on format 21's files: these inputs predate
+`RK_EV_YARD`, so a yard's change has no event.
+`codectest outcomes`, natively under ASan and under Wine, writes a block with a spray in each
+selector form -- raw with no history, as it was, moved, turned each way, with a residual, a body
+raw beside another, an older entry, raw for a unit past the slots, and a point 2^29 from its unit
+whose turns the bound leaves out -- and refuses a selector with no spray kept, one for a unit past
+the slots, bits 4..6 set, an entry past the kept ones, and a turn of a point past the bound; a
+list re-sent short, longer and after its unit's death, its nodes matched, raw and matched again,
+and refuses a node matched past the kept list, twice, or after the death dropped it; the orders
+frame's own outcomes again under `RT_HOLD`; scheme 1 written without `RT_HOLD`, each decoder
+refusing the other's scheme and a restart under the other `RT_HOLD` leaving the codec invalid; the
+survivors' lanes won by the line, the stamp and the last value, a lane's residual past its width
+refused, and a survivor's byte `0x6B` that changed declining its block. Fuzzed on
+the heavy hour, 20,000 cases each, C and Python agreeing in every case: the events frame alone
+(1,939 accepted), the orders frame alone (2,094) and the pool frame alone (2,406) on the x86-64
+build with the sanitizers, none firing; every section on that build and under Wine, 2,754 accepted
+by each, all 20,000 alike (the i686 zstd's refusal of a chunk the x86-64 build accepts, *P5*'s one
+case in 20,000, did not come up with this seed).
+
+**What it does not do.** A slot's spray history outlives its unit, so a new unit in the slot
+predicts from the old one's sprays until it has its own: size only.
+The match does not follow a node that moved more than 32 places after the last match.
+
+## RC: the unit coder, measured
+
+**What format 24 changes** (tagpu_recfmt.h, *RCS_UNITS*; tagpu_reccodec.c, *THE UNIT CODER*). The
+unit frame's listing, lane masks and residuals were byte columns -- symbols, ranks, mask ids,
+varints -- that the run's zstd packed. Format 24 codes them as one binary range coder's bytes a
+block (LZMA's: 12-bit probabilities each moved 1/16 of the way to the bit coded), every decision
+under a context the writer and every reader keep, all restarting at every reset point:
+
+- **The listing**: one decision for every slot an iteration visits -- live, not slot 0, named by
+  no `RK_UNIT` or `RK_UNIT_GONE` -- in slot order. A resting slot: whether it is woken, under how
+  long since its last listing in the run (none, or 1 + the bit length of the gap, at most 15). A
+  slot the iteration before listed: whether it is listed again, under its last mask and its streak
+  of listings (1..3). Any other: whether it is listed, under the gap and its last mask.
+- **The mask**, under the slot's last mask: that mask's 8 next masks, most recent first, a
+  decision each; past them an escape, a 13-bit id among the run's kept masks -- its new masks in
+  first-use order, up to 4,096 (`RECC_MASKS`) and 8 to a hash chain (`UC_CHAIN`) -- or a new
+  mask lane by lane, each bit under the lane, the bit before and whether any came yet.
+- **The residuals**, each lane of the mask in order: a hit among the 8 recent values of a cache
+  keyed by the unit's type (`+0xA6`) and the lane (8,192 caches, hashed), its index a 3-bit tree;
+  else a literal, its bit length under the lane and the slot's last length in it, the 4 bits below
+  its top modelled, the rest raw.
+
+The decoder decodes a listed slot's mask and residuals before it evaluates the slot, so the
+frame's rules read them from the slot rather than from columns. A section is consumed exactly by
+construction: the encoder writes N + 4 bytes for its N renormalisations, and the decoder reads 4
+at its start and one at each of the same N, so a reader refuses a section the decode reads past
+and one it leaves bytes of.
+
+**What decided each model** (MEASURED 2026-10-13 offline, on the two fresh format-23 hours: a
+prototype of the coder replacing RCS_UNITS, every block decoded back and consumed exactly, and the
+blocks repacked as the writer packs them -- one zstd-19 frame a run, windowLog 20, flushed per
+block -- which reproduces the format-23 files' stream blocks byte for byte; the heavy hour
+14,326,468 → 11,922,688 bytes, −16.8 %, the light one 6,220,813 → 4,883,781, −21.5 %; each
+change below is the heavy hour's real file against the step before):
+
+- A first cut -- listed decisions, a list per last mask, residuals as a length and their bits
+  raw -- gave −5.4 %. zstd had been taking repeated residual values, which the raw bits lost:
+  18–22 % of TURN, VX and VZ residuals equal the lane's last value and another 47–52 % are among
+  its 8 before. A recent-value cache per lane took the file to 11.60 MB.
+- Caches keyed by the unit's type and the lane hit 77.5 % against 74.3 %, at smaller indices:
+  −446 K. With them a "the slot's last value again" decision costs bytes (−54 K without it).
+- A listed decision per visited slot beats the gaps of the format before by 604 K on the heavy
+  hour and 294 K on the light one.
+- One adaptive rate, moving 1/16, beats 1/32 by 86 K; mixing two rates is worse in every pair
+  tried (4+7, 4+6, 5+7, 3+6).
+- The mask's context is the last mask alone: a per-type list behind it saves only 21 K, and a
+  type context on the listed decision costs 77 K. 8 next masks a context.
+- A literal's length under the slot's last length in the lane saves 42 K; the hit decision under
+  whether the slot's last value there was a hit, 66 K. Both live in one byte a slot and lane.
+- 8 values a cache beat 16 by 12 K and 4 by 92 K; 8,192 caches beat 2,048 by 14 K. 4 modelled
+  bits below a literal's top beat 3 by 7 K; 5 would save 6 K for twice the table.
+
+The prototype's coded unit frame by part (bytes):
+
+| part | heavy | light |
+|---|---:|---:|
+| listed: resting (woken?) / carried / other | 59,389 / 303,193 / 415,915 | 30,068 / 139,626 / 184,290 |
+| masks: the context's list / escape id / new masks' bits | 734,715 / 338,859 / 65,752 | 421,606 / 225,778 / 44,918 |
+| residuals: cache hit decision / cache index | 339,512 / 908,521 | 148,562 / 427,669 |
+| residuals: length / modelled bits / raw bits | 532,372 / 553,148 / 789,058 | 229,782 / 227,687 / 307,759 |
+| **the unit frame**, with 4 flush bytes and the iterations a block | **5,062,192** | **2,406,597** |
+
+**Measured** (2026-10-13, `codectest lossy` -- the writer's path -- under Wine, 32-bit, on the
+reference setup; the inputs and header overrides of *P4*). The baseline is format 23 (main's
+codectest) on the same path:
+
+| | heavy hour | light hour |
+|---|---:|---:|
+| the file, format 23 / 24 | 12,712,480 / **10,542,083 (−2,170,397, −17.1 %)** | 7,572,362 / **5,959,925 (−1,612,437, −21.3 %)** |
+| the stream and snapshots | 12,688,695 / 10,518,298 | 7,550,904 / 5,938,467 |
+| the unit frame, raw / packed alone | 10.6 MB / 7,579 KB → 4,615 KB / 4,650 KB | 7,993 KB / 5,379 KB → 3,244 KB / 3,279 KB |
+
+Every block sectioned, none declined or mismatched, 3,605 and 3,608 of them; the other sections
+keep their sizes (`recsize.py`). The coder's bytes do not pack: zstd keeps them as they are. On
+the heavy hour's 32,741,856 unit-ticks the file is 0.322 bytes a unit-tick, against 0.388 at
+format 23; its 10.54 MB sits inside the 7.3–12.4 MB estimated for TADR's recorder on the same
+hour (*L5*). The writer's pass (`codectest transcode`, which times `reccodec_stream_block`, the
+writer's whole block: the encode, the check decode and the packing) took 39.4 s over the heavy
+hour, at most 21 ms a block after the first, against 40.6 s and 22 ms at format 23, each run
+alone; the C decoder takes at most 15 ms a block of that hour (`codectest.py verify`).
+
+**A game recorded with this build** (MEASURED 2026-10-13 under Wine on the reference setup: a
+heavy hour on Moon Quartet -- five players, each AI's base placed beside its commander, 108,000
+ticks -- recorded twice the same day from one script, once with main's format-23 DLL and once with
+this one). Format 24 writes 12,715,914 bytes over
+39,229,416 unit-ticks, 0.324 bytes a unit-tick, against 14,326,468 over 37,251,931, 0.385, at
+format 23: −15.7 % a unit-tick, the two being separate plays of the scenario. The writer
+sectioned all 3,602 blocks, declining and mismatching none; `tarec check` reads the file to its
+end with every change explained and every snapshot equal, and the C and Python readers agree on
+every block (`codectest.py verify`). A two-peer multiplayer game recorded with it
+(`recmp_create_begin_test.py`) sections all 52 of its blocks and plays to its end on a puppet
+host (`recmp_play_test.py --to-end`).
+
+**Memory.** The unit coder's state is allocated by `reccodec_new`, none of it per block: its
+probabilities (520 KB), the run's kept masks with their hash chains (88 KB), each context's next
+masks (68 KB) and the residual caches (264 KB), and per slot a byte a lane and 7 bytes more, in
+place of the listing's 106 KB and 16-byte last mask. MEASURED in the 32-bit build by counting
+`reccodec_new`'s allocations: 9,407,112 bytes a codec at 5,001 slots and 3,000 projectile records
+against 7,956,440 at format 23 (+1.45 MB), and 18,887,112 against 16,246,440 at 15,001 slots. The
+writer holds two codecs.
+
+**The work a block can ask.** A near-certain decision costs almost no input, so a section's bytes
+do not bound its decode, and every slot that does not rest is evaluated whatever the section
+holds. Both sides count a block's work -- each decision 1, each raw bit 1, each slot the frame
+evaluates 128 (`UC_EVAL`) -- and a reader refuses a block whose work passes `RECC_WORK`, 2^28,
+checked after each visited slot; the encoder counts the same work and declines such a block to
+records before a reader sees it. No hash chain of kept masks holds more than 8 (`UC_CHAIN`): the
+hash has no key, so a file can aim every mask at one chain, and the cap keeps a search to 8
+compares. `UC_EVAL` is an evaluation's cost in decisions: about 790 ns under Wine, against 3–7 ns
+a decision. Counted as one decision, the same evaluations would let a block of 65,534 units that
+never rest run 256 iterations, 13.2 s of decode (MEASURED).
+
+`codectest.py worst MODE` writes a block of as much work as `RECC_WORK` allows in one of four
+shapes, as many iterations as `RECC_TICKS_MAX` and `RECC_PAYLOAD_MAX` allow and the encoder writes
+within the budget, and decodes it from a copy of the state before it (MEASURED 2026-10-13 under
+Wine on the reference setup; the logs are in the archive's `rc/logs/fix`):
+
+| shape | units | iterations | work (of 2^28) | decode | a unit of work |
+|---|---:|---:|---:|---:|---:|
+| **visit**: units that never change but hold an energy request, so that none rests: a decision and an evaluation each | 65,534 | 31 | 262,070,466 (98 %) | 1.57–1.59 s | 6.0 ns |
+| **lit**: every dword of every unit changed by one step, every residual a literal although its cache holds it | 5,000 | 18 | 239,008,848 (89 %) | 0.67–0.69 s | 2.8–2.9 ns |
+| **full**: the same as cache hits | 5,000 | 38, all `RECC_PAYLOAD_MAX` holds | 108,881,582 (41 %) | 0.55–0.57 s | 5.1–5.3 ns |
+| **chain**: the same, each mask's hash chain filled first, so that no mask is kept and every listing escapes, spells its lanes and searches a full chain | 5,000 | 38 | 132,440,627 (49 %) | 0.63–0.66 s | 4.8–5.0 ns |
+
+So a block decodes in at most about 1.63 s, the slowest shape at `RECC_WORK` [INFERRED: scaled
+from 98 %]. Against real games: the two hours' heaviest block is 908,494 (heavy) and 464,184
+(light), 295 times under the budget; no mask went unkept for a full chain, and a run kept at most
+621. The heaviest block's work a visit, 130.0, makes a 15,001-slot game's 30-iteration block 58.5
+million, 4.6 times under it, and every one of its 15,000 units evaluated and listed in every
+iteration at the hours' heaviest listing, 41.7 decisions past its listed one, 76.8 million, 3.5
+times under it. A block past the budget is still written, as records.
+The slowest of 40,000 fuzzed blocks of the heavy hour (below) decodes in 17 ms under Wine, 48 ms
+on the x86-64 build with the sanitizers.
+
+**Checked** (format 24): the C decoder and the Python reader give the same records on every block
+of both hours (`codectest.py verify`, skipping resting units and evaluating every candidate);
+`tarec lossy-check` passes over the whole of both hours written with their exact streams
+(`--exact`); `tarec check` reads both to their end with no correction and every snapshot equal,
+and finds the same 1,124 and 310 unexplained changes as main's format-23 files: these inputs
+predate `RK_EV_YARD`. `codectest outcomes`, natively under ASan and under Wine, writes a block
+with a resting slot woken, a carried slot listed and one not, a mask from its context's list, an
+escape to a kept mask, a new mask, residuals from a cache and as literals, and reads it back,
+both sides counting the same work; reads it at a budget of its own work and refuses it at one
+less, and its encoder declines it at one less; a run of 4,200 masks, of which the run keeps
+4,096 and codes the rest whole, none for a full chain, after which the first 60 come back as kept
+masks; the same block with its first mask's hash chain filled first, which codes that mask whole
+every time and keeps every other; and refuses, each coded once by the self-test's build in place
+of the right value, an escape past the kept masks or into its context's list, an empty new mask,
+a new mask the run keeps, a cache index past the cache's values and a residual past its lane's
+width, and, as bytes, the coder's last byte cut, a byte after it, a coder of 3 bytes and
+iterations not the head's. Fuzzed on the heavy hour, 20,000 cases each, C and Python agreeing in
+every case: the unit section alone on the x86-64 build with the sanitizers (110 accepted) and
+under Wine (97), every section on both (2,331 accepted by each); the sanitizers fired on none.
+`codectest fuzz --faults` writes those six faults into three real blocks each, from the state
+the block starts from, and decodes three blocks at a budget of their own work and of one less:
+on the heavy hour under Wine and under the sanitizers and the light one under Wine, 24 cases
+each, C refusing the 18 faults and the 3 blocks under budget, and the Python reader agreeing in
+every case -- so both readers refuse alike and count the same work to the unit. The multiplayer
+file tests build the codec into the real writer and reader: `recmp_lifecycle_test.py` passes, and
+`recmp_file_test.py`'s complete file -- written, read by the C and Python readers, sought, and its
+perspective, network-create and contribution controls -- passes; its four incomplete-file modes
+fail at the same check with format 23's codec as with this one (the reader finds a second tick in
+the abandoned file).
+
+**What it does not do.** The escape's id has no context but its own tree; a literal is coded
+whole even when it is near a cached value; a block's coder ends with five shifts, 4 bytes, about
+14 KB an hour. Each was left out as small next to the gain above.
 
 ## Multiplayer recordings
 
@@ -724,9 +2066,16 @@ the units: stage 6's traffic budget.
 | L0 | every codec run offline on the naval and Town & Country recordings and one with aircraft and hills: DONE 2026-10-07, lossless everywhere (*L0* above) | aircraft as the open cost |
 | L1 | the sectioned container, decode-before-write with fallback, the unit frame with the aircraft and cell rules in integers: LANDED (*L1* above) | planned about −42 MiB on this battle; MEASURED 99.6 → 29.1 MiB on a new run of it, not like for like |
 | L2 | projectiles by identity (format 9's pool frame), the guided-velocity rule, the search capped at 4 candidates, shooter first: LANDED (*L2* above) | planned about −34 MiB against the pre-L1 file; MEASURED −12.7 MiB on L1's own battle file (29.09 → 16.40), because L1's zstd had already packed its projectiles from 36.5 to 15.0 MiB |
-| L3 | cells, orders, events, globals; the snapshot wreck base | about −7 MiB |
-| L4 | the measured hour of a four-player game with AI and structures | the snapshot interval; whether lossy is needed |
-| L5 | lossy, only if L4 misses a budget | about −1 MiB per category |
+| L3 | cells, orders, events and state as four record frames that restart empty at every reset point; the snapshot wreck base: LANDED (*L3* above) | planned about −7 MiB against the pre-L1 file; MEASURED −4.52 MiB on L2's own battle file (16.40 → 11.88), −3.47 on Town & Country's, −0.60 on naval's, −5.54 on the air war's |
+| L4 | two measured four-player hours, a light and a heavy one; format 11: snapshots every 1,800 ticks, the cells frame restarting from the reader's grid (R1): LANDED (*L4* above) | the snapshot interval, decided by the owner with the seek target relaxed for dense battles; MEASURED −1.63 MB an hour from R1 on the light hour at 1,800; both hours miss the 25 MB budget even with no snapshots |
+| L5a | the unit frame predicts the resource ledger, format 12: LANDED (*L5a* below) | MEASURED heavy hour 56.99 → 42.15 MB, lossless |
+| L5 | lossy, chosen by the owner 2026-10-11: internal values held between refreshes, shown values exact (*L5: the lossy plan, measured offline*). The core LANDED as format 13: the filter, the refresh every 300 ticks, the takeover at a refresh, the exact stream for the harness; the unit and order hold rows LANDED as format 14; the spray sessions LANDED as format 15; the cells held LANDED as format 16 (*The cells held*) | MEASURED offline heavy hour 42.15 → 19.32 MB with the plan's transforms; format 14's rows 42.15 → 30.53 MB on the writer's path; the spray sessions −2.72 MB over the rows; the cells alone −6.34 MB over the empty table |
+| P1 | the container, format 17: each run of sectioned blocks one zstd frame at level 19, the snapshots chained, a key every tenth: LANDED (*P1* above) | MEASURED lossy hour 20.73 → 15.65 MB, exact hour 42.15 → 29.90 MB |
+| P6 | the kinds as patterns with two markers and the frames' group counts, the GameTime once a block, format 18: LANDED (*P6* above) | MEASURED heavy hour 16.16 → 15.81 MB, light hour 9.39 → 9.10 MB |
+| P4 | the unit frame's type rules and `RT_TYPES`, format 19 (*P4* above) | MEASURED heavy hour 15.81 → 14.06 MB, light hour 9.10 → 8.34 MB, on P6 |
+| P5 | the unit listing against the frame's state, each lane's count before its column, format 21 (*P5* above) | MEASURED heavy hour 14.06 → 13.12 MB, light hour 8.34 → 7.73 MB |
+| P7 | explicit sprays against the unit's last four, order nodes matched in a skirmish stream, the survivors' lanes, format 22 (*P7* above) | MEASURED heavy hour 13.12 → 12.71 MB, light hour 7.73 → 7.57 MB |
+| RC | the unit frame's listing, masks and residuals range-coded under contexts both sides keep, format 24 (*RC* above) | MEASURED heavy hour 12.71 → 10.54 MB, light hour 7.57 → 5.96 MB, against format 23 |
 | L6 | multiplayer: K (with or after L1), its snapshot checkpoints, then the wire codec in stage 6 | multiplayer files and bandwidth |
 
 ## Decisions
@@ -751,3 +2100,12 @@ Taken by the owner on 2026-10-07:
 11. **The measured hour runs accelerated**, within the ten-minute rule for a game run, with one
     ten-minute stretch at normal speed as a cross-check for anything paced in real time (cameras,
     cursors).
+
+Taken by the owner on 2026-10-10, with L4's measurements in hand:
+
+12. **Snapshots every 1,800 ticks**, with the big battle's 1.7 s worst decode known: the one-second
+    seek target is relaxed for dense battles, about 2.5 s at worst there (2.4–2.6 s inferred) and well under a second
+    in ordinary games (the product page says so).
+13. **R1**, a frame restarting from the reader's world. L4 applies it to the cells frame; the
+    orders, events and state frames keep restarting empty, at 148 KB an hour on the light hour
+    (*L4*).

@@ -3,7 +3,8 @@
 
     recsize.py <file.imprec> [--json out.json] [--window 900]
 
-Reads a recording of format 9 with reccodec.py's block walk and reports:
+Reads a recording of the current format (reccodec.REC_FORMAT) with reccodec.py's block walk and
+reports:
 
   - the file by block kind, raw (as the block headers state it: a sectioned block's container)
     and on disk;
@@ -67,6 +68,10 @@ UNIT_FIELDS = {     # unit record offsets (the U_ names of tagpu_replay.c and re
     0x78: "footprint z", 0x7A: "sight xz", 0x7E: "footprint w", 0x80: "footprint h",
     0x82: "sort bucket", 0x86: "carrier", 0x8A: "cargo", 0x8E: "next", 0x92: "type",
     0x96: "owner", 0x9A: "cob", 0x9E: "model", 0xA6: "type index", 0xAC: "group",
+    0xBC: "energy produced", 0xC0: "energy requested", 0xC4: "energy granted", 0xC8: "energy debt",
+    0xCC: "energy last produced", 0xD0: "energy last requested", 0xD4: "metal produced",
+    0xD8: "metal requested", 0xDC: "metal granted", 0xE0: "metal debt",
+    0xE4: "metal last produced", 0xE8: "metal last requested",
     0xF0: "attacker", 0xF8: "sight h", 0xF9: "piece", 0xFF: "owner byte", 0x104: "build fraction",
     0x108: "hp", 0x10A: "water", 0x10E: "state byte", 0x10F: "yard", 0x110: "state bits",
 }
@@ -93,18 +98,19 @@ def field_names():
     return names
 
 
-SECTIONS = ("kinds", "unit frame", "projectiles", "cells", "orders", "events", "other")
-SEC_HEAD = struct.Struct("<IHH7I")      # RecSecHead: payload, iterations, sections, len[7]
+SECTIONS = ("kinds", "unit frame", "projectiles", "cells", "orders", "events", "other", "state")
+SEC_HEAD = struct.Struct("<IHH8I")      # RecSecHead: payload, iterations, sections, len[8]
 
 
 def zstd3(data):
-    """The writer's packing: one zstd frame at level 3 (tagpu_reccodec.c, reccodec_pack)."""
+    """One zstd frame at level 3, as the writer packs a block alone (tagpu_reccodec.c,
+    reccodec_pack)."""
     import zstandard
     return len(zstandard.ZstdCompressor(level=3).compress(data)) if data else 0
 
 
 def sections_of(flags, unpacked):
-    """A stream block's bytes by section: a sectioned container's head and its seven sections
+    """A stream block's bytes by section: a sectioned container's head and its eight sections
     as written, or a records block's records routed to the section their kind would take."""
     import reccodec
     if flags & T.RBF_SECTIONS:
@@ -127,7 +133,7 @@ def read(path):
     import reccodec
     sraw, salone = collections.Counter(), collections.Counter()
 
-    def count(ordinal, flags, unpacked, frame):
+    def count(ordinal, flags, unpacked, frame, run):
         for name, data in sections_of(flags, bytes(unpacked)).items():
             sraw[name] += len(data)
             salone[name] += zstd3(bytes(data))

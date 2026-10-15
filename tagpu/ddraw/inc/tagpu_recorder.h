@@ -25,6 +25,15 @@ void __cdecl tagpu_rec_capture(void);
    replay makes it at the same point of its own step (tagpu_replay_phase). */
 void __cdecl tagpu_rec_phase(unsigned phase);
 
+/* The unit tick's stub (tagpu_patches.c, THE SCRIPT SLICE), on the game thread, for each unit
+   whose script call is reached, with that unit and its COB object as 0x48ADDF reads them: on a
+   recording level, RK_EV_SLICE when the COB had an engine start since the capture point. 1 when
+   it wrote one. */
+int tagpu_rec_slice(const char* unit, const char* cob);
+/* A script slice was given (THE COUNTS): `where` 0 in the unit tick, 1 at the place the recording
+   gives it, 2 at the end of a playing's step. Game thread. */
+void tagpu_rec_slice_given(unsigned where);
+
 /* Arms the harness's dump `name` -- 1 to 39 letters, digits, '-' and '_' -- which tagpu_rec_capture
    takes at the capture point of GameTime `at`, or at its next call when `at` is 0, on any level in
    play, recorded or playing (the replay's frame visit arms it from the trigger's `dump <name>
@@ -55,6 +64,19 @@ void tagpu_rec_level_end(void);
    explosion and the footprint writers' undo at them. tagpu_rec_hooks_in: all of them are in. */
 void tagpu_rec_init(void);
 int tagpu_rec_hooks_in(void);
+/* DllMain's attach, before tagpu_simreg_attach closes the lever list, so a recording's header
+   names them: THE TEST LEVERS, honoured only in a test launch (tagpu_regstore_active) and refused
+   with a line otherwise.
+   - tagpu_rec.decline: every recording's codec declines stream blocks 2, 7, 12, ...
+     (RecStream.decline): the tareplay fixtures codec-decline and stock-codec-decline record under
+     it and check that the recording reads back across each declined block.
+   - tagpu_rec.exact: after each stream block the writer writes the exact records it was filtered
+     from (RB_EXACT), which `tarec compare --exact` and `tarec lossy-check` read.
+   - tagpu_rec.refresh, its text N: a skirmish recording's refresh every N ticks instead of
+     REC_REFRESH_TICKS, N a multiple of REC_REFRESH_MIN up to REC_REFRESH_TICKS, so a takeover
+     fixture's refresh lands on its GameTime; a multiplayer recording keeps REC_REFRESH_TICKS,
+     which its header, having no RT_HOLD, cannot name otherwise. */
+void tagpu_rec_lever_init(void);
 
 /* Actual delivered span in this thread's owned primary receive frame. Zero
    means the pointer is not that frame's current packet. No engine buffer is
@@ -186,6 +208,11 @@ typedef struct RecRing {
                                           ordinary recording, which creates its own file       */
     RecMpFile*     mp;                 /* copied contribution context, set before writer start;
                                           producer end precedes the final ring publication     */
+    int            decline;            /* the test lever tagpu_rec.decline (tagpu_rec_lever_init):
+                                          the writer's codec declines blocks (RecStream.decline) */
+    int            exact;              /* the test lever tagpu_rec.exact: RB_EXACT blocks       */
+    unsigned       refresh;            /* the refresh interval in ticks: REC_REFRESH_TICKS, or
+                                          the test lever tagpu_rec.refresh's                    */
 } RecRing;
 
 /* Starts the writer thread on a ring whose first record is RK_HEADER. From then on the writer
