@@ -48,12 +48,17 @@ style. The mockup in `tools/hudart/mockup/` draws the HUD from those files and n
 
 ## Viewing it
 
-The page reads its files over HTTP, so serve the repository root:
+The page reads its files over HTTP, so serve the repository root with `tools/hudart/serve.py`:
 
 ```
-python3 -m http.server 8000 -d "$(git rev-parse --show-toplevel)"
+python3 tools/hudart/serve.py            # --bind ADDR --port N; defaults 127.0.0.1 and 8000
 # then open http://127.0.0.1:8000/tools/hudart/mockup/
 ```
+
+It marks every response `Cache-Control: no-cache`. `python3 -m http.server` sends no caching
+headers, and a browser then keeps each file for a time of its own: a reload after the kit changes
+can draw new parts against the old `kit.json` or `hud.js`, with slices out of place and bands
+stretched that should repeat.
 
 The toolbar sets the screen, the game's HUD scale, the replay HUD's scale, the players and the
 teams. The same switches, and more, go in the URL, for captures:
