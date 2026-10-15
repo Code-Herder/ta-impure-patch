@@ -162,6 +162,7 @@ typedef struct {
     float       xs[HUD_MAXBAND][2], ys[HUD_MAXBAND][2];
     const TJV*  wells;
     float       slice[4];           /* HK_NINE: top, right, bottom, left, in PNG pixels   */
+    int         xtile;              /* HK_GRID, HK_NINE: the x bands repeat, not stretch  */
 } HUDPART;
 
 typedef struct {
@@ -227,7 +228,9 @@ float tagpu_hudlay_baseline(float y, float h, float size, float asc, float desc)
    a tiled fill, which repeats). Returns the count, at most `cap`: a grid part is one quad a
    cell, and its HUD_MAXBAND bands an axis cut that axis into at most 2 * HUD_MAXBAND + 1
    segments, so HUD_MAXQUAD is every cell of the largest grid and a caller that offers that many
-   loses none. */
+   loses none. An `xtile` part's band copies are one quad each, and they are fitted to what is
+   left of `cap` after every cell has its one: a band drawn longer than that holds fewer, longer
+   copies, never a missing cell. */
 #define HUD_MAXQUAD ((2 * HUD_MAXBAND + 1) * (2 * HUD_MAXBAND + 1))
 typedef struct { float x0, y0, x1, y1, u0, v0, u1, v1; } HUDQUAD;
 int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, int cap);

@@ -1175,11 +1175,23 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
    their edges; a 9-slice part as CSS border-image draws it, its slice's edges kept at their size
    in units unless the box is smaller than both together, when all four shrink by one factor;
    a tiled fill scaled to its height and repeated along x at a whole-pixel period; an icon kept
-   to its aspect and centred. */
+   to its aspect and centred. An `xtile` part's x bands are each one period of a seamless tile
+   (seamband.py): drawn as a whole number of copies at about their painted length, each copy an
+   equal share of the drawn band, as hud.js composes a grid part and as CSS border-image-repeat
+   `round` draws a 9-slice's middle. */
 float tagpu_hudlay_baseline(float y, float h, float size, float asc, float desc)
 {
     float A = floorf(asc * size + 0.5f), D = floorf(desc * size + 0.5f);
     return y + (h - size) / 2 + A + floorf((size - A - D) / 2);
+}
+
+/* How many copies of a band `period` px long fill `len` px: the nearest whole number, at least one,
+   and at most 1 + `extra`, the copies the caller's quads have room for. */
+static int copies(double len, double period, int extra)
+{
+    double n = period > 0 ? floor(len / period + 0.5) : 1;
+    if (n < 1) n = 1;
+    return n > 1 + extra ? 1 + extra : (int)n;
 }
 
 int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, int cap)
@@ -1192,20 +1204,26 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
     switch (k->kind) {
     case HK_GRID: {
         double bx[2 * HUD_MAXBAND + 2], by[2 * HUD_MAXBAND + 2];
-        int nx = 0, ny = 0;
+        int nx = 0, ny = 0, extra;
         F f;
         f.w = op->r.w; f.h = op->r.h; f.k = k;
         bx[nx++] = 0; for (i = 0; i < k->nxs; i++) { bx[nx++] = k->xs[i][0]; bx[nx++] = k->xs[i][1]; } bx[nx++] = k->design[0];
         by[ny++] = 0; for (i = 0; i < k->nys; i++) { by[ny++] = k->ys[i][0]; by[ny++] = k->ys[i][1]; } by[ny++] = k->design[1];
+        /* THE COPIES ARE BOUNDED BY `cap`: every row gets cap / rows quads, its nx - 1 cells take one
+           each, and each band may add an equal share of what is left. */
+        extra = k->nxs ? (cap / (ny - 1) - (nx - 1)) / k->nxs : 0;
         for (j = 0; j + 1 < ny; j++)
             for (i = 0; i + 1 < nx; i++) {
                 double x0 = x + fx(&f, bx[i]) * px, x1 = x + fx(&f, bx[i + 1]) * px;
                 double y0 = y + fy(&f, by[j]) * px, y1 = y + fy(&f, by[j + 1]) * px;
-                if (x1 <= x0 || y1 <= y0 || n >= cap) continue;
-                q[n].x0 = (float)x0; q[n].x1 = (float)x1; q[n].y0 = (float)y0; q[n].y1 = (float)y1;
-                q[n].u0 = (float)(bx[i] / k->design[0]); q[n].u1 = (float)(bx[i + 1] / k->design[0]);
-                q[n].v0 = (float)(by[j] / k->design[1]); q[n].v1 = (float)(by[j + 1] / k->design[1]);
-                n++;
+                int c, m = k->xtile && i % 2 ? copies(x1 - x0, (bx[i + 1] - bx[i]) * px, extra) : 1;
+                if (x1 <= x0 || y1 <= y0) continue;
+                for (c = 0; c < m && n < cap; c++, n++) {
+                    q[n].x0 = (float)(x0 + (x1 - x0) * c / m); q[n].x1 = (float)(x0 + (x1 - x0) * (c + 1) / m);
+                    q[n].y0 = (float)y0; q[n].y1 = (float)y1;
+                    q[n].u0 = (float)(bx[i] / k->design[0]); q[n].u1 = (float)(bx[i + 1] / k->design[0]);
+                    q[n].v0 = (float)(by[j] / k->design[1]); q[n].v1 = (float)(by[j + 1] / k->design[1]);
+                }
             }
         return n;
     }
@@ -1213,6 +1231,7 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
         double t = k->slice[0] / k->scale * px, r = k->slice[1] / k->scale * px;
         double b = k->slice[2] / k->scale * px, le = k->slice[3] / k->scale * px, f = 1;
         double dx[4], dy[4], su[4], sv[4];
+        int m;
         if (le + r > 0) f = fmin(f, w / (le + r));
         if (t + b > 0) f = fmin(f, h / (t + b));
         t *= f; r *= f; b *= f; le *= f;
@@ -1220,12 +1239,18 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
         dy[0] = y; dy[1] = y + t; dy[2] = y + h - b; dy[3] = y + h;
         su[0] = 0; su[1] = k->slice[3] / k->pw; su[2] = 1 - k->slice[1] / k->pw; su[3] = 1;
         sv[0] = 0; sv[1] = k->slice[0] / k->ph; sv[2] = 1 - k->slice[2] / k->ph; sv[3] = 1;
+        /* the middle's period is its painted width at the edges' scale (px * f / scale), as CSS sizes a
+           `round` tile from the top edge's; each of the three rows has cap / 3 quads, two of them ends */
+        m = k->xtile ? copies(dx[2] - dx[1], (k->pw - k->slice[1] - k->slice[3]) * px * f / k->scale, cap / 3 - 3) : 1;
         for (j = 0; j < 3; j++)
             for (i = 0; i < 3; i++) {
-                if (dx[i + 1] <= dx[i] || dy[j + 1] <= dy[j] || n >= cap) continue;
-                q[n].x0 = (float)dx[i]; q[n].x1 = (float)dx[i + 1]; q[n].y0 = (float)dy[j]; q[n].y1 = (float)dy[j + 1];
-                q[n].u0 = (float)su[i]; q[n].u1 = (float)su[i + 1]; q[n].v0 = (float)sv[j]; q[n].v1 = (float)sv[j + 1];
-                n++;
+                int c, mi = i == 1 ? m : 1;
+                if (dx[i + 1] <= dx[i] || dy[j + 1] <= dy[j]) continue;
+                for (c = 0; c < mi && n < cap; c++, n++) {
+                    q[n].x0 = (float)(dx[i] + (dx[i + 1] - dx[i]) * c / mi); q[n].x1 = (float)(dx[i] + (dx[i + 1] - dx[i]) * (c + 1) / mi);
+                    q[n].y0 = (float)dy[j]; q[n].y1 = (float)dy[j + 1];
+                    q[n].u0 = (float)su[i]; q[n].u1 = (float)su[i + 1]; q[n].v0 = (float)sv[j]; q[n].v1 = (float)sv[j + 1];
+                }
             }
         return n;
     }
@@ -1287,6 +1312,7 @@ static int load_kit(HUDLAY* l, const TJV* parts, HUDPNGSIZE png_size, void* ctx,
             snprintf(err, errn, "kit: part '%s' has no PNG", k->name);
             return 0;
         }
+        k->xtile = tj_is(tj_get(e, "xtile"), TJ_TRUE);
         if (k->kind == HK_GRID) {
             const TJV* d = tj_get(e, "design");
             k->design[0] = (float)tj_num(tj_at(d, 0), 0);
