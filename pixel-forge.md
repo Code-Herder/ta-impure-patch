@@ -22,8 +22,10 @@ render**: it holds the style guide, the method, the tools and what each one meas
 2. **The look is a crop of the chosen painting**, passed as a style reference: the part being made,
    cut out of the full-dock painting the owner picked, upscaled 2x. Use `pixel-forge crop`.
 3. **Render each layout with its crops**: `pixel-forge gen --ref <layout>.png:layout --ref
-   <crop>.png:style`. Pixel-forge pads a long layout to an aspect the model accepts and crops it
-   back, so the result is the layout's full canvas, ready for the cutters.
+   <crop>.png:style`. Pixel-forge stretches a long layout to an aspect the model accepts and back,
+   so the result is the layout's full canvas, ready for the cutters. Crop the layout to the part
+   first, and measure the cut: the model evens out recesses of different widths, which
+   `.data/hud-art/work/m3kit/regrid.py` sets right by stretching the flat recess interiors.
 4. **Cut and file** with the repository's tools: `gridslice.py` for one-piece parts,
    `PRESSED_DARK=1.5 cut.py` for sheets, `iconcut.py` for icons, then `file.py <kit dir> <parts>`.
    Check `tools/hudart/laycheck.py` still ends "laycheck: the two agree" and capture the mockup.
