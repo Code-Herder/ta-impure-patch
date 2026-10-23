@@ -6378,9 +6378,10 @@ REPLAY_POV_RX = re.compile(
     r"(?:; overlays: (\d+) items, (\d+) selected units)?")
 
 
-def _replay_camera(args, line, rx):
+def _replay_ask(args, line, rx, refused=None):
     """Writes `line` to the running playback's trigger and waits for the first log line `rx`
-    matches after it, or for a refusal; returns (name, the line, its match or None)."""
+    matches after it, or for a refusal (`refused`, by default the camera verbs'); returns (name,
+    the line, its match or None)."""
     inst = Instance(args.name)
     if inst.remote:
         die(f"{args.name} is remote: the replay's camera verbs drive a local instance")
@@ -6392,8 +6393,10 @@ def _replay_camera(args, line, rx):
     tmp = trig.with_name(trig.name + ".tmp")
     tmp.write_text(line + "\n")
     os.replace(tmp, trig)
-    refused = re.compile(r"replay: (?:[^:]*: )?(?:follow|jump|free cam|pov|overlay)\b[^:]* refused: .*"
-                         rf"|replay: {re.escape(REPLAY_TRIGGER)}: not understood: .*")
+    refused = re.compile((refused or
+                          r"replay: (?:[^:]*: )?(?:follow|jump|free cam|pov|overlay)\b[^:]* "
+                          r"refused: .*")
+                         + rf"|replay: {re.escape(REPLAY_TRIGGER)}: not understood: .*")
     deadline = time.time() + args.timeout
     while time.time() < deadline:
         for got in lines():
@@ -6419,7 +6422,7 @@ def cmd_replay_follow(args):
         rx = re.compile(rf"replay: .*: follow seat {args.seat}, epoch (\d+)")
     else:
         die(f"follow: SEAT is a recorded seat's number or `free`, not {args.seat!r}")
-    name, got, m = _replay_camera(args, line, rx)
+    name, got, m = _replay_ask(args, line, rx)
     res = {"name": args.name, "as": name, "seat": args.seat, "done": m is not None, "line": got}
     if m and m.groups():
         res["epoch"] = int(m[1])
@@ -6431,7 +6434,7 @@ def cmd_replay_follow(args):
 def cmd_replay_jump(args):
     """Put the camera where a recorded seat's was, once."""
     rx = re.compile(rf"replay: .*: jump to seat {args.seat}, epoch (\d+)")
-    name, got, m = _replay_camera(args, f"jump {args.seat}", rx)
+    name, got, m = _replay_ask(args, f"jump {args.seat}", rx)
     res = {"name": args.name, "as": name, "seat": args.seat, "done": m is not None, "line": got}
     if m:
         res["epoch"] = int(m[1])
@@ -6442,7 +6445,7 @@ def cmd_replay_jump(args):
 
 def cmd_replay_pov(args):
     """What the playback's Follow computed at its latest frame visit."""
-    name, got, m = _replay_camera(args, "pov", REPLAY_POV_RX)
+    name, got, m = _replay_ask(args, "pov", REPLAY_POV_RX)
     res = {"name": args.name, "as": name, "line": got, "done": m is not None}
     if m:
         res["gametime"] = int(m[1])
@@ -6458,6 +6461,58 @@ def cmd_replay_pov(args):
         sys.exit(1)
 
 
+def cmd_replay_timeline(args):
+    """Watch another timeline of the running playback's file, in place (tagpu_replay.c, THE
+    SWITCH)."""
+    n = args.timeline
+    rx = re.compile(rf"replay: .*: watching timeline {n} (?:from GameTime (\d+) \(shared history: "
+                    rf"no rebuild\)|at GameTime (\d+) \(sought from (\d+) in (\d+) ms\))")
+    name, got, m = _replay_ask(args, f"timeline {n}", rx,
+                                  rf"replay: .*: watching timeline {n} refused: .*")
+    res = {"name": args.name, "as": name, "timeline": n, "done": m is not None, "line": got}
+    if m and m[1] is not None:
+        res.update(path="shared", gametime=int(m[1]))
+    elif m:
+        res.update(path="sought", gametime=int(m[2]) - 1, sought_from=int(m[3]), ms=int(m[4]))
+    out(res, args.json, human=got)
+    if not m:
+        sys.exit(1)
+
+
+# The `hud state` trigger's first line (tagpu_replay.c, the trigger): the playing's file's
+# timelines as its last scan found them, `<id>:<parent>@<fork_at>..<last>/<L|D>/c<seat>`, `*` on
+# the chain that plays.
+REPLAY_TIMELINES_RX = re.compile(r"replay: .*: hud state timelines (.*); axis (\d+)\.\.(\d+); "
+                                 r"span (\d+)\.\.(\d+); watched (\d+)\s*$")
+REPLAY_TIMELINE_ROW_RX = re.compile(r"(\d+):(\d+)@(\d+)\.\.(\d+)/([LD])/c(\d+)(\*?)$")
+
+
+def cmd_replay_timelines(args):
+    """The running playback's file's timelines, as the HUD sees them."""
+    name, got, m = _replay_ask(args, "hud state", REPLAY_TIMELINES_RX, r"(?!)")
+    rows = []
+    if m and m[1] != "none":
+        for text in m[1].split(" "):
+            r = REPLAY_TIMELINE_ROW_RX.match(text)
+            if r:
+                rows.append({"id": int(r[1]), "parent": int(r[2]), "fork_at": int(r[3]),
+                             "last": int(r[4]), "live": r[5] == "L", "controlled": int(r[6]),
+                             "on_chain": r[7] == "*"})
+    res = {"name": args.name, "as": name, "done": m is not None, "line": got, "timelines": rows}
+    if m:
+        res.update(axis=[int(m[2]), int(m[3])], span=[int(m[4]), int(m[5])], watched=int(m[6]))
+    human = [got]
+    if m:
+        human = [f"{name}: watching timeline {res['watched']}, span {m[4]}..{m[5]}, axis "
+                 f"{m[2]}..{m[3]}"]
+        human += [f"  {'*' if r['on_chain'] else ' '} {r['id']:>3}  parent {r['parent']:>3}  from "
+                  f"{r['fork_at']:>6}  to {r['last']:>6}  {'live' if r['live'] else 'deleted'}  "
+                  f"played as {r['controlled']}" for r in rows]
+    out(res, args.json, human="\n".join(human))
+    if not m:
+        sys.exit(1)
+
+
 REPLAY_OVERLAYS = ("cursors", "clicks", "selections", "chat")
 
 
@@ -6468,7 +6523,7 @@ def cmd_replay_overlay(args):
         rx = re.compile(rf"replay: chat {'shown' if on else 'hidden'}")
     else:
         rx = re.compile(rf"replay: overlay {args.overlay} {args.state}")
-    name, got, m = _replay_camera(args, f"overlay {args.overlay} {args.state}", rx)
+    name, got, m = _replay_ask(args, f"overlay {args.overlay} {args.state}", rx)
     res = {"name": args.name, "as": name, "overlay": args.overlay, "on": on, "done": m is not None,
            "line": got}
     out(res, args.json, human=got)
@@ -7658,6 +7713,30 @@ def build_parser():
     rpov.add_argument("state", choices=("on", "off"))
     rpov.add_argument("--timeout", type=float, default=30.0)
     rpov.set_defaults(func=cmd_replay_overlay)
+
+    rptl = rpv.add_parser(
+        "timeline", help="watch another timeline of the running playback's file, in place",
+        description="The playback goes on in timeline N of the file it plays from the GameTime it "
+                    "is at, without leaving the level: at once when the history it has played is "
+                    "N's too (`shared`), else by a seek onto N's chain (`sought`). Prints the "
+                    "DLL's line; exit 1 when the switch is refused.")
+    add_common(rptl)
+    rptl.add_argument("name", help="the instance whose playback runs")
+    rptl.add_argument("timeline", type=gametime_type, metavar="N",
+                      help="a timeline of the file (`replay timelines`)")
+    rptl.add_argument("--timeout", type=float, default=REPLAY_SEEK_TIMEOUT)
+    rptl.set_defaults(func=cmd_replay_timeline)
+
+    rptls = rpv.add_parser(
+        "timelines", help="the running playback's timelines, as its replay HUD sees them",
+        description="Every timeline of the file the playback plays, as its last scan found them: "
+                    "parent, fork point, last GameTime, live or deleted, the seat a fork was "
+                    "played as, and `*` on the chain that plays; with the span and the timeline "
+                    "watched.")
+    add_common(rptls)
+    rptls.add_argument("name", help="the instance whose playback runs")
+    rptls.add_argument("--timeout", type=float, default=30.0)
+    rptls.set_defaults(func=cmd_replay_timelines)
 
     rpf = rpv.add_parser("forks", help="list a recording's timelines, or delete/export a fork")
     add_common(rpf)

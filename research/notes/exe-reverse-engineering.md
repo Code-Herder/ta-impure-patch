@@ -1748,7 +1748,13 @@ the measured runs and what they mean for the design are in the
   seat in `main+0x2A43` and `main+0x2A42` (`0x47A798..0x47A7DE`); controller 2 does the same with
   type 2 and leaves those two bytes; anything else calls `0x464290(seat, 0)`. Then a human or AI
   record is marked allied (`+0x108 + j` = 1, `0x47A890`) to every active entry j with the same `+8`
-  group other than group 5 (`0x47A83C..0x47A89E`).
+  group other than group 5 (`0x47A83C..0x47A89E`). The demo recorder writes the two bytes into its
+  header's RT_OPTIONS, `main+0x2A42` (controlled) as byte 18 and `+0x2A43` (viewed) as byte 19
+  (`tagpu_recorder.c`, READ), which is where a takeover's fork names the seat it was played as:
+  the takeover's `tk_live` stores that seat in `+0x2A42`, then `tk_end` arms the fork, whose
+  header `header_build` writes at its first capture point (`tagpu_replay.c`,
+  `tagpu_recorder.c`, READ); the forks lane's `hud state` check compares every fork's seat with
+  the player it took over as.
 - **The seat activation `0x464290(seat, type)`** (stdcall, `ret 8`; callers `0x47A7C7` and
   `0x47A81E` in the fill, `0x450C29` in the join `0x450A10`, and `0x496DC2`/`0x496DCB` in `0x496DB0`,
   which seats 0 as type 1 and 1 as type 2 and sets `+0x2A3C` to 2 [role not traced]) zeroes the
