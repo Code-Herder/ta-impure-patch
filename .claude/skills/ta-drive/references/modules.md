@@ -852,10 +852,19 @@ exe, is not loaded at attach. Drive them the way the compat suite does:
 
 ## The demo recorder: recordings and dumps
 
-**A skirmish or native multiplayer game is recorded while `tagpu_recorder.on` is in the game folder** — `tacli arm <i>
-recorder.on` before the level starts, since the recorder looks for it at each level's first
-iteration — from that iteration to the level's end, to `gamedir/replays/<date> <time> <map>.imprec`.
-Without it the log says `recorder: not recording: tagpu_recorder.on is absent`. The log says
+**Every skirmish and native multiplayer game is recorded on the play defaults** —
+`tagpu_recorder.on` is one of them — from the level's first iteration to its end, to
+`gamedir/replays/<date> <time> <map>.imprec`. On a tacli instance that means: a bare launch
+(`tagpu_defaults.off`) records only with `tacli arm <i> recorder.on`; a `--defaults` launch records
+every game unless `tacli arm <i> recorder.off`. Arm either before the level starts, since the
+recorder reads the switch at each level's first iteration. Not recording, the log says `recorder:
+not recording: tagpu_recorder.on is off (its .off file, tagpu_defaults.off)`. **Each new recording, never a fork, prunes
+`replays/`**: the newest 50 are kept counting the new one (`recorder.on=keep N` changes the count),
+and an older one is deleted unless it is in use, has a live fork, is a favourite or bookmarked in
+`replays/index.dat`, or does not read as a recording — so a `--defaults` instance's recordings past
+the newest 50 go, and a fixture recording kept there has to be favourited or bookmarked, or kept
+elsewhere. The log says `recorder: prune at <new>: N older recordings, the newest K kept; of the
+rest, D deleted, M kept (forked or marked), B in use, U unreadable`. The log says
 `recorder: recording …` at the start and `recorder: writer: … closed: …` when the file is done, with
 the corrections, which must be 0; `recorder: N iterations captured: …` gives the capture's cost.
 A native file contains this peer's observed world plus the separate exact-owner

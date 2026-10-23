@@ -73,8 +73,9 @@ step of the [completeness design](demo-recorder-completeness.md) is built (every
 of the simulation files is declared, and the build refuses one that is not; the bytes of the
 engine's unit and player records that are not recorded as values are listed in one exclusion file
 the build checks). The [skirmish slice](demo-recorder-skirmish-slice.md) is five landings; the
-first, the recorder, landed 2026-09-29: a skirmish is recorded on request to a file that checks
-itself against the game as it is made. Playback and seek performance remain unverified.
+first, the recorder, landed 2026-09-29: a skirmish is recorded to a file that checks itself
+against the game as it is made, and every skirmish and multiplayer game is recorded by default,
+the oldest recordings pruned past the newest 50. Playback and seek performance remain unverified.
 
 ## Adding a page
 

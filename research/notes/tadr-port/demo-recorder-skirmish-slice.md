@@ -12,8 +12,8 @@ The [product page](demo-recorder.md#milestones-and-delivery-order)'s second mile
 and `tacli` automation, with the verification the
 [completeness design](demo-recorder-completeness.md#build-order) lists as its step 2. Six landings,
 each a finished unit verified by running it. **S1, the recorder, landed on 2026-09-29**: a
-skirmish is recorded to a file when `tagpu_recorder.on` asks for it, and `tools/replay/tarec.py`
-reads a recording back. **S2, watching, is two landings.** S2a landed on 2026-09-30: a recording
+skirmish is recorded to a file, and `tools/replay/tarec.py` reads a recording back; every
+skirmish and multiplayer game is recorded by default (*The switch*, below). **S2, watching, is two landings.** S2a landed on 2026-09-30: a recording
 carries every mover, order list and PlayerInfo, and the events, each checked against the engine
 (*S2a, verified and measured*). S2b landed on 2026-09-30: `tacli replay play` plays a recording
 back on puppets, showing everything or one recorded player's view, and every recorded value is
@@ -53,11 +53,10 @@ Each landing adds one capability that can be verified by itself, and the ones af
 **S1 and S2 record every value exactly, at every tick.** That is what makes their checks exact. The
 reduced stream — the same exact values, coded losslessly ([making recordings
 smaller](demo-recorder-size.md)) — is a landing of its own after S2; S1 measures the exact stream's
-size so that the gap to the budget is known before then. Until that landing a skirmish is recorded only
-when asked, by the file `tagpu_recorder.on` in the game's folder, because the exact stream is too
-large to write for every game (*Measured*). That landing turns recording on for every skirmish and
-retires the file, and it packs the stream tighter as well: a scratch repacking of the exact stream
-measured about 2.5 times smaller (*Measured*).
+size so that the gap to the budget is known before then: a scratch repacking of the exact stream
+measured about 2.5 times smaller (*Measured*). Every skirmish and multiplayer game is recorded by
+default, `tagpu_recorder.on` being a play default (*The switch*, below), and each new recording
+prunes `replays\` to the newest 50 ([GPU status](../gpu-status.md) §2.6e, *The prune*).
 
 ## S1 — the recorder
 
@@ -502,10 +501,10 @@ incomplete.
 
 ### Its lifetime
 
-A recording starts at the first capture of a skirmish level, and only when it is asked for and
-its end is certain. `tagpu_recorder.on` in the game's folder asks for it: the recorder looks for the
-file once, at that capture, so it has to be there before the level starts, and removing it changes
-the next level, not this one. The end is certain because `tagpu_reclaim`'s wrap of the teardown
+A recording starts at the first capture of a skirmish level, and only when the recorder's switch
+is on and its end is certain. The recorder reads `tagpu_recorder.on` (*The switch*, below) once, at
+that capture, so a change to the game's folder has to be made before the level starts, and one made
+during a level changes the next level, not this one. The end is certain because `tagpu_reclaim`'s wrap of the teardown
 `0x491B60` tells the recorder on the game thread, on entry, before the cascade frees the unit array
 (`0x485980`, called at `0x491B95`), and without the wrap the recorder does not start. The end
 record is the capture's last access to the ring; the writer then
@@ -580,11 +579,15 @@ iterations to record.
   writes the live world's images to `replays\dump-<name>.bin`, a stored snapshot of the state that
   capture records.
 
-The switch is a file, not a setting: `tagpu_recorder.on`, read with `tagpu_opt_on`, which
-`tacli arm <instance> recorder.on` writes. It decides whether a game is recorded, not what the
-simulation runs, so it is not a simulation lever and the header's lever list does not name it. The
-product's opt-out is a setting, and the settings store's only writer is its menu
-(`tagpu_settings.h`), so the setting comes with its menu row in S5.
+**The switch** is a play default, not a setting: `tagpu_recorder.on`, read with `tagpu_opt_on`
+and on by `tagpu_opt.c`'s table, so every skirmish and multiplayer game is recorded unless
+`tagpu_recorder.off` or `tagpu_defaults.off` is in the game's folder. A tacli instance's bare launch
+writes `tagpu_defaults.off`, so the lab bench records nothing it is not asked to, and `tacli arm
+<instance> recorder.on` records there. The file's text may say `keep N`, how many recordings the
+prune keeps ([GPU status](../gpu-status.md) §2.6e, *The prune*). It decides whether a game is
+recorded, not what the simulation runs, so it is not a simulation lever and the header's lever list
+does not name it. The player's switch is a setting, and the settings store's only writer is its
+menu (`tagpu_settings.h`), so it comes with its menu row, S5's *Record games*, which is not built.
 
 ### Verified by
 
@@ -2001,7 +2004,7 @@ counted) and the names (`RK_COUNT_NAME`).
   functions. They chain after the puppet gates, so on a puppet they count only what the gates let
   through. The broadcast starts, the start sites, `QueryNanoPiece`, the order dispatch and the
   footprint writers count too, for S3c-3's UNCOVERED; nothing compares them.
-- **Sinks**: 21 count-only observers (the [hook map](../gpu-status.md#26e-the-demo-recorder-tagpu_recorderc-tagpu_recwriterc-a-skirmish-on-request)):
+- **Sinks**: 21 count-only observers (the [hook map](../gpu-status.md#26e-the-demo-recorder-tagpu_recorderc-tagpu_recwriterc-every-game-by-default)):
   the explosion add, the COB thread allocation keyed by the script's name (read only through the
   engine's own bound on the index), the four sound entries, the projectile init, the three shot
   paths, the impact `0x499EB0` and ten particle emitters. The plan's sink on the particle pool's
