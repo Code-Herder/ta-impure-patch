@@ -96,6 +96,29 @@ closes its file and S4c lock. The frame visit polls that event, then the ordinar
 file-locking takeover appends the new timeline. A failed append leaves playback
 paused and permits retrying `fork`; `now` cannot resume an ended recording.
 
+### The verbs as a queue, and their outcomes
+
+The trigger's `rewind ...` line is parsed (`rw_trigger`: the prefix, the length, the ` dump NAME`
+suffix, with their refusals) into a verb, and the HUD calls `tagpu_replay_rewind(op, T, dump)`
+with one of the five; both queue it, the latest replacing an earlier one not yet taken. A verb the
+parse does not know is queued too, so it meets the state refusals first (`waiting for the writer`,
+`no rewind is open`) and its own last, as every verb always has. **The ordering, on one thread:**
+the frame visit takes the queue right after `trigger_read` and before `rw_poll` (`rw_visit`), so
+the trigger's verbs run where they ran inside the trigger's read; a HUD click comes from the wndproc
+or the shield's mouse path, both on the game thread, and waits for that visit, between two steps,
+where `seek_run` must run.
+
+Every rewind line that ends a verb -- refused, failed, opened, complete, returned to now, forked,
+closed -- is logged by `rw_said` with its text unchanged and becomes the last request's outcome
+(`tagpu_replay_result`, kind REWIND, the verb as its op). The close that follows a refused open
+is logged and is not its outcome: the refusal stays the last. `tagpu_replay_rewind_state` gives
+the state (idle, flush, open, past, ending), whether an open would be taken now (a live recorded
+skirmish, not a network game, whose recorder is healthy: `tagpu_rec_rewind_ready`, the open's
+test without its flush), the live recording's span once open, G and the last seek's T. The
+trigger's `hud state` prints both; the rewind lane checks them before the first open (idle,
+available), after it (open, G, the outcome `opened at GameTime ...`) and after a refused
+`rewind seek 0`.
+
 ### Pause ordering and atomic dumps
 
 A before-observer steals the six-byte `test byte [eax+0x38A51],bl` at `0x496920`.

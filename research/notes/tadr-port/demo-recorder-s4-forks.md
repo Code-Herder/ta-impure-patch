@@ -97,6 +97,37 @@ signalling their done events; exit waits for those events before sealing the
 maintenance set. The coverage build flushes after both waits, and the harness
 collects those final coverage files after stopping the process.
 
+## Tickets and the HUD's route
+
+`recfile_request` returns the request's **ticket**, never 0, or 0 when it is refused before it is
+queued (a bad argument, no memory, every worker busy, the process exiting). Its outcome waits in a
+ring of `REC_FILE_RESULTS` = 16 slots, slot ticket mod 16: `recfile_result` answers 0 while the job
+is queued or running, 1 done, -1 refused with the worker's reason, -2 unknown. The deletion of a
+timeline a playing holds is a queued request whose outcome, `timeline N is in use`, is in the ring
+at once. **The ordering, under the queue's lock:** the worker writes the result before its job
+leaves the pending set, so a ticket is pending or in the ring at every instant the lock is free; a
+slot names its ticket, so a ticket a later one has displaced reads unknown, never another
+request's outcome. `recfile_completed` counts the finished requests without the lock, for a reader
+that wants to know some file may have changed.
+
+The replay HUD deletes and exports a fork of the playing's file through
+`tagpu_replay_fork_op` (`inc/tagpu_replay.h`): refused at once with a line and an outcome
+(`replay: NAME: the HUD's fork request refused: <why>`) when the level plays no recording, a live
+rewind owns it, the operation is unknown, the export's stem is not a file stem, or four requests
+already wait; else queued with its ticket kept. The frame visit polls the tickets (`fork_poll`),
+logs `replay: NAME: the HUD's fork request T done: <why>` (or `refused`), makes it the last
+outcome (`tagpu_replay_result`, kind FORK) and refreshes the HUD's timelines. The trigger's
+`hud fork delete <id>` and `hud fork export <id> "<stem>"` are the tests' way to it. Deleting the
+timeline that plays is refused as in use.
+
+**The HUD's timelines** come from a cache the game thread refreshes at the first iteration, a
+rewind's open, a takeover's plan and the frame visit after any file job finished, never per frame:
+its scan is the one the trigger's dry run already ran on the playing reader (`segs_scan`, which
+keeps the reader's place). Each row carries the timeline's `controlled` seat, its header's
+RT_OPTIONS byte 18, which the recorder takes from `main+0x2A42`: in a fork, the player it was
+played as [INFERRED from the order: the takeover sets `+0x2A42` before the fork's first capture
+point]. The axis runs from the root's first GameTime to the greatest last of a live timeline.
+
 ## Driving it
 
 - `tacli replay forks INSTANCE FILE` lists physical segments, state, last-used time
@@ -118,7 +149,12 @@ collects those final coverage files after stopping the process.
   boundary or a time past the selected timeline's end. No takeover occurs.
 - `tools/replay/tareplay.py forks battle [--cover]` exercises the rules. The
   landing tier also runs its X lane on `battle` and `stock-limits`, after the
-  existing L, P, R, Q, K, F and W lanes when present.
+  existing L, P, R, Q, K, F and W lanes when present. While timeline 5 plays the lane
+  compares `hud state` with the file (every row's id, parent, fork point, last and state,
+  each fork's controlled seat, the axis, the chain's span and its marks), checks the in-game
+  prediction against the file's, a refused seek's outcome, and the HUD's route: the
+  deletion of 5 refused as in use, an export of 4 holding `[0, 4]`, and the two outcomes in
+  turn.
 
 ## Verification and remaining work
 
