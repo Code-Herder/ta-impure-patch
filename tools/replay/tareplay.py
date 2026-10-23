@@ -1833,6 +1833,11 @@ def watch_takeover(w, log, rec, stem, T, out, cover):
     log.wait_running(r"recorder: writer: .* closed", n)
     if not log.wait(rf"replay: forks .*\b{re.escape(stem)}\.imprec: (done|refused):", 120, n):
         raise CouldNotRun("the fork's level did not complete its file maintenance")
+    # the level ends into the Replays browser it was watched from; its name is on top before its
+    # init has run, and a click before the init's last line is lost, so the quit's Back waits
+    # for that line
+    if not log.wait(r"replays: opened - ", 120, n):
+        raise CouldNotRun("the fork's level did not return to the Replays browser")
     out.mkdir(parents=True, exist_ok=True)
     copy = out / "W-takeover.imprec"
     shutil.copy2(fork_file(w, log), copy)
