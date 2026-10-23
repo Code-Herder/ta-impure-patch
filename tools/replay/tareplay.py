@@ -2753,7 +2753,7 @@ def forks_steps(w, fx, out, results):
                      f"{st['result']['serial']} -> {again['serial']}"))
 
     def command(action, tid, export=None, expect=True):
-        say(f"forks: {action} {tid}" + (f" to {export}" if export else ""))
+        say(f"forks: {action} {tid}" + (f" to {export}" if export else "") + ("" if expect else ", which is refused"))
         rec = w.gamedir / "replays" / "forks.imprec"
         argv = ["replay", "forks", w.name, rec, action, tid]
         if export:

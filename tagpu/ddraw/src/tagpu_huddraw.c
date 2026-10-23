@@ -265,20 +265,18 @@ typedef struct {
 static HUDINST* emit(B* c, int tex, int mode, float x0, float y0, float x1, float y1, const HUDOP* op)
 {
     HUDINST* q;
+    /* a fill (tex -1) joins the run it falls in, but never a layer's: the pass rescales a layer
+       run's uv (layer_record), and a drop shadow carries its offset there */
+    const int join = !c->fresh && c->nb > 0 &&
+                     (tex == -1 ? c->b[c->nb - 1].tex != HUD_TEX_LAYER : c->b[c->nb - 1].tex == tex);
     if (c->n >= c->cap) return NULL;
-    if (c->fresh || (tex != -1 && (c->nb == 0 || c->b[c->nb - 1].tex != tex))) {
+    if (!join) {
         if (c->nb >= c->bcap) return NULL;
         c->fresh = 0;
         c->b[c->nb].tex = tex == -1 ? HUD_TEX_ATLAS : tex;
         c->b[c->nb].first = c->n;
         c->b[c->nb].count = 0;
         c->nb++;
-    } else if (c->nb == 0) {
-        if (c->bcap < 1) return NULL;
-        c->b[0].tex = HUD_TEX_ATLAS;
-        c->b[0].first = c->n;
-        c->b[0].count = 0;
-        c->nb = 1;
     }
     q = &c->inst[c->n++];
     c->b[c->nb - 1].count++;
@@ -607,7 +605,13 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
    its ops composite to over nothing. Each group has its own region, so two that overlap on screen
    still fade apart. The region is the group's box on the attachment in whole pixels, and its
    instances are moved there by a whole-pixel offset, so they rasterise there as they would have in
-   place, and the quad covers that box and samples the region texel for pixel. */
+   place, and the quad covers that box and samples the region texel for pixel.
+
+   THE LAYER IS NO LARGER THAN THE ATTACHMENT: the regions are packed in shelves across the
+   attachment's width and drawn with its viewport, so a region below its height would draw
+   nothing. A group whose region does not fit is refused, and its ops are drawn on the attachment
+   where they stand, each at the group's opacity -- overlapping ops of it then show through each
+   other, the one difference -- and the build starts again without it, at most once per group. */
 
 /* the shelf the next region opens on, and the layer's extent so far */
 typedef struct { int x, y, h, w_used, h_used; } SHELF;
@@ -632,9 +636,10 @@ static void group_box(const B* c, int i0, int* x0, int* y0, int* x1, int* y1)
     *x1 = (int)ceilf(bx1 < c->W ? bx1 : c->W); *y1 = (int)ceilf(by1 < c->H ? by1 : c->H);
 }
 
-/* group k's ops [i0, i1) drawn into its region; its composite at index `at` (-1 none) set */
-static void draw_group(B* c, const HUDOPS* ops, int k, int i0, int i1, int at, int* charted,
-                       SHELF* sh, HUDLAYREG* g)
+/* group k's ops [i0, i1) drawn into its region; its composite at index `at` (-1 none) set. 0 when
+   the region does not fit the attachment. */
+static int draw_group(B* c, const HUDOPS* ops, int k, int i0, int i1, int at, int* charted,
+                      SHELF* sh, HUDLAYREG* g)
 {
     int j0 = c->n, i, x0, y0, x1, y1, w, h;
     float dx, dy;
@@ -649,9 +654,11 @@ static void draw_group(B* c, const HUDOPS* ops, int k, int i0, int i1, int at, i
     if (w <= 0 || h <= 0) {
         g->nb = 0;
         if (at >= 0) colour(&c->inst[at], 0, 0);
-        return;
+        return 1;
     }
+    /* the box lies within the attachment, so its width fits an empty shelf */
     if (sh->x + w > (int)c->W) { sh->y += sh->h; sh->x = 0; sh->h = 0; }
+    if (sh->y + h > (int)c->H) return 0;
     g->x = sh->x; g->y = sh->y; g->w = w; g->h = h;
     sh->x += w;
     sh->h = h > sh->h ? h : sh->h;
@@ -674,48 +681,66 @@ static void draw_group(B* c, const HUDOPS* ops, int k, int i0, int i1, int at, i
         q->uv[2] = (float)(g->x + w); q->uv[3] = (float)(g->y + h);
         colour(q, 0xFFFFFF, ops->grp[k]);
     }
+    return 1;
 }
 
 int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, float px, int ox, int oy, int w, int h,
                         HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb, int* nmain,
-                        HUDLAYREG* g, int* ng, int* lw, int* lh, int* dropped)
+                        HUDLAYREG* g, int* ng, int* lw, int* lh, int* dropped, int* unfit)
 {
     B c;
     HUDOP none;
     SHELF sh;
     int at[HUD_MAXGRP];
-    int i, i0, k, charted = 0;
+    unsigned char out[HUD_MAXGRP];      /* the groups refused a region: drawn op by op */
+    int i, i0, k, charted, again;
     if (s_full) atlas_empty();
-    memset(&c, 0, sizeof c);
-    c.art = art; c.ops = ops; c.px = px; c.ox = (float)ox; c.oy = (float)oy; c.W = (float)w; c.H = (float)h;
-    c.inst = inst; c.cap = cap; c.b = b; c.bcap = bcap;
+    memset(out, 0, sizeof out);
     memset(&none, 0, sizeof none);
     none.clip.w = -1;
-    for (k = 0; k < HUD_MAXGRP; k++) at[k] = -1;
+    *unfit = 0;
+    do {
+        again = 0;
+        charted = 0;
+        memset(&c, 0, sizeof c);
+        c.art = art; c.ops = ops; c.px = px; c.ox = (float)ox; c.oy = (float)oy; c.W = (float)w; c.H = (float)h;
+        c.inst = inst; c.cap = cap; c.b = b; c.bcap = bcap;
+        for (k = 0; k < HUD_MAXGRP; k++) at[k] = -1;
 
-    /* the attachment's instances, a group's composite where its last op stands */
-    for (i = 0; i < ops->n; i++) {
-        const HUDOP* op = &ops->op[i];
-        HUDINST* q;
-        if (!op->grp) { draw_op(&c, op, &charted); continue; }
-        if (i + 1 < ops->n && ops->op[i + 1].grp == op->grp) continue;
-        if (op->grp <= ops->ngrp && (q = emit(&c, HUD_TEX_LAYER, HUDM_PART, 0, 0, 0, 0, &none)))
-            at[op->grp - 1] = (int)(q - c.inst);
-    }
-    *nmain = c.nb;
+        /* the attachment's instances, a group's composite where its last op stands; a refused
+           group's ops in place, each faded by the group's opacity (premultiplied: all four) */
+        for (i = 0; i < ops->n; i++) {
+            const HUDOP* op = &ops->op[i];
+            HUDINST* q;
+            if (!op->grp || op->grp > ops->ngrp || out[op->grp - 1]) {
+                int j, n0 = c.n;
+                float a = op->grp && op->grp <= ops->ngrp ? ops->grp[op->grp - 1] : 1.0f;
+                if (op->grp > ops->ngrp) continue;
+                draw_op(&c, op, &charted);
+                for (j = n0; j < c.n && a != 1.0f; j++) {
+                    c.inst[j].rgba[0] *= a; c.inst[j].rgba[1] *= a; c.inst[j].rgba[2] *= a; c.inst[j].rgba[3] *= a;
+                }
+                continue;
+            }
+            if (i + 1 < ops->n && ops->op[i + 1].grp == op->grp) continue;
+            if ((q = emit(&c, HUD_TEX_LAYER, HUDM_PART, 0, 0, 0, 0, &none)))
+                at[op->grp - 1] = (int)(q - c.inst);
+        }
+        *nmain = c.nb;
 
-    /* the groups' own, each in its region of the layer */
-    memset(&sh, 0, sizeof sh);
-    *ng = 0;
-    for (i = 0; i < ops->n; i = i0) {
-        int gk = ops->op[i].grp;
-        i0 = i + 1;
-        if (!gk) continue;
-        while (i0 < ops->n && ops->op[i0].grp == gk) i0++;
-        if (gk > ops->ngrp) continue;
-        draw_group(&c, ops, gk - 1, i, i0, at[gk - 1], &charted, &sh, &g[*ng]);
-        ++*ng;
-    }
+        /* the groups' own, each in its region of the layer */
+        memset(&sh, 0, sizeof sh);
+        *ng = 0;
+        for (i = 0; i < ops->n && !again; i = i0) {
+            int gk = ops->op[i].grp;
+            i0 = i + 1;
+            if (!gk) continue;
+            while (i0 < ops->n && ops->op[i0].grp == gk) i0++;
+            if (gk > ops->ngrp || out[gk - 1]) continue;
+            if (draw_group(&c, ops, gk - 1, i, i0, at[gk - 1], &charted, &sh, &g[*ng])) ++*ng;
+            else { out[gk - 1] = 1; ++*unfit; again = 1; }
+        }
+    } while (again);
     *lw = sh.w_used;
     *lh = sh.h_used;
     *nb = c.nb;

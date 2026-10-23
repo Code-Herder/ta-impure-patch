@@ -120,9 +120,13 @@ The replay HUD deletes and exports a fork of the playing's file through
 `tagpu_replay_fork_op` (`inc/tagpu_replay.h`): refused at once with a line and an outcome
 (`replay: NAME: the HUD's fork request refused: <why>`) when the level plays no recording, a live
 rewind owns it, the operation is unknown, the export's stem is not a file stem, or four requests
-already wait; else queued with its ticket kept. The frame visit polls the tickets (`fork_poll`),
-logs `replay: NAME: the HUD's fork request T done: <why>` (or `refused`), makes it the last
-outcome (`tagpu_replay_result`, kind FORK) and refreshes the HUD's timelines. The trigger's
+already wait, and 0 returned; else queued, and its own ticket returned, never 0 (`fork_ticket`,
+apart from the file worker's job ticket it keeps). The frame visit polls the jobs (`fork_poll`),
+logs `replay: NAME: the HUD's fork request T done: <why>` (or `refused`; T the worker's ticket),
+makes it the last outcome (`tagpu_replay_result`, kind FORK, carrying the returned ticket and the
+fork's id) and refreshes the HUD's timelines. A switch's outcome carries the timeline it named the
+same way, so the HUD matches each outcome to its own request (*The outcomes* in
+[the HUD in game](../hud-in-game.md)). The trigger's
 `hud fork delete <id>` and `hud fork export <id> "<stem>"` are the tests' way to it. Deleting the
 timeline that plays is a switch first (*Watching another timeline in place*); the forks trigger's
 deletion of it, which no switch precedes, is refused as in use.
@@ -203,8 +207,8 @@ for several.
 switch first, to the nearest live timeline up the chain from the leaf's parent; with none it is
 refused ("the last live timeline of this chain plays"), and while another switch or a takeover
 waits ("another request is waiting"). The deletion is queued once the switch has released the
-claim, so the worker's in-use test passes by construction, and its ticket goes in a slot the
-request kept free; a refused switch makes the deletion's outcome refused ("could not leave
+claim, so the worker's in-use test passes by construction, and its job goes in a slot the
+request kept free, under the ticket the request returned (`then_ticket`); a refused switch makes the deletion's outcome refused ("could not leave
 timeline N"). The recorder's rule is unchanged: a deletion of a claimed timeline is still refused.
 
 **The tests: X2,** a step of the X lane right after fork 5, on a copy of the file (live

@@ -302,6 +302,11 @@ static struct {
     int        pending;
     unsigned   id;                  /* the timeline asked for                                     */
     unsigned   then_delete;         /* 0, or the timeline to delete once the switch is done       */
+    unsigned   then_ticket;         /* that deletion's ticket (tagpu_replay_fork_op). Kept past
+                                       tl_switch's clearing of the request: its outcome, refused
+                                       or queued, is set within the same tl_switch or
+                                       replay_close, before the game thread can take another
+                                       request that could replace it                          */
     RecReader* prev;                /* the reader played before a switch's seek, while it runs   */
 } s_sw;
 /* THE IN-LEVEL STAMPS (used_stamp): the last-used times of the timelines this level has played,
@@ -312,13 +317,14 @@ static unsigned         s_nused;
 /* THE LAST REQUEST'S OUTCOME (tagpu_replay_result), game thread: nothing clears it, the serial
    alone tells a reader whether it is new */
 static TAGPU_REPLAY_RESULT s_res;
-static void result_set(int kind, int op, int ok, unsigned ticket, const char* why)
+static void result_set(int kind, int op, int ok, unsigned ticket, unsigned id, const char* why)
 {
     s_res.serial++;
     s_res.kind = kind;
     s_res.op = op;
     s_res.ok = ok;
     s_res.ticket = ticket;
+    s_res.id = id;
     snprintf(s_res.why, sizeof s_res.why, "%s", why);
 }
 static int s_sk_req;                /* the request seek_run serves, whose end it reports: the
@@ -344,7 +350,16 @@ static int tlc_open(void);
    since a click a frame cannot outrun the worker's eight jobs and the HUD shows one outcome at
    a time */
 #define FORK_TICKETS 4
-static struct { unsigned ticket; int op; } s_fk[FORK_TICKETS];
+static struct { unsigned job; int op; unsigned ticket, id; } s_fk[FORK_TICKETS];   /* job: the
+                                       file worker's ticket, 0 a free slot; ticket: the one
+                                       tagpu_replay_fork_op returned                             */
+static unsigned s_fk_last;          /* the last ticket tagpu_replay_fork_op handed out          */
+/* the next fork ticket: never 0, which is a refusal */
+static unsigned fork_ticket(void)
+{
+    if (!++s_fk_last) ++s_fk_last;
+    return s_fk_last;
+}
 static struct {
     int      on;                    /* seek_run's TAKEOVER steps are live: from TK0 to TK4b       */
     RecFork  fork;                  /* TK0's handle and append point, until the arm moves them
@@ -7717,7 +7732,7 @@ static void tk_end(unsigned T, unsigned P, unsigned D, unsigned ms, unsigned rea
     if (s_sk_req == TAGPU_REPLAY_RQ_TAKEOVER) {
         char done[48];
         snprintf(done, sizeof done, "taken over at GameTime %u as player %u", T, P);
-        result_set(TAGPU_REPLAY_RQ_TAKEOVER, 0, 1, 0, done);
+        result_set(TAGPU_REPLAY_RQ_TAKEOVER, 0, 1, 0, 0, done);
     }
     snprintf(line, sizeof line, "replay: %s: taken over at GameTime %u as player %u, difficulty "
              "%u, in %u ms (read %u, rebuild %u, AI %u, passability %u); units %u killed, %u "
@@ -7752,7 +7767,7 @@ static void sk_refused(int tk, unsigned T, const char* why)
     if (tk) tagpu_logf("replay: %s: takeover at %u refused: seek to %u refused: %s", s_name, T, T,
                        why);
     else tagpu_logf("replay: %s: seek to %u refused: %s", s_name, T, why);
-    if (s_sk_req) result_set(s_sk_req, 0, 0, 0, why);
+    if (s_sk_req) result_set(s_sk_req, 0, 0, 0, 0, why);
 }
 
 /* The recorded contact bits `mask` of +0x110, put back from W's images (R14b):
@@ -7900,7 +7915,7 @@ static int seek_run(char* ta)
         if (!tk_bound(&L, V, P, &D, back, why, sizeof why) ||
             (!back && !tk_open(T, why, sizeof why))) {
             tagpu_logf("replay: %s: takeover at %u refused: %s", s_name, T, why);
-            if (s_sk_req) result_set(s_sk_req, 0, 0, 0, why);
+            if (s_sk_req) result_set(s_sk_req, 0, 0, 0, 0, why);
             if (!back) sk_back(&L, prev);
             return 0;
         }
@@ -8065,7 +8080,7 @@ static int seek_run(char* ta)
     if (s_sk_req == TAGPU_REPLAY_RQ_SEEK) {
         char done[64];
         snprintf(done, sizeof done, "at GameTime %u, sought from GameTime %u", T, h);
-        result_set(TAGPU_REPLAY_RQ_SEEK, 0, 1, 0, done);
+        result_set(TAGPU_REPLAY_RQ_SEEK, 0, 1, 0, 0, done);
     }
     tagpu_logf("replay: %s: the seek to %u wrote: %u units left alive by the kills; buckets: %u "
                "units moved, %u carried units' buckets set, %u units outside the recorded "
@@ -8295,7 +8310,7 @@ static void rw_said(int ok, int op, const char* fmt, ...)
     vsnprintf(text, sizeof text, fmt, ap);
     va_end(ap);
     tagpu_logf("rewind: %s", text);
-    result_set(TAGPU_REPLAY_RQ_REWIND, op, ok, 0, text);
+    result_set(TAGPU_REPLAY_RQ_REWIND, op, ok, 0, 0, text);
 }
 
 static void rw_finish(char* ta, int back)
@@ -9172,12 +9187,12 @@ static void sw_refused(unsigned id, unsigned del, const char* why)
 {
     tagpu_logf("replay: %s: watching timeline %u refused: %s", tlc_open() ? s_name : "-", id,
                why);
-    result_set(TAGPU_REPLAY_RQ_SWITCH, 0, 0, 0, why);
+    result_set(TAGPU_REPLAY_RQ_SWITCH, 0, 0, 0, id, why);
     if (del) {
         char w2[48];
         snprintf(w2, sizeof w2, "could not leave timeline %u", del);
         tagpu_logf("replay: %s: the HUD's fork request refused: %s", s_name, w2);
-        result_set(TAGPU_REPLAY_RQ_FORK, TAGPU_REPLAY_FORK_DELETE, 0, 0, w2);
+        result_set(TAGPU_REPLAY_RQ_FORK, TAGPU_REPLAY_FORK_DELETE, 0, s_sw.then_ticket, del, w2);
     }
 }
 
@@ -9191,23 +9206,26 @@ static void sw_done(unsigned left, unsigned id)
     tlc_refresh();
     recfile_release(left);
     snprintf(done, sizeof done, "watching timeline %u", id);
-    result_set(TAGPU_REPLAY_RQ_SWITCH, 0, 1, 0, done);
+    result_set(TAGPU_REPLAY_RQ_SWITCH, 0, 1, 0, id, done);
 }
 
 /* a deletion that waited for its switch, queued now that the switch released its claim; its
-   ticket waits in the slot tagpu_replay_fork_op kept for it */
+   job waits in the slot tagpu_replay_fork_op kept for it */
 static void sw_delete(unsigned del)
 {
     unsigned i, t;
-    for (i = 0; i < FORK_TICKETS && s_fk[i].ticket; i++) {}
+    for (i = 0; i < FORK_TICKETS && s_fk[i].job; i++) {}
     t = i < FORK_TICKETS ? fork_request(s_path, REC_FILE_DELETE, del, NULL, NULL) : 0;
     if (!t) {
         tagpu_logf("replay: %s: the HUD's fork request refused: file worker unavailable", s_name);
-        result_set(TAGPU_REPLAY_RQ_FORK, TAGPU_REPLAY_FORK_DELETE, 0, 0, "file worker unavailable");
+        result_set(TAGPU_REPLAY_RQ_FORK, TAGPU_REPLAY_FORK_DELETE, 0, s_sw.then_ticket, del,
+                   "file worker unavailable");
         return;
     }
-    s_fk[i].ticket = t;
+    s_fk[i].job = t;
     s_fk[i].op = TAGPU_REPLAY_FORK_DELETE;
+    s_fk[i].ticket = s_sw.then_ticket;
+    s_fk[i].id = del;
 }
 
 /* the seek path: a second reader on timeline `id`'s chain, THE SEEK on it; 1 done, 0 refused with
@@ -9846,13 +9864,13 @@ int tagpu_replay_takeover_request(unsigned P, unsigned T, int D)
     RecAppend a;
     if (!tagpu_puppet_on() || !s_rd || s_dead) {
         tagpu_logf("replay: takeover refused: this level plays no recording");
-        result_set(TAGPU_REPLAY_RQ_TAKEOVER, 0, 0, 0, "this level plays no recording");
+        result_set(TAGPU_REPLAY_RQ_TAKEOVER, 0, 0, 0, 0, "this level plays no recording");
         return 0;
     }
     /* the frame visit runs no takeover while a rewind owns the level, so none is queued then */
     if (s_rw.state) {
         tagpu_logf("replay: refused: use rewind commands while live rewind owns the level");
-        result_set(TAGPU_REPLAY_RQ_TAKEOVER, 0, 0, 0,
+        result_set(TAGPU_REPLAY_RQ_TAKEOVER, 0, 0, 0, 0,
                    "use rewind commands while live rewind owns the level");
         return 0;
     }
@@ -9861,7 +9879,7 @@ int tagpu_replay_takeover_request(unsigned P, unsigned T, int D)
     R = takeover_point(T, &a, why, sizeof why, NULL);
     if (!R) {
         tagpu_logf("replay: %s: takeover refused: %s", s_name, why);
-        result_set(TAGPU_REPLAY_RQ_TAKEOVER, 0, 0, 0, why);
+        result_set(TAGPU_REPLAY_RQ_TAKEOVER, 0, 0, 0, 0, why);
         return 0;
     }
     if (R != T)
@@ -9923,7 +9941,7 @@ static unsigned fork_fallback(void)
     return UINT32_MAX;
 }
 
-int tagpu_replay_fork_op(int op, unsigned id, const char* stem)
+unsigned tagpu_replay_fork_op(int op, unsigned id, const char* stem)
 {
     char why[96], output[MAX_PATH];
     unsigned i, t, slot = FORK_TICKETS, fallback = UINT32_MAX, nfree = 0;
@@ -9941,7 +9959,7 @@ int tagpu_replay_fork_op(int op, unsigned id, const char* stem)
         snprintf(why, sizeof why, "the export's name is not a file name");
     else {
         for (i = 0; i < FORK_TICKETS; i++)
-            if (!s_fk[i].ticket) {
+            if (!s_fk[i].job) {
                 if (slot == FORK_TICKETS) slot = i;
                 nfree++;
             }
@@ -9961,7 +9979,7 @@ int tagpu_replay_fork_op(int op, unsigned id, const char* stem)
     if (why[0]) {
         tagpu_logf("replay: %s: the HUD's fork request refused: %s", tlc_open() ? s_name : "-",
                    why);
-        result_set(TAGPU_REPLAY_RQ_FORK, op, 0, 0, why);
+        result_set(TAGPU_REPLAY_RQ_FORK, op, 0, 0, id, why);
         return 0;
     }
     /* the timeline that plays: a switch to its fallback first, the deletion once the switch has
@@ -9970,21 +9988,24 @@ int tagpu_replay_fork_op(int op, unsigned id, const char* stem)
         s_sw.pending = 1;
         s_sw.id = fallback;
         s_sw.then_delete = id;
+        s_sw.then_ticket = fork_ticket();
         tagpu_logf("replay: %s: the HUD's deletion of timeline %u waits for the switch to "
                    "timeline %u", s_name, id, fallback);
-        return 1;
+        return s_sw.then_ticket;
     }
     if (op == TAGPU_REPLAY_FORK_EXPORT)
         snprintf(output, sizeof output, "replays\\%s.imprec", stem);
     t = fork_request(s_path, op == TAGPU_REPLAY_FORK_DELETE ? REC_FILE_DELETE : REC_FILE_EXPORT,
                      id, op == TAGPU_REPLAY_FORK_EXPORT ? output : NULL, NULL);
     if (!t) {
-        result_set(TAGPU_REPLAY_RQ_FORK, op, 0, 0, "file worker unavailable");
+        result_set(TAGPU_REPLAY_RQ_FORK, op, 0, 0, id, "file worker unavailable");
         return 0;
     }
-    s_fk[slot].ticket = t;
+    s_fk[slot].job = t;
     s_fk[slot].op = op;
-    return 1;
+    s_fk[slot].ticket = fork_ticket();
+    s_fk[slot].id = id;
+    return s_fk[slot].ticket;
 }
 
 /* The HUD's fork requests the file worker has finished, at every frame visit: each outcome
@@ -9995,7 +10016,7 @@ static void fork_poll(void)
     unsigned i;
     for (i = 0; i < FORK_TICKETS; i++) {
         char why[160];
-        unsigned t = s_fk[i].ticket;
+        unsigned t = s_fk[i].job;
         int k;
         if (!t) continue;
         k = recfile_result(t, why, sizeof why);
@@ -10008,8 +10029,8 @@ static void fork_poll(void)
                      REC_FILE_RESULTS);
             tagpu_logf("replay: %s: the HUD's fork request %u: %s", s_name, t, why);
         }
-        result_set(TAGPU_REPLAY_RQ_FORK, s_fk[i].op, k == 1, t, why);
-        s_fk[i].ticket = 0;
+        result_set(TAGPU_REPLAY_RQ_FORK, s_fk[i].op, k == 1, s_fk[i].ticket, s_fk[i].id, why);
+        s_fk[i].job = 0;
         s_tlc.done = ~recfile_completed();
     }
 }

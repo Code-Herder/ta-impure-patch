@@ -165,8 +165,9 @@ typedef struct {
 /* THE GROUPS: a disabled control is one layer, as the mockup's CSS `opacity` on its element makes
    it -- its part, icon, stripe and text composited at full opacity, then the whole faded once.
    Its ops are consecutive and carry its number (`grp`); `grp[]` holds each group's opacity.
-   Every group is a control made at a hot() site, so a frame has at most tagpu_hudlay_max_hot of
-   them, which the load holds to HUD_MAXHOT; a group never holds the chart or a drop shadow. */
+   Each group stands at a site tagpu_hudlay_max_hot counts -- a control whose hot() it takes the
+   place of while disabled -- one group a site, so a frame has at most that many groups, which the
+   load holds to HUD_MAXHOT; a group never holds the chart or a drop shadow. */
 #define HUD_MAXGRP  HUD_MAXHOT
 #define HUD_MAXRUN  2048
 #define HUD_TEXTMAX 32768

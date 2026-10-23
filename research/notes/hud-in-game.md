@@ -167,9 +167,14 @@ The owner's decisions:
   (`tagpu_huddraw.c`, *THE GROUPS*). Both are premultiplied OVER, so the pixel is
   a L + (1 − a L.a) B for the layer L, the mockup's. `tagpu_vk_hud_prepare` records the layer's
   own render pass before the seam's; the layer is an image a frame slot, replaced behind the
-  slot's fence wait when a frame's regions outgrow it. Each group has its own region, so two that
-  overlap on screen fade apart. At most `HUD_MAXHOT` groups: each is a control made at a
-  `hot()` site. MEASURED 2026-10-23 at 1024×768 on the stock-limits recording past its end
+  slot's fence wait when a frame's regions outgrow it. It is RGBA8 in the attachment's encoding
+  (sRGB when the attachment's is, `layer_format`), so a group's coverage keeps a full 8-bit alpha
+  whatever the swapchain carries, and never larger than the attachment, whose viewport its regions
+  are drawn with: a group whose region does not fit below the others is refused — logged once,
+  `hud: N disabled controls' regions did not fit the groups' layer` — and drawn op by op at its
+  opacity, the build starting again without it. Each group has its own region, so two that
+  overlap on screen fade apart. At most `HUD_MAXHOT` groups: each stands at a site
+  `tagpu_hudlay_max_hot` counts, one group a site. MEASURED 2026-10-23 at 1024×768 on the stock-limits recording past its end
   scenario, the game against the mockup fed its dump, best shift (0, 0) everywhere: the out
   picker rows' mean difference 6.27, 5.10 and 5.16 (7.05, 5.71 and 5.68 when each part, icon
   and glyph took a on its own), the disabled TEAMS chip 5.73 (6.31), the Forks bay with no fork 5.44
@@ -597,7 +602,9 @@ has. A lane whose fork has gone since the draw is the replay's to refuse.
   lane it asks for 0, the original: the mockup's "back to the replay". It disarms Delete.
 - `export:k` saves the fork as `replays\<name>-F<id>.imprec`, `<name>` the playing's own
   (`tagpu_replay_fork_op(EXPORT, id, stem)`). An existing export is never overwritten, and a name
-  `fork_stem` refuses is refused; the log has the worker's reason.
+  `fork_stem` refuses is refused; the log has the worker's reason. A recording whose name leaves
+  no room for `-F<id>` in the stem's 127 characters is refused by the HUD itself, "Cannot save
+  F<id>" and a `hud: export of timeline` line, rather than saved under a cut name.
 - `delete:k`, first click: arms it — "Click again to delete F<id>", the button drawn pressed.
   Second click: `tagpu_replay_fork_op(DELETE, id)`. The watched timeline's deletion is the
   replay's switch to the nearest live timeline up its chain first, then the deletion. The lane
@@ -607,13 +614,20 @@ has. A lane whose fork has gone since the draw is the replay's to refuse.
 the packet (`TAGPU_PK_FORK_ARMED`), so `HUDSTATE.armed` follows the fork if the list reorders. It
 holds only while the lanes are open and list its fork, and a lane click clears it.
 
-**The outcomes.** The fill reads the replay's last result once by its serial, as the picker does,
-and toasts the outcome of what the lanes asked for: "Cannot watch F<id>" (or "Cannot go back to the
+**The outcomes.** A request the replay refuses at once is toasted at once. One it accepts waits
+for its outcome, which the fill reads once by the result's serial, as the picker does, and matches
+by what the result names (`TAGPU_REPLAY_RESULT`'s `id` and `ticket`): a switch by the timeline it
+went to, an export or a deletion by the ticket `tagpu_replay_fork_op` returned, up to four waiting
+(`HUD_FORKASK`), so an outcome the lanes did not ask for — a trigger's — is never toasted as theirs,
+and each toast names the result's own fork: "Cannot watch F<id>" (or "Cannot go back to the
 replay") for a refused switch, "F<id> saved as a replay of its own" or "Cannot save F<id>", "F<id>
-deleted" or "Cannot delete F<id>". A result names no timeline, so each kind keeps the id the lanes
-asked for, and an outcome they did not ask for — a trigger's — is not toasted. With two requests of
-one kind in flight the toasts name the later's id. Every toast is logged, `hud: toast "..."`, which
-is how the tests read them.
+deleted" or "Cannot delete F<id>". Every toast is logged, `hud: toast "..."`, which is how the tests
+read them.
+
+**A press and its release act on one fork.** The press keeps the fork its lane showed
+(`held_lane`), and the release acts only when its own frame's lane at that index is the same fork:
+a list that changed between them (a deletion, a fork made) does not send the click to the fork
+that moved into its place.
 
 **The markers after a switch.** The walker walks the chain that plays, so a switch restarts it.
 The fill asks the old walk to stop and polls its join at every fill after, showing no marker and
@@ -658,8 +672,8 @@ over the world, is `tagpu_menu_modal`'s.
   change) — posts `n` = 0, and a click there is the engine's.
 - **The next command record carries it** (`TAGPU_CMD_HUD` in `TAGPU_CMD`, `tagpu_packet.h`):
   `tagpu_zoom_frame_end` fills it through `tagpu_hudstate_cmd` beside the zoom's fields. It is a
-  level, as the record's other levels are. With 128 controls the record is 4224 bytes (2152 with
-  64; measured by `sizeof`, 2026-10-23), past one page: `pkx_init` commits at least the record
+  level, as the record's other levels are. With 128 controls the record is 4224 bytes (2152 before the
+  lanes: 64 controls and no lane fields; measured by `sizeof`, 2026-10-23), past one page: `pkx_init` commits at least the record
   for each slot before it zeroes it (`slot_commit(m, i, max(commit0, recBytes))`), so the zeroing
   stays inside what was committed whatever the record's size, a reservation too small refuses the
   arm by name, and `sizeof(TAGPU_CMD) + 4 <= PK_CMD_RESERVE` (64 KB) is asserted at compile
@@ -968,20 +982,35 @@ the render thread.
 - **The dump answers every 30 frames**, so at a low frame rate `tacli hud show` can miss a toast
   that lasts 1.8 s: at about 5 frames a second a dump is 6 s apart. The log keeps every toast
   (`hud: toast "..."`); how it looks needs a capture.
-- **A lane's toast can name the wrong fork** when two requests of one kind are in flight: the
-  replay's outcome names no timeline, so the lanes toast the id they asked for last.
+- **A lane's outcome can go untoasted.** The replay keeps one outcome, so two consumed in one
+  frame visit show the fill the later only: a switch refused and the deletion that waited for it,
+  or two fork jobs finishing together. The hidden one is never toasted; its wait is dropped when a
+  fifth request takes its slot, or at the level's end.
+- **A chain lane fills to its end when the fork after it on the chain is deleted.** A lane before
+  the watched one fills to where the next fork on the chain branches off it
+  (`TAGPU_PK_FORK_CHAIN`, parent ids); the packet lists live forks only, so when that next fork is
+  deleted while a fork of it plays, no listed fork names the lane as its parent, and the lane fills
+  to its own end (the mockup's rule does the same) [INFERRED from the code, not run].
 - **The hit map is one frame behind the HUD being built**, by design: it is the frame on screen.
   A control that moves between two frames (a row's buttons appearing under the pointer, the
   column scrolling) is clickable where the player saw it, not where the next frame draws it.
-- **Bookmarks do not survive a playing** [INFERRED from the code, not run]: `replays\index.dat`
-  keys them by the file's name and size, and every playing's end touches the file, which appends a
-  timeline table and so changes its size; a fork, a deletion and an export change it too.
 - **A multiplayer recording's fork may not play** [INFERRED from the code, not run]: the reader
   refuses a chain whose segments differ in RT_HOLD, a multiplayer root has none, and its fork,
   recorded by a live skirmish, writes one.
 - **A one-pixel Oswald residual.** At 26 of 7554 sizes swept, Chrome rounds Oswald's ascent or
   descent differently from the rule the DLL follows, and the line sits a pixel off the mockup's
   ([The replay HUD's layout](hud-layout.md), *Text*).
+- **Glyphs stand up to a pixel taller in the mockup.** Chrome on Linux hints the faces
+  vertically, snapping a glyph's horizontal edges to whole pixels; the DLL's rasteriser
+  (stb_truetype) does not hint. MEASURED 2026-10-23 in headless Chrome, a T of Oswald 500 from 20
+  to 59.75 px: the cap height is whole pixels and up to 1.3 px over the font's 0.81 em (43 px at
+  52 px against 42.12, 28 at 33 against 26.73), where the game draws 0.81 em exactly; in the
+  game-against-mockup capture at 4K and HUD 150 "TAKE OVER REPLAY" (51.75 px) is 43 rows in the
+  mockup and 42 in the game, its tops one row higher, which reads as the text sitting half a pixel
+  low, while "PLAYER" (42.75 px) and the lane labels (28.35 px) span the same rows in both. With
+  `text-rendering: geometricPrecision` Chrome draws the T unhinted, within a fifth of a pixel of
+  0.81 em, but it also moves Chrome's line layout, by up to 2.7 units in `laycheck.py`, so the
+  baseline rule would have to be derived again for it.
 
 ## Open
 

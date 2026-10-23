@@ -433,8 +433,10 @@ static void forks(const TAGPU_PK_HUD* h, HUDSTATE* st, unsigned axis)
         for (j = 0; j < h->nseat && j < (int)TAGPU_PK_HUD_SEATS && h->seat[j].seat != k->seat; j++) {}
         if (j < h->nseat && j < (int)TAGPU_PK_HUD_SEATS)
             tagpu_hudstate_utf8(f->name, sizeof f->name, h->seat[j].name, sizeof h->seat[j].name);
-        else
+        else if (k->seat < TAGPU_PK_HUD_SEATS)
             snprintf(f->name, sizeof f->name, "Player %u", (unsigned)k->seat + 1);
+        else    /* no recorded seat, 0xFF among them: no name is known */
+            snprintf(f->name, sizeof f->name, "Unknown seat");
         if (k->flags & TAGPU_PK_FORK_WATCHED) st->timeline = i;
         /* the input marks the armed Delete on its fork, so the arm follows it when the list reorders */
         if (k->flags & TAGPU_PK_FORK_ARMED) st->armed = i;

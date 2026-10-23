@@ -162,12 +162,12 @@ int tagpu_replay_axis(unsigned* first, unsigned* last);
 unsigned tagpu_replay_timelines_serial(void);
 
 /* A fork of the playing's file deleted or exported (replays\<stem>.imprec), by the file worker:
-   1 accepted, its outcome reported later through tagpu_replay_result (kind FORK) once the frame
-   visit has taken it; 0 refused at once, with a line and that result. The deletion of the
+   accepted, its ticket, never 0, which its outcome carries when tagpu_replay_result reports it
+   (kind FORK) once the frame visit has taken it; 0 refused at once, with a line and that result. The deletion of the
    timeline that plays is a switch to the nearest live timeline up its chain first (THE SWITCH),
    the deletion queued once that switch is done, and refused when it is refused. */
 enum { TAGPU_REPLAY_FORK_DELETE = 1, TAGPU_REPLAY_FORK_EXPORT };
-int tagpu_replay_fork_op(int op, unsigned id, const char* stem);
+unsigned tagpu_replay_fork_op(int op, unsigned id, const char* stem);
 
 /* LIVE REWIND (tagpu_replay.c, THE LIVE REWIND), the trigger's verbs: queued for the next frame
    visit, the latest replacing an earlier one not yet taken. T is SEEK's; `dump` a frame dump
@@ -188,15 +188,17 @@ typedef struct TAGPU_REPLAY_RWSTATE {
 } TAGPU_REPLAY_RWSTATE;
 void tagpu_replay_rewind_state(TAGPU_REPLAY_RWSTATE* out);
 
-/* THE LAST REQUEST'S OUTCOME: of the seeks, the takeovers, the rewind verbs and the fork
-   operations, the one consumed last. `serial` grows by one at each, so a caller that remembers
-   it sees each outcome once. */
+/* THE LAST REQUEST'S OUTCOME: of the seeks, the takeovers, the switches, the rewind verbs and
+   the fork operations, the one consumed last. `serial` grows by one at each, so a caller that
+   remembers it sees an outcome once; two consumed between its reads show it the later only, so a
+   caller waiting for one outcome matches it by its ticket or id and never takes another's. */
 enum { TAGPU_REPLAY_RQ_NONE, TAGPU_REPLAY_RQ_TAKEOVER, TAGPU_REPLAY_RQ_REWIND,
        TAGPU_REPLAY_RQ_FORK, TAGPU_REPLAY_RQ_SEEK, TAGPU_REPLAY_RQ_SWITCH };
 typedef struct TAGPU_REPLAY_RESULT {
     unsigned serial;
     int      kind, op, ok;   /* op: the rewind verb or the fork op                          */
-    unsigned ticket;         /* a fork op's                                                  */
+    unsigned ticket;         /* a fork op's: what tagpu_replay_fork_op returned              */
+    unsigned id;             /* the timeline a switch or a fork op named; 0 for the others   */
     char     why[96];        /* the refusal's reason, or what was done                       */
 } TAGPU_REPLAY_RESULT;
 void tagpu_replay_result(TAGPU_REPLAY_RESULT* out);

@@ -106,7 +106,7 @@ static TAGPU_VKSTAGE         s_stage[TAGPU_VK_SLOTS];
 static HUDOPS                s_ops;             /* render thread's; 400 KB, never on a stack  */
 static HUDBATCH              s_batch[HUD_MAXBATCH];
 static int                   s_nbatch, s_ninst;
-static int                   s_saidDrop, s_saidMiss, s_saidChart;
+static int                   s_saidDrop, s_saidMiss, s_saidChart, s_saidUnfit;
 
 /* THE GROUPS' LAYER (tagpu_huddraw.c, THE GROUPS): an image a frame slot, cleared and drawn by
    this pass's own render pass in `prepare` and sampled by the attachment's composites in `record`,
@@ -328,8 +328,23 @@ static void draw_batch(VkCommandBuffer cb, const HUDBATCH* b, uint32_t slot)
 
 /* ---- the groups' layer ------------------------------------------------------------------------ */
 
-/* One colour attachment in the attachment's own format, so a group blends in the layer as it would
-   have on the attachment. LOAD_OP_CLEAR over the render area, which holds every region; the
+/* THE LAYER'S FORMAT: RGBA8 in the attachment's encoding -- sRGB when the attachment's is, so a
+   group blends in the layer in the space it would have blended in on the attachment -- and a full
+   8-bit alpha whatever the attachment carries, since a group's coverage lives in the layer's alpha
+   and one with little or none would lose it. */
+static VkFormat s_lfmt;
+static VkFormat layer_format(VkFormat attachment)
+{
+    switch (attachment) {
+    case VK_FORMAT_R8_SRGB: case VK_FORMAT_R8G8_SRGB: case VK_FORMAT_R8G8B8_SRGB: case VK_FORMAT_B8G8R8_SRGB:
+    case VK_FORMAT_R8G8B8A8_SRGB: case VK_FORMAT_B8G8R8A8_SRGB: case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
+        return VK_FORMAT_R8G8B8A8_SRGB;
+    default:
+        return VK_FORMAT_R8G8B8A8_UNORM;
+    }
+}
+
+/* One colour attachment in the layer's format (layer_format). LOAD_OP_CLEAR over the render area, which holds every region; the
    contents outside it are never sampled. FIRST SCOPE: the slot's earlier frames, whose composites
    sampled the image -- a write after their reads. SECOND: the composites of this frame's render
    pass, which read what this one wrote. */
@@ -341,7 +356,7 @@ static int build_layer_pass(const TAGPU_VKPASS* d)
     VkSubpassDependency dep[2];
     VkRenderPassCreateInfo rpi = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
     memset(&at, 0, sizeof at);
-    at.format = d->fmt;
+    at.format = s_lfmt;
     at.samples = VK_SAMPLE_COUNT_1_BIT;
     at.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     at.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -385,8 +400,11 @@ static void layer_free(VkDevice dev, LAYER* L)
 }
 
 /* The slot's layer at least w x h, grown in steps of 64 pixels so a picker that opens and closes
-   does not rebuild it. Safe to replace here: the caller owns the slot (the seam's fence wait). */
-static int layer_size(const TAGPU_VKPASS* d, LAYER* L, int w, int h)
+   does not rebuild it, and never past the attachment's `cw` x `ch`: the regions lie within it
+   (tagpu_huddraw.c, THE LAYER IS NO LARGER THAN THE ATTACHMENT), and an image the device made at
+   that size is one it can make. Safe to replace here: the caller owns the slot (the seam's fence
+   wait). */
+static int layer_size(const TAGPU_VKPASS* d, LAYER* L, int w, int h, int cw, int ch)
 {
     VkImageCreateInfo ici = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
     VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
@@ -396,12 +414,15 @@ static int layer_size(const TAGPU_VKPASS* d, LAYER* L, int w, int h)
     VkWriteDescriptorSet wr;
     VkMemoryRequirements req;
     int type;
+    if (w > cw || h > ch) return 0;
     if (L->img && L->w >= w && L->h >= h) return 1;
     w = ((w > L->w ? w : L->w) + 63) / 64 * 64;
     h = ((h > L->h ? h : L->h) + 63) / 64 * 64;
+    if (w > cw) w = cw;
+    if (h > ch) h = ch;
     layer_free(d->dev, L);
     ici.imageType = VK_IMAGE_TYPE_2D;
-    ici.format = d->fmt;
+    ici.format = s_lfmt;
     ici.extent.width = (uint32_t)w;
     ici.extent.height = (uint32_t)h;
     ici.extent.depth = 1;
@@ -421,7 +442,7 @@ static int layer_size(const TAGPU_VKPASS* d, LAYER* L, int w, int h)
     if (vkBindImageMemory(d->dev, L->img, L->mem, 0) != VK_SUCCESS) { layer_free(d->dev, L); return 0; }
     ivi.image = L->img;
     ivi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    ivi.format = d->fmt;
+    ivi.format = s_lfmt;
     ivi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     ivi.subresourceRange.levelCount = 1;
     ivi.subresourceRange.layerCount = 1;
@@ -469,7 +490,7 @@ static int layer_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     VkViewport vp;
     VkDeviceSize off = (VkDeviceSize)slot * IBYTES;
     int i, j, k;
-    if (!layer_size(d, L, s_layW > 0 ? s_layW : 1, s_layH > 0 ? s_layH : 1)) return 0;
+    if (!layer_size(d, L, s_layW > 0 ? s_layW : 1, s_layH > 0 ? s_layH : 1, (int)w, (int)h)) return 0;
     for (i = 0; i < s_nmain; i++) {
         const HUDBATCH* b = &s_batch[i];
         if (b->tex != HUD_TEX_LAYER) continue;
@@ -640,13 +661,16 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
        minified through a mip chain this pass blits, and the glyphs are filtered. All of it is
        mandatory for these two formats, so this has never fired; the day it does the log names
        it instead of the pass drawing nothing. */
+    s_lfmt = layer_format(d->fmt);
     if (!format_ok(d, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT
                                               | VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT)
         || !format_ok(d, VK_FORMAT_R8_UNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)
         || !format_ok(d, VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)
-        || !format_ok(d, d->fmt, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
-        plog(d, "hud: this device cannot filter or blit RGBA8 / R8, sample RGBA32F, or blend into and "
-                "sample its attachment's format - the pass stays down");
+        || !format_ok(d, d->fmt, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT)
+        || !format_ok(d, s_lfmt, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+        plog(d, "hud: this device cannot filter or blit RGBA8 / R8, sample RGBA32F, blend into its "
+                "attachment's format, or blend into and sample the groups' layer's %s - the pass stays down",
+             s_lfmt == VK_FORMAT_R8G8B8A8_SRGB ? "RGBA8 sRGB" : "RGBA8");
         return 0;
     }
     s_nparts = tagpu_hudlay_nparts(art->lay);
@@ -903,7 +927,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     TAGPU_VKSTAGE* sg;
     char err[160];
     float px;
-    int dropped = 0, r, due, ox, oy;
+    int dropped = 0, unfit = 0, r, due, ox, oy;
 
     s_ninst = s_nbatch = s_nmain = s_ngroup = 0;
     tagpu_hudstate_drawn(NULL);
@@ -936,7 +960,12 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     s_ninst = tagpu_huddraw_build(art, &s_ops, px, ox, oy, (int)w, (int)h, (HUDINST*)(s_imap + (size_t)slot * IBYTES),
                                   HUD_MAXINST, s_batch, HUD_MAXBATCH, &s_nbatch, &s_nmain,
-                                  s_group, &s_ngroup, &s_layW, &s_layH, &dropped);
+                                  s_group, &s_ngroup, &s_layW, &s_layH, &dropped, &unfit);
+    if (unfit && !s_saidUnfit) {
+        s_saidUnfit = 1;
+        plog(d, "hud: %d disabled controls' regions did not fit the groups' layer (%ux%u) this frame; "
+                "they are drawn op by op at their opacity (said once)", unfit, (unsigned)w, (unsigned)h);
+    }
     if ((dropped || s_ops.overflow) && !s_saidDrop) {
         s_saidDrop = 1;
         plog(d, "hud: %d glyphs did not fit the atlas this frame%s (said once)", dropped,
