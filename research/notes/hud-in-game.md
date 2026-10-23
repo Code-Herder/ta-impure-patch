@@ -142,9 +142,9 @@ The owner's decisions:
 | `tagpu_menu.c` | the modal test `tagpu_menu_modal`, and Leave's question opened from the DrawGameScreen observer behind its guard | game |
 | `tagpu_shield.c`, `wndproc.c`, `tagpu_input.c` | the mouse paths into `tagpu_hudinput_button` and `tagpu_hudinput_wheel`; the device tokens `ddown:`, `dup:` and `dwheel:` | game |
 | `tagpu_hudlay.c`/`.h` | `hud.js`'s placement and builders in C, over `layout.json` and `kit.json`, the stats window and its chart among them; the text baseline; a part op as quads; the controls as `HOP_HOT` ops | either: a pure function |
-| `tagpu_huddraw.c`/`.h` | the ops as instances; the glyph atlas; the chart's image; the shader pair | render |
+| `tagpu_huddraw.c`/`.h` | the ops as instances; the glyph atlas; the chart's image; the groups' regions and composites; the shader pair | render |
 | `tagpu_hudart.c`/`.h` | the loader: the `HUDPAK` resource, the parts decoded, the faces opened | its own, then immutable |
-| `tagpu_vk_hud.c`/`.h` | the pass: the images, the uploads, one pipeline, a draw per run of instances | render |
+| `tagpu_vk_hud.c`/`.h` | the pass: the images, the uploads, the groups' layer and its render pass, one pipeline state built against each pass, a draw per run of instances | render |
 | `tagpu_json.c`/`.h` | the JSON parser the layout reads its two files with | either |
 | `tagpu_packet.h`, `tagpu_packet_pub.c`, `tagpu_packet.c` | `TAGPU_PK_HUD`, its area `hud_off`/`hud_len`, its fill, and `frame_valid`'s bounds on `nseat` and `nmark`; `TAGPU_PK_HUDSTAT` in `hstat_off`/`hstat_len`, and its bounds; `TAGPU_CMD_HUD` in the command record, and its take | game → render, render → game |
 | `tools/hudpak.py`, `res.rc`, the Makefile | `art/hud/` packed into `inc/tagpu_hudpak.bin` (gitignored), embedded as the `RCDATA` resource `HUDPAK` | build |
@@ -156,6 +156,23 @@ The owner's decisions:
   before `tagpu_vk_gui_record`, after the world target's composite.
 - **The HUD covers the world and nothing else.** The engine's dialogs, its messages and its menu
   draw over it, and so does the cursor, which is the last quad of the UI pass's sharp layer.
+- **A disabled control is one layer, as CSS `opacity` on its element makes it.** The builder
+  marks a disabled button's ops, and an out-of-game picker row's, as one group with the control's
+  opacity a (`group_begin`, `tagpu_hudlay.h` *THE GROUPS*). The drawer draws each group's ops at
+  full opacity into a region of its own on a layer image, cleared to transparent, moved there by
+  a whole-pixel offset so they rasterise as they would in place, and puts one quad where the
+  group stands in paint order, sampling the region texel for pixel at opacity a
+  (`tagpu_huddraw.c`, *THE GROUPS*). Both are premultiplied OVER, so the pixel is
+  a L + (1 − a L.a) B for the layer L, the mockup's. `tagpu_vk_hud_prepare` records the layer's
+  own render pass before the seam's; the layer is an image a frame slot, replaced behind the
+  slot's fence wait when a frame's regions outgrow it. Each group has its own region, so two that
+  overlap on screen fade apart. At most `HUD_MAXHOT` groups: each is a control made at a
+  `hot()` site. MEASURED 2026-10-23 at 1024×768 on the stock-limits recording past its end
+  scenario, the game against the mockup fed its dump, best shift (0, 0) everywhere: the out
+  picker rows' mean difference 6.27, 5.10 and 5.16 (7.05, 5.71 and 5.68 when each part, icon
+  and glyph took a on its own), the disabled TEAMS chip 5.73 (6.31), the Forks bay with no fork 5.44
+  (6.75), against 7.43 to 8.44 for enabled controls in the same capture; all 4831 pixels that
+  changed lie inside the groups.
 - **It is alpha-blended at the device's resolution**, premultiplied (`ONE`,
   `ONE_MINUS_SRC_ALPHA`): the parts' straight alpha is premultiplied once, at load, so filtering
   and mipmaps cannot darken an edge.
@@ -849,14 +866,6 @@ the render thread.
 
 ## Gaps
 
-- **A disabled control's text is faded glyph by glyph, not as one layer.** The mockup dims a
-  disabled control whole (CSS `opacity` on it and everything in it): its text and the text's
-  outline or shadow are composited first and faded together. The DLL gives a text op the
-  control's opacity a (`texts_at`, the op's `rgba`), and each glyph and each of its copies takes
-  it alone, so where a copy lies under its glyph the background shows through at (1 − a)² instead
-  of (1 − a): at the picker row's and the split chip's 0.45, 0.30 of it instead of 0.55 [computed
-  from the blend, not measured]. All three styles there carry copies (`header` an outline, `label` a
-  shadow, `face_chip` an outline). laycheck compares the opacity, which agrees, not the pixels.
 - **Closing a picker that is seeking leaves its seek to run**: the playback still goes back to R.
 - **GDI has no stats window**, as it has no replay HUD.
 - **The samples are held values, not interpolated**: each is the first walked iteration at or

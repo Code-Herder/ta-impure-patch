@@ -23,19 +23,29 @@ typedef struct {
 
 enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_CHART, HUDM_DROP };
 
-/* A run of instances drawn with one texture bound: a part's index, HUD_TEX_ATLAS or
-   HUD_TEX_CHART. A fill samples nothing, so it joins whatever run it falls in rather than
-   breaking it. */
+/* A run of instances drawn with one texture bound: a part's index, HUD_TEX_ATLAS,
+   HUD_TEX_CHART or HUD_TEX_LAYER. A fill samples nothing, so it joins whatever run it falls in
+   rather than breaking it. */
 #define HUD_TEX_ATLAS (-2)
 #define HUD_TEX_CHART (-3)
+#define HUD_TEX_LAYER (-4)
 typedef struct { int tex, first, count; } HUDBATCH;
 
+/* A GROUP'S REGION OF THE LAYER IMAGE (tagpu_huddraw.c, THE GROUPS), in its pixels from its top
+   left, and its instances: batches b0 .. b0 + nb - 1, drawn into the layer with the attachment's
+   viewport and the region as the scissor. */
+typedef struct { int x, y, w, h, b0, nb; } HUDLAYREG;
+
 /* The instances for `ops` at `px` device pixels a unit, the game screen's top-left corner at
-   (`ox`, `oy`) on a `w` x `h` attachment. Returns the instance count; `*nb` batches. Glyphs the
-   atlas could not take are left out and counted in `*dropped` (the atlas is rebuilt on the next
-   call that needs room). */
+   (`ox`, `oy`) on a `w` x `h` attachment. Returns the instance count; `*nb` batches, of which the
+   first `*nmain` are the attachment's and the rest the groups' (`g`, `*ng` of them, room for
+   HUD_MAXGRP), whose layer is at least `*lw` x `*lh`. A group's composite is a HUD_TEX_LAYER
+   instance whose uv are the region's corners IN LAYER PIXELS, which the pass divides by the size
+   of the image it binds. Glyphs the atlas could not take are left out and counted in `*dropped`
+   (the atlas is rebuilt on the next call that needs room). */
 int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, float px, int ox, int oy, int w, int h,
-                        HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb, int* dropped);
+                        HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb, int* nmain,
+                        HUDLAYREG* g, int* ng, int* lw, int* lh, int* dropped);
 
 /* THE GLYPH ATLAS: one R8 coverage image. `gen` changes when it is emptied because a glyph did
    not fit; the rows [*y0, *y1) are the ones changed since tagpu_huddraw_atlas_sent last covered

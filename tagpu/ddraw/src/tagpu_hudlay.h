@@ -138,11 +138,11 @@ typedef struct {
     int16_t  part;          /* HOP_PART: the kit index                                    */
     HUDRECT  r;
     HUDRECT  clip;          /* w < 0: none                                                */
-    uint32_t rgba;          /* HOP_SOLID, HOP_DOT: the colour; HOP_PART, HOP_TEXT: 0xFFFFFF00 |
-                               opacity                                                       */
+    uint32_t rgba;          /* HOP_SOLID, HOP_DOT: the colour; HOP_PART: 0xFFFFFF00 | opacity */
     float    shade;         /* HOPF_SHADE                                                 */
     int16_t  style;         /* HOP_TEXT: the style's index in layout.json `styles`        */
     uint8_t  centre;        /* HOP_TEXT: 1 centred, 2 to the box's right, 0 from its left */
+    uint8_t  grp;           /* 0, or the group it is drawn in: HUDOPS `grp[grp - 1]`        */
     float    size;          /* HOP_TEXT: the font size in units, after `fit`              */
     uint16_t run, nrun;     /* HOP_TEXT: its runs; HOP_HOT: run = the key's offset in text */
 } HUDOP;
@@ -162,6 +162,12 @@ typedef struct {
 } HUDCHART;
 
 #define HUD_MAXOP   4096
+/* THE GROUPS: a disabled control is one layer, as the mockup's CSS `opacity` on its element makes
+   it -- its part, icon, stripe and text composited at full opacity, then the whole faded once.
+   Its ops are consecutive and carry its number (`grp`); `grp[]` holds each group's opacity.
+   Every group is a control made at a hot() site, so a frame has at most tagpu_hudlay_max_hot of
+   them, which the load holds to HUD_MAXHOT; a group never holds the chart or a drop shadow. */
+#define HUD_MAXGRP  HUD_MAXHOT
 #define HUD_MAXRUN  2048
 #define HUD_TEXTMAX 32768
 
@@ -172,6 +178,8 @@ typedef struct {
                                the scroll the state asked for, held to [0, last]           */
     float   track_x0, track_x1; /* the playhead's run along the timeline, start to end     */
     HUDCHART chart;
+    int     ngrp;
+    float   grp[HUD_MAXGRP];
     HUDOP   op[HUD_MAXOP];
     HUDRUN  run[HUD_MAXRUN];
     char    text[HUD_TEXTMAX];

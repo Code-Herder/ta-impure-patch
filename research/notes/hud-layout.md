@@ -296,7 +296,8 @@ At those sizes the game's line sits a pixel off the mockup's.
   team's and a hover button's key adds the row's or the team's index in the frame, `jump:2`,
   `fold:0`, `row:4`. The game hit-tests these, topmost (last painted) first
   ([The replay HUD in game](hud-in-game.md), *Input*).
-- **A disabled control** is drawn at its `off` opacity, its icon and its text too, and has no
+- **A disabled control** is drawn at its `off` opacity as one layer, its part, icon, stripe and
+  text composited first and the whole faded once, as CSS `opacity` on its element does; it has no
   clickable of its own: the TEAMS chip when the teams are not told apart (one team, or a free-for-all), at
   `split.off` (0.45).
 - **An inset edge** (a resource bar's) is flagged on its ops (`HOPF_EDGE`), so `laycheck` matches

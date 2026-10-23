@@ -259,15 +259,17 @@ typedef struct {
     HUDBATCH*     b;
     int           nb, bcap;
     int           dropped;
+    int           fresh;        /* the next instance opens a batch: a group's first          */
 } B;
 
 static HUDINST* emit(B* c, int tex, int mode, float x0, float y0, float x1, float y1, const HUDOP* op)
 {
     HUDINST* q;
     if (c->n >= c->cap) return NULL;
-    if (tex != -1 && (c->nb == 0 || c->b[c->nb - 1].tex != tex)) {
+    if (c->fresh || (tex != -1 && (c->nb == 0 || c->b[c->nb - 1].tex != tex))) {
         if (c->nb >= c->bcap) return NULL;
-        c->b[c->nb].tex = tex;
+        c->fresh = 0;
+        c->b[c->nb].tex = tex == -1 ? HUD_TEX_ATLAS : tex;
         c->b[c->nb].first = c->n;
         c->b[c->nb].count = 0;
         c->nb++;
@@ -412,7 +414,7 @@ static void text(B* c, const HUDOP* op)
             if (!(q = emit(c, HUD_TEX_ATLAS, HUDM_GLYPH, x0, y0, x0 + gl->w, y0 + gl->h, op))) return;
             q->uv[0] = (float)gl->x / HUD_ATLAS; q->uv[1] = (float)gl->y / HUD_ATLAS;
             q->uv[2] = (float)(gl->x + gl->w) / HUD_ATLAS; q->uv[3] = (float)(gl->y + gl->h) / HUD_ATLAS;
-            colour(q, k < copies ? 0 : rgb[i], alpha[k] * (float)(op->rgba & 0xFF) / 255.0f);
+            colour(q, k < copies ? 0 : rgb[i], alpha[k]);
         }
     }
 }
@@ -530,75 +532,191 @@ static void chart_prepare(const B* c)
     }
 }
 
+/* One op's instances, at the B's origin. */
+static void draw_op(B* c, const HUDOP* op, int* charted)
+{
+    const HUDART* art = c->art;
+    const float px = c->px;
+    HUDQUAD q[HUD_MAXQUAD];
+    HUDINST* in;
+    int j, n;
+    switch (op->kind) {
+    case HOP_PART:
+        n = tagpu_hudlay_expand(art->lay, op, px, q, HUD_MAXQUAD);
+        for (j = 0; j < n; j++) {
+            if (!(in = emit(c, op->part, HUDM_PART, q[j].x0, q[j].y0, q[j].x1, q[j].y1, op))) break;
+            in->uv[0] = q[j].u0; in->uv[1] = q[j].v0; in->uv[2] = q[j].u1; in->uv[3] = q[j].v1;
+            colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
+        }
+        break;
+    case HOP_SOLID:
+        if (op->flags & HOPF_DROP) {
+            /* the blurred box reaches 3 sigma past its edges, where a Gaussian has all but
+               0.14 % of itself */
+            float x0 = op->r.x * px, y0 = op->r.y * px, x1 = (op->r.x + op->r.w) * px, y1 = (op->r.y + op->r.h) * px;
+            float sg = op->shade * px / 2, dy = op->size * px, e = 3 * sg;
+            if (!(in = emit(c, -1, HUDM_DROP, x0 - e, y0 - e + (dy < 0 ? dy : 0), x1 + e, y1 + e + (dy > 0 ? dy : 0), op))) break;
+            in->px[0] = x0 + c->ox; in->px[1] = y0 + c->oy; in->px[2] = x1 + c->ox; in->px[3] = y1 + c->oy;
+            in->uv[0] = in->uv[2] = dy;
+            in->uv[1] = in->uv[3] = 0;
+            colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
+            in->prm[1] = sg;
+            break;
+        }
+        /* fall through */
+    case HOP_DOT:
+        if (!(in = emit(c, -1, op->kind == HOP_DOT ? HUDM_DOT : op->flags & HOPF_SHADE ? HUDM_SHADE : HUDM_SOLID,
+                        op->r.x * px, op->r.y * px, (op->r.x + op->r.w) * px, (op->r.y + op->r.h) * px, op))) break;
+        colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
+        in->prm[1] = op->shade * px / 2;
+        break;
+    case HOP_LINE: {
+        float x0 = op->r.x * px, y0 = op->r.y * px, x1 = (op->r.x + op->r.w) * px, y1 = (op->r.y + op->r.h) * px;
+        float hw = op->size * px / 2, e = hw + 1;
+        if (!(in = emit(c, -1, HUDM_LINE, (x0 < x1 ? x0 : x1) - e, (y0 < y1 ? y0 : y1) - e,
+                        (x0 > x1 ? x0 : x1) + e, (y0 > y1 ? y0 : y1) + e, op))) break;
+        in->px[0] = x0 + c->ox; in->px[1] = y0 + c->oy; in->px[2] = x1 + c->ox; in->px[3] = y1 + c->oy;
+        colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
+        in->prm[1] = hw;
+        break;
+    }
+    case HOP_CHART:
+        if (!*charted) { chart_prepare(c); *charted = 1; }
+        for (j = 0; j < s_nband; j++) {
+            const BAND* bd = &s_band[j];
+            if (!(in = emit(c, HUD_TEX_CHART, HUDM_CHART, bd->x0, bd->y0, bd->x1, bd->y1, op))) break;
+            in->px[0] = (float)bd->j0; in->px[1] = (float)bd->j1; in->px[2] = (float)bd->col; in->px[3] = 0;
+            colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
+        }
+        break;
+    case HOP_TEXT:
+        text(c, op);
+        break;
+    default:
+        break;
+    }
+}
+
+/* ---- the groups ------------------------------------------------------------------------------
+
+   A GROUP (tagpu_hudlay.h, THE GROUPS) IS DRAWN AS CSS OPACITY DRAWS IT: its ops at full opacity
+   into a region of its own on the layer image, cleared to transparent, and that region then one
+   quad on the attachment at the group's opacity a, where the group stands in paint order. Both are
+   premultiplied OVER, so the quad's pixel is a L + (1 - a L.a) B, the mockup's, for the layer L
+   its ops composite to over nothing. Each group has its own region, so two that overlap on screen
+   still fade apart. The region is the group's box on the attachment in whole pixels, and its
+   instances are moved there by a whole-pixel offset, so they rasterise there as they would have in
+   place, and the quad covers that box and samples the region texel for pixel. */
+
+/* the shelf the next region opens on, and the layer's extent so far */
+typedef struct { int x, y, h, w_used, h_used; } SHELF;
+
+static void group_box(const B* c, int i0, int* x0, int* y0, int* x1, int* y1)
+{
+    float bx0 = c->W, by0 = c->H, bx1 = 0, by1 = 0;
+    int i;
+    for (i = i0; i < c->n; i++) {
+        const HUDINST* q = &c->inst[i];
+        float a = (q->ndc[0] + 1) * 0.5f * c->W, b = (q->ndc[1] + 1) * 0.5f * c->H;
+        float e = (q->ndc[2] + 1) * 0.5f * c->W, f = (q->ndc[3] + 1) * 0.5f * c->H;
+        if (q->clip[2] >= q->clip[0]) {
+            a = a > q->clip[0] ? a : q->clip[0]; b = b > q->clip[1] ? b : q->clip[1];
+            e = e < q->clip[2] ? e : q->clip[2]; f = f < q->clip[3] ? f : q->clip[3];
+        }
+        if (e <= a || f <= b) continue;
+        bx0 = a < bx0 ? a : bx0; by0 = b < by0 ? b : by0;
+        bx1 = e > bx1 ? e : bx1; by1 = f > by1 ? f : by1;
+    }
+    *x0 = (int)floorf(bx0 > 0 ? bx0 : 0); *y0 = (int)floorf(by0 > 0 ? by0 : 0);
+    *x1 = (int)ceilf(bx1 < c->W ? bx1 : c->W); *y1 = (int)ceilf(by1 < c->H ? by1 : c->H);
+}
+
+/* group k's ops [i0, i1) drawn into its region; its composite at index `at` (-1 none) set */
+static void draw_group(B* c, const HUDOPS* ops, int k, int i0, int i1, int at, int* charted,
+                       SHELF* sh, HUDLAYREG* g)
+{
+    int j0 = c->n, i, x0, y0, x1, y1, w, h;
+    float dx, dy;
+    g->b0 = c->nb;
+    g->x = g->y = g->w = g->h = 0;
+    c->fresh = 1;
+    for (i = i0; i < i1; i++) draw_op(c, &ops->op[i], charted);
+    c->fresh = 0;
+    g->nb = c->nb - g->b0;
+    group_box(c, j0, &x0, &y0, &x1, &y1);
+    w = x1 - x0; h = y1 - y0;
+    if (w <= 0 || h <= 0) {
+        g->nb = 0;
+        if (at >= 0) colour(&c->inst[at], 0, 0);
+        return;
+    }
+    if (sh->x + w > (int)c->W) { sh->y += sh->h; sh->x = 0; sh->h = 0; }
+    g->x = sh->x; g->y = sh->y; g->w = w; g->h = h;
+    sh->x += w;
+    sh->h = h > sh->h ? h : sh->h;
+    sh->w_used = sh->x > sh->w_used ? sh->x : sh->w_used;
+    sh->h_used = sh->y + sh->h;
+    dx = (float)(g->x - x0); dy = (float)(g->y - y0);
+    for (i = j0; i < c->n; i++) {
+        HUDINST* q = &c->inst[i];
+        q->ndc[0] += 2 * dx / c->W; q->ndc[2] += 2 * dx / c->W;
+        q->ndc[1] += 2 * dy / c->H; q->ndc[3] += 2 * dy / c->H;
+        q->px[0] += dx; q->px[2] += dx; q->px[1] += dy; q->px[3] += dy;
+        if (q->clip[2] >= q->clip[0]) { q->clip[0] += dx; q->clip[2] += dx; q->clip[1] += dy; q->clip[3] += dy; }
+    }
+    if (at >= 0) {
+        HUDINST* q = &c->inst[at];
+        q->ndc[0] = x0 / c->W * 2 - 1; q->ndc[1] = y0 / c->H * 2 - 1;
+        q->ndc[2] = x1 / c->W * 2 - 1; q->ndc[3] = y1 / c->H * 2 - 1;
+        q->px[0] = (float)x0; q->px[1] = (float)y0; q->px[2] = (float)x1; q->px[3] = (float)y1;
+        q->uv[0] = (float)g->x; q->uv[1] = (float)g->y;
+        q->uv[2] = (float)(g->x + w); q->uv[3] = (float)(g->y + h);
+        colour(q, 0xFFFFFF, ops->grp[k]);
+    }
+}
+
 int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, float px, int ox, int oy, int w, int h,
-                        HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb, int* dropped)
+                        HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb, int* nmain,
+                        HUDLAYREG* g, int* ng, int* lw, int* lh, int* dropped)
 {
     B c;
-    int i, j, n, charted = 0;
-    HUDQUAD q[HUD_MAXQUAD];
+    HUDOP none;
+    SHELF sh;
+    int at[HUD_MAXGRP];
+    int i, i0, k, charted = 0;
     if (s_full) atlas_empty();
     memset(&c, 0, sizeof c);
     c.art = art; c.ops = ops; c.px = px; c.ox = (float)ox; c.oy = (float)oy; c.W = (float)w; c.H = (float)h;
     c.inst = inst; c.cap = cap; c.b = b; c.bcap = bcap;
+    memset(&none, 0, sizeof none);
+    none.clip.w = -1;
+    for (k = 0; k < HUD_MAXGRP; k++) at[k] = -1;
+
+    /* the attachment's instances, a group's composite where its last op stands */
     for (i = 0; i < ops->n; i++) {
         const HUDOP* op = &ops->op[i];
-        HUDINST* in;
-        switch (op->kind) {
-        case HOP_PART:
-            n = tagpu_hudlay_expand(art->lay, op, px, q, HUD_MAXQUAD);
-            for (j = 0; j < n; j++) {
-                if (!(in = emit(&c, op->part, HUDM_PART, q[j].x0, q[j].y0, q[j].x1, q[j].y1, op))) break;
-                in->uv[0] = q[j].u0; in->uv[1] = q[j].v0; in->uv[2] = q[j].u1; in->uv[3] = q[j].v1;
-                colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
-            }
-            break;
-        case HOP_SOLID:
-            if (op->flags & HOPF_DROP) {
-                /* the blurred box reaches 3 sigma past its edges, where a Gaussian has all but
-                   0.14 % of itself */
-                float x0 = op->r.x * px, y0 = op->r.y * px, x1 = (op->r.x + op->r.w) * px, y1 = (op->r.y + op->r.h) * px;
-                float sg = op->shade * px / 2, dy = op->size * px, e = 3 * sg;
-                if (!(in = emit(&c, -1, HUDM_DROP, x0 - e, y0 - e + (dy < 0 ? dy : 0), x1 + e, y1 + e + (dy > 0 ? dy : 0), op))) break;
-                in->px[0] = x0 + c.ox; in->px[1] = y0 + c.oy; in->px[2] = x1 + c.ox; in->px[3] = y1 + c.oy;
-                in->uv[0] = in->uv[2] = dy;
-                in->uv[1] = in->uv[3] = 0;
-                colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
-                in->prm[1] = sg;
-                break;
-            }
-            /* fall through */
-        case HOP_DOT:
-            if (!(in = emit(&c, -1, op->kind == HOP_DOT ? HUDM_DOT : op->flags & HOPF_SHADE ? HUDM_SHADE : HUDM_SOLID,
-                            op->r.x * px, op->r.y * px, (op->r.x + op->r.w) * px, (op->r.y + op->r.h) * px, op))) break;
-            colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
-            in->prm[1] = op->shade * px / 2;
-            break;
-        case HOP_LINE: {
-            float x0 = op->r.x * px, y0 = op->r.y * px, x1 = (op->r.x + op->r.w) * px, y1 = (op->r.y + op->r.h) * px;
-            float hw = op->size * px / 2, e = hw + 1;
-            if (!(in = emit(&c, -1, HUDM_LINE, (x0 < x1 ? x0 : x1) - e, (y0 < y1 ? y0 : y1) - e,
-                            (x0 > x1 ? x0 : x1) + e, (y0 > y1 ? y0 : y1) + e, op))) break;
-            in->px[0] = x0 + c.ox; in->px[1] = y0 + c.oy; in->px[2] = x1 + c.ox; in->px[3] = y1 + c.oy;
-            colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
-            in->prm[1] = hw;
-            break;
-        }
-        case HOP_CHART:
-            if (!charted) { chart_prepare(&c); charted = 1; }
-            for (j = 0; j < s_nband; j++) {
-                const BAND* bd = &s_band[j];
-                if (!(in = emit(&c, HUD_TEX_CHART, HUDM_CHART, bd->x0, bd->y0, bd->x1, bd->y1, op))) break;
-                in->px[0] = (float)bd->j0; in->px[1] = (float)bd->j1; in->px[2] = (float)bd->col; in->px[3] = 0;
-                colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
-            }
-            break;
-        case HOP_TEXT:
-            text(&c, op);
-            break;
-        default:
-            break;
-        }
+        HUDINST* q;
+        if (!op->grp) { draw_op(&c, op, &charted); continue; }
+        if (i + 1 < ops->n && ops->op[i + 1].grp == op->grp) continue;
+        if (op->grp <= ops->ngrp && (q = emit(&c, HUD_TEX_LAYER, HUDM_PART, 0, 0, 0, 0, &none)))
+            at[op->grp - 1] = (int)(q - c.inst);
     }
+    *nmain = c.nb;
+
+    /* the groups' own, each in its region of the layer */
+    memset(&sh, 0, sizeof sh);
+    *ng = 0;
+    for (i = 0; i < ops->n; i = i0) {
+        int gk = ops->op[i].grp;
+        i0 = i + 1;
+        if (!gk) continue;
+        while (i0 < ops->n && ops->op[i0].grp == gk) i0++;
+        if (gk > ops->ngrp) continue;
+        draw_group(&c, ops, gk - 1, i, i0, at[gk - 1], &charted, &sh, &g[*ng]);
+        ++*ng;
+    }
+    *lw = sh.w_used;
+    *lh = sh.h_used;
     *nb = c.nb;
     *dropped = c.dropped;
     return c.n;

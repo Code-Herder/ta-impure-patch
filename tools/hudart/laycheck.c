@@ -55,6 +55,15 @@ static void json_str(const char* s, int n)
     putchar('"');
 }
 
+/* the opacity an op is painted with: its own times its group's, as the mockup's is its own times
+   every ancestor's */
+static unsigned painted(const HUDOPS* o, const HUDOP* p)
+{
+    double a = (double)(p->rgba & 0xFF);
+    if (p->grp) a *= o->grp[p->grp - 1];
+    return (unsigned)(a + 0.5);
+}
+
 int main(int argc, char** argv)
 {
     char path[1024], err[256];
@@ -189,14 +198,14 @@ int main(int argc, char** argv)
         if (p->kind == HOP_CHART) printf(",\"clip\":[%.4f,%.4f,%.4f,%.4f]", p->clip.x, p->clip.y, p->clip.w, p->clip.h);
         if (p->kind == HOP_PART) {
             printf(",\"part\":"); json_str(tagpu_hudlay_part(l, p->part)->name, (int)strlen(tagpu_hudlay_part(l, p->part)->name));
-            printf(",\"alpha\":%u", p->rgba & 0xFF);
+            printf(",\"alpha\":%u", painted(o, p));
         }
         if (p->kind == HOP_SOLID || p->kind == HOP_DOT) printf(",\"rgba\":\"%08x\"", p->rgba);
         if (p->clip.w >= 0 && p->kind != HOP_TEXT && p->kind != HOP_CHART) printf(",\"clip\":[%.4f,%.4f,%.4f,%.4f]", p->clip.x, p->clip.y, p->clip.w, p->clip.h);
         if (p->kind == HOP_TEXT) {
             const char* sn = tagpu_hudlay_globals(l)->style[p->style].name;
             printf(",\"style\":\"%s\",\"size\":%.4f,\"centre\":%d,\"alpha\":%u", sn, p->size, p->centre,
-                   p->rgba & 0xFF);
+                   painted(o, p));
             if (p->nrun) printf(",\"rgb\":\"%06x\"", o->run[p->run].rgb);
             /* the baseline at `px` a unit, from the face metrics the state carries per style */
             if (argc == 4) {
