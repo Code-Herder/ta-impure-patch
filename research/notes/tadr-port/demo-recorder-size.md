@@ -1339,11 +1339,13 @@ order and a contest there can end the other way until the contested units move. 
 made unit's yard as its create returns, so a nanoframe in a lab of a lower slot finds the yard's
 cells free, as the game made it; a forward playing applies each yard change at its place in the
 step (`RK_EV_YARD`), so a nanoframe made in the tick its lab's yard opened finds them free too (the
-engine map's *An open yard gives nothing back*). **What remains
-open**: where the playing makes two contesting footprint calls in another order than the game did
-(deaths, creates and placements in slot order against the game's interleaving in its unit tick),
-the holder can differ (MEASURED in emulation, 4 of an air war's 1,700 iterations; no slot-B impact
-differed in the game in an air war or a battle). A multiplayer recording is unchanged: its playing
+engine map's *An open yard gives nothing back*). **A straight
+playing makes the step's footprint calls in the game's order** (format 26, *The contest order*
+below): the recording carries each top-level footprint event's turn where a reader cannot infer it
+and the acting attaches at their place, and the playing places every unit of an earlier turn
+before each footprint event, so a contest ends as it did on the recording machine. **What remains
+open**: a seek still makes its units in slot order, so after one the holder of a cell two units
+contest can differ until they move, which the occupancy rule accepts. A multiplayer recording is unchanged: its playing
 keeps the engine's slots already, its marks are still written from the recording, and its contest
 follows the puppet's type-3 rule (the owner has not decided the marks for it). Its takeover
 timeline is a skirmish segment and holds its cells: the playing changes to the recording
@@ -1386,6 +1388,14 @@ density. The stream of that recording packs to 5,221,632 bytes against 5,255,593
 recording of the same test group at main, but the two are different games -- the simulation RNG
 is seeded per level, and main's run made 3,128 more broadcast starts -- so that difference
 measures the games, not the format.
+
+**The contest order: recording format 26** (2026-10-23). Two kinds of the events frame's other
+records (RCS_OTHER, no codec change): `RK_EV_TURN`, 4 bytes, before a top-level footprint event
+whose turn a reader cannot infer, and `RK_EV_LINK`, 12 bytes, at every attach or detach that acts
+outside a death ([the events note](demo-recorder-s2-events.md), §1.8e). A key is written for a create
+or a link made in a later turn than the step's last key, and for a death or a yard made in another
+turn than its own slot's (after the tick, above all); links follow transports, pads and every build finish.
+`recsize.py` reports both as *the contest order: keys and links*.
 
 ## P1: the container, measured
 

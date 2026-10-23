@@ -598,6 +598,31 @@ makes it again and the playing checks it. Anything else is malformed (THE YARD R
 `tagpu_recfmt.h`; [engine map](../exe-reverse-engineering.md), *An open yard gives nothing
 back*).
 
+### 1.8e The contest order — `RK_EV_TURN` and `RK_EV_LINK` (format 26)
+
+Not roots: what a playing needs to make a step's footprint and chain calls in the recording
+machine's order (`tagpu_recfmt.h`, *THE CONTEST ORDER*; [engine map](../exe-reverse-engineering.md),
+*The order of a step's footprint and chain calls*). Skirmish recordings only, outside any bracket.
+
+- **`RK_EV_TURN {u16 key, u16 0}`**: the turn of the unit tick -- the slot whose turn it was, or
+  `0xFFFF` after the tick -- that the next top-level footprint event (a create, a death, a live
+  unit's yard, a link) was made in, written just before that event and only when its key differs
+  from the one a reader infers: a death's or a yard's own slot, or the step's last key, whichever
+  is later, and a create's or a link's the step's last key. The keys never go back within a step,
+  and a key stands before a footprint event or not at all; the writer and both readers refuse
+  anything else. The recorder takes the turn at the slice stub (`tagpu_patches.c`, `unit_slice`),
+  which every turn of the tick passes, and the phase after the units sets it to `0xFFFF`.
+- **`RK_EV_LINK {u32 child ID, u32 parent ID or 0, u8 the piece, u8 the layer, u16 0}`**: an attach
+  or a detach `0x48AB70` that acts, written at its place from the observer at its entry. A
+  playing makes it through `0x48AB70` there (`tagpu_replay.c`, `ev_link`), and the carry links'
+  reconciliation after the step then finds nothing to do unless the host refused one. The
+  destructor's own detaches are not written: the playing's destructor makes them again.
+
+The recorder counts every footprint or attach call no key can order -- a call from a site its table
+does not hold, a Teleport's set-position on another unit, a turn out of slot order, an attach
+inside any bracket but a death -- and logs the count at the recording's end (`recorder: N footprint calls a
+playing cannot put in their order`); the replay harness fails a recording whose count is not 0.
+
 ### 1.9 The unit state a death must carry
 
 On the owner, the destructor runs inside the unit tick. The reaper (0x48AFB9..0x48AFD1) comes

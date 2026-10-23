@@ -2388,9 +2388,10 @@ S2a of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s2a-what-w
 cannot say, where the engine does it and in the order it does it; the research is
 [the events note](tadr-port/demo-recorder-s2-events.md). `tagpu_rec_init`, at DllMain's attach,
 byte-matches every site and builds every stub before any lands; no recording starts without all of
-them (`recorder: 66 event sites in`: thirty observers, five network tests, fifteen named-start
+them (`recorder: 67 event sites in`: thirty-one observers -- the attach `0x48AB70`'s among them
+(*The order of a step's footprint and chain calls*) -- five network tests, fifteen named-start
 calls, six query calls, six feature draws, the destructor's explosion call, reproduction's source
-test and the two click calls; MEASURED in a battle recording's log, 2026-10-13).
+test and the two click calls).
 Each hook reads only a recording's game thread; a call from another thread is refused and counted
 (`RK_END`'s off-thread count). An observer's handler sees the site's `esp` as `E` and the
 registers `pushad` saved under it (EDI at `E−0x24` up to EAX at `E−0x08`), so at a function's
@@ -8411,6 +8412,112 @@ slot B); under the recording machine's 1 of 2,221, not at slot B (the known feat
 `0x47DFC0` through `0x47E1F0` (`0x4408D5`; five calls `0x47E214..0x47E2B5`), and that reads a
 cell's slot A at `0x47E10C`. A takeover writes the recording's slots, yard bits and marks and then
 runs it over every context whole (`tagpu_replay.c`, `tk_cells`, `tk_live`).
+
+### The order of a step's footprint and chain calls — the contest order, `0x48AD30`, `0x48A9F0`, `0x48AB70`, `0x47E5C0` [DISASSEMBLED 2026-10-23]
+
+Who holds a contested cell, and which units carry the marks (`+0x110` bit 26 the holder, bit 27
+the loser, *The footprint contest's rule* above), is a function of the order in which a step makes
+the stamp `0x47CC30`, the clear `0x47D0E0` and the re-claim `0x47C790`, and of the order of the
+bucket chains the re-claim walk reads. Where the recorder and a playing use this:
+`tagpu_recfmt.h`, *THE CONTEST ORDER*; `tagpu_replay.c`, *THE CONTEST ORDER*.
+
+**Every direct call of the three writers in the file**, by a call scan of `.text`; none of the
+three, nor the set-position `0x48A9F0`, the relink `0x43D6D0`, the attach `0x48AB70` or its
+wrapper `0x48AAC0`, is stored as an address anywhere in the file (a dword scan of the whole
+file). The walk's functor is a stack object whose first dword is `0x4FD660`, written at
+`0x47CACD`, `0x47D2B9` and `0x47DB29`.
+
+| writer | call site (return) | what |
+|---|---|---|
+| stamp `0x47CC30` | `0x43DA41` (`0x43DA46`) | the relink `0x43D6D0`, movement |
+| | `0x48610F` (`0x486114`) | the create `0x485F50` |
+| | `0x48AA9A` (`0x48AA9F`) | the set-position `0x48A9F0` |
+| | `0x48630C` (`0x486311`) | CreateFromNetwork `0x4861D0` |
+| | `0x48B6B9` (`0x48B6BE`) | the `0x2C` receiver |
+| clear `0x47D0E0` | `0x43DA0F` (`0x43DA14`) | the relink |
+| | `0x47CBD6` (`0x47CBDB`) | the death's removal `0x47CBD0`, whose one caller is the destructor's `0x48682D` |
+| | `0x48AA6B` (`0x48AA70`) | the set-position |
+| | `0x48B685` (`0x48B68A`) | the `0x2C` receiver |
+| re-claim `0x47C790` | `0x47DAFD` (`0x47DB02`) | YARD_OPEN `0x47DAC0`, whose one caller is the COB setter (`0x480BAE`) |
+| | `0x47ED35` (`0x47ED3A`) | the walk's callback `0x47ED30`, inside a clear's walk (`0x47D2C4`), a re-claim's (`0x47CAD8`) or `0x47DB20`'s (`0x47DB4B`) |
+
+**The set-position `0x48A9F0(unit, x, alt, z, layer)`**, stdcall `ret 0x14`: it rounds the cell,
+`(x − w·2^19 + 2^19) >> 20` and the same for z (`0x48AA0C..0x48AA32`), and compares it with
+`+0x76`/`+0x78` and the layer with `+0x110 & 3` (`0x48AA35..0x48AA56`). Unchanged, it writes
+`+0x6A`/`+0x6E`/`+0x72` alone; changed, it calls the clear (`0x48AA6B`), writes the position, the
+cell and the layer bits, then the stamp (`0x48AA9A`) and the sight stamp `0x4827B0` (`0x48AAA0`).
+Either way it sets bit 16 (`0x48AAAC`). Its two callers: the relink's carried path `0x43D775` and
+**Teleport**'s `0x406BC0` (order 47, handler `0x406AA0`), which places *other* units in a box --
+the one footprint call of stock code that is made in one unit's turn on another unit.
+
+**The relink `0x43D6D0` has one caller**, `0x43DD55` in the movement pass `0x43DD20`, whose
+callers are the unit tick's `0x48AFAA` and the `0x2C` receiver's `0x48BA46`. It relinks only on a
+cell or layer change (`0x43D898..0x43D8BF`: the clear `0x43DA0F` and the stamp `0x43DA41`, or the
+set-position at `0x43D775` for a carried unit). So a unit relinks at most once a step, in its own
+turn.
+
+**The unit tick's turns** (`0x48AD30..0x48B022`): records 0..9 in order (`al` counts 0..9, `edx`
+steps `0x14B`, `0x48B008..0x48B022`); for each active record of type 1, 2 or 3 with `+0x146` ≠ 10
+(`0x48AD7A..0x48AD9C`) its block `[+0x67, +0x6B]` ascending by `0x118` (`0x48ADA2..0x48ADAA`,
+`0x48AFD6..0x48AFDE`), a slot whose `+0xA6` is 0 skipped (`0x48ADB0`). In a skirmish block k
+starts at slot k·each + 1 (`0x4854A0`, `0x4858BD`/`0x4858E0`), so **the turns ascend by slot over
+the whole tick**. A turn runs `0x437910` (`0x48ADC4`), AutoAim `0x49E1A0` (`0x48ADDA`, type 1/2),
+the slice site `0x48ADDF..0x48ADF0` (every turn passes it: its only branches in are AutoAim's
+skips), two countdowns, then for an owner of type 1/2 (`0x48AEB5..0x48AECD`) `0x489BB0`
+(`0x48AF32`), `0x41BD10` (`0x48AF92`), **the order runs** `0x43B7C0` (`0x48AF98`) and `0x43BAD0`
+(`0x48AF9E`) and, with a mover, **the movement pass** `0x43DD20` (`0x48AFAA`) and `0x48A870`
+(`0x48AFB0`); and for any owner, bit 14 → **Send_UnitDeath** `0x4864B0` (`0x48AFD1`). The
+footprint and chain calls of a turn come from the slice (COB YARD_OPEN → `0x47DAC0` → the
+re-claim), the order runs (BuildingBuild `0x402640` creates at `0x4028EA` and attaches at
+`0x402948`, the transport handlers attach between `0x40F221` and `0x415843`, the build finish
+`0x41B8D0` detaches at `0x41B9A1`, Teleport's set-position `0x406BC0`), the unit's own relink and
+its death, in that order. Of the tick's direct calls only `0x43DD20` and `0x4864B0` reach a writer
+in the direct-call graph [MEASURED with a call graph of `.text`]; the rest is indirect, through
+the order handlers' tables.
+
+**After the unit tick.** In the step `0x495490`, the unit tick at `0x4954ED` returns to `0x4954F2`,
+and before the projectile tick's call at `0x495513` there is only a timing accumulator (`0x4B6560`
+at `0x4954FE`, stores to `main+0x38D85`). Then the explosions (`0x495539`), the players phase
+(`0x49555F`, whose Deathmatch respawn creates at `0x4653D9`) and the features. In the frame
+`0x496790`: the main loop's network pump (`0x4968CB`), the step (`0x49693E`), the draw
+(`0x4969CD`), then `0x4969D2`, where Impure's scenario applier runs. So every footprint call
+outside the unit tick follows every turn of its capture-to-capture group.
+
+**The walk `0x47E5C0` reads the chains in order.** It visits each bucket of its rectangle by its
+head (`+0x6`, `0x47E652`), follows the chain through `+0x8E` (`0x47E6EE`, `0x47E6F8`), and calls
+the functor on each unit and then on that unit's cargo through `+0x8A`/`+0x8E` (`0x47E6A1`,
+`0x47E6EC`). So the bucket chains' order decides which unit owed a re-claim gets a freed cell
+first. The chains' writers (a call scan): the stamp's re-file (`0x47CCD2..0x47CD31`: an unlink and
+a push at the front, skipped for a carried unit, which gets `+0x82` alone), the attach `0x48AB70`
+(its unlink `0x47CB00` has one caller, `0x48AC5E`, and its push `0x47CB40` one, `0x48ACDC`), and
+the death's removal `0x47CBD0` (one caller, `0x48682D`; it calls the clear at `0x47CBD6`).
+**`0x47CB60` has no caller in the file.** **`0x47DB20(unit)`** sets bit 27 and walks re-claims
+(`0x47DB20..0x47DB5E`); its one caller is `0x487698` in the saved-game restore `0x487080`, reached
+only from the loader `0x497180` (through `0x432610` at `0x497B29`) and the restore's own order
+loader `0x43A420`: it never runs in a step.
+
+**`0x48AAC0(child, parent, piece, layer)`** (`ret 0x10`), the attach's wrapper: it refuses a
+child not alive (`+0x110` bit 28), a structure (bit 29) or one with cargo (`+0x8A`), and a parent
+not alive, the child itself or carried (`+0x86`) (`0x48AAC7..0x48AB0D`), builds the `0x0A`
+record from both units' `+0xA8`, sends it (`0x44FDB0`, `0x451DF0`) and applies it at `0x48AB62`.
+Its 30 callers (a call scan): BuildingBuild `0x402948`; the transport handlers' twenty-two, `0x40F221`
+to `0x415843`; the build finish `0x41B9A1`; COB's ATTACH `0x4813A6` and DROP `0x481422`;
+the destructor's two detaches `0x4867CB`, `0x48681D`; `0x4871FF` in the saved-game restore; and
+`0x488263`, in a function not mapped here. Since its tests are `0x48AB70`'s own, every call it
+makes of `0x48AB70` acts. **An acting attach always changes a chain**: onto a carrier it pushes
+the child at the front of the carrier's chain (`0x48AC70..0x48AC82`); a detach puts it at the
+front of its bucket (`0x47CB40` at `0x48ACDC`), unlinked first from its carrier's chain or, for a
+child no unit carries, from its bucket (`0x47CB00` at `0x48AC5E`) -- so a detach of an uncarried
+unit, the build finish's included, re-files it at its bucket's head.
+
+**How the recorder sees it.** An observer at the attach's entry, `mov edx,[0x511DE8]`
+(`8B 15 E8 1D 51 00`; no rel8/rel32 in the file branches into `0x48AB71..0x48AB75`), reads the
+record's seven bytes and, on slots bounded first, the refusals above, and writes an acting
+attach's `RK_EV_LINK` at its place unless it is a death's (`tagpu_recorder.c`, `ob_link`). The
+three writers' observers check each call's return against the table above
+(`FOOT_SITES`): a relink's or a set-position's call is ordered only as the turn unit's own; a
+return the table does not hold, a Teleport, or a turn out of slot order is counted
+(`recorder: N footprint calls a playing cannot put in their order`).
 
 ### Stacked aircraft in area damage — `0x49A664`, `0x49A415`, `0x47CF98`, `0x4954ED` [DISASSEMBLED + MEASURED 2026-09-25]
 
