@@ -231,10 +231,18 @@ static const char* live_clock(char* b, size_t n, unsigned T)
 }
 
 /* one of the rewind's verbs, for the next frame visit, as the `rewind` trigger's (THE LIVE REWIND,
-   tagpu_replay.c); its outcome comes back through tagpu_replay_result (live_fill) */
-static void rw_send(int op, unsigned T)
+   tagpu_replay.c); its outcome comes back through tagpu_replay_result (live_fill). 1 queued; 0
+   refused at once -- no level in play, as after the level's end, which clears the queue -- and
+   then the arm ends and the toast says so, since no outcome will follow. */
+static int rw_send(int op, unsigned T)
 {
-    if (tagpu_replay_rewind(op, T, NULL)) s_rwAsked = 1;
+    if (tagpu_replay_rewind(op, T, NULL)) {
+        s_rwAsked = 1;
+        return 1;
+    }
+    s_arm = ARM_NONE;
+    toast("Rewind refused");
+    return 0;
 }
 
 /* the strip's track: the drawn frame's run mapped on the span it was drawn with (t_first, t_last),
@@ -275,7 +283,9 @@ static void live_fork(void)
    only once s_now + 1 == s_armR -- the snap's seek has run and the world on the screen is R - 1.
    The snap's SEEK made R the rewind's seek target, so the fork verb's own takeover_point(R), on the
    same reader, answers R: the fork starts at the world shown, by the function the plan ran, and
-   the eviction shown is the one the fork acts on. The plan reserves nothing. */
+   the eviction shown is the one the fork acts on. The plan reserves nothing.
+   THE PLAN SCANS THE FILE, so it is asked here, on a click, on the game thread between two steps,
+   and nowhere per frame: neither live_fill nor the render half calls it. */
 static void live_play(void)
 {
     TAGPU_REPLAY_TKPLAN p;
@@ -283,8 +293,7 @@ static void live_play(void)
     unsigned T = s_now + 1;
     if (s_rwState == TAGPU_REPLAY_RWS_OPEN) {
         s_arm = ARM_NONE;
-        rw_send(TAGPU_REPLAY_RW_CLOSE, 0);
-        toast("Playing on from %s", live_clock(a, sizeof a, s_rwG));
+        if (rw_send(TAGPU_REPLAY_RW_CLOSE, 0)) toast("Playing on from %s", live_clock(a, sizeof a, s_rwG));
         return;
     }
     if (s_rwState != TAGPU_REPLAY_RWS_PAST || s_arm == ARM_SEEKING) return;
@@ -296,7 +305,7 @@ static void live_play(void)
     if (p.R == T && p.evict == UINT32_MAX) { live_fork(); return; }
     s_armR = p.R;
     s_armEvict = p.evict;
-    if (p.R != T) rw_send(TAGPU_REPLAY_RW_SEEK, p.R);
+    if (p.R != T && !rw_send(TAGPU_REPLAY_RW_SEEK, p.R)) return;
     s_arm = ARM_SEEKING;
     if (p.evict != UINT32_MAX) snprintf(warn, sizeof warn, ", replacing F%u", p.evict);
     toast("Click again to play from %s%s", live_clock(a, sizeof a, p.R), warn);

@@ -727,7 +727,10 @@ frame visit.
 
 Any key but `live_play` and the plate ends Play from here's arm. Each outcome of a verb the HUD
 sent is read once by its serial (`tagpu_replay_result`): a refusal toasts "Rewind refused" and
-ends the arm, the fork "Playing from m:ss".
+ends the arm, the fork "Playing from m:ss". A verb refused at once — no level in play, as after
+the level's end, which clears the queue — toasts the same and ends the arm, since no outcome
+follows. The takeover's plan scans the file, so it is asked only on Play from here's first click,
+never per frame.
 
 **Play from here** (owner decision 1-B: what is taken over is what is shown). The rewind's fork
 starts at `takeover_point(T)`, the refresh at or before the last seek's target, which in a
