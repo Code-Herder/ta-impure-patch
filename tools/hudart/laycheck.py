@@ -54,6 +54,14 @@ CASES = [
     ("1080-100-stats-ffa-army-held", "res=1920x1080&game=off&hud=100&np=6&nt=6&t=20&stat=1&sm=army&ss=team&paused", None, "close"),
     ("4k-auto-stats-16-excess-start", "res=3840x2160&game=auto&hud=150&np=16&nt=4&t=0&stat=1&sm=excess&ss=player&paused", None, ""),
     ("4k-150-stats-clamped-energy", "res=3840x2160&game=150&hud=100&np=4&nt=2&t=132&stat=1&sm=energy&ss=player&paused&sx=2000&sy=-40", None, ""),
+    # the proposed features: the Forks bay off with no fork, the picker (at the fork limit with its
+    # warning), and a watched fork with the lanes closed, whose axis takes in the forks and whose fill
+    # stops at the fork's branch
+    ("4k-150-prop-no-forks", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&stat=0&nf=0&paused", None, ""),
+    ("1440-75-picker", "res=2560x1440&game=200&hud=75&np=8&nt=2&t=90&nf=2&pick&paused", None, ""),
+    ("4k-150-picker-full", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&pick&paused", None, ""),
+    ("1080-100-watched-fork-closed", "res=1920x1080&game=off&hud=100&np=6&nt=1&t=40&nf=3&tl=1&paused", None, ""),
+    ("4k-150-picker-held", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&pick&paused", None, "takeover"),
 ]
 # a chart point is a float in the game and a double in the mockup, and both write it to a tenth: one
 # within 1e-5 of a tenth's half can round either way, so a point may differ by that tenth
@@ -76,16 +84,20 @@ COLLECT = r"""() => {
     st.mx = r[0] + r[2] / 2; st.my = r[1] + r[3] / 2;
   }
   const els = [], ctx = document.createElement('canvas').getContext('2d');
+  // the opacity an element is painted with: its own times every ancestor's, as a disabled
+  // control's icon and text are dimmed with it
+  const opacity = (e) => {
+    let a = 1;
+    for (let q = e; q && q.id !== 'hud-layer'; q = q.parentElement) a *= +getComputedStyle(q).opacity;
+    return Math.round(255 * a);
+  };
   for (const e of document.querySelectorAll('#hud-layer *')) {
     if (!e.getClientRects().length) continue;
     const dim = !!(e.closest('.row') && e.closest('.row').style.filter);
     if (e.classList.contains('art')) {
       let part = e.dataset.gp || e.dataset.tile;
       if (!part) { const m = /parts\/([^/]+)\.png/.exec(e.style.getPropertyValue('--bi')); part = m && m[1]; }
-      // the opacity it is painted with: its own times every ancestor's, as a disabled button's icon is dimmed
-      let a = 1;
-      for (let q = e; q && q.id !== 'hud-layer'; q = q.parentElement) a *= +getComputedStyle(q).opacity;
-      els.push({ kind: 'part', part, r: R(e), dim, alpha: Math.round(255 * a) });
+      els.push({ kind: 'part', part, r: R(e), dim, alpha: opacity(e) });
     }
     if (e.dataset.act && !e.classList.contains('off')) {   // a disabled control takes no input
       const k = e.dataset.act + (e.dataset.val != null ? ':' + e.dataset.val : e.dataset.team != null ? ':' + e.dataset.team : e.dataset.seat != null ? ':' + e.dataset.seat
@@ -105,7 +117,7 @@ COLLECT = r"""() => {
       const cs = getComputedStyle(e);
       ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
       const fm = ctx.measureText('M');
-      els.push({ kind: 'text', text: e.textContent, r: R(e), dim, size: parseFloat(cs.fontSize) / u, base,
+      els.push({ kind: 'text', text: e.textContent, r: R(e), dim, alpha: opacity(e), size: parseFloat(cs.fontSize) / u, base,
                  asc: fm.fontBoundingBoxAscent, desc: fm.fontBoundingBoxDescent });
     }
     const bg = e.style.background || e.style.backgroundColor;
@@ -203,8 +215,8 @@ def mockup(port, query, hover, held, tmp):
     cfg = tmp / "pw.json"
     cfg.write_text(json.dumps({"browser": {"contextOptions": {"deviceScaleFactor": 2, "viewport": {"width": 2100, "height": 1400}}}}))
     pw = ["playwright-cli", f"-s=laycheck{os.getpid()}", f"--config={cfg}"]
-    # prop=0: the proposed features are the mockup's alone until the DLL draws them
-    url = f"http://127.0.0.1:{port}/tools/hudart/mockup/index.html?{query}&prop=0"
+    # the mockup's own default, prop=1 and two forks unless the case says otherwise: the game's look
+    url = f"http://127.0.0.1:{port}/tools/hudart/mockup/index.html?{query}"
     run = lambda *a: subprocess.run(pw + list(a), capture_output=True, text=True, cwd=tmp)
     run("open", url)
     try:
@@ -341,7 +353,7 @@ def main():
                     dm = sum(1 for c, d in pairs if bool(c.get("dim")) != bool(d.get("dim")))
                     extra += f", dim disagrees {dm}" if dm else ""
                     bad += dm
-                if k == "part":
+                if k in ("part", "text"):
                     al = sum(1 for c, d in pairs if abs(c.get("alpha", 255) - d.get("alpha", 255)) > 1)
                     extra += f", opacity disagrees {al}" if al else ""
                     bad += al

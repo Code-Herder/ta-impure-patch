@@ -22,6 +22,16 @@ skirmish segment of the multiplayer file:
   and the recorder's start of the new timeline, and exits 1 on a refusal.
 - By hand, `takeover <P> at <T>[ difficulty <D>]` in `tagpu_replay.trigger` on a playing level.
   D defaults to the timeline's own difficulty when it has an AI seat, else 2.
+- **From the replay HUD**, Take over replay and its player picker (owner decision 1-B: what is
+  taken over is the world on screen). The button pauses the playback; the next fill plans the
+  takeover at the playhead (`tagpu_replay_takeover_plan`, `takeover_point`'s rounding and the
+  append's eviction, committing nothing), **snaps back**: seeks the playback to the plan's R when
+  R is not the next iteration, and opens the picker once the playback shows R. A row takes over
+  at R itself (`tagpu_replay_takeover_request`), so the HUD's takeover is never rounded. At a
+  timeline's first iteration, which no takeover starts at, the plan is refused naming the second
+  (`next`), and the HUD plans again there: the snap goes **one tick forward**. The trigger never
+  snaps; it rounds down and refuses a first iteration. The picker dims a seat with no unit at R,
+  the word R0 refuses it by ([The replay HUD in game](../hud-in-game.md), *Take over*).
 - **A takeover starts at a refresh.** T is rounded down to the refresh at or before it, read from
   the file's index (`recr_refresh_at`): a segment's first and second iterations, then each GameTime
   1 modulo the refresh interval (the first iteration past one that a gap skips), the interval being

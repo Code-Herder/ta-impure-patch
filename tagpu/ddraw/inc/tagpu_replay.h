@@ -157,6 +157,9 @@ typedef struct TAGPU_REPLAY_TIMELINE {
 } TAGPU_REPLAY_TIMELINE;
 int tagpu_replay_timelines(TAGPU_REPLAY_TIMELINE* out, int cap);
 int tagpu_replay_axis(unsigned* first, unsigned* last);
+/* One more at every change of what those two give, the playing's end included: a caller that
+   remembers it knows when to read them, and to re-plan a takeover, again. */
+unsigned tagpu_replay_timelines_serial(void);
 
 /* A fork of the playing's file deleted or exported (replays\<stem>.imprec), by the file worker:
    1 accepted, its outcome reported later through tagpu_replay_result (kind FORK) once the frame

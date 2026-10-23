@@ -131,7 +131,9 @@ rewind's open, a takeover's plan and the frame visit after any file job finished
 its scan is the one the trigger's dry run already ran on the playing reader (`segs_scan`, which
 keeps the reader's place). Each row carries the timeline's `controlled` seat, its header's
 RT_OPTIONS byte 18, which the recorder takes from `main+0x2A42`: in a fork, the player it was
-played as. READ: the takeover's `tk_live` stores that seat in `+0x2A42`, then `tk_end` arms the
+played as. `tagpu_replay_timelines_serial` grows by one at every change of the rows or the axis,
+the playing's end included, so a caller (the takeover's picker) knows when to read them and plan
+again. READ: the takeover's `tk_live` stores that seat in `+0x2A42`, then `tk_end` arms the
 fork, whose header `header_build` writes at its first capture point; the X lane's `hud state`
 check compares every fork's seat with the player it took over as. The axis runs from the root's first GameTime to the greatest last of a live timeline.
 

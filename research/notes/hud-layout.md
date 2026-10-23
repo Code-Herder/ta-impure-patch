@@ -98,20 +98,25 @@ mockup its query carries `stat=1`, so that the chips it captures are on screen.
     renamed in `layout.json` too: the page names any well it cannot find.
 
 - **A new element** needs data, a rule in `hud.js`, and the same rule in `tagpu_hudlay.c`,
-  checked by `laycheck.py`. It is the only kind of change that touches code.
+  checked by `laycheck.py`. It is the only kind of change that touches code. A new control — a
+  new `hot()` call site in C — also needs its term in `tagpu_hudlay_max_hot`, the bound the hit
+  map is sized against; the layout's load fails a self-test build that makes more controls than
+  the bound ([The replay HUD in game](hud-in-game.md), *The hit map*).
 
 - **After any change,** capture at 3840×2160 with both scales at 150, the owner's setting, and
   look at it. Check `game=auto` too, where the engine's frame is largest and the list scrolls.
 
 ## Proposed: forks, take over and live rewind
 
-**A proposal, not the game.** The owner chose variation B of the replay UI's missing features
-on 2026-10-12, from a canvas of four whitebox variations: forks drawn as lanes on the timeline.
-Its art is the worn painted steel of the rest of the HUD (`hud-art.md`).
-The mockup draws it from `layout.json`'s `proposed` section behind its **Proposed** switch (on
-by default, `prop=0` turns it off). The DLL does not read that section, and `laycheck.py` runs
-with `prop=0`. A part the kit has no art for yet is drawn as whitebox: a mid-grey plate with a
-dark edge, and an icon it lacks as a stand-in glyph.
+The owner chose variation B of the replay UI's missing features on 2026-10-12, from a canvas of
+four whitebox variations: forks drawn as lanes on the timeline. Its art is the worn painted steel
+of the rest of the HUD (`hud-art.md`). The mockup draws it from `layout.json`'s `proposed`
+section behind its **Proposed** switch (on by default, `prop=0` turns it off). **The game draws
+its replay side** — the Forks bay and the forks housing, the axis, the fill and the shaded groove,
+Take over and the player picker — from the same rows, always (*Take over and the picker*, and
+[The replay HUD in game](hud-in-game.md), *Take over*), and `laycheck.py` checks every case at
+`prop=1`. The lanes and live rewind are the mockup's alone. A part the kit has no art for yet is
+drawn as whitebox: a mid-grey plate with a dark edge, and an icon it lacks as a stand-in glyph.
 
 - **The Forks bay.** A bay at the timeline housing's left end, spanning the marker lane and the
   track, shows and hides the lanes; they are hidden whenever a replay starts. It shows the fold
@@ -135,9 +140,12 @@ dark edge, and an icon it lacks as a stand-in glyph.
   rows fit while forks are kept.
 - **Take over.** A button as wide as the transport plate sits on top of it, level with the lanes,
   and reads "Take over replay". It opens the **player picker**, which lists every player with
-  their colour. A player defeated by the playhead is dimmed and cannot be taken. With 3 forks
-  kept, the picker says which fork a take-over replaces, the one watched least recently, and
-  outlines that fork's lane.
+  their colour. A player out of the game — no unit left, the column's dim rule (`out`) — is
+  dimmed, marked "defeated" and cannot be taken. In game `out` is the seat's live-unit count at
+  the picker's start, the word the takeover itself refuses a seat by, so the picker dims exactly
+  the players a takeover would refuse; the mockup's synthetic game sets `out` on its own. With 3
+  forks kept, the picker says which fork a take-over replaces, the one watched least recently,
+  and outlines that fork's lane.
 - **Live rewind.** With `mode=live` the page shows a live game. A rewind button sits in the top
   bar beside the Impure Config sprocket; the sprocket is drawn as a dark stand-in, since the
   game draws it outside the HUD. The button opens a strip under the top bar over the paused game:
@@ -288,8 +296,8 @@ At those sizes the game's line sits a pixel off the mockup's.
   team's and a hover button's key adds the row's or the team's index in the frame, `jump:2`,
   `fold:0`, `row:4`. The game hit-tests these, topmost (last painted) first
   ([The replay HUD in game](hud-in-game.md), *Input*).
-- **A disabled control** is drawn at its `off` opacity, its icon too, and has no clickable of its
-  own: the TEAMS chip when the teams are not told apart (one team, or a free-for-all), at
+- **A disabled control** is drawn at its `off` opacity, its icon and its text too, and has no
+  clickable of its own: the TEAMS chip when the teams are not told apart (one team, or a free-for-all), at
   `split.off` (0.45).
 - **An inset edge** (a resource bar's) is flagged on its ops (`HOPF_EDGE`), so `laycheck` matches
   it with the mockup's `box-shadow` by that flag, not by its colour.
@@ -302,9 +310,14 @@ At those sizes the game's line sits a pixel off the mockup's.
   wide. Each button fills its well, padded by `transport.button.pad`. The play button shows
   `playing`'s icon while the replay plays.
 - **The timeline housing** runs from `rail.gap` right of the plate to `rail.r` from the screen's
-  right.
-    - **The track** is its `track` well, and the clickable `track`. The fill is inset by
-      `fill.pad` and uncovered up to the played fraction p of its width. The playhead is
+  right. Its part is `proposed.forks.rail`, the housing painted with the Forks bay's pocket.
+    - **The track** is its `track` well, and the clickable `track`. Its axis T is the state's:
+      the original's length, or the longest live chain's while the lanes are open or a fork is
+      watched. The fill is inset by `fill.pad` and uncovered up to min(t, `fillTo`) / T of its
+      width, where `fillTo` is where the watched chain leaves the original. When the original
+      ends before the axis does (`ends` < T), the groove from `ends` to the fill box's end is
+      covered by a solid of `proposed.forks.after`'s colour and alpha (hud.js `after`), after the
+      fill and under the playhead. The playhead is
       `playhead.w` wide, centred at `ends` + (w − 2 × `ends`) × p, and extended above and below
       by its pad. The playhead's run, from p = 0 to p = 1, is handed out with the ops
       (`track_x0`, `track_x1` in `HUDOPS`) for the timeline's seek.
@@ -312,7 +325,15 @@ At those sizes the game's line sits a pixel off the mockup's.
       `markers.h` tall. Each badge is h × h, centred at `ends` + (w − 2 × `ends`) × t / T.
       Its dot is inset by `dot` and drawn in the player's colour, or `bookmark_dot` for a
       bookmark, under the badge part, then the icon inset by `icon`.
-    - **The clock** is in the `time` well.
+    - **The clock** is in the `time` well: the playhead's time and `len`, the watched chain's
+      end.
+    - **The Forks bay** (`proposed.forks.bay`) is placed in the housing's frame like a well's
+      control (`in`, `pad`), after the clock: a button keyed `lanes` with the fold icon, open
+      while the lanes are open and a fork is kept, `off` at `bay.off` with none, and the count of
+      forks under it, centred from `count.y` of its height down, outside the button.
+- **Take over** (`proposed.forks.takeover`) is a button as wide as the transport plate,
+  `takeover.gap` above it and `takeover.h` tall, keyed `takeover`, its label centred; it is down
+  while the picker is asked for, sought to or open (`pick_down`; the mockup's while `picker`).
 
 ### The column
 
@@ -367,6 +388,25 @@ At those sizes the game's line sits a pixel off the mockup's.
   buttons, `jump:i`, `sight:i` and `follow:i`, share its width, with `margin` around them and
   between them. **Sight and Follow are drawn pressed on the row they are set to** (the state's
   `sight`, `follow`; -1 for none), and a click on the pressed one undoes it.
+
+### Take over and the picker
+
+- **The picker** (`proposed.picker`, hud.js `picker`) is built after the stats window and before
+  the toast. Its plate, `picker.w` wide and keyed `picker`, stands `picker.gap` above the Take
+  over button, from the transport plate's left: `pad`, the title `title.h`, a row of `row.h` and
+  `row.gap` for each player, the warning when shown, then `pad` again.
+- **The title** reads "Take over at m:ss as", with no-break spaces round the time, inset by
+  `title.pad` in `title.style`. In game the time is the picker's start R (`pick_t`), in the
+  mockup the playhead's.
+- **A row** is the part `row.part` (`row.pressed` while held), keyed `takeas:<i>` with i the
+  row's index, as a column row's is. In it, the player's colour as a stripe `stripe.w` wide inset
+  by `stripe.pad` from the row's left, top and bottom; the name inset by `row.name.pad`; and for
+  a player out of the game the row drawn at `row.off` with no key and "defeated" aligned to the
+  right inside `row.note.pad`.
+- **The warning**, while the file keeps the fork limit (`nfork >= fork_max`; the mockup's
+  `forks.max`): two lines `warn.line` tall inside `warn.pad`, in `warn.style` and `warn.colour`,
+  "N of N forks kept: this one" and "replaces F<id>, the one watched least recently", naming
+  the fork a takeover would delete (`replace`), or the first.
 
 ### The toast
 
@@ -458,28 +498,35 @@ The rules:
 
 ## Checking the C against the mockup
 
-`tools/hudart/laycheck.py` opens the mockup headless for thirteen cases (4K at 150 with two
+`tools/hudart/laycheck.py` opens the mockup headless at its default `prop=1` with two forks
+kept, the game's look, for eighteen cases (4K at 150 with two
 teams, 4K at Auto with the list too long, 1080p at 100 with one team, 1440p at 75 with a row
 hovered and a button held, 4K at 150 as a six-player free-for-all, 4K at 150 as a 2v1v1, 4K at
 150 with fourteen players scrolled to item 3 and a toast, 1440p at 75 with the first row hovered
 and Sight and Follow on it, and five with the stats window open: `4k-150-stats-units`,
 `1440-75-stats-teams-metal`, `1080-100-stats-ffa-army-held` (a free-for-all asking for teams,
 close held), `4k-auto-stats-16-excess-start` (sixteen players at 0:00) and
-`4k-150-stats-clamped-energy` (placed past the screen's right and top edges)), takes the mockup's state and
+`4k-150-stats-clamped-energy` (placed past the screen's right and top edges), and five of the
+proposed features: `4k-150-prop-no-forks` (the bay off, its count 0), `1440-75-picker`,
+`4k-150-picker-full` (three forks: the warning), `1080-100-watched-fork-closed` (a fork watched
+with the lanes closed: the axis takes in the forks, the fill stops at the fork's branch, the
+groove past the original is shaded) and `4k-150-picker-held` (Take over held)), takes the mockup's state and
 every element's box in HUD units, runs `tagpu_hudlay.c` compiled natively (`laycheck.c`) on the
 same state, and pairs the two element by element: every part by name and painted opacity (its own
-times its ancestors', as a disabled button's icon is dimmed), every text by its string, every
+times its ancestors', as a disabled button's icon is dimmed), every text by its string and painted
+opacity, every
 solid by its colour, every clickable by its key; an inset edge is set aside by its flag. From the
 chart's SVG it pairs the line ops by colour (with width and opacity), the SVG texts by string
 (with anchor, size and colour), the two chart ops by opacity (with their clip) and the drop
 shadow (offset, blur, opacity), and compares every group's colour, halo, points and cross, a
 point within a tenth of a unit, the precision both sides write. It also measures every text's baseline in the browser — a zero-size
 inline-block probe on the text's own line — against `tagpu_hudlay_baseline` from the faces'
-metrics. It exits 1 on a box or baseline more than its tolerance off, a part's opacity more than
-one level off, a dim that disagrees, or an element only one side has.
+metrics. It exits 1 on a box or baseline more than its tolerance off, a part's or a text's opacity
+more than one level off, a dim that disagrees, or an element only one side has.
 
 MEASURED 2026-10-08 on the first six cases, again on all eight once the controls were laid out
-for input, and on all thirteen with the stats window (2026-10-09): the two agree. A halo
+for input, on all thirteen with the stats window (2026-10-09), and on all eighteen at `prop=1`
+(2026-10-23): the two agree. A halo
 polyline is told from its line by its `stroke-opacity`, which only the halo carries. At 4K every box is within 0.015 units and every baseline
 within 0.0142. The Oswald residual above is named, not failed, and only where the same rule on
 Chrome's own rounded ascent and descent (`measureText`'s `fontBoundingBoxAscent`/`Descent`) gives

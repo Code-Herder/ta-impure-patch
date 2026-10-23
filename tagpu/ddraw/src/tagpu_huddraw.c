@@ -375,7 +375,7 @@ static void text(B* c, const HUDOP* op)
         x = op->r.x * c->px - (op->centre == 1 ? width / 2 : op->centre == 2 ? width : 0);
         base = floorf(op->r.y * c->px + 0.5f);
     } else {
-        x = op->r.x * c->px + (op->centre ? (op->r.w * c->px - width) / 2 : 0);
+        x = op->r.x * c->px + (op->centre == 1 ? (op->r.w * c->px - width) / 2 : op->centre == 2 ? op->r.w * c->px - width : 0);
         /* Chrome's baseline (tagpu_hudlay_baseline), painted on a whole pixel */
         base = floorf(tagpu_hudlay_baseline(op->r.y * c->px, op->r.h * c->px, size, f->ascent, f->descent) + 0.5f);
     }
@@ -412,7 +412,7 @@ static void text(B* c, const HUDOP* op)
             if (!(q = emit(c, HUD_TEX_ATLAS, HUDM_GLYPH, x0, y0, x0 + gl->w, y0 + gl->h, op))) return;
             q->uv[0] = (float)gl->x / HUD_ATLAS; q->uv[1] = (float)gl->y / HUD_ATLAS;
             q->uv[2] = (float)(gl->x + gl->w) / HUD_ATLAS; q->uv[3] = (float)(gl->y + gl->h) / HUD_ATLAS;
-            colour(q, k < copies ? 0 : rgb[i], alpha[k]);
+            colour(q, k < copies ? 0 : rgb[i], alpha[k] * (float)(op->rgba & 0xFF) / 255.0f);
         }
     }
 }

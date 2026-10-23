@@ -2495,7 +2495,10 @@ def cmd_wheel(args):
         human=f"done: {' '.join(tokens)}")
 
 
-HUD_ASK = "tagpu_replayhud.dump"      # the trigger the replay HUD answers (tagpu_hudstate.c)
+# the trigger the replay HUD answers (tagpu_hudstate.c). Its controls are keyed as the layout makes
+# them, and `hud show` lists the frame's; the takeover's are takeover (the Take over button), picker
+# (the picker's plate), takeas:<row> (take over that row's player) and lanes (the Forks bay)
+HUD_ASK = "tagpu_replayhud.dump"
 HUD_OUT = "tagpu_replayhud.json"
 
 
@@ -2567,6 +2570,7 @@ def cmd_hud(args):
                  f"{st['speed']:g}x, HUD {round(st['hud'] * 100)}%, sight {st['sight']}, "
                  f"follow {st['follow']}, scroll {st['scroll']} (last {hits['last']})"
                  + (f", toast {st['toast']!r}" if st["toast"] else "")
+                 + (f", picker {st['pick']['R']}" if st.get("pick", {}).get("state") == 2 else "")
                  + (f"\nstats: {sw['measure']} by {sw['split']} at {sw['x']:.1f},{sw['y']:.1f}, "
                     f"{len(sw['groups'])} groups of {len(sw['groups'][0]['v']) if sw['groups'] else 0} samples "
                     f"{sw['dt']:g} s apart from {sw['t0']:g} s" if sw.get("open") else "") + "\n"
@@ -2590,7 +2594,7 @@ def cmd_hud(args):
         return
 
     if verb == "scrub":
-        # the timeline pressed at one fraction of the recording, dragged in steps, released at
+        # the timeline pressed at one fraction of the track's axis, dragged in steps, released at
         # another: a seek a frame, the newest winning
         if len(rest) != 2:
             die("usage: hud <name> scrub <from 0..1> <to 0..1>")
@@ -7317,7 +7321,8 @@ def build_parser():
                     help="show | wait | click <key> | hover <key> | wheel <key> <notches> | "
                          "scrub <from> <to> | drag <key> <dx> <dy> -- a key as `show` lists it "
                          "(play, speed, track, jump:2, fold:0, cursors, stats, chip:army, drag, "
-                         "...); a row's button hovers its row first")
+                         "takeover, takeas:<row>, lanes, picker, ...); a row's button hovers its "
+                         "row first")
     hd.add_argument("rest", nargs="*")
     hd.add_argument("--right", action="store_true", help="click: the right button")
     hd.add_argument("--timeout", type=float, default=20.0, help="seconds to wait for the HUD")
