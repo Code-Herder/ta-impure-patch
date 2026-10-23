@@ -333,19 +333,36 @@ paused, it stayed paused after No.
 **Bookmarks** are one field of `replays\index.dat`, after the seats: comma-separated GameTimes,
 at most 64, none within 30 of another, written through the index's temporary file and rename. They
 belong to the recording, not to a timeline, and follow its line's root key, so they survive the
-timeline table every playing's end appends (the touch), a fork, a deletion and a compaction.
+timeline table every playing's end appends (the touch), a fork, a deletion and a compaction. A
+bookmark is placed only inside the recording's span, and kept when a compaction after the root
+timeline's deletion shortens that span; the HUD draws only those inside the span it plays.
 MEASURED 2026-10-23, before the key: the index keyed a line by its size as well, and a bookmark at
 GameTime 2039 was gone after Leave and the browser's reopen (the file 119847 → 119895 bytes).
 MEASURED 2026-10-23 with the key (retail, a private Xvfb, a 4-seat recording of 4213 ticks
 watched through the browser): a bookmark placed on the HUD at GameTime 427 was in the index after
 Leave, whose touch grew the file 171974 → 172022 bytes, and on the HUD's timeline at the next
 Watch; the line's favourite, carried over from a version-1 line, stayed with it.
-**The index's version** is 2 (`IMPURE-REPLAYS-INDEX\t2`, the key after the size). A version-1
-index is converted once, at its first load: each line takes its file's key; one whose size is
-still its file's keeps everything, one whose file has changed size keeps its favourite and
-last-played time and loses its bookmarks and refusal mark, as version 1 itself would have at its
-next read, and one whose file cannot be opened at that moment goes. Until the conversion the
-prune reads a version-1 index as "nothing decided" and keeps every recording.
+**The index's version** is 2 (`IMPURE-REPLAYS-INDEX\t2`, the key after the size). **A mark goes
+only when a read proves its file changed or is gone.**
+
+- **A version-1 index is converted at its first load**, text line by line, every line kept, those
+  past the browser's 1024 too, and written at once. Each line's key is written `-`, *unknown*: no
+  file is read for it. The line takes its file's key at the first read of the file that succeeds,
+  with version 1's own rule: the favourite and the last-played time stay, and the bookmarks and the
+  refusal's mark stay while the file's size is still the line's. Until then the prune counts the
+  line's marks by its name alone. Any key field that is not sixteen hex digits reads as unknown.
+- **A line is dropped only when its file is not there**: the name not found, never an open that
+  failed. A summary that could not be read now (the file held exclusively) leaves the line's size
+  unknown, so the next open reads it again.
+- **An index that cannot be read is never rebuilt over.** Only a missing file is no index; an empty
+  one holds no mark either. A read that fails, a file over 4 MB, or a version this build does not
+  know, a later build's among them, makes every write of the index refuse and log, and the prune
+  keep every recording, until the file reads again.
+- **A downgrade is the hazard this cannot cover.** A build from before version 2 reads a version-2
+  index as foreign and rebuilds it, which loses its favourites and bookmarks; nothing in this build
+  can stop that.
+- The prune reads a version-1 index as "nothing decided" and keeps every recording, until the
+  first load converts it.
 
 **The speed and the pause are the player's.** Neither is recorded. The replay writes both only on
 a playback level (`tagpu_replay_speed_set`, `tagpu_replay_pause`); the player's speed is exchanged

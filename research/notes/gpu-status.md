@@ -2970,17 +2970,19 @@ timelines, and a live fork keeps it; opens the recording itself exclusively with
 which fails while anything holds it open and, while held, lets no playing start, a playing being
 the only way a bookmark is added; and then, under the index's lock, which `index_save` also takes
 (`idx_lock`, `tagpu_replays.c`), reads the file's marks off the disk — its line of that name and
-of the root key read through that same handle (`recr_root_key`: no open by path can share it) — and
-marks it for deletion on that handle (`tagpu_replays_unmarked_delete`); a version-1 index decides
-nothing, so every recording is kept until the browser or a playing has converted it. It goes
-when the handle closes, and a mark the index
-held before that read keeps it. The lock file goes with the recording, through the exclusive handle
+of the root key read through that same handle (`recr_root_key`: no open by path can share it), or
+of that name with its key unknown (a line the version-1 conversion left) — and marks it for
+deletion on that handle (`tagpu_replays_unmarked_delete`); a version-1 index, or one that cannot be
+read, decides nothing, so every recording is kept. It goes when the handle closes, and a mark the
+index held before that read keeps it. The lock file goes with the recording, through the exclusive handle
 no other caller can share, and so does a lock file the prune created itself for a recording it
 keeps. `SetFileInformationByHandle` is resolved at run time, so the DLL still loads on XP; where it
 is absent the prune deletes nothing and counts every older recording as in use. One line per
 prune: `recorder: prune at <new>: N older recordings, the newest K kept; of the rest, D deleted, M
 kept (forked or marked), B in use, U unreadable`, where *in use* also counts a recording whose lock
-or file could not be opened exclusively and one whose index could not be read. The process's exit
+or file could not be opened exclusively, one whose root key could not be read, and every recording
+while the index could not be read, is of version 1 (not yet converted) or of a version this build
+does not know. The process's exit
 waits for the worker (`recfile_exit`), so the prune stops at the next file once the exit has begun.
 **What the ordering does not cover:** a favourite given while a prune runs, after it has read that
 file's marks, or one the index could not save (`index_save` failing to write `index.tmp`, or the
