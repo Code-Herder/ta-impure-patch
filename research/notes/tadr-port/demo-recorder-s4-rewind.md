@@ -119,6 +119,28 @@ trigger's `hud state` prints both; the rewind lane checks them before the first 
 available), after it (open, G, the outcome `opened at GameTime ...`) and after a refused
 `rewind seek 0`.
 
+### The HUD's route
+
+In a live recorded skirmish on the Vulkan lane the HUD draws a rewind button beside the Impure
+Config sprocket and, while a rewind is open or in the past, a strip under the top bar
+([the HUD in game](../hud-in-game.md), *Live rewind*). Its clicks are this queue's verbs, through
+`tagpu_replay_rewind`: the button OPEN, CLOSE (open, nothing moved) or NOW (in the past); rew and
+fwd a SEEK 300 GameTime either way, held to the span; the track a SEEK a frame while dragged; Back
+to now CLOSE or NOW; Play from here in the open strip a CLOSE. Each outcome of a verb the HUD sent
+is read once by its serial: a refusal toasts "Rewind refused". The strip's play is drawn
+disabled: the past is held paused (`rw_poll` sets the pause bit each frame) and no verb plays it
+toward now.
+
+**Play from here's snap back** (owner decision 1-B). In the past, the fork starts at
+`takeover_point` of the last seek's target, the refresh at or before it, up to a refresh interval
+(10 s in a player's recording) before the world shown. The HUD's first click asks the takeover's
+plan for the T the fork would use, `now + 1` — the playhead is held at the target − 1 — and, when
+the plan's R is earlier or a fork would be deleted, SEEKs to R and shows that moment with the
+eviction ("Click again to play from m:ss, replacing F<n>"); once the world on screen is R − 1 the
+arm is set, and the second click sends FORK. That seek made R the rewind's target, so the fork
+verb's own `takeover_point(R)`, on the same reader, starts the fork at R: the world shown, with
+the eviction the plan named. When R is the T and nothing would be deleted, one click forks.
+
 ### Pause ordering and atomic dumps
 
 A before-observer steals the six-byte `test byte [eax+0x38A51],bl` at `0x496920`.

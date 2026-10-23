@@ -109,8 +109,10 @@ mockup its query carries `stat=1`, so that the chips it captures are on screen.
 on 2026-10-12, from a canvas of four whitebox variations: forks drawn as lanes on the timeline.
 Its art is the worn painted steel of the rest of the HUD (`hud-art.md`).
 The mockup draws it from `layout.json`'s `proposed` section behind its **Proposed** switch (on
-by default, `prop=0` turns it off). The DLL does not read that section, and `laycheck.py` runs
-with `prop=0`. A part the kit has no art for yet is drawn as whitebox: a mid-grey plate with a
+by default, `prop=0` turns it off). **The live mode is drawn by the game** (`live` in
+`tagpu_hudlay.c`; [the HUD in game](hud-in-game.md), *Live rewind*), and `laycheck.py` checks it
+in three cases with the switch on; the rest of the section the DLL does not read yet, and the
+other cases run with `prop=0`. A part the kit has no art for yet is drawn as whitebox: a mid-grey plate with a
 dark edge, and an icon it lacks as a stand-in glyph.
 
 - **The Forks bay.** A bay at the timeline housing's left end, spanning the marker lane and the
@@ -142,7 +144,9 @@ dark edge, and an icon it lacks as a stand-in glyph.
   bar beside the Impure Config sprocket; the sprocket is drawn as a dark stand-in, since the
   game draws it outside the HUD. The button opens a strip under the top bar over the paused game:
   the transport, a track up to NOW, the time, **Play from here** and **Back to now**. The strip
-  reuses the bay buttons, the timeline fill and the playhead.
+  reuses the bay buttons, the timeline fill and the playhead. Its play is drawn disabled (`off`):
+  the rewind holds the past paused and has no verb that plays it. Play from here is drawn pressed
+  while it is armed (the game's dump, `rw.arm` 2), and `?state=` draws the game's live dump.
 
 The shell screens of variation B (fork rows in the Replays browser, Delete and Play on there,
 Rewind on the end screen, and the Record games and Keep replays rows in Impure Config) are

@@ -13,6 +13,12 @@ rules, so the two stay 1:1. It replaces the watching dock and the player cards o
 [S5](tadr-port/demo-recorder-s5-ui.md), which are deleted; on the GDI renderer a replay has no
 on-screen controls (*When it draws*).
 
+**The live rewind is built and not yet run in a game** (*Live rewind*): in a live recorded
+skirmish the HUD draws the mockup's live mode instead — a rewind button beside the Impure Config
+sprocket in the top bar and, while a rewind is open, its strip under the bar — and drives the
+rewind through its own verbs. Its layout agrees with the mockup's (laycheck); the game runs and
+the captures are owed.
+
 The word **dock** on this page and in `layout.json` is the HUD's own bottom part, the transport
 plate and the timeline housing; the engine GUI screen of the same name (`DOCK.GUI`,
 `tagpu_dock.c`) no longer exists.
@@ -108,11 +114,16 @@ The owner's decisions:
 
 ## When it draws
 
-- **On every level that plays a recording, on the Vulkan lane.** There is no lever:
-  `tagpu_hudstate_on` (`tagpu_hudstate.c`) answers yes while `g_ddraw.renderer` is
-  `vk_render_main` and the pass has not refused (`tagpu_hudstate_refuse`, below), and
-  `tagpu_hudstate_fill` fills the packet's record while the playback is live
-  (`tagpu_replay_live`) and its span is known.
+- **On every level that plays a recording, and every live recorded skirmish, on the Vulkan
+  lane.** There is no lever: `tagpu_hudstate_on` (`tagpu_hudstate.c`) answers yes while
+  `g_ddraw.renderer` is `vk_render_main` and the pass has not refused (`tagpu_hudstate_refuse`,
+  below), and `tagpu_hudstate_mode` says what the HUD shows. **The live HUD** while a rewind owns
+  the level or one could open (`tagpu_replay_rewind_state`: its state is not idle, or `available`
+  — a live, recorded, non-network skirmish whose recorder is healthy); **else the replay HUD**
+  while the playback is live (`tagpu_replay_live`) and its span is known; else nothing. The
+  rewind is asked first because a rewind into the past plays the recording as puppets, where
+  `tagpu_replay_live` is true. `tagpu_hudstate_fill` fills the packet's record in either mode, its
+  `mode` saying which.
 - **On GDI, or once the Vulkan lane has handed the session to it, a replay has no on-screen
   controls**: no record is filled, the marker walker never starts (it starts from the fill), so
   there is no stats window either, the engine's `PAUSED` icon shows while paused, and the
@@ -154,6 +165,10 @@ The owner's decisions:
   before `tagpu_vk_gui_record`, after the world target's composite.
 - **The HUD covers the world and nothing else.** The engine's dialogs, its messages and its menu
   draw over it, and so does the cursor, which is the last quad of the UI pass's sharp layer.
+- **But for its top layer**, the ops flagged `HOPF_TOP` (the live rewind's button, which sits in
+  the top bar the UI paints whole): `tagpu_vk_hud_record_top` draws them after
+  `tagpu_vk_gui_record`, and the UI's sharp layer is drawn again inside their rect
+  (`tagpu_vk_gui_record_sharp`), so the cursor stays on top (*Live rewind*, *The top layer*).
 - **It is alpha-blended at the device's resolution**, premultiplied (`ONE`,
   `ONE_MINUS_SRC_ALPHA`): the parts' straight alpha is premultiplied once, at load, so filtering
   and mipmaps cannot darken an edge.
@@ -240,8 +255,8 @@ The owner's decisions:
   failing to load, its pass failing to build, the device failing an upload, or its layout failing
   to build: each calls `tagpu_hudstate_refuse` on the render thread, an interlocked store
   `tagpu_hudstate_on` reads on the game thread. From then on no record is filled and no click is
-  the HUD's (`hud: the replay HUD cannot draw (…) - a replay has no on-screen controls this
-  session`); the engine's menu still leaves. Not run: none of the four can be brought about
+  the HUD's (`hud: the HUD cannot draw (…) - a replay has no on-screen controls and a live game
+  no rewind button this session`); the engine's menu still leaves. Not run: none of the four can be brought about
   without breaking the build.
 
 ### The rules in C
@@ -435,10 +450,14 @@ DrawGameScreen draws the GAF `igpaused` in the middle of the world while the pau
 over the window. `pause_icon_init` (`tagpu_replay.c`, THE PAUSE ICON) puts a stub on its test at
 `0x46A107`: the nine bytes of the `test`/`je`, checked with the `mov eax,[main]` before them,
 are replaced by the same test, and when the bit is set the stub calls `tagpu_hudinput_on_screen`
-and draws the icon only when it answers 0. That is the HUD on the screen, not merely on: the
-fill's own test (`tagpu_hudstate_drawing`: the Vulkan lane, the HUD not refused, a live playback
-with a span) and controls in the command record last taken, which the render thread posts empty
-for a frame that drew no HUD and the in-play draw takes before anything it draws. While the art
+and draws the icon only when it answers 0. That is a control on the screen that carries the
+pause, not merely the HUD on: controls in the command record last taken, which the render thread
+posts empty for a frame that drew no HUD and the in-play draw takes before anything it draws, and
+the HUD's mode (`tagpu_hudstate_mode`) the replay's, or the live HUD's while a rewind owns the
+level. **A live recorded skirmish the player pauses keeps the icon**: the live HUD idle is one
+button with no pause on it, and answering for the whole live mode would take the icon from every
+recorded skirmish. While a rewind holds the game the strip says so, and the icon in the middle of
+the world would sit under it, so it goes, as it goes under the replay HUD. While the art
 loads, the pass is down or the chart's first image is not yet on the device, the icon shows. Game thread, inside the draw; it writes nothing. If the
 bytes differ the log says `replay: the pause icon's test 0x46A107 holds other bytes: a replay
 shows it`.
@@ -634,8 +653,9 @@ control's place in the frame on screen — and never calls the replay's API:
   display a drag whose later steps leave the picture ends where the last frame sampled an
   in-picture step: keep every step inside the picture.
 - **`show` and `wait`** print the state and every control, and a `stats:` line while the window is
-  open (its measure, split, place, groups and samples); they wait up to `--timeout` (20 s) for
-  an answer, which only a Vulkan replay's HUD gives.
+  open (its measure, split, place, groups and samples); in a live recorded skirmish, `live,
+  rewind <state>, t … of … s, arm <n>` and the controls instead. They wait up to `--timeout`
+  (20 s) for an answer, which only the Vulkan lane's HUD gives.
 
 The replay harness's W lane drives the HUD through it ([completeness](tadr-port/demo-recorder-completeness.md),
 *The replay test harness*): the speed, play, the trigger's `hud seek <T>` (the timeline's own
@@ -653,8 +673,115 @@ queues it for the frame visit; the plan only reads. The trigger's own commands r
 same calls, and `hud state` prints what they answer (`tagpu_replay.c`, the trigger's comment). The
 details: [the takeover](tadr-port/demo-recorder-s4-takeover.md#driving-it),
 [the forks](tadr-port/demo-recorder-s4-forks.md#tickets-and-the-huds-route) and
-[live rewind](tadr-port/demo-recorder-s4-rewind.md#the-verbs-as-a-queue-and-their-outcomes). No
-control of the HUD calls them yet.
+[live rewind](tadr-port/demo-recorder-s4-rewind.md#the-verbs-as-a-queue-and-their-outcomes). The
+live HUD calls the rewind's verbs and state, the outcome and, for Play from here, the takeover's
+plan (*Live rewind*); no control of the replay HUD calls them yet.
+
+## Live rewind
+
+The mockup's live mode (`tools/hudart/mockup/?mode=live&rw`, hud.js `live`), drawn by the game
+in a live recorded skirmish: **a rewind button beside the Impure Config sprocket** in the top bar,
+which opens the strip at now and closes it back to now, and **the strip** under the bar while a
+rewind is open or in the past — rew, play, fwd, the track from the recording's first GameTime to
+now, "now", the time, **Play from here** and **Back to now**. The verbs are the rewind's own
+([live rewind](tadr-port/demo-recorder-s4-rewind.md#the-huds-route)), sent through
+`tagpu_replay_rewind`, so a click and the `rewind` trigger run one code path at one point of the
+frame visit.
+
+### The mode, the record and the layout
+
+- **`tagpu_hudstate_mode`** (*When it draws*). The live record (`fill_live`) carries the clock,
+  the pause, the scale, the rewind's state, its span (`first`, `last`) and `rw_G`, where it opened;
+  no seats, no markers, no stats. It never calls `tagpu_hudmarks_get`: in the past
+  `tagpu_replay_live` is true, and the markers' walker would start on the live recording.
+- **The render half** (`present_live`): the strip is drawn while the state is OPEN or PAST, the
+  button is down while it is not IDLE, `T` is `(rw_G − first) / 30` and `t` the playhead held to
+  `[first, rw_G]`, both in seconds from `first`; `playing` is 0. The drawn track's span,
+  `first`..`rw_G`, goes into the hit map (`t_first`, `t_last`), and a click on the track is mapped
+  on it, then held to the rewind's span `[first + 1, last]` on the game thread.
+- **The layout** (`live`, `tagpu_hudlay.c`, a port of hud.js `live`): the button at
+  `(W − (entry.r + entry.s)·k, entry.t·k)`, `entry.s·k` square, with `k = top / entry.bar` — the
+  bar's own pixels, as the engine places the sprocket (`trigger_rect`, `tagpu_menu.c`: x
+  `w − 44`, y 2, 28 square), so the button sits 3 bar pixels left of it. The mockup's whitebox
+  sprocket is its stand-in for the engine's and is not drawn. **The strip's play is drawn
+  disabled** (`off` in `layout.json`, the mockup too): the rewind holds the past paused and has no
+  verb that plays it toward now (the owner's choice for this round). Play from here is drawn
+  pressed while it is armed. The toast draws in both modes.
+- **The hit map's bound** is the larger of the replay HUD's and the live HUD's (the button, the
+  strip's plate, its transport, its track and its actions: 7); the load's self-test builds the
+  live HUD closed and open with Play from here armed, each against the live bound.
+
+### The input
+
+`act` hands every key to `live_act` while the last fill was the live HUD's. The table:
+
+| key | when | does |
+|---|---|---|
+| `rewind` | idle / OPEN / PAST | OPEN / CLOSE / NOW; nothing while the writer flushes or a fork ends the original, where the verb would be refused |
+| `rew`, `fwd` | OPEN, PAST | SEEK 300 GameTime back, held to `first + 1`, or forward, held to `last` |
+| `track` | OPEN, PAST | press and drag: a SEEK a frame at the pointer, the latest winning (the queue) |
+| `live_play` | OPEN | CLOSE, toast "Playing on from m:ss" |
+| `live_play` | PAST | **Play from here**, below |
+| `live_now` | OPEN / PAST | CLOSE / NOW |
+| `live` | | the strip's plate, taken |
+
+Any key but `live_play` and the plate ends Play from here's arm. Each outcome of a verb the HUD
+sent is read once by its serial (`tagpu_replay_result`): a refusal toasts "Rewind refused" and
+ends the arm, the fork "Playing from m:ss".
+
+**Play from here** (owner decision 1-B: what is taken over is what is shown). The rewind's fork
+starts at `takeover_point(T)`, the refresh at or before the last seek's target, which in a
+player's recording (a refresh every 300 GameTime, 10 s) can be up to 10 s before the world on
+screen. So the first click asks `tagpu_replay_takeover_plan(now + 1)` — in the past the playhead
+is held at the seek's target − 1, so `now + 1` is the T the fork would use:
+
+- refused: "Cannot play from m:ss";
+- R is that T and nothing would be deleted: FORK, one click;
+- else the arm takes R and the fork it would delete, SEEKs to R when R is earlier (the snap back),
+  and toasts "Click again to play from m:ss[, replacing F<n>]"; the arm is *seeking* until the
+  world on screen is R − 1, then *armed*, drawn pressed; the second click sends FORK.
+
+**The ordering it rests on** (one thread): FORK is sent only armed, which needs the snap's seek to
+have run, so the rewind's seek target is R; the fork verb's own `takeover_point(R)` on the same
+reader answers R, so the fork starts at the world shown, by the function the plan ran, and the
+eviction shown is the one the fork acts on. The plan reserves nothing.
+
+### The top layer
+
+The engine's UI composite is one full-screen quad that paints every texel the engine drew, the top
+bar included, so a HUD op inside the bar drawn before it would be painted over. The button's ops
+are flagged `HOPF_TOP` and drawn after the composite:
+
+- **Two builds, one atlas.** `tagpu_vk_hud_prepare` calls `tagpu_huddraw_begin`, which empties
+  the glyph atlas if a glyph did not fit, then builds the base layer and the top layer into one
+  instance range, the top's batches after the base's. An atlas emptied between the two builds
+  would leave the base layer's glyphs naming emptied texels; emptied only before the first build,
+  both layers are one generation, which the upload rule covers.
+- **The record order** (`tagpu_vk.c`): the base layer, the UI composite, the top layer, then the
+  composite's **sharp layer again** inside the top layer's rect (`tagpu_vk_gui_record_sharp`): the
+  composite's pipeline, set and viewport with a second quad whose vertices carry `a.z = 1`, which
+  `LAY_FS` reads as `sharpOnly` and discards past its sharp-layer test. Draws in one render pass
+  land in record order, so the sharp layer — the only cursor — is the last thing drawn at every
+  pixel of the rect, as the composite's own is everywhere else. The composite's quad has
+  `a.z = 0`, so its output is unchanged. The redraw runs only when the composite was drawn this
+  frame for this slot. No new GPU object; it is all `record`, on the render thread.
+- **The hit map lists the top layer's controls first**, then the rest topmost-first.
+- **The Config panel** hangs below the bar (`panel_rect`, `tagpu_menu.c`) and does not reach the
+  button's rect; a point the sprocket or the panel owns is the menu's (`tagpu_menu_owns_point`).
+  [INFERRED] The engine draws no control in the bar under the button (`W − 75 s .. W − 47 s` at
+  the game's HUD scale s): owed, a check by eye at the smallest window the HUD supports.
+
+### The tests
+
+U clicks the HUD's open, rew and Back to now on the live level before its fork (`tarewind.py`,
+`hud_cycle`); U-E, on a copy of the recording, takes over timeline 1, forks it by a rewind, and
+plays Play from here past a refresh of that fork: the snap back to the refresh, the eviction
+named, the second click's fork there with the named timeline deleted and the fork EQUAL to its
+recording (`play_from_here`, on a takeover fixture, whose refreshes are on the 30-GameTime grid).
+The pause icon's rule is checked by eye: neither a peek nor `tacli hud show` sees the icon.
+`tacli hud show` prints `live, rewind <state>, t … of … s, arm <n>` and the dump carries
+`mode`, `live` (`{open}`) and `rw` (`state`, `arm`, `R`, `evict`, `G`, `first`), which the
+mockup's `?state=` draws.
 
 **The span is the chain's.** A playing of a fork seeks, clamps and starts over within its own
 chain: the span runs from the root's first GameTime to the chosen timeline's last, which the scan
@@ -730,9 +857,15 @@ the render thread.
 - **Bookmarks do not survive a playing** [INFERRED from the code, not run]: `replays\index.dat`
   keys them by the file's name and size, and every playing's end touches the file, which appends a
   timeline table and so changes its size; a fork, a deletion and an export change it too.
-- **The hit map does not carry the timeline axis it was drawn with**: a click on the timeline is
-  mapped with the latest fill's span (`seek_at`, `tagpu_hudinput.c`). That is exact while the span
-  never changes inside a level; a timeline switch would change it.
+- **The replay's timeline click is mapped with the latest fill's span** (`seek_at`,
+  `tagpu_hudinput.c`), not the drawn axis the hit map now carries (`t_first`, `t_last`, which the
+  live strip's track maps on). That is exact while the span never changes inside a level; a
+  timeline switch would change it.
+- **The replay HUD no longer draws during a live rewind into the past**, where
+  `tagpu_replay_live` is true: the mode asks the rewind first, and a rewind always shows the strip.
+- **The live rewind has not been run in a game**: the HUD cycle and U-E, the W control, the
+  captures against the mockup, the cursor over the button and the pause icon's rule by eye are
+  owed.
 - **A multiplayer recording's fork may not play** [INFERRED from the code, not run]: the reader
   refuses a chain whose segments differ in RT_HOLD, a multiplayer root has none, and its fork,
   recorded by a live skirmish, writes one.
@@ -747,6 +880,6 @@ the render thread.
   the archive stays mapped with the DLL, 27.0 MB. The parts are painted at about twice the
   4.5 pixels a unit the HUD is drawn at on a 4K screen at 150 %, so most of both is detail no
   screen up to 4K shows. The owner keeps the full resolution. 20 of the 66 parts (34.4 MB decoded,
-  10.7 MB of the archive) are the `proposed` section's: the Take over button and picker, the fork
-  lanes and the live rewind strip, which the DLL packs and decodes but draws only once their
-  landings make it read that section.
+  10.7 MB of the archive) are the `proposed` section's: the Take over button and picker and the
+  fork lanes, which the DLL packs and decodes but draws only once their landings make it read
+  them, and the live rewind's button and strip, which it draws.

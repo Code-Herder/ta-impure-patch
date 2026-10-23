@@ -1059,8 +1059,9 @@ block that reads to its last complete block.
   it waits for `replay: overlay <name> on|off`, or `replay:
   chat hidden|shown` for the chat. Every switch is on when a playing starts. Triggers: `overlay
   <name> on|off`, and `chat hide` / `chat show`.
-- **The replay HUD** is a replay's controls on every Vulkan playing; there is no lever, and on GDI
-  a replay has no on-screen controls. **Drive it with `tacli hud <i>`**, by the keys of the frame
+- **The replay HUD** is a replay's controls on every Vulkan playing, and in a live recorded
+  skirmish the live rewind's button and strip; there is no lever, and on GDI there is neither.
+  **Drive it with `tacli hud <i>`**, by the keys of the frame
   on screen, never by coordinates: `show` (the default; `wait` is the same) prints the clock, the
   speed, Sight, Follow, the scroll, any toast, a `stats:` line while the stats window is open
   (measure, split, place, groups, samples, their spacing) and every control with its client rect,
@@ -1073,7 +1074,11 @@ block that reads to its last complete block.
   `selections` `chat`, `fold:<t>`, `row:<i>`, `jump:<i>` `sight:<i>` `follow:<i>`, `scroll_up`
   `scroll_down`, and with the stats window open `close`, `chip:<k>` (`metal` `energy` `excess`
   `units` `army` `kills` `losses`), `chip:player` `chip:team` and `drag`, its title; a row's
-  button shows only under the pointer, so `hud` hovers `row:<i>` first. `click stats` opens the
+  button shows only under the pointer, so `hud` hovers `row:<i>` first. Live: `rewind` (the
+  button: open, close, back to now), and with the strip open `rew` `fwd` `track` `live_play`
+  `live_now` and the plate `live` (the strip's `play` is disabled and not a control); `show`
+  prints `live, rewind <state>, t … of … s, arm <n>`, and `--json`'s state carries `rw`
+  (`state`, `arm`, `R`, `evict`, `G`, `first`). `click stats` opens the
   window, closed at every replay's start; `drag drag 200 -80` moves it. The window follows the
   pointer once a frame, and a pointer outside the picture has no client point: at a low frame
   rate a drag whose later steps leave the picture ends where the last frame sampled an
