@@ -662,7 +662,8 @@ control of the HUD calls them yet.
 **The span is the chain's.** A playing of a fork seeks, clamps and starts over within its own
 chain: the span runs from the root's first GameTime to the chosen timeline's last, which the scan
 that chose it found (`first_iteration`). For the original nothing changes, its last being the
-summary's.
+summary's. MEASURED 2026-10-23 on the rewind lane's `battle` recording: a HUD seek to 5401 in the
+fork's playing goes to 5401, past the original's last, 5101.
 
 ## Checking it against the mockup
 
