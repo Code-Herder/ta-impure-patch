@@ -1680,8 +1680,8 @@ def watch_lane(w, fx, rec, out, T):
     """W: the playback started as a player starts it, through the Replays browser's Watch, and
     driven through the replay HUD: a version-1 index converted at the browser's open, its line's
     favourite and bookmark kept with the file's root key, two copies of the recording refused, the
-    data refusal's marked and the missing map's not, then the recording watched, its speed changed on the HUD, the
-    in-game Options' OK (the settings save), a pause, the HUD's seek to T with dump w<T>, the
+    data refusal's marked and the missing map's not, then the recording watched, its speed changed
+    on the HUD, the in-game Options' OK (the settings save), a pause, the HUD's seek to T with dump w<T>, the
     resume, Leave with the marks still on the line, and a second Watch from the browser it
     returns to.
     Returns its own checks, (name, verdict, detail) each; a claim that does not hold is Failed."""
@@ -1693,12 +1693,14 @@ def watch_lane(w, fx, rec, out, T):
     copies = [(f"{stem}-layout", tarec.RT_LAYOUT, other_layout,
                "it was recorded with another exclusion file (replay-layout.tsv)"),
               (f"{stem}-map", tarec.RT_SETTINGS_MAP, no_such_map, TERRAIN)]
+    # the browser lists newest first by the recorded start, as the prune orders (tagpu_replays.c,
+    # THE ORDER): the copies first, in this order, the recording itself last
     now = time.time()
     for k, (name, tag, edit, _) in enumerate(copies):
-        header_copy(rec, rd / f"{name}.imprec", {tag: edit})
-        os.utime(rd / f"{name}.imprec", (now - 60 * k, now - 60 * k))
-    shutil.copyfile(rec, rd / f"{stem}.imprec")
-    os.utime(rd / f"{stem}.imprec", (now - 60 * len(copies),) * 2)
+        header_copy(rec, rd / f"{name}.imprec",
+                    {tag: edit, tarec.RT_WALLCLOCK: started_at(now - 60 * k)})
+    header_copy(rec, rd / f"{stem}.imprec",
+                {tarec.RT_WALLCLOCK: started_at(now - 60 * len(copies))})
     # THE CONVERSION (tagpu_replays.c): a version-1 index, the only line the recording's, at its
     # file's size, a favourite with a bookmark at T (name size format start last end fav played
     # map nseats marks): no mark of an earlier run's copies, and the line keeps both

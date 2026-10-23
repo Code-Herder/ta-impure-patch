@@ -38,6 +38,7 @@
 #include "tagpu_art.h"
 #include "tagpu_recorder.h"    /* tagpu_rec_mod_print: the running game's archives */
 #include "tagpu_recreader.h"
+#include "tagpu_recfile.h"     /* recfile_newer_first: the prune's order, the list's */
 #include "tagpu_replays.h"
 #include "tagpu_profiles.h"
 #include "tagpu_replay.h"
@@ -1005,7 +1006,7 @@ static void __stdcall mm_oncommand(void* gi)
    The index is a cache that can always be rebuilt, but for four marks it alone holds: the
    favourite flag, the last time a recording was played, its bookmarks and Watch's refusal. One
    line per recording, keyed by its file name and its root key:
-     name size key format start last end fav played map nseats seat... marks
+     name size key started format start last end fav played map nseats seat... marks
        I<gen> version modprint has_modprint archives mod result,commander,defeat...
        L code modprint buildkey a b                                         (tab-separated)
    THE KEY (ent_refresh). `key` is recr_root_key's, the root header block's crc_body and crc_head
@@ -1017,6 +1018,10 @@ static void __stdcall mm_oncommand(void* gi)
    unsigned value when the summary is to be read again. `-`, or any key field that is not sixteen
    hex digits, is a key unknown (THE CONVERSION): the prune keeps the line's marks by its name,
    and the first read of the file gives it the key.
+   `started` is the recorded start (RT_WALLCLOCK) the key's header holds, which the list is
+   ordered by as the prune orders (THE ORDER): a FILETIME in UTC as sixteen hex digits, `none` for
+   a header read without one, `-` for one not read yet. It is the key's, so it is read again only
+   with a new key.
    `played` is when Watch last started it, in seconds since 1970 (UTC), 0 for never. `marks` is the
    replay HUD's bookmarks, comma-separated GameTimes, sorted, each inside [start, last] when it was
    placed (tagpu_replays_mark_add) and kept when a compaction shortens the span; a line without
@@ -1038,7 +1043,8 @@ typedef struct {
     unsigned long long size;
     unsigned key[2];                        /* THE KEY: recr_root_key's                        */
     int      keyless;                       /* key unknown: written `-` (THE CONVERSION)       */
-    FILETIME mtime;
+    int      dated;                         /* recr_wallclock_of's answer for the key, -1 unread */
+    FILETIME started;                       /* the recorded start, UTC, when dated is 1         */
     unsigned format, start, last, end, fav, played, nseats;
     char     map[RECR_TEXT];
     char     name[REC_PLAYERS][RECR_NAME];
@@ -1158,11 +1164,24 @@ static void lock_parse(char** f, int n, Ent* e)
     e->lock_b = strtoul(f[5], NULL, 16);
 }
 
+/* `t`, sixteen hex digits, into two words; 0 when it is not that */
+static int hex16(const char* t, unsigned* hi, unsigned* lo)
+{
+    unsigned a, b;
+    if (strlen(t) != 16 || strspn(t, "0123456789ABCDEFabcdef") != 16 ||
+        sscanf(t, "%8x%8x", &a, &b) != 2)
+        return 0;
+    *hi = a;
+    *lo = b;
+    return 1;
+}
+
 /* One index line into `e`, of the layout of index version `version`; 0 when it is not one.
    `line` is NUL-terminated and is cut up. */
 static int ent_parse(char* line, Ent* e, int version)
 {
-    char* f[12 + REC_PLAYERS + 6 + REC_PLAYERS + 6];
+    char* f[13 + REC_PLAYERS + 6 + REC_PLAYERS + 6];
+    unsigned hi = 0, lo = 0;
     int n = 0, i, k;
     char* p = line;
     memset(e, 0, sizeof *e);
@@ -1175,12 +1194,14 @@ static int ent_parse(char* line, Ent* e, int version)
     if (version >= 2) {
         /* the key, taken out: the fields after it are numbered as version 1 numbers them. A
            key field that is not sixteen hex digits -- `-`, or one damaged -- is a key unknown */
-        if (n < 11) return 0;
-        e->keyless = strlen(f[2]) != 16 || strspn(f[2], "0123456789ABCDEFabcdef") != 16 ||
-                     sscanf(f[2], "%8x%8x", &e->key[0], &e->key[1]) != 2;
+        if (n < 12) return 0;
+        e->keyless = !hex16(f[2], &e->key[0], &e->key[1]);
         if (e->keyless) e->key[0] = e->key[1] = 0;
-        memmove(f + 2, f + 3, (size_t)(n - 3) * sizeof f[0]);
-        n--;
+        e->dated = !strcmp(f[3], "none") ? 0 : hex16(f[3], &hi, &lo) ? 1 : -1;
+        e->started.dwHighDateTime = hi;
+        e->started.dwLowDateTime = lo;
+        memmove(f + 2, f + 4, (size_t)(n - 4) * sizeof f[0]);
+        n -= 2;
     }
     if (n < 10 || !f[0][0] || strlen(f[0]) >= FILE_MAX) return 0;
     lstrcpynA(e->file, f[0], FILE_MAX);
@@ -1244,7 +1265,7 @@ static int file_key(const char* file, unsigned key[2], unsigned long long* size)
 static const char* s_idxBad;
 
 /* THE CONVERSION of a version-1 index, whose lines are keyed by name and size alone: its text
-   made version 2's, line by line, each line's key field `-`, a key unknown, after its size. No
+   made version 2's, line by line, each line's key and start `-`, unknown, after its size. No
    line is dropped and no file is read here: every line, past ENT_MAX too, is carried as it was.
    A line takes its file's key at the first read of the file that succeeds (ent_refresh), which
    applies version 1's own rule: the favourite and the last-played time stay, and the bookmarks
@@ -1256,7 +1277,7 @@ static int index_convert(void)
     size_t lines = 1, at;
     char* out;
     for (at = 0; p[at]; at++) lines += p[at] == '\n';
-    out = (char*)malloc(sizeof INDEX_MAGIC + strlen(p) + 2 * lines + 1);
+    out = (char*)malloc(sizeof INDEX_MAGIC + strlen(p) + 4 * lines + 1);
     if (!out) return 0;
     memcpy(out, INDEX_MAGIC "\n", sizeof INDEX_MAGIC);
     at = sizeof INDEX_MAGIC;
@@ -1269,8 +1290,8 @@ static int index_convert(void)
         memcpy(out + at, p, head);
         at += head;
         if (t2) {
-            memcpy(out + at, "\t-", 2);
-            at += 2;
+            memcpy(out + at, "\t-\t-", 4);
+            at += 4;
             memcpy(out + at, t2, len - head);
             at += len - head;
         }
@@ -1378,6 +1399,9 @@ static int put_ent(char* b, int cap, int at, const Ent* e)
     sanitize(map);
     at = gput(b, cap, at, "%s\t%I64u\t", e->file, e->size);
     at = e->keyless ? gput(b, cap, at, "-") : gput(b, cap, at, "%08X%08X", e->key[0], e->key[1]);
+    at = e->dated > 0 ? gput(b, cap, at, "\t%08lX%08lX", e->started.dwHighDateTime,
+                             e->started.dwLowDateTime)
+                      : gput(b, cap, at, e->dated ? "\t-" : "\tnone");
     at = gput(b, cap, at, "\t%u\t%u\t%u\t%u\t%u\t%u\t%s\t%u", e->format, e->start, e->last,
               e->end, e->fav, e->played, map, e->nseats);
     for (i = 0; i < e->nseats; i++) {
@@ -1753,6 +1777,7 @@ static int ent_refresh(Ent* e, const unsigned key[2], unsigned long long size)
     }
     e->key[0] = key[0];
     e->key[1] = key[1];
+    e->dated = -1;                          /* the new key's start: read by scan (THE ORDER) */
     e->size = size;
     if (summarize(e) < 0) e->size = ~0ull;
     if (keep_lock) e->lock = lock;
@@ -1768,6 +1793,7 @@ static Ent* ent_new(const char* file)
     memset(e, 0, sizeof *e);
     lstrcpynA(e->file, file, FILE_MAX);
     e->size = ~0ull;
+    e->dated = -1;
     return e;
 }
 
@@ -1883,14 +1909,21 @@ int tagpu_replays_mark_remove(const char* file, unsigned T)
     return 0;
 }
 
-typedef struct { char file[FILE_MAX]; FILETIME mtime; } Found;
+/* a file in replays\: its key and size as file_key read them (`read` its answer), and its
+   recorded start (`dated` recr_wallclock_of's answer) */
+typedef struct {
+    char file[FILE_MAX];
+    int read, dated;
+    unsigned key[2];
+    unsigned long long size;
+    FILETIME started;
+} Found;
 
 static int newest_first(const void* a, const void* b)
 {
     const Found* x = (const Found*)a;
     const Found* y = (const Found*)b;
-    int c = CompareFileTime(&y->mtime, &x->mtime);
-    return c ? c : lstrcmpiA(y->file, x->file);
+    return recfile_newer_first(x->dated, &x->started, x->file, y->dated, &y->started, y->file);
 }
 
 /* A row for each recording listed that the filter shows: with All mods every one, else those of
@@ -1963,7 +1996,12 @@ static const char* lock_text(const Ent* e)
 
 /* The recordings listed: every one in replays\, newest first, the first ENT_MAX of them. One whose
    key cannot be read -- held by the prune, say -- is listed as its line has it, and not at all
-   without one: nothing is decided about its marks from a file that could not be read. */
+   without one: nothing is decided about its marks from a file that could not be read.
+   THE ORDER is the prune's (recfile_newer_first), by the recorded start, so the list's first
+   ENT_MAX are the ones the prune keeps first. A file's start is its line's when the line is its
+   key's and has read it, and is read (recr_wallclock_of) otherwise, before the sort; a file whose
+   key or start cannot be read now sorts as the prune sorts a file it cannot read, after every
+   dated one. */
 static void scan(void)
 {
     WIN32_FIND_DATAA fd;
@@ -1995,12 +2033,28 @@ static void scan(void)
                 cap = c;
             }
             lstrcpynA(found[nf].file, fd.cFileName, FILE_MAX);
-            found[nf].mtime = fd.ftLastWriteTime;
             nf++;
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
     s_nfiles = nf;
+    for (i = 0; i < nf; i++) {
+        Found* f = &found[i];
+        int k = ent_find(f->file);
+        f->read = file_key(f->file, f->key, &f->size);
+        f->dated = -1;
+        f->started.dwLowDateTime = f->started.dwHighDateTime = 0;
+        if (f->read >= 0 && k >= 0 && !s_ent[k].keyless && same_key(&s_ent[k], f->key) &&
+            s_ent[k].dated >= 0) {
+            f->dated = s_ent[k].dated;
+            f->started = s_ent[k].started;
+        } else if (f->read >= 0) {
+            char path[MAX_PATH];
+            _snprintf(path, sizeof path, "replays\\%s", f->file);
+            path[sizeof path - 1] = 0;
+            f->dated = recr_wallclock_of(path, &f->started);
+        }
+    }
     if (nf > 1) qsort(found, (size_t)nf, sizeof *found, newest_first);
     if (nf > ENT_MAX) {
         rlog("replays: %d recordings; the browser lists the newest %d", nf, ENT_MAX);
@@ -2017,18 +2071,21 @@ static void scan(void)
     gone = s_nent - kept;
     s_nent = kept;
     for (i = 0; i < nf; i++) {
-        unsigned key[2];
-        unsigned long long size;
-        int k = ent_find(found[i].file), read = file_key(found[i].file, key, &size);
+        const Found* f = &found[i];
+        int k = ent_find(f->file), refreshed;
         if (k < 0) {
-            Ent* e = read < 0 ? NULL : ent_new(found[i].file);
+            Ent* e = f->read < 0 ? NULL : ent_new(f->file);
             if (!e) continue;
             k = (int)(e - s_ent);
         }
-        s_ent[k].mtime = found[i].mtime;
-        if (read >= 0 && ent_refresh(&s_ent[k], key, size)) {
+        refreshed = f->read >= 0 && ent_refresh(&s_ent[k], f->key, f->size);
+        dirty |= refreshed;
+        if (f->read >= 0 && s_ent[k].dated != f->dated) {
+            s_ent[k].dated = f->dated;
+            s_ent[k].started = f->started;
             dirty = 1;
-        } else if (!s_ent[k].info) {
+        }
+        if (!refreshed && !s_ent[k].info) {
             info_read(&s_ent[k]);
             dirty |= s_ent[k].info;
         }

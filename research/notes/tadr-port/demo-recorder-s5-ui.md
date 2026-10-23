@@ -342,12 +342,16 @@ MEASURED 2026-10-23 with the key (retail, a private Xvfb, a 4-seat recording of 
 watched through the browser): a bookmark placed on the HUD at GameTime 427 was in the index after
 Leave, whose touch grew the file 171974 → 172022 bytes, and on the HUD's timeline at the next
 Watch; the line's favourite, carried over from a version-1 line, stayed with it.
-**The index's version** is 2 (`IMPURE-REPLAYS-INDEX\t2`, the key after the size). **A mark goes
-only when a read proves its file changed or is gone.**
+**The index's version** is 2 (`IMPURE-REPLAYS-INDEX\t2`): after the size, the root key, then
+the recorded start (`RT_WALLCLOCK` as `recr_wallclock_of` reads it: a UTC FILETIME, `none`, or `-`
+not read yet), which the list is ordered by, newest first, exactly as the prune orders
+(`recfile_newer_first`), before its cut to 1024. **A mark goes only when a read proves its file
+changed or is gone.**
 
 - **A version-1 index is converted at its first load**, text line by line, every line kept, those
-  past the browser's 1024 too, and written at once. Each line's key is written `-`, *unknown*: no
-  file is read for it. The line takes its file's key at the first read of the file that succeeds,
+  past the browser's 1024 too, and written at once. Each line's key and start are written `-`,
+  *unknown*: no file is read for them. The browser's next open reads both for every file it lists,
+  and a file it cannot read then sorts after the dated ones, as the prune sorts it. The line takes its file's key at the first read of the file that succeeds,
   with version 1's own rule: the favourite and the last-played time stay, and the bookmarks and the
   refusal's mark stay while the file's size is still the line's. Until then the prune counts the
   line's marks by its name alone. Any key field that is not sixteen hex digits reads as unknown.

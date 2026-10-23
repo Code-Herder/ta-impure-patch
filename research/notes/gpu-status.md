@@ -2970,8 +2970,10 @@ by the clock of the machine that recorded it. So watching a replay does not keep
 does exporting one (an export carries its root's header and start); a favourite or a bookmark
 does. A clock set back makes each new recording the oldest at the next game's prune, and a file
 dated in the future holds one of the kept places until the clock passes it. The Replays browser
-still lists newest first by last write (`newest_first`, `tagpu_replays.c`), so its order, and which
-recordings its `ENT_MAX` cut lists, can differ from the prune's. The first `REC_KEEP` −
+lists in this same order (`recfile_newer_first`, which `scan` in `tagpu_replays.c` sorts by too),
+each file's start kept in its `index.dat` line with its root key and read again only with a new
+key, so its `ENT_MAX` cut lists the recordings the prune keeps first; a file whose key or start
+cannot be read at the open sorts as the prune sorts one it cannot read, after every dated one. The first `REC_KEEP` −
 1 = 49 are kept, so the newest 50 are kept counting the new one. The lever's text `keep N` changes the count (`keep_count`, `tagpu_recorder.c`): with no
 number, or `keep 0`, it is `REC_KEEP`; `keep 1` keeps the new one alone. Each older recording is
 deleted unless it is in use, has a live fork, is a favourite or bookmarked in `replays\index.dat`, or
