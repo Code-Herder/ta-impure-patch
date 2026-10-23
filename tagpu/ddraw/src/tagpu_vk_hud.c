@@ -114,8 +114,8 @@ static int                   s_tb0, s_tb1;      /* the top layer's: s_batch[s_tb
 static VkRect2D              s_top;             /* the top layer's device pixels; empty none   */
 
 /* THE GROUPS' LAYER (tagpu_huddraw.c, THE GROUPS): an image a frame slot, cleared and drawn by
-   this pass's own render pass in `prepare` and sampled by the attachment's composites in `record`,
-   both in the slot's command buffer. The seam's fence wait on the slot proves the slot's last use
+   this pass's own render pass in `prepare` and sampled by the attachment's composites in `record`
+   and `record_top` -- both layers' groups are in it -- all in the slot's command buffer. The seam's fence wait on the slot proves the slot's last use
    of it done (tagpu_vk_pass.h), so it is replaced, when a frame's regions outgrow it, with nothing
    in flight naming it. Its descriptor set is the slot's for the pass's life and is re-pointed at
    each new image, so a set in hand always names the current one. */
@@ -937,6 +937,9 @@ static void top_rect(const HUDINST* in, int n, uint32_t w, uint32_t h)
         float c = (in[i].ndc[1] + 1) * 0.5f * (float)h, e = (in[i].ndc[3] + 1) * 0.5f * (float)h;
         if (a > b) { float t = a; a = b; b = t; }
         if (c > e) { float t = c; c = e; e = t; }
+        /* a quad that covers nothing -- a group's composite whose region came out empty stays at
+           the corner it was emitted at -- draws nothing to bound */
+        if (!(b > a) || !(e > c)) continue;
         if (a < x0) x0 = a;
         if (c < y0) y0 = c;
         if (b > x1) x1 = b;
