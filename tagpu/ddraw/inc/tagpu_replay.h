@@ -108,7 +108,7 @@ void tagpu_replay_level_end(void);
    span: the chain that plays, its root's first GameTime and its last timeline's last; 0 when
    none.
    path: "replays\\<file>" while a recording is open, else NULL; timeline: the timeline of it
-   that plays, 0 the original -- a rewind into a fork changes it within the level.
+   that plays, 0 the original -- a rewind into a fork, or a switch, changes it within the level.
    seek_request: a seek to T, clamped to [first + 1, last], for the next frame visit; 0 refused.
    paused / pause: bit 0 of main+0x38A51, the Pause key's bit.
    speed / speed_set: the game speed's ceiling main+0x38A4B, 10 = 1x; speed_set takes 5, 10, 20, 40
@@ -166,7 +166,9 @@ unsigned tagpu_replay_timelines_serial(void);
 
 /* A fork of the playing's file deleted or exported (replays\<stem>.imprec), by the file worker:
    1 accepted, its outcome reported later through tagpu_replay_result (kind FORK) once the frame
-   visit has taken it; 0 refused at once, with a line and that result. */
+   visit has taken it; 0 refused at once, with a line and that result. The deletion of the
+   timeline that plays is a switch to the nearest live timeline up its chain first (THE SWITCH),
+   the deletion queued once that switch is done, and refused when it is refused. */
 enum { TAGPU_REPLAY_FORK_DELETE = 1, TAGPU_REPLAY_FORK_EXPORT };
 int tagpu_replay_fork_op(int op, unsigned id, const char* stem);
 
@@ -193,7 +195,7 @@ void tagpu_replay_rewind_state(TAGPU_REPLAY_RWSTATE* out);
    operations, the one consumed last. `serial` grows by one at each, so a caller that remembers
    it sees each outcome once. */
 enum { TAGPU_REPLAY_RQ_NONE, TAGPU_REPLAY_RQ_TAKEOVER, TAGPU_REPLAY_RQ_REWIND,
-       TAGPU_REPLAY_RQ_FORK, TAGPU_REPLAY_RQ_SEEK };
+       TAGPU_REPLAY_RQ_FORK, TAGPU_REPLAY_RQ_SEEK, TAGPU_REPLAY_RQ_SWITCH };
 typedef struct TAGPU_REPLAY_RESULT {
     unsigned serial;
     int      kind, op, ok;   /* op: the rewind verb or the fork op                          */
@@ -201,6 +203,13 @@ typedef struct TAGPU_REPLAY_RESULT {
     char     why[96];        /* the refusal's reason, or what was done                       */
 } TAGPU_REPLAY_RESULT;
 void tagpu_replay_result(TAGPU_REPLAY_RESULT* out);
+
+/* THE SWITCH (tagpu_replay.c, THE SWITCH): the playing goes on in timeline `id` of the same file
+   from the GameTime it is at, for the next frame visit -- in place when the history it has
+   played is id's too, else by a seek onto id's chain. 1 queued (the latest replaces an earlier
+   one not yet taken), 0 refused at once; either way its outcome is a TAGPU_REPLAY_RQ_SWITCH
+   result. */
+int tagpu_replay_watch_timeline(unsigned id);
 
 /* The replay HUD's rows, game thread only. Rows stay in the recording header's order, including defeated
    seats. Values come from the player's current recorded image, held after EOF -- in a multiplayer
