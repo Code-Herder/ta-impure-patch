@@ -1831,7 +1831,7 @@ def watch_takeover(w, log, rec, stem, T, out, cover):
         raise CouldNotRun(f"apply {END_SCENARIO.name}: {last(o)}")
     resume(w, log)
     log.wait_running(r"recorder: writer: .* closed", n)
-    if not log.wait(rf"replay: {re.escape(stem)} .*: (done|refused):", 120, n):
+    if not log.wait(rf"replay: forks .*\b{re.escape(stem)}\.imprec: (done|refused):", 120, n):
         raise CouldNotRun("the fork's level did not complete its file maintenance")
     copy = out / "W-takeover.imprec"
     shutil.copy2(fork_file(w, log), copy)
