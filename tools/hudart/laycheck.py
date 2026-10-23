@@ -199,7 +199,8 @@ def mockup(port, query, hover, held, tmp):
     cfg = tmp / "pw.json"
     cfg.write_text(json.dumps({"browser": {"contextOptions": {"deviceScaleFactor": 2, "viewport": {"width": 2100, "height": 1400}}}}))
     pw = ["playwright-cli", f"-s=laycheck{os.getpid()}", f"--config={cfg}"]
-    url = f"http://127.0.0.1:{port}/tools/hudart/mockup/index.html?{query}"
+    # prop=0: the proposed features are the mockup's alone until the DLL draws them
+    url = f"http://127.0.0.1:{port}/tools/hudart/mockup/index.html?{query}&prop=0"
     run = lambda *a: subprocess.run(pw + list(a), capture_output=True, text=True, cwd=tmp)
     run("open", url)
     try:

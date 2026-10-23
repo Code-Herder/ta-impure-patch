@@ -1,8 +1,8 @@
-"""Render the parts sheets Codex paints the 9-slice parts and icons from: grey cells on the flat magenta key,
+"""Render the parts sheets the 9-slice parts and icons are painted from: grey cells on the flat magenta key,
 each labelled; the corners a part may shape are marked dark and its slice lines dashed.
 usage: [PLAIN=1] sheets.py <parts spec> <out dir>   -> parts_<sheet>.png, parts_icons.png and sheets.json
 <parts spec> names a module in specs/ (parts_look, parts_buttons). PLAIN=1 draws flat cells with no corner
-marks: Codex reads a dark corner square as a place for hardware, or paints it as a dark block."""
+marks: an image model reads a dark corner square as a place for hardware, or paints it as a dark block."""
 import importlib, json, os, sys
 from PIL import Image, ImageDraw, ImageFont
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'specs'))

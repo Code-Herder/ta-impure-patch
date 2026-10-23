@@ -126,7 +126,8 @@ The owner's decisions:
 - **One HUD unit is the viewport height / 720 × the replay HUD's scale**
   (`tagpu_hudstate_present`), whatever the game's HUD scale. The engine's frame — the side
   panel's width and the bars' height at the game's HUD scale, from `tagpu_hud_live` — gives the
-  anchors, and the 9-slice and grid-sliced parts stretch to fill what is left.
+  anchors, and the 9-slice and grid-sliced parts stretch to fill what is left, except an `xtile`
+  part's x band, which repeats (*How it is built*).
 
 ## How it is built
 
@@ -176,7 +177,7 @@ The owner's decisions:
 
 - **One archive, embedded as a resource.** `tools/hudpak.py` packs `art/hud/` as it is —
   `layout.json`, `kit.json`, `parts/*.png`, `fonts/*.ttf` and the fonts' licence texts — behind
-  a directory, into `inc/tagpu_hudpak.bin` (7.8 MB with the 44 parts of 2026-10-08), which
+  a directory, into `inc/tagpu_hudpak.bin` (27.0 MB with the 66 parts of 2026-10-23), which
   `res.rc` embeds. Every offset is checked against the resource's size before it is read.
 - **The JSON is read at run time, not converted.** `tagpu_json.c` reads the same text the mockup
   reads, and `tagpu_hudlay_load` resolves it into structs once. A field missing or of the wrong
@@ -185,24 +186,25 @@ The owner's decisions:
 - **Decoding is off the frame.** The first frame that has a HUD to draw starts the loader
   (`tagpu_hudart_start`), a thread of its own that decodes the parts, premultiplies them and
   opens the faces, then publishes the result with one interlocked store; the HUD draws nothing
-  until then. MEASURED 2026-10-08: `hud: loaded 44 parts (5.7 Mpx) and 3 faces in ~230 ms`.
-- **The decoded parts stay for the session**, 22.9 MB of RGBA. Every teardown and resize brings
+  until then. MEASURED 2026-10-15, before the picker's re-cut (the kit is 21.2 Mpx since): `hud: loaded 66 parts (21.5 Mpx) and 3 faces in ~830 ms`.
+- **The decoded parts stay for the session**, 85 MB of RGBA. Every teardown and resize brings
   the pass down, and its images are uploaded again from these. Nothing writes or frees the
   loaded HUD afterwards, which is why any thread may read it without a lock.
-- **Each part is its own image, with mipmaps.** The parts are painted at 3 to 26 pixels a unit,
-  mostly about 9, and drawn at 1.1 (1080p, 75 %) to 4.5 (4K, 150 %), so most are minified 2 to 8
+- **Each part is its own image, with mipmaps.** The parts are painted at 4.2 to 12.5 pixels a unit,
+  mostly about 10, and drawn at 1.1 (1080p, 75 %) to 4.5 (4K, 150 %), so most are minified 2 to 9
   times. One descriptor set per part is bound per run of quads.
 
 ### The uploads
 
-- **The parts go once per build, across frames.** Their level 0 totals 22.9 MB against a slot's
+- **The parts go once per build, across frames.** Their level 0 totals 85 MB against a slot's
   2 MiB staging cap (`TAGPU_VK_STAGE_CAP`, `tagpu_vk_stage.h`), so they take several frames:
   each frame resumes where the last stopped (`s_nsent`), a banded part uses none of a frame's
   room, and the rest go as many as fit it.
 - **A part that does not fit what is left of this frame's buffer waits** to be the next frame's
   first copy. That copy goes in the frame's own command buffer when it fits the whole buffer,
-  and banded when it does not. The banded ones are the four parts over 2 MiB: `win_one`,
-  `foot_one`, `tp_one` and `rail_one`, sized from their PNGs. A pass's first upload after it is
+  and banded when it does not. The banded ones are the nine parts over 2 MiB: `win_one`,
+  `picker_one`, `rail_forks`, `rail_one`, `tp_one`, `live_one`, `foot_one`, `head_one` and `row_one`,
+  sized from their PNGs. A pass's first upload after it is
   built is the event the banded path is for (`tagpu_vk_stage.h`).
 - **The mip chains are made on the GPU.** After a part's level 0 lands, `blit_chain` blits each
   level down from the one above with `vkCmdBlitImage` and a linear filter, in the frame's command
@@ -256,6 +258,19 @@ The owner's decisions:
   most `HUD_MAXQUAD` = (2·`HUD_MAXBAND` + 1)² quads (`tagpu_hudlay.h`), the bound the loader
   enforces on each part's bands. The mockup composes a grid part into one image instead; at a
   cell's edge the two can differ by a pixel's filtering, and nowhere else.
+- **An `xtile` part's x band repeats** ([The replay HUD's layout](hud-layout.md), *Parts*): each
+  copy is one more quad with the band's own texture coordinates, the count rounded from the drawn
+  band's length over the painted one exactly as `hud.js` rounds it. The copies are fitted to what
+  `HUD_MAXQUAD` leaves once every cell has its quad, so a band drawn longer than that holds fewer,
+  longer copies and no cell is dropped.
+- **Verified on 2026-10-15** (MEASURED, the reference setup: a private 3840 × 2160 Xvfb, a
+  four-seat 2v2 and a ten-seat five-team recording on Town & Country and Core Prime): the game's
+  capture against the mockup fed the game's own dump at shift 0, 0, as the share of pixels
+  differing by more than 48 levels — at HUD 150 the timeline 1.50 % and the transport 2.24 % (the
+  world above them and the clock's text edges), the stats window 0.35 %; the column differs only
+  where the world shows between its rows and where the game shows a hover the dump does not
+  carry. At 125 and 75 the timeline's copies fall at the same pixels in both; the scroll bar of
+  the ten-seat column matches, thumb included.
 - **`tools/hudart/laycheck.py`** compares this file's rectangles and baselines with the mockup's
   ([The replay HUD's layout](hud-layout.md), *Text*).
 
@@ -701,5 +716,10 @@ the render thread.
 ## Open
 
 - **The HUD font** is not decided; Oswald and Barlow Condensed are the mockup's.
-- **Address space.** The decoded parts stay for the session, 22.9 MB of a 32-bit process, and
-  the archive stays mapped with the DLL, 7.8 MB.
+- **Address space.** The decoded parts stay for the session, 85 MB of a 32-bit process, and
+  the archive stays mapped with the DLL, 27.0 MB. The parts are painted at about twice the
+  4.5 pixels a unit the HUD is drawn at on a 4K screen at 150 %, so most of both is detail no
+  screen up to 4K shows. The owner keeps the full resolution. 20 of the 66 parts (34.4 MB decoded,
+  10.7 MB of the archive) are the `proposed` section's: the Take over button and picker, the fork
+  lanes and the live rewind strip, which the DLL packs and decodes but draws only once their
+  landings make it read that section.
