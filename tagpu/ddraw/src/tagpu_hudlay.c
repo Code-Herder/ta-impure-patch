@@ -1236,7 +1236,8 @@ static void picker(C* c)
        first, finds a row over it */
     hot(c, box(x, y, w, h), "picker");
     art(c, str(c, Pk, "part"), box(x, y, w, h), 1);
-    clock_s(t0, sizeof t0, st->pick_t);
+    /* the playhead's own time: the world the takeover starts from is the one on screen */
+    clock_s(t0, sizeof t0, st->t);
     snprintf(s, sizeof s, "Take over at\xC2\xA0%s\xC2\xA0" "as", t0);     /* NO-BREAK SPACEs */
     memset(&p, 0, sizeof p);
     text(c, s, box(x + pad + tj_num(tj_at(tp, 0), 0), y + pad,
@@ -1658,7 +1659,6 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     st->timeline = 1;
     st->replace = 1;
     st->picker = st->pick_down = 1;
-    st->pick_t = 30;
     strcpy(st->held, "takeas:0");
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(l, o, "forks build", err, errn)) goto done;
     ok = 1;

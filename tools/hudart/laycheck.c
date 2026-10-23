@@ -144,7 +144,6 @@ int main(int argc, char** argv)
     /* the Take over button is down while the picker is open, and the picker's title is the
        playhead's clock: the mockup's st.t */
     st->pick_down = st->picker;
-    st->pick_t = st->t;
     v = tj_get(S, "forks");
     for (e = v ? v->first : NULL; e && st->nfork < HUD_MAXFORK; e = e->next) {
         HUDFORK* f = &st->fork[st->nfork++];

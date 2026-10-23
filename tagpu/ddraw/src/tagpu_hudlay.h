@@ -107,7 +107,6 @@ typedef struct {
     int      lanes_open;
     int      picker;                /* the picker is drawn                                    */
     int      pick_down;             /* the Take over button is down: asked, seeking or open   */
-    float    pick_t;                /* the picker's title clock, seconds: R                   */
     int      replace;               /* the fork a takeover replaces, while the picker is open;
                                        -1 none                                                */
     int      armed;                 /* the fork whose Delete is armed; -1 none                */

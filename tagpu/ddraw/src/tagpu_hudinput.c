@@ -72,6 +72,7 @@ static unsigned s_pickR;                /* the plan's start: the first iteration
 static unsigned s_pickEvict;            /* the fork it would delete; UINT32_MAX none               */
 static unsigned s_pickTl;               /* the timeline the plan was made on                       */
 static unsigned s_pickSerial;           /* the replay's result serial at the plan                  */
+static unsigned s_pickCache;            /* the timelines' serial the plan was made under           */
 static unsigned s_resSerial;            /* the last result serial the fill has seen                */
 static int      s_resSeen;              /* s_resSerial is this level's: a result older than the
                                            level's first fill is never toasted                    */
@@ -217,9 +218,11 @@ static void scroll_by(int d)
 }
 
 /* GameTime T as the replay's clock, whole seconds from its first */
-static unsigned secs(unsigned T)
+/* The dock's clock with the playhead at `now`, whole seconds from the first, rounded as the
+   layout's clock_s rounds: a toast names a time as the playhead shows it */
+static unsigned clock_at(unsigned now)
 {
-    return (T > s_first ? T - s_first : 0) / TICKS;
+    return ((now > s_first ? now - s_first : 0) + TICKS / 2) / TICKS;
 }
 
 #define IS(s) (k == sizeof(s "") - 1 && !strncmp(key, s, k))   /* a literal only */
@@ -242,7 +245,8 @@ static int pick_act(const char* key, size_t k, int n)
         }
     } else if (IS("takeas")) {
         /* a row's index is the drawn frame's; the takeover takes the recorded seat */
-        unsigned seat, t = secs(s_pickR);
+        /* the world taken over is the one on screen, the playhead's at R - 1 */
+        unsigned seat, t = clock_at(s_pickR - 1);
         if (s_pick != PICK_OPEN) return 1;
         s_pick = PICK_CLOSED;
         if (n < 0 || n >= s_hit.nseat || s_hit.seat[n] >= TAGPU_PK_HUD_SEATS) return 1;
@@ -266,12 +270,14 @@ static void pick_fill(const TAGPU_PK_HUD* h, const TAGPU_REPLAY_RESULT* r, int f
         /* at the recording's end the playhead stands at `last` */
         unsigned T = h->now + 1 < h->last ? h->now + 1 : h->last;
         TAGPU_REPLAY_TKPLAN p;
-        int ok = tagpu_replay_takeover_plan(T, &p);
+        int ok;
+        s_pickCache = tagpu_replay_timelines_serial();
+        ok = tagpu_replay_takeover_plan(T, &p);
         /* T is a timeline's first iteration, which no takeover starts at: one tick on is its
            second, a refresh */
         if (!ok && p.next) ok = tagpu_replay_takeover_plan(p.next, &p);
         if (!ok) {
-            t = secs(T);
+            t = clock_at(h->now);
             toast("Cannot take over at %u:%02u", t / 60, t % 60);
             tagpu_logf("hud: take over refused: %s", p.why);
             s_pick = PICK_CLOSED;
@@ -291,7 +297,7 @@ static void pick_fill(const TAGPU_PK_HUD* h, const TAGPU_REPLAY_RESULT* r, int f
                refused, or a later one replaced it (the latest request runs). The picker never
                waits for a seek that will not come. */
             s_pick = PICK_CLOSED;
-            t = secs(s_pickR);
+            t = clock_at(s_pickR - 1);
             if (!r->ok) toast("Cannot go back to %u:%02u", t / 60, t % 60);
         }
     } else if (s_pick == PICK_OPEN && (!h->paused || h->now + 1 != s_pickR)) {
@@ -301,6 +307,24 @@ static void pick_fill(const TAGPU_PK_HUD* h, const TAGPU_REPLAY_RESULT* r, int f
     }
     /* a switch can change the chain without moving the playhead; the plan was the old chain's */
     if (s_pick != PICK_CLOSED && tagpu_replay_timeline() != s_pickTl) s_pick = PICK_CLOSED;
+    /* the file's timelines changed under the plan -- a fork made, deleted or compacted -- so the
+       fork it would delete may be another: planned again at R, once for each change of the
+       serial and never otherwise, since a plan reads the file's block headers (tagpu_replay.h).
+       A plan that no longer starts at R closes the picker: R is what the playback was brought to. */
+    if ((s_pick == PICK_SEEKING || s_pick == PICK_OPEN) &&
+        tagpu_replay_timelines_serial() != s_pickCache) {
+        TAGPU_REPLAY_TKPLAN p;
+        s_pickCache = tagpu_replay_timelines_serial();
+        if (tagpu_replay_takeover_plan(s_pickR, &p) && p.R == s_pickR) {
+            s_pickEvict = p.evict;
+        } else {
+            t = clock_at(s_pickR - 1);
+            toast("Cannot take over at %u:%02u", t / 60, t % 60);
+            if (p.R) tagpu_logf("hud: take over refused: planned again, it starts at %u, not %u", p.R, s_pickR);
+            else tagpu_logf("hud: take over refused: %s", p.why);
+            s_pick = PICK_CLOSED;
+        }
+    }
 }
 
 /* A click on a control, released over it. Every command is the replay's own call or the stats

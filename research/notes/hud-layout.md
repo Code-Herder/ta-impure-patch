@@ -396,8 +396,8 @@ At those sizes the game's line sits a pixel off the mockup's.
   over button, from the transport plate's left: `pad`, the title `title.h`, a row of `row.h` and
   `row.gap` for each player, the warning when shown, then `pad` again.
 - **The title** reads "Take over at m:ss as", with no-break spaces round the time, inset by
-  `title.pad` in `title.style`. In game the time is the picker's start R (`pick_t`), in the
-  mockup the playhead's.
+  `title.pad` in `title.style`. The time is the playhead's, `t`, in game as in the mockup: the
+  world a takeover starts from is the one on screen.
 - **A row** is the part `row.part` (`row.pressed` while held), keyed `takeas:<i>` with i the
   row's index, as a column row's is. In it, the player's colour as a stripe `stripe.w` wide inset
   by `stripe.pad` from the row's left, top and bottom; the name inset by `row.name.pad`; and for

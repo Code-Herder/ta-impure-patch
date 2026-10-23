@@ -497,6 +497,20 @@ takeover would delete.
 4. **Open** while the playback is paused at R − 1. A row takes over its seat at R
    (`tagpu_replay_takeover_request(seat, R, -1)`), which R does not round.
 
+**Every time the HUD names is the playhead's.** The HUD's playhead is the last iteration the
+playback applied (`now`), so a seek to T shows T − 1, and the world the takeover starts from —
+its first iteration is R — is the one on screen at R − 1. The picker's title is drawn from the
+playhead's own value (`st->t`), which an open picker holds at R − 1 in the same fill, and the
+toasts name R − 1 (the playhead at the click, for a refused plan) rounded as the dock's clock
+rounds (`clock_at`).
+
+**A plan follows the file's timelines.** The plan is made under the timelines' serial
+(`tagpu_replay_timelines_serial`), which grows at each change of the rows or the axis. While the
+picker seeks or is open, a new serial plans again at R, once for that change, so the fork the
+picker names for deletion is the one the takeover would delete; a plan that no longer starts at
+R closes the picker with "Cannot take over at m:ss". A plan reads the file's block headers, so it
+is made at the click and at a change and never per frame.
+
 It closes on its button, on rew, fwd, play and a press on the track, when the playhead leaves
 R − 1 or the playback runs (the Pause key, a trigger's seek), and in every state when the
 timeline that plays changes, since a switch can change the chain without moving the playhead and
@@ -512,7 +526,9 @@ picker's "defeated" rows are R0's refusals, by construction**: a row's player is
 after the seek to R the reader's world is iteration R (a frame visit holds `W->tick == now + 1`);
 `tk_bound` refuses P on the same word of the same world (`player %u has no unit at GameTime
 %u`); and the picker opens only when now + 1 == R. So it dims exactly the seats the takeover would
-refuse.
+refuse. W checks it where seats are out: past the fixture's end scenario, at a refresh, the
+picker's clickable rows are the seats with a unit, and the takeover refuses one without by that
+line.
 
 **After the takeover** the level is a live skirmish: puppet mode ends and the reader closes, so
 the replay HUD stops drawing at the frame visit that runs the takeover; the toast shows until
@@ -747,7 +763,10 @@ The replay harness's W lane drives the HUD through it ([completeness](tadr-port/
 seek entry, at a GameTime of the test's choosing), Sight twice on row 0, Follow, Follow again and
 Jump on the row of the seat the recording's human commanded, Cursors off and on, play again,
 and Leave, answered Yes through `tacli ui`. On the second Watch it takes over through the HUD
-(`watch_takeover`): paused 15 ticks past a refresh R0, Take over must seek back to R0 and open
+(`watch_takeover`). First at the recording's last refresh RD, where the end scenario has left one
+AI's unit (`defeated_seats`): Take over must open at RD with a clickable row for exactly the
+seats that have a unit, some having none, and the trigger's takeover of one without must be
+refused for having no unit at RD. Then, paused 15 ticks past a refresh R0, Take over must seek back to R0 and open
 the picker there with a clickable row for exactly the players who have a unit; the controlled
 seat's row must take over at R0 with no rounding; the fork plays 300 ticks, and offline it must
 start at R0 and its first iteration equal its parent's chain there (`compare-fork`). The X lane
@@ -838,9 +857,6 @@ the render thread.
   of (1 − a): at the picker row's and the split chip's 0.45, 0.30 of it instead of 0.55 [computed
   from the blend, not measured]. All three styles there carry copies (`header` an outline, `label` a
   shadow, `face_chip` an outline). laycheck compares the opacity, which agrees, not the pixels.
-- **The picker's title names R; the playhead stands at R − 1.** Both show the same second where R
-  − 1 falls on a whole second, as it does at a refresh 1 modulo 30 [INFERRED from the clock's
-  rounding to whole seconds].
 - **Closing a picker that is seeking leaves its seek to run**: the playback still goes back to R.
 - **GDI has no stats window**, as it has no replay HUD.
 - **The samples are held values, not interpolated**: each is the first walked iteration at or

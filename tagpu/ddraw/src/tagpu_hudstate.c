@@ -437,7 +437,6 @@ static void forks(const TAGPU_PK_HUD* h, HUDSTATE* st, unsigned axis)
     }
     st->picker = h->pick == 2;
     st->pick_down = h->pick != 0;
-    st->pick_t = on_axis(h->pick_R, h->first, axis);
     st->lanes_open = h->lanes != 0;
     if (st->picker)
         for (i = 0; i < st->nfork; i++)
