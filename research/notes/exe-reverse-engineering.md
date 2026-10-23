@@ -2391,7 +2391,7 @@ byte-matches every site and builds every stub before any lands; no recording sta
 them (`recorder: 67 event sites in`: thirty-one observers -- the attach `0x48AB70`'s among them
 (*The order of a step's footprint and chain calls*) -- five network tests, fifteen named-start
 calls, six query calls, six feature draws, the destructor's explosion call, reproduction's source
-test and the two click calls).
+test and the two click calls; MEASURED in slice-walkers' logs, 2026-10-23).
 Each hook reads only a recording's game thread; a call from another thread is refused and counted
 (`RK_END`'s off-thread count). An observer's handler sees the site's `esp` as `E` and the
 registers `pushad` saved under it (EDI at `E−0x24` up to EAX at `E−0x08`), so at a function's

@@ -3027,7 +3027,7 @@ entry), a file that is not a recording and a 3-byte file, −1 for a missing fil
 harness held open exclusively. A name too long
 for its lock path is counted unreadable before the sort, outside N.
 
-**Its events have 59 sites of their own** (the attach log's `recorder: N event sites in`),
+**Its events have 67 sites of their own** (the attach log's `recorder: 67 event sites in`, MEASURED 2026-10-23),
 byte-matched and built at `DllMain` by `tagpu_rec_init`, all before any lands; no recording starts
 without them. Thirty-one observers run a handler and then the stolen bytes: the COB start entries
 `0x4B0B00` and `0x4B0940` (the slice markers' start set, below), the constructor

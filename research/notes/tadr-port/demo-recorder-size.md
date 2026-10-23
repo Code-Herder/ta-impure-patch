@@ -1395,7 +1395,7 @@ whose turn a reader cannot infer, and `RK_EV_LINK`, 12 bytes, at every attach or
 outside a death ([the events note](demo-recorder-s2-events.md), §1.8e). A key is written for a create
 or a link made in a later turn than the step's last key, and for a death or a yard made in another
 turn than its own slot's (after the tick, above all); links follow transports, pads and every build finish.
-`recsize.py` reports both as *the contest order: keys and links*.
+`recsize.py` reports both as *contest keys and links*.
 
 ## P1: the container, measured
 
