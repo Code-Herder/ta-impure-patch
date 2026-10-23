@@ -4327,13 +4327,15 @@ previous build shows no cursor over the minimap, and this one draws it on top.
 **The rule for a future client of the layer**: record it before `sharp_cursor`. Anything
 recorded after the cursor covers it.
 
-### 24.4 The sharp layer drawn again over the HUD's top layer  [SOURCE, not yet run]
+### 24.4 The UI drawn again over the HUD's top layer  [the cursor's redraw MEASURED 2026-10-23; the panel's SOURCE, not yet run]
 
 The composite is the UI's one full-screen quad, and it paints the whole top bar and the engine's
 message lines, so the live HUD's rewind button, which sits in the bar beside the Impure Config
-sprocket, and its strip, which the message lines would cross, are drawn after it — the HUD's top
-layer ([the HUD in game](hud-in-game.html), *Live rewind*). The cursor would then be
-under them. So the composite's vertex buffer carries **a second quad**, right after the
+sprocket, and its strip and toast, which the message lines would cross, are drawn after it — the
+HUD's top layer ([the HUD in game](hud-in-game.html), *Live rewind*). Two things then have to go
+back over it.
+
+**The cursor.** The composite's vertex buffer carries **a second quad**, right after the
 composite's own (`s_laySharp`, `nquad + nsdraw + 1`; the grow reserves `+ 2`): the same unit
 square with `a.z = 1` at every vertex, which `LAY_VS` passes as the flat `sharpOnly`, and `LAY_FS`
 discards right after its sharp-layer test when it is set. `tagpu_vk_gui_record_sharp` draws it
@@ -4343,7 +4345,13 @@ top layer, and only when `tagpu_vk_gui_record` drew this slot's composite this f
 — is the last thing drawn in that rect, as the composite's own is everywhere else. The
 composite's own quad has `a.z = 0`, so its output is unchanged by construction. The minimap is in
 the sharp layer too and never reaches the top layer's rect: it is in the side panel, and the strip
-starts right of it.
+starts right of it. The runner's captures at 1080, HUD 100 show the cursor over the button and
+over the strip.
+
+**The Config panel**, which hangs over the strip's right end. While it is open,
+`tagpu_vk_gui_record_whole` draws the composite's own quad again, the same way, scissored to the
+panel's part of the top layer's rect, before the cursor's redraw. What the engine drew in that
+rect is the panel, so the panel is the last UI drawn there.
 
 ## 25. The movie on the Vulkan lane — `PK_MOVIE`  [MEASURED 2026-09-26]
 

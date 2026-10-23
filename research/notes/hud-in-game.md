@@ -166,10 +166,11 @@ The owner's decisions:
 - **The HUD covers the world and nothing else.** The engine's dialogs, its messages and its menu
   draw over it, and so does the cursor, which is the last quad of the UI pass's sharp layer.
 - **But for its top layer**, the ops flagged `HOPF_TOP` (the live rewind's button, which sits in
-  the top bar the UI paints whole, and its strip while no engine screen the player uses is up,
-  over the engine's message lines): `tagpu_vk_hud_record_top` draws them after
-  `tagpu_vk_gui_record`, and the UI's sharp layer is drawn again inside their rect
-  (`tagpu_vk_gui_record_sharp`), so the cursor stays on top (*Live rewind*, *The top layer*).
+  the top bar the UI paints whole, its strip and its toast): `tagpu_vk_hud_record_top` draws them
+  after `tagpu_vk_gui_record`; the whole UI is drawn again inside the Config panel's rect while
+  it is open (`tagpu_vk_gui_record_whole`), and the UI's sharp layer inside their rect
+  (`tagpu_vk_gui_record_sharp`), so the panel stays over the strip and the cursor on top (*Live
+  rewind*, *The top layer*).
 - **It is alpha-blended at the device's resolution**, premultiplied (`ONE`,
   `ONE_MINUS_SRC_ALPHA`): the parts' straight alpha is premultiplied once, at load, so filtering
   and mipmaps cannot darken an edge.
@@ -744,7 +745,10 @@ is held at the seek's target − 1, so `now + 1` is the T the fork would use:
 - else the arm takes R and the fork it would delete and SEEKs to R when R is earlier (the snap
   back); the arm is *seeking* until the world on screen is R − 1, then *armed*, drawn pressed;
   the second click sends FORK.
-- **The warning is the arm's**: "Click again to play from m:ss[, replacing F<n>]" starts when the
+- **The warning is the arm's**, and like every live toast it is drawn in the top layer and, while
+  the strip is open, clear of it: at `top + live_clear` units, or the layout's `toast.top` when
+  that is lower (hud.js `toast` places it the same way; laycheck's live toast cases).
+  "Click again to play from m:ss[, replacing F<n>]" starts when the
   arm is set, at R, and is held for as long as the arm holds, past the toast's 1.8 s. The snap's
   seek can outlast the toast (2341 ms measured 2026-10-23 on the battle test group), and the
   warning names the fork the second click deletes, so it is on screen whenever that click can
@@ -767,8 +771,10 @@ are flagged `HOPF_TOP` and drawn after the composite:
   instance range, the top's batches after the base's. An atlas emptied between the two builds
   would leave the base layer's glyphs naming emptied texels; emptied only before the first build,
   both layers are one generation, which the upload rule covers.
-- **The record order** (`tagpu_vk.c`): the base layer, the UI composite, the top layer, then the
-  composite's **sharp layer again** inside the top layer's rect (`tagpu_vk_gui_record_sharp`): the
+- **The record order** (`tagpu_vk.c`): the base layer, the UI composite, the top layer, the whole
+  composite again inside the Config panel's part of the top layer's rect while the panel is open
+  (below), then the composite's **sharp layer again** inside the top layer's rect
+  (`tagpu_vk_gui_record_sharp`): the
   composite's pipeline, set and viewport with a second quad whose vertices carry `a.z = 1`, which
   `LAY_FS` reads as `sharpOnly` and discards past its sharp-layer test. Draws in one render pass
   land in record order, so the sharp layer — the only cursor — is the last thing drawn at every
@@ -776,21 +782,43 @@ are flagged `HOPF_TOP` and drawn after the composite:
   `a.z = 0`, so its output is unchanged. The redraw runs only when the composite was drawn this
   frame for this slot. No new GPU object; it is all `record`, on the render thread.
 - **The hit map lists the top layer's controls first**, then the rest topmost-first.
-- **The strip is the top layer too**, so the engine's message lines cannot draw over it. The
-  engine draws them in the world's top left (`DrawChatText 0x464060`: x `0x8A`, the first line's
-  top `0x34`, each next one a font height down, DISASSEMBLED), under the strip's left end, and
-  they are in the composite: only a layer drawn after it keeps the strip whole (the runner's 1080
-  capture at HUD 100 showed four "Under Attack" lines hiding rew, play, fwd and the track's start
-  while the strip was in the base layer).
-- **Unless an engine screen the player uses is up.** The game thread sets the packet's
-  `rw_under` while `tagpu_menu_modal` holds (a menu over the world, Leave's question, the chat's
-  input) or the Config panel is open
-  (`tagpu_menu_panel_open`); the strip then draws in the base layer, under the composite, as the
-  rest of the HUD does. The Config panel hangs below the bar's right end (`panel_rect`,
-  `tagpu_menu.c`), over the strip's actions, so the panel is over the strip while it is open. The
-  button stays in the top layer: neither reaches the bar. A point the sprocket or the panel owns
-  is the menu's (`tagpu_menu_owns_point`). While `rw_under` holds, the message lines draw over the
-  strip's left end again, as they do over the engine's own screens.
+- **The strip and the live toast are the top layer too**, always, so nothing the engine draws
+  into the composite can cover them. The engine's message lines are drawn in the world's top
+  left (`DrawChatText 0x464060`: x `0x8A`, the first line's top `0x34`, each next one a font
+  height down, DISASSEMBLED), under the strip's left end; with the strip in the base layer, the
+  runner's 1080 capture at HUD 100 showed four "Under Attack" lines hiding rew, play, fwd and the
+  track's start.
+- **The message lines start under the strip** while it is on the screen, so none is hidden under
+  it and none shows in the gap between the side panel (x 128 at 1080) and the strip's left end (x
+  146): with the strip in the top layer alone, the first glyphs of each line showed there (x 138
+  to 145, round 2's captures). A stub on DrawChatText's store of its first line's top (`0x4640D6`,
+  `chat_top_init`, `tagpu_replay.c`) stores `tagpu_hudinput_chat_top`'s value instead of `0x34`.
+  The game thread keeps that value at the packet's fill: `0x34`, or, while the last frame drawn
+  has the strip's plate (`live` in the hit map), the first engine row clear of the strip,
+  `32 + live_clear · scale · gh / 720`. `live_clear` is the layout's `2·strip.t + strip.h`, the
+  strip's gap under the bar again under it; `scale` the HUD's own; `gh` the engine's height. A
+  HUD unit is the attachment's height / 720 times the scale, and the bar is the frame's `bh`
+  scaled by the attachment's height over `gh`, so the window's size cancels out and the row is
+  exact in the frame's pixels; the world region is drawn `bh − 32` lower than the engine draws
+  it, which gives the engine's row. Back to `0x34` when the strip is not drawn, in a replay and at
+  the level's end. GDI draws no HUD, so its lines never move. If the bytes differ the log says
+  `replay: DrawChatText's first line 0x4640D6 holds other bytes: the messages stay under the live
+  HUD's strip`, and the strip still covers them.
+- **The Config panel stays over the strip.** It hangs below the bar's right end (`panel_rect`,
+  `tagpu_menu.c`), over Play from here and Back to now. While it is open the game thread sets the
+  packet's `rw_panel` (`tagpu_menu_panel_open`); the render half places the panel's rect by the
+  rule `panel_rect` uses (`tagpu_menu_panel_screen`, pure, from this frame's width, HUD scale, bar
+  and shift), maps it to the attachment as the composite does, and the Vulkan pass draws the
+  whole composite again inside that rect's part of the top layer's rect
+  (`tagpu_vk_gui_record_whole`), after the top layer and before the cursor's redraw. In that
+  rect what the engine drew is the panel, so the panel is the last UI drawn there. A point the
+  sprocket or the panel owns is the menu's (`tagpu_menu_owns_point`).
+- **No other engine screen reaches the strip** (MEASURED on round 2's runs, 1080, HUD 100): the
+  in-game menu is at x 10 to 112, inside the side panel; the Exit question is centred, below
+  the strip; the chat's input field is in the bottom bar; with the strip open chat does not open,
+  and with chat open the strip does not open. **Not measured**: the F4 or SPACE Kills/Losses box,
+  which the engine draws at the viewport's top right (`0x469F65`, `0x469F9F`), would sit under
+  the strip while it is open; and the window sizes the HUD supports below 1080.
   [INFERRED] The engine draws no control in the bar under the button (`W − 75 s .. W − 47 s` at
   the game's HUD scale s): owed, a check by eye at the smallest window the HUD supports.
 

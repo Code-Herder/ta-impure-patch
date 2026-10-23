@@ -15057,8 +15057,11 @@ at `ctrls+0xEC`. Callers reject any result that differs from requested text.
   `main + 0x12EF + 0x48·i`, a kind byte at `+0x1335` and flags at `+0x1336`, from
   `main+0x2A3E`; the gate at `0x4640DE` reads `main+0x37EFE` (1, 2 or 3) against the flags' low
   nibble [INFERRED: which kinds of message the player's setting shows]. In engine pixels, so under
-  HUD scale they move with the world region. The live HUD's strip covers that corner and draws in
-  the top layer for it (hud-in-game.md, *The top layer*).
+  HUD scale they move with the world region. Three callers: `0x469FCB` (DrawGameScreen),
+  `0x41F7A5`, `0x41F9D8`. **Patched at `0x4640D6`** (`mov dword [esp+0x14],0x34`, `C7 44 24 14 34
+  00 00 00`; the loop's back edge is `0x4640DE`, past it, and no jump lands inside it): the stub
+  stores the live HUD's value, `0x34` unless its strip is on the screen, when the lines start
+  under it (hud-in-game.md, *The top layer*).
 - **`0x467D70` the HUD panel painter**, `void (void)`, one caller `0x49842A`, prologue
   `A1 E8 1D 51 00` (5): `esi = *(main+0x37E1B)`; `0x4C69A0(esi)`; `0x4C6890(esi, 0)`; three
   side-specific GAF frames (`main + side·4 + 0x1481F / 0x14833 / 0x14847`, side from
