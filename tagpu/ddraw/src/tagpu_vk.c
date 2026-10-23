@@ -2890,10 +2890,12 @@ static int vk_present(void)
             }
         }
         /* THE HUD IS NEVER IN A WORLD CAPTURE: both its layers record in the swapchain's render
-           pass, after the world target is composited into it (below), so it is one more pass in the
+           pass, after the world target is composited into it (world_records, then
+           tagpu_vk_hud_record and tagpu_vk_hud_record_top, above), so it is one more pass in the
            captured image only when the capture reads the swapchain. A recorded live skirmish
            always draws the rewind button, and no lever turns the HUD off there, so counting it
-           for a world capture would refuse every world A/B taken in one. */
+           for a world capture would refuse every world A/B taken in one. The UI pass still
+           counts: under the play defaults a world A/B needs tagpu_gui.off, as it always has. */
         if (abworld) ndraw -= draw_hud;
         if (nclaim > 1 || (nclaim == 1 && ndraw > 1))
             vklog("%d A/B levers claimed this frame and %d passes drew into it - "

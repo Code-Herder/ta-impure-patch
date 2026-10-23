@@ -1054,7 +1054,8 @@ typedef struct TAGPU_PACKET {
 /* THE REPLAY HUD'S HIT MAP, in the command record: the controls of the last
    frame the HUD was drawn on, for the game thread to hit-test a click against
    what the player saw (tagpu_hudinput.c). A LEVEL: a frame that did not draw the
-   HUD posts n = 0. Topmost first, in the window's client pixels, each key as
+   HUD posts n = 0, and `pass` tells a frame whose HUD pass ran and drew nothing
+   from one where no pass ran at all. Topmost first, in the window's client pixels, each key as
    the layout makes it: a row's index ("jump:2") is the drawn frame's, which
    `seat` turns into the recorded seat, and a team's the t-th of its grouping. */
 #define TAGPU_CMD_HUDHITS 128u    /* HUD_MAXHOT: the layout's bound is checked at
@@ -1077,7 +1078,12 @@ typedef struct TAGPU_CMD_HUD {
     uint8_t  first, last;       /* the column's first item as drawn, and the
                                    greatest it can be                            */
     uint8_t  nseat;             /* <= TAGPU_PK_HUD_SEATS                         */
-    uint8_t  pad;
+    uint8_t  pass;              /* 1: the Vulkan pass's HUD prepare ran for the
+                                   frame this map is, so the controls are that
+                                   frame's, none when it drew none; 0: no prepare
+                                   ran since the last record (tagpu_vk_frame
+                                   returned before vk_present prepared), and the
+                                   map says nothing about the screen             */
     uint8_t  seat[TAGPU_PK_HUD_SEATS];  /* row i's recorded seat                 */
     uint8_t  pad2[2];
     float    u;                 /* the client pixels of a HUD unit, and the      */

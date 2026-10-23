@@ -157,7 +157,9 @@ static struct { unsigned state, arm, R, evict, G, first; } s_rw;
    draw (tagpu_hudstate_drawn), read by the dump and then by the next command record
    (tagpu_hudstate_cmd), which empties it, all on this thread. So each drawn frame's map is posted
    once, and a frame that draws no HUD -- whether the pass ran and drew none or tagpu_vk_frame
-   returned before it ran -- posts none. */
+   returned before it ran -- posts none. `pass` tells the two apart: the pass's prepare sets it
+   (tagpu_hudstate_drawn, NULL first, on every frame it runs) and the record clears it, so a
+   record posted with no prepare since the last one carries 0. */
 static TAGPU_CMD_HUD s_map;
 static int      s_mapCut;               /* a frame had more controls than the map: said once */
 
@@ -508,6 +510,7 @@ void tagpu_hudstate_drawn(const HUDOPS* ops)
 {
     int i, top, cut = 0;
     s_map.n = 0;
+    s_map.pass = 1;
     if (!ops || !s_have) return;
     /* topmost first: the top layer's controls (HOPF_TOP), which are drawn after everything else,
        then the rest -- the build paints in order, so the last control painted is on top */
@@ -546,6 +549,7 @@ void tagpu_hudstate_cmd(TAGPU_CMD_HUD* out)
 {
     *out = s_map;
     s_map.n = 0;
+    s_map.pass = 0;
 }
 
 int tagpu_hudstate_frame(unsigned frame, const HUDSTATE** st, float* px, int* ox, int* oy)

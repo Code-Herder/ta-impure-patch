@@ -11376,8 +11376,12 @@ static void pause_icon_init(void)
    (0x4FD528, 0x4FD530; ebx rewritten at 0x4641E6). The live HUD's strip covers that corner, so
    while the last frame drawn had it the lines start under it (tagpu_hudinput_chat_top), and only
    for DrawGameScreen's call: the stub stores that value when the return address is 0x469FD0,
-   after the call at 0x469FCB, and 0x34 for the other two callers, 0x41F7A5 and 0x41F9D8, both
-   outside DrawGameScreen, whose lines no strip covers. The frame is sub esp,0x20 and four pushes, and the
+   after the call at 0x469FCB, and 0x34 for the other two callers: 0x41F9D8 is in 0x41F7F0, which
+   loads MSGBOX.GUI (push 0x502BD4 at 0x41F97C), and 0x41F7A5 in 0x41F760, gated on
+   main+0x39057 == 1, whose address appears nowhere in the exe, so how it is reached is not known
+   [INFERRED: through an address computed at run time, or not at all]; neither is
+   measured under the strip, and the gate keeps both at the engine's value. The frame is sub
+   esp,0x20 and four pushes, and the
    argument pushed for 0x4C1420 at 0x4640B1 is popped by its `ret 4`, so after the stub's own push
    the return address is [esp+0x34] and the frame's +0x14 is [esp+0x18] (DISASSEMBLED). eax holds
    main there and 0x4640DE reads it, so the stub keeps it; the flags it changes are set again

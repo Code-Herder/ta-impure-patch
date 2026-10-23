@@ -106,9 +106,17 @@ static void chat_top(void)
 }
 
 /* THE ORDERING: the take runs in DrawGameScreen's hook before the draw (tagpu_packet_pub.c, THE
-   COMMANDS), and DrawChatText runs inside that draw, so the message lines' top is always the hit
-   map's that this draw's clicks are tested against: the strip's when the last frame drawn had it,
-   0x34 when it had none or no map has come back. */
+   COMMANDS), and DrawChatText runs inside that draw, so the message lines' top is set before the
+   draw reads it.
+   THE VERDICT IS THE LAST PASS'S: a map whose HUD pass ran (`pass`) says whether that frame drew
+   the strip, and only such a map moves the lines; a record with no pass behind it (tagpu_vk_frame
+   returned before vk_present prepared) says nothing about the screen, which still shows the last
+   frame presented, so the lines keep that frame's verdict and do not jump to 0x34 for one draw.
+   Every way the HUD stops drawing gives 0x34: on GDI and once the HUD is refused the mode is NONE
+   here, on this thread (tagpu_hudstate_on), with no map needed; with no level to show (mode
+   NONE) no packet is filled, so the pass that runs builds no state and posts an empty map with
+   `pass` set (tagpu_vk_hud_prepare: tagpu_hudstate_drawn(NULL) first); and the level's end resets
+   it (tagpu_hudinput_level_end). */
 void tagpu_hudinput_take(const TAGPU_CMD_HUD* h)
 {
     if (!h) s_hit.n = 0;
@@ -117,7 +125,8 @@ void tagpu_hudinput_take(const TAGPU_CMD_HUD* h)
         if (s_hit.n > TAGPU_CMD_HUDHITS) s_hit.n = TAGPU_CMD_HUDHITS;
         if (s_hit.nseat > TAGPU_PK_HUD_SEATS) s_hit.nseat = TAGPU_PK_HUD_SEATS;
     }
-    chat_top();
+    if (tagpu_hudstate_mode() == HUD_MODE_NONE) s_chatTop = CHAT_TOP;
+    else if (h && h->pass) chat_top();
 }
 
 /* THE PAUSE ICON GOES WHERE A CONTROL ON THE SCREEN CARRIES THE PAUSE: the replay HUD's play

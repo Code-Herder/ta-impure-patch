@@ -251,8 +251,9 @@ layer.addEventListener('click', e => {
   switch (a.dataset.act) {
     case 'play': if (S.t >= tlEnd()) S.t = 0; S.playing = !S.playing; break;
     case 'rew': S.t = Math.max(0, S.t - 10); break;
-    // live, forward from the past to the strip's end or past it is back to now, which closes the strip
-    case 'fwd': if (S.mode === 'live' && S.t + 10 >= T) { S.rw = false; S.t = T; } else S.t = Math.min(tlEnd(), S.t + 10); break;
+    // live, as the game: a jump that reaches the recording's last GameTime, one tick (1/30 s) before now, is back to
+    // now, which closes the strip (tagpu_hudinput.c, live_act)
+    case 'fwd': if (S.mode === 'live' && S.t + 10 >= T - 1 / 30) { S.rw = false; S.t = T; } else S.t = Math.min(tlEnd(), S.t + 10); break;
     case 'lanes': if (S.forks.length) S.lo = !S.lo; break;
     case 'takeover': S.pick = !S.pick; if (S.pick) S.playing = false; break;
     case 'takeas': { const p = state().seats[+a.dataset.seat], fl = forkList();
