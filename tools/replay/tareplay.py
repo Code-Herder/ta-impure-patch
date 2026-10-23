@@ -2237,8 +2237,9 @@ def forks_steps(w, fx, out, results):
     def hud_route(log, tl):
         """The HUD's recorder calls on the playing of timeline `tl` (tagpu_replay.h, THE HUD'S
         RECORDER CALLS): `hud state` against the file the game reads, then the HUD's fork route --
-        the playing timeline's deletion refused as in use, an export of timeline 4 done, and the
-        two outcomes in turn."""
+        the deletion of timeline 1, which fork 4 evicted, refused by the file worker, an export of
+        timeline 4 done, and the two outcomes in turn. The deletion of the playing timeline is a
+        switch first (THE SWITCH), which X2 plays."""
         game = w.gamedir / "replays" / "forks.imprec"
         copy, = copies("hud state", game)
         segs, stop = tarec.file_segments(copy)
@@ -2291,12 +2292,15 @@ def forks_steps(w, fx, out, results):
                 sought["serial"] != st["result"]["serial"] + 1:
             raise Failed(f"forks: hud state result {sought} after a refused seek, from serial "
                          f"{st['result']['serial']}")
+        if any(s["id"] == 1 and s["state"] == 1 for s in segs):
+            raise CouldNotRun("forks: hud state: timeline 1 is live, not evicted by fork 4")
         n = len(log.lines)
-        w.trigger(f"hud fork delete {tl}")
-        if not log.wait(rf"the HUD's fork request \d+ refused: timeline {tl} is in use", ACK_S, n) \
-                or not log.wait(rf"replay: forks .*: refused: timeline {tl} is in use", ACK_S, n):
-            raise Failed(f"forks: the HUD's deletion of the playing timeline {tl} was not refused "
-                         f"as in use")
+        w.trigger("hud fork delete 1")
+        if not log.wait(r"the HUD's fork request \d+ refused: timeline 1 is absent or deleted",
+                        ACK_S, n) or \
+                not log.wait(r"replay: forks .*: refused: timeline 1 is absent or deleted", ACK_S, n):
+            raise Failed("forks: the HUD's deletion of the evicted timeline 1 was not refused by "
+                         "the file worker")
         n = len(log.lines)
         w.trigger('hud fork export 4 "hudexport4"')
         done = log.wait(r"the HUD's fork request (?:\d+ done|\d+ refused|refused|\d+):", 180, n)
@@ -2317,7 +2321,7 @@ def forks_steps(w, fx, out, results):
                          f"its export, from serial {sought['serial']}")
         results.add(("forks: the HUD's recorder calls", PASS,
                      f"timelines {got}, axis {st['axis']}, chain {chain}; {want} at {T}; seek 0 "
-                     f"refused; delete {tl} refused in use, export 4 done; serial "
+                     f"refused; delete 1 refused, export 4 done; serial "
                      f"{st['result']['serial']} -> {again['serial']}"))
 
     def command(action, tid, export=None, expect=True):

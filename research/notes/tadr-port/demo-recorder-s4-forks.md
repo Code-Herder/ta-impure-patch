@@ -107,7 +107,7 @@ queued (a bad argument, no memory, every worker busy, the process exiting). Its 
 ring of `REC_FILE_RESULTS` = 16 slots, filled in the order the requests finish: `recfile_result`
 answers 0 while the job is queued or running, 1 done, -1 refused with the worker's reason, -2
 unknown. A job is given a ticket only once it has a worker's slot; the deletion of a timeline a
-playing holds is a queued request whose outcome, `timeline N is in use`, is in the ring at once.
+playing claims is a queued request whose outcome, `timeline N is in use`, is in the ring at once.
 **The ordering, under the queue's lock:** the worker writes the result before its job leaves the
 pending set, so from its issue a ticket is pending or in the ring at every instant the lock is
 free, until 15 later requests have finished: a result outlives 15 later completions. Each slot
@@ -257,8 +257,8 @@ blocks no deletion rewrites, in a file no compaction can replace while it is ope
   compares `hud state` with the file (every row's id, parent, fork point, last and state,
   each fork's controlled seat, the axis, the chain's span and its marks), checks the in-game
   prediction against the file's, a refused seek's outcome, and the HUD's route: the
-  deletion of 5 refused as in use, an export of 4 holding `[0, 4]`, and the two outcomes in
-  turn. X2 runs on a copy after fork 5 (*Watching another timeline in place*);
+  deletion of the evicted 1 refused by the file worker, an export of 4 holding `[0, 4]`, and
+  the two outcomes in turn. X2 runs on a copy after fork 5 (*Watching another timeline in place*);
   `tareplay.py forks battle --x2-only FILE` plays it alone on a saved `x2.imprec`, for a
   debugging loop, never as a gate.
 
