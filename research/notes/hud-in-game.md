@@ -4,7 +4,9 @@
 
 **Landings 1 to 3 are built: the replay HUD is a replay's controls on Vulkan.** Landing 4 adds
 the proposed features' replay side: **Take over replay** and its player picker, and the forks
-housing with its Forks bay, the track's axis, fill and shaded groove (*Take over*). The replay
+housing with its Forks bay, the track's axis, fill and shaded groove (*Take over*), and the
+**fork lanes** the bay opens: watch a fork, save it as a replay of its own, delete it (*The
+lanes*). The replay
 HUD of [The replay HUD's layout](hud-layout.md) — the column of team headers and player rows at
 the top right with its foot plate of buttons, the dock at the bottom with its transport
 buttons, the timeline and its markers, and the clock, and the stats window with its chart of
@@ -526,6 +528,66 @@ refuse.
 the replay HUD stops drawing at the frame visit that runs the takeover; the toast shows until
 then. The new fork's lane is there the next time the file is watched.
 
+## The lanes
+
+**What is drawn** ([The replay HUD's layout](hud-layout.md), *The lanes*): while the Forks bay is
+open and the file keeps a fork, a plate over the timeline housing with a lane for each live fork,
+oldest branch on top, from its branch to its end on the track's own axis; its label `F<id> · NAME
+from m:ss`, NAME the seat it was played as; Export and Delete at its right end; the watched lane
+pressed; a line from each lane's branch; the playhead's line up through every lane; and, while the
+picker is open, the lane its takeover would replace outlined. The column stands on the plate.
+Two rules are new in the mockup and the game alike:
+
+- **The chain that plays is filled along it**, as the track is filled to where the chain leaves
+  the original: the watched lane to the playhead, and each lane before it on the chain
+  (`TAGPU_PK_FORK_CHAIN`) to where the next one on the chain branches off it. Watching F5, a fork
+  of F2, the track fills to F2's branch, F2's lane from its branch to F5's, and F5's lane to the
+  playhead, so the path the playing took has no gap.
+- **A fork of a fork rises to its parent.** A fork whose parent is a lane drawn above it draws its
+  line up from its lane's top to that lane's bottom: its history before its branch is its
+  parent's, and a line down to the track would cross the lanes below. Every other fork — of the
+  original, or of a deleted fork, whose prefix still plays but has no lane — drops its line to the
+  track. The parent is above by construction: the lanes are in (branch, id) order, and a fork
+  branches after its parent, since a takeover starts after the first iteration of the segment
+  holding R − 1 (`takeover_point`) and that segment is its parent. The line's x is the fork's
+  branch, which lies in the parent's span; it is held to the parent's lane, which a lane clamped
+  at the track's right end may not reach.
+
+**The keys** (`tagpu_hudinput.c`, `lane_act`, one dispatch line at `act()`'s head beside the
+picker's `pick_act`). A lane's index is the drawn frame's: `tagpu_hudstate_drawn` writes the drawn
+lanes' timeline ids into the hit map (`nlane`, `lane_id[]`, in `fork[]`'s order), the take bounds
+`nlane` by `TAGPU_PK_HUD_FORKS`, and an index at or past it is refused — the bound a row's index
+has. A lane whose fork has gone since the draw is the replay's to refuse.
+
+- `lane:k` watches lane k's timeline (`tagpu_replay_watch_timeline`, *The switch* in
+  [S4c](tadr-port/demo-recorder-s4-forks.md#watching-another-timeline-in-place)); on the watched
+  lane it asks for 0, the original: the mockup's "back to the replay". It disarms Delete.
+- `export:k` saves the fork as `replays\<name>-F<id>.imprec`, `<name>` the playing's own
+  (`tagpu_replay_fork_op(EXPORT, id, stem)`). An existing export is never overwritten, and a name
+  `fork_stem` refuses is refused; the log has the worker's reason.
+- `delete:k`, first click: arms it — "Click again to delete F<id>", the button drawn pressed.
+  Second click: `tagpu_replay_fork_op(DELETE, id)`. The watched timeline's deletion is the
+  replay's switch to the nearest live timeline up its chain first, then the deletion. The lane
+  disappears once the timelines cache sees the deletion.
+
+**The arm** is the armed fork's timeline id, kept on the game thread and marked on that fork in
+the packet (`TAGPU_PK_FORK_ARMED`), so `HUDSTATE.armed` follows the fork if the list reorders. It
+holds only while the lanes are open and list its fork, and a lane click clears it.
+
+**The outcomes.** The fill reads the replay's last result once by its serial, as the picker does,
+and toasts the outcome of what the lanes asked for: "Cannot watch F<id>" (or "Cannot go back to the
+replay") for a refused switch, "F<id> saved as a replay of its own" or "Cannot save F<id>", "F<id>
+deleted" or "Cannot delete F<id>". A result names no timeline, so each kind keeps the id the lanes
+asked for, and an outcome they did not ask for — a trigger's — is not toasted. With two requests of
+one kind in flight the toasts name the later's id. Every toast is logged, `hud: toast "..."`, which
+is how the tests read them.
+
+**The markers after a switch.** The walker walks the chain that plays, so a switch restarts it.
+The fill asks the old walk to stop and polls its join at every fill after, showing no marker and
+no sample meanwhile, then starts the new chain's walk (*The data*, the walker's lifetime): a lane
+click blanks the markers for at most one iteration's read or one fork crossing's seek, and never
+stalls a frame for it.
+
 ## Input
 
 The HUD takes a click where the player saw its controls. Everything on the game thread is
@@ -549,8 +611,9 @@ over the world, is `tagpu_menu_modal`'s.
   of sixteen seats has a team of two, so at most fifteen teams); the scroll bar's track and two
   arrows; one hovered row's `hover.buttons`; `column.foot.buttons`; the window's plate, title
   drag and close; each tray's chips (the measures of its group, the split's chips where it has
-  one); and the picker's plate and a row for each of `HUD_MAXSEAT` seats. With today's layout
-  that is 84 (computed by the load, 2026-10-23). The load refuses a layout whose bound is above
+  one); the picker's plate and a row for each of `HUD_MAXSEAT` seats; and the lanes' plate with,
+  for each of `REC_FORK_LIMIT` forks, a lane and its `proposed.forks.lane.buttons.items`. With
+  today's layout that is 94 (computed by the load, 2026-10-23). The load refuses a layout whose bound is above
   `HUD_MAXHOT` (128, asserted equal to `TAGPU_CMD_HUDHITS`) — "the layout makes up to N
   controls; the hit map holds M" — and the HUD is then refused as for any layout that does not
   load. Each of the load's self-test builds counts its own controls against the bound, which is
@@ -593,6 +656,9 @@ over the world, is `tagpu_menu_modal`'s.
 | `takeas:i` | the picker | with the picker open, row i's seat taken over at the picker's start (`tagpu_replay_takeover_request`), the toast "Taking over NAME at m:ss"; the picker closes. No hot for a row whose player has no unit left |
 | `picker` | the picker's plate | taken, and nothing done |
 | `lanes` | the Forks bay | the lanes opened or closed, while the file keeps a fork; no hot with none (the bay drawn off) |
+| `lane:k` | a fork's lane | lane k's timeline watched (`tagpu_replay_watch_timeline`); on the watched lane, the original (*The lanes*) |
+| `export:k` | a lane's Export | the fork saved as `replays\<name>-F<id>.imprec`; the toast "F<id> saved as a replay of its own" |
+| `delete:k` | a lane's Delete | first click: armed, "Click again to delete F<id>"; second: the fork deleted, the watched one by a switch up its chain first |
 | `stats` | foot plate | the stats window opened or closed; drawn pressed while open |
 | `close` | the window's close button | the window closed |
 | `chip:<k>` | the window's trays | the measure `k` of `layout.json`'s `window.measures` (`metal`, `energy`, `excess`, `units`, `army`, `kills`, `losses`) |
@@ -829,13 +895,16 @@ the original nothing changes, its last being the summary's.
    baseline-text ops; the stats button, close, the chips and the title drag; the pause icon's
    stub; the dump's `stats`, `tacli hud drag` and the `stats:` line. Checked as *Status* says
    (2026-10-09).
-4. **Take over and the Forks bay** — built; it lands with the fork lanes. The records of the
+4. **Take over, the Forks bay and the fork lanes** — built, one landing. The records of the
    forks, the takeover, the lanes and the live rewind in the packet, the command record and the
    layout's state; the hit map at 128 under a bound the load computes from the layout;
    `pkx_init`'s commit sized to the record; the dock's forks housing, bay, fill, groove and
    clock; Take over and the picker by the mockup's rules, the picker's "defeated" being the
    column's `out` in both; the picker's states over the replay's plan, seek and takeover calls;
-   the track's click on the drawn axis; the dump's proposed fields; laycheck at `prop=1`.
+   the track's click on the drawn axis; the dump's proposed fields; laycheck at `prop=1`. The
+   fork lanes by the mockup's rules with two new in both, the chain fill and a fork of a fork's
+   line to its parent; their keys, the arm and the toasts of their outcomes; the walker's polled
+   join; X2 driven through the lanes.
 
 Each landing is reviewed at `high`: it adds a pass and a hand-over between the game thread and
 the render thread.
@@ -869,7 +938,10 @@ the render thread.
   the screen, and only the Vulkan lane reads it. A GDI player leaves through the engine's menu and
   has no on-screen seek, pause, speed, Sight or Follow.
 - **The dump answers every 30 frames**, so at a low frame rate `tacli hud show` can miss a toast
-  that lasts 1.8 s: at about 5 frames a second a dump is 6 s apart. Check a toast with a capture.
+  that lasts 1.8 s: at about 5 frames a second a dump is 6 s apart. The log keeps every toast
+  (`hud: toast "..."`); how it looks needs a capture.
+- **A lane's toast can name the wrong fork** when two requests of one kind are in flight: the
+  replay's outcome names no timeline, so the lanes toast the id they asked for last.
 - **The hit map is one frame behind the HUD being built**, by design: it is the frame on screen.
   A control that moves between two frames (a row's buttons appearing under the pointer, the
   column scrolling) is clickable where the player saw it, not where the next frame draws it.
@@ -891,5 +963,5 @@ the render thread.
   4.5 pixels a unit the HUD is drawn at on a 4K screen at 150 %, so most of both is detail no
   screen up to 4K shows. The owner keeps the full resolution. 20 of the 66 parts (34.4 MB decoded,
   10.7 MB of the archive) are the `proposed` section's: the Take over button and picker and the
-  forks housing and bay, which the DLL draws, and the fork lanes and the live rewind strip, which
+  forks housing and bay and the fork lanes, which the DLL draws, and the live rewind strip, which
   it packs and decodes but does not draw.

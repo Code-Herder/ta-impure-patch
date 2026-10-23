@@ -46,7 +46,11 @@ Three screens, each chosen from three prototyped directions:
   forks) and the playhead, and the Overlays, Timeline and Leave buttons; player cards on the right
   edge with Jump, Sight and Follow per player. It was built as the watching dock and the player
   cards, and redesigned as the replay HUD: layout E1, its art painted
-  ([HUD art](../hud-art.md)) and drawn by a pass of its own, which replaced both.
+  ([HUD art](../hud-art.md)) and drawn by a pass of its own, which replaced both. The replay
+  UI's missing features, variation B, are built in it on the replay side: Take over replay and
+  its player picker, the Forks bay, and the fork lanes, from which a fork is watched, saved as a
+  replay of its own or deleted ([The replay HUD in game](../hud-in-game.md), *Take over* and
+  *The lanes*).
 
 The **in-game settings panel** is renamed **Impure Config** (it was *Render options*) and gains two
 rows, *Record games* and *Keep replays*.

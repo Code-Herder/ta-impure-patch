@@ -113,9 +113,9 @@ four whitebox variations: forks drawn as lanes on the timeline. Its art is the w
 of the rest of the HUD (`hud-art.md`). The mockup draws it from `layout.json`'s `proposed`
 section behind its **Proposed** switch (on by default, `prop=0` turns it off). **The game draws
 its replay side** — the Forks bay and the forks housing, the axis, the fill and the shaded groove,
-Take over and the player picker — from the same rows, always (*Take over and the picker*, and
-[The replay HUD in game](hud-in-game.md), *Take over*), and `laycheck.py` checks every case at
-`prop=1`. The lanes and live rewind are the mockup's alone. A part the kit has no art for yet is
+Take over and the player picker, and the fork lanes — from the same rows, always (*Take over and
+the picker*, *The lanes*, and [The replay HUD in game](hud-in-game.md), *Take over* and *The
+lanes*), and `laycheck.py` checks every case at `prop=1`. Live rewind is the mockup's alone. A part the kit has no art for yet is
 drawn as whitebox: a mid-grey plate with a dark edge, and an icon it lacks as a stand-in glyph.
 
 - **The Forks bay.** A bay at the timeline housing's left end, spanning the marker lane and the
@@ -126,16 +126,17 @@ drawn as whitebox: a mid-grey plate with a dark edge, and an icon it lacks as a 
 - **Lanes.** Each fork the replay keeps (at most `forks.max`, 3) is a lane on a plate above the
   timeline housing, as wide as the housing. The oldest branch is on top. A lane runs from where
   the fork branched to where it ends, on the track's own time axis. A lane narrower than
-  `lane.min_w` widens to the right first. A line drops from the branch to the track, and the
-  playhead's line runs up through every lane. The lane's label names the player taken over and
+  `lane.min_w` widens to the right first. A line drops from the branch to the track — or, for a
+  fork of a fork, rises to its parent's lane — and the playhead's line runs up through every lane. The lane's label names the player taken over and
   the branch time. Its right end carries Export and Delete; a first click on Delete arms it,
   and a second deletes the fork.
 - **The axis.** A fork can run longer than the replay. While the lanes are open or a fork is
   watched, the track's axis is therefore the longest timeline kept, and the groove past the
   replay's end is shaded (`forks.after`). Closed, the timeline is the replay's own, as today.
 - **Watching a fork.** Clicking a lane watches that timeline and presses the lane in. Its played
-  part fills to the playhead, the main track stays filled only to the branch, and the clock shows
-  the fork's length. Clicking the pressed lane goes back to the replay.
+  part fills to the playhead, the main track stays filled only to where the chain leaves the
+  replay, each lane between them on the chain fills to where the next one branches off it, and
+  the clock shows the fork's length. Clicking the pressed lane goes back to the replay.
 - **The column.** The column stands on the lane plate, because the lanes run under it, so fewer
   rows fit while forks are kept.
 - **Take over.** A button as wide as the transport plate sits on top of it, level with the lanes,
@@ -294,7 +295,8 @@ At those sizes the game's line sits a pixel off the mockup's.
 - **A control is its `act`.** Every enabled button, and every plate that takes a click, is a
   clickable op (`HOP_HOT` in the DLL, `data-act` in the mockup) keyed by its `act`; a row's, a
   team's and a hover button's key adds the row's or the team's index in the frame, `jump:2`,
-  `fold:0`, `row:4`. The game hit-tests these, topmost (last painted) first
+  `fold:0`, `row:4`, and a lane's and its buttons' the lane's (`lane:1`, `delete:1`; the mockup's
+  `data-fork`). The game hit-tests these, topmost (last painted) first
   ([The replay HUD in game](hud-in-game.md), *Input*).
 - **A disabled control** is drawn at its `off` opacity, its icon and its text too, and has no
   clickable of its own: the TEAMS chip when the teams are not told apart (one team, or a free-for-all), at
@@ -408,6 +410,42 @@ At those sizes the game's line sits a pixel off the mockup's.
   "N of N forks kept: this one" and "replaces F<id>, the one watched least recently", naming
   the fork a takeover would delete (`replace`), or the first.
 
+### The lanes
+
+Drawn while the Forks bay is open and a fork is kept (`lanes_open`, `nfork`), after the bay and
+before Take over (hud.js `lanes`, `tagpu_hudlay.c` `lanes`). X(t) is the track's own axis: the
+track's x plus `ends` plus (w − 2 × `ends`) × t / T.
+
+- **The plate** (`forks.plate.part`, keyed `dock`, taken and doing nothing as the dock's plates
+  do) spans the housing's width, its bottom `plate.gap` above the dock; it is `plate.pad`'s top,
+  a lane `lane.h` tall for each fork with `lane.gap` between, and `plate.pad`'s bottom. The
+  column's bottom rises by that height and the gap (hud.js `lanesH`), so the column stands on it.
+- **A lane** for fork k, in the state's `forks` order, oldest branch on top: from X(`from`) to
+  max(X(`end`), X(`from`) + `lane.min_w`); one past the track's right end is moved left to end
+  there, but never left of the track's start. Its part is `lane.part`, `lane.pressed` when it is
+  the watched one (`timeline`) or held, keyed `lane:k`.
+- **The fill** (`lane.fill.part`, inset by `lane.fill.pad`, from the branch) is drawn on a lane
+  of the chain that plays: the watched lane's uncovered to min(X(t), X(`end`)); a lane before it
+  on the chain (the packet's `TAGPU_PK_FORK_CHAIN`, the mockup's `chain`) to min(X(t), X(`from`
+  of the fork on the chain whose parent it is)). This is the track's `fillTo` rule applied to the
+  lanes, so the chain's path has no gap; in the mockup `fillTo` is the branch of the chain's first
+  fork, the one whose parent is the replay.
+- **The label** `F<id> · NAME from m:ss` in `lane.label.style`, from `lane.label.pad`'s left of
+  the branch to the buttons less the same pad.
+- **The buttons**, `lane.buttons.items` in order at the lane's right end, `buttons.w` wide,
+  `buttons.gap` apart and `buttons.pad` in from the right, top and bottom: the item's icon in
+  `buttons.part`, keyed `<act>:k` (`export:k`, `delete:k`); Delete is drawn pressed while armed
+  (`armed`).
+- **The replace outline**: on the lane a takeover would replace (`replace`, while the picker is
+  open), a ring `replace.width` wide outside the lane's box in `replace.colour` (the mockup's
+  inset box-shadow on a box grown by the width).
+- **The branch lines**, after every lane, `branch.w` wide in `branch.colour`, centred at the
+  branch: for a fork whose `parent` is the id of a lane drawn above it, from its lane's top up to
+  that lane's bottom, its x held to that lane's span; for every other fork, from its lane's bottom
+  down to the track's top.
+- **The playhead's line**, last, `playhead.w` wide in `playhead.colour`, centred at X(t), from the
+  plate's top to the track's top.
+
 ### The toast
 
 A short message (`toast` in the state) in a dark box centred across the screen, `toast.top` of
@@ -499,7 +537,7 @@ The rules:
 ## Checking the C against the mockup
 
 `tools/hudart/laycheck.py` opens the mockup headless at its default `prop=1` with two forks
-kept, the game's look, for eighteen cases (4K at 150 with two
+kept, the game's look, for twenty-two cases (4K at 150 with two
 teams, 4K at Auto with the list too long, 1080p at 100 with one team, 1440p at 75 with a row
 hovered and a button held, 4K at 150 as a six-player free-for-all, 4K at 150 as a 2v1v1, 4K at
 150 with fourteen players scrolled to item 3 and a toast, 1440p at 75 with the first row hovered
@@ -510,7 +548,11 @@ close held), `4k-auto-stats-16-excess-start` (sixteen players at 0:00) and
 proposed features: `4k-150-prop-no-forks` (the bay off, its count 0), `1440-75-picker`,
 `4k-150-picker-full` (three forks: the warning), `1080-100-watched-fork-closed` (a fork watched
 with the lanes closed: the axis takes in the forks, the fill stops at the fork's branch, the
-groove past the original is shaded) and `4k-150-picker-held` (Take over held)), takes the mockup's state and
+groove past the original is shaded) and `4k-150-picker-held` (Take over held), and four with the
+lanes open on the seed's three forks, the third by branch point a fork of the first:
+`4k-150-lanes` (its line rising to the first's lane), `1440-75-lanes-watched` (that fork watched:
+the chain filled along the first lane to its branch), `1080-100-lanes-picker` (the replace
+outline) and `4k-150-lanes-held` (a lane held)), takes the mockup's state and
 every element's box in HUD units, runs `tagpu_hudlay.c` compiled natively (`laycheck.c`) on the
 same state, and pairs the two element by element: every part by name and painted opacity (its own
 times its ancestors', as a disabled button's icon is dimmed), every text by its string and painted
@@ -525,10 +567,10 @@ metrics. It exits 1 on a box or baseline more than its tolerance off, a part's o
 more than one level off, a dim that disagrees, or an element only one side has.
 
 MEASURED 2026-10-08 on the first six cases, again on all eight once the controls were laid out
-for input, on all thirteen with the stats window (2026-10-09), and on all eighteen at `prop=1`
-(2026-10-23): the two agree. A halo
-polyline is told from its line by its `stroke-opacity`, which only the halo carries. At 4K every box is within 0.015 units and every baseline
-within 0.0142. The Oswald residual above is named, not failed, and only where the same rule on
+for input, on all thirteen with the stats window (2026-10-09), on all eighteen at `prop=1`
+(2026-10-23), and on all twenty-two with the lanes (2026-10-23): the two agree. A halo
+polyline is told from its line by its `stroke-opacity`, which only the halo carries. At 4K every
+box is within 0.018 units and every baseline within 0.0145 (the twenty-two cases, 2026-10-23). The Oswald residual above is named, not failed, and only where the same rule on
 Chrome's own rounded ascent and descent (`measureText`'s `fontBoundingBoxAscent`/`Descent`) gives
 the browser's baseline, so a wrong line rule still fails: in the 1080p and 1440p cases the `name`
 style at 7.125 CSS px moves by a pixel (6 and 8 texts), and the rule on Chrome's metrics lands on
