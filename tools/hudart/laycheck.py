@@ -168,7 +168,7 @@ COLLECT = r"""() => {
       }
     }
   }
-  return JSON.stringify({ state: st, els, u, chart });
+  return JSON.stringify({ state: st, els, u, d: window.devicePixelRatio || 1, chart });
 }"""
 
 
@@ -281,7 +281,7 @@ def main():
             sp = tmp / f"{name}.state.json"
             sp.write_text(json.dumps({**dom["state"], "faces": faces}))
             # the baseline is computed at the mockup's CSS pixels, the grid Blink rounds a face's metrics to
-            r = subprocess.run([str(exe), str(ROOT / "art/hud"), str(sp), repr(dom["u"])], capture_output=True, text=True)
+            r = subprocess.run([str(exe), str(ROOT / "art/hud"), str(sp), repr(dom["u"]), repr(dom["u"] * dom["d"])], capture_output=True, text=True)
             if r.returncode:
                 sys.exit(f"laycheck: {name}: {r.stderr}")
             ops = json.loads(r.stdout)

@@ -69,6 +69,10 @@ const HUD = (() => {
   /* ---- elements ---- */
   const U = n => `calc(${+n.toFixed(4)} * var(--u))`;
   const rect = b => `left:${U(b.x)};top:${U(b.y)};width:${U(b.w)};height:${U(b.h)}`;
+  // a fill's width: one that has begun spans at least one device pixel, so it always shows
+  // (tagpu_hudlay_clip, the DLL's same floor)
+  const UF = w => w > 0 ? `max(${U(w)}, ${+(1 / (window.devicePixelRatio || 1)).toFixed(4)}px)` : U(0);
+  const frect = b => `left:${U(b.x)};top:${U(b.y)};width:${UF(b.w)};height:${U(b.h)}`;
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
   const WB_GLYPH = { export: '⇩', delete: '✕', rewind: '⟲' };
   const attrs = a => Object.entries(a || {}).map(([k, v]) => ` data-${k}="${esc(v)}"`).join('');
@@ -150,7 +154,7 @@ const HUD = (() => {
     h += `<div class="box" data-act="${D.act}" style="${rect({ x: rx, y, w: rw, h: D.h })}">` + art(part, zero(rw, D.h))
       + `<div class="box" style="${rect(lane)}">${marks}</div>`
       + `<div class="box" data-track data-ends="${R.track.ends}" style="${rect(tr)}">`
-      + `<div class="clip" data-fill="${fb.w}" style="${rect({ ...fb, w: fb.w * pf })}">${art(R.track.fill.part, zero(fb.w, fb.h))}</div>`
+      + `<div class="clip" data-fill="${fb.w}" style="${frect({ ...fb, w: fb.w * pf })}">${art(R.track.fill.part, zero(fb.w, fb.h))}</div>`
       + (st.ends < st.T ? after(fb, along(tr.w, R.track.ends, st.ends / st.T) - fb.x) : '')
       + art(ph.part, { x: phx - ph.w / 2, y: phb.y, w: ph.w, h: phb.h }, '', '', { playhead: `${tr.w} ${R.track.ends} ${ph.w}` }) + `</div>`
       + text(`${clock(st.t)} / ${clock(st.len ?? st.T)}`, place(FR, R.time), R.time.style, R.time, null, { time: 1 })
@@ -209,7 +213,7 @@ const HUD = (() => {
       const fp = Ln.fill.pad, fw = w - fp[0] - fp[2], fx = bx - x0;
       // the watched lane fills to the playhead, a lane before it on the chain to where the next one on the chain branches off it
       const next = on ? null : st.forks.find(q => q.chain && q.parent === f.id), stop = next ? X(next.from) : X(f.end);
-      let inner = on || f.chain ? `<div class="clip" data-lanefill="${bx} ${stop}" style="${rect({ x: fp[0] + fx, y: fp[1], w: Math.max(0, Math.min(X(st.t), stop) - bx), h: Ln.h - fp[1] - fp[3] })}">`
+      let inner = on || f.chain ? `<div class="clip" data-lanefill="${bx} ${stop}" style="${frect({ x: fp[0] + fx, y: fp[1], w: Math.max(0, Math.min(X(st.t), stop) - bx), h: Ln.h - fp[1] - fp[3] })}">`
         + art(Ln.fill.part, zero(fw, Ln.h - fp[1] - fp[3])) + `</div>` : '';
       inner += text(`F${f.id} · ${esc(f.name)} from ${clock(f.from)}`, place(F, { pad: [fx + Ln.label.pad[0], 0, w - btx + Ln.label.pad[0], 0] }), Ln.label.style, Ln.label);
       inner += Bt.items.map((it, j) => button({ act: it.act, icon: { name: it.icon, padf: Bt.icon.padf }, data: { fork: k } }, Bt,
@@ -271,7 +275,7 @@ const HUD = (() => {
     const fp = Tr.fill.pad, fb = { x: fp[0], y: fp[1], w: tw - fp[0] - fp[2], h: Tr.h - fp[1] - fp[3] }, p = st.t / st.T;
     const phb = place(frame(tw, Tr.h), { pad: Tr.playhead.pad }), phx = Tr.ends + (tw - 2 * Tr.ends) * p;
     inner += `<div class="box" data-track data-ends="${Tr.ends}" style="${rect(tb)}">` + art(Tr.part, zero(tw, Tr.h))
-      + `<div class="clip" data-fill="${fb.w}" style="${rect({ ...fb, w: fb.w * p })}">${art(Tr.fill.part, zero(fb.w, fb.h))}</div>`
+      + `<div class="clip" data-fill="${fb.w}" style="${frect({ ...fb, w: fb.w * p })}">${art(Tr.fill.part, zero(fb.w, fb.h))}</div>`
       + art(Tr.playhead.part, { x: phx - Tr.playhead.w / 2, y: phb.y, w: Tr.playhead.w, h: phb.h }, '', '', { playhead: `${tw} ${Tr.ends} ${Tr.playhead.w}` }) + `</div>`;
     cx += tw;
     inner += text('now', { x: cx, y: S.pad, w: S.now.w, h: ih }, S.now.style, S.now); cx += S.now.w;
@@ -503,11 +507,11 @@ const HUD = (() => {
   // what moves while the replay plays, without rebuilding: the fill, the playhead, the clocks and the chart
   function tick(el, st) {
     const p = st.t / st.T, pf = st.live ? p : filled(st), now = `${clock(st.t)} / ${clock(st.len ?? st.T)}`;
-    el.querySelectorAll('[data-fill]').forEach(e => { e.style.width = U(+e.dataset.fill * pf); });
+    el.querySelectorAll('[data-fill]').forEach(e => { e.style.width = UF(+e.dataset.fill * pf); });
     // a watched lane fills from its branch to the playhead, in the screen units its data carries
     const hd = el.querySelector('[data-lanehead]');
     if (hd) { const [a, w] = hd.dataset.lanehead.split(' ').map(Number), x = a + w * p;
-      el.querySelectorAll('[data-lanefill]').forEach(e => { const [b0, b1] = e.dataset.lanefill.split(' ').map(Number); e.style.width = U(Math.max(0, Math.min(x, b1) - b0)); }); }
+      el.querySelectorAll('[data-lanefill]').forEach(e => { const [b0, b1] = e.dataset.lanefill.split(' ').map(Number); e.style.width = UF(Math.max(0, Math.min(x, b1) - b0)); }); }
     el.querySelectorAll('[data-lanehead]').forEach(e => { const [a, w, hw] = e.dataset.lanehead.split(' ').map(Number); e.style.left = U(a + w * p - hw / 2); });
     el.querySelectorAll('[data-tot]').forEach(e => { const s = clock(st.t); if (e.textContent !== s) e.textContent = s; });
     el.querySelectorAll('[data-playhead]').forEach(e => { const [w, ends, pw] = e.dataset.playhead.split(' ').map(Number); e.style.left = U(ends + (w - 2 * ends) * p - pw / 2); });

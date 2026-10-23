@@ -289,8 +289,9 @@ static HUDINST* emit(B* c, int tex, int mode, float x0, float y0, float x1, floa
     q->uv[0] = q->uv[1] = 0; q->uv[2] = q->uv[3] = 1;
     q->rgba[0] = q->rgba[1] = q->rgba[2] = q->rgba[3] = 1;
     if (op->clip.w >= 0) {
-        q->clip[0] = op->clip.x * c->px + c->ox; q->clip[1] = op->clip.y * c->px + c->oy;
-        q->clip[2] = (op->clip.x + op->clip.w) * c->px + c->ox; q->clip[3] = (op->clip.y + op->clip.h) * c->px + c->oy;
+        HUDRECT k = tagpu_hudlay_clip(op, c->px);
+        q->clip[0] = k.x * c->px + c->ox; q->clip[1] = k.y * c->px + c->oy;
+        q->clip[2] = (k.x + k.w) * c->px + c->ox; q->clip[3] = (k.y + k.h) * c->px + c->oy;
     } else {
         q->clip[0] = 1; q->clip[2] = 0; q->clip[1] = q->clip[3] = 0;
     }

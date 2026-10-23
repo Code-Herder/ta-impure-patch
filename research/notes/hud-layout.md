@@ -198,7 +198,15 @@ A `grid` or `nine` part may carry **`xtile`**: its x stretch band (a grid's one 
 middle column) is one period of a seamless tile, painted to join its fixed neighbours, and it **repeats**
 along x instead of stretching: drawn n = max(1, round(drawn length / painted length)) times, each copy
 taking an equal share of the drawn band (CSS `border-image-repeat: round stretch` for a 9-slice). Along y it
-still stretches. A part drawn much wider than it was painted keeps its wear in proportion this way;
+still stretches. A 9-slice's painted length is its middle at **its row's edge scale**, as CSS sizes a
+`round` tile: the top row and the middle row at the top edge's drawn width over its slice, the bottom row
+at the bottom edge's, so the rows may hold different counts. And the edges are drawn **whole device
+pixels** wide, as the browser snaps a border width (floored, a thinner one drawn one pixel): the Take
+over button at 4K and HUD 150 has a top edge of 8.81 px drawn 8, which makes its top and middle rows
+five copies of 199 px and its bottom row (10.67 px, drawn 10) four of 248 — MEASURED 2026-10-23 against
+the mockup's capture, where the exact widths gave four in every row and the scratches fell up to 55 px
+apart. A grid part's cell and copy edges are whole pixels from its corner, as `composeGrid` draws
+them on its canvas. A part drawn much wider than it was painted keeps its wear in proportion this way;
 `tools/hudart/seamband.py` makes the band and sets the flag. The mockup and the game
 (`tagpu_hudlay_expand`) draw it alike.
 
@@ -431,6 +439,10 @@ track's x plus `ends` plus (w − 2 × `ends`) × t / T.
   of the fork on the chain whose parent it is)). This is the track's `fillTo` rule applied to the
   lanes, so the chain's path has no gap; in the mockup `fillTo` is the branch of the chain's first
   fork, the one whose parent is the replay.
+- **A fill that has begun shows**: the track's fill and a lane's, uncovered by any positive width,
+  span at least one device pixel (`tagpu_hudlay_clip`; hud.js `UF`, a CSS `max()` with one device
+  pixel). Without the floor a chain fill 0.44 px wide drew nothing in the game, which clips by pixel
+  centre, and one pixel in the browser, which snaps the box's edges.
 - **The label** `F<id> · NAME from m:ss` in `lane.label.style`, from `lane.label.pad`'s left of
   the branch to the buttons less the same pad.
 - **The buttons**, `lane.buttons.items` in order at the lane's right end, `buttons.w` wide,

@@ -1,8 +1,9 @@
 /* laycheck.c -- tagpu_hudlay's rectangles for a state the mockup dumped, as JSON on stdout.
 
-     laycheck <art/hud dir> <state.json>
+     laycheck <art/hud dir> <state.json> [<CSS px a unit> <device px a unit>]
 
-   The state is the mockup's own (index.html `state()`), so the two sides lay out the same
+   With the two scales it also gives each text's baseline, in CSS pixels as the browser lays it
+   out, and each fill's clip as the draw takes it, at least one device pixel wide. The state is the mockup's own (index.html `state()`), so the two sides lay out the same
    game; tools/hudart/laycheck.py compares this output with the mockup's element boxes.
    Compiled natively by laycheck.py: tagpu_json.c and tagpu_hudlay.c are pure C99 for this. */
 #include <stdio.h>
@@ -76,7 +77,7 @@ int main(int argc, char** argv)
     HUDOPS* o = (HUDOPS*)malloc(sizeof(HUDOPS));
     int i, j;
 
-    if (argc != 3 && argc != 4) { fprintf(stderr, "usage: laycheck <art/hud dir> <state.json> [<px a unit>]\n"); return 2; }
+    if (argc != 3 && argc != 5) { fprintf(stderr, "usage: laycheck <art/hud dir> <state.json> [<CSS px a unit> <device px a unit>]\n"); return 2; }
     snprintf(path, sizeof path, "%s/layout.json", argv[1]);
     if (!(lt = slurp(path, &nl))) { fprintf(stderr, "laycheck: cannot read %s\n", path); return 2; }
     snprintf(path, sizeof path, "%s/kit.json", argv[1]);
@@ -204,14 +205,17 @@ int main(int argc, char** argv)
             printf(",\"alpha\":%u", painted(o, p));
         }
         if (p->kind == HOP_SOLID || p->kind == HOP_DOT) printf(",\"rgba\":\"%08x\"", p->rgba);
-        if (p->clip.w >= 0 && p->kind != HOP_TEXT && p->kind != HOP_CHART) printf(",\"clip\":[%.4f,%.4f,%.4f,%.4f]", p->clip.x, p->clip.y, p->clip.w, p->clip.h);
+        if (p->clip.w >= 0 && p->kind != HOP_TEXT && p->kind != HOP_CHART) {
+            HUDRECT k = argc == 5 ? tagpu_hudlay_clip(p, (float)atof(argv[4])) : p->clip;
+            printf(",\"clip\":[%.4f,%.4f,%.4f,%.4f]", k.x, k.y, k.w, k.h);
+        }
         if (p->kind == HOP_TEXT) {
             const char* sn = tagpu_hudlay_globals(l)->style[p->style].name;
             printf(",\"style\":\"%s\",\"size\":%.4f,\"centre\":%d,\"alpha\":%u", sn, p->size, p->centre,
                    painted(o, p));
             if (p->nrun) printf(",\"rgb\":\"%06x\"", o->run[p->run].rgb);
             /* the baseline at `px` a unit, from the face metrics the state carries per style */
-            if (argc == 4) {
+            if (argc == 5) {
                 const TJV* fm = tj_get(tj_get(tagpu_json_root(sd), "faces"), sn);
                 float px = (float)atof(argv[3]);
                 if (fm)

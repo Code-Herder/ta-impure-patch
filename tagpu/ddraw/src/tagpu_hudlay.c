@@ -1445,7 +1445,8 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
    to its aspect and centred. An `xtile` part's x bands are each one period of a seamless tile
    (seamband.py): drawn as a whole number of copies at about their painted length, each copy an
    equal share of the drawn band, as hud.js composes a grid part and as CSS border-image-repeat
-   `round` draws a 9-slice's middle. */
+   `round` draws a 9-slice's middle, row by row at its edge's scale. A 9-slice's edges are whole
+   device pixels, as the browser draws them (edge_px). */
 float tagpu_hudlay_baseline(float y, float h, float size, float asc, float desc)
 {
     float A = floorf(asc * size + 0.5f), D = floorf(desc * size + 0.5f);
@@ -1460,6 +1461,23 @@ static int copies(double len, double period, int extra)
     if (n < 1) n = 1;
     if (extra < 0) extra = 0;   /* a cap below one quad a cell still draws every cell once */
     return n > 1 + extra ? 1 + extra : (int)n;
+}
+
+/* A 9-slice edge's drawn width in device pixels as the browser draws a border: a width of a pixel
+   or more floored to whole pixels, a thinner one drawn a pixel wide. MEASURED 2026-10-23 on Chrome,
+   the mockup's browser: the Take over button at 4K and HUD 150 (4.5 px a unit) drew its 8.81 px top
+   edge 8 px wide, which made its middle 5 `round` tiles of 199 px against the 4 of 248 px the exact
+   width gives, and its 10.67 px bottom edge 10 px, the bottom row's 4 tiles of 248 px. */
+static double edge_px(double v)
+{
+    return v >= 1 ? floor(v) : v > 0 ? 1 : 0;
+}
+
+HUDRECT tagpu_hudlay_clip(const HUDOP* op, float px)
+{
+    HUDRECT r = op->clip;
+    if (op->kind == HOP_PART && r.w > 0 && px > 0 && r.w * px < 1) r.w = 1 / px;
+    return r;
 }
 
 int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, int cap)
@@ -1480,14 +1498,17 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
         /* THE COPIES ARE BOUNDED BY `cap`: every row gets cap / rows quads, its nx - 1 cells take one
            each, and each band may add an equal share of what is left. */
         extra = k->nxs ? (cap / (ny - 1) - (nx - 1)) / k->nxs : 0;
+        /* the cell and copy edges are whole pixels from the part's corner, as hud.js composes the
+           part on a canvas of its own (composeGrid) */
         for (j = 0; j + 1 < ny; j++)
             for (i = 0; i + 1 < nx; i++) {
-                double x0 = x + fx(&f, bx[i]) * px, x1 = x + fx(&f, bx[i + 1]) * px;
-                double y0 = y + fy(&f, by[j]) * px, y1 = y + fy(&f, by[j + 1]) * px;
+                double x0 = floor(fx(&f, bx[i]) * px + 0.5), x1 = floor(fx(&f, bx[i + 1]) * px + 0.5);
+                double y0 = y + floor(fy(&f, by[j]) * px + 0.5), y1 = y + floor(fy(&f, by[j + 1]) * px + 0.5);
                 int c, m = k->xtile && i % 2 ? copies(x1 - x0, (bx[i + 1] - bx[i]) * px, extra) : 1;
                 if (x1 <= x0 || y1 <= y0) continue;
                 for (c = 0; c < m && n < cap; c++, n++) {
-                    q[n].x0 = (float)(x0 + (x1 - x0) * c / m); q[n].x1 = (float)(x0 + (x1 - x0) * (c + 1) / m);
+                    q[n].x0 = (float)(x + x0 + floor((x1 - x0) * c / m + 0.5));
+                    q[n].x1 = (float)(x + x0 + floor((x1 - x0) * (c + 1) / m + 0.5));
                     q[n].y0 = (float)y0; q[n].y1 = (float)y1;
                     q[n].u0 = (float)(bx[i] / k->design[0]); q[n].u1 = (float)(bx[i + 1] / k->design[0]);
                     q[n].v0 = (float)(by[j] / k->design[1]); q[n].v1 = (float)(by[j + 1] / k->design[1]);
@@ -1498,21 +1519,31 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
     case HK_NINE: {
         double t = k->slice[0] / k->scale * px, r = k->slice[1] / k->scale * px;
         double b = k->slice[2] / k->scale * px, le = k->slice[3] / k->scale * px, f = 1;
-        double dx[4], dy[4], su[4], sv[4];
-        int m;
+        double dx[4], dy[4], su[4], sv[4], mw = k->pw - k->slice[1] - k->slice[3];
+        int m[3];
         if (le + r > 0) f = fmin(f, w / (le + r));
         if (t + b > 0) f = fmin(f, h / (t + b));
-        t *= f; r *= f; b *= f; le *= f;
+        t = edge_px(t * f); r = edge_px(r * f); b = edge_px(b * f); le = edge_px(le * f);
         dx[0] = x; dx[1] = x + le; dx[2] = x + w - r; dx[3] = x + w;
         dy[0] = y; dy[1] = y + t; dy[2] = y + h - b; dy[3] = y + h;
         su[0] = 0; su[1] = k->slice[3] / k->pw; su[2] = 1 - k->slice[1] / k->pw; su[3] = 1;
         sv[0] = 0; sv[1] = k->slice[0] / k->ph; sv[2] = 1 - k->slice[2] / k->ph; sv[3] = 1;
-        /* the middle's period is its painted width at the edges' scale (px * f / scale), as CSS sizes a
-           `round` tile from the top edge's; each of the three rows has cap / 3 quads, two of them ends */
-        m = k->xtile ? copies(dx[2] - dx[1], (k->pw - k->slice[1] - k->slice[3]) * px * f / k->scale, cap / 3 - 3) : 1;
+        /* THE MIDDLE COLUMN REPEATS AS CSS `round` TILES IT: a row's tile is the painted middle at that
+           row's edge scale, the drawn edge width over its slice -- the top row and the middle at the
+           top edge's (the bottom's when the top has none), the bottom row at the bottom's. Each row has
+           cap / 3 quads, two of them its ends. */
+        if (k->xtile) {
+            double st = k->slice[0] > 0 && t > 0 ? t / k->slice[0] : 0, sb = k->slice[2] > 0 && b > 0 ? b / k->slice[2] : 0;
+            double sm = st > 0 ? st : sb > 0 ? sb : px * f / k->scale;
+            m[0] = copies(dx[2] - dx[1], mw * (st > 0 ? st : sm), cap / 3 - 3);
+            m[1] = copies(dx[2] - dx[1], mw * sm, cap / 3 - 3);
+            m[2] = copies(dx[2] - dx[1], mw * (sb > 0 ? sb : sm), cap / 3 - 3);
+        } else {
+            m[0] = m[1] = m[2] = 1;
+        }
         for (j = 0; j < 3; j++)
             for (i = 0; i < 3; i++) {
-                int c, mi = i == 1 ? m : 1;
+                int c, mi = i == 1 ? m[j] : 1;
                 if (dx[i + 1] <= dx[i] || dy[j + 1] <= dy[j]) continue;
                 for (c = 0; c < mi && n < cap; c++, n++) {
                     q[n].x0 = (float)(dx[i] + (dx[i + 1] - dx[i]) * c / mi); q[n].x1 = (float)(dx[i] + (dx[i + 1] - dx[i]) * (c + 1) / mi);
