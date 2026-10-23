@@ -172,8 +172,9 @@ seek, `tl_switch` takes it in one of two ways:
   moved. **The invariant, an ordering:** every refusal of `seek_run` comes before its first host
   write (R1), and in SWITCH mode it calls no `sk_back`; so a refused switch closes the second
   reader and puts the first back, and the playing goes on as before -- except what every refused
-  seek leaves (the eye's lead, the cleared click overlay), and in a multiplayer playing the
-  materializer's rule, which `mp_follow` sets back from the first reader's segment. **The
+  seek leaves (the eye's lead, the cleared click overlay), and what `mp_follow` follows from the
+  segment -- getter 75's per-seat answers, and in a multiplayer playing the materializer's rule
+  -- which `mp_follow` sets back from the first reader's segment. **The
   residual:** in a multiplayer playing, a refusal from the second reader's materializer
   (`mp_follow` on it failing) is sticky (`mp_fail`) and stops the playing, as it stops it after
   any refused seek; restoring it would need the first reader's materializer rebuilt whole by
@@ -224,7 +225,12 @@ timelines 0, 2, 4 and 5), one launch held at fork 5's first iteration:
 5. a switch to the evicted timeline 1 refused, the dumps before and after it EQUAL;
 6. the deletion of the watched 4: the switch to 0 (a seek, past 4's fork), the worker's deletion,
    the HUD's outcome, live `[0, 2, 5]`;
-7. the level's end: `touched timelines 0, 5, 2`, and the three last-use times later than before.
+7. the level's end: `touched timelines 0, 5, 2`, and the three last-use times later than before;
+8. a bookmark (`tacli hud click bookmark`) set on 2 at the GameTime of step 2's HUD seek, before
+   both forks, listed by `tacli hud show` on 2, again on 4 after step 2's switch and on 0 after
+   step 6's, whose deletion grew the file; and after the level's end index.dat's line for the
+   file holds it, keyed by the file's root key (index version 3, `tagpu_replays.c`). Each
+   switch's new walk reads the bookmarks back from the index (`tagpu_hudmarks.c`, `walk_start`).
 
 **Measured 2026-10-23** on the coverage build, `battle`, X2 alone (`--x2-only`) on the file the
 lane's run made (T5 = 902, F2 = 901, F4 = 1501, base 601): 5 -> 2 sought at 903 in 2032 ms, the
@@ -250,10 +256,11 @@ its argument is the structural one above. Of the refusals at the frame visit, X2
 a claim refused because the timeline's deletion is queued, and a re-chain or a second reader
 refused by the file (`k < 0`, a timeline the cache still lists live), each need a deletion to
 finish between the request's look at the cache and the visit, which no test can order; the
-refusal X2 plays is the request's own. X2 plays a single-player file: the multiplayer lines of
-the restoration (`mp_follow`) are reached by no test; a ten-seat X2 would reach them. Two things
-fixed from the first header stay as a switch finds them, as a boundary crossing leaves them:
-getter 75's `local[]` (`seat_level`) and the viewer's side art. The HUD's walker (markers, stats)
+refusal X2 plays is the request's own. X2 plays a single-player file: `mp_follow`'s multiplayer
+branch on a switch is reached by no test; a ten-seat X2 would reach it. Getter 75's per-seat
+answers follow the segment: a sought switch sets them from the new chain's segment (`mp_follow`
+in `seek_run`), and a re-chain keeps the segment, so its answers stand. The viewer's side art,
+fixed from the first header, stays as a switch finds it, as a boundary crossing leaves it. The HUD's walker (markers, stats)
 of the left timeline is joined, with its bounded wait on the game thread, at the HUD's next fill
 after a switch, as at any timeline change, until the lanes' landing polls it; its reads are of
 blocks no deletion rewrites, in a file no compaction can replace while it is open. A touch

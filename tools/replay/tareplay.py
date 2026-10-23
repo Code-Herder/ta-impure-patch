@@ -1668,17 +1668,23 @@ def root_key(path):
     return "%08X%08X" % struct.unpack_from("<II", Path(path).read_bytes()[:40], 32)
 
 
-def keyed_line(rd, name, T, what):
-    """The index's line of `name`, Failed unless the index is version 2's and the line carries
-    its file's root key, the favourite and the one bookmark at T: name size key started format
-    start last end fav played map nseats seat... marks (tagpu_replays.c, the index). Returns a
-    summary."""
+def index_line(rd, name):
+    """The index's head line, and `name`'s line split and its marks field (None for none): name
+    size key started format start last end fav played map nseats seat... marks (tagpu_replays.c,
+    the index)."""
     f = rd / "index.dat"
     head = f.read_text(errors="replace").split("\n", 1)[0] if f.exists() else ""
-    ln = index_lines(rd).get(name, "")
-    c = ln.split("\t")
+    c = index_lines(rd).get(name, "").split("\t")
     at = 12 + int(c[11]) if len(c) > 11 and c[11].isdigit() else len(c)
-    marks = c[at] if at < len(c) else None
+    return head, c, c[at] if at < len(c) else None
+
+
+def keyed_line(rd, name, T, what):
+    """The index's line of `name`, Failed unless the index is version 3's and the line carries
+    its file's root key, the favourite and the one bookmark at T (index_line). Returns a
+    summary."""
+    head, c, marks = index_line(rd, name)
+    ln = "\t".join(c)
     key = root_key(rd / name)
     if head != "IMPURE-REPLAYS-INDEX\t3" or len(c) < 13 or c[2] != key or c[8] != "1" or \
             marks != str(T):
@@ -2029,8 +2035,10 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     whose live timelines are 0, 2, 4 and 5: from timeline 5 to 2 by a seek, whose world a round
     trip rebuilds in place; from 2 to 4 at a GameTime before both forks, re-chained with no seek;
     the eviction the in-level stamps decide, which the file's own would not; the re-chained
-    reader's world past 2's fork, and 4's boundary crossed on it; a refused switch, which moves nothing; the watched timeline 4
-    deleted, a switch to 0 first; and the level's end, one touch of every timeline it played.
+    reader's world past 2's fork, and 4's boundary crossed on it; a refused switch, which moves
+    nothing; the watched timeline 4 deleted, a switch to 0 first; a bookmark set on 2 and listed
+    on 4 and on 0, its index line keyed by the file's root key; and the level's end, one touch of
+    every timeline it played.
     `base` is a GameTime of the original before 2 and 4 fork. The tarec checks go on `results`'
     offline pool, reading copies taken at once (`copies`)."""
     segs, stop = tarec.file_segments(x2)
@@ -2045,7 +2053,14 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     used = {s["id"]: s["last_used"] for s in segs}
     name = x2.stem
     say(f"forks: X2 on {name}, from timeline 5 at {T5 + 1}")
+    w.stop()
     w.place(fx["fix"], fx["dll"])
+    # an index line an earlier run left for this name keeps its bookmarks when the file is the
+    # same copy, root key and all, and would hand step 9 one: the line goes while the game is down
+    idx = w.gamedir / "replays" / "index.dat"
+    if idx.exists():
+        lines = idx.read_text(errors="replace").splitlines(keepends=True)
+        idx.write_text("".join(ln for ln in lines if not ln.startswith(x2.name + "\t")))
     log = Log(w)
     rc, text = tacli("replay", "seek", w.name, T5 + 1, "--recording", x2, "--timeline", 5,
                      "--defaults", "--restart", "--keep-dll", "--perspective", P, "--timeout",
@@ -2071,6 +2086,12 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
         if st["watched"] != tid or on != chain:
             raise Failed(f"X2: hud state watches {st['watched']} on {on}, not {tid} on {chain}")
         return st
+
+    def bookmarks(where):
+        """The HUD's bookmark markers as `tacli hud show` lists them: their times, from the
+        span's first iteration, which every timeline of the file shares (the root's)."""
+        d = json.loads(hud(w, "show", "--json", timeout=ACK_S))
+        return [m["t"] for m in d["state"]["markers"] if m["kind"] == "bookmark"]
 
     def dump_now(dname):
         arm(w, log, f"dump {dname} now", rf"recorder: frame dump {dname} at GameTime",
@@ -2101,11 +2122,27 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     w.trigger(f"hud seek {base}")
     if not log.wait(rf"replay: .*: at GameTime {base}, sought from ", ACK_S, n):
         raise Failed(f"X2: the HUD's seek to {base}: no seek line")
+    # 9. the bookmark, before both forks, where every timeline's chain holds it: index.dat keys
+    # it by the file's name and root key (tagpu_replays.c), so each switch's new walk reads it
+    # back (tagpu_hudmarks.c, walk_start), and so does step 7's, whose deletion grows the file
+    n = len(log.lines)
+    hud(w, "click", "bookmark", timeout=ACK_S)
+    got = log.wait(rf"replays: bookmark at \d+ in {re.escape(x2.name)} (\(\d+ now\)|refused: )",
+                   ACK_S, n)
+    if not got or "refused" in got:
+        raise Failed(f"X2: the HUD's bookmark: {got.strip() if got else 'no line'}")
+    BT = int(re.search(r"bookmark at (\d+)", got).group(1))
+    marked = bookmarks("on 2")
+    if len(marked) != 1:
+        raise Failed(f"X2: the HUD lists bookmarks at {marked} s on 2; wanted the one at "
+                     f"GameTime {BT}")
     got, n = switch(4)
     want = f"watching timeline 4 from GameTime {base - 1} (shared history: no rebuild)"
     if want not in got or log.wait(r"replay: .*: at GameTime \d+, sought from ", 0, n):
         raise Failed(f"X2: 2 -> 4: {got.strip()}; wanted `{want}` and no seek")
     watched(4, [0, 4])
+    if bookmarks("on 4") != marked:
+        raise Failed(f"X2: the HUD lists bookmarks at {bookmarks('on 4')} s on 4; on 2 {marked}")
     # 4. the eviction: the file's last-used order puts 2 (touched by the lane's playing of 2)
     # before 5 (made after it); the level's stamps -- 5 left at step 2, 2 at step 3 -- put 5 first
     if not used[2] < used[5]:
@@ -2159,6 +2196,9 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     left = sorted(r["id"] for r in st["timelines"] if r["live"])
     if left != [0, 2, 5]:
         raise Failed(f"X2: hud state's live timelines after the deletion: {left}")
+    if bookmarks("on 0") != marked:
+        raise Failed(f"X2: the HUD lists bookmarks at {bookmarks('on 0')} s on 0 after the "
+                     f"deletion; on 2 {marked}")
     # 8. the level's end: one touch, the last timeline first, then the others as they were left;
     # 4 is deleted and skipped
     if fx["cover"]:
@@ -2180,12 +2220,17 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     if stop or sorted(now) != [0, 2, 5] or any(now[t] <= used[t] for t in (0, 2, 5)):
         raise Failed(f"X2: last-used after the touch {now}, before {used}"
                      + (f" ({stop})" if stop else ""))
+    head, c, marks = index_line(w.gamedir / "replays", x2.name)
+    key = root_key(after)
+    if head != "IMPURE-REPLAYS-INDEX\t3" or len(c) < 13 or c[2] != key or marks != str(BT):
+        raise Failed(f"X2: index {head!r}, line {chr(9).join(c)!r}; expected key {key} and the "
+                     f"bookmark {BT}")
     w.collect(out / "X2")
     w.stop()
     results.add(("forks: X2, watching another timeline in place", PASS,
                  f"5 -> 2 sought at {T5 + 1}; 2 -> 4 re-chained at {base - 1}; the stamps evict 5; "
-                 f"4 at {F2 + 30} and past {F4}; 1 refused; delete 4 by way of 0; touched 0, 5, "
-                 f"2"))
+                 f"4 at {F2 + 30} and past {F4}; 1 refused; delete 4 by way of 0; the bookmark at "
+                 f"{BT} listed on 2, 4 and 0, keyed {key}; touched 0, 5, 2"))
 
 
 def forks_steps(w, fx, out, results):
