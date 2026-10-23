@@ -565,7 +565,8 @@ DLL emits textured quads.
       float, so every caller rounds its product (and a far edge's sum, `tagpu_hud_edge`) to float
       before the rule, and the rule itself is exact in double. The DLL's x87 code (`-std=c99`
       rounds an excess-precision value at a cast, an assignment and a parameter) and laycheck's
-      native SSE build therefore put the same float on the same pixel, and the hit map
+      native SSE build therefore put the same float on the same pixel (the rule's sums are exact at
+      53-bit x87 precision, Windows' default for a thread, which the DLL never changes), and the hit map
       (`tagpu_hudstate.c`) tests a click against those pixels too. hud.js computes in double, the
       one place the margin above is what makes the sides agree.
     - **The mockup pins every box itself** (`pin` in `hud.js`). It computes each box's edges from

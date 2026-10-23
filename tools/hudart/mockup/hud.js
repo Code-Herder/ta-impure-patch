@@ -75,8 +75,6 @@ const HUD = (() => {
   // a fill's box (--fl): one that has begun spans at least one device pixel, so it always shows (tagpu_hudlay_clip,
   // the DLL's same floor)
   const frect = b => `${rect(b)};--fl:1`;
-  // an inset edge e wide on box b, drawn as the DLL draws it (ring in tagpu_hudlay.c): four solids, the top and bottom
-  // across the box and the sides between them, each pinned to whole pixels on its own
   // an inset edge e units deep inside box b, as the DLL's ring: one box whose four sides pin() places on edges it
   // snaps once (ringEdges)
   const ring = (b, e, col) => `<div class="box ring" style="${rect(b)};pointer-events:none" data-e="${e}">`
@@ -483,7 +481,7 @@ const HUD = (() => {
   }
   const nice = v => { if (!(v > 0)) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))), f = v / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p; };
 
-  /* ---- composing: a grid-sliced or 9-slice part, or a tiled fill, drawn on a canvas of its box's size snapped as
+  /* ---- composing: every part -- grid-sliced, 9-slice, a tiled fill, a whole part or an icon as one piece -- drawn on a canvas of its box's size snapped as
      Chrome snaps the element, each edge rounded half up to a device pixel, which the element then shows pixel for
      pixel. The pieces are tagpu_hudlay_expand's and are sampled as the DLL's GPU samples them (paint), so the game and
      the mockup draw the same texels at the same pixels: a grid part cell by cell, the cells sharing rounded edges so
@@ -491,7 +489,7 @@ const HUD = (() => {
      unless the box is smaller than both together, when all four shrink by one factor; a tiled fill one piece
      repeating along x at its height's scale. An xtile part's x band is one period of a seamless tile, repeated a
      whole number of times at about its painted length, each copy an equal share of the band with whole-pixel edges;
-     a 9-slice's middle row by row at that row's edge scale. Each grid or 9-slice part keeps its pieces (`quads`:
+     a 9-slice's middle row by row at that row's edge scale. Every part but a tiled fill keeps its pieces (`quads`:
      destination x0, y0, x1, y1 in its pixels, source u0, v0, u1, v1 in the part's), which tools/hudart/laycheck.py
      compares with the DLL's. ---- */
   // a device coordinate rounded to the whole pixel an edge is drawn on, as tagpu_hud_snap rounds it in the DLL: half up,

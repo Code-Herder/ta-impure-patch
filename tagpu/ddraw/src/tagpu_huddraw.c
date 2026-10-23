@@ -8,8 +8,9 @@
        tagpu_hudlay_expand, a solid's, a dot's and a clip's here (snap). The rasteriser's
        pixel-centre rule alone would round an edge at exactly half a pixel down;
      * text sits on the baseline `display: flex; align-items: center; line-height: 1` gives it,
-       with Blink's roundings (tagpu_hudlay_baseline); the baseline is rounded to a whole pixel
-       and the pen keeps its fraction, as Skia draws horizontal text;
+       with Blink's roundings (tagpu_hudlay_baseline); each glyph's origin goes to the nearest
+       quarter pixel and an outline or shadow copy's y offset to a whole pixel, half up, as
+       Chrome draws them (text);
      * `letter-spacing` follows every character, the last included, so a centred string is
        centred with its trailing space, as Chrome centres it;
      * a drop shadow (`text-shadow: 0 s 0 rgba(0,0,0,.8)`) and the four-copy outline are the

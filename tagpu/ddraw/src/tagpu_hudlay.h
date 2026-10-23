@@ -309,7 +309,8 @@ HUDRECT tagpu_hudlay_clip(const HUDOP* op, float px);
    to float first -- a sum inside it is rounded to float by the caller too (tagpu_hud_edge) -- and
    the rest is in double, where adding the half and the margin to a float is exact. The DLL's x87
    code (-std=c99 rounds at an assignment, a cast and a parameter: -fexcess-precision=standard)
-   and laycheck's SSE build therefore give the same pixel for the same float. */
+   and laycheck's SSE build therefore give the same pixel for the same float. The sums are exact at
+   53-bit x87 precision, Windows' default for a thread, which the DLL never changes. */
 static inline double tagpu_hud_snap(float v) { return floor((double)v + 0.5 + 1.0 / 64); }
 
 /* the far edge of a box from `a` units long `b`, at `px` a unit, snapped: the sum and the product

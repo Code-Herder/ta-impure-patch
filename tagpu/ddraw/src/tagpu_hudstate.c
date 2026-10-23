@@ -628,7 +628,9 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
 }
 
 /* a hit edge: the device pixel the draw puts the same edge on (tagpu_hud_snap, the draw's own
-   float products), from the game screen's corner at `o` */
+   float products), from the game screen's corner at `o`; the track's ends are the playhead's
+   centre run, not a drawn edge, and agree with the draw to within a pixel, which seek_at's
+   interpolation absorbs */
 static int16_t dev(int o, double snapped)
 {
     double r = o + snapped;
