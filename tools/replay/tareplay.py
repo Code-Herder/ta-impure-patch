@@ -1431,11 +1431,10 @@ def takeover_f(w, fx, out):
 
 # ---- W: the browser's Watch and the replay HUD ---------------------------------------------
 
-def header_copy(rec, dst, edits):
-    """A copy of the recording `rec` at `dst` whose first header block's entry of each tag of
-    `edits` holds edits[tag](its bytes), of the same length, the block stored again with both its
-    CRCs: a file the reader opens, which the replay's own checks then judge. A header block is
-    always stored (tagpu_recfmt.h)."""
+def header_rewrite(rec, dst, rebuild):
+    """A copy of the recording `rec` at `dst` whose first header block's payload is
+    rebuild(its payload), the block stored again with both its CRCs. A header block is always
+    stored (tagpu_recfmt.h)."""
     data = Path(rec).read_bytes()
     if data[:8] != tarec.REC_MAGIC:
         raise CouldNotRun(f"{rec}: not a recording")
@@ -1446,24 +1445,53 @@ def header_copy(rec, dst, edits):
         raise CouldNotRun(f"{rec}: no header block")
     if flags != tarec.RBF_STORED:
         raise CouldNotRun(f"{rec}: a header block with flags {flags:#x}, not stored")
-    payload = bytearray(data[40:40 + packed])
-    at, found = 0, set()
-    while at + 4 <= len(payload):
-        t, n = struct.unpack_from("<HH", payload, at)
-        if t in edits:
-            new = edits[t](bytes(payload[at + 4:at + 4 + n]))
-            if len(new) != n:
-                raise CouldNotRun(f"{rec}: an edit of header entry {t} changed its length")
-            payload[at + 4:at + 4 + n] = new
-            found.add(t)
-        at += (4 + n + 3) & ~3
-    if set(edits) - found:
-        raise CouldNotRun(f"{rec}: no header entry {min(set(edits) - found)}")
-    body = bytes(payload)
+    body = rebuild(bytes(data[40:40 + packed]))
     head = struct.pack("<IHHIIIII", magic, kind, flags, first, upto, len(body), len(body),
                        zlib.crc32(body))
     head += struct.pack("<I", zlib.crc32(head))
     Path(dst).write_bytes(data[:8] + head + body + data[40 + packed:])
+
+
+def header_copy(rec, dst, edits):
+    """A copy of the recording `rec` at `dst` whose first header block's entry of each tag of
+    `edits` holds edits[tag](its bytes), of the same length: a file the reader opens, which the
+    replay's own checks then judge."""
+    def rebuild(raw):
+        payload = bytearray(raw)
+        at, found = 0, set()
+        while at + 4 <= len(payload):
+            t, n = struct.unpack_from("<HH", payload, at)
+            if t in edits:
+                new = edits[t](bytes(payload[at + 4:at + 4 + n]))
+                if len(new) != n:
+                    raise CouldNotRun(f"{rec}: an edit of header entry {t} changed its length")
+                payload[at + 4:at + 4 + n] = new
+                found.add(t)
+            at += (4 + n + 3) & ~3
+        if set(edits) - found:
+            raise CouldNotRun(f"{rec}: no header entry {min(set(edits) - found)}")
+        return bytes(payload)
+    header_rewrite(rec, dst, rebuild)
+
+
+def format24_copy(rec, dst, seconds):
+    """A copy of the recording `rec` at `dst` with a header in format 24's shape: RT_FORMAT 24
+    and RT_WALLCLOCK the start alone, a FILETIME of `seconds` since 1970 (UTC) in 8 bytes, the
+    other entries as they are. This build reads it as a recording of another format with no
+    recorded start (tagpu_recfmt.h)."""
+    def rebuild(raw):
+        out, seen = bytearray(), set()
+        for t, b in tarec.entries(raw):
+            if t == tarec.RT_FORMAT:
+                b = struct.pack("<I", 24)
+            elif t == tarec.RT_WALLCLOCK:
+                b = started_at(seconds)(b)[:8]
+            seen.add(t)
+            out += struct.pack("<HH", t, len(b)) + b + b"\0" * (-len(b) % 4)
+        if {tarec.RT_FORMAT, tarec.RT_WALLCLOCK} - seen:
+            raise CouldNotRun(f"{rec}: a header without RT_FORMAT or RT_WALLCLOCK")
+        return bytes(out)
+    header_rewrite(rec, dst, rebuild)
 
 
 def started_at(seconds):
@@ -1472,11 +1500,6 @@ def started_at(seconds):
     def edit(b):
         return struct.pack("<Q", int((seconds + 11644473600) * 10 ** 7)) + b[8:]
     return edit
-
-
-def older_format(b):
-    """RT_FORMAT's number less one: the format before this build's."""
-    return struct.pack("<I", struct.unpack("<I", b)[0] - 1)
 
 
 def other_layout(b):
@@ -1812,11 +1835,12 @@ def prune_step(w, fx, out, forked):
     """THE PRUNE (tagpu_recfile.h) on a recorded launch of the fixture's scenario, under the
     instance's `keep 2` (Worker): replays\\ seeded, the recorded starts (RT_WALLCLOCK) oldest
     last, with two plain copies of L's recording, a favourite one, a recording with live forks
-    (`forked`, the lane's own), one in the format before this build's and a file that is not a
-    recording, which has no recorded start. The files' last-write times run the other way, so a
-    prune that ordered by them would keep the non-recording as the newest and delete the first
-    plain copy. Besides the new recording the newest is kept; of the rest the second plain copy
-    and the older format go, and the favourite, the forked one and the non-recording stay.
+    (`forked`, the lane's own), one in format 24's shape (format24_copy) and a file that is not a
+    recording. The last two have no start this build reads, so they sort after the dated four,
+    the format-24 one first by name. The files' last-write times run the other way, so a prune
+    that ordered by them would keep the non-recording as the newest and delete the first plain
+    copy. Besides the new recording the newest is kept; of the rest the second plain copy and the
+    format-24 one go, and the favourite, the forked one and the non-recording stay.
     Returns its check."""
     w.place(fx["fix"], fx["dll"])
     rd = w.gamedir / "replays"
@@ -1829,7 +1853,7 @@ def prune_step(w, fx, out, forked):
         if name == "forked":
             header_copy(forked, dst, start)
         elif name == "older":
-            header_copy(rec, dst, {**start, tarec.RT_FORMAT: older_format})
+            format24_copy(rec, dst, now - 600 * (k + 1))
         elif name == "not-a-recording":
             dst.write_bytes(b"not a recording")
         else:

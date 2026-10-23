@@ -748,6 +748,37 @@ class HeaderCopy(unittest.TestCase):
                              ((1792764309 + 11644473600) * 10 ** 7, 120))
             self.assertEqual(tarec.started(h), "2026-10-23 16:05:09 +02:00")
 
+    def test_format24_copy(self):
+        """format24_copy writes format 24's header shape: RT_FORMAT 24 and an 8-byte RT_WALLCLOCK
+        at the start given, the other entries and the blocks after the header as they were"""
+        entry = self.entry
+        smap = b"Coast To Coast\0"
+        head = (entry(tarec.RT_FORMAT, struct.pack("<I", tarec.REC_FORMAT)) +
+                entry(tarec.RT_WALLCLOCK, struct.pack("<Qi", 0, 120)) +
+                entry(tarec.RT_SETTINGS_MAP, smap))
+        with tempfile.TemporaryDirectory() as d:
+            src, dst = Path(d) / "a.imprec", Path(d) / "b.imprec"
+            tail = self.block(tarec.RB_STREAM, b"\1\2\3\4")
+            src.write_bytes(tarec.REC_MAGIC + self.block(tarec.RB_HEADER, head) + tail)
+            tareplay.format24_copy(src, dst, 1792764309)
+            data = dst.read_bytes()
+            magic, kind, flags, _f, _u, raw, packed, crc_body, crc_head = \
+                struct.unpack_from("<IHHIIIIII", data, 8)
+            body = data[40:40 + packed]
+            self.assertEqual((kind, flags, raw), (tarec.RB_HEADER, tarec.RBF_STORED, packed))
+            self.assertEqual(zlib.crc32(body), crc_body)
+            self.assertEqual(zlib.crc32(data[8:36]), crc_head)
+            self.assertEqual(data[40 + packed:], tail)
+            ents = dict(tarec.entries(body))
+            self.assertEqual(ents[tarec.RT_FORMAT], struct.pack("<I", 24))
+            self.assertEqual(ents[tarec.RT_WALLCLOCK],
+                             struct.pack("<Q", (1792764309 + 11644473600) * 10 ** 7))
+            self.assertEqual(ents[tarec.RT_SETTINGS_MAP], smap)
+            # an 8-byte entry is no start to tarec either, as to the DLL's reader
+            ours = entry(tarec.RT_FORMAT, struct.pack("<I", tarec.REC_FORMAT)) + \
+                entry(tarec.RT_WALLCLOCK, ents[tarec.RT_WALLCLOCK])
+            self.assertNotIn("wallclock", tarec.header(ours))
+
     def test_a_packed_header_is_refused(self):
         head = self.entry(tarec.RT_SETTINGS_MAP, b"Coast To Coast\0")
         with tempfile.TemporaryDirectory() as d:

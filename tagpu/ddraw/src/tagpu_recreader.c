@@ -2726,26 +2726,36 @@ RecReader* recr_open(const char* path, char* why, unsigned cap)
     return open_handle(f, path, why, cap, 0);
 }
 
-/* `path`'s header block parsed into the returned reader's h, for recr_format_of and
-   recr_wallclock_of: *parsed 1 when header_parse took it, 0 when it refused it, h then holding
-   the entries its loop read before the refusal. The format entry, the writer's first, is read
-   before any check that can refuse the header, and the format is judged after the loop, so h
-   holds every entry of another format's header that comes before the first one this build finds
-   malformed, if any; NULL when
-   the file has no recording's magic and header block, or cannot be opened or read. */
-static RecReader* header_peek(const char* path, int* parsed)
+enum { PEEK_HEADER, PEEK_NOT_OURS, PEEK_UNREAD };
+
+/* `path`'s header block, for recr_format_of and recr_wallclock_of. PEEK_HEADER: the returned
+   reader's h holds what header_parse read, *parsed 1 when it took the header and 0 when it
+   refused it. The format entry, the writer's first, is read before any check that can refuse
+   the header, and the format is judged after the loop, so h holds every entry of another
+   format's header up to the first one this build finds malformed. PEEK_NOT_OURS: the file's
+   first 8 bytes were read and are not REC_MAGIC, or it is shorter. PEEK_UNREAD: no memory, the
+   file cannot be opened, a read fails, or its header block cannot be read whole. Only
+   PEEK_HEADER returns a reader. */
+static RecReader* header_peek(const char* path, int* parsed, int* status)
 {
     RecReader* r = (RecReader*)calloc(1, sizeof *r);
     char magic[8], why[160];
     RecBlock b;
+    DWORD got = 0;
+    *status = PEEK_UNREAD;
     if (!r) return NULL;
     r->f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
                        FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-    if (r->f != INVALID_HANDLE_VALUE && read_all(r->f, magic, 8) && !memcmp(magic, REC_MAGIC, 8)) {
-        r->off = 8;
-        if (block_read(r, &b, why, sizeof why) > 0 && b.kind == RB_HEADER) {
-            *parsed = header_parse(&r->h, r->raw, r->rawn, why, sizeof why);
-            return r;
+    if (r->f != INVALID_HANDLE_VALUE && ReadFile(r->f, magic, 8, &got, NULL)) {
+        if (got < 8 || memcmp(magic, REC_MAGIC, 8)) {
+            *status = PEEK_NOT_OURS;
+        } else {
+            r->off = 8;
+            if (block_read(r, &b, why, sizeof why) > 0 && b.kind == RB_HEADER) {
+                *parsed = header_parse(&r->h, r->raw, r->rawn, why, sizeof why);
+                *status = PEEK_HEADER;
+                return r;
+            }
         }
     }
     recr_close(r);
@@ -2754,8 +2764,8 @@ static RecReader* header_peek(const char* path, int* parsed)
 
 int recr_format_of(const char* path)
 {
-    int parsed = 0, k = -1;
-    RecReader* r = header_peek(path, &parsed);
+    int parsed = 0, status, k = -1;
+    RecReader* r = header_peek(path, &parsed, &status);
     if (r && parsed) k = 1;
     else if (r && r->h.format && !rec_format_supported(r->h.format)) k = 0;
     recr_close(r);
@@ -2764,15 +2774,16 @@ int recr_format_of(const char* path)
 
 int recr_wallclock_of(const char* path, FILETIME* utc)
 {
-    int parsed = 0, got = 0;
-    RecReader* r = header_peek(path, &parsed);
+    int parsed = 0, status, k;
+    RecReader* r = header_peek(path, &parsed, &status);
+    k = status == PEEK_UNREAD ? -1 : 0;
     if (r && r->h.has_wallclock) {
         utc->dwLowDateTime = (DWORD)r->h.wallclock;
         utc->dwHighDateTime = (DWORD)(r->h.wallclock >> 32);
-        got = 1;
+        k = 1;
     }
     recr_close(r);
-    return got;
+    return k;
 }
 
 RecReader* recr_dump_world(const char* path, char* why, unsigned cap)

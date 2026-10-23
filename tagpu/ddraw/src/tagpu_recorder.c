@@ -2072,8 +2072,8 @@ static void archive_entry(void* ctx, const char* name, unsigned n, unsigned size
    alternative, GetTimeZoneInformation's Bias plus the DaylightBias or StandardBias its return
    value picks, is a second sample of the clock beside `utc`, which a daylight-saving change
    between the two would split, and its TIME_ZONE_ID_UNKNOWN (a zone without daylight saving)
-   and TIME_ZONE_ID_INVALID returns would each need their own case. Both sides are whole milliseconds (the SYSTEMTIME round trip), so
-   the difference is a whole number of minutes. */
+   and TIME_ZONE_ID_INVALID returns would each need their own case. Both sides are whole
+   milliseconds (the SYSTEMTIME round trip), so the difference is a whole number of minutes. */
 static int utc_offset_minutes(const FILETIME* utc)
 {
     SYSTEMTIME u, l;

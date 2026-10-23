@@ -204,17 +204,18 @@ static int prune_one(const char* path)
     return r;
 }
 
-/* `t` the recorded start (recr_wallclock_of), `dated` 0 when the file has none */
+/* `t` the recorded start and `dated` what recr_wallclock_of said: 1 dated, 0 read without a
+   start, -1 not read */
 typedef struct { char name[MAX_PATH]; FILETIME t; int dated; } PruneFile;
-/* A total order, newest first: by the recorded start, a file without one after every dated file,
-   then by name, latest first (a recording's name begins with its local start time); names are
-   distinct as the file system compares them, without case. */
+/* A strict weak order, newest first: by the recorded start, every file without one after every
+   dated file, then by name, latest first (a recording's name begins with its local start time).
+   Names equal under the case-insensitive comparison keep an unspecified order between them. */
 static int newer_first(const void* a, const void* b)
 {
     const PruneFile* x = (const PruneFile*)a;
     const PruneFile* y = (const PruneFile*)b;
-    int c = y->dated - x->dated;
-    if (!c && x->dated) c = CompareFileTime(&y->t, &x->t);
+    int c = (y->dated > 0) - (x->dated > 0);
+    if (!c && x->dated > 0) c = CompareFileTime(&y->t, &x->t);
     return c ? c : _stricmp(y->name, x->name);
 }
 
@@ -254,12 +255,19 @@ static void prune(const char* fresh, unsigned keep)
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
+    /* the process's exit waits for this worker (recfile_exit): both passes stop at the next file
+       once it has begun, and nothing is deleted after a header pass it cut short */
     if (n > keep) {
         /* one open and one read of the header block a file, on this worker */
-        for (i = 0; i < n; i++) all[i].dated = recr_wallclock_of(all[i].name, &all[i].t);
-        qsort(all, n, sizeof *all, newer_first);
-        /* the process's exit waits for this worker (recfile_exit): it stops at the next file */
-        for (i = keep; i < n && !exiting(); i++) c[prune_one(all[i].name)]++;
+        for (i = 0; i < n && !exiting(); i++)
+            all[i].dated = recr_wallclock_of(all[i].name, &all[i].t);
+        if (i == n) {
+            qsort(all, n, sizeof *all, newer_first);
+            /* a file the header pass could not read is kept, counted in use: it may read again
+               by the time prune_one would reach it, dated as newly as any of the kept */
+            for (i = keep; i < n && !exiting(); i++)
+                c[all[i].dated < 0 ? PRUNE_BUSY : prune_one(all[i].name)]++;
+        }
     }
     free(all);
     tagpu_logf("recorder: prune at %s: %u older recordings, the newest %u kept; of the rest, %u "

@@ -30,11 +30,17 @@ enum RecFileOp { REC_FILE_TOUCH, REC_FILE_DELETE, REC_FILE_EXPORT, REC_FILE_COMP
    the new recording, one of the `id`): the other replays\*.imprec newest first by the start their
    header records (RT_WALLCLOCK, recr_wallclock_of), the first `id` - 1 kept, and each older one
    deleted unless it is in use, has a live fork, or is a favourite or bookmarked in
-   replays\index.dat. A file with no recorded start (not one of our recordings, or a header without
-   the entry as this build writes it) sorts after every dated one, and ties go by name. A file that
-   is not one of our recordings is kept; one of another format is deleted like any other (this
-   build can neither read its forks nor play it). "Older" is by the recorded start: a replay copied
-   in counts by when it was recorded, whatever its file's dates.
+   replays\index.dat. A file with no recorded start sorts after every dated one, then by name,
+   latest first: one that is not one of our recordings, one whose header lacks the entry at 12
+   bytes (every recording of format 24 or earlier), and one that cannot be opened or read at the
+   moment, which is kept and counted in use whatever its place. A file that is not one of our
+   recordings is kept; one of another format is deleted like any other (this build can neither
+   read its forks nor play it).
+   "Newest" is the recording's own date: the latest start by the clock of the machine that
+   recorded it, whatever the file's dates. So watching a replay does not keep it, nor does
+   exporting one (the export carries its root's start); a favourite or a bookmark does. A clock
+   set back makes each new recording the oldest at the next game's prune, and a file dated in the
+   future holds one of the kept places until the clock passes it.
    REC_KEEP is the count when the recorder's lever names none (`keep N`, tagpu_recorder.c). */
 #define REC_KEEP 50
 /* The worker owns copies of the paths. A full queue or an exiting process refuses the request;

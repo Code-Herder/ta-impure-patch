@@ -1817,12 +1817,18 @@ def codec_text(h):
 
 def started(h):
     """The header's recorded start (RT_WALLCLOCK) as its local time with the offset from UTC,
-    "2026-10-23 14:05:09 +02:00"; None when the header has none."""
+    "2026-10-23 14:05:09 +02:00"; None when the header has none, and the raw FILETIME and
+    minutes when they make no date (an offset of a day or more, or a time past datetime's)."""
     if "wallclock" not in h:
         return None
-    off = h["utc_offset"]
-    utc = datetime(1601, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=h["wallclock"] // 10)
-    local = utc.astimezone(timezone(timedelta(minutes=off)))
+    ft, off = h["wallclock"], h["utc_offset"]
+    try:
+        if abs(off) >= 1440:
+            raise ValueError(off)
+        utc = datetime(1601, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=ft // 10)
+        local = utc.astimezone(timezone(timedelta(minutes=off)))
+    except (ValueError, OverflowError):
+        return f"FILETIME {ft}, offset {off} min"
     return (f"{local:%Y-%m-%d %H:%M:%S} {'-' if off < 0 else '+'}"
             f"{abs(off) // 60:02d}:{abs(off) % 60:02d}")
 

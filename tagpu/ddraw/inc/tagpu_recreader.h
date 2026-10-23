@@ -245,7 +245,9 @@ int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap);
 int recr_format_of(const char* path);
 /* The start `path`'s header records (RT_WALLCLOCK), as a FILETIME in UTC, for the prune's order:
    1 read, from a recording of any format whose header carries the entry as this build writes
-   it; 0 for a file that is not one of our recordings, cannot be read, or has no such entry. */
+   it; 0 read without one: a file that is not one of our recordings (its first 8 bytes are not
+   the magic), or a header without the entry at 12 bytes; -1 not read: no memory, the file
+   cannot be opened, a read fails, or its header block cannot be read whole. */
 int recr_wallclock_of(const char* path, FILETIME* utc);
 
 /* A TIMELINE is a segment of the file (tagpu_recfmt.h): the original, id 0, or a fork recorded

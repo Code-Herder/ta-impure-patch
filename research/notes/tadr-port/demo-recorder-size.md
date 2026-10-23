@@ -7,7 +7,7 @@
 *L5a: the ledger rule*, *P1: the container, measured*, *P6: the kinds and the ticks, measured*,
 *P4: the unit frame's type rules, measured*, *P5: the unit listing, measured*, *P7: the sprays,
 the order nodes and the projectile lanes, measured* and *RC: the unit coder, measured*, below).
-Recording format 24 codes the unit frame's listing, lane masks and residuals as one range coder's
+Recording format 25 codes the unit frame's listing, lane masks and residuals as one range coder's
 bytes a block, each decision under a context both sides keep, codes an explicit
 nano spray against the unit's last four, matches order nodes to the kept list in a skirmish
 stream and codes a surviving projectile's fields as lanes of their own widths, predicts more of the unit

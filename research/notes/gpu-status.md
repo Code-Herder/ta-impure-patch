@@ -2960,10 +2960,19 @@ fork's, asks a recording-file worker to prune `replays\` as its writer starts (`
 by the start each one's header records (`RT_WALLCLOCK`'s FILETIME in UTC, read by
 `recr_wallclock_of`: one open and one read of the header block a file, on the worker), never by
 the file's dates, so a replay copied in counts by when it was recorded. A file with no recorded
-start sorts after every dated one: one that is not a recording, and one of ours whose header lacks
-the entry at the 12 bytes this format writes, which every recording of format 24 or earlier is (it
-wrote the start alone, in 8 bytes); ties go by name. The first `REC_KEEP` − 1 = 49 are kept, so the
-newest 50 are kept counting the new one. The lever's text `keep N` changes the count (`keep_count`, `tagpu_recorder.c`): with no
+start sorts after every dated one, then by name, latest first: one that is not a recording; one of
+ours whose header lacks the entry at the 12 bytes this format writes, which every recording of
+format 24 or earlier is (it wrote the start alone, in 8 bytes); and one that cannot be opened or
+read at the moment (`recr_wallclock_of`'s −1), which is never handed to the deletion and is
+counted in use whatever its place, since it might read again, as new as any, by the time the
+deletion reached it. **"Newest" is the recording's own date**, the owner's rule: the latest start
+by the clock of the machine that recorded it. So watching a replay does not keep it, and neither
+does exporting one (an export carries its root's header and start); a favourite or a bookmark
+does. A clock set back makes each new recording the oldest at the next game's prune, and a file
+dated in the future holds one of the kept places until the clock passes it. The Replays browser
+still lists newest first by last write (`newest_first`, `tagpu_replays.c`), so its order, and which
+recordings its `ENT_MAX` cut lists, can differ from the prune's. The first `REC_KEEP` −
+1 = 49 are kept, so the newest 50 are kept counting the new one. The lever's text `keep N` changes the count (`keep_count`, `tagpu_recorder.c`): with no
 number, or `keep 0`, it is `REC_KEEP`; `keep 1` keeps the new one alone. Each older recording is
 deleted unless it is in use, has a live fork, is a favourite or bookmarked in `replays\index.dat`, or
 is not one of our recordings. One of ours in another format (`recr_format_of`) is deleted like any
@@ -2982,8 +2991,10 @@ keeps. `SetFileInformationByHandle` is resolved at run time, so the DLL still lo
 is absent the prune deletes nothing and counts every older recording as in use. One line per
 prune: `recorder: prune at <new>: N older recordings, the newest K kept; of the rest, D deleted, M
 kept (forked or marked), B in use, U unreadable`, where *in use* also counts a recording whose lock
-or file could not be opened exclusively and one whose index could not be read. The process's exit
-waits for the worker (`recfile_exit`), so the prune stops at the next file once the exit has begun.
+or file could not be opened exclusively, one whose index could not be read, and one whose header
+the date pass could not read. The process's exit waits for the worker (`recfile_exit`), so the
+prune stops at the next file once the exit has begun, in the date pass as in the deletion, and a
+date pass the exit cut short deletes nothing.
 **What the ordering does not cover:** a favourite given while a prune runs, after it has read that
 file's marks, or one the index could not save (`index_save` failing to write `index.tmp`, or the
 index over `INDEX_CAP`), does not keep its file. The tareplay forks test runs the prune on a seeded
@@ -2995,13 +3006,16 @@ file and a file with a live fork (made by a real takeover) kept as forked or mar
 that is not a recording kept. With `keep 3`, the next game's 54 older recordings: the newest 2 kept, 48
 deleted and the same four kept. **Not exercised:** *in use*, since a file held open by another process
 could not be reproduced under Wine on the reference setup. MEASURED 2026-10-23 by `prune_step` in
-the landing gate, both builds, the seeds' last-write times against their recorded starts: `6 older
+the landing gate, both builds, the seeds' last-write times against their recorded starts and one seed in format 24's shape: `6 older
 recordings, the newest 1 kept; of the rest, 2 deleted, 2 kept (forked or marked), 0 in use, 1
-unreadable`, the older-format copy among the deleted and the first plain copy kept. **The order's
+unreadable`, the format-24 copy among the deleted and the first plain copy kept. **The order's
 cost**, MEASURED 2026-10-23 under Wine on the reference setup by a scratch harness calling
 `recr_wallclock_of` over 50 copies of a gate recording (a header block of 11,132 bytes each) with
-the page cache warm: 6.5 to 6.9 ms for the 50 over five passes, about 0.14 ms a file; a cold cache
-was not measured. A name too long
+the page cache warm: 6.4 to 7.4 ms for the 50 over ten passes in two runs, about 0.14 ms a file; a
+cold cache was not measured. The same harness on single files: 1 for a gate recording and for a
+copy with `RT_FORMAT` 23 and the 12-byte entry, 0 for a copy in format 24's shape (an 8-byte
+entry), a file that is not a recording and a 3-byte file, −1 for a missing file and for one the
+harness held open exclusively. A name too long
 for its lock path is counted unreadable before the sort, outside N.
 
 **Its events have 59 sites of their own** (the attach log's `recorder: N event sites in`),
