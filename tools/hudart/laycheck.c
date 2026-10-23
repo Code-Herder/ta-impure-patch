@@ -255,7 +255,7 @@ int main(int argc, char** argv)
             printf(",\"part\":"); json_str(tagpu_hudlay_part(l, p->part)->name, (int)strlen(tagpu_hudlay_part(l, p->part)->name));
             printf(",\"alpha\":%u", painted(o, p));
             /* a composed part's pieces from its snapped corner, as hud.js keeps them (`quads`) */
-            if (argc == 5 && (tagpu_hudlay_part(l, p->part)->kind == HK_GRID || tagpu_hudlay_part(l, p->part)->kind == HK_NINE)) {
+            if (argc == 5 && tagpu_hudlay_part(l, p->part)->kind != HK_TILE) {
                 static HUDQUAD q[HUD_MAXQUAD];
                 const float dpx = (float)atof(argv[4]);
                 const double X = tagpu_hud_snap(p->r.x * dpx), Y = tagpu_hud_snap(p->r.y * dpx);   /* the corner */

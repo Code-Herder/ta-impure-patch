@@ -6,9 +6,7 @@
 /* a part: its art is painted behind its children */
 .hud .art { position: absolute; isolation: isolate; }
 .hud .art::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; }
-.hud .art.whole::before { background: var(--bi) center / 100% 100% no-repeat; }
-.hud .art.icon::before { background: var(--bi) center / contain no-repeat; }
-/* grid-sliced and 9-slice parts and tiled fills are composed into one image at the drawn size (hud.js, composing) */
+/* every part is composed into one image at the drawn size, as the DLL samples it (hud.js, composing) */
 .hud .art.composed { background-size: 100% 100%; }
 .hud .art.composed::before { display: none; }
 /* a part the kit lacks is whitebox: a mid grey plate with a dark edge, darker while pressed; an icon it lacks is its

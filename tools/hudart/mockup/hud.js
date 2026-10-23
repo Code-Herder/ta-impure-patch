@@ -16,7 +16,7 @@ const HUD = (() => {
   async function load(base) {
     root = base;
     [L, K] = await Promise.all([fetch(base + 'layout.json').then(r => r.json()), fetch(base + 'kit.json').then(r => r.json()).then(j => j.parts)]);
-    await Promise.all(Object.keys(K).filter(n => ['grid', 'nine', 'tile'].includes(K[n].kind)).map(n => {
+    await Promise.all(Object.keys(K).map(n => {
       const im = new Image(); im.src = url(n); IMG[n] = im; return im.decode();
     }));
     return { layout: L, kit: K };
@@ -90,22 +90,18 @@ const HUD = (() => {
     // a part the kit lacks is drawn as whitebox; an icon it lacks, as its stand-in glyph
     if (!k && part.startsWith('i_')) return `<div class="art noicon ${cls}" data-wb="${esc(WB_GLYPH[part.slice(2)] || part.slice(2))}" style="${rect(b)};--wbs:${+(b.h * .9).toFixed(3)}${style}"${attrs(data)}></div>`;
     if (!k) return `<div class="art noart ${cls}" style="${rect(b)}${style}"${attrs(data)}>${inner}</div>`;
-    if (k.kind === 'grid' || k.kind === 'nine' || k.kind === 'tile')
-      return `<div class="art composed ${cls}" style="${rect(b)}${style}" data-${k.kind === 'tile' ? 'tile' : 'gp'}="${part}"${attrs(data)}>${inner}</div>`;
-    return `<div class="art ${k.kind} ${cls}" data-part="${part}" style="${rect(b)};${vars(part)}${style}"${attrs(data)}>${inner}</div>`;
+    // every part is composed on a canvas as the DLL's sampler draws it (paint), a whole or an icon part as one piece
+    return `<div class="art composed ${cls}" style="${rect(b)}${style}" data-${k.kind === 'tile' ? 'tile' : 'gp'}="${part}"${attrs(data)}>${inner}</div>`;
   }
-  // the custom property that draws a whole or icon part
-  const vars = part => `--bi:url('${url(part)}')`;
   // a held button shows its pressed part, and its face sinks; released, it shows its own part again
   function press(el, down) {
     const part = down ? el.dataset.down : el.dataset.up;
     if (part && !K[part]) { el.classList.toggle('pressed', down); return; }
     if (!part) return;
-    if (el.dataset.gp) el.dataset.gp = part;
-    else el.style.setProperty('--bi', `url('${url(part)}')`);
+    el.dataset.gp = part;
     el.classList.toggle('pressed', down);
     pin(layer);   // the face moves
-    if (el.dataset.gp) composeOne(el);
+    composeOne(el);
   }
   const icon = (name, b, cls = '') => art('i_' + name, b, '', cls);
   // text in style `st`: its size shrinks to the box's height / s.fit when the box is lower than the style's line
@@ -549,8 +545,9 @@ const HUD = (() => {
     for (let k = 0; k < 4; k++)
       o[k] = (p[(c + a) * 4 + k] * (1 - fx) + p[(c + b) * 4 + k] * fx) * (1 - fy) + (p[(d + a) * 4 + k] * (1 - fx) + p[(d + b) * 4 + k] * fx) * fy;
   }
-  /* The pieces drawn as the DLL's part shader draws them: a pixel is a piece's when its centre is inside it, its
-     coordinates interpolated at that centre, and sampled through a linear filter between the two mip levels its
+  /* The pieces drawn as the DLL's part shader draws them: a pixel is a piece's when its centre is inside it (one on
+     a left or top edge in, one on a right or bottom edge out, as the rasteriser's rule has it), its coordinates
+     interpolated at that centre, and sampled through a linear filter between the two mip levels its
      footprint falls between, the level of detail the log2 of the larger of the piece's two scales in texels a pixel
      (the sampler: tagpu_vk_hud.c mk_sampler). */
   function paint(n, quads, Wd, Hd, wrap) {
@@ -560,7 +557,8 @@ const HUD = (() => {
       const su = (u1 - u0) / (x1 - x0), sv = (v1 - v0) / (y1 - y0);
       const lod = Math.min(L.length - 1, Math.max(0, Math.log2(Math.max(Math.abs(su) * w0, Math.abs(sv) * h0))));
       const l0 = Math.floor(lod), f = lod - l0, l1 = Math.min(L.length - 1, l0 + 1);
-      for (let y = Math.max(0, y0); y < Math.min(Hd, y1); y++) for (let x = Math.max(0, x0); x < Math.min(Wd, x1); x++) {
+      const xa = Math.max(0, Math.ceil(x0 - 0.5)), xb = Math.min(Wd, Math.ceil(x1 - 0.5));
+      for (let y = Math.max(0, Math.ceil(y0 - 0.5)); y < Math.min(Hd, Math.ceil(y1 - 0.5)); y++) for (let x = xa; x < xb; x++) {
         const u = u0 + (x + 0.5 - x0) * su, v = v0 + (y + 0.5 - y0) * sv;
         bilinear(L[l0], u * L[l0].w, v * L[l0].h, wrap, A);
         if (f > 0) { bilinear(L[l1], u * L[l1].w, v * L[l1].h, wrap, B); for (let k = 0; k < 4; k++) A[k] += (B[k] - A[k]) * f; }
@@ -612,6 +610,18 @@ const HUD = (() => {
                     sx[i] / pw, sy[j] / ph, sx[i + 1] / pw, sy[j + 1] / ph]);
     }
     return cache[key] = { url: paint(n, quads, Wd, Hd, false), quads };
+  }
+  // a whole part: one piece over the box; an icon: one piece its own aspect, as large as fits, centred, its edges
+  // where they fall (tagpu_hudlay_expand, HK_ICON)
+  function composePiece(n, Wd, Hd) {
+    const k = K[n], img = IMG[n], key = ['1', n, Wd, Hd].join('|');
+    if (cache[key]) return cache[key];
+    let q = [0, 0, Wd, Hd, 0, 0, 1, 1];
+    if (k.kind === 'icon') {
+      const s = Math.min(Wd / img.naturalWidth, Hd / img.naturalHeight), iw = img.naturalWidth * s, ih = img.naturalHeight * s;
+      q = [(Wd - iw) / 2, (Hd - ih) / 2, (Wd - iw) / 2 + iw, (Hd - ih) / 2 + ih, 0, 0, 1, 1];
+    }
+    return cache[key] = { url: paint(n, [q], Wd, Hd, false), quads: [q] };
   }
   // a tiled fill: one piece the box's height, its period the part's width at that height in whole pixels, repeating
   function composeTile(n, Wd, Hd) {
@@ -700,7 +710,8 @@ const HUD = (() => {
   function composeOne(e) {
     const [X0, Y0, X1, Y1] = e.dataset.dev.split(' ').map(Number), n = e.dataset.gp || e.dataset.tile;
     const w = X1 - X0, h = Y1 - Y0;
-    const out = e.dataset.tile ? composeTile(n, w, h) : K[n].kind === 'nine' ? composeNine(n, w, h, layerPx) : composeGrid(n, w, h, layerPx);
+    const kind = K[n].kind, out = e.dataset.tile ? composeTile(n, w, h) : kind === 'nine' ? composeNine(n, w, h, layerPx)
+      : kind === 'grid' ? composeGrid(n, w, h, layerPx) : composePiece(n, w, h);
     e.style.backgroundImage = `url("${out.url}")`;
     if (out.quads) e.dataset.quads = JSON.stringify(out.quads);
     e.dataset.made = e.dataset.dev;

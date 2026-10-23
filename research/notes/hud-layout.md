@@ -640,7 +640,7 @@ metrics. It compares every part's, solid's, ring's, dot's and clip's device pixe
 box the DLL's draw snaps (`laycheck.c` prints it), the box `hud.js` pinned, and the box Chrome
 painted; for a ring its inner box as well, and the four sides Chrome painted against the edges they
 share.
-And it compares every grid and 9-slice part's pieces — the destination edges in device pixels from
+And it compares every part's pieces but a tiled fill's — the destination edges in device pixels from
 the snapped corner, the source rectangle — with `tagpu_hudlay_expand`'s. A box is compared in
 units by the numbers `hud.js` pinned it from, a text's baseline as Chrome lays it out. It exits 1
 on a box or baseline more than its tolerance off, a part's or a text's opacity more than one level
@@ -655,7 +655,8 @@ box's device pixels and every grid and 9-slice part's pieces (2026-10-23): the t
 the cases the 1615 parts, 974 solids, 173 dots and 25 clips are each on the same pixels in the
 DLL, pinned and painted; and on all thirty with the live HUD and every inset edge a ring
 (2026-10-23): 1689 parts, 977 solids, 358 rings (inner edges and sides too), 173 dots and 30
-clips, each on the same pixels in the DLL, pinned and painted. A halo
+clips, each on the same pixels in the DLL, pinned and painted, and the pieces of all 1659 parts
+that are not tiled fills, icons and whole parts among them, the same. A halo
 polyline is told from its line by its `stroke-opacity`, which only the halo carries. At 4K every
 box is within 0.018 units and every baseline within 0.0145 (the twenty-two cases, 2026-10-23). The Oswald residual above is named, not failed, and only where the same rule on
 Chrome's own rounded ascent and descent (`measureText`'s `fontBoundingBoxAscent`/`Descent`) gives

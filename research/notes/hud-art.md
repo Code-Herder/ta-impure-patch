@@ -341,7 +341,7 @@ tools/hudart/capture.sh 'http://127.0.0.1:8000/tools/hudart/mockup/?paused&res=3
   new wells ([The replay HUD's layout](hud-layout.md), *Checking the C against the mockup*).
 - **The mockup at native 4K.**
     - `capture.sh` lays the page out at device scale factor 1 and screenshots at device scale.
-    - It waits until every grid part and fill is composed, and prints `missing art`, which must
+    - It waits until every part is composed, and prints `missing art`, which must
       be 0.
     - Look at the capture at native 4K, never through a downscaled copy.
     - Repeat at HUD 75, 100 and 125, where a repeat shows more copies.
@@ -603,15 +603,23 @@ DLL emits textured quads.
       middle rows at the top edge's drawn width over its slice, the bottom row at the bottom
       edge's. This is how CSS `border-image-repeat: round` sizes the tile.
     - In the DLL each copy is one more quad with the band's own texture coordinates.
-- **The mockup composes the grid and 9-slice parts and the tiled fills itself,** on a canvas of
-  the snapped box's size (`composeGrid`, `composeNine`, `composeTile`), and samples every piece
+- **The mockup composes every part itself,** on a canvas of the snapped box's size
+  (`composeGrid`, `composeNine`, `composeTile`, and `composePiece` for a whole part or an icon),
+  and samples every piece
   as the DLL's GPU does (`paint`): from the part's premultiplied texels and a mip chain made as
   `blit_chain` makes it, through a linear filter between the two levels the piece's larger scale
   falls between (`mk_sampler` in `tagpu_vk_hud.c`). Chrome's own resampling differs: its
   `border-image` drew the Take over button's middle with no mip levels, so the scratches painted
   into it showed as aliased "/" marks the game's minified middle does not have, and its canvas
   `drawImage` gives the same picture at every `imageSmoothingQuality`, sharper than the game's
-  along the less-minified axis. A grid or 9-slice part keeps its pieces in `data-quads`, and
+  along the less-minified axis. Its CSS background is sharper than the GPU's trilinear sample as
+  well: an icon drawn that way had more contrast than the game's, the enabled fwd of the live
+  strip a luminance spread of 39.5 against the game's 36.5 at 1920 × 1080 and HUD 100 (46.0
+  against 45.5 at 4K and 150), and composed by `paint` it has the game's to the tenth, its
+  pixels a mean 0.52 levels from the game's against 3.31 (MEASURED 2026-10-23 on the runner's
+  captures of the live strip, fed the game's own dump). A pixel is a piece's when its centre is
+  inside it, as the rasteriser decides, so an icon's fractional edges fall where the DLL's do.
+  Every part but a tiled fill keeps its pieces in `data-quads`, and
   `tools/hudart/laycheck.py` compares them, edge for edge, with the DLL's.
 - **The DLL's bound.** The DLL draws a part into at most `HUD_MAXQUAD` = (2 · `HUD_MAXBAND` + 1)²
   = 289 quads, `HUD_MAXBAND` being 8 (`tagpu_hudlay.h`). That is every cell of the largest grid
@@ -623,8 +631,8 @@ DLL emits textured quads.
     - The mockup does not cap the copies.
 - **A tiled fill** is scaled to its drawn height and repeated along x at a whole-pixel period, one
   piece whose texture coordinates run past 1 through a repeating sampler.
-- **An icon** is drawn whole inside its box, keeping its aspect, centred. **A whole part** is
-  stretched to its box. The mockup draws both as CSS backgrounds.
+- **An icon** is drawn whole inside its box, keeping its aspect, centred, its edges where they
+  fall. **A whole part** is stretched to its box. Each is one piece.
 
 **The timeline housing at 3840 × 2160,** with the game's HUD at 150 (a 192-pixel panel).
 It is 1216 / s − 310 units long, s being the replay HUD's scale; its fixed cells are 144.13 units

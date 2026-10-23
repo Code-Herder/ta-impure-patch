@@ -120,8 +120,7 @@ COLLECT = r"""() => {
     if (!e.getClientRects().length || getComputedStyle(e).visibility === 'hidden') continue;
     const dim = !!(e.closest('.row') && e.closest('.row').style.filter);
     if (e.classList.contains('art')) {
-      let part = e.dataset.gp || e.dataset.tile;
-      if (!part) { const m = /parts\/([^/]+)\.png/.exec(e.style.getPropertyValue('--bi')); part = m && m[1]; }
+      const part = e.dataset.gp || e.dataset.tile;
       els.push({ kind: 'part', part, r: R(e), dim, alpha: opacity(e), quads: e.dataset.quads ? JSON.parse(e.dataset.quads) : null,
                  dev: dev(e), painted: painted(e) });
     }
