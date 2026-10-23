@@ -526,8 +526,12 @@ static void slice_disarm(void);
 static void slice_reset(void);
 static void query_reset(void);
 
+static void sw_refused(unsigned id, unsigned del, const char* why);
+
 static void replay_close(void)
 {
+    /* a switch, or a deletion waiting for one, that the frame visit never took has its outcome */
+    if (s_sw.pending) sw_refused(s_sw.id, s_sw.then_delete, "the playing ended");
     /* Start's undo precedes thread creation; level teardown follows the engine's
        load-done gate. No loader can still consume this immutable plan. */
     InterlockedExchange(&s_mp_arena.state,MP_ARENA_OFF);
@@ -9111,23 +9115,30 @@ static void span_chain(void)
    - RE-CHAINED, when the reader has read nothing that is not on both chains (recr_rechain, THE
      RE-CHAIN'S INVARIANT): the reader is then exactly one that had played the new timeline from
      the start, and the host holds its world at the GameTime it is at, so nothing on the host
-     moves. A level held at a boundary is not shared: the boundary's step played the iteration's
-     events and read no images after it, so the reader is not where a playing of the new chain
-     would stand, and its seek serves it.
+     moves. Two states are not shared whatever the reader holds, and the seek serves them: a
+     level held at a boundary, whose step played the iteration's events and read no images after
+     it, so the reader is not where a playing of the new chain would stand; and a playing that
+     has stopped (s_over -- a boundary's seek that failed, a read that failed), which only a seek
+     starts again (seek_run clears s_over).
    - SOUGHT, otherwise: a second reader of the same file, chosen on the new chain, and THE SEEK on
      it to the host's GameTime + 1, which THE SEEK's invariant makes what a playing of the new
      timeline holds there. The first reader is not moved: every refusal of seek_run comes before
      its first host write (R1), so a refused switch puts the first reader back and the playing
-     goes on as if it had not been asked (seek_run, at `sw`).
-   THE CLAIMS' ORDER (tagpu_recfile.h, THE CLAIMS): every timeline a reader of this playing reads
-   is claimed, under the file queue's lock, from before that reader's scan until after it closes
-   -- the new timeline claimed before the re-chain's scan or the second reader opens, the left one
-   released after its reader closes (or, re-chained, after the reader has stopped reading it as
-   its last timeline). So "the timeline that plays is never deleted" holds through the window in
-   which two readers are open.
+     goes on as if it had not been asked (seek_run, at `sw`). THE RESIDUAL, in a multiplayer
+     playing: a refusal from the second reader's materializer (mp_follow on B failing, mp_fail)
+     is sticky and stops the playing, as it stops it after any refused seek.
+   THE CLAIMS' ORDER (tagpu_recfile.h, THE CLAIMS): the timeline a playing chooses is claimed,
+   under the file queue's lock, before the scan it is chosen from, and released after its reader
+   stops playing it -- the new timeline claimed before the re-chain's scan or the second reader
+   opens, the left one released after its reader closes (or, re-chained, once the reader plays
+   the new one). So "the timeline that plays is never deleted" holds through the window in which
+   two readers are open. The HUD's walker reads unclaimed; what keeps its bytes is THE FILE'S
+   LIFETIME below.
    THE FILE'S LIFETIME: the second reader opens the playing's path while the first holds it open,
    and an open reader's file can be neither replaced nor deleted (recr_open shares no DELETE;
    file_compact's replacement fails on an open file), so both name one file; recr_same checks it.
+   A deletion writes only a metadata block after the file's last, so a reader of a deleted
+   timeline, the walker's included, reads blocks nothing rewrites.
    A deletion of the watched timeline is this switch first, to the nearest live timeline up its
    chain, and the deletion queued once the switch has released the claim, so the worker's in-use
    test passes by construction (tagpu_replay_fork_op). */
@@ -9186,6 +9197,7 @@ static void sw_delete(unsigned del)
     for (i = 0; i < FORK_TICKETS && s_fk[i].ticket; i++) {}
     t = i < FORK_TICKETS ? fork_request(s_path, REC_FILE_DELETE, del, NULL, NULL) : 0;
     if (!t) {
+        tagpu_logf("replay: %s: the HUD's fork request refused: file worker unavailable", s_name);
         result_set(TAGPU_REPLAY_RQ_FORK, TAGPU_REPLAY_FORK_DELETE, 0, 0, "file worker unavailable");
         return;
     }
@@ -9289,7 +9301,7 @@ static void tl_switch(char* ta)
         sw_refused(id, del, why);
         return;
     }
-    k = s_hold ? 0 : recr_rechain(s_rd, id, why, sizeof why);
+    k = s_hold || s_over ? 0 : recr_rechain(s_rd, id, why, sizeof why);
     if (k < 0) {
         recfile_release(id);
         sw_refused(id, del, why);
@@ -9893,7 +9905,10 @@ int tagpu_replay_fork_op(int op, unsigned id, const char* stem)
             snprintf(why, sizeof why, "four fork requests are already waiting");
         else if (op == TAGPU_REPLAY_FORK_DELETE && id == s_tl) {
             fallback = fork_fallback();
-            if (fallback == UINT32_MAX)
+            if (!s_tlc.n)
+                snprintf(why, sizeof why, "the timelines cannot be listed, so none to watch "
+                         "instead is known");
+            else if (fallback == UINT32_MAX)
                 snprintf(why, sizeof why, "the last live timeline of this chain plays");
             else if (s_sw.pending || (s_seek.pending && s_seek.mode == SK_TAKEOVER))
                 snprintf(why, sizeof why, "another request is waiting");
@@ -9911,7 +9926,6 @@ int tagpu_replay_fork_op(int op, unsigned id, const char* stem)
         s_sw.pending = 1;
         s_sw.id = fallback;
         s_sw.then_delete = id;
-        s_sw.prev = NULL;
         tagpu_logf("replay: %s: the HUD's deletion of timeline %u waits for the switch to "
                    "timeline %u", s_name, id, fallback);
         return 1;
@@ -9980,7 +9994,6 @@ int tagpu_replay_watch_timeline(unsigned id)
     s_sw.pending = 1;
     s_sw.id = id;
     s_sw.then_delete = 0;
-    s_sw.prev = NULL;
     tagpu_logf("replay: %s: watching timeline %u waits for the frame visit", s_name, id);
     return 1;
 }

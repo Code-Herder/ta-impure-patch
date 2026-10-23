@@ -4027,6 +4027,82 @@ static int outcomes_reader(const RecCodecParams* p)
     return ok;
 }
 
+/* the reader read on from where it stands to GameTime T: 1 there, 0 when a read stopped first */
+static int rd_tick_to(RecReader* r, uint32_t T, char* why, unsigned cap)
+{
+    while (recr_world(r)->tick < T)
+        if (recr_tick(r, why, cap) != 1) return 0;
+    return recr_world(r)->tick == T;
+}
+
+/* recr_rechain's edges (tagpu_recreader.c, THE RE-CHAIN'S INVARIANT) on a file of the original,
+   GameTime 1 to 44, and two forks of it, 1 from 25 and 2 from 31: the original's reader at 24,
+   fork 1's fork_at - 1, re-chains onto 1, whose boundary its next read then meets; at 25 it does
+   not, and reads on in the original; a reader that has read nothing, one that has read its end,
+   and one in fork 1's segment asked for fork 2, whose chain does not hold that segment, are not
+   shared and stay as they were; a timeline the file lacks is refused. */
+static int outcomes_rechain(const RecCodecParams* p)
+{
+    char dir[MAX_PATH], path[MAX_PATH], why[256];
+    RecBytes f, x;
+    RecStream st;
+    RecReader* r;
+    int ok = 1, k;
+    memset(&f, 0, sizeof f);
+    memset(&x, 0, sizeof x);
+    if (!GetTempPathA(sizeof dir, dir)) return expect("rechain: a temporary folder", 0, 1);
+    snprintf(path, sizeof path, "%scodectest-rechain.imprec", dir);
+    if (!reccodec_stream_begin(&st, p)) return expect("rechain: the codec's stream", 0, 1);
+    rb_put(&f, REC_MAGIC, 8);
+    rd_segment(&f, &st, 1, &x, 0, 0, 1, 21, 0);
+    st.chain = 0;
+    rd_segment(&f, &st, 1, &x, 1, 25, 25, 3, 40);
+    st.chain = 0;
+    rd_segment(&f, &st, 1, &x, 2, 31, 31, 3, 50);
+    ok &= expect("rechain: the file is written", rd_write(path, &f), 1);
+
+    r = recr_open(path, why, sizeof why);
+    k = r && rd_tick_to(r, 24, why, sizeof why) ? recr_rechain(r, 1, why, sizeof why) : -9;
+    ok &= expect("rechain: the original at 24, fork 1's fork_at - 1, re-chains onto 1", k, 1);
+    ok &= expect("  the reader plays timeline 1", r && k == 1 ? (int)recr_selected(r)->id : -1, 1);
+    ok &= expect("  and its next read is fork 1's boundary",
+                 r && k == 1 ? recr_tick(r, why, sizeof why) : -9, RECR_BOUNDARY);
+    recr_close(r);
+
+    r = recr_open(path, why, sizeof why);
+    k = r && rd_tick_to(r, 25, why, sizeof why) ? recr_rechain(r, 1, why, sizeof why) : -9;
+    ok &= expect("rechain: at 25, fork 1's first iteration, it does not", k, 0);
+    ok &= expect("  the reader still plays the original",
+                 r && !k ? (int)recr_selected(r)->id : -1, 0);
+    ok &= expect("  and reads on in it", r && !k ? recr_tick(r, why, sizeof why) == 1 &&
+                 recr_world(r)->tick == 26 : 0, 1);
+    recr_close(r);
+
+    r = recr_open(path, why, sizeof why);
+    ok &= expect("rechain: a reader that has read nothing is not shared",
+                 r ? recr_rechain(r, 1, why, sizeof why) : -9, 0);
+    while (r && (k = recr_tick(r, why, sizeof why)) == 1) {}
+    ok &= expect("rechain: one that has read its end is not shared",
+                 r && !k ? recr_rechain(r, 1, why, sizeof why) : -9, 0);
+    ok &= expect("rechain: a timeline the file lacks is refused",
+                 r ? recr_rechain(r, 9, why, sizeof why) : -9, -1);
+    recr_close(r);
+
+    r = recr_open(path, why, sizeof why);
+    k = r && recr_timeline(r, 1, why, sizeof why) == 1 &&
+        recr_seek(r, 27, 0, NULL, NULL, why, sizeof why) == 1 ? recr_rechain(r, 2, why, sizeof why)
+                                                              : -9;
+    ok &= expect("rechain: fork 1's reader at 27, asked for fork 2, is not shared", k, 0);
+    ok &= expect("  and still plays timeline 1", r && !k ? (int)recr_selected(r)->id : -1, 1);
+    recr_close(r);
+
+    DeleteFileA(path);
+    reccodec_stream_end(&st);
+    rb_free(&f);
+    rb_free(&x);
+    return ok;
+}
+
 /* THE YARD RULE (tagpu_recfmt.h) through the DLL's reader: a file whose first iteration holds
    slot 1 (unit ID 2) alive and then `nev` events, each {kind, unit ID, yard} (a feature call and
    its end are the feature tick's), and a second
@@ -5954,6 +6030,7 @@ static int cmd_outcomes(void)
     ok &= outcomes_unit_coder(&p);
 #ifdef _WIN32
     ok &= outcomes_reader(&p);
+    ok &= outcomes_rechain(&p);
     ok &= outcomes_yard_rule();
 #endif
     ok &= outcomes_sprays();

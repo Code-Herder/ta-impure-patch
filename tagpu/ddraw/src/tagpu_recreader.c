@@ -3296,7 +3296,8 @@ int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
     if (!r) { recfile_unlock(&lock); return 0; }
     if (segs_scan(r, 1, why, cap) < 0) goto done;
     s = seg_index(r, id);
-    if (op != REC_FILE_COMPACT && (s == RECR_TIMELINES || r->seg[s].t.state != REC_TL_LIVE)) {
+    if (op != REC_FILE_COMPACT && op != REC_FILE_TOUCH &&
+        (s == RECR_TIMELINES || r->seg[s].t.state != REC_TL_LIVE)) {
         snprintf(why, cap, "timeline %u is absent or deleted", id);
         goto done;
     }
@@ -3318,6 +3319,10 @@ int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
                 k += (size_t)snprintf(touched + k, sizeof touched - k, "%s%u", nt ? ", " : "",
                                       used[i].id);
             nt++;
+        }
+        if (!nt) {
+            snprintf(why, cap, "no timeline the playing used is live");
+            goto done;
         }
     }
     if (op == REC_FILE_TOUCH || op == REC_FILE_DELETE) {
