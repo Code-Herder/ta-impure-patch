@@ -65,7 +65,10 @@ typedef struct RecHeader {
     char         build[RECR_TEXT], map[RECR_TEXT], settings_map[RECR_TEXT], layout[RECR_TEXT + 8];
     char         globals[RECR_TEXT + 8];    /* RT_GLOBALS: replay-globals.tsv's SHA-256       */
     unsigned     has_settings_map;
+    unsigned     has_wallclock;             /* RT_WALLCLOCK: the start as a FILETIME, UTC, and
+                                               the local time's offset from UTC in minutes    */
     uint64_t     wallclock;
+    int          utc_offset;
     unsigned     has_timeline, tl_id, tl_parent, tl_fork_at;   /* RT_TIMELINE, a fork's    */
     unsigned     nseats;
     RecSeat      seats[REC_PLAYERS];            /* in the header's order               */
@@ -240,6 +243,10 @@ int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap);
    our recordings in a format it does not (its magic, header block and format entry read), -1
    anything else, a file it cannot open or read among them. */
 int recr_format_of(const char* path);
+/* The start `path`'s header records (RT_WALLCLOCK), as a FILETIME in UTC, for the prune's order:
+   1 read, from a recording of any format whose header carries the entry as this build writes
+   it; 0 for a file that is not one of our recordings, cannot be read, or has no such entry. */
+int recr_wallclock_of(const char* path, FILETIME* utc);
 
 /* A TIMELINE is a segment of the file (tagpu_recfmt.h): the original, id 0, or a fork recorded
    from a takeover. A CHAIN is a timeline and its ancestors, root first: segment s covers

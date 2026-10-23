@@ -204,10 +204,18 @@ static int prune_one(const char* path)
     return r;
 }
 
-typedef struct { char name[MAX_PATH]; FILETIME t; } PruneFile;
+/* `t` the recorded start (recr_wallclock_of), `dated` 0 when the file has none */
+typedef struct { char name[MAX_PATH]; FILETIME t; int dated; } PruneFile;
+/* A total order, newest first: by the recorded start, a file without one after every dated file,
+   then by name, latest first (a recording's name begins with its local start time); names are
+   distinct as the file system compares them, without case. */
 static int newer_first(const void* a, const void* b)
 {
-    return CompareFileTime(&((const PruneFile*)b)->t, &((const PruneFile*)a)->t);
+    const PruneFile* x = (const PruneFile*)a;
+    const PruneFile* y = (const PruneFile*)b;
+    int c = y->dated - x->dated;
+    if (!c && x->dated) c = CompareFileTime(&y->t, &x->t);
+    return c ? c : _stricmp(y->name, x->name);
 }
 
 static int exiting(void)
@@ -242,11 +250,13 @@ static void prune(const char* fresh, unsigned keep)
                 c[PRUNE_ODD]++;
                 continue;
             }
-            all[n++].t = fd.ftLastWriteTime;
+            n++;
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
     if (n > keep) {
+        /* one open and one read of the header block a file, on this worker */
+        for (i = 0; i < n; i++) all[i].dated = recr_wallclock_of(all[i].name, &all[i].t);
         qsort(all, n, sizeof *all, newer_first);
         /* the process's exit waits for this worker (recfile_exit): it stops at the next file */
         for (i = keep; i < n && !exiting(); i++) c[prune_one(all[i].name)]++;

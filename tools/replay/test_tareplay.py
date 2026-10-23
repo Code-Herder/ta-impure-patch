@@ -714,16 +714,39 @@ class HeaderCopy(unittest.TestCase):
             src, dst = Path(d) / "a.imprec", Path(d) / "b.imprec"
             src.write_bytes(tarec.REC_MAGIC + self.block(tarec.RB_HEADER, head)
                             + self.block(tarec.RB_STREAM, b"\1\2\3\4"))
-            tareplay.header_copy(src, dst, tarec.RT_SETTINGS_MAP, tareplay.no_such_map)
+            tareplay.header_copy(src, dst, {tarec.RT_SETTINGS_MAP: tareplay.no_such_map})
             got, why = tarec.blocks(dst)
             self.assertIsNone(why)
             self.assertEqual(got[1], (tarec.RB_STREAM, 1, 9, b"\1\2\3\4"))
             ents = dict(tarec.entries(got[0][3]))
             self.assertEqual(ents[tarec.RT_SETTINGS_MAP], b"Q" * 14 + b"\0")
             self.assertEqual(ents[tarec.RT_LAYOUT], layout)
-            tareplay.header_copy(src, dst, tarec.RT_LAYOUT, tareplay.other_layout)
+            tareplay.header_copy(src, dst, {tarec.RT_LAYOUT: tareplay.other_layout})
             ents = dict(tarec.entries(tarec.blocks(dst)[0][0][3]))
             self.assertEqual(ents[tarec.RT_LAYOUT], b"1" + layout[1:])
+            self.assertEqual(ents[tarec.RT_SETTINGS_MAP], smap)
+            tareplay.header_copy(src, dst, {tarec.RT_LAYOUT: tareplay.other_layout,
+                                            tarec.RT_SETTINGS_MAP: tareplay.no_such_map})
+            ents = dict(tarec.entries(tarec.blocks(dst)[0][0][3]))
+            self.assertEqual((ents[tarec.RT_LAYOUT], ents[tarec.RT_SETTINGS_MAP]),
+                             (b"1" + layout[1:], b"Q" * 14 + b"\0"))
+            with self.assertRaisesRegex(tareplay.CouldNotRun, "no header entry"):
+                tareplay.header_copy(src, dst, {tarec.RT_WALLCLOCK: tareplay.started_at(0)})
+
+    def test_the_start(self):
+        """started_at rewrites RT_WALLCLOCK's FILETIME and keeps the offset, which tarec shows
+        as the local time"""
+        entry = self.entry
+        head = (entry(tarec.RT_FORMAT, struct.pack("<I", tarec.REC_FORMAT)) +
+                entry(tarec.RT_WALLCLOCK, struct.pack("<Qi", 0, 120)))
+        with tempfile.TemporaryDirectory() as d:
+            src, dst = Path(d) / "a.imprec", Path(d) / "b.imprec"
+            src.write_bytes(tarec.REC_MAGIC + self.block(tarec.RB_HEADER, head))
+            tareplay.header_copy(src, dst, {tarec.RT_WALLCLOCK: tareplay.started_at(1792764309)})
+            h = tarec.header(tarec.blocks(dst)[0][0][3])
+            self.assertEqual((h["wallclock"], h["utc_offset"]),
+                             ((1792764309 + 11644473600) * 10 ** 7, 120))
+            self.assertEqual(tarec.started(h), "2026-10-23 16:05:09 +02:00")
 
     def test_a_packed_header_is_refused(self):
         head = self.entry(tarec.RT_SETTINGS_MAP, b"Coast To Coast\0")
@@ -731,8 +754,8 @@ class HeaderCopy(unittest.TestCase):
             src = Path(d) / "a.imprec"
             src.write_bytes(tarec.REC_MAGIC + self.block(tarec.RB_HEADER, head, 0))
             with self.assertRaisesRegex(tareplay.CouldNotRun, "not stored"):
-                tareplay.header_copy(src, Path(d) / "b.imprec", tarec.RT_SETTINGS_MAP,
-                                     tareplay.no_such_map)
+                tareplay.header_copy(src, Path(d) / "b.imprec",
+                                     {tarec.RT_SETTINGS_MAP: tareplay.no_such_map})
 
 
 class TakeoverRoster(unittest.TestCase):

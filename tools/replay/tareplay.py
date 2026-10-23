@@ -1431,10 +1431,11 @@ def takeover_f(w, fx, out):
 
 # ---- W: the browser's Watch and the replay HUD ---------------------------------------------
 
-def header_copy(rec, dst, tag, edit):
-    """A copy of the recording `rec` at `dst` whose header entry `tag` holds edit(its bytes), of
-    the same length, the header block stored again with both its CRCs: a file the reader opens,
-    which the replay's own checks then judge. A header block is always stored (tagpu_recfmt.h)."""
+def header_copy(rec, dst, edits):
+    """A copy of the recording `rec` at `dst` whose first header block's entry of each tag of
+    `edits` holds edits[tag](its bytes), of the same length, the block stored again with both its
+    CRCs: a file the reader opens, which the replay's own checks then judge. A header block is
+    always stored (tagpu_recfmt.h)."""
     data = Path(rec).read_bytes()
     if data[:8] != tarec.REC_MAGIC:
         raise CouldNotRun(f"{rec}: not a recording")
@@ -1446,23 +1447,36 @@ def header_copy(rec, dst, tag, edit):
     if flags != tarec.RBF_STORED:
         raise CouldNotRun(f"{rec}: a header block with flags {flags:#x}, not stored")
     payload = bytearray(data[40:40 + packed])
-    at, found = 0, False
+    at, found = 0, set()
     while at + 4 <= len(payload):
         t, n = struct.unpack_from("<HH", payload, at)
-        if t == tag:
-            new = edit(bytes(payload[at + 4:at + 4 + n]))
+        if t in edits:
+            new = edits[t](bytes(payload[at + 4:at + 4 + n]))
             if len(new) != n:
-                raise CouldNotRun(f"{rec}: an edit of header entry {tag} changed its length")
+                raise CouldNotRun(f"{rec}: an edit of header entry {t} changed its length")
             payload[at + 4:at + 4 + n] = new
-            found = True
+            found.add(t)
         at += (4 + n + 3) & ~3
-    if not found:
-        raise CouldNotRun(f"{rec}: no header entry {tag}")
+    if set(edits) - found:
+        raise CouldNotRun(f"{rec}: no header entry {min(set(edits) - found)}")
     body = bytes(payload)
     head = struct.pack("<IHHIIIII", magic, kind, flags, first, upto, len(body), len(body),
                        zlib.crc32(body))
     head += struct.pack("<I", zlib.crc32(head))
     Path(dst).write_bytes(data[:8] + head + body + data[40 + packed:])
+
+
+def started_at(seconds):
+    """An edit of RT_WALLCLOCK: the start at `seconds` since 1970 (UTC), the offset from UTC
+    kept (tagpu_recfmt.h)."""
+    def edit(b):
+        return struct.pack("<Q", int((seconds + 11644473600) * 10 ** 7)) + b[8:]
+    return edit
+
+
+def older_format(b):
+    """RT_FORMAT's number less one: the format before this build's."""
+    return struct.pack("<I", struct.unpack("<I", b)[0] - 1)
 
 
 def other_layout(b):
@@ -1633,7 +1647,7 @@ def watch_lane(w, fx, rec, out, T):
               (f"{stem}-map", tarec.RT_SETTINGS_MAP, no_such_map, TERRAIN)]
     now = time.time()
     for k, (name, tag, edit, _) in enumerate(copies):
-        header_copy(rec, rd / f"{name}.imprec", tag, edit)
+        header_copy(rec, rd / f"{name}.imprec", {tag: edit})
         os.utime(rd / f"{name}.imprec", (now - 60 * k, now - 60 * k))
     shutil.copyfile(rec, rd / f"{stem}.imprec")
     os.utime(rd / f"{stem}.imprec", (now - 60 * len(copies),) * 2)
@@ -1796,11 +1810,14 @@ def check_or_fail(why, *args):
 
 def prune_step(w, fx, out, forked):
     """THE PRUNE (tagpu_recfile.h) on a recorded launch of the fixture's scenario, under the
-    instance's `keep 2` (Worker): replays\\ seeded, oldest last, with two plain copies of L's
-    recording, a favourite one, a recording with live forks (`forked`, the lane's own), one in the
-    format before this build's and a file that is not a recording. Besides the new recording the
-    newest is kept; of the rest the second plain copy and the older format go, and the favourite,
-    the forked one and the non-recording stay. Returns its check."""
+    instance's `keep 2` (Worker): replays\\ seeded, the recorded starts (RT_WALLCLOCK) oldest
+    last, with two plain copies of L's recording, a favourite one, a recording with live forks
+    (`forked`, the lane's own), one in the format before this build's and a file that is not a
+    recording, which has no recorded start. The files' last-write times run the other way, so a
+    prune that ordered by them would keep the non-recording as the newest and delete the first
+    plain copy. Besides the new recording the newest is kept; of the rest the second plain copy
+    and the older format go, and the favourite, the forked one and the non-recording stay.
+    Returns its check."""
     w.place(fx["fix"], fx["dll"])
     rd = w.gamedir / "replays"
     rd.mkdir(exist_ok=True)
@@ -1808,16 +1825,16 @@ def prune_step(w, fx, out, forked):
     seeds = ("plain-a", "plain-b", "starred", "forked", "older", "not-a-recording")
     for k, name in enumerate(seeds):
         dst = rd / f"0000 {name}.imprec"
+        start = {tarec.RT_WALLCLOCK: started_at(now - 600 * (k + 1))}
         if name == "forked":
-            shutil.copyfile(forked, dst)
+            header_copy(forked, dst, start)
         elif name == "older":
-            header_copy(rec, dst, tarec.RT_FORMAT,
-                        lambda b: struct.pack("<I", struct.unpack("<I", b)[0] - 1))
+            header_copy(rec, dst, {**start, tarec.RT_FORMAT: older_format})
         elif name == "not-a-recording":
             dst.write_bytes(b"not a recording")
         else:
-            shutil.copyfile(rec, dst)
-        os.utime(dst, (now - 600 * (k + 1),) * 2)
+            header_copy(rec, dst, start)
+        os.utime(dst, (now - 600 * (len(seeds) - k),) * 2)
     star = rd / "0000 starred.imprec"
     # an index line with the favourite flag set: name size format start last end fav played map
     # nseats marks (tagpu_replays.c, the index)

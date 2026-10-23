@@ -145,11 +145,12 @@ import re
 import struct
 import sys
 import zlib
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 24                           # the unit frame range-coded; transport and pad queries, BeginTransport and setSFXoccupy as owner starts; sprays against the last four, order nodes matched, projectile lanes; the unit listing from state; script slices, owner's queries, yards; the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
+REC_FORMAT = 25                           # the start's offset from UTC; the unit frame range-coded; transport and pad queries, BeginTransport and setSFXoccupy as owner starts; sprays against the last four, order nodes matched, projectile lanes; the unit listing from state; script slices, owner's queries, yards; the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -377,7 +378,8 @@ def header(payload):
         elif tag == RT_MODE: h["mode"] = u32
         elif tag == RT_MAP: h["map"] = b.decode("latin-1")
         elif tag == RT_START: h["start"] = u32
-        elif tag == RT_WALLCLOCK: h["wallclock"] = struct.unpack_from("<Q", b)[0]
+        elif tag == RT_WALLCLOCK and len(b) == 12:
+            h["wallclock"], h["utc_offset"] = struct.unpack_from("<Qi", b)
         elif tag == RT_SLOTS: h["slots"] = u32
         elif tag == RT_UNITS_EACH: h["units_each"] = u32
         elif tag == RT_UNITDEFS and len(b) == 8: h["unitdefs"] = struct.unpack_from("<II", b)
@@ -1813,6 +1815,18 @@ def codec_text(h):
             f"{len(prm.types)} unit types")
 
 
+def started(h):
+    """The header's recorded start (RT_WALLCLOCK) as its local time with the offset from UTC,
+    "2026-10-23 14:05:09 +02:00"; None when the header has none."""
+    if "wallclock" not in h:
+        return None
+    off = h["utc_offset"]
+    utc = datetime(1601, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=h["wallclock"] // 10)
+    local = utc.astimezone(timezone(timedelta(minutes=off)))
+    return (f"{local:%Y-%m-%d %H:%M:%S} {'-' if off < 0 else '+'}"
+            f"{abs(off) // 60:02d}:{abs(off) % 60:02d}")
+
+
 def cmd_info(path):
     sizes, flags = [], []
     all_blocks, stop = blocks(path, sizes, flags=flags)
@@ -1822,7 +1836,7 @@ def cmd_info(path):
     h, bl = segs[0]["header"], segs[0]["blocks"]
     print(f"{path}")
     print(f"  map {h.get('map')!r}, mode {h.get('mode')}, build {h.get('build')}, "
-          f"from GameTime {h.get('start')}")
+          f"from GameTime {h.get('start')}, started {started(h)}")
     print(f"  {h.get('slots')} unit slots, {h.get('units_each')} units each, "
           f"unit defs {h.get('unitdefs')}, layout {h.get('layout', '')[:12]}")
     o = h.get("options", {})

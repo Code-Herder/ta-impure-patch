@@ -27,11 +27,14 @@ void recfile_unlock(HANDLE* lock);
 
 enum RecFileOp { REC_FILE_TOUCH, REC_FILE_DELETE, REC_FILE_EXPORT, REC_FILE_COMPACT, REC_FILE_PRUNE };
 /* THE PRUNE. REC_FILE_PRUNE, requested as a new recording starts (`id` = how many to keep, `path`
-   the new recording, one of the `id`): the other replays\*.imprec newest first by last write, the
-   first `id` - 1 kept, and each older one deleted unless it is in use, has a live fork, or is a
-   favourite or bookmarked in replays\index.dat. A file that is not one of our recordings is kept;
-   one of another format is deleted like any other (this build can neither read its forks nor play
-   it). "Older" is by last write: a replay copied in with its old date counts as old.
+   the new recording, one of the `id`): the other replays\*.imprec newest first by the start their
+   header records (RT_WALLCLOCK, recr_wallclock_of), the first `id` - 1 kept, and each older one
+   deleted unless it is in use, has a live fork, or is a favourite or bookmarked in
+   replays\index.dat. A file with no recorded start (not one of our recordings, or a header without
+   the entry as this build writes it) sorts after every dated one, and ties go by name. A file that
+   is not one of our recordings is kept; one of another format is deleted like any other (this
+   build can neither read its forks nor play it). "Older" is by the recorded start: a replay copied
+   in counts by when it was recorded, whatever its file's dates.
    REC_KEEP is the count when the recorder's lever names none (`keep N`, tagpu_recorder.c). */
 #define REC_KEEP 50
 /* The worker owns copies of the paths. A full queue or an exiting process refuses the request;

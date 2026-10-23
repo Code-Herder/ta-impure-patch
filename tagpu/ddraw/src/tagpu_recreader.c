@@ -511,7 +511,13 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             h->has_mp_seats = 1;
             break;
         case RT_MAP:           text(h->map, sizeof h->map, p, n); break;
-        case RT_WALLCLOCK:     if (n == 8) memcpy(&h->wallclock, p, 8); break;
+        case RT_WALLCLOCK:
+            if (n == 12) {
+                memcpy(&h->wallclock, p, 8);
+                memcpy(&h->utc_offset, p + 8, 4);
+                h->has_wallclock = 1;
+            }
+            break;
         case RT_START:         if (n == 4) h->start = u32(p); break;
         case RT_FRAME:         if (n == 4) { h->has_frame = 1; h->frame = u32(p); } break;
         case RT_SLOTS:         if (n == 4) { h->slots = u32(p); seen |= 4; } break;
@@ -639,7 +645,7 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             break;
         }
         default:
-            break;      /* RT_WALLCLOCK, RT_LEVER: nothing the replay needs */
+            break;      /* RT_LEVER: nothing the replay needs */
         }
         at += (4 + (size_t)n + 3) & ~(size_t)3;
     }
@@ -2720,25 +2726,53 @@ RecReader* recr_open(const char* path, char* why, unsigned cap)
     return open_handle(f, path, why, cap, 0);
 }
 
-int recr_format_of(const char* path)
+/* `path`'s header block parsed into the returned reader's h, for recr_format_of and
+   recr_wallclock_of: *parsed 1 when header_parse took it, 0 when it refused it, h then holding
+   the entries its loop read before the refusal. The format entry, the writer's first, is read
+   before any check that can refuse the header, and the format is judged after the loop, so h
+   holds every entry of another format's header that comes before the first one this build finds
+   malformed, if any; NULL when
+   the file has no recording's magic and header block, or cannot be opened or read. */
+static RecReader* header_peek(const char* path, int* parsed)
 {
     RecReader* r = (RecReader*)calloc(1, sizeof *r);
     char magic[8], why[160];
     RecBlock b;
-    int k = -1;
-    if (!r) return -1;
+    if (!r) return NULL;
     r->f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
                        FILE_FLAG_SEQUENTIAL_SCAN, NULL);
     if (r->f != INVALID_HANDLE_VALUE && read_all(r->f, magic, 8) && !memcmp(magic, REC_MAGIC, 8)) {
         r->off = 8;
         if (block_read(r, &b, why, sizeof why) > 0 && b.kind == RB_HEADER) {
-            /* the format entry is read before any check that can refuse the header */
-            if (header_parse(&r->h, r->raw, r->rawn, why, sizeof why)) k = 1;
-            else if (r->h.format && !rec_format_supported(r->h.format)) k = 0;
+            *parsed = header_parse(&r->h, r->raw, r->rawn, why, sizeof why);
+            return r;
         }
     }
     recr_close(r);
+    return NULL;
+}
+
+int recr_format_of(const char* path)
+{
+    int parsed = 0, k = -1;
+    RecReader* r = header_peek(path, &parsed);
+    if (r && parsed) k = 1;
+    else if (r && r->h.format && !rec_format_supported(r->h.format)) k = 0;
+    recr_close(r);
     return k;
+}
+
+int recr_wallclock_of(const char* path, FILETIME* utc)
+{
+    int parsed = 0, got = 0;
+    RecReader* r = header_peek(path, &parsed);
+    if (r && r->h.has_wallclock) {
+        utc->dwLowDateTime = (DWORD)r->h.wallclock;
+        utc->dwHighDateTime = (DWORD)(r->h.wallclock >> 32);
+        got = 1;
+    }
+    recr_close(r);
+    return got;
 }
 
 RecReader* recr_dump_world(const char* path, char* why, unsigned cap)
