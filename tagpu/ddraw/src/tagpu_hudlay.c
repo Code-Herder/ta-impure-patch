@@ -1439,9 +1439,9 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
 }
 
 /* The kit's drawing, as quads, in the part's box snapped to whole pixels, each edge rounded half
-   up as Chrome snaps an element (the GPU's pixel-centre rule alone rounds an edge at exactly half a
-   pixel down: at 1920 x 1080 and HUD 100, 1.5 px a unit, the lanes plate's top at 874.5 drew from
-   row 874 against the mockup's 875). A grid-sliced part is drawn cell by cell, the cells sharing
+   up by tagpu_hud_snap, as hud.js pins the mockup's boxes (the GPU's pixel-centre rule alone rounds
+   an edge at exactly half a pixel down: at 1920 x 1080 and HUD 100, 1.5 px a unit, the lanes
+   plate's top at 874.5 drew from row 874 against the mockup's 875). A grid-sliced part is drawn cell by cell, the cells sharing
    their edges; a 9-slice part with its slice's edges kept at their size in units unless the box
    is smaller than both together, when all four shrink by one factor; a tiled fill scaled to its
    height and repeated along x at a whole-pixel period; an icon kept to its aspect and centred.
@@ -1489,8 +1489,8 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
 {
     const HUDPART* k;
     /* the box snapped as Chrome snaps an element's: each edge rounded half up to a whole pixel */
-    double x = floor(op->r.x * px + 0.5), y = floor(op->r.y * px + 0.5);
-    double w = floor((op->r.x + op->r.w) * px + 0.5) - x, h = floor((op->r.y + op->r.h) * px + 0.5) - y;
+    double x = tagpu_hud_snap(op->r.x * px), y = tagpu_hud_snap(op->r.y * px);
+    double w = tagpu_hud_snap((op->r.x + op->r.w) * px) - x, h = tagpu_hud_snap((op->r.y + op->r.h) * px) - y;
     int n = 0, i, j;
     if (op->kind != HOP_PART || op->part < 0 || op->part >= l->nparts || cap < 1) return 0;
     k = &l->part[op->part];
@@ -1509,13 +1509,13 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
            snapped size, as hud.js composes the part on a canvas of that size (composeGrid) */
         for (j = 0; j + 1 < ny; j++)
             for (i = 0; i + 1 < nx; i++) {
-                double x0 = floor(fx(&f, bx[i]) * px + 0.5), x1 = floor(fx(&f, bx[i + 1]) * px + 0.5);
-                double y0 = y + floor(fy(&f, by[j]) * px + 0.5), y1 = y + floor(fy(&f, by[j + 1]) * px + 0.5);
+                double x0 = tagpu_hud_snap(fx(&f, bx[i]) * px), x1 = tagpu_hud_snap(fx(&f, bx[i + 1]) * px);
+                double y0 = y + tagpu_hud_snap(fy(&f, by[j]) * px), y1 = y + tagpu_hud_snap(fy(&f, by[j + 1]) * px);
                 int c, m = k->xtile && i % 2 ? copies(x1 - x0, (bx[i + 1] - bx[i]) * px, extra) : 1;
                 if (x1 <= x0 || y1 <= y0) continue;
                 for (c = 0; c < m && n < cap; c++, n++) {
-                    q[n].x0 = (float)(x + x0 + floor((x1 - x0) * c / m + 0.5));
-                    q[n].x1 = (float)(x + x0 + floor((x1 - x0) * (c + 1) / m + 0.5));
+                    q[n].x0 = (float)(x + x0 + tagpu_hud_snap((x1 - x0) * c / m));
+                    q[n].x1 = (float)(x + x0 + tagpu_hud_snap((x1 - x0) * (c + 1) / m));
                     q[n].y0 = (float)y0; q[n].y1 = (float)y1;
                     q[n].u0 = (float)(bx[i] / k->design[0]); q[n].u1 = (float)(bx[i + 1] / k->design[0]);
                     q[n].v0 = (float)(by[j] / k->design[1]); q[n].v1 = (float)(by[j + 1] / k->design[1]);
@@ -1553,8 +1553,8 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
                 int c, mi = i == 1 ? m[j] : 1;
                 if (dx[i + 1] <= dx[i] || dy[j + 1] <= dy[j]) continue;
                 for (c = 0; c < mi && n < cap; c++, n++) {
-                    q[n].x0 = (float)(dx[i] + floor((dx[i + 1] - dx[i]) * c / mi + 0.5));
-                    q[n].x1 = (float)(dx[i] + floor((dx[i + 1] - dx[i]) * (c + 1) / mi + 0.5));
+                    q[n].x0 = (float)(dx[i] + tagpu_hud_snap((dx[i + 1] - dx[i]) * c / mi));
+                    q[n].x1 = (float)(dx[i] + tagpu_hud_snap((dx[i + 1] - dx[i]) * (c + 1) / mi));
                     q[n].y0 = (float)dy[j]; q[n].y1 = (float)dy[j + 1];
                     q[n].u0 = (float)su[i]; q[n].u1 = (float)su[i + 1]; q[n].v0 = (float)sv[j]; q[n].v1 = (float)sv[j + 1];
                 }
@@ -1562,7 +1562,7 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
         return n;
     }
     case HK_TILE: {
-        double ch = fmax(1, floor(h + 0.5)), tw = fmax(1, floor(k->pw * ch / k->ph + 0.5));
+        double ch = fmax(1, tagpu_hud_snap(h)), tw = fmax(1, tagpu_hud_snap(k->pw * ch / k->ph));
         q[0].x0 = (float)x; q[0].x1 = (float)(x + w); q[0].y0 = (float)y; q[0].y1 = (float)(y + h);
         q[0].u0 = 0; q[0].u1 = (float)(w / tw); q[0].v0 = 0; q[0].v1 = 1;
         return 1;

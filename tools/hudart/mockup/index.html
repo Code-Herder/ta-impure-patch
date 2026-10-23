@@ -242,7 +242,7 @@ layer.addEventListener('pointermove', e => {
   if (drag) {
     const u = unit(), st = state(), W = HUD.layout.window, win = $('#statwin');
     S.sw = { x: Math.max(0, Math.min(st.W - W.w, drag.ox + (e.clientX - drag.x) / u)), y: Math.max(0, Math.min(st.H - W.h, drag.oy + (e.clientY - drag.y) / u)) };
-    win.style.left = `calc(${S.sw.x} * var(--u))`; win.style.top = `calc(${S.sw.y} * var(--u))`;
+    win.style.setProperty('--x', S.sw.x); win.style.setProperty('--y', S.sw.y); HUD.pin(layer);
   }
 });
 window.addEventListener('pointerup', () => { if (drag) save(); seek = drag = null; });

@@ -3,8 +3,9 @@
      laycheck <art/hud dir> <state.json> [<CSS px a unit> <device px a unit>]
 
    With the two scales it also gives each text's baseline, in CSS pixels as the browser lays it
-   out, each fill's clip as the draw takes it, at least one device pixel wide, and each grid or
-   9-slice part's pieces in device pixels from its snapped corner (tagpu_hudlay_expand). The state is the mockup's own (index.html `state()`), so the two sides lay out the same
+   out, each fill's clip as the draw takes it, at least one device pixel wide, the device pixels each
+   part, solid, dot and clip is snapped to, and each grid or 9-slice part's pieces in device pixels
+   from its snapped corner (tagpu_hudlay_expand). The state is the mockup's own (index.html `state()`), so the two sides lay out the same
    game; tools/hudart/laycheck.py compares this output with the mockup's element boxes.
    Compiled natively by laycheck.py: tagpu_json.c and tagpu_hudlay.c are pure C99 for this. */
 #include <math.h>
@@ -209,11 +210,9 @@ int main(int argc, char** argv)
             if (argc == 5 && (tagpu_hudlay_part(l, p->part)->kind == HK_GRID || tagpu_hudlay_part(l, p->part)->kind == HK_NINE)) {
                 static HUDQUAD q[HUD_MAXQUAD];
                 const float dpx = (float)atof(argv[4]);
-                /* the corner and far edges as tagpu_hudlay_expand snaps them, in its arithmetic */
-                const double X = floor(p->r.x * dpx + 0.5), Y = floor(p->r.y * dpx + 0.5);
-                const double X1 = floor((p->r.x + p->r.w) * dpx + 0.5), Y1 = floor((p->r.y + p->r.h) * dpx + 0.5);
+                const double X = tagpu_hud_snap(p->r.x * dpx), Y = tagpu_hud_snap(p->r.y * dpx);
                 int m = tagpu_hudlay_expand(l, p, dpx, q, HUD_MAXQUAD), j;
-                printf(",\"snap\":[%.0f,%.0f,%.0f,%.0f],\"quads\":[", X, Y, X1, Y1);
+                printf(",\"quads\":[");
                 for (j = 0; j < m; j++)
                     printf("%s[%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%.6f,%.6f]", j ? "," : "", q[j].x0 - X, q[j].y0 - Y,
                            q[j].x1 - X, q[j].y1 - Y, q[j].u0, q[j].v0, q[j].u1, q[j].v1);
@@ -221,9 +220,21 @@ int main(int argc, char** argv)
             }
         }
         if (p->kind == HOP_SOLID || p->kind == HOP_DOT) printf(",\"rgba\":\"%08x\"", p->rgba);
+        /* the device pixels a part, a solid or a dot is drawn on, its box snapped in the draw's arithmetic
+           (tagpu_hudlay_expand, tagpu_huddraw.c snap) */
+        if (argc == 5 && (p->kind == HOP_PART || p->kind == HOP_DOT || (p->kind == HOP_SOLID && !(p->flags & HOPF_DROP)))) {
+            const float dpx = (float)atof(argv[4]);
+            printf(",\"snap\":[%.0f,%.0f,%.0f,%.0f]", tagpu_hud_snap(p->r.x * dpx), tagpu_hud_snap(p->r.y * dpx),
+                   tagpu_hud_snap((p->r.x + p->r.w) * dpx), tagpu_hud_snap((p->r.y + p->r.h) * dpx));
+        }
         if (p->clip.w >= 0 && p->kind != HOP_TEXT && p->kind != HOP_CHART) {
             HUDRECT k = argc == 5 ? tagpu_hudlay_clip(p, (float)atof(argv[4])) : p->clip;
             printf(",\"clip\":[%.4f,%.4f,%.4f,%.4f]", k.x, k.y, k.w, k.h);
+            if (argc == 5) {
+                const float dpx = (float)atof(argv[4]);
+                printf(",\"csnap\":[%.0f,%.0f,%.0f,%.0f]", tagpu_hud_snap(k.x * dpx), tagpu_hud_snap(k.y * dpx),
+                       tagpu_hud_snap((k.x + k.w) * dpx), tagpu_hud_snap((k.y + k.h) * dpx));
+            }
         }
         if (p->kind == HOP_TEXT) {
             const char* sn = tagpu_hudlay_globals(l)->style[p->style].name;

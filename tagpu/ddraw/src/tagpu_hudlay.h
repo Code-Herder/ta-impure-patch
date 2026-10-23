@@ -13,6 +13,7 @@
    Pure C99 and the C library, like tagpu_json.c, so tools/hudart/ compiles it natively.
 
    Every coordinate is in HUD units, from the screen's top left. */
+#include <math.h>
 #include <stdint.h>
 #include "tagpu_json.h"
 
@@ -282,6 +283,16 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
    that has begun always shows. The draw clips by pixel centre on a half-open rect, so one device
    pixel holds exactly one centre; hud.js gives a `.clip` box the same floor in CSS. */
 HUDRECT tagpu_hudlay_clip(const HUDOP* op, float px);
+
+/* A device coordinate rounded to the whole pixel an edge is drawn on: half up, as Chrome snaps an
+   element, with an edge less than a sixty-fourth of a pixel below a half counted as on it. The
+   layout computes in float and hud.js in double, and an edge that falls exactly on a half -- at
+   1.5 px a unit, any odd unit; at 4.5, a third of one -- comes out a hair either side of it by their
+   arithmetic: float's 24 bits leave under 2.5e-4 px a rounding below 4096 px, a few roundings an
+   edge [INFERRED from the format], and laycheck finds the two sides' edges equal on every box. The
+   margin makes both sides round such an edge up. hud.js pins its boxes and composes its parts by the
+   same rule (snapPx). */
+static inline double tagpu_hud_snap(double v) { return floor(v + 0.5 + 1.0 / 64); }
 
 /* Whether the state's teams are told apart: two or more, one of them with two players (hud.js,
    `headed`). The column's headers, the teams chip and the stats window's team split follow it. */

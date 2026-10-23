@@ -81,7 +81,13 @@ COLLECT = r"""() => {
   const hoverRow = HOVER, held = HELD;
   build();
   const u = unit(), s = document.querySelector('#stage').getBoundingClientRect();
-  const R = e => { const r = e.getBoundingClientRect(); return [(r.left - s.left) / u, (r.top - s.top) / u, r.width / u, r.height / u]; };
+  // a box in units: the exact one hud.js pinned it from, else (an SVG's own elements) Chrome's
+  const R = e => { if (e.dataset && e.dataset.ub) return e.dataset.ub.split(' ').map(Number);
+    const r = e.getBoundingClientRect(); return [(r.left - s.left) / u, (r.top - s.top) / u, r.width / u, r.height / u]; };
+  // the device pixels it is drawn on, and the ones Chrome painted its box on
+  const dev = e => e.dataset.dev ? e.dataset.dev.split(' ').map(Number) : null;
+  const d = window.devicePixelRatio || 1, painted = e => { const r = e.getBoundingClientRect();
+    return [r.left, r.top, r.right, r.bottom].map((v, i) => Math.round((v - (i % 2 ? s.top : s.left)) * d)); };
   const st = state();
   // a held control by its key: the act, and the index a lane's or a row's key carries
   if (held) { const [act, ix] = held.split(':');
@@ -106,7 +112,8 @@ COLLECT = r"""() => {
     if (e.classList.contains('art')) {
       let part = e.dataset.gp || e.dataset.tile;
       if (!part) { const m = /parts\/([^/]+)\.png/.exec(e.style.getPropertyValue('--bi')); part = m && m[1]; }
-      els.push({ kind: 'part', part, r: R(e), dim, alpha: opacity(e), quads: e.dataset.quads ? JSON.parse(e.dataset.quads) : null });
+      els.push({ kind: 'part', part, r: R(e), dim, alpha: opacity(e), quads: e.dataset.quads ? JSON.parse(e.dataset.quads) : null,
+                 dev: dev(e), painted: painted(e) });
     }
     if (e.dataset.act && !e.classList.contains('off')) {   // a disabled control takes no input
       const k = e.dataset.act + (e.dataset.val != null ? ':' + e.dataset.val : e.dataset.team != null ? ':' + e.dataset.team : e.dataset.seat != null ? ':' + e.dataset.seat
@@ -114,7 +121,7 @@ COLLECT = r"""() => {
       els.push({ kind: 'hot', key: k, r: R(e) });
     }
     if (e.dataset.track != null) els.push({ kind: 'hot', key: 'track', r: R(e) });
-    if (e.classList.contains('clip')) els.push({ kind: 'clip', r: R(e) });
+    if (e.classList.contains('clip')) els.push({ kind: 'clip', r: R(e), dev: dev(e), painted: painted(e) });
     if (e.classList.contains('t')) {
       // the baseline: an empty inline-block on the text's own line sits on it (the text and the probe
       // wrapped in one span, which takes the anonymous flex item's place and lays out as it does)
@@ -132,7 +139,7 @@ COLLECT = r"""() => {
     const bg = e.style.background || e.style.backgroundColor;
     if (bg && !e.classList.contains('art')) {
       const c = getComputedStyle(e).backgroundColor.match(/\d+/g).slice(0, 3).map(Number);
-      els.push({ kind: e.style.borderRadius ? 'dot' : 'solid', rgb: c, r: R(e), dim });
+      els.push({ kind: e.style.borderRadius ? 'dot' : 'solid', rgb: c, r: R(e), dim, dev: dev(e), painted: painted(e) });
     }
   }
   // the stats window's drop shadow, and the chart: its SVG's own numbers, in units from its origin
@@ -154,8 +161,12 @@ COLLECT = r"""() => {
     for (const t of svg.querySelectorAll(':scope > text'))
       els.push({ kind: 'svgtext', text: t.textContent, r: [o[0] + A(t, 'x'), o[1] + A(t, 'y'), 0, 0], size: A(t, 'font-size'),
                  anchor: { start: 0, middle: 1, end: 2 }[t.getAttribute('text-anchor') || 'start'], rgb: hex(t.getAttribute('fill')) });
-    for (const r of svg.querySelectorAll(':scope > rect'))
-      els.push({ kind: 'solid', rgb: hex(r.getAttribute('fill')), r: [o[0] + A(r, 'x'), o[1] + A(r, 'y'), A(r, 'width'), A(r, 'height')], dim: false });
+    // a solid by its own numbers (pinned, its attributes are snapped); a ring's edge is set aside, as the DLL's is
+    for (const r of svg.querySelectorAll(':scope > rect:not([data-edge])')) {
+      const [x, y, w, h] = r.dataset.r.split(' ').map(Number), b = r.getBoundingClientRect();
+      els.push({ kind: 'solid', rgb: hex(r.getAttribute('fill')), r: [o[0] + x, o[1] + y, w, h], dim: false, dev: r.dataset.dev.split(' ').map(Number),
+                 painted: [b.left - s.left, b.top - s.top, b.right - s.left, b.bottom - s.top].map(v => Math.round(v * d)) });
+    }
     // the body, in paint order: a group's halo (a dark colour's), its line, its cross
     let halo = false;
     for (const e of faint.children) {
@@ -170,7 +181,7 @@ COLLECT = r"""() => {
       }
     }
   }
-  return JSON.stringify({ state: st, els, u, d: window.devicePixelRatio || 1, chart });
+  return JSON.stringify({ state: st, els, u, d, chart });
 }"""
 
 
@@ -298,7 +309,7 @@ def main():
                     continue                      # an inset edge: a box-shadow in the mockup
                 cs[o["kind"]].append(o)
                 if "clip" in o and o["kind"] != "chart":     # a chart's clip is compared with its op
-                    cs["clip"].append({"r": o["clip"]})
+                    cs["clip"].append({"r": o["clip"], "snap": o.get("csnap")})
             ds = {k: [e for e in dom["els"] if e["kind"] == k] for k in cs}
             keys = {"part": lambda e: e["part"], "text": lambda e: e["text"], "hot": lambda e: e["key"],
                     "solid": lambda e: tuple(e["rgb"]) if "rgb" in e else tuple(int(e["rgba"][i:i + 2], 16) for i in (0, 2, 4)),
@@ -370,36 +381,23 @@ def main():
                             return a is None and b is None
                         return len(a) == len(b) and all(abs(x - y) <= (1e-3 if i < 4 else 1e-4)
                                                          for qa, qb in zip(a, b) for i, (x, y) in enumerate(zip(qa, qb)))
-                    def snapped_apart(c, d):
-                        """Chrome lays a box out in LayoutUnits, sixty-fourths of a CSS pixel summed down the
-                        element tree, the DLL in floats: an edge on a half pixel can come out a hair below it
-                        on one side and on or above it on the other, and snap a pixel apart. Then the pieces
-                        cannot be compared, and the box is held to the rect tolerance instead: True when the
-                        two snap apart with every such edge within it, False when they snap alike, None when
-                        an edge snaps apart by more."""
-                        if "snap" not in c:
-                            return False
-                        k = dom["u"] * dom["d"]
-                        r = d["r"]
-                        de = [r[0] * k, r[1] * k, (r[0] + r[2]) * k, (r[1] + r[3]) * k]
-                        ce = [c["r"][0] * k, c["r"][1] * k, (c["r"][0] + c["r"][2]) * k, (c["r"][1] + c["r"][3]) * k]
-                        apart = [i for i in range(4) if math.floor(de[i] + 0.5) != c["snap"][i]]
-                        if not apart:
-                            return False
-                        return True if all(abs(de[i] - ce[i]) <= TOL * k for i in apart) else None
-                    sa, pc = [], []
-                    for c, d in pairs:
-                        a = snapped_apart(c, d)
-                        if a:
-                            sa.append((c, d))
-                        elif a is None or not same(c, d):
-                            pc.append((c, d))
+                    pc = [(c, d) for c, d in pairs if c.get("snap") == d.get("dev") and not same(c, d)]
                     extra += f", pieces disagree {len(pc)}" if pc else ""
-                    extra += f", {len(sa)} snapped a pixel apart on a half-pixel edge, within the tolerance" if sa else ""
                     for c, d in pc[:3]:
                         print(f"        pieces of {c['part']!r}: DLL {len(c.get('quads') or [])} {(c.get('quads') or [])[:2]} "
                               f"mockup {len(d.get('quads') or [])} {(d.get('quads') or [])[:2]}")
                     bad += len(pc)
+                if k in ("part", "solid", "dot", "clip"):
+                    # the device pixels: the DLL's snapped box, the one hud.js pinned, and the one Chrome painted
+                    sa = [(c, d) for c, d in pairs if d.get("dev") is not None and c.get("snap") != d["dev"]]
+                    sp = [(c, d) for c, d in pairs if d.get("dev") is not None and d["painted"] != d["dev"]]
+                    nd = sum(1 for c, d in pairs if d.get("dev") is None and c.get("snap") is not None)
+                    extra += f", {len(sa)} snapped a pixel apart" if sa else ""
+                    extra += f", {len(sp)} painted off their pixels" if sp else ""
+                    extra += f", {nd} not pinned" if nd else ""
+                    for c, d in (sa + sp)[:3]:
+                        print(f"        {keys[k](c)!r}: DLL {c.get('snap')} pinned {d['dev']} painted {d['painted']} (units {[round(v, 4) for v in c['r']]})")
+                    bad += len(sa) + len(sp) + nd
                 if k in ("part", "text"):
                     al = sum(1 for c, d in pairs if abs(c.get("alpha", 255) - d.get("alpha", 255)) > 1)
                     extra += f", opacity disagrees {al}" if al else ""

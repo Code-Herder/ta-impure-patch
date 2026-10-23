@@ -3,9 +3,10 @@
    WHAT THE BROWSER DOES, DONE HERE, because the mockup is the reference (hud-layout.md):
 
      * a part is premultiplied (tagpu_hudart.c) and blended ONE, ONE_MINUS_SRC_ALPHA;
-     * a box's edges fall where its fractional edges round half up, as Chrome snaps an element to
-       device pixels: a part's in tagpu_hudlay_expand, a solid's, a dot's and a clip's here (snap).
-       The rasteriser's pixel-centre rule alone would round an edge at exactly half a pixel down;
+     * a box's edges fall where its fractional edges round half up (tagpu_hud_snap), as Chrome
+       snaps an element to device pixels and hud.js pins its boxes: a part's in
+       tagpu_hudlay_expand, a solid's, a dot's and a clip's here (snap). The rasteriser's
+       pixel-centre rule alone would round an edge at exactly half a pixel down;
      * text sits on the baseline `display: flex; align-items: center; line-height: 1` gives it,
        with Blink's roundings (tagpu_hudlay_baseline); the baseline is rounded to a whole pixel
        and the pen keeps its fraction, as Skia draws horizontal text;
@@ -263,8 +264,8 @@ typedef struct {
     int           fresh;        /* the next instance opens a batch: a group's first          */
 } B;
 
-/* a device coordinate snapped as Chrome snaps an element's edge: rounded half up */
-static float snap(float v) { return floorf(v + 0.5f); }
+/* a device coordinate snapped as a part's edges are (tagpu_hud_snap) */
+static float snap(float v) { return (float)tagpu_hud_snap(v); }
 
 static HUDINST* emit(B* c, int tex, int mode, float x0, float y0, float x1, float y1, const HUDOP* op)
 {

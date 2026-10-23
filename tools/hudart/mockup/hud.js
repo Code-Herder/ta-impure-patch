@@ -68,11 +68,13 @@ const HUD = (() => {
 
   /* ---- elements ---- */
   const U = n => `calc(${+n.toFixed(4)} * var(--u))`;
-  const rect = b => `left:${U(b.x)};top:${U(b.y)};width:${U(b.w)};height:${U(b.h)}`;
-  // a fill's width: one that has begun spans at least one device pixel, so it always shows
-  // (tagpu_hudlay_clip, the DLL's same floor)
-  const UF = w => w > 0 ? `max(${U(w)}, ${+(1 / (window.devicePixelRatio || 1)).toFixed(4)}px)` : U(0);
-  const frect = b => `left:${U(b.x)};top:${U(b.y)};width:${UF(b.w)};height:${U(b.h)}`;
+  /* a box relative to its parent: its numbers kept whole in --x, --y, --w and --h, which pin() places it by; the
+     calc()s lay it out until then */
+  const rect = b => `--x:${b.x};--y:${b.y};--w:${b.w};--h:${b.h};left:calc(var(--x) * var(--u));top:calc(var(--y) * var(--u));`
+    + `width:calc(var(--w) * var(--u));height:calc(var(--h) * var(--u))`;
+  // a fill's box (--fl): one that has begun spans at least one device pixel, so it always shows (tagpu_hudlay_clip,
+  // the DLL's same floor)
+  const frect = b => `${rect(b)};--fl:1`;
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
   const WB_GLYPH = { export: '⇩', delete: '✕', rewind: '⟲' };
   const attrs = a => Object.entries(a || {}).map(([k, v]) => ` data-${k}="${esc(v)}"`).join('');
@@ -93,9 +95,11 @@ const HUD = (() => {
     const part = down ? el.dataset.down : el.dataset.up;
     if (part && !K[part]) { el.classList.toggle('pressed', down); return; }
     if (!part) return;
-    if (el.dataset.gp) { el.dataset.gp = part; composeOne(el); }
+    if (el.dataset.gp) el.dataset.gp = part;
     else el.style.setProperty('--bi', `url('${url(part)}')`);
     el.classList.toggle('pressed', down);
+    pin(layer);   // the face moves
+    if (el.dataset.gp) composeOne(el);
   }
   const icon = (name, b, cls = '') => art('i_' + name, b, '', cls);
   // text in style `st`: its size shrinks to the box's height / s.fit when the box is lower than the style's line
@@ -371,7 +375,7 @@ const HUD = (() => {
       h += text(l.res.toUpperCase(), lb, Rw.letter.style, Rw.letter, L.resource[l.res])
         + text(`${k1(v)} / ${k1(max)}`, vb, Rw.value.style, fit)
         + `<div class="box" style="${rect(bb)};background:${Rw.bar.bg};box-shadow:inset 0 0 0 ${U(Rw.bar.edge)} rgba(0,0,0,.8)">`
-        + `<i style="position:absolute;left:0;top:0;bottom:0;width:${(100 * (max > 0 ? Math.min(1, v / max) : 0)).toFixed(1)}%;background:${L.resource[l.res]}"></i></div>`
+        + `<div class="box" style="${rect(zero(bb.w * +(100 * (max > 0 ? Math.min(1, v / max) : 0)).toFixed(1) / 100, bb.h))};background:${L.resource[l.res]}"></div></div>`
         + text(signed(rate(r[l.res + 'i']), rate(r[l.res + 'o'])), place(F, { ...Rw.income, in: l.inc }), Rw.income.style, Rw.income);
     }
     h += hover(st, p, place(F, Rw.hover));
@@ -460,8 +464,14 @@ const HUD = (() => {
       + tx(xph, Tp + ph + A.below, clock(st.t), `font-size="${A.size}" fill="${C.now.colour}" text-anchor="middle" font-weight="700"`);
     const Lg = C.legend, lx = W - R + Lg.x + Lg.pad, ly = Tp + Lg.pad, lw = R - Lg.r - 2 * Lg.pad, lh = ph - 2 * Lg.pad;
     const ranked = G.map(g => ({ g, v: NS ? g.v[now] : 0 })).sort((a, b) => b.v - a.v), rh = Math.min(Lg.row, lh / ranked.length), fs = Math.min(Lg.size, rh * Lg.text_h);
-    return h + ranked.map((e, k) => { const yy = ly + k * rh;
-      return `<rect x="${lx}" y="${yy + rh * Lg.swatch_y}" width="${Lg.swatch}" height="${rh * Lg.swatch_h}" fill="${e.g.col}" stroke="${dark(e.g.col) ? Lg.swatch_edge : 'none'}" stroke-width="${Lg.swatch_edge_w}"/>`
+    // a swatch is a solid, and a dark one has a ring of four solids on its edge, half in and half out, as the DLL draws
+    // them (ring in tagpu_hudlay.c), so pin() snaps each to whole pixels as the DLL's draw does
+    const box = (x, y, w, h, fill, edge) => `<rect${edge ? ' data-edge="1"' : ''} x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}"/>`;
+    return h + ranked.map((e, k) => { const yy = ly + k * rh, sy = yy + rh * Lg.swatch_y, sw = Lg.swatch, sh = rh * Lg.swatch_h, t = Lg.swatch_edge_w;
+      const bx = lx - t / 2, by = sy - t / 2, bw = sw + t, bh = sh + t;
+      return box(lx, sy, sw, sh, e.g.col)
+        + (dark(e.g.col) ? [[bx, by, bw, t], [bx, by + bh - t, bw, t], [bx, by + t, t, bh - 2 * t], [bx + bw - t, by + t, t, bh - 2 * t]]
+          .map(([x, y, w, h]) => box(x, y, w, h, Lg.swatch_edge, true)).join('') : '')
         + tx(lx + Lg.text_x, yy + rh * Lg.text_y, e.g.name, `font-size="${fs}" fill="${Lg.name}"`)
         + tx(lx + lw, yy + rh * Lg.text_y, fv(e.v), `font-size="${fs}" fill="${Lg.value}" text-anchor="end"`); }).join('');
   }
@@ -478,6 +488,10 @@ const HUD = (() => {
      a 9-slice's middle row by row at that row's edge scale. Each grid or 9-slice part keeps its pieces (`quads`:
      destination x0, y0, x1, y1 in its pixels, source u0, v0, u1, v1 in the part's), which tools/hudart/laycheck.py
      compares with the DLL's. ---- */
+  // a device coordinate rounded to the whole pixel an edge is drawn on, as tagpu_hud_snap rounds it in the DLL: half up,
+  // an edge less than a sixty-fourth below a half counted as on it, so an edge exactly on a half rounds alike in either
+  // side's arithmetic
+  const snapPx = v => Math.floor(v + 0.5 + 1 / 64);
   const copies = (len, period) => period > 0 ? Math.max(1, Math.round(len / period)) : 1;
   function canvas(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, w); c.height = Math.max(1, h); return c; }
   /* A part's texels as the DLL uploads them, premultiplied to eight bits (tagpu_hudart.c), and its mip chain as the
@@ -546,11 +560,11 @@ const HUD = (() => {
     const [DW, DH] = k.design, fx = bandMap(k.xs, DW, Wd / px), fy = bandMap(k.ys, DH, Hd / px);
     const bx = [0, ...k.xs.flat(), DW], by = [0, ...k.ys.flat(), DH], quads = [];
     for (let j = 0; j + 1 < by.length; j++) for (let i = 0; i + 1 < bx.length; i++) {
-      const dx0 = Math.round(fx(bx[i]) * px), dx1 = Math.round(fx(bx[i + 1]) * px), dy0 = Math.round(fy(by[j]) * px), dy1 = Math.round(fy(by[j + 1]) * px);
+      const dx0 = snapPx(fx(bx[i]) * px), dx1 = snapPx(fx(bx[i + 1]) * px), dy0 = snapPx(fy(by[j]) * px), dy1 = snapPx(fy(by[j + 1]) * px);
       if (!(dx1 > dx0 && dy1 > dy0)) continue;
       const m = k.xtile && i % 2 ? copies(dx1 - dx0, (bx[i + 1] - bx[i]) * px) : 1;
       for (let e = 0; e < m; e++)
-        quads.push([dx0 + Math.round((dx1 - dx0) * e / m), dy0, dx0 + Math.round((dx1 - dx0) * (e + 1) / m), dy1, bx[i] / DW, by[j] / DH, bx[i + 1] / DW, by[j + 1] / DH]);
+        quads.push([dx0 + snapPx((dx1 - dx0) * e / m), dy0, dx0 + snapPx((dx1 - dx0) * (e + 1) / m), dy1, bx[i] / DW, by[j] / DH, bx[i + 1] / DW, by[j + 1] / DH]);
     }
     return cache[key] = { url: paint(n, quads, Wd, Hd, false), quads };
   }
@@ -575,7 +589,7 @@ const HUD = (() => {
       if (!(dx[i + 1] > dx[i] && dy[j + 1] > dy[j])) continue;
       const mi = i === 1 ? m[j] : 1;
       for (let e = 0; e < mi; e++)
-        quads.push([dx[i] + Math.round((dx[i + 1] - dx[i]) * e / mi), dy[j], dx[i] + Math.round((dx[i + 1] - dx[i]) * (e + 1) / mi), dy[j + 1],
+        quads.push([dx[i] + snapPx((dx[i + 1] - dx[i]) * e / mi), dy[j], dx[i] + snapPx((dx[i + 1] - dx[i]) * (e + 1) / mi), dy[j + 1],
                     sx[i] / pw, sy[j] / ph, sx[i + 1] / pw, sy[j + 1] / ph]);
     }
     return cache[key] = { url: paint(n, quads, Wd, Hd, false), quads };
@@ -584,23 +598,82 @@ const HUD = (() => {
   function composeTile(n, Wd, Hd) {
     const img = IMG[n], key = ['t', n, Wd, Hd].join('|');
     if (cache[key]) return cache[key];
-    const tw = Math.max(1, Math.round(img.naturalWidth * Math.max(1, Hd) / img.naturalHeight));
+    const tw = Math.max(1, snapPx(img.naturalWidth * Math.max(1, Hd) / img.naturalHeight));
     return cache[key] = { url: paint(n, [[0, 0, Wd, Hd, 0, 0, Wd / tw, 1]], Wd, Hd, true), quads: null };
   }
-  // one composed part at its snapped size: its box's edges from the layer's corner, which sits on a device pixel
+  /* ---- pinning: every box placed on the device pixels the DLL draws it on. Its edges are computed here, from the
+     layout's own numbers (--x, --y, --w, --h, relative to the parent) and not read back from Chrome's layout, which
+     keeps a position in LayoutUnits, sixty-fourths of a CSS pixel, and so can put an edge that falls on a half pixel a
+     hair below it and round it the other way. A box that paints or clips -- a part, a fill's clip, a solid, a dot,
+     a hit box with them -- gets its edges rounded to whole device pixels by snapPx, as tagpu_hudlay_expand and
+     tagpu_huddraw.c snap theirs; a text, the chart's SVG and the stats window (whose drop shadow the DLL blurs from
+     the exact box) keep their exact place. Each box is then given its offset from its parent's placed corner in CSS
+     pixels: Chrome truncates each offset to a sixty-fourth, which leaves a snapped box less than a tenth of a device
+     pixel off a whole one, a distance its own pixel snapping takes back out. A pressed face's sink (hud.css) is a
+     transform, so its box is placed without it and painted with it. The layer's corner sits on a device pixel. ---- */
   let layer = null, layerPx = 1;
+  const prop = (e, k) => { const v = e.style.getPropertyValue(k); return v === '' ? null : +v; };
+  function pin(el) {
+    const d = window.devicePixelRatio || 1, px = layerPx;
+    const sink = +getComputedStyle(el).getPropertyValue('--press') || 0;
+    // (tx, ty): the parent's corner in units; (rx, ry): where it is placed, in device pixels
+    const walk = (e, tx, ty, rx, ry) => {
+      for (const c of e.children) {
+        const x = prop(c, '--x');
+        if (x === null) { if (c.tagName !== 'svg') walk(c, tx, ty, rx, ry); continue; }
+        const dy = c.classList.contains('face') && c.parentElement.classList.contains('pressed') ? sink : 0;
+        const ax = tx + x, ay = ty + prop(c, '--y') + dy, h = prop(c, '--h');
+        if (c.tagName === 'svg') { pinChart(c, ax, ay, prop(c, '--w'), h, rx, ry, d, px); continue; }
+        let w = prop(c, '--w');
+        if (prop(c, '--fl') && w > 0 && w * px < 1) w = 1 / px;
+        let X0, Y0, X1, Y1;
+        if (c.classList.contains('t') || c.id === 'statwin') {
+          X0 = ax * px; Y0 = ay * px; X1 = (ax + w) * px; Y1 = (ay + h) * px;
+          delete c.dataset.dev;
+        } else {
+          X0 = snapPx(ax * px); Y0 = snapPx(ay * px); X1 = snapPx((ax + w) * px); Y1 = snapPx((ay + h) * px);
+          c.dataset.dev = `${X0} ${Y0} ${X1} ${Y1}`;
+        }
+        c.dataset.ub = `${ax} ${ay} ${w} ${h}`;
+        c.style.left = `${(X0 - rx) / d}px`; c.style.top = `${(Y0 - dy * px - ry) / d}px`;
+        c.style.width = `${(X1 - X0) / d}px`; c.style.height = `${(Y1 - Y0) / d}px`;
+        if ((c.dataset.gp || c.dataset.tile) && c.dataset.made && c.dataset.made !== c.dataset.dev) composeOne(c);
+        walk(c, ax, ay, X0, Y0);
+      }
+    };
+    walk(el, 0, 0, 0, 0);
+  }
+  /* The chart's SVG: its viewport on whole device pixels round its box, its view box offset so that a unit of the
+     chart still falls where it did, and its solids -- the legend's swatches and their rings -- snapped to whole
+     pixels inside it, each rect's own numbers kept in data-r. Its lines and text stay where the chart puts them. */
+  function pinChart(c, ax, ay, w, h, rx, ry, d, px) {
+    const X0 = Math.floor(ax * px), Y0 = Math.floor(ay * px), X1 = Math.ceil((ax + w) * px), Y1 = Math.ceil((ay + h) * px);
+    c.dataset.ub = `${ax} ${ay} ${w} ${h}`;
+    c.style.left = `${(X0 - rx) / d}px`; c.style.top = `${(Y0 - ry) / d}px`;
+    c.style.width = `${(X1 - X0) / d}px`; c.style.height = `${(Y1 - Y0) / d}px`;
+    c.setAttribute('viewBox', `${X0 / px - ax} ${Y0 / px - ay} ${(X1 - X0) / px} ${(Y1 - Y0) / px}`);
+    for (const r of c.querySelectorAll(':scope > rect')) {
+      if (!r.dataset.r) r.dataset.r = ['x', 'y', 'width', 'height'].map(k => r.getAttribute(k)).join(' ');
+      const [x, y, rw, rh] = r.dataset.r.split(' ').map(Number);
+      const E = [snapPx((ax + x) * px), snapPx((ay + y) * px), snapPx((ax + x + rw) * px), snapPx((ay + y + rh) * px)];
+      r.dataset.dev = E.join(' ');
+      r.setAttribute('x', E[0] / px - ax); r.setAttribute('y', E[1] / px - ay);
+      r.setAttribute('width', (E[2] - E[0]) / px); r.setAttribute('height', (E[3] - E[1]) / px);
+    }
+  }
+  // one composed part at its pinned size
   function composeOne(e) {
-    const d = window.devicePixelRatio || 1, o = layer.getBoundingClientRect(), r = e.getBoundingClientRect();
-    const R = v => Math.floor(v * d + 0.5);
-    const w = R(r.right - o.left) - R(r.left - o.left), h = R(r.bottom - o.top) - R(r.top - o.top);
-    const n = e.dataset.gp || e.dataset.tile;
+    const [X0, Y0, X1, Y1] = e.dataset.dev.split(' ').map(Number), n = e.dataset.gp || e.dataset.tile;
+    const w = X1 - X0, h = Y1 - Y0;
     const out = e.dataset.tile ? composeTile(n, w, h) : K[n].kind === 'nine' ? composeNine(n, w, h, layerPx) : composeGrid(n, w, h, layerPx);
     e.style.backgroundImage = `url("${out.url}")`;
     if (out.quads) e.dataset.quads = JSON.stringify(out.quads);
+    e.dataset.made = e.dataset.dev;
   }
   // px: device pixels per HUD unit
   function compose(el, px) {
     layer = el; layerPx = px;
+    pin(el);
     el.querySelectorAll('[data-gp], [data-tile]').forEach(composeOne);
   }
 
@@ -623,16 +696,17 @@ const HUD = (() => {
   // what moves while the replay plays, without rebuilding: the fill, the playhead, the clocks and the chart
   function tick(el, st) {
     const p = st.t / st.T, pf = st.live ? p : filled(st), now = `${clock(st.t)} / ${clock(st.len ?? st.T)}`;
-    el.querySelectorAll('[data-fill]').forEach(e => { e.style.width = UF(+e.dataset.fill * pf); });
+    el.querySelectorAll('[data-fill]').forEach(e => { e.style.setProperty('--w', +e.dataset.fill * pf); });
     // a watched lane fills from its branch to the playhead, in the screen units its data carries
     const hd = el.querySelector('[data-lanehead]');
     if (hd) { const [a, w] = hd.dataset.lanehead.split(' ').map(Number), x = a + w * p;
-      el.querySelectorAll('[data-lanefill]').forEach(e => { const [b0, b1] = e.dataset.lanefill.split(' ').map(Number); e.style.width = UF(Math.max(0, Math.min(x, b1) - b0)); }); }
-    el.querySelectorAll('[data-lanehead]').forEach(e => { const [a, w, hw] = e.dataset.lanehead.split(' ').map(Number); e.style.left = U(a + w * p - hw / 2); });
+      el.querySelectorAll('[data-lanefill]').forEach(e => { const [b0, b1] = e.dataset.lanefill.split(' ').map(Number); e.style.setProperty('--w', Math.max(0, Math.min(x, b1) - b0)); }); }
+    el.querySelectorAll('[data-lanehead]').forEach(e => { const [a, w, hw] = e.dataset.lanehead.split(' ').map(Number); e.style.setProperty('--x', a + w * p - hw / 2); });
     el.querySelectorAll('[data-tot]').forEach(e => { const s = clock(st.t); if (e.textContent !== s) e.textContent = s; });
-    el.querySelectorAll('[data-playhead]').forEach(e => { const [w, ends, pw] = e.dataset.playhead.split(' ').map(Number); e.style.left = U(ends + (w - 2 * ends) * p - pw / 2); });
+    el.querySelectorAll('[data-playhead]').forEach(e => { const [w, ends, pw] = e.dataset.playhead.split(' ').map(Number); e.style.setProperty('--x', ends + (w - 2 * ends) * p - pw / 2); });
     el.querySelectorAll('[data-time]').forEach(e => { if (e.textContent !== now) e.textContent = now; });
     el.querySelectorAll('[data-chart]').forEach(e => { const [w, h, R] = e.dataset.chart.split(' ').map(Number); e.innerHTML = chart(st, w, h, R); });
+    pin(el);
   }
-  return { load, draw, tick, press, get layout() { return L; } };
+  return { load, draw, tick, press, pin, get layout() { return L; } };
 })();
