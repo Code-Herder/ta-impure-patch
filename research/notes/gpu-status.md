@@ -2957,8 +2957,22 @@ recording that has ended is closed ([*Its lifetime*](tadr-port/demo-recorder-ski
 fork's, asks a recording-file worker to prune `replays\` as its writer starts (`recfile_request`,
 `REC_FILE_PRUNE`); a full queue or an exiting process refuses the request, and the log says
 `recorder: no prune at <file>: no file worker`. The other `replays\*.imprec` are taken newest first
-by last write time (a replay copied in with its old date counts as old) and the first `REC_KEEP` − 1 = 49 are kept, so the newest 50 are kept counting
-the new one. The lever's text `keep N` changes the count (`keep_count`, `tagpu_recorder.c`): with no
+by the start each one's header records (`RT_WALLCLOCK`'s FILETIME in UTC, read by
+`recr_wallclock_of`: one open and one read of the header block a file, on the worker), never by
+the file's dates, so a replay copied in counts by when it was recorded. A file with no recorded
+start sorts after every dated one, then by name, latest first: one that is not a recording; one of
+ours whose header lacks the entry at the 12 bytes this format writes, which every recording of
+format 24 or earlier is (it wrote the start alone, in 8 bytes); and one that cannot be opened or
+read at the moment (`recr_wallclock_of`'s −1), which is never handed to the deletion and is
+counted in use whatever its place, since it might read again, as new as any, by the time the
+deletion reached it. **"Newest" is the recording's own date**, the owner's rule: the latest start
+by the clock of the machine that recorded it. So watching a replay does not keep it, and neither
+does exporting one (an export carries its root's header and start); a favourite or a bookmark
+does. A clock set back makes each new recording the oldest at the next game's prune, and a file
+dated in the future holds one of the kept places until the clock passes it. The Replays browser
+still lists newest first by last write (`newest_first`, `tagpu_replays.c`), so its order, and which
+recordings its `ENT_MAX` cut lists, can differ from the prune's. The first `REC_KEEP` −
+1 = 49 are kept, so the newest 50 are kept counting the new one. The lever's text `keep N` changes the count (`keep_count`, `tagpu_recorder.c`): with no
 number, or `keep 0`, it is `REC_KEEP`; `keep 1` keeps the new one alone. Each older recording is
 deleted unless it is in use, has a live fork, is a favourite or bookmarked in `replays\index.dat`, or
 is not one of our recordings. One of ours in another format (`recr_format_of`) is deleted like any
@@ -2980,22 +2994,32 @@ keeps. `SetFileInformationByHandle` is resolved at run time, so the DLL still lo
 is absent the prune deletes nothing and counts every older recording as in use. One line per
 prune: `recorder: prune at <new>: N older recordings, the newest K kept; of the rest, D deleted, M
 kept (forked or marked), B in use, U unreadable`, where *in use* also counts a recording whose lock
-or file could not be opened exclusively, one whose root key could not be read, and every recording
-while the index could not be read, is of version 1 (not yet converted) or of a version this build
-does not know. The process's exit
-waits for the worker (`recfile_exit`), so the prune stops at the next file once the exit has begun.
+or file could not be opened exclusively, one whose root key could not be read, one whose header
+the date pass could not read, and every recording while the index could not be read, is of
+version 1 (not yet converted) or of a version this build does not know. The process's exit waits
+for the worker (`recfile_exit`), so the prune stops at the next file once the exit has begun, in the
+date pass as in the deletion, and a date pass the exit cut short deletes nothing.
 **What the ordering does not cover:** a favourite given while a prune runs, after it has read that
 file's marks, or one the index could not save (`index_save` failing to write `index.tmp`, or the
 index over `INDEX_CAP`), does not keep its file. The tareplay forks test runs the prune on a seeded
-folder and checks its line and what is left (`prune_step`). MEASURED 2026-10-22
-on an instance with play defaults on and no lever file: 55 older recordings, the newest 49 kept
+folder and checks its line and what is left (`prune_step`); the seeded files' last-write times run
+against their recorded starts, so a prune that ordered by last write would fail it. MEASURED
+2026-10-22, on the build that ordered by last write, on an instance with play defaults on and no lever file: 55 older recordings, the newest 49 kept
 beside the new one; of the other six, the 2 oldest plain copies deleted, a favourite, a bookmarked
 file and a file with a live fork (made by a real takeover) kept as forked or marked, and a file
 that is not a recording kept. With `keep 3`, the next game's 54 older recordings: the newest 2 kept, 48
 deleted and the same four kept. **Not exercised:** *in use*, since a file held open by another process
 could not be reproduced under Wine on the reference setup. MEASURED 2026-10-23 by `prune_step` in
-the landing gate, both builds: `6 older recordings, the newest 1 kept; of the rest, 2 deleted, 2 kept
-(forked or marked), 0 in use, 1 unreadable`, the older-format copy among the deleted. A name too long
+the landing gate, both builds, the seeds' last-write times against their recorded starts and one seed in format 24's shape: `6 older
+recordings, the newest 1 kept; of the rest, 2 deleted, 2 kept (forked or marked), 0 in use, 1
+unreadable`, the format-24 copy among the deleted and the first plain copy kept. **The order's
+cost**, MEASURED 2026-10-23 under Wine on the reference setup by a scratch harness calling
+`recr_wallclock_of` over 50 copies of a gate recording (a header block of 11,132 bytes each) with
+the page cache warm: 6.4 to 7.4 ms for the 50 over ten passes in two runs, about 0.14 ms a file; a
+cold cache was not measured. The same harness on single files: 1 for a gate recording and for a
+copy with `RT_FORMAT` 23 and the 12-byte entry, 0 for a copy in format 24's shape (an 8-byte
+entry), a file that is not a recording and a 3-byte file, −1 for a missing file and for one the
+harness held open exclusively. A name too long
 for its lock path is counted unreadable before the sort, outside N.
 
 **Its events have 59 sites of their own** (the attach log's `recorder: N event sites in`),
@@ -3128,7 +3152,7 @@ The native fixture delivers sixteen DATA packets per peer through the production
 
 Source-prefix seals (`tagpu_recmp_stream.c`) validate contiguous sequences, closed source ticks, cumulative DATA bytes and CRC before publication. B2 closes the previous capture tick only when its clock advances; a final seal freezes a local producer, while capture failure aborts without success. The game consumer refuses a seal with a partial order transaction, and relinquishes consumption. Native fixture peers receive exact final human/AI prefixes after primary Close; a withheld last DATA fails at its valid final seal. Both live TA workers also finish after ordinary peer exits. The earlier exit test leaves two markers unread on the joiner after its game consumer stops. A vanished unsealed peer prevents transmission retirement; the drain deadline fails incomplete. Frozen per-source consumption cuts now require covering seals, and authenticated 48-byte final receipts validate against the worker's accepted marker. A retained sole consumer can drain late packets after end without moving those cuts. Active-source, withheld receipt/cut and altered receipt controls pass; the native fixture validates four receipts per peer. Actual TA verifies the departing host closes with cuts 2/2 and four receipts while the joiner remains in play, then the joiner exits cleanly with cuts 2/2. Game capture now attaches a file context before the first publication; engine authority application remains open.
 
-An optional engine-free source/application journal now copies local publications and remote consumptions into one bounded 16 MiB SPSC stream. It preserves source envelopes, assigns a global consumption/production ordinal and retains application ticks separately. A failed local journal detaches while mandatory contributions continue. `RecRing` can transfer its copied context to the actual writer, which writes contribution blocks and a validated cut footer; the readers read recording format 24 only. The synthetic `.imprec` fixture passes normal closure, C/Python reading, world seeking, missing-proof/local-save failure and semantic corruption controls. Game capture attaches that context on local recording opt-in, before the first publication/consumption and writer start. Full owner authority, engine authority application and network playback remain open. No new engine address, patch or engine write is added by the container.
+An optional engine-free source/application journal now copies local publications and remote consumptions into one bounded 16 MiB SPSC stream. It preserves source envelopes, assigns a global consumption/production ordinal and retains application ticks separately. A failed local journal detaches while mandatory contributions continue. `RecRing` can transfer its copied context to the actual writer, which writes contribution blocks and a validated cut footer; the readers read recording format 25 only. The synthetic `.imprec` fixture passes normal closure, C/Python reading, world seeking, missing-proof/local-save failure and semantic corruption controls. Game capture attaches that context on local recording opt-in, before the first publication/consumption and writer start. Full owner authority, engine authority application and network playback remain open. No new engine address, patch or engine write is added by the container.
 
 The production adapter's resource-only samples are now full normalized 520-byte human/hosted-AI player images and changed-word deltas (`tagpu_recmp_players.c`). A copied roster freezes each primary origin's recorder-local seat and bounded fixed unit block; remote queues use it for authorization. Complete player updates preserve source stream/tick/sequence and actual application tick, while unknown or malformed input cannot publish a replacement. The player-cache/journal fixture reconstructs all four exact source images in C and Python and passes roster/provenance/guard-page controls. Actual TA with two humans and one AI hosted by each verifies all four first full-image CRCs/source stamps, nonempty queues through frozen blocks and successful cuts/receipts at ordinary exit. The optional file context now copies the roster into `RT_MP_SEATS`; writer and C/Python readers require exact source/world/seat ownership agreement. The synthetic container passes 23 malformed-mapping refusals, including file-info validation when mode is falsified. This does not close remaining owner-only effects, declared Impure state, takeover or game network playback integration. The adapter reuses existing B2/player-image reads and writes only its owned caches; no new patch or engine field write.
 

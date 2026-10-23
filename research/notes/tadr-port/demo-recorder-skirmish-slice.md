@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 24 and its readers take format 24 alone (*The file*, below).
+The recorder writes recording format 25 and its readers take format 25 alone (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -156,10 +156,14 @@ THE CHAIN*):
   else the bytes stored. The header, the end and the timelines blocks are always stored, so a
   header reads without zstd.
 
-`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 20; a reader takes that format alone:
+`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 25; a reader takes that format alone:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
-  GameTime, the wall clock, the unit array's slots and the units each player may have, the unit
+  GameTime, the start's wall clock (`RT_WALLCLOCK`: a FILETIME in UTC, then the local time's offset
+  from UTC at that instant in minutes, east positive, daylight saving included, which
+  `tarec.py info` shows as the local time and its offset: MEASURED 2026-10-23, a landing gate's
+  recording read `started 2026-10-23 02:18:14 -04:00`, the reference setup's zone in daylight
+  saving time), the unit array's slots and the units each player may have, the unit
   types' count and a hash of their names, the players (index, controller, side, logo and name), the
   registry's levers and their text, the exclusion file's SHA-256, and the recorded declarations
   (index, class, key, row size, flags and name), so a reader can walk their images; the main
