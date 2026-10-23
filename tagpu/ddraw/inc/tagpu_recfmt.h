@@ -37,8 +37,10 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 24: format 23 with the unit frame's listing, lane masks and residuals as one binary range
-   coder's bytes a block, each decision under a context both sides keep (RCS_UNITS below). 23 was
+/* 25: format 24 with RT_WALLCLOCK's start carrying the local time's offset from UTC at that
+   instant beside it. 24 was format 23 with the unit frame's listing, lane masks and residuals as
+   one binary range coder's bytes a block, each decision under a context both sides keep
+   (RCS_UNITS below). 23 was
    format 22 with QueryTransport and QueryLandingPad among the owner's queries, and
    BeginTransport and setSFXoccupy as the owner's starts (RK_EV_START_NAMED) where the broadcast and
    the playing's own water-state call made them before. 22 was format 21 with three record
@@ -77,7 +79,7 @@
    frame carries the projectile pool coded by identity, and whose four record frames -- the cells,
    the orders, the events and the state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER
    below). */
-#define REC_FORMAT        24
+#define REC_FORMAT        25
 
 static __inline int rec_format_supported(unsigned format)
 {
@@ -867,7 +869,9 @@ enum RecTag {
     RT_MODE,           /* u32: the game mode, 2 for a skirmish                                  */
     RT_MAP,            /* string: the map file's stem                                           */
     RT_START,          /* u32: the first recorded GameTime                                      */
-    RT_WALLCLOCK,      /* u32 low, u32 high: the start as a FILETIME, UTC                       */
+    RT_WALLCLOCK,      /* u32 low, u32 high: the start as a FILETIME, UTC; then i32: the local
+                          time's offset from UTC at the start in minutes, east positive (local =
+                          UTC + offset), daylight saving included                               */
     RT_SLOTS,          /* u32: the unit array's slots, the engine's own count                   */
     RT_UNITS_EACH,     /* u32: the units a player may have, main+0x37EE6                         */
     RT_UNITDEFS,       /* u32 count, u32 FNV-1a of every UnitName (def+0x20), in index order     */

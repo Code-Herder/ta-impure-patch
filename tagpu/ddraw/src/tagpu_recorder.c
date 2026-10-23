@@ -2066,6 +2066,27 @@ static void archive_entry(void* ctx, const char* name, unsigned n, unsigned size
     tlv((Tlv*)ctx, RT_ARCHIVE, b, 12 + n);
 }
 
+/* The local time's offset from UTC at `utc`, in minutes, east positive; 0 when the conversion
+   fails. SystemTimeToTzSpecificLocalTime applies the active zone's rules to this instant, so the
+   offset is the one in force when the recording starts, daylight saving included. The
+   alternative, GetTimeZoneInformation's Bias plus the DaylightBias or StandardBias its return
+   value picks, is a second sample of the clock beside `utc`, which a daylight-saving change
+   between the two would split, and its TIME_ZONE_ID_UNKNOWN (a zone without daylight saving)
+   and TIME_ZONE_ID_INVALID returns would each need their own case. Both sides are whole
+   milliseconds (the SYSTEMTIME round trip), so the difference is a whole number of minutes. */
+static int utc_offset_minutes(const FILETIME* utc)
+{
+    SYSTEMTIME u, l;
+    FILETIME uf, lf;
+    long long d;
+    if (!FileTimeToSystemTime(utc, &u) || !SystemTimeToTzSpecificLocalTime(NULL, &u, &l) ||
+        !SystemTimeToFileTime(&u, &uf) || !SystemTimeToFileTime(&l, &lf))
+        return 0;
+    d = (long long)(((unsigned long long)lf.dwHighDateTime << 32 | lf.dwLowDateTime) -
+                    ((unsigned long long)uf.dwHighDateTime << 32 | uf.dwLowDateTime));
+    return (int)(d / 600000000LL);          /* 100 ns units in a minute */
+}
+
 /* the header's entries; `fork`, for a fork's, adds RT_TIMELINE after RT_START */
 static void header_build(const Level* L, int tick, const char* map, const FILETIME* now,
                          const RecFork* fork, const RecMpFile* mp, Tlv* t)
@@ -2091,7 +2112,13 @@ static void header_build(const Level* L, int tick, const char* map, const FILETI
         d[2] = fork->fork_at;
         tlv(t, RT_TIMELINE, d, 12);
     }
-    tlv(t, RT_WALLCLOCK, now, 8);
+    {
+        unsigned char w[12];
+        int off = utc_offset_minutes(now);
+        memcpy(w, now, 8);
+        memcpy(w + 8, &off, 4);
+        tlv(t, RT_WALLCLOCK, w, 12);
+    }
     tlv_u32(t, RT_SLOTS, L->nslots);
     tlv_u32(t, RT_UNITS_EACH, *(const unsigned short*)(ta + OFF_EACH));
     {

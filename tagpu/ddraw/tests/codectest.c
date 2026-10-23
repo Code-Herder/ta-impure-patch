@@ -704,7 +704,9 @@ static void hold_bytes(unsigned char* hold, int masks)
 }
 
 /* A header's entries as the current format writes them: RT_FORMAT REC_FORMAT, every other entry
-   kept but RT_HOLD, and `hold`'s RT_HOLD after them when it is not NULL. */
+   kept but RT_HOLD and an RT_WALLCLOCK not of 12 bytes (an older format's 8 never recorded the
+   offset from UTC, and the reader takes the entry at 12 alone), and `hold`'s RT_HOLD after them
+   when it is not NULL. */
 static void header_out(RecBytes* out, const unsigned char* p, size_t n, const unsigned char* hold)
 {
     size_t at = 0;
@@ -717,7 +719,7 @@ static void header_out(RecBytes* out, const unsigned char* p, size_t n, const un
             unsigned char f[4];
             put32(f, REC_FORMAT);
             tlv_put(out, RT_FORMAT, f, 4);
-        } else if (tag != RT_HOLD) {
+        } else if (tag != RT_HOLD && (tag != RT_WALLCLOCK || len == 12)) {
             rb_put(out, p + at, step < n - at ? step : n - at);
         }
         at += step;
@@ -1400,9 +1402,8 @@ void tagpu_logf(const char* fmt, ...)
     (void)fmt;
 }
 
-/* The file code's prune (tagpu_recfile.c, prune_one) asks the DLL's replay index whether a
-   recording is marked, and this test has no index: every recording reads as busy, so a prune
-   here deletes nothing. No test prunes. */
+/* The prune in tagpu_recfile.c, linked with the reader, asks the browser's index
+   (tagpu_replays.c), which this test does not link; nothing here prunes, and -1 decides nothing. */
 int tagpu_replays_unmarked_delete(const char* file, HANDLE recording)
 {
     (void)file;

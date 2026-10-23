@@ -517,7 +517,13 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             h->has_mp_seats = 1;
             break;
         case RT_MAP:           text(h->map, sizeof h->map, p, n); break;
-        case RT_WALLCLOCK:     if (n == 8) memcpy(&h->wallclock, p, 8); break;
+        case RT_WALLCLOCK:
+            if (n == 12) {
+                memcpy(&h->wallclock, p, 8);
+                memcpy(&h->utc_offset, p + 8, 4);
+                h->has_wallclock = 1;
+            }
+            break;
         case RT_START:         if (n == 4) h->start = u32(p); break;
         case RT_FRAME:         if (n == 4) { h->has_frame = 1; h->frame = u32(p); } break;
         case RT_SLOTS:         if (n == 4) { h->slots = u32(p); seen |= 4; } break;
@@ -645,7 +651,7 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             break;
         }
         default:
-            break;      /* RT_WALLCLOCK, RT_LEVER: nothing the replay needs */
+            break;      /* RT_LEVER: nothing the replay needs */
         }
         at += (4 + (size_t)n + 3) & ~(size_t)3;
     }
@@ -2747,22 +2753,61 @@ RecReader* recr_open(const char* path, char* why, unsigned cap)
     return open_handle(f, path, why, cap, 0);
 }
 
-int recr_format_of(const char* path)
+enum { PEEK_HEADER, PEEK_NOT_OURS, PEEK_UNREAD };
+
+/* `path`'s header block, for recr_format_of and recr_wallclock_of. PEEK_HEADER: the returned
+   reader's h holds what header_parse read, *parsed 1 when it took the header and 0 when it
+   refused it. The format entry, the writer's first, is read before any check that can refuse
+   the header, and the format is judged after the loop, so h holds every entry of another
+   format's header up to the first one this build finds malformed. PEEK_NOT_OURS: the file's
+   first 8 bytes were read and are not REC_MAGIC, or it is shorter. PEEK_UNREAD: no memory, the
+   file cannot be opened, a read fails, or its header block cannot be read whole. Only
+   PEEK_HEADER returns a reader. */
+static RecReader* header_peek(const char* path, int* parsed, int* status)
 {
     RecReader* r = (RecReader*)calloc(1, sizeof *r);
     char magic[8], why[160];
     RecBlock b;
-    int k = -1;
-    if (!r) return -1;
+    DWORD got = 0;
+    *status = PEEK_UNREAD;
+    if (!r) return NULL;
     r->f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
                        FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-    if (r->f != INVALID_HANDLE_VALUE && read_all(r->f, magic, 8) && !memcmp(magic, REC_MAGIC, 8)) {
-        r->off = 8;
-        if (block_read(r, &b, why, sizeof why) > 0 && b.kind == RB_HEADER) {
-            /* the format entry is read before any check that can refuse the header */
-            if (header_parse(&r->h, r->raw, r->rawn, why, sizeof why)) k = 1;
-            else if (r->h.format && !rec_format_supported(r->h.format)) k = 0;
+    if (r->f != INVALID_HANDLE_VALUE && ReadFile(r->f, magic, 8, &got, NULL)) {
+        if (got < 8 || memcmp(magic, REC_MAGIC, 8)) {
+            *status = PEEK_NOT_OURS;
+        } else {
+            r->off = 8;
+            if (block_read(r, &b, why, sizeof why) > 0 && b.kind == RB_HEADER) {
+                *parsed = header_parse(&r->h, r->raw, r->rawn, why, sizeof why);
+                *status = PEEK_HEADER;
+                return r;
+            }
         }
+    }
+    recr_close(r);
+    return NULL;
+}
+
+int recr_format_of(const char* path)
+{
+    int parsed = 0, status, k = -1;
+    RecReader* r = header_peek(path, &parsed, &status);
+    if (r && parsed) k = 1;
+    else if (r && r->h.format && !rec_format_supported(r->h.format)) k = 0;
+    recr_close(r);
+    return k;
+}
+
+int recr_wallclock_of(const char* path, FILETIME* utc)
+{
+    int parsed = 0, status, k;
+    RecReader* r = header_peek(path, &parsed, &status);
+    k = status == PEEK_UNREAD ? -1 : 0;
+    if (r && r->h.has_wallclock) {
+        utc->dwLowDateTime = (DWORD)r->h.wallclock;
+        utc->dwHighDateTime = (DWORD)(r->h.wallclock >> 32);
+        k = 1;
     }
     recr_close(r);
     return k;
