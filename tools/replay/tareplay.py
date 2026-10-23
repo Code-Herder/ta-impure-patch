@@ -2002,7 +2002,7 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
         return st
 
     def dump_now(dname):
-        arm(w, log, f"dump {dname} now", rf"recorder: dump {dname} at GameTime",
+        arm(w, log, f"dump {dname} now", rf"recorder: frame dump {dname} at GameTime",
             rf"recorder: (frame )?dump(:| {dname}) .*(refused|please|not letters|cannot)",
             f"dump {dname} now")
         return copies(f"X2 {dname}", w.gamedir / "replays" / f"dump-{dname}.bin")[0]
@@ -4037,8 +4037,12 @@ def x2_alone(w, fx, out, rec):
 
     results = Ordered()
     with results:
-        x2_switch(w, fx, out, x2, tarec.header_only(x2)["options"]["controlled"], base,
-                  results, copies)
+        try:
+            x2_switch(w, fx, out, x2, tarec.header_only(x2)["options"]["controlled"], base,
+                      results, copies)
+        except (CouldNotRun, Failed):
+            w.collect(out / "X2")           # the failed game's log, for the loop's next look
+            raise
         return results.results()
 
 

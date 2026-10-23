@@ -8603,7 +8603,8 @@ static void rw_visit(void)
      `... hud state rewind <idle|flush|open|past|ending> available <0|1> span F..L G g T t`
      (tagpu_replay_rewind_state);
      `... hud state result <serial> <none|takeover|rewind|fork|seek|switch> op <op>
-     <ok|refused>: <why>` (tagpu_replay_result). The replay harness parses them: their format is an interface.
+     <ok|refused>: <why>` (tagpu_replay_result). The replay harness parses them: their format
+     is an interface.
    - `takeover <P> at <T>` or `takeover <P> at <T> difficulty <D>`: on a level that plays a
      recording, the takeover waits for the next frame visit after the first step (THE TAKEOVER);
      it takes over at the refresh at or before T, and says so when that is not T (tk_bound). A
@@ -9131,10 +9132,10 @@ static void span_chain(void)
    chain, and the deletion queued once the switch has released the claim, so the worker's in-use
    test passes by construction (tagpu_replay_fork_op). */
 
-/* Timeline `id`'s last use, now, at the end of THE IN-LEVEL STAMPS: taken when a timeline is
-   left -- at a switch, and for the last one at the level's end -- so the order is the one the
-   timelines were watched in, least recently first. Bounded by REC_TIMELINE_ROWS: a full table
-   drops its oldest row. */
+/* THE IN-LEVEL STAMPS: timeline `id` used until now, its row moved to the end of s_used. A stamp
+   is taken when a timeline is left -- at a switch, and for the last one at the level's end -- so
+   the rows are in the order the timelines were watched, least recently first. Bounded by
+   REC_TIMELINE_ROWS: a full table drops its oldest row. */
 static void used_stamp(unsigned id)
 {
     uint64_t now = recfile_now();
