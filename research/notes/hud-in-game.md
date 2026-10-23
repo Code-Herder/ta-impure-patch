@@ -471,7 +471,7 @@ over the world, is `tagpu_menu_modal`'s.
 | `rew`, `fwd` | transport | a seek 300 GameTime (10 s) back or forward, through `tagpu_replay_seek_request` |
 | `play` | transport | the pause toggled; at the recording's end a seek to its start and the pause cleared (the button shows play there, as the mockup's does) |
 | `speed` | transport | the next preset above the speed in force, 5, 10, 20, 40, 80 (½× to 8×), and from 8× back to ½× |
-| `bookmark` | transport | the bookmark nearest now within 90 GameTime (3 s) removed, else one added at now (`tagpu_hudmarks_bookmark`, through `tagpu_replays_mark_add`/`_remove` into `replays\index.dat`); the toast "Bookmark at m:ss" or "Bookmark removed", nothing when the recording was not opened from `replays\` or the list is full |
+| `bookmark` | transport | the bookmark nearest now within 90 GameTime (3 s) removed, else one added at now (`tagpu_hudmarks_bookmark`, through `tagpu_replays_mark_add`/`_remove` into `replays\index.dat`, on the recording's line by name and root key, so they survive every playing's end); the toast "Bookmark at m:ss" or "Bookmark removed", nothing when the recording was not opened from `replays\` or the list is full |
 | `uiscale` | transport | the HUD's scale to the next of 75, 100, 125, 150, wrapping, and into the settings store (`hud: the replay HUD's scale is N%`) |
 | `leave` | transport | Leave's question (*Leave*) |
 | `track` | timeline | a seek where it was pressed, one a frame while it is dragged, and one where it is released (*The press*) |
