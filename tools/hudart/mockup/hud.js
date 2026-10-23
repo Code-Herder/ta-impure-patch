@@ -243,11 +243,11 @@ const HUD = (() => {
 
   /* ---- proposed, live rewind: a button beside the Impure Config sprocket in the top bar, and the strip it opens under
      the bar over the paused game: the transport, the track up to now, the time, Play from here and Back to now. The
-     sprocket and the button are placed in the top bar's own pixels (entry.bar tall), scaled with it ---- */
+     button is placed in the top bar's own pixels (entry.bar tall), scaled with it; the sprocket is the engine's, drawn by
+     the page's backdrop ---- */
   function live(st) {
-    const E = L.proposed.live.entry, S = L.proposed.live.strip, k = st.frame.top / E.bar, Sp = E.sprocket;
-    let h = `<div class="box ex" style="${rect({ x: st.W - (Sp.r + Sp.s) * k, y: Sp.t * k, w: Sp.s * k, h: Sp.s * k })};--wbs:${+(Sp.s * k * .75).toFixed(3)}" data-wb="⚙"></div>`;
-    h += button({ act: 'rewind', icon: { name: E.icon.name, padf: E.icon.padf } }, E, { x: st.W - (E.r + E.s) * k, y: E.t * k, w: E.s * k, h: E.s * k }, st, st.live.open);
+    const E = L.proposed.live.entry, S = L.proposed.live.strip, k = st.frame.top / E.bar;
+    let h = button({ act: 'rewind', icon: { name: E.icon.name, padf: E.icon.padf } }, E, { x: st.W - (E.r + E.s) * k, y: E.t * k, w: E.s * k, h: E.s * k }, st, st.live.open);
     if (!st.live.open) return h;
     const x = st.frame.panel + S.l, w = st.W - S.r - x, y = st.frame.top + S.t, ih = S.h - 2 * S.pad;
     let inner = '', cx = S.pad;

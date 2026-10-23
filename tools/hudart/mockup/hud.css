@@ -14,14 +14,12 @@
 .hud .art.composed { background-size: 100% 100%; }
 .hud .art.composed::before { display: none; }
 /* a part the kit lacks is whitebox: a mid grey plate with a dark edge, darker while pressed; an icon it lacks is its
-   stand-in glyph; .ex stands in for something the game draws outside the HUD (the Impure Config sprocket) */
+   stand-in glyph */
 .hud .art.noart::before { background: #94948c; border: calc(.6 * var(--u)) solid #1d1d1b; box-sizing: border-box; }
 .hud .art.noart.pressed::before { background: #5c5c56; }
 .hud .art.noicon::before { display: none; }
-.hud .noicon::after, .hud .ex::after { content: attr(data-wb); position: absolute; inset: 0; display: flex; align-items: center;
+.hud .noicon::after { content: attr(data-wb); position: absolute; inset: 0; display: flex; align-items: center;
   justify-content: center; font: 700 calc(var(--wbs, 12) * var(--u))/1 'DejaVu Sans', sans-serif; color: #1d1d1b; }
-.hud .ex { background: rgba(24, 24, 22, .9); box-shadow: inset 0 0 0 calc(.4 * var(--u)) #9a9a92; }
-.hud .ex::after { color: #e6e6e0; }
 .hud .noicon.on_dark::after { color: #e2dcb0; }
 /* text: one line, centred vertically in its box */
 .hud .t { position: absolute; display: flex; align-items: center; line-height: 1; white-space: nowrap; overflow: hidden; }
