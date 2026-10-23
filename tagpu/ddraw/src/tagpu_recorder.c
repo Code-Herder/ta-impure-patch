@@ -7404,11 +7404,17 @@ unsigned tagpu_rec_ring_used(void)
     return ring_used(r);
 }
 
+int tagpu_rec_rewind_ready(void)
+{
+    Rec* r = s_rec;
+    return s_state == ST_RECORDING && r && r->mode == MODE_SKIRMISH && !s_suspended &&
+           !r->ev_full && !InterlockedCompareExchange(&r->ring->failed, 0, 0);
+}
+
 int tagpu_rec_rewind_open(unsigned* timeline, char* why, unsigned whycap)
 {
     Rec* r = s_rec;
-    if (s_state != ST_RECORDING || !r || r->mode!=MODE_SKIRMISH || s_suspended || r->ev_full ||
-        InterlockedCompareExchange(&r->ring->failed, 0, 0)) {
+    if (!tagpu_rec_rewind_ready()) {
         snprintf(why, whycap, "no healthy live recording");
         return 0;
     }

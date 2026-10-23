@@ -44,9 +44,19 @@ enum RecFileOp { REC_FILE_TOUCH, REC_FILE_DELETE, REC_FILE_EXPORT, REC_FILE_COMP
    REC_KEEP is the count when the recorder's lever names none (`keep N`, tagpu_recorder.c). */
 #define REC_KEEP 50
 /* The worker owns copies of the paths. A full queue or an exiting process refuses the request;
-   it never runs file maintenance on the caller's thread. */
-int recfile_request(const char* path, unsigned op, unsigned id, const char* output,
-                    const char* request);
+   it never runs file maintenance on the caller's thread. The request's TICKET, never 0, whose
+   outcome recfile_result gives; 0 when it is refused before it is queued (a bad argument, no
+   memory, every worker busy, the process exiting). A deletion refused because a playing holds
+   the timeline is a queued request whose outcome is that refusal. */
+unsigned recfile_request(const char* path, unsigned op, unsigned id, const char* output,
+                         const char* request);
+/* A ticket's outcome: 0 still queued or running; 1 done; -1 refused, `why` filled; -2 unknown --
+   never issued, or displaced from the last REC_FILE_RESULTS outcomes. Any thread. */
+#define REC_FILE_RESULTS 16
+int recfile_result(unsigned ticket, char* why, unsigned cap);
+/* How many requests have finished: it changes after each, for a reader that wants to know that
+   some file may have changed. Any thread, without the queue's lock. */
+unsigned recfile_completed(void);
 void recfile_exit(void);
 /* A playing and a queued deletion reserve canonical path, file identity and timeline under
    the same lock; replacement of the file cannot erase its path reservation.
