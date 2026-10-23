@@ -101,13 +101,15 @@ collects those final coverage files after stopping the process.
 
 `recfile_request` returns the request's **ticket**, never 0, or 0 when it is refused before it is
 queued (a bad argument, no memory, every worker busy, the process exiting). Its outcome waits in a
-ring of `REC_FILE_RESULTS` = 16 slots, slot ticket mod 16: `recfile_result` answers 0 while the job
-is queued or running, 1 done, -1 refused with the worker's reason, -2 unknown. The deletion of a
-timeline a playing holds is a queued request whose outcome, `timeline N is in use`, is in the ring
-at once. **The ordering, under the queue's lock:** the worker writes the result before its job
-leaves the pending set, so a ticket is pending or in the ring at every instant the lock is free; a
-slot names its ticket, so a ticket a later one has displaced reads unknown, never another
-request's outcome. `recfile_completed` counts the finished requests without the lock, for a reader
+ring of `REC_FILE_RESULTS` = 16 slots, filled in the order the requests finish: `recfile_result`
+answers 0 while the job is queued or running, 1 done, -1 refused with the worker's reason, -2
+unknown. A job is given a ticket only once it has a worker's slot; the deletion of a timeline a
+playing holds is a queued request whose outcome, `timeline N is in use`, is in the ring at once.
+**The ordering, under the queue's lock:** the worker writes the result before its job leaves the
+pending set, so from its issue a ticket is pending or in the ring at every instant the lock is
+free, until 15 later requests have finished: a result outlives 15 later completions. Each slot
+names its ticket, so a ticket the ring no longer holds reads unknown, never another request's
+outcome. `recfile_completed` counts the finished requests without the lock, for a reader
 that wants to know some file may have changed.
 
 The replay HUD deletes and exports a fork of the playing's file through
@@ -125,8 +127,11 @@ rewind's open, a takeover's plan and the frame visit after any file job finished
 its scan is the one the trigger's dry run already ran on the playing reader (`segs_scan`, which
 keeps the reader's place). Each row carries the timeline's `controlled` seat, its header's
 RT_OPTIONS byte 18, which the recorder takes from `main+0x2A42`: in a fork, the player it was
-played as [INFERRED from the order: the takeover sets `+0x2A42` before the fork's first capture
-point]. The axis runs from the root's first GameTime to the greatest last of a live timeline.
+played as. `tagpu_replay_timelines_serial` grows by one at every change of the rows or the axis,
+the playing's end included, so a caller (the takeover's picker) knows when to read them and plan
+again. READ: the takeover's `tk_live` stores that seat in `+0x2A42`, then `tk_end` arms the
+fork, whose header `header_build` writes at its first capture point; the X lane's `hud state`
+check compares every fork's seat with the player it took over as. The axis runs from the root's first GameTime to the greatest last of a live timeline.
 
 ## Driving it
 

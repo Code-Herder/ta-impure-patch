@@ -909,6 +909,7 @@ HUD_ROW_RX = re.compile(r"(\d+):(\d+)@(\d+)\.\.(\d+)/([LD])/c(\d+)(\*?)$")
 HUD_STATE_RX = {
     "timelines": re.compile(r"replay: (.+?): hud state timelines (.*); axis (\d+)\.\.(\d+); span "
                             r"(\d+)\.\.(\d+); watched (\d+)\s*$"),
+    "cache": re.compile(r"replay: (.+?): hud state cache serial (\d+)\s*$"),
     "rewind": re.compile(r"replay: (.+?): hud state rewind (\w+) available ([01]) span "
                          r"(\d+)\.\.(\d+) G (\d+) T (\d+)\s*$"),
     "result": re.compile(r"replay: (.+?): hud state result (\d+) (\w+) op (-?\d+) "
@@ -917,11 +918,11 @@ HUD_STATE_RX = {
 
 
 def hud_state_parse(lines):
-    """The three lines of the trigger's `hud state` (tagpu_replay.c, the trigger) as a dict, or
+    """The four lines of the trigger's `hud state` (tagpu_replay.c, the trigger) as a dict, or
     None when one is missing: `name`; `timelines`, a row dict each (id, parent, fork_at, last,
     live, controlled, on_chain), [] for `none`; `axis` and `span` as (first, last); `watched`;
-    `rewind` (state, available, span, G, T); `result` (serial, kind, op, ok, why). The last of
-    each line counts."""
+    `cache`, the timelines' serial; `rewind` (state, available, span, G, T); `result` (serial,
+    kind, op, ok, why). The last of each line counts."""
     got = {}
     for ln in lines:
         for key, rx in HUD_STATE_RX.items():
@@ -941,7 +942,7 @@ def hud_state_parse(lines):
                          "last": int(m[4]), "live": m[5] == "L", "controlled": int(m[6]),
                          "on_chain": m[7] == "*"})
     return {"name": t[1], "timelines": rows, "axis": (int(t[3]), int(t[4])),
-            "span": (int(t[5]), int(t[6])), "watched": int(t[7]),
+            "span": (int(t[5]), int(t[6])), "watched": int(t[7]), "cache": int(got["cache"][2]),
             "rewind": {"state": r[2], "available": r[3] == "1", "span": (int(r[4]), int(r[5])),
                        "G": int(r[6]), "T": int(r[7])},
             "result": {"serial": int(q[2]), "kind": q[3], "op": int(q[4]), "ok": q[5] == "ok",
@@ -951,7 +952,7 @@ def hud_state_parse(lines):
 def hud_state(w, log):
     """What the HUD's recorder calls answer now (tagpu_replay.h, THE HUD'S RECORDER CALLS),
     through the trigger's `hud state`: hud_state_parse's dict. The result line is the last of the
-    three the frame visit logs."""
+    four the frame visit logs."""
     n = len(log.lines)
     w.trigger("hud state")
     if not log.wait(r"hud state result ", ACK_S, n):
@@ -2160,7 +2161,8 @@ def forks_steps(w, fx, out, results):
             raise Failed(f"forks: hud state result {again} after the HUD's refused deletion and "
                          f"its export, from serial {sought['serial']}")
         results.add(("forks: the HUD's recorder calls", PASS,
-                     f"timelines {got}, axis {st['axis']}, chain {chain}; {want} at {T}; seek 0 "
+                     f"timelines {got} (serial {st['cache']}), axis {st['axis']}, chain {chain}; "
+                     f"{want} at {T}; seek 0 "
                      f"refused; delete {tl} refused in use, export 4 done; serial "
                      f"{st['result']['serial']} -> {again['serial']}"))
 

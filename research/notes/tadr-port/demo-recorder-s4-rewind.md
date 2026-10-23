@@ -99,7 +99,7 @@ paused and permits retrying `fork`; `now` cannot resume an ended recording.
 ### The verbs as a queue, and their outcomes
 
 The trigger's `rewind ...` line is parsed (`rw_trigger`: the prefix, the length, the ` dump NAME`
-suffix, with their refusals) into a verb, and the HUD calls `tagpu_replay_rewind(op, T, dump)`
+suffix, whose refusals are logged and record no outcome) into a verb, and the HUD calls `tagpu_replay_rewind(op, T, dump)`
 with one of the five; both queue it, the latest replacing an earlier one not yet taken. A verb the
 parse does not know is queued too, so it meets the state refusals first (`waiting for the writer`,
 `no rewind is open`) and its own last, as every verb always has. **The ordering, on one thread:**
@@ -118,6 +118,13 @@ test without its flush), the live recording's span once open, G and the last see
 trigger's `hud state` prints both; the rewind lane checks them before the first open (idle,
 available), after it (open, G, the outcome `opened at GameTime ...`) and after a refused
 `rewind seek 0`.
+
+**The fork and the original's compaction.** When the recording a rewind forks was itself a fork
+(a live game a takeover made), its writer is an append writer, which queues the file's compaction
+before it signals its done event (`tagpu_recwriter.c`, the hand-over); the compaction holds the
+file's lock while it runs. So `rw_poll` takes the fork only once the done event is seen and no
+request on the file is queued or running (`recfile_pending`): from the event on the compaction is
+queued, running or finished, and the fork's `tk_open` takes the lock after it, never against it.
 
 ### The HUD's route
 

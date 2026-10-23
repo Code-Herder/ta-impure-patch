@@ -50,8 +50,9 @@ skirmish segment of the multiplayer file:
   T, D)` is the trigger's takeover with the trigger's lines: refused at once by `takeover_point`,
   or queued for the frame visit.
 - **The latest request runs.** A seek, the HUD's included, replaces a takeover not yet taken:
-  every request writes every field `seek_run` reads at its entry (the mode, T, P and D, the dump,
-  the poison, the boundary), so a HUD seek after a queued takeover is a seek to its own T.
+  every request writes every field `seek_run` reads at its entry (the mode, T, the dump, the
+  poison, the boundary, and P and D for a takeover), so a HUD seek after a queued takeover is a
+  seek to its own T.
 - **Each takeover's outcome is the last request's** (`tagpu_replay_result`, kind TAKEOVER): the
   refusal's reason, or `taken over at GameTime R as player P`. Only a request records one: a
   live rewind's fork reports through the rewind's own outcome
