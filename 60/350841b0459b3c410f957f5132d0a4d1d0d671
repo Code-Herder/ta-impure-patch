@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=medium reviewers=1 range=main..60350841 findings=3 acted=2 rejected=1 date=2026-10-23 (MEDIUM proposed-only parts packed+decoded: kept, owner chose full resolution and their draws land next, cost stated in hud-in-game.md Open; LOW copies() negative room -> clamp; NIT figures re-measured)
