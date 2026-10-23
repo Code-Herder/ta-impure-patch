@@ -177,10 +177,11 @@ static void* cells_make(const RecCodecParams* p)
    moves. BOUND: reccodec_restart hands over only a world of the codec's grid, the W * H this
    frame was made for, so the copy is W * H cells on both sides. With no world the codec is
    invalid, and G stays as it was until a restart that has one. */
-static void cells_restart(void* f, const RecFrameWorld* w)
+static void cells_restart(void* f, const RecCodecParams* p, const RecFrameWorld* w)
 {
     Cells* x = (Cells*)f;
     unsigned i;
+    (void)p;
     if (w && w->grid != x->g) memcpy(x->g, w->grid, x->wh * CB);
     tick_empty(&x->t[0]);
     tick_empty(&x->t[1]);

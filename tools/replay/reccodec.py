@@ -2393,9 +2393,12 @@ def _orders_new(prm):
             np.zeros(_O_MAX, np.bool_))
 
 
-def _orders_restart(st):
+def _orders_restart(st, hold):
+    """As orders_restart: the kept lists and the latches cleared, and the scheme the restart's
+    params set (a segment's RT_HOLD)."""
     st[0][...] = 0
     st[2][:2] = 0
+    st[2][2] = _ORDERS_MATCH if hold else _ORDERS_SCHEME
 
 
 def _orders_clone(st):
@@ -3326,9 +3329,9 @@ def _frames_new(prm):
     return (_cells_new(prm), _orders_new(prm), _events_new(prm), _state_new(prm))
 
 
-def _frames_restart(fst):
+def _frames_restart(fst, prm):
     _cells_restart(fst[0])
-    _orders_restart(fst[1])
+    _orders_restart(fst[1], prm.hold)
     _events_restart(fst[2])
     _state_restart(fst[3])
 
@@ -3347,13 +3350,14 @@ class Frame:
     pool frame: the copy of the projectile pool (zero from its extent on), each record's image
     one iteration before, its winners and its age, the last birth of each weapon ID, the last
     iteration's shots, and meta = (count, extent, shots). The record frames: `fst`, their states,
-    made for the sizes the segment's params give (`sizes`), which every restart's must match, as
-    reccodec_restart requires; None while the params are not usable."""
+    made for the five sizes the segment's params give (`sizes`: slots, pool, grid columns and rows,
+    wreck pool), which every restart's must match, as reccodec_restart requires; None while the
+    params are not usable. The orders frame's scheme is each restart's, from its params' `hold`."""
 
     def __init__(self, prm, rest=True):
         self.prm = prm
         self.rest_mode = rest
-        self.sizes = (prm.nslots, prm.nproj, prm.gw, prm.gh, prm.nwrecks, prm.hold)
+        self.sizes = (prm.nslots, prm.nproj, prm.gw, prm.gh, prm.nwrecks)
         self.fst = _frames_new(prm) if prm.usable else None
         n = prm.nslots
         self.copy = np.zeros((n, IMG), np.uint8)
@@ -3461,11 +3465,11 @@ class Frame:
                        np.zeros((UC_CACHES, UC_CVALS), np.int64), np.zeros(UC_CACHES, np.int64))
         p = self.prm
         if (not p.usable or not self.nl or
-                (p.nslots, p.nproj, p.gw, p.gh, p.nwrecks, p.hold) != self.sizes):
+                (p.nslots, p.nproj, p.gw, p.gh, p.nwrecks) != self.sizes):
             return
         if self.fst is None:
             self.fst = _frames_new(p)
-        _frames_restart(self.fst)
+        _frames_restart(self.fst, p)
         c, h = int(self.meta[0]), int(self.meta[1])
         if c > h or h > len(self.P):
             return

@@ -29,7 +29,9 @@
    may have been appended since. A playing reads one CHAIN of timelines, root first, chosen by
    recr_timeline before its first iteration; every segment of it agrees with the first header in
    shape, which is the bound that keeps the world's allocations, sized from the first header,
-   valid for every segment's records.
+   valid for every segment's records. What a segment's header may set for its own records (its
+   RT_HOLD, mode and roster, its seats' controllers), the reader takes from that segment's header
+   (seg_header), never from the first's.
    THE INVARIANT that makes a chain one world: a segment's records are applied only over a world
    reset to that segment's first iteration, or built from that segment's own snapshot over that
    segment's own base. No record of one segment is applied over another segment's world except
@@ -309,7 +311,11 @@ static int sections_body(RecReader* r, const RecBlock* b, const unsigned char* s
        encoder restarted from, and its grid, which every image of the segment read so far built
        (apply), or a snapshot over the base did. The codec was made for the sizes of the first
        segment it met -- slots, projectile pool, grid and wreck pool -- which every segment's
-       header equals (segs_scan, shape_differs); h->codec is this segment's own. */
+       header equals (segs_scan, shape_differs); h->codec is this segment's own. The restart
+       takes from h->codec what a segment may set, the orders frame's scheme (RT_HOLD).
+       THE ORDERING: every change of segment resets the world (world_reset), which invalidates
+       the codec, and sections_ready refuses a block that continues an invalid one. So a
+       segment's records are decoded only after a restart from its own header. */
     if (b->flags & RBF_FRAME_RESET) {
         RecFrameWorld fw = { r->h.grid_w, r->h.grid_h, r->w.grid };
         reccodec_restart(r->codec, &h->codec, r->w.unit, r->w.live, r->w.proj, r->w.nproj,
