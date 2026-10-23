@@ -409,7 +409,11 @@ class Worker:
                           "--private-registry", timeout=300)
             if rc:
                 raise CouldNotRun(f"tacli create {self.name}: {last(o)}")
-            tacli("arm", self.name, "recorder.on")
+            # keep 2: from a worker's third recording on, every launch of L prunes its replays\ for
+            # real (tagpu_recfile.h, THE PRUNE), so the gate reaches the prune and every later test of
+            # the worker runs beside it. No test reads a recording out of the instance once its own
+            # test has collected it.
+            tacli("arm", self.name, "recorder.on=keep 2")
         except BaseException:
             stop_xvfb(self.xvfb)
             self.lock.close()

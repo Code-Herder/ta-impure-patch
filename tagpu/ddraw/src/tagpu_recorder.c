@@ -7516,7 +7516,7 @@ void __cdecl tagpu_rec_capture(void)
             if (tagpu_puppet_on())
                 tagpu_logf("recorder: not recording: this level plays a recording");
             else if (!tagpu_opt_on(REC_ON))
-                tagpu_logf("recorder: not recording: %s is absent", REC_ON);
+                tagpu_logf("recorder: not recording: %s is off (its .off file, tagpu_defaults.off)", REC_ON);
             else if (!tagpu_reclaim_level_tracked())
                 tagpu_logf("recorder: not recording: the teardown wrap is not in (tagpu_reclaim.c), "
                            "so nothing would end a recording");
