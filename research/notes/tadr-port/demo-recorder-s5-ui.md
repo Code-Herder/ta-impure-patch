@@ -348,20 +348,32 @@ not read yet), which the list is ordered by, newest first, exactly as the prune 
 (`recfile_newer_first`), before its cut to 1024. **A mark goes only when a read proves its file
 changed or is gone.**
 
+- **The index is read whole and written whole.** Every line goes into one table that grows as it
+  needs (`ent_slot`), however many there are, apart from the browser's list of at most 1024; so a
+  file listed again later finds its own line, and no second line is ever made for a name the index
+  holds. A line that does not fit the 4 MB cap fails the whole write, which then leaves the old
+  index in place.
 - **A version-1 index is converted at its first load**, text line by line, every line kept, those
-  past the browser's 1024 too, and written at once. Each line's key and start are written `-`,
-  *unknown*: no file is read for them. The browser's next open reads both for every file it lists,
-  and a file it cannot read then sorts after the dated ones, as the prune sorts it. The line takes its file's key at the first read of the file that succeeds,
-  with version 1's own rule: the favourite and the last-played time stay, and the bookmarks and the
-  refusal's mark stay while the file's size is still the line's. Until then the prune counts the
-  line's marks by its name alone. Any key field that is not sixteen hex digits reads as unknown.
-- **A line is dropped only when its file is not there**: the name not found, never an open that
-  failed. A summary that could not be read now (the file held exclusively) leaves the line's size
-  unknown, so the next open reads it again.
-- **An index that cannot be read is never rebuilt over.** Only a missing file is no index; an empty
-  one holds no mark either. A read that fails, a file over 4 MB, or a version this build does not
-  know, a later build's among them, makes every write of the index refuse and log, and the prune
-  keep every recording, until the file reads again.
+  past 1024 too, and written at once. Each line's key and start are written `-`, *unknown*: no
+  file is read for them. The browser's next open reads both for every file in `replays\`, before
+  its cut to 1024, and a file it cannot read then sorts after the dated ones, as the prune sorts
+  it. The line takes its file's key at the first read of the file that succeeds, with version 1's
+  own rule: the favourite and the last-played time stay, and the bookmarks and the refusal's mark
+  stay while the file's size is still the line's. Until then the prune counts the line's marks by
+  its name alone. Any key field that is not sixteen hex digits reads as unknown, and a file whose
+  first bytes are not a whole recording header never gives its line a key.
+- **A line is dropped only when its file is not there**: the name not found at a write, never an
+  open that failed. A summary that could not be read now (the file held exclusively) leaves the
+  line's size unknown, so the next open reads it again.
+- **An index that cannot be read is never rebuilt over.** Only a missing file, or a missing
+  `replays\` folder, is no index; an empty one holds no mark either. A read that fails, a file
+  over 4 MB, a version this build does not know (a later build's among them), or no memory to read
+  it whole makes every write of the index refuse and log, and the prune keep every recording,
+  until the file reads again. A favourite clicked then is put back as it was, and logged.
+- **An index written by this branch's earlier builds reads wrong.** Its version-2 lines lack the
+  recorded start, which a later build of the branch added without raising the version, since no
+  version 2 ever shipped: delete `replays\index.dat` on any instance that ran one. The replay
+  gate's instances need nothing: every lane's `place` empties `replays\`, index and all.
 - **A downgrade is the hazard this cannot cover.** A build from before version 2 reads a version-2
   index as foreign and rebuilds it, which loses its favourites and bookmarks; nothing in this build
   can stop that.
