@@ -1255,6 +1255,14 @@ static int put_ent(char* b, int cap, int at, const Ent* e)
     return gput(b, cap, at, "\n");
 }
 
+/* THE INDEX'S LOCK (an ordering). index_save replaces the index under it, and the recording prune
+   (tagpu_replays_unmarked_delete, on a file worker) reads a recording's marks off the disk and marks
+   the recording for deletion under it: a favourite or a bookmark the index holds before the prune
+   reads it keeps its recording. Neither side does more than one file's read or write under it. */
+static volatile LONG s_idxLock;
+static void idx_lock(void) { while (InterlockedExchange(&s_idxLock, 1)) Sleep(0); }
+static void idx_unlock(void) { InterlockedExchange(&s_idxLock, 0); }
+
 /* The whole index, written beside the old one and renamed over it. On the game thread, in the
    shell, where no simulation is waiting on it, or on a level that plays a recording (the replay
    HUD's bookmarks): a playback is a skirmish, mode 2, with no peer, so the write can stall only the
@@ -1295,8 +1303,10 @@ static void index_save(void)
         free(b);
         return;
     }
+    idx_lock();
     h = CreateFileA(INDEX_TMP, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) {
+        idx_unlock();
         rlog("replays: cannot write " INDEX_TMP " (%lu)", GetLastError());
         free(b);
         return;
@@ -1309,6 +1319,61 @@ static void index_save(void)
         rlog("replays: cannot replace " INDEX_PATH " (%lu)", GetLastError());
         DeleteFileA(INDEX_TMP);
     }
+    idx_unlock();
+}
+
+/* Does the index on disk give `file` a favourite or a bookmark? Any line of that name counts,
+   whatever size it was written for. 1 marked, 0 not, -1 the index could not be read (a missing
+   index marks nothing). Under the index's lock, on any thread: it touches no s_ent. */
+static int index_marked(const char* file)
+{
+    HANDLE h = CreateFileA(INDEX_PATH, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    LARGE_INTEGER sz;
+    DWORD got = 0;
+    char *raw, *line, *next;
+    Ent* e;
+    int marked = 0;
+    if (h == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_FILE_NOT_FOUND ? 0 : -1;
+    raw = GetFileSizeEx(h, &sz) && sz.QuadPart > 0 && sz.QuadPart <= INDEX_CAP
+        ? (char*)malloc((size_t)sz.QuadPart + 1) : NULL;
+    e = (Ent*)malloc(sizeof *e);
+    if (!raw || !e || !ReadFile(h, raw, (DWORD)sz.QuadPart, &got, NULL) || got != (DWORD)sz.QuadPart) {
+        CloseHandle(h);
+        free(raw);
+        free(e);
+        return -1;
+    }
+    CloseHandle(h);
+    raw[got] = 0;
+    if (strncmp(raw, INDEX_MAGIC "\n", sizeof INDEX_MAGIC)) marked = -1;
+    for (line = raw + sizeof INDEX_MAGIC; marked == 0 && *line; line = next) {
+        size_t k;
+        next = strchr(line, '\n');
+        next = next ? (*next = 0, next + 1) : line + strlen(line);
+        k = strlen(line);
+        if (k && line[k - 1] == '\r') line[k - 1] = 0;
+        if (ent_parse(line, e) && !_stricmp(e->file, file) && (e->fav || e->nmarks)) marked = 1;
+    }
+    free(raw);
+    free(e);
+    return marked;
+}
+
+typedef BOOL (WINAPI* SetInfoFn)(HANDLE, FILE_INFO_BY_HANDLE_CLASS, LPVOID, DWORD);
+
+int tagpu_replays_unmarked_delete(const char* file, HANDLE recording)
+{
+    /* resolved at run time: a static import of a Vista call would stop the DLL loading on XP */
+    SetInfoFn set = (SetInfoFn)(void*)GetProcAddress(GetModuleHandleA("kernel32.dll"),
+                                                     "SetFileInformationByHandle");
+    FILE_DISPOSITION_INFO gone = { TRUE };
+    int marked, r;
+    if (!set) return -1;
+    idx_lock();
+    marked = index_marked(file);
+    r = marked ? 0 : set(recording, FileDispositionInfo, &gone, sizeof gone) ? 1 : -1;
+    idx_unlock();
+    return marked < 0 ? -1 : r;
 }
 
 static int ascii_lower(char c) { return c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : (unsigned char)c; }

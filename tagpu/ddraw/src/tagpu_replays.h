@@ -15,6 +15,7 @@
    once the archive is written and its GUI redirect is in: a REPLAYS.GUI the engine cannot read
    faults GUI_Load, so the button is offered only when the screen it opens can load. */
 
+#include <windows.h>
 #include "tagpu_ufo.h"
 
 /* The archive's entries for the screen: one ground per style that has art of its own, and one
@@ -40,6 +41,14 @@ int  tagpu_replays_redirects(const char* name);
 int  tagpu_replays_marks_get(const char* file, unsigned long long size, unsigned* out, int cap);
 int  tagpu_replays_mark_add(const char* file, unsigned long long size, unsigned T);
 int  tagpu_replays_mark_remove(const char* file, unsigned long long size, unsigned T);
+
+/* On a recording-file worker (tagpu_recfile.c, the prune): marks `recording`, a handle with DELETE
+   access that no other opener shares, for deletion unless replays\\index.dat gives `file` (its
+   name in replays\\) a favourite or a bookmark. The index is read off the disk under the lock its
+   writer takes, so a mark saved before this call keeps the recording. 1 marked for deletion (it
+   goes when the handle closes), 0 kept, -1 nothing decided: the index could not be read, or the
+   system has no SetFileInformationByHandle. */
+int  tagpu_replays_unmarked_delete(const char* file, HANDLE recording);
 
 /* Watch's own check refused the recording `file` of replays\\ with one of WATCH'S DATA REFUSALS
    (tagpu_replay.h), `code`, having compared the running values `a` and `b`: its index line is

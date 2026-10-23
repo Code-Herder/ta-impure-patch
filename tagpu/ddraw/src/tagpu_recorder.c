@@ -2481,6 +2481,8 @@ static unsigned s_refresh;          /* tagpu_rec.refresh's interval, 0 for REC_R
 
 /* Everything a recording will need, taken now. After this the capture allocates only from its own
    heap, for the order lists' images, and for a heap table that grows (table_grow). */
+static unsigned keep_count(void);   /* the entry points' section, beside REC_ON */
+
 static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
 {
     HANDLE heap = GetProcessHeap();
@@ -2636,6 +2638,9 @@ static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
         goto fail;
     }
     s_mp_file=g->mp;
+    /* a new file, never a fork's: the prune runs on a file worker, and keeps this one, the newest */
+    if (!g->fork.file && !recfile_request(g->path, REC_FILE_PRUNE, keep_count(), NULL, NULL))
+        tagpu_logf("recorder: no prune at %s: no file worker", g->path);
     if (g->fork.id)
         tagpu_logf("recorder: recording timeline %u of %s from GameTime %d (parent %u): %u slots, "
                    "%u tables", g->fork.id, g->path, tick, g->fork.parent, L->nslots, r->ntab);
@@ -7226,11 +7231,24 @@ fail:
 
 /* ---- the entry points ----------------------------------------------------------------------- */
 
-/* A level is recorded only while this file is in the game's folder at its first iteration
-   (`tacli arm <instance> recorder.on`): the exact stream is too large to write for every game
-   (demo-recorder-skirmish-slice.md, *Measured*). It decides whether a game is recorded, not what
-   the simulation runs, so it is not a simulation lever and not in the header's lever list. */
+/* A level is recorded when this lever is on at its first iteration: a play default
+   (tagpu_opt.c), so every skirmish and multiplayer game is, unless `tagpu_recorder.off` or
+   `tagpu_defaults.off` is in the game's folder (a tacli instance's bare launch writes the second;
+   `tacli arm <instance> recorder.on` records there). Its text may say `keep N`, how many
+   recordings the prune keeps (tagpu_recfile.h, THE PRUNE). It decides whether a game is recorded,
+   not what the simulation runs, so it is not a simulation lever and not in the header's lever list. */
 #define REC_ON "tagpu_recorder.on"
+
+/* the lever's `keep N`, or REC_KEEP when it names none */
+static unsigned keep_count(void)
+{
+    char b[64];
+    const char* k;
+    unsigned long n;
+    if (tagpu_opt_read(REC_ON, b, sizeof b) < 0 || !(k = strstr(b, "keep "))) return REC_KEEP;
+    n = strtoul(k + 5, NULL, 10);
+    return n ? (unsigned)n : REC_KEEP;
+}
 
 /* THE FORK'S HANDLE (a lifetime). A takeover's fork is written into the file it was played from,
    through a handle the takeover opened (tagpu_replay.c, TK0). Its owners, in order:
