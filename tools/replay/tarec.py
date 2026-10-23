@@ -1477,10 +1477,15 @@ def segments(bl, offsets=None):
 
 
 def shape_differs(a, b):
-    """The first field in which a segment's header differs from the first header, or None: the
-    reader's bound that keeps the world sized from the first header for every segment."""
+    """The first field in which a segment's header `a` differs from the first header `b`, or None:
+    the reader's bound that keeps the world sized from the first header for every segment, each
+    rule the DLL's reader's (tagpu_recreader.c, shape_differs)."""
     if "multiplayer" in a and "multiplayer" in b and (a["multiplayer"] != b["multiplayer"] or a["mp_seats"] != b["mp_seats"]):
         return "multiplayer source/seat mapping"
+    if "multiplayer" in a and "multiplayer" not in b:
+        return "multiplayer roster"
+    if "multiplayer" not in a and "multiplayer" not in b and holds_cells(a) != holds_cells(b):
+        return "held cells"
     for key in ("slots", "units_each", "unitdefs", "weapons", "features", "projectiles", "layout",
                 "globals", "settings_map"):
         if a.get(key) != b.get(key):
