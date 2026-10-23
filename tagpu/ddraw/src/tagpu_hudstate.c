@@ -119,6 +119,7 @@ typedef char hud_stats_fit[(TAGPU_PK_HUD_POINTS == HUD_MAXPT && TAGPU_PK_HUD_MEA
 _Static_assert(TAGPU_CMD_HUDHITS == HUD_MAXHOT, "the hit map holds the layout's bound");
 _Static_assert(TAGPU_PK_HUD_FORKS == REC_FORK_LIMIT && TAGPU_PK_HUD_FORKS == HUD_MAXFORK,
                "the packet and the layout carry every live fork");
+_Static_assert(TAGPU_PK_FORK_CHAIN == 2u, "tagpu_hudlay.c's LANE_CHAIN is the packet's flag");
 static int      s_have;
 static unsigned s_frame;                /* the render-thread frame `s_st` is for */
 static float    s_px;
@@ -421,6 +422,10 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     st->held[sizeof st->held - 1] = 0;
     memcpy(st->toast, h->toast, sizeof st->toast);
     st->toast[sizeof st->toast - 1] = 0;
+    /* the armed Delete by its fork's place in the list, which the input marks on the fork itself */
+    st->armed = -1;
+    for (i = 0; i < st->nfork; i++)
+        if (st->fork[i].flags & TAGPU_PK_FORK_ARMED) st->armed = i;
     s_px = u;
     s_frame = f->frame_counter;
     s_have = 1;
@@ -468,6 +473,10 @@ void tagpu_hudstate_drawn(const HUDOPS* ops)
     s_map.last = (uint8_t)(ops->last < 0 ? 0 : ops->last > 255 ? 255 : ops->last);
     s_map.nseat = (uint8_t)(s_st.nseat < (int)TAGPU_PK_HUD_SEATS ? s_st.nseat : (int)TAGPU_PK_HUD_SEATS);
     memcpy(s_map.seat, s_seatOf, sizeof s_map.seat);
+    /* the lanes this frame drew, in the order their keys index them (tagpu_hudlay.c, lanes) */
+    s_map.nlane = 0;
+    for (i = 0; s_st.lanes_open && i < s_st.nfork && i < (int)TAGPU_PK_HUD_FORKS; i++)
+        s_map.lane_id[s_map.nlane++] = (uint32_t)s_st.fork[i].id;
 }
 
 void tagpu_hudstate_cmd(TAGPU_CMD_HUD* out)

@@ -26,6 +26,7 @@ static volatile LONG   s_mkN;
 static volatile LONG   s_walkStop;
 static HANDLE          s_walkH;
 static int             s_walkStarted;
+static int             s_walkStopping;  /* the stop is asked and the worker not yet joined        */
 static char            s_walkPath[MAX_PATH];
 static unsigned        s_walkTl;        /* the timeline walked: the one the playback plays        */
 /* the bookmarks: index.dat keys a recording by its name in replays\ and its root key, which
@@ -54,14 +55,22 @@ static unsigned        s_narmy;
    player image: replay-layout.tsv excludes neither.
    ORDERING: an entry is written whole before InterlockedExchange publishes the count that covers
    it, and entries are never rewritten, so the game thread reads entries below the count it read.
-   LIFETIME: the worker owns its reader and closes it before it returns; walk_stop stops it and
-   waits for it on the game thread -- at the teardown's entry, and when the playback moves to
-   another timeline -- before the count goes back to 0. The wait is bounded by the file and the
-   format, not by a timeout: before its first look at the stop flag the worker opens the reader,
-   which reads every block header (recr_open's segment scan), and between two looks it reads one
-   iteration -- at most one block unpacked and decoded (RECR_BLOCK_MAX) -- or crosses one fork,
-   a seek that scans the headers again and rebuilds from the last snapshot before the fork
-   (SNAPSHOT_TICKS apart when written) plus the child's first iteration.
+   LIFETIME: the worker owns its reader and closes it before it returns. walk_ask asks it to stop
+   -- at the teardown's entry, and when the playback moves to another timeline -- and walk_reap
+   joins it on the game thread: polled at each fill after a switch, so a switch never stalls a
+   frame, and waited for at the teardown, whose level memory goes away after it. The tables the
+   worker writes (s_mk, s_sv, s_base, s_army) are reset or freed only once WaitForSingleObject
+   has seen its thread end, never at the stop's request; while a stop is pending the game thread
+   reads no marker and no sample, since the worker may still publish into the old tables and a
+   reset under it would let its next publication pass for the new walk's; and a new walk starts
+   only after the join. So at no instant do two workers, or a worker and a reset, share the
+   tables. The stop is bounded by the file and the format, not by a timeout -- a bound on the
+   frames the markers blank after a switch, and on the teardown's wait: before its first look at
+   the stop flag the worker opens the reader, which reads every block header (recr_open's
+   segment scan), and between two looks it reads one iteration -- at most one block unpacked and
+   decoded (RECR_BLOCK_MAX) -- or crosses one fork, a seek that scans the headers again and
+   rebuilds from the last snapshot before the fork (SNAPSHOT_TICKS apart when written) plus the
+   child's first iteration.
    THE TIMELINE WALKED IS THE ONE THAT PLAYS (tagpu_replay_timeline): the reader is moved onto its
    chain before the first iteration, as the playback's own is, and crosses each fork on it by a
    seek, one segment's first iteration read whole.
@@ -78,7 +87,7 @@ static unsigned        s_narmy;
    TAGPU_PK_HUD_POINTS samples. They are published as the markers are: s_base is written before
    the first count, a sample whole before the count that covers it, and none is rewritten.
    THE TYPES' VALUES are the game thread's copy of the engine's (tagpu_replay_army_values), made
-   before CreateThread and freed by walk_stop after the join: the worker never reads engine memory
+   before CreateThread and freed by walk_reap after the join: the worker never reads engine memory
    and never outlives the table. A type index at or past the table's count is data the recording
    holds and is worth nothing. */
 _Static_assert(0x144 + 2 <= REC_PLAYER_BYTES, "the walker's player fields are in the player image");
@@ -244,11 +253,25 @@ static void walk_start(void)
     if (!s_walkH) tagpu_logf("hud: markers: none - the walker did not start (%lu)", GetLastError());
 }
 
-static void walk_stop(void)
+static int walk_reap(DWORD wait);
+
+/* Asks the worker to stop; the join is walk_reap's. */
+static void walk_ask(void)
 {
     if (s_walkH) {
         InterlockedExchange(&s_walkStop, 1);
-        WaitForSingleObject(s_walkH, INFINITE);
+        s_walkStopping = 1;
+    } else {
+        walk_reap(0);               /* the worker never started: its tables are empty */
+    }
+}
+
+/* The worker joined -- at once when `wait` is 0, else until it returns -- and the walk's tables
+   emptied: 1; 0 still running. */
+static int walk_reap(DWORD wait)
+{
+    if (s_walkH && WaitForSingleObject(s_walkH, wait) != WAIT_OBJECT_0) return 0;
+    if (s_walkH) {
         CloseHandle(s_walkH);
         s_walkH = NULL;
     }
@@ -259,13 +282,17 @@ static void walk_stop(void)
     s_army = NULL;
     s_narmy = 0;
     s_walkStarted = 0;
+    s_walkStopping = 0;
+    return 1;
 }
 
 int tagpu_hudmarks_get(unsigned* T, unsigned char* kind, unsigned char* seat, int cap)
 {
     LONG n;
     int i, k = 0;
-    if (s_walkStarted && tagpu_replay_timeline() != s_walkTl) walk_stop();
+    if (s_walkStarted && !s_walkStopping && tagpu_replay_timeline() != s_walkTl) walk_ask();
+    /* the old walk's markers are not the timeline's: none until the new walk */
+    if (s_walkStopping && !walk_reap(0)) goto bookmarks;
     if (!s_walkStarted && tagpu_replay_live()) walk_start();
     /* the walker writes an entry, then publishes the count: the entries below it are whole */
     n = InterlockedCompareExchange(&s_mkN, 0, 0);
@@ -274,6 +301,7 @@ int tagpu_hudmarks_get(unsigned* T, unsigned char* kind, unsigned char* seat, in
         kind[k] = s_mk[i].kind;
         seat[k] = s_mk[i].seat;
     }
+bookmarks:
     for (i = 0; i < s_nbm && k < cap; i++, k++) {
         T[k] = s_bm[i];
         kind[k] = 2;
@@ -289,6 +317,8 @@ int tagpu_hudmarks_stats(const char* key, const unsigned char* seat, int nseat, 
     int m, i, k;
     for (m = 0; m < ST_N && strcmp(key, ST_KEY[m]); m++) {}
     *period = s_period;
+    /* a stopping walk's samples are not the timeline's, and may still be written (THE WALKER) */
+    if (s_walkStopping) { *base = 0; return 0; }
     /* the walker writes the base and then a sample before it publishes the count: the base read
        after a count is that walk's, and the samples below it are whole */
     n = InterlockedCompareExchange(&s_svN, 0, 0);
@@ -330,7 +360,9 @@ int tagpu_hudmarks_bookmark(unsigned now, unsigned within, unsigned* at)
 
 void tagpu_hudmarks_level_end(void)
 {
-    walk_stop();
+    /* the teardown keeps the blocking join: the level's memory goes away after it */
+    walk_ask();
+    walk_reap(INFINITE);
     s_nbm = 0;
     s_keyOk = 0;
 }

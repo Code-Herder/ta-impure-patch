@@ -672,7 +672,9 @@ typedef struct TAGPU_PK_HUDMARK {
    ones by branch point, oldest first, as the mockup lists them (index.html,
    `forkList`) */
 #define TAGPU_PK_HUD_FORKS 3u       /* REC_FORK_LIMIT: the live forks a file keeps */
-enum { TAGPU_PK_FORK_WATCHED = 1, TAGPU_PK_FORK_CHAIN = 2 };
+/* ARMED: its Delete has had the first of its two clicks (tagpu_hudinput.c), a flag
+   so the arm follows its fork when the list reorders */
+enum { TAGPU_PK_FORK_WATCHED = 1, TAGPU_PK_FORK_CHAIN = 2, TAGPU_PK_FORK_ARMED = 4 };
 typedef struct TAGPU_PK_HUDFORK {
     uint32_t id;
     uint32_t from, end;         /* its fork_at and its last GameTime             */
@@ -680,7 +682,7 @@ typedef struct TAGPU_PK_HUDFORK {
     uint8_t  seat;              /* the seat it was played as (RT_OPTIONS
                                    controlled)                                   */
     uint8_t  flags;             /* TAGPU_PK_FORK_*: the one watched; a segment of
-                                   the chain that plays                          */
+                                   the chain that plays; its Delete armed        */
     uint8_t  pad[2];
 } TAGPU_PK_HUDFORK;
 /* What the HUD shows: the replay's controls, or a live recorded skirmish's

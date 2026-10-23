@@ -168,11 +168,17 @@ const HUD = (() => {
   }
 
   /* ---- proposed, variation B (layout.json's "proposed"): forks as lanes over the timeline housing, oldest branch on top.
-     A lane runs from its branch to its end on the track's own time axis, widened to its minimum to the right first; a
-     line drops from its branch to the track, and the playhead's line runs up through every lane. Clicking a lane watches
-     that timeline, clicking the watched one goes back to the replay. At the fork limit, while the picker is open, the
-     lane a take-over would replace is outlined (st.replace). The lanes show only while the Forks bay is open (st.lanesOpen).
-     g: the housing's box and its track's span, in units ---- */
+     A lane runs from its branch to its end on the track's own time axis, widened to its minimum to the right first, and
+     the playhead's line runs up through every lane. The chain that plays is filled along it, as the track is filled to
+     where the chain leaves the replay: the watched lane to the playhead, and each lane before it on the chain (f.chain)
+     to where the next one on the chain branches off it, so the path the playing took has no gap. A line from each
+     lane's branch says where its history before the branch is: a fork whose parent is a lane drawn above it rises to
+     that lane; every other fork, of the replay or of a deleted fork, drops to the track. The parent is always above,
+     since a fork branches after its parent does; the line is held to the parent's lane, which a lane clamped at the
+     track's right end may not reach. Clicking a lane watches that timeline, clicking the watched one goes back to the
+     replay. At the fork limit, while the picker is open, the lane a take-over would replace is outlined (st.replace).
+     The lanes show only while the Forks bay is open (st.lanesOpen). The game draws them by the same rules
+     (tagpu_hudlay.c, lanes). g: the housing's box and its track's span, in units ---- */
   /* the Forks bay at the housing's left end opens and closes the lanes and counts the forks; it sits in the pocket
      painted for it in the housing (FR, the housing's frame), which spans the marker lane and the track */
   function forksBay(st, FR) {
@@ -192,14 +198,18 @@ const HUD = (() => {
     const py = g.y - lanesH(st), ph = lanesH(st) - P.plate.gap;
     const X = t => g.tx + g.ends + (g.tw - 2 * g.ends) * t / st.T, lo = g.tx + g.ends, hi = g.tx + g.tw - g.ends;
     let h = art(P.plate.part, { x: g.x, y: py, w: g.w, h: ph }, '', '', { act: 'dock' }), lines = '';
+    const span = [];
     st.forks.forEach((f, k) => {
       const ly = py + pad[1] + k * (Ln.h + Ln.gap), bx = X(f.from);
       let x0 = bx, x1 = Math.max(X(f.end), bx + Ln.min_w);
       if (x1 > hi) { x0 = Math.max(lo, x0 - (x1 - hi)); x1 = hi; }
+      span.push([x0, x1, ly]);
       const w = x1 - x0, on = st.timeline === k, F = frame(w, Ln.h), nb = Bt.items.length;
       const bw = Bt.w, btx = w - Bt.pad - nb * bw - (nb - 1) * Bt.gap;
       const fp = Ln.fill.pad, fw = w - fp[0] - fp[2], fx = bx - x0;
-      let inner = on ? `<div class="clip" data-lanefill="${bx} ${X(f.end)}" style="${rect({ x: fp[0] + fx, y: fp[1], w: Math.max(0, Math.min(X(st.t), X(f.end)) - bx), h: Ln.h - fp[1] - fp[3] })}">`
+      // the watched lane fills to the playhead, a lane before it on the chain to where the next one on the chain branches off it
+      const next = on ? null : st.forks.find(q => q.chain && q.parent === f.id), stop = next ? X(next.from) : X(f.end);
+      let inner = on || f.chain ? `<div class="clip" data-lanefill="${bx} ${stop}" style="${rect({ x: fp[0] + fx, y: fp[1], w: Math.max(0, Math.min(X(st.t), stop) - bx), h: Ln.h - fp[1] - fp[3] })}">`
         + art(Ln.fill.part, zero(fw, Ln.h - fp[1] - fp[3])) + `</div>` : '';
       inner += text(`F${f.id} · ${esc(f.name)} from ${clock(f.from)}`, place(F, { pad: [fx + Ln.label.pad[0], 0, w - btx + Ln.label.pad[0], 0] }), Ln.label.style, Ln.label);
       inner += Bt.items.map((it, j) => button({ act: it.act, icon: { name: it.icon, padf: Bt.icon.padf }, data: { fork: k } }, Bt,
@@ -207,8 +217,10 @@ const HUD = (() => {
       h += art(on ? Ln.pressed : Ln.part, { x: x0, y: ly, w, h: Ln.h }, inner, `hot${on ? ' pressed' : ''}`, { act: 'lane', fork: k, up: Ln.part, down: Ln.pressed, ...(on ? { on: 1 } : {}) });
       if (st.replace === k) { const R = P.replace;
         h += `<div class="box" style="${rect({ x: x0 - R.width, y: ly - R.width, w: w + 2 * R.width, h: Ln.h + 2 * R.width })};box-shadow:inset 0 0 0 ${U(R.width)} ${R.colour};pointer-events:none"></div>`; }
-      const B = P.branch;
-      lines += `<div class="box" style="${rect({ x: bx - B.w / 2, y: ly + Ln.h, w: B.w, h: g.ty - ly - Ln.h })};background:${B.colour};pointer-events:none"></div>`;
+      const B = P.branch, up = st.forks.findIndex(q => q.id === f.parent);
+      if (up >= 0 && up < k) { const [ux0, ux1, uy] = span[up], x = Math.min(Math.max(bx, ux0), ux1);
+        lines += `<div class="box" style="${rect({ x: x - B.w / 2, y: uy + Ln.h, w: B.w, h: ly - uy - Ln.h })};background:${B.colour};pointer-events:none"></div>`; }
+      else lines += `<div class="box" style="${rect({ x: bx - B.w / 2, y: ly + Ln.h, w: B.w, h: g.ty - ly - Ln.h })};background:${B.colour};pointer-events:none"></div>`;
     });
     const Hd = P.playhead;
     return h + lines + `<div class="box" data-lanehead="${g.tx + g.ends} ${g.tw - 2 * g.ends} ${Hd.w}" style="${rect({ x: X(st.t) - Hd.w / 2, y: py, w: Hd.w, h: g.ty - py })};background:${Hd.colour};pointer-events:none"></div>`;

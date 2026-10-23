@@ -94,12 +94,16 @@ function seats() {
   });
 }
 /* the forks a replay keeps: at most FORK_MAX, the least recently watched replaced by a new one. Each branched off the
-   replay where a player was taken over, and ran on as long as that game was played */
-const FORK_MAX = 3, FORK_SEED = [{ seat: 0, from: 30, len: 160 }, { seat: 3, from: 100, len: 70 }, { seat: 2, from: 60, len: 95 }];
+   timeline that played where a player was taken over -- the replay (parent 0) or a fork, by its id -- and ran on as
+   long as that game was played. The third is a fork of the first: 60 lies in the first's 30..190 */
+const FORK_MAX = 3, FORK_SEED = [{ seat: 0, from: 30, len: 160, parent: 0 }, { seat: 3, from: 100, len: 70, parent: 0 },
+  { seat: 2, from: 60, len: 95, parent: 1 }];
 let seen = 0;
 const seedForks = () => { S.forks = FORK_SEED.slice(0, S.nf).map((f, k) => ({ ...f, id: k + 1, seen: ++seen })); S.tl = Math.min(S.tl, S.forks.length - 1); };
 const forkList = () => S.forks.slice().sort((a, b) => a.from - b.from);
 const watched = () => S.prop && S.mode === 'replay' && S.tl >= 0 ? forkList()[S.tl] : null;
+// the chain that plays, the watched fork first and then its ancestors: a deleted parent ends it, its prefix has no fork
+const chain = () => { const c = []; for (let f = watched(); f; f = S.forks.find(q => q.id === f.parent)) c.push(f); return c; };
 const clock = t => { t = Math.max(0, Math.round(t)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
 // the axis takes in the forks only while they are shown or one is watched: closed, the timeline is the replay's own
 const axis = () => S.prop && S.mode === 'replay' && (S.lo || watched()) ? Math.max(T, ...S.forks.map(f => f.from + f.len)) : T;
@@ -168,8 +172,11 @@ function state() {
   const base = { W: w / u, H: h / u, frame: { panel: ef.panel / ud, top: ef.bar / ud, bottom: ef.bar / ud } };
   if (S.prop && S.mode === 'live') return { ...base, t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, live: { open: S.rw }, toast: S.toast, stats: { open: false } };
   const fl = S.prop ? forkList() : null, lru = fl && fl.length >= FORK_MAX ? fl.indexOf(fl.reduce((a, f) => f.seen < a.seen ? f : a)) : -1;
-  const prop = !S.prop ? {} : { T: axis(), ends: T, len: tlEnd(), fillTo: watched() ? watched().from : T, timeline: S.tl, lanesOpen: S.lo, picker: S.pick, armed: S.armed,
-    replace: S.pick ? lru : -1, forks: fl.map(f => ({ id: f.id, name: ps[f.seat] ? ps[f.seat].name : NAMES[f.seat], from: f.from, end: f.from + f.len })) };
+  // the track fills to where the chain leaves the replay: its first fork's branch
+  const ch = S.prop ? chain() : [];
+  const prop = !S.prop ? {} : { T: axis(), ends: T, len: tlEnd(), fillTo: ch.length ? ch[ch.length - 1].from : T, timeline: S.tl, lanesOpen: S.lo, picker: S.pick, armed: S.armed,
+    replace: S.pick ? lru : -1, forks: fl.map(f => ({ id: f.id, name: ps[f.seat] ? ps[f.seat].name : NAMES[f.seat], from: f.from, end: f.from + f.len,
+      parent: f.parent || 0, chain: ch.includes(f) })) };
   return { ...base,
     t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, seats: ps, teams: tm, folded: S.fold, markers,
     sight: S.sight, follow: S.follow, scroll: S.scroll, toast: S.toast,
@@ -248,8 +255,10 @@ layer.addEventListener('click', e => {
     case 'lanes': if (S.forks.length) S.lo = !S.lo; break;
     case 'takeover': S.pick = !S.pick; if (S.pick) S.playing = false; break;
     case 'takeas': { const p = state().seats[+a.dataset.seat], fl = forkList();
+      // its parent is the timeline that played at the playhead: the chain's fork that had branched by then, or the replay
+      const own = chain().find(f => f.from < S.t);
       if (fl.length >= FORK_MAX) S.forks = S.forks.filter(f => f !== fl.reduce((x, f) => f.seen < x.seen ? f : x));
-      const f = { seat: p.i, from: Math.round(S.t), len: 45, id: Math.max(0, ...S.forks.map(f => f.id)) + 1, seen: ++seen };
+      const f = { seat: p.i, from: Math.round(S.t), len: 45, id: Math.max(0, ...S.forks.map(f => f.id)) + 1, seen: ++seen, parent: own ? own.id : 0 };
       S.forks.push(f); S.pick = false; S.tl = forkList().indexOf(f);
       toast(`Taking over ${p.name} at ${clock(f.from)}`); break; }
     case 'lane': { const k = +a.dataset.fork; S.tl = S.tl === k ? -1 : k; if (S.tl >= 0) watched().seen = ++seen; S.t = Math.min(S.t, tlEnd()); S.armed = -1; break; }

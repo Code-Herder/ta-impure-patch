@@ -66,7 +66,10 @@ COLLECT = r"""() => {
   const u = unit(), s = document.querySelector('#stage').getBoundingClientRect();
   const R = e => { const r = e.getBoundingClientRect(); return [(r.left - s.left) / u, (r.top - s.top) / u, r.width / u, r.height / u]; };
   const st = state();
-  if (held) { const b = document.querySelector(`.art.hot[data-act="${held}"]`); HUD.press(b, true); st.held = held; }
+  // a held control by its key: the act, and the index a lane's or a row's key carries
+  if (held) { const [act, ix] = held.split(':');
+    const b = [...document.querySelectorAll(`.art.hot[data-act="${act}"]`)].find(e => ix == null || [e.dataset.fork, e.dataset.seat, e.dataset.team, e.dataset.val].includes(ix));
+    HUD.press(b, true); st.held = held; }
   if (hoverRow != null) {
     const row = document.querySelectorAll('#hud-layer .row')[hoverRow], r = R(row);
     row.querySelector('.hov').style.display = 'block';
@@ -85,7 +88,8 @@ COLLECT = r"""() => {
       els.push({ kind: 'part', part, r: R(e), dim, alpha: Math.round(255 * a) });
     }
     if (e.dataset.act && !e.classList.contains('off')) {   // a disabled control takes no input
-      const k = e.dataset.act + (e.dataset.val != null ? ':' + e.dataset.val : e.dataset.team != null ? ':' + e.dataset.team : e.dataset.seat != null ? ':' + e.dataset.seat : '');
+      const k = e.dataset.act + (e.dataset.val != null ? ':' + e.dataset.val : e.dataset.team != null ? ':' + e.dataset.team : e.dataset.seat != null ? ':' + e.dataset.seat
+        : e.dataset.fork != null ? ':' + e.dataset.fork : '');
       els.push({ kind: 'hot', key: k, r: R(e) });
     }
     if (e.dataset.track != null) els.push({ kind: 'hot', key: 'track', r: R(e) });

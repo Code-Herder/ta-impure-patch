@@ -451,6 +451,8 @@ static void button(C* c, const BTN* s, const TJV* kind, R b, int on)
 
 static double along(double w, double e, double f) { return e + (w - 2 * e) * f; }
 
+static void lanes(C* c, R g, R tr, double ends);
+
 static void dock(C* c)
 {
     const HUDSTATE* st = c->st;
@@ -544,6 +546,127 @@ static void dock(C* c)
     snprintf(tx, sizeof tx, "%s / %s", t0, t1);
     pl = spec(tm);
     text(c, tx, at(place(c, &fr, &pl), rx, y), str(c, tm, "style"), &pl, 0, 0);
+    if (st->nfork > 0 && st->lanes_open) lanes(c, box(rx, y, rw, Dh), at(tr, rx, y), ends);
+}
+
+/* ---- proposed, variation B: the forks as lanes over the timeline housing, oldest branch on top
+   (hud.js `lanesH`, `lanes`). A lane runs from its branch to its end on the track's own time axis,
+   widened to its minimum to the right first; the playhead's line runs up through every lane.
+   THE CHAIN THAT PLAYS IS FILLED ALONG IT, as the track is filled to where the chain leaves the
+   original: the watched lane to the playhead, and each lane before it on the chain to where the
+   next one on the chain branches off it, so the path the playing took has no gap.
+   THE BRANCH LINE says where a fork's history before its branch is: a fork whose parent is a lane
+   drawn above it rises to that lane; every other fork -- of the original, or of a deleted fork,
+   whose prefix still plays but has no lane -- drops to the track. The parent is always above:
+   the lanes are in (branch, id) order, and a fork branches after its parent does, since a
+   takeover starts after the first iteration of the segment it forks (takeover_point). The line's
+   x is the fork's branch, inside its parent's span; it is held to the parent's lane, which a lane
+   clamped at the track's right end may not reach. g: the housing's box; tr: its track's. ------- */
+
+#define LANE_CHAIN 2u           /* HUDFORK.flags: the packet's TAGPU_PK_FORK_CHAIN, a segment of
+                                   the chain that plays */
+
+/* the lane plate's height with its gap above the dock: the column stands on it, since the lanes
+   run under the column */
+static double lanes_h(C* c)
+{
+    const HUDSTATE* st = c->st;
+    const TJV *P, *Pl, *Ln, *pad;
+    int n = st->nfork < HUD_MAXFORK ? st->nfork : HUD_MAXFORK;
+    if (n <= 0 || !st->lanes_open) return 0;
+    P = obj(c, obj(c, c->L, "proposed"), "forks");
+    Pl = obj(c, P, "plate");
+    Ln = obj(c, P, "lane");
+    pad = arr(c, Pl, "pad");
+    return num(c, Pl, "gap") + tj_num(tj_at(pad, 1), 0) + n * num(c, Ln, "h") + (n - 1) * num(c, Ln, "gap")
+         + tj_num(tj_at(pad, 3), 0);
+}
+
+static void lanes(C* c, R g, R tr, double ends)
+{
+    const HUDSTATE* st = c->st;
+    const TJV *P = obj(c, obj(c, c->L, "proposed"), "forks"), *Pl = obj(c, P, "plate"), *Ln = obj(c, P, "lane");
+    const TJV *Bt = obj(c, Ln, "buttons"), *items = arr(c, Bt, "items"), *Lb = obj(c, Ln, "label"), *Fl = obj(c, Ln, "fill");
+    const TJV *Br = obj(c, P, "branch"), *Hd = obj(c, P, "playhead"), *Rp = obj(c, P, "replace");
+    const TJV *pad = arr(c, Pl, "pad"), *fp = arr(c, Fl, "pad"), *lp = arr(c, Lb, "pad");
+    int n = st->nfork < HUD_MAXFORK ? st->nfork : HUD_MAXFORK, nb = items ? items->n : 0, k, j;
+    double H = lanes_h(c), py = g.y - H, lh = num(c, Ln, "h"), lg = num(c, Ln, "gap"), min_w = num(c, Ln, "min_w");
+    double lo = tr.x + ends, hi = tr.x + tr.w - ends, bw = num(c, Bt, "w"), bg = num(c, Bt, "gap"), bp = num(c, Bt, "pad");
+    double f0 = tj_num(tj_at(fp, 0), 0), f1 = tj_num(tj_at(fp, 1), 0), f2 = tj_num(tj_at(fp, 2), 0), f3 = tj_num(tj_at(fp, 3), 0);
+    double l0 = tj_num(tj_at(lp, 0), 0), brw = num(c, Br, "w"), hw = num(c, Hd, "w"), rpw = num(c, Rp, "width");
+    double x0s[HUD_MAXFORK], x1s[HUD_MAXFORK], lys[HUD_MAXFORK], bxs[HUD_MAXFORK];
+    uint32_t brgb = hexrgb(str(c, Br, "colour"));
+    PL ls = spec(Lb);
+    char s[96], t0[16], key[HUD_KEYLEN];
+#define X(t) (st->T > 0 ? tr.x + ends + (tr.w - 2 * ends) * (t) / st->T : lo)
+
+    hot(c, box(g.x, py, g.w, H - num(c, Pl, "gap")), "dock");
+    art(c, str(c, Pl, "part"), box(g.x, py, g.w, H - num(c, Pl, "gap")), 1);
+    for (k = 0; k < n; k++) {
+        const HUDFORK* f = &st->fork[k];
+        double ly = py + tj_num(tj_at(pad, 1), 0) + k * (lh + lg), bx = X(f->from), x0 = bx, x1 = fmax(X(f->end), bx + min_w);
+        double w, btx, fx;
+        int on = st->timeline == k, pressed;
+        R lb;
+        PL p;
+        if (x1 > hi) { x0 = fmax(lo, x0 - (x1 - hi)); x1 = hi; }
+        w = x1 - x0;
+        btx = w - bp - nb * bw - (nb - 1) * bg;
+        fx = bx - x0;
+        x0s[k] = x0; x1s[k] = x1; lys[k] = ly; bxs[k] = bx;
+        lb = box(x0, ly, w, lh);
+        snprintf(key, sizeof key, "lane:%d", k);
+        pressed = on || (st->held[0] && !strcmp(st->held, key));
+        art(c, str(c, Ln, pressed ? "pressed" : "part"), lb, 1);
+        hot(c, lb, key);
+        if (on || (f->flags & LANE_CHAIN)) {
+            /* the watched lane fills to the playhead, a lane before it on the chain to where the
+               next one on the chain branches off it */
+            double stop = X(f->end), fh = lh - f1 - f3;
+            R fb = box(bx + f0, ly + f1, w - f0 - f2, fh);
+            HUDOP* a;
+            for (j = 0; !on && j < n; j++)
+                if ((st->fork[j].flags & LANE_CHAIN) && st->fork[j].parent == f->id) stop = X(st->fork[j].from);
+            if ((a = art(c, str(c, Fl, "part"), fb, 1))) {
+                a->clip = a->r;
+                a->clip.w = (float)fmax(0, fmin(X(st->t), stop) - bx);
+            }
+        }
+        clock_s(t0, sizeof t0, f->from);
+        snprintf(s, sizeof s, "F%d \xC2\xB7 %s from %s", f->id, f->name, t0);     /* U+00B7 MIDDLE DOT */
+        memset(&p, 0, sizeof p);
+        p.pad[0] = fx + l0;
+        p.pad[2] = w - btx + l0;
+        {
+            F lf = frame(c->l, w, lh, NULL);
+            text(c, s, at(place(c, &lf, &p), x0, ly), str(c, Lb, "style"), &ls, 0, 0);
+        }
+        for (j = 0; j < nb; j++) {
+            const TJV* it = tj_at(items, j);
+            const char* act = str(c, it, "act");
+            char bk[HUD_KEYLEN];
+            BTN b;
+            memset(&b, 0, sizeof b);
+            snprintf(bk, sizeof bk, "%s:%d", act, k);
+            b.key = bk;
+            b.icon = obj(c, Bt, "icon");
+            b.icon_name = str(c, it, "icon");
+            button(c, &b, Bt, box(x0 + btx + j * (bw + bg), ly + bp, bw, lh - 2 * bp), st->armed == k && !strcmp(act, "delete"));
+        }
+        /* the lane a takeover would replace: outlined round its box (hud.js, an inset box-shadow) */
+        if (st->replace == k) ring(c, box(x0 - rpw, ly - rpw, w + 2 * rpw, lh + 2 * rpw), rpw, hexrgb(str(c, Rp, "colour")), 1);
+    }
+    for (k = 0; k < n; k++) {
+        for (j = 0; j < k && st->fork[j].id != st->fork[k].parent; j++) {}
+        if (j < k) {
+            double x = fmin(fmax(bxs[k], x0s[j]), x1s[j]);
+            solid(c, box(x - brw / 2, lys[j] + lh, brw, lys[k] - lys[j] - lh), brgb, 1);
+        } else {
+            solid(c, box(bxs[k] - brw / 2, lys[k] + lh, brw, tr.y - lys[k] - lh), brgb, 1);
+        }
+    }
+    solid(c, box(X(st->t) - hw / 2, py, hw, tr.y - py), hexrgb(str(c, Hd, "colour")), 1);
+#undef X
 }
 
 /* ---- the column: team headers and player rows from the top bar down, as many as fit above the
@@ -570,7 +693,7 @@ static void column(C* c)
     const HUDSTATE* st = c->st;
     const TJV *Cl = obj(c, c->L, "column"), *Fo = obj(c, Cl, "foot"), *Hd = obj(c, c->L, "header"), *Rw = obj(c, c->L, "row");
     double Cw = num(c, Cl, "w"), x = st->W - num(c, Cl, "r") - Cw, top = st->top + num(c, Cl, "t");
-    double bottom = st->H - st->bottom - num(c, obj(c, c->L, "dock"), "h") - num(c, Cl, "dock_gap");
+    double bottom = st->H - st->bottom - num(c, obj(c, c->L, "dock"), "h") - lanes_h(c) - num(c, Cl, "dock_gap");
     double Foh = num(c, Fo, "h"), Fog = num(c, Fo, "gap"), area = bottom - top - Fog - Foh;
     double gap = num(c, Cl, "gap"), hgap = num(c, Cl, "header_gap"), hh = num(c, Hd, "h"), rh = num(c, Rw, "h");
     double used = 0, yy = 0, fyy, u;
@@ -1425,6 +1548,9 @@ static int max_hot(HUDLAY* l, char* err, size_t errn)
         if (tj_is(tj_get(tr, "split"), TJ_TRUE) && sp) n += sp->n;
     }
     n += 1 + HUD_MAXSEAT;                                       /* picker(): the plate, a row a seat */
+    /* lanes(): the plate, and for each fork a lane and its buttons */
+    if ((v = arr(&c, obj(&c, obj(&c, obj(&c, obj(&c, l->L, "proposed"), "forks"), "lane"), "buttons"), "items")))
+        n += 1 + HUD_MAXFORK * (1 + v->n);
     return c.bad ? -1 : n;
 }
 
@@ -1463,7 +1589,7 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     /* Every branch once: teams with headers, a folded team, a lost commander, a player out of
        the game, each marker kind, a hovered row with Sight on, a held button, every toggle, a
        toast, the stats window with a dark line and a commander's cross, and a column too short
-       for its items and scrolled, so the scroll bar is drawn. */
+       for its items and scrolled, so the scroll bar is drawn; then the forks' lanes open. */
     st->W = 1280; st->H = 720; st->panel = 128; st->top = 32; st->bottom = 32;
     st->t = 30; st->T = 60; st->playing = 1; st->speed = 1; st->hud = 1;
     st->nseat = HUD_MAXSEAT;
@@ -1499,6 +1625,27 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(l, o, "first build", err, errn)) goto done;
     st->H = 300; st->scroll = 1;    /* the scroll bar */
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(l, o, "scrolled build", err, errn)) goto done;
+    /* the lanes, every fork the packet carries: a fork of the original on the chain, a fork of it
+       watched, whose line rises to its parent, and a short one at the track's right end, clamped
+       there, its Delete armed and outlined as the one a takeover replaces; the first lane held */
+    st->H = 720; st->scroll = 0;
+    st->T = 90; st->ends = 60; st->len = 40; st->fill_to = 10;
+    st->nfork = HUD_MAXFORK;
+    for (i = 0; i < HUD_MAXFORK; i++) {
+        HUDFORK* f = &st->fork[i];
+        static const float from[HUD_MAXFORK] = { 10, 20, 88 }, end[HUD_MAXFORK] = { 85, 40, 89 };
+        f->id = i + 1;
+        snprintf(f->name, sizeof f->name, "P%d", i);
+        f->from = from[i];
+        f->end = end[i];
+        f->parent = i == 1 ? 1 : 0;
+        f->flags = i == 0 ? LANE_CHAIN : i == 1 ? 1 | LANE_CHAIN : 0;   /* watched (TAGPU_PK_FORK_WATCHED) */
+    }
+    st->timeline = 1;
+    st->lanes_open = 1;
+    st->armed = st->replace = 2;
+    strcpy(st->held, "lane:0");
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(l, o, "lanes build", err, errn)) goto done;
     ok = 1;
 done:
     free(st);

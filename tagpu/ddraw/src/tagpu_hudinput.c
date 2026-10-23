@@ -62,6 +62,16 @@ static float    s_statX, s_statY;
 static int      s_wdrag;                /* the left press is on the window's title                */
 static int      s_wdx, s_wdy;           /* where it landed, in client pixels                      */
 static float    s_wox, s_woy;           /* the window's place then, in units                      */
+static unsigned s_resSerial;            /* the last result serial the fill has seen                */
+static int      s_resSeen;              /* s_resSerial is this level's: a result older than the
+                                           level's first fill is never toasted                    */
+/* THE LANES: a Delete's first click arms it, the second deletes. s_armed is the armed fork's
+   timeline id, 0 none (id 0 is the original, never a fork). The requests the lanes made wait for
+   their outcomes, which name no timeline: each kind keeps the id it asked for, so the toast names
+   it, and an outcome the lanes did not ask for (a trigger's) is not toasted. */
+static unsigned s_armed;
+static int      s_watchAsked, s_exportAsked, s_deleteAsked;
+static unsigned s_watchId, s_exportId, s_deleteId;
 
 void tagpu_hudinput_take(const TAGPU_CMD_HUD* h)
 {
@@ -69,6 +79,7 @@ void tagpu_hudinput_take(const TAGPU_CMD_HUD* h)
     s_hit = *h;
     if (s_hit.n > TAGPU_CMD_HUDHITS) s_hit.n = TAGPU_CMD_HUDHITS;
     if (s_hit.nseat > TAGPU_PK_HUD_SEATS) s_hit.nseat = TAGPU_PK_HUD_SEATS;
+    if (s_hit.nlane > TAGPU_PK_HUD_FORKS) s_hit.nlane = TAGPU_PK_HUD_FORKS;
 }
 
 int __cdecl tagpu_hudinput_on_screen(void)
@@ -196,6 +207,78 @@ static void scroll_by(int d)
     s_scroll = f < 0 ? 0 : f > (int)s_hit.last ? s_hit.last : (unsigned)f;
 }
 
+#define IS(s) (k == sizeof(s "") - 1 && !strncmp(key, s, k))   /* a literal only */
+
+/* THE LANES' KEYS: 1 when the key is one of them. A lane's index is the drawn frame's, which
+   lane_id turns into the timeline it showed, as a row's index is turned into its seat: an index
+   past the lanes that frame drew is refused, and a lane whose fork has gone since is the replay's
+   to refuse (tagpu_replay_watch_timeline, tagpu_replay_fork_op). */
+static int lane_act(const char* key, size_t k, int n)
+{
+    unsigned id;
+    if (!IS("lane") && !IS("export") && !IS("delete")) return 0;
+    if (n < 0 || n >= s_hit.nlane) return 1;
+    id = s_hit.lane_id[n];
+    if (IS("lane")) {
+        /* the watched lane goes back to the replay, the original */
+        s_watchId = id == tagpu_replay_timeline() ? 0 : id;
+        s_watchAsked = 1;
+        tagpu_replay_watch_timeline(s_watchId);
+        s_armed = 0;
+    } else if (IS("export")) {
+        /* the playing's own name with -F<id>: replays\<name>-F<id>.imprec */
+        const char* path = tagpu_replay_path();
+        char stem[128];
+        size_t len;
+        if (!path) return 1;
+        if (!_strnicmp(path, "replays\\", 8)) path += 8;
+        lstrcpynA(stem, path, sizeof stem);
+        len = strlen(stem);
+        if (len > 7 && !_stricmp(stem + len - 7, ".imprec")) stem[len -= 7] = 0;
+        _snprintf(stem + len, sizeof stem - len, "-F%u", id);
+        stem[sizeof stem - 1] = 0;
+        s_exportId = id;
+        s_exportAsked = 1;
+        tagpu_replay_fork_op(TAGPU_REPLAY_FORK_EXPORT, id, stem);
+    } else if (s_armed != id) {
+        s_armed = id;
+        toast("Click again to delete F%u", id);
+    } else {
+        /* the watched one is left first, for the nearest live timeline up its chain (THE SWITCH) */
+        s_deleteId = id;
+        s_deleteAsked = 1;
+        tagpu_replay_fork_op(TAGPU_REPLAY_FORK_DELETE, id, NULL);
+        s_armed = 0;
+    }
+    return 1;
+}
+
+/* THE LANES AT THE FILL: the outcomes of what they asked for, toasted once each, and the arm, which
+   holds only while the lanes are open and list its fork, marked on that fork */
+static void lane_fill(TAGPU_PK_HUD* h, const TAGPU_REPLAY_RESULT* r, int fresh)
+{
+    int i, listed = 0;
+    if (fresh && r->kind == TAGPU_REPLAY_RQ_SWITCH && s_watchAsked) {
+        s_watchAsked = 0;
+        if (!r->ok && s_watchId) toast("Cannot watch F%u", s_watchId);
+        else if (!r->ok) toast("Cannot go back to the replay");
+    } else if (fresh && r->kind == TAGPU_REPLAY_RQ_FORK && r->op == TAGPU_REPLAY_FORK_EXPORT && s_exportAsked) {
+        s_exportAsked = 0;
+        if (r->ok) toast("F%u saved as a replay of its own", s_exportId);
+        else toast("Cannot save F%u", s_exportId);
+    } else if (fresh && r->kind == TAGPU_REPLAY_RQ_FORK && r->op == TAGPU_REPLAY_FORK_DELETE && s_deleteAsked) {
+        s_deleteAsked = 0;
+        if (r->ok) toast("F%u deleted", s_deleteId);
+        else toast("Cannot delete F%u", s_deleteId);
+    }
+    for (i = 0; i < h->nfork && i < (int)TAGPU_PK_HUD_FORKS; i++)
+        if (s_armed && h->lanes && h->fork[i].id == s_armed) {
+            h->fork[i].flags |= TAGPU_PK_FORK_ARMED;
+            listed = 1;
+        }
+    if (!listed) s_armed = 0;
+}
+
 /* A click on a control, released over it. Every command is the replay's own call or the stats
    window's own state; a key with no command -- the dock's, the column's and the window's plates,
    the scroll track, the window's title -- is taken and does nothing. */
@@ -204,7 +287,7 @@ static void act(const char* key)
     const char* colon = strchr(key, ':');
     size_t k = colon ? (size_t)(colon - key) : strlen(key);
     int n = colon ? atoi(colon + 1) : -1, i;
-#define IS(s) (k == sizeof(s "") - 1 && !strncmp(key, s, k))   /* a literal only */
+    if (lane_act(key, k, n)) return;
     if (IS("rew")) {
         tagpu_replay_seek_request(s_now > JUMP ? s_now - JUMP : 0);
     } else if (IS("fwd")) {
@@ -270,8 +353,8 @@ static void act(const char* key)
             if (k == strlen(SWITCHES[i].key) && !strncmp(key, SWITCHES[i].key, k))
                 tagpu_replay_overlay_set(SWITCHES[i].ov, !tagpu_replay_overlay(SWITCHES[i].ov));
     }
-#undef IS
 }
+#undef IS
 
 int tagpu_hudinput_button(int cx, int cy, int gx, int gy, int down, int right)
 {
@@ -338,7 +421,8 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h)
 {
     const HUDART* art = tagpu_hudart_get();
     unsigned ms = art ? tagpu_hudlay_globals(art->lay)->toast_ms : 0;
-    int cx, cy, i;
+    TAGPU_REPLAY_RESULT r;
+    int cx, cy, i, fresh;
 
     s_now = h->now;
     s_first = h->first;
@@ -346,6 +430,13 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h)
     s_pov = 0;
     for (i = 0; i < h->nseat && i < (int)TAGPU_PK_HUD_SEATS; i++)
         if (h->seat[i].pov && h->seat[i].seat < TAGPU_PK_HUD_SEATS) s_pov |= 1u << h->seat[i].seat;
+
+    /* THE REPLAY'S LAST OUTCOME, seen once: its serial grows at each */
+    tagpu_replay_result(&r);
+    fresh = s_resSeen && r.serial != s_resSerial;
+    s_resSerial = r.serial;
+    s_resSeen = 1;
+    lane_fill(h, &r, fresh);
 
     /* THE TIMELINE DRAG SEEKS TO THE POINTER ONCE A FRAME: a seek runs at the frame visit, so a
        request a frame is the most that can run, and the newest replaces one not yet run */
@@ -423,4 +514,7 @@ void tagpu_hudinput_level_end(void)
     s_toast[0] = 0;
     s_statOpen = s_wdrag = 0;
     s_leaveWant = s_leaveAsked = 0;
+    s_resSeen = 0;
+    s_armed = 0;
+    s_watchAsked = s_exportAsked = s_deleteAsked = 0;
 }
