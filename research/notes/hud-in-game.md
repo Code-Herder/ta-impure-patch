@@ -867,6 +867,9 @@ the render thread.
 ## Gaps
 
 - **Closing a picker that is seeking leaves its seek to run**: the playback still goes back to R.
+- **No test plans again on a timelines change.** It needs a fork of the playing's own file
+  deleted while the picker is open: X's one playing with forks to spare is "playing 5", whose
+  forks its later steps count on, and a playing of a copy is a game of its own.
 - **GDI has no stats window**, as it has no replay HUD.
 - **The samples are held values, not interpolated**: each is the first walked iteration at or
   after its time, at least 1 s apart and at most 512 a recording, so a long recording's chart
