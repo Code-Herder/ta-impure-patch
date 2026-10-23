@@ -20,6 +20,9 @@ render**: it holds the style guide, the method, the tools and what each one meas
    - a sheet of 9-slice parts from `PLAIN=1 tools/hudart/sheets.py <spec> <out dir>`, which writes
      `parts_<sheet>.png` and `sheets.json`.
    The specs are in `tools/hudart/specs/`; a one-off spec may live beside the job's inputs.
+   A recess drawn into a 9-slice's whitebox sits where `art/hud/layout.json` puts what the game draws in it:
+   the picker's list area starts below its title band (`pad` + `title.h`, 20 units), and a list area
+   painted higher puts the title on its edge.
 2. **The look is a piece of a finished part, placed on the layout itself** beside the whiteboxes and
    named as the reference in the prompt ("keep it exactly as it is"): a crop of the dock from
    `art/hud/parts/`. Passed as a separate style reference instead, its content is copied into the
